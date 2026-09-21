@@ -430,6 +430,94 @@ def test_economic_incident_requires_proof_not_broker_terminal_to_recover():
     assert any(r['rule']=='economic_producer_gap' and r['status']=='recovered' for r in state['incidents'].values())
 
 
+def nonentry_gap(action="BLOCK", **extra):
+    return event(action=action, screen="not_requested_machine_nonentry",
+        stage="entry_ai_economic_source_gap", entry_economic_source_status="source_gap",
+        entry_economic_source_blocker="exact_broker_capacity_missing",
+        entry_economic_capacity_blocker="capacity_observation_cache_miss_nonentry", **extra)
+
+
+@pytest.mark.parametrize("action", ["BLOCK", "RECHECK"])
+def test_explicit_nonentry_cache_miss_is_visible_coverage_not_submit_alert(action):
+    state = {}
+    for minutes in (10, 15):
+        now = START + timedelta(minutes=minutes)
+        payload = report([nonentry_gap(action), event(999, when=now)], now)
+        state = monitor.evaluate(payload, state, now)
+    scope = next(iter(state["scopes"].values()))
+    assert scope["nonentry_capacity_observation_gaps"] == 1
+    assert scope["economic_gap_action_counts"][action] == 1
+    assert scope["economic_status_counts"]["source_gap"] == 2
+    assert not any(r["rule"] == "economic_producer_gap" for r in active(state))
+    row = payload["submission_monitor"]["rows"][0]
+    assert row["economic_source"]["status"] == "source_gap"
+    assert row["economic_source"]["valid_economics"] is False
+
+
+@pytest.mark.parametrize("defect", ["enter", "unknown_reason", "conflict", "accepted", "screen", "terminal", "contract"])
+def test_nonentry_coverage_never_hides_execution_or_unknown_contract_gaps(defect):
+    row = monitor.snapshot([nonentry_gap()], START)["rows"][0]
+    if defect == "enter": row["mechanistic_action"] = "ENTER_NOW"
+    elif defect == "unknown_reason": row["economic_source"].pop("capacity_blocker")
+    elif defect == "conflict": row["conflict_reasons"] = ["conflicting_machine_actions"]
+    elif defect == "accepted": row["broker_acceptance_observed"] = True
+    elif defect == "screen": row["ai_screen_status"] = "pass"
+    elif defect == "terminal": row["final_state"] = "submit_pipeline_reached"
+    else: row["economic_source"]["blocker"] = "frozen_operating_contract_missing"
+    assert not monitor._nonentry_capacity_observation_gap(row)
+
+
+def test_old_slim_projection_recovers_detail_only_from_retained_field():
+    import json
+    raw_event = nonentry_gap(economic_source_monitor_projection=json.dumps({
+        "status": "source_gap", "blocker": "exact_broker_capacity_missing", "valid_economics": False}))
+    raw = dict(event_type="pipeline_event", pipeline=raw_event.pipeline, stage=raw_event.stage,
+        stock_name="fixture", stock_code=raw_event.stock_code, record_id=raw_event.record_id,
+        emitted_at=raw_event.emitted_at.isoformat(), fields=raw_event.fields)
+    cached = sentinel._payload_to_cache_row(raw, exclude_summary_stages=True)
+    projection = json.loads(cached["fields"]["economic_source_monitor_projection"])
+    assert projection.pop("capacity_blocker") == "capacity_observation_cache_miss_nonentry"
+    cached["fields"]["economic_source_monitor_projection"] = json.dumps(projection)
+    row = monitor.snapshot([sentinel._event_from_cache_row(cached)], START)["rows"][0]
+    assert monitor._nonentry_capacity_observation_gap(row)
+    cached["fields"].pop("entry_economic_capacity_blocker")
+    row = monitor.snapshot([sentinel._event_from_cache_row(cached)], START)["rows"][0]
+    assert not monitor._nonentry_capacity_observation_gap(row)
+
+
+def test_reclassification_retains_history_is_not_recovery_and_rearms_real_gap():
+    import copy
+    state = {}
+    for minutes in (10, 15, 20):
+        now = START + timedelta(minutes=minutes)
+        payload = report([nonentry_gap(), event(999, when=now)], now)
+        if minutes < 20:
+            payload["submission_monitor"]["rows"][0]["economic_source"].pop("capacity_blocker")
+        before = copy.deepcopy(state)
+        result = monitor.evaluate(payload, state, now)
+        assert state == before
+        state = result
+        if minutes == 15:
+            old = copy.deepcopy(next(r for r in active(state) if r["rule"] == "economic_producer_gap"))
+            monitor.notify(state, "fixture.json", send=lambda _: None)
+    item = next(r for r in state["incidents"].values() if r["rule"] == "economic_producer_gap")
+    assert item["status"] == "observation_only_unresolved"
+    for key in ("count", "evidence_ids", "examples", "first_seen"):
+        assert item[key] == old[key]
+    assert not state["notification_pending"]
+    # A later real/unknown gap must start a new persistence interval.
+    for minutes in (25, 30):
+        now = START + timedelta(minutes=minutes)
+        payload = report([nonentry_gap(), event(999, when=now)], now)
+        payload["submission_monitor"]["rows"][0]["economic_source"]["capacity_blocker"] = "capacity_scope_unavailable"
+        state = monitor.evaluate(payload, state, now)
+    assert any(r["rule"] == "economic_producer_gap" for r in active(state))
+    new = next(r for r in active(state) if r["rule"] == "economic_producer_gap")
+    assert new["history"][0]["status"] == "observation_only_unresolved"
+    assert new["history"][0]["evidence_ids"] == old["evidence_ids"]
+    assert state["notification_pending"]
+
+
 def test_economic_proof_conflict_cannot_be_overwritten_by_later_duplicate():
     import json
     events=[event(stage='entry_ai_economic_plan_observed',economic_source_monitor_projection=json.dumps({

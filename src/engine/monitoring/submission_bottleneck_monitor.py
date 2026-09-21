@@ -44,6 +44,7 @@ def economic_evidence(fields, stock_code=None):
     status = fields.get("entry_economic_source_status")
     blocker = str(fields.get("entry_economic_source_blocker") or "")
     result = {"status": status, "blocker": blocker or None,
+        "capacity_blocker": fields.get("entry_economic_capacity_blocker") or None,
         "owner": fields.get("entry_economic_source_owner") or "main_entry_execution_owners",
         "closure_test": fields.get("entry_economic_source_closure_test") or "exact frozen plan/cost/capital source reaches evaluator",
         "plan_sha256": fields.get("entry_economic_plan_sha256"), "valid_economics": False}
@@ -155,6 +156,10 @@ def snapshot(events, as_of):
             value = e.fields.get("economic_source_monitor_projection")
             value = json.loads(value) if isinstance(value, str) else value
             value = value if isinstance(value, dict) else economic_evidence(e.fields, e.stock_code)
+            # Older slim-cache projections omitted this diagnostic, but the
+            # original field was retained. No raw rescan or proof regeneration.
+            value = {**value, "capacity_blocker": e.fields.get("entry_economic_capacity_blocker")
+                     or value.get("capacity_blocker")}
             old = economic.get(key, {})
             if (old.get("blocker") == "economic_observation_conflicting_proofs"
                 or old.get("status") == value.get("status") == "recorded_source_only"
@@ -194,6 +199,19 @@ def snapshot(events, as_of):
     }
 
 
+def _nonentry_capacity_observation_gap(row):
+    """Only explicit no-fetch non-entry misses are coverage, not submit faults."""
+    economic = row.get("economic_source") or {}
+    return (row.get("mechanistic_action") in {"BLOCK", "RECHECK"}
+            and row.get("ai_screen_status") == "not_requested_machine_nonentry"
+            and not row.get("conflict_reasons")
+            and not row.get("broker_acceptance_observed")
+            and row.get("final_state") in {"machine_block_point_drop", "machine_recheck_observation"}
+            and economic.get("status") == "source_gap"
+            and economic.get("blocker") == "exact_broker_capacity_missing"
+            and economic.get("capacity_blocker") == "capacity_observation_cache_miss_nonentry")
+
+
 def evaluate(report, state, now):
     """Pure state transition. Old/stale evidence never triggers recovery or alerts."""
     now = stamp(now)
@@ -210,6 +228,14 @@ def evaluate(report, state, now):
               "source_as_of": prior.get("source_as_of"),
               "identity_observation": {"status": "unobservable", "reason": "source_not_validated"},
               "last_notification_at": prior.get("last_notification_at")}
+    result["economic_coverage_contract"] = {
+        "metric_role": "funnel_count", "decision_authority": "report_only",
+        "window_policy": "exact_attempts_current_30_minutes",
+        "sample_floor": "none_for_counts_no_quality_acceptance",
+        "primary_decision_metric": "economic_gap_action_counts",
+        "source_quality_gate": "same_attempt_explicit_nonentry_cache_miss_only",
+        "forbidden_uses": ["order_authority", "missing_as_zero_ev", "tuning_population_acceptance"],
+    }
     if (report.get("target_date") != today or report.get("dry_run")
             or source.get("schema") != SCHEMA or not as_of or not latest
             or not 0 <= (now - as_of).total_seconds() <= 420
@@ -271,7 +297,9 @@ def evaluate(report, state, now):
                      or (r["ai_screen_status"] == "pass" and r["final_state"] == "pending"))]
         economic_gaps = [r for r in all_rows
             if (now - stamp(r["first_evaluated_at"])).total_seconds() >= GRACE_SEC
-            and (r.get("economic_source") or {}).get("status") == "source_gap"]
+            and (r.get("economic_source") or {}).get("status") == "source_gap"
+            and not _nonentry_capacity_observation_gap(r)]
+        observation_gaps = [r for r in rows if _nonentry_capacity_observation_gap(r)]
         tests = {
             "economic_producer_gap": (economic_gaps, "structural_evidence", 240),
             "source_or_submit_lineage_gap": (gaps, "structural_evidence", 240),
@@ -281,6 +309,13 @@ def evaluate(report, state, now):
         result["scopes"][scope] = {"unique_promotions": len(parents), "valid_promotions": len(valid),
             "enter_now": len(entered), "veto": len(veto), "accepted_attempts": len(accepted),
             "unresolved_attempts": len(gaps), "economic_producer_gaps": len(economic_gaps),
+            "nonentry_capacity_observation_gaps": len(observation_gaps),
+            "nonentry_capacity_observation_examples": [{k: r.get(k) for k in
+                ("stock_code", "evaluation_key", "first_evaluated_at", "mechanistic_action", "economic_source")}
+                for r in observation_gaps[:3]],
+            "economic_gap_action_counts": {action: sum(r["mechanistic_action"] == action
+                and (r.get("economic_source") or {}).get("status") == "source_gap" for r in rows)
+                for action in ("ENTER_NOW", "BLOCK", "RECHECK", "SOURCE_INVALID")},
             "economic_status_counts": {status: sum((r.get("economic_source") or {}).get("status") == status for r in rows)
                 for status in ("recorded_source_only", "source_gap", "guard_excluded", "unsupported_scope")}, "guard_blocked": sum(r["final_guard_blocked"] for r in rows)}
         for rule, (bad, category, persistence) in tests.items():
@@ -298,10 +333,27 @@ def evaluate(report, state, now):
                     "last_seen": now.isoformat(), "status": "active" if confirmed else "pending",
                     "evidence_ids": ids[:128], "promotion_ids": identities[:128],
                     "count": len(ids), "notified_status": old.get("notified_status"),
-                    "examples": [{k: r.get(k) for k in ("stock_code", "evaluation_key", "final_state", "conflict_reasons", "source_invalid_decomposition", "economic_source")} for r in bad[:3]],
+                    "examples": [{k: r.get(k) for k in ("stock_code", "evaluation_key", "mechanistic_action", "final_state", "conflict_reasons", "source_invalid_decomposition", "economic_source")} for r in bad[:3]],
                     "owner": (bad[0].get("economic_source") or {}).get("owner") if rule == "economic_producer_gap" else "buy_funnel_sentinel.machine_primary_entry_funnel",
                     "closure_test": "same attempt publishes valid frozen economic proof" if rule == "economic_producer_gap" else "same attempt receives a consistent terminal; ratios recover on new valid promotions"}
+                if old.get("history"):
+                    item["history"] = old["history"]
+                if old.get("status") == "observation_only_unresolved":
+                    item["history"] = (list(old.get("history") or []) + [
+                        {k: v for k, v in old.items() if k != "history"}])[-8:]
+                    item["notified_status"] = None
                 incidents[key] = item
+            elif (rule == "economic_producer_gap" and old
+                  and old.get("status") in {"active", "pending"}
+                  and old.get("count") == len(set(old.get("evidence_ids", [])))
+                  and old.get("evidence_ids")
+                  and set(old["evidence_ids"]) <= {r["evaluation_key"] for r in all_rows
+                                                    if _nonentry_capacity_observation_gap(r)}):
+                # Reclassification is not source recovery. Preserve old proof
+                # IDs/count/examples; unknown/expired/mixed incidents stay open.
+                incidents[key] = {**old, "status": "observation_only_unresolved",
+                    "classification_reason": "exact_nonentry_no_fetch_evidence_confirmed",
+                    "classified_at": now.isoformat()}
             elif old and old.get("status") == "active":
                 # Window expiration is not recovery. Require explicit closure evidence.
                 old_ids = set(old.get("evidence_ids", []))
@@ -410,6 +462,11 @@ def notify(result, path, send=None):
                  or next(iter(example.get("conflict_reasons") or []), None)
                  or example.get("final_state"))
         cause_text = f"첫 결손: {str(cause)[:180]}\n" if cause else ""
+        if item["rule"] == "economic_producer_gap":
+            detail = (example.get("economic_source") or {}).get("capacity_blocker")
+            cause_text += (f"판정: {example.get('mechanistic_action') or '미확인'} / "
+                           f"조회 원인: {detail or '자금 조회 외 계약 결손 또는 구형 근거'}\n"
+                           "경제성 증거 결손이며 실제 주문 실패 건수와 다릅니다.\n")
         messages.append(cause_text + f'{item["status"]}: {item["rule"]}\n{item["scope"]}\n근거 {item["count"]}건 / {item["category"]}\n' +
                         json.dumps(item.get("examples", [])[:1], ensure_ascii=False)[:350])
     message = "[제출병목 점검] 자동 매매 변경 없음\n" + "\n".join(messages) + f"\n근거: {path}\nCodex에서 원천과 제출 경로를 점검하세요."
