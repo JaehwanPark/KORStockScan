@@ -547,7 +547,7 @@ def promotion_errors(candidate, parent, scope):
             if not valid_dates or not ids or len(ids) != len(set(ids)):
                 errors.append(split + '_machine_support_invalid')
             if (economy.get('status') != 'supported_machine_admission'
-                or economy.get('basis') != 'nonentry_to_enter_now_fixed_exit_cost_adjusted_path'
+                or economy.get('basis') != 'nonentry_to_enter_now_cost_bound_quality_path'
                 or economy.get('auxiliary_ai_required') is not False):
                 errors.append(split + '_machine_metric_invalid')
             delta = _number(economy.get('paired_admission_delta_pct'))

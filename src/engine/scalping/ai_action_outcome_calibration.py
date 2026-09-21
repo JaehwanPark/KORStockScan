@@ -7918,11 +7918,24 @@ def _machine_admission_metrics(rows, actions):
         if cost is None or charged is None or not math.isclose(cost, charged, abs_tol=1e-9):
             excluded['full_cost_missing_or_mismatched'] += 1
             continue
-        # Deliberately use the machine path, never an incumbent AI PASS/VETO.
-        value = _mechanistic_terminal_proxy_pct({'comparison': comparison})
-        if value is None:
+        # The existing quality path binds its gross target to full round-trip
+        # cost. The legacy gross 0.3% target can be below that cost and cannot
+        # measure a profitable missed opportunity. Never infer an AI verdict.
+        path = row.get('entry_quality_path') or {}
+        path_cost = _number(path.get('conservative_execution_cost_pct'))
+        if (row.get('entry_quality_contract_valid') is not True
+            or path.get('schema') != 'entry_quality_path_v1'
+            or path_cost is None or not math.isclose(path_cost, cost, rel_tol=0, abs_tol=1e-9)):
+            excluded['quality_path_cost_missing_or_mismatched'] += 1
+            continue
+        hit = path.get('first_hit')
+        boundary = _number(path.get('gross_net_target_pct' if hit == 'net_target_first' else 'exact_stop_distance_pct'))
+        if (path.get('status') != 'evaluable' or hit not in {'net_target_first', 'exact_stop_first'}
+            or boundary is None or (hit == 'net_target_first' and boundary < 0)
+            or (hit == 'exact_stop_first' and boundary >= 0)):
             excluded['terminal_path_censored'] += 1
             continue
+        value = boundary - cost
         new = action == 'ENTER_NOW'
         key = (row['source_date'], row['stock_code'], row.get('scanner_promotion_id') or row['decision_trace_id'])
         groups[key].append((0., value if new else 0., new))
@@ -7933,7 +7946,7 @@ def _machine_admission_metrics(rows, actions):
     selected_episodes = [[v[1] for v in values if v[2]] for values in groups.values()]
     selected_episodes = [values for values in selected_episodes if values]
     return dict(status='supported_machine_admission' if groups else 'machine_path_unavailable',
-        basis='nonentry_to_enter_now_fixed_exit_cost_adjusted_path',
+        basis='nonentry_to_enter_now_cost_bound_quality_path',
         comparison_unit='equal_episode_weighted_immediate_attempts',
         comparable_opportunity_count=len(groups), comparable_attempt_count=sum(map(len, groups.values())),
         excluded_attempt_counts=dict(excluded), selected_attempt_count=len(selected),
@@ -7972,7 +7985,7 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
     population = supported
     if not population:
         return {**result, 'blocker': 'strategy_no_supported_predecision_rows'}
-    input_sha256 = strategy.digest([source_contract, parent, population, 'machine_admission_v1'] if machine_policy_only else [source_contract, parent, population])
+    input_sha256 = strategy.digest([source_contract, parent, population, 'machine_admission_v2_cost_bound'] if machine_policy_only else [source_contract, parent, population])
     result['input_sha256'] = input_sha256
     # Same input/selection is immutable; retries do not optimize on used holdout.
     if previous and previous.get('input_sha256') == input_sha256 and previous.get('candidate'):
@@ -8088,6 +8101,8 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
             step = max(1, (max(grid)-min(grid)) // 2) if isinstance(strategy.REGISTRY[name][0], int) else (max(grid)-min(grid))/2
             domains[name] = sorted(set(grid) | {max(low,min(grid)-step), min(high,max(grid)+step)})
     start = ((previous or {}).get('search') or {}).get('cursor', 0) if (previous or {}).get('input_sha256') == input_sha256 else 0
+    if machine_policy_only and start:
+        result['evaluated_candidate_count'] = previous.get('evaluated_candidate_count', 0)
     frozen = (previous or {}).get('candidate') or {}
     if (frozen.get('parent_sha256') == strategy.digest(parent)
         and frozen.get('evidence', {}).get('holdout', {}).get('source_dates')
@@ -8104,6 +8119,7 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
             'promotion_errors': errors, 'status': 'eligible' if not errors else 'hold_candidate',
             'selection_status': 'frozen_before_same_holdout_revision'}
     best, best_evidence, best_score, blockers = None, None, None, Counter()
+    machine_scores = list((previous or {}).get('machine_candidate_scores') or []) if machine_policy_only and start else []
     research_candidates = deepcopy((previous or {}).get('research_candidates') or []) if (previous or {}).get('input_sha256') == input_sha256 else []
     for candidate, progress in strategy.joint_candidates(parent, scope, domains=domains, selectors=selectors, start=start, limit=limit,
             **({'local_first': True} if machine_policy_only else {})):
@@ -8131,6 +8147,10 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
             worst = economy.get('worst_selected_path_pct')
             win_rate = economy.get('win_rate_pct')
             score = (win_rate, selected_ev, delta, economy['selected_opportunity_count'])
+            machine_scores.append(dict(policy_sha256=strategy.digest(candidate),
+                profile_changes={k:v for k,v in strategy.default_profile(candidate).items()
+                                 if v != strategy.default_profile(parent)[k]},
+                economics=economy, action_transition_counts=evidence['action_transition_counts']))
             if (delta is not None and delta >= 0 and selected_ev is not None and selected_ev >= 0 and win_rate is not None
                 and worst is not None and worst > CATASTROPHIC_LOSS_PCT
                 and (best_score is None or score > best_score)):
@@ -8170,6 +8190,7 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
             'status': 'selected_machine_policy' if best is not None else 'no_nonnegative_machine_candidate',
             'machine_policy': best, 'machine_policy_sha256': strategy.digest(best) if best is not None else None,
             'machine_evidence': machine_evidence, 'auxiliary_ai_required': False,
+            'machine_candidate_scores': machine_scores,
             'candidate': candidate, 'promotion_pass': not errors, 'promotion_errors': errors,
             'selection_basis': 'nonnegative_net_path_then_win_rate_then_net_ev',
             'holdout_status': holdout_status,
@@ -8202,6 +8223,8 @@ def build_machine_policy_report(rows, *, source_receipt, target_date, data_root=
     from src.engine.scalping import entry_strategy_policy as strategy
     from src.engine.scalping.mechanistic_entry_runtime_policy import load_effective, for_cohort
     incumbent = load_effective(data_root=data_root, target_date=datetime.now(KST).date().isoformat())
+    prior = _load_json(data_root / 'report' / 'ai_decision_action_outcome_calibration' / f'machine_policy_{target_date}.json')
+    prior = prior.get('selections', {}) if _artifact_content_sha256_valid(prior) else {}
     scopes = sorted({(r['effective_venue'], r['session_bucket']) for r in rows})
     selections = {}
     for cohort in scopes:
@@ -8213,7 +8236,7 @@ def build_machine_policy_report(rows, *, source_receipt, target_date, data_root=
         population, contract = _common_refinement_population([], scoped_rows,
             target_date=target_date, source_receipt=source_receipt, paired_contract={}, cohort=cohort)
         selections['|'.join(cohort)] = build_main_strategy_refinement(population,
-            parent=parent, scope=cohort, source_contract=contract, limit=limit, machine_policy_only=True)
+            parent=parent, scope=cohort, source_contract=contract, previous=prior.get('|'.join(cohort)), limit=limit, machine_policy_only=True)
     policy = {scope: selection['machine_policy'] for scope, selection in selections.items()
               if selection.get('machine_policy') is not None}
     return _with_artifact_content_sha256(dict(schema='main_machine_policy_report_v1',

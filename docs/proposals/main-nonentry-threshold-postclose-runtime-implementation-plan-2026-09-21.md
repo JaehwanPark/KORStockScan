@@ -159,7 +159,7 @@ candidate마다 incumbent/candidate action의 3×3 전이표, 유일 기회 수,
 
 ### 6.3 현재 기계정책의 비교 기준
 
-기존 labeler가 검증한 실행가능 ask 기준의 고정 target/adverse 선착순 경로와 왕복 비용을 사용한다. 목표 먼저 도달은 target minus cost, 손실 먼저 도달은 adverse minus cost다. 동시 도달·미도달·비용 결손은 null로 남겨 같은 비교 모집단에서 제외한다. 미래 고점/MFE를 체결이나 실현이익으로 사용하지 않는다.
+기존 labeler가 검증한 실행가능 ask 기준의 `entry_quality_path_v1`과 왕복 비용을 사용한다. 목표 먼저 도달은 `gross_net_target_pct minus full cost`, 손실 먼저 도달은 `exact_stop_distance_pct minus full cost`다. 목표·비용·선착순은 같은 저장 경로에서 읽고 비용 계약과 일치해야 한다. 비용보다 낮을 수 있는 별도 고정 gross 0.3% 비교 목표로 대체하지 않는다. 기존 순이익 목표 경로를 평가에 재사용하며 실제 청산 정책은 변경하지 않는다. 동시 도달·미도달·비용 결손은 null로 남겨 같은 비교 모집단에서 제외한다. 미래 고점/MFE를 체결이나 실현이익으로 사용하지 않는다.
 
 평가 모집단은 **기존 기계판정이 BLOCK/RECHECK인 기회만**이다. 기존 ENTER_NOW를 줄인 이익은 점수에 포함하지 않는다. 보조 판정기의 VETO→PASS 기회비용, 다른 하드 가드·scale-in·청산 튜닝은 각각 후속 분리 작업이다. 평가 단위는 **그 시점에 즉시 진입할지**다. ENTER_NOW는 해당 비용 반영 경로 값, BLOCK/RECHECK는 이 즉시 진입 실험에서 노출하지 않음으로 비교한다. 이는 RECHECK 이후 재진입·watch 종료 손익을 0으로 확정한다는 뜻이 아니다. 반복 attempt는 기회 내부에서 평균하고 기회마다 동일 가중치를 부여한다. 선택 진입의 비용 반영 평균 경로 값은 0 이상을 요구한다. 주 지표는 `win_rate_pct`이며 같은 승률이면 평균 경로 이익, `paired_admission_delta_pct`, 유일 기회 수 순으로 선택한다. 비용 후 이익이 0인 표본은 허용하되 승리로 세지 않는다. 기존 catastrophic 경계도 유지한다. 승률은 기회별 평균으로 계산하여 반복 RECHECK가 가중치를 늘리지 않는다. 포트폴리오 원화 순익이나 실제 체결률은 산출하지 않는다.
 

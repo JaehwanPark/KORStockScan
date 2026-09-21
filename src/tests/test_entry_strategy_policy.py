@@ -383,6 +383,10 @@ def machine_cost_row(hit='target_first'):
         entry_cost_contract=dict(schema='entry_round_trip_cost_v1', source_date=row['source_date'],
             effective_venue='KRX', session_bucket='KRX_REGULAR', basis='source_bound_estimate',
             source_sha256='a'*64, components_pct=dict(buy_fee=.01, sell_fee=.01, sell_tax=.15, slippage=.03)))
+    row['entry_quality_contract_valid'] = True
+    row['entry_quality_path'] = dict(schema='entry_quality_path_v1', status='evaluable',
+        first_hit={'target_first':'net_target_first', 'adverse_first':'exact_stop_first'}.get(hit, hit),
+        gross_net_target_pct=.5, exact_stop_distance_pct=-.5, conservative_execution_cost_pct=.2)
     return row
 
 
@@ -420,6 +424,18 @@ def test_machine_admission_cost_and_episode_weighting_ignore_ai():
     assert value['comparable_opportunity_count'] == 2
     good['comparison']['entry_cost_contract']['components_pct'].pop('sell_tax')
     assert c._machine_admission_metrics([good], ['ENTER_NOW'])['paired_admission_delta_pct'] is None
+
+
+def test_machine_admission_uses_cost_bound_path_not_lower_legacy_target():
+    from src.engine.scalping import ai_action_outcome_calibration as c
+    row = machine_cost_row()
+    row['comparison']['entry_path_target_pct'] = .1  # Below the recorded .2% cost.
+    value = c._machine_admission_metrics([row], ['ENTER_NOW'])
+    assert value['selected_path_ev_pct'] == pytest.approx(.3)
+    row['entry_quality_path']['conservative_execution_cost_pct'] = .1
+    assert c._machine_admission_metrics([row], ['ENTER_NOW'])['selected_path_ev_pct'] is None
+    row.pop('entry_quality_path')
+    assert c._machine_admission_metrics([row], ['ENTER_NOW'])['selected_path_ev_pct'] is None
 
 
 def test_machine_policy_losing_candidate_is_not_selected(monkeypatch):
@@ -516,17 +532,34 @@ def test_machine_win_rate_counts_costs_and_does_not_inflate_rechecks():
     result = c._machine_admission_metrics([good,good,bad],['ENTER_NOW']*3)
     assert result['win_rate_pct'] == 50
     assert result['selected_opportunity_count'] == 2
-    good['comparison']['entry_path_target_pct'] = .1
+    good['entry_quality_path']['gross_net_target_pct'] = .1
     assert c._machine_admission_metrics([good],['ENTER_NOW'])['win_rate_pct'] == 0
 
 
 def test_machine_break_even_policy_is_allowed(monkeypatch):
     from src.engine.scalping import ai_action_outcome_calibration as c
     one_research_candidate(monkeypatch)
-    row = machine_cost_row(); row['comparison']['entry_path_target_pct'] = .2
+    row = machine_cost_row(); row['entry_quality_path']['gross_net_target_pct'] = .2
     result = c.build_main_strategy_refinement([row],
         parent=evidence.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1, scope=('KRX','KRX_REGULAR'), source_contract={}, machine_policy_only=True)
     assert result['machine_policy'] is not None
     assert result['promotion_pass'], result['promotion_errors']
     assert result['machine_evidence']['train']['economics']['selected_path_ev_pct'] == pytest.approx(0.)
     assert strategy.select_report_candidate({'strategy_refinements_by_scope':{'KRX|KRX_REGULAR':result}})[0] == 'KRX|KRX_REGULAR'
+
+
+def test_nonentry_search_resumes_without_repeating_prior_candidates(monkeypatch):
+    from src.engine.scalping import ai_action_outcome_calibration as c
+    starts=[]
+    def candidates(*args, **kw):
+        starts.append(kw['start'])
+        yield research_policy(), dict(cursor=kw['start']+1,domain_size=10,domain_sha256='a'*64,search_complete=False)
+    monkeypatch.setattr(strategy,'joint_candidates',candidates)
+    kwargs=dict(parent=evidence.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,scope=('KRX','KRX_REGULAR'),source_contract={},machine_policy_only=True)
+    first=c.build_main_strategy_refinement([machine_cost_row('adverse_first')],**kwargs)
+    second=c.build_main_strategy_refinement([machine_cost_row('adverse_first')],previous=first,**kwargs)
+    assert starts==[0,1]
+    assert second['evaluated_candidate_count']==2 and len(second['machine_candidate_scores'])==2
+    changed=machine_cost_row('adverse_first');changed['comparison']['entry_path_adverse_pct']=-.6
+    third=c.build_main_strategy_refinement([changed],previous=second,**kwargs)
+    assert starts[-1]==0 and third['evaluated_candidate_count']==1
