@@ -96,3 +96,16 @@ Episode 복구는23:09:19에 공동 명단 검증 단계를 통과했으나 `low
 - 00:58 main terminal/기본 strict 검증은 성공했으나 9/22를 명시한 scoped 검증은 `runtime_summary_effective_date_mismatch`였다. low-price tuning 및 rising missed가 자정 이후 생성일9/22를 발행일로 사용하여9/23 후보를 만들고, summary가 날짜 최댓값을 선택했다.
 - 두 생산자에 명시적 publication date를 연결하고 source/generated 범위를 검증한다. 요약에도 명시적 prepared date 우선 및 실제 정책 날짜 포함 여부 검사를 추가했다. 검증124건 PASS. 과거 계산은 유지하고 low-price의 기존 `--refresh-receipts-only`, rising의 기존 writer로 날짜/영수증만 재발행한다.
 - 이전 성공 machine 회차도 source/발행 변경 시 같은 검증 경로로 재구축할 수 있도록 terminal 상태 검증을 확장했다. running/잘못된 exit code/불일치 원천은 계속 차단한다.
+
+### 9/22 최종 정책 인계 실검증
+
+- 선택 배포본 `98c70f566235c2328bcbd15e2df34f144faaf5b6`; immutable release에서도 관련124건 PASS. 정규 cron 4개 라우팅과 독립 controller/tuning 설치를 확인했다.
+- Tuning monitoring은01:05:09 정상 종료. native machine terminal은 새 closure와 기존 분석의 해시 검증 후 summary/checklist만 재개하여 succeeded/0. main native terminal도 succeeded이며 고비용 후보 계산은 반복하지 않았다.
+- 원천9/21·발행9/21·적용9/22를 명시한 main/compact scoped verifier 모두 PASS. 잘못 생성된9/23 checklist와 rising 정책은 미소비/bootstrap 부재를 확인하고 `tmp/postclose-source-order-20260921/misdated-unconsumed/`로 보존했다.
+- 메인 선택 배포본의 실제 `load_effective`가 `cdeff4e82473b3c850fb184861c35d10f96bee5f6407834e14e41840b06a27b6`를 읽었다. 위젯 실제 서비스 release의 설정 로더는005930/034020/042660, 에피소드 실제 서비스 release의9/22 정책/프로필 로더는19종목61프로필을 읽었다. 호출은 읽기 전용이며 주문/장전 부트스트랩을 실행하지 않았다.
+- 정상 예약은07:35 PREOPEN,07:55 main start,07:58 widget,08:56 episode auto-expansion이다. 현재 main은 표준 장후 stop 상태이며 새 배포본의 자연 PID 소비·9/22 실제 성과는 아직 발생 전이다.
+- 최종화 첫 호출의 storage-only 옵션은 해당 날짜의 기존 storage 실패가 없어 거절됐다. 검증 조건을 바꾸지 않고 정상 정리 경로로 재실행했다. 저장소 capacity는healthy, 여유 공간 약18GB이며 삭제 권한은 확장하지 않았다.
+
+- 01:13:32 native finalization/cleanup/final detector 모두 DONE, service exit0. 종료 후 full strict chain 검증 PASS(issue_count0), 독립 detector 재확인에서 cron completion PASS·실패 detector0. 독립 복구 detector도 명시적9/22 prepared-date 환경을 요구하므로 해당 날짜 계약으로 실행했다.
+- 비차단 경고는 code-improvement 작업서 미생성, 기존 EOD completed_with_warnings, 과거 로그 경고이다. 실제 장후 producer/정책 발행/인계 오류와 구분하며 모든 시스템 경고가 없어졌다고 주장하지 않는다. 전체 결과는 `data/report/threshold_cycle_postclose_verification/`, `data/report/postclose_done_controller/postclose_done_controller_2026-09-21.json`, `data/report/error_detection/error_detection_2026-09-21.json`, `logs/postclose_finalization_cron.log`가 소유한다.
+- 최종 문서 parser/diff 검증 PASS. 추가 광역 테스트·정책 재계산·외부 Project/Calendar 동기화는 실행하지 않았다. 장전 실제 PID 소비와 수익성은 예약 실행 후 별도 확인한다.
