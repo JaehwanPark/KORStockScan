@@ -622,6 +622,8 @@ strict verifier는 다음을 모두 요구한다.
 
 2026-09-21 추가 수리 승인: 비동기 스캐너의 기존 market-preparation worker에서 최종 시세 갱신 전 source-only 증거를 준비한다. 공유 한도/주문 우선권은 그대로 두고 기존 source-only 대기 상한1.25초 및 worker 잔여 deadline 안에서만 수집한다(transport 여유0.30초 제외). 관측 시점에는 계좌·종목·가격·주문/잔고 세대가 일치하는 2초 이내 성공 증거만 재사용한다. 동기 관측의 rate 대기0, 주문 직전 fresh 조회와 최종 시세/취소/deadline 검증은 유지한다. 과거 결손은 소급 복구하지 않으며 날짜형 DB 상태는 원형 보존 직렬화한다. [수리·검증·배포 근거](../audit-reports/2026-09-21-preflight-submit-bottleneck-repair.md).
 
+현재 `legacy` 모드에서는 같은 bridge가 시장자료 조회 전 준비 요청만 전달한다. 기존 detached post-sell/policy worker가 최대8개 exact key·5초 유효 pending 요청을 중복 억제하고 한 번에 하나씩 동일 source-only 한도 안에서 수집한다. 비활성 async 모드를 켜지 않으며 main loop는 이 수집을 기다리지 않는다. 기존 worker의 idle poll0.1초, 정책/post-sell 유지 주기1초와 bounded 수집 지연을 구분하고, 새 thread·주문 권한·과거 결손 복구는 만들지 않는다.
+
 - ENTER/BLOCK/RECHECK 관측 계획은 실제 machine action을 유지한다. non-entry에는 compact PASS/VETO 또는 AI 응답 시각을 만들지 않는다. 기존 split producer가 `nonentry_plan_only`를 보존하고 main evaluator가 직접 소비한다. 원래 AI 미호출 지점을 새 ENTER로 바꾸려면 exact 보조 판정이 별도로 필요하며 없으면 `frozen_auxiliary_verdict_missing`이다.
 - 동일 promotion의 RECHECK는 시간순 후속 판단으로 이어진다. 원천 모집단의 모든 평가가 남았는지 확인한다. 실제 WATCHING TTL owner의 기한·종료 receipt가 일치할 때만 비노출 종결한다. FIFO는 같은 CF 큐 점유가 입증되지 않으므로 TTL로 대체하지 않는다. 미종결 RECHECK는 pending이다.
 - 경제성의 지원 실험은 **동일 frozen 현금 한도·동일 총수량의 조건부 비교**다. 실제 계좌 전체 수익을 복원하는 backtest가 아니다. 동시 reserve/보유 종목을 시간순으로 처리하고 이익 재투자는 하지 않는다. 관측 사이 승인 수량·budget가 바뀌거나 다른 owner의 현금 흐름 증거가 없으면 해당 비교를 `unsupported_scope`로 남긴다. 단순 표본 증가로 이 범위 제한이 해소된다고 보고하지 않는다.

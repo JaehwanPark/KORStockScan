@@ -86,6 +86,42 @@ def response(**extra):
     }
 
 
+def test_legacy_preparation_is_coalesced_bounded_and_scope_checked(monkeypatch):
+    handlers._reset_entry_capacity_receipts()
+    clock = [1000.0]
+    generation = ["first"]
+    reads = []
+    monkeypatch.setattr(handlers.time, "time", lambda: clock[0])
+    monkeypatch.setattr(handlers, "_is_any_simulated_position", lambda stock, strategy: stock.get("sim", False))
+    monkeypatch.setattr(handlers, "_entry_capacity_receipt_key", lambda code, price: (generation[0], code, price))
+    monkeypatch.setattr(handlers, "_prefetch_entry_capacity_for_async_evaluation",
+                        lambda *args: reads.append(args) or {"status": "ready"})
+    request = handlers._request_entry_capacity_preparation
+    try:
+        assert not request({"sim": True}, "005930", {"curr": 10000})
+        assert not request({"buy_qty": 1}, "005930", {"curr": 10000})
+        for _ in range(3):
+            assert request({}, "005930", {"curr": 10000})
+        assert len(handlers._ENTRY_CAPACITY_PENDING) == 1
+        assert not reads  # Main loop cannot wait for or perform broker I/O.
+        assert handlers.prepare_pending_entry_capacity() == {"status": "ready"}
+        assert reads == [("005930", {"curr": 10000}, 1005.0)]
+        assert handlers.prepare_pending_entry_capacity() == {"status": "idle"}
+        request({}, "005930", {"curr": 10000})
+        generation[0] = "changed"
+        assert handlers.prepare_pending_entry_capacity()["reason"] == "expired_or_changed_scope"
+        for code in range(8):
+            assert request({}, str(code), {"curr": 10000})
+        assert not request({}, "extra", {"curr": 10000})
+        clock[0] = 1006
+        assert handlers.prepare_pending_entry_capacity()["reason"] == "expired_or_changed_scope"
+        assert len(reads) == 1
+        assert request({}, "fresh", {"curr": 10000})
+        assert len(handlers._ENTRY_CAPACITY_PENDING) == 1
+    finally:
+        handlers._reset_entry_capacity_receipts()
+
+
 @pytest.mark.parametrize(
     "value,status,parsed",
     [

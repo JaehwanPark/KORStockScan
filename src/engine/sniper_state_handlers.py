@@ -2828,15 +2828,18 @@ _ENTRY_CAPACITY_LOCK = threading.Lock()
 _ENTRY_CAPACITY_RECEIPTS: dict = {}
 _ENTRY_CAPACITY_INFLIGHT: dict = {}
 _ENTRY_CAPACITY_RETRY_AFTER: dict = {}
+_ENTRY_CAPACITY_PENDING: dict = {}
 
 
 def _reset_entry_capacity_receipts():
     global _ENTRY_CAPACITY_LOCK, _ENTRY_CAPACITY_RECEIPTS
     global _ENTRY_CAPACITY_INFLIGHT, _ENTRY_CAPACITY_RETRY_AFTER
+    global _ENTRY_CAPACITY_PENDING
     _ENTRY_CAPACITY_LOCK = threading.Lock()
     _ENTRY_CAPACITY_RECEIPTS = {}
     _ENTRY_CAPACITY_INFLIGHT = {}
     _ENTRY_CAPACITY_RETRY_AFTER = {}
+    _ENTRY_CAPACITY_PENDING = {}
 
 
 if hasattr(os, "register_at_fork"):
@@ -2944,6 +2947,46 @@ def _prefetch_entry_capacity_for_async_evaluation(code, ws_data, deadline_epoch)
         if _entry_capacity_receipt_valid(receipt, code, price, time.time()):
             return {"status": "ready", "reuse_status": receipt.get("capacity_reuse_status")}
         return {"status": "source_gap", "reason": receipt.get("error") or "kt00011_empty"}
+    except Exception as exc:
+        return {"status": "source_gap", "reason": type(exc).__name__ + ":" + str(exc)}
+
+
+def _request_entry_capacity_preparation(stock, code, ws_data):
+    """Nonblocking legacy preparation; no evaluation result is ever backfilled."""
+    try:
+        price = _safe_int((ws_data or {}).get("curr"), 0)
+        if (price <= 0 or _safe_int(stock.get("buy_qty"), 0) > 0
+                or _is_any_simulated_position(stock, stock.get("strategy"))):
+            return False
+        key = _entry_capacity_receipt_key(code, price)
+        now_ts = time.time()
+        with _ENTRY_CAPACITY_LOCK:
+            if _entry_capacity_receipt_valid(_ENTRY_CAPACITY_RECEIPTS.get(key), code, price, now_ts):
+                return True
+            if _ENTRY_CAPACITY_INFLIGHT.get(key):
+                return True
+            for expired in [k for k, v in _ENTRY_CAPACITY_PENDING.items() if v[2] <= now_ts]:
+                _ENTRY_CAPACITY_PENDING.pop(expired)
+            if key not in _ENTRY_CAPACITY_PENDING and len(_ENTRY_CAPACITY_PENDING) >= 8:
+                return False
+            _ENTRY_CAPACITY_PENDING.setdefault(key, (code, price, now_ts + 5.0))
+        return True
+    except Exception:
+        # The normal observer retains the authoritative missing-source cause.
+        return False
+
+
+def prepare_pending_entry_capacity():
+    """Consume at most one coalesced source read on the existing observer worker."""
+    with _ENTRY_CAPACITY_LOCK:
+        if not _ENTRY_CAPACITY_PENDING:
+            return {"status": "idle"}
+        key = next(iter(_ENTRY_CAPACITY_PENDING))
+        code, price, deadline = _ENTRY_CAPACITY_PENDING.pop(key)
+    try:
+        if time.time() >= deadline or key != _entry_capacity_receipt_key(code, price):
+            return {"status": "skipped", "reason": "expired_or_changed_scope"}
+        return _prefetch_entry_capacity_for_async_evaluation(code, {"curr": price}, deadline)
     except Exception as exc:
         return {"status": "source_gap", "reason": type(exc).__name__ + ":" + str(exc)}
 
@@ -60177,6 +60220,7 @@ def _resolve_scanner_async_entry_ai(
     if not isinstance(coordinator, ScannerAsyncEvalCoordinator) or not isinstance(
         generation, ScannerGeneration
     ):
+        _request_entry_capacity_preparation(stock, code, ws_data)
         return {"status": "not_enabled"}
 
     cache_key = _scanner_async_entry_cache_key(

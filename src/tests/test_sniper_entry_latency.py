@@ -35,6 +35,7 @@ def _assert_danger_hard_safety_block(result, *, danger_reasons=None):
 
 
 def test_post_sell_bbo_observer_runs_detached_from_trading_loop(monkeypatch):
+    monkeypatch.setattr(state_handlers, "_ENTRY_CAPACITY_PENDING", {})
     from src.engine.scalping import avg_down_replay_capture as capture
     monkeypatch.setattr(capture, "_POLICY_CACHE", {})
     rules = sniper_runtime.sniper_state_handlers.TRADING_RULES
@@ -43,6 +44,9 @@ def test_post_sell_bbo_observer_runs_detached_from_trading_loop(monkeypatch):
         "files": {}, "matrix_selection": {},
     })
     calls = []
+    capacity_calls = []
+    monkeypatch.setattr(sniper_runtime.sniper_state_handlers, "prepare_pending_entry_capacity",
+                        lambda: capacity_calls.append(time.time()) or {"status": "ready"})
     monkeypatch.setattr(
         sniper_runtime.sniper_state_handlers,
         "observe_post_sell_executable_bbo_horizons",
@@ -58,6 +62,8 @@ def test_post_sell_bbo_observer_runs_detached_from_trading_loop(monkeypatch):
     thread.join(timeout=1.0)
 
     assert calls
+    assert capacity_calls and capacity_calls[0] < calls[0]
+    assert sniper_runtime.run_sniper.entry_economic_capacity_preparation_receipt["status"] == "ready"
     assert not thread.is_alive()
     assert sniper_runtime.run_sniper.post_sell_bbo_observer_failure_count == 0
     assert sniper_runtime.run_sniper.post_sell_bbo_observer_last_success_epoch > 0.0
@@ -66,6 +72,7 @@ def test_post_sell_bbo_observer_runs_detached_from_trading_loop(monkeypatch):
 
 
 def test_post_sell_bbo_observer_rate_limits_repeated_failures(monkeypatch):
+    monkeypatch.setattr(state_handlers, "_ENTRY_CAPACITY_PENDING", {})
     logs = []
 
     def _fail_observation(*, now_ts):

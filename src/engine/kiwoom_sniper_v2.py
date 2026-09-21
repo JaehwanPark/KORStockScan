@@ -11651,7 +11651,14 @@ def _start_post_sell_bbo_observer_worker() -> threading.Thread:
     run_sniper.post_sell_bbo_observer_last_result = {}
 
     def _worker() -> None:
-        while not stop_event.wait(1.0):
+        next_maintenance = time.monotonic() + 1.0
+        while not stop_event.wait(0.1):
+            capacity_result = sniper_state_handlers.prepare_pending_entry_capacity()
+            if capacity_result.get("status") != "idle":
+                run_sniper.entry_economic_capacity_preparation_receipt = capacity_result
+            if time.monotonic() < next_maintenance:
+                continue
+            next_maintenance = time.monotonic() + 1.0
             # Source-only policy preparation shares the existing detached
             # cadence, never the entry/submit thread or retired capture loop.
             from src.engine.scalping.avg_down_replay_capture import (

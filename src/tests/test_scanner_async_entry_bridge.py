@@ -40,6 +40,17 @@ class _FakeAI:
         return {"action": "BUY", "score": 77, "reason": "fresh continuation"}
 
 
+def test_legacy_entry_bridge_requests_nonblocking_capacity_without_enabling_async(monkeypatch):
+    calls = []
+    monkeypatch.setattr(handlers, "_request_entry_capacity_preparation",
+                        lambda *args: calls.append(args))
+    stock, ws = {"code": "005930"}, {"curr": 10000}
+    result = handlers._resolve_scanner_async_entry_ai(stock, "005930", ws, _FakeAI(), {},
+        trigger_reason="first_call", last_ai_time=0, current_ai_score=50)
+    assert result == {"status": "not_enabled"}
+    assert calls == [(stock, "005930", ws)]
+
+
 def _generation(venue="KRX"):
     return ScannerGeneration(
         code="005930",
