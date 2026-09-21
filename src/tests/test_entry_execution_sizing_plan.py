@@ -829,10 +829,12 @@ def test_runtime_pre_ai_producer_freezes_owner_inputs_without_submit(monkeypatch
     exact={'current':{'price':10020},'session_bucket':session,'broker_route':broker_route,
            'orderbook_top1':{'bid':{'price':10000},'ask':{'price':10010}}}
     receipt={'evaluation_attempt_id':'pre-ai-live','scanner_promotion_id':'promotion-pre-ai',
-             'effective_venue':venue,'session_bucket':session}
+             'effective_venue':venue,'session_bucket':session, 'market_session_bucket':session,
+             'machine_capture_status':'captured','machine_observation_sha256':'c'*64}
     result=handlers._observe_entry_economics_before_ai(stock,'005930',ws,
         exact_payload=exact,assessment={'action':machine_action},capture=receipt,bundle_sha256='a'*64)
-    assert stock == before
+    assert {k:v for k,v in stock.items() if k != '_machine_observation_revision'} == before
+    assert stock['_machine_observation_revision']['digest'] == 'c'*64
     assert requests == [('005930',10020,0,{'source_only':True,
         'reuse_only': machine_action != 'ENTER_NOW'})]
     logger.flush_pipeline_event_producer_summary()
@@ -845,8 +847,13 @@ def test_runtime_pre_ai_producer_freezes_owner_inputs_without_submit(monkeypatch
                      if (payload := json.loads(line)).get("stage") in {"entry_ai_economic_plan_observed", "entry_ai_economic_source_gap"})
     cached = sentinel._payload_to_cache_row(raw_event, exclude_summary_stages=True)
     assert cached is not None
+    assert cached['fields']['machine_revision_schema'] == 'exact_machine_revision_v1'
+    assert cached['fields']['machine_revision_parent_sha256'] == ''
     diagnostic = json.loads(cached['fields']['economic_source_monitor_projection'])
     assert diagnostic['status'] == ('recorded_source_only' if guard_allowed else 'guard_excluded'), diagnostic
+    assert diagnostic['observation_guard']['stage'] == 'pre_ai_observation_only'
+    assert diagnostic['observation_guard']['allowed'] == guard_allowed
+    assert diagnostic['observation_guard']['latency_state'] == 'SAFE'
     assert 'entry_opportunity_replay_seed' not in cached['fields']
     if guard_allowed:
         assert result['entry_economic_source_status']=='recorded_source_only', result

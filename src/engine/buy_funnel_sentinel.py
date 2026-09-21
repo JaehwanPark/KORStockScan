@@ -2726,6 +2726,61 @@ def _machine_source_invalid_decomposition(
     }
 
 
+def _machine_revision_rows(rows):
+    """Select a terminal revision only with explicit ordered snapshot receipts.
+
+    Legacy attempts remain subject to the original conflict rules. This is a
+    report projection, never entry or order authority.
+    """
+    decisions = [r for r in rows if r.fields.get("entry_mechanistic_action")]
+    if not any(r.fields.get("machine_revision_schema") for r in decisions):
+        return rows, "legacy_unverified", []
+    revisions = {}
+    previous = ""
+    for event in decisions:
+        fields = event.fields
+        digest = _safe_str(fields.get("machine_observation_sha256"))
+        parent = _safe_str(fields.get("machine_revision_parent_sha256"))
+        if (fields.get("machine_revision_schema") != "exact_machine_revision_v1"
+                or fields.get("entry_primary_decision_owner") != MACHINE_PRIMARY_DECISION_OWNER
+                or "machine_revision_parent_sha256" not in fields
+                or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest)):
+            return rows, "invalid", ["machine_revision_receipt_missing_or_invalid"]
+        if digest != previous:
+            if digest in revisions or parent != previous:
+                return rows, "invalid", ["machine_revision_parent_or_order_conflict"]
+            if previous and event.emitted_at <= revisions[previous][-1].emitted_at:
+                return rows, "invalid", ["machine_revision_order_unproven"]
+            revisions[digest] = []
+            previous = digest
+        group = revisions[digest]
+        if group and parent != _safe_str(group[0].fields.get("machine_revision_parent_sha256")):
+            return rows, "invalid", ["machine_revision_parent_or_order_conflict"]
+        group.append(event)
+    for group in revisions.values():
+        actions = {_safe_str(r.fields.get("entry_mechanistic_action")).upper() for r in group}
+        screens = {_safe_str(r.fields.get("entry_ai_screen_status")).lower() for r in group
+                   if r.fields.get("entry_ai_screen_status")}
+        if len(actions) != 1 or not actions <= MACHINE_PRIMARY_ENTRY_ACTIONS or len(screens) > 1:
+            return rows, "invalid", ["machine_revision_decision_conflict"]
+        action = next(iter(actions))
+        screen = next(iter(screens), "")
+        if (not screens <= MACHINE_PRIMARY_AI_SCREEN_STATUSES
+                or action == "ENTER_NOW" and screen not in {"pass", "veto", "caution", "insufficient",
+                    "response_invalid", "not_evaluated_transport", "not_evaluated_local"}
+                or action == "BLOCK" and screen not in {"", "not_requested_machine_nonentry"}
+                or action == "RECHECK" and screen not in {"", "not_requested_machine_nonentry", "not_requested_required_feature_insufficient"}
+                or action == "SOURCE_INVALID" and screen not in {"", "not_requested_machine_source_invalid"}):
+            return rows, "invalid", ["machine_revision_screen_contract_invalid"]
+    if len(revisions) > 1:
+        latest = set(id(r) for r in revisions[previous])
+        if any(id(r) not in latest and (r.stage.startswith("order_")
+                or r.stage in BROKER_SUBMIT_FAILURE_STAGES
+                or r.stage in {"budget_pass", "entry_armed", "entry_submit_attempt_finished"}) for r in rows):
+            return rows, "invalid", ["machine_revision_prior_execution_unresolved"]
+    return revisions[previous], "valid" if len(revisions) > 1 else "single_revision", []
+
+
 def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]:
     """Diagnostic machine -> AI screen -> submit funnel with explicit identity.
 
@@ -2821,14 +2876,29 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
     for key, rows in sorted(grouped.items()):
         rows = sorted(rows, key=lambda row: row.emitted_at)
         identity_parts = key.removeprefix("machine:").split("|")
+        decision_history = []
+        for event in rows:
+            observed_action = _safe_str(event.fields.get("entry_mechanistic_action")).upper()
+            if observed_action not in MACHINE_PRIMARY_ENTRY_ACTIONS:
+                continue
+            observation = {
+                "action": observed_action,
+                "ai_screen_status": _safe_str(event.fields.get("entry_ai_screen_status")),
+                "machine_observation_sha256": _safe_str(event.fields.get("machine_observation_sha256")),
+            }
+            if not decision_history or any(decision_history[-1][k] != v for k, v in observation.items()):
+                decision_history.append({**observation, "observed_at": event.emitted_at.isoformat(),
+                                         "stage": event.stage})
+        decision_rows, revision_status, revision_errors = _machine_revision_rows(rows)
+        observed_actions = {item["action"] for item in decision_history}
         actions = {
             _safe_str(row.fields.get("entry_mechanistic_action")).upper()
-            for row in rows
+            for row in decision_rows
             if _safe_str(row.fields.get("entry_mechanistic_action"))
         }
         screens = {
             _safe_str(row.fields.get("entry_ai_screen_status")).lower()
-            for row in rows
+            for row in decision_rows
             if _safe_str(row.fields.get("entry_ai_screen_status"))
         }
         owners = {
@@ -2841,7 +2911,9 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
             for row in rows
             if _safe_str(row.fields.get("entry_mechanistic_policy_version"))
         }
-        conflict_reasons = []
+        conflict_reasons = list(revision_errors)
+        if revision_status == "valid" and len(policy_versions) > 1:
+            conflict_reasons.append("machine_revision_policy_version_conflict")
         if len(actions) != 1 or not actions <= MACHINE_PRIMARY_ENTRY_ACTIONS:
             conflict_reasons.append("mechanistic_action_missing_or_conflicting")
         if owners != {MACHINE_PRIMARY_DECISION_OWNER}:
@@ -3029,6 +3101,11 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
             "first_evaluated_at": rows[0].emitted_at.isoformat(),
             "last_event_at": rows[-1].emitted_at.isoformat(),
             "mechanistic_action": action,
+            "revision_chain_status": revision_status,
+            "decision_history": decision_history,
+            "initial_observed_action": decision_history[0]["action"] if decision_history else "UNKNOWN",
+            "latest_observed_action": decision_history[-1]["action"] if decision_history else "UNKNOWN",
+            "enter_now_observed": "ENTER_NOW" in observed_actions,
             "ai_screen_status": screen or "not_reported",
             "policy_versions": sorted(policy_versions),
             "submit_pipeline_reached": bool(submitted_rows),

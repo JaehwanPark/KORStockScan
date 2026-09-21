@@ -48,6 +48,14 @@ def economic_evidence(fields, stock_code=None):
         "owner": fields.get("entry_economic_source_owner") or "main_entry_execution_owners",
         "closure_test": fields.get("entry_economic_source_closure_test") or "exact frozen plan/cost/capital source reaches evaluator",
         "plan_sha256": fields.get("entry_economic_plan_sha256"), "valid_economics": False}
+    guard = fields.get("entry_economic_guard_receipt")
+    if isinstance(guard, str):
+        try:
+            guard = json.loads(guard)
+        except (ValueError, TypeError):
+            guard = None
+    if isinstance(guard, dict):
+        result["observation_guard"] = guard
     if status != "recorded_source_only":
         if blocker.startswith("common_guard_block:") or blocker == "owner_sizing_zero_or_invalid":
             result["status"] = "guard_excluded"
@@ -148,7 +156,10 @@ def snapshot(events, as_of):
         missing_last_at=missing_rows[-1]["occurred_at"] if missing_rows else None,
         examples=current_missing[:3])
     economic = {}
-    for e in recent:
+    economic_by_revision = {}
+    chain_status = {r["evaluation_key"]: r["revision_chain_status"] for r in funnel["evaluation_ledger"]}
+    economic_history = defaultdict(list)
+    for e in sorted(recent, key=lambda event: stamp(event.emitted_at)):
         if e.stage not in ECONOMIC_STAGES:
             continue
         key = _machine_primary_evaluation_key(e)
@@ -160,13 +171,22 @@ def snapshot(events, as_of):
             # original field was retained. No raw rescan or proof regeneration.
             value = {**value, "capacity_blocker": e.fields.get("entry_economic_capacity_blocker")
                      or value.get("capacity_blocker")}
-            old = economic.get(key, {})
+            observation = {"observed_at": stamp(e.emitted_at).isoformat(), "stage": e.stage,
+                "mechanistic_action": e.fields.get("entry_mechanistic_action"),
+                "machine_observation_sha256": e.fields.get("machine_observation_sha256"),
+                "evidence": dict(value)}
+            if observation not in economic_history[key]:
+                economic_history[key].append(observation)
+            revision_key = (key, e.fields.get("machine_observation_sha256")) if chain_status.get(key) == "valid" else (key, None)
+            old = economic_by_revision.get(revision_key, {})
             if (old.get("blocker") == "economic_observation_conflicting_proofs"
                 or old.get("status") == value.get("status") == "recorded_source_only"
                 and old.get("seed_sha256") != value.get("seed_sha256")):
                 value = {**old, "status": "source_gap", "blocker": "economic_observation_conflicting_proofs"}
+            economic_by_revision[revision_key] = value
             economic[key] = value
     for row in funnel["evaluation_ledger"]:
+        row["economic_history"] = economic_history.get(row["evaluation_key"], [])
         feature_guard = (row["mechanistic_action"] == "RECHECK"
                          and row["ai_screen_status"] == "not_requested_required_feature_insufficient"
                          and not row["conflict_reasons"])
@@ -180,6 +200,19 @@ def snapshot(events, as_of):
                         else None),
             "owner": "main_entry_execution_owners->pipeline_event_logger->sentinel_cache",
             "closure_test": "same exact attempt publishes its pre-AI economic observation"})
+        if row["revision_chain_status"] == "valid":
+            missing = {"status": "source_gap", "blocker": "economic_observation_event_missing",
+                "owner": "main_entry_execution_owners->pipeline_event_logger->sentinel_cache",
+                "closure_test": "same exact revision publishes its pre-AI economic observation"}
+            final_hash = row["decision_history"][-1]["machine_observation_sha256"]
+            row["economic_source"] = economic_by_revision.get((row["evaluation_key"], final_hash), missing)
+            # A later revision's success cannot retrospectively repair an
+            # earlier ENTER_NOW's missing proof. Guard exclusions are separate.
+            for observed in row["decision_history"]:
+                proof = economic_by_revision.get((row["evaluation_key"], observed["machine_observation_sha256"]), missing)
+                if observed["action"] == "ENTER_NOW" and proof.get("status") == "source_gap":
+                    row["economic_source"] = {**proof, "machine_observation_sha256": observed["machine_observation_sha256"]}
+                    break
     return {
         "schema": SCHEMA, "as_of": now.isoformat(),
         "latest_event_at": max((stamp(e.emitted_at) for e in recent), default=now - timedelta(days=1)).isoformat(),
@@ -189,6 +222,8 @@ def snapshot(events, as_of):
             "session_bucket", "policy_bundle_hash", "first_evaluated_at", "last_event_at",
             "mechanistic_action", "ai_screen_status", "broker_acceptance_observed",
             "final_guard_blocked", "final_state", "conflict_reasons", "source_invalid_decomposition", "economic_source",
+            "decision_history", "initial_observed_action", "latest_observed_action",
+            "enter_now_observed", "economic_history", "revision_chain_status",
         )} for r in funnel["evaluation_ledger"]],
         "missing_identity_evidence": sorted({r["evidence_id"] for r in mature_missing}),
         "missing_identity_examples": mature_missing[:3],
@@ -205,6 +240,7 @@ def _nonentry_capacity_observation_gap(row):
     return (row.get("mechanistic_action") in {"BLOCK", "RECHECK"}
             and row.get("ai_screen_status") == "not_requested_machine_nonentry"
             and not row.get("conflict_reasons")
+            and not row.get("enter_now_observed")
             and not row.get("broker_acceptance_observed")
             and row.get("final_state") in {"machine_block_point_drop", "machine_recheck_observation"}
             and economic.get("status") == "source_gap"
@@ -303,10 +339,13 @@ def evaluate(report, state, now):
         tests = {
             "economic_producer_gap": (economic_gaps, "structural_evidence", 240),
             "source_or_submit_lineage_gap": (gaps, "structural_evidence", 240),
-            "enter_now_scarcity": (valid if len(valid) >= MIN_PROMOTIONS and not entered else [], "review_required", PERSIST_SEC),
+            "enter_now_scarcity": (valid if len(valid) >= MIN_PROMOTIONS and not entered
+                and not any(r.get("enter_now_observed") for r in rows) else [], "review_required", PERSIST_SEC),
             "ai_veto_concentration": (veto if len(entered) >= MIN_PROMOTIONS and len(veto) / len(entered) >= .9 and not accepted else [], "review_required", PERSIST_SEC),
         }
         result["scopes"][scope] = {"unique_promotions": len(parents), "valid_promotions": len(valid),
+            "enter_now_observed_attempts": sum(bool(r.get("enter_now_observed")) for r in rows),
+            "enter_now_observed_conflicting_attempts": sum(bool(r.get("enter_now_observed")) and bool(r["conflict_reasons"]) for r in rows),
             "enter_now": len(entered), "veto": len(veto), "accepted_attempts": len(accepted),
             "unresolved_attempts": len(gaps), "economic_producer_gaps": len(economic_gaps),
             "nonentry_capacity_observation_gaps": len(observation_gaps),

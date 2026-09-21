@@ -11958,13 +11958,19 @@ def _observe_entry_economics_before_ai(stock, code, ws_data, *, exact_payload,
                                       assessment, capture, bundle_sha256):
     """Freeze the existing owner plan before AI without submitting or reserving.
 
-    The clone protects watched state. Broker capacity uses the existing bounded
+    The clone protects trading state; only the observation revision receipt is
+    retained on the watched stock. Broker capacity uses the existing bounded
     source-only request; missing capacity never falls back to fabricated cash.
     Submitted-plan calibration and this observation remain separate populations.
     """
     from src.engine.scalping.strategy_owner_replay import freeze_entry_operating_context
     from src.engine.scalping.strategy_owner_components import digest
+    from src.engine.scalping.ai_decision_trace import bind_machine_observation_revision
+    bind_machine_observation_revision(stock, capture, symbol=str(code)[:6],
+                                      bundle_sha256=bundle_sha256)
     snapshot = copy.deepcopy(stock or {})
+    # Process-local diagnostics are not an operating-policy replay input.
+    snapshot.pop("_machine_observation_revision", None)
     now_ts = time.time()
     source = {"entry_economic_source_status": "source_gap",
               "entry_economic_source_owner": "main_entry_execution_owners",
@@ -11974,6 +11980,9 @@ def _observe_entry_economics_before_ai(stock, code, ws_data, *, exact_payload,
         effective_venue=capture.get("effective_venue"),
         market_session_bucket=capture.get("session_bucket") or exact_payload.get("session_bucket"),
         machine_bundle_sha256=bundle_sha256, entry_mechanistic_action=assessment.get("action"),
+        machine_observation_sha256=capture.get("machine_observation_sha256"),
+        machine_revision_schema=capture.get("machine_revision_schema"),
+        machine_revision_parent_sha256=capture.get("machine_revision_parent_sha256"),
         entry_primary_decision_owner="mechanistic_entry_adjudicator", entry_ai_screen_pass=False)
     try:
         if snapshot.get("code") and str(snapshot["code"])[:6] != str(code)[:6]:
@@ -12025,6 +12034,21 @@ def _observe_entry_economics_before_ai(stock, code, ws_data, *, exact_payload,
         gate = evaluate_live_buy_entry(stock=snapshot, code=code, ws_data=copy.deepcopy(ws_data),
             strategy_id="SCALPING", planned_qty=sizing.effective_qty, signal_price=current,
             target_buy_price=_safe_int(snapshot.get("target_buy_price"), 0))
+        source["entry_economic_guard_receipt"] = json.dumps({
+            "stage": "pre_ai_observation_only", "observed_epoch": time.time(),
+            "machine_observation_sha256": capture.get("machine_observation_sha256"),
+            **{key: gate[key] for key in (
+                "allowed", "reason", "decision", "effective_decision", "effective_reason",
+                "latency_state", "ws_age_ms", "ws_jitter_ms", "spread_ratio", "quote_stale",
+                "latency_danger_reasons", "latency_danger_remeasure_reasons",
+                "latency_danger_detail_reason", "latency_danger_source_quality_state",
+                "latency_danger_reason_taxonomy_gap", "latency_danger_max_ws_age_ms_for_caution",
+                "latency_danger_max_ws_jitter_ms_for_caution", "latency_danger_max_spread_ratio_for_caution",
+                "latency_danger_guard_max_spread_ratio",
+                "cached_quote_received_epoch", "cached_quote_receive_age_ms",
+                "computed_allowed_slippage", "signal_price", "latest_price",
+            ) if key in gate},
+        }, sort_keys=True, separators=(",", ":"))
         if gate.get("allowed") is not True:
             raise ValueError("common_guard_block:" + str(gate.get("reason")))
         orders, _ = _apply_mechanistic_entry_price_owner(stock=snapshot, code=code,
@@ -18789,9 +18813,11 @@ def _log_machine_nonentry_terminal_if_needed(
         or decision.get("snapshot_id")
         or ""
     ).strip()
+    revision_hash = str(decision.get("machine_observation_sha256") or "")
     if (
         attempt_id
         and stock_fields.get("_machine_nonentry_terminal_attempt_id") == attempt_id
+        and str(stock_fields.get("_machine_nonentry_terminal_revision_sha256") or "") == revision_hash
     ):
         return False
     source_invalid_fields = (
@@ -18838,7 +18864,8 @@ def _log_machine_nonentry_terminal_if_needed(
     if attempt_id:
         _mutate_stock_state(
             stock_fields,
-            set_fields={"_machine_nonentry_terminal_attempt_id": attempt_id},
+            set_fields={"_machine_nonentry_terminal_attempt_id": attempt_id,
+                        "_machine_nonentry_terminal_revision_sha256": revision_hash},
         )
     return True
 
@@ -31562,6 +31589,9 @@ def _machine_primary_entry_provenance_fields(source: dict | None) -> dict:
         "evaluation_attempt_identity_source",
         "machine_capture_status",
         "machine_observation_sha256",
+        "entry_decision_large_sell_print_detected",
+        "machine_revision_schema",
+        "machine_revision_parent_sha256",
         "entry_source_invalid_schema",
         "entry_source_invalid_stage",
         "entry_source_invalid_primary_blocker",
@@ -49289,6 +49319,9 @@ def _build_ai_ops_log_fields(
         "evaluation_attempt_identity_source",
         "machine_capture_status",
         "machine_observation_sha256",
+        "entry_decision_large_sell_print_detected",
+        "machine_revision_schema",
+        "machine_revision_parent_sha256",
         "entry_source_invalid_schema",
         "entry_source_invalid_stage",
         "entry_source_invalid_primary_blocker",

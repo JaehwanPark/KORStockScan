@@ -2167,6 +2167,26 @@ def _mechanistic_micro_pass(
     )
 
 
+def _large_sell_exhaustion_recheck(setup: dict[str, Any]) -> bool:
+    """Honor the producer's bounded wait, never compensate a sell into entry."""
+    source = _as_dict(setup.get("source_quality"))
+    return bool(
+        setup.get("setup_state") == "WAIT_CONFIRMATION"
+        and setup.get("setup_family") in SETUP_FAMILIES
+        and setup.get("setup_family") != "NO_VALID_SETUP"
+        and "LARGE_SELL_EXHAUSTION_RECHECK" in (setup.get("recheck_reasons") or [])
+        and set(setup.get("invalidation_facts") or [])
+        == {"hard_blocker:large_sell_print_present"}
+        and {"structural_edge_floor", "volume_confirmed"}.issubset(
+            set(setup.get("positive_facts") or [])
+        )
+        and source.get("status") in {"fresh_consistent", "pass"}
+        and source.get("source_mode") in {"fresh_dual", "degraded_but_bounded"}
+        and (_number(source.get("completed_bar_count")) or 0) > 0
+        and _as_dict(setup.get("tail_risk_assessment")).get("state") == "not_observed"
+    )
+
+
 def mechanistic_entry_action_core(
     setup_evidence: Any,
     *,
@@ -2222,10 +2242,16 @@ def mechanistic_entry_action_core(
             counterweights = []
         if risk_code == "LIQUIDITY_FRAGILE" and not liquidity_threshold_pass:
             counterweights = []
-        blocking = risk_code in BLOCKING_VETO_RISK_CODES
+        bounded_sell_wait = (
+            risk_code == "STRUCTURE_INVALIDATED"
+            and set(fact_ids) == {"hard_blocker:large_sell_print_present"}
+            and _large_sell_exhaustion_recheck(setup)
+        )
+        blocking = risk_code in BLOCKING_VETO_RISK_CODES and not bounded_sell_wait
         disposition = (
             "BLOCKING"
             if blocking
+            else "RECHECKABLE" if bounded_sell_wait
             else "COMPENSATED" if counterweights else "RECHECKABLE"
         )
         assessments.append(
@@ -3293,7 +3319,14 @@ def validate_entry_action_comparison(
             errors.append("entry_comparison_risk_fact_binding_invalid")
         if disposition not in COMPARATIVE_RISK_DISPOSITIONS:
             errors.append("entry_comparison_risk_disposition_invalid")
-        if code in BLOCKING_VETO_RISK_CODES and disposition != "BLOCKING":
+        bounded_sell_wait = (
+            code == "STRUCTURE_INVALIDATED"
+            and set(bindings.get(code, [])) == {"hard_blocker:large_sell_print_present"}
+            and _large_sell_exhaustion_recheck(setup)
+            and disposition == "RECHECKABLE"
+            and action == "RECHECK"
+        )
+        if code in BLOCKING_VETO_RISK_CODES and disposition != "BLOCKING" and not bounded_sell_wait:
             errors.append("entry_comparison_blocking_risk_downgraded")
         if code not in BLOCKING_VETO_RISK_CODES and disposition == "BLOCKING":
             errors.append("entry_comparison_bounded_risk_escalated")

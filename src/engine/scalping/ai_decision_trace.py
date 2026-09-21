@@ -1001,6 +1001,33 @@ def capture_canonical_context_candidate(
         return {}
 
 
+def bind_machine_observation_revision(state, capture, *, symbol, bundle_sha256):
+    """Link recorded snapshots on one watched attempt; observation authority only.
+
+    One receipt per watched stock bounds memory. Lost/restarted/interleaved
+    attempts start a new root, which consumers must not infer as continuity.
+    """
+    if not isinstance(state, dict) or capture.get("machine_capture_status") != "captured":
+        return
+    key = [capture.get("scanner_promotion_id"), capture.get("evaluation_attempt_id"),
+           symbol, capture.get("effective_venue"),
+           capture.get("market_session_bucket"), bundle_sha256, os.getpid()]
+    digest = capture.get("machine_observation_sha256")
+    if not all(key) or not re.fullmatch(r"[0-9a-f]{64}", str(digest or "")):
+        return
+    with _WRITE_LOCK:
+        previous = state.get("_machine_observation_revision") or {}
+        same_attempt = previous.get("key") == key
+        if same_attempt and previous.get("digest") == digest:
+            receipt = previous["receipt"]
+        else:
+            receipt = {"machine_revision_schema": "exact_machine_revision_v1",
+                       "machine_revision_parent_sha256": previous["digest"] if same_attempt else ""}
+            state["_machine_observation_revision"] = {
+                "key": key, "digest": digest, "receipt": receipt}
+        capture.update(receipt)
+
+
 def capture_machine_observation(
     *,
     exact_payload: dict,
@@ -1141,6 +1168,11 @@ def capture_machine_observation(
     return {
         "machine_capture_status": "redacted_ineligible" if redacted else "captured",
         "machine_observation_sha256": digest,
+        # This is the frozen decision input, not the earlier feature probe.
+        "entry_decision_large_sell_print_detected": (
+            exact_payload.get("features", {}).get("large_sell_print_detected")
+            if isinstance(exact_payload.get("features"), dict) else None
+        ),
         **capture_identity,
     }
 
@@ -2488,6 +2520,9 @@ def record_ai_decision_trace(
                     "entry_required_feature_blockers",
                     "machine_capture_status",
                     "machine_observation_sha256",
+                    "machine_revision_schema",
+                    "machine_revision_parent_sha256",
+                    "entry_decision_large_sell_print_detected",
                     "evaluation_attempt_id",
                     "evaluation_attempt_identity_source",
                     "scanner_promotion_id",
@@ -2565,6 +2600,9 @@ def record_ai_decision_trace(
                 "entry_required_feature_blockers",
                 "machine_capture_status",
                 "machine_observation_sha256",
+                "machine_revision_schema",
+                "machine_revision_parent_sha256",
+                "entry_decision_large_sell_print_detected",
                 "evaluation_attempt_id",
                 "evaluation_attempt_identity_source",
                 "scanner_promotion_id",
