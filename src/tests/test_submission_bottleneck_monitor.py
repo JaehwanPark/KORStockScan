@@ -173,8 +173,130 @@ def test_missing_identity_detected_without_fake_denominator():
     events = [event(evaluation_attempt_id="", scanner_promotion_id="")]
     state = tick(events, 10)
     result = tick(events, 15, state)
-    assert result["identity_missing_events"] == 1
-    assert any(r["rule"] == "source_identity_missing" for r in active(result))
+    incident = result['incidents']['unbound_machine_identity']
+    assert result['identity_observation']['missing_event_count'] == 0
+    assert incident['count'] == 1
+    assert incident['status'] == 'historical_unresolved'
+    assert incident['current_status'] == 'no_recurrence_observed'
+    assert incident['examples'][0]['missing_fields'] == ['scanner_promotion_id', 'evaluation_attempt_id']
+    assert not active(result)
+
+
+def test_identity_delayed_alert_is_historical_and_keeps_occurrence_details():
+    bad = event(evaluation_attempt_id='None')
+    state = tick([bad], 10)
+    sent = []
+    monitor.notify(state, 'fixture.json', send=sent.append)
+    assert len(sent) == 1
+    assert 'historical_unresolved' in sent[0] and '주문 수 아님' in sent[0]
+    assert '005930' in sent[0] and 'evaluation_attempt_id' in sent[0]
+    assert '2026-09-21T08:05:00+09:00' in sent[0]
+    assert '[]' not in sent[0]
+    old = state['incidents']['unbound_machine_identity']
+    expired = tick([], 50, state)
+    item = expired['incidents']['unbound_machine_identity']
+    assert item['status'] == 'historical_unresolved'
+    for key in ('count', 'evidence_ids', 'examples', 'occurred_first_at', 'occurred_last_at'):
+        assert item[key] == old[key]
+    monitor.notify(expired, 'fixture.json', send=sent.append)
+    assert len(sent) == 1  # Neither disappearance nor fresh good rows repair history.
+
+
+def test_identity_current_recurrence_rearms_without_losing_prior_history():
+    state = tick([event(evaluation_attempt_id='')], 10)
+    monitor.notify(state, 'fixture.json', send=lambda _: None)
+    original = state['incidents']['unbound_machine_identity'].copy()
+    for minutes in (50, 55):
+        bad = [event(i, evaluation_attempt_id='', when=START+timedelta(minutes=i))
+               for i in (40, 49, 54) if i <= minutes]
+        state = tick(bad, minutes, state)
+    item = state['incidents']['unbound_machine_identity']
+    assert item['status'] == 'active' and item['current_status'] == 'current_gap'
+    assert item['history'][0]['evidence_ids'] == original['evidence_ids']
+    assert 'unbound_machine_identity' in state['notification_pending']
+    sent=[]
+    monitor.notify(state,'fixture.json',send=sent.append)
+    assert len(sent)==1 and 'current_gap' in sent[0]
+
+
+def test_identity_no_machine_rows_stale_and_legacy_are_not_no_recurrence():
+    import copy
+    state = tick([event(evaluation_attempt_id='')], 10)
+    before = copy.deepcopy(state)
+    now = START + timedelta(minutes=50)
+    market = event(when=now, entry_primary_decision_owner='', entry_mechanistic_action='')
+    current = monitor.evaluate(report([market], now), state, now)
+    assert current['identity_observation']['status'] == 'unobservable'
+    assert current['incidents']['unbound_machine_identity']['current_status'] == 'unobservable'
+    assert not current['notification_pending']
+    stale = monitor.evaluate(report([market], now), state, now+timedelta(minutes=20))
+    assert stale['identity_observation']['status'] == 'unobservable'
+    assert stale['incidents'] == before['incidents'] and state == before
+    legacy = report([event(when=now)], now)
+    legacy['submission_monitor'].pop('identity_observation')
+    assert monitor.evaluate(legacy,state,now)['identity_observation']['status']=='unobservable'
+
+
+def test_identity_legacy_incident_preserved_and_missing_details_not_fabricated():
+    state=tick([event(evaluation_attempt_id='')],10)
+    old=state['incidents']['unbound_machine_identity']
+    old.update(status='active',notified_status='active',examples=[],count=104)
+    old.pop('occurred_first_at');old.pop('occurred_last_at')
+    result=tick([],50,state)
+    item=result['incidents']['unbound_machine_identity']
+    assert item['count']==104 and item['evidence_ids']==old['evidence_ids']
+    assert item['status']=='historical_unresolved'
+    sent=[];monitor.notify(result,'fixture.json',send=sent.append)
+    assert len(sent)==1 and '미확인(구형 이력)' in sent[0]
+    assert 'recovered' not in sent[0] and '[]' not in sent[0]
+
+
+def test_identity_legacy_details_backfill_requires_exact_retained_hash():
+    bad = event(evaluation_attempt_id='')
+    state = tick([bad],10)
+    old = state['incidents']['unbound_machine_identity']
+    old.update(status='active',examples=[])
+    old.pop('occurred_first_at');old.pop('occurred_last_at')
+    result = tick([bad,event(2,evaluation_attempt_id='')],50,state)
+    item = result['incidents']['unbound_machine_identity']
+    assert item['count']==1 and item['evidence_ids']==old['evidence_ids']
+    assert len(item['examples'])==1 and item['examples'][0]['record_id']=='0'
+    assert item['occurred_first_at']=='2026-09-21T08:05:00+09:00'
+    assert item['detail_basis']=='existing_cache_exact_evidence_hash_match'
+    assert item['status']=='historical_unresolved'
+
+
+def test_old_evidence_with_new_immature_gap_does_not_rearm_old_alert():
+    old_bad=event(evaluation_attempt_id='')
+    state=tick([old_bad],10)
+    monitor.notify(state,'fixture.json',send=lambda _:None)
+    now_bad=event(2,evaluation_attempt_id='',when=START+timedelta(minutes=15))
+    result=tick([old_bad,now_bad],15,state)
+    assert result['identity_observation']['status']=='current_gap'
+    assert result['incidents']['unbound_machine_identity']['status']=='historical_unresolved'
+    assert 'unbound_machine_identity' not in result['notification_pending']
+
+
+def test_historical_identity_metadata_is_bounded_and_never_changes_current_denominator():
+    events=[event(i,evaluation_attempt_id='',when=START+timedelta(seconds=i)) for i in range(200)]
+    now=START+timedelta(minutes=60)
+    value=monitor.snapshot(list(reversed(events))+[event(999,when=now)],now)
+    assert len(value['historical_identity_samples'])==128
+    assert value['identity_missing_events']==0
+    assert value['missing_identity_evidence']==[]
+    assert len(value['rows'])==1
+
+
+def test_active_to_historical_preserves_original_count_when_window_shrinks():
+    bad=event(evaluation_attempt_id='')
+    state=tick([bad],10)
+    item=state['incidents']['unbound_machine_identity']
+    item.update(status='active',count=104,evidence_ids=item['evidence_ids']+['old-other-proof'])
+    result=tick([bad],15,state)
+    historical=result['incidents']['unbound_machine_identity']
+    assert historical['status']=='historical_unresolved'
+    assert historical['count']==104
+    assert historical['evidence_ids']==item['evidence_ids']
 
 
 def test_notify_failure_retries_and_success_deduplicates():

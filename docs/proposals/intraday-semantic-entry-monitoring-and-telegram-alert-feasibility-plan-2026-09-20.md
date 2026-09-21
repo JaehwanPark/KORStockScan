@@ -32,6 +32,8 @@
 - 입력 date가 현재 KST와 다름, dry-run, 생성 후7분 초과, 최근 event10분 초과, 역행/중복 snapshot은 `unobservable`이며 새 경보/복구를 만들지 않는다. 멈춘 봇·원천 freshness는 기존 error detector owner가 담당한다.
 - source-invalid는 해당 promotion을 정상 판단 비율 분모에서 제외한다. 유효 scope는 계속 관찰한다. 결손을 0 EV/no-edge로 바꾸지 않는다.
 - 미결 사건은 날짜별 상태에 남는다. 구조 결손은 저장한 exact attempt가 명시 terminal로 닫힐 때만 복구; 비율 경보는 새로운 실제 제출 응답으로 복구한다. 옛 identity 부재는 건강한 새 이벤트만으로 과거 복구라고 선언하지 않는다.
+- identity 표시 보완(9/21 승인): 최근10분 신규 기계 이벤트의 결손은 `current_gap`, 정상 식별 이벤트만 관측되면 `no_recurrence_observed`, 표본 없음/입력 stale·legacy recency 부재는 `unobservable`로 분리한다. 10분 유예·4분 지속 기준은 유지한다. 과거 사건은 `historical_unresolved`로 수량·해시·사례를 보존하며 복구로 표시하지 않는다. 신규 결손이 유예 조건에 들어오면 이전 사건을 history에 보존하고 지속성/알림 중복 억제를 새로 시작한다.
+- 발생시각 범위·종목·누락 필드는 exact identity owner의 같은 alias 규칙에서 산출한다. 구형 사건은 이미 읽힌 당일 cache의 최근 과거 표본 최대128개 중 저장 hash와 일치한 것만 보충하며 원시 로그 추가 스캔·과거 분모 재계산은 하지 않는다. 불완전한 범위/표본은 미확인으로 표시한다. Telegram은 신규 active와 과거 보존 전이를 구분하고 이벤트 수≠주문 수를 명시한다.
 
 ## 실행·알림·보존
 

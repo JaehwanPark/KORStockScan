@@ -1,5 +1,13 @@
 # 2026-09-21 preflight / submission bottleneck repair
 
+## Authorized delayed identity alert separation
+
+- User approved monitor-display repair, immutable deployment and graceful restart. Scope is `source_identity_missing` recency/state/notification only; capacity, operating-economics, trading guards and other incident rules are unchanged.
+- Retain old incidents as `historical_unresolved`, not recovered. Current ten-minute machine identity observations distinguish `current_gap`, `no_recurrence_observed` and `unobservable`; stale/duplicate/wrong-date/legacy sources cannot prove current health. New mature recurrence preserves the previous episode and rearms the existing persistence/notification rules. Shrinking windows do not erase the historical count or proof IDs.
+- Sentinel's exact six-field identity component resolver is shared with missing-field diagnostics without changing identity keys. Events retain occurrence time, symbol, stage, record ID and missing field names. Legacy detail backfill is bounded to128 samples from already-loaded current-date cache, matched to stored hashes; incomplete coverage does not manufacture a full period. No raw scan, broker/provider call, source event rewrite or manual alert is added.
+- Read-only actual20MiB cache/state preview: incoming old incident retains39 proof IDs (the last stored rolling cohort, not a replacement estimate of the earlier104-event alert). All39 hashes match09:45:17.482791–09:48:19.735054; sample003160 lacks `evaluation_attempt_id`. The preview changes only display state to historical, reports recent identity gap0 and retains all old proof/count values. Telegram was inspected through an injected local mock only.
+- Review covered delay, recurrence, stale/no-machine/legacy inputs, count retention, exact metadata binding and alert deduplication. Final affected suites:233 passed; compile/diff and print-only document parser required before authorized handoff. Deployment/PID/scheduled consumption are recorded after completion below.
+
 ## Authorized economic-source follow-up: reference gate
 
 User approval: repair policy-cache supply and bounded capacity reuse, deploy and gracefully restart; include the already-tested noisy URL-diagnostic removal. Preserve request limits, source-only priority/timeouts, normal pre-submit verification and independent widget changes.

@@ -2343,8 +2343,8 @@ def _summarize_events(events, *, start_at, end_at, summary_rows=None):
     return result
 
 
-def _machine_primary_evaluation_key(event: PipelineEvent) -> str:
-    """Return the exact six-field machine attempt identity, never a fuzzy join."""
+def _machine_primary_identity_components(event: PipelineEvent) -> dict[str, str]:
+    """Shared identity aliases for exact joins and missing-field diagnostics."""
     def identity_first(names: tuple[str, ...]) -> str:
         # Wire fields may contain the literal "None" alongside the concrete
         # machine receipt. An absent higher-priority alias must not mask it.
@@ -2393,14 +2393,14 @@ def _machine_primary_evaluation_key(event: PipelineEvent) -> str:
         )
     ).strip()
     symbol = _safe_str(event.stock_code).strip()
-    components = (
-        scanner_promotion_id,
-        evaluation_attempt_id,
-        symbol,
-        venue,
-        session,
-        bundle_hash,
-    )
+    return dict(scanner_promotion_id=scanner_promotion_id,
+                evaluation_attempt_id=evaluation_attempt_id, stock_code=symbol,
+                effective_venue=venue, session_bucket=session, policy_bundle_hash=bundle_hash)
+
+
+def _machine_primary_evaluation_key(event: PipelineEvent) -> str:
+    """Return the exact six-field machine attempt identity, never a fuzzy join."""
+    components = tuple(_machine_primary_identity_components(event).values())
     if any(
         not component or component.lower() in {"none", "null", "unknown", "-", "0"}
         for component in components

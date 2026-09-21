@@ -97,11 +97,55 @@ def snapshot(events, as_of):
     """Reuse already loaded events and the existing identity/terminal owner."""
     from src.engine.buy_funnel_sentinel import (
         _machine_primary_entry_funnel, _is_machine_primary_event, _machine_primary_evaluation_key,
+        _machine_primary_identity_components,
     )
 
     now = stamp(as_of)
     recent = [e for e in events if 0 <= (now - stamp(e.emitted_at)).total_seconds() <= 2700]
     funnel = _machine_primary_entry_funnel(recent)
+    missing_rows = []
+    historical_samples = []
+    identified_clocks = []
+    # Reuse already loaded cache rows for legacy incident metadata only; no
+    # second raw scan or historical funnel/recovery calculation. Bound output.
+    for e in events:
+        at = stamp(e.emitted_at)
+        if at.date() != now.date() or at > now:
+            continue
+        if e.pipeline != "ENTRY_PIPELINE" or not _is_machine_primary_event(e):
+            continue
+        if _machine_primary_evaluation_key(e):
+            if (now - at).total_seconds() <= 2700:
+                identified_clocks.append(at)
+            continue
+        detail = dict(
+            evidence_id=hashlib.sha256(repr((e.emitted_at, e.stage, e.stock_code,
+                e.record_id, sorted(e.fields.items()))).encode()).hexdigest(),
+            occurred_at=at.isoformat(), stock_code=e.stock_code, stage=e.stage,
+            record_id=e.record_id,
+            missing_fields=[k for k, v in _machine_primary_identity_components(e).items()
+                if not v or v.lower() in {"none", "null", "unknown", "-", "0"}])
+        if (now - at).total_seconds() <= 2700:
+            missing_rows.append(detail)
+        else:
+            historical_samples.append(detail)
+            # Keep the most recent old receipts even when input is unsorted.
+            if len(historical_samples) > 128:
+                historical_samples.sort(key=lambda r: (r['occurred_at'], r['evidence_id']))
+                historical_samples.pop(0)
+    missing_rows.sort(key=lambda row: (row["occurred_at"], row["evidence_id"]))
+    mature_missing = [r for r in missing_rows
+        if GRACE_SEC <= (now - stamp(r["occurred_at"])).total_seconds() <= WINDOW_SEC]
+    current_missing = [r for r in missing_rows
+        if (now - stamp(r["occurred_at"])).total_seconds() < GRACE_SEC]
+    current_identified = [at for at in identified_clocks if (now - at).total_seconds() < GRACE_SEC]
+    identity_observation = dict(schema="machine_identity_recency_v1", window_sec=GRACE_SEC,
+        status="current_gap" if current_missing else "no_recurrence_observed" if current_identified else "unobservable",
+        missing_event_count=len(current_missing), identified_event_count=len(current_identified),
+        latest_identified_at=max(current_identified).isoformat() if current_identified else None,
+        missing_first_at=missing_rows[0]["occurred_at"] if missing_rows else None,
+        missing_last_at=missing_rows[-1]["occurred_at"] if missing_rows else None,
+        examples=current_missing[:3])
     economic = {}
     for e in recent:
         if e.stage not in ECONOMIC_STAGES:
@@ -141,11 +185,12 @@ def snapshot(events, as_of):
             "mechanistic_action", "ai_screen_status", "broker_acceptance_observed",
             "final_guard_blocked", "final_state", "conflict_reasons", "source_invalid_decomposition", "economic_source",
         )} for r in funnel["evaluation_ledger"]],
-        "missing_identity_evidence": sorted({hashlib.sha256(
-            repr((e.emitted_at, e.stage, e.stock_code, e.record_id, sorted(e.fields.items()))).encode()
-        ).hexdigest() for e in recent if _is_machine_primary_event(e)
-            and not _machine_primary_evaluation_key(e)
-            and GRACE_SEC <= (now - stamp(e.emitted_at)).total_seconds() <= WINDOW_SEC}),
+        "missing_identity_evidence": sorted({r["evidence_id"] for r in mature_missing}),
+        "missing_identity_examples": mature_missing[:3],
+        "missing_identity_first_at": mature_missing[0]['occurred_at'] if mature_missing else None,
+        "missing_identity_last_at": mature_missing[-1]['occurred_at'] if mature_missing else None,
+        "historical_identity_samples": historical_samples,
+        "identity_observation": identity_observation,
     }
 
 
@@ -163,6 +208,7 @@ def evaluate(report, state, now):
               "notification_status": "idle",
               "incidents": incidents, "notification_pending": [], "scopes": {},
               "source_as_of": prior.get("source_as_of"),
+              "identity_observation": {"status": "unobservable", "reason": "source_not_validated"},
               "last_notification_at": prior.get("last_notification_at")}
     if (report.get("target_date") != today or report.get("dry_run")
             or source.get("schema") != SCHEMA or not as_of or not latest
@@ -271,24 +317,62 @@ def evaluate(report, state, now):
     missing = source.get("missing_identity_evidence") or []
     key = "unbound_machine_identity"
     old = incidents.get(key, {})
+    observation = source.get("identity_observation") or {}
+    current_status = (observation.get("status") if observation.get("schema") == "machine_identity_recency_v1"
+                      else "unobservable")
+    if current_status not in {"current_gap", "no_recurrence_observed", "unobservable"}:
+        current_status = "unobservable"
+    result["identity_observation"] = observation or {"status": "unobservable", "reason": "legacy_source_no_recency"}
     if missing:
-        first = old.get("first_seen", now.isoformat()) if old.get("status") in {"pending", "active"} else now.isoformat()
-        result["scopes"]["unbound"] = {"missing_identity_events": len(missing)}
-        incidents[key] = {"scope": "unbound", "rule": "source_identity_missing",
+        recurrence = (old.get("status") == "historical_unresolved" and current_status == "current_gap"
+                      and bool(set(missing) - set(old.get("evidence_ids", []))))
+        history = list(old.get("history") or [])
+        if recurrence:
+            history.append({k: v for k, v in old.items() if k != "history"})
+        first = old.get("first_seen", now.isoformat()) if not recurrence else now.isoformat()
+        status = ("active" if (now - stamp(first)).total_seconds() >= 240 else "pending")
+        if current_status != "current_gap":
+            status = "historical_unresolved"
+        # A shrinking window must not erase the already recorded old incident.
+        preserve = bool(old) and not recurrence and (status == "historical_unresolved"
+                                                    or old.get("status") == "historical_unresolved")
+        if preserve:
+            status = "historical_unresolved"
+        incidents[key] = {**old, "scope": "unbound", "rule": "source_identity_missing",
             "category": "structural_evidence", "first_seen": first, "last_seen": now.isoformat(),
-            "status": "active" if (now - stamp(first)).total_seconds() >= 240 else "pending",
-            "count": len(missing), "evidence_ids": missing[:128], "examples": [],
-            "notified_status": old.get("notified_status"),
+            "status": status, "current_status": current_status, "history": history,
+            "count": old.get("count", len(missing)) if preserve else len(missing),
+            "evidence_ids": old.get("evidence_ids", missing[:128]) if preserve else missing[:128],
+            "examples": (old.get("examples") or []) if preserve else source.get("missing_identity_examples") or [],
+            "occurred_first_at": old.get("occurred_first_at") if preserve else source.get("missing_identity_first_at"),
+            "occurred_last_at": old.get("occurred_last_at") if preserve else source.get("missing_identity_last_at"),
+            "notified_status": None if recurrence else old.get("notified_status"),
             "owner": "ENTRY_PIPELINE machine producer identity",
             "closure_test": "new identified machine evaluations with no missing identity; old unbound rows remain unrepairable"}
-    elif old and old.get("status") == "pending":
-        incidents.pop(key, None)
-    if source.get("identity_missing_events"):
+    elif old:
+        incidents[key] = {**old, "status": "historical_unresolved", "current_status": current_status}
+    item = incidents.get(key, {})
+    if item and not item.get('examples'):
+        matched = {r['evidence_id']: r for r in (source.get('historical_identity_samples', [])
+                    + source.get('missing_identity_examples', []))
+                   if r.get('evidence_id') in set(item.get('evidence_ids', []))}
+        if matched:
+            details = sorted(matched.values(), key=lambda r: r['occurred_at'])
+            item['examples'] = details[:3]
+            item['detail_basis'] = 'existing_cache_exact_evidence_hash_match'
+            if len(matched) == len(set(item.get('evidence_ids', []))) == item.get('count'):
+                item['occurred_first_at'] = details[0]['occurred_at']
+                item['occurred_last_at'] = details[-1]['occurred_at']
+    if missing or old:
+        result["scopes"]["unbound"] = {"missing_identity_events": len(missing),
+            "current_missing_events": observation.get("missing_event_count"), "current_status": current_status}
+    if observation.get("missing_event_count"):
         result["blocker"] = "machine_identity_missing_events"
-        result["identity_missing_events"] = source["identity_missing_events"]
+        result["identity_missing_events"] = observation["missing_event_count"]
     # Absent scopes/stale sources retain incidents without asserting they resolved.
     result["notification_pending"] = [k for k, v in incidents.items()
-        if v["status"] in {"active", "recovered"} and v.get("notified_status") != v["status"]
+        if v["status"] in {"active", "recovered", "historical_unresolved"} and v.get("notified_status") != v["status"]
+        and (v["status"] != "historical_unresolved" or v.get("current_status") == "no_recurrence_observed")
         and v["scope"] in result["scopes"]]
     return result
 
@@ -304,6 +388,21 @@ def notify(result, path, send=None):
     messages = []
     for key in keys[:4]:
         item = result["incidents"][key]
+        if item["rule"] == "source_identity_missing":
+            obs = result.get("identity_observation") or {}
+            examples = item.get("examples") or []
+            sample = examples[0] if examples else {}
+            messages.append(
+                f'{item["status"]}: source_identity_missing\n'
+                f'현재 최근10분: {item.get("current_status", "unobservable")} '
+                f'/ 결손 {obs.get("missing_event_count", "미확인")}건\n'
+                f'과거 원천 복구 주장 없음 / 보존 근거 {item["count"]} 이벤트 (주문 수 아님)\n'
+                f'발생: {item.get("occurred_first_at") or "미확인(구형 이력)"} ~ '
+                f'{item.get("occurred_last_at") or "미확인(구형 이력)"}\n'
+                f'종목: {sample.get("stock_code") or "미확인(구형 이력)"} / '
+                f'누락 필드: {", ".join(sample.get("missing_fields") or []) or "미확인(구형 이력)"}\n'
+                f'대표 발생시각: {sample.get("occurred_at") or "미확인(구형 이력)"}')
+            continue
         example = (item.get("examples") or [{}])[0]
         cause = ((example.get("economic_source") or {}).get("blocker")
                  if item["rule"] == "economic_producer_gap" else
