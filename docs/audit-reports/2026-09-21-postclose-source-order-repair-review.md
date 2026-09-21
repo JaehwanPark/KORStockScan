@@ -39,3 +39,12 @@
 ### 전수 report 저장 한도 후속
 
 Episode 복구는23:09:19에 공동 명단 검증 단계를 통과했으나 `low_price_research_report_size_exceeds_contract`로 중단됐다. 전수 결과를 삭제/축약하지 않고 생산자와 generation-stable reader가 공유하는 한도를128MiB→256MiB로 확장했다. 초과 오류에 실제 bytes/limit를 출력한다. 자동 정책·closure·runtime summary가 이 native reader를 소비함을 확인하고 writer/reader/크기 초과/계약/completion143 tests PASS. 재실행은 원 source9/21과 publication9/21/effective9/22를 유지한다. 전체 main wrapper는22:36 failed 이력을 유지하며, 독립 source 복구를 main DONE으로 바꾸지 않는다.
+
+
+### 사용자 지정 연구 범위 축소
+
+후속 사용자 지시에 따라 위젯100종목, 에피소드 신규50종목으로 변경한다. 위의256MiB 한도 증액은 배포하지 않았으며 이번 변경에서128MiB로 복원한다. 에피소드 신규320종목×5시간대와 기존 시간대/로직95프로필이 합쳐져1695프로필로 확대되었고, 각 프로필의 후보·baseline·holdout 상세 결과 중복이 JSON 저장량을 키웠다. 신규50종목이면250+95=345프로필 수준으로 줄어든다. 기존 운영 종목은 유지한다.
+
+공유 선정 함수는 기존 연구 lifecycle owner에 추가한다. 완료 추천 순위와 사전 자료 유무로 선정하고 평가 중인 손익을 사용하지 않는다. 전체 catalog/동결 manifest는 삭제하지 않으며 자원상 이월과 소스 부족/경제성 탈락을 구분한다. source waiting의 context와 episode candidate fingerprint에 선택된 명단이 반영되어 전수355/320 캐시를 축소된 분모로 오인 재사용하지 않는다. 위젯 기존 운영/명시 watch가100을 초과하면 조용히 누락시키지 않고 명시 오류로 중단한다.
+
+검증: 위젯/에피소드/runtime policy/handoff206 tests PASS, compile/diff/parser PASS. 선정 단계에서 기존 운영 종목의 처리 순서까지 바뀌던 결함을 회귀 테스트로 발견하여 보존하도록 수정했다. 완료 advisory/auto-policy prefix는 연구 lifecycle/closure refresh를 소비하지 않아 source hash 검증 후 재사용하며, signal/episode 경제성 평가는 새 선택 명단으로 검증한다.

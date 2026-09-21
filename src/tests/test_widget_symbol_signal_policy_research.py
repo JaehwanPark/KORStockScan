@@ -1626,3 +1626,22 @@ def test_retained_date_gap_keeps_qualified_history_and_exact_exclusion(tmp_path,
     assert meta["trading_date_count"] == 25 and meta["expected_trading_date_count"] == 26
     assert [r["trade_date"] for r in meta["snapshot_date_exclusions"]] == [str(missing)]
     assert str(missing) not in meta["retrieved_at_by_date"]
+
+
+def test_research_budget_preserves_protected_inventory_and_defers_without_rejection():
+    from src.engine.monitoring.machine_candidate_lifecycle import bounded_research_population
+    universe = {str(i): str(i) for i in range(355)}
+    selected, receipt = bounded_research_population(
+        universe, limit=100, protected=["354"], preferred=["353", "352"],
+        coverage={"351": 60},
+    )
+    assert list(selected)[:4] == ["354", "353", "352", "351"]
+    assert len(selected) == 100
+    assert receipt["catalog_count"] == 355
+    assert len(receipt["deferred_symbols"]) == 255
+    assert set(selected).isdisjoint(receipt["deferred_symbols"])
+    assert receipt["disposition"] == "resource_deferred_not_economic_rejection"
+    assert receipt["runtime_effect"] is False
+    assert len(universe) == 355
+    with pytest.raises(ValueError, match="below_protected_inventory"):
+        bounded_research_population(universe, limit=1, protected=["353", "354"])

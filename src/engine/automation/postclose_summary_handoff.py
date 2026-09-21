@@ -612,6 +612,8 @@ def _producer_main(argv=None) -> int:
                        # The advisory/auto-policy prefix does not consume the
                        # joint research allocator; signal research revalidates it.
                        "src/engine/monitoring/research_closed_loop.py",
+                       "src/engine/monitoring/machine_candidate_lifecycle.py",
+                       "src/engine/automation/machine_research_closed_loop_refresh.py",
                        "src/engine/monitoring/low_price_two_leg_expanded_candidate_research.py"}
             changed = [name for name in changed if not name.startswith("src/tests/")]
             if set(changed) - allowed:

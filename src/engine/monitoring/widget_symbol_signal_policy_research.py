@@ -3078,6 +3078,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--end-date")
     parser.add_argument("--retained-source-only", action="store_true", help="Evaluate only stored historical snapshots; preserve missing symbols as source exclusions.")
     parser.add_argument("--max-pages", type=int, default=120)
+    parser.add_argument("--max-research-symbols", type=int, default=100)
     parser.add_argument("--max-source-backfill-symbols", type=int, default=10,
                         help="Bound remote history acquisition; other symbols use validated retained dates.")
     parser.add_argument("--page-delay-sec", type=float, default=0.2)
@@ -3094,6 +3095,17 @@ def main(argv: list[str] | None = None) -> int:
         else resolve_completed_research_end_date()
     )
     symbol_universe, symbol_origins = load_symbol_universe(observed_date=end_date)
+    from src.engine.monitoring.machine_candidate_lifecycle import bounded_research_population
+    _, preferred = completed_daily_recommendation_symbols(end_date)
+    symbol_universe, population_selection = bounded_research_population(
+        symbol_universe, limit=args.max_research_symbols,
+        protected=[symbol for symbol, origin in symbol_origins.items()
+                   if origin in {"established_widget_symbol", "operator_enrolled_research_watch"}],
+        preferred=preferred,
+        coverage={symbol: sum(1 for path in (args.snapshot_dir / symbol).glob("????-??-??.json")
+                             if path.stem <= str(end_date)) for symbol in symbol_universe},
+    )
+    symbol_origins = {symbol: symbol_origins[symbol] for symbol in symbol_universe}
     from src.engine.monitoring.widget_symbol_runtime_policy import (
         WidgetSymbolRuntimePolicyLoader,
     )
@@ -3115,6 +3127,7 @@ def main(argv: list[str] | None = None) -> int:
     context = dict(
         retained_source_only=args.retained_source_only,
         max_source_backfill_symbols=args.max_source_backfill_symbols,
+        population_selection=population_selection,
         producer_sha256=research_contract_hash(),
         source_parser_sha256=source_parser_contract_hash(),
         cost_contract=comparison_cost_contract(end_date),
@@ -3412,6 +3425,7 @@ def main(argv: list[str] | None = None) -> int:
     })
     report["retained_source_only"] = args.retained_source_only
     report["max_source_backfill_symbols"] = args.max_source_backfill_symbols
+    report["population_selection"] = population_selection
     report["symbol_universe"] = symbol_universe
     report["symbol_origins"] = symbol_origins
     report["passed_symbols"] = [

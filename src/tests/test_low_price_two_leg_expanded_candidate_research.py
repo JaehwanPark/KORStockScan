@@ -2189,3 +2189,18 @@ def test_selection_cache_ignores_feedback_but_preserves_cost_and_source(monkeypa
     assert expanded.research_input_fingerprint(**kwargs) != assembly
     monkeypatch.setattr(expanded, 'COST_PCT', expanded.COST_PCT + .001)
     assert expanded.research_input_fingerprint(**kwargs, selection_only=True) != selection
+
+
+def test_new_symbol_budget_preserves_existing_episode_evaluations():
+    from src.engine.monitoring.machine_candidate_lifecycle import bounded_research_population
+    target = date(2026, 9, 21)
+    baseline = expanded._target_date_research_inventory(target)
+    candidates = {f"9{i:05d}": f"candidate-{i}" for i in range(320)}
+    selected, receipt = bounded_research_population(candidates, limit=50)
+    bounded = expanded._target_date_research_inventory(target, candidate_symbols=selected)
+    assert len(bounded.candidate_symbols) == 50
+    assert len(bounded.new_symbol_profiles) == 50 * len(expanded.SESSION_WINDOWS)
+    assert bounded.live_profiles == baseline.live_profiles
+    assert bounded.time_extension_profiles == baseline.time_extension_profiles
+    assert bounded.logic_improvement_profiles == baseline.logic_improvement_profiles
+    assert len(receipt["deferred_symbols"]) == 270

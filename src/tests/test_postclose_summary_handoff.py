@@ -322,7 +322,7 @@ def test_widget_prefix_reuse_rejects_drift_and_preserves_origin(monkeypatch, tmp
     from src.utils import constants
     monkeypatch.setattr(constants, "DATA_DIR", tmp_path / "data")
     monkeypatch.setattr(constants, "PROJECT_ROOT", tmp_path)
-    monkeypatch.setattr(mod.subprocess, "check_output", lambda args, **kw: "" if "diff" in args else "a" * 40)
+    monkeypatch.setattr(mod.subprocess, "check_output", lambda args, **kw: "src/engine/monitoring/machine_candidate_lifecycle.py\nsrc/engine/automation/machine_research_closed_loop_refresh.py" if "diff" in args else "a" * 40)
     day="2026-09-17"
     paths=source_paths(tmp_path / "data/report", day)
     for label in mod.INDEPENDENT_SOURCES["widget"][:2]:

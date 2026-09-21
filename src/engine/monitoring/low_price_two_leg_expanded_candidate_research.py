@@ -95,7 +95,7 @@ DEFAULT_STATE_FILE = (
 DEFAULT_SOURCE_CACHE_DIR = DATA_DIR / "cache" / "low_price_two_leg_ka10080"
 SOURCE_CACHE_SCHEMA = "low_price_two_leg_ka10080_source_cache_v1"
 REPORT_CACHE_SCHEMA = "low_price_two_leg_verified_report_cache_v1"
-REPORT_CACHE_MAX_BYTES = 256 * 1024 * 1024
+REPORT_CACHE_MAX_BYTES = 128 * 1024 * 1024
 REPORT_CACHE_TERMINALS = frozenset(
     {"recommendations_ready", "no_qualified_candidate", "partial_source_quality"}
 )
@@ -3535,6 +3535,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--start-date")
     parser.add_argument("--end-date")
     parser.add_argument("--max-pages", type=int, default=400)
+    parser.add_argument("--max-new-research-symbols", type=int, default=50)
     parser.add_argument("--page-delay-sec", type=float, default=0.2)
     parser.add_argument("--output-dir", type=Path, default=OUTPUT_DIR)
     parser.add_argument(
@@ -3605,6 +3606,12 @@ def main(argv: list[str] | None = None) -> int:
             **base_target_inventory.candidate_symbols,
             **dynamic_symbols,
         }
+        from src.engine.monitoring.machine_candidate_lifecycle import bounded_research_population
+        _, preferred = completed_daily_recommendation_symbols(target_date)
+        candidate_symbols, population_selection = bounded_research_population(
+            candidate_symbols, limit=args.max_new_research_symbols,
+            preferred=preferred,
+        )
         applied_policy_snapshots: dict[str, dict[str, Any]] = {}
         for profile_id in sorted(base_target_inventory.live_profiles):
             policy, applied_hash, reason = load_applied_profile_policy(
@@ -3728,6 +3735,7 @@ def main(argv: list[str] | None = None) -> int:
             existing_path, target_date=target_date, fingerprint=fingerprint
         )
         if reusable is not None:
+            reusable["population_selection"] = population_selection
             # Admission is a separate evidence phase. Refresh it on the frozen
             # source without replaying unchanged economic grids or acquisitions.
             reusable = _attach_admission_evidence(
@@ -3779,6 +3787,7 @@ def main(argv: list[str] | None = None) -> int:
             checkpoint_cache_dir=args.source_cache_dir / "profile_selection",
         )
         report["source_input_fingerprint"] = fingerprint
+        report["population_selection"] = population_selection
         report["execution_mode"] = "full_recompute"
         if fetch_failures:
             report["source_quarantine"].update(fetch_failures)

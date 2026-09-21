@@ -26,6 +26,36 @@ EPISODE_REPORT_DIR = (
 MIN_LONG_HORIZON_TRADING_DAYS = 40
 
 
+def bounded_research_population(
+    universe: dict[str, str], *, limit: int, protected=(), preferred=(), coverage=None,
+) -> tuple[dict[str, str], dict[str, Any]]:
+    """Limit this research run, preserving the admission catalog and live owners.
+
+    Ranking never uses the outcomes being evaluated. Deferred symbols are a
+    resource decision, not source failures, economic rejects or registry pruning.
+    """
+    protected = set(protected) & universe.keys()
+    if limit < 1 or len(protected) > limit:
+        raise ValueError("research_population_limit_below_protected_inventory")
+    preferred = {symbol: rank for rank, symbol in enumerate(preferred)}
+    coverage = coverage or {}
+    order = {symbol: rank for rank, symbol in enumerate(universe)}
+    ranked = sorted(universe, key=lambda symbol: (
+        symbol not in protected,
+        order[symbol] if symbol in protected else preferred.get(symbol, len(preferred)),
+        -coverage.get(symbol, 0), order[symbol],
+    ))
+    selected = ranked[:limit]
+    return {symbol: universe[symbol] for symbol in selected}, dict(
+        schema="bounded_research_population_v1", limit=limit,
+        catalog_count=len(universe), evaluated_universe_count=len(selected),
+        selected_symbols=selected, deferred_symbols=ranked[limit:],
+        disposition="resource_deferred_not_economic_rejection",
+        ranking="protected_then_completed_recommendation_then_retained_coverage_then_catalog_order",
+        outcome_used_for_selection=False, runtime_effect=False,
+    )
+
+
 def completed_daily_recommendation_symbols(
     observed_date: date,
     *,
