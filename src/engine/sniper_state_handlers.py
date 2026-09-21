@@ -2867,7 +2867,8 @@ def _entry_capacity_receipt_valid(snapshot, code, price, now_ts):
         return False
 
 
-def _read_entry_capacity_snapshot(code, price, *, source_only=False):
+def _read_entry_capacity_snapshot(code, price, *, source_only=False,
+                                  source_read_rate_max_wait_sec=0.0):
     """Reuse successful exact receipts only for observation, never live sizing.
 
     Runtime-required reads retain their original transport path. Observers
@@ -2875,9 +2876,12 @@ def _read_entry_capacity_snapshot(code, price, *, source_only=False):
     origin/token/day, exact price and inventory/custody generation bind reuse.
     """
     def fetch():
+        bounds = {"source_only": True} if source_only else {}
+        if source_only and source_read_rate_max_wait_sec > 0:
+            bounds["source_read_rate_max_wait_sec"] = source_read_rate_max_wait_sec
         return kiwoom_utils.get_orderable_by_margin_kt00011(
             KIWOOM_TOKEN, code, unit_price=price,
-            **({"source_only": True} if source_only else {}))
+            **bounds)
     try:
         key = _entry_capacity_receipt_key(code, price)
     except Exception:
@@ -2919,6 +2923,29 @@ def _read_entry_capacity_snapshot(code, price, *, source_only=False):
             if len(_ENTRY_CAPACITY_RETRY_AFTER) >= 128:
                 _ENTRY_CAPACITY_RETRY_AFTER.pop(next(iter(_ENTRY_CAPACITY_RETRY_AFTER)))
             _ENTRY_CAPACITY_RETRY_AFTER[key] = time.time() + 0.5
+
+
+def _prefetch_entry_capacity_for_async_evaluation(code, ws_data, deadline_epoch):
+    """Prepare evidence in the existing worker, before final quote refresh.
+
+    No delayed event/backfill is emitted. The later observer must independently
+    validate the exact price, account/inventory generation and two-second age.
+    Normal sizing and the observer itself retain their original wait budgets.
+    """
+    from src.utils.kiwoom_read_request_control import DEFAULT_SOURCE_ONLY_MAX_WAIT_SEC
+    price = _safe_int((ws_data or {}).get("curr"), 0)
+    # Leave the existing HTTP connect/read budget inside the worker deadline.
+    remaining = float(deadline_epoch) - time.time() - 0.30
+    if price <= 0 or remaining <= 0:
+        return {"status": "skipped", "reason": "price_or_worker_budget_missing"}
+    try:
+        receipt = _read_entry_capacity_snapshot(code, price, source_only=True,
+            source_read_rate_max_wait_sec=min(DEFAULT_SOURCE_ONLY_MAX_WAIT_SEC, remaining))
+        if _entry_capacity_receipt_valid(receipt, code, price, time.time()):
+            return {"status": "ready", "reuse_status": receipt.get("capacity_reuse_status")}
+        return {"status": "source_gap", "reason": receipt.get("error") or "kt00011_empty"}
+    except Exception as exc:
+        return {"status": "source_gap", "reason": type(exc).__name__ + ":" + str(exc)}
 
 
 def _resolve_scalp_cash_budget_context(code, unit_price, fallback_orderable_amount, *, source_only=False):
@@ -60383,8 +60410,15 @@ def _resolve_scanner_async_entry_ai(
             source_meta=candle_source_meta,
             include_investor_source=True,
         )
+        capacity_prefetch = {"status": "skipped", "reason": "noninitial_or_nonreal_scope"}
+        if (_safe_int(stock_snapshot.get("buy_qty"), 0) <= 0
+                and not _is_any_simulated_position(stock_snapshot, stock_snapshot.get("strategy"))):
+            capacity_prefetch = _prefetch_entry_capacity_for_async_evaluation(
+                code, prepared_ws, async_context.deadline_epoch
+            )
         return {
             "source_quality_ok": True,
+            "entry_capacity_prefetch": capacity_prefetch,
             "recent_ticks": recent_ticks,
             "recent_candles": recent_candles,
             "candle_source_meta": candle_source_meta,

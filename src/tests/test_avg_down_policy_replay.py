@@ -12,6 +12,23 @@ from src.engine.scalping import avg_down_replay_capture as capture
 from src.tests.test_avg_down_replay import replay_fixture
 
 
+def test_snapshot_date_and_datetime_preserve_distinct_types():
+    from datetime import date, timezone
+    values = {"rec_date": date(2026, 9, 21),
+              "observed_at": datetime(2026, 9, 21, tzinfo=timezone.utc)}
+    frozen = policy._json_value(values)
+    assert frozen["rec_date"] == {"__replay_date__": "2026-09-21"}
+    assert "__replay_datetime__" in frozen["observed_at"]
+    restored = policy.thaw(frozen)
+    assert restored == values
+    assert type(restored["rec_date"]) is date
+    assert type(restored["observed_at"]) is datetime
+    with pytest.raises(ValueError):
+        policy.thaw({"__replay_date__": "not-a-date"})
+    with pytest.raises(ValueError, match="unsupported_snapshot_value"):
+        policy._json_value(object())
+
+
 def policy_fixture():
     from src.engine import sniper_state_handlers as handlers
     from src.utils.constants import TRADING_RULES
@@ -27,6 +44,7 @@ def policy_fixture():
     runtime.LAST_LOG_TIMES = {}
     stock = {
         "id": 91,
+        "rec_date": datetime.fromtimestamp(epoch).date(),
         "code": observation["stock_code"],
         "name": "REPLAY_TEST",
         "status": "HOLDING",

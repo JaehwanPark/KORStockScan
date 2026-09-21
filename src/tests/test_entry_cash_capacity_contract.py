@@ -6,6 +6,73 @@ from src.utils import kiwoom_utils
 from src.engine import sniper_state_handlers as handlers
 
 
+@pytest.mark.parametrize("wait,expected", [(0, 0), (0.4, 0.4), (99, 1.25), (-1, 0)])
+def test_source_capacity_bounded_wait_preserves_priority_and_normal_read(monkeypatch, wait, expected):
+    calls = []
+    monkeypatch.setattr(kiwoom_utils, "fetch_kiwoom_api_continuous",
+                        lambda **kwargs: calls.append(kwargs) or [])
+    kiwoom_utils.get_orderable_by_margin_kt00011("fake", "005930", 10000,
+        source_only=True, source_read_rate_max_wait_sec=wait)
+    assert calls[-1]["request_class"] == "source_only"
+    assert calls[-1]["read_rate_max_wait_sec"] == expected
+    assert calls[-1]["max_retries"] == 1
+    assert calls[-1]["request_timeout"] == (0.15, 0.15)
+    kiwoom_utils.get_orderable_by_margin_kt00011("fake", "005930", 10000)
+    assert "request_class" not in calls[-1]
+    assert "read_rate_max_wait_sec" not in calls[-1]
+
+
+def test_async_capacity_prefetch_reused_only_after_completion_and_exact_validation(monkeypatch):
+    from datetime import datetime, timezone
+    handlers._reset_entry_capacity_receipts()
+    clock = [1000.0]
+    calls = []
+    monkeypatch.setattr(handlers.time, "time", lambda: clock[0])
+    monkeypatch.setattr(handlers, "_entry_capacity_receipt_key", lambda code, price: (code, price))
+    def fetch(token, code, unit_price=None, **kwargs):
+        calls.append(kwargs)
+        assert handlers._read_entry_capacity_snapshot(code, unit_price, source_only=True)["error"] == "capacity_source_inflight"
+        clock[0] += 0.4
+        return {"return_code": 0, "cash_orderable_contract_status": "valid",
+            "capacity_observed_at": datetime.fromtimestamp(clock[0], timezone.utc).isoformat(),
+            "capacity_source_sha256": "a" * 64, "requested_stock_code": code,
+            "requested_unit_price": unit_price}
+    monkeypatch.setattr(kiwoom_utils, "get_orderable_by_margin_kt00011", fetch)
+    try:
+        prefetched = handlers._prefetch_entry_capacity_for_async_evaluation("005930", {"curr": 10000}, 1005)
+        assert prefetched == {"status": "ready", "reuse_status": "fresh_read"}
+        assert calls == [{"source_only": True, "source_read_rate_max_wait_sec": 1.25}]
+        assert handlers._read_entry_capacity_snapshot("005930", 10000, source_only=True)["capacity_reuse_status"] == "exact_receipt_reused"
+        assert len(calls) == 1
+        handlers._read_entry_capacity_snapshot("005930", 10001, source_only=True)
+        assert len(calls) == 2  # A final quote change cannot reuse the prepared price.
+        assert calls[-1] == {"source_only": True}
+        clock[0] += 3
+        handlers._read_entry_capacity_snapshot("005930", 10000, source_only=True)
+        assert len(calls) == 3  # Queued/expired evidence never bypasses freshness.
+    finally:
+        handlers._reset_entry_capacity_receipts()
+
+
+@pytest.mark.parametrize("price,deadline,expected", [(0, 1005, None), (10000, 1000.2, None),
+                                                       (10000, 1000.8, 0.5)])
+def test_async_capacity_prefetch_budget_and_failure_are_source_only(monkeypatch, price, deadline, expected):
+    monkeypatch.setattr(handlers.time, "time", lambda: 1000.0)
+    calls = []
+    def read(*args, **kwargs):
+        calls.append(kwargs)
+        raise ValueError("fixture_failure")
+    monkeypatch.setattr(handlers, "_read_entry_capacity_snapshot", read)
+    result = handlers._prefetch_entry_capacity_for_async_evaluation("005930", {"curr": price}, deadline)
+    if expected is None:
+        assert result["status"] == "skipped"
+        assert not calls
+    else:
+        assert calls[0]["source_only"] is True
+        assert calls[0]["source_read_rate_max_wait_sec"] == pytest.approx(expected)
+        assert result == {"status": "source_gap", "reason": "ValueError:fixture_failure"}
+
+
 def response(**extra):
     return {
         "return_code": 0,

@@ -8,6 +8,7 @@ from datetime import datetime
 
 import pytest
 
+
 from src.engine.ai.hot_path_ai_dispatcher import HotPathAIDispatcher
 from src.engine.scalping.scanner_async_eval import (
     ScannerAsyncEvalCoordinator,
@@ -15,6 +16,18 @@ from src.engine.scalping.scanner_async_eval import (
 )
 from src.engine.scalping.scanner_runtime_scheduler import ScannerGeneration
 from src.engine import sniper_state_handlers as handlers
+
+
+@pytest.fixture(autouse=True)
+def capacity_prefetch_calls(monkeypatch):
+    calls = []
+
+    def prefetch(code, frame, deadline):
+        calls.append((code, dict(frame), deadline))
+        return {"status": "source_gap", "reason": "fixture_no_account_io"}
+
+    monkeypatch.setattr(handlers, "_prefetch_entry_capacity_for_async_evaluation", prefetch)
+    return calls
 
 
 @pytest.fixture(autouse=True)
@@ -855,6 +868,7 @@ def test_async_entry_expired_result_is_discarded_and_schedules_fresh_recheck(
 def test_async_entry_bridge_prepares_off_thread_then_commits_on_current_state(
     monkeypatch,
     tmp_path,
+    capacity_prefetch_calls,
     venue,
     ws_suffix,
     ws_route,
@@ -949,6 +963,7 @@ def test_async_entry_bridge_prepares_off_thread_then_commits_on_current_state(
 
     class CapturingAI(_FakeAI):
         def analyze_target(self, name, frame, ticks, candles, **kwargs):
+            assert len(capacity_prefetch_calls) == 1
             evaluated.append((frame, ticks, kwargs["candle_context"]))
             return super().analyze_target(name, frame, ticks, candles, **kwargs)
 
@@ -994,6 +1009,9 @@ def test_async_entry_bridge_prepares_off_thread_then_commits_on_current_state(
     coordinator.shutdown()
 
     assert committed["status"] == "completed"
+    assert capacity_prefetch_calls[0][0] == "005930"
+    assert capacity_prefetch_calls[0][1]["curr"] == 1001
+    assert committed["prepared_context"]["entry_capacity_prefetch"]["reason"] == "fixture_no_account_io"
     assert committed["ai_decision"]["action"] == "BUY"
     assert [dict(item) for item in committed["prepared_context"]["recent_ticks"]] == [
         {"price": 1003 if execution_refresh else 1000}

@@ -1030,7 +1030,8 @@ def get_account_execution_snapshot_kt00008(token):
     return snapshot
 
 
-def get_orderable_by_margin_kt00011(token, code, unit_price=None, is_nxt=None, *, source_only=False):
+def get_orderable_by_margin_kt00011(token, code, unit_price=None, is_nxt=None, *, source_only=False,
+                                  source_read_rate_max_wait_sec=0.0):
     """
     [kt00011] 증거금율별주문가능수량조회요청
     - 종목별 증거금율(stk_profa_rt), 계좌증거금율(profa_rt), 적용증거금율(aplc_rt)
@@ -1047,7 +1048,8 @@ def get_orderable_by_margin_kt00011(token, code, unit_price=None, is_nxt=None, *
     source_bounds = (
         dict(max_retries=1, request_owner="scale_in_budget_source",
              request_class=REQUEST_CLASS_SOURCE_ONLY, request_code=req_code,
-             read_rate_max_wait_sec=0.0, request_timeout=(0.15, 0.15))
+             read_rate_max_wait_sec=max(0.0, min(DEFAULT_SOURCE_ONLY_MAX_WAIT_SEC,
+                 float(source_read_rate_max_wait_sec))), request_timeout=(0.15, 0.15))
         if source_only else {}
     )
     results = fetch_kiwoom_api_continuous(

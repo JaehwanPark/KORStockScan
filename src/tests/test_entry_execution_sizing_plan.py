@@ -818,7 +818,7 @@ def test_runtime_pre_ai_producer_freezes_owner_inputs_without_submit(monkeypatch
     policy_snapshot['files']={key.replace('2026-09-04',day):value for key,value in policy_snapshot['files'].items()}
     monkeypatch.setattr(capture_owner, '_cached_policy', lambda *a: policy_snapshot)
     stock={'name':'fixture','id':1,'strategy':'SCALPING','position_tag':position_tag,'source_signature':'scanner-confirmed','is_nxt':True,
-        'scanner_promotion_id':'promotion-pre-ai','code':'005930',
+        'scanner_promotion_id':'promotion-pre-ai','code':'005930','rec_date':frozen_clock.date(),
         'entry_economic_watch_lifetime': {
             'owner':'kiwoom_sniper_v2._scanner_evaluation_lifetime_anchor/_scalping_watching_ttl_sec',
             'scanner_promotion_id':'promotion-pre-ai','deadline_epoch':frozen_clock.timestamp()+1800,

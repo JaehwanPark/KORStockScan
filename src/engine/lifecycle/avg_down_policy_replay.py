@@ -166,6 +166,8 @@ def _json_value(value: Any) -> Any:
     """No repr/default=str normalization of unknown policy state."""
     if isinstance(value, datetime):
         return {"__replay_datetime__": value.isoformat()}
+    if isinstance(value, date):
+        return {"__replay_date__": value.isoformat()}
     if isinstance(value, Decimal):
         if not value.is_finite():
             raise ValueError("non_finite_decimal_state")
@@ -206,6 +208,8 @@ def thaw(value: Any) -> Any:
             )
         if set(value) == {"__replay_datetime__"}:
             return datetime.fromisoformat(value["__replay_datetime__"])
+        if set(value) == {"__replay_date__"}:
+            return date.fromisoformat(value["__replay_date__"])
         if set(value) == {"__replay_collection__", "items"}:
             constructor = {"tuple": tuple, "set": set, "frozenset": frozenset}.get(
                 value["__replay_collection__"]
