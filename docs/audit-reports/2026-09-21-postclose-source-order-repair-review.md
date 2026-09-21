@@ -24,3 +24,13 @@
 ## 실행 증거
 
 수리 후 관련 pytest173개 통과, Python compile/bash -n/diff --check 및 print-only checklist parser 통과. Prefix 재사용 허용 경로는 advisory/auto-policy가 소비하지 않는 공동 연구 모듈에 한정하여 보완했다. immutable release 재실행 결과는 아래에 기록한다. 기존 main 실패·과거 recovery 이력은 보존한다.
+
+### 재실행과 후행 보완
+
+- `a13afa1f5` immutable release 자체에서 관련164 tests PASS. 공통 cron router와 widget/machine 기존 systemd source pin을 새 release로 연결했다. 실행 중 매매 봇은 이전 release 그대로이며 새로운 PID 소비로 표시하지 않았다.
+- 22:58:57 label 원 producer 성공. 22건(partial18/pending4), source input validator issues0. 23:00:57 collector 추천 재생성 성공, qualified/reported7건, 아직 미등록6건, notification 미실행. 추천은 메인 기계정책 승격과 별개이다.
+- Widget 기존 완료 prefix를 보존하고 retained-only signal 연구 재실행. 475150 등 하루/일부 날짜 결손 종목이 기존 일별 품질 계약으로 평가됨을 확인했다. 전체355 분모 유지, 실제 완료·제외 수는 terminal 후 확정한다.
+- Main의 실패 원인과 같은 공동 명단 예외가 후행 `freeze_joint_bundle`에도 남아 있어 refresh에서 진단으로 기록하고 기존 canonical allocation gate로 재구성하도록 보완한다. publisher가 gate를 재계산했을 때 일치해야 한다는 회귀 검증을 포함한다.
+- 복구 worker만 4CPU/가용메모리4GB 확인 후 CPUQuota80%로 제한하였다. 정규 서비스 자원 한도는 변경하지 않았다.
+
+후행 보완 검증: 공동 manifest 실패를 포함한 실제 publish/reuse 회귀4개, 관련 closed-loop/completion/handoff126 tests PASS. 원 gate와 publisher 재구성 gate 불일치가 없음을 확인했다.

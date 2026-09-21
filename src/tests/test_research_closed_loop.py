@@ -535,8 +535,9 @@ def test_late_publication_receipt_retains_served_version_and_marks_unconsumed(tm
 
 
 @pytest.mark.parametrize("publication", [None, "2026-09-20"])
+@pytest.mark.parametrize("freeze_failure", [False, True])
 def test_completed_study_fixed_point_publishes_valid_empty_and_blocks_changed_dependency(
-    tmp_path, monkeypatch, publication
+    tmp_path, monkeypatch, publication, freeze_failure
 ):
     from src.engine.automation import machine_research_closed_loop_refresh as phase
     from src.tests.test_widget_symbol_runtime_policy import _research
@@ -587,7 +588,16 @@ def test_completed_study_fixed_point_publishes_valid_empty_and_blocks_changed_de
         episode.write_report(
             peer, output_dir=root / "low_price_two_leg_expanded_candidate_research"
         )
+    if freeze_failure:
+        def reject_freeze(*a, **kw):
+            raise ValueError("joint_cohort_member_pruned_without_supersession")
+        monkeypatch.setattr(loop, "freeze_joint_bundle", reject_freeze)
+        monkeypatch.setattr(loop, "frozen_joint_bundle", reject_freeze)
     first = phase.refresh(DAY, directory=directory, report_root=root)
+    if freeze_failure:
+        saved = loop.read_object(root / "widget_symbol_signal_policy_research" / f"widget_symbol_signal_policy_research_{DAY}.json")
+        assert saved["joint_allocation_gate"]["status"] == "allocation_blocked"
+        assert saved["joint_allocation_gate"]["feasible_combined_net_profit_krw"] is None
     assert first["status"] == "complete" and phase.validate_current_receipt(first, DAY)
     assert first["publications"]["widget"]["profile_count"] == 0
     assert {p["effective_date"] for p in first["publications"].values()} == {"2026-09-21" if publication else "2026-09-18"}

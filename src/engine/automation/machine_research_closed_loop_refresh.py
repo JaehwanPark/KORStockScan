@@ -265,14 +265,18 @@ def _refresh(
         )
         for family, report in studies.items():
             loop.write_joint_inputs(report, family=family, directory=directory)
-        loop.freeze_joint_bundle(
-            [
-                loop.joint_inputs(report, family=family)
-                for family, report in studies.items()
-            ],
-            directory=directory,
-        )
+        freeze_issue = None
+        try:
+            loop.freeze_joint_bundle(
+                [loop.joint_inputs(report, family=family) for family, report in studies.items()],
+                directory=directory,
+            )
+        except ValueError as exc:
+            freeze_issue = str(exc)
         for family, report in studies.items():
+            report["joint_bundle_freeze_issue"] = freeze_issue
+            # Reconstruct the same canonical gate as the policy consumers.
+            # Do not invent a different gate that cannot be hash-validated.
             report["joint_allocation_gate"] = loop.combined_joint_gate(
                 report, family=family, source_date=day, directory=directory
             )
