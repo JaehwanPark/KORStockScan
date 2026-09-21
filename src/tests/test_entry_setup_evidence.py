@@ -25,6 +25,7 @@ from src.engine.scalping.entry_setup_evidence import (
     entry_action_comparison_openai_schema,
     entry_risk_adjudication_openai_schema,
     mechanistic_entry_action_comparison,
+    mechanistic_entry_policy_decision,
     repair_invalid_entry_risk_adjudication,
     repair_mechanistic_pass_citations,
     validate_entry_risk_adjudication,
@@ -1877,6 +1878,36 @@ def test_large_sell_only_blocker_becomes_recheck_not_probe():
     assert composed["action"] == "WAIT"
     assert composed["entry_probe_intent"] is False
     assert composed["entry_recheck_intent"] is True
+
+
+def test_large_sell_wait_survives_actual_machine_policy_without_entry():
+    analysis = _exact_analysis(trusted_supportive_trigger=False)
+    analysis["volume_confirmation"] = {"state": "confirmed", "volume_ratio": 1.4}
+    recovery = _recovery_analysis()
+    recovery["hard_blockers"] = ["large_sell_print_present"]
+    evidence = build_entry_setup_evidence(
+        exact_payload={"current": {"price": 10000}},
+        exact_analysis=analysis, recovery_analysis=recovery,
+    )
+    comparison = mechanistic_entry_action_comparison(evidence)
+    assert comparison["preferred_action"] == "RECHECK"
+    assert mechanistic_entry_policy_decision(evidence)["action"] == "RECHECK"
+    decision = compose_mechanistic_primary_decision(setup_evidence=evidence, ai_risk_adjudication=None)
+    assert decision["entry_mechanistic_action"] == "RECHECK"
+    assert decision["action"] == "WAIT"
+    assert decision["entry_probe_intent"] is False
+    assert decision["entry_ai_followup_disposition"] == "machine_recheck_next_scanner_loop"
+    for fault in ("failed_structure", "source_unusable", "spread_extreme_or_unusable"):
+        invalid = deepcopy(evidence)
+        invalid["invalidation_facts"].append("hard_blocker:" + fault)
+        assert mechanistic_entry_policy_decision(invalid)["action"] == "BLOCK"
+    for field, value in (("status", "stale"), ("completed_bar_count", 0)):
+        invalid = deepcopy(evidence)
+        invalid["source_quality"][field] = value
+        assert mechanistic_entry_policy_decision(invalid)["action"] == "BLOCK"
+    forged = deepcopy(comparison)
+    forged["preferred_action"] = "ENTER_NOW"
+    assert validate_entry_action_comparison(forged, setup_evidence=evidence)
 
 
 def test_report_attributes_tail_fragility_as_bounded_probe_stress(

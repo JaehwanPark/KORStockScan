@@ -5069,6 +5069,30 @@ def test_machine_nonentry_closes_exact_attempt_without_changing_action(monkeypat
     assert calls == []
 
 
+def test_machine_recheck_terminal_keeps_each_revision_without_order_authority(monkeypatch):
+    calls = []
+    monkeypatch.setattr(state_handlers, "_log_entry_pipeline",
+                        lambda stock, code, stage, **fields: calls.append((stage, fields)))
+    decision = {"action": "WAIT", "provider_called": False,
+        "machine_decision_before_provider": True, "entry_mechanistic_action": "RECHECK",
+        "entry_primary_decision_owner": "mechanistic_entry_adjudicator",
+        "evaluation_attempt_id": "attempt", "machine_observation_sha256": "a" * 64,
+        "machine_revision_schema": "exact_machine_revision_v1", "machine_revision_parent_sha256": "",
+        "entry_decision_large_sell_print_detected": True}
+    stock = {"id": 1}
+    assert state_handlers._log_machine_nonentry_terminal_if_needed(stock, "005930", ai_decision=decision)
+    assert not state_handlers._log_machine_nonentry_terminal_if_needed(stock, "005930", ai_decision=decision)
+    decision.update(machine_observation_sha256="b" * 64, machine_revision_parent_sha256="a" * 64)
+    assert state_handlers._log_machine_nonentry_terminal_if_needed(stock, "005930", ai_decision=decision)
+    assert len(calls) == 2
+    for _, fields in calls:
+        assert fields["terminal_reason"] == "machine_recheck_before_auxiliary_ai"
+        assert fields["actual_order_submitted"] is False
+        assert fields["broker_order_forbidden"] is True
+        assert fields["entry_decision_large_sell_print_detected"] is True
+    assert calls[1][1]["machine_revision_parent_sha256"] == "a" * 64
+
+
 def test_pre_submit_entry_ai_authority_retry_rebases_stale_quote_before_ai(
     monkeypatch,
 ):
@@ -21411,6 +21435,9 @@ def test_watching_state_blocks_deep_below_bid_pre_submit_price(monkeypatch):
             return cls(2026, 4, 29, 10, 0, 0)
 
     state_handlers.datetime = FixedDateTime
+    # This test targets price distance, not elapsed quote age under suite load.
+    # Keep the wall clock consistent with its fixed decision/session clock.
+    monkeypatch.setattr(state_handlers.time, "time", lambda: FixedDateTime.now().timestamp())
     state_handlers.TRADING_RULES = replace(
         CONFIG,
         SCALE_IN_REQUIRE_HISTORY_TABLE=False,
@@ -21420,7 +21447,8 @@ def test_watching_state_blocks_deep_below_bid_pre_submit_price(monkeypatch):
     state_handlers.COOLDOWNS = {}
     state_handlers.ALERTED_STOCKS = set()
     state_handlers.HIGHEST_PRICES = {}
-    state_handlers.LAST_AI_CALL_TIMES = {"001440": FixedDateTime.now().timestamp() - 10}
+    # The price guard is downstream of AI cooldown; start with an expired one.
+    state_handlers.LAST_AI_CALL_TIMES = {"001440": FixedDateTime.now().timestamp() - 3600}
     state_handlers.LAST_LOG_TIMES = {}
     state_handlers.DB = _DummyDB()
     state_handlers.KIWOOM_TOKEN = "token"
@@ -21575,7 +21603,7 @@ def test_watching_state_blocks_deep_below_bid_pre_submit_price(monkeypatch):
     by_stage = {stage: fields for stage, fields in logs}
     assert sent_orders == []
     assert "order_bundle_submitted" not in by_stage
-    assert "pre_submit_price_guard_block" in by_stage, logs
+    assert "pre_submit_price_guard_block" in by_stage, [stage for stage, _ in logs]
     assert by_stage["pre_submit_price_guard_block"]["submitted_order_price"] == 48_800
     assert by_stage["pre_submit_price_guard_block"]["best_bid_at_submit"] == 50_500
     assert by_stage["pre_submit_price_guard_block"]["best_ask_at_submit"] == 50_900

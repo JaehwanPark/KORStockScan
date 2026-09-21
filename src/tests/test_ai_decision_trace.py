@@ -33,13 +33,15 @@ def test_machine_observation_keeps_exact_input_without_provider_request(
 ):
     _enable(monkeypatch, tmp_path)
     result = trace.capture_machine_observation(
-        exact_payload={"stock_code": "005930", "name": "삼성전자", "best_ask": 10000},
+        exact_payload={"stock_code": "005930", "name": "삼성전자", "best_ask": 10000,
+                       "features": {"large_sell_print_detected": True}},
         setup_evidence={"setup_state": "WAIT_CONFIRMATION"},
         assessment={"action": "RECHECK"},
         bundle_sha256="b" * 64,
         metadata={"record_id": 123},
     )
     assert result["machine_capture_status"] == "captured"
+    assert result["entry_decision_large_sell_print_detected"] is True
     row = _rows(trace._payload_path(trace._date_text()))[0]
     assert row["schema"] == "mechanistic_entry_observation_v1"
     assert row["provider_called"] is False
@@ -50,6 +52,27 @@ def test_machine_observation_keeps_exact_input_without_provider_request(
     assert result["evaluation_attempt_identity_source"] == "missing"
     assert not (tmp_path / "ai_decision_prompts").exists()
     assert not (tmp_path / "ai_decision_outcomes").exists()
+
+
+def test_revision_receipt_is_bounded_exact_attempt_and_capture_only():
+    state = {}
+    first = {"machine_capture_status": "captured", "machine_observation_sha256": "a" * 64,
+        "evaluation_attempt_id": "attempt", "scanner_promotion_id": "promotion",
+        "effective_venue": "KRX", "market_session_bucket": "KRX_REGULAR"}
+    trace.bind_machine_observation_revision(state, first, symbol="005930", bundle_sha256="b" * 64)
+    assert first["machine_revision_parent_sha256"] == ""
+    second = {**first, "machine_observation_sha256": "c" * 64}
+    trace.bind_machine_observation_revision(state, second, symbol="005930", bundle_sha256="b" * 64)
+    assert second["machine_revision_parent_sha256"] == "a" * 64
+    trace.bind_machine_observation_revision(state, second, symbol="005930", bundle_sha256="b" * 64)
+    assert second["machine_revision_parent_sha256"] == "a" * 64
+    third = {**first, "machine_observation_sha256": "d" * 64}
+    trace.bind_machine_observation_revision(state, third, symbol="005930", bundle_sha256="e" * 64)
+    assert third["machine_revision_parent_sha256"] == ""
+    assert len(state) == 1
+    failed = {"machine_capture_status": "write_failed"}
+    trace.bind_machine_observation_revision(state, failed, symbol="005930", bundle_sha256="e" * 64)
+    assert "machine_revision_schema" not in failed
 
 
 def test_machine_observation_returns_exact_snapshot_evaluation_identity(

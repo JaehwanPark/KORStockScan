@@ -2911,6 +2911,19 @@ def _coverage_row(
         for row in candidate_rows["candidate_evaluated"]
         if row.get("scanner_source_cycle_id")
     }
+    candidate_anchor = min(candidate_rows["candidate_evaluated"], key=lambda r: r["ts"], default=None)
+    admission = None
+    if candidate_anchor and not flags["scanner_promoted"]:
+        generation = candidate_anchor.get("scanner_scan_generation_id")
+        if generation:
+            admission = min((r for r in candidate_rows["candidate_evaluated"]
+                if r.get("raw_stage") == "scalping_scanner_candidate_pruned"
+                and r.get("scanner_scan_generation_id") == generation
+                and r["ts"] >= candidate_anchor["ts"]
+                and r.get("reason") not in {None, "", "returned", "partial_adapter_return"}
+                and not (r.get("scanner_source_cycle_id") and candidate_anchor.get("scanner_source_cycle_id")
+                    and r["scanner_source_cycle_id"] != candidate_anchor["scanner_source_cycle_id"])),
+                key=lambda r: r["ts"], default=None)
     return {
         **{
             key: (value.isoformat() if isinstance(value, datetime) else value)
@@ -2962,6 +2975,26 @@ def _coverage_row(
         },
         "stage_reason_codes": stage_reason_codes,
         "first_stage_reason_code": first_stage_reason_code,
+        # Adapter return is source availability, not an admission disposition.
+        # Do not borrow a source_seen reason from another scanner cycle.
+        "candidate_nonpromotion_evidence": {
+            "status": (
+                "not_applicable" if flags["scanner_promoted"] else
+                "reason_observed" if admission or first_stage_reason_code.get("candidate_evaluated")
+                not in {None, "", "returned", "partial_adapter_return"}
+                else "candidate_disposition_missing"
+            ),
+            "reason": (
+                admission["reason"] if admission else first_stage_reason_code.get("candidate_evaluated")
+                if not flags["scanner_promoted"] and first_stage_reason_code.get("candidate_evaluated")
+                not in {None, "", "returned", "partial_adapter_return"} else None
+            ),
+            "source_stage": "candidate_evaluated",
+            "binding": "exact_scan_generation" if admission else "first_stage_observation_only",
+            "scan_generation_id": admission.get("scanner_scan_generation_id") if admission else None,
+            "occurred_at": admission["ts"].isoformat() if admission else None,
+            "runtime_effect": False,
+        },
         "scanner_lineage": {
             "required": require_lineage,
             "status": lineage_status,
@@ -3024,9 +3057,12 @@ def _summarize_rows_base(rows: list[dict[str, Any]]) -> dict[str, Any]:
         sorted(
             Counter(
                 str(
-                    (row.get("first_stage_reason_code") or {}).get(
-                        "candidate_evaluated"
-                    )
+                    ((row.get("candidate_nonpromotion_evidence") or {}).get("reason")
+                     if (row.get("candidate_nonpromotion_evidence") or {}).get("binding") == "exact_scan_generation"
+                     else "candidate_disposition_missing")
+                    if (row.get("first_stage_reason_code") or {}).get("candidate_evaluated")
+                    in {"returned", "partial_adapter_return"}
+                    else (row.get("first_stage_reason_code") or {}).get("candidate_evaluated")
                     or "reason_missing"
                 )
                 for row in candidate_not_promoted_rows

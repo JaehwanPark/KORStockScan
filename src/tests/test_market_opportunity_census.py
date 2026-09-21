@@ -1603,6 +1603,26 @@ def test_candidate_prune_reason_is_preserved_for_scanner_attribution(tmp_path):
     assert missing_reason_summary["candidate_not_promoted_first_reason_counts"] == {
         "reason_missing": 1
     }
+    for reason in ("returned", "partial_adapter_return"):
+        adapter_row = {**row, "first_stage_reason_code": {
+            "candidate_evaluated": reason, "source_seen": "general_slot_limit"}}
+        summary = census._summarize_rows_base([adapter_row])
+        assert summary["candidate_not_promoted_first_reason_counts"] == {
+            "candidate_disposition_missing": 1}
+    candidates = stage_index["005930"]["candidate_evaluated"]
+    for candidate in candidates:
+        candidate["scanner_scan_generation_id"] = "generation-a"
+    candidates.append({**candidates[0], "raw_stage": "scalping_scanner_candidate_pool_census",
+        "ts": datetime.fromisoformat("2026-07-30T10:00:00+09:00"), "reason": "returned"})
+    for generation, expected in (("generation-a", "general_slot_limit"),
+                                 ("generation-b", "candidate_disposition_missing")):
+        candidates[-1]["scanner_scan_generation_id"] = generation
+        linked = census._coverage_row({"venue": "KRX", "session": "KRX_REGULAR",
+            "stock_code": "005930", "first_census_at": candidates[-1]["ts"]}, stage_index,
+            after=candidates[-1]["ts"], before=datetime.fromisoformat("2026-07-30T10:05:00+09:00"),
+            require_venue=True, require_lineage=True)
+        assert linked["first_stage_reason_code"]["candidate_evaluated"] == "returned"
+        assert census._summarize_rows_base([linked])["candidate_not_promoted_first_reason_counts"] == {expected: 1}
 
 
 def test_report_splits_forward_exact_from_noncausal_retrospective(tmp_path):

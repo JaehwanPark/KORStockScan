@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+import json
 
 import pytest
 
@@ -40,6 +41,34 @@ def active(state):
     return [r for r in state["incidents"].values() if r["status"] == "active"]
 
 
+@pytest.mark.parametrize("initial_status,initial_blocker", [
+    ("guard_excluded", "common_guard_block:latency_state_danger"),
+    ("source_gap", "exact_broker_capacity_missing"),
+])
+def test_conflicting_attempt_retains_enter_and_economic_history_without_recovery(initial_status, initial_blocker):
+    early = event(stage="entry_ai_economic_source_gap", screen="caution",
+        machine_observation_sha256="a" * 64,
+        economic_source_monitor_projection=json.dumps({"status": initial_status,
+            "blocker": initial_blocker}))
+    late = event(action="BLOCK", screen="not_requested_machine_nonentry",
+        stage="entry_ai_economic_source_gap", when=START + timedelta(seconds=3),
+        machine_observation_sha256="b" * 64,
+        economic_source_monitor_projection=json.dumps({"status": "source_gap",
+            "blocker": "exact_broker_capacity_missing",
+            "capacity_blocker": "capacity_observation_cache_miss_nonentry"}))
+    source = report([late, early, early], START + timedelta(minutes=2))["submission_monitor"]
+    row = source["rows"][0]
+    assert row["mechanistic_action"] == "UNKNOWN"
+    assert row["conflict_reasons"]
+    assert row["enter_now_observed"] is True
+    assert row["initial_observed_action"] == "ENTER_NOW"
+    assert row["latest_observed_action"] == "BLOCK"
+    assert len(row["decision_history"]) == 2
+    assert len(row["economic_history"]) == 2
+    assert row["economic_history"][0]["evidence"]["blocker"] == initial_blocker
+    assert not monitor._nonentry_capacity_observation_gap(row)
+
+
 def test_pending_pass_persists_then_exact_terminal_recovers():
     events = [event()]
     first = tick(events, 10)
@@ -51,6 +80,99 @@ def test_pending_pass_persists_then_exact_terminal_recovers():
     final = tick(events, 20, second)
     assert not active(final)
     assert any(r["status"] == "recovered" for r in final["incidents"].values())
+
+
+def revision_events():
+    receipt = {"machine_revision_schema": "exact_machine_revision_v1"}
+    early = event(screen="caution", machine_observation_sha256="a" * 64,
+                  machine_revision_parent_sha256="", **receipt)
+    late = event(action="BLOCK", screen="not_requested_machine_nonentry",
+        when=START + timedelta(seconds=3), machine_observation_sha256="b" * 64,
+        machine_revision_parent_sha256="a" * 64, **receipt)
+    return early, late
+
+
+def test_explicit_revision_chain_keeps_one_attempt_and_initial_enter():
+    early, late = revision_events()
+    result = sentinel._machine_primary_entry_funnel([late, early, early])
+    assert len(result["evaluation_ledger"]) == 1
+    row = result["evaluation_ledger"][0]
+    assert row["conflict_reasons"] == []
+    assert row["revision_chain_status"] == "valid"
+    assert row["mechanistic_action"] == "BLOCK"
+    assert row["enter_now_observed"] is True
+    assert row["initial_observed_action"] == "ENTER_NOW"
+    assert row["final_state"] == "machine_block_point_drop"
+
+
+@pytest.mark.parametrize("mutation", ["missing", "parent", "same_hash", "owner",
+    "screen", "policy", "tie", "reverse", "reopened", "prior_order", "foreign_attempt"])
+def test_revision_chain_never_hides_unproven_or_executed_transition(mutation):
+    early, late = revision_events()
+    rows = [early, late]
+    if mutation == "missing":
+        late.fields.pop("machine_revision_schema")
+    elif mutation == "parent":
+        late.fields["machine_revision_parent_sha256"] = "c" * 64
+    elif mutation == "same_hash":
+        late.fields["machine_observation_sha256"] = "a" * 64
+    elif mutation == "owner":
+        early.fields["entry_primary_decision_owner"] = "auxiliary"
+    elif mutation == "screen":
+        early.fields["entry_ai_screen_status"] = "not_requested_machine_nonentry"
+    elif mutation == "policy":
+        late.fields["entry_mechanistic_policy_version"] = "v2"
+    elif mutation in {"tie", "reverse"}:
+        rows[1] = event(action="BLOCK", screen="not_requested_machine_nonentry",
+            when=START if mutation == "tie" else START - timedelta(seconds=1), **{
+                k: v for k, v in late.fields.items() if k.startswith("machine_")})
+    elif mutation == "reopened":
+        rows.append(event(when=START + timedelta(seconds=4), **early.fields))
+    elif mutation == "prior_order":
+        rows[0] = event(stage="order_bundle_submitted", broker_order_no="real-receipt", **early.fields)
+    elif mutation == "foreign_attempt":
+        late.fields["evaluation_attempt_id"] = "foreign"
+    result = sentinel._machine_primary_entry_funnel(rows)
+    assert any(r["conflict_reasons"] for r in result["evaluation_ledger"])
+
+
+def test_revision_economics_does_not_backfill_initial_enter_gap():
+    early, late = revision_events()
+    early.fields["economic_source_monitor_projection"] = json.dumps(
+        {"status": "source_gap", "blocker": "exact_broker_capacity_missing"})
+    late.fields["economic_source_monitor_projection"] = json.dumps(
+        {"status": "recorded_source_only", "seed_sha256": "later"})
+    rows = [event(stage="entry_ai_economic_source_gap", when=START, **early.fields),
+            event(stage="entry_ai_economic_plan_observed", when=START + timedelta(seconds=3), **late.fields)]
+    row = monitor.snapshot(rows, START + timedelta(minutes=2))["rows"][0]
+    assert row["revision_chain_status"] == "valid"
+    assert row["economic_source"]["blocker"] == "exact_broker_capacity_missing"
+    assert row["economic_source"]["machine_observation_sha256"] == "a" * 64
+
+
+def test_distinct_revisions_can_have_distinct_economic_proofs():
+    early, late = revision_events()
+    rows = []
+    for index, original in enumerate((early, late)):
+        rows.append(event(stage="entry_ai_economic_plan_observed",
+            when=START + timedelta(seconds=index * 3), **original.fields,
+            economic_source_monitor_projection=json.dumps(
+                {"status": "recorded_source_only", "seed_sha256": str(index)})))
+    row = monitor.snapshot(rows, START + timedelta(minutes=2))["rows"][0]
+    assert row["economic_source"]["status"] == "recorded_source_only"
+    assert len(row["economic_history"]) == 2
+
+
+@pytest.mark.parametrize("missing_index", [0, 1])
+def test_economic_receipt_never_transfers_between_revisions(missing_index):
+    originals = revision_events()
+    rows = [originals[missing_index]]
+    other = originals[1 - missing_index]
+    rows.append(event(stage="entry_ai_economic_plan_observed", when=other.emitted_at,
+        **other.fields, economic_source_monitor_projection=json.dumps(
+            {"status": "recorded_source_only", "seed_sha256": "proof"})))
+    row = monitor.snapshot(rows, START + timedelta(minutes=2))["rows"][0]
+    assert row["economic_source"]["blocker"] == "economic_observation_event_missing"
 
 
 @pytest.mark.parametrize("stage,extra", [("latency_block", {}), ("order_bundle_submitted", {"broker_order_no": "1"})])
@@ -252,12 +374,15 @@ def test_identity_legacy_incident_preserved_and_missing_details_not_fabricated()
 
 
 def test_identity_legacy_details_backfill_requires_exact_retained_hash():
+    import copy
     bad = event(evaluation_attempt_id='')
     state = tick([bad],10)
     old = state['incidents']['unbound_machine_identity']
     old.update(status='active',examples=[])
     old.pop('occurred_first_at');old.pop('occurred_last_at')
+    before = copy.deepcopy(state)
     result = tick([bad,event(2,evaluation_attempt_id='')],50,state)
+    assert state == before
     item = result['incidents']['unbound_machine_identity']
     assert item['count']==1 and item['evidence_ids']==old['evidence_ids']
     assert len(item['examples'])==1 and item['examples'][0]['record_id']=='0'
