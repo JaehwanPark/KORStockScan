@@ -50,3 +50,12 @@ Episode 복구는23:09:19에 공동 명단 검증 단계를 통과했으나 `low
 검증: 위젯/에피소드/runtime policy/handoff206 tests PASS, compile/diff/parser PASS. 선정 단계에서 기존 운영 종목의 처리 순서까지 바뀌던 결함을 회귀 테스트로 발견하여 보존하도록 수정했다. 완료 advisory/auto-policy prefix는 연구 lifecycle/closure refresh를 소비하지 않아 source hash 검증 후 재사용하며, signal/episode 경제성 평가는 새 선택 명단으로 검증한다.
 
 축소 release 자체206 tests PASS, cron routing4/4 확인 후 episode50 재실행 시작. 위젯 중단 receipt가 started 상태이면 top-level sources 없이 reused_prefix.sources만 보존되는 재개 결함을 확인했다. native 재개에서 해당 증거를 동일 날짜/해시 검증 후 읽도록 보완하고 중단 후 재재개 회귀를 추가했다. 자료 검증을 생략하거나 prefix를 재작성하지 않는다.
+
+
+### 내일 기동 준비를 위한 지속 복구
+
+사용자 지시에 따라9/21 source→publication9/21→effective9/22를 고정하고 main/독립 연구/후행 monitoring/최종 closure를 끝까지 복구한다. 계산 대상 추가 축소가 필요하면 기존 운영 종목을 보존하고 사전 데이터 커버리지·완료 추천·이미 검증된 학습 성과를 우선한다. 평가할 holdout 결과로 사전 대상을 고르지 않는다.
+
+- 검증된 b195524bc에서 main wrapper 재개, bot action none, notification false. 기존 거래 프로세스는 유지한다. 구 release 대기 보고서 세션을 종료하고 새 release monitoring owner로 연결한다. 최종 controller는 독립 terminal 이후 실행한다.
+- 비용 source prerequisite가 상대 data root를 manifest 경로에 두 번 결합하여 종목 master/fee/tax 파일을 결손 처리하던 오류를 확인했다. helper에서 root를 resolve하고 상대/절대 경로 회귀4개 PASS. 기존 immutable CLI에 절대 data root를 전달한 원 producer 재생성으로 master2604·비용 profile6·eligible7812/7812·source blockers0을 확인했다. 가격·비용을 임의 대체하지 않았다.
+- 에피소드50 복구 정상 종료. report46,798,188bytes로128MiB 이내이며 신규/시간대/로직 추천0건이다. 신규 추천 없음과 기존 운영 정책 승계·내일 loader 검증은 별개로 진행한다.

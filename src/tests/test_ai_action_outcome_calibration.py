@@ -4540,7 +4540,8 @@ def test_capture_population_survives_cost_exclusion_and_collapses_same_capture()
     assert result['partitions'][0]['source_binding_counts'] == {'exact_bound': 1, 'micro_window_source_gap': 1}
 
 
-def test_machine_cost_prerequisite_uses_private_sources_not_live_provider_budget(monkeypatch, tmp_path):
+@pytest.mark.parametrize("relative_root", [False, True])
+def test_machine_cost_prerequisite_uses_private_sources_not_live_provider_budget(monkeypatch, tmp_path, relative_root):
     from datetime import datetime
     from zoneinfo import ZoneInfo
     from src.engine.scalping.micro_reversion import economic_reference as reference, economic_reference_owner as owner
@@ -4555,7 +4556,8 @@ def test_machine_cost_prerequisite_uses_private_sources_not_live_provider_budget
         (root / 'provider_budget_policy.json').write_text('private-source-only')
     monkeypatch.setattr(owner, 'build_daily_sources', build_sources)
     monkeypatch.setattr(reference, 'build_daily_resolution', lambda **kwargs: {'verified': True, 'status': 'verified', 'target_date': day})
-    receipt = calibration.ensure_machine_economic_reference(data_root=tmp_path, target_date=day)
+    monkeypatch.chdir(tmp_path)
+    receipt = calibration.ensure_machine_economic_reference(data_root=Path('.') if relative_root else tmp_path, target_date=day)
     assert receipt['verified'] is True
     assert calls[0]['output_root'] == tmp_path / 'report/micro_reversion_economic_reference/machine_source_inputs' / day
     assert not (tmp_path / 'policy').exists()

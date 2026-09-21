@@ -8874,6 +8874,9 @@ def ensure_machine_economic_reference(*, data_root: Path, target_date: str) -> d
     from src.engine.scalping.micro_reversion.economic_reference import build_daily_resolution, atomic_write_json
     from src.engine.scalping.micro_reversion.economic_reference_owner import build_daily_sources
 
+    # Source manifests resolve relative entries against their own directory.
+    # Keep generated source paths absolute even when the CLI uses ./data.
+    data_root = data_root.resolve()
     root = data_root / "report" / "micro_reversion_economic_reference"
     path = root / f"micro_reversion_economic_reference_{target_date}.json"
     existing = existing_or_gzip_path(path)
