@@ -95,7 +95,7 @@ DEFAULT_STATE_FILE = (
 DEFAULT_SOURCE_CACHE_DIR = DATA_DIR / "cache" / "low_price_two_leg_ka10080"
 SOURCE_CACHE_SCHEMA = "low_price_two_leg_ka10080_source_cache_v1"
 REPORT_CACHE_SCHEMA = "low_price_two_leg_verified_report_cache_v1"
-REPORT_CACHE_MAX_BYTES = 128 * 1024 * 1024
+REPORT_CACHE_MAX_BYTES = 256 * 1024 * 1024
 REPORT_CACHE_TERMINALS = frozenset(
     {"recommendations_ready", "no_qualified_candidate", "partial_source_quality"}
 )
@@ -2972,7 +2972,10 @@ def write_report(
         allow_nan=False,
     ) + "\n"
     if len(serialized.encode("utf-8")) > REPORT_CACHE_MAX_BYTES:
-        raise ValueError("low_price_research_report_size_exceeds_contract")
+        raise ValueError(
+            f"low_price_research_report_size_exceeds_contract:"
+            f"bytes={len(serialized.encode('utf-8'))}:limit={REPORT_CACHE_MAX_BYTES}"
+        )
     from src.engine.monitoring.research_closed_loop import freeze_candidate
 
     for result in report["profiles"].values():

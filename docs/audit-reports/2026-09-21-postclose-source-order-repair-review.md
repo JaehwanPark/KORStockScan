@@ -34,3 +34,8 @@
 - 복구 worker만 4CPU/가용메모리4GB 확인 후 CPUQuota80%로 제한하였다. 정규 서비스 자원 한도는 변경하지 않았다.
 
 후행 보완 검증: 공동 manifest 실패를 포함한 실제 publish/reuse 회귀4개, 관련 closed-loop/completion/handoff126 tests PASS. 원 gate와 publisher 재구성 gate 불일치가 없음을 확인했다.
+
+
+### 전수 report 저장 한도 후속
+
+Episode 복구는23:09:19에 공동 명단 검증 단계를 통과했으나 `low_price_research_report_size_exceeds_contract`로 중단됐다. 전수 결과를 삭제/축약하지 않고 생산자와 generation-stable reader가 공유하는 한도를128MiB→256MiB로 확장했다. 초과 오류에 실제 bytes/limit를 출력한다. 자동 정책·closure·runtime summary가 이 native reader를 소비함을 확인하고 writer/reader/크기 초과/계약/completion143 tests PASS. 재실행은 원 source9/21과 publication9/21/effective9/22를 유지한다. 전체 main wrapper는22:36 failed 이력을 유지하며, 독립 source 복구를 main DONE으로 바꾸지 않는다.
