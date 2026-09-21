@@ -528,3 +528,107 @@ def test_expired_owner_is_distinct_from_policy_change(pin, monkeypatch):
     with pytest.raises(guard.EntryNotSent, match="SKIP_OWNER_DEADLINE"):
         guard.final_check(holder=holder, clock=lambda: NOW, validate_owner=owner, save=lambda: None)
     assert holder[guard.KEY]["action"] == "SKIP_OWNER_DEADLINE"
+
+
+@pytest.mark.parametrize('route', ['NXT', 'KRX', 'SOR'])
+@pytest.mark.parametrize('symbol', ['005930', '006800'])
+def test_order_flow_accepts_integrated_tape_without_relabeling_order_route(route, symbol):
+    from src.trading.market.entry_adverse_flow import evaluate_order_snapshot
+    data = tape(adverse=False)
+    row = source(data)
+    for receipt in row['realtime_types'].values():
+        receipt['item'] = symbol + '_AL'
+    for stream in ('recent_depth', 'recent_trades'):
+        for event in row[stream]:
+            event['item'] = symbol + '_AL'
+    data['stocks'][symbol] = data['stocks'].pop('005930')
+    result = evaluate_order_snapshot(snapshot=data, symbol=symbol, route=route,
+                                    cutoff_ms=int(NOW.timestamp() * 1000), require_latest=True)
+    assert result['action'] == 'CONTINUE'
+    assert result['item'] == symbol + '_AL'
+    assert result['order_route'] == route
+    assert result['market_data_route'] == 'SOR'
+    assert row['realtime_types']['0B']['item'] == symbol + '_AL'
+
+
+@pytest.mark.parametrize('damage', ['partial', 'duplicate', 'stale', 'epoch', 'route_conflict'])
+def test_integrated_source_failure_does_not_fall_back_to_valid_native(damage):
+    from src.trading.market.entry_adverse_flow import evaluate_order_snapshot
+    data = tape(adverse=False)
+    integrated = source(data)
+    native = deepcopy(integrated)
+    for receipt in native['realtime_types'].values():
+        receipt['item'] = '005930_NX'
+    for stream in ('recent_depth', 'recent_trades'):
+        for row in native[stream]:
+            row['item'] = '005930_NX'
+    routes = data['stocks']['005930']['machine_confirmation_routes']
+    routes['NXT'] = native
+    if damage == 'partial':
+        integrated['realtime_types'].pop('0D')
+    elif damage == 'duplicate':
+        routes['duplicate'] = deepcopy(integrated)
+    elif damage == 'stale':
+        for stream in ('recent_depth', 'recent_trades'):
+            for row in integrated[stream]:
+                row['received_at_ms'] -= 10000
+    elif damage == 'epoch':
+        integrated['realtime_types']['0D']['transport_epoch'] = 2
+    else:
+        integrated['realtime_types']['0B']['market_route'] = 'nxt_only'
+    result = evaluate_order_snapshot(snapshot=data, symbol='005930', route='NXT',
+                                    cutoff_ms=int(NOW.timestamp() * 1000), require_latest=True)
+    assert result['action'] == 'SOURCE_UNAVAILABLE'
+    assert result['market_data_route'] == 'SOR'
+    routes.pop('SOR')
+    routes.pop('duplicate', None)
+    native_result = evaluate_order_snapshot(snapshot=data, symbol='005930', route='NXT',
+                                           cutoff_ms=int(NOW.timestamp() * 1000), require_latest=True)
+    assert native_result['action'] == 'CONTINUE'
+    assert native_result['item'] == '005930_NX'
+
+
+def test_integrated_flow_cannot_make_invalid_order_route_valid():
+    from src.trading.market.entry_adverse_flow import evaluate_order_snapshot
+    result = evaluate_order_snapshot(snapshot=tape(adverse=False), symbol='005930',
+                                    route='UNKNOWN', cutoff_ms=int(NOW.timestamp()*1000))
+    assert result['reason'] == 'order_route_invalid'
+
+
+@pytest.mark.parametrize('corrupt_final', [False, True])
+def test_nxt_order_uses_al_at_prepare_and_final_transport_without_scope_mutation(pin, monkeypatch, corrupt_final):
+    policy, write = pin
+    scope = dict(owner='episode', scope_id='morning', symbol='005930',
+                 route='NXT', session='NXT_PREMARKET')
+    policy['scopes'] = [scope]
+    write()
+    data = tape(adverse=False)
+    monkeypatch.setattr(guard, 'load_live_dynamic_confirmation_source', lambda: (data, 'ready'))
+    holder = {}
+    assert guard.prepare(holder=holder, identity='morning-nxt', signal_at=NOW,
+                         now=NOW, scope=scope, timing_mode='baseline_immediate')
+    state = holder[guard.KEY]
+    assert state['scope'] == scope
+    assert state['anchor'] == ['005930_AL', 1]
+    if corrupt_final:
+        source(data)['realtime_types']['0D']['transport_epoch'] = 2
+        with pytest.raises(guard.EntryNotSent):
+            guard.final_check(holder=holder, clock=lambda: NOW, validate_owner=lambda: True, save=lambda: None)
+        assert state['action'] != 'TRANSPORT_STARTED'
+    else:
+        guard.final_check(holder=holder, clock=lambda: NOW, validate_owner=lambda: True, save=lambda: None)
+        assert state['action'] == 'TRANSPORT_STARTED'
+        assert state['pre_transport']['order_route'] == 'NXT'
+        assert state['pre_transport']['market_data_route'] == 'SOR'
+    assert state['scope'] == scope
+
+
+def test_partial_duplicate_al_is_not_ignored_when_one_complete_al_exists():
+    from src.trading.market.entry_adverse_flow import evaluate_order_snapshot
+    data = tape(adverse=False)
+    extra = deepcopy(source(data))
+    extra['realtime_types'].pop('0D')
+    data['stocks']['005930']['machine_confirmation_routes']['extra'] = extra
+    result = evaluate_order_snapshot(snapshot=data, symbol='005930', route='NXT',
+                                    cutoff_ms=int(NOW.timestamp()*1000))
+    assert result['reason'] == 'exact_route_missing_or_duplicate'
