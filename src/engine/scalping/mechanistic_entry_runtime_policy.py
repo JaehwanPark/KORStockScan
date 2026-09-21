@@ -176,7 +176,7 @@ def validate(bundle: dict, *, target_date: str) -> None:
         activation = bundle["strategy_activation"]
         try:
             effective = datetime.fromisoformat(activation["effective_from"])
-            if (activation["schema"] != "main_entry_activation_v2"
+            if (activation["schema"] not in {"main_entry_activation_v2", "main_entry_activation_v3"}
                 or activation["lifetime"] != "until_superseded"
                 or effective.tzinfo is None or effective.astimezone(KST).date().isoformat() != target_date
                 or effective > datetime.now(KST)):
@@ -1307,33 +1307,40 @@ def activate_strategy_report(source_path: Path, *, data_root: Path, now: datetim
         if previous is None:
             raise ValueError("strategy_activation_incumbent_missing")
         evaluations = source.get("strategy_refinements_by_scope") or {}
-        from src.engine.scalping.entry_strategy_policy import select_report_candidate
-        selected = select_report_candidate(source)
-        if selected is None or selected[1].get('promotion_pass') is not True:
-            return dict(status="incumbent_carry", bundle_sha256=previous["bundle_sha256"],
-                        reason="no_qualified_strategy_successor", dispositions={s: r.get("status") for s,r in evaluations.items()})
-        # One train-selected scope changes; other market/custody owners carry.
-        # Never assemble a bundle from whichever leaves/scopes won holdout.
-        scope, result = selected
-        scoped = for_cohort(previous, tuple(scope.split("|")))
-        if scoped is None:
-            raise ValueError("strategy_activation_scope_unadopted")
-        candidate = result.get("candidate")
-        if (previous.get('strategy_activation') or {}).get('candidate_sha256') == digest(candidate):
-            return dict(status='already_active', bundle_sha256=previous['bundle_sha256'])
-        if any(day > source['target_date'] for split in ('train', 'holdout')
-               for day in ((candidate or {}).get('evidence', {}).get(split) or {}).get('source_dates', [])):
-            raise ValueError('strategy_activation_future_source')
-        errors = promotion_errors(candidate, scoped["machine_policy"], tuple(scope.split("|")))
-        if errors:
-            raise ValueError("strategy_activation_rejected:" + ",".join(errors))
-        # An already consumed holdout cannot be reused for another selection.
-        holdout = candidate['evidence'].get('holdout') or {}
-        proof_key = (holdout['opportunity_ids'] if holdout else
-                     [candidate['policy_sha256'], candidate['evidence_sha256']])
-        consumption = policy_root / "holdouts" / (digest([scope, proof_key]) + '.json')
-        if consumption.exists() and _read(consumption).get('policy_sha256') != candidate['policy_sha256']:
-            raise ValueError('strategy_holdout_already_consumed')
+        accepted, dispositions, consumptions = {}, {}, []
+        active = previous.get('strategy_activation') or {}
+        active_scopes = active.get('scopes') or {active.get('scope'): active}
+        for scope, result in sorted(evaluations.items()):
+            candidate = result.get('candidate')
+            if result.get('promotion_pass') is not True or not candidate:
+                dispositions[scope] = result.get('promotion_errors') or [result.get('status')]
+                continue
+            scoped = for_cohort(previous, tuple(scope.split('|')))
+            if scoped is None:
+                dispositions[scope] = ['strategy_activation_scope_unadopted']
+                continue
+            if (active_scopes.get(scope) or {}).get('candidate_sha256') == digest(candidate):
+                dispositions[scope] = ['already_active']
+                continue
+            errors = promotion_errors(candidate, scoped['machine_policy'], tuple(scope.split('|')))
+            if any(d > source['target_date'] for split in ('train', 'holdout')
+                   for d in (candidate.get('evidence', {}).get(split) or {}).get('source_dates', [])):
+                errors.append('strategy_activation_future_source')
+            if errors:
+                dispositions[scope] = errors
+                continue
+            holdout = candidate['evidence'].get('holdout') or {}
+            proof_key = holdout.get('opportunity_ids') or [candidate['policy_sha256'], candidate['evidence_sha256']]
+            consumption = policy_root / 'holdouts' / (digest([scope, proof_key]) + '.json')
+            if consumption.exists() and _read(consumption).get('policy_sha256') != candidate['policy_sha256']:
+                dispositions[scope] = ['strategy_holdout_already_consumed']
+                continue
+            accepted[scope] = dict(candidate=candidate, parent_machine_sha256=digest(scoped['machine_policy']))
+            consumptions.append((consumption, candidate))
+        if not accepted:
+            return dict(status='already_active' if any(v == ['already_active'] for v in dispositions.values()) else 'incumbent_carry',
+                        bundle_sha256=previous['bundle_sha256'],
+                        reason='no_qualified_strategy_successor', dispositions=dispositions)
         bundle = copy.deepcopy(previous)
         source_bytes = source_path.read_bytes()
         source_hash = hashlib.sha256(source_bytes).hexdigest()
@@ -1347,19 +1354,23 @@ def activate_strategy_report(source_path: Path, *, data_root: Path, now: datetim
                 handle.write(source_bytes)
                 handle.flush()
                 os.fsync(handle.fileno())
-        machine = copy.deepcopy(candidate['policy'])
-        if bundle.get('all_continuous_adopted'):
-            bundle['scope_policies'][scope]['machine_policy'] = machine
-        if scope == 'KRX|KRX_REGULAR':
-            bundle['machine_policy'] = machine
+        activation_scopes = {}
+        for scope, item in accepted.items():
+            candidate = item['candidate']
+            machine = copy.deepcopy(candidate['policy'])
+            if bundle.get('all_continuous_adopted'):
+                bundle['scope_policies'][scope]['machine_policy'] = machine
+            if scope == 'KRX|KRX_REGULAR':
+                bundle['machine_policy'] = machine
+            activation_scopes[scope] = dict(candidate_sha256=digest(candidate),
+                parent_machine_sha256=item['parent_machine_sha256'])
         bundle.update(target_date=day, publication_date=day, source_date=source['target_date'],
             source_file_sha256=source_hash, source_artifact_sha256=source['artifact_content_sha256'],
             previous_bundle_sha256=previous['bundle_sha256'], generated_at=current.isoformat(),
             machine_disposition='evidence_qualified_strategy_update',
-            strategy_activation=dict(schema='main_entry_activation_v2', effective_from=current.isoformat(),
-                lifetime='until_superseded', scope=scope, candidate_sha256=digest(candidate),
-                parent_bundle_sha256=previous['bundle_sha256'],
-                parent_machine_sha256=digest(scoped['machine_policy'])))
+            strategy_activation=dict(schema='main_entry_activation_v3', effective_from=current.isoformat(),
+                lifetime='until_superseded', scopes=activation_scopes,
+                parent_bundle_sha256=previous['bundle_sha256']))
         bundle['machine_evaluation_source'] = dict(source_date=source['target_date'],
             file_sha256=source_hash, artifact_content_sha256=source['artifact_content_sha256'],
             report_scope=source['report_scope'])
@@ -1369,13 +1380,14 @@ def activate_strategy_report(source_path: Path, *, data_root: Path, now: datetim
         _atomic_write_json(policy_root / 'generations' / f"{previous['bundle_sha256']}.json", previous)
         _atomic_write_json(policy_root / 'generations' / f"{bundle['bundle_sha256']}.json", bundle)
         # Durable immutable body and source precede the atomic current receipt.
-        _atomic_write_json(consumption, dict(policy_sha256=candidate['policy_sha256'],
-            bundle_sha256=bundle['bundle_sha256'], consumed_at=current.isoformat()))
+        for consumption, candidate in consumptions:
+            _atomic_write_json(consumption, dict(policy_sha256=candidate['policy_sha256'],
+                bundle_sha256=bundle['bundle_sha256'], consumed_at=current.isoformat()))
         receipt = dict(schema='main_entry_current_v2', bundle_sha256=bundle['bundle_sha256'],
             previous_bundle_sha256=previous['bundle_sha256'], effective_from=current.isoformat())
         receipt['receipt_sha256'] = digest(receipt)
         _atomic_write_json(policy_root / 'current.json', receipt)
-        return dict(status='activated', **receipt)
+        return dict(status='activated', scopes=sorted(accepted), dispositions=dispositions, **receipt)
 
 
 def _load_current(data_root: Path, target_date: str) -> dict | None:
@@ -1404,16 +1416,89 @@ def _load_current(data_root: Path, target_date: str) -> dict | None:
     validate(parent, target_date=parent['target_date'])
     if parent['bundle_sha256'] != parent_hash:
         raise ValueError('strategy_parent_generation_mismatch')
-    scope = activation['scope']
-    candidate = (source.get('strategy_refinements_by_scope', {}).get(scope) or {}).get('candidate')
+    rollback = activation.get('rollback_machine_generation')
+    if rollback:
+        if re.fullmatch(r'[0-9a-f]{64}', str(rollback)) is None:
+            raise ValueError('strategy_rollback_generation_invalid')
+        donor = _read(root(data_root) / 'generations' / f'{rollback}.json')
+        validate(donor, target_date=donor['target_date'])
+        _validate_bundle_sources(donor, data_root)
+        if donor['bundle_sha256'] != rollback or donor['machine_policy'] != bundle['machine_policy'] or parent['ai_policy'] != bundle['ai_policy']:
+            raise ValueError('strategy_rollback_component_binding_invalid')
+        for scope, value in (bundle.get('scope_policies') or {}).items():
+            if value['machine_policy'] != donor['scope_policies'][scope]['machine_policy'] or value['ai_policy'] != parent['scope_policies'][scope]['ai_policy']:
+                raise ValueError('strategy_rollback_scope_binding_invalid')
+        return bundle if target_date >= bundle['target_date'] else None
     from src.engine.scalping.entry_strategy_policy import promotion_errors
-    old = for_cohort(parent, tuple(scope.split('|')))
-    new = for_cohort(bundle, tuple(scope.split('|')))
-    if (not old or not new or promotion_errors(candidate, old['machine_policy'], tuple(scope.split('|')))
-        or digest(candidate) != activation.get('candidate_sha256')
-        or candidate['policy'] != new['machine_policy']):
-        raise ValueError('strategy_current_economic_binding_invalid')
+    scopes = activation.get('scopes') or {activation.get('scope'): activation}
+    if not scopes or None in scopes:
+        raise ValueError('strategy_current_scopes_invalid')
+    for scope, proof in scopes.items():
+        candidate = (source.get('strategy_refinements_by_scope', {}).get(scope) or {}).get('candidate')
+        old = for_cohort(parent, tuple(scope.split('|')))
+        new = for_cohort(bundle, tuple(scope.split('|')))
+        if (not old or not new or promotion_errors(candidate, old['machine_policy'], tuple(scope.split('|')))
+            or digest(old['machine_policy']) != proof.get('parent_machine_sha256')
+            or digest(candidate) != proof.get('candidate_sha256')
+            or candidate['policy'] != new['machine_policy']):
+            raise ValueError('strategy_current_economic_binding_invalid')
     return bundle if target_date >= bundle['target_date'] else None
+
+
+def rollback_machine_component(generation: str, *, data_root: Path, now: datetime | None = None) -> dict:
+    """Explicit operator rollback of machines only, preserving the latest AI pair."""
+    if re.fullmatch(r'[0-9a-f]{64}', generation) is None:
+        raise ValueError('strategy_rollback_generation_invalid')
+    current = (now or datetime.now(KST)).astimezone(KST)
+    day = current.date().isoformat()
+    policy_root = root(data_root)
+    with (policy_root / 'publisher.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        previous = load_effective(data_root=data_root, target_date=day)
+        donor = _read(policy_root / 'generations' / f'{generation}.json')
+        validate(donor, target_date=donor['target_date'])
+        _validate_bundle_sources(donor, data_root)
+        if donor['bundle_sha256'] != generation or donor['target_date'] > day or previous is None:
+            raise ValueError('strategy_rollback_source_invalid')
+        if donor.get('all_continuous_adopted') != previous.get('all_continuous_adopted'):
+            raise ValueError('strategy_rollback_scope_coverage_changed')
+        bundle = copy.deepcopy(previous)
+        bundle['machine_policy'] = copy.deepcopy(donor['machine_policy'])
+        for key in ('source_date', 'source_file_sha256', 'source_artifact_sha256', 'machine_evaluation_source'):
+            if key in donor:
+                bundle[key] = copy.deepcopy(donor[key])
+            else:
+                bundle.pop(key, None)
+        for scope, value in (bundle.get('scope_policies') or {}).items():
+            value['machine_policy'] = copy.deepcopy(donor['scope_policies'][scope]['machine_policy'])
+        bundle.update(target_date=day, publication_date=day, generated_at=current.isoformat(),
+            previous_bundle_sha256=previous['bundle_sha256'], machine_disposition='explicit_machine_component_rollback',
+            strategy_activation=dict(schema='main_entry_activation_v3', effective_from=current.isoformat(),
+                lifetime='until_superseded', parent_bundle_sha256=previous['bundle_sha256'],
+                rollback_machine_generation=generation))
+        bundle.pop('bundle_sha256', None)
+        bundle['bundle_sha256'] = digest(bundle)
+        validate(bundle, target_date=day)
+        _atomic_write_json(policy_root / 'generations' / f"{previous['bundle_sha256']}.json", previous)
+        _atomic_write_json(policy_root / 'generations' / f"{bundle['bundle_sha256']}.json", bundle)
+        receipt = dict(schema='main_entry_current_v2', bundle_sha256=bundle['bundle_sha256'],
+            previous_bundle_sha256=previous['bundle_sha256'], effective_from=current.isoformat())
+        receipt['receipt_sha256'] = digest(receipt)
+        _atomic_write_json(policy_root / 'current.json', receipt)
+        return dict(status='machine_component_rolled_back', **receipt)
+
+
+def validate_attempt_generation(bundle_sha256: str, *, data_root: Path, now: datetime | None = None) -> dict:
+    """The exact machine/AI pair remains pinned until submit or a fresh recheck."""
+    current = now or datetime.now(KST)
+    try:
+        bundle = load_effective(data_root=data_root, target_date=current.astimezone(KST).date().isoformat())
+        matched = bool(bundle and bundle['bundle_sha256'] == bundle_sha256)
+        return dict(allowed=matched, reason='current_pair' if matched else 'policy_generation_changed',
+                    attempt_bundle_sha256=bundle_sha256,
+                    current_bundle_sha256=bundle['bundle_sha256'] if bundle else None)
+    except (ValueError, OSError, TypeError, KeyError):
+        return dict(allowed=False, reason='policy_generation_invalid', attempt_bundle_sha256=bundle_sha256)
 
 
 def current_strategy_receipt(*, data_root: Path) -> dict:
@@ -1430,7 +1515,8 @@ def current_strategy_receipt(*, data_root: Path) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source", type=Path, required=True)
+    parser.add_argument("--source", type=Path)
+    parser.add_argument("--rollback-machine-to")
     parser.add_argument("--data-root", type=Path, default=Path("data"))
     parser.add_argument("--bootstrap", action="store_true")
     parser.add_argument("--activate-now", action="store_true")
@@ -1442,6 +1528,13 @@ def main() -> int:
         help="Explicit initial adoption; later dated succession is automatic",
     )
     args = parser.parse_args()
+    if args.rollback_machine_to:
+        if args.source or args.activate_now or args.bootstrap:
+            parser.error('--rollback-machine-to is a standalone action')
+        print(json.dumps(rollback_machine_component(args.rollback_machine_to, data_root=args.data_root)))
+        return 0
+    if not args.source:
+        parser.error('--source is required')
     if args.activate_now:
         print(json.dumps(activate_strategy_report(args.source, data_root=args.data_root)))
         return 0

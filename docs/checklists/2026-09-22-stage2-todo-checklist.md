@@ -72,3 +72,21 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 - 9/21 계산의 9/22 장전 인계는 [원천·순서·영수증 복구 리뷰](../audit-reports/2026-09-21-postclose-source-order-repair-review.md)가 소유한다. 기계정책 생성·현재 closure 검증·9/22 명시 main/compact 인계 검증이 완료되었다. 01:13 최종화 DONE 및 전체 strict 검증 PASS. 자연 PREOPEN/PID 소비는 기존 direct-family 작업으로 검증한다.
 
 - 장후 적용일 복구: 9/21 분석·발행 / 9/22 적용을 명시해 생산자·요약·체크리스트의 날짜를 검증한다. 자정 후 자동 생성된9/23 임시 인계는 최종 근거로 사용하지 않는다.
+
+## 단계별 튜닝 보완 구현
+
+- [ ] `[PostcloseStageRunnerSeparation] 통합 장후 실행기와 단계별 완료·재시도 분리` (`Due: 2026-09-22`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~23:30`, `Track: RuntimeStability`)
+  - Source: [실행기 분리 계획](../proposals/machine-postclose-runner-separation-implementation-plan-2026-09-22.md).
+  - Acceptance: main/auxiliary/widget/episode 독립 stage receipt·writer·retry, label 선행 barrier, 전체 완료와 장전 정책 준비 분리, scheduler/router/운영문서 동시 정합, 실패 주입·대상 검증 및 실제 단계별 재개.
+  - 문서 계획 단계이며 현재 cron/서비스/producer는 변경하지 않았다.
+
+- [ ] `[DirectFamilySourceRepairMainMechanisticEntry] 기계정책 조합 탐색·유형 원천·장중 적용 보완` (`Due: 2026-09-22`, `Slot: INTRADAY`, `TimeWindow: 08:00~19:30`, `Track: RuntimeStability`)
+  - Source: [기계정책 보완 계획](../proposals/main-nonentry-threshold-postclose-runtime-implementation-plan-2026-09-21.md).
+  - Acceptance: 실제82좌표 제한예산에서 다축/selector 탐색, train 재개·holdout 분리, metadata/row fallback, 적격 scope 합성, 고정 source 재계산, 장중 component CAS·실제 PID 소비·다음 정책까지 승계.
+  - 9/22 구현: M1–M5 대상 검증648건 통과. 독립 machine-only stage를 기존 장후 wrapper에 연결했고, 최종 고정 원천 계산·immutable 배포·자연 PID 소비를 진행한다. [변경·검증·운영 영수증](../audit-reports/2026-09-22-main-machine-policy-repair-review.md).
+  - 기존 source gap/독립 검증 이력은 [9/21 복구 리뷰](../audit-reports/2026-09-21-postclose-source-order-repair-review.md)에 보존한다. 새로 확인한 탐색 결함으로 재개하며 과거 장후 성공을 취소하지 않는다. AI/portfolio 증거는 기계정책 적용 gate가 아니다.
+
+- [ ] `[AuxiliaryAIBidirectionalTuning] VETO 기회비용·PASS 오진입 양방향 AI 튜닝과 장중 적용` (`Due: 2026-09-22`, `Slot: INTRADAY`, `TimeWindow: 08:00~19:30`, `Track: RuntimeStability`)
+  - Source: [보조 AI 전체 계획](../proposals/auxiliary-ai-opportunity-error-tuning-runtime-implementation-plan-2026-09-22.md).
+  - Acceptance: 실제 ENTER_NOW 호출 모집단의 양방향 paired 평가, soft 임계치와 fixed safety 분리, raw/effective 응답 binding, runtime 공유 판정, 새 basis 발행·AI component CAS·실제 PID 소비·독립 장후 갱신.
+  - 현재는 계획 수립이며 provider 호출·정책 변경·배포·재기동 미실행. 학습/발행/PID/실현손익을 분리하고 기계정책·주문/보유 hard safety를 보존한다.

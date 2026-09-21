@@ -69697,6 +69697,18 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 runtime_effect=True,
             )
             break
+        if strategy == 'SCALPING' and not opening_rotation_active:
+            receipt = submit_attempt_machine_lineage(stock, code) or {}
+            pair_hash = receipt.get('machine_bundle_sha256') or receipt.get('policy_bundle_hash')
+            if pair_hash:
+                from src.engine.scalping.mechanistic_entry_runtime_policy import validate_attempt_generation
+                generation_guard = validate_attempt_generation(pair_hash, data_root=DATA_DIR)
+                if not generation_guard['allowed']:
+                    stock['ai_wait_rebound_recheck_pending'] = True
+                    stock['ai_wait_rebound_recheck_last_at'] = time.time()
+                    _log_entry_pipeline(stock, code, 'machine_policy_generation_recheck',
+                        **generation_guard, actual_order_submitted=False, broker_order_forbidden=True)
+                    break
         broker_submit_attempt_count += 1
         wait_submission = {}
         if strategy == "SCALPING":

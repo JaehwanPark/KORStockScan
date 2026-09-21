@@ -561,10 +561,11 @@ def test_machine_capture_matures_with_existing_cost_owner_without_ai(
         bundle_sha256="b" * 64,
     )
     assert capture["machine_capture_status"] == "captured"
-    rows, census = calibration.load_machine_observation_rows(tmp_path, target_date=day)
+    monkeypatch.setattr(calibration, '_machine_ai_trace_index', lambda *a: pytest.fail('independent machine joined AI'))
+    rows, census = calibration.load_machine_observation_rows(tmp_path, target_date=day, independent_machine=True)
     assert census["captured"] == 1
     assert census["evaluable"] == 1
-    assert census["machine_snapshot_id_missing"] == 1
+    assert census["independent_machine_no_ai_join"] == 1
     assert census["pipeline_lifecycle_unresolved"] == 1
     assert len(rows) == 1
     assert rows[0]["comparison"]["conservative_execution_cost_pct"] == pytest.approx(

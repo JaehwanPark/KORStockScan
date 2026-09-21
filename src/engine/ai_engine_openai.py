@@ -1749,6 +1749,8 @@ class GPTSniperEngine:
             # optional AI context promotion. Never enable the promoted MTF view.
             payload["multi_timeframe_ai_input_enabled"] = False
             payload["input_role"] = "main_machine_base_candles_no_context_promotion"
+            if context.get('strategy_completed_bars'):
+                payload['strategy_completed_bars'] = context['strategy_completed_bars']
             payload.pop("regime", None)
             payload.pop("alignment", None)
         if payload["multi_timeframe_ai_input_enabled"]:
@@ -9256,6 +9258,7 @@ class GPTSniperEngine:
                     ),
                 )
                 machine_exact = json.loads(machine_hot_payload)
+                machine_exact['strategy_observed_at'] = datetime.now(timezone.utc).isoformat()
                 if machine_input_fields:
                     # Capture persists exact_payload, not arbitrary metadata.
                     machine_exact["entry_machine_input_trace"] = dict(machine_input_fields)
@@ -9263,6 +9266,12 @@ class GPTSniperEngine:
                     self._attach_entry_candle_inputs(
                         machine_exact, candle_context, machine_base_only=True
                     )
+                if isinstance(candle_context, dict) and candle_context.get('strategy_completed_bars'):
+                    # The formatter may already have attached the smaller AI
+                    # projection. Machine replay retains its full closed-bar source.
+                    machine_exact.setdefault('entry_candle_context', {}).update(
+                        strategy_completed_bars=candle_context['strategy_completed_bars'],
+                        completed_bar_count=candle_context.get('completed_bar_count'))
                 # Preserve explicit identity for both common and child policy
                 # observations; no venue/session is inferred from the symbol.
                 for key in (
@@ -9286,6 +9295,22 @@ class GPTSniperEngine:
                             }),
                             None,
                         )
+                # Read the existing master collector's timestamped snapshot.
+                # Missing or future metadata means an unknown selector feature.
+                from src.utils.constants import DATA_DIR as strategy_data_dir
+                from src.engine.scalping.entry_strategy_policy import features as strategy_features
+                symbol = str((metadata_extra or {}).get('stock_code') or ws_data.get('stock_code') or machine_exact.get('stock_code') or '')[:6]
+                metadata_path = strategy_data_dir / 'runtime' / 'entry_strategy_metadata' / f'{symbol}.json'
+                try:
+                    if symbol.isdigit() and len(symbol) == 6 and metadata_path.is_file() and metadata_path.stat().st_size < 16384:
+                        strategy_metadata = json.loads(metadata_path.read_text())
+                        if strategy_metadata.get('stock_code') == symbol:
+                            strategy_metadata['observed_at'] = datetime.now(timezone.utc).isoformat()
+                            strategy_features({'strategy_metadata': strategy_metadata}, {})
+                            machine_exact['strategy_metadata'] = strategy_metadata
+                except (OSError, ValueError, TypeError, KeyError):
+                    machine_exact['strategy_metadata_status'] = 'missing_or_invalid_master_snapshot'
+
                 # The compact feature formatter omits lifecycle identity. Bind
                 # it before capture AND economics so both publish the same
                 # producer-owned attempt, including machine non-entry points.
@@ -9354,7 +9379,8 @@ class GPTSniperEngine:
                     bundle_sha256=entry_setup_live_policy["machine_bundle_sha256"],
                     metadata=(
                         {**(dict(metadata_extra or {}) if isinstance(metadata_extra, dict) else {}),
-                         **machine_input_fields}
+                         **machine_input_fields,
+                         'ai_component_sha256': entry_setup_live_policy.get('auxiliary_policy_sha256')}
                     ),
                 )
                 if machine_assessment["action"] in {"ENTER_NOW", "BLOCK", "RECHECK"} and callable(entry_economics_observer):

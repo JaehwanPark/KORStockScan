@@ -1290,7 +1290,7 @@ def build_session_candle_source(
     )
     build_ms = int((time.perf_counter() - started) * 1000)
     strategy_source = {}
-    if local_breakout:
+    if completed_session:
         from src.engine.scalping.entry_strategy_policy import digest as strategy_digest
         body = dict(observed_at=now.isoformat(), bars=[
             {k: (v.isoformat() if isinstance(v, datetime) else v)

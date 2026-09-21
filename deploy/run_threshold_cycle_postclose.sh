@@ -1892,13 +1892,16 @@ if [ "$RUN_LOW_PRICE_TWO_LEG_TUNING" = "true" ] || [ "$RUN_LOW_PRICE_TWO_LEG_TUN
 fi
 if [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "true" ] || [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "1" ]; then
   wait_for_postclose_resources "ai_decision_action_outcome_calibration"
+  # The standalone machine stage publishes before any auxiliary replay.
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.ai_action_outcome_calibration \
+    --target-date "$TARGET_DATE" --data-root "$PROJECT_DIR/data" --machine-policy-only --write --activate-now
   # Main mechanistic evaluation owns the canonical calibration report and is
   # independent from compact provider availability.  It must publish before
   # compact finalization so both family receipts survive in one dated bundle.
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.ai_action_outcome_calibration \
     --target-date "$TARGET_DATE" --data-root "$PROJECT_DIR/data" --machine-only --write \
     --publication-date "$POLICY_PUBLICATION_DATE" \
-    --require-policy-publication --activate-now --print-summary
+    --require-policy-publication --print-summary
   wait_for_json_artifact \
     "$PROJECT_DIR/data/report/ai_decision_action_outcome_calibration/ai_decision_action_outcome_calibration_${TARGET_DATE}.json" \
     "main_mechanistic_entry_full_evaluation"

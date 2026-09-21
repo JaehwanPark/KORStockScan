@@ -305,3 +305,14 @@ def test_openai_parse_json_response_text_extracts_json_from_wrapped_text():
 
     assert parsed["action"] == "WAIT"
     assert parsed["score"] == 63
+
+
+def test_machine_candle_projection_retains_closed_bar_primitives_without_ai_promotion():
+    engine = _build_engine()
+    frozen = {'body': {'observed_at': '2026-09-22T09:10:00+09:00', 'bars': []}, 'sha256': 'a'*64}
+    context = dict(enabled=False, completed_bar_count=0, strategy_completed_bars=frozen,
+                   multi_timeframe_ai_input_enabled=True)
+    assert engine._entry_candle_model_payload(context) is None
+    projected = engine._entry_candle_model_payload(context, machine_base_only=True)
+    assert projected['strategy_completed_bars'] == frozen
+    assert projected['multi_timeframe_ai_input_enabled'] is False

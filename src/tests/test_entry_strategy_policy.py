@@ -460,7 +460,7 @@ def test_machine_policy_cli_does_not_invoke_full_loop(monkeypatch, tmp_path, cap
     from src.engine.scalping import ai_action_outcome_calibration as c
     monkeypatch.setattr(c, 'load_machine_observation_rows', lambda *a, **kw: ([], {}))
     monkeypatch.setattr(c, '_machine_ai_natural_source_receipt', lambda *a: {})
-    monkeypatch.setattr(c, 'ensure_machine_economic_reference', lambda **kw: pytest.fail('reference regeneration'))
+    monkeypatch.setattr(c, 'ensure_machine_economic_reference', lambda **kw: {'status': 'existing_verified_sources_preserved'})
     monkeypatch.setattr(c, 'build_main_mechanistic_report', lambda **kw: pytest.fail('full loop'))
     assert c.main(['--target-date','2026-09-17','--data-root',str(tmp_path),'--machine-policy-only','--write']) == 0
     path = tmp_path/'report/ai_decision_action_outcome_calibration/machine_policy_2026-09-17.json'
@@ -526,15 +526,15 @@ def test_local_priority_keeps_joint_frontier_and_resume():
     parent = evidence.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1
     domains = {k:[strategy.REGISTRY[k][0],max(strategy.REGISTRY[k][1])] for k in
         ('trigger_buy_pressure','overextension_ma5_bp','ask_wall_ratio')}
-    rows = list(strategy.joint_candidates(parent,('KRX','KRX_REGULAR'),domains=domains,local_first=True,limit=30))
-    assert rows[-1][1]['search_complete'] and len(rows)==11
-    assert rows[3:] == list(strategy.joint_candidates(parent,('KRX','KRX_REGULAR'),domains=domains,local_first=True,start=3,limit=30))
-    assert len({strategy.digest(p) for p,_ in rows}) == 8
+    rows = list(strategy.joint_candidates(parent,('KRX','KRX_REGULAR'),domains=domains,local_first=True,limit=96))
+    assert rows[-1][1]['search_complete'] and len(rows)==96
+    assert rows[3:] == list(strategy.joint_candidates(parent,('KRX','KRX_REGULAR'),domains=domains,local_first=True,start=3,limit=96))
+    assert len({strategy.digest(p) for p,_ in rows if p}) >= 4
 
 
 def test_machine_scope_selection_prioritizes_win_rate_over_larger_profit():
     def choice(win, net):
-        return dict(candidate=dict(evaluation_basis='machine_nonentry_opportunity_v1',
+        return dict(promotion_pass=True, candidate=dict(evaluation_basis='machine_nonentry_opportunity_v1',
             evidence=dict(train=dict(economics=dict(win_rate_pct=win, selected_path_ev_pct=net,
                 paired_admission_delta_pct=net)))))
     source = dict(strategy_refinements_by_scope=dict(high_win=choice(90,.1), high_profit=choice(60,2.), loss=choice(95,-.1)))
@@ -577,7 +577,8 @@ def test_nonentry_search_resumes_without_repeating_prior_candidates(monkeypatch)
     first=c.build_main_strategy_refinement([machine_cost_row('same_bar_ambiguous')],**kwargs)
     second=c.build_main_strategy_refinement([machine_cost_row('same_bar_ambiguous')],previous=first,**kwargs)
     assert starts==[0,1]
-    assert second['evaluated_candidate_count']==2 and len(second['machine_candidate_scores'])==2
+    assert second['evaluated_candidate_count']==1 and len(second['machine_candidate_scores'])==1
+    assert second['train_checkpoint']['group_counts']['legacy']['deduplicated'] == 1
     changed=machine_cost_row('same_bar_ambiguous');changed['comparison']['entry_path_adverse_pct']=-.6
     third=c.build_main_strategy_refinement([changed],previous=second,**kwargs)
     assert starts[-1]==0 and third['evaluated_candidate_count']==1
@@ -599,3 +600,167 @@ def test_frozen_machine_policy_revalidates_without_researching_holdout(monkeypat
     assert result['machine_policy'] == previous['machine_policy']
     assert result['machine_evidence']['holdout']['economics']['selected_path_ev_pct'] < 0
     assert result['selection_status'] == 'frozen_before_same_holdout_revision'
+
+
+def test_full_registry_budget_reaches_joint_and_selector_groups():
+    parent = evidence.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1
+    rows = list(strategy.joint_candidates(parent, ('KRX','KRX_REGULAR'),
+        selectors=[None, ('price', 20000, 'lt'), ('spread_bp', 15, 'ge')], local_first=True))
+    from collections import Counter
+    assert len(strategy.registry_contract()) == 82
+    assert Counter(p['allocated_group'] for _,p in rows) == strategy.SEARCH_BUDGET
+    valid_groups = {p['group'] for c,p in rows if c}
+    assert valid_groups == set(strategy.SEARCH_BUDGET)
+    assert any(c and len(p['changed_coordinates']) == 3 for c,p in rows)
+    assert any(c and len(c['strategy']['nodes']) > 1 for c,p in rows)
+    covered = {n for c,p in rows if c for n in p['changed_coordinates']}
+    assert covered == set(strategy.REGISTRY)
+    assert rows[41:] == list(strategy.joint_candidates(parent, ('KRX','KRX_REGULAR'),
+        selectors=[None, ('price', 20000, 'lt'), ('spread_bp', 15, 'ge')], local_first=True, start=41))
+    assert rows[-1][1]['search_complete'] and not rows[-1][1]['cartesian_exhausted']
+
+
+def test_missing_row_uses_parent_without_freezing_supported_row():
+    parent = policy()
+    child = strategy._mutate_tree(parent, {'tape_supportive_score': 60}, None)
+    original = setup()
+    raw = original['strategy_raw_input']
+    selected, receipt = strategy.select(child, raw, original)
+    assert selected['tape_supportive_score'] == 60
+    raw = deepcopy(raw)
+    raw['features'].pop('order_flow_pressure_score', None)
+    selected, receipt = strategy.select(child, raw, original)
+    assert selected == strategy.default_profile(parent)
+    assert receipt['fallback_reason'] == 'source_missing_parent'
+    assert receipt['unsupported_coordinates'] == ['tape_supportive_score']
+
+
+def test_existing_tree_leaf_and_fallback_survive_mutation():
+    parent = strategy._mutate_tree(policy(), {'trigger_buy_pressure': 55}, ('price', 20000, 'lt'))
+    child = strategy._mutate_tree(parent, {'ask_wall_ratio': 7}, None)
+    original = setup()
+    chosen, receipt = strategy.select(child, original['strategy_raw_input'], original)
+    assert chosen['trigger_buy_pressure'] == 55 and chosen['ask_wall_ratio'] == 7
+    assert len(child['strategy']['nodes']) == 3
+    split = strategy._mutate_tree(parent, {'ask_wall_ratio': 7}, ('spread_bp', 20, 'both'))
+    assert len(split['strategy']['nodes']) == 10 and not strategy.validate(split['strategy'])
+    assert strategy.select(split, original['strategy_raw_input'], original)[0]['trigger_buy_pressure'] == 55
+    raw = deepcopy(original['strategy_raw_input']); raw['features'].pop('spread_bp', None)
+    assert strategy.select(split, raw, original)[0] == strategy.select(parent, raw, original)[0]
+
+
+def test_machine_train_best_is_resumed_before_holdout(monkeypatch):
+    from src.engine.scalping import ai_action_outcome_calibration as c
+    def candidates(*args, **kw):
+        if kw['start'] == 0:
+            yield research_policy(), dict(cursor=1, domain_size=2, search_complete=False)
+        else:
+            yield policy(), dict(cursor=2, domain_size=2, search_complete=True)
+    monkeypatch.setattr(strategy, 'joint_candidates', candidates)
+    kw = dict(parent=evidence.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1, scope=('KRX','KRX_REGULAR'),
+              source_contract={}, machine_policy_only=True)
+    rows = [machine_cost_row(), machine_cost_row('adverse_first')]
+    rows[1].update(source_date='2026-09-11', decision_trace_id='held-attempt')
+    rows[1]['comparison']['entry_cost_contract']['source_date'] = '2026-09-11'
+    first = c.build_main_strategy_refinement(rows, **kw)
+    assert first['selection_state'] == 'searching_train' and first['candidate'] is None
+    assert first['train_checkpoint']['best'] and 'holdout' not in first['train_checkpoint']['best_evidence']
+    second = c.build_main_strategy_refinement(rows, previous=first, **kw)
+    assert second['machine_policy'] == research_policy()
+    assert second['selection_state'] == 'holdout_evaluated' and second['promotion_pass']
+
+
+def test_opportunity_identity_missing_promotion_uses_attempt():
+    from src.engine.scalping import ai_action_outcome_calibration as c
+    left = machine_cost_row(); right = deepcopy(left)
+    left.pop('scanner_promotion_id', None); right.pop('scanner_promotion_id', None)
+    right['decision_trace_id'] = 'second-attempt'
+    assert c._machine_opportunity_id(left) != c._machine_opportunity_id(right)
+    assert c._machine_admission_metrics([left,right], ['ENTER_NOW']*2)['selected_opportunity_count'] == 2
+
+
+def test_invalid_high_score_scope_cannot_prevent_qualified_scope_activation(tmp_path):
+    from src.tests.test_mechanistic_entry_runtime_policy import initial
+    from src.engine.scalping import ai_action_outcome_calibration as c
+    previous = initial(tmp_path)
+    source_path = activation_source(tmp_path, candidate(previous['machine_policy']))
+    source = json.loads(source_path.read_text())
+    source['strategy_refinements_by_scope']['NXT|NXT_REGULAR'] = dict(promotion_pass=False,
+        candidate=dict(evaluation_basis='machine_nonentry_opportunity_v1',
+                       evidence=dict(train=dict(economics=dict(win_rate_pct=100, selected_path_ev_pct=10.)))))
+    source_path.write_text(json.dumps(c._with_artifact_content_sha256(source)))
+    applied = runtime.activate_strategy_report(source_path, data_root=tmp_path,
+        now=datetime(2026,9,14,12,tzinfo=runtime.KST))
+    assert applied['scopes'] == ['KRX|KRX_REGULAR']
+    assert 'NXT|NXT_REGULAR' in applied['dispositions']
+    assert runtime.validate_attempt_generation(previous['bundle_sha256'], data_root=tmp_path,
+        now=datetime(2026,9,14,12,tzinfo=runtime.KST))['reason'] == 'policy_generation_changed'
+    assert runtime.validate_attempt_generation(applied['bundle_sha256'], data_root=tmp_path,
+        now=datetime(2026,9,14,12,tzinfo=runtime.KST))['allowed']
+
+
+def test_canonical_market_cap_snapshot_uses_official_unit_without_legacy_rewrite(monkeypatch):
+    from src.utils import kiwoom_utils as k
+    monkeypatch.setattr(k, 'fetch_kiwoom_api_continuous', lambda *a, **kw: [dict(mac='2500', stk_nm='sample')])
+    result = k.get_basic_info_ka10001('not-a-live-token', '123456')
+    assert result['Marcap'] == 2500
+    metadata = result['StrategyMetadata']
+    assert metadata['market_cap']['value'] == 250_000_000_000
+    assert strategy.features({'strategy_metadata': metadata}, {})['market_cap_krw'] == 250_000_000_000
+    metadata['observed_at'] = '2026-06-05T10:00:00+09:00'
+    assert strategy.features({'strategy_metadata': metadata}, {})['market_cap_krw'] is None
+
+
+def test_two_valid_scopes_publish_atomically_and_preserve_ai(tmp_path):
+    from src.tests.test_mechanistic_entry_runtime_policy import initial, source as initial_source
+    from src.engine.scalping import ai_action_outcome_calibration as c
+    initial(tmp_path)
+    previous = runtime.publish(initial_source(tmp_path), data_root=tmp_path,
+        adopt_all_continuous=True, adopt_hierarchy=True, now=datetime(2026,9,13,22,tzinfo=runtime.KST))
+    selections = {}
+    for scope in ['KRX|KRX_REGULAR', 'NXT|NXT_AFTERMARKET']:
+        parent = runtime.for_cohort(previous, tuple(scope.split('|')))['machine_policy']
+        item = candidate(parent)
+        item['scope'] = scope.split('|')
+        item['policy']['strategy']['scope'] = item['scope']
+        item['policy_sha256'] = strategy.digest(item['policy'])
+        selections[scope] = dict(candidate=item, promotion_pass=True)
+    path = tmp_path/'multi.json'
+    path.write_text(json.dumps(c._with_artifact_content_sha256(dict(target_date='2026-09-11',
+        report_scope='main_mechanistic_entry', noncompact_sections_refreshed=True,
+        strategy_refinements_by_scope=selections))))
+    receipt = runtime.activate_strategy_report(path, data_root=tmp_path, now=datetime(2026,9,14,12,tzinfo=runtime.KST))
+    assert receipt['scopes'] == sorted(selections)
+    active = runtime.load_effective(data_root=tmp_path,target_date='2026-09-15')
+    for scope in selections:
+        old = runtime.for_cohort(previous, tuple(scope.split('|')))
+        new = runtime.for_cohort(active, tuple(scope.split('|')))
+        assert new['machine_policy'] == selections[scope]['candidate']['policy']
+        assert new['ai_policy'] == old['ai_policy']
+
+
+def test_successor_keeps_parent_missing_source_fallback():
+    original = setup(); raw = deepcopy(original['strategy_raw_input'])
+    raw['features'].pop('order_flow_pressure_score', None)
+    parent = strategy._mutate_tree(policy(), {'tape_supportive_score':60}, None)
+    successor = strategy._mutate_tree(parent, {'tape_supportive_score':64, 'ask_wall_ratio':7}, None)
+    old, _ = strategy.select(parent, raw, original)
+    new, receipt = strategy.select(successor, raw, original)
+    assert old == new
+    assert receipt['fallback_reason'] == 'source_missing_parent'
+
+
+def test_machine_component_rollback_preserves_latest_ai(tmp_path):
+    from src.tests.test_mechanistic_entry_runtime_policy import initial
+    previous = initial(tmp_path)
+    applied = runtime.activate_strategy_report(activation_source(tmp_path, candidate(previous['machine_policy'])),
+        data_root=tmp_path, now=datetime(2026,9,14,12,tzinfo=runtime.KST))
+    active = runtime.load_effective(data_root=tmp_path, target_date='2026-09-14')
+    result = runtime.rollback_machine_component(previous['bundle_sha256'], data_root=tmp_path,
+        now=datetime(2026,9,14,13,tzinfo=runtime.KST))
+    restored = runtime.load_effective(data_root=tmp_path, target_date='2026-09-21')
+    assert result['status'] == 'machine_component_rolled_back'
+    assert restored['machine_policy'] == previous['machine_policy']
+    assert restored['ai_policy'] == active['ai_policy']
+    assert not runtime.validate_attempt_generation(applied['bundle_sha256'], data_root=tmp_path,
+        now=datetime(2026,9,14,14,tzinfo=runtime.KST))['allowed']

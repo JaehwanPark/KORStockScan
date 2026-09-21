@@ -13,6 +13,9 @@ if ! flock -n 9; then
   echo "[SKIP] compact paired replay already running target_date=$TARGET_DATE"
   exit 0
 fi
+# Same independent owner/lock/checkpoint as the regular postclose pipeline.
+"$VENV_PY" -m src.engine.scalping.ai_action_outcome_calibration \
+  --target-date "$TARGET_DATE" --data-root "$PROJECT_DIR/data" --machine-policy-only --write --activate-now
 # Main machine evaluation is provider-independent and cannot be suppressed by
 # a compact provider/source failure.
 "$VENV_PY" -m src.engine.scalping.ai_action_outcome_calibration \

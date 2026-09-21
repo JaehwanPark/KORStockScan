@@ -450,6 +450,12 @@ def process_and_save_stock(code, token, session, is_nxt=False) -> pd.DataFrame:
         df["Code"] = code_str
         df["Name"] = basic_info.get("Name") or "이름없음"
         df["Marcap"] = basic_info.get("Marcap") or 0
+        metadata = basic_info.get('StrategyMetadata')
+        if isinstance(metadata, dict) and metadata.get('stock_code') == code_str:
+            # Separate current snapshot, never backfill into historical rows.
+            from src.engine.scalping.mechanistic_entry_runtime_policy import _atomic_write_json
+            _atomic_write_json(PROJECT_ROOT / 'data' / 'runtime' / 'entry_strategy_metadata' / f'{code_str}.json', metadata)
+
         df["Is_NXT"] = bool(is_nxt)
 
         # 💡 [핵심 복구 2] 지표 계산 전 원본 데이터 완벽 백업

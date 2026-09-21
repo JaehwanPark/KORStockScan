@@ -197,7 +197,7 @@ def validate(strategy):
             raise ValueError('strategy_tree_invalid')
         visited.add(key)
         node = nodes[key]
-        if not isinstance(node, dict) or set(node) not in ({'profile'}, {'profile', 'split'}):
+        if not isinstance(node, dict) or set(node) - {'profile', 'split', 'fallback_profile', 'fallback_ancestors'} or 'profile' not in node:
             raise ValueError('strategy_node_invalid')
         profile = node['profile']
         if not isinstance(profile, dict) or set(profile) != set(REGISTRY):
@@ -210,15 +210,26 @@ def validate(strategy):
                 raise ValueError('strategy_integer_required:' + name)
         if profile['momentum_fading_score'] >= profile['momentum_accelerating_score'] or profile['tape_adverse_score'] >= profile['tape_supportive_score'] or not profile['cost_low_spread_bp'] <= profile['cost_observable_spread_bp'] <= profile['cost_extreme_spread_bp'] or profile['volume_absent_ratio'] >= profile['volume_confirm_ratio']:
             raise ValueError('strategy_ordered_bounds_invalid')
+        if 'fallback_profile' in node:
+            fallback = {**strategy, 'root': 'root', 'nodes': {'root': {'profile': node['fallback_profile']}}}
+            if validate(fallback):
+                raise ValueError('strategy_fallback_profile_invalid')
+        ancestors_profiles = node.get('fallback_ancestors', [])
+        if not isinstance(ancestors_profiles, list) or len(ancestors_profiles) > 16:
+            raise ValueError('strategy_fallback_ancestors_invalid')
+        for ancestor in ancestors_profiles:
+            if validate({**strategy, 'root': 'root', 'nodes': {'root': {'profile': ancestor}}}):
+                raise ValueError('strategy_fallback_ancestor_invalid')
         if 'split' in node:
             split = node['split']
-            if not isinstance(split, dict) or set(split) != {'feature', 'boundary', 'lt', 'ge'} or split['feature'] not in FEATURES:
+            if not isinstance(split, dict) or set(split) not in ({'feature', 'boundary', 'lt', 'ge'}, {'feature', 'boundary', 'lt', 'ge', 'unknown'}) or split['feature'] not in FEATURES:
                 raise ValueError('strategy_split_invalid')
             boundary = split['boundary']
             if isinstance(boundary, bool) or not isinstance(boundary, (int, float)) or not math.isfinite(boundary):
                 raise ValueError('strategy_boundary_invalid')
-            for child in ('lt', 'ge'):
-                visit(split[child], ancestors | {key})
+            for child in ('lt', 'ge', 'unknown'):
+                if child in split:
+                    visit(split[child], ancestors | {key})
     try:
         visit(strategy['root'], set())
         if visited != set(nodes):
@@ -257,6 +268,12 @@ def features(payload, setup):
             known, effective = (datetime.fromisoformat(cap[k]) for k in ('known_at', 'effective_at'))
             if not all(t.tzinfo for t in (at, known, effective)) or cap['unit'] != 'KRW' or re.fullmatch(r'[0-9a-f]{64}', str(cap['source_sha256'])) is None or cap.get('corporate_action_consistent') is not True:
                 raise ValueError('strategy_metadata_contract_invalid')
+            source = metadata.get('source')
+            if source is not None and (not isinstance(source, dict) or digest(source) != cap['source_sha256']
+                or source.get('api_id') != 'ka10001' or source.get('unit') != '100000000_KRW'
+                or source.get('observed_at') != cap['known_at'] or source.get('observed_at') != cap['effective_at']
+                or int(source.get('mac', 0)) * 100_000_000 != cap['value']):
+                raise ValueError('strategy_metadata_source_binding_invalid')
             if known <= at and effective <= at:
                 values['market_cap_krw'] = _number(cap['value'])
                 if values['market_cap_krw'] is None or values['market_cap_krw'] <= 0:
@@ -292,12 +309,24 @@ def select(policy, payload, setup):
         value = values[split['feature']]
         if value is None:
             reason = 'unknown_parent'
+            if split.get('unknown'):
+                key = split['unknown']
+                continue
             break
         key = split['lt' if value < split['boundary'] else 'ge']
     profile = deepcopy(node['profile'])
+    fallback = node.get('fallback_profile')
+    missing = sorted(k for k in profile if fallback and profile[k] != fallback[k] and not coordinate_supported(k, payload))
+    if missing:
+        profile = deepcopy(fallback)
+        for ancestor in node.get('fallback_ancestors', []):
+            if not any(profile[k] != ancestor[k] and not coordinate_supported(k, payload) for k in profile):
+                break
+            profile = deepcopy(ancestor)
+        reason = 'source_missing_parent'
     return profile, dict(schema=SCHEMA, kernel=KERNEL, policy_sha256=digest(policy),
         selector_sha256=digest(strategy), features=values, path=path, leaf=key,
-        fallback_reason=reason, effective_thresholds=profile, profile_sha256=digest(profile))
+        fallback_reason=reason, unsupported_coordinates=missing, effective_thresholds=profile, profile_sha256=digest(profile))
 
 
 def legacy_projection(policy):
@@ -365,6 +394,37 @@ def _rebuild_captured_local_structure(payload, profile):
     structure['alignment'] = 'adverse' if regime in ADVERSE_REGIMES else 'positive' if regime in {'breakout','healthy_pullback'} else 'neutral'
 
 
+def completed_bar_rows(payload, *, observed_at=None):
+    context = payload.get('entry_candle_context') or {}
+    frozen = context.get('strategy_completed_bars')
+    if not isinstance(frozen, dict) or frozen.get('sha256') != digest(frozen.get('body')):
+        raise ValueError('strategy_completed_bar_source_missing')
+    body = frozen['body']
+    cutoff = datetime.fromisoformat(body['observed_at'])
+    if cutoff.tzinfo is None:
+        raise ValueError('strategy_bar_clock_invalid')
+    observed_at = observed_at or payload.get('strategy_observed_at')
+    if observed_at:
+        anchor = datetime.fromisoformat(observed_at)
+        if anchor.tzinfo is None or cutoff > anchor:
+            raise ValueError('strategy_bar_source_from_future')
+    bars = []
+    for row in body['bars']:
+        bar = {**row, 'dt': datetime.fromisoformat(row['dt'])}
+        if bar['dt'].tzinfo is None or bar['dt'].timestamp() + 60 > cutoff.timestamp() or bar.get('forming'):
+            raise ValueError('strategy_future_or_forming_bar')
+        if (any(_number(bar.get(k)) is None for k in ('o', 'h', 'l', 'c', 'v'))
+            or not 0 < bar['l'] <= min(bar['o'], bar['c']) <= max(bar['o'], bar['c']) <= bar['h']
+            or bar['v'] < 0
+            or bar['dt'].astimezone(ZoneInfo('Asia/Seoul')).date() != cutoff.astimezone(ZoneInfo('Asia/Seoul')).date()):
+            raise ValueError('strategy_completed_bar_ohlcv_or_session_invalid')
+        bars.append(bar)
+    if len(bars) != context.get('completed_bar_count') or any(
+        a['dt'] >= b['dt'] for a,b in zip(bars, bars[1:])):
+        raise ValueError('strategy_completed_bar_coverage_invalid')
+    return bars
+
+
 def rebuild(setup, policy):
     """Replay the existing fact kernels from preserved predecision inputs."""
     from src.engine.scalping.ai_decision_quality import (
@@ -396,27 +456,7 @@ def rebuild(setup, policy):
         if structure_changed and (full_bars or any(profile[k] != REGISTRY[k][0] for k in STRUCTURE_REGISTRY if k.startswith('structure_'))):
             from src.engine.scalping.entry_candle_context import _structure
             context = payload.get('entry_candle_context') or {}
-            frozen = context.get('strategy_completed_bars')
-            if not isinstance(frozen, dict) or frozen.get('sha256') != digest(frozen.get('body')):
-                raise ValueError('strategy_completed_bar_source_missing')
-            body = frozen['body']
-            cutoff = datetime.fromisoformat(body['observed_at'])
-            if cutoff.tzinfo is None:
-                raise ValueError('strategy_bar_clock_invalid')
-            bars = []
-            for row in body['bars']:
-                bar = {**row, 'dt': datetime.fromisoformat(row['dt'])}
-                if bar['dt'].tzinfo is None or bar['dt'].timestamp() + 60 > cutoff.timestamp() or bar.get('forming'):
-                    raise ValueError('strategy_future_or_forming_bar')
-                if (any(_number(bar.get(k)) is None for k in ('o', 'h', 'l', 'c', 'v'))
-                    or not 0 < bar['l'] <= min(bar['o'], bar['c']) <= max(bar['o'], bar['c']) <= bar['h']
-                    or bar['v'] < 0
-                    or bar['dt'].astimezone(ZoneInfo('Asia/Seoul')).date() != cutoff.astimezone(ZoneInfo('Asia/Seoul')).date()):
-                    raise ValueError('strategy_completed_bar_ohlcv_or_session_invalid')
-                bars.append(bar)
-            if len(bars) != context.get('completed_bar_count') or any(
-                a['dt'] >= b['dt'] for a,b in zip(bars, bars[1:])):
-                raise ValueError('strategy_completed_bar_coverage_invalid')
+            bars = completed_bar_rows(payload)
             context['structure'] = _structure(bars, local_breakout=True)
         else:
             _rebuild_captured_local_structure(payload, profile)
@@ -434,7 +474,149 @@ def rebuild(setup, policy):
     return rebuilt, effective, receipt
 
 
-def joint_candidates(parent, scope, *, domains=None, selectors=None, start=0, limit=96, local_first=False):
+# This is a search budget, not a claim that the Cartesian domain is exhausted.
+SEARCH_VERSION = 'balanced_machine_train_v2'
+SOURCE_COORDINATES = set(STRUCTURE_REGISTRY) | {'tape_supportive_score', 'tape_adverse_score', 'momentum_accelerating_score', 'momentum_fading_score', 'micro_confirmation_recipe', 'minimum_depletion_fraction_per_sec', 'minimum_trade_backed_ratio', 'maximum_refill_ratio'}
+SEARCH_BUDGET = {'control': 4, 'single': 20, 'local_joint': 24, 'selector_leaf': 32, 'broad_joint': 16}
+
+
+def coordinate_supported(name, payload):
+    """Missing primitives use the inherited profile; corrupt primitives still fail replay."""
+    facts = payload.get('features') or {}
+    if name in STRUCTURE_REGISTRY:
+        return bool((payload.get('entry_candle_context') or {}).get('strategy_completed_bars'))
+    if name.startswith('tape_'):
+        return (_number(facts.get('order_flow_pressure_score')) is not None
+                and facts.get('order_flow_pressure_source') == 'trusted_aggressor')
+    if name in {'momentum_accelerating_score', 'momentum_fading_score'}:
+        return _number(facts.get('entry_momentum_score')) is not None
+    if name in {'micro_confirmation_recipe', 'minimum_depletion_fraction_per_sec',
+                'minimum_trade_backed_ratio', 'maximum_refill_ratio'}:
+        return (payload.get('mechanistic_micro_window') or {}).get('source_quality_status') == 'eligible'
+    return True
+
+
+def registry_contract():
+    """Auditable coordinate ownership; these bounds never override broker guards."""
+    return {name: dict(default=spec[0], seed=list(spec[1]), bounds=list(coordinate_bounds(name)),
+        unit=('enum' if name == 'micro_confirmation_recipe' else 'ticks' if name == 'breakout_tolerance_ticks' else
+              'fraction_per_second' if name == 'minimum_depletion_fraction_per_sec' else 'pct_per_bar' if name == 'structure_bounce_slope' else
+              'percentage_points' if name == 'relative_weakness_pct_point' else 'bp' if name.endswith('_bp') else 'pct' if '_pct' in name or 'return_' in name
+              else 'seconds' if name.endswith('_sec') else 'count' if isinstance(spec[0], int)
+              else 'score' if 'score' in name or 'pressure' in name or 'fillability' in name else 'ratio'),
+        owner=('entry_candle_context._structure' if name in STRUCTURE_REGISTRY else
+               'entry_strategy_policy.rebuild' if name.startswith(('tape_', 'momentum_')) else
+               'entry_setup_evidence.mechanistic_entry_policy_decision' if name.startswith(('minimum_', 'maximum_', 'micro_')) else
+               'ai_decision_quality'),
+        source=('strategy_completed_bars' if name in STRUCTURE_REGISTRY else
+                'trusted_aggressor' if name.startswith('tape_') else
+                'entry_momentum_score' if name.startswith('momentum_') else
+                'mechanistic_micro_window' if name in {'micro_confirmation_recipe', 'minimum_depletion_fraction_per_sec', 'minimum_trade_backed_ratio', 'maximum_refill_ratio'} else 'strategy_raw_input'),
+        authority='machine_strategy_only') for name, spec in REGISTRY.items()}
+
+
+def _mutate_tree(base, values, selector):
+    candidate = deepcopy(base)
+    tree = candidate['strategy']
+    contracts = registry_contract()
+    def changed(node):
+        result = deepcopy(node)
+        result['fallback_profile'] = deepcopy(node['profile'])
+        ancestors = ([node['fallback_profile']] if node.get('fallback_profile') else []) + node.get('fallback_ancestors', [])
+        # Only the first profile with each source requirement set is reachable.
+        compact, seen = [], set()
+        for ancestor in ancestors:
+            requirement = tuple(sorted({contracts[k]['source'] for k in REGISTRY
+                                       if ancestor[k] != REGISTRY[k][0] and k in SOURCE_COORDINATES}))
+            if requirement not in seen:
+                compact.append(deepcopy(ancestor)); seen.add(requirement)
+        if compact:
+            result['fallback_ancestors'] = compact
+
+        result['profile'].update(values)
+        return result
+    if selector is None:
+        tree['nodes'] = {key: changed(node) for key, node in tree['nodes'].items()}
+    else:
+        feature, boundary, side = selector
+        old_nodes, old_root = tree['nodes'], tree['root']
+        nodes = {'root': {'profile': deepcopy(old_nodes[old_root]['profile']),
+                         'split': dict(feature=feature, boundary=boundary, lt='lt_'+old_root, ge='ge_'+old_root)}}
+        # Preserve both inherited subtrees, including fallback for unknown features.
+        branches = ('lt', 'ge', 'unknown') if len(old_nodes) > 1 else ('lt', 'ge')
+        if 'unknown' in branches:
+            nodes['root']['split']['unknown'] = 'unknown_' + old_root
+        for branch in branches:
+            for key, node in old_nodes.items():
+                item = changed(node) if branch != 'unknown' and side in (branch, 'both') else deepcopy(node)
+                if 'split' in item:
+                    for child in ('lt', 'ge', 'unknown'):
+                        if child in item['split']:
+                            item['split'][child] = branch + '_' + item['split'][child]
+                nodes[branch+'_'+key] = item
+        tree.update(root='root', nodes=nodes)
+    return candidate
+
+
+def _balanced_candidates(parent, scope, domains, selectors, start, limit, priority_coordinates=None, search_seed=None):
+    base = seed(parent, scope) if 'strategy' not in parent else deepcopy(parent)
+    inherited = default_profile(base)
+    active = [n for n in domains if any(v != inherited[n] for v in domains[n])]
+    # Parent/source-derived domain rotation is deterministic and independent of labels.
+    order_seed = digest([parent, scope, domains, selectors, SEARCH_VERSION, search_seed])
+    priority = {n:i for i,n in enumerate(priority_coordinates or [])}
+    active.sort(key=lambda n: (priority.get(n, len(priority)), digest([order_seed, n])))
+    templates = [tuple(n for n in group if n in active) for group in (
+        ('overextension_runup_pct', 'overextension_vwap_bp', 'overextension_ma5_bp'),
+        ('momentum_accelerating_score', 'trigger_buy_pressure', 'reversal_tick_acceleration'),
+        ('maximum_spread_bp', 'minimum_fillability_score', 'maximum_top3_ask_to_bid_ratio'),
+        ('structural_positive_returns', 'structural_positive_slopes', 'early_volume_ratio'),
+        ('volume_absent_ratio', 'volume_confirm_ratio', 'recovery_positive_windows'))]
+    templates = [g for g in templates if len(g) >= 2]
+    split_options = [s for s in selectors if s is not None]
+    tree_budget_full = len(base['strategy']['nodes']) > 20
+    if tree_budget_full:
+        split_options = []
+    groups = [g for g, count in SEARCH_BUDGET.items() for _ in range(count)]
+    domain_hash = digest([domains, selectors, parent, SEARCH_VERSION, SEARCH_BUDGET, priority_coordinates, search_seed])
+    counters = {g: 0 for g in SEARCH_BUDGET}
+    for cursor, allocated in enumerate(groups):
+        index = counters[allocated]; counters[allocated] += 1
+        group, reason = allocated, None
+        if group == 'selector_leaf' and not split_options:
+            group, reason = 'local_joint', 'parent_tree_node_budget' if tree_budget_full else 'no_train_selector_boundary'
+        values, selector = {}, None
+        if active and (group != 'control' or index):
+            if group == 'single':
+                chosen = [active[index % len(active)]]
+            elif group in {'local_joint', 'selector_leaf'}:
+                width = min(len(active), 2 + index % 2)
+                chosen = (list(templates[index % len(templates)]) if templates and index < len(templates) * 2 else
+                          [active[(index * 3 + j) % len(active)] for j in range(width)])
+            else:
+                chosen = active
+            for n in chosen:
+                options = [v for v in domains[n] if v != inherited[n]]
+                offset = int(digest([order_seed, group, index, n])[:8], 16)
+                values[n] = options[offset % len(options)]
+            if group == 'selector_leaf':
+                feature, boundary, side = split_options[index % len(split_options)]
+                selector = (feature, boundary, 'both' if index % 4 == 3 else side)
+                if index == 0:
+                    values = {}
+        candidate = _mutate_tree(base, values, selector) if values or selector else deepcopy(base)
+        errors = validate(candidate['strategy'])
+        if cursor >= start:
+            yield (None if errors else candidate), dict(cursor=cursor+1, domain_size=len(groups),
+                domain_sha256=domain_hash, search_complete=cursor+1 == len(groups),
+                cartesian_exhausted=False, budget_version=SEARCH_VERSION, group=group,
+                allocated_group=allocated, reallocation_reason=reason,
+                changed_coordinates=sorted(values), selector=selector, invalid_reasons=errors)
+        if cursor + 1 >= start + limit:
+            break
+
+
+def joint_candidates(parent, scope, *, domains=None, selectors=None, start=0, limit=96, local_first=False, priority_coordinates=None, search_seed=None):
     """Bounded traversal of a declared Cartesian domain, with resumable cursor.
 
     Coprime stride visits every combination once; all coordinates participate
@@ -442,6 +624,9 @@ def joint_candidates(parent, scope, *, domains=None, selectors=None, start=0, li
     is not a proof of global optimality until the cursor reaches domain_size.
     """
     domains = domains or {name: list(spec[1]) for name, spec in REGISTRY.items()}
+    if local_first:
+        yield from _balanced_candidates(parent, scope, domains, selectors or [None], start, limit, priority_coordinates, search_seed)
+        return
     names = sorted(domains)
     if set(names) - set(REGISTRY) or any(not domains[n] for n in names):
         raise ValueError('strategy_search_domain_invalid')
@@ -452,15 +637,6 @@ def joint_candidates(parent, scope, *, domains=None, selectors=None, start=0, li
         stride += 1
     base = seed(parent, scope) if 'strategy' not in parent else deepcopy(parent)
     initial = []
-    if local_first:
-        inherited = base['strategy']['nodes'][base['strategy']['root']]['profile']
-        # Try nearby changes before simultaneously perturbing every coordinate.
-        # This changes traversal order only; the full joint frontier remains.
-        for name in names:
-            options = [v for v in domains[name] if v != inherited[name]]
-            if options:
-                for value in dict.fromkeys((min(options), max(options))):
-                    initial.append({name: value})
     domain_hash = digest(dict(domains=domains, selectors=selectors, parent=digest(parent), local_first=local_first))
     total = size + len(initial)
     for cursor in range(start, min(start + limit, total)):
@@ -498,6 +674,8 @@ def select_report_candidate(source):
     """Choose the scope using train results only, never the holdout winners."""
     proposals = []
     for scope, result in sorted((source.get('strategy_refinements_by_scope') or {}).items()):
+        if result.get('promotion_pass') is not True:
+            continue
         candidate = result.get('candidate') or {}
         economy = (((candidate.get('evidence') or {}).get('train') or {}).get('economics') or {})
         if candidate.get('evaluation_basis') == 'machine_nonentry_opportunity_v1':

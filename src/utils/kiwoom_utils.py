@@ -2279,9 +2279,24 @@ def get_basic_info_ka10001(token, code):
     raw_mac = data.get("mac", 0)
     marcap = int(raw_mac) if str(raw_mac).strip() != "" else 0
 
+    # Preserve the legacy Marcap contract; new strategy metadata uses the
+    # official ka10001.mac unit (100 million KRW), captured at retrieval time.
+    # It must never be projected into earlier daily rows as an as-of fact.
+    market_cap_snapshot = None
+    if marcap > 0 and str(data.get('return_code', '0')) == '0':
+        observed = datetime.now(ZoneInfo('Asia/Seoul')).isoformat()
+        source = {'api_id': 'ka10001', 'stock_code': str(code).split('_')[0],
+                  'mac': str(raw_mac), 'unit': '100000000_KRW', 'observed_at': observed}
+        market_cap_snapshot = dict(observed_at=observed, stock_code=source['stock_code'],
+            market_cap=dict(value=marcap * 100_000_000, unit='KRW', known_at=observed,
+                effective_at=observed, source_sha256=hashlib.sha256(json.dumps(source,
+                    sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode()).hexdigest(),
+                corporate_action_consistent=True, adjustment_basis='reported_market_cap_no_price_or_share_splice'),
+            source=source)
     return {
         "Name": name,
         "Marcap": marcap,
+        "StrategyMetadata": market_cap_snapshot,
         "BasePrice": _scanner_to_int(data.get("base_pric")),
         "UpperLimitPrice": _scanner_to_int(data.get("upl_pric")),
         "LowerLimitPrice": _scanner_to_int(data.get("lst_pric")),
