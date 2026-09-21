@@ -64,3 +64,9 @@ Episode 복구는23:09:19에 공동 명단 검증 단계를 통과했으나 `low
 - 첫 main복구는23:52 final raw projection mismatch로 실패했다. 기존 봇 supervisor가23:51 재기동하면서 장후 preflight 이후 raw에 scanner configuration1행(5796bytes)을 추가했다. 따라서 검증 차단은 정당했다. 다음 복구는 표준 main BOT_ACTION=stop으로 기존 야간 tmux세션을 종료하여 원본과 정규 아침 기동을 안정화했다. 별도 주문·보유 정산 변경은 없다. 이번 복구에서 이미 성공한 sim post-sell/rising-missed 보조 피드백만 invocation flag로 재실행하지 않는다. 기존 보고서는 보존하고 필수 원천 감사·정책 생성은 재수행한다.
 - Machine 분석/closure/policy는 모두rc0, 마지막 builder만 stale direct summary로rc1. 정확 원인은 effective_dates=[]인데 fallback 당일 bootstrap PID를 actual_pid_consumed=true로 붙이던 summary 결함이다. PID 생존 여부만의 문제가 아니다. 효과일·manifest·검증 날짜가 일치한 bootstrap에서만 PID 소비를 인정하도록 수정하고, machine wrapper도 summary→checklist 순서로 갱신한다. 관련95 tests PASS.
 - 자정 이후 source/publication9/21와effective9/22를 유지한다.9/22 체크리스트는 아직 없으며 native builder에서 최신 owner로 생성할 예정이다.
+
+### 자정 경계 복구 보완 (2026-09-22)
+
+- 00:02 main 재시도에서 `research_same_date_publication_conflict`: effective date가 달력상 당일이 되어 전일 장후 발행 갱신을 거부했다. 명시적 publication date, 다음 거래일, 07:30 이전, bootstrap 부재를 모두 만족할 때만 CAS 재발행을 허용한다.
+- 이전 machine은 연구 발행 후 checklist 생성에서 실패했다. 후속 main 연구 재생성/코드 수리로 전체 closure가 오래되어 widget 입력 대기에서 교착됐다. 이전 서명 receipt, 동일 widget terminal, 현재 widget 연구 semantic hash와 immutable 발행 세대를 검증한 경우 재구축만 허용한다. 최종 성공 게이트는 완전한 current receipt를 유지한다.
+- 코드 리뷰에서 누락된 date import를 보완했다. 경계시간/장전 준비 존재/잘못된 날짜/보고서 및 발행 변조 회귀 검증 포함.

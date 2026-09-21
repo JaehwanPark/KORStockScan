@@ -393,3 +393,79 @@ def test_machine_refresh_binds_widget_generation_without_rewriting_original_run(
     assert mod.producer_receipt_path(reports, day, 'widget').read_bytes() == original
     _write(path, dict(target_date=day, unexpected_later_generation=True))
     assert mod.producer_receipt_issues(reports, day, 'widget')
+
+
+@pytest.mark.parametrize('clock,publication,prepared,allowed', [
+    ('2026-09-22T00:30:00+09:00', '2026-09-21', False, True),
+    ('2026-09-22T07:29:59+09:00', '2026-09-21', False, True),
+    ('2026-09-22T07:30:00+09:00', '2026-09-21', False, False),
+    ('2026-09-22T00:30:00+09:00', '2026-09-21', True, False),
+    ('2026-09-22T00:30:00+09:00', '', False, False),
+    ('2026-09-22T00:30:00+09:00', '2026-09-18', False, False),
+])
+def test_overnight_publication_recovery_stops_before_preopen(tmp_path, monkeypatch, clock, publication, prepared, allowed):
+    from datetime import date, datetime
+    from src.engine.monitoring import research_closed_loop as loop
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.fromisoformat(clock)
+    monkeypatch.setattr(loop, 'datetime', Clock)
+    monkeypatch.setattr(loop, 'DATA_DIR', tmp_path)
+    monkeypatch.setenv('POSTCLOSE_POLICY_PUBLICATION_DATE', publication)
+    effective = date(2026, 9, 22)
+    folder = tmp_path / 'policies'
+    initial = loop.publication_transaction(folder, effective_date=effective, files={'policy.json': {'revision': 1}})
+    if prepared:
+        root = tmp_path / 'runtime' / 'policy_bootstrap'
+        root.mkdir(parents=True)
+        (root / f'runtime_policy_bootstrap_{effective}.json').write_text('{}')
+    parent = loop.future_publication_parent(folder, effective)
+    if allowed:
+        assert parent == initial['generation_sha256']
+        updated = loop.publication_transaction(folder, effective_date=effective, files={'policy.json': {'revision': 2}}, expected_generation=parent)
+        assert updated['parent_generation_sha256'] == parent
+        loop.verify_publication(folder, effective_date=effective, name='policy.json', value={'revision': 2})
+    else:
+        assert parent is None
+        with pytest.raises(ValueError, match='publication_conflict'):
+            loop.publication_transaction(folder, effective_date=effective, files={'policy.json': {'revision': 2}}, expected_generation=initial['generation_sha256'])
+
+
+def test_failed_refresh_can_rebuild_after_unrelated_dependency_changed(tmp_path, monkeypatch):
+    from src.engine.monitoring import research_closed_loop as loop
+    from src.engine.automation import machine_research_closed_loop_refresh as refresh
+    from src.engine.verify_threshold_cycle_postclose_chain import _sha
+    from datetime import date
+    day = '2026-09-21'
+    widget = mod.producer_receipt_path(tmp_path, day, 'widget')
+    widget.parent.mkdir(parents=True)
+    study = tmp_path / 'study.json'
+    study.write_text('{"target_date":"2026-09-21"}')
+    sources = {'widget_symbol_signal_policy_research': {'path': str(study)}}
+    widget.write_text(json.dumps({'sources': sources}))
+    effective = date(2026, 9, 22)
+    publication = tmp_path / 'policies'
+    manifest = loop.publication_transaction(publication, effective_date=effective, files={'policy.json': {}})
+    closure = {'schema': loop.SCHEMA, 'target_date': day, 'status': 'complete',
+        'publications': {'widget': {'directory': str(publication), 'effective_date': str(effective), 'generation_sha256': manifest['generation_sha256']}},
+        'dependency_sources': {str(study): loop.digest(json.loads(study.read_text()))}}
+    closure['receipt_sha256'] = loop.digest(closure)
+    path = tmp_path / 'machine_research_closed_loop' / f'machine_research_closed_loop_{day}.json'
+    path.parent.mkdir()
+    path.write_text(json.dumps(closure))
+    previous = {'status': 'failed', 'owner': 'machine', 'target_date': day, 'run_id': 'run', 'exit_code': 1, 'code_commit': 'a' * 40,
+        'upstream_widget': {'sha256': _sha(widget), 'sources': sources}}
+    monkeypatch.setattr(refresh, 'validate_current_receipt', lambda *args: False)
+    issues = ['widget:source_hash_invalid:widget_symbol_signal_policy_research']
+    assert mod._verified_failed_machine_refresh_retry(tmp_path, day, previous, issues)
+    (publication / 'policy.json').write_text('{"tampered": true}')
+    assert not mod._verified_failed_machine_refresh_retry(tmp_path, day, previous, issues)
+    (publication / 'policy.json').write_text('{}')
+    bad = dict(closure, receipt_sha256='f' * 64)
+    path.write_text(json.dumps(bad))
+    assert not mod._verified_failed_machine_refresh_retry(tmp_path, day, previous, issues)
+    path.write_text(json.dumps(closure))
+    study.write_text('{"target_date":"2026-09-20"}')
+    assert not mod._verified_failed_machine_refresh_retry(tmp_path, day, previous, issues)
+    assert not mod._verified_failed_machine_refresh_retry(tmp_path, day, previous, ['widget:source_hash_invalid:widget_advisory_calibration'])

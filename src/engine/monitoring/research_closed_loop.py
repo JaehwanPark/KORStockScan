@@ -391,6 +391,25 @@ def prospective_window(value, *, source_date, qualified_dates):
     )
 
 
+def _publication_update_allowed(effective_date):
+    """Allow an explicitly dated overnight recovery before preopen preparation."""
+    now = datetime.now(ZoneInfo("Asia/Seoul"))
+    if effective_date > now.date():
+        return True
+    publication = os.environ.get("POSTCLOSE_POLICY_PUBLICATION_DATE", "")
+    try:
+        source_day = date.fromisoformat(publication)
+    except ValueError:
+        return False
+    if (effective_date != now.date() or source_day >= effective_date
+        or (now.hour, now.minute) >= (7, 30)
+        or trading_dates_after(source_day, 1) != [effective_date.isoformat()]):
+        return False
+    # A prepared/consumed generation is immutable, even before the cutoff.
+    bootstrap = DATA_DIR / "runtime" / "policy_bootstrap"
+    return not any(bootstrap.glob(f"runtime_policy_bootstrap*_{effective_date}.*"))
+
+
 def publication_transaction(
     directory, *, effective_date, files, expected_generation=None
 ):
@@ -416,7 +435,7 @@ def publication_transaction(
         if previous and not identical:
             if (
                 expected_generation != previous.get("generation_sha256")
-                or effective_date <= datetime.now(ZoneInfo("Asia/Seoul")).date()
+                or not _publication_update_allowed(effective_date)
                 or set(previous_files) != set(payloads)
             ):
                 raise ValueError("research_same_date_publication_conflict")
@@ -457,7 +476,7 @@ def publication_transaction(
 def future_publication_parent(directory, effective_date):
     """Return a validated future parent for the existing nightly fixed point."""
     directory = _directory(directory)
-    if effective_date <= datetime.now(ZoneInfo("Asia/Seoul")).date():
+    if not _publication_update_allowed(effective_date):
         return None
     try:
         pointer = read_object(

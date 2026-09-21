@@ -10,6 +10,7 @@ import hashlib
 import json
 import re
 import subprocess
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -513,7 +514,33 @@ def _verified_failed_machine_refresh_retry(report_dir: Path, day: str, previous:
         or upstream.get("sources") != _load_json(widget_path).get("sources")):
         return False
     closure_path = report_dir / "machine_research_closed_loop" / f"machine_research_closed_loop_{day}.json"
-    return validate_current_receipt(_load_json(closure_path), day)
+    closure = _load_json(closure_path)
+    if validate_current_receipt(closure, day):
+        return True
+    # A main retry or a code repair can invalidate other closure dependencies.
+    # Authenticate only the completed widget handoff to permit reconstruction;
+    # finished/succeeded still requires a fully current closure receipt.
+    from src.engine.automation.machine_research_closed_loop_refresh import validate_receipt
+    from src.engine.monitoring import research_closed_loop as loop
+    if not validate_receipt(closure, day):
+        return False
+    try:
+        row = upstream["sources"]["widget_symbol_signal_policy_research"]
+        source = Path(row["path"])
+        if loop.digest(loop.read_object(source, limit=64 * 1024 * 1024)) != closure["dependency_sources"].get(str(source.resolve())):
+            return False
+        publication = closure["publications"]["widget"]
+        directory = Path(publication["directory"])
+        effective = date.fromisoformat(publication["effective_date"])
+        manifest = loop.read_object(directory / f"research_publication_{effective}.json")
+        if manifest["generation_sha256"] != publication["generation_sha256"]:
+            return False
+        for name in manifest["files"]:
+            loop.verify_publication(directory, effective_date=effective, name=name,
+                                    value=loop.read_object(directory / name, limit=32 * 1024 * 1024))
+        return True
+    except (OSError, ValueError, TypeError, KeyError):
+        return False
 
 
 def machine_input_issues(report_dir: Path, day: str) -> list[str]:
