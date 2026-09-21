@@ -34,7 +34,7 @@
 ## 실행 항목
 
 - [ ] `[DirectFamilyPreopenPolicyHandoff] direct family 날짜별 정책·bootstrap 장전 소비 확인` (`Due: 2026-09-22`, `Slot: PREOPEN`, `TimeWindow: 07:35~08:05`, `Track: RuntimeStability`)
-  - Widget/episode pre-submit AL adapter:706 tests PASS; broker route and terminal identities preserved. Partial/duplicate/stale integrated source stays blocked. [Review and deployment](../audit-reports/2026-09-22-entry-adverse-integrated-ws-route-repair.md); future natural orders/outcomes remain separate.
+  - Widget/episode pre-submit AL adapter:dfe202068 pushed/deployed;706 source +706 release tests PASS;66 service bindings verified;widget PID32218 and morning terminal-preserving PID32298 checked; broker route and terminal identities preserved. Partial/duplicate/stale integrated source stays blocked. [Review and deployment](../audit-reports/2026-09-22-entry-adverse-integrated-ws-route-repair.md); future natural orders/outcomes remain separate.
   - Source: [runtime_approval_summary_2026-09-21.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-09-21.json)
   - 판정 기준: source_date=`2026-09-21`, apply_date=`2026-09-22`, preopen_state=`pending`, due_policy_receipts=`entry_cancel_wait(valid=True, handoff=blocked)`의 schema·semantic hash·scope와 bootstrap accepted/rejected 결과를 확인한다.
   - incumbent 정책은 runtime override가 0이어야 하고 validated edge는 단일축 allowlist·operator lock·retired OFF·same-stage guard를 통과해야 한다.
