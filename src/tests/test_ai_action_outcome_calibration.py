@@ -2083,6 +2083,27 @@ def _natural_refinement_fixture():
     return rows, receipt
 
 
+def test_current_structure_population_preserves_old_rows_and_rebinds_receipt():
+    from copy import deepcopy
+    from src.engine.scalping.entry_candle_context import LOCAL_BREAKOUT_VERSION
+    rows = [dict(setup_evidence={"structure_contract_version": version},
+                 source_date="2026-09-21", decision_trace_id=str(index), fingerprint=str(index),
+                 refinement_source_lane="natural")
+            for index, version in enumerate([None, LOCAL_BREAKOUT_VERSION])]
+    original = deepcopy(rows)
+    contract = {"input_row_disposition_complete": True, "row_exclusion_reason_counts": {}}
+    selected, receipt = calibration._current_structure_population(rows, contract)
+    assert rows == original
+    assert selected == rows[1:]
+    assert receipt["structure_contract_input_counts"] == {"legacy_session_high_v1": 1, LOCAL_BREAKOUT_VERSION: 1}
+    assert receipt["structure_contract_population_count"] == 2
+    assert receipt["accepted_unique_trace_count"] == 1
+    assert receipt["row_exclusion_reason_counts"]["structure_contract_version_mismatch"] == 1
+    assert receipt["accepted_rows_sha256"] == calibration._canonical_sha256([
+        {"decision_trace_id": "1", "fingerprint": "1"}])
+    assert contract["row_exclusion_reason_counts"] == {}
+
+
 def test_common_refinement_keeps_natural_block_for_research_without_promoting_proxy(
     monkeypatch,
 ):

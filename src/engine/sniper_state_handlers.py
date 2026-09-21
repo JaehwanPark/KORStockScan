@@ -2829,6 +2829,7 @@ _ENTRY_CAPACITY_RECEIPTS: dict = {}
 _ENTRY_CAPACITY_INFLIGHT: dict = {}
 _ENTRY_CAPACITY_RETRY_AFTER: dict = {}
 _ENTRY_CAPACITY_PENDING: dict = {}
+_ENTRY_NONENTRY_CAPACITY_REUSE_MAX_AGE_SEC = 5.0
 
 
 def _reset_entry_capacity_receipts():
@@ -2855,12 +2856,13 @@ def _entry_capacity_receipt_key(code, price):
                 sort_keys=True, default=str).encode()).hexdigest())
 
 
-def _entry_capacity_receipt_valid(snapshot, code, price, now_ts):
+def _entry_capacity_receipt_valid(snapshot, code, price, now_ts, *, nonentry_observation=False):
     if not isinstance(snapshot, dict) or snapshot.get("error"):
         return False
     try:
         observed = datetime.fromisoformat(snapshot["capacity_observed_at"])
-        return bool(observed.tzinfo and 0 <= now_ts - observed.timestamp() <= 2.0
+        max_age = _ENTRY_NONENTRY_CAPACITY_REUSE_MAX_AGE_SEC if nonentry_observation else 2.0
+        return bool(observed.tzinfo and 0 <= now_ts - observed.timestamp() <= max_age
             and snapshot.get("cash_orderable_contract_status") == "valid"
             and snapshot.get("return_code") == 0
             and snapshot.get("requested_stock_code") == str(code)
@@ -2877,6 +2879,8 @@ def _read_entry_capacity_snapshot(code, price, *, source_only=False,
     Runtime-required reads retain their original transport path. Observers
     neither wait on an in-flight read nor adopt its future response. Account,
     origin/token/day, exact price and inventory/custody generation bind reuse.
+    Only cache-only non-entry observations use five seconds; ENTER_NOW and
+    preparation retain two seconds, and normal sizing always reads afresh.
     """
     def fetch():
         bounds = {"source_only": True} if source_only else {}
@@ -2895,8 +2899,11 @@ def _read_entry_capacity_snapshot(code, price, *, source_only=False,
             if _ENTRY_CAPACITY_INFLIGHT.get(key):
                 return {"error": "capacity_source_inflight"}
             cached = _ENTRY_CAPACITY_RECEIPTS.get(key)
-            if _entry_capacity_receipt_valid(cached, code, price, started):
-                return {**copy.deepcopy(cached), "capacity_reuse_status": "exact_receipt_reused"}
+            if _entry_capacity_receipt_valid(cached, code, price, started,
+                                             nonentry_observation=reuse_only):
+                return {**copy.deepcopy(cached), "capacity_reuse_status": "exact_receipt_reused",
+                        "capacity_reuse_max_age_sec": (
+                            _ENTRY_NONENTRY_CAPACITY_REUSE_MAX_AGE_SEC if reuse_only else 2.0)}
             if reuse_only:
                 return {"error": "capacity_observation_cache_miss_nonentry"}
             if started < _ENTRY_CAPACITY_RETRY_AFTER.get(key, 0):
@@ -3092,6 +3099,7 @@ def _resolve_scalp_cash_budget_context(code, unit_price, fallback_orderable_amou
         "capacity_source_sha256",
         "return_code",
         "capacity_reuse_status",
+        "capacity_reuse_max_age_sec",
     ):
         context[f"kt00011_{field}"] = snapshot.get(field, "not_reported")
     if snapshot.get("cash_orderable_contract_status") in {"missing", "invalid"}:
@@ -39840,7 +39848,8 @@ def _retry_entry_ai_submit_authority_before_block(
             recent_ticks,
             recent_candles,
             entry_economics_observer=lambda **facts: _observe_entry_economics_before_ai(
-                stock, code, retry_ws_data, **facts),
+                stock, code, facts.pop('observation_ws_data', retry_ws_data), **facts),
+            entry_input_refresher=lambda ws, ticks, context: _refresh_prepared_entry_inputs(code, ws, ticks, context),
             prompt_profile="watching",
             metadata_extra={
                 **_scanner_promotion_correlation_fields(stock or {}),
@@ -60549,7 +60558,9 @@ def _resolve_scanner_async_entry_ai(
                 thaw_scanner_async_value(prepared.get("recent_ticks") or []),
                 thaw_scanner_async_value(prepared.get("recent_candles") or []),
                 entry_economics_observer=lambda **facts: _observe_entry_economics_before_ai(
-                    stock, code, thaw_scanner_async_value(prepared.get('ws_data') or {}), **facts),
+                    stock, code, facts.pop('observation_ws_data', thaw_scanner_async_value(prepared.get('ws_data') or {})), **facts),
+                entry_input_refresher=lambda ws, ticks, context: _refresh_prepared_entry_inputs(code, ws, ticks, context),
+                entry_input_deadline_epoch=async_context.deadline_epoch,
                 prompt_profile="watching",
                 metadata_extra={
                     **_scanner_promotion_correlation_fields(stock_snapshot),
@@ -61857,7 +61868,8 @@ def _handle_watching_strategy_branch(
                                     recent_ticks,
                                     recent_candles,
                                     entry_economics_observer=lambda **facts: _observe_entry_economics_before_ai(
-                                        stock, code, entry_ai_ws_data, **facts),
+                                        stock, code, facts.pop('observation_ws_data', entry_ai_ws_data), **facts),
+                                    entry_input_refresher=lambda ws, ticks, context: _refresh_prepared_entry_inputs(code, ws, ticks, context),
                                     prompt_profile="watching",
                                     metadata_extra={
                                         **_scanner_promotion_correlation_fields(stock),
@@ -62341,7 +62353,8 @@ def _handle_watching_strategy_branch(
                                     recent_ticks,
                                     recent_candles,
                                     entry_economics_observer=lambda **facts: _observe_entry_economics_before_ai(
-                                        stock, code, ws_data, **facts),
+                                        stock, code, facts.pop('observation_ws_data', ws_data), **facts),
+                                    entry_input_refresher=lambda ws, ticks, context: _refresh_prepared_entry_inputs(code, ws, ticks, context),
                                     prompt_profile="watching",
                                     cache_profile="numeric_consistency_recheck",
                                     metadata_extra={
@@ -62590,7 +62603,8 @@ def _handle_watching_strategy_branch(
                                     recent_ticks,
                                     recent_candles,
                                     entry_economics_observer=lambda **facts: _observe_entry_economics_before_ai(
-                                        stock, code, ws_data, **facts),
+                                        stock, code, facts.pop('observation_ws_data', ws_data), **facts),
+                                    entry_input_refresher=lambda ws, ticks, context: _refresh_prepared_entry_inputs(code, ws, ticks, context),
                                     prompt_profile="watching",
                                     cache_profile="early_accel_strong_bundle_recheck",
                                     metadata_extra={

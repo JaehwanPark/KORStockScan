@@ -30,6 +30,61 @@ from src.engine.scalping import multi_timeframe_context as multi_context_module
 KST = ZoneInfo("Asia/Seoul")
 
 
+def _local_breakout_bars(recent, *, resistance=3120):
+    from datetime import timedelta
+    start = datetime(2026, 9, 21, 14, 47, tzinfo=KST)
+    values = [(resistance - 10, resistance, resistance - 20, resistance - 10)] * 10 + recent
+    return [dict(dt=start + timedelta(minutes=i), o=o, h=h, l=l, c=c, v=100,
+                 forming=False) for i, (o, h, l, c) in enumerate(values)]
+
+
+def test_local_breakout_freezes_prebreak_line_and_preserves_shared_structure():
+    from src.engine.scalping.entry_candle_context import _structure, LOCAL_BREAKOUT_VERSION
+    # 092220 observed recent bars: the newer 3185 high is NOT resistance.
+    bars = _local_breakout_bars([(3110, 3135, 3100, 3120),
+                                 (3120, 3185, 3115, 3160),
+                                 (3160, 3165, 3150, 3155)])
+    legacy = _structure(bars)
+    current = _structure(bars, local_breakout=True)
+    local = current["local_breakout"]
+    assert legacy["regime"] == "failed_breakout"
+    assert current["regime"] != "failed_breakout"
+    assert local["resistance_price"] == 3135  # Ten bars BEFORE the confirmed 14:58 close.
+    assert local["status"] == "breakout_holding"
+    assert local["recheck_required"] is True
+    assert current["structure_contract_version"] == LOCAL_BREAKOUT_VERSION
+    assert local["available_at"] == bars[-2]["dt"].timestamp() + 60
+    altered = [dict(b) for b in bars]
+    altered[-1]["h"] = 3200
+    assert _structure(altered, local_breakout=True)["local_breakout"]["episode_id"] == local["episode_id"]
+    assert "local_breakout" not in legacy
+
+
+def test_local_breakout_touch_is_not_confirmation_and_real_failure_is_separate():
+    from src.engine.scalping.entry_candle_context import _local_breakout
+    touched = _local_breakout_bars([(30150, 30200, 30100, 30150),
+                                    (30150, 30250, 30100, 30200),
+                                    (30200, 30250, 30100, 30150)], resistance=30200)
+    assert _local_breakout(touched)["status"] == "no_confirmed_breakout"
+    bars = _local_breakout_bars([(3120, 3150, 3110, 3140),
+                                 (3140, 3145, 3105, 3115),
+                                 (3115, 3120, 3105, 3110)])
+    assert _local_breakout(bars[:-1])["status"] == "retest_pending"
+    assert _local_breakout(bars)["status"] == "failed_breakout"
+    bars[-1]["forming"] = True
+    assert _local_breakout(bars)["status"] == "retest_pending"
+
+
+def test_local_breakout_rejects_missing_reversed_or_cross_day_bars():
+    from datetime import timedelta
+    from src.engine.scalping.entry_candle_context import _local_breakout
+    bars = _local_breakout_bars([(3120, 3150, 3110, 3140)])
+    assert _local_breakout(bars[:10])["status"] == "insufficient"
+    assert _local_breakout(list(reversed(bars)))["status"] == "insufficient"
+    bars[3]["dt"] -= timedelta(days=1)
+    assert _local_breakout(bars)["status"] == "insufficient"
+
+
 def test_default_session_uses_shared_post_effective_market_contract():
     observed_at = datetime(2026, 9, 14, 16, 20, tzinfo=KST)
 

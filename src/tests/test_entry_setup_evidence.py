@@ -56,6 +56,27 @@ def _exact_analysis(**fact_overrides):
     }
 
 
+def test_local_breakout_recheck_survives_supportive_setup_and_hard_block_wins():
+    analysis = _exact_analysis()
+    analysis["completed_structure"] = {
+        "structure_contract_version": "entry_local_breakout_completed_v1",
+        "local_breakout": {"status": "breakout_holding", "recheck_required": True},
+    }
+    evidence = build_entry_setup_evidence(
+        exact_payload={"current": {"price": 10000}}, exact_analysis=analysis,
+        recovery_analysis=_recovery_analysis(clean=True),
+    )
+    assert evidence["setup_state"] == "WAIT_CONFIRMATION"
+    assert "TRIGGER_CONFIRMATION_RECHECK" in evidence["recheck_reasons"]
+    assert validate_entry_setup_evidence(evidence) == []
+    decision = mechanistic_entry_policy_decision(evidence)
+    assert decision["action"] == "RECHECK"
+    assert decision["reason"] == "local_breakout_confirmation_required"
+    invalid = deepcopy(evidence)
+    invalid["setup_state"] = "INVALID"
+    assert mechanistic_entry_policy_decision(invalid)["action"] == "BLOCK"
+
+
 def _recovery_analysis(*, clean=False, recovery=False, source_mode="fresh_dual"):
     return {
         "schema": "anticipatory_reversal_analysis_v1",

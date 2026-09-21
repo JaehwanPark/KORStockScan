@@ -13,6 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 import time
+import copy
 import threading
 import json
 import math
@@ -166,6 +167,63 @@ from src.engine.ai_prompt_contracts import (
     decision_quality_holding_v2_4_live_score_system_prompt,
     decision_quality_entry_price_v2_5_live_krx_system_prompt,
 )
+
+
+def _final_entry_machine_inputs(ws_data, recent_ticks, candle_context, *, refresher,
+                                deadline_epoch=None):
+    """Freeze local inputs after slow preparation; never renew an attempt deadline."""
+    from src.engine.scalping.entry_candle_context import revalidate_entry_candle_snapshot
+
+    started = time.perf_counter()
+    ws, ticks, context = copy.deepcopy((ws_data, recent_ticks, candle_context))
+    fields = {}
+    error = None
+    try:
+        if deadline_epoch is not None and (
+            not math.isfinite(float(deadline_epoch)) or time.time() >= deadline_epoch
+        ):
+            raise ValueError("entry_machine_input_deadline_expired")
+        ws, ticks, context, refresh_fields = refresher(ws, ticks, context)
+        ws, ticks, context = copy.deepcopy((ws, ticks, context))
+        fields.update({key.replace("entry_ai_final_", "entry_machine_input_", 1): value
+                       for key, value in refresh_fields.items()})
+        if refresh_fields.get("entry_ai_final_snapshot_revalidation_error"):
+            raise ValueError(refresh_fields["entry_ai_final_snapshot_revalidation_error"])
+        old_epoch = (ws_data or {}).get("market_data_transport_epoch")
+        new_epoch = (ws or {}).get("market_data_transport_epoch")
+        if old_epoch != new_epoch:
+            raise ValueError("entry_machine_transport_epoch_changed")
+        as_of = time.time()
+        if deadline_epoch is not None and as_of >= deadline_epoch:
+            raise ValueError("entry_machine_input_deadline_expired")
+        context = revalidate_entry_candle_snapshot(context, ws, now_ts=as_of)
+        from src.trading.market.quote_consistency import ws_quote_receive_age_ms
+        canonical_age = (context.get("ai_market_snapshot_v1") or {}).get("sources", {}).get("bbo", {}).get("age_ms")
+        feature_age = ws_quote_receive_age_ms(ws, now_ts=as_of)
+        if canonical_age is not None and (
+            feature_age is None or abs(float(canonical_age) - feature_age) > 1.0
+        ):
+            raise ValueError("entry_machine_quote_clock_conflict")
+    except Exception as exc:
+        error = str(exc) or type(exc).__name__
+        as_of = time.time()
+        ws, ticks, context = copy.deepcopy((ws_data, recent_ticks, candle_context))
+        ws = ws if isinstance(ws, dict) else {}
+        context = context if isinstance(context, dict) else {}
+    fields.update(entry_machine_input_as_of=as_of,
+                  entry_machine_input_refresh_ms=round((time.perf_counter() - started) * 1000, 3))
+    if isinstance(context, dict):
+        snapshot = context.get("ai_market_snapshot_v1") or {}
+        snapshot = snapshot if isinstance(snapshot, dict) else {}
+        sources = snapshot.get("sources") or {}
+        sources = sources if isinstance(sources, dict) else {}
+        bbo = sources.get("bbo") or {}
+        bbo = bbo if isinstance(bbo, dict) else {}
+        fields["entry_machine_input_snapshot_at"] = snapshot.get("captured_at")
+        fields["entry_machine_input_bbo_received_at"] = bbo.get("observed_at")
+    if error:
+        fields["entry_machine_input_error"] = error
+    return ws, ticks, context, fields
 
 
 def _expected_semantic_contract_version(schema_name):
@@ -5971,6 +6029,7 @@ class GPTSniperEngine:
             "tick_aggressor_pressure_usable",
             "tick_aggressor_cached_orderbook_touch_count",
             "quote_age_ms",
+            "evaluation_as_of",
             "quote_age_source",
             "quote_stale",
             "same_price_buy_absorption",
@@ -6369,6 +6428,7 @@ class GPTSniperEngine:
             "spread_bp",
             "volume_ratio_pct",
             "quote_age_ms",
+            "evaluation_as_of",
             "quote_stale",
             "tick_latest_age_ms",
             "tick_context_quality",
@@ -6397,8 +6457,12 @@ class GPTSniperEngine:
             "features": features,
             "quote": {
                 "latency_state": ws.get("latency_state"),
-                "quote_stale": bool(ws.get("quote_stale", False)),
                 **quote,
+                # One feature computation owns both views; the WS boolean may
+                # describe an earlier consumer time, not this evaluation.
+                "quote_stale": features.get("quote_stale", True),
+                "quote_age_ms": features.get("quote_age_ms"),
+                "evaluation_as_of": feature_packet.get("evaluation_as_of"),
             },
             "orderbook_top1": {
                 "ask": (
@@ -8390,6 +8454,8 @@ class GPTSniperEngine:
         metadata_extra=None,
         candle_context=None,
         entry_economics_observer=None,
+        entry_input_refresher=None,
+        entry_input_deadline_epoch=None,
     ):
         from src.engine.scalping.entry_setup_scalping_rollout import PATH_ENV, SHA_ENV
 
@@ -8823,6 +8889,41 @@ class GPTSniperEngine:
             else {}
         )
 
+        machine_input_fields = {}
+        prepared_micro_source = None
+        micro_source_error = None
+        if is_scalping_entry_call and callable(entry_input_refresher):
+            # File-backed optional context can also be slow. Read it BEFORE
+            # the final WS freeze, not between that freeze and adjudication.
+            if machine_policy_trace_fields:
+                from src.trading.market.micro_confirmation import load_live_dynamic_confirmation_source
+                try:
+                    prepared_micro_source = load_live_dynamic_confirmation_source()
+                except Exception as exc:
+                    micro_source_error = "source_read_failed:" + type(exc).__name__
+            prepared_snapshot_id = pre_prompt_snapshot.get("snapshot_id")
+            valid_identity = lambda value: str(value or "").strip().lower() not in {"", "-", "none", "null", "unknown"}
+            prepared_attempt_id = next((source.get(key)
+                for key in ("evaluation_attempt_id", "entry_evaluation_attempt_id")
+                for source in (pre_prompt_snapshot, ws_data or {}, metadata_extra or {})
+                if valid_identity(source.get(key))), None)
+            if prepared_attempt_id is None and valid_identity(prepared_snapshot_id):
+                prepared_attempt_id = prepared_snapshot_id
+            preparation_ms = round((time.perf_counter() - analysis_started) * 1000, 3)
+            ws_data, recent_ticks, candle_context, machine_input_fields = _final_entry_machine_inputs(
+                ws_data, recent_ticks, candle_context, refresher=entry_input_refresher,
+                deadline_epoch=entry_input_deadline_epoch,
+            )
+            machine_input_fields["entry_machine_input_preparation_ms"] = preparation_ms
+            if micro_source_error:
+                machine_input_fields["entry_machine_input_error"] = micro_source_error
+            machine_input_fields["entry_machine_input_parent_snapshot_id"] = prepared_snapshot_id
+            if prepared_attempt_id is not None:
+                ws_data["evaluation_attempt_id"] = prepared_attempt_id
+            pre_prompt_snapshot = (candle_context or {}).get("ai_market_snapshot_v1") or {}
+            if not isinstance(pre_prompt_snapshot, dict):
+                pre_prompt_snapshot = {}  # Malformed storage must reach source-invalid, not crash.
+
         def _merge_runtime_fields(payload: dict[str, Any] | None) -> dict[str, Any]:
             merged = merge_holding_exit_matrix_result_fields(payload, matrix_runtime)
             if isinstance(entry_adm_runtime, dict):
@@ -8831,11 +8932,19 @@ class GPTSniperEngine:
             # Refresh diagnostic policy status even when reusing a cached decision.
             merged.update(fallback_policy_trace_fields)
             merged.update(economic_source_fields)
+            merged.update(machine_input_fields)
             for key, value in machine_policy_trace_fields.items():
                 merged.setdefault(key, value)
             return merged
 
         candle_preflight = ai_input_preflight(candle_context)
+        if machine_input_fields.get("entry_machine_input_error"):
+            candle_preflight = dict(candle_preflight)
+            reason = "entry_machine_input_refresh_failed"
+            candle_preflight.update(allowed=False, source_allowed=False, status="blocked",
+                                   primary_blocker=reason, primary_blocker_category="source_quality")
+            candle_preflight["blockers"] = list(candle_preflight.get("blockers") or []) + [reason]
+            candle_preflight["source_blockers"] = list(candle_preflight.get("source_blockers") or []) + [reason]
         feature_input_blocked = bool(
             candle_preflight.get("source_allowed") is True
             and isinstance(candle_preflight.get("feature_blockers"), list)
@@ -8849,7 +8958,8 @@ class GPTSniperEngine:
         )
         if (
             is_scalping_entry_call
-            and (runtime_preflight_required() or decision_quality_v2_7_selected)
+            and (runtime_preflight_required() or decision_quality_v2_7_selected
+                 or machine_input_fields.get("entry_machine_input_error"))
             and not bool(candle_preflight.get("allowed", False))
         ):
             machine_source_invalid_fields: dict[str, Any] = {}
@@ -8930,7 +9040,8 @@ class GPTSniperEngine:
                         entry_setup_live_policy.get("machine_bundle_sha256") or ""
                     ),
                     metadata=(
-                        dict(metadata_extra) if isinstance(metadata_extra, dict) else {}
+                        {**(dict(metadata_extra) if isinstance(metadata_extra, dict) else {}),
+                         **machine_input_fields}
                     ),
                 )
                 machine_source_invalid_fields.update(
@@ -9064,9 +9175,16 @@ class GPTSniperEngine:
             # provider lock and minimum-call-interval wait. AI screens only
             # machine-selected points and cannot promote a non-entry decision.
             try:
+                feature_started = time.perf_counter()
                 machine_feature_packet = extract_scalping_feature_packet(
-                    ws_data, recent_ticks, recent_candles
+                    ws_data, recent_ticks, recent_candles,
+                    **({"now": datetime.fromtimestamp(machine_input_fields["entry_machine_input_as_of"], timezone.utc)}
+                       if machine_input_fields else {}),
                 )
+                if machine_input_fields:
+                    machine_feature_packet["evaluation_as_of"] = machine_input_fields["entry_machine_input_as_of"]
+                    machine_input_fields["entry_machine_input_feature_build_ms"] = round(
+                        (time.perf_counter() - feature_started) * 1000, 3)
                 machine_hot_payload = self._format_entry_screen_hot_data(
                     ws_data,
                     recent_ticks,
@@ -9125,8 +9243,10 @@ class GPTSniperEngine:
 
                 # Observe before first child adoption too: collection must not
                 # require the policy whose evidence it is meant to produce.
-                cutoff_ms = int(time.time() * 1000)
-                snapshot, snapshot_status = load_live_dynamic_confirmation_source()
+                cutoff_ms = int(machine_input_fields.get("entry_machine_input_as_of", time.time()) * 1000)
+                snapshot, snapshot_status = (
+                    prepared_micro_source if prepared_micro_source is not None
+                    else load_live_dynamic_confirmation_source())
                 machine_exact["mechanistic_micro_window"] = (
                     evaluate_machine_entry_payload(
                         snapshot=snapshot, payload=machine_exact, cutoff_ms=cutoff_ms,
@@ -9164,15 +9284,16 @@ class GPTSniperEngine:
                     capture_machine_observation,
                 )
 
+                if entry_input_deadline_epoch is not None and time.time() >= entry_input_deadline_epoch:
+                    raise ValueError("entry_machine_input_deadline_expired")
                 machine_capture = capture_machine_observation(
                     exact_payload=machine_exact,
                     setup_evidence=machine_setup,
                     assessment=machine_assessment,
                     bundle_sha256=entry_setup_live_policy["machine_bundle_sha256"],
                     metadata=(
-                        dict(metadata_extra or {})
-                        if isinstance(metadata_extra, dict)
-                        else {}
+                        {**(dict(metadata_extra or {}) if isinstance(metadata_extra, dict) else {}),
+                         **machine_input_fields}
                     ),
                 )
                 if machine_assessment["action"] in {"ENTER_NOW", "BLOCK", "RECHECK"} and callable(entry_economics_observer):
@@ -9180,6 +9301,7 @@ class GPTSniperEngine:
                         economic_source_fields = entry_economics_observer(
                             exact_payload=machine_exact, assessment=machine_assessment,
                             capture=machine_capture, bundle_sha256=entry_setup_live_policy["machine_bundle_sha256"],
+                            **({"observation_ws_data": ws_data} if callable(entry_input_refresher) else {}),
                         ) or {}
                     except Exception as exc:
                         # Instrumentation can never alter machine/AI/order authority.

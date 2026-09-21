@@ -5985,6 +5985,8 @@ def build_exact_payload_analysis_v1(
         },
         "completed_structure": {
             "phase": structure_phase,
+            "structure_contract_version": structure.get("structure_contract_version", "legacy_session_high_v1"),
+            "local_breakout": structure.get("local_breakout"),
             "phase_policy_version": STRUCTURE_PHASE_POLICY_VERSION,
             "phase_stable_on_completed_bar": True,
             "phase_input_policy": (

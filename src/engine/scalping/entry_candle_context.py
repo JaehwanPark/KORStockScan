@@ -8,6 +8,8 @@ BUY authority, choose an order price/quantity, or bypass broker/safety guards.
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 import math
 import os
 import time
@@ -32,6 +34,7 @@ from src.trading.market import session_contract
 
 SCHEMA = "entry_candle_context_v1"
 SOURCE_SCHEMA = "session_candle_source_v1"
+LOCAL_BREAKOUT_VERSION = "entry_local_breakout_completed_v1"
 KST = ZoneInfo("Asia/Seoul")
 ADVERSE_REGIMES = {
     "failed_breakout",
@@ -636,7 +639,64 @@ def _range_pct(bars: list[dict[str, Any]], minutes: int) -> float | None:
     return round((max(highs) / min(lows) - 1.0) * 100.0, 4)
 
 
-def _structure(bars: list[dict[str, Any]]) -> dict[str, Any]:
+def _local_breakout(bars: list[dict[str, Any]]) -> dict[str, Any]:
+    """Freeze resistance BEFORE the first close breakout in the last three bars.
+
+    This is a completed-bar event, not a reconstructed intrabar trade time.
+    No new high after that breakout is allowed to move its resistance line.
+    """
+    result = {"version": LOCAL_BREAKOUT_VERSION, "status": "insufficient",
+              "bar_time_precision": "1m", "lookback_bars": 10, "event_window_bars": 3,
+              "episode_scope": "last_three_completed_bars_only"}
+    active = [bar for bar in bars if not bar.get("forming")]
+    if len(active) < 11:
+        return result
+    tail = active[-13:]
+    if any(not isinstance(b.get("dt"), datetime) for b in tail):
+        return result
+    if any(b["dt"].date() != tail[-1]["dt"].date() for b in tail) or any(
+        (right["dt"] - left["dt"]).total_seconds() != 60
+        for left, right in zip(tail, tail[1:])
+    ):
+        return result
+    if any(not (0 < b["l"] <= min(b["o"], b["c"]) <= max(b["o"], b["c"]) <= b["h"])
+           for b in tail):
+        return result
+    result["status"] = "no_confirmed_breakout"
+    for index in range(max(10, len(active) - 3), len(active)):
+        prior, event = active[index - 10:index], active[index]
+        resistance = max(b["h"] for b in prior)
+        if event["c"] <= resistance:
+            continue
+        support = min(b["l"] for b in prior)
+        after = active[index + 1:]
+        below = [b for b in after if b["c"] < resistance]
+        failed = any(b["c"] < support for b in after)
+        # The first return is unresolved; two consecutive completed closes
+        # below the SAME line corroborate failure without a session-high proxy.
+        failed = failed or any(a["c"] < resistance and b["c"] < resistance
+                               for a, b in zip(after, after[1:]))
+        source = [[b["dt"].isoformat(), b["o"], b["h"], b["l"], b["c"], b["v"]]
+                  for b in prior + [event]]
+        source_hash = hashlib.sha256(json.dumps(source, separators=(",", ":")).encode()).hexdigest()
+        result.update(
+            status="failed_breakout" if failed else (
+                "retest_pending" if below else "breakout_holding"),
+            resistance_price=resistance, support_price=support,
+            resistance_anchor_bar_at=next(b["dt"].isoformat() for b in reversed(prior)
+                                          if b["h"] == resistance),
+            resistance_window_start=prior[0]["dt"].isoformat(),
+            resistance_window_end=prior[-1]["dt"].isoformat(),
+            breakout_confirmed_bar_at=event["dt"].isoformat(),
+            available_at=(event["dt"].timestamp() + 60),
+            source_sha256=source_hash, episode_id=source_hash,
+            last_evaluated_bar_at=active[-1]["dt"].isoformat(),
+        )
+        break
+    return result
+
+
+def _structure(bars: list[dict[str, Any]], *, local_breakout: bool = False) -> dict[str, Any]:
     completed = [bar for bar in bars if not bar.get("forming")]
     active = completed
     highs = [bar["h"] for bar in active if bar["h"] > 0]
@@ -806,12 +866,25 @@ def _structure(bars: list[dict[str, Any]]) -> dict[str, Any]:
     else:
         regime = "range"
 
+    local = _local_breakout(bars) if local_breakout else None
+    legacy_regime = regime
+    if local is not None:
+        if local["status"] == "failed_breakout":
+            regime = "failed_breakout"
+        elif regime == "failed_breakout":
+            regime = "range"  # No automatic entry promotion; setup requires a recheck.
+        local["recheck_required"] = bool(
+            local["status"] == "retest_pending"
+            or (legacy_regime == "failed_breakout" and regime != "failed_breakout")
+        )
     alignment = (
         "adverse"
         if regime in ADVERSE_REGIMES
         else ("positive" if regime in {"breakout", "healthy_pullback"} else "neutral")
     )
     return {
+        **({"local_breakout": local, "structure_contract_version": LOCAL_BREAKOUT_VERSION}
+           if local is not None else {}),
         "returns_pct": returns,
         "slopes_pct_per_bar": slopes,
         "ranges_pct": ranges,
@@ -872,6 +945,7 @@ def build_session_candle_source(
     source_meta: dict[str, Any] | None = None,
     broker_route: str | None = None,
     allow_integrated_sor_execution_view: bool = False,
+    local_breakout: bool = False,
 ) -> dict[str, Any]:
     """Build a neutral venue/session candle bundle for bounded consumers."""
 
@@ -1154,7 +1228,12 @@ def build_session_candle_source(
             else "fresh_consistent"
         )
     )
-    structure = _structure(current_session)
+    structure = _structure(current_session, local_breakout=local_breakout)
+    local = structure.get("local_breakout")
+    if isinstance(local, dict) and local.get("source_sha256"):
+        local["episode_id"] = hashlib.sha256(json.dumps(
+            [request_code, venue_value, session_value, local["source_sha256"]],
+            separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
     completed_count = sum(not bar.get("forming") for bar in current_session)
     sample_mode = (
         "opening_flow_only"
@@ -1368,6 +1447,7 @@ def build_entry_candle_context(
         source_meta=source_meta,
         broker_route=planned_broker_route,
         allow_integrated_sor_execution_view=True,
+        local_breakout=True,
     )
     context.update(
         {

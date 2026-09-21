@@ -1143,6 +1143,8 @@ def build_entry_setup_evidence(
         key: completed_structure.get(key)
         for key in (
             "phase",
+            "structure_contract_version",
+            "local_breakout",
             "phase_policy_version",
             "phase_input_policy",
             "structural_edge",
@@ -1478,6 +1480,13 @@ def build_entry_setup_evidence(
         if micro["tape_support"] and liquidity_state == "supportive":
             recheck_reasons.append("SETUP_DISCOVERY_RECHECK")
 
+    if (_as_dict(completed_structure.get("local_breakout")).get("recheck_required") is True
+            and setup_state not in {"INVALID", "INSUFFICIENT"}):
+        setup_state = "WAIT_CONFIRMATION"
+        recheck_reasons.append("TRIGGER_CONFIRMATION_RECHECK")
+        contradicting_facts.append("trigger_confirmation_missing")
+        corroborated_risk_codes.append("CONFIRMATION_MISSING")
+
     if setup_state == "WAIT_CONFIRMATION" and tail_liquidity_fragility:
         recheck_reasons.append("TAIL_LIQUIDITY_RECHECK")
 
@@ -1509,6 +1518,8 @@ def build_entry_setup_evidence(
         "setup_family": setup_family,
         "setup_state": setup_state,
         "structure_phase": structure_phase,
+        "structure_contract_version": completed_structure.get("structure_contract_version", "legacy_session_high_v1"),
+        "local_breakout": completed_structure.get("local_breakout"),
         "structure_phase_policy_version": STRUCTURE_PHASE_POLICY_VERSION,
         "structure_phase_sha256": structure_phase_sha256,
         "structure_phase_bar_end": phase_source["decision_window_end"],
@@ -2269,6 +2280,8 @@ def mechanistic_entry_action_core(
     dispositions = {row["disposition"] for row in assessments}
     if state in {"INVALID", "INSUFFICIENT"} or "BLOCKING" in dispositions:
         action = "BLOCK"
+    elif _as_dict(setup.get("local_breakout")).get("recheck_required") is True:
+        action = "RECHECK"
     elif state == "READY" and dispositions <= {"COMPENSATED"}:
         action = "ENTER_NOW"
     else:
@@ -2283,6 +2296,8 @@ def mechanistic_entry_action_core(
         "LARGE_SELL_EXHAUSTION_RECHECK",
     )
     reason = next((value for value in reason_priority if value in reasons), "NONE")
+    if action == "RECHECK" and _as_dict(setup.get("local_breakout")).get("recheck_required") is True:
+        reason = "TRIGGER_CONFIRMATION_RECHECK"
     opportunity_priority = (
         "structural_edge_floor",
         "early_session_structural_edge_floor",
@@ -2401,6 +2416,9 @@ def mechanistic_entry_policy_decision(
     if core_action == "BLOCK":
         action = "BLOCK"
         reason = "mechanistic_hard_or_source_block"
+    elif _as_dict(setup.get("local_breakout")).get("recheck_required") is True:
+        action = "RECHECK"
+        reason = "local_breakout_confirmation_required"
     elif rule is not None and not group_trigger:
         action = "RECHECK"
         reason = micro_reason if rule["micro"] else "group_trigger_confirmation_missing"

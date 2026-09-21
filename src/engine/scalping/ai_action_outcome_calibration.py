@@ -352,6 +352,7 @@ def _main_mechanistic_input_fingerprint(
         Path(__file__),
         Path(__file__).with_name("ai_decision_quality.py"),
         Path(__file__).with_name("entry_setup_evidence.py"),
+        Path(__file__).with_name("entry_candle_context.py"),
         Path(__file__).with_name("compact_auxiliary_paired_replay.py"),
         Path(__file__).with_name("strategy_owner_replay.py"),
         Path(__file__).with_name("entry_split_order_plan.py"),
@@ -2554,6 +2555,33 @@ def _common_refinement_population(
     }
 
 
+def _current_structure_population(rows, contract):
+    """Isolate current producer semantics; retain the original case-table history."""
+    from src.engine.scalping.entry_candle_context import LOCAL_BREAKOUT_VERSION
+
+    counts = Counter(r["setup_evidence"].get("structure_contract_version")
+                     or "legacy_session_high_v1" for r in rows)
+    selected = [r for r in rows if r["setup_evidence"].get("structure_contract_version")
+                == LOCAL_BREAKOUT_VERSION]
+    excluded = dict(contract.get("row_exclusion_reason_counts") or {})
+    if len(selected) != len(rows):
+        excluded["structure_contract_version_mismatch"] = len(rows) - len(selected)
+    return selected, {
+        **contract,
+        "structure_contract_version": LOCAL_BREAKOUT_VERSION,
+        "structure_contract_input_counts": dict(counts),
+        "structure_contract_population_count": len(rows),
+        "row_exclusion_reason_counts": excluded,
+        "accepted_lane_counts": dict(Counter(r["refinement_source_lane"] for r in selected)),
+        "accepted_unique_trace_count": len(selected),
+        "accepted_source_dates": sorted({r["source_date"] for r in selected}),
+        "accepted_rows_sha256": _canonical_sha256([
+            {"decision_trace_id": r["decision_trace_id"], "fingerprint": r["fingerprint"]}
+            for r in selected]),
+        "operating_economic_enrichment_count": sum("operating_comparison_input" in r for r in selected),
+    }
+
+
 def _mechanistic_threshold_policy(policy, parent_policy=None, *, publication=False):
     threshold_policy = json.loads(json.dumps(
         parent_policy or MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1
@@ -3104,6 +3132,10 @@ def build_clean_baseline_mechanistic_refinement(
         for row in rows
     )
     path_boundary_contract_isolated = len(path_boundary_counts) <= 1
+    structure_contract_counts = Counter(
+        row["setup_evidence"].get("structure_contract_version") or "legacy_session_high_v1"
+        for row in rows
+    )
 
     candidates: list[dict[str, Any]] = []
     seen_selections: set[str] = set()
@@ -3321,6 +3353,7 @@ def build_clean_baseline_mechanistic_refinement(
     promotion_checks["path_boundary_contract_isolated"] = (
         path_boundary_contract_isolated
     )
+    promotion_checks["structure_contract_isolated"] = len(structure_contract_counts) <= 1
     promotion_checks["holdout_source_coverage_complete"] = (
         bool(holdout_dates) and holdout_dates_with_accepted_rows == holdout_dates
     )
@@ -3431,6 +3464,7 @@ def build_clean_baseline_mechanistic_refinement(
                 )
             },
             "path_boundary_contract_isolated": path_boundary_contract_isolated,
+            "structure_contract_counts": dict(structure_contract_counts),
         },
         "search_direction": "within_existing_bounds_incumbent_first",
         "calibration_source_dates": calibration_dates,
@@ -7648,7 +7682,9 @@ def _machine_full_evaluation_projection(
         "operating_blocker_owner": operating.get('owner'),
         "operating_closure_test": operating.get('closure_test'),
         "state": full_state,
-        "full_population_count": accepted_count,
+        "full_population_count": refinement_contract.get("structure_contract_population_count", accepted_count),
+        "current_structure_eligible_count": accepted_count,
+        "structure_contract_input_counts": refinement_contract.get("structure_contract_input_counts"),
         "population_unit": "exact_machine_attempt",
         "metric_role": "sim_probe_ev",
         "economic_basis": "terminal_path_proxy_unless_operating_proof_present",
@@ -7926,9 +7962,10 @@ def build_main_mechanistic_report(
             natural_conflicting_attempt_identity_count=case_table["conflicting_attempt_identity_count"],
             natural_conflicting_evaluation_keys=case_table["conflicting_evaluation_keys"],
             cohort=cohort, operating_projection=operating_projection)
+        population, contract = _current_structure_population(population, contract)
         contract["economic_kernel_sha256"] = _canonical_sha256({
             name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
-            for name in ("ai_action_outcome_calibration.py", "entry_setup_evidence.py",
+            for name in ("ai_action_outcome_calibration.py", "entry_setup_evidence.py", "entry_candle_context.py",
                          "compact_auxiliary_paired_replay.py", "strategy_owner_replay.py")})
         joint_population.extend(population)
         joint_parents[scope] = scope_parent

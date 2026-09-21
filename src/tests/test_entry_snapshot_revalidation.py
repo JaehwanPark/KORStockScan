@@ -68,6 +68,97 @@ def _context():
     )
 
 
+@pytest.mark.parametrize("delay", [3.1, 58.0])
+def test_final_machine_refresh_single_clock_and_frozen_old_source(monkeypatch, delay):
+    from src.engine import ai_engine_openai as engine_module
+    from src.engine.scalping_feature_packet import extract_scalping_feature_packet
+    from src.tests.test_ai_engine_openai_transport import _build_engine
+    now = NOW + delay
+    monkeypatch.setattr(engine_module.time, "time", lambda: now)
+    original = _ws(NOW - .1)
+    original["quote_stale"] = False
+    ws, ticks, context, fields = engine_module._final_entry_machine_inputs(
+        original, [], _context(), refresher=lambda w, t, c: (w, t, c, {}))
+    assert "entry_machine_input_error" not in fields
+    assert context["ai_market_snapshot_v1"]["sources"]["bbo"]["age_ms"] == pytest.approx((delay + .1) * 1000, abs=1)
+    features = extract_scalping_feature_packet(ws, ticks, [], now=datetime.fromtimestamp(now))
+    features["evaluation_as_of"] = now
+    payload = _build_engine()._build_entry_screen_hot_payload(ws, ticks, [], feature_packet=features)
+    assert payload["quote"]["quote_stale"] is True
+    assert payload["quote"]["quote_stale"] == payload["features"]["quote_stale"]
+    assert payload["quote"]["quote_age_ms"] == payload["features"]["quote_age_ms"]
+    assert payload["quote"]["evaluation_as_of"] == now
+    assert original["quote_stale"] is False
+
+
+@pytest.mark.parametrize("expired_before", [True, False])
+def test_final_machine_refresh_preserves_attempt_deadline(monkeypatch, expired_before):
+    from src.engine import ai_engine_openai as engine_module
+    now = [NOW + (10 if expired_before else 0)]
+    calls = []
+    monkeypatch.setattr(engine_module.time, "time", lambda: now[0])
+    def refresh(w, t, c):
+        calls.append(True)
+        now[0] += 10
+        return w, t, c, {}
+    *_, fields = engine_module._final_entry_machine_inputs(
+        _ws(NOW), [], _context(), refresher=refresh, deadline_epoch=NOW + 5)
+    assert fields["entry_machine_input_error"] == "entry_machine_input_deadline_expired"
+    assert len(calls) == (0 if expired_before else 1)
+
+
+def test_final_machine_refresh_does_not_clear_refresh_failure(monkeypatch):
+    from src.engine import ai_engine_openai as engine_module
+    monkeypatch.setattr(engine_module.time, "time", lambda: NOW)
+    *_, fields = engine_module._final_entry_machine_inputs(
+        _ws(NOW), [], _context(), refresher=lambda w, t, c: (
+            w, t, c, {"entry_ai_final_snapshot_revalidation_error": "route_changed"}))
+    assert fields["entry_machine_input_error"] == "route_changed"
+
+
+def test_final_machine_refresh_rejects_epoch_change(monkeypatch):
+    from src.engine import ai_engine_openai as engine_module
+    monkeypatch.setattr(engine_module.time, "time", lambda: NOW)
+    ws = {**_ws(NOW), "market_data_transport_epoch": 1}
+    *_, fields = engine_module._final_entry_machine_inputs(
+        ws, [], _context(), refresher=lambda w, t, c: (
+            {**w, "market_data_transport_epoch": 2}, t, c, {}))
+    assert fields["entry_machine_input_error"] == "entry_machine_transport_epoch_changed"
+
+
+def test_final_machine_refresh_uses_new_bbo_after_slow_preparation(monkeypatch):
+    from src.engine import ai_engine_openai as engine_module
+    monkeypatch.setattr(engine_module.time, "time", lambda: NOW + 58)
+    *_, context, fields = engine_module._final_entry_machine_inputs(
+        _ws(NOW), [], _context(), refresher=lambda w, t, c: (_ws(NOW + 57.9), [], c, {}))
+    assert "entry_machine_input_error" not in fields
+    assert context["ai_market_snapshot_v1"]["sources"]["bbo"]["age_ms"] == pytest.approx(100, abs=1)
+
+
+@pytest.mark.parametrize("malformed_snapshot", [False, True])
+def test_final_machine_refresh_failure_stops_engine_before_provider(monkeypatch, malformed_snapshot):
+    from src.engine import ai_engine_openai as engine_module
+    from src.tests.test_ai_engine_openai_transport import _build_engine, _allowed_entry_candle_context
+    engine = _build_engine()
+    monkeypatch.setattr(engine_module, "resolve_live_prompt_policy", lambda **kw: {})
+    monkeypatch.setattr(engine_module, "runtime_preflight_required", lambda: False)
+    monkeypatch.setattr(engine, "_call_openai_safe", lambda *a, **kw: pytest.fail("refresh failure must not call provider"))
+    def broken(*args):
+        if malformed_snapshot:
+            return (*args, {})
+        raise ValueError("test_clock_conflict")
+    context = _allowed_entry_candle_context()
+    if malformed_snapshot:
+        context["ai_market_snapshot_v1"] = "invalid_storage"
+    result = engine.analyze_target(
+        "test", _ws(NOW), [], [], prompt_profile="watching",
+        candle_context=context, entry_input_refresher=broken)
+    assert result["ai_result_source"] == "input_preflight_blocked"
+    assert result["entry_machine_input_error"]
+    if not malformed_snapshot:
+        assert result["entry_machine_input_error"] == "test_clock_conflict"
+
+
 def test_revalidation_keeps_bar_and_investor_clocks_without_io():
     context = _context()
     original = deepcopy(context)

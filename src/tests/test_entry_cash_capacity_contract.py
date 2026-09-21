@@ -113,6 +113,93 @@ def test_nonentry_capacity_reuses_exact_receipt_without_new_account_read(monkeyp
         handlers._reset_entry_capacity_receipts()
 
 
+@pytest.mark.parametrize("age,reused", [(-0.001, False), (2.001, True),
+                                      (4.999, True), (5.0, True), (5.001, False)])
+def test_nonentry_five_second_reuse_does_not_extend_entry_or_submit(monkeypatch, age, reused):
+    from datetime import datetime, timezone
+    handlers._reset_entry_capacity_receipts()
+    monkeypatch.setattr(handlers.time, "time", lambda: 1000.0)
+    monkeypatch.setattr(handlers, "_entry_capacity_receipt_key", lambda code, price: (code, price))
+    calls = []
+    monkeypatch.setattr(kiwoom_utils, "get_orderable_by_margin_kt00011",
+                        lambda *args, **kwargs: calls.append(kwargs) or {})
+    receipt = {
+        "return_code": 0, "cash_orderable_contract_status": "valid",
+        "capacity_observed_at": datetime.fromtimestamp(1000 - age, timezone.utc).isoformat(),
+        "capacity_source_sha256": "a" * 64, "requested_stock_code": "005930",
+        "requested_unit_price": 10000,
+    }
+    try:
+        read = handlers._read_entry_capacity_snapshot
+        handlers._ENTRY_CAPACITY_RECEIPTS[("005930", 10000)] = receipt
+        result = read("005930", 10000, source_only=True, reuse_only=True)
+        assert (result.get("capacity_reuse_status") == "exact_receipt_reused") is reused
+        if reused:
+            assert result["capacity_observed_at"] == receipt["capacity_observed_at"]
+            assert result["capacity_reuse_max_age_sec"] == 5.0
+        else:
+            assert result["error"] == "capacity_observation_cache_miss_nonentry"
+        assert not calls
+        assert not handlers._entry_capacity_receipt_valid(receipt, "005930", 10000, 1000)
+        read("005930", 10000, source_only=True)  # ENTER_NOW still requires <=2s.
+        assert calls == [{"unit_price": 10000, "source_only": True}]
+        handlers._ENTRY_CAPACITY_RECEIPTS[("005930", 10000)] = receipt
+        read("005930", 10000, reuse_only=True)  # Live sizing never reuses it.
+        assert calls[-1] == {"unit_price": 10000}
+        assert len(calls) == 2
+    finally:
+        handlers._reset_entry_capacity_receipts()
+
+
+@pytest.mark.parametrize("field,value", [
+    ("capacity_source_sha256", ""), ("return_code", 3),
+    ("cash_orderable_contract_status", "missing"),
+    ("requested_stock_code", "000660"), ("requested_unit_price", 10001),
+    ("capacity_observed_at", "1970-01-01T00:16:36"),
+])
+def test_nonentry_extended_age_still_requires_bound_proof(field, value):
+    from datetime import datetime, timezone
+    receipt = {"return_code": 0, "cash_orderable_contract_status": "valid",
+        "capacity_observed_at": datetime.fromtimestamp(996, timezone.utc).isoformat(),
+        "capacity_source_sha256": "a" * 64, "requested_stock_code": "005930",
+        "requested_unit_price": 10000}
+    assert not handlers._entry_capacity_receipt_valid(
+        {**receipt, field: value}, "005930", 10000, 1000, nonentry_observation=True)
+
+
+def test_nonentry_five_second_receipt_reaches_budget_with_original_clock(monkeypatch):
+    from datetime import datetime, timezone
+    handlers._reset_entry_capacity_receipts()
+    monkeypatch.setattr(handlers, "KIWOOM_TOKEN", "fake")
+    monkeypatch.setattr(handlers.time, "time", lambda: 1000.0)
+    monkeypatch.setattr(handlers.kiwoom_orders, "get_last_deposit_meta", lambda: {})
+    generation = ["account-inventory-1"]
+    monkeypatch.setattr(handlers, "_entry_capacity_receipt_key",
+                        lambda code, price: (generation[0], code, price))
+    monkeypatch.setattr(kiwoom_utils, "get_orderable_by_margin_kt00011",
+                        lambda *a, **kw: pytest.fail("Nonentry must not fetch"))
+    observed = datetime.fromtimestamp(996, timezone.utc).isoformat()
+    try:
+        handlers._ENTRY_CAPACITY_RECEIPTS[(generation[0], "005930", 10000)] = {
+            "return_code": 0, "cash_orderable_contract_status": "valid",
+            "capacity_observed_at": observed, "capacity_source_sha256": "a" * 64,
+            "requested_stock_code": "005930", "requested_unit_price": 10000,
+            "deposit": 10000, "cash_only_orderable_amount": 10000,
+            "cash_only_orderable_qty": 1,
+        }
+        resolve = handlers._resolve_scalp_cash_budget_context
+        budget = resolve("005930", 10000, 0, source_only=True, reuse_only=True)
+        assert budget["kt00011_error"] == ""
+        assert budget["cash_orderable_qty_cap"] == 1
+        assert budget["kt00011_capacity_observed_at"] == observed
+        assert budget["kt00011_capacity_reuse_max_age_sec"] == 5.0
+        generation[0] = "account-inventory-2"
+        assert resolve("005930", 10000, 0, source_only=True, reuse_only=True)[
+            "kt00011_error"] == "capacity_observation_cache_miss_nonentry"
+    finally:
+        handlers._reset_entry_capacity_receipts()
+
+
 def test_legacy_preparation_is_coalesced_bounded_and_scope_checked(monkeypatch):
     handlers._reset_entry_capacity_receipts()
     clock = [1000.0]

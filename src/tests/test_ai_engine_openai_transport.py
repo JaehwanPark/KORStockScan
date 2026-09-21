@@ -4018,8 +4018,9 @@ def test_machine_pass_keeps_recent_exit_reentry_guard():
 
 @pytest.mark.parametrize("ready", [False, True])
 @pytest.mark.parametrize("identity_mode", ["snapshot", "caller", "generated"])
+@pytest.mark.parametrize("final_refresh", [False, True])
 def test_machine_initial_policy_assesses_before_provider_cache_and_lock(
-    monkeypatch, ready, identity_mode
+    monkeypatch, ready, identity_mode, final_refresh
 ):
     from src.engine.scalping import mechanistic_entry_runtime_policy as initial_policy
     from src.engine.scalping.entry_setup_evidence import (
@@ -4029,6 +4030,7 @@ def test_machine_initial_policy_assesses_before_provider_cache_and_lock(
 
     engine = _build_engine()
     events = []
+    policy_calls = []
     live = {
         "enabled": True,
         "status": "active_bounded_krx_canary",
@@ -4046,7 +4048,7 @@ def test_machine_initial_policy_assesses_before_provider_cache_and_lock(
         ),
     }
     monkeypatch.setattr(
-        openai_module, "resolve_live_prompt_policy", lambda **kwargs: live
+        openai_module, "resolve_live_prompt_policy", lambda **kwargs: (policy_calls.append(True), live)[1]
     )
     monkeypatch.setattr(
         openai_module,
@@ -4121,6 +4123,9 @@ def test_machine_initial_policy_assesses_before_provider_cache_and_lock(
     attempt_ids = []
     def observer(**kwargs):
         observed.append(kwargs['assessment']['action'])
+        if final_refresh:
+            assert kwargs['observation_ws_data']['final_refresh_marker'] is True
+            assert kwargs['exact_payload']['current']['price'] == kwargs['observation_ws_data']['curr']
         assert kwargs['exact_payload']['entry_candle_context']['completed_bar_count'] == 1
         assert kwargs['exact_payload']['entry_candle_context']['multi_timeframe_ai_input_enabled'] is False
         attempt = kwargs['exact_payload']['evaluation_attempt_id']
@@ -4135,6 +4140,14 @@ def test_machine_initial_policy_assesses_before_provider_cache_and_lock(
     context = _allowed_entry_candle_context()
     context.setdefault('ai_market_snapshot_v1', {}).update(
         snapshot_id="-" if identity_mode == "generated" else "aims-machine-current", broker_route="SOR")
+    def refresh(ws, ticks, candle):
+        assert policy_calls
+        ws['final_refresh_marker'] = True
+        ws['curr'] = 12345
+        return ws, ticks, candle, {'entry_ai_final_ws_snapshot_refresh_applied': True}
+    if final_refresh:
+        from src.engine.scalping import entry_candle_context as candle_module
+        monkeypatch.setattr(candle_module, 'revalidate_entry_candle_snapshot', lambda c, w, **kw: c)
     result = engine.analyze_target(
         "test",
         ws_data,
@@ -4144,9 +4157,13 @@ def test_machine_initial_policy_assesses_before_provider_cache_and_lock(
         prompt_profile="watching",
         candle_context=context,
         entry_economics_observer=observer,
+        **({'entry_input_refresher': refresh} if final_refresh else {}),
     )
     assert observed == ['ENTER_NOW' if ready else 'RECHECK']
     assert result['entry_economic_source_status'] == 'recorded_source_only'
+    if final_refresh:
+        assert result['entry_machine_input_ws_snapshot_refresh_applied'] is True
+        assert 'final_refresh_marker' not in ws_data
     assert events == (["machine", "ai"] if ready else ["machine"]), result
     assert result["scanner_promotion_id"] == "SCANPROM-005930-machine"
     assert result["evaluation_attempt_id"] == attempt_ids[0]
