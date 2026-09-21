@@ -1830,18 +1830,16 @@ def freeze_entry_operating_context(handlers, stock, sizing_context, *, now_ts, c
     from src.engine.trade_profit import get_trade_cost_rate
     try:
         if handlers._is_any_simulated_position(stock, stock.get('strategy')):
-            return None
+            raise ValueError('unsupported_simulated_initial_position')
         budget = sizing_context.budget_base_krw * sizing_context.safety_ratio
         if sizing_context.absolute_budget_cap_krw > 0:
             budget = min(budget, sizing_context.absolute_budget_cap_krw)
         if not _finite(budget, positive=True):
-            return None
+            raise ValueError('initial_operating_budget_invalid')
         snapshot = capture._cached_policy(handlers, now_ts)
         from types import SimpleNamespace
-        from src.engine.sniper_execution_receipts import initial_scalp_preset_exit_fields
-        if not handlers.is_default_position_tag("SCALPING", stock.get("position_tag")):
-            return None
-        initial_exit = initial_scalp_preset_exit_fields(stock, rules=SimpleNamespace(**snapshot["rules"]))
+        from src.engine.sniper_execution_receipts import initial_main_entry_exit_fields
+        initial_exit = initial_main_entry_exit_fields(stock, rules=SimpleNamespace(**snapshot["rules"]))
         decision_source=stock.get("last_watching_ai_machine_primary_fields") or {}
         # Record the SAME existing listing owner used by holding routing. A
         # quote scope or SOR route never manufactures NXT eligibility.
@@ -1855,8 +1853,8 @@ def freeze_entry_operating_context(handlers, stock, sizing_context, *, now_ts, c
             nxt_listing_receipt=dict(value=nxt_enabled, owner=nxt_owner, stock_code=stock.get("code"),
                 frozen_at=datetime.fromtimestamp(now_ts, KST).isoformat()),
             broker_route=decision_source.get("ai_trace_broker_route"),
-            initial_fill_exit_contract_version="main_scalp_preset_initial_fill_v1",
-            initial_fill_exit_owner="sniper_execution_receipts.initial_scalp_preset_exit_fields",
+            initial_fill_exit_contract_version="main_role_initial_fill_v2",
+            initial_fill_exit_owner="sniper_execution_receipts.initial_main_entry_exit_fields",
             initial_fill_exit_state=initial_exit,
             initial_micro_estimator_state=capture.micro_state(handlers, stock.get('code', '')),
             frozen_at=datetime.fromtimestamp(now_ts, KST).isoformat(),
@@ -2119,10 +2117,14 @@ def replay_operating_entry_arm(seed, arm, depth_rows, *, executor=None, trade_ro
                 raise ValueError('frozen_nxt_listing_owner_receipt_invalid')
         if "initial_fill_exit_state" in context:
             from types import SimpleNamespace
-            from src.engine.sniper_execution_receipts import initial_scalp_preset_exit_fields
-            expected = initial_scalp_preset_exit_fields(stock, rules=SimpleNamespace(**context['policy_snapshot']['rules']))
-            if (context.get('initial_fill_exit_contract_version') != 'main_scalp_preset_initial_fill_v1'
-                or context.get('initial_fill_exit_owner') != 'sniper_execution_receipts.initial_scalp_preset_exit_fields'
+            from src.engine.sniper_execution_receipts import initial_main_entry_exit_fields, initial_scalp_preset_exit_fields
+            role_v2 = context.get('initial_fill_exit_contract_version') == 'main_role_initial_fill_v2'
+            expected = (initial_main_entry_exit_fields if role_v2 else initial_scalp_preset_exit_fields)(
+                stock, rules=SimpleNamespace(**context['policy_snapshot']['rules']))
+            expected_owner = 'sniper_execution_receipts.' + ('initial_main_entry_exit_fields'
+                if role_v2 else 'initial_scalp_preset_exit_fields')
+            if (context.get('initial_fill_exit_contract_version') not in {'main_role_initial_fill_v2','main_scalp_preset_initial_fill_v1'}
+                or context.get('initial_fill_exit_owner') != expected_owner
                 or context['initial_fill_exit_state'] != expected):
                 raise ValueError('frozen_initial_fill_exit_transition_invalid')
             stock.update(expected)

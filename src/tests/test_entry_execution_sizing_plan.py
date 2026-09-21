@@ -731,13 +731,28 @@ def test_before_ai_observation_is_not_a_submit_pass_and_keeps_frozen_seed():
 
 
 
+def test_main_initial_fill_projection_preserves_scanner_exit_and_rejects_other_owners():
+    from copy import deepcopy
+    from src.engine.sniper_execution_receipts import initial_main_entry_exit_fields
+    scanner = {'strategy': 'SCALPING', 'position_tag': 'SCANNER',
+               'exit_mode': 'original_scanner_exit', 'hard_stop_pct': -2.5}
+    before = deepcopy(scanner)
+    assert initial_main_entry_exit_fields(scanner) == {'position_tag': 'SCANNER'}
+    assert scanner == before
+    for stock in ({'strategy': 'SCALPING', 'position_tag': 'MANUAL'},
+                  {'strategy': 'KOSPI_ML', 'position_tag': 'SCANNER'}):
+        with pytest.raises(ValueError, match='unsupported_initial_main_entry_position_role'):
+            initial_main_entry_exit_fields(stock)
+
+
 @pytest.mark.parametrize('machine_action', ['ENTER_NOW', 'BLOCK', 'RECHECK'])
+@pytest.mark.parametrize('position_tag', [None, 'SCANNER'])
 @pytest.mark.parametrize('guard_allowed,broker_route,venue,session', [
     (True,'KRX','KRX','KRX_REGULAR'),(False,'SOR','KRX','KRX_REGULAR'),
     (True,'SOR','KRX','KRX_REGULAR'),(True,'SOR','NXT','NXT_PREMARKET'),
     (True,'SOR','KRX_NXT_INTEGRATED','KRX_NXT_AFTERMARKET'),
     (True,'SOR','NXT','NXT_REGULAR_OVERLAP'),(True,'SOR','NXT','NXT_AFTERMARKET')])
-def test_runtime_pre_ai_producer_freezes_owner_inputs_without_submit(monkeypatch, tmp_path, guard_allowed,broker_route,venue,session,machine_action):
+def test_runtime_pre_ai_producer_freezes_owner_inputs_without_submit(monkeypatch, tmp_path, guard_allowed,broker_route,venue,session,machine_action,position_tag):
     from copy import deepcopy
     from src.engine import kiwoom_sniper_v2 as runtime
     from types import SimpleNamespace
@@ -745,6 +760,13 @@ def test_runtime_pre_ai_producer_freezes_owner_inputs_without_submit(monkeypatch
     from src.engine.scalping import entry_split_order_plan as split
     from src.engine.scalping import strategy_owner_replay as replay
     from src.engine.scalping import avg_down_replay_capture as capture_owner
+    from src.engine.monitoring import machine_microstructure_attribution as micro
+    # The injected native loader must not compare concurrently growing live
+    # source generations. Keep the real generation validator on fixture paths.
+    monkeypatch.setattr(micro, 'OBSERVATION_ROOT', tmp_path / 'native_observations')
+    monkeypatch.setattr(micro, 'DEFAULT_SOURCE_EXCLUSION_MANIFEST', tmp_path / 'exclusions.json')
+    monkeypatch.setattr(micro, 'DEFAULT_CANARY_SNAPSHOT_PATH', tmp_path / 'canary.json')
+    monkeypatch.setattr(micro, 'CANARY_DAILY_SNAPSHOT_DIR', tmp_path / 'canary_daily')
     from src.engine.sniper_missed_entry_counterfactual import _load_entry_events, _price_ready_plan
     from src.tests.test_pipeline_event_logger import _reset_logger_state
     from src.utils import pipeline_event_logger as logger
@@ -795,7 +817,7 @@ def test_runtime_pre_ai_producer_freezes_owner_inputs_without_submit(monkeypatch
     policy_snapshot['environment']['KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ACTIVE_DATE'] = day
     policy_snapshot['files']={key.replace('2026-09-04',day):value for key,value in policy_snapshot['files'].items()}
     monkeypatch.setattr(capture_owner, '_cached_policy', lambda *a: policy_snapshot)
-    stock={'name':'fixture','id':1,'strategy':'SCALPING','source_signature':'scanner-confirmed','is_nxt':True,
+    stock={'name':'fixture','id':1,'strategy':'SCALPING','position_tag':position_tag,'source_signature':'scanner-confirmed','is_nxt':True,
         'scanner_promotion_id':'promotion-pre-ai','code':'005930',
         'entry_economic_watch_lifetime': {
             'owner':'kiwoom_sniper_v2._scanner_evaluation_lifetime_anchor/_scalping_watching_ttl_sec',
@@ -833,6 +855,11 @@ def test_runtime_pre_ai_producer_freezes_owner_inputs_without_submit(monkeypatch
         seed=json.loads(event.fields['entry_opportunity_replay_seed'])
         assert replay._entry_seed_valid(seed)
         assert seed['operating_contract']['budget_krw'] > 0
+        initial_exit = seed['operating_contract']['initial_fill_exit_state']
+        assert initial_exit['position_tag'] == (position_tag or 'SCALP_BASE')
+        if position_tag == 'SCANNER':
+            assert initial_exit == {'position_tag': 'SCANNER'}
+            assert seed['operating_contract']['initial_policy_state']['stock']['position_tag'] == 'SCANNER'
         capital = seed['operating_contract']['capital_source']
         assert capital['status'] == 'recorded_source_only'
         from src.engine.monitoring.submission_bottleneck_monitor import economic_evidence
@@ -931,6 +958,13 @@ def test_runtime_pre_ai_producer_freezes_owner_inputs_without_submit(monkeypatch
         assert computed['counts']['unique_retained']==1
         assert computed['rows'][0]['status']=='completed_source_only', computed['rows'][0]
         operating=next(iter(computed['rows'][0]['operating_arms'].values()))
+        if position_tag == 'SCANNER':
+            # This default-preset fixture has no SCANNER REST quote receipt.
+            # Valid source binding must not manufacture a terminal cash result.
+            assert operating['status'] == 'unsupported_scope'
+            assert 'bounded_rest_quote_request_or_cutoff_gap' in operating['blocker']
+            assert operating['net_pnl_krw'] is None
+            return
         assert operating['status']=='completed_source_only', operating['blocker']
         assert operating['net_pnl_krw']<0
         assert operating['stress_net_pnl_krw']<=operating['net_pnl_krw']

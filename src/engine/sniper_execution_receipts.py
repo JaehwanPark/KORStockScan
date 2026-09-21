@@ -9990,6 +9990,20 @@ def _submit_opening_rotation_profit_order(
     return True
 
 
+def initial_main_entry_exit_fields(target_stock, *, rules=None):
+    """Pure projection of the existing initial BUY receipt's main-role branch.
+
+    SCANNER keeps its watched exit state: the real receipt normalizes its tag
+    but does not enter the default-SCALPING preset branch. Never relabel it.
+    """
+    strategy = normalize_strategy(target_stock.get("strategy"))
+    tag = normalize_position_tag(strategy, target_stock.get("position_tag"))
+    if strategy != "SCALPING" or not (tag == "SCANNER" or is_default_position_tag(strategy, tag)):
+        raise ValueError("unsupported_initial_main_entry_position_role:" + tag)
+    return {"position_tag": tag, **(initial_scalp_preset_exit_fields(target_stock, rules=rules)
+        if is_default_position_tag(strategy, tag) else {})}
+
+
 def initial_scalp_preset_exit_fields(target_stock, *, rules=None):
     """Pure initial-fill state shared by the real receipt and frozen CF owner.
 
