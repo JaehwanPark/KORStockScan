@@ -5130,7 +5130,12 @@ def test_contradictory_complete_receipt_is_quarantined(tmp_path):
 
 
 # Actual-conditioned successor uses native writers/loaders, not subset authority.
-def test_actual_paired_carry_generates_next_trading_policy_and_freezes(tmp_path, monkeypatch):
+@pytest.mark.parametrize("publication", [None, "2026-09-17"])
+def test_actual_paired_carry_generates_next_trading_policy_and_freezes(tmp_path, monkeypatch, publication):
+    if publication:
+        monkeypatch.setenv("POSTCLOSE_POLICY_PUBLICATION_DATE", publication)
+    else:
+        monkeypatch.delenv("POSTCLOSE_POLICY_PUBLICATION_DATE", raising=False)
     from src.engine.monitoring import low_price_two_leg_tuning as tuner
     from src.trading.low_price_two_leg import policy_runtime as runtime
     target = "2026-09-17"
@@ -5145,6 +5150,9 @@ def test_actual_paired_carry_generates_next_trading_policy_and_freezes(tmp_path,
         paired_context_loader=lambda *args: pytest.fail("empty actuals must not replay"))
     candidate = tuner.build_candidate(report, candidate_dir=tmp_path / "candidates", samsung_candidate_dir=tmp_path / "samsung")
     assert candidate["schema"] == runtime.PAIRED_CANDIDATE_SCHEMA
+    if publication:
+        assert candidate["publication_date"] == publication
+        assert candidate["effective_date"] == "2026-09-18"
     assert candidate["policy_mutations"] == []
     assert candidate["effective_date"] == str(runtime.next_policy_date(date.fromisoformat(target), date.fromisoformat(candidate["publication_date"])))
     tuner.write_outputs(report, candidate, output_dir=tmp_path / "reports", candidate_dir=tmp_path / "candidates")

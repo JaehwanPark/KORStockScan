@@ -40,3 +40,5 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 ## 장후 복구 진행 근거
 
 - 9/21 계산의 9/22 장전 인계는 [원천·순서·영수증 복구 리뷰](../audit-reports/2026-09-21-postclose-source-order-repair-review.md)가 소유한다. 기계정책은 생성되었고 heartbeat와 주문 원천을 분리한 최종 closure 재검증을 진행한다. 자연 PREOPEN/PID 소비는 완료 후 생성되는 direct-family 작업으로 검증한다.
+
+- 장후 적용일 복구: 9/21 분석·발행 / 9/22 적용을 명시해 생산자·요약·체크리스트의 날짜를 검증한다. 자정 후 자동 생성된9/23 임시 인계는 최종 근거로 사용하지 않는다.

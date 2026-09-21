@@ -432,7 +432,8 @@ def test_overnight_publication_recovery_stops_before_preopen(tmp_path, monkeypat
             loop.publication_transaction(folder, effective_date=effective, files={'policy.json': {'revision': 2}}, expected_generation=initial['generation_sha256'])
 
 
-def test_failed_refresh_can_rebuild_after_unrelated_dependency_changed(tmp_path, monkeypatch):
+@pytest.mark.parametrize("terminal,exit_code", [("failed", 1), ("succeeded", 0)])
+def test_failed_refresh_can_rebuild_after_unrelated_dependency_changed(tmp_path, monkeypatch, terminal, exit_code):
     from src.engine.monitoring import research_closed_loop as loop
     from src.engine.automation import machine_research_closed_loop_refresh as refresh
     from src.engine.verify_threshold_cycle_postclose_chain import _sha
@@ -454,21 +455,21 @@ def test_failed_refresh_can_rebuild_after_unrelated_dependency_changed(tmp_path,
     path = tmp_path / 'machine_research_closed_loop' / f'machine_research_closed_loop_{day}.json'
     path.parent.mkdir()
     path.write_text(json.dumps(closure))
-    previous = {'status': 'failed', 'owner': 'machine', 'target_date': day, 'run_id': 'run', 'exit_code': 1, 'code_commit': 'a' * 40,
+    previous = {'status': terminal, 'owner': 'machine', 'target_date': day, 'run_id': 'run', 'exit_code': exit_code, 'code_commit': 'a' * 40,
         'upstream_widget': {'sha256': _sha(widget), 'sources': sources}}
     monkeypatch.setattr(refresh, 'validate_current_receipt', lambda *args: False)
     issues = ['widget:source_hash_invalid:widget_symbol_signal_policy_research']
-    assert mod._verified_failed_machine_refresh_retry(tmp_path, day, previous, issues)
+    assert mod._verified_machine_refresh_retry(tmp_path, day, previous, issues)
     (publication / 'policy.json').write_text('{"tampered": true}')
-    assert not mod._verified_failed_machine_refresh_retry(tmp_path, day, previous, issues)
+    assert not mod._verified_machine_refresh_retry(tmp_path, day, previous, issues)
     (publication / 'policy.json').write_text('{}')
     bad = dict(closure, receipt_sha256='f' * 64)
     path.write_text(json.dumps(bad))
-    assert not mod._verified_failed_machine_refresh_retry(tmp_path, day, previous, issues)
+    assert not mod._verified_machine_refresh_retry(tmp_path, day, previous, issues)
     path.write_text(json.dumps(closure))
     study.write_text('{"target_date":"2026-09-20"}')
-    assert not mod._verified_failed_machine_refresh_retry(tmp_path, day, previous, issues)
-    assert not mod._verified_failed_machine_refresh_retry(tmp_path, day, previous, ['widget:source_hash_invalid:widget_advisory_calibration'])
+    assert not mod._verified_machine_refresh_retry(tmp_path, day, previous, issues)
+    assert not mod._verified_machine_refresh_retry(tmp_path, day, previous, ['widget:source_hash_invalid:widget_advisory_calibration'])
 
 
 def test_widget_state_dependency_ignores_heartbeat_but_binds_order_facts(tmp_path):

@@ -497,18 +497,18 @@ def producer_receipt_issues(report_dir: Path, day: str, owner: str) -> list[str]
     return issues
 
 
-def _verified_failed_machine_refresh_retry(report_dir: Path, day: str, previous: dict, issues: list[str]) -> bool:
-    """Permit a repair attempt, never terminal success, after native reconstruction."""
+def _verified_machine_refresh_retry(report_dir: Path, day: str, previous: dict, issues: list[str]) -> bool:
+    """Permit rebuilding a completed attempt, never infer terminal success."""
     from src.engine.verify_threshold_cycle_postclose_chain import _sha
     from src.engine.automation.machine_research_closed_loop_refresh import validate_current_receipt
     allowed = {f"widget:source_hash_invalid:{label}" for label in (
         "widget_symbol_signal_policy_research", "widget_symbol_runtime_policy_apply")}
     widget_path = producer_receipt_path(report_dir, day, "widget")
     upstream = previous.get("upstream_widget") or {}
-    if (not issues or not set(issues) <= allowed or previous.get("status") != "failed"
+    if (not issues or not set(issues) <= allowed or previous.get("status") not in {"failed", "succeeded"}
         or previous.get("owner") != "machine" or previous.get("target_date") != day
         or not previous.get("run_id") or type(previous.get("exit_code")) is not int
-        or previous.get("exit_code") == 0
+        or (previous.get("exit_code") == 0) != (previous.get("status") == "succeeded")
         or not re.fullmatch(r"[0-9a-f]{40}", str(previous.get("code_commit") or ""))
         or upstream.get("sha256") != _sha(widget_path)
         or upstream.get("sources") != _load_json(widget_path).get("sources")):
@@ -551,7 +551,7 @@ def machine_input_issues(report_dir: Path, day: str) -> list[str]:
     """
     from src.engine.automation.postclose_recommendation_intake import _report_date
     issues = producer_receipt_issues(report_dir, day, "widget")
-    if issues and _verified_failed_machine_refresh_retry(
+    if issues and _verified_machine_refresh_retry(
         report_dir, day, _load_json(producer_receipt_path(report_dir, day, "machine")), issues
     ):
         issues = []
@@ -622,7 +622,7 @@ def _producer_main(argv=None) -> int:
             widget_path = producer_receipt_path(report_dir, day, "widget")
             if widget_path.exists():
                 widget_issues = producer_receipt_issues(report_dir, day, "widget")
-                if widget_issues and not _verified_failed_machine_refresh_retry(report_dir, day, value, widget_issues):
+                if widget_issues and not _verified_machine_refresh_retry(report_dir, day, value, widget_issues):
                     raise RuntimeError("machine_upstream_widget_terminal_invalid")
                 upstream_widget = dict(path=str(widget_path), sha256=_sha(widget_path),
                                        sources=_load_json(widget_path)["sources"])

@@ -234,3 +234,16 @@ def test_publication_rejects_changed_source_before_any_write(monkeypatch, tmp_pa
 
     assert report_path.read_text() == "previous-generation"
     assert not (tmp_path / "rising_missed_tp1_policy_2026-09-21.json").exists()
+
+
+def test_overnight_recovery_preserves_requested_publication_date(monkeypatch, tmp_path):
+    monkeypatch.setattr(mod, "OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(mod, "FEEDBACK_DIR", tmp_path / "feedback")
+    monkeypatch.setenv("POSTCLOSE_POLICY_PUBLICATION_DATE", "2026-09-21")
+    report = mod.build_report("2026-09-21", generated_at="2026-09-22T00:30:00+09:00")
+    result = mod.write_outputs(report, output_json=tmp_path / "report.json", output_md=tmp_path / "report.md")
+    assert result["policy"]["publication_date"] == "2026-09-21"
+    assert result["policy"]["effective_date"] == "2026-09-22"
+    monkeypatch.setenv("POSTCLOSE_POLICY_PUBLICATION_DATE", "2026-09-23")
+    with pytest.raises(ValueError, match="publication_date_invalid"):
+        mod.write_outputs(report, output_json=tmp_path / "report.json", output_md=tmp_path / "report.md")

@@ -90,3 +90,9 @@ Episode 복구는23:09:19에 공동 명단 검증 단계를 통과했으나 `low
 - machine 완료 prefix 재사용 사전검증은 실패했다. 유일한 오래된 의존성은 계속 운영 중인 widget 서비스의 `widget_signal_auto_trade_state.json`이었다. 그 외 코드/원천/발행 세대는 동일했다. 실패 검증을 건너뛰거나 완료 상태를 강제로 기록하지 않았다.
 - 기존 native outcome reader가 사용하는 분석일까지의 원본 주문 객체만 semantic dependency로 연결했다. heartbeat/감시목록/자정 rollover는 제외하지만 모든 원본 주문 속성·날짜·종목을 보존한다. 수집 중 주문 입력 변경은 실패한다. raw state 자체 hash도 outcome audit에 보존한다.
 - 주문 변경 시 invalidation, 날짜 rollover 및 heartbeat 불변성을 포함한 작업본92건 PASS. 실제 closure-only 재구축 뒤 해시가 일치하는 나머지 분석 결과만 재사용한다.
+
+### 적용일 고정 및 실제 9/22 인계 검증
+
+- 00:58 main terminal/기본 strict 검증은 성공했으나 9/22를 명시한 scoped 검증은 `runtime_summary_effective_date_mismatch`였다. low-price tuning 및 rising missed가 자정 이후 생성일9/22를 발행일로 사용하여9/23 후보를 만들고, summary가 날짜 최댓값을 선택했다.
+- 두 생산자에 명시적 publication date를 연결하고 source/generated 범위를 검증한다. 요약에도 명시적 prepared date 우선 및 실제 정책 날짜 포함 여부 검사를 추가했다. 검증124건 PASS. 과거 계산은 유지하고 low-price의 기존 `--refresh-receipts-only`, rising의 기존 writer로 날짜/영수증만 재발행한다.
+- 이전 성공 machine 회차도 source/발행 변경 시 같은 검증 경로로 재구축할 수 있도록 terminal 상태 검증을 확장했다. running/잘못된 exit code/불일치 원천은 계속 차단한다.

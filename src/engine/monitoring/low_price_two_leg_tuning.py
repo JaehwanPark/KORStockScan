@@ -2593,7 +2593,10 @@ def build_candidate(
         "forbidden_uses": METRIC_CONTRACT["forbidden_uses"],
     }
     if source_date >= date(2026, 9, 17):
-        publication = datetime.fromisoformat(report["generated_at_kst"]).astimezone(KST).date()
+        generated_day = datetime.fromisoformat(report["generated_at_kst"]).astimezone(KST).date()
+        publication = date.fromisoformat(os.environ.get("POSTCLOSE_POLICY_PUBLICATION_DATE") or str(generated_day))
+        if not source_date <= publication <= generated_day:
+            raise ValueError("episode_tuning_publication_date_invalid")
         candidate.update(schema=PAIRED_CANDIDATE_SCHEMA, publication_date=str(publication),
             effective_date=str(next_policy_date(source_date, publication)),
             evaluation_authority_contract=PAIRED_AUTHORITY_CONTRACT, paired_economic_search=search,

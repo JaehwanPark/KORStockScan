@@ -753,7 +753,12 @@ def _runtime_consumption_state(
             and not row.get("error") and row.get("effective_date")
         }
     )
-    apply_date = effective_dates[-1] if effective_dates else target_date
+    requested_effective = os.environ.get("POSTCLOSE_PREPARED_EFFECTIVE_DATE")
+    if requested_effective:
+        date.fromisoformat(requested_effective)
+        if effective_dates and requested_effective not in effective_dates:
+            raise ValueError("runtime_summary_prepared_effective_date_missing")
+    apply_date = requested_effective or (effective_dates[-1] if effective_dates else target_date)
     runtime_dir = DATA_DIR / "runtime" / "policy_bootstrap"
     manifest_path = runtime_dir / f"runtime_policy_bootstrap_{apply_date}.json"
     verification_path = runtime_dir / f"runtime_policy_bootstrap_verify_{apply_date}.json"

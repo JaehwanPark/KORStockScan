@@ -2,6 +2,8 @@ import hashlib
 import json
 from pathlib import Path
 
+import pytest
+
 from src.engine import runtime_approval_summary as mod
 
 
@@ -706,3 +708,16 @@ def test_machine_admission_selection_is_not_portfolio_edge(monkeypatch):
     assert row["actual_net_profit_improvement"] is None
     assert row["diagnostic_machine_selection"]["train"]["win_rate_pct"] == 60.
     assert row["diagnostic_machine_selection"]["holdout"]["selected_opportunity_count"] == 0
+
+
+def test_explicit_prepared_date_does_not_slide_to_later_sibling(monkeypatch, tmp_path):
+    _patch(monkeypatch, tmp_path)
+    monkeypatch.setenv("POSTCLOSE_PREPARED_EFFECTIVE_DATE", "2026-09-22")
+    sources = {str(i): dict(exists=True, target_date_matches=True, effective_date=day)
+               for i,day in enumerate(("2026-09-22", "2026-09-23"))}
+    _, _, receipt = mod._runtime_consumption_state("2026-09-21", sources)
+    assert receipt["apply_date"] == "2026-09-22"
+    assert receipt["effective_dates"] == ["2026-09-22", "2026-09-23"]
+    monkeypatch.setenv("POSTCLOSE_PREPARED_EFFECTIVE_DATE", "2026-09-24")
+    with pytest.raises(ValueError, match="prepared_effective_date_missing"):
+        mod._runtime_consumption_state("2026-09-21", sources)

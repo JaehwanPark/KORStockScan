@@ -444,6 +444,14 @@ def policy_paths(source_date: str, effective_date: str) -> tuple[Path, Path]:
     )
 
 
+def _publication_date(report: dict[str, Any]) -> date:
+    generated = date.fromisoformat(str(report["generated_at"])[:10])
+    publication = date.fromisoformat(os.environ.get("POSTCLOSE_POLICY_PUBLICATION_DATE") or str(generated))
+    if not date.fromisoformat(report["target_date"]) <= publication <= generated:
+        raise ValueError("rising_missed_publication_date_invalid")
+    return publication
+
+
 def _policy_receipt(report: dict[str, Any], effective_date: str) -> dict[str, Any]:
     evaluated = next(
         (
@@ -478,7 +486,7 @@ def _policy_receipt(report: dict[str, Any], effective_date: str) -> dict[str, An
         "report_type": "rising_missed_tp1_policy",
         "runtime_family": "rising_missed_tp1_selector",
         "source_date": report["target_date"],
-        "publication_date": report["generated_at"][:10],
+        "publication_date": _publication_date(report).isoformat(),
         "effective_date": effective_date,
         "status": "validated_edge" if selected else "incumbent_preserved",
         "decision": "publish_challenger" if selected else "hold_no_edge",
@@ -651,7 +659,7 @@ def write_outputs(
     )
 
     source_date = date.fromisoformat(str(report["target_date"]))
-    publication_date = date.fromisoformat(str(report["generated_at"])[:10])
+    publication_date = _publication_date(report)
     effective_date = effective_date or _next_trading_date(
         max(source_date, publication_date).isoformat()
     )
