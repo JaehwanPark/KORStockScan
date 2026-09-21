@@ -2824,6 +2824,103 @@ def _entry_context_ws_data(ws_data, stock):
     return enriched
 
 
+_ENTRY_CAPACITY_LOCK = threading.Lock()
+_ENTRY_CAPACITY_RECEIPTS: dict = {}
+_ENTRY_CAPACITY_INFLIGHT: dict = {}
+_ENTRY_CAPACITY_RETRY_AFTER: dict = {}
+
+
+def _reset_entry_capacity_receipts():
+    global _ENTRY_CAPACITY_LOCK, _ENTRY_CAPACITY_RECEIPTS
+    global _ENTRY_CAPACITY_INFLIGHT, _ENTRY_CAPACITY_RETRY_AFTER
+    _ENTRY_CAPACITY_LOCK = threading.Lock()
+    _ENTRY_CAPACITY_RECEIPTS = {}
+    _ENTRY_CAPACITY_INFLIGHT = {}
+    _ENTRY_CAPACITY_RETRY_AFTER = {}
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_entry_capacity_receipts)
+
+
+def _entry_capacity_receipt_key(code, price):
+    from src.trading.order.owner_custody_registry import broker_account_key
+    return (kiwoom_utils._market_data_cache_scope(KIWOOM_TOKEN),
+            hashlib.sha256(broker_account_key().encode()).hexdigest(),
+            str(code), int(price), _scale_in_budget_inventory_signature(),
+            hashlib.sha256(json.dumps(kiwoom_orders.get_last_deposit_meta(),
+                sort_keys=True, default=str).encode()).hexdigest())
+
+
+def _entry_capacity_receipt_valid(snapshot, code, price, now_ts):
+    if not isinstance(snapshot, dict) or snapshot.get("error"):
+        return False
+    try:
+        observed = datetime.fromisoformat(snapshot["capacity_observed_at"])
+        return bool(observed.tzinfo and 0 <= now_ts - observed.timestamp() <= 2.0
+            and snapshot.get("cash_orderable_contract_status") == "valid"
+            and snapshot.get("return_code") == 0
+            and snapshot.get("requested_stock_code") == str(code)
+            and snapshot.get("requested_unit_price") == int(price)
+            and re.fullmatch(r"[0-9a-f]{64}", str(snapshot.get("capacity_source_sha256") or "")))
+    except (ValueError, TypeError, KeyError):
+        return False
+
+
+def _read_entry_capacity_snapshot(code, price, *, source_only=False):
+    """Reuse successful exact receipts only for observation, never live sizing.
+
+    Runtime-required reads retain their original transport path. Observers
+    neither wait on an in-flight read nor adopt its future response. Account,
+    origin/token/day, exact price and inventory/custody generation bind reuse.
+    """
+    def fetch():
+        return kiwoom_utils.get_orderable_by_margin_kt00011(
+            KIWOOM_TOKEN, code, unit_price=price,
+            **({"source_only": True} if source_only else {}))
+    try:
+        key = _entry_capacity_receipt_key(code, price)
+    except Exception:
+        return {"error": "capacity_scope_unavailable"} if source_only else fetch()
+    started = time.time()
+    with _ENTRY_CAPACITY_LOCK:
+        if source_only:
+            if _ENTRY_CAPACITY_INFLIGHT.get(key):
+                return {"error": "capacity_source_inflight"}
+            cached = _ENTRY_CAPACITY_RECEIPTS.get(key)
+            if _entry_capacity_receipt_valid(cached, code, price, started):
+                return {**copy.deepcopy(cached), "capacity_reuse_status": "exact_receipt_reused"}
+            if started < _ENTRY_CAPACITY_RETRY_AFTER.get(key, 0):
+                return {"error": "capacity_source_retry_deferred"}
+        _ENTRY_CAPACITY_RECEIPTS.pop(key, None)
+        _ENTRY_CAPACITY_INFLIGHT[key] = _ENTRY_CAPACITY_INFLIGHT.get(key, 0) + 1
+    try:
+        snapshot = fetch()
+        try:
+            unchanged = key == _entry_capacity_receipt_key(code, price)
+        except Exception:
+            unchanged = False
+        if unchanged and _entry_capacity_receipt_valid(snapshot, code, price, time.time()):
+            with _ENTRY_CAPACITY_LOCK:
+                if len(_ENTRY_CAPACITY_RECEIPTS) >= 128:
+                    _ENTRY_CAPACITY_RECEIPTS.pop(next(iter(_ENTRY_CAPACITY_RECEIPTS)))
+                _ENTRY_CAPACITY_RECEIPTS[key] = copy.deepcopy(snapshot)
+            return {**snapshot, "capacity_reuse_status": "fresh_read"}
+        if source_only and not unchanged:
+            return {"error": "capacity_inventory_changed_during_read"}
+        return snapshot
+    finally:
+        with _ENTRY_CAPACITY_LOCK:
+            remaining = _ENTRY_CAPACITY_INFLIGHT[key] - 1
+            if remaining:
+                _ENTRY_CAPACITY_INFLIGHT[key] = remaining
+            else:
+                _ENTRY_CAPACITY_INFLIGHT.pop(key, None)
+            if len(_ENTRY_CAPACITY_RETRY_AFTER) >= 128:
+                _ENTRY_CAPACITY_RETRY_AFTER.pop(next(iter(_ENTRY_CAPACITY_RETRY_AFTER)))
+            _ENTRY_CAPACITY_RETRY_AFTER[key] = time.time() + 0.5
+
+
 def _resolve_scalp_cash_budget_context(code, unit_price, fallback_orderable_amount, *, source_only=False):
     fallback = max(0, _safe_int(fallback_orderable_amount, 0))
     deposit_meta = kiwoom_orders.get_last_deposit_meta()
@@ -2854,11 +2951,8 @@ def _resolve_scalp_cash_budget_context(code, unit_price, fallback_orderable_amou
         context["kt00011_error"] = "missing_code_price_or_token"
         return context
     try:
-        snapshot = kiwoom_utils.get_orderable_by_margin_kt00011(
-            KIWOOM_TOKEN,
-            code,
-            unit_price=_safe_int(unit_price, 0),
-            **({"source_only": True} if source_only else {}),
+        snapshot = _read_entry_capacity_snapshot(
+            code, _safe_int(unit_price, 0), source_only=source_only,
         )
     except Exception as exc:
         context["kt00011_error"] = str(exc)
@@ -2923,6 +3017,7 @@ def _resolve_scalp_cash_budget_context(code, unit_price, fallback_orderable_amou
         "capacity_observed_at",
         "capacity_source_sha256",
         "return_code",
+        "capacity_reuse_status",
     ):
         context[f"kt00011_{field}"] = snapshot.get(field, "not_reported")
     if snapshot.get("cash_orderable_contract_status") in {"missing", "invalid"}:
@@ -11831,6 +11926,7 @@ def _observe_entry_economics_before_ai(stock, code, ws_data, *, exact_payload,
             raise ValueError("exact_reference_price_missing")
         budget = _resolve_scalp_cash_budget_context(code, current, 0, source_only=True)
         if budget.get("kt00011_error") or budget.get("cash_orderable_qty_cap") is None:
+            source["entry_economic_capacity_blocker"] = budget.get("kt00011_error") or "cash_quantity_missing"
             raise ValueError("exact_broker_capacity_missing")
         budget = _apply_general_entry_margin_budget_authority(budget, unit_price=current)
         margin = bool(budget.get("general_entry_margin_one_share_authorized"))
@@ -11865,7 +11961,7 @@ def _observe_entry_economics_before_ai(stock, code, ws_data, *, exact_payload,
         if not orders:
             raise ValueError("owner_price_or_final_sizing_missing")
         operating = freeze_entry_operating_context(sys.modules[__name__], snapshot, context,
-            now_ts=time.time(), capacity_receipt=budget)
+            now_ts=time.time(), capacity_receipt=budget, strict=True)
         if not operating:
             raise ValueError("frozen_operating_contract_missing")
         orders, split = apply_entry_split_order_policy(orders, stock=snapshot,

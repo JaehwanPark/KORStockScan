@@ -11652,6 +11652,14 @@ def _start_post_sell_bbo_observer_worker() -> threading.Thread:
 
     def _worker() -> None:
         while not stop_event.wait(1.0):
+            # Source-only policy preparation shares the existing detached
+            # cadence, never the entry/submit thread or retired capture loop.
+            from src.engine.scalping.avg_down_replay_capture import (
+                maintain_main_entry_policy_cache,
+            )
+            run_sniper.entry_economic_policy_cache_receipt = (
+                maintain_main_entry_policy_cache(sniper_state_handlers, now_ts=time.time())
+            )
             try:
                 result = (
                     sniper_state_handlers.observe_post_sell_executable_bbo_horizons(

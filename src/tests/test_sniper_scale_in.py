@@ -16656,6 +16656,104 @@ def test_dynamic_scale_in_qty_uses_deposit_budget_with_cash_orderable_qty_cap(
     assert blocked["qty_reason"] == "position_cap_or_budget"
 
 
+def test_entry_capacity_source_reuses_exact_receipt_but_normal_submit_reads_fresh(monkeypatch):
+    from datetime import datetime, timezone
+    state_handlers._reset_entry_capacity_receipts()
+    clock = [1000.0]
+    state = ["inventory-1"]
+    calls = []
+    monkeypatch.setattr(state_handlers.time, "time", lambda: clock[0])
+    monkeypatch.setattr(state_handlers, "_entry_capacity_receipt_key",
+        lambda code, price: (state[0], code, price))
+    def fetch(token, code, unit_price=None, **kwargs):
+        calls.append(kwargs)
+        return {"return_code": 0, "cash_orderable_contract_status": "valid",
+            "capacity_observed_at": datetime.fromtimestamp(clock[0], timezone.utc).isoformat(),
+            "capacity_source_sha256": "a" * 64, "requested_stock_code": code,
+            "requested_unit_price": unit_price, "raw": {"value": 1}}
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_orderable_by_margin_kt00011", fetch)
+    read = state_handlers._read_entry_capacity_snapshot
+    read("005930", 10000)
+    reused = read("005930", 10000, source_only=True)
+    assert reused["capacity_reuse_status"] == "exact_receipt_reused"
+    assert len(calls) == 1
+    reused["raw"]["value"] = 99
+    assert read("005930", 10000, source_only=True)["raw"]["value"] == 1
+    read("005930", 10000)
+    assert calls == [{}, {}]  # Order-path requests are neither cached nor deferred.
+    read("005930", 10001, source_only=True)
+    state[0] = "inventory-2"
+    read("005930", 10000, source_only=True)
+    clock[0] += 2.01
+    read("005930", 10000, source_only=True)
+    assert len(calls) == 5
+    assert calls[-3:] == [{"source_only": True}] * 3
+    state_handlers._reset_entry_capacity_receipts()
+
+
+def test_entry_capacity_source_collapses_inflight_and_rejects_state_change(monkeypatch):
+    state_handlers._reset_entry_capacity_receipts()
+    state = ["inventory-1"]
+    monkeypatch.setattr(state_handlers, "_entry_capacity_receipt_key", lambda *a: state[0])
+    read = state_handlers._read_entry_capacity_snapshot
+    def fetch(*args, **kwargs):
+        assert read("005930", 10000, source_only=True)["error"] == "capacity_source_inflight"
+        state[0] = "inventory-2"
+        return {"error": "fixture_deferred"}
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_orderable_by_margin_kt00011", fetch)
+    assert read("005930", 10000, source_only=True)["error"] == "capacity_inventory_changed_during_read"
+    state[0] = "inventory-1"
+    assert read("005930", 10000, source_only=True)["error"] == "capacity_source_retry_deferred"
+    assert not state_handlers._ENTRY_CAPACITY_RECEIPTS
+    state_handlers._reset_entry_capacity_receipts()
+
+
+def test_entry_capacity_scope_includes_account_origin_token_date_price_and_inventory(monkeypatch):
+    from src.trading.order import owner_custody_registry as custody
+    scope = [("token-hash-1", "origin-1", "2026-09-21")]
+    account = ["account-1"]
+    inventory = ["state-1"]
+    deposit = [{"raw_amount": 10000}]
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "_market_data_cache_scope", lambda *a: scope[0])
+    monkeypatch.setattr(custody, "broker_account_key", lambda: account[0])
+    monkeypatch.setattr(state_handlers, "_scale_in_budget_inventory_signature", lambda: inventory[0])
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_last_deposit_meta", lambda: deposit[0])
+    key = state_handlers._entry_capacity_receipt_key("005930", 10000)
+    for next_scope in (("token-hash-2", "origin-1", "2026-09-21"),
+                       ("token-hash-1", "origin-2", "2026-09-21"),
+                       ("token-hash-1", "origin-1", "2026-09-22")):
+        scope[0] = next_scope
+        assert state_handlers._entry_capacity_receipt_key("005930", 10000) != key
+    scope[0] = ("token-hash-1", "origin-1", "2026-09-21")
+    account[0] = "account-2"
+    assert state_handlers._entry_capacity_receipt_key("005930", 10000) != key
+    account[0] = "account-1"
+    inventory[0] = "state-2"
+    assert state_handlers._entry_capacity_receipt_key("005930", 10000) != key
+    inventory[0] = "state-1"
+    assert state_handlers._entry_capacity_receipt_key("005930", 10001) != key
+    assert state_handlers._entry_capacity_receipt_key("000660", 10000) != key
+    deposit[0] = {"raw_amount": 9000}
+    assert state_handlers._entry_capacity_receipt_key("005930", 10000) != key
+
+
+def test_entry_capacity_receipt_rejects_stale_future_and_unbound_proof():
+    from datetime import datetime, timezone
+    valid = {"return_code": 0, "cash_orderable_contract_status": "valid",
+        "capacity_observed_at": datetime.fromtimestamp(1000, timezone.utc).isoformat(),
+        "capacity_source_sha256": "a" * 64, "requested_stock_code": "005930",
+        "requested_unit_price": 10000}
+    check = state_handlers._entry_capacity_receipt_valid
+    assert check(valid, "005930", 10000, 1001)
+    assert not check(valid, "005930", 10000, 999)
+    assert not check(valid, "005930", 10000, 1002.01)
+    for field, value in (("capacity_observed_at", "1970-01-01T00:16:40"),
+                         ("capacity_source_sha256", ""), ("return_code", 3),
+                         ("cash_orderable_contract_status", "missing"),
+                         ("requested_stock_code", "000660"), ("requested_unit_price", 10001)):
+        assert not check({**valid, field: value}, "005930", 10000, 1001)
+
+
 def test_resolve_scalp_cash_budget_context_prefers_kt00011_deposit_with_cash_qty_guard(
     monkeypatch,
 ):

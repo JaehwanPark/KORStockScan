@@ -1,5 +1,16 @@
 # 2026-09-21 preflight / submission bottleneck repair
 
+## Authorized economic-source follow-up: reference gate
+
+User approval: repair policy-cache supply and bounded capacity reuse, deploy and gracefully restart; include the already-tested noisy URL-diagnostic removal. Preserve request limits, source-only priority/timeouts, normal pre-submit verification and independent widget changes.
+
+Official reference checked before implementation at 2026-09-21 10:03–10:06 KST: upstream `Kiwoom-Securities/Kiwoom-REST-API` main `953e5dbff123f437ab4d11a78a95191a685eb51f`; inspected `kiwoom/specs.py`, complete packaged `kiwoom/_data/kiwoom_api_spec.json` kt00011 entry, relevant `kiwoom/core/client.py` headers/errors/continuation, and PRD/MOCK kt00011 Postman entries. `kiwoom_docs` is absent in that tree. Packaged spec defines POST `/api/dostk/acnt`, `api-id=kt00011`, bearer auth, `stk_cd`, optional KRW `uv`, quantity in shares and signed/padded currency fields; continuation and nonzero return-code failure remain unchanged. Postman URL query presentation differs from the packaged body/example; no request envelope, parser, authentication or continuation is changed by this follow-up. Reuse is a local source-only consumer contract, not official permission to use old capacity for orders.
+
+- Existing detached main observer prepares and validates the actual policy snapshot; dependency changes refresh it, future/expired snapshots fail closed, and preparation/freezing errors retain their cause. Retired AVG_DOWN capture is not started.
+- Successful capacity receipts may be reused only by source observations within two seconds, bound to account, origin/token/date, symbol, exact price, inventory/order/custody generation and last deposit receipt. Normal execution reads remain fresh. In-flight duplicates fail explicitly without waiting for future evidence; repeated failed source reads have a bounded half-second per-key retry deferral. Limits, source-only class, zero rate-slot wait and transport timeout are unchanged.
+- URL lookup success banners are removed, including repeated cache-scope lookups; configuration-error diagnostics remain. The sudden amplification began with per-lookup market-data cache scoping in `819b17883d2b192af55a0948886718eec6b19d29` (2026-09-17 13:55:06 KST), not a broker reconnection loop.
+- Self-review covered real policy supply/read dependencies, exact receipt/time binding, concurrent reads, fork reset and live-order bypass of reuse. Targeted integration: 1,279 passed; additional capacity proof checks: four passed. Compile/diff and print-only document validation are required before deployment. Natural acceptance remains separate until the new PID produces matching capital/policy/operating-plan evidence; old failed attempts are not rewritten.
+
 Scope: user-authorized defect repair, immutable deployment and graceful main-bot restart. Existing dirty widget/process-health changes are excluded. No threshold, provider, sizing, custody or source-freshness guard changes.
 
 ## Cause and repair

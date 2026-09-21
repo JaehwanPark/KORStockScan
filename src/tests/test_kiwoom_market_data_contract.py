@@ -6,7 +6,7 @@ from src.engine import sniper_strength_shadow_feedback
 from src.utils import kiwoom_utils
 
 
-def test_base_url_diagnostic_preserves_json_stdout(tmp_path, monkeypatch, capsys):
+def test_base_url_success_is_silent_and_preserves_json_stdout(tmp_path, monkeypatch, capsys):
     import json
 
     config_path = tmp_path / "config.json"
@@ -15,7 +15,42 @@ def test_base_url_diagnostic_preserves_json_stdout(tmp_path, monkeypatch, capsys
     print(json.dumps({"base_url": kiwoom_utils.get_kiwoom_base_url()}))
     captured = capsys.readouterr()
     assert json.loads(captured.out) == {"base_url": "https://example.test"}
-    assert "https://example.test" in captured.err
+    assert captured.err == ""
+
+
+def test_market_cache_scope_repeated_url_resolution_is_silent(
+    tmp_path, monkeypatch, capsys
+):
+    config_path = tmp_path / "config.json"
+    monkeypatch.setattr(kiwoom_utils, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(kiwoom_utils, "resolve_kiwoom_request_token", lambda token: token)
+    config_path.write_text('{"KIWOOM_BASE_URL":"https://example.test"}')
+    scopes = [kiwoom_utils._market_data_cache_scope("fixture-token") for _ in range(8)]
+    assert all(scope == scopes[0] for scope in scopes)
+    assert scopes[0][1] == "https://example.test"
+    assert scopes[0][0] != "fixture-token"
+    # Silence must not freeze the origin or allow cross-origin cache reuse.
+    config_path.write_text('{"KIWOOM_BASE_URL":"https://mock.test"}')
+    changed = kiwoom_utils._market_data_cache_scope("fixture-token")
+    assert changed[1] == "https://mock.test"
+    assert changed != scopes[0]
+    captured = capsys.readouterr()
+    assert captured.out == captured.err == ""
+
+
+def test_base_url_dev_file_and_default_url_remain_silent(
+    tmp_path, monkeypatch, capsys
+):
+    config_path = tmp_path / "missing.json"
+    dev_path = tmp_path / "config_dev.json"
+    monkeypatch.setattr(kiwoom_utils, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(kiwoom_utils, "DEV_PATH", dev_path)
+    dev_path.write_text('{"KIWOOM_BASE_URL":"https://mock.test"}')
+    assert kiwoom_utils.get_kiwoom_base_url() == "https://mock.test"
+    dev_path.write_text('{}')
+    assert kiwoom_utils.get_kiwoom_base_url() == "https://api.kiwoom.com"
+    captured = capsys.readouterr()
+    assert captured.out == captured.err == ""
 
 
 def test_base_url_failure_diagnostic_preserves_json_stdout(

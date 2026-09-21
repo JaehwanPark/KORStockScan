@@ -1824,7 +1824,7 @@ def freeze_entry_capital_source(capacity, sizing_context, *, now_ts):
     return {**value, 'sha256': owner.digest(value)}
 
 
-def freeze_entry_operating_context(handlers, stock, sizing_context, *, now_ts, capacity_receipt=None):
+def freeze_entry_operating_context(handlers, stock, sizing_context, *, now_ts, capacity_receipt=None, strict=False):
     from src.engine.scalping import avg_down_replay_capture as capture
     from src.engine.lifecycle.avg_down_policy_replay import snapshot_version
     from src.engine.trade_profit import get_trade_cost_rate
@@ -1872,7 +1872,9 @@ def freeze_entry_operating_context(handlers, stock, sizing_context, *, now_ts, c
             value['capital_source'] = freeze_entry_capital_source(
                 capacity_receipt, sizing_context, now_ts=now_ts)
         return {**value, 'sha256': owner.digest(value)}
-    except (ValueError, TypeError, AttributeError, KeyError):
+    except (ValueError, TypeError, AttributeError, KeyError) as exc:
+        if strict:
+            raise ValueError(f"frozen_operating_contract:{type(exc).__name__}:{exc}") from exc
         return None
 
 

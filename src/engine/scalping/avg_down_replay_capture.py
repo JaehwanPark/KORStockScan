@@ -244,8 +244,13 @@ def micro_state(handlers, code: str) -> dict:
 def warm_policy_cache(handlers, *, now_ts: float) -> None:
     """Compression/large policy reads belong to the observation thread, not BUY latency."""
     with _LOCK:
-        if now_ts - _POLICY_CACHE.get("warmed_at", 0) < 30:
+        recently_warmed = 0 <= now_ts - _POLICY_CACHE.get("warmed_at", 0) < 30
+    if recently_warmed:
+        try:
+            _cached_policy(handlers, now_ts)
             return
+        except (ValueError, TypeError, AttributeError, KeyError, OSError):
+            pass  # Refresh changed dependencies; never prolong a stale receipt.
     snapshot = policy_snapshot(handlers, now_ts)
     with _LOCK:
         _POLICY_CACHE.update(
@@ -255,12 +260,23 @@ def warm_policy_cache(handlers, *, now_ts: float) -> None:
         )
 
 
+def maintain_main_entry_policy_cache(handlers, *, now_ts: float) -> dict:
+    """Existing observer cadence owns preparation; no retired capture is enabled."""
+    try:
+        warm_policy_cache(handlers, now_ts=now_ts)
+        _cached_policy(handlers, now_ts)
+        return {"status": "ready", "checked_at": now_ts}
+    except Exception as exc:
+        return {"status": "source_gap", "checked_at": now_ts,
+                "blocker": f"{type(exc).__name__}:{exc}"}
+
+
 def _cached_policy(handlers, now_ts):
     with _LOCK:
         cache = dict(_POLICY_CACHE)
     if (
         not cache.get("snapshot")
-        or now_ts - cache.get("warmed_at", 0) > 60
+        or not 0 <= now_ts - cache.get("warmed_at", 0) <= 60
         or cache.get("rules_identity") != id(handlers.TRADING_RULES)
     ):
         raise ValueError("policy_cache_not_ready")

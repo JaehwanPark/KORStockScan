@@ -35,6 +35,13 @@ def _assert_danger_hard_safety_block(result, *, danger_reasons=None):
 
 
 def test_post_sell_bbo_observer_runs_detached_from_trading_loop(monkeypatch):
+    from src.engine.scalping import avg_down_replay_capture as capture
+    monkeypatch.setattr(capture, "_POLICY_CACHE", {})
+    rules = sniper_runtime.sniper_state_handlers.TRADING_RULES
+    monkeypatch.setattr(capture, "policy_snapshot", lambda handlers, now_ts: {
+        "rules": capture._json_value(vars(rules)), "environment": capture.policy_environment(),
+        "files": {}, "matrix_selection": {},
+    })
     calls = []
     monkeypatch.setattr(
         sniper_runtime.sniper_state_handlers,
@@ -54,6 +61,8 @@ def test_post_sell_bbo_observer_runs_detached_from_trading_loop(monkeypatch):
     assert not thread.is_alive()
     assert sniper_runtime.run_sniper.post_sell_bbo_observer_failure_count == 0
     assert sniper_runtime.run_sniper.post_sell_bbo_observer_last_success_epoch > 0.0
+    assert sniper_runtime.run_sniper.entry_economic_policy_cache_receipt["status"] == "ready"
+    assert capture._cached_policy(sniper_runtime.sniper_state_handlers, time.time())["rules"]
 
 
 def test_post_sell_bbo_observer_rate_limits_repeated_failures(monkeypatch):
@@ -87,6 +96,39 @@ def test_post_sell_bbo_observer_rate_limits_repeated_failures(monkeypatch):
     assert len(logs) == 1
     assert "failure_count=1" in logs[0]
     assert not thread.is_alive()
+
+
+def test_main_entry_policy_supplier_refreshes_real_snapshot_and_keeps_failure_reason(monkeypatch, tmp_path):
+    from src.engine.scalping import avg_down_replay_capture as capture
+    from src.engine.scalping import strategy_owner_replay as replay
+    policy_file = tmp_path / "policy.json"
+    policy_file.write_text('{"version":1}')
+    handlers = SimpleNamespace(TRADING_RULES=SimpleNamespace(MAIN_POLICY_FILE=str(policy_file)),
+        _is_any_simulated_position=lambda *a: False)
+    monkeypatch.setattr(capture, "DATA_DIR", tmp_path / "data")
+    monkeypatch.setattr(capture, "_POLICY_CACHE", {})
+    monkeypatch.setattr(capture, "_IMPLEMENTATION", {})
+    monkeypatch.setattr(capture, "loaded_code_identity", lambda *a: {})
+    sizing = SimpleNamespace(budget_base_krw=10000, safety_ratio=0.95, absolute_budget_cap_krw=0)
+    import pytest
+    with pytest.raises(ValueError, match="policy_cache_not_ready"):
+        replay.freeze_entry_operating_context(handlers, {}, sizing, now_ts=100, strict=True)
+    assert capture.maintain_main_entry_policy_cache(handlers, now_ts=100)["status"] == "ready"
+    first = capture._cached_policy(handlers, 100)
+    assert str(policy_file) in first["files"]
+    policy_file.write_text('{"version":222}')
+    with pytest.raises(ValueError, match="policy_file_changed_since_snapshot"):
+        capture._cached_policy(handlers, 101)
+    assert capture.maintain_main_entry_policy_cache(handlers, now_ts=101)["status"] == "ready"
+    assert capture._cached_policy(handlers, 101)["files"] != first["files"]
+    with pytest.raises(ValueError, match="policy_cache_not_ready"):
+        capture._cached_policy(handlers, 99)
+    with pytest.raises(ValueError, match="policy_cache_not_ready"):
+        capture._cached_policy(handlers, 162)
+    monkeypatch.setattr(capture, "policy_snapshot", lambda *a: (_ for _ in ()).throw(RuntimeError("fixture_failure")))
+    result = capture.maintain_main_entry_policy_cache(handlers, now_ts=162)
+    assert result["status"] == "source_gap"
+    assert result["blocker"] == "RuntimeError:fixture_failure"
 
 
 def test_scanner_promotion_correlation_fields_preserve_forced_rising_missed_lineage():

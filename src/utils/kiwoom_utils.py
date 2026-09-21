@@ -573,18 +573,9 @@ def get_kiwoom_base_url():
             conf = json.load(f)
             # config에 명시된 URL이 있으면 가져오고, 없으면 실투자 URL을 기본값으로 씁니다.
             base_url = conf.get("KIWOOM_BASE_URL", "https://api.kiwoom.com")
-            # 최초 1회 로드 시 터미널에 현재 모드를 명확히 출력해줍니다.
-            # target_path가 문자열이어도 에러가 나지 않도록 형변환 후 처리
-            mode_str = (
-                "🧪 [MOCK/DEV]"
-                if "dev" in str(target_path).lower()
-                else "🚀 [PROD/REAL]"
-            )
-            # Keep machine-readable CLI stdout free of import-time diagnostics.
-            print(
-                f"⚙️ Kiwoom API 스위치 온: {mode_str} 목적지 -> {base_url}",
-                file=sys.stderr,
-            )
+            # Also called for each market-cache scope, not only at startup.
+            # Successful resolution must be silent on both stdout and stderr;
+            # keep reading the origin so cache isolation stays unchanged.
             return base_url
     except Exception as e:
         # Startup diagnostics must stay on stderr even if file logging fails.
