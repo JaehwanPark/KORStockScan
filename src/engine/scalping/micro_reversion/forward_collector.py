@@ -917,6 +917,8 @@ class ForwardObservationCollector:
             aggressor = str(trade.get("aggressor_side") or "UNKNOWN").upper()
             if aggressor not in {"BUY", "SELL"}:
                 aggressor = "UNKNOWN"
+            raw_values = trade.get("values")
+            raw_values = raw_values if isinstance(raw_values, dict) else {}
             result = self._adapter.observe(
                 symbol=symbol,
                 venue=venue,
@@ -929,6 +931,9 @@ class ForwardObservationCollector:
                 realtime_type="0B",
                 trade_price=_positive_float_or_none(trade.get("price")),
                 trade_qty=_nonnegative_int_or_none(trade.get("volume")),
+                source_item=item,
+                cumulative_volume_raw=(raw_values.get("13") if isinstance(raw_values.get("13"), str) else None),
+                trade_volume_raw=(raw_values.get("15") if isinstance(raw_values.get("15"), str) else None),
                 best_bid=best_bid,
                 best_ask=best_ask,
                 bid_depth=None,

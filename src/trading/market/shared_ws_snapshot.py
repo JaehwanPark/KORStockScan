@@ -1,4 +1,4 @@
-"""Bounded cross-process WS transport comparison; never an order input selector."""
+"""Bounded shared WS comparison and explicit collector market-input selection."""
 
 from __future__ import annotations
 
@@ -168,25 +168,43 @@ def validate_widget_ws_receipt(receipt, *, context, now_ts):
             raise ValueError("widget_ws_source_stale_or_future")
 
 
-def select_widget_ws_inputs(context, transport, *, now_ts, require_trade_veto=False):
-    """Existing collector input selector. No request, recovery or order authority."""
+def widget_market_data_source(context):
+    """Explicit rollout membership; no automatic registration-based promotion."""
     mode = os.getenv("KORSTOCKSCAN_WIDGET_MARKET_DATA_SOURCE", "rest").strip().lower()
+    if mode not in {"rest", "ws"}:
+        raise RuntimeError("widget_market_data_source_invalid")
+    members = os.getenv("KORSTOCKSCAN_WIDGET_WS_SYMBOLS")
+    if mode == "ws" and members is not None:
+        codes = [code.strip() for code in members.split(",")]
+        if not codes or any(not re.fullmatch(r"[0-9]{6}", code) for code in codes) or len(set(codes)) != len(codes):
+            raise RuntimeError("widget_ws_rollout_scope_invalid")
+        if context.request_code[:6] not in codes:
+            return "rest"
+    return mode
+
+
+def select_widget_ws_inputs(context, transport, *, now_ts, require_trade_veto=False,
+                            require_day_low=True):
+    """Existing collector input selector. No request, recovery or order authority."""
+    mode = widget_market_data_source(context)
     if mode == "rest":
         return None
     if mode != "ws":
         raise RuntimeError("widget_market_data_source_invalid")
     try:
         validate_widget_ws_receipt(transport, context=context, now_ts=now_ts)
-        fields = transport["widget_quote_fields"]
-        low_raw = fields["low_price"]
-        if not isinstance(low_raw, str) or not re.fullmatch(r"[+-]?[0-9]+", low_raw.strip()):
-            raise ValueError("widget_ws_low_price_missing_or_invalid")
-        low = abs(int(low_raw))
         values = transport["values"]
-        if not 0 < low <= values["current_price"]:
-            raise ValueError("widget_ws_low_price_conflict")
-        quote = {"cur_prc": values["current_price"], "low_pric": low,
+        quote = {"cur_prc": values["current_price"],
                  "source": "kiwoom_ws_0B", "source_item": transport["ws_request_code"]}
+        fields = transport.get("widget_quote_fields") or {}
+        if require_day_low:
+            low_raw = fields["low_price"]
+            if not isinstance(low_raw, str) or not re.fullmatch(r"[+-]?[0-9]+", low_raw.strip()):
+                raise ValueError("widget_ws_low_price_missing_or_invalid")
+            low = abs(int(low_raw))
+            if not 0 < low <= values["current_price"]:
+                raise ValueError("widget_ws_low_price_conflict")
+            quote["low_pric"] = low
         trade_payload = {}
         if require_trade_veto:
             change_raw = fields["change_pct"]
@@ -217,6 +235,8 @@ def select_widget_ws_inputs(context, transport, *, now_ts, require_trade_veto=Fa
         qt = datetime.fromtimestamp(transport["source_clocks"]["0B"], KST)
         bt = datetime.fromtimestamp(transport["source_clocks"]["0D"], KST)
         receipt = {k: v for k, v in transport.items() if k not in {"census", "recent_trades"}}
+        receipt.update(mode="ws_input", selected_input="shared_ws_snapshot", input_adopted=True,
+                       comparison_status="ws_selected")
         bbo = {k: values[k] for k in ("best_bid", "best_ask", "best_bid_qty", "best_ask_qty")}
         bbo.update(source="kiwoom_ws_0D", received_at=bt.isoformat(),
                    age_sec=now_ts - bt.timestamp(), ws_source_receipt=receipt)

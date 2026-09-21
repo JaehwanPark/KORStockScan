@@ -565,10 +565,33 @@ def test_main_server_preflight_is_reproducible_and_drop_free() -> None:
     assert report["frozen_limits"]["producer_callback_latency_p99_max_ms"] > 0
 
 
+def _reviewed_ws_lineage_sources():
+    # Keep the historical receipt and runtime guard frozen. The additive raw
+    # lineage path has a separate measured, exact-source receipt.
+    root = Path(__file__).resolve().parents[2]
+    receipt = json.loads((root / "docs/audit-reports/2026-09-21-widget-ws-lineage-latency-validation.json.txt").read_text())
+    assert receipt["status"] == "PASS_WITH_UNCHANGED_RUNTIME_LIMITS"
+    assert receipt["runtime_guard_changed"] is False
+    assert receipt["summary"]["queue_drop_count"] == receipt["summary"]["worker_error_count"] == 0
+    guard_path = root / "configs/scalp_micro_reversion_canary_guard.toml"
+    assert hashlib.sha256(guard_path.read_bytes()).hexdigest() == receipt["guard_config_sha256"]
+    assert hashlib.sha256((root / "src/engine/scalping/micro_reversion/canary_monitor.py").read_bytes()).hexdigest() == receipt["benchmark_module_sha256"]
+    limits = tomllib.loads(guard_path.read_text())["limits"]
+    assert receipt["runtime_limits"] == limits
+    for percentile in (95, 99):
+        assert receipt["summary"][f"observer_on_internal_p{percentile}_ms_max"] < limits[f"producer_callback_latency_p{percentile}_max_ms"]
+    sources = {**receipt["source_hashes"], **receipt.get("unchanged_deployed_source_hashes", {})}
+    return {root / name: sha for name, sha in sources.items()}
+
+
 def _assert_frozen_source_or_reviewed_mount(path, expected):
     import hashlib
 
     source = path.read_bytes()
+    reviewed = _reviewed_ws_lineage_sources()
+    if path in reviewed:
+        assert hashlib.sha256(source).hexdigest() == reviewed[path]
+        return
     if hashlib.sha256(source).hexdigest() == expected:
         return
     if path.name == "forward_collector.py" and expected == (
@@ -652,7 +675,11 @@ def test_repository_guard_matches_frozen_baseline_artifact() -> None:
             repository_root / "configs/scalp_micro_reversion_source_exclusions.json.txt"
         ),
     }
+    reviewed = _reviewed_ws_lineage_sources()
     for field, path in evidence_files.items():
+        if path in reviewed:
+            _assert_frozen_source_or_reviewed_mount(path, baseline[field])
+            continue
         expected = baseline[field]
         if field == "benchmark_module_sha256":
             # Keep the frozen callback-latency benchmark receipt while

@@ -549,3 +549,17 @@ def test_reference_append_and_load_reject_symlinked_session_ancestor(
         load_path_event_references(target)
 
     assert external_source.read_bytes() == original
+
+
+def test_canonical_stream_lineage_rejects_item_scope_conflict_and_preserves_old_rows():
+    from src.engine.scalping.micro_reversion.path_capture import to_market_stream_point
+    original = _envelope(1, 0)
+    assert to_market_stream_point(original).cumulative_volume_raw is None
+    enriched = replace(original, source_item="000001", cumulative_volume_raw="1234", trade_volume_raw="-10")
+    point = to_market_stream_point(enriched)
+    assert point.as_dict()["cumulative_volume_raw"] == "1234"
+    assert point.as_dict()["trade_volume_raw"] == "-10"
+    with pytest.raises(ValueError, match="conflicts"):
+        replace(original, source_item="000001_AL")
+    with pytest.raises(ValueError, match="conflicts"):
+        replace(point, source_item="000001_NX")

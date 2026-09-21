@@ -2046,3 +2046,26 @@ def test_depth_freezes_existing_owner_inputs_without_future_or_new_requests(tmp_
     record_market_inputs('000001',now_ts=clock,market_regime='BEAR')
     assert point.as_dict()==row
     assert row['actual_order_submitted'] is False and row['broker_order_forbidden'] is True
+
+
+@pytest.mark.parametrize("raw_values", [{"13": "001234", "15": "-0010"}, {}, {"13": 1234, "15": 10}])
+def test_integrated_stream_preserves_raw_volume_lineage_without_inventing_missing_fields(tmp_path, raw_values):
+    collector = _collector(tmp_path, path_capture_enabled=True)
+    snap = _snapshot(item="000001_AL", venue="SOR")
+    snap["last_trade_tick"]["values"] = raw_values
+    # A normalized cumulative value is not a substitute for the raw FID.
+    snap["last_trade_tick"]["cum_volume"] = 1234
+    try:
+        assert collector.observe_kiwoom_0b("000001", snap, realtime_type="0B") is ProducerCanaryResult.ENQUEUED
+        deadline = time.monotonic() + 2
+        while collector.runtime_snapshot().writer_persisted_envelope_count < 1 and time.monotonic() < deadline:
+            time.sleep(.01)
+    finally:
+        collector.close()
+    files = list(tmp_path.rglob("market_stream.jsonl"))
+    assert len(files) == 1
+    row = json.loads(files[0].read_text().splitlines()[0])
+    assert row["source_item"] == "000001_AL" and row["venue"] == "SOR"
+    assert row["cumulative_volume_raw"] == (raw_values.get("13") if isinstance(raw_values.get("13"), str) else None)
+    assert row["trade_volume_raw"] == (raw_values.get("15") if isinstance(raw_values.get("15"), str) else None)
+    assert row["trade_qty"] == 10 and row["actual_order_submitted"] is False

@@ -12,6 +12,12 @@ from datetime import datetime, time as clock_time, timedelta
 from pathlib import Path
 from statistics import median
 from typing import Any
+from types import SimpleNamespace
+
+from src.trading.market.shared_ws_snapshot import (
+    read_shared_widget_quote, select_widget_ws_inputs, validate_widget_ws_receipt,
+    attach_transport_census, widget_market_data_source,
+)
 
 import requests
 
@@ -198,25 +204,35 @@ def _advance_support_break_count(episode: "EpisodeState", latest: MinuteBar) -> 
 
 def _source_quality(
     *, latest: MinuteBar | None, bbo: dict[str, Any], observed_at: datetime,
-    request_code: str = "",
+    request_code: str = "", context: Any = None,
 ) -> tuple[str, tuple[str, ...]]:
     reasons: list[str] = []
     from src.trading.market.quote_consistency import build_rest_market_data_health
 
-    meta = bbo.get("_kiwoom_source_meta")
-    meta = meta if isinstance(meta, dict) else {}
-    health = build_rest_market_data_health(
-        {"buy_fpr_bid": bbo.get("best_bid"), "sel_fpr_bid": bbo.get("best_ask"),
-         "stk_cd": bbo.get("response_item_raw")},
-        api_id="ka10004", request_code=request_code or str(meta.get("request_code") or ""),
-        source_meta=meta, now_ts=observed_at.timestamp(), quote_max_age_ms=35_000,
-    )
-    bbo["market_data_health"] = health
-    if meta or bbo.get("rest_receipt_metadata_present"):
-        age_ms = health["rest_quote"]["quote_receive_age_ms"]
-        bbo["age_sec"] = age_ms / 1000.0 if age_ms is not None else None
-        if health["rest_quote"]["quote_state"] != "fresh":
-            reasons.append("bbo_receive_receipt_invalid_or_stale")
+    if bbo.get("source") == "kiwoom_ws_0D":
+        receipt = bbo.get("ws_source_receipt") or {}
+        try:
+            validate_widget_ws_receipt(receipt, context=context, now_ts=observed_at.timestamp())
+        except (ValueError, KeyError, TypeError, OSError, AttributeError):
+            reasons.append("ws_receive_receipt_invalid_or_stale")
+        # Integrated WS is the operator-selected quote authority. Preserve
+        # the independent bar scope rather than requiring REST equality.
+        bbo["market_data_health"] = {"source": "kiwoom_ws_0D", "receipt": receipt}
+    else:
+        meta = bbo.get("_kiwoom_source_meta")
+        meta = meta if isinstance(meta, dict) else {}
+        health = build_rest_market_data_health(
+            {"buy_fpr_bid": bbo.get("best_bid"), "sel_fpr_bid": bbo.get("best_ask"),
+             "stk_cd": bbo.get("response_item_raw")},
+            api_id="ka10004", request_code=request_code or str(meta.get("request_code") or ""),
+            source_meta=meta, now_ts=observed_at.timestamp(), quote_max_age_ms=35_000,
+        )
+        bbo["market_data_health"] = health
+        if meta or bbo.get("rest_receipt_metadata_present"):
+            age_ms = health["rest_quote"]["quote_receive_age_ms"]
+            bbo["age_sec"] = age_ms / 1000.0 if age_ms is not None else None
+            if health["rest_quote"]["quote_state"] != "fresh":
+                reasons.append("bbo_receive_receipt_invalid_or_stale")
     if latest is None:
         reasons.append("completed_1m_missing")
     else:
@@ -357,6 +373,7 @@ class WidgetSymbolRuntimeCollector:
         self._episodes: dict[str, EpisodeState] = {}
         self._episode_sessions: dict[str, str] = {}
         self._last_record_key: dict[str, str] = {}
+        self._ws_transport_owners: dict[str, Any] = {}
         self._symbol_cursor = 0
         self._completed_bar_buffers: dict[str, list[dict[str, Any]]] = {}
 
@@ -378,6 +395,7 @@ class WidgetSymbolRuntimeCollector:
             or WidgetSymbolRuntimeContract(symbol, str(policy["name"]))
             for symbol, policy in self._policies.items()
         }
+        self._ws_transport_owners.clear()
         self._completed_bar_buffers.clear()
         self._minute_cache.clear()
         self._bbo_cache.clear()
@@ -756,6 +774,9 @@ class WidgetSymbolRuntimeCollector:
         return blocked("entry_price_range_invalid")
 
     def _record(self, symbol: str, payload: dict[str, Any]) -> None:
+        owner = self._ws_transport_owners.get(symbol)
+        if owner is not None:
+            attach_transport_census(owner, payload)
         from src.engine.monitoring.widget_research_watch_collector import (
             attach_bar_delta,
         )
@@ -951,6 +972,8 @@ class WidgetSymbolRuntimeCollector:
         client: KiwoomReadOnlyClient,
         observed_at: datetime,
     ) -> dict[str, Any]:
+        if symbol in self._ws_transport_owners:
+            self._ws_transport_owners[symbol]._transport_comparison = None
         contract = self._contract(symbol)
         context = contract.session_context(observed_at)
         integrated_aftermarket = context.market_data_route == "krx_nxt_integrated"
@@ -1015,21 +1038,33 @@ class WidgetSymbolRuntimeCollector:
             }
             _atomic_write(contract.DEFAULT_SNAPSHOT_PATH, payload)
             return payload
-        quote, quote_age_sec = self._quote(
-            client=client,
-            symbol=symbol,
-            request_code=context.request_code,
-            observed_at=observed_at,
+        transport = {}
+        if widget_market_data_source(context) == "ws":
+            transport = read_shared_widget_quote(context, now_ts=observed_at.timestamp())
+            owner = self._ws_transport_owners.setdefault(symbol, SimpleNamespace())
+            owner._transport_comparison = transport
+        ws_inputs = select_widget_ws_inputs(
+            context, transport, now_ts=observed_at.timestamp(), require_day_low=False,
         )
+        if ws_inputs is not None:
+            quote, quote_received, bbo, bbo_received, _ = ws_inputs
+            quote_age_sec = (observed_at - quote_received).total_seconds()
+        else:
+            quote, quote_age_sec = self._quote(
+                client=client, symbol=symbol, request_code=context.request_code,
+                observed_at=observed_at,
+            )
+            if _positive_int(quote.get("cur_prc")) is None:
+                raise RuntimeError(f"{symbol}_quote_price_missing")
+            bbo = self._bbo(
+                client=client, symbol=symbol, request_code=context.request_code,
+                observed_at=observed_at,
+            )
+            quote_received = self._quote_cache[f"{symbol}:{context.request_code}"][2]
+            bbo_received = self._bbo_cache[f"{symbol}:{context.request_code}"][2]
         current_price = _positive_int(quote.get("cur_prc"))
         if current_price is None:
             raise RuntimeError(f"{symbol}_quote_price_missing")
-        bbo = self._bbo(
-            client=client,
-            symbol=symbol,
-            request_code=context.request_code,
-            observed_at=observed_at,
-        )
         bars = self._bars(
             client=client,
             symbol=symbol,
@@ -1050,7 +1085,7 @@ class WidgetSymbolRuntimeCollector:
                 )
         source_quality, source_quality_reasons = _source_quality(
             latest=latest, bbo=bbo, observed_at=observed_at,
-            request_code=context.request_code,
+            request_code=context.request_code, context=context,
         )
         from src.engine.monitoring.widget_research_watch_collector import (
             attach_bar_delta,
@@ -1135,13 +1170,11 @@ class WidgetSymbolRuntimeCollector:
                     "widget_read_scope_or_clock_changed_during_collection"
                 )
             observed_at = decision_at
-            quote_received = self._quote_cache[f"{symbol}:{context.request_code}"][2]
             quote_age_sec = (observed_at - quote_received).total_seconds()
-            bbo_received = self._bbo_cache[f"{symbol}:{context.request_code}"][2]
             bbo["age_sec"] = (observed_at - bbo_received).total_seconds()
             source_quality, source_quality_reasons = _source_quality(
                 latest=latest, bbo=bbo, observed_at=observed_at,
-                request_code=context.request_code,
+                request_code=context.request_code, context=context,
             )
             if not 0 <= quote_age_sec <= 35.0:
                 source_quality = "BLOCKED"
@@ -1290,7 +1323,7 @@ class WidgetSymbolRuntimeCollector:
                     "actual_order_submitted": False,
                     "broker_order_forbidden": True,
                 }
-        cached_quote_receipt = self._quote_cache.get(f"{symbol}:{context.request_code}")
+        quote_source = "kiwoom_ws_0B" if ws_inputs is not None else "kiwoom_ka10001_response_received_time"
         payload = {
             "schema_version": SNAPSHOT_SCHEMA_VERSION,
             "status": "ok" if source_quality == "PASS" else "data_wait",
@@ -1303,6 +1336,8 @@ class WidgetSymbolRuntimeCollector:
             "market_session": market_session,
             "market_data_route": context.market_data_route,
             "market_data_request_code": context.request_code,
+            "bar_market_data_request_code": context.request_code,
+            "quote_market_data_request_code": transport.get("ws_request_code", context.request_code),
             "actual_execution_venue": "UNKNOWN",
             "strategy_profile": contract.STRATEGY_PROFILE,
             "policy_id": policy["policy_id"],
@@ -1345,16 +1380,11 @@ class WidgetSymbolRuntimeCollector:
             ),
             "bbo": bbo,
             "quote_source_meta": {
-                "source": "kiwoom_ka10001_response_received_time",
-                "received_at": (
-                    cached_quote_receipt[2].isoformat()
-                    if cached_quote_receipt
-                    else None
-                ),
+                "source": quote_source, "received_at": quote_received.isoformat(),
+                "source_item": transport.get("ws_request_code", context.request_code),
             },
             "quote_provenance": {
-                "source": "kiwoom_ka10001_response_received_time",
-                "age_sec": round(quote_age_sec, 3),
+                "source": quote_source, "age_sec": round(quote_age_sec, 3),
             },
             "relative_strength": auxiliary["relative"],
             "flow": auxiliary["flow"],

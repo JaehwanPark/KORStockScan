@@ -16,6 +16,12 @@ import re
 from datetime import date, datetime, time as clock_time
 from pathlib import Path
 from typing import Any
+from types import SimpleNamespace
+
+from src.trading.market.shared_ws_snapshot import (
+    read_shared_widget_quote, select_widget_ws_inputs, validate_widget_ws_receipt,
+    attach_transport_census, widget_market_data_source,
+)
 
 from src.engine.monitoring.samsung_widget_advisory import (
     KiwoomReadOnlyClient,
@@ -412,6 +418,7 @@ class WidgetResearchWatchCollector:
         self._client_override = client
         self._last_record_key: dict[str, str] = {}
         self._request_context: dict[str, Any] = {}
+        self._ws_transport_owners: dict[str, Any] = {}
 
     def _client(self) -> KiwoomReadOnlyClient:
         if self._client_override is not None:
@@ -489,6 +496,9 @@ class WidgetResearchWatchCollector:
         )
 
         code = symbol["stock_code"]
+        self._request_context = {}
+        if code in self._ws_transport_owners:
+            self._ws_transport_owners[code]._transport_comparison = None
         context = WidgetSymbolRuntimeContract(
             code, symbol["stock_name"]
         ).session_context(observed_at)
@@ -526,30 +536,45 @@ class WidgetResearchWatchCollector:
             }
             return client.post(path, api_id, fields)
 
-        reused = self._reuse_quote_bbo(
-            symbol=code, context=context, observed_at=observed_at
+        transport = {}
+        if widget_market_data_source(context) == "ws":
+            self._request_context = {"source_stage": "shared_ws", "request_symbol": code,
+                                     "request_code": request_code}
+            transport = read_shared_widget_quote(context, now_ts=observed_at.timestamp())
+            owner = self._ws_transport_owners.setdefault(code, SimpleNamespace())
+            owner._transport_comparison = transport
+        ws_inputs = select_widget_ws_inputs(
+            context, transport, now_ts=observed_at.timestamp(), require_day_low=False,
         )
-        if reused is not None:
-            quote, reused_bbo, reuse_receipt = reused
-            quote_received = datetime.fromisoformat(
-                reuse_receipt["quote_received_at_kst"]
-            )
-            bbo_received = datetime.fromisoformat(reuse_receipt["bbo_received_at_kst"])
-            bbo_raw = {}
-        else:
-            quote = request("/api/dostk/stkinfo", "ka10001", {"stk_cd": request_code})
-            quote_received = (
-                client.response_received_at(api_id="ka10001", request_code=request_code)
-                if isinstance(client, KiwoomReadOnlyClient)
-                else observed_at
-            )
-            bbo_raw = request("/api/dostk/mrkcond", "ka10004", {"stk_cd": request_code})
-            bbo_received = (
-                client.response_received_at(api_id="ka10004", request_code=request_code)
-                if isinstance(client, KiwoomReadOnlyClient)
-                else observed_at
-            )
+        reused = None
+        if ws_inputs is not None:
+            quote, quote_received, reused_bbo, bbo_received, _ = ws_inputs
             reuse_receipt = None
+        else:
+            reused = self._reuse_quote_bbo(
+                symbol=code, context=context, observed_at=observed_at
+            )
+            if reused is not None:
+                quote, reused_bbo, reuse_receipt = reused
+                quote_received = datetime.fromisoformat(
+                    reuse_receipt["quote_received_at_kst"]
+                )
+                bbo_received = datetime.fromisoformat(reuse_receipt["bbo_received_at_kst"])
+                bbo_raw = {}
+            else:
+                quote = request("/api/dostk/stkinfo", "ka10001", {"stk_cd": request_code})
+                quote_received = (
+                    client.response_received_at(api_id="ka10001", request_code=request_code)
+                    if isinstance(client, KiwoomReadOnlyClient)
+                    else observed_at
+                )
+                bbo_raw = request("/api/dostk/mrkcond", "ka10004", {"stk_cd": request_code})
+                bbo_received = (
+                    client.response_received_at(api_id="ka10004", request_code=request_code)
+                    if isinstance(client, KiwoomReadOnlyClient)
+                    else observed_at
+                )
+                reuse_receipt = None
         bars_raw = request(
             "/api/dostk/chart",
             "ka10080",
@@ -569,7 +594,7 @@ class WidgetResearchWatchCollector:
                     "widget_read_scope_or_clock_changed_during_collection"
                 )
             observed_at = decision_at
-        bbo = reused_bbo if reused is not None else _parse_bbo(bbo_raw, bbo_received)
+        bbo = reused_bbo if ws_inputs is not None or reused is not None else _parse_bbo(bbo_raw, bbo_received)
         bbo["age_sec"] = (observed_at - bbo_received).total_seconds()
         received_rows = bars_raw.get("stk_min_pole_chart_qry")
         bars = completed_session_bars(
@@ -589,20 +614,28 @@ class WidgetResearchWatchCollector:
         source_issues: list[str] = []
         from src.trading.market.quote_consistency import build_rest_market_data_health
 
-        meta = bbo.get("_kiwoom_source_meta")
-        meta = meta if isinstance(meta, dict) else {}
-        health = build_rest_market_data_health(
-            {"buy_fpr_bid": best_bid, "sel_fpr_bid": best_ask,
-             "stk_cd": bbo.get("response_item_raw")},
-            api_id="ka10004", request_code=request_code, source_meta=meta,
-            now_ts=observed_at.timestamp(), quote_max_age_ms=10_000,
-        )
-        bbo["market_data_health"] = health
-        if meta or bbo.get("rest_receipt_metadata_present"):
-            age_ms = health["rest_quote"]["quote_receive_age_ms"]
-            bbo["age_sec"] = age_ms / 1000.0 if age_ms is not None else None
-            if health["rest_quote"]["quote_state"] != "fresh":
-                source_issues.append("bbo_receive_receipt_invalid_or_stale")
+        if ws_inputs is not None:
+            try:
+                validate_widget_ws_receipt(transport, context=context, now_ts=observed_at.timestamp())
+            except (ValueError, KeyError, TypeError, OSError, AttributeError):
+                source_issues.append("ws_receive_receipt_invalid_or_stale")
+            health = {"source": "kiwoom_ws_0D", "receipt": bbo["ws_source_receipt"]}
+            bbo["market_data_health"] = health
+        else:
+            meta = bbo.get("_kiwoom_source_meta")
+            meta = meta if isinstance(meta, dict) else {}
+            health = build_rest_market_data_health(
+                {"buy_fpr_bid": best_bid, "sel_fpr_bid": best_ask,
+                 "stk_cd": bbo.get("response_item_raw")},
+                api_id="ka10004", request_code=request_code, source_meta=meta,
+                now_ts=observed_at.timestamp(), quote_max_age_ms=10_000,
+            )
+            bbo["market_data_health"] = health
+            if meta or bbo.get("rest_receipt_metadata_present"):
+                age_ms = health["rest_quote"]["quote_receive_age_ms"]
+                bbo["age_sec"] = age_ms / 1000.0 if age_ms is not None else None
+                if health["rest_quote"]["quote_state"] != "fresh":
+                    source_issues.append("bbo_receive_receipt_invalid_or_stale")
         if not 0 <= (observed_at - quote_received).total_seconds() <= 10:
             source_issues.append("quote_stale_or_clock_invalid")
         if bbo["age_sec"] is None or not 0 <= bbo["age_sec"] <= 10:
@@ -645,6 +678,11 @@ class WidgetResearchWatchCollector:
             ),
             "current_price": current_price,
             "common_market_source_reuse": reuse_receipt,
+            "bar_market_data_request_code": request_code,
+            "quote_market_data_request_code": transport.get("ws_request_code", request_code),
+            "market_data_transport": transport,
+            "quote_source": "kiwoom_ws_0B" if ws_inputs is not None else "kiwoom_ka10001_response_received_time",
+            "bbo_source": bbo.get("source"),
             "market_data_health": health,
             "quote_received_at_kst": quote_received.isoformat(),
             "bbo_received_at_kst": bbo.get("received_at"),
@@ -705,6 +743,9 @@ class WidgetResearchWatchCollector:
 
     def _record(self, payload: dict[str, Any]) -> bool:
         code = str(payload["stock_code"])
+        owner = self._ws_transport_owners.get(code)
+        if owner is not None:
+            attach_transport_census(owner, payload)
         latest = payload.get("latest_completed_bar")
         bar_time = latest.get("source_time") if isinstance(latest, dict) else None
         observation_minute = str(payload.get("observed_at_kst") or "")[:16]

@@ -75,8 +75,9 @@ def test_direct_quote_bbo_cache_keeps_http_clock_across_later_collection(
 
 
 @pytest.mark.parametrize("delay,blocked", [(2, False), (40, True)])
+@pytest.mark.parametrize("source_mode", ["rest", "ws"])
 def test_runtime_direct_read_rechecks_original_bbo_at_final_decision(
-    monkeypatch, tmp_path, delay, blocked
+    monkeypatch, tmp_path, delay, blocked, source_mode
 ):
     from src.engine.monitoring import samsung_widget_advisory as advisory
     from src.engine.monitoring import widget_symbol_runtime_collector as runtime
@@ -154,15 +155,26 @@ def test_runtime_direct_read_rechecks_original_bbo_at_final_decision(
             "reentry_cooldown_bars": 10,
         },
     }
+    monkeypatch.setenv("KORSTOCKSCAN_WIDGET_MARKET_DATA_SOURCE", source_mode)
+    if source_mode == "ws":
+        from src.tests.test_quote_consistency import _adoptable_widget_transport
+        transport = _adoptable_widget_transport(cycle, "080220", 10000, 9900)
+        transport["ws_request_code"] = "080220"
+        transport["source_clocks"] = {"0B": cycle.timestamp(), "0D": cycle.timestamp()}
+        monkeypatch.setattr(runtime, "read_shared_widget_quote", lambda *a, **kw: transport)
     row = collector._collect_symbol(
         symbol="080220", policy=policy, client=client, observed_at=cycle
     )
     assert row["observed_at_kst"] == decision.isoformat()
     assert row["bbo"]["received_at"] == cycle.isoformat()
     assert row["bbo"]["age_sec"] == delay
-    facts = row["bbo"]["market_data_health"]["rest_quote"]
-    assert facts["quote_receive_age_ms"] == delay * 1000
-    assert facts["quote_state"] == ("stale" if blocked else "fresh")
+    if source_mode == "ws":
+        assert row["bbo"]["market_data_health"]["source"] == "kiwoom_ws_0D"
+        blocked = delay > 20
+    else:
+        facts = row["bbo"]["market_data_health"]["rest_quote"]
+        assert facts["quote_receive_age_ms"] == delay * 1000
+        assert facts["quote_state"] == ("stale" if blocked else "fresh")
     assert row["advisory"]["source_quality"]["status"] == (
         "BLOCKED" if blocked else "PASS"
     )
@@ -492,8 +504,9 @@ def test_degraded_symbol_payload_clears_actionable_events(monkeypatch, tmp_path)
     assert snapshot_path.exists()
 
 
+@pytest.mark.parametrize("source_mode", ["rest", "ws"])
 def test_new_symbol_snapshot_records_partial_flow_without_granting_signal_authority(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, source_mode
 ):
     monkeypatch.setattr(
         runtime_contract, "DEFAULT_SNAPSHOT_DIR", tmp_path / "snapshots"
@@ -592,10 +605,24 @@ def test_new_symbol_snapshot_records_partial_flow_without_granting_signal_author
         },
     }
 
+    client = Client()
+    monkeypatch.setenv("KORSTOCKSCAN_WIDGET_MARKET_DATA_SOURCE", source_mode)
+    if source_mode == "ws":
+        from src.tests.test_quote_consistency import _adoptable_widget_transport
+        from src.engine.monitoring import widget_symbol_runtime_collector as runtime
+        transport = _adoptable_widget_transport(now, "080220", 10000, 9900)
+        transport["ws_request_code"] = "080220"
+        transport.pop("widget_quote_fields")  # unused by this consumer
+        monkeypatch.setattr(runtime, "read_shared_widget_quote", lambda *a, **kw: transport)
     payload = collector._collect_symbol(
-        symbol="080220", policy=policy, client=Client(), observed_at=now
+        symbol="080220", policy=policy, client=client, observed_at=now
     )
 
+    if source_mode == "ws":
+        assert not [c for c in client.calls if c[0] in {"ka10001", "ka10004"}]
+        assert payload["quote_source_meta"]["source"] == "kiwoom_ws_0B"
+        assert payload["market_data_transport"]["selected_input"] == "shared_ws_snapshot"
+        assert payload["quote_source_meta"]["received_at"] == (now-timedelta(seconds=.2)).isoformat()
     auxiliary = payload["advisory"]["auxiliary_context"]
     assert payload["status"] == "ok"
     assert payload["advisory"]["source_quality"]["status"] == "PASS"
@@ -613,7 +640,8 @@ def test_new_symbol_snapshot_records_partial_flow_without_granting_signal_author
     )
     assert payload["actual_order_submitted"] is False
     assert payload["broker_order_forbidden"] is True
-    assert payload["quote_source_meta"]["received_at"] == now.isoformat()
+    expected_quote_time = now - timedelta(seconds=.2) if source_mode == "ws" else now
+    assert payload["quote_source_meta"]["received_at"] == expected_quote_time.isoformat()
     from src.engine.monitoring.widget_research_watch_collector import (
         WidgetResearchWatchCollector,
     )
@@ -621,8 +649,11 @@ def test_new_symbol_snapshot_records_partial_flow_without_granting_signal_author
     watch = WidgetResearchWatchCollector(config={"symbols": []})
     context = collector._contract("080220").session_context(now)
     reused = watch._reuse_quote_bbo(symbol="080220", context=context, observed_at=now)
-    assert reused is not None
-    assert reused[2]["quote_received_at_kst"] == now.isoformat()
+    if source_mode == "ws":
+        assert reused is None  # REST-only cache reuse cannot relabel WS input.
+    else:
+        assert reused is not None
+        assert reused[2]["quote_received_at_kst"] == now.isoformat()
 
     # A revised historical bar must be blocked before the kernel and shared publish.
     collector._minute_cache.clear()
@@ -718,3 +749,52 @@ def test_runtime_source_quality_rechecks_original_receipt_binding(extra):
                                       request_code="005930")
     assert status == "BLOCKED"
     assert "bbo_receive_receipt_invalid_or_stale" in reasons
+
+
+@pytest.mark.parametrize("change,reason", [("scope", None),
+    ("stale", "ws_receive_receipt_invalid_or_stale"), ("producer", "ws_receive_receipt_invalid_or_stale")])
+def test_extended_ws_source_quality_preserves_scope_and_liveness(change, reason):
+    from src.tests.test_quote_consistency import _adoptable_widget_transport
+    from src.trading.market.shared_ws_snapshot import select_widget_ws_inputs
+    now = datetime(2026, 8, 12, 11, 30, 5, tzinfo=KST)
+    receipt = _adoptable_widget_transport(now, "080220", 10000, 9900)
+    receipt["ws_request_code"] = "080220"
+    if change == "scope":
+        receipt["ws_request_code"] = "080220_AL"
+    elif change == "stale":
+        receipt["source_clocks"]["0D"] -= 40
+    else:
+        receipt["producer"]["process"]["start_ticks"] += 1
+    bbo = {"source": "kiwoom_ws_0D", "ws_source_receipt": receipt,
+           "best_bid": 9990, "best_ask": 10000, "age_sec": 0}
+    status, issues = _source_quality(latest=_bar(29, 10000, 10000, 10000, 10000, 100),
+        bbo=bbo, observed_at=now, request_code="080220",
+        context=SimpleNamespace(name="KRX_REGULAR", request_code="080220"))
+    if change == "scope":
+        assert status == "PASS" and not issues
+        assert bbo["market_data_health"]["receipt"]["ws_request_code"] == "080220_AL"
+    else:
+        assert status == "BLOCKED" and reason in issues
+
+
+def test_extended_ws_missing_input_never_reads_rest_and_keeps_failed_census(monkeypatch, tmp_path):
+    from src.engine.monitoring import widget_symbol_runtime_collector as runtime
+    from src.tests.test_quote_consistency import _adoptable_widget_transport
+    now = datetime(2026, 8, 12, 11, 30, 5, tzinfo=KST)
+    monkeypatch.setenv("KORSTOCKSCAN_WIDGET_MARKET_DATA_SOURCE", "ws")
+    monkeypatch.setattr(runtime_contract, "DEFAULT_SNAPSHOT_DIR", tmp_path/"snapshots")
+    receipt = _adoptable_widget_transport(now, "080220")
+    receipt.update(status="source_gap", reason="item_not_registered")
+    monkeypatch.setattr(runtime, "read_shared_widget_quote", lambda *a, **kw: receipt)
+    class Client:
+        def post(self, *args, **kwargs):
+            pytest.fail("Missing selected WS must not initiate REST recovery")
+    collector = WidgetSymbolRuntimeCollector(observation_dir=tmp_path/"raw")
+    policy = {"policy_id": "P", "effective_date": now.date().isoformat()}
+    with pytest.raises(RuntimeError, match="widget_ws_input_unavailable"):
+        collector._collect_symbol(symbol="080220", policy=policy, client=Client(), observed_at=now)
+    row = collector._degraded_symbol_payload(symbol="080220", policy=policy,
+        observed_at=now, reason="widget_ws_input_unavailable")
+    assert row["entry_event"] is None and row["exit_event"] is None
+    bucket = next(iter(row["market_data_transport"]["census"]["windows"].values()))
+    assert bucket["expected_comparisons"] == 1 and bucket["ws_selection_gap"] == 1

@@ -23,7 +23,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Iterable
 
-from .contracts import normalize_symbol, normalize_venue
+from .contracts import normalize_symbol, normalize_venue, registration_item_identity
 
 MARKET_PATH_SCHEMA = "scalp_micro_reversion_market_path_point_v6"
 MARKET_PATH_MANIFEST_SCHEMA = "scalp_micro_reversion_market_path_manifest_v1"
@@ -280,6 +280,11 @@ class MarketStreamPoint:
     realtime_type: str
     trade_price: float | None = None
     trade_qty: int | None = None
+    # Optional additive lineage: old rows remain readable but cannot establish
+    # cumulative-volume continuity for a WS-completed minute.
+    source_item: str = ""
+    cumulative_volume_raw: str | None = None
+    trade_volume_raw: str | None = None
     best_bid: float | None = None
     best_ask: float | None = None
     bid_depth: int | None = None
@@ -317,6 +322,12 @@ class MarketStreamPoint:
             value = getattr(self, name)
             if value is not None and value < 0:
                 raise ValueError(f"{name} must not be negative")
+        if self.source_item and registration_item_identity(self.source_item) != (symbol, venue):
+            raise ValueError("trade source item conflicts with symbol or venue")
+        for name in ("cumulative_volume_raw", "trade_volume_raw"):
+            value = getattr(self, name)
+            if value is not None and not isinstance(value, str):
+                raise ValueError(f"{name} must preserve the original string")
         if self.quote_age_ms is not None and self.quote_age_ms < 0:
             raise ValueError("quote_age_ms must not be negative")
         validate_market_stream_path_provenance(

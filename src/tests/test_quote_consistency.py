@@ -907,6 +907,7 @@ def test_widget_ws_adoption_preserves_fields_clocks_and_negative_veto(monkeypatc
     assert qt.timestamp() == now.timestamp()-.2 and bt.timestamp() == now.timestamp()-.1
     assert _recent_trade_negative_veto(trades) is True
     assert b["source"] == "kiwoom_ws_0D" and "_kiwoom_source_meta" not in b
+    assert b["ws_source_receipt"]["selected_input"] == "shared_ws_snapshot"
     assert t["selected_input"] == "shared_ws_snapshot"
     with pytest.raises(ValueError, match="stale"):
         validate_widget_ws_receipt(b["ws_source_receipt"], context=c, now_ts=now.timestamp()+21)
@@ -930,3 +931,20 @@ def test_widget_ws_adoption_rejects_partial_sources(monkeypatch, broken):
     with pytest.raises(RuntimeError, match="widget_ws_input_unavailable"):
         select_widget_ws_inputs(c, t, now_ts=now.timestamp(), require_trade_veto=True)
     assert t["selected_input"] == "none"
+
+
+def test_explicit_widget_ws_cohort_keeps_other_symbols_on_existing_rest(monkeypatch):
+    from types import SimpleNamespace
+    from src.trading.market.shared_ws_snapshot import widget_market_data_source, select_widget_ws_inputs
+    monkeypatch.setenv("KORSTOCKSCAN_WIDGET_MARKET_DATA_SOURCE", "ws")
+    monkeypatch.setenv("KORSTOCKSCAN_WIDGET_WS_SYMBOLS", "006800,010140,080220")
+    assert widget_market_data_source(SimpleNamespace(request_code="006800_AL")) == "ws"
+    other = SimpleNamespace(request_code="005930")
+    assert widget_market_data_source(other) == "rest"
+    assert select_widget_ws_inputs(other, {}, now_ts=0) is None
+    with pytest.raises(RuntimeError, match="widget_ws_input_unavailable"):
+        select_widget_ws_inputs(SimpleNamespace(request_code="006800_AL"), {}, now_ts=0)
+    for scope in ("", "006800,", "006800,006800", "006800_AL", "*"):
+        monkeypatch.setenv("KORSTOCKSCAN_WIDGET_WS_SYMBOLS", scope)
+        with pytest.raises(RuntimeError, match="widget_ws_rollout_scope_invalid"):
+            widget_market_data_source(other)

@@ -383,4 +383,19 @@ def test_removed_entry_odds_surfaces_and_no_runtime_authority_imports() -> None:
         "import src.engine.lifecycle",
         "from src.engine.lifecycle",
     )
+    # Shared venue constants already used by the source-only contract do not
+    # grant execution authority. Keep every other runtime import prohibited.
+    import ast
+    contracts = package_root / "contracts.py"
+    tree = ast.parse(contracts.read_text())
+    allowed = [n for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)
+               and n.module == "src.trading.market.session_contract"]
+    assert len(allowed) == 1
+    assert {n.name for n in allowed[0].names} == {
+        "ACTUAL_EXECUTION_VENUE_UNKNOWN", "MARKET_DATA_ROUTE_KRX_NXT_INTEGRATED",
+        "MARKET_DATA_ROUTE_KRX_ONLY", "MARKET_DATA_ROUTE_NXT_ONLY", "MARKET_DATA_ROUTE_UNKNOWN",
+    }
+    allowed_source = ast.get_source_segment(contracts.read_text(), allowed[0]).lower()
+    assert source.count(allowed_source) == 1
+    source = source.replace(allowed_source, "", 1)
     assert all(token not in source for token in forbidden_imports)

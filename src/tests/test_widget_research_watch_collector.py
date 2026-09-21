@@ -704,3 +704,71 @@ def test_same_response_conflicting_bars_are_not_lost_by_parser_dedup(tmp_path):
     assert result[0]["status"] == "SOURCE_QUALITY_BLOCKED"
     assert len(result[0]["conflicting_completed_bars"]) == 1
     assert result[0]["entry_event"] is None and result[0]["exit_event"] is None
+
+
+@pytest.mark.parametrize("scope,expected", [("exact", "PASS"), ("integrated", "PASS"), ("missing", "SOURCE_ERROR")])
+def test_research_ws_primary_reads_and_per_symbol_failure_census(tmp_path, monkeypatch, scope, expected):
+    from copy import deepcopy
+    from src.tests.test_quote_consistency import _adoptable_widget_transport
+    monkeypatch.setenv("KORSTOCKSCAN_WIDGET_MARKET_DATA_SOURCE", "ws")
+    now = datetime(2026, 8, 13, 10, 1, 30, tzinfo=KST)
+    client = _FakeClient()
+    collector = watch.WidgetResearchWatchCollector(
+        config=_runtime_config([("111111", "one"), ("222222", "two")]), client=client,
+        output_dir=tmp_path/"raw", snapshot_dir=tmp_path/"snapshots")
+    def read(context, **kwargs):
+        receipt = _adoptable_widget_transport(now, context.request_code, 10000, 9990)
+        receipt.pop("widget_quote_fields")
+        if scope == "exact":
+            receipt["ws_request_code"] = context.request_code
+        if scope == "missing":
+            receipt.update(status="source_gap", reason="item_not_registered")
+        return receipt
+    monkeypatch.setattr(watch, "read_shared_widget_quote", read)
+    collector.collect_once(now)
+    rows = collector.collect_once(now)
+    assert [r["status"] for r in rows] == [expected, expected]
+    assert all(call[1] == "ka10080" for call in client.calls)
+    assert len(client.calls) == (0 if scope == "missing" else 4)
+    for row in rows:
+        assert row["entry_event"] is None and row["exit_event"] is None
+        assert row["actual_order_submitted"] is False
+        t = row["market_data_transport"]
+        bucket = next(iter(t["census"]["windows"].values()))
+        assert bucket["expected_comparisons"] == 2
+        if scope == "missing":
+            assert bucket["ws_source_gap"] == 2 and bucket["ws_selection_gap"] == 2
+        else:
+            assert t["selected_input"] == "shared_ws_snapshot"
+            assert row["quote_source"] == "kiwoom_ws_0B"
+            assert row["quote_received_at_kst"] == (now-timedelta(seconds=.2)).isoformat()
+        if scope == "integrated":
+            assert not row["source_quality_issues"]
+            assert row["quote_market_data_request_code"] == row["stock_code"] + "_AL"
+            assert row["bar_market_data_request_code"] == row["stock_code"]
+            assert t["status"] == "valid_ws_comparison_input"
+
+
+@pytest.mark.parametrize("delay", [3, 15, 25])
+def test_research_ws_revalidates_original_clocks_after_rest_bars(tmp_path, monkeypatch, delay):
+    from src.tests.test_quote_consistency import _adoptable_widget_transport
+    now = datetime(2026, 8, 13, 10, 1, 30, tzinfo=KST)
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now + timedelta(seconds=delay)
+    class Client(_FakeClient, watch.KiwoomReadOnlyClient):
+        def __init__(self):
+            watch.KiwoomReadOnlyClient.__init__(self, "TEST", session=object())
+            _FakeClient.__init__(self)
+    monkeypatch.setattr(watch, "datetime", Clock)
+    monkeypatch.setenv("KORSTOCKSCAN_WIDGET_MARKET_DATA_SOURCE", "ws")
+    receipt = _adoptable_widget_transport(now, "111111", 10000, 9990)
+    receipt["ws_request_code"] = "111111"
+    monkeypatch.setattr(watch, "read_shared_widget_quote", lambda *a, **kw: receipt)
+    collector = watch.WidgetResearchWatchCollector(config=_runtime_config([("111111", "one")]),
+        client=Client(), output_dir=tmp_path/"raw", snapshot_dir=tmp_path/"snapshots")
+    row = collector.collect_once(now)[0]
+    assert row["status"] == ("PASS" if delay == 3 else "SOURCE_QUALITY_BLOCKED")
+    assert row["quote_received_at_kst"] == (now-timedelta(seconds=.2)).isoformat()
+    assert ("ws_receive_receipt_invalid_or_stale" in row["source_quality_issues"]) == (delay == 25)
