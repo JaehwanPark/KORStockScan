@@ -11,6 +11,7 @@ from __future__ import annotations
 from src.trading.market.shared_ws_snapshot import read_shared_widget_quote, compare_widget_rest, attach_transport_census
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -3709,7 +3710,25 @@ class KiwoomReadOnlyClient:
         except (ValueError, OverflowError, OSError) as exc:
             raise RuntimeError("widget_rest_receive_receipt_invalid") from exc
 
-    def post(
+    def post(self, path, api_id, payload, *, optional=False):
+        if not self.shared_read_control_enabled:
+            return self._post_uncached(path, api_id, payload, optional=optional)
+        from src.utils.kiwoom_read_request_control import WidgetMarketResponseCache
+
+        def fetch():
+            data = self._post_uncached(path, api_id, payload, optional=optional)
+            return data, dict(self.last_request_receipt)
+
+        (data, receipt), _hit = WidgetMarketResponseCache().run(
+            token=kiwoom_utils.resolve_kiwoom_request_token(self.token),
+            endpoint=kiwoom_utils.get_api_url(path), api_id=api_id, payload=payload, fetch=fetch,
+        )
+        self.last_request_receipt = receipt
+        if _hit and self.budget is not None:
+            self.budget.note_response_reuse()
+        return data
+
+    def _post_uncached(
         self,
         path: str,
         api_id: str,
@@ -3734,6 +3753,7 @@ class KiwoomReadOnlyClient:
         if self.budget is not None:
             self.budget.acquire(optional=optional)
         active_token = kiwoom_utils.resolve_kiwoom_request_token(self.token)
+        self.last_request_receipt["request_token_digest"] = hashlib.sha256(str(active_token).encode()).hexdigest()
         if active_token:
             self.token = active_token
         endpoint = kiwoom_utils.get_api_url(path)
@@ -3850,6 +3870,7 @@ class ReadOnlyRequestBudget:
         self._requests: deque[float] = deque()
         self._cooldown_until = 0.0
         self.total_request_count = 0
+        self.total_reused_response_count = 0
         self.rate_limit_count = 0
         self._lock = threading.RLock()
         if hasattr(os, "register_at_fork"):
@@ -3881,6 +3902,10 @@ class ReadOnlyRequestBudget:
             self.rate_limit_count += 1
             self._cooldown_until = max(self._cooldown_until, time.monotonic() + 30.0)
 
+    def note_response_reuse(self) -> None:
+        with self._lock:
+            self.total_reused_response_count += 1
+
     def snapshot(self) -> dict[str, int]:
         with self._lock:
             now = time.monotonic()
@@ -3892,6 +3917,7 @@ class ReadOnlyRequestBudget:
                     0, self.max_requests_per_minute - len(self._requests)
                 ),
                 "total_request_count": self.total_request_count,
+                "total_reused_response_count": self.total_reused_response_count,
                 "rate_limit_count": self.rate_limit_count,
             }
 

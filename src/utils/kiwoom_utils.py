@@ -120,7 +120,9 @@ def _cache_get(namespace, key):
         entry = _MARKET_DATA_CACHE.get(cache_key)
         if not entry:
             return None
-        if float(entry.get("expires_at", 0.0) or 0.0) <= now:
+        if (float(entry.get("expires_at", 0.0) or 0.0) <= now
+                or (namespace.startswith("ka10080") and
+                    (now < entry.get("created_at", now) or int(entry.get("created_at", now) // 60) != int(now // 60)))):
             _MARKET_DATA_CACHE.pop(cache_key, None)
             return None
         return _cache_clone(entry.get("value"))
@@ -141,9 +143,13 @@ def _cache_set(namespace, key, value, ttl_sec):
         return value
     cache_key = (namespace, key)
     now = time.time()
+    expires_at = now + float(ttl_sec)
+    if meta.get("read_response_cache_expires_at") is not None:
+        expires_at = min(expires_at, float(meta["read_response_cache_expires_at"]))
     with _MARKET_DATA_CACHE_LOCK:
         _MARKET_DATA_CACHE[cache_key] = {
-            "expires_at": now + float(ttl_sec),
+            "expires_at": expires_at,
+            "created_at": now,
             "value": _cache_clone(value),
         }
         if len(_MARKET_DATA_CACHE) > _MARKET_DATA_CACHE_MAX_ENTRIES:
@@ -5071,9 +5077,37 @@ def fetch_kiwoom_api_continuous(
         else float(read_rate_max_wait_sec)
     )
     try:
+        def fetch_market_read():
+            # The wire key excludes caller-side slicing (10 vs 120 bars) but
+            # retains route, date, priority, continuation and request bounds.
+            if api_id == "ka10080":
+                cached = _cache_get("ka10080_transport", key)
+                if cached is not None:
+                    cached[1]["read_response_cache_status"] = "hit"
+                    cached[1]["read_response_cache_caller_http_attempt_count"] = 0
+                    return cached
+            started = time.time()
+            result = _fetch_kiwoom_api_continuous_transport(**kwargs)
+            results, meta = result
+            if (api_id == "ka10080" and results
+                    and all(isinstance(row, dict) and str(row.get("return_code")) == "0" for row in results)
+                    and type(meta.get("rest_received_ts_ms")) is int
+                    and 0 < meta["rest_received_ts_ms"] <= int(time.time() * 1000)
+                    and meta.get("read_rate_control_status") == "admitted"
+                    and not meta.get("continuous_next_key_missing")
+                    and not meta.get("rate_limit_detected")
+                    and int(started // 60) == int(time.time() // 60)):
+                ttl = min(3.0, float(getattr(TRADING_RULES, "KIWOOM_MINUTE_CACHE_TTL_SEC", 3.0)))
+                # Preserve the existing post-fetch normalized-cache window;
+                # a later raw-cache consumer may not start another TTL.
+                meta["read_response_cache_expires_at"] = time.time() + ttl
+                meta["read_response_cache_status"] = "miss"
+                _cache_set("ka10080_transport", key, result, ttl)
+            return result
+
         (results, meta), joined, elapsed = _MARKET_READ_SINGLE_FLIGHT.run(
             key,
-            lambda: _fetch_kiwoom_api_continuous_transport(**kwargs),
+            fetch_market_read,
             wait_sec=wait_sec,
         )
     except MarketReadJoinDeferred as exc:
@@ -5101,7 +5135,7 @@ def fetch_kiwoom_api_continuous(
             "read_singleflight_status": "joined" if joined else "owner",
             "read_singleflight_waited_sec": round(elapsed, 6) if joined else 0.0,
             "read_singleflight_caller_http_attempt_count": (
-                0 if joined else meta.get("request_attempt_count", 0)
+                0 if joined or meta.get("read_response_cache_status") == "hit" else meta.get("request_attempt_count", 0)
             ),
             "transport_request_owner": meta.get("request_owner"),
             "request_owner": str(request_owner or f"kiwoom_utils.{api_id}"),

@@ -3773,6 +3773,43 @@ def test_forked_collector_budget_preserves_window_without_parent_mutex_dependenc
     assert budget.snapshot()["total_request_count"] == 4
 
 
+def test_widget_clients_reuse_success_without_budget_or_receive_clock_refresh(tmp_path, monkeypatch):
+    from src.utils import kiwoom_read_request_control as control
+    from types import SimpleNamespace
+    monkeypatch.setattr(control, "DATA_DIR", tmp_path)
+    clock = [601.0]
+    monkeypatch.setattr(advisory.time, "time", lambda: clock[0])
+    monkeypatch.setattr(advisory.kiwoom_utils, "resolve_kiwoom_request_token", lambda token: token)
+    monkeypatch.setattr(advisory.kiwoom_utils, "get_api_url", lambda path: "https://api.test" + path)
+    admissions, sends = [], []
+    def acquire(**kwargs):
+        admissions.append(kwargs)
+        return SimpleNamespace(admitted=True, reason="admitted")
+    monkeypatch.setattr(advisory.kiwoom_utils, "acquire_kiwoom_read_capacity", acquire)
+    class Response:
+        status_code = 200
+        def raise_for_status(self): pass
+        def json(self): return {"return_code": 0, "cur_prc": "100"}
+    class Session:
+        def post(self, *args, **kwargs):
+            sends.append(kwargs)
+            return Response()
+    budget = advisory.ReadOnlyRequestBudget()
+    a = advisory.KiwoomReadOnlyClient("TEST", session=Session(), budget=budget, shared_read_control_enabled=True)
+    b = advisory.KiwoomReadOnlyClient("TEST", session=Session(), budget=budget, shared_read_control_enabled=True)
+    first = a.post("/api/dostk/stkinfo", "ka10001", {"stk_cd": "005930"})
+    clock[0] += 1
+    second = b.post("/api/dostk/stkinfo", "ka10001", {"stk_cd": "005930"})
+    assert len(sends) == len(admissions) == budget.total_request_count == 1
+    assert second["_kiwoom_source_meta"]["rest_received_ts_ms"] == first["_kiwoom_source_meta"]["rest_received_ts_ms"]
+    assert b.response_received_at(api_id="ka10001", request_code="005930").timestamp() == 601
+    assert b.last_request_receipt["response_cache_status"] == "hit"
+    assert budget.snapshot()["total_reused_response_count"] == 1
+    clock[0] += 3
+    b.post("/api/dostk/stkinfo", "ka10001", {"stk_cd": "005930"})
+    assert len(sends) == len(admissions) == budget.total_request_count == 2
+
+
 @pytest.mark.parametrize(
     "raw_code", [None, False, True, 0.0, 0.5, {}, [], "bad-code", "0.0"]
 )

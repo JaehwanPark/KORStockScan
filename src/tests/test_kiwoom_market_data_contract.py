@@ -759,6 +759,31 @@ def test_strength_shadow_feedback_uses_first_ask_level_as_best_ask(monkeypatch):
     assert recorded and recorded[0]["best_ask"] == 10010
 
 
+def test_minute_wire_cache_reuses_different_slices_without_clock_extension(monkeypatch):
+    kiwoom_utils._MARKET_DATA_CACHE.clear()
+    clock, calls = [601.0], []
+    monkeypatch.setattr(kiwoom_utils.time, "time", lambda: clock[0])
+    def transport(**kwargs):
+        calls.append(kwargs)
+        rows = [{"cntr_tm": f"2026092109{i:02d}00", "cur_prc": "100", "open_pric": "100",
+                 "high_pric": "101", "low_pric": "99", "trde_qty": "10"} for i in range(30)]
+        return [{"return_code": 0, "stk_min_pole_chart_qry": rows}], {
+            "rest_received_ts_ms": int(clock[0]*1000), "request_attempt_count": 1,
+            "request_owner": "original", "read_rate_control_status": "admitted"}
+    monkeypatch.setattr(kiwoom_utils, "_fetch_kiwoom_api_continuous_transport", transport)
+    a, _ = kiwoom_utils.get_minute_candles_ka10080_with_meta("cache-test", "005930", 10, explicit_request_code=True)
+    clock[0] += 1
+    b, meta = kiwoom_utils.get_minute_candles_ka10080_with_meta("cache-test", "005930", 20, explicit_request_code=True)
+    assert len(a) == 10 and len(b) == 20 and len(calls) == 1
+    assert meta["rest_received_ts_ms"] == 601000
+    assert meta["read_response_cache_status"] == "hit"
+    assert meta["read_singleflight_caller_http_attempt_count"] == 0
+    clock[0] = 604.1
+    kiwoom_utils.get_minute_candles_ka10080_with_meta("cache-test", "005930", 20, explicit_request_code=True)
+    assert len(calls) == 2  # normalized cache cannot extend raw response expiry
+    kiwoom_utils._MARKET_DATA_CACHE.clear()
+
+
 def test_market_read_transport_scope_and_receipt_are_preserved(monkeypatch):
     from copy import deepcopy
 

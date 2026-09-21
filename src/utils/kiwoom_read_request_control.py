@@ -20,6 +20,7 @@ import math
 import os
 import time
 import threading
+import tempfile
 from copy import deepcopy
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -49,6 +50,101 @@ DEFAULT_SOURCE_ONLY_MAX_WAIT_SEC = 1.25
 RATE_LIMIT_RETURN_CODES = frozenset({"1700", "1701", "1702"})
 STATE_SCHEMA_VERSION = "kiwoom_domestic_read_rate_control_v1"
 DEFAULT_STATE_DIR = DATA_DIR / "runtime" / "kiwoom_read_rate_control"
+
+
+class WidgetMarketResponseCache:
+    """Bounded exact-request reuse for advisory REST reads, never orders.
+
+    Three seconds from request start, within the same minute. Original HTTP
+    receipt clocks survive reuse. Slot collisions and I/O faults are misses.
+    No lock is held over network I/O; simultaneous misses keep normal budgets.
+    """
+
+    def __init__(self, directory=None):
+        self.directory = Path(directory or DATA_DIR / "runtime" / "widget_market_response_cache")
+
+    @staticmethod
+    def _complete(data, api_id):
+        if not isinstance(data, dict) or str(data.get("return_code")) != "0":
+            return False
+        if api_id == "ka10080":
+            rows = data.get("stk_min_pole_chart_qry")
+            return bool(isinstance(rows, list) and rows and all(isinstance(row, dict)
+                and len(str(row.get("cntr_tm", ""))) == 14 and str(row.get("cntr_tm", "")).isdigit()
+                and all(str(row.get(k, "")).strip() for k in ("cur_prc", "open_pric", "high_pric", "low_pric", "trde_qty"))
+                for row in rows))
+        fields = ("cur_prc",) if api_id == "ka10001" else ("buy_fpr_bid", "sel_fpr_bid", "buy_fpr_req", "sel_fpr_req")
+        try:
+            values = [abs(int(str(data[k]).replace(",", ""))) for k in fields]
+            return all(v > 0 for v in values) and (api_id != "ka10004" or values[0] <= values[1])
+        except (KeyError, TypeError, ValueError):
+            return False
+
+    def run(self, *, token, endpoint, api_id, payload, fetch):
+        allowed = {"ka10001": "/api/dostk/stkinfo", "ka10004": "/api/dostk/mrkcond",
+                   "ka10080": "/api/dostk/chart"}
+        if not token or allowed.get(api_id) != urlsplit(endpoint).path:
+            return fetch(), False
+        started = time.time()
+        token_digest = hashlib.sha256(token.encode()).hexdigest()
+        scope = ["widget_market_response_v1", endpoint, token_digest,
+                 api_id, payload, int(started // 60)]
+        key = hashlib.sha256(json.dumps(scope, sort_keys=True, allow_nan=False).encode()).hexdigest()
+        path = self.directory / f"{int(key[:8], 16) % 256:03d}.json"
+        try:
+            with path.open("rb") as handle:
+                raw = handle.read(2 * 1024 * 1024 + 1)
+            entry = json.loads(raw) if len(raw) <= 2 * 1024 * 1024 else {}
+            data, receipt = entry["value"]
+            stamp = receipt["rest_received_ts_ms"] / 1000
+            now = time.time()
+            if (entry["key"] == key and 0 <= now - entry["started"] < 3
+                    and entry["started"] <= stamp + .001 and stamp <= now
+                    and int(now // 60) == int(started // 60)
+                    and receipt.get("request_succeeded") is True
+                    and receipt.get("request_token_digest") == token_digest
+                    and receipt.get("api_id") == api_id
+                    and receipt.get("request_code") == payload.get("stk_cd")
+                    and data.get("_kiwoom_source_meta", {}).get("rest_received_ts_ms") == receipt["rest_received_ts_ms"]
+                    and data.get("_kiwoom_source_meta", {}).get("api_id") == api_id
+                    and data.get("_kiwoom_source_meta", {}).get("request_code") == payload.get("stk_cd")
+                    and self._complete(data, api_id)):
+                receipt.update(admission_status="reused_success", request_attempt_count=0,
+                               response_cache_status="hit", response_cache_source_pid=entry["pid"])
+                data["_kiwoom_source_meta"]["response_cache_status"] = "hit"
+                return (data, receipt), True
+        except (OSError, ValueError, KeyError, TypeError, AttributeError, OverflowError):
+            pass
+        value = fetch()
+        data, receipt = value
+        # Cache only explicit successful replies, not deferrals, errors or
+        # incomplete clock contracts. Never renew an inherited cached receipt.
+        stamp = receipt.get("rest_received_ts_ms")
+        finished = time.time()
+        if (receipt.get("request_succeeded") is not True or not self._complete(data, api_id)
+                or receipt.get("request_token_digest") != token_digest
+                or type(stamp) is not int or not started <= stamp / 1000 + .001 <= finished + .001
+                or not 0 <= finished - started < 3 or int(finished // 60) != int(started // 60)):
+            return value, False
+        temporary = None
+        try:
+            raw = json.dumps({"key": key, "started": started, "pid": os.getpid(), "value": value},
+                             allow_nan=False).encode()
+            if len(raw) <= 2 * 1024 * 1024:
+                self.directory.mkdir(parents=True, exist_ok=True)
+                with tempfile.NamedTemporaryFile(dir=self.directory, delete=False) as handle:
+                    temporary = Path(handle.name)
+                    handle.write(raw)
+                os.replace(temporary, path)
+        except (OSError, ValueError, TypeError):
+            pass
+        finally:
+            if temporary is not None:
+                try:
+                    temporary.unlink(missing_ok=True)
+                except OSError:
+                    pass
+        return value, False
 
 
 class MarketReadJoinDeferred(RuntimeError):

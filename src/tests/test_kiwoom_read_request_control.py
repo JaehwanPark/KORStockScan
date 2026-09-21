@@ -5,6 +5,114 @@ from pathlib import Path
 
 import pytest
 
+
+def _widget_cache_fixture(tmp_path, monkeypatch):
+    from src.utils import kiwoom_read_request_control as control
+    clock = [601.0]
+    monkeypatch.setattr(control.time, "time", lambda: clock[0])
+    calls = []
+    def fetch():
+        calls.append(True)
+        stamp = int(clock[0] * 1000)
+        meta = {"api_id": "ka10004", "request_code": "005930", "rest_received_ts_ms": stamp}
+        return {"return_code": 0, "buy_fpr_bid": "100", "sel_fpr_bid": "101",
+                "buy_fpr_req": "10", "sel_fpr_req": "12", "_kiwoom_source_meta": meta}, {
+            **meta, "request_succeeded": True, "request_attempt_count": 1,
+            "request_token_digest": control.hashlib.sha256(b"PRIVATE-TOKEN").hexdigest()}
+    cache = control.WidgetMarketResponseCache(tmp_path)
+    kwargs = dict(token="PRIVATE-TOKEN", endpoint="https://api.kiwoom.com/api/dostk/mrkcond",
+                  api_id="ka10004", payload={"stk_cd": "005930"}, fetch=fetch)
+    return cache, kwargs, clock, calls
+
+
+def test_widget_response_cache_cross_instance_preserves_original_clock(tmp_path, monkeypatch):
+    from src.utils.kiwoom_read_request_control import WidgetMarketResponseCache
+    cache, kwargs, clock, calls = _widget_cache_fixture(tmp_path, monkeypatch)
+    original, hit = cache.run(**kwargs)
+    assert not hit
+    clock[0] += 1
+    reused, hit = WidgetMarketResponseCache(tmp_path).run(**kwargs)
+    assert hit and len(calls) == 1
+    assert reused[1]["rest_received_ts_ms"] == original[1]["rest_received_ts_ms"] == 601000
+    assert reused[1]["request_attempt_count"] == 0
+    reused[0]["buy_fpr_bid"] = "999"
+    assert cache.run(**kwargs)[0][0]["buy_fpr_bid"] == "100"
+    assert "PRIVATE-TOKEN" not in next(tmp_path.glob("*.json")).read_text()
+
+
+def test_widget_response_cache_independent_process_read(tmp_path, monkeypatch):
+    import subprocess, sys
+    cache, kwargs, clock, calls = _widget_cache_fixture(tmp_path, monkeypatch)
+    cache.run(**kwargs)
+    script = '''import sys,json
+from src.utils import kiwoom_read_request_control as c
+c.time.time=lambda:602.0
+def forbidden(): raise AssertionError("unexpected transport")
+value,hit=c.WidgetMarketResponseCache(sys.argv[1]).run(token="PRIVATE-TOKEN",endpoint="https://api.kiwoom.com/api/dostk/mrkcond",api_id="ka10004",payload={"stk_cd":"005930"},fetch=forbidden)
+print(json.dumps([hit,value[1]["rest_received_ts_ms"],value[1]["request_attempt_count"]]))
+'''
+    result = subprocess.run([sys.executable, "-c", script, str(tmp_path)], check=True,
+                            capture_output=True, text=True, timeout=10)
+    assert json.loads(result.stdout.splitlines()[-1]) == [True, 601000, 0]
+
+
+@pytest.mark.parametrize("change", ["token", "origin", "route", "body", "expired", "future", "minute", "corrupt", "receipt_conflict"])
+def test_widget_response_cache_isolation_and_invalid_receipt(tmp_path, monkeypatch, change):
+    cache, kwargs, clock, calls = _widget_cache_fixture(tmp_path, monkeypatch)
+    if change == "minute": clock[0] = 659.5
+    cache.run(**kwargs)
+    if change == "token": kwargs["token"] = "OTHER"
+    elif change == "origin": kwargs["endpoint"] = kwargs["endpoint"].replace("api.kiwoom", "mockapi.kiwoom")
+    elif change == "route": kwargs["payload"] = {"stk_cd": "005930_AL"}
+    elif change == "body": kwargs["payload"] = {"stk_cd": "005930", "extra": "1"}
+    elif change == "expired": clock[0] += 3
+    elif change == "future": clock[0] -= .1
+    elif change == "minute": clock[0] += 1
+    elif change == "corrupt": next(tmp_path.glob("*.json")).write_text("{")
+    elif change == "receipt_conflict":
+        p = next(tmp_path.glob("*.json")); d = json.loads(p.read_text())
+        d["value"][0]["_kiwoom_source_meta"]["rest_received_ts_ms"] -= 1
+        p.write_text(json.dumps(d))
+    assert cache.run(**kwargs)[1] is False
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("api,path", [("kt00011", "/api/dostk/acnt"), ("kt10000", "/api/dostk/ordr"), ("ka10004", "/wrong")])
+def test_widget_response_cache_never_reuses_accounts_orders_or_wrong_path(tmp_path, monkeypatch, api, path):
+    cache, kwargs, clock, calls = _widget_cache_fixture(tmp_path, monkeypatch)
+    kwargs.update(api_id=api, endpoint="https://api.kiwoom.com" + path)
+    cache.run(**kwargs); cache.run(**kwargs)
+    assert len(calls) == 2 and not list(tmp_path.glob("*.json"))
+
+
+def test_widget_response_cache_failure_and_io_fault_are_not_success(tmp_path, monkeypatch):
+    cache, kwargs, clock, calls = _widget_cache_fixture(tmp_path, monkeypatch)
+    def failed():
+        raise RuntimeError("deferred")
+    kwargs["fetch"] = failed
+    with pytest.raises(RuntimeError, match="deferred"):
+        cache.run(**kwargs)
+    assert not list(tmp_path.glob("*.json"))
+
+
+@pytest.mark.parametrize("defect", ["empty", "crossed", "token_changed", "io"])
+def test_widget_response_cache_does_not_retain_partial_or_wrong_token(tmp_path, monkeypatch, defect):
+    cache, kwargs, clock, calls = _widget_cache_fixture(tmp_path, monkeypatch)
+    original = kwargs["fetch"]
+    def fetch():
+        data, receipt = original()
+        if defect == "empty": data.pop("sel_fpr_req")
+        elif defect == "crossed": data["sel_fpr_bid"] = "99"
+        elif defect == "token_changed": receipt["request_token_digest"] = "changed"
+        return data, receipt
+    kwargs["fetch"] = fetch
+    if defect == "io":
+        p = tmp_path / "not_a_directory"; p.write_text("preserve")
+        cache.directory = p
+    assert cache.run(**kwargs)[1] is False
+    assert cache.run(**kwargs)[1] is False
+    assert len(calls) == 2
+
 from src.utils.kiwoom_read_request_control import (
     KiwoomReadRequestCoordinator,
     is_kiwoom_read_rate_limit,
