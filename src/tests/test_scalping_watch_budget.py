@@ -1,5 +1,7 @@
 from datetime import datetime
 
+import pytest
+
 from src.engine import kiwoom_sniper_v2
 from src.engine.scalping.watch_budget import (
     GENERAL_SCALPING,
@@ -7,10 +9,33 @@ from src.engine.scalping.watch_budget import (
     RISING_MISSED,
     classify_owner,
     limits,
+    market_gainer_first_ai_retention,
     owner_allowances,
     rising_source_reservation,
     slot_type,
 )
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [(None, 180.0), ("240", 240.0), ("invalid", 180.0), ("0", 1.0), ("900", 600.0)],
+)
+def test_market_gainer_retention_reads_runtime_env(monkeypatch, configured, expected):
+    key = "KORSTOCKSCAN_SCANNER_MARKET_GAINER_FIRST_EVAL_RETENTION_SEC"
+    if configured is None:
+        monkeypatch.delenv(key, raising=False)
+    else:
+        monkeypatch.setenv(key, configured)
+    target = {
+        "source_signature": "PREV_CLOSE_GAINER",
+        "scanner_promotion_emitted_epoch": 1000.0,
+    }
+
+    decision = market_gainer_first_ai_retention(target, now_ts=1002.0)
+
+    assert decision["market_gainer_first_eval_retention_max_sec"] == expected
+    assert decision["retention_active"] is (2.0 < expected)
+    assert decision["actual_order_submitted"] is False
 
 
 def _watch_target(code, owner, armed_epoch):
