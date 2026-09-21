@@ -4,6 +4,8 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
+# Operator-approved research-only collection scope; execution owners are preserved.
+Environment="KORSTOCKSCAN_WIDGET_RESEARCH_PRIORITY_SYMBOLS=006800,010140,080220"
 Type=simple
 User=ubuntu
 Group=www-data

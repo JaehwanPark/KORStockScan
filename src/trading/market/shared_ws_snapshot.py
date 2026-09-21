@@ -8,6 +8,8 @@ import math
 import os
 import re
 import time
+import threading
+import copy
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -44,6 +46,36 @@ def producer_provenance():
             "source_root": str(Path(__file__).resolve().parents[3])}
 
 
+_FRAME_CACHE_LOCK = threading.Lock()
+_FRAME_CACHE = None
+
+
+def _frame_generation(st):
+    return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+
+
+def _read_shared_frame(path):
+    """One parsed frame per process and file generation, not a validity cache."""
+    global _FRAME_CACHE
+    with _FRAME_CACHE_LOCK:
+        generation = _frame_generation(path.stat())
+        key = (str(path.absolute()), generation)
+        if _FRAME_CACHE is not None and _FRAME_CACHE[0] == key:
+            return _FRAME_CACHE[1], _FRAME_CACHE[2]
+        with path.open("rb") as handle:
+            opened = _frame_generation(os.fstat(handle.fileno()))
+            raw = handle.read(8 * 1024 * 1024 + 1)
+            after = _frame_generation(os.fstat(handle.fileno()))
+        if len(raw) > 8 * 1024 * 1024:
+            raise ValueError("snapshot_size_exceeded")
+        if generation != opened or opened != after or after != _frame_generation(path.stat()):
+            raise ValueError("snapshot_changed_during_read")
+        frame = json.loads(raw)
+        digest = hashlib.sha256(raw).hexdigest()
+        _FRAME_CACHE = (key, frame, digest)
+        return frame, digest
+
+
 def read_shared_widget_quote(context, *, now_ts, path=None):
     """Read one atomic checkpoint, preserving each original field clock.
 
@@ -67,11 +99,7 @@ def read_shared_widget_quote(context, *, now_ts, path=None):
         item = context.request_code
         if not re.fullmatch(r"[0-9]{6}(?:_AL|_NX)?", item):
             raise ValueError("request_item_invalid")
-        with path.open("rb") as handle:
-            raw = handle.read(8 * 1024 * 1024 + 1)
-        if len(raw) > 8 * 1024 * 1024:
-            raise ValueError("snapshot_size_exceeded")
-        snapshot = json.loads(raw)
+        snapshot, snapshot_digest = _read_shared_frame(path)
         if live_clock:
             # A live multi-symbol cycle may start long before this atomic read.
             # Observe after I/O; never rewrite the producer or field clocks.
@@ -101,7 +129,7 @@ def read_shared_widget_quote(context, *, now_ts, path=None):
                 or not re.fullmatch(r"[0-9a-f]{40}", producer.get("source_commit", ""))
                 or producer.get("process") != process_generation(producer["process"]["pid"])):
             raise ValueError("producer_generation_invalid")
-        result["producer"] = producer
+        result["producer"] = copy.deepcopy(producer)
         registered = producer.get("registered_items")
         if (not isinstance(registered, list)
                 or any(not isinstance(code, str) for code in registered)):
@@ -171,11 +199,11 @@ def read_shared_widget_quote(context, *, now_ts, path=None):
                       provider_trade_clock={k: types["0B"].get(k) for k in
                           ("provider_trade_epoch", "provider_trade_time_precision_ms", "provider_trade_date_basis")},
                       source_sha256=hashlib.sha256(json.dumps(types, sort_keys=True).encode()).hexdigest(),
-                      snapshot_sha256=hashlib.sha256(raw).hexdigest(), snapshot_generated_at=generated)
-        result["widget_quote_fields"] = types["0B"].get("widget_quote_fields", {})
+                      snapshot_sha256=snapshot_digest, snapshot_generated_at=generated)
+        result["widget_quote_fields"] = copy.deepcopy(types["0B"].get("widget_quote_fields", {}))
         selected = next(r for r in stock["machine_confirmation_routes"].values()
                         if r.get("realtime_types", {}).get("0B", {}).get("item") == item)
-        result["recent_trades"] = list(selected.get("recent_trades") or ())[:3]
+        result["recent_trades"] = copy.deepcopy(list(selected.get("recent_trades") or ())[:3])
     except (OSError, ValueError, KeyError, TypeError, IndexError, OverflowError, AttributeError, RecursionError) as exc:
         result["reason"] = str(exc) if isinstance(exc, ValueError) else type(exc).__name__ + ":" + str(exc)
     result["reader_elapsed_ms"] = round((time.monotonic() - started) * 1000, 3)

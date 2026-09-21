@@ -362,6 +362,10 @@ class WidgetSymbolRuntimeCollector:
         self.request_budget = ReadOnlyRequestBudget(
             max_requests_per_minute=REQUESTS_PER_MINUTE
         )
+        from src.engine.monitoring.widget_research_watch_collector import observation_priority_symbols
+        self._observation_priority = observation_priority_symbols()
+        self._paused_observations = {}
+        self._execution_symbols = set()
         self._active_date = ""
         self._policies: dict[str, dict[str, Any]] = {}
         self._contracts: dict[str, WidgetSymbolRuntimeContract] = {}
@@ -398,10 +402,14 @@ class WidgetSymbolRuntimeCollector:
         self._policies = self.policy_loader.resolve_observation_all(
             observed_date=observed_at.date()
         )
+        if self._observation_priority is not None:
+            self._execution_symbols = set(self.policy_loader.resolve_all(observed_date=observed_at.date()))
+        self._paused_observations.clear()
         self._raw_only_symbols = {
             symbol: name
             for symbol, name in self._research_universe.items()
             if symbol not in self._policies
+            and (self._observation_priority is None or symbol in self._observation_priority)
         }
         self._contracts = {
             symbol: CONTRACTS.get(symbol)
@@ -1518,6 +1526,23 @@ class WidgetSymbolRuntimeCollector:
         client = self._client()
         failures: dict[str, str] = {}
         for symbol, policy in self._ordered_policy_items():
+            episode = self._episodes.get(symbol)
+            if (self._observation_priority is not None
+                    and symbol not in self._observation_priority
+                    and symbol not in self._execution_symbols
+                    and policy.get("authority") == "prospective_exact_observation_only"
+                    and not (episode and episode.active)):
+                if symbol not in self._paused_observations:
+                    payload = dict(status="observation_paused", symbol=symbol,
+                                   observed_at_kst=now.isoformat(), policy_id=policy["policy_id"],
+                                   reason="operator_research_priority_scope",
+                                   runtime_effect=False, actual_order_submitted=False,
+                                   broker_order_forbidden=True, entry_event=None, exit_event=None,
+                                   episode=episode.as_dict() if episode else {})
+                    _atomic_write(self._contracts[symbol].DEFAULT_SNAPSHOT_PATH, payload)
+                    self._paused_observations[symbol] = payload
+                results[symbol] = self._paused_observations[symbol]
+                continue
             try:
                 results[symbol] = self._collect_symbol(
                     symbol=symbol,

@@ -1000,3 +1000,31 @@ def test_widget_receipt_rejects_incomplete_or_non_numeric_field_clocks(tmp_path,
     source["source_clocks"] = clocks
     with pytest.raises(ValueError, match="widget_ws_source"):
         validate_widget_ws_receipt(source, context=context, now_ts=now)
+
+
+def test_shared_frame_cache_reuses_parse_and_preserves_freshness(tmp_path, monkeypatch):
+    from src.trading.market import shared_ws_snapshot as shared
+    path, context, now, _ = _shared_widget_fixture(tmp_path, monkeypatch)
+    shared._FRAME_CACHE = None
+    calls = []
+    original = shared.json.loads
+    monkeypatch.setattr(shared.json, "loads", lambda raw: (calls.append(1), original(raw))[1])
+    first = shared.read_shared_widget_quote(context, now_ts=now, path=path)
+    first["producer"]["transport_epoch"] = 999
+    second = shared.read_shared_widget_quote(context, now_ts=now + 1, path=path)
+    assert second["status"] == "valid_ws_comparison_input"
+    assert second["producer"]["transport_epoch"] == 1
+    assert len(calls) == 1
+    assert shared.read_shared_widget_quote(context, now_ts=now + 21, path=path)["reason"] == "snapshot_stale_or_future"
+    assert len(calls) == 1
+
+
+def test_shared_frame_cache_rejects_replaced_or_missing_file(tmp_path, monkeypatch):
+    from src.trading.market import shared_ws_snapshot as shared
+    path, context, now, _ = _shared_widget_fixture(tmp_path, monkeypatch)
+    assert shared.read_shared_widget_quote(context, now_ts=now, path=path)["status"] == "valid_ws_comparison_input"
+    replacement = path.with_suffix(".new")
+    replacement.write_text("{}"); replacement.replace(path)
+    assert shared.read_shared_widget_quote(context, now_ts=now, path=path)["status"] == "source_gap"
+    path.unlink()
+    assert shared.read_shared_widget_quote(context, now_ts=now, path=path)["status"] == "source_gap"
