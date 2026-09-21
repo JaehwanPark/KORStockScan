@@ -237,3 +237,16 @@ def test_cutover_respects_existing_history_floor_and_gap_scope(monkeypatch):
     rows.append({"cntr_tm":"20260921160200"})
     assert reader.selected_completed_bar_payload("005930",now=BASE,seed_fetch=lambda _:pytest.fail("REST after WS history ready"),minimum_bars=2)==selected
     assert len(calls)==1
+
+
+def test_mid_session_ws_cannot_rebase_session_anchor(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_WIDGET_BAR_SOURCE","ws")
+    monkeypatch.setenv("KORSTOCKSCAN_WIDGET_BAR_WS_SYMBOLS","005930")
+    raw={"stk_min_pole_chart_qry":[{}]*100,"_completed_bar_source":{"complete_session_prefix":False}}
+    monkeypatch.setattr(reader,"read_shared_completed_bars",lambda *args,**kw:raw)
+    with pytest.raises(RuntimeError,match="session_anchor_history_incomplete"):
+        reader.selected_completed_bar_payload("005930",now=BASE,history_scope="session")
+    seed={"stk_min_pole_chart_qry":[{"cntr_tm":"20260921160000"}],"_completed_bar_source":{"source":"kiwoom_ka10080_AL_seed","adjustment":"adjusted_1"}}
+    monkeypatch.setattr(reader,"shared_completed_bar_seed",lambda *args,**kw:seed)
+    selected=reader.selected_completed_bar_payload("005930",now=BASE,history_scope="session",seed_fetch=lambda _:None)
+    assert selected is seed and selected["_completed_bar_source"]["ws_selection_blocker"]=="session_anchor_history_incomplete"

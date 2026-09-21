@@ -3725,6 +3725,7 @@ class KiwoomReadOnlyClient:
             bars = selected_completed_bar_payload(
                 str(payload.get("stk_cd", "")), now=datetime.now(KST),
                 minimum_bars=getattr(self, "completed_bar_minimum_bars", 1),
+                history_scope=getattr(self, "completed_bar_history_scope", "session"),
                 seed_fetch=lambda item: self._post_uncached(
                     path, api_id, {**payload, "stk_cd": item}, optional=optional),
             )
@@ -4615,6 +4616,7 @@ class SamsungWidgetCollector:
         from src.trading.market.shared_ws_snapshot import completed_bar_mode
         if isinstance(client, KiwoomReadOnlyClient):
             client.completed_bar_minimum_bars = context.minimum_bars
+            client.completed_bar_history_scope = "session"
         ws_bars = completed_bar_mode(context.request_code) == "ws"
         if ws_bars:
             self._minute_cache = {}  # An invalidated WS revision cannot reuse old bars.

@@ -1696,7 +1696,8 @@ class SamsungRegularTwoLegMachine:
 
     def _source(self, now: datetime):
         if hasattr(self.gateway, "completed_bar_minimum_bars"):
-            self.gateway.completed_bar_minimum_bars = int(getattr(self.policy, "lookback_bars", 1))
+            self.gateway.completed_bar_minimum_bars = (int(getattr(self.policy, "lookback_bars", 1))
+                                                       + int(getattr(self.policy, "confirmation_bars", 0)))
         return self.gateway.completed_sor_minute_bars(trade_date=now.date(), now=now)
 
     def _completed_bars_after_signal(self, now: datetime) -> int | None:

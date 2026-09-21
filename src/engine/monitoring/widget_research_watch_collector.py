@@ -598,6 +598,7 @@ class WidgetResearchWatchCollector:
                 reuse_receipt = None
         if isinstance(client, KiwoomReadOnlyClient):
             client.completed_bar_minimum_bars = context.minimum_bars
+            client.completed_bar_history_scope = "rolling"
         bars_raw = request(
             "/api/dostk/chart",
             "ka10080",

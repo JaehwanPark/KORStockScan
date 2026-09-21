@@ -475,8 +475,12 @@ def read_shared_completed_bars(request_code, *, now, root=None, snapshot_path=No
     invalid_from = payload.get("invalid_from_minute")
     if invalid_from is not None:
         rows = [row for row in rows if datetime.strptime(row["cntr_tm"], "%Y%m%d%H%M%S").replace(tzinfo=KST).timestamp() > invalid_from]
+    session_open = {"SOR_PREMARKET": "080000", "SOR_REGULAR": "090000", "SOR_AFTERMARKET": "160000"}[session]
+    starts_at_session_open = bool(rows and rows[0]["cntr_tm"] == now.strftime("%Y%m%d") + session_open)
+    complete_session_prefix = starts_at_session_open and not any(b["status"] == "gap" for b in payload["bars"]) and invalid_from is None
     receipt = {"source": "kiwoom_ws_AL_completed_1m", "request_code": request_code,
                "adjustment": payload["adjustment"], "source_epoch": payload["source_epoch"],
+               "complete_session_prefix": complete_session_prefix,
                "transport_epoch": producer["transport_epoch"], "producer": payload["producer"],
                "revision": payload["revision"], "content_sha256": expected,
                "available_at_epoch": max((b["available_at_epoch"] or 0 for b in payload["bars"]), default=0),
@@ -494,12 +498,20 @@ def read_shared_completed_bars(request_code, *, now, root=None, snapshot_path=No
     return {"stk_min_pole_chart_qry": rows, "_completed_bar_source": receipt}
 
 
-def selected_completed_bar_payload(request_code, *, now, consumer="widget", seed_fetch=None, minimum_bars=1):
+def selected_completed_bar_payload(request_code, *, now, consumer="widget", seed_fetch=None, minimum_bars=1, history_scope="rolling"):
     if completed_bar_mode(request_code, consumer=consumer) == "rest":
         return None
     item = request_code[:6] + "_AL"
     try:
         result = read_shared_completed_bars(item, now=now)
+        if history_scope not in {"rolling", "session"}:
+            raise ValueError("completed_bar_history_scope_invalid")
+        if history_scope == "session" and not result["_completed_bar_source"]["complete_session_prefix"]:
+            if seed_fetch is None:
+                raise ValueError("session_anchor_history_incomplete")
+            seed = shared_completed_bar_seed(item, now=now, fetch=seed_fetch)
+            seed["_completed_bar_source"]["ws_selection_blocker"] = "session_anchor_history_incomplete"
+            return seed
         if len(result["stk_min_pole_chart_qry"]) >= max(1, int(minimum_bars)) or seed_fetch is None:
             return result
         # A homogeneous bootstrap seed may cover startup, never be spliced

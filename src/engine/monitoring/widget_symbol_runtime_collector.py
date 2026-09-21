@@ -457,7 +457,11 @@ class WidgetSymbolRuntimeCollector:
     ) -> list[MinuteBar]:
         if isinstance(client, KiwoomReadOnlyClient):
             signal = (self._policies.get(symbol) or {}).get("signal_policy") or {}
-            client.completed_bar_minimum_bars = int(signal.get("minimum_history_bars", signal.get("lookback_bars", context.minimum_bars)))
+            client.completed_bar_history_scope = signal.get("anchor_mode", "session")
+            client.completed_bar_minimum_bars = max(
+                int(signal.get("minimum_history_bars", context.minimum_bars)),
+                int(signal.get("lookback_bars", context.minimum_bars)) + int(signal.get("setup_valid_bars", 0)),
+            )
         minute_key = observed_at.strftime("%Y%m%d%H%M")
         request_code = str(context.request_code)
         cache_key = f"{symbol}:{request_code}"

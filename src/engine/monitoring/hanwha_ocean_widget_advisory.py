@@ -1086,6 +1086,7 @@ class HanwhaOceanWidgetCollector:
         from src.trading.market.shared_ws_snapshot import completed_bar_mode
         if isinstance(client, KiwoomReadOnlyClient):
             client.completed_bar_minimum_bars = context.minimum_bars
+            client.completed_bar_history_scope = "session"
         ws_bars = completed_bar_mode(contract.HANWHA_OCEAN_CODE) == "ws"
         if ws_bars:
             self._minute_cache = {}  # An invalidated WS revision cannot reuse old bars.
