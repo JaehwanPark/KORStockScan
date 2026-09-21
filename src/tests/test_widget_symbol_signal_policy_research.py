@@ -156,6 +156,21 @@ def test_exact_date_report_reuse_requires_matching_fingerprint(tmp_path) -> None
     )
 
 
+def test_snapshot_generation_defers_when_recorded_source_disappears(tmp_path) -> None:
+    snapshot = tmp_path / "005930" / "2026-08-18.json"
+    snapshot.parent.mkdir()
+    snapshot.write_text("{}", encoding="utf-8")
+    meta = {"retrieved_at_by_date": {"2026-08-18": "2026-08-18T16:00:00+09:00"}}
+
+    assert research._snapshot_generation(tmp_path, "005930", meta)["2026-08-18"]
+
+    snapshot.unlink()
+    with pytest.raises(
+        ResearchError, match="^widget_research_source_snapshot_unstable$"
+    ):
+        research._snapshot_generation(tmp_path, "005930", meta)
+
+
 def test_widget_source_is_independent_read_only_ohlcv_contract():
     started = date(2026, 6, 5)
     dates = [started + timedelta(days=index) for index in range(17)]

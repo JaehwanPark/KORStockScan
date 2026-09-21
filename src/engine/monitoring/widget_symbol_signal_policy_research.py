@@ -2793,6 +2793,26 @@ def _receipt_checksum(payload: dict[str, Any]) -> str:
     ).hexdigest()
 
 
+def _snapshot_generation(
+    snapshot_dir: Path, symbol: str, meta: dict[str, Any]
+) -> dict[str, list[int]]:
+    generations = {}
+    try:
+        for day in meta.get("retrieved_at_by_date", {}):
+            path = snapshot_dir / symbol / f"{day}.json"
+            stat = path.lstat()
+            generations[day] = [
+                stat.st_dev,
+                stat.st_ino,
+                stat.st_size,
+                stat.st_mtime_ns,
+                stat.st_ctime_ns,
+            ]
+    except OSError as exc:
+        raise ResearchError("widget_research_source_snapshot_unstable") from exc
+    return generations
+
+
 def _read_snapshot(
     path: Path, symbol: str, day: date
 ) -> tuple[list[Bar], dict[str, Any]] | None:
@@ -3095,14 +3115,6 @@ def main(argv: list[str] | None = None) -> int:
         snapshot_dir=str(args.snapshot_dir.resolve()),
     )
 
-    def snapshot_generation(symbol, meta):
-        generations = {}
-        for day in meta.get("retrieved_at_by_date", {}):
-            path = args.snapshot_dir / symbol / f"{day}.json"
-            stat = path.lstat()
-            generations[day] = [stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns]
-        return generations
-
     selected = list(symbol_universe)
     resumed = False
     if args.write and waiting_path.exists():
@@ -3156,15 +3168,22 @@ def main(argv: list[str] | None = None) -> int:
                     or any(part.get(key) is not value for key, value in AUTHORITY.items())):
                     raise ResearchError("widget_research_resume_checkpoint_invalid")
                 try:
-                    unchanged = snapshot_generation(symbol, part["source_meta"][symbol]) == source_snapshot_generations[symbol]
-                except OSError:
+                    unchanged = _snapshot_generation(
+                        args.snapshot_dir, symbol, part["source_meta"][symbol]
+                    ) == source_snapshot_generations[symbol]
+                except ResearchError:
                     unchanged = False
                 if not unchanged:
                     raise ResearchError("widget_research_resume_snapshot_changed")
                 part = {key: value for key, value in part.items() if key != "checkpoint_sha256"}
                 part["execution_quality_by_symbol"][symbol] = load_execution_incidents(symbol, target_date=end_date, session="KRX_REGULAR")
                 reports.append(part)
-            allowed_waiting = {"source_not_attempted", "ka10080_shared_read_rate_deferred:shared_read_rate_wait_budget_exhausted", "ka10080_shared_read_rate_deferred:shared_read_rate_server_cooldown"}
+            allowed_waiting = {
+                "source_not_attempted",
+                "ka10080_shared_read_rate_deferred:shared_read_rate_wait_budget_exhausted",
+                "ka10080_shared_read_rate_deferred:shared_read_rate_server_cooldown",
+                "widget_research_source_snapshot_unstable",
+            }
             if any(reason not in allowed_waiting for reason in pending.values()):
                 raise ResearchError("widget_research_resume_waiting_reason_invalid")
             source_waiting = pending
@@ -3221,7 +3240,7 @@ def main(argv: list[str] | None = None) -> int:
                 max_pages=args.max_pages,
                 page_delay_sec=args.page_delay_sec,
             )
-            snapshot_before = snapshot_generation(symbol, meta)
+            snapshot_before = _snapshot_generation(args.snapshot_dir, symbol, meta)
             kwargs = dict(
                 sources={symbol: (bars, meta)},
                 end_date=end_date,
@@ -3280,8 +3299,8 @@ def main(argv: list[str] | None = None) -> int:
                 report["execution_quality_by_symbol"][symbol] = load_execution_incidents(
                     symbol, target_date=end_date, session="KRX_REGULAR"
                 )
-            if snapshot_generation(symbol, meta) != snapshot_before:
-                raise ResearchError("widget_research_source_snapshot_changed_during_evaluation")
+            if _snapshot_generation(args.snapshot_dir, symbol, meta) != snapshot_before:
+                raise ResearchError("widget_research_source_snapshot_unstable")
             source_snapshot_generations[symbol] = snapshot_before
             symbol_fingerprints[symbol] = fingerprint
             reports.append(report)
@@ -3308,6 +3327,7 @@ def main(argv: list[str] | None = None) -> int:
             if reason in {
                 "ka10080_shared_read_rate_deferred:shared_read_rate_wait_budget_exhausted",
                 "ka10080_shared_read_rate_deferred:shared_read_rate_server_cooldown",
+                "widget_research_source_snapshot_unstable",
             }:
                 source_waiting[symbol] = reason
                 progress()
