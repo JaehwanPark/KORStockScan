@@ -206,6 +206,15 @@ class MinuteBar:
     volume: int
 
 
+class ObservedMinuteBar(MinuteBar):
+    """Validated AL observation; gaps are excluded, never synthetic minutes."""
+    history_basis = "observed_valid_rows"
+
+
+def observed_bar_history(bars: list[MinuteBar]) -> bool:
+    return bool(bars) and all(getattr(bar, "history_basis", "") == "observed_valid_rows" for bar in bars)
+
+
 def completed_session_bars(
     rows: object,
     *,
@@ -249,7 +258,8 @@ def completed_session_bars(
             continue
         high = max(high, open_price, close)
         low = min(low, open_price, close)
-        bar = MinuteBar(raw_time[:14], open_price, high, low, close, volume)
+        bar_type = ObservedMinuteBar if row.get("_history_basis") == "observed_valid_rows" else MinuteBar
+        bar = bar_type(raw_time[:14], open_price, high, low, close, volume)
         by_time[raw_time[:14]] = bar
         if preserve_duplicates:
             received_bars.append(bar)
@@ -531,7 +541,9 @@ def _session_anchor(bars: list[MinuteBar], observed_at: datetime) -> dict[str, A
         "status": "OBSERVED",
         "date": _as_kst(observed_at).date().isoformat(),
         "observed_at": _as_kst(observed_at).isoformat(),
-        "open": bars[0].open,
+        "open": None if observed_bar_history(bars) else bars[0].open,
+        "history_basis": "observed_valid_rows" if observed_bar_history(bars) else "session",
+        "observed_open": bars[0].open,
         "high": max(bar.high for bar in bars),
         "low": min(bar.low for bar in bars),
         "close": bars[-1].close,
@@ -1337,7 +1349,7 @@ def _source_quality(
         max_age = 120 if context.name == "KRX_REGULAR" else 180
         if age < -2:
             issues.append("completed_bar_time_conflict")
-        elif age > max_age:
+        elif age > max_age and not (observed_bar_history(bars) and context.name in {"NXT_PREMARKET", "NXT_AFTERMARKET"}):
             issues.append("completed_bar_stale")
     else:
         issues.append("completed_bars_missing")
@@ -1532,6 +1544,8 @@ def evaluate_advisory(
             "quote_received_at": quote_received_at,
             "quote_age_sec": round(quote_age_sec, 3),
             "session_vwap_method": "hlc3_volume_weighted_with_hlc3_fallback",
+            "bar_history_basis": "observed_valid_rows" if observed_bar_history(bars) else "session",
+            "vwap_scope": "observed_valid_rows" if observed_bar_history(bars) else "session",
         },
         "authority": ADVISORY_AUTHORITY,
         "runtime_effect": False,
@@ -2024,10 +2038,10 @@ def evaluate_advisory(
                 "session_anchor": session_anchor,
                 "recent_resistance": recent_resistance,
                 "previous_day": previous_day,
-                "opening_range_high": max(
+                "opening_range_high": None if observed_bar_history(bars) else max(
                     bar.high for bar in bars[: context.minimum_bars]
                 ),
-                "opening_range_low": min(
+                "opening_range_low": None if observed_bar_history(bars) else min(
                     bar.low for bar in bars[: context.minimum_bars]
                 ),
                 "spread_ticks": spread_ticks,

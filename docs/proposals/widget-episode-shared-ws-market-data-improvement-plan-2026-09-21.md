@@ -1,5 +1,7 @@
 # 위젯·에피소드 공통 WS 시세 수집 개선안
 
+> 2026-09-21 사용자 승인 갱신: 현재 수준의 누락은 허용하고 검증된 관측 구간을 WS 분봉으로 채택한다. 세션 전체 prefix·무결손 연속성·사전3x15분은 전환 선행조건에서 제외한다. 종목/당일/AL 식별, 유효 완료봉, 판단별 실제 최소 입력, 주문 직전 hard guard만 필수다. 기존 엄격 조건을 설명한 아래 기록보다 이 승인이 우선하며 [전환 구현·검증 기록](../audit-reports/2026-09-21-widget-ws-completed-bars-implementation-review.md#operator-approved-observed-history-cutover)이 운영 설정·롤백·현재 증거를 소유한다.
+
 - 최신 원천 분석·P3 연결 확정: 프리·애프터 quiet는 장애/반복갱신 사유가 아니다.16:36 명시적1006 이후 확장3종목 이전epoch 및삼성age-only를 구분했다. 원인 귀속/멱등 복구→기존writer 분봉투영→공통reader→현재cohort→episode 순서를 §3.3.1에 확정했다. 이는 구현/배포 완료가 아니다. [분석 증거](../audit-reports/2026-09-21-widget-source-block-and-p3-connection-review.md). 현재 메인5e3f48bd9/PID297783이므로 아래285831은이전이력이다.
 - 상태: **P0/P1 비교·P2E 주문 직전 WS 연결에 이어 기본3종목 P2 실제 입력 전환을 배포, 자연 수용 검증 진행 중**. 현재 사용자 실행 승인은 기존 consumer의 입력 전환과 시한 수리를 포함한다. 확장 관측58종목 중3종목 추가 전환을 배포했으며 나머지 확대와 P3 완료 분봉 공유는 미완료다.
 - 최신 인계: P2 producer `4c5dc8a06`(메인 PID285831), 기본/관측 consumer `d8bb46367`로 기본3종목 WS 가격·호가·당일 저가와 삼성 등락률/최근체결 입력을 선택한다. 기존 P2E·메인 수리를 보존하고 regular episode 만료를 REST/예약 전에 차단했다. P1의14:00–14:45는 raw/집계 분모 결손으로 미통과였으며, 이번 제한 적용을 이전 통계 PASS로 바꾸지 않는다. 새 producer/consumer 이후 자연 소비와 완전한 세션 내3창·submit-path는 별도 검증한다. [코드·배포·검증 기록](../audit-reports/2026-09-21-widget-p2-source-and-episode-deadline-review.md).

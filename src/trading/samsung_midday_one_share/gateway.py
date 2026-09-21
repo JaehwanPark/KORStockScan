@@ -361,6 +361,8 @@ class KiwoomMiddayOneShareGateway:
                 _positive_int(row.get("high_pric")),
                 _positive_int(row.get("low_pric")),
                 _positive_int(row.get("cur_prc")),
+                history_basis=("observed_valid_rows" if selected is not None
+                    and (selected.get("_completed_bar_source") or {}).get("history_basis") == "observed_valid_rows" else ""),
             )
             if (
                 min(bar.open_price, bar.high_price, bar.low_price, bar.close_price) <= 0
