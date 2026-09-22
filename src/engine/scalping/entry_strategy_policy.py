@@ -672,7 +672,8 @@ def joint_candidates(parent, scope, *, domains=None, selectors=None, start=0, li
             domain_sha256=domain_hash, search_complete=cursor + 1 == total)
 
 
-MACHINE_SELECTION_VERSION = 'support_adjusted_win_rate_preserve_entries_v3'
+MACHINE_SELECTION_VERSION = 'support_adjusted_win_rate_full_population_v4'
+MACHINE_EVALUATION_BASIS = 'machine_full_population_opportunity_v1'
 
 
 def machine_support_adjusted_win_rate(economy):
@@ -707,9 +708,9 @@ def select_report_candidate(source):
             continue
         candidate = result.get('candidate') or {}
         economy = (((candidate.get('evidence') or {}).get('train') or {}).get('economics') or {})
-        if candidate.get('evaluation_basis') == 'machine_nonentry_opportunity_v1':
-            rank = machine_admission_rank(economy)
-            score = rank[:3] if all(v is not None for v in rank[:3]) else None
+        if candidate.get('evaluation_basis') in {'machine_nonentry_opportunity_v1', MACHINE_EVALUATION_BASIS}:
+            rank = machine_admission_rank(economy, node_count=len((candidate.get('policy') or {}).get('strategy', {}).get('nodes') or {'root': {}}))
+            score = rank if all(v is not None for v in rank[:3]) else None
         else:
             net = _number(economy.get('daily_net_profit_delta_krw'))
             score = (0., net, 0.) if net is not None and net > 0 else None
@@ -743,7 +744,29 @@ def promotion_errors(candidate, parent, scope, *, existing_publication=False):
     if candidate.get('evidence_sha256') != digest(candidate.get('evidence')):
         errors.append('strategy_candidate_evidence_hash_invalid')
     evidence = candidate.get('evidence') or {}
-    if candidate.get('evaluation_basis') == 'machine_nonentry_opportunity_v1':
+    full_population = candidate.get('evaluation_basis') == MACHINE_EVALUATION_BASIS
+    if full_population:
+        contract = evidence.get('evaluation_contract') or {}
+        if (contract.get('selection_version') != MACHINE_SELECTION_VERSION
+            or contract.get('evaluation_basis') != MACHINE_EVALUATION_BASIS
+            or contract.get('parent_sha256') != digest(parent) or contract.get('scope') != list(scope)
+            or any(not isinstance(contract.get(k), str) or len(contract[k]) != 64
+                   for k in ('input_sha256', 'source_contract_sha256'))):
+            errors.append('strategy_machine_evaluation_contract_invalid')
+        baseline = (evidence.get('incumbent_train') or {}).get('economics') or {}
+        train_economy = (evidence.get('train') or {}).get('economics') or {}
+        if (baseline.get('comparable_population_sha256') != train_economy.get('comparable_population_sha256')
+            or baseline.get('evaluation_basis') != MACHINE_EVALUATION_BASIS
+            or baseline.get('selection_score_version') != MACHINE_SELECTION_VERSION):
+            errors.append('strategy_machine_incumbent_population_mismatch')
+        old_rank, new_rank = machine_admission_rank(baseline)[:4], machine_admission_rank(train_economy)[:4]
+        if all(v is not None for v in old_rank) and (any(v is None for v in new_rank) or new_rank < old_rank):
+            errors.append('strategy_machine_candidate_rank_below_incumbent')
+    if full_population and candidate.get('selection_score_version') != MACHINE_SELECTION_VERSION:
+        errors.append('strategy_machine_selection_version_invalid')
+    if candidate.get('evaluation_basis') not in {None, 'machine_nonentry_opportunity_v1', MACHINE_EVALUATION_BASIS}:
+        errors.append('strategy_machine_evaluation_basis_invalid')
+    if candidate.get('evaluation_basis') in {'machine_nonentry_opportunity_v1', MACHINE_EVALUATION_BASIS}:
         # Machine opportunity selection is independent of auxiliary AI and
         # portfolio replay. Net losses remain evidence, not a profit floor.
         for split in ('train', 'holdout'):
@@ -752,7 +775,17 @@ def promotion_errors(candidate, parent, scope, *, existing_publication=False):
                 continue
             days, ids = arm.get('source_dates') or [], arm.get('opportunity_ids') or []
             economy = arm.get('economics') or {}
-            if machine_existing_entry_changes(arm) and (not existing_publication or candidate.get('preserve_existing_entries') is True):
+            if full_population:
+                if (economy.get('unevaluated_existing_entry_changes') != []
+                    or economy.get('evaluated_existing_entry_changed_count') != machine_existing_entry_changes(arm)):
+                    errors.append(split + '_machine_existing_entries_changed_without_evaluation')
+                if (economy.get('selection_score_version') != MACHINE_SELECTION_VERSION
+                    or economy.get('evaluation_basis') != MACHINE_EVALUATION_BASIS
+                    or not isinstance(economy.get('comparable_population_sha256'), str)
+                    or len(economy['comparable_population_sha256']) != 64
+                    or sum((economy.get('transition_attempt_counts') or {}).values()) != economy.get('comparable_attempt_count')):
+                    errors.append(split + '_machine_population_contract_invalid')
+            elif machine_existing_entry_changes(arm) and (not existing_publication or candidate.get('preserve_existing_entries') is True):
                 errors.append(split + '_machine_existing_entries_changed_without_evaluation')
             try:
                 valid_dates = days and all(datetime.fromisoformat(d).date().isoformat() == d and d >= '2026-06-05' for d in days)
@@ -761,7 +794,7 @@ def promotion_errors(candidate, parent, scope, *, existing_publication=False):
             if not valid_dates or not ids or len(ids) != len(set(ids)):
                 errors.append(split + '_machine_support_invalid')
             if (economy.get('status') != 'supported_machine_admission'
-                or economy.get('basis') != 'nonentry_to_enter_now_cost_bound_quality_path'
+                or economy.get('basis') != ('full_population_cost_bound_quality_path' if full_population else 'nonentry_to_enter_now_cost_bound_quality_path')
                 or economy.get('auxiliary_ai_required') is not False):
                 errors.append(split + '_machine_metric_invalid')
             delta = _number(economy.get('paired_admission_delta_pct'))
@@ -774,7 +807,7 @@ def promotion_errors(candidate, parent, scope, *, existing_publication=False):
                     or win_rate is None or not 0 <= win_rate <= 100):
                     errors.append(split + '_machine_selected_path_invalid')
             elif split == 'train':
-                errors.append('train_machine_no_recovered_entry')
+                errors.append('train_machine_no_selected_entry' if full_population else 'train_machine_no_recovered_entry')
         train, holdout = evidence.get('train') or {}, evidence.get('holdout') or {}
         if holdout and (not train.get('source_dates') or not holdout.get('source_dates')
                        or max(train['source_dates']) >= min(holdout['source_dates'])

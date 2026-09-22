@@ -16,6 +16,8 @@ import re
 import tempfile
 from datetime import date, datetime, timedelta
 from functools import lru_cache
+from contextvars import ContextVar
+from threading import RLock
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -100,8 +102,16 @@ def next_target(source_date: str) -> str:
     raise ValueError("next_trading_date_unresolved")
 
 
+_CURRENT_CACHE = {}
+_CURRENT_CACHE_LOCK = RLock()
+_READ_DEPENDENCIES = ContextVar('machine_policy_read_dependencies', default=None)
+
+
 def _read(path: Path) -> dict:
+    signature = _signature(path)
     value = json.loads(path.read_text(encoding="utf-8"))
+    if _signature(path) != signature:
+        raise ValueError("machine_policy_source_changed_during_read")
     if not isinstance(value, dict):
         raise ValueError("policy_object_required")
     return value
@@ -140,7 +150,13 @@ def _source_hash(path: str, signature: tuple) -> str:
 
 def _signature(path: Path) -> tuple:
     stat = path.stat()
-    return (stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+    signature = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+    dependencies = _READ_DEPENDENCIES.get()
+    if dependencies is not None:
+        previous = dependencies.setdefault(str(path), signature)
+        if previous != signature:
+            raise ValueError("machine_policy_dependency_changed_during_validation")
+    return signature
 
 
 def validate(bundle: dict, *, target_date: str) -> None:
@@ -1329,6 +1345,9 @@ def activate_strategy_report(source_path: Path, *, data_root: Path, now: datetim
             if errors:
                 dispositions[scope] = errors
                 continue
+            if candidate['policy'] == scoped['machine_policy']:
+                dispositions[scope] = ['incumbent_best_or_tied']
+                continue
             holdout = candidate['evidence'].get('holdout') or {}
             proof_key = holdout.get('opportunity_ids') or [candidate['policy_sha256'], candidate['evidence_sha256']]
             consumption = policy_root / 'holdouts' / (digest([scope, proof_key]) + '.json')
@@ -1391,6 +1410,38 @@ def activate_strategy_report(source_path: Path, *, data_root: Path, now: datetim
 
 
 def _load_current(data_root: Path, target_date: str) -> dict | None:
+    """Reuse a validated generation only while every read dependency is intact."""
+    key = (str(data_root.resolve()), target_date)
+    with _CURRENT_CACHE_LOCK:
+        cached = _CURRENT_CACHE.get(key)
+    if cached is not None:
+        dependencies, bundle = cached
+        try:
+            unchanged = all(_signature(Path(path)) == sig for path, sig in dependencies.items())
+        except OSError:
+            unchanged = False
+        effective = (bundle.get('strategy_activation') or {}).get('effective_from')
+        if unchanged and (not effective or datetime.fromisoformat(effective) <= datetime.now(KST)):
+            return copy.deepcopy(bundle)
+    dependencies = {}
+    token = _READ_DEPENDENCIES.set(dependencies)
+    try:
+        bundle = _load_current_uncached(data_root, target_date)
+        if bundle is not None:
+            # Include current receipt, generation, parent and all source/rollback
+            # reads, not merely the current policy hash. No snapshot I/O on hit.
+            if not all(_signature(Path(path)) == sig for path, sig in dependencies.items()):
+                raise ValueError('machine_policy_dependency_changed_during_validation')
+            with _CURRENT_CACHE_LOCK:
+                if len(_CURRENT_CACHE) >= 16:
+                    _CURRENT_CACHE.pop(next(iter(_CURRENT_CACHE)), None)
+                _CURRENT_CACHE[key] = (dependencies, copy.deepcopy(bundle))
+        return bundle
+    finally:
+        _READ_DEPENDENCIES.reset(token)
+
+
+def _load_current_uncached(data_root: Path, target_date: str) -> dict | None:
     path = root(data_root) / 'current.json'
     if not path.exists():
         return None

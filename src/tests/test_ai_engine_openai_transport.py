@@ -4058,6 +4058,8 @@ def test_machine_initial_policy_assesses_before_provider_cache_and_lock(
             OPENAI_ANALYZE_TARGET_PROMPT_VERSION=DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
         ),
     )
+    monkeypatch.setattr(engine, '_capture_prepromotion_context_candidate',
+        lambda **kw: pytest.fail('duplicate pre-machine forensic capture'))
     analysis = _exact_analysis()
     analysis["executable_liquidity"].update(
         spread_bp=20.0, fillability_score=70.0, top3_ask_to_bid_ratio=0.8
@@ -4154,6 +4156,9 @@ def test_machine_initial_policy_assesses_before_provider_cache_and_lock(
         assert policy_calls
         ws['final_refresh_marker'] = True
         ws['curr'] = 12345
+        if identity_mode == 'snapshot':
+            candle['ai_market_snapshot_v1']['snapshot_id'] = 'aims-final-machine'
+            candle['ai_market_snapshot_v1']['captured_at'] = '2026-09-22T16:12:46+09:00'
         return ws, ticks, candle, {'entry_ai_final_ws_snapshot_refresh_applied': True}
     if final_refresh:
         from src.engine.scalping import entry_candle_context as candle_module
@@ -4171,6 +4176,9 @@ def test_machine_initial_policy_assesses_before_provider_cache_and_lock(
     )
     assert observed == ['ENTER_NOW' if ready else 'RECHECK']
     assert result['entry_economic_source_status'] == 'recorded_source_only'
+    if final_refresh and identity_mode == 'snapshot':
+        assert result['ai_input_preflight_source_clock_snapshot_id'] == 'aims-final-machine'
+        assert result['ai_input_preflight_source_clock_captured_at'] == '2026-09-22T16:12:46+09:00'
     if final_refresh:
         assert result['entry_machine_input_ws_snapshot_refresh_applied'] is True
         assert 'final_refresh_marker' not in ws_data

@@ -375,7 +375,7 @@ def test_full_completed_bar_replay_rejects_invalid_ohlcv_and_other_session(chang
 
 def machine_cost_row(hit='target_first'):
     row = research_row()
-    row['stock_code'] = '005930'
+    row.update(stock_code='005930', effective_venue='KRX', session_bucket='KRX_REGULAR')
     row['scanner_promotion_id'] = 'opportunity-1'
     row['comparison'] = dict(incumbent_machine_action='BLOCK',
         entry_path_first_hit=hit, entry_path_target_pct=.5, entry_path_adverse_pct=-.5,
@@ -485,14 +485,15 @@ def test_machine_policy_holdout_does_not_choose_train_winner(monkeypatch):
     assert result['allowed_runtime_apply'] is False
 
 
-def test_machine_selection_scores_only_nonentry_opportunity_cost():
+def test_machine_selection_scores_nonentry_and_existing_entry_loss_avoidance():
     from src.engine.scalping import ai_action_outcome_calibration as c
     missed = machine_cost_row(); missed['comparison']['incumbent_machine_action'] = 'RECHECK'
     existing = machine_cost_row('adverse_first'); existing['comparison']['incumbent_machine_action'] = 'ENTER_NOW'
     result = c._machine_admission_metrics([missed, existing], ['ENTER_NOW', 'BLOCK'])
-    assert result['paired_admission_delta_pct'] == pytest.approx(.3)
+    assert result['paired_admission_delta_pct'] == pytest.approx(.5)
     assert result['comparable_opportunity_count'] == 1
-    assert result['excluded_attempt_counts'] == {'outside_nonentry_population': 1}
+    assert result['excluded_attempt_counts'] == {}
+    assert result['transition_attempt_counts']['existing_failure_avoided'] == 1
 
 
 @pytest.mark.parametrize('holdout_hit', [None, 'adverse_first'])
@@ -860,9 +861,157 @@ def test_preservation_rule_does_not_invalidate_already_published_legacy_policy(m
     one_research_candidate(monkeypatch)
     parent=evidence.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1; scope=('KRX','KRX_REGULAR')
     result=c.build_main_strategy_refinement([machine_cost_row()],parent=parent,scope=scope,source_contract={},machine_policy_only=True)
-    candidate=deepcopy(result['candidate']);candidate['evidence']['train']['action_transition_counts']['ENTER_NOW->RECHECK']=1
+    candidate=deepcopy(result['candidate'])
+    candidate['evaluation_basis'] = 'machine_nonentry_opportunity_v1'
+    candidate['preserve_existing_entries'] = True
+    candidate['evidence']['train']['economics']['basis'] = 'nonentry_to_enter_now_cost_bound_quality_path'
+    candidate['evidence']['train']['action_transition_counts']['ENTER_NOW->RECHECK']=1
     candidate['evidence_sha256']=strategy.digest(candidate['evidence'])
     assert strategy.promotion_errors(candidate,parent,scope,existing_publication=True)
     candidate.pop('preserve_existing_entries')
     assert strategy.promotion_errors(candidate,parent,scope)
     assert not strategy.promotion_errors(candidate,parent,scope,existing_publication=True)
+
+
+def test_full_population_success_failure_neutral_and_fixed_denominator():
+    from src.engine.scalping import ai_action_outcome_calibration as c
+    rows = [machine_cost_row(), machine_cost_row('adverse_first'), machine_cost_row(), machine_cost_row()]
+    for i, row in enumerate(rows):
+        row['scanner_promotion_id'] = str(i)
+        row['decision_trace_id'] = str(i)
+        row['comparison']['incumbent_machine_action'] = 'ENTER_NOW' if i < 3 else 'BLOCK'
+    rows[2]['entry_quality_path']['gross_net_target_pct'] = .2
+    baseline = c._machine_admission_metrics(rows, ['ENTER_NOW'] * 3 + ['BLOCK'])
+    result = c._machine_admission_metrics(rows, ['BLOCK', 'BLOCK', 'ENTER_NOW', 'ENTER_NOW'])
+    assert result['comparable_population_sha256'] == baseline['comparable_population_sha256']
+    assert result['comparable_opportunity_count'] == 4
+    assert result['paired_admission_delta_pct'] == pytest.approx((-.3 + .7 + 0 + .3) / 4)
+    assert result['win_rate_pct'] == 50
+    assert result['selected_path_ev_pct'] == pytest.approx(.15)
+    assert result['existing_success_retention_rate_pct'] == 0
+    assert sum(result['transition_attempt_counts'].values()) == 4
+    assert result['missed_success_simple_sum_path_pct'] == pytest.approx(.3)
+    assert result['avoided_loss_simple_sum_path_pct'] == pytest.approx(.7)
+    assert rows[0]['comparison']['incumbent_machine_action'] == 'ENTER_NOW'
+
+
+def test_full_population_missing_existing_outcome_is_not_zero_or_changeable():
+    from src.engine.scalping import ai_action_outcome_calibration as c
+    row = machine_cost_row(None)
+    row['comparison']['incumbent_machine_action'] = 'ENTER_NOW'
+    result = c._machine_admission_metrics([row], ['BLOCK'])
+    assert result['unevaluated_existing_entry_changes'] == [row['decision_trace_id']]
+    assert result['paired_admission_delta_pct'] is None
+    assert c._machine_admission_metrics([row], ['ENTER_NOW'])['unevaluated_existing_entry_changes'] == []
+    with pytest.raises(ValueError, match='population_mismatch'):
+        c._machine_admission_metrics([row], [])
+
+
+def test_full_population_all_block_is_unranked_and_legacy_comparison_available():
+    from src.engine.scalping import ai_action_outcome_calibration as c
+    good, bad = machine_cost_row(), machine_cost_row('adverse_first')
+    bad['comparison']['incumbent_machine_action'] = 'ENTER_NOW'
+    full = c._machine_admission_metrics([good, bad], ['BLOCK', 'BLOCK'])
+    assert full['paired_admission_delta_pct'] == pytest.approx(.35)
+    assert strategy.machine_admission_rank(full)[0] is None
+    legacy = c._machine_admission_metrics([good, bad], ['ENTER_NOW', 'BLOCK'], full_population=False)
+    assert legacy['paired_admission_delta_pct'] == pytest.approx(.3)
+    assert legacy['excluded_attempt_counts'] == {'outside_nonentry_population': 1}
+
+
+def test_full_population_gate_rejects_mixed_basis_or_incumbent_population(monkeypatch):
+    from src.engine.scalping import ai_action_outcome_calibration as c
+    one_research_candidate(monkeypatch)
+    parent = evidence.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1; scope = ('KRX', 'KRX_REGULAR')
+    candidate = c.build_main_strategy_refinement([machine_cost_row()], parent=parent, scope=scope,
+        source_contract={}, machine_policy_only=True)['candidate']
+    assert not strategy.promotion_errors(candidate, parent, scope)
+    for key, value in [('selection_score_version', 'support_adjusted_win_rate_preserve_entries_v3'),
+                       ('evaluation_basis', 'invalid')]:
+        broken = deepcopy(candidate); broken[key] = value
+        assert strategy.promotion_errors(broken, parent, scope)
+    broken = deepcopy(candidate)
+    broken['evidence']['incumbent_train']['economics']['comparable_population_sha256'] = '0' * 64
+    broken['evidence_sha256'] = strategy.digest(broken['evidence'])
+    assert 'strategy_machine_incumbent_population_mismatch' in strategy.promotion_errors(broken, parent, scope)
+
+
+def test_full_population_parent_tie_is_retained(monkeypatch):
+    from src.engine.scalping import ai_action_outcome_calibration as c
+    one_research_candidate(monkeypatch)
+    parent = research_policy()
+    row = machine_cost_row()
+    result = c.build_main_strategy_refinement([row], parent=parent, scope=('KRX','KRX_REGULAR'),
+        source_contract={}, machine_policy_only=True)
+    assert result['machine_policy'] == parent
+    assert result['machine_evidence']['train']['economics']['paired_admission_delta_pct'] == 0
+
+
+def test_full_population_can_select_loss_avoidance_without_new_entry(monkeypatch):
+    from src.engine.scalping import ai_action_outcome_calibration as c
+    parent = research_policy(); child = deepcopy(parent)
+    child['strategy']['nodes']['root']['profile']['maximum_spread_bp'] = 20
+    good, bad = machine_cost_row(), machine_cost_row('adverse_first')
+    bad.update(decision_trace_id='loser', scanner_promotion_id='loser')
+    def decide(source, *, policy):
+        if source is bad['setup_evidence']:
+            raise AssertionError('caller inputs should be frozen copies')
+        losing = source.get('test_losing')
+        return {'action': 'BLOCK' if losing and policy == child else 'ENTER_NOW'}
+    bad['setup_evidence']['test_losing'] = True
+    monkeypatch.setattr(c, 'mechanistic_entry_policy_decision', decide)
+    monkeypatch.setattr(strategy, 'joint_candidates', lambda *a, **kw: iter([(child, {'cursor':1,'search_complete':True})]))
+    result = c.build_main_strategy_refinement([good,bad], parent=parent, scope=('KRX','KRX_REGULAR'),
+        source_contract={}, machine_policy_only=True)
+    assert result['machine_policy'] == child
+    assert result['promotion_pass'], result['promotion_errors']
+    assert result['machine_evidence']['train']['action_transition_counts'] == {'ENTER_NOW->ENTER_NOW':1, 'ENTER_NOW->BLOCK':1}
+    assert result['machine_evidence']['train']['economics']['paired_admission_delta_pct'] == pytest.approx(.35)
+
+
+@pytest.mark.parametrize('dependency', ['source', 'parent', 'generation', 'current'])
+def test_current_generation_cache_checks_every_dependency_and_isolates_callers(monkeypatch, tmp_path, dependency):
+    from src.engine.scalping import ai_action_outcome_calibration as c
+    from src.tests.test_mechanistic_entry_runtime_policy import initial
+    previous = initial(tmp_path); one_research_candidate(monkeypatch)
+    result = c.build_main_strategy_refinement([machine_cost_row()], parent=previous['machine_policy'],
+        scope=('KRX','KRX_REGULAR'), source_contract={}, machine_policy_only=True)
+    runtime.activate_strategy_report(activation_source(tmp_path, result['candidate']), data_root=tmp_path,
+        now=datetime(2026,9,14,12,tzinfo=runtime.KST))
+    active = runtime.load_effective(data_root=tmp_path, target_date='2026-09-22')
+    original = runtime._read; reads = []
+    monkeypatch.setattr(runtime, '_read', lambda p: (reads.append(str(p)), original(p))[1])
+    cached = runtime.load_effective(data_root=tmp_path, target_date='2026-09-22')
+    assert cached == active and not reads
+    cached['machine_policy']['thresholds']['maximum_spread_bp'] = -1
+    assert runtime.load_effective(data_root=tmp_path,target_date='2026-09-22') == active
+    root = runtime.root(tmp_path)
+    paths = {'source':root/'sources'/f"{active['source_file_sha256']}.json",
+             'parent':root/'generations'/f"{active['strategy_activation']['parent_bundle_sha256']}.json",
+             'generation':root/'generations'/f"{active['bundle_sha256']}.json", 'current':root/'current.json'}
+    paths[dependency].write_text('{}')
+    with pytest.raises((ValueError,KeyError)):
+        runtime.load_effective(data_root=tmp_path,target_date='2026-09-22')
+    assert reads
+
+
+def test_scheduled_machine_report_retains_explicit_consumed_training_boundary(monkeypatch, tmp_path):
+    from src.engine.scalping import ai_action_outcome_calibration as c
+    from src.tests.test_mechanistic_entry_runtime_policy import initial
+    initial(tmp_path)
+    report_path = tmp_path/'report/ai_decision_action_outcome_calibration/machine_policy_2026-09-22.json'
+    report_path.parent.mkdir(parents=True,exist_ok=True)
+    report_path.write_text(json.dumps(c._with_artifact_content_sha256({'selections':{'KRX|KRX_REGULAR':{
+        'training_through_date':'2026-09-22','holdout_boundary_basis':'explicit_forward_boundary'}}})))
+    row=machine_cost_row();row['source_date']='2026-09-22'
+    seen=[]
+    monkeypatch.setattr(c,'_common_refinement_population',lambda *a,**kw:([row],{}))
+    def build(*a,**kw):
+        seen.append(kw['training_through_date'])
+        return {'status':'source_gap'}
+    monkeypatch.setattr(c,'build_main_strategy_refinement',build)
+    c.build_machine_policy_report([row],source_receipt={},target_date='2026-09-22',data_root=tmp_path)
+    assert seen == ['2026-09-22']
+    with pytest.raises(ValueError,match='consumed_holdout'):
+        c.build_machine_policy_report([row],source_receipt={},target_date='2026-09-22',data_root=tmp_path,
+            training_through_date='2026-09-21')

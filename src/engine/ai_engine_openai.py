@@ -8878,30 +8878,36 @@ class GPTSniperEngine:
                     )
                 }
             )
-            input_contract_fields.update(
-                self._capture_prepromotion_context_candidate(
-                    endpoint_name="analyze_target",
-                    symbol=(
-                        (candle_context.get("ai_market_snapshot_v1") or {}).get(
-                            "stock_code"
-                        )
-                        if isinstance(candle_context.get("ai_market_snapshot_v1"), dict)
-                        else target_name
-                    ),
-                    entry_context=candle_context,
-                    call_inputs={
-                        "target_name": target_name,
-                        "ws_data": ws_data,
-                        "recent_ticks": recent_ticks,
-                        "recent_candles": recent_candles,
-                        "strategy": strategy,
-                        "program_net_qty": program_net_qty,
-                        "cache_profile": cache_profile,
-                        "prompt_profile": prompt_profile,
-                    },
-                    metadata=metadata_extra,
+            if is_scalping_entry_call and decision_quality_v2_14_selected and entry_setup_live_policy.get("machine_bundle_sha256"):
+                # The machine owner below persists the final exact input for
+                # every action (including source-invalid). Do not serialize a
+                # second, already superseded forensic snapshot before its freeze.
+                input_contract_fields["entry_machine_context_capture_owner"] = "mechanistic_entry_observation_v1"
+            else:
+                input_contract_fields.update(
+                    self._capture_prepromotion_context_candidate(
+                        endpoint_name="analyze_target",
+                        symbol=(
+                            (candle_context.get("ai_market_snapshot_v1") or {}).get(
+                                "stock_code"
+                            )
+                            if isinstance(candle_context.get("ai_market_snapshot_v1"), dict)
+                            else target_name
+                        ),
+                        entry_context=candle_context,
+                        call_inputs={
+                            "target_name": target_name,
+                            "ws_data": ws_data,
+                            "recent_ticks": recent_ticks,
+                            "recent_candles": recent_candles,
+                            "strategy": strategy,
+                            "program_net_qty": program_net_qty,
+                            "cache_profile": cache_profile,
+                            "prompt_profile": prompt_profile,
+                        },
+                        metadata=metadata_extra,
+                    )
                 )
-            )
 
             preparation_stages["context_capture_ms"] = (time.perf_counter() - candidate_started) * 1000
 
@@ -8984,6 +8990,10 @@ class GPTSniperEngine:
             pre_prompt_snapshot = (candle_context or {}).get("ai_market_snapshot_v1") or {}
             if not isinstance(pre_prompt_snapshot, dict):
                 pre_prompt_snapshot = {}  # Malformed storage must reach source-invalid, not crash.
+            # Final preflight and trace must use the same snapshot and clocks.
+            input_contract_fields.update(entry_candle_context_log_fields(candle_context))
+            input_contract_fields.update(ai_market_snapshot_log_fields(candle_context))
+            input_contract_fields["ai_input_snapshot_id"] = pre_prompt_snapshot.get("snapshot_id")
 
         def _merge_runtime_fields(payload: dict[str, Any] | None) -> dict[str, Any]:
             merged = merge_holding_exit_matrix_result_fields(payload, matrix_runtime)

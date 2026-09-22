@@ -499,8 +499,9 @@ def test_hierarchy_never_promotes_half_spread_only_cost_as_net_ev():
     assert result["excluded"]["full_cost_or_relabel_required"] == len(rows)
 
 
+@pytest.mark.parametrize("missing", [None, "path", "cost"])
 def test_machine_capture_matures_with_existing_cost_owner_without_ai(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, missing
 ):
     from datetime import datetime, timedelta
     from src.engine.scalping import (
@@ -547,6 +548,10 @@ def test_machine_capture_matures_with_existing_cost_owner_without_ai(
         "load_pipeline_price_and_lifecycle_rows",
         lambda *args, **kwargs: (prices, []),
     )
+    if missing == 'path':
+        prices.clear()
+    if missing == 'cost':
+        profile.clear()
     capture = trace.capture_machine_observation(
         exact_payload={
             "stock_code": "005930",
@@ -564,6 +569,11 @@ def test_machine_capture_matures_with_existing_cost_owner_without_ai(
     monkeypatch.setattr(calibration, '_machine_ai_trace_index', lambda *a: pytest.fail('independent machine joined AI'))
     rows, census = calibration.load_machine_observation_rows(tmp_path, target_date=day, independent_machine=True)
     assert census["captured"] == 1
+    if missing:
+        assert census['retained_without_economic_outcome'] == 1
+        assert len(rows) == 1 and rows[0]['entry_quality_contract_valid'] is False
+        assert calibration._machine_path_value(rows[0])[0] is None
+        return
     assert census["evaluable"] == 1
     assert census["independent_machine_no_ai_join"] == 1
     assert census["pipeline_lifecycle_unresolved"] == 1
@@ -5187,3 +5197,16 @@ def test_partial_arm_requires_partial_model_holdout_not_full_fill_proof():
         proof['actual_rows_sha256']=compact.digest(proof['calibration_rows']+proof['holdout_rows'])
         proof['sha256']=compact.digest({k:v for k,v in proof.items() if k!='sha256'})
     assert compact.owner_model_scope_valid(row['operating_model_validation'],source)
+
+
+def test_machine_full_population_retains_missing_outcome_for_entry_protection():
+    rows, receipt = _natural_refinement_fixture()
+    rows[0]['entry_quality_contract_valid'] = False
+    rows[0]['comparison'].pop('entry_cost_contract', None)
+    usual, _ = calibration._common_refinement_population([], rows, target_date='2026-09-15',
+        source_receipt=receipt, paired_contract={})
+    protected, _ = calibration._common_refinement_population([], rows, target_date='2026-09-15',
+        source_receipt=receipt, paired_contract={}, retain_unevaluated_machine_rows=True)
+    assert len(protected) == len(usual) + 1
+    missing = next(r for r in protected if r['decision_trace_id'] == rows[0]['decision_trace_id'])
+    assert calibration._machine_path_value(missing)[0] is None
