@@ -74,6 +74,13 @@ fi
 PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.scanner_lookup_attention_policy \
   --target-date "$TARGET_DATE" --write
 
+# Select the reviewed AI successor before bootstrap captures policy receipts.
+# An unqualified/mismatched candidate leaves the current pair unchanged.
+if ! PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.mechanistic_entry_runtime_policy \
+  --activate-dated-auxiliary --target-date "$TARGET_DATE"; then
+  echo "[WARN] auxiliary successor not activated; current machine/AI pair preserved"
+fi
+
 bootstrap_args=(
   --date "$TARGET_DATE"
   --write

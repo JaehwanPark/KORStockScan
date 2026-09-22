@@ -43,6 +43,194 @@ def compact_result(row, verdict="PASS"):
                            "input_sha256": compact.input_identity(row), "validation_errors": [], "runtime_inference_cost_delta_krw": 0.0})
 
 
+def test_auxiliary_stage_replays_good_pass_and_bad_pass_on_fixed_denominator():
+    from copy import deepcopy
+    from src.tests.test_entry_setup_evidence import _machine_screen_case
+
+    rows = []
+    for ordinal, (verdict, first_hit, extra_support) in enumerate((
+        ("PASS", "target_first", True),
+        ("PASS", "adverse_first", False),
+        ("VETO", "target_first", True),
+        ("VETO", "adverse_first", False),
+    )):
+        setup, response = _machine_screen_case(verdict)
+        if extra_support:
+            response["supporting_fact_ids"].append(next(
+                f for f in setup["positive_facts"]
+                if f not in response["supporting_fact_ids"]
+            ))
+        rows.append({
+            "source_date": "2026-09-22", "stock_code": f"{ordinal:06d}",
+            "scanner_promotion_id": f"promotion-{ordinal}",
+            "evaluation_key": f"trace-{ordinal}", "decision_ts": f"2026-09-22T10:0{ordinal}:00+09:00",
+            "effective_venue": "KRX", "session_bucket": "KRX_REGULAR",
+            "machine_policy": {},
+            "incumbent_prompt_version": "parent", "incumbent_verdict": verdict,
+            "input": {"entry_setup_evidence_v1": setup},
+            "raw_response": response, "parent_auxiliary_soft_policy": None,
+            "natural_contract_evidence": {
+                "semantic_validation_status": "pass", "decision_quality_contract_status": "pass",
+            },
+            "source_label_identity_reasons": [],
+            "ai_stage_path": {
+                "schema": "auxiliary_fixed_path_10m_v1", "first_hit": first_hit,
+                "target_pct": .3, "adverse_pct": -.7, "end_return_pct": 0,
+                "sample_count": 5, "conservative_execution_cost_pct": .1,
+                "label_report_sha256": "a" * 64,
+                "label_source_quality_status": "pass", "observed_venue": "KRX",
+                "observed_session_bucket": "KRX_REGULAR",
+            },
+        })
+    projection = compact.sealed({
+        "schema": "compact_auxiliary_frozen_projection_v1",
+        "target_date": "2026-09-22", "source_manifest_sha256": "b" * 64,
+        "source_tuning_allowed": True, "rows": rows,
+    })
+    result = compact.evaluate_auxiliary_stage(projection)
+    scope = result["scope_results"]["KRX|KRX_REGULAR"]
+    assert result["eligible_count"] == 4
+    assert scope["status"] == "candidate_selected"
+    assert scope["eligible_successful_pass_count"] == 1
+    assert scope["selected"]["good_pass_retention"] == 1
+    assert scope["selected"]["bad_pass_rejection"] == 1
+    assert scope["selected"]["successful_pass_changed_count"] == 0
+    assert scope["selected"]["paired_delta_ev_pct"] > 0
+    assert result["additional_provider_calls"] == 0
+    missing = deepcopy(rows)
+    missing[0]["ai_stage_path"]["conservative_execution_cost_pct"] = None
+    assert compact.evaluate_auxiliary_stage(compact.sealed({**projection, "rows": missing}))[
+        "exclusion_counts"
+    ]["fixed_path_or_cost_incomplete"] == 1
+
+
+def test_auxiliary_stage_publisher_updates_only_ai_component_with_parent_cas(tmp_path, monkeypatch):
+    from src.engine.scalping import mechanistic_entry_runtime_policy as policy
+    from src.tests.test_mechanistic_entry_runtime_policy import initial
+
+    parent = initial(tmp_path)
+    candidate = {
+        "schema": "auxiliary_soft_policy_v1",
+        "veto_min_independent_evidence_count": 2,
+        "pass_min_positive_evidence_count": 3,
+    }
+    projection = compact.sealed({
+        "schema": "compact_auxiliary_frozen_projection_v1",
+        "target_date": "2026-09-17", "rows": [],
+    })
+    compact.write(compact.report_path(tmp_path, "2026-09-17").with_suffix(".source.json"), projection)
+    source = full_compact_proof()
+    source.update(
+        candidate_improvement_proven=False, promotion_pass=False,
+        candidate_selection=compact.sealed({"schema": compact.CANDIDATE_SELECTION_SCHEMA,
+                                            "status": "insufficient_sample"}),
+        promotion_scopes=[], machine_parent_bundle_sha256s=[parent["bundle_sha256"]],
+        source_projection_sha256=projection["artifact_content_sha256"],
+        auxiliary_stage=compact.sealed({
+            "schema": "auxiliary_ai_stage_evaluation_v1",
+            "source_date": "2026-09-17", "source_projection_sha256": projection["artifact_content_sha256"],
+            "source_manifest_sha256": "d" * 64, "source_tuning_allowed": True,
+            "additional_provider_calls": 0,
+            "scope_results": {"KRX|KRX_REGULAR": {
+                "status": "candidate_selected",
+                "parent_prompt_versions": [parent["ai_policy"]["prompt_version"]],
+                "parent_soft_policy_sha256s": [compact.digest(None)],
+                "parent_machine_bundle_sha256s": [parent["bundle_sha256"]],
+                "selected": {"policy": candidate},
+            }},
+        }),
+    )
+    monkeypatch.setattr(compact, "evaluate_auxiliary_stage", lambda _: source["auxiliary_stage"])
+    source = compact.sealed(source)
+    intraday_root = tmp_path / "intraday"
+    intraday_parent = initial(intraday_root)
+    intraday_stage = compact.sealed({
+        **source["auxiliary_stage"],
+        "scope_results": {"KRX|KRX_REGULAR": {
+            **source["auxiliary_stage"]["scope_results"]["KRX|KRX_REGULAR"],
+            "parent_machine_bundle_sha256s": [intraday_parent["bundle_sha256"]],
+        }},
+    })
+    intraday_source = compact.sealed({
+        **source, "machine_parent_bundle_sha256s": [intraday_parent["bundle_sha256"]],
+        "auxiliary_stage": intraday_stage,
+    })
+    carry_stage = compact.sealed({
+        **intraday_stage,
+        "scope_results": {"KRX|KRX_REGULAR": {
+            **intraday_stage["scope_results"]["KRX|KRX_REGULAR"],
+            "status": "incumbent_carry",
+        }},
+    })
+    carry_source = compact.sealed({**intraday_source, "auxiliary_stage": carry_stage})
+    monkeypatch.setattr(compact, "evaluate_auxiliary_stage", lambda _: carry_stage)
+    compact.write(compact.report_path(intraday_root, "2026-09-17").with_suffix(".source.json"), projection)
+    compact.write(compact.report_path(intraday_root, "2026-09-17"), carry_source)
+    carry = policy.activate_dated_auxiliary_policy(
+        data_root=intraday_root, target_date=datetime.now(policy.KST).date().isoformat(),
+        source_day="2026-09-17", now=datetime.now(policy.KST),
+    )
+    assert carry["status"] == "incumbent_carry"
+    assert policy.load_effective(
+        data_root=intraday_root, target_date=datetime.now(policy.KST).date().isoformat()
+    )["bundle_sha256"] == intraday_parent["bundle_sha256"]
+    monkeypatch.setattr(compact, "evaluate_auxiliary_stage", lambda _: intraday_stage)
+    compact.write(compact.report_path(intraday_root, "2026-09-17"), intraday_source)
+    intraday = policy.activate_dated_auxiliary_policy(
+        data_root=intraday_root, target_date=datetime.now(policy.KST).date().isoformat(),
+        source_day="2026-09-17", now=datetime.now(policy.KST),
+    )
+    assert intraday["status"] == "activated"
+    intraday_effective = policy.load_effective(
+        data_root=intraday_root, target_date=datetime.now(policy.KST).date().isoformat())
+    assert intraday_effective["machine_policy"] == intraday_parent["machine_policy"]
+    assert intraday_effective["ai_policy"]["auxiliary_soft_policy"] == candidate
+    monkeypatch.setattr(compact, "evaluate_auxiliary_stage", lambda _: source["auxiliary_stage"])
+    receipt = {
+        "source_manifest_sha256": "d" * 64, "target_date": "2026-09-17",
+        "tuning_input_allowed": True,
+        "machine_terminal_tuning_gate": {"decision_counterfactual_tuning_input_allowed": True},
+        "compact_auxiliary_policy_measurement": {"measurement_allowed": True},
+    }
+    now = datetime.fromisoformat("2026-09-18T20:00:00+09:00")
+    published = policy.publish_compact_evaluation(
+        source, source_receipt=receipt, publication_day="2026-09-18",
+        data_root=tmp_path, now=now,
+    )
+    assert published["target_date"] == "2026-09-21"
+    assert published["machine_policy"] == parent["machine_policy"]
+    assert published["ai_policy"]["auxiliary_soft_policy"] == candidate
+    assert published["auxiliary_soft_promoted_scopes"] == ["KRX|KRX_REGULAR"]
+    assert policy.load(data_root=tmp_path, target_date="2026-09-21") == published
+
+    conflicting = compact.sealed({
+        **source,
+        "auxiliary_stage": compact.sealed({
+            **source["auxiliary_stage"],
+            "scope_results": {"KRX|KRX_REGULAR": {
+                **source["auxiliary_stage"]["scope_results"]["KRX|KRX_REGULAR"],
+                "parent_soft_policy_sha256s": ["f" * 64],
+            }},
+        }),
+    })
+    monkeypatch.setattr(compact, "evaluate_auxiliary_stage", lambda _: conflicting["auxiliary_stage"])
+    with pytest.raises(ValueError, match="parent_conflict"):
+        policy.publish_compact_evaluation(
+            conflicting, source_receipt=receipt, publication_day="2026-09-18",
+            data_root=tmp_path, now=now,
+        )
+    monkeypatch.setattr(compact, "evaluate_auxiliary_stage", lambda _: source["auxiliary_stage"])
+    activated = policy.activate_dated_auxiliary_policy(
+        data_root=tmp_path, target_date="2026-09-21",
+        now=datetime.fromisoformat("2026-09-21T07:40:00+09:00"),
+    )
+    assert activated["status"] == "activated"
+    effective = policy.load_effective(data_root=tmp_path, target_date="2026-09-21")
+    assert effective["bundle_sha256"] == activated["bundle_sha256"]
+    assert effective["machine_policy"] == parent["machine_policy"]
+    assert effective["ai_policy"]["auxiliary_soft_policy"] == candidate
+
+
 def test_compact_owner_replay_is_bound_to_exact_attempt_and_plan_hash():
     from copy import deepcopy
 

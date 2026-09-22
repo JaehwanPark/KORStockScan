@@ -2265,6 +2265,10 @@ def record_ai_decision_trace(
                 merged, "entry_execution_readiness_state"
             ),
             "entry_ai_risk_verdict": _optional(merged, "entry_ai_risk_verdict"),
+            "entry_ai_soft_policy_sha256": _optional(merged, "entry_ai_soft_policy_sha256"),
+            "entry_ai_soft_policy": _optional(merged, "entry_ai_soft_policy"),
+            "entry_ai_component_sha256": _optional(merged, "entry_ai_component_sha256"),
+            "entry_ai_effective_assessment": _optional(merged, "entry_ai_effective_assessment"),
             "entry_ai_risk_codes": (
                 [str(code) for code in merged.get("entry_ai_risk_codes") or []]
                 if isinstance(merged.get("entry_ai_risk_codes"), list)

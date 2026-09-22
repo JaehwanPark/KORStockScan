@@ -817,6 +817,41 @@ def _machine_screen_case(verdict):
     return evidence, risk
 
 
+def test_auxiliary_soft_policy_preserves_raw_facts_and_machine_authority():
+    from src.engine.scalping.entry_setup_evidence import evaluate_auxiliary_policy
+
+    policy = {
+        "schema": "auxiliary_soft_policy_v1",
+        "veto_min_independent_evidence_count": 2,
+        "pass_min_positive_evidence_count": 3,
+    }
+    setup, veto = _machine_screen_case("VETO")
+    extra = next(f for f in setup["positive_facts"] if f not in veto["supporting_fact_ids"])
+    veto["supporting_fact_ids"].append(extra)
+    assessment = evaluate_auxiliary_policy(veto, setup_evidence=setup, soft_policy=policy)
+    assert assessment["raw_verdict"] == "VETO"
+    assert assessment["effective_verdict"] == "PASS"
+    assert veto["risk_verdict"] == "VETO"
+    composed = compose_mechanistic_primary_decision(
+        setup_evidence=setup, ai_risk_adjudication=veto,
+        auxiliary_soft_policy=policy,
+    )
+    assert composed["entry_mechanistic_action"] == "ENTER_NOW"
+    assert composed["entry_ai_advisory_verdict"] == "VETO"
+    assert composed["entry_ai_risk_verdict"] == "PASS"
+    assert composed["entry_ai_screen_pass"] is True
+
+    invalid = {**veto, "contradicting_fact_ids": ["invented_fact"]}
+    assert evaluate_auxiliary_policy(
+        invalid, setup_evidence=setup, soft_policy=policy
+    )["effective_verdict"] == "INVALID"
+    blocked_setup, passed = _machine_screen_case("PASS")
+    passed["supporting_fact_ids"] = passed["supporting_fact_ids"][:2]
+    assert evaluate_auxiliary_policy(
+        passed, setup_evidence=blocked_setup, soft_policy=policy
+    )["effective_verdict"] == "CAUTION"
+
+
 @pytest.mark.parametrize(
     "verdict,field,error",
     [

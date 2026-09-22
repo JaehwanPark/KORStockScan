@@ -192,7 +192,7 @@ def validate(bundle: dict, *, target_date: str) -> None:
         activation = bundle["strategy_activation"]
         try:
             effective = datetime.fromisoformat(activation["effective_from"])
-            if (activation["schema"] not in {"main_entry_activation_v2", "main_entry_activation_v3"}
+            if (activation["schema"] not in {"main_entry_activation_v2", "main_entry_activation_v3", "main_auxiliary_activation_v1"}
                 or activation["lifetime"] != "until_superseded"
                 or effective.tzinfo is None
                 or effective.astimezone(KST).date().isoformat() > target_date
@@ -341,6 +341,11 @@ def _validate_ai_policy(ai: object, context: object) -> bool:
     ):
         return False
     version = ai.get("prompt_version")
+    soft = ai.get("auxiliary_soft_policy")
+    if soft is not None:
+        from src.engine.scalping.entry_setup_evidence import validate_auxiliary_soft_policy
+        if not validate_auxiliary_soft_policy(soft):
+            return False
     if version in COMPACT_AI_VARIANTS:
         return ai.get("variant") == compact_prompt_variant(version) and ai.get(
             "system_prompt"
@@ -605,6 +610,7 @@ def publish_compact_evaluation(
 ) -> dict:
     """Publish one canonical paired result without a copied calibration owner."""
     from src.engine.scalping import compact_auxiliary_paired_replay as paired
+    from src.engine.scalping.entry_setup_evidence import validate_auxiliary_soft_policy
 
     current = (now or datetime.now(KST)).astimezone(KST)
     source_day = str(source.get("target_date") or "")
@@ -619,6 +625,24 @@ def publish_compact_evaluation(
         or source.get("source_manifest_sha256") != manifest_sha
     ):
         raise ValueError("compact_direct_evaluation_source_invalid")
+    auxiliary_stage = source.get("auxiliary_stage")
+    if auxiliary_stage is not None and (
+        not paired.valid(auxiliary_stage)
+        or auxiliary_stage.get("schema") != "auxiliary_ai_stage_evaluation_v1"
+        or auxiliary_stage.get("source_date") != source_day
+        or auxiliary_stage.get("source_projection_sha256") != source.get("source_projection_sha256")
+        or auxiliary_stage.get("source_manifest_sha256") != manifest_sha
+        or auxiliary_stage.get("additional_provider_calls") != 0
+    ):
+        raise ValueError("compact_auxiliary_stage_invalid")
+    if auxiliary_stage is not None:
+        projection = paired.read(
+            paired.report_path(data_root, source_day).with_suffix(".source.json")
+        )
+        if (not paired.valid(projection)
+            or projection.get("artifact_content_sha256") != auxiliary_stage["source_projection_sha256"]
+            or paired.evaluate_auxiliary_stage(projection) != auxiliary_stage):
+            raise ValueError("compact_auxiliary_stage_source_or_selection_invalid")
     target = next_target(publication_day)
     previous = load_effective(data_root=data_root, target_date=publication_day)
     if previous is None:
@@ -719,6 +743,43 @@ def publish_compact_evaluation(
             )["ai_policy"]
             if current_ai["prompt_version"] != old_ai["prompt_version"]:
                 raise ValueError("compact_future_stage_owner_conflict:" + scope_key)
+        selected_soft_scopes = {}
+        if auxiliary_stage and auxiliary_stage.get("source_tuning_allowed") is True:
+            for source_scope, assessment in (auxiliary_stage.get("scope_results") or {}).items():
+                scope_key = source_scope.upper()
+                if scope_key not in scope_keys or scope_key in promoted_scopes:
+                    continue
+                if assessment.get("status") != "candidate_selected":
+                    continue
+                candidate_policy = (assessment.get("selected") or {}).get("policy")
+                if not validate_auxiliary_soft_policy(candidate_policy):
+                    raise ValueError("compact_auxiliary_stage_candidate_invalid")
+                old_scoped = (previous.get("scope_policies") or {}).get(scope_key, previous)
+                current_scoped = ((existing or {}).get("scope_policies") or {}).get(
+                    scope_key, existing or previous)
+                old_ai = old_scoped["ai_policy"]
+                current_ai = current_scoped["ai_policy"]
+                scope_parent_hashes = set()
+                for parent_hash in assessment.get("parent_machine_bundle_sha256s") or []:
+                    if re.fullmatch(r"[0-9a-f]{64}", str(parent_hash)) is None:
+                        continue
+                    parent_path = policy_root / "generations" / f"{parent_hash}.json"
+                    if not parent_path.is_file():
+                        continue
+                    try:
+                        parent_bundle = _read(parent_path)
+                        validate(parent_bundle, target_date=parent_bundle["target_date"])
+                        scoped_parent = for_cohort(parent_bundle, tuple(scope_key.split("|")))
+                    except (KeyError, OSError, ValueError):
+                        continue
+                    if scoped_parent:
+                        scope_parent_hashes.add(digest(scoped_parent["machine_policy"]))
+                if (assessment.get("parent_prompt_versions") != [old_ai["prompt_version"]]
+                    or assessment.get("parent_soft_policy_sha256s") != [digest(old_ai.get("auxiliary_soft_policy"))]
+                    or scope_parent_hashes != {digest(current_scoped["machine_policy"])}
+                    or digest(current_ai) != digest(old_ai)):
+                    raise ValueError("compact_auxiliary_stage_parent_conflict:" + scope_key)
+                selected_soft_scopes[scope_key] = candidate_policy
         if existing:
             _atomic_write_json(
                 policy_root / "generations" / f"{existing['bundle_sha256']}.json",
@@ -748,6 +809,11 @@ def publish_compact_evaluation(
                 ai_policy["system_prompt_sha256"] = digest(
                     ai_policy["system_prompt"]
                 )
+        for scope_key, soft_policy in selected_soft_scopes.items():
+            if scope_key == "|".join(COHORT):
+                bundle["ai_policy"]["auxiliary_soft_policy"] = copy.deepcopy(soft_policy)
+            if scope_key in (bundle.get("scope_policies") or {}):
+                bundle["scope_policies"][scope_key]["ai_policy"]["auxiliary_soft_policy"] = copy.deepcopy(soft_policy)
         encoded_source = (
             json.dumps(source, ensure_ascii=False, indent=2) + "\n"
         ).encode()
@@ -770,6 +836,7 @@ def publish_compact_evaluation(
             compact_inherited_bundle_sha256=inherited["bundle_sha256"],
             compact_inherited_source_date=inherited["source_date"],
             compact_paired_artifact_sha256=source["artifact_content_sha256"],
+            compact_source_file_sha256=source_hash,
             compact_evaluation_fingerprint=source.get("evaluation_fingerprint"),
             compact_prompt_disposition=(
                 "compact_paired_candidate_selected"
@@ -781,6 +848,8 @@ def publish_compact_evaluation(
                 )
             ),
             compact_promoted_scopes=promoted_scopes,
+            auxiliary_stage_sha256=auxiliary_stage.get("artifact_content_sha256") if auxiliary_stage else None,
+            auxiliary_soft_promoted_scopes=sorted(selected_soft_scopes),
             compact_evaluation_source={
                 "source_date": source_day,
                 "artifact_content_sha256": source["artifact_content_sha256"],
@@ -1410,6 +1479,176 @@ def activate_strategy_report(source_path: Path, *, data_root: Path, now: datetim
         return dict(status='activated', scopes=sorted(accepted), dispositions=dispositions, **receipt)
 
 
+def activate_dated_auxiliary_policy(
+    *, data_root: Path, target_date: str, now: datetime | None = None,
+    source_day: str | None = None,
+) -> dict:
+    """Activate a reviewed AI successor today, preserving the live machine.
+
+    The dated publisher may run postclose.  Current trading attempts continue
+    to use the prior pair until this explicit component CAS succeeds.
+    """
+    from src.engine.scalping import compact_auxiliary_paired_replay as paired
+    from src.engine.scalping.entry_setup_evidence import validate_auxiliary_soft_policy
+
+    current = (now or datetime.now(KST)).astimezone(KST)
+    if target_date != current.date().isoformat():
+        raise ValueError('auxiliary_activation_target_not_today')
+    policy_root = root(data_root)
+    with (policy_root / 'publisher.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        dated = None if source_day else load(data_root=data_root, target_date=target_date)
+        previous = (_load_current(data_root, target_date) or
+                    load_effective(data_root=data_root,
+                                   target_date=str((dated or {}).get('publication_date') or target_date)))
+        if source_day and previous:
+            if source_day > target_date or source_day < str(previous.get('source_date') or ''):
+                raise ValueError('auxiliary_activation_source_date_invalid')
+            source = paired.read(paired.report_path(data_root, source_day))
+            stage = source.get('auxiliary_stage') or {}
+            projection = paired.read(paired.report_path(data_root, source_day).with_suffix('.source.json'))
+            if (not paired.valid(source) or source.get('target_date') != source_day
+                or not paired.valid(stage) or not paired.valid(projection)
+                or stage.get('source_date') != source_day
+                or stage.get('source_projection_sha256') != projection.get('artifact_content_sha256')
+                or stage.get('source_manifest_sha256') != source.get('source_manifest_sha256')
+                or stage.get('source_tuning_allowed') is not True
+                or stage.get('additional_provider_calls') != 0
+                or paired.evaluate_auxiliary_stage(projection) != stage):
+                raise ValueError('auxiliary_activation_stage_invalid')
+            selected = {key.upper(): value for key, value in (stage.get('scope_results') or {}).items()
+                        if value.get('status') == 'candidate_selected'}
+            dated = copy.deepcopy(previous)
+            dated['auxiliary_soft_promoted_scopes'] = sorted(selected)
+            dated['auxiliary_stage_sha256'] = stage['artifact_content_sha256']
+            dated['compact_evaluation_source_date'] = source_day
+            dated['compact_paired_artifact_sha256'] = source['artifact_content_sha256']
+            dated['compact_evaluation_fingerprint'] = source.get('evaluation_fingerprint')
+            dated['compact_evaluation_source'] = {
+                'source_date': source_day,
+                'artifact_content_sha256': source['artifact_content_sha256'],
+                'evaluation_fingerprint': source.get('evaluation_fingerprint'),
+                'machine_parent_bundle_sha256s': source.get('machine_parent_bundle_sha256s') or [],
+                'machine_policy_sha256': digest(previous['machine_policy']),
+                'disposition': 'candidate_selected',
+            }
+            for scope, assessment in selected.items():
+                old = for_cohort(previous, tuple(scope.split('|')))
+                candidate = (assessment.get('selected') or {}).get('policy')
+                parent_machine_hashes = set()
+                for parent_hash in assessment.get('parent_machine_bundle_sha256s') or []:
+                    if re.fullmatch(r'[0-9a-f]{64}', str(parent_hash)) is None:
+                        continue
+                    parent_path = policy_root / 'generations' / f'{parent_hash}.json'
+                    if not parent_path.is_file():
+                        continue
+                    parent_bundle = _read(parent_path)
+                    validate(parent_bundle, target_date=parent_bundle['target_date'])
+                    parent_scope = for_cohort(parent_bundle, tuple(scope.split('|')))
+                    if parent_scope:
+                        parent_machine_hashes.add(digest(parent_scope['machine_policy']))
+                if (not old or not validate_auxiliary_soft_policy(candidate)
+                    or assessment.get('parent_prompt_versions') != [old['ai_policy']['prompt_version']]
+                    or assessment.get('parent_soft_policy_sha256s') != [digest(old['ai_policy'].get('auxiliary_soft_policy'))]
+                    or parent_machine_hashes != {digest(old['machine_policy'])}):
+                    raise ValueError('auxiliary_activation_parent_cas_failed:' + scope)
+                if scope in (dated.get('scope_policies') or {}):
+                    dated['scope_policies'][scope]['ai_policy']['auxiliary_soft_policy'] = copy.deepcopy(candidate)
+                if scope == '|'.join(COHORT):
+                    dated['ai_policy']['auxiliary_soft_policy'] = copy.deepcopy(candidate)
+            encoded_source = (json.dumps(source, ensure_ascii=False, indent=2) + '\n').encode()
+            dated['compact_source_file_sha256'] = hashlib.sha256(encoded_source).hexdigest()
+        if previous is None or dated is None:
+            return {'status': 'incumbent_carry', 'reason': 'dated_auxiliary_policy_missing'}
+        scopes = dated.get('auxiliary_soft_promoted_scopes') or []
+        if not scopes:
+            return {'status': 'incumbent_carry', 'reason': 'no_auxiliary_successor',
+                    'bundle_sha256': previous['bundle_sha256']}
+        if any(for_cohort(previous, tuple(scope.split('|'))) is None
+               or for_cohort(dated, tuple(scope.split('|'))) is None for scope in scopes):
+            raise ValueError('auxiliary_activation_scope_unadopted')
+        if all(for_cohort(previous, tuple(scope.split('|')))['ai_policy']
+               == for_cohort(dated, tuple(scope.split('|')))['ai_policy'] for scope in scopes):
+            return {'status': 'already_active', 'bundle_sha256': previous['bundle_sha256']}
+        inherited_hash = previous['bundle_sha256'] if source_day else dated.get('compact_inherited_bundle_sha256')
+        if re.fullmatch(r'[0-9a-f]{64}', str(inherited_hash)) is None:
+            raise ValueError('auxiliary_activation_parent_missing')
+        inherited = _read(policy_root / 'generations' / f'{inherited_hash}.json')
+        validate(inherited, target_date=inherited['target_date'])
+        _validate_bundle_sources(previous if source_day else dated, data_root)
+        source_hash = dated.get('compact_source_file_sha256')
+        source_path = policy_root / 'sources' / f'{source_hash}.json'
+        if source_day:
+            _atomic_write_json(source_path, source)
+        if re.fullmatch(r'[0-9a-f]{64}', str(source_hash)) is None or _source_hash(
+            str(source_path), _signature(source_path)
+        ) != source_hash:
+            raise ValueError('auxiliary_activation_source_file_invalid')
+        source = _read(source_path)
+        stage = source.get('auxiliary_stage') or {}
+        projection = paired.read(paired.report_path(data_root, source['target_date']).with_suffix('.source.json'))
+        if (not paired.valid(source) or not paired.valid(stage)
+            or not paired.valid(projection)
+            or paired.evaluate_auxiliary_stage(projection) != stage
+            or stage.get('artifact_content_sha256') != dated.get('auxiliary_stage_sha256')):
+            raise ValueError('auxiliary_activation_stage_invalid')
+        if (previous['machine_policy'] != dated['machine_policy']
+            or any(previous['scope_policies'][scope]['machine_policy'] != dated['scope_policies'][scope]['machine_policy']
+                   for scope in previous.get('scope_policies') or ())):
+            raise ValueError('auxiliary_activation_machine_changed_revalidation_required')
+        proofs = {}
+        bundle = copy.deepcopy(previous)
+        for scope in scopes:
+            old = for_cohort(previous, tuple(scope.split('|')))
+            parent = for_cohort(inherited, tuple(scope.split('|')))
+            successor = for_cohort(dated, tuple(scope.split('|')))
+            selected = next((value for key, value in (stage.get('scope_results') or {}).items()
+                             if key.upper() == scope), {})
+            candidate = (selected.get('selected') or {}).get('policy')
+            if (not old or not parent or not successor
+                or selected.get('status') != 'candidate_selected'
+                or not validate_auxiliary_soft_policy(candidate)
+                or old['ai_policy'] != parent['ai_policy']
+                or successor['ai_policy'] != {**old['ai_policy'], 'auxiliary_soft_policy': candidate}):
+                raise ValueError('auxiliary_activation_parent_cas_failed:' + scope)
+            if scope in (bundle.get('scope_policies') or {}):
+                bundle['scope_policies'][scope]['ai_policy'] = copy.deepcopy(successor['ai_policy'])
+            if scope == '|'.join(COHORT):
+                bundle['ai_policy'] = copy.deepcopy(successor['ai_policy'])
+            proofs[scope] = {
+                'parent_ai_sha256': digest(old['ai_policy']),
+                'candidate_ai_sha256': digest(successor['ai_policy']),
+            }
+        for key in ('compact_evaluation_source_date', 'compact_paired_artifact_sha256',
+                    'compact_source_file_sha256', 'compact_evaluation_fingerprint',
+                    'compact_evaluation_source', 'auxiliary_stage_sha256',
+                    'auxiliary_soft_promoted_scopes'):
+            bundle[key] = copy.deepcopy(dated.get(key))
+        bundle.update(target_date=target_date, publication_date=target_date,
+                      previous_bundle_sha256=previous['bundle_sha256'],
+                      generated_at=current.isoformat(),
+                      strategy_activation={
+                          'schema': 'main_auxiliary_activation_v1',
+                          'effective_from': current.isoformat(),
+                          'lifetime': 'until_superseded',
+                          'scopes': proofs,
+                          'parent_bundle_sha256': previous['bundle_sha256'],
+                      })
+        bundle.pop('bundle_sha256', None)
+        bundle['bundle_sha256'] = digest(bundle)
+        validate(bundle, target_date=target_date)
+        _atomic_write_json(policy_root / 'generations' / f"{previous['bundle_sha256']}.json", previous)
+        _atomic_write_json(policy_root / 'generations' / f"{bundle['bundle_sha256']}.json", bundle)
+        receipt = {'schema': 'main_entry_current_v2', 'bundle_sha256': bundle['bundle_sha256'],
+                   'previous_bundle_sha256': previous['bundle_sha256'],
+                   'effective_from': current.isoformat()}
+        receipt['receipt_sha256'] = digest(receipt)
+        _atomic_write_json(policy_root / 'current.json', receipt)
+        if load_effective(data_root=data_root, target_date=target_date)['bundle_sha256'] != bundle['bundle_sha256']:
+            raise ValueError('auxiliary_activation_readback_failed')
+        return {'status': 'activated', 'scopes': sorted(proofs), **receipt}
+
+
 def _load_current(data_root: Path, target_date: str) -> dict | None:
     """Reuse a validated generation only while every read dependency is intact."""
     key = (str(data_root.resolve()), target_date)
@@ -1480,6 +1719,48 @@ def _load_current_uncached(data_root: Path, target_date: str) -> dict | None:
         for scope, value in (bundle.get('scope_policies') or {}).items():
             if value['machine_policy'] != donor['scope_policies'][scope]['machine_policy'] or value['ai_policy'] != parent['scope_policies'][scope]['ai_policy']:
                 raise ValueError('strategy_rollback_scope_binding_invalid')
+        return bundle if target_date >= bundle['target_date'] else None
+    if activation.get('schema') == 'main_auxiliary_activation_v1':
+        from src.engine.scalping import compact_auxiliary_paired_replay as paired
+        from src.engine.scalping.entry_setup_evidence import validate_auxiliary_soft_policy
+        source_hash = bundle.get('compact_source_file_sha256')
+        if re.fullmatch(r'[0-9a-f]{64}', str(source_hash)) is None:
+            raise ValueError('auxiliary_activation_source_hash_invalid')
+        source_path = root(data_root) / 'sources' / f'{source_hash}.json'
+        if _source_hash(str(source_path), _signature(source_path)) != source_hash:
+            raise ValueError('auxiliary_activation_source_file_invalid')
+        paired_source = _read(source_path)
+        stage = paired_source.get('auxiliary_stage') or {}
+        if (not paired.valid(paired_source) or not paired.valid(stage)
+            or paired_source.get('artifact_content_sha256') != bundle.get('compact_paired_artifact_sha256')
+            or stage.get('artifact_content_sha256') != bundle.get('auxiliary_stage_sha256')
+            or bundle['machine_policy'] != parent['machine_policy']
+            or bundle.get('all_continuous_adopted') != parent.get('all_continuous_adopted')):
+            raise ValueError('auxiliary_activation_source_or_machine_invalid')
+        scopes = activation.get('scopes') or {}
+        if not scopes or sorted(scopes) != bundle.get('auxiliary_soft_promoted_scopes'):
+            raise ValueError('auxiliary_activation_scope_invalid')
+        if (bundle.get('scope_policies')
+            and bundle['ai_policy'] != bundle['scope_policies']['KRX|KRX_REGULAR']['ai_policy']):
+            raise ValueError('auxiliary_activation_base_projection_invalid')
+        for scope, old in (parent.get('scope_policies') or {}).items():
+            new = (bundle.get('scope_policies') or {}).get(scope)
+            if not new or new['machine_policy'] != old['machine_policy']:
+                raise ValueError('auxiliary_activation_machine_scope_changed')
+            if scope not in scopes and new['ai_policy'] != old['ai_policy']:
+                raise ValueError('auxiliary_activation_unselected_ai_changed')
+        for scope, proof in scopes.items():
+            old = for_cohort(parent, tuple(scope.split('|')))
+            new = for_cohort(bundle, tuple(scope.split('|')))
+            evaluation = next((value for key, value in (stage.get('scope_results') or {}).items()
+                               if key.upper() == scope), {})
+            candidate = (evaluation.get('selected') or {}).get('policy')
+            if (not old or not new or evaluation.get('status') != 'candidate_selected'
+                or not validate_auxiliary_soft_policy(candidate)
+                or digest(old['ai_policy']) != proof.get('parent_ai_sha256')
+                or digest(new['ai_policy']) != proof.get('candidate_ai_sha256')
+                or new['ai_policy'] != {**old['ai_policy'], 'auxiliary_soft_policy': candidate}):
+                raise ValueError('auxiliary_activation_component_binding_invalid')
         return bundle if target_date >= bundle['target_date'] else None
     from src.engine.scalping.entry_strategy_policy import promotion_errors
     scopes = activation.get('scopes') or {activation.get('scope'): activation}
@@ -1568,6 +1849,10 @@ def current_strategy_receipt(*, data_root: Path) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path)
+    parser.add_argument("--activate-dated-auxiliary", action="store_true")
+    parser.add_argument("--activate-auxiliary-now", action="store_true")
+    parser.add_argument("--source-date")
+    parser.add_argument("--target-date")
     parser.add_argument("--rollback-machine-to")
     parser.add_argument("--data-root", type=Path, default=Path("data"))
     parser.add_argument("--bootstrap", action="store_true")
@@ -1580,6 +1865,19 @@ def main() -> int:
         help="Explicit initial adoption; later dated succession is automatic",
     )
     args = parser.parse_args()
+    if args.activate_auxiliary_now:
+        if not args.source_date or args.source or args.activate_dated_auxiliary or args.activate_now or args.bootstrap or args.rollback_machine_to:
+            parser.error('--activate-auxiliary-now requires only --source-date')
+        print(json.dumps(activate_dated_auxiliary_policy(
+            data_root=args.data_root, target_date=datetime.now(KST).date().isoformat(),
+            source_day=args.source_date)))
+        return 0
+    if args.activate_dated_auxiliary:
+        if args.source or not args.target_date or args.activate_now or args.bootstrap or args.rollback_machine_to:
+            parser.error('--activate-dated-auxiliary requires only --target-date')
+        print(json.dumps(activate_dated_auxiliary_policy(
+            data_root=args.data_root, target_date=args.target_date)))
+        return 0
     if args.rollback_machine_to:
         if args.source or args.activate_now or args.bootstrap:
             parser.error('--rollback-machine-to is a standalone action')

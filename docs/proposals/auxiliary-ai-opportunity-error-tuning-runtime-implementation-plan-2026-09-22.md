@@ -1,8 +1,8 @@
 # 보조 AI의 VETO 기회비용·PASS 오진입 튜닝 및 장중 정책 적용 계획
 
 작성: 2026-09-22 KST
-상태: **계획 수립. AI 호출·후보 생성·정책 변경·배포·재기동은 이번 문서 작업에서 실행하지 않는다.**
-실행 owner: [9/22 체크리스트](../checklists/2026-09-22-stage2-todo-checklist.md)의 `AuxiliaryAIBidirectionalTuning`.
+상태: **AI 단계 구현·회귀검증 중. 발행, 배포, 다음 장전 소비 및 자연 경제성은 별도 영수증으로 확인한다.**
+실행 owner: [9/23 체크리스트](../checklists/2026-09-23-stage2-todo-checklist.md)의 `DirectFamilySourceRepairCompactAuxiliary`. 성공 PASS 대조군 반영은 이 owner의 기존 compact auxiliary source/label/evaluator 단계에 포함하며 별도 stage나 장후 실행기를 추가하지 않는다.
 연결: [메인 기계판정](main-nonentry-threshold-postclose-runtime-implementation-plan-2026-09-21.md), [장후 실행기 분리](machine-postclose-runner-separation-implementation-plan-2026-09-22.md).
 
 ## 1. 목표와 단계 경계
@@ -29,7 +29,7 @@
 
 - 동일 입력 시점의 부모·후보 AI를 비교한다. 최신 기계정책 때문에 새롭게 ENTER_NOW가 된 과거 BLOCK/RECHECK는 보조 AI의 실제 호출 모집단에 소급 편입하지 않는다. 이후 실제 호출에서 자료를 쌓는다.
 - 후보가 사실과 다른 판단을 한 것과, PASS 후 슬리피지/가격·수량/청산 때문에 실제 손실이 난 것을 구별한다. PASS 손실을 전부 AI 오류라고 단정하지 않는다.
-- 필수 평가는 기계단계와 같은 원천 가격경로·왕복 비용을 쓴다. 실제 `COMPLETED + valid profit_rate` 및 같은 attempt의 실제 비용이 있는 경우만 별도 realized outcome으로 연결한다. 실제 손익이 없다고 stage 학습을 막거나 0으로 채우지 않는다.
+- AI 단계의 최초 독립 평가 basis는 기존 outcome label의 같은 venue/session 10분 고정 target(+0.3%)/adverse(−0.7%)/종료 가격 경로에서 왕복 보수 비용을 뺀 `auxiliary_fixed_path_10m_v1`이다. 가격경로가 미완결·동일 봉 선후 불명·비용 누락이면 제외한다. 이는 기존 `entry_quality_path`의 **실제 계획 exact stop** 또는 체결 손익이라고 주장하지 않는다. 정확한 stop이 없는 과거 건을 임의로 보충하지 않는다. 실제 `COMPLETED + valid profit_rate` 및 같은 attempt의 실제 비용이 있는 경우만 별도 realized outcome으로 연결한다.
 - 동일 봉 목표·손실 동시 도달, 종료 미확정, fill 불명확한 실현손익은 확정 성공/실패로 쓰지 않는다. 경로 라벨의 target/stop/horizon/cost 버전은 해당 평가 동안 고정한다.
 - 날짜·종목·promotion 기회 단위로 동일 가중치를 부여하고, attempt 수가 많은 RECHECK/재호출이 점수를 부풀리지 않게 한다. 미래 경로는 label에만 쓰며 prompt와 selector에는 전달하지 않는다.
 
@@ -52,14 +52,28 @@ B. **근거 임계치 후보**: 동일한 유효 AI 응답·근거 프레임을 
 - `good_pass_retention`: 양수 경로 기회를 PASS로 남긴 비율.
 - `bad_pass_rejection`: 음수 경로 기회를 non-PASS로 바꾼 비율.
 - `balanced_quality`: good retention과 bad rejection의 평균. 한 class가 없으면 그 class 비율은 null, 관측 class만 사용하고 coverage를 명시한다.
-- `Q = 0.6 * pass_win_rate + 0.4 * balanced_quality` (각 비율0~1). 이 가중치는 평가 계약으로 고정하며 후보가 점수 가중치를 바꾸지 않는다.
-- 적격 후보는 부모 대비 평균 paired delta가 음수가 아니어야 한다. **절대 평균이익 양수는 요구하지 않는다.** 그 안에서 Q → PASS 승률 → paired delta → PASS 평균 경로 이익 → 단순성 순으로 선택한다. 동일 점수·동일 행동이면 부모를 유지한다.
+- `Q = 0.6 * pass_win_rate + 0.4 * balanced_quality` (각 비율0~1)는 양방향 진단값으로 남긴다. 후보가 점수 가중치를 바꾸지 않는다.
+- **기계판정과 같은 선정 순위**를 사용한다. 기회 단위 PASS 승률의 support-adjusted 점수 → 선택 PASS의 비용 후 평균 경로 이익 → 동일 분모의 부모 대비 paired delta → 선택 기회 수 → 단순성 순이다. 1건/100% 승률이 과대평가되지 않도록 기존 `machine_support_adjusted_win_rate`를 재사용한다. Q·좋은 PASS 보존·나쁜 PASS 차단은 별도로 보고한다.
+- 적격 후보는 부모 대비 평균 paired delta가 음수가 아니고 위 순위가 부모보다 높아야 한다. **절대 평균이익 양수는 요구하지 않는다.** 동일 행동이면 부모를 유지한다.
 
 모두 VETO/CAUTION으로 바꾸어 분모를 없앤 후보, 허용 PASS0인 후보, 지원 자료를 의도적으로 제외한 후보는 적용 후보가 아니다. 무근거 all-PASS도 fact/guard 검증을 통과할 수 없다. 실제 경로가 모두 양수라면 근거를 충족한 all-PASS 자체를 금지하지 않는다.
 
-평가 한 기회부터 실행하며 고정20회·2일·portfolio 이익 문턱을 재도입하지 않는다. 유효 후보가 없거나 바꿀 방향의 근거가 없으면 scope별 부모 carry이다. 부족한 class를 가짜 표본으로 채우지 않는다. Q와 가중치 선택은 계획상의 초기 기준이며 현재 구현되어 있는 기준으로 보고하지 않는다.
+평가 한 기회부터 실행하며 고정20회·2일·portfolio 이익 문턱을 재도입하지 않는다. 유효 후보가 없거나 바꿀 방향의 근거가 없으면 scope별 부모 carry이다. 부족한 class를 가짜 표본으로 채우지 않는다. Q는 양방향 진단값으로 계산하며 선정은 위의 기계판정식 보정 승률·비용 후 EV·paired 순위를 따른다.
 
-### 3.3 시간·범위·계산량
+### 3.3 성공 PASS 대조군을 추가 부담 없이 학습에 반영
+
+성공 PASS는 기존 AI 호출 로그와 기존 가격 경로·비용 라벨을 재사용해 후보가 보호해야 할 양성 대조군으로 반영한다. 별도 AI 재호출, 새 저장소, 전 종목 재생은 요구하지 않는다.
+
+- 대조군은 실제 machine `ENTER_NOW` 뒤 AI가 실제 호출되어 raw/effective verdict가 유효한 `PASS`였고, 해당 promotion의 완결된 비용 반영 경로가 양수인 기회로 한정한다. 단순 PASS, 미체결, 미완결·censored 경로는 성공으로 세지 않는다. 실제 `COMPLETED + valid profit_rate`는 별도 실현손익 표본으로 유지한다.
+- 장후 `outcome_labels`/`compact_auxiliary_paired_replay`가 이미 만든 같은 attempt의 label을 verdict·input hash로 조인한다. 기존 라벨을 재생성하지 말고, 응답·label join이 없으면 그 행은 미연결 source gap으로 남긴다.
+- deterministic 근거 임계치 후보는 기존 raw 응답과 fact frame을 공유 evaluator에 다시 넣는다. 추가 provider 호출 수는 0으로 제한하고, `good_pass_retention` 및 `pass_win_rate`에 성공 PASS를 포함한다. 후보가 성공 PASS를 non-PASS로 바꾸면 동일 기회 paired delta에서 그 기회 수익만큼 불이익을 받는다.
+- prompt 후보가 필요한 경우에도 성공 PASS 행을 후보 manifest와 동일한 고정 분모에 넣는다. 기존 exact-input 응답 cache를 먼저 재사용하고, cache miss 재호출은 기존 최대 후보·provider budget 안에서만 수행한다. 성공 PASS만을 따로 표본추출하거나 평가 후 분모에서 제거하지 않는다.
+- 보고서에는 `eligible_successful_pass_count`, `linked_successful_pass_count`, `good_pass_retention`, 성공 PASS에서 바뀐 verdict 수, 추가 provider call 수를 기록한다. 이 값은 별도 score 보너스가 아니라 기존 paired score의 분모·전이 근거다.
+- AI 단계 고정 경로의 target/adverse/horizon·왕복 비용·동일 route outcome provenance가 빠지면 PASS 행은 보존하되 success label은 미확정으로 분류하고 승격을 막는다. null을 0이나 성공으로 바꾸지 않는다. 기존 owner-capital/exact-stop 비교의 `exact_stop_distance_missing_or_invalid` 결손은 별도 legacy basis에 남는다.
+
+성공 PASS 대조군 연결은 기존 compact auxiliary 평가 안에서 닫는다. 별도 장후 stage/cron, 모델 학습 서비스, 별도 승인 통로는 만들지 않는다.
+
+### 3.4 시간·범위·계산량
 
 - source generation과 부모 AI component를 pin하고 train에서만 후보·경계·학습 대상을 정한다. latest completed day는 가능한 경우 진단 holdout이며, 결과를 본 뒤 같은 holdout에서 다시 선택하지 않는다. 한 날짜뿐이면 holdout 없음으로 표시한다.
 - 소스와 모델을 동일하게 맞춘 paired 비교를 수행한다. machine generation이 다른 기회는 층별 결과를 남긴다. 의미적으로 호환되는 입력 schema/지원 cohort에서만 묶고, 새로운 기계 scope에는 미학습 AI 임계치를 전파하지 않는다.
@@ -108,7 +122,7 @@ soft materiality 수치는 82개 machine registry를 복사하지 않는다. 기
 5. attempt 시작에서 두 generation을 함께 pin한다. 진행 중 응답은 그 pair에만 귀속시킨다. 제출 직전 generation/유효시간이 달라지면 기존 신규진입 재확인 경로로 돌려 source와 AI를 다시 확인한다. response만 새 generation으로 재표기하지 않는다.
 6. 코드 배포에 restart가 필요하면 기존 guarded procedure를 쓰고, 정책만 바뀌면 live loader의 다음 attempt에서 반영한다. 주문/보유 custody를 유지한다. 다음 날짜까지 기다리거나 시험 주문을 제출하지 않는다.
 7. actual PID/start/release/AI component/effective verdict 영수증을 확인한다. 자연 호출이 없으면 `published_awaiting_natural_attempt`이며, synthetic 검증을 실제 소비로 표시하지 않는다.
-8. 다음 적격 AI 정책/명시 rollback까지 carry한다. 기계 튜닝 실패·장후 전체 실패·날짜 변경으로 AI를 초기값으로 돌리지 않는다. 장후 AI stage는 이와 동일한 evaluator/validator/publisher를 사용한다.
+8. 다음 적격 AI 정책/명시 rollback까지 carry한다. 기계 튜닝 실패·장후 전체 실패·날짜 변경으로 AI를 초기값으로 돌리지 않는다. 기존 `main_auxiliary_policy` 장후 stage가 같은 evaluator/validator/publisher를 사용한다. 오늘 원천에서 후보가 선정되면 `--activate-auxiliary-now --source-date YYYY-MM-DD`가 현재 machine/AI 부모와 보고서 재생 결과를 잠금 안에서 CAS 검사해 AI component만 즉시 활성화한다. 다음 거래일 07:35 preopen wrapper도 dated 후보에 같은 CAS를 적용한다. 후보가 없으면 현재 pair를 유지한다.
 
 ## 7. 구현·검증 순서
 

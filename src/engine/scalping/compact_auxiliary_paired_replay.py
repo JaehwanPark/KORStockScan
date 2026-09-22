@@ -46,7 +46,7 @@ CONTRACT = {
     "incumbent_only_candidate_direction_required": True,
     "candidate_direction_route_learning_floor_required": True,
 }
-SOURCE_PROJECTION_CONTRACT = "compact_pre_ai_execution_source_v7"
+SOURCE_PROJECTION_CONTRACT = "compact_pre_ai_execution_source_v9"
 CANDIDATE_SELECTION_SCHEMA = "compact_auxiliary_candidate_direction_v1"
 PROSPECTIVE_SOURCE_CONTRACT_SCHEMA = (
     "compact_auxiliary_prospective_source_contract_v1"
@@ -415,11 +415,32 @@ def natural_response_contract_exclusion(trace):
     return None
 
 
+def auxiliary_stage_path(label):
+    outcome = (label.get("horizon_metrics") or {}).get("10m") or {}
+    return {
+        "schema": "auxiliary_fixed_path_10m_v1",
+        "first_hit": outcome.get("entry_path_first_hit"),
+        "target_pct": outcome.get("entry_path_target_pct"),
+        "adverse_pct": outcome.get("entry_path_adverse_pct"),
+        "end_return_pct": outcome.get("end_return_pct"),
+        "sample_count": outcome.get("sample_count"),
+        "conservative_execution_cost_pct": label.get("entry_conservative_execution_cost_pct"),
+        "label_report_sha256": digest(label) if label else None,
+        "label_source_quality_status": label.get("source_quality_status"),
+        "observed_venue": outcome.get("observed_venue"),
+        "observed_session_bucket": outcome.get("observed_session_bucket"),
+        "actual_order_submitted": False,
+        "path_authority": "counterfactual_completed_bar_touch_not_actual_fill",
+    }
+
+
 def prepare(data_root, day):
     """Use actual compact screens, never fabricated AI for machine BLOCK rows."""
     from src.utils.jsonl_io import iter_jsonl, existing_or_gzip_path
     from src.engine.scalping.ai_decision_trace import _json_bytes
+    from src.engine.scalping import mechanistic_entry_runtime_policy as machine_policy_owner
     from src.engine.scalping.mechanistic_entry_runtime_policy import COMPACT_AI_VARIANTS
+    from src.engine.scalping.entry_setup_evidence import ENTRY_RISK_ADJUDICATION_SCHEMA
 
     root = Path(data_root)
     source = read(
@@ -478,7 +499,21 @@ def prepare(data_root, day):
         or (summary.get("daily_diagnostic") or {}).get("entry_opportunity_executable_replay") or {})
     owner_rows, owner_conflicts = index_owner_replays(owner_source.get("rows", []))
     rows, exclusions = [], Counter()
+    machine_policies = {}
     for key, trace in sorted(traces.items()):
+        bundle_hash = trace.get("machine_bundle_sha256")
+        cohort = (str(trace.get("effective_venue") or "").upper(),
+                  str(trace.get("session_bucket") or "").upper())
+        policy_key = (bundle_hash, cohort)
+        if policy_key not in machine_policies:
+            generation = read(root / "runtime/mechanistic_entry_policy/generations" / f"{bundle_hash}.json")
+            try:
+                machine_policy_owner.validate(generation, target_date=generation["target_date"])
+                machine_policy_owner._validate_bundle_sources(generation, root)
+                scoped = machine_policy_owner.for_cohort(generation, cohort)
+                machine_policies[policy_key] = scoped["machine_policy"] if scoped and generation["bundle_sha256"] == bundle_hash else None
+            except (KeyError, TypeError, ValueError):
+                machine_policies[policy_key] = None
         payload_key = (
             trace.get("request_envelope_sha256"),
             trace.get("payload_sha256"),
@@ -486,8 +521,17 @@ def prepare(data_root, day):
         )
         payload = payloads.get(payload_key) or {}
         raw = payload.get("sanitized_user_input")
-        outcome = (by_trace.get(key, {}).get("horizon_metrics") or {}).get("10m") or {}
+        label = by_trace.get(key, {})
+        outcome = (label.get("horizon_metrics") or {}).get("10m") or {}
         path = outcome.get("entry_quality_path") or {}
+        raw_response = {
+            "schema": ENTRY_RISK_ADJUDICATION_SCHEMA,
+            "risk_verdict": trace.get("entry_ai_raw_risk_verdict"),
+            "risk_codes": trace.get("entry_ai_raw_risk_codes"),
+            "supporting_fact_ids": trace.get("entry_ai_raw_supporting_fact_ids"),
+            "contradicting_fact_ids": trace.get("entry_ai_raw_contradicting_fact_ids"),
+            "confidence": trace.get("entry_ai_raw_confidence"),
+        }
         row_identity = {
             "source_date": day,
             "evaluation_attempt_id": trace.get("evaluation_attempt_id"),
@@ -551,10 +595,15 @@ def prepare(data_root, day):
                 "session_bucket": trace.get("session_bucket"),
                 "broker_route": trace.get("broker_route"),
                 "machine_bundle_sha256": trace.get("machine_bundle_sha256"),
+                "machine_policy": machine_policies[policy_key],
                 "incumbent_prompt_version": trace.get("prompt_version"),
                 "issued_prompt_sha256": trace.get("prompt_sha256"),
                 "payload_sha256": trace.get("payload_sha256"),
                 "incumbent_verdict": verdict,
+                "raw_response": raw_response,
+                "parent_auxiliary_soft_policy": trace.get("entry_ai_soft_policy"),
+                "parent_auxiliary_soft_policy_sha256": trace.get("entry_ai_soft_policy_sha256"),
+                "ai_stage_path": auxiliary_stage_path(label),
                 # Preserve frozen source for a later owner-path evaluation;
                 # exclusion, not deletion of the payload, controls execution.
                 "input": raw if isinstance(raw, dict) and payload.get("replay_exact") is True
@@ -602,6 +651,201 @@ def input_identity(row):
             )
         }
     )
+
+
+def auxiliary_stage_net(row):
+    """Cost-adjusted fixed 10m path, never an exact stop or realized fill."""
+    path = row.get("ai_stage_path") or {}
+    if path.get("schema") != "auxiliary_fixed_path_10m_v1" or not path.get("label_report_sha256"):
+        return None
+    if (path.get("label_source_quality_status") != "pass"
+        or str(path.get("observed_venue") or "").upper() != str(row.get("effective_venue") or "").upper()
+        or str(path.get("observed_session_bucket") or "").upper() != str(row.get("session_bucket") or "").upper()):
+        return None
+    if type(path.get("sample_count")) is not int or path["sample_count"] < 1:
+        return None
+    cost = path.get("conservative_execution_cost_pct")
+    target, adverse = path.get("target_pct"), path.get("adverse_pct")
+    if not all(finite(v) for v in (cost, target, adverse)) or cost < 0 or target <= 0 or adverse >= 0:
+        return None
+    first = path.get("first_hit")
+    if first == "target_first":
+        gross = target
+    elif first == "adverse_first":
+        gross = adverse
+    elif first == "neither_hit" and finite(path.get("end_return_pct")):
+        gross = path["end_return_pct"]
+    else:
+        return None
+    return round(gross - cost, 10)
+
+
+def evaluate_auxiliary_stage(projection):
+    """Bounded deterministic AI-stage replay over actual machine ENTER_NOW calls.
+
+    This independent basis deliberately does not inherit the legacy 20-row,
+    owner-capital or exact-stop promotion gates.  An absent outcome remains a
+    source gap, and one promotion receives one vote regardless of retry count.
+    """
+    from src.engine.scalping.entry_setup_evidence import (
+        evaluate_auxiliary_policy, repair_mechanistic_pass_citations,
+    )
+    from src.engine.scalping.entry_strategy_policy import machine_support_adjusted_win_rate
+
+    if not valid(projection) or projection.get("schema") != "compact_auxiliary_frozen_projection_v1":
+        raise ValueError("auxiliary_stage_projection_invalid")
+    seen, eligible, excluded = set(), [], Counter()
+    for row in sorted(projection.get("rows") or [], key=lambda r: (
+        str(r.get("decision_ts") or ""), str(r.get("evaluation_key") or ""))):
+        opportunity = (row.get("source_date"), row.get("stock_code"), row.get("scanner_promotion_id"))
+        if opportunity in seen:
+            excluded["duplicate_promotion_attempt"] += 1
+            continue
+        seen.add(opportunity)
+        natural = row.get("natural_contract_evidence") or {}
+        if natural.get("semantic_validation_status") != "pass" or natural.get("decision_quality_contract_status") != "pass":
+            excluded["natural_response_invalid"] += 1
+            continue
+        if not isinstance(row.get("input"), dict) or row.get("source_label_identity_reasons"):
+            excluded["frozen_input_or_label_identity_invalid"] += 1
+            continue
+        setup = row["input"].get("entry_setup_evidence_v1")
+        raw = row.get("raw_response")
+        if not isinstance(setup, dict) or not isinstance(raw, dict) or not isinstance(row.get("machine_policy"), dict):
+            excluded["raw_response_or_setup_missing"] += 1
+            continue
+        # Runtime applies this deterministic citation repair before composing
+        # its binding screen. Preserve the provider response in the projection.
+        replay_response, _ = repair_mechanistic_pass_citations(raw, setup_evidence=setup)
+        parent_policy = row.get("parent_auxiliary_soft_policy")
+        if (parent_policy and digest(parent_policy) != row.get("parent_auxiliary_soft_policy_sha256")):
+            excluded["parent_soft_policy_hash_invalid"] += 1
+            continue
+        parent = evaluate_auxiliary_policy(
+            replay_response, setup_evidence=setup, machine_policy=row["machine_policy"],
+            soft_policy=parent_policy
+        )
+        if parent["validation_errors"] or parent["effective_verdict"] != row.get("incumbent_verdict"):
+            excluded["raw_response_validation_or_verdict_mismatch"] += 1
+            continue
+        net = auxiliary_stage_net(row)
+        if net is None:
+            excluded["fixed_path_or_cost_incomplete"] += 1
+            continue
+        eligible.append(({**row, "replay_response": replay_response}, net))
+    groups = _scope_groups([row for row, _ in eligible])
+    candidates = [None] + [
+        {"schema": "auxiliary_soft_policy_v1",
+         "veto_min_independent_evidence_count": veto,
+         "pass_min_positive_evidence_count": positive}
+        for veto in (1, 2, 3) for positive in (1, 2, 3)
+    ]
+    scopes = {}
+    for scope, rows in sorted(groups.items()):
+        by_key = {row["evaluation_key"]: net for row, net in eligible if row in rows}
+        population = [(row, by_key[row["evaluation_key"]]) for row in rows]
+        parent_versions = sorted({row.get("incumbent_prompt_version") for row, _ in population})
+        parent_soft_hashes = sorted({digest(row.get("parent_auxiliary_soft_policy")) for row, _ in population})
+        positive_total = sum(net > 0 for _, net in population)
+        negative_total = sum(net < 0 for _, net in population)
+        trials = []
+        for policy in [population[0][0].get("parent_auxiliary_soft_policy")] + candidates[1:]:
+            pairs, unsupported = [], 0
+            for row, net in population:
+                assessment = evaluate_auxiliary_policy(
+                    row["replay_response"],
+                    setup_evidence=row["input"]["entry_setup_evidence_v1"],
+                    machine_policy=row["machine_policy"],
+                    soft_policy=policy,
+                )
+                if assessment["validation_errors"]:
+                    unsupported += 1
+                    # Fixed parent fallback keeps the same paired denominator.
+                    verdict = row["incumbent_verdict"]
+                else:
+                    verdict = assessment["effective_verdict"]
+                pairs.append((row["incumbent_verdict"], verdict, net))
+            passed = [(old, new, net) for old, new, net in pairs if new == "PASS"]
+            pass_count = len(passed)
+            pass_wins = sum(net > 0 for _, _, net in passed)
+            selected_ev = sum(net for _, _, net in passed) / pass_count if pass_count else None
+            adjusted = machine_support_adjusted_win_rate({
+                "win_rate_pct": 100 * pass_wins / pass_count if pass_count else None,
+                "selected_opportunity_count": pass_count,
+            })
+            good_retention = sum(net > 0 and new == "PASS" for _, new, net in pairs) / positive_total if positive_total else None
+            bad_rejection = sum(net < 0 and new != "PASS" for _, new, net in pairs) / negative_total if negative_total else None
+            quality_parts = [v for v in (good_retention, bad_rejection) if v is not None]
+            balanced = sum(quality_parts) / len(quality_parts) if quality_parts else None
+            win_rate = pass_wins / pass_count if pass_count else None
+            q = .6 * win_rate + .4 * balanced if win_rate is not None and balanced is not None else None
+            delta = sum((int(new == "PASS") - int(old == "PASS")) * net for old, new, net in pairs) / len(pairs)
+            trials.append({
+                "policy": policy, "policy_sha256": digest(policy) if policy else None,
+                "eligible_count": len(pairs), "pass_count": pass_count,
+                "pass_win_rate": win_rate, "good_pass_retention": good_retention,
+                "support_adjusted_win_rate_pct": adjusted,
+                "bad_pass_rejection": bad_rejection, "balanced_quality": balanced,
+                "q": q, "paired_delta_ev_pct": round(delta, 10),
+                "pass_mean_net_pct": round(selected_ev, 10) if selected_ev is not None else None,
+                "changed_count": sum(old != new for old, new, _ in pairs),
+                "successful_pass_changed_count": sum(old == "PASS" and net > 0 and new != "PASS" for old, new, net in pairs),
+                "unsupported_fallback_count": unsupported,
+                "transitions": dict(Counter(f"{old}->{new}" for old, new, _ in pairs)),
+            })
+        incumbent = trials[0]
+        def rank(trial):
+            return (
+                round(trial["support_adjusted_win_rate_pct"], 10),
+                trial["pass_mean_net_pct"], trial["paired_delta_ev_pct"],
+                trial["pass_count"],
+                -sum(trial["policy"][key] for key in (
+                    "veto_min_independent_evidence_count",
+                    "pass_min_positive_evidence_count",
+                )) if trial["policy"] else 0,
+            )
+        incumbent_rank = rank(incumbent) if incumbent["support_adjusted_win_rate_pct"] is not None else None
+        ranked = sorted(
+            (t for t in trials[1:] if t["pass_count"] and t["changed_count"]
+             and t["paired_delta_ev_pct"] >= 0
+             and t["support_adjusted_win_rate_pct"] is not None
+             and (incumbent_rank is None or rank(t) > incumbent_rank)
+             and len(parent_versions) == 1 and len(parent_soft_hashes) == 1),
+            key=rank,
+            reverse=True,
+        )
+        chosen = ranked[0] if ranked else incumbent
+        scopes[scope] = {
+            "status": "candidate_selected" if ranked else "incumbent_carry",
+            "incumbent": incumbent, "selected": chosen, "candidates": trials,
+            "selection_rank_version": "machine_support_adjusted_win_rate_auxiliary_stage_v1",
+            "parent_prompt_versions": parent_versions,
+            "parent_soft_policy_sha256s": parent_soft_hashes,
+            "parent_machine_bundle_sha256s": sorted({
+                row.get("machine_bundle_sha256") for row, _ in population
+                if row.get("machine_bundle_sha256")
+            }),
+            "eligible_count": len(population),
+            "eligible_successful_pass_count": sum(row["incumbent_verdict"] == "PASS" and net > 0 for row, net in population),
+            "linked_successful_pass_count": sum(row["incumbent_verdict"] == "PASS" and net > 0 for row, net in population),
+            "positive_path_count": positive_total, "negative_path_count": negative_total,
+            "incumbent_net_ev_pct": round(sum(net * int(row["incumbent_verdict"] == "PASS") for row, net in population) / len(population), 10),
+        }
+    return sealed({
+        "schema": "auxiliary_ai_stage_evaluation_v1",
+        "source_date": projection.get("target_date"),
+        "source_projection_sha256": projection["artifact_content_sha256"],
+        "source_manifest_sha256": projection.get("source_manifest_sha256"),
+        "source_tuning_allowed": projection.get("source_tuning_allowed") is True,
+        "label_basis": "fixed_10m_completed_bar_target_adverse_or_end_cost_adjusted_not_actual_fill",
+        "screened_total": len(projection.get("rows") or []),
+        "eligible_count": len(eligible),
+        "excluded_count": sum(excluded.values()),
+        "exclusion_counts": dict(excluded),
+        "scope_results": scopes,
+        "additional_provider_calls": 0,
+        "runtime_effect": False, "actual_order_submitted": False,
+    })
 
 
 def evaluate(rows, results):
@@ -1139,14 +1383,17 @@ def blocker_accountability(disposition, blocker):
 
 
 def candidate_selection_projections(parent, day, current):
-    """Load only sealed v7 daily projections needed for incumbent-only learning."""
+    """Load only sealed current daily projections for incumbent-only learning."""
     projections = {}
     for path in sorted(parent.glob("compact_auxiliary_paired_economic_*.source.json")):
         value = read(path)
         source_day = value.get("target_date")
         if (
             valid(value)
-            and value.get("source_projection_contract") == SOURCE_PROJECTION_CONTRACT
+            and value.get("source_projection_contract") in {
+                "compact_pre_ai_execution_source_v7", "compact_pre_ai_execution_source_v8",
+                SOURCE_PROJECTION_CONTRACT,
+            }
             and isinstance(source_day, str)
             and "2026-06-05" <= source_day <= day
         ):
@@ -1238,8 +1485,10 @@ def candidate_direction_selection(projections):
         projection_rows = projection.get("rows") or []
         if (
             not valid(projection)
-            or projection.get("source_projection_contract")
-            != SOURCE_PROJECTION_CONTRACT
+            or projection.get("source_projection_contract") not in {
+                "compact_pre_ai_execution_source_v7", "compact_pre_ai_execution_source_v8",
+                SOURCE_PROJECTION_CONTRACT,
+            }
             or projection.get("projection_contract_sha256") != digest(CONTRACT)
             or projection.get("source_tuning_allowed") is not True
             or any(projection.get(key) is not value for key, value in AUTHORITY.items())
@@ -1644,6 +1893,9 @@ def run(
             label_report.get("target_date") == day
             and all(label_counts[row.get("evaluation_key")] == 1
                 and row.get("entry_quality_path") == ((label_index[row["evaluation_key"]].get("horizon_metrics") or {}).get("10m") or {}).get("entry_quality_path", {})
+                and (projection.get("schema") != "compact_auxiliary_frozen_projection_v1"
+                     or projection.get("source_projection_contract") != SOURCE_PROJECTION_CONTRACT
+                     or row.get("ai_stage_path") == auxiliary_stage_path(label_index[row["evaluation_key"]]))
                 and (row.get("source_label_identity_reasons") or []) == [
                     r for r in label_index[row["evaluation_key"]].get("primary_cohort_exclusion_reasons") or []
                     if r in {"payload_trace_venue_mismatch", "payload_trace_session_mismatch", "canonical_context_venue_session_mismatch"}]
@@ -1666,7 +1918,13 @@ def run(
         split_dependency = str(root / "report/entry_split_order_plan" / f"entry_split_order_plan_{day}.json")
         unchanged_raw = (valid(projection) and label_projection_matches and prior.get(label_dependency) == signatures.get(label_dependency)
             and all(prior.get(k) == v for k, v in signatures.items() if k not in (split_dependency, label_dependency)))
-        if unchanged_raw and (projection.get("source_projection_contract") != SOURCE_PROJECTION_CONTRACT
+        stage_fields_missing = (
+            projection.get("schema") == "compact_auxiliary_frozen_projection_v1"
+            and any("raw_response" not in row or "ai_stage_path" not in row
+                    or not isinstance(row.get("machine_policy"), dict)
+                    for row in projection.get("rows") or [])
+        )
+        if unchanged_raw and not stage_fields_missing and (projection.get("source_projection_contract") != SOURCE_PROJECTION_CONTRACT
             or projection.get("projection_contract_sha256") != digest(CONTRACT)
             or prior.get(split_dependency) != signatures.get(split_dependency)):
             labels = read(Path(label_dependency))
@@ -1727,7 +1985,9 @@ def run(
         if (
             not valid(projection)
             or not label_projection_matches
+            or stage_fields_missing
             or projection.get("dependency_signatures") != signatures
+            or projection.get("source_projection_contract") != SOURCE_PROJECTION_CONTRACT
             or projection.get("projection_contract_sha256") != digest(CONTRACT)
         ):
             if valid(projection):
@@ -1794,6 +2054,11 @@ def run(
             raise ValueError("frozen_candidate_selection_mismatch")
         if (valid(previous)
                 and previous.get("evaluation_fingerprint") == fingerprint
+                and (projection.get("schema") != "compact_auxiliary_frozen_projection_v1"
+                     or projection.get("source_projection_contract") != SOURCE_PROJECTION_CONTRACT
+                     or (valid(previous.get("auxiliary_stage"))
+                         and previous["auxiliary_stage"].get("source_projection_sha256") == projection["artifact_content_sha256"]
+                         and previous["auxiliary_stage"] == evaluate_auxiliary_stage(projection)))
                 and previous.get("comparison_dependency_signatures") == _comparison_signatures(path.parent, day, candidate)
                 and (previous.get("prospective_source_contract") or {}).get(
                     "schema"
@@ -2175,6 +2440,9 @@ def run(
             is True
             else None
         )
+        if (projection.get("schema") == "compact_auxiliary_frozen_projection_v1"
+            and projection.get("source_projection_contract") == SOURCE_PROJECTION_CONTRACT):
+            report["auxiliary_stage"] = evaluate_auxiliary_stage(projection)
         report = sealed(report)
         write(path, report)
         return report

@@ -2287,6 +2287,7 @@ def resolve_live_prompt_policy(
                     primary_decision_owner=MECHANISTIC_PRIMARY_DECISION_OWNER,
                     ai_role=MECHANISTIC_AI_ADVISORY_ROLE,
                     auxiliary_policy_sha256=hashlib.sha256(json.dumps(initial['ai_policy'], sort_keys=True, separators=(',', ':'), ensure_ascii=True, allow_nan=False).encode()).hexdigest(),
+                    auxiliary_soft_policy=initial["ai_policy"].get("auxiliary_soft_policy"),
                     mechanistic_threshold_policy=initial["machine_policy"],
                     machine_bundle_sha256=initial["bundle_sha256"],
                     machine_policy_disposition=initial["machine_disposition"],

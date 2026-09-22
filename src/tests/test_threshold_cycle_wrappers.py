@@ -41,9 +41,11 @@ def test_preopen_orders_direct_publishers_before_bootstrap_and_consumers():
         "machine_microstructure_policy_approval",
         "machine_entry_timing_tuning",
         "scanner_lookup_attention_policy",
+        "mechanistic_entry_runtime_policy",
     ]
     bootstrap = script.index("src.engine.automation.runtime_policy_bootstrap")
     assert all(script.index(name) < bootstrap for name in publishers)
+    assert script.index("scanner_lookup_attention_policy") < script.index("--activate-dated-auxiliary") < bootstrap
     assert bootstrap < script.index("src.engine.scalping.entry_setup_live_policy")
     assert "--receipt" in script
     assert "src.engine.threshold_cycle_preopen_apply" not in script

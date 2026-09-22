@@ -2353,6 +2353,7 @@ class GPTSniperEngine:
                     setup_evidence=setup,
                     ai_risk_adjudication=risk,
                     policy=policy.get("mechanistic_threshold_policy"),
+                    auxiliary_soft_policy=policy.get("auxiliary_soft_policy"),
                 )
             except ValueError as exc:
                 contract_errors.append(
@@ -2453,6 +2454,8 @@ class GPTSniperEngine:
             )[:12],
         }
         policy_fields = {
+            "entry_ai_soft_policy": policy.get("auxiliary_soft_policy"),
+            "entry_ai_component_sha256": policy.get("auxiliary_policy_sha256"),
             "entry_setup_live_policy_status": policy.get("status"),
             "entry_setup_live_policy_scope_authority": policy.get("scope_authority"),
             "entry_setup_live_policy_mode": policy.get("canary_mode"),

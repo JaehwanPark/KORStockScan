@@ -54,7 +54,7 @@
   - Source: [runtime_approval_summary_2026-09-22.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-09-22.json)
   - 증거: runtime_summary_sha256=`993d46a23ae3ab7f48515b306ce1db314c1d54547ff29e95b3f09cc1855567a6`, source_artifact=`/home/ubuntu/KORStockScan/data/report/ai_entry_setup_paired_replay_batch/compact_auxiliary_paired_economic_2026-09-22.json`.
   - 상태: family=`compact_auxiliary`, task_role=`producer_contract_repair`, comparison_status=`source_gap`, resolution_mode=`producer_repair`, prospective_resolution_mode=`-`, first_blocker=`exact_stop_distance_missing_or_invalid`.
-  - 완료 기준: closure_owner=`compact_auxiliary_paired_replay`, closure_test=`full_cost_stop_owner_plan_portfolio_and_forward_holdout_receipts`. policy_receipt_valid=`True`, source_date=`2026-09-22`의 원천·비용 EV·정책·consumer 날짜와 해시를 다시 대조한다.
+  - 완료 기준: closure_owner=`compact_auxiliary_paired_replay`, closure_test=`full_cost_stop_owner_plan_portfolio_and_forward_holdout_receipts`. 기존 owner/exact-stop basis와 독립된 AI 10분 고정경로 basis를 구분한다. 실제 PASS 양성 경로를 같은 attempt의 label/hash로 연결하고 good-PASS retention·전이·기계정책과 같은 보정승률/EV/paired 순위를 보고한다. 결정론적 후보의 추가 provider call은 0건이며, 비용·경로·label provenance 결손 행은 성공으로 간주하지 않는다. 오늘 적격 후보가 생기면 현재 machine/AI parent CAS로 장중 AI component만 활성화하고, 후보가 없으면 carry한다. 다음 장전 dated AI 후보도 preopen CAS 영수증을 확인한다. policy_receipt_valid=`True`, source_date=`2026-09-22`의 원천·비용 EV·정책·consumer 날짜와 해시를 다시 대조한다.
   - 권한 경계: null을 0/no-edge로 바꾸거나 threshold·provider·주문·수량·cap·custody·operator lock·hard safety를 우회하지 않는다.
 
 - [ ] `[DirectFamilySourceRepairEntryCancelWait] entry_cancel_wait 직접 family 원천·경제성 계약 수리` (`Due: 2026-09-23`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~21:40`, `Track: RuntimeStability`)

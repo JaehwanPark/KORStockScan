@@ -2543,11 +2543,80 @@ def validate_mechanistic_risk_screen(
     return errors
 
 
+def evaluate_auxiliary_policy(
+    response: Any, *, setup_evidence: Any, machine_policy: Any = None,
+    soft_policy: Any = None,
+) -> dict[str, Any]:
+    """Reclassify only fact-bound soft judgments after raw validation.
+
+    The returned assessment is separate from the provider response.  A missing
+    policy is the legacy identity mapping; invalid raw evidence never gains
+    exposure authority.
+    """
+    raw = _as_dict(response)
+    setup = _as_dict(setup_evidence)
+    errors = validate_mechanistic_risk_screen(
+        raw, setup_evidence=setup, policy=machine_policy
+    ) if raw else ["ai_advisory_not_available"]
+    verdict = str(raw.get("risk_verdict") or "UNAVAILABLE").upper()
+    effective = verdict
+    reason = "raw_verdict_preserved"
+    selected = _as_dict(soft_policy)
+    if selected and not validate_auxiliary_soft_policy(selected):
+        errors.append("auxiliary_soft_policy_invalid")
+    if not errors and selected:
+        support = set(map(str, raw.get("supporting_fact_ids") or []))
+        adverse = set(map(str, raw.get("contradicting_fact_ids") or []))
+        codes = set(map(str, raw.get("risk_codes") or []))
+        hard = set(_risk_fact_bindings(setup)) & BLOCKING_VETO_RISK_CODES
+        if verdict == "PASS" and len(support) < selected["pass_min_positive_evidence_count"]:
+            effective, reason = "CAUTION", "pass_positive_evidence_below_policy"
+        elif (
+            verdict == "VETO"
+            and codes <= {"LIQUIDITY_FRAGILE", "ADVERSE_TAPE", "REWARD_RISK_WEAK"}
+            and not hard and not setup.get("invalidation_facts")
+            and setup.get("setup_state") == "READY"
+            and len(adverse) < selected["veto_min_independent_evidence_count"]
+            and len(support) >= selected["pass_min_positive_evidence_count"]
+            and support.intersection({"structural_edge_floor", "early_session_structural_edge_floor"})
+            and support.intersection({"trusted_supportive_trigger", "trigger_confirmed"})
+        ):
+            effective, reason = "PASS", "soft_veto_evidence_below_policy"
+    return {
+        "schema": "auxiliary_effective_assessment_v1",
+        "raw_verdict": verdict,
+        "effective_verdict": effective if not errors else "INVALID",
+        "reason": reason if not errors else "raw_or_policy_invalid",
+        "validated_response_sha256": _canonical_sha256(raw),
+        "soft_policy_sha256": _canonical_sha256(selected) if selected else None,
+        "validation_errors": list(dict.fromkeys(errors)),
+    }
+
+
+def validate_auxiliary_soft_policy(policy: Any) -> bool:
+    value = _as_dict(policy)
+    return (
+        set(value) == {
+            "schema", "veto_min_independent_evidence_count",
+            "pass_min_positive_evidence_count",
+        }
+        and value.get("schema") == "auxiliary_soft_policy_v1"
+        and all(
+            type(value.get(key)) is int and 1 <= value[key] <= 3
+            for key in (
+                "veto_min_independent_evidence_count",
+                "pass_min_positive_evidence_count",
+            )
+        )
+    )
+
+
 def compose_mechanistic_primary_decision(
     *,
     setup_evidence: Any,
     ai_risk_adjudication: Any = None,
     policy: Any = None,
+    auxiliary_soft_policy: Any = None,
 ) -> dict[str, Any]:
     """Machine selects points; validated AI PASS/VETO screens exposure.
 
@@ -2564,12 +2633,13 @@ def compose_mechanistic_primary_decision(
         action_comparison=comparison,
     )
     advisory = _as_dict(ai_risk_adjudication)
-    advisory_errors = (
-        validate_mechanistic_risk_screen(advisory, setup_evidence=setup, policy=policy)
-        if advisory
-        else ["ai_advisory_not_available"]
+    assessment = evaluate_auxiliary_policy(
+        advisory, setup_evidence=setup, machine_policy=policy,
+        soft_policy=auxiliary_soft_policy,
     )
-    advisory_verdict = str(advisory.get("risk_verdict") or "UNAVAILABLE").upper()
+    advisory_errors = assessment["validation_errors"]
+    advisory_verdict = assessment["effective_verdict"]
+    raw_advisory_verdict = assessment["raw_verdict"]
     mechanistic_action = str(policy_decision.get("action") or "BLOCK").upper()
     if mechanistic_action != "ENTER_NOW":
         result.update(
@@ -2601,6 +2671,10 @@ def compose_mechanistic_primary_decision(
         "VETO": "BLOCK",
         "INSUFFICIENT": "RECHECK",
     }.get(advisory_verdict, "UNAVAILABLE")
+    raw_advisory_direction = {
+        "PASS": "ENTER_NOW", "CAUTION": "RECHECK", "VETO": "BLOCK",
+        "INSUFFICIENT": "RECHECK",
+    }.get(raw_advisory_verdict, "UNAVAILABLE")
     screen_required = mechanistic_action == "ENTER_NOW"
     screen_status = "not_requested_machine_nonentry"
     if screen_required:
@@ -2674,12 +2748,15 @@ def compose_mechanistic_primary_decision(
             "entry_mechanistic_policy_sha256": _canonical_sha256(
                 selected_mechanistic_policy
             ),
-            "entry_ai_advisory_verdict": advisory_verdict,
+            "entry_ai_advisory_verdict": raw_advisory_verdict,
+            "entry_ai_raw_risk_verdict": assessment["raw_verdict"],
+            "entry_ai_effective_assessment": assessment,
+            "entry_ai_soft_policy_sha256": assessment["soft_policy_sha256"],
             "entry_ai_advisory_contract_valid": not advisory_errors,
             "entry_ai_advisory_contract_errors": advisory_errors,
-            "entry_ai_advisory_direction": advisory_direction,
+            "entry_ai_advisory_direction": raw_advisory_direction,
             "entry_ai_advisory_agrees_with_mechanistic": (
-                advisory_direction == mechanistic_action if advisory else None
+                raw_advisory_direction == mechanistic_action if advisory else None
             ),
             "entry_ai_advisory_changed_action": (
                 screen_required and screen_status != "pass"
