@@ -12186,6 +12186,16 @@ def run_sniper(is_test_mode=False):
 
     try:
         while True:
+            # Daily trace indexes are maintenance, before fresh input capture
+            # and the AI request deadline. Warm once per date, also on rollover.
+            if ai_engine is not None:
+                from src.engine.scalping.ai_decision_trace import prepare_ai_request_capture
+                try:
+                    trace_preparation = prepare_ai_request_capture()
+                    if trace_preparation:
+                        log_info(f"[AI_TRACE_PREPARED] {trace_preparation}")
+                except Exception as exc:
+                    log_error(f"[AI_TRACE_PREPARATION_FAILED] {type(exc).__name__}")
             now_ts = time.time()
             now = datetime.now()
             now_t = now.time()

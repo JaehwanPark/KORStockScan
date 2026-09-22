@@ -5087,8 +5087,10 @@ class GPTSniperEngine:
                 replay_context=replay_context,
             )
 
+        capture_started = time.perf_counter()
         capture_meta = capture_request(request)
         transport_meta.update(capture_meta)
+        transport_meta["ai_trace_capture_ms"] = (time.perf_counter() - capture_started) * 1000
         bedrock_primary_payload = (
             None
             if compact_auxiliary_call
@@ -5227,6 +5229,9 @@ class GPTSniperEngine:
                 log_info(fallback_msg)
         else:
             http_lock_wait_started = time.perf_counter()
+            transport_meta["openai_local_pre_http_ms"] = max(
+                0, int((http_lock_wait_started - request.submitted_at_perf) * 1000)
+            )
             try:
                 with self.api_call_lock:
                     transport_meta["openai_http_lock_wait_ms"] = max(

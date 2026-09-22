@@ -28,6 +28,34 @@ def _enable(monkeypatch, tmp_path):
     trace._SEEN_CONTEXT_CANDIDATE_HASHES.clear()
 
 
+def test_request_capture_preparation_reuses_indexes_and_rolls_date(monkeypatch, tmp_path):
+    _enable(monkeypatch, tmp_path)
+    calls = []
+    original = trace._load_seen
+    def load(path, field):
+        calls.append((str(path), field))
+        return original(path, field)
+    monkeypatch.setattr(trace, "_load_seen", load)
+    day = trace._date_text()
+    assert trace.prepare_ai_request_capture(day)["ai_trace_dedup_init_ms"] >= 0
+    assert len(calls) == 3
+    assert trace.prepare_ai_request_capture(day) == {}
+    kwargs = dict(prompt="JSON only", user_input={"stock_code": "005930"},
+                  endpoint_name="analyze_target", symbol="005930", request_id="warm",
+                  model="test", schema_name="entry_v1", require_json=True)
+    first = trace.capture_ai_request(**kwargs)
+    trace.capture_ai_request(**kwargs)
+    assert len(calls) == 3  # No history scan inside the actual request.
+    assert len(_rows(trace._payload_path(day))) == 1
+    assert len(_rows(trace._request_path(day))) == 1
+    assert first["ai_trace_dedup_init_ms"] == 0
+    for key in ("ai_trace_prepare_ms", "ai_trace_lock_wait_ms", "ai_trace_file_lock_wait_ms",
+                "ai_trace_write_ms", "ai_trace_capture_ms"):
+        assert first[key] >= 0
+    assert trace.prepare_ai_request_capture("2026-09-23")
+    assert len(calls) == 6
+
+
 def test_machine_observation_keeps_exact_input_without_provider_request(
     monkeypatch, tmp_path
 ):
@@ -234,6 +262,10 @@ def test_timeout_exception_trace_normalizes_transport_provenance(monkeypatch, tm
             "openai_http_attempt_count": 1,
             "openai_http_timeout_budget_exhausted": True,
             "openai_http_provider_total_ms": 11974,
+            "ai_trace_capture_ms": 6001,
+            "ai_trace_lock_wait_ms": 5900,
+            "openai_local_pre_http_ms": 6005,
+            "openai_http_lock_wait_ms": 0,
             "openai_http_provider_future_cancelled": True,
             "openai_transport_mode": "http",
             "ai_parse_ok": False,
@@ -253,6 +285,10 @@ def test_timeout_exception_trace_normalizes_transport_provenance(monkeypatch, tm
     assert row["provider_actual"] == "openai"
     assert row["transport_timing"]["openai_http_provider_total_ms"] == 11974
     assert row["transport_timing"]["openai_http_provider_future_cancelled"] is True
+    assert row["transport_timing"]["ai_trace_capture_ms"] == 6001
+    assert row["transport_timing"]["ai_trace_lock_wait_ms"] == 5900
+    assert row["transport_timing"]["openai_local_pre_http_ms"] == 6005
+    assert row["transport_timing"]["openai_http_lock_wait_ms"] == 0
 
 
 def test_non_timeout_transport_failure_is_not_labeled_timeout(monkeypatch, tmp_path):

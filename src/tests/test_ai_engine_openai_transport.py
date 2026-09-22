@@ -7480,6 +7480,40 @@ def test_openai_responses_ws_pool_uses_round_robin_workers(monkeypatch):
     assert len(calls[1].jobs) == 1
 
 
+@pytest.mark.parametrize("capture_seconds", [0.25, 6.0])
+def test_http_capture_timing_preserves_original_deadline(monkeypatch, capture_seconds):
+    engine = _build_engine()
+    clock = [100.0]
+    calls = []
+    monkeypatch.setattr(openai_module.time, "perf_counter", lambda: clock[0])
+    def capture(**kwargs):
+        clock[0] += capture_seconds
+        return {"ai_trace_lock_wait_ms": capture_seconds * 1000}
+    monkeypatch.setattr(openai_module, "capture_ai_request", capture)
+    def create(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(output_text='{"action":"WAIT","score":61,"reason":"test"}')
+    engine.client = SimpleNamespace(responses=SimpleNamespace(create=create))
+    kwargs = dict(require_json=True, context_name="capture-deadline-test",
+                  schema_name="entry_v1", endpoint_name="analyze_target", symbol="005930",
+                  transport_mode_override="http", timeout_ms_override=5000,
+                  metadata_extra={"selected_prompt_version": next(iter(
+                      openai_module.MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS))})
+    if capture_seconds > 5:
+        with pytest.raises(OpenAIResponsesHTTPError):
+            engine._call_openai_safe("PROMPT", "payload", **kwargs)
+        assert calls == []  # Preparation does not renew the request deadline.
+    else:
+        engine._call_openai_safe("PROMPT", "payload", **kwargs)
+        assert len(calls) == 1
+    meta = engine._consume_last_transport_meta()
+    assert meta["openai_timeout_budget_ms"] == 5000
+    assert meta["ai_trace_capture_ms"] == capture_seconds * 1000
+    assert meta["ai_trace_lock_wait_ms"] == capture_seconds * 1000
+    assert meta["openai_local_pre_http_ms"] == capture_seconds * 1000
+    assert meta["openai_http_lock_wait_ms"] == 0
+
+
 def test_openai_call_falls_back_from_ws_to_http(monkeypatch):
     engine = _build_engine()
     engine.client = SimpleNamespace(

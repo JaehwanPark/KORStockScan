@@ -12,6 +12,7 @@ import os
 import re
 import stat
 import threading
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -264,16 +265,19 @@ def _json_bytes(value: Any) -> bytes:
     ).encode("utf-8")
 
 
-def _append_jsonl(path: Path, payload: dict[str, Any]) -> None:
+def _append_jsonl(path: Path, payload: dict[str, Any]) -> dict[str, float]:
     line = (
         json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
         + "\n"
     )
+    lock_started = time.perf_counter()
     with jsonl_artifact_generation_lock(
         path,
         exclusive=True,
         blocking=True,
     ) as generation:
+        write_started = time.perf_counter()
+        lock_ms = (write_started - lock_started) * 1000
         descriptor = -1
         entry_name = generation.logical.name
         try:
@@ -321,6 +325,26 @@ def _append_jsonl(path: Path, payload: dict[str, Any]) -> None:
         finally:
             if descriptor >= 0:
                 os.close(descriptor)
+    return {"ai_trace_file_lock_wait_ms": lock_ms,
+            "ai_trace_write_ms": (time.perf_counter() - write_started) * 1000}
+
+
+def prepare_ai_request_capture(target_date: str | None = None) -> dict[str, float]:
+    """Warm request dedup indexes before the live evaluation budget starts."""
+    if not trace_enabled():
+        return {}
+    day = target_date or _date_text()
+    indexes = ((_SEEN_PAYLOAD_HASHES, _payload_path, "request_envelope_sha256"),
+               (_SEEN_PROMPT_HASHES, _prompt_path, "prompt_sha256"),
+               (_SEEN_REQUEST_IDS, _request_path, "request_id"))
+    if all(day in cache for cache, _, _ in indexes):
+        return {}
+    started = time.perf_counter()
+    with _WRITE_LOCK:
+        for cache, path, field in indexes:
+            if day not in cache:
+                cache[day] = _load_seen(path(day), field)
+    return {"ai_trace_dedup_init_ms": (time.perf_counter() - started) * 1000}
 
 
 def _load_seen(path: Path, field: str) -> set[str]:
@@ -1202,6 +1226,14 @@ def capture_ai_request(
     replay_context: Any = None,
 ) -> dict[str, Any]:
     """Persist provider input plus an optional exact offline replay context."""
+    started = time.perf_counter()
+    timings = {"ai_trace_file_lock_wait_ms": 0.0, "ai_trace_write_ms": 0.0,
+               "ai_trace_dedup_init_ms": 0.0}
+
+    def persist(path, row):
+        for key, value in (_append_jsonl(path, row) or {}).items():
+            timings[key] = timings.get(key, 0.0) + value
+
     if not trace_enabled():
         return {}
     try:
@@ -1408,34 +1440,28 @@ def capture_ai_request(
             **STORAGE_SECURITY_CONTRACT,
             **OBSERVATION_CONTRACT,
         }
+        timings["ai_trace_prepare_ms"] = (time.perf_counter() - started) * 1000
+        lock_started = time.perf_counter()
         with _WRITE_LOCK:
-            seen = _SEEN_PAYLOAD_HASHES.get(target_date)
-            if seen is None:
-                path = _payload_path(target_date)
-                seen = _load_seen(path, "request_envelope_sha256")
-                _SEEN_PAYLOAD_HASHES[target_date] = seen
+            timings["ai_trace_lock_wait_ms"] = (time.perf_counter() - lock_started) * 1000
+            timings.update(prepare_ai_request_capture(target_date))
+            seen = _SEEN_PAYLOAD_HASHES[target_date]
             if request_envelope_sha256 not in seen:
-                _append_jsonl(_payload_path(target_date), payload_row)
+                persist(_payload_path(target_date), payload_row)
                 seen.add(request_envelope_sha256)
-            seen_prompts = _SEEN_PROMPT_HASHES.get(target_date)
-            if seen_prompts is None:
-                prompt_path = _prompt_path(target_date)
-                seen_prompts = _load_seen(prompt_path, "prompt_sha256")
-                _SEEN_PROMPT_HASHES[target_date] = seen_prompts
+            seen_prompts = _SEEN_PROMPT_HASHES[target_date]
             if prompt_sha256 not in seen_prompts:
-                _append_jsonl(_prompt_path(target_date), prompt_row)
+                persist(_prompt_path(target_date), prompt_row)
                 seen_prompts.add(prompt_sha256)
             # Commit the request ledger last. A request row must never point at
             # payload/prompt content that failed to persist.
-            seen_requests = _SEEN_REQUEST_IDS.get(target_date)
-            if seen_requests is None:
-                request_path = _request_path(target_date)
-                seen_requests = _load_seen(request_path, "request_id")
-                _SEEN_REQUEST_IDS[target_date] = seen_requests
+            seen_requests = _SEEN_REQUEST_IDS[target_date]
             if trace_id not in seen_requests:
-                _append_jsonl(_request_path(target_date), request_row)
+                persist(_request_path(target_date), request_row)
                 seen_requests.add(trace_id)
         return {
+            **timings,
+            "ai_trace_capture_ms": (time.perf_counter() - started) * 1000,
             "ai_decision_trace_id": trace_id,
             "ai_prompt_sha256": prompt_sha256,
             "ai_prompt_store_date": target_date,
@@ -2052,6 +2078,14 @@ def record_ai_decision_trace(
             "transport_timing": {
                 key: merged[key]
                 for key in (
+                    "ai_trace_prepare_ms",
+                    "ai_trace_lock_wait_ms",
+                    "ai_trace_dedup_init_ms",
+                    "ai_trace_file_lock_wait_ms",
+                    "ai_trace_write_ms",
+                    "ai_trace_capture_ms",
+                    "openai_local_pre_http_ms",
+                    "openai_http_lock_wait_ms",
                     "openai_http_provider_ms",
                     "openai_http_provider_total_ms",
                     "openai_http_attempt_count",
