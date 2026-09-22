@@ -742,3 +742,12 @@ def test_summary_receipt_does_not_hash_itself(stage_environment):
     assert h.stage_path(report, day, 'machine_attribution') in paths.values()
     assert h.stage_path(report, day, 'summary_handoff') not in paths.values()
     assert h.stage_artifacts(report, day, 'summary_handoff')['postclose_done_controller'] not in paths.values()
+
+
+@pytest.mark.parametrize('status', ['pending', 'running', 'deferred'])
+def test_scheduled_stage_check_reports_pending_as_deferred(stage_environment, monkeypatch, status):
+    h, day, report, run, produce=stage_environment
+    from src.utils import constants
+    monkeypatch.setattr(constants, 'DATA_DIR', report.parent)
+    h._stage_write(h.stage_path(report, day, 'main_auxiliary_policy'), {'status':status})
+    assert h._stage_main(['--stage','main_auxiliary_policy','--date',day,'--check'])==75

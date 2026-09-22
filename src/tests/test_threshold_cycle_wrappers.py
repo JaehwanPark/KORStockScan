@@ -256,3 +256,9 @@ def test_machine_refresh_binds_publication_before_waiting():
     assert 'POSTCLOSE_POLICY_PUBLICATION_DATE:-$completed_target_date' in script
     assert 'export POSTCLOSE_PREPARED_EFFECTIVE_DATE=' in script
     assert script.index('export POSTCLOSE_POLICY_PUBLICATION_DATE=') < script.index('--stage machine_group')
+
+
+def test_scoped_final_verification_respects_disabled_machine_schedule():
+    script=(Path(__file__).resolve().parents[2]/'deploy/run_threshold_cycle_postclose.sh').read_text()
+    final=script[script.index('--stage wait --date'):]
+    assert final.index('if [[ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION"') < final.index('for stage in legacy_machine_report main_auxiliary_policy')

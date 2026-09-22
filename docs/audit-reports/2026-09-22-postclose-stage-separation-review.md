@@ -30,3 +30,10 @@
 검증된 immutable release와 유효 router/systemd binding을 아래에 기록한다. 진행 중인 매매 PID에 배포 사실을 소급하지 않는다. 현재 기계정책은 `a552d63ac3c3c33b310ee7ea6cdb6b7528b5ce3905dae601a7008f498c14137d`이며 앞선 M1–M6 자연 소비 근거는 [기계정책 리뷰](2026-09-22-main-machine-policy-repair-review.md)에 있다.
 
 오늘 정기 source_date9/22 terminal·9/23 loader/부트스트랩의 자연 확인은 [현재 checklist](../checklists/2026-09-22-stage2-todo-checklist.md)의 `PostcloseStageRunnerSeparation`에 유지한다. 이는 구현 검증과 구별되는 미래 운영 관측이다.
+
+## 배포본 검증 및 예약 경로 보완
+
+- 1차 코드 `97fcd5463` push, 독립 배포본451tests PASS. 완료 source 복사본의 실제 재개도 release cwd에서 성공했다. 검증 fixture는 strict source reader 계약에 맞게 공유 data의 실경로를 사용했다.
+- 10:25 유효 두 장후 unit의 WorkingDirectory/ExecStart와 공통 cron postclose/finalize router를 새 배포본으로 확인했다. 검증 영수증: `tmp/postclose-stage-separation-20260922/deployment-verification.json`.
+- 마지막 예약 분기 리뷰에서 OFF machine/AI stage의 불필요 scoped verification을 제거하고 pending/running/deferred follower 확인을 exit75로 반환하도록 보완했다. 추가98tests PASS. 이 수정까지 포함한 최종 selector·unit·commit은 동일 deployment 영수증에 갱신한다.
+- 현재 매매 PID60693은 `main-machine-20260922-3a79e240f/src`에서 유지한다. 새 배포는 정기 장후 코드에 적용되었으며 현재 PID가 새 source를 소비했다고 표시하지 않았다. 기존 정책 bundle의 새 loader 검증 PASS, 원 정책 변경 없음.

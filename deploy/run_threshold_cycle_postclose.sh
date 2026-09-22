@@ -2008,6 +2008,7 @@ wait_for_file_artifact "$(next_stage2_checklist_path)" "next_stage2_checklist_fi
 # Independent failures remain in their own receipts; the native wrapper can
 # finish its own sources, while finalization checks the whole stage registry.
 "$VENV_PY" -m src.engine.automation.postclose_summary_handoff --stage wait --date "$TARGET_DATE" --timeout-sec 14400 || true
+if [[ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" == "true" || "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" == "1" ]]; then
 for stage in legacy_machine_report main_auxiliary_policy; do
   if "$VENV_PY" -m src.engine.automation.postclose_summary_handoff --stage "$stage" --date "$TARGET_DATE" --check; then
     scope_flag=--main-mechanistic-summary-only
@@ -2016,6 +2017,7 @@ for stage in legacy_machine_report main_auxiliary_policy; do
       --date "$TARGET_DATE" "$scope_flag" --require-summary-handoff --effective-date "$PREPARED_EFFECTIVE_DATE" --publication-date "$POLICY_PUBLICATION_DATE"
   fi
 done
+fi
 wait_for_postclose_resources "verify_threshold_cycle_postclose_chain"
 POSTCLOSE_FAILURE_REASON="verify_threshold_cycle_postclose_chain_failed"
 POSTCLOSE_FAILURE_ARTIFACT="$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.json"

@@ -1129,6 +1129,8 @@ def _stage_main(argv):
             time.sleep(1)
         return 0
     if args.check:
+        status = _load_json(stage_path(DATA_DIR / 'report', day, args.stage)).get('status', 'pending')
+        if status in {'pending', 'running', 'deferred'}: return 75
         return 1 if stage_receipt_issues(DATA_DIR / 'report', day, args.stage) else 0
     if args.launch:
         subprocess.Popen([sys.executable, '-m', 'src.engine.automation.postclose_summary_handoff', *[a for a in argv if a != '--launch']],
