@@ -23,7 +23,7 @@
 | ENTER 부족 | 최근30분 유효 고유 promotion 10개 이상, ENTER0; 15분 지속 + 새 promotion 유입 | `review_required`. 기계 결함/경제적 손실 단정 금지 |
 | VETO 집중 | 고유 ENTER promotion10개 이상, VETO/ENTER≥90%, 제출 응답0; 15분 지속 + 새 promotion | `review_required`. transport/미호출을 VETO로 계산하지 않음 |
 | 원천/제출 연결 | exact attempt의 conflict/source-invalid/불명확 dispatch/미종결 PASS를 최초 평가10분 뒤 관찰하고 4분 이상 지속 확인 | `structural_evidence`는 관측 계약 결손 증거이며 실행 코드 원인 확정은 Codex 조사. 정상 guard/명시 거절은 미종결 아님 |
-| identity 결손 | 기계 원천 이벤트의 필수 identity 부재를 동일 유예·지속 기준으로 확인 | 분모를 추정하지 않고 unbound 원천 hash를 보존 |
+| identity 결손 | 최근10분 기계 원천 이벤트의 필수 identity 부재를 다음 정기 실행에서 즉시 확인(별도 유예·지속 없음) | 분모를 추정하지 않고 unbound 원천 hash를 보존 |
 
 수치는 **진단 알림의 초기값**이며 튜닝으로 검증된 최적치나 매매 gate가 아니다. WINDOW/GRACE/PERSIST/MIN_PROMOTIONS는 모듈 한 곳에서 관리한다.
 
@@ -32,8 +32,8 @@
 - 입력 date가 현재 KST와 다름, dry-run, 생성 후7분 초과, 최근 event10분 초과, 역행/중복 snapshot은 `unobservable`이며 새 경보/복구를 만들지 않는다. 멈춘 봇·원천 freshness는 기존 error detector owner가 담당한다.
 - source-invalid는 해당 promotion을 정상 판단 비율 분모에서 제외한다. 유효 scope는 계속 관찰한다. 결손을 0 EV/no-edge로 바꾸지 않는다.
 - 미결 사건은 날짜별 상태에 남는다. 구조 결손은 저장한 exact attempt가 명시 terminal로 닫힐 때만 복구; 비율 경보는 새로운 실제 제출 응답으로 복구한다. 옛 identity 부재는 건강한 새 이벤트만으로 과거 복구라고 선언하지 않는다.
-- identity 표시 보완(9/21 승인): 최근10분 신규 기계 이벤트의 결손은 `current_gap`, 정상 식별 이벤트만 관측되면 `no_recurrence_observed`, 표본 없음/입력 stale·legacy recency 부재는 `unobservable`로 분리한다. 10분 유예·4분 지속 기준은 유지한다. 과거 사건은 `historical_unresolved`로 수량·해시·사례를 보존하며 복구로 표시하지 않는다. 신규 결손이 유예 조건에 들어오면 이전 사건을 history에 보존하고 지속성/알림 중복 억제를 새로 시작한다.
-- 발생시각 범위·종목·누락 필드는 exact identity owner의 같은 alias 규칙에서 산출한다. 구형 사건은 이미 읽힌 당일 cache의 최근 과거 표본 최대128개 중 저장 hash와 일치한 것만 보충하며 원시 로그 추가 스캔·과거 분모 재계산은 하지 않는다. 불완전한 범위/표본은 미확인으로 표시한다. Telegram은 신규 active와 과거 보존 전이를 구분하고 이벤트 수≠주문 수를 명시한다.
+- identity 표시 보완(9/21 승인): 최근10분 신규 기계 이벤트의 결손은 `current_gap`, 정상 식별 이벤트만 관측되면 `no_recurrence_observed`, 표본 없음/입력 stale·legacy recency 부재는 `unobservable`로 분리한다. 9/22 알림 보완 승인으로 identity 결손에만 유예·지속 기준을 제거한다. 기존 5분 정기 실행·통보 cooldown은 유지한다. 과거 사건은 `historical_unresolved`로 수량·해시·사례를 보존하며 복구로 표시하지 않는다. 신규 결손이 재발하면 이전 사건을 history에 보존하고 active 알림을 다시 허용한다.
+- 발생시각 범위·종목·누락 필드는 exact identity owner의 같은 alias 규칙에서 산출한다. 구형 사건은 이미 읽힌 당일 cache의 최근 과거 표본 최대128개 중 저장 hash와 일치한 것만 보충하며 원시 로그 추가 스캔·과거 분모 재계산은 하지 않는다. 불완전한 범위/표본은 미확인으로 표시한다. Telegram은 신규 active/재발만 점검 요청으로 보내고 이벤트 수≠주문 수를 명시한다. 현재 사례·시각을 우선 표시한다. historical_unresolved만 남은 사건(정책 영수증 사건 포함)은 보고서에 보존하고 통보하지 않는다. 이전 active 통보가 성공한 identity 사건에 정상 식별 이벤트가 새로 확인되면 정상 관측 안내를 한 번만 보낸다. stale/무표본은 정상 증거가 아니며 통보 실패·cooldown은 성공 전까지 재시도한다. 정상 안내에는 추가 점검 요청을 붙이지 않으며 과거 원천 복구라고 표현하지 않는다. 기존 historical 상태의 배포 전환 알림은 만들지 않는다.
 
 ## 실행·알림·보존
 

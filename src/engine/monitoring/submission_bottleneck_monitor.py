@@ -143,14 +143,16 @@ def snapshot(events, as_of):
                 historical_samples.sort(key=lambda r: (r['occurred_at'], r['evidence_id']))
                 historical_samples.pop(0)
     missing_rows.sort(key=lambda row: (row["occurred_at"], row["evidence_id"]))
-    mature_missing = [r for r in missing_rows
-        if GRACE_SEC <= (now - stamp(r["occurred_at"])).total_seconds() <= WINDOW_SEC]
+    retained_missing = [r for r in missing_rows
+        if (now - stamp(r["occurred_at"])).total_seconds() <= WINDOW_SEC]
     current_missing = [r for r in missing_rows
         if (now - stamp(r["occurred_at"])).total_seconds() < GRACE_SEC]
     current_identified = [at for at in identified_clocks if (now - at).total_seconds() < GRACE_SEC]
     identity_observation = dict(schema="machine_identity_recency_v1", window_sec=GRACE_SEC,
         status="current_gap" if current_missing else "no_recurrence_observed" if current_identified else "unobservable",
         missing_event_count=len(current_missing), identified_event_count=len(current_identified),
+        current_missing_first_at=current_missing[0]["occurred_at"] if current_missing else None,
+        current_missing_last_at=current_missing[-1]["occurred_at"] if current_missing else None,
         latest_identified_at=max(current_identified).isoformat() if current_identified else None,
         missing_first_at=missing_rows[0]["occurred_at"] if missing_rows else None,
         missing_last_at=missing_rows[-1]["occurred_at"] if missing_rows else None,
@@ -225,10 +227,10 @@ def snapshot(events, as_of):
             "decision_history", "initial_observed_action", "latest_observed_action",
             "enter_now_observed", "economic_history", "revision_chain_status",
         )} for r in funnel["evaluation_ledger"]],
-        "missing_identity_evidence": sorted({r["evidence_id"] for r in mature_missing}),
-        "missing_identity_examples": mature_missing[:3],
-        "missing_identity_first_at": mature_missing[0]['occurred_at'] if mature_missing else None,
-        "missing_identity_last_at": mature_missing[-1]['occurred_at'] if mature_missing else None,
+        "missing_identity_evidence": sorted({r["evidence_id"] for r in retained_missing}),
+        "missing_identity_examples": retained_missing[:3],
+        "missing_identity_first_at": retained_missing[0]['occurred_at'] if retained_missing else None,
+        "missing_identity_last_at": retained_missing[-1]['occurred_at'] if retained_missing else None,
         "historical_identity_samples": historical_samples,
         "identity_observation": identity_observation,
     }
@@ -437,7 +439,7 @@ def attach_machine_semantics(result, semantics):
     elif old.get("status") == "pending":
         result["incidents"].pop(key, None)
     item = result["incidents"].get(key, {})
-    if item.get("status") in {"active", "historical_unresolved"} and item.get("notified_status") != item["status"]:
+    if item.get("status") == "active" and item.get("notified_status") != item["status"]:
         if key not in result["notification_pending"]:
             result["notification_pending"].append(key)
 
@@ -617,7 +619,7 @@ def evaluate(report, state, now):
         if recurrence:
             history.append({k: v for k, v in old.items() if k != "history"})
         first = old.get("first_seen", now.isoformat()) if not recurrence else now.isoformat()
-        status = ("active" if (now - stamp(first)).total_seconds() >= 240 else "pending")
+        status = "active"  # Exact current identity loss needs no ratio/persistence floor.
         if current_status != "current_gap":
             status = "historical_unresolved"
         # A shrinking window must not erase the already recorded old incident.
@@ -634,11 +636,16 @@ def evaluate(report, state, now):
             "occurred_first_at": old.get("occurred_first_at") if preserve else source.get("missing_identity_first_at"),
             "occurred_last_at": old.get("occurred_last_at") if preserve else source.get("missing_identity_last_at"),
             "notified_status": None if recurrence else old.get("notified_status"),
+            "normal_observation_pending": False if recurrence else old.get("normal_observation_pending", False),
+            "normal_observation_notified_at": None if recurrence else old.get("normal_observation_notified_at"),
             "owner": "ENTRY_PIPELINE machine producer identity",
             "closure_test": "new identified machine evaluations with no missing identity; old unbound rows remain unrepairable"}
     elif old:
         incidents[key] = {**old, "status": "historical_unresolved", "current_status": current_status}
     item = incidents.get(key, {})
+    if (item.get("status") == "historical_unresolved"
+            and old.get("status") == "active" and old.get("notified_status") == "active"):
+        item["normal_observation_pending"] = True
     if item and not item.get('examples'):
         matched = {r['evidence_id']: r for r in (source.get('historical_identity_samples', [])
                     + source.get('missing_identity_examples', []))
@@ -658,14 +665,28 @@ def evaluate(report, state, now):
         result["identity_missing_events"] = observation["missing_event_count"]
     # Absent scopes/stale sources retain incidents without asserting they resolved.
     result["notification_pending"] = [k for k, v in incidents.items()
-        if v["status"] in {"active", "recovered", "historical_unresolved"} and v.get("notified_status") != v["status"]
-        and (v["status"] != "historical_unresolved" or v.get("current_status") == "no_recurrence_observed")
-        and v["scope"] in result["scopes"]]
+        if _notification_kind(v, result) and v["scope"] in result["scopes"]]
     return result
 
 
+def _notification_kind(item, result):
+    status = item.get("status")
+    if status in {"active", "recovered"} and item.get("notified_status") != status:
+        return status
+    observation = result.get("identity_observation") or {}
+    if (status == "historical_unresolved" and item.get("rule") == "source_identity_missing"
+            and item.get("normal_observation_pending")
+            and observation.get("status") == "no_recurrence_observed"
+            and observation.get("missing_event_count") == 0
+            and observation.get("identified_event_count", 0) > 0):
+        return "normal_observation"
+    return None
+
+
 def notify(result, path, send=None):
-    keys = result["notification_pending"]
+    keys = [key for key in result["notification_pending"]
+            if _notification_kind(result["incidents"][key], result)]
+    keys.sort(key=lambda key: _notification_kind(result["incidents"][key], result) != "active")
     last = stamp(result.get("last_notification_at"))
     if last and (stamp(result["as_of"]) - last).total_seconds() < 300:
         result["notification_status"] = "cooldown"
@@ -675,17 +696,24 @@ def notify(result, path, send=None):
     messages = []
     for key in keys[:4]:
         item = result["incidents"][key]
+        if _notification_kind(item, result) == "normal_observation":
+            obs = result["identity_observation"]
+            messages.append(
+                "현재 정상 관측: 식별자 결손 최근10분 0건 / "
+                f'정상 식별 {obs["identified_event_count"]} 이벤트\n'
+                "추가 점검 요청 없음. 과거 결손은 보고서에 보존하며 원천 복구를 뜻하지 않습니다.")
+            continue
         if item["rule"] == "source_identity_missing":
             obs = result.get("identity_observation") or {}
-            examples = item.get("examples") or []
+            examples = obs.get("examples") or item.get("examples") or []
             sample = examples[0] if examples else {}
             messages.append(
                 f'{item["status"]}: source_identity_missing\n'
                 f'현재 최근10분: {item.get("current_status", "unobservable")} '
                 f'/ 결손 {obs.get("missing_event_count", "미확인")}건\n'
                 f'과거 원천 복구 주장 없음 / 보존 근거 {item["count"]} 이벤트 (주문 수 아님)\n'
-                f'발생: {item.get("occurred_first_at") or "미확인(구형 이력)"} ~ '
-                f'{item.get("occurred_last_at") or "미확인(구형 이력)"}\n'
+                f'현재 결손 발생: {obs.get("current_missing_first_at") or item.get("occurred_first_at") or "미확인(구형 이력)"} ~ '
+                f'{obs.get("current_missing_last_at") or item.get("occurred_last_at") or "미확인(구형 이력)"}\n'
                 f'종목: {sample.get("stock_code") or "미확인(구형 이력)"} / '
                 f'누락 필드: {", ".join(sample.get("missing_fields") or []) or "미확인(구형 이력)"}\n'
                 f'대표 발생시각: {sample.get("occurred_at") or "미확인(구형 이력)"}')
@@ -705,7 +733,11 @@ def notify(result, path, send=None):
                            "후단 실행 재생 증거 결손입니다. 기계 튜닝 실패나 실제 주문 실패 건수가 아닙니다.\n")
         messages.append(cause_text + f'{item["status"]}: {item["rule"]}\n{item["scope"]}\n근거 {item["count"]}건 / {item["category"]}\n' +
                         json.dumps(item.get("examples", [])[:1], ensure_ascii=False)[:350])
-    message = "[제출병목 점검] 자동 매매 변경 없음\n" + "\n".join(messages) + f"\n근거: {path}\nCodex에서 원천과 제출 경로를 점검하세요."
+    actionable = any(_notification_kind(result["incidents"][key], result) == "active" for key in keys[:4])
+    title = "제출병목 점검" if actionable else "제출병목 정상 확인"
+    message = f"[{title}] 자동 매매 변경 없음\n" + "\n".join(messages) + f"\n근거: {path}"
+    if actionable:
+        message += "\nCodex에서 원천과 제출 경로를 점검하세요."
     if send is None:
         try:
             token, admin = _load_telegram_config()
@@ -723,6 +755,9 @@ def notify(result, path, send=None):
         result["notification_status"] = f"retry_required:{type(exc).__name__}"
         return
     for key in keys[:4]:
+        if _notification_kind(result["incidents"][key], result) == "normal_observation":
+            result["incidents"][key]["normal_observation_pending"] = False
+            result["incidents"][key]["normal_observation_notified_at"] = result["as_of"]
         result["incidents"][key]["notified_status"] = result["incidents"][key]["status"]
     result["notification_status"] = "sent"
     result["last_notification_at"] = result["as_of"]

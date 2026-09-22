@@ -304,16 +304,13 @@ def test_missing_identity_detected_without_fake_denominator():
     assert not active(result)
 
 
-def test_identity_delayed_alert_is_historical_and_keeps_occurrence_details():
+def test_identity_delayed_history_is_silent_and_keeps_occurrence_details():
     bad = event(evaluation_attempt_id='None')
     state = tick([bad], 10)
     sent = []
     monitor.notify(state, 'fixture.json', send=sent.append)
-    assert len(sent) == 1
-    assert 'historical_unresolved' in sent[0] and '주문 수 아님' in sent[0]
-    assert '005930' in sent[0] and 'evaluation_attempt_id' in sent[0]
-    assert '2026-09-21T08:05:00+09:00' in sent[0]
-    assert '[]' not in sent[0]
+    assert sent == []
+    assert state['incidents']['unbound_machine_identity']['examples'][0]['stock_code'] == '005930'
     old = state['incidents']['unbound_machine_identity']
     expired = tick([], 50, state)
     item = expired['incidents']['unbound_machine_identity']
@@ -321,7 +318,7 @@ def test_identity_delayed_alert_is_historical_and_keeps_occurrence_details():
     for key in ('count', 'evidence_ids', 'examples', 'occurred_first_at', 'occurred_last_at'):
         assert item[key] == old[key]
     monitor.notify(expired, 'fixture.json', send=sent.append)
-    assert len(sent) == 1  # Neither disappearance nor fresh good rows repair history.
+    assert sent == []  # Neither disappearance nor fresh good rows repair history.
 
 
 def test_identity_current_recurrence_rearms_without_losing_prior_history():
@@ -369,8 +366,8 @@ def test_identity_legacy_incident_preserved_and_missing_details_not_fabricated()
     assert item['count']==104 and item['evidence_ids']==old['evidence_ids']
     assert item['status']=='historical_unresolved'
     sent=[];monitor.notify(result,'fixture.json',send=sent.append)
-    assert len(sent)==1 and '미확인(구형 이력)' in sent[0]
-    assert 'recovered' not in sent[0] and '[]' not in sent[0]
+    assert len(sent)==1 and '현재 정상 관측' in sent[0]
+    assert '점검하세요' not in sent[0] and 'recovered' not in sent[0]
 
 
 def test_identity_legacy_details_backfill_requires_exact_retained_hash():
@@ -391,15 +388,19 @@ def test_identity_legacy_details_backfill_requires_exact_retained_hash():
     assert item['status']=='historical_unresolved'
 
 
-def test_old_evidence_with_new_immature_gap_does_not_rearm_old_alert():
+def test_new_identity_gap_rearms_immediately_and_reports_current_occurrence():
     old_bad=event(evaluation_attempt_id='')
     state=tick([old_bad],10)
     monitor.notify(state,'fixture.json',send=lambda _:None)
     now_bad=event(2,evaluation_attempt_id='',when=START+timedelta(minutes=15))
     result=tick([old_bad,now_bad],15,state)
     assert result['identity_observation']['status']=='current_gap'
-    assert result['incidents']['unbound_machine_identity']['status']=='historical_unresolved'
-    assert 'unbound_machine_identity' not in result['notification_pending']
+    assert result['incidents']['unbound_machine_identity']['status']=='active'
+    assert 'unbound_machine_identity' in result['notification_pending']
+    sent=[]
+    monitor.notify(result,'fixture.json',send=sent.append)
+    assert '2026-09-21T08:20:00+09:00' in sent[0]
+    assert '2026-09-21T08:05:00+09:00' not in sent[0]
 
 
 def test_historical_identity_metadata_is_bounded_and_never_changes_current_denominator():
@@ -793,6 +794,7 @@ def test_receipt_incident_requires_persistence_and_does_not_fake_recovery():
     result['notification_pending'] = []
     monitor.attach_machine_semantics(result, {'issues':{}})
     assert result['incidents']['machine_policy_receipt_contract']['status'] == 'historical_unresolved'
+    assert not result['notification_pending']
 
 
 def test_required_feature_guard_has_no_selected_threshold_receipt(tmp_path, monkeypatch):
@@ -840,3 +842,80 @@ def test_source_invalid_echo_uses_canonical_action_spelling():
     _, status, errors = sentinel._machine_revision_rows([first, echo])
     assert status == 'single_revision' and not errors
     assert sentinel._machine_primary_entry_funnel([first, echo])['evaluation_ledger'][0]['mechanistic_action'] == 'SOURCE_INVALID'
+
+
+def test_current_identity_loss_alerts_immediately_then_normal_notice_once():
+    state = tick([event(evaluation_attempt_id='')], 0)
+    sent = []
+    monitor.notify(state, 'fixture.json', send=sent.append)
+    assert len(sent) == 1 and 'current_gap' in sent[-1]
+    assert '점검하세요' in sent[-1]
+    cleared = tick([], 11, state)
+    monitor.notify(cleared, 'fixture.json', send=sent.append)
+    assert len(sent) == 2 and '현재 정상 관측' in sent[-1]
+    assert '점검하세요' not in sent[-1]
+    assert cleared['incidents']['unbound_machine_identity']['status'] == 'historical_unresolved'
+    assert cleared['incidents']['unbound_machine_identity']['normal_observation_notified_at']
+    monitor.notify(cleared, 'fixture.json', send=sent.append)
+    later = tick([], 20, cleared)
+    monitor.notify(later, 'fixture.json', send=sent.append)
+    assert len(sent) == 2
+    recurrent = tick([event(2, evaluation_attempt_id='', when=START+timedelta(minutes=21))], 21, later)
+    monitor.notify(recurrent, 'fixture.json', send=sent.append)
+    assert len(sent) == 3 and 'current_gap' in sent[-1]
+    assert recurrent['incidents']['unbound_machine_identity']['history']
+
+
+def test_normal_identity_notice_waits_for_fresh_evidence_and_retries_failure():
+    state = tick([event(evaluation_attempt_id='')], 0)
+    monitor.notify(state, 'fixture.json', send=lambda _: None)
+    now = START+timedelta(minutes=11)
+    unobserved = monitor.evaluate(report([], now), state, now)
+    sent = []
+    monitor.notify(unobserved, 'fixture.json', send=sent.append)
+    assert not sent
+    normal = tick([], 12, unobserved)
+    def fail(text):
+        raise OSError('redacted')
+    monitor.notify(normal, 'fixture.json', send=fail)
+    assert normal['notification_status'] == 'retry_required:OSError'
+    assert normal['incidents']['unbound_machine_identity']['normal_observation_pending']
+    retry = tick([], 13, normal)
+    monitor.notify(retry, 'fixture.json', send=sent.append)
+    assert len(sent) == 1 and '현재 정상 관측' in sent[0]
+
+
+def test_existing_historical_state_does_not_generate_migration_notice():
+    state = tick([event(evaluation_attempt_id='')], 11)
+    state['incidents']['unbound_machine_identity']['notified_status'] = 'historical_unresolved'
+    next_state = tick([], 12, state)
+    # Even a persisted old notification queue must not send a historical alert.
+    next_state['notification_pending'] = ['unbound_machine_identity']
+    sent = []
+    monitor.notify(next_state, 'fixture.json', send=sent.append)
+    assert not sent
+
+
+def test_normal_and_current_alert_batch_keeps_actionable_request():
+    state = tick([event(evaluation_attempt_id='')], 0)
+    monitor.notify(state, 'fixture.json', send=lambda _: None)
+    normal = tick([], 11, state)
+    normal['incidents']['another'] = dict(scope='test',rule='test',status='active',count=1,category='structural_evidence')
+    normal['notification_pending'].append('another')
+    sent = []
+    monitor.notify(normal, 'fixture.json', send=sent.append)
+    assert len(sent) == 1 and '현재 정상 관측' in sent[0] and '점검하세요' in sent[0]
+
+
+def test_normal_notice_survives_cooldown_without_duplicate_ack():
+    state = tick([event(evaluation_attempt_id='')], 0)
+    monitor.notify(state, 'fixture.json', send=lambda _: None)
+    normal = tick([], 11, state)
+    normal['last_notification_at'] = (START+timedelta(minutes=10)).isoformat()
+    sent=[]
+    monitor.notify(normal, 'fixture.json', send=sent.append)
+    assert not sent and normal['notification_status']=='cooldown'
+    assert normal['incidents']['unbound_machine_identity']['normal_observation_pending']
+    ready=tick([],16,normal)
+    monitor.notify(ready,'fixture.json',send=sent.append)
+    assert len(sent)==1 and '현재 정상 관측' in sent[0]
