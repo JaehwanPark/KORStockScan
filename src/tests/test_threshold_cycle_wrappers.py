@@ -112,6 +112,13 @@ def test_main_machine_evaluation_precedes_compact_and_final_consumers():
     assert '--launch' in script[machine:episode]
 
 
+def test_failed_cycle_recovery_reuses_main_terminal_without_replaying_machine():
+    script = _text("deploy/run_threshold_cycle_postclose.sh")
+    assert 'POSTCLOSE_STAGE_RECOVERY_ARGS+=(--recover-closed-target)' in script
+    from src.engine.automation.postclose_summary_handoff import stage_commands
+    assert stage_commands('main_machine_policy', '2026-09-21', '2026-09-21', recovery=True) == []
+
+
 def test_final_done_follows_bound_seal_and_no_retired_finalizer_dependencies():
     from pathlib import Path
     root = Path(__file__).resolve().parents[2]

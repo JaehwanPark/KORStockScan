@@ -881,6 +881,8 @@ def stage_commands(stage, day, publication, *, recovery=False):
     def command(module, *args):
         return prefix + ['src.engine.' + module, *args]
     date_args = ['--target-date', day, '--write']
+    if stage == 'main_machine_policy' and recovery:
+        return []
     if stage == 'main_machine_policy':
         return [command('scalping.ai_action_outcome_calibration', *date_args, '--machine-policy-only', '--activate-now')]
     if stage == 'legacy_machine_report':

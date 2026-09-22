@@ -778,6 +778,10 @@ raise SystemExit(exit_code)
 }
 
 detect_postclose_recovery_reuse_mode
+POSTCLOSE_STAGE_RECOVERY_ARGS=()
+if [ "$POSTCLOSE_RECOVERY_REUSE_MODE" = "true" ]; then
+  POSTCLOSE_STAGE_RECOVERY_ARGS+=(--recover-closed-target)
+fi
 started_at="$(TZ=Asia/Seoul date +%FT%T%z)"
 write_postclose_status running started 0 0
 emit_postclose_marker "[START] threshold-cycle postclose target_date=$TARGET_DATE recovery_reuse=$POSTCLOSE_RECOVERY_REUSE_MODE started_at=$started_at"
@@ -1444,7 +1448,7 @@ done
 # Launch the independent machine owner before any long family/AI producer.
 if [[ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" == "true" || "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" == "1" ]]; then
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.postclose_summary_handoff \
-    --stage main_machine_policy --date "$TARGET_DATE" --publication-date "$POLICY_PUBLICATION_DATE" --launch
+    --stage main_machine_policy --date "$TARGET_DATE" --publication-date "$POLICY_PUBLICATION_DATE" "${POSTCLOSE_STAGE_RECOVERY_ARGS[@]}" --launch
 fi
 
 if [ "$RUN_SIM_POST_SELL_FEEDBACK" = "true" ] || [ "$RUN_SIM_POST_SELL_FEEDBACK" = "1" ]; then
@@ -1477,7 +1481,7 @@ fi
 
 if [ "$RUN_LOW_PRICE_TWO_LEG_CANDIDATE_RECOMMENDATION" = "true" ] || [ "$RUN_LOW_PRICE_TWO_LEG_CANDIDATE_RECOMMENDATION" = "1" ]; then
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.postclose_summary_handoff \
-    --stage episode_policy --date "$TARGET_DATE" --publication-date "$POLICY_PUBLICATION_DATE" --launch
+    --stage episode_policy --date "$TARGET_DATE" --publication-date "$POLICY_PUBLICATION_DATE" "${POSTCLOSE_STAGE_RECOVERY_ARGS[@]}" --launch
 fi
 # Rising Missed scout entry and dedicated studies retired 2026-09-18.
 echo "[threshold-cycle] entry AI gate diagnostic skipped schedule=$ENTRY_AI_GATE_BACKTEST_SCHEDULE target_date=$TARGET_DATE"
@@ -1799,7 +1803,7 @@ if [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "true" ] || [ "$RUN_AI_DECI
   wait_for_postclose_resources "ai_decision_action_outcome_calibration"
   for stage in legacy_machine_report main_auxiliary_policy; do
     run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.postclose_summary_handoff \
-      --stage "$stage" --date "$TARGET_DATE" --publication-date "$POLICY_PUBLICATION_DATE" --launch
+      --stage "$stage" --date "$TARGET_DATE" --publication-date "$POLICY_PUBLICATION_DATE" "${POSTCLOSE_STAGE_RECOVERY_ARGS[@]}" --launch
   done
 fi
 if [ "$RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT" = "true" ] || [ "$RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT" = "1" ]; then
