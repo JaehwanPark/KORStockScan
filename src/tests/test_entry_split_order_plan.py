@@ -4931,3 +4931,99 @@ def test_verified_completed_receipt_survives_capital_join_gap_in_producer():
     assert models[0]['blocker']=='actual_capital_or_reservation_source_missing'
     evidence=split_plan.evaluate_entry_split_operating_economics(rows,models,{},target_date='2026-09-17')
     assert evidence['status']=='source_gap' and not evidence['candidates'] and not any(x['validated'] for x in evidence['model_scopes'])
+
+
+@pytest.mark.parametrize('mode', ['deferred', 'probe', 'invalid_sizing', 'opening'])
+def test_live_submit_split_branch_binds_or_releases_reservation(monkeypatch, tmp_path, mode):
+    """Run the actual pre-broker branch, including its enclosing conditions."""
+    import ast
+    from pathlib import Path
+    from src.engine import sniper_state_handlers as handlers
+    from src.engine.scalping import strategy_owner_replay
+
+    monkeypatch.setattr(split_plan, 'PROBE_RUNTIME_STATE_PATH', tmp_path / 'probe.json')
+    monkeypatch.setattr(strategy_owner_replay, 'freeze_entry_operating_context', lambda *a, **k: {})
+    source = ast.parse(Path(handlers.__file__).read_text())
+    function = next(n for n in source.body if isinstance(n, ast.FunctionDef)
+                    and n.name == '_submit_watching_triggered_entry')
+    start = next(i for i, n in enumerate(function.body)
+                 if isinstance(n, ast.Assign) and ast.unparse(n.targets[0]) == 'entry_execution_sizing_fields')
+    end = next(i for i in range(start, len(function.body))
+               if isinstance(function.body[i], ast.Assign)
+               and ast.unparse(function.body[i].targets[0]) == 'msg')
+    branch = ast.parse('def run(planned_orders):\n    return True\n').body[0]
+    branch.body = function.body[start:end] + branch.body
+    module = ast.fix_missing_locations(ast.Module(body=[branch], type_ignores=[]))
+    fields = {'entry_split_order_probe_first_required': True,
+              'entry_split_order_probe_first_applied': mode != 'deferred',
+              'entry_split_order_probe_capacity_deferred': mode == 'deferred',
+              'entry_split_order_probe_first_skip_reason': 'probe_active_bundle_cap_reached',
+              'entry_split_order_probe_bundle_id': 'new-plan'}
+    probe = {'qty': 1, 'price': 1000, 'entry_split_order_probe_continuation': {'requested_qty': 5},
+             'entry_split_order_probe_submit_best_ask': 1000}
+    split_plan.update_probe_runtime_bundle('new-plan', phase='planned')
+    calls, stock = [], {'id': 1}
+    env = {**vars(handlers), 'stock': stock, 'code': '000001', 'strategy': 'SCALPING',
+           'opening_rotation_active': mode == 'opening', 'sizing_context': {}, 'budget_context': {},
+           'planned_orders': [probe], 'latency_gate': {}, 'latency_price_snapshot': {},
+           'entry_orderbook_micro_fields': {}, 'microstructure_submit_log_fields': {},
+           'submit_revalidation_fields': {}, 'entry_ai_submit_authority': {}, 'requested_qty': 5,
+           'entry_mode': 'normal', 'wait_probe_required': False,
+           'apply_entry_split_order_policy': lambda *a, **k: ([] if mode == 'deferred' else [probe], fields),
+           'submit_attempt_machine_lineage': lambda *a: {'evaluation_attempt_id': 'current'},
+           '_decorate_entry_split_leg_ttls': lambda orders, *a: orders,
+           'compose_entry_execution_sizing_plan': lambda orders, **k: (orders, {
+               'entry_execution_sizing_valid': mode != 'invalid_sizing'}),
+           'clear_signal_reference': lambda *a: None,
+           '_log_entry_pipeline': lambda stock, code, stage, **kw: calls.append((stage, kw))}
+    exec(compile(module, '<live-pre-broker-branch>', 'exec'), env)
+    assert env['run']([probe]) is (mode in {'probe', 'opening'})
+    stages = [stage for stage, _ in calls]
+    state = json.loads((tmp_path / 'probe.json').read_text())['bundles']['new-plan']
+    if mode == 'probe':
+        assert stock['entry_split_probe_bundle_id'] == 'new-plan'
+        assert stock['entry_split_probe_phase'] == state['phase'] == 'probe_submitting'
+        assert stock['entry_split_probe_continuation'] == probe['entry_split_order_probe_continuation']
+    elif mode == 'deferred':
+        assert stages[-1] == 'entry_split_probe_capacity_deferred'
+        assert calls[-1][1]['broker_order_forbidden'] is True
+        assert 'order_bundle_failed' not in stages
+    elif mode == 'invalid_sizing':
+        assert state['phase'] == 'aborted'
+    else:
+        assert stock.get('entry_split_probe_bundle_id') is None
+        assert stages == ['entry_split_order_plan_skipped']
+
+
+@pytest.mark.parametrize('phase', ['planned', 'probe_submitting', 'probe_submitted', 'residual_submitted', 'complete'])
+def test_unused_probe_release_never_releases_inflight_or_completed(monkeypatch, tmp_path, phase):
+    monkeypatch.setattr(split_plan, 'PROBE_RUNTIME_STATE_PATH', tmp_path / 'probe.json')
+    split_plan.update_probe_runtime_bundle('bundle', phase=phase)
+    assert split_plan.release_unsubmitted_probe_reservation('bundle', reason='sizing_blocked') is (phase == 'planned')
+
+
+def test_completed_probe_is_not_reopened_by_late_submit(monkeypatch, tmp_path):
+    monkeypatch.setattr(split_plan, 'PROBE_RUNTIME_STATE_PATH', tmp_path / 'probe.json')
+    split_plan.update_probe_runtime_bundle('bundle', phase='complete', filled_qty=5)
+    late = split_plan.update_probe_runtime_bundle('bundle', phase='residual_submitted', filled_qty=1)
+    assert late['phase'] == 'complete'
+    assert late['filled_qty'] == 5
+
+
+@pytest.mark.parametrize('inflight', [False, True])
+def test_submit_scope_reclaims_plan_on_exception_but_preserves_broker_ambiguity(monkeypatch, tmp_path, inflight):
+    monkeypatch.setattr(split_plan, 'PROBE_RUNTIME_STATE_PATH', tmp_path / 'probe.json')
+    monkeypatch.setenv('KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED', 'true')
+    monkeypatch.setenv('KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ACTIVE_DATE', 'DAILY')
+    with pytest.raises(RuntimeError, match='injected'):
+        with split_plan.probe_submission_scope():
+            bundle_id, reason = split_plan._reserve_probe_runtime_bundle(
+                stock={'id': 1, 'code': '000001'}, total_qty=2,
+                submit_contract={'probe_submit_best_ask': 1000, 'continuation': {
+                    'requested_qty': 2, 'residual_qty': 1, 'residual_quantities': [1]}})
+            assert reason == 'reserved'
+            if inflight:
+                split_plan.update_probe_runtime_bundle(bundle_id, phase='probe_submitting')
+            raise RuntimeError('injected')
+    state = json.loads((tmp_path / 'probe.json').read_text())['bundles'][bundle_id]
+    assert state['phase'] == ('probe_submitting' if inflight else 'aborted')

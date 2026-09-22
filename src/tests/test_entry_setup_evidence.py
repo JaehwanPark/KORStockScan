@@ -3190,3 +3190,18 @@ def test_wait_probe_is_attributed_as_arm_not_unsubmitted_exposure():
     assert "false_wait" in row["candidate_error_taxonomy"]
     assert report["candidate_probe_arm_risk_budget"]["evaluable_count"] == 1
     assert report["candidate_probe_arm_risk_budget"]["pass"] is True
+
+
+@pytest.mark.parametrize('state', ['READY', 'UNCONFIRMED'])
+def test_risk_schema_excludes_unfounded_insufficient_for_adverse_tape(state):
+    evidence = {'setup_state': state, 'positive_facts': ['tape_supportive'],
+                'contradicting_facts': ['program_flow_net_and_delta_sell'],
+                'corroborated_risk_codes': ['ADVERSE_TAPE'],
+                'risk_fact_bindings': {'ADVERSE_TAPE': ['program_flow_net_and_delta_sell']}}
+    schema = entry_risk_adjudication_openai_schema(evidence)
+    assert set(schema['properties']['risk_verdict']['enum']) == {'PASS', 'CAUTION', 'VETO'}
+    response = _risk('INSUFFICIENT', ['ADVERSE_TAPE'], contradict=['program_flow_net_and_delta_sell'])
+    assert 'entry_risk_unfounded_insufficient' in validate_entry_risk_adjudication(response, setup_evidence=evidence)
+    evidence.update(setup_state='INSUFFICIENT', corroborated_risk_codes=['SOURCE_QUALITY_GAP'],
+                    risk_fact_bindings={'SOURCE_QUALITY_GAP': ['required_source_missing']})
+    assert entry_risk_adjudication_openai_schema(evidence)['properties']['risk_verdict']['enum'] == ['INSUFFICIENT']

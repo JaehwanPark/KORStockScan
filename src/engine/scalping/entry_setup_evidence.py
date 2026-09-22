@@ -1720,6 +1720,13 @@ def entry_risk_adjudication_openai_schema(
         schema["properties"]["risk_verdict"]["enum"] = ["INSUFFICIENT"]
     elif setup_state == "INVALID":
         schema["properties"]["risk_verdict"]["enum"] = ["VETO"]
+    elif "SOURCE_QUALITY_GAP" not in bindings:
+        # Conflicting tape is a risk judgment, not missing source evidence.
+        # Keep PASS/VETO/CAUTION available; never normalize an invalid reply
+        # into entry authority after the provider has returned it.
+        schema["properties"]["risk_verdict"]["enum"] = sorted(
+            RISK_VERDICTS - {"INSUFFICIENT"}
+        )
     fact_fields = {
         "supporting_fact_ids": list(setup.get("positive_facts") or []),
         "contradicting_fact_ids": (

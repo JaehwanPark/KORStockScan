@@ -335,6 +335,8 @@ from src.engine.scalping.entry_ai_gate import (
 from src.engine.scalping.entry_split_order_plan import (
     apply_entry_split_order_policy,
     build_probe_residual_orders,
+    probe_submission_scope,
+    release_unsubmitted_probe_reservation,
     trip_probe_runtime_circuit,
     update_probe_runtime_bundle,
 )
@@ -64701,6 +64703,7 @@ def _observe_entry_submit_finished(stock, code, outcome):
     )
 
 
+@probe_submission_scope()
 @observe_submit_attempt(on_finish=_observe_entry_submit_finished)
 def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
     retired_scout_intent = any(
@@ -68795,6 +68798,10 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 for planned in planned_orders:
                     planned[receipt_key] = entry_split_fields[receipt_key]
         if not entry_execution_sizing_fields.get("entry_execution_sizing_valid"):
+            release_unsubmitted_probe_reservation(
+                str(entry_split_fields.get("entry_split_order_probe_bundle_id") or ""),
+                reason="atomic_entry_execution_sizing_contract_invalid",
+            )
             clear_signal_reference(stock)
             _log_entry_pipeline(
                 stock,
@@ -68870,6 +68877,8 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             "entry_split_order_leg_count": 1,
             "entry_split_order_skip_reason": "opening_rotation_scale_in_forbidden",
         }
+    if strategy == "SCALPING":
+        # Both ordinary and opening entries must bind the split lifecycle.
         submit_revalidation_fields.update(entry_split_fields)
         latency_gate.update(
             {
@@ -82013,27 +82022,30 @@ def _submit_entry_split_probe_residual_locked(
             preserve_position=True,
         )
         return True
-    _mutate_stock_state(
-        stock,
-        set_fields={
-            "entry_split_probe_phase": "residual_submitted",
-            "entry_split_probe_residual_submitted_at": time.time(),
-        },
-    )
-    update_probe_runtime_bundle(
-        bundle_id,
-        phase="residual_submitted",
-        residual_order_nos=[order.get("ord_no") for order in successful_orders],
-        residual_orders=successful_orders,
-        **_merge_entry_pipeline_field_groups(
-            plan_fields,
-            {
-                key: stock.get(key)
-                for key in confirmation_grant_runtime_keys
-                if key in stock
+    with ENTRY_LOCK:
+        if stock.get("entry_split_probe_phase") == "complete":
+            return True
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "entry_split_probe_phase": "residual_submitted",
+                "entry_split_probe_residual_submitted_at": time.time(),
             },
-        ),
-    )
+        )
+        update_probe_runtime_bundle(
+            bundle_id,
+            phase="residual_submitted",
+            residual_order_nos=[order.get("ord_no") for order in successful_orders],
+            residual_orders=successful_orders,
+            **_merge_entry_pipeline_field_groups(
+                plan_fields,
+                {
+                    key: stock.get(key)
+                    for key in confirmation_grant_runtime_keys
+                    if key in stock
+                },
+            ),
+        )
     return True
 
 

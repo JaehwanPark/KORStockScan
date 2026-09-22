@@ -11,6 +11,8 @@ import re
 import tempfile
 import threading
 from collections import Counter, defaultdict
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from statistics import mean
@@ -219,6 +221,7 @@ PROBE_RECOVERY_TERMINAL_PHASES = frozenset(
     {"complete", "bundle_completed", "partial_complete"}
 )
 _PROBE_RUNTIME_STATE_LOCK = threading.RLock()
+_SUBMIT_PROBE_RESERVATIONS = ContextVar("submit_probe_reservations", default=None)
 
 
 def _kst_date(now: datetime | None = None) -> str:
@@ -1088,6 +1091,39 @@ def recover_probe_runtime_bundle_for_stock(
         }
 
 
+@contextmanager
+def probe_submission_scope():
+    """Roll back unused reservations on every return/exception of one submit."""
+    reservations = []
+    token = _SUBMIT_PROBE_RESERVATIONS.set(reservations)
+    try:
+        yield
+    finally:
+        try:
+            for bundle_id in reservations:
+                release_unsubmitted_probe_reservation(
+                    bundle_id, reason="submit_scope_finished_before_probe_submission"
+                )
+        finally:
+            _SUBMIT_PROBE_RESERVATIONS.reset(token)
+
+
+def release_unsubmitted_probe_reservation(bundle_id: str, *, reason: str) -> bool:
+    """Release only a call's unused plan, never a broker-in-flight bundle."""
+    if not bundle_id:
+        return False
+    with _PROBE_RUNTIME_STATE_LOCK:
+        payload = _load_probe_runtime_state(_kst_date())
+        bundle = dict((payload.get("bundles") or {}).get(bundle_id) or {})
+        if bundle.get("phase") != "planned" or any(
+            bundle.get(key)
+            for key in ("order_no", "residual_order_nos", "submitting_at", "counted_submitted")
+        ):
+            return False
+        update_probe_runtime_bundle(bundle_id, phase="aborted", reason=reason)
+        return True
+
+
 def update_probe_runtime_bundle(
     bundle_id: str,
     *,
@@ -1100,6 +1136,12 @@ def update_probe_runtime_bundle(
         payload = _load_probe_runtime_state(target_date)
         bundles = payload.setdefault("bundles", {})
         bundle = dict(bundles.get(bundle_id) or {})
+        # A fill/sell callback may finish before the submission thread returns.
+        # A late acknowledgement must not occupy a completed slot again.
+        if bundle.get("phase") in {"complete", "bundle_completed"} and phase not in {
+            "complete", "bundle_completed"
+        }:
+            return bundle
         countable_phase = phase in {
             "probe_submitted",
             "probe_filled",
@@ -1202,6 +1244,9 @@ def _reserve_probe_runtime_bundle(
             "reserved_at": datetime.now(timezone.utc).isoformat(),
         }
         _write_probe_runtime_state(payload)
+        reservations = _SUBMIT_PROBE_RESERVATIONS.get()
+        if reservations is not None:
+            reservations.append(bundle_id)
         return bundle_id, "reserved"
 
 
