@@ -68,6 +68,7 @@ B. **근거 임계치 후보**: 동일한 유효 AI 응답·근거 프레임을 
 - 장후 `outcome_labels`/`compact_auxiliary_paired_replay`가 이미 만든 같은 attempt의 label을 verdict·input hash로 조인한다. 기존 라벨을 재생성하지 말고, 응답·label join이 없으면 그 행은 미연결 source gap으로 남긴다.
 - deterministic 근거 임계치 후보는 기존 raw 응답과 fact frame을 공유 evaluator에 다시 넣는다. 추가 provider 호출 수는 0으로 제한하고, `good_pass_retention` 및 `pass_win_rate`에 성공 PASS를 포함한다. 후보가 성공 PASS를 non-PASS로 바꾸면 동일 기회 paired delta에서 그 기회 수익만큼 불이익을 받는다.
 - prompt 후보가 필요한 경우에도 성공 PASS 행을 후보 manifest와 동일한 고정 분모에 넣는다. 기존 exact-input 응답 cache를 먼저 재사용하고, cache miss 재호출은 기존 최대 후보·provider budget 안에서만 수행한다. 성공 PASS만을 따로 표본추출하거나 평가 후 분모에서 제거하지 않는다.
+- 독립 AI 단계 보고서가 존재하면 기존 owner-capital/exact-stop 기준의 prompt 승격 결과를 AI 단계 후보로 전용하지 않는다. 동일 고정경로·보정 승률 비교가 준비되지 않은 prompt 후보는 기존 prompt를 승계한다.
 - 보고서에는 `eligible_successful_pass_count`, `linked_successful_pass_count`, `good_pass_retention`, 성공 PASS에서 바뀐 verdict 수, 추가 provider call 수를 기록한다. 이 값은 별도 score 보너스가 아니라 기존 paired score의 분모·전이 근거다.
 - AI 단계 고정 경로의 target/adverse/horizon·왕복 비용·동일 route outcome provenance가 빠지면 PASS 행은 보존하되 success label은 미확정으로 분류하고 승격을 막는다. null을 0이나 성공으로 바꾸지 않는다. 기존 owner-capital/exact-stop 비교의 `exact_stop_distance_missing_or_invalid` 결손은 별도 legacy basis에 남는다.
 

@@ -192,6 +192,7 @@ def test_auxiliary_stage_publisher_updates_only_ai_component_with_parent_cas(tmp
         "machine_terminal_tuning_gate": {"decision_counterfactual_tuning_input_allowed": True},
         "compact_auxiliary_policy_measurement": {"measurement_allowed": True},
     }
+    monkeypatch.setattr(compact, "promotion_valid", lambda *args, **kwargs: True)
     now = datetime.fromisoformat("2026-09-18T20:00:00+09:00")
     published = policy.publish_compact_evaluation(
         source, source_receipt=receipt, publication_day="2026-09-18",

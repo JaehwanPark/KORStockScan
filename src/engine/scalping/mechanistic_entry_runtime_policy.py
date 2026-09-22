@@ -723,7 +723,10 @@ def publish_compact_evaluation(
             old_ai = (previous.get("scope_policies") or {}).get(
                 scope_key, previous
             )["ai_policy"]
-            if measurement_allowed and paired.promotion_valid(
+            # The legacy prompt comparison uses a different economic gate.
+            # Once an independent AI-stage replay exists, only its ranked
+            # candidate may change this component.
+            if auxiliary_stage is None and measurement_allowed and paired.promotion_valid(
                 source,
                 incumbent=old_ai["prompt_version"],
                 selected=selected,
