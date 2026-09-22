@@ -11,6 +11,39 @@ from src.engine.scalping import entry_split_order_plan as split_plan
 from src.engine import sniper_post_sell_feedback as post_sell_feedback
 
 
+def test_acknowledged_entry_leg_merges_duplicate_policy_receipts():
+    """Execute the real post-ack logging expression without a broker call."""
+    import ast
+    import textwrap
+    from pathlib import Path
+    from src.engine import sniper_state_handlers as handlers
+    source = Path(handlers.__file__).read_text()
+    expression = source.split('        entry_submit_event = _log_entry_pipeline(', 1)[1]
+    expression = 'entry_submit_event = _log_entry_pipeline(' + expression.split(
+        '        _record_lifecycle_submit_telemetry_if_raw_appended(', 1)[0]
+    tree = ast.parse(textwrap.dedent(expression))
+    stock = dict(entry_split_order_policy_sha256='old', entry_split_order_runtime_pid=1,
+                 entry_split_order_runtime_consumed=True, market_session_bucket='KRX_REGULAR')
+    env = dict(stock=stock, code='000001', request={'tag':'primary'}, qty=2,
+        ord_no='acknowledged-1', price=1000, order_sent_ts=1790036000,
+        datetime=datetime, _KST=timezone(timedelta(hours=9)),
+        order_resolution_fields={'broker_route':'KRX'}, entry_execution_cohort='KRX',
+        split_leg_meta_fields={**stock, 'entry_split_order_policy_sha256':'leg-policy'},
+        real_pre_submit_guard_fields={}, submit_revalidation_fields={},
+        _entry_price_ai_trace_fields=lambda _: {},
+        _merge_entry_pipeline_field_groups=handlers._merge_entry_pipeline_field_groups,
+        _log_entry_pipeline=lambda *args, **fields: fields)
+    # The session field belongs to the explicit event, not split metadata.
+    env['split_leg_meta_fields'].pop('market_session_bucket')
+    exec(compile(tree, '<post-ack-entry-log>', 'exec'), env)
+    event = env['entry_submit_event']
+    assert event['entry_split_order_policy_sha256'] == 'leg-policy'
+    assert event['entry_split_order_runtime_pid'] == 1
+    assert event['broker_order_no'] == 'acknowledged-1'
+    assert event['actual_order_submitted'] is True
+    assert event['broker_order_forbidden'] is False
+
+
 @pytest.fixture(autouse=True)
 def isolate_native_replay_generation(monkeypatch, tmp_path):
     """Mock windows must not fingerprint a growing production collector."""

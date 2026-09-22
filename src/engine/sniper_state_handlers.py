@@ -70142,7 +70142,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             order_response_ord_no=ord_no,
             entry_split_submitted_price=price,
             entry_split_submitted_at=datetime.fromtimestamp(order_sent_ts, _KST).isoformat(),
-            **{key: stock.get(key) for key in ("entry_split_order_policy_sha256", "entry_split_order_runtime_pid", "entry_split_order_runtime_consumed")},
             lifecycle_submission_leg_contract="exact_broker_order_leg_v1",
             lifecycle_submission_time_source=(
                 "pipeline_emit_after_broker_success_response"
@@ -70152,8 +70151,9 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             **order_resolution_fields,
             effective_venue=entry_execution_cohort,
             market_session_bucket=stock.get("market_session_bucket") or "-",
-            **split_leg_meta_fields,
             **_merge_entry_pipeline_field_groups(
+                {key: stock.get(key) for key in ("entry_split_order_policy_sha256", "entry_split_order_runtime_pid", "entry_split_order_runtime_consumed")},
+                split_leg_meta_fields,
                 real_pre_submit_guard_fields,
                 _entry_price_ai_trace_fields(submit_revalidation_fields),
             ),
