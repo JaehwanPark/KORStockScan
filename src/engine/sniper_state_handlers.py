@@ -49856,6 +49856,12 @@ def _build_ai_ops_log_fields(
         out["ai_cooldown_blocked"] = bool(ai_cooldown_blocked)
     out.update(microstructure_delivery_fields(payload))
     _copy_ai_preflight_log_fields(payload, out)
+    # Use the current decision, never the mutable watched-stock cache. The
+    # generic event venue may still be UNKNOWN after a scanner promotion.
+    provenance = _machine_primary_entry_provenance_fields(payload)
+    for key in ("effective_venue", "market_session_bucket"):
+        if key in provenance:
+            out[key] = provenance[key]
     return out
 
 

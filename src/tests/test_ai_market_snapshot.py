@@ -73,6 +73,11 @@ def test_proven_five_second_trade_gap_is_feature_shortfall_not_source_damage(
     assert snapshot["market_data_health"] == build_market_data_health(ws, now_ts=now)
     assert snapshot["trade_activity"]["trade_activity_state"] == state
     assert snapshot["trade_activity"]["canonical_binding_proven"] is True
+    evidence = snapshot["trade_activity"]["continuity_evidence"]
+    assert evidence["route_key"] == key
+    assert evidence["transport_epoch"] == 2
+    assert evidence["receipts"]["0B"]["observed_epoch"] == now - gap
+    assert evidence["quiet_tape_observation"]["last_trade"] == now - gap
     assert preflight["source_allowed"] is True
     assert preflight["allowed"] is False  # no provider/entry bypass
     if integrated:
@@ -109,6 +114,9 @@ def test_proven_five_second_trade_gap_is_feature_shortfall_not_source_damage(
     ws["market_data_health"] = snapshot["market_data_health"]
     del ws["realtime_type_snapshots_by_route"][key]["quiet_tape_observation"]
     missing = build()
+    assert missing["trade_activity"]["continuity_evidence"]["quiet_tape_observation"]["last_trade"] is None
+    # Previously frozen evidence must survive later input mutation.
+    assert evidence["quiet_tape_observation"]["last_trade"] == now - gap
     assert missing["trade_activity"]["canonical_binding_proven"] is False
     assert "tape_stale" in missing["ai_input_preflight_v1"]["source_blockers"]
     records = ws["realtime_type_snapshots_by_route"][key]
@@ -123,6 +131,7 @@ def test_proven_five_second_trade_gap_is_feature_shortfall_not_source_damage(
     )
     records["0B"]["transport_epoch"] = 1
     cross_epoch = build()
+    assert cross_epoch["trade_activity"]["continuity_evidence"]["receipts"]["0B"]["transport_epoch"] == 1
     assert cross_epoch["trade_activity"]["canonical_binding_proven"] is False
     assert "tape_stale" in cross_epoch["ai_input_preflight_v1"]["source_blockers"]
 

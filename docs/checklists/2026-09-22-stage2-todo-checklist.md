@@ -105,3 +105,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
   - Source: [보조 AI 전체 계획](../proposals/auxiliary-ai-opportunity-error-tuning-runtime-implementation-plan-2026-09-22.md).
   - Acceptance: 실제 ENTER_NOW 호출 모집단의 양방향 paired 평가, soft 임계치와 fixed safety 분리, raw/effective 응답 binding, runtime 공유 판정, 새 basis 발행·AI component CAS·실제 PID 소비·독립 장후 갱신.
   - 현재는 계획 수립이며 provider 호출·정책 변경·배포·재기동 미실행. 학습/발행/PID/실현손익을 분리하고 기계정책·주문/보유 hard safety를 보존한다.
+
+- [ ] `[MainMachineSourceIdentityRepair] 기계판정 후속 식별자 및 갱신 공백 근거 보완` (`Due: 2026-09-22`, `Slot: INTRADAY`, `TimeWindow: 17:50~19:55`, `Track: RuntimeStability`)
+  - Source: [식별자·공백 보완 리뷰](../audit-reports/2026-09-22-machine-source-identity-and-gap-review.md).
+  - Acceptance: 현재 판정의 canonical venue/session 전달, 원천 연속성 근거 보존, 대상 검증·고정 배포본·재기동 PID 확인. 과거 원천 복구·무체결 확정·EV 개선으로 해석하지 않는다.

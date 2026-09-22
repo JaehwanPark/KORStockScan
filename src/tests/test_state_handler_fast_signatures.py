@@ -8091,3 +8091,41 @@ def test_terminal_no_budget_uses_call_local_ai_result_over_later_stock(monkeypat
     assert emitted[-1]["evaluation_attempt_id"] == "original"
     assert emitted[-1]["actual_order_submitted"] is False
     assert emitted[-1]["allowed_runtime_apply"] is False
+
+
+@pytest.mark.parametrize("stage", ["ai_confirmed", "blocked_ai_score"])
+@pytest.mark.parametrize("action", ["BLOCK", "RECHECK", "SOURCE_INVALID"])
+def test_machine_ops_log_keeps_current_scope_despite_unknown_scanner(stage, action, monkeypatch):
+    emitted = []
+    monkeypatch.setattr(handlers, "emit_pipeline_event", lambda *args, **kwargs: emitted.append(kwargs["fields"]))
+    monkeypatch.setattr(handlers, "_is_scanner_watching_runtime_observation_target", lambda stock: True)
+    monkeypatch.setattr(handlers, "_scanner_runtime_event_venue_fields", lambda stock: {
+        "venue": "UNKNOWN", "effective_venue": "UNKNOWN"})
+    decision = {
+        "entry_mechanistic_action": action, "evaluation_attempt_id": "current",
+        "scanner_promotion_id": "promotion-current", "machine_bundle_sha256": "a" * 64,
+        "entry_setup_live_policy_effective_venue": "KRX_NXT_INTEGRATED",
+        "entry_setup_live_policy_session_bucket": "KRX_NXT_AFTERMARKET",
+    }
+    if action == "SOURCE_INVALID":
+        decision["effective_venue"] = decision.pop("entry_setup_live_policy_effective_venue")
+        decision["market_session_bucket"] = decision.pop("entry_setup_live_policy_session_bucket")
+    stock = {"id": 9, "last_watching_ai_machine_primary_fields": {
+        **decision, "evaluation_attempt_id": "later", "effective_venue": "KRX"}}
+    fields = handlers._build_ai_ops_log_fields(decision)
+    handlers._log_entry_pipeline(stock, "003670", stage, **fields)
+    assert emitted[-1]["effective_venue"] == "KRX_NXT_INTEGRATED"
+    assert emitted[-1]["market_session_bucket"] == "KRX_NXT_AFTERMARKET"
+    assert emitted[-1]["evaluation_attempt_id"] == "current"
+    assert emitted[-1]["venue"] == "UNKNOWN"  # no actual execution venue inferred
+    from src.engine.buy_funnel_sentinel import PipelineEvent, _machine_primary_evaluation_key
+    event = PipelineEvent(emitted_at="2026-09-22T17:30:00", pipeline="ENTRY_PIPELINE",
+                          stage=stage, stock_code="003670", stock_name="test", record_id="9", fields=emitted[-1])
+    assert _machine_primary_evaluation_key(event)
+
+
+def test_machine_ops_log_does_not_infer_missing_or_replace_explicit_scope():
+    assert "effective_venue" not in handlers._build_ai_ops_log_fields({})
+    decision = {"entry_mechanistic_action": "BLOCK", "effective_venue": "UNKNOWN",
+                "entry_setup_live_policy_effective_venue": "KRX_NXT_INTEGRATED"}
+    assert handlers._build_ai_ops_log_fields(decision)["effective_venue"] == "UNKNOWN"

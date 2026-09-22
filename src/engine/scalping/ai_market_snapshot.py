@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo
 
 from src.utils import kiwoom_utils
 from src.engine.scalping.multi_timeframe_context import promotion_activation_state
-from src.trading.market.quote_consistency import build_market_data_health
+from src.trading.market.quote_consistency import build_market_data_health, _type_route_records
 
 SCHEMA = "ai_market_snapshot_v1"
 PREFLIGHT_SCHEMA = "ai_input_preflight_v1"
@@ -1286,6 +1286,27 @@ def build_ai_market_snapshot(
     market_health = build_market_data_health(raw_ws, now_ts=now_epoch)
     health_key = f"{suffix or 'KRX'}|{route}"
     activity = market_health["routes"].get(health_key, {})
+    # Freeze the existing route's continuity inputs for diagnosis. These are
+    # local receipts, not proof of exchange silence or transport completeness.
+    route_records = _type_route_records(raw_ws).get(health_key, {})
+    route_records = route_records if isinstance(route_records, dict) else {}
+    quiet_observation = route_records.get("quiet_tape_observation")
+    quiet_observation = quiet_observation if isinstance(quiet_observation, dict) else {}
+    continuity_evidence = {
+        "route_key": health_key,
+        "transport_epoch": raw_ws.get("market_data_transport_epoch"),
+        "quiet_tape_observation": {
+            key: quiet_observation.get(key)
+            for key in ("last_quote", "last_trade", "closed_episodes")
+        },
+        "receipts": {
+            kind: {key: row.get(key) for key in (
+                "item", "market_route", "transport_epoch", "observed_epoch", "route_sequence",
+            )}
+            for kind in ("0B", "0D")
+            if isinstance((row := route_records.get(kind)), dict)
+        },
+    }
     activity_proven = bool(
         activity.get("observation_continuity_proven") is True
         and activity.get("quote_state") == "fresh"
@@ -1915,7 +1936,8 @@ def build_ai_market_snapshot(
         "route_partition": route_partition,
         "required_sources": required_sources,
         "market_data_health": market_health,
-        "trade_activity": {**activity, "canonical_binding_proven": activity_proven},
+        "trade_activity": {**activity, "canonical_binding_proven": activity_proven,
+                           "continuity_evidence": continuity_evidence},
         "realtime_type_provenance": provenance,
         "sources": sources,
         "max_source_skew_ms": max_skew_ms,
