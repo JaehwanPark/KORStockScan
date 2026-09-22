@@ -17,8 +17,8 @@ from src.trading.order import (
 from src.trading.market.entry_adverse_flow import CONTRACT
 
 
-@pytest.fixture
-def setup(tmp_path, monkeypatch):
+@pytest.fixture(params=["native", "integrated"])
+def setup(tmp_path, monkeypatch, request):
     monkeypatch.setenv(
         "KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH", str(tmp_path / "registry.jsonl")
     )
@@ -46,7 +46,7 @@ def setup(tmp_path, monkeypatch):
         route = stock["machine_confirmation_routes"]["SOR"]
         from src.trading.market.micro_confirmation import _live_route_item
 
-        item = _live_route_item(symbol, flags["scope"]["route"])
+        item = _live_route_item(symbol, "SOR" if request.param == "integrated" else flags["scope"]["route"])
         for entry in route["realtime_types"].values():
             entry["item"] = item
         for stream in ("recent_depth", "recent_trades"):

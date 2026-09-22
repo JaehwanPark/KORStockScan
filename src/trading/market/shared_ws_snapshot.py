@@ -8,6 +8,8 @@ import math
 import os
 import re
 import time
+import threading
+import copy
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -44,6 +46,46 @@ def producer_provenance():
             "source_root": str(Path(__file__).resolve().parents[3])}
 
 
+_FRAME_CACHE_LOCK = threading.Lock()
+_FRAME_CACHE = None
+
+
+def _reset_frame_cache_after_fork():
+    global _FRAME_CACHE_LOCK, _FRAME_CACHE
+    _FRAME_CACHE_LOCK = threading.Lock()
+    _FRAME_CACHE = None
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_frame_cache_after_fork)
+
+
+def _frame_generation(st):
+    return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+
+
+def _read_shared_frame(path):
+    """One parsed frame per process and file generation, not a validity cache."""
+    global _FRAME_CACHE
+    with _FRAME_CACHE_LOCK:
+        generation = _frame_generation(path.stat())
+        key = (str(path.absolute()), generation)
+        if _FRAME_CACHE is not None and _FRAME_CACHE[0] == key:
+            return _FRAME_CACHE[1], _FRAME_CACHE[2]
+        with path.open("rb") as handle:
+            opened = _frame_generation(os.fstat(handle.fileno()))
+            raw = handle.read(8 * 1024 * 1024 + 1)
+            after = _frame_generation(os.fstat(handle.fileno()))
+        if len(raw) > 8 * 1024 * 1024:
+            raise ValueError("snapshot_size_exceeded")
+        if generation != opened or opened != after or after != _frame_generation(path.stat()):
+            raise ValueError("snapshot_changed_during_read")
+        frame = json.loads(raw)
+        digest = hashlib.sha256(raw).hexdigest()
+        _FRAME_CACHE = (key, frame, digest)
+        return frame, digest
+
+
 def read_shared_widget_quote(context, *, now_ts, path=None):
     """Read one atomic checkpoint, preserving each original field clock.
 
@@ -67,11 +109,7 @@ def read_shared_widget_quote(context, *, now_ts, path=None):
         item = context.request_code
         if not re.fullmatch(r"[0-9]{6}(?:_AL|_NX)?", item):
             raise ValueError("request_item_invalid")
-        with path.open("rb") as handle:
-            raw = handle.read(8 * 1024 * 1024 + 1)
-        if len(raw) > 8 * 1024 * 1024:
-            raise ValueError("snapshot_size_exceeded")
-        snapshot = json.loads(raw)
+        snapshot, snapshot_digest = _read_shared_frame(path)
         if live_clock:
             # A live multi-symbol cycle may start long before this atomic read.
             # Observe after I/O; never rewrite the producer or field clocks.
@@ -101,7 +139,7 @@ def read_shared_widget_quote(context, *, now_ts, path=None):
                 or not re.fullmatch(r"[0-9a-f]{40}", producer.get("source_commit", ""))
                 or producer.get("process") != process_generation(producer["process"]["pid"])):
             raise ValueError("producer_generation_invalid")
-        result["producer"] = producer
+        result["producer"] = copy.deepcopy(producer)
         registered = producer.get("registered_items")
         if (not isinstance(registered, list)
                 or any(not isinstance(code, str) for code in registered)):
@@ -171,11 +209,11 @@ def read_shared_widget_quote(context, *, now_ts, path=None):
                       provider_trade_clock={k: types["0B"].get(k) for k in
                           ("provider_trade_epoch", "provider_trade_time_precision_ms", "provider_trade_date_basis")},
                       source_sha256=hashlib.sha256(json.dumps(types, sort_keys=True).encode()).hexdigest(),
-                      snapshot_sha256=hashlib.sha256(raw).hexdigest(), snapshot_generated_at=generated)
-        result["widget_quote_fields"] = types["0B"].get("widget_quote_fields", {})
+                      snapshot_sha256=snapshot_digest, snapshot_generated_at=generated)
+        result["widget_quote_fields"] = copy.deepcopy(types["0B"].get("widget_quote_fields", {}))
         selected = next(r for r in stock["machine_confirmation_routes"].values()
                         if r.get("realtime_types", {}).get("0B", {}).get("item") == item)
-        result["recent_trades"] = list(selected.get("recent_trades") or ())[:3]
+        result["recent_trades"] = copy.deepcopy(list(selected.get("recent_trades") or ())[:3])
     except (OSError, ValueError, KeyError, TypeError, IndexError, OverflowError, AttributeError, RecursionError) as exc:
         result["reason"] = str(exc) if isinstance(exc, ValueError) else type(exc).__name__ + ":" + str(exc)
     result["reader_elapsed_ms"] = round((time.monotonic() - started) * 1000, 3)
@@ -184,8 +222,12 @@ def read_shared_widget_quote(context, *, now_ts, path=None):
 
 def validate_widget_ws_receipt(receipt, *, context, now_ts):
     """Recheck original field clocks after slow auxiliary/REST work."""
-    if (receipt.get("status") != "valid_ws_comparison_input"
-            or receipt.get("request_code") != context.request_code
+    if receipt.get("status") != "valid_ws_comparison_input":
+        reason = str(receipt.get("reason") or "source_gap")
+        if not re.fullmatch(r"[A-Za-z0-9_:-]+", reason):
+            reason = "source_gap"
+        raise ValueError("widget_ws_source_unavailable:" + reason)
+    if (receipt.get("request_code") != context.request_code
             or receipt.get("session") != context.name
             or receipt["producer"]["process"] != process_generation(receipt["producer"]["process"]["pid"])):
         raise ValueError("widget_ws_receipt_binding_invalid")
@@ -422,7 +464,23 @@ def _bar_session(now):
     raise ValueError("completed_bar_session_inactive")
 
 
-def read_shared_completed_bars(request_code, *, now, root=None, snapshot_path=None):
+def observed_completed_bar_history_enabled():
+    """Explicit operator-approved row exclusions; unrelated consumers stay strict."""
+    return os.getenv("KORSTOCKSCAN_WS_COMPLETED_BAR_GAP_POLICY", "strict") == "observed_valid_rows"
+
+
+def completed_bar_window_usable(bars):
+    """Policy windows may use validated observed rows without inventing minutes."""
+    observed = bool(bars) and all(getattr(bar, "history_basis", "") == "observed_valid_rows" for bar in bars)
+    return bool(bars) and all(
+        current.timestamp.date() == previous.timestamp.date()
+        and (current.timestamp > previous.timestamp if observed
+             else (current.timestamp - previous.timestamp).total_seconds() == 60)
+        for previous, current in zip(bars, bars[1:])
+    )
+
+
+def read_shared_completed_bars(request_code, *, now, root=None, snapshot_path=None, allow_partial_history=False):
     """Historical bar clocks are causal; no quote-age TTL and no recovery I/O."""
     from src.engine.scalping.micro_reversion.completed_bars import SCHEMA, digest, item_integrity
     if now.tzinfo is None or not re.fullmatch(r"[0-9]{6}_AL", request_code):
@@ -431,9 +489,17 @@ def read_shared_completed_bars(request_code, *, now, root=None, snapshot_path=No
     session = _bar_session(now)
     snapshot = _bounded_json(snapshot_path or SNAPSHOT_PATH, 8 * 1024 * 1024)
     producer = snapshot["shared_transport_producer"]
-    if (not 0 <= now.timestamp() - snapshot["generated_at_epoch"] <= 20
+    try:
+        live_process = process_generation(producer["process"]["pid"])
+    except (OSError, ValueError, KeyError, TypeError, IndexError) as exc:
+        # /proc absence is a dead producer, not a missing native artifact
+        # that authorizes seed/fallback REST in the caller.
+        raise ValueError("completed_bar_live_binding_invalid") from exc
+    snapshot_age = now.timestamp() - snapshot["generated_at_epoch"]
+    if (not math.isfinite(snapshot_age) or snapshot_age < 0
+            or (not allow_partial_history and snapshot_age > 20)
             or producer["connection_available"] is not True
-            or producer["process"] != process_generation(producer["process"]["pid"])
+            or producer["process"] != live_process
             or request_code not in producer["registered_items"]):
         raise ValueError("completed_bar_live_binding_invalid")
     payload = _bounded_json(Path(root or COMPLETED_BARS_ROOT) / now.date().isoformat() / request_code / (session + ".json"))
@@ -453,7 +519,7 @@ def read_shared_completed_bars(request_code, *, now, root=None, snapshot_path=No
             or payload["actual_order_submitted"] is not False
             or payload["runtime_effect"] is not False):
         raise ValueError("completed_bar_source_contract_invalid")
-    rows, previous = [], None
+    rows, previous, excluded, accepted = [], None, [], {}
     for bar in payload["bars"]:
         minute = bar["minute_epoch"]
         stamp = datetime.fromtimestamp(minute, KST)
@@ -462,25 +528,41 @@ def read_shared_completed_bars(request_code, *, now, root=None, snapshot_path=No
             raise ValueError("completed_bar_order_or_session_invalid")
         previous = minute
         if bar["status"] == "gap":
-            rows = []  # A consumer never bridges an unresolved source hole.
+            excluded.append({"minute_epoch": minute, "reason": "source_gap", "issues": bar["issues"]})
+            if not allow_partial_history:
+                rows = []
             continue
         if bar["status"] == "pending":
             continue
-        values = [bar[k] for k in ("open", "high", "low", "close", "volume")]
-        if (bar["status"] != "complete" or bar["issues"] or bar["source_item"] != request_code
-                or not all(type(v) is int and v >= 0 for v in values)
-                or min(values[:4]) <= 0 or bar["high"] < max(values[:4])
-                or bar["low"] > min(values[:4]) or bar["available_at_epoch"] is None
-                or not minute + 60 <= bar["available_at_epoch"] <= now.timestamp()
-                or minute + 61 > payload["watermark_epoch"]
-                or bar["source_time"] != stamp.strftime("%Y%m%d%H%M%S")):
-            raise ValueError("completed_bar_ohlcv_or_clock_invalid")
+        if bar["source_item"] != request_code:
+            raise ValueError("completed_bar_identity_invalid")
+        try:
+            values = [bar[k] for k in ("open", "high", "low", "close", "volume")]
+            invalid = (bar["status"] != "complete" or bar["issues"] or bar["source_item"] != request_code
+                    or type(bar.get("source_epoch")) is not int or bar["source_epoch"] <= 0
+                    or not all(type(v) is int and v >= 0 for v in values)
+                    or min(values[:4]) <= 0 or bar["high"] < max(values[:4])
+                    or bar["low"] > min(values[:4]) or bar["available_at_epoch"] is None
+                    or not minute + 60 <= bar["available_at_epoch"] <= now.timestamp()
+                    or minute + 61 > payload["watermark_epoch"]
+                    or bar["source_time"] != stamp.strftime("%Y%m%d%H%M%S"))
+        except (KeyError, TypeError, ValueError, OverflowError):
+            invalid = True
+        if invalid:
+            if not allow_partial_history:
+                raise ValueError("completed_bar_ohlcv_or_clock_invalid")
+            excluded.append({"minute_epoch": minute, "reason": "completed_bar_ohlcv_or_clock_invalid"})
+            continue
         rows.append({"cntr_tm": bar["source_time"], "open_pric": str(bar["open"]),
                      "high_pric": str(bar["high"]), "low_pric": str(bar["low"]),
                      "cur_prc": str(bar["close"]), "trde_qty": str(bar["volume"])})
+        accepted[bar["source_time"]] = bar
     invalid_from = payload.get("invalid_from_minute")
     if invalid_from is not None:
-        rows = [row for row in rows if datetime.strptime(row["cntr_tm"], "%Y%m%d%H%M%S").replace(tzinfo=KST).timestamp() > invalid_from]
+        rows = [row for row in rows if (
+            datetime.strptime(row["cntr_tm"], "%Y%m%d%H%M%S").replace(tzinfo=KST).timestamp() != invalid_from
+            if allow_partial_history else
+            datetime.strptime(row["cntr_tm"], "%Y%m%d%H%M%S").replace(tzinfo=KST).timestamp() > invalid_from)]
     session_open = {"SOR_PREMARKET": "080000", "SOR_REGULAR": "090000", "SOR_AFTERMARKET": "160000"}[session]
     coverage = payload.get("session_coverage")
     covered = False
@@ -507,17 +589,18 @@ def read_shared_completed_bars(request_code, *, now, root=None, snapshot_path=No
         covered = True
     # A quiet opening minute need not contain a candle. Its absence alone is
     # not a gap when the first print's cumulative boundary is proven.
-    complete_session_prefix = bool(rows) and covered and not payload.get("history_truncated", False) and not any(b["status"] == "gap" for b in payload["bars"]) and invalid_from is None
+    complete_session_prefix = bool(rows) and covered and not excluded and not payload.get("history_truncated", False) and not any(b["status"] == "gap" for b in payload["bars"]) and invalid_from is None
+    accepted_bars = [accepted[row["cntr_tm"]] for row in rows]
     receipt = {"source": "kiwoom_ws_AL_completed_1m", "request_code": request_code,
                "adjustment": payload["adjustment"], "source_epoch": payload["source_epoch"],
                "complete_session_prefix": complete_session_prefix,
                "session_coverage": coverage,
                "transport_epoch": producer["transport_epoch"], "producer": payload["producer"],
                "revision": payload["revision"], "content_sha256": expected,
-               "available_at_epoch": max((b["available_at_epoch"] or 0 for b in payload["bars"]), default=0),
+               "available_at_epoch": max((b["available_at_epoch"] for b in accepted_bars), default=0),
                "generated_at_epoch": payload["generated_at_epoch"], "session": session,
                "cursor": payload["cursor"], "durable_cursor": payload.get("durable_cursor"),
-               "historical_source_epochs": sorted({b["source_epoch"] for b in payload["bars"] if b["status"] == "complete"}),
+               "historical_source_epochs": sorted({b["source_epoch"] for b in accepted_bars}),
                "rest_request_count": 0,
                "missing_range": next((
                    {"from_minute": b["minute_epoch"], "to_minute": b["minute_epoch"] + 60,
@@ -526,6 +609,14 @@ def read_shared_completed_bars(request_code, *, now, root=None, snapshot_path=No
                    and any(issue != "startup_or_reconnect_partial_minute" for issue in b["issues"])
                ), "initial_session_history"),
                "empty_minute_policy": payload["empty_minute_policy"]}
+    if allow_partial_history:
+        for row in rows:
+            row["_history_basis"] = "observed_valid_rows"
+        receipt.update(history_basis="observed_valid_rows", excluded_bars=excluded,
+                       invalid_minute_excluded=invalid_from,
+                       observed_from=rows[0]["cntr_tm"] if rows else None,
+                       observed_to=rows[-1]["cntr_tm"] if rows else None,
+                       full_session_claimed=False)
     return {"stk_min_pole_chart_qry": rows, "_completed_bar_source": receipt}
 
 
@@ -541,10 +632,11 @@ def selected_completed_bar_payload(request_code, *, now, consumer="widget", seed
             raise ValueError("completed_bar_history_scope_invalid")
         if type(minimum_bars) is not int or minimum_bars < 1:
             raise ValueError("completed_bar_history_floor_invalid")
-        result = read_shared_completed_bars(item, now=now)
+        partial = observed_completed_bar_history_enabled()
+        result = read_shared_completed_bars(item, now=now, **({"allow_partial_history": True} if partial else {}))
         selection.update(available_bars=len(result["stk_min_pole_chart_qry"]),
                          source_content_sha256=result["_completed_bar_source"].get("content_sha256"))
-        if history_scope == "session" and not result["_completed_bar_source"]["complete_session_prefix"]:
+        if history_scope == "session" and not partial and not result["_completed_bar_source"]["complete_session_prefix"]:
             if mode == "ws_when_ready":
                 selection.update(status="rest_retained", reason="session_anchor_history_incomplete")
                 return None  # Retain the existing homogeneous REST/cache path.
@@ -554,7 +646,7 @@ def selected_completed_bar_payload(request_code, *, now, consumer="widget", seed
             seed["_completed_bar_source"]["ws_selection_blocker"] = "session_anchor_history_incomplete"
             return seed
         if len(result["stk_min_pole_chart_qry"]) >= minimum_bars:
-            selection.update(status="ws_selected", reason="required_native_history_ready")
+            selection.update(status="ws_selected", reason="observed_valid_history_ready" if partial else "required_native_history_ready")
             return result
         if mode == "ws_when_ready":
             selection.update(status="rest_retained", reason="completed_bar_history_insufficient")

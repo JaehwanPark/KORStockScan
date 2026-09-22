@@ -798,3 +798,55 @@ def test_extended_ws_missing_input_never_reads_rest_and_keeps_failed_census(monk
     assert row["entry_event"] is None and row["exit_event"] is None
     bucket = next(iter(row["market_data_transport"]["census"]["windows"].values()))
     assert bucket["expected_comparisons"] == 1 and bucket["ws_selection_gap"] == 1
+
+
+def test_observed_setup_accepts_excluded_minutes_but_trend_keeps_time_meaning():
+    from src.engine.monitoring.samsung_widget_advisory import ObservedMinuteBar
+    from src.engine.monitoring.widget_symbol_runtime_collector import _setup_feature, _trend_not_down
+    rows=[ObservedMinuteBar(f'2026092118{m:02d}00',10000,10010,9990,10000,100) for m in [0,1,5,6]]
+    assert _setup_feature(rows,3,4,anchor_mode='session',minimum_history_bars=3) is not None
+    assert _setup_feature([MinuteBar(r.source_time,r.open,r.high,r.low,r.close,r.volume) for r in rows],3,4,anchor_mode='session',minimum_history_bars=3) is None
+    assert not _trend_not_down(rows,3,3)
+    assert _setup_feature(rows,1,4,minimum_history_bars=3) is None
+
+
+def test_observed_quiet_history_retains_bbo_guard():
+    from src.engine.monitoring.samsung_widget_advisory import ObservedMinuteBar
+    now=datetime(2026,9,21,18,30,tzinfo=KST)
+    latest=ObservedMinuteBar('20260921181000',10000,10010,9990,10000,100)
+    assert _source_quality(latest=latest,bbo={'best_bid':9990,'best_ask':10000,'age_sec':0},observed_at=now)==('PASS',())
+    status,reasons=_source_quality(latest=latest,bbo={'best_bid':9990,'best_ask':10000,'age_sec':40},observed_at=now)
+    assert status=='BLOCKED' and reasons==('bbo_stale',)
+
+
+def test_observed_adapter_uses_policy_minimum_plus_reclaim(monkeypatch,tmp_path):
+    from src.engine.monitoring.samsung_widget_advisory import KiwoomReadOnlyClient
+    monkeypatch.setenv('KORSTOCKSCAN_WS_COMPLETED_BAR_GAP_POLICY','observed_valid_rows')
+    collector=WidgetSymbolRuntimeCollector(observation_dir=tmp_path)
+    collector._policies={'006800':{'signal_policy':{'minimum_history_bars':15,'lookback_bars':30,'setup_valid_bars':20,'anchor_mode':'session'}}}
+    client=KiwoomReadOnlyClient('TEST')
+    monkeypatch.setattr(client,'post',lambda *a,**kw:{'stk_min_pole_chart_qry':[]})
+    collector._bars(client=client,symbol='006800',observed_at=datetime(2026,9,21,18,30,tzinfo=KST),context=SimpleNamespace(minimum_bars=5,request_code='006800_AL',start=datetime.min.time(),end=None))
+    assert client.completed_bar_minimum_bars==16
+
+
+@pytest.mark.parametrize("protected", ["execution", "active_episode", "none"])
+def test_research_priority_pauses_only_idle_observation(tmp_path, monkeypatch, protected):
+    from src.engine.monitoring import widget_symbol_runtime_collector as module
+    monkeypatch.setenv("KORSTOCKSCAN_WIDGET_RESEARCH_PRIORITY_SYMBOLS", "006800,010140,080220")
+    collector = WidgetSymbolRuntimeCollector()
+    now = datetime(2026, 9, 21, 18, 0, tzinfo=KST)
+    collector._policies = {"123456": {"policy_id": "P", "authority": "prospective_exact_observation_only"}}
+    collector._contracts = {"123456": SimpleNamespace(DEFAULT_SNAPSHOT_PATH=tmp_path / "123456.json")}
+    collector._episodes = {"123456": EpisodeState(trade_date="2026-09-21", active=protected == "active_episode")}
+    if protected == "execution": collector._execution_symbols = {"123456"}
+    monkeypatch.setattr(collector, "_activate_date", lambda now: None)
+    monkeypatch.setattr(collector, "_client", lambda: object())
+    calls = []
+    monkeypatch.setattr(collector, "_collect_symbol", lambda **kw: calls.append(kw) or {"status": "ok"})
+    collector.collect_once(now)
+    collector.collect_once(now)
+    assert len(calls) == (0 if protected == "none" else 2)
+    if protected == "none":
+        import json
+        assert json.loads((tmp_path / "123456.json").read_text())["status"] == "observation_paused"

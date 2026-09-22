@@ -778,3 +778,15 @@ def test_research_ws_revalidates_original_clocks_after_rest_bars(tmp_path, monke
     assert row["status"] == ("PASS" if delay == 3 else "SOURCE_QUALITY_BLOCKED")
     assert row["quote_received_at_kst"] == (read_at-timedelta(seconds=.2)).isoformat()
     assert ("ws_receive_receipt_invalid_or_stale" in row["source_quality_issues"]) == (delay == 25)
+
+
+def test_priority_config_limits_research_universe_without_changing_source(monkeypatch):
+    from src.engine.monitoring import widget_research_watch_collector as collector
+    from src.engine.monitoring import widget_symbol_signal_policy_research as policy
+    monkeypatch.setenv("KORSTOCKSCAN_WIDGET_RESEARCH_PRIORITY_SYMBOLS", "006800,010140,080220")
+    universe = {code: code for code in ["006800", "010140", "080220", "123456"]}
+    monkeypatch.setattr(policy, "load_symbol_universe", lambda **kw: (universe, {s: {} for s in universe}))
+    from datetime import date
+    result = collector.research_collection_config({"symbols": []}, observed_date=date(2026, 9, 21))
+    assert {row["stock_code"] for row in result["symbols"]} == {"006800", "010140", "080220"}
+    assert len(universe) == 4

@@ -260,6 +260,17 @@ def load_config(
     }
 
 
+def observation_priority_symbols() -> set[str] | None:
+    """Operator scope for research collection only; absence preserves the catalog."""
+    raw = os.getenv("KORSTOCKSCAN_WIDGET_RESEARCH_PRIORITY_SYMBOLS")
+    if raw is None:
+        return None
+    codes = [code.strip() for code in raw.split(",")]
+    if any(not re.fullmatch(r"[0-9]{6}", code) for code in codes) or len(codes) != len(set(codes)):
+        raise ValueError("widget_research_priority_scope_invalid")
+    return set(codes)
+
+
 def research_collection_config(
     config: dict[str, Any],
     *,
@@ -273,6 +284,7 @@ def research_collection_config(
     universe, origins = load_symbol_universe(
         observed_date=observed_date, config_path=config_path
     )
+    priority = observation_priority_symbols()
     enrolled = {row["stock_code"]: row for row in config["symbols"]}
     scope_hash = hashlib.sha256(
         json.dumps(
@@ -292,6 +304,7 @@ def research_collection_config(
                 "universe_sha256": scope_hash,
             }
             for symbol, name in sorted(universe.items())
+            if priority is None or symbol in priority
         ],
     }
 
@@ -970,7 +983,8 @@ def main(argv: list[str] | None = None) -> int:
 
         stop = threading.Event()
         writer = SharedResearchFactWriter(
-            row["stock_code"] for row in config["symbols"]
+            (row["stock_code"] for row in config["symbols"]),
+            widget_symbol_scope=observation_priority_symbols(),
         )
         thread = threading.Thread(
             target=writer.run, args=(stop,), name="research-shared-facts", daemon=True

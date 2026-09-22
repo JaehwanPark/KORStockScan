@@ -3934,3 +3934,16 @@ def test_bbo_response_identity_conflict_survives_consume_recalculation(response_
     assert "bbo_receive_receipt_invalid_or_stale" in result["issues"]
     assert bbo["market_data_health"]["rest_input"]["receipt_binding_conflict"]
     assert bbo["response_item_raw"] == response_item
+
+
+def test_observed_bar_parser_does_not_invent_session_open():
+    from src.engine.monitoring.samsung_widget_advisory import completed_session_bars, observed_bar_history, _session_anchor
+    from datetime import datetime, time
+    from zoneinfo import ZoneInfo
+    now=datetime(2026,9,21,18,30,tzinfo=ZoneInfo('Asia/Seoul'))
+    rows=[{'cntr_tm':'20260921181000','open_pric':'10000','high_pric':'10010','low_pric':'9990','cur_prc':'10000','trde_qty':'100','_history_basis':'observed_valid_rows'}]
+    bars=completed_session_bars(rows,observed_at=now,session_start=time(16))
+    assert observed_bar_history(bars)
+    anchor=_session_anchor(bars,now)
+    assert anchor['open'] is None and anchor['observed_open']==10000
+    assert anchor['history_basis']=='observed_valid_rows'

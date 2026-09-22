@@ -17,7 +17,7 @@ from src.trading.market.entry_adverse_flow import (
     MAX_LATE_MS,
     DEADLINE_MS,
     MAXIMUM_SOURCE_AGE_MS,
-    evaluate_snapshot,
+    evaluate_order_snapshot as evaluate_snapshot,
 )
 from src.trading.market.micro_confirmation import load_live_dynamic_confirmation_source
 

@@ -138,6 +138,14 @@ def _bars_are_contiguous(rows: list[MinuteBar]) -> bool:
     )
 
 
+def _setup_history_usable(rows: list[MinuteBar]) -> bool:
+    from src.engine.monitoring.samsung_widget_advisory import observed_bar_history
+    if not observed_bar_history(rows):
+        return _bars_are_contiguous(rows)
+    # The observed range has no claim to a complete minute/session prefix.
+    return all(a.source_time < b.source_time for a, b in zip(rows, rows[1:]))
+
+
 def _trend_not_down(rows: list[MinuteBar], end_index: int, horizon: int) -> bool:
     if end_index < horizon:
         return False
@@ -172,7 +180,7 @@ def _setup_feature(
         window = rows[max(0, index - lookback + 1) : index + 1]
     else:
         return None
-    if not _bars_are_contiguous(window):
+    if not _setup_history_usable(window):
         return None
     high = max(row.high for row in window)
     low = min(row.low for row in window)
@@ -244,7 +252,12 @@ def _source_quality(
             reasons.append("completed_1m_timestamp_invalid")
         else:
             age_sec = (observed_at - latest_at).total_seconds()
-            if not 0 <= age_sec <= 120:
+            quiet_observed_history = (
+                getattr(latest, "history_basis", "") == "observed_valid_rows"
+                and ("08:00" <= observed_at.strftime("%H:%M") < "08:50"
+                     or "16:00" <= observed_at.strftime("%H:%M") < "20:00")
+            )
+            if age_sec < 0 or (age_sec > 120 and not quiet_observed_history):
                 reasons.append("completed_1m_stale")
     bid = _positive_int(bbo.get("best_bid"))
     ask = _positive_int(bbo.get("best_ask"))
@@ -349,6 +362,10 @@ class WidgetSymbolRuntimeCollector:
         self.request_budget = ReadOnlyRequestBudget(
             max_requests_per_minute=REQUESTS_PER_MINUTE
         )
+        from src.engine.monitoring.widget_research_watch_collector import observation_priority_symbols
+        self._observation_priority = observation_priority_symbols()
+        self._paused_observations = {}
+        self._execution_symbols = set()
         self._active_date = ""
         self._policies: dict[str, dict[str, Any]] = {}
         self._contracts: dict[str, WidgetSymbolRuntimeContract] = {}
@@ -385,10 +402,14 @@ class WidgetSymbolRuntimeCollector:
         self._policies = self.policy_loader.resolve_observation_all(
             observed_date=observed_at.date()
         )
+        if self._observation_priority is not None:
+            self._execution_symbols = set(self.policy_loader.resolve_all(observed_date=observed_at.date()))
+        self._paused_observations.clear()
         self._raw_only_symbols = {
             symbol: name
             for symbol, name in self._research_universe.items()
             if symbol not in self._policies
+            and (self._observation_priority is None or symbol in self._observation_priority)
         }
         self._contracts = {
             symbol: CONTRACTS.get(symbol)
@@ -458,10 +479,12 @@ class WidgetSymbolRuntimeCollector:
         if isinstance(client, KiwoomReadOnlyClient):
             signal = (self._policies.get(symbol) or {}).get("signal_policy") or {}
             client.completed_bar_history_scope = signal.get("anchor_mode", "session")
-            client.completed_bar_minimum_bars = max(
-                int(signal.get("minimum_history_bars", context.minimum_bars)),
-                int(signal.get("lookback_bars", context.minimum_bars)) + int(signal.get("setup_valid_bars", 0)),
-            )
+            from src.trading.market.shared_ws_snapshot import observed_completed_bar_history_enabled
+            minimum = int(signal.get("minimum_history_bars", context.minimum_bars))
+            client.completed_bar_minimum_bars = (
+                minimum + 1 if observed_completed_bar_history_enabled() else max(
+                    minimum, int(signal.get("lookback_bars", context.minimum_bars)) + int(signal.get("setup_valid_bars", 0)))
+            )  # A setup needs its policy minimum plus a subsequent reclaim bar.
         minute_key = observed_at.strftime("%Y%m%d%H%M")
         request_code = str(context.request_code)
         cache_key = f"{symbol}:{request_code}"
@@ -658,6 +681,10 @@ class WidgetSymbolRuntimeCollector:
         diagnostic.update(
             {
                 "anchor_mode": anchor_mode,
+                "anchor_scope": (
+                    "observed_valid_rows" if bars and getattr(bars[-1], "history_basis", "") == "observed_valid_rows"
+                    else anchor_mode
+                ),
                 "lookback_bars": lookback,
                 "minimum_history_bars": minimum_history,
                 "max_reclaim_chase_ticks": max_reclaim_chase_ticks,
@@ -675,7 +702,7 @@ class WidgetSymbolRuntimeCollector:
                 ) :
             ]
         )
-        if not _bars_are_contiguous(continuity_window):
+        if not _setup_history_usable(continuity_window):
             return blocked("completed_bar_continuity_gap")
         latest = bars[latest_index]
         if not (
@@ -1499,6 +1526,23 @@ class WidgetSymbolRuntimeCollector:
         client = self._client()
         failures: dict[str, str] = {}
         for symbol, policy in self._ordered_policy_items():
+            episode = self._episodes.get(symbol)
+            if (self._observation_priority is not None
+                    and symbol not in self._observation_priority
+                    and symbol not in self._execution_symbols
+                    and policy.get("authority") == "prospective_exact_observation_only"
+                    and not (episode and episode.active)):
+                if symbol not in self._paused_observations:
+                    payload = dict(status="observation_paused", symbol=symbol,
+                                   observed_at_kst=now.isoformat(), policy_id=policy["policy_id"],
+                                   reason="operator_research_priority_scope",
+                                   runtime_effect=False, actual_order_submitted=False,
+                                   broker_order_forbidden=True, entry_event=None, exit_event=None,
+                                   episode=episode.as_dict() if episode else {})
+                    _atomic_write(self._contracts[symbol].DEFAULT_SNAPSHOT_PATH, payload)
+                    self._paused_observations[symbol] = payload
+                results[symbol] = self._paused_observations[symbol]
+                continue
             try:
                 results[symbol] = self._collect_symbol(
                     symbol=symbol,

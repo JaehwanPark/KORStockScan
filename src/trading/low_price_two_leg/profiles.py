@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta
 
+from src.trading.market.shared_ws_snapshot import completed_bar_window_usable
 from src.trading.order.episode_quantity import EPISODE_TOTAL_QUANTITY
 from src.trading.order.tick_utils import clamp_price_to_tick, move_price_by_ticks
 
@@ -209,6 +210,7 @@ class MinuteBar:
     high_price: int
     low_price: int
     close_price: int
+    history_basis: str = ""
 
 
 @dataclass(frozen=True)
@@ -295,10 +297,7 @@ class RegularTwoLegPolicy:
         if not self.scan_start <= candidate.timestamp.time() <= self.scan_last_bar:
             return None
         window = bars[-self.lookback_bars :]
-        if any(
-            current.timestamp - previous.timestamp != timedelta(minutes=1)
-            for previous, current in zip(window, window[1:])
-        ):
+        if not completed_bar_window_usable(window):
             return None
         rolling_high = max(bar.high_price for bar in window)
         rolling_low = min(bar.low_price for bar in window)

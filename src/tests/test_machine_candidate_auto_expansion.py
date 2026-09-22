@@ -284,3 +284,81 @@ def test_original_policy_source_survives_report_refresh_only_with_exact_snapshot
     snapshot.write_text('{}')
     with pytest.raises(ValueError, match='source_hash_mismatch'):
         expansion.load_policy(date(2026,9,16), policy_dir=policies)
+
+
+def test_source_projection_reuses_inventory_but_rechecks_source_bytes(tmp_path, monkeypatch):
+    from src.engine.monitoring import low_price_two_leg_expanded_candidate_research as producer
+    source = tmp_path / "source.json"
+    report = _report()
+    source.write_text(json.dumps(report))
+    payload = {"source_report_sha256": expansion._file_sha256(source), "profiles": {}}
+    calls = []
+    original = producer.read_report
+    monkeypatch.setattr(producer, "read_report", lambda path: (calls.append(path), original(path))[1])
+    expansion._SOURCE_SUMMARIES.clear()
+    first = expansion._policy_source_summary(source, payload)
+    first["target_date"] = "mutated"
+    assert expansion._policy_source_summary(source, payload)["target_date"] == report["target_date"]
+    assert len(calls) == 1
+    assert "diagnostic_population" not in expansion._policy_source_summary(source, payload)
+    source.write_text(json.dumps({**report, "target_date": "2026-09-14"}))
+    with pytest.raises(ValueError, match="hash_mismatch"):
+        expansion._policy_source_summary(source, payload)
+
+
+def test_source_projection_rejects_symlink_even_on_cache_hit(tmp_path):
+    source = tmp_path / "source.json"
+    source.write_text(json.dumps(_report()))
+    payload = {"source_report_sha256": expansion._file_sha256(source), "profiles": {}}
+    expansion._policy_source_summary(source, payload)
+    link = tmp_path / "link.json"
+    link.symlink_to(source)
+    with pytest.raises(ValueError, match="symlink"):
+        expansion._policy_source_summary(link, payload)
+
+
+def test_source_projection_still_validates_nested_recommendations(tmp_path):
+    source = tmp_path / "source.json"
+    report = _report()
+    report["nested"] = {"recommendation_id": "invalid"}
+    source.write_text(json.dumps(report))
+    payload = {"source_report_sha256": expansion._file_sha256(source), "profiles": {}}
+    with pytest.raises(ValueError, match="inventory_contract_invalid"):
+        expansion._policy_source_summary(source, payload)
+
+
+def test_source_projection_keeps_selected_reconstruction_inputs(tmp_path):
+    source = tmp_path / "source.json"
+    report = _report()
+    row = report["recommendations"][0]
+    report["profiles"] = {row["profile_id"]: {"selected": {"full": {"episodes": [1]}}},
+                          "unselected": {"large": "population"}}
+    source.write_text(json.dumps(report))
+    payload = {"source_report_sha256": expansion._file_sha256(source),
+               "profiles": {"test": {"source_recommendation_id": row["recommendation_id"]}}}
+    result = expansion._policy_source_summary(source, payload)
+    assert result["profiles"] == {row["profile_id"]: report["profiles"][row["profile_id"]]}
+    assert result["recommendations"] == report["recommendations"]
+
+
+def test_cached_source_does_not_bypass_current_publication(tmp_path, monkeypatch):
+    from src.engine.monitoring import research_closed_loop as loop
+    day = date(2026, 9, 21)
+    source = tmp_path / "source.json"
+    source.write_text(json.dumps({"schema": "test", "target_date": "2026-09-18", "recommendations": []}))
+    payload = {"schema": expansion.CLOSED_LOOP_SCHEMA, "profiles": {},
+               "source_date": "2026-09-18", "publication_date": "2026-09-20",
+               "source_report": str(source), "source_report_sha256": expansion._file_sha256(source)}
+    expansion.policy_path(day, policy_dir=tmp_path).write_text(json.dumps(payload))
+    monkeypatch.setattr(expansion, "validate_policy", lambda *a, **kw: None)
+    monkeypatch.setattr(expansion, "_previous_profiles", lambda *a, **kw: {})
+    monkeypatch.setattr(expansion, "_next_trading_date", lambda day: date(2026, 9, 21))
+    calls = []
+    def verify(*args, **kwargs):
+        calls.append(1)
+        if len(calls) > 1: raise ValueError("research_publication_not_committed")
+    monkeypatch.setattr(loop, "verify_publication", verify)
+    assert expansion.load_policy(day, policy_dir=tmp_path) == payload
+    with pytest.raises(ValueError, match="publication_not_committed"):
+        expansion.load_policy(day, policy_dir=tmp_path)
+    assert len(calls) == 2

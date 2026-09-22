@@ -18,6 +18,48 @@ DEADLINE_MS = 6500
 MAXIMUM_SOURCE_AGE_MS = 1500
 
 
+def evaluate_order_snapshot(*, snapshot, symbol, route, cutoff_ms,
+                            require_latest=False, market_session=""):
+    """Use integrated flow when received, retaining the broker order route.
+
+    An incomplete, ambiguous or stale integrated source must fail its normal
+    validation, never fall back to another tape. Native-only subscriptions
+    retain their existing exact-route behavior. Main AI payloads use their
+    separately bound market-data route and do not call this adapter.
+    """
+    market_route = route
+    try:
+        if not _live_route_item(symbol, route):
+            raise ValueError("order_route_invalid")
+        routes = snapshot["stocks"][symbol]["machine_confirmation_routes"]
+        integrated = [
+            source for source in routes.values()
+            if any(source.get("realtime_types", {}).get(kind, {}).get("item")
+                   == f"{symbol}_AL" for kind in ("0B", "0D"))
+        ]
+        if integrated:
+            market_route = "SOR"
+            if len(integrated) != 1:
+                raise ValueError("exact_route_missing_or_duplicate")
+            for source in integrated:
+                for receipt in source.get("realtime_types", {}).values():
+                    if (receipt.get("market_route") not in (None, "", "krx_nxt_integrated")
+                            or receipt.get("effective_venue") not in
+                            (None, "", "UNKNOWN", "KRX_NXT_INTEGRATED")):
+                        raise ValueError("integrated_source_route_conflict")
+    except (KeyError, TypeError, AttributeError, ValueError) as exc:
+        return dict(contract=CONTRACT, action="SOURCE_UNAVAILABLE",
+                    cutoff_ms=cutoff_ms, source_quality_status="source_gap",
+                    reason=str(exc), order_route=route,
+                    market_data_route=market_route)
+    result = evaluate_snapshot(
+        snapshot=snapshot, symbol=symbol, route=market_route, cutoff_ms=cutoff_ms,
+        require_latest=require_latest, market_session=market_session,
+    )
+    result.update(order_route=route, market_data_route=market_route)
+    return result
+
+
 
 def evaluate_machine_entry_payload(*, snapshot, payload, cutoff_ms):
     """Bind the market-data item to the exact AI snapshot, not a scope alias."""

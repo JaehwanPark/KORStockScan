@@ -1610,7 +1610,8 @@ def test_native_capacity_rejects_wrong_clock_before_account_or_token_helpers(tmp
     assert not (tmp_path/'native_capacity').exists()
 
 
-def test_registered_actual_episode_seed_consumes_native_books_without_discovery_admission(tmp_path):
+@pytest.mark.parametrize("scope", [None, {"006800"}])
+def test_registered_actual_episode_seed_consumes_native_books_without_discovery_admission(tmp_path, scope):
     from src.tests.test_dynamic_micro_confirmation import _live_snapshot
     from src.trading.low_price_two_leg.profiles import get_profile
     profile = get_profile("kakao_late_morning", target_date=DAY)
@@ -1625,7 +1626,9 @@ def test_registered_actual_episode_seed_consumes_native_books_without_discovery_
     native_snapshot["stocks"][profile.symbol] = native_snapshot["stocks"].pop("005930")
     loop.atomic_write(snapshot, native_snapshot)
     assert not loop.admission_symbols(now.date(), owner="episode", directory=tmp_path)
-    writer = facts.SharedResearchFactWriter([], directory=tmp_path, snapshot_path=snapshot)
+    writer = facts.SharedResearchFactWriter(
+        [], directory=tmp_path, snapshot_path=snapshot, widget_symbol_scope=scope,
+    )
     receipt = writer.collect_once(now)
     assert receipt["remote_requests"] == 0
     assert writer.revisions[profile.symbol] == [revision]
@@ -1727,3 +1730,39 @@ def test_frozen_calendar_reuse_returns_independent_lists(monkeypatch):
     assert len(calls) == count
     monkeypatch.setattr(loop, "is_krx_trading_day", lambda day: True)
     assert loop.trading_dates_after(DAY, 4) != expected
+
+
+@pytest.mark.parametrize("scope", [None, set(), {"006800"}, {"005930"}])
+@pytest.mark.parametrize("episode_admitted", [False, True])
+def test_priority_scope_cannot_reenter_via_widget_admission_or_episode_union(
+    tmp_path, monkeypatch, scope, episode_admitted,
+):
+    from src.tests.test_dynamic_micro_confirmation import _live_snapshot
+    common = dict(symbol="005930", parameters={}, source_date=DAY,
+                  source_sha256="a" * 64, cost_sha256="b" * 64,
+                  frozen_at=datetime.fromisoformat(f"{DAY}T20:10:00+09:00"))
+    widget = loop.candidate_revision(owner="widget", lane_id="widget", calibration_days=10, **common)
+    episode = loop.candidate_revision(owner="episode", lane_id="non_native_test", calibration_days=30, **common)
+    for revision in [widget, episode]:
+        loop.freeze_candidate(revision, directory=tmp_path)
+    now = datetime.fromisoformat(widget["calibration_dates"][0] + "T09:05:00+09:00")
+    source = tmp_path / "ws.json"
+    loop.atomic_write(source, _live_snapshot(now, item="005930"))
+    monkeypatch.setattr(
+        loop, "admission_symbols",
+        lambda *args, **kw: {"005930"} if kw["owner"] == "widget" or episode_admitted else set(),
+    )
+    writer = facts.SharedResearchFactWriter(
+        ["006800"], directory=tmp_path, snapshot_path=source,
+        widget_symbol_scope=scope,
+    )
+    receipt = writer.collect_once(now)
+    widget_allowed = scope is None or "005930" in scope
+    expected = ([widget] if widget_allowed else []) + ([episode] if widget_allowed or episode_admitted else [])
+    assert {row["revision_sha256"] for row in writer.revisions.get("005930", [])} == {row["revision_sha256"] for row in expected}
+    assert receipt["written_facts"] == (2 if expected else 0)
+    assert receipt["widget_symbol_scope"] == (None if scope is None else sorted(scope))
+    assert receipt["remote_requests"] == 0
+    from datetime import timedelta
+    writer.collect_once(now + timedelta(seconds=31))
+    assert {row["revision_sha256"] for row in writer.revisions.get("005930", [])} == {row["revision_sha256"] for row in expected}

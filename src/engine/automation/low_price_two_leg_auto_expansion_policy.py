@@ -9,6 +9,8 @@ import os
 import re
 import shutil
 import tempfile
+from functools import lru_cache
+from collections import OrderedDict
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -42,9 +44,67 @@ def _digest(value: Any) -> str:
     ).hexdigest()
 
 
+def _file_generation(path: Path) -> tuple:
+    st = path.stat()
+    return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+
+
+@lru_cache(maxsize=128)
+def _generation_sha256(path: str, generation: tuple) -> str:
+    source_path = Path(path)
+    with source_path.open("rb") as source:
+        digest = hashlib.file_digest(source, "sha256").hexdigest()
+    if _file_generation(source_path) != generation:
+        raise ValueError("episode_policy_source_changed_during_hash")
+    return digest
+
+
 def _file_sha256(path: Path) -> str:
-    with path.open("rb") as source:
-        return hashlib.file_digest(source, "sha256").hexdigest()
+    return _generation_sha256(str(path.absolute()), _file_generation(path))
+
+
+_SOURCE_SUMMARIES = OrderedDict()
+
+
+def _policy_source_summary(source: Path, payload: dict) -> dict:
+    """Cache only source-derived inputs; re-run current authority checks below.
+
+    Never retain the full research population across recursive policy ancestry.
+    The bounded cache owns no publication, registry or execution authority.
+    """
+    if source.is_symlink() or source.parent.is_symlink():
+        raise ValueError("episode_policy_source_symlink")
+    expected = payload["source_report_sha256"]
+    identities = tuple(sorted(str(row.get("source_recommendation_id") or "")
+                              for row in payload["profiles"].values()))
+    key = (expected, identities)
+    if _file_sha256(source) != expected:
+        raise ValueError("episode_auto_expansion_source_hash_mismatch")
+    cached = _SOURCE_SUMMARIES.get(key)
+    if cached is not None:
+        _SOURCE_SUMMARIES.move_to_end(key)
+        return json.loads(cached)
+    from src.engine.monitoring.low_price_two_leg_expanded_candidate_research import read_report
+    report = read_report(source)
+    recommendation_inventory(report)
+    recommendations = [row for row in report.get("recommendations", [])
+                       if row.get("recommendation_id") in identities]
+    selected = {row.get("profile_id") for row in recommendations}
+    summary = {"schema": report.get("schema"), "target_date": report.get("target_date"),
+               "recommendations": recommendations,
+               "profiles": {key: value for key, value in (report.get("profiles") or {}).items()
+                            if key in selected},
+               "joint_allocation_gate": report.get("joint_allocation_gate"),
+               "mature_nonperforming_profile_ids": sorted(_mature_nonperforming_profile_ids(report))}
+    if _file_sha256(source) != expected:
+        raise ValueError("episode_auto_expansion_source_hash_mismatch")
+    raw = json.dumps(summary, allow_nan=False)
+    # At most 8 MiB serialized source projections, no full report cache.
+    if len(raw.encode("utf-8")) <= 1024 * 1024:
+        while _SOURCE_SUMMARIES and sum(len(v.encode("utf-8")) for v in _SOURCE_SUMMARIES.values()) + len(raw.encode("utf-8")) > 8 * 1024 * 1024:
+            _SOURCE_SUMMARIES.popitem(last=False)
+        _SOURCE_SUMMARIES[key] = raw
+    return summary
 
 
 def _next_trading_date(source_date: date) -> date:
@@ -476,21 +536,17 @@ def load_policy(day: date, *, policy_dir: Path = POLICY_DIR) -> dict[str, Any]:
     if payload.get("schema") == CLOSED_LOOP_SCHEMA:
         from src.engine.monitoring import research_closed_loop as loop
 
-        from src.engine.monitoring.low_price_two_leg_expanded_candidate_research import (
-            read_report,
-        )
-
-        report = read_report(source)
+        # Resolve ancestors before allocating this day's research population.
+        previous = _previous_profiles(day, policy_dir=policy_dir)
+        report = _policy_source_summary(source, payload)
         source_date = date.fromisoformat(payload["source_date"])
         if (
             report.get("target_date") != str(source_date)
             or _next_trading_date(date.fromisoformat(payload.get("publication_date") or source_date.isoformat())) != day
         ):
             raise ValueError("episode_policy_source_date_invalid")
-        recommendation_inventory(report)
         # The immutable source report and native publisher manifest bind the
         # gate; historical candidates are checked against their registry archive.
-        previous = _previous_profiles(day, policy_dir=policy_dir)
         for profile_id, row in payload["profiles"].items():
             recommendations = [
                 item
@@ -544,7 +600,7 @@ def load_policy(day: date, *, policy_dir: Path = POLICY_DIR) -> dict[str, Any]:
                 inherited = dict(row)
                 if row.get("entry_runtime_eligible") is False:
                     if profile_id not in set(
-                        _mature_nonperforming_profile_ids(report)
+                        report["mature_nonperforming_profile_ids"]
                     ) | set(payload.get("superseded_by_static_profile_ids") or []):
                         raise ValueError("episode_retirement_not_declared")
                     inherited.pop("entry_runtime_eligible", None)
