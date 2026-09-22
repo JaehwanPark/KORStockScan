@@ -853,3 +853,16 @@ def test_machine_conversion_promotion_preserves_existing_entries(monkeypatch):
     candidate['evidence']['train']['action_transition_counts']['ENTER_NOW->ENTER_NOW']=15
     candidate['evidence_sha256']=strategy.digest(candidate['evidence'])
     assert not strategy.promotion_errors(candidate,parent,scope)
+
+
+def test_preservation_rule_does_not_invalidate_already_published_legacy_policy(monkeypatch):
+    from src.engine.scalping import ai_action_outcome_calibration as c
+    one_research_candidate(monkeypatch)
+    parent=evidence.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1; scope=('KRX','KRX_REGULAR')
+    result=c.build_main_strategy_refinement([machine_cost_row()],parent=parent,scope=scope,source_contract={},machine_policy_only=True)
+    candidate=deepcopy(result['candidate']);candidate['evidence']['train']['action_transition_counts']['ENTER_NOW->RECHECK']=1
+    candidate['evidence_sha256']=strategy.digest(candidate['evidence'])
+    assert strategy.promotion_errors(candidate,parent,scope,existing_publication=True)
+    candidate.pop('preserve_existing_entries')
+    assert strategy.promotion_errors(candidate,parent,scope)
+    assert not strategy.promotion_errors(candidate,parent,scope,existing_publication=True)

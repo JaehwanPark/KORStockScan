@@ -726,7 +726,7 @@ def machine_existing_entry_changes(arm):
                if transition.startswith('ENTER_NOW->') and transition != 'ENTER_NOW->ENTER_NOW')
 
 
-def promotion_errors(candidate, parent, scope):
+def promotion_errors(candidate, parent, scope, *, existing_publication=False):
     """One gate used by research, publisher and activation; no 10bp floor."""
     errors = []
     if not isinstance(candidate, dict) or candidate.get('schema') != 'main_entry_strategy_candidate_v2':
@@ -752,7 +752,7 @@ def promotion_errors(candidate, parent, scope):
                 continue
             days, ids = arm.get('source_dates') or [], arm.get('opportunity_ids') or []
             economy = arm.get('economics') or {}
-            if machine_existing_entry_changes(arm):
+            if machine_existing_entry_changes(arm) and (not existing_publication or candidate.get('preserve_existing_entries') is True):
                 errors.append(split + '_machine_existing_entries_changed_without_evaluation')
             try:
                 valid_dates = days and all(datetime.fromisoformat(d).date().isoformat() == d and d >= '2026-06-05' for d in days)

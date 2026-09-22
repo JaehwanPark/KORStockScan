@@ -68,3 +68,6 @@
 장중 교체 승인 후 eb3079c96에서9/21 source를 현재 a552d63 부모로 다시 평가했다. KRX96회 중 유효 신규 전환 후보는3기회33.33%/−0.7421%였으나, 기존 ENTER_NOW23attempt 중15를 RECHECK로 바꿨다. 이15건의 손익은 미진입 전환 점수에 포함되지 않는다. 발행 전 계산 PID93556을 종료하고 기존 정책 pointer를 유지했다.
 
 선정 loop와 공통 promotion validator에서 기존 ENTER_NOW 변경 후보를 제외하도록 보완했다. 변경 횟수는 저장된 action transition에서 계산한다. 원 승률·표본보정·음수 EV 허용 조건은 유지하며 이 조건은 범위 밖 미평가 영향의 방지다. 선정 버전은 `support_adjusted_win_rate_preserve_entries_v3`이다. 현재 유효 정책 및 기동 여부와 새 후보 적용을 구분하며, 유효 후보가 없으면 정책은 carry한다.310개 회귀검증 PASS.
+
+
+장중9/22 preflight를 새로 생성했고 `machine_threshold_tuning_input_allowed=true`를 확인했다. 최신 자료를 읽은 첫 실행은 기존 통합시장 정책의 과거 ENTER_NOW 변경1건에 새 검증 조건을 소급 적용해 `strategy_current_economic_binding_invalid`로 중단되었다. 정책 pointer 변경은 없었다. 수정: 기존 발행분 읽기에만 이전 계약을 유지하고, 신규 후보는 `preserve_existing_entries=true`와 strict 승격 검증을 요구한다. 기존 정책 검증을 원천 로딩 앞으로 옮겼다.311tests 및 실제 기존a552d63 로더 재검증 PASS.

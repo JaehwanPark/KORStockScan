@@ -8270,7 +8270,7 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
                 holdout_status = 'unsupported'
                 machine_evidence['holdout'] = {'blocker': str(exc)}
         candidate = (dict(schema='main_entry_strategy_candidate_v2',
-            evaluation_basis='machine_nonentry_opportunity_v1', scope=list(scope),
+            evaluation_basis='machine_nonentry_opportunity_v1', preserve_existing_entries=True, scope=list(scope),
             parent_policy=deepcopy(parent), parent_sha256=strategy.digest(parent),
             policy=best, policy_sha256=strategy.digest(best), evidence=machine_evidence,
             evidence_sha256=strategy.digest(machine_evidence), selected_without_holdout=True)
@@ -9053,6 +9053,9 @@ def main(argv: list[str] | None = None) -> int:
         output.parent.mkdir(parents=True, exist_ok=True)
         with (output.parent / f'machine_policy_{args.target_date}.lock').open('a') as stage_lock:
             fcntl.flock(stage_lock, fcntl.LOCK_EX)
+            # Validate current policy before expensive source loading.
+            from src.engine.scalping.mechanistic_entry_runtime_policy import load_effective
+            load_effective(data_root=args.data_root, target_date=datetime.now(KST).date().isoformat())
             cost_source = ensure_machine_economic_reference(data_root=args.data_root, target_date=args.target_date) if args.write else {}
             rows, source_counts = load_machine_observation_rows(args.data_root, target_date=args.target_date, independent_machine=True)
             result = build_machine_policy_report(rows,

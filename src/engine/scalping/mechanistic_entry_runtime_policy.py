@@ -1437,7 +1437,7 @@ def _load_current(data_root: Path, target_date: str) -> dict | None:
         candidate = (source.get('strategy_refinements_by_scope', {}).get(scope) or {}).get('candidate')
         old = for_cohort(parent, tuple(scope.split('|')))
         new = for_cohort(bundle, tuple(scope.split('|')))
-        if (not old or not new or promotion_errors(candidate, old['machine_policy'], tuple(scope.split('|')))
+        if (not old or not new or promotion_errors(candidate, old['machine_policy'], tuple(scope.split('|')), existing_publication=True)
             or digest(old['machine_policy']) != proof.get('parent_machine_sha256')
             or digest(candidate) != proof.get('candidate_sha256')
             or candidate['policy'] != new['machine_policy']):
