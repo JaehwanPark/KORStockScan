@@ -632,6 +632,39 @@ def test_large_expansion_uses_current_late_machine_dependency_proof(monkeypatch,
     assert mod._large_companion("low_price_expansion", path, day, mod._sha(path), {})[2] == "semantic_unverified_large_source"
 
 
+def test_ws_freshness_reuse_contract_verifies_final_source_only_report(tmp_path):
+    day = "2026-09-22"
+    path = tmp_path / "intraday_ws_freshness_monitor" / f"intraday_ws_freshness_monitor_{day}.json"
+    report = {
+        "report_type": "intraday_ws_freshness_monitor",
+        "target_date": day,
+        "evaluation_phase": "postclose_final",
+        "postclose_quality_handoff": {
+            "parent_quality_final_claimed": True,
+            "source_only": True,
+        },
+        "metric_contract": {
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "broker_order_forbidden": True,
+        },
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    contract = {
+        "schema": "postclose_artifact_reuse_contract_v1",
+        "target_date": day,
+        "artifact_path": str(path),
+        "artifact_sha256": mod._sha(path),
+    }
+    _write(Path(str(path) + ".reuse-contract.json"), contract)
+    _, proof, error = mod._large_companion("ws_freshness", path, day, mod._sha(path), {})
+    assert error is None and proof["verified"] is True
+    report["evaluation_phase"] = "intraday"
+    path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    assert mod._large_companion("ws_freshness", path, day, mod._sha(path), {})[2] == "semantic_unverified_large_source"
+
+
 def test_main_proxy_population_and_ev_are_not_operating_economics():
     payload = {"machine_full_evaluation": dict(state="source_gap", full_population_count=1715,
         paired_comparable_count=1710, holdout_incumbent_ev_pct=-0.005,

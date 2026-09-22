@@ -347,6 +347,55 @@ def _large_companion(
             "artifact_sha_matches": byte_sha_matches,
             "verified": verified,
         }, None if verified else "semantic_unverified_large_source"
+    if owner == "ws_freshness":
+        companion_path = path.with_name(path.name + ".reuse-contract.json")
+        payload, error, read_mode, _ = _read(companion_path)
+        source_path = Path(str(payload.get("artifact_path") or ""))
+        source_name_matches = source_path.name == path.name
+        byte_sha_matches = bool(
+            artifact_sha256 and payload.get("artifact_sha256") == artifact_sha256
+        )
+        # The freshness report is source-only evidence. Its postclose handoff
+        # must be final and must never authorize runtime or order changes.
+        report_projection = _read_top_level_sections(
+            path,
+            {
+                "report_type",
+                "target_date",
+                "evaluation_phase",
+                "postclose_quality_handoff",
+                "metric_contract",
+            },
+        )
+        handoff = report_projection.get("postclose_quality_handoff") or {}
+        metric_contract = report_projection.get("metric_contract") or {}
+        semantic_contract_matches = (
+            report_projection.get("report_type") == "intraday_ws_freshness_monitor"
+            and report_projection.get("target_date") == target_date
+            and report_projection.get("evaluation_phase") == "postclose_final"
+            and handoff.get("parent_quality_final_claimed") is True
+            and handoff.get("source_only") is True
+            and metric_contract.get("runtime_effect") is False
+            and metric_contract.get("allowed_runtime_apply") is False
+            and metric_contract.get("broker_order_forbidden") is True
+        )
+        verified = (
+            error is None
+            and _date_matches(payload, target_date)
+            and source_name_matches
+            and byte_sha_matches
+            and semantic_contract_matches
+        )
+        return payload, {
+            "path": str(companion_path),
+            "sha256": _sha(companion_path),
+            "read_mode": read_mode,
+            "contract": "ws_freshness_source_reuse_contract_v1",
+            "source_name_matches": source_name_matches,
+            "artifact_sha_matches": byte_sha_matches,
+            "semantic_contract_matches": semantic_contract_matches,
+            "verified": verified,
+        }, None if verified else "semantic_unverified_large_source"
     return {}, {"path": None, "sha256": None, "contract": None, "verified": False}, "semantic_unverified_large_source"
 
 
