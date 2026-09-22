@@ -4112,6 +4112,10 @@ def test_machine_initial_policy_assesses_before_provider_cache_and_lock(
 
     monkeypatch.setattr(engine, "_call_openai_safe", provider)
     if not ready:
+        # An adapter semantic rejection must not erase an already assessed
+        # machine RECHECK or turn its terminal into an unclassified source gap.
+        monkeypatch.setattr(engine, '_normalize_decision_quality_entry_result',
+            lambda *args, **kwargs: {'action': 'WAIT', 'score': 0})
 
         class NoProviderLock:
             def acquire(self, **kwargs):
@@ -4193,6 +4197,8 @@ def test_machine_initial_policy_assesses_before_provider_cache_and_lock(
     if not ready:
         assert result["provider_called"] is False
         assert result["action"] in {"WAIT", "DROP"}
+        assert result["entry_mechanistic_action"] == "RECHECK"
+        assert result["entry_ai_screen_status"] == "not_requested_machine_nonentry"
 
 
 @pytest.mark.parametrize("feature_shortfall", [False, True])

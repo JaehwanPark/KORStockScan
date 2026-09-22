@@ -49,6 +49,18 @@ from src.engine.sniper_state_handlers import (
 from src.utils.constants import TRADING_RULES
 
 
+def test_submit_machine_revision_rejects_superseded_observation():
+    key = ["promotion", "attempt", "005930", "KRX", "REGULAR", "bundle", 1]
+    receipt = {"evaluation_attempt_id": "attempt", "machine_observation_sha256": "a" * 64}
+    stock = {"_machine_observation_revision": {"key": key, "digest": "a" * 64}}
+    assert handlers._machine_submit_revision_is_current(stock, receipt)
+    stock["_machine_observation_revision"]["digest"] = "b" * 64
+    assert not handlers._machine_submit_revision_is_current(stock, receipt)
+    stock["_machine_observation_revision"]["digest"] = "a" * 64
+    stock["_machine_observation_revision"]["key"] = ["promotion", "other"]
+    assert not handlers._machine_submit_revision_is_current(stock, receipt)
+
+
 def _trusted_pressure(fields):
     out = {
         **fields,

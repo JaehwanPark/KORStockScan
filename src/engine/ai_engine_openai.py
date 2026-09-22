@@ -9428,6 +9428,24 @@ class GPTSniperEngine:
                         entry_setup_evidence=machine_setup,
                         live_policy=entry_setup_live_policy,
                     )
+                    # The adapter can reject an empty provider response even
+                    # though the machine has already made a valid non-entry
+                    # decision. Preserve that exact decision for its terminal
+                    # receipt; no AI or order authority is created here.
+                    machine_action = machine_assessment["action"]
+                    if (decision.get("entry_mechanistic_action") is not None
+                            and str(decision["entry_mechanistic_action"]).upper() != machine_action):
+                        raise ValueError("machine_predecision_composer_disagreement")
+                    decision.update(
+                        entry_primary_decision_owner="mechanistic_entry_adjudicator",
+                        entry_mechanistic_action=machine_action,
+                        entry_ai_screen_status=(
+                            "not_requested_machine_source_invalid"
+                            if machine_action == "SOURCE_INVALID"
+                            else "not_requested_machine_nonentry"
+                        ),
+                        entry_ai_screen_pass=False,
+                    )
                     decision.update(
                         provider_called=False,
                         machine_bundle_sha256=machine_first_context["bundle_sha256"],

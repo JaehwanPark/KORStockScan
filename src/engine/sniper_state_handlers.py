@@ -31644,6 +31644,17 @@ def _machine_primary_entry_provenance_fields(source: dict | None) -> dict:
     return fields
 
 
+def _machine_submit_revision_is_current(stock: dict, receipt: dict) -> bool:
+    """Reject a submit receipt superseded by a newer exact machine snapshot."""
+    digest = receipt.get("machine_observation_sha256")
+    if not digest:
+        return True  # Legacy receipts have no revision contract to compare.
+    revision = stock.get("_machine_observation_revision") or {}
+    key = revision.get("key") or []
+    return (revision.get("digest") == digest and len(key) >= 2
+            and key[1] == receipt.get("evaluation_attempt_id"))
+
+
 REAL_ENTRY_PANIC_GAP_WEIGHT_FAMILY = "real_entry_panic_gap_weight"
 
 
@@ -62552,6 +62563,11 @@ def _handle_watching_strategy_branch(
                                         "ai_numeric_consistency_recheck"
                                     )
                                     ai_decision = dict(recheck_decision or {})
+                                    machine_primary_entry_provenance = _machine_primary_entry_provenance_fields(ai_decision)
+                                    runtime["machine_primary_entry_provenance"] = machine_primary_entry_provenance
+                                    _mutate_stock_state(stock, set_fields={
+                                        "last_watching_ai_machine_primary_fields": machine_primary_entry_provenance,
+                                    })
                                     action = recheck_action
                                     ai_score = recheck_score
                                     raw_ai_score = recheck_score
@@ -62841,6 +62857,11 @@ def _handle_watching_strategy_branch(
                                     "early_accel_strong_bundle_recheck"
                                 )
                                 ai_decision = dict(recheck_decision or {})
+                                machine_primary_entry_provenance = _machine_primary_entry_provenance_fields(ai_decision)
+                                runtime["machine_primary_entry_provenance"] = machine_primary_entry_provenance
+                                _mutate_stock_state(stock, set_fields={
+                                    "last_watching_ai_machine_primary_fields": machine_primary_entry_provenance,
+                                })
                                 action = recheck_action
                                 ai_score = recheck_score
                                 raw_ai_score = recheck_score
@@ -64748,6 +64769,15 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         },
     )
     strategy = runtime["strategy"]
+    if strategy == "SCALPING":
+        receipt = submit_attempt_machine_lineage(stock, code)
+        if receipt and not _machine_submit_revision_is_current(stock, receipt):
+            _log_entry_pipeline(stock, code, "machine_observation_revision_recheck",
+                expected_machine_observation_sha256=receipt.get("machine_observation_sha256"),
+                latest_machine_observation_sha256=(
+                    (stock.get("_machine_observation_revision") or {}).get("digest")),
+                actual_order_submitted=False, broker_order_forbidden=True)
+            return False
     ratio = runtime["ratio"]
     curr_price = runtime["curr_price"]
     liquidity_value = runtime["liquidity_value"]
@@ -69727,6 +69757,13 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         if strategy == 'SCALPING' and not opening_rotation_active:
             receipt = submit_attempt_machine_lineage(stock, code) or {}
             pair_hash = receipt.get('machine_bundle_sha256') or receipt.get('policy_bundle_hash')
+            if not _machine_submit_revision_is_current(stock, receipt):
+                _log_entry_pipeline(stock, code, 'machine_observation_revision_recheck',
+                    expected_machine_observation_sha256=receipt.get('machine_observation_sha256'),
+                    latest_machine_observation_sha256=(
+                        (stock.get('_machine_observation_revision') or {}).get('digest')),
+                    actual_order_submitted=False, broker_order_forbidden=True)
+                break
             if pair_hash:
                 from src.engine.scalping.mechanistic_entry_runtime_policy import validate_attempt_generation
                 generation_guard = validate_attempt_generation(pair_hash, data_root=DATA_DIR)

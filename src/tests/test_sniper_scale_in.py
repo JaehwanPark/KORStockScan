@@ -20838,6 +20838,10 @@ def test_ai_numeric_consistency_recheck_corrected_updates_last_reason(monkeypatc
                 "action": "WAIT",
                 "score": 72,
                 "reason": "clean wait due to weak follow through",
+                "entry_primary_decision_owner": "mechanistic_entry_adjudicator",
+                "entry_mechanistic_action": "RECHECK",
+                "entry_ai_screen_status": "not_requested_machine_nonentry",
+                "machine_observation_sha256": "b" * 64,
                 "tick_acceleration_ratio": 1.25,
                 "buy_pressure_10t": 71.0,
                 "net_aggressive_delta_10t": 1200.0,
@@ -20943,6 +20947,7 @@ def test_ai_numeric_consistency_recheck_corrected_updates_last_reason(monkeypatc
     assert ai.calls == 2
     assert stock["ai_numeric_consistency_recheck_count"] == 1
     assert stock["last_watching_ai_reason"] == "clean wait due to weak follow through"
+    assert stock["last_watching_ai_machine_primary_fields"]["machine_observation_sha256"] == "b" * 64
 
 
 def test_ai_numeric_consistency_recheck_buy_below_min_score_does_not_arm_entry(
