@@ -85,10 +85,14 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
   - Acceptance: main/auxiliary/widget/episode 독립 stage receipt·writer·retry, label 선행 barrier, 전체 완료와 장전 정책 준비 분리, scheduler/router/운영문서 동시 정합, 실패 주입·대상 검증 및 실제 단계별 재개.
   - 9/22 구현·리뷰 완료: R1–R6 stage registry/독립 writer·bounded child2/label barrier/summary 인계 구현.458+최종94tests 및 완료 원천 복사본의 실제 collector 재개 PASS; 원 정책 유지. 최종90c5cbad3 push/배포10:28 확인, 배포본451+추가98tests·두 unit/cron route PASS. [코드·재실행·배포 리뷰](../audit-reports/2026-09-22-postclose-stage-separation-review.md). 남은 자연 확인은 오늘 정기 source_date=9/22 각 stage의 실제 PID/terminal과9/23 정책 loader/부트스트랩이며 이 owner를 유지한다.
 
-- [ ] `[MainMachineSuccessReferenceEvaluation] 성공 ENTER_NOW 참조를 포함한 기계정책 장후 평가 보완` (`Due: 2026-09-22`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~23:30`, `Track: RuntimeStability`)
+- [x] `[MainMachineSuccessReferenceEvaluation] 성공 ENTER_NOW 참조를 포함한 기계정책 장후 평가 보완` (`Due: 2026-09-22`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~23:30`, `Track: RuntimeStability`)
   - Source: [기계정책 성공 참조 보완계획 §9](../proposals/main-nonentry-threshold-postclose-runtime-implementation-plan-2026-09-21.md#9-성공-enter_now-참조를-포함한-장후-평가-보완계획).
-  - 상태: 9/22 사용자 후속 구현·커밋/푸시·배포 지시로 v4 구현/리뷰 및 원천→발행→장후 연결을 진행한다. 기존 완료 M1–M6와 별개이며 AI·하드 가드·주문/보유 custody는 보존한다.
+  - 완료:747 source/release tests PASS,35eb8e489 push/deploy, PID269562 bootstrap PASS.17:25:36 bundle0c329961 기계 component 발행, 정규장 성공3건 유지·선택6→11기회·승률50→54.55%·평균 경로EV−0.45184→−0.39440%(공통분모 개선−0.00170%p). AI/통합/장전 승계, 자연3건 bundle 소비·최종 source clock 일치, 장후 명령/출력/cron 연결 확인. [리뷰/한계/rollback](../audit-reports/2026-09-22-machine-success-reference-and-input-latency-review.md).
   - Acceptance: 성공/실패/미진입 동일 비용 경로·기회 분모, 평가된 기존 진입 변경 허용, 부모 포함 승률 우선 비교, v3/v4 checkpoint·발행 호환, 동일 원천 비교와 장중 무추가 I/O·지연 검증, 승인된 후속 실행의 독립 stage·machine CAS·승계·PID 소비. 성공 표본/성과가 없으면 결손·부모 유지를 구분한다.
+
+- [ ] `[MainMachineSuccessReferenceNaturalKRX] 성공 참조 정책의 갱신 KRX 분기 자연 소비 확인` (`Due: 2026-09-23`, `Slot: INTRADAY`, `TimeWindow: 09:00~10:00`, `Track: RuntimeStability`)
+  - Source: [성공 참조 정책 배포·자연 소비](../audit-reports/2026-09-22-machine-success-reference-and-input-latency-review.md).
+  - Acceptance: 최신 적격 successor 또는0c329961 bundle의 실제 KRX_REGULAR attempt/PID/release/leaf/임계치를 대조한다. 현 통합시장 자연 소비를 갱신 KRX 분기 사용으로 바꾸어 해석하지 않는다. 해당 session 자연 발생이 없으면 대기 상태로 유지하며 확인용 주문·재기동은 실행하지 않는다.
 
 - [x] `[DirectFamilySourceRepairMainMechanisticEntry] 기계정책 조합 탐색·유형 원천·장중 적용 보완` (`Due: 2026-09-22`, `Slot: INTRADAY`, `TimeWindow: 08:00~19:30`, `Track: RuntimeStability`)
   - Source: [기계정책 보완 계획](../proposals/main-nonentry-threshold-postclose-runtime-implementation-plan-2026-09-21.md).

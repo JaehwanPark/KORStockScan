@@ -39,10 +39,24 @@
 
 정규장 비교 가능 원천은290attempt/136기회다. **이번 동일 후보 시험에서는 v3와 v4의 선정 결과가 같았다.** 성공 참조3건이 실제로 점수·유지율에 참여했음을 확인했으며, 이를 별도의 수익 개선 증명으로 표현하지 않는다. 승률 우선 순위상 후보는 부모보다 높지만 공통 분모 개선값은 음수이고 평균 EV도 음수다. 이는 사용자가 승인한 승률 우선/음수 허용 정책의 명시적인 절충이다.
 
-정규장 후보는 기존3node 상한 내의 가격44350 분기이며 두 leaf 모두 `depth_adverse_ratio 2→3.75`, `absorption_buy_pressure 55→45`, `prior_adverse_drawdown_pct -1→-1.5`를 사용한다. 두 가격대의 임계치 차이가 생겼다는 의미는 아니다. root/unknown feature fallback은 부모를 보존한다. 통합시장(33attempt/20기회)은 부모 유지, 장전(4attempt/3기회)은 유효 선택 진입이 없어 부모 유지다.
+정규장 후보는 기존 tree 상한 내의 3node 가격44350 분기이며 두 leaf 모두 `depth_adverse_ratio 2→3.75`, `absorption_buy_pressure 55→45`, `prior_adverse_drawdown_pct -1→-1.5`를 사용한다. 두 가격대의 임계치 차이가 생겼다는 의미는 아니다. root/unknown feature fallback은 부모를 보존한다. 통합시장(33attempt/20기회)은 부모 유지, 장전(4attempt/3기회)은 유효 선택 진입이 없어 부모 유지다.
 
 같은 frozen 입력/정책의 이전·변경 코드 판정 결과 해시는 모두 일치했다. 정책별 warm400회, 최초 서로 다른 입력40회 측정에서 추가 파일 I/O는 없었다. 정규장 v3/v4 선정 정책의 p95는 이전 코드5.650/변경 코드5.635ms이고, 부모 정책은4.148/4.136ms다. 선택된3node 정책 자체는 기존1node 부모보다 약1.5ms 더 걸리며, 정책 로더 반복 조회 약35ms 절감과 별도로 보고한다. 최초40회 측정은 프로세스/OS cache 전체 초기화 실험이 아니다.
 
 코드 리뷰의 미해결 범위 내 finding은0이다. 배포·정책 발행·PID 자연 소비는 아래 별도 영수증으로 닫는다.
 
 근거 디렉터리: [`tmp/machine-success-v4-20260922`](../../tmp/machine-success-v4-20260922). `population-bound.json`, `frozen.json`, `comparison.json`, `candidate-policies.json`, `source-gap-diagnosis.json`, `tests-final.log`, `loader-before.json`, `loader-after.json`을 보존한다. 정책 비교는 비용 반영 가격 경로이며 실제 체결손익이 아니다.
+
+
+## 배포·정책 발행·자연 소비
+
+- 구현 커밋 `35eb8e48949280465479506a5208c472134fdf67` main push 완료. immutable release `machine-success-20260922-35eb8e489`에서 동일747 tests PASS(기존 보유 payload 1건 제외), source clean·hash·문서 parser 확인.
+- 선택 release와 비활성 기계 final-refresh systemd의 코드 경로를 일치시켰다. 정규 postclose cron routing PASS. `main_machine_policy` 명령은 독립 `--machine-policy-only --write --activate-now`이며 선행 AI/widget/episode 의존이 없다. 정규 실행은 기존 전체 원천 경로를 유지하고 이번50종목 제한은 첫 비교의 명시적 manifest에만 해당한다.
+- 표준 guarded restart 완료: PID233479→269562,17:24:34 기동. bootstrap/PID env verify PASS, singleton 확인, morning custody handoff는 owner 비활성으로 not_required. 주문·보유·provider·cap·stale guard를 변경하지 않았다.
+- 새 코드를 기동한 뒤17:25:36에 기계 component만 CAS 발행. bundle `1114428c426fc95a45e62f04e750ed669c8b2e36b7a9321a7a0c7bc78e23364a`→`0c329961a6d8c8301cd91a5c3ad126f2f281ccdf612c27eb0901a2e758063b66`. 갱신 scope는 `KRX|KRX_REGULAR` 하나다. 통합시장은 `incumbent_best_or_tied`, 장전은 `no_evaluable_machine_candidate`로 승계한다. 모든 scope의 AI component 보존과9/23 승계 확인.
+- canonical machine report/terminal을 기존 producer 형식으로 저장하고 독립 stage 출력 validator의 오류0을 확인했다. 무관한 장후 group 전체를 재실행하거나 실행하지 않은 전체 stage 완료 영수증을 만들지 않았다. 소스 재생성은 고정 원천에 대한 기존 machine builder 실행이며 정규 예정 작업과 구분한다.
+- 17:26:34(003670/BLOCK),17:26:43(356860/required-feature RECHECK),17:27:01(007660/RECHECK)의 자연 capture에서 PID269562·새 bundle을 확인했다. 세 건 모두 최종 snapshot 시각·source timing·0B/0D provenance가 trace와 정확히 일치했다. 문맥 처리0.097/0.081/0.074ms, 정책 resolve57.947ms(새 generation 최초)/4.990/5.224ms였다. 과거1.129초 사례와는 서로 다른 입력이므로 동일 입력 속도향상 배수로 환산하지 않는다.
+- 실제 세션은 통합시장 장후이므로 자연 selector는 승계한 통합시장 root다. **갱신된 KRX3node 분기의 자연 사용은 다음 정규장 관측 대상**이다. 코드·발행·전체 bundle PID 소비는 확인했으며, 해당 분기 자연 사용·향후 비용 후 실현손익은 아직 확인하지 않았다.
+- rollback은 기존 `--rollback-machine-to 1114428c426fc95a45e62f04e750ed669c8b2e36b7a9321a7a0c7bc78e23364a`를 사용하며 최신 AI를 보존한다. 코드 rollback 선택/서비스 원본은 `selection-before.json`, `machine-service-before.conf`에 보존한다.
+
+최종 근거: `release-validation.json`, `release-tests.log`, `deployment.json`, `restart.log`, `activation.json`, `bundle-before.json`, `bundle-after.json`, `postclose-connection.json`, `cron-check.json`, `natural-acceptance.json`. 후속 자연 KRX 확인은 당일 체크리스트의 `MainMachineSuccessReferenceNaturalKRX`가 소유한다.
