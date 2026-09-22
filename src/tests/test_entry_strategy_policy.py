@@ -764,3 +764,32 @@ def test_machine_component_rollback_preserves_latest_ai(tmp_path):
     assert restored['ai_policy'] == active['ai_policy']
     assert not runtime.validate_attempt_generation(applied['bundle_sha256'], data_root=tmp_path,
         now=datetime(2026,9,14,14,tzinfo=runtime.KST))['allowed']
+
+
+def test_source_admission_uses_attempt_fallback_before_economic_selection():
+    from src.engine.scalping import ai_action_outcome_calibration as c
+    from src.tests.test_ai_action_outcome_calibration import _natural_refinement_fixture
+    rows, receipt = _natural_refinement_fixture()
+    for row in rows:
+        row['scanner_promotion_id'] = None
+    strict, _ = c._common_refinement_population([], rows, target_date=receipt['target_date'],
+        source_receipt=receipt, paired_contract={})
+    assert not strict
+    admitted, contract = c._common_refinement_population([], rows, target_date=receipt['target_date'],
+        source_receipt=receipt, paired_contract={}, allow_attempt_identity_fallback=True)
+    assert len(admitted) == len(rows)
+    assert contract['attempt_identity_fallback_count'] == len(rows)
+    assert contract['input_row_disposition_complete']
+    conflicting = deepcopy(rows[0]); conflicting['comparison']['entry_path_target_pct'] = 9
+    admitted, contract = c._common_refinement_population([], rows+[conflicting], target_date=receipt['target_date'],
+        source_receipt=receipt, paired_contract={}, allow_attempt_identity_fallback=True)
+    assert len(admitted) == len(rows)-1
+    assert contract['row_exclusion_reason_counts']['conflicting_exact_attempt'] == 2
+
+
+def test_machine_rank_ignores_float_noise_before_episode_support():
+    from src.engine.scalping.ai_action_outcome_calibration import _machine_admission_rank
+    a = dict(win_rate_pct=100., selected_path_ev_pct=.10000000000000009,
+             paired_admission_delta_pct=.1, selected_opportunity_count=1)
+    b = {**a, 'selected_path_ev_pct':.1, 'selected_opportunity_count':2}
+    assert _machine_admission_rank(b) > _machine_admission_rank(a)

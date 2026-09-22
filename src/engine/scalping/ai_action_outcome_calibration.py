@@ -2332,6 +2332,7 @@ def _common_refinement_population(
     natural_conflicting_evaluation_keys: list[str] | None = None,
     cohort: tuple[str, str] = ("KRX", "KRX_REGULAR"),
     operating_projection: dict | None = None,
+    allow_attempt_identity_fallback: bool = False,
 ) -> tuple[list[dict], dict]:
     """Union existing exact CF lanes before selection; no fills/AI required.
 
@@ -2347,7 +2348,9 @@ def _common_refinement_population(
     excluded_keys = set(gate.get("excluded_evaluation_keys") or []) | set(
         gate.get("pending_evaluation_keys") or []
     )
-    observed_conflict_keys = _machine_conflicting_evaluation_keys(natural_rows)
+    def evaluation_key(row):
+        return _machine_evaluation_key(row, allow_attempt_fallback=allow_attempt_identity_fallback)
+    observed_conflict_keys = _machine_conflicting_evaluation_keys(natural_rows, allow_attempt_fallback=allow_attempt_identity_fallback)
     conflict_manifest_valid = (
         natural_conflicting_evaluation_keys is None
         or (
@@ -2448,15 +2451,16 @@ def _common_refinement_population(
                 not natural_allowed
                 or (row.get("effective_venue"), row.get("session_bucket")) != cohort
                 or not _is_sha256(row.get("bundle_sha256"))
-                or _machine_evaluation_key(row) in excluded_keys
+                or evaluation_key(row) in excluded_keys
                 or not all(str(row.get(key) or "").strip() for key in (
-                    "scanner_promotion_id", "evaluation_attempt_id", "stock_code",
+                    "evaluation_attempt_id", "stock_code",
                     "effective_venue", "session_bucket", "bundle_sha256",
                 ))
+                or (not allow_attempt_identity_fallback and not str(row.get("scanner_promotion_id") or "").strip())
             ):
                 excluded["natural_machine_receipt_or_identity_invalid"] += 1
                 continue
-            if _machine_evaluation_key(row) in observed_conflict_keys:
+            if evaluation_key(row) in observed_conflict_keys:
                 excluded["conflicting_exact_attempt"] += 1
                 continue
             comparison = _as_dict(row.get("comparison"))
@@ -2478,7 +2482,7 @@ def _common_refinement_population(
             if not trace or not str(row.get("stock_code") or "").strip():
                 excluded["trace_or_symbol_missing"] += 1
                 continue
-            key = ("natural", _machine_evaluation_key(row)) if lane == "natural" else ("paired", trace)
+            key = ("natural", evaluation_key(row)) if lane == "natural" else ("paired", trace)
             # One trace must not contribute twice merely because both the
             # paired replay and natural machine materialization consumed it.
             # Exact conflicting receipts are quarantined, never time-joined.
@@ -2544,6 +2548,8 @@ def _common_refinement_population(
         "input_lane_counts": {"paired": len(paired_rows), "natural": len(natural_rows)},
         "accepted_lane_counts": dict(Counter(r["refinement_source_lane"] for r in result)),
         "accepted_unique_trace_count": len(result),
+        "attempt_identity_fallback_allowed": allow_attempt_identity_fallback,
+        "attempt_identity_fallback_count": sum(not bool(r.get("scanner_promotion_id")) for r in result),
         "accepted_source_dates": sorted({r["source_date"] for r in result}),
         "accepted_rows_sha256": _canonical_sha256([
             {"decision_trace_id": r["decision_trace_id"], "fingerprint": r["fingerprint"]}
@@ -4721,7 +4727,7 @@ def _machine_ai_natural_source_receipt(data_root: Path, target_date: str) -> dic
     }
 
 
-def _machine_evaluation_key(row: Mapping[str, Any]) -> str:
+def _machine_evaluation_key(row: Mapping[str, Any], *, allow_attempt_fallback: bool = False) -> str:
     values = (
         row.get("scanner_promotion_id"),
         row.get("evaluation_attempt_id") or row.get("decision_trace_id"),
@@ -4730,6 +4736,8 @@ def _machine_evaluation_key(row: Mapping[str, Any]) -> str:
         row.get("session_bucket"),
         row.get("bundle_sha256"),
     )
+    if allow_attempt_fallback and not str(values[0] or '').strip() and all(str(v or '').strip() for v in values[1:]) and row.get('source_date'):
+        return 'machine-attempt:' + _canonical_sha256([row['source_date'], *values[1:]])
     if not all(str(value or "").strip() for value in values):
         return ""
     return "machine:" + "|".join(str(value).strip() for value in values)
@@ -4746,11 +4754,11 @@ def _machine_learning_fingerprint(row: Mapping[str, Any]) -> str:
     )})
 
 
-def _machine_conflicting_evaluation_keys(rows: list[dict]) -> set[str]:
+def _machine_conflicting_evaluation_keys(rows: list[dict], *, allow_attempt_fallback: bool = False) -> set[str]:
     """Locate whole conflicting attempts before either arm contributes EV."""
     seen, conflicts = {}, set()
     for row in rows:
-        key = _machine_evaluation_key(row)
+        key = _machine_evaluation_key(row, allow_attempt_fallback=allow_attempt_fallback)
         if not key:
             continue
         fingerprint = _machine_learning_fingerprint(row)
@@ -7903,6 +7911,13 @@ def _machine_opportunity_id(row):
                               row.get('scanner_promotion_id') or row['decision_trace_id']])
 
 
+def _machine_admission_rank(economy, *, node_count=1, complexity=0):
+    # Sub-picopercent float subtraction noise must not outrank episode support.
+    values = [economy.get(k) for k in ('win_rate_pct', 'selected_path_ev_pct', 'paired_admission_delta_pct')]
+    return tuple(round(v, 10) if v is not None else None for v in values) + (
+        economy['selected_opportunity_count'], -node_count, -complexity)
+
+
 def _machine_admission_metrics(rows, actions):
     """BLOCK/RECHECK to ENTER_NOW opportunity study, independent of auxiliary AI.
 
@@ -8200,7 +8215,7 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
             worst = economy.get('worst_selected_path_pct')
             win_rate = economy.get('win_rate_pct')
             complexity = sum(sum(v != node.get('fallback_profile', strategy.default_profile(parent))[k] for k,v in node['profile'].items()) for node in candidate['strategy']['nodes'].values())
-            score = (win_rate, selected_ev, delta, economy['selected_opportunity_count'], -len(candidate['strategy']['nodes']), -complexity)
+            score = _machine_admission_rank(economy, node_count=len(candidate['strategy']['nodes']), complexity=complexity)
             machine_scores.append(dict(policy_sha256=strategy.digest(candidate),
                 search_group=progress.get('group'), node_count=len(candidate['strategy']['nodes']),
                 fallback_counts=evidence['fallback_counts'],
@@ -8307,7 +8322,7 @@ def build_machine_policy_report(rows, *, source_receipt, target_date, data_root=
         parent = (scoped or {}).get('machine_policy') or MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1
         scoped_rows = [r for r in rows if (r['effective_venue'], r['session_bucket']) == cohort]
         population, contract = _common_refinement_population([], scoped_rows,
-            target_date=target_date, source_receipt=source_receipt, paired_contract={}, cohort=cohort)
+            target_date=target_date, source_receipt=source_receipt, paired_contract={}, cohort=cohort, allow_attempt_identity_fallback=True)
         contract['economic_kernel_sha256'] = _canonical_sha256({
             name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
             for name in ('ai_action_outcome_calibration.py', 'entry_strategy_policy.py',
@@ -8322,6 +8337,7 @@ def build_machine_policy_report(rows, *, source_receipt, target_date, data_root=
                 _atomic_write_json(checkpoint_path, _with_artifact_content_sha256(value))
         selections['|'.join(cohort)] = build_main_strategy_refinement(population,
             parent=parent, scope=cohort, source_contract=contract, previous=prior_selection, limit=limit, machine_policy_only=True, checkpoint=save_progress, training_through_date=training_through_date)
+        selections['|'.join(cohort)]['source_acceptance'] = {k:v for k,v in contract.items() if k not in {'natural_machine_source_receipt', 'paired_source_contract'}}
         save_progress(selections['|'.join(cohort)])
     policy = {scope: selection['machine_policy'] for scope, selection in selections.items()
               if selection.get('machine_policy') is not None and selection.get('promotion_pass') is True}
