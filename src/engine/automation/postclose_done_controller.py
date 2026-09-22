@@ -107,7 +107,15 @@ def build_postclose_done_controller(
         )
         actions.append("direct_postclose_verification_refreshed")
         status = ("summary_verified" if summary_handoff_only else "done") if verifier.get("status") == "pass" else "blocked_direct_evidence_gap"
+    from src.engine.automation.postclose_summary_handoff import STAGE_REGISTRY, stage_path, stage_overview
+    stage_state = None
+    if any(stage_path(DATA_DIR / 'report', target_date, stage).exists() for stage in STAGE_REGISTRY):
+        stage_state = stage_overview(DATA_DIR / 'report', target_date)
+        if status == 'summary_verified' and predecessor.get('status') == 'succeeded' and require_independent_producers:
+            status = 'done'
+        stage_state['postclose_all_active_stages_complete'] = require_independent_producers and not independent_issues and verifier.get('status') == 'pass' and status == 'done'
     report = {
+        "postclose_stage_status": stage_state,
         "schema_version": 2,
         "report_type": "postclose_done_controller",
         "date": target_date,
@@ -166,6 +174,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--require-codex-completed", action="store_true", default=False)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
+    from src.engine.automation.postclose_summary_handoff import STAGE_REGISTRY, stage_path, _stage_main
+    if not args.dry_run and os.environ.get('POSTCLOSE_STAGE_WORKER') != '1' and any(stage_path(DATA_DIR / 'report', args.date, s).exists() for s in STAGE_REGISTRY):
+        return _stage_main(['--stage', 'summary_handoff', '--date', args.date])
     if not args.dry_run and not args.summary_handoff_only:
         _wait_for_predecessor_succeeded(
             args.date,

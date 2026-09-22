@@ -208,6 +208,8 @@ def validate(strategy):
                 raise ValueError('strategy_coordinate_invalid:' + name)
             if isinstance(default, int) and not isinstance(value, int):
                 raise ValueError('strategy_integer_required:' + name)
+        if profile['maximum_spread_bp'] <= 0 or profile['maximum_top3_ask_to_bid_ratio'] <= 0:
+            raise ValueError('strategy_execution_threshold_must_be_positive')
         if profile['momentum_fading_score'] >= profile['momentum_accelerating_score'] or profile['tape_adverse_score'] >= profile['tape_supportive_score'] or not profile['cost_low_spread_bp'] <= profile['cost_observable_spread_bp'] <= profile['cost_extreme_spread_bp'] or profile['volume_absent_ratio'] >= profile['volume_confirm_ratio']:
             raise ValueError('strategy_ordered_bounds_invalid')
         if 'fallback_profile' in node:

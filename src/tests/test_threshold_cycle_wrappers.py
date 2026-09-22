@@ -87,10 +87,13 @@ def test_compact_postclose_has_one_direct_evaluator_and_no_phase_coordinator():
     dedicated = _text("deploy/run_ai_entry_setup_paired_replay_postclose.sh")
     assert "--postclose-phase" not in main + dedicated
     assert "compact_summary_handoff" not in main + dedicated
+    from src.engine.automation.postclose_summary_handoff import stage_commands
+    commands = stage_commands('main_auxiliary_policy', '2026-09-21', '2026-09-21')
+    assert sum('--execute-compact-candidate' in c for c in commands) == 1
+    assert sum('--finalize-compact' in c for c in commands) == 1
     for script in (main, dedicated):
-        assert script.count("--execute-compact-candidate") == 1
-        assert script.count("--finalize-compact") == 1
-        assert "src.engine.scalping.entry_setup_paired_replay_batch" in script
+        assert 'main_auxiliary_policy' in script
+        assert '--execute-compact-candidate' not in script
     installer = _text("deploy/install_threshold_cycle_cron.sh")
     controller = _text("deploy/run_postclose_done_controller.sh")
     assert "run_ai_entry_setup_paired_replay_postclose.sh" not in installer
@@ -102,17 +105,11 @@ def test_compact_postclose_has_one_direct_evaluator_and_no_phase_coordinator():
 
 def test_main_machine_evaluation_precedes_compact_and_final_consumers():
     script = _text("deploy/run_threshold_cycle_postclose.sh")
-    publication = script.index('--publication-date "$POLICY_PUBLICATION_DATE"')
-    full = script.rfind(
-        "src.engine.scalping.ai_action_outcome_calibration", 0, publication
-    )
-    compact_execute = script.index("--execute-compact-candidate --write", full)
-    compact_finalize = script.index("--finalize-compact --publication-date", compact_execute)
-    summary = script.index("src.engine.runtime_approval_summary", compact_finalize)
-    checklist = script.index("src.engine.build_next_stage2_checklist", summary)
-    strict = script.index("--main-mechanistic-summary-only", checklist)
-    assert full < compact_execute < compact_finalize < summary < checklist < strict
-    assert "--require-policy-publication" in script[full:compact_execute]
+    machine = script.index('--stage main_machine_policy')
+    episode = script.index('--stage episode_policy')
+    auxiliary = script.index('for stage in legacy_machine_report main_auxiliary_policy')
+    assert machine < episode < auxiliary
+    assert '--launch' in script[machine:episode]
 
 
 def test_final_done_follows_bound_seal_and_no_retired_finalizer_dependencies():
@@ -132,12 +129,13 @@ def test_historical_machine_recovery_disables_current_account_cost_and_notificat
     from pathlib import Path
     root = Path(__file__).resolve().parents[2]
     script = (root / "deploy/run_machine_microstructure_final_refresh.sh").read_text()
-    assert '"$RECOVERY_MODE" != "true" ]]; then\n  "$PYTHON_BIN" -m src.engine.monitoring.research_native_capacity_source' in script
-    for setting in ('notify_args=()', 'policy_notify_args=()', 'cost_args=()'):
-        assert setting in script
-    assert '--phase finished --exit-code "$rc"' in script
-    assert script.index('--phase wait-inputs') < script.index('--phase started')
-    assert script.index('if ((expansion_rc != 0))') < script.index('attribution_rc=0')
+    from src.engine.automation.postclose_summary_handoff import stage_commands
+    assert '--stage machine_group' in script
+    assert '--recover-closed-target' in script
+    assert '--phase wait-inputs' not in script
+    for stage in ('collector_recommendation', 'research_allocation', 'legacy_policy_approval'):
+        commands = stage_commands(stage, '2026-09-21', '2026-09-21', recovery=True)
+        assert not any('--notify' in c or '--collect-costs' in c for c in commands)
     service = _text("deploy/systemd/korstockscan-machine-microstructure-final-refresh.service")
     assert "Restart=no" in service
     assert "TimeoutStartSec=57600" in service
@@ -247,12 +245,14 @@ def test_source_producer_wrapper_routes_canonical_to_selected_release(tmp_path, 
 
 def test_machine_refresh_updates_direct_summary_before_checklist():
     script = (Path(__file__).resolve().parents[2] / "deploy/run_machine_microstructure_final_refresh.sh").read_text()
-    assert script.index("-m src.engine.runtime_approval_summary") < script.index("-m src.engine.build_next_stage2_checklist")
-    assert "if ((builder_rc == 0)); then" in script
+    from src.engine.automation.postclose_summary_handoff import stage_commands
+    commands = stage_commands('summary_handoff', '2026-09-21', '2026-09-21')
+    assert commands[0][2] == 'src.engine.automation.postclose_done_controller'
+    assert '--require-independent-producers' in commands[0]
 
 
 def test_machine_refresh_binds_publication_before_waiting():
     script = (Path(__file__).resolve().parents[2] / "deploy/run_machine_microstructure_final_refresh.sh").read_text()
     assert 'POSTCLOSE_POLICY_PUBLICATION_DATE:-$completed_target_date' in script
     assert 'export POSTCLOSE_PREPARED_EFFECTIVE_DATE=' in script
-    assert script.index('export POSTCLOSE_POLICY_PUBLICATION_DATE=') < script.index('--phase wait-inputs')
+    assert script.index('export POSTCLOSE_POLICY_PUBLICATION_DATE=') < script.index('--stage machine_group')

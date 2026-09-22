@@ -56,14 +56,20 @@ OFF·퇴역 producer, 유효 frozen policy/checkpoint, 별도 custody/override·
 | 20:10 | tuning monitoring | predecessor 계약·단계 exit/status `success`·Parquet/DuckDB source hash/coverage |
 | 20:10 | widget evaluation systemd | advisory→auto policy→EOD wait→signal research→runtime policy의 같은 completed date·unit terminal |
 | 20:50 | dashboard DB archive | 최신 대상일 DONE·검증된 archive/source generation·보존 계약 |
-| 21:05 | AI entry setup paired replay follower | batch→calibration→optimizer/holding→consumer terminal 또는 근거 있는 disabled |
-| 21:15 | machine final refresh systemd | expansion→attribution→hysteresis/timing→native capacity/research closure→approval→checklist·각 rc와 unit terminal |
+| 21:05 | AI entry setup paired replay follower | main wrapper가 소유한 `main_auxiliary_policy` receipt 확인만 수행; 학습 재호출 없음 |
+| 21:15 | machine final refresh systemd | capacity·collector·attribution·timing·weakness·allocation·legacy approval의 독립 stage 및 summary/controller 인계 |
 | 21:55부터, bounded | postclose finalization | predecessor 확인→최신 summary/tower/checklist/strict closure→cleanup→final detector receipt |
 | 장후 정기 5분, 21:50까지 및 finalization 후 | System Error Detector | 해당 run/stage/target의 unresolved critical·최신 terminal; 단순 이전 PASS 재사용 금지 |
 
 ### 3.1 공통 배포 경로와 독립 서비스 경계
 
-Machine final refresh는 실행 전에 같은 source date의 widget terminal, AI outcome label, episode 연구, runtime approval summary를 기다린다. main producer가 실행 중이면 소비를 시작하지 않는다. 최대12시간 입력 대기 후에도 미충족이면 exit75로 종료하며 systemd 전체 자동 재시도는 하지 않는다. 실패 원인을 수리하고 명시적 재실행하거나 다음 정기 timer를 사용한다. Collector source 계약 실패 시 뒤의 attribution/approval을 실행하지 않는다. 날짜는 대기 전에 고정한다. Machine 후행 체크리스트는 runtime approval summary를 먼저 재생성한 뒤 소비한다. 적용일이 없거나 bootstrap 날짜가 일치하지 않는 이전 PID receipt를 새 정책 소비로 표시하지 않는다.
+기계 BLOCK/RECHECK 정책은 main wrapper가 긴 연구 전에 `main_machine_policy`로 dispatch한다. 같은 wrapper의 `outcome_labels`, `episode_policy`, `legacy_machine_report`, `main_auxiliary_policy`는 독립 worker이며 후행 AI follower는 receipt만 검증한다. 기계정책 계산·발행은 AI/위젯/에피소드의 성공을 기다리지 않는다. `run_machine_microstructure_final_refresh.sh`는 `machine_group` 호환 진입점이며 collector 실패가 attribution/weakness/timing/approval을 취소하지 않는다. Widget/episode는 자기 완료 연구만 발행하며 공동 allocation은 별도 계산한다. allocation stage는 family 보고서·정책을 덮어쓰지 않는다.
+
+날짜별 `data/report/postclose_stage_terminal/YYYY-MM-DD/<stage>.json`의 v2 receipt가 완료 기준이다. source/publication/effective date, code/output/input/prerequisite hash, run/PID/start ticks, heartbeat, exit/status, 정책 hash/disposition을 확인한다. 같은 stage는 flock 하나를 사용하고 무거운 child는 host 전체 두 개로 제한한다. 선행 단계가 pending/running일 때 compute slot 밖에서 최대4시간 기다리며 선행 실패/입력 변경은 deferred/failed로 기록한다. Summary/controller는 같은 registry를 사용하고 자기 output/receipt는 source hash 집합에서 제외한다. v1 terminal은 과거 대상일 검증에만 유지하며 새 stage 성공으로 합성하지 않는다.
+
+라벨은 기존 atomic publisher가 쓰고 collector/AI는 committed label receipt 뒤에 소비한다. 날짜·생성시각·내용 hash와 원 payload generation을 검증하며 소비 중 변경은 실패로 남긴다. 복구는 기존 dispatcher `--stage <failed-stage> --date <source-date> --publication-date <publication-date> --recover-closed-target`로 필요한 단계와 영향받은 하류만 실행한다. `outcome_labels --validate-existing`만 완료된 원 라벨의 명시적 검증 intake를 허용한다. 다른 stage는 파일 존재만으로 cache 성공을 만들지 않고 기존 producer의 checkpoint/source 검증을 이용한다. 과거 source 복구는 capacity 재조회·AI/기계 전체 학습·전체 wrapper 재실행을 동반하지 않는다. SIGTERM/timeout은 child process group을 종료하고 기존 마지막 저장 checkpoint를 보존한다.
+
+`postclose_all_active_stages_complete`와 `next_session_policy_ready`를 구분한다. 후자는 exact next-date bootstrap의 현재 원천 재검증과 main/widget/episode loader 검증을 모두 요구하며 과거 PASS 파일만으로 true가 되지 않는다. 정책 carry와 신규 자본 allocation 승격은 다른 결과다. 적용일이 없거나 bootstrap 날짜가 맞지 않는 PID receipt를 새 정책 소비로 표시하지 않는다. 이번 migration 뒤 기존 예약 wrapper 이름과 v1 reader는 외부 예약/과거 영수증 호환 때문에 유지한다. 새 producer 중복 등록, 통합 legacy writer의 추가 예약, 구 전체 실행기 복구는 금지한다. 예약 변경이 승인되는 후속 작업에서 마지막 외부 참조가 없어질 때만 호환 이름을 제거한다.
 
 Widget signal 연구는 기존 일별 품질 기준을 통과한 날짜로 평가하고 결손 날짜를 명시한다. 기존 `PASS_WITH_DATE_EXCLUSIONS`와 holdout/sample 기준을 유지하며 한 날짜의 결손만으로 전체 종목을 제외하지 않는다. 추가 원격 history backfill은 회차당 기본10종목으로 제한하고 나머지는 저장된 검증 자료를 사용한다. 전체 종목 분모, 날짜 제외, 자료 부족 종목을 보존하며 재실행 완료를 경제성 통과와 구분한다. 회차별 위젯 평가는 기본100종목(`--max-research-symbols`), 에피소드 신규 탐색은 기본50종목(`--max-new-research-symbols`)으로 제한한다. 위젯 기존 운영·명시 watch를 우선 보존하고 완료 추천 순위→저장 자료 커버리지→기존 명단 순서를 사용한다. 에피소드 기존 운영 종목의 시간대·로직 평가는 신규50 한도 밖에서 유지한다. 원 명단은 삭제하지 않으며 제외분은 `population_selection.deferred_symbols`에 자원상 이월로 기록한다. 평가 수익으로 대상을 사전 선별하지 않는다.
 

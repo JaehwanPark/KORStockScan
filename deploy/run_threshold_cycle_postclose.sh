@@ -909,53 +909,6 @@ PY
 }
 
 
-low_price_candidate_recommendation_reusable() {
-  local json_path="$1"
-  "$VENV_PY" - "$json_path" "$TARGET_DATE" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-from src.engine.monitoring.low_price_two_leg_expanded_candidate_research import (
-    CandidateRecommendationNotifier,
-    REPORT_SCHEMA,
-)
-
-try:
-    payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-except Exception:
-    raise SystemExit(1)
-target_date = sys.argv[2]
-valid = (
-    isinstance(payload, dict)
-    and payload.get("schema") == REPORT_SCHEMA
-    and payload.get("report_type") == "low_price_two_leg_expanded_candidate_research"
-    and payload.get("target_date") == target_date
-    and payload.get("end_date") == target_date
-    and payload.get("status")
-    in {
-        "recommendations_ready",
-        "no_qualified_candidate",
-        "partial_source_quality",
-        "source_quality_blocked",
-    }
-    and CandidateRecommendationNotifier._valid_report(payload)
-    and payload.get("telegram_status")
-    in {"sent", "duplicate", "sent_state_persist_failed"}
-    and payload.get("authority")
-    == "lower_price_machine_candidate_recommendation_only"
-    and payload.get("recommendation_only") is True
-    and payload.get("machine_created") is False
-    and payload.get("service_started") is False
-    and payload.get("runtime_effect") is False
-    and payload.get("allowed_runtime_apply") is False
-    and payload.get("actual_order_submitted") is False
-    and payload.get("broker_order_forbidden") is True
-    and isinstance(payload.get("recommendations"), list)
-)
-raise SystemExit(0 if valid else 1)
-PY
-}
 
 resource_guard_enabled() {
   [ "$POSTCLOSE_RESOURCE_GUARD" = "true" ] || [ "$POSTCLOSE_RESOURCE_GUARD" = "1" ]
@@ -1482,16 +1435,16 @@ print(stage2_checklist_path(target_date))
 PY
 }
 
-# Collect the existing same-day full-cost source before long raw/research work.
-# Provider replay gates cannot suppress this diagnostic source prerequisite.
-if [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "true" ] || [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "1" ]; then
-  wait_for_postclose_resources "ai_decision_action_outcome_calibration"
-  if run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.ai_action_outcome_calibration \
-    --target-date "$TARGET_DATE" --write --ensure-economic-reference-only; then
-    echo "[threshold-cycle] machine full-cost source prerequisite verified target_date=$TARGET_DATE"
-  else
-    echo "[WARN] machine full-cost source unavailable target_date=$TARGET_DATE; missing economics remain excluded/null" >&2
+for spec in "main_machine_policy:$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" "legacy_machine_report:$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" "main_auxiliary_policy:$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" "episode_policy:$RUN_LOW_PRICE_TWO_LEG_CANDIDATE_RECOMMENDATION" "outcome_labels:$RUN_AI_DECISION_QUALITY_DAILY_MATERIALIZATION"; do
+  stage="${spec%%:*}"; enabled="${spec#*:}"
+  if [[ "$enabled" != "true" && "$enabled" != "1" ]]; then
+    "$VENV_PY" -m src.engine.automation.postclose_summary_handoff --stage "$stage" --date "$TARGET_DATE" --off
   fi
+done
+# Launch the independent machine owner before any long family/AI producer.
+if [[ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" == "true" || "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" == "1" ]]; then
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.postclose_summary_handoff \
+    --stage main_machine_policy --date "$TARGET_DATE" --publication-date "$POLICY_PUBLICATION_DATE" --launch
 fi
 
 if [ "$RUN_SIM_POST_SELL_FEEDBACK" = "true" ] || [ "$RUN_SIM_POST_SELL_FEEDBACK" = "1" ]; then
@@ -1523,47 +1476,8 @@ fi
 
 
 if [ "$RUN_LOW_PRICE_TWO_LEG_CANDIDATE_RECOMMENDATION" = "true" ] || [ "$RUN_LOW_PRICE_TWO_LEG_CANDIDATE_RECOMMENDATION" = "1" ]; then
-  candidate_recommendation_json="$PROJECT_DIR/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_${TARGET_DATE}.json"
-  candidate_recommendation_md="$PROJECT_DIR/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_${TARGET_DATE}.md"
-  if verified_reused_module "src.engine.monitoring.low_price_two_leg_expanded_candidate_research" || { reusable_completed_artifact \
-    "$candidate_recommendation_json" \
-    "$candidate_recommendation_md" \
-    "low_price_two_leg_expanded_candidate_research" \
-    "$PROJECT_DIR/src/engine/monitoring/low_price_two_leg_expanded_candidate_research.py" \
-    && low_price_candidate_recommendation_reusable "$candidate_recommendation_json"; }
-  then
-    echo "[threshold-cycle] reuse completed low-price machine candidate recommendation date=$TARGET_DATE"
-  else
-    low_price_resume_attempt=1
-    while true; do
-      wait_for_postclose_resources "low_price_two_leg_candidate_recommendation"
-      if run_postclose_cmd env PYTHONPATH=. "$VENV_PY" \
-        -m src.engine.monitoring.low_price_two_leg_expanded_candidate_research \
-        --target-date "$TARGET_DATE" \
-        --write \
-        "${POSTCLOSE_NOTIFY_ARGS[@]}" "${POSTCLOSE_RETAINED_SOURCE_ARGS[@]}" \
-        --print-summary
-      then
-        break
-      else
-        low_price_resume_rc=$?
-      fi
-      if [ "$low_price_resume_rc" -ne 75 ] || [ "$low_price_resume_attempt" -ge 3 ]; then
-        exit "$low_price_resume_rc"
-      fi
-      emit_postclose_marker "[RETRY] low_price_two_leg_candidate_recommendation target_date=$TARGET_DATE reason=shared_read_deferred_resume attempt=$low_price_resume_attempt"
-      low_price_resume_attempt=$((low_price_resume_attempt + 1))
-      sleep 5
-    done
-  fi
-  wait_for_report_artifact \
-    "$candidate_recommendation_json" \
-    "$candidate_recommendation_md" \
-    "low_price_two_leg_candidate_recommendation"
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" \
-    -m src.engine.automation.low_price_two_leg_auto_expansion_policy \
-    --publication-date "$POLICY_PUBLICATION_DATE" --source-date "$TARGET_DATE" \
-    --write
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.postclose_summary_handoff \
+    --stage episode_policy --date "$TARGET_DATE" --publication-date "$POLICY_PUBLICATION_DATE" --launch
 fi
 # Rising Missed scout entry and dedicated studies retired 2026-09-18.
 echo "[threshold-cycle] entry AI gate diagnostic skipped schedule=$ENTRY_AI_GATE_BACKTEST_SCHEDULE target_date=$TARGET_DATE"
@@ -1622,17 +1536,8 @@ if [ "$RUN_ENTRY_SPLIT_ORDER_PLAN" = "true" ] || [ "$RUN_ENTRY_SPLIT_ORDER_PLAN"
     "entry_split_order_policy"
 fi
 if [ "$RUN_AI_DECISION_QUALITY_DAILY_MATERIALIZATION" = "true" ] || [ "$RUN_AI_DECISION_QUALITY_DAILY_MATERIALIZATION" = "1" ]; then
-  wait_for_postclose_resources "ai_decision_quality_daily_materialization"
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.ai_decision_quality \
-    --date "$TARGET_DATE" \
-    --mode postclose \
-    --write
-  wait_for_json_artifact \
-    "$PROJECT_DIR/data/runtime/ai_decision_quality_control_${TARGET_DATE}.json" \
-    "ai_decision_quality_control"
-  wait_for_json_artifact \
-    "$PROJECT_DIR/data/report/ai_decision_outcome_labels/ai_decision_outcome_labels_${TARGET_DATE}.json" \
-    "ai_decision_outcome_labels"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.postclose_summary_handoff \
+    --stage outcome_labels --date "$TARGET_DATE" --publication-date "$POLICY_PUBLICATION_DATE" --launch
 fi
 run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.entry_cancel_wait_tuning \
   --publication-date "$POLICY_PUBLICATION_DATE" --effective-date "$PREPARED_EFFECTIVE_DATE" --date "$TARGET_DATE"
@@ -1892,28 +1797,10 @@ if [ "$RUN_LOW_PRICE_TWO_LEG_TUNING" = "true" ] || [ "$RUN_LOW_PRICE_TWO_LEG_TUN
 fi
 if [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "true" ] || [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "1" ]; then
   wait_for_postclose_resources "ai_decision_action_outcome_calibration"
-  # The standalone machine stage publishes before any auxiliary replay.
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.ai_action_outcome_calibration \
-    --target-date "$TARGET_DATE" --data-root "$PROJECT_DIR/data" --machine-policy-only --write --activate-now
-  # Main mechanistic evaluation owns the canonical calibration report and is
-  # independent from compact provider availability.  It must publish before
-  # compact finalization so both family receipts survive in one dated bundle.
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.ai_action_outcome_calibration \
-    --target-date "$TARGET_DATE" --data-root "$PROJECT_DIR/data" --machine-only --write \
-    --publication-date "$POLICY_PUBLICATION_DATE" \
-    --require-policy-publication --print-summary
-  wait_for_json_artifact \
-    "$PROJECT_DIR/data/report/ai_decision_action_outcome_calibration/ai_decision_action_outcome_calibration_${TARGET_DATE}.json" \
-    "main_mechanistic_entry_full_evaluation"
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.entry_setup_paired_replay_batch \
-    --date "$TARGET_DATE" --data-root "$PROJECT_DIR/data" --compact-only \
-    --execute-compact-candidate --write
-  wait_for_json_artifact \
-    "$PROJECT_DIR/data/report/ai_entry_setup_paired_replay_batch/compact_auxiliary_paired_economic_${TARGET_DATE}.json" \
-    "compact_auxiliary_paired_economic"
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.entry_setup_paired_replay_batch \
-    --date "$TARGET_DATE" --data-root "$PROJECT_DIR/data" --compact-only \
-    --finalize-compact --publication-date "$POLICY_PUBLICATION_DATE" --write
+  for stage in legacy_machine_report main_auxiliary_policy; do
+    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.postclose_summary_handoff \
+      --stage "$stage" --date "$TARGET_DATE" --publication-date "$POLICY_PUBLICATION_DATE" --launch
+  done
 fi
 if [ "$RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT" = "true" ] || [ "$RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT" = "1" ]; then
   automation_trigger_decision "codebase_performance_workorder"
@@ -2118,12 +2005,17 @@ refresh_automation_trigger_decision_snapshot "final_consumer"
 wait_for_postclose_resources "build_next_stage2_checklist_final_refresh"
 run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.build_next_stage2_checklist --source-date "$TARGET_DATE"
 wait_for_file_artifact "$(next_stage2_checklist_path)" "next_stage2_checklist_final_refresh"
-if [[ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" == "true" || "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" == "1" ]]; then
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.verify_threshold_cycle_postclose_chain \
-    --date "$TARGET_DATE" --main-mechanistic-summary-only --require-summary-handoff --effective-date "$PREPARED_EFFECTIVE_DATE" --publication-date "$POLICY_PUBLICATION_DATE"
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.verify_threshold_cycle_postclose_chain \
-    --date "$TARGET_DATE" --compact-summary-only --require-summary-handoff --effective-date "$PREPARED_EFFECTIVE_DATE" --publication-date "$POLICY_PUBLICATION_DATE"
-fi
+# Independent failures remain in their own receipts; the native wrapper can
+# finish its own sources, while finalization checks the whole stage registry.
+"$VENV_PY" -m src.engine.automation.postclose_summary_handoff --stage wait --date "$TARGET_DATE" --timeout-sec 14400 || true
+for stage in legacy_machine_report main_auxiliary_policy; do
+  if "$VENV_PY" -m src.engine.automation.postclose_summary_handoff --stage "$stage" --date "$TARGET_DATE" --check; then
+    scope_flag=--main-mechanistic-summary-only
+    if [[ "$stage" == "main_auxiliary_policy" ]]; then scope_flag=--compact-summary-only; fi
+    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.verify_threshold_cycle_postclose_chain \
+      --date "$TARGET_DATE" "$scope_flag" --require-summary-handoff --effective-date "$PREPARED_EFFECTIVE_DATE" --publication-date "$POLICY_PUBLICATION_DATE"
+  fi
+done
 wait_for_postclose_resources "verify_threshold_cycle_postclose_chain"
 POSTCLOSE_FAILURE_REASON="verify_threshold_cycle_postclose_chain_failed"
 POSTCLOSE_FAILURE_ARTIFACT="$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.json"

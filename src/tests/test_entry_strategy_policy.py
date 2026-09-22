@@ -793,3 +793,12 @@ def test_machine_rank_ignores_float_noise_before_episode_support():
              paired_admission_delta_pct=.1, selected_opportunity_count=1)
     b = {**a, 'selected_path_ev_pct':.1, 'selected_opportunity_count':2}
     assert _machine_admission_rank(b) > _machine_admission_rank(a)
+
+
+@pytest.mark.parametrize('name', ['maximum_spread_bp', 'maximum_top3_ask_to_bid_ratio'])
+def test_strategy_rejects_zero_execution_bounds_before_replay(name):
+    from src.engine.scalping import entry_strategy_policy as strategy
+    from src.engine.scalping.entry_setup_evidence import MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1
+    policy = strategy.seed(MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1, ('KRX','KRX_REGULAR'))
+    policy['strategy']['nodes']['root']['profile'][name] = 0.
+    assert 'strategy_execution_threshold_must_be_positive' in strategy.validate(policy['strategy'])

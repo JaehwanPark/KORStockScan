@@ -1035,6 +1035,9 @@ def build_runtime_approval_summary(
         "runtime_effect": False, "allowed_runtime_apply": False, "actual_order_submitted": False,
         "include_swing": include_swing, "include_producer_gap": include_producer_gap,
     }
+    from src.engine.automation.postclose_summary_handoff import stage_overview, stage_path, STAGE_REGISTRY
+    if any(stage_path(DATA_DIR / 'report', target_date, stage).exists() for stage in STAGE_REGISTRY):
+        report['postclose_stage_status'] = stage_overview(DATA_DIR / 'report', target_date)
     json_path, md_path = summary_paths(target_date)
     _atomic_write(json_path, json.dumps(report, ensure_ascii=False, indent=2) + "\n")
     lines = [

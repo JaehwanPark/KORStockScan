@@ -97,7 +97,7 @@ def _read_report_dependency(path, *, source_date=None):
     return loop.read_object(path, limit=32 * 1024 * 1024)
 
 
-def read_studies(day, *, report_root=DATA_DIR / "report"):
+def read_studies(day, *, report_root=DATA_DIR / "report", families=("widget", "episode")):
     paths = {
         "widget": Path(report_root)
         / "widget_symbol_signal_policy_research"
@@ -106,7 +106,7 @@ def read_studies(day, *, report_root=DATA_DIR / "report"):
         / "low_price_two_leg_expanded_candidate_research"
         / f"low_price_two_leg_expanded_candidate_research_{day}.json",
     }
-    paths = {family: path.resolve() for family, path in paths.items()}
+    paths = {family: path.resolve() for family, path in paths.items() if family in families}
     studies, missing = {}, []
     for family, path in paths.items():
         try:
@@ -194,6 +194,7 @@ def _refresh(
     publish=True,
     collect_costs=False,
     source_wait_seconds=0,
+    allocation_only=False,
 ):
     started = clock.monotonic()
     publication_contract = _publication_contract(day)
@@ -226,7 +227,8 @@ def _refresh(
         except FileNotFoundError:
             previous = {}
         if (
-            previous.get("exact_cost_recovery_requested") is collect_costs
+            previous.get("allocation_only", False) is allocation_only
+            and previous.get("exact_cost_recovery_requested") is collect_costs
             and validate_current_receipt(
                 previous, day, publication_contract=publication_contract
             )
@@ -304,6 +306,7 @@ def _refresh(
                 code=code,
                 native_widget_state_sha256=state_hash,
                 exact_cost_recovery_requested=collect_costs,
+                allocation_only=allocation_only,
                 publication_contract=publication_contract,
             )
         )
@@ -362,10 +365,11 @@ def _refresh(
             low_price_two_leg_auto_expansion_policy as episode_policy,
         )
 
-        widget.write_report(studies["widget"], output_dir=paths["widget"].parent)
-        episode.write_report(studies["episode"], paths["episode"].parent)
+        if not allocation_only:
+            widget.write_report(studies["widget"], output_dir=paths["widget"].parent)
+            episode.write_report(studies["episode"], paths["episode"].parent)
         publications = {}
-        if publish:
+        if publish and not allocation_only:
             core, _, _ = widget_policy.write_outputs(
                 studies["widget"],
                 evidence_report_path=paths["widget"],
@@ -474,6 +478,7 @@ def _refresh(
             },
             exact_cost_recovery_requested=collect_costs,
             publication_requested=publish,
+            allocation_only=allocation_only,
             publication_contract=publication_contract,
             dependency_sources=dependency_sources,
             execution_mode="completed_study_fixed_point_no_grid_replay",
@@ -586,12 +591,55 @@ def validate_receipt(value, day):
         and value.get("target_date") == str(day)
         and value.get("status") == "complete"
         and value.get("receipt_sha256") == loop.digest(body)
-        and bool(value.get("publications"))
+        and (bool(value.get("publications")) or value.get("allocation_only") is True)
         and all(
             item.get("unaccounted_count") == 0
             for item in value.get("lifecycle_counts", {}).values()
         )
     )
+
+
+def refresh_family(day, family, *, directory=loop.DIRECTORY, report_root=DATA_DIR / 'report'):
+    """Publish one family's completed study; allocation retains its own writer."""
+    studies, paths, missing = read_studies(day, report_root=report_root, families=(family,))
+    destination = Path(report_root) / REPORT_TYPE / f'{family}_policy_refresh_{day}.json'
+    if missing:
+        return dict(status='waiting', missing_families=missing)
+    publication = _publication_contract(day)
+    with loop.research_scope(directory), loop.writer_lock(Path(directory) / 'refresh', blocking=False):
+        report = studies[family]
+        from src.engine.monitoring.research_version_outcomes import outcome_feedback, episode_feedback
+        report['policy_version_feedback'] = outcome_feedback(day, directory=directory) if family == 'widget' else episode_feedback(day, report_root=report_root)
+        loop.write_joint_inputs(report, family=family, directory=directory)
+        report['joint_allocation_gate'] = loop.combined_joint_gate(report, family=family, source_date=day, directory=directory)
+        if family == 'widget':
+            from src.engine.monitoring import widget_symbol_signal_policy_research as study
+            from src.engine.monitoring import widget_symbol_runtime_policy as policy
+            study.write_report(report, output_dir=paths[family].parent)
+            child, _, _ = policy.write_outputs(report, evidence_report_path=paths[family],
+                policy_dir=Path(directory).parent / 'widget_symbol_runtime_policy',
+                apply_report_dir=Path(report_root) / 'widget_symbol_runtime_policy_apply')
+        else:
+            from src.engine.monitoring import low_price_two_leg_expanded_candidate_research as study
+            from src.engine.automation import low_price_two_leg_auto_expansion_policy as policy
+            study.write_report(report, paths[family].parent)
+            folder = Path(directory).parent / 'low_price_two_leg_auto_expansion'
+            value = policy.build_policy(publication_date=date.fromisoformat(publication['publication_date']),
+                source_date=day, report_dir=paths[family].parent, policy_dir=folder)
+            effective = date.fromisoformat(value['effective_date'])
+            child = policy.policy_path(effective, policy_dir=folder)
+            policy.preserve_source_snapshot(value, policy_dir=folder)
+            loop.publication_transaction(folder, effective_date=effective, files={child.name:value},
+                expected_generation=loop.future_publication_parent(folder, effective))
+            policy.load_policy(effective, policy_dir=folder)
+        value = loop.read_object(child, limit=32 * 1024 * 1024)
+        receipt = dict(schema='family_policy_refresh_v2', target_date=str(day), family=family, status='complete',
+            publication_contract=publication, policy_path=str(child.resolve()), policy_sha256=loop.digest(value),
+            source_path=str(paths[family]), source_sha256=loop.digest(_read_report_dependency(paths[family])),
+            allocation_disposition=report['joint_allocation_gate'].get('status'), **loop.AUTHORITY)
+        receipt['receipt_sha256'] = loop.digest(receipt)
+        loop.atomic_write(destination, receipt)
+        return receipt
 
 
 def main(argv=None):
@@ -601,13 +649,14 @@ def main(argv=None):
     parser.add_argument("--source-poll-sec", type=int, default=30)
     parser.add_argument("--write", action="store_true")
     parser.add_argument("--collect-costs", action="store_true")
+    parser.add_argument("--family", choices=("widget", "episode", "allocation", "legacy"), default="legacy")
     args = parser.parse_args(argv)
     day = date.fromisoformat(args.source_date)
     now = datetime.now(ZoneInfo("Asia/Seoul"))
     if (
         day > now.date()
-        or day == now.date()
-        and now.time().replace(tzinfo=None) < time(20, 5)
+        or (args.family in {"legacy", "allocation"} and day == now.date()
+        and now.time().replace(tzinfo=None) < time(20, 5))
     ):
         print("machine_research_closed_loop_not_yet_due")
         return 75
@@ -615,6 +664,14 @@ def main(argv=None):
         studies, _, missing = read_studies(day)
         print(loop.digest(studies), missing)
         return 75 if missing else 0
+    if args.family in {"widget", "episode"}:
+        try:
+            result = refresh_family(day, args.family)
+        except BlockingIOError:
+            print('family_publication_writer_busy')
+            return 75
+        print(result["status"])
+        return 0 if result["status"] == "complete" else 75
     import signal
 
     def interrupted(signum, frame):
@@ -626,6 +683,7 @@ def main(argv=None):
         result = refresh(
             day,
             collect_costs=args.collect_costs,
+            publish=args.family != "allocation", allocation_only=args.family == "allocation",
             source_wait_seconds=clock.monotonic() - begin,
         )
         if result["status"] == "complete":

@@ -1,7 +1,7 @@
 # 기계 통합 장후 실행기 분리·정리 구현계획
 
 작성: 2026-09-22 KST
-상태: 계획 수립. scheduler/서비스/실행기 변경은 아직 실행하지 않았다.
+상태: R1–R6 구현·리뷰·격리 재실행 검증 완료. 배포 및 실제 정기 실행 근거는 아래 리뷰 기록으로 관리한다.
 실행 owner: [9/22 체크리스트](../checklists/2026-09-22-stage2-todo-checklist.md)의 `PostcloseStageRunnerSeparation`.
 연결: [메인 기계정책](main-nonentry-threshold-postclose-runtime-implementation-plan-2026-09-21.md), [보조 AI](auxiliary-ai-opportunity-error-tuning-runtime-implementation-plan-2026-09-22.md).
 
@@ -61,10 +61,20 @@
 
 실패 주입: collector label 지연/부분 파일, widget 실패, episode 실패, AI timeout, summary 실패, 자정, 같은 source 동시 요청, 코드 변경·과거 terminal 재사용. 기존 wrapper/summary/controller/router 테스트에 추가하고 `bash -n`, 대상 pytest, diff, parser를 실행한다.
 
-자동화 변경 구현 시 [장후 운영 문서](../postclose-tuning-result-review-task-instructions.md)·daily checklist를 같은 변경집합으로 갱신한다. baseline Rebase/README/AGENTS는 별도 요청 없이 수정하지 않는다. 계획 단계에서는 cron/서비스를 수정하거나 작업을 실행하지 않는다.
+자동화 변경 구현 시 [장후 운영 문서](../postclose-tuning-result-review-task-instructions.md)·daily checklist를 같은 변경집합으로 갱신한다. baseline Rebase/README/AGENTS는 별도 요청 없이 수정하지 않는다. 구현·배포는 사용자 명시 승인에 따라 수행하며 기존 정기 예약 시각을 유지한다.
 
 ## 6. 세 계획의 적용 순서
 
 R1의 최소 stage receipt 계약과 M1~M5를 먼저 보완하고, M6에서 기계정책을 장중 적용한다. R2~R5의 나머지 family 분리는 그 기계정책의 장중 적용을 대기시키지 않는다. AI는 확보된 실제 호출 원천으로 A1~A5를 준비하고 A6에서 독립 적용한다. AI 표본 부족이나 source gap은 main 정책 유지·갱신을 막지 않는다. 마지막에 R6로 독립 장후 자동 갱신을 검증한다.
 
-문서 검증: 세 계획의 상대 링크·현재 stable owner·실행 권한 경계를 재리뷰했고 print-only parser/diff를 통과했다. 문서 전용 단계이므로 shell/Python 테스트·서비스 전환·보고서 재생성은 실행하지 않았다.
+## 7. 구현·검증 기록
+
+- R1: 기존 summary owner에14개 stage registry와 v2 terminal을 추가했다. 현재 source/code/receipt hash, partial label, source generation 변경, legacy reader를 검증했다.
+- R2: main 정책을 먼저 독립 launch하고 episode/label/legacy report/compact AI 실패를 각 terminal로 분리했다. 기존21:05 follower의 중복 학습 호출을 제거했다.
+- R3: widget/episode 발행은 `--family widget|episode`, 공동 allocation은 `--family allocation`으로 기존 owner를 나눴다. source 대기에는 compute slot을 점유하지 않고 child 동시 실행은2개다.
+- R4: controller/summary/verifier의 source 목록을 같은 registry에 결속했다. 전체 완료와 다음 장 준비를 분리하고 bootstrap 재검증·현재 loader를 확인한다. summary 자기 hash 순환은 제외했다.
+- R5: 기존 cron/router/두 정기 unit의 이름·시각은 유지하고 검증된 immutable release로 연결한다. 정확 release/유효 ExecStart/배포 시각은 아래 리뷰에 기록한다. 오늘 정기 run의 실제 PID·terminal은 아직 미래 관측이다.
+- R6: 9/21 완료 payload39,349,135bytes·label351,502bytes 복사본으로 partial label 실패→collector deferred→원 라벨 복구→collector 성공을 실제 실행했다. main/AI 학습0회·실제 collector1회이며 원 정책 pointer SHA256는 전후 동일하다. 전체 전일 장후를 다시 실행하거나 원본 DONE을 v2 성공으로 소급 작성하지 않았다.
+- 검증: 관련458tests, 최종 handoff94tests, 중단·checkpoint 및 재시도 검증 PASS. 배포본 재검증과 정기 자연 실행은 서로 다른 근거로 기록한다.
+
+[코드리뷰·재실행·배포 기록](../audit-reports/2026-09-22-postclose-stage-separation-review.md)이 실제 영수증을 소유한다. 기계정책 자체는 별도 M1–M6의 장중 generation을 유지하며 이번 추가 리뷰에서는 실행 불가능한0값 threshold 후보만 거절하도록 검증했다.
