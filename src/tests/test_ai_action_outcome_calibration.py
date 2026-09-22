@@ -5042,6 +5042,30 @@ def test_machine_model_holdout_must_follow_model_calibration():
     assert not compact.owner_model_scope_valid(model, row['operating_comparison_input'])
 
 
+def test_mechanistic_threshold_candidate_normalizes_strategy_parent_selection():
+    import copy
+
+    from src.engine.scalping.entry_setup_evidence import (
+        validate_mechanistic_entry_threshold_policy,
+    )
+
+    parent = copy.deepcopy(calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1)
+    from src.engine.scalping import entry_strategy_policy
+
+    parent = entry_strategy_policy.seed(parent, ("KRX", "KRX_REGULAR"))
+    coords = {k: parent["thresholds"][k] for k in calibration.MECHANISTIC_COMMON_FEATURE_GRID}
+
+    candidate = calibration._mechanistic_threshold_policy(coords, parent)
+    assert candidate["version"] == calibration.MECHANISTIC_REFINEMENT_POLICY_VERSION
+    assert candidate["postclose_selection"]["minimum_cost_adjusted_ev_pct"] == 0.10
+    assert candidate["postclose_selection"]["minimum_unique_symbol_count"] == 3
+    assert validate_mechanistic_entry_threshold_policy(candidate) == []
+
+    published = calibration._mechanistic_threshold_policy(coords, parent, publication=True)
+    assert published["version"] == calibration.MECHANISTIC_FULL_POPULATION_POLICY_VERSION
+    assert validate_mechanistic_entry_threshold_policy(published) == []
+
+
 def test_joint_frozen_bundle_qualifies_then_hash_date_and_subset_fail_closed(monkeypatch):
     import copy
     from datetime import datetime, timedelta

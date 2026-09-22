@@ -2608,6 +2608,20 @@ def _mechanistic_threshold_policy(policy, parent_policy=None, *, publication=Fal
         if threshold_policy.get("version") == MECHANISTIC_FULL_POPULATION_POLICY_VERSION
         else MECHANISTIC_REFINEMENT_POLICY_VERSION
     )
+    # A live strategy parent may intentionally use the relaxed strategy
+    # selection floor (EV 0 / one symbol). The offline refinement and
+    # full-population versions have a stricter schema contract, and the action
+    # evaluator validates that contract even though it does not use these
+    # selection fields. Normalize the copied parent before candidate replay.
+    selection = threshold_policy.setdefault("postclose_selection", {})
+    selection["minimum_cost_adjusted_ev_pct"] = max(
+        float(selection.get("minimum_cost_adjusted_ev_pct", 0.0)),
+        MECHANISTIC_REFINEMENT_GATE["minimum_cost_adjusted_ev_pct"],
+    )
+    selection["minimum_unique_symbol_count"] = max(
+        int(selection.get("minimum_unique_symbol_count", 0)),
+        3,
+    )
     threshold_policy["thresholds"].update(policy)
     if publication:
         threshold_policy.pop("hierarchy", None)
