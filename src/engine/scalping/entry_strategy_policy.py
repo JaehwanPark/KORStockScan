@@ -672,7 +672,7 @@ def joint_candidates(parent, scope, *, domains=None, selectors=None, start=0, li
             domain_sha256=domain_hash, search_complete=cursor + 1 == total)
 
 
-MACHINE_SELECTION_VERSION = 'support_adjusted_win_rate_then_net_ev_v2'
+MACHINE_SELECTION_VERSION = 'support_adjusted_win_rate_preserve_entries_v3'
 
 
 def machine_support_adjusted_win_rate(economy):
@@ -721,6 +721,11 @@ def select_report_candidate(source):
     return scope, result
 
 
+def machine_existing_entry_changes(arm):
+    return sum(count for transition, count in (arm.get('action_transition_counts') or {}).items()
+               if transition.startswith('ENTER_NOW->') and transition != 'ENTER_NOW->ENTER_NOW')
+
+
 def promotion_errors(candidate, parent, scope):
     """One gate used by research, publisher and activation; no 10bp floor."""
     errors = []
@@ -747,6 +752,8 @@ def promotion_errors(candidate, parent, scope):
                 continue
             days, ids = arm.get('source_dates') or [], arm.get('opportunity_ids') or []
             economy = arm.get('economics') or {}
+            if machine_existing_entry_changes(arm):
+                errors.append(split + '_machine_existing_entries_changed_without_evaluation')
             try:
                 valid_dates = days and all(datetime.fromisoformat(d).date().isoformat() == d and d >= '2026-06-05' for d in days)
             except (ValueError, TypeError):

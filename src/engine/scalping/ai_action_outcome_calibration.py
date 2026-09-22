@@ -8227,6 +8227,7 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
                 economics=economy, action_transition_counts=evidence['action_transition_counts']))
             if (delta is not None and selected_ev is not None and win_rate is not None
                 and worst is not None and score[0] is not None
+                and not strategy.machine_existing_entry_changes(evidence)
                 and (best_score is None or score > best_score)):
                 best, best_evidence, best_score = candidate, evidence, score
             result['train_checkpoint'] = dict(best=best, best_evidence=best_evidence, best_score=best_score,

@@ -61,3 +61,10 @@
 - 근거:`tmp/postclose-stage-separation-20260922/support-rank-comparison.json`(원 보고서 artifact SHA 포함), `support-rank-final-tests.log`309tests PASS. 원 정책 bundle `a552d63…` loader PASS. 큰 원천/학습/provider 재실행 없이 기존 후보 점수만 분석했으며 정책 pointer를 변경하지 않았다.
 - scope 선택 fixture에는 실제 계약에 필요한 표본 수를 명시했다.1/1 대6/10·12/20·18/30 비교, 반복 attempt 불변성, 음수 EV 동점 비교, invalid 표본, 선정 버전 변경 후 재탐색을 검증했다.
 - 직전 정책 전체보다 우수함의 입증이나 소표본 문제의 완전 해소를 주장하지 않는다. 기존 ENTER_NOW 유지/제외의 손익 비교와 새 날짜의 자연 성과는 이 점수 개선과 별개다.
+
+
+### 장중 재생성 중 추가 범위 결함 수정
+
+장중 교체 승인 후 eb3079c96에서9/21 source를 현재 a552d63 부모로 다시 평가했다. KRX96회 중 유효 신규 전환 후보는3기회33.33%/−0.7421%였으나, 기존 ENTER_NOW23attempt 중15를 RECHECK로 바꿨다. 이15건의 손익은 미진입 전환 점수에 포함되지 않는다. 발행 전 계산 PID93556을 종료하고 기존 정책 pointer를 유지했다.
+
+선정 loop와 공통 promotion validator에서 기존 ENTER_NOW 변경 후보를 제외하도록 보완했다. 변경 횟수는 저장된 action transition에서 계산한다. 원 승률·표본보정·음수 EV 허용 조건은 유지하며 이 조건은 범위 밖 미평가 영향의 방지다. 선정 버전은 `support_adjusted_win_rate_preserve_entries_v3`이다. 현재 유효 정책 및 기동 여부와 새 후보 적용을 구분하며, 유효 후보가 없으면 정책은 carry한다.310개 회귀검증 PASS.
