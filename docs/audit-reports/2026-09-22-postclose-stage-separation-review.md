@@ -35,5 +35,5 @@
 
 - 1차 코드 `97fcd5463` push, 독립 배포본451tests PASS. 완료 source 복사본의 실제 재개도 release cwd에서 성공했다. 검증 fixture는 strict source reader 계약에 맞게 공유 data의 실경로를 사용했다.
 - 10:25 유효 두 장후 unit의 WorkingDirectory/ExecStart와 공통 cron postclose/finalize router를 새 배포본으로 확인했다. 검증 영수증: `tmp/postclose-stage-separation-20260922/deployment-verification.json`.
-- 마지막 예약 분기 리뷰에서 OFF machine/AI stage의 불필요 scoped verification을 제거하고 pending/running/deferred follower 확인을 exit75로 반환하도록 보완했다. 추가98tests PASS. 이 수정까지 포함한 최종 selector·unit·commit은 동일 deployment 영수증에 갱신한다.
+- 마지막 예약 분기 리뷰에서 OFF machine/AI stage의 불필요 scoped verification을 제거하고 pending/running/deferred follower 확인을 exit75로 반환하도록 보완했다. 추가98tests PASS. 이 수정까지 포함한 최종 코드 `90c5cbad3`을 push/배포했고10:28:50 두 unit과 postclose/finalize router의 동일 release를 확인했다. 최종 배포본 추가98tests도 PASS다. 상세는 동일 deployment 영수증에 갱신했다.
 - 현재 매매 PID60693은 `main-machine-20260922-3a79e240f/src`에서 유지한다. 새 배포는 정기 장후 코드에 적용되었으며 현재 PID가 새 source를 소비했다고 표시하지 않았다. 기존 정책 bundle의 새 loader 검증 PASS, 원 정책 변경 없음.

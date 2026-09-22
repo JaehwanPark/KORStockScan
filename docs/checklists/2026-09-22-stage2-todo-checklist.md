@@ -78,7 +78,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 - [ ] `[PostcloseStageRunnerSeparation] 통합 장후 실행기와 단계별 완료·재시도 분리` (`Due: 2026-09-22`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~23:30`, `Track: RuntimeStability`)
   - Source: [실행기 분리 계획](../proposals/machine-postclose-runner-separation-implementation-plan-2026-09-22.md).
   - Acceptance: main/auxiliary/widget/episode 독립 stage receipt·writer·retry, label 선행 barrier, 전체 완료와 장전 정책 준비 분리, scheduler/router/운영문서 동시 정합, 실패 주입·대상 검증 및 실제 단계별 재개.
-  - 9/22 구현·리뷰 완료: R1–R6 stage registry/독립 writer·bounded child2/label barrier/summary 인계 구현.458+최종94tests 및 완료 원천 복사본의 실제 collector 재개 PASS; 원 정책 유지. [코드·재실행·배포 리뷰](../audit-reports/2026-09-22-postclose-stage-separation-review.md). 남은 자연 확인은 오늘 정기 source_date=9/22 각 stage의 실제 PID/terminal과9/23 정책 loader/부트스트랩이며 이 owner를 유지한다.
+  - 9/22 구현·리뷰 완료: R1–R6 stage registry/독립 writer·bounded child2/label barrier/summary 인계 구현.458+최종94tests 및 완료 원천 복사본의 실제 collector 재개 PASS; 원 정책 유지. 최종90c5cbad3 push/배포10:28 확인, 배포본451+추가98tests·두 unit/cron route PASS. [코드·재실행·배포 리뷰](../audit-reports/2026-09-22-postclose-stage-separation-review.md). 남은 자연 확인은 오늘 정기 source_date=9/22 각 stage의 실제 PID/terminal과9/23 정책 loader/부트스트랩이며 이 owner를 유지한다.
 
 - [x] `[DirectFamilySourceRepairMainMechanisticEntry] 기계정책 조합 탐색·유형 원천·장중 적용 보완` (`Due: 2026-09-22`, `Slot: INTRADAY`, `TimeWindow: 08:00~19:30`, `Track: RuntimeStability`)
   - Source: [기계정책 보완 계획](../proposals/main-nonentry-threshold-postclose-runtime-implementation-plan-2026-09-21.md).
