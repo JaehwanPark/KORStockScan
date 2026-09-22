@@ -1,7 +1,7 @@
 # 메인 BLOCK/RECHECK 전환 임계치 학습·장중 적용 보완계획
 
 작성: 2026-09-21 KST / 전면 보완: 2026-09-22 KST
-상태: **M1–M5 구현·대상 검증 완료. M6 최종 계산·배포·PID 소비 확인 진행 중.**
+상태: **M1–M6 완료(2026-09-22 09:40 KST). 독립 계산·세 구간 발행·KRX 자연 PID 소비·승계·장후 연결 검증.**
 실행 owner: [9/22 체크리스트](../checklists/2026-09-22-stage2-todo-checklist.md)의 `DirectFamilySourceRepairMainMechanisticEntry`.
 연결 계획: [장후 실행기 분리](machine-postclose-runner-separation-implementation-plan-2026-09-22.md), [보조 AI 양방향 튜닝](auxiliary-ai-opportunity-error-tuning-runtime-implementation-plan-2026-09-22.md).
 

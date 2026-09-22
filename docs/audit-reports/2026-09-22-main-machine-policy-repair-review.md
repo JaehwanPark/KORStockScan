@@ -15,10 +15,37 @@
 
 리뷰 중 보완: 부분 결손 때문에 전체 좌표를 동결하는 로직 제거, AI mismatch 행 제외 연결 제거, 기존 tree의 unknown/결손 fallback 보존, AI formatter의 완성봉 제거 경로 보완, primitive 손상 row 사전 격리, 동일 input 중단 재개 시 탐색 순서 고정. 예비 계산은 train checkpoint에서 중지해 검증되지 않은 후보를 적용하지 않았다.
 
+입력 재검토에서 promotion ID가 없는 기회를 기존 admission 검사가 먼저 제외하는 결함을 추가 발견했다. 독립 machine 경로만 date/attempt/symbol/venue/session/bundle 식별자를 허용하고, 같은 exact attempt의 상충 증거는 양쪽 모두 격리한다. AI/기존 통합 경로의 계약은 유지했다. 부동소수점의 극미세한 EV 차이로 동일 성과의 다수 기회 후보가 밀리지 않도록 순위 비교를 소수10자리로 정규화했다. 수정 후 핵심302건 PASS를 고정 배포본에서도 확인했다. 누락 수정 이전 계산은 `before-admission-fix-machine_policy_2026-09-21.json`으로 보존하고 발행하지 않았다.
+
 ## 공식 원천 확인
 
 2026-09-22 KST 확인 upstream HEAD `953e5dbff123f437ab4d11a78a95191a685eb51f`. `kiwoom_docs`는 현재 upstream tree에 없음. `kiwoom/specs.py`, `kiwoom/core/client.py`, `kiwoom/_data/kiwoom_api_spec.json`, `postman/kiwoom-openapi.postman_collection.json`의 ka10001 요청/응답을 대조했다. POST `/api/dostk/stkinfo`, api-id ka10001, 종목별 stk_cd 및 기존 continuation/오류 처리 유지. `mac` 공식 단위는 억원이며 새로운 snapshot만 ×100,000,000 KRW로 변환한다. 같은 응답의 보고 시총을 사용하고 가격/상장주식수를 사후 혼합하지 않는다. 실제 API 호출 추가, 주문·인증·WS 변경 없음. 시각과 확인 항목은 `tmp/main-machine-repair-20260922/official-reference.json`에 보존.
 
 ## 최종 계산·배포·소비
 
-최종 코드 고정 후 기계 전용 회차를 실행한다. 원천 cutoff/학습 cutoff는2026-09-21이며 이후 날짜의 미관측 holdout을 성공으로 표시하지 않는다. 후보·승률·평균 비용 반영 EV·군별 탐색·scope 적용·현재 bundle·실제 PID 소비 결과는 완료 후 아래에 기록한다. 현재 이 절은 완료 영수증이 아니다.
+- 코드 `7741517b4`, 입력 admission 추가 수정 `17653b451` 모두 main push 완료. 최종 immutable release: `/home/ubuntu/KORStockScan-runtime-releases/main-machine-20260922-17653b451`. 최종 guarded restart09:13:32, PID47171, PID/env bootstrap PASS. 검증 전용 provider/주문 호출 없음.
+- 원천 cutoff와 명시 train cutoff2026-09-21, 학습 날짜9/14·15·16·21. 이후 미관측 holdout은 없음이며 독립 검증 성공으로 표현하지 않는다. 독립 계산 terminal09:32:54 `completed`; 각 scope96회 탐색을 마쳤다. artifact: `data/report/ai_decision_action_outcome_calibration/machine_policy_2026-09-21.json` 및 `machine_policy_terminal_2026-09-21.json`.
+- KRX admission:1214→1868판정, promotion ID 부재654건을 attempt identity로 복원. 미진입 비교872기회/1846판정. 기존 source contract 부적합154건 제외; 봉/metadata primitive 검사 이후 추가 제외0. 82좌표 중 역사적 완성봉 원천이 없는13개는 부모값 유지. 현재 장중 자연 capture의 완성봉10개/hash/time 검증 PASS. 시총 snapshot writer/reader는 구현·대상 검증했으며 아직 자연 수집 snapshot은0개이므로 현재 자료에서는 unknown이다.
+
+아래 값은 **새로 ENTER_NOW로 전환된 미진입 기회**의 비용 반영 가격경로 값이다. 전체 정책 또는 실제 체결의 손익/승률이 아니다.
+
+| 구간 | 입력 판정 | 미진입 비교 기회 | 새 전환 기회 | 승률 | 평균 경로 EV | 기존 ENTER_NOW 영향 |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| KRX 정규 | 1868 | 872 | 1 | 100% | +0.1000% | 22건 모두 유지 |
+| KRX/NXT 장후 통합 | 349 | 35 | 1 | 0% | −1.1884% | 2건 중1건 유지·1건 RECHECK |
+| 장전 KRX-like | 230 | 15 | 1 | 0% | −1.2831% | 1건 유지 |
+
+음수 EV 자체를 갱신 차단 조건으로 쓰지 않는 사용자 기준을 적용했다. 표본이 각1기회인 결과이며 일반화·실현 수익 개선 증거가 아니다. KRX 변경은 `tape_supportive_score=60`, `tail_fillability=2.5`; 장후 통합은 `early_volume_ratio=1.4`, `momentum_accelerating_score=54`, `top1_supportive_ratio=2.5`; 장전은 `tape_supportive_score=60`. 나머지 값은 각 부모에서 승계한다. selector+leaf32회도 평가했으나 이번 승자는 각 root1개 정책이다. 유형 선택 기능의 미구현을 의미하지 않는다.
+
+- KRX 군별 attempted4/20/24/32/16, 유효 평가2/19/23/32/7. 순서·범위 제약에 어긋난13조합은 validation/replay에서 제외했고 다른 후보 탐색을 지속했다. 원천 입력 손실과 부적격 임계치 조합 거절을 구분한다. 자세한 scope별 지표·전이는 `tmp/main-machine-repair-20260922/final-scope-results.json`에 보존.
+- 09:33:22.880640 세 구간 atomic activation 완료. bundle `a552d63ac3c3c33b310ee7ea6cdb6b7528b5ce3905dae601a7008f498c14137d`, 이전 `cdeff4e82473b3c850fb184861c35d10f96bee5f6407834e14e41840b06a27b6`. 전 scope AI component 동일, 9/23 로더의 동일 bundle 승계 검증 PASS. 계산 terminal은 발행 이전 영수증이므로 activation=null/PID=false를 보존하고, 후속 발행은 `activation.json`·`activation-validation.json`에서 별도 증명한다.
+- 최종 selected release의 정규 postclose route, inactive machine-final-refresh 서비스 binding, 필수 cron4개 routing PASS. 다음 정규 회차는 독립 machine stage의 `--write --activate-now`를 거치며, 후속 AI 작업 실패가 이미 발행된 machine generation을 기본값으로 되돌리지 않는다. 기존 전체 runner 분리와 AI 양방향 학습은 연결된 별도 계획 소유다.
+- 자연 PID 소비 완료:09:39:50.951600~09:40:20.806801 KRX4건, PID60693/start ticks1079749/cwd최종3a79e240f/src. machine hash `0ccd3dddcd918d88b8a4ab30351e4ac9930d1b62e91a5653a517af6b525bb85f`, bundle위a552d63, AI hash `c7b686514d2061cdfb9871b36c05222e20f94a79e2669a03ff5dd7dcc1cea7d5`. 네 건 모두 실제 적용값tape60/tail2.5를 기록했다. `natural-policy-consumption.json` 및 생성·배포·발행·PID·cron을 묶은 `final-acceptance.json` 보존. 다른 시간 구간의 자연 선택은 해당 세션에서 별도로 관측하며, 현재는 전 scope 발행/로더와 KRX 자연 bundle 소비를 확인한 범위다.
+
+## 장중 소비 검증 중 추가 수리와 종결
+
+09:31경 기존 제출 후 기록 경로에서 split policy 영수증 키가 stock 및 leg metadata 양쪽 `**kwargs`로 전달돼 TypeError가 발생하고 sniper loop가 중단된 것을 발견했다. 정책 발행09:33 이전부터 발생한 별도 기존 결함이며 새 정책 소비를 막았으므로 같은 완료 범위에서 수리했다. 두 필드 집합을 기존 병합 helper에 넣어 실제 leg 영수증 우선순위를 유지했다. broker/account/order request·수량·보유/청산 판단 변경 없음. 실제 주문 없이 제출 후 기록 표현식을 실행하는 회귀 및 관련172건 PASS, 고정 배포본 재검증172건 PASS. 검증 결과와 stack은 `post-ack-tests.log`, `release-post-ack-tests.log`, `post-ack-runtime-incident.log`.
+
+추가 코드 `3a79e240f` main push, 최종 release `/home/ubuntu/KORStockScan-runtime-releases/main-machine-20260922-3a79e240f`. guarded restart09:39:08/PID60693, env bootstrap와 custody handoff PASS. 재계산 없이 기존 a552d63 정책을 승계했다. 최종 source/서비스/cron route도3a79e240f로 재확인했다. 기존 접수 종목222800은 재기동 후 정상 보유 관리의 TRAILING 매도 체결을 관측했으나 이를 이번 튜닝의 수익 검증으로 사용하지 않는다. 별도 청산 영수증에서 `EXIT_RECEIPT_SUBMISSION_CUSTODY_CONTRACT_BLOCKED / exit_session_matches`가 관측됐으며, 기계정책 수리 완료와 청산 custody/실현손익 검증은 구분한다.
+
+**M1–M6 구현·검증·계산·장중 정책 적용·자연 PID 소비·정규 장후 연결 완료.** 한정96회 탐색은 전역 최적성 증명이 아니며, 신규 전환 각1기회·역사적 원천 결손·독립 미래 holdout 부재를 그대로 공개한다. 보조 AI 튜닝/전체 runner 분리/청산 영수증 검증을 기계정책 완료로 합산하지 않는다.
