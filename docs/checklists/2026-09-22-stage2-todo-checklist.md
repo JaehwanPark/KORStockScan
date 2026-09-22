@@ -76,7 +76,8 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 ## 단계별 튜닝 보완 구현
 
 - [x] `[SubmissionBottleneckMonitorNatural0921] 개선된 기계정책의 의미 감시 현행화·배포·재검사` (`Due: 2026-09-22`, `Slot: INTRADAY`, `TimeWindow: 08:00~19:55`, `Track: RuntimeStability`)
-  - 9/22 후속 결함: historical-only 점검 알림 억제·정상 관측1회·재발 재통보를 같은 owner에서 보완한다. [알림 보완 리뷰](../audit-reports/2026-09-22-machine-source-identity-and-gap-review.md#notification-lifecycle-follow-up).
+  - 9/22 후속 결함: historical-only 점검 알림 억제·정상 관측1회·재발 재통보를 같은 owner에서 보완 완료. [알림 보완 리뷰](../audit-reports/2026-09-22-machine-source-identity-and-gap-review.md#notification-lifecycle-follow-up).
+  - 18:25 자연 확인:c8f9565fa push·배포, source/릴리스286tests PASS, PID294296/환경 인계 PASS. 정기 감시 정상54·결손0·과거7 보존·알림 대기0; 외부 시험 알림 없음.
   - Source: [의미 감시 현행화](../proposals/intraday-semantic-entry-monitoring-and-telegram-alert-feasibility-plan-2026-09-20.md#922-기계정책-개선에-따른-감시-현행화). 기존 stable ID를 승계하며 과거 이력/원천·자연 성과의 한계는 [9/21 owner](./2026-09-21-stage2-todo-checklist.md#제출병목-지속-감시)에 보존한다.
   - Acceptance: 기계/후단 source 결손 분리, 당시 policy/scope/leaf/실효 임계치 대사, 표본 보정 선정 계약, 판정 revision/종료 요약 분리, 대상 회귀·고정 배포본 소비·무통보 재검사. 자동 threshold/AI/주문 변경 및 실현수익 입증을 포함하지 않는다.
   - 9/22 12:27 완료: 의미 감시/판정 echo 현행화82c31f34f push·배포, source/배포본288tests PASS. 배포본 Sentinel/monitor 실제 PID exit0·무통보 재검사, 정책 실효값/PID62건 일치·연결충돌0. 원천 invalid10/필수 입력17(부분89표본), source 경보17·후단5·비진입 관측39는 별도 분모/owner로 보존. 위 Source 문서의 최종 배포·재검사 절 참조. 메인/정책/주문 변경 없음.
