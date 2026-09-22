@@ -830,3 +830,13 @@ def test_exact_hash_downstream_echo_requires_existing_consistent_revision(mismat
     assert bool(errors) == bool(mismatch)
     # Without an initial explicit receipt, the echo remains legacy, not verified.
     assert sentinel._machine_revision_rows([echo])[1] == 'legacy_unverified'
+
+
+def test_source_invalid_echo_uses_canonical_action_spelling():
+    first = event(action='SOURCE_INVALID', screen='not_requested_machine_source_invalid',
+        machine_revision_schema='exact_machine_revision_v1', machine_observation_sha256='a'*64, machine_revision_parent_sha256='')
+    echo = event(action='source_invalid', screen='not_requested_machine_source_invalid',
+        stage='blocked_ai_score', machine_observation_sha256='a'*64, when=START+timedelta(seconds=1))
+    _, status, errors = sentinel._machine_revision_rows([first, echo])
+    assert status == 'single_revision' and not errors
+    assert sentinel._machine_primary_entry_funnel([first, echo])['evaluation_ledger'][0]['mechanistic_action'] == 'SOURCE_INVALID'

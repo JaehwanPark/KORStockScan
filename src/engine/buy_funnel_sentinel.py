@@ -2747,8 +2747,8 @@ def _machine_revision_rows(rows):
                 and "machine_revision_parent_sha256" not in fields):
             prior = revisions[previous][-1].fields
             if (fields.get("entry_primary_decision_owner") != MACHINE_PRIMARY_DECISION_OWNER
-                    or fields.get("entry_mechanistic_action") != prior.get("entry_mechanistic_action")
-                    or fields.get("entry_ai_screen_status") != prior.get("entry_ai_screen_status")):
+                    or _safe_str(fields.get("entry_mechanistic_action")).upper() != _safe_str(prior.get("entry_mechanistic_action")).upper()
+                    or _safe_str(fields.get("entry_ai_screen_status")).lower() != _safe_str(prior.get("entry_ai_screen_status")).lower()):
                 return rows, "invalid", ["machine_echo_revision_binding_unproven"]
             revisions[previous].append(event)
             continue
@@ -2761,8 +2761,8 @@ def _machine_revision_rows(rows):
             prior = revisions.get(previous, [])
             if (not prior
                     or fields.get("entry_primary_decision_owner") != MACHINE_PRIMARY_DECISION_OWNER
-                    or fields.get("entry_mechanistic_action") != prior[-1].fields.get("entry_mechanistic_action")
-                    or fields.get("entry_ai_screen_status") != prior[-1].fields.get("entry_ai_screen_status")):
+                    or _safe_str(fields.get("entry_mechanistic_action")).upper() != _safe_str(prior[-1].fields.get("entry_mechanistic_action")).upper()
+                    or _safe_str(fields.get("entry_ai_screen_status")).lower() != _safe_str(prior[-1].fields.get("entry_ai_screen_status")).lower()):
                 return rows, "invalid", ["machine_terminal_revision_binding_unproven"]
             prior.append(event)
             continue
