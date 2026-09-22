@@ -71,3 +71,14 @@
 
 
 장중9/22 preflight를 새로 생성했고 `machine_threshold_tuning_input_allowed=true`를 확인했다. 최신 자료를 읽은 첫 실행은 기존 통합시장 정책의 과거 ENTER_NOW 변경1건에 새 검증 조건을 소급 적용해 `strategy_current_economic_binding_invalid`로 중단되었다. 정책 pointer 변경은 없었다. 수정: 기존 발행분 읽기에만 이전 계약을 유지하고, 신규 후보는 `preserve_existing_entries=true`와 strict 승격 검증을 요구한다. 기존 정책 검증을 원천 로딩 앞으로 옮겼다.311tests 및 실제 기존a552d63 로더 재검증 PASS.
+
+
+### 표본 보정 선정 기준 장중 발행·소비 종결 — 11:21 KST
+
+- 코드 `6445826952e1f49345f08648c1fa37f16ab39ec0`까지 main push, 고정 release `machine-rank-20260922-644582695` 선택·비활성 장후 unit 두 개 인계 완료. source/release 각각311tests PASS. 현재 main은 기존 검증된3a79e240f/PID60693을 유지하고 정책 hot load로 적용했다. 선정 코드는 장후 생산자에서 실행하므로 main 재기동이 필요하지 않았다.
+- source_date/training_through_date=9/22, machine-only 3scope×96회 한정 탐색 완료. 실제 평가 후보는 정규장18·통합86·장전88개다. 정규장/장전은 `no_evaluable_machine_candidate`로 기존 component를 승계하고 통합시장만 발행했다. 현재 부모 정책 기준 신규 전환을 평가한 결과이며 과거 원 부모에서 선정한 후보의 지표와 직접 비교하지 않는다.
+- 통합시장의 `ask_wall_spread_bp`만50→80bp. 신규 전환1기회, 원 승률0%, 표본 보정0점, 비용 반영 평균 경로 EV −1.25425%. 기존 ENTER_NOW2attempt는 모두 유지한다. 사용자의 음수 EV 허용·후보 중 최상위 적용 지시를 따른 결과다. 표본 확보 또는 직전 정책 전체보다 우수함의 입증이 아니다. AI component와 나머지 scope 임계치는 동일하다.
+- 11:21:00.104657 atomic activation, 새 bundle `1114428c426fc95a45e62f04e750ed669c8b2e36b7a9321a7a0c7bc78e23364a`, 이전a552d63. canonical `machine_policy_terminal_2026-09-22.json` status=completed/activation=activated. 계산 terminal의 `actual_pid_consumed=false`는 발행시점 사실로 보존한다.
+- 11:21:11.259338 자연 기계판정에서 새 bundle 소비 확인: PID60693/startticks1079749/cwd3a79e240f/src. 이 영수증은 정규장(기존 machine hash0ccd3ddd·AI c7b68651)이며, **변경된 장후 통합시장 임계치의 자연 사용은 해당 세션에서 별도로 확인해야 한다**. 주문·실현손익 증명과 구분한다.
+- 9/23 loader의 동일 bundle 승계, 현재 main 배포본 로더와 새 배포본 로더 호환, 모든 AI component 보존 PASS. 필수cron4개 및 정규 postclose router가644582695를 선택하는 것 확인. 정기 장후 기계 stage가 새 선정 기준으로 후속 정책을 생성한다.
+- 근거: `tmp/machine-support-rank-live-20260922/`의 `intraday-generation-final.log`, `activation-verification.json`, `threshold-diff.json`, `natural-policy-consumption.json`, `compatibility-release-tests.log`. 사후 문서 검증은 print-only parser와 diff check로 제한했다. 외부 sync/수동 주문 미실행.

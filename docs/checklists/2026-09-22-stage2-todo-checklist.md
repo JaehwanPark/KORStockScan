@@ -84,6 +84,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
   - Source: [기계정책 보완 계획](../proposals/main-nonentry-threshold-postclose-runtime-implementation-plan-2026-09-21.md).
   - Acceptance: 실제82좌표 제한예산에서 다축/selector 탐색, train 재개·holdout 분리, metadata/row fallback, 적격 scope 합성, 고정 source 재계산, 장중 component CAS·실제 PID 소비·다음 정책까지 승계.
   - 9/22 완료09:40: M1–M6 구현·검증, source admission654건 복원, 3scope×96회 계산·즉시 발행. 최종3a79e240f push/배포/PID60693, 자연4판정에서a552d63 bundle과tape60/tail2.5 소비, 전scope AI 보존·날짜 승계·장후/cron route PASS. 신규 전환은 scope별1기회(KRX100%/+0.10%, 통합0%/−1.1884%, 장전0%/−1.2831%)로 실현손익 증명이 아니다. 제출 후 기록 중복 키 예외도172건 검증 후 수리. [변경·검증·운영 영수증](../audit-reports/2026-09-22-main-machine-policy-repair-review.md).
+  - 9/22 추가11:21: 표본 보정 승률·기존 진입 보존·과거 발행 호환 수리644582695 push/배포,311tests PASS. 3scope×96회 재생성 후 통합시장 ask_wall_spread_bp50→80bp만 발행(bundle1114428c), 정규장·장전은 적격 신규 후보 없어 승계. 통합 신규1기회/0%/순 경로EV−1.25425%이며 수익 개선 증명이 아니다. PID60693 자연 정규장 판정에서 새 bundle 소비,9/23 승계·cron route PASS; 변경된 통합시장 임계치의 자연 사용은 해당 장후 세션 확인 범위다.
   - 기존 source gap/독립 검증 이력은 [9/21 복구 리뷰](../audit-reports/2026-09-21-postclose-source-order-repair-review.md)에 보존한다. 새로 확인한 탐색 결함으로 재개하며 과거 장후 성공을 취소하지 않는다. AI/portfolio 증거는 기계정책 적용 gate가 아니다.
 
 - [ ] `[AuxiliaryAIBidirectionalTuning] VETO 기회비용·PASS 오진입 양방향 AI 튜닝과 장중 적용` (`Due: 2026-09-22`, `Slot: INTRADAY`, `TimeWindow: 08:00~19:30`, `Track: RuntimeStability`)
