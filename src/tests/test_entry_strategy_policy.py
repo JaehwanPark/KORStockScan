@@ -536,7 +536,7 @@ def test_machine_scope_selection_prioritizes_win_rate_over_larger_profit():
     def choice(win, net):
         return dict(promotion_pass=True, candidate=dict(evaluation_basis='machine_nonentry_opportunity_v1',
             evidence=dict(train=dict(economics=dict(win_rate_pct=win, selected_path_ev_pct=net,
-                paired_admission_delta_pct=net)))))
+                paired_admission_delta_pct=net, selected_opportunity_count=20)))))
     source = dict(strategy_refinements_by_scope=dict(high_win=choice(90,.1), high_profit=choice(60,2.), loss=choice(95,-.1)))
     assert strategy.select_report_candidate(source)[0] == 'loss'
     source['strategy_refinements_by_scope'] = dict(loss=choice(60,-.1), worse_loss=choice(60,-.2))
@@ -802,3 +802,39 @@ def test_strategy_rejects_zero_execution_bounds_before_replay(name):
     policy = strategy.seed(MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1, ('KRX','KRX_REGULAR'))
     policy['strategy']['nodes']['root']['profile'][name] = 0.
     assert 'strategy_execution_threshold_must_be_positive' in strategy.validate(policy['strategy'])
+
+
+@pytest.mark.parametrize('wins,count', [(6,10),(12,20),(18,30)])
+def test_machine_supported_win_rate_outranks_one_lucky_entry(wins,count):
+    from src.engine.scalping import entry_strategy_policy as mod
+    single=dict(win_rate_pct=100.,selected_path_ev_pct=.1,paired_admission_delta_pct=.1,selected_opportunity_count=1)
+    supported={**single,'win_rate_pct':100*wins/count,'selected_opportunity_count':count,'selected_path_ev_pct':-.4}
+    assert mod.machine_admission_rank(supported)>mod.machine_admission_rank(single)
+
+
+def test_machine_support_rank_keeps_negative_ev_and_episode_denominator():
+    from src.engine.scalping import entry_strategy_policy as mod
+    a=dict(win_rate_pct=60.,selected_path_ev_pct=-.4,paired_admission_delta_pct=-.2,selected_opportunity_count=20,selected_attempt_count=20)
+    b={**a,'selected_attempt_count':200}
+    assert mod.machine_admission_rank(a)==mod.machine_admission_rank(b)
+    assert mod.machine_admission_rank({**a,'selected_path_ev_pct':-.3})>mod.machine_admission_rank(a)
+    assert mod.machine_support_adjusted_win_rate({**a,'selected_opportunity_count':0}) is None
+    assert mod.machine_support_adjusted_win_rate({**a,'win_rate_pct':101}) is None
+
+
+def test_machine_selection_version_invalidates_old_rank_checkpoint(monkeypatch):
+    from src.engine.scalping import ai_action_outcome_calibration as c
+    one_research_candidate(monkeypatch)
+    original=strategy.joint_candidates; calls=[]
+    def count_search(*args, **kwargs):
+        calls.append(kwargs.get('start'))
+        yield from original(*args, **kwargs)
+    monkeypatch.setattr(strategy,'joint_candidates',count_search)
+    kwargs=dict(parent=evidence.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,scope=('KRX','KRX_REGULAR'),source_contract={},machine_policy_only=True)
+    first=c.build_main_strategy_refinement([machine_cost_row()],**kwargs)
+    monkeypatch.setattr(strategy,'MACHINE_SELECTION_VERSION','test-new-score-version')
+    second=c.build_main_strategy_refinement([machine_cost_row()],previous=first,**kwargs)
+    assert calls==[0,0]
+    assert first['input_sha256']!=second['input_sha256']
+    assert second['selection_basis']=='test-new-score-version'
+    assert second['machine_evidence']['train']['economics']['support_adjusted_win_rate_pct']<100

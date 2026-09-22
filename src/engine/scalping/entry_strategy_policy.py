@@ -672,6 +672,33 @@ def joint_candidates(parent, scope, *, domains=None, selectors=None, start=0, li
             domain_sha256=domain_hash, search_complete=cursor + 1 == total)
 
 
+MACHINE_SELECTION_VERSION = 'support_adjusted_win_rate_then_net_ev_v2'
+
+
+def machine_support_adjusted_win_rate(economy):
+    """Wilson-shaped ranking penalty using equal-weight unique episodes.
+
+    Repeated attempts do not increase n. Episodes may be correlated and their
+    win fractions need not be Bernoulli: this is a ranking score, not a proved
+    confidence bound, live win probability or statistical superiority claim.
+    """
+    rate = _number(economy.get('win_rate_pct'))
+    count = _number(economy.get('selected_opportunity_count'))
+    if rate is None or not 0 <= rate <= 100 or count is None or count < 1 or count != int(count):
+        return None
+    p, z2 = rate / 100., 1.6448536269514722 ** 2
+    return 100. * max(0., (p + z2 / (2. * count)
+        - math.sqrt(z2 * (p * (1. - p) / count + z2 / (4. * count ** 2)))) / (1. + z2 / count))
+
+
+def machine_admission_rank(economy, *, node_count=1, complexity=0):
+    adjusted = machine_support_adjusted_win_rate(economy)
+    values = [adjusted, _number(economy.get('selected_path_ev_pct')),
+              _number(economy.get('paired_admission_delta_pct'))]
+    return tuple(round(v, 10) if v is not None else None for v in values) + (
+        economy.get('selected_opportunity_count', 0), -node_count, -complexity)
+
+
 def select_report_candidate(source):
     """Choose the scope using train results only, never the holdout winners."""
     proposals = []
@@ -681,8 +708,8 @@ def select_report_candidate(source):
         candidate = result.get('candidate') or {}
         economy = (((candidate.get('evidence') or {}).get('train') or {}).get('economics') or {})
         if candidate.get('evaluation_basis') == 'machine_nonentry_opportunity_v1':
-            win_rate, net = _number(economy.get('win_rate_pct')), _number(economy.get('selected_path_ev_pct'))
-            score = (win_rate, net, _number(economy.get('paired_admission_delta_pct')) or 0.) if win_rate is not None and net is not None else None
+            rank = machine_admission_rank(economy)
+            score = rank[:3] if all(v is not None for v in rank[:3]) else None
         else:
             net = _number(economy.get('daily_net_profit_delta_krw'))
             score = (0., net, 0.) if net is not None and net > 0 else None

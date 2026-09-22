@@ -49,3 +49,15 @@
 추가 코드 `3a79e240f` main push, 최종 release `/home/ubuntu/KORStockScan-runtime-releases/main-machine-20260922-3a79e240f`. guarded restart09:39:08/PID60693, env bootstrap와 custody handoff PASS. 재계산 없이 기존 a552d63 정책을 승계했다. 최종 source/서비스/cron route도3a79e240f로 재확인했다. 기존 접수 종목222800은 재기동 후 정상 보유 관리의 TRAILING 매도 체결을 관측했으나 이를 이번 튜닝의 수익 검증으로 사용하지 않는다. 별도 청산 영수증에서 `EXIT_RECEIPT_SUBMISSION_CUSTODY_CONTRACT_BLOCKED / exit_session_matches`가 관측됐으며, 기계정책 수리 완료와 청산 custody/실현손익 검증은 구분한다.
 
 **M1–M6 구현·검증·계산·장중 정책 적용·자연 PID 소비·정규 장후 연결 완료.** 한정96회 탐색은 전역 최적성 증명이 아니며, 신규 전환 각1기회·역사적 원천 결손·독립 미래 holdout 부재를 그대로 공개한다. 보조 AI 튜닝/전체 runner 분리/청산 영수증 검증을 기계정책 완료로 합산하지 않는다.
+
+
+## 소표본 승률 과대평가 추가 보완 — 2026-09-22
+
+사용자 요청:1개 기회의100% 승률이 정책 선정을 독점하는 문제 개선. 기존 기계 전환 평가 안에서 원 승률 대신 표본 보정 점수를 우선 비교하도록 변경했다. Wilson 형태 z=1.645의 보수적 점수이며, 반복 attempt가 아닌 고유 기회 수를 사용한다. 원 승률·순 EV·paired delta는 보존하고 음수 EV도 계속 허용한다. 새로운 최소 표본/손익 승격 장벽, 보조 AI/청산 의존성은 추가하지 않았다.
+
+- 공유 rank 함수로 후보와 scope 선택을 일치시켰다. 선정 버전을 input hash/frozen 재사용 조건에 넣어 이전 raw-win-rate best/checkpoint를 새 점수의 결과로 재사용하지 않는다. train/holdout 모두 원 승률과 보정 점수·점수 버전을 기록한다.
+- 1/1은26.99점,6/10은35.16점,12/20은41.86점으로 단일 성공의 과대평가를 할인한다. 상관·부분 승률을 포함한 순위용 점수이며 실제 승률/유의성 보증이 아니다.
+- 저장된9/21 후보를 source 재계산 없이 순위만 다시 확인했다. KRX 기록83개 중 유효7개, 최상위1기회100%/+0.10%→26.99점, 최대5기회40%/−0.73906%→14.27점이다. 새 기준에서도 KRX 최상위는 같다. 통합/장전은 유효 후보의 표본이 모두1개여서 표본 보정으로 더 나은 근거를 새로 만들어낼 수 없다.
+- 근거:`tmp/postclose-stage-separation-20260922/support-rank-comparison.json`(원 보고서 artifact SHA 포함), `support-rank-final-tests.log`309tests PASS. 원 정책 bundle `a552d63…` loader PASS. 큰 원천/학습/provider 재실행 없이 기존 후보 점수만 분석했으며 정책 pointer를 변경하지 않았다.
+- scope 선택 fixture에는 실제 계약에 필요한 표본 수를 명시했다.1/1 대6/10·12/20·18/30 비교, 반복 attempt 불변성, 음수 EV 동점 비교, invalid 표본, 선정 버전 변경 후 재탐색을 검증했다.
+- 직전 정책 전체보다 우수함의 입증이나 소표본 문제의 완전 해소를 주장하지 않는다. 기존 ENTER_NOW 유지/제외의 손익 비교와 새 날짜의 자연 성과는 이 점수 개선과 별개다.

@@ -7912,10 +7912,8 @@ def _machine_opportunity_id(row):
 
 
 def _machine_admission_rank(economy, *, node_count=1, complexity=0):
-    # Sub-picopercent float subtraction noise must not outrank episode support.
-    values = [economy.get(k) for k in ('win_rate_pct', 'selected_path_ev_pct', 'paired_admission_delta_pct')]
-    return tuple(round(v, 10) if v is not None else None for v in values) + (
-        economy['selected_opportunity_count'], -node_count, -complexity)
+    from src.engine.scalping.entry_strategy_policy import machine_admission_rank
+    return machine_admission_rank(economy, node_count=node_count, complexity=complexity)
 
 
 def _machine_admission_metrics(rows, actions):
@@ -7965,7 +7963,7 @@ def _machine_admission_metrics(rows, actions):
     new = [fmean(v[1] for v in values) for values in groups.values()]
     selected_episodes = [[v[1] for v in values if v[2]] for values in groups.values()]
     selected_episodes = [values for values in selected_episodes if values]
-    return dict(status='supported_machine_admission' if groups else 'machine_path_unavailable',
+    result = dict(status='supported_machine_admission' if groups else 'machine_path_unavailable',
         basis='nonentry_to_enter_now_cost_bound_quality_path',
         comparison_unit='equal_episode_weighted_immediate_attempts',
         comparable_opportunity_count=len(groups), comparable_attempt_count=sum(map(len, groups.values())),
@@ -7979,6 +7977,10 @@ def _machine_admission_metrics(rows, actions):
         episode_positive_mean_rate_pct=100 * fmean(fmean(values) > 0 for values in selected_episodes) if selected_episodes else None,
         worst_selected_path_pct=min(selected) if selected else None,
         auxiliary_ai_required=False, realized_pnl=False, portfolio_pnl=False)
+
+    from src.engine.scalping.entry_strategy_policy import machine_support_adjusted_win_rate, MACHINE_SELECTION_VERSION
+    result.update(support_adjusted_win_rate_pct=machine_support_adjusted_win_rate(result), selection_score_version=MACHINE_SELECTION_VERSION)
+    return result
 
 
 def build_main_strategy_refinement(population, *, parent, scope, source_contract, previous=None, limit=96, machine_policy_only=False, checkpoint=None, training_through_date=None):
@@ -8013,7 +8015,7 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
     population = supported
     if not population:
         return {**result, 'blocker': 'strategy_no_supported_predecision_rows'}
-    input_sha256 = strategy.digest([source_contract, parent, population, strategy.SEARCH_VERSION, training_through_date] if machine_policy_only else [source_contract, parent, population])
+    input_sha256 = strategy.digest([source_contract, parent, population, strategy.SEARCH_VERSION, strategy.MACHINE_SELECTION_VERSION, training_through_date] if machine_policy_only else [source_contract, parent, population])
     result['input_sha256'] = input_sha256
     # Same input/selection is immutable; retries do not optimize on used holdout.
     if previous and previous.get('input_sha256') == input_sha256 and previous.get('candidate') and previous.get('selection_state') in {'holdout_evaluated', 'published'}:
@@ -8148,7 +8150,8 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
         result['search_domain']['priority_coordinates'] = priority_coordinates
         result['evaluated_candidate_count'] = previous.get('evaluated_candidate_count', 0)
     frozen = (previous or {}).get('candidate') or {}
-    if (not training_through_date and frozen.get('parent_sha256') == strategy.digest(parent)
+    if ((not machine_policy_only or (previous or {}).get('selection_basis') == strategy.MACHINE_SELECTION_VERSION)
+        and not training_through_date and frozen.get('parent_sha256') == strategy.digest(parent)
         and frozen.get('evidence', {}).get('holdout', {}).get('source_dates')
         and max(frozen['evidence']['holdout']['source_dates']) >= dates[-1]):
         frozen = deepcopy(frozen)
@@ -8163,7 +8166,7 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
             result.update(schema='main_entry_machine_policy_selection_v1',
                 machine_policy=frozen['policy'], machine_policy_sha256=frozen['policy_sha256'],
                 machine_evidence=frozen['evidence'], auxiliary_ai_required=False,
-                selection_basis='win_rate_then_net_ev_without_profit_floor',
+                selection_basis=strategy.MACHINE_SELECTION_VERSION,
                 holdout_status='evaluated_after_selection',
                 runtime_effect=False, allowed_runtime_apply=False)
         return {**result, 'candidate': frozen, 'promotion_pass': not errors,
@@ -8223,7 +8226,7 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
                                  if v != strategy.default_profile(parent)[k]},
                 economics=economy, action_transition_counts=evidence['action_transition_counts']))
             if (delta is not None and selected_ev is not None and win_rate is not None
-                and worst is not None
+                and worst is not None and score[0] is not None
                 and (best_score is None or score > best_score)):
                 best, best_evidence, best_score = candidate, evidence, score
             result['train_checkpoint'] = dict(best=best, best_evidence=best_evidence, best_score=best_score,
@@ -8278,7 +8281,7 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
             'machine_evidence': machine_evidence, 'auxiliary_ai_required': False,
             'machine_candidate_scores': machine_scores,
             'candidate': candidate, 'promotion_pass': not errors, 'promotion_errors': errors,
-            'selection_basis': 'win_rate_then_net_ev_without_profit_floor',
+            'selection_basis': strategy.MACHINE_SELECTION_VERSION,
             'holdout_status': holdout_status, 'selection_state': 'holdout_evaluated',
             'runtime_effect': False, 'allowed_runtime_apply': False}
     if support_blocker:
@@ -8349,7 +8352,7 @@ def build_machine_policy_report(rows, *, source_receipt, target_date, data_root=
         status='machine_policy_generated' if policy else 'no_evaluable_machine_candidate',
         metric_role='sim_probe_ev', decision_authority='machine_policy_selection_only',
         window_policy='chronological_train_then_holdout_diagnostic', sample_floor='one_valid_episode_for_selection',
-        primary_decision_metric='win_rate_then_net_ev_without_profit_floor', source_quality_gate='verified_raw_full_cost_terminal_path',
+        primary_decision_metric=strategy.MACHINE_SELECTION_VERSION, source_quality_gate='verified_raw_full_cost_terminal_path',
         auxiliary_ai_required=False, runtime_effect=False, allowed_runtime_apply=False,
         forbidden_uses=['realized_pnl', 'portfolio_pnl', 'auxiliary_ai_pass']))
 
