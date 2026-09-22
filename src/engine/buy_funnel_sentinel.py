@@ -2741,6 +2741,17 @@ def _machine_revision_rows(rows):
         fields = event.fields
         digest = _safe_str(fields.get("machine_observation_sha256"))
         parent = _safe_str(fields.get("machine_revision_parent_sha256"))
+        # Downstream echoes can retain the exact observation hash while
+        # omitting the revision envelope. They cannot establish a new revision.
+        if (previous and digest == previous and not fields.get("machine_revision_schema")
+                and "machine_revision_parent_sha256" not in fields):
+            prior = revisions[previous][-1].fields
+            if (fields.get("entry_primary_decision_owner") != MACHINE_PRIMARY_DECISION_OWNER
+                    or fields.get("entry_mechanistic_action") != prior.get("entry_mechanistic_action")
+                    or fields.get("entry_ai_screen_status") != prior.get("entry_ai_screen_status")):
+                return rows, "invalid", ["machine_echo_revision_binding_unproven"]
+            revisions[previous].append(event)
+            continue
         # This terminal summarizes the same attempt; it is not a fresh machine
         # decision. Older producers omit revision fields here. Bind only to an
         # already witnessed revision with an identical action/screen.

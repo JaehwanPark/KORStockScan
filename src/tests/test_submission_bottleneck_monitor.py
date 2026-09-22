@@ -815,3 +815,18 @@ def test_historical_policy_receipt_is_not_compared_to_new_current(tmp_path, monk
     assert not result['issues']
     assert not next(iter(result['scopes'].values()))['current_bundle']
     assert result['current_bundle_sha256'] == 'c'*64
+
+
+@pytest.mark.parametrize('mismatch', [None, 'hash', 'action', 'screen', 'owner'])
+def test_exact_hash_downstream_echo_requires_existing_consistent_revision(mismatch):
+    decision = event(action='RECHECK', screen='not_requested_required_feature_insufficient',
+        stage='ai_confirmed_terminal_no_budget', machine_revision_schema='exact_machine_revision_v1',
+        machine_observation_sha256='a'*64, machine_revision_parent_sha256='')
+    echo = event(action='RECHECK', screen='not_requested_required_feature_insufficient',
+        stage='blocked_ai_score', when=START+timedelta(seconds=1), machine_observation_sha256='a'*64)
+    field = dict(hash='machine_observation_sha256', action='entry_mechanistic_action', screen='entry_ai_screen_status', owner='entry_primary_decision_owner')
+    if mismatch: echo.fields[field[mismatch]] = 'different'
+    _, _, errors = sentinel._machine_revision_rows([decision, echo])
+    assert bool(errors) == bool(mismatch)
+    # Without an initial explicit receipt, the echo remains legacy, not verified.
+    assert sentinel._machine_revision_rows([echo])[1] == 'legacy_unverified'

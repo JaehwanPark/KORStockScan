@@ -76,3 +76,7 @@ wrapper의 lock/cooldown 안에서 Sentinel 성공 후 compact source consumer�
 - 실효 정책 mismatch는4분 지속 후 기존 알림 경로의 구조 결손이다. 새 관측에서 사라져도 과거 사건은 historical_unresolved이며 복구로 선언하지 않는다. stale/미관측/PID 종료는 현재 소비 증거가 아니다.
 - `entry_submit_attempt_finished`는 판정 변경이 아닌 동일 attempt 종료 요약이다. revision 필드가 없는 과거 생산자 요약은 앞서 확인된 판정 owner/action/AI screen과 일치할 때만 같은 revision에 연결한다. 새 판정의 누락·다른 action/screen·선행 실행 후 재판정은 계속 결손으로 유지한다.
 - 코드 소유자는 기존 `buy_funnel_sentinel.py`, `monitoring/submission_bottleneck_monitor.py`, 기존 해당 테스트다. 정기 buy-funnel wrapper/cron 경로를 유지한다. 수동 재검사는 notify 없이 실행하며 외부 시험 통보는 하지 않는다.
+
+### 9/22 리뷰·실제 원천 재검사
+
+최초282건 검증/35125396e push·고정 배포 후12:19–12:20 Sentinel과 monitor를 notify 없이 재실행했다. 당시 정책 실효값64건/PID60693 일치, source_invalid10·필수 입력 RECHECK18을 분리했다. 남은6개 revision 경보를 기존 cache 끝16MiB에서 역추적하여 `ai_confirmed`/`blocked_ai_score`가 동일 관측 hash를 재전달하지만 revision envelope를 생략한 경우를 확인했다. 선행 explicit revision과 hash·owner·action·screen이 모두 같은 echo만 결속하도록 보완했다. 다른 hash/판정/owner와 새 revision 누락은 계속 거절한다. 실원천 `aims-53deca7d3c66a14adb41`은 수리 후 single_revision/충돌0/정상 RECHECK로 재현됐으며287개 회귀검증 PASS. 원천 freshness·공급자 지연은 별도 실제 병목으로 유지한다. 증거는 `tmp/semantic-monitor-20260922/`에 보존한다.
