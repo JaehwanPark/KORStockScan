@@ -80,3 +80,14 @@ wrapper의 lock/cooldown 안에서 Sentinel 성공 후 compact source consumer�
 ### 9/22 리뷰·실제 원천 재검사
 
 최초282건 검증/35125396e push·고정 배포 후12:19–12:20 Sentinel과 monitor를 notify 없이 재실행했다. 당시 정책 실효값64건/PID60693 일치, source_invalid10·필수 입력 RECHECK18을 분리했다. 남은6개 revision 경보를 기존 cache 끝16MiB에서 역추적하여 `ai_confirmed`/`blocked_ai_score`가 동일 관측 hash를 재전달하지만 revision envelope를 생략한 경우를 확인했다. 선행 explicit revision과 hash·owner·action·screen이 모두 같은 echo만 결속하도록 보완했다. 다른 hash/판정/owner와 새 revision 누락은 계속 거절한다. 실원천 `aims-53deca7d3c66a14adb41`은 수리 후 single_revision/충돌0/정상 RECHECK로 재현됐으며287개 회귀검증 PASS. 원천 freshness·공급자 지연은 별도 실제 병목으로 유지한다. 증거는 `tmp/semantic-monitor-20260922/`에 보존한다.
+
+
+### 최종 배포·재검사 결과 — 2026-09-22 12:27 KST
+
+- 최종 코드 `82c31f34fba9430b989ea49340bf13ef5d8b8082` main push, 고정 release `semantic-monitor-20260922-82c31f34f` 배포. source/배포본 각각288tests, compile/bash/diff/문서 parser PASS. 동일 원천의 SOURCE_INVALID/source_invalid 표기 차이도 기존 canonical action 규칙으로 보완했다. 필수cron4개와 buy-funnel router 인계 PASS.
+- 실제 배포본에서 Sentinel PID144214(12:26:37–12:27:35), monitor PID144591(12:27:35–12:27:36) 모두 exit0. 수동 notify 미실행. 메인 재기동/정책 변경/AI·주문 호출 없음. 기존 정책1114428c 유지. `final-recheck-processes.json`이 cwd/commit/실행 PID/종료를 결속한다.
+- 12:27:35 감시, source12:26:51 기준 최근 투영의 revision/identity 충돌0. 기계 관측 끝8MiB의 최근30분 표본89건 중 당시 policy/scope/leaf/실효 임계치와 실제 메인 PID가 일치한62건, source_invalid10건, 필수 입력 RECHECK17건. 정책 영수증 mismatch0, 선정 report/terminal·표본 보정 계약 결손0. tail 부분 표본이며 전체일·전체 모집단 수치가 아니다. 변경된 통합시장 임계치의 세션별 사용을 정규장 receipt로 대신하지 않는다.
+- 현재 실제 병목: current_price/tape stale, provider trade late, source clock skew, 일부 route provenance 및 entry_machine_input_refresh_failed. source blocker 수는 중복 가능하다. 최근30분 고유 promotion49/유효40, 최신상태 ENTER1/VETO0/제출 응답0이며 같은 윈도우의 ENTER 이력은2attempt다. 기계 ENTER 이후를 충분히 평가하기 전 AI VETO 집중이나 임계치 오판으로 단정하지 않는다.
+- 최근30분 명확한 비진입 후단 관측 결손39건은 기계 튜닝 실패와 분리. 별도45분 보존·10분 유예의 원천/연결 경보17건과 후단 경제성 경보5건은 남는다. 후단5건은 RECHECK4건의 AI screen 미기록(not_reported:020000/033170/035420/064290)과043260의 이전 ENTER 이력이 있어 현재 비진입만 보고 제외하지 않은1건이다. 다음 owner는 필수 원천 freshness/입력 refresh 생산자, 명시 screen terminal 기록, ENTER revision별 경제성 proof다. closure는 fresh bound source와 동일 attempt 명시 terminal/proof이며 수익 하한·임계치 완화로 닫지 않는다.
+- 기존 전체일 요약의 SUBMIT_DROUGHT_CRITICAL/UPSTREAM_AI_THRESHOLD와 최근 기계 전용 진단은 분모가 다르다. 전자는 실제 AI VETO 원인 확정이 아니다. 과거 active 사건은 현재 표본에서 사라졌다는 이유로 복구 처리하지 않았다.
+- 최종 근거: `tmp/semantic-monitor-20260922/final-diagnosis.json`, `final-monitor.json`, `downstream-gap-examples.json`, `final-release-validation.json`, `final-recheck-processes.json`, `final-release-tests.log`. 구현·감시 재검사는 완료이며 원천 freshness 정상화/실제 주문·실현손익은 별도 운영 작업이다.

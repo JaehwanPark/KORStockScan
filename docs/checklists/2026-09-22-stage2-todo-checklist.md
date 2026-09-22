@@ -75,9 +75,10 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 
 ## 단계별 튜닝 보완 구현
 
-- [ ] `[SubmissionBottleneckMonitorNatural0921] 개선된 기계정책의 의미 감시 현행화·배포·재검사` (`Due: 2026-09-22`, `Slot: INTRADAY`, `TimeWindow: 08:00~19:55`, `Track: RuntimeStability`)
+- [x] `[SubmissionBottleneckMonitorNatural0921] 개선된 기계정책의 의미 감시 현행화·배포·재검사` (`Due: 2026-09-22`, `Slot: INTRADAY`, `TimeWindow: 08:00~19:55`, `Track: RuntimeStability`)
   - Source: [의미 감시 현행화](../proposals/intraday-semantic-entry-monitoring-and-telegram-alert-feasibility-plan-2026-09-20.md#922-기계정책-개선에-따른-감시-현행화). 기존 stable ID를 승계하며 과거 이력/원천·자연 성과의 한계는 [9/21 owner](./2026-09-21-stage2-todo-checklist.md#제출병목-지속-감시)에 보존한다.
   - Acceptance: 기계/후단 source 결손 분리, 당시 policy/scope/leaf/실효 임계치 대사, 표본 보정 선정 계약, 판정 revision/종료 요약 분리, 대상 회귀·고정 배포본 소비·무통보 재검사. 자동 threshold/AI/주문 변경 및 실현수익 입증을 포함하지 않는다.
+  - 9/22 12:27 완료: 의미 감시/판정 echo 현행화82c31f34f push·배포, source/배포본288tests PASS. 배포본 Sentinel/monitor 실제 PID exit0·무통보 재검사, 정책 실효값/PID62건 일치·연결충돌0. 원천 invalid10/필수 입력17(부분89표본), source 경보17·후단5·비진입 관측39는 별도 분모/owner로 보존. 위 Source 문서의 최종 배포·재검사 절 참조. 메인/정책/주문 변경 없음.
 
 - [ ] `[PostcloseStageRunnerSeparation] 통합 장후 실행기와 단계별 완료·재시도 분리` (`Due: 2026-09-22`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~23:30`, `Track: RuntimeStability`)
   - Source: [실행기 분리 계획](../proposals/machine-postclose-runner-separation-implementation-plan-2026-09-22.md).
