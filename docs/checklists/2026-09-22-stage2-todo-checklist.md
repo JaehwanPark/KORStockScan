@@ -120,3 +120,8 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
   - Source: [I/O 수리 리뷰](../audit-reports/2026-09-22-rising-missed-feedback-io-review.md).
   - Acceptance: 동일 prefix 결과 동등성, 원천1회 읽기, 압축 spool 메모리 제한·정리, append/교체/결손 처리, 대상 검증 및 고정 배포본 보고서1회 실행 receipt. 정책·주문·기존 작업 잠금·cooldown·안전 임계치 유지.
   - 완료20:08:7c40d0c7a push/보고서 배포, source/release178tests PASS. 6.5GB/397,509행 원천1회·289.736초·최대127MiB·표본swap0, I/O wait0.63~3.16%. 기존 main PID/정책 유지, cron·장후 명령 경로와 신규 report PID/정상 저장 확인. 위 리뷰의 최종 receipt 참조.
+
+- [ ] `[MachineReplayResourceRepair] 기계정책 반복 재생 축소와 다음 장전 정책 재생성` (`Due: 2026-09-22`, `Slot: POSTCLOSE`, `TimeWindow: 21:30~23:59`, `Track: RuntimeStability`)
+  - 승인된 기계판정 worker 중지·체크포인트 보존. 비용/결과 결손 미진입의 반복 재생 생략, 모든 기존 ENTER_NOW 검증 유지, 원천 중복 복사·후보 상세 캐시 축소.
+  - 완료 기준: 코드리뷰·관련 테스트, 커밋/푸시·불변 배포본, 9/22 원천 재생성 terminal 및 9/23 loader 확인. 비용 후 CF EV와 실현손익을 구분한다.
+  - 근거: [리뷰](../audit-reports/2026-09-22-machine-replay-resource-review.md).

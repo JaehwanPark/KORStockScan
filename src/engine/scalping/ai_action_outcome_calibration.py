@@ -8064,11 +8064,16 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
     dates = sorted({r["source_date"] for r in population})
     if training_through_date and training_through_date < dates[0]:
         raise ValueError("strategy_training_boundary_outside_sources")
-    train = [deepcopy(r) for r in population if len(dates) == 1 or r["source_date"] < dates[-1]]
-    holdout = [deepcopy(r) for r in population if len(dates) > 1 and r["source_date"] == dates[-1]]
+    # Machine replay replaces comparison only; kernels copy nested evidence
+    # before changes. Isolate the top-level setup without duplicating raw bars.
+    def working_row(row):
+        return ({**row, 'setup_evidence': dict(row['setup_evidence'])}
+                if machine_policy_only else deepcopy(row))
+    train = [working_row(r) for r in population if len(dates) == 1 or r["source_date"] < dates[-1]]
+    holdout = [working_row(r) for r in population if len(dates) > 1 and r["source_date"] == dates[-1]]
     if training_through_date:
-        train = [deepcopy(r) for r in population if r['source_date'] <= training_through_date]
-        holdout = [deepcopy(r) for r in population if r['source_date'] > training_through_date]
+        train = [working_row(r) for r in population if r['source_date'] <= training_through_date]
+        holdout = [working_row(r) for r in population if r['source_date'] > training_through_date]
     result['training_through_date'] = training_through_date or max(r['source_date'] for r in train)
     result['holdout_boundary_basis'] = 'explicit_forward_boundary' if training_through_date else 'last_source_date'
 
@@ -8113,7 +8118,18 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
         selected, changed, downstream, actions = [], set(), True, []
         fallback_counts = Counter()
         transitions, changed_attempts = Counter(), []
+        skipped = Counter()
         for row in rows:
+            old = row["comparison"]["incumbent_machine_action"]
+            # A cost/path exclusion is policy-independent. Keep it in the
+            # economic denominator manifest, but do not invent a replay action.
+            # Every existing entry still replays, including unpriced entries:
+            # their changed admission must continue to block promotion.
+            reason = prepared_paths[id(row)][1] if machine_policy_only else None
+            if reason and old in {"BLOCK", "RECHECK"}:
+                actions.append(None)
+                skipped[reason] += 1
+                continue
             decision = (dict(action=row['comparison']['incumbent_machine_action']) if machine_policy_only and candidate == parent
                         else mechanistic_entry_policy_decision(row["setup_evidence"], policy=candidate))
             actions.append(decision['action'])
@@ -8152,6 +8168,16 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
             fallback_counts=dict(fallback_counts),
             incumbent_enter_now_changed_count=sum(v for k,v in transitions.items() if k.startswith('ENTER_NOW->') and k != 'ENTER_NOW->ENTER_NOW'))
         if machine_policy_only:
+            arm['replay_coverage'] = dict(
+                version='machine_economic_replay_v1', population_count=len(rows),
+                replayed_count=len(rows) - sum(skipped.values()),
+                excluded_nonentry_count=sum(skipped.values()),
+                excluded_nonentry_reason_counts=dict(skipped),
+                all_existing_entries_replayed=True,
+                transition_scope='replayed_rows_only')
+            # Candidates are unique; retaining all detailed arms provides no
+            # reuse and grows memory with candidate_count * population_count.
+            evaluation_cache.clear()
             evaluation_cache[cache_key] = arm
         return arm
     selectors = [None]
@@ -8281,6 +8307,7 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
             machine_scores.append(dict(policy_sha256=strategy.digest(candidate),
                 search_group=progress.get('group'), node_count=len(candidate['strategy']['nodes']),
                 fallback_counts=evidence['fallback_counts'],
+                replay_coverage=evidence['replay_coverage'],
                 profile_changes={k:v for k,v in strategy.default_profile(candidate).items()
                                  if v != strategy.default_profile(parent)[k]},
                 economics=economy, action_transition_counts=evidence['action_transition_counts']))

@@ -1015,3 +1015,47 @@ def test_scheduled_machine_report_retains_explicit_consumed_training_boundary(mo
     with pytest.raises(ValueError,match='consumed_holdout'):
         c.build_machine_policy_report([row],source_receipt={},target_date='2026-09-22',data_root=tmp_path,
             training_through_date='2026-09-21')
+
+
+def test_machine_replay_skips_only_unpriced_nonentry_and_preserves_input(monkeypatch):
+    from src.engine.scalping import ai_action_outcome_calibration as c
+    one_research_candidate(monkeypatch)
+    good = machine_cost_row()
+    missing = deepcopy(good)
+    missing['decision_trace_id'] = 'missing'
+    missing['comparison']['entry_cost_contract'] = {}
+    frozen = deepcopy([good, missing])
+    calls = []
+    original = c.mechanistic_entry_policy_decision
+    def counted(setup, *, policy):
+        calls.append(policy)
+        return original(setup, policy=policy)
+    monkeypatch.setattr(c, 'mechanistic_entry_policy_decision', counted)
+    result = c.build_main_strategy_refinement([good, missing],
+        parent=evidence.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1, scope=('KRX','KRX_REGULAR'),
+        source_contract={}, machine_policy_only=True)
+    assert [good, missing] == frozen
+    assert len(calls) == 3  # Two incumbent replays, only one candidate replay.
+    arm = result['machine_evidence']['train']
+    assert arm['replay_coverage']['excluded_nonentry_count'] == 1
+    assert arm['economics']['excluded_attempt_counts'] == {'full_cost_scope_mismatch': 1}
+    assert arm['economics']['selected_path_ev_pct'] == pytest.approx(.3)
+    assert arm['economics']['comparable_attempt_count'] == 1
+
+
+def test_machine_replay_keeps_unpriced_existing_entry_promotion_guard(monkeypatch):
+    from src.engine.scalping import ai_action_outcome_calibration as c
+    one_research_candidate(monkeypatch)
+    row = machine_cost_row()
+    row['comparison']['entry_cost_contract'] = {}
+    calls = []
+    def decide(setup, *, policy):
+        calls.append(policy)
+        return dict(action='ENTER_NOW' if policy == evidence.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1 else 'BLOCK')
+    monkeypatch.setattr(c, 'mechanistic_entry_policy_decision', decide)
+    result = c.build_main_strategy_refinement([row],
+        parent=evidence.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1, scope=('KRX','KRX_REGULAR'),
+        source_contract={}, machine_policy_only=True)
+    assert len(calls) == 2
+    assert result['promotion_pass'] is False
+    assert result['machine_candidate_scores'][0]['economics']['unevaluated_existing_entry_changes'] == ['attempt-1']
