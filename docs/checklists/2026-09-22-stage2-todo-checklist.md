@@ -115,3 +115,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
   - Source: [식별자·공백 보완 리뷰](../audit-reports/2026-09-22-machine-source-identity-and-gap-review.md).
   - Acceptance: 현재 판정의 canonical venue/session 전달, 원천 연속성 근거 보존, 대상 검증·고정 배포본·재기동 PID 확인. 과거 원천 복구·무체결 확정·EV 개선으로 해석하지 않는다.
   - 18:07 완료:4b1631d3b push·배포, 릴리스1096tests PASS(기존 실패2건 재현 후 제외), PID286554/환경 인계 PASS. 자연9판정의14후속 이벤트 exact identity14/14,003670 정상; 새 원천9건 연속성 근거 포함. 기존 정책 유지·과거 공백 복구 주장 없음.
+
+- [ ] `[RisingMissedIntradayIORepair] 장중 피드백 반복 원천 읽기 제거·배포 확인` (`Due: 2026-09-22`, `Slot: POSTCLOSE`, `TimeWindow: 19:45~21:30`, `Track: RuntimeStability`)
+  - Source: [I/O 수리 리뷰](../audit-reports/2026-09-22-rising-missed-feedback-io-review.md).
+  - Acceptance: 동일 prefix 결과 동등성, 원천1회 읽기, 압축 spool 메모리 제한·정리, append/교체/결손 처리, 대상 검증 및 고정 배포본 보고서1회 실행 receipt. 정책·주문·기존 작업 잠금·cooldown·안전 임계치 유지.

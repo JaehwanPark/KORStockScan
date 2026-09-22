@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import gzip
+import hashlib
 import json
+import os
+import pickle
+import tempfile
 from collections import Counter
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -20,6 +26,90 @@ from src.engine.scalping.risky_micro_episode import (
     evaluate_risky_micro_episode,
 )
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
+
+
+class _PipelineReplay:
+    """Lossless, process-local replay; never load pickle from an external file."""
+
+    def __init__(self, storage):
+        self.storage = storage
+        self.row_count = 0
+        self.receipt = {}
+
+    def __iter__(self):
+        self.storage.seek(0)
+        with gzip.GzipFile(fileobj=self.storage, mode="rb") as stream:
+            for _ in range(self.row_count):
+                yield pickle.load(stream)
+            if stream.read(1):
+                raise ValueError("pipeline_replay_trailing_data")
+
+
+def _pipeline_rows(source):
+    return iter(source) if isinstance(source, _PipelineReplay) else iter_jsonl(source)
+
+
+@contextmanager
+def _pipeline_replay(path):
+    """Read one bounded prefix, then replay compressed records without JSON parsing.
+
+    Only compressed bytes occupy the 8 MiB spool; larger runs spill to a private
+    temporary file, removed on success or failure. Every run rebuilds its own
+    replay. Aggregators see independent dictionaries from the same source cut.
+    """
+    actual = existing_or_gzip_path(path)
+    source_exists = actual.exists()
+    with tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024, mode="w+b") as storage:
+        replay = _PipelineReplay(storage)
+        digest = hashlib.sha256()
+        source_bytes = 0
+        with gzip.GzipFile(fileobj=storage, mode="wb", compresslevel=1, mtime=0) as archive:
+            if source_exists:
+                with actual.open("rb") as raw:
+                    before = os.fstat(raw.fileno())
+                    compressed = actual.suffix == ".gz"
+                    stream = gzip.GzipFile(fileobj=raw, mode="rb") if compressed else raw
+                    try:
+                        while compressed or source_bytes < before.st_size:
+                            line = stream.readline() if compressed else stream.readline(before.st_size - source_bytes)
+                            if not line:
+                                break
+                            source_bytes += len(line)
+                            digest.update(line)
+                            try:
+                                row = json.loads(line.decode("utf-8", errors="replace").strip())
+                            except json.JSONDecodeError:
+                                continue
+                            if isinstance(row, dict):
+                                # A new pickler per row avoids retaining prior objects.
+                                pickle.dump(row, archive, protocol=pickle.HIGHEST_PROTOCOL)
+                                replay.row_count += 1
+                    finally:
+                        if compressed:
+                            stream.close()
+                    after = os.fstat(raw.fileno())
+                    current = actual.stat()
+                    identity = lambda st: (st.st_dev, st.st_ino)
+                    if (identity(before) != identity(current)
+                            or after.st_size < before.st_size
+                            or (after.st_size == before.st_size and
+                                (after.st_mtime_ns, after.st_ctime_ns) !=
+                                (before.st_mtime_ns, before.st_ctime_ns))
+                            or (compressed and after.st_size != before.st_size)):
+                        raise ValueError("pipeline_source_changed_during_snapshot")
+                    if not compressed and source_bytes != before.st_size:
+                        raise ValueError("pipeline_source_prefix_incomplete")
+        replay.receipt = {
+            "strategy": "single_prefix_lossless_compressed_replay_v1",
+            "source_path": str(actual),
+            "source_exists": source_exists,
+            "decoded_source_bytes": source_bytes,
+            "decoded_prefix_sha256": digest.hexdigest(),
+            "row_count": replay.row_count,
+            "compressed_replay_bytes": storage.tell(),
+            "spool_memory_limit_bytes": 8 * 1024 * 1024,
+        }
+        yield replay
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 PIPELINE_EVENTS_DIR = PROJECT_ROOT / "data" / "pipeline_events"
@@ -759,7 +849,7 @@ def _build_first_touch_regression_rows(
     blocker_reason_counts: dict[str, Counter[str]] = {
         record_id: Counter() for record_id in candidates
     }
-    for row in iter_jsonl(pipeline_path):
+    for row in _pipeline_rows(pipeline_path):
         record_id = str(row.get("record_id") or "").strip()
         if record_id not in candidates:
             continue
@@ -889,7 +979,7 @@ def _build_forced_submit_lineage_rows(
         "entry_order_cancel_requested",
         "entry_order_cancel_confirmed",
     }
-    for row in iter_jsonl(pipeline_path):
+    for row in _pipeline_rows(pipeline_path):
         stage = str(row.get("stage") or "")
         if stage not in lineage_stages:
             continue
@@ -1997,7 +2087,7 @@ def _build_submit_safety_and_backoff_audit(
     open_dynamic_age_rows_by_code: dict[str, list[dict[str, Any]]] = {}
     recent_executable_bbo_by_record: dict[str, dict[str, Any]] = {}
 
-    for row in iter_jsonl(pipeline_path):
+    for row in _pipeline_rows(pipeline_path):
         code = _event_code(row)
         if not code:
             continue
@@ -3626,7 +3716,7 @@ def _load_tp1_label_event_projection(
     candidate_codes: set[str] = set()
     candidate_promotion_ids: set[str] = set()
     observation_watermark: datetime | None = None
-    for row in iter_jsonl(pipeline_path):
+    for row in _pipeline_rows(pipeline_path):
         timestamp = _tp1_label_timestamp(_event_ts(row))
         if timestamp is not None and (
             observation_watermark is None or timestamp > observation_watermark
@@ -3644,7 +3734,7 @@ def _load_tp1_label_event_projection(
         return [], observation_watermark
 
     projected: list[dict[str, Any]] = []
-    for row in iter_jsonl(pipeline_path):
+    for row in _pipeline_rows(pipeline_path):
         if _event_code(row) not in candidate_codes:
             continue
         fields = _fields(row)
@@ -3963,7 +4053,7 @@ def _build_tp1_counterfactual_submit_safety(
     risk_counts: Counter[str] = Counter()
     unique_symbols: set[str] = set()
     rows: list[dict[str, Any]] = []
-    for row in iter_jsonl(pipeline_path):
+    for row in _pipeline_rows(pipeline_path):
         if (
             str(row.get("stage") or "")
             != "rising_missed_tp1_counterfactual_submit_safety"
@@ -4707,7 +4797,7 @@ def _build_nxt_session_observation(
     sampler_outcome_counts: Counter[str] = Counter()
     sampler_evaluations: set[str] = set()
     unique_symbols: set[str] = set()
-    for row in iter_jsonl(pipeline_path):
+    for row in _pipeline_rows(pipeline_path):
         fields = _fields(row)
         stage = str(row.get("stage") or "")
         evaluation_id = str(fields.get("rising_missed_tp1_evaluation_id") or "").strip()
@@ -5251,7 +5341,7 @@ def _build_adverse_micro_recovery_observation(
     outcome_counts: Counter[str] = Counter()
     rows: list[dict[str, Any]] = []
     registered_observation_ids: set[str] = set()
-    for event in iter_jsonl(pipeline_path):
+    for event in _pipeline_rows(pipeline_path):
         stage = str(event.get("stage") or "")
         if not stage.startswith("rising_missed_adverse_micro_recovery_"):
             continue
@@ -6063,7 +6153,7 @@ def _build_risky_micro_episode_source_candidates(
     unique_symbols: set[str] = set()
     seen: set[tuple[str, str, str, str, str]] = set()
     rows: list[dict[str, Any]] = []
-    for row in iter_jsonl(pipeline_path):
+    for row in _pipeline_rows(pipeline_path):
         event_stage = str(row.get("stage") or "")
         explicit_candidate = (
             event_stage == "risky_micro_episode_source_candidate_observed"
@@ -6307,7 +6397,7 @@ def _build_risky_micro_episode_source_candidates(
     horizon_observer_event_count = 0
     horizon_observer_fresh_bbo_event_count = 0
     if observations_by_code:
-        for row in iter_jsonl(pipeline_path):
+        for row in _pipeline_rows(pipeline_path):
             row_ts = _risky_micro_ts(_event_ts(row))
             if row_ts is not None and (
                 pipeline_watermark is None or row_ts > pipeline_watermark
@@ -6917,16 +7007,40 @@ def build_report(
     generated_at: str | None = None,
     entry_turn_symbol_master_path: Path | None = None,
 ) -> dict[str, Any]:
-    pipeline_path = pipeline_path or _pipeline_path(target_date)
-    resolved_pipeline_path = existing_or_gzip_path(pipeline_path)
+    path = pipeline_path or _pipeline_path(target_date)
     generated_at = generated_at or datetime.now(KST).isoformat(timespec="seconds")
+    with _pipeline_replay(path) as replay:
+        report = _build_report(
+            target_date, pipeline_path=path, pipeline_rows=replay,
+            generated_at=generated_at,
+            entry_turn_symbol_master_path=entry_turn_symbol_master_path,
+        )
+        report["source_snapshot"] = replay.receipt
+        return report
+
+
+def _build_report(
+    target_date: str,
+    *,
+    pipeline_path: Path | None = None,
+    pipeline_rows: _PipelineReplay | None = None,
+    generated_at: str | None = None,
+    entry_turn_symbol_master_path: Path | None = None,
+) -> dict[str, Any]:
+    pipeline_path = pipeline_path or _pipeline_path(target_date)
+    resolved_pipeline_path = (
+        Path(pipeline_rows.receipt["source_path"]) if pipeline_rows is not None
+        else existing_or_gzip_path(pipeline_path)
+    )
+    generated_at = generated_at or datetime.now(KST).isoformat(timespec="seconds")
+    source = pipeline_rows if pipeline_rows is not None else pipeline_path
     forced: dict[str, dict[str, Any]] = {}
     holding_by_record: dict[str, dict[str, Any]] = {}
-    source_quality_status = (
-        "pass" if resolved_pipeline_path.exists() else "missing_pipeline_events"
-    )
+    source_exists = (pipeline_rows.receipt["source_exists"] if pipeline_rows is not None
+                     else resolved_pipeline_path.exists())
+    source_quality_status = "pass" if source_exists else "missing_pipeline_events"
 
-    for row in iter_jsonl(pipeline_path):
+    for row in _pipeline_rows(source):
         record_id = str(row.get("record_id") or "").strip()
         if not record_id:
             continue
@@ -6976,8 +7090,8 @@ def build_report(
             str(item.get("record_id") or ""),
         )
     )
-    first_touch_rows = _build_first_touch_regression_rows(forced, pipeline_path)
-    submit_lineage_rows = _build_forced_submit_lineage_rows(forced, pipeline_path)
+    first_touch_rows = _build_first_touch_regression_rows(forced, source)
+    submit_lineage_rows = _build_forced_submit_lineage_rows(forced, source)
     label_counts = Counter(
         str(item.get("feedback_label") or "unknown") for item in rows
     )
@@ -6993,7 +7107,7 @@ def build_report(
         submit_safety_rows,
         backoff_audit_rows,
         dynamic_age_post_apply_rows,
-    ) = _build_submit_safety_and_backoff_audit(pipeline_path)
+    ) = _build_submit_safety_and_backoff_audit(source)
     latency_false_negative_summary, latency_false_negative_rows = (
         _build_latency_false_negative_review(submit_safety_rows)
     )
@@ -7008,19 +7122,19 @@ def build_report(
         latency_canary_rows,
     )
     tp1_label_events, tp1_observation_watermark = _load_tp1_label_event_projection(
-        pipeline_path
+        source
     )
     tp1_label_summary, tp1_label_rows = _build_tp1_first_hit_labels(
-        pipeline_path,
+        source,
         label_events=tp1_label_events,
         observation_watermark=tp1_observation_watermark,
     )
     tp1_counterfactual_summary, tp1_counterfactual_rows = (
-        _build_tp1_counterfactual_submit_safety(pipeline_path)
+        _build_tp1_counterfactual_submit_safety(source)
     )
     tp1_counterfactual_label_summary, tp1_counterfactual_label_rows = (
         _build_tp1_counterfactual_first_hit_labels(
-            pipeline_path,
+            source,
             label_events=tp1_label_events,
             observation_watermark=tp1_observation_watermark,
         )
@@ -7058,12 +7172,12 @@ def build_report(
         nxt_session_rows,
         nxt_order_rows,
         nxt_post_block_sampler_rows,
-    ) = _build_nxt_session_observation(pipeline_path)
+    ) = _build_nxt_session_observation(source)
     adverse_micro_recovery_summary, adverse_micro_recovery_rows = (
-        _build_adverse_micro_recovery_observation(pipeline_path)
+        _build_adverse_micro_recovery_observation(source)
     )
     risky_micro_episode_summary, risky_micro_episode_rows = (
-        _build_risky_micro_episode_source_candidates(pipeline_path)
+        _build_risky_micro_episode_source_candidates(source)
     )
     risky_micro_episode_daily_rolling_rows = _risky_micro_daily_rolling_eligible_rows(
         target_date,
@@ -7641,7 +7755,7 @@ def build_report(
         "source_paths": {"pipeline_events": str(resolved_pipeline_path)},
         "source_quality": {
             "status": source_quality_status,
-            "pipeline_events_exists": resolved_pipeline_path.exists(),
+            "pipeline_events_exists": source_exists,
             "tp1_label_projection_mode": "streaming_two_pass_exact_field_allowlist_v3",
             "tp1_label_projected_event_count": len(tp1_label_events),
             "tp1_label_full_fields_materialized": False,
