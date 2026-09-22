@@ -713,6 +713,10 @@ def _producer_main(argv=None) -> int:
 # Stage registry is shared by dispatch, summary, verifier and controller. Legacy
 # v1 terminals remain readable, but never synthesize a successful v2 stage.
 STAGE_SCHEMA = 'postclose_stage_terminal_v2'
+# Episode/widget research reports can legitimately exceed the legacy 32 MiB
+# validation bound. Keep the read bounded while matching the producer's
+# existing artifact-size contract.
+FAMILY_ARTIFACT_MAX_BYTES = 64 * 1024 * 1024
 STAGE_REGISTRY = {
     'main_machine_policy': ((), ('machine_policy', 'machine_policy_terminal')),
     'main_auxiliary_policy': (('outcome_labels',), ('compact_auxiliary_paired_economic',)),
@@ -848,8 +852,8 @@ def _stage_output_issues(report_dir, day, stage):
         if name in {'episode_policy_refresh', 'widget_policy_refresh'}:
             from src.engine.monitoring.research_closed_loop import digest, read_object
             if (value.get('receipt_sha256') != digest({k:v for k,v in value.items() if k != 'receipt_sha256'})
-                or value.get('source_sha256') != digest(read_object(Path(value.get('source_path') or ''), limit=32*1024*1024))
-                or value.get('policy_sha256') != digest(read_object(Path(value.get('policy_path') or ''), limit=32*1024*1024))):
+                or value.get('source_sha256') != digest(read_object(Path(value.get('source_path') or ''), limit=FAMILY_ARTIFACT_MAX_BYTES))
+                or value.get('policy_sha256') != digest(read_object(Path(value.get('policy_path') or ''), limit=FAMILY_ARTIFACT_MAX_BYTES))):
                 errors.append(f'{stage}:family_publication_invalid')
         if name == 'machine_research_closed_loop':
             from src.engine.automation.machine_research_closed_loop_refresh import validate_current_receipt

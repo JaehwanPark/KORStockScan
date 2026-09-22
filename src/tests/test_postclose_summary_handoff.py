@@ -702,6 +702,45 @@ def test_stage_machine_rejects_sealed_but_unbound_terminal(stage_environment):
     assert 'main_machine_policy:report_terminal_binding_invalid' in h._stage_output_issues(report, day, 'main_machine_policy')
 
 
+def test_family_publication_validation_uses_bounded_64_mib_read(tmp_path, monkeypatch):
+    from src.engine.monitoring import research_closed_loop as loop
+
+    day = '2026-09-21'
+    report_dir = tmp_path / 'data' / 'report'
+    paths = mod.stage_artifacts(report_dir, day, 'episode_policy')
+    source = paths['low_price_two_leg_expanded_candidate_research']
+    policy = tmp_path / 'data' / 'runtime' / 'low_price_two_leg_auto_expansion' / 'policy.json'
+    source.parent.mkdir(parents=True)
+    policy.parent.mkdir(parents=True)
+    source_payload = {'end_date': day, 'status': 'complete'}
+    policy_payload = {'effective_date': '2026-09-22', 'runtime_effect': False}
+    source.write_text(json.dumps(source_payload), encoding='utf-8')
+    policy.write_text(json.dumps(policy_payload), encoding='utf-8')
+    refresh = paths['episode_policy_refresh']
+    refresh.parent.mkdir(parents=True)
+    from src.engine.monitoring.research_closed_loop import digest
+    value = {
+        'source_date': day,
+        'source_path': str(source),
+        'source_sha256': digest(source_payload),
+        'policy_path': str(policy),
+        'policy_sha256': digest(policy_payload),
+        'status': 'complete',
+    }
+    value['receipt_sha256'] = digest(value)
+    refresh.write_text(json.dumps(value), encoding='utf-8')
+
+    calls = []
+    original = loop.read_object
+    def bounded(path, *, limit=0):
+        calls.append(limit)
+        return original(path, limit=limit)
+    monkeypatch.setattr(loop, 'read_object', bounded)
+
+    assert mod._stage_output_issues(report_dir, day, 'episode_policy') == []
+    assert calls == [64 * 1024 * 1024, 64 * 1024 * 1024]
+
+
 def test_label_ready_time_uses_kst_instant(stage_environment):
     h, day, report, run, produce = stage_environment
     produce(['fixture', 'outcome_labels'])
