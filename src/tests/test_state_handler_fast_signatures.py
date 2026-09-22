@@ -6279,6 +6279,45 @@ def test_log_ai_confirmed_terminal_no_budget_emits_contract_fields(monkeypatch):
     assert fields["quote_age_source"] == "last_ws_update_ts"
 
 
+@pytest.mark.parametrize("with_attempt", [False, True])
+def test_terminal_no_budget_merges_source_invalid_receipts(monkeypatch, with_attempt):
+    emitted = []
+    monkeypatch.setattr(handlers, "emit_pipeline_event",
+                        lambda *args, **kwargs: emitted.append(kwargs["fields"]))
+    old_quality = {
+        "entry_source_invalid_schema": "old-schema",
+        "entry_source_invalid_primary_blocker": "old-blocker",
+        "tick_context_quality": "old-quality",
+    }
+    stock = {"id": 44, "last_watching_ai_source_quality_fields": old_quality.copy()}
+    decision = {
+        "action": "WAIT", "entry_mechanistic_action": "SOURCE_INVALID",
+        "entry_source_invalid_schema": "current-schema",
+        "entry_source_invalid_primary_blocker": "quote_stale",
+        "entry_source_invalid_blockers": ["quote_stale"],
+        "ai_market_snapshot_id": "current-snapshot",
+    }
+    if with_attempt:
+        decision["evaluation_attempt_id"] = "current-attempt"
+    handlers._log_ai_confirmed_terminal_no_budget(
+        stock, "000035", terminal_reason="source_invalid", source_stage="first_ai_wait",
+        ai_decision=decision,
+        extra_fields={"entry_source_invalid_schema": "current-schema",
+                      "actual_order_submitted": True, "broker_order_forbidden": False,
+                      "allowed_runtime_apply": True, "terminal_reason": "wrong"},
+    )
+    fields = emitted[-1]
+    assert fields["entry_source_invalid_schema"] == "current-schema"
+    assert fields["entry_source_invalid_primary_blocker"] == "quote_stale"
+    assert fields["ai_market_snapshot_id"] == "current-snapshot"
+    assert fields.get("tick_context_quality") != "old-quality"
+    assert fields["actual_order_submitted"] is False
+    assert fields["broker_order_forbidden"] is True
+    assert fields["allowed_runtime_apply"] is False
+    assert fields["terminal_reason"] == "source_invalid"
+    assert stock["last_watching_ai_source_quality_fields"] == old_quality
+
+
 def test_first_ai_big_bite_wait_does_not_block_strong_buy():
     assert (
         _should_first_ai_wait_for_big_bite(

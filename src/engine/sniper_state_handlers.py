@@ -18756,28 +18756,33 @@ def _log_ai_confirmed_terminal_no_budget(
         "primary_decision_metric": "funnel_count",
         "source_quality_gate": "terminal_reason_contract_fields_present",
     }
+    current_fields = _merge_entry_pipeline_field_groups(
+        _build_tick_source_quality_log_fields(ai_decision or {}),
+        _machine_primary_entry_provenance_fields(ai_decision),
+        extra_fields,
+    )
     contract_fields = _ensure_ai_source_quality_fields(
-        contract_fields,
-        stock if isinstance(stock, dict) else None,
+        _merge_entry_pipeline_field_groups(current_fields, contract_fields),
+        None if current_fields.get("evaluation_attempt_id") else stock_fields,
         not_evaluated_reason="ai_confirmed_terminal_no_budget_source_quality_missing",
     )
     _log_entry_pipeline(
         stock,
         code,
         "ai_confirmed_terminal_no_budget",
-        **contract_fields,
-        actual_order_submitted=False,
-        broker_order_forbidden=True,
-        allowed_runtime_apply=False,
-        terminal_reason=str(terminal_reason or "unknown_terminal_no_budget"),
-        source_stage=str(source_stage or "unknown"),
-        ai_score=f"{score_value:.1f}",
-        ai_action=action or "UNKNOWN",
-        entry_score_threshold=f"{float(entry_score_threshold):.1f}",
-        **{
-            **_machine_primary_entry_provenance_fields(ai_decision),
-            **(extra_fields or {}),
-        },
+        **_merge_entry_pipeline_field_groups(
+            contract_fields,
+            {
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "allowed_runtime_apply": False,
+                "terminal_reason": str(terminal_reason or "unknown_terminal_no_budget"),
+                "source_stage": str(source_stage or "unknown"),
+                "ai_score": f"{score_value:.1f}",
+                "ai_action": action or "UNKNOWN",
+                "entry_score_threshold": f"{float(entry_score_threshold):.1f}",
+            },
+        ),
     )
 
 
