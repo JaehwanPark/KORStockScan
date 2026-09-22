@@ -52,14 +52,14 @@
 
 현재 PID에서 아래가 모두 일치해야 runtime 소비를 인정한다.
 
-- 선택 release root/commit과 PID root/commit
+- 해당 소비자에 승인된 release root/commit과 PID root/commit. 장후 생산자만 갱신된 경우 공통 release selector와 기존 메인 PID의 commit 차이를 곧바로 소비 실패로 판정하지 않는다
 - target date, source date, policy bundle hash와 selected scope/rule
 - `entry_primary_decision_owner=mechanistic_entry_adjudicator`
 - `entry_ai_role=auxiliary_risk_screen_pass_veto_no_promotion`
 - compact prompt/schema/system prompt hash
 - resolver 결과와 자연 trace의 owner/action/prompt/bundle
 
-문자열 status, 정책 파일 존재, PREOPEN verifier PASS만으로 현재 PID 소비를 인정하지 않는다. 유효 부모 정책과 선택된 그룹·종목·micro 자식 정책을 분리하며, 자식 표본 부족을 부모 정책 부재나 추가 live 진입 gate로 만들지 않는다.
+문자열 status, 정책 파일 존재, PREOPEN verifier PASS만으로 현재 PID 소비를 인정하지 않는다. 정책 묶음 소비와 변경된 구간·선택 규칙·실제 임계치 소비를 구분한다. 과거 판정은 당시 bundle로 검증하며 현재 임계치를 소급하지 않는다. 유효 부모 정책과 선택된 그룹·종목·micro 자식 정책을 분리하며, 자식 표본 부족을 부모 정책 부재나 추가 live 진입 gate로 만들지 않는다.
 
 판정 분모의 canonical key는 다음과 같다.
 
@@ -101,7 +101,7 @@ AI raw verdict `PASS|VETO|CAUTION|INSUFFICIENT`와 screen terminal status `pass|
 
 익절했더라도 깊은 역행이나 장시간 횡보 뒤 회복한 사례는 좋은 타점으로 세지 않는다. 손절선·청산 override 때문에 실현 EV가 왜곡된 경우 타점 품질과 exit 결과를 분리한다. 미래 first-hit·사후 고가를 당시 feature에 역류시키거나 체결을 합성하지 않는다.
 
-임계치 변경 시뮬레이션은 성숙한 동일 attempt 집합에서만 수행한다. incumbent와 후보가 같은 source-quality, 비용, venue/session, chronological holdout과 tail 계약을 사용해야 한다. 다음 거래일 후보는 해당 family 계약의 비용 차감 EV `>= +0.10%`, incumbent 대비 paired 개선과 tail guard를 확인한다. `+0.10%`는 매 거래 보장수익이나 장중 수동 threshold 변경 근거가 아니다. source/identity 결함 수리에도 경제성 floor를 추가하지 않는다.
+임계치 변경 시뮬레이션은 성숙한 동일 attempt 집합에서만 수행한다. incumbent와 후보가 같은 source-quality, 비용, venue/session, chronological holdout과 tail 계약을 사용해야 한다. 후보 선정 기준은 해당 family의 현재 승인된 계약을 따른다. 메인 기계 BLOCK/RECHECK→ENTER_NOW 튜닝은 사용자 승인된 `support_adjusted_win_rate_preserve_entries_v3`를 사용하며 표본 보정 승률, 평균 순 경로 EV 순으로 비교하고 음수 EV도 허용한다. 기계 튜닝에 AI/자금/청산 재생 또는 `+0.10%` 수익 하한을 추가하지 않는다. 다른 family의 비용·paired 개선·tail 계약은 별도로 유지한다. source/identity 결함 수리에도 경제성 floor를 추가하지 않는다.
 
 #### 2.1.3 탐색부터 제출까지의 최초 병목
 

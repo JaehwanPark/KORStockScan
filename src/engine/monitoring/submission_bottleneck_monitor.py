@@ -6,7 +6,7 @@ import fcntl
 import hashlib
 import json
 import math
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -248,6 +248,200 @@ def _nonentry_capacity_observation_gap(row):
             and economic.get("capacity_blocker") == "capacity_observation_cache_miss_nonentry")
 
 
+def _nonentry_downstream_gap(row):
+    """An uncalled execution replay is not a machine admission contract."""
+    return (row.get("mechanistic_action") in {"BLOCK", "RECHECK"}
+            and row.get("ai_screen_status") == "not_requested_machine_nonentry"
+            and not row.get("conflict_reasons") and not row.get("enter_now_observed")
+            and not row.get("broker_acceptance_observed")
+            and row.get("final_state") in {"machine_block_point_drop", "machine_recheck_observation"}
+            and (row.get("economic_source") or {}).get("status") == "source_gap")
+
+
+def _small_json(path):
+    if path.stat().st_size > 8 * 1024 * 1024:
+        raise ValueError("semantic_artifact_size_limit")
+    value = json.loads(path.read_text())
+    if not isinstance(value, dict):
+        raise ValueError("semantic_artifact_invalid")
+    return value
+
+
+def machine_semantics(data_root, now, *, tail_bytes=8 * 1024 * 1024):
+    """Bounded receipt audit, not a replay, policy publisher or outcome estimator."""
+    from src.engine.scalping import entry_strategy_policy as strategy
+    from src.engine.scalping import mechanistic_entry_runtime_policy as runtime
+    from src.engine.scalping.ai_decision_trace import _json_bytes
+    from src.engine.buy_funnel_sentinel import _canonical_session
+
+    now = stamp(now)
+    day = now.date().isoformat()
+    result = dict(status="unobservable", metric_role="source_quality_gate",
+        decision_authority="report_only", window_policy="recent_30m_bounded_tail",
+        sample_floor="none_for_receipt_checks", primary_decision_metric="receipt_mismatch_count",
+        source_quality_gate="exact_observation_hash_scope_and_frozen_policy",
+        forbidden_uses=["automatic_policy_change", "realized_pnl", "missing_as_zero_ev"],
+        selection={}, scopes={}, issues={}, examples=[], observation_count=0,
+        source_invalid_count=0, required_feature_guard_count=0, source_invalid_blockers={}, action_replay_performed=False)
+    issues = Counter()
+    try:
+        current = runtime.load_effective(data_root=data_root, target_date=day)
+        if not current:
+            raise ValueError("current_policy_missing")
+        result["current_bundle_sha256"] = current["bundle_sha256"]
+        report = _small_json(data_root / "report/ai_decision_action_outcome_calibration" / f"machine_policy_{day}.json")
+        digest = runtime.digest({k: v for k, v in report.items() if k != "artifact_content_sha256"})
+        if digest != report.get("artifact_content_sha256") or report.get("target_date") != day:
+            raise ValueError("selection_artifact_invalid")
+        for scope, selected in report.get("selections", {}).items():
+            economy = ((selected.get("machine_evidence") or {}).get("train") or {}).get("economics") or {}
+            score = strategy.machine_support_adjusted_win_rate(economy)
+            recorded = economy.get("support_adjusted_win_rate_pct")
+            valid = selected.get("selection_basis") == strategy.MACHINE_SELECTION_VERSION
+            if selected.get("promotion_pass"):
+                valid = valid and score is not None and isinstance(recorded, (int, float)) and math.isclose(score, recorded, abs_tol=1e-8)
+            result["selection"][scope] = dict(version=selected.get("selection_basis"), score_contract_valid=valid,
+                promotion_pass=selected.get("promotion_pass"), reasons=selected.get("promotion_errors"),
+                unique_opportunities=economy.get("selected_opportunity_count"), win_rate_pct=economy.get("win_rate_pct"),
+                support_adjusted_score_pct=recorded, mean_net_path_ev_pct=economy.get("selected_path_ev_pct"),
+                realized_pnl=False, report_is_activation_receipt=False)
+            if not valid:
+                issues["selection_score_contract_invalid"] += 1
+        terminal = _small_json(data_root / "report/ai_decision_action_outcome_calibration" / f"machine_policy_terminal_{day}.json")
+        if (terminal.get("report_sha256") != report["artifact_content_sha256"]
+                or runtime.digest({k:v for k,v in terminal.items() if k != "artifact_content_sha256"}) != terminal.get("artifact_content_sha256")):
+            raise ValueError("selection_terminal_binding_invalid")
+        result["publication"] = dict(status=terminal.get("status"), activation=terminal.get("activation"),
+            actual_pid_consumption="see_per_scope_live_pid_receipts")
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        result["selection_status"] = "unobservable:" + str(exc)[:160]
+    path = data_root / "ai_decision_payloads" / f"ai_decision_payloads_{day}.jsonl"
+    generations, seen = {}, set()
+    try:
+        with path.open("rb") as stream:
+            size = path.stat().st_size
+            start = max(0, size - tail_bytes)
+            stream.seek(start)
+            if start:
+                stream.readline()
+            result.update(tail_truncated=bool(start), source_bytes=size, read_limit_bytes=tail_bytes)
+            for line in stream.read(max(0, size - stream.tell())).splitlines(keepends=True):
+                if not line.endswith(b"\n"):
+                    break
+                try:
+                    observation = json.loads(line)
+                except (ValueError, UnicodeDecodeError):
+                    issues["observation_json_invalid"] += 1
+                    continue
+                if not isinstance(observation, dict) or observation.get("schema") != "mechanistic_entry_observation_v1":
+                    continue
+                at = stamp(observation.get("captured_at"))
+                if not at or not 0 <= (now - at).total_seconds() <= WINDOW_SEC:
+                    continue
+                observed_hash = observation.get("machine_observation_sha256")
+                if observed_hash in seen:
+                    continue
+                seen.add(observed_hash)
+                result["observation_count"] += 1
+                try:
+                    if hashlib.sha256(_json_bytes({k:v for k,v in observation.items() if k != "machine_observation_sha256"})).hexdigest() != observed_hash:
+                        raise ValueError("machine_observation_hash_invalid")
+                    receipt = observation["runtime_consumption"]
+                    bundle_hash = observation["bundle_sha256"]
+                    if not isinstance(bundle_hash, str) or len(bundle_hash) != 64 or any(c not in "0123456789abcdef" for c in bundle_hash):
+                        raise ValueError("bundle_hash_invalid")
+                    if bundle_hash not in generations:
+                        bundle = _small_json(runtime.root(data_root) / "generations" / f"{bundle_hash}.json")
+                        if runtime.digest({k:v for k,v in bundle.items() if k != "bundle_sha256"}) != bundle_hash:
+                            raise ValueError("frozen_bundle_hash_invalid")
+                        generations[bundle_hash] = bundle
+                    context, source = observation["label_context"], observation["source"]
+                    assessment = source.get("assessment") or {}
+                    invalid = str(assessment.get("action", "")).upper() == "SOURCE_INVALID"
+                    feature_guard = (assessment.get("schema") == "mechanistic_entry_required_feature_v1"
+                        and assessment.get("action") == "RECHECK" and assessment.get("reason") == "required_feature_input_insufficient"
+                        and (source.get("setup_evidence") or {}).get("source_quality_status") == "blocked")
+                    if invalid or feature_guard:
+                        result["source_invalid_count" if invalid else "required_feature_guard_count"] += 1
+                        for blocker in (source.get("setup_evidence") or {}).get("source_quality_blockers", []):
+                            result["source_invalid_blockers"][blocker] = result["source_invalid_blockers"].get(blocker, 0) + 1
+                        continue
+                    scope = (str(context["effective_venue"]).upper(), _canonical_session(context["session_bucket"]))
+                    scoped = runtime.for_cohort(generations[bundle_hash], scope)
+                    if not scoped:
+                        raise ValueError("frozen_policy_scope_missing")
+                    setup = source["setup_evidence"]
+                    raw = setup.get("strategy_raw_input")
+                    if not isinstance(raw, dict):
+                        raise ValueError("machine_raw_input_missing")
+                    if strategy.digest(raw) != setup.get("strategy_raw_sha256"):
+                        raise ValueError("machine_raw_hash_invalid")
+                    profile, selection = strategy.select(scoped["machine_policy"], raw, setup)
+                    if (receipt.get("bundle_sha256") != bundle_hash
+                            or receipt.get("policy_sha256") != selection["policy_sha256"]
+                            or receipt.get("selector_leaf") != selection["leaf"]
+                            or receipt.get("effective_thresholds") != profile):
+                        raise ValueError("effective_policy_receipt_mismatch")
+                    key = "|".join((*scope, bundle_hash, selection["policy_sha256"], selection["leaf"]))
+                    counts = result["scopes"].setdefault(key, dict(matched_receipts=0, live_pid_receipts=0,
+                        effective_thresholds=profile, current_bundle=bundle_hash == result.get("current_bundle_sha256")))
+                    counts["matched_receipts"] += 1
+                    try:
+                        proc = Path('/proc') / str(int(receipt['pid']))
+                        live = (str((proc/'cwd').resolve()) == receipt.get('cwd')
+                            and (proc/'stat').read_text().split(') ', 1)[1].split()[19] == receipt.get('process_start_ticks'))
+                    except (OSError, ValueError, KeyError, IndexError):
+                        live = False
+                    counts["live_pid_receipts"] += int(live)
+                except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+                    reason = str(exc)[:160]
+                    issues[reason] += 1
+                    if len(result["examples"]) < 3:
+                        result["examples"].append(dict(observation_sha256=observed_hash, reason=reason))
+    except OSError as exc:
+        result["source_status"] = "unobservable:" + type(exc).__name__
+    result["issues"] = dict(issues)
+    if issues:
+        result["status"] = "review_required"
+    elif result.get("selection_status") or result.get("source_status"):
+        result["status"] = "partial_unobservable"
+    elif result["source_invalid_count"] or result["required_feature_guard_count"]:
+        result["status"] = "source_invalid_observed"
+    elif result["observation_count"]:
+        result["status"] = "observed_receipts_match"
+    return result
+
+
+def attach_machine_semantics(result, semantics):
+    """Persistent report-only receipt faults; absence never repairs old evidence."""
+    result["machine_semantics"] = semantics
+    key = "machine_policy_receipt_contract"
+    old = result["incidents"].get(key, {})
+    if semantics.get("issues"):
+        now = stamp(result["as_of"])
+        first = old.get("first_seen", result["as_of"]) if old.get("status") in {"pending", "active"} else result["as_of"]
+        item = dict(scope=semantics.get("current_bundle_sha256", "unbound"), rule=key,
+            category="structural_evidence", first_seen=first, last_seen=result["as_of"],
+            status="active" if (now - stamp(first)).total_seconds() >= 240 else "pending",
+            count=sum(semantics["issues"].values()), examples=semantics.get("examples", []),
+            issues=semantics["issues"], owner="machine_observation->frozen_policy->runtime_receipt",
+            closure_test="repair exact receipt source; absence does not repair historical observations",
+            notified_status=old.get("notified_status") if old.get("status") in {"pending", "active"} else None)
+        if old.get("history"):
+            item["history"] = old["history"]
+        if old.get("status") == "historical_unresolved":
+            item["history"] = (list(old.get("history", [])) + [{k:v for k,v in old.items() if k != "history"}])[-8:]
+        result["incidents"][key] = item
+    elif old.get("status") == "active":
+        result["incidents"][key] = {**old, "status": "historical_unresolved"}
+    elif old.get("status") == "pending":
+        result["incidents"].pop(key, None)
+    item = result["incidents"].get(key, {})
+    if item.get("status") in {"active", "historical_unresolved"} and item.get("notified_status") != item["status"]:
+        if key not in result["notification_pending"]:
+            result["notification_pending"].append(key)
+
+
 def evaluate(report, state, now):
     """Pure state transition. Old/stale evidence never triggers recovery or alerts."""
     now = stamp(now)
@@ -334,7 +528,7 @@ def evaluate(report, state, now):
         economic_gaps = [r for r in all_rows
             if (now - stamp(r["first_evaluated_at"])).total_seconds() >= GRACE_SEC
             and (r.get("economic_source") or {}).get("status") == "source_gap"
-            and not _nonentry_capacity_observation_gap(r)]
+            and not _nonentry_downstream_gap(r)]
         observation_gaps = [r for r in rows if _nonentry_capacity_observation_gap(r)]
         tests = {
             "economic_producer_gap": (economic_gaps, "structural_evidence", 240),
@@ -349,6 +543,8 @@ def evaluate(report, state, now):
             "enter_now": len(entered), "veto": len(veto), "accepted_attempts": len(accepted),
             "unresolved_attempts": len(gaps), "economic_producer_gaps": len(economic_gaps),
             "nonentry_capacity_observation_gaps": len(observation_gaps),
+            "nonentry_downstream_observation_gaps": sum(_nonentry_downstream_gap(r) for r in rows),
+            "economic_producer_gap_owner": "downstream_execution_replay_not_machine_tuning",
             "nonentry_capacity_observation_examples": [{k: r.get(k) for k in
                 ("stock_code", "evaluation_key", "first_evaluated_at", "mechanistic_action", "economic_source")}
                 for r in observation_gaps[:3]],
@@ -387,11 +583,11 @@ def evaluate(report, state, now):
                   and old.get("count") == len(set(old.get("evidence_ids", [])))
                   and old.get("evidence_ids")
                   and set(old["evidence_ids"]) <= {r["evaluation_key"] for r in all_rows
-                                                    if _nonentry_capacity_observation_gap(r)}):
+                                                    if _nonentry_downstream_gap(r)}):
                 # Reclassification is not source recovery. Preserve old proof
                 # IDs/count/examples; unknown/expired/mixed incidents stay open.
                 incidents[key] = {**old, "status": "observation_only_unresolved",
-                    "classification_reason": "exact_nonentry_no_fetch_evidence_confirmed",
+                    "classification_reason": "exact_nonentry_downstream_evidence_not_machine_tuning",
                     "classified_at": now.isoformat()}
             elif old and old.get("status") == "active":
                 # Window expiration is not recovery. Require explicit closure evidence.
@@ -499,13 +695,14 @@ def notify(result, path, send=None):
                  if item["rule"] == "economic_producer_gap" else
                  (example.get("source_invalid_decomposition") or {}).get("primary_blocker")
                  or next(iter(example.get("conflict_reasons") or []), None)
-                 or example.get("final_state"))
+                 or example.get("final_state") or example.get("reason")
+                 or next(iter(item.get("issues") or {}), None))
         cause_text = f"첫 결손: {str(cause)[:180]}\n" if cause else ""
         if item["rule"] == "economic_producer_gap":
             detail = (example.get("economic_source") or {}).get("capacity_blocker")
             cause_text += (f"판정: {example.get('mechanistic_action') or '미확인'} / "
                            f"조회 원인: {detail or '자금 조회 외 계약 결손 또는 구형 근거'}\n"
-                           "경제성 증거 결손이며 실제 주문 실패 건수와 다릅니다.\n")
+                           "후단 실행 재생 증거 결손입니다. 기계 튜닝 실패나 실제 주문 실패 건수가 아닙니다.\n")
         messages.append(cause_text + f'{item["status"]}: {item["rule"]}\n{item["scope"]}\n근거 {item["count"]}건 / {item["category"]}\n' +
                         json.dumps(item.get("examples", [])[:1], ensure_ascii=False)[:350])
     message = "[제출병목 점검] 자동 매매 변경 없음\n" + "\n".join(messages) + f"\n근거: {path}\nCodex에서 원천과 제출 경로를 점검하세요."
@@ -550,6 +747,7 @@ def main():
     with state_path.with_suffix(".lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         result = evaluate(report, _load_state(state_path), datetime.now(KST))
+        attach_machine_semantics(result, machine_semantics(PROJECT_ROOT / "data", result["as_of"]))
         if args.notify:
             notify(result, output)
         _write_state(state_path, result)

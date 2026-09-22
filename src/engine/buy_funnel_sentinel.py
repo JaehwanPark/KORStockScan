@@ -2741,6 +2741,20 @@ def _machine_revision_rows(rows):
         fields = event.fields
         digest = _safe_str(fields.get("machine_observation_sha256"))
         parent = _safe_str(fields.get("machine_revision_parent_sha256"))
+        # This terminal summarizes the same attempt; it is not a fresh machine
+        # decision. Older producers omit revision fields here. Bind only to an
+        # already witnessed revision with an identical action/screen.
+        if (event.stage == "entry_submit_attempt_finished" and not digest
+                and not fields.get("machine_revision_schema")
+                and "machine_revision_parent_sha256" not in fields):
+            prior = revisions.get(previous, [])
+            if (not prior
+                    or fields.get("entry_primary_decision_owner") != MACHINE_PRIMARY_DECISION_OWNER
+                    or fields.get("entry_mechanistic_action") != prior[-1].fields.get("entry_mechanistic_action")
+                    or fields.get("entry_ai_screen_status") != prior[-1].fields.get("entry_ai_screen_status")):
+                return rows, "invalid", ["machine_terminal_revision_binding_unproven"]
+            prior.append(event)
+            continue
         if (fields.get("machine_revision_schema") != "exact_machine_revision_v1"
                 or fields.get("entry_primary_decision_owner") != MACHINE_PRIMARY_DECISION_OWNER
                 or "machine_revision_parent_sha256" not in fields
@@ -2880,6 +2894,11 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
         for event in rows:
             observed_action = _safe_str(event.fields.get("entry_mechanistic_action")).upper()
             if observed_action not in MACHINE_PRIMARY_ENTRY_ACTIONS:
+                continue
+            if (event.stage == "entry_submit_attempt_finished"
+                    and not event.fields.get("machine_observation_sha256")
+                    and not event.fields.get("machine_revision_schema")
+                    and "machine_revision_parent_sha256" not in event.fields):
                 continue
             observation = {
                 "action": observed_action,

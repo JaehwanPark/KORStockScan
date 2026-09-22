@@ -617,7 +617,7 @@ def test_reclassification_retains_history_is_not_recovery_and_rearms_real_gap():
         now = START + timedelta(minutes=minutes)
         payload = report([nonentry_gap(), event(999, when=now)], now)
         if minutes < 20:
-            payload["submission_monitor"]["rows"][0]["economic_source"].pop("capacity_blocker")
+            payload["submission_monitor"]["rows"][0]["enter_now_observed"] = True
         before = copy.deepcopy(state)
         result = monitor.evaluate(payload, state, now)
         assert state == before
@@ -635,6 +635,7 @@ def test_reclassification_retains_history_is_not_recovery_and_rearms_real_gap():
         now = START + timedelta(minutes=minutes)
         payload = report([nonentry_gap(), event(999, when=now)], now)
         payload["submission_monitor"]["rows"][0]["economic_source"]["capacity_blocker"] = "capacity_scope_unavailable"
+        payload["submission_monitor"]["rows"][0]["enter_now_observed"] = True
         state = monitor.evaluate(payload, state, now)
     assert any(r["rule"] == "economic_producer_gap" for r in active(state))
     new = next(r for r in active(state) if r["rule"] == "economic_producer_gap")
@@ -675,3 +676,142 @@ def test_cache_upgrade_requires_zero_census_for_all_new_stages(tmp_path, monkeyp
 def test_source_invalid_machine_does_not_require_a_nonexistent_economic_plan():
     payload=monitor.snapshot([event(action='SOURCE_INVALID',screen='not_requested_machine_source_invalid')],START)
     assert payload['rows'][0]['economic_source']['status']=='not_applicable_machine_source_invalid'
+
+
+def semantic_fixture(tmp_path, monkeypatch):
+    import os
+    import hashlib
+    from src.tests.test_entry_strategy_policy import raw, setup, policy
+    from src.engine.scalping import entry_strategy_policy as strategy, mechanistic_entry_runtime_policy as runtime
+    from src.engine.scalping.ai_decision_trace import _json_bytes
+    payload = raw()
+    evidence = setup(payload)
+    evidence.update(strategy_raw_input=payload, strategy_raw_sha256=strategy.digest(payload))
+    machine = policy()
+    profile, selection = strategy.select(machine, payload, evidence)
+    bundle = dict(all_continuous_adopted=True, scope_policies={'KRX|KRX_REGULAR': dict(machine_policy=machine)})
+    bundle['bundle_sha256'] = runtime.digest(bundle)
+    path = runtime.root(tmp_path) / 'generations' / (bundle['bundle_sha256'] + '.json')
+    path.parent.mkdir(parents=True);path.write_text(json.dumps(bundle))
+    monkeypatch.setattr(runtime, 'load_effective', lambda **kw: bundle)
+    scope = dict(selection_basis=strategy.MACHINE_SELECTION_VERSION, promotion_pass=True,
+        machine_evidence={'train': {'economics': dict(selected_opportunity_count=10, win_rate_pct=60., selected_path_ev_pct=-.4)}})
+    scope['machine_evidence']['train']['economics']['support_adjusted_win_rate_pct'] = strategy.machine_support_adjusted_win_rate(scope['machine_evidence']['train']['economics'])
+    report = dict(target_date='2026-09-21', selections={'KRX|KRX_REGULAR': scope})
+    report['artifact_content_sha256'] = runtime.digest(report)
+    path = tmp_path / 'report/ai_decision_action_outcome_calibration/machine_policy_2026-09-21.json'
+    path.parent.mkdir(parents=True);path.write_text(json.dumps(report))
+    terminal = dict(report_sha256=report['artifact_content_sha256'], status='completed', activation={'status':'activated'})
+    terminal['artifact_content_sha256'] = runtime.digest(terminal)
+    path.with_name('machine_policy_terminal_2026-09-21.json').write_text(json.dumps(terminal))
+    observation = dict(schema='mechanistic_entry_observation_v1', captured_at=START.isoformat(),
+        bundle_sha256=bundle['bundle_sha256'], label_context=dict(effective_venue='KRX', session_bucket='krx_regular'),
+        source=dict(setup_evidence=evidence, assessment={'action': 'BLOCK'}),
+        runtime_consumption=dict(bundle_sha256=bundle['bundle_sha256'], policy_sha256=selection['policy_sha256'],
+            selector_leaf=selection['leaf'], effective_thresholds=profile, pid=os.getpid(), cwd=str(__import__('pathlib').Path.cwd()),
+            process_start_ticks=__import__('pathlib').Path('/proc/self/stat').read_text().split(') ',1)[1].split()[19]))
+    path = tmp_path / 'ai_decision_payloads/ai_decision_payloads_2026-09-21.jsonl'
+    path.parent.mkdir()
+    def write(value):
+        value = {k:v for k,v in value.items() if k != 'machine_observation_sha256'}
+        value['machine_observation_sha256'] = hashlib.sha256(_json_bytes(value)).hexdigest()
+        path.write_text(json.dumps(value)+'\n')
+    write(observation)
+    return observation, write
+
+
+def test_semantic_receipt_and_negative_ev_selection(tmp_path, monkeypatch):
+    observation, write = semantic_fixture(tmp_path, monkeypatch)
+    result = monitor.machine_semantics(tmp_path, START)
+    assert result['status'] == 'observed_receipts_match'
+    assert next(iter(result['scopes'].values()))['live_pid_receipts'] == 1
+    assert result['selection']['KRX|KRX_REGULAR']['score_contract_valid']
+    assert result['selection']['KRX|KRX_REGULAR']['mean_net_path_ev_pct'] == -.4
+    observation['runtime_consumption']['effective_thresholds']['ask_wall_spread_bp'] = 80
+    write(observation)
+    assert monitor.machine_semantics(tmp_path, START)['issues'] == {'effective_policy_receipt_mismatch': 1}
+
+
+def test_semantic_source_invalid_is_not_policy_mismatch(tmp_path, monkeypatch):
+    observation, write = semantic_fixture(tmp_path, monkeypatch)
+    observation['source'] = dict(assessment={'action':'source_invalid'}, setup_evidence={'source_quality_blockers':['bbo_stale']})
+    write(observation)
+    result = monitor.machine_semantics(tmp_path, START)
+    assert result['source_invalid_count'] == 1 and not result['issues']
+    assert not result['scopes'] and result['status'] == 'source_invalid_observed'
+
+
+def test_semantic_hash_staleness_and_partial_tail(tmp_path, monkeypatch):
+    observation, write = semantic_fixture(tmp_path, monkeypatch)
+    result = monitor.machine_semantics(tmp_path, START + timedelta(hours=1))
+    assert result['status'] == 'unobservable' and not result['observation_count']
+    path = tmp_path / 'ai_decision_payloads/ai_decision_payloads_2026-09-21.jsonl'
+    path.write_text(path.read_text().replace('krx_regular', 'nxt_regular'))
+    assert monitor.machine_semantics(tmp_path, START)['issues'] == {'machine_observation_hash_invalid': 1}
+    assert monitor.machine_semantics(tmp_path, START, tail_bytes=30)['tail_truncated']
+    assert not monitor.machine_semantics(tmp_path, START, tail_bytes=30)['observation_count']
+
+
+def test_nonentry_downstream_gaps_do_not_require_ai_or_capital():
+    now = START + timedelta(minutes=15)
+    payload = report([nonentry_gap(), event(999, when=now)], now)
+    row = payload['submission_monitor']['rows'][0]
+    row['economic_source'] = dict(status='source_gap', blocker='economic_observation_event_missing')
+    result = monitor.evaluate(payload, {}, now)
+    assert not any(i['rule']=='economic_producer_gap' for i in result['incidents'].values())
+    assert next(iter(result['scopes'].values()))['nonentry_downstream_observation_gaps'] == 1
+    row['enter_now_observed'] = True
+    assert not monitor._nonentry_downstream_gap(row)
+
+
+@pytest.mark.parametrize('mismatch', [None, 'action', 'screen', 'owner', 'before', 'partial_receipt'])
+def test_sparse_submit_terminal_is_not_new_machine_revision(mismatch):
+    decision = event(screen='pass', machine_revision_schema='exact_machine_revision_v1',
+        machine_observation_sha256='a'*64, machine_revision_parent_sha256='')
+    terminal = event(stage='entry_submit_attempt_finished', screen='pass', when=START+timedelta(seconds=2))
+    if mismatch == 'action': terminal.fields['entry_mechanistic_action'] = 'BLOCK'
+    if mismatch == 'screen': terminal.fields['entry_ai_screen_status'] = 'veto'
+    if mismatch == 'owner': terminal.fields['entry_primary_decision_owner'] = 'other'
+    if mismatch == 'partial_receipt': terminal.fields['machine_revision_schema'] = 'exact_machine_revision_v1'
+    rows = [terminal, decision] if mismatch == 'before' else [decision, terminal]
+    selected, status, errors = sentinel._machine_revision_rows(rows)
+    assert bool(errors) == bool(mismatch)
+    if not mismatch:
+        assert terminal in selected
+        ledger = sentinel._machine_primary_entry_funnel(rows)['evaluation_ledger'][0]
+        assert not ledger['conflict_reasons'] and len(ledger['decision_history']) == 1
+
+
+def test_receipt_incident_requires_persistence_and_does_not_fake_recovery():
+    semantics = dict(issues={'effective_policy_receipt_mismatch':1}, examples=[], current_bundle_sha256='a'*64)
+    result = dict(as_of=START.isoformat(), incidents={}, notification_pending=[])
+    monitor.attach_machine_semantics(result, semantics)
+    assert not result['notification_pending']
+    result['as_of'] = (START+timedelta(minutes=5)).isoformat()
+    monitor.attach_machine_semantics(result, semantics)
+    assert result['incidents']['machine_policy_receipt_contract']['status'] == 'active'
+    result['notification_pending'] = []
+    monitor.attach_machine_semantics(result, {'issues':{}})
+    assert result['incidents']['machine_policy_receipt_contract']['status'] == 'historical_unresolved'
+
+
+def test_required_feature_guard_has_no_selected_threshold_receipt(tmp_path, monkeypatch):
+    observation, write = semantic_fixture(tmp_path, monkeypatch)
+    observation['source'] = dict(assessment=dict(schema='mechanistic_entry_required_feature_v1', action='RECHECK', reason='required_feature_input_insufficient'),
+        setup_evidence=dict(source_quality_status='blocked', source_quality_blockers=['required_feature_tape_stale']))
+    write(observation)
+    result = monitor.machine_semantics(tmp_path, START)
+    assert result['required_feature_guard_count'] == 1 and not result['issues']
+    observation['source']['assessment']['action'] = 'ENTER_NOW'
+    write(observation)
+    assert monitor.machine_semantics(tmp_path, START)['issues'] == {'machine_raw_input_missing': 1}
+
+
+def test_historical_policy_receipt_is_not_compared_to_new_current(tmp_path, monkeypatch):
+    from src.engine.scalping import mechanistic_entry_runtime_policy as runtime
+    observation, write = semantic_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(runtime, 'load_effective', lambda **kw: {'bundle_sha256':'c'*64})
+    result = monitor.machine_semantics(tmp_path, START)
+    assert not result['issues']
+    assert not next(iter(result['scopes'].values()))['current_bundle']
+    assert result['current_bundle_sha256'] == 'c'*64

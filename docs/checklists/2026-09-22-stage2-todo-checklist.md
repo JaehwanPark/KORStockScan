@@ -75,6 +75,10 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 
 ## 단계별 튜닝 보완 구현
 
+- [ ] `[SubmissionBottleneckMonitorNatural0921] 개선된 기계정책의 의미 감시 현행화·배포·재검사` (`Due: 2026-09-22`, `Slot: INTRADAY`, `TimeWindow: 08:00~19:55`, `Track: RuntimeStability`)
+  - Source: [의미 감시 현행화](../proposals/intraday-semantic-entry-monitoring-and-telegram-alert-feasibility-plan-2026-09-20.md#922-기계정책-개선에-따른-감시-현행화). 기존 stable ID를 승계하며 과거 이력/원천·자연 성과의 한계는 [9/21 owner](./2026-09-21-stage2-todo-checklist.md#제출병목-지속-감시)에 보존한다.
+  - Acceptance: 기계/후단 source 결손 분리, 당시 policy/scope/leaf/실효 임계치 대사, 표본 보정 선정 계약, 판정 revision/종료 요약 분리, 대상 회귀·고정 배포본 소비·무통보 재검사. 자동 threshold/AI/주문 변경 및 실현수익 입증을 포함하지 않는다.
+
 - [ ] `[PostcloseStageRunnerSeparation] 통합 장후 실행기와 단계별 완료·재시도 분리` (`Due: 2026-09-22`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~23:30`, `Track: RuntimeStability`)
   - Source: [실행기 분리 계획](../proposals/machine-postclose-runner-separation-implementation-plan-2026-09-22.md).
   - Acceptance: main/auxiliary/widget/episode 독립 stage receipt·writer·retry, label 선행 barrier, 전체 완료와 장전 정책 준비 분리, scheduler/router/운영문서 동시 정합, 실패 주입·대상 검증 및 실제 단계별 재개.

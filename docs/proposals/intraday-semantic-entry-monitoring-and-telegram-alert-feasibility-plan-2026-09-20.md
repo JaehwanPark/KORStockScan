@@ -64,3 +64,15 @@ wrapper의 lock/cooldown 안에서 Sentinel 성공 후 compact source consumer�
 - 기존 구조 결손과 같은 지속성/Telegram 전이 규칙을 적용한다. 정상 제출·guard receipt만으로 경제성 결손을 해제하지 않고 같은 attempt의 유효 원천 proof를 요구한다. 통보에 첫 경제성 blocker를 우선 표시한다.
 - cache version은 과거 번호와 충돌하지 않는15(raw)/16(lossless)을 사용한다. 기존11/13은 verified zero-stage census와 동일 raw generation/완료 offset이 있을 때만 재사용한다. 근거 없는 schema 덮어쓰기나 전수 raw 재스캔을 이번 리뷰에서 실행하지 않는다.
 - 실제 운영 pre-AI producer→pipeline JSONL→Sentinel cache→진단을 KRX/NXT/SOR와 ENTER/BLOCK/RECHECK에서 검증한다. 합성 원천 통과는 자연 유입·유효 모델 holdout·실제 EV가 아니다.
+
+
+## 9/22 기계정책 개선에 따른 감시 현행화
+
+최신 사용자 승인 범위는 기존 Sentinel/monitor의 의미 검증 보완·리뷰·배포·감시 재검사다. 이전의 전체 운영 경제성 설명을 기계 튜닝의 필수 조건으로 적용하지 않는다. 자동 매매 변경 권한은 없다.
+
+- 기계 튜닝은 BLOCK/RECHECK→ENTER_NOW의 독립 입력/비용 후 경로 평가이며 AI/계좌/청산 실행 재생과 분리한다. 명확한 비진입이고 이전 ENTER·제출·충돌이 없는 후단 source gap은 관측 항목으로 남긴다. 원천을 정상으로 바꾸지 않고, 과거 사건은 exact 증거 일치 시에만 observation_only_unresolved로 재분류한다.
+- 기존 monitor 프로세스에서 당일 기계 관측 JSONL의 끝8MiB만 읽는다. 30분 안의 고유 관측 hash만 당시 불변 generation/scope/선택 leaf/실효 임계치와 대사한다. 부분 tail은 전수 coverage가 아니며 source-invalid와 policy mismatch를 구분한다. 당시 selector 재선택은 수행하지만 action/AI/주문/EV 재생은 수행하지 않는다. 새 collector/DB/상주 서비스 없음.
+- 기존 machine report/terminal을 각8MiB 제한·hash/date binding으로 읽어 선정 버전·고유 기회 수·원 승률·보정 점수·순 경로EV·발행 상태를 표시한다. 음수EV/1기회 자체는 오류가 아니며 보정점수는 실제 승률·유의성 증명이 아니다. 보고서 존재·발행·현재 PID 영수증·변경 구간 소비를 별도로 표시한다.
+- 실효 정책 mismatch는4분 지속 후 기존 알림 경로의 구조 결손이다. 새 관측에서 사라져도 과거 사건은 historical_unresolved이며 복구로 선언하지 않는다. stale/미관측/PID 종료는 현재 소비 증거가 아니다.
+- `entry_submit_attempt_finished`는 판정 변경이 아닌 동일 attempt 종료 요약이다. revision 필드가 없는 과거 생산자 요약은 앞서 확인된 판정 owner/action/AI screen과 일치할 때만 같은 revision에 연결한다. 새 판정의 누락·다른 action/screen·선행 실행 후 재판정은 계속 결손으로 유지한다.
+- 코드 소유자는 기존 `buy_funnel_sentinel.py`, `monitoring/submission_bottleneck_monitor.py`, 기존 해당 테스트다. 정기 buy-funnel wrapper/cron 경로를 유지한다. 수동 재검사는 notify 없이 실행하며 외부 시험 통보는 하지 않는다.
