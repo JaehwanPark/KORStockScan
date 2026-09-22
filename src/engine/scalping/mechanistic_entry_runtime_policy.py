@@ -184,8 +184,8 @@ def validate(bundle: dict, *, target_date: str) -> None:
     if (
         source < "2026-06-05"
         or publication < source
+        or publication > target_date
         or (not bundle.get("strategy_activation") and next_target(publication) != target_date)
-        or (bundle.get("strategy_activation") and publication != target_date)
     ):
         raise ValueError("machine_bundle_date_invalid")
     if "strategy_activation" in bundle:
@@ -194,7 +194,8 @@ def validate(bundle: dict, *, target_date: str) -> None:
             effective = datetime.fromisoformat(activation["effective_from"])
             if (activation["schema"] not in {"main_entry_activation_v2", "main_entry_activation_v3"}
                 or activation["lifetime"] != "until_superseded"
-                or effective.tzinfo is None or effective.astimezone(KST).date().isoformat() != target_date
+                or effective.tzinfo is None
+                or effective.astimezone(KST).date().isoformat() > target_date
                 or effective > datetime.now(KST)):
                 raise ValueError("strategy_activation_contract_invalid")
         except (TypeError, KeyError) as exc:

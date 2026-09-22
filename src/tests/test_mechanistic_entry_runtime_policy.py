@@ -89,6 +89,21 @@ def test_historical_source_uses_publication_day_for_next_preopen_policy(tmp_path
     policy.validate(bundle, target_date="2026-09-21")
 
 
+def test_compact_successor_accepts_carried_machine_activation(tmp_path):
+    bundle = initial(tmp_path)
+    bundle["target_date"] = "2026-09-15"
+    bundle["publication_date"] = "2026-09-14"
+    bundle["strategy_activation"] = {
+        "schema": "main_entry_activation_v3",
+        "effective_from": "2026-09-14T21:00:00+09:00",
+        "lifetime": "until_superseded",
+    }
+    bundle["bundle_sha256"] = policy.digest(
+        {key: value for key, value in bundle.items() if key != "bundle_sha256"}
+    )
+    policy.validate(bundle, target_date="2026-09-15")
+
+
 @pytest.mark.parametrize("changed_parent", [False, True])
 def test_common_successor_is_automatic_only_against_exact_current_parent(monkeypatch, tmp_path, changed_parent):
     from src.engine.scalping import entry_setup_live_policy as activation
