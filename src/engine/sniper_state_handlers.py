@@ -43915,6 +43915,7 @@ def _abort_entry_split_probe_residual(
     *,
     preserve_position: bool,
     now_ts: float | None = None,
+    failure_fields: dict | None = None,
 ) -> None:
     bundle_id = str(stock.get("entry_split_probe_bundle_id") or "").strip()
     filled_qty = _safe_int(stock.get("entry_filled_qty"), 0)
@@ -44338,8 +44339,11 @@ def _abort_entry_split_probe_residual(
         exit_authority_conflict_fields=(
             ",".join(_entry_exit_authority_conflict_fields(stock)) or "-"
         ),
-        **_entry_split_probe_observation_contract_fields(stock),
-        **_probe_residual_scale_in_causal_fields(stock, now_ts=observed_at),
+        **_merge_entry_pipeline_field_groups(
+            _entry_split_probe_observation_contract_fields(stock),
+            _probe_residual_scale_in_causal_fields(stock, now_ts=observed_at),
+            failure_fields,
+        ),
     )
 
 
@@ -81789,6 +81793,7 @@ def _submit_entry_split_probe_residual_locked(
     dmst_stex_tp = _entry_order_submit_dmst_stex_tp(probe_order)
     successful_orders: list[dict[str, Any]] = []
     failure_reason = ""
+    failure_quote_fields: dict[str, Any] = {}
     for residual_order in residual_orders:
         submission_age_sec = max(0.0, now_ts - filled_at) + max(
             0.0, time.monotonic() - revalidation_started_monotonic
@@ -81798,22 +81803,45 @@ def _submit_entry_split_probe_residual_locked(
             break
         if post_probe_resolver_enabled:
             leg_ws_data = dict(ws_data or {})
+            quote_refresh_status = "input_snapshot_fallback"
             if WS_MANAGER is not None:
+                quote_refresh_status = "empty_latest_snapshot"
                 try:
                     latest_leg_ws = WS_MANAGER.get_latest_data(code)
                     if isinstance(latest_leg_ws, dict) and latest_leg_ws:
                         leg_ws_data = latest_leg_ws
+                        quote_refresh_status = "latest_snapshot"
                 except Exception as exc:
                     failure_reason = "residual_leg_fresh_quote_exception"
+                    failure_quote_fields = {
+                        "residual_leg_quote_refresh_status": "error",
+                        "residual_leg_quote_refresh_error_type": type(exc).__name__,
+                    }
                     log_error(
                         f"[ENTRY_SPLIT_PROBE_LEG_REPRICE] {stock.get('name', code)}({code}) "
                         f"fresh quote failed: {exc}"
                     )
                     break
+            quote_observed_at = time.time()
+            leg_ws_quote = quote_input_from_ws(
+                leg_ws_data, now_ts=quote_observed_at
+            )
             leg_quote_fields, leg_mark, leg_ask, _ = _build_quote_consistency_fields(
                 leg_ws_data,
                 side="buy",
-                now_ts=time.time(),
+                now_ts=quote_observed_at,
+            )
+            failure_quote_fields = _merge_quote_consistency_fields(
+                {}, leg_quote_fields
+            )
+            failure_quote_fields.update(
+                {
+                    "canonical_mark_price": leg_mark,
+                    "executable_buy_price": leg_ask,
+                    "residual_leg_best_bid": leg_ws_quote.best_bid,
+                    "residual_leg_best_ask": leg_ws_quote.best_ask,
+                    "residual_leg_quote_refresh_status": quote_refresh_status,
+                }
             )
             leg_quote_state = str(
                 leg_quote_fields.get("quote_consistency_state") or ""
@@ -82284,11 +82312,16 @@ def _submit_entry_split_probe_residual_locked(
                 actual_order_submitted=True,
                 broker_order_forbidden=True,
                 runtime_effect=True,
+                **failure_quote_fields,
                 **_entry_split_probe_observation_contract_fields(stock),
             )
             return True
         _abort_entry_split_probe_residual(
-            stock, code, failure_reason, preserve_position=True
+            stock,
+            code,
+            failure_reason,
+            preserve_position=True,
+            failure_fields=failure_quote_fields,
         )
         return False
     if (

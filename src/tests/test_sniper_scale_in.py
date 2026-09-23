@@ -29069,6 +29069,56 @@ def test_probe_residual_missing_submit_contract_has_canonical_abort(monkeypatch)
     )
 
 
+def test_probe_residual_quote_abort_logs_observed_quote_without_relaxing_guard(
+    monkeypatch,
+):
+    pipeline_events = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: pipeline_events.append((stage, fields)),
+    )
+    quote_failure_fields = {
+        "quote_consistency_state": "warning",
+        "quote_consistency_reason": "quote_stale",
+        "quote_consistency_age_ms": 5020,
+        "quote_consistency_ws_age_ms": 5020,
+        "quote_consistency_rest_age_ms": None,
+        "passive_buy_price": 1562,
+        "executable_buy_price": 1564,
+        "residual_leg_best_bid": 1562,
+        "residual_leg_best_ask": 1564,
+        "residual_leg_quote_refresh_status": "latest_snapshot",
+    }
+    stock = {
+        "status": "HOLDING",
+        "entry_filled_qty": 1,
+        "entry_split_probe_requested_qty": 907,
+        "entry_split_probe_target_qty": 907,
+        "entry_split_probe_actual_submitted_qty": 1,
+    }
+
+    state_handlers._abort_entry_split_probe_residual(
+        stock,
+        "000000",
+        "residual_leg_stale_or_conflicted_quote",
+        preserve_position=True,
+        now_ts=1_789_000_000.0,
+        failure_fields=quote_failure_fields,
+    )
+
+    residual_block = next(
+        fields for stage, fields in pipeline_events if stage == "residual_blocked"
+    )
+    for key, value in quote_failure_fields.items():
+        assert residual_block[key] == value
+    assert residual_block["actual_order_submitted"] is False
+    assert residual_block["broker_order_forbidden"] is True
+    assert stock["status"] == "HOLDING"
+    assert stock["entry_requested_qty"] == 1
+    assert stock["entry_split_probe_residual_terminal_qty"] == 906
+
+
 def test_post_submit_db_state_preserves_receipt_advanced_fill():
     stock = {
         "status": "HOLDING",
