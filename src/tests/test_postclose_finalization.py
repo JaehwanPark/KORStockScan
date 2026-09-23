@@ -270,9 +270,12 @@ def test_finalization_reserves_same_date_margin_before_midnight():
     assert "reason=same_date_hard_deadline" in script
 
 
-@pytest.mark.parametrize("refresh_rc", [0, 9])
+@pytest.mark.parametrize(
+    ("refresh_rc", "receipt_status", "expected_rc"),
+    [(0, "done", 0), (0, "summary_verified", 1), (9, "done", 1)],
+)
 def test_late_summary_refresh_precedes_cleanup_and_failure_cannot_reuse_done(
-    tmp_path, monkeypatch, refresh_rc
+    tmp_path, monkeypatch, refresh_rc, receipt_status, expected_rc
 ):
     monkeypatch.setattr(sys.modules[__name__], "TARGET_DATE", "2026-09-09")
     project = tmp_path / "project"
@@ -298,6 +301,19 @@ def test_late_summary_refresh_precedes_cleanup_and_failure_cannot_reuse_done(
         'if [[ "${1:-}" == "-m" ]]; then\n'
         '  [[ "$2" == "src.engine.automation.postclose_done_controller" ]]\n'
         '  [[ " $* " == *" --require-independent-producers "* ]]\n'
+        '  "$REAL_PY" - "$PROJECT_DIR" "2026-09-09" <<\'PY\'\n'
+        'import json, os, sys\n'
+        'from datetime import datetime\n'
+        'from pathlib import Path\n'
+        'root=Path(sys.argv[1]) / "data/report/postclose_done_controller"\n'
+        'root.mkdir(parents=True, exist_ok=True)\n'
+        'attempt=root / "attempts/2026-09-09_fixture.json"\n'
+        'attempt.parent.mkdir(parents=True, exist_ok=True)\n'
+        'report={"date":"2026-09-09","generated_at":datetime.now().astimezone().isoformat(timespec="seconds"),"status":os.environ.get("MOCK_CONTROLLER_STATUS","done"),"whole_native_chain_done_claimed":True,"require_independent_producers":True,"final_verifier_status":"pass","attempt_path":str(attempt)}\n'
+        'payload=json.dumps(report, indent=2) + "\\n"\n'
+        'attempt.write_text(payload, encoding="utf-8")\n'
+        '(root / "postclose_done_controller_2026-09-09.json").write_text(payload, encoding="utf-8")\n'
+        'PY\n'
         '  printf "summary\\n" >> "$PROJECT_DIR/order.txt"\n'
         f'  exit {refresh_rc}\nfi\nexec "$REAL_PY" "$@"\n',
     )
@@ -305,16 +321,19 @@ def test_late_summary_refresh_precedes_cleanup_and_failure_cannot_reuse_done(
         **_base_env(project, cleanup, detector),
         "VENV_PY": str(python),
         "REAL_PY": sys.executable,
+        "MOCK_CONTROLLER_STATUS": receipt_status,
         "PATH": f"{project / 'bin'}:{os.environ['PATH']}",
     }
     result = subprocess.run(
         ["bash", str(WRAPPER), TARGET_DATE], env=env, text=True, capture_output=True
     )
-    assert result.returncode == (0 if refresh_rc == 0 else 1), (
+    assert result.returncode == expected_rc, (
         result.stdout + result.stderr
     )
     assert (project / "order.txt").read_text().splitlines() == (
         ["summary", "cleanup", "detector"]
-        if refresh_rc == 0
+        if expected_rc == 0
         else ["summary", "detector"]
     )
+    if receipt_status != "done" and refresh_rc == 0:
+        assert "controller_terminal_receipt_invalid" in result.stdout

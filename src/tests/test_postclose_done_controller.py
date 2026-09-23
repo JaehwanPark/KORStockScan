@@ -89,3 +89,39 @@ def test_controller_predecessor_wait_times_out_without_mutation(monkeypatch, tmp
         "2026-09-21", wait_sec=60, timeout_sec=0
     ) is False
     assert not (data / "report" / "threshold_cycle_postclose_status").exists()
+
+
+def test_finalizer_requires_fresh_whole_chain_done_attempt_receipt(tmp_path):
+    from datetime import datetime
+
+    report_path = tmp_path / "postclose_done_controller_2026-09-22.json"
+    attempt_path = report_path.parent / "attempts" / "2026-09-22_attempt.json"
+    report = {
+        "date": "2026-09-22",
+        "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "status": "done",
+        "whole_native_chain_done_claimed": True,
+        "require_independent_producers": True,
+        "final_verifier_status": "pass",
+        "attempt_path": str(attempt_path),
+    }
+    _write(attempt_path, report)
+    _write(report_path, report)
+
+    assert mod.done_terminal_receipt_issues(
+        report_path, "2026-09-22", started_after_ns=0
+    ) == []
+    import time
+
+    assert "controller_report_not_fresh_for_finalization" in mod.done_terminal_receipt_issues(
+        report_path,
+        "2026-09-22",
+        started_after_ns=time.time_ns() + 1_000_000_000,
+    )
+
+    report["status"] = "summary_verified"
+    _write(attempt_path, report)
+    _write(report_path, report)
+    assert "controller_report_not_done" in mod.done_terminal_receipt_issues(
+        report_path, "2026-09-22", started_after_ns=0
+    )

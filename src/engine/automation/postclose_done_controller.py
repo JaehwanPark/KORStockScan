@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import time
@@ -40,6 +41,45 @@ def _control_paths(target_date: str) -> tuple[Path, Path]:
         REPORT_DIR / f"postclose_done_controller_{target_date}.json",
         REPORT_DIR / f"postclose_done_controller_{target_date}.md",
     )
+
+
+def done_terminal_receipt_issues(
+    report_path: Path, target_date: str, *, started_after_ns: int
+) -> list[str]:
+    """Require a fresh, exact-date whole-chain DONE receipt before final cleanup."""
+    report_path = Path(report_path)
+    report = _load(report_path)
+    if not report:
+        return ["controller_report_missing_or_invalid"]
+    issues = []
+    if report.get("date") != target_date:
+        issues.append("controller_report_target_date_mismatch")
+    if report.get("status") != "done":
+        issues.append("controller_report_not_done")
+    if report.get("whole_native_chain_done_claimed") is not True:
+        issues.append("controller_whole_chain_not_claimed")
+    if report.get("require_independent_producers") is not True:
+        issues.append("controller_independent_producers_not_required")
+    if report.get("final_verifier_status") != "pass":
+        issues.append("controller_final_verifier_not_pass")
+    try:
+        generated = datetime.fromisoformat(str(report.get("generated_at")))
+        if generated.tzinfo is None or report_path.stat().st_mtime_ns < started_after_ns:
+            issues.append("controller_report_not_fresh_for_finalization")
+    except (TypeError, ValueError, OverflowError):
+        issues.append("controller_report_generation_time_invalid")
+    try:
+        attempts_dir = (report_path.parent / "attempts").resolve()
+        attempt_path = Path(str(report.get("attempt_path") or "")).resolve(strict=True)
+        if attempt_path.parent != attempts_dir:
+            raise ValueError("attempt_path_outside_owner")
+        if hashlib.sha256(attempt_path.read_bytes()).digest() != hashlib.sha256(
+            report_path.read_bytes()
+        ).digest():
+            issues.append("controller_attempt_receipt_mismatch")
+    except (OSError, ValueError):
+        issues.append("controller_attempt_receipt_missing_or_invalid")
+    return issues
 
 
 def _wait_for_predecessor_succeeded(

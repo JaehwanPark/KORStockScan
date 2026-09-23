@@ -207,6 +207,7 @@ if [[ "$TARGET_DATE" > "2026-09-08" ]]; then
   # Independent 20:10/21:15 producers may finish after main's original DONE.
   # Reuse the controller after exact independent terminal validation. No EV,
   # provider, workorder producer, live apply, or whole-wrapper recovery here.
+  controller_started_after_ns="$(date +%s%N)"
   if ! timeout --kill-after=10s "${SUMMARY_TIMEOUT_SEC}s" env PYTHONPATH=. \
     POSTCLOSE_DONE_CONTROLLER_REQUIRE_CODEX_COMPLETED=false "$VENV_PY" \
     -m src.engine.automation.postclose_done_controller --date "$TARGET_DATE" \
@@ -215,6 +216,26 @@ if [[ "$TARGET_DATE" > "2026-09-08" ]]; then
     run_final_detector || true
     exit 1
   fi
+controller_receipt="$(env PYTHONPATH=. "$VENV_PY" - "$PROJECT_DIR" "$TARGET_DATE" "$controller_started_after_ns" <<'PY'
+import json
+import sys
+from pathlib import Path
+from src.engine.automation.postclose_done_controller import done_terminal_receipt_issues
+
+project = Path(sys.argv[1])
+target_date = sys.argv[2]
+started_after_ns = int(sys.argv[3])
+report_path = project / "data/report/postclose_done_controller" / f"postclose_done_controller_{target_date}.json"
+issues = done_terminal_receipt_issues(report_path, target_date, started_after_ns=started_after_ns)
+print(json.dumps({"status": "pass" if not issues else "blocked", "issues": issues}, sort_keys=True))
+raise SystemExit(0 if not issues else 1)
+PY
+)" || {
+    echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=controller_terminal_receipt_invalid details=${controller_receipt}"
+    run_final_detector || true
+    exit 1
+  }
+  echo "[INFO] postclose_finalization controller_terminal_receipt=${controller_receipt}"
   echo "[INFO] postclose_finalization summary_handoff_verified target_date=${TARGET_DATE}"
 fi
 

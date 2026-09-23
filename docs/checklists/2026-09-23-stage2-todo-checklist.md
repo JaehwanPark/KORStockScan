@@ -43,6 +43,11 @@
 
 ## 실행 항목
 
+- [ ] `[PostcloseFinalizerControllerTerminalReceipt] controller terminal 영수증을 검증한 뒤 장후 마감` (`Due: 2026-09-23`, `Slot: POSTCLOSE`, `TimeWindow: 21:55~23:20`, `Track: RuntimeStability`)
+  - Source: [Postclose handoff contract](../report-based-automation-traceability.md#complete-recommendation-and-terminal-summary-handoff-source-date-2026-09-09-onward).
+  - 완료 기준: exact-date main 및 설치된 widget/machine predecessor가 성공한 뒤 controller canonical/attempt 영수증이 이번 finalizer 실행 이후 생성되고 byte-identical이며, `status=done`, `whole_native_chain_done_claimed=true`, `require_independent_producers=true`, strict verifier `pass`임을 확인한다. 불일치·`summary_verified`·오래된 report면 cleanup 전에 실패하고 final detector에 넘긴다. 최종 finalizer/detector terminal marker까지 확인한다.
+  - 권한 경계: 성공 상태나 terminal receipt를 합성하지 않는다. threshold·정책·주문·provider·봇·cleanup 범위는 바꾸지 않는다.
+
 - [ ] `[PostcloseWidgetEodSlotAdmission] Widget EOD 대기의 계산 슬롯 분리와 신규 원천 자연 검증` (`Due: 2026-09-23`, `Slot: POSTCLOSE`, `TimeWindow: 20:10~21:40`, `Track: RuntimeStability`)
   - Source: [장후 장시간 작업 최적화 계획](../proposals/postclose-long-running-work-quality-preserving-optimization-plan-2026-09-23.md).
   - 완료 기준: EOD 미준비 시 stage가 계산 슬롯을 잡지 않고 `waiting_for_source`로 대기하며, 완료 후 기존 worker의 날짜·행수 검사를 통과해 같은 모집단·grid·정책 해시를 산출한다. 첫 신규 원천 실행의 stage wall/child CPU/RSS, EOD 대기 시간, source hash와 최종 validator receipt를 별도로 확인한다. 9/22 복구 stage의 `succeeded`는 신규 계산의 성능 수용 근거가 아니다.
