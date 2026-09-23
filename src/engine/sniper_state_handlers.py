@@ -64899,6 +64899,8 @@ def _observe_entry_submit_finished(stock, code, outcome):
             selected_delay_sec=delay_intent["delay_sec"],
             committed_at_epoch=delay_intent["committed_at_epoch"],
             original_machine_observation_sha256=delay_intent.get("machine_observation_sha256"),
+            resolved_machine_attempt_id=delay_intent.get("resolved_machine_attempt_id"),
+            resolved_machine_observation_sha256=delay_intent.get("resolved_machine_observation_sha256"),
             submit_call_outcome=outcome,
             submit_call_broker_accepted=broker_accepted,
             actual_order_submitted=broker_accepted,
@@ -64957,6 +64959,8 @@ def expire_untriggered_pre_submit_delay(stock, code, *, now_mono=None, reason="t
         return False
     stock.pop("_pre_submit_delay_pending", None)
     stock["_pre_submit_delay_last_terminal_key"] = pending["machine_key"]
+    if pending.get("promotion_id"):
+        stock["_pre_submit_delay_last_terminal_parent"] = pending["promotion_id"]
     _log_pre_submit_delay_event(stock, code, "pre_submit_delay_intent_terminal",
         delay_intent_id=pending["id"], selected_delay_sec=pending["delay_sec"],
         committed_at_epoch=pending["committed_at_epoch"],
@@ -64980,10 +64984,10 @@ def pre_submit_delay_due_matches(due, policy, machine_fields, decision_type,
         and policy.get("delay_sec") == due.get("delay_sec")
         and policy.get("policy_sha256") == due.get("policy_sha256")
         and str(machine_fields.get("entry_mechanistic_action") or "").upper() == "ENTER_NOW"
-        and (
-            str(machine_fields.get("evaluation_attempt_id") or ""),
-            str(machine_fields.get("machine_observation_sha256") or ""),
-        ) == due.get("machine_key")
+        and bool(machine_fields.get("evaluation_attempt_id"))
+        and bool(machine_fields.get("machine_observation_sha256"))
+        and bool(due.get("machine_policy_sha256"))
+        and bool(due.get("ai_policy_sha256"))
         and str(machine_fields.get("entry_mechanistic_policy_sha256") or "")
         == due.get("machine_policy_sha256")
         and str(machine_fields.get("entry_ai_soft_policy_sha256") or "")
@@ -65061,6 +65065,8 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             return False
         stock["_pre_submit_delay_due"] = stock.pop("_pre_submit_delay_pending")
         stock["_pre_submit_delay_last_terminal_key"] = pending_delay["machine_key"]
+        if pending_delay.get("promotion_id"):
+            stock["_pre_submit_delay_last_terminal_parent"] = pending_delay["promotion_id"]
         if runtime.get("strategy") != "SCALPING":
             return False
     retired_scout_intent = any(
@@ -69067,6 +69073,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             str(machine_fields.get("evaluation_attempt_id") or ""),
             str(machine_fields.get("machine_observation_sha256") or ""),
         )
+        promotion_id = str(stock.get("scanner_promotion_id") or "")
         due_delay = stock.get("_pre_submit_delay_due")
         quote_route = str((ws_data or {}).get("ws_route") or "").strip().upper()
         type_ask, type_bid = _get_best_levels_from_ws(ws_data or {})
@@ -69089,12 +69096,17 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     actual_order_submitted=False, broker_order_forbidden=True,
                     runtime_effect=True)
                 return False
+            due_delay["resolved_machine_attempt_id"] = machine_key[0]
+            due_delay["resolved_machine_observation_sha256"] = machine_key[1]
         elif delay_policy["delay_sec"] > 0:
-            if (not all(machine_key) or not quote_route
+            if (not all(machine_key) or not promotion_id or not quote_route
+                    or not machine_fields.get("entry_mechanistic_policy_sha256")
+                    or not machine_fields.get("entry_ai_soft_policy_sha256")
                     or decision_type["venue"] == "UNKNOWN"
                     or decision_type["session_bucket"] == "UNKNOWN"
                     or str(machine_fields.get("entry_mechanistic_action") or "").upper() != "ENTER_NOW"
                     or _pre_submit_delay_auxiliary_verdict(machine_fields) not in {"PASS", "CAUTION"}
+                    or (promotion_id and stock.get("_pre_submit_delay_last_terminal_parent") == promotion_id)
                     or stock.get("_pre_submit_delay_last_terminal_key") == machine_key):
                 _log_entry_pipeline(stock, code, "pre_submit_delay_intent_invalid",
                     policy_sha256=delay_policy["policy_sha256"],
@@ -69105,6 +69117,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             delay_id = uuid4().hex
             stock["_pre_submit_delay_pending"] = {
                 "id": delay_id, "machine_key": machine_key,
+                "promotion_id": promotion_id,
                 "machine_observation_sha256": machine_key[1],
                 "machine_policy_sha256": str(machine_fields.get("entry_mechanistic_policy_sha256") or ""),
                 "ai_policy_sha256": str(machine_fields.get("entry_ai_soft_policy_sha256") or ""),

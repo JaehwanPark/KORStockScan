@@ -209,8 +209,12 @@ def test_due_intent_requires_same_policy_owner_quantity_cap_and_route(monkeypatc
         due, policy, machine,
         {**frozen_type, "type_key": "KRX|KRX_REGULAR|GE_10BP"}, **kwargs
     )
-    assert not handlers.pre_submit_delay_due_matches(
+    assert handlers.pre_submit_delay_due_matches(
         due, policy, {**machine, "evaluation_attempt_id": "successor"},
+        frozen_type, **kwargs
+    )
+    assert not handlers.pre_submit_delay_due_matches(
+        due, policy, {**machine, "machine_observation_sha256": ""},
         frozen_type, **kwargs
     )
 
