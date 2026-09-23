@@ -231,6 +231,30 @@ def test_expired_delay_does_not_submit_without_current_trigger(monkeypatch):
     assert events[0][1]["actual_order_submitted"] is False
 
 
+def test_zero_delay_intent_closes_on_actual_submit_call(monkeypatch):
+    from src.engine import sniper_state_handlers as handlers
+
+    events = []
+    monkeypatch.setattr(handlers, "_log_entry_pipeline",
+                        lambda *args, **fields: events.append((args[2], fields)))
+    monkeypatch.setattr(handlers, "submit_attempt_fields", lambda *args: {
+        "entry_submit_attempt_broker_accepted": True,
+        "entry_submit_attempt_return_outcome": "returned",
+    })
+    stock = {"_pre_submit_delay_zero_intent": {
+        "id": "zero-intent", "delay_sec": 0.0,
+        "committed_at_epoch": 100.0,
+        "machine_observation_sha256": "observation",
+    }}
+    handlers._observe_entry_submit_finished(stock, "005930", True)
+    stage, fields = events[0]
+    assert stage == "pre_submit_delay_intent_terminal"
+    assert fields["delay_intent_id"] == "zero-intent"
+    assert fields["selected_delay_sec"] == 0.0
+    assert fields["actual_order_submitted"] is True
+    assert "_pre_submit_delay_zero_intent" not in stock
+
+
 def test_type_selected_delay_never_spills_into_another_type(tmp_path, monkeypatch):
     monkeypatch.setattr(delay, "REPORT_DIR", tmp_path / "report")
     monkeypatch.setattr(delay, "POLICY_DIR", tmp_path / "threshold_cycle" / "pre_submit_delay_policy")

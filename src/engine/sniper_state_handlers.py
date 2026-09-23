@@ -64889,13 +64889,16 @@ def _handle_watching_strategy_branch(
 def _observe_entry_submit_finished(stock, code, outcome):
     attempt_fields = submit_attempt_fields(stock, code)
     delayed = stock.pop("_pre_submit_delay_due", None) if isinstance(stock, dict) else None
-    if isinstance(delayed, dict):
+    zero_intent = stock.pop("_pre_submit_delay_zero_intent", None) if isinstance(stock, dict) else None
+    delay_intent = delayed if isinstance(delayed, dict) else zero_intent
+    if isinstance(delay_intent, dict):
         broker_accepted = bool(attempt_fields.get("entry_submit_attempt_broker_accepted"))
         _log_pre_submit_delay_event(
             stock, code, "pre_submit_delay_intent_terminal",
-            delay_intent_id=delayed["id"], selected_delay_sec=delayed["delay_sec"],
-            committed_at_epoch=delayed["committed_at_epoch"],
-            original_machine_observation_sha256=delayed.get("machine_observation_sha256"),
+            delay_intent_id=delay_intent["id"],
+            selected_delay_sec=delay_intent["delay_sec"],
+            committed_at_epoch=delay_intent["committed_at_epoch"],
+            original_machine_observation_sha256=delay_intent.get("machine_observation_sha256"),
             submit_call_outcome=outcome,
             submit_call_broker_accepted=broker_accepted,
             actual_order_submitted=broker_accepted,
@@ -69155,6 +69158,11 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             committed_at = time.time()
             delay_id = uuid4().hex
             stock["_pre_submit_delay_commit_key"] = machine_key
+            stock["_pre_submit_delay_zero_intent"] = {
+                "id": delay_id, "delay_sec": 0.0,
+                "committed_at_epoch": committed_at,
+                "machine_observation_sha256": machine_key[1],
+            }
             stock["_pre_submit_delay_observation"] = {
                 "id": delay_id, "committed_at_epoch": committed_at,
                 "remaining_sec": list(DELAYS_SEC), "route": quote_route,
