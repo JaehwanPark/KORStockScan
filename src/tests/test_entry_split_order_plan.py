@@ -3019,6 +3019,32 @@ def test_probe_first_defers_before_order_when_residual_direction_source_is_missi
     )
 
 
+def test_probe_quote_deferral_records_exact_quote_reason_without_submitting(monkeypatch):
+    from src.engine import sniper_state_handlers as handlers
+
+    events = []
+    monkeypatch.setattr(handlers, "_log_entry_pipeline", lambda *args, **fields: events.append(fields))
+    monkeypatch.setattr(handlers, "update_probe_runtime_bundle", lambda *args, **kwargs: None)
+    stock = {"entry_split_probe_bundle_id": "probe-1"}
+    handlers._defer_entry_split_probe_source_quality(
+        stock, "003160", reason="stale_or_conflicted_fresh_quote",
+        now_ts=100.0, filled_at=99.0, timeout_sec=3,
+        quote_fields={
+            "quote_consistency_state": "diverged",
+            "quote_consistency_reason": "price_conflict",
+            "price_source": "ws_primary_rest_diverged",
+            "passive_buy_price": 195100,
+            "executable_buy_price": 195300,
+            "ws_rest_gap_bps": 10.2,
+        },
+    )
+    assert stock["entry_split_probe_continuation_action"] == "DEFER"
+    assert events[0]["quote_consistency_state"] == "diverged"
+    assert events[0]["quote_consistency_reason"] == "price_conflict"
+    assert events[0]["passive_buy_price"] == 195100
+    assert events[0]["actual_order_submitted"] is False
+
+
 def test_probe_first_capacity_counts_all_nonterminal_bundle_phases(
     monkeypatch, tmp_path
 ):

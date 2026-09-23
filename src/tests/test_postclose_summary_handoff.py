@@ -507,6 +507,7 @@ def stage_environment(tmp_path, monkeypatch):
     from src.engine.automation import postclose_summary_handoff as h
     monkeypatch.setattr(h, '_stage_code', lambda *a: 'code-v2')
     monkeypatch.setattr(h, 'stage_commands', lambda stage, *a, **kw: [['fixture', stage]])
+    monkeypatch.setenv('KORSTOCKSCAN_WIDGET_EVALUATION_WAIT_FOR_EOD', 'false')
     day = '2026-09-21'; report = tmp_path / 'data' / 'report'
     def produce(command, **kwargs):
         from src.engine.scalping.ai_action_outcome_calibration import _with_artifact_content_sha256
@@ -528,6 +529,25 @@ def stage_environment(tmp_path, monkeypatch):
         return h.run_stage(stage, day, report_dir=report, project=tmp_path,
             runner=kwargs.pop('runner', produce), **kwargs)
     return h, day, report, run, produce
+
+
+def test_widget_eod_wait_does_not_acquire_compute_slot(stage_environment, monkeypatch):
+    h, day, report, run, produce = stage_environment
+    monkeypatch.setenv('KORSTOCKSCAN_WIDGET_EVALUATION_WAIT_FOR_EOD', 'true')
+    monkeypatch.setenv('KORSTOCKSCAN_WIDGET_EVALUATION_EOD_WAIT_SEC', '0')
+    deferred = run('widget_policy', runner=lambda *a, **kw: pytest.fail('source is not ready'))
+    assert deferred['status'] == 'deferred'
+    assert deferred['reason'] == 'waiting_for_source'
+    assert not (report.parent / 'runtime' / 'postclose_stage_slots').exists()
+
+    status = report.parent / 'runtime' / 'update_kospi_status' / f'update_kospi_{day}.json'
+    status.parent.mkdir(parents=True)
+    status.write_text(json.dumps({'status':'completed', 'target_date':day,
+        'db_state':{'latest_quote_date':day, 'rows_on_latest_date':2}}))
+    assert h._widget_eod_state(report, day) == 'ready'
+    status.write_text(json.dumps({'status':'completed', 'target_date':day,
+        'db_state':{'latest_quote_date':'2026-09-20', 'rows_on_latest_date':2}}))
+    assert h._widget_eod_state(report, day) == 'invalid'
 
 
 @pytest.mark.parametrize("failed_stage", ["market_weakness", "main_auxiliary_policy", "widget_policy", "episode_policy", "summary_handoff"])

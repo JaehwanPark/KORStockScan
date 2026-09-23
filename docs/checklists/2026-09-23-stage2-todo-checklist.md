@@ -43,6 +43,11 @@
 
 ## 실행 항목
 
+- [ ] `[PostcloseWidgetEodSlotAdmission] Widget EOD 대기의 계산 슬롯 분리와 신규 원천 자연 검증` (`Due: 2026-09-23`, `Slot: POSTCLOSE`, `TimeWindow: 20:10~21:40`, `Track: RuntimeStability`)
+  - Source: [장후 장시간 작업 최적화 계획](../proposals/postclose-long-running-work-quality-preserving-optimization-plan-2026-09-23.md).
+  - 완료 기준: EOD 미준비 시 stage가 계산 슬롯을 잡지 않고 `waiting_for_source`로 대기하며, 완료 후 기존 worker의 날짜·행수 검사를 통과해 같은 모집단·grid·정책 해시를 산출한다. 첫 신규 원천 실행의 stage wall/child CPU/RSS, EOD 대기 시간, source hash와 최종 validator receipt를 별도로 확인한다. 9/22 복구 stage의 `succeeded`는 신규 계산의 성능 수용 근거가 아니다.
+  - 권한 경계: 입력·후보·threshold·정책 적용·주문 권한은 변경하지 않는다. source 실패 또는 날짜 불일치 시 기존 정책을 유지한다.
+
 - [ ] `[DirectFamilyScopeDecisionMainMechanisticEntry] main_mechanistic_entry 직접 family 지원 범위 계약 확정` (`Due: 2026-09-23`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~21:40`, `Track: RuntimeStability`)
   - Source: [runtime_approval_summary_2026-09-22.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-09-22.json)
   - 증거: runtime_summary_sha256=`993d46a23ae3ab7f48515b306ce1db314c1d54547ff29e95b3f09cc1855567a6`, source_artifact=`/home/ubuntu/KORStockScan/data/report/ai_decision_action_outcome_calibration/ai_decision_action_outcome_calibration_2026-09-22.json`.

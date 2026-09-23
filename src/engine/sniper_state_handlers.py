@@ -29603,6 +29603,15 @@ def _refresh_prepared_entry_inputs(code, ws_data, recent_ticks, candle_context):
     except (AttributeError, KeyError, TypeError, ValueError, OverflowError) as exc:
         # Canonical preflight remains the rejection owner. Never reuse a
         # previously allowed snapshot after a route/clock/contract error.
+        if str(exc) == "entry_context_revalidation_route_changed":
+            from src.engine.scalping.ai_market_snapshot import preferred_ws_route
+            expected_route = (
+                str(candle_context.get("ws_suffix") or ""),
+                str(candle_context.get("ws_route") or ""),
+            )
+            observed_route = preferred_ws_route(ws_data, now_ts=time.time())
+            fields["entry_ai_final_expected_ws_route"] = expected_route
+            fields["entry_ai_final_observed_ws_route"] = observed_route
         candle_context = copy.deepcopy(candle_context)
         blocked_snapshot = candle_context.get("ai_market_snapshot_v1")
         blocked_snapshot = (
@@ -43727,6 +43736,7 @@ def _defer_entry_split_probe_source_quality(
     now_ts: float,
     filled_at: float,
     timeout_sec: int,
+    quote_fields: dict | None = None,
 ) -> None:
     """Keep immediate submit blocked while allowing one bounded fresh-quote retry."""
 
@@ -43767,6 +43777,17 @@ def _defer_entry_split_probe_source_quality(
         reason=reason,
         recheck_count=recheck_count,
         recheck_due_at=f"{recheck_due_at:.6f}",
+        **{
+            key: (quote_fields or {}).get(key)
+            for key in (
+                "quote_consistency_state",
+                "quote_consistency_reason",
+                "price_source",
+                "passive_buy_price",
+                "executable_buy_price",
+                "ws_rest_gap_bps",
+            )
+        },
         metric_role="source_quality_gate",
         decision_authority="dynamic_entry_price_resolver_p1_post_probe",
         window_policy="same_probe_fill_ttl_bounded_recheck",
@@ -81109,6 +81130,7 @@ def _submit_entry_split_probe_residual_locked(
             now_ts=now_ts,
             filled_at=filled_at,
             timeout_sec=timeout_sec,
+            quote_fields=quote_fields,
         )
         return False
     if best_bid <= 0 or best_ask <= 0 or best_bid > best_ask:
@@ -81119,6 +81141,7 @@ def _submit_entry_split_probe_residual_locked(
             now_ts=now_ts,
             filled_at=filled_at,
             timeout_sec=timeout_sec,
+            quote_fields=quote_fields,
         )
         return False
 

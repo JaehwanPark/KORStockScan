@@ -819,6 +819,8 @@ def stage_receipt_issues(report_dir, day, stage, *, code_hash=None):
 
 def stage_input_paths(report_dir, day, stage):
     paths = {s:stage_path(report_dir, day, s) for s in STAGE_REGISTRY[stage][0]}
+    if stage == 'widget_policy':
+        paths['eod_status'] = Path(report_dir).parent / 'runtime' / 'update_kospi_status' / f'update_kospi_{day}.json'
     if stage in {'collector_recommendation', 'outcome_labels'}:
         paths['labels'] = Path(report_dir) / 'ai_decision_outcome_labels' / f'ai_decision_outcome_labels_{day}.json'
         paths['payloads'] = Path(report_dir).parent / 'ai_decision_payloads' / f'ai_decision_payloads_{day}.jsonl'
@@ -873,6 +875,22 @@ def _safe_stage_output_issues(report_dir, day, stage):
         return _stage_output_issues(report_dir, day, stage)
     except (OSError, ValueError, TypeError, KeyError) as exc:
         return [f'{stage}:output_validation_failed:{type(exc).__name__}']
+
+
+def _widget_eod_state(report_dir, day):
+    """Mirror the widget worker's exact-date EOD gate before taking a compute slot."""
+    status = _load_json(Path(report_dir).parent / 'runtime' / 'update_kospi_status' / f'update_kospi_{day}.json')
+    state = str(status.get('status') or 'missing')
+    if state in {'failed', 'fail', 'error'}:
+        return 'failed'
+    if state in {'completed', 'completed_with_warnings'}:
+        db = status.get('db_state') or {}
+        rows = db.get('rows_on_latest_date')
+        if (status.get('target_date') == day and db.get('latest_quote_date') == day
+            and type(rows) is int and rows > 0):
+            return 'ready'
+        return 'invalid'
+    return 'waiting'
 
 
 def stage_commands(stage, day, publication, *, recovery=False):
@@ -982,19 +1000,41 @@ def run_stage(stage, day, *, report_dir, project, publication=None, effective=No
             _stage_write(path, {**value, 'heartbeat_at':now(), 'reason':'prerequisite_pending', 'issues':issues})
             time.sleep(min(5, max(0, wait_deadline - time.monotonic())))
         value['prerequisite_receipts'] = _stage_sources(prerequisites)
-        value['input_sources'] = _stage_sources(stage_input_paths(report_dir, day, stage))
         if issues:
             return _stage_write(path, {**value, 'status':'deferred', 'exit_code':75, 'issues':issues, 'policy_disposition':'source_gap'})
         if not execute:
             # Review-only intake is explicit: validates existing artifacts, never
             # claims that their calculation was executed by this new runner.
+            value['input_sources'] = _stage_sources(stage_input_paths(report_dir, day, stage))
             issues = _safe_stage_output_issues(report_dir, day, stage)
             return _stage_write(path, {**value, 'sources':_stage_sources(stage_artifacts(report_dir, day, stage)),
                 'status':'failed' if issues else 'succeeded', 'exit_code':1 if issues else 0,
                 'issues':issues, 'execution_mode':'existing_output_validation', 'finished_at':now()})
+        if stage == 'widget_policy' and not recovery and str(os.getenv('KORSTOCKSCAN_WIDGET_EVALUATION_WAIT_FOR_EOD', 'true')).lower() in {'1', 'true'}:
+            raw_wait = str(os.getenv('KORSTOCKSCAN_WIDGET_EVALUATION_EOD_WAIT_SEC', '5400'))
+            raw_interval = str(os.getenv('KORSTOCKSCAN_WIDGET_EVALUATION_EOD_WAIT_INTERVAL_SEC', '30'))
+            wait_sec = int(raw_wait) if raw_wait.isdigit() else 5400
+            interval_sec = int(raw_interval) if raw_interval.isdigit() and int(raw_interval) > 0 else 30
+            source_wait_started = time.monotonic()
+            wait_until = source_wait_started + max(0, wait_sec)
+            while True:
+                eod_state = _widget_eod_state(report_dir, day)
+                if eod_state == 'ready':
+                    break
+                if eod_state in {'failed', 'invalid'} or time.monotonic() >= wait_until or (stop_event is not None and stop_event.is_set()):
+                    return _stage_write(path, {**value, 'status':'deferred', 'exit_code':75,
+                        'source_wait_sec':round(time.monotonic() - source_wait_started, 3),
+                        'reason':'waiting_for_source' if eod_state == 'waiting' else 'eod_source_'+eod_state,
+                        'issues':['widget_eod_'+eod_state], 'policy_disposition':'incumbent_carry',
+                        'finished_at':now()})
+                _stage_write(path, {**value, 'heartbeat_at':now(), 'reason':'waiting_for_source',
+                    'issues':['widget_eod_waiting']})
+                time.sleep(min(interval_sec, max(0, wait_until - time.monotonic())))
+            value['source_wait_sec'] = round(time.monotonic() - source_wait_started, 3)
+        value['input_sources'] = _stage_sources(stage_input_paths(report_dir, day, stage))
         # Host-wide admission shared across independent scheduled wrappers.
         slots = Path(report_dir).parent / 'runtime' / 'postclose_stage_slots'; slots.mkdir(parents=True, exist_ok=True)
-        slot = None; deadline = time.monotonic() + timeout
+        slot = None; admission_started = time.monotonic(); deadline = admission_started + timeout
         while slot is None and time.monotonic() < deadline:
             if stop_event is not None and stop_event.is_set():
                 return _stage_write(path, {**value, 'status':'deferred', 'exit_code':75, 'issues':['stage_interrupted_at_saved_checkpoint']})
@@ -1008,6 +1048,7 @@ def run_stage(stage, day, *, report_dir, project, publication=None, effective=No
         if slot is None:
             return _stage_write(path, {**value, 'status':'deferred', 'exit_code':75, 'issues':['resource_admission_timeout']})
         try:
+            value['resource_admission_wait_sec'] = round(time.monotonic() - admission_started, 3)
             value.update(status='running', heartbeat_at=now()); _stage_write(path, value)
             env = {**os.environ, 'PYTHONPATH':str(project), 'POSTCLOSE_STAGE_WORKER':'1', 'POSTCLOSE_SOURCE_DATE':day,
                 'POSTCLOSE_POLICY_PUBLICATION_DATE':publication, 'POSTCLOSE_PREPARED_EFFECTIVE_DATE':effective}

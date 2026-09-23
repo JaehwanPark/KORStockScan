@@ -356,6 +356,8 @@ def test_watching_final_revalidation_errors_fail_closed(monkeypatch, broken):
     )
     assert not snapshot_module.ai_input_preflight(refreshed)["allowed"]
     assert "entry_ai_final_snapshot_revalidation_error" in fields
+    if broken == "route":
+        assert fields["entry_ai_final_expected_ws_route"] != fields["entry_ai_final_observed_ws_route"]
 
 
 def test_watching_final_refresh_is_wired_before_provider():
