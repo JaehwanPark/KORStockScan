@@ -1,6 +1,255 @@
 from src.engine import sniper_trade_review_report as report_mod
 
 
+def test_completed_projection_keeps_full_population_beyond_display_limit(monkeypatch):
+    trades = [
+        {
+            "id": index,
+            "rec_date": "2026-09-23",
+            "code": f"{index:06d}",
+            "name": "test",
+            "status": "COMPLETED",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "buy_price": 10000,
+            "buy_qty": 1,
+            "buy_time": "2026-09-23 09:00:00",
+            "sell_price": 10100,
+            "sell_time": "2026-09-23 09:10:00",
+            "profit_rate": 0.77,
+            "realized_pnl_krw": 77,
+        }
+        for index in range(1, 13)
+    ]
+    monkeypatch.setattr(report_mod, "_fetch_trade_rows", lambda *_: (trades, []))
+    monkeypatch.setattr(report_mod, "_iter_target_lines", lambda *_args, **_kw: [])
+    monkeypatch.setattr(
+        report_mod, "find_gatekeeper_snapshot_for_trade", lambda *_args: None
+    )
+
+    result = report_mod.build_trade_review_report("2026-09-23")
+
+    assert len(result["sections"]["recent_trades"]) == 10
+    projection = result["sections"]["completed_trade_projection"]
+    assert len(projection) == 12
+    assert {row["id"] for row in projection} == set(range(1, 13))
+    assert result["metrics"]["canonical_completed_trades"] == 12
+
+
+def test_completed_projection_requires_exact_receipt_for_cost_and_fill_time():
+    base = {
+        "id": 1,
+        "rec_date": "2026-09-23",
+        "code": "123456",
+        "status": "COMPLETED",
+        "strategy": "SCALPING",
+        "buy_qty": 1,
+        "buy_time": "2026-09-23 09:00:00",
+        "sell_time": "2026-09-23 09:10:02",
+        "profit_rate": 0.5,
+        "realized_pnl_krw": 50,
+        "realized_pnl_krw_source": "price_cost_model",
+    }
+    event = report_mod.HoldingEvent(
+        timestamp="2026-09-23 09:10:02",
+        name="test",
+        code="123456",
+        stage="sell_completed",
+        fields={
+            "id": "1",
+            "decision_authority": "broker_sell_fill_observation_only",
+            "actual_order_submitted": "True",
+            "broker_order_forbidden": "False",
+            "cumulative_sell_qty": "1",
+            "buy_qty": "1",
+            "profit_rate": "0.5",
+            "realized_pnl_krw_source": "broker_fill_prices_fee_aware",
+            "realized_pnl_krw": "40",
+            "main_lifecycle_execution_occurrence_time_source": "official_fid_908",
+            "main_lifecycle_execution_occurred_at": "2026-09-23T09:10:01+09:00",
+        },
+        raw_line="",
+    )
+
+    direct = report_mod._completed_trade_projection(base, [event], base)
+
+    assert direct["realized_pnl_krw"] == 40
+    assert direct["exact_sell_fill_time"] == "2026-09-23T09:10:01+09:00"
+
+    event.fields["decision_authority"] = "broker_balance_reconciliation_only"
+    event.fields["sell_time_precision"] = "order_second_not_fill_second"
+    event.fields["sell_time_forbidden_for_intraday_horizon"] = "True"
+    sync_only = report_mod._completed_trade_projection(base, [event], base)
+
+    assert sync_only["realized_pnl_krw"] is None
+    assert sync_only["modeled_realized_pnl_krw"] == 50
+    assert sync_only["exact_sell_fill_time"] is None
+    assert sync_only["sell_time_forbidden_for_intraday_horizon"] is True
+
+
+def test_sell_day_completion_event_recovers_prior_entry_by_exact_id(monkeypatch):
+    prior_entry = {
+        "id": 42,
+        "rec_date": "2026-09-22",
+        "code": "123456",
+        "name": "test",
+        "status": "COMPLETED",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "buy_price": 10000,
+        "buy_qty": 1,
+        "buy_time": "2026-09-22 15:00:00",
+        "sell_price": 10100,
+        "sell_time": "2026-09-23 09:10:00",
+        "profit_rate": 0.77,
+        "realized_pnl_krw": 77,
+    }
+    recovered_ids = []
+    monkeypatch.setattr(report_mod, "_fetch_trade_rows", lambda *_: ([], []))
+    monkeypatch.setattr(
+        report_mod,
+        "_fetch_completed_trade_rows_by_ids",
+        lambda ids: (recovered_ids.append(ids) or [prior_entry], []),
+    )
+    monkeypatch.setattr(
+        report_mod,
+        "_iter_target_lines",
+        lambda *_args, **_kw: [
+            "[2026-09-23 09:10:00] [HOLDING_PIPELINE] test(123456) "
+            "stage=sell_completed id=42 sell_price=10100"
+        ],
+    )
+    monkeypatch.setattr(
+        report_mod, "find_gatekeeper_snapshot_for_trade", lambda *_args: None
+    )
+
+    result = report_mod.build_trade_review_report("2026-09-23")
+
+    assert recovered_ids == [{42}]
+    assert result["metrics"]["completed_trades"] == 0
+    assert result["metrics"]["carry_completed_rows"] == 1
+    assert result["sections"]["completed_trade_projection"][0]["id"] == 42
+
+
+def test_completed_projection_uses_sell_day_not_later_db_status(monkeypatch):
+    trade = {
+        "id": 42,
+        "rec_date": "2026-09-22",
+        "code": "123456",
+        "status": "COMPLETED",
+        "strategy": "SCALPING",
+        "buy_qty": 1,
+        "buy_time": "2026-09-22 15:00:00",
+        "sell_time": "2026-09-23 09:10:00",
+        "profit_rate": 0.77,
+    }
+    monkeypatch.setattr(report_mod, "_fetch_trade_rows", lambda *_: ([trade], []))
+    monkeypatch.setattr(report_mod, "_iter_target_lines", lambda *_args, **_kw: [])
+    monkeypatch.setattr(
+        report_mod, "find_gatekeeper_snapshot_for_trade", lambda *_args: None
+    )
+
+    report = report_mod.build_trade_review_report("2026-09-22")
+
+    assert report["sections"]["completed_trade_projection"] == []
+    assert report["metrics"]["canonical_completed_trades"] == 0
+
+
+def test_sync_completion_without_sell_time_keeps_event_day_census(monkeypatch):
+    trade = {
+        "id": 42,
+        "rec_date": "2026-09-23",
+        "code": "123456",
+        "status": "COMPLETED",
+        "strategy": "SCALPING",
+        "buy_qty": 1,
+        "buy_time": "2026-09-23 09:00:00",
+        "sell_time": "",
+        "profit_rate": 0.77,
+    }
+    monkeypatch.setattr(report_mod, "_fetch_trade_rows", lambda *_: ([trade], []))
+    monkeypatch.setattr(
+        report_mod,
+        "_iter_target_lines",
+        lambda *_args, **_kw: [
+            "[2026-09-23 09:10:00] [HOLDING_PIPELINE] test(123456) "
+            "stage=sell_completed id=42 "
+            "decision_authority=broker_balance_reconciliation_only"
+        ],
+    )
+    monkeypatch.setattr(
+        report_mod, "find_gatekeeper_snapshot_for_trade", lambda *_args: None
+    )
+
+    report = report_mod.build_trade_review_report("2026-09-23")
+    row = report["sections"]["completed_trade_projection"][0]
+
+    assert row["completion_observed_date"] == "2026-09-23"
+    assert row["completion_day_basis"] == "terminal_event"
+    assert row["exact_sell_fill_time"] is None
+    assert row["realized_pnl_krw"] is None
+
+
+def test_completed_projection_rejects_receipt_profit_rate_mismatch():
+    trade = {
+        "id": 1,
+        "status": "COMPLETED",
+        "buy_qty": 1,
+        "profit_rate": 0.5,
+    }
+    event = report_mod.HoldingEvent(
+        timestamp="2026-09-23 09:10:02",
+        name="test",
+        code="123456",
+        stage="sell_completed",
+        fields={
+            "decision_authority": "broker_sell_fill_observation_only",
+            "actual_order_submitted": "True",
+            "broker_order_forbidden": "False",
+            "cumulative_sell_qty": "1",
+            "profit_rate": "1.0",
+            "realized_pnl_krw_source": "broker_fill_prices_fee_aware",
+            "realized_pnl_krw": "40",
+        },
+        raw_line="",
+    )
+
+    row = report_mod._completed_trade_projection(trade, [event], trade)
+
+    assert row["terminal_profit_rate_reconciled"] is False
+    assert row["realized_pnl_krw"] is None
+
+
+def test_explicit_exit_signal_precedes_later_terminal_inferred_rule():
+    def event(stage, time, rule):
+        return report_mod.HoldingEvent(
+            timestamp=time,
+            name="test",
+            code="123456",
+            stage=stage,
+            fields={"exit_rule": rule},
+            raw_line="",
+        )
+
+    events = [
+        event("exit_signal", "2026-09-23 09:10:00", "scalp_soft_stop_pct"),
+        event("sell_order_sent", "2026-09-23 09:10:01", "scalp_soft_stop_pct"),
+        event("sell_completed", "2026-09-23 09:10:02", "scalp_soft_stop_pct"),
+    ]
+
+    signal = report_mod._build_exit_signal(events)
+
+    assert signal.get("inferred", False) is False
+    assert signal["exit_rule"] == "scalp_soft_stop_pct"
+
+    events.insert(
+        1,
+        event("exit_signal", "2026-09-23 09:10:00.500", "scalp_hard_stop_pct"),
+    )
+    signal = report_mod._build_exit_signal(events)
+    assert signal.get("inferred") is True
+
+
 def test_trade_review_restores_completed_trade_from_holding_events(monkeypatch):
     holding_lines = [
         "[2026-04-06 09:08:57] [HOLDING_PIPELINE] 심텍(222800) stage=holding_started id=1085 fill_price=57000 fill_qty=10 buy_price=57000.00 buy_qty=10 strategy=SCALPING position_tag=SCANNER",

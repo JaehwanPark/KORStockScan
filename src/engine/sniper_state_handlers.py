@@ -19667,6 +19667,82 @@ def _log_holding_pipeline(stock, code, stage, **fields):
     )
 
 
+def _scalp_exit_threshold_observation_fields(
+    *,
+    exit_rule: str,
+    profit_rate: float,
+    peak_profit: float,
+    hard_stop_pct=None,
+    soft_stop_pct=None,
+    trailing_start_pct=None,
+    trailing_limit_pct=None,
+    trailing_drawdown_pct=None,
+    strong_trailing: bool = False,
+) -> dict[str, Any]:
+    """Record the evaluated branch, never a new source of exit authority."""
+    try:
+        rule = str(exit_rule or "").strip()
+        if rule == "scalp_hard_stop_pct" and hard_stop_pct is not None:
+            threshold_key, threshold_value, observed = (
+                "SCALP_HARD_STOP/position_hard_stop_pct",
+                hard_stop_pct,
+                profit_rate,
+            )
+        elif rule == "scalp_soft_stop_pct" and soft_stop_pct is not None:
+            threshold_key, threshold_value, observed = (
+                "SCALP_STOP/effective_dynamic_stop_pct",
+                soft_stop_pct,
+                profit_rate,
+            )
+        elif rule == "scalp_trailing_take_profit" and trailing_limit_pct is not None:
+            threshold_key, threshold_value, observed = (
+                (
+                    "SCALP_TRAILING_LIMIT_STRONG"
+                    if strong_trailing
+                    else "SCALP_TRAILING_LIMIT_WEAK"
+                ),
+                trailing_limit_pct,
+                trailing_drawdown_pct,
+            )
+        else:
+            return {
+                "exit_threshold_status": "branch_not_mapped",
+                "exit_threshold_provenance_status": "source_gap",
+            }
+        numeric_values = [float(threshold_value), float(profit_rate), float(peak_profit)]
+        if observed is not None:
+            numeric_values.append(float(observed))
+        if not all(math.isfinite(value) for value in numeric_values):
+            raise ValueError("non_finite_threshold_observation")
+        return {
+            "exit_threshold_status": (
+                "effective_value_observed" if observed is not None else "missing_lhs"
+            ),
+            "exit_threshold_key": threshold_key,
+            "exit_threshold_effective_pct": round(float(threshold_value), 6),
+            "exit_threshold_observed_pct": (
+                round(float(observed), 6) if observed is not None else "-"
+            ),
+            "exit_threshold_profit_rate_pct": round(float(profit_rate), 6),
+            "exit_threshold_peak_profit_pct": round(float(peak_profit), 6),
+            "exit_threshold_trailing_start_pct": (
+                round(float(trailing_start_pct), 6)
+                if rule == "scalp_trailing_take_profit"
+                and trailing_start_pct is not None
+                and math.isfinite(float(trailing_start_pct))
+                else "-"
+            ),
+            "exit_threshold_runtime_pid": os.getpid(),
+            # This is an effective branch value, not proof of env/policy origin.
+            "exit_threshold_provenance_status": "effective_branch_only",
+        }
+    except (TypeError, ValueError, OverflowError):
+        return {
+            "exit_threshold_status": "invalid_observation",
+            "exit_threshold_provenance_status": "source_gap",
+        }
+
+
 def _real_sell_submission_contract_fields() -> dict[str, Any]:
     return {
         "metric_role": "execution_quality_real_only",
@@ -29314,6 +29390,18 @@ def evaluate_and_dispatch_fast_scalp_exit(
             exit_rule=exit_rule,
             ws_data=dispatch_ws,
             fast_exit=True,
+            extra_fields=_scalp_exit_threshold_observation_fields(
+                exit_rule=exit_rule,
+                profit_rate=profit_rate,
+                peak_profit=peak_profit,
+                hard_stop_pct=hard_stop_pct,
+                trailing_start_pct=trailing_start_pct,
+                trailing_limit_pct=trailing_limit,
+                trailing_drawdown_pct=trailing_drawdown_pct,
+                strong_trailing=_holding_strong_trailing_enabled(
+                    score_context, current_ai_score
+                ),
+            ),
         )
     except Exception as exc:
         with ENTRY_LOCK:
@@ -86855,6 +86943,23 @@ def handle_holding_state(
             buy_price=buy_p,
             buy_qty=_safe_int(stock.get("buy_qty"), 0),
             **exit_extra_fields,
+            **(
+                _scalp_exit_threshold_observation_fields(
+                    exit_rule=exit_rule,
+                    profit_rate=profit_rate,
+                    peak_profit=peak_profit,
+                    hard_stop_pct=locals().get("hard_stop_pct"),
+                    soft_stop_pct=locals().get("dynamic_stop_pct"),
+                    trailing_start_pct=locals().get("scalp_trailing_start_pct"),
+                    trailing_limit_pct=locals().get("dynamic_trailing_limit"),
+                    trailing_drawdown_pct=locals().get("trailing_decision_drawdown"),
+                    strong_trailing=_holding_strong_trailing_enabled(
+                        holding_score_exit_role_ctx, current_ai_score
+                    ),
+                )
+                if _is_scalp_strategy(strategy)
+                else {}
+            ),
         )
         if _is_swing_intraday_probe_target(stock):
             _log_holding_pipeline(

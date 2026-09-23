@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import math
 import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -203,7 +204,8 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
     try:
         if value is None or value == "":
             return default
-        return float(value)
+        result = float(value)
+        return result if math.isfinite(result) else default
     except Exception:
         return default
 
@@ -314,6 +316,42 @@ def _build_event_details(event: HoldingEvent) -> list[dict[str, str]]:
     return details
 
 
+def _db_trade_mapping(row: Any) -> dict:
+    buy_price = _safe_float(row.get("buy_price"))
+    sell_price = _safe_float(row.get("sell_price"))
+    buy_qty = _safe_int(row.get("buy_qty"))
+    raw_profit_rate = row.get("profit_rate")
+    canonical_profit_rate = _safe_float(raw_profit_rate, default=float("nan"))
+    if not math.isfinite(canonical_profit_rate):
+        canonical_profit_rate = None
+    economics_complete = buy_price > 0 and sell_price > 0 and buy_qty > 0
+    pnl_krw = (
+        _calculate_realized_pnl_krw(buy_price, sell_price, buy_qty)
+        if economics_complete
+        else None
+    )
+    return {
+        "id": _safe_int(row.get("id")),
+        "rec_date": str(row.get("rec_date") or ""),
+        "code": str(row.get("stock_code") or "").strip()[:6],
+        "name": str(row.get("stock_name") or ""),
+        "status": str(row.get("status") or ""),
+        "strategy": str(row.get("strategy") or ""),
+        "position_tag": str(row.get("position_tag") or ""),
+        "buy_price": buy_price,
+        "buy_qty": buy_qty,
+        "buy_time": _format_dt(row.get("buy_time")),
+        "sell_price": _safe_int(sell_price),
+        "sell_time": _format_dt(row.get("sell_time")),
+        "profit_rate": round(_safe_float(row.get("profit_rate")), 2),
+        "realized_pnl_krw": pnl_krw,
+        "canonical_profit_rate": canonical_profit_rate,
+        "realized_pnl_krw_source": (
+            "price_cost_model" if economics_complete else "missing"
+        ),
+    }
+
+
 def _import_sqlalchemy():
     from sqlalchemy import create_engine, text
 
@@ -364,31 +402,37 @@ def _fetch_trade_rows(
         with engine.connect() as conn:
             result = conn.execute(text(query), params)
             for row in result.mappings():
-                buy_price = _safe_float(row.get("buy_price"))
-                sell_price = _safe_float(row.get("sell_price"))
-                buy_qty = _safe_int(row.get("buy_qty"))
-                pnl_krw = _calculate_realized_pnl_krw(buy_price, sell_price, buy_qty)
-                rows.append(
-                    {
-                        "id": _safe_int(row.get("id")),
-                        "rec_date": str(row.get("rec_date") or ""),
-                        "code": str(row.get("stock_code") or "").strip()[:6],
-                        "name": str(row.get("stock_name") or ""),
-                        "status": str(row.get("status") or ""),
-                        "strategy": str(row.get("strategy") or ""),
-                        "position_tag": str(row.get("position_tag") or ""),
-                        "buy_price": buy_price,
-                        "buy_qty": buy_qty,
-                        "buy_time": _format_dt(row.get("buy_time")),
-                        "sell_price": _safe_int(sell_price),
-                        "sell_time": _format_dt(row.get("sell_time")),
-                        "profit_rate": round(_safe_float(row.get("profit_rate")), 2),
-                        "realized_pnl_krw": pnl_krw,
-                    }
-                )
+                rows.append(_db_trade_mapping(row))
     except Exception as exc:
         warnings.append(f"매매 이력 조회 실패: {exc}")
     return rows, warnings
+
+
+def _fetch_completed_trade_rows_by_ids(ids: set[int]) -> tuple[list[dict], list[str]]:
+    if not ids:
+        return [], []
+    if len(ids) > 1000:
+        return [], ["당일 완료 이벤트 ID가 1000건을 초과해 carry 조회를 중단함"]
+    try:
+        create_engine, text = _import_sqlalchemy()
+        engine = create_engine(POSTGRES_URL, pool_pre_ping=True)
+        params = {f"trade_id_{index}": value for index, value in enumerate(sorted(ids))}
+        placeholders = ", ".join(f":{key}" for key in params)
+        query = f"""
+            SELECT id, rec_date, stock_code, stock_name, status, strategy,
+                   position_tag, buy_price, buy_qty, buy_time, sell_price,
+                   sell_time, profit_rate
+            FROM recommendation_history
+            WHERE id IN ({placeholders})
+        """
+        with engine.connect() as conn:
+            rows = [
+                _db_trade_mapping(row)
+                for row in conn.execute(text(query), params).mappings()
+            ]
+        return rows, []
+    except Exception as exc:
+        return [], [f"완료 carry ID 조회 실패: {exc}"]
 
 
 def _match_trade_events(trade: dict, events: list[HoldingEvent]) -> list[HoldingEvent]:
@@ -596,6 +640,44 @@ def _infer_exit_decision_source(
 
 
 def _build_exit_signal(events: list[HoldingEvent]) -> dict | None:
+    completed = next(
+        (event for event in reversed(events) if event.stage == "sell_completed"), None
+    )
+    completed_rule = (
+        _normalize_exit_rule(completed.fields.get("exit_rule")) if completed else ""
+    )
+    latest_explicit = next(
+        (
+            event
+            for event in reversed(events)
+            if event.stage == "exit_signal"
+            and _normalize_exit_rule(event.fields.get("exit_rule"))
+            and (not completed or event.timestamp <= completed.timestamp)
+        ),
+        None,
+    )
+    explicit = (
+        latest_explicit
+        if latest_explicit is not None
+        and (
+            not completed_rule
+            or _normalize_exit_rule(latest_explicit.fields.get("exit_rule"))
+            == completed_rule
+        )
+        else None
+    )
+    if explicit is not None:
+        explicit_rule = _normalize_exit_rule(explicit.fields.get("exit_rule"))
+        return _build_exit_signal_payload(
+            explicit,
+            exit_rule=explicit_rule,
+            exit_decision_source=_infer_exit_decision_source(
+                exit_rule=explicit_rule,
+                reason=explicit.fields.get("reason"),
+                fields=explicit.fields,
+            ),
+            inferred=False,
+        )
     sell_completed = None
     fallback_exit_event = None
     for event in reversed(events):
@@ -1060,6 +1142,151 @@ def _build_trade_row(trade: dict, events: list[HoldingEvent]) -> dict:
     }
 
 
+_PROJECTION_EVENT_STAGES = {
+    "holding_started",
+    "position_rebased_after_fill",
+    "scale_in_executed",
+    "ai_holding_review",
+    "exit_signal",
+    "sell_order_sent",
+    "sell_order_failed",
+    "sell_completed",
+    "holding_flow_override_defer_exit",
+    "holding_flow_max_defer_bullish_extension",
+    "holding_flow_override_force_exit",
+    "holding_flow_override_confirm_exit",
+}
+
+
+def _completed_trade_projection(
+    trade: dict, events: list[HoldingEvent], compiled: dict
+) -> dict | None:
+    """Keep the full canonical completion census separate from display recovery."""
+    if str(trade.get("status") or "").upper() != "COMPLETED":
+        return None
+    profit = trade.get("canonical_profit_rate", trade.get("profit_rate"))
+    profit = _safe_float(profit, default=float("nan"))
+    if not math.isfinite(profit):
+        profit = None
+    terminal = next(
+        (event for event in reversed(events) if event.stage == "sell_completed"), None
+    )
+    terminal_fields = terminal.fields if terminal else {}
+    terminal_observed_date = str(terminal.timestamp)[:10] if terminal else None
+    sell_date = str(trade.get("sell_time") or "")[:10]
+    completion_observed_date = terminal_observed_date or sell_date or None
+    buy_qty = _safe_int(trade.get("buy_qty"), 0)
+    completed_sell_qty = _safe_int(terminal_fields.get("cumulative_sell_qty"), 0)
+    quantity_conserved = bool(buy_qty > 0 and completed_sell_qty == buy_qty)
+    receipt_profit_rate = _safe_float(
+        terminal_fields.get("profit_rate"), default=float("nan")
+    )
+    rate_reconciled = bool(
+        profit is not None
+        and math.isfinite(receipt_profit_rate)
+        and abs(float(profit) - receipt_profit_rate) <= 0.02
+    )
+    exact_receipt = (
+        terminal_fields.get("realized_pnl_krw_source") == "broker_fill_prices_fee_aware"
+        and terminal_fields.get("decision_authority")
+        == "broker_sell_fill_observation_only"
+        and str(terminal_fields.get("actual_order_submitted") or "").lower() == "true"
+        and str(terminal_fields.get("broker_order_forbidden") or "").lower() == "false"
+        and quantity_conserved
+        and rate_reconciled
+    )
+    exact_pnl = _safe_float(
+        terminal_fields.get("realized_pnl_krw"), default=float("nan")
+    )
+    if not exact_receipt or not math.isfinite(exact_pnl):
+        exact_pnl = None
+    occurrence_source = str(
+        terminal_fields.get("main_lifecycle_execution_occurrence_time_source") or ""
+    )
+    occurrence_time = str(
+        terminal_fields.get("main_lifecycle_execution_occurred_at") or ""
+    )
+    exact_fill_time = (
+        occurrence_time
+        if exact_receipt
+        and occurrence_source == "official_fid_908"
+        and _parse_dt(occurrence_time) is not None
+        else None
+    )
+    return {
+        "id": trade.get("id"),
+        "rec_date": trade.get("rec_date"),
+        "code": trade.get("code"),
+        "name": trade.get("name"),
+        "status": "COMPLETED",
+        "strategy": trade.get("strategy"),
+        "position_tag": trade.get("position_tag"),
+        "effective_venue": terminal_fields.get("main_lifecycle_venue")
+        or terminal_fields.get("effective_venue"),
+        "market_session_bucket": terminal_fields.get("main_lifecycle_session_bucket")
+        or terminal_fields.get("market_session_bucket"),
+        "entry_execution_broker_route": terminal_fields.get("broker_route"),
+        "main_lifecycle_id": terminal_fields.get("main_lifecycle_id"),
+        "attempt_id": terminal_fields.get("attempt_id")
+        or terminal_fields.get("main_lifecycle_attempt_id"),
+        "sell_order_no": terminal_fields.get("order_no")
+        or terminal_fields.get("sell_order_no"),
+        "sell_execution_no": terminal_fields.get("execution_no"),
+        "cumulative_sell_qty": completed_sell_qty or None,
+        "sell_quantity_conserved": quantity_conserved,
+        "terminal_profit_rate_reconciled": rate_reconciled,
+        "entry_mode": compiled.get("entry_mode"),
+        "buy_price": trade.get("buy_price"),
+        "buy_qty": trade.get("buy_qty"),
+        "buy_time": trade.get("buy_time"),
+        "sell_price": trade.get("sell_price"),
+        "sell_time": trade.get("sell_time"),
+        "completion_observed_date": completion_observed_date,
+        "completion_day_basis": (
+            "terminal_event" if terminal_observed_date else "db_sell_time_only"
+        ),
+        "exact_sell_fill_time": exact_fill_time,
+        "profit_rate": profit,
+        "realized_pnl_krw": int(round(exact_pnl)) if exact_pnl is not None else None,
+        "realized_pnl_krw_source": (
+            "broker_fill_prices_fee_aware"
+            if exact_pnl is not None
+            else "missing_exact_cost"
+        ),
+        "modeled_realized_pnl_krw": trade.get("realized_pnl_krw"),
+        "modeled_realized_pnl_source": trade.get("realized_pnl_krw_source"),
+        "sell_time_precision": terminal_fields.get("sell_time_precision")
+        or ("broker_fill_second" if exact_fill_time else "missing"),
+        "sell_time_forbidden_for_intraday_horizon": (
+            str(
+                terminal_fields.get("sell_time_forbidden_for_intraday_horizon") or ""
+            ).lower()
+            == "true"
+        ),
+        "terminal_decision_authority": terminal_fields.get("decision_authority"),
+        "main_lifecycle_fees_taxes_krw": (
+            _safe_float(terminal_fields.get("main_lifecycle_fees_taxes_krw"), None)
+            if exact_receipt
+            else None
+        ),
+        "main_lifecycle_slippage_krw": (
+            _safe_float(terminal_fields.get("main_lifecycle_slippage_krw"), None)
+            if exact_receipt
+            else None
+        ),
+        "exit_signal": _build_exit_signal(events),
+        "timeline": [
+            {
+                "stage": event.stage,
+                "timestamp": event.timestamp,
+                "fields": dict(event.fields),
+            }
+            for event in events
+            if event.stage in _PROJECTION_EVENT_STAGES
+        ],
+    }
+
+
 def _is_entered_trade(row: dict) -> bool:
     status = str(row.get("status") or "").upper()
     if row.get("buy_time"):
@@ -1262,19 +1489,53 @@ def build_trade_review_report(
     events.sort(key=_event_sort_key)
 
     trade_rows, warnings = _fetch_trade_rows(target_date, None)
+    completion_event_ids = {
+        _safe_int(event.fields.get("id"))
+        for event in all_events
+        if event.stage in {"sell_completed", "sell_completion_reconciliation_gap"}
+        and _safe_int(event.fields.get("id")) > 0
+    }
+    missing_completion_ids = completion_event_ids - {
+        _safe_int(row.get("id")) for row in trade_rows
+    }
+    carry_rows, carry_warnings = _fetch_completed_trade_rows_by_ids(
+        missing_completion_ids
+    )
+    trade_rows.extend(carry_rows)
+    warnings.extend(carry_warnings)
+    unresolved_completion_ids = missing_completion_ids - {
+        _safe_int(row.get("id")) for row in carry_rows
+    }
+    if unresolved_completion_ids:
+        warnings.append(
+            f"완료 이벤트의 DB 포지션 ID 미해결: {sorted(unresolved_completion_ids)[:20]}"
+        )
     per_stage = Counter(event.stage for event in events)
 
     compiled_rows = []
+    completed_projection = []
     for trade in trade_rows:
         matched = _match_trade_events(trade, all_events)
-        compiled_rows.append(_build_trade_row(trade, matched))
+        compiled = _build_trade_row(trade, matched)
+        compiled_rows.append(compiled)
+        projected = _completed_trade_projection(trade, matched, compiled)
+        if (
+            projected is not None
+            and projected.get("completion_observed_date") == target_date
+        ):
+            completed_projection.append(projected)
 
     all_rows = compiled_rows
-    entered_rows = [row for row in all_rows if _is_entered_trade(row)]
-    expired_rows = [
-        row for row in all_rows if str(row.get("status") or "").upper() == "EXPIRED"
+    daily_rows = [
+        row for row in all_rows if str(row.get("rec_date") or "") == target_date
     ]
-    base_rows = all_rows if scope == "all" else entered_rows
+    entered_rows = [row for row in daily_rows if _is_entered_trade(row)]
+    expired_rows = [
+        row for row in daily_rows if str(row.get("status") or "").upper() == "EXPIRED"
+    ]
+    # Keep the original entry-day display scope; the separate projection also
+    # includes positions opened earlier and sold on the target day.
+    base_rows = daily_rows if scope == "all" else entered_rows
     visible_rows = base_rows
     if normalized_code:
         visible_rows = [
@@ -1316,12 +1577,15 @@ def build_trade_review_report(
         "has_data": bool(visible_rows or events),
         "meta": {
             "warnings": warnings,
+            "completion_event_id_count": len(completion_event_ids),
+            "completion_event_unresolved_id_count": len(unresolved_completion_ids),
             "available_stocks": available_stocks,
             "log_paths": [str(path) for path in log_paths],
         },
         "metrics": {
             "total_trades": len(visible_rows),
             "completed_trades": len(realized),
+            "canonical_completed_trades": len(completed_projection),
             "open_trades": sum(
                 1
                 for row in visible_rows
@@ -1342,7 +1606,12 @@ def build_trade_review_report(
                 sum(_safe_int(row.get("realized_pnl_krw")) for row in realized)
             ),
             "holding_events": len(events),
-            "all_rows": len(all_rows),
+            "all_rows": len(daily_rows),
+            "carry_completed_rows": sum(
+                str(row.get("status") or "").upper() == "COMPLETED"
+                and str(row.get("rec_date") or "") != target_date
+                for row in all_rows
+            ),
             "entered_rows": len(entered_rows),
             "expired_rows": len(expired_rows),
             "full_fill_events": int(
@@ -1375,6 +1644,7 @@ def build_trade_review_report(
         ],
         "sections": {
             "recent_trades": recent_trades,
+            "completed_trade_projection": completed_projection,
             "completed_trades": [
                 row
                 for row in visible_rows

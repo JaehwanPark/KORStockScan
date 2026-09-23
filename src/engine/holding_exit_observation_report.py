@@ -187,17 +187,117 @@ def _load_saved_snapshots(
     return snapshots, paths
 
 
-def _trade_rows_from_snapshots(snapshots: list[dict]) -> list[dict]:
+def _collect_completed_trade_rows(
+    snapshots: list[dict],
+) -> tuple[list[dict], list[dict]]:
     rows: list[dict] = []
+    gaps: list[dict] = []
+    seen: dict[str, dict] = {}
     for snapshot in snapshots:
-        for row in (snapshot.get("sections") or {}).get("recent_trades") or []:
-            if isinstance(row, dict):
-                rows.append(row)
-    return rows
+        if snapshot.get("code") or snapshot.get("since"):
+            gaps.append(
+                {
+                    "date": snapshot.get("date"),
+                    "reason": "filtered_trade_review_snapshot",
+                }
+            )
+            continue
+        if (snapshot.get("meta") or {}).get("warnings"):
+            gaps.append(
+                {"date": snapshot.get("date"), "reason": "trade_review_source_warning"}
+            )
+            continue
+        sections = snapshot.get("sections") or {}
+        projection = sections.get("completed_trade_projection")
+        recent = sections.get("recent_trades") or []
+        candidates = projection if isinstance(projection, list) else recent
+        completed = [
+            row
+            for row in candidates
+            if isinstance(row, dict)
+            and str(row.get("status") or "").upper() == "COMPLETED"
+        ]
+        metrics = snapshot.get("metrics") or {}
+        count_key = (
+            "canonical_completed_trades"
+            if isinstance(projection, list)
+            else "completed_trades"
+        )
+        declared = _safe_int(metrics.get(count_key), -1)
+        ids = [_trade_id(row) for row in completed]
+        if (
+            declared < 0
+            or len(completed) != declared
+            or not all(ids)
+            or len(set(ids)) != len(ids)
+        ):
+            gaps.append(
+                {
+                    "date": snapshot.get("date"),
+                    "reason": (
+                        "completed_population_truncated"
+                        if not isinstance(projection, list)
+                        and declared > len(completed)
+                        else "completed_population_contract_gap"
+                    ),
+                    "declared": declared,
+                    "observed": len(completed),
+                }
+            )
+            continue
+        if not isinstance(projection, list):
+            gaps.append(
+                {
+                    "date": snapshot.get("date"),
+                    "reason": "legacy_completion_census_unsealed",
+                    "declared": declared,
+                    "observed": len(completed),
+                }
+            )
+            # Historical display rows carry modeled PnL and possibly synthetic
+            # exit signals. They may be used diagnostically, never as exact-cost
+            # economic evidence.
+            completed = [
+                {
+                    **row,
+                    "modeled_realized_pnl_krw": row.get("realized_pnl_krw"),
+                    "realized_pnl_krw": None,
+                    "realized_pnl_krw_source": "legacy_display_unsealed",
+                    "exact_sell_fill_time": None,
+                }
+                for row in completed
+            ]
+        elif any(
+            row.get("completion_day_basis") != "terminal_event" for row in completed
+        ):
+            gaps.append(
+                {
+                    "date": snapshot.get("date"),
+                    "reason": "completion_day_terminal_receipt_missing",
+                }
+            )
+        for row in completed:
+            trade_id = _trade_id(row)
+            previous = seen.get(trade_id)
+            if previous is not None:
+                if previous != row:
+                    gaps.append(
+                        {
+                            "date": snapshot.get("date"),
+                            "reason": "duplicate_completed_trade_conflict",
+                            "id": trade_id,
+                        }
+                    )
+                continue
+            seen[trade_id] = row
+            rows.append(row)
+    return rows, gaps
 
 
 def _is_valid_completed_trade(row: dict) -> bool:
     if str(row.get("status") or "").upper() != "COMPLETED":
+        return False
+    if str(row.get("strategy") or "").upper() not in {"SCALPING", "SCALP"}:
         return False
     return _safe_float(row.get("profit_rate"), None) is not None
 
@@ -278,14 +378,20 @@ def _summarize_completed_trades(rows: list[dict]) -> dict:
         float(_safe_float(row.get("profit_rate"), 0.0) or 0.0) for row in valid_rows
     ]
     exit_rules = Counter(_exit_group(_exit_rule_from_trade(row)) for row in valid_rows)
+    pnl_values = [_safe_float(row.get("realized_pnl_krw"), None) for row in valid_rows]
+    pnl_complete = [value for value in pnl_values if value is not None]
     return {
         "trade_count": len(valid_rows),
         "win_trades": sum(1 for value in profits if value > 0),
         "loss_trades": sum(1 for value in profits if value <= 0),
         "avg_profit_rate": _avg(profits),
-        "realized_pnl_krw": int(
-            sum(_safe_int(row.get("realized_pnl_krw"), 0) for row in valid_rows)
+        "realized_pnl_krw": (
+            int(round(sum(pnl_complete)))
+            if len(pnl_complete) == len(valid_rows) and valid_rows
+            else None
         ),
+        "realized_pnl_complete_count": len(pnl_complete),
+        "realized_pnl_missing_count": len(valid_rows) - len(pnl_complete),
         "exit_rules": [
             {"label": key, "count": value} for key, value in exit_rules.most_common()
         ],
@@ -350,11 +456,251 @@ def _load_post_sell_rows(dates: list[str]) -> tuple[list[dict], list[str]]:
         evaluations.extend(_read_jsonl(evaluation_path))
 
     rows: list[dict] = []
+    evaluated_ids: set[str] = set()
     for evaluation in evaluations:
         post_sell_id = str(evaluation.get("post_sell_id") or "")
         candidate = candidates_by_id.get(post_sell_id, {})
-        rows.append(_enrich_post_sell_row(candidate=candidate, evaluation=evaluation))
+        rows.append(
+            {
+                **_enrich_post_sell_row(candidate=candidate, evaluation=evaluation),
+                "evaluation_status": (
+                    "evaluated" if candidate else "source_gap_candidate_missing"
+                ),
+            }
+        )
+        evaluated_ids.add(post_sell_id)
+    rows.extend(
+        {**candidate, "evaluation_status": "candidate_only"}
+        for post_sell_id, candidate in candidates_by_id.items()
+        if post_sell_id not in evaluated_ids
+    )
     return rows, paths
+
+
+_FLOW_INTERVENTION_STAGES = {
+    "holding_flow_override_defer_exit": "deferred",
+    "holding_flow_max_defer_bullish_extension": "deferred_extension",
+    "holding_flow_override_force_exit": "force_exit_review",
+    "holding_flow_override_confirm_exit": "confirmed_exit_review",
+}
+
+
+def _build_position_outcomes(
+    trades: list[dict], post_sell_rows: list[dict]
+) -> tuple[list[dict], dict]:
+    """Join existing owner receipts without turning labels into causal evidence."""
+    post_sell_by_trade: dict[str, list[dict]] = defaultdict(list)
+    for post_sell in post_sell_rows:
+        trade_id = str(post_sell.get("recommendation_id") or "").strip()
+        if trade_id and post_sell.get("post_sell_id"):
+            post_sell_by_trade[trade_id].append(post_sell)
+
+    outcomes: list[dict] = []
+    for trade in trades:
+        trade_id = _trade_id(trade)
+        timeline = [
+            event for event in trade.get("timeline") or [] if isinstance(event, dict)
+        ]
+        exit_signal = trade.get("exit_signal") or {}
+        exit_rule = _exit_group(_exit_rule_from_trade(trade))
+        inferred = bool(exit_signal.get("inferred")) or not any(
+            event.get("stage") == "exit_signal" and not event.get("is_inferred")
+            for event in timeline
+        )
+        role_event = next(
+            (
+                event
+                for event in reversed(timeline)
+                if event.get("stage") in {"exit_signal", "sell_order_sent"}
+                and (event.get("fields") or {}).get("holding_score_role_gate")
+            ),
+            {},
+        )
+        role_fields = role_event.get("fields") or {}
+        role_gate = str(role_fields.get("holding_score_role_gate") or "missing")
+        threshold_fields = exit_signal.get("fields") or {} if not inferred else {}
+        threshold_status = str(
+            threshold_fields.get("exit_threshold_status")
+            or "source_gap_missing_receipt"
+        )
+        if role_gate == "unusable_neutral_only":
+            ai_intervention = "unusable"
+        elif role_gate == "missing":
+            ai_intervention = "unobserved"
+        else:
+            ai_intervention = "eligible_causal_effect_unproven"
+
+        flow_stages = [
+            str(event.get("stage") or "")
+            for event in timeline
+            if str(event.get("stage") or "") in _FLOW_INTERVENTION_STAGES
+        ]
+        if "holding_flow_override_defer_exit" in flow_stages:
+            flow_intervention = "deferred"
+        elif "holding_flow_max_defer_bullish_extension" in flow_stages:
+            flow_intervention = "deferred_extension"
+        elif flow_stages:
+            flow_intervention = "reviewed_exit_not_proven_changed"
+        elif exit_signal.get("exit_decision_source") == "HOLDING_FLOW_OVERRIDE":
+            flow_intervention = "unproven_source_label_only"
+        else:
+            flow_intervention = "not_observed"
+
+        exact_fill_time = str(trade.get("exact_sell_fill_time") or "").strip()
+        horizon_forbidden = bool(trade.get("sell_time_forbidden_for_intraday_horizon"))
+        matching = post_sell_by_trade.get(trade_id, [])
+        if not exact_fill_time or horizon_forbidden:
+            post_sell_status = "not_observable_no_exact_fill_time"
+        elif len(matching) > 1:
+            post_sell_status = "source_gap_multiple_post_sell_candidates"
+        elif not matching:
+            post_sell_status = "not_recorded_or_unmatured"
+        elif matching[0].get("evaluation_status") == "candidate_only":
+            post_sell_status = "candidate_unmatured"
+        elif matching[0].get("evaluation_status") == "source_gap_candidate_missing":
+            post_sell_status = "source_gap_candidate_missing"
+        else:
+            post_sell_status = str(
+                matching[0].get("minute_candle_source_quality") or "source_gap"
+            )
+            candidate_date = str(matching[0].get("signal_date") or "")
+            candidate_time = str(matching[0].get("sell_time") or "")
+            exact_bucket = f"{exact_fill_time[:10]} {exact_fill_time[11:16]}"
+            candidate_bucket = f"{candidate_date} {candidate_time[:5]}"
+            if not candidate_date or not candidate_time:
+                post_sell_status = "source_gap_anchor_missing"
+            elif exact_bucket != candidate_bucket:
+                post_sell_status = "source_gap_anchor_bucket_mismatch"
+            if (
+                matching[0].get("strategy")
+                and str(matching[0].get("strategy")).upper()
+                != str(trade.get("strategy") or "").upper()
+            ):
+                post_sell_status = "source_gap_custody_mismatch"
+            if post_sell_status == "pass" and not isinstance(
+                matching[0].get("metrics_10m"), dict
+            ):
+                post_sell_status = "source_gap_missing_10m_metrics"
+            if post_sell_status == "pass":
+                sell_dt = _parse_dt(f"{candidate_date} {candidate_time}")
+                evaluated_dt = _parse_dt(matching[0].get("evaluated_at"))
+                horizon_metrics = [
+                    matching[0].get(f"metrics_{minute}m") for minute in (1, 3, 5, 10)
+                ]
+                if (
+                    sell_dt is None
+                    or evaluated_dt is None
+                    or evaluated_dt < sell_dt + timedelta(minutes=10)
+                    or any(
+                        not isinstance(metric, dict)
+                        or _safe_int(metric.get("bars")) <= 0
+                        for metric in horizon_metrics
+                    )
+                ):
+                    post_sell_status = "source_gap_horizon_maturity_unproven"
+
+        pnl = _safe_float(trade.get("realized_pnl_krw"), None)
+        outcomes.append(
+            {
+                "record_id": trade_id,
+                "rec_date": trade.get("rec_date"),
+                "code": trade.get("code"),
+                "strategy": trade.get("strategy"),
+                "position_tag": trade.get("position_tag"),
+                "buy_time": trade.get("buy_time"),
+                "sell_time": trade.get("sell_time"),
+                "completion_observed_date": trade.get("completion_observed_date"),
+                "completion_day_basis": trade.get("completion_day_basis"),
+                "exact_sell_fill_time": exact_fill_time or None,
+                "exit_rule": exit_rule,
+                "exit_rule_provenance": "inferred" if inferred else "observed",
+                "holding_score_role_gate": role_gate,
+                "ai_intervention": ai_intervention,
+                "flow_intervention": flow_intervention,
+                "exit_threshold_status": threshold_status,
+                "exit_threshold_key": threshold_fields.get("exit_threshold_key"),
+                "exit_threshold_effective_pct": _safe_float(
+                    threshold_fields.get("exit_threshold_effective_pct"), None
+                ),
+                "exit_threshold_observed_pct": _safe_float(
+                    threshold_fields.get("exit_threshold_observed_pct"), None
+                ),
+                "exit_threshold_provenance_status": threshold_fields.get(
+                    "exit_threshold_provenance_status"
+                ),
+                "terminal_decision_authority": trade.get("terminal_decision_authority"),
+                "profit_rate": _safe_float(trade.get("profit_rate"), None),
+                "realized_pnl_krw": int(round(pnl)) if pnl is not None else None,
+                "realized_pnl_krw_source": trade.get("realized_pnl_krw_source"),
+                "modeled_realized_pnl_krw": trade.get("modeled_realized_pnl_krw"),
+                "sell_time_precision": trade.get("sell_time_precision"),
+                "post_sell_ids": [row["post_sell_id"] for row in matching],
+                "post_sell_status": post_sell_status,
+                "post_sell_outcome_diagnostic": (
+                    matching[0].get("outcome") if len(matching) == 1 else None
+                ),
+            }
+        )
+
+    exact = [row for row in outcomes if row["realized_pnl_krw"] is not None]
+    by_rule: dict[str, dict] = {}
+    for rule in sorted({row["exit_rule"] for row in outcomes}):
+        rule_rows = [row for row in outcomes if row["exit_rule"] == rule]
+        exact_rows = [row for row in rule_rows if row["realized_pnl_krw"] is not None]
+        by_rule[rule] = {
+            "completed_valid_trades": len(rule_rows),
+            "exact_cost_trades": len(exact_rows),
+            "missing_exact_cost_trades": len(rule_rows) - len(exact_rows),
+            "exact_cost_subset_pnl_krw": (
+                sum(row["realized_pnl_krw"] for row in exact_rows)
+                if exact_rows
+                else None
+            ),
+            "whole_rule_pnl_krw": (
+                sum(row["realized_pnl_krw"] for row in exact_rows)
+                if len(exact_rows) == len(rule_rows)
+                else None
+            ),
+            "observed_exit_signal_trades": sum(
+                row["exit_rule_provenance"] == "observed" for row in rule_rows
+            ),
+        }
+    coverage = {
+        "metric_role": "source_quality_gate",
+        "decision_authority": "holding_exit_observation_only",
+        "window_policy": "completed_position_exact_terminal",
+        "sample_floor": "all_completed_positions_with_exact_cost",
+        "primary_decision_metric": "cost_adjusted_realized_pnl_when_complete",
+        "source_quality_gate": "full_census_exact_cost_and_source_provenance",
+        "forbidden_uses": "threshold_apply|order_change|gross_ev_substitution",
+        "completed_valid_trades": len(outcomes),
+        "exact_cost_trades": len(exact),
+        "missing_exact_cost_trades": len(outcomes) - len(exact),
+        "exact_cost_subset_pnl_krw": (
+            sum(row["realized_pnl_krw"] for row in exact) if exact else None
+        ),
+        "whole_cohort_pnl_krw": (
+            sum(row["realized_pnl_krw"] for row in exact)
+            if len(exact) == len(outcomes) and outcomes
+            else None
+        ),
+        "observed_exit_signal_trades": sum(
+            row["exit_rule_provenance"] == "observed" for row in outcomes
+        ),
+        "effective_threshold_receipt_trades": sum(
+            row["exit_threshold_status"] == "effective_value_observed"
+            for row in outcomes
+        ),
+        "flow_deferred_trades": sum(
+            row["flow_intervention"] in {"deferred", "deferred_extension"}
+            for row in outcomes
+        ),
+        "full_post_sell_observation_trades": sum(
+            row["post_sell_status"] == "pass" for row in outcomes
+        ),
+        "by_exit_rule": by_rule,
+    }
+    return outcomes, coverage
 
 
 def _metric_window(row: dict, window: str) -> dict:
@@ -545,12 +891,9 @@ def _summarize_exit_rule_quality(
                 ),
                 "completed_valid_trades": len(completed_profits),
                 "completed_valid_avg_profit_rate": _avg(completed_profits),
-                "completed_valid_realized_pnl_krw": int(
-                    sum(
-                        _safe_int(row.get("realized_pnl_krw"), 0)
-                        for row in completed_rows
-                    )
-                ),
+                "completed_valid_realized_pnl_krw": _summarize_completed_trades(
+                    completed_rows
+                )["realized_pnl_krw"],
             }
         )
     return rows
@@ -721,9 +1064,9 @@ def _build_hard_stop_auxiliary(
         "rebound_windows": _build_rebound_windows(rows),
         "completed_valid_trades": len(completed_rows),
         "completed_valid_avg_profit_rate": _avg(completed_profits),
-        "completed_valid_realized_pnl_krw": int(
-            sum(_safe_int(row.get("realized_pnl_krw"), 0) for row in completed_rows)
-        ),
+        "completed_valid_realized_pnl_krw": _summarize_completed_trades(completed_rows)[
+            "realized_pnl_krw"
+        ],
         "live_priority": "soft_stop 이후 보조 관찰. hard stop 완화 canary는 severe-loss guard 훼손 리스크 때문에 금지.",
     }
 
@@ -1058,18 +1401,45 @@ def build_holding_exit_observation_report(
     if perf_path is not None:
         performance_paths.append(str(perf_path))
 
-    valid_trades = [
+    completed_rows, completed_gaps = _collect_completed_trade_rows(trade_snapshots)
+    loaded_trade_dates = {str(item.get("date") or "") for item in trade_snapshots}
+    for missing_date in dates:
+        if missing_date in loaded_trade_dates:
+            continue
+        completed_gaps.append(
+            {
+                "date": missing_date,
+                "reason": (
+                    "target_trade_review_snapshot_missing"
+                    if missing_date == safe_date
+                    else "analysis_window_trade_review_snapshot_missing"
+                ),
+            }
+        )
+    main_completed_rows = [
         row
-        for row in _trade_rows_from_snapshots(trade_snapshots)
-        if _is_valid_completed_trade(row)
+        for row in completed_rows
+        if str(row.get("strategy") or "").upper() in {"SCALPING", "SCALP"}
+    ]
+    valid_trades = [
+        row for row in main_completed_rows if _is_valid_completed_trade(row)
     ]
     target_valid_trades = [
         row
         for row in valid_trades
-        if str(row.get("rec_date") or "") == safe_date
-        or str(row.get("buy_time") or "").startswith(safe_date)
+        if str(
+            row.get("completion_observed_date") or row.get("sell_time") or ""
+        ).startswith(safe_date)
     ]
-    post_sell_rows, post_sell_paths = _load_post_sell_rows(dates)
+    post_sell_lineage_rows, post_sell_paths = _load_post_sell_rows(dates)
+    post_sell_rows = [
+        row
+        for row in post_sell_lineage_rows
+        if row.get("evaluation_status") == "evaluated"
+    ]
+    position_outcomes, position_coverage = _build_position_outcomes(
+        valid_trades, post_sell_lineage_rows
+    )
     target_pipeline_summary, pipeline_paths, pipeline_rows = (
         _summarize_target_pipeline_events(safe_date)
     )
@@ -1086,6 +1456,18 @@ def build_holding_exit_observation_report(
         # than the first day of the current calendar month.
         "month_start": safe_month_start,
         "analysis_window": analysis_window,
+        "completed_population_quality": {
+            "complete": not completed_gaps,
+            "source_gap_dates": completed_gaps,
+            "canonical_completed_rows": len(completed_rows),
+            "main_completed_rows": len(main_completed_rows),
+            "other_owner_excluded_rows": len(completed_rows) - len(main_completed_rows),
+            "valid_profit_rows": len(valid_trades),
+            "invalid_profit_rows": len(main_completed_rows) - len(valid_trades),
+            "target_sell_date_valid_rows": len(target_valid_trades),
+        },
+        "position_outcomes": position_outcomes,
+        "position_outcome_coverage": position_coverage,
         "readiness": _build_readiness(
             target_date=safe_date,
             target_valid_trades=target_valid_trades,
@@ -1126,4 +1508,27 @@ def build_holding_exit_observation_report(
             "post_fallback_cutoff": POST_FALLBACK_CUTOFF.strftime("%Y-%m-%d %H:%M:%S"),
         },
     }
+    economic_input_complete = bool(
+        not completed_gaps
+        and valid_trades
+        and position_coverage["exact_cost_trades"] == len(valid_trades)
+    )
+    report["economic_input_complete"] = economic_input_complete
+    tuning_input_complete = bool(
+        economic_input_complete
+        and position_coverage["observed_exit_signal_trades"] == len(valid_trades)
+        and position_coverage["effective_threshold_receipt_trades"] == len(valid_trades)
+        and position_coverage["full_post_sell_observation_trades"] == len(valid_trades)
+    )
+    report["tuning_input_complete"] = tuning_input_complete
+    if completed_gaps:
+        position_coverage["whole_cohort_pnl_krw"] = None
+        for rule in position_coverage["by_exit_rule"].values():
+            rule["whole_rule_pnl_krw"] = None
+    if not tuning_input_complete:
+        report["trailing_continuation"]["eligible_for_live_review"] = False
+        report["trailing_continuation"][
+            "economic_gate_reason"
+        ] = "completed_census_cost_or_causal_forward_evidence_incomplete"
+        report["soft_stop_rebound"]["cooldown_live_allowed"] = False
     return report

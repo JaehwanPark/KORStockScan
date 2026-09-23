@@ -82,6 +82,7 @@ def _trade(
         "buy_time": buy_time,
         "sell_price": 10100,
         "sell_time": sell_time,
+        "completion_day_basis": "terminal_event",
         "profit_rate": profit_rate,
         "realized_pnl_krw": realized_pnl_krw,
         "entry_mode": entry_mode,
@@ -129,6 +130,152 @@ def _post_sell_row(
         },
     }
     return candidate, evaluation
+
+
+def test_full_completed_projection_is_not_capped_by_recent_trades():
+    full = [_trade(index) for index in range(1, 13)]
+    snapshot = {
+        "date": "2026-09-23",
+        "metrics": {"canonical_completed_trades": 12, "completed_trades": 12},
+        "sections": {
+            "recent_trades": full[:10],
+            "completed_trade_projection": full,
+        },
+    }
+
+    rows, gaps = report_mod._collect_completed_trade_rows([snapshot])
+
+    assert gaps == []
+    assert {row["id"] for row in rows} == set(range(1, 13))
+
+
+def test_legacy_truncated_snapshot_is_excluded_not_treated_as_complete():
+    snapshot = {
+        "date": "2026-09-23",
+        "metrics": {"completed_trades": 12},
+        "sections": {"recent_trades": [_trade(index) for index in range(1, 11)]},
+    }
+
+    rows, gaps = report_mod._collect_completed_trade_rows([snapshot])
+
+    assert rows == []
+    assert gaps[0]["reason"] == "completed_population_truncated"
+
+
+def test_trade_review_source_warning_cannot_become_valid_empty_population():
+    rows, gaps = report_mod._collect_completed_trade_rows(
+        [
+            {
+                "date": "2026-09-23",
+                "meta": {"warnings": ["DB connection failed"]},
+                "metrics": {"canonical_completed_trades": 0},
+                "sections": {"completed_trade_projection": []},
+            }
+        ]
+    )
+
+    assert rows == []
+    assert gaps == [{"date": "2026-09-23", "reason": "trade_review_source_warning"}]
+
+
+def test_legacy_display_profit_is_diagnostic_not_exact_cost():
+    rows, gaps = report_mod._collect_completed_trade_rows(
+        [
+            {
+                "date": "2026-09-23",
+                "metrics": {"completed_trades": 1},
+                "sections": {"recent_trades": [_trade(1, realized_pnl_krw=100)]},
+            }
+        ]
+    )
+
+    assert gaps[0]["reason"] == "legacy_completion_census_unsealed"
+    assert rows[0]["realized_pnl_krw"] is None
+    assert rows[0]["modeled_realized_pnl_krw"] == 100
+
+
+def test_missing_realized_pnl_is_not_zero_filled():
+    rows = [_trade(1, realized_pnl_krw=100), _trade(2, realized_pnl_krw=None)]
+
+    summary = report_mod._summarize_completed_trades(rows)
+
+    assert summary["trade_count"] == 2
+    assert summary["realized_pnl_krw"] is None
+    assert summary["realized_pnl_complete_count"] == 1
+    assert summary["realized_pnl_missing_count"] == 1
+
+
+def test_position_outcome_distinguishes_exact_cost_ai_and_post_sell_quality():
+    direct = _trade(1, realized_pnl_krw=77)
+    direct["exit_signal"] = {
+        "exit_rule": "scalp_trailing_take_profit",
+        "exit_decision_source": "HOLDING_FLOW_OVERRIDE",
+        "inferred": True,
+    }
+    direct["sell_time_precision"] = "broker_fill_second"
+    direct["exact_sell_fill_time"] = "2026-09-23T09:40:00+09:00"
+    direct["timeline"].append(
+        {
+            "stage": "sell_order_sent",
+            "fields": {
+                "holding_score_role_gate": "unusable_neutral_only",
+                "holding_score_negative_exit_usable": "False",
+                "exit_decision_source": "HOLDING_FLOW_OVERRIDE",
+            },
+        }
+    )
+    reconciled = _trade(2, realized_pnl_krw=None)
+    reconciled["sell_time"] = ""
+    reconciled["sell_time_precision"] = "order_second_not_fill_second"
+    reconciled["sell_time_forbidden_for_intraday_horizon"] = True
+    post_sell = [
+        {
+            "post_sell_id": "a",
+            "recommendation_id": 1,
+            "signal_date": "2026-09-23",
+            "sell_time": "09:40:00",
+            "minute_candle_source_quality": "partial_window",
+            "metrics_10m": {"mfe_pct": 0.5},
+            "outcome": "MISSED_UPSIDE",
+        }
+    ]
+
+    outcomes, coverage = report_mod._build_position_outcomes(
+        [direct, reconciled], post_sell
+    )
+
+    assert coverage["completed_valid_trades"] == 2
+    assert coverage["exact_cost_trades"] == 1
+    assert coverage["full_post_sell_observation_trades"] == 0
+    assert outcomes[0]["ai_intervention"] == "unusable"
+    assert outcomes[0]["flow_intervention"] == "unproven_source_label_only"
+    assert outcomes[0]["exit_rule_provenance"] == "inferred"
+    assert outcomes[0]["post_sell_status"] == "partial_window"
+    assert outcomes[1]["post_sell_status"] == "not_observable_no_exact_fill_time"
+
+
+def test_post_sell_pass_requires_mature_horizons_and_matching_anchor():
+    trade = _trade(1, realized_pnl_krw=77)
+    trade["exact_sell_fill_time"] = "2026-09-23T09:40:00+09:00"
+    evaluation = {
+        "post_sell_id": "a",
+        "recommendation_id": 1,
+        "evaluation_status": "evaluated",
+        "signal_date": "2026-09-23",
+        "sell_time": "09:40:00",
+        "evaluated_at": "2026-09-23T09:45:00",
+        "minute_candle_source_quality": "pass",
+        **{f"metrics_{minute}m": {"bars": 1} for minute in (1, 3, 5, 10)},
+    }
+
+    outcomes, coverage = report_mod._build_position_outcomes([trade], [evaluation])
+    assert outcomes[0]["post_sell_status"] == "source_gap_horizon_maturity_unproven"
+    assert coverage["full_post_sell_observation_trades"] == 0
+
+    evaluation["evaluated_at"] = "2026-09-23T09:51:00"
+    outcomes, coverage = report_mod._build_position_outcomes([trade], [evaluation])
+    assert outcomes[0]["post_sell_status"] == "pass"
+    assert coverage["full_post_sell_observation_trades"] == 1
 
 
 def test_holding_exit_observation_report_splits_required_cohorts(monkeypatch, tmp_path):
@@ -211,7 +358,7 @@ def test_holding_exit_observation_report_splits_required_cohorts(monkeypatch, tm
         {
             "date": "2026-04-24",
             "sections": {"recent_trades": trades},
-            "metrics": {"completed_trades": 8},
+            "metrics": {"completed_trades": 9},
         },
     )
     _write_json(
@@ -304,7 +451,7 @@ def test_holding_exit_observation_report_splits_required_cohorts(monkeypatch, tm
         assert key in report
 
     assert report["readiness"]["observation_ready"] is True
-    assert report["readiness"]["completed_valid_trades"] == 8
+    assert report["readiness"]["completed_valid_trades"] == 7
     assert report["readiness"]["directional_only"] is True
     assert report["cohorts"]["normal_only"]["trade_count"] == 8
     assert report["cohorts"]["post_fallback_deprecation"]["trade_count"] == 7
@@ -312,7 +459,8 @@ def test_holding_exit_observation_report_splits_required_cohorts(monkeypatch, tm
     assert report["cohorts"]["partial_fill"]["trade_count"] == 1
     assert report["cohorts"]["initial-only"]["trade_count"] == 7
     assert report["cohorts"]["pyramid-activated"]["trade_count"] == 1
-    assert report["trailing_continuation"]["eligible_for_live_review"] is True
+    assert report["trailing_continuation"]["eligible_for_live_review"] is False
+    assert report["economic_input_complete"] is False
     assert report["trailing_continuation"]["qualifying_cohort_count"] == 5
     assert report["soft_stop_rebound"]["rebound_above_buy_10m_rate"] == 50.0
     assert report["soft_stop_rebound"]["whipsaw_signal"] is True
@@ -361,6 +509,23 @@ def test_holding_exit_observation_reads_gzip_post_sell_rows(monkeypatch, tmp_pat
     ]
 
 
+def test_post_sell_candidate_without_evaluation_stays_unmatured(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    candidate, _evaluation = _post_sell_row(
+        "waiting-1", 301, exit_rule="scalp_soft_stop_pct", outcome="NEUTRAL"
+    )
+    _write_jsonl(
+        tmp_path / "post_sell" / "post_sell_candidates_2026-04-24.jsonl",
+        [candidate],
+    )
+
+    rows, _paths = report_mod._load_post_sell_rows(["2026-04-24"])
+
+    assert len(rows) == 1
+    assert rows[0]["evaluation_status"] == "candidate_only"
+    assert "metrics_10m" not in rows[0]
+
+
 def test_holding_exit_observation_defaults_to_clean_baseline_window(
     monkeypatch, tmp_path
 ):
@@ -375,9 +540,7 @@ def test_holding_exit_observation_defaults_to_clean_baseline_window(
         },
     )
 
-    report = report_mod.build_holding_exit_observation_report(
-        target_date="2026-06-06"
-    )
+    report = report_mod.build_holding_exit_observation_report(target_date="2026-06-06")
 
     assert report["month_start"] == "2026-06-05"
     assert report["analysis_window"] == {
@@ -390,6 +553,11 @@ def test_holding_exit_observation_defaults_to_clean_baseline_window(
         "runtime_effect": False,
         "allowed_runtime_apply": False,
     }
+    assert report["completed_population_quality"]["complete"] is False
+    assert {
+        item["date"]
+        for item in report["completed_population_quality"]["source_gap_dates"]
+    } == {"2026-06-05", "2026-06-06"}
 
 
 def test_holding_exit_observation_uses_calendar_month_when_baseline_disabled(
@@ -406,9 +574,7 @@ def test_holding_exit_observation_uses_calendar_month_when_baseline_disabled(
         },
     )
 
-    report = report_mod.build_holding_exit_observation_report(
-        target_date="2026-09-11"
-    )
+    report = report_mod.build_holding_exit_observation_report(target_date="2026-09-11")
 
     assert report["month_start"] == "2026-09-01"
     assert report["analysis_window"]["selection"] == "calendar_month_policy_disabled"

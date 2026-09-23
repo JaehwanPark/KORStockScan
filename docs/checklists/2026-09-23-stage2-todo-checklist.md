@@ -43,6 +43,11 @@
 
 ## 실행 항목
 
+- [ ] `[HoldingExitPositionOutcomeLineageClosure] 완료 포지션 청산·비용·후행관측 원천 연결 종결` (`Due: 2026-09-23`, `Slot: POSTCLOSE`, `TimeWindow: 17:00~23:20`, `Track: RuntimeStability`)
+  - Source: [보유·청산 포지션별 런타임 임계치 연결 계획](../proposals/holding-exit-position-outcome-runtime-threshold-lineage-implementation-plan-2026-09-23.md).
+  - 완료 기준: 새 `trade_review`의 당일 `sell_completed` 전량 ID·수량·원천 날짜를 DB terminal과 대사하고, `holding_exit_observation`의 비용 확정/결손·명시적 `exit_signal`/추정·유효 임계치/AI/flow 실제 개입·정확한 fill time·1/3/5/10분 후행창 품질을 포지션별로 확인한다. 9/23 저장본 8건 중 직접 체결 6건의 비용 후 부분합 -4,621원과 잔고대사 2건의 모델 +5,900원을 분리하고, 전체 exact-cost EV·paired/holdout EV는 결손 해소 전 null로 유지한다. 영향받은 장후 산출물의 source hash/strict terminal, 선택 release/PID 소비와 신규 자연 표본을 각각 별도 영수증으로 확인한다.
+  - 권한 경계: 추정 청산 규칙·source label·partial window를 실제 개입/완전 관측으로 승격하지 않는다. threshold·provider·주문·봇 PID·hard safety 변경 및 결손 비용의 0 대체를 하지 않는다.
+
 - [x] `[IntradaySemanticEntryExecutionTuningMonitor] entry split·최초 제출 지연의 독립 장후 결과와 runtime handoff 감시` (`Due: 2026-09-23`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~21:40`, `Track: RuntimeStability`)
   - Source: [장중 제출병목·의미 감시 계획](../proposals/intraday-semantic-entry-monitoring-and-telegram-alert-feasibility-plan-2026-09-20.md#923-entry-split최초-제출-지연-장후-산출물-감시).
   - 완료 기준: latest exact-date split report/policy generation binding과 bootstrap incumbent/candidate binding, delay report와 canonical bootstrap handoff를 구분해 기록한다. 후보 0·source gap·미발행은 incident가 아니며 EV null은 null로 보존한다. 구조 불일치만 persistence/Telegram 전이를 탄다. 실제 PID 소비와 주문/정책 효과는 이 감시가 증명하지 않는다. bounded JSON 외 raw replay·tuner 재실행을 하지 않고 기존 5분 cron에서 notify 없는 배포본 재검사까지 확인한다.

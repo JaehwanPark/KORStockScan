@@ -5,6 +5,32 @@ from src.engine import sniper_overnight_gatekeeper as overnight
 from src.engine import sniper_state_handlers as handlers
 
 
+def test_exit_threshold_observation_fields_are_effective_only_not_authority():
+    fields = handlers._scalp_exit_threshold_observation_fields(
+        exit_rule="scalp_trailing_take_profit",
+        profit_rate=0.3,
+        peak_profit=1.0,
+        trailing_start_pct=0.6,
+        trailing_limit_pct=0.4,
+        trailing_drawdown_pct=0.7,
+        strong_trailing=False,
+    )
+
+    assert fields["exit_threshold_key"] == "SCALP_TRAILING_LIMIT_WEAK"
+    assert fields["exit_threshold_effective_pct"] == 0.4
+    assert fields["exit_threshold_observed_pct"] == 0.7
+    assert fields["exit_threshold_provenance_status"] == "effective_branch_only"
+    assert "allowed_runtime_apply" not in fields
+
+    invalid = handlers._scalp_exit_threshold_observation_fields(
+        exit_rule="scalp_soft_stop_pct",
+        profit_rate=-1.5,
+        peak_profit=0.0,
+        soft_stop_pct="bad-value",
+    )
+    assert invalid["exit_threshold_status"] == "invalid_observation"
+
+
 class DummyFlowAI:
     def __init__(self, action):
         self.action = action
