@@ -40,6 +40,31 @@ def test_projected_real_submit_without_context_or_owner_cannot_be_verified_zero(
     assert mod._parents('2026-09-22',[failed],[])[1]==0
 
 
+def test_runtime_submission_log_merges_response_without_losing_dispatch_truth():
+    import ast
+    from pathlib import Path
+    from src.engine import sniper_state_handlers as handlers
+    from src.engine.scalping.entry_cancel_wait_runtime import submission_response_fields
+
+    tree=ast.parse(Path(handlers.__file__).read_text())
+    call=next(node for node in ast.walk(tree) if isinstance(node,ast.Call)
+        and isinstance(node.func,ast.Name) and node.func.id=='_log_entry_pipeline'
+        and len(node.args)>=3 and isinstance(node.args[2],ast.Constant)
+        and node.args[2].value=='entry_cancel_wait_submission')
+    captured=[]
+    env={**vars(handlers),'stock':{},'code':'041190',
+         'submission_response_fields':submission_response_fields,
+         'wait_submission':{'actual_order_submitted':False,
+                            'entry_cancel_wait_submission_context':'frozen-context'},
+         'res':{'return_code':'0','ord_no':'0022991'},
+         '_log_entry_pipeline':lambda *args,**fields:captured.append(fields)}
+    eval(compile(ast.Expression(call),'<actual-cancel-wait-log-call>','eval'),env)
+    assert captured==[{'actual_order_submitted':True,
+                       'entry_cancel_wait_submission_context':'frozen-context',
+                       'broker_order_no':'0022991','broker_return_code':'0',
+                       'owner_registry_intent_id':'','dispatch_disposition':'accepted'}]
+
+
 def test_prior_custody_cannot_supply_a_zero_profit_day():
     journal=[dict(intent_id='held',owner_type='main_scalping',side='BUY',action='NEW',
         order_date='2026-09-17',state='ORDER_TERMINAL',terminal_reconciliation=True,filled_qty=1)]

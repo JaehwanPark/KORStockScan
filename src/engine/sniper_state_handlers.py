@@ -70011,10 +70011,11 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             try:
                 from src.engine.scalping.entry_cancel_wait_runtime import submission_response_fields
                 _log_entry_pipeline(stock, code, "entry_cancel_wait_submission",
-                    **wait_submission, **submission_response_fields(res))
-            except Exception:
-                # Durable order-owner reconciliation remains authoritative.
-                pass
+                    **_merge_entry_pipeline_field_groups(
+                        wait_submission, submission_response_fields(res)))
+            except Exception as exc:
+                # Source-only receipt loss must be visible without vetoing a broker order.
+                log_error(f"[ENTRY_CANCEL_WAIT_SUBMISSION_RECEIPT_GAP] code={code} reason={type(exc).__name__}")
         if not isinstance(res, dict):
             _log_entry_pipeline(
                 stock,
