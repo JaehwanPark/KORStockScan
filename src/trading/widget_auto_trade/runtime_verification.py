@@ -210,6 +210,14 @@ def _systemd_identity() -> dict:
     }
 
 
+def active_receipt_path() -> Path:
+    """Locate the receipt in the release selected by the installed widget unit."""
+    return (
+        Path(_systemd_identity()["working_directory"])
+        / "data/runtime/widget_signal_auto_trade_state.runtime-receipt.json"
+    )
+
+
 def _file_identity(info: os.stat_result) -> dict:
     return {
         "device": info.st_dev,

@@ -22,7 +22,7 @@ from src.engine.risk.manual_control_exclusion import (
     manual_control_operator_exclusion_source,
 )
 from src.trading.widget_auto_trade.runtime_verification import (
-    DEFAULT_RECEIPT_PATH as WIDGET_RUNTIME_RECEIPT_PATH,
+    active_receipt_path as widget_active_receipt_path,
     verify_startup_receipt as verify_widget_startup_receipt,
 )
 
@@ -964,7 +964,7 @@ def _widget_runtime_release_contract(now: datetime) -> dict:
         "target_date": target_date,
         "expected_start": "07:58",
         "acceptance_deadline": "08:05",
-        "receipt_path": str(WIDGET_RUNTIME_RECEIPT_PATH),
+        "receipt_path": None,
         "runtime_effect": False,
         "runtime_mutation": "none",
     }
@@ -972,12 +972,24 @@ def _widget_runtime_release_contract(now: datetime) -> dict:
         return {**details, "severity": "pass", "status": "not_applicable"}
     if current_minute < _WIDGET_START_MINUTE:
         return {**details, "severity": "pass", "status": "not_yet_due"}
-    result = verify_widget_startup_receipt(
-        WIDGET_RUNTIME_RECEIPT_PATH,
-        target_date=now.date(),
-    )
+    try:
+        receipt_path = widget_active_receipt_path()
+    except Exception:
+        result = {
+            "release_binding_passed": False,
+            "findings": ["widget_unit_identity_unavailable"],
+        }
+    else:
+        details["receipt_path"] = str(receipt_path)
+        result = verify_widget_startup_receipt(
+            receipt_path,
+            target_date=now.date(),
+        )
     details["verification"] = result
-    if result.get("release_binding_passed") is True:
+    if result.get("release_binding_passed") is True and result.get("status") in {
+        "observed_not_compared",
+        "verified_requested_startup_fields",
+    }:
         return {
             **details,
             "severity": "pass",

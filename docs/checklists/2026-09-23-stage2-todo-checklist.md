@@ -59,6 +59,12 @@
   - 완료 기준: exact-date main 및 설치된 widget/machine predecessor가 성공한 뒤 controller canonical/attempt 영수증이 이번 finalizer 실행 이후 생성되고 byte-identical이며, `status=done`, `whole_native_chain_done_claimed=true`, `require_independent_producers=true`, strict verifier `pass`임을 확인한다. 불일치·`summary_verified`·오래된 report면 cleanup 전에 실패하고 final detector에 넘긴다. 최종 finalizer/detector terminal marker까지 확인한다.
   - 권한 경계: 성공 상태나 terminal receipt를 합성하지 않는다. threshold·정책·주문·provider·봇·cleanup 범위는 바꾸지 않는다.
 
+- [ ] `[WidgetEpisodeHealthDetectorRelease0923] 위젯 상태 점검기의 설치 release 영수증 결속 및 자연 수용` (`Due: 2026-09-23`, `Slot: POSTCLOSE`, `TimeWindow: 20:10~21:40`, `Track: RuntimeStability`)
+  - Source: [Widget startup verification contract](../report-based-automation-traceability.md#widget-startup-configuration-verification-without-proc-environ-access).
+  - 현재 증거: 위젯은 PID `329642`의 integrated release에서 실행되고 startup receipt의 PID/release binding은 통과했다. 기존 `process_health`는 main release의 오래된 receipt를 읽어 `process_identity_unverified`를 오탐했다. TYM `002900` 에피소드는 14:36 SOR 체결 watermark가 12초 이상 오래되고 후속 호가 depth도 오래되어 `SKIP_SOURCE_UNAVAILABLE`로 주문 전 차단됐다. 팬오션은 당일 실제 주문번호가 있으나 체결 0건이다.
+  - 완료 기준: 수정한 detector를 별도 검토·검증 후 허용된 main release 절차로 반영하고, 실제 detector PID/코드 결속 및 신규 report가 설치 위젯 unit의 receipt를 읽어 release-binding PASS인지 확인한다. 다음 적격 자연 widget/episode cycle에서 policy 소비, source freshness, 주문 시도·증권사 접수·체결·비용 후 성과를 각각 확인한다. TYM 시세 원천 결손은 신규 자연 source의 동일 item/route/epoch와 신선한 체결·0D depth가 확인될 때만 닫는다.
+  - 권한 경계: 사용자 추가 승인에 따라 이번 detector 결함의 검증된 main release 반영을 위한 정상 절차의 main bot 재기동만 허용한다. 위젯 재기동·주문·임계치/provider/정책 payload·hard safety 변경은 승인하지 않는다. 코드 PASS나 무주문만으로 매매 복구·수익성 수용을 선언하지 않는다.
+
 - [ ] `[PostcloseWidgetEodSlotAdmission] Widget EOD 대기의 계산 슬롯 분리와 신규 원천 자연 검증` (`Due: 2026-09-23`, `Slot: POSTCLOSE`, `TimeWindow: 20:10~21:40`, `Track: RuntimeStability`)
   - Source: [장후 장시간 작업 최적화 계획](../proposals/postclose-long-running-work-quality-preserving-optimization-plan-2026-09-23.md).
   - 완료 기준: EOD 미준비 시 stage가 계산 슬롯을 잡지 않고 `waiting_for_source`로 대기하며, 완료 후 기존 worker의 날짜·행수 검사를 통과해 같은 모집단·grid·정책 해시를 산출한다. 첫 신규 원천 실행의 stage wall/child CPU/RSS, EOD 대기 시간, source hash와 최종 validator receipt를 별도로 확인한다. 9/22 복구 stage의 `succeeded`는 신규 계산의 성능 수용 근거가 아니다.

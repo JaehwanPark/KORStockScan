@@ -997,21 +997,88 @@ def test_widget_runtime_release_contract_has_bounded_startup_gate(
     expected_severity,
     expected_status,
 ):
+    receipt_path = (
+        Path("/installed/widget")
+        / "data/runtime/widget_signal_auto_trade_state.runtime-receipt.json"
+    )
+    monkeypatch.setattr(
+        process_health_module, "widget_active_receipt_path", lambda: receipt_path
+    )
+    seen_paths = []
+
+    def verify_receipt(path, *, target_date):
+        seen_paths.append(path)
+        return {
+            "release_binding_passed": release_binding_passed,
+            "status": (
+                "observed_not_compared" if release_binding_passed else "blocked"
+            ),
+            "findings": (
+                ["expected_configuration_not_supplied"]
+                if release_binding_passed
+                else ["unit_process_release_mismatch"]
+            ),
+        }
+
     monkeypatch.setattr(
         process_health_module,
         "verify_widget_startup_receipt",
-        lambda path, *, target_date: {
-            "release_binding_passed": release_binding_passed,
-            "findings": (
-                [] if release_binding_passed else ["unit_process_release_mismatch"]
-            ),
-        },
+        verify_receipt,
     )
 
     result = _ORIGINAL_WIDGET_RUNTIME_RELEASE_CONTRACT(datetime.fromisoformat(at))
 
     assert result["severity"] == expected_severity
     assert result["status"] == expected_status
+    assert seen_paths == ([] if at.endswith("07:57:59+09:00") else [receipt_path])
+    if seen_paths:
+        assert result["receipt_path"] == str(receipt_path)
+
+
+def test_widget_runtime_release_contract_fails_closed_when_unit_path_unavailable(
+    monkeypatch,
+):
+    def unavailable():
+        raise OSError("unit unavailable")
+
+    monkeypatch.setattr(process_health_module, "widget_active_receipt_path", unavailable)
+    monkeypatch.setattr(
+        process_health_module,
+        "verify_widget_startup_receipt",
+        lambda *_args, **_kwargs: pytest.fail("must not verify an unrelated receipt"),
+    )
+
+    result = _ORIGINAL_WIDGET_RUNTIME_RELEASE_CONTRACT(
+        datetime.fromisoformat("2026-09-02T08:05:00+09:00")
+    )
+
+    assert result["severity"] == "fail"
+    assert result["reason"] == "widget_unit_identity_unavailable"
+    assert result["receipt_path"] is None
+
+
+def test_widget_runtime_release_contract_rejects_untrusted_receipt(monkeypatch):
+    monkeypatch.setattr(
+        process_health_module,
+        "widget_active_receipt_path",
+        lambda: Path("/installed/widget/data/runtime/widget.runtime-receipt.json"),
+    )
+    monkeypatch.setattr(
+        process_health_module,
+        "verify_widget_startup_receipt",
+        lambda *_args, **_kwargs: {
+            "release_binding_passed": True,
+            "status": "blocked",
+            "findings": ["receipt_owner_or_permissions_invalid"],
+        },
+    )
+
+    result = _ORIGINAL_WIDGET_RUNTIME_RELEASE_CONTRACT(
+        datetime.fromisoformat("2026-09-23T17:45:00+09:00")
+    )
+
+    assert result["severity"] == "fail"
+    assert result["reason"] == "receipt_owner_or_permissions_invalid"
 
 
 def _write_samsung_authority(path, *, target_date: str, ready: bool):

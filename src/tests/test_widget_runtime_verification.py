@@ -76,6 +76,13 @@ def verify(context, **kwargs):
     )
 
 
+def test_active_receipt_path_uses_installed_widget_release(context):
+    assert verification.active_receipt_path() == (
+        context.path.parent
+        / "data/runtime/widget_signal_auto_trade_state.runtime-receipt.json"
+    )
+
+
 def change_receipt(context, transform, *, rehash=True):
     payload = json.loads(context.path.read_text())
     payload.pop("receipt_sha256")
