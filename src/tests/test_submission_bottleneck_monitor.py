@@ -807,6 +807,26 @@ def test_nonentry_downstream_gaps_do_not_require_ai_or_capital():
     assert not monitor._nonentry_downstream_gap(row)
 
 
+def test_valid_enter_to_recheck_revision_keeps_latest_cache_miss_observation_only():
+    now = START + timedelta(minutes=15)
+    payload = report([nonentry_gap(action='RECHECK'), event(999, when=now)], now)
+    row = payload['submission_monitor']['rows'][0]
+    evidence = row['economic_source']
+    row.update(enter_now_observed=True, initial_observed_action='ENTER_NOW',
+        latest_observed_action='RECHECK', revision_chain_status='valid',
+        decision_history=[{'action': 'ENTER_NOW', 'machine_observation_sha256': 'a' * 64},
+            {'action': 'RECHECK', 'machine_observation_sha256': 'b' * 64}],
+        economic_history=[{'mechanistic_action': 'RECHECK',
+            'machine_observation_sha256': 'b' * 64, 'evidence': evidence}])
+    result = monitor.evaluate(payload, {}, now)
+    scope = next(iter(result['scopes'].values()))
+    assert scope['nonentry_capacity_observation_gaps'] == 1
+    assert scope['economic_producer_gaps'] == 0
+    assert not any(i['rule'] == 'economic_producer_gap' for i in result['incidents'].values())
+    row['economic_history'][-1]['machine_observation_sha256'] = 'c' * 64
+    assert not monitor._nonentry_downstream_gap(row)
+
+
 @pytest.mark.parametrize('mismatch', [None, 'action', 'screen', 'owner', 'before', 'partial_receipt'])
 def test_sparse_submit_terminal_is_not_new_machine_revision(mismatch):
     decision = event(screen='pass', machine_revision_schema='exact_machine_revision_v1',

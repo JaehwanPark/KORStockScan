@@ -244,7 +244,7 @@ def _nonentry_capacity_observation_gap(row):
     return (row.get("mechanistic_action") in {"BLOCK", "RECHECK"}
             and row.get("ai_screen_status") == "not_requested_machine_nonentry"
             and not row.get("conflict_reasons")
-            and not row.get("enter_now_observed")
+            and _latest_nonentry_economics(row)
             and not row.get("broker_acceptance_observed")
             and row.get("final_state") in {"machine_block_point_drop", "machine_recheck_observation"}
             and economic.get("status") == "source_gap"
@@ -256,10 +256,31 @@ def _nonentry_downstream_gap(row):
     """An uncalled execution replay is not a machine admission contract."""
     return (row.get("mechanistic_action") in {"BLOCK", "RECHECK"}
             and row.get("ai_screen_status") == "not_requested_machine_nonentry"
-            and not row.get("conflict_reasons") and not row.get("enter_now_observed")
+            and not row.get("conflict_reasons") and _latest_nonentry_economics(row)
             and not row.get("broker_acceptance_observed")
             and row.get("final_state") in {"machine_block_point_drop", "machine_recheck_observation"}
             and (row.get("economic_source") or {}).get("status") == "source_gap")
+
+
+def _latest_nonentry_economics(row):
+    """A valid later machine revision can supersede an earlier ENTER_NOW."""
+    if not row.get("enter_now_observed"):
+        return True
+    decisions = row.get("decision_history") or []
+    economics = row.get("economic_history") or []
+    if (row.get("revision_chain_status") != "valid"
+            or row.get("latest_observed_action") != row.get("mechanistic_action")
+            or not decisions or not economics):
+        return False
+    latest_decision, latest_economic = decisions[-1], economics[-1]
+    return bool(
+        latest_decision.get("action") == row.get("mechanistic_action")
+        and latest_economic.get("mechanistic_action") == row.get("mechanistic_action")
+        and latest_decision.get("machine_observation_sha256")
+        and latest_decision.get("machine_observation_sha256")
+        == latest_economic.get("machine_observation_sha256")
+        and latest_economic.get("evidence") == row.get("economic_source")
+    )
 
 
 def _small_json(path):
