@@ -190,6 +190,37 @@ def test_sync_completion_without_sell_time_keeps_event_day_census(monkeypatch):
     assert row["realized_pnl_krw"] is None
 
 
+def test_sell_completed_event_with_open_db_row_blocks_census(monkeypatch):
+    trade = {
+        "id": 42,
+        "rec_date": "2026-09-23",
+        "code": "123456",
+        "status": "OPEN",
+        "strategy": "SCALPING",
+        "buy_qty": 1,
+        "buy_time": "2026-09-23 09:00:00",
+        "profit_rate": None,
+    }
+    monkeypatch.setattr(report_mod, "_fetch_trade_rows", lambda *_: ([trade], []))
+    monkeypatch.setattr(
+        report_mod,
+        "_iter_target_lines",
+        lambda *_args, **_kw: [
+            "[2026-09-23 09:10:00] [HOLDING_PIPELINE] test(123456) "
+            "stage=sell_completed id=42"
+        ],
+    )
+    monkeypatch.setattr(
+        report_mod, "find_gatekeeper_snapshot_for_trade", lambda *_args: None
+    )
+
+    report = report_mod.build_trade_review_report("2026-09-23")
+
+    assert report["meta"]["sell_completed_event_ids"] == [42]
+    assert report["sections"]["completed_trade_projection"] == []
+    assert any("sell_completed" in item for item in report["meta"]["warnings"])
+
+
 def test_completed_projection_rejects_receipt_profit_rate_mismatch():
     trade = {
         "id": 1,

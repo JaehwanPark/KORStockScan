@@ -225,6 +225,18 @@ def _collect_completed_trade_rows(
         )
         declared = _safe_int(metrics.get(count_key), -1)
         ids = [_trade_id(row) for row in completed]
+        if isinstance(projection, list):
+            raw_event_ids = (snapshot.get("meta") or {}).get("sell_completed_event_ids")
+            if not isinstance(raw_event_ids, list) or {
+                str(item) for item in raw_event_ids
+            } != set(ids):
+                gaps.append(
+                    {
+                        "date": snapshot.get("date"),
+                        "reason": "sell_completed_id_census_mismatch",
+                    }
+                )
+                continue
         if (
             declared < 0
             or len(completed) != declared

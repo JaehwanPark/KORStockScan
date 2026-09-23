@@ -136,6 +136,7 @@ def test_full_completed_projection_is_not_capped_by_recent_trades():
     full = [_trade(index) for index in range(1, 13)]
     snapshot = {
         "date": "2026-09-23",
+        "meta": {"sell_completed_event_ids": list(range(1, 13))},
         "metrics": {"canonical_completed_trades": 12, "completed_trades": 12},
         "sections": {
             "recent_trades": full[:10],
@@ -147,6 +148,20 @@ def test_full_completed_projection_is_not_capped_by_recent_trades():
 
     assert gaps == []
     assert {row["id"] for row in rows} == set(range(1, 13))
+
+
+def test_completed_projection_rejects_terminal_event_id_mismatch():
+    snapshot = {
+        "date": "2026-09-23",
+        "meta": {"sell_completed_event_ids": [1, 2]},
+        "metrics": {"canonical_completed_trades": 1},
+        "sections": {"completed_trade_projection": [_trade(1)]},
+    }
+
+    rows, gaps = report_mod._collect_completed_trade_rows([snapshot])
+
+    assert rows == []
+    assert gaps[0]["reason"] == "sell_completed_id_census_mismatch"
 
 
 def test_legacy_truncated_snapshot_is_excluded_not_treated_as_complete():

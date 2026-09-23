@@ -1489,6 +1489,16 @@ def build_trade_review_report(
     events.sort(key=_event_sort_key)
 
     trade_rows, warnings = _fetch_trade_rows(target_date, None)
+    sell_completed_event_ids = {
+        _safe_int(event.fields.get("id"))
+        for event in all_events
+        if event.stage == "sell_completed" and _safe_int(event.fields.get("id")) > 0
+    }
+    if any(
+        event.stage == "sell_completed" and _safe_int(event.fields.get("id")) <= 0
+        for event in all_events
+    ):
+        warnings.append("sell_completed 이벤트의 포지션 ID 누락")
     completion_event_ids = {
         _safe_int(event.fields.get("id"))
         for event in all_events
@@ -1524,6 +1534,13 @@ def build_trade_review_report(
             and projected.get("completion_observed_date") == target_date
         ):
             completed_projection.append(projected)
+    projected_completed_ids = {_safe_int(row.get("id")) for row in completed_projection}
+    if sell_completed_event_ids != projected_completed_ids:
+        warnings.append(
+            "sell_completed 이벤트와 완료 projection ID 불일치: "
+            f"event_only={sorted(sell_completed_event_ids - projected_completed_ids)[:20]} "
+            f"projection_only={sorted(projected_completed_ids - sell_completed_event_ids)[:20]}"
+        )
 
     all_rows = compiled_rows
     daily_rows = [
@@ -1577,6 +1594,7 @@ def build_trade_review_report(
         "has_data": bool(visible_rows or events),
         "meta": {
             "warnings": warnings,
+            "sell_completed_event_ids": sorted(sell_completed_event_ids),
             "completion_event_id_count": len(completion_event_ids),
             "completion_event_unresolved_id_count": len(unresolved_completion_ids),
             "available_stocks": available_stocks,
