@@ -111,6 +111,8 @@ SUMMARY_STAGES = frozenset(
     }
 )
 EXECUTION_SUMMARY_STAGES = frozenset({
+    "pre_submit_delay_committed", "pre_submit_delay_quote_observed",
+    "pre_submit_delay_intent_terminal",
     "entry_execution_sizing_plan", "entry_execution_sizing_plan_block",
     "entry_ai_economic_plan_observed", "entry_ai_economic_source_gap",
     "entry_ai_economic_decision_available", "entry_machine_watch_terminal",

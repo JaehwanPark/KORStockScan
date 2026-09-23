@@ -216,6 +216,8 @@ fi
 RUN_SIM_POST_SELL_FEEDBACK="${THRESHOLD_CYCLE_RUN_SIM_POST_SELL_FEEDBACK:-true}"
 RUN_SCALP_ENTRY_ADM=false # permanently retired: scalping_adm_ldm_retirement_20260906
 RUN_ENTRY_SPLIT_ORDER_PLAN="${THRESHOLD_CYCLE_RUN_ENTRY_SPLIT_ORDER_PLAN:-true}"
+RUN_PRE_SUBMIT_DELAY_TUNING="${THRESHOLD_CYCLE_RUN_PRE_SUBMIT_DELAY_TUNING:-true}"
+export RUN_PRE_SUBMIT_DELAY_TUNING
 RUN_SCALE_IN_SPLIT_ORDER_PLAN="${THRESHOLD_CYCLE_RUN_SCALE_IN_SPLIT_ORDER_PLAN:-true}"
 ENTRY_AI_GATE_BACKTEST_SCHEDULE="on_demand"
 RUN_ENTRY_AI_GATE_BACKTEST=false
@@ -370,6 +372,7 @@ payload.update(
         "producer_flags": {
             "observation_source_quality_audit": source_quality,
             "entry_split_order_plan": entry_split,
+            "pre_submit_delay_tuning": os.environ.get("RUN_PRE_SUBMIT_DELAY_TUNING"),
             "scale_in_split_order_plan": scale_in_split,
             "samsung_machine_entry_tuning": machine_entry,
             "low_price_two_leg_tuning": low_price,
@@ -1523,6 +1526,16 @@ if [ "$RUN_SCALE_IN_SPLIT_ORDER_PLAN" = "true" ] || [ "$RUN_SCALE_IN_SPLIT_ORDER
 fi
 
 
+
+# Launch the independent first-submit-delay family before entry split. Its
+# source-gap policy cannot mutate the entry decision or split shape.
+if [ "$RUN_PRE_SUBMIT_DELAY_TUNING" = "true" ] || [ "$RUN_PRE_SUBMIT_DELAY_TUNING" = "1" ]; then
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.postclose_summary_handoff \
+    --stage pre_submit_delay --date "$TARGET_DATE" --publication-date "$POLICY_PUBLICATION_DATE" --launch
+else
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.postclose_summary_handoff \
+    --stage pre_submit_delay --date "$TARGET_DATE" --publication-date "$POLICY_PUBLICATION_DATE" --off
+fi
 
 # Materialize the existing source chain once, before its Daily economic consumer.
 # Source-only/provider-deferred results retain their own warning semantics; no

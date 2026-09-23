@@ -19667,6 +19667,14 @@ def test_watching_state_rejects_deprecated_fallback_bundle(monkeypatch):
 
 def test_watching_state_logs_latency_entry_price_guard(monkeypatch):
     from src.utils.constants import TRADING_RULES as CONFIG
+    from src.engine.scalping import mechanistic_entry_runtime_policy
+
+    # This synthetic fixture exercises latency price handling, independent
+    # of the live dated machine bundle installed on the test host.
+    monkeypatch.setattr(
+        mechanistic_entry_runtime_policy, "validate_attempt_generation",
+        lambda *args, **kwargs: {"allowed": True, "reason": "test_generation_current"},
+    )
 
     class FixedDateTime(datetime):
         @classmethod
@@ -22810,6 +22818,14 @@ def test_rising_missed_scout_quality_guard_keeps_independent_ofi_veto(
 def test_pre_submit_liquidity_relief_allows_strong_bundle_submit(
     monkeypatch, broker_order_identity_present
 ):
+    from src.engine.scalping import mechanistic_entry_runtime_policy
+
+    # This test exercises the liquidity relief and broker identity contract;
+    # its synthetic bundle must not depend on today's shared runtime bundle.
+    monkeypatch.setattr(
+        mechanistic_entry_runtime_policy, "validate_attempt_generation",
+        lambda *args, **kwargs: {"allowed": True, "reason": "test_generation_current"},
+    )
     class FixedDateTime(datetime):
         @classmethod
         def now(cls, tz=None):

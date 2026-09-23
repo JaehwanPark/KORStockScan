@@ -42226,7 +42226,10 @@ def _entry_split_probe_first_deferred(fields: dict | None) -> bool:
         and (
             fields.get("entry_split_order_probe_capacity_deferred")
             or fields.get("entry_split_order_skip_reason")
-            == "probe_residual_admission_deferred"
+            in {
+                "probe_residual_admission_deferred",
+                "probe_operating_shape_mismatch_deferred",
+            }
         )
     )
 
@@ -64885,6 +64888,20 @@ def _handle_watching_strategy_branch(
 
 def _observe_entry_submit_finished(stock, code, outcome):
     attempt_fields = submit_attempt_fields(stock, code)
+    delayed = stock.pop("_pre_submit_delay_due", None) if isinstance(stock, dict) else None
+    if isinstance(delayed, dict):
+        broker_accepted = bool(attempt_fields.get("entry_submit_attempt_broker_accepted"))
+        _log_pre_submit_delay_event(
+            stock, code, "pre_submit_delay_intent_terminal",
+            delay_intent_id=delayed["id"], selected_delay_sec=delayed["delay_sec"],
+            committed_at_epoch=delayed["committed_at_epoch"],
+            original_machine_observation_sha256=delayed.get("machine_observation_sha256"),
+            submit_call_outcome=outcome,
+            submit_call_broker_accepted=broker_accepted,
+            actual_order_submitted=broker_accepted,
+            runtime_effect=True,
+            decision_authority="bounded_pre_submit_delay_existing_submit_path",
+        )
     _log_entry_pipeline(
         stock,
         code,
@@ -64908,9 +64925,141 @@ def _observe_entry_submit_finished(stock, code, outcome):
     )
 
 
+def _log_pre_submit_delay_event(stock, code, stage, **fields):
+    """Observation loss cannot interrupt the existing BUY/guard path."""
+    try:
+        _log_entry_pipeline(stock, code, stage, **fields)
+        return True
+    except Exception as exc:
+        try:
+            log_error(f"[PRE_SUBMIT_DELAY_RECEIPT] code={code} stage={stage} error={type(exc).__name__}")
+        except Exception:
+            pass
+        return False
+
+
+def pre_submit_delay_observation_due(stock, *, now_ts=None):
+    state = stock.get("_pre_submit_delay_observation") if isinstance(stock, dict) else None
+    if not isinstance(state, dict):
+        return False
+    targets = state.get("remaining_sec") or []
+    return bool(targets and (now_ts if now_ts is not None else time.time())
+                >= float(state.get("committed_at_epoch") or 0) + float(targets[0]))
+
+
+def expire_untriggered_pre_submit_delay(stock, code, *, now_mono=None, reason="trigger_not_current"):
+    """Close a due intent without ordering if its normal trigger disappeared."""
+    pending = stock.get("_pre_submit_delay_pending") if isinstance(stock, dict) else None
+    if not isinstance(pending, dict) or (now_mono if now_mono is not None else time.monotonic()) < pending["due_monotonic"]:
+        return False
+    stock.pop("_pre_submit_delay_pending", None)
+    stock["_pre_submit_delay_last_terminal_key"] = pending["machine_key"]
+    _log_pre_submit_delay_event(stock, code, "pre_submit_delay_intent_terminal",
+        delay_intent_id=pending["id"], selected_delay_sec=pending["delay_sec"],
+        committed_at_epoch=pending["committed_at_epoch"],
+        terminal_reason=reason, submit_call_broker_accepted=False,
+        actual_order_submitted=False, broker_order_forbidden=True,
+        runtime_effect=True,
+        decision_authority="bounded_pre_submit_delay_existing_submit_path")
+    return True
+
+
+def pre_submit_delay_due_matches(due, policy, machine_fields, decision_type,
+                                 *, quote_route, requested_qty, final_price):
+    """Bound a delayed intent to its original authority and fixed quantity/cap."""
+    if not isinstance(due, dict):
+        return False
+    price = _safe_float(final_price, 0.0)
+    cap = _safe_float(due.get("price_cap"), 0.0)
+    frozen_type = due.get("decision_type") or {}
+    return bool(
+        policy.get("status") == "loaded"
+        and policy.get("delay_sec") == due.get("delay_sec")
+        and policy.get("policy_sha256") == due.get("policy_sha256")
+        and str(machine_fields.get("entry_mechanistic_action") or "").upper() == "ENTER_NOW"
+        and (
+            str(machine_fields.get("evaluation_attempt_id") or ""),
+            str(machine_fields.get("machine_observation_sha256") or ""),
+        ) == due.get("machine_key")
+        and str(machine_fields.get("entry_mechanistic_policy_sha256") or "")
+        == due.get("machine_policy_sha256")
+        and str(machine_fields.get("entry_ai_soft_policy_sha256") or "")
+        == due.get("ai_policy_sha256")
+        and _pre_submit_delay_auxiliary_verdict(machine_fields)
+        == due.get("ai_effective_assessment")
+        and due.get("ai_effective_assessment") in {"PASS", "CAUTION"}
+        and requested_qty == due.get("planned_qty")
+        and 0 < price <= cap
+        and quote_route and quote_route == due.get("route")
+        and decision_type.get("venue") == frozen_type.get("venue")
+        and decision_type.get("session_bucket") == frozen_type.get("session_bucket")
+        and decision_type.get("type_key") == frozen_type.get("type_key")
+    )
+
+
+def _pre_submit_delay_auxiliary_verdict(machine_fields):
+    assessment = machine_fields.get("entry_ai_effective_assessment")
+    if isinstance(assessment, dict):
+        assessment = assessment.get("effective_verdict")
+    return str(assessment or "UNKNOWN").strip().upper()
+
+
+def observe_pre_submit_delay_quote(stock, code, ws_data, *, now_ts=None):
+    """Sample an existing local WS snapshot; this never requests or submits."""
+    state = stock.get("_pre_submit_delay_observation") if isinstance(stock, dict) else None
+    if not isinstance(state, dict):
+        return
+    now = float(now_ts if now_ts is not None else time.time())
+    remaining = state.get("remaining_sec") or []
+    while remaining and now >= float(state["committed_at_epoch"]) + float(remaining[0]):
+        horizon = remaining.pop(0)
+        offset = now - float(state["committed_at_epoch"])
+        ask, bid = _get_best_levels_from_ws(ws_data or {})
+        asks = ((ws_data or {}).get("orderbook") or {}).get("asks") or []
+        first_ask = asks[0] if asks and isinstance(asks[0], dict) else {}
+        ask_qty = _safe_int(first_ask.get("volume") or first_ask.get("qty"), 0)
+        type_ts = (ws_data or {}).get("last_realtime_type_ts") or {}
+        type_ts = type_ts if isinstance(type_ts, dict) else {}
+        depth_epoch = _safe_float(type_ts.get("0D"), 0.0)
+        depth_age = now - depth_epoch if depth_epoch > 0 else None
+        quote_fields, _, _, _ = _build_quote_consistency_fields(ws_data or {}, side="buy", now_ts=now)
+        quote_route = str((ws_data or {}).get("ws_route") or "").strip().upper()
+        intended_route = str(state.get("route") or "").strip().upper()
+        within_window = abs(offset - float(horizon)) <= 3.0
+        source_valid = bool(
+            within_window and quote_route and intended_route and quote_route == intended_route
+            and depth_age is not None and 0 <= depth_age <= 0.7
+            and ask > 0 and bid > 0 and bid <= ask and ask_qty > 0
+            and str(quote_fields.get("quote_consistency_state") or "").lower()
+            not in {"stale", "conflicted", "diverged", "blocked", "missing"}
+            and not _truthy_field(quote_fields.get("quote_consistency_entry_blocked"))
+        )
+        _log_pre_submit_delay_event(stock, code, "pre_submit_delay_quote_observed",
+            delay_intent_id=state["id"], target_delay_sec=horizon,
+            actual_offset_sec=round(offset, 3), ask_price=ask, best_bid=bid,
+            ask_qty=ask_qty, route=intended_route, quote_route=quote_route,
+            quote_valid=source_valid,
+            quote_source_reason=("valid" if source_valid else "horizon_or_route_or_fresh_depth_gap"),
+            quote_consistency_state=quote_fields.get("quote_consistency_state"),
+            quote_consistency_reason=quote_fields.get("quote_consistency_reason"),
+            ws_last_0d_epoch=depth_epoch or None, ws_last_0d_age_sec=depth_age,
+            actual_order_submitted=False, broker_order_forbidden=True,
+            runtime_effect=False, decision_authority="source_only_pre_submit_delay_observation")
+    if not remaining:
+        stock.pop("_pre_submit_delay_observation", None)
+
+
 @probe_submission_scope()
 @observe_submit_attempt(on_finish=_observe_entry_submit_finished)
 def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
+    pending_delay = stock.get("_pre_submit_delay_pending")
+    if isinstance(pending_delay, dict):
+        if time.monotonic() < pending_delay["due_monotonic"]:
+            return False
+        stock["_pre_submit_delay_due"] = stock.pop("_pre_submit_delay_pending")
+        stock["_pre_submit_delay_last_terminal_key"] = pending_delay["machine_key"]
+        if runtime.get("strategy") != "SCALPING":
+            return False
     retired_scout_intent = any(
         _truthy_field(source.get(key))
         for source in (runtime, stock)
@@ -68897,6 +69046,137 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             )
             return False
 
+    if stock.get("_pre_submit_delay_due") and (
+        strategy != "SCALPING" or opening_rotation_active
+        or not planned_orders or requested_qty <= 0
+    ):
+        _log_entry_pipeline(stock, code, "pre_submit_delay_due_recheck_blocked",
+            reason="execution_owner_or_plan_changed",
+            actual_order_submitted=False, broker_order_forbidden=True,
+            runtime_effect=True)
+        return False
+    if strategy == "SCALPING" and not opening_rotation_active and planned_orders and requested_qty > 0:
+        from src.engine.scalping.pre_submit_delay_tuning import (
+            DELAYS_SEC, decision_type_snapshot, load_runtime_policy,
+        )
+        machine_fields = stock.get("last_watching_ai_machine_primary_fields") or {}
+        machine_key = (
+            str(machine_fields.get("evaluation_attempt_id") or ""),
+            str(machine_fields.get("machine_observation_sha256") or ""),
+        )
+        due_delay = stock.get("_pre_submit_delay_due")
+        quote_route = str((ws_data or {}).get("ws_route") or "").strip().upper()
+        type_ask, type_bid = _get_best_levels_from_ws(ws_data or {})
+        decision_type = decision_type_snapshot(
+            price=final_price, ask=type_ask, bid=type_bid,
+            venue=stock.get("effective_venue"),
+            session=stock.get("market_session_bucket"),
+        )
+        delay_policy = load_runtime_policy(
+            decision_type=due_delay["decision_type"] if isinstance(due_delay, dict) else decision_type,
+        )
+        if isinstance(due_delay, dict):
+            if not pre_submit_delay_due_matches(
+                due_delay, delay_policy, machine_fields, decision_type,
+                quote_route=quote_route, requested_qty=requested_qty,
+                final_price=final_price,
+            ):
+                _log_entry_pipeline(stock, code, "pre_submit_delay_due_recheck_blocked",
+                    delay_intent_id=due_delay["id"], reason="frozen_intent_or_policy_changed",
+                    actual_order_submitted=False, broker_order_forbidden=True,
+                    runtime_effect=True)
+                return False
+        elif delay_policy["delay_sec"] > 0:
+            if (not all(machine_key) or not quote_route
+                    or decision_type["venue"] == "UNKNOWN"
+                    or decision_type["session_bucket"] == "UNKNOWN"
+                    or str(machine_fields.get("entry_mechanistic_action") or "").upper() != "ENTER_NOW"
+                    or _pre_submit_delay_auxiliary_verdict(machine_fields) not in {"PASS", "CAUTION"}
+                    or stock.get("_pre_submit_delay_last_terminal_key") == machine_key):
+                _log_entry_pipeline(stock, code, "pre_submit_delay_intent_invalid",
+                    policy_sha256=delay_policy["policy_sha256"],
+                    actual_order_submitted=False, broker_order_forbidden=True,
+                    runtime_effect=True)
+                return False
+            committed_at = time.time()
+            delay_id = uuid4().hex
+            stock["_pre_submit_delay_pending"] = {
+                "id": delay_id, "machine_key": machine_key,
+                "machine_observation_sha256": machine_key[1],
+                "machine_policy_sha256": str(machine_fields.get("entry_mechanistic_policy_sha256") or ""),
+                "ai_policy_sha256": str(machine_fields.get("entry_ai_soft_policy_sha256") or ""),
+                "ai_effective_assessment": _pre_submit_delay_auxiliary_verdict(machine_fields),
+                "committed_at_epoch": committed_at,
+                "due_monotonic": time.monotonic() + delay_policy["delay_sec"],
+                "delay_sec": delay_policy["delay_sec"],
+                "policy_sha256": delay_policy["policy_sha256"],
+                "planned_qty": requested_qty, "price_cap": final_price,
+                "route": quote_route, "decision_type": decision_type,
+            }
+            stock["_pre_submit_delay_observation"] = {
+                "id": delay_id, "committed_at_epoch": committed_at,
+                "remaining_sec": list(DELAYS_SEC), "route": quote_route,
+            }
+            committed_recorded = _log_pre_submit_delay_event(stock, code, "pre_submit_delay_committed",
+                delay_intent_id=delay_id, decision_committed_at_epoch=committed_at,
+                entry_action="ENTER_NOW",
+                auxiliary_effective_action=_pre_submit_delay_auxiliary_verdict(machine_fields),
+                owner="main_scalping", planned_qty=requested_qty,
+                price_cap=final_price, route=quote_route,
+                effective_venue=stock.get("effective_venue"),
+                market_session_bucket=stock.get("market_session_bucket"),
+                delay_decision_type=json.dumps(decision_type, sort_keys=True, separators=(",", ":")),
+                delay_policy_status=delay_policy["status"],
+                delay_policy_sha256=delay_policy["policy_sha256"],
+                actual_order_submitted=False, broker_order_forbidden=True,
+                runtime_effect=False,
+                decision_authority="source_only_pre_submit_delay_observation")
+            armed_recorded = committed_recorded and _log_pre_submit_delay_event(stock, code, "pre_submit_delay_intent_armed",
+                delay_intent_id=delay_id, selected_delay_sec=delay_policy["delay_sec"],
+                policy_sha256=delay_policy["policy_sha256"],
+                original_machine_observation_sha256=machine_key[1],
+                delay_decision_type=json.dumps(decision_type, sort_keys=True, separators=(",", ":")),
+                actual_order_submitted=False, broker_order_forbidden=True,
+                runtime_effect=True,
+                decision_authority="bounded_pre_submit_delay_existing_submit_path")
+            if not armed_recorded:
+                stock.pop("_pre_submit_delay_pending", None)
+                stock.pop("_pre_submit_delay_observation", None)
+                return False
+            try:
+                observe_pre_submit_delay_quote(stock, code, ws_data, now_ts=committed_at)
+            except (KeyError, TypeError, ValueError, AttributeError) as exc:
+                log_error(f"[PRE_SUBMIT_DELAY_OBSERVATION] code={code} error={type(exc).__name__}")
+            return False
+        if (str(machine_fields.get("entry_mechanistic_action") or "").upper() == "ENTER_NOW"
+            and all(machine_key)
+            and not isinstance(due_delay, dict)
+            and stock.get("_pre_submit_delay_commit_key") != machine_key):
+            committed_at = time.time()
+            delay_id = uuid4().hex
+            stock["_pre_submit_delay_commit_key"] = machine_key
+            stock["_pre_submit_delay_observation"] = {
+                "id": delay_id, "committed_at_epoch": committed_at,
+                "remaining_sec": list(DELAYS_SEC), "route": quote_route,
+            }
+            _log_pre_submit_delay_event(stock, code, "pre_submit_delay_committed",
+                delay_intent_id=delay_id, decision_committed_at_epoch=committed_at,
+                entry_action="ENTER_NOW",
+                auxiliary_effective_action=_pre_submit_delay_auxiliary_verdict(machine_fields),
+                owner="main_scalping", planned_qty=requested_qty,
+                price_cap=final_price, route=quote_route,
+                effective_venue=stock.get("effective_venue"),
+                market_session_bucket=stock.get("market_session_bucket"),
+                delay_decision_type=json.dumps(decision_type, sort_keys=True, separators=(",", ":")),
+                delay_policy_status=delay_policy["status"],
+                delay_policy_sha256=delay_policy["policy_sha256"],
+                actual_order_submitted=False, broker_order_forbidden=True,
+                runtime_effect=False, decision_authority="source_only_pre_submit_delay_observation")
+            try:
+                observe_pre_submit_delay_quote(stock, code, ws_data, now_ts=committed_at)
+            except (KeyError, TypeError, ValueError, AttributeError) as exc:
+                log_error(f"[PRE_SUBMIT_DELAY_OBSERVATION] code={code} error={type(exc).__name__}")
+
     entry_execution_sizing_fields = {}
     if strategy == "SCALPING" and not opening_rotation_active:
         from src.engine.scalping.strategy_owner_replay import freeze_entry_operating_context
@@ -69187,7 +69467,12 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     "entry_split_probe_admission_deferred"
                     if entry_split_fields.get("entry_split_order_skip_reason")
                     == "probe_residual_admission_deferred"
-                    else "entry_split_probe_capacity_deferred"
+                    else (
+                        "entry_split_probe_shape_deferred"
+                        if entry_split_fields.get("entry_split_order_skip_reason")
+                        == "probe_operating_shape_mismatch_deferred"
+                        else "entry_split_probe_capacity_deferred"
+                    )
                 )
                 if _entry_split_probe_first_deferred(entry_split_fields)
                 else (
@@ -80951,6 +81236,14 @@ def handle_watching_state(
     if not _handle_watching_strategy_branch(
         stock, code, ws_data, radar, ai_engine, runtime, config
     ):
+        expire_untriggered_pre_submit_delay(
+            stock, code, reason="watching_branch_no_longer_ready"
+        )
+        return
+
+    pending_delay = stock.get("_pre_submit_delay_pending")
+    if (isinstance(pending_delay, dict)
+            and time.monotonic() < pending_delay["due_monotonic"]):
         return
 
     if runtime["is_trigger"]:
@@ -80960,6 +81253,7 @@ def handle_watching_state(
             )
         _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime)
         return
+    expire_untriggered_pre_submit_delay(stock, code)
 
 
 def handle_scanner_async_opening_rotation_commit(

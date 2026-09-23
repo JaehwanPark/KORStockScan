@@ -40,6 +40,81 @@ RISING_MISSED_ENV_BY_AXIS = {
 EXACT_DATE_HANDOFF_ENV = {
     "KORSTOCKSCAN_THRESHOLD_RUNTIME_AUTO_APPLY_ENABLED": "true",
 }
+PRE_SUBMIT_DELAY_ENV_KEYS = (
+    "KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ENABLED",
+    "KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_FILE",
+    "KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ACTIVE_DATE",
+)
+
+
+def _pre_submit_delay_handoff(target_date: str) -> tuple[dict[str, str], dict[str, Any]]:
+    """Bind one exact-date delay policy, including an explicit zero carry."""
+    from src.engine.scalping.pre_submit_delay_tuning import (
+        DELAYS_SEC, _digest, _number, _validated_candidate, report_path,
+    )
+
+    directory = DATA_DIR / "threshold_cycle" / "pre_submit_delay_policy"
+    matches: list[tuple[str, Path, dict[str, Any]]] = []
+    for path in directory.glob("pre_submit_delay_policy_????-??-??.json"):
+        if path.is_symlink() or path.stat().st_size > 1024 * 1024:
+            continue
+        try:
+            policy = _load_json(path)
+        except (OSError, ValueError):
+            continue
+        if policy.get("effective_from") == target_date:
+            matches.append((str(policy.get("source_date") or ""), path, policy))
+    if not matches:
+        return {}, {"status": "not_published", "target_date": target_date}
+    source_date, path, policy = max(matches, key=lambda row: row[0])
+    report_file = report_path(source_date)
+    try:
+        report = _load_json(report_file)
+    except (OSError, ValueError):
+        return {}, {"status": "report_unreadable", "path": str(path)}
+    valid = (
+        policy.get("schema") == "pre_submit_delay_policy_v1"
+        and report.get("schema") == "pre_submit_delay_tuning_v1"
+        and policy.get("source_date") == report.get("source_date") == source_date
+        and report.get("effective_date") == target_date
+        and source_date < target_date
+        and policy.get("expires_on", "") >= target_date
+        and policy.get("policy_sha256")
+        == _digest({key: value for key, value in policy.items() if key != "policy_sha256"})
+        and report.get("policy_sha256") == policy.get("policy_sha256")
+        and policy.get("report_sha256")
+        == _digest({key: value for key, value in report.items() if key != "policy_sha256"})
+    )
+    selected = _number(policy.get("selected_delay_sec"))
+    valid = valid and selected in DELAYS_SEC
+    if selected and selected > 0:
+        valid = bool(valid and _validated_candidate(policy, report))
+    branch_delays = []
+    for family, key_name in (("scope_policies", "scope_key"), ("type_policies", "type_key")):
+        branches = policy.get(family, {})
+        if not isinstance(branches, dict):
+            valid = False
+            continue
+        for key, branch in branches.items():
+            delay_sec = _number(branch.get("selected_delay_sec")) if isinstance(branch, dict) else None
+            branch_delays.append(delay_sec)
+            if (delay_sec not in DELAYS_SEC
+                    or not _validated_candidate(policy, report, **{key_name: key})):
+                valid = False
+    if not valid:
+        return {}, {"status": "binding_invalid", "path": str(path)}
+    return {
+        "KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ENABLED": "true",
+        "KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_FILE": str(path.resolve()),
+        "KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ACTIVE_DATE": target_date,
+    }, {
+        "status": "verified_candidate" if any(value and value > 0 for value in [selected, *branch_delays]) else "verified_zero_carry",
+        "target_date": target_date,
+        "source_date": source_date,
+        "policy_sha256": policy["policy_sha256"],
+        "source_receipt": _file_receipt(path),
+        "report_receipt": _file_receipt(report_file),
+    }
 
 
 def env_path(target_date: str) -> Path:
@@ -583,6 +658,8 @@ def build_manifest(
         for key, value in (incumbent.get("env_overrides") or {}).items()
     }
     values = without_retired_env(incumbent_values)
+    for key in PRE_SUBMIT_DELAY_ENV_KEYS:
+        values.pop(key, None)
     # These are bootstrap-consumption coordinates, not tuning values.  Refresh
     # them for the manifest's exact date instead of inheriting a stale source
     # date.  The operator layer is applied afterwards and therefore retains
@@ -594,6 +671,7 @@ def build_manifest(
     direct_receipts, rejected_receipts = _load_direct_receipts(
         target_date, receipt_paths
     )
+    delay_env, delay_handoff = _pre_submit_delay_handoff(target_date)
     locks, invalid_locks = _load_locks(target_date)
     applied_locks: list[dict[str, Any]] = []
     rejected_locks: list[dict[str, Any]] = list(invalid_locks)
@@ -609,6 +687,10 @@ def build_manifest(
         for key, value in receipt.get("runtime_env_overrides", {}).items():
             values[key] = str(value)
             env_owners[key] = f"direct_policy:{receipt['family']}"
+    for key, value in delay_env.items():
+        if key not in operator_values:
+            values[key] = value
+            env_owners[key] = "pre_submit_delay_exact_date_policy"
     for lock in locks:
         classification = operator_policy_succession.classify(lock)
         row = {
@@ -684,6 +766,7 @@ def build_manifest(
         "operator_locks_rejected": rejected_locks,
         "operator_override_sources": operator_sources,
         "direct_family_receipts": direct_receipts,
+        "pre_submit_delay_handoff": delay_handoff,
         "direct_family_receipts_rejected": rejected_receipts,
         "env_key_owners": env_owners,
         "env_overrides": dict(sorted(values.items())),
@@ -778,6 +861,13 @@ def verify_bootstrap(target_date: str, *, pid: int | None = None, write: bool = 
     if not isinstance(manifest_env, dict):
         findings.append("manifest_env_overrides_invalid")
         manifest_env = {}
+    if target_date >= "2026-09-23":
+        current_delay_env, current_delay_handoff = _pre_submit_delay_handoff(target_date)
+        if manifest.get("pre_submit_delay_handoff") != current_delay_handoff:
+            findings.append("pre_submit_delay_generation_changed")
+        for key, value in current_delay_env.items():
+            if (manifest.get("env_key_owners") or {}).get(key) == "pre_submit_delay_exact_date_policy" and manifest_env.get(key) != value:
+                findings.append(f"pre_submit_delay_env_mismatch:{key}")
     if (
         str(
             manifest_env.get(

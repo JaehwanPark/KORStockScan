@@ -28,6 +28,7 @@ PRIMARY_DIRECT_OWNERS = (
     "source_quality",
     "entry_cancel_wait",
     "entry_split",
+    "pre_submit_delay",
     "scale_in_split",
     "machine_entry",
     "low_price_two_leg",
@@ -42,6 +43,7 @@ REQUIRED_DIRECT_OWNERS = frozenset(PRIMARY_DIRECT_OWNERS)
 PRODUCER_FLAG_BY_OWNER = {
     "source_quality": "observation_source_quality_audit",
     "entry_split": "entry_split_order_plan",
+    "pre_submit_delay": "pre_submit_delay_tuning",
     "scale_in_split": "scale_in_split_order_plan",
     "machine_entry": "samsung_machine_entry_tuning",
     "low_price_two_leg": "low_price_two_leg_tuning",
@@ -55,6 +57,7 @@ PRODUCER_FLAG_BY_OWNER = {
 POLICY_OWNER_BY_SOURCE = {
     "entry_cancel_wait": "entry_cancel_wait_policy",
     "entry_split": "entry_split_policy",
+    "pre_submit_delay": "pre_submit_delay_policy",
     "scale_in_split": "scale_in_split_policy",
     "machine_entry": "machine_entry_candidate",
     "low_price_two_leg": "low_price_candidate",
@@ -68,6 +71,7 @@ DEFAULT_CLOSURE_OWNER = {
     "source_quality": "observation_source_quality_audit",
     "entry_cancel_wait": "entry_cancel_wait_tuning",
     "entry_split": "entry_split_order_plan",
+    "pre_submit_delay": "pre_submit_delay_tuning",
     "scale_in_split": "scale_in_split_order_plan",
     "machine_entry": "samsung_machine_entry_tuning",
     "low_price_two_leg": "low_price_two_leg_tuning",
@@ -126,6 +130,8 @@ def _paths(target_date: str) -> dict[str, Path]:
         "entry_cancel_wait_policy": report / "entry_cancel_wait_tuning" / f"entry_cancel_wait_policy_{target_date}.json",
         "entry_split": report / "entry_split_order_plan" / f"entry_split_order_plan_{target_date}.json",
         "entry_split_policy": threshold / "entry_split_order_policy" / f"entry_split_order_policy_{target_date}.json",
+        "pre_submit_delay": report / "pre_submit_delay_tuning" / f"pre_submit_delay_tuning_{target_date}.json",
+        "pre_submit_delay_policy": threshold / "pre_submit_delay_policy" / f"pre_submit_delay_policy_{target_date}.json",
         "scale_in_split": report / "scale_in_split_order_plan" / f"scale_in_split_order_plan_{target_date}.json",
         "scale_in_split_policy": threshold / "scale_in_split_order_policy" / f"scale_in_split_order_policy_{target_date}.json",
         "machine_entry": report / "samsung_machine_entry_tuning" / f"samsung_machine_entry_tuning_{target_date}.json",
@@ -246,6 +252,9 @@ def _owner_requirements(target_date: str) -> tuple[dict[str, bool], dict[str, An
     missing_flags: list[str] = []
     for owner in PRIMARY_DIRECT_OWNERS:
         flag = PRODUCER_FLAG_BY_OWNER.get(owner)
+        if owner == "pre_submit_delay" and target_date < "2026-09-23":
+            required[owner] = False
+            continue
         if flag is not None and flag not in flags:
             missing_flags.append(flag)
         required[owner] = True if flag is None else _flag_enabled(flags.get(flag), True)
@@ -971,6 +980,20 @@ def build_runtime_approval_summary(
                 == source_payload.get("artifact_content_sha256")
                 and policy_payload.get("compact_evaluation_fingerprint")
                 == source_payload.get("evaluation_fingerprint")
+            )
+        if owner == "pre_submit_delay" and policy_receipt_valid:
+            from src.engine.scalping.pre_submit_delay_tuning import _digest
+            policy_payload = _load_json(Path(str(policy.get("path") or "")))
+            source_payload = _load_json(Path(str(row.get("path") or "")))
+            policy_receipt_valid = bool(
+                policy_payload.get("schema") == "pre_submit_delay_policy_v1"
+                and source_payload.get("schema") == "pre_submit_delay_tuning_v1"
+                and policy_payload.get("policy_sha256")
+                == _digest({k: v for k, v in policy_payload.items() if k != "policy_sha256"})
+                and policy_payload.get("report_sha256")
+                == _digest({k: v for k, v in source_payload.items() if k != "policy_sha256"})
+                and source_payload.get("policy_sha256") == policy_payload.get("policy_sha256")
+                and policy_payload.get("source_date") == target_date
             )
         if owner == "main_mechanistic_entry" and policy_receipt_valid:
             from src.engine.scalping import mechanistic_entry_runtime_policy as machine_policy

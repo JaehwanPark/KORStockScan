@@ -13938,6 +13938,19 @@ def run_sniper(is_test_mode=False):
                 runtime_processed_target_ids.add(id(stock))
                 code = str(stock.get("code", "")).strip()[:6]
                 status = stock.get("status")
+                if sniper_state_handlers.pre_submit_delay_observation_due(
+                    stock, now_ts=time.time()
+                ):
+                    try:
+                        delay_ws = WS_MANAGER.get_latest_data(code) if WS_MANAGER else {}
+                        sniper_state_handlers.observe_pre_submit_delay_quote(
+                            stock, code, delay_ws or {}, now_ts=time.time()
+                        )
+                    except Exception as exc:
+                        log_error(
+                            f"[PRE_SUBMIT_DELAY_OBSERVATION] source-only code={code} "
+                            f"error={type(exc).__name__}"
+                        )
 
                 if (
                     scanner_precheck_seen

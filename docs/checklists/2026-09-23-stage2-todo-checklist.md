@@ -81,6 +81,11 @@
   - 완료 기준: closure_owner=`entry_split_order_plan`, closure_test=`same frozen submitted-order scope; independent completed-cost model calibration/holdout followed by complete paired candidate calibration/holdout`. policy_receipt_valid=`True`, source_date=`2026-09-22`의 원천·비용 EV·정책·consumer 날짜와 해시를 다시 대조한다.
   - 권한 경계: null을 0/no-edge로 바꾸거나 threshold·provider·주문·수량·cap·custody·operator lock·hard safety를 우회하지 않는다.
 
+- [ ] `[DirectFamilySourceRepairPreSubmitDelay] 최초 BUY 제출 전 지연의 독립 평가·정책·소비 계약 구현` (`Due: 2026-09-23`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~21:40`, `Track: RuntimeStability`)
+  - Source: [메인 진입 실행 장후 EV 평가·장중 정책 소비 구현계획](../proposals/main-entry-downstream-postclose-profitability-closure-plan-2026-09-23.md).
+  - 완료 기준: `pre_submit_delay_tuning`이 기존 raw pipeline·BBO/0D·분봉 원천을 우선 재사용하여 분할 정책과 별도 exact cohort·동일 분모 0/30/60/120/180초 비용 후 EV·시간순 holdout 또는 시점/경로별 정확한 source gap을 내고, 진입 의도 시점에 동결한 venue/session·가격 호가단위·유동성·변동성 유형의 지원 가능한 leaf와 parent fallback을 별도로 보고한다. 독립 dated `pre_submit_delay_policy`와 loader·비차단 intent·실제 PID 소비를 날짜/hash로 검증한다. 분할 정책 파일·후보·승격 상태는 변경하지 않으며 독립 stage/terminal과 장후 실행시간을 확인한다.
+  - 권한 경계: 기계/AI 진입 판정·분할 형태·cancel wait·원 수량을 변경하지 않는다. fresh AI/quote/route·가격 상한·broker/account/order/cooldown·hard safety를 우회하거나 EV null을 0으로 바꾸지 않는다.
+
 - [ ] `[DirectFamilySourceRepairLowPriceTwoLeg] low_price_two_leg 직접 family 원천·경제성 계약 수리` (`Due: 2026-09-23`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~21:40`, `Track: RuntimeStability`)
   - Source: [runtime_approval_summary_2026-09-22.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-09-22.json)
   - 증거: runtime_summary_sha256=`993d46a23ae3ab7f48515b306ce1db314c1d54547ff29e95b3f09cc1855567a6`, source_artifact=`/home/ubuntu/KORStockScan/data/report/low_price_two_leg_tuning/low_price_two_leg_tuning_2026-09-22.json`.

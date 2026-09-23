@@ -1208,6 +1208,51 @@ def test_allocator_applies_child_shape_seed_only_for_exact_observed_shape(
     assert orders[0]["qty"] == 1
 
 
+def test_operating_shape_mismatch_cannot_submit_full_order_when_probe_required(
+    monkeypatch,
+):
+    template = {
+        "leg_count": 2,
+        "price_offsets_ticks": [0, 1],
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+    }
+    policy = {
+        "source_date": "2026-09-23",
+        "policy_version": "operating-shape-test",
+        "buckets": {
+            "balanced_normal": {
+                "leg_count": 2,
+                "price_offsets_ticks": [0, 1],
+                "qty_weight_min": 0.5,
+                "operating_template": template,
+                "operating_scope_sha256": "test-scope",
+                "supported_total_quantities": [4],
+            }
+        },
+    }
+    monkeypatch.setattr(split_plan, "_load_policy_from_env", lambda *a, **k: (policy, "loaded"))
+    monkeypatch.setattr(split_plan, "_context_bucket", lambda fields: "balanced_normal")
+    monkeypatch.setattr(split_plan, "_entry_operating_scope", lambda fields: "test-scope")
+    monkeypatch.setattr(split_plan, "_market_first_leg_active", lambda **k: False)
+    monkeypatch.setattr(split_plan, "_probe_runtime_config", lambda **k: {"enabled": True, "timeout_sec": 3})
+    monkeypatch.setattr(split_plan, "_probe_first_eligible", lambda *a: (True, "ready"))
+
+    orders, fields = split_plan.apply_entry_split_order_policy(
+        [{"tag": "normal", "qty": 4, "price": 1000}],
+        stock={"code": "005930", "strategy": "SCALPING", "effective_venue": "KRX", "market_session_bucket": "KRX_REGULAR"},
+        latency_gate={"latency_state": "SAFE", "best_bid": 999},
+        operating_context={"scope": "test"},
+        now=datetime(2026, 9, 23, 9, 30, tzinfo=timezone(timedelta(hours=9))),
+    )
+
+    assert orders == []
+    assert fields["entry_split_order_skip_reason"] == "probe_operating_shape_mismatch_deferred"
+    assert fields["entry_split_order_probe_first_required"] is True
+    assert fields["actual_order_submitted"] is False
+    assert fields["broker_order_forbidden"] is True
+
+
 def test_runtime_loader_rejects_preopen_policy_version_mismatch(monkeypatch, tmp_path):
     _patch_dirs(monkeypatch, tmp_path)
     target_date = datetime.now(timezone(timedelta(hours=9))).date().isoformat()
@@ -4181,6 +4226,44 @@ def test_allocator_keeps_original_order_when_scoped_policy_omits_bucket(
     assert fields["entry_split_order_skip_reason"] == "policy_bucket_not_selected"
 
 
+def test_allocator_selects_price_tick_type_then_legacy_state_parent(monkeypatch, tmp_path):
+    policy_file = tmp_path / "entry-policy-types.json"
+    policy_file.write_text(json.dumps({
+        "schema_version": "entry_split_order_policy_v1",
+        "policy_version": "type-leaf-and-parent",
+        "source_date": "2026-09-23",
+        "runtime_apply_allowed": True,
+        "runtime_apply_compatibility_semantics": split_plan.RUNTIME_APPLY_COMPATIBILITY_SEMANTICS,
+        "exploration_seed_allowed": True,
+        "ev_validated_runtime_apply_allowed": False,
+        "runtime_apply_authority_classes": ["bounded_exploration_seed"],
+        "baseline_runtime_defaults_enabled": False,
+        "missing_bucket_action": "keep_original_order",
+        "explicit_bucket_count": 2,
+        "buckets": {
+            "balanced_normal|GE_10BP": {"leg_count": 1, "price_offsets_ticks": [0], "qty_weight_min": 1.0},
+            "balanced_normal": {"leg_count": 2, "price_offsets_ticks": [0, 1], "qty_weight_min": 0.5},
+        },
+    }), encoding="utf-8")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE", str(policy_file))
+    # This test isolates the runtime selector. Generation binding is covered
+    # by the report/policy contract tests and needs a full signed report.
+    monkeypatch.setattr(split_plan, "_load_policy_from_env",
+                        lambda *a, **kw: (json.loads(policy_file.read_text()), "loaded"))
+    now = datetime(2026, 9, 24, 9, 3, tzinfo=timezone(timedelta(hours=9)))
+    gate = {"spread_bps": 18, "buy_pressure_10t": 55, "latency_state": "SAFE"}
+    stock = {"code": "005930", "id": 1, "strategy": "SCALPING"}
+    _, leaf = split_plan.apply_entry_split_order_policy(
+        [{"qty": 4, "price": 1000}], stock=stock, latency_gate=gate, now=now)
+    _, parent = split_plan.apply_entry_split_order_policy(
+        [{"qty": 4, "price": 1564}], stock=stock, latency_gate=gate, now=now)
+    assert leaf["entry_split_order_bucket"] == "balanced_normal|GE_10BP"
+    assert leaf["entry_split_order_skip_reason"] == "single_leg_policy"
+    assert parent["entry_split_order_bucket"] == "balanced_normal"
+    assert parent["entry_split_order_policy_applied"] is True
+
+
 def test_allocator_daily_contract_does_not_authorize_stale_standard_policy(
     monkeypatch, tmp_path
 ):
@@ -4861,7 +4944,8 @@ def _operating_economic_fixture():
                     cost_provenance=context['cost_provenance'],exit_policy_sha256=context['exit_policy_version'],contract_sha256=context['sha256'],terminal_evidence_sha256='9'*64);arm.pop('sha256');arm['sha256']=split_plan._canonical_sha256(arm)
             row=dict(attempt_id=f'candidate-{day}-{n}',episode_id=f'candidate-episode-{day}-{n}',
                 scope_sha256=scope,source_date=day,total_qty=10,budget_krw=100000.,arms=arms,
-                context_bucket='balanced_normal',candidate_template=template,origin='counterfactual',owner='main_scalping',seed=seed)
+                context_bucket=split_plan._execution_type_bucket('balanced_normal', 1000),
+                candidate_template=template,origin='counterfactual',owner='main_scalping',seed=seed)
             row['sha256']=split_plan._canonical_sha256(row);rows.append(row)
     return rows,models,{'2026-09-08':10,'2026-09-09':10,'2026-09-10':15,'2026-09-11':15}
 

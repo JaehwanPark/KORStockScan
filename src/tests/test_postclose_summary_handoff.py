@@ -801,6 +801,8 @@ def test_summary_receipt_does_not_hash_itself(stage_environment):
     assert h.stage_path(report, day, 'machine_attribution') in paths.values()
     assert h.stage_path(report, day, 'summary_handoff') not in paths.values()
     assert h.stage_artifacts(report, day, 'summary_handoff')['postclose_done_controller'] not in paths.values()
+    assert 'stage_pre_submit_delay' not in paths
+    assert 'pre_submit_delay' not in h.stage_overview(report, day)['stages']
 
 
 @pytest.mark.parametrize('status', ['pending', 'running', 'deferred'])

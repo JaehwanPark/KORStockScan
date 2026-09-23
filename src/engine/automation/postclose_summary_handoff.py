@@ -155,7 +155,7 @@ def source_paths(report_dir: Path, target_date: str, consumer: str) -> dict[str,
         paths = {"runtime_approval_summary": summary_path}
         if any(stage_path(report_dir, target_date, s).exists() for s in STAGE_REGISTRY):
             paths.update({f'stage_{stage}':stage_path(report_dir, target_date, stage)
-                for stage in STAGE_REGISTRY if stage != 'summary_handoff'})
+                for stage in active_stage_names(target_date) if stage != 'summary_handoff'})
             return paths
         for owner in ("widget", "machine"):
             path = producer_receipt_path(report_dir, target_date, owner)
@@ -719,6 +719,7 @@ STAGE_SCHEMA = 'postclose_stage_terminal_v2'
 FAMILY_ARTIFACT_MAX_BYTES = 64 * 1024 * 1024
 STAGE_REGISTRY = {
     'main_machine_policy': ((), ('machine_policy', 'machine_policy_terminal')),
+    'pre_submit_delay': ((), ('pre_submit_delay_tuning', 'pre_submit_delay_policy')),
     'main_auxiliary_policy': (('outcome_labels',), ('compact_auxiliary_paired_economic',)),
     'legacy_machine_report': ((), ('ai_decision_action_outcome_calibration',)),
     'outcome_labels': ((), ('ai_decision_outcome_labels',)),
@@ -733,6 +734,12 @@ STAGE_REGISTRY = {
     'legacy_policy_approval': (('machine_attribution',), ('machine_microstructure_policy_approval',)),
     'summary_handoff': ((), ('postclose_done_controller',)),
 }
+
+
+def active_stage_names(day):
+    """A new mandatory family must not retroactively invalidate old dates."""
+    return tuple(stage for stage in STAGE_REGISTRY
+                 if stage != 'pre_submit_delay' or day >= '2026-09-23')
 STAGE_OWNER_GROUPS = {
     'widget': ('widget_policy',),
     'machine': ('collector_recommendation', 'machine_attribution', 'machine_timing',
@@ -754,6 +761,8 @@ def stage_artifacts(report_dir, day, stage):
         folder = 'ai_entry_setup_paired_replay_batch' if label.startswith('compact') else 'ai_decision_action_outcome_calibration'
         paths[label] = Path(report_dir) / folder / f'{label}_{day}.json'
     paths['research_native_capacity'] = Path(report_dir).parent / 'runtime' / 'machine_research_closed_loop' / f'capacity_source_{day}.json'
+    paths['pre_submit_delay_tuning'] = Path(report_dir) / 'pre_submit_delay_tuning' / f'pre_submit_delay_tuning_{day}.json'
+    paths['pre_submit_delay_policy'] = Path(report_dir).parent / 'threshold_cycle' / 'pre_submit_delay_policy' / f'pre_submit_delay_policy_{day}.json'
     paths['widget_policy_refresh'] = Path(report_dir) / 'machine_research_closed_loop' / f'widget_policy_refresh_{day}.json'
     paths['episode_policy_refresh'] = Path(report_dir) / 'machine_research_closed_loop' / f'episode_policy_refresh_{day}.json'
     return {name: paths.get(name, Path(report_dir) / name / f'{name}_{day}.json') for name in STAGE_REGISTRY[stage][1]}
@@ -819,6 +828,8 @@ def stage_receipt_issues(report_dir, day, stage, *, code_hash=None):
 
 def stage_input_paths(report_dir, day, stage):
     paths = {s:stage_path(report_dir, day, s) for s in STAGE_REGISTRY[stage][0]}
+    if stage == 'pre_submit_delay':
+        paths['pipeline_summary_manifest'] = Path(report_dir).parent / 'pipeline_event_summaries' / f'pipeline_event_producer_summary_manifest_{day}.json'
     if stage == 'widget_policy':
         paths['eod_status'] = Path(report_dir).parent / 'runtime' / 'update_kospi_status' / f'update_kospi_{day}.json'
     if stage in {'collector_recommendation', 'outcome_labels'}:
@@ -867,6 +878,19 @@ def _stage_output_issues(report_dir, day, stage):
         if (terminal.get('report_sha256') != report.get('artifact_content_sha256')
             or terminal.get('policy_sha256') != report.get('policy_sha256')):
             errors.append(f'{stage}:report_terminal_binding_invalid')
+    if stage == 'pre_submit_delay':
+        from src.engine.scalping.pre_submit_delay_tuning import _digest
+        paths = stage_artifacts(report_dir, day, stage)
+        report = _load_json(paths['pre_submit_delay_tuning'])
+        policy = _load_json(paths['pre_submit_delay_policy'])
+        if (report.get('schema') != 'pre_submit_delay_tuning_v1'
+            or policy.get('schema') != 'pre_submit_delay_policy_v1'
+            or report.get('source_date') != day or policy.get('source_date') != day
+            or report.get('effective_date') != policy.get('effective_from')
+            or report.get('policy_sha256') != policy.get('policy_sha256')
+            or policy.get('report_sha256') != _digest({k:v for k,v in report.items() if k != 'policy_sha256'})
+            or policy.get('policy_sha256') != _digest({k:v for k,v in policy.items() if k != 'policy_sha256'})):
+            errors.append(f'{stage}:report_policy_binding_invalid')
     return errors
 
 
@@ -903,6 +927,8 @@ def stage_commands(stage, day, publication, *, recovery=False):
         return []
     if stage == 'main_machine_policy':
         return [command('scalping.ai_action_outcome_calibration', *date_args, '--machine-policy-only', '--activate-now')]
+    if stage == 'pre_submit_delay':
+        return [command('scalping.pre_submit_delay_tuning', '--date', day, '--effective-date', _next_krx_trading_day(publication))]
     if stage == 'legacy_machine_report':
         return [command('scalping.ai_action_outcome_calibration', *date_args, '--machine-only', '--publication-date', publication, '--require-policy-publication')]
     if stage == 'main_auxiliary_policy':
@@ -1106,7 +1132,7 @@ def run_stage(stage, day, *, report_dir, project, publication=None, effective=No
 
 
 def stage_overview(report_dir, day):
-    states = {s:_load_json(stage_path(report_dir, day, s)) for s in STAGE_REGISTRY}
+    states = {s:_load_json(stage_path(report_dir, day, s)) for s in active_stage_names(day)}
     issues = {s:stage_receipt_issues(report_dir, day, s) for s in states if s != 'summary_handoff'}
     # Startup evidence has its own date and contract, independent of diagnostics.
     from src.engine.build_next_stage2_checklist import _next_krx_trading_day
@@ -1169,7 +1195,9 @@ def _stage_main(argv):
     if args.stage == 'wait':
         import time
         deadline = time.monotonic() + args.timeout_sec
-        required = ('main_machine_policy', 'main_auxiliary_policy', 'legacy_machine_report', 'episode_policy', 'outcome_labels')
+        required = tuple(stage for stage in ('main_machine_policy', 'main_auxiliary_policy',
+            'legacy_machine_report', 'episode_policy', 'outcome_labels', 'pre_submit_delay')
+            if stage in active_stage_names(day))
         while any(_load_json(stage_path(DATA_DIR / 'report', day, s)).get('status', 'pending') in {'pending','running'} for s in required):
             if time.monotonic() >= deadline: return 75
             if stop_event.is_set(): return 75

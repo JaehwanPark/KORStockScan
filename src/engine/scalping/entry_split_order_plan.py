@@ -2501,6 +2501,20 @@ def _context_bucket(fields: dict[str, Any]) -> str:
     return "balanced_normal"
 
 
+def _price_tick_band(price: Any) -> str:
+    value = _safe_float(price, None)
+    if value is None or value <= 0:
+        return "UNKNOWN"
+    tick_pct = get_tick_size(value) / value * 100.0
+    return "LT_5BP" if tick_pct < .05 else "5_TO_10BP" if tick_pct < .10 else "GE_10BP"
+
+
+def _execution_type_bucket(base_bucket: str, price: Any) -> str:
+    """One bounded stock-type leaf; legacy state buckets remain the parent."""
+    band = _price_tick_band(price)
+    return f"{base_bucket}|{band}" if band != "UNKNOWN" else base_bucket
+
+
 def _template_for_bucket(bucket: str) -> dict[str, Any]:
     templates = {
         "urgent_tight_spread": {
@@ -4549,7 +4563,8 @@ def evaluate_entry_split_operating_economics(rows, model_rows, source_counts, *,
                     continue
                 declared_template=_entry_operating_input_rows([dict(seed=r.get("seed") or {},operating_arms=r["arms"])])
                 valid=bool(declared_template and declared_template[0]["candidate_template"]==r["candidate_template"]
-                    and declared_template[0]["scope_sha256"]==scope and declared_template[0]["budget_krw"]==r["budget_krw"])
+                    and declared_template[0]["scope_sha256"]==scope and declared_template[0]["budget_krw"]==r["budget_krw"]
+                    and declared_template[0]["context_bucket"]==r["context_bucket"])
                 for arm in r["arms"].values():
                     if (arm.get("status")!="completed_source_only" or arm.get("actual_fill_evidence") is not False
                         or arm.get("requested_qty")!=r.get("total_qty") or arm.get("budget_krw")!=r["budget_krw"]
@@ -4747,9 +4762,12 @@ def _entry_operating_input_rows(replays):
             candidate_leg_policy_version=seed["candidate_leg_policy_version"],
             effective_venue=seed["effective_venue"],session_bucket=seed["session_bucket"],
             order_types=[x.get("order_type_code") for x in legs])
+        base_bucket=context.get("context_bucket") or _context_bucket((context.get("initial_policy_state") or {}).get("stock") or {})
+        type_bucket=_execution_type_bucket(base_bucket, base)
         row=dict(attempt_id=seed["seed_sha256"],episode_id=seed["plan_sha256"],
             plan_sha256=seed["plan_sha256"],source_date=seed["source_date"],scope_sha256=_entry_operating_scope(seed),
-            context_bucket=context.get("context_bucket") or _context_bucket((context.get("initial_policy_state") or {}).get("stock") or {}),
+            context_bucket=type_bucket,base_context_bucket=base_bucket,
+            price_tick_band=_price_tick_band(base),
             total_qty=seed["total_qty"],budget_krw=context["budget_krw"],arms=arms,
             candidate_template=template,origin="counterfactual",owner="main_scalping",
             seed=_compact_operating_seed(seed),native_replay_sha256=replay.get("replay_sha256"))
@@ -4941,7 +4959,8 @@ def _operating_policy(target_date,report_json,economics):
     policy=_policy_payload(target_date,report_json,grid)
     for item in grid:
         bucket=policy["buckets"][item["context_bucket"]]
-        bucket.update(supported_total_quantities=sorted({r["total_qty"] for r in economics["input_rows"] if r["scope_sha256"]==item["operating_scope_sha256"]}),
+        bucket.update(supported_total_quantities=sorted({r["total_qty"] for r in economics["input_rows"]
+            if r["scope_sha256"]==item["operating_scope_sha256"] and r["context_bucket"]==item["context_bucket"]}),
             operating_scope_sha256=item["operating_scope_sha256"],
             operating_selection_sha256=item["operating_selection_sha256"],operating_template={key:item[key] for key in
                 ("effective_venue","session_bucket","order_types","leg_count","price_offsets_ticks","qty_weight_min","qty_weight_max")})
@@ -6982,7 +7001,9 @@ def apply_entry_split_order_policy(
         policy_stale and stale_policy_authorized
     )
     context_fields = {**stock, **latency_gate}
-    bucket = _context_bucket(context_fields)
+    base_bucket = _context_bucket(context_fields)
+    type_bucket = _execution_type_bucket(base_bucket, orders[0].get("price") if orders else None)
+    bucket = type_bucket if type_bucket in (policy.get("buckets") or {}) else base_bucket
     bucket_policy = (policy.get("buckets") or {}).get(bucket)
     fallback_policy_applied = False
     if not isinstance(bucket_policy, dict):
@@ -7105,6 +7126,15 @@ def apply_entry_split_order_policy(
     if operating_template and (market_first_leg_active or probe_config["enabled"] or runtime_weight_adjusted
             or desired_legs != operating_template["leg_count"] or applied_offsets != operating_template["price_offsets_ticks"]):
         fields["entry_split_order_operating_shape_mismatch"] = dict(market_first=market_first_leg_active,probe=probe_config["enabled"],weight_adjusted=runtime_weight_adjusted,weight=first_weight,legs=desired_legs,offsets=applied_offsets)
+        if probe_config["enabled"] and probe_eligible:
+            fields.update(
+                entry_split_order_skip_reason="probe_operating_shape_mismatch_deferred",
+                entry_split_order_probe_first_required=True,
+                entry_split_order_runtime_effect=False,
+                actual_order_submitted=False,
+                broker_order_forbidden=True,
+            )
+            return [], fields
         fields["entry_split_order_skip_reason"] = "operating_verified_shape_changed_by_runtime_guard"
         return orders, fields
     if not shape_gate_passed:
