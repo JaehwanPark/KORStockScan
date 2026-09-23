@@ -839,6 +839,7 @@ def evaluate(report, state, now):
             "enter_now_observed_attempts": sum(bool(r.get("enter_now_observed")) for r in rows),
             "enter_now_observed_conflicting_attempts": sum(bool(r.get("enter_now_observed")) and bool(r["conflict_reasons"]) for r in rows),
             "enter_now": len(entered), "veto": len(veto), "accepted_attempts": len(accepted),
+            "machine_action_counts": dict(Counter(r["mechanistic_action"] for r in valid)),
             "unresolved_attempts": len(gaps), "economic_producer_gaps": len(economic_gaps),
             "nonentry_capacity_observation_gaps": len(observation_gaps),
             "nonentry_downstream_observation_gaps": sum(_nonentry_downstream_gap(r) for r in rows),
@@ -868,7 +869,13 @@ def evaluate(report, state, now):
                     "count": len(ids), "notified_status": old.get("notified_status"),
                     "examples": [{k: r.get(k) for k in ("stock_code", "evaluation_key", "mechanistic_action", "final_state", "conflict_reasons", "auxiliary_ai_semantics", "source_invalid_decomposition", "economic_source")} for r in bad[:3]],
                     "owner": (bad[0].get("economic_source") or {}).get("owner") if rule == "economic_producer_gap" else "buy_funnel_sentinel.machine_primary_entry_funnel",
-                    "closure_test": "same attempt publishes valid frozen economic proof" if rule == "economic_producer_gap" else "same attempt receives a consistent terminal; ratios recover on new valid promotions"}
+                    "closure_test": (
+                        "same attempt publishes valid frozen economic proof"
+                        if rule == "economic_producer_gap" else
+                        "new conflict-free ENTER_NOW promotion in the same scope; order submission is tracked separately"
+                        if rule == "enter_now_scarcity" else
+                        "same attempt receives a consistent terminal; ratios recover on new valid promotions"
+                    )}
                 if old.get("history"):
                     item["history"] = old["history"]
                 if old.get("status") == "observation_only_unresolved":
@@ -895,6 +902,12 @@ def evaluate(report, state, now):
                          if rule == "economic_producer_gap" else not r["conflict_reasons"]
                          and r["final_state"] in {"submit_pipeline_reached", "final_guard_blocked", "broker_rejected"})}
                 healthy = bool(old_ids and old.get("count") == len(old_ids) and old_ids <= resolved) if category == "structural_evidence" else bool(accepted and any(r["evaluation_key"] not in old_ids for r in accepted))
+                if rule == "enter_now_scarcity":
+                    healthy = any(
+                        r["mechanistic_action"] == "ENTER_NOW"
+                        and not r["conflict_reasons"]
+                        for r in rows
+                    )
                 if healthy:
                     incidents[key] = {**old, "status": "recovered", "last_seen": now.isoformat()}
             elif old and old.get("status") == "pending":
@@ -1014,6 +1027,17 @@ def notify(result, path, send=None):
                 f'누락 필드: {", ".join(sample.get("missing_fields") or []) or "미확인(구형 이력)"}\n'
                 f'대표 발생시각: {sample.get("occurred_at") or "미확인(구형 이력)"}')
             continue
+        if item["rule"] == "enter_now_scarcity":
+            stats = result.get("scopes", {}).get(item["scope"], {})
+            actions = stats.get("machine_action_counts", {})
+            messages.append(
+                f'{item["status"]}: 기계판정 ENTER_NOW 희소 / {item["scope"]}\n'
+                f'유효 승격 {stats.get("valid_promotions", "미확인")}건 / '
+                f'BLOCK {actions.get("BLOCK", 0)} / RECHECK {actions.get("RECHECK", 0)} / '
+                f'ENTER_NOW {actions.get("ENTER_NOW", 0)}\n'
+                "판정 경로 검토 신호이며 주문 제출 실패·미체결 증거가 아닙니다."
+            )
+            continue
         example = (item.get("examples") or [{}])[0]
         cause = ((example.get("economic_source") or {}).get("blocker")
                  if item["rule"] == "economic_producer_gap" else
@@ -1033,11 +1057,24 @@ def notify(result, path, send=None):
             cause_text += "보고서의 후보 부족·source gap 자체는 오류나 EV 0으로 판정하지 않습니다.\n"
         messages.append(cause_text + f'{item["status"]}: {item["rule"]}\n{item["scope"]}\n근거 {item["count"]}건 / {item["category"]}\n' +
                         json.dumps(item.get("examples", [])[:1], ensure_ascii=False)[:350])
-    actionable = any(_notification_kind(result["incidents"][key], result) == "active" for key in keys[:4])
-    title = "제출병목 점검" if actionable else "제출병목 정상 확인"
+    active_keys = [key for key in keys[:4]
+                   if _notification_kind(result["incidents"][key], result) == "active"]
+    actionable = bool(active_keys)
+    has_structural = any(result["incidents"][key].get("category") == "structural_evidence"
+                         for key in active_keys)
+    active_rules = {result["incidents"][key].get("rule") for key in active_keys}
+    if not actionable:
+        title = "제출병목 정상 확인"
+    elif not has_structural and active_rules == {"enter_now_scarcity"}:
+        title = "기계판정 검토"
+    elif not has_structural and active_rules <= {"enter_now_scarcity", "ai_veto_concentration"}:
+        title = "진입판정 검토"
+    else:
+        title = "제출병목 점검"
     message = f"[{title}] 자동 매매 변경 없음\n" + "\n".join(messages) + f"\n근거: {path}"
     if actionable:
-        message += "\nCodex에서 원천과 제출 경로를 점검하세요."
+        message += ("\nCodex에서 원천과 제출 경로를 점검하세요."
+                    if has_structural else "\n판정·기회비용 검토 신호이며 자동 매매 변경은 없습니다.")
     if send is None:
         try:
             token, admin = _load_telegram_config()

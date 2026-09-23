@@ -318,6 +318,41 @@ def test_ratios_require_new_promotions_and_policy_isolation():
     assert not active(tick(split, 15, tick(split, 0)))
 
 
+def test_enter_now_scarcity_alert_is_machine_review_not_submit_failure():
+    events = [event(i, "BLOCK", "not_requested_machine_nonentry") for i in range(10)]
+    state = tick(events, 0)
+    events.append(event(30, "RECHECK", "not_requested_machine_nonentry",
+                        when=START + timedelta(minutes=15)))
+    result = tick(events, 15, state)
+    sent = []
+
+    monitor.notify(result, "fixture.json", send=sent.append)
+
+    assert len(sent) == 1
+    assert sent[0].startswith("[기계판정 검토] 자동 매매 변경 없음")
+    assert "BLOCK" in sent[0] and "RECHECK" in sent[0] and "ENTER_NOW" in sent[0]
+    assert "주문 제출 실패·미체결 증거가 아닙니다" in sent[0]
+    assert "Codex에서 원천과 제출 경로를 점검하세요" not in sent[0]
+
+
+def test_enter_now_scarcity_recovers_on_new_valid_enter_now_without_fill():
+    events = [event(i, "BLOCK", "not_requested_machine_nonentry") for i in range(10)]
+    state = tick(events, 0)
+    events.append(event(30, "BLOCK", "not_requested_machine_nonentry",
+                        when=START + timedelta(minutes=15)))
+    state = tick(events, 15, state)
+    assert any(item["rule"] == "enter_now_scarcity" for item in active(state))
+
+    events.append(event(31, "ENTER_NOW", "pass", when=START + timedelta(minutes=16)))
+    recovered = tick(events, 20, state)
+    scarcity = [item for item in recovered["incidents"].values()
+                if item["rule"] == "enter_now_scarcity"]
+
+    assert len(scarcity) == 1
+    assert scarcity[0]["status"] == "recovered"
+    assert recovered["runtime_effect"] is False
+
+
 def test_veto_is_review_not_proven_bad_decision():
     events = [event(i, screen="veto") for i in range(10)]
     state = tick(events, 0)

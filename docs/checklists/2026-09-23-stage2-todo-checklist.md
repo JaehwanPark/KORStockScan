@@ -54,6 +54,11 @@
   - 권한 경계: 판정·threshold·가격·수량·주문·provider·봇 PID를 변경하지 않는다.
   - 완료 증거: commit=`762b8d4ab54a97fab8a44124a572c1512141548e`, release=`semantic-entry-axis-20260923-762b8d4a`, PID=`314251`/bootstrap verify `pass`; 17:05 cron consumed the release, monitor `observed`, receipt issues=0. Split paired policy binding=`matched`, candidates=0/source gap, incumbent retained; delay=`not_published`, handoff/env match; Telegram `idle`. Source+release tests 105/105 pass; print-only checklist parser pass.
 
+- [x] `[SubmissionBottleneckAlertSemantics0923] 기계판정 희소와 실제 제출 결손 알림 분리` (`Due: 2026-09-23`, `Slot: RUNTIME_RECOVERY`, `TimeWindow: 17:30~18:00`, `Track: RuntimeStability`)
+  - Source: [장중 제출병목·의미 감시 계획](../proposals/intraday-semantic-entry-monitoring-and-telegram-alert-feasibility-plan-2026-09-20.md#923-entry-split최초-제출-지연-장후-산출물-감시).
+  - 완료 증거: `enter_now_scarcity` 알림을 `기계판정 검토`로 분리하고 유효 승격의 BLOCK/RECHECK/ENTER_NOW 수를 표시한다. 해당 알림은 제출 실패·미체결 증거가 아님을 명시한다. 같은 범위의 새 무충돌 ENTER_NOW로 자연 종료하며, 주문 접수는 별도 지표로 유지한다. 제출 경로 결손 알림은 기존 제목·조치 경로를 유지한다. 테스트 `test_submission_bottleneck_monitor.py` 107 passed.
+  - 권한 경계: 진입 판정·threshold·가격·수량·주문·provider·봇 상태는 변경하지 않는다. Telegram 실제 발송은 테스트하지 않았다.
+
 - [ ] `[PostcloseFinalizerControllerTerminalReceipt] controller terminal 영수증을 검증한 뒤 장후 마감` (`Due: 2026-09-23`, `Slot: POSTCLOSE`, `TimeWindow: 21:55~23:20`, `Track: RuntimeStability`)
   - Source: [Postclose handoff contract](../report-based-automation-traceability.md#complete-recommendation-and-terminal-summary-handoff-source-date-2026-09-09-onward).
   - 완료 기준: exact-date main 및 설치된 widget/machine predecessor가 성공한 뒤 controller canonical/attempt 영수증이 이번 finalizer 실행 이후 생성되고 byte-identical이며, `status=done`, `whole_native_chain_done_claimed=true`, `require_independent_producers=true`, strict verifier `pass`임을 확인한다. 불일치·`summary_verified`·오래된 report면 cleanup 전에 실패하고 final detector에 넘긴다. 최종 finalizer/detector terminal marker까지 확인한다.
