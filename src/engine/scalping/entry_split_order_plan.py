@@ -6598,6 +6598,86 @@ def _probe_first_eligible(stock: dict[str, Any], total_qty: int) -> tuple[bool, 
     return True, "eligible"
 
 
+def _probe_residual_admission(
+    latency_gate: dict[str, Any], timeout_sec: int
+) -> tuple[bool, str, str]:
+    """Require the contracts used after a probe fill before placing that probe.
+
+    The residual resolver needs a fresh price plus one independent directional
+    group, and a WAIT probe needs the exact submit-time continuation contract.
+    This is an admission check only; the post-fill resolver repeats every live
+    quote, direction, account and broker guard.
+    """
+    fields = latency_gate if isinstance(latency_gate, dict) else {}
+    action = str(fields.get("entry_ai_submit_authority_action") or "").strip().upper()
+    result_source = str(
+        fields.get("entry_ai_submit_authority_result_source") or ""
+    ).strip().lower()
+    action_source = str(
+        fields.get("entry_ai_submit_authority_action_source") or ""
+    ).strip().lower()
+    trace_id = str(fields.get("entry_ai_submit_authority_decision_trace_id") or "").strip()
+    age = _safe_float(fields.get("entry_ai_submit_authority_confirmed_age_sec"), None)
+    trusted = bool(
+        not _safe_bool(fields.get("entry_ai_submit_authority_blocked", True))
+        and action in {"BUY", "WAIT"}
+        and result_source in {"live", "prior_valid"}
+        and action_source not in {"", "-", "none", "not_available", "not_evaluated"}
+        and trace_id not in {"", "-", "none", "not_available", "not_evaluated"}
+        and age is not None
+        and -0.5 <= age <= max(1, int(timeout_sec))
+    )
+    if not trusted:
+        return False, "ai_authority_missing_stale_or_untrusted", "-"
+    if action == "WAIT" and not _safe_bool(
+        fields.get("entry_ai_submit_authority_wait_probe_required")
+    ):
+        return False, "wait_probe_continuation_contract_missing", "-"
+
+    mark = _safe_int(
+        fields.get("canonical_mark_price") or fields.get("latest_price"), 0
+    )
+    bid = _safe_int(fields.get("best_bid") or fields.get("passive_buy_price"), 0)
+    ask = _safe_int(
+        fields.get("best_ask_at_submit") or fields.get("executable_buy_price")
+        or fields.get("best_ask"), 0
+    )
+    quote_state = str(fields.get("quote_consistency_state") or "").strip().lower()
+    quote_fresh = bool(
+        mark > 0 and bid > 0 and ask >= bid
+        and quote_state in {"ok", "warning", "single_source"}
+        and not _safe_bool(fields.get("quote_stale_at_submit"))
+        and not _safe_bool(fields.get("stale_quote_submit_block"))
+    )
+    if not quote_fresh:
+        return False, "fresh_price_source_missing", "-"
+
+    age_ms = _safe_float(fields.get("orderbook_micro_snapshot_age_ms"), None)
+    max_age_ms = max(1, _safe_int(fields.get("orderbook_micro_stale_threshold_ms"), 700))
+    orderbook_ready = bool(
+        _safe_bool(fields.get("orderbook_micro_ready"))
+        and fields.get("orderbook_micro_observer_healthy") is True
+        and age_ms is not None and 0 <= age_ms <= max_age_ms
+    )
+    tick_ready = bool(
+        str(fields.get("tick_context_quality") or "").strip().lower() == "fresh_computed"
+        and _safe_bool(fields.get("tick_aggressor_pressure_usable"))
+        and not _safe_bool(fields.get("tick_context_stale"))
+        and any(
+            _safe_float(fields.get(key), None) is not None
+            for key in ("buy_pressure_10t", "buy_pressure", "last_buy_pressure_10t")
+        )
+    )
+    groups = ["price_tick"]
+    if orderbook_ready:
+        groups.append("orderbook")
+    if tick_ready:
+        groups.append("signed_pressure")
+    if len(groups) < 2:
+        return False, "residual_direction_sources_not_ready", ",".join(groups)
+    return True, "ready", ",".join(groups)
+
+
 def _build_probe_continuation(
     *,
     base_order: dict[str, Any],
@@ -6938,6 +7018,34 @@ def apply_entry_split_order_policy(
             }
         )
         return orders, fields
+    if probe_config["enabled"] and probe_eligible:
+        admission_ok, admission_reason, admission_groups = _probe_residual_admission(
+            latency_gate, probe_config["timeout_sec"]
+        )
+        fields.update(
+            {
+                "entry_split_order_probe_residual_admission_checked": True,
+                "entry_split_order_probe_residual_admission_status": (
+                    "ready" if admission_ok else "deferred"
+                ),
+                "entry_split_order_probe_residual_admission_reason": admission_reason,
+                "entry_split_order_probe_residual_admission_groups": admission_groups,
+            }
+        )
+        if not admission_ok:
+            # Probe-first is an atomic continuation contract.  Do not fall
+            # through to the ordinary multi-leg orders when its residual
+            # prerequisites are absent; retry on a later fresh scanner pass.
+            fields.update(
+                {
+                    "entry_split_order_skip_reason": "probe_residual_admission_deferred",
+                    "entry_split_order_probe_first_required": True,
+                    "entry_split_order_runtime_effect": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                }
+            )
+            return [], fields
     if probe_config["enabled"] and probe_eligible:
         probe_variant_id = f"{split_variant_id}__{PROBE_VARIANT_SUFFIX}"
         common_fields = {

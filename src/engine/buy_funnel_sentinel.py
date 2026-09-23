@@ -2806,6 +2806,78 @@ def _machine_revision_rows(rows):
     return revisions[previous], "valid" if len(revisions) > 1 else "single_revision", []
 
 
+def _auxiliary_ai_semantics(rows, action: str, screen: str) -> dict[str, Any]:
+    """Check the versioned auxiliary assessment receipt without granting authority."""
+    if action != "ENTER_NOW":
+        return {"status": "not_applicable_machine_nonentry", "issues": []}
+    versioned = [row for row in rows if row.fields.get("entry_ai_auxiliary_contract_version")]
+    if not versioned:
+        return {"status": "legacy_uninstrumented", "issues": []}
+    issues: list[str] = []
+    latest = versioned[-1].fields
+    versions = {str(row.fields.get("entry_ai_auxiliary_contract_version")) for row in versioned}
+    if versions != {"auxiliary_effective_assessment_v1"}:
+        issues.append("auxiliary_contract_version_missing_or_conflicting")
+    assessment = latest.get("entry_ai_effective_assessment")
+    if isinstance(assessment, str):
+        try:
+            assessment = json.loads(assessment)
+        except (ValueError, TypeError):
+            assessment = None
+    if not isinstance(assessment, dict):
+        issues.append("auxiliary_effective_assessment_missing_or_invalid")
+        assessment = {}
+    errors = assessment.get("validation_errors")
+    errors = errors if isinstance(errors, list) else None
+    effective = str(assessment.get("effective_verdict") or "").upper()
+    expected_screen = effective.lower()
+    if screen == "response_invalid":
+        expected_screen = "response_invalid"
+        if effective != "INVALID" or not errors:
+            issues.append("auxiliary_invalid_screen_receipt_mismatch")
+    elif expected_screen != screen:
+        issues.append("auxiliary_effective_verdict_screen_mismatch")
+    elif errors is None or errors:
+        issues.append("auxiliary_validation_error_screen_mismatch")
+    if assessment.get("schema") != "auxiliary_effective_assessment_v1":
+        issues.append("auxiliary_assessment_schema_invalid")
+    response_hash = str(assessment.get("validated_response_sha256") or "")
+    if len(response_hash) != 64 or any(c not in "0123456789abcdef" for c in response_hash):
+        issues.append("auxiliary_validated_response_hash_invalid")
+    policy_hash = assessment.get("soft_policy_sha256")
+    event_policy_hash = latest.get("entry_ai_soft_policy_sha256")
+    if policy_hash != event_policy_hash:
+        issues.append("auxiliary_soft_policy_hash_mismatch")
+    if policy_hash is not None and (
+        not isinstance(policy_hash, str) or len(policy_hash) != 64
+        or any(c not in "0123456789abcdef" for c in policy_hash)
+    ):
+        issues.append("auxiliary_soft_policy_hash_invalid")
+    raw_verdict = str(assessment.get("raw_verdict") or "").upper()
+    recorded_raw = str(latest.get("entry_ai_advisory_verdict") or "").upper()
+    if recorded_raw and raw_verdict != recorded_raw:
+        issues.append("auxiliary_raw_verdict_mismatch")
+    recorded_valid = latest.get("entry_ai_advisory_contract_valid")
+    if recorded_valid is not None:
+        normalized_valid = _safe_str(recorded_valid).strip().lower()
+        if normalized_valid not in {"true", "false", "1", "0"}:
+            issues.append("auxiliary_contract_validity_invalid")
+        elif (normalized_valid in {"true", "1"}) != bool(errors is not None and not errors):
+            issues.append("auxiliary_contract_validity_mismatch")
+    return {
+        "status": "review_required" if issues else "receipt_match",
+        "contract_version": next(iter(versions)) if len(versions) == 1 else "conflicting",
+        "screen_status": screen,
+        "raw_verdict": raw_verdict or None,
+        "effective_verdict": effective or None,
+        "soft_policy_sha256": policy_hash,
+        "validation_error_count": len(errors) if errors is not None else None,
+        "issues": sorted(set(issues)),
+        "runtime_effect": False,
+        "decision_authority": "report_only_semantic_receipt_check",
+    }
+
+
 def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]:
     """Diagnostic machine -> AI screen -> submit funnel with explicit identity.
 
@@ -2887,6 +2959,8 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
     ledger: list[dict[str, Any]] = []
     action_counts: Counter[str] = Counter()
     screen_counts: Counter[str] = Counter()
+    auxiliary_ai_status_counts: Counter[str] = Counter()
+    auxiliary_ai_issue_counts: Counter[str] = Counter()
     final_counts: Counter[str] = Counter()
     latest_evaluation_by_parent: dict[tuple[str, ...], tuple[str, datetime]] = {}
     for key, rows in grouped.items():
@@ -2970,6 +3044,10 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
             "not_requested_machine_nonentry", "not_requested_required_feature_insufficient"
         }:
             conflict_reasons.append("machine_enter_ai_screen_not_requested")
+        auxiliary_semantics = _auxiliary_ai_semantics(decision_rows, action, screen)
+        conflict_reasons.extend(auxiliary_semantics.get("issues") or [])
+        auxiliary_ai_status_counts[auxiliary_semantics["status"]] += 1
+        auxiliary_ai_issue_counts.update(auxiliary_semantics.get("issues") or [])
         submitted_rows = [row for row in rows if row.stage == "order_bundle_submitted"]
         broker_acceptance_rows = [
             row
@@ -3137,6 +3215,7 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
             "latest_observed_action": decision_history[-1]["action"] if decision_history else "UNKNOWN",
             "enter_now_observed": "ENTER_NOW" in observed_actions,
             "ai_screen_status": screen or "not_reported",
+            "auxiliary_ai_semantics": auxiliary_semantics,
             "policy_versions": sorted(policy_versions),
             "submit_pipeline_reached": bool(submitted_rows),
             # `order_bundle_submitted` is emitted only after its successful
@@ -3312,6 +3391,8 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
             "allowed_runtime_apply": False,
         },
         "ai_screen_status_counts": dict(sorted(screen_counts.items())),
+        "auxiliary_ai_semantic_status_counts": dict(sorted(auxiliary_ai_status_counts.items())),
+        "auxiliary_ai_semantic_issue_counts": dict(sorted(auxiliary_ai_issue_counts.items())),
         "final_state_counts": dict(sorted(final_counts.items())),
         "machine_enter_count": machine_enter,
         "ai_pass_count": ai_pass,

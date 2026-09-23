@@ -277,6 +277,48 @@ def test_required_feature_recheck_is_guard_excluded_not_missing_economics():
     assert ordinary[0]["economic_source"]["status"] == "source_gap"
 
 
+def test_auxiliary_ai_semantic_receipt_matches_effective_screen():
+    policy_hash = "c" * 64
+    assessment = {
+        "schema": "auxiliary_effective_assessment_v1",
+        "raw_verdict": "PASS", "effective_verdict": "PASS",
+        "reason": "raw_verdict_preserved", "validated_response_sha256": "d" * 64,
+        "soft_policy_sha256": policy_hash, "validation_errors": [],
+    }
+    candidate = event(
+        entry_ai_auxiliary_contract_version="auxiliary_effective_assessment_v1",
+        entry_ai_effective_assessment=assessment,
+        entry_ai_soft_policy_sha256=policy_hash,
+        entry_ai_advisory_verdict="PASS",
+        entry_ai_advisory_contract_valid="True",
+    )
+    row = sentinel._machine_primary_entry_funnel([candidate])["evaluation_ledger"][0]
+    assert row["auxiliary_ai_semantics"]["status"] == "receipt_match"
+    assert row["conflict_reasons"] == []
+    projection = monitor.snapshot([candidate], START)
+    assert projection["auxiliary_ai_semantic_status_counts"] == {"receipt_match": 1}
+    assert projection["rows"][0]["auxiliary_ai_semantics"]["soft_policy_sha256"] == policy_hash
+
+
+def test_auxiliary_ai_semantic_receipt_mismatch_is_reported_not_authorized():
+    assessment = {
+        "schema": "auxiliary_effective_assessment_v1",
+        "raw_verdict": "VETO", "effective_verdict": "VETO",
+        "validated_response_sha256": "d" * 64,
+        "soft_policy_sha256": "c" * 64, "validation_errors": [],
+    }
+    candidate = event(
+        entry_ai_auxiliary_contract_version="auxiliary_effective_assessment_v1",
+        entry_ai_effective_assessment=assessment,
+        entry_ai_soft_policy_sha256="c" * 64,
+        entry_ai_advisory_verdict="VETO",
+    )
+    row = sentinel._machine_primary_entry_funnel([candidate])["evaluation_ledger"][0]
+    assert row["auxiliary_ai_semantics"]["status"] == "review_required"
+    assert "auxiliary_effective_verdict_screen_mismatch" in row["conflict_reasons"]
+    assert row["auxiliary_ai_semantics"]["runtime_effect"] is False
+
+
 @pytest.mark.parametrize("missing", [None, "None", "null", "-", "unknown", "0", ""])
 def test_missing_identity_alias_does_not_mask_explicit_machine_receipt(missing):
     base = event(action="BLOCK", screen="not_requested_machine_nonentry")

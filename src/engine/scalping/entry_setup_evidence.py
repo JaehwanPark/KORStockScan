@@ -2736,6 +2736,7 @@ def compose_mechanistic_primary_decision(
     )
     result.update(
         {
+            "entry_ai_auxiliary_contract_version": "auxiliary_effective_assessment_v1",
             "primary_schema": MECHANISTIC_PRIMARY_DECISION_SCHEMA,
             "entry_primary_decision_owner": MECHANISTIC_PRIMARY_DECISION_OWNER,
             "entry_ai_role": MECHANISTIC_AI_ADVISORY_ROLE,

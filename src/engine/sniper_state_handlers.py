@@ -11964,6 +11964,16 @@ _MACHINE_PRIMARY_LINEAGE_PIPELINE_STAGES = frozenset(
 )
 
 
+def _machine_auxiliary_receipt_wire_fields(fields: dict) -> dict:
+    """Keep auxiliary AI semantic receipts parseable in string-valued events."""
+    result = dict(fields or {})
+    for key in ("entry_ai_effective_assessment", "entry_ai_advisory_contract_errors"):
+        value = result.get(key)
+        if isinstance(value, (dict, list)):
+            result[key] = json.dumps(value, sort_keys=True, separators=(",", ":"))
+    return result
+
+
 def _observe_entry_economics_before_ai(stock, code, ws_data, *, exact_payload,
                                       assessment, capture, bundle_sha256):
     """Freeze the existing owner plan before AI without submitting or reserving.
@@ -12130,6 +12140,8 @@ def _log_entry_pipeline(stock, code, stage, **fields):
                     "entry_opportunity_replay_seed", "entry_economic_capacity_receipt"):
             if isinstance(fields.get(key), dict):
                 fields[key] = json.dumps(fields[key], sort_keys=True, separators=(",", ":"))
+    if stage == "ai_confirmed" or stage in _MACHINE_PRIMARY_LINEAGE_PIPELINE_STAGES:
+        fields = _machine_auxiliary_receipt_wire_fields(fields)
     if stage in _MACHINE_PRIMARY_LINEAGE_PIPELINE_STAGES and isinstance(stock, dict):
         # Downstream submit stages belong to the exact trusted AI attempt kept
         # on the watched stock.  Add provenance only; this does not authorize a
@@ -31595,7 +31607,14 @@ def _machine_primary_entry_provenance_fields(source: dict | None) -> dict:
         "entry_mechanistic_policy_version",
         "entry_mechanistic_policy_sha256",
         "entry_ai_role",
+        "entry_ai_auxiliary_contract_version",
         "entry_ai_screen_status",
+        "entry_ai_advisory_verdict",
+        "entry_ai_raw_risk_verdict",
+        "entry_ai_effective_assessment",
+        "entry_ai_soft_policy_sha256",
+        "entry_ai_advisory_contract_valid",
+        "entry_ai_advisory_contract_errors",
         "entry_ai_followup_disposition",
         "entry_ai_followup_authority",
         "entry_ai_screen_required",
@@ -49338,7 +49357,14 @@ def _build_ai_ops_log_fields(
         "entry_mechanistic_policy_decision",
         "entry_mechanistic_policy_version",
         "entry_ai_role",
+        "entry_ai_auxiliary_contract_version",
         "entry_ai_screen_status",
+        "entry_ai_advisory_verdict",
+        "entry_ai_raw_risk_verdict",
+        "entry_ai_effective_assessment",
+        "entry_ai_soft_policy_sha256",
+        "entry_ai_advisory_contract_valid",
+        "entry_ai_advisory_contract_errors",
         "entry_ai_followup_disposition",
         "entry_ai_followup_authority",
         "scanner_promotion_id",
@@ -49464,7 +49490,13 @@ def _build_ai_ops_log_fields(
     ):
         if field_name in payload:
             value = payload.get(field_name, "-")
-            out[field_name] = str(value if value is not None else "-")
+            if field_name in {
+                "entry_ai_effective_assessment",
+                "entry_ai_advisory_contract_errors",
+            }:
+                out[field_name] = value
+            else:
+                out[field_name] = str(value if value is not None else "-")
     for field_name, value in payload.items():
         if str(field_name).startswith(("holding_context_", "entry_ai_final_")):
             out[field_name] = value
@@ -68735,6 +68767,9 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 **microstructure_submit_log_fields,
                 **submit_revalidation_fields,
                 **entry_ai_submit_authority,
+                "orderbook_micro_stale_threshold_ms": _rule_int(
+                    "OFI_AI_SMOOTHING_STALE_THRESHOLD_MS", 700
+                ),
             },
         )
         # Only the receipt validated and frozen at this submit invocation may

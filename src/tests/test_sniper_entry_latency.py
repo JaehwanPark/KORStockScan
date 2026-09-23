@@ -20,6 +20,23 @@ from src.engine.sniper_entry_latency import (
 from src.utils.constants import TRADING_RULES as CONFIG
 
 
+def test_machine_auxiliary_receipt_is_json_on_string_valued_event_wire():
+    assessment = {"schema": "auxiliary_effective_assessment_v1", "raw_verdict": "VETO"}
+    fields = state_handlers._build_ai_ops_log_fields({
+        "entry_primary_decision_owner": "mechanistic_entry_adjudicator",
+        "entry_mechanistic_action": "ENTER_NOW",
+        "entry_ai_auxiliary_contract_version": "auxiliary_effective_assessment_v1",
+        "entry_ai_effective_assessment": assessment,
+        "entry_ai_advisory_contract_errors": ["risk_fact_missing"],
+        "entry_ai_soft_policy_sha256": "a" * 64,
+    })
+    assert isinstance(fields["entry_ai_effective_assessment"], dict)
+    fields = state_handlers._machine_auxiliary_receipt_wire_fields(fields)
+    assert json.loads(fields["entry_ai_effective_assessment"]) == assessment
+    assert json.loads(fields["entry_ai_advisory_contract_errors"]) == ["risk_fact_missing"]
+    assert fields["entry_ai_soft_policy_sha256"] == "a" * 64
+
+
 def _assert_danger_hard_safety_block(result, *, danger_reasons=None):
     assert result["latency_state"] == "DANGER"
     assert result["latency_canary_applied"] is False
