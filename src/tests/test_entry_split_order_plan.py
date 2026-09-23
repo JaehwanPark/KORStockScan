@@ -4637,8 +4637,9 @@ def test_execution_model_actual_census_and_no_false_economic_pass(actual_qty, mo
     # Same order number on another day cannot join this frozen parent.
     actual[0]["order_date"] = actual[1]["order_date"] = "2026-09-16"
     other = split_plan.build_execution_model_validation("2026-09-17", events, [replay], actual)
-    assert other["counts"] == {"source_gap": 1}
-    assert other["unclassified_main_buy_parent_count"] == 1
+    assert other["counts"] == {"source_gap": 2}
+    assert other["unclassified_main_buy_parent_count"] == 2
+    assert other["projection_unregistered_order_count"] == 1
     # A replay conflict stays quarantined even if a third row repeats the first.
     actual[0]["order_date"] = actual[1]["order_date"] = "2026-09-17"
     conflict = {**replay, "schema": "conflicting_model"}
@@ -4658,6 +4659,21 @@ def test_execution_model_policy_hash_and_supporting_exit_cannot_promote():
     assert not split_plan.execution_model_policy_contract_status(report, {**policy, "execution_model_validation_sha256": "f" * 64})[0]
 
 
+def test_submitted_main_order_missing_owner_journal_stays_in_census():
+    event = {"stage": "order_leg_sent", "emitted_date": "2026-09-22",
+        "fields": {"actual_order_submitted": True, "broker_order_no": "0022991",
+            "entry_execution_sizing_plan_id": "entry-sizing-1",
+            "entry_execution_sizing_plan_sha256": "a" * 64}}
+    report = split_plan.build_execution_model_validation("2026-09-22", [event], [], [])
+    assert report["projection_submitted_order_count"] == 1
+    assert report["projection_unregistered_order_count"] == 1
+    assert report["actual_attempt_count"] == 1
+    assert report["counts"] == {"source_gap": 1}
+    assert report["rows"][0]["reason"] == "submitted_order_owner_registry_missing"
+    assert report["actual_net_ev_pct"] is None
+    assert report["allowed_runtime_apply"] is False
+
+
 def test_execution_projection_is_not_valid_empty_and_preserves_exact_contract(monkeypatch, tmp_path):
     monkeypatch.setattr(split_plan, "DATA_DIR", tmp_path)
     rows, source = split_plan._bounded_execution_projection("2026-09-17")
@@ -4672,6 +4688,22 @@ def test_execution_projection_is_not_valid_empty_and_preserves_exact_contract(mo
     part.write_text(json.dumps({**event, "emitted_date": "2026-09-16"}) + "\n")
     with pytest.raises(ValueError, match="date_mismatch"):
         split_plan._bounded_execution_projection("2026-09-17")
+
+
+def test_execution_producer_census_accepts_sealed_summary_above_old_limit(monkeypatch, tmp_path):
+    from src.engine.pipeline_event_summary import IDENTITY_CONTRACT, producer_summary_paths
+
+    monkeypatch.setattr(split_plan, "DATA_DIR", tmp_path)
+    path, manifest_path = producer_summary_paths(tmp_path / "pipeline_event_summaries", "2026-09-22")
+    path.parent.mkdir(parents=True)
+    path.write_text('{"stage":"unrelated"}\n')
+    assert split_plan.EXECUTION_PRODUCER_CENSUS_MAX_BYTES > 74_018_715
+    manifest_path.write_text(json.dumps({"summary_stages": [], "identity_contract": IDENTITY_CONTRACT,
+        "summary_storage_size_bytes": path.stat().st_size}))
+    monkeypatch.setattr(split_plan, "EXECUTION_PRODUCER_CENSUS_MAX_BYTES", path.stat().st_size - 1)
+    assert split_plan._execution_projection_census("2026-09-22", [], stages=frozenset())["reason"] == "execution_producer_census_unsealed"
+    monkeypatch.setattr(split_plan, "EXECUTION_PRODUCER_CENSUS_MAX_BYTES", path.stat().st_size)
+    assert split_plan._execution_projection_census("2026-09-22", [], stages=frozenset())["status"] == "ready"
 
 
 def test_bounded_refresh_reuses_revision_and_rejects_stale_policy(monkeypatch, tmp_path):
@@ -5068,6 +5100,8 @@ def test_live_submit_split_branch_binds_or_releases_reservation(monkeypatch, tmp
     fields = {'entry_split_order_probe_first_required': True,
               'entry_split_order_probe_first_applied': mode not in {'deferred', 'admission_deferred'},
               'entry_split_order_probe_capacity_deferred': mode == 'deferred',
+              'actual_order_submitted': True,
+              'broker_order_forbidden': False,
               'entry_split_order_skip_reason': (
                   'probe_residual_admission_deferred' if mode == 'admission_deferred' else ''),
               'entry_split_order_probe_first_skip_reason': 'probe_active_bundle_cap_reached',
@@ -5095,6 +5129,12 @@ def test_live_submit_split_branch_binds_or_releases_reservation(monkeypatch, tmp
     exec(compile(module, '<live-pre-broker-branch>', 'exec'), env)
     assert env['run']([probe]) is (mode in {'probe', 'opening'})
     stages = [stage for stage, _ in calls]
+    split_events = [(stage, fields) for stage, fields in calls
+                    if stage.startswith('entry_split_order_plan_')
+                    or stage.startswith('entry_split_probe_')]
+    if split_events:
+        assert split_events[0][1]['actual_order_submitted'] is False
+        assert split_events[0][1]['broker_order_forbidden'] is (mode in {'deferred', 'admission_deferred'})
     state = json.loads((tmp_path / 'probe.json').read_text())['bundles']['new-plan']
     if mode == 'probe':
         assert stock['entry_split_probe_bundle_id'] == 'new-plan'

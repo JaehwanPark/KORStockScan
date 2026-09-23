@@ -25,6 +25,21 @@ def test_registry_only_attempt_cannot_be_verified_zero():
     assert not parents and unclassified==1
 
 
+def test_projected_real_submit_without_context_or_owner_cannot_be_verified_zero():
+    event=dict(stage='order_leg_sent',emitted_date='2026-09-22',fields=dict(
+        actual_order_submitted='True',broker_order_no='0022991'))
+    parents,unclassified=mod._parents('2026-09-22',[event],[])
+    assert not parents and unclassified==1
+    registry=[dict(intent_id='main-1',owner_type='main_scalping',side='BUY',action='NEW',
+        order_date='2026-09-22',broker_order_no='0022991',client_intent_id='main:ENTRY_BUY:1')]
+    assert mod._parents('2026-09-22',[event],registry)[1]==1
+    event['fields']['actual_order_submitted']='False'
+    assert mod._parents('2026-09-22',[event],[])[1]==0
+    failed=dict(stage='entry_cancel_wait_submission',emitted_date='2026-09-22',
+        fields=dict(actual_order_submitted='False',entry_cancel_wait_submission_context='invalid'))
+    assert mod._parents('2026-09-22',[failed],[])[1]==0
+
+
 def test_prior_custody_cannot_supply_a_zero_profit_day():
     journal=[dict(intent_id='held',owner_type='main_scalping',side='BUY',action='NEW',
         order_date='2026-09-17',state='ORDER_TERMINAL',terminal_reconciliation=True,filled_qty=1)]

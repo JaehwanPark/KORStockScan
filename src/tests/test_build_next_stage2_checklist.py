@@ -1802,6 +1802,21 @@ def test_direct_family_checklist_publishes_current_generation_marker(
     assert "신규 실행 항목 없음" in text
 
 
+def test_direct_family_refresh_preserves_unrelated_manual_open_task(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    monkeypatch.setattr(mod, "PROJECT_ROOT", tmp_path)
+    day = "2026-09-19"
+    _write_json(mod._direct_summary_path(day), _direct_summary(day))
+    path = Path(mod.build_next_stage2_checklist(day)["path"])
+    manual = ("- [ ] `[PostcloseWidgetEodSlotAdmission] widget source wait` "
+        "(`Due: 2026-09-21`, `Slot: POSTCLOSE`, `TimeWindow: 20:10~21:40`, `Track: RuntimeStability`)\n"
+        "  - 완료 기준: unchanged source and native receipt.\n")
+    path.write_text(path.read_text().replace(mod.AUTO_END, manual + mod.AUTO_END))
+    mod.build_next_stage2_checklist(day)
+    assert path.read_text().count("[PostcloseWidgetEodSlotAdmission]") == 1
+    assert "unchanged source and native receipt" in path.read_text()
+
+
 def test_direct_family_checklist_opens_only_structural_economic_blockers(
     monkeypatch, tmp_path
 ):

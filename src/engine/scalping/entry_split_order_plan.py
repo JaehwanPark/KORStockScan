@@ -5097,6 +5097,7 @@ def _refresh_operating_economics(report,validation,replay,actual_outcomes,*,targ
     return validation,economics
 
 EXECUTION_MODEL_CONTRACT = "entry_split_execution_model_validation_v1"
+EXECUTION_PRODUCER_CENSUS_MAX_BYTES = 256 * 1024 * 1024
 EXECUTION_SOURCE_STAGES = frozenset({
     "entry_execution_sizing_plan", "entry_execution_sizing_plan_block",
     "entry_ai_economic_plan_observed", "entry_ai_economic_source_gap",
@@ -5119,7 +5120,8 @@ def _execution_projection_census(target_date, events, *, stages=None):
         return {"status": "source_gap", "reason": "execution_producer_census_missing",
                 "coverage_scope": "declared_execution_stage_producer_census"}
     before = path.stat()
-    if path.is_symlink() or before.st_size > 64 * 1024 * 1024 or manifest.get("summary_storage_size_bytes") != before.st_size:
+    if (path.is_symlink() or before.st_size > EXECUTION_PRODUCER_CENSUS_MAX_BYTES
+            or manifest.get("summary_storage_size_bytes") != before.st_size):
         return {"status": "source_gap", "reason": "execution_producer_census_unsealed"}
     expected = Counter(); expected_hash = Counter()
     for row in iter_jsonl(path):
@@ -5372,6 +5374,16 @@ def build_execution_model_validation(target_date, events, replays, registry_even
                 if price_error is not None:
                     optimistic_errors.append(max(0., -price_error * actual_qty))
         results.append(entry)
+    registered_orders = {order_key(actual) for actual in inventory.values()
+        if actual.get("broker_order_no")}
+    unregistered_orders = sorted(set(submitted) - registered_orders)
+    for order_date, broker_order_no in unregistered_orders:
+        results.append({"parent_id": f"unjoined:projection:{order_date}:{broker_order_no}",
+            "source_dates": [order_date], "order_intent_ids": [],
+            "broker_order_no": broker_order_no, "actual_net_pnl_krw": None,
+            "model_net_error_krw": None, "capital_error": None,
+            "cohort": "submitted_main_buy_owner_journal_missing",
+            "status": "source_gap", "reason": "submitted_order_owner_registry_missing"})
     counts = Counter(row["status"] for row in results)
     diagnostics = [row for row in results if row.get("modeled_filled_qty") is not None]
     confusion = {key: sum(row.get(key) is True for row in diagnostics) for key in ("false_fill", "missed_fill")}
@@ -5389,6 +5401,8 @@ def build_execution_model_validation(target_date, events, replays, registry_even
             "increase_quantity_or_budget", "replace_missing_outcomes_with_zero", "guard_or_operator_bypass"],
         "window_policy": "clean_baseline_main_buy_inventory_initial_cohort_requires_atomic_join",
         "actual_attempt_count": len(results), "actual_order_intent_count": len(inventory),
+        "projection_submitted_order_count": len(submitted),
+        "projection_unregistered_order_count": len(unregistered_orders),
         "actual_census_scope": "verified_owner_journal_only_not_complete_historical_main_orders",
         "full_actual_attempt_count": None,
         "submitted_order_intent_count": len(bound), "counts": dict(counts), "rows": results,
@@ -5409,7 +5423,8 @@ def build_execution_model_validation(target_date, events, replays, registry_even
         "primary_blockers": ([((source_contract or {}).get("projection") or {}).get("reason")]
             if ((source_contract or {}).get("projection") or {}).get("status") == "source_gap" else [])
             + ["tolerance_contract_missing", "operating_exit_cost_capital_replay_unvalidated", "independent_model_holdout_missing"]
-            + (["actual_main_buy_attempts_missing"] if not inventory else []),
+            + (["submitted_order_owner_registry_missing"] if unregistered_orders else [])
+            + (["actual_main_buy_attempts_missing"] if not inventory and not submitted else []),
         "source_gap_owner": "entry_execution_sizing_plan->owner_custody_registry->strategy_owner_replay",
         "closure_test": "exact frozen parent/attempt->broker order->terminal fill; incumbent fidelity and independent operating exit/cost/capital validation",
         "eta": None}

@@ -2367,6 +2367,8 @@ def _build_direct_family_checklist(
         lines.append("")
     lines.append(AUTO_END)
     auto_block = "\n".join(lines) + "\n"
+    if existing:
+        auto_block = _merge_preserved_auto_tasks(existing, auto_block)
     content = (
         _upsert_auto_block(existing, auto_block)
         if existing

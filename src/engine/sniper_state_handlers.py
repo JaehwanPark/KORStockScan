@@ -69198,7 +69198,11 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             broker_order_forbidden=_entry_split_probe_first_deferred(
                 entry_split_fields
             ),
-            **entry_split_fields,
+            **_without_entry_pipeline_fields(
+                entry_split_fields,
+                "actual_order_submitted",
+                "broker_order_forbidden",
+            ),
         )
         if _entry_split_probe_first_deferred(entry_split_fields):
             return False

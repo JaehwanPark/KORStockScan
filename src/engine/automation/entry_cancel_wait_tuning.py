@@ -328,7 +328,7 @@ def _current_sources(target_date):
     from src.engine.scalping import entry_split_order_plan as entry
     from src.engine.pipeline_event_summary import CANCEL_WAIT_SUMMARY_STAGES
     try:
-        events, projection=entry._bounded_execution_projection(target_date,stages=CANCEL_WAIT_SUMMARY_STAGES,
+        events, projection=entry._bounded_execution_projection(target_date,stages=CANCEL_WAIT_SUMMARY_STAGES | {'order_leg_sent'},
             families=('dynamic_entry_price_resolver','entry_price_execution_quality'))
     except (OSError,ValueError,TypeError,KeyError) as exc:
         events,projection=[],dict(status='source_gap',reason=str(exc),raw_not_read=True)
@@ -340,6 +340,7 @@ def _current_sources(target_date):
 
 
 def _parents(target_date, events, registry):
+    from src.engine.scalping.entry_split_order_plan import _safe_bool
     inventory={};fills=defaultdict(list)
     for event in registry:
         if event.get('owner_type') != 'main_scalping' or event.get('side') != 'BUY' or event.get('action') != 'NEW':continue
@@ -352,10 +353,12 @@ def _parents(target_date, events, registry):
         no=(v.get('order_date'),str(v['broker_order_no']))
         if no in by_number and by_number[no][0]!=key:raise ValueError('submission_account_order_identity_conflict')
         by_number[no]=(key,v)
-    parents={};unclassified=0;joined=set()
+    parents={};unclassified=set();joined=set();joined_orders=set()
     for event in events:
         if event.get('stage') != 'entry_cancel_wait_submission' or event.get('emitted_date') != target_date:continue
-        f=event.get('fields') or {};context=_object(f.get('entry_cancel_wait_submission_context'))
+        f=event.get('fields') or {}
+        if not _safe_bool(f.get('actual_order_submitted')):continue
+        context=_object(f.get('entry_cancel_wait_submission_context'))
         if (not isinstance(context,dict) or context.get('sha256') != _digest({k:v for k,v in context.items() if k!='sha256'})
             or context.get('source_date') != target_date):
             raise ValueError('submission_context_hash_or_date_invalid')
@@ -364,8 +367,12 @@ def _parents(target_date, events, registry):
         if not actual:
             pair=by_number.get((target_date,str(f.get('broker_order_no'))));identity,actual=pair if pair else ('',None)
         if not actual:
-            unclassified+=1;continue
+            no=str(f.get('broker_order_no') or '')
+            unclassified.add(('order',target_date,no) if no else ('submission',_digest(event)))
+            continue
         joined.add(identity)
+        if actual.get('broker_order_no'):
+            joined_orders.add((target_date,str(actual['broker_order_no'])))
         seed=context.get('seed') or {};parent=context.get('parent_id') or 'unclassified:'+identity
         if seed and (seed.get('operating_contract') or {}).get('broker_route')!=context['broker_route']:
             raise ValueError('submission_frozen_seed_broker_route_conflict')
@@ -388,8 +395,17 @@ def _parents(target_date, events, registry):
         if ':AVG_DOWN:' in client or ':PYRAMID:' in client:continue
         # Missing producer events, unknown actions and rejected/ambiguous owner
         # attempts remain in the census; a verified projection zero is not enough.
-        unclassified+=1
-    return list(parents.values()),unclassified
+        no=str(actual.get('broker_order_no') or '')
+        unclassified.add(('order',target_date,no) if no else ('intent',identity))
+    for event in events:
+        if event.get('stage')!='order_leg_sent' or event.get('emitted_date')!=target_date:continue
+        fields=event.get('fields') or {}
+        if not _safe_bool(fields.get('actual_order_submitted')):continue
+        no=str(fields.get('broker_order_no') or fields.get('ord_no') or '')
+        key=('order',target_date,no) if no else ('projection',_digest(event))
+        if no and (target_date,no) in joined_orders:continue
+        unclassified.add(key)
+    return list(parents.values()),len(unclassified)
 
 
 def _previous_state(target_date):
@@ -407,7 +423,7 @@ def _previous_state(target_date):
         if state.get('parents') and registry_contract.get('status')!='verified':
             raise ValueError('cancel_wait_predecessor_registry_unverified')
         for source_day in set(state.get('source_counts',{}))|{p['source_date'] for p in state.get('parents',[])}:
-            original,contract=entry._bounded_execution_projection(source_day,stages=CANCEL_WAIT_SUMMARY_STAGES,
+            original,contract=entry._bounded_execution_projection(source_day,stages=CANCEL_WAIT_SUMMARY_STAGES | {'order_leg_sent'},
                 families=('dynamic_entry_price_resolver','entry_price_execution_quality'))
             retained=[e for e in state.get('source_events',[]) if e.get('emitted_date')==source_day]
             if contract.get('status')!='ready' or {_digest(e) for e in original}!={_digest(e) for e in retained}:
