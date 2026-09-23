@@ -42223,7 +42223,11 @@ def _entry_split_probe_first_deferred(fields: dict | None) -> bool:
     return bool(
         fields.get("entry_split_order_probe_first_required")
         and not fields.get("entry_split_order_probe_first_applied")
-        and fields.get("entry_split_order_probe_capacity_deferred")
+        and (
+            fields.get("entry_split_order_probe_capacity_deferred")
+            or fields.get("entry_split_order_skip_reason")
+            == "probe_residual_admission_deferred"
+        )
     )
 
 
@@ -42452,6 +42456,25 @@ def _entry_split_probe_observation_contract_fields(
             "entry_split_probe_scale_in_recheck_origin": (
                 stock.get("entry_split_probe_scale_in_recheck_origin") or "-"
             ),
+            "entry_split_probe_target_qty": _safe_int(
+                stock.get("entry_split_probe_target_qty"), 0
+            ),
+            "entry_split_probe_committed_qty": _safe_int(
+                stock.get("entry_split_probe_committed_qty"), 0
+            ),
+            "entry_split_probe_conditional_qty": _safe_int(
+                stock.get("entry_split_probe_conditional_qty"), 0
+            ),
+            "entry_split_probe_actual_submitted_qty": _safe_int(
+                stock.get("entry_split_probe_actual_submitted_qty"), 0
+            ),
+            "entry_split_probe_residual_terminal_qty": _safe_int(
+                stock.get("entry_split_probe_residual_terminal_qty"), 0
+            ),
+            **{
+                key: value for key, value in stock.items()
+                if key.startswith("entry_split_probe_successor_")
+            },
         }
     )
     return fields
@@ -42605,6 +42628,87 @@ def _post_probe_source_epoch(value: Any) -> float:
     if observed_at > 10_000_000_000:
         observed_at /= 1000.0
     return round(observed_at, 6) if observed_at > 0 else 0.0
+
+
+def _probe_residual_successor_source_fields(
+    code: str, ws_data: dict, *, curr_price: int, now_ts: float,
+    effective_venue: str = "", market_session_bucket: str = "",
+) -> dict[str, Any]:
+    """Observe the same live producers that can supply post-fill direction."""
+    ws = ws_data if isinstance(ws_data, dict) else {}
+    realtime = ws.get("last_realtime_type_ts") or {}
+    realtime = realtime if isinstance(realtime, dict) else {}
+    ticks = [row for row in (ws.get("recent_trade_ticks") or []) if isinstance(row, dict)]
+    tick_at = max(
+        _post_probe_source_epoch(realtime.get("0B")),
+        max(
+            (_post_probe_source_epoch(row.get("received_at_ms")) for row in ticks),
+            default=0.0,
+        ),
+    )
+    tick_event_at = max(
+        (_post_probe_source_epoch(row.get("ts") or row.get("timestamp")) for row in ticks),
+        default=0.0,
+    )
+    tick_age = now_ts - tick_at if tick_at > 0 else None
+    pressure = next(
+        (_safe_float(ws.get(key), None) for key in
+         ("buy_pressure_10t", "buy_pressure", "last_buy_pressure_10t")
+         if _safe_float(ws.get(key), None) is not None), None
+    )
+    tick_ready = bool(
+        str(ws.get("tick_context_quality") or "").strip().lower() == "fresh_computed"
+        and _truthy_field(ws.get("tick_aggressor_pressure_usable"))
+        and not _truthy_field(ws.get("tick_context_stale"))
+        and pressure is not None and math.isfinite(pressure)
+    )
+    micro = _build_orderbook_micro_log_fields(
+        _build_live_orderbook_micro_context(code, curr_price=curr_price)
+    )
+    micro_age = _safe_float(micro.get("orderbook_micro_snapshot_age_ms"), None)
+    micro_ready = bool(
+        micro.get("orderbook_micro_ready")
+        and micro.get("orderbook_micro_observer_healthy") is True
+        and micro_age is not None and micro_age >= 0
+    )
+    micro_state = str(micro.get("orderbook_micro_state") or "").strip().lower()
+    source_identity = {
+        "stock_code": code,
+        "ws_0b_at": tick_at,
+        "ws_tick_event_at": tick_event_at,
+        "ws_tick_quality": ws.get("tick_context_quality"),
+        "ws_buy_pressure": pressure,
+        "live_micro_at_ms": micro.get("orderbook_micro_captured_at_ms"),
+        "live_micro_state": micro.get("orderbook_micro_state"),
+        "live_micro_qi": micro.get("orderbook_micro_qi"),
+        "live_micro_ofi": micro.get("orderbook_micro_ofi_norm"),
+        "effective_venue": effective_venue,
+        "market_session_bucket": market_session_bucket,
+    }
+    return {
+        "entry_split_probe_successor_ws_tick_ready": tick_ready,
+        "entry_split_probe_successor_ws_tick_at": tick_at,
+        "entry_split_probe_successor_ws_tick_event_at": tick_event_at,
+        "entry_split_probe_successor_ws_tick_age_sec": tick_age,
+        "entry_split_probe_successor_ws_tick_negative": bool(
+            pressure is not None
+            and pressure < _rising_missed_reversal_pre_submit_low_buy_pressure_max()
+        ),
+        "entry_split_probe_successor_live_micro_ready": micro_ready,
+        "entry_split_probe_successor_live_micro_negative": micro_state == "bearish",
+        "entry_split_probe_successor_live_micro_age_ms": micro_age,
+        "entry_split_probe_successor_live_micro_at_ms": micro.get(
+            "orderbook_micro_captured_at_ms"
+        ),
+        "entry_split_probe_successor_live_micro_state": micro.get(
+            "orderbook_micro_state"
+        ),
+        "entry_split_probe_successor_effective_venue": effective_venue,
+        "entry_split_probe_successor_market_session_bucket": market_session_bucket,
+        "entry_split_probe_successor_source_sha256": hashlib.sha256(
+            json.dumps(source_identity, sort_keys=True, default=str).encode()
+        ).hexdigest(),
+    }
 
 
 def _wait_probe_contract_at_submit(stock: dict, *, now_ts: float) -> bool:
@@ -43945,6 +44049,11 @@ def _abort_entry_split_probe_residual(
         "entry_split_probe_phase": "aborted",
         "entry_split_probe_abort_reason": reason,
         "entry_split_probe_abort_detail_reason": timeout_cause,
+        "entry_split_probe_residual_terminal_qty": max(
+            0,
+            _safe_int(stock.get("entry_split_probe_target_qty"), 0)
+            - _safe_int(stock.get("entry_split_probe_actual_submitted_qty"), 0),
+        ),
         "entry_split_probe_scale_in_forbidden": bool(
             preserve_position and not scale_in_recheck_allowed
         ),
@@ -44114,6 +44223,7 @@ def _abort_entry_split_probe_residual(
             phase="aborted",
             reason=reason,
             filled_qty=filled_qty,
+            residual_terminal_qty=set_fields["entry_split_probe_residual_terminal_qty"],
             soft_abort=soft_abort,
             scale_in_recheck_allowed=scale_in_recheck_allowed,
             scale_in_recheck_origin=set_fields[
@@ -68799,6 +68909,20 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 **microstructure_submit_log_fields,
                 **submit_revalidation_fields,
                 **entry_ai_submit_authority,
+                **(
+                    _probe_residual_successor_source_fields(
+                        code, ws_data, curr_price=curr_price, now_ts=time.time(),
+                        effective_venue=str(
+                            stock.get("rising_missed_effective_venue")
+                            or stock.get("effective_venue") or ""
+                        ),
+                        market_session_bucket=str(
+                            stock.get("rising_missed_market_session_bucket")
+                            or stock.get("market_session_bucket") or ""
+                        ),
+                    )
+                    if requested_qty > 1 else {}
+                ),
                 "orderbook_micro_stale_threshold_ms": _rule_int(
                     "OFI_AI_SMOOTHING_STALE_THRESHOLD_MS", 700
                 ),
@@ -68883,14 +69007,12 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     "entry_execution_sizing_plan_v1"
                 ),
                 "entry_execution_sizing_plan_emitted": False,
-                "entry_execution_sizing_valid": bool(
-                    entry_split_fields.get("entry_split_order_probe_capacity_deferred")
+                "entry_execution_sizing_valid": _entry_split_probe_first_deferred(
+                    entry_split_fields
                 ),
                 "entry_execution_sizing_blockers": (
                     []
-                    if entry_split_fields.get(
-                        "entry_split_order_probe_capacity_deferred"
-                    )
+                    if _entry_split_probe_first_deferred(entry_split_fields)
                     else ["planned_orders_missing"]
                 ),
             }
@@ -69057,7 +69179,12 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             stock,
             code,
             (
-                "entry_split_probe_capacity_deferred"
+                (
+                    "entry_split_probe_admission_deferred"
+                    if entry_split_fields.get("entry_split_order_skip_reason")
+                    == "probe_residual_admission_deferred"
+                    else "entry_split_probe_capacity_deferred"
+                )
                 if _entry_split_probe_first_deferred(entry_split_fields)
                 else (
                     "entry_split_order_plan_applied"
@@ -69103,6 +69230,15 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     "entry_split_probe_phase": "probe_submitting",
                     "entry_split_probe_bundle_id": probe_bundle_id,
                     "entry_split_probe_requested_qty": requested_qty,
+                    "entry_split_probe_target_qty": requested_qty,
+                    "entry_split_probe_committed_qty": 1,
+                    "entry_split_probe_conditional_qty": max(0, requested_qty - 1),
+                    "entry_split_probe_actual_submitted_qty": 0,
+                    "entry_split_probe_residual_terminal_qty": 0,
+                    **{
+                        key: value for key, value in entry_split_fields.items()
+                        if key.startswith("entry_split_probe_successor_")
+                    },
                     "entry_split_probe_continuation": probe_continuation,
                     "entry_split_probe_submit_best_ask": _safe_int(
                         probe_order.get("entry_split_order_probe_submit_best_ask"), 0
@@ -70211,6 +70347,9 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     "entry_split_probe_phase": probe_phase,
                     "entry_split_probe_order_no": ord_no,
                     "entry_split_probe_submitted_at": order_sent_ts,
+                    "entry_split_probe_actual_submitted_qty": max(
+                        1, _safe_int(stock.get("entry_split_probe_actual_submitted_qty"), 0)
+                    ),
                 },
             )
             update_probe_runtime_bundle(
@@ -70218,6 +70357,9 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 phase=probe_phase,
                 order_no=ord_no,
                 submitted_at=order_sent_ts,
+                actual_submitted_qty=_safe_int(
+                    stock.get("entry_split_probe_actual_submitted_qty"), 0
+                ),
                 requested_order_type=order_resolution.get("requested_order_type"),
                 effective_order_type=order_resolution.get("effective_order_type"),
                 dmst_stex_tp=response_broker_route,
@@ -81333,7 +81475,9 @@ def _submit_entry_split_probe_residual_locked(
                 actual_order_submitted=False,
                 broker_order_forbidden=True,
                 runtime_effect=True,
-                **direction_fields,
+                **_merge_entry_pipeline_field_groups(
+                    direction_fields, _entry_split_probe_observation_contract_fields(stock)
+                ),
             )
             return False
         stale_wait_recovery = bool(
@@ -81416,7 +81560,9 @@ def _submit_entry_split_probe_residual_locked(
                 actual_order_submitted=False,
                 broker_order_forbidden=True,
                 runtime_effect=True,
-                **direction_fields,
+                **_merge_entry_pipeline_field_groups(
+                    direction_fields, _entry_split_probe_observation_contract_fields(stock)
+                ),
             )
             return False
         chase_guard_fields = _post_probe_chase_guard_fields(
@@ -81476,7 +81622,9 @@ def _submit_entry_split_probe_residual_locked(
                 actual_order_submitted=False,
                 broker_order_forbidden=True,
                 runtime_effect=True,
-                **direction_fields,
+                **_merge_entry_pipeline_field_groups(
+                    direction_fields, _entry_split_probe_observation_contract_fields(stock)
+                ),
             )
             return False
     residual_orders, plan_fields = build_probe_residual_orders(
@@ -81950,6 +82098,14 @@ def _submit_entry_split_probe_residual_locked(
                 "order_type_remap_reason": resolution.get("order_type_remap_reason"),
             }
         )
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "entry_split_probe_actual_submitted_qty": 1 + sum(
+                    _safe_int(order.get("qty"), 0) for order in successful_orders
+                ),
+            },
+        )
         completed_during_order_bind = bool(
             str(stock.get("entry_split_probe_phase") or "") == "complete"
             and _safe_int(stock.get("buy_qty"), 0) >= requested_qty
@@ -82069,6 +82225,14 @@ def _submit_entry_split_probe_residual_locked(
                     "entry_split_probe_bounded_partial_submission": (
                         bounded_partial_submission
                     ),
+                    "entry_split_probe_actual_submitted_qty": 1 + sum(
+                        _safe_int(order.get("qty"), 0) for order in successful_orders
+                    ),
+                    "entry_split_probe_residual_terminal_qty": max(
+                        0, requested_qty - 1 - sum(
+                            _safe_int(order.get("qty"), 0) for order in successful_orders
+                        )
+                    ),
                 },
             )
             update_probe_runtime_bundle(
@@ -82142,6 +82306,8 @@ def _submit_entry_split_probe_residual_locked(
             set_fields={
                 "entry_split_probe_phase": "residual_submitted",
                 "entry_split_probe_residual_submitted_at": time.time(),
+                "entry_split_probe_actual_submitted_qty": requested_qty,
+                "entry_split_probe_residual_terminal_qty": 0,
             },
         )
         update_probe_runtime_bundle(
@@ -82149,6 +82315,7 @@ def _submit_entry_split_probe_residual_locked(
             phase="residual_submitted",
             residual_order_nos=[order.get("ord_no") for order in successful_orders],
             residual_orders=successful_orders,
+            residual_submitted_qty=requested_qty - 1,
             **_merge_entry_pipeline_field_groups(
                 plan_fields,
                 {

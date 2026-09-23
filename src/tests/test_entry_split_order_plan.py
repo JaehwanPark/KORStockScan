@@ -27,7 +27,72 @@ def _probe_ready_gate(action="WAIT"):
         "orderbook_micro_ready": True,
         "orderbook_micro_observer_healthy": True,
         "orderbook_micro_snapshot_age_ms": 100,
+        "entry_split_probe_successor_live_micro_ready": True,
+        "entry_split_probe_successor_live_micro_age_ms": 100,
+        "entry_split_probe_successor_live_micro_at_ms": 1790120000000,
     }
+
+
+def test_probe_admission_rejects_cached_pressure_without_live_successor():
+    cached_only = {
+        **_probe_ready_gate("BUY"),
+        "orderbook_micro_ready": False,
+        "tick_context_quality": "fresh_computed",
+        "tick_aggressor_pressure_usable": True,
+        "buy_pressure_10t": 72,
+        "entry_split_probe_successor_live_micro_ready": False,
+    }
+    assert split_plan._probe_residual_admission(cached_only, 3) == (
+        False, "residual_source_path_unavailable", "price_tick"
+    )
+    live = {
+        **cached_only,
+        "entry_split_probe_successor_ws_tick_ready": True,
+        "entry_split_probe_successor_ws_tick_age_sec": 0.2,
+        "entry_split_probe_successor_ws_tick_at": 1790120000,
+    }
+    assert split_plan._probe_residual_admission(live, 3) == (
+        True, "ready", "price_tick,signed_pressure"
+    )
+    live["entry_split_probe_successor_ws_tick_age_sec"] = 3.1
+    assert split_plan._probe_residual_admission(live, 3)[0] is False
+
+
+def test_probe_successor_observer_uses_live_sources_and_excludes_negative(monkeypatch):
+    from src.engine import sniper_state_handlers as handlers
+
+    now = 1_790_120_000.0
+    monkeypatch.setattr(
+        handlers, "_build_live_orderbook_micro_context",
+        lambda *args, **kwargs: {
+            "ready": True, "observer_healthy": True,
+            "micro_state": "neutral", "snapshot_age_ms": 100,
+            "captured_at_ms": int(now * 1000) - 100,
+        },
+    )
+    ws = {
+        "tick_context_quality": "fresh_computed",
+        "tick_aggressor_pressure_usable": True,
+        "buy_pressure_10t": 80,
+        "last_realtime_type_ts": {"0B": now - 0.2},
+    }
+    proof = handlers._probe_residual_successor_source_fields(
+        "095610", ws, curr_price=10000, now_ts=now
+    )
+    assert proof["entry_split_probe_successor_ws_tick_ready"] is True
+    assert proof["entry_split_probe_successor_live_micro_ready"] is True
+    assert proof["entry_split_probe_successor_ws_tick_age_sec"] == pytest.approx(0.2)
+    assert len(proof["entry_split_probe_successor_source_sha256"]) == 64
+
+    ws["buy_pressure_10t"] = 0
+    weak = handlers._probe_residual_successor_source_fields(
+        "095610", ws, curr_price=10000, now_ts=now
+    )
+    assert weak["entry_split_probe_successor_ws_tick_negative"] is True
+    gate = {**_probe_ready_gate("BUY"), **weak,
+            "orderbook_micro_ready": False, "tick_context_quality": "fresh_computed",
+            "tick_aggressor_pressure_usable": True, "buy_pressure_10t": 0}
+    assert split_plan._probe_residual_admission(gate, 3)[0] is False
 
 
 def test_acknowledged_entry_leg_merges_duplicate_policy_receipts():
@@ -2831,8 +2896,13 @@ def test_allocator_probe_first_reserves_one_share_and_builds_fill_anchored_resid
 
     assert fields["entry_split_order_probe_first_applied"] is True
     assert fields["entry_split_order_split_qty"] == 10
+    assert fields["entry_split_order_target_qty"] == 10
+    assert fields["entry_split_order_probe_committed_qty"] == 1
+    assert fields["entry_split_order_residual_conditional_qty"] == 9
     assert len(orders) == 1
     assert orders[0]["qty"] == 1
+    assert orders[0]["entry_split_order_target_qty"] == 10
+    assert orders[0]["entry_split_order_residual_conditional_qty"] == 9
     assert orders[0]["entry_split_order_leg_index"] == 0
     assert orders[0]["entry_split_order_execution_mode"] == "probe_first_market"
     continuation = orders[0]["entry_split_order_probe_continuation"]
@@ -2999,6 +3069,11 @@ def test_probe_first_defers_before_order_when_residual_direction_source_is_missi
     gate.pop("orderbook_micro_ready")
     gate.pop("orderbook_micro_observer_healthy")
     gate.pop("orderbook_micro_snapshot_age_ms")
+    gate.update({
+        "tick_context_quality": "fresh_computed",
+        "tick_aggressor_pressure_usable": True,
+        "buy_pressure_10t": 80,
+    })
     orders, fields = split_plan.apply_entry_split_order_policy(
         [{"tag": "normal", "qty": 4, "price": 10000}],
         stock={"code": "005930", "id": 3, "strategy": "SCALPING"},
@@ -3008,7 +3083,7 @@ def test_probe_first_defers_before_order_when_residual_direction_source_is_missi
     assert orders == []
     assert fields["entry_split_order_probe_residual_admission_groups"] == "price_tick"
     assert fields["entry_split_order_probe_residual_admission_reason"] == (
-        "residual_direction_sources_not_ready"
+        "residual_source_path_unavailable"
     )
     assert fields["entry_split_order_probe_first_required"] is True
     assert not (tmp_path / "probe.json").exists()
@@ -3705,6 +3780,11 @@ def test_probe_runtime_restart_clears_pending_recheck_without_opening_circuit(
     assert "entry_split_probe_direction_state" not in stock
     assert stock["entry_split_probe_terminal_outcome"] == "residual_not_submitted"
     assert (
+        stock["entry_split_probe_target_qty"],
+        stock["entry_split_probe_actual_submitted_qty"],
+        stock["entry_split_probe_residual_terminal_qty"],
+    ) == (5, 1, 4)
+    assert (
         stock["entry_split_probe_terminal_abort_reason"]
         == "post_probe_recheck_cleared_on_restart"
     )
@@ -3712,6 +3792,7 @@ def test_probe_runtime_restart_clears_pending_recheck_without_opening_circuit(
     assert state["circuit_open"] is False
     persisted = state["bundles"]["123456-probe-recheck-restart"]
     assert persisted["phase"] == "aborted"
+    assert persisted["residual_terminal_qty"] == 4
     assert persisted["entry_split_probe_scale_in_forbidden"] is True
     assert persisted["probe_expand_forbidden"] is True
 
@@ -4963,7 +5044,7 @@ def test_verified_completed_receipt_survives_capital_join_gap_in_producer():
     assert evidence['status']=='source_gap' and not evidence['candidates'] and not any(x['validated'] for x in evidence['model_scopes'])
 
 
-@pytest.mark.parametrize('mode', ['deferred', 'probe', 'invalid_sizing', 'opening'])
+@pytest.mark.parametrize('mode', ['deferred', 'admission_deferred', 'probe', 'invalid_sizing', 'opening'])
 def test_live_submit_split_branch_binds_or_releases_reservation(monkeypatch, tmp_path, mode):
     """Run the actual pre-broker branch, including its enclosing conditions."""
     import ast
@@ -4985,8 +5066,10 @@ def test_live_submit_split_branch_binds_or_releases_reservation(monkeypatch, tmp
     branch.body = function.body[start:end] + branch.body
     module = ast.fix_missing_locations(ast.Module(body=[branch], type_ignores=[]))
     fields = {'entry_split_order_probe_first_required': True,
-              'entry_split_order_probe_first_applied': mode != 'deferred',
+              'entry_split_order_probe_first_applied': mode not in {'deferred', 'admission_deferred'},
               'entry_split_order_probe_capacity_deferred': mode == 'deferred',
+              'entry_split_order_skip_reason': (
+                  'probe_residual_admission_deferred' if mode == 'admission_deferred' else ''),
               'entry_split_order_probe_first_skip_reason': 'probe_active_bundle_cap_reached',
               'entry_split_order_probe_bundle_id': 'new-plan'}
     probe = {'qty': 1, 'price': 1000, 'entry_split_order_probe_continuation': {'requested_qty': 5},
@@ -4994,12 +5077,15 @@ def test_live_submit_split_branch_binds_or_releases_reservation(monkeypatch, tmp
     split_plan.update_probe_runtime_bundle('new-plan', phase='planned')
     calls, stock = [], {'id': 1}
     env = {**vars(handlers), 'stock': stock, 'code': '000001', 'strategy': 'SCALPING',
+           'ws_data': {}, 'curr_price': 1000,
+           '_probe_residual_successor_source_fields': lambda *a, **k: {},
            'opening_rotation_active': mode == 'opening', 'sizing_context': {}, 'budget_context': {},
            'planned_orders': [probe], 'latency_gate': {}, 'latency_price_snapshot': {},
            'entry_orderbook_micro_fields': {}, 'microstructure_submit_log_fields': {},
            'submit_revalidation_fields': {}, 'entry_ai_submit_authority': {}, 'requested_qty': 5,
            'entry_mode': 'normal', 'wait_probe_required': False,
-           'apply_entry_split_order_policy': lambda *a, **k: ([] if mode == 'deferred' else [probe], fields),
+           'apply_entry_split_order_policy': lambda *a, **k: (
+               [] if mode in {'deferred', 'admission_deferred'} else [probe], fields),
            'submit_attempt_machine_lineage': lambda *a: {'evaluation_attempt_id': 'current'},
            '_decorate_entry_split_leg_ttls': lambda orders, *a: orders,
            'compose_entry_execution_sizing_plan': lambda orders, **k: (orders, {
@@ -5016,6 +5102,10 @@ def test_live_submit_split_branch_binds_or_releases_reservation(monkeypatch, tmp
         assert stock['entry_split_probe_continuation'] == probe['entry_split_order_probe_continuation']
     elif mode == 'deferred':
         assert stages[-1] == 'entry_split_probe_capacity_deferred'
+        assert calls[-1][1]['broker_order_forbidden'] is True
+        assert 'order_bundle_failed' not in stages
+    elif mode == 'admission_deferred':
+        assert stages[-1] == 'entry_split_probe_admission_deferred'
         assert calls[-1][1]['broker_order_forbidden'] is True
         assert 'order_bundle_failed' not in stages
     elif mode == 'invalid_sizing':

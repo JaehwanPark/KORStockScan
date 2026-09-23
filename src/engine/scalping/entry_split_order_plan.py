@@ -429,6 +429,13 @@ def recover_probe_submit_contract_for_fill(
     recovery_fields = {
         "entry_split_probe_bundle_id": bundle_id,
         "entry_split_probe_requested_qty": requested_qty,
+        "entry_split_probe_target_qty": requested_qty,
+        "entry_split_probe_committed_qty": 1,
+        "entry_split_probe_conditional_qty": max(0, requested_qty - 1),
+        **{
+            key: value for key, value in bundle.items()
+            if key.startswith("entry_split_probe_successor_")
+        },
         "entry_split_probe_continuation": dict(continuation),
         "entry_split_probe_submit_best_ask": submit_best_ask,
         "entry_split_probe_timeout_sec": bundle.get("timeout_sec"),
@@ -614,6 +621,23 @@ def recover_probe_runtime_bundle_for_stock(
             if stock.get(key) in (None, "")
         }
         recovered_contract: dict[str, Any] = {}
+        requested_qty = _safe_int(bundle.get("requested_qty"), 0)
+        if requested_qty > 1:
+            recovered_contract.update({
+                "entry_split_probe_target_qty": requested_qty,
+                "entry_split_probe_committed_qty": 1 if requested_qty > 1 else 0,
+                "entry_split_probe_conditional_qty": max(0, requested_qty - 1),
+                "entry_split_probe_actual_submitted_qty": max(
+                    0, _safe_int(bundle.get("actual_submitted_qty"), 0)
+                ),
+                "entry_split_probe_residual_terminal_qty": max(
+                    0, _safe_int(bundle.get("residual_terminal_qty"), 0)
+                ),
+                **{
+                    key: value for key, value in bundle.items()
+                    if key.startswith("entry_split_probe_successor_")
+                },
+            })
         if "wait_contract_at_submit" in bundle:
             recovered_contract["entry_split_probe_wait_contract_at_submit"] = (
                 _safe_bool(bundle.get("wait_contract_at_submit"))
@@ -650,6 +674,13 @@ def recover_probe_runtime_bundle_for_stock(
             for key, value in recovered_contract.items()
             if stock.get(key) in (None, "")
             or (value is True and not _safe_bool(stock.get(key)))
+            or (
+                key in {
+                    "entry_split_probe_actual_submitted_qty",
+                    "entry_split_probe_residual_terminal_qty",
+                }
+                and _safe_int(stock.get(key), 0) < _safe_int(value, 0)
+            )
         }
         if missing_provenance or missing_contract:
             stock.update(missing_provenance)
@@ -766,6 +797,8 @@ def recover_probe_runtime_bundle_for_stock(
                     "recovered_actual_qty": actual_qty,
                     "terminal_at": recovered_at.timestamp(),
                     "terminal_outcome": "residual_not_submitted",
+                    "actual_submitted_qty": 1,
+                    "residual_terminal_qty": max(0, requested_qty - 1),
                     "terminal_abort_reason": close_reason,
                     "terminal_direction_state": terminal_direction_state,
                     "terminal_direction_reason": terminal_direction_reason,
@@ -784,6 +817,15 @@ def recover_probe_runtime_bundle_for_stock(
                 {
                     "entry_split_probe_phase": "aborted",
                     "entry_split_probe_bundle_id": bundle_id,
+                    "entry_split_probe_target_qty": requested_qty,
+                    "entry_split_probe_committed_qty": 1,
+                    "entry_split_probe_conditional_qty": max(0, requested_qty - 1),
+                    "entry_split_probe_actual_submitted_qty": 1,
+                    "entry_split_probe_residual_terminal_qty": max(0, requested_qty - 1),
+                    **{
+                        key: value for key, value in bundle.items()
+                        if key.startswith("entry_split_probe_successor_")
+                    },
                     "entry_split_probe_abort_reason": close_reason,
                     "entry_split_probe_scale_in_forbidden": scale_in_forbidden,
                     "probe_expand_forbidden": probe_expand_forbidden,
@@ -965,6 +1007,23 @@ def recover_probe_runtime_bundle_for_stock(
                 bundle.get("reason") if phase == "aborted" else None
             ),
             "entry_split_probe_requested_qty": requested_qty,
+            "entry_split_probe_target_qty": requested_qty,
+            "entry_split_probe_committed_qty": 1,
+            "entry_split_probe_conditional_qty": max(0, requested_qty - 1),
+            "entry_split_probe_actual_submitted_qty": (
+                max(0, _safe_int(bundle.get("actual_submitted_qty"), 0))
+                if bundle.get("actual_submitted_qty") is not None
+                else (0 if not bundle.get("order_no") else 1 + max(
+                    0, _safe_int(bundle.get("residual_submitted_qty"), 0)
+                ))
+            ),
+            "entry_split_probe_residual_terminal_qty": max(
+                0, _safe_int(bundle.get("residual_terminal_qty"), 0)
+            ),
+            **{
+                key: value for key, value in bundle.items()
+                if key.startswith("entry_split_probe_successor_")
+            },
             "entry_split_probe_continuation": bundle.get("continuation"),
             "entry_split_probe_submit_best_ask": bundle.get("probe_submit_best_ask"),
             "entry_split_probe_timeout_sec": bundle.get("timeout_sec"),
@@ -6668,13 +6727,40 @@ def _probe_residual_admission(
             for key in ("buy_pressure_10t", "buy_pressure", "last_buy_pressure_10t")
         )
     )
+    successor_micro_age = _safe_float(
+        fields.get("entry_split_probe_successor_live_micro_age_ms"), None
+    )
+    successor_tick_age = _safe_float(
+        fields.get("entry_split_probe_successor_ws_tick_age_sec"), None
+    )
+    successor_micro_at = _safe_float(
+        fields.get("entry_split_probe_successor_live_micro_at_ms"), None
+    )
+    successor_tick_at = _safe_float(
+        fields.get("entry_split_probe_successor_ws_tick_at"), None
+    )
     groups = ["price_tick"]
-    if orderbook_ready:
+    if (orderbook_ready
+            and _safe_bool(fields.get("entry_split_probe_successor_live_micro_ready"))
+            and not _safe_bool(fields.get("entry_split_probe_successor_live_micro_negative"))
+            and successor_micro_at is not None and successor_micro_at > 0
+            and successor_micro_age is not None
+            and 0 <= successor_micro_age <= max_age_ms):
         groups.append("orderbook")
-    if tick_ready:
+    if (tick_ready
+            and _safe_bool(fields.get("entry_split_probe_successor_ws_tick_ready"))
+            and not _safe_bool(fields.get("entry_split_probe_successor_ws_tick_negative"))
+            and successor_tick_at is not None and successor_tick_at > 0
+            and successor_tick_age is not None
+            and 0 <= successor_tick_age <= max(1, int(timeout_sec))):
         groups.append("signed_pressure")
     if len(groups) < 2:
-        return False, "residual_direction_sources_not_ready", ",".join(groups)
+        reason = (
+            "residual_source_path_unavailable"
+            if orderbook_ready or tick_ready
+            else "residual_direction_sources_not_ready"
+        )
+        return False, reason, ",".join(groups)
     return True, "ready", ",".join(groups)
 
 
@@ -7018,7 +7104,7 @@ def apply_entry_split_order_policy(
             }
         )
         return orders, fields
-    if probe_config["enabled"] and probe_eligible:
+    if probe_config["enabled"] and probe_eligible and not observation_only:
         admission_ok, admission_reason, admission_groups = _probe_residual_admission(
             latency_gate, probe_config["timeout_sec"]
         )
@@ -7030,6 +7116,15 @@ def apply_entry_split_order_policy(
                 ),
                 "entry_split_order_probe_residual_admission_reason": admission_reason,
                 "entry_split_order_probe_residual_admission_groups": admission_groups,
+                **{
+                    key: value for key, value in latency_gate.items()
+                    if key.startswith("entry_split_probe_successor_")
+                },
+                "entry_split_order_target_qty": total_qty,
+                "entry_split_order_probe_committed_qty": 1 if admission_ok else 0,
+                "entry_split_order_residual_conditional_qty": (
+                    total_qty - 1 if admission_ok else 0
+                ),
             }
         )
         if not admission_ok:
@@ -7137,6 +7232,10 @@ def apply_entry_split_order_policy(
             total_qty=total_qty,
             submit_contract={
                 "continuation": continuation,
+                **{
+                    key: value for key, value in latency_gate.items()
+                    if key.startswith("entry_split_probe_successor_")
+                },
                 "probe_submit_best_ask": market_first_reference_price,
                 "timeout_sec": probe_config["timeout_sec"],
                 "max_slippage_bps": probe_config["max_slippage_bps"],
@@ -7170,6 +7269,9 @@ def apply_entry_split_order_policy(
                 "entry_split_order_probe_anchor_mode": probe_config["anchor_mode"],
                 "entry_split_order_probe_submit_best_ask": market_first_reference_price,
                 "entry_split_order_probe_continuation": continuation,
+                "entry_split_order_target_qty": total_qty,
+                "entry_split_order_probe_committed_qty": 1,
+                "entry_split_order_residual_conditional_qty": total_qty - 1,
                 "entry_split_order_market_first_leg_applied": False,
                 "entry_split_order_market_reference_price": market_first_reference_price,
                 "split_leg_role": "probe",

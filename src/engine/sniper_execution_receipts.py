@@ -11456,6 +11456,11 @@ def _handle_entry_buy_execution(
             target_stock["entry_split_probe_order_no"] = order_no
             target_stock["entry_split_probe_fill_price"] = exec_price
             target_stock["entry_split_probe_filled_at"] = filled_at_ts
+            # The fill can race ahead of the submit acknowledgement.  A broker
+            # fill proves that the one-share probe was submitted.
+            target_stock["entry_split_probe_actual_submitted_qty"] = max(
+                1, _safe_int(target_stock.get("entry_split_probe_actual_submitted_qty"), 0)
+            )
             target_stock["entry_split_probe_scale_in_forbidden"] = True
             target_stock["probe_expand_forbidden"] = bool(
                 target_stock.get("entry_lifecycle_conflict")
@@ -11467,6 +11472,7 @@ def _handle_entry_buy_execution(
                 fill_price=exec_price,
                 filled_at=filled_at_ts,
                 fill_qty=effective_exec_qty,
+                actual_submitted_qty=target_stock["entry_split_probe_actual_submitted_qty"],
                 entry_split_probe_scale_in_forbidden=True,
                 probe_expand_forbidden=bool(
                     target_stock.get("entry_lifecycle_conflict")

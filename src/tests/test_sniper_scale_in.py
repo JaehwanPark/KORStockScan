@@ -4732,6 +4732,8 @@ def test_krx_like_wait_probe_timeout_releases_existing_scale_in_owner(monkeypatc
         "status": "HOLDING",
         "entry_filled_qty": 1,
         "entry_split_probe_requested_qty": 20,
+        "entry_split_probe_target_qty": 20,
+        "entry_split_probe_actual_submitted_qty": 1,
         "entry_split_probe_direction_reason": "post_probe_wait_negative_group",
         "rising_missed_effective_venue": "PREMARKET_KRX_LIKE",
         "rising_missed_market_session_bucket": "krx_like_premarket",
@@ -4753,6 +4755,10 @@ def test_krx_like_wait_probe_timeout_releases_existing_scale_in_owner(monkeypatc
     assert stock["entry_split_probe_scale_in_recheck_allowed"] is True
     assert stock["entry_split_probe_scale_in_forbidden"] is False
     assert stock["probe_expand_forbidden"] is False
+    assert stock["entry_split_probe_residual_terminal_qty"] == 19
+    assert state_handlers._entry_split_probe_observation_contract_fields(stock)[
+        "entry_split_probe_actual_submitted_qty"
+    ] == 1
 
 
 def test_nxt_wait_probe_timeout_keeps_fast_tape_fail_closed(monkeypatch):
@@ -28992,6 +28998,7 @@ def test_probe_fill_recovers_submit_contract_before_residual_callback(
     assert stock["entry_split_probe_requested_qty"] == 21
     assert stock["entry_split_probe_submit_best_ask"] == 10_010
     assert stock["entry_split_probe_phase"] == "probe_filled"
+    assert stock["entry_split_probe_actual_submitted_qty"] == 1
     assert callback_snapshots[0]["entry_split_probe_requested_qty"] == 21
     assert callback_snapshots[0]["entry_split_probe_bundle_id"] == ("123456-probe-race")
     assert callback_snapshots[0]["entry_split_probe_submit_best_ask"] == 10_010
@@ -29012,6 +29019,7 @@ def test_probe_fill_recovers_submit_contract_before_residual_callback(
     state = entry_split_order_plan.probe_runtime_state_snapshot(now=test_now)
     assert state["circuit_open"] is False
     assert state["bundles"]["123456-probe-race"]["phase"] == "probe_filled"
+    assert state["bundles"]["123456-probe-race"]["actual_submitted_qty"] == 1
 
 
 def test_probe_residual_missing_submit_contract_has_canonical_abort(monkeypatch):
