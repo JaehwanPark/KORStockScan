@@ -684,8 +684,8 @@ def test_update_ai_quote_freshness_fields_overwrites_stale_provenance(monkeypatc
     result = handlers._update_ai_quote_freshness_fields(ws_data)
 
     assert result is ws_data
-    assert ws_data["quote_age_ms"] == 50
-    assert ws_data["quote_age_source"] == "last_ws_update_ts"
+    assert ws_data["quote_age_ms"] == pytest.approx(50)
+    assert ws_data["quote_age_source"] == "canonical_adopted_quote_receive"
     assert ws_data["quote_stale"] is False
 
 
@@ -2366,7 +2366,7 @@ def test_entry_adm_snapshot_records_feature_parity_and_numeric_consistency(monke
     assert fields["tick_acceleration_ratio_raw"] == "0.000"
     assert fields["tick_accel_source"] == "same_second_burst_10ticks"
     assert fields["buy_pressure_10t"] == "71.200"
-    assert fields["curr_vs_micro_vwap_bp"] == "11.400"
+    assert fields["curr_vs_micro_vwap_bp"] == "not_evaluated"
     assert fields["curr_vs_ma5_bp"] == "9.800"
     assert fields["micro_vwap_available"] is False
     assert fields["minute_candle_context_quality"] == "unavailable_fail_closed"

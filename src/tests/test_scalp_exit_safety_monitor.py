@@ -1556,9 +1556,10 @@ def test_sell_route_guard_blocks_inter_session_gap_even_for_nxt_holding():
 
     assert resolution == {
         "blocked": True,
-        "dmst_stex_tp": "NXT",
+        "dmst_stex_tp": "UNKNOWN",
         "nxt_enabled": True,
         "nxt_flag_source": "stock.is_nxt",
+        "market_session_regime": "krx_like_premarket",
         "reason": "outside_supported_sell_execution_session",
     }
 
@@ -2028,6 +2029,7 @@ def test_fast_exit_broker_reject_uses_shared_sell_backoff(monkeypatch):
 
 def test_shared_exit_wrapper_preserves_explicit_route_and_guard_context(monkeypatch):
     calls = []
+    observed_at = datetime(2026, 9, 23, 10, 0, tzinfo=handlers._KST)
     monkeypatch.setattr(
         sniper_trade_utils.kiwoom_orders,
         "send_sell_order_market",
@@ -2041,6 +2043,7 @@ def test_shared_exit_wrapper_preserves_explicit_route_and_guard_context(monkeypa
         dmst_stex_tp="NXT",
         reason_type="LOSS",
         strategy="SCALPING",
+        now=observed_at,
     )
 
     assert calls == [
@@ -2052,6 +2055,8 @@ def test_shared_exit_wrapper_preserves_explicit_route_and_guard_context(monkeypa
             "dmst_stex_tp": "NXT",
             "reason_type": "LOSS",
             "strategy": "SCALPING",
+            "now": observed_at,
+            "existing_holding": True,
         }
     ]
 

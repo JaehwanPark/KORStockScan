@@ -616,6 +616,16 @@ def test_compact_public_finalization_uses_direct_pair_policy_consumer(tmp_path, 
     from src.engine.scalping.main_ai_prompt_consumer import verify_compact_handoff
     from src.tests.test_ai_action_outcome_calibration import _compact_router_case_table
 
+    class PublicationClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            observed_at = cls.fromisoformat("2026-09-18T20:00:00+09:00")
+            return observed_at.astimezone(tz) if tz else observed_at
+
+    # The publisher intentionally freezes an uncreated dated policy before
+    # PREOPEN. Exercise the historical publication at its own clock time.
+    monkeypatch.setattr(policy, "datetime", PublicationClock)
+
     parent = initial(tmp_path)
     proof = full_compact_proof()
     proof["machine_parent_bundle_sha256s"] = [parent["bundle_sha256"]]
