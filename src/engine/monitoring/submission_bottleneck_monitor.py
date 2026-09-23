@@ -437,6 +437,279 @@ def machine_semantics(data_root, now, *, tail_bytes=8 * 1024 * 1024):
     return result
 
 
+def _latest_dated_json(directory, prefix, through_date):
+    """Read one exact-date artifact; never scan event/history payloads here."""
+    candidates = []
+    for path in directory.glob(f"{prefix}????-??-??.json"):
+        day = path.name[len(prefix):-5]
+        try:
+            if datetime.fromisoformat(day).date().isoformat() == day and day <= through_date:
+                candidates.append((day, path))
+        except ValueError:
+            continue
+    if not candidates:
+        return None, None
+    day, path = max(candidates)
+    if path.is_symlink():
+        raise ValueError("semantic_artifact_symlink_rejected")
+    return day, _small_json(path)
+
+
+def entry_execution_tuning_semantics(data_root, now):
+    """Audit the independent split/delay postclose receipts without replaying data."""
+    now = stamp(now)
+    day = now.date().isoformat()
+    result = {
+        "schema": "entry_execution_tuning_semantics_v1",
+        "as_of": now.isoformat(),
+        "metric_role": "source_quality_gate",
+        "decision_authority": "report_only",
+        "axes_are_independent": True,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "forbidden_uses": ["entry_action", "split_or_delay_policy_change", "missing_as_zero_ev"],
+        "bootstrap": {"status": "unobservable"},
+        "entry_split": {"status": "unobservable", "runtime_consumption": "not_proven"},
+        "pre_submit_delay": {"status": "unobservable", "runtime_consumption": "not_proven"},
+        "issues": {},
+        "examples": [],
+    }
+    issues = Counter()
+    data_root = Path(data_root)
+
+    bootstrap_path = data_root / "runtime/policy_bootstrap" / f"runtime_policy_bootstrap_{day}.json"
+    verify_path = data_root / "runtime/policy_bootstrap" / f"runtime_policy_bootstrap_verify_{day}.json"
+    bootstrap = {}
+    bootstrap_valid = False
+    try:
+        bootstrap = _small_json(bootstrap_path)
+        verify = _small_json(verify_path)
+        if bootstrap.get("target_date") != day or verify.get("target_date") != day:
+            raise ValueError("bootstrap_target_date_mismatch")
+        bootstrap_valid = True
+        result["bootstrap"] = {
+            "status": "verified" if verify.get("status") == "pass" and verify.get("passed") is True else "verification_not_passed",
+            "verify_status": verify.get("status"),
+            "pid_passed": verify.get("pid_passed"),
+            "policy_pid_consumption_proven": False,
+        }
+        if result["bootstrap"]["status"] != "verified":
+            issues["entry_execution_bootstrap_verification_failed"] += 1
+            result["examples"].append({"axis": "bootstrap", "reason": "same_date_verification_not_passed"})
+    except (OSError, ValueError, TypeError) as exc:
+        result["bootstrap"] = {"status": "unobservable", "reason": str(exc)[:160]}
+
+    # Entry split: exact report-policy generation, source gap, and the dated
+    # incumbent named by the bootstrap are distinct facts. No candidate is not
+    # a receipt defect and does not create a synthetic zero-EV result.
+    split = result["entry_split"]
+    try:
+        report_date, report = _latest_dated_json(
+            data_root / "report/entry_split_order_plan", "entry_split_order_plan_", day
+        )
+        if report is None:
+            split.update(status="not_yet_observed", blocker="entry_split_report_missing")
+        else:
+            policy_path = data_root / "threshold_cycle/entry_split_order_policy" / f"entry_split_order_policy_{report_date}.json"
+            binding_status = "missing"
+            policy = None
+            if policy_path.is_symlink():
+                binding_status = "symlink_rejected"
+            elif policy_path.exists():
+                policy = _small_json(policy_path)
+                from src.engine.scalping.entry_split_order_plan import validate_report_policy_generation
+                valid, reason = validate_report_policy_generation(report, policy)
+                binding_status = "matched" if valid else reason
+            if binding_status != "matched":
+                issues["entry_split_report_policy_generation_mismatch"] += 1
+                if len(result["examples"]) < 3:
+                    result["examples"].append({"axis": "entry_split", "reason": binding_status, "source_date": report_date})
+            bootstrap_policy_binding = "unobservable"
+            if bootstrap_valid:
+                env = bootstrap.get("env_overrides") or {}
+                env_file = env.get("KORSTOCKSCAN_ENTRY_SPLIT_DAILY_BASELINE_POLICY_FILE") if isinstance(env, dict) else None
+                env_version = env.get("KORSTOCKSCAN_ENTRY_SPLIT_DAILY_BASELINE_POLICY_VERSION") if isinstance(env, dict) else None
+                configured = None
+                if env_file:
+                    configured_path = Path(str(env_file))
+                    try:
+                        configured_path.resolve(strict=True).relative_to(data_root.resolve(strict=True))
+                        if configured_path.is_symlink():
+                            raise ValueError("bootstrap_policy_symlink_rejected")
+                        configured = _small_json(configured_path)
+                    except (OSError, ValueError, RuntimeError):
+                        configured = None
+                        bootstrap_policy_binding = "configured_policy_invalid"
+                if configured is not None and configured.get("policy_version") != env_version:
+                    bootstrap_policy_binding = "configured_policy_version_mismatch"
+                elif configured is not None and policy and policy.get("runtime_apply_allowed") is True:
+                    same_file = Path(str(env_file)).resolve() == policy_path.resolve()
+                    bootstrap_policy_binding = "candidate_bound" if same_file and env_version == policy.get("policy_version") else "promoted_candidate_not_bound"
+                elif policy and policy.get("runtime_apply_allowed") is True:
+                    bootstrap_policy_binding = "promoted_candidate_not_bound"
+                elif configured is not None:
+                    bootstrap_policy_binding = "incumbent_preserved_candidate_not_promoted"
+                if bootstrap_policy_binding in {
+                    "configured_policy_invalid", "configured_policy_version_mismatch", "promoted_candidate_not_bound"
+                }:
+                    issue = "entry_split_bootstrap_policy_binding_invalid"
+                    issues[issue] += 1
+                    if len(result["examples"]) < 3:
+                        result["examples"].append({"axis": "entry_split", "reason": bootstrap_policy_binding, "source_date": report_date})
+            acceptance = report.get("economic_acceptance") or {}
+            candidates = report.get("operating_candidate_grid") or []
+            split.update(
+                status="source_gap" if acceptance.get("blockers") else "candidate_observed" if candidates else "no_candidate_observed",
+                source_date=report_date,
+                report_schema=report.get("schema_version"),
+                clean_baseline_date=(report.get("cumulative_state") or {}).get("clean_tuning_baseline_date"),
+                cumulative_source_date_count=len((report.get("cumulative_state") or {}).get("source_dates") or []),
+                economic_status=acceptance.get("status"),
+                blockers=list(acceptance.get("blockers") or [])[:12],
+                operating_candidate_count=len(candidates),
+                primary_operating_ev_pct=acceptance.get("primary_operating_ev_pct"),
+                robust_paired_delta_ev_lower_bound_pct=acceptance.get("robust_paired_delta_ev_lower_bound_pct"),
+                paired_model_row_count=acceptance.get("model_rows"),
+                consumed_holdout_count=acceptance.get("consumed_holdouts"),
+                policy_generation_binding=binding_status,
+                policy_runtime_apply_allowed=bool(policy and policy.get("runtime_apply_allowed")),
+                prepared_effective_date=(policy or {}).get("prepared_effective_date"),
+                paired_net_ev_delta_pct=acceptance.get("paired_net_ev_delta_pct"),
+                bootstrap_policy_binding=bootstrap_policy_binding,
+                runtime_consumption="bootstrap_manifest_bound_not_pid_proven" if bootstrap_policy_binding in {
+                    "candidate_bound", "incumbent_preserved_candidate_not_promoted"
+                } else "not_proven",
+            )
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        split.update(status="unobservable", reason=str(exc)[:160])
+
+    # The bootstrap's own delay selector is the canonical policy validator.
+    # Re-run that bounded small-artifact check and compare it with the frozen
+    # manifest; do not read raw pipeline/BBO history or regenerate the tuner.
+    delay = result["pre_submit_delay"]
+    try:
+        delay_report_date, delay_report = _latest_dated_json(
+            data_root / "report/pre_submit_delay_tuning", "pre_submit_delay_tuning_", day
+        )
+        if delay_report is not None:
+            report_identity_valid = (
+                delay_report.get("schema") == "pre_submit_delay_tuning_v1"
+                and delay_report.get("source_date") == delay_report_date
+                and delay_report.get("analysis_axis") == "pre_submit_delay"
+            )
+            if not report_identity_valid:
+                issues["pre_submit_delay_report_identity_invalid"] += 1
+                if len(result["examples"]) < 3:
+                    result["examples"].append({"axis": "pre_submit_delay", "reason": "report_identity_invalid", "source_date": delay_report_date})
+            delay_grid = delay_report.get("candidate_grid") or []
+            delay.update(
+                report_status="observed" if report_identity_valid else "invalid",
+                report_date=delay_report_date,
+                report_schema=delay_report.get("schema"),
+                report_source_date=delay_report.get("source_date"),
+                clean_baseline_date=delay_report.get("clean_tuning_baseline_date"),
+                source_date_count=(delay_report.get("source") or {}).get("source_date_count"),
+                committed_count=delay_report.get("committed_attempt_count"),
+                completed_terminal_count=delay_report.get("terminal_observation_count"),
+                candidate_count=len(delay_grid),
+                candidate_delays_sec=[row.get("delay_sec") for row in delay_grid[:8]],
+                report_blockers=[delay_report.get("first_blocker")] if delay_report.get("first_blocker") else [],
+                selected_delay_sec=delay_report.get("selected_delay_sec"),
+                net_ev_delta_pct=delay_report.get("net_ev_delta_pct"),
+            )
+        else:
+            delay["report_status"] = "not_yet_observed"
+        from src.engine.automation import runtime_policy_bootstrap as bootstrap_owner
+        expected_env, expected_handoff = bootstrap_owner._pre_submit_delay_handoff(day)
+        recorded_handoff = bootstrap.get("pre_submit_delay_handoff")
+        env = bootstrap.get("env_overrides") or {}
+        if not isinstance(env, dict):
+            raise ValueError("bootstrap_env_overrides_invalid")
+        # A missing/stale bootstrap is unobservable; do not turn it into a
+        # mismatch against today's selector. Only compare same-day receipts.
+        handoff_match = recorded_handoff == expected_handoff if bootstrap_valid else None
+        env_keys = set(bootstrap_owner.PRE_SUBMIT_DELAY_ENV_KEYS)
+        env_match = ({key: env.get(key) for key in env_keys if key in env} == expected_env
+                     if bootstrap_valid else None)
+        if bootstrap_valid and handoff_match is not True:
+            issues["pre_submit_delay_bootstrap_handoff_mismatch"] += 1
+            if len(result["examples"]) < 3:
+                result["examples"].append({"axis": "pre_submit_delay", "reason": "bootstrap_handoff_mismatch"})
+        if bootstrap_valid and env_match is not True:
+            issues["pre_submit_delay_bootstrap_env_mismatch"] += 1
+            if len(result["examples"]) < 3:
+                result["examples"].append({"axis": "pre_submit_delay", "reason": "bootstrap_env_mismatch"})
+        status = expected_handoff.get("status")
+        delay.update(
+            status=("verified_policy_bound" if status in {"verified_candidate", "verified_carried_candidate"} and env_match is True
+                    else "source_gap" if status == "no_validated_candidate_source_gap"
+                    else "unpublished" if status == "not_published"
+                    else "contract_mismatch" if status == "binding_invalid" or handoff_match is False
+                    else "unobservable"),
+            handoff_status=status,
+            source_date=expected_handoff.get("source_date"),
+            effective_from=expected_handoff.get("effective_from"),
+            policy_sha256=expected_handoff.get("policy_sha256"),
+            bootstrap_handoff_match=handoff_match,
+            bootstrap_env_match=env_match,
+            runtime_consumption="bootstrap_manifest_bound_not_pid_proven" if expected_env and env_match is True else "not_proven",
+            runtime_effect=False,
+        )
+        if status == "binding_invalid":
+            issues["pre_submit_delay_policy_binding_invalid"] += 1
+            if len(result["examples"]) < 3:
+                result["examples"].append({"axis": "pre_submit_delay", "reason": "policy_binding_invalid"})
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        delay.update(status="unobservable", reason=str(exc)[:160])
+
+    result["issues"] = dict(issues)
+    if issues:
+        result["status"] = "review_required"
+    elif result["bootstrap"].get("status") == "verified":
+        result["status"] = "observed"
+    else:
+        result["status"] = "partial_unobservable"
+    return result
+
+
+def attach_entry_execution_tuning_semantics(result, semantics):
+    """Persist only contradictory receipt claims; source gaps remain diagnostic."""
+    result["entry_execution_tuning_semantics"] = semantics
+    key = "entry_execution_tuning_receipt_contract"
+    old = result["incidents"].get(key, {})
+    if semantics.get("issues"):
+        now = stamp(result["as_of"])
+        first = old.get("first_seen", result["as_of"]) if old.get("status") in {"pending", "active"} else result["as_of"]
+        item = dict(
+            scope="entry_split|pre_submit_delay",
+            rule=key,
+            category="structural_evidence",
+            first_seen=first,
+            last_seen=result["as_of"],
+            status="active" if (now - stamp(first)).total_seconds() >= 240 else "pending",
+            count=sum(semantics["issues"].values()),
+            issues=semantics["issues"],
+            examples=semantics.get("examples", [])[:3],
+            owner="entry_split_order_plan->pre_submit_delay_tuning->runtime_policy_bootstrap",
+            closure_test="same-date report/policy generation and bootstrap handoff hashes agree",
+            notified_status=old.get("notified_status") if old.get("status") in {"pending", "active"} else None,
+        )
+        if old.get("history"):
+            item["history"] = old["history"]
+        if old.get("status") == "historical_unresolved":
+            item["history"] = (list(old.get("history", [])) + [{k: v for k, v in old.items() if k != "history"}])[-8:]
+        result["incidents"][key] = item
+    elif old.get("status") == "active":
+        result["incidents"][key] = {**old, "status": "historical_unresolved"}
+    elif old.get("status") == "pending":
+        result["incidents"].pop(key, None)
+    item = result["incidents"].get(key, {})
+    if item.get("status") == "active" and item.get("notified_status") != item["status"]:
+        if key not in result["notification_pending"]:
+            result["notification_pending"].append(key)
+
+
 def attach_machine_semantics(result, semantics):
     """Persistent report-only receipt faults; absence never repairs old evidence."""
     result["machine_semantics"] = semantics
@@ -754,6 +1027,10 @@ def notify(result, path, send=None):
             cause_text += (f"판정: {example.get('mechanistic_action') or '미확인'} / "
                            f"조회 원인: {detail or '자금 조회 외 계약 결손 또는 구형 근거'}\n"
                            "후단 실행 재생 증거 결손입니다. 기계 튜닝 실패나 실제 주문 실패 건수가 아닙니다.\n")
+        elif item["rule"] == "entry_execution_tuning_receipt_contract":
+            axis = ", ".join(sorted({str(row.get("axis")) for row in item.get("examples", []) if row.get("axis")}))
+            cause_text += f"대상 축: {axis or 'entry_split / pre_submit_delay'}\n"
+            cause_text += "보고서의 후보 부족·source gap 자체는 오류나 EV 0으로 판정하지 않습니다.\n"
         messages.append(cause_text + f'{item["status"]}: {item["rule"]}\n{item["scope"]}\n근거 {item["count"]}건 / {item["category"]}\n' +
                         json.dumps(item.get("examples", [])[:1], ensure_ascii=False)[:350])
     actionable = any(_notification_kind(result["incidents"][key], result) == "active" for key in keys[:4])
@@ -806,6 +1083,9 @@ def main():
         fcntl.flock(lock, fcntl.LOCK_EX)
         result = evaluate(report, _load_state(state_path), datetime.now(KST))
         attach_machine_semantics(result, machine_semantics(PROJECT_ROOT / "data", result["as_of"]))
+        attach_entry_execution_tuning_semantics(
+            result, entry_execution_tuning_semantics(PROJECT_ROOT / "data", result["as_of"])
+        )
         if args.notify:
             notify(result, output)
         _write_state(state_path, result)

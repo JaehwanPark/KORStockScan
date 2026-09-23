@@ -43,6 +43,11 @@
 
 ## 실행 항목
 
+- [ ] `[IntradaySemanticEntryExecutionTuningMonitor] entry split·최초 제출 지연의 독립 장후 결과와 runtime handoff 감시` (`Due: 2026-09-23`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~21:40`, `Track: RuntimeStability`)
+  - Source: [장중 제출병목·의미 감시 계획](../proposals/intraday-semantic-entry-monitoring-and-telegram-alert-feasibility-plan-2026-09-20.md#923-entry-split최초-제출-지연-장후-산출물-감시).
+  - 완료 기준: latest exact-date split report/policy generation binding과 bootstrap incumbent/candidate binding, delay report와 canonical bootstrap handoff를 구분해 기록한다. 후보 0·source gap·미발행은 incident가 아니며 EV null은 null로 보존한다. 구조 불일치만 persistence/Telegram 전이를 탄다. 실제 PID 소비와 주문/정책 효과는 이 감시가 증명하지 않는다. bounded JSON 외 raw replay·tuner 재실행을 하지 않고 기존 5분 cron에서 notify 없는 배포본 재검사까지 확인한다.
+  - 권한 경계: 판정·threshold·가격·수량·주문·provider·봇 PID를 변경하지 않는다.
+
 - [ ] `[PostcloseFinalizerControllerTerminalReceipt] controller terminal 영수증을 검증한 뒤 장후 마감` (`Due: 2026-09-23`, `Slot: POSTCLOSE`, `TimeWindow: 21:55~23:20`, `Track: RuntimeStability`)
   - Source: [Postclose handoff contract](../report-based-automation-traceability.md#complete-recommendation-and-terminal-summary-handoff-source-date-2026-09-09-onward).
   - 완료 기준: exact-date main 및 설치된 widget/machine predecessor가 성공한 뒤 controller canonical/attempt 영수증이 이번 finalizer 실행 이후 생성되고 byte-identical이며, `status=done`, `whole_native_chain_done_claimed=true`, `require_independent_producers=true`, strict verifier `pass`임을 확인한다. 불일치·`summary_verified`·오래된 report면 cleanup 전에 실패하고 final detector에 넘긴다. 최종 finalizer/detector terminal marker까지 확인한다.

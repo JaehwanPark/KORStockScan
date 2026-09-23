@@ -41,6 +41,119 @@ def active(state):
     return [r for r in state["incidents"].values() if r["status"] == "active"]
 
 
+def _entry_axis_fixture(data_root, *, delay_handoff=None, mismatch_split_policy=False, delay_env=None):
+    from src.engine.automation import runtime_policy_bootstrap as bootstrap_owner
+    from src.engine.scalping import entry_split_order_plan as split_owner
+
+    target = START.date().isoformat()
+    bootstrap_dir = data_root / "runtime/policy_bootstrap"
+    bootstrap_dir.mkdir(parents=True)
+    (bootstrap_dir / f"runtime_policy_bootstrap_{target}.json").write_text(json.dumps({
+        "target_date": target,
+        "pre_submit_delay_handoff": delay_handoff or {"status": "not_published", "target_date": target},
+        "env_overrides": delay_env or {},
+    }))
+    (bootstrap_dir / f"runtime_policy_bootstrap_verify_{target}.json").write_text(json.dumps({
+        "target_date": target, "status": "pass", "passed": True, "pid_passed": True,
+    }))
+
+    report = {
+        "schema_version": split_owner.SCHEMA_VERSION,
+        "date": target,
+        "recommended_policy": {
+            "policy_version": "entry_split_fixture_v1",
+            "entry_execution_sizing_plan_schema": split_owner.ATOMIC_EXECUTION_SIZING_SCHEMA,
+            "entry_execution_sizing_policy": split_owner.ATOMIC_EXECUTION_SIZING_BASELINE_POLICY,
+            "entry_price_plan_schema": split_owner.ATOMIC_PRICE_PLAN_SCHEMA,
+        },
+        "economic_acceptance": {
+            "status": "source_gap", "blockers": ["operating_paired_source_missing"],
+            "primary_operating_ev_pct": None,
+            "robust_paired_delta_ev_lower_bound_pct": None,
+            "model_rows": 0, "consumed_holdouts": 0,
+        },
+        "operating_candidate_grid": [],
+        "cumulative_state": {"clean_tuning_baseline_date": "2026-06-05", "source_dates": [target]},
+    }
+    policy = {
+        "schema_version": split_owner.POLICY_SCHEMA_VERSION,
+        "source_date": target,
+        "policy_version": "entry_split_fixture_v1",
+        "runtime_apply_allowed": False,
+        "entry_execution_sizing_plan_schema": split_owner.ATOMIC_EXECUTION_SIZING_SCHEMA,
+        "entry_execution_sizing_policy": split_owner.ATOMIC_EXECUTION_SIZING_BASELINE_POLICY,
+        "entry_price_plan_schema": split_owner.ATOMIC_PRICE_PLAN_SCHEMA,
+    }
+    report, policy = split_owner.bind_report_policy_generation(report, policy)
+    if mismatch_split_policy:
+        policy["policy_version"] = "tampered"
+    report_dir = data_root / "report/entry_split_order_plan"
+    policy_dir = data_root / "threshold_cycle/entry_split_order_policy"
+    report_dir.mkdir(parents=True)
+    policy_dir.mkdir(parents=True)
+    (report_dir / f"entry_split_order_plan_{target}.json").write_text(json.dumps(report))
+    (policy_dir / f"entry_split_order_policy_{target}.json").write_text(json.dumps(policy))
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(bootstrap_owner, "DATA_DIR", data_root)
+    return monkeypatch
+
+
+def test_entry_execution_semantics_keeps_source_gaps_separate_from_receipt_faults(tmp_path):
+    patch = _entry_axis_fixture(tmp_path)
+    try:
+        semantics = monitor.entry_execution_tuning_semantics(tmp_path, START)
+        assert semantics["status"] == "observed"
+        assert semantics["axes_are_independent"] is True
+        assert semantics["issues"] == {}
+        assert semantics["entry_split"]["status"] == "source_gap"
+        assert semantics["entry_split"]["operating_candidate_count"] == 0
+        assert semantics["entry_split"]["paired_net_ev_delta_pct"] is None
+        assert semantics["pre_submit_delay"]["status"] == "unpublished"
+    finally:
+        patch.undo()
+
+
+def test_entry_execution_semantics_detects_generation_and_handoff_mismatch(tmp_path):
+    patch = _entry_axis_fixture(
+        tmp_path, delay_handoff={"status": "verified_candidate", "target_date": START.date().isoformat()},
+        mismatch_split_policy=True,
+    )
+    try:
+        semantics = monitor.entry_execution_tuning_semantics(tmp_path, START)
+        assert semantics["status"] == "review_required"
+        assert "entry_split_report_policy_generation_mismatch" in semantics["issues"]
+        assert "pre_submit_delay_bootstrap_handoff_mismatch" in semantics["issues"]
+    finally:
+        patch.undo()
+
+
+def test_entry_execution_semantics_detects_stale_delay_environment_when_unpublished(tmp_path):
+    patch = _entry_axis_fixture(tmp_path, delay_env={
+        "KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ENABLED": "true",
+        "KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_FILE": "/old/pre_submit_delay_policy.json",
+    })
+    try:
+        semantics = monitor.entry_execution_tuning_semantics(tmp_path, START)
+        assert semantics["pre_submit_delay"]["handoff_status"] == "not_published"
+        assert semantics["issues"]["pre_submit_delay_bootstrap_env_mismatch"] == 1
+    finally:
+        patch.undo()
+
+
+def test_entry_execution_incident_persists_and_preserves_historical_gap():
+    base = monitor.evaluate({}, {}, START)
+    issue = {"issues": {"entry_split_report_policy_generation_mismatch": 1},
+             "examples": [{"axis": "entry_split", "reason": "generation_binding_missing"}]}
+    monitor.attach_entry_execution_tuning_semantics(base, issue)
+    assert base["incidents"]["entry_execution_tuning_receipt_contract"]["status"] == "pending"
+    later = monitor.evaluate({}, base, START + timedelta(minutes=5))
+    monitor.attach_entry_execution_tuning_semantics(later, issue)
+    assert later["incidents"]["entry_execution_tuning_receipt_contract"]["status"] == "active"
+    resolved = monitor.evaluate({}, later, START + timedelta(minutes=10))
+    monitor.attach_entry_execution_tuning_semantics(resolved, {"issues": {}, "examples": []})
+    assert resolved["incidents"]["entry_execution_tuning_receipt_contract"]["status"] == "historical_unresolved"
+
+
 @pytest.mark.parametrize("initial_status,initial_blocker", [
     ("guard_excluded", "common_guard_block:latency_state_danger"),
     ("source_gap", "exact_broker_capacity_missing"),

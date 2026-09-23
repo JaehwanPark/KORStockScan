@@ -91,3 +91,13 @@ wrapper의 lock/cooldown 안에서 Sentinel 성공 후 compact source consumer�
 - 최근30분 명확한 비진입 후단 관측 결손39건은 기계 튜닝 실패와 분리. 별도45분 보존·10분 유예의 원천/연결 경보17건과 후단 경제성 경보5건은 남는다. 후단5건은 RECHECK4건의 AI screen 미기록(not_reported:020000/033170/035420/064290)과043260의 이전 ENTER 이력이 있어 현재 비진입만 보고 제외하지 않은1건이다. 다음 owner는 필수 원천 freshness/입력 refresh 생산자, 명시 screen terminal 기록, ENTER revision별 경제성 proof다. closure는 fresh bound source와 동일 attempt 명시 terminal/proof이며 수익 하한·임계치 완화로 닫지 않는다.
 - 기존 전체일 요약의 SUBMIT_DROUGHT_CRITICAL/UPSTREAM_AI_THRESHOLD와 최근 기계 전용 진단은 분모가 다르다. 전자는 실제 AI VETO 원인 확정이 아니다. 과거 active 사건은 현재 표본에서 사라졌다는 이유로 복구 처리하지 않았다.
 - 최종 근거: `tmp/semantic-monitor-20260922/final-diagnosis.json`, `final-monitor.json`, `downstream-gap-examples.json`, `final-release-validation.json`, `final-recheck-processes.json`, `final-release-tests.log`. 구현·감시 재검사는 완료이며 원천 freshness 정상화/실제 주문·실현손익은 별도 운영 작업이다.
+
+## 9/23 entry split·최초 제출 지연 장후 산출물 감시
+
+감시기는 두 튜닝축의 장후 결과와 bootstrap handoff를 기존 5분 buy-funnel 실행에서 읽는다. 분할 정책과 최초 제출 지연은 별도로 표시하며 서로의 후보·증거·승격상태를 공유하지 않는다.
+
+- Entry split은 최신 exact-date report와 짝 정책의 generation binding, clean-baseline source-date 수, economic blocker, operating 후보 수, paired EV 하한/holdout 수를 읽는다. 후보 0건이나 source gap은 유효한 장후 결과 상태이지 감시 incident가 아니다. bootstrap이 명시적으로 runtime 적용 허용 후보를 선택했다면 그 policy file/version도 같은 manifest 값과 대조한다. source gap이면 bootstrap incumbent 보존을 정상으로 표시한다.
+- 최초 제출 지연은 최신 exact-date report의 intent/terminal census와 candidate/blocker 요약을 읽고 canonical `_pre_submit_delay_handoff` 결과를 당일 bootstrap manifest/environment와 비교한다. `not_published`와 `no_validated_candidate_source_gap`은 오류·EV 0으로 보지 않는다. invalid policy binding 또는 당일 handoff/environment와 현재 selector의 불일치만 결손으로 지속 관찰한다.
+- 두 축 모두 `runtime_effect=false`, 주문 권한 없음이다. Bootstrap manifest 일치는 설정 handoff 증거일 뿐 실제 PID가 정책을 소비했다는 증거가 아니며, monitor 결과에도 `not_pid_proven`으로 표시한다.
+- bounded exact-date JSON만 읽는다. 기존 소형 artifact 개별 8MiB 상한을 적용하며 raw pipeline/BBO 재생·전수 partition scan·tuner 재실행·새 collector/service는 추가하지 않는다. 출력은 기존 monitor incident/state/report와 Telegram 상태전이만 사용한다.
+- 검증은 source-gap/미발행 정상 억제, 같은 날짜 generation/handoff mismatch 지속 사건, 과거 날짜 제한, 독립축 표시, null EV 보존, 실제 cron이 고정 release monitor를 소비하는지로 닫는다. 자동매매 프로세스/PID 재기동은 이 감시 변경의 승인 범위가 아니다.
