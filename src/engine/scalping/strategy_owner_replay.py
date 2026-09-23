@@ -1183,6 +1183,32 @@ def _entry_seed_valid(seed):
         return False
 
 
+def entry_decision_version_identity(seed, receipt=None):
+    """Return the immutable machine/AI decision versions bound to this entry."""
+    if not isinstance(seed, dict):
+        return None
+    context = seed.get('operating_contract') or {}
+    decision = receipt if isinstance(receipt, dict) else context.get('entry_decision_version_receipt')
+    if not isinstance(decision, dict):
+        return None
+    identity = {key: decision.get(key) for key in (
+        'machine_bundle_sha256', 'machine_policy_version', 'machine_policy_sha256',
+        'compact_prompt_version', 'compact_prompt_sha256')}
+    if (decision.get('sha256') != owner.digest({k:v for k,v in decision.items() if k!='sha256'})
+        or decision.get('machine_bundle_sha256') != seed.get('policy_bundle_sha256')
+        or decision.get('evaluation_attempt_id') != seed.get('evaluation_attempt_id')
+        or not _sha(identity['machine_bundle_sha256'])
+        or not _sha(identity['machine_policy_sha256'])
+        or not _sha(identity['compact_prompt_sha256'])
+        or not all(isinstance(identity[k], str) and identity[k].strip() for k in (
+            'machine_policy_version', 'compact_prompt_version'))
+        or not isinstance(decision.get('decision_trace_id'), str)
+        or not decision.get('decision_trace_id')
+        or type(decision.get('runtime_pid')) is not int or decision['runtime_pid'] <= 0):
+        return None
+    return identity
+
+
 def replay_entry_opportunity(seed, depth_rows, trade_rows, *, source_ready, evaluated_at, cancel_model=None):
     """Replay all arms on one continuous exact-scope native path, without requests.
 
@@ -2450,19 +2476,15 @@ def entry_split_actual_economic_receipt(stock, *, buy_price, buy_qty, profit_rat
     cost_version='trade_profit_net_realized_pnl:rate=' + str(get_trade_cost_rate())
     qty=int(buy_qty) if _finite(buy_qty,positive=True) and int(buy_qty)==buy_qty else None
     net=stock.get('realized_pnl_krw')
+    decision=context.get('entry_decision_version_receipt') or {}
+    decision_identity=entry_decision_version_identity(seed, decision)
     complete=(stock.get('sell_execution_receipt_economics_complete') is True
         and stock.get('sell_execution_receipt_quantity_contract_complete') is True
         and _finite(net) and _finite(profit_rate) and qty is not None and 0<qty<=seed['total_qty']
         and stock.get('entry_split_initial_entry_lineage_conflict') is not True
+        and decision_identity is not None
         and cost_version==context['cost_policy_version'])
-    decision=context.get('entry_decision_version_receipt') or {}
-    decision_valid=(decision.get('sha256')==split._canonical_sha256({k:v for k,v in decision.items() if k!='sha256'})
-        and decision.get('machine_bundle_sha256')==seed['policy_bundle_sha256']
-        and decision.get('evaluation_attempt_id')==seed['evaluation_attempt_id']
-        and all(decision.get(k) for k in (
-            'machine_policy_version','machine_policy_sha256',
-            'compact_prompt_version','compact_prompt_sha256',
-            'decision_trace_id','runtime_pid')))
+    decision_valid=decision_identity is not None
     value=dict(episode_id=str(stock.get('position_episode_id') or seed['plan_sha256']),
         plan_sha256=seed['plan_sha256'],source_date=seed['source_date'],
         completion_date=completion_at.astimezone(KST).date().isoformat(),completed_at=completion_at.isoformat(),
@@ -2471,6 +2493,7 @@ def entry_split_actual_economic_receipt(stock, *, buy_price, buy_qty, profit_rat
         requested_qty=seed['total_qty'],actual_entry_vwap=buy_price,profit_rate=profit_rate if _finite(profit_rate) else None,
         net_pnl_krw=net if _finite(net) else None,cost_complete=complete,exact_lineage=complete,
         cost_policy_version=cost_version,cost_provenance='completed_sell_execution_receipt_trade_profit_configuration',
+        decision_policy_identity=decision_identity,
         budget_krw=context['budget_krw'],capital_krw_minutes=None,reserve_krw_minutes=None,
         entry_decision_version_receipt=decision if decision_valid else None,
         entry_decision_pid_consumed=bool(decision_valid),

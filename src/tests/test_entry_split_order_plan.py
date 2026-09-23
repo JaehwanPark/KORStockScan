@@ -4935,7 +4935,7 @@ def test_entry_replay_maturity_changes_reuse_identity_only_at_declared_boundary(
     assert split_plan._entry_replay_maturity_revision(events, now=start + 180) == split_plan._entry_replay_maturity_revision(events, now=start + 181)
 
 
-def _operating_economic_fixture():
+def _operating_economic_fixture(candidate_counts=(15,15)):
     scope='8'*64
     template=dict(leg_count=2,price_offsets_ticks=[0,1],qty_weight_min=.4,qty_weight_max=.4,
         urgency_score=0.,passive_edge_score=0.,policy_mode=split_plan.POLICY_MODE_REAL_PRIMARY_EV,
@@ -4948,6 +4948,17 @@ def _operating_economic_fixture():
                 status='COMPLETED',origin='real',cost_complete=True,exact_lineage=True,owner='main_scalping',
                 vwap_error_bps=0.,receipt_clock_error_sec=.1,quantity_error=0,
                 net_error_budget_pct=0.,capital_error_minutes=0.,reserve_error_minutes=0.,false_fill=False,missed_fill=False))
+    for n,model in enumerate(models):
+        decision=dict(evaluation_attempt_id=f'model-attempt-{n}',machine_bundle_sha256='a'*64,
+            machine_policy_version='machine-v1',machine_policy_sha256='1'*64,
+            compact_prompt_version='compact-v1',compact_prompt_sha256='2'*64,
+            decision_trace_id=f'model-trace-{n}',runtime_pid=123)
+        decision['sha256']=split_plan._canonical_sha256(decision)
+        model['entry_decision_version_receipt']=decision
+        model['entry_decision_pid_consumed']=True
+        model['decision_policy_identity']={k:decision[k] for k in (
+            'machine_bundle_sha256','machine_policy_version','machine_policy_sha256',
+            'compact_prompt_version','compact_prompt_sha256')}
     from src.engine.scalping.strategy_owner_replay import freeze_entry_opportunity, AUTHORITY, ENTRY_OPERATING_SCHEMA, entry_operating_model_identity
     from src.engine.lifecycle.avg_down_policy_replay import snapshot_version
     snapshot={'rules':{},'environment':{},'implementation':{}}
@@ -4957,8 +4968,8 @@ def _operating_economic_fixture():
         cost_provenance='frozen_loaded_trade_profit_configuration_not_broker_settlement',stress_cost_rate_increment=.0005,max_frame_gap_sec=5.,**AUTHORITY)
     context['sha256']=split_plan._canonical_sha256(context)
     rows=[]
-    for day in ['2026-09-10','2026-09-11']:
-        for n in range(15):
+    for day,count in zip(['2026-09-10','2026-09-11'],candidate_counts):
+        for n in range(count):
             arms={}
             for i,key in enumerate(split_plan.QUANTITY_LEG_FOUR_ARM_IDS):
                 arm=dict(**AUTHORITY,status='completed_source_only',actual_fill_evidence=False,requested_qty=10,modeled_filled_qty=10,
@@ -4970,18 +4981,29 @@ def _operating_economic_fixture():
                 market_session_bucket='krx_regular',policy_bundle_hash='a'*64,quantity_policy_version='qty-original',
                 split_policy_version='leg-original',price_policy_sha256='c'*64,price_plan_sha256='d'*64,
                 legs=[dict(qty=8,numeric_price=1000,execution_phase='immediate'),dict(qty=2,numeric_price=999,execution_phase='immediate')])
-            seed=freeze_entry_opportunity(plan,stock_code='005930',observed_at=datetime.fromisoformat(day+'T10:00:00+09:00').timestamp()+n*240,operating_context=context)
+            operating_context=dict(context)
+            decision=dict(evaluation_attempt_id=plan['action_receipt_id'],
+                machine_bundle_sha256=plan['policy_bundle_hash'],
+                machine_policy_version='machine-v1',machine_policy_sha256='1'*64,
+                compact_prompt_version='compact-v1',compact_prompt_sha256='2'*64,
+                decision_trace_id=f'trace-{day}-{n}',runtime_pid=123)
+            decision['sha256']=split_plan._canonical_sha256(decision)
+            operating_context['entry_decision_version_receipt']=decision
+            operating_context.pop('sha256',None)
+            operating_context['sha256']=split_plan._canonical_sha256(operating_context)
+            seed=freeze_entry_opportunity(plan,stock_code='005930',observed_at=datetime.fromisoformat(day+'T10:00:00+09:00').timestamp()+n*240,operating_context=operating_context)
             scope=split_plan._entry_operating_scope(seed)
             for model in models:model['scope_sha256']=scope
             for arm in arms.values():
                 arm.update(modeled_exit_at=day+'T12:00:00+09:00',cost_policy_version=context['cost_policy_version'],
-                    cost_provenance=context['cost_provenance'],exit_policy_sha256=context['exit_policy_version'],contract_sha256=context['sha256'],terminal_evidence_sha256='9'*64);arm.pop('sha256');arm['sha256']=split_plan._canonical_sha256(arm)
-            row=dict(attempt_id=f'candidate-{day}-{n}',episode_id=f'candidate-episode-{day}-{n}',
-                scope_sha256=scope,source_date=day,total_qty=10,budget_krw=100000.,arms=arms,
+                    cost_provenance=context['cost_provenance'],exit_policy_sha256=context['exit_policy_version'],contract_sha256=operating_context['sha256'],terminal_evidence_sha256='9'*64);arm.pop('sha256');arm['sha256']=split_plan._canonical_sha256(arm)
+            row=dict(attempt_id=seed['seed_sha256'],episode_id=seed['plan_sha256'],
+                plan_sha256=seed['plan_sha256'],scope_sha256=scope,source_date=day,total_qty=10,budget_krw=100000.,arms=arms,
                 context_bucket=split_plan._execution_type_bucket('balanced_normal', 1000),
                 candidate_template=template,origin='counterfactual',owner='main_scalping',seed=seed)
             row['sha256']=split_plan._canonical_sha256(row);rows.append(row)
-    return rows,models,{'2026-09-08':10,'2026-09-09':10,'2026-09-10':15,'2026-09-11':15}
+    return rows,models,{'2026-09-08':10,'2026-09-09':10,
+        '2026-09-10':candidate_counts[0],'2026-09-11':candidate_counts[1]}
 
 
 def test_operating_economics_positive_and_recomputed_policy_contract(tmp_path):
@@ -5003,6 +5025,54 @@ def test_operating_economics_positive_and_recomputed_policy_contract(tmp_path):
     assert split_plan.execution_model_policy_contract_status(report,policy)[0]
     evidence['candidates'][0]['partitions']['holdout']['candidate']['ev_pct']=999.
     assert not split_plan.execution_model_policy_contract_status(report,policy)[0]
+
+
+def test_operating_model_skips_early_incomplete_dates_without_outcome_selection():
+    rows,models,census=_operating_economic_fixture()
+    models.append(dict(episode_id='early-source-gap',scope_sha256=models[0]['scope_sha256'],
+        source_date='2026-09-07',status='source_gap',origin='real',owner='main_scalping'))
+    evidence=split_plan.evaluate_entry_split_operating_economics(rows,models,census,target_date='2026-09-17')
+    assert evidence['status']=='positive_candidate'
+    scope=evidence['model_scopes'][0]
+    assert scope['calibration_dates']==['2026-09-08']
+    assert scope['holdout_dates']==['2026-09-09']
+    check=evidence['cohort_checks'][0]
+    assert check['declared_model_dates'][0]=='2026-09-07'
+    assert check['eligible_model_dates']==['2026-09-08','2026-09-09']
+
+
+def test_operating_scope_binds_machine_and_compact_prompt_versions():
+    from copy import deepcopy
+    rows,_,_=_operating_economic_fixture()
+    seed=deepcopy(rows[0]['seed'])
+    original=split_plan._entry_operating_scope(seed)
+    receipt=seed['operating_contract']['entry_decision_version_receipt']
+    receipt['machine_policy_sha256']='3'*64
+    receipt['compact_prompt_sha256']='4'*64
+    receipt.pop('sha256');receipt['sha256']=split_plan._canonical_sha256(receipt)
+    context=seed['operating_contract'];context.pop('sha256')
+    context['sha256']=split_plan._canonical_sha256(context)
+    seed.pop('seed_sha256');seed['seed_sha256']=split_plan._canonical_sha256(seed)
+    assert split_plan._entry_operating_scope(seed)!=original
+
+
+def test_operating_paired_holdout_requires_minimum_partition_floor():
+    rows,models,census=_operating_economic_fixture(candidate_counts=(29,1))
+    evidence=split_plan.evaluate_entry_split_operating_economics(rows,models,census,target_date='2026-09-17')
+    assert evidence['status']=='insufficient_sample'
+    assert not evidence['candidates']
+    assert evidence['cohort_checks'][0]['candidates'][0]['blockers']==[
+        'paired_sample_coverage_or_latest_holdout_floor']
+
+
+def test_operating_paired_sample_cannot_be_inflated_by_relabeling_seed_attempt():
+    rows,models,census=_operating_economic_fixture(candidate_counts=(14,15))
+    duplicate=dict(rows[0],attempt_id='forged-attempt-id')
+    duplicate.pop('sha256');duplicate['sha256']=split_plan._canonical_sha256(duplicate)
+    rows.append(duplicate)
+    evidence=split_plan.evaluate_entry_split_operating_economics(rows,models,census,target_date='2026-09-17')
+    assert evidence['status']=='insufficient_sample'
+    assert not evidence['candidates']
 
 
 @pytest.mark.parametrize('defect,expected', [('no_models','insufficient_sample'),('holdout_error','model_validation_failed'),
@@ -5035,7 +5105,9 @@ def test_operating_holdout_revision_cannot_reuse_a_consumed_date():
     first=split_plan.evaluate_entry_split_operating_economics(rows,models,census,target_date='2026-09-17')
     reused=split_plan.evaluate_entry_split_operating_economics(rows,models,census,target_date='2026-09-17',consumed_holdouts=first['consumed_holdouts'])
     assert reused==first
-    rows[-1]['attempt_id']='different-after-viewing-holdout';rows[-1].pop('sha256');rows[-1]['sha256']=split_plan._canonical_sha256(rows[-1])
+    arm=rows[-1]['arms'][split_plan.QUANTITY_LEG_FOUR_ARM_IDS[2]]
+    arm['net_pnl_krw']+=1.;arm.pop('sha256');arm['sha256']=split_plan._canonical_sha256(arm)
+    rows[-1].pop('sha256');rows[-1]['sha256']=split_plan._canonical_sha256(rows[-1])
     revised=split_plan.evaluate_entry_split_operating_economics(rows,models,census,target_date='2026-09-17',consumed_holdouts=first['consumed_holdouts'])
     assert revised['status']=='source_gap' and not revised['candidates']
 
@@ -5139,6 +5211,17 @@ def test_initial_seed_survives_baseline_fill_and_completed_cost_producer(monkeyp
     assert result['entry_decision_pid_consumed'] is True
     assert result['entry_decision_version_receipt']==decision
     assert result['sha256']==split_plan._canonical_sha256({k:v for k,v in result.items() if k!='sha256'})
+    invalid_seed=deepcopy(seed)
+    invalid_seed['operating_contract'].pop('entry_decision_version_receipt')
+    invalid_seed['operating_contract']['sha256']=split_plan._canonical_sha256({
+        k:v for k,v in invalid_seed['operating_contract'].items() if k!='sha256'})
+    invalid_seed['seed_sha256']=split_plan._canonical_sha256({
+        k:v for k,v in invalid_seed.items() if k!='seed_sha256'})
+    invalid_stock=dict(stock,entry_split_initial_entry_seed=invalid_seed)
+    invalid=entry_split_actual_economic_receipt(invalid_stock,buy_price=1000,buy_qty=10,
+        profit_rate=1.7654,completion_at=datetime.fromisoformat('2026-09-11T20:00:00'))
+    assert invalid['cost_complete'] is False and invalid['exact_lineage'] is False
+    assert invalid['entry_decision_pid_consumed'] is False
     monkeypatch.setattr(split_plan,'DATA_DIR',tmp_path)
     path=split_plan._real_post_sell_candidate_path('2026-09-11');path.parent.mkdir(parents=True)
     path.write_text(json.dumps({'fields':{'entry_split_actual_economics':repr(result)}})+'\n')
@@ -5215,7 +5298,9 @@ def test_verified_completed_receipt_survives_capital_join_gap_in_producer():
         entry_qty=10,actual_entry_vwap=1000.,status='COMPLETED',origin='real',owner='main_scalping',cost_complete=True,
         exact_lineage=True,pid_consumed=True,policy_applied=True,policy_version='v1',policy_sha256='1'*64,
         fill_class='full',net_pnl_krw=200.,profit_rate=.2,budget_krw=100000.,
-        cost_policy_version=seed['operating_contract']['cost_policy_version'],capital_krw_minutes=None,reserve_krw_minutes=None)
+        cost_policy_version=seed['operating_contract']['cost_policy_version'],capital_krw_minutes=None,reserve_krw_minutes=None,
+        entry_decision_version_receipt=seed['operating_contract']['entry_decision_version_receipt'],
+        entry_decision_pid_consumed=True)
     actual['sha256']=split_plan._canonical_sha256(actual)
     diagnostic=dict(scope={'plan_sha256':plan},actual_filled_qty=10,actual_entry_vwap=1000.,actual_journal_legs=[],
         modeled_filled_qty=10,vwap_error_krw=0.,receipt_clock_error_sec=0.,false_fill=False,missed_fill=False)
