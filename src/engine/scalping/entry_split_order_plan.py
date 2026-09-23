@@ -1836,9 +1836,16 @@ def _iter_input_events(target_date: str) -> tuple[list[dict[str, Any]], dict[str
         "threshold_events": _threshold_events_path(target_date),
     }
     execution_projection = None
+    execution_projection_reused_source_names = []
     for source_name, path in source_paths.items():
         actual = existing_or_gzip_path(path)
         if actual.exists() and actual.stat().st_size > 64 * 1024 * 1024:
+            # Both large logs resolve through the same compact execution
+            # projection. Re-reading it for the second log duplicates both
+            # the bounded IO and the calibration population.
+            if execution_projection is not None:
+                execution_projection_reused_source_names.append(source_name)
+                continue
             source_rows, execution_projection = _bounded_execution_projection(target_date)
         else:
             source_rows = _iter_entry_split_input_rows(path, hard_blocking_stages=hard_blocking_stages)
@@ -1880,6 +1887,7 @@ def _iter_input_events(target_date: str) -> tuple[list[dict[str, Any]], dict[str
     return events, {
         "_entry_opportunity_plan_events": native_plan_events,
         "execution_projection": execution_projection,
+        "execution_projection_reused_source_names": execution_projection_reused_source_names,
         "source_paths": {
             name: _existing_jsonl_source(path) for name, path in source_paths.items()
         },

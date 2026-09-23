@@ -4757,6 +4757,40 @@ def test_submitted_main_order_missing_owner_journal_stays_in_census():
     assert report["allowed_runtime_apply"] is False
 
 
+def test_large_pipeline_and_threshold_logs_reuse_one_execution_projection(monkeypatch, tmp_path):
+    day = "2026-09-23"
+    pipeline = tmp_path / "pipeline.jsonl"
+    threshold = tmp_path / "threshold.jsonl"
+    for path in (pipeline, threshold):
+        with path.open("wb") as handle:
+            handle.truncate(64 * 1024 * 1024 + 1)
+    event = {
+        "stage": "order_leg_sent",
+        "stock_code": "005930",
+        "emitted_at": f"{day}T10:00:00+09:00",
+        "fields": {"stage": "order_leg_sent", "date": day},
+    }
+    projection_calls = []
+    monkeypatch.setattr(split_plan, "_pipeline_events_path", lambda _day: pipeline)
+    monkeypatch.setattr(split_plan, "_threshold_events_path", lambda _day: threshold)
+    monkeypatch.setattr(split_plan, "existing_or_gzip_path", lambda path: path)
+    monkeypatch.setattr(split_plan, "clean_baseline_policy", lambda: {})
+    monkeypatch.setattr(split_plan, "_source_quality_summary", lambda _day: {"hard_blocking_stages": []})
+    monkeypatch.setattr(split_plan, "is_date_allowed", lambda _day, _policy: True)
+    monkeypatch.setattr(split_plan, "_event_fields", lambda row: row["fields"])
+    monkeypatch.setattr(split_plan, "_event_date", lambda fields: fields.get("date"))
+    monkeypatch.setattr(split_plan, "_bounded_execution_projection", lambda _day: (
+        projection_calls.append(_day) or [event], {"status": "ready", "raw_not_read": True}
+    ))
+    monkeypatch.setattr(split_plan, "_existing_jsonl_source", lambda path: str(path))
+
+    events, summary = split_plan._iter_input_events(day)
+
+    assert projection_calls == [day]
+    assert len(events) == 1
+    assert summary["execution_projection_reused_source_names"] == ["threshold_events"]
+
+
 def test_execution_projection_is_not_valid_empty_and_preserves_exact_contract(monkeypatch, tmp_path):
     monkeypatch.setattr(split_plan, "DATA_DIR", tmp_path)
     rows, source = split_plan._bounded_execution_projection("2026-09-17")
