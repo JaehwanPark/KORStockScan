@@ -42268,7 +42268,7 @@ def _decorate_scale_in_split_leg_ttls(split_orders, stock, strategy):
 def _split_order_meta_fields(order: dict | None) -> dict:
     src = order if isinstance(order, dict) else {}
     return {
-        **{key:src[key] for key in ("entry_split_initial_entry_seed","entry_split_initial_entry_lineage_conflict","entry_split_order_policy_sha256","entry_split_order_runtime_pid","entry_split_order_runtime_consumed") if key in src},
+        **{key:src[key] for key in ("entry_split_initial_entry_seed","entry_split_initial_entry_lineage_conflict","entry_split_replay_seed_status","entry_split_replay_seed_blocker","entry_split_order_policy_sha256","entry_split_order_runtime_pid","entry_split_order_runtime_consumed") if key in src},
         "split_leg_ttl_sec": src.get("split_leg_ttl_sec"),
         "split_bundle_hard_ttl_sec": src.get("split_bundle_hard_ttl_sec"),
         "split_leg_role": src.get("split_leg_role"),
@@ -69289,7 +69289,14 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     stock["entry_split_initial_entry_lineage_conflict"] = True
                 else:
                     stock["entry_split_initial_entry_seed"] = copy.deepcopy(seed)
-                if planned_orders:
+            stock["entry_split_replay_seed_status"] = entry_execution_sizing_fields.get(
+                "entry_opportunity_replay_seed_status", "not_requested")
+            stock["entry_split_replay_seed_blocker"] = entry_execution_sizing_fields.get(
+                "entry_opportunity_replay_seed_blocker")
+            if planned_orders:
+                planned_orders[0]["entry_split_replay_seed_status"] = stock["entry_split_replay_seed_status"]
+                planned_orders[0]["entry_split_replay_seed_blocker"] = stock["entry_split_replay_seed_blocker"]
+                if seed:
                     planned_orders[0]["entry_split_initial_entry_seed"]=copy.deepcopy(stock["entry_split_initial_entry_seed"])
                     planned_orders[0]["entry_split_initial_entry_lineage_conflict"]=stock.get("entry_split_initial_entry_lineage_conflict",False)
         elif planned_orders:
@@ -71605,6 +71612,8 @@ def _merge_pending_entry_orders(existing_orders, entry_orders):
 ENTRY_SPLIT_POSITION_PROVENANCE_KEYS = (
     "entry_split_initial_entry_seed",
     "entry_split_initial_entry_lineage_conflict",
+    "entry_split_replay_seed_status",
+    "entry_split_replay_seed_blocker",
     "entry_split_order_policy_sha256",
     "entry_split_order_runtime_pid",
     "entry_split_order_runtime_consumed",

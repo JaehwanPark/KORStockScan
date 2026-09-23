@@ -19,6 +19,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from src.engine.automation.source_quality_clean_baseline import clean_baseline_policy
 from src.utils.constants import DATA_DIR
 
 KST = timezone(timedelta(hours=9))
@@ -62,13 +63,29 @@ def policy_path(target_date: str) -> Path:
 
 
 def _source_rows(target_date: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    directory = DATA_DIR / "threshold_cycle" / f"date={target_date}" / f"family={FAMILY}"
-    paths = sorted(directory.glob("part-execution-*.jsonl"))
+    baseline = str(clean_baseline_policy().get("clean_tuning_baseline_date") or "2026-06-05")
+    root = DATA_DIR / "threshold_cycle"
+    source_partitions: list[tuple[str, Path]] = []
+    if root.is_dir():
+        for directory in root.glob("date=*/family=" + FAMILY):
+            source_date = directory.parent.name.removeprefix("date=")
+            try:
+                if (date.fromisoformat(source_date).isoformat() == source_date
+                        and baseline <= source_date <= target_date):
+                    source_partitions.extend(
+                        (source_date, path)
+                        for path in sorted(directory.glob("part-execution-*.jsonl"))
+                    )
+            except ValueError:
+                continue
+    source_partitions.sort()
+    paths = [path for _, path in source_partitions]
     rows: list[dict[str, Any]] = []
     source_hash = hashlib.sha256()
     total_bytes = 0
     seen: set[str] = set()
-    for path in paths:
+    source_dates: set[str] = set()
+    for source_date, path in source_partitions:
         before = path.stat()
         if path.is_symlink() or before.st_size > 64 * 1024 * 1024:
             raise ValueError("delay_partition_invalid_or_unbounded")
@@ -79,7 +96,7 @@ def _source_rows(target_date: str) -> tuple[list[dict[str, Any]], dict[str, Any]
                     raise ValueError("delay_partition_decoded_budget_or_partial_line")
                 source_hash.update(line.encode())
                 row = json.loads(line)
-                if row.get("emitted_date") != target_date or row.get("family") != FAMILY:
+                if row.get("emitted_date") != source_date or row.get("family") != FAMILY:
                     raise ValueError("delay_partition_date_or_family_mismatch")
                 if row.get("stage") not in SOURCE_STAGES:
                     continue
@@ -89,17 +106,32 @@ def _source_rows(target_date: str) -> tuple[list[dict[str, Any]], dict[str, Any]
                 if identity not in seen:
                     rows.append(row)
                     seen.add(identity)
+                    source_dates.add(source_date)
         after = path.stat()
         if (before.st_ino, before.st_size, before.st_mtime_ns) != (
             after.st_ino, after.st_size, after.st_mtime_ns
         ):
             raise ValueError("delay_partition_changed_during_read")
-    if paths != sorted(directory.glob("part-execution-*.jsonl")):
+    current_partitions = sorted(
+        (source_date, path)
+        for source_date, directory in (
+            (item.parent.name.removeprefix("date="), item)
+            for item in root.glob("date=*/family=" + FAMILY)
+        )
+        if baseline <= source_date <= target_date
+        for path in directory.glob("part-execution-*.jsonl")
+    ) if root.is_dir() else []
+    if source_partitions != current_partitions:
         raise ValueError("delay_partition_inventory_changed")
     return rows, {
         "status": "ready" if paths else "source_gap",
-        "first_blocker": None if paths else "prospective_delay_observations_missing",
+        "first_blocker": None if paths else "clean_baseline_delay_observations_missing",
         "paths": [str(path) for path in paths],
+        "window_policy": "clean_baseline_cumulative_through_target_date",
+        "clean_tuning_baseline_date": baseline,
+        "through_date": target_date,
+        "source_dates": sorted(source_dates),
+        "source_date_count": len(source_dates),
         "bytes_read": total_bytes,
         "sha256": source_hash.hexdigest() if paths else None,
     }
@@ -177,7 +209,8 @@ def _validated_candidate(policy: dict[str, Any], report: dict[str, Any],
         grid = report.get("candidate_grid", [])
     selected = _number(selected_policy.get("selected_delay_sec"))
     if selected == 0:
-        return True
+        # Zero seconds remains the paired control arm, never a selected delay policy.
+        return False
     if selected not in DELAYS_SEC or report.get("status") != "validated_edge":
         return False
     if report.get("model_status") != "validated" or selected_policy.get("model_status") != "validated":
@@ -439,7 +472,7 @@ def build_report(
                  "candidate_passed": False}
                 for second in DELAYS_SEC
             ],
-            "selection_status": "root_zero_carry_source_gap",
+            "selection_status": "unselected_source_gap",
         } for scope_key in sorted(scope_counts)
     ]
     type_diagnostic = [
@@ -459,12 +492,12 @@ def build_report(
                     "candidate_passed": False,
                 } for second in DELAYS_SEC
             ],
-            "selection_status": "parent_zero_carry_source_gap",
+            "selection_status": "unselected_source_gap",
         } for type_key in sorted(type_counts)
     ]
     # Ask improvements alone are not executable fills. Until full/partial/no-fill
     # and completed-cost calibration are joined on this same denominator, every
-    # candidate EV remains null and the independent zero-second policy carries.
+    # candidate EV remains null and no delay policy is selected.
     if source["status"] == "source_gap":
         blocker = (
             "exact_commit_and_horizon_quote_binding_missing"
@@ -499,19 +532,19 @@ def build_report(
         "decision_type_schema": "pre_submit_delay_decision_type_v1",
         "type_census": type_diagnostic,
         "scope_census": scope_diagnostic,
-        "selected_type_policies": {row["type_key"]: 0.0 for row in type_diagnostic},
-        "selected_scope_policies": {row["scope_key"]: 0.0 for row in scope_diagnostic},
+        "selected_type_policies": {row["type_key"]: None for row in type_diagnostic},
+        "selected_scope_policies": {row["scope_key"]: None for row in scope_diagnostic},
         "model_status": "not_validated",
         "metric_role": "primary_ev",
         "decision_authority": "next_preopen_bounded_pre_submit_delay_policy",
-        "window_policy": "same_frozen_intent_first_submit_delay_0_30_60_120_180s",
+        "window_policy": "clean_baseline_cumulative_same_frozen_intent_first_submit_delay_0_30_60_120_180s",
         "sample_floor": {"paired_attempts": 10, "holdout_attempts": 3},
         "primary_decision_metric": "paired_completed_cost_net_ev_delta_pct",
         "source_quality_gate": "exact_intent_route_fresh_depth_fill_terminal_cost_and_holdout",
         "forbidden_uses": ["entry_action", "split_shape", "price_override",
                            "quantity_increase", "safety_guard_bypass"],
         "incumbent_net_ev_pct": None,
-        "selected_delay_sec": 0.0,
+        "selected_delay_sec": None,
         "status": "source_gap",
         "first_blocker": blocker,
         "realized_pnl_not_double_counted": True,
@@ -519,29 +552,35 @@ def build_report(
         "actual_order_submitted": False,
         "elapsed_sec": round(time.monotonic() - started, 4),
     }
+    policy_selected = (
+        _number(report.get("selected_delay_sec")) in DELAYS_SEC
+        and _number(report.get("selected_delay_sec")) > 0
+        and report.get("status") == "validated_edge"
+    )
     policy = {
         "schema": POLICY_SCHEMA,
         "source_date": target_date,
         "effective_from": effective_date,
-        "expires_on": effective_date,
+        "expires_on": "9999-12-31" if policy_selected else effective_date,
+        "carry_forward_until_superseded": policy_selected,
         "analysis_axis": FAMILY,
-        "selected_delay_sec": 0.0,
+        "selected_delay_sec": None,
         "scope_policies": {
             row["scope_key"]: {
-                "selected_delay_sec": 0.0,
-                "selection_status": "incumbent_zero_carry_source_gap",
+                "selected_delay_sec": None,
+                "selection_status": "unselected_source_gap",
                 "runtime_apply_allowed": False,
             } for row in scope_diagnostic
         },
         "type_policies": {
             row["type_key"]: {
-                "selected_delay_sec": 0.0,
-                "selection_status": "incumbent_zero_carry_source_gap",
+                "selected_delay_sec": None,
+                "selection_status": "unselected_source_gap",
                 "runtime_apply_allowed": False,
             } for row in type_diagnostic
         },
         "runtime_apply_allowed": False,
-        "selection_status": "incumbent_zero_carry_source_gap",
+        "selection_status": "unselected_source_gap",
         "first_blocker": blocker,
         "paired_net_ev_delta_pct": None,
         "holdout_net_ev_delta_pct": None,
@@ -549,7 +588,7 @@ def build_report(
         "source_report": str(report_path(target_date)),
         "decision_authority": "next_preopen_bounded_pre_submit_delay_policy",
         "metric_role": "primary_ev",
-        "window_policy": "same_frozen_intent_first_submit_delay_0_30_60_120_180s",
+        "window_policy": "clean_baseline_cumulative_same_frozen_intent_first_submit_delay_0_30_60_120_180s",
         "sample_floor": {"paired_attempts": 10, "holdout_attempts": 3},
         "primary_decision_metric": "paired_completed_cost_net_ev_delta_pct",
         "source_quality_gate": "exact_intent_route_fresh_depth_fill_terminal_cost_and_holdout",
@@ -567,7 +606,11 @@ def build_report(
 def load_runtime_policy(*, now: datetime | None = None,
                         decision_type: dict[str, Any] | None = None) -> dict[str, Any]:
     """Return zero unless an exact-date, economic-valid independent policy loads."""
-    fallback = {"delay_sec": 0.0, "status": "zero_incumbent", "policy_sha256": None}
+    fallback = {
+        "delay_sec": 0.0,
+        "status": "no_validated_delay_policy_existing_submit_behavior",
+        "policy_sha256": None,
+    }
     if os.getenv("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ENABLED", "").lower() not in {
         "1", "true", "yes", "on"
     }:
@@ -602,9 +645,22 @@ def load_runtime_policy(*, now: datetime | None = None,
         ):
             return {**fallback, "status": "policy_report_identity_invalid"}
         selected = _number(policy.get("selected_delay_sec"))
-        if selected not in DELAYS_SEC:
+        selector_only = (
+            selected is None
+            and policy.get("selection_status") == "selected_by_type"
+            and policy.get("runtime_apply_allowed") is True
+        )
+        if selected is None and not selector_only:
+            if (policy.get("selection_status") == "unselected_source_gap"
+                    and policy.get("runtime_apply_allowed") is False
+                    and report.get("status") == "source_gap"):
+                return {**fallback, "status": "no_validated_delay_policy_source_gap"}
             return {**fallback, "status": "policy_delay_invalid"}
-        if selected > 0 and not _validated_candidate(policy, report):
+        if selected is not None and selected not in DELAYS_SEC:
+            return {**fallback, "status": "policy_delay_invalid"}
+        if selected == 0:
+            return {**fallback, "status": "zero_seconds_is_control_not_policy"}
+        if selected is not None and selected > 0 and not _validated_candidate(policy, report):
             return {**fallback, "status": "policy_economics_unvalidated"}
         for family, evidence_key, key_name in (
             ("scope_policies", "scope_census", "scope_key"),
@@ -617,7 +673,7 @@ def load_runtime_policy(*, now: datetime | None = None,
                 if not isinstance(branch, dict) or key not in {
                     row.get(key_name) for row in report.get(evidence_key, [])
                     if isinstance(row, dict)
-                } or _number(branch.get("selected_delay_sec")) not in DELAYS_SEC:
+                } or _number(branch.get("selected_delay_sec")) not in DELAYS_SEC or _number(branch.get("selected_delay_sec")) <= 0:
                     return {**fallback, "status": "policy_selector_invalid"}
                 if _number(branch.get("selected_delay_sec")) > 0 and not _validated_candidate(
                     policy, report,
@@ -635,6 +691,8 @@ def load_runtime_policy(*, now: datetime | None = None,
         scope_branch = (policy.get("scope_policies") or {}).get(scope_key)
         branch = type_branch or scope_branch
         chosen = _number(branch.get("selected_delay_sec")) if branch else selected
+        if chosen is None or chosen <= 0:
+            return {**fallback, "status": "policy_type_uncovered"}
         return {"delay_sec": chosen, "status": "loaded", "policy_sha256": digest,
                 "selected_type_key": type_key if type_branch else None,
                 "selected_scope_key": scope_key if scope_branch and not type_branch else None}

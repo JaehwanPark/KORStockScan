@@ -45,11 +45,11 @@ def test_decision_type_is_frozen_from_known_submit_inputs_and_reported_separatel
     assert group["eligible_attempt_count"] == 1
     assert group["candidate_grid"][1]["source_valid_attempt_count"] == 1
     assert group["candidate_grid"][1]["paired_net_ev_delta_pct"] is None
-    assert report["selected_delay_sec"] == 0
+    assert report["selected_delay_sec"] is None
     assert report["first_blocker"] == "exact_submit_terminal_receipt_missing"
     policy = json.loads(delay.policy_path("2026-09-23").read_text())
-    assert policy["type_policies"][observed["type_key"]]["selected_delay_sec"] == 0
-    assert policy["scope_policies"]["KRX|KRX_REGULAR"]["selected_delay_sec"] == 0
+    assert policy["type_policies"][observed["type_key"]]["selected_delay_sec"] is None
+    assert policy["scope_policies"]["KRX|KRX_REGULAR"]["selected_delay_sec"] is None
     monkeypatch.setenv("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ENABLED", "true")
     monkeypatch.setenv("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_FILE",
                        str(delay.policy_path("2026-09-23")))
@@ -57,8 +57,8 @@ def test_decision_type_is_frozen_from_known_submit_inputs_and_reported_separatel
         now=datetime(2026, 9, 24, 9, tzinfo=timezone(timedelta(hours=9))),
         decision_type=observed,
     )
-    assert loaded["delay_sec"] == 0
-    assert loaded["selected_type_key"] == observed["type_key"]
+    assert loaded["delay_sec"] == 0  # Existing immediate-submit behavior, not a selected delay policy.
+    assert loaded["status"] == "no_validated_delay_policy_source_gap"
 
 
 def test_existing_post_decision_quote_is_counted_without_inventing_fill(tmp_path, monkeypatch):
@@ -99,11 +99,12 @@ def test_existing_post_decision_quote_is_counted_without_inventing_fill(tmp_path
     monkeypatch.setenv("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_FILE", str(delay.policy_path("2026-09-23")))
     now = datetime(2026, 9, 24, 10, 0, tzinfo=timezone(timedelta(hours=9)))
     assert delay.load_runtime_policy(now=now)["delay_sec"] == 0
+    assert delay.load_runtime_policy(now=now)["status"] == "no_validated_delay_policy_source_gap"
     from src.engine.automation import runtime_policy_bootstrap as bootstrap
     monkeypatch.setattr(bootstrap, "DATA_DIR", tmp_path)
     handoff_env, handoff = bootstrap._pre_submit_delay_handoff("2026-09-24")
-    assert handoff["status"] == "verified_zero_carry"
-    assert handoff_env["KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ACTIVE_DATE"] == "2026-09-24"
+    assert handoff["status"] == "no_validated_candidate_source_gap"
+    assert handoff_env == {}
     # A self-consistent file pair still cannot promote a 30-second arm when
     # the underlying report only contains quote fields and no paired EV.
     source_report = json.loads(delay.report_path("2026-09-23").read_text())
@@ -113,7 +114,8 @@ def test_existing_post_decision_quote_is_counted_without_inventing_fill(tmp_path
     source_report["selected_delay_sec"] = 30.0
     source_policy.update(selected_delay_sec=30.0, runtime_apply_allowed=True,
                          selection_status="selected", model_status="validated",
-                         paired_net_ev_delta_pct=1.0, holdout_net_ev_delta_pct=0.0)
+                         paired_net_ev_delta_pct=1.0, holdout_net_ev_delta_pct=0.0,
+                         expires_on="9999-12-31", carry_forward_until_superseded=True)
     source_policy["report_sha256"] = delay._digest(source_report)
     source_policy["policy_sha256"] = delay._digest(source_policy)
     source_report["policy_sha256"] = source_policy["policy_sha256"]
@@ -124,6 +126,34 @@ def test_existing_post_decision_quote_is_counted_without_inventing_fill(tmp_path
     delay.report_path("2026-09-23").write_text("{}\n", encoding="utf-8")
     assert delay.load_runtime_policy(now=now)["status"] == "policy_report_identity_invalid"
     assert bootstrap._pre_submit_delay_handoff("2026-09-24")[1]["status"] == "binding_invalid"
+
+
+def test_source_census_aggregates_only_clean_baseline_partitions(tmp_path, monkeypatch):
+    monkeypatch.setattr(delay, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(delay, "REPORT_DIR", tmp_path / "report" / "pre_submit_delay_tuning")
+    monkeypatch.setattr(delay, "POLICY_DIR", tmp_path / "threshold_cycle" / "pre_submit_delay_policy")
+
+    def write_day(day, identity):
+        source = tmp_path / "threshold_cycle" / f"date={day}" / "family=pre_submit_delay"
+        source.mkdir(parents=True)
+        (source / "part-execution-test.jsonl").write_text(json.dumps({
+            "stage": "pre_submit_delay_committed",
+            "fields": {"delay_intent_id": identity},
+            "family": "pre_submit_delay", "emitted_date": day,
+            "execution_source_event_sha256": identity.ljust(64, "0"),
+        }) + "\n", encoding="utf-8")
+
+    write_day("2026-06-04", "archive-only")
+    write_day("2026-06-05", "baseline-day")
+    write_day("2026-09-22", "prior-day")
+    write_day("2026-09-23", "target-day")
+    rows, source = delay._source_rows("2026-09-23")
+    assert [row["fields"]["delay_intent_id"] for row in rows] == [
+        "baseline-day", "prior-day", "target-day",
+    ]
+    assert source["window_policy"] == "clean_baseline_cumulative_through_target_date"
+    assert source["clean_tuning_baseline_date"] == "2026-06-05"
+    assert source["source_dates"] == ["2026-06-05", "2026-09-22", "2026-09-23"]
 
 
 def test_live_quote_observer_keeps_small_level_one_depth_as_valid_source(monkeypatch):
@@ -278,7 +308,7 @@ def test_type_selected_delay_never_spills_into_another_type(tmp_path, monkeypatc
     report = {
         "schema": delay.REPORT_SCHEMA, "analysis_axis": delay.FAMILY,
         "source_date": target, "effective_date": effective,
-        "selected_delay_sec": 0.0, "status": "validated_edge",
+        "selected_delay_sec": None, "status": "validated_edge",
         "model_status": "validated", "source": {"status": "ready"},
         "terminal_observation_count": 12, "candidate_grid": [],
         "scope_census": [],
@@ -288,8 +318,10 @@ def test_type_selected_delay_never_spills_into_another_type(tmp_path, monkeypatc
     }
     policy = {
         "schema": delay.POLICY_SCHEMA, "source_date": target,
-        "effective_from": effective, "expires_on": effective,
-        "selected_delay_sec": 0.0, "runtime_apply_allowed": True,
+        "effective_from": effective, "expires_on": "9999-12-31",
+        "carry_forward_until_superseded": True,
+        "selection_status": "selected_by_type",
+        "selected_delay_sec": None, "runtime_apply_allowed": True,
         "scope_policies": {},
         "type_policies": {selected_type["type_key"]: {
             "selected_delay_sec": 30.0, "runtime_apply_allowed": True,
@@ -310,6 +342,9 @@ def test_type_selected_delay_never_spills_into_another_type(tmp_path, monkeypatc
     from src.engine.automation import runtime_policy_bootstrap as bootstrap
     monkeypatch.setattr(bootstrap, "DATA_DIR", tmp_path)
     assert bootstrap._pre_submit_delay_handoff(effective)[1]["status"] == "verified_candidate"
+    carry_env, carry_receipt = bootstrap._pre_submit_delay_handoff("2026-09-25")
+    assert carry_receipt["status"] == "verified_carried_candidate"
+    assert carry_env["KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ACTIVE_DATE"] == "2026-09-25"
     policy["type_policies"][selected_type["type_key"]]["holdout_net_ev_delta_pct"] = -.1
     policy["report_sha256"] = delay._digest({k: v for k, v in report.items() if k != "policy_sha256"})
     policy.pop("policy_sha256")

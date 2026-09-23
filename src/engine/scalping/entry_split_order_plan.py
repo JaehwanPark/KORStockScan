@@ -4427,6 +4427,7 @@ def build_quantity_leg_four_arm_evaluation(
 # Observation only: shared with existing durable BUY/SELL receipt snapshots.
 ENTRY_SPLIT_ECONOMIC_RECEIPT_KEYS = (
     "entry_split_initial_entry_seed","entry_split_initial_entry_lineage_conflict",
+    "entry_split_replay_seed_status","entry_split_replay_seed_blocker",
     "entry_split_order_policy_sha256","entry_split_order_runtime_pid","entry_split_order_runtime_consumed",
     "entry_split_order_policy_applied","entry_split_order_policy_version","entry_split_order_bucket",
     "entry_split_order_policy_mode","entry_split_order_policy_variant_id","entry_split_order_variant_id",
@@ -4787,12 +4788,17 @@ def _read_bounded_actual_entry_outcomes(target_date):
     if not path.is_file():return [],{"path":str(path),"status":"missing","sha256":None}
     before=path.stat()
     if path.is_symlink() or before.st_size>64*1024*1024:return [],{"path":str(path),"status":"bounded_source_required","sha256":None}
-    rows=[];hasher=hashlib.sha256();size=0
+    rows=[];hasher=hashlib.sha256();size=0;record_count=0;source_gap_count=0;unattributed_count=0;legacy_unclassified_count=0
     with open_text_auto(path) as handle:
         for line in handle:
             size+=len(line.encode());hasher.update(line.encode())
             if size>64*1024*1024 or not line.endswith("\n"):raise ValueError("actual_entry_outcome_source_unbounded_or_partial")
             row=_event_fields(json.loads(line))
+            record_count+=1
+            receipt_status=row.get("entry_split_actual_economic_receipt_status")
+            if receipt_status=="source_gap":source_gap_count+=1
+            elif receipt_status=="not_attributed":unattributed_count+=1
+            elif receipt_status is None:legacy_unclassified_count+=1
             value=row.get("entry_split_actual_economics")
             if isinstance(value,str):
                 import ast
@@ -4802,7 +4808,11 @@ def _read_bounded_actual_entry_outcomes(target_date):
             if isinstance(value,dict):rows.append(value)
     after=path.stat()
     if (before.st_ino,before.st_size,before.st_mtime_ns)!=(after.st_ino,after.st_size,after.st_mtime_ns):raise ValueError("actual_entry_outcome_source_changed")
-    return rows,{"path":str(path.resolve()),"status":"ready","sha256":hasher.hexdigest()}
+    return rows,{"path":str(path.resolve()),"status":"ready","sha256":hasher.hexdigest(),
+        "receipt_census":{"post_sell_record_count":record_count,"exact_completed_cost_receipt_count":len(rows),
+            "receipt_source_gap_count":source_gap_count,"not_attributed_count":unattributed_count,
+            "legacy_unclassified_count":legacy_unclassified_count,
+            "status":"source_gap" if source_gap_count else "ready"}}
 
 
 
@@ -4922,9 +4932,59 @@ def _attach_operating_model_outcomes(validation,replays,actual_outcomes):
     return model_rows
 
 
+def _paired_economic_population_census(report, state, economics):
+    """Show where clean-baseline split attempts lack a paired realized witness.
+
+    Diagnostic cumulative dates are not treated as zero-attempt days unless the
+    operating replay recorded an explicit zero census for that exact date.
+    """
+    cumulative=report.get("cumulative_state") or {}
+    baseline=str(cumulative.get("clean_tuning_baseline_date") or "2026-06-05")
+    dates=sorted({str(d) for d in cumulative.get("source_dates",[])
+        if baseline<=str(d)<=str(state.get("through_date") or economics.get("source_date"))})
+    counts=state.get("source_counts") or economics.get("source_counts") or {}
+    rows=economics.get("input_rows") or []
+    models=economics.get("model_rows") or []
+    outcomes=state.get("actual_outcomes") or []
+    census=[]
+    for day in dates:
+        expected=counts.get(day)
+        replayed=sum(r.get("source_date")==day for r in rows)
+        actual=sum(r.get("source_date")==day and r.get("status")=="COMPLETED"
+            and r.get("origin")=="real" and r.get("owner")=="main_scalping"
+            and r.get("cost_complete") is True and r.get("exact_lineage") is True for r in outcomes)
+        comparable=sum(r.get("source_date")==day and r.get("status")=="COMPLETED"
+            and type(r.get("net_error_budget_pct")) in (int,float) and math.isfinite(r["net_error_budget_pct"])
+            for r in models)
+        if expected is None:status="operating_attempt_census_missing"
+        elif expected==0:status="censused_zero_eligible_attempts"
+        elif replayed<expected:status="frozen_seed_or_paired_replay_missing"
+        elif actual<replayed:status="completed_realized_outcome_receipt_incomplete_or_pending"
+        elif comparable<actual:status="incumbent_model_actual_comparison_incomplete"
+        else:status="paired_realized_source_available"
+        census.append(dict(source_date=day,diagnostic_population_date=True,
+            operating_eligible_attempt_count=expected,paired_replay_count=replayed,
+            completed_cost_receipt_count=actual,model_comparable_completed_count=comparable,
+            disposition=status))
+    gaps=sum(item["disposition"] not in {"censused_zero_eligible_attempts","paired_realized_source_available"}
+        for item in census)
+    return dict(schema="entry_split_clean_baseline_paired_population_census_v1",
+        baseline_start=baseline,through_date=state.get("through_date") or economics.get("source_date"),
+        clean_baseline_diagnostic_date_count=len(dates),paired_source_gap_date_count=gaps,
+        status="source_gap" if gaps else "census_ready",
+        missing_dates_are_not_zero=True,dates=census,
+        authority="diagnostic_census_only_no_runtime_or_EV_authority")
+
+
 def _operating_owner_source_blockers(validation):
-    return ["operating_owner_source_invalid:"+key for key,value in (validation.get("source_contract") or {}).items()
-        if isinstance(value,dict) and value.get("status") in {"source_gap","bounded_source_required"}]
+    blockers=["operating_owner_source_invalid:"+key for key,value in (validation.get("source_contract") or {}).items()
+        if isinstance(value,dict) and value.get("status") in {"missing","source_gap","bounded_source_required"}]
+    actual=(validation.get("source_contract") or {}).get("actual_outcomes") or {}
+    if (actual.get("receipt_census") or {}).get("receipt_source_gap_count",0):
+        blockers.append("completed_entry_split_receipt_source_gap")
+    census=validation.get("paired_economic_population_census") or {}
+    if census.get("status")=="source_gap":blockers.append("clean_baseline_paired_realized_population_incomplete")
+    return blockers
 
 
 def _apply_operating_model_support(validation,economics):
@@ -5090,6 +5150,8 @@ def _refresh_operating_economics(report,validation,replay,actual_outcomes,*,targ
     counts={**previous.get("source_counts",{}),target_date:unique_census}
     economics=evaluate_entry_split_operating_economics(old_rows+new_rows,old_models+model_rows,counts,
         target_date=target_date,consumed_holdouts=previous.get("consumed_holdouts") or {})
+    validation["paired_economic_population_census"]=_paired_economic_population_census(
+        report,{"through_date":target_date,"source_counts":counts,"actual_outcomes":actual},economics)
     validation=_apply_operating_model_support(validation,economics)
     source_blockers=_operating_owner_source_blockers(validation)
     if source_blockers:

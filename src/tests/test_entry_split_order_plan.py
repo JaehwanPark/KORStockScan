@@ -5083,14 +5083,19 @@ def test_initial_seed_survives_baseline_fill_and_completed_cost_producer(monkeyp
     seed['operating_contract']['sha256']=split_plan._canonical_sha256({
         k:v for k,v in seed['operating_contract'].items() if k!='sha256'})
     seed['seed_sha256']=split_plan._canonical_sha256({k:v for k,v in seed.items() if k!='seed_sha256'})
-    order={'qty':10,'entry_split_initial_entry_seed':seed,'entry_split_initial_entry_lineage_conflict':False}
+    order={'qty':10,'entry_split_initial_entry_seed':seed,'entry_split_initial_entry_lineage_conflict':False,
+        'entry_split_replay_seed_status':'ready','entry_split_replay_seed_blocker':None}
     meta=handlers._split_order_meta_fields(order)
     stock=handlers._entry_split_position_provenance([meta])
     assert stock['entry_split_initial_entry_seed']==seed
+    assert stock['entry_split_replay_seed_status']=='ready'
+    from src.engine.sniper_post_sell_feedback import _entry_split_post_sell_fields
+    assert _entry_split_post_sell_fields(stock)['entry_split_replay_seed_status']=='ready'
     from src.engine import sniper_execution_receipts as receipts
     for keys in (receipts._BUY_RECEIPT_SNAPSHOT_KEYS,receipts._SELL_RECEIPT_SNAPSHOT_KEYS):
         snapshot=receipts._normalized_receipt_snapshot(receipts._receipt_snapshot(stock,keys))
         assert snapshot['entry_split_initial_entry_seed']==seed
+        assert snapshot['entry_split_replay_seed_status']=='ready'
     stock.update(code='005930',strategy='SCALPING',realized_pnl_krw=177,sell_execution_receipt_economics_complete=True,sell_execution_receipt_quantity_contract_complete=True)
     # Existing producer accepts KST wall-clock values; no UTC day shift at 20:00.
     result=entry_split_actual_economic_receipt(stock,buy_price=1000,buy_qty=10,profit_rate=1.7654,
@@ -5105,9 +5110,40 @@ def test_initial_seed_survives_baseline_fill_and_completed_cost_producer(monkeyp
     path.write_text(json.dumps({'fields':{'entry_split_actual_economics':repr(result)}})+'\n')
     found,source=split_plan._bounded_actual_entry_outcomes('2026-09-11')
     assert found==[result] and source['status']=='ready'
+    assert source['receipt_census']=={'post_sell_record_count':1,'exact_completed_cost_receipt_count':1,
+        'receipt_source_gap_count':0,'not_attributed_count':0,'legacy_unclassified_count':1,'status':'ready'}
+    path.write_text(json.dumps({'fields':{'entry_split_actual_economic_receipt_status':'source_gap',
+        'entry_split_actual_economic_receipt_blocker':'frozen_seed_missing'}})+'\n')
+    found,source=split_plan._bounded_actual_entry_outcomes('2026-09-11')
+    assert found==[] and source['receipt_census']['receipt_source_gap_count']==1
     path.write_text('{"incomplete":')
     found,source=split_plan._bounded_actual_entry_outcomes('2026-09-11')
     assert found==[] and source['status']=='source_gap'
+
+
+def test_entry_split_missing_frozen_seed_reason_is_preserved():
+    from src.engine.scalping.strategy_owner_replay import freeze_entry_opportunity
+    diagnostic={}
+    assert freeze_entry_opportunity({},stock_code='005930',observed_at=1,diagnostic=diagnostic) is None
+    assert diagnostic=={'status':'source_gap','blocker':'frozen_plan_or_route_contract_missing'}
+
+
+def test_entry_split_clean_baseline_census_does_not_infer_missing_days_as_zero():
+    census=split_plan._paired_economic_population_census(
+        {'cumulative_state':{'clean_tuning_baseline_date':'2026-06-05',
+            'source_dates':['2026-06-05','2026-06-08']}},
+        {'through_date':'2026-06-08','source_counts':{'2026-06-05':0},'actual_outcomes':[]},
+        {'source_date':'2026-06-08','source_counts':{'2026-06-05':0},'input_rows':[],'model_rows':[]})
+    assert census['status']=='source_gap'
+    assert census['missing_dates_are_not_zero'] is True
+    assert [row['disposition'] for row in census['dates']]==[
+        'censused_zero_eligible_attempts','operating_attempt_census_missing']
+
+
+def test_entry_split_missing_realized_outcome_source_blocks_paired_selection():
+    blockers=split_plan._operating_owner_source_blockers(
+        {'source_contract':{'actual_outcomes':{'status':'missing'}}})
+    assert blockers==['operating_owner_source_invalid:actual_outcomes']
 
 
 def test_actual_pnl_is_reported_with_null_unsupported_model_error():

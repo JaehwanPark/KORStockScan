@@ -237,6 +237,8 @@ def _safe_bool(value, default: bool = False) -> bool:
 
 
 ENTRY_SPLIT_POST_SELL_KEYS = (
+    "entry_split_replay_seed_status",
+    "entry_split_replay_seed_blocker",
     "entry_split_order_policy_applied",
     "entry_split_order_bucket",
     "entry_split_order_policy_version",
@@ -994,8 +996,22 @@ def record_post_sell_candidate(
             **_entry_split_post_sell_fields(stock),
         }
         from src.engine.scalping.strategy_owner_replay import entry_split_actual_economic_receipt
-        payload["entry_split_actual_economics"] = entry_split_actual_economic_receipt(stock,
+        entry_split_receipt = entry_split_actual_economic_receipt(stock,
             buy_price=buy_price, buy_qty=buy_qty, profit_rate=profit_rate, completion_at=sell_dt)
+        payload["entry_split_actual_economics"] = entry_split_receipt
+        split_attributed = bool(stock.get("entry_split_initial_entry_seed")
+            or stock.get("entry_split_order_policy_applied")
+            or stock.get("entry_split_order_policy_variant_id")
+            or stock.get("entry_split_order_variant_id")
+            or stock.get("entry_split_order_policy_mode"))
+        payload["entry_split_actual_economic_receipt_status"] = (
+            "ready" if entry_split_receipt else
+            "source_gap" if split_attributed or stock.get("entry_split_replay_seed_status") == "source_gap"
+            else "not_attributed")
+        if not entry_split_receipt and payload["entry_split_actual_economic_receipt_status"] == "source_gap":
+            payload["entry_split_actual_economic_receipt_blocker"] = (
+                stock.get("entry_split_replay_seed_blocker") or
+                "completed_cost_or_exact_frozen_seed_contract_missing")
         for optional_key in (
             "no_scale_in_counterfactual_profit_pct",
             "scale_in_incremental_realized_delta_pct",

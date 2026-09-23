@@ -48,13 +48,13 @@ PRE_SUBMIT_DELAY_ENV_KEYS = (
 
 
 def _pre_submit_delay_handoff(target_date: str) -> tuple[dict[str, str], dict[str, Any]]:
-    """Bind one exact-date delay policy, including an explicit zero carry."""
+    """Carry the newest validated positive delay policy until superseded."""
     from src.engine.scalping.pre_submit_delay_tuning import (
         DELAYS_SEC, _digest, _number, _validated_candidate, report_path,
     )
 
     directory = DATA_DIR / "threshold_cycle" / "pre_submit_delay_policy"
-    matches: list[tuple[str, Path, dict[str, Any]]] = []
+    matches: list[tuple[str, str, Path, dict[str, Any]]] = []
     for path in directory.glob("pre_submit_delay_policy_????-??-??.json"):
         if path.is_symlink() or path.stat().st_size > 1024 * 1024:
             continue
@@ -62,58 +62,106 @@ def _pre_submit_delay_handoff(target_date: str) -> tuple[dict[str, str], dict[st
             policy = _load_json(path)
         except (OSError, ValueError):
             continue
-        if policy.get("effective_from") == target_date:
-            matches.append((str(policy.get("source_date") or ""), path, policy))
+        effective_from = str(policy.get("effective_from") or "")
+        expires_on = str(policy.get("expires_on") or "")
+        if effective_from <= target_date <= expires_on:
+            matches.append((effective_from, str(policy.get("source_date") or ""), path, policy))
     if not matches:
         return {}, {"status": "not_published", "target_date": target_date}
-    source_date, path, policy = max(matches, key=lambda row: row[0])
-    report_file = report_path(source_date)
-    try:
-        report = _load_json(report_file)
-    except (OSError, ValueError):
-        return {}, {"status": "report_unreadable", "path": str(path)}
-    valid = (
-        policy.get("schema") == "pre_submit_delay_policy_v1"
-        and report.get("schema") == "pre_submit_delay_tuning_v1"
-        and policy.get("source_date") == report.get("source_date") == source_date
-        and report.get("effective_date") == target_date
-        and source_date < target_date
-        and policy.get("expires_on", "") >= target_date
-        and policy.get("policy_sha256")
-        == _digest({key: value for key, value in policy.items() if key != "policy_sha256"})
-        and report.get("policy_sha256") == policy.get("policy_sha256")
-        and policy.get("report_sha256")
-        == _digest({key: value for key, value in report.items() if key != "policy_sha256"})
-    )
-    selected = _number(policy.get("selected_delay_sec"))
-    valid = valid and selected in DELAYS_SEC
-    if selected and selected > 0:
-        valid = bool(valid and _validated_candidate(policy, report))
-    branch_delays = []
-    for family, key_name in (("scope_policies", "scope_key"), ("type_policies", "type_key")):
-        branches = policy.get(family, {})
-        if not isinstance(branches, dict):
-            valid = False
+    saw_source_gap = False
+    saw_invalid = False
+    for effective_from, source_date, path, policy in sorted(matches, reverse=True):
+        report_file = report_path(source_date)
+        try:
+            report = _load_json(report_file)
+        except (OSError, ValueError):
             continue
-        for key, branch in branches.items():
-            delay_sec = _number(branch.get("selected_delay_sec")) if isinstance(branch, dict) else None
-            branch_delays.append(delay_sec)
-            if (delay_sec not in DELAYS_SEC
-                    or not _validated_candidate(policy, report, **{key_name: key})):
+        digest = policy.get("policy_sha256")
+        valid = (
+            policy.get("schema") == "pre_submit_delay_policy_v1"
+            and report.get("schema") == "pre_submit_delay_tuning_v1"
+            and policy.get("source_date") == report.get("source_date") == source_date
+            and policy.get("effective_from") == report.get("effective_date") == effective_from
+            and source_date < effective_from <= target_date
+            and policy.get("expires_on", "") >= target_date
+            and policy.get("carry_forward_until_superseded") is True
+            and digest == _digest({key: value for key, value in policy.items() if key != "policy_sha256"})
+            and report.get("policy_sha256") == digest
+            and policy.get("report_sha256")
+            == _digest({key: value for key, value in report.items() if key != "policy_sha256"})
+        )
+        selected = _number(policy.get("selected_delay_sec"))
+        selector_only = (
+            selected is None
+            and policy.get("selection_status") == "selected_by_type"
+            and policy.get("runtime_apply_allowed") is True
+        )
+        unresolved = selected is None and not selector_only
+        if unresolved:
+            saw_source_gap = True
+            valid = bool(valid
+                         and policy.get("selection_status") == "unselected_source_gap"
+                         and policy.get("runtime_apply_allowed") is False
+                         and report.get("status") == "source_gap"
+                         and report.get("runtime_effect") is False
+                         and report.get("selected_delay_sec") is None)
+        else:
+            valid = bool(valid and policy.get("runtime_apply_allowed") is True)
+        if selected is not None:
+            valid = bool(valid and selected in DELAYS_SEC and selected > 0
+                         and _validated_candidate(policy, report))
+        branch_delays = []
+        for family, evidence_key, key_name in (
+            ("scope_policies", "scope_census", "scope_key"),
+            ("type_policies", "type_census", "type_key"),
+        ):
+            branches = policy.get(family, {})
+            evidence_rows = report.get(evidence_key, [])
+            if not isinstance(branches, dict):
                 valid = False
-    if not valid:
-        return {}, {"status": "binding_invalid", "path": str(path)}
-    return {
-        "KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ENABLED": "true",
-        "KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_FILE": str(path.resolve()),
-        "KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ACTIVE_DATE": target_date,
-    }, {
-        "status": "verified_candidate" if any(value and value > 0 for value in [selected, *branch_delays]) else "verified_zero_carry",
+                continue
+            for key, branch in branches.items():
+                delay_sec = _number(branch.get("selected_delay_sec")) if isinstance(branch, dict) else None
+                branch_delays.append(delay_sec)
+                unresolved_branch = (
+                    delay_sec is None and unresolved and isinstance(branch, dict)
+                    and branch.get("selection_status") == "unselected_source_gap"
+                    and branch.get("runtime_apply_allowed") is False
+                )
+                if unresolved_branch:
+                    continue
+                if (delay_sec not in DELAYS_SEC or delay_sec <= 0
+                        or not any(isinstance(row, dict) and row.get(key_name) == key for row in evidence_rows)
+                        or not _validated_candidate(policy, report, **{key_name: key})):
+                    valid = False
+        if not valid:
+            saw_invalid = True
+            continue
+        if unresolved:
+            continue
+        if not any(value and value > 0 for value in [selected, *branch_delays]):
+            continue
+        return {
+            "KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ENABLED": "true",
+            "KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_FILE": str(path.resolve()),
+            "KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ACTIVE_DATE": target_date,
+        }, {
+            "status": "verified_candidate" if effective_from == target_date else "verified_carried_candidate",
+            "target_date": target_date,
+            "source_date": source_date,
+            "effective_from": effective_from,
+            "policy_sha256": digest,
+            "source_receipt": _file_receipt(path),
+            "report_receipt": _file_receipt(report_file),
+        }
+    return {}, {
+        "status": (
+            "no_validated_candidate_source_gap" if saw_source_gap
+            else "binding_invalid" if saw_invalid
+            else "not_published"
+        ),
         "target_date": target_date,
-        "source_date": source_date,
-        "policy_sha256": policy["policy_sha256"],
-        "source_receipt": _file_receipt(path),
-        "report_receipt": _file_receipt(report_file),
+        "runtime_policy_bound": False,
     }
 
 

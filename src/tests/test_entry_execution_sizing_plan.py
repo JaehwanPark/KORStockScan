@@ -689,6 +689,8 @@ def test_replay_anchor_uses_plan_issue_clock_without_refreshing_original_quote()
         replay_context={'stock_code': '005930', 'observed_at': quote_at + 2,
                         'profile': 'strong_1tick_pressure', 'profile_bps': 11})
     seed = fields['entry_opportunity_replay_seed']
+    assert fields['entry_opportunity_replay_seed_status']=='ready'
+    assert fields['entry_opportunity_replay_seed_blocker'] is None
     assert datetime.fromisoformat(seed['observed_at']).timestamp() == quote_at + 2
     assert orders[0]['entry_price_captured_at'] == quote_at
     assert fields['entry_execution_sizing_plan']['price_candidates'][0]['captured_at'] == quote_at
@@ -709,6 +711,8 @@ def test_before_ai_observation_is_not_a_submit_pass_and_keeps_frozen_seed():
     _, observed = compose_entry_execution_sizing_plan([order], observation_only=True, **kwargs)
     assert observed['entry_execution_sizing_valid'] is True
     seed = observed['entry_opportunity_replay_seed']
+    assert observed['entry_opportunity_replay_seed_status']=='ready'
+    assert observed['entry_opportunity_replay_seed_blocker'] is None
     seed['retained_owner_metadata'] = 'x' * 32000
     seed['seed_sha256'] = digest({k:v for k,v in seed.items() if k != 'seed_sha256'})
     row = dict(pipeline='ENTRY_PIPELINE', stock_code='005930', stock_name='TEST', record_id=1,

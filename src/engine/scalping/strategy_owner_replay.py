@@ -996,7 +996,8 @@ def entry_operating_route_supported(venue, session, broker_route):
 
 
 def freeze_entry_opportunity(plan, *, stock_code, observed_at, profile=None,
-                             profile_bps=None, anchor_price=None, sizing_context=None, candidate_leg_plan=None, operating_context=None):
+                             profile_bps=None, anchor_price=None, sizing_context=None, candidate_leg_plan=None, operating_context=None,
+                             diagnostic=None):
     """Freeze an order-free, non-increasing research menu alongside an owner plan.
 
     The original orders, quantities, prices and signed plan are never changed.
@@ -1004,6 +1005,10 @@ def freeze_entry_opportunity(plan, *, stock_code, observed_at, profile=None,
     """
     from src.engine.monitoring.research_closed_loop import digest
     from src.trading.order.tick_utils import move_price_down_by_bps, clamp_price_to_tick
+    def gap(reason):
+        if isinstance(diagnostic, dict):
+            diagnostic.update(status='source_gap', blocker=str(reason))
+        return None
     try:
         if (not _finite(observed_at, positive=True) or plan.get('valid') is not True or plan.get('blockers')
             or type(plan.get('total_qty')) is not int or plan['total_qty'] <= 0
@@ -1012,7 +1017,7 @@ def freeze_entry_opportunity(plan, *, stock_code, observed_at, profile=None,
             or not entry_operating_route_supported(plan.get('effective_venue'), plan.get('market_session_bucket'),
                 (operating_context or {}).get('broker_route') or entry_native_market_venue(plan.get('effective_venue')))
             or not plan.get('market_session_bucket') or not _sha(plan.get('policy_bundle_hash'))):
-            return None
+            return gap('frozen_plan_or_route_contract_missing')
         clock = datetime.fromtimestamp(observed_at, KST)
         legs = plan['legs']
         def frozen_legs(owner_plan):
@@ -1040,7 +1045,7 @@ def freeze_entry_opportunity(plan, *, stock_code, observed_at, profile=None,
             alternative = resolve_scalping_allocation(replace(sizing_context,
                 simulation=True, initial_tier=1, initial_formula_version=FORMULA_VERSION))
             if alternative.ratio != .10 or alternative.effective_qty <= 0:
-                return None
+                return gap('registered_quantity_replay_alternative_unsupported')
             candidate_qty = min(plan['total_qty'], alternative.effective_qty)
             candidate_quantity_version = ROLLBACK_FORMULA_VERSION
         candidate_legs = original_legs
@@ -1058,7 +1063,7 @@ def freeze_entry_opportunity(plan, *, stock_code, observed_at, profile=None,
                 or sum(x['qty'] for x in alternative_legs) != plan['total_qty']
                 or any(type(x['qty']) is not int or x['qty'] <= 0
                     or (x['price'], x['order_type_code']) not in {(a['price'], a['order_type_code']) for a in original_legs} for x in alternative_legs)):
-                return None
+                return gap('candidate_leg_plan_not_exact_same_intent')
             candidate_legs = alternative_legs
             candidate_leg_version = candidate_leg_plan['split_policy_version']
             candidate_leg_sha = digest(candidate_leg_plan)
@@ -1115,9 +1120,11 @@ def freeze_entry_opportunity(plan, *, stock_code, observed_at, profile=None,
             for bps in sorted({max(lower, profile_bps - 1), profile_bps, min(upper, profile_bps + 1)}):
                 shift = move_price_down_by_bps(anchor_price, bps) - legs[0]['numeric_price']
                 seed['price_candidates'][str(bps)] = [clamp_price_to_tick(x['numeric_price'] + shift) for x in legs]
-        return {**seed, 'seed_sha256': digest(seed)}
-    except (TypeError, ValueError, KeyError, OverflowError, AttributeError):
-        return None
+        result={**seed, 'seed_sha256': digest(seed)}
+        if isinstance(diagnostic, dict):diagnostic.update(status='ready', blocker=None)
+        return result
+    except (TypeError, ValueError, KeyError, OverflowError, AttributeError) as exc:
+        return gap('frozen_seed_build_failed:'+type(exc).__name__+':'+str(exc)[:120])
 
 
 def _entry_seed_valid(seed):
@@ -1435,7 +1442,13 @@ def build_entry_opportunity_replays(day, events, *, evaluated_at=None, micro_loa
             else:
                 candidates[key] = seed
         except (TypeError, ValueError, KeyError, SyntaxError, RecursionError) as exc:
-            first_blockers[str(exc)] += 1
+            fields=event.fields if isinstance(getattr(event,"fields",None),dict) else {}
+            seed_blocker=str(fields.get('entry_opportunity_replay_seed_blocker') or '').strip()
+            seed_status=str(fields.get('entry_opportunity_replay_seed_status') or '').strip()
+            if str(exc)=='original_plan_or_frozen_seed_missing_or_invalid' and seed_status=='source_gap' and seed_blocker:
+                first_blockers['replay_seed:'+seed_blocker] += 1
+            else:
+                first_blockers[str(exc)] += 1
             rejected['original_plan_or_frozen_seed_missing_or_invalid'] += 1
     rejected['conflicting_exact_plan'] += len(conflicts)
     # Raw-row and unique-attempt dispositions are separate conserved populations.

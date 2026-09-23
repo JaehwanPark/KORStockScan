@@ -610,6 +610,7 @@ def compose_entry_execution_sizing_plan(
         decorated_orders[0]["entry_split_order_probe_continuation"] = continuation
     # Observation failure must never alter an already validated broker plan.
     replay_seed = None
+    replay_seed_diagnostic = {"status": "not_requested", "blocker": "replay_context_absent"}
     if isinstance(replay_context, dict) and replay_context and not blockers:
         from src.engine.scalping.strategy_owner_replay import freeze_entry_opportunity
         replay_seed = freeze_entry_opportunity(
@@ -621,10 +622,13 @@ def compose_entry_execution_sizing_plan(
             candidate_leg_plan=replay_context.get('candidate_leg_plan'),
             operating_context=replay_context.get('operating_context'),
             anchor_price=(orders[0].get("entry_price_current_price") if orders else None),
+            diagnostic=replay_seed_diagnostic,
         )
     return decorated_orders, {
         **common_fields,
         "entry_opportunity_replay_seed": replay_seed,
+        "entry_opportunity_replay_seed_status": replay_seed_diagnostic["status"],
+        "entry_opportunity_replay_seed_blocker": replay_seed_diagnostic["blocker"],
         "entry_price_plan": price_receipt,
         "entry_execution_sizing_plan": plan_core,
     }
