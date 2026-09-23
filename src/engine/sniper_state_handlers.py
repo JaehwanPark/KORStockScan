@@ -19808,6 +19808,19 @@ def _new_sell_submit_context_fields(
         _safe_int(stock.get("buy_qty"), 0),
         _safe_int(stock.get("cum_buy_qty"), 0),
     )
+    submit_observed_at = datetime.fromtimestamp(float(started_at), tz=_KST)
+    submit_session = session_contract.resolve_market_session(submit_observed_at)
+    intended_session = str(intended_session_bucket or "").strip()
+    if (
+        submit_session.blocker is None
+        and intended_session
+        == sniper_trade_utils.holding_sell_session_bucket(submit_observed_at)
+    ):
+        # The holding exit selector uses a legacy lowercase label, while the
+        # exact receipt contract uses the effective-date session regime.
+        # Translate only the same timestamp's matching label; mismatches stay
+        # invalid and are rejected by receipt custody validation.
+        intended_session = submit_session.session_regime
     fields = {
         "sell_submit_pending": True,
         "sell_submit_requested_qty": int(requested_qty),
@@ -19820,9 +19833,7 @@ def _new_sell_submit_context_fields(
         "sell_submit_intended_effective_venue": str(intended_effective_venue or "")
         .strip()
         .upper(),
-        "sell_submit_intended_session_bucket": str(
-            intended_session_bucket or ""
-        ).strip(),
+        "sell_submit_intended_session_bucket": intended_session,
     }
     context_stock = dict(stock)
     context_stock.update(fields)

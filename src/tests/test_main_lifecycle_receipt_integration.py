@@ -773,6 +773,59 @@ def test_exit_receipt_submission_custody_accepts_exact_integrated_sor_envelope(
     assert emitted[0]["effective_venue"] == "UNKNOWN"
 
 
+def test_current_holding_sell_submit_session_matches_receipt_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    emitted: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        execution_receipts,
+        "_log_holding_pipeline",
+        lambda *args, **kwargs: (
+            emitted.append(kwargs)
+            or {"structured_append_succeeded": True,
+                "structured_append_status": "raw_appended"}
+        ),
+    )
+    stock = _exact_sell_execution_stock(
+        received_at="2026-09-23T09:07:00.345000+09:00",
+        occurred_at="2026-09-23T09:07:00.000000+09:00",
+        intended_session_bucket="krx_regular",
+    )
+    assert stock["sell_submit_intended_session_bucket"] == "KRX_REGULAR"
+    validation: dict[str, Any] = {}
+    assert execution_receipts._emit_execution_receipt_submission_custody(
+        target_stock=stock,
+        target_id=701,
+        code="005930",
+        stage="exit_execution_receipt_submission_custody",
+        order_no="0000456",
+        execution_no="0000002",
+        requested_qty=2,
+        contract_validation=validation,
+    )
+    assert validation == {"valid": True, "reason_codes": ()}
+    assert emitted[0]["market_session_regime"] == "KRX_REGULAR"
+
+    mismatched = _exact_sell_execution_stock(
+        received_at="2026-09-23T09:07:00.345000+09:00",
+        occurred_at="2026-09-23T09:07:00.000000+09:00",
+        intended_session_bucket="nxt_entry_window",
+    )
+    assert mismatched["sell_submit_intended_session_bucket"] == "nxt_entry_window"
+    rejected: dict[str, Any] = {}
+    assert not execution_receipts._emit_execution_receipt_submission_custody(
+        target_stock=mismatched,
+        target_id=701,
+        code="005930",
+        stage="exit_execution_receipt_submission_custody",
+        order_no="0000456",
+        execution_no="0000002",
+        requested_qty=2,
+        contract_validation=rejected,
+    )
+    assert rejected["reason_codes"] == ("exit_session_matches",)
+
+
 @pytest.mark.parametrize("actual_venue", ["KRX", "NXT", "UNKNOWN"])
 @pytest.mark.parametrize("observed_route", [None, "krx_only", "krx_nxt_integrated"])
 def test_exit_receipt_submission_custody_separates_sor_from_dual_actual_venue(
