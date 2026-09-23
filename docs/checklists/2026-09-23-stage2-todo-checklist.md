@@ -56,13 +56,19 @@
 
 - [x] `[SubmissionBottleneckAlertSemantics0923] 기계판정 희소와 실제 제출 결손 알림 분리` (`Due: 2026-09-23`, `Slot: RUNTIME_RECOVERY`, `TimeWindow: 17:30~18:00`, `Track: RuntimeStability`)
   - Source: [장중 제출병목·의미 감시 계획](../proposals/intraday-semantic-entry-monitoring-and-telegram-alert-feasibility-plan-2026-09-20.md#923-entry-split최초-제출-지연-장후-산출물-감시).
-  - 완료 증거: `enter_now_scarcity` 알림을 `기계판정 검토`로 분리하고 유효 승격의 BLOCK/RECHECK/ENTER_NOW 수를 표시한다. 해당 알림은 제출 실패·미체결 증거가 아님을 명시한다. 같은 범위의 새 무충돌 ENTER_NOW로 자연 종료하며, 주문 접수는 별도 지표로 유지한다. 제출 경로 결손 알림은 기존 제목·조치 경로를 유지한다. 테스트 `test_submission_bottleneck_monitor.py` 107 passed.
+  - 완료 증거: `enter_now_scarcity` 알림을 `기계판정 검토`로 분리하고 유효 승격의 BLOCK/RECHECK/ENTER_NOW 수를 표시한다. 해당 알림은 제출 실패·미체결 증거가 아님을 명시한다. 같은 범위의 무충돌 ENTER_NOW로 자연 종료하며, 주문 접수는 별도 지표로 유지한다. 제출 경로 결손 알림은 기존 제목·조치 경로를 유지한다. 최종 선택 release=`widget-health-detector-20260923`, commit=`e5c1d1529cb0de29827b8738e423314911800550`; main PID=`349564`가 18:01 KST부터 해당 release의 `src`에서 실행 중이고 launcher-child CWD 영수증과 일치한다. 제출병목 의미 분리 기능도 이 release에 포함됐다. 최종 타깃 검증 249 passed, compileall 및 `git diff --check` PASS. 실제 Telegram 전송은 fixture sender로만 확인했다.
   - 권한 경계: 진입 판정·threshold·가격·수량·주문·provider·봇 상태는 변경하지 않는다. Telegram 실제 발송은 테스트하지 않았다.
 
 - [ ] `[PostcloseFinalizerControllerTerminalReceipt] controller terminal 영수증을 검증한 뒤 장후 마감` (`Due: 2026-09-23`, `Slot: POSTCLOSE`, `TimeWindow: 21:55~23:20`, `Track: RuntimeStability`)
   - Source: [Postclose handoff contract](../report-based-automation-traceability.md#complete-recommendation-and-terminal-summary-handoff-source-date-2026-09-09-onward).
   - 완료 기준: exact-date main 및 설치된 widget/machine predecessor가 성공한 뒤 controller canonical/attempt 영수증이 이번 finalizer 실행 이후 생성되고 byte-identical이며, `status=done`, `whole_native_chain_done_claimed=true`, `require_independent_producers=true`, strict verifier `pass`임을 확인한다. 불일치·`summary_verified`·오래된 report면 cleanup 전에 실패하고 final detector에 넘긴다. 최종 finalizer/detector terminal marker까지 확인한다.
   - 권한 경계: 성공 상태나 terminal receipt를 합성하지 않는다. threshold·정책·주문·provider·봇·cleanup 범위는 바꾸지 않는다.
+
+- [x] `[WidgetEpisodePolicyPathRecovery0923] 위젯·에피소드 pinned policy 경로 복구` (`Due: 2026-09-23`, `Slot: RUNTIME_RECOVERY`, `TimeWindow: 17:20~17:40`, `Track: RuntimeStability`)
+  - Source: [Widget/episode shared WS market-data plan](../proposals/widget-episode-shared-ws-market-data-improvement-plan-2026-09-21.md).
+  - 완료 증거: widget, episode live template, episode preflight의 systemd effective paths를 stable tracked policy files로 연결하고 원래 pinned SHA-256 3개를 유지했다. 실제 integrated release loader에서 세 정책을 exact hash로 검증했다. widget PID `329642`, release `integrated-20260922-2e1d935f9`; post-restart cycle `2026-09-23T17:32:36+09:00`, `runtime_effect=true`, `actual_order_submitted=false`. `SKIP_POLICY_INVALID`의 새 재발은 확인되지 않았다.
+  - 한계/후속: startup receipt의 `current_policy_consumption_verified=false`는 해당 receipt 계약에서 관찰 전용 상수이고 startup 전용이므로 소비 실패 증거가 아니다. episode profile 인스턴스는 현재 비활성이라 다음 자연 preflight/cycle의 소비 확인은 미완료이며, TYM의 별도 `SKIP_SOURCE_UNAVAILABLE` 원인도 미해결이다.
+  - 권한 경계: 정책 payload/hash, 임계치, 주문, 수량, provider, episode profile 활성 상태는 변경하지 않았다.
 
 - [ ] `[WidgetEpisodeHealthDetectorRelease0923] 위젯 상태 점검기의 설치 release 영수증 결속 및 자연 수용` (`Due: 2026-09-23`, `Slot: POSTCLOSE`, `TimeWindow: 20:10~21:40`, `Track: RuntimeStability`)
   - Source: [Widget startup verification contract](../report-based-automation-traceability.md#widget-startup-configuration-verification-without-proc-environ-access).
