@@ -43,10 +43,11 @@
 
 ## 실행 항목
 
-- [ ] `[IntradaySemanticEntryExecutionTuningMonitor] entry split·최초 제출 지연의 독립 장후 결과와 runtime handoff 감시` (`Due: 2026-09-23`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~21:40`, `Track: RuntimeStability`)
+- [x] `[IntradaySemanticEntryExecutionTuningMonitor] entry split·최초 제출 지연의 독립 장후 결과와 runtime handoff 감시` (`Due: 2026-09-23`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~21:40`, `Track: RuntimeStability`)
   - Source: [장중 제출병목·의미 감시 계획](../proposals/intraday-semantic-entry-monitoring-and-telegram-alert-feasibility-plan-2026-09-20.md#923-entry-split최초-제출-지연-장후-산출물-감시).
   - 완료 기준: latest exact-date split report/policy generation binding과 bootstrap incumbent/candidate binding, delay report와 canonical bootstrap handoff를 구분해 기록한다. 후보 0·source gap·미발행은 incident가 아니며 EV null은 null로 보존한다. 구조 불일치만 persistence/Telegram 전이를 탄다. 실제 PID 소비와 주문/정책 효과는 이 감시가 증명하지 않는다. bounded JSON 외 raw replay·tuner 재실행을 하지 않고 기존 5분 cron에서 notify 없는 배포본 재검사까지 확인한다.
   - 권한 경계: 판정·threshold·가격·수량·주문·provider·봇 PID를 변경하지 않는다.
+  - 완료 증거: commit=`762b8d4ab54a97fab8a44124a572c1512141548e`, release=`semantic-entry-axis-20260923-762b8d4a`, PID=`314251`/bootstrap verify `pass`; 17:05 cron consumed the release, monitor `observed`, receipt issues=0. Split paired policy binding=`matched`, candidates=0/source gap, incumbent retained; delay=`not_published`, handoff/env match; Telegram `idle`. Source+release tests 105/105 pass; print-only checklist parser pass.
 
 - [ ] `[PostcloseFinalizerControllerTerminalReceipt] controller terminal 영수증을 검증한 뒤 장후 마감` (`Due: 2026-09-23`, `Slot: POSTCLOSE`, `TimeWindow: 21:55~23:20`, `Track: RuntimeStability`)
   - Source: [Postclose handoff contract](../report-based-automation-traceability.md#complete-recommendation-and-terminal-summary-handoff-source-date-2026-09-09-onward).
