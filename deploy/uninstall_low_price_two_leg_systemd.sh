@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+PROJECT_DIR="${KORSTOCKSCAN_PROJECT_DIR:-/home/ubuntu/KORStockScan}"
+SCRIPT_DIR="$PROJECT_DIR/deploy"
+source "$SCRIPT_DIR/runtime_release_set_lock.sh"
+
 TARGET_DIR="/etc/systemd/system"
 TIMERS=(
   korstockscan-low-price-two-leg-lotte-chemical-midday-preflight.timer
@@ -268,6 +272,8 @@ if [[ "${EUID}" -ne 0 ]]; then
   echo "run as root: sudo $0"
   exit 2
 fi
+
+runtime_release_set_lock_acquire "$PROJECT_DIR"
 
 /bin/systemctl disable --now "${TIMERS[@]}" 2>/dev/null || true
 /bin/systemctl stop "${SERVICES[@]}" 2>/dev/null || true

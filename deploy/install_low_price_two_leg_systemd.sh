@@ -2,7 +2,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+PROJECT_DIR="${KORSTOCKSCAN_PROJECT_DIR:-$(cd "$SCRIPT_DIR/.." && pwd -P)}"
+source "$SCRIPT_DIR/runtime_release_set_lock.sh"
 PYTHON_BIN="$PROJECT_DIR/.venv/bin/python"
 SYSTEMD_DIR="$SCRIPT_DIR/systemd"
 TARGET_DIR="/etc/systemd/system"
@@ -273,6 +274,8 @@ if [[ "${EUID}" -ne 0 ]]; then
   echo "run as root: sudo $0"
   exit 2
 fi
+
+runtime_release_set_lock_acquire "$PROJECT_DIR"
 
 /bin/systemd-analyze verify "${UNITS[@]/#/$SYSTEMD_DIR/}"
 # Stop active clocks before replacing calendars: daemon-reload can dispatch

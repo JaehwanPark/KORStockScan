@@ -8,6 +8,11 @@ if ((EUID != 0)); then
 fi
 
 PROJECT_DIR="${KORSTOCKSCAN_PROJECT_DIR:-/home/ubuntu/KORStockScan}"
+SCRIPT_DIR="$PROJECT_DIR/deploy"
+source "$SCRIPT_DIR/runtime_release_set_lock.sh"
+
+runtime_release_set_lock_acquire "$PROJECT_DIR"
+
 UNIT_SOURCE_DIR="$PROJECT_DIR/deploy/systemd"
 UNIT_INSTALL_DIR="/etc/systemd/system"
 TIMER_STATE_DIR="/var/lib/systemd/timers"

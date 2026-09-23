@@ -1,3 +1,4 @@
+import hashlib
 import json
 import subprocess
 
@@ -107,6 +108,67 @@ def test_bad_json_rejected(release, payload):
     manifest.write_text(payload)
     with pytest.raises(ValueError):
         router.selected_release(workspace)
+
+
+def test_runtime_release_set_lock_is_nonblocking(release):
+    workspace, _, _, _ = release
+    with router.runtime_release_set_lock(workspace):
+        with pytest.raises(ValueError, match="transition_in_progress"):
+            with router.runtime_release_set_lock(workspace):
+                pass
+
+
+def test_release_set_check_keeps_separate_owner_pins(release, monkeypatch):
+    workspace, root, _, _ = release
+    other = workspace.parent / f"{workspace.name}-runtime-releases" / "episode"
+    other.mkdir()
+    policy = workspace / "data" / "machine-policy.json"
+    policy.write_text('{"policy":"current"}')
+    digest = hashlib.sha256(policy.read_bytes()).hexdigest()
+    profile = "korstockscan-low-price-two-leg@tym_late_morning.service"
+    monkeypatch.setattr(
+        router.subprocess,
+        "run",
+        lambda command, **kwargs: subprocess.CompletedProcess(
+            command, 0, f"{profile} loaded inactive dead description\n", ""
+        ),
+    )
+
+    def show(unit, **kwargs):
+        route = other if unit == profile else root
+        environment = (
+            f"SAMPLE_POLICY_PATH={policy} SAMPLE_POLICY_SHA256={digest}"
+            if unit == profile
+            else ""
+        )
+        return {
+            "LoadState": "loaded",
+            "ActiveState": "inactive",
+            "SubState": "dead",
+            "MainPID": "0",
+            "WorkingDirectory": str(route),
+            "ExecStart": f"{{ path={route}/deploy/run_owner.sh ; argv[]=... }}",
+            "Environment": environment,
+        }
+
+    monkeypatch.setattr(router, "_systemd_properties", show)
+    report = router.check_release_set(workspace, root, "a" * 40)
+
+    assert report["status"] == "passed"
+    assert report["owner_count"] == 3
+    assert {item["release_root"] for item in report["systemd_owners"]} == {str(root)}
+    assert report["episode_profile_inventory"]["loaded_units_checked"] == 1
+
+
+def test_release_set_rejects_policy_hash_mismatch(release, monkeypatch, tmp_path):
+    workspace, root, _, _ = release
+    policy = tmp_path / "policy.json"
+    policy.write_text("expected")
+    with pytest.raises(ValueError, match="hash_mismatch"):
+        router._policy_environment_status(
+            f"SAMPLE_POLICY_PATH={policy} SAMPLE_POLICY_SHA256={'0' * 64}",
+            "sample.service",
+        )
 
 
 def test_outside_root_rejected(release):

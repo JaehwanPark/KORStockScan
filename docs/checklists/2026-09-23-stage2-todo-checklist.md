@@ -43,6 +43,10 @@
 
 ## 실행 항목
 
+- [x] `[RuntimeReleaseSetDeploymentGate0923] 메인·위젯·에피소드 배포 전 공통 잠금·경로 검증` (`Due: 2026-09-23`, `Slot: RUNTIME_RECOVERY`, `TimeWindow: 19:00~19:20`, `Track: RuntimeStability`)
+  - 완료 증거: `runtime_release_router --check-release-set`은 main 선택 릴리스와 widget/episode 별도 소유자를 한꺼번에 점검한다. 현재 확인은 PASS, main=`e5c1d152`, widget·episode=`2e1d935f`로 독립 pin을 유지, low-price live/preflight 122개 unit의 366개 policy hash가 일치했다. 기능 health는 `not_assessed`로 구분하며 main PID receipt와 episode unit 상태 failed 3/inactive 119도 경로 PASS와 분리해 기록한다. main start/restart와 저장소의 systemd 설치/해제 스크립트에 같은 nonblocking lock을 연결했다. 교차 프로세스 확인에서 공통 잠금 보유 중 경쟁 사전검증이 `runtime_release_transition_in_progress`로 종료됐다. 타깃 테스트 59 passed, Python compile, 수정 wrapper `bash -n`, `git diff --check` PASS.
+  - 권한 경계: 코드는 구현했으나 현재 선택기·systemd 설정은 변경하지 않았고 봇/위젯/에피소드 프로세스를 재시작하지 않았다. 정책 소비·기능 수용·성과는 별도 검증한다.
+
 - [ ] `[HoldingExitPositionOutcomeLineageClosure] 완료 포지션 청산·비용·후행관측 원천 연결 종결` (`Due: 2026-09-23`, `Slot: POSTCLOSE`, `TimeWindow: 17:00~23:20`, `Track: RuntimeStability`)
   - Source: [보유·청산 포지션별 런타임 임계치 연결 계획](../proposals/holding-exit-position-outcome-runtime-threshold-lineage-implementation-plan-2026-09-23.md).
   - 완료 기준: 새 `trade_review`의 당일 `sell_completed` 전량 ID·수량·원천 날짜를 DB terminal과 대사하고, `holding_exit_observation`의 비용 확정/결손·명시적 `exit_signal`/추정·유효 임계치/AI/flow 실제 개입·정확한 fill time·1/3/5/10분 후행창 품질을 포지션별로 확인한다. 9/23 저장본 8건 중 직접 체결 6건의 비용 후 부분합 -4,621원과 잔고대사 2건의 모델 +5,900원을 분리하고, 전체 exact-cost EV·paired/holdout EV는 결손 해소 전 null로 유지한다. 영향받은 장후 산출물의 source hash/strict terminal, 선택 release/PID 소비와 신규 자연 표본을 각각 별도 영수증으로 확인한다.

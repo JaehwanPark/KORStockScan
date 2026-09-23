@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+PROJECT_DIR="${KORSTOCKSCAN_PROJECT_DIR:-/home/ubuntu/KORStockScan}"
+SCRIPT_DIR="$PROJECT_DIR/deploy"
+source "$SCRIPT_DIR/runtime_release_set_lock.sh"
+
 TARGET_DIR="/etc/systemd/system"
 UNITS=(
   korstockscan-samsung-afternoon-one-share-preflight.service
@@ -13,6 +17,8 @@ if [[ "${EUID}" -ne 0 ]]; then
   echo "run as root: sudo $0"
   exit 2
 fi
+
+runtime_release_set_lock_acquire "$PROJECT_DIR"
 
 /bin/systemctl disable --now \
   korstockscan-samsung-afternoon-one-share.timer \
