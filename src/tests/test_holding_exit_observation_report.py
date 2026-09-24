@@ -322,6 +322,8 @@ def test_trailing_direct_input_receipt_preserves_trigger_and_source_gap():
                 "triggered": False,
                 "source_gap": True,
                 "evaluation_at_epoch": 1780000000.0,
+                "ws_trade_received_at_epoch": 1779999999.8,
+                "ws_trade_clock_provenance": "type_specific_0B",
             },
         }
     )
@@ -333,6 +335,8 @@ def test_trailing_direct_input_receipt_preserves_trigger_and_source_gap():
                 "triggered": True,
                 "source_gap": False,
                 "evaluation_at_epoch": 1780000001.0,
+                "bid_source_received_at_epoch": 1780000000.9,
+                "bid_source_clock_provenance": "rest_receive",
             },
         }
     )
@@ -351,10 +355,14 @@ def test_trailing_direct_input_receipt_preserves_trigger_and_source_gap():
     assert coverage["trailing_direct_input_receipt_trades"] == 1
     assert coverage["trailing_input_transition_trades"] == 1
     assert coverage["trailing_first_arm_receipt_trades"] == 1
+    assert coverage["trailing_first_arm_trade_clock_trades"] == 1
+    assert coverage["trailing_first_trigger_bid_clock_trades"] == 1
     assert outcomes[0]["trailing_input_transition_count"] == 2
     assert outcomes[0]["trailing_source_gap_transition_count"] == 1
     assert outcomes[0]["trailing_first_arm_at_epoch"] == 1780000000.0
+    assert outcomes[0]["trailing_first_arm_ws_trade_at_epoch"] == 1779999999.8
     assert outcomes[0]["trailing_first_trigger_at_epoch"] == 1780000001.0
+    assert outcomes[0]["trailing_first_trigger_bid_at_epoch"] == 1780000000.9
     assert outcomes[0]["exit_threshold_peak_price"] == 10110
     assert outcomes[0]["exit_threshold_executable_bid"] == 10060
     assert outcomes[0]["exit_threshold_ai_score_usable"] is False

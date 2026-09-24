@@ -8,6 +8,68 @@ from src.engine import sniper_trade_utils
 from src.engine.scalping.exit_safety_monitor import ScalpExitSafetyMonitor
 
 
+def test_trailing_transition_keeps_type_specific_and_rest_source_clocks(monkeypatch):
+    events = []
+    monkeypatch.setattr(
+        handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: events.append((stage, fields)),
+    )
+    stock = {"id": 123, "code": "123456"}
+    snapshot = {
+        "last_realtime_type_ts": {"0D": 998.0},
+        "last_ws_update_ts": 999.5,
+    }
+    decision = handlers.evaluate_trailing_take_profit(
+        peak_price=10100,
+        executable_bid=10050,
+        peak_profit_pct=1.0,
+        start_pct=0.6,
+        strong=False,
+        weak_limit_pct=0.4,
+        strong_limit_pct=0.8,
+    )
+    common = dict(
+        ws_data=snapshot,
+        decision=decision,
+        peak_price=10100,
+        executable_bid=10050,
+        strong=False,
+        ai_score=50.0,
+        ai_usable=True,
+        start_pct=0.6,
+        now_ts=1000.0,
+        evaluator="fast",
+    )
+    handlers._observe_scalp_trailing_input_transition(
+        stock, "123456", bid_source="fresh_ws_executable_bid", **common
+    )
+    ws_fields = events[-1][1]
+    assert ws_fields["ws_trade_received_at_epoch"] is None
+    assert ws_fields["ws_quote_received_at_epoch"] == 998.0
+    assert ws_fields["bid_source_received_at_epoch"] == 998.0
+
+    stock["scalp_trailing_observation_state"] = list(
+        stock["scalp_trailing_observation_state"]
+    )
+    handlers._observe_scalp_trailing_input_transition(
+        stock, "123456", bid_source="fresh_ws_executable_bid", **common
+    )
+    assert len(events) == 1
+
+    handlers._observe_scalp_trailing_input_transition(
+        stock,
+        "123456",
+        bid_source="fresh_rest_executable_bid",
+        rest_snapshot={"rest_received_ts_ms": 999000},
+        **common,
+    )
+    rest_fields = events[-1][1]
+    assert len(events) == 2
+    assert rest_fields["ws_trade_received_at_epoch"] is None
+    assert rest_fields["bid_source_received_at_epoch"] == 999.0
+
+
 def _exact_cancel_ack_response(
     *,
     orig_order_no="0000001",

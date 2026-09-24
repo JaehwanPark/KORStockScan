@@ -28808,12 +28808,46 @@ def _observe_scalp_trailing_input_transition(
     start_pct: float,
     now_ts: float,
     evaluator: str,
+    rest_snapshot: dict | None = None,
 ) -> None:
     """Keep bounded arm, source-quality and trigger transitions for replay."""
 
     snapshot = ws_data if isinstance(ws_data, dict) else {}
-    times = snapshot.get("last_realtime_type_ts")
-    times = times if isinstance(times, dict) else {}
+    type_times = snapshot.get("last_realtime_type_ts")
+    has_type_times = isinstance(type_times, dict)
+    times = type_times if has_type_times else {}
+    trade_received_at = _safe_float(
+        times.get("0B") if has_type_times else snapshot.get("last_ws_update_ts"),
+        None,
+    )
+    quote_received_at = _safe_float(
+        times.get("0D") if has_type_times else snapshot.get("last_ws_update_ts"),
+        None,
+    )
+    if trade_received_at is not None and not 0 < trade_received_at <= now_ts:
+        trade_received_at = None
+    if quote_received_at is not None and not 0 < quote_received_at <= now_ts:
+        quote_received_at = None
+    trade_clock_provenance = (
+        "type_specific_0B" if has_type_times and trade_received_at is not None
+        else "legacy_shared" if trade_received_at is not None else "missing"
+    )
+    quote_clock_provenance = (
+        "type_specific_0D" if has_type_times and quote_received_at is not None
+        else "legacy_shared" if quote_received_at is not None else "missing"
+    )
+    bid_received_at = None
+    bid_clock_provenance = "missing"
+    if bid_source == "fresh_rest_executable_bid":
+        rest_received_ms = _safe_float(
+            (rest_snapshot or {}).get("rest_received_ts_ms"), None
+        )
+        if rest_received_ms is not None and 0 < rest_received_ms <= now_ts * 1000:
+            bid_received_at = rest_received_ms / 1000.0
+            bid_clock_provenance = "rest_receive"
+    elif bid_source in {"fresh_ws_executable_bid", "fresh_nxt_0d_executable_bid"}:
+        bid_received_at = quote_received_at
+        bid_clock_provenance = quote_clock_provenance
     state = (
         bool(decision.armed),
         bool(decision.triggered),
@@ -28825,6 +28859,8 @@ def _observe_scalp_trailing_input_transition(
         position_key = _scalp_holding_source_position_key(stock, code)
         previous_key = stock.get("scalp_trailing_observation_position_key")
         previous_state = stock.get("scalp_trailing_observation_state")
+        if isinstance(previous_state, list):
+            previous_state = tuple(previous_state)
         if previous_key == position_key and previous_state == state:
             return
         stock["scalp_trailing_observation_position_key"] = position_key
@@ -28848,8 +28884,12 @@ def _observe_scalp_trailing_input_transition(
             peak_price=peak_price,
             executable_bid=executable_bid,
             bid_source=bid_source,
-            ws_trade_received_at_epoch=times.get("0B") or snapshot.get("last_ws_update_ts"),
-            ws_quote_received_at_epoch=times.get("0D") or snapshot.get("last_ws_update_ts"),
+            ws_trade_received_at_epoch=trade_received_at,
+            ws_trade_clock_provenance=trade_clock_provenance,
+            ws_quote_received_at_epoch=quote_received_at,
+            ws_quote_clock_provenance=quote_clock_provenance,
+            bid_source_received_at_epoch=bid_received_at,
+            bid_source_clock_provenance=bid_clock_provenance,
             trailing_start_pct=start_pct,
             trailing_limit_key=decision.threshold_key,
             trailing_limit_pct=decision.threshold_pct,
@@ -28869,15 +28909,15 @@ def _observe_scalp_trailing_input_transition(
 
 def _recover_scalp_trailing_bid_for_normal(
     stock: dict, code: str, ws_data: dict, *, now_ts: float
-) -> tuple[int, str]:
+) -> tuple[int, str, dict]:
     """Attempt one bounded, venue-qualified book refresh after stop evaluation."""
 
     route = _fast_exit_execution_route_fields(stock, code, ws_data, now_ts=now_ts)
     if route.get("fast_exit_broker_route_blocked"):
-        return 0, "broker_route_blocked"
+        return 0, "broker_route_blocked", {}
     retry_after = _safe_float(stock.get("scalp_trailing_rest_retry_after"), 0.0)
     if now_ts < retry_after:
-        return 0, "rest_retry_interval"
+        return 0, "rest_retry_interval", {}
     stock["scalp_trailing_rest_retry_after"] = (
         now_ts + _holding_rest_quote_fallback_min_interval_sec()
     )
@@ -28892,18 +28932,18 @@ def _recover_scalp_trailing_bid_for_normal(
         explicit_request_code=True,
     )
     if state != "ok" or not rest:
-        return 0, f"rest_{state}"
+        return 0, f"rest_{state}", {}
     route = _fast_exit_execution_route_fields(
         stock, code, ws_data, rest_snapshot=rest, now_ts=now_ts
     )
     if route.get("fast_exit_broker_route_blocked") or route.get(
         "fast_exit_route_source_quality_blocked"
     ):
-        return 0, "rest_route_unproven"
+        return 0, "rest_route_unproven", {}
     fields, _, _, _ = _build_quote_consistency_fields(
         ws_data, rest_snapshot=rest, side="sell", now_ts=now_ts
     )
-    return _trusted_scalp_trailing_bid(
+    bid, source = _trusted_scalp_trailing_bid(
         ws_data,
         code=code,
         quote_fields=fields,
@@ -28911,6 +28951,7 @@ def _recover_scalp_trailing_bid_for_normal(
         rest_request_code=request_code,
         now_ts=now_ts,
     )
+    return bid, source, rest if source == "fresh_rest_executable_bid" else {}
 
 
 def evaluate_and_dispatch_fast_scalp_exit(
@@ -29142,6 +29183,7 @@ def evaluate_and_dispatch_fast_scalp_exit(
         start_pct=trailing_start_pct,
         now_ts=observed_at,
         evaluator="fast",
+        rest_snapshot=rest_snapshot,
     )
     trailing_drawdown_pct = trailing_decision.drawdown_pct
     trigger_kind = ""
@@ -29341,6 +29383,7 @@ def evaluate_and_dispatch_fast_scalp_exit(
                 start_pct=trailing_start_pct,
                 now_ts=observed_at,
                 evaluator="fast_rest_confirmed",
+                rest_snapshot=wide_rest,
             )
             trailing_drawdown_pct = trailing_decision.drawdown_pct
             if fast_stop_enabled and emergency_pct is not None and profit_rate <= emergency_pct:
@@ -84858,7 +84901,7 @@ def handle_holding_state(
 
         elif not is_sell_signal and scalp_trailing_peak_armed:
             if trailing_decision_price <= 0:
-                trailing_decision_price, trailing_bid_source = (
+                trailing_decision_price, trailing_bid_source, recovered_rest = (
                     _recover_scalp_trailing_bid_for_normal(
                         stock, code, ws_data, now_ts=now_ts
                     )
@@ -84888,6 +84931,7 @@ def handle_holding_state(
                     start_pct=scalp_trailing_start_pct,
                     now_ts=now_ts,
                     evaluator="normal_rest_recovery",
+                    rest_snapshot=recovered_rest,
                 )
                 if trailing_decision_price > 0:
                     trailing_decision_profit_rate = calculate_net_profit_rate(

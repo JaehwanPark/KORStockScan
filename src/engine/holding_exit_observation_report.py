@@ -708,8 +708,20 @@ def _build_position_outcomes(
                 "trailing_first_arm_at_epoch": _safe_float(
                     first_arm.get("evaluation_at_epoch"), None
                 ),
+                "trailing_first_arm_ws_trade_at_epoch": _safe_float(
+                    first_arm.get("ws_trade_received_at_epoch"), None
+                ),
+                "trailing_first_arm_ws_trade_clock_provenance": first_arm.get(
+                    "ws_trade_clock_provenance"
+                ),
                 "trailing_first_trigger_at_epoch": _safe_float(
                     first_trigger.get("evaluation_at_epoch"), None
+                ),
+                "trailing_first_trigger_bid_at_epoch": _safe_float(
+                    first_trigger.get("bid_source_received_at_epoch"), None
+                ),
+                "trailing_first_trigger_bid_clock_provenance": first_trigger.get(
+                    "bid_source_clock_provenance"
                 ),
                 "trailing_source_gap_transition_count": trailing_source_gap_count,
                 "terminal_decision_authority": trade.get("terminal_decision_authority"),
@@ -791,6 +803,18 @@ def _build_position_outcomes(
         ),
         "trailing_first_arm_receipt_trades": sum(
             row["trailing_first_arm_at_epoch"] is not None for row in outcomes
+        ),
+        "trailing_first_arm_trade_clock_trades": sum(
+            row["trailing_first_arm_ws_trade_at_epoch"] is not None
+            and row["trailing_first_arm_ws_trade_clock_provenance"]
+            == "type_specific_0B"
+            for row in outcomes
+        ),
+        "trailing_first_trigger_bid_clock_trades": sum(
+            row["trailing_first_trigger_bid_at_epoch"] is not None
+            and row["trailing_first_trigger_bid_clock_provenance"]
+            in {"type_specific_0D", "rest_receive"}
+            for row in outcomes
         ),
         "flow_deferred_trades": sum(
             row["flow_intervention"] in {"deferred", "deferred_extension"}
