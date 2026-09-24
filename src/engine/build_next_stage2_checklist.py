@@ -95,6 +95,7 @@ DIRECT_OWNER_TASK_LABEL = {
     "main_mechanistic_entry": "MainMechanisticEntry",
     "compact_auxiliary": "CompactAuxiliary",
     "rising_missed": "RisingMissed",
+    "pre_submit_delay": "PreSubmitDelay",
 }
 DIRECT_TERMINAL_STATES = {
     "identical_policy",
@@ -1852,7 +1853,7 @@ def _task_slot_from_block(block: str, fallback_slot: str) -> str:
 def _is_builder_owned_conditional_task(task_id: str) -> bool:
     return task_id.startswith(
         MACHINE_MICROSTRUCTURE_BUILDER_OWNED_CONDITIONAL_TASK_PREFIXES
-    )
+    ) or task_id.startswith("DirectFamily")
 
 
 def _preserved_auto_task_blocks(

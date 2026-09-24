@@ -140,6 +140,7 @@ def _direct_summary(
             "ai_outcome",
             "compact_auxiliary",
             "rising_missed",
+            "pre_submit_delay",
         )
     }
     rows.update(sources or {})
@@ -1800,6 +1801,30 @@ def test_direct_family_checklist_publishes_current_generation_marker(
     assert "threshold_cycle_ev" not in text
     assert "threshold_cycle_preopen_apply" not in text
     assert "신규 실행 항목 없음" in text
+
+
+def test_direct_summary_accepts_pre_submit_delay_as_independent_owner():
+    day = "2026-09-23"
+    payload = _direct_summary(day)
+
+    result = mod._validate_direct_summary(payload, day)
+
+    assert "pre_submit_delay" in result["sources"]
+    assert mod.DIRECT_OWNER_TASK_LABEL["pre_submit_delay"] == "PreSubmitDelay"
+
+
+def test_direct_family_refresh_drops_stale_generated_task_but_keeps_manual_auto_task():
+    existing = "\n".join((mod.AUTO_START,
+        "- [ ] `[DirectFamilySourceRepairLowPriceExpansion] stale generated task`",
+        "- [ ] `[ManualOtherOwner] retained manual task`", mod.AUTO_END))
+    current = "\n".join((mod.AUTO_START,
+        "- [ ] `[DirectFamilySourceRepairPreSubmitDelay] current generated task`", mod.AUTO_END))
+
+    merged = mod._merge_preserved_auto_tasks(existing, current)
+
+    assert "DirectFamilySourceRepairLowPriceExpansion" not in merged
+    assert "DirectFamilySourceRepairPreSubmitDelay" in merged
+    assert "ManualOtherOwner" in merged
 
 
 def test_direct_family_refresh_preserves_unrelated_manual_open_task(monkeypatch, tmp_path):
