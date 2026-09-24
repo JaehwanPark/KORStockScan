@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gzip
+import hashlib
 import json
 import math
 from collections import Counter, defaultdict
@@ -12,6 +13,11 @@ from typing import Any
 
 from src.engine.automation.source_quality_clean_baseline import clean_baseline_policy
 from src.engine.monitor_snapshot_runtime import guard_stdin_heavy_build
+from src.engine.scalping.trailing_threshold_policy import (
+    GRID_VERSION as SCALP_TRAILING_GRID_VERSION,
+    bootstrap_receipt as scalp_trailing_bootstrap_receipt,
+    value_hash as scalp_trailing_value_hash,
+)
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 
@@ -306,6 +312,37 @@ def _collect_completed_trade_rows(
     return rows, gaps
 
 
+def _collect_open_scalp_positions(
+    snapshots: list[dict], target_date: str
+) -> tuple[list[dict], str]:
+    latest = next(
+        (row for row in snapshots if str(row.get("date") or "") == target_date),
+        None,
+    )
+    if not isinstance(latest, dict) or (latest.get("meta") or {}).get("warnings"):
+        return [], "source_gap_trade_review_missing_or_warning"
+    rows = (latest.get("sections") or {}).get("open_scalp_position_projection")
+    if not isinstance(rows, list):
+        return [], "source_gap_open_projection_missing"
+    ids = [str(row.get("id") or "") for row in rows if isinstance(row, dict)]
+    declared = _safe_int(
+        (latest.get("metrics") or {}).get("open_scalp_position_projection_count"), -1
+    )
+    census_status = (latest.get("metrics") or {}).get(
+        "open_scalp_position_projection_status"
+    )
+    if census_status != "current_db_census":
+        return [], str(census_status or "source_gap_open_census_status_missing")
+    if (
+        len(ids) != len(rows)
+        or declared != len(rows)
+        or not all(ids)
+        or len(set(ids)) != len(ids)
+    ):
+        return [], "source_gap_open_projection_census_mismatch"
+    return rows, "observed_open_census_not_economic"
+
+
 def _is_valid_completed_trade(row: dict) -> bool:
     if str(row.get("status") or "").upper() != "COMPLETED":
         return False
@@ -497,6 +534,119 @@ _FLOW_INTERVENTION_STAGES = {
 }
 
 
+def _trailing_policy_manifest_binding(policy_date: str, observed_sha: str) -> dict:
+    """Bind an effective value hash to its dated producer, not to a live PID."""
+
+    try:
+        datetime.strptime(policy_date, "%Y-%m-%d")
+    except (TypeError, ValueError):
+        return {"status": "source_gap_policy_date_missing"}
+    path = (
+        DATA_DIR
+        / "runtime"
+        / "policy_bootstrap"
+        / f"runtime_policy_bootstrap_{policy_date}.json"
+    )
+    env_path = path.with_suffix(".env")
+    try:
+        manifest = _read_json(path)
+        env_bytes = env_path.read_bytes()
+    except (OSError, ValueError):
+        return {"status": "source_gap_bootstrap_missing", "path": str(path)}
+    unsigned = {key: value for key, value in manifest.items() if key != "manifest_sha256"}
+    try:
+        manifest_sha = hashlib.sha256(
+            json.dumps(
+                unsigned, ensure_ascii=True, allow_nan=False, sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+    except (TypeError, ValueError):
+        return {"status": "source_gap_bootstrap_invalid", "path": str(path)}
+    receipt = manifest.get("scalp_trailing_threshold_receipt") or {}
+    try:
+        receipt_sha = scalp_trailing_value_hash(receipt["values"])
+        expected_receipt = scalp_trailing_bootstrap_receipt(
+            manifest["env_overrides"], manifest["env_key_owners"]
+        )
+    except (KeyError, TypeError, ValueError):
+        receipt_sha = ""
+        expected_receipt = None
+    valid = bool(
+        manifest.get("target_date") == policy_date
+        and manifest.get("manifest_sha256") == manifest_sha
+        and manifest.get("env_sha256") == hashlib.sha256(env_bytes).hexdigest()
+        and receipt.get("schema") == "scalp_trailing_threshold_receipt_v1"
+        and receipt.get("value_sha256") == receipt_sha
+        and receipt == expected_receipt
+        and manifest["env_overrides"].get(
+            "KORSTOCKSCAN_SCALP_TRAILING_VALUE_SHA256"
+        ) == receipt_sha
+        and observed_sha == receipt_sha
+    )
+    return {
+        "status": (
+            "manifest_value_hash_matched_no_pid_proof"
+            if valid else "source_gap_bootstrap_binding_mismatch"
+        ),
+        "path": str(path),
+        "manifest_sha256": manifest_sha if valid else None,
+        "value_sha256": receipt_sha or None,
+        "sources": receipt.get("sources") if valid else None,
+    }
+
+
+def _operational_manifest_binding(
+    policy_date: str, values: dict | None, sources: dict | None
+) -> dict:
+    """Check environment sourced inputs against the dated bootstrap artifact."""
+
+    if not isinstance(values, dict) or not isinstance(sources, dict):
+        return {"status": "source_gap_operational_values_or_sources"}
+    path = (
+        DATA_DIR / "runtime" / "policy_bootstrap"
+        / f"runtime_policy_bootstrap_{policy_date}.json"
+    )
+    try:
+        manifest = _read_json(path)
+    except (OSError, ValueError):
+        return {"status": "source_gap_operational_manifest_missing"}
+    env = manifest.get("env_overrides")
+    owners = manifest.get("env_key_owners")
+    if not isinstance(env, dict) or not isinstance(owners, dict):
+        return {"status": "source_gap_operational_manifest_invalid"}
+    matched = {}
+    mismatched = []
+    code_owned = []
+    for key, observed in values.items():
+        source = sources.get(key)
+        if source in {"code_default", "code_constant"}:
+            code_owned.append(key)
+            continue
+        if source != "runtime_env":
+            mismatched.append(key)
+            continue
+        env_key = key if key.startswith("KORSTOCKSCAN_") else f"KORSTOCKSCAN_{key}"
+        try:
+            matches = math.isclose(float(env[env_key]), float(observed), abs_tol=1e-9)
+        except (KeyError, TypeError, ValueError):
+            matches = False
+        if matches and owners.get(env_key):
+            matched[key] = owners[env_key]
+        else:
+            mismatched.append(key)
+    return {
+        "status": (
+            "source_gap_operational_env_mismatch" if mismatched
+            else "env_values_matched_code_defaults_unproven_no_pid_proof"
+        ),
+        "manifest_path": str(path),
+        "env_matched_owners": matched,
+        "code_owned_keys": sorted(code_owned),
+        "mismatched_keys": sorted(mismatched),
+    }
+
+
 def _build_position_outcomes(
     trades: list[dict], post_sell_rows: list[dict]
 ) -> tuple[list[dict], dict]:
@@ -508,6 +658,7 @@ def _build_position_outcomes(
             post_sell_by_trade[trade_id].append(post_sell)
 
     outcomes: list[dict] = []
+    bootstrap_bindings: dict[tuple[str, str], dict] = {}
     for trade in trades:
         trade_id = _trade_id(trade)
         timeline = [
@@ -549,6 +700,13 @@ def _build_position_outcomes(
             for event in timeline
             if event.get("stage") == "scalp_trailing_input_transition"
         ]
+        holding_start_events = [
+            event for event in timeline
+            if event.get("stage") == "holding_started"
+            and (event.get("fields") or {}).get(
+                "pipeline_lifecycle_population_scope"
+            ) == "real_record_bound"
+        ]
         first_arm = next(
             (
                 fields
@@ -569,6 +727,199 @@ def _build_position_outcomes(
             str(fields.get("source_gap")).strip().lower() in {"true", "1"}
             for fields in trailing_transitions
         )
+        transition_sequences = [
+            _safe_int(fields.get("event_sequence"), -1)
+            for fields in trailing_transitions
+        ]
+        transition_position_keys = {
+            str(fields.get("position_key") or "") for fields in trailing_transitions
+        }
+        transition_grid_versions = {
+            str(fields.get("observation_grid_version") or "")
+            for fields in trailing_transitions
+        }
+        coverage_exhausted = any(
+            str(fields.get("observation_coverage_exhausted")).lower()
+            in {"true", "1"}
+            for fields in trailing_transitions
+        )
+        telemetry_gap = any(
+            str(fields.get("observation_telemetry_gap")).lower() in {"true", "1"}
+            for fields in trailing_transitions
+        ) or str(threshold_fields.get(
+            "scalp_trailing_observation_source_gap"
+        )).lower() in {"true", "1"}
+        policy_sha = str(
+            threshold_fields.get("scalp_trailing_policy_value_sha256")
+            or (trailing_transitions[-1].get("scalp_trailing_policy_value_sha256")
+                if trailing_transitions else "")
+            or ""
+        )
+        policy_date = str(
+            threshold_fields.get("scalp_trailing_policy_date")
+            or (trailing_transitions[-1].get("scalp_trailing_policy_date")
+                if trailing_transitions else "")
+            or ""
+        )
+        policy_values = threshold_fields.get("scalp_trailing_policy_values")
+        if not isinstance(policy_values, dict):
+            policy_values = next(
+                (
+                    row.get("scalp_trailing_policy_values")
+                    for row in trailing_transitions
+                    if isinstance(row.get("scalp_trailing_policy_values"), dict)
+                ),
+                None,
+            )
+        try:
+            policy_values_valid = (
+                isinstance(policy_values, dict)
+                and scalp_trailing_value_hash(policy_values) == policy_sha
+            )
+        except (KeyError, TypeError, ValueError):
+            policy_values_valid = False
+        observed_policy_shas = {
+            str(fields.get("scalp_trailing_policy_value_sha256") or "")
+            for fields in trailing_transitions
+        }
+        observed_policy_provenance = {
+            str(fields.get("scalp_trailing_policy_provenance") or "")
+            for fields in trailing_transitions
+        }
+        observed_expected_shas = {
+            str(fields.get("scalp_trailing_policy_expected_sha256") or "")
+            for fields in trailing_transitions
+        }
+        observed_operational_shas = {
+            str(fields.get("operational_threshold_value_sha256") or "")
+            for fields in trailing_transitions
+        }
+        first_operational_values = next(
+            (
+                row.get("operational_threshold_values")
+                for row in trailing_transitions
+                if isinstance(row.get("operational_threshold_values"), dict)
+            ),
+            None,
+        )
+        first_operational_sources = next(
+            (
+                row.get("operational_threshold_sources")
+                for row in trailing_transitions
+                if isinstance(row.get("operational_threshold_sources"), dict)
+            ),
+            None,
+        )
+        operational_sha = next(iter(observed_operational_shas), "")
+        try:
+            operational_values_hash = hashlib.sha256(
+                json.dumps(
+                    first_operational_values, allow_nan=False, sort_keys=True,
+                    separators=(",", ":")
+                ).encode()
+            ).hexdigest()
+        except (TypeError, ValueError):
+            operational_values_hash = ""
+        operational_values_valid = bool(
+            first_operational_values
+            and len(observed_operational_shas) == 1
+            and operational_sha == operational_values_hash
+        )
+        is_trailing_observed = bool(
+            exit_rule == "scalp_trailing_take_profit" or trailing_transitions
+        )
+        operational_binding = (
+            _operational_manifest_binding(
+                policy_date,
+                first_operational_values if operational_values_valid else None,
+                first_operational_sources if operational_values_valid else None,
+            )
+            if is_trailing_observed else {"status": "not_applicable_non_trailing"}
+        )
+        binding_key = (policy_date, policy_sha)
+        if is_trailing_observed and binding_key not in bootstrap_bindings:
+            bootstrap_bindings[binding_key] = _trailing_policy_manifest_binding(
+                policy_date, policy_sha
+            )
+        policy_binding = (
+            bootstrap_bindings[binding_key] if is_trailing_observed
+            else {"status": "not_applicable_non_trailing"}
+        )
+        if not is_trailing_observed:
+            trailing_replay_status = "not_applicable_non_trailing"
+        elif not trailing_transitions:
+            trailing_replay_status = "source_gap_no_input_samples"
+        elif trade.get("trailing_event_source_status") != "structured_partition_read":
+            trailing_replay_status = "source_gap_structured_event_partition"
+        elif not holding_start_events:
+            trailing_replay_status = "source_gap_holding_start_missing"
+        elif coverage_exhausted:
+            trailing_replay_status = "source_gap_sample_cap_exhausted"
+        elif telemetry_gap:
+            trailing_replay_status = "source_gap_observation_telemetry_failure"
+        elif (
+            transition_sequences != list(range(1, len(transition_sequences) + 1))
+            or len(transition_position_keys) != 1
+            or "" in transition_position_keys
+        ):
+            trailing_replay_status = "source_gap_position_or_sequence"
+        elif transition_grid_versions != {SCALP_TRAILING_GRID_VERSION}:
+            trailing_replay_status = "source_gap_grid_version"
+        elif observed_policy_shas != {policy_sha} or policy_sha in {"", "-"}:
+            trailing_replay_status = "source_gap_policy_changed_or_missing"
+        elif (
+            observed_policy_provenance != {"bootstrap_value_hash_matched"}
+            or observed_expected_shas != {policy_sha}
+        ):
+            trailing_replay_status = "source_gap_runtime_bootstrap_hash"
+        elif not policy_values_valid:
+            trailing_replay_status = "source_gap_policy_values"
+        elif not operational_values_valid:
+            trailing_replay_status = "source_gap_operational_values"
+        elif operational_binding["status"].startswith("source_gap"):
+            trailing_replay_status = "source_gap_operational_manifest_binding"
+        elif policy_binding["status"] != "manifest_value_hash_matched_no_pid_proof":
+            trailing_replay_status = "source_gap_policy_binding"
+        else:
+            # Grid crossings are captured, but unobserved intra-poll prices and
+            # future order fills still prohibit an economic counterfactual.
+            trailing_replay_status = "grid_source_linked_paired_replay_pending"
+        operational_inputs = {
+            "quote_age": any(
+                _safe_float(row.get("bid_source_age_ms"), None) is not None
+                and (
+                    str(row.get("bid_source") or "") == "fresh_rest_executable_bid"
+                    or str(row.get("adopted_quote_source_type") or "") in {"0B", "0D"}
+                )
+                for row in trailing_transitions
+            ),
+            "quote_gap": any(
+                _safe_float(row.get("ws_rest_gap_bps"), None) is not None
+                for row in trailing_transitions
+            ),
+            "spread": any(
+                _safe_float(row.get("executable_spread_bps"), None) is not None
+                for row in trailing_transitions
+            ),
+            "ai_age": any(
+                _safe_float(row.get("ai_score_age_sec"), None) is not None
+                for row in trailing_transitions
+            ),
+            "ai_provider": any(
+                str(row.get("ai_score_source") or "-") not in {"", "-", "missing"}
+                and str(row.get("ai_score_data_quality") or "-")
+                in {"fresh", "partial"}
+                for row in trailing_transitions
+            ),
+            "nxt_0b_0d": any(
+                row.get("nxt_trailing_bid_guard_applied") is not None
+                for row in trailing_transitions
+            ),
+            "rest_bid": any(
+                str(row.get("bid_source") or "") == "fresh_rest_executable_bid"
+                for row in trailing_transitions
+            ),
+        }
         if role_gate == "unusable_neutral_only":
             ai_intervention = "unusable"
         elif role_gate == "missing":
@@ -657,6 +1008,11 @@ def _build_position_outcomes(
                 "sell_time": trade.get("sell_time"),
                 "completion_observed_date": trade.get("completion_observed_date"),
                 "completion_day_basis": trade.get("completion_day_basis"),
+                "terminal_population_scope": trade.get("terminal_population_scope"),
+                "attempt_id": trade.get("attempt_id"),
+                "sell_order_no": trade.get("sell_order_no"),
+                "sell_execution_no": trade.get("sell_execution_no"),
+                "sell_quantity_conserved": trade.get("sell_quantity_conserved"),
                 "exact_sell_fill_time": exact_fill_time or None,
                 "exit_rule": exit_rule,
                 "exit_rule_provenance": "inferred" if inferred else "observed",
@@ -703,6 +1059,40 @@ def _build_position_outcomes(
                 "exit_threshold_trigger_kind": threshold_fields.get(
                     "exit_threshold_trigger_kind"
                 ),
+                "trailing_policy_value_sha256": policy_sha or None,
+                "trailing_policy_values": policy_values if policy_values_valid else None,
+                "trailing_policy_date": policy_date or None,
+                "trailing_policy_binding": policy_binding,
+                "trailing_operational_value_sha256": (
+                    operational_sha if operational_values_valid else None
+                ),
+                "trailing_operational_values": (
+                    first_operational_values if operational_values_valid else None
+                ),
+                "trailing_operational_sources": (
+                    first_operational_sources if operational_values_valid else None
+                ),
+                "trailing_operational_binding": operational_binding,
+                "trailing_replay_source_status": trailing_replay_status,
+                "trailing_observation_grid_version": (
+                    next(iter(transition_grid_versions))
+                    if len(transition_grid_versions) == 1 else None
+                ),
+                "trailing_observation_coverage_exhausted": coverage_exhausted,
+                "trailing_observation_telemetry_gap": telemetry_gap,
+                "trailing_holding_start_observed": bool(holding_start_events),
+                "trailing_observation_first_sequence": (
+                    transition_sequences[0] if transition_sequences else None
+                ),
+                "trailing_observation_last_sequence": (
+                    transition_sequences[-1] if transition_sequences else None
+                ),
+                "trailing_operational_inputs": operational_inputs,
+                "trailing_replay_source_reference": {
+                    "snapshot_kind": "trade_review",
+                    "record_id": trade_id,
+                    "source_date": trade.get("completion_observed_date"),
+                },
                 "tp_alternative_observed_rules": alternative_observations,
                 "trailing_input_transition_count": len(trailing_transitions),
                 "trailing_first_arm_at_epoch": _safe_float(
@@ -1028,13 +1418,19 @@ def _summarize_exit_rule_quality(
 
 
 
-def _build_trailing_threshold_readiness(outcomes: list[dict]) -> dict:
+def _build_trailing_threshold_readiness(
+    outcomes: list[dict], open_positions: list[dict] | None = None
+) -> dict:
     """Expose source-qualified denominators; never infer a tuning proposal."""
 
     trailing = [
         row for row in outcomes if row["exit_rule"] == "scalp_trailing_take_profit"
     ]
-    direct = [row for row in trailing if row["exit_rule_provenance"] == "observed"]
+    direct = [
+        row for row in trailing
+        if row["exit_rule_provenance"] == "observed"
+        and row.get("terminal_population_scope") == "real_record_bound"
+    ]
     inputs = [
         row
         for row in direct
@@ -1046,22 +1442,57 @@ def _build_trailing_threshold_readiness(outcomes: list[dict]) -> dict:
     ]
     exact = [row for row in inputs if row["realized_pnl_krw"] is not None]
     forward = [row for row in exact if row["post_sell_status"] == "pass"]
-    arm = [row for row in inputs if row["trailing_first_arm_at_epoch"] is not None]
+    source_linked = [
+        row for row in inputs
+        if row.get("trailing_replay_source_status")
+        == "grid_source_linked_paired_replay_pending"
+    ]
+    arm = [
+        row for row in source_linked
+        if row["trailing_first_arm_at_epoch"] is not None
+    ]
     score = [
         row
-        for row in inputs
+        for row in source_linked
         if str(row["exit_threshold_ai_score_usable"]).strip().lower()
         in {"true", "1"}
         and row["exit_threshold_ai_score_observed"] is not None
+        and (row.get("trailing_operational_inputs") or {}).get("ai_provider")
     ]
     funnel = {
         "completed_valid_ids": [row["record_id"] for row in outcomes],
         "trailing_exit_ids": [row["record_id"] for row in trailing],
+        "real_completed_ids": [
+            row["record_id"] for row in outcomes
+            if row.get("terminal_population_scope") == "real_record_bound"
+        ],
+        "terminal_custody_unproven_ids": [
+            row["record_id"] for row in outcomes
+            if row.get("terminal_population_scope") != "real_record_bound"
+        ],
         "direct_signal_ids": [row["record_id"] for row in direct],
         "effective_input_ids": [row["record_id"] for row in inputs],
         "exact_cost_ids": [row["record_id"] for row in exact],
         "mature_forward_ids": [row["record_id"] for row in forward],
         "paired_replay_eligible_ids": [],
+        "censored_open_position_ids": [
+            str(row["id"]) for row in (open_positions or [])
+            if row.get("real_position_observed")
+        ],
+        "open_position_custody_unproven_ids": [
+            str(row["id"]) for row in (open_positions or [])
+            if not row.get("real_position_observed")
+        ],
+        "grid_source_linked_ids": [
+            row["record_id"] for row in outcomes
+            if row.get("trailing_replay_source_status")
+            == "grid_source_linked_paired_replay_pending"
+        ],
+        "policy_manifest_bound_ids": [
+            row["record_id"] for row in outcomes
+            if (row.get("trailing_policy_binding") or {}).get("status")
+            == "manifest_value_hash_matched_no_pid_proof"
+        ],
     }
     axis_inputs = {
         "SCALP_TRAILING_START_PCT": (arm, "pre_arm_quote_path_and_paired_replay_missing"),
@@ -1070,22 +1501,145 @@ def _build_trailing_threshold_readiness(outcomes: list[dict]) -> dict:
             "score_ttl_provider_lineage_and_paired_replay_missing",
         ),
         "SCALP_TRAILING_LIMIT_WEAK": (
-            [row for row in forward if row["exit_threshold_key"] == "SCALP_TRAILING_LIMIT_WEAK"],
+            [row for row in forward if row in source_linked and row["exit_threshold_key"] == "SCALP_TRAILING_LIMIT_WEAK"],
             "first_crossing_fill_cost_and_holdout_replay_missing",
         ),
         "SCALP_TRAILING_LIMIT_STRONG": (
-            [row for row in forward if row["exit_threshold_key"] == "SCALP_TRAILING_LIMIT_STRONG"],
+            [row for row in forward if row in source_linked and row["exit_threshold_key"] == "SCALP_TRAILING_LIMIT_STRONG"],
             "first_crossing_fill_cost_and_holdout_replay_missing",
         ),
     }
+    operational_requirements = {
+        "KORSTOCKSCAN_SCALP_FAST_EXIT_POLL_MS": None,
+        "KORSTOCKSCAN_QUOTE_CONSISTENCY_MAX_WS_AGE_MS": "quote_age",
+        "KORSTOCKSCAN_QUOTE_CONSISTENCY_MAX_REST_AGE_MS": "rest_bid",
+        "KORSTOCKSCAN_QUOTE_CONSISTENCY_WARN_GAP_BPS": "spread",
+        "KORSTOCKSCAN_QUOTE_CONSISTENCY_EMERGENCY_REST_TIMEOUT_MS": "rest_bid",
+        "HOLDING_EXIT_REST_QUOTE_FALLBACK_MIN_INTERVAL_SEC": "rest_bid",
+        "KORSTOCKSCAN_SCALP_NXT_TRAILING_BID_GUARD_MAX_0D_AGE_MS": "nxt_0b_0d",
+        "KORSTOCKSCAN_SCALP_NXT_TRAILING_BID_GUARD_MIN_0B_STALE_MS": "nxt_0b_0d",
+        "AI_HOLDING_CRITICAL_COOLDOWN": "ai_age",
+        "AI_HOLDING_CRITICAL_MIN_COOLDOWN": "ai_age",
+        "AI_HOLDING_MIN_COOLDOWN": "ai_age",
+        "AI_HOLDING_MAX_COOLDOWN": "ai_age",
+        "SCALP_SAFE_PROFIT": "ai_age",
+        "AI_HOLDING_FAST_REUSE_MAX_WS_AGE_SEC": "ai_age",
+        "AI_HOLDING_FAST_REUSE_CRITICAL_SEC": "ai_age",
+        "AI_HOLDING_FAST_REUSE_NORMAL_SEC": "ai_age",
+        "AI_HOLDING_NEAR_SAFE_PROFIT_BAND_PCT": "ai_age",
+        "AI_HOLDING_CRITICAL_PRICE_TRIGGER_PCT": "ai_age",
+        "AI_HOLDING_NORMAL_PRICE_TRIGGER_PCT": "ai_age",
+    }
+    operational_contracts = {
+        "KORSTOCKSCAN_SCALP_FAST_EXIT_POLL_MS": ("ms", "poll_interval=max(50,value)"),
+        "KORSTOCKSCAN_QUOTE_CONSISTENCY_MAX_WS_AGE_MS": ("ms", "ws_age<=value"),
+        "KORSTOCKSCAN_QUOTE_CONSISTENCY_MAX_REST_AGE_MS": ("ms", "rest_age<=value"),
+        "KORSTOCKSCAN_QUOTE_CONSISTENCY_WARN_GAP_BPS": ("bps", "gap_or_spread>value_requires_recheck"),
+        "KORSTOCKSCAN_QUOTE_CONSISTENCY_EMERGENCY_REST_TIMEOUT_MS": ("ms", "rest_request_timeout=value"),
+        "HOLDING_EXIT_REST_QUOTE_FALLBACK_MIN_INTERVAL_SEC": ("sec", "rest_retry_elapsed>=max(3,value)"),
+        "KORSTOCKSCAN_SCALP_NXT_TRAILING_BID_GUARD_MAX_0D_AGE_MS": ("ms", "nxt_0d_age<=value"),
+        "KORSTOCKSCAN_SCALP_NXT_TRAILING_BID_GUARD_MIN_0B_STALE_MS": ("ms", "nxt_0b_age>=value"),
+        "AI_HOLDING_CRITICAL_COOLDOWN": ("sec", "critical_score_age<=value"),
+        "AI_HOLDING_CRITICAL_MIN_COOLDOWN": ("sec", "critical_recheck_elapsed>value"),
+        "AI_HOLDING_MIN_COOLDOWN": ("sec", "normal_recheck_elapsed>value"),
+        "AI_HOLDING_MAX_COOLDOWN": ("sec", "normal_recheck_elapsed>value_forced"),
+        "SCALP_SAFE_PROFIT": ("pct", "profit_near_or_above_value_changes_ai_zone"),
+        "AI_HOLDING_FAST_REUSE_MAX_WS_AGE_SEC": ("sec", "ws_snapshot_age<=value"),
+        "AI_HOLDING_FAST_REUSE_CRITICAL_SEC": ("sec", "critical_reuse_age<max(value,dynamic_max+2)"),
+        "AI_HOLDING_FAST_REUSE_NORMAL_SEC": ("sec", "normal_reuse_age<max(value,dynamic_max+2)"),
+        "AI_HOLDING_NEAR_SAFE_PROFIT_BAND_PCT": ("pct_point", "abs(profit-safe_profit)<=value"),
+        "AI_HOLDING_CRITICAL_PRICE_TRIGGER_PCT": ("pct", "critical_price_change>=value"),
+        "AI_HOLDING_NORMAL_PRICE_TRIGGER_PCT": ("pct", "normal_price_change>=value"),
+    }
+    operational_axes = {}
+    for key, required_input in operational_requirements.items():
+        observed_rows = [
+            row for row in outcomes
+            if key in (row.get("trailing_operational_values") or {})
+        ]
+        connected_rows = [
+            row for row in observed_rows
+            if row.get("trailing_replay_source_status")
+            == "grid_source_linked_paired_replay_pending"
+            and (
+                required_input is None
+                or (row.get("trailing_operational_inputs") or {}).get(required_input)
+            )
+        ]
+        operational_axes[key] = {
+            "unit": operational_contracts[key][0],
+            "consumer_comparison": operational_contracts[key][1],
+            "owner": (
+                "shared_quote_safety" if "QUOTE_CONSISTENCY" in key
+                or "REST_QUOTE" in key else
+                "holding_ai_shared" if key.startswith("AI_HOLDING")
+                or key == "SCALP_SAFE_PROFIT" else
+                "scalp_exit_input_quality"
+            ),
+            "observed_value_ids": [row["record_id"] for row in observed_rows],
+            "source_connected_ids": [row["record_id"] for row in connected_rows],
+            "effective_values": sorted({
+                row["trailing_operational_values"][key] for row in observed_rows
+            }),
+            "effective_value_sha256": sorted({
+                row["trailing_operational_value_sha256"] for row in observed_rows
+                if row.get("trailing_operational_value_sha256")
+            }),
+            "effective_sources": sorted({
+                (row.get("trailing_operational_sources") or {}).get(key, "source_gap")
+                for row in observed_rows
+            }),
+            "candidate_value": None,
+            "eligible_for_live_review": False,
+            "blocker": (
+                "poll_source_tick_and_stop_latency_counterfactual_missing"
+                if required_input is None
+                else "shared_owner_safety_and_paired_replay_missing"
+            ),
+            "decision_authority": "report_only_shared_owner_review_required",
+        }
     return {
         "status": "source_gap_paired_replay_unavailable",
         "decision_authority": "report_only_no_threshold_apply",
         "funnel_ids": funnel,
+        "operational_axes": operational_axes,
         "axes": {
             key: {
+                "unit": "score" if key == "SCALP_TRAILING_STRONG_AI_SCORE" else "pct",
+                "consumer_comparison": (
+                    "usable_score>=value_selects_strong"
+                    if key == "SCALP_TRAILING_STRONG_AI_SCORE" else
+                    "peak_profit>=value_arms"
+                    if key == "SCALP_TRAILING_START_PCT" else
+                    "armed_and_peak_to_bid_drawdown>=value_triggers"
+                ),
+                "owner": "scalp_trailing_take_profit",
                 "qualified_input_ids": [row["record_id"] for row in rows],
                 "qualified_input_count": len(rows),
+                "policy_manifest_bound_ids": [
+                    row["record_id"] for row in rows
+                    if (row.get("trailing_policy_binding") or {}).get("status")
+                    == "manifest_value_hash_matched_no_pid_proof"
+                ],
+                "effective_values": sorted({
+                    row["trailing_policy_values"][key]
+                    for row in rows
+                    if isinstance(row.get("trailing_policy_values"), dict)
+                    and key in row["trailing_policy_values"]
+                }),
+                "effective_value_sha256": sorted({
+                    row["trailing_policy_value_sha256"]
+                    for row in rows if row.get("trailing_policy_value_sha256")
+                }),
+                "effective_sources": sorted({
+                    (row.get("trailing_policy_binding") or {}).get("sources", {}).get(
+                        key, "source_gap"
+                    )
+                    for row in rows
+                    if isinstance(
+                        (row.get("trailing_policy_binding") or {}).get("sources"), dict
+                    )
+                }),
                 "candidate_value": None,
                 "eligible_for_live_review": False,
                 "blocker": blocker,
@@ -1555,6 +2109,9 @@ def build_holding_exit_observation_report(
     position_outcomes, position_coverage = _build_position_outcomes(
         valid_trades, post_sell_lineage_rows
     )
+    open_positions, open_position_status = _collect_open_scalp_positions(
+        trade_snapshots, safe_date
+    )
     target_pipeline_summary, pipeline_paths, pipeline_rows = (
         _summarize_target_pipeline_events(safe_date)
     )
@@ -1580,6 +2137,15 @@ def build_holding_exit_observation_report(
         },
         "position_outcomes": position_outcomes,
         "position_outcome_coverage": position_coverage,
+        "open_position_censoring": {
+            "status": open_position_status,
+            "position_ids": [str(row["id"]) for row in open_positions],
+            "real_observed_ids": [
+                str(row["id"]) for row in open_positions
+                if row.get("real_position_observed")
+            ],
+            "decision_authority": "source_only_no_pnl_or_threshold_apply",
+        },
         "readiness": _build_readiness(
             target_date=safe_date,
             target_valid_trades=target_valid_trades,
@@ -1589,7 +2155,7 @@ def build_holding_exit_observation_report(
         "cohorts": _build_cohorts(valid_trades),
         "exit_rule_quality": _summarize_exit_rule_quality(post_sell_rows, valid_trades),
         "trailing_threshold_readiness": _build_trailing_threshold_readiness(
-            position_outcomes
+            position_outcomes, open_positions
         ),
         "soft_stop_rebound": _build_soft_stop_rebound(
             post_sell_rows,

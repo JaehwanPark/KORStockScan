@@ -8,6 +8,7 @@ artifacts.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -251,7 +252,12 @@ def load_observation_report(target_date: str) -> dict[str, Any] | None:
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        raw = path.read_bytes()
+        payload = json.loads(raw)
+        if not isinstance(payload, dict) or payload.get("date") != target_date:
+            return None
+        payload["_source_sha256"] = hashlib.sha256(raw).hexdigest()
+        return payload
     except Exception:
         return None
 
@@ -872,6 +878,9 @@ def _observation_metrics(observation: dict[str, Any] | None) -> dict[str, Any]:
         if item.get("exit_rule") == "scalp_trailing_take_profit":
             trailing = item
             break
+    readiness = observation.get("trailing_threshold_readiness") or {}
+    funnel = readiness.get("funnel_ids") or {}
+    operational_axes = readiness.get("operational_axes") or {}
     return {
         "soft_stop_total": int(soft_stop.get("total_soft_stop") or 0),
         "soft_stop_rebound_above_sell_10m_rate": _safe_float(
@@ -882,6 +891,14 @@ def _observation_metrics(observation: dict[str, Any] | None) -> dict[str, Any]:
         "trailing_missed_upside_rate": _safe_float(
             trailing.get("missed_upside_rate"), 0.0
         ),
+        "trailing_policy_manifest_bound_count": len(
+            funnel.get("policy_manifest_bound_ids") or []
+        ),
+        "trailing_grid_source_linked_count": len(
+            funnel.get("grid_source_linked_ids") or []
+        ),
+        "trailing_operational_axis_count": len(operational_axes),
+        "trailing_threshold_source_status": readiness.get("status") or "source_gap",
     }
 
 
@@ -1258,6 +1275,9 @@ def build_holding_exit_sentinel_report(
         },
         "observation": {
             "path": str(_observation_path(target_date)),
+            "source_sha256": (
+                observation.get("_source_sha256") if observation else None
+            ),
             "metrics": obs_metrics,
             "decision_authority": "cross_venue_observation_diagnostic_only",
         },

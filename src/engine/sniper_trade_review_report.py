@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import re
 from collections import Counter, defaultdict
@@ -9,11 +10,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from src.engine.trade_profit import calculate_net_realized_pnl
 from src.engine.log_archive_service import iter_target_log_lines, load_monitor_snapshot
 from src.engine.monitor_snapshot_runtime import guard_stdin_heavy_build
-from src.utils.constants import LOGS_DIR, POSTGRES_URL
+from src.utils.constants import DATA_DIR, LOGS_DIR, POSTGRES_URL
+from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 from src.engine.sniper_gatekeeper_replay import find_gatekeeper_snapshot_for_trade
 
 _HOLDING_RE = re.compile(
@@ -105,6 +108,9 @@ _EVENT_DETAIL_LABELS = {
 _DETAIL_HIDDEN_KEYS = {
     "id",
     "new_watch_id",
+    "scalp_trailing_policy_values",
+    "operational_threshold_values",
+    "operational_threshold_sources",
 }
 
 _DETAIL_KEY_ORDER = [
@@ -163,14 +169,32 @@ def _iter_target_lines(log_paths: list[Path], *, target_date: str) -> list[str]:
     )
 
 
+def _decode_threshold_json_fields(fields: dict) -> dict:
+    for key in (
+        "scalp_trailing_policy_values",
+        "operational_threshold_values",
+        "operational_threshold_sources",
+    ):
+        if key not in fields or fields[key] == "-":
+            continue
+        if isinstance(fields[key], dict):
+            continue
+        try:
+            value = json.loads(fields[key])
+        except (TypeError, ValueError):
+            value = None
+        fields[key] = value if isinstance(value, dict) else None
+    return fields
+
+
 def _parse_event(line: str) -> HoldingEvent | None:
     match = _HOLDING_RE.match(line.strip())
     if not match:
         return None
-    fields = {
+    fields = _decode_threshold_json_fields({
         m.group("key"): str(m.group("value") or "").replace("|", " ")
         for m in _FIELD_RE.finditer(match.group("rest") or "")
-    }
+    })
     return HoldingEvent(
         timestamp=match.group("timestamp"),
         name=match.group("name"),
@@ -178,6 +202,57 @@ def _parse_event(line: str) -> HoldingEvent | None:
         stage=match.group("stage"),
         fields=fields,
         raw_line=line.strip(),
+    )
+
+
+def _load_holding_projection_events_from_structured(
+    target_date: str,
+) -> tuple[list[HoldingEvent], str]:
+    base = DATA_DIR / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
+    late = base.with_name(f"{base.stem}.late.jsonl")
+    paths = [existing_or_gzip_path(path) for path in (base, late)]
+    existing = [path for path in paths if path.exists()]
+    if not existing:
+        return [], "source_gap_structured_partition_missing"
+    base_missing = not paths[0].exists()
+    events = []
+    malformed_count = 0
+    try:
+        for path in existing:
+            for payload in iter_jsonl(path):
+                if payload.get("pipeline") != "HOLDING_PIPELINE" or payload.get(
+                    "stage"
+                ) not in _PROJECTION_EVENT_STAGES:
+                    continue
+                emitted_at = str(payload.get("emitted_at") or "")
+                partition_date = str(
+                    payload.get("storage_partition_date") or emitted_at[:10]
+                )
+                if partition_date != target_date:
+                    continue
+                fields = payload.get("fields")
+                if not isinstance(fields, dict) or len(emitted_at) < 19:
+                    malformed_count += 1
+                    continue
+                fields = _decode_threshold_json_fields(dict(fields))
+                record_id = payload.get("record_id")
+                if _safe_int(record_id) > 0:
+                    fields["id"] = str(record_id)
+                events.append(HoldingEvent(
+                    timestamp=emitted_at[:19].replace("T", " "),
+                    name=str(payload.get("stock_name") or "-"),
+                    code=str(payload.get("stock_code") or "-")[:6],
+                    stage=str(payload["stage"]),
+                    fields=fields,
+                    raw_line=str(payload.get("text_payload") or ""),
+                ))
+    except (OSError, EOFError, UnicodeError):
+        return [], "source_gap_structured_partition_unreadable"
+    events.sort(key=_event_sort_key)
+    return events, (
+        "source_gap_base_partition_missing" if base_missing
+        else "source_gap_structured_projection_malformed" if malformed_count
+        else "structured_partition_read"
     )
 
 
@@ -435,6 +510,41 @@ def _fetch_completed_trade_rows_by_ids(ids: set[int]) -> tuple[list[dict], list[
         return rows, []
     except Exception as exc:
         return [], [f"완료 carry ID 조회 실패: {exc}"]
+
+
+def _fetch_open_scalp_rows(target_date: str) -> tuple[list[dict], list[str]]:
+    """Current DB census only; a past date has no reconstructible open snapshot."""
+
+    if target_date != datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat():
+        return [], ["source_gap_historical_open_census_not_reconstructible"]
+    try:
+        create_engine, text = _import_sqlalchemy()
+        engine = create_engine(POSTGRES_URL, pool_pre_ping=True)
+        query = """
+            SELECT id, rec_date, stock_code, stock_name, status, strategy,
+                   position_tag, buy_price, buy_qty, buy_time, sell_price,
+                   sell_time, profit_rate
+            FROM recommendation_history
+            WHERE rec_date >= :baseline_date AND rec_date <= :target_date
+              AND status IN ('HOLDING', 'SELL_ORDERED')
+              AND strategy IN ('SCALPING', 'SCALP')
+              AND buy_qty > 0
+            ORDER BY id DESC
+            LIMIT 1001
+        """
+        with engine.connect() as conn:
+            rows = [
+                _db_trade_mapping(row)
+                for row in conn.execute(text(query), {
+                    "baseline_date": datetime(2026, 6, 5).date(),
+                    "target_date": datetime.strptime(target_date, "%Y-%m-%d").date(),
+                }).mappings()
+            ]
+        if len(rows) > 1000:
+            return [], ["source_gap_open_scalp_census_cap_exceeded"]
+        return rows, []
+    except Exception as exc:
+        return [], [f"source_gap_open_scalp_census_db_error:{type(exc).__name__}"]
 
 
 def _match_trade_events(trade: dict, events: list[HoldingEvent]) -> list[HoldingEvent]:
@@ -1272,6 +1382,9 @@ def _completed_trade_projection(
             == "true"
         ),
         "terminal_decision_authority": terminal_fields.get("decision_authority"),
+        "terminal_population_scope": terminal_fields.get(
+            "pipeline_lifecycle_population_scope"
+        ),
         "main_lifecycle_fees_taxes_krw": (
             _safe_float(terminal_fields.get("main_lifecycle_fees_taxes_krw"), None)
             if exact_receipt
@@ -1291,6 +1404,40 @@ def _completed_trade_projection(
             }
             for event in events
             if event.stage in _PROJECTION_EVENT_STAGES
+        ],
+    }
+
+
+def _open_scalp_position_projection(trade: dict, events: list[HoldingEvent]) -> dict | None:
+    """Keep the observed open census separate from completed PnL evidence."""
+
+    if str(trade.get("status") or "").upper() not in {"HOLDING", "SELL_ORDERED"}:
+        return None
+    if str(trade.get("strategy") or "").upper() not in {"SCALPING", "SCALP"}:
+        return None
+    if _safe_int(trade.get("buy_qty"), 0) <= 0:
+        return None
+    observed = [
+        event for event in events
+        if event.stage in {"holding_started", "scalp_trailing_input_transition", "exit_signal"}
+    ]
+    real_observed = any(
+        event.fields.get("pipeline_lifecycle_population_scope") == "real_record_bound"
+        for event in observed
+    )
+    return {
+        "id": trade.get("id"),
+        "rec_date": trade.get("rec_date"),
+        "code": trade.get("code"),
+        "strategy": trade.get("strategy"),
+        "status": trade.get("status"),
+        "buy_time": trade.get("buy_time"),
+        "buy_qty": trade.get("buy_qty"),
+        "real_position_observed": real_observed,
+        "censor_reason": "open_position_no_completed_economics",
+        "timeline": [
+            {"stage": event.stage, "timestamp": event.timestamp, "fields": dict(event.fields)}
+            for event in observed
         ],
     }
 
@@ -1483,7 +1630,26 @@ def build_trade_review_report(
         LOGS_DIR / "pipeline_event_logger_info.log",
     ]
     lines = _iter_target_lines(log_paths, target_date=target_date)
-    all_events = [event for line in lines if (event := _parse_event(line))]
+    text_events = [event for line in lines if (event := _parse_event(line))]
+    structured_projection_events, trailing_source_status = (
+        _load_holding_projection_events_from_structured(target_date)
+    )
+    structured_text_counts = Counter(
+        event.raw_line for event in structured_projection_events if event.raw_line
+    )
+    unmatched_text_events = []
+    for event in text_events:
+        marker = "[HOLDING_PIPELINE]"
+        text_payload = (
+            marker + event.raw_line.split(marker, 1)[1]
+            if marker in event.raw_line else ""
+        )
+        if structured_text_counts[text_payload] > 0:
+            structured_text_counts[text_payload] -= 1
+            continue
+        unmatched_text_events.append(event)
+    all_events = unmatched_text_events + structured_projection_events
+    all_events.sort(key=_event_sort_key)
     events = all_events
     if normalized_code:
         events = [event for event in events if event.code == normalized_code]
@@ -1513,14 +1679,29 @@ def build_trade_review_report(
         if event.stage in {"sell_completed", "sell_completion_reconciliation_gap"}
         and _safe_int(event.fields.get("id")) > 0
     }
+    observed_open_ids = {
+        _safe_int(event.fields.get("id"))
+        for event in all_events
+        if event.stage in {"holding_started", "scalp_trailing_input_transition"}
+        and _safe_int(event.fields.get("id")) > 0
+    }
     missing_completion_ids = completion_event_ids - {
         _safe_int(row.get("id")) for row in trade_rows
     }
+    missing_observed_ids = observed_open_ids - {
+        _safe_int(row.get("id")) for row in trade_rows
+    }
     carry_rows, carry_warnings = _fetch_completed_trade_rows_by_ids(
-        missing_completion_ids
+        missing_completion_ids | missing_observed_ids
     )
     trade_rows.extend(carry_rows)
     warnings.extend(carry_warnings)
+    open_census_rows, open_census_warnings = _fetch_open_scalp_rows(target_date)
+    existing_ids = {_safe_int(row.get("id")) for row in trade_rows}
+    trade_rows.extend(
+        row for row in open_census_rows
+        if _safe_int(row.get("id")) not in existing_ids
+    )
     unresolved_completion_ids = missing_completion_ids - {
         _safe_int(row.get("id")) for row in carry_rows
     }
@@ -1532,6 +1713,7 @@ def build_trade_review_report(
 
     compiled_rows = []
     completed_projection = []
+    open_projection = []
     for trade in trade_rows:
         matched = _match_trade_events(trade, all_events)
         compiled = _build_trade_row(trade, matched)
@@ -1541,7 +1723,11 @@ def build_trade_review_report(
             projected is not None
             and projected.get("completion_observed_date") == target_date
         ):
+            projected["trailing_event_source_status"] = trailing_source_status
             completed_projection.append(projected)
+        open_projected = _open_scalp_position_projection(trade, matched)
+        if open_projected is not None:
+            open_projection.append(open_projected)
     projected_completed_ids = {_safe_int(row.get("id")) for row in completed_projection}
     if sell_completed_event_ids != projected_completed_ids:
         warnings.append(
@@ -1612,6 +1798,12 @@ def build_trade_review_report(
             "total_trades": len(visible_rows),
             "completed_trades": len(realized),
             "canonical_completed_trades": len(completed_projection),
+            "open_scalp_position_projection_count": len(open_projection),
+            "open_scalp_position_projection_status": (
+                "current_db_census" if not open_census_warnings
+                else open_census_warnings[0]
+            ),
+            "trailing_input_transition_source_status": trailing_source_status,
             "open_trades": sum(
                 1
                 for row in visible_rows
@@ -1671,6 +1863,7 @@ def build_trade_review_report(
         "sections": {
             "recent_trades": recent_trades,
             "completed_trade_projection": completed_projection,
+            "open_scalp_position_projection": open_projection,
             "completed_trades": [
                 row
                 for row in visible_rows

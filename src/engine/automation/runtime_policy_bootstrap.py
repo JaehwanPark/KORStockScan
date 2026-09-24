@@ -24,6 +24,10 @@ from src.engine.lifecycle.retirement import (
     retirement_env,
     without_retired_env,
 )
+from src.engine.scalping.trailing_threshold_policy import (
+    THRESHOLD_KEYS as SCALP_TRAILING_THRESHOLD_KEYS,
+    bootstrap_receipt as scalp_trailing_bootstrap_receipt,
+)
 from src.utils.constants import DATA_DIR
 
 SCHEMA_VERSION = 1
@@ -774,6 +778,18 @@ def build_manifest(
     off_values = retirement_env()
     values.update(off_values)
     env_owners.update({key: "explicit_retirement_off" for key in off_values})
+    trailing_receipt = scalp_trailing_bootstrap_receipt(values, env_owners)
+    for key in SCALP_TRAILING_THRESHOLD_KEYS:
+        env_key = f"KORSTOCKSCAN_{key}"
+        if env_key not in values:
+            values[env_key] = str(trailing_receipt["values"][key])
+            env_owners[env_key] = "code_default"
+    values["KORSTOCKSCAN_SCALP_TRAILING_VALUE_SHA256"] = trailing_receipt[
+        "value_sha256"
+    ]
+    env_owners["KORSTOCKSCAN_SCALP_TRAILING_VALUE_SHA256"] = (
+        "scalp_trailing_threshold_receipt"
+    )
     selected_families = sorted(
         str(item)
         for item in incumbent.get("selected_families") or []
@@ -821,6 +837,7 @@ def build_manifest(
         "pre_submit_delay_handoff": delay_handoff,
         "direct_family_receipts_rejected": rejected_receipts,
         "env_key_owners": env_owners,
+        "scalp_trailing_threshold_receipt": trailing_receipt,
         "env_overrides": dict(sorted(values.items())),
         "retired_key_scrubbed": sorted(
             retired_keys | (set(incumbent_values) - set(without_retired_env(incumbent_values)))
@@ -915,6 +932,19 @@ def verify_bootstrap(target_date: str, *, pid: int | None = None, write: bool = 
     if not isinstance(manifest_env, dict):
         findings.append("manifest_env_overrides_invalid")
         manifest_env = {}
+    trailing_receipt = manifest.get("scalp_trailing_threshold_receipt")
+    if trailing_receipt is not None:
+        try:
+            expected_trailing = scalp_trailing_bootstrap_receipt(
+                manifest_env, manifest.get("env_key_owners") or {}
+            )
+        except (KeyError, TypeError, ValueError):
+            findings.append("scalp_trailing_threshold_receipt_invalid")
+        else:
+            if trailing_receipt != expected_trailing or manifest_env.get(
+                "KORSTOCKSCAN_SCALP_TRAILING_VALUE_SHA256"
+            ) != expected_trailing["value_sha256"]:
+                findings.append("scalp_trailing_threshold_receipt_mismatch")
     if target_date >= "2026-09-23":
         current_delay_env, current_delay_handoff = _pre_submit_delay_handoff(target_date)
         if manifest.get("pre_submit_delay_handoff") != current_delay_handoff:

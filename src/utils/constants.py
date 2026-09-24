@@ -948,7 +948,6 @@ class TradingConfig:
         0.20  # historical/replay 전용 기준
     )
     SCALP_TRAILING_START_PCT: float = 0.6  # 초단타 트레일링 시작 수익률
-    SCALP_TRAILING_LIMIT: float = 0.5  # DEPRECATED: STRONG/WEAK로 대체됨
     MIN_SCALP_LIQUIDITY: int = 500_000_000  # 최소 호가 잔량 대금 (5억)
     MAX_SCALP_SURGE_PCT: float = 20.0  # 초단타 진입 금지 급등률 (20%)
     MAX_INTRADAY_SURGE: float = 16.0  # 당일 시가 대비 최대 급등률 (1차 완화: 16%)
@@ -2847,8 +2846,15 @@ def _build_trading_rules() -> TradingConfig:
         "KORSTOCKSCAN_HOLDING_EXIT_LIVE_TUNING_SELECTED"
     )
     env_scalp_safe_profit = _env_float("KORSTOCKSCAN_SCALP_SAFE_PROFIT")
+    env_scalp_trailing_start_pct = _env_float("KORSTOCKSCAN_SCALP_TRAILING_START_PCT")
     env_scalp_trailing_strong_ai_score = _env_int(
         "KORSTOCKSCAN_SCALP_TRAILING_STRONG_AI_SCORE"
+    )
+    env_scalp_trailing_limit_weak = _env_float(
+        "KORSTOCKSCAN_SCALP_TRAILING_LIMIT_WEAK"
+    )
+    env_scalp_trailing_limit_strong = _env_float(
+        "KORSTOCKSCAN_SCALP_TRAILING_LIMIT_STRONG"
     )
     env_profit_stagnation_enabled = _env_bool(
         "KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_EXIT_ENABLED"
@@ -4221,10 +4227,25 @@ def _build_trading_rules() -> TradingConfig:
                 if env_scalp_safe_profit is not None
                 else config.SCALP_SAFE_PROFIT
             ),
+            SCALP_TRAILING_START_PCT=(
+                env_scalp_trailing_start_pct
+                if env_scalp_trailing_start_pct is not None
+                else config.SCALP_TRAILING_START_PCT
+            ),
             SCALP_TRAILING_STRONG_AI_SCORE=(
                 env_scalp_trailing_strong_ai_score
                 if env_scalp_trailing_strong_ai_score is not None
                 else config.SCALP_TRAILING_STRONG_AI_SCORE
+            ),
+            SCALP_TRAILING_LIMIT_WEAK=(
+                env_scalp_trailing_limit_weak
+                if env_scalp_trailing_limit_weak is not None
+                else config.SCALP_TRAILING_LIMIT_WEAK
+            ),
+            SCALP_TRAILING_LIMIT_STRONG=(
+                env_scalp_trailing_limit_strong
+                if env_scalp_trailing_limit_strong is not None
+                else config.SCALP_TRAILING_LIMIT_STRONG
             ),
             SCALP_PROFIT_STAGNATION_EXIT_ENABLED=(
                 env_profit_stagnation_enabled

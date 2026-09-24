@@ -1090,6 +1090,35 @@ def build_runtime_approval_summary(
         sources[owner]["economic_evidence"]["policy_handoff_state"]
         for owner in PRIMARY_DIRECT_OWNERS if required_by_owner.get(owner)
     )
+    trailing_path = (
+        DATA_DIR / "report" / "holding_exit_observation"
+        / f"holding_exit_observation_{target_date}.json"
+    )
+    trailing_payload, trailing_error, trailing_read_mode, _ = _read(trailing_path)
+    trailing_readiness = trailing_payload.get("trailing_threshold_readiness") or {}
+    trailing_status = (
+        "source_gap_report_missing_or_unreadable" if trailing_error
+        else "source_gap_report_exceeds_read_limit"
+        if trailing_read_mode == "stream_hash_only_large_json"
+        else "source_gap_report_date_mismatch"
+        if trailing_payload.get("date") != target_date
+        else str(trailing_readiness.get("status") or "source_gap_readiness_missing")
+    )
+    trailing_lineage = {
+        "path": str(trailing_path),
+        "source_sha256": _sha(trailing_path),
+        "source_date": trailing_payload.get("date"),
+        "status": trailing_status,
+        "read_mode": trailing_read_mode,
+        "error": trailing_error,
+        "policy_manifest_bound_count": len(
+            (trailing_readiness.get("funnel_ids") or {}).get("policy_manifest_bound_ids") or []
+        ),
+        "grid_source_linked_count": len(
+            (trailing_readiness.get("funnel_ids") or {}).get("grid_source_linked_ids") or []
+        ),
+        "decision_authority": "optional_source_only_no_candidate_or_runtime_apply",
+    }
     report = {
         "schema_version": 3, "report_type": "runtime_approval_summary", "date": target_date,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"), "status": status,
@@ -1099,6 +1128,7 @@ def build_runtime_approval_summary(
         "policy_candidate_count": sum(1 for owner in PRIMARY_DIRECT_OWNERS if sources[owner]["economic_evidence"]["policy_handoff_state"] == "candidate_published"),
         "preopen_consumption_state": preopen_state, "natural_acceptance_state": natural_state,
         "preopen_consumption_receipt": preopen_receipt,
+        "holding_exit_threshold_lineage": trailing_lineage,
         "policy_handoff_state": (
             "candidate_published" if handoff_states.get("candidate_published")
             else "blocked" if handoff_states.get("blocked")
@@ -1137,6 +1167,7 @@ def build_runtime_approval_summary(
         f"- direct evidence: `{report['direct_evidence_state']}`", f"- economic state: `{report['economic_state']}`",
         f"- PREOPEN consumption: `{report['preopen_consumption_state']}`", "- authority: family-owned direct evidence summary only",
         "- common Daily/EV candidate generation: `retired`",
+        f"- holding exit threshold lineage: `{trailing_status}`; source hash: `{trailing_lineage['source_sha256'] or '-'}`",
         f"- required sources: `{report['available_required_source_count']}/{report['required_source_count']}`", "", "## Direct owners", "",
         "| Owner | Required | Evidence | Economic | Policy handoff | First blocker |", "|---|---:|---|---|---|---|",
     ]

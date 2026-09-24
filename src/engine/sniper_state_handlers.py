@@ -286,6 +286,7 @@ from src.trading.market.quote_consistency import (
     build_quote_consistency_snapshot,
     quote_input_from_rest_orderbook,
     quote_input_from_ws,
+    ws_quote_source_receipt,
     ws_trade_receive_age_ms,
 )
 from src.trading.order.tick_utils import clamp_price_to_tick, move_price_down_by_bps
@@ -352,6 +353,11 @@ from src.engine.scalping.scale_in_split_order_plan import (
 from src.trading.order.split_execution_math import scale_in_leg_ttl_seconds
 from src.engine.scalping.position_peak_ledger import POSITION_PEAK_LEDGER
 from src.engine.scalping.trailing_exit_decision import evaluate_trailing_take_profit
+from src.engine.scalping.trailing_threshold_policy import (
+    GRID_VERSION as SCALP_TRAILING_GRID_VERSION,
+    MAX_POSITION_SAMPLES as SCALP_TRAILING_MAX_POSITION_SAMPLES,
+    value_hash as scalp_trailing_value_hash,
+)
 from src.engine.scalping.scanner_async_eval import (
     ScannerAsyncEvalContext,
     ScannerAsyncEvalCoordinator,
@@ -19672,6 +19678,33 @@ def _log_holding_pipeline(stock, code, stage, **fields):
     )
 
 
+def _scalp_trailing_policy_observation_fields() -> dict[str, Any]:
+    values = {
+        "SCALP_TRAILING_START_PCT": _rule_float("SCALP_TRAILING_START_PCT", 0.6),
+        "SCALP_TRAILING_STRONG_AI_SCORE": _rule_int("SCALP_TRAILING_STRONG_AI_SCORE", 75),
+        "SCALP_TRAILING_LIMIT_WEAK": _rule_float("SCALP_TRAILING_LIMIT_WEAK", 0.4),
+        "SCALP_TRAILING_LIMIT_STRONG": _rule_float("SCALP_TRAILING_LIMIT_STRONG", 0.8),
+    }
+    try:
+        digest = scalp_trailing_value_hash(values)
+    except (KeyError, TypeError, ValueError):
+        digest = ""
+    expected = str(os.getenv("KORSTOCKSCAN_SCALP_TRAILING_VALUE_SHA256") or "").strip()
+    return {
+        "scalp_trailing_policy_values": values,
+        "scalp_trailing_policy_value_sha256": digest or "-",
+        "scalp_trailing_policy_expected_sha256": expected or "-",
+        "scalp_trailing_policy_provenance": (
+            "bootstrap_value_hash_matched"
+            if digest and expected == digest
+            else "bootstrap_value_hash_mismatch" if expected else "runtime_values_only"
+        ),
+        "scalp_trailing_policy_date": os.getenv(
+            "KORSTOCKSCAN_RUNTIME_POLICY_BOOTSTRAP_DATE", ""
+        ) or "-",
+    }
+
+
 def _scalp_exit_threshold_observation_fields(
     *,
     exit_rule: str,
@@ -19725,7 +19758,7 @@ def _scalp_exit_threshold_observation_fields(
             numeric_values.append(float(observed))
         if not all(math.isfinite(value) for value in numeric_values):
             raise ValueError("non_finite_threshold_observation")
-        return {
+        fields = {
             "exit_threshold_status": (
                 "effective_value_observed" if observed is not None else "missing_lhs"
             ),
@@ -19782,6 +19815,15 @@ def _scalp_exit_threshold_observation_fields(
             # This is an effective branch value, not proof of env/policy origin.
             "exit_threshold_provenance_status": "effective_branch_only",
         }
+        if rule == "scalp_trailing_take_profit":
+            policy_fields = _scalp_trailing_policy_observation_fields()
+            policy_fields["scalp_trailing_policy_values"] = json.dumps(
+                policy_fields["scalp_trailing_policy_values"],
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            fields.update(policy_fields)
+        return fields
     except (TypeError, ValueError, OverflowError):
         return {
             "exit_threshold_status": "invalid_observation",
@@ -28809,8 +28851,10 @@ def _observe_scalp_trailing_input_transition(
     now_ts: float,
     evaluator: str,
     rest_snapshot: dict | None = None,
+    quote_fields: dict | None = None,
+    nxt_guard_fields: dict | None = None,
 ) -> None:
-    """Keep bounded arm, source-quality and trigger transitions for replay."""
+    """Keep predeclared grid crossings and source quality without raw tick logging."""
 
     snapshot = ws_data if isinstance(ws_data, dict) else {}
     type_times = snapshot.get("last_realtime_type_ts")
@@ -28848,25 +28892,175 @@ def _observe_scalp_trailing_input_transition(
     elif bid_source in {"fresh_ws_executable_bid", "fresh_nxt_0d_executable_bid"}:
         bid_received_at = quote_received_at
         bid_clock_provenance = quote_clock_provenance
+    quality = quote_fields if isinstance(quote_fields, dict) else {}
+    nxt_quality = nxt_guard_fields if isinstance(nxt_guard_fields, dict) else {}
+    peak_profit_pct = (
+        calculate_net_profit_rate(_safe_float(stock.get("buy_price"), 0.0), peak_price)
+        if _safe_float(stock.get("buy_price"), 0.0) > 0 and peak_price > 0
+        else None
+    )
+    score_age_sec = _holding_score_age_sec(stock, now_ts=now_ts)
+    quote_receipt = ws_quote_source_receipt(snapshot, now_ts=now_ts)
+    type_items = snapshot.get("last_realtime_type_item")
+    type_items = type_items if isinstance(type_items, dict) else {}
+    ws_quote_age_ms = (
+        max(0.0, (now_ts - quote_received_at) * 1000.0)
+        if quote_received_at is not None
+        else None
+    )
+    bid_age_ms = (
+        max(0.0, (now_ts - bid_received_at) * 1000.0)
+        if bid_received_at is not None
+        else None
+    )
+    def grid_bin(value, step, *, cap=300):
+        if value is None or not math.isfinite(float(value)):
+            return -1
+        return min(cap, math.floor(float(value) / step + 1e-9))
+
+    policy_fields = _scalp_trailing_policy_observation_fields()
+    quote_config = QuoteConsistencyConfig.from_env()
+    try:
+        fast_poll_ms = max(
+            50.0, float(os.getenv("KORSTOCKSCAN_SCALP_FAST_EXIT_POLL_MS", "250"))
+        )
+    except (TypeError, ValueError):
+        fast_poll_ms = 250.0
+    operational_values = {
+        "KORSTOCKSCAN_SCALP_FAST_EXIT_POLL_MS": fast_poll_ms,
+        "KORSTOCKSCAN_QUOTE_CONSISTENCY_MAX_WS_AGE_MS": quote_config.max_ws_age_ms,
+        "KORSTOCKSCAN_QUOTE_CONSISTENCY_MAX_REST_AGE_MS": quote_config.max_rest_age_ms,
+        "KORSTOCKSCAN_QUOTE_CONSISTENCY_OK_GAP_BPS": quote_config.ok_gap_bps,
+        "KORSTOCKSCAN_QUOTE_CONSISTENCY_WARN_GAP_BPS": quote_config.warn_gap_bps,
+        "KORSTOCKSCAN_QUOTE_CONSISTENCY_EMERGENCY_REST_TIMEOUT_MS": (
+            quote_config.emergency_rest_timeout_ms
+        ),
+        "HOLDING_EXIT_REST_QUOTE_FALLBACK_MIN_INTERVAL_SEC": (
+            _holding_rest_quote_fallback_min_interval_sec()
+        ),
+        "KORSTOCKSCAN_SCALP_NXT_TRAILING_BID_GUARD_MAX_0D_AGE_MS": (
+            max(100.0, min(3000.0, _safe_float(os.getenv(
+                "KORSTOCKSCAN_SCALP_NXT_TRAILING_BID_GUARD_MAX_0D_AGE_MS"
+            ), 1500.0)))
+        ),
+        "KORSTOCKSCAN_SCALP_NXT_TRAILING_BID_GUARD_MIN_0B_STALE_MS": (
+            max(500.0, min(10000.0, _safe_float(os.getenv(
+                "KORSTOCKSCAN_SCALP_NXT_TRAILING_BID_GUARD_MIN_0B_STALE_MS"
+            ), 1500.0)))
+        ),
+        "AI_HOLDING_CRITICAL_COOLDOWN": _rule_int("AI_HOLDING_CRITICAL_COOLDOWN", 45),
+        "AI_HOLDING_CRITICAL_MIN_COOLDOWN": _rule_int(
+            "AI_HOLDING_CRITICAL_MIN_COOLDOWN", 20
+        ),
+        "AI_HOLDING_MIN_COOLDOWN": _rule_int("AI_HOLDING_MIN_COOLDOWN", 45),
+        "AI_HOLDING_MAX_COOLDOWN": _rule_int("AI_HOLDING_MAX_COOLDOWN", 180),
+        "SCALP_SAFE_PROFIT": _rule_float("SCALP_SAFE_PROFIT", 1.0),
+        "AI_HOLDING_FAST_REUSE_MAX_WS_AGE_SEC": _rule_float(
+            "AI_HOLDING_FAST_REUSE_MAX_WS_AGE_SEC", 1.5
+        ),
+        "AI_HOLDING_FAST_REUSE_CRITICAL_SEC": _rule_float(
+            "AI_HOLDING_FAST_REUSE_CRITICAL_SEC", 5.0
+        ),
+        "AI_HOLDING_FAST_REUSE_NORMAL_SEC": _rule_float(
+            "AI_HOLDING_FAST_REUSE_NORMAL_SEC", 12.0
+        ),
+        "AI_HOLDING_NEAR_SAFE_PROFIT_BAND_PCT": 0.20,
+        "AI_HOLDING_CRITICAL_PRICE_TRIGGER_PCT": 0.20,
+        "AI_HOLDING_NORMAL_PRICE_TRIGGER_PCT": 0.40,
+    }
+    operational_sha256 = hashlib.sha256(
+        json.dumps(operational_values, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    configurable_rule_keys = {
+        "AI_HOLDING_CRITICAL_COOLDOWN",
+        "AI_HOLDING_CRITICAL_MIN_COOLDOWN",
+        "AI_HOLDING_MIN_COOLDOWN",
+        "AI_HOLDING_MAX_COOLDOWN",
+        "SCALP_SAFE_PROFIT",
+    }
+    operational_sources = {
+        key: (
+            "code_constant"
+            if key in {
+                "AI_HOLDING_NEAR_SAFE_PROFIT_BAND_PCT",
+                "AI_HOLDING_CRITICAL_PRICE_TRIGGER_PCT",
+                "AI_HOLDING_NORMAL_PRICE_TRIGGER_PCT",
+            }
+            else
+            "runtime_env"
+            if (key.startswith("KORSTOCKSCAN_") or key in configurable_rule_keys)
+            and os.getenv(key if key.startswith("KORSTOCKSCAN_") else f"KORSTOCKSCAN_{key}") is not None
+            else "code_default"
+        )
+        for key in operational_values
+    }
+    best_ask = _safe_int(quality.get("executable_buy_price"), 0)
+    spread_bps = (
+        (best_ask - executable_bid) / executable_bid * 10000.0
+        if executable_bid > 0 and best_ask >= executable_bid
+        else None
+    )
     state = (
         bool(decision.armed),
         bool(decision.triggered),
         bool(decision.price_usable),
         bool(strong),
         bid_source,
+        grid_bin(peak_profit_pct, 0.1),
+        grid_bin(decision.drawdown_pct if decision.price_usable else None, 0.1),
+        grid_bin(ai_score if ai_usable else None, 5.0, cap=20),
+        grid_bin(ws_quote_age_ms, 100.0, cap=30),
+        grid_bin(bid_age_ms, 100.0, cap=30),
+        str(quality.get("quote_consistency_state") or "-"),
+        str(quality.get("quote_consistency_reason") or "-"),
+        bool(nxt_quality.get("nxt_trailing_bid_guard_applied")),
+        str(quote_receipt.get("item") or "-"),
+        str(quote_receipt.get("market_route") or "-"),
+        str(stock.get("holding_score_source") or stock.get("holding_ai_score_source") or "-"),
+        str(stock.get("holding_score_data_quality") or "-"),
+        policy_fields["scalp_trailing_policy_value_sha256"],
+        operational_sha256,
     )
     with ENTRY_LOCK:
         position_key = _scalp_holding_source_position_key(stock, code)
         previous_key = stock.get("scalp_trailing_observation_position_key")
         previous_state = stock.get("scalp_trailing_observation_state")
+        previous_policy_sha = stock.get("scalp_trailing_observation_policy_sha256")
+        previous_operational_sha = stock.get("scalp_trailing_observation_operational_sha256")
         if isinstance(previous_state, list):
             previous_state = tuple(previous_state)
         if previous_key == position_key and previous_state == state:
             return
         stock["scalp_trailing_observation_position_key"] = position_key
         stock["scalp_trailing_observation_state"] = state
-        sequence = _safe_int(stock.get("scalp_trailing_observation_sequence"), 0) + 1
+        previous_count = _safe_int(stock.get("scalp_trailing_observation_sequence"), 0)
+        if previous_key != position_key:
+            previous_count = 0
+            stock["scalp_trailing_observation_coverage_exhausted"] = False
+            if stock.get("scalp_trailing_observation_source_gap_position_key") != position_key:
+                stock["scalp_trailing_observation_source_gap"] = False
+        if previous_count >= SCALP_TRAILING_MAX_POSITION_SAMPLES:
+            if stock.get("scalp_trailing_observation_coverage_exhausted"):
+                return
+            stock["scalp_trailing_observation_coverage_exhausted"] = True
+            coverage_exhausted = True
+            sequence = previous_count + 1
+        else:
+            coverage_exhausted = False
+            sequence = previous_count + 1
         stock["scalp_trailing_observation_sequence"] = sequence
+        include_values = bool(
+            previous_key != position_key
+            or previous_policy_sha != policy_fields["scalp_trailing_policy_value_sha256"]
+            or previous_operational_sha != operational_sha256
+        )
+        stock["scalp_trailing_observation_policy_sha256"] = policy_fields[
+            "scalp_trailing_policy_value_sha256"
+        ]
+        stock["scalp_trailing_observation_operational_sha256"] = operational_sha256
+    if not include_values:
+        policy_fields = dict(policy_fields)
+        policy_fields.pop("scalp_trailing_policy_values", None)
     try:
         _log_holding_pipeline(
             stock,
@@ -28874,15 +29068,29 @@ def _observe_scalp_trailing_input_transition(
             "scalp_trailing_input_transition",
             position_key=position_key,
             event_sequence=sequence,
+            observation_grid_version=SCALP_TRAILING_GRID_VERSION,
+            observation_coverage_exhausted=coverage_exhausted,
+            observation_telemetry_gap=bool(
+                stock.get("scalp_trailing_observation_source_gap")
+            ),
+            observation_max_samples=SCALP_TRAILING_MAX_POSITION_SAMPLES,
             evaluation_at_epoch=now_ts,
             evaluator=evaluator,
             armed=decision.armed,
             triggered=decision.triggered,
             trigger_kind=decision.trigger_kind or "-",
             price_usable=decision.price_usable,
-            source_gap=not decision.price_usable,
+            source_gap=not decision.price_usable or coverage_exhausted,
             peak_price=peak_price,
+            peak_profit_pct=peak_profit_pct,
             executable_bid=executable_bid,
+            executable_bid_profit_pct=(
+                calculate_net_profit_rate(
+                    _safe_float(stock.get("buy_price"), 0.0), executable_bid
+                )
+                if _safe_float(stock.get("buy_price"), 0.0) > 0 and executable_bid > 0
+                else None
+            ),
             bid_source=bid_source,
             ws_trade_received_at_epoch=trade_received_at,
             ws_trade_clock_provenance=trade_clock_provenance,
@@ -28890,6 +29098,35 @@ def _observe_scalp_trailing_input_transition(
             ws_quote_clock_provenance=quote_clock_provenance,
             bid_source_received_at_epoch=bid_received_at,
             bid_source_clock_provenance=bid_clock_provenance,
+            ws_quote_age_ms=ws_quote_age_ms,
+            adopted_quote_observed_at_epoch=quote_receipt.get("observed_epoch"),
+            adopted_quote_source_type=quote_receipt.get("source_type") or "-",
+            adopted_quote_identity_status=quote_receipt.get("identity_status") or "-",
+            adopted_quote_item=quote_receipt.get("item") or "-",
+            adopted_quote_market_route=quote_receipt.get("market_route") or "-",
+            adopted_quote_transport_epoch=quote_receipt.get("transport_epoch"),
+            ws_trade_item=type_items.get("0B") or "-",
+            ws_quote_item=type_items.get("0D") or "-",
+            bid_source_age_ms=bid_age_ms,
+            quote_consistency_state=quality.get("quote_consistency_state"),
+            quote_consistency_reason=quality.get("quote_consistency_reason"),
+            ws_rest_gap_bps=quality.get("ws_rest_gap_bps"),
+            executable_best_ask=best_ask or None,
+            executable_spread_bps=spread_bps,
+            quote_consistency_ws_age_ms=quality.get("quote_consistency_ws_age_ms"),
+            quote_consistency_rest_age_ms=quality.get("quote_consistency_rest_age_ms"),
+            nxt_trailing_bid_guard_applied=nxt_quality.get(
+                "nxt_trailing_bid_guard_applied"
+            ),
+            nxt_trailing_bid_guard_reason=nxt_quality.get(
+                "nxt_trailing_bid_guard_reason"
+            ),
+            nxt_trailing_bid_guard_ws_0b_age_ms=nxt_quality.get(
+                "nxt_trailing_bid_guard_ws_0b_age_ms"
+            ),
+            nxt_trailing_bid_guard_ws_0d_age_ms=nxt_quality.get(
+                "nxt_trailing_bid_guard_ws_0d_age_ms"
+            ),
             trailing_start_pct=start_pct,
             trailing_limit_key=decision.threshold_key,
             trailing_limit_pct=decision.threshold_pct,
@@ -28898,13 +29135,59 @@ def _observe_scalp_trailing_input_transition(
             strong_score_threshold=_rule_float("SCALP_TRAILING_STRONG_AI_SCORE", 75),
             ai_score=ai_score,
             ai_score_usable=ai_usable,
+            ai_score_age_sec=score_age_sec,
+            ai_score_ttl_sec=_holding_score_ttl_sec(is_critical_zone=True),
+            ai_score_source=(
+                stock.get("holding_score_source")
+                or stock.get("holding_ai_score_source")
+                or stock.get("current_ai_score_source")
+                or "-"
+            ),
+            ai_score_data_quality=stock.get("holding_score_data_quality") or "-",
+            operational_threshold_values=(
+                json.dumps(operational_values, sort_keys=True, separators=(",", ":"))
+                if include_values else "-"
+            ),
+            operational_threshold_sources=(
+                json.dumps(operational_sources, sort_keys=True, separators=(",", ":"))
+                if include_values else "-"
+            ),
+            operational_threshold_value_sha256=operational_sha256,
+            **{
+                key: (
+                    json.dumps(value, sort_keys=True, separators=(",", ":"))
+                    if key == "scalp_trailing_policy_values" and isinstance(value, dict)
+                    else value
+                )
+                for key, value in policy_fields.items()
+            },
             metric_role="funnel_count",
             decision_authority="scalp_trailing_take_profit_observation_only",
             actual_order_submitted=False,
             runtime_effect=False,
         )
     except Exception as exc:
+        stock["scalp_trailing_observation_source_gap"] = True
+        stock["scalp_trailing_observation_source_gap_position_key"] = position_key
         log_error(f"[SCALP_TRAILING_INPUT] {code} transition logging failed: {exc}")
+
+
+def _observe_scalp_trailing_input_transition_safe(*args, **kwargs) -> None:
+    """Observation failures never alter a live exit decision."""
+
+    try:
+        _observe_scalp_trailing_input_transition(*args, **kwargs)
+    except Exception as exc:
+        stock = args[0] if args else None
+        if isinstance(stock, dict):
+            stock["scalp_trailing_observation_source_gap"] = True
+            try:
+                stock["scalp_trailing_observation_source_gap_position_key"] = (
+                    _scalp_holding_source_position_key(stock, str(args[1]))
+                )
+            except Exception:
+                stock["scalp_trailing_observation_source_gap_position_key"] = None
+        log_error(f"[SCALP_TRAILING_INPUT] pre-log observation failed: {exc}")
 
 
 def _recover_scalp_trailing_bid_for_normal(
@@ -29169,7 +29452,7 @@ def evaluate_and_dispatch_fast_scalp_exit(
         weak_limit_pct=trailing_limit,
         strong_limit_pct=trailing_limit,
     )
-    _observe_scalp_trailing_input_transition(
+    _observe_scalp_trailing_input_transition_safe(
         stock,
         code,
         ws_data=ws_data,
@@ -29184,6 +29467,7 @@ def evaluate_and_dispatch_fast_scalp_exit(
         now_ts=observed_at,
         evaluator="fast",
         rest_snapshot=rest_snapshot,
+        quote_fields=quote_fields,
     )
     trailing_drawdown_pct = trailing_decision.drawdown_pct
     trigger_kind = ""
@@ -29224,10 +29508,7 @@ def evaluate_and_dispatch_fast_scalp_exit(
         )
         quote_config = QuoteConsistencyConfig.from_env()
         max_spread_bps = float(quote_config.warn_gap_bps)
-        confirmation_spread_bps = min(
-            max_spread_bps,
-            float(QuoteConsistencyConfig.from_env().warn_gap_bps),
-        )
+        confirmation_spread_bps = max_spread_bps
         wide_trailing_quote = bool(
             (math.isfinite(spread_bps) and spread_bps > confirmation_spread_bps)
             or mark_to_bid_gap_bps > confirmation_spread_bps
@@ -29369,7 +29650,7 @@ def evaluate_and_dispatch_fast_scalp_exit(
                 weak_limit_pct=trailing_limit,
                 strong_limit_pct=trailing_limit,
             )
-            _observe_scalp_trailing_input_transition(
+            _observe_scalp_trailing_input_transition_safe(
                 stock,
                 code,
                 ws_data=ws_data,
@@ -29384,6 +29665,7 @@ def evaluate_and_dispatch_fast_scalp_exit(
                 now_ts=observed_at,
                 evaluator="fast_rest_confirmed",
                 rest_snapshot=wide_rest,
+                quote_fields=wide_quote_fields,
             )
             trailing_drawdown_pct = trailing_decision.drawdown_pct
             if fast_stop_enabled and emergency_pct is not None and profit_rate <= emergency_pct:
@@ -83703,7 +83985,7 @@ def handle_holding_state(
             weak_limit_pct=dynamic_trailing_limit,
             strong_limit_pct=dynamic_trailing_limit,
         )
-        _observe_scalp_trailing_input_transition(
+        _observe_scalp_trailing_input_transition_safe(
             stock,
             code,
             ws_data=ws_data,
@@ -83717,6 +83999,8 @@ def handle_holding_state(
             start_pct=scalp_trailing_start_pct,
             now_ts=now_ts,
             evaluator="normal",
+            quote_fields=holding_quote_fields,
+            nxt_guard_fields=nxt_trailing_bid_guard_fields,
         )
         scalp_trailing_peak_armed = trailing_decision.armed
         stagnation_observation = _evaluate_scalp_profit_stagnation_exit(
@@ -84915,7 +85199,7 @@ def handle_holding_state(
                     weak_limit_pct=dynamic_trailing_limit,
                     strong_limit_pct=dynamic_trailing_limit,
                 )
-                _observe_scalp_trailing_input_transition(
+                _observe_scalp_trailing_input_transition_safe(
                     stock,
                     code,
                     ws_data=ws_data,
@@ -84932,6 +85216,8 @@ def handle_holding_state(
                     now_ts=now_ts,
                     evaluator="normal_rest_recovery",
                     rest_snapshot=recovered_rest,
+                    quote_fields=None,
+                    nxt_guard_fields=nxt_trailing_bid_guard_fields,
                 )
                 if trailing_decision_price > 0:
                     trailing_decision_profit_rate = calculate_net_profit_rate(
@@ -85447,6 +85733,9 @@ def handle_holding_state(
             stock,
             code,
             "exit_signal",
+            scalp_trailing_observation_source_gap=bool(
+                stock.get("scalp_trailing_observation_source_gap")
+            ),
             sell_reason_type=sell_reason_type,
             reason=reason,
             exit_rule=exit_rule or "-",
