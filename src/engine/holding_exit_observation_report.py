@@ -535,6 +535,40 @@ def _build_position_outcomes(
             threshold_fields.get("exit_threshold_status")
             or "source_gap_missing_receipt"
         )
+        alternative_observations = sorted(
+            {
+                str((event.get("fields") or {}).get("exit_rule") or "")
+                for event in timeline
+                if event.get("stage") == "scalp_tp_alternative_observed"
+                and (event.get("fields") or {}).get("would_exit") is True
+                and (event.get("fields") or {}).get("exit_rule")
+            }
+        )
+        trailing_transitions = [
+            event.get("fields") or {}
+            for event in timeline
+            if event.get("stage") == "scalp_trailing_input_transition"
+        ]
+        first_arm = next(
+            (
+                fields
+                for fields in trailing_transitions
+                if str(fields.get("armed")).strip().lower() in {"true", "1"}
+            ),
+            {},
+        )
+        first_trigger = next(
+            (
+                fields
+                for fields in trailing_transitions
+                if str(fields.get("triggered")).strip().lower() in {"true", "1"}
+            ),
+            {},
+        )
+        trailing_source_gap_count = sum(
+            str(fields.get("source_gap")).strip().lower() in {"true", "1"}
+            for fields in trailing_transitions
+        )
         if role_gate == "unusable_neutral_only":
             ai_intervention = "unusable"
         elif role_gate == "missing":
@@ -640,6 +674,44 @@ def _build_position_outcomes(
                 "exit_threshold_provenance_status": threshold_fields.get(
                     "exit_threshold_provenance_status"
                 ),
+                "exit_threshold_trailing_start_pct": _safe_float(
+                    threshold_fields.get("exit_threshold_trailing_start_pct"), None
+                ),
+                "exit_threshold_trailing_arm_observed_pct": _safe_float(
+                    threshold_fields.get("exit_threshold_trailing_arm_observed_pct"),
+                    None,
+                ),
+                "exit_threshold_strong_score_effective": _safe_float(
+                    threshold_fields.get("exit_threshold_strong_score_effective"),
+                    None,
+                ),
+                "exit_threshold_ai_score_observed": _safe_float(
+                    threshold_fields.get("exit_threshold_ai_score_observed"), None
+                ),
+                "exit_threshold_ai_score_usable": threshold_fields.get(
+                    "exit_threshold_ai_score_usable"
+                ),
+                "exit_threshold_peak_price": _safe_int(
+                    threshold_fields.get("exit_threshold_peak_price"), 0
+                ),
+                "exit_threshold_executable_bid": _safe_int(
+                    threshold_fields.get("exit_threshold_executable_bid"), 0
+                ),
+                "exit_threshold_bid_source": threshold_fields.get(
+                    "exit_threshold_bid_source"
+                ),
+                "exit_threshold_trigger_kind": threshold_fields.get(
+                    "exit_threshold_trigger_kind"
+                ),
+                "tp_alternative_observed_rules": alternative_observations,
+                "trailing_input_transition_count": len(trailing_transitions),
+                "trailing_first_arm_at_epoch": _safe_float(
+                    first_arm.get("evaluation_at_epoch"), None
+                ),
+                "trailing_first_trigger_at_epoch": _safe_float(
+                    first_trigger.get("evaluation_at_epoch"), None
+                ),
+                "trailing_source_gap_transition_count": trailing_source_gap_count,
                 "terminal_decision_authority": trade.get("terminal_decision_authority"),
                 "profit_rate": _safe_float(trade.get("profit_rate"), None),
                 "realized_pnl_krw": int(round(pnl)) if pnl is not None else None,
@@ -702,6 +774,23 @@ def _build_position_outcomes(
         "effective_threshold_receipt_trades": sum(
             row["exit_threshold_status"] == "effective_value_observed"
             for row in outcomes
+        ),
+        "trailing_direct_input_receipt_trades": sum(
+            row["exit_rule"] == "scalp_trailing_take_profit"
+            and row["exit_rule_provenance"] == "observed"
+            and row["exit_threshold_trailing_start_pct"] is not None
+            and row["exit_threshold_strong_score_effective"] is not None
+            and row["exit_threshold_peak_price"] > 0
+            and row["exit_threshold_executable_bid"] > 0
+            and row["exit_threshold_trigger_kind"]
+            == "trailing_peak_worsen_floor"
+            for row in outcomes
+        ),
+        "trailing_input_transition_trades": sum(
+            row["trailing_input_transition_count"] > 0 for row in outcomes
+        ),
+        "trailing_first_arm_receipt_trades": sum(
+            row["trailing_first_arm_at_epoch"] is not None for row in outcomes
         ),
         "flow_deferred_trades": sum(
             row["flow_intervention"] in {"deferred", "deferred_extension"}
@@ -911,84 +1000,74 @@ def _summarize_exit_rule_quality(
     return rows
 
 
-def _build_trade_lookup(valid_trades: list[dict]) -> dict[str, dict]:
-    lookup: dict[str, dict] = {}
-    for row in valid_trades:
-        trade_id = _trade_id(row)
-        if trade_id:
-            lookup[trade_id] = row
-    return lookup
 
 
-def _build_trailing_continuation(
-    *,
-    post_sell_rows: list[dict],
-    valid_trades: list[dict],
-    fallback_regression_count: int,
-) -> dict:
-    trade_lookup = _build_trade_lookup(valid_trades)
-    trailing_rows = [
-        row
-        for row in post_sell_rows
-        if _exit_group(str(row.get("exit_rule") or "-")) == "scalp_trailing_take_profit"
+
+
+def _build_trailing_threshold_readiness(outcomes: list[dict]) -> dict:
+    """Expose source-qualified denominators; never infer a tuning proposal."""
+
+    trailing = [
+        row for row in outcomes if row["exit_rule"] == "scalp_trailing_take_profit"
     ]
-    qualifying_rows: list[dict] = []
-    for row in trailing_rows:
-        trade = trade_lookup.get(str(row.get("recommendation_id") or ""))
-        if not trade:
-            continue
-        if (
-            _entry_mode(trade) == "normal"
-            and _is_post_fallback(trade)
-            and _fill_quality(trade) == "full_fill"
-            and not _is_pyramid_activated(trade)
-            and float(_safe_float(row.get("profit_rate"), 0.0) or 0.0) > 0
-        ):
-            qualifying_rows.append(row)
-
-    outcomes = Counter(
-        str(row.get("outcome") or "NEUTRAL").upper() for row in trailing_rows
-    )
-    evaluated = len(trailing_rows)
-    missed_rate = _ratio(outcomes.get("MISSED_UPSIDE", 0), evaluated)
-    good_rate = _ratio(outcomes.get("GOOD_EXIT", 0), evaluated)
-    eligible = (
-        evaluated >= 5
-        and missed_rate >= 60.0
-        and good_rate <= 30.0
-        and fallback_regression_count == 0
-        and len(qualifying_rows) > 0
-    )
+    direct = [row for row in trailing if row["exit_rule_provenance"] == "observed"]
+    inputs = [
+        row
+        for row in direct
+        if row["exit_threshold_status"] == "effective_value_observed"
+        and row["exit_threshold_peak_price"] > 0
+        and row["exit_threshold_executable_bid"] > 0
+        and row["exit_threshold_trailing_start_pct"] is not None
+        and row["exit_threshold_strong_score_effective"] is not None
+    ]
+    exact = [row for row in inputs if row["realized_pnl_krw"] is not None]
+    forward = [row for row in exact if row["post_sell_status"] == "pass"]
+    arm = [row for row in inputs if row["trailing_first_arm_at_epoch"] is not None]
+    score = [
+        row
+        for row in inputs
+        if str(row["exit_threshold_ai_score_usable"]).strip().lower()
+        in {"true", "1"}
+        and row["exit_threshold_ai_score_observed"] is not None
+    ]
+    funnel = {
+        "completed_valid_ids": [row["record_id"] for row in outcomes],
+        "trailing_exit_ids": [row["record_id"] for row in trailing],
+        "direct_signal_ids": [row["record_id"] for row in direct],
+        "effective_input_ids": [row["record_id"] for row in inputs],
+        "exact_cost_ids": [row["record_id"] for row in exact],
+        "mature_forward_ids": [row["record_id"] for row in forward],
+        "paired_replay_eligible_ids": [],
+    }
+    axis_inputs = {
+        "SCALP_TRAILING_START_PCT": (arm, "pre_arm_quote_path_and_paired_replay_missing"),
+        "SCALP_TRAILING_STRONG_AI_SCORE": (
+            score,
+            "score_ttl_provider_lineage_and_paired_replay_missing",
+        ),
+        "SCALP_TRAILING_LIMIT_WEAK": (
+            [row for row in forward if row["exit_threshold_key"] == "SCALP_TRAILING_LIMIT_WEAK"],
+            "first_crossing_fill_cost_and_holdout_replay_missing",
+        ),
+        "SCALP_TRAILING_LIMIT_STRONG": (
+            [row for row in forward if row["exit_threshold_key"] == "SCALP_TRAILING_LIMIT_STRONG"],
+            "first_crossing_fill_cost_and_holdout_replay_missing",
+        ),
+    }
     return {
-        "candidate_id": "trailing_continuation_micro_canary",
-        "priority": 2,
-        "priority_basis": "upside capture 개선 후보이나 soft_stop realized loss 축보다 손익 훼손 우선순위가 낮다.",
-        "evaluated_trailing": evaluated,
-        "qualifying_cohort_count": len(qualifying_rows),
-        "outcome_counts": {
-            "MISSED_UPSIDE": int(outcomes.get("MISSED_UPSIDE", 0)),
-            "GOOD_EXIT": int(outcomes.get("GOOD_EXIT", 0)),
-            "NEUTRAL": int(outcomes.get("NEUTRAL", 0)),
+        "status": "source_gap_paired_replay_unavailable",
+        "decision_authority": "report_only_no_threshold_apply",
+        "funnel_ids": funnel,
+        "axes": {
+            key: {
+                "qualified_input_ids": [row["record_id"] for row in rows],
+                "qualified_input_count": len(rows),
+                "candidate_value": None,
+                "eligible_for_live_review": False,
+                "blocker": blocker,
+            }
+            for key, (rows, blocker) in axis_inputs.items()
         },
-        "missed_upside_rate": missed_rate,
-        "good_exit_rate": good_rate,
-        "fallback_regression_count": int(fallback_regression_count),
-        "eligible_for_live_review": eligible,
-        "single_control_point": "SCALP_TRAILING_LIMIT_WEAK qualifying cohort +0.2%p only",
-        "scope": "normal_only + post_fallback_deprecation + full_fill + initial-only + scalp_trailing_take_profit + profit_rate>0",
-        "excluded_scopes": [
-            "partial_fill",
-            "pyramid-activated",
-            "soft_stop",
-            "EOD/NXT",
-            "fallback",
-        ],
-        "rollback_guards": [
-            "Plan Rebase §6 common guards",
-            "trailing canary cohort avg_profit_rate <= 0",
-            "soft_stop transition rate baseline +5.0%p",
-            "GOOD_EXIT rate additional deterioration +15.0%p",
-        ],
     }
 
 
@@ -1456,9 +1535,6 @@ def build_holding_exit_observation_report(
         _summarize_target_pipeline_events(safe_date)
     )
     opportunity_cost, missed_entry_paths = _build_opportunity_cost(dates)
-    fallback_regression_count = _safe_int(
-        target_pipeline_summary.get("fallback_regression_count"), 0
-    )
 
     same_symbol_reentry = _build_same_symbol_reentry(valid_trades)
     report = {
@@ -1488,10 +1564,8 @@ def build_holding_exit_observation_report(
         ),
         "cohorts": _build_cohorts(valid_trades),
         "exit_rule_quality": _summarize_exit_rule_quality(post_sell_rows, valid_trades),
-        "trailing_continuation": _build_trailing_continuation(
-            post_sell_rows=post_sell_rows,
-            valid_trades=valid_trades,
-            fallback_regression_count=fallback_regression_count,
+        "trailing_threshold_readiness": _build_trailing_threshold_readiness(
+            position_outcomes
         ),
         "soft_stop_rebound": _build_soft_stop_rebound(
             post_sell_rows,
@@ -1538,9 +1612,5 @@ def build_holding_exit_observation_report(
         for rule in position_coverage["by_exit_rule"].values():
             rule["whole_rule_pnl_krw"] = None
     if not tuning_input_complete:
-        report["trailing_continuation"]["eligible_for_live_review"] = False
-        report["trailing_continuation"][
-            "economic_gate_reason"
-        ] = "completed_census_cost_or_causal_forward_evidence_incomplete"
         report["soft_stop_rebound"]["cooldown_live_allowed"] = False
     return report

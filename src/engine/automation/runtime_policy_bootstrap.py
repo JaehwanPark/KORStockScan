@@ -767,6 +767,10 @@ def build_manifest(
             values[key] = str(value)
             env_owners[key] = f"operator_lock:{lock.get('lock_id') or lock.get('family')}"
         applied_locks.append({**row, "env_keys": sorted(lock_env)})
+    # Retired exit deferrals must not return through operator or direct receipts.
+    retired_keys = set(values) - set(without_retired_env(values))
+    values = without_retired_env(values)
+    env_owners = {key: owner for key, owner in env_owners.items() if key in values}
     off_values = retirement_env()
     values.update(off_values)
     env_owners.update({key: "explicit_retirement_off" for key in off_values})
@@ -818,7 +822,9 @@ def build_manifest(
         "direct_family_receipts_rejected": rejected_receipts,
         "env_key_owners": env_owners,
         "env_overrides": dict(sorted(values.items())),
-        "retired_key_scrubbed": sorted(set(incumbent_values) - set(without_retired_env(incumbent_values))),
+        "retired_key_scrubbed": sorted(
+            retired_keys | (set(incumbent_values) - set(without_retired_env(incumbent_values)))
+        ),
         "assertions": {
             "provider_called": False,
             "broker_called": False,

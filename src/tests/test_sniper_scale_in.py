@@ -10674,15 +10674,15 @@ def test_holding_flow_override_passes_micro_estimator_fields_to_ai(monkeypatch):
             "ask_tot": 3000,
         },
         ai_engine=DummyAI(),
-        exit_rule="scalp_trailing_take_profit",
-        sell_reason_type="TRAILING",
+        exit_rule="scalp_soft_stop_pct",
+        sell_reason_type="LOSS",
         reason="test_exit_candidate",
-        profit_rate=1.0,
+        profit_rate=-1.0,
         peak_profit=1.2,
         drawdown=0.2,
         current_ai_score=70.0,
         held_sec=180,
-        curr_price=10100,
+        curr_price=9900,
         buy_price=10000,
         now_ts=now_ts,
     )
@@ -17051,25 +17051,33 @@ def test_scalp_trailing_uses_peak_start_after_profit_falls_below_safe_profit(
         "buy_price": 10000,
         "buy_qty": 10,
         "rt_ai_prob": 0.50,
+        "scalp_trailing_trusted_peak_price": 10136,
+        "scalp_trailing_peak_basis_price": 10000,
+        "scalp_trailing_peak_position_key": "record:1",
     }
+    monkeypatch.setattr(state_handlers, "_get_ws_snapshot_age_sec", lambda *_: 0.0)
 
     state_handlers.handle_holding_state(
         stock=stock,
         code="123456",
         ws_data={
             "curr": 10095,
-            "orderbook": {"bids": [{"price": 10095, "volume": 1000}]},
+            "orderbook": {
+                "bids": [{"price": 10095, "volume": 1000}],
+                "asks": [{"price": 10100, "volume": 1000}],
+            },
+            "last_ws_update_ts": datetime(2026, 7, 9, 12, 20, tzinfo=state_handlers._KST).timestamp(),
         },
         admin_id=1,
         market_regime="BULL",
-        now_ts=1_000_000.0,
+        now_ts=datetime(2026, 7, 9, 12, 20, tzinfo=state_handlers._KST).timestamp(),
         now_dt=datetime(2026, 7, 9, 12, 20, 0),
         radar=None,
         ai_engine=None,
     )
 
     exit_logs = [fields for stage, fields in pipeline_logs if stage == "exit_signal"]
-    assert sell_calls
+    assert sell_calls, pipeline_logs[-20:]
     assert stock["last_exit_rule"] == "scalp_trailing_take_profit"
     assert exit_logs and exit_logs[-1]["exit_rule"] == "scalp_trailing_take_profit"
     assert float(str(exit_logs[-1]["profit_rate"]).replace("+", "")) < 1.0
@@ -17239,6 +17247,9 @@ def test_scalp_nxt_trailing_uses_fresh_0d_bid_without_inflating_trade_peak(monke
         "buy_qty": 2,
         "rt_ai_prob": 0.50,
         "is_nxt": True,
+        "scalp_trailing_trusted_peak_price": 10_150,
+        "scalp_trailing_peak_basis_price": 10_000,
+        "scalp_trailing_peak_position_key": "record:17",
     }
     ws_data = {
         "curr": 10_120,
@@ -17275,7 +17286,7 @@ def test_scalp_nxt_trailing_uses_fresh_0d_bid_without_inflating_trade_peak(monke
     guard_fields = next(
         fields
         for stage, fields in pipeline_logs
-        if stage == "nxt_trailing_bid_guard_applied"
+        if stage == "scalp_trailing_bid_decision"
     )
     assert guard_fields["original_trade_mark"] == 10_120
     assert guard_fields["nxt_trailing_bid_guard_effective_price"] == 10_090
@@ -37447,7 +37458,7 @@ def test_open_reclaim_never_green_ignores_stale_holding_score(monkeypatch):
     assert not exit_logs
 
 
-def test_momentum_decay_requires_fresh_negative_exit_score(monkeypatch):
+def test_momentum_decay_is_observed_without_independent_sell(monkeypatch):
     from src.utils.constants import TRADING_RULES as CONFIG
 
     state_handlers.TRADING_RULES = replace(
@@ -37462,6 +37473,12 @@ def test_momentum_decay_requires_fresh_negative_exit_score(monkeypatch):
     state_handlers.LAST_AI_CALL_TIMES = {}
     state_handlers.LAST_LOG_TIMES = {}
     state_handlers.DB = _DummyDB()
+    events = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: events.append((stage, fields)),
+    )
 
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
@@ -37503,7 +37520,13 @@ def test_momentum_decay_requires_fresh_negative_exit_score(monkeypatch):
         return stock
 
     fresh_stock = _run_with_score_fields(_fresh_holding_score_fields(30))
-    assert fresh_stock["last_exit_rule"] == "scalp_ai_momentum_decay"
+    assert fresh_stock.get("last_exit_rule") != "scalp_ai_momentum_decay"
+    assert any(
+        stage == "scalp_tp_alternative_observed"
+        and fields.get("exit_rule") == "scalp_ai_momentum_decay"
+        and fields.get("would_exit") is True
+        for stage, fields in events
+    )
 
     stale_stock = _run_with_score_fields(_stale_holding_score_fields(30))
     assert stale_stock.get("last_exit_rule") != "scalp_ai_momentum_decay"
@@ -38904,7 +38927,7 @@ def test_scalp_low_profit_stagnation_replay_does_not_exit_rising_open(monkeypatc
     assert not any(row["should_exit"] for row in (first, progressed, escaped_band))
     assert (
         "scalp_low_profit_stagnation_hard_exit"
-        in state_handlers._HOLDING_FLOW_OVERRIDE_EXIT_RULES
+        not in state_handlers._HOLDING_FLOW_OVERRIDE_EXIT_RULES
     )
 
 
@@ -39134,60 +39157,9 @@ def test_scalp_mfe_protect_negative_fill_uses_loss_sign_and_cooldown(monkeypatch
     )
 
 
-def test_trailing_shallow_loss_confirm_defer_accepts_strong_micro_context():
-    stock = {"strategy": "SCALPING"}
-    decision = state_handlers._trailing_shallow_loss_confirm_defer_decision(
-        stock,
-        strategy="SCALPING",
-        sell_reason_type="LOSS",
-        exit_rule="scalp_trailing_take_profit",
-        profit_rate=-0.06,
-        peak_profit=0.77,
-        drawdown=0.83,
-        current_ai_score=75,
-        held_sec=1314,
-        feature_fields={
-            "quote_stale": "False",
-            "tick_context_stale": "False",
-            "micro_vwap_available": "True",
-            "large_sell_print_detected": "False",
-            "buy_pressure_10t": "50.0",
-            "tick_acceleration_ratio": "1.0",
-            "curr_vs_micro_vwap_bp": "-37.19",
-        },
-        now_ts=1_000.0,
-    )
-
-    assert decision["defer"] is True
-    assert decision["reason"] == "shallow_loss_trailing_micro_confirm"
-    assert decision["defer_until"] == pytest.approx(1_015.0)
-
-    stock["trailing_shallow_loss_confirm_deferred"] = True
-    repeated = state_handlers._trailing_shallow_loss_confirm_defer_decision(
-        stock,
-        strategy="SCALPING",
-        sell_reason_type="LOSS",
-        exit_rule="scalp_trailing_take_profit",
-        profit_rate=-0.06,
-        peak_profit=0.77,
-        drawdown=0.83,
-        current_ai_score=75,
-        held_sec=1314,
-        feature_fields={
-            "quote_stale": "False",
-            "tick_context_stale": "False",
-            "micro_vwap_available": "True",
-            "large_sell_print_detected": "False",
-            "buy_pressure_10t": "50.0",
-            "tick_acceleration_ratio": "1.0",
-            "curr_vs_micro_vwap_bp": "-37.19",
-        },
-        now_ts=1_000.0,
-    )
-    assert repeated == {"defer": False, "reason": "already_deferred_once"}
 
 
-def test_handle_holding_state_blocks_trailing_sell_when_pre_submit_quote_stale(
+def test_handle_holding_state_blocks_trailing_signal_when_bid_is_stale(
     monkeypatch,
 ):
     original_rules = state_handlers.TRADING_RULES
@@ -39245,7 +39217,7 @@ def test_handle_holding_state_blocks_trailing_sell_when_pre_submit_quote_stale(
         monkeypatch.setattr(
             state_handlers,
             "_fetch_rest_orderbook_snapshot_bounded",
-            lambda code, timeout_ms: ({}, "unavailable", 0.0),
+            lambda code, timeout_ms, **kwargs: ({}, "unavailable", 0.0),
         )
         monkeypatch.setattr(
             state_handlers,
@@ -39276,8 +39248,11 @@ def test_handle_holding_state_blocks_trailing_sell_when_pre_submit_quote_stale(
             "buy_price": 10_000,
             "buy_qty": 3,
             "rt_ai_prob": 0.75,
-            "buy_time": 1_000.0,
+            "buy_time": datetime(2026, 7, 13, 13, 0, tzinfo=state_handlers._KST).timestamp(),
             "trailing_shallow_loss_confirm_deferred": True,
+            "scalp_trailing_trusted_peak_price": 10_080,
+            "scalp_trailing_peak_basis_price": 10_000,
+            "scalp_trailing_peak_position_key": "record:1",
         }
 
         state_handlers.handle_holding_state(
@@ -39286,7 +39261,7 @@ def test_handle_holding_state_blocks_trailing_sell_when_pre_submit_quote_stale(
             ws_data={"curr": 10_000},
             admin_id=1,
             market_regime="BULL",
-            now_ts=1_240.0,
+            now_ts=datetime(2026, 7, 13, 13, 4, 30, tzinfo=state_handlers._KST).timestamp(),
             now_dt=datetime(2026, 7, 13, 13, 4, 30),
             radar=None,
             ai_engine=None,
@@ -39298,170 +39273,15 @@ def test_handle_holding_state_blocks_trailing_sell_when_pre_submit_quote_stale(
     blocked = [
         fields
         for stage, fields in pipeline_events
-        if stage == "trailing_sell_quote_revalidation_blocked"
+        if stage == "scalp_trailing_input_transition"
+        and fields.get("source_gap") is True
+        and fields.get("bid_source") == "rest_unavailable"
     ]
     assert blocked, pipeline_events
-    assert blocked[0]["quote_consistency_reason"] == "quote_stale"
+    assert blocked[0]["armed"] is True
     assert blocked[0]["actual_order_submitted"] is False
 
 
-def test_handle_holding_state_blocks_low_profit_stagnation_sell_when_quote_stale(
-    monkeypatch,
-):
-    original_rules = state_handlers.TRADING_RULES
-    try:
-        state_handlers.TRADING_RULES = replace(
-            CONFIG,
-            SCALE_IN_REQUIRE_HISTORY_TABLE=False,
-            SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED=False,
-            SCALP_BAD_ENTRY_REFINED_OBSERVE_ENABLED=False,
-            SCALP_MFE_PROTECT_EXIT_ENABLED=False,
-            SCALP_TRAILING_START_PCT=10.0,
-            SCALP_SAFE_PROFIT=10.0,
-        )
-        state_handlers.COOLDOWNS = {}
-        state_handlers.ALERTED_STOCKS = set()
-        state_handlers.HIGHEST_PRICES = {"123456": 10_070}
-        state_handlers.LAST_AI_CALL_TIMES = {}
-        state_handlers.LAST_LOG_TIMES = {}
-        state_handlers.DB = _DummyDB()
-        state_handlers.KIWOOM_TOKEN = "token"
-
-        sell_calls = []
-        pipeline_events = []
-        monkeypatch.setattr(
-            state_handlers,
-            "_evaluate_scalp_low_profit_stagnation_hard_exit",
-            lambda *args, **kwargs: {
-                "should_exit": True,
-                "min_hold_sec": 1800,
-                "elapsed_sec": 230,
-                "confirmation_sec": 180,
-                "adjusted_profit_pct": 0.52,
-                "assumed_exit_slippage_bps": 15.0,
-            },
-        )
-        rest_available = {"value": False}
-
-        def fake_quote_fields(
-            ws_data, *, rest_snapshot=None, side="mark", safety_exit=False, now_ts=None
-        ):
-            if rest_snapshot:
-                return (
-                    {
-                        "quote_consistency_state": "single_source",
-                        "quote_consistency_reason": "rest_only_fresh",
-                        "quote_consistency_entry_blocked": False,
-                        "price_source": "rest_mid",
-                    },
-                    10_070,
-                    10_080,
-                    10_060,
-                )
-            return (
-                {
-                    "quote_consistency_state": "stale",
-                    "quote_consistency_reason": "quote_stale",
-                    "quote_consistency_entry_blocked": True,
-                    "price_source": "stale_cached",
-                },
-                10_070,
-                10_080,
-                10_060,
-            )
-
-        monkeypatch.setattr(
-            state_handlers, "_build_quote_consistency_fields", fake_quote_fields
-        )
-        monkeypatch.setattr(
-            state_handlers,
-            "_fetch_rest_orderbook_snapshot_bounded",
-            lambda code, timeout_ms: (
-                (
-                    {"best_bid": 10_060, "best_ask": 10_080}
-                    if rest_available["value"]
-                    else {}
-                ),
-                "ok" if rest_available["value"] else "unavailable",
-                12.0 if rest_available["value"] else 0.0,
-            ),
-        )
-        monkeypatch.setattr(
-            state_handlers,
-            "can_consider_scale_in",
-            lambda *args, **kwargs: {"allowed": False, "reason": "test_no_add"},
-        )
-        monkeypatch.setattr(
-            state_handlers.kiwoom_orders,
-            "send_smart_sell_order",
-            lambda **kwargs: (
-                sell_calls.append(kwargs) or {"return_code": "0", "ord_no": "S1"}
-            ),
-        )
-        monkeypatch.setattr(
-            state_handlers,
-            "_log_holding_pipeline",
-            lambda stock, code, stage, **fields: pipeline_events.append(
-                (stage, fields)
-            ),
-        )
-        stock = {
-            "id": 1,
-            "code": "123456",
-            "name": "LG전자",
-            "status": "HOLDING",
-            "strategy": "SCALPING",
-            "buy_price": 10_000,
-            "buy_qty": 1,
-            "rt_ai_prob": 0.63,
-            "buy_time": 1_000.0,
-        }
-
-        state_handlers.handle_holding_state(
-            stock=stock,
-            code="123456",
-            ws_data={"curr": 10_070},
-            admin_id=1,
-            market_regime="BULL",
-            now_ts=4_000.0,
-            now_dt=datetime(2026, 7, 23, 12, 52, 54),
-            radar=None,
-            ai_engine=None,
-        )
-
-        assert sell_calls == []
-        assert stock["status"] == "HOLDING"
-        rest_available["value"] = True
-        state_handlers.handle_holding_state(
-            stock=stock,
-            code="123456",
-            ws_data={"curr": 10_070},
-            admin_id=1,
-            market_regime="BULL",
-            now_ts=4_001.0,
-            now_dt=datetime(2026, 7, 23, 12, 52, 55),
-            radar=None,
-            ai_engine=None,
-        )
-    finally:
-        state_handlers.TRADING_RULES = original_rules
-
-    assert len(sell_calls) == 1
-    blocked = [
-        fields
-        for stage, fields in pipeline_events
-        if stage == "scalping_discretionary_sell_quote_revalidation_blocked"
-    ]
-    assert blocked, pipeline_events
-    assert blocked[0]["exit_rule"] == "scalp_low_profit_stagnation_hard_exit"
-    assert blocked[0]["quote_consistency_reason"] == "quote_stale"
-    assert blocked[0]["actual_order_submitted"] is False
-    assert blocked[0]["broker_order_forbidden"] is True
-    assert stock["status"] == "SELL_ORDERED"
-    assert stock["exit_decision_mark_price"] == 10_070
-    assert stock["exit_decision_executable_sell_price"] == 10_060
-    assert stock["exit_decision_quote_state"] == "single_source"
-    assert stock["exit_decision_quote_reason"] == "rest_only_fresh"
 
 
 def test_scalping_discretionary_quote_revalidation_excludes_emergency_exits():
@@ -39470,6 +39290,14 @@ def test_scalping_discretionary_quote_revalidation_excludes_emergency_exits():
             strategy="SCALPING",
             exit_rule="scalp_low_profit_stagnation_hard_exit",
             sell_reason_type="LOW_PROFIT_STAGNATION",
+        )
+        is False
+    )
+    assert (
+        state_handlers._requires_scalping_discretionary_sell_quote_revalidation(
+            strategy="SCALPING",
+            exit_rule="scalp_trailing_take_profit",
+            sell_reason_type="TRAILING",
         )
         is True
     )
@@ -39676,124 +39504,6 @@ def test_handle_holding_state_cancels_soft_stop_when_fresh_quote_recovers(
     assert source_only_arms[-1]["runtime_effect"] is False
 
 
-def test_handle_holding_state_defers_trailing_sell_on_executable_recovery(
-    monkeypatch,
-):
-    original_rules = state_handlers.TRADING_RULES
-    try:
-        state_handlers.TRADING_RULES = replace(
-            CONFIG,
-            SCALE_IN_REQUIRE_HISTORY_TABLE=False,
-            SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED=False,
-            SCALP_BAD_ENTRY_REFINED_OBSERVE_ENABLED=False,
-            SCALP_MFE_PROTECT_EXIT_ENABLED=False,
-            SCALP_TRAILING_START_PCT=0.50,
-            SCALP_SAFE_PROFIT=1.00,
-        )
-        state_handlers.COOLDOWNS = {}
-        state_handlers.ALERTED_STOCKS = set()
-        state_handlers.HIGHEST_PRICES = {"123456": 10_080}
-        state_handlers.LAST_AI_CALL_TIMES = {}
-        state_handlers.LAST_LOG_TIMES = {}
-        state_handlers.DB = _DummyDB()
-        state_handlers.KIWOOM_TOKEN = "token"
-        sell_calls = []
-        recovery_calls = []
-        pipeline_events = []
-
-        monkeypatch.setattr(
-            state_handlers,
-            "_build_quote_consistency_fields",
-            lambda *args, **kwargs: (
-                {
-                    "quote_consistency_state": "ok",
-                    "quote_consistency_reason": "ws_rest_gap_ok",
-                    "quote_consistency_entry_blocked": False,
-                    "price_source": "ws_rest_mid",
-                },
-                10_000,
-                10_010,
-                9_995,
-            ),
-        )
-        monkeypatch.setattr(
-            state_handlers,
-            "_fetch_rest_orderbook_snapshot_bounded",
-            lambda code, timeout_ms: (
-                {"best_bid": 9_995, "best_ask": 10_005},
-                "ok",
-                10.0,
-            ),
-        )
-        monkeypatch.setattr(
-            state_handlers,
-            "_trailing_pre_submit_executable_recovery_decision",
-            lambda *args, **kwargs: (
-                recovery_calls.append((args, kwargs))
-                or {
-                    "defer": True,
-                    "reason": "executable_recovery_confirmed",
-                    "evaluated": True,
-                }
-            ),
-        )
-        monkeypatch.setattr(
-            state_handlers,
-            "can_consider_scale_in",
-            lambda *args, **kwargs: {"allowed": False, "reason": "test_no_add"},
-        )
-        monkeypatch.setattr(
-            state_handlers.kiwoom_orders,
-            "send_smart_sell_order",
-            lambda **kwargs: (
-                sell_calls.append(kwargs) or {"return_code": "0", "ord_no": "S1"}
-            ),
-        )
-        monkeypatch.setattr(
-            state_handlers,
-            "_log_holding_pipeline",
-            lambda stock, code, stage, **fields: pipeline_events.append(
-                (stage, fields)
-            ),
-        )
-        stock = {
-            "id": 1,
-            "code": "123456",
-            "name": "TEST",
-            "status": "HOLDING",
-            "strategy": "SCALPING",
-            "buy_price": 10_000,
-            "buy_qty": 3,
-            "rt_ai_prob": 0.60,
-            "buy_time": 1_000.0,
-            "trailing_shallow_loss_confirm_deferred": True,
-        }
-
-        state_handlers.handle_holding_state(
-            stock=stock,
-            code="123456",
-            ws_data={"curr": 10_000},
-            admin_id=1,
-            market_regime="BULL",
-            now_ts=1_240.0,
-            now_dt=datetime(2026, 7, 13, 13, 4, 30),
-            radar=None,
-            ai_engine=None,
-        )
-    finally:
-        state_handlers.TRADING_RULES = original_rules
-
-    assert recovery_calls
-    assert sell_calls == []
-    assert stock["status"] == "HOLDING"
-    deferred = [
-        fields
-        for stage, fields in pipeline_events
-        if stage == "trailing_pre_submit_executable_recovery_deferred"
-    ]
-    assert deferred
-    assert deferred[0]["exit_classification"] == "trailing_loss_conversion"
-    assert deferred[0]["actual_order_submitted"] is False
 
 
 def test_scalp_profit_stagnation_time_exit_skips_simulated_position(monkeypatch):
@@ -41654,7 +41364,7 @@ def test_scalp_profit_stagnation_time_exit_resets_on_profit_or_peak_breakout(
     assert stock["profit_stagnation_anchor_peak"] == 1.35
 
 
-def test_scalp_profit_stagnation_time_exit_allows_holding_flow_override(monkeypatch):
+def test_scalp_profit_stagnation_time_exit_has_no_holding_flow_override(monkeypatch):
     state_handlers.TRADING_RULES = replace(
         CONFIG,
         HOLDING_FLOW_OVERRIDE_ENABLED=True,
@@ -41666,443 +41376,22 @@ def test_scalp_profit_stagnation_time_exit_allows_holding_flow_override(monkeypa
             "SCALPING",
             "scalp_profit_stagnation_time_exit",
         )
-        is True
-    )
-
-
-def test_scalp_trailing_loss_conversion_recheck_is_one_shot_and_rest_bounded(
-    monkeypatch,
-):
-    now_ts = 1_783_471_000.0
-    active_date = (
-        datetime.fromtimestamp(now_ts, tz=state_handlers._KST).date().isoformat()
-    )
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_ENABLED", "true"
-    )
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_ACTIVE_DATE",
-        active_date,
-    )
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_TTL_SEC", "15"
-    )
-    fetches = []
-    logs = []
-    monkeypatch.setattr(
-        state_handlers,
-        "_fetch_rest_orderbook_snapshot_bounded",
-        lambda code, timeout_ms: (
-            fetches.append((code, timeout_ms))
-            or ({"best_bid": 2_825, "best_ask": 2_830}, "ok", 12.0)
-        ),
-    )
-    monkeypatch.setattr(
-        state_handlers,
-        "_build_quote_consistency_fields",
-        lambda *args, **kwargs: (
-            {
-                "quote_consistency_state": "single_source",
-                "quote_consistency_rest_age_ms": 12.0,
-                "price_source": "rest_mid",
-            },
-            2_827,
-            2_830,
-            2_825,
-        ),
-    )
-    monkeypatch.setattr(
-        state_handlers,
-        "_log_holding_pipeline",
-        lambda stock, code, stage, **fields: logs.append((stage, fields)),
-    )
-    stock = {"strategy": "SCALPING"}
-
-    armed = state_handlers._evaluate_scalp_trailing_loss_conversion_recheck(
-        stock=stock,
-        code="099440",
-        ws_data={"curr": 2_840},
-        profit_rate=-0.05,
-        peak_profit=0.65,
-        trailing_peak_worsen=0.70,
-        now_ts=now_ts,
-    )
-    deferred = state_handlers._evaluate_scalp_trailing_loss_conversion_recheck(
-        stock=stock,
-        code="099440",
-        ws_data={"curr": 2_840},
-        profit_rate=-0.04,
-        peak_profit=0.65,
-        trailing_peak_worsen=0.69,
-        now_ts=now_ts + 10.0,
-    )
-    expired = state_handlers._evaluate_scalp_trailing_loss_conversion_recheck(
-        stock=stock,
-        code="099440",
-        ws_data={"curr": 2_840},
-        profit_rate=-0.03,
-        peak_profit=0.65,
-        trailing_peak_worsen=0.68,
-        now_ts=now_ts + 16.0,
-    )
-
-    assert armed is True
-    assert deferred is True
-    assert expired is False
-    assert len(fetches) == 2
-    assert [fields["recheck_state"] for _, fields in logs] == [
-        "armed",
-        "deferred",
-        "ttl_expired",
-    ]
-    assert "scalp_trailing_loss_conversion_recheck_started_at" not in stock
-
-
-def test_scalp_trailing_loss_conversion_recheck_keeps_armed_ttl_on_worsen(
-    monkeypatch,
-):
-    now_ts = 1_783_471_000.0
-    active_date = (
-        datetime.fromtimestamp(now_ts, tz=state_handlers._KST).date().isoformat()
-    )
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_ENABLED", "true"
-    )
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_ACTIVE_DATE",
-        active_date,
-    )
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_TTL_SEC", "15"
-    )
-    monkeypatch.setattr(
-        state_handlers,
-        "_fetch_rest_orderbook_snapshot_bounded",
-        lambda code, timeout_ms: (
-            {"best_bid": 2_990, "best_ask": 3_000},
-            "ok",
-            12.0,
-        ),
-    )
-    monkeypatch.setattr(
-        state_handlers,
-        "_build_quote_consistency_fields",
-        lambda *args, **kwargs: (
-            {
-                "quote_consistency_state": "single_source",
-                "quote_consistency_rest_age_ms": 12.0,
-                "price_source": "rest_mid",
-            },
-            2_995,
-            3_000,
-            2_990,
-        ),
-    )
-    logs = []
-    monkeypatch.setattr(
-        state_handlers,
-        "_log_holding_pipeline",
-        lambda stock, code, stage, **fields: logs.append((stage, fields)),
-    )
-    stock = {"strategy": "SCALPING"}
-
-    assert state_handlers._evaluate_scalp_trailing_loss_conversion_recheck(
-        stock=stock,
-        code="475040",
-        ws_data={"curr": 2_995},
-        profit_rate=-0.06,
-        peak_profit=0.94,
-        trailing_peak_worsen=1.00,
-        now_ts=now_ts,
-    )
-    assert state_handlers._evaluate_scalp_trailing_loss_conversion_recheck(
-        stock=stock,
-        code="475040",
-        ws_data={"curr": 2_995},
-        profit_rate=-0.23,
-        peak_profit=0.94,
-        trailing_peak_worsen=1.17,
-        now_ts=now_ts + 5.0,
-    )
-    assert (
-        state_handlers._evaluate_scalp_trailing_loss_conversion_recheck(
-            stock=stock,
-            code="475040",
-            ws_data={"curr": 2_995},
-            profit_rate=-0.23,
-            peak_profit=0.94,
-            trailing_peak_worsen=1.17,
-            now_ts=now_ts + 16.0,
-        )
         is False
     )
-    assert [fields["recheck_state"] for _, fields in logs] == [
-        "armed",
-        "deferred",
-        "ttl_expired",
-    ]
 
 
-def test_scalp_trailing_loss_conversion_recheck_keeps_armed_ttl_on_rest_gap(
-    monkeypatch,
-):
-    now_ts = 1_783_471_000.0
-    active_date = (
-        datetime.fromtimestamp(now_ts, tz=state_handlers._KST).date().isoformat()
-    )
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_ENABLED", "true"
-    )
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_ACTIVE_DATE",
-        active_date,
-    )
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_TTL_SEC", "15"
-    )
-    rest_results = iter(
-        [
-            ({"best_bid": 2_990, "best_ask": 3_000}, "ok", 12.0),
-            ({}, "timeout", 300.0),
-        ]
-    )
-    monkeypatch.setattr(
-        state_handlers,
-        "_fetch_rest_orderbook_snapshot_bounded",
-        lambda code, timeout_ms: next(rest_results),
-    )
-
-    def quote_fields(*args, rest_snapshot=None, **kwargs):
-        if rest_snapshot:
-            return (
-                {
-                    "quote_consistency_state": "single_source",
-                    "quote_consistency_rest_age_ms": 12.0,
-                    "price_source": "rest_mid",
-                },
-                2_995,
-                3_000,
-                2_990,
-            )
-        return (
-            {
-                "quote_consistency_state": "single_source",
-                "quote_consistency_rest_age_ms": None,
-                "price_source": "ws",
-            },
-            2_995,
-            3_000,
-            2_990,
-        )
-
-    monkeypatch.setattr(
-        state_handlers,
-        "_build_quote_consistency_fields",
-        quote_fields,
-    )
-    logs = []
-    monkeypatch.setattr(
-        state_handlers,
-        "_log_holding_pipeline",
-        lambda stock, code, stage, **fields: logs.append((stage, fields)),
-    )
-    stock = {"strategy": "SCALPING"}
-
-    assert state_handlers._evaluate_scalp_trailing_loss_conversion_recheck(
-        stock=stock,
-        code="475040",
-        ws_data={"curr": 2_995},
-        profit_rate=-0.06,
-        peak_profit=0.94,
-        trailing_peak_worsen=1.00,
-        now_ts=now_ts,
-    )
-    assert state_handlers._evaluate_scalp_trailing_loss_conversion_recheck(
-        stock=stock,
-        code="475040",
-        ws_data={"curr": 2_995},
-        profit_rate=-0.23,
-        peak_profit=0.94,
-        trailing_peak_worsen=1.17,
-        now_ts=now_ts + 5.0,
-    )
-    assert stock["scalp_trailing_loss_conversion_recheck_started_at"] == now_ts
-    assert [fields["recheck_state"] for _, fields in logs] == [
-        "armed",
-        "deferred_rest_quote_unavailable",
-    ]
 
 
-def test_scalp_trailing_loss_conversion_recheck_fails_open_without_fresh_rest(
-    monkeypatch,
-):
-    now_ts = 1_783_471_000.0
-    active_date = (
-        datetime.fromtimestamp(now_ts, tz=state_handlers._KST).date().isoformat()
-    )
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_ENABLED", "true"
-    )
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_ACTIVE_DATE",
-        active_date,
-    )
-    monkeypatch.setattr(
-        state_handlers,
-        "_fetch_rest_orderbook_snapshot_bounded",
-        lambda code, timeout_ms: ({}, "timeout", float(timeout_ms)),
-    )
-    monkeypatch.setattr(
-        state_handlers,
-        "_log_holding_pipeline",
-        lambda *args, **kwargs: None,
-    )
-
-    decision = state_handlers._evaluate_scalp_trailing_loss_conversion_recheck(
-        stock={"strategy": "SCALPING"},
-        code="099440",
-        ws_data={"curr": 2_840},
-        profit_rate=-0.05,
-        peak_profit=0.65,
-        trailing_peak_worsen=0.70,
-        now_ts=now_ts,
-    )
-
-    assert decision is False
 
 
-def test_trailing_pre_submit_executable_recovery_defers_once(monkeypatch):
-    now_ts = 1_783_471_000.0
-    sleeps = []
-    monkeypatch.setattr(
-        state_handlers.time, "sleep", lambda seconds: sleeps.append(seconds)
-    )
-    monkeypatch.setattr(state_handlers.time, "time", lambda: now_ts + 2.0)
-    monkeypatch.setattr(
-        state_handlers,
-        "_fetch_rest_orderbook_snapshot_bounded",
-        lambda code, timeout_ms: (
-            {"best_bid": 3_595, "best_ask": 3_605},
-            "ok",
-            12.0,
-        ),
-    )
-    monkeypatch.setattr(
-        state_handlers,
-        "_build_quote_consistency_fields",
-        lambda *args, **kwargs: (
-            {
-                "quote_consistency_state": "single_source",
-                "quote_consistency_reason": "rest_only_fresh",
-                "quote_consistency_rest_age_ms": 12.0,
-                "quote_consistency_entry_blocked": False,
-            },
-            3_600,
-            3_605,
-            3_595,
-        ),
-    )
-    stock = {
-        "id": 1,
-        "strategy": "SCALPING",
-        "buy_time": now_ts - 140,
-        "hard_stop_pct": -0.70,
-    }
-
-    decision = state_handlers._trailing_pre_submit_executable_recovery_decision(
-        stock,
-        "413630",
-        {"curr": 3_585},
-        buy_price=3_600,
-        signal_profit_rate=-0.65,
-        peak_profit=0.60,
-        current_ai_score=57,
-        initial_executable_sell_price=3_595,
-        now_ts=now_ts,
-    )
-    repeated = state_handlers._trailing_pre_submit_executable_recovery_decision(
-        stock,
-        "413630",
-        {"curr": 3_595},
-        buy_price=3_600,
-        signal_profit_rate=-0.40,
-        peak_profit=0.60,
-        current_ai_score=57,
-        initial_executable_sell_price=3_595,
-        now_ts=now_ts + 60,
-    )
-
-    assert decision["defer"] is True
-    assert decision["reason"] == "executable_recovery_confirmed"
-    assert decision["rechecked_executable_sell_price"] == 3_595
-    assert decision["quote_consistency_executable_sell_price"] == 3_595
-    assert decision["evaluated"] is True
-    assert sleeps == [2.0]
-    assert repeated == {"defer": False, "reason": "already_deferred_once"}
 
 
-def test_trailing_pre_submit_executable_recovery_preserves_hard_stop(monkeypatch):
-    monkeypatch.setattr(
-        state_handlers.time,
-        "sleep",
-        lambda seconds: pytest.fail("hard-stop-adjacent exit must not sleep"),
-    )
-    stock = {
-        "id": 1,
-        "strategy": "SCALPING",
-        "buy_time": 1_000.0,
-        "hard_stop_pct": -0.70,
-    }
-
-    decision = state_handlers._trailing_pre_submit_executable_recovery_decision(
-        stock,
-        "413630",
-        {"curr": 3_580},
-        buy_price=3_600,
-        signal_profit_rate=-0.75,
-        peak_profit=0.60,
-        current_ai_score=70,
-        initial_executable_sell_price=3_580,
-        now_ts=1_140.0,
-    )
-
-    assert decision["defer"] is False
-    assert decision["reason"] in {
-        "executable_loss_below_recovery_band",
-        "hard_stop_margin_insufficient",
-    }
 
 
-def test_trailing_pre_submit_executable_recovery_does_not_bypass_protect_stop(
-    monkeypatch,
-):
-    monkeypatch.setattr(
-        state_handlers.time,
-        "sleep",
-        lambda seconds: pytest.fail("protect stop must not sleep"),
-    )
-    stock = {
-        "id": 1,
-        "strategy": "SCALPING",
-        "buy_time": 1_000.0,
-        "hard_stop_pct": -0.70,
-        "protect_profit_pct": -0.30,
-    }
 
-    decision = state_handlers._trailing_pre_submit_executable_recovery_decision(
-        stock,
-        "413630",
-        {"curr": 3_585},
-        buy_price=3_600,
-        signal_profit_rate=-0.65,
-        peak_profit=0.60,
-        current_ai_score=70,
-        initial_executable_sell_price=3_595,
-        now_ts=1_140.0,
-    )
 
-    assert decision["defer"] is False
-    assert decision["reason"] == "protect_stop_precedence"
+
+
 
 
 def test_emit_same_symbol_soft_stop_cooldown_shadow_once(monkeypatch):
@@ -42544,9 +41833,6 @@ def test_shared_rebound_retirement_never_defers_or_intercepts_stop(monkeypatch):
         strategy="SCALPING", profit_rate=-3, now_ts=2000)["active"]
 
 
-def test_shared_rebound_retirement_disables_pyramid_exit_handoff_even_with_old_env(monkeypatch):
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_PYRAMID_HANDOFF_ENABLED", "true")
-    assert state_handlers._scalp_trailing_continuation_recheck_config(2000)["pyramid_handoff_enabled"] is False
 
 
 def test_shared_rebound_retirement_never_acquires_independent_budget_source(monkeypatch):
@@ -42556,7 +41842,10 @@ def test_shared_rebound_retirement_never_acquires_independent_budget_source(monk
 
 
 def _execute_shared_rebound_guard_fixture(*, monkeypatch, stock, code, ws_data, action, admin_id):
-    """Valid new producer permit, with existing quote/window/margin guards intact."""
+    """Exercise downstream margin and quote guards in an eligible buy window."""
+    monkeypatch.setattr(
+        state_handlers, "is_scalping_buy_time_allowed", lambda _now: True
+    )
     stock.setdefault("id", 100)
     stock.setdefault("status", "HOLDING")
     stock.setdefault("buy_qty", 10)

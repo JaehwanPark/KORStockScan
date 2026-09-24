@@ -1865,22 +1865,16 @@ def test_trade_profit_helper_accounts_for_costs():
     assert calculate_net_profit_rate(14320, 14420) == 0.47
 
 
-def test_trailing_continuation_lineage_is_snapshotted_then_reset():
+def test_trailing_peak_lineage_is_snapshotted_then_reset():
     stock = {
-        "scalp_trailing_continuation_recheck_consumed_id": "scr-runtime-7",
-        "scalp_trailing_continuation_recheck_consumed_position_key": (
-            "runtime:123456:position-7"
-        ),
+        "scalp_trailing_trusted_peak_price": 10100,
+        "scalp_trailing_peak_position_key": "record:7",
+        "scalp_trailing_observation_sequence": 3,
     }
 
-    fields = receipts._trailing_continuation_receipt_fields(stock)
-
-    assert fields == {
-        "trailing_continuation_recheck_id": "scr-runtime-7",
-        "trailing_continuation_position_key": "runtime:123456:position-7",
-    }
     assert all(key in receipts._SELL_RECEIPT_SNAPSHOT_KEYS for key in stock)
     assert all(key in receipts._SELL_COMPLETE_RESET_KEYS for key in stock)
+    assert "scalp_trailing_observation_state" in receipts._SELL_COMPLETE_RESET_KEYS
     assert (
         "scalp_trailing_continuation_runtime_position_token"
         in receipts._SELL_COMPLETE_RESET_KEYS
@@ -2207,8 +2201,8 @@ def test_standard_sell_waits_for_full_cumulative_receipt_and_emits_exact_legs(
     assert partial_fields["main_lifecycle_reconciled_final_exit"] is False
     assert partial_fields["effective_venue"] == "NXT"
     assert partial_fields["exit_effective_venue"] == "NXT"
-    assert partial_fields["market_session_bucket"] == "nxt_entry_window"
-    assert partial_fields["exit_market_session_bucket"] == "nxt_entry_window"
+    assert partial_fields["market_session_bucket"] == "nxt_aftermarket"
+    assert partial_fields["exit_market_session_bucket"] == "nxt_aftermarket"
     assert partial_fields["exit_market_session_time_source"] == (
         "websocket_packet_ingress"
     )
@@ -2276,8 +2270,8 @@ def test_standard_sell_waits_for_full_cumulative_receipt_and_emits_exact_legs(
     assert final_fields["main_lifecycle_broker_reconciled"] is True
     assert final_fields["effective_venue"] == "NXT"
     assert final_fields["exit_effective_venue"] == "NXT"
-    assert final_fields["market_session_bucket"] == "nxt_entry_window"
-    assert final_fields["exit_market_session_bucket"] == "nxt_entry_window"
+    assert final_fields["market_session_bucket"] == "nxt_aftermarket"
+    assert final_fields["exit_market_session_bucket"] == "nxt_aftermarket"
     assert final_fields["exit_market_session_time_source"] == (
         "websocket_packet_ingress"
     )
@@ -2327,7 +2321,7 @@ def test_standard_sell_waits_for_full_cumulative_receipt_and_emits_exact_legs(
     assert lifecycle_stock["effective_venue"] == "KRX"
     assert lifecycle_stock["market_session_bucket"] == "krx_regular"
     assert transition["venue"] == "NXT"
-    assert transition["session_bucket"] == "nxt_entry_window"
+    assert transition["session_bucket"] == "nxt_aftermarket"
     assert transition["data"].get("broker_execution_actual_venue") == "NXT", transition[
         "data"
     ]

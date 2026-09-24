@@ -293,6 +293,85 @@ def test_post_sell_pass_requires_mature_horizons_and_matching_anchor():
     assert coverage["full_post_sell_observation_trades"] == 1
 
 
+def test_trailing_direct_input_receipt_preserves_trigger_and_source_gap():
+    trade = _trade(1)
+    fields = {
+        "exit_threshold_status": "effective_value_observed",
+        "exit_threshold_key": "SCALP_TRAILING_LIMIT_WEAK",
+        "exit_threshold_effective_pct": 0.4,
+        "exit_threshold_trailing_start_pct": 0.6,
+        "exit_threshold_trailing_arm_observed_pct": 1.1,
+        "exit_threshold_strong_score_effective": 75,
+        "exit_threshold_ai_score_observed": 50,
+        "exit_threshold_ai_score_usable": False,
+        "exit_threshold_peak_price": 10110,
+        "exit_threshold_executable_bid": 10060,
+        "exit_threshold_bid_source": "fresh_ws_executable_bid",
+        "exit_threshold_trigger_kind": "trailing_peak_worsen_floor",
+    }
+    trade["exit_signal"] = {
+        "exit_rule": "scalp_trailing_take_profit",
+        "fields": fields,
+    }
+    trade["timeline"][1]["fields"].update(fields)
+    trade["timeline"].append(
+        {
+            "stage": "scalp_trailing_input_transition",
+            "fields": {
+                "armed": True,
+                "triggered": False,
+                "source_gap": True,
+                "evaluation_at_epoch": 1780000000.0,
+            },
+        }
+    )
+    trade["timeline"].append(
+        {
+            "stage": "scalp_trailing_input_transition",
+            "fields": {
+                "armed": True,
+                "triggered": True,
+                "source_gap": False,
+                "evaluation_at_epoch": 1780000001.0,
+            },
+        }
+    )
+    trade["timeline"].append(
+        {
+            "stage": "scalp_tp_alternative_observed",
+            "fields": {
+                "exit_rule": "scalp_ai_momentum_decay",
+                "would_exit": True,
+            },
+        }
+    )
+
+    outcomes, coverage = report_mod._build_position_outcomes([trade], [])
+
+    assert coverage["trailing_direct_input_receipt_trades"] == 1
+    assert coverage["trailing_input_transition_trades"] == 1
+    assert coverage["trailing_first_arm_receipt_trades"] == 1
+    assert outcomes[0]["trailing_input_transition_count"] == 2
+    assert outcomes[0]["trailing_source_gap_transition_count"] == 1
+    assert outcomes[0]["trailing_first_arm_at_epoch"] == 1780000000.0
+    assert outcomes[0]["trailing_first_trigger_at_epoch"] == 1780000001.0
+    assert outcomes[0]["exit_threshold_peak_price"] == 10110
+    assert outcomes[0]["exit_threshold_executable_bid"] == 10060
+    assert outcomes[0]["exit_threshold_ai_score_usable"] is False
+    assert outcomes[0]["tp_alternative_observed_rules"] == [
+        "scalp_ai_momentum_decay"
+    ]
+    readiness = report_mod._build_trailing_threshold_readiness(outcomes)
+    assert readiness["funnel_ids"]["direct_signal_ids"] == ["1"]
+    assert readiness["funnel_ids"]["paired_replay_eligible_ids"] == []
+    assert readiness["axes"]["SCALP_TRAILING_START_PCT"]["qualified_input_count"] == 1
+    assert all(
+        axis["candidate_value"] is None
+        and axis["eligible_for_live_review"] is False
+        for axis in readiness["axes"].values()
+    )
+
+
 def test_holding_exit_observation_report_splits_required_cohorts(monkeypatch, tmp_path):
     monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
     snapshot_dir = tmp_path / "report" / "monitor_snapshots"
@@ -457,7 +536,7 @@ def test_holding_exit_observation_report_splits_required_cohorts(monkeypatch, tm
         "readiness",
         "cohorts",
         "exit_rule_quality",
-        "trailing_continuation",
+        "trailing_threshold_readiness",
         "soft_stop_rebound",
         "same_symbol_reentry",
         "opportunity_cost",
@@ -474,9 +553,13 @@ def test_holding_exit_observation_report_splits_required_cohorts(monkeypatch, tm
     assert report["cohorts"]["partial_fill"]["trade_count"] == 1
     assert report["cohorts"]["initial-only"]["trade_count"] == 7
     assert report["cohorts"]["pyramid-activated"]["trade_count"] == 1
-    assert report["trailing_continuation"]["eligible_for_live_review"] is False
+    assert report["trailing_threshold_readiness"]["status"] == (
+        "source_gap_paired_replay_unavailable"
+    )
     assert report["economic_input_complete"] is False
-    assert report["trailing_continuation"]["qualifying_cohort_count"] == 5
+    assert report["trailing_threshold_readiness"]["axes"][
+        "SCALP_TRAILING_LIMIT_WEAK"
+    ]["candidate_value"] is None
     assert report["soft_stop_rebound"]["rebound_above_buy_10m_rate"] == 50.0
     assert report["soft_stop_rebound"]["whipsaw_signal"] is True
     assert report["soft_stop_rebound"]["whipsaw_windows"][3]["window"] == "10m"

@@ -326,8 +326,8 @@ def test_trailing_followup_uses_native_observation_owner():
     )
 
     assert followup == {
-        "route": "trailing_continuation_report_only_review",
-        "owner": "scalp_trailing_continuation_recheck",
+        "route": "trailing_threshold_source_review",
+        "owner": "scalp_trailing_take_profit",
         "operator_action_required": False,
         "runtime_effect": "report_only_no_mutation",
         "next_artifact": "holding_exit_observation",

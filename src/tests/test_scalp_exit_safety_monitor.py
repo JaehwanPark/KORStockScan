@@ -61,6 +61,50 @@ def test_monitor_polls_only_holding_targets():
     assert [call[1] for call in calls] == ["222222"]
 
 
+def test_trailing_peak_resets_for_new_position_without_changing_safety_peak():
+    stock = {
+        "id": 2,
+        "buy_price": 10_000,
+        "scalp_trailing_trusted_peak_price": 11_000,
+        "scalp_trailing_peak_basis_price": 10_000,
+        "scalp_trailing_peak_position_key": "record:1",
+    }
+    handlers.HIGHEST_PRICES = {"123456": 11_000}
+
+    peak = handlers._scalp_trailing_trusted_peak(
+        stock, "123456", {"curr": 10_500}, buy_price=10_000, now_ts=1000.0
+    )
+
+    assert peak == 10_000
+    assert stock["scalp_trailing_peak_position_key"] == "record:2"
+    assert handlers.HIGHEST_PRICES["123456"] == 11_000
+
+
+def test_trailing_rest_bid_rejects_other_symbol_and_request_route():
+    now_ts = 1_784_778_400.0
+    rest = {
+        "source": "ka10004_rest_orderbook",
+        "stock_code": "999999",
+        "request_code": "999999",
+        "rest_received_ts_ms": now_ts * 1000,
+        "best_bid": 9_900,
+        "best_ask": 9_910,
+    }
+    fields = {"quote_consistency_state": "consistent", "quote_consistency_reason": "ok"}
+
+    bid, _ = handlers._trusted_scalp_trailing_bid(
+        {}, code="123456", quote_fields=fields, now_ts=now_ts,
+        rest_snapshot=rest, rest_request_code="123456"
+    )
+    assert bid == 0
+    rest["stock_code"] = "123456"
+    bid, _ = handlers._trusted_scalp_trailing_bid(
+        {}, code="123456", quote_fields=fields, now_ts=now_ts,
+        rest_snapshot=rest, rest_request_code="123456"
+    )
+    assert bid == 0
+
+
 @pytest.mark.parametrize(
     ("regime", "expected_source"),
     [("BULL", "kospi_stop_loss_bull"), ("BEAR", "kospi_stop_loss_bear")],
@@ -123,9 +167,8 @@ def test_fast_exit_skips_manual_control_excluded_holding(monkeypatch):
 
 def test_fast_exit_claims_once_and_dispatches_without_holding_ai(monkeypatch):
     now_ts = 1_784_778_400.0
-    active_date = datetime.fromtimestamp(now_ts, tz=handlers._KST).date().isoformat()
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ENABLED", "true")
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ACTIVE_DATE", active_date)
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ENABLED", "false")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ACTIVE_DATE", "2026-01-01")
     monkeypatch.setattr(
         handlers,
         "_build_quote_consistency_fields",
@@ -169,16 +212,6 @@ def test_fast_exit_claims_once_and_dispatches_without_holding_ai(monkeypatch):
         "_scalping_micro_estimator_log_fields",
         lambda **_kwargs: {},
     )
-    monkeypatch.setattr(
-        handlers,
-        "_evaluate_scalp_trailing_loss_conversion_recheck",
-        lambda **_kwargs: False,
-    )
-    monkeypatch.setattr(
-        handlers,
-        "_evaluate_scalp_trailing_continuation_recheck",
-        lambda **_kwargs: False,
-    )
     dispatches = []
 
     def fake_dispatch(**kwargs):
@@ -196,12 +229,16 @@ def test_fast_exit_claims_once_and_dispatches_without_holding_ai(monkeypatch):
         "status": "HOLDING",
         "buy_price": 10_000,
         "buy_qty": 94,
+        "hard_stop_pct": -1.0,
+        "scalp_trailing_trusted_peak_price": 10_077,
+        "scalp_trailing_peak_basis_price": 10_000,
+        "scalp_trailing_peak_position_key": "record:1",
     }
 
     triggered = handlers.evaluate_and_dispatch_fast_scalp_exit(
         stock,
         "123456",
-        {"curr": 9_800},
+        {"curr": 9_800, "best_bid": 9_800, "last_ws_update_ts": now_ts},
         now_ts=now_ts,
     )
 
@@ -218,11 +255,28 @@ def test_fast_exit_claims_once_and_dispatches_without_holding_ai(monkeypatch):
         handlers.evaluate_and_dispatch_fast_scalp_exit(
             stock,
             "123456",
-            {"curr": 9_790},
+            {"curr": 9_790, "best_bid": 9_790, "last_ws_update_ts": now_ts},
             now_ts=now_ts + 0.25,
         )
         is False
     )
+    stop_only = {
+        **stock,
+        "id": 2,
+        "status": "HOLDING",
+        "exit_requested": False,
+        "exit_token": "",
+        "hard_stop_pct": -1.0,
+        "scalp_trailing_trusted_peak_price": 10_000,
+        "scalp_trailing_peak_position_key": "record:2",
+    }
+    assert handlers.evaluate_and_dispatch_fast_scalp_exit(
+        stop_only,
+        "123456",
+        {"curr": 9_800, "best_bid": 9_800, "last_ws_update_ts": now_ts},
+        now_ts=now_ts,
+    ) is False
+    assert len(dispatches) == 1
     assert len(dispatches) == 1
 
 
@@ -287,16 +341,6 @@ def test_fast_exit_uses_cached_sell_quote_when_safety_contract_allows_it(
     monkeypatch.setattr(handlers, "_holding_score_role_log_fields", lambda context: {})
     monkeypatch.setattr(
         handlers, "_scalping_micro_estimator_log_fields", lambda **_kwargs: {}
-    )
-    monkeypatch.setattr(
-        handlers,
-        "_evaluate_scalp_trailing_loss_conversion_recheck",
-        lambda **_kwargs: False,
-    )
-    monkeypatch.setattr(
-        handlers,
-        "_evaluate_scalp_trailing_continuation_recheck",
-        lambda **_kwargs: False,
     )
     logs = []
     monkeypatch.setattr(
@@ -384,20 +428,14 @@ def test_dongyang_wide_spread_trailing_uses_confirmed_rest_bid(monkeypatch):
             {
                 "best_bid": 1133,
                 "best_ask": 1135,
-                "rest_received_ts": now_ts,
+                    "rest_received_ts_ms": now_ts * 1000,
+                    "source": "ka10004_rest_orderbook",
+                    "stock_code": "001520",
+                    "request_code": "001520",
             },
             "ok",
             12.0,
         ),
-    )
-    monkeypatch.setattr(
-        handlers,
-        "_scalp_trailing_loss_conversion_recheck_config",
-        lambda _now: {
-            "max_spread_bps": 150.0,
-            "rest_timeout_ms": 300,
-            "max_rest_age_ms": 1500.0,
-        },
     )
     monkeypatch.setattr(
         handlers,
@@ -422,16 +460,6 @@ def test_dongyang_wide_spread_trailing_uses_confirmed_rest_bid(monkeypatch):
     monkeypatch.setattr(
         handlers, "_scalping_micro_estimator_log_fields", lambda **_kwargs: {}
     )
-    monkeypatch.setattr(
-        handlers,
-        "_evaluate_scalp_trailing_loss_conversion_recheck",
-        lambda **_kwargs: False,
-    )
-    monkeypatch.setattr(
-        handlers,
-        "_evaluate_scalp_trailing_continuation_recheck",
-        lambda **_kwargs: False,
-    )
     logs = []
     monkeypatch.setattr(
         handlers,
@@ -453,10 +481,13 @@ def test_dongyang_wide_spread_trailing_uses_confirmed_rest_bid(monkeypatch):
         "status": "HOLDING",
         "buy_price": 1123,
         "buy_qty": 1,
+        "scalp_trailing_trusted_peak_price": 1140,
+        "scalp_trailing_peak_basis_price": 1123,
+        "scalp_trailing_peak_position_key": "record:117",
     }
 
     assert handlers.evaluate_and_dispatch_fast_scalp_exit(
-        stock, "001520", {"curr": 1133}, now_ts=now_ts
+        stock, "001520", {"curr": 1133, "best_bid": 1121, "best_ask": 1145, "last_ws_update_ts": now_ts}, now_ts=now_ts
     )
     assert dispatches[0]["curr_p"] == 1134
     assert dispatches[0]["ws_data"]["executable_sell_price"] == 1133
@@ -523,20 +554,14 @@ def test_wide_spread_trailing_rechecks_rest_when_mark_pnl_is_slightly_negative(
             {
                 "best_bid": 2_995,
                 "best_ask": 3_005,
-                "rest_received_ts": now_ts,
+                    "rest_received_ts_ms": now_ts * 1000,
+                    "source": "ka10004_rest_orderbook",
+                    "stock_code": "475040",
+                    "request_code": "475040",
             },
             "ok",
             12.0,
         ),
-    )
-    monkeypatch.setattr(
-        handlers,
-        "_scalp_trailing_loss_conversion_recheck_config",
-        lambda _now: {
-            "max_spread_bps": 150.0,
-            "rest_timeout_ms": 300,
-            "max_rest_age_ms": 1500.0,
-        },
     )
     pnl_by_price = {
         2_990: -0.23,
@@ -567,16 +592,6 @@ def test_wide_spread_trailing_rechecks_rest_when_mark_pnl_is_slightly_negative(
     monkeypatch.setattr(
         handlers, "_scalping_micro_estimator_log_fields", lambda **_kwargs: {}
     )
-    monkeypatch.setattr(
-        handlers,
-        "_evaluate_scalp_trailing_loss_conversion_recheck",
-        lambda **_kwargs: False,
-    )
-    monkeypatch.setattr(
-        handlers,
-        "_evaluate_scalp_trailing_continuation_recheck",
-        lambda **_kwargs: False,
-    )
     logs = []
     monkeypatch.setattr(
         handlers,
@@ -598,10 +613,13 @@ def test_wide_spread_trailing_rechecks_rest_when_mark_pnl_is_slightly_negative(
         "status": "HOLDING",
         "buy_price": 2_990,
         "buy_qty": 1,
+        "scalp_trailing_trusted_peak_price": 3_025,
+        "scalp_trailing_peak_basis_price": 2_990,
+        "scalp_trailing_peak_position_key": "record:25063",
     }
 
     assert handlers.evaluate_and_dispatch_fast_scalp_exit(
-        stock, "475040", {"curr": 2_995}, now_ts=now_ts
+        stock, "475040", {"curr": 2_995, "best_bid": 2_990, "best_ask": 3_030, "last_ws_update_ts": now_ts}, now_ts=now_ts
     )
     assert len(rest_fetches) == 1
     assert dispatches[0]["ws_data"]["executable_sell_price"] == 2_995
@@ -661,15 +679,6 @@ def test_wide_spread_trailing_defers_when_rest_bbo_is_not_narrow(monkeypatch):
             "ok",
             12.0,
         ),
-    )
-    monkeypatch.setattr(
-        handlers,
-        "_scalp_trailing_loss_conversion_recheck_config",
-        lambda _now: {
-            "max_spread_bps": 150.0,
-            "rest_timeout_ms": 300,
-            "max_rest_age_ms": 1500.0,
-        },
     )
     monkeypatch.setattr(
         handlers,
@@ -772,16 +781,6 @@ def test_fast_exit_dispatch_survives_claim_logging_failure(monkeypatch):
     monkeypatch.setattr(
         handlers, "_scalping_micro_estimator_log_fields", lambda **_kwargs: {}
     )
-    monkeypatch.setattr(
-        handlers,
-        "_evaluate_scalp_trailing_loss_conversion_recheck",
-        lambda **_kwargs: False,
-    )
-    monkeypatch.setattr(
-        handlers,
-        "_evaluate_scalp_trailing_continuation_recheck",
-        lambda **_kwargs: False,
-    )
     dispatches = []
     monkeypatch.setattr(
         handlers,
@@ -797,12 +796,15 @@ def test_fast_exit_dispatch_survives_claim_logging_failure(monkeypatch):
         "status": "HOLDING",
         "buy_price": 10_000,
         "buy_qty": 1,
+        "scalp_trailing_trusted_peak_price": 10_077,
+        "scalp_trailing_peak_basis_price": 10_000,
+        "scalp_trailing_peak_position_key": "record:1",
     }
 
     assert handlers.evaluate_and_dispatch_fast_scalp_exit(
         stock,
         "123456",
-        {"curr": 9_800},
+        {"curr": 9_800, "best_bid": 9_800, "last_ws_update_ts": now_ts},
         now_ts=now_ts,
     )
     assert len(dispatches) == 1
@@ -810,276 +812,8 @@ def test_fast_exit_dispatch_survives_claim_logging_failure(monkeypatch):
     assert stock["exit_requested"] is True
 
 
-def test_fast_exit_uses_trailing_continuation_owner_before_claim(monkeypatch):
-    now_ts = 1_784_778_400.0
-    active_date = datetime.fromtimestamp(now_ts, tz=handlers._KST).date().isoformat()
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ENABLED", "true")
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ACTIVE_DATE", active_date)
-    monkeypatch.setattr(
-        handlers,
-        "_build_quote_consistency_fields",
-        lambda *args, **kwargs: (
-            {"quote_consistency_state": "consistent", "quote_consistency_reason": "ok"},
-            9_800,
-            0,
-            9_800,
-        ),
-    )
-    monkeypatch.setattr(
-        handlers,
-        "calculate_net_profit_rate",
-        lambda buy_price, price: ((float(price) - float(buy_price)) / float(buy_price))
-        * 100.0,
-    )
-    monkeypatch.setattr(
-        handlers,
-        "_rule_float",
-        lambda name, default=0.0: {
-            "SCALP_TRAILING_START_PCT": 0.6,
-            "SCALP_TRAILING_LIMIT_WEAK": 0.4,
-            "SCALP_TRAILING_LIMIT_STRONG": 0.8,
-        }.get(name, default),
-    )
-    monkeypatch.setattr(handlers, "_has_active_sell_order_pending", lambda stock: False)
-    monkeypatch.setattr(handlers, "_is_any_simulated_position", lambda *args: False)
-    monkeypatch.setattr(
-        handlers,
-        "_holding_score_runtime_context",
-        lambda *args, **kwargs: {"usable_for_negative_exit": False},
-    )
-    monkeypatch.setattr(
-        handlers, "_scalping_micro_estimator_log_fields", lambda **_kwargs: {}
-    )
-    monkeypatch.setattr(
-        handlers,
-        "_evaluate_scalp_trailing_loss_conversion_recheck",
-        lambda **_kwargs: False,
-    )
-    continuation_calls = []
-    monkeypatch.setattr(
-        handlers,
-        "_evaluate_scalp_trailing_continuation_recheck",
-        lambda **kwargs: continuation_calls.append(kwargs) or True,
-    )
-    monkeypatch.setattr(
-        handlers,
-        "_dispatch_scalp_preset_exit",
-        lambda **_kwargs: (_ for _ in ()).throw(
-            AssertionError("deferred trailing must not dispatch")
-        ),
-    )
-    handlers.HIGHEST_PRICES = {"123456": 10_077}
-    stock = {
-        "name": "지엔씨에너지",
-        "code": "123456",
-        "strategy": "SCALPING",
-        "status": "HOLDING",
-        "buy_price": 10_000,
-        "buy_qty": 1,
-    }
-
-    assert (
-        handlers.evaluate_and_dispatch_fast_scalp_exit(
-            stock, "123456", {"curr": 9_800}, now_ts=now_ts
-        )
-        is False
-    )
-    assert len(continuation_calls) == 1
-    assert continuation_calls[0]["recheck_invoker"] == "fast_exit_monitor"
-    envelope = continuation_calls[0]["decision_quote_envelope"]
-    assert envelope["exit_quote_envelope_id"]
-    assert envelope["exit_quote_envelope_base_best_bid"] == 9_800
-    assert envelope["exit_quote_envelope_base_mark_price"] == 9_800
-    assert stock.get("exit_token") in (None, "")
-    assert stock.get("exit_requested") is not True
-
-    dispatches = []
-    monkeypatch.setattr(
-        handlers,
-        "_dispatch_scalp_preset_exit",
-        lambda **kwargs: dispatches.append(kwargs),
-    )
-    hard_stop_stock = dict(stock, hard_stop_pct=-1.0)
-    assert handlers.evaluate_and_dispatch_fast_scalp_exit(
-        hard_stop_stock, "123456", {"curr": 9_800}, now_ts=now_ts
-    )
-    assert len(continuation_calls) == 1
-    assert dispatches[0]["exit_rule"] == "scalp_hard_stop_pct"
-
-    monkeypatch.setattr(
-        handlers,
-        "_pyramid_post_add_trailing_grace",
-        lambda *_args, **_kwargs: (True, 1.0, 2.0),
-    )
-    monkeypatch.setattr(
-        handlers, "_log_pyramid_post_add_trailing_grace", lambda *_args, **_kwargs: None
-    )
-    pyramid_stock = dict(stock)
-    assert (
-        handlers.evaluate_and_dispatch_fast_scalp_exit(
-            pyramid_stock, "123456", {"curr": 9_800}, now_ts=now_ts
-        )
-        is False
-    )
-    assert len(continuation_calls) == 1
-    assert len(dispatches) == 1
 
 
-@pytest.mark.parametrize(
-    ("reuse_allowed", "expected_triggered", "expected_decision_price"),
-    (
-        (True, True, 9_790),
-        (False, False, None),
-    ),
-)
-def test_fast_exit_reuses_or_blocks_continuation_recheck_quote_envelope(
-    monkeypatch,
-    reuse_allowed,
-    expected_triggered,
-    expected_decision_price,
-):
-    now_ts = 1_784_778_400.0
-    active_date = datetime.fromtimestamp(now_ts, tz=handlers._KST).date().isoformat()
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ENABLED", "true")
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ACTIVE_DATE", active_date)
-    monkeypatch.setattr(
-        handlers,
-        "_build_quote_consistency_fields",
-        lambda *args, **kwargs: (
-            {"quote_consistency_state": "consistent", "quote_consistency_reason": "ok"},
-            9_800,
-            9_801,
-            9_800,
-        ),
-    )
-    monkeypatch.setattr(
-        handlers,
-        "_fast_exit_execution_route_fields",
-        lambda *args, **kwargs: {
-            "fast_exit_broker_route": "SOR",
-            "fast_exit_execution_cohort": "KRX",
-            "fast_exit_route_source_quality_blocked": False,
-            "fast_exit_broker_route_blocked": False,
-        },
-    )
-    monkeypatch.setattr(
-        handlers,
-        "calculate_net_profit_rate",
-        lambda buy_price, price: ((float(price) - float(buy_price)) / float(buy_price))
-        * 100.0,
-    )
-    monkeypatch.setattr(
-        handlers,
-        "_rule_float",
-        lambda name, default=0.0: {
-            "SCALP_TRAILING_START_PCT": 0.6,
-            "SCALP_TRAILING_LIMIT_WEAK": 0.4,
-            "SCALP_TRAILING_LIMIT_STRONG": 0.8,
-        }.get(name, default),
-    )
-    monkeypatch.setattr(handlers, "_has_active_sell_order_pending", lambda stock: False)
-    monkeypatch.setattr(handlers, "_is_any_simulated_position", lambda *args: False)
-    monkeypatch.setattr(
-        handlers,
-        "_holding_score_runtime_context",
-        lambda *args, **kwargs: {"usable_for_negative_exit": False},
-    )
-    monkeypatch.setattr(handlers, "_holding_score_role_log_fields", lambda context: {})
-    monkeypatch.setattr(
-        handlers, "_scalping_micro_estimator_log_fields", lambda **_kwargs: {}
-    )
-    monkeypatch.setattr(
-        handlers,
-        "_evaluate_scalp_trailing_loss_conversion_recheck",
-        lambda **_kwargs: False,
-    )
-
-    def continuation_recheck(**kwargs):
-        envelope = kwargs["decision_quote_envelope"]
-        envelope.update(
-            {
-                "exit_quote_envelope_recheck_attempted": True,
-                "exit_quote_envelope_recheck_rest_state": "ok",
-                "exit_quote_envelope_recheck_rest_elapsed_ms": 12.0,
-                "exit_quote_envelope_recheck_reuse_allowed": reuse_allowed,
-                "exit_quote_envelope_recheck_block_reason": (
-                    "-" if reuse_allowed else "recheck_quote_conflicted"
-                ),
-                "exit_quote_envelope_recheck_mark_price": 9_795,
-                "exit_quote_envelope_recheck_best_ask": 9_800,
-                "exit_quote_envelope_recheck_best_bid": 9_790,
-                "exit_quote_envelope_recheck_rest_snapshot": {
-                    "best_bid": 9_790,
-                    "best_ask": 9_800,
-                    "rest_received_ts": now_ts,
-                },
-                "exit_quote_envelope_recheck_quote_fields": {
-                    "quote_consistency_state": (
-                        "consistent" if reuse_allowed else "diverged"
-                    ),
-                    "quote_consistency_reason": (
-                        "ok" if reuse_allowed else "quote_diverged"
-                    ),
-                },
-            }
-        )
-        return False
-
-    monkeypatch.setattr(
-        handlers,
-        "_evaluate_scalp_trailing_continuation_recheck",
-        continuation_recheck,
-    )
-    logs = []
-    monkeypatch.setattr(
-        handlers,
-        "_log_holding_pipeline",
-        lambda stock, code, stage, **fields: logs.append((stage, fields)),
-    )
-    dispatches = []
-    monkeypatch.setattr(
-        handlers,
-        "_dispatch_scalp_preset_exit",
-        lambda **kwargs: dispatches.append(kwargs),
-    )
-    handlers.HIGHEST_PRICES = {"123456": 10_077}
-    stock = {
-        "name": "quote-envelope",
-        "code": "123456",
-        "strategy": "SCALPING",
-        "status": "HOLDING",
-        "buy_price": 10_000,
-        "buy_qty": 1,
-    }
-
-    triggered = handlers.evaluate_and_dispatch_fast_scalp_exit(
-        stock,
-        "123456",
-        {"curr": 9_800},
-        now_ts=now_ts,
-    )
-
-    assert triggered is expected_triggered
-    if reuse_allowed:
-        assert len(dispatches) == 1
-        assert (
-            dispatches[0]["ws_data"]["executable_sell_price"] == expected_decision_price
-        )
-        claim = next(
-            fields for stage, fields in logs if stage == "scalp_fast_exit_claimed"
-        )
-        assert claim["decision_price"] == expected_decision_price
-        assert claim["exit_quote_envelope_recheck_reuse_allowed"] is True
-    else:
-        assert dispatches == []
-        assert not stock.get("exit_token")
-        blocked = next(
-            fields
-            for stage, fields in logs
-            if stage == "scalp_fast_exit_quote_envelope_blocked"
-        )
-        assert blocked["block_reason"] == "recheck_quote_conflicted"
-        assert blocked["exit_quote_envelope_recheck_reuse_allowed"] is False
 
 
 def _nxt_quote_snapshot(code: str, now_ts: float) -> dict:

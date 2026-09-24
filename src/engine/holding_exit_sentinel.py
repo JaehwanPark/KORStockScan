@@ -1085,8 +1085,8 @@ def _followup_route(classification: dict[str, Any]) -> dict[str, Any]:
         }
     if primary == "TRAILING_EARLY_EXIT":
         return {
-            "route": "trailing_continuation_report_only_review",
-            "owner": "scalp_trailing_continuation_recheck",
+            "route": "trailing_threshold_source_review",
+            "owner": "scalp_trailing_take_profit",
             "operator_action_required": False,
             "runtime_effect": "report_only_no_mutation",
             "next_artifact": "holding_exit_observation",

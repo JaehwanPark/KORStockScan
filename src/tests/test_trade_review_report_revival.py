@@ -1,6 +1,27 @@
 from src.engine import sniper_trade_review_report as report_mod
 
 
+def test_trailing_transitions_survive_timeline_and_projection():
+    events = [
+        report_mod.HoldingEvent(
+            timestamp=f"2026-09-24 09:00:0{index}",
+            name="TEST",
+            code="123456",
+            stage="scalp_trailing_input_transition",
+            fields={"id": "1", "armed": str(index == 1)},
+            raw_line="",
+        )
+        for index in (0, 1)
+    ]
+
+    timeline = report_mod._build_timeline(events)
+
+    assert len(timeline) == 2
+    assert [row["fields"]["armed"] for row in timeline] == ["False", "True"]
+    assert "scalp_trailing_input_transition" in report_mod._PROJECTION_EVENT_STAGES
+    assert "scalp_tp_alternative_observed" in report_mod._PROJECTION_EVENT_STAGES
+
+
 def test_completed_projection_keeps_full_population_beyond_display_limit(monkeypatch):
     trades = [
         {

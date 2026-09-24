@@ -316,7 +316,7 @@ def pending_report_shell(snapshot_kind: str, target_date: str) -> dict[str, Any]
             "readiness": {},
             "cohorts": {},
             "exit_rule_quality": [],
-            "trailing_continuation": {},
+            "trailing_threshold_readiness": {},
             "soft_stop_rebound": {},
             "same_symbol_reentry": {},
             "opportunity_cost": {},

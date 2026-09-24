@@ -39,6 +39,8 @@ _DISPLAY_STAGE_LABELS = {
     "preset_exit_setup_disabled_trailing_unified": "Preset TP 설치 비활성화",
     "preset_exit_sync_disabled_trailing_unified": "Preset TP 동기화 비활성화",
     "scalp_preset_tp_disabled_trailing_unified": "Preset TP 주문 취소 후 trailing 통일",
+    "scalp_trailing_input_transition": "트레일링 입력 전이",
+    "scalp_tp_alternative_observed": "대체 익절 후보 관측",
     "exit_signal": "청산 시그널",
     "sell_order_sent": "매도 주문 전송",
     "sell_order_failed": "매도 주문 실패",
@@ -465,7 +467,11 @@ def _match_trade_events(trade: dict, events: list[HoldingEvent]) -> list[Holding
 def _build_timeline(events: list[HoldingEvent]) -> list[dict[str, Any]]:
     timeline: list[dict[str, Any]] = []
     for event in events:
-        if timeline and timeline[-1]["stage"] == event.stage:
+        if (
+            timeline
+            and timeline[-1]["stage"] == event.stage
+            and event.stage != "scalp_trailing_input_transition"
+        ):
             continue
         timeline.append(
             {
@@ -1155,6 +1161,8 @@ _PROJECTION_EVENT_STAGES = {
     "holding_flow_max_defer_bullish_extension",
     "holding_flow_override_force_exit",
     "holding_flow_override_confirm_exit",
+    "scalp_trailing_input_transition",
+    "scalp_tp_alternative_observed",
 }
 
 

@@ -909,8 +909,9 @@ _SELL_RECEIPT_SNAPSHOT_KEYS = (
     "pre_add_avg_price",
     "pre_add_qty",
     "scalp_live_simulator",
-    "scalp_trailing_continuation_recheck_consumed_id",
-    "scalp_trailing_continuation_recheck_consumed_position_key",
+    "scalp_trailing_trusted_peak_price",
+    "scalp_trailing_peak_position_key",
+    "scalp_trailing_observation_sequence",
     "scale_in_incremental_realized_delta_pct",
     "last_add_position_episode_id",
     "last_add_scale_in_decision_id",
@@ -1288,6 +1289,14 @@ _SELL_COMPLETE_RESET_KEYS = (
     "fast_exit_last_error",
     "fast_exit_trigger_kind",
     "fast_exit_rest_retry_after",
+    "scalp_trailing_trusted_peak_price",
+    "scalp_trailing_peak_basis_price",
+    "scalp_trailing_peak_position_key",
+    "scalp_trailing_rest_retry_after",
+    "scalp_trailing_observation_position_key",
+    "scalp_trailing_observation_state",
+    "scalp_trailing_observation_sequence",
+    "scalp_holding_source_position_token",
     *_GENERAL_ENTRY_MARGIN_POSITION_KEYS,
     *_FAST_EXIT_DECISION_RESET_KEYS,
     *_EXIT_DECISION_RESET_KEYS,
@@ -2085,19 +2094,6 @@ def _lifecycle_submit_trace_id(
     ):
         return ""
     return value
-
-
-def _trailing_continuation_receipt_fields(stock: dict[str, Any]) -> dict[str, Any]:
-    """Carry the exact recheck lineage into the terminal broker receipt."""
-    return {
-        "trailing_continuation_recheck_id": str(
-            stock.get("scalp_trailing_continuation_recheck_consumed_id") or "-"
-        ),
-        "trailing_continuation_position_key": str(
-            stock.get("scalp_trailing_continuation_recheck_consumed_position_key")
-            or "-"
-        ),
-    }
 
 
 def _main_lifecycle_exit_economics_fields(
@@ -3071,7 +3067,12 @@ def _standard_sell_final_lifecycle_outbox_leg(
         "mfe_pct": receipt_snapshot.get("mfe_pct", "-"),
         **_broker_execution_provenance_fields(receipt_snapshot),
         **_sell_execution_provenance_fields(receipt_snapshot),
-        **_trailing_continuation_receipt_fields(receipt_snapshot),
+        "scalp_trailing_trusted_peak_price": receipt_snapshot.get(
+            "scalp_trailing_trusted_peak_price", "-"
+        ),
+        "scalp_trailing_observation_sequence": receipt_snapshot.get(
+            "scalp_trailing_observation_sequence", "-"
+        ),
         **final_leg_economics,
         **scout_ai_execution_attribution_fields(
             receipt_snapshot,

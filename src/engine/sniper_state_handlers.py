@@ -286,6 +286,7 @@ from src.trading.market.quote_consistency import (
     build_quote_consistency_snapshot,
     quote_input_from_rest_orderbook,
     quote_input_from_ws,
+    ws_trade_receive_age_ms,
 )
 from src.trading.order.tick_utils import clamp_price_to_tick, move_price_down_by_bps
 from src.trading.order.owner_custody_registry import (
@@ -350,6 +351,7 @@ from src.engine.scalping.scale_in_split_order_plan import (
 )
 from src.trading.order.split_execution_math import scale_in_leg_ttl_seconds
 from src.engine.scalping.position_peak_ledger import POSITION_PEAK_LEDGER
+from src.engine.scalping.trailing_exit_decision import evaluate_trailing_take_profit
 from src.engine.scalping.scanner_async_eval import (
     ScannerAsyncEvalContext,
     ScannerAsyncEvalCoordinator,
@@ -1146,17 +1148,10 @@ _SCALP_LOSS_REENTRY_EVENT_CACHE: dict[str, Any] = {
 }
 _HOLDING_FLOW_OVERRIDE_EXIT_RULES = {
     "scalp_soft_stop_pct",
-    "scalp_ai_momentum_decay",
-    "scalp_trailing_take_profit",
-    "scalp_profit_stagnation_time_exit",
-    "scalp_low_profit_stagnation_hard_exit",
     "scalp_bad_entry_refined_canary",
 }
 _SCALP_FRESH_QUOTE_REQUIRED_DISCRETIONARY_EXIT_RULES = {
-    "scalp_ai_momentum_decay",
     "scalp_trailing_take_profit",
-    "scalp_profit_stagnation_time_exit",
-    "scalp_low_profit_stagnation_hard_exit",
     "scalp_same_session_terminal_exit",
 }
 _PROFIT_STAGNATION_STATE_FIELDS = (
@@ -3693,6 +3688,46 @@ def _strategy_owner_component_fields(stock):
         "strategy_owner_context_sha256": state["context_sha256"],
         "strategy_owner_component_state": state["status"],
     }
+
+
+def _observe_scalp_tp_alternative(
+    stock: dict,
+    code: str,
+    *,
+    exit_rule: str,
+    would_exit: bool,
+    profit_rate: float,
+    peak_profit: float,
+    now_ts: float,
+) -> None:
+    """Emit a transition receipt without granting another take-profit owner."""
+
+    states = stock.setdefault("_scalp_tp_alternative_observation", {})
+    if not isinstance(states, dict):
+        states = {}
+        stock["_scalp_tp_alternative_observation"] = states
+    previous = bool(states.get(exit_rule))
+    if previous == bool(would_exit):
+        return
+    states[exit_rule] = bool(would_exit)
+    try:
+        _log_holding_pipeline(
+            stock,
+            code,
+            "scalp_tp_alternative_observed",
+            exit_rule=exit_rule,
+            would_exit=bool(would_exit),
+            profit_rate=f"{profit_rate:+.2f}",
+            peak_profit=f"{peak_profit:+.2f}",
+            observed_at=now_ts,
+            metric_role="funnel_count",
+            decision_authority="source_only_no_real_sell",
+            runtime_effect=False,
+            actual_order_submitted=False,
+        )
+    except Exception as exc:
+        # Read-only observation must never block an already chosen SELL.
+        log_error(f"[SCALP_TP_OBSERVATION] {code} {exit_rule}: {exc}")
 
 
 def _evaluate_scalp_profit_stagnation_exit(
@@ -10394,36 +10429,6 @@ def _resolve_last_add_timestamp(stock, *, now_ts=None):
         if history_ts > 0:
             candidates.append(history_ts)
     return min(candidates) if candidates else 0.0
-
-
-def _pyramid_post_add_trailing_grace(stock, now_ts):
-    return False, 0, 0
-
-
-def _log_pyramid_post_add_trailing_grace(
-    stock, code, *, now_ts, exit_rule_candidate, profit_rate, peak_profit, drawdown
-):
-    last_log = float(stock.get("last_pyramid_post_add_trailing_grace_log_ts", 0) or 0)
-    if now_ts - last_log < 15:
-        return
-    active, elapsed_sec, grace_sec = _pyramid_post_add_trailing_grace(stock, now_ts)
-    if not active:
-        return
-    _mutate_stock_state(
-        stock, set_fields={"last_pyramid_post_add_trailing_grace_log_ts": now_ts}
-    )
-    _log_holding_pipeline(
-        stock,
-        code,
-        "pyramid_post_add_trailing_grace",
-        exit_rule_candidate=exit_rule_candidate,
-        profit_rate=f"{profit_rate:+.2f}",
-        peak_profit=f"{peak_profit:+.2f}",
-        drawdown=f"{drawdown:.2f}",
-        elapsed_sec=elapsed_sec,
-        grace_sec=grace_sec,
-        last_add_type=stock.get("last_add_type", "-"),
-    )
 
 
 def _append_holding_price_sample(stock, *, now_ts, curr_price):
@@ -19678,6 +19683,12 @@ def _scalp_exit_threshold_observation_fields(
     trailing_limit_pct=None,
     trailing_drawdown_pct=None,
     strong_trailing: bool = False,
+    trailing_peak_price=None,
+    trailing_executable_bid=None,
+    trailing_bid_source: str = "",
+    trailing_trigger_kind: str = "",
+    current_ai_score=None,
+    ai_score_usable: bool = False,
 ) -> dict[str, Any]:
     """Record the evaluated branch, never a new source of exit authority."""
     try:
@@ -19732,6 +19743,41 @@ def _scalp_exit_threshold_observation_fields(
                 and math.isfinite(float(trailing_start_pct))
                 else "-"
             ),
+            "exit_threshold_trailing_arm_observed_pct": (
+                round(float(peak_profit), 6)
+                if rule == "scalp_trailing_take_profit"
+                else "-"
+            ),
+            "exit_threshold_strong_score_key": (
+                "SCALP_TRAILING_STRONG_AI_SCORE"
+                if rule == "scalp_trailing_take_profit"
+                else "-"
+            ),
+            "exit_threshold_strong_score_effective": (
+                _rule_float("SCALP_TRAILING_STRONG_AI_SCORE", 75.0)
+                if rule == "scalp_trailing_take_profit"
+                else "-"
+            ),
+            "exit_threshold_ai_score_observed": (
+                round(float(current_ai_score), 6)
+                if rule == "scalp_trailing_take_profit"
+                and current_ai_score is not None
+                and math.isfinite(float(current_ai_score))
+                else "-"
+            ),
+            "exit_threshold_ai_score_usable": bool(ai_score_usable),
+            "exit_threshold_peak_price": (
+                _safe_int(trailing_peak_price, 0)
+                if rule == "scalp_trailing_take_profit"
+                else 0
+            ),
+            "exit_threshold_executable_bid": (
+                _safe_int(trailing_executable_bid, 0)
+                if rule == "scalp_trailing_take_profit"
+                else 0
+            ),
+            "exit_threshold_bid_source": trailing_bid_source or "-",
+            "exit_threshold_trigger_kind": trailing_trigger_kind or "-",
             "exit_threshold_runtime_pid": os.getpid(),
             # This is an effective branch value, not proof of env/policy origin.
             "exit_threshold_provenance_status": "effective_branch_only",
@@ -20476,18 +20522,6 @@ def _mark_owner_registry_buy_reconciliation(
     )
 
 
-def _exit_quote_envelope_log_fields(envelope: dict | None) -> dict[str, Any]:
-    if not isinstance(envelope, dict):
-        return {}
-    internal_fields = {
-        "exit_quote_envelope_recheck_rest_snapshot",
-        "exit_quote_envelope_recheck_quote_fields",
-    }
-    return {
-        key: value
-        for key, value in envelope.items()
-        if key not in internal_fields and key.startswith("exit_quote_envelope_")
-    }
 
 
 def _log_scale_in_counterfactual_started(
@@ -28658,6 +28692,227 @@ def _dispatch_scalp_preset_exit(
     )
 
 
+def _trusted_scalp_trailing_bid(
+    ws_data: dict | None,
+    *,
+    code: str,
+    quote_fields: dict | None,
+    now_ts: float,
+    rest_snapshot: dict | None = None,
+    rest_request_code: str = "",
+) -> tuple[int, str]:
+    """Require a fresh real BBO level; a mark-price fallback is not a bid."""
+
+    fields = quote_fields if isinstance(quote_fields, dict) else {}
+    state = str(fields.get("quote_consistency_state") or "").lower()
+    reason = str(fields.get("quote_consistency_reason") or "").lower()
+    if state in {"missing", "diverged", "blocked", "stale"} or reason in {
+        "quote_stale",
+        "stale_quote",
+        "conflicted",
+        "price_conflict",
+    }:
+        return 0, "quote_quality_blocked"
+    if _truthy_log_value(fields.get("quote_consistency_entry_blocked")):
+        return 0, "quote_quality_blocked"
+    expected_code = str(code or "").strip()[:6]
+    snapshot = ws_data if isinstance(ws_data, dict) else {}
+    snapshot_code = str(snapshot.get("code") or snapshot.get("stock_code") or "").strip()[:6]
+    quote_items = snapshot.get("last_realtime_type_item")
+    quote_item = (
+        str(quote_items.get("0D") or "").strip()[:6]
+        if isinstance(quote_items, dict)
+        else ""
+    )
+    if not expected_code or (snapshot_code and snapshot_code != expected_code) or (
+        quote_item and quote_item != expected_code
+    ):
+        return 0, "quote_symbol_mismatch"
+    config = QuoteConsistencyConfig.from_env()
+    if rest_snapshot:
+        rest = quote_input_from_rest_orderbook(rest_snapshot, now_ts=now_ts)
+        if (
+            rest_snapshot.get("source") == "ka10004_rest_orderbook"
+            and rest_snapshot.get("rest_received_ts_ms") is not None
+            and str(rest_snapshot.get("stock_code") or "").strip()[:6]
+            == expected_code
+            and str(rest_snapshot.get("request_code") or "").strip().upper()
+            == str(rest_request_code or "").strip().upper()
+            and rest.best_bid > 0
+            and rest.age_ms is not None
+            and 0 <= rest.age_ms <= config.max_rest_age_ms
+        ):
+            return int(rest.best_bid), "fresh_rest_executable_bid"
+    ws = quote_input_from_ws(ws_data or {}, now_ts=now_ts)
+    if (
+        ws.best_bid > 0
+        and ws.age_ms is not None
+        and 0 <= ws.age_ms <= config.max_ws_age_ms
+    ):
+        return int(ws.best_bid), "fresh_ws_executable_bid"
+    return 0, "executable_bid_missing_or_stale"
+
+
+def _trusted_scalp_peak_mark(ws_data: dict | None, *, now_ts: float) -> int:
+    """Only an actual fresh trade receipt can extend a take-profit peak."""
+
+    snapshot = ws_data if isinstance(ws_data, dict) else {}
+    if snapshot.get("ws_snapshot_recovery_source") or _boolish_true(
+        snapshot.get("quote_stale")
+    ):
+        return 0
+    age_ms = ws_trade_receive_age_ms(snapshot, now_ts=now_ts)
+    if age_ms is None or not 0 <= age_ms <= QuoteConsistencyConfig.from_env().max_ws_age_ms:
+        return 0
+    return _safe_int(snapshot.get("curr"), 0)
+
+
+def _scalp_trailing_trusted_peak(
+    stock: dict, code: str, ws_data: dict | None, *, buy_price: float, now_ts: float
+) -> int:
+    """Keep the take-profit peak independent of the safety/protect peak ledger."""
+
+    mark = _trusted_scalp_peak_mark(ws_data, now_ts=now_ts)
+    with ENTRY_LOCK:
+        position_key = _scalp_holding_source_position_key(stock, code)
+        basis = _safe_float(stock.get("scalp_trailing_peak_basis_price"), 0.0)
+        if (
+            stock.get("scalp_trailing_peak_position_key") != position_key
+            or basis != buy_price
+            or stock.get("peak_rebaseline_pending")
+        ):
+            stock["scalp_trailing_trusted_peak_price"] = max(
+                1, _safe_int(buy_price, 0), mark
+            )
+            stock["scalp_trailing_peak_basis_price"] = buy_price
+            stock["scalp_trailing_peak_position_key"] = position_key
+        elif mark > 0:
+            stock["scalp_trailing_trusted_peak_price"] = max(
+                _safe_int(stock.get("scalp_trailing_trusted_peak_price"), 0), mark
+            )
+        return _safe_int(stock.get("scalp_trailing_trusted_peak_price"), 0)
+
+
+def _observe_scalp_trailing_input_transition(
+    stock: dict,
+    code: str,
+    *,
+    ws_data: dict | None,
+    decision,
+    peak_price: int,
+    executable_bid: int,
+    bid_source: str,
+    strong: bool,
+    ai_score: float,
+    ai_usable: bool,
+    start_pct: float,
+    now_ts: float,
+    evaluator: str,
+) -> None:
+    """Keep bounded arm, source-quality and trigger transitions for replay."""
+
+    snapshot = ws_data if isinstance(ws_data, dict) else {}
+    times = snapshot.get("last_realtime_type_ts")
+    times = times if isinstance(times, dict) else {}
+    state = (
+        bool(decision.armed),
+        bool(decision.triggered),
+        bool(decision.price_usable),
+        bool(strong),
+        bid_source,
+    )
+    with ENTRY_LOCK:
+        position_key = _scalp_holding_source_position_key(stock, code)
+        previous_key = stock.get("scalp_trailing_observation_position_key")
+        previous_state = stock.get("scalp_trailing_observation_state")
+        if previous_key == position_key and previous_state == state:
+            return
+        stock["scalp_trailing_observation_position_key"] = position_key
+        stock["scalp_trailing_observation_state"] = state
+        sequence = _safe_int(stock.get("scalp_trailing_observation_sequence"), 0) + 1
+        stock["scalp_trailing_observation_sequence"] = sequence
+    try:
+        _log_holding_pipeline(
+            stock,
+            code,
+            "scalp_trailing_input_transition",
+            position_key=position_key,
+            event_sequence=sequence,
+            evaluation_at_epoch=now_ts,
+            evaluator=evaluator,
+            armed=decision.armed,
+            triggered=decision.triggered,
+            trigger_kind=decision.trigger_kind or "-",
+            price_usable=decision.price_usable,
+            source_gap=not decision.price_usable,
+            peak_price=peak_price,
+            executable_bid=executable_bid,
+            bid_source=bid_source,
+            ws_trade_received_at_epoch=times.get("0B") or snapshot.get("last_ws_update_ts"),
+            ws_quote_received_at_epoch=times.get("0D") or snapshot.get("last_ws_update_ts"),
+            trailing_start_pct=start_pct,
+            trailing_limit_key=decision.threshold_key,
+            trailing_limit_pct=decision.threshold_pct,
+            trailing_drawdown_pct=decision.drawdown_pct,
+            strong=strong,
+            strong_score_threshold=_rule_float("SCALP_TRAILING_STRONG_AI_SCORE", 75),
+            ai_score=ai_score,
+            ai_score_usable=ai_usable,
+            metric_role="funnel_count",
+            decision_authority="scalp_trailing_take_profit_observation_only",
+            actual_order_submitted=False,
+            runtime_effect=False,
+        )
+    except Exception as exc:
+        log_error(f"[SCALP_TRAILING_INPUT] {code} transition logging failed: {exc}")
+
+
+def _recover_scalp_trailing_bid_for_normal(
+    stock: dict, code: str, ws_data: dict, *, now_ts: float
+) -> tuple[int, str]:
+    """Attempt one bounded, venue-qualified book refresh after stop evaluation."""
+
+    route = _fast_exit_execution_route_fields(stock, code, ws_data, now_ts=now_ts)
+    if route.get("fast_exit_broker_route_blocked"):
+        return 0, "broker_route_blocked"
+    retry_after = _safe_float(stock.get("scalp_trailing_rest_retry_after"), 0.0)
+    if now_ts < retry_after:
+        return 0, "rest_retry_interval"
+    stock["scalp_trailing_rest_retry_after"] = (
+        now_ts + _holding_rest_quote_fallback_min_interval_sec()
+    )
+    session = resolve_entry_candle_session(now_ts=now_ts)
+    venue = resolve_entry_candle_venue(ws_data, session=session)
+    request_code = resolve_entry_candle_request_code(
+        code, venue=venue, session=session, ws_data=ws_data
+    )
+    rest, state, _ = _fetch_rest_orderbook_snapshot_bounded(
+        request_code,
+        QuoteConsistencyConfig.from_env().emergency_rest_timeout_ms,
+        explicit_request_code=True,
+    )
+    if state != "ok" or not rest:
+        return 0, f"rest_{state}"
+    route = _fast_exit_execution_route_fields(
+        stock, code, ws_data, rest_snapshot=rest, now_ts=now_ts
+    )
+    if route.get("fast_exit_broker_route_blocked") or route.get(
+        "fast_exit_route_source_quality_blocked"
+    ):
+        return 0, "rest_route_unproven"
+    fields, _, _, _ = _build_quote_consistency_fields(
+        ws_data, rest_snapshot=rest, side="sell", now_ts=now_ts
+    )
+    return _trusted_scalp_trailing_bid(
+        ws_data,
+        code=code,
+        quote_fields=fields,
+        rest_snapshot=rest,
+        rest_request_code=request_code,
+        now_ts=now_ts,
+    )
+
+
 def evaluate_and_dispatch_fast_scalp_exit(
     stock: dict,
     code: str,
@@ -28665,11 +28920,10 @@ def evaluate_and_dispatch_fast_scalp_exit(
     *,
     now_ts: float | None = None,
 ) -> bool:
-    """Claim and dispatch an existing scalp safety exit without AI/scale-in work."""
+    """Claim an always-on scalp trailing exit and any enabled fast safety exit."""
 
     observed_at = float(time.time() if now_ts is None else now_ts)
-    if not _scalp_fast_exit_guard_active(now_ts=observed_at):
-        return False
+    fast_stop_enabled = _scalp_fast_exit_guard_active(now_ts=observed_at)
     existing_exit_token = str(stock.get("exit_token") or "").strip()
     retry_pending = bool(existing_exit_token and stock.get("fast_exit_retry_pending"))
     strategy = normalize_strategy(stock.get("strategy"))
@@ -28697,6 +28951,13 @@ def evaluate_and_dispatch_fast_scalp_exit(
     buy_qty = _safe_int(stock.get("buy_qty"), 0)
     if buy_price <= 0 or buy_qty <= 0:
         return False
+    peak_price = _scalp_trailing_trusted_peak(
+        stock, code, ws_data, buy_price=buy_price, now_ts=observed_at
+    )
+    peak_profit = calculate_net_profit_rate(buy_price, peak_price)
+    trailing_start_pct = _rule_float("SCALP_TRAILING_START_PCT", 0.6)
+    if not fast_stop_enabled and not retry_pending and peak_profit < trailing_start_pct:
+        return False
 
     rest_snapshot: dict[str, Any] = {}
     route_fields = _fast_exit_execution_route_fields(
@@ -28718,6 +28979,16 @@ def evaluate_and_dispatch_fast_scalp_exit(
             },
         )
         return False
+    fast_quote_session = resolve_entry_candle_session(now_ts=observed_at)
+    fast_quote_venue = resolve_entry_candle_venue(
+        ws_data, session=fast_quote_session
+    )
+    fast_rest_request_code = resolve_entry_candle_request_code(
+        code,
+        venue=fast_quote_venue,
+        session=fast_quote_session,
+        ws_data=ws_data,
+    )
 
     quote_fields, mark_price, executable_buy_price, executable_sell_price = (
         _build_quote_consistency_fields(ws_data, side="sell", now_ts=observed_at)
@@ -28766,8 +29037,9 @@ def evaluate_and_dispatch_fast_scalp_exit(
         stock["fast_exit_rest_retry_after"] = observed_at + 1.0
         rest_snapshot, rest_state, rest_elapsed_ms = (
             _fetch_rest_orderbook_snapshot_bounded(
-                code,
+                fast_rest_request_code,
                 QuoteConsistencyConfig.from_env().emergency_rest_timeout_ms,
+                explicit_request_code=True,
             )
         )
         quote_fields, mark_price, executable_buy_price, executable_sell_price = (
@@ -28813,27 +29085,18 @@ def evaluate_and_dispatch_fast_scalp_exit(
         )
         return False
 
-    decision_price = _safe_int(executable_sell_price or mark_price, 0)
+    trusted_bid, trusted_bid_source = _trusted_scalp_trailing_bid(
+        ws_data,
+        code=code,
+        quote_fields=quote_fields,
+        now_ts=observed_at,
+        rest_snapshot=rest_snapshot,
+        rest_request_code=fast_rest_request_code,
+    )
+    decision_price = _safe_int(trusted_bid or executable_sell_price or mark_price, 0)
     if decision_price <= 0:
         return False
-    price_key = _price_tracking_key(stock, code)
-    with ENTRY_LOCK:
-        peak_price = max(
-            _safe_int((HIGHEST_PRICES or {}).get(price_key), 0),
-            decision_price,
-        )
-        if isinstance(HIGHEST_PRICES, dict):
-            HIGHEST_PRICES[price_key] = peak_price
-    _persist_scalping_position_peak(
-        stock,
-        code,
-        peak_price=peak_price,
-        observed_at=observed_at,
-        reason="fast_exit_peak_observation",
-    )
     profit_rate = calculate_net_profit_rate(buy_price, decision_price)
-    peak_profit = calculate_net_profit_rate(buy_price, peak_price)
-    trailing_start_pct = _rule_float("SCALP_TRAILING_START_PCT", 0.6)
     current_ai_score = _safe_float(
         stock.get("holding_score_effective"),
         _safe_float(stock.get("rt_ai_prob"), 0.5) * 100.0,
@@ -28844,43 +29107,59 @@ def evaluate_and_dispatch_fast_scalp_exit(
         now_ts=observed_at,
         is_critical_zone=True,
     )
+    strong_trailing = _holding_strong_trailing_enabled(
+        score_context, current_ai_score
+    )
     trailing_limit = _rule_float(
         (
             "SCALP_TRAILING_LIMIT_STRONG"
-            if _holding_strong_trailing_enabled(score_context, current_ai_score)
+            if strong_trailing
             else "SCALP_TRAILING_LIMIT_WEAK"
         ),
-        (
-            0.8
-            if _holding_strong_trailing_enabled(score_context, current_ai_score)
-            else 0.4
-        ),
+        (0.8 if strong_trailing else 0.4),
     )
     trailing_worsen = peak_profit - profit_rate
-    trailing_drawdown_pct = (
-        ((float(peak_price) - float(decision_price)) / float(peak_price)) * 100.0
-        if peak_price > 0
-        else 0.0
+    trailing_decision = evaluate_trailing_take_profit(
+        peak_price=peak_price,
+        executable_bid=trusted_bid,
+        peak_profit_pct=peak_profit,
+        start_pct=trailing_start_pct,
+        strong=strong_trailing,
+        weak_limit_pct=trailing_limit,
+        strong_limit_pct=trailing_limit,
     )
+    _observe_scalp_trailing_input_transition(
+        stock,
+        code,
+        ws_data=ws_data,
+        decision=trailing_decision,
+        peak_price=peak_price,
+        executable_bid=trusted_bid,
+        bid_source=trusted_bid_source,
+        strong=strong_trailing,
+        ai_score=current_ai_score,
+        ai_usable=bool(score_context.get("usable_for_negative_exit")),
+        start_pct=trailing_start_pct,
+        now_ts=observed_at,
+        evaluator="fast",
+    )
+    trailing_drawdown_pct = trailing_decision.drawdown_pct
     trigger_kind = ""
     exit_rule = ""
     hard_stop_pct = _safe_float(stock.get("hard_stop_pct"), None)
     emergency_pct = _safe_float(stock.get("hard_stop_emergency_pct"), None)
     protect_pct = _safe_float(stock.get("protect_profit_pct"), None)
-    if emergency_pct is not None and profit_rate <= emergency_pct:
+    if fast_stop_enabled and emergency_pct is not None and profit_rate <= emergency_pct:
         trigger_kind = "emergency_stop"
         exit_rule = "scalp_hard_stop_emergency"
-    elif hard_stop_pct is not None and profit_rate <= hard_stop_pct:
+    elif fast_stop_enabled and hard_stop_pct is not None and profit_rate <= hard_stop_pct:
         trigger_kind = "hard_stop"
         exit_rule = "scalp_hard_stop_pct"
-    elif protect_pct is not None and profit_rate <= protect_pct:
+    elif fast_stop_enabled and protect_pct is not None and profit_rate <= protect_pct:
         trigger_kind = "protect_stop"
         exit_rule = "scalp_protect_profit_stop"
-    elif (
-        peak_profit >= trailing_start_pct
-        and trailing_drawdown_pct + 1e-9 >= trailing_limit
-    ):
-        trigger_kind = "trailing_peak_worsen_floor"
+    elif trailing_decision.triggered:
+        trigger_kind = trailing_decision.trigger_kind
         exit_rule = "scalp_trailing_take_profit"
     if not trigger_kind:
         if not retry_pending:
@@ -28901,8 +29180,8 @@ def evaluate_and_dispatch_fast_scalp_exit(
             if mark_price > decision_price > 0
             else 0.0
         )
-        wide_config = _scalp_trailing_loss_conversion_recheck_config(observed_at)
-        max_spread_bps = float(wide_config["max_spread_bps"])
+        quote_config = QuoteConsistencyConfig.from_env()
+        max_spread_bps = float(quote_config.warn_gap_bps)
         confirmation_spread_bps = min(
             max_spread_bps,
             float(QuoteConsistencyConfig.from_env().warn_gap_bps),
@@ -28914,21 +29193,12 @@ def evaluate_and_dispatch_fast_scalp_exit(
         if wide_trailing_quote:
             wide_rest, wide_rest_state, wide_rest_elapsed_ms = (
                 _fetch_rest_orderbook_snapshot_bounded(
-                    code,
-                    int(wide_config["rest_timeout_ms"]),
+                    fast_rest_request_code,
+                    quote_config.emergency_rest_timeout_ms,
+                    explicit_request_code=True,
                 )
             )
             wide_rest = dict(wide_rest or {})
-            if wide_rest and not any(
-                wide_rest.get(key)
-                for key in (
-                    "rest_received_ts_ms",
-                    "received_at_ms",
-                    "rest_received_ts",
-                    "received_ts",
-                )
-            ):
-                wide_rest["rest_received_ts"] = time.time()
             (
                 wide_quote_fields,
                 wide_mark_price,
@@ -28967,7 +29237,14 @@ def evaluate_and_dispatch_fast_scalp_exit(
             )
             wide_rest_confirmed = bool(
                 wide_rest_state == "ok"
-                and 0.0 <= wide_rest_age_ms <= wide_config["max_rest_age_ms"]
+                and wide_rest.get("source") == "ka10004_rest_orderbook"
+                and wide_rest.get("rest_received_ts_ms") is not None
+                and str(wide_rest.get("stock_code") or "").strip()[:6]
+                == str(code or "").strip()[:6]
+                and str(wide_rest.get("request_code") or "").strip().upper()
+                == str(fast_rest_request_code or "").strip().upper()
+                and _safe_int(wide_rest.get("best_bid"), 0) == wide_bid
+                and 0.0 <= wide_rest_age_ms <= quote_config.max_rest_age_ms
                 and wide_bid > 0
                 and wide_ask >= wide_bid
                 and wide_spread_bps <= max_spread_bps
@@ -29033,231 +29310,53 @@ def evaluate_and_dispatch_fast_scalp_exit(
             executable_buy_price = wide_ask
             executable_sell_price = wide_bid
             decision_price = wide_bid
+            trusted_bid = wide_bid
+            trusted_bid_source = "fresh_rest_executable_bid"
             rest_snapshot = wide_rest
             rest_state = wide_rest_state
             rest_elapsed_ms = wide_rest_elapsed_ms
             profit_rate = calculate_net_profit_rate(buy_price, decision_price)
             peak_profit = calculate_net_profit_rate(buy_price, peak_price)
             trailing_worsen = peak_profit - profit_rate
-            trailing_drawdown_pct = (
-                ((float(peak_price) - float(decision_price)) / float(peak_price))
-                * 100.0
-                if peak_price > 0
-                else 0.0
+            trailing_decision = evaluate_trailing_take_profit(
+                peak_price=peak_price,
+                executable_bid=decision_price,
+                peak_profit_pct=peak_profit,
+                start_pct=trailing_start_pct,
+                strong=strong_trailing,
+                weak_limit_pct=trailing_limit,
+                strong_limit_pct=trailing_limit,
             )
-            if emergency_pct is not None and profit_rate <= emergency_pct:
+            _observe_scalp_trailing_input_transition(
+                stock,
+                code,
+                ws_data=ws_data,
+                decision=trailing_decision,
+                peak_price=peak_price,
+                executable_bid=trusted_bid,
+                bid_source=trusted_bid_source,
+                strong=strong_trailing,
+                ai_score=current_ai_score,
+                ai_usable=bool(score_context.get("usable_for_negative_exit")),
+                start_pct=trailing_start_pct,
+                now_ts=observed_at,
+                evaluator="fast_rest_confirmed",
+            )
+            trailing_drawdown_pct = trailing_decision.drawdown_pct
+            if fast_stop_enabled and emergency_pct is not None and profit_rate <= emergency_pct:
                 trigger_kind = "emergency_stop"
                 exit_rule = "scalp_hard_stop_emergency"
-            elif hard_stop_pct is not None and profit_rate <= hard_stop_pct:
+            elif fast_stop_enabled and hard_stop_pct is not None and profit_rate <= hard_stop_pct:
                 trigger_kind = "hard_stop"
                 exit_rule = "scalp_hard_stop_pct"
-            elif protect_pct is not None and profit_rate <= protect_pct:
+            elif fast_stop_enabled and protect_pct is not None and profit_rate <= protect_pct:
                 trigger_kind = "protect_stop"
                 exit_rule = "scalp_protect_profit_stop"
-            elif (
-                peak_profit >= trailing_start_pct
-                and trailing_drawdown_pct + 1e-9 >= trailing_limit
-            ):
-                trigger_kind = "trailing_peak_worsen_floor"
+            elif trailing_decision.triggered:
+                trigger_kind = trailing_decision.trigger_kind
                 exit_rule = "scalp_trailing_take_profit"
             else:
                 return False
-
-    if trigger_kind == "trailing_peak_worsen_floor" and not retry_pending:
-        in_pyramid_trailing_grace, _, _ = _pyramid_post_add_trailing_grace(
-            stock, observed_at
-        )
-        if in_pyramid_trailing_grace:
-            _log_pyramid_post_add_trailing_grace(
-                stock,
-                code,
-                now_ts=observed_at,
-                exit_rule_candidate="scalp_trailing_take_profit",
-                profit_rate=profit_rate,
-                peak_profit=peak_profit,
-                drawdown=trailing_drawdown_pct,
-            )
-            return False
-        fast_exit_micro_fields = _scalping_micro_estimator_log_fields(
-            stock=stock,
-            code=code,
-            ws_data=ws_data,
-            now_ts=observed_at,
-            prefix="holding_flow_micro_estimator",
-            consumer_stage="scalp_fast_exit_monitor",
-            tier="hot",
-        )
-        exit_quote_envelope = {
-            "exit_quote_envelope_id": uuid4().hex,
-            "exit_quote_envelope_observed_at": float(observed_at),
-            "exit_quote_envelope_base_mark_price": _safe_int(mark_price, 0),
-            "exit_quote_envelope_base_best_ask": _safe_int(executable_buy_price, 0),
-            "exit_quote_envelope_base_best_bid": int(decision_price),
-            "exit_quote_envelope_base_quote_state": quote_state or "-",
-            "exit_quote_envelope_base_quote_reason": quote_reason or "-",
-            "exit_quote_envelope_base_rest_state": rest_state,
-            "exit_quote_envelope_base_rest_elapsed_ms": round(rest_elapsed_ms, 3),
-            "exit_quote_envelope_recheck_attempted": False,
-            "exit_quote_envelope_recheck_reuse_allowed": False,
-        }
-        loss_conversion_deferred = _evaluate_scalp_trailing_loss_conversion_recheck(
-            stock=stock,
-            code=code,
-            ws_data=ws_data,
-            profit_rate=profit_rate,
-            peak_profit=peak_profit,
-            trailing_peak_worsen=trailing_worsen,
-            now_ts=observed_at,
-            emit_deferred_log=False,
-            recheck_invoker="fast_exit_monitor",
-        )
-        continuation_deferred = False
-        if not loss_conversion_deferred:
-            continuation_deferred = _evaluate_scalp_trailing_continuation_recheck(
-                stock=stock,
-                code=code,
-                ws_data=ws_data,
-                micro_fields=fast_exit_micro_fields,
-                profit_rate=profit_rate,
-                peak_profit=peak_profit,
-                trailing_peak_worsen=trailing_worsen,
-                current_ai_score=current_ai_score,
-                now_ts=observed_at,
-                emit_deferred_log=False,
-                recheck_invoker="fast_exit_monitor",
-                decision_quote_envelope=exit_quote_envelope,
-            )
-        if loss_conversion_deferred or continuation_deferred:
-            return False
-        if exit_quote_envelope.get("exit_quote_envelope_recheck_attempted"):
-            recheck_state = str(
-                exit_quote_envelope.get("exit_quote_envelope_recheck_rest_state") or ""
-            ).lower()
-            recheck_reuse_allowed = bool(
-                exit_quote_envelope.get("exit_quote_envelope_recheck_reuse_allowed")
-            )
-            if recheck_state == "ok" and not recheck_reuse_allowed:
-                _log_holding_pipeline(
-                    stock,
-                    code,
-                    "scalp_fast_exit_quote_envelope_blocked",
-                    block_reason=(
-                        exit_quote_envelope.get(
-                            "exit_quote_envelope_recheck_block_reason"
-                        )
-                        or "recheck_quote_not_reusable"
-                    ),
-                    metric_role="source_quality_gate",
-                    decision_authority="real_scalping_fast_exit_guard",
-                    window_policy="same_trailing_candidate_frozen_quote_envelope",
-                    sample_floor="not_applicable_runtime_guard",
-                    primary_decision_metric="quote_envelope_reuse_allowed",
-                    source_quality_gate=(
-                        "fresh_conflict_free_recheck_quote_matches_exit_envelope"
-                    ),
-                    forbidden_uses=(
-                        "hard_stop_delay|protect_stop_delay|emergency_stop_delay|"
-                        "threshold_mutation|provider_route_change|broker_guard_bypass"
-                    ),
-                    actual_order_submitted=False,
-                    broker_order_forbidden=True,
-                    runtime_effect=True,
-                    **_exit_quote_envelope_log_fields(exit_quote_envelope),
-                )
-                return False
-            if recheck_reuse_allowed:
-                recheck_quote_fields = exit_quote_envelope.get(
-                    "exit_quote_envelope_recheck_quote_fields"
-                )
-                recheck_rest_snapshot = exit_quote_envelope.get(
-                    "exit_quote_envelope_recheck_rest_snapshot"
-                )
-                quote_fields = (
-                    dict(recheck_quote_fields)
-                    if isinstance(recheck_quote_fields, dict)
-                    else quote_fields
-                )
-                rest_snapshot = (
-                    dict(recheck_rest_snapshot)
-                    if isinstance(recheck_rest_snapshot, dict)
-                    else rest_snapshot
-                )
-                mark_price = _safe_int(
-                    exit_quote_envelope.get("exit_quote_envelope_recheck_mark_price"),
-                    mark_price,
-                )
-                executable_buy_price = _safe_int(
-                    exit_quote_envelope.get("exit_quote_envelope_recheck_best_ask"),
-                    executable_buy_price,
-                )
-                executable_sell_price = _safe_int(
-                    exit_quote_envelope.get("exit_quote_envelope_recheck_best_bid"),
-                    executable_sell_price,
-                )
-                decision_price = int(executable_sell_price)
-                rest_state = str(
-                    exit_quote_envelope.get("exit_quote_envelope_recheck_rest_state")
-                    or rest_state
-                )
-                rest_elapsed_ms = _safe_float(
-                    exit_quote_envelope.get(
-                        "exit_quote_envelope_recheck_rest_elapsed_ms"
-                    ),
-                    rest_elapsed_ms,
-                )
-                quote_state = str(
-                    quote_fields.get("quote_consistency_state") or ""
-                ).lower()
-                quote_reason = str(
-                    quote_fields.get("quote_consistency_reason") or ""
-                ).lower()
-                route_fields = _fast_exit_execution_route_fields(
-                    stock,
-                    code,
-                    ws_data,
-                    rest_snapshot=rest_snapshot,
-                    now_ts=observed_at,
-                )
-                if route_fields.get("fast_exit_route_source_quality_blocked"):
-                    return False
-                profit_rate = calculate_net_profit_rate(buy_price, decision_price)
-                peak_profit = calculate_net_profit_rate(buy_price, peak_price)
-                trailing_worsen = peak_profit - profit_rate
-                trailing_drawdown_pct = (
-                    ((float(peak_price) - float(decision_price)) / float(peak_price))
-                    * 100.0
-                    if peak_price > 0
-                    else 0.0
-                )
-                if not (
-                    peak_profit >= trailing_start_pct
-                    and trailing_drawdown_pct + 1e-9 >= trailing_limit
-                ):
-                    _log_holding_pipeline(
-                        stock,
-                        code,
-                        "scalp_fast_exit_quote_envelope_trigger_cleared",
-                        metric_role="source_quality_gate",
-                        decision_authority="real_scalping_fast_exit_guard",
-                        window_policy=("same_trailing_candidate_frozen_quote_envelope"),
-                        sample_floor="not_applicable_runtime_guard",
-                        primary_decision_metric="trailing_trigger_revalidated",
-                        source_quality_gate=(
-                            "recheck_quote_reused_for_final_exit_decision"
-                        ),
-                        forbidden_uses=(
-                            "hard_stop_delay|protect_stop_delay|"
-                            "emergency_stop_delay|threshold_mutation|"
-                            "broker_guard_bypass"
-                        ),
-                        actual_order_submitted=False,
-                        broker_order_forbidden=True,
-                        runtime_effect=True,
-                        **_exit_quote_envelope_log_fields(exit_quote_envelope),
-                    )
-                    return False
-    else:
-        exit_quote_envelope = {}
 
     exit_token = existing_exit_token or uuid4().hex
     with ENTRY_LOCK:
@@ -29324,11 +29423,11 @@ def evaluate_and_dispatch_fast_scalp_exit(
             profit_rate=f"{profit_rate:+.2f}",
             peak_profit=f"{peak_profit:+.2f}",
             trailing_peak_worsen=f"{trailing_worsen:.2f}",
+            trailing_bid_source=trusted_bid_source,
             trailing_drawdown_pct=f"{trailing_drawdown_pct:.2f}",
             trailing_limit=f"{trailing_limit:.2f}",
             rest_check_state=rest_state,
             rest_check_elapsed_ms=round(rest_elapsed_ms, 3),
-            **_exit_quote_envelope_log_fields(exit_quote_envelope),
             metric_role="safety_veto",
             decision_authority="real_scalping_fast_exit_guard",
             window_policy="same_position_first_threshold_cross",
@@ -29401,6 +29500,12 @@ def evaluate_and_dispatch_fast_scalp_exit(
                 strong_trailing=_holding_strong_trailing_enabled(
                     score_context, current_ai_score
                 ),
+                trailing_peak_price=peak_price,
+                trailing_executable_bid=trusted_bid,
+                trailing_bid_source=trusted_bid_source,
+                trailing_trigger_kind=trigger_kind,
+                current_ai_score=current_ai_score,
+                ai_score_usable=bool(score_context.get("usable_for_negative_exit")),
             ),
         )
     except Exception as exc:
@@ -29845,7 +29950,7 @@ def _without_event_field_collisions(fields: dict | None, *reserved_keys: str) ->
 
 
 def _fetch_rest_orderbook_snapshot_bounded(
-    code: str, timeout_ms: int
+    code: str, timeout_ms: int, *, explicit_request_code: bool = False
 ) -> tuple[dict, str, float]:
     if not KIWOOM_TOKEN:
         return {}, "token_missing", 0.0
@@ -29860,6 +29965,7 @@ def _fetch_rest_orderbook_snapshot_bounded(
                     kiwoom_utils.get_stock_orderbook_ka10004(
                         KIWOOM_TOKEN,
                         code,
+                        explicit_request_code=explicit_request_code,
                         request_owner="scalping_bounded_rest_orderbook_refresh",
                         request_class="runtime_required",
                     )
@@ -46267,10 +46373,6 @@ def _scalp_nxt_trailing_bid_guard_context(
     curr_price: int,
     now_ts: float,
 ) -> dict[str, Any]:
-    enabled = _env_bool("KORSTOCKSCAN_SCALP_NXT_TRAILING_BID_GUARD_ENABLED", False)
-    active_date = str(
-        os.getenv("KORSTOCKSCAN_SCALP_NXT_TRAILING_BID_GUARD_ACTIVE_DATE", "")
-    ).strip()
     observed_dt = datetime.fromtimestamp(float(now_ts), tz=_KST)
     current_date = observed_dt.date().isoformat()
     max_quote_age_ms = max(
@@ -46332,13 +46434,7 @@ def _scalp_nxt_trailing_bid_guard_context(
     quote_fresh = quote_age_ms is not None and quote_age_ms <= max_quote_age_ms
 
     reason = "eligible"
-    if not enabled:
-        reason = "runtime_disabled"
-    elif not active_date:
-        reason = "active_date_missing"
-    elif active_date != current_date:
-        reason = "runtime_inactive_date"
-    elif not in_nxt_exit_window:
+    if not in_nxt_exit_window:
         reason = "outside_nxt_exit_window"
     elif not quote_item_is_nxt:
         reason = "actual_nxt_0d_item_missing"
@@ -46360,8 +46456,7 @@ def _scalp_nxt_trailing_bid_guard_context(
     return {
         "nxt_trailing_bid_guard_applied": reason == "eligible",
         "nxt_trailing_bid_guard_reason": reason,
-        "nxt_trailing_bid_guard_enabled": enabled,
-        "nxt_trailing_bid_guard_active_date": active_date or "-",
+        "nxt_trailing_bid_guard_enabled": True,
         "nxt_trailing_bid_guard_current_date": current_date,
         "nxt_trailing_bid_guard_window": "16:00:00~20:00:00_KST",
         "nxt_trailing_bid_guard_max_0d_age_ms": round(max_quote_age_ms, 3),
@@ -46906,330 +47001,8 @@ def _truthy_log_value(value) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-def _trailing_shallow_loss_confirm_defer_decision(
-    stock: dict | None,
-    *,
-    strategy: str | None,
-    sell_reason_type: str | None,
-    exit_rule: str | None,
-    profit_rate: float,
-    peak_profit: float,
-    drawdown: float,
-    current_ai_score: float,
-    held_sec: int,
-    feature_fields: dict | None = None,
-    now_ts: float | None = None,
-) -> dict:
-    if str(strategy or "").upper() != "SCALPING":
-        return {"defer": False, "reason": "not_scalping"}
-    if str(sell_reason_type or "").upper() != "LOSS":
-        return {"defer": False, "reason": "not_loss_exit"}
-    if str(exit_rule or "").strip() != "scalp_trailing_take_profit":
-        return {"defer": False, "reason": "not_trailing_exit"}
-    if (
-        not isinstance(stock, dict)
-        or _is_scalp_simulated_position(stock, strategy)
-        or _has_sim_probe_provenance(stock)
-    ):
-        return {"defer": False, "reason": "not_real_position"}
-    if bool(stock.get("trailing_shallow_loss_confirm_deferred")):
-        return {"defer": False, "reason": "already_deferred_once"}
-
-    min_peak = 0.60
-    min_profit = -0.30
-    max_profit = 0.05
-    min_ai = 75.0
-    min_held_sec = 30
-    max_drawdown = 1.20
-    min_buy_pressure = 50.0
-    min_tick_accel = 1.0
-    min_micro_vwap_bp = -40.0
-    max_recheck_sec = 15
-
-    profit = _safe_float(profit_rate, 0.0)
-    peak = _safe_float(peak_profit, 0.0)
-    ai_score = _safe_float(current_ai_score, 0.0)
-    drawdown_value = _safe_float(drawdown, max(0.0, peak - profit))
-    if not (min_profit <= profit <= max_profit):
-        return {
-            "defer": False,
-            "reason": "profit_not_shallow_loss",
-            "profit_rate": profit,
-        }
-    if peak < min_peak:
-        return {
-            "defer": False,
-            "reason": "peak_below_min",
-            "peak_profit": peak,
-            "min_peak": min_peak,
-        }
-    if ai_score < min_ai:
-        return {
-            "defer": False,
-            "reason": "ai_below_min",
-            "current_ai_score": ai_score,
-            "min_ai": min_ai,
-        }
-    if int(held_sec or 0) < min_held_sec:
-        return {
-            "defer": False,
-            "reason": "hold_below_min",
-            "held_sec": int(held_sec or 0),
-            "min_held_sec": min_held_sec,
-        }
-    if drawdown_value >= max_drawdown:
-        return {
-            "defer": False,
-            "reason": "drawdown_too_deep",
-            "drawdown": drawdown_value,
-            "max_drawdown": max_drawdown,
-        }
-
-    fields = feature_fields if isinstance(feature_fields, dict) else {}
-    quote_stale = _truthy_log_value(fields.get("quote_stale"))
-    tick_context_stale = _truthy_log_value(fields.get("tick_context_stale"))
-    micro_vwap_available = _truthy_log_value(fields.get("micro_vwap_available"))
-    large_sell_print_detected = _truthy_log_value(
-        fields.get("large_sell_print_detected")
-    )
-    buy_pressure = _safe_float(fields.get("buy_pressure_10t"), 0.0)
-    tick_accel = _safe_float(fields.get("tick_acceleration_ratio"), 0.0)
-    curr_vs_micro_vwap_bp = _safe_float(fields.get("curr_vs_micro_vwap_bp"), -999.0)
-    if quote_stale or tick_context_stale:
-        return {"defer": False, "reason": "source_stale"}
-    if large_sell_print_detected:
-        return {"defer": False, "reason": "large_sell_print_detected"}
-    if not micro_vwap_available:
-        return {"defer": False, "reason": "micro_vwap_missing"}
-    support_checks = {
-        "buy_pressure_ok": buy_pressure >= min_buy_pressure,
-        "tick_accel_ok": tick_accel >= min_tick_accel,
-        "micro_vwap_ok": curr_vs_micro_vwap_bp >= min_micro_vwap_bp,
-    }
-    if not all(support_checks.values()):
-        return {
-            "defer": False,
-            "reason": "micro_support_insufficient",
-            **support_checks,
-            "buy_pressure_10t": buy_pressure,
-            "tick_acceleration_ratio": tick_accel,
-            "curr_vs_micro_vwap_bp": curr_vs_micro_vwap_bp,
-        }
-
-    now = float(now_ts if now_ts is not None else time.time())
-    return {
-        "defer": True,
-        "reason": "shallow_loss_trailing_micro_confirm",
-        "defer_sec": max_recheck_sec,
-        "defer_until": now + max_recheck_sec,
-        "profit_rate": profit,
-        "peak_profit": peak,
-        "drawdown": drawdown_value,
-        "current_ai_score": ai_score,
-        "buy_pressure_10t": buy_pressure,
-        "tick_acceleration_ratio": tick_accel,
-        "curr_vs_micro_vwap_bp": curr_vs_micro_vwap_bp,
-        **support_checks,
-    }
 
 
-def _trailing_pre_submit_executable_recovery_decision(
-    stock: dict | None,
-    code: str,
-    ws_data: dict | None,
-    *,
-    buy_price: float,
-    signal_profit_rate: float,
-    peak_profit: float,
-    current_ai_score: float,
-    initial_executable_sell_price: int,
-    now_ts: float,
-) -> dict[str, Any]:
-    """Confirm a shallow trailing-loss recovery once before broker submit."""
-    stock = stock if isinstance(stock, dict) else {}
-    position_key = (
-        f"{stock.get('id', '-')}:"
-        f"{stock.get('holding_started_at') or stock.get('buy_time') or '-'}:"
-        f"{float(buy_price or 0.0):.4f}"
-    )
-    if stock.get("trailing_pre_submit_recovery_position_key") == position_key:
-        return {"defer": False, "reason": "already_deferred_once"}
-
-    min_peak_pct = 0.50
-    max_peak_pct = 1.00
-    max_executable_loss_pct = -0.50
-    min_ai_score = 55.0
-    min_recovery_improvement_pct = 0.15
-    max_recheck_deterioration_pct = 0.05
-    hard_stop_margin_pct = 0.15
-    recheck_sec = 2.0
-    rest_timeout_ms = 300
-    max_rest_age_ms = 1_500.0
-    max_spread_bps = 150.0
-
-    buy_price_value = _safe_float(buy_price, 0.0)
-    signal_profit = _safe_float(signal_profit_rate, 0.0)
-    peak = _safe_float(peak_profit, 0.0)
-    ai_score = _safe_float(current_ai_score, 0.0)
-    initial_price = _safe_int(initial_executable_sell_price, 0)
-    if buy_price_value <= 0 or initial_price <= 0:
-        return {"defer": False, "reason": "invalid_executable_price"}
-    if signal_profit >= 0.0:
-        return {"defer": False, "reason": "not_loss_conversion"}
-    if not (min_peak_pct <= peak <= max_peak_pct):
-        return {"defer": False, "reason": "peak_outside_recovery_band"}
-    if ai_score < min_ai_score:
-        return {"defer": False, "reason": "ai_below_recovery_floor"}
-
-    initial_profit = calculate_net_profit_rate(buy_price_value, initial_price)
-    recovery_improvement = initial_profit - signal_profit
-    hard_stop_pct = _safe_float(
-        stock.get("hard_stop_pct"),
-        _rule_float("SCALP_PRESET_HARD_STOP_PCT", -0.70),
-    )
-    if initial_profit < max_executable_loss_pct:
-        return {
-            "defer": False,
-            "reason": "executable_loss_below_recovery_band",
-            "initial_executable_profit_rate": initial_profit,
-        }
-    if recovery_improvement + 1e-9 < min_recovery_improvement_pct:
-        return {
-            "defer": False,
-            "reason": "executable_recovery_too_small",
-            "recovery_improvement_pct": recovery_improvement,
-        }
-    if initial_profit <= hard_stop_pct + hard_stop_margin_pct:
-        return {
-            "defer": False,
-            "reason": "hard_stop_margin_insufficient",
-            "initial_executable_profit_rate": initial_profit,
-            "hard_stop_pct": hard_stop_pct,
-        }
-    protect_profit_pct = _safe_float(stock.get("protect_profit_pct"), None)
-    if protect_profit_pct is not None and initial_profit <= protect_profit_pct:
-        return {
-            "defer": False,
-            "reason": "protect_stop_precedence",
-            "initial_executable_profit_rate": initial_profit,
-            "protect_profit_pct": protect_profit_pct,
-        }
-
-    features, has_features = _normalize_soft_stop_expert_features(stock)
-    if bool(
-        has_features
-        and _truthy_field(features.get("micro_context_usable"))
-        and _truthy_field(features.get("large_sell_print_detected"))
-    ):
-        return {"defer": False, "reason": "large_sell_print_detected"}
-
-    time.sleep(recheck_sec)
-    recheck_now_ts = time.time()
-    rest_snapshot, rest_state, rest_elapsed_ms = _fetch_rest_orderbook_snapshot_bounded(
-        code, rest_timeout_ms
-    )
-    rest_snapshot = dict(rest_snapshot or {})
-    if rest_snapshot and not any(
-        rest_snapshot.get(key)
-        for key in (
-            "rest_received_ts_ms",
-            "received_at_ms",
-            "rest_received_ts",
-            "received_ts",
-        )
-    ):
-        rest_snapshot["rest_received_ts"] = recheck_now_ts
-    quote_fields, _, _, rechecked_sell_price = _build_quote_consistency_fields(
-        ws_data,
-        rest_snapshot=rest_snapshot,
-        side="sell",
-        safety_exit=False,
-        now_ts=recheck_now_ts,
-    )
-    rest_age_ms = _safe_float(
-        quote_fields.get("quote_consistency_rest_age_ms"), float("inf")
-    )
-    best_bid = _safe_int(rest_snapshot.get("best_bid"), 0)
-    best_ask = _safe_int(rest_snapshot.get("best_ask"), 0)
-    spread_bps = (
-        ((best_ask - best_bid) / max(best_bid, 1)) * 10000.0
-        if best_bid > 0 and best_ask >= best_bid
-        else float("inf")
-    )
-    quote_reason = str(quote_fields.get("quote_consistency_reason") or "").lower()
-    quote_state = str(quote_fields.get("quote_consistency_state") or "").lower()
-    quote_fresh = bool(
-        rest_state == "ok"
-        and rest_snapshot
-        and 0.0 <= rest_age_ms <= max_rest_age_ms
-        and best_bid > 0
-        and best_ask >= best_bid
-        and rechecked_sell_price > 0
-        and spread_bps <= max_spread_bps
-        and quote_state not in {"blocked", "conflicted", "diverged", "stale"}
-        and quote_reason
-        not in {
-            "conflicted",
-            "price_conflict",
-            "quote_stale",
-            "stale_quote",
-            "ws_rest_conflicted",
-        }
-        and not _truthy_log_value(quote_fields.get("quote_consistency_entry_blocked"))
-    )
-    quote_consistency_sell_price = rechecked_sell_price
-    rechecked_sell_price = best_bid if quote_fresh else 0
-    rechecked_profit = (
-        calculate_net_profit_rate(buy_price_value, rechecked_sell_price)
-        if rechecked_sell_price > 0
-        else float("-inf")
-    )
-    stable_recovery = bool(
-        quote_fresh
-        and rechecked_profit >= max_executable_loss_pct
-        and rechecked_profit > hard_stop_pct + hard_stop_margin_pct
-        and rechecked_profit + max_recheck_deterioration_pct + 1e-9 >= initial_profit
-    )
-    fields = {
-        "defer": stable_recovery,
-        "reason": (
-            "executable_recovery_confirmed"
-            if stable_recovery
-            else "executable_recovery_not_confirmed"
-        ),
-        "position_key": position_key,
-        "signal_profit_rate": signal_profit,
-        "peak_profit": peak,
-        "current_ai_score": ai_score,
-        "initial_executable_sell_price": initial_price,
-        "initial_executable_profit_rate": initial_profit,
-        "recovery_improvement_pct": recovery_improvement,
-        "rechecked_executable_sell_price": rechecked_sell_price,
-        "quote_consistency_executable_sell_price": quote_consistency_sell_price,
-        "rechecked_executable_profit_rate": rechecked_profit,
-        "recheck_sec": recheck_sec,
-        "rest_fetch_state": rest_state,
-        "rest_fetch_elapsed_ms": rest_elapsed_ms,
-        "rest_quote_age_ms": rest_age_ms,
-        "rest_spread_bps": spread_bps,
-        "quote_fresh": quote_fresh,
-        "evaluated": True,
-        "hard_stop_pct": hard_stop_pct,
-        "hard_stop_margin_pct": hard_stop_margin_pct,
-        "max_executable_loss_pct": max_executable_loss_pct,
-        "min_recovery_improvement_pct": min_recovery_improvement_pct,
-        "max_recheck_deterioration_pct": max_recheck_deterioration_pct,
-        **quote_fields,
-    }
-    if stable_recovery:
-        _mutate_stock_state(
-            stock,
-            set_fields={
-                "trailing_pre_submit_recovery_position_key": position_key,
-                "trailing_pre_submit_recovery_deferred_at": recheck_now_ts,
-            },
-        )
-    return fields
 
 
 def _normalize_pre_ai_strength_ws_timestamp(snapshot: dict | None) -> tuple[dict, str]:
@@ -52154,8 +51927,6 @@ def _clear_holding_flow_override_candidate(
             "holding_flow_max_defer_extension_used",
             "holding_flow_max_defer_extension_until",
             "holding_flow_max_defer_extension_started_at",
-            *_SCALP_TRAILING_CONTINUATION_RECHECK_STATE_FIELDS,
-            *_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_STATE_FIELDS,
         ),
     )
     _log_holding_pipeline(
@@ -52169,542 +51940,20 @@ def _clear_holding_flow_override_candidate(
     )
 
 
-_SCALP_TRAILING_CONTINUATION_RECHECK_STATE_FIELDS = (
-    "scalp_trailing_continuation_recheck_started_at",
-    "scalp_trailing_continuation_recheck_until_epoch",
-    "scalp_trailing_continuation_recheck_id",
-    "scalp_trailing_continuation_recheck_position_key",
-    "scalp_trailing_continuation_recheck_anchor_profit",
-    "scalp_trailing_continuation_recheck_min_profit",
-    "scalp_trailing_continuation_recheck_max_profit",
-    "scalp_trailing_continuation_recheck_counterfactual_sell_price",
-    "scalp_trailing_continuation_recheck_lane",
-)
-
-_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_STATE_FIELDS = (
-    "scalp_trailing_loss_conversion_recheck_started_at",
-    "scalp_trailing_loss_conversion_recheck_until_epoch",
-    "scalp_trailing_loss_conversion_recheck_anchor_profit",
-    "scalp_trailing_loss_conversion_recheck_min_profit",
-)
 
 
-def _scalp_trailing_continuation_recheck_config(now_ts: float) -> dict[str, Any]:
-    enabled = _env_bool(
-        "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_ENABLED", False
-    )
-    active_date = str(
-        os.getenv("KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_ACTIVE_DATE", "")
-    ).strip()
-    current_date = datetime.fromtimestamp(float(now_ts), tz=_KST).date().isoformat()
-    return {
-        "enabled": enabled,
-        "active_date": active_date,
-        "current_date": current_date,
-        "active": bool(enabled and active_date == current_date),
-        "ttl_sec": max(
-            5.0,
-            min(
-                30.0,
-                _safe_float(
-                    os.getenv(
-                        "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_TTL_SEC"
-                    ),
-                    15.0,
-                ),
-            ),
-        ),
-        "min_peak_pct": max(
-            0.0,
-            _safe_float(
-                os.getenv(
-                    "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_MIN_PEAK_PCT"
-                ),
-                0.60,
-            ),
-        ),
-        "max_peak_pct": max(
-            0.0,
-            _safe_float(
-                os.getenv(
-                    "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_MAX_PEAK_PCT"
-                ),
-                1.50,
-            ),
-        ),
-        "min_profit_pct": max(
-            0.01,
-            _safe_float(
-                os.getenv(
-                    "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_MIN_PROFIT_PCT"
-                ),
-                0.05,
-            ),
-        ),
-        "max_worsen_pct": max(
-            0.0,
-            _safe_float(
-                os.getenv(
-                    "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_MAX_WORSEN_PCT"
-                ),
-                0.90,
-            ),
-        ),
-        "min_ai_score": max(
-            0.0,
-            _safe_float(
-                os.getenv(
-                    "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_MIN_AI_SCORE"
-                ),
-                65.0,
-            ),
-        ),
-        "quote_recovery_enabled": _env_bool(
-            "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_QUOTE_RECOVERY_ENABLED",
-            False,
-        ),
-        "quote_recovery_timeout_ms": max(
-            100,
-            min(
-                500,
-                _env_int(
-                    "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_QUOTE_RECOVERY_TIMEOUT_MS",
-                    300,
-                ),
-            ),
-        ),
-        "quote_recovery_max_age_ms": max(
-            100.0,
-            _env_float(
-                "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_QUOTE_RECOVERY_MAX_AGE_MS",
-                1500.0,
-            ),
-        ),
-        "quote_recovery_max_spread_bps": max(
-            1.0,
-            _env_float(
-                "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_QUOTE_RECOVERY_MAX_SPREAD_BPS",
-                150.0,
-            ),
-        ),
-        "pyramid_handoff_enabled": False,
-        "pyramid_handoff_max_age_sec": max(
-            1.0,
-            min(
-                30.0,
-                _env_float(
-                    "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_PYRAMID_HANDOFF_MAX_AGE_SEC",
-                    25.0,
-                ),
-            ),
-        ),
-        "high_peak_enabled": _env_bool(
-            "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_HIGH_PEAK_ENABLED",
-            False,
-        ),
-        "high_peak_ttl_sec": max(
-            5.0,
-            min(
-                20.0,
-                _safe_float(
-                    os.getenv(
-                        "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_HIGH_PEAK_TTL_SEC"
-                    ),
-                    10.0,
-                ),
-            ),
-        ),
-        "high_peak_min_peak_pct": max(
-            0.0,
-            _env_float(
-                "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_HIGH_PEAK_MIN_PEAK_PCT",
-                1.50,
-            ),
-        ),
-        "high_peak_max_peak_pct": max(
-            0.0,
-            _env_float(
-                "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_HIGH_PEAK_MAX_PEAK_PCT",
-                3.50,
-            ),
-        ),
-        "high_peak_min_profit_pct": max(
-            0.01,
-            _env_float(
-                "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_HIGH_PEAK_MIN_PROFIT_PCT",
-                0.40,
-            ),
-        ),
-        "high_peak_max_worsen_pct": max(
-            0.0,
-            _env_float(
-                "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_HIGH_PEAK_MAX_WORSEN_PCT",
-                1.50,
-            ),
-        ),
-        "high_peak_min_ai_score": max(
-            0.0,
-            _env_float(
-                "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_HIGH_PEAK_MIN_AI_SCORE",
-                75.0,
-            ),
-        ),
-        "high_peak_max_quote_age_ms": max(
-            100.0,
-            _env_float(
-                "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_HIGH_PEAK_MAX_QUOTE_AGE_MS",
-                1500.0,
-            ),
-        ),
-        "high_peak_min_trusted_ticks": max(
-            3,
-            _env_int(
-                "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_HIGH_PEAK_MIN_TRUSTED_TICKS",
-                3,
-            ),
-        ),
-    }
 
 
-def _scalp_trailing_loss_conversion_recheck_config(now_ts: float) -> dict[str, Any]:
-    enabled = _env_bool(
-        "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_ENABLED", False
-    )
-    active_date = str(
-        os.getenv("KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_ACTIVE_DATE", "")
-    ).strip()
-    current_date = datetime.fromtimestamp(float(now_ts), tz=_KST).date().isoformat()
-    return {
-        "enabled": enabled,
-        "active_date": active_date,
-        "current_date": current_date,
-        "active": bool(enabled and active_date == current_date),
-        "ttl_sec": max(
-            5.0,
-            min(
-                20.0,
-                _env_float(
-                    "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_TTL_SEC",
-                    15.0,
-                ),
-            ),
-        ),
-        "min_peak_pct": max(
-            0.0,
-            _env_float(
-                "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_MIN_PEAK_PCT",
-                0.50,
-            ),
-        ),
-        "max_peak_pct": max(
-            0.0,
-            _env_float(
-                "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_MAX_PEAK_PCT",
-                1.00,
-            ),
-        ),
-        "min_profit_pct": min(
-            -0.01,
-            _env_float(
-                "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_MIN_PROFIT_PCT",
-                -0.30,
-            ),
-        ),
-        "max_profit_pct": max(
-            -0.01,
-            _env_float(
-                "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_MAX_PROFIT_PCT",
-                0.05,
-            ),
-        ),
-        "max_worsen_pct": max(
-            0.0,
-            _env_float(
-                "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_MAX_WORSEN_PCT",
-                1.00,
-            ),
-        ),
-        "rest_timeout_ms": max(
-            100,
-            min(
-                500,
-                _env_int(
-                    "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_REST_TIMEOUT_MS",
-                    300,
-                ),
-            ),
-        ),
-        "max_rest_age_ms": max(
-            100.0,
-            _env_float(
-                "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_MAX_REST_AGE_MS",
-                1500.0,
-            ),
-        ),
-        "max_spread_bps": max(
-            1.0,
-            _env_float(
-                "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_MAX_SPREAD_BPS",
-                150.0,
-            ),
-        ),
-    }
 
 
-def _scalp_trailing_loss_conversion_contract_fields() -> dict[str, Any]:
-    return {
-        "threshold_family": "scalp_trailing_loss_conversion_recheck",
-        "metric_role": "bounded_tunable",
-        "decision_authority": "operator_runtime_override_scalp_trailing_loss_conversion_recheck",
-        "window_policy": "same_trailing_candidate_single_bounded_recheck",
-        "sample_floor": "shallow_loss_conversion_with_fresh_rest_executable_quote",
-        "primary_decision_metric": "post_recheck_mfe_before_trailing_exit",
-        "source_quality_gate": "ka10004_receive_age_and_valid_top_of_book",
-        "runtime_effect": True,
-        "allowed_runtime_apply": True,
-        "actual_order_submitted": False,
-        "broker_order_forbidden": True,
-        "forbidden_uses": (
-            "hard_stop_bypass|protect_stop_bypass|emergency_stop_bypass|"
-            "broker_guard_bypass|provider_route_change|quantity_or_cap_change|"
-            "second_extension"
-        ),
-    }
 
 
-def _evaluate_scalp_trailing_loss_conversion_recheck(
-    *,
-    stock: dict,
-    code: str,
-    ws_data: dict | None,
-    profit_rate: float,
-    peak_profit: float,
-    trailing_peak_worsen: float,
-    now_ts: float,
-    emit_deferred_log: bool = True,
-    recheck_invoker: str = "holding_flow",
-) -> bool:
-    """Defer one shallow loss-conversion trailing exit on a fresh REST quote."""
-    config = _scalp_trailing_loss_conversion_recheck_config(now_ts)
-    if not config["active"]:
-        return False
-
-    started_at = _safe_float(
-        stock.get("scalp_trailing_loss_conversion_recheck_started_at"), 0.0
-    )
-    features, has_features = _normalize_soft_stop_expert_features(stock)
-    feature_context_usable = bool(
-        has_features and _truthy_field(features.get("micro_context_usable"))
-    )
-    explicit_large_sell = bool(
-        feature_context_usable
-        and _truthy_field(features.get("large_sell_print_detected"))
-    )
-    initial_band_eligible = bool(
-        config["min_peak_pct"] <= float(peak_profit) <= config["max_peak_pct"]
-        and config["min_profit_pct"] <= float(profit_rate) < config["max_profit_pct"]
-        and float(trailing_peak_worsen) <= config["max_worsen_pct"]
-        and not explicit_large_sell
-    )
-    # Once a bounded shallow-loss recheck is armed, keep its promised TTL while
-    # the executable loss remains inside the configured band.  A transient
-    # peak-to-bid widening must not silently cancel the same recheck that was
-    # introduced to absorb one-quote loss conversion noise.  Hard/protect/
-    # emergency stops are resolved before this trailing-only helper.
-    active_ttl_band_eligible = bool(
-        started_at > 0
-        and config["min_peak_pct"] <= float(peak_profit) <= config["max_peak_pct"]
-        and config["min_profit_pct"] <= float(profit_rate) < config["max_profit_pct"]
-        and not explicit_large_sell
-    )
-    band_eligible = bool(initial_band_eligible or active_ttl_band_eligible)
-    if not band_eligible:
-        if started_at > 0:
-            _clear_scalp_trailing_loss_conversion_recheck(stock)
-            _log_holding_pipeline(
-                stock,
-                code,
-                "scalp_trailing_loss_conversion_recheck",
-                recheck_state="vetoed",
-                profit_rate=f"{float(profit_rate):+.2f}",
-                peak_profit=f"{float(peak_profit):+.2f}",
-                trailing_peak_worsen=f"{float(trailing_peak_worsen):.2f}",
-                explicit_large_sell=explicit_large_sell,
-                **_scalp_trailing_loss_conversion_contract_fields(),
-            )
-        return False
-
-    if started_at > 0:
-        until_epoch = _safe_float(
-            stock.get("scalp_trailing_loss_conversion_recheck_until_epoch"),
-            started_at + config["ttl_sec"],
-        )
-        elapsed_sec = max(0.0, float(now_ts) - started_at)
-        if float(now_ts) >= until_epoch:
-            _clear_scalp_trailing_loss_conversion_recheck(stock)
-            _log_holding_pipeline(
-                stock,
-                code,
-                "scalp_trailing_loss_conversion_recheck",
-                recheck_state="ttl_expired",
-                recheck_elapsed_sec=f"{elapsed_sec:.3f}",
-                recheck_until_epoch=f"{until_epoch:.3f}",
-                profit_rate=f"{float(profit_rate):+.2f}",
-                peak_profit=f"{float(peak_profit):+.2f}",
-                trailing_peak_worsen=f"{float(trailing_peak_worsen):.2f}",
-                **_scalp_trailing_loss_conversion_contract_fields(),
-            )
-            return False
-
-    rest_snapshot, rest_state, rest_elapsed_ms = _fetch_rest_orderbook_snapshot_bounded(
-        code, config["rest_timeout_ms"]
-    )
-    rest_snapshot = dict(rest_snapshot or {})
-    if rest_snapshot and not any(
-        rest_snapshot.get(key)
-        for key in (
-            "rest_received_ts_ms",
-            "received_at_ms",
-            "rest_received_ts",
-            "received_ts",
-        )
-    ):
-        rest_snapshot["rest_received_ts"] = time.time()
-    quote_fields, _, _, executable_sell_price = _build_quote_consistency_fields(
-        ws_data,
-        rest_snapshot=rest_snapshot,
-        side="sell",
-        safety_exit=True,
-        now_ts=now_ts,
-    )
-    rest_age_ms = _safe_float(
-        quote_fields.get("quote_consistency_rest_age_ms"), float("inf")
-    )
-    best_bid = _safe_int(rest_snapshot.get("best_bid"), 0)
-    best_ask = _safe_int(rest_snapshot.get("best_ask"), 0)
-    spread_bps = (
-        ((best_ask - best_bid) / max(best_bid, 1)) * 10000.0
-        if best_bid > 0 and best_ask >= best_bid
-        else float("inf")
-    )
-    rest_quote_fresh = bool(
-        rest_state == "ok"
-        and rest_snapshot
-        and 0.0 <= rest_age_ms <= config["max_rest_age_ms"]
-        and best_bid > 0
-        and best_ask >= best_bid
-        and executable_sell_price > 0
-        and spread_bps <= config["max_spread_bps"]
-    )
-    state_fields = {
-        "recheck_invoker": recheck_invoker,
-        "recheck_enabled": config["enabled"],
-        "recheck_active": config["active"],
-        "recheck_active_date": config["active_date"] or "-",
-        "recheck_current_date": config["current_date"],
-        "recheck_ttl_sec": f"{config['ttl_sec']:.3f}",
-        "recheck_min_peak_pct": f"{config['min_peak_pct']:.2f}",
-        "recheck_max_peak_pct": f"{config['max_peak_pct']:.2f}",
-        "recheck_min_profit_pct": f"{config['min_profit_pct']:+.2f}",
-        "recheck_max_profit_pct": f"{config['max_profit_pct']:+.2f}",
-        "recheck_max_worsen_pct": f"{config['max_worsen_pct']:.2f}",
-        "profit_rate": f"{float(profit_rate):+.2f}",
-        "peak_profit": f"{float(peak_profit):+.2f}",
-        "trailing_peak_worsen": f"{float(trailing_peak_worsen):.2f}",
-        "explicit_large_sell": explicit_large_sell,
-        "rest_fetch_state": rest_state,
-        "rest_fetch_elapsed_ms": f"{rest_elapsed_ms:.3f}",
-        "rest_quote_age_ms": (
-            f"{rest_age_ms:.3f}" if rest_age_ms != float("inf") else "-"
-        ),
-        "rest_best_bid": best_bid,
-        "rest_best_ask": best_ask,
-        "rest_executable_sell_price": executable_sell_price,
-        "rest_spread_bps": f"{spread_bps:.3f}" if spread_bps != float("inf") else "-",
-        "rest_quote_fresh": rest_quote_fresh,
-        **quote_fields,
-        **_scalp_trailing_loss_conversion_contract_fields(),
-    }
-    if not rest_quote_fresh:
-        if started_at > 0:
-            _log_holding_pipeline(
-                stock,
-                code,
-                "scalp_trailing_loss_conversion_recheck",
-                recheck_state="deferred_rest_quote_unavailable",
-                **state_fields,
-            )
-            return True
-        _log_holding_pipeline(
-            stock,
-            code,
-            "scalp_trailing_loss_conversion_recheck",
-            recheck_state="rest_quote_unavailable",
-            **state_fields,
-        )
-        return False
-
-    if started_at <= 0:
-        until_epoch = float(now_ts) + config["ttl_sec"]
-        _mutate_stock_state(
-            stock,
-            set_fields={
-                "scalp_trailing_loss_conversion_recheck_started_at": float(now_ts),
-                "scalp_trailing_loss_conversion_recheck_until_epoch": until_epoch,
-                "scalp_trailing_loss_conversion_recheck_anchor_profit": float(
-                    profit_rate
-                ),
-                "scalp_trailing_loss_conversion_recheck_min_profit": float(profit_rate),
-            },
-        )
-        _log_holding_pipeline(
-            stock,
-            code,
-            "scalp_trailing_loss_conversion_recheck",
-            recheck_state="armed",
-            recheck_until_epoch=f"{until_epoch:.3f}",
-            **state_fields,
-        )
-        return True
-
-    until_epoch = _safe_float(
-        stock.get("scalp_trailing_loss_conversion_recheck_until_epoch"),
-        started_at + config["ttl_sec"],
-    )
-    elapsed_sec = max(0.0, float(now_ts) - started_at)
-
-    _mutate_stock_state(
-        stock,
-        set_fields={
-            "scalp_trailing_loss_conversion_recheck_min_profit": min(
-                _safe_float(
-                    stock.get("scalp_trailing_loss_conversion_recheck_min_profit"),
-                    profit_rate,
-                ),
-                float(profit_rate),
-            )
-        },
-    )
-    if emit_deferred_log:
-        _log_holding_pipeline(
-            stock,
-            code,
-            "scalp_trailing_loss_conversion_recheck",
-            recheck_state="deferred",
-            recheck_elapsed_sec=f"{elapsed_sec:.3f}",
-            recheck_until_epoch=f"{until_epoch:.3f}",
-            **state_fields,
-        )
-    return True
 
 
-def _clear_scalp_trailing_continuation_recheck(stock: dict) -> None:
-    _mutate_stock_state(
-        stock, pop_fields=_SCALP_TRAILING_CONTINUATION_RECHECK_STATE_FIELDS
-    )
 
 
-def _scalp_trailing_continuation_position_key(stock: dict, code: str) -> str:
+
+def _scalp_holding_source_position_key(stock: dict, code: str) -> str:
     record_id = str(stock.get("id") or stock.get("record_id") or "").strip()
     if record_id and record_id != "-":
         return f"record:{record_id}"
@@ -52719,11 +51968,11 @@ def _scalp_trailing_continuation_position_key(stock: dict, code: str) -> str:
 
     with ENTRY_LOCK:
         token = str(
-            stock.get("scalp_trailing_continuation_runtime_position_token") or ""
+            stock.get("scalp_holding_source_position_token") or ""
         ).strip()
         if not token:
             token = uuid4().hex
-            stock["scalp_trailing_continuation_runtime_position_token"] = token
+            stock["scalp_holding_source_position_token"] = token
     return f"runtime:{code}:{token}"
 
 
@@ -52749,7 +51998,7 @@ def _arm_smoothing_source_only_path(
     """Arm an observation-only alternative without changing holding authority."""
 
     with ENTRY_LOCK:
-        position_key = _scalp_trailing_continuation_position_key(stock, code)
+        position_key = _scalp_holding_source_position_key(stock, code)
         next_state, event = arm_source_only_path(
             stock.get(SMOOTHING_SOURCE_ONLY_PATH_STATE_KEY),
             family=family,
@@ -52793,7 +52042,7 @@ def _observe_smoothing_source_only_paths(
         state = stock.get(SMOOTHING_SOURCE_ONLY_PATH_STATE_KEY)
         if not isinstance(state, dict) or not (state.get("arms") or {}):
             return
-        position_key = _scalp_trailing_continuation_position_key(stock, code)
+        position_key = _scalp_holding_source_position_key(stock, code)
         next_state, events = observe_source_only_paths(
             state,
             position_key=position_key,
@@ -53297,742 +52546,14 @@ def observe_smoothing_source_only_paths_cycle(
     }
 
 
-def _scalp_trailing_continuation_terminal_fields(
-    stock: dict,
-    *,
-    now_ts: float,
-    until_epoch: float,
-    profit_rate: float,
-) -> dict[str, Any]:
-    anchor_profit = _safe_float(
-        stock.get("scalp_trailing_continuation_recheck_anchor_profit"), profit_rate
-    )
-    min_profit = min(
-        _safe_float(
-            stock.get("scalp_trailing_continuation_recheck_min_profit"), profit_rate
-        ),
-        float(profit_rate),
-    )
-    max_profit = max(
-        _safe_float(
-            stock.get("scalp_trailing_continuation_recheck_max_profit"), profit_rate
-        ),
-        float(profit_rate),
-    )
-    return {
-        "recheck_contract_version": "bounded_one_shot_attribution_v2",
-        "recheck_id": str(stock.get("scalp_trailing_continuation_recheck_id") or "-"),
-        "recheck_position_key": str(
-            stock.get("scalp_trailing_continuation_recheck_position_key") or "-"
-        ),
-        "counterfactual_profit_rate": f"{float(anchor_profit):+.4f}",
-        "counterfactual_executable_sell_price": _safe_int(
-            stock.get("scalp_trailing_continuation_recheck_counterfactual_sell_price"),
-            0,
-        ),
-        "recheck_min_profit_rate": f"{float(min_profit):+.4f}",
-        "recheck_max_profit_rate": f"{float(max_profit):+.4f}",
-        "recheck_profit_delta_pct": f"{float(profit_rate) - float(anchor_profit):+.4f}",
-        "recheck_deadline_lag_sec": f"{max(0.0, float(now_ts) - until_epoch):.3f}",
-        "second_extension_forbidden": True,
-    }
 
 
-def _claim_scalp_trailing_continuation_second_extension_log(
-    stock: dict, position_key: str
-) -> bool:
-    with ENTRY_LOCK:
-        consumed_position_key = str(
-            stock.get("scalp_trailing_continuation_recheck_consumed_position_key") or ""
-        ).strip()
-        if consumed_position_key != position_key:
-            return False
-        logged_position_key = str(
-            stock.get(
-                "scalp_trailing_continuation_recheck_second_extension_logged_position_key"
-            )
-            or ""
-        ).strip()
-        if logged_position_key == position_key:
-            return False
-        stock[
-            "scalp_trailing_continuation_recheck_second_extension_logged_position_key"
-        ] = position_key
-        return True
 
 
-def _clear_scalp_trailing_loss_conversion_recheck(stock: dict) -> None:
-    _mutate_stock_state(
-        stock,
-        pop_fields=_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_STATE_FIELDS,
-    )
 
 
-def _scalp_trailing_continuation_recheck_contract_fields() -> dict[str, Any]:
-    return {
-        "threshold_family": "scalp_trailing_continuation_recheck",
-        "metric_role": "bounded_tunable",
-        "decision_authority": "operator_runtime_override_scalp_trailing_continuation_recheck",
-        "window_policy": "same_trailing_candidate_bounded_recheck",
-        "sample_floor": (
-            "positive_profit_with_fresh_trusted_ws_micro_or_single_fresh_rest_quote_"
-            "recovery_or_recent_rising_missed_pyramid_price_guard_handoff"
-        ),
-        "primary_decision_metric": "post_recheck_mfe_before_trailing_exit",
-        "source_quality_gate": "fresh_trusted_ws_composite_micro_or_bounded_ka10004_executable_quote",
-        "runtime_effect": True,
-        "allowed_runtime_apply": True,
-        "actual_order_submitted": False,
-        "broker_order_forbidden": True,
-        "forbidden_uses": (
-            "hard_stop_bypass|protect_stop_bypass|emergency_stop_bypass|"
-            "stale_effective_quote_bypass|broker_guard_bypass|provider_route_change|"
-            "quantity_or_cap_change|second_extension"
-        ),
-    }
 
 
-def _evaluate_scalp_trailing_continuation_recheck(
-    *,
-    stock: dict,
-    code: str,
-    ws_data: dict | None,
-    micro_fields: dict | None,
-    profit_rate: float,
-    peak_profit: float,
-    trailing_peak_worsen: float,
-    current_ai_score: float,
-    now_ts: float,
-    emit_deferred_log: bool = True,
-    recheck_invoker: str = "holding_flow",
-    decision_quote_envelope: dict | None = None,
-) -> bool:
-    """Defer only a shallow profitable trailing exit while fresh WS support persists."""
-    config = _scalp_trailing_continuation_recheck_config(now_ts)
-    if not config["active"]:
-        return False
-
-    position_key = _scalp_trailing_continuation_position_key(stock, code)
-    started_at = _safe_float(
-        stock.get("scalp_trailing_continuation_recheck_started_at"), 0.0
-    )
-    stored_until_epoch = _safe_float(
-        stock.get("scalp_trailing_continuation_recheck_until_epoch"), 0.0
-    )
-    active_position_key = str(
-        stock.get("scalp_trailing_continuation_recheck_position_key") or ""
-    ).strip()
-    if started_at > 0 and active_position_key not in {"", position_key}:
-        _clear_scalp_trailing_continuation_recheck(stock)
-        started_at = 0.0
-        stored_until_epoch = 0.0
-    recheck_already_expired = bool(
-        started_at > 0
-        and stored_until_epoch > 0
-        and float(now_ts) >= stored_until_epoch
-    )
-
-    micro_fields = micro_fields if isinstance(micro_fields, dict) else {}
-    raw_features = stock.get("last_reversal_features") or {}
-    raw_features = raw_features if isinstance(raw_features, dict) else {}
-    features, has_features = _normalize_soft_stop_expert_features(stock)
-    feature_context_usable = bool(
-        has_features
-        and _truthy_field(features.get("micro_context_usable"))
-        and _truthy_field(features.get("tick_aggressor_pressure_usable"))
-    )
-    large_sell_print = bool(
-        feature_context_usable
-        and _truthy_field(features.get("large_sell_print_detected"))
-    )
-    large_sell_state = (
-        "confirmed_sell"
-        if large_sell_print
-        else "confirmed_clear" if feature_context_usable else "unknown"
-    )
-    micro_supported, micro_support_fields = _holding_flow_max_defer_micro_support(
-        ws_data,
-        micro_fields,
-        now_ts=now_ts,
-    )
-    micro_source_state = (
-        str(micro_fields.get("holding_flow_micro_estimator_source_state") or "")
-        .strip()
-        .lower()
-    )
-    micro_source_trusted_ws = micro_source_state.startswith("fresh_ws")
-    shallow_eligible = bool(
-        config["min_peak_pct"] <= float(peak_profit) <= config["max_peak_pct"]
-        and float(profit_rate) >= config["min_profit_pct"]
-        and float(trailing_peak_worsen) <= config["max_worsen_pct"]
-        and float(current_ai_score) >= config["min_ai_score"]
-        and feature_context_usable
-        and not large_sell_print
-        and micro_source_trusted_ws
-        and micro_supported
-    )
-    quote_age_raw = raw_features.get("quote_age_ms")
-    quote_age_ms = (
-        _safe_float(quote_age_raw, float("inf"))
-        if _field_has_numeric_value(quote_age_raw)
-        else float("inf")
-    )
-    quote_fresh = bool(
-        not _truthy_field(raw_features.get("quote_stale"))
-        and quote_age_ms <= config["high_peak_max_quote_age_ms"]
-    )
-    trusted_tick_count = _safe_int(features.get("tick_aggressor_trusted_count"), 0)
-    high_peak_checks = {
-        "enabled": bool(config["high_peak_enabled"]),
-        "peak_band": bool(
-            config["high_peak_min_peak_pct"]
-            <= float(peak_profit)
-            <= config["high_peak_max_peak_pct"]
-        ),
-        "profit_floor": float(profit_rate) >= config["high_peak_min_profit_pct"],
-        "worsen_cap": (
-            float(trailing_peak_worsen) <= config["high_peak_max_worsen_pct"]
-        ),
-        "ai_score": float(current_ai_score) >= config["high_peak_min_ai_score"],
-        "feature_context": feature_context_usable,
-        "quote_fresh": quote_fresh,
-        "trusted_ticks": trusted_tick_count >= config["high_peak_min_trusted_ticks"],
-        "large_sell_clear": not large_sell_print,
-    }
-    high_peak_eligible = all(high_peak_checks.values())
-    scale_in_block = _last_scale_in_submit_block_fields(stock)
-    scale_in_block_at = _safe_float(scale_in_block.get("at"), 0.0)
-    scale_in_block_age_sec = (
-        max(0.0, float(now_ts) - scale_in_block_at)
-        if scale_in_block_at > 0
-        else float("inf")
-    )
-    pyramid_handoff_checks = {
-        "enabled": bool(config["pyramid_handoff_enabled"]),
-        "fresh_block": (
-            scale_in_block_age_sec <= config["pyramid_handoff_max_age_sec"]
-        ),
-        "price_guard_stage": (
-            scale_in_block.get("stage") == "scale_in_price_guard_block"
-        ),
-        "pyramid_type": scale_in_block.get("add_type") == "PYRAMID",
-        "rising_missed_bridge": (
-            scale_in_block.get("add_reason") == "rising_missed_scout_pyramid_bridge_ok"
-        ),
-        "micro_vwap_only": str(scale_in_block.get("reason") or "").startswith(
-            "micro_vwap_bp>"
-        ),
-        "peak_band": bool(
-            config["min_peak_pct"] <= float(peak_profit) <= config["max_peak_pct"]
-        ),
-        "profit_floor": float(profit_rate) >= config["min_profit_pct"],
-        "worsen_cap": (float(trailing_peak_worsen) <= config["max_worsen_pct"]),
-        "feature_context": feature_context_usable,
-        "quote_fresh": quote_fresh,
-        "trusted_ticks": trusted_tick_count >= config["high_peak_min_trusted_ticks"],
-        "large_sell_clear": not large_sell_print,
-    }
-    pyramid_handoff_candidate = False  # Retired PYRAMID cannot defer a common exit.
-    pyramid_handoff_armed = False  # Retired PYRAMID cannot defer a common exit.
-    pyramid_handoff_active_checks = {
-        "peak_band": bool(
-            config["min_peak_pct"] <= float(peak_profit) <= config["max_peak_pct"]
-        ),
-        "profit_floor": float(profit_rate) >= config["min_profit_pct"],
-        "worsen_cap": (float(trailing_peak_worsen) <= config["max_worsen_pct"]),
-        "feature_context": feature_context_usable,
-        "quote_fresh": quote_fresh,
-        "trusted_ticks": trusted_tick_count >= config["high_peak_min_trusted_ticks"],
-        "large_sell_clear": not large_sell_print,
-    }
-    pyramid_handoff_active_eligible = False  # Retired PYRAMID cannot defer a common exit.
-    quote_recovery_band_candidate = bool(
-        (
-            (
-                config["quote_recovery_enabled"]
-                and config["min_peak_pct"]
-                <= float(peak_profit)
-                <= config["max_peak_pct"]
-                and float(profit_rate) >= config["min_profit_pct"]
-                and float(trailing_peak_worsen) <= config["max_worsen_pct"]
-                and not large_sell_print
-                and not shallow_eligible
-                and not pyramid_handoff_armed
-            )
-            or (pyramid_handoff_candidate and not pyramid_handoff_armed)
-        )
-        and not recheck_already_expired
-    )
-    quote_recovery_fields = {
-        "quote_recovery_enabled": bool(config["quote_recovery_enabled"]),
-        "quote_recovery_candidate": bool(quote_recovery_band_candidate),
-        "quote_recovery_eligible": False,
-        "quote_recovery_fetch_state": "not_requested",
-        "quote_recovery_fetch_elapsed_ms": "-",
-        "quote_recovery_quote_age_ms": "-",
-        "quote_recovery_quote_conflicted": False,
-        "quote_recovery_best_bid": 0,
-        "quote_recovery_best_ask": 0,
-        "quote_recovery_executable_sell_price": 0,
-        "quote_recovery_spread_bps": "-",
-        "quote_recovery_max_age_ms": f"{config['quote_recovery_max_age_ms']:.0f}",
-        "quote_recovery_max_spread_bps": (
-            f"{config['quote_recovery_max_spread_bps']:.1f}"
-        ),
-        "quote_recovery_large_sell_state": large_sell_state,
-        "quote_recovery_trigger": (
-            "pyramid_price_guard_handoff"
-            if pyramid_handoff_candidate
-            else (
-                "pyramid_price_guard_handoff_active"
-                if pyramid_handoff_armed
-                else "generic_quote_recovery"
-            )
-        ),
-    }
-    quote_recovery_eligible = False
-    if quote_recovery_band_candidate:
-        rest_snapshot, rest_state, rest_elapsed_ms = (
-            _fetch_rest_orderbook_snapshot_bounded(
-                code, config["quote_recovery_timeout_ms"]
-            )
-        )
-        rest_snapshot = dict(rest_snapshot or {})
-        if rest_snapshot and not any(
-            rest_snapshot.get(key)
-            for key in (
-                "rest_received_ts_ms",
-                "received_at_ms",
-                "rest_received_ts",
-                "received_ts",
-            )
-        ):
-            rest_snapshot["rest_received_ts"] = time.time()
-        (
-            quote_fields,
-            recheck_mark_price,
-            recheck_best_ask,
-            executable_sell_price,
-        ) = _build_quote_consistency_fields(
-            ws_data,
-            rest_snapshot=rest_snapshot,
-            side="sell",
-            safety_exit=True,
-            now_ts=now_ts,
-        )
-        rest_age_ms = _safe_float(
-            quote_fields.get("quote_consistency_rest_age_ms"), float("inf")
-        )
-        quote_consistency_state = (
-            str(quote_fields.get("quote_consistency_state") or "").strip().lower()
-        )
-        quote_consistency_reason = (
-            str(quote_fields.get("quote_consistency_reason") or "").strip().lower()
-        )
-        quote_conflicted = bool(
-            quote_consistency_state in {"conflicted", "diverged"}
-            or quote_consistency_reason
-            in {"conflicted", "price_conflict", "quote_diverged"}
-        )
-        rest_best_bid = _safe_int(rest_snapshot.get("best_bid"), 0)
-        rest_best_ask = _safe_int(rest_snapshot.get("best_ask"), 0)
-        rest_spread_bps = (
-            ((rest_best_ask - rest_best_bid) / max(rest_best_bid, 1)) * 10000.0
-            if rest_best_bid > 0 and rest_best_ask >= rest_best_bid
-            else float("inf")
-        )
-        quote_recovery_eligible = bool(
-            rest_state == "ok"
-            and rest_snapshot
-            and not quote_conflicted
-            and 0.0 <= rest_age_ms <= config["quote_recovery_max_age_ms"]
-            and rest_best_bid > 0
-            and rest_best_ask >= rest_best_bid
-            and executable_sell_price > 0
-            and rest_spread_bps <= config["quote_recovery_max_spread_bps"]
-        )
-        if isinstance(decision_quote_envelope, dict):
-            if quote_conflicted:
-                envelope_block_reason = "recheck_quote_conflicted"
-            elif rest_state == "ok" and not quote_recovery_eligible:
-                envelope_block_reason = "recheck_quote_not_reusable"
-            elif rest_state != "ok":
-                envelope_block_reason = f"recheck_rest_{rest_state or 'unknown'}"
-            else:
-                envelope_block_reason = "-"
-            decision_quote_envelope.update(
-                {
-                    "exit_quote_envelope_recheck_attempted": True,
-                    "exit_quote_envelope_recheck_rest_state": rest_state,
-                    "exit_quote_envelope_recheck_rest_elapsed_ms": round(
-                        rest_elapsed_ms, 3
-                    ),
-                    "exit_quote_envelope_recheck_quote_age_ms": (
-                        round(rest_age_ms, 3) if rest_age_ms != float("inf") else "-"
-                    ),
-                    "exit_quote_envelope_recheck_quote_conflicted": (quote_conflicted),
-                    "exit_quote_envelope_recheck_mark_price": _safe_int(
-                        recheck_mark_price, 0
-                    ),
-                    "exit_quote_envelope_recheck_best_bid": _safe_int(
-                        executable_sell_price, rest_best_bid
-                    ),
-                    "exit_quote_envelope_recheck_best_ask": _safe_int(
-                        recheck_best_ask, rest_best_ask
-                    ),
-                    "exit_quote_envelope_recheck_reuse_allowed": (
-                        quote_recovery_eligible
-                    ),
-                    "exit_quote_envelope_recheck_block_reason": (envelope_block_reason),
-                    "exit_quote_envelope_recheck_rest_snapshot": rest_snapshot,
-                    "exit_quote_envelope_recheck_quote_fields": quote_fields,
-                }
-            )
-        quote_recovery_fields.update(
-            {
-                "quote_recovery_eligible": quote_recovery_eligible,
-                "quote_recovery_fetch_state": rest_state,
-                "quote_recovery_fetch_elapsed_ms": f"{rest_elapsed_ms:.3f}",
-                "quote_recovery_quote_age_ms": (
-                    f"{rest_age_ms:.3f}" if rest_age_ms != float("inf") else "-"
-                ),
-                "quote_recovery_quote_conflicted": quote_conflicted,
-                "quote_recovery_best_bid": rest_best_bid,
-                "quote_recovery_best_ask": rest_best_ask,
-                "quote_recovery_executable_sell_price": executable_sell_price,
-                "quote_recovery_spread_bps": (
-                    f"{rest_spread_bps:.3f}" if rest_spread_bps != float("inf") else "-"
-                ),
-                **quote_fields,
-            }
-        )
-
-    eligible = bool(
-        shallow_eligible
-        or high_peak_eligible
-        or quote_recovery_eligible
-        or pyramid_handoff_active_eligible
-    )
-    if high_peak_eligible:
-        recheck_lane = "high_peak"
-    elif shallow_eligible:
-        recheck_lane = "shallow"
-    elif (
-        pyramid_handoff_candidate and quote_recovery_eligible
-    ) or pyramid_handoff_active_eligible:
-        recheck_lane = "scale_in_handoff"
-    else:
-        recheck_lane = "quote_recovery"
-    recheck_ttl_sec = (
-        config["high_peak_ttl_sec"] if high_peak_eligible else config["ttl_sec"]
-    )
-    high_peak_failed_checks = [
-        name for name, passed in high_peak_checks.items() if not passed
-    ]
-    state_fields = {
-        "recheck_invoker": recheck_invoker,
-        "recheck_enabled": bool(config["enabled"]),
-        "recheck_active": bool(config["active"]),
-        "recheck_active_date": config["active_date"] or "-",
-        "recheck_current_date": config["current_date"],
-        "recheck_ttl_sec": f"{recheck_ttl_sec:.3f}",
-        "recheck_min_peak_pct": f"{config['min_peak_pct']:.2f}",
-        "recheck_max_peak_pct": f"{config['max_peak_pct']:.2f}",
-        "recheck_min_profit_pct": f"{config['min_profit_pct']:+.2f}",
-        "recheck_max_worsen_pct": f"{config['max_worsen_pct']:.2f}",
-        "recheck_min_ai_score": f"{config['min_ai_score']:.0f}",
-        "recheck_lane": recheck_lane if eligible else "ineligible",
-        "high_peak_enabled": bool(config["high_peak_enabled"]),
-        "high_peak_eligible": bool(high_peak_eligible),
-        "high_peak_failed_checks": (
-            ",".join(high_peak_failed_checks) if high_peak_failed_checks else "-"
-        ),
-        "high_peak_ttl_sec": f"{config['high_peak_ttl_sec']:.3f}",
-        "high_peak_min_peak_pct": f"{config['high_peak_min_peak_pct']:.2f}",
-        "high_peak_max_peak_pct": f"{config['high_peak_max_peak_pct']:.2f}",
-        "high_peak_min_profit_pct": f"{config['high_peak_min_profit_pct']:+.2f}",
-        "high_peak_max_worsen_pct": f"{config['high_peak_max_worsen_pct']:.2f}",
-        "high_peak_min_ai_score": f"{config['high_peak_min_ai_score']:.0f}",
-        "high_peak_max_quote_age_ms": f"{config['high_peak_max_quote_age_ms']:.0f}",
-        "high_peak_quote_age_ms": (
-            f"{quote_age_ms:.3f}" if quote_age_ms != float("inf") else "-"
-        ),
-        "high_peak_quote_fresh": quote_fresh,
-        "high_peak_min_trusted_ticks": config["high_peak_min_trusted_ticks"],
-        "high_peak_trusted_tick_count": trusted_tick_count,
-        "pyramid_handoff_enabled": bool(config["pyramid_handoff_enabled"]),
-        "pyramid_handoff_candidate": bool(pyramid_handoff_candidate),
-        "pyramid_handoff_armed": bool(pyramid_handoff_armed),
-        "pyramid_handoff_active_eligible": bool(pyramid_handoff_active_eligible),
-        "pyramid_handoff_active_failed_checks": (
-            ",".join(
-                name
-                for name, passed in pyramid_handoff_active_checks.items()
-                if not passed
-            )
-            or "-"
-        ),
-        "pyramid_handoff_failed_checks": (
-            ",".join(
-                name for name, passed in pyramid_handoff_checks.items() if not passed
-            )
-            or "-"
-        ),
-        "pyramid_handoff_max_age_sec": (f"{config['pyramid_handoff_max_age_sec']:.3f}"),
-        "pyramid_handoff_block_age_sec": (
-            f"{scale_in_block_age_sec:.3f}"
-            if scale_in_block_age_sec != float("inf")
-            else "-"
-        ),
-        "pyramid_handoff_block_stage": scale_in_block.get("stage") or "-",
-        "pyramid_handoff_block_reason": scale_in_block.get("reason") or "-",
-        "pyramid_handoff_add_reason": scale_in_block.get("add_reason") or "-",
-        "profit_rate": f"{float(profit_rate):+.2f}",
-        "peak_profit": f"{float(peak_profit):+.2f}",
-        "trailing_peak_worsen": f"{float(trailing_peak_worsen):.2f}",
-        "current_ai_score": f"{float(current_ai_score):.0f}",
-        "reversal_feature_context_usable": bool(feature_context_usable),
-        "large_sell_print_detected": bool(large_sell_print),
-        "micro_source_state": micro_source_state or "missing",
-        "micro_source_trusted_ws": bool(micro_source_trusted_ws),
-        "composite_micro_supported": bool(micro_supported),
-        **_exit_quote_envelope_log_fields(decision_quote_envelope),
-        **quote_recovery_fields,
-        **micro_support_fields,
-        **micro_fields,
-        **_scalp_trailing_continuation_recheck_contract_fields(),
-    }
-    if started_at <= 0:
-        consumed_position_key = str(
-            stock.get("scalp_trailing_continuation_recheck_consumed_position_key") or ""
-        ).strip()
-        if consumed_position_key == position_key:
-            if _claim_scalp_trailing_continuation_second_extension_log(
-                stock, position_key
-            ):
-                counterfactual_sell_price = _safe_int(
-                    quote_recovery_fields.get("quote_recovery_executable_sell_price"),
-                    0,
-                ) or _safe_int(
-                    (decision_quote_envelope or {}).get(
-                        "exit_quote_envelope_base_best_bid"
-                    ),
-                    0,
-                )
-                _log_holding_pipeline(
-                    stock,
-                    code,
-                    "scalp_trailing_continuation_recheck",
-                    recheck_state="second_extension_blocked",
-                    recheck_contract_version="bounded_one_shot_attribution_v2",
-                    recheck_id=str(
-                        stock.get("scalp_trailing_continuation_recheck_consumed_id")
-                        or "-"
-                    ),
-                    recheck_position_key=position_key,
-                    counterfactual_profit_rate=f"{float(profit_rate):+.4f}",
-                    counterfactual_executable_sell_price=counterfactual_sell_price,
-                    recheck_min_profit_rate=f"{float(profit_rate):+.4f}",
-                    recheck_max_profit_rate=f"{float(profit_rate):+.4f}",
-                    recheck_profit_delta_pct="+0.0000",
-                    recheck_deadline_lag_sec="0.000",
-                    second_extension_forbidden=True,
-                    **state_fields,
-                )
-            return False
-        if not eligible:
-            if float(peak_profit) > config["max_peak_pct"]:
-                _log_holding_pipeline(
-                    stock,
-                    code,
-                    "scalp_trailing_continuation_recheck",
-                    recheck_state="high_peak_ineligible",
-                    **state_fields,
-                )
-            return False
-        until_epoch = float(now_ts) + float(recheck_ttl_sec)
-        counterfactual_sell_price = _safe_int(
-            quote_recovery_fields.get("quote_recovery_executable_sell_price"), 0
-        ) or _safe_int(
-            (decision_quote_envelope or {}).get("exit_quote_envelope_base_best_bid"),
-            0,
-        )
-        recheck_id = f"scr-{uuid4().hex}"
-        second_extension_blocked = False
-        concurrent_arm = False
-        with ENTRY_LOCK:
-            concurrent_started_at = _safe_float(
-                stock.get("scalp_trailing_continuation_recheck_started_at"), 0.0
-            )
-            concurrent_position_key = str(
-                stock.get("scalp_trailing_continuation_recheck_position_key") or ""
-            ).strip()
-            if concurrent_started_at > 0 and concurrent_position_key == position_key:
-                concurrent_arm = True
-            elif (
-                str(
-                    stock.get(
-                        "scalp_trailing_continuation_recheck_consumed_position_key"
-                    )
-                    or ""
-                ).strip()
-                == position_key
-            ):
-                second_extension_blocked = True
-            else:
-                stock.update(
-                    {
-                        "scalp_trailing_continuation_recheck_started_at": float(now_ts),
-                        "scalp_trailing_continuation_recheck_until_epoch": until_epoch,
-                        "scalp_trailing_continuation_recheck_id": recheck_id,
-                        "scalp_trailing_continuation_recheck_position_key": position_key,
-                        "scalp_trailing_continuation_recheck_anchor_profit": float(
-                            profit_rate
-                        ),
-                        "scalp_trailing_continuation_recheck_min_profit": float(
-                            profit_rate
-                        ),
-                        "scalp_trailing_continuation_recheck_max_profit": float(
-                            profit_rate
-                        ),
-                        "scalp_trailing_continuation_recheck_counterfactual_sell_price": (
-                            counterfactual_sell_price
-                        ),
-                        "scalp_trailing_continuation_recheck_lane": recheck_lane,
-                        "scalp_trailing_continuation_recheck_consumed_position_key": (
-                            position_key
-                        ),
-                        "scalp_trailing_continuation_recheck_consumed_id": recheck_id,
-                    }
-                )
-        if concurrent_arm:
-            return True
-        if second_extension_blocked:
-            if _claim_scalp_trailing_continuation_second_extension_log(
-                stock, position_key
-            ):
-                _log_holding_pipeline(
-                    stock,
-                    code,
-                    "scalp_trailing_continuation_recheck",
-                    recheck_state="second_extension_blocked",
-                    recheck_contract_version="bounded_one_shot_attribution_v2",
-                    recheck_id=str(
-                        stock.get("scalp_trailing_continuation_recheck_consumed_id")
-                        or "-"
-                    ),
-                    recheck_position_key=position_key,
-                    counterfactual_profit_rate=f"{float(profit_rate):+.4f}",
-                    counterfactual_executable_sell_price=counterfactual_sell_price,
-                    recheck_min_profit_rate=f"{float(profit_rate):+.4f}",
-                    recheck_max_profit_rate=f"{float(profit_rate):+.4f}",
-                    recheck_profit_delta_pct="+0.0000",
-                    recheck_deadline_lag_sec="0.000",
-                    second_extension_forbidden=True,
-                    **state_fields,
-                )
-            return False
-        _log_holding_pipeline(
-            stock,
-            code,
-            "scalp_trailing_continuation_recheck",
-            recheck_state="armed",
-            recheck_until_epoch=f"{until_epoch:.3f}",
-            recheck_contract_version="bounded_one_shot_attribution_v2",
-            recheck_id=recheck_id,
-            recheck_position_key=position_key,
-            counterfactual_profit_rate=f"{float(profit_rate):+.4f}",
-            counterfactual_executable_sell_price=counterfactual_sell_price,
-            recheck_min_profit_rate=f"{float(profit_rate):+.4f}",
-            recheck_max_profit_rate=f"{float(profit_rate):+.4f}",
-            recheck_profit_delta_pct="+0.0000",
-            recheck_deadline_lag_sec="0.000",
-            second_extension_forbidden=True,
-            **state_fields,
-        )
-        return True
-
-    until_epoch = _safe_float(
-        stock.get("scalp_trailing_continuation_recheck_until_epoch"),
-        started_at + float(recheck_ttl_sec),
-    )
-    elapsed_sec = max(0.0, float(now_ts) - started_at)
-    if float(now_ts) >= until_epoch:
-        terminal_fields = _scalp_trailing_continuation_terminal_fields(
-            stock,
-            now_ts=now_ts,
-            until_epoch=until_epoch,
-            profit_rate=profit_rate,
-        )
-        _clear_scalp_trailing_continuation_recheck(stock)
-        _log_holding_pipeline(
-            stock,
-            code,
-            "scalp_trailing_continuation_recheck",
-            recheck_state="ttl_expired",
-            recheck_elapsed_sec=f"{elapsed_sec:.3f}",
-            recheck_until_epoch=f"{until_epoch:.3f}",
-            **terminal_fields,
-            **state_fields,
-        )
-        return False
-    if not eligible:
-        terminal_fields = _scalp_trailing_continuation_terminal_fields(
-            stock,
-            now_ts=now_ts,
-            until_epoch=until_epoch,
-            profit_rate=profit_rate,
-        )
-        _clear_scalp_trailing_continuation_recheck(stock)
-        _log_holding_pipeline(
-            stock,
-            code,
-            "scalp_trailing_continuation_recheck",
-            recheck_state="vetoed",
-            recheck_elapsed_sec=f"{elapsed_sec:.3f}",
-            recheck_until_epoch=f"{until_epoch:.3f}",
-            **terminal_fields,
-            **state_fields,
-        )
-        return False
-
-    _mutate_stock_state(
-        stock,
-        set_fields={
-            "scalp_trailing_continuation_recheck_min_profit": min(
-                _safe_float(
-                    stock.get("scalp_trailing_continuation_recheck_min_profit"),
-                    profit_rate,
-                ),
-                float(profit_rate),
-            ),
-            "scalp_trailing_continuation_recheck_max_profit": max(
-                _safe_float(
-                    stock.get("scalp_trailing_continuation_recheck_max_profit"),
-                    profit_rate,
-                ),
-                float(profit_rate),
-            ),
-        },
-    )
-    if emit_deferred_log:
-        deferred_fields = _scalp_trailing_continuation_terminal_fields(
-            stock,
-            now_ts=now_ts,
-            until_epoch=until_epoch,
-            profit_rate=profit_rate,
-        )
-        _log_holding_pipeline(
-            stock,
-            code,
-            "scalp_trailing_continuation_recheck",
-            recheck_state="deferred",
-            recheck_elapsed_sec=f"{elapsed_sec:.3f}",
-            recheck_until_epoch=f"{until_epoch:.3f}",
-            **deferred_fields,
-            **state_fields,
-        )
-    return True
 
 
 def _evaluate_holding_flow_override(
@@ -54142,9 +52663,7 @@ def _evaluate_holding_flow_override(
                 "holding_flow_max_defer_extension_started_at": None,
             },
             pop_fields=(
-                *_SCALP_TRAILING_CONTINUATION_RECHECK_STATE_FIELDS,
-                *_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_STATE_FIELDS,
-            ),
+                    ),
         )
 
     elapsed_sec = max(0, int(now_ts - candidate_started_at))
@@ -54293,67 +52812,6 @@ def _evaluate_holding_flow_override(
             **holding_flow_micro_estimator_fields,
         )
         return True
-    if exit_rule == "scalp_trailing_take_profit":
-        trailing_peak_worsen = float(peak_profit or 0.0) - float(profit_rate or 0.0)
-        holding_score_trailing_ctx = _holding_score_runtime_context(
-            stock,
-            current_ai_score=current_ai_score,
-            now_ts=now_ts,
-            is_critical_zone=True,
-        )
-        trailing_force_worsen_pct = (
-            _rule_float("SCALP_TRAILING_LIMIT_STRONG", 0.8)
-            if _holding_strong_trailing_enabled(
-                holding_score_trailing_ctx, current_ai_score
-            )
-            else _rule_float("SCALP_TRAILING_LIMIT_WEAK", 0.4)
-        )
-        if _evaluate_scalp_trailing_loss_conversion_recheck(
-            stock=stock,
-            code=code,
-            ws_data=ws_data,
-            profit_rate=profit_rate,
-            peak_profit=peak_profit,
-            trailing_peak_worsen=trailing_peak_worsen,
-            now_ts=now_ts,
-        ):
-            return False
-        if _evaluate_scalp_trailing_continuation_recheck(
-            stock=stock,
-            code=code,
-            ws_data=ws_data,
-            micro_fields=holding_flow_micro_estimator_fields,
-            profit_rate=profit_rate,
-            peak_profit=peak_profit,
-            trailing_peak_worsen=trailing_peak_worsen,
-            current_ai_score=current_ai_score,
-            now_ts=now_ts,
-        ):
-            return False
-        if trailing_peak_worsen + 1e-9 >= max(0.0, trailing_force_worsen_pct):
-            _log_holding_pipeline(
-                stock,
-                code,
-                "holding_flow_override_force_exit",
-                exit_rule=exit_rule,
-                force_reason="trailing_peak_worsen_floor",
-                trailing_peak_worsen=f"{trailing_peak_worsen:.2f}",
-                trailing_force_worsen_pct=f"{trailing_force_worsen_pct:.2f}",
-                drawdown=f"{drawdown:.2f}",
-                profit_rate=f"{profit_rate:+.2f}",
-                peak_profit=f"{peak_profit:+.2f}",
-                candidate_profit=f"{candidate_profit:+.2f}",
-                **_holding_flow_ofi_force_exit_phase_fields(
-                    stock,
-                    force_reason="trailing_peak_worsen_floor",
-                    profit_rate=profit_rate,
-                    now_ts=now_ts,
-                ),
-                **_holding_flow_override_force_exit_contract_fields(),
-                **holding_flow_micro_estimator_fields,
-            )
-            return True
-
     def _holding_flow_micro_feature_log_fields(
         features: dict, has_features: bool
     ) -> dict:
@@ -82987,6 +81445,7 @@ def handle_holding_state(
             **holding_ws_fields,
         )
         return
+    peak_mark_for_update = curr_p
     holding_quote_fields, canonical_mark_price, _, executable_sell_price = (
         _build_quote_consistency_fields(
             ws_data,
@@ -83117,7 +81576,9 @@ def handle_holding_state(
     if isinstance(highest_prices, dict):
         with ENTRY_LOCK:
             if stock.get("peak_rebaseline_pending"):
-                rebaseline_price = max(1, _safe_int(buy_p, curr_p), curr_p)
+                rebaseline_price = max(
+                    1, _safe_int(buy_p, curr_p), peak_mark_for_update
+                )
                 highest_prices[price_key] = rebaseline_price
                 stock["peak_rebaseline_pending"] = False
                 stock["peak_basis_qty"] = _safe_int(stock.get("buy_qty"), 0)
@@ -83126,12 +81587,14 @@ def handle_holding_state(
                 stock["peak_basis_at"] = now_ts
             if price_key not in highest_prices:
                 highest_prices[price_key] = (
-                    max(1, _safe_int(buy_p, curr_p))
-                    if rest_quote_only_recovery
+                    max(1, _safe_int(buy_p, curr_p), peak_mark_for_update)
+                    if rest_quote_only_recovery or strategy == "SCALPING"
                     else curr_p
                 )
-            if not rest_quote_only_recovery:
-                highest_prices[price_key] = max(highest_prices[price_key], curr_p)
+            if not rest_quote_only_recovery and peak_mark_for_update > 0:
+                highest_prices[price_key] = max(
+                    highest_prices[price_key], peak_mark_for_update
+                )
         _persist_scalping_position_peak(
             stock,
             code,
@@ -85108,9 +83571,15 @@ def handle_holding_state(
             )
         else:
             drawdown = 0
-        trailing_decision_price = curr_p
-        trailing_decision_profit_rate = profit_rate
-        trailing_decision_drawdown = drawdown
+        scalp_tp_peak_price = _scalp_trailing_trusted_peak(
+            stock, code, ws_data, buy_price=buy_p, now_ts=now_ts
+        )
+        scalp_tp_peak_profit = calculate_net_profit_rate(
+            buy_p, scalp_tp_peak_price
+        )
+        trailing_decision_price, trailing_bid_source = _trusted_scalp_trailing_bid(
+            ws_data, code=code, quote_fields=holding_quote_fields, now_ts=now_ts
+        )
         nxt_trailing_bid_guard_fields = _scalp_nxt_trailing_bid_guard_context(
             ws_data,
             code=code,
@@ -85120,18 +83589,34 @@ def handle_holding_state(
         if nxt_trailing_bid_guard_fields.get("nxt_trailing_bid_guard_applied"):
             trailing_decision_price = _safe_int(
                 nxt_trailing_bid_guard_fields.get("nxt_trailing_bid_guard_best_bid"),
-                curr_p,
+                0,
             )
-            trailing_decision_profit_rate = calculate_net_profit_rate(
-                buy_p,
-                trailing_decision_price,
+            trailing_bid_source = "fresh_nxt_0d_executable_bid"
+        trailing_route_fields = _fast_exit_execution_route_fields(
+            stock, code, ws_data, now_ts=now_ts
+        )
+        if (
+            trailing_route_fields.get("fast_exit_broker_route_blocked")
+            or trailing_route_fields.get("fast_exit_route_source_quality_blocked")
+        ):
+            trailing_decision_price = 0
+            trailing_bid_source = "trailing_route_unproven"
+        trailing_decision_profit_rate = (
+            calculate_net_profit_rate(buy_p, trailing_decision_price)
+            if trailing_decision_price > 0
+            else profit_rate
+        )
+        trailing_decision_drawdown = (
+            max(
+                0.0,
+                (highest_prices[price_key] - trailing_decision_price)
+                / highest_prices[price_key]
+                * 100,
             )
-            if highest_prices.get(price_key, 0) > 0:
-                trailing_decision_drawdown = (
-                    (highest_prices[price_key] - trailing_decision_price)
-                    / highest_prices[price_key]
-                    * 100
-                )
+            if highest_prices.get(price_key, 0) > 0 and trailing_decision_price > 0
+            else 0.0
+        )
+        if nxt_trailing_bid_guard_fields.get("nxt_trailing_bid_guard_applied"):
             nxt_trailing_bid_guard_fields.update(
                 {
                     "nxt_trailing_bid_guard_effective_price": trailing_decision_price,
@@ -85161,10 +83646,37 @@ def handle_holding_state(
             dynamic_stop_pct = soft_stop_pct
             dynamic_trailing_limit = _rule_float("SCALP_TRAILING_LIMIT_WEAK", 0.4)
         scalp_trailing_start_pct = _rule_float(
-            "SCALP_TRAILING_START_PCT", safe_profit_pct
+            "SCALP_TRAILING_START_PCT", 0.6
         )
-        scalp_trailing_peak_armed = peak_profit >= scalp_trailing_start_pct
-        _evaluate_scalp_profit_stagnation_exit(
+        strong_trailing = _holding_strong_trailing_enabled(
+            holding_score_exit_role_ctx, current_ai_score
+        )
+        trailing_decision = evaluate_trailing_take_profit(
+            peak_price=scalp_tp_peak_price,
+            executable_bid=trailing_decision_price,
+            peak_profit_pct=scalp_tp_peak_profit,
+            start_pct=scalp_trailing_start_pct,
+            strong=strong_trailing,
+            weak_limit_pct=dynamic_trailing_limit,
+            strong_limit_pct=dynamic_trailing_limit,
+        )
+        _observe_scalp_trailing_input_transition(
+            stock,
+            code,
+            ws_data=ws_data,
+            decision=trailing_decision,
+            peak_price=scalp_tp_peak_price,
+            executable_bid=trailing_decision_price,
+            bid_source=trailing_bid_source,
+            strong=strong_trailing,
+            ai_score=current_ai_score,
+            ai_usable=bool(holding_score_exit_role_ctx.get("usable_for_negative_exit")),
+            start_pct=scalp_trailing_start_pct,
+            now_ts=now_ts,
+            evaluator="normal",
+        )
+        scalp_trailing_peak_armed = trailing_decision.armed
+        stagnation_observation = _evaluate_scalp_profit_stagnation_exit(
             stock,
             strategy=strategy,
             profit_rate=profit_rate,
@@ -86344,163 +84856,120 @@ def handle_holding_state(
             )
             exit_rule = "scalp_open_reclaim_retrace_exit"
 
-        elif not is_sell_signal and (
-            profit_rate >= safe_profit_pct or scalp_trailing_peak_armed
-        ):
-            if (
+        elif not is_sell_signal and scalp_trailing_peak_armed:
+            if trailing_decision_price <= 0:
+                trailing_decision_price, trailing_bid_source = (
+                    _recover_scalp_trailing_bid_for_normal(
+                        stock, code, ws_data, now_ts=now_ts
+                    )
+                )
+                trailing_decision = evaluate_trailing_take_profit(
+                    peak_price=scalp_tp_peak_price,
+                    executable_bid=trailing_decision_price,
+                    peak_profit_pct=scalp_tp_peak_profit,
+                    start_pct=scalp_trailing_start_pct,
+                    strong=strong_trailing,
+                    weak_limit_pct=dynamic_trailing_limit,
+                    strong_limit_pct=dynamic_trailing_limit,
+                )
+                _observe_scalp_trailing_input_transition(
+                    stock,
+                    code,
+                    ws_data=ws_data,
+                    decision=trailing_decision,
+                    peak_price=scalp_tp_peak_price,
+                    executable_bid=trailing_decision_price,
+                    bid_source=trailing_bid_source,
+                    strong=strong_trailing,
+                    ai_score=current_ai_score,
+                    ai_usable=bool(
+                        holding_score_exit_role_ctx.get("usable_for_negative_exit")
+                    ),
+                    start_pct=scalp_trailing_start_pct,
+                    now_ts=now_ts,
+                    evaluator="normal_rest_recovery",
+                )
+                if trailing_decision_price > 0:
+                    trailing_decision_profit_rate = calculate_net_profit_rate(
+                        buy_p, trailing_decision_price
+                    )
+            if trailing_decision.triggered:
+                original_trade_mark = curr_p
+                curr_p = trailing_decision_price
+                profit_rate = calculate_net_profit_rate(buy_p, curr_p)
+                drawdown = trailing_decision.drawdown_pct
+                ws_data = dict(ws_data or {})
+                ws_data["curr"] = curr_p
+                ws_data["executable_sell_price"] = curr_p
+                if nxt_trailing_bid_guard_fields.get(
+                    "nxt_trailing_bid_guard_applied"
+                ):
+                    ws_data["nxt_trailing_bid_guard_applied"] = True
+                _log_holding_pipeline(
+                    stock,
+                    code,
+                    "scalp_trailing_bid_decision",
+                    original_trade_mark=original_trade_mark,
+                    executable_bid=curr_p,
+                    bid_source=trailing_bid_source,
+                    peak_price=scalp_tp_peak_price,
+                    drawdown_pct=round(drawdown, 6),
+                    threshold_key=trailing_decision.threshold_key,
+                    threshold_pct=round(trailing_decision.threshold_pct, 6),
+                    trigger_kind=trailing_decision.trigger_kind,
+                    **nxt_trailing_bid_guard_fields,
+                )
+                is_sell_signal = True
+                sell_reason_type = "LOSS" if profit_rate < 0 else "TRAILING"
+                reason = (
+                    f"고점 대비 밀림 ({drawdown:.2f}%). "
+                    f"트레일링 청산 ({profit_rate:+.2f}%, peak={scalp_tp_peak_profit:+.2f}%)"
+                )
+                exit_rule = "scalp_trailing_take_profit"
+
+        # Retained source observations cannot select a separate real SELL.
+        _observe_scalp_tp_alternative(
+            stock,
+            code,
+            exit_rule="scalp_ai_momentum_decay",
+            would_exit=bool(
                 profit_rate >= safe_profit_pct
                 and holding_score_negative_exit_usable
                 and current_ai_score < momentum_decay_score_limit
                 and held_sec >= momentum_decay_min_hold_sec
-            ):
-                is_sell_signal = True
-                sell_reason_type = "MOMENTUM_DECAY"
-                reason = (
-                    f"🤖 AI 틱 가속도 둔화 ({current_ai_score:.0f}점). "
-                    f"확인유예({momentum_decay_min_hold_sec}s) 후 익절 (+{profit_rate:.2f}%)"
-                )
-                exit_rule = "scalp_ai_momentum_decay"
-
-            elif (
-                scalp_trailing_peak_armed
-                and trailing_decision_drawdown >= dynamic_trailing_limit
-            ):
-                in_pyramid_trailing_grace, _, _ = _pyramid_post_add_trailing_grace(
-                    stock, now_ts
-                )
-                if in_pyramid_trailing_grace:
-                    _log_pyramid_post_add_trailing_grace(
-                        stock,
-                        code,
-                        now_ts=now_ts,
-                        exit_rule_candidate="scalp_trailing_take_profit",
-                        profit_rate=trailing_decision_profit_rate,
-                        peak_profit=peak_profit,
-                        drawdown=trailing_decision_drawdown,
-                    )
-                else:
-                    if nxt_trailing_bid_guard_fields.get(
-                        "nxt_trailing_bid_guard_applied"
-                    ):
-                        original_trade_mark = curr_p
-                        original_profit_rate = profit_rate
-                        curr_p = trailing_decision_price
-                        profit_rate = trailing_decision_profit_rate
-                        drawdown = trailing_decision_drawdown
-                        ws_data = dict(ws_data or {})
-                        ws_data["curr"] = curr_p
-                        ws_data["executable_sell_price"] = curr_p
-                        ws_data["nxt_trailing_bid_guard_applied"] = True
-                        _log_holding_pipeline(
-                            stock,
-                            code,
-                            "nxt_trailing_bid_guard_applied",
-                            original_trade_mark=original_trade_mark,
-                            original_profit_rate=f"{original_profit_rate:+.2f}",
-                            profit_rate=f"{profit_rate:+.2f}",
-                            peak_profit=f"{peak_profit:+.2f}",
-                            drawdown=f"{drawdown:.2f}",
-                            **nxt_trailing_bid_guard_fields,
-                        )
-                    is_sell_signal = True
-                    sell_reason_type = "LOSS" if profit_rate < 0 else "TRAILING"
-                    trailing_label = (
-                        "트레일링 손실방어" if profit_rate < 0 else "트레일링 익절"
-                    )
-                    reason = (
-                        f"🔥 고점 대비 밀림 (-{drawdown:.2f}%). "
-                        f"{trailing_label} ({profit_rate:+.2f}%, peak={peak_profit:+.2f}%)"
-                    )
-                    exit_rule = "scalp_trailing_take_profit"
-            else:
-                stagnation_exit = (
-                    _evaluate_scalp_profit_stagnation_exit(
-                        stock,
-                        strategy=strategy,
-                        profit_rate=profit_rate,
-                        peak_profit=peak_profit,
-                        current_ai_score=current_ai_score,
-                        now_ts=now_ts,
-                    )
-                    if profit_rate >= safe_profit_pct
-                    else {}
-                )
-                if stagnation_exit.get("should_exit"):
-                    is_sell_signal = True
-                    sell_reason_type = "PROFIT_STAGNATION"
-                    reason = (
-                        "익절권 횡보 시간청산 "
-                        f"(hold={held_sec}s, stable={stagnation_exit.get('elapsed_sec', 0)}s, "
-                        f"profit=+{profit_rate:.2f}%, anchor=+{_safe_float(stagnation_exit.get('anchor_profit'), profit_rate):.2f}%, "
-                        f"peak=+{peak_profit:.2f}%, peak_improve={_safe_float(stagnation_exit.get('peak_improve'), 0.0):.2f}%p)"
-                    )
-                    exit_rule = "scalp_profit_stagnation_time_exit"
+            ),
+            profit_rate=profit_rate,
+            peak_profit=peak_profit,
+            now_ts=now_ts,
+        )
+        _observe_scalp_tp_alternative(
+            stock,
+            code,
+            exit_rule="scalp_profit_stagnation_time_exit",
+            would_exit=bool(stagnation_observation.get("should_exit")),
+            profit_rate=profit_rate,
+            peak_profit=peak_profit,
+            now_ts=now_ts,
+        )
 
         if not is_sell_signal:
-            low_profit_stagnation_exit = (
-                _evaluate_scalp_low_profit_stagnation_hard_exit(
-                    stock,
-                    strategy=strategy,
-                    profit_rate=profit_rate,
-                    peak_profit=peak_profit,
-                    held_sec=held_sec,
-                    now_ts=now_ts,
-                )
+            low_profit_observation = _evaluate_scalp_low_profit_stagnation_hard_exit(
+                stock,
+                strategy=strategy,
+                profit_rate=profit_rate,
+                peak_profit=peak_profit,
+                held_sec=held_sec,
+                now_ts=now_ts,
             )
-            if low_profit_stagnation_exit.get("should_exit"):
-                adjusted_profit = _safe_float(
-                    low_profit_stagnation_exit.get("adjusted_profit_pct"),
-                    profit_rate,
-                )
-                slippage_bps = _safe_float(
-                    low_profit_stagnation_exit.get("assumed_exit_slippage_bps"),
-                    0.0,
-                )
-                is_sell_signal = True
-                sell_reason_type = "LOW_PROFIT_STAGNATION"
-                reason = (
-                    "조정수익권 횡보확인 청산 "
-                    f"(hold={held_sec}s/{low_profit_stagnation_exit.get('min_hold_sec', 0)}s, "
-                    f"stable={low_profit_stagnation_exit.get('elapsed_sec', 0)}s/"
-                    f"{low_profit_stagnation_exit.get('confirmation_sec', 0)}s, "
-                    f"profit=+{profit_rate:.2f}%, adjusted=+{adjusted_profit:.2f}%, "
-                    f"slippage={slippage_bps:.0f}bp)"
-                )
-                exit_rule = "scalp_low_profit_stagnation_hard_exit"
-            elif low_profit_stagnation_exit.get("state_changed"):
-                _log_holding_pipeline(
-                    stock,
-                    code,
-                    "low_profit_stagnation_confirmation",
-                    reason=low_profit_stagnation_exit.get("reason"),
-                    profit_rate=f"{profit_rate:+.2f}",
-                    peak_profit=f"{peak_profit:+.2f}",
-                    adjusted_profit_pct=f"{_safe_float(low_profit_stagnation_exit.get('adjusted_profit_pct'), profit_rate):+.2f}",
-                    elapsed_sec=low_profit_stagnation_exit.get("elapsed_sec", 0),
-                    confirmation_sec=low_profit_stagnation_exit.get(
-                        "confirmation_sec", 0
-                    ),
-                    anchor_profit=low_profit_stagnation_exit.get("anchor_profit", "-"),
-                    anchor_peak=low_profit_stagnation_exit.get("anchor_peak", "-"),
-                    max_profit_move=low_profit_stagnation_exit.get(
-                        "max_profit_move", "-"
-                    ),
-                    max_peak_improve=low_profit_stagnation_exit.get(
-                        "max_peak_improve", "-"
-                    ),
-                    **holding_quote_provenance,
-                    metric_role="bounded_tunable_exit_confirmation",
-                    decision_authority="profit_stagnation_exit_runtime_confirmation_only",
-                    window_policy="same_position_runtime_state",
-                    sample_floor="existing_preopen_selected_stagnation_thresholds",
-                    primary_decision_metric="confirmed_low_profit_stagnation_duration_sec",
-                    source_quality_gate="holding_quote_freshness_and_profit_peak_state",
-                    runtime_effect=True,
-                    allowed_runtime_apply=False,
-                    actual_order_submitted=False,
-                    broker_order_forbidden=True,
-                    forbidden_uses="hard_stop_bypass,protect_stop_bypass,emergency_stop_bypass,trailing_exit_bypass,provider_route_change,quantity_or_cap_change",
-                )
+            _observe_scalp_tp_alternative(
+                stock,
+                code,
+                exit_rule="scalp_low_profit_stagnation_hard_exit",
+                would_exit=bool(low_profit_observation.get("should_exit")),
+                profit_rate=profit_rate,
+                peak_profit=peak_profit,
+                now_ts=now_ts,
+            )
 
     elif strategy == "KOSDAQ_ML":
         try:
@@ -86641,7 +85110,10 @@ def handle_holding_state(
                 return
         if (
             not opening_rotation_active
-            and exit_rule != "scalp_same_session_terminal_exit"
+            and exit_rule not in {
+                "scalp_same_session_terminal_exit",
+                "scalp_trailing_take_profit",
+            }
         ):
             if not _evaluate_holding_flow_override(
                 stock=stock,
@@ -86947,14 +85419,39 @@ def handle_holding_state(
                 _scalp_exit_threshold_observation_fields(
                     exit_rule=exit_rule,
                     profit_rate=profit_rate,
-                    peak_profit=peak_profit,
+                    peak_profit=(
+                        scalp_tp_peak_profit
+                        if str(exit_rule or "").strip()
+                        == "scalp_trailing_take_profit"
+                        else peak_profit
+                    ),
                     hard_stop_pct=locals().get("hard_stop_pct"),
                     soft_stop_pct=locals().get("dynamic_stop_pct"),
                     trailing_start_pct=locals().get("scalp_trailing_start_pct"),
                     trailing_limit_pct=locals().get("dynamic_trailing_limit"),
-                    trailing_drawdown_pct=locals().get("trailing_decision_drawdown"),
+                    trailing_drawdown_pct=(
+                        trailing_decision.drawdown_pct
+                        if str(exit_rule or "").strip()
+                        == "scalp_trailing_take_profit"
+                        else None
+                    ),
                     strong_trailing=_holding_strong_trailing_enabled(
                         holding_score_exit_role_ctx, current_ai_score
+                    ),
+                    trailing_peak_price=locals().get("scalp_tp_peak_price"),
+                    trailing_executable_bid=locals().get(
+                        "trailing_decision_price"
+                    ),
+                    trailing_bid_source=locals().get("trailing_bid_source", ""),
+                    trailing_trigger_kind=(
+                        trailing_decision.trigger_kind
+                        if str(exit_rule or "").strip()
+                        == "scalp_trailing_take_profit"
+                        else ""
+                    ),
+                    current_ai_score=current_ai_score,
+                    ai_score_usable=bool(
+                        holding_score_exit_role_ctx.get("usable_for_negative_exit")
                     ),
                 )
                 if _is_scalp_strategy(strategy)
@@ -87545,7 +86042,6 @@ def handle_holding_state(
             and str(exit_rule or stock.get("last_exit_rule") or "").strip()
             == "scalp_trailing_take_profit"
         )
-        trailing_signal_profit_rate = float(profit_rate)
         soft_stop_signal_profit_rate = float(profit_rate)
         sell_quote_session = resolve_entry_candle_session(now_ts=now_ts)
         sell_quote_venue = resolve_entry_candle_venue(
@@ -87846,80 +86342,6 @@ def handle_holding_state(
                     ),
                 },
             )
-
-        if trailing_pre_submit_recheck:
-            recovery_decision = _trailing_pre_submit_executable_recovery_decision(
-                stock,
-                code,
-                ws_data,
-                buy_price=buy_p,
-                signal_profit_rate=trailing_signal_profit_rate,
-                peak_profit=peak_profit,
-                current_ai_score=current_ai_score,
-                initial_executable_sell_price=sell_order_price,
-                now_ts=now_ts,
-            )
-            if recovery_decision.get("defer"):
-                _mutate_stock_state(
-                    stock,
-                    pop_fields=(
-                        "last_exit_rule",
-                        "last_exit_reason",
-                        "last_exit_decision_source",
-                    ),
-                )
-                _log_holding_pipeline(
-                    stock,
-                    code,
-                    "trailing_pre_submit_executable_recovery_deferred",
-                    exit_rule=exit_rule or stock.get("last_exit_rule") or "-",
-                    sell_reason_type=sell_reason_type or "-",
-                    exit_classification="trailing_loss_conversion",
-                    metric_role="bounded_tunable",
-                    decision_authority=(
-                        "real_scalping_trailing_pre_submit_executable_recovery_guard"
-                    ),
-                    window_policy="same_position_single_two_second_recheck",
-                    sample_floor="fresh_two_point_executable_sell_quote_recovery",
-                    primary_decision_metric="post_defer_mfe_before_next_exit_signal",
-                    source_quality_gate="two_fresh_consistent_executable_sell_quotes",
-                    actual_order_submitted=False,
-                    broker_order_forbidden=True,
-                    runtime_effect=True,
-                    allowed_runtime_apply=False,
-                    forbidden_uses=(
-                        f"{TRADE_QUALITY_RUNTIME_FORBIDDEN_USES}|hard_stop_bypass|"
-                        "protect_stop_bypass|emergency_stop_bypass|second_extension"
-                    ),
-                    **recovery_decision,
-                )
-                return
-            if recovery_decision.get("evaluated"):
-                _log_holding_pipeline(
-                    stock,
-                    code,
-                    "trailing_pre_submit_executable_recovery_checked",
-                    exit_rule=exit_rule or stock.get("last_exit_rule") or "-",
-                    sell_reason_type=sell_reason_type or "-",
-                    exit_classification="trailing_loss_conversion",
-                    metric_role="bounded_tunable",
-                    decision_authority=(
-                        "real_scalping_trailing_pre_submit_executable_recovery_guard"
-                    ),
-                    window_policy="same_position_single_two_second_recheck",
-                    sample_floor="fresh_two_point_executable_sell_quote_recovery",
-                    primary_decision_metric="post_recheck_executable_profit_rate",
-                    source_quality_gate="two_fresh_consistent_executable_sell_quotes",
-                    actual_order_submitted=False,
-                    broker_order_forbidden=False,
-                    runtime_effect=True,
-                    allowed_runtime_apply=False,
-                    forbidden_uses=(
-                        f"{TRADE_QUALITY_RUNTIME_FORBIDDEN_USES}|hard_stop_bypass|"
-                        "protect_stop_bypass|emergency_stop_bypass|second_extension"
-                    ),
-                    **recovery_decision,
-                )
 
         sell_exchange_resolution = _resolve_holding_sell_dmst_stex_tp(
             stock,
