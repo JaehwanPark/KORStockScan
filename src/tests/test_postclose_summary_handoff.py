@@ -554,6 +554,7 @@ def test_widget_eod_wait_does_not_acquire_compute_slot(stage_environment, monkey
 def test_stage_failure_does_not_cancel_independent_machine(stage_environment, failed_stage):
     h, day, report, run, produce = stage_environment
     if failed_stage == 'main_auxiliary_policy': run('outcome_labels')
+    if failed_stage == 'market_weakness': run('machine_attribution')
     failed = run(failed_stage, runner=lambda *a, **kw: 9)
     machine = run('main_machine_policy')
     assert failed['status'] == 'failed'
@@ -572,6 +573,16 @@ def test_stage_prerequisites_and_changed_generation(stage_environment):
     path.write_text(json.dumps(dict(target_date=day, status='complete', revised=True)))
     assert h.stage_receipt_issues(report, day, 'machine_attribution') == ['machine_attribution:output_generation_changed']
     assert run('machine_timing')['status'] == 'deferred'
+
+
+def test_summary_handoff_tracks_later_active_stage_generation(stage_environment):
+    h, day, report, run, _produce = stage_environment
+    assert run('summary_handoff')['status'] == 'succeeded'
+    assert h.stage_receipt_issues(report, day, 'summary_handoff') == []
+    assert run('legacy_machine_report')['status'] == 'succeeded'
+    assert h.stage_receipt_issues(report, day, 'summary_handoff') == [
+        'summary_handoff:input_generation_changed'
+    ]
 
 
 def test_committed_label_intake_binds_payload_and_rejects_partial_file(stage_environment):
@@ -705,6 +716,12 @@ def test_policy_readiness_is_separate_from_failed_diagnostic(stage_environment, 
     view=h.stage_overview(report, day)
     assert not view['postclose_all_active_stages_complete']
     assert view['next_session_policy_ready']
+    assert view['widget_policy_authority'] == 'live'
+    monkeypatch.setattr(WidgetSymbolRuntimePolicyLoader, 'resolve_all', lambda *a, **kw: {})
+    monkeypatch.setattr(WidgetSymbolRuntimePolicyLoader, 'resolve_observation_all', lambda *a, **kw: {'observed': {}})
+    view=h.stage_overview(report, day)
+    assert view['next_session_policy_ready']
+    assert view['widget_policy_authority'] == 'observation_only'
     monkeypatch.setattr(bootstrap_owner, 'verify_bootstrap', lambda *a, **kw: {'passed':False})
     assert not h.stage_overview(report, day)['next_session_policy_ready']
     monkeypatch.setattr(bootstrap_owner, 'verify_bootstrap', lambda *a, **kw: {'passed':True})
@@ -777,6 +794,54 @@ def test_launch_rejects_invalid_date_before_fork(monkeypatch):
     monkeypatch.setattr(h.subprocess, 'Popen', lambda *a, **kw: pytest.fail('must not launch'))
     with pytest.raises(SystemExit):
         h._stage_main(['--stage','main_machine_policy','--date','2099-01-01','--launch'])
+
+
+def test_pre_submit_delay_stage_command_resolves_next_session_effective_date():
+    from src.engine.automation import postclose_summary_handoff as h
+
+    command = h.stage_commands('pre_submit_delay', '2026-09-23', '2026-09-23')[0]
+
+    assert command[-4:] == ['--date', '2026-09-23', '--effective-date', '2026-09-28']
+
+
+def test_market_weakness_waits_for_its_attribution_source(stage_environment):
+    h, _, _, _, _ = stage_environment
+
+    assert h.STAGE_REGISTRY['market_weakness'][0] == ('machine_attribution',)
+
+
+def test_unchanged_stage_accepts_exact_selected_release_code_hash(stage_environment, monkeypatch, tmp_path):
+    h, day, report, run, _ = stage_environment
+    run('machine_attribution')
+
+    managed = tmp_path / 'KORStockScan-runtime-releases'
+    release = managed / 'immutable-release'
+    previous = managed / 'previous-release'
+    for root in (release, previous):
+        (root / '.git').mkdir(parents=True)
+        dispatcher = root / 'src/engine/automation/postclose_summary_handoff.py'
+        dispatcher.parent.mkdir(parents=True)
+        dispatcher.write_text('# pinned release dispatcher\n')
+    selection = report.parent / 'runtime' / 'runtime_release_selection.json'
+    selection.parent.mkdir(parents=True, exist_ok=True)
+    selection.write_text(json.dumps({
+        'schema': 'runtime_release_selection_v1',
+        'release_root': str(release),
+        'git_commit': 'a' * 40,
+    }))
+
+    def code_hash(stage, commands, project, *, dispatcher_path=None):
+        if dispatcher_path is None:
+            return 'repaired-code'
+        return 'previous-release-code' if project.name == 'previous-release' else 'selected-release-code'
+
+    monkeypatch.setattr(h, '_stage_code', code_hash)
+    path = h.stage_path(report, day, 'machine_attribution')
+    terminal = h._load_json(path)
+    terminal['stage_code_sha256'] = 'previous-release-code'
+    h._stage_write(path, terminal)
+
+    assert h.stage_receipt_issues(report, day, 'machine_attribution', code_hash='repaired-code') == []
 
 
 def test_stage_stop_cleans_child_and_preserves_checkpoint(stage_environment, monkeypatch, tmp_path):

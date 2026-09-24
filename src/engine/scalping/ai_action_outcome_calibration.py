@@ -2390,23 +2390,28 @@ def _common_refinement_population(
         and source_receipt.get("machine_threshold_tuning_input_allowed") is True
         and conflict_locations_complete
     )
+    operating_rows_by_attempt = defaultdict(list)
+    operating_projection_valid = False
+    if operating_projection is not None and natural_rows:
+        from src.engine.scalping import compact_auxiliary_paired_replay as compact
+        operating_projection_valid = compact.valid(operating_projection)
+        if operating_projection_valid:
+            for operating_row in operating_projection.get("rows") or []:
+                attempt_id = operating_row.get("evaluation_attempt_id")
+                if isinstance(attempt_id, str):
+                    operating_rows_by_attempt[attempt_id].append(operating_row)
     for lane, originals in (("paired", paired_rows), ("natural", natural_rows)):
         for original in originals:
             row = dict(original)
             operating_source = None
-            if operating_projection is not None:
-                from src.engine.scalping import compact_auxiliary_paired_replay as compact
-                matches = [r for r in operating_projection.get("rows") or []
-                           if r.get("evaluation_attempt_id") == row.get("evaluation_attempt_id")]
+            if operating_projection_valid and lane == "natural":
+                attempt_id = row.get("evaluation_attempt_id")
+                matches = operating_rows_by_attempt.get(attempt_id, ()) if isinstance(attempt_id, str) else ()
                 # Compact replay is an optional downstream-economic enrichment.
                 # It must never redefine the machine counterfactual population:
                 # BLOCK/RECHECK and paired lanes are valid machine research rows
                 # even though no compact provider call was made for them.
-                if (
-                    lane == "natural"
-                    and compact.valid(operating_projection)
-                    and len(matches) == 1
-                ):
+                if len(matches) == 1:
                     candidate_source = matches[0]
                     if (
                         not candidate_source.get("exclusion_reason")
@@ -2524,16 +2529,19 @@ def _common_refinement_population(
             excluded["paired_alias_of_natural_machine_attempt"] += 1
     result = sorted(accepted.values(), key=lambda r: (r["source_date"], r["decision_trace_id"]))
     sequence_groups = defaultdict(list)
+    natural_sequence_counts = Counter(
+        (r.get("source_date"), r.get("stock_code"), r.get("scanner_promotion_id"))
+        for r in natural_rows
+    )
     for row in result:
         key = (row.get("source_date"), row.get("stock_code"), row.get("scanner_promotion_id"))
         sequence_groups[key].append(row)
     for key, rows in sequence_groups.items():
-        originals = [r for r in natural_rows if
-            (r.get("source_date"), r.get("stock_code"), r.get("scanner_promotion_id")) == key]
+        original_count = natural_sequence_counts[key]
         if natural_allowed and all(key):
             for row in rows:
-                row['machine_sequence_expected_count'] = len(originals)
-        if natural_allowed and len(originals) == len(rows) and all(key):
+                row['machine_sequence_expected_count'] = original_count
+        if natural_allowed and original_count == len(rows) and all(key):
             members = sorted(r["decision_trace_id"] for r in rows)
             for row in rows:
                 row["machine_sequence_members"] = members
@@ -4292,7 +4300,8 @@ def _machine_capture_cost_reference_venue(capture: dict, cohort: tuple[str, str]
 
 
 def load_machine_observation_rows(
-    data_root: Path, *, target_date: str, materialized_labels_only: bool = False, independent_machine: bool = False
+    data_root: Path, *, target_date: str, materialized_labels_only: bool = False,
+    independent_machine: bool = False, minimum_source_date: str = '2026-09-13'
 ) -> tuple[list[dict], dict]:
     """Reuse the payload archive and existing path labeler, with no AI calls."""
     from src.engine.scalping import ai_decision_quality as quality
@@ -4307,7 +4316,7 @@ def load_machine_observation_rows(
         # Machine-only capture started on 9/13. The clean-baseline paired
         # replay loader supplies older evidence; opening every prior payload
         # archive here would add postclose I/O without creating a valid capture.
-        if not match or not "2026-09-13" <= match[1] <= target_date:
+        if not match or not max("2026-09-13", minimum_source_date) <= match[1] <= target_date:
             continue
         if path.suffix == ".gz" and path.with_suffix("").is_file():
             continue
@@ -8414,6 +8423,297 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
             "promotion_errors": errors, "status": "eligible" if not errors else "hold_candidate"}
 
 
+def _winrate_opportunity_metrics(rows):
+    """Score a frozen selected population using only cost-bound first-hit bits."""
+    from src.engine.scalping.entry_strategy_policy import machine_support_adjusted_win_rate
+    groups = defaultdict(list)
+    for row in rows:
+        groups[row['opportunity_id']].append(row['win'])
+    rate = 100 * fmean(fmean(values) for values in groups.values()) if groups else None
+    return dict(selected_attempt_count=len(rows), selected_opportunity_count=len(groups),
+        winning_attempt_count=sum(row['win'] for row in rows),
+        source_dates=sorted({row['source_date'] for row in rows}),
+        win_rate_pct=rate,
+        support_adjusted_win_rate_pct=machine_support_adjusted_win_rate(
+            dict(win_rate_pct=rate, selected_opportunity_count=len(groups))))
+
+
+def _winrate_veto_payload(threshold):
+    return dict(schema='entry_situation_veto_v1', selection_basis='win_rate_only',
+        market='REGULAR', exact_scope='KRX|KRX_REGULAR',
+        feature='curr_vs_micro_vwap_bp', threshold_bp=float(threshold),
+        condition='parent_ENTER_NOW_and_fresh_available',
+        selected_action='BLOCK', unknown_action='parent')
+
+
+def build_winrate_policy_report(rows, *, source_receipt, target_date, data_root=Path('data')):
+    """Evaluate the registered one-feature veto without replaying fact kernels per threshold."""
+    from copy import deepcopy
+    from src.engine.scalping import entry_strategy_policy as strategy
+    from src.engine.scalping.mechanistic_entry_runtime_policy import load_effective, for_cohort
+    current = load_effective(data_root=data_root, target_date=datetime.now(KST).date().isoformat())
+    scoped = for_cohort(current, ('KRX', 'KRX_REGULAR')) if current else None
+    if scoped is None:
+        raise ValueError('winrate_incumbent_scope_missing')
+    parent = scoped['machine_policy']
+    if 'strategy' not in parent:
+        raise ValueError('winrate_parent_raw_strategy_missing')
+    base_policy = deepcopy(parent)
+    base_policy.pop('entry_situation_veto', None)
+    scope_rows = [row for row in rows if (row.get('effective_venue'), row.get('session_bucket')) == ('KRX', 'KRX_REGULAR')]
+    population, contract = _common_refinement_population([], scope_rows,
+        target_date=target_date, source_receipt=source_receipt, paired_contract={},
+        cohort=('KRX', 'KRX_REGULAR'), allow_attempt_identity_fallback=True,
+        retain_unevaluated_machine_rows=True)
+    excluded = Counter()
+    prepared, seen = [], set()
+    for row in population:
+        trace = row.get('decision_trace_id')
+        if not trace or trace in seen:
+            excluded['attempt_identity_missing_or_duplicate'] += 1
+            continue
+        seen.add(trace)
+        setup = row.get('setup_evidence') or {}
+        raw = setup.get('strategy_raw_input') or {}
+        if not raw or setup.get('strategy_raw_sha256') != strategy.digest(raw):
+            excluded['raw_capture_hash_invalid'] += 1
+            continue
+        try:
+            strategy.completed_bar_rows(raw, observed_at=row.get('decision_ts'))
+        except (ValueError, TypeError, KeyError, OverflowError):
+            excluded['completed_bar_structure_invalid'] += 1
+            continue
+        _, reason = _machine_path_value(row)
+        if reason:
+            excluded[reason] += 1
+            continue
+        first_hit = (row.get('entry_quality_path') or {}).get('first_hit')
+        if first_hit not in {'net_target_first', 'exact_stop_first'}:
+            excluded['binary_terminal_missing'] += 1
+            continue
+        try:
+            decision = mechanistic_entry_policy_decision(setup, policy=parent)
+            base_decision = (decision if base_policy == parent else
+                mechanistic_entry_policy_decision(setup, policy=base_policy))
+        except (ValueError, TypeError, KeyError):
+            excluded['parent_replay_invalid'] += 1
+            continue
+        feat = raw.get('features') or {}
+        value = strategy._number(feat.get('curr_vs_micro_vwap_bp'))
+        available = feat.get('micro_vwap_available') is True
+        fresh = feat.get('minute_candle_window_fresh') is True
+        prepared.append(dict(source_date=row['source_date'], decision_trace_id=trace,
+            opportunity_id=_machine_opportunity_id(row), parent_action=decision['action'],
+            base_action=base_decision['action'],
+            win=first_hit == 'net_target_first',
+            gross_first_hit=(row.get('comparison') or {}).get('entry_path_first_hit'),
+            value_bp=value if available and fresh else None,
+            situation='VWAP_UNKNOWN' if not (available and fresh and value is not None) else
+                'VWAP_EXTENDED' if value >= 68.75 else 'VWAP_NOT_EXTENDED'))
+    dates = sorted({row['source_date'] for row in prepared})
+    initial = 'entry_situation_veto' not in parent
+    if initial:
+        train_dates, holdout_dates = [day for day in dates if day <= '2026-09-22'], ['2026-09-23']
+        thresholds = [68.75]
+    else:
+        consumed = set()
+        for receipt_path in (data_root / 'runtime' / 'mechanistic_entry_policy' / 'winrate_holdouts').glob('*.json'):
+            receipt = _load_json(receipt_path)
+            if (receipt.get('schema') != 'main_entry_winrate_holdout_consumption_v1'
+                or not _artifact_content_sha256_valid(receipt)
+                or not isinstance(receipt.get('holdout_dates'), list)
+                or any(not isinstance(day, str) or day <= '2026-09-23' for day in receipt['holdout_dates'])):
+                raise ValueError('winrate_holdout_consumption_invalid')
+            consumed.update(receipt.get('holdout_dates') or [])
+        fresh_dates = [day for day in dates if day > '2026-09-23' and day not in consumed]
+        holdout_dates = fresh_dates[-2:] if len(fresh_dates) >= 2 else []
+        train_dates = [day for day in dates if day not in holdout_dates]
+        train_values = sorted({row['value_bp'] for row in prepared if row['source_date'] in train_dates
+                               and row['base_action'] == 'ENTER_NOW' and row['value_bp'] is not None})
+        thresholds = sorted({train_values[min(len(train_values) - 1, int((len(train_values) - 1) * q / 10))]
+            for q in range(1, 10)}) if train_values else []
+    def selected(source, threshold):
+        return [row for row in source if
+            (row['parent_action'] == 'ENTER_NOW' if threshold is None else
+             row['base_action'] == 'ENTER_NOW' and (row['value_bp'] is None or row['value_bp'] < threshold))]
+    train = [row for row in prepared if row['source_date'] in train_dates]
+    holdout = [row for row in prepared if row['source_date'] in holdout_dates]
+    baseline_train, baseline_holdout = (_winrate_opportunity_metrics(selected(part, None))
+                                       for part in (train, holdout))
+    frozen = []
+    baseline_train_winners = {row['decision_trace_id'] for row in selected(train, None) if row['win']}
+    for threshold in thresholds:
+        train_selected = selected(train, threshold)
+        metrics = _winrate_opportunity_metrics(train_selected)
+        kept_winners = {row['decision_trace_id'] for row in train_selected if row['win']}
+        eligible_train = (initial or (
+            len(metrics['source_dates']) >= 3
+            and metrics['selected_opportunity_count'] >= 30
+            and baseline_train['selected_opportunity_count'] > 0
+            and metrics['selected_opportunity_count'] >= .5 * baseline_train['selected_opportunity_count']
+            and (not baseline_train_winners or len(kept_winners) >= .8 * len(baseline_train_winners))
+            and metrics['win_rate_pct'] > baseline_train['win_rate_pct']
+            and metrics['support_adjusted_win_rate_pct'] - baseline_train['support_adjusted_win_rate_pct'] >= 5))
+        if metrics['selected_opportunity_count'] and eligible_train:
+            frozen.append((metrics['support_adjusted_win_rate_pct'], metrics['win_rate_pct'],
+                           metrics['selected_opportunity_count'], threshold, metrics))
+    frozen.sort(reverse=True)
+    chosen = frozen[0] if frozen else None
+    threshold = chosen[3] if chosen else None
+    candidate_train = chosen[4] if chosen else _winrate_opportunity_metrics([])
+    candidate_holdout = _winrate_opportunity_metrics(selected(holdout, threshold)) if chosen else _winrate_opportunity_metrics([])
+    candidate_policy = deepcopy(parent)
+    if threshold is not None:
+        candidate_policy['entry_situation_veto'] = _winrate_veto_payload(threshold)
+    from src.engine.scalping.entry_setup_evidence import validate_mechanistic_entry_threshold_policy
+    if validate_mechanistic_entry_threshold_policy(candidate_policy):
+        raise ValueError('winrate_candidate_policy_invalid')
+    errors = []
+    if initial:
+        if (dates != ['2026-09-22', '2026-09-23']
+            or len(prepared) != 351
+            or Counter(row['source_date'] for row in prepared) != {'2026-09-22': 222, '2026-09-23': 129}
+            or Counter(row['situation'] for row in prepared) != {'VWAP_NOT_EXTENDED': 291, 'VWAP_EXTENDED': 60}
+            or baseline_train['selected_attempt_count'] != 21
+            or baseline_train['winning_attempt_count'] != 13
+            or baseline_holdout['selected_attempt_count'] != 8
+            or baseline_holdout['winning_attempt_count'] != 4
+            or candidate_train['selected_attempt_count'] != 11
+            or candidate_train['selected_opportunity_count'] != 11
+            or candidate_train['winning_attempt_count'] != 10
+            or candidate_holdout['selected_attempt_count'] != 4
+            or candidate_holdout['selected_opportunity_count'] != 4
+            or candidate_holdout['winning_attempt_count'] != 3):
+            errors.append('initial_frozen_reproduction_mismatch')
+    else:
+        if len(train_dates) < 3 or len(holdout_dates) < 2 or not holdout_dates or holdout_dates[0] <= '2026-09-23':
+            errors.append('successor_independent_dates_insufficient')
+        if not chosen:
+            errors.append('successor_no_train_qualified_candidate')
+        if candidate_train['selected_opportunity_count'] < 30 or candidate_holdout['selected_opportunity_count'] < 10:
+            errors.append('successor_selected_sample_insufficient')
+        for part, baseline, candidate in (('train', baseline_train, candidate_train), ('holdout', baseline_holdout, candidate_holdout)):
+            if baseline['selected_opportunity_count'] == 0 or candidate['selected_opportunity_count'] == 0:
+                errors.append(part + '_baseline_or_candidate_empty')
+                continue
+            if (candidate['win_rate_pct'] <= baseline['win_rate_pct']
+                or candidate['support_adjusted_win_rate_pct'] - baseline['support_adjusted_win_rate_pct'] < 5):
+                errors.append(part + '_winrate_hurdle_failed')
+            if candidate['selected_opportunity_count'] < .5 * baseline['selected_opportunity_count']:
+                errors.append(part + '_coverage_hurdle_failed')
+            baseline_winners = {row['decision_trace_id'] for row in selected(train if part == 'train' else holdout, None) if row['win']}
+            kept_winners = {row['decision_trace_id'] for row in selected(train if part == 'train' else holdout, threshold) if row['win']}
+            if baseline_winners and len(kept_winners) < .8 * len(baseline_winners):
+                errors.append(part + '_winning_attempt_retention_failed')
+    candidate_hash = strategy.digest(candidate_policy)
+    market_census = {}
+    for cohort in sorted({(row.get('effective_venue'), row.get('session_bucket')) for row in rows}):
+        if not all(cohort) or not mechanistic_scope_supported(*cohort):
+            continue
+        key = '|'.join(cohort)
+        market = ('PREMARKET' if 'PREMARKET' in cohort[1] else
+                  'AFTERMARKET' if 'AFTERMARKET' in cohort[1] else 'REGULAR')
+        if cohort == ('KRX', 'KRX_REGULAR'):
+            market_census[key] = dict(market=market, input_attempt_count=len(scope_rows),
+                accepted_attempt_count=len(prepared),
+                source_contract_excluded_count=len(scope_rows)-len(population),
+                source_contract_exclusion_reasons=contract.get('row_exclusion_reason_counts') or {},
+                excluded_attempt_counts=dict(excluded),
+                winning_attempt_count=sum(row['win'] for row in prepared),
+                gross_label_difference_count=sum(row['gross_first_hit'] in {'target_first', 'adverse_first'}
+                    and (row['gross_first_hit'] == 'target_first') != row['win'] for row in prepared))
+            continue
+        exact_rows = [row for row in rows if (row.get('effective_venue'), row.get('session_bucket')) == cohort]
+        admitted, source_contract = _common_refinement_population([], exact_rows,
+            target_date=target_date, source_receipt=source_receipt, paired_contract={},
+            cohort=cohort, allow_attempt_identity_fallback=True, retain_unevaluated_machine_rows=True)
+        rejection = Counter()
+        accepted, wins, gross_differences = 0, 0, 0
+        for row in admitted:
+            setup = row.get('setup_evidence') or {}
+            raw = setup.get('strategy_raw_input') or {}
+            if not raw or setup.get('strategy_raw_sha256') != strategy.digest(raw):
+                rejection['raw_capture_hash_invalid'] += 1
+                continue
+            try:
+                strategy.completed_bar_rows(raw, observed_at=row.get('decision_ts'))
+            except (ValueError, TypeError, KeyError, OverflowError):
+                rejection['completed_bar_structure_invalid'] += 1
+                continue
+            _, reason = _machine_path_value(row)
+            if reason:
+                rejection[reason] += 1
+                continue
+            hit = (row.get('entry_quality_path') or {}).get('first_hit')
+            if hit not in {'net_target_first', 'exact_stop_first'}:
+                rejection['binary_terminal_missing'] += 1
+                continue
+            accepted += 1
+            win = hit == 'net_target_first'
+            wins += win
+            gross = (row.get('comparison') or {}).get('entry_path_first_hit')
+            gross_differences += gross in {'target_first', 'adverse_first'} and (gross == 'target_first') != win
+        market_census[key] = dict(market=market, input_attempt_count=len(exact_rows),
+            accepted_attempt_count=accepted,
+            source_contract_excluded_count=len(exact_rows)-len(admitted),
+            source_contract_exclusion_reasons=source_contract.get('row_exclusion_reason_counts') or {},
+            excluded_attempt_counts=dict(rejection), winning_attempt_count=wins,
+            gross_label_difference_count=gross_differences)
+    historical_full_evaluation_reference = None
+    if initial:
+        frozen_report = _load_json(data_root / 'report' / 'ai_decision_action_outcome_calibration'
+            / 'ai_decision_action_outcome_calibration_2026-09-23.json')
+        frozen_scopes = (frozen_report.get('machine_full_evaluation') or {}).get('scope_evaluations') or {}
+        expected = {'KRX|KRX_REGULAR': 351,
+            'PREMARKET_KRX_LIKE|PREMARKET_KRX_LIKE': 25,
+            'KRX_NXT_INTEGRATED|KRX_NXT_AFTERMARKET': 100}
+        observed = {scope: (frozen_scopes.get(scope) or {}).get('current_structure_eligible_count')
+            for scope in expected}
+        if (not _artifact_content_sha256_valid(frozen_report)
+            or frozen_report.get('artifact_content_sha256') != '10b29ced3cf6e61bee35e84de5e456db3dd78b562378cd0aef9db605fdc85564'
+            or observed != expected):
+            errors.append('initial_whole_market_reference_invalid')
+        historical_full_evaluation_reference = dict(
+            artifact_content_sha256=frozen_report.get('artifact_content_sha256'),
+            source_date='2026-09-23', exact_scope_eligible_counts=observed,
+            total_eligible_count=sum(v for v in observed.values() if type(v) is int),
+            role='frozen_full_evaluation_reference_not_daily_machine_capture_denominator')
+    if errors and candidate_policy is not None:
+        # Source/reference failures cannot leave an adoptable candidate body.
+        candidate_policy = None
+        disposition = 'incumbent_carried'
+    else:
+        disposition = 'initial_adopted' if initial else 'successor_selected'
+    return _with_artifact_content_sha256(dict(schema='main_entry_winrate_policy_report_v1',
+        target_date=target_date, generated_at=datetime.now(KST).isoformat(),
+        report_scope='main_entry_winrate', noncompact_sections_refreshed=True,
+        policy_version='winrate_initial_v1' if initial else 'winrate_successor_v1',
+        selection_basis='win_rate_only', disposition=disposition,
+        source_contract_sha256=strategy.digest(contract), source_receipt=source_receipt,
+        parent_bundle_sha256=current['bundle_sha256'], parent_machine_policy_sha256=strategy.digest(parent),
+        candidate_machine_policy_sha256=candidate_hash, candidate_policy=candidate_policy,
+        policy_by_scope={'KRX|KRX_REGULAR': candidate_policy} if not errors else {},
+        policy_sha256=strategy.digest({'KRX|KRX_REGULAR': candidate_policy} if not errors else {}),
+        candidate_threshold_bp=threshold, candidate_search_count=len(thresholds),
+        train_dates=train_dates, holdout_dates=holdout_dates,
+        consumed_holdout_dates=sorted(consumed) if not initial else [],
+        input_attempt_count=len(scope_rows), accepted_attempt_count=len(prepared),
+        source_contract_excluded_count=len(scope_rows)-len(population),
+        source_contract_exclusion_reasons=contract.get('row_exclusion_reason_counts') or {},
+        excluded_attempt_counts=dict(excluded), situation_attempt_counts=dict(Counter(row['situation'] for row in prepared)),
+        gross_label_difference_count=sum(row['gross_first_hit'] in {'target_first', 'adverse_first'}
+            and (row['gross_first_hit'] == 'target_first') != row['win'] for row in prepared),
+        market_census=market_census,
+        historical_full_evaluation_reference=historical_full_evaluation_reference,
+        baseline=dict(train=baseline_train, holdout=baseline_holdout),
+        candidate=dict(train=candidate_train, holdout=candidate_holdout),
+        hurdle_errors=errors, evaluated_attempt_manifest_sha256=strategy.digest(sorted(
+            [row['decision_trace_id'], row['opportunity_id'], row['source_date'], row['win'], row['value_bp'], row['parent_action'], row['base_action']]
+            for row in prepared)),
+        runtime_effect=False, allowed_runtime_apply=False, actual_order_submitted=False,
+        broker_order_forbidden=True))
+
+
 def build_machine_policy_report(rows, *, source_receipt, target_date, data_root=Path('data'), limit=96, write_checkpoints=False, training_through_date=None):
     """Generate a machine policy artifact only; no downstream or publication loop."""
     from src.engine.scalping import entry_strategy_policy as strategy
@@ -9150,6 +9450,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--data-root", type=Path, default=Path("data"))
     parser.add_argument("--write", action="store_true")
     parser.add_argument('--machine-policy-only', action='store_true', help='Generate only the pre-AI machine threshold policy artifact')
+    parser.add_argument('--winrate-policy-only', action='store_true', help='Evaluate the registered win-rate veto and stage a next-day policy')
     parser.add_argument('--training-through-date', help='Explicit train cutoff; later sources only are diagnostic holdout')
     parser.add_argument('--search-limit', type=int, default=96, help='Machine policy candidate traversal budget')
     parser.add_argument(
@@ -9170,6 +9471,42 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--activate-now", action="store_true", help="Activate an eligible strategy generation immediately and carry until superseded")
     parser.add_argument("--print-summary", action="store_true")
     args = parser.parse_args(argv)
+    if args.winrate_policy_only:
+        if (args.machine_policy_only or args.machine_only or args.activate_now
+            or args.require_policy_publication
+            or args.ensure_economic_reference_only or args.training_through_date):
+            parser.error('--winrate-policy-only is a standalone policy-generation action')
+        output = args.data_root / 'report' / 'ai_decision_action_outcome_calibration' / f'winrate_policy_{args.target_date}.json'
+        output.parent.mkdir(parents=True, exist_ok=True)
+        with (output.parent / f'winrate_policy_{args.target_date}.lock').open('a') as stage_lock:
+            fcntl.flock(stage_lock, fcntl.LOCK_EX)
+            cost_source = ensure_machine_economic_reference(data_root=args.data_root, target_date=args.target_date) if args.write else {}
+            rows, counts = load_machine_observation_rows(args.data_root, target_date=args.target_date,
+                independent_machine=True, minimum_source_date='2026-09-22')
+            result = build_winrate_policy_report(rows,
+                source_receipt=_machine_ai_natural_source_receipt(args.data_root, args.target_date),
+                target_date=args.target_date, data_root=args.data_root)
+            result = _with_artifact_content_sha256({**result, 'observation_source_counts': counts,
+                'cost_source': cost_source,
+                'publication_date': args.publication_date or datetime.now(KST).date().isoformat()})
+            if result['policy_version'] == 'winrate_initial_v1' and result['hurdle_errors']:
+                raise ValueError('winrate_initial_frozen_reproduction_mismatch:' + ','.join(result['hurdle_errors']))
+            staged = None
+            if args.write:
+                _atomic_write_json(output, result)
+                from src.engine.scalping.mechanistic_entry_runtime_policy import stage_winrate_policy
+                staged = stage_winrate_policy(output, data_root=args.data_root,
+                    publication_day=args.publication_date)
+            terminal = _with_artifact_content_sha256(dict(schema='main_machine_policy_terminal_v1',
+                target_date=args.target_date, completed_at=datetime.now(KST).isoformat(),
+                status='completed', report_sha256=result['artifact_content_sha256'],
+                policy_sha256=result['policy_sha256'], selection_basis='win_rate_only',
+                disposition=result['disposition'], staged=staged, actual_pid_consumed=False))
+            if args.write:
+                _atomic_write_json(output.with_name(f'winrate_policy_terminal_{args.target_date}.json'), terminal)
+            print(json.dumps(dict(disposition=result['disposition'], staged=staged,
+                                  path=str(output) if args.write else None)))
+        return 0
     if args.machine_policy_only:
         if (args.machine_only or (args.activate_now and not args.write) or args.require_policy_publication
             or args.ensure_economic_reference_only or args.publication_date or args.search_limit < 1):

@@ -74,6 +74,12 @@ fi
 PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.scanner_lookup_attention_policy \
   --target-date "$TARGET_DATE" --write
 
+# Activate the next-day machine choice before bootstrap captures policy receipts.
+# A missing candidate carries the current machine; a broken staged receipt
+# fails the common PREOPEN handoff rather than silently using an unknown pair.
+PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.mechanistic_entry_runtime_policy \
+  --activate-dated-winrate --target-date "$TARGET_DATE"
+
 # Select the reviewed AI successor before bootstrap captures policy receipts.
 # An unqualified/mismatched candidate leaves the current pair unchanged.
 if ! PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.mechanistic_entry_runtime_policy \

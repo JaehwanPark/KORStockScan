@@ -358,6 +358,14 @@ def _scanner_scope(target_date: str) -> dict[str, Any]:
     return {"status": "pass" if not issues else "fail", "scope": "scanner_lookup_attention_only", "issues": issues, "whole_native_chain_done_claimed": False}
 
 
+def _selected_strategy_requires_runtime_activation(selected_strategy: tuple | None) -> bool:
+    if not selected_strategy or selected_strategy[1].get('promotion_pass') is not True:
+        return False
+    return (selected_strategy[1].get('candidate') or {}).get('evaluation_basis') not in {
+        'machine_full_population_opportunity_v1', 'machine_nonentry_opportunity_v1',
+    }
+
+
 def _main_mechanistic_scope(target_date: str, effective_date: str | None = None, publication_date: str | None = None) -> dict[str, Any]:
     from src.engine.scalping import ai_action_outcome_calibration as calibration
     from src.engine.scalping import mechanistic_entry_runtime_policy as policy
@@ -434,36 +442,49 @@ def _main_mechanistic_scope(target_date: str, effective_date: str | None = None,
                 raise ValueError("main_machine_loaded_bundle_mismatch")
         except (OSError, ValueError):
             issues.append("main_machine_future_policy_invalid")
-        if (
-            machine_source.get("report_scope") != "main_mechanistic_entry"
-            or machine_source.get("noncompact_sections_refreshed") is not True
-        ):
-            issues.append("main_machine_policy_source_scope_invalid")
-        if machine_source.get("artifact_content_sha256") != source.get(
-            "artifact_content_sha256"
-        ):
-            issues.append("main_machine_report_policy_hash_mismatch")
-        if machine_source.get("terminal_state") != terminal.get("state"):
-            issues.append("main_machine_terminal_disposition_mismatch")
-        expected = (
-            "evidence_qualified_threshold_update"
-            if terminal.get("state") == "validated_edge"
-            else None
-        )
-        if expected and bundle.get("machine_disposition") != expected:
-            issues.append("main_machine_validated_edge_not_published")
-        if (
-            terminal.get("state") != "validated_edge"
-            and bundle.get("machine_disposition")
-            == "evidence_qualified_threshold_update"
-        ):
-            issues.append("main_machine_unqualified_edge_published")
+        if bundle.get('winrate_selection'):
+            winrate = _load(REPORT_DIR / 'ai_decision_action_outcome_calibration' /
+                            f'winrate_policy_{target_date}.json')
+            proof = bundle['winrate_selection']
+            if (machine_source.get('report_scope') != 'main_entry_winrate'
+                or machine_source.get('artifact_content_sha256') != winrate.get('artifact_content_sha256')
+                or proof.get('report_sha256') != winrate.get('artifact_content_sha256')
+                or proof.get('machine_policy_sha256') != policy.digest(bundle['machine_policy'])
+                or proof.get('disposition') != bundle.get('machine_disposition')
+                or winrate.get('selection_basis') != 'win_rate_only'):
+                issues.append('main_machine_winrate_selection_binding_invalid')
+        else:
+            if (
+                machine_source.get("report_scope") != "main_mechanistic_entry"
+                or machine_source.get("noncompact_sections_refreshed") is not True
+            ):
+                issues.append("main_machine_policy_source_scope_invalid")
+            if machine_source.get("artifact_content_sha256") != source.get(
+                "artifact_content_sha256"
+            ):
+                issues.append("main_machine_report_policy_hash_mismatch")
+            if machine_source.get("terminal_state") != terminal.get("state"):
+                issues.append("main_machine_terminal_disposition_mismatch")
+            expected = (
+                "evidence_qualified_threshold_update"
+                if terminal.get("state") == "validated_edge"
+                else None
+            )
+            if expected and bundle.get("machine_disposition") != expected:
+                issues.append("main_machine_validated_edge_not_published")
+            if (
+                terminal.get("state") != "validated_edge"
+                and bundle.get("machine_disposition")
+                == "evidence_qualified_threshold_update"
+            ):
+                issues.append("main_machine_unqualified_edge_published")
     try:
         current_strategy = policy.current_strategy_receipt(data_root=DATA_DIR)
         from src.engine.scalping.entry_strategy_policy import select_report_candidate
         selected_strategy = select_report_candidate(source)
-        if selected_strategy and selected_strategy[1].get('promotion_pass') is True:
-            if (current_strategy.get('activation') or {}).get('candidate_sha256') != policy.digest(selected_strategy[1]['candidate']):
+        if _selected_strategy_requires_runtime_activation(selected_strategy):
+            active_candidate_sha256 = policy.active_candidate_sha256_for_scope(current_strategy, selected_strategy[0])
+            if active_candidate_sha256 != policy.digest(selected_strategy[1]['candidate']):
                 issues.append('main_machine_qualified_strategy_not_current')
     except (OSError, ValueError, TypeError, KeyError) as exc:
         current_strategy = dict(status='active_generation_invalid', reason=str(exc))

@@ -192,7 +192,7 @@ def validate(bundle: dict, *, target_date: str) -> None:
         activation = bundle["strategy_activation"]
         try:
             effective = datetime.fromisoformat(activation["effective_from"])
-            if (activation["schema"] not in {"main_entry_activation_v2", "main_entry_activation_v3", "main_auxiliary_activation_v1"}
+            if (activation["schema"] not in {"main_entry_activation_v2", "main_entry_activation_v3", "main_auxiliary_activation_v1", "main_entry_winrate_activation_v1"}
                 or activation["lifetime"] != "until_superseded"
                 or effective.tzinfo is None
                 or effective.astimezone(KST).date().isoformat() > target_date
@@ -577,6 +577,30 @@ def _validate_bundle_sources(bundle: dict, data_root: Path) -> dict:
             "artifact_content_sha256"
         ):
             raise ValueError("machine_evaluation_source_artifact_hash_invalid")
+    proof = bundle.get('winrate_selection')
+    if proof is not None:
+        from src.engine.scalping import ai_action_outcome_calibration as calibration
+        if (not isinstance(proof, dict) or proof.get('schema') != 'main_entry_winrate_selection_v1'
+            or proof.get('disposition') not in {'initial_adopted', 'successor_selected', 'incumbent_carried'}
+            or source_payload.get('schema') != 'main_entry_winrate_policy_report_v1'
+            or not calibration._artifact_content_sha256_valid(source_payload)
+            or source_payload.get('artifact_content_sha256') != proof.get('report_sha256')
+            or source_payload.get('parent_bundle_sha256') != proof.get('parent_bundle_sha256')
+            or source_payload.get('disposition') != proof.get('disposition')
+            or source_payload.get('policy_version') != proof.get('policy_version')
+            or source_payload.get('selection_basis') != 'win_rate_only'):
+            raise ValueError('winrate_selection_source_invalid')
+        parent_path = root(data_root) / 'generations' / f"{proof['parent_bundle_sha256']}.json"
+        parent = _read(parent_path)
+        validate(parent, target_date=parent['target_date'])
+        old = for_cohort(parent, ('KRX', 'KRX_REGULAR'))
+        new = for_cohort(bundle, ('KRX', 'KRX_REGULAR'))
+        if (parent.get('bundle_sha256') != proof['parent_bundle_sha256'] or not old or not new
+            or digest(old['machine_policy']) != source_payload.get('parent_machine_policy_sha256')
+            or digest(new['machine_policy']) != proof.get('machine_policy_sha256')
+            or (source_payload.get('candidate_policy') if proof['disposition'] != 'incumbent_carried'
+                else old['machine_policy']) != new['machine_policy']):
+            raise ValueError('winrate_selection_parent_or_candidate_invalid')
     return bundle
 
 
@@ -590,14 +614,18 @@ def load_effective(*, data_root: Path, target_date: str) -> dict | None:
     if current is not None:
         return current
     exact = load(data_root=data_root, target_date=target_date)
-    if exact is not None:
+    if exact is not None and not (exact.get('winrate_selection') and not exact.get('strategy_activation')):
         return exact
     paths = sorted(
         p
         for p in root(data_root).glob("policy_????-??-??.json")
         if p.stem[7:] < target_date
     )
-    return load(data_root=data_root, target_date=paths[-1].stem[7:]) if paths else None
+    for path in reversed(paths):
+        prior = load(data_root=data_root, target_date=path.stem[7:])
+        if prior is not None and not (prior.get('winrate_selection') and not prior.get('strategy_activation')):
+            return prior
+    return None
 
 
 def publish_compact_evaluation(
@@ -987,6 +1015,10 @@ def publish(
                 {k: v for k, v in reviewed.items() if k != "bundle_sha256"}
             )
             validate(reviewed, target_date=target)
+        if existing is not None and existing.get('winrate_selection'):
+            # The legacy EV evaluator remains a diagnostic producer. It must
+            # never overwrite a separately selected win-rate machine bundle.
+            return existing
         evaluation_incumbent = (
             load_effective(data_root=data_root, target_date=source_date) or existing
         )
@@ -1370,6 +1402,238 @@ def publish(
         )
         _atomic_write_json(policy_root / f"policy_{target}.json", bundle)
         return load(data_root=data_root, target_date=target)
+
+
+def stage_winrate_policy(source_path: Path, *, data_root: Path, now: datetime | None = None,
+                         publication_day: str | None = None) -> dict:
+    """Freeze the reviewed next-day machine choice without moving current."""
+    from src.engine.scalping import ai_action_outcome_calibration as calibration
+    current = (now or datetime.now(KST)).astimezone(KST)
+    publication_day = publication_day or current.date().isoformat()
+    target = next_target(publication_day)
+    source = _read(source_path)
+    excluded = source.get('excluded_attempt_counts') or {}
+    situations = source.get('situation_attempt_counts') or {}
+    accepted = source.get('accepted_attempt_count')
+    source_excluded = source.get('source_contract_excluded_count')
+    population_valid = (type(accepted) is int and accepted >= 0
+        and type(source_excluded) is int and source_excluded >= 0
+        and isinstance(excluded, dict)
+        and all(type(value) is int and value >= 0 for value in excluded.values())
+        and isinstance(situations, dict)
+        and all(type(value) is int and value >= 0 for value in situations.values())
+        and accepted + source_excluded + sum(excluded.values()) == source.get('input_attempt_count')
+        and sum(situations.values()) == accepted)
+    if (source.get('schema') != 'main_entry_winrate_policy_report_v1'
+        or not isinstance(source.get('target_date'), str)
+        or source.get('target_date') > publication_day
+        or publication_day > current.date().isoformat()
+        or source.get('publication_date', publication_day) != publication_day
+        or source.get('report_scope') != 'main_entry_winrate'
+        or not calibration._artifact_content_sha256_valid(source)
+        or source.get('selection_basis') != 'win_rate_only'
+        or source.get('policy_version') not in {'winrate_initial_v1', 'winrate_successor_v1'}
+        or re.fullmatch(r'[0-9a-f]{64}', str(source.get('source_contract_sha256'))) is None
+        or re.fullmatch(r'[0-9a-f]{64}', str(source.get('evaluated_attempt_manifest_sha256'))) is None
+        or (source.get('source_receipt') or {}).get('target_date') != source.get('target_date')
+        or not population_valid
+        or source.get('disposition') not in {'initial_adopted', 'successor_selected', 'incumbent_carried'}):
+        raise ValueError('winrate_stage_source_invalid')
+    policy_root = root(data_root)
+    policy_root.mkdir(parents=True, exist_ok=True)
+    with (policy_root / 'publisher.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        previous = load_effective(data_root=data_root, target_date=publication_day)
+        if previous is None or previous['bundle_sha256'] != source.get('parent_bundle_sha256'):
+            raise ValueError('winrate_stage_parent_cas_failed')
+        parent = for_cohort(previous, ('KRX', 'KRX_REGULAR'))['machine_policy']
+        if ('strategy' not in parent or digest(parent) != source.get('parent_machine_policy_sha256')
+            or (source['policy_version'] == 'winrate_initial_v1') != ('entry_situation_veto' not in parent)):
+            raise ValueError('winrate_stage_parent_machine_changed')
+        candidate = source.get('candidate_policy')
+        disposition = source['disposition']
+        if disposition == 'incumbent_carried':
+            if candidate is not None or not source.get('hurdle_errors'):
+                raise ValueError('winrate_carry_contract_invalid')
+            machine = parent
+        else:
+            expected_candidate = copy.deepcopy(parent)
+            expected_candidate['entry_situation_veto'] = copy.deepcopy(
+                candidate.get('entry_situation_veto') if isinstance(candidate, dict) else None)
+            if (not isinstance(candidate, dict)
+                or validate_mechanistic_entry_threshold_policy(candidate)
+                or candidate != expected_candidate
+                or digest(candidate) != source.get('candidate_machine_policy_sha256')
+                or candidate == parent
+                or (disposition == 'initial_adopted') != ('entry_situation_veto' not in parent)
+                or (disposition == 'initial_adopted' and candidate['entry_situation_veto']['threshold_bp'] != 68.75)
+                or source.get('hurdle_errors')):
+                raise ValueError('winrate_candidate_contract_invalid')
+            if disposition == 'initial_adopted':
+                train = (source.get('candidate') or {}).get('train') or {}
+                holdout = (source.get('candidate') or {}).get('holdout') or {}
+                reference = source.get('historical_full_evaluation_reference') or {}
+                if (source.get('accepted_attempt_count') != 351
+                    or source.get('input_attempt_count') != 1485
+                    or source.get('source_contract_excluded_count') != 60
+                    or sum((source.get('excluded_attempt_counts') or {}).values()) != 1074
+                    or source.get('situation_attempt_counts') != {'VWAP_NOT_EXTENDED': 291, 'VWAP_EXTENDED': 60}
+                    or source.get('gross_label_difference_count') != 9
+                    or reference.get('artifact_content_sha256') != '10b29ced3cf6e61bee35e84de5e456db3dd78b562378cd0aef9db605fdc85564'
+                    or reference.get('total_eligible_count') != 476
+                    or reference.get('exact_scope_eligible_counts') != {
+                        'KRX|KRX_REGULAR': 351,
+                        'PREMARKET_KRX_LIKE|PREMARKET_KRX_LIKE': 25,
+                        'KRX_NXT_INTEGRATED|KRX_NXT_AFTERMARKET': 100}
+                    or source.get('train_dates') != ['2026-09-22']
+                    or source.get('holdout_dates') != ['2026-09-23']
+                    or (source.get('source_receipt') or {}).get('tuning_input_allowed') is not True
+                    or train.get('selected_opportunity_count') != 11
+                    or train.get('winning_attempt_count') != 10
+                    or holdout.get('selected_opportunity_count') != 4
+                    or holdout.get('winning_attempt_count') != 3):
+                    raise ValueError('winrate_initial_source_reproduction_invalid')
+            machine = candidate
+        original_bytes = source_path.read_bytes()
+        if json.loads(original_bytes) != source:
+            raise ValueError('winrate_source_changed_during_stage')
+        source_hash = hashlib.sha256(original_bytes).hexdigest()
+        snapshot = policy_root / 'sources' / f'{source_hash}.json'
+        if not snapshot.exists():
+            snapshot.parent.mkdir(parents=True, exist_ok=True)
+            with snapshot.open('xb') as handle:
+                handle.write(original_bytes)
+                handle.flush()
+                os.fsync(handle.fileno())
+        if _source_hash(str(snapshot), _signature(snapshot)) != source_hash:
+            raise ValueError('winrate_source_snapshot_invalid')
+        holdout_path = None
+        holdout_receipt = None
+        if (disposition != 'initial_adopted' and source.get('candidate_threshold_bp') is not None
+            and len(source.get('holdout_dates') or []) == 2):
+            holdout_days = source['holdout_dates']
+            holdout_path = policy_root / 'winrate_holdouts' / f"{digest(holdout_days)}.json"
+            holdout_receipt = calibration._with_artifact_content_sha256(dict(
+                schema='main_entry_winrate_holdout_consumption_v1',
+                holdout_dates=holdout_days, source_date=source['target_date'],
+                report_sha256=source['artifact_content_sha256'],
+                parent_bundle_sha256=previous['bundle_sha256'],
+                candidate_threshold_bp=source['candidate_threshold_bp']))
+            if holdout_path.exists() and _read(holdout_path) != holdout_receipt:
+                raise ValueError('winrate_holdout_already_consumed')
+        existing = load(data_root=data_root, target_date=target)
+        if existing and existing.get('winrate_selection'):
+            if (existing['winrate_selection']['report_sha256'] == source['artifact_content_sha256']
+                and existing['winrate_selection']['parent_bundle_sha256'] == previous['bundle_sha256']):
+                if holdout_path is not None and not holdout_path.exists():
+                    _atomic_write_json(holdout_path, holdout_receipt)
+                return dict(status='already_staged', target_date=target,
+                            bundle_sha256=existing['bundle_sha256'], disposition=disposition)
+            if not (disposition == 'initial_adopted'
+                and existing['winrate_selection'].get('disposition') == 'initial_adopted'
+                and existing['winrate_selection'].get('parent_bundle_sha256') == previous['bundle_sha256']
+                and publication_day < target
+                and (_load_current(data_root, publication_day) or {}).get('bundle_sha256') != existing['bundle_sha256']):
+                raise ValueError('winrate_dated_generation_already_staged')
+        bundle = copy.deepcopy(previous)
+        if existing and (existing.get('compact_promoted_scopes') or existing.get('auxiliary_soft_promoted_scopes')):
+            if (existing['machine_policy'] != previous['machine_policy']
+                or any(existing['scope_policies'][scope]['machine_policy'] != previous['scope_policies'][scope]['machine_policy']
+                       for scope in previous.get('scope_policies') or ())):
+                raise ValueError('winrate_existing_auxiliary_machine_parent_conflict')
+            bundle['ai_policy'] = copy.deepcopy(existing['ai_policy'])
+            for scope in previous.get('scope_policies') or ():
+                bundle['scope_policies'][scope]['ai_policy'] = copy.deepcopy(existing['scope_policies'][scope]['ai_policy'])
+            for key in ('compact_evaluation_source_date', 'compact_paired_artifact_sha256',
+                        'compact_source_file_sha256', 'compact_evaluation_fingerprint',
+                        'compact_inherited_bundle_sha256', 'compact_inherited_source_date',
+                        'compact_prompt_disposition', 'compact_promoted_scopes',
+                        'auxiliary_stage_sha256', 'auxiliary_soft_promoted_scopes',
+                        'compact_evaluation_source'):
+                bundle[key] = copy.deepcopy(existing.get(key))
+        bundle.pop('strategy_activation', None)
+        bundle.update(target_date=target, publication_date=publication_day,
+            source_date=source['target_date'], source_file_sha256=source_hash,
+            source_artifact_sha256=source['artifact_content_sha256'],
+            previous_bundle_sha256=previous['bundle_sha256'], generated_at=current.isoformat(),
+            machine_disposition=disposition,
+            machine_evaluation_source=dict(source_date=source['target_date'],
+                file_sha256=source_hash, artifact_content_sha256=source['artifact_content_sha256'],
+                report_scope='main_entry_winrate', terminal_state=disposition),
+            winrate_selection=dict(schema='main_entry_winrate_selection_v1',
+                disposition=disposition, report_sha256=source['artifact_content_sha256'],
+                policy_version=source['policy_version'],
+                parent_bundle_sha256=previous['bundle_sha256'], machine_policy_sha256=digest(machine)))
+        bundle['machine_policy'] = copy.deepcopy(machine)
+        if bundle.get('all_continuous_adopted'):
+            bundle['scope_policies']['KRX|KRX_REGULAR']['machine_policy'] = copy.deepcopy(machine)
+            bundle['scope_policies']['KRX|KRX_REGULAR']['machine_disposition'] = disposition
+        bundle.pop('bundle_sha256', None)
+        bundle['bundle_sha256'] = digest(bundle)
+        validate(bundle, target_date=target)
+        _atomic_write_json(policy_root / 'generations' / f"{previous['bundle_sha256']}.json", previous)
+        if existing is not None:
+            _atomic_write_json(policy_root / 'generations' / f"{existing['bundle_sha256']}.json", existing)
+        _validate_bundle_sources(bundle, data_root)
+        _atomic_write_json(policy_root / 'generations' / f"{bundle['bundle_sha256']}.json", bundle)
+        _atomic_write_json(policy_root / f'policy_{target}.json', bundle)
+        if holdout_path is not None and not holdout_path.exists():
+            _atomic_write_json(holdout_path, holdout_receipt)
+        return dict(status='staged', target_date=target, bundle_sha256=bundle['bundle_sha256'],
+                    disposition=disposition, machine_policy_sha256=digest(machine),
+                    current_unchanged=True)
+
+
+def activate_dated_winrate_policy(*, data_root: Path, target_date: str, now: datetime | None = None) -> dict:
+    """At PREOPEN, move the pointer only when staged source and parent still bind."""
+    current = (now or datetime.now(KST)).astimezone(KST)
+    if current.date().isoformat() != target_date:
+        raise ValueError('winrate_activation_target_not_today')
+    policy_root = root(data_root)
+    with (policy_root / 'publisher.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        staged = load(data_root=data_root, target_date=target_date)
+        if staged is None or not staged.get('winrate_selection'):
+            return dict(status='incumbent_carry', reason='winrate_dated_policy_missing')
+        previous = (_load_current(data_root, target_date) or
+                    load_effective(data_root=data_root, target_date=staged['publication_date']))
+        if previous is None:
+            raise ValueError('winrate_activation_incumbent_missing')
+        proof = staged['winrate_selection']
+        activation = previous.get('strategy_activation') or {}
+        if (activation.get('schema') == 'main_entry_winrate_activation_v1'
+            and activation.get('stage_bundle_sha256') == staged['bundle_sha256']
+            and previous.get('winrate_selection') == proof):
+            return dict(status='already_active', bundle_sha256=previous['bundle_sha256'])
+        if previous['bundle_sha256'] == staged['bundle_sha256']:
+            return dict(status='already_active', bundle_sha256=previous['bundle_sha256'])
+        if previous['bundle_sha256'] != proof['parent_bundle_sha256']:
+            raise ValueError('winrate_activation_parent_cas_failed')
+        if proof['disposition'] == 'incumbent_carried':
+            return dict(status='incumbent_carry', bundle_sha256=previous['bundle_sha256'],
+                        machine_policy_sha256=digest(previous['machine_policy']))
+        bundle = copy.deepcopy(staged)
+        bundle['publication_date'] = target_date
+        bundle['target_date'] = target_date
+        bundle['generated_at'] = current.isoformat()
+        bundle['strategy_activation'] = dict(schema='main_entry_winrate_activation_v1',
+            effective_from=current.isoformat(), lifetime='until_superseded',
+            parent_bundle_sha256=previous['bundle_sha256'],
+            stage_bundle_sha256=staged['bundle_sha256'],
+            scopes={'KRX|KRX_REGULAR': dict(parent_machine_sha256=digest(previous['machine_policy']),
+                candidate_machine_sha256=digest(bundle['machine_policy']))})
+        bundle.pop('bundle_sha256', None)
+        bundle['bundle_sha256'] = digest(bundle)
+        validate(bundle, target_date=target_date)
+        _validate_bundle_sources(bundle, data_root)
+        _atomic_write_json(policy_root / 'generations' / f"{bundle['bundle_sha256']}.json", bundle)
+        receipt = dict(schema='main_entry_current_v2', bundle_sha256=bundle['bundle_sha256'],
+            previous_bundle_sha256=previous['bundle_sha256'], effective_from=current.isoformat())
+        receipt['receipt_sha256'] = digest(receipt)
+        _atomic_write_json(policy_root / 'current.json', receipt)
+        if load_effective(data_root=data_root, target_date=target_date)['bundle_sha256'] != bundle['bundle_sha256']:
+            raise ValueError('winrate_activation_readback_failed')
+        return dict(status='activated', scope='KRX|KRX_REGULAR', **receipt)
 
 
 def activate_strategy_report(source_path: Path, *, data_root: Path, now: datetime | None = None) -> dict:
@@ -1765,6 +2029,26 @@ def _load_current_uncached(data_root: Path, target_date: str) -> dict | None:
                 or new['ai_policy'] != {**old['ai_policy'], 'auxiliary_soft_policy': candidate}):
                 raise ValueError('auxiliary_activation_component_binding_invalid')
         return bundle if target_date >= bundle['target_date'] else None
+    if activation.get('schema') == 'main_entry_winrate_activation_v1':
+        stage_hash = activation.get('stage_bundle_sha256')
+        if re.fullmatch(r'[0-9a-f]{64}', str(stage_hash)) is None:
+            raise ValueError('winrate_activation_stage_hash_invalid')
+        staged = _read(root(data_root) / 'generations' / f'{stage_hash}.json')
+        validate(staged, target_date=staged['target_date'])
+        _validate_bundle_sources(staged, data_root)
+        old = for_cohort(parent, ('KRX', 'KRX_REGULAR'))
+        new = for_cohort(bundle, ('KRX', 'KRX_REGULAR'))
+        staged_scope = for_cohort(staged, ('KRX', 'KRX_REGULAR'))
+        scope_proof = (activation.get('scopes') or {}).get('KRX|KRX_REGULAR') or {}
+        if (not old or not new or not staged_scope
+            or staged.get('bundle_sha256') != stage_hash
+            or staged.get('winrate_selection') != bundle.get('winrate_selection')
+            or staged_scope['machine_policy'] != new['machine_policy']
+            or digest(old['machine_policy']) != scope_proof.get('parent_machine_sha256')
+            or digest(new['machine_policy']) != scope_proof.get('candidate_machine_sha256')
+            or activation.get('parent_bundle_sha256') != bundle.get('previous_bundle_sha256')):
+            raise ValueError('winrate_activation_binding_invalid')
+        return bundle if target_date >= bundle['target_date'] else None
     from src.engine.scalping.entry_strategy_policy import promotion_errors
     scopes = activation.get('scopes') or {activation.get('scope'): activation}
     if not scopes or None in scopes:
@@ -1853,6 +2137,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path)
     parser.add_argument("--activate-dated-auxiliary", action="store_true")
+    parser.add_argument("--activate-dated-winrate", action="store_true")
     parser.add_argument("--activate-auxiliary-now", action="store_true")
     parser.add_argument("--source-date")
     parser.add_argument("--target-date")
@@ -1868,6 +2153,11 @@ def main() -> int:
         help="Explicit initial adoption; later dated succession is automatic",
     )
     args = parser.parse_args()
+    if args.activate_dated_winrate:
+        if not args.target_date or args.source or args.activate_now or args.bootstrap or args.rollback_machine_to or args.activate_dated_auxiliary:
+            parser.error('--activate-dated-winrate requires only --target-date')
+        print(json.dumps(activate_dated_winrate_policy(data_root=args.data_root, target_date=args.target_date)))
+        return 0
     if args.activate_auxiliary_now:
         if not args.source_date or args.source or args.activate_dated_auxiliary or args.activate_now or args.bootstrap or args.rollback_machine_to:
             parser.error('--activate-auxiliary-now requires only --source-date')

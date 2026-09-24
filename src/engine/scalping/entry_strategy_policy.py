@@ -335,6 +335,10 @@ def legacy_projection(policy):
     """Unscoped consumer projection keeps the incumbent common coordinates."""
     result = deepcopy(policy)
     result.pop('strategy', None)
+    # The outer decision owns this veto after the rebuilt parent and micro
+    # confirmation are final. Applying it during the recursive replay would
+    # lose the raw-capture and parent-action receipt.
+    result.pop('entry_situation_veto', None)
     if result.get('version') == POLICY_VERSION:
         from src.engine.scalping.entry_setup_evidence import MECHANISTIC_FULL_POPULATION_POLICY_VERSION
         result['version'] = MECHANISTIC_FULL_POPULATION_POLICY_VERSION

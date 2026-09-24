@@ -64,6 +64,49 @@ def test_raw_strategic_block_recomputed_and_context_does_not_leak():
     assert not evidence.validate_entry_setup_evidence(decision['effective_setup_evidence'])
 
 
+def test_winrate_entry_situation_veto_is_exact_scope_and_enter_only():
+    candidate = policy()
+    candidate['strategy']['nodes']['root']['profile'].update(
+        overextension_runup_pct=20, overextension_vwap_bp=120,
+        overextension_ma5_bp=120, tape_supportive_score=60)
+    candidate['entry_situation_veto'] = dict(
+        schema='entry_situation_veto_v1', selection_basis='win_rate_only',
+        market='REGULAR', exact_scope='KRX|KRX_REGULAR',
+        feature='curr_vs_micro_vwap_bp', threshold_bp=68.75,
+        condition='parent_ENTER_NOW_and_fresh_available', selected_action='BLOCK',
+        unknown_action='parent')
+    assert not evidence.validate_mechanistic_entry_threshold_policy(candidate)
+    payload = raw()
+    payload['features'].update(micro_vwap_available=True, minute_candle_window_fresh=True)
+    blocked = evidence.mechanistic_entry_policy_decision(setup(payload), policy=candidate)
+    assert blocked['action'] == 'BLOCK'
+    assert blocked['entry_situation']['parent_action'] == 'ENTER_NOW'
+    assert blocked['entry_situation']['situation'] == 'VWAP_EXTENDED'
+    payload['features']['curr_vs_micro_vwap_bp'] = 68.74
+    allowed = evidence.mechanistic_entry_policy_decision(setup(payload), policy=candidate)
+    assert allowed['action'] == 'ENTER_NOW'
+    payload['features']['curr_vs_micro_vwap_bp'] = 90
+    payload['features']['micro_vwap_available'] = False
+    unknown = evidence.mechanistic_entry_policy_decision(setup(payload), policy=candidate)
+    assert unknown['action'] == 'ENTER_NOW'
+    assert unknown['entry_situation']['situation'] == 'VWAP_UNKNOWN'
+    payload['features']['micro_vwap_available'] = True
+    payload['features']['curr_vs_micro_vwap_bp'] = '90'
+    string_value = evidence.mechanistic_entry_policy_decision(setup(payload), policy=candidate)
+    assert string_value['action'] == 'ENTER_NOW'
+    assert string_value['entry_situation']['situation'] == 'VWAP_UNKNOWN'
+    payload['features']['curr_vs_micro_vwap_bp'] = 90
+    payload['features']['micro_vwap_available'] = True
+    payload['effective_venue'] = 'NXT'
+    payload['session_bucket'] = 'NXT_REGULAR'
+    # A policy for KRX cannot be borrowed by another exact strategy scope.
+    with pytest.raises(ValueError, match='strategy_source_scope_mismatch'):
+        evidence.mechanistic_entry_policy_decision(setup(payload), policy=candidate)
+    invalid = deepcopy(candidate)
+    invalid['entry_situation_veto']['selection_basis'] = 'ev'
+    assert 'entry_situation_veto_contract_invalid' in evidence.validate_mechanistic_entry_threshold_policy(invalid)
+
+
 def test_missing_and_corrupt_raw_cannot_use_saved_labels():
     original = setup()
     original.pop('strategy_raw_input')

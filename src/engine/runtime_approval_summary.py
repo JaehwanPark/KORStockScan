@@ -792,6 +792,7 @@ def _economic_projection(owner: str, payload: dict[str, Any]) -> dict[str, Any]:
         "closure_test": economic.get("closure_test") or {
             "entry_cancel_wait": "native_execution_census_cancel_terminal_cost_and_independent_holdouts",
             "entry_split": "submitted_order_frozen_plan_model_holdout_paired_candidate_and_loader",
+            "pre_submit_delay": "exact_attempt_submit_clock_quote_cost_terminal_and_independent_holdout",
             "scale_in_split": "eligible_add_fill_terminal_clock_cost_and_independent_paired_holdout",
             "low_price_two_leg": "profile_leg_durable_denominator_custody_cost_and_dated_consumer",
             "low_price_expansion": "retained_source_isolation_frozen_allocator_independent_holdout_and_dated_consumer",
@@ -1020,20 +1021,39 @@ def build_runtime_approval_summary(
                 policy_contract_valid = False
             from src.engine.scalping.entry_strategy_policy import select_report_candidate
             typed_selection = select_report_candidate(source_payload)
-            if typed_selection and typed_selection[1].get('promotion_pass') is True:
+            if not policy_payload.get('winrate_selection') and typed_selection and typed_selection[1].get('promotion_pass') is True:
                 policy_contract_valid = bool(policy_contract_valid and
                     (row.get('current_strategy_generation', {}).get('activation') or {}).get('candidate_sha256')
                     == machine_policy.digest(typed_selection[1]['candidate']))
-            policy_receipt_valid = bool(
-                policy_receipt_valid and policy_contract_valid
-                and source_payload.get("report_scope") == "main_mechanistic_entry"
-                and source_payload.get("noncompact_sections_refreshed") is True
-                and machine_source.get("source_date") == target_date
-                and machine_source.get("artifact_content_sha256")
-                == source_payload.get("artifact_content_sha256")
-                and machine_source.get("terminal_state")
-                == (source_payload.get("machine_full_evaluation") or {}).get("state")
-            )
+            winrate = policy_payload.get('winrate_selection') or {}
+            if winrate:
+                winrate_source = _load_json(DATA_DIR / 'report' / 'ai_decision_action_outcome_calibration' /
+                    f'winrate_policy_{target_date}.json')
+                row['winrate_policy'] = dict(selection_basis=winrate_source.get('selection_basis'),
+                    disposition=winrate.get('disposition'),
+                    report_sha256=winrate.get('report_sha256'),
+                    machine_policy_sha256=winrate.get('machine_policy_sha256'),
+                    source_date=winrate_source.get('target_date'),
+                    actual_pid_consumed=False)
+                policy_receipt_valid = bool(policy_receipt_valid and policy_contract_valid
+                    and winrate_source.get('schema') == 'main_entry_winrate_policy_report_v1'
+                    and winrate_source.get('selection_basis') == 'win_rate_only'
+                    and winrate.get('report_sha256') == winrate_source.get('artifact_content_sha256')
+                    and winrate.get('machine_policy_sha256') == machine_policy.digest(policy_payload['machine_policy'])
+                    and winrate.get('disposition') == policy_payload.get('machine_disposition')
+                    and machine_source.get('artifact_content_sha256') == winrate_source.get('artifact_content_sha256')
+                    and winrate_source.get('target_date') == target_date)
+            else:
+                policy_receipt_valid = bool(
+                    policy_receipt_valid and policy_contract_valid
+                    and source_payload.get("report_scope") == "main_mechanistic_entry"
+                    and source_payload.get("noncompact_sections_refreshed") is True
+                    and machine_source.get("source_date") == target_date
+                    and machine_source.get("artifact_content_sha256")
+                    == source_payload.get("artifact_content_sha256")
+                    and machine_source.get("terminal_state")
+                    == (source_payload.get("machine_full_evaluation") or {}).get("state")
+                )
         row["policy_receipt"] = {
             "owner": policy_owner,
             "path": policy.get("path"),

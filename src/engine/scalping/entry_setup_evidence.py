@@ -1899,7 +1899,7 @@ def validate_mechanistic_entry_threshold_policy(policy: Any) -> list[str]:
         "actual_order_submitted",
         "broker_order_forbidden",
     }
-    if set(value) - {"hierarchy", "strategy"} != expected_fields:
+    if set(value) - {"hierarchy", "strategy", "entry_situation_veto"} != expected_fields:
         errors.append("mechanistic_entry_threshold_policy_fields_invalid")
     if value.get("schema") != MECHANISTIC_ENTRY_THRESHOLD_POLICY_SCHEMA:
         errors.append("mechanistic_entry_threshold_policy_schema_invalid")
@@ -1978,6 +1978,24 @@ def validate_mechanistic_entry_threshold_policy(policy: Any) -> list[str]:
         errors.extend(validate_strategy(value["strategy"]))
         if "hierarchy" in value:
             errors.append("strategy_and_legacy_hierarchy_conflict")
+    if "entry_situation_veto" in value:
+        veto = _as_dict(value["entry_situation_veto"])
+        expected_veto = {
+            "schema": "entry_situation_veto_v1",
+            "selection_basis": "win_rate_only",
+            "market": "REGULAR",
+            "exact_scope": "KRX|KRX_REGULAR",
+            "feature": "curr_vs_micro_vwap_bp",
+            "condition": "parent_ENTER_NOW_and_fresh_available",
+            "selected_action": "BLOCK",
+            "unknown_action": "parent",
+        }
+        if (set(veto) != set(expected_veto) | {"threshold_bp"}
+            or any(veto.get(k) != v for k, v in expected_veto.items())
+            or type(veto.get("threshold_bp")) not in (int, float)
+            or (threshold := _number(veto.get("threshold_bp"))) is None
+            or threshold <= 0):
+            errors.append("entry_situation_veto_contract_invalid")
     if "hierarchy" in value:
         errors.extend(validate_mechanistic_hierarchy(value))
     return list(dict.fromkeys(errors))
@@ -2403,7 +2421,7 @@ def mechanistic_entry_policy_decision(
         decision["policy_version"] = selected_policy["version"]
         decision["strategy_selection"] = receipt
         decision["effective_setup_evidence"] = rebuilt
-        return decision
+        return _apply_entry_situation_veto(decision, setup, selected_policy)
     effective, rule, selection = _mechanistic_hierarchy_selection(
         setup, selected_policy
     )
@@ -2477,7 +2495,7 @@ def mechanistic_entry_policy_decision(
     else:
         action = "ENTER_NOW"
         reason = "MECHANISTIC_SETUP_AND_THRESHOLD_PASS"
-    return {
+    decision = {
         "schema": MECHANISTIC_POLICY_DECISION_SCHEMA,
         "action": action,
         "reason": reason,
@@ -2496,6 +2514,62 @@ def mechanistic_entry_policy_decision(
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
     }
+    return _apply_entry_situation_veto(decision, setup, selected_policy)
+
+
+def _apply_entry_situation_veto(
+    decision: dict[str, Any], setup: dict[str, Any], policy: dict[str, Any]
+) -> dict[str, Any]:
+    """Bind a one-attempt veto to the same verified raw capture as the parent."""
+    veto = policy.get("entry_situation_veto")
+    if veto is None:
+        return decision
+    from src.engine.scalping.entry_strategy_policy import digest as strategy_digest
+
+    raw = setup.get("strategy_raw_input")
+    if not isinstance(raw, dict) or setup.get("strategy_raw_sha256") != strategy_digest(raw):
+        raise ValueError("entry_situation_raw_capture_invalid")
+    route = _as_dict(raw.get("routing"))
+    raw_scope = "|".join((
+        str(raw.get("effective_venue") or route.get("effective_venue") or "").upper(),
+        str(raw.get("session_bucket") or route.get("session_bucket") or "").upper(),
+    ))
+    parts = _as_dict(_as_dict(_as_dict(setup.get("mechanistic_context")).get("group")).get("key_parts"))
+    captured_scope = "|".join((str(parts.get("venue") or "").upper(),
+                               str(parts.get("session_bucket") or "").upper()))
+    if raw_scope != captured_scope or "UNKNOWN" in raw_scope or "||" in raw_scope:
+        raise ValueError("entry_situation_scope_capture_conflict")
+    parent_action = decision["action"]
+    feature = _as_dict(raw.get("features"))
+    raw_value = feature.get("curr_vs_micro_vwap_bp")
+    observed = _number(raw_value) if type(raw_value) in (int, float) else None
+    available = feature.get("micro_vwap_available") is True
+    fresh = feature.get("minute_candle_window_fresh") is True
+    situation = ("BASE" if raw_scope != veto["exact_scope"] else
+                 "VWAP_UNKNOWN" if not (available and fresh and observed is not None) else
+                 "VWAP_EXTENDED" if observed >= veto["threshold_bp"] else
+                 "VWAP_NOT_EXTENDED")
+    receipt = {
+        "schema": "entry_situation_decision_v1",
+        "market": "PREMARKET" if "PREMARKET" in raw_scope else
+                  "AFTERMARKET" if "AFTERMARKET" in raw_scope else "REGULAR",
+        "exact_scope": raw_scope,
+        "situation": situation,
+        "parent_action": parent_action,
+        "parent_reason": decision["reason"],
+        "feature_value_bp": observed if available and fresh else None,
+        "micro_vwap_available": available,
+        "minute_candle_window_fresh": fresh,
+        "raw_sha256": setup["strategy_raw_sha256"],
+        "policy_sha256": strategy_digest(policy),
+        "veto_sha256": strategy_digest(veto),
+    }
+    if situation == "VWAP_EXTENDED" and parent_action == "ENTER_NOW":
+        decision["action"] = "BLOCK"
+        decision["reason"] = "ENTRY_SITUATION_VWAP_EXTENDED_VETO"
+    receipt["final_action"] = decision["action"]
+    decision["entry_situation"] = receipt
+    return decision
 
 
 def validate_mechanistic_risk_screen(

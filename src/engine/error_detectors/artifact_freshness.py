@@ -2,10 +2,13 @@ from __future__ import annotations
 
 
 import csv
+import gzip
 import glob
+import hashlib
 import json
 import os
 import time
+from collections import Counter
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -28,6 +31,150 @@ from src.engine.error_detectors.cron_completion import CronCompletionDetector
 
 def _today_kst_str(now_kst: datetime | None = None) -> str:
     return (now_kst or datetime.now()).strftime("%Y-%m-%d")
+
+
+def _machine_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
+    """Check exact-date machine economics separately from stage completion."""
+    report_path = (root / "data/report/ai_decision_action_outcome_calibration"
+                   / f"ai_decision_action_outcome_calibration_{source_date}.json")
+    if not (report_path.exists() or report_path.is_symlink()):
+        # The scheduled artifact/cron owners detect absence. This semantic
+        # check runs only after a report exists, including historical review.
+        return {"status": "not_assessed", "findings": []}
+    try:
+        if report_path.is_symlink() or report_path.stat().st_size > 64 * 1024 * 1024:
+            return {"status": "source_invalid", "findings": ["machine_report_untrusted_path_or_size"]}
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        declared = report.get("artifact_content_sha256")
+        body = {key: value for key, value in report.items() if key != "artifact_content_sha256"}
+        actual = hashlib.sha256(json.dumps(body, ensure_ascii=True, sort_keys=True,
+            separators=(",", ":"), default=str).encode("utf-8")).hexdigest()
+        if report.get("target_date") != source_date or declared != actual:
+            raise ValueError("machine_report_date_or_hash_invalid")
+        scopes = (report.get("machine_full_evaluation") or {}).get("scope_evaluations")
+        if not isinstance(scopes, dict):
+            raise ValueError("machine_scope_evaluations_missing")
+    except (OSError, UnicodeError, ValueError, TypeError, AttributeError) as exc:
+        return {"status": "source_invalid", "findings": [str(exc)]}
+    findings: list[str] = []
+    scope_details: dict[str, dict[str, Any]] = {}
+    for scope, row in scopes.items():
+        if not isinstance(row, dict):
+            findings.append("machine_scope_row_invalid")
+            continue
+        full = row.get("full_population_count")
+        eligible = row.get("current_structure_eligible_count")
+        paired = row.get("paired_comparable_count")
+        exclusions = row.get("row_exclusion_reason_counts") or {}
+        if not isinstance(exclusions, dict):
+            findings.append("machine_exclusion_counts_invalid")
+            continue
+        invalid = exclusions.get("source_contract_invalid", 0)
+        if (any(type(value) is not int or value < 0 for value in (full, eligible, invalid))
+            or eligible > full or (paired is not None and (type(paired) is not int or paired < 0))):
+            findings.append("machine_population_count_invalid")
+            continue
+        if not full and not invalid:
+            continue
+        scope_details[scope] = {"full": full, "eligible": eligible,
+            "operating_paired": paired, "source_contract_invalid": invalid}
+        if invalid:
+            findings.append("machine_source_contract_exclusions")
+        if full and not eligible:
+            findings.append("machine_current_structure_empty")
+        if eligible and not paired:
+            findings.append("machine_operating_paired_unbound")
+        if eligible and row.get("downstream_operating_evidence_complete") is not True:
+            findings.append("machine_operating_economics_incomplete")
+    compact_path = (root / "data/report/ai_entry_setup_paired_replay_batch"
+                    / f"compact_auxiliary_paired_economic_{source_date}.source.json")
+    compact_exclusions: dict[str, int] = {}
+    compact_path = existing_or_gzip_path(compact_path)
+    if compact_path.exists() or compact_path.is_symlink():
+        try:
+            if compact_path.is_symlink() or compact_path.stat().st_size > 64 * 1024 * 1024:
+                findings.append("compact_projection_untrusted_path_or_size")
+            else:
+                opener = gzip.open if compact_path.suffix == ".gz" else open
+                with opener(compact_path, "rt", encoding="utf-8") as handle:
+                    compact_text = handle.read(64 * 1024 * 1024 + 1)
+                if len(compact_text) > 64 * 1024 * 1024:
+                    raise ValueError("compact_projection_uncompressed_size_exceeded")
+                compact = json.loads(compact_text)
+                if compact.get("target_date") != source_date or not isinstance(compact.get("rows"), list):
+                    raise ValueError("compact_projection_date_or_rows_invalid")
+                compact_hash = compact.get("artifact_content_sha256")
+                compact_body = {k: v for k, v in compact.items() if k != "artifact_content_sha256"}
+                actual_hash = hashlib.sha256(json.dumps(compact_body, ensure_ascii=False,
+                    sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+                if compact_hash != actual_hash:
+                    raise ValueError("compact_projection_hash_invalid")
+                if any(not isinstance(row, dict) for row in compact["rows"]):
+                    raise ValueError("compact_projection_rows_invalid")
+                compact_exclusions = dict(Counter(str(row.get("exclusion_reason"))
+                    for row in compact["rows"] if row.get("exclusion_reason")))
+                if compact["rows"] and sum(compact_exclusions.values()) == len(compact["rows"]):
+                    findings.append("compact_operating_rows_all_excluded")
+        except (OSError, EOFError, UnicodeError, ValueError, TypeError, AttributeError):
+            findings.append("compact_projection_invalid")
+    winrate_path = (root / 'data/report/ai_decision_action_outcome_calibration'
+                    / f'winrate_policy_{source_date}.json')
+    if winrate_path.exists() or winrate_path.is_symlink():
+        try:
+            if winrate_path.is_symlink() or winrate_path.stat().st_size > 64 * 1024 * 1024:
+                raise ValueError('winrate_report_untrusted_path_or_size')
+            from src.engine.scalping import ai_action_outcome_calibration as calibration
+            from src.engine.scalping import mechanistic_entry_runtime_policy as runtime_policy
+            winrate = json.loads(winrate_path.read_text(encoding='utf-8'))
+            if winrate.get('schema') == 'main_entry_winrate_policy_report_v1':
+                if (not calibration._artifact_content_sha256_valid(winrate)
+                    or winrate.get('target_date') != source_date
+                    or winrate.get('selection_basis') != 'win_rate_only'):
+                    findings.append('winrate_report_hash_or_scope_invalid')
+                accepted = winrate.get('accepted_attempt_count')
+                source_excluded = winrate.get('source_contract_excluded_count')
+                excluded = winrate.get('excluded_attempt_counts') or {}
+                if (type(accepted) is not int or accepted < 0
+                    or type(source_excluded) is not int or source_excluded < 0
+                    or any(type(v) is not int or v < 0 for v in excluded.values())
+                    or accepted + source_excluded + sum(excluded.values()) != winrate.get('input_attempt_count')
+                    or sum((winrate.get('situation_attempt_counts') or {}).values()) != accepted):
+                    findings.append('winrate_population_denominator_invalid')
+                markets = winrate.get('market_census') or {}
+                if not markets or any(
+                    not isinstance(item, dict)
+                    or any(type(item.get(name)) is not int or item[name] < 0 for name in
+                        ('input_attempt_count', 'accepted_attempt_count', 'source_contract_excluded_count'))
+                    or item['accepted_attempt_count'] + item['source_contract_excluded_count']
+                        + sum((item.get('excluded_attempt_counts') or {}).values()) != item['input_attempt_count']
+                    for item in markets.values()):
+                    findings.append('winrate_market_denominator_invalid')
+                disposition = winrate.get('disposition')
+                if disposition in {'initial_adopted', 'successor_selected'}:
+                    for part in ('train', 'holdout'):
+                        metrics = (winrate.get('candidate') or {}).get(part) or {}
+                        if (not metrics.get('selected_opportunity_count')
+                            or metrics.get('win_rate_pct') is None
+                            or metrics.get('support_adjusted_win_rate_pct') is None):
+                            findings.append('winrate_selected_zero_or_undefined')
+                terminal_path = winrate_path.with_name(f'winrate_policy_terminal_{source_date}.json')
+                terminal = json.loads(terminal_path.read_text(encoding='utf-8'))
+                target = (terminal.get('staged') or {}).get('target_date')
+                if (not calibration._artifact_content_sha256_valid(terminal)
+                    or terminal.get('report_sha256') != winrate.get('artifact_content_sha256')
+                    or not isinstance(target, str)):
+                    raise ValueError('winrate_terminal_binding_invalid')
+                bundle = runtime_policy.load(data_root=root / 'data', target_date=target)
+                selection = (bundle or {}).get('winrate_selection') or {}
+                if (selection.get('report_sha256') != winrate.get('artifact_content_sha256')
+                    or selection.get('disposition') != disposition
+                    or selection.get('machine_policy_sha256') != runtime_policy.digest(bundle['machine_policy'])
+                    or (bundle.get('scope_policies') or {}).get('KRX|KRX_REGULAR', {}).get('machine_disposition') != disposition):
+                    findings.append('winrate_candidate_bundle_or_scope_mismatch')
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+            findings.append('winrate_semantic_validation_failed')
+    return {"status": "warning" if findings else "pass", "findings": sorted(set(findings)),
+        "scopes": scope_details, "compact_exclusions": compact_exclusions}
 
 
 def _reconcile_update_kospi_master_difference(
@@ -900,6 +1047,12 @@ class ArtifactFreshnessDetector(BaseDetector):
                     details[f"{aid}_status"] = "warning"
             else:
                 details[f"{aid}_status"] = "pass"
+
+        if trading_day:
+            machine_semantics = _machine_result_semantics(PROJECT_ROOT, today)
+            details["machine_result_semantics"] = machine_semantics
+            if machine_semantics["findings"]:
+                warnings.append("machine_result_semantics: " + ", ".join(machine_semantics["findings"]))
 
         severity, summary = self._classify(issues, warnings)
         return DetectionResult(

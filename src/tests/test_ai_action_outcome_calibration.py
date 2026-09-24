@@ -2382,6 +2382,52 @@ def test_common_refinement_deduplicates_exact_natural_attempts():
     assert contract["input_row_disposition_complete"] is True
 
 
+def test_common_refinement_indexes_sealed_operating_projection_once(monkeypatch):
+    from src.engine.scalping import compact_auxiliary_paired_replay as compact
+
+    rows, receipt = _natural_refinement_fixture()
+    rows = rows[:2]
+    def projection_row(row):
+        return {key: row[key] for key in (
+            "evaluation_attempt_id", "source_date", "stock_code",
+            "scanner_promotion_id", "effective_venue", "session_bucket",
+        )}
+    projection = compact.sealed({"rows": [
+        projection_row(rows[0]), projection_row(rows[0]), projection_row(rows[1]),
+    ]})
+    valid = compact.valid
+    calls = []
+    def checked(value):
+        calls.append(value)
+        return valid(value)
+    monkeypatch.setattr(compact, "valid", checked)
+    monkeypatch.setattr(calibration, "_machine_nonentry_seed", lambda source: {"valid": True})
+
+    result, contract = calibration._common_refinement_population(
+        [], rows, target_date="2026-09-15", source_receipt=receipt,
+        paired_contract={}, operating_projection=projection,
+    )
+
+    assert len(calls) == 1
+    assert contract["operating_economic_enrichment_count"] == 1
+    assert "operating_comparison_input" not in result[0]
+    assert result[1]["operating_comparison_input"]["evaluation_attempt_id"] == rows[1]["evaluation_attempt_id"]
+    assert all(row["machine_sequence_expected_count"] == 1 for row in result)
+
+
+def test_common_refinement_ignores_invalid_optional_projection_attempt_id():
+    from src.engine.scalping import compact_auxiliary_paired_replay as compact
+
+    rows, receipt = _natural_refinement_fixture()
+    projection = compact.sealed({"rows": [{"evaluation_attempt_id": ["invalid"]}]})
+    result, contract = calibration._common_refinement_population(
+        [], rows[:1], target_date="2026-09-15", source_receipt=receipt,
+        paired_contract={}, operating_projection=projection,
+    )
+    assert len(result) == 1
+    assert contract["operating_economic_enrichment_count"] == 0
+
+
 @pytest.mark.parametrize("conflict", [False, True])
 def test_common_refinement_trace_cannot_inflate_cross_lane_population(conflict):
     import copy
@@ -5234,3 +5280,16 @@ def test_machine_full_population_retains_missing_outcome_for_entry_protection():
     assert len(protected) == len(usual) + 1
     missing = next(r for r in protected if r['decision_trace_id'] == rows[0]['decision_trace_id'])
     assert calibration._machine_path_value(missing)[0] is None
+def test_winrate_opportunity_metric_uses_binary_labels_and_unique_opportunities():
+    from src.engine.scalping.ai_action_outcome_calibration import _winrate_opportunity_metrics
+    rows = [
+        dict(opportunity_id='a', decision_trace_id='a1', source_date='2026-09-22', win=True),
+        dict(opportunity_id='a', decision_trace_id='a2', source_date='2026-09-22', win=False),
+        dict(opportunity_id='b', decision_trace_id='b1', source_date='2026-09-23', win=True),
+    ]
+    metrics = _winrate_opportunity_metrics(rows)
+    assert metrics['selected_attempt_count'] == 3
+    assert metrics['selected_opportunity_count'] == 2
+    assert metrics['winning_attempt_count'] == 2
+    assert metrics['win_rate_pct'] == pytest.approx(75)
+    assert _winrate_opportunity_metrics([])['win_rate_pct'] is None

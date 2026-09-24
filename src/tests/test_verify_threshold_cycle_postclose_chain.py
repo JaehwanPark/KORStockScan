@@ -216,6 +216,15 @@ def test_main_mechanistic_scope_rejects_compact_only_report(
     assert "main_machine_future_policy_missing_or_ambiguous" in result["issues"]
 
 
+def test_machine_admission_selection_does_not_claim_runtime_strategy_activation():
+    for basis in ("machine_full_population_opportunity_v1", "machine_nonentry_opportunity_v1"):
+        selected = ("KRX|KRX_REGULAR", {"promotion_pass": True, "candidate": {"evaluation_basis": basis}})
+        assert mod._selected_strategy_requires_runtime_activation(selected) is False
+    runtime_selected = ("KRX|KRX_REGULAR", {"promotion_pass": True, "candidate": {"evaluation_basis": "runtime_owner_replay_v1"}})
+    assert mod._selected_strategy_requires_runtime_activation(runtime_selected) is True
+    assert mod._selected_strategy_requires_runtime_activation(None) is False
+
+
 def test_terminal_rejects_wrong_date_nonzero_exit_missing_identity_and_stale_proof(monkeypatch, tmp_path):
     target = "2026-09-19"
     _seed(monkeypatch, tmp_path, target)

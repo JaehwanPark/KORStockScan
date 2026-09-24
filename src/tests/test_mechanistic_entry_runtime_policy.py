@@ -39,6 +39,75 @@ def initial(tmp_path):
     )
 
 
+def test_winrate_stage_requires_explicit_preopen_activation(tmp_path, monkeypatch):
+    from src.engine.scalping import entry_strategy_policy as strategy
+    previous = copy.deepcopy(initial(tmp_path))
+    previous['machine_policy'] = strategy.seed(previous['machine_policy'], ('KRX', 'KRX_REGULAR'))
+    previous['bundle_sha256'] = policy.digest({k: v for k, v in previous.items() if k != 'bundle_sha256'})
+    policy._atomic_write_json(policy.root(tmp_path) / 'policy_2026-09-14.json', previous)
+    policy._atomic_write_json(policy.root(tmp_path) / 'generations' / f"{previous['bundle_sha256']}.json", previous)
+    candidate = copy.deepcopy(previous['machine_policy'])
+    candidate['entry_situation_veto'] = dict(schema='entry_situation_veto_v1',
+        selection_basis='win_rate_only', market='REGULAR', exact_scope='KRX|KRX_REGULAR',
+        feature='curr_vs_micro_vwap_bp', threshold_bp=68.75,
+        condition='parent_ENTER_NOW_and_fresh_available', selected_action='BLOCK',
+        unknown_action='parent')
+    report = calibration._with_artifact_content_sha256(dict(
+        schema='main_entry_winrate_policy_report_v1', target_date='2026-09-23',
+        report_scope='main_entry_winrate', selection_basis='win_rate_only',
+        policy_version='winrate_initial_v1',
+        disposition='initial_adopted', source_contract_sha256='a' * 64,
+        evaluated_attempt_manifest_sha256='b' * 64,
+        source_receipt=dict(target_date='2026-09-23', tuning_input_allowed=True),
+        parent_bundle_sha256=previous['bundle_sha256'],
+        parent_machine_policy_sha256=policy.digest(previous['machine_policy']),
+        candidate_machine_policy_sha256=policy.digest(candidate), candidate_policy=candidate,
+        candidate_threshold_bp=68.75, input_attempt_count=1485,
+        accepted_attempt_count=351, source_contract_excluded_count=60,
+        excluded_attempt_counts={'quality_path_cost_missing_or_mismatched': 1074},
+        situation_attempt_counts={'VWAP_NOT_EXTENDED': 291, 'VWAP_EXTENDED': 60},
+        gross_label_difference_count=9,
+        historical_full_evaluation_reference=dict(
+            artifact_content_sha256='10b29ced3cf6e61bee35e84de5e456db3dd78b562378cd0aef9db605fdc85564',
+            total_eligible_count=476,
+            exact_scope_eligible_counts={'KRX|KRX_REGULAR': 351,
+                'PREMARKET_KRX_LIKE|PREMARKET_KRX_LIKE': 25,
+                'KRX_NXT_INTEGRATED|KRX_NXT_AFTERMARKET': 100}),
+        train_dates=['2026-09-22'], holdout_dates=['2026-09-23'],
+        candidate=dict(train=dict(selected_opportunity_count=11, winning_attempt_count=10),
+                       holdout=dict(selected_opportunity_count=4, winning_attempt_count=3)),
+        hurdle_errors=[]))
+    source_path = tmp_path / 'winrate_report.json'
+    policy._atomic_write_json(source_path, report)
+    staged = policy.stage_winrate_policy(source_path, data_root=tmp_path,
+        now=datetime(2026, 9, 24, 14, tzinfo=policy.KST))
+    assert staged['status'] == 'staged' and staged['target_date'] == '2026-09-28'
+    assert not (policy.root(tmp_path) / 'current.json').exists()
+    assert policy.load(data_root=tmp_path, target_date='2026-09-28')['machine_policy'] == candidate
+    assert policy.load_effective(data_root=tmp_path, target_date='2026-09-28')['machine_policy'] == previous['machine_policy']
+    changed = copy.deepcopy(report)
+    changed['candidate_policy']['thresholds']['min_score'] = -999
+    changed['candidate_machine_policy_sha256'] = policy.digest(changed['candidate_policy'])
+    changed = calibration._with_artifact_content_sha256({k: v for k, v in changed.items()
+        if k != 'artifact_content_sha256'})
+    policy._atomic_write_json(source_path, changed)
+    with pytest.raises(ValueError, match='winrate_candidate_contract_invalid'):
+        policy.stage_winrate_policy(source_path, data_root=tmp_path,
+            now=datetime(2026, 9, 24, 14, tzinfo=policy.KST))
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 9, 28, 8, 30, tzinfo=tz or policy.KST)
+    monkeypatch.setattr(policy, 'datetime', FrozenDateTime)
+    activated = policy.activate_dated_winrate_policy(data_root=tmp_path,
+        target_date='2026-09-28', now=FrozenDateTime.now(policy.KST))
+    assert activated['status'] == 'activated'
+    assert policy.load_effective(data_root=tmp_path, target_date='2026-09-28')['machine_policy'] == candidate
+    repeated = policy.activate_dated_winrate_policy(data_root=tmp_path,
+        target_date='2026-09-28', now=FrozenDateTime.now(policy.KST))
+    assert repeated == {'status': 'already_active', 'bundle_sha256': activated['bundle_sha256']}
+
+
 def test_initial_policy_does_not_require_promotion_candidate(tmp_path):
     bundle = initial(tmp_path)
     assert bundle["target_date"] == "2026-09-14"

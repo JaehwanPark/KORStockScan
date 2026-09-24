@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import pytest
 
 import os
@@ -14,10 +15,77 @@ from src.engine.error_detectors.artifact_freshness import (
     ArtifactFreshnessDetector,
     ARTIFACT_REGISTRY,
     _reconcile_update_kospi_master_difference,
+    _machine_result_semantics,
 )
 from src.engine.scalping.micro_reversion.symbol_master import SymbolLookupStatus
 
 _TRADING_MOCK = "src.engine.error_detectors.artifact_freshness.is_krx_trading_day"
+
+
+def test_machine_result_semantics_detects_successful_stage_with_unbound_economics(tmp_path, monkeypatch):
+    day = "2026-09-23"
+    root = tmp_path / "data/report"
+    report_path = root / "ai_decision_action_outcome_calibration" / f"ai_decision_action_outcome_calibration_{day}.json"
+    report_path.parent.mkdir(parents=True)
+    report = {"target_date": day, "machine_full_evaluation": {"scope_evaluations": {
+        "KRX|KRX_REGULAR": {"full_population_count": 10,
+            "current_structure_eligible_count": 4, "paired_comparable_count": 0,
+            "downstream_operating_evidence_complete": False,
+            "row_exclusion_reason_counts": {"source_contract_invalid": 3}},
+    }}}
+    report["artifact_content_sha256"] = hashlib.sha256(json.dumps(report,
+        ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    compact_path = root / "ai_entry_setup_paired_replay_batch" / f"compact_auxiliary_paired_economic_{day}.source.json"
+    compact_path.parent.mkdir(parents=True)
+    compact = {"target_date": day, "rows": [
+        {"exclusion_reason": "terminal_path_not_evaluable"},
+        {"exclusion_reason": "exact_stop_distance_missing_or_invalid"},
+    ]}
+    compact["artifact_content_sha256"] = hashlib.sha256(json.dumps(compact,
+        ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    compact_path.write_text(json.dumps(compact), encoding="utf-8")
+    result = _machine_result_semantics(tmp_path, day)
+    assert result["status"] == "warning"
+    assert result["findings"] == ["compact_operating_rows_all_excluded",
+        "machine_operating_economics_incomplete", "machine_operating_paired_unbound",
+        "machine_source_contract_exclusions"]
+    assert result["compact_exclusions"] == {"terminal_path_not_evaluable": 1,
+        "exact_stop_distance_missing_or_invalid": 1}
+    import src.engine.error_detectors.artifact_freshness as detector_module
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 9, 24, 12, 0)
+    monkeypatch.setattr(detector_module, "datetime", Clock)
+    monkeypatch.setattr(detector_module, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(detector_module, "ARTIFACT_REGISTRY", [])
+    monkeypatch.setattr(detector_module, "load_installed_crontab", lambda: "")
+    monkeypatch.setattr(detector_module, "is_krx_trading_day", lambda _: True)
+    detector = ArtifactFreshnessDetector(dry_run=True)
+    detector.postclose_source_date = day
+    detection = detector.check()
+    assert detection.severity == "warning"
+    assert detection.details["machine_result_semantics"]["findings"] == result["findings"]
+    report["machine_full_evaluation"]["scope_evaluations"]["KRX|KRX_REGULAR"].update(
+        paired_comparable_count=4, downstream_operating_evidence_complete=True,
+        row_exclusion_reason_counts={})
+    report["artifact_content_sha256"] = hashlib.sha256(json.dumps({
+        k: v for k, v in report.items() if k != "artifact_content_sha256"},
+        ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    compact_path.unlink()
+    assert _machine_result_semantics(tmp_path, day)["status"] == "pass"
+    assert detector.check().severity == "pass"
+    compact_path.with_suffix(".json.gz").write_bytes(b"not-gzip")
+    assert _machine_result_semantics(tmp_path, day)["findings"] == ["compact_projection_invalid"]
+    compact_path.with_suffix(".json.gz").unlink()
+    report_path.write_bytes(b"\xff")
+    assert _machine_result_semantics(tmp_path, day)["status"] == "source_invalid"
+    report_path.unlink()
+    report_path.symlink_to("missing-report.json")
+    assert _machine_result_semantics(tmp_path, day)["findings"] == [
+        "machine_report_untrusted_path_or_size"]
 
 
 def _update_kospi_partial_payload() -> dict:

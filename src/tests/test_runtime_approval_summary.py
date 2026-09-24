@@ -679,6 +679,19 @@ def test_main_proxy_population_and_ev_are_not_operating_economics():
     assert row["future_contract_state"] == "unverified_requires_owner_evidence"
 
 
+def test_pre_submit_delay_source_gap_has_owned_closure_test():
+    row = mod._economic_projection("pre_submit_delay", {
+        "source_date": "2026-09-23",
+        "status": "source_gap",
+        "first_blocker": "invalid_submit_clock",
+    })
+    assert row["closure_owner"] == "pre_submit_delay_tuning"
+    assert row["closure_test"] == (
+        "exact_attempt_submit_clock_quote_cost_terminal_and_independent_holdout"
+    )
+    assert row["policy_handoff_state"] == "blocked"
+
+
 def test_active_expansion_source_gap_is_not_retired_or_not_applicable(tmp_path):
     path = tmp_path / "study.json"
     _write(path, dict(target_date="2026-09-17", status="partial_source_quality",

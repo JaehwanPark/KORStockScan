@@ -728,7 +728,7 @@ STAGE_REGISTRY = {
     'collector_recommendation': (('outcome_labels',), ('widget_collector_expansion_recommendation',)),
     'machine_attribution': ((), ('machine_microstructure_attribution',)),
     'machine_timing': (('machine_attribution',), ('machine_entry_timing_tuning',)),
-    'market_weakness': ((), ('market_weakness_hysteresis_tuning',)),
+    'market_weakness': (('machine_attribution',), ('market_weakness_hysteresis_tuning',)),
     'research_capacity': ((), ('research_native_capacity',)),
     'research_allocation': (('widget_policy', 'episode_policy', 'research_capacity'), ('machine_research_closed_loop',)),
     'legacy_policy_approval': (('machine_attribution',), ('machine_microstructure_policy_approval',)),
@@ -759,7 +759,9 @@ def stage_artifacts(report_dir, day, stage):
     paths = catalog(Path(report_dir), day)
     for label in ('machine_policy', 'machine_policy_terminal', 'compact_auxiliary_paired_economic'):
         folder = 'ai_entry_setup_paired_replay_batch' if label.startswith('compact') else 'ai_decision_action_outcome_calibration'
-        paths[label] = Path(report_dir) / folder / f'{label}_{day}.json'
+        filename = {'machine_policy': 'winrate_policy',
+                    'machine_policy_terminal': 'winrate_policy_terminal'}.get(label, label)
+        paths[label] = Path(report_dir) / folder / f'{filename}_{day}.json'
     paths['research_native_capacity'] = Path(report_dir).parent / 'runtime' / 'machine_research_closed_loop' / f'capacity_source_{day}.json'
     paths['pre_submit_delay_tuning'] = Path(report_dir) / 'pre_submit_delay_tuning' / f'pre_submit_delay_tuning_{day}.json'
     paths['pre_submit_delay_policy'] = Path(report_dir).parent / 'threshold_cycle' / 'pre_submit_delay_policy' / f'pre_submit_delay_policy_{day}.json'
@@ -812,7 +814,40 @@ def stage_receipt_issues(report_dir, day, stage, *, code_hash=None):
     if code_hash is None:
         code_hash = _stage_code(stage, stage_commands(stage, day, value.get('publication_date') or day, recovery=value.get('recovery_mode', False)), Path(__file__).resolve().parents[3])
     if value.get('stage_code_sha256') != code_hash:
-        return [f'{stage}:code_changed']
+        # A code-only release transition must not force unchanged stages to
+        # replay. Accept the exact hash from a bounded set of managed immutable
+        # releases; artifact, input, and prerequisite hashes remain checked
+        # below in either case.
+        compatible = set()
+        selection = _load_json(Path(report_dir).parent / 'runtime' / 'runtime_release_selection.json')
+        selected_root = Path(selection.get('release_root', ''))
+        if (selection.get('schema') == 'runtime_release_selection_v1'
+            and len(selection.get('git_commit', '')) == 40
+            and all(ch in '0123456789abcdef' for ch in selection.get('git_commit', ''))
+            and selected_root.is_absolute()
+            and selected_root.parent.name == 'KORStockScan-runtime-releases'):
+            release_roots = [selected_root]
+            try:
+                managed_roots = sorted(
+                    child for child in selected_root.parent.iterdir()
+                    if child.is_dir() and (child / '.git').exists()
+                )
+            except OSError:
+                managed_roots = []
+            if len(managed_roots) <= 256:
+                release_roots.extend(root for root in managed_roots if root != selected_root)
+                commands = stage_commands(stage, day,
+                    value.get('publication_date') or day,
+                    recovery=value.get('recovery_mode', False))
+                for release_root in release_roots:
+                    release_dispatcher = release_root / 'src/engine/automation/postclose_summary_handoff.py'
+                    if release_dispatcher.is_file():
+                        compatible.add(_stage_code(stage, commands, release_root,
+                            dispatcher_path=release_dispatcher))
+                        if value.get('stage_code_sha256') in compatible:
+                            break
+        if value.get('stage_code_sha256') not in compatible:
+            return [f'{stage}:code_changed']
     expected = stage_artifacts(report_dir, day, stage)
     if set(value.get('sources', {})) != set(expected):
         return [f'{stage}:source_set_invalid']
@@ -828,6 +863,9 @@ def stage_receipt_issues(report_dir, day, stage, *, code_hash=None):
 
 def stage_input_paths(report_dir, day, stage):
     paths = {s:stage_path(report_dir, day, s) for s in STAGE_REGISTRY[stage][0]}
+    if stage == 'summary_handoff':
+        paths.update({s:stage_path(report_dir, day, s) for s in active_stage_names(day)
+                      if s != 'summary_handoff'})
     if stage == 'pre_submit_delay':
         paths['pipeline_summary_manifest'] = Path(report_dir).parent / 'pipeline_event_summaries' / f'pipeline_event_producer_summary_manifest_{day}.json'
     if stage == 'widget_policy':
@@ -878,6 +916,43 @@ def _stage_output_issues(report_dir, day, stage):
         if (terminal.get('report_sha256') != report.get('artifact_content_sha256')
             or terminal.get('policy_sha256') != report.get('policy_sha256')):
             errors.append(f'{stage}:report_terminal_binding_invalid')
+        if report.get('selection_basis') == 'win_rate_only':
+            from src.engine.scalping import mechanistic_entry_runtime_policy as runtime_policy
+            staged = terminal.get('staged') or {}
+            counts = report.get('excluded_attempt_counts') or {}
+            markets = report.get('market_census') or {}
+            market_counts_valid = bool(markets) and all(
+                isinstance(item, dict)
+                and item.get('market') in {'PREMARKET', 'REGULAR', 'AFTERMARKET'}
+                and all(type(item.get(name)) is int and item[name] >= 0 for name in
+                    ('input_attempt_count', 'accepted_attempt_count', 'source_contract_excluded_count'))
+                and item['accepted_attempt_count'] + item['source_contract_excluded_count']
+                    + sum((item.get('excluded_attempt_counts') or {}).values()) == item['input_attempt_count']
+                for item in markets.values())
+            if (report.get('schema') != 'main_entry_winrate_policy_report_v1'
+                or report.get('disposition') not in {'initial_adopted', 'successor_selected', 'incumbent_carried'}
+                or terminal.get('disposition') != report.get('disposition')
+                or staged.get('status') not in {'staged', 'already_staged'}
+                or type(report.get('accepted_attempt_count')) is not int
+                or type(report.get('source_contract_excluded_count')) is not int
+                or any(type(value) is not int or value < 0 for value in counts.values())
+                or report['accepted_attempt_count'] + report['source_contract_excluded_count']
+                    + sum(counts.values()) != report.get('input_attempt_count')
+                or sum((report.get('situation_attempt_counts') or {}).values()) != report['accepted_attempt_count']
+                or not market_counts_valid):
+                errors.append(f'{stage}:winrate_semantics_invalid')
+            else:
+                try:
+                    bundle = runtime_policy.load(data_root=Path(report_dir).parent,
+                        target_date=staged['target_date'])
+                    proof = (bundle or {}).get('winrate_selection') or {}
+                    if (bundle.get('bundle_sha256') != staged.get('bundle_sha256')
+                        or proof.get('report_sha256') != report.get('artifact_content_sha256')
+                        or proof.get('machine_policy_sha256') != runtime_policy.digest(bundle['machine_policy'])
+                        or proof.get('disposition') != report['disposition']):
+                        errors.append(f'{stage}:winrate_staged_binding_invalid')
+                except (OSError, ValueError, TypeError, KeyError, AttributeError):
+                    errors.append(f'{stage}:winrate_staged_binding_invalid')
     if stage == 'pre_submit_delay':
         from src.engine.scalping.pre_submit_delay_tuning import _digest
         paths = stage_artifacts(report_dir, day, stage)
@@ -919,6 +994,7 @@ def _widget_eod_state(report_dir, day):
 
 def stage_commands(stage, day, publication, *, recovery=False):
     import sys
+    from src.engine.build_next_stage2_checklist import _next_krx_trading_day
     prefix = [sys.executable, '-m']
     def command(module, *args):
         return prefix + ['src.engine.' + module, *args]
@@ -926,11 +1002,12 @@ def stage_commands(stage, day, publication, *, recovery=False):
     if stage == 'main_machine_policy' and recovery:
         return []
     if stage == 'main_machine_policy':
-        return [command('scalping.ai_action_outcome_calibration', *date_args, '--machine-policy-only', '--activate-now')]
+        return [command('scalping.ai_action_outcome_calibration', *date_args,
+                        '--winrate-policy-only', '--publication-date', publication)]
     if stage == 'pre_submit_delay':
         return [command('scalping.pre_submit_delay_tuning', '--date', day, '--effective-date', _next_krx_trading_day(publication))]
     if stage == 'legacy_machine_report':
-        return [command('scalping.ai_action_outcome_calibration', *date_args, '--machine-only', '--publication-date', publication, '--require-policy-publication')]
+        return [command('scalping.ai_action_outcome_calibration', *date_args, '--machine-only', '--publication-date', publication)]
     if stage == 'main_auxiliary_policy':
         common = ['--date', day, '--compact-only', '--write']
         return [command('scalping.entry_setup_paired_replay_batch', *common, '--execute-compact-candidate'),
@@ -957,8 +1034,8 @@ def stage_commands(stage, day, publication, *, recovery=False):
     return [command('automation.postclose_done_controller', '--date', day, '--summary-handoff-only', '--require-independent-producers')]
 
 
-def _stage_code(stage, commands, project):
-    paths = {'dispatcher': Path(__file__)}
+def _stage_code(stage, commands, project, *, dispatcher_path=None):
+    paths = {'dispatcher': Path(dispatcher_path or __file__)}
     for cmd in commands:
         if '-m' in cmd:
             module = cmd[cmd.index('-m') + 1]
@@ -968,6 +1045,8 @@ def _stage_code(stage, commands, project):
     if stage in {'widget_policy', 'episode_policy', 'research_allocation'}:
         from src.engine.automation.machine_research_closed_loop_refresh import code_contract
         return _stage_digest([_stage_sources(paths), code_contract()])
+    if stage == 'summary_handoff':
+        paths['next_stage2_checklist'] = project / 'src/engine/build_next_stage2_checklist.py'
     if stage == 'research_capacity':
         paths['native_capacity'] = project / 'src/engine/monitoring/research_native_capacity_source.py'
     if stage == 'main_machine_policy':
@@ -1112,8 +1191,11 @@ def run_stage(stage, day, *, report_dir, project, publication=None, effective=No
                 sources=_stage_sources(stage_artifacts(report_dir, day, stage)))
             if stage == 'main_machine_policy' and not issues:
                 terminal = _load_json(stage_artifacts(report_dir, day, stage)['machine_policy_terminal'])
+                staging = terminal.get('staged') or {}
                 activation = (terminal.get('activation') or {}).get('status')
-                value['policy_disposition'] = 'updated' if activation == 'activated' else 'incumbent_carry' if activation in {'already_active', 'incumbent_carry'} else 'no_valid_candidate'
+                value['policy_disposition'] = (terminal.get('disposition')
+                    if terminal.get('selection_basis') == 'win_rate_only' and staging.get('status') in {'staged', 'already_staged'}
+                    else 'updated' if activation == 'activated' else 'incumbent_carry' if activation in {'already_active', 'incumbent_carry'} else 'no_valid_candidate')
                 value['policy_sha256'] = terminal.get('policy_sha256')
             if stage in {'widget_policy', 'episode_policy'} and not issues:
                 family_receipt = _load_json(stage_artifacts(report_dir, day, stage)[stage.replace('_policy', '_policy_refresh')])
@@ -1152,13 +1234,23 @@ def stage_overview(report_dir, day):
     except (OSError, ValueError, TypeError, KeyError): policy_checks['main'] = False
     try: policy_checks['episode'] = bool(load_policy(date.fromisoformat(effective), policy_dir=data_root / 'runtime' / 'low_price_two_leg_auto_expansion'))
     except (OSError, ValueError, TypeError, KeyError): policy_checks['episode'] = False
-    try: policy_checks['widget'] = bool(WidgetSymbolRuntimePolicyLoader(data_root / 'runtime' / 'widget_symbol_runtime_policy').resolve_all(observed_date=date.fromisoformat(effective)))
-    except (OSError, ValueError, TypeError, KeyError): policy_checks['widget'] = False
+    widget_authority = 'missing'
+    try:
+        widget_loader = WidgetSymbolRuntimePolicyLoader(data_root / 'runtime' / 'widget_symbol_runtime_policy')
+        widget_date = date.fromisoformat(effective)
+        if widget_loader.resolve_all(observed_date=widget_date):
+            widget_authority = 'live'
+        elif widget_loader.resolve_observation_all(observed_date=widget_date):
+            widget_authority = 'observation_only'
+    except (OSError, ValueError, TypeError, KeyError):
+        pass
+    policy_checks['widget'] = widget_authority != 'missing'
     ready = ready and all(policy_checks.values())
     return dict(schema='postclose_stage_overview_v2', source_date=day, effective_date=effective,
         stages={s:dict(status=v.get('status', 'pending'), issues=issues.get(s, []), policy_disposition=v.get('policy_disposition')) for s,v in states.items()},
         postclose_all_active_stages_complete=not any(issues.values()) and states['summary_handoff'].get('status') == 'succeeded',
-        next_session_policy_ready=ready, policy_loader_checks=policy_checks, startup_contract=bootstrap.get('status', 'not_verified'))
+        next_session_policy_ready=ready, policy_loader_checks=policy_checks,
+        widget_policy_authority=widget_authority, startup_contract=bootstrap.get('status', 'not_verified'))
 
 
 def _stage_main(argv):
