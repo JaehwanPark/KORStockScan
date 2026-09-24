@@ -16,7 +16,12 @@ from src.engine.monitor_snapshot_runtime import guard_stdin_heavy_build
 from src.engine.scalping.trailing_threshold_policy import (
     GRID_VERSION as SCALP_TRAILING_GRID_VERSION,
     bootstrap_receipt as scalp_trailing_bootstrap_receipt,
+    start_values_hash as scalp_trailing_start_values_hash,
     value_hash as scalp_trailing_value_hash,
+)
+from src.engine.scalping.trailing_start_replay import (
+    replay_start_grid,
+    summarize_start_grid,
 )
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
@@ -614,7 +619,9 @@ _FLOW_INTERVENTION_STAGES = {
 }
 
 
-def _trailing_policy_manifest_binding(policy_date: str, observed_sha: str) -> dict:
+def _trailing_policy_manifest_binding(
+    policy_date: str, observed_sha: str, observed_market_sha: str = ""
+) -> dict:
     """Bind an effective value hash to its dated producer, not to a live PID."""
 
     try:
@@ -656,13 +663,17 @@ def _trailing_policy_manifest_binding(policy_date: str, observed_sha: str) -> di
         manifest.get("target_date") == policy_date
         and manifest.get("manifest_sha256") == manifest_sha
         and manifest.get("env_sha256") == hashlib.sha256(env_bytes).hexdigest()
-        and receipt.get("schema") == "scalp_trailing_threshold_receipt_v1"
+        and receipt.get("schema") == "scalp_trailing_threshold_receipt_v2"
         and receipt.get("value_sha256") == receipt_sha
         and receipt == expected_receipt
         and manifest["env_overrides"].get(
             "KORSTOCKSCAN_SCALP_TRAILING_VALUE_SHA256"
         ) == receipt_sha
         and observed_sha == receipt_sha
+        and receipt.get("start_by_market_sha256") == observed_market_sha
+        and manifest["env_overrides"].get(
+            "KORSTOCKSCAN_SCALP_TRAILING_START_BY_MARKET_SHA256"
+        ) == observed_market_sha
     )
     return {
         "status": (
@@ -908,6 +919,24 @@ def _build_position_outcomes(
         is_trailing_observed = bool(
             exit_rule == "scalp_trailing_take_profit" or trailing_transitions
         )
+        market_values = next(
+            (
+                row.get("scalp_trailing_start_by_market")
+                for row in trailing_transitions
+                if isinstance(row.get("scalp_trailing_start_by_market"), dict)
+            ),
+            None,
+        )
+        start_replay = replay_start_grid(
+            trade,
+            trailing_transitions,
+            actual_exit_rule=exit_rule,
+            actual_exit_signal=exit_signal,
+            incumbent_start_pct=_safe_float(
+                (policy_values or {}).get("SCALP_TRAILING_START_PCT"), 0.6
+            ) or 0.6,
+            incumbent_by_market=market_values,
+        )
         operational_binding = (
             _operational_manifest_binding(
                 policy_date,
@@ -916,10 +945,27 @@ def _build_position_outcomes(
             )
             if is_trailing_observed else {"status": "not_applicable_non_trailing"}
         )
-        binding_key = (policy_date, policy_sha)
+        market_shas = {
+            str(fields.get("scalp_trailing_start_by_market_sha256") or "")
+            for fields in trailing_transitions
+        }
+        market_provenance = {
+            str(fields.get("scalp_trailing_start_by_market_provenance") or "")
+            for fields in trailing_transitions
+        }
+        market_sha = next(iter(market_shas), "")
+        market_value_hashes = set()
+        for row in trailing_transitions:
+            try:
+                market_value_hashes.add(scalp_trailing_start_values_hash(
+                    row.get("scalp_trailing_start_by_market")
+                ))
+            except (TypeError, ValueError):
+                market_value_hashes.add("")
+        binding_key = (policy_date, policy_sha, market_sha)
         if is_trailing_observed and binding_key not in bootstrap_bindings:
             bootstrap_bindings[binding_key] = _trailing_policy_manifest_binding(
-                policy_date, policy_sha
+                policy_date, policy_sha, market_sha
             )
         policy_binding = (
             bootstrap_bindings[binding_key] if is_trailing_observed
@@ -949,6 +995,12 @@ def _build_position_outcomes(
             trailing_replay_status = "source_gap_grid_version"
         elif observed_policy_shas != {policy_sha} or policy_sha in {"", "-"}:
             trailing_replay_status = "source_gap_policy_changed_or_missing"
+        elif len(market_shas) != 1 or market_sha in {"", "-"}:
+            trailing_replay_status = "source_gap_market_policy_changed_or_missing"
+        elif market_value_hashes != {market_sha}:
+            trailing_replay_status = "source_gap_market_policy_values_hash"
+        elif market_provenance != {"bootstrap_value_hash_matched"}:
+            trailing_replay_status = "source_gap_market_policy_runtime_hash"
         elif (
             observed_policy_provenance != {"bootstrap_value_hash_matched"}
             or observed_expected_shas != {policy_sha}
@@ -966,6 +1018,12 @@ def _build_position_outcomes(
             # Grid crossings are captured, but unobserved intra-poll prices and
             # future order fills still prohibit an economic counterfactual.
             trailing_replay_status = "grid_source_linked_paired_replay_pending"
+        if trailing_replay_status != "grid_source_linked_paired_replay_pending":
+            start_replay = {
+                **start_replay,
+                "source_gap": trailing_replay_status,
+                "markets": {},
+            }
         operational_inputs = {
             "quote_age": any(
                 _safe_float(row.get("bid_source_age_ms"), None) is not None
@@ -1150,6 +1208,8 @@ def _build_position_outcomes(
                     "exit_threshold_trigger_kind"
                 ),
                 "trailing_policy_value_sha256": policy_sha or None,
+                "trailing_start_by_market_sha256": market_sha or None,
+                "trailing_start_by_market_values": market_values,
                 "trailing_policy_values": policy_values if policy_values_valid else None,
                 "trailing_policy_date": policy_date or None,
                 "trailing_policy_binding": policy_binding,
@@ -1164,6 +1224,7 @@ def _build_position_outcomes(
                 ),
                 "trailing_operational_binding": operational_binding,
                 "trailing_replay_source_status": trailing_replay_status,
+                "trailing_start_market_replay": start_replay,
                 "trailing_observation_grid_version": (
                     next(iter(transition_grid_versions))
                     if len(transition_grid_versions) == 1 else None
@@ -1209,6 +1270,7 @@ def _build_position_outcomes(
                 "trailing_source_gap_transition_count": trailing_source_gap_count,
                 "terminal_decision_authority": trade.get("terminal_decision_authority"),
                 "profit_rate": _safe_float(trade.get("profit_rate"), None),
+                "buy_fill_amount": _safe_float(trade.get("buy_fill_amount"), None),
                 "realized_pnl_krw": int(round(pnl)) if pnl is not None else None,
                 "realized_pnl_krw_source": trade.get("realized_pnl_krw_source"),
                 "modeled_realized_pnl_krw": trade.get("modeled_realized_pnl_krw"),
@@ -1556,9 +1618,20 @@ def _build_trailing_threshold_readiness(
     exact = [row for row in inputs if row["realized_pnl_krw"] is not None]
     forward = [row for row in exact if row["post_sell_status"] == "pass"]
     source_linked = [
-        row for row in inputs
+        row for row in outcomes
         if row.get("trailing_replay_source_status")
         == "grid_source_linked_paired_replay_pending"
+    ]
+    fully_paired = [
+        row for row in source_linked
+        if not (row.get("trailing_start_market_replay") or {}).get("source_gap")
+        and all(
+            candidate.get("paired_delta_pnl_krw") is not None
+            for market in (row.get("trailing_start_market_replay") or {})
+                .get("markets", {}).values()
+            for candidate in market.values()
+        )
+        and (row.get("trailing_start_market_replay") or {}).get("markets")
     ]
     arm = [
         row for row in source_linked
@@ -1593,7 +1666,7 @@ def _build_trailing_threshold_readiness(
         "effective_input_ids": [row["record_id"] for row in inputs],
         "exact_cost_ids": [row["record_id"] for row in exact],
         "mature_forward_ids": [row["record_id"] for row in forward],
-        "paired_replay_eligible_ids": [],
+        "paired_replay_eligible_ids": [row["record_id"] for row in fully_paired],
         "censored_open_position_ids": [
             str(row["id"]) for row in (open_positions or [])
             if row.get("real_position_observed")
@@ -2335,6 +2408,9 @@ def build_holding_exit_observation_report(
         "trailing_threshold_readiness": _build_trailing_threshold_readiness(
             position_outcomes, open_positions,
             completed_valid_ids=[_trade_id(row) for row in valid_trades],
+        ),
+        "trailing_start_market_tuning": summarize_start_grid(
+            position_outcomes, population_complete=not completed_gaps
         ),
         "soft_stop_rebound": _build_soft_stop_rebound(
             post_sell_rows,

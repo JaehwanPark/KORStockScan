@@ -110,6 +110,7 @@ _DETAIL_HIDDEN_KEYS = {
     "id",
     "new_watch_id",
     "scalp_trailing_policy_values",
+    "scalp_trailing_start_by_market",
     "operational_threshold_values",
     "operational_threshold_sources",
 }
@@ -173,6 +174,7 @@ def _iter_target_lines(log_paths: list[Path], *, target_date: str) -> list[str]:
 def _decode_threshold_json_fields(fields: dict) -> dict:
     for key in (
         "scalp_trailing_policy_values",
+        "scalp_trailing_start_by_market",
         "operational_threshold_values",
         "operational_threshold_sources",
     ):
@@ -1322,6 +1324,8 @@ def _completed_execution_ledger(trade: dict, events: list[HoldingEvent]) -> dict
     sell_leg_net_pnl = 0.0
     buy_quality: set[str] = set()
     accepted_buy_fills: list[tuple[str, int]] = []
+    buy_fill_legs: list[dict] = []
+    sell_fill_legs: list[dict] = []
     sell_order_numbers: set[str] = set()
     buy_events = [event for event in events if event.stage in {
         "position_rebased_after_fill", "scale_in_executed"
@@ -1375,6 +1379,14 @@ def _completed_execution_ledger(trade: dict, events: list[HoldingEvent]) -> dict
         buy_orders[order] = cumulative
         buy_qty += delta
         accepted_buy_fills.append((event.timestamp, delta))
+        buy_fill_legs.append({
+            "at": event.timestamp,
+            "order_no": order,
+            "execution_no": execution,
+            "qty": delta,
+            "price": price,
+            "amount_krw": delta * price,
+        })
         buy_amount += delta * price
         buy_quality.add(str(fields.get("fill_quality") or "unknown").lower())
 
@@ -1463,6 +1475,15 @@ def _completed_execution_ledger(trade: dict, events: list[HoldingEvent]) -> dict
         sell_amount += delta * price
         sell_fee_amount += fee
         sell_leg_net_pnl += net_pnl
+        sell_fill_legs.append({
+            "at": event.timestamp,
+            "order_no": order,
+            "execution_no": execution,
+            "qty": delta,
+            "price": price,
+            "fees_taxes_krw": fee,
+            "net_pnl_krw": net_pnl,
+        })
         if sell_qty > sum(qty for at, qty in accepted_buy_fills
                           if at <= event.timestamp):
             reasons.append("source_gap_negative_position_balance")
@@ -1506,6 +1527,8 @@ def _completed_execution_ledger(trade: dict, events: list[HoldingEvent]) -> dict
         "sell_execution_count": len(seen_sell),
         "buy_order_count": len(buy_orders),
         "sell_order_count": len(sell_orders),
+        "buy_fill_legs": buy_fill_legs,
+        "sell_fill_legs": sell_fill_legs,
     }
 
 

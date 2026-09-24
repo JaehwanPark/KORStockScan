@@ -25,6 +25,7 @@ from src.engine.lifecycle.retirement import (
     without_retired_env,
 )
 from src.engine.scalping.trailing_threshold_policy import (
+    START_MARKET_ENV_KEYS as SCALP_TRAILING_START_MARKET_ENV_KEYS,
     THRESHOLD_KEYS as SCALP_TRAILING_THRESHOLD_KEYS,
     bootstrap_receipt as scalp_trailing_bootstrap_receipt,
 )
@@ -784,10 +785,20 @@ def build_manifest(
         if env_key not in values:
             values[env_key] = str(trailing_receipt["values"][key])
             env_owners[env_key] = "code_default"
+    for market, env_key in SCALP_TRAILING_START_MARKET_ENV_KEYS.items():
+        if env_key not in values:
+            values[env_key] = str(trailing_receipt["start_by_market"][market])
+            env_owners[env_key] = trailing_receipt["start_by_market_sources"][market]
     values["KORSTOCKSCAN_SCALP_TRAILING_VALUE_SHA256"] = trailing_receipt[
         "value_sha256"
     ]
     env_owners["KORSTOCKSCAN_SCALP_TRAILING_VALUE_SHA256"] = (
+        "scalp_trailing_threshold_receipt"
+    )
+    values["KORSTOCKSCAN_SCALP_TRAILING_START_BY_MARKET_SHA256"] = (
+        trailing_receipt["start_by_market_sha256"]
+    )
+    env_owners["KORSTOCKSCAN_SCALP_TRAILING_START_BY_MARKET_SHA256"] = (
         "scalp_trailing_threshold_receipt"
     )
     selected_families = sorted(
@@ -938,6 +949,7 @@ def verify_bootstrap(target_date: str, *, pid: int | None = None, write: bool = 
     else:
         owners = manifest.get("env_key_owners")
         trailing_keys = [f"KORSTOCKSCAN_{key}" for key in SCALP_TRAILING_THRESHOLD_KEYS]
+        trailing_keys.extend(SCALP_TRAILING_START_MARKET_ENV_KEYS.values())
         if (
             not isinstance(owners, dict)
             or any(key not in manifest_env or not owners.get(key) for key in trailing_keys)
@@ -953,7 +965,9 @@ def verify_bootstrap(target_date: str, *, pid: int | None = None, write: bool = 
         else:
             if trailing_receipt != expected_trailing or manifest_env.get(
                 "KORSTOCKSCAN_SCALP_TRAILING_VALUE_SHA256"
-            ) != expected_trailing["value_sha256"]:
+            ) != expected_trailing["value_sha256"] or manifest_env.get(
+                "KORSTOCKSCAN_SCALP_TRAILING_START_BY_MARKET_SHA256"
+            ) != expected_trailing["start_by_market_sha256"]:
                 findings.append("scalp_trailing_threshold_receipt_mismatch")
     if target_date >= "2026-09-23":
         current_delay_env, current_delay_handoff = _pre_submit_delay_handoff(target_date)

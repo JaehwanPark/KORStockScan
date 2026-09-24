@@ -26,6 +26,7 @@ def evaluate_trailing_take_profit(
     strong: bool,
     weak_limit_pct: float,
     strong_limit_pct: float,
+    already_armed: bool = False,
 ) -> TrailingTakeProfitDecision:
     """Arm on peak profit, then compare peak-to-bid drawdown in percent."""
 
@@ -40,7 +41,10 @@ def evaluate_trailing_take_profit(
         and math.isfinite(value)
         for value in arm_values
     )
-    armed = bool(arm_numeric and peak_price > 0 and peak_profit_pct >= start_pct)
+    armed = bool(
+        arm_numeric and peak_price > 0
+        and (peak_profit_pct >= start_pct or already_armed)
+    )
     bid_numeric = (
         isinstance(executable_bid, (int, float))
         and not isinstance(executable_bid, bool)

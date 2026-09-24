@@ -122,8 +122,48 @@ class PositionPeakRuntimeLedger:
                 "updated_at_epoch": float(observed_at),
                 "update_reason": str(reason or "peak_update"),
             }
+            if abs(_safe_float(previous.get("average_price"), 0.0) - average_price) <= 0.01:
+                for key in (
+                    "trailing_arm_at_epoch", "trailing_arm_market",
+                    "trailing_arm_start_pct", "trailing_arm_policy_sha256",
+                ):
+                    if key in previous:
+                        row[key] = previous[key]
             if row == previous:
                 return dict(row)
+            rows[cycle_id] = row
+            self._write(rows)
+            return dict(row)
+
+    def record_trailing_arm(
+        self, stock: dict[str, Any], *, observed_at: float,
+        market: str, start_pct: float, policy_sha256: str,
+    ) -> dict[str, Any] | None:
+        """Latch an arm to the current position cost basis across restarts."""
+
+        cycle_id = position_cycle_id(stock)
+        with self._lock:
+            rows = self.load()
+            row = dict(rows.get(cycle_id) or {})
+            average = _safe_float(stock.get("buy_price"), 0.0)
+            if (
+                not row or average <= 0
+                or _safe_int(row.get("target_id"), 0) != _safe_int(stock.get("id"), 0)
+                or str(row.get("code") or "")[:6] != str(stock.get("code") or "")[:6]
+                or abs(_safe_float(row.get("average_price"), 0.0) - average) > 0.01
+                or _safe_int(row.get("holding_qty"), 0) <= 0
+            ):
+                return None
+            if row.get("trailing_arm_at_epoch") is not None:
+                return row
+            if not math.isfinite(float(start_pct)) or not math.isfinite(float(observed_at)):
+                return None
+            row.update({
+                "trailing_arm_at_epoch": float(observed_at),
+                "trailing_arm_market": str(market),
+                "trailing_arm_start_pct": float(start_pct),
+                "trailing_arm_policy_sha256": str(policy_sha256),
+            })
             rows[cycle_id] = row
             self._write(rows)
             return dict(row)

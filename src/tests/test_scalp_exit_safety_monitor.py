@@ -1,4 +1,5 @@
 from datetime import datetime
+from zoneinfo import ZoneInfo
 import threading
 
 import pytest
@@ -68,6 +69,97 @@ def test_trailing_transition_keeps_type_specific_and_rest_source_clocks(monkeypa
     assert len(events) == 2
     assert rest_fields["ws_trade_received_at_epoch"] is None
     assert rest_fields["bid_source_received_at_epoch"] == 999.0
+
+
+def test_trailing_grid_heartbeat_exposes_evaluation_gap(monkeypatch):
+    events = []
+    monkeypatch.setattr(
+        handlers, "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: events.append((stage, fields)),
+    )
+    stock = {"id": 123, "code": "123456"}
+    decision = handlers.evaluate_trailing_take_profit(
+        peak_price=10100, executable_bid=10050, peak_profit_pct=1.0,
+        start_pct=0.6, strong=False, weak_limit_pct=0.4,
+        strong_limit_pct=0.8,
+    )
+    common = dict(
+        ws_data={}, decision=decision, peak_price=10100,
+        executable_bid=10050, bid_source="missing", strong=False,
+        ai_score=50.0, ai_usable=True, start_pct=0.6,
+        evaluator="fast",
+    )
+    for at in (1000.0, 1000.2, 1000.4):
+        handlers._observe_scalp_trailing_input_transition(
+            stock, "123456", now_ts=at, **common
+        )
+    assert len(events) == 1
+    handlers._observe_scalp_trailing_input_transition(
+        stock, "123456", now_ts=1015.2, **common
+    )
+    assert len(events) == 2
+    fields = events[-1][1]
+    assert fields["tuning_grid_heartbeat"] is True
+    assert fields["tuning_grid_evaluations_since_event"] == 3
+    assert fields["tuning_grid_max_evaluation_gap_sec"] > 14
+    assert fields["tuning_grid_source_complete"] is False
+
+
+def test_trailing_grid_uses_exact_route_depth_without_top_level_qty(monkeypatch):
+    events = []
+    monkeypatch.setattr(
+        handlers, "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: events.append((stage, fields)),
+    )
+    at = datetime(2026, 9, 25, 10, tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
+    depth = {
+        "item": "123456", "market_route": "krx_only",
+        "transport_epoch": 1, "observed_epoch": at,
+        "orderbook": {"bids": [{"price": 10050, "volume": 20}]},
+    }
+    snapshot = {
+        "market_data_transport_epoch": 1,
+        "realtime_type_snapshots_by_route": {"krx_only": {"0D": depth}},
+        "last_realtime_type_item": {"0D": "123456"},
+        "last_realtime_type_ts": {"0D": at},
+        "best_bid": 10050, "best_ask": 10060,
+    }
+    decision = handlers.evaluate_trailing_take_profit(
+        peak_price=10100, executable_bid=10050, peak_profit_pct=1.0,
+        start_pct=0.6, strong=False, weak_limit_pct=0.4,
+        strong_limit_pct=0.8,
+    )
+    handlers._observe_scalp_trailing_input_transition(
+        {"id": 123, "code": "123456", "buy_price": 10000}, "123456",
+        ws_data=snapshot, decision=decision, peak_price=10100,
+        executable_bid=10050, bid_source="fresh_ws_executable_bid",
+        strong=False, ai_score=50.0, ai_usable=True, start_pct=0.6,
+        now_ts=at, evaluator="fast",
+        quote_fields={"quote_consistency_state": "consistent",
+                      "executable_buy_price": 10060},
+    )
+    fields = events[-1][1]
+    assert fields["executable_bid_qty"] == 20
+    assert fields["tuning_grid_source_complete"] is True
+
+
+def test_trailing_arm_persistence_failure_does_not_block_live_decision(monkeypatch):
+    stock = {"id": 123, "code": "123456", "buy_price": 10000}
+    monkeypatch.setattr(
+        handlers.POSITION_PEAK_LEDGER, "get_for_stock", lambda stock: None
+    )
+    def fail(*args, **kwargs):
+        raise OSError("test persistence failure")
+    monkeypatch.setattr(
+        handlers.POSITION_PEAK_LEDGER, "record_trailing_arm", fail
+    )
+    monkeypatch.setattr(handlers, "log_error", lambda message: None)
+    handlers._scalp_trailing_latch_arm(
+        stock, armed=True, observed_at=1000.0,
+        start_pct=0.6, market="REGULAR",
+    )
+    assert stock["scalp_trailing_arm_latched"] is True
+    assert stock["scalp_trailing_arm_persist_gap"] is True
 
 
 def _exact_cancel_ack_response(
