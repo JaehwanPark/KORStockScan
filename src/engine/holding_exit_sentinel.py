@@ -881,7 +881,13 @@ def _observation_metrics(observation: dict[str, Any] | None) -> dict[str, Any]:
     readiness = observation.get("trailing_threshold_readiness") or {}
     funnel = readiness.get("funnel_ids") or {}
     operational_axes = readiness.get("operational_axes") or {}
+    population = observation.get("completed_population_quality") or {}
     return {
+        "completed_valid_count": len(population.get("db_completed_valid_profit_ids") or []),
+        "strict_completed_position_count": len(
+            population.get("strict_completed_position_ids") or []
+        ),
+        "strict_completion_source_gap_count": len(population.get("source_gap_ids") or []),
         "soft_stop_total": int(soft_stop.get("total_soft_stop") or 0),
         "soft_stop_rebound_above_sell_10m_rate": _safe_float(
             soft_stop.get("rebound_above_sell_10m_rate"),

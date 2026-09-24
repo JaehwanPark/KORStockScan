@@ -96,10 +96,11 @@ def test_completed_projection_requires_exact_receipt_for_cost_and_fill_time():
         "code": "123456",
         "status": "COMPLETED",
         "strategy": "SCALPING",
+        "buy_price": 10000,
         "buy_qty": 1,
         "buy_time": "2026-09-23 09:00:00",
         "sell_time": "2026-09-23 09:10:02",
-        "profit_rate": 0.5,
+        "profit_rate": 0.4,
         "realized_pnl_krw": 50,
         "realized_pnl_krw_source": "price_cost_model",
     }
@@ -111,11 +112,23 @@ def test_completed_projection_requires_exact_receipt_for_cost_and_fill_time():
         fields={
             "id": "1",
             "decision_authority": "broker_sell_fill_observation_only",
+            "pipeline_lifecycle_population_scope": "real_record_bound",
+            "order_no": "S1",
+            "execution_no": "SE1",
+            "main_lifecycle_exit_qty": "1",
+            "main_lifecycle_exit_price": "10050",
+            "remaining_sell_qty": "0",
+            "sell_execution_receipt_economics_complete": "True",
+            "sell_execution_receipt_quantity_contract_complete": "True",
+            "sell_execution_receipt_unit_fill_consistent": "True",
+            "main_lifecycle_fees_taxes_krw": "10",
+            "main_lifecycle_realized_net_pnl_krw": "40",
+            "entry_opportunity_recheck_cost_rate": "0.001",
             "actual_order_submitted": "True",
             "broker_order_forbidden": "False",
             "cumulative_sell_qty": "1",
             "buy_qty": "1",
-            "profit_rate": "0.5",
+            "profit_rate": "0.4",
             "realized_pnl_krw_source": "broker_fill_prices_fee_aware",
             "realized_pnl_krw": "40",
             "main_lifecycle_execution_occurrence_time_source": "official_fid_908",
@@ -123,21 +136,218 @@ def test_completed_projection_requires_exact_receipt_for_cost_and_fill_time():
         },
         raw_line="",
     )
+    buy_event = report_mod.HoldingEvent(
+        timestamp="2026-09-23 09:00:00",
+        name="test", code="123456", stage="position_rebased_after_fill",
+        fields={
+            "id": "1", "order_no": "B1", "execution_no": "BE1",
+            "fill_qty": "1", "order_filled_qty": "1",
+            "order_requested_qty": "1", "order_remaining_qty": "0",
+            "fill_price": "10000", "fill_quality": "FULL_FILL",
+            "receipt_economics_complete": "True",
+            "receipt_quantity_contract_complete": "True",
+            "receipt_unit_fill_consistent": "True",
+            "actual_order_submitted": "True", "broker_order_forbidden": "False",
+            "pipeline_lifecycle_population_scope": "real_record_bound",
+        }, raw_line="",
+    )
 
-    direct = report_mod._completed_trade_projection(base, [event], base)
+    direct = report_mod._completed_trade_projection(base, [buy_event, event], base)
 
     assert direct["realized_pnl_krw"] == 40
     assert direct["exact_sell_fill_time"] == "2026-09-23T09:10:01+09:00"
+    assert direct["strict_completion_status"] == "eligible"
+
+    event.fields["main_lifecycle_execution_occurrence_time_source"] = "missing"
+    no_clock = report_mod._completed_trade_projection(base, [buy_event, event], base)
+    assert no_clock["strict_completion_status"] == "eligible"
+    assert no_clock["realized_pnl_krw"] == 40
+    assert no_clock["exact_sell_fill_time"] is None
+
+    event.fields["main_lifecycle_fees_taxes_krw"] = "0"
+    no_cost = report_mod._completed_trade_projection(base, [buy_event, event], base)
+    assert no_cost["strict_completion_status"] == "excluded"
+    assert "source_gap_exact_cost_missing" in no_cost["strict_completion_reasons"]
+    event.fields["main_lifecycle_fees_taxes_krw"] = "10"
 
     event.fields["decision_authority"] = "broker_balance_reconciliation_only"
     event.fields["sell_time_precision"] = "order_second_not_fill_second"
     event.fields["sell_time_forbidden_for_intraday_horizon"] = "True"
-    sync_only = report_mod._completed_trade_projection(base, [event], base)
+    sync_only = report_mod._completed_trade_projection(base, [buy_event, event], base)
 
     assert sync_only["realized_pnl_krw"] is None
     assert sync_only["modeled_realized_pnl_krw"] == 50
     assert sync_only["exact_sell_fill_time"] is None
     assert sync_only["sell_time_forbidden_for_intraday_horizon"] is True
+
+
+def test_completed_execution_ledger_requires_buy_fill_and_conserves_all_sell_legs():
+    def event(stage, second, **fields):
+        return report_mod.HoldingEvent(
+            timestamp=f"2026-09-24 09:00:{second:02d}", name="test",
+            code="123456", stage=stage,
+            fields={"pipeline_lifecycle_population_scope": "real_record_bound",
+                    "actual_order_submitted": "True",
+                    "broker_order_forbidden": "False",
+                    "sell_receipt_economics_complete": "True",
+                    "sell_receipt_quantity_contract_complete": "True",
+                    "sell_receipt_unit_fill_consistent": "True",
+                    "sell_execution_receipt_economics_complete": "True",
+                    "sell_execution_receipt_quantity_contract_complete": "True",
+                    "sell_execution_receipt_unit_fill_consistent": "True",
+                    "main_lifecycle_fees_taxes_krw": "10",
+                    "main_lifecycle_realized_net_pnl_krw": "40", **fields}, raw_line="",
+        )
+
+    buy_base = {
+        "order_no": "B1", "order_requested_qty": "2", "fill_price": "10000",
+        "receipt_economics_complete": "True",
+        "receipt_quantity_contract_complete": "True",
+        "receipt_unit_fill_consistent": "True",
+    }
+    events = [
+        event("position_rebased_after_fill", 1, **buy_base, execution_no="BEX1",
+              fill_qty="1", order_filled_qty="1", order_remaining_qty="1"),
+        event("position_rebased_after_fill", 2, **buy_base, execution_no="BEX2",
+              fill_qty="1", order_filled_qty="2", order_remaining_qty="0"),
+        event("sell_partial_fill_progress", 3, order_no="S1", execution_no="SEX1",
+              main_lifecycle_exit_qty="1", main_lifecycle_exit_price="10050",
+              cumulative_sell_qty="1", remaining_sell_qty="1"),
+        event("sell_completed", 4, order_no="S1", execution_no="SEX2",
+              main_lifecycle_exit_qty="1", main_lifecycle_exit_price="10060",
+              cumulative_sell_qty="2", remaining_sell_qty="0"),
+    ]
+    trade = {"buy_qty": 2, "buy_price": 10000}
+    ledger = report_mod._completed_execution_ledger(trade, events)
+    assert ledger["strict_completion_status"] == "eligible"
+    assert ledger["buy_filled_qty"] == ledger["sell_filled_qty"] == 2
+    assert ledger["sell_fill_amount"] == 20110
+    assert ledger["sell_fill_fees_taxes_krw"] == 20
+
+    second_order = event(
+        "sell_completed", 4, order_no="S2", execution_no="SEX2",
+        main_lifecycle_exit_qty="1", main_lifecycle_exit_price="10060",
+        cumulative_sell_qty="2", remaining_sell_qty="0",
+    )
+    multi_order = report_mod._completed_execution_ledger(
+        trade, events[:-1] + [second_order]
+    )
+    assert multi_order["strict_completion_status"] == "eligible"
+    assert multi_order["sell_order_count"] == 2
+
+    no_buy = report_mod._completed_execution_ledger(trade, events[2:])
+    assert "source_gap_buy_fill_missing" in no_buy["strict_completion_reasons"]
+    duplicate = report_mod._completed_execution_ledger(trade, events[:2] + [events[1]] + events[2:])
+    assert "source_gap_duplicate_buy_execution" in duplicate["strict_completion_reasons"]
+    partial = report_mod._completed_execution_ledger(trade, events[:-1])
+    assert "source_gap_position_quantity_not_conserved" in partial["strict_completion_reasons"]
+
+
+def test_completed_execution_ledger_rejects_unresolved_buy_order():
+    trade = {"buy_qty": 1, "buy_price": 10000}
+    buy = report_mod.HoldingEvent(
+        timestamp="2026-09-24 09:00:00", name="test", code="123456",
+        stage="position_rebased_after_fill", raw_line="",
+        fields={
+            "order_no": "B1", "execution_no": "BE1", "fill_qty": "1",
+            "order_filled_qty": "1", "order_requested_qty": "2",
+            "order_remaining_qty": "1", "fill_price": "10000",
+            "receipt_quantity_contract_complete": "True",
+            "receipt_unit_fill_consistent": "True",
+            "receipt_economics_complete": "True",
+            "actual_order_submitted": "True", "broker_order_forbidden": "False",
+            "pipeline_lifecycle_population_scope": "real_record_bound",
+        },
+    )
+    sell = report_mod.HoldingEvent(
+        timestamp="2026-09-24 09:01:00", name="test", code="123456",
+        stage="sell_completed", raw_line="",
+        fields={
+            "order_no": "S1", "execution_no": "SE1",
+            "main_lifecycle_exit_qty": "1", "main_lifecycle_exit_price": "10050",
+            "cumulative_sell_qty": "1", "remaining_sell_qty": "0",
+            "actual_order_submitted": "True", "broker_order_forbidden": "False",
+            "pipeline_lifecycle_population_scope": "real_record_bound",
+            "sell_execution_receipt_economics_complete": "True",
+            "sell_execution_receipt_quantity_contract_complete": "True",
+            "sell_execution_receipt_unit_fill_consistent": "True",
+            "main_lifecycle_fees_taxes_krw": "10",
+            "main_lifecycle_realized_net_pnl_krw": "40",
+        },
+    )
+    ledger = report_mod._completed_execution_ledger(trade, [buy, sell])
+    assert ledger["position_residual_qty"] == 0
+    assert "source_gap_buy_order_terminal_missing" in ledger["strict_completion_reasons"]
+
+    terminal = report_mod.HoldingEvent(
+        timestamp="2026-09-24 09:00:30", name="test", code="123456",
+        stage="entry_buy_order_terminal_confirmed", raw_line="",
+        fields={
+            "orig_ord_no": "B1", "order_filled_qty": "1",
+            "order_requested_qty": "2",
+            "terminal_reason": "terminal_absence_and_inventory_exact",
+            "pipeline_lifecycle_population_scope": "real_record_bound",
+            "actual_order_submitted": "True", "broker_order_forbidden": "False",
+        },
+    )
+    closed = report_mod._completed_execution_ledger(trade, [buy, terminal, sell])
+    assert closed["strict_completion_status"] == "eligible"
+    assert closed["buy_fill_quality"] == "unknown"
+
+    terminal.fields["order_filled_qty"] = "2"
+    mismatched = report_mod._completed_execution_ledger(trade, [buy, terminal, sell])
+    assert "source_gap_buy_order_terminal_missing" in mismatched["strict_completion_reasons"]
+
+
+def test_prior_entry_fill_events_require_sealed_same_id_snapshot(monkeypatch):
+    snapshot = {
+        "date": "2026-09-23", "meta": {"warnings": []},
+        "metrics": {"open_scalp_position_projection_status": "current_db_census",
+                    "open_scalp_position_projection_count": 1},
+        "sections": {"open_scalp_position_projection": [{
+            "id": 42, "code": "123456", "timeline": [{
+                "stage": "position_rebased_after_fill",
+                "timestamp": "2026-09-23 09:00:00",
+                "fields": {"id": "42", "order_no": "B1", "execution_no": "BE1"},
+            }],
+        }]},
+    }
+    monkeypatch.setattr(report_mod, "load_monitor_snapshot", lambda *args: snapshot)
+    trade = {"id": 42, "rec_date": "2026-09-23", "status": "COMPLETED"}
+    events, receipts = report_mod._prior_entry_fill_events([trade], "2026-09-24")
+    assert len(events["42"]) == 1
+    assert receipts["2026-09-23"]["status"] == "sealed_entry_snapshot"
+
+    snapshot["sections"]["open_scalp_position_projection"][0]["timeline"][0]["fields"]["id"] = "99"
+    events, _ = report_mod._prior_entry_fill_events([trade], "2026-09-24")
+    assert events == {}
+
+
+def test_prior_fill_events_include_intermediate_day_scale_in(monkeypatch):
+    def snapshot(day):
+        stage = "position_rebased_after_fill" if day == "2026-09-22" else "scale_in_executed"
+        return {
+            "date": day, "meta": {"warnings": []},
+            "metrics": {"open_scalp_position_projection_status": "current_db_census",
+                        "open_scalp_position_projection_count": 1},
+            "sections": {"open_scalp_position_projection": [{
+                "id": 42, "code": "123456", "timeline": [{
+                    "stage": stage, "timestamp": f"{day} 09:00:00",
+                    "fields": {"id": "42", "order_no": "B1" if day.endswith("22") else "B2",
+                               "execution_no": "BE1" if day.endswith("22") else "BE2"},
+                }],
+            }]},
+        }
+
+    monkeypatch.setattr(report_mod, "load_monitor_snapshot", lambda _, day: snapshot(day))
+    events, receipts = report_mod._prior_entry_fill_events(
+        [{"id": 42, "rec_date": "2026-09-22", "status": "COMPLETED"}],
+        "2026-09-24",
+    )
+    assert [event.stage for event in events["42"]] == [
+        "position_rebased_after_fill", "scale_in_executed"
+    ]
+    assert set(receipts) == {"2026-09-22", "2026-09-23"}
 
 
 def test_sell_day_completion_event_recovers_prior_entry_by_exact_id(monkeypatch):

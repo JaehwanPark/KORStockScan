@@ -26,6 +26,26 @@ COST_HASH = "a" * 64
 SYMBOL_HASH = "b" * 64
 
 
+def test_execution_receipt_population_scope_requires_real_order_authority(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(execution_receipts, "emit_pipeline_event", lambda *a, **kw: emitted.append(kw["fields"].copy()))
+    monkeypatch.setattr(execution_receipts, "observe_candidate_transition_safe", lambda *a, **kw: None)
+    monkeypatch.setattr(execution_receipts, "pipeline_lifecycle_fields_safe", lambda *a, **kw: {})
+    stock = {"id": 701, "code": "005930", "name": "SAMSUNG"}
+    execution_receipts._log_holding_pipeline_impl(
+        "SAMSUNG", "005930", 701, "position_rebased_after_fill",
+        candidate_stock=stock, actual_order_submitted=True,
+        broker_order_forbidden=False,
+    )
+    assert emitted[-1]["pipeline_lifecycle_population_scope"] == "real_record_bound"
+    execution_receipts._log_holding_pipeline_impl(
+        "SAMSUNG", "005930", 701, "sell_completed",
+        candidate_stock={**stock, "simulation_book": True},
+        actual_order_submitted=True, broker_order_forbidden=False,
+    )
+    assert emitted[-1]["pipeline_lifecycle_population_scope"] == "sim_observation_only"
+
+
 @pytest.fixture(autouse=True)
 def _isolate_owner_policy_and_registry(tmp_path, monkeypatch):
     # Exercise the real resolver against isolated files, not today's live owners.

@@ -82,6 +82,10 @@ def _trade(
         "buy_time": buy_time,
         "sell_price": 10100,
         "sell_time": sell_time,
+        "sell_order_no": "S1",
+        "sell_execution_no": "SE1",
+        "effective_venue": "KRX",
+        "exit_execution_broker_route": "KRX",
         "completion_day_basis": "terminal_event",
         "profit_rate": profit_rate,
         "realized_pnl_krw": realized_pnl_krw,
@@ -193,6 +197,62 @@ def test_trade_review_source_warning_cannot_become_valid_empty_population():
     assert gaps == [{"date": "2026-09-23", "reason": "trade_review_source_warning"}]
 
 
+def test_strict_completed_population_partitions_exit_and_forward_layers(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    trades = [
+        _trade(1, rec_date="2026-09-24", buy_time="2026-09-24 09:00:00",
+               sell_time="2026-09-24 09:10:00", realized_pnl_krw=40),
+        _trade(2, rec_date="2026-09-24", buy_time="2026-09-24 09:20:00",
+               sell_time="2026-09-24 09:30:00", exit_rule="scalp_soft_stop_pct",
+               realized_pnl_krw=-20),
+        _trade(3, rec_date="2026-09-24", buy_time="2026-09-24 10:00:00",
+               sell_time="2026-09-24 10:10:00", realized_pnl_krw=100),
+        _trade(4, rec_date="2026-09-24", buy_time="2026-09-24 10:20:00",
+               sell_time="2026-09-24 10:30:00", profit_rate=None,
+               realized_pnl_krw=200),
+    ]
+    for trade in trades:
+        trade.update({
+            "completion_observed_date": "2026-09-24",
+            "strict_completion_status": "eligible",
+            "strict_completion_reasons": [],
+            "terminal_population_scope": "real_record_bound",
+            "sell_quantity_conserved": True,
+            "terminal_profit_rate_reconciled": True,
+            "realized_pnl_krw_source": "broker_fill_prices_fee_aware",
+        })
+    trades[2]["strict_completion_status"] = "excluded"
+    trades[2]["strict_completion_reasons"] = ["source_gap_buy_fill_missing"]
+    _write_json(
+        tmp_path / "report" / "monitor_snapshots" / "trade_review_2026-09-24.json",
+        {"date": "2026-09-24", "meta": {"sell_completed_event_ids": [1, 2, 3, 4]},
+         "metrics": {"canonical_completed_trades": 4},
+         "sections": {"completed_trade_projection": trades}},
+    )
+
+    report = report_mod.build_holding_exit_observation_report(
+        target_date="2026-09-24", month_start="2026-09-24"
+    )
+    quality = report["completed_population_quality"]
+    assert quality["db_completed_main_ids"] == ["1", "2", "3", "4"]
+    assert quality["db_completed_valid_profit_ids"] == ["1", "2", "3"]
+    assert quality["db_completed_invalid_profit_ids"] == ["4"]
+    assert quality["strict_completed_position_ids"] == ["1", "2"]
+    assert quality["source_gap_ids"] == ["3"]
+    assert quality["excluded_ids_by_reason"] == {"source_gap_buy_fill_missing": ["3"]}
+    assert [row["record_id"] for row in report["position_outcomes"]] == ["1", "2"]
+    coverage = report["position_outcome_coverage"]
+    assert coverage["exit_class_ids"]["trailing_observed"] == ["1"]
+    assert coverage["exit_class_ids"]["other_exit_observed"] == ["2"]
+    assert coverage["post_sell_layer_ids"]["not_observable_no_exact_fill_time"] == ["1", "2"]
+    assert coverage["whole_cohort_pnl_krw"] is None
+    funnel = report["trailing_threshold_readiness"]["funnel_ids"]
+    assert funnel["completed_valid_ids"] == ["1", "2", "3"]
+    assert funnel["strict_completed_position_ids"] == ["1", "2"]
+    assert funnel["competing_exit_ids"] == ["2"]
+    assert report["economic_input_complete"] is False
+
+
 def test_legacy_display_profit_is_diagnostic_not_exact_cost():
     rows, gaps = report_mod._collect_completed_trade_rows(
         [
@@ -249,6 +309,10 @@ def test_position_outcome_distinguishes_exact_cost_ai_and_post_sell_quality():
             "recommendation_id": 1,
             "signal_date": "2026-09-23",
             "sell_time": "09:40:00",
+            "exact_sell_fill_time": "2026-09-23T09:40:00+09:00",
+            "sell_order_no": "S1", "sell_execution_no": "SE1",
+            "market_axes_source_quality_status": "route_contract_ready",
+            "actual_execution_venue": "KRX", "broker_route_requested": "KRX",
             "minute_candle_source_quality": "partial_window",
             "metrics_10m": {"mfe_pct": 0.5},
             "outcome": "MISSED_UPSIDE",
@@ -278,6 +342,10 @@ def test_post_sell_pass_requires_mature_horizons_and_matching_anchor():
         "evaluation_status": "evaluated",
         "signal_date": "2026-09-23",
         "sell_time": "09:40:00",
+        "exact_sell_fill_time": "2026-09-23T09:40:00+09:00",
+        "sell_order_no": "S1", "sell_execution_no": "SE1",
+        "market_axes_source_quality_status": "route_contract_ready",
+        "actual_execution_venue": "KRX", "broker_route_requested": "KRX",
         "evaluated_at": "2026-09-23T09:45:00",
         "minute_candle_source_quality": "pass",
         **{f"metrics_{minute}m": {"bars": 1} for minute in (1, 3, 5, 10)},
@@ -291,6 +359,14 @@ def test_post_sell_pass_requires_mature_horizons_and_matching_anchor():
     outcomes, coverage = report_mod._build_position_outcomes([trade], [evaluation])
     assert outcomes[0]["post_sell_status"] == "pass"
     assert coverage["full_post_sell_observation_trades"] == 1
+
+    evaluation["sell_execution_no"] = "OTHER"
+    outcomes, _ = report_mod._build_position_outcomes([trade], [evaluation])
+    assert outcomes[0]["post_sell_status"] == "source_gap_post_sell_execution_identity"
+    evaluation["sell_execution_no"] = "SE1"
+    evaluation["exact_sell_fill_time"] = None
+    outcomes, _ = report_mod._build_position_outcomes([trade], [evaluation])
+    assert outcomes[0]["post_sell_status"] == "source_gap_exact_fill_binding_missing"
 
 
 def test_trailing_direct_input_receipt_preserves_trigger_and_source_gap():
@@ -554,14 +630,11 @@ def test_holding_exit_observation_report_splits_required_cohorts(monkeypatch, tm
         assert key in report
 
     assert report["readiness"]["observation_ready"] is True
-    assert report["readiness"]["completed_valid_trades"] == 7
+    assert report["readiness"]["completed_valid_trades"] == 0
     assert report["readiness"]["directional_only"] is True
-    assert report["cohorts"]["normal_only"]["trade_count"] == 8
-    assert report["cohorts"]["post_fallback_deprecation"]["trade_count"] == 7
-    assert report["cohorts"]["full_fill"]["trade_count"] == 7
-    assert report["cohorts"]["partial_fill"]["trade_count"] == 1
-    assert report["cohorts"]["initial-only"]["trade_count"] == 7
-    assert report["cohorts"]["pyramid-activated"]["trade_count"] == 1
+    assert report["completed_population_quality"]["valid_profit_rows"] == 8
+    assert report["completed_population_quality"]["strict_completed_position_ids"] == []
+    assert report["cohorts"]["normal_only"]["trade_count"] == 0
     assert report["trailing_threshold_readiness"]["status"] == (
         "source_gap_paired_replay_unavailable"
     )
@@ -569,19 +642,8 @@ def test_holding_exit_observation_report_splits_required_cohorts(monkeypatch, tm
     assert report["trailing_threshold_readiness"]["axes"][
         "SCALP_TRAILING_LIMIT_WEAK"
     ]["candidate_value"] is None
-    assert report["soft_stop_rebound"]["rebound_above_buy_10m_rate"] == 50.0
-    assert report["soft_stop_rebound"]["whipsaw_signal"] is True
-    assert report["soft_stop_rebound"]["whipsaw_windows"][3]["window"] == "10m"
-    assert report["soft_stop_rebound"]["whipsaw_windows"][3]["mfe_ge_1_0_rate"] == 100.0
     assert report["soft_stop_rebound"]["cooldown_live_allowed"] is False
-    assert (
-        report["soft_stop_rebound"]["hard_stop_auxiliary"]["evaluated_post_sell"] == 1
-    )
-    assert (
-        report["soft_stop_rebound"]["hard_stop_auxiliary"]["completed_valid_trades"]
-        == 1
-    )
-    assert report["same_symbol_reentry"]["after_soft_stop_next_loss_count"] == 1
+    assert report["same_symbol_reentry"]["after_soft_stop_next_loss_count"] == 0
     assert report["opportunity_cost"]["outcome_counts"]["MISSED_WINNER"] == 3
     assert report["opportunity_cost"]["terminal_stage_top"][0] == {
         "label": "latency_block",

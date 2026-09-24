@@ -8,7 +8,7 @@ import math
 import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -1288,11 +1288,16 @@ def _build_trade_row(trade: dict, events: list[HoldingEvent]) -> dict:
 _PROJECTION_EVENT_STAGES = {
     "holding_started",
     "position_rebased_after_fill",
+    "entry_buy_order_terminal_confirmed",
+    "scale_in_buy_order_terminal_confirmed",
     "scale_in_executed",
     "ai_holding_review",
     "exit_signal",
     "sell_order_sent",
     "sell_order_failed",
+    "sell_partial_fill_progress",
+    "nxt_rising_missed_tp1_partial_fill_progress",
+    "nxt_rising_missed_tp1_partial_sell_completed",
     "sell_completed",
     "holding_flow_override_defer_exit",
     "holding_flow_max_defer_bullish_extension",
@@ -1301,6 +1306,200 @@ _PROJECTION_EVENT_STAGES = {
     "scalp_trailing_input_transition",
     "scalp_tp_alternative_observed",
 }
+
+
+def _completed_execution_ledger(trade: dict, events: list[HoldingEvent]) -> dict:
+    """Reconcile broker fill deltas for one completed position, fail closed."""
+
+    reasons: list[str] = []
+    buy_orders: dict[str, int] = {}
+    sell_orders: dict[str, int] = {}
+    seen_buy: set[tuple[str, str]] = set()
+    seen_sell: set[tuple[str, str]] = set()
+    buy_qty = sell_qty = 0
+    buy_amount = sell_amount = 0.0
+    sell_fee_amount = 0.0
+    sell_leg_net_pnl = 0.0
+    buy_quality: set[str] = set()
+    sell_order_numbers: set[str] = set()
+    buy_events = [event for event in events if event.stage in {
+        "position_rebased_after_fill", "scale_in_executed"
+    }]
+    sell_events = [event for event in events if event.stage in {
+        "sell_partial_fill_progress", "nxt_rising_missed_tp1_partial_fill_progress",
+        "nxt_rising_missed_tp1_partial_sell_completed", "sell_completed"
+    }]
+    sell_events.sort(key=lambda event: (
+        event.timestamp, event.stage == "sell_completed",
+        _safe_int(event.fields.get("cumulative_sell_qty"), -1)
+    ))
+    if not buy_events:
+        reasons.append("source_gap_buy_fill_missing")
+    if not sell_events or sell_events[-1].stage != "sell_completed":
+        reasons.append("source_gap_final_sell_fill_missing")
+
+    for event in buy_events:
+        fields = event.fields
+        order = str(fields.get("order_no") or "").strip()
+        execution = str(fields.get("execution_no") or "").strip()
+        delta = _safe_int(fields.get("fill_qty"), -1)
+        cumulative = _safe_int(fields.get("order_filled_qty"), -1)
+        requested = _safe_int(fields.get("order_requested_qty"), -1)
+        remaining = _safe_int(
+            fields.get("order_remaining_qty", fields.get("remaining_qty")), -1
+        )
+        price = _safe_float(fields.get("fill_price"), -1.0)
+        if order in {"", "-"} or execution in {"", "-"}:
+            reasons.append("source_gap_buy_execution_identity")
+            continue
+        identity = (order, execution)
+        if identity in seen_buy:
+            reasons.append("source_gap_duplicate_buy_execution")
+            continue
+        seen_buy.add(identity)
+        previous = buy_orders.get(order, 0)
+        if (delta <= 0 or price <= 0 or cumulative != previous + delta
+                or requested < cumulative or remaining < 0
+                or requested != cumulative + remaining):
+            reasons.append("source_gap_buy_quantity_or_price")
+            continue
+        if (str(fields.get("receipt_quantity_contract_complete")).lower() != "true"
+                or str(fields.get("receipt_unit_fill_consistent")).lower() != "true"
+                or str(fields.get("receipt_economics_complete")).lower() != "true"
+                or str(fields.get("actual_order_submitted")).lower() != "true"
+                or str(fields.get("broker_order_forbidden")).lower() != "false"
+                or fields.get("pipeline_lifecycle_population_scope") != "real_record_bound"):
+            reasons.append("source_gap_buy_receipt_authority_or_cost")
+            continue
+        buy_orders[order] = cumulative
+        buy_qty += delta
+        buy_amount += delta * price
+        buy_quality.add(str(fields.get("fill_quality") or "unknown").lower())
+
+    terminal_buy_orders = {
+        str(event.fields.get("orig_ord_no") or "").strip(): event
+        for event in events if event.stage in {
+            "entry_buy_order_terminal_confirmed", "scale_in_buy_order_terminal_confirmed"
+        }
+    }
+    for order, filled_qty in buy_orders.items():
+        last_fill = next((event for event in reversed(buy_events)
+                          if event.fields.get("order_no") == order), None)
+        if last_fill is None:
+            continue
+        remaining = _safe_int(last_fill.fields.get(
+            "order_remaining_qty", last_fill.fields.get("remaining_qty")
+        ), -1)
+        if remaining == 0:
+            continue
+        terminal_buy = terminal_buy_orders.get(order)
+        terminal_fields = terminal_buy.fields if terminal_buy else {}
+        if (terminal_buy is None
+                or terminal_buy.timestamp < last_fill.timestamp
+                or terminal_fields.get("pipeline_lifecycle_population_scope") != "real_record_bound"
+                or str(terminal_fields.get("actual_order_submitted")).lower() != "true"
+                or str(terminal_fields.get("broker_order_forbidden")).lower() != "false"
+                or terminal_fields.get("terminal_reason") not in {
+                    "terminal_absence_and_owner_inventory_exact",
+                    "terminal_absence_and_inventory_exact",
+                }
+                or _safe_int(terminal_fields.get("order_filled_qty"), -1) != filled_qty
+                or _safe_int(terminal_fields.get("order_requested_qty"), -1)
+                   < filled_qty):
+            reasons.append("source_gap_buy_order_terminal_missing")
+
+    for event in sell_events:
+        fields = event.fields
+        order = str(fields.get("order_no") or "").strip()
+        execution = str(fields.get("execution_no") or "").strip()
+        delta = _safe_int(fields.get("main_lifecycle_exit_qty"), -1)
+        cumulative = _safe_int(fields.get("cumulative_sell_qty"), -1)
+        price = _safe_float(fields.get("main_lifecycle_exit_price"), -1.0)
+        if order in {"", "-"} or execution in {"", "-"}:
+            reasons.append("source_gap_sell_execution_identity")
+            continue
+        identity = (order, execution)
+        if identity in seen_sell:
+            reasons.append("source_gap_duplicate_sell_execution")
+            continue
+        seen_sell.add(identity)
+        # The producer emits position-wide cumulative_sell_qty even when a
+        # prior partial SELL belonged to another order.
+        if delta <= 0 or price <= 0 or cumulative != sell_qty + delta:
+            reasons.append("source_gap_sell_quantity_or_price")
+            continue
+        if (str(fields.get("actual_order_submitted")).lower() != "true"
+                or str(fields.get("broker_order_forbidden")).lower() != "false"
+                or fields.get("pipeline_lifecycle_population_scope") != "real_record_bound"):
+            reasons.append("source_gap_sell_receipt_authority")
+            continue
+        fee = _safe_float(fields.get("main_lifecycle_fees_taxes_krw"), -1.0)
+        net_pnl = _safe_float(fields.get(
+            "main_lifecycle_realized_net_pnl_krw"), default=float("nan")
+        )
+        economics_complete = fields.get(
+            "sell_receipt_economics_complete",
+            fields.get("sell_execution_receipt_economics_complete"),
+        )
+        quantity_complete = fields.get(
+            "sell_receipt_quantity_contract_complete",
+            fields.get("sell_execution_receipt_quantity_contract_complete"),
+        )
+        unit_consistent = fields.get(
+            "sell_receipt_unit_fill_consistent",
+            fields.get("sell_execution_receipt_unit_fill_consistent"),
+        )
+        if (str(economics_complete).lower() != "true"
+                or str(quantity_complete).lower() != "true"
+                or str(unit_consistent).lower() != "true"
+                or fee < 0 or not math.isfinite(net_pnl)):
+            reasons.append("source_gap_sell_leg_cost_or_quantity")
+            continue
+        sell_orders[order] = sell_orders.get(order, 0) + delta
+        sell_order_numbers.add(order)
+        sell_qty += delta
+        sell_amount += delta * price
+        sell_fee_amount += fee
+        sell_leg_net_pnl += net_pnl
+        if sell_qty > buy_qty:
+            reasons.append("source_gap_negative_position_balance")
+
+    terminal = next((event for event in reversed(events)
+                     if event.stage == "sell_completed"), None)
+    final_fields = terminal.fields if terminal else {}
+    if terminal and _safe_int(final_fields.get("remaining_sell_qty"), -1) != 0:
+        reasons.append("source_gap_sell_residual_unresolved")
+    if not buy_qty or buy_qty != sell_qty:
+        reasons.append("source_gap_position_quantity_not_conserved")
+    if buy_qty and not any(event.stage == "sell_partial_fill_progress" for event in sell_events):
+        if _safe_int(trade.get("buy_qty"), -1) != buy_qty:
+            reasons.append("source_gap_db_buy_quantity_mismatch")
+    if buy_qty and abs(_safe_float(trade.get("buy_price"), -1.0)
+                       - buy_amount / buy_qty) > 1.0:
+        reasons.append("source_gap_db_buy_cost_mismatch")
+    if sell_qty and _safe_float(trade.get("sell_price"), 0.0) > 0:
+        if abs(_safe_float(trade.get("sell_price"), 0.0)
+               - sell_amount / sell_qty) > 1.0:
+            reasons.append("source_gap_db_sell_price_mismatch")
+    return {
+        "strict_completion_status": "eligible" if not reasons else "excluded",
+        "strict_completion_reasons": sorted(set(reasons)),
+        "buy_filled_qty": buy_qty,
+        "buy_fill_amount": buy_amount if buy_qty else None,
+        "sell_filled_qty": sell_qty,
+        "sell_fill_amount": sell_amount if sell_qty else None,
+        "sell_fill_fees_taxes_krw": sell_fee_amount if sell_qty else None,
+        "sell_leg_net_pnl_krw": sell_leg_net_pnl if sell_qty else None,
+        "position_residual_qty": buy_qty - sell_qty,
+        "buy_fill_quality": (
+            "partial_fill" if "partial_fill" in buy_quality
+            else "full_fill" if buy_quality == {"full_fill"} else "unknown"
+        ),
+        "buy_execution_count": len(seen_buy),
+        "sell_execution_count": len(seen_sell),
+        "buy_order_count": len(buy_orders),
+        "sell_order_count": len(sell_orders),
+    }
 
 
 def _completed_trade_projection(
@@ -1317,12 +1516,16 @@ def _completed_trade_projection(
         (event for event in reversed(events) if event.stage == "sell_completed"), None
     )
     terminal_fields = terminal.fields if terminal else {}
+    ledger = _completed_execution_ledger(trade, events)
     terminal_observed_date = str(terminal.timestamp)[:10] if terminal else None
     sell_date = str(trade.get("sell_time") or "")[:10]
     completion_observed_date = terminal_observed_date or sell_date or None
-    buy_qty = _safe_int(trade.get("buy_qty"), 0)
     completed_sell_qty = _safe_int(terminal_fields.get("cumulative_sell_qty"), 0)
-    quantity_conserved = bool(buy_qty > 0 and completed_sell_qty == buy_qty)
+    quantity_conserved = bool(
+        ledger["buy_filled_qty"] > 0
+        and ledger["position_residual_qty"] == 0
+        and _safe_int(terminal_fields.get("remaining_sell_qty"), -1) == 0
+    )
     receipt_profit_rate = _safe_float(
         terminal_fields.get("profit_rate"), default=float("nan")
     )
@@ -1331,6 +1534,33 @@ def _completed_trade_projection(
         and math.isfinite(receipt_profit_rate)
         and abs(float(profit) - receipt_profit_rate) <= 0.02
     )
+    cost_rate = _safe_float(
+        terminal_fields.get("entry_opportunity_recheck_cost_rate"), -1.0
+    )
+    receipt_pnl = _safe_float(
+        terminal_fields.get("realized_pnl_krw"), default=float("nan")
+    )
+    fill_cost_reconciled = bool(
+        0 < cost_rate <= 0.05
+        and ledger["buy_fill_amount"] is not None
+        and ledger["sell_fill_amount"] is not None
+        and math.isfinite(receipt_pnl)
+        and ledger["sell_fill_fees_taxes_krw"] is not None
+        and ledger["sell_leg_net_pnl_krw"] is not None
+        and abs(receipt_pnl - ledger["sell_leg_net_pnl_krw"]) <= max(
+            2.0, ledger["sell_execution_count"] * 1.0
+        )
+        and abs(receipt_pnl - (
+            ledger["sell_fill_amount"] - ledger["buy_fill_amount"]
+            - ledger["sell_fill_fees_taxes_krw"]
+        )) <= max(2.0, ledger["sell_execution_count"] * 1.0)
+        and abs(ledger["sell_fill_fees_taxes_krw"]
+                - ledger["sell_fill_amount"] * cost_rate) <= max(
+                    2.0, ledger["sell_execution_count"] * 1.0
+                )
+        and profit is not None
+        and abs(profit - receipt_pnl / ledger["buy_fill_amount"] * 100.0) <= 0.02
+    )
     exact_receipt = (
         terminal_fields.get("realized_pnl_krw_source") == "broker_fill_prices_fee_aware"
         and terminal_fields.get("decision_authority")
@@ -1338,13 +1568,29 @@ def _completed_trade_projection(
         and str(terminal_fields.get("actual_order_submitted") or "").lower() == "true"
         and str(terminal_fields.get("broker_order_forbidden") or "").lower() == "false"
         and quantity_conserved
+        and ledger["strict_completion_status"] == "eligible"
         and rate_reconciled
+        and fill_cost_reconciled
+        and str(terminal_fields.get("sell_execution_receipt_economics_complete")).lower() == "true"
+        and str(terminal_fields.get("sell_execution_receipt_quantity_contract_complete")).lower() == "true"
+        and str(terminal_fields.get("sell_execution_receipt_unit_fill_consistent")).lower() == "true"
+        and _safe_float(terminal_fields.get("main_lifecycle_fees_taxes_krw"), -1.0) >= 0
+        and not terminal_fields.get("trade_review_economics_reconciled")
     )
     exact_pnl = _safe_float(
         terminal_fields.get("realized_pnl_krw"), default=float("nan")
     )
     if not exact_receipt or not math.isfinite(exact_pnl):
         exact_pnl = None
+    strict_reasons = list(ledger["strict_completion_reasons"])
+    if not rate_reconciled:
+        strict_reasons.append("source_gap_profit_rate_unreconciled")
+    if not fill_cost_reconciled or exact_pnl is None:
+        strict_reasons.append("source_gap_exact_cost_missing")
+    if terminal_fields.get("decision_authority") != "broker_sell_fill_observation_only":
+        strict_reasons.append("source_gap_final_sell_authority")
+    if terminal_fields.get("trade_review_economics_reconciled"):
+        strict_reasons.append("source_gap_terminal_db_economics_conflict")
     occurrence_source = str(
         terminal_fields.get("main_lifecycle_execution_occurrence_time_source") or ""
     )
@@ -1371,6 +1617,9 @@ def _completed_trade_projection(
         "market_session_bucket": terminal_fields.get("main_lifecycle_session_bucket")
         or terminal_fields.get("market_session_bucket"),
         "entry_execution_broker_route": terminal_fields.get("broker_route"),
+        "exit_execution_broker_route": terminal_fields.get(
+            "broker_route_requested"
+        ) or terminal_fields.get("broker_route"),
         "main_lifecycle_id": terminal_fields.get("main_lifecycle_id"),
         "attempt_id": terminal_fields.get("attempt_id")
         or terminal_fields.get("main_lifecycle_attempt_id"),
@@ -1379,7 +1628,16 @@ def _completed_trade_projection(
         "sell_execution_no": terminal_fields.get("execution_no"),
         "cumulative_sell_qty": completed_sell_qty or None,
         "sell_quantity_conserved": quantity_conserved,
+        **ledger,
+        "strict_completion_status": "excluded" if strict_reasons else "eligible",
+        "strict_completion_reasons": sorted(set(strict_reasons)),
         "terminal_profit_rate_reconciled": rate_reconciled,
+        "fill_cost_reconciled": fill_cost_reconciled,
+        "cost_basis": (
+            "broker_fill_prices_configured_cost_rate"
+            if fill_cost_reconciled else "source_gap_cost_provenance"
+        ),
+        "effective_cost_rate": cost_rate if 0 < cost_rate <= 0.05 else None,
         "entry_mode": compiled.get("entry_mode"),
         "buy_price": trade.get("buy_price"),
         "buy_qty": trade.get("buy_qty"),
@@ -1446,7 +1704,12 @@ def _open_scalp_position_projection(trade: dict, events: list[HoldingEvent]) -> 
         return None
     observed = [
         event for event in events
-        if event.stage in {"holding_started", "scalp_trailing_input_transition", "exit_signal"}
+        if event.stage in {
+            "position_rebased_after_fill", "holding_started", "scale_in_executed",
+            "entry_buy_order_terminal_confirmed",
+            "scale_in_buy_order_terminal_confirmed",
+            "scalp_trailing_input_transition", "exit_signal",
+        }
     ]
     real_observed = any(
         event.fields.get("pipeline_lifecycle_population_scope") == "real_record_bound"
@@ -1467,6 +1730,77 @@ def _open_scalp_position_projection(trade: dict, events: list[HoldingEvent]) -> 
             for event in observed
         ],
     }
+
+
+def _prior_entry_fill_events(
+    trades: list[dict], target_date: str
+) -> tuple[dict[str, list[HoldingEvent]], dict[str, dict]]:
+    """Reuse sealed open projections for every observed pre-exit BUY leg."""
+
+    prior_dates: set[str] = set()
+    for trade in trades:
+        if str(trade.get("status") or "").upper() != "COMPLETED":
+            continue
+        try:
+            entry_day = datetime.strptime(str(trade.get("rec_date") or "")[:10],
+                                          "%Y-%m-%d").date()
+            exit_day = datetime.strptime(target_date, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if not entry_day < exit_day:
+            continue
+        day = entry_day
+        while day < exit_day:
+            prior_dates.add(day.isoformat())
+            day += timedelta(days=1)
+    events_by_id: dict[str, list[HoldingEvent]] = defaultdict(list)
+    receipts: dict[str, dict] = {}
+    for prior_date in sorted(prior_dates):
+        snapshot = load_monitor_snapshot("trade_review", prior_date)
+        if not isinstance(snapshot, dict) or snapshot.get("date") != prior_date:
+            receipts[prior_date] = {"status": "source_gap_entry_snapshot_missing"}
+            continue
+        if (snapshot.get("meta") or {}).get("warnings"):
+            receipts[prior_date] = {"status": "source_gap_entry_snapshot_warning"}
+            continue
+        rows = (snapshot.get("sections") or {}).get("open_scalp_position_projection")
+        metrics = snapshot.get("metrics") or {}
+        ids = [str(row.get("id") or "") for row in rows] if (
+            isinstance(rows, list) and all(isinstance(row, dict) for row in rows)
+        ) else []
+        if (not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows)
+                or not all(ids) or len(ids) != len(set(ids))
+                or metrics.get("open_scalp_position_projection_status") != "current_db_census"
+                or _safe_int(metrics.get("open_scalp_position_projection_count"), -1) != len(rows)):
+            receipts[prior_date] = {"status": "source_gap_entry_snapshot_census"}
+            continue
+        receipts[prior_date] = {
+            "status": "sealed_entry_snapshot",
+            "logical_sha256": hashlib.sha256(json.dumps(
+                snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")).hexdigest(),
+        }
+        for row in rows:
+            trade_id = str(row["id"])
+            for item in row.get("timeline") or []:
+                if not isinstance(item, dict) or item.get("stage") not in {
+                    "position_rebased_after_fill", "scale_in_executed",
+                    "entry_buy_order_terminal_confirmed",
+                    "scale_in_buy_order_terminal_confirmed"
+                }:
+                    continue
+                fields = item.get("fields")
+                if not isinstance(fields, dict) or str(fields.get("id") or "") != trade_id:
+                    continue
+                timestamp = str(item.get("timestamp") or "")
+                if _parse_dt(timestamp) is None or timestamp[:10] != prior_date:
+                    continue
+                events_by_id[trade_id].append(HoldingEvent(
+                    timestamp=timestamp, name=str(row.get("name") or "-"),
+                    code=str(row.get("code") or "-")[:6],
+                    stage=str(item["stage"]), fields=dict(fields), raw_line="",
+                ))
+    return events_by_id, receipts
 
 
 def _is_entered_trade(row: dict) -> bool:
@@ -1742,6 +2076,9 @@ def build_trade_review_report(
         warnings.append(
             f"완료 이벤트의 DB 포지션 ID 미해결: {sorted(unresolved_completion_ids)[:20]}"
         )
+    prior_entry_events, prior_entry_receipts = _prior_entry_fill_events(
+        trade_rows, target_date
+    )
     per_stage = Counter(event.stage for event in events)
 
     compiled_rows = []
@@ -1749,6 +2086,13 @@ def build_trade_review_report(
     open_projection = []
     for trade in trade_rows:
         matched = _match_trade_events(trade, all_events)
+        prior_date = str(trade.get("rec_date") or "")[:10]
+        if prior_date < target_date:
+            matched.extend(
+                event for event in prior_entry_events.get(str(trade.get("id") or ""), [])
+                if event.code == str(trade.get("code") or "")[:6]
+            )
+            matched.sort(key=_event_sort_key)
         compiled = _build_trade_row(trade, matched)
         compiled_rows.append(compiled)
         projected = _completed_trade_projection(trade, matched, compiled)
@@ -1758,6 +2102,14 @@ def build_trade_review_report(
         ):
             projected["trailing_event_source_status"] = trailing_source_status
             projected["trailing_event_source_sha256"] = trailing_source_sha256
+            if prior_date < target_date:
+                projected["prior_entry_snapshot_receipt"] = prior_entry_receipts.get(
+                    prior_date, {"status": "source_gap_entry_snapshot_missing"}
+                )
+                projected["prior_fill_snapshot_receipts"] = {
+                    day: receipt for day, receipt in prior_entry_receipts.items()
+                    if prior_date <= day < target_date
+                }
             completed_projection.append(projected)
         open_projected = _open_scalp_position_projection(trade, matched)
         if open_projected is not None:

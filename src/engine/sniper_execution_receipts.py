@@ -1406,6 +1406,28 @@ def _log_holding_pipeline_impl(
         pipeline="HOLDING_PIPELINE",
         source_stage=stage,
     )
+    if stage in {
+        "position_rebased_after_fill", "holding_started", "scale_in_executed",
+        "sell_partial_fill_progress", "nxt_rising_missed_tp1_partial_fill_progress",
+        "nxt_rising_missed_tp1_partial_sell_completed", "sell_completed",
+    }:
+        simulated = bool(
+            isinstance(candidate_stock, dict)
+            and (candidate_stock.get("simulation_book") or candidate_stock.get("simulation_owner"))
+        )
+        real_receipt = bool(
+            isinstance(candidate_stock, dict)
+            and candidate_stock.get("id") not in (None, "", 0)
+            and fields.get("actual_order_submitted") is True
+            and fields.get("broker_order_forbidden") is False
+            and not simulated
+        )
+        if simulated:
+            fields["pipeline_lifecycle_population_scope"] = "sim_observation_only"
+        elif real_receipt:
+            fields["pipeline_lifecycle_population_scope"] = "real_record_bound"
+        else:
+            fields.pop("pipeline_lifecycle_population_scope", None)
     for field_name in _MAIN_LIFECYCLE_GENERATED_PIPELINE_FIELDS:
         if field_name != "attempt_id" or lifecycle_stage_mapped:
             fields.pop(field_name, None)
@@ -11795,6 +11817,8 @@ def _handle_entry_buy_execution(
         "position_rebased_after_fill",
         candidate_stock=target_stock,
         observed_at=now,
+        actual_order_submitted=True,
+        broker_order_forbidden=False,
         order_no=order_no or "-",
         execution_no=execution_no or "-",
         fill_price=round(float(exec_price or 0.0), 4),

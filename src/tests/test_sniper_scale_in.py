@@ -17969,8 +17969,10 @@ def test_scale_in_split_residual_cancel_after_partial_fill_has_no_cancel_cooldow
         "send_cancel_order",
         lambda **kwargs: {"return_code": "0"},
     )
+    holding_logs = []
     monkeypatch.setattr(
-        state_handlers, "_log_holding_pipeline", lambda *args, **kwargs: None
+        state_handlers, "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: holding_logs.append((stage, fields)),
     )
 
     stock = {
@@ -17987,6 +17989,7 @@ def test_scale_in_split_residual_cancel_after_partial_fill_has_no_cancel_cooldow
         "pending_add_requested_at": 90.0,
         "pending_add_filled_qty": 1,
         "_add_receipt_requested_by_order_no": {"A2": 3},
+        "_add_receipt_filled_by_order_no": {"A2": 1},
         "_add_receipt_leg_meta_by_order_no": {
             "A2": {
                 "qty": 3,
@@ -18011,6 +18014,10 @@ def test_scale_in_split_residual_cancel_after_partial_fill_has_no_cancel_cooldow
     assert stock.get("pending_add_order") is None
     assert "last_add_cancel_at" not in stock
     assert stock["last_add_residual_cancel_at"] == 100.0
+    terminal = dict(holding_logs)["scale_in_buy_order_terminal_confirmed"]
+    assert terminal["orig_ord_no"] == "A2"
+    assert terminal["order_filled_qty"] == 1
+    assert terminal["terminal_reason"] == "terminal_absence_and_inventory_exact"
 
 
 def test_timeout_unfilled_late_loss_avg_down_restores_retry_count(monkeypatch):
@@ -25693,11 +25700,16 @@ def test_get_best_levels_from_ws_uses_top_of_book_levels():
 def test_pending_entry_cancel_logs_receipt_provenance(monkeypatch):
     _mock_exact_order_terminal(monkeypatch)
     logs = []
+    holding_logs = []
     cancel_calls = []
     monkeypatch.setattr(
         state_handlers,
         "_log_entry_pipeline",
         lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers, "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: holding_logs.append((stage, fields)),
     )
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
@@ -25753,6 +25765,10 @@ def test_pending_entry_cancel_logs_receipt_provenance(monkeypatch):
         == "entry-price-snapshot-1"
     )
     assert cancel_calls[-1]["dmst_stex_tp"] == "SOR"
+    terminal = dict(holding_logs)["entry_buy_order_terminal_confirmed"]
+    assert terminal["orig_ord_no"] == "O1"
+    assert terminal["order_filled_qty"] == 0
+    assert terminal["terminal_reason"] == "terminal_absence_and_inventory_exact"
 
 
 def test_split_entry_cancel_only_expired_leg_keeps_later_legs(monkeypatch):

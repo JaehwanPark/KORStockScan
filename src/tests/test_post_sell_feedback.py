@@ -203,6 +203,31 @@ def test_profitable_hard_stop_keeps_exit_rule_but_labels_realized_profit(
     assert candidate["ai_data_quality"] == "partial"
 
 
+def test_real_post_sell_candidate_anchors_to_exact_final_fill(monkeypatch, tmp_path):
+    monkeypatch.setattr(feedback_mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(
+        feedback_mod, "TRADING_RULES",
+        SimpleNamespace(POST_SELL_FEEDBACK_ENABLED=True),
+    )
+    feedback_mod._RECORDED_KEYS.clear()
+    candidate = feedback_mod.record_post_sell_candidate(
+        recommendation_id=31,
+        stock={
+            "name": "test", "strategy": "SCALPING",
+            "broker_execution_time_source": "official_fid_908",
+            "broker_execution_observed_at": "2026-09-24T09:40:01+09:00",
+            "sell_execution_order_no": "S1",
+            "sell_execution_execution_no": "SE1",
+        },
+        code="123456", sell_time="2026-09-24 09:40:05",
+        buy_price=10000, sell_price=10100, profit_rate=0.8, buy_qty=1,
+    )
+    assert candidate["sell_time"] == "09:40:01"
+    assert candidate["exact_sell_fill_time"] == "2026-09-24T09:40:01+09:00"
+    assert candidate["sell_order_no"] == "S1"
+    assert candidate["sell_execution_no"] == "SE1"
+
+
 def test_real_post_sell_candidate_handles_none_ai_provenance(monkeypatch, tmp_path):
     monkeypatch.setattr(feedback_mod, "DATA_DIR", tmp_path)
     monkeypatch.setattr(

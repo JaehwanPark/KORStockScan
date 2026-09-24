@@ -21,7 +21,7 @@ from src.engine.scalping.trailing_threshold_policy import (
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 POST_FALLBACK_CUTOFF = datetime(2026, 4, 21, 9, 45)
 TARGET_EXIT_RULES = (
     "scalp_trailing_take_profit",
@@ -75,6 +75,36 @@ def _parse_dt(value: Any) -> datetime | None:
             return datetime.strptime(raw, fmt)
         except Exception:
             continue
+    return None
+
+
+def _parse_aware_dt(value: Any) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed.tzinfo is not None else None
+
+
+def _post_sell_binding_gap(trade: dict, candidate: dict) -> str | None:
+    terminal_fill_at = _parse_aware_dt(trade.get("exact_sell_fill_time"))
+    candidate_fill_at = _parse_aware_dt(candidate.get("exact_sell_fill_time"))
+    if terminal_fill_at is None or candidate_fill_at is None:
+        return "source_gap_exact_fill_binding_missing"
+    if terminal_fill_at != candidate_fill_at:
+        return "source_gap_exact_fill_binding_mismatch"
+    if (not trade.get("sell_order_no") or not trade.get("sell_execution_no")
+            or str(candidate.get("sell_order_no") or "")
+               != str(trade.get("sell_order_no"))
+            or str(candidate.get("sell_execution_no") or "")
+               != str(trade.get("sell_execution_no"))):
+        return "source_gap_post_sell_execution_identity"
+    if (candidate.get("market_axes_source_quality_status") != "route_contract_ready"
+            or str(candidate.get("actual_execution_venue") or "")
+               != str(trade.get("effective_venue") or "")
+            or str(candidate.get("broker_route_requested") or "")
+               != str(trade.get("exit_execution_broker_route") or "")):
+        return "source_gap_post_sell_venue_route"
     return None
 
 
@@ -349,6 +379,38 @@ def _is_valid_completed_trade(row: dict) -> bool:
     if str(row.get("strategy") or "").upper() not in {"SCALPING", "SCALP"}:
         return False
     return _safe_float(row.get("profit_rate"), None) is not None
+
+
+def _strict_completed_reasons(row: dict, *, clean_start: str) -> list[str]:
+    """Keep the DB completion census separate from broker-proven economics."""
+    raw_reasons = row.get("strict_completion_reasons")
+    reasons = list(raw_reasons) if isinstance(raw_reasons, list) else []
+    if raw_reasons is not None and not isinstance(raw_reasons, list):
+        reasons.append("source_gap_strict_completion_reasons_invalid")
+    if row.get("strict_completion_status") != "eligible":
+        if not reasons:
+            reasons.append("source_gap_strict_completion_receipt_missing")
+    if str(row.get("rec_date") or "")[:10] < clean_start:
+        reasons.append("outside_clean_entry_window")
+    if str(row.get("completion_observed_date") or "")[:10] < clean_start:
+        reasons.append("outside_clean_completion_window")
+    if _entry_mode(row) != "normal":
+        reasons.append("non_normal_or_unproven_entry_mode")
+    if row.get("terminal_population_scope") != "real_record_bound":
+        reasons.append("source_gap_real_custody_unproven")
+    if (str(row.get("rec_date") or "")[:10]
+            < str(row.get("completion_observed_date") or "")[:10]
+            and (row.get("prior_entry_snapshot_receipt") or {}).get("status")
+            != "sealed_entry_snapshot"):
+        reasons.append("source_gap_prior_entry_snapshot_unsealed")
+    if row.get("sell_quantity_conserved") is not True:
+        reasons.append("source_gap_sell_quantity_not_conserved")
+    if row.get("terminal_profit_rate_reconciled") is not True:
+        reasons.append("source_gap_profit_rate_unreconciled")
+    if (row.get("realized_pnl_krw_source") != "broker_fill_prices_fee_aware"
+            or _safe_float(row.get("realized_pnl_krw"), None) is None):
+        reasons.append("source_gap_exact_cost_missing")
+    return sorted(set(reasons))
 
 
 def _entry_mode(row: dict) -> str:
@@ -976,6 +1038,8 @@ def _build_position_outcomes(
                 != str(trade.get("strategy") or "").upper()
             ):
                 post_sell_status = "source_gap_custody_mismatch"
+            if not post_sell_status.startswith("source_gap"):
+                post_sell_status = _post_sell_binding_gap(trade, matching[0]) or post_sell_status
             if post_sell_status == "pass" and not isinstance(
                 matching[0].get("metrics_10m"), dict
             ):
@@ -1018,6 +1082,12 @@ def _build_position_outcomes(
                 "exact_sell_fill_time": exact_fill_time or None,
                 "exit_rule": exit_rule,
                 "exit_rule_provenance": "inferred" if inferred else "observed",
+                "exit_class": (
+                    "exit_rule_missing" if exit_rule in {"", "-", "unknown"} else
+                    "exit_rule_inferred" if inferred else
+                    "trailing_observed" if exit_rule == "scalp_trailing_take_profit" else
+                    "other_exit_observed"
+                ),
                 "holding_score_role_gate": role_gate,
                 "ai_intervention": ai_intervention,
                 "flow_intervention": flow_intervention,
@@ -1127,6 +1197,15 @@ def _build_position_outcomes(
                 "sell_time_precision": trade.get("sell_time_precision"),
                 "post_sell_ids": [row["post_sell_id"] for row in matching],
                 "post_sell_status": post_sell_status,
+                "post_sell_layer": (
+                    "pass" if post_sell_status == "pass" else
+                    "partial_window" if post_sell_status == "partial_window" else
+                    "unmatured" if post_sell_status in {
+                        "not_recorded_or_unmatured", "candidate_unmatured"
+                    } else
+                    "not_observable_no_exact_fill_time" if post_sell_status ==
+                    "not_observable_no_exact_fill_time" else "source_gap"
+                ),
                 "post_sell_outcome_diagnostic": (
                     matching[0].get("outcome") if len(matching) == 1 else None
                 ),
@@ -1165,6 +1244,16 @@ def _build_position_outcomes(
         "source_quality_gate": "full_census_exact_cost_and_source_provenance",
         "forbidden_uses": "threshold_apply|order_change|gross_ev_substitution",
         "completed_valid_trades": len(outcomes),
+        "exit_class_ids": {
+            label: [row["record_id"] for row in outcomes if row["exit_class"] == label]
+            for label in ("trailing_observed", "other_exit_observed",
+                          "exit_rule_inferred", "exit_rule_missing")
+        },
+        "post_sell_layer_ids": {
+            label: [row["record_id"] for row in outcomes if row["post_sell_layer"] == label]
+            for label in ("pass", "partial_window", "unmatured",
+                          "not_observable_no_exact_fill_time", "source_gap")
+        },
         "exact_cost_trades": len(exact),
         "missing_exact_cost_trades": len(outcomes) - len(exact),
         "exact_cost_subset_pnl_krw": (
@@ -1424,12 +1513,13 @@ def _summarize_exit_rule_quality(
 
 
 def _build_trailing_threshold_readiness(
-    outcomes: list[dict], open_positions: list[dict] | None = None
+    outcomes: list[dict], open_positions: list[dict] | None = None,
+    *, completed_valid_ids: list[str] | None = None,
 ) -> dict:
     """Expose source-qualified denominators; never infer a tuning proposal."""
 
     trailing = [
-        row for row in outcomes if row["exit_rule"] == "scalp_trailing_take_profit"
+        row for row in outcomes if row["exit_class"] == "trailing_observed"
     ]
     direct = [
         row for row in trailing
@@ -1465,7 +1555,13 @@ def _build_trailing_threshold_readiness(
         and (row.get("trailing_operational_inputs") or {}).get("ai_provider")
     ]
     funnel = {
-        "completed_valid_ids": [row["record_id"] for row in outcomes],
+        "completed_valid_ids": (
+            completed_valid_ids if completed_valid_ids is not None
+            else [row["record_id"] for row in outcomes]
+        ),
+        "strict_completed_position_ids": [row["record_id"] for row in outcomes],
+        "competing_exit_ids": [row["record_id"] for row in outcomes
+                               if row["exit_class"] == "other_exit_observed"],
         "trailing_exit_ids": [row["record_id"] for row in trailing],
         "real_completed_ids": [
             row["record_id"] for row in outcomes
@@ -2098,9 +2194,43 @@ def build_holding_exit_observation_report(
     valid_trades = [
         row for row in main_completed_rows if _is_valid_completed_trade(row)
     ]
+    strict_exclusions = {
+        _trade_id(row): _strict_completed_reasons(
+            row, clean_start=analysis_window["clean_tuning_baseline_date"][:10]
+        )
+        for row in valid_trades
+    }
+    strict_trades = [
+        row for row in valid_trades
+        if not strict_exclusions[_trade_id(row)]
+    ]
+    main_ids = [_trade_id(row) for row in main_completed_rows]
+    valid_ids = [_trade_id(row) for row in valid_trades]
+    invalid_ids = [
+        _trade_id(row) for row in main_completed_rows
+        if not _is_valid_completed_trade(row)
+    ]
+    strict_ids = [_trade_id(row) for row in strict_trades]
+    excluded_ids = [trade_id for trade_id, reasons in strict_exclusions.items() if reasons]
+    source_gap_ids = [
+        trade_id for trade_id, reasons in strict_exclusions.items()
+        if any(reason.startswith("source_gap_") for reason in reasons)
+    ]
+    census_id_contract_ok = bool(
+        len(main_ids) == len(set(main_ids))
+        and set(main_ids) == set(valid_ids).union(invalid_ids)
+        and not set(valid_ids).intersection(invalid_ids)
+        and set(valid_ids) == set(strict_ids).union(excluded_ids)
+        and not set(strict_ids).intersection(excluded_ids)
+        and set(source_gap_ids).issubset(excluded_ids)
+    )
+    if not census_id_contract_ok:
+        completed_gaps.append({
+            "date": safe_date, "reason": "completed_position_id_partition_mismatch"
+        })
     target_valid_trades = [
         row
-        for row in valid_trades
+        for row in strict_trades
         if str(
             row.get("completion_observed_date") or row.get("sell_time") or ""
         ).startswith(safe_date)
@@ -2112,7 +2242,7 @@ def build_holding_exit_observation_report(
         if row.get("evaluation_status") == "evaluated"
     ]
     position_outcomes, position_coverage = _build_position_outcomes(
-        valid_trades, post_sell_lineage_rows
+        strict_trades, post_sell_lineage_rows
     )
     open_positions, open_position_status = _collect_open_scalp_positions(
         trade_snapshots, safe_date
@@ -2122,7 +2252,7 @@ def build_holding_exit_observation_report(
     )
     opportunity_cost, missed_entry_paths = _build_opportunity_cost(dates)
 
-    same_symbol_reentry = _build_same_symbol_reentry(valid_trades)
+    same_symbol_reentry = _build_same_symbol_reentry(strict_trades)
     report = {
         "date": safe_date,
         # Kept for compatibility with existing readers. New readers should
@@ -2131,6 +2261,13 @@ def build_holding_exit_observation_report(
         "month_start": safe_month_start,
         "analysis_window": analysis_window,
         "completed_population_quality": {
+            "metric_role": "source_quality_gate",
+            "decision_authority": "completed_position_research_only",
+            "window_policy": "clean_entry_to_exact_final_sell_day",
+            "sample_floor": "all_db_completed_main_ids_accounted",
+            "primary_decision_metric": "strict_completed_position_ids",
+            "source_quality_gate": "sealed_census_and_broker_buy_sell_cost_reconciliation",
+            "forbidden_uses": "threshold_apply|order_change|gross_ev_substitution",
             "complete": not completed_gaps,
             "source_gap_dates": completed_gaps,
             "canonical_completed_rows": len(completed_rows),
@@ -2138,6 +2275,28 @@ def build_holding_exit_observation_report(
             "other_owner_excluded_rows": len(completed_rows) - len(main_completed_rows),
             "valid_profit_rows": len(valid_trades),
             "invalid_profit_rows": len(main_completed_rows) - len(valid_trades),
+            "id_partition_reconciled": census_id_contract_ok,
+            "db_completed_main_ids": main_ids,
+            "db_completed_valid_profit_ids": valid_ids,
+            "db_completed_invalid_profit_ids": invalid_ids,
+            "strict_completed_position_ids": strict_ids,
+            "excluded_ids_by_reason": {
+                reason: [trade_id for trade_id, reasons in strict_exclusions.items()
+                         if reasons and reasons[0] == reason]
+                for reason in sorted({reasons[0] for reasons in strict_exclusions.values()
+                                      if reasons})
+            },
+            "excluded_all_reasons": {
+                trade_id: reasons for trade_id, reasons in strict_exclusions.items()
+                if reasons
+            },
+            "source_gap_ids": source_gap_ids,
+            "strict_cohort_research_ready": bool(strict_trades and not completed_gaps),
+            "whole_census_economics_complete": bool(
+                strict_trades and len(strict_trades) == len(valid_trades)
+                and len(valid_trades) == len(main_completed_rows)
+                and not completed_gaps
+            ),
             "target_sell_date_valid_rows": len(target_valid_trades),
         },
         "position_outcomes": position_outcomes,
@@ -2157,15 +2316,16 @@ def build_holding_exit_observation_report(
             performance_snapshot=performance_snapshot,
             target_pipeline_summary=target_pipeline_summary,
         ),
-        "cohorts": _build_cohorts(valid_trades),
-        "exit_rule_quality": _summarize_exit_rule_quality(post_sell_rows, valid_trades),
+        "cohorts": _build_cohorts(strict_trades),
+        "exit_rule_quality": _summarize_exit_rule_quality(post_sell_rows, strict_trades),
         "trailing_threshold_readiness": _build_trailing_threshold_readiness(
-            position_outcomes, open_positions
+            position_outcomes, open_positions,
+            completed_valid_ids=[_trade_id(row) for row in valid_trades],
         ),
         "soft_stop_rebound": _build_soft_stop_rebound(
             post_sell_rows,
             same_symbol_reentry,
-            valid_trades,
+            strict_trades,
         ),
         "same_symbol_reentry": same_symbol_reentry,
         "opportunity_cost": opportunity_cost,
@@ -2185,24 +2345,27 @@ def build_holding_exit_observation_report(
             "schema_version": SCHEMA_VERSION,
             "generated_at": datetime.now().isoformat(),
             "basis": "main-only, normal_only, post_fallback_deprecation",
-            "profit_basis": "COMPLETED + valid profit_rate only",
+            "profit_basis": "strict broker BUY and SELL filled completed positions with fee aware PnL",
             "post_fallback_cutoff": POST_FALLBACK_CUTOFF.strftime("%Y-%m-%d %H:%M:%S"),
         },
     }
     economic_input_complete = bool(
         not completed_gaps
-        and valid_trades
-        and position_coverage["exact_cost_trades"] == len(valid_trades)
+        and strict_trades
+        and len(strict_trades) == len(valid_trades)
+        and len(valid_trades) == len(main_completed_rows)
+        and position_coverage["exact_cost_trades"] == len(strict_trades)
     )
     report["economic_input_complete"] = economic_input_complete
     tuning_input_complete = bool(
         economic_input_complete
-        and position_coverage["observed_exit_signal_trades"] == len(valid_trades)
-        and position_coverage["effective_threshold_receipt_trades"] == len(valid_trades)
-        and position_coverage["full_post_sell_observation_trades"] == len(valid_trades)
+        and position_coverage["observed_exit_signal_trades"] == len(strict_trades)
+        and position_coverage["effective_threshold_receipt_trades"] == len(strict_trades)
+        and position_coverage["full_post_sell_observation_trades"] == len(strict_trades)
     )
     report["tuning_input_complete"] = tuning_input_complete
-    if completed_gaps:
+    if (completed_gaps or len(strict_trades) != len(valid_trades)
+            or len(valid_trades) != len(main_completed_rows)):
         position_coverage["whole_cohort_pnl_krw"] = None
         for rule in position_coverage["by_exit_rule"].values():
             rule["whole_rule_pnl_krw"] = None

@@ -820,6 +820,12 @@ def record_post_sell_candidate(
 
     now = datetime.now()
     sell_dt = _parse_datetime(sell_time, default=now) or now
+    exact_fill_at = None
+    if stock.get("broker_execution_time_source") == "official_fid_908":
+        observed = _parse_datetime(stock.get("broker_execution_observed_at"))
+        if observed is not None and observed.tzinfo is not None:
+            exact_fill_at = observed
+            sell_dt = observed
     target_date = sell_dt.strftime("%Y-%m-%d")
     sell_bucket = _minute_bucket(sell_dt, bucket_min=1)
     rec_id_text = str(_safe_int(recommendation_id, 0))
@@ -866,6 +872,9 @@ def record_post_sell_candidate(
             "signal_date": target_date,
             "recommendation_id": _safe_int(recommendation_id, 0),
             "sell_time": sell_dt.strftime("%H:%M:%S"),
+            "exact_sell_fill_time": exact_fill_at.isoformat() if exact_fill_at else None,
+            "sell_order_no": str(stock.get("sell_execution_order_no") or ""),
+            "sell_execution_no": str(stock.get("sell_execution_execution_no") or ""),
             "sell_bucket": sell_bucket,
             "stock_code": norm_code,
             "stock_name": str(stock.get("name", "") or ""),
