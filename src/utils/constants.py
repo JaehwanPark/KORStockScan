@@ -1334,10 +1334,6 @@ class TradingConfig:
     GATEKEEPER_SNAPSHOT_DEDUP_TTL_SEC: float = (
         10.0  # 동일 Gatekeeper 스냅샷 중복 기록 억제
     )
-    AI_HOLDING_FAST_REUSE_CRITICAL_SEC: float = (
-        5.0  # 위기구간 동일 시장상태 재평가 생략
-    )
-    AI_HOLDING_FAST_REUSE_NORMAL_SEC: float = 12.0  # 일반구간 동일 시장상태 재평가 생략
     AI_GATEKEEPER_FAST_REUSE_SEC: float = 30.0  # 동일 감시 스냅샷 재평가 생략
     AI_HOLDING_FAST_REUSE_MAX_WS_AGE_SEC: float = (
         1.5  # 보유 AI fast reuse 허용 최대 WS 나이

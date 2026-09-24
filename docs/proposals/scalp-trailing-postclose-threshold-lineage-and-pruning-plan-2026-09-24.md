@@ -44,7 +44,7 @@
 | 대상 | 판단 | 계획된 정리와 확인 |
 | --- | --- | --- |
 | `SCALP_TRAILING_LIMIT=0.5` | live 공통 판정 독자 0; 강/약 값으로 대체 | **삭제 대상.** live `TRADING_RULES`·bootstrap/문서·fixture 참조를 제거. `src/model/models_old/scalping_simulation.py`의 보존된 과거 모델은 archive 재현용으로 분리 표기하고 live 소비자로 계상하지 않음. |
-| `AI_HOLDING_FAST_REUSE_CRITICAL_SEC=5`, `NORMAL_SEC=12` | 현재 기본 동적 최대 45/180초에서는 유효 하한 47/182초가 우세하다. 그러나 `AI_HOLDING_*_COOLDOWN`이 낮아지면 이 두 값이 재사용 하한을 다시 결정한다. | **유지.** 초기 리뷰에서 삭제 동등성이 성립하지 않음을 확인하고 삭제안을 철회했다. 장후 운영축에 값과 원천을 표시한다. |
+| `AI_HOLDING_FAST_REUSE_CRITICAL_SEC=5`, `NORMAL_SEC=12` | 기본 45/180초에서는 동적 하한 47/182초가 우세하다. 최대 재평가 간격을 과거의 독립 하한보다 낮추면 재사용 시간은 그 간격을 따르게 된다. | **삭제.** 2026-09-25 사용자 지시로 독립 설정·런타임 조회·장후 운영축을 제거하고 `dynamic_max_cd+2`만 남긴다. 이후 cooldown 변경은 이 결합 동작을 함께 검토한다. |
 | fast 넓은 스프레드 `min(warn_gap_bps, warn_gap_bps)` | 동일 값을 두 번 비교하는 계산 중복 | **중복 계산 삭제 대상.** 80bp 소비는 유지하고 결과 동등성 확인. |
 | `QUOTE_CONSISTENCY_OK_GAP_BPS=30` | 현행 익절은 `ok`와 `warning`을 모두 허용하고 직접 재확인 경계는 80bp다. 30bp는 공유 quote 분류/다른 전략에 독자가 있음 | **익절 후보 목록에서는 제외**, 공유 코드·env는 유지. 전역 삭제는 모든 다른 독자의 행동·보고 계약을 대사한 별도 변경으로만 수행. |
 | `BLOCK_ENTRY_ON_DIVERGENCE`, fast stop enable, 과거 AI decay/stagnation 임계치 | 각각 entry/stop 또는 observation-only 소유. 현재 익절 SELL의 조정축 아님 | 익절 tuning/policy에서 제외. 기존 소유자의 설정·관측을 이 계획으로 삭제하지 않음. |
@@ -57,6 +57,8 @@
 `/home/ubuntu/KORStockScan-worktrees/scalp-trailing-lineage-20260924`에서 익절 네 값의 bootstrap receipt·값 hash·런타임 관측, 운영값/출처의 bounded grid 전이, 완료 및 열린 포지션의 별도 분모, 장후 보고서의 정책 manifest 대사, sentinel·summary의 보고서 hash 소비를 추가했다. `SCALP_TRAILING_LIMIT`와 중복 80bp 계산은 제거했다. 변경은 보고 전용이고 후보값과 live 적용 권한을 만들지 않는다.
 
 첫 리뷰에서 보유 AI 재사용 5/12초 값의 삭제가 다른 cooldown 설정과 결합할 때 동등하지 않음을 확인해 유지했다. 전이 이벤트의 dict는 로거가 문자열로 바꾸므로 공백 없는 JSON으로 기록하고 장후 trade review에서 명시적으로 복원한다. 열린 포지션은 현재 KST 날짜의 DB census에서만 전체 분모로 표시한다. 과거 날짜에 현재 DB 상태를 소급 적용할 수 없어 해당 재생성은 `source_gap_historical_open_census_not_reconstructible`로 남긴다.
+
+2026-09-25 후속 결정은 위 독립 재사용값을 삭제하고 cooldown 기반 하한만 사용하는 것이다. `QUOTE_CONSISTENCY_OK_GAP_BPS=30`은 공유 시세 `ok`/`warning` 분류와 다른 소비자의 판단에 영향을 주므로 익절 조정 후보에서만 제외하고 기존 공유 기준을 유지한다.
 
 재리뷰에서 관측 이벤트의 텍스트 출력이 기본적으로 억제됨을 확인했다. `trade_review`는 정식 `pipeline_events` JSONL과 late sidecar의 보유·신호·주문·체결 이벤트를 읽고 텍스트 중복을 제거한다. 원본 분할이 없거나 관측 계산이 실패하면 포지션별 `source_gap`으로 남긴다. 공유 시세·AI 운영값은 dated bootstrap env와 일치하는지 보고서에서 대사하되 코드 기본값과 실제 PID의 일치는 별도 증명으로 둔다.
 

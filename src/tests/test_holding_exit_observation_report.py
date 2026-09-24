@@ -478,6 +478,9 @@ def test_trailing_direct_input_receipt_preserves_trigger_and_source_gap():
     assert readiness["funnel_ids"]["terminal_custody_unproven_ids"] == ["1"]
     assert readiness["funnel_ids"]["paired_replay_eligible_ids"] == []
     assert readiness["axes"]["SCALP_TRAILING_START_PCT"]["qualified_input_count"] == 0
+    assert "AI_HOLDING_FAST_REUSE_CRITICAL_SEC" not in readiness["operational_axes"]
+    assert "AI_HOLDING_FAST_REUSE_NORMAL_SEC" not in readiness["operational_axes"]
+    assert "KORSTOCKSCAN_QUOTE_CONSISTENCY_OK_GAP_BPS" not in readiness["operational_axes"]
     assert all(
         axis["candidate_value"] is None
         and axis["eligible_for_live_review"] is False

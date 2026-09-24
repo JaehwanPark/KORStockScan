@@ -28958,12 +28958,6 @@ def _observe_scalp_trailing_input_transition(
         "AI_HOLDING_FAST_REUSE_MAX_WS_AGE_SEC": _rule_float(
             "AI_HOLDING_FAST_REUSE_MAX_WS_AGE_SEC", 1.5
         ),
-        "AI_HOLDING_FAST_REUSE_CRITICAL_SEC": _rule_float(
-            "AI_HOLDING_FAST_REUSE_CRITICAL_SEC", 5.0
-        ),
-        "AI_HOLDING_FAST_REUSE_NORMAL_SEC": _rule_float(
-            "AI_HOLDING_FAST_REUSE_NORMAL_SEC", 12.0
-        ),
         "AI_HOLDING_NEAR_SAFE_PROFIT_BAND_PCT": 0.20,
         "AI_HOLDING_CRITICAL_PRICE_TRIGGER_PCT": 0.20,
         "AI_HOLDING_NORMAL_PRICE_TRIGGER_PCT": 0.40,
@@ -70089,14 +70083,9 @@ def _floor_bucket_float(value, step):
         return 0.0
 
 
-def _resolve_holding_ai_fast_reuse_sec(is_critical_zone, dynamic_max_cd):
-    configured_sec = (
-        float(_rule("AI_HOLDING_FAST_REUSE_CRITICAL_SEC", 8.0) or 8.0)
-        if is_critical_zone
-        else float(_rule("AI_HOLDING_FAST_REUSE_NORMAL_SEC", 20.0) or 20.0)
-    )
+def _resolve_holding_ai_fast_reuse_sec(dynamic_max_cd):
     review_window_floor = max(0.0, float(dynamic_max_cd or 0.0)) + 2.0
-    return max(configured_sec, review_window_floor)
+    return review_window_floor
 
 
 def _resolve_gatekeeper_fast_reuse_sec():
@@ -82491,9 +82480,7 @@ def handle_holding_state(
             try:
                 market_snapshot = _build_holding_ai_fast_snapshot(ws_data)
                 market_signature = tuple(market_snapshot.values())
-                reuse_sec = _resolve_holding_ai_fast_reuse_sec(
-                    is_critical_zone, dynamic_max_cd
-                )
+                reuse_sec = _resolve_holding_ai_fast_reuse_sec(dynamic_max_cd)
                 max_ws_age_sec = _rule_float(
                     "AI_HOLDING_FAST_REUSE_MAX_WS_AGE_SEC", 1.5
                 )

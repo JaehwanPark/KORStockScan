@@ -3502,8 +3502,9 @@ def test_holding_ai_fast_signature_changes_on_meaningful_orderbook_shift():
 
 
 def test_holding_ai_fast_reuse_sec_tracks_review_window():
-    assert _resolve_holding_ai_fast_reuse_sec(True, 10) == 12.0
-    assert _resolve_holding_ai_fast_reuse_sec(False, 50) == 52.0
+    assert _resolve_holding_ai_fast_reuse_sec(0) == 2.0
+    assert _resolve_holding_ai_fast_reuse_sec(10) == 12.0
+    assert _resolve_holding_ai_fast_reuse_sec(50) == 52.0
 
 
 def test_gatekeeper_fast_reuse_sec_has_minimum_window():
