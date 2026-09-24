@@ -58,14 +58,32 @@ def test_winrate_stage_requires_explicit_preopen_activation(tmp_path, monkeypatc
         policy_version='winrate_initial_v1',
         disposition='initial_adopted', source_contract_sha256='a' * 64,
         evaluated_attempt_manifest_sha256='b' * 64,
-        source_receipt=dict(target_date='2026-09-23', tuning_input_allowed=True),
+        source_receipt=dict(target_date='2026-09-23', tuning_input_allowed=True,
+            machine_threshold_tuning_input_allowed=True),
         parent_bundle_sha256=previous['bundle_sha256'],
         parent_machine_policy_sha256=policy.digest(previous['machine_policy']),
         candidate_machine_policy_sha256=policy.digest(candidate), candidate_policy=candidate,
+        policy_by_scope={'KRX|KRX_REGULAR': candidate},
+        policy_sha256=policy.digest({'KRX|KRX_REGULAR': candidate}),
         candidate_threshold_bp=68.75, input_attempt_count=1485,
         accepted_attempt_count=351, source_contract_excluded_count=60,
+        source_contract_exclusion_reasons={'conflicting_exact_attempt': 60},
         excluded_attempt_counts={'quality_path_cost_missing_or_mismatched': 1074},
         situation_attempt_counts={'VWAP_NOT_EXTENDED': 291, 'VWAP_EXTENDED': 60},
+        market_census={
+            'KRX|KRX_REGULAR': dict(market='REGULAR', input_attempt_count=1485,
+                accepted_attempt_count=351, source_contract_excluded_count=60,
+                source_contract_exclusion_reasons={'conflicting_exact_attempt': 60},
+                excluded_attempt_counts={'quality_path_cost_missing_or_mismatched': 1074},
+                gross_label_difference_count=9),
+            'PREMARKET_KRX_LIKE|PREMARKET_KRX_LIKE': dict(market='PREMARKET',
+                input_attempt_count=116, accepted_attempt_count=19, source_contract_excluded_count=6,
+                source_contract_exclusion_reasons={'conflicting_exact_attempt': 6},
+                excluded_attempt_counts={'quality_path_cost_missing_or_mismatched': 91}),
+            'KRX_NXT_INTEGRATED|KRX_NXT_AFTERMARKET': dict(market='AFTERMARKET',
+                input_attempt_count=484, accepted_attempt_count=84, source_contract_excluded_count=8,
+                source_contract_exclusion_reasons={'conflicting_exact_attempt': 8},
+                excluded_attempt_counts={'quality_path_cost_missing_or_mismatched': 392})},
         gross_label_difference_count=9,
         historical_full_evaluation_reference=dict(
             artifact_content_sha256='10b29ced3cf6e61bee35e84de5e456db3dd78b562378cd0aef9db605fdc85564',
@@ -88,9 +106,19 @@ def test_winrate_stage_requires_explicit_preopen_activation(tmp_path, monkeypatc
     changed = copy.deepcopy(report)
     changed['candidate_policy']['thresholds']['min_score'] = -999
     changed['candidate_machine_policy_sha256'] = policy.digest(changed['candidate_policy'])
+    changed['policy_by_scope'] = {'KRX|KRX_REGULAR': changed['candidate_policy']}
+    changed['policy_sha256'] = policy.digest(changed['policy_by_scope'])
     changed = calibration._with_artifact_content_sha256({k: v for k, v in changed.items()
         if k != 'artifact_content_sha256'})
     policy._atomic_write_json(source_path, changed)
+    with pytest.raises(ValueError, match='winrate_candidate_contract_invalid'):
+        policy.stage_winrate_policy(source_path, data_root=tmp_path,
+            now=datetime(2026, 9, 24, 14, tzinfo=policy.KST))
+    misbound = copy.deepcopy(report)
+    misbound['policy_sha256'] = 'f' * 64
+    misbound = calibration._with_artifact_content_sha256({k: v for k, v in misbound.items()
+        if k != 'artifact_content_sha256'})
+    policy._atomic_write_json(source_path, misbound)
     with pytest.raises(ValueError, match='winrate_candidate_contract_invalid'):
         policy.stage_winrate_policy(source_path, data_root=tmp_path,
             now=datetime(2026, 9, 24, 14, tzinfo=policy.KST))
@@ -106,6 +134,94 @@ def test_winrate_stage_requires_explicit_preopen_activation(tmp_path, monkeypatc
     repeated = policy.activate_dated_winrate_policy(data_root=tmp_path,
         target_date='2026-09-28', now=FrozenDateTime.now(policy.KST))
     assert repeated == {'status': 'already_active', 'bundle_sha256': activated['bundle_sha256']}
+    auxiliary_child = copy.deepcopy(policy.load_effective(data_root=tmp_path, target_date='2026-09-28'))
+    auxiliary_child['bundle_sha256'] = 'c' * 64
+    auxiliary_child['strategy_activation'] = dict(schema='main_auxiliary_activation_v1',
+        parent_bundle_sha256=activated['bundle_sha256'])
+    with monkeypatch.context() as patch:
+        patch.setattr(policy, '_load_current', lambda *_args: auxiliary_child)
+        after_auxiliary = policy.activate_dated_winrate_policy(data_root=tmp_path,
+            target_date='2026-09-28', now=FrozenDateTime.now(policy.KST))
+    assert after_auxiliary == {'status': 'already_active', 'bundle_sha256': 'c' * 64}
+    relaxed = copy.deepcopy(candidate)
+    relaxed['entry_situation_veto']['threshold_bp'] = 80.0
+    successor = copy.deepcopy(report)
+    successor.update(target_date='2026-10-01', publication_date='2026-10-01',
+        policy_version='winrate_successor_v1', disposition='successor_selected',
+        parent_bundle_sha256=activated['bundle_sha256'],
+        parent_machine_policy_sha256=policy.digest(candidate),
+        candidate_policy=relaxed, candidate_machine_policy_sha256=policy.digest(relaxed),
+        policy_by_scope={'KRX|KRX_REGULAR': relaxed},
+        policy_sha256=policy.digest({'KRX|KRX_REGULAR': relaxed}),
+        candidate_threshold_bp=80.0)
+    successor['source_receipt']['target_date'] = '2026-10-01'
+    successor = calibration._with_artifact_content_sha256({k: v for k, v in successor.items()
+        if k != 'artifact_content_sha256'})
+    successor_path = tmp_path / 'successor_report.json'
+    policy._atomic_write_json(successor_path, successor)
+    monkeypatch.setattr(policy, '_winrate_successor_hurdles_valid', lambda _source: True)
+    with pytest.raises(ValueError, match='winrate_candidate_contract_invalid'):
+        policy.stage_winrate_policy(successor_path, data_root=tmp_path,
+            now=datetime(2026, 10, 1, 20, tzinfo=policy.KST))
+
+
+def test_winrate_successor_publisher_rechecks_both_holdout_dates_and_winrate_hurdles():
+    report = {'target_date': '2026-10-01',
+        'train_dates': ['2026-09-24', '2026-09-28', '2026-09-29'],
+        'holdout_dates': ['2026-09-30', '2026-10-01'], 'consumed_holdout_dates': [],
+        'baseline': {
+            'train': {'source_dates': ['2026-09-24', '2026-09-28', '2026-09-29'],
+                'selected_attempt_count': 40, 'selected_opportunity_count': 40,
+                'winning_attempt_count': 24, 'win_rate_pct': 60.0,
+                'support_adjusted_win_rate_pct': 50.0},
+            'holdout': {'source_dates': ['2026-09-30', '2026-10-01'],
+                'selected_attempt_count': 20, 'selected_opportunity_count': 20,
+                'winning_attempt_count': 12, 'win_rate_pct': 60.0,
+                'support_adjusted_win_rate_pct': 45.0}},
+        'candidate': {
+            'train': {'source_dates': ['2026-09-24', '2026-09-28', '2026-09-29'],
+                'selected_attempt_count': 32, 'selected_opportunity_count': 32,
+                'winning_attempt_count': 23, 'win_rate_pct': 71.875,
+                'support_adjusted_win_rate_pct': 58.0},
+            'holdout': {'source_dates': ['2026-09-30', '2026-10-01'],
+                'selected_attempt_count': 16, 'selected_opportunity_count': 16,
+                'winning_attempt_count': 11, 'win_rate_pct': 68.75,
+                'support_adjusted_win_rate_pct': 52.0}}}
+    assert policy._winrate_successor_hurdles_valid(report)
+    malformed = copy.deepcopy(report)
+    malformed['candidate'] = ['wrong_type']
+    assert not policy._winrate_successor_hurdles_valid(malformed)
+    malformed = copy.deepcopy(report)
+    malformed['candidate']['holdout']['selected_attempt_count'] = 1
+    assert not policy._winrate_successor_hurdles_valid(malformed)
+    one_day = copy.deepcopy(report)
+    one_day['candidate']['holdout']['source_dates'] = ['2026-09-30']
+    assert not policy._winrate_successor_hurdles_valid(one_day)
+    reused = copy.deepcopy(report)
+    reused['consumed_holdout_dates'] = ['2026-09-30']
+    assert not policy._winrate_successor_hurdles_valid(reused)
+    weak = copy.deepcopy(report)
+    weak['candidate']['holdout']['support_adjusted_win_rate_pct'] = 49.0
+    assert not policy._winrate_successor_hurdles_valid(weak)
+
+
+def test_winrate_market_census_requires_all_three_markets_and_top_level_binding():
+    row = dict(market='REGULAR', input_attempt_count=4, accepted_attempt_count=2,
+        source_contract_excluded_count=1, source_contract_exclusion_reasons={'conflict': 1},
+        excluded_attempt_counts={'path_missing': 1}, gross_label_difference_count=0)
+    report = dict(input_attempt_count=4, accepted_attempt_count=2,
+        source_contract_excluded_count=1, source_contract_exclusion_reasons={'conflict': 1},
+        excluded_attempt_counts={'path_missing': 1}, gross_label_difference_count=0,
+        market_census={'KRX|KRX_REGULAR': row,
+            'PREMARKET_KRX_LIKE|PREMARKET_KRX_LIKE': dict(row, market='PREMARKET'),
+            'KRX_NXT_INTEGRATED|KRX_NXT_AFTERMARKET': dict(row, market='AFTERMARKET')})
+    assert policy.winrate_market_census_valid(report)
+    missing = copy.deepcopy(report)
+    missing['market_census'].pop('PREMARKET_KRX_LIKE|PREMARKET_KRX_LIKE')
+    assert not policy.winrate_market_census_valid(missing)
+    changed = copy.deepcopy(report)
+    changed['market_census']['KRX|KRX_REGULAR']['accepted_attempt_count'] = 3
+    assert not policy.winrate_market_census_valid(changed)
 
 
 def test_initial_policy_does_not_require_promotion_candidate(tmp_path):

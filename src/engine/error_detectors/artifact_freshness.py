@@ -132,24 +132,25 @@ def _machine_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
                     or winrate.get('selection_basis') != 'win_rate_only'):
                     findings.append('winrate_report_hash_or_scope_invalid')
                 accepted = winrate.get('accepted_attempt_count')
+                input_count = winrate.get('input_attempt_count')
                 source_excluded = winrate.get('source_contract_excluded_count')
                 excluded = winrate.get('excluded_attempt_counts') or {}
-                if (type(accepted) is not int or accepted < 0
+                if (type(input_count) is not int or input_count < 0
+                    or type(accepted) is not int or accepted < 0
                     or type(source_excluded) is not int or source_excluded < 0
                     or any(type(v) is not int or v < 0 for v in excluded.values())
-                    or accepted + source_excluded + sum(excluded.values()) != winrate.get('input_attempt_count')
+                    or accepted + source_excluded + sum(excluded.values()) != input_count
                     or sum((winrate.get('situation_attempt_counts') or {}).values()) != accepted):
                     findings.append('winrate_population_denominator_invalid')
-                markets = winrate.get('market_census') or {}
-                if not markets or any(
-                    not isinstance(item, dict)
-                    or any(type(item.get(name)) is not int or item[name] < 0 for name in
-                        ('input_attempt_count', 'accepted_attempt_count', 'source_contract_excluded_count'))
-                    or item['accepted_attempt_count'] + item['source_contract_excluded_count']
-                        + sum((item.get('excluded_attempt_counts') or {}).values()) != item['input_attempt_count']
-                    for item in markets.values()):
+                if not runtime_policy.winrate_market_census_valid(winrate):
                     findings.append('winrate_market_denominator_invalid')
+                elif any(item['input_attempt_count'] == 0
+                    for item in winrate['market_census'].values()):
+                    findings.append('winrate_market_source_empty')
                 disposition = winrate.get('disposition')
+                if (disposition == 'successor_selected'
+                    and not runtime_policy._winrate_successor_hurdles_valid(winrate)):
+                    findings.append('winrate_successor_hurdle_invalid')
                 if disposition in {'initial_adopted', 'successor_selected'}:
                     for part in ('train', 'holdout'):
                         metrics = (winrate.get('candidate') or {}).get(part) or {}
@@ -171,6 +172,8 @@ def _machine_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
                     or selection.get('machine_policy_sha256') != runtime_policy.digest(bundle['machine_policy'])
                     or (bundle.get('scope_policies') or {}).get('KRX|KRX_REGULAR', {}).get('machine_disposition') != disposition):
                     findings.append('winrate_candidate_bundle_or_scope_mismatch')
+            else:
+                findings.append('winrate_report_schema_invalid')
         except (OSError, ValueError, TypeError, KeyError, AttributeError):
             findings.append('winrate_semantic_validation_failed')
     return {"status": "warning" if findings else "pass", "findings": sorted(set(findings)),

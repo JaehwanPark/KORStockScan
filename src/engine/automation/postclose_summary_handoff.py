@@ -920,19 +920,12 @@ def _stage_output_issues(report_dir, day, stage):
             from src.engine.scalping import mechanistic_entry_runtime_policy as runtime_policy
             staged = terminal.get('staged') or {}
             counts = report.get('excluded_attempt_counts') or {}
-            markets = report.get('market_census') or {}
-            market_counts_valid = bool(markets) and all(
-                isinstance(item, dict)
-                and item.get('market') in {'PREMARKET', 'REGULAR', 'AFTERMARKET'}
-                and all(type(item.get(name)) is int and item[name] >= 0 for name in
-                    ('input_attempt_count', 'accepted_attempt_count', 'source_contract_excluded_count'))
-                and item['accepted_attempt_count'] + item['source_contract_excluded_count']
-                    + sum((item.get('excluded_attempt_counts') or {}).values()) == item['input_attempt_count']
-                for item in markets.values())
+            market_counts_valid = runtime_policy.winrate_market_census_valid(report)
             if (report.get('schema') != 'main_entry_winrate_policy_report_v1'
                 or report.get('disposition') not in {'initial_adopted', 'successor_selected', 'incumbent_carried'}
                 or terminal.get('disposition') != report.get('disposition')
                 or staged.get('status') not in {'staged', 'already_staged'}
+                or type(report.get('input_attempt_count')) is not int
                 or type(report.get('accepted_attempt_count')) is not int
                 or type(report.get('source_contract_excluded_count')) is not int
                 or any(type(value) is not int or value < 0 for value in counts.values())

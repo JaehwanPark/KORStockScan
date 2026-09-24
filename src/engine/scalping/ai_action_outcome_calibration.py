@@ -8530,8 +8530,11 @@ def build_winrate_policy_report(rows, *, source_receipt, target_date, data_root=
         train_dates = [day for day in dates if day not in holdout_dates]
         train_values = sorted({row['value_bp'] for row in prepared if row['source_date'] in train_dates
                                and row['base_action'] == 'ENTER_NOW' and row['value_bp'] is not None})
-        thresholds = sorted({train_values[min(len(train_values) - 1, int((len(train_values) - 1) * q / 10))]
-            for q in range(1, 10)}) if train_values else []
+        thresholds = (train_values if len(train_values) <= 9 else sorted({
+            train_values[min(len(train_values) - 1, int((len(train_values) - 1) * q / 10))]
+            for q in range(1, 10)}))
+        thresholds = [value for value in thresholds
+            if value <= parent['entry_situation_veto']['threshold_bp']]
     def selected(source, threshold):
         return [row for row in source if
             (row['parent_action'] == 'ENTER_NOW' if threshold is None else
@@ -8561,7 +8564,11 @@ def build_winrate_policy_report(rows, *, source_receipt, target_date, data_root=
     chosen = frozen[0] if frozen else None
     threshold = chosen[3] if chosen else None
     candidate_train = chosen[4] if chosen else _winrate_opportunity_metrics([])
-    candidate_holdout = _winrate_opportunity_metrics(selected(holdout, threshold)) if chosen else _winrate_opportunity_metrics([])
+    selected_holdout = selected(holdout, threshold) if chosen else []
+    candidate_holdout = _winrate_opportunity_metrics(selected_holdout)
+    holdout_opportunity_manifest_sha256 = (strategy.digest(sorted(
+        [row['source_date'], row['opportunity_id'], row['decision_trace_id'], row['win']]
+        for row in selected_holdout)) if chosen else None)
     candidate_policy = deepcopy(parent)
     if threshold is not None:
         candidate_policy['entry_situation_veto'] = _winrate_veto_payload(threshold)
@@ -8588,6 +8595,8 @@ def build_winrate_policy_report(rows, *, source_receipt, target_date, data_root=
     else:
         if len(train_dates) < 3 or len(holdout_dates) < 2 or not holdout_dates or holdout_dates[0] <= '2026-09-23':
             errors.append('successor_independent_dates_insufficient')
+        if candidate_holdout['source_dates'] != holdout_dates:
+            errors.append('successor_holdout_date_coverage_insufficient')
         if not chosen:
             errors.append('successor_no_train_qualified_candidate')
         if candidate_train['selected_opportunity_count'] < 30 or candidate_holdout['selected_opportunity_count'] < 10:
@@ -8659,6 +8668,16 @@ def build_winrate_policy_report(rows, *, source_receipt, target_date, data_root=
             source_contract_exclusion_reasons=source_contract.get('row_exclusion_reason_counts') or {},
             excluded_attempt_counts=dict(rejection), winning_attempt_count=wins,
             gross_label_difference_count=gross_differences)
+    for scope, market in (
+        ('KRX|KRX_REGULAR', 'REGULAR'),
+        ('PREMARKET_KRX_LIKE|PREMARKET_KRX_LIKE', 'PREMARKET'),
+        ('KRX_NXT_INTEGRATED|KRX_NXT_AFTERMARKET', 'AFTERMARKET'),
+    ):
+        market_census.setdefault(scope, dict(market=market, input_attempt_count=0,
+            accepted_attempt_count=0, source_contract_excluded_count=0,
+            source_contract_exclusion_reasons={}, excluded_attempt_counts={},
+            winning_attempt_count=0, gross_label_difference_count=0,
+            source_state='no_rows'))
     historical_full_evaluation_reference = None
     if initial:
         frozen_report = _load_json(data_root / 'report' / 'ai_decision_action_outcome_calibration'
@@ -8695,6 +8714,7 @@ def build_winrate_policy_report(rows, *, source_receipt, target_date, data_root=
         policy_by_scope={'KRX|KRX_REGULAR': candidate_policy} if not errors else {},
         policy_sha256=strategy.digest({'KRX|KRX_REGULAR': candidate_policy} if not errors else {}),
         candidate_threshold_bp=threshold, candidate_search_count=len(thresholds),
+        candidate_holdout_opportunity_manifest_sha256=holdout_opportunity_manifest_sha256,
         train_dates=train_dates, holdout_dates=holdout_dates,
         consumed_holdout_dates=sorted(consumed) if not initial else [],
         input_attempt_count=len(scope_rows), accepted_attempt_count=len(prepared),

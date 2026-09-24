@@ -1404,6 +1404,111 @@ def publish(
         return load(data_root=data_root, target_date=target)
 
 
+def winrate_market_census_valid(source: dict) -> bool:
+    markets = source.get('market_census')
+    required = {
+        'KRX|KRX_REGULAR': 'REGULAR',
+        'PREMARKET_KRX_LIKE|PREMARKET_KRX_LIKE': 'PREMARKET',
+        'KRX_NXT_INTEGRATED|KRX_NXT_AFTERMARKET': 'AFTERMARKET',
+    }
+    if not isinstance(markets, dict) or not set(required) <= set(markets):
+        return False
+    seen = set()
+    for scope, row in markets.items():
+        if not isinstance(scope, str) or not isinstance(row, dict):
+            return False
+        market = row.get('market')
+        if market not in {'PREMARKET', 'REGULAR', 'AFTERMARKET'}:
+            return False
+        if scope in required and market != required[scope]:
+            return False
+        seen.add(market)
+        excluded = row.get('excluded_attempt_counts')
+        source_reasons = row.get('source_contract_exclusion_reasons')
+        if (not isinstance(excluded, dict)
+            or any(type(value) is not int or value < 0 for value in excluded.values())
+            or not isinstance(source_reasons, dict)
+            or any(type(value) is not int or value < 0 for value in source_reasons.values())
+            or any(type(row.get(name)) is not int or row[name] < 0 for name in
+                ('input_attempt_count', 'accepted_attempt_count', 'source_contract_excluded_count'))
+            or sum(source_reasons.values()) != row['source_contract_excluded_count']
+            or row['accepted_attempt_count'] + row['source_contract_excluded_count']
+                + sum(excluded.values()) != row['input_attempt_count']
+            or (row.get('source_state') == 'no_rows' and row['input_attempt_count'] != 0)):
+            return False
+    regular = markets['KRX|KRX_REGULAR']
+    return (seen == {'PREMARKET', 'REGULAR', 'AFTERMARKET'}
+        and regular['market'] == 'REGULAR'
+        and all(type(source.get(name)) is int and source[name] >= 0 for name in
+            ('input_attempt_count', 'accepted_attempt_count', 'source_contract_excluded_count'))
+        and all(regular.get(name) == source.get(name) for name in
+            ('input_attempt_count', 'accepted_attempt_count', 'source_contract_excluded_count'))
+        and regular.get('excluded_attempt_counts') == source.get('excluded_attempt_counts')
+        and regular.get('source_contract_exclusion_reasons') == source.get('source_contract_exclusion_reasons')
+        and regular.get('gross_label_difference_count') == source.get('gross_label_difference_count'))
+
+
+def _winrate_successor_hurdles_valid(source: dict) -> bool:
+    import math
+
+    train_dates = source.get('train_dates')
+    holdout_dates = source.get('holdout_dates')
+    consumed = source.get('consumed_holdout_dates')
+    if (not isinstance(train_dates, list) or len(train_dates) < 3
+        or not isinstance(holdout_dates, list) or len(holdout_dates) != 2
+        or not isinstance(consumed, list)
+        or any(not isinstance(day, str) for day in [*train_dates, *holdout_dates, *consumed])
+        or train_dates != sorted(set(train_dates))
+        or holdout_dates != sorted(set(holdout_dates))
+        or max(train_dates) >= min(holdout_dates)
+        or max(holdout_dates) > str(source.get('target_date') or '')
+        or min(holdout_dates) <= '2026-09-23'
+        or set(holdout_dates) & set(consumed)):
+        return False
+    try:
+        for day in [*train_dates, *holdout_dates, *consumed]:
+            date.fromisoformat(day)
+    except ValueError:
+        return False
+    baseline = source.get('baseline')
+    candidate = source.get('candidate')
+    if not isinstance(baseline, dict) or not isinstance(candidate, dict):
+        return False
+    for part, floor in (('train', 30), ('holdout', 10)):
+        old = baseline.get(part)
+        new = candidate.get(part)
+        if not isinstance(old, dict) or not isinstance(new, dict):
+            return False
+        expected_dates = train_dates if part == 'train' else holdout_dates
+        observed_dates = new.get('source_dates')
+        if (not isinstance(observed_dates, list)
+            or observed_dates != sorted(set(observed_dates))
+            or any(day not in expected_dates for day in observed_dates)
+            or (len(observed_dates) < 3 if part == 'train' else observed_dates != holdout_dates)):
+            return False
+        for metric in (old, new):
+            if (type(metric.get('selected_opportunity_count')) is not int
+                or metric['selected_opportunity_count'] <= 0
+                or type(metric.get('winning_attempt_count')) is not int
+                or metric['winning_attempt_count'] < 0
+                or type(metric.get('selected_attempt_count')) is not int
+                or metric['selected_attempt_count'] < metric['selected_opportunity_count']
+                or metric['winning_attempt_count'] > metric['selected_attempt_count']
+                or any(type(metric.get(name)) not in (int, float)
+                    or not math.isfinite(metric[name])
+                    or not 0 <= metric[name] <= 100 for name in
+                    ('win_rate_pct', 'support_adjusted_win_rate_pct'))):
+                return False
+        if (new['selected_opportunity_count'] < floor
+            or new['selected_opportunity_count'] < .5 * old['selected_opportunity_count']
+            or new['win_rate_pct'] <= old['win_rate_pct']
+            or new['support_adjusted_win_rate_pct'] - old['support_adjusted_win_rate_pct'] < 5
+            or (old['winning_attempt_count'] > 0
+                and new['winning_attempt_count'] < .8 * old['winning_attempt_count'])):
+            return False
+    return True
+
+
 def stage_winrate_policy(source_path: Path, *, data_root: Path, now: datetime | None = None,
                          publication_day: str | None = None) -> dict:
     """Freeze the reviewed next-day machine choice without moving current."""
@@ -1416,13 +1521,15 @@ def stage_winrate_policy(source_path: Path, *, data_root: Path, now: datetime | 
     situations = source.get('situation_attempt_counts') or {}
     accepted = source.get('accepted_attempt_count')
     source_excluded = source.get('source_contract_excluded_count')
-    population_valid = (type(accepted) is int and accepted >= 0
+    input_count = source.get('input_attempt_count')
+    population_valid = (type(input_count) is int and input_count >= 0
+        and type(accepted) is int and accepted >= 0
         and type(source_excluded) is int and source_excluded >= 0
         and isinstance(excluded, dict)
         and all(type(value) is int and value >= 0 for value in excluded.values())
         and isinstance(situations, dict)
         and all(type(value) is int and value >= 0 for value in situations.values())
-        and accepted + source_excluded + sum(excluded.values()) == source.get('input_attempt_count')
+        and accepted + source_excluded + sum(excluded.values()) == input_count
         and sum(situations.values()) == accepted)
     if (source.get('schema') != 'main_entry_winrate_policy_report_v1'
         or not isinstance(source.get('target_date'), str)
@@ -1437,6 +1544,11 @@ def stage_winrate_policy(source_path: Path, *, data_root: Path, now: datetime | 
         or re.fullmatch(r'[0-9a-f]{64}', str(source.get('evaluated_attempt_manifest_sha256'))) is None
         or (source.get('source_receipt') or {}).get('target_date') != source.get('target_date')
         or not population_valid
+        or not winrate_market_census_valid(source)
+        or (source.get('policy_version') == 'winrate_successor_v1'
+            and source.get('candidate_threshold_bp') is not None
+            and len(source.get('holdout_dates') or []) == 2
+            and re.fullmatch(r'[0-9a-f]{64}', str(source.get('candidate_holdout_opportunity_manifest_sha256'))) is None)
         or source.get('disposition') not in {'initial_adopted', 'successor_selected', 'incumbent_carried'}):
         raise ValueError('winrate_stage_source_invalid')
     policy_root = root(data_root)
@@ -1453,20 +1565,30 @@ def stage_winrate_policy(source_path: Path, *, data_root: Path, now: datetime | 
         candidate = source.get('candidate_policy')
         disposition = source['disposition']
         if disposition == 'incumbent_carried':
-            if candidate is not None or not source.get('hurdle_errors'):
+            if (candidate is not None or not source.get('hurdle_errors')
+                or source.get('policy_by_scope') != {}
+                or source.get('policy_sha256') != digest({})):
                 raise ValueError('winrate_carry_contract_invalid')
             machine = parent
         else:
             expected_candidate = copy.deepcopy(parent)
             expected_candidate['entry_situation_veto'] = copy.deepcopy(
                 candidate.get('entry_situation_veto') if isinstance(candidate, dict) else None)
+            scoped_candidate = {'KRX|KRX_REGULAR': candidate}
             if (not isinstance(candidate, dict)
                 or validate_mechanistic_entry_threshold_policy(candidate)
                 or candidate != expected_candidate
                 or digest(candidate) != source.get('candidate_machine_policy_sha256')
+                or source.get('candidate_threshold_bp') != candidate['entry_situation_veto']['threshold_bp']
+                or source.get('policy_by_scope') != scoped_candidate
+                or source.get('policy_sha256') != digest(scoped_candidate)
                 or candidate == parent
                 or (disposition == 'initial_adopted') != ('entry_situation_veto' not in parent)
                 or (disposition == 'initial_adopted' and candidate['entry_situation_veto']['threshold_bp'] != 68.75)
+                or (disposition == 'successor_selected' and
+                    candidate['entry_situation_veto']['threshold_bp'] > parent['entry_situation_veto']['threshold_bp'])
+                or (source.get('source_receipt') or {}).get('machine_threshold_tuning_input_allowed') is not True
+                or (disposition == 'successor_selected' and not _winrate_successor_hurdles_valid(source))
                 or source.get('hurdle_errors')):
                 raise ValueError('winrate_candidate_contract_invalid')
             if disposition == 'initial_adopted':
@@ -1511,6 +1633,8 @@ def stage_winrate_policy(source_path: Path, *, data_root: Path, now: datetime | 
         holdout_receipt = None
         if (disposition != 'initial_adopted' and source.get('candidate_threshold_bp') is not None
             and len(source.get('holdout_dates') or []) == 2):
+            if re.fullmatch(r'[0-9a-f]{64}', str(source.get('candidate_holdout_opportunity_manifest_sha256'))) is None:
+                raise ValueError('winrate_holdout_opportunity_manifest_missing')
             holdout_days = source['holdout_dates']
             holdout_path = policy_root / 'winrate_holdouts' / f"{digest(holdout_days)}.json"
             holdout_receipt = calibration._with_artifact_content_sha256(dict(
@@ -1518,7 +1642,9 @@ def stage_winrate_policy(source_path: Path, *, data_root: Path, now: datetime | 
                 holdout_dates=holdout_days, source_date=source['target_date'],
                 report_sha256=source['artifact_content_sha256'],
                 parent_bundle_sha256=previous['bundle_sha256'],
-                candidate_threshold_bp=source['candidate_threshold_bp']))
+                candidate_threshold_bp=source['candidate_threshold_bp'],
+                selected_opportunity_count=((source.get('candidate') or {}).get('holdout') or {}).get('selected_opportunity_count'),
+                selected_opportunity_manifest_sha256=source['candidate_holdout_opportunity_manifest_sha256']))
             if holdout_path.exists() and _read(holdout_path) != holdout_receipt:
                 raise ValueError('winrate_holdout_already_consumed')
         existing = load(data_root=data_root, target_date=target)
@@ -1605,6 +1731,21 @@ def activate_dated_winrate_policy(*, data_root: Path, target_date: str, now: dat
             and activation.get('stage_bundle_sha256') == staged['bundle_sha256']
             and previous.get('winrate_selection') == proof):
             return dict(status='already_active', bundle_sha256=previous['bundle_sha256'])
+        if (activation.get('schema') == 'main_auxiliary_activation_v1'
+            and previous.get('winrate_selection') == proof
+            and previous.get('machine_policy') == staged['machine_policy']):
+            parent_hash = activation.get('parent_bundle_sha256')
+            if re.fullmatch(r'[0-9a-f]{64}', str(parent_hash)) is not None:
+                ancestor = _read(policy_root / 'generations' / f'{parent_hash}.json')
+                validate(ancestor, target_date=ancestor['target_date'])
+                _validate_bundle_sources(ancestor, data_root)
+                inherited_activation = ancestor.get('strategy_activation') or {}
+                if (ancestor['bundle_sha256'] == parent_hash
+                    and inherited_activation.get('schema') == 'main_entry_winrate_activation_v1'
+                    and inherited_activation.get('stage_bundle_sha256') == staged['bundle_sha256']
+                    and ancestor.get('winrate_selection') == proof
+                    and ancestor['machine_policy'] == staged['machine_policy']):
+                    return dict(status='already_active', bundle_sha256=previous['bundle_sha256'])
         if previous['bundle_sha256'] == staged['bundle_sha256']:
             return dict(status='already_active', bundle_sha256=previous['bundle_sha256'])
         if previous['bundle_sha256'] != proof['parent_bundle_sha256']:

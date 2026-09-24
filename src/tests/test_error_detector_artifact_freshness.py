@@ -88,6 +88,45 @@ def test_machine_result_semantics_detects_successful_stage_with_unbound_economic
         "machine_report_untrusted_path_or_size"]
 
 
+def test_machine_result_semantics_rejects_unknown_winrate_sidecar_schema(tmp_path, monkeypatch):
+    day = '2026-09-23'
+    directory = tmp_path / 'data/report/ai_decision_action_outcome_calibration'
+    directory.mkdir(parents=True)
+    full = {'target_date': day, 'machine_full_evaluation': {'scope_evaluations': {}}}
+    full['artifact_content_sha256'] = hashlib.sha256(json.dumps(full,
+        ensure_ascii=True, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    (directory / f'ai_decision_action_outcome_calibration_{day}.json').write_text(json.dumps(full))
+    (directory / f'winrate_policy_{day}.json').write_text(json.dumps({'schema': 'unknown'}))
+
+    result = _machine_result_semantics(tmp_path, day)
+
+    assert result['findings'] == ['winrate_report_schema_invalid']
+    from src.engine.scalping import ai_action_outcome_calibration as calibration
+    from src.engine.scalping import mechanistic_entry_runtime_policy as runtime_policy
+    zero = dict(input_attempt_count=0, accepted_attempt_count=0,
+        source_contract_excluded_count=0, source_contract_exclusion_reasons={},
+        excluded_attempt_counts={}, gross_label_difference_count=0)
+    report = calibration._with_artifact_content_sha256(dict(
+        schema='main_entry_winrate_policy_report_v1', target_date=day,
+        selection_basis='win_rate_only', disposition='successor_selected',
+        situation_attempt_counts={}, **zero,
+        market_census={'KRX|KRX_REGULAR': dict(market='REGULAR', **zero),
+            'PREMARKET_KRX_LIKE|PREMARKET_KRX_LIKE': dict(market='PREMARKET', **zero),
+            'KRX_NXT_INTEGRATED|KRX_NXT_AFTERMARKET': dict(market='AFTERMARKET', **zero)}))
+    (directory / f'winrate_policy_{day}.json').write_text(json.dumps(report))
+    terminal = calibration._with_artifact_content_sha256(dict(
+        report_sha256=report['artifact_content_sha256'],
+        staged={'target_date': '2026-09-28'}))
+    (directory / f'winrate_policy_terminal_{day}.json').write_text(json.dumps(terminal))
+    machine = {'policy': 'candidate'}
+    monkeypatch.setattr(runtime_policy, 'load', lambda **_: dict(
+        machine_policy=machine,
+        winrate_selection=dict(report_sha256=report['artifact_content_sha256'],
+            disposition='successor_selected', machine_policy_sha256=runtime_policy.digest(machine)),
+        scope_policies={'KRX|KRX_REGULAR': {'machine_disposition': 'successor_selected'}}))
+    assert 'winrate_successor_hurdle_invalid' in _machine_result_semantics(tmp_path, day)['findings']
+
+
 def _update_kospi_partial_payload() -> dict:
     return {
         "target_date": "2026-09-15",
