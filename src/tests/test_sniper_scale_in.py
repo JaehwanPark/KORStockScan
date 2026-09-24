@@ -17088,10 +17088,10 @@ def test_scalp_nxt_trailing_bid_guard_requires_stale_0b_and_fresh_actual_nxt_0d(
     monkeypatch,
 ):
     now_ts = datetime(2026, 7, 15, 16, 48, tzinfo=state_handlers._KST).timestamp()
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_NXT_TRAILING_BID_GUARD_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_NXT_TRAILING_BID_GUARD_ENABLED", "false")
     monkeypatch.setenv(
         "KORSTOCKSCAN_SCALP_NXT_TRAILING_BID_GUARD_ACTIVE_DATE",
-        "2026-07-15",
+        "2026-07-14",
     )
     ws_data = {
         "curr": 10_120,
@@ -17116,6 +17116,7 @@ def test_scalp_nxt_trailing_bid_guard_requires_stale_0b_and_fresh_actual_nxt_0d(
     )
 
     assert decision["nxt_trailing_bid_guard_applied"] is True
+    assert decision["decision_authority"] == "scalp_trailing_take_profit_input_quality"
     assert decision["nxt_trailing_bid_guard_reason"] == "eligible"
     assert decision["nxt_trailing_bid_guard_best_bid"] == 10_090
     assert decision["nxt_trailing_bid_guard_price_source"] == (

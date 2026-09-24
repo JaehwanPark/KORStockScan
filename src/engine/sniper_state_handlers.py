@@ -46481,8 +46481,8 @@ def _scalp_nxt_trailing_bid_guard_context(
             else "unavailable"
         ),
         "nxt_trailing_bid_guard_peak_source": "trusted_trade_mark_only",
-        "metric_role": "bounded_tunable_exit_input",
-        "decision_authority": "operator_runtime_override_scalp_nxt_trailing_bid_guard",
+        "metric_role": "source_quality_exit_input",
+        "decision_authority": "scalp_trailing_take_profit_input_quality",
         "window_policy": "same_position_nxt_0b_stale_fresh_0d_quote",
         "sample_floor": "fresh_actual_nxt_ws_0d_with_stale_or_missing_ws_0b",
         "primary_decision_metric": "executable_bid_drawdown_from_trade_peak",
