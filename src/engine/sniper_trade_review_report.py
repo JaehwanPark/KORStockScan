@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import re
 from collections import Counter, defaultdict
@@ -16,7 +17,7 @@ from src.engine.trade_profit import calculate_net_realized_pnl
 from src.engine.log_archive_service import iter_target_log_lines, load_monitor_snapshot
 from src.engine.monitor_snapshot_runtime import guard_stdin_heavy_build
 from src.utils.constants import DATA_DIR, LOGS_DIR, POSTGRES_URL
-from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
+from src.utils.jsonl_io import existing_or_gzip_path, open_text_auto
 from src.engine.sniper_gatekeeper_replay import find_gatekeeper_snapshot_for_trade
 
 _HOLDING_RE = re.compile(
@@ -207,53 +208,76 @@ def _parse_event(line: str) -> HoldingEvent | None:
 
 def _load_holding_projection_events_from_structured(
     target_date: str,
-) -> tuple[list[HoldingEvent], str]:
+) -> tuple[list[HoldingEvent], str, list[dict]]:
     base = DATA_DIR / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
     late = base.with_name(f"{base.stem}.late.jsonl")
     paths = [existing_or_gzip_path(path) for path in (base, late)]
     existing = [path for path in paths if path.exists()]
     if not existing:
-        return [], "source_gap_structured_partition_missing"
+        return [], "source_gap_structured_partition_missing", []
     base_missing = not paths[0].exists()
     events = []
     malformed_count = 0
+    source_receipts = []
     try:
         for path in existing:
-            for payload in iter_jsonl(path):
-                if payload.get("pipeline") != "HOLDING_PIPELINE" or payload.get(
-                    "stage"
-                ) not in _PROJECTION_EVENT_STAGES:
-                    continue
-                emitted_at = str(payload.get("emitted_at") or "")
-                partition_date = str(
-                    payload.get("storage_partition_date") or emitted_at[:10]
-                )
-                if partition_date != target_date:
-                    continue
-                fields = payload.get("fields")
-                if not isinstance(fields, dict) or len(emitted_at) < 19:
-                    malformed_count += 1
-                    continue
-                fields = _decode_threshold_json_fields(dict(fields))
-                record_id = payload.get("record_id")
-                if _safe_int(record_id) > 0:
-                    fields["id"] = str(record_id)
-                events.append(HoldingEvent(
-                    timestamp=emitted_at[:19].replace("T", " "),
-                    name=str(payload.get("stock_name") or "-"),
-                    code=str(payload.get("stock_code") or "-")[:6],
-                    stage=str(payload["stage"]),
-                    fields=fields,
-                    raw_line=str(payload.get("text_payload") or ""),
-                ))
+            before = path.stat()
+            digest = hashlib.sha256()
+            with open_text_auto(path, errors="strict") as handle:
+                for raw_line in handle:
+                    digest.update(raw_line.encode("utf-8"))
+                    try:
+                        payload = json.loads(raw_line)
+                    except (TypeError, ValueError):
+                        malformed_count += 1
+                        continue
+                    if not isinstance(payload, dict):
+                        malformed_count += 1
+                        continue
+                    if payload.get("pipeline") != "HOLDING_PIPELINE" or payload.get(
+                        "stage"
+                    ) not in _PROJECTION_EVENT_STAGES:
+                        continue
+                    emitted_at = str(payload.get("emitted_at") or "")
+                    partition_date = str(
+                        payload.get("storage_partition_date") or emitted_at[:10]
+                    )
+                    if partition_date != target_date:
+                        continue
+                    fields = payload.get("fields")
+                    if not isinstance(fields, dict) or len(emitted_at) < 19:
+                        malformed_count += 1
+                        continue
+                    fields = _decode_threshold_json_fields(dict(fields))
+                    record_id = payload.get("record_id")
+                    if _safe_int(record_id) > 0:
+                        fields["id"] = str(record_id)
+                    events.append(HoldingEvent(
+                        timestamp=emitted_at[:19].replace("T", " "),
+                        name=str(payload.get("stock_name") or "-"),
+                        code=str(payload.get("stock_code") or "-")[:6],
+                        stage=str(payload["stage"]),
+                        fields=fields,
+                        raw_line=str(payload.get("text_payload") or ""),
+                    ))
+            after = path.stat()
+            if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
+                after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns
+            ):
+                return [], "source_gap_structured_partition_changed_during_read", []
+            source_receipts.append({
+                "path": str(path),
+                "logical_sha256": digest.hexdigest(),
+                "size_bytes": before.st_size,
+            })
     except (OSError, EOFError, UnicodeError):
-        return [], "source_gap_structured_partition_unreadable"
+        return [], "source_gap_structured_partition_unreadable", []
     events.sort(key=_event_sort_key)
     return events, (
         "source_gap_base_partition_missing" if base_missing
         else "source_gap_structured_projection_malformed" if malformed_count
         else "structured_partition_read"
-    )
+    ), source_receipts
 
 
 def _event_sort_key(event: HoldingEvent) -> tuple[datetime, str, str]:
@@ -1631,8 +1655,14 @@ def build_trade_review_report(
     ]
     lines = _iter_target_lines(log_paths, target_date=target_date)
     text_events = [event for line in lines if (event := _parse_event(line))]
-    structured_projection_events, trailing_source_status = (
+    structured_projection_events, trailing_source_status, trailing_source_receipts = (
         _load_holding_projection_events_from_structured(target_date)
+    )
+    trailing_source_sha256 = (
+        hashlib.sha256(json.dumps(
+            trailing_source_receipts, sort_keys=True, separators=(",", ":")
+        ).encode()).hexdigest()
+        if trailing_source_receipts else None
     )
     structured_text_counts = Counter(
         event.raw_line for event in structured_projection_events if event.raw_line
@@ -1724,6 +1754,7 @@ def build_trade_review_report(
             and projected.get("completion_observed_date") == target_date
         ):
             projected["trailing_event_source_status"] = trailing_source_status
+            projected["trailing_event_source_sha256"] = trailing_source_sha256
             completed_projection.append(projected)
         open_projected = _open_scalp_position_projection(trade, matched)
         if open_projected is not None:
@@ -1793,6 +1824,7 @@ def build_trade_review_report(
             "completion_event_unresolved_id_count": len(unresolved_completion_ids),
             "available_stocks": available_stocks,
             "log_paths": [str(path) for path in log_paths],
+            "trailing_event_source_receipts": trailing_source_receipts,
         },
         "metrics": {
             "total_trades": len(visible_rows),
@@ -1804,6 +1836,7 @@ def build_trade_review_report(
                 else open_census_warnings[0]
             ),
             "trailing_input_transition_source_status": trailing_source_status,
+            "trailing_input_transition_source_sha256": trailing_source_sha256,
             "open_trades": sum(
                 1
                 for row in visible_rows

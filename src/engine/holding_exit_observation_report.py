@@ -851,6 +851,8 @@ def _build_position_outcomes(
             trailing_replay_status = "source_gap_no_input_samples"
         elif trade.get("trailing_event_source_status") != "structured_partition_read":
             trailing_replay_status = "source_gap_structured_event_partition"
+        elif not trade.get("trailing_event_source_sha256"):
+            trailing_replay_status = "source_gap_structured_event_hash_missing"
         elif not holding_start_events:
             trailing_replay_status = "source_gap_holding_start_missing"
         elif coverage_exhausted:
@@ -1092,6 +1094,9 @@ def _build_position_outcomes(
                     "snapshot_kind": "trade_review",
                     "record_id": trade_id,
                     "source_date": trade.get("completion_observed_date"),
+                    "pipeline_event_source_sha256": trade.get(
+                        "trailing_event_source_sha256"
+                    ),
                 },
                 "tp_alternative_observed_rules": alternative_observations,
                 "trailing_input_transition_count": len(trailing_transitions),

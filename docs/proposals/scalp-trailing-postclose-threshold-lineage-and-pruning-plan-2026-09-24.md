@@ -60,6 +60,8 @@
 
 재리뷰에서 관측 이벤트의 텍스트 출력이 기본적으로 억제됨을 확인했다. `trade_review`는 정식 `pipeline_events` JSONL과 late sidecar의 보유·신호·주문·체결 이벤트를 읽고 텍스트 중복을 제거한다. 원본 분할이 없거나 관측 계산이 실패하면 포지션별 `source_gap`으로 남긴다. 공유 시세·AI 운영값은 dated bootstrap env와 일치하는지 보고서에서 대사하되 코드 기본값과 실제 PID의 일치는 별도 증명으로 둔다.
 
+커밋 후 재리뷰에서는 원본 파이프라인 분할의 hash가 빠진 점을 보완했다. `trade_review`가 원본·late 파일을 스트리밍하면서 논리적 내용 hash와 파일 변경 여부를 봉인하고, 완료 projection 및 `holding_exit_observation`의 포지션 원천 참조로 전달한다. 분할이 읽는 동안 바뀌거나 JSON 원천이 손상되면 후보 재현은 부적격이다.
+
 현재 자료만으로 첫 후보 crossing과 주문 체결의 반사실 비용을 증명할 수 없다. 표본 상한, 장중 수집 시작 이전, 자정 넘어온 포지션, 누락된 quote/AI 원천은 replay 적격에서 제외한다. 새 릴리스의 실제 PID 소비와 자연 실거래 표본이 생기기 전에는 `candidate_value=null`, `paired_replay_eligible_ids=[]`이며, 장후 summary의 연결 상태는 독립적인 직접 경제성 PASS가 아니다.
 
 ## 5. 연결 수리 뒤 장후 튜닝 고도화
