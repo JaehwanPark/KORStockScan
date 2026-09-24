@@ -99,11 +99,15 @@ def _post_sell_binding_gap(trade: dict, candidate: dict) -> str | None:
             or str(candidate.get("sell_execution_no") or "")
                != str(trade.get("sell_execution_no"))):
         return "source_gap_post_sell_execution_identity"
+    terminal_venue = str(trade.get("effective_venue") or "").upper()
+    candidate_venue = str(candidate.get("actual_execution_venue") or "").upper()
+    terminal_route = str(trade.get("exit_execution_broker_route") or "").upper()
+    candidate_route = str(candidate.get("broker_route_requested") or "").upper()
     if (candidate.get("market_axes_source_quality_status") != "route_contract_ready"
-            or str(candidate.get("actual_execution_venue") or "")
-               != str(trade.get("effective_venue") or "")
-            or str(candidate.get("broker_route_requested") or "")
-               != str(trade.get("exit_execution_broker_route") or "")):
+            or terminal_venue not in {"KRX", "NXT"}
+            or candidate_venue != terminal_venue
+            or terminal_route not in {"KRX", "NXT", "SOR"}
+            or candidate_route != terminal_route):
         return "source_gap_post_sell_venue_route"
     return None
 
@@ -398,11 +402,25 @@ def _strict_completed_reasons(row: dict, *, clean_start: str) -> list[str]:
         reasons.append("non_normal_or_unproven_entry_mode")
     if row.get("terminal_population_scope") != "real_record_bound":
         reasons.append("source_gap_real_custody_unproven")
-    if (str(row.get("rec_date") or "")[:10]
-            < str(row.get("completion_observed_date") or "")[:10]
-            and (row.get("prior_entry_snapshot_receipt") or {}).get("status")
-            != "sealed_entry_snapshot"):
-        reasons.append("source_gap_prior_entry_snapshot_unsealed")
+    entry_day = str(row.get("rec_date") or "")[:10]
+    completion_day = str(row.get("completion_observed_date") or "")[:10]
+    if entry_day < completion_day:
+        if (row.get("prior_entry_snapshot_receipt") or {}).get("status") != "sealed_entry_snapshot":
+            reasons.append("source_gap_prior_entry_snapshot_unsealed")
+        fill_receipts = row.get("prior_fill_snapshot_receipts")
+        try:
+            day = datetime.strptime(entry_day, "%Y-%m-%d").date()
+            final_day = datetime.strptime(completion_day, "%Y-%m-%d").date()
+            while day < final_day:
+                if (not isinstance(fill_receipts, dict)
+                        or not isinstance(fill_receipts.get(day.isoformat()), dict)
+                        or fill_receipts[day.isoformat()].get("status")
+                        != "sealed_entry_snapshot"):
+                    reasons.append("source_gap_prior_fill_snapshot_unsealed")
+                    break
+                day += timedelta(days=1)
+        except ValueError:
+            reasons.append("source_gap_prior_fill_snapshot_unsealed")
     if row.get("sell_quantity_conserved") is not True:
         reasons.append("source_gap_sell_quantity_not_conserved")
     if row.get("terminal_profit_rate_reconciled") is not True:

@@ -1321,6 +1321,7 @@ def _completed_execution_ledger(trade: dict, events: list[HoldingEvent]) -> dict
     sell_fee_amount = 0.0
     sell_leg_net_pnl = 0.0
     buy_quality: set[str] = set()
+    accepted_buy_fills: list[tuple[str, int]] = []
     sell_order_numbers: set[str] = set()
     buy_events = [event for event in events if event.stage in {
         "position_rebased_after_fill", "scale_in_executed"
@@ -1373,6 +1374,7 @@ def _completed_execution_ledger(trade: dict, events: list[HoldingEvent]) -> dict
             continue
         buy_orders[order] = cumulative
         buy_qty += delta
+        accepted_buy_fills.append((event.timestamp, delta))
         buy_amount += delta * price
         buy_quality.add(str(fields.get("fill_quality") or "unknown").lower())
 
@@ -1461,7 +1463,8 @@ def _completed_execution_ledger(trade: dict, events: list[HoldingEvent]) -> dict
         sell_amount += delta * price
         sell_fee_amount += fee
         sell_leg_net_pnl += net_pnl
-        if sell_qty > buy_qty:
+        if sell_qty > sum(qty for at, qty in accepted_buy_fills
+                          if at <= event.timestamp):
             reasons.append("source_gap_negative_position_balance")
 
     terminal = next((event for event in reversed(events)
@@ -1471,7 +1474,11 @@ def _completed_execution_ledger(trade: dict, events: list[HoldingEvent]) -> dict
         reasons.append("source_gap_sell_residual_unresolved")
     if not buy_qty or buy_qty != sell_qty:
         reasons.append("source_gap_position_quantity_not_conserved")
-    if buy_qty and not any(event.stage == "sell_partial_fill_progress" for event in sell_events):
+    if buy_qty and not any(event.stage in {
+        "sell_partial_fill_progress",
+        "nxt_rising_missed_tp1_partial_fill_progress",
+        "nxt_rising_missed_tp1_partial_sell_completed",
+    } for event in sell_events):
         if _safe_int(trade.get("buy_qty"), -1) != buy_qty:
             reasons.append("source_gap_db_buy_quantity_mismatch")
     if buy_qty and abs(_safe_float(trade.get("buy_price"), -1.0)
@@ -1708,6 +1715,9 @@ def _open_scalp_position_projection(trade: dict, events: list[HoldingEvent]) -> 
             "position_rebased_after_fill", "holding_started", "scale_in_executed",
             "entry_buy_order_terminal_confirmed",
             "scale_in_buy_order_terminal_confirmed",
+            "sell_partial_fill_progress",
+            "nxt_rising_missed_tp1_partial_fill_progress",
+            "nxt_rising_missed_tp1_partial_sell_completed",
             "scalp_trailing_input_transition", "exit_signal",
         }
     ]
@@ -1735,7 +1745,7 @@ def _open_scalp_position_projection(trade: dict, events: list[HoldingEvent]) -> 
 def _prior_entry_fill_events(
     trades: list[dict], target_date: str
 ) -> tuple[dict[str, list[HoldingEvent]], dict[str, dict]]:
-    """Reuse sealed open projections for every observed pre-exit BUY leg."""
+    """Reuse sealed open projections for prior BUY and partial SELL legs."""
 
     prior_dates: set[str] = set()
     for trade in trades:
@@ -1786,7 +1796,10 @@ def _prior_entry_fill_events(
                 if not isinstance(item, dict) or item.get("stage") not in {
                     "position_rebased_after_fill", "scale_in_executed",
                     "entry_buy_order_terminal_confirmed",
-                    "scale_in_buy_order_terminal_confirmed"
+                    "scale_in_buy_order_terminal_confirmed",
+                    "sell_partial_fill_progress",
+                    "nxt_rising_missed_tp1_partial_fill_progress",
+                    "nxt_rising_missed_tp1_partial_sell_completed",
                 }:
                     continue
                 fields = item.get("fields")

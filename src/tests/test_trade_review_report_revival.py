@@ -242,6 +242,15 @@ def test_completed_execution_ledger_requires_buy_fill_and_conserves_all_sell_leg
     partial = report_mod._completed_execution_ledger(trade, events[:-1])
     assert "source_gap_position_quantity_not_conserved" in partial["strict_completion_reasons"]
 
+    # A later BUY cannot retroactively fund an earlier SELL even when totals match.
+    late_buy = event("position_rebased_after_fill", 5, **buy_base,
+                     execution_no="BEX2", fill_qty="1", order_filled_qty="2",
+                     order_remaining_qty="0")
+    out_of_order = report_mod._completed_execution_ledger(
+        trade, [events[0], late_buy, events[2], events[3]]
+    )
+    assert "source_gap_negative_position_balance" in out_of_order["strict_completion_reasons"]
+
 
 def test_completed_execution_ledger_rejects_unresolved_buy_order():
     trade = {"buy_qty": 1, "buy_price": 10000}
@@ -297,6 +306,54 @@ def test_completed_execution_ledger_rejects_unresolved_buy_order():
     terminal.fields["order_filled_qty"] = "2"
     mismatched = report_mod._completed_execution_ledger(trade, [buy, terminal, sell])
     assert "source_gap_buy_order_terminal_missing" in mismatched["strict_completion_reasons"]
+
+
+def test_carry_partial_sell_reconciles_prior_and_final_fill_legs():
+    def event(stage, day, order, execution, quantity, cumulative, price, fee):
+        fields = {
+            "id": "42", "order_no": order, "execution_no": execution,
+            "actual_order_submitted": "True", "broker_order_forbidden": "False",
+            "pipeline_lifecycle_population_scope": "real_record_bound",
+        }
+        if stage == "position_rebased_after_fill":
+            fields.update({
+                "fill_qty": str(quantity), "order_filled_qty": str(cumulative),
+                "order_requested_qty": "2", "order_remaining_qty": str(2-cumulative),
+                "fill_price": str(price), "receipt_economics_complete": "True",
+                "receipt_quantity_contract_complete": "True",
+                "receipt_unit_fill_consistent": "True",
+            })
+        else:
+            fields.update({
+                "main_lifecycle_exit_qty": str(quantity),
+                "main_lifecycle_exit_price": str(price),
+                "cumulative_sell_qty": str(cumulative),
+                "remaining_sell_qty": str(2-cumulative),
+                "sell_receipt_economics_complete": "True",
+                "sell_receipt_quantity_contract_complete": "True",
+                "sell_receipt_unit_fill_consistent": "True",
+                "sell_execution_receipt_economics_complete": "True",
+                "sell_execution_receipt_quantity_contract_complete": "True",
+                "sell_execution_receipt_unit_fill_consistent": "True",
+                "main_lifecycle_fees_taxes_krw": str(fee),
+                "main_lifecycle_realized_net_pnl_krw": str(price-10000-fee),
+            })
+        return report_mod.HoldingEvent(
+            timestamp=f"{day} 09:00:00", name="test", code="123456",
+            stage=stage, fields=fields, raw_line="",
+        )
+
+    events = [
+        event("position_rebased_after_fill", "2026-09-23", "B1", "BE1", 2, 2, 10000, 0),
+        event("sell_partial_fill_progress", "2026-09-23", "S1", "SE1", 1, 1, 10100, 10),
+        event("sell_completed", "2026-09-24", "S2", "SE2", 1, 2, 10200, 10),
+    ]
+    trade = {"buy_qty": 1, "buy_price": 10000, "sell_price": 10150}
+    ledger = report_mod._completed_execution_ledger(trade, events)
+    assert ledger["strict_completion_status"] == "eligible"
+    assert ledger["buy_filled_qty"] == ledger["sell_filled_qty"] == 2
+    assert ledger["sell_order_count"] == 2
+    assert ledger["sell_fill_fees_taxes_krw"] == 20
 
 
 def test_prior_entry_fill_events_require_sealed_same_id_snapshot(monkeypatch):

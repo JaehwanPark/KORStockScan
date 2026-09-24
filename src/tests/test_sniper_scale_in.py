@@ -1,4 +1,5 @@
 from dataclasses import replace
+from copy import deepcopy
 from datetime import date, datetime, timedelta, time as dt_time, timezone
 from concurrent.futures import ThreadPoolExecutor
 import importlib
@@ -25742,6 +25743,7 @@ def test_pending_entry_cancel_logs_receipt_provenance(monkeypatch):
             }
         ],
     }
+    stock_with_log_failure = deepcopy(stock)
 
     assert (
         state_handlers._cancel_pending_entry_orders(stock, "440110", force=True)
@@ -25769,6 +25771,13 @@ def test_pending_entry_cancel_logs_receipt_provenance(monkeypatch):
     assert terminal["orig_ord_no"] == "O1"
     assert terminal["order_filled_qty"] == 0
     assert terminal["terminal_reason"] == "terminal_absence_and_inventory_exact"
+    monkeypatch.setattr(
+        state_handlers, "_log_holding_pipeline",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("append failed")),
+    )
+    assert state_handlers._cancel_pending_entry_orders(
+        stock_with_log_failure, "440110", force=True
+    ) == "cancelled"
 
 
 def test_split_entry_cancel_only_expired_leg_keeps_later_legs(monkeypatch):

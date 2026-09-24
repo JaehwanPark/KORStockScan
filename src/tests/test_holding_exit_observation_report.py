@@ -197,6 +197,29 @@ def test_trade_review_source_warning_cannot_become_valid_empty_population():
     assert gaps == [{"date": "2026-09-23", "reason": "trade_review_source_warning"}]
 
 
+def test_strict_completed_population_requires_each_prior_fill_snapshot():
+    trade = _trade(42, rec_date="2026-09-22", sell_time="2026-09-24 09:40:00")
+    trade.update({
+        "completion_observed_date": "2026-09-24",
+        "strict_completion_status": "eligible",
+        "strict_completion_reasons": [],
+        "terminal_population_scope": "real_record_bound",
+        "sell_quantity_conserved": True,
+        "terminal_profit_rate_reconciled": True,
+        "realized_pnl_krw_source": "broker_fill_prices_fee_aware",
+        "prior_entry_snapshot_receipt": {"status": "sealed_entry_snapshot"},
+        "prior_fill_snapshot_receipts": {
+            "2026-09-22": {"status": "sealed_entry_snapshot"},
+        },
+    })
+    reasons = report_mod._strict_completed_reasons(trade, clean_start="2026-06-05")
+    assert reasons == ["source_gap_prior_fill_snapshot_unsealed"]
+    trade["prior_fill_snapshot_receipts"]["2026-09-23"] = {
+        "status": "sealed_entry_snapshot"
+    }
+    assert report_mod._strict_completed_reasons(trade, clean_start="2026-06-05") == []
+
+
 def test_strict_completed_population_partitions_exit_and_forward_layers(monkeypatch, tmp_path):
     monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
     trades = [
@@ -367,6 +390,11 @@ def test_post_sell_pass_requires_mature_horizons_and_matching_anchor():
     evaluation["exact_sell_fill_time"] = None
     outcomes, _ = report_mod._build_position_outcomes([trade], [evaluation])
     assert outcomes[0]["post_sell_status"] == "source_gap_exact_fill_binding_missing"
+    evaluation["exact_sell_fill_time"] = "2026-09-23T09:40:00+09:00"
+    trade["effective_venue"] = "UNKNOWN"
+    evaluation["actual_execution_venue"] = "UNKNOWN"
+    outcomes, _ = report_mod._build_position_outcomes([trade], [evaluation])
+    assert outcomes[0]["post_sell_status"] == "source_gap_post_sell_venue_route"
 
 
 def test_trailing_direct_input_receipt_preserves_trigger_and_source_gap():

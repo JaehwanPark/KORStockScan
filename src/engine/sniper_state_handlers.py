@@ -76128,20 +76128,31 @@ def _cancel_pending_entry_orders(
                 order["status"] = "CANCELLED"
                 order["cancelled_at"] = time.time()
                 order.pop("cancel_terminal_pending", None)
-                _log_holding_pipeline(
-                    stock,
-                    code,
-                    "entry_buy_order_terminal_confirmed",
-                    orig_ord_no=str(order.get("ord_no") or ""),
-                    order_filled_qty=_coerce_int_value(order.get("filled_qty")),
-                    order_requested_qty=_coerce_int_value(order.get("qty")),
-                    terminal_reason=reconcile_reason,
-                    broker_inventory_qty=broker_qty,
-                    actual_order_submitted=True,
-                    broker_order_forbidden=False,
-                    runtime_effect=False,
-                    decision_authority="broker_order_terminal_inventory_observation_only",
-                )
+                try:
+                    emitted = _log_holding_pipeline(
+                        stock,
+                        code,
+                        "entry_buy_order_terminal_confirmed",
+                        orig_ord_no=str(order.get("ord_no") or ""),
+                        order_filled_qty=_coerce_int_value(order.get("filled_qty")),
+                        order_requested_qty=_coerce_int_value(order.get("qty")),
+                        terminal_reason=reconcile_reason,
+                        broker_inventory_qty=broker_qty,
+                        actual_order_submitted=True,
+                        broker_order_forbidden=False,
+                        runtime_effect=False,
+                        decision_authority="broker_order_terminal_inventory_observation_only",
+                    )
+                    if emitted is False:
+                        log_error(
+                            f"[ENTRY_CANCEL] source_gap_buy_terminal_evidence "
+                            f"order={order.get('ord_no')} append_not_confirmed"
+                        )
+                except Exception as exc:
+                    log_error(
+                        f"[ENTRY_CANCEL] source_gap_buy_terminal_evidence "
+                        f"order={order.get('ord_no')} error={type(exc).__name__}"
+                    )
             cancelled_any = True
             _mutate_stock_state(
                 stock,
@@ -88174,23 +88185,34 @@ def _cancel_or_reconcile_pending_add(stock, reason, *, expired_only=False, now_t
         if not isinstance(executions_by_order, dict):
             executions_by_order = {}
         for item in cancelled_ord_nos:
-            _log_holding_pipeline(
-                stock,
-                code,
-                "scale_in_buy_order_terminal_confirmed",
-                orig_ord_no=item,
-                order_filled_qty=_safe_int(filled_by_order.get(item), 0),
-                order_requested_qty=(
-                    _safe_int(requested_by_order.get(item), 0)
-                    or _safe_int((meta_by_order.get(item) or {}).get("qty"), 0)
-                ),
-                terminal_reason=reconcile_reason,
-                broker_inventory_qty=broker_qty,
-                actual_order_submitted=True,
-                broker_order_forbidden=False,
-                runtime_effect=False,
-                decision_authority="broker_order_terminal_inventory_observation_only",
-            )
+            try:
+                _log_holding_pipeline(
+                    stock,
+                    code,
+                    "scale_in_buy_order_terminal_confirmed",
+                    orig_ord_no=item,
+                    order_filled_qty=_safe_int(filled_by_order.get(item), 0),
+                    order_requested_qty=(
+                        _safe_int(requested_by_order.get(item), 0)
+                        or _safe_int((meta_by_order.get(item) or {}).get("qty"), 0)
+                    ),
+                    terminal_reason=reconcile_reason,
+                    broker_inventory_qty=broker_qty,
+                    actual_order_submitted=True,
+                    broker_order_forbidden=False,
+                    runtime_effect=False,
+                    decision_authority="broker_order_terminal_inventory_observation_only",
+                )
+                if emitted is False:
+                    log_error(
+                        f"[SCALE_IN_CANCEL] source_gap_buy_terminal_evidence "
+                        f"order={item} append_not_confirmed"
+                    )
+            except Exception as exc:
+                log_error(
+                    f"[SCALE_IN_CANCEL] source_gap_buy_terminal_evidence "
+                    f"order={item} error={type(exc).__name__}"
+                )
         cancelled_qty = sum(
             _safe_int(requested_by_order.get(item), 0)
             or _safe_int((meta_by_order.get(item) or {}).get("qty"), 0)
