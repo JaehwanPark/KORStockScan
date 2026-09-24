@@ -192,7 +192,7 @@ def _write_observation(tmp_path, target_date: str, payload: dict) -> None:
     report_dir = tmp_path / "report" / "monitor_snapshots"
     report_dir.mkdir(parents=True, exist_ok=True)
     (report_dir / f"holding_exit_observation_{target_date}.json").write_text(
-        json.dumps(payload, ensure_ascii=False),
+        json.dumps({"date": target_date, **payload}, ensure_ascii=False),
         encoding="utf-8",
     )
 

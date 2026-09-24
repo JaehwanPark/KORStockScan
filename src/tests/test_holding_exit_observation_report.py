@@ -370,9 +370,10 @@ def test_trailing_direct_input_receipt_preserves_trigger_and_source_gap():
         "scalp_ai_momentum_decay"
     ]
     readiness = report_mod._build_trailing_threshold_readiness(outcomes)
-    assert readiness["funnel_ids"]["direct_signal_ids"] == ["1"]
+    assert readiness["funnel_ids"]["direct_signal_ids"] == []
+    assert readiness["funnel_ids"]["terminal_custody_unproven_ids"] == ["1"]
     assert readiness["funnel_ids"]["paired_replay_eligible_ids"] == []
-    assert readiness["axes"]["SCALP_TRAILING_START_PCT"]["qualified_input_count"] == 1
+    assert readiness["axes"]["SCALP_TRAILING_START_PCT"]["qualified_input_count"] == 0
     assert all(
         axis["candidate_value"] is None
         and axis["eligible_for_live_review"] is False

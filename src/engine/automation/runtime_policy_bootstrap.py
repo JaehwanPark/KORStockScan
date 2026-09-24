@@ -933,10 +933,20 @@ def verify_bootstrap(target_date: str, *, pid: int | None = None, write: bool = 
         findings.append("manifest_env_overrides_invalid")
         manifest_env = {}
     trailing_receipt = manifest.get("scalp_trailing_threshold_receipt")
-    if trailing_receipt is not None:
+    if trailing_receipt is None:
+        findings.append("scalp_trailing_threshold_receipt_missing")
+    else:
+        owners = manifest.get("env_key_owners")
+        trailing_keys = [f"KORSTOCKSCAN_{key}" for key in SCALP_TRAILING_THRESHOLD_KEYS]
+        if (
+            not isinstance(owners, dict)
+            or any(key not in manifest_env or not owners.get(key) for key in trailing_keys)
+        ):
+            findings.append("scalp_trailing_threshold_env_or_owner_missing")
+            owners = {}
         try:
             expected_trailing = scalp_trailing_bootstrap_receipt(
-                manifest_env, manifest.get("env_key_owners") or {}
+                manifest_env, owners
             )
         except (KeyError, TypeError, ValueError):
             findings.append("scalp_trailing_threshold_receipt_invalid")

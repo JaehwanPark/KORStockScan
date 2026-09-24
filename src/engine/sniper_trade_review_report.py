@@ -243,6 +243,7 @@ def _load_holding_projection_events_from_structured(
                         payload.get("storage_partition_date") or emitted_at[:10]
                     )
                     if partition_date != target_date:
+                        malformed_count += 1
                         continue
                     fields = payload.get("fields")
                     if not isinstance(fields, dict) or len(emitted_at) < 19:
@@ -250,8 +251,10 @@ def _load_holding_projection_events_from_structured(
                         continue
                     fields = _decode_threshold_json_fields(dict(fields))
                     record_id = payload.get("record_id")
-                    if _safe_int(record_id) > 0:
-                        fields["id"] = str(record_id)
+                    if _safe_int(record_id) <= 0:
+                        malformed_count += 1
+                        continue
+                    fields["id"] = str(record_id)
                     events.append(HoldingEvent(
                         timestamp=emitted_at[:19].replace("T", " "),
                         name=str(payload.get("stock_name") or "-"),

@@ -138,6 +138,35 @@ def test_bootstrap_carries_incumbent_applies_lock_and_scrubs_retired(monkeypatch
     assert bootstrap.verify_bootstrap("2026-09-19")["status"] == "fail"
 
 
+def test_bootstrap_rejects_missing_trailing_receipt_and_env_owner(monkeypatch, tmp_path):
+    monkeypatch.setattr(bootstrap, "BOOTSTRAP_DIR", tmp_path / "bootstrap")
+    monkeypatch.setattr(bootstrap, "LEGACY_RUNTIME_DIR", tmp_path / "legacy")
+    monkeypatch.setattr(bootstrap, "OPERATOR_LOCK_DIR", tmp_path / "locks")
+    _write(tmp_path / "legacy" / "threshold_runtime_env_2026-09-18.json", {
+        "target_date": "2026-09-18", "env_overrides": {"BASE": "1"}
+    })
+    _write(tmp_path / "legacy" / "threshold_runtime_env_verify_2026-09-18.json", {
+        "target_date": "2026-09-18", "status": "pass", "passed": True
+    })
+    manifest = bootstrap.write_bootstrap("2026-09-19")
+    manifest.pop("scalp_trailing_threshold_receipt")
+    manifest["manifest_sha256"] = bootstrap._digest_json({
+        key: value for key, value in manifest.items() if key != "manifest_sha256"
+    })
+    _write(bootstrap.manifest_path("2026-09-19"), manifest)
+    result = bootstrap.verify_bootstrap("2026-09-19", write=False)
+    assert "scalp_trailing_threshold_receipt_missing" in result["findings"]
+
+    manifest = bootstrap.write_bootstrap("2026-09-19")
+    manifest["env_key_owners"].pop("KORSTOCKSCAN_SCALP_TRAILING_START_PCT")
+    manifest["manifest_sha256"] = bootstrap._digest_json({
+        key: value for key, value in manifest.items() if key != "manifest_sha256"
+    })
+    _write(bootstrap.manifest_path("2026-09-19"), manifest)
+    result = bootstrap.verify_bootstrap("2026-09-19", write=False)
+    assert "scalp_trailing_threshold_env_or_owner_missing" in result["findings"]
+
+
 def test_bootstrap_preserves_explicit_operator_handoff_veto(monkeypatch, tmp_path):
     boot_dir = tmp_path / "runtime" / "policy_bootstrap"
     legacy_dir = tmp_path / "threshold_cycle" / "runtime_env"

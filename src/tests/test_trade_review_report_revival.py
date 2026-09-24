@@ -1,3 +1,5 @@
+import json
+
 from src.engine import sniper_trade_review_report as report_mod
 
 
@@ -20,6 +22,36 @@ def test_trailing_transitions_survive_timeline_and_projection():
     assert [row["fields"]["armed"] for row in timeline] == ["False", "True"]
     assert "scalp_trailing_input_transition" in report_mod._PROJECTION_EVENT_STAGES
     assert "scalp_tp_alternative_observed" in report_mod._PROJECTION_EVENT_STAGES
+
+
+def test_structured_trailing_projection_flags_wrong_partition_and_missing_id(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    path = tmp_path / "pipeline_events" / "pipeline_events_2026-09-24.jsonl"
+    path.parent.mkdir(parents=True)
+    base = {
+        "pipeline": "HOLDING_PIPELINE",
+        "stage": "scalp_trailing_input_transition",
+        "emitted_at": "2026-09-24T09:00:00+09:00",
+        "storage_partition_date": "2026-09-24",
+        "record_id": 123,
+        "fields": {"transition_sequence": 1},
+        "stock_code": "123456",
+    }
+    wrong_partition = {**base, "storage_partition_date": "2026-09-23"}
+    missing_id = {**base, "record_id": None}
+    path.write_text("\n".join(json.dumps(row) for row in (
+        base, wrong_partition, missing_id
+    )) + "\n")
+
+    events, status, receipts = (
+        report_mod._load_holding_projection_events_from_structured("2026-09-24")
+    )
+    assert len(events) == 1
+    assert events[0].fields["id"] == "123"
+    assert status == "source_gap_structured_projection_malformed"
+    assert receipts[0]["logical_sha256"]
 
 
 def test_completed_projection_keeps_full_population_beyond_display_limit(monkeypatch):
