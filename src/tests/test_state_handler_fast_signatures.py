@@ -36,6 +36,7 @@ from src.engine.sniper_state_handlers import (
     _resolve_ai_numeric_consistency_recheck,
     _resolve_gatekeeper_fast_reuse_sec,
     _resolve_holding_ai_fast_reuse_sec,
+    _holding_ai_fast_reuse_ws_fresh,
     _resolve_scanner_rising_strength_momentum_override,
     _reversal_add_runtime_supply_context,
     _pre_ai_blocked_gate_quality_fields,
@@ -3505,6 +3506,15 @@ def test_holding_ai_fast_reuse_sec_tracks_review_window():
     assert _resolve_holding_ai_fast_reuse_sec(0) == 2.0
     assert _resolve_holding_ai_fast_reuse_sec(10) == 12.0
     assert _resolve_holding_ai_fast_reuse_sec(50) == 52.0
+
+
+def test_holding_ai_fast_reuse_requires_fresh_ws_clock():
+    assert _holding_ai_fast_reuse_ws_fresh(None, 1.5) is False
+    assert _holding_ai_fast_reuse_ws_fresh(float("nan"), 1.5) is False
+    assert _holding_ai_fast_reuse_ws_fresh(-0.1, 1.5) is False
+    assert _holding_ai_fast_reuse_ws_fresh(1.6, 1.5) is False
+    assert _holding_ai_fast_reuse_ws_fresh(0.1, float("inf")) is False
+    assert _holding_ai_fast_reuse_ws_fresh(1.5, 1.5) is True
 
 
 def test_gatekeeper_fast_reuse_sec_has_minimum_window():

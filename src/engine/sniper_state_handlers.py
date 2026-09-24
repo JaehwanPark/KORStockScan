@@ -70088,6 +70088,16 @@ def _resolve_holding_ai_fast_reuse_sec(dynamic_max_cd):
     return review_window_floor
 
 
+def _holding_ai_fast_reuse_ws_fresh(ws_age_sec, max_ws_age_sec):
+    return bool(
+        ws_age_sec is not None
+        and math.isfinite(ws_age_sec)
+        and math.isfinite(max_ws_age_sec)
+        and max_ws_age_sec >= 0.0
+        and 0.0 <= ws_age_sec <= max_ws_age_sec
+    )
+
+
 def _resolve_gatekeeper_fast_reuse_sec():
     configured_sec = float(_rule("AI_GATEKEEPER_FAST_REUSE_SEC", 12.0) or 12.0)
     return max(configured_sec, 20.0)
@@ -82504,7 +82514,9 @@ def handle_holding_state(
                 near_low_score_band = current_ai_score <= (near_ai_exit_score_limit + 5)
                 fast_sig_fresh = fast_sig_age is not None and fast_sig_age < reuse_sec
                 price_change_ok = price_change < (dynamic_price_trigger * 1.25)
-                ws_fresh = ws_age_sec is None or ws_age_sec <= max_ws_age_sec
+                ws_fresh = _holding_ai_fast_reuse_ws_fresh(
+                    ws_age_sec, max_ws_age_sec
+                )
                 shadow_action = "review"
 
                 if (
