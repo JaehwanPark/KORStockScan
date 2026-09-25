@@ -23901,7 +23901,7 @@ def _resolve_exit_decision_source(
     if rule == "scalp_preset_hard_stop_pct":
         return "PRESET_HARD_STOP"
 
-    if rule in {"scalp_preset_protect_profit", "protect_trailing_stop"}:
+    if rule == "protect_trailing_stop":
         return "PRESET_PROTECT"
 
     if rule == "scalp_preset_ai_review_exit":
@@ -85645,20 +85645,6 @@ def handle_holding_state(
                 f"[KOSDAQ_TIMEOUT] holding 기간 파싱 실패 ({stock.get('code', '-')}, date={stock.get('date')}) ({exc})"
             )
 
-        kosdaq_target = _rule_float("KOSDAQ_TARGET", 4.0)
-        if not is_sell_signal and peak_profit >= kosdaq_target:
-            # Follow-up tracked in checklist: SwingTrailingPolicy0506
-            drawdown = (
-                (highest_prices.get(price_key, curr_p) - curr_p)
-                / max(highest_prices.get(price_key, curr_p), 1)
-                * 100
-            )
-            if drawdown >= 1.0:
-                is_sell_signal = True
-                sell_reason_type = "TRAILING"
-                reason = f"🏆 KOSDAQ 트레일링 익절 (+{kosdaq_target}% 돌파 후 하락)"
-                exit_rule = "kosdaq_trailing_take_profit"
-
         kosdaq_stop = _rule_float("KOSDAQ_STOP", -2.0)
         if not is_sell_signal and profit_rate <= kosdaq_stop:
             is_sell_signal = True
@@ -85695,19 +85681,7 @@ def handle_holding_state(
                 f"[KOSPI_TIMEOUT] holding 기간 파싱 실패 ({stock.get('code', '-')}, date={stock.get('date')}) ({exc})"
             )
 
-        # Follow-up tracked in checklist: SwingTrailingPolicy0506
-        # 현재 로직은 해당 임계 도달 시 즉시 익절로 동작
-        trailing_start_pct = _rule_float("TRAILING_START_PCT", 2.0)
-        if not is_sell_signal and profit_rate >= trailing_start_pct:
-            is_sell_signal = True
-            sell_reason_type = "PROFIT"
-            reason = (
-                f"🎯 트레일링 시작 수익률 도달 (+{trailing_start_pct}%) "
-                "(현 로직: 즉시 익절)"
-            )
-            exit_rule = "kospi_trailing_start_take_profit"
-
-        elif not is_sell_signal and profit_rate <= current_stop_loss:
+        if not is_sell_signal and profit_rate <= current_stop_loss:
             is_sell_signal = True
             sell_reason_type = "LOSS"
             reason = f"🛑 손절선 도달 ({regime_name} 기준 {current_stop_loss}%)"

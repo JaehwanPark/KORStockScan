@@ -730,10 +730,8 @@ def _infer_exit_rule_from_reason(reason: Any) -> str:
         ("하드스탑 도달", "scalp_hard_stop_pct"),
         ("보호 트레일링", "protect_trailing_stop"),
         ("코스닥 스윙 기한 만료 청산", "kosdaq_timeout"),
-        ("KOSDAQ 트레일링 익절", "kosdaq_trailing_take_profit"),
         ("KOSDAQ 전용 방어선 이탈", "kosdaq_stop_loss"),
         ("스윙 보유 만료", "kospi_timeout"),
-        ("트레일링 시작 수익률 도달", "kospi_trailing_start_take_profit"),
     )
     for keyword, exit_rule in rules_by_keyword:
         if keyword in text:

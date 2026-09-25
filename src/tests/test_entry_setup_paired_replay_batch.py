@@ -385,6 +385,15 @@ def operating_compact_row(day="2026-09-17", ordinal=0):
     seed = replay["seed"]
     context = deepcopy(operating_test_context())
     context["frozen_at"] = seed["observed_at"]
+    decision = dict(
+        evaluation_attempt_id=seed["evaluation_attempt_id"],
+        machine_bundle_sha256=seed["policy_bundle_sha256"],
+        machine_policy_version="machine-v1", machine_policy_sha256="1" * 64,
+        compact_prompt_version="compact-v1", compact_prompt_sha256="2" * 64,
+        decision_trace_id=f"fixture-trace-{day}-{ordinal}", runtime_pid=123,
+    )
+    decision["sha256"] = compact.digest(decision)
+    context["entry_decision_version_receipt"] = decision
     context["sha256"] = compact.digest({k: v for k, v in context.items() if k != "sha256"})
     seed["operating_contract"] = context
     seed["seed_sha256"] = compact.digest({k: v for k, v in seed.items() if k != "seed_sha256"})

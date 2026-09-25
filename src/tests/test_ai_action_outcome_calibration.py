@@ -5039,11 +5039,27 @@ def _second_machine_owner_row(row, *, second_offset=30, symbol='000660', promoti
     source = result['operating_comparison_input']; replay = source['owner_replay']; seed = replay['seed']
     seed.update(stock_code=symbol, scanner_promotion_id=promotion, evaluation_attempt_id='second-attempt')
     seed['observed_at'] = (datetime.fromisoformat(seed['observed_at']) + timedelta(seconds=second_offset)).isoformat()
-    seed['seed_sha256'] = compact.digest({k:v for k,v in seed.items() if k != 'seed_sha256'})
     for k in ('stock_code', 'scanner_promotion_id', 'evaluation_attempt_id'): source[k] = seed[k]
-    replay['replay_sha256'] = compact.digest({k:v for k,v in replay.items() if k != 'replay_sha256'})
+    _resign_machine_owner_replay(replay)
     result.update(decision_trace_id='second-machine', stock_code=symbol, scanner_promotion_id=promotion)
     return result
+
+
+def _resign_machine_owner_replay(replay):
+    """Keep the synthetic decision receipt bound after changing its attempt."""
+    from src.engine.scalping import compact_auxiliary_paired_replay as compact
+    seed = replay['seed']
+    context = seed['operating_contract']
+    receipt = context['entry_decision_version_receipt']
+    receipt['evaluation_attempt_id'] = seed['evaluation_attempt_id']
+    receipt['sha256'] = compact.digest({k:v for k,v in receipt.items() if k != 'sha256'})
+    context['frozen_at'] = seed['observed_at']
+    context['sha256'] = compact.digest({k:v for k,v in context.items() if k != 'sha256'})
+    seed['seed_sha256'] = compact.digest({k:v for k,v in seed.items() if k != 'seed_sha256'})
+    for arm in (replay.get('operating_arms') or {}).values():
+        arm['contract_sha256'] = context['sha256']
+        arm['sha256'] = compact.digest({k:v for k,v in arm.items() if k != 'sha256'})
+    replay['replay_sha256'] = compact.digest({k:v for k,v in replay.items() if k != 'replay_sha256'})
 
 
 def test_machine_common_capital_rejects_overlap_without_resizing_or_double_profit():
@@ -5133,14 +5149,12 @@ def test_joint_frozen_bundle_qualifies_then_hash_date_and_subset_fail_closed(mon
             seed['source_date'] = seed['observed_at'][:10]
             seed['scanner_promotion_id'] = f'joint-{n}-{losing}'
             seed['evaluation_attempt_id'] = f'joint-attempt-{n}-{losing}'
-            seed['seed_sha256'] = compact.digest({k:v for k,v in seed.items() if k != 'seed_sha256'})
             for k in ('source_date','scanner_promotion_id','evaluation_attempt_id'): source[k] = seed[k]
             arm = next(iter(replay['operating_arms'].values()))
             arm['modeled_exit_at'] = (datetime.fromisoformat(arm['modeled_exit_at'])+delta).isoformat()
             if losing:
                 arm.update(net_pnl_krw=-600.,stress_net_pnl_krw=-720.,net_return_pct=-.5,stress_net_return_pct=-.6)
-            arm['sha256'] = compact.digest({k:v for k,v in arm.items() if k != 'sha256'})
-            replay['replay_sha256'] = compact.digest({k:v for k,v in replay.items() if k != 'replay_sha256'})
+            _resign_machine_owner_replay(replay)
             row.update(source_date=seed['source_date'],decision_trace_id=seed['evaluation_attempt_id'],
                 entry_group_observation={'key_parts':dict(zip(('venue','session_bucket'),scope.split('|')))},
                 setup_evidence={'losing':losing})

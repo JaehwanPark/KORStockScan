@@ -11509,15 +11509,6 @@ def evaluate_swing_exit(
     strategy,
 ):
     if strategy == "KOSDAQ_ML":
-        if peak_profit >= getattr(TRADING_RULES, "KOSDAQ_TARGET", 4.0):
-            drawdown = (
-                (highest_prices[code] - curr_p) / highest_prices[code] * 100
-                if highest_prices[code] > 0
-                else 0
-            )
-            # TODO: KOSDAQ 트레일링 되밀림 폭을 TRAILING_DRAWDOWN_PCT로 통일 검토
-            if drawdown >= 1.0:
-                return f"KOSDAQ 트레일링 익절 (peak_profit={peak_profit:.1f}%)"
         if profit_rate <= getattr(TRADING_RULES, "KOSDAQ_STOP", -2.0):
             return f"KOSDAQ 손절선 도달 (profit_rate={profit_rate:.2f}%)"
         return None
@@ -11539,14 +11530,6 @@ def evaluate_swing_exit(
             f"스윙 손절선 도달 (profit_rate={profit_rate:.2f}% <= {current_stop_loss}%)"
         )
 
-    if peak_profit >= getattr(TRADING_RULES, "TRAILING_START_PCT"):
-        drawdown = (
-            (highest_prices[code] - curr_p) / highest_prices[code] * 100
-            if highest_prices[code] > 0
-            else 0
-        )
-        if drawdown >= getattr(TRADING_RULES, "TRAILING_DRAWDOWN_PCT"):
-            return f"스윙 트레일링 익절 (peak_profit={peak_profit:.1f}%)"
     return None
 
 

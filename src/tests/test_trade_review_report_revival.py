@@ -3,6 +3,14 @@ import json
 from src.engine import sniper_trade_review_report as report_mod
 
 
+def test_retired_preset_profit_rule_keeps_historical_attribution():
+    assert report_mod._normalize_exit_rule("scalp_preset_protect_profit") == "scalp_preset_protect_profit"
+    assert report_mod._infer_exit_rule_from_reason("SCALP 출구엔진 보호선 이탈") == "scalp_preset_protect_profit"
+    assert report_mod._infer_exit_decision_source(
+        exit_rule="scalp_preset_protect_profit"
+    ) == "PRESET_PROTECT"
+
+
 def test_trailing_transitions_survive_timeline_and_projection():
     events = [
         report_mod.HoldingEvent(
