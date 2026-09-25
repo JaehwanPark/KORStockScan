@@ -9,6 +9,13 @@ from src.engine import sniper_trade_utils
 from src.engine.scalping.exit_safety_monitor import ScalpExitSafetyMonitor
 
 
+@pytest.fixture(autouse=True)
+def _isolate_active_targets(monkeypatch):
+    """Each cancellation case must use only the positions it constructs."""
+
+    monkeypatch.setattr(handlers, "ACTIVE_TARGETS", [])
+
+
 def test_trailing_transition_keeps_type_specific_and_rest_source_clocks(monkeypatch):
     events = []
     monkeypatch.setattr(

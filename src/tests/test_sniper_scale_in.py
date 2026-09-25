@@ -17971,6 +17971,8 @@ def test_scale_in_split_residual_cancel_after_partial_fill_has_no_cancel_cooldow
         lambda **kwargs: {"return_code": "0"},
     )
     holding_logs = []
+    errors = []
+    monkeypatch.setattr(state_handlers, "log_error", errors.append)
     monkeypatch.setattr(
         state_handlers, "_log_holding_pipeline",
         lambda stock, code, stage, **fields: holding_logs.append((stage, fields)),
@@ -18019,6 +18021,7 @@ def test_scale_in_split_residual_cancel_after_partial_fill_has_no_cancel_cooldow
     assert terminal["orig_ord_no"] == "A2"
     assert terminal["order_filled_qty"] == 1
     assert terminal["terminal_reason"] == "terminal_absence_and_inventory_exact"
+    assert not any("source_gap_buy_terminal_evidence" in error for error in errors)
 
 
 def test_timeout_unfilled_late_loss_avg_down_restores_retry_count(monkeypatch):

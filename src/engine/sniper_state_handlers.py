@@ -88465,7 +88465,7 @@ def _cancel_or_reconcile_pending_add(stock, reason, *, expired_only=False, now_t
             executions_by_order = {}
         for item in cancelled_ord_nos:
             try:
-                _log_holding_pipeline(
+                emitted = _log_holding_pipeline(
                     stock,
                     code,
                     "scale_in_buy_order_terminal_confirmed",
