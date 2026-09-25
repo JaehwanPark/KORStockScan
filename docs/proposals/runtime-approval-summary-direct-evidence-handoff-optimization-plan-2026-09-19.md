@@ -264,6 +264,7 @@ summary는 R6 존재·버전 결속·상태만 보여 준다.
 - measured no-edge는 구현 주문을 만들지 않는다.
 - validated edge는 기존 publisher/PREOPEN owner로 인계한다.
 - 같은 blocker를 새 ID로 반복 생성하지 않는다.
+- `DirectFamily*` 항목은 현재 `runtime_approval_summary`에서 다시 투영하는 builder 소유 작업이다. 다음 summary가 해당 family를 terminal/not-applicable로 판정하면 이전 자동 블록의 해당 항목은 제거하고, 무관한 수동 작업은 보존한다.
 
 ### 10.4 strict verifier
 

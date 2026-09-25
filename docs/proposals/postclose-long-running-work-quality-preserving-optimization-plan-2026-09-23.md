@@ -57,7 +57,7 @@
 
 - 9/22에 배포된 독립 stage dispatch, source 대기 시 compute slot 비점유, 최대 두 child compute slot, stage lock 및 checkpoint 재개를 기준선으로 삼는다.
 - widget full grid와 main replay 등 CPU·메모리 집약 단계의 동시 실행이 자연 resource samples에서 반복 압박을 만드는 경우, 기존 scheduler/admission owner 안에서 실행 순서 또는 slot admission만 조정한다. 새 timer·cron·worker·무제한 병렬화는 추가하지 않는다.
-- 재시도는 실패/deferred stage와 hash가 바뀐 하류 stage에만 적용한다. 성공 receipt는 현재 입력·코드·prerequisite 검증 후 재사용하고, 같은 실패 입력을 무한 반복하지 않는다.
+- 재시도는 실패/deferred stage와 hash가 바뀐 하류 stage에만 적용한다. 성공 receipt는 현재 입력·코드·prerequisite 검증 후 재사용하고, 같은 실패 입력을 무한 반복하지 않는다. immutable release 간 재사용은 관리 release 안의 동일 stage 코드 hash와 artifact·input·prerequisite hash가 모두 일치할 때만 허용한다.
 - market/source validation 실패는 해당 owner에 귀속하고, 무관한 성공 stage나 기존 유효 정책을 취소·삭제하지 않는다.
 
 ### P5 — Rising 최적화 유지

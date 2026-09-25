@@ -40,6 +40,8 @@
 
 `machine_attribution → machine_timing`, widget/episode 정책과 공동 allocation은 독립 stage다. `rising_missed`는 기계판정 이전 기회 발견의 진단 원천이다. 이들 결과를 메인 AI PASS 이후 주문 성과의 분모에 합치지 않는다. `runtime_approval_summary`는 각 family 평가·후행 소비 상태를 투영하며 EV를 새로 계산하지 않는다.
 
+`pre_submit_delay`는 2026-09-23부터 독립 필수 direct-evidence owner다. 요약 검증기와 다음 checklist handoff는 이를 `PreSubmitDelay` owner로 받아들이며, `source_gap`을 유효한 결손 상태로 보존한다. 이는 정책 선정이나 runtime 적용을 뜻하지 않는다.
+
 ## 2. 9/22 원천의 현재 결손과 첫 작업
 
 | Owner | 관측 상태 | 보완 대상과 종료 검사 |
