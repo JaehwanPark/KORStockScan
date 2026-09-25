@@ -13,6 +13,7 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from src.trading.market import session_contract
 from src.engine.scalping.trailing_exit_decision import evaluate_trailing_take_profit
 from src.engine.scalping.trailing_threshold_policy import (
     GRID_VERSION,
@@ -107,6 +108,14 @@ def _validated_events(rows: list[dict]) -> tuple[list[dict], str | None]:
         market = market_type_at(at)
         if market is None or market != row.get("tuning_market_type"):
             return [], "source_gap_market_session_binding"
+        session = session_contract.resolve_market_session(
+            datetime.fromtimestamp(at, KST)
+        )
+        if (not session.exit_allowed_by_clock
+                or _flag(row.get("tuning_exit_allowed_by_clock")) is not True
+                or row.get("tuning_session_contract_version")
+                    != session.contract_version):
+            return [], "source_gap_market_exit_clock_blocked"
         peak = _number(row.get("peak_price"))
         peak_profit = _number(row.get("peak_profit_pct"))
         bid = _number(row.get("executable_bid"))
@@ -497,7 +506,7 @@ def summarize_start_grid(
             if len(incumbent_values) == 1 and None not in incumbent_values
             else None
         )
-        if incumbent_value is None:
+        if incumbent_value is None or incumbent_value not in START_GRID_PCT:
             enough = False
         ranked = sorted(
             START_GRID_PCT,

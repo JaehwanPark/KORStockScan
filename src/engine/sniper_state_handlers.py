@@ -29099,6 +29099,12 @@ def _observe_scalp_trailing_input_transition(
         else None
     )
     market_type = scalp_trailing_market_type_at(now_ts)
+    market_session = session_contract.resolve_market_session(
+        datetime.fromtimestamp(float(now_ts), tz=_KST)
+    )
+    exit_allowed_by_clock = bool(
+        not market_session.blocker and market_session.exit_allowed_by_clock
+    )
     depth_receipt = quote_receipt.get("depth_receipt")
     depth_receipt = depth_receipt if isinstance(depth_receipt, dict) else {}
     depth_row = None
@@ -29172,7 +29178,7 @@ def _observe_scalp_trailing_input_transition(
             and depth_row is not None
         )
     grid_source_complete = bool(
-        market_type and bid_received_at is not None
+        market_type and exit_allowed_by_clock and bid_received_at is not None
         and decision.price_usable and executable_bid_qty > 0
         and bid_identity_proven
         and not stock.get("scalp_trailing_arm_persist_gap")
@@ -29316,6 +29322,8 @@ def _observe_scalp_trailing_input_transition(
             observation_max_samples=SCALP_TRAILING_MAX_POSITION_SAMPLES,
             evaluation_at_epoch=now_ts,
             tuning_market_type=market_type or "-",
+            tuning_exit_allowed_by_clock=exit_allowed_by_clock,
+            tuning_session_contract_version=market_session.contract_version,
             tuning_start_grid_version="start_0p3_to_1p2_step_0p1_v1",
             tuning_grid_first_arm=json.dumps(new_arms),
             tuning_grid_first_trigger=json.dumps(new_triggers),
@@ -29332,6 +29340,7 @@ def _observe_scalp_trailing_input_transition(
                 "-" if grid_source_complete and not coverage_exhausted
                 and max_evaluation_gap <= 2.0
                 else "market_session_missing" if not market_type
+                else "market_exit_clock_blocked" if not exit_allowed_by_clock
                 else "bid_clock_missing" if bid_received_at is None
                 else "bid_depth_missing" if executable_bid_qty <= 0
                 else "bid_identity_missing" if not bid_identity_proven

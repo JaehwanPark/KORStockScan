@@ -18,6 +18,7 @@ from src.engine.scalping.trailing_threshold_policy import (
     market_type_at,
     start_values_hash,
 )
+from src.trading.market import session_contract
 
 
 def _at(clock: str) -> float:
@@ -49,6 +50,12 @@ def _event(clock: str, sequence: int, *, peak: int, bid: int,
         "evaluation_at_epoch": at,
         "bid_source_received_at_epoch": at - 0.1,
         "tuning_market_type": market_type_at(at),
+        "tuning_exit_allowed_by_clock": True,
+        "tuning_session_contract_version": (
+            session_contract.resolve_market_session(
+                datetime.fromtimestamp(at, ZoneInfo("Asia/Seoul"))
+            ).contract_version
+        ),
         "peak_price": peak,
         "peak_profit_pct": peak_profit,
         "executable_bid": bid,
@@ -255,10 +262,4 @@ def test_market_change_keeps_prior_arm_for_later_market_signal():
         trade, rows, actual_exit_rule="scalp_trailing_take_profit",
         actual_exit_signal={"timestamp": "2026-09-25 09:00:00"},
     )
-    assert replay["source_gap"] is None
-    assert replay["markets"]["REGULAR"]["1.0"]["first_arm_at_epoch"] == (
-        _at("2026-09-25 08:59:59")
-    )
-    assert replay["markets"]["REGULAR"]["1.0"]["first_trigger_at_epoch"] == (
-        _at("2026-09-25 09:00:00")
-    )
+    assert replay["source_gap"] == "source_gap_market_exit_clock_blocked"
