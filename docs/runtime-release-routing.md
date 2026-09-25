@@ -2,6 +2,12 @@
 
 Owner: deployment infrastructure. Installed main routing is separate from exact-date trading approval. Widget/episode services use the separately authorized machine pin described below, not the main selector.
 
+## 스캘핑 트레일링 익절 4축 영수증
+
+다음 bootstrap 생성부터 `SCALP_TRAILING_START_PCT`, `SCALP_TRAILING_STRONG_AI_SCORE`, `SCALP_TRAILING_LIMIT_WEAK`, `SCALP_TRAILING_LIMIT_STRONG`는 프리마켓·정규장·통합애프터마켓별 12개 환경값과 단일 `KORSTOCKSCAN_SCALP_TRAILING_MARKET_VECTOR_SHA256`를 받는다. 네 scalar는 시장 키 누락 시 fallback이며, 정책 영수증 v3은 12개 값·출처·hash를 검증한다. 실거래 fast/normal 익절은 평가 시각 시장의 같은 벡터를 쓰고, hash가 맞지 않으면 scalar를 적용하며 관측 원천 결손을 남긴다. 손절의 기존 동적 stop 경로는 이 시장별 익절 벡터의 소비자가 아니다. 현행 `session_contract`는 프리마켓 청산 시각을 허용하지 않으므로 프리마켓 값은 이 계약에서 실익절 관측이 생기기 전까지 정책 식별 불가로 남는다.
+
+장후 `trailing_four_axis_market_tuning.research_candidate`는 보고 전용이며 `runtime_selected`나 실제 PID 소비를 뜻하지 않는다. 기존 bootstrap의 명시적 `--receipt` 경로에서 `scalp_trailing_four_axis_selected_policy_v1`을 소비할 때만 후보 12개 값이 다음 날짜에 들어갈 수 있다. 이 선택 영수증은 원천 보고서 파일 hash·후보 벡터 hash·부모 rollback hash·`selection_review`의 원천/실행모형/동일 stage 검토·단일 canary scope를 대사한다. 운영자 override/lock 충돌이나 동일 stage 후보 중복은 거절한다. 새 bootstrap 생성·검증과 실제 프로세스 소비는 날짜별 release 영수증으로 별도 대사한다.
+
 ## Single selection
 
 `data/runtime/runtime_release_selection.json` selects one absolute managed release root and its full Git commit. The workspace entrypoint is `bash deploy/run_runtime_release.sh`. It checks the selected HEAD, clean `src/deploy/restart.sh` and shared `data/logs/tmp/.venv/docs/restart.flag` before invoking a target. Missing or invalid selection blocks execution; it must not fall back to mutable workspace code.

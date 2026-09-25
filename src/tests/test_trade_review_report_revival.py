@@ -1,6 +1,19 @@
 import json
+import pytest
 
 from src.engine import sniper_trade_review_report as report_mod
+
+
+@pytest.fixture(autouse=True)
+def _isolate_saved_structured_partition(monkeypatch, request):
+    """Unit builders must not absorb the host's preserved trading archive."""
+
+    if request.node.name == "test_structured_trailing_projection_flags_wrong_partition_and_missing_id":
+        return
+    monkeypatch.setattr(
+        report_mod, "_load_holding_projection_events_from_structured",
+        lambda _date: ([], "source_gap_structured_partition_missing", []),
+    )
 
 
 def test_retired_preset_profit_rule_keeps_historical_attribution():

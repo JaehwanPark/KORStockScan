@@ -111,6 +111,7 @@ _DETAIL_HIDDEN_KEYS = {
     "new_watch_id",
     "scalp_trailing_policy_values",
     "scalp_trailing_start_by_market",
+    "scalp_trailing_market_values",
     "operational_threshold_values",
     "operational_threshold_sources",
 }
@@ -175,6 +176,7 @@ def _decode_threshold_json_fields(fields: dict) -> dict:
     for key in (
         "scalp_trailing_policy_values",
         "scalp_trailing_start_by_market",
+        "scalp_trailing_market_values",
         "operational_threshold_values",
         "operational_threshold_sources",
     ):

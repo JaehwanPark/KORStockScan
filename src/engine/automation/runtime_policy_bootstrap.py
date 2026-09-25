@@ -25,9 +25,11 @@ from src.engine.lifecycle.retirement import (
     without_retired_env,
 )
 from src.engine.scalping.trailing_threshold_policy import (
-    START_MARKET_ENV_KEYS as SCALP_TRAILING_START_MARKET_ENV_KEYS,
+    MARKET_ENV_KEYS as SCALP_TRAILING_MARKET_ENV_KEYS,
+    MARKET_VECTOR_SHA_ENV_KEY as SCALP_TRAILING_MARKET_VECTOR_SHA_ENV_KEY,
     THRESHOLD_KEYS as SCALP_TRAILING_THRESHOLD_KEYS,
     bootstrap_receipt as scalp_trailing_bootstrap_receipt,
+    selected_policy_env as scalp_trailing_selected_policy_env,
 )
 from src.utils.constants import DATA_DIR
 
@@ -533,6 +535,13 @@ def _direct_runtime_env(
     family: str, payload: dict[str, Any], target_date: str
 ) -> tuple[dict[str, str], str | None]:
     raw = payload.get("runtime_env_overrides")
+    if family == "scalp_trailing_four_axis_selector":
+        if not isinstance(raw, dict) or set(raw) != {
+            env_key for markets in SCALP_TRAILING_MARKET_ENV_KEYS.values()
+            for env_key in markets.values()
+        }:
+            return {}, "scalp_trailing_market_env_keys_invalid"
+        return {str(key): str(value) for key, value in raw.items()}, None
     if raw in (None, {}):
         if family == "rising_missed_tp1_selector" and payload.get(
             "policy_sha256"
@@ -641,6 +650,25 @@ def _load_direct_receipts(
                 source_binding_error = validate_rising_missed_policy_receipt(
                     payload, source_report, target_date
                 )
+        if family == "scalp_trailing_four_axis_selector" and runtime_env_error is None:
+            source_date = str(payload.get("source_date") or "")
+            try:
+                if date.fromisoformat(source_date).isoformat() != source_date:
+                    raise ValueError("source_date_format")
+                source_path = (DATA_DIR / "report" / "monitor_snapshots"
+                               / f"holding_exit_observation_{source_date}.json")
+                if source_path.stat().st_size > 64 * 1024 * 1024:
+                    raise ValueError("source_report_exceeds_read_limit")
+                source_bytes = source_path.read_bytes()
+                source_report = json.loads(source_bytes)
+                expected_env = scalp_trailing_selected_policy_env(
+                    payload, source_report, target_date=target_date,
+                    report_sha256=_digest_bytes(source_bytes),
+                )
+                if runtime_env != expected_env:
+                    raise ValueError("selected_env_mismatch")
+            except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+                source_binding_error = f"scalp_trailing_selection_invalid:{exc}"
         row = {
             "family": family,
             "source_receipt": _file_receipt(path),
@@ -736,10 +764,45 @@ def build_manifest(
         if key not in operator_values:
             env_owners[key] = "runtime_policy_bootstrap_exact_date_handoff"
     env_owners.update({key: "operator_runtime_override" for key in operator_values})
+    accepted_direct_receipts = []
     for receipt in direct_receipts:
+        if receipt["family"] == "scalp_trailing_four_axis_selector":
+            if any(row["family"] == receipt["family"] for row in accepted_direct_receipts):
+                rejected_receipts.append({**receipt, "reason": "multiple_same_stage_candidates"})
+                continue
+            selected_env = receipt["runtime_env_overrides"]
+            operator_conflicts = sorted(
+                key for key, value in selected_env.items()
+                if key in operator_values and operator_values[key] != value
+            )
+            lock_conflicts = sorted({
+                key for lock in locks
+                if operator_policy_succession.classify(lock) != "inactive_archive"
+                for key, value in operator_policy_succession.lock_values(lock).items()
+                if key in selected_env and str(value) != selected_env[key]
+            })
+            if operator_conflicts or lock_conflicts:
+                rejected_receipts.append({
+                    **receipt, "reason": "operator_or_lock_veto_conflict",
+                    "env_keys": sorted(set(operator_conflicts + lock_conflicts)),
+                })
+                continue
+            parent = scalp_trailing_bootstrap_receipt(values, env_owners)[
+                "market_values_sha256"
+            ]
+            try:
+                policy = _load_json(Path(receipt["source_receipt"]["path"]))
+            except (OSError, ValueError, json.JSONDecodeError):
+                rejected_receipts.append({**receipt, "reason": "selected_receipt_unreadable"})
+                continue
+            if policy.get("rollback_market_values_sha256") != parent:
+                rejected_receipts.append({**receipt, "reason": "rollback_parent_hash_mismatch"})
+                continue
         for key, value in receipt.get("runtime_env_overrides", {}).items():
             values[key] = str(value)
             env_owners[key] = f"direct_policy:{receipt['family']}"
+        accepted_direct_receipts.append(receipt)
+    direct_receipts = accepted_direct_receipts
     for key, value in delay_env.items():
         if key not in operator_values:
             values[key] = value
@@ -785,10 +848,11 @@ def build_manifest(
         if env_key not in values:
             values[env_key] = str(trailing_receipt["values"][key])
             env_owners[env_key] = "code_default"
-    for market, env_key in SCALP_TRAILING_START_MARKET_ENV_KEYS.items():
-        if env_key not in values:
-            values[env_key] = str(trailing_receipt["start_by_market"][market])
-            env_owners[env_key] = trailing_receipt["start_by_market_sources"][market]
+    for threshold, markets in SCALP_TRAILING_MARKET_ENV_KEYS.items():
+        for market, env_key in markets.items():
+            if env_key not in values:
+                values[env_key] = str(trailing_receipt["market_values"][market][threshold])
+                env_owners[env_key] = trailing_receipt["market_value_sources"][market][threshold]
     values["KORSTOCKSCAN_SCALP_TRAILING_VALUE_SHA256"] = trailing_receipt[
         "value_sha256"
     ]
@@ -799,6 +863,12 @@ def build_manifest(
         trailing_receipt["start_by_market_sha256"]
     )
     env_owners["KORSTOCKSCAN_SCALP_TRAILING_START_BY_MARKET_SHA256"] = (
+        "scalp_trailing_threshold_receipt"
+    )
+    values[SCALP_TRAILING_MARKET_VECTOR_SHA_ENV_KEY] = trailing_receipt[
+        "market_values_sha256"
+    ]
+    env_owners[SCALP_TRAILING_MARKET_VECTOR_SHA_ENV_KEY] = (
         "scalp_trailing_threshold_receipt"
     )
     selected_families = sorted(
@@ -949,7 +1019,10 @@ def verify_bootstrap(target_date: str, *, pid: int | None = None, write: bool = 
     else:
         owners = manifest.get("env_key_owners")
         trailing_keys = [f"KORSTOCKSCAN_{key}" for key in SCALP_TRAILING_THRESHOLD_KEYS]
-        trailing_keys.extend(SCALP_TRAILING_START_MARKET_ENV_KEYS.values())
+        trailing_keys.extend(
+            env_key for markets in SCALP_TRAILING_MARKET_ENV_KEYS.values()
+            for env_key in markets.values()
+        )
         if (
             not isinstance(owners, dict)
             or any(key not in manifest_env or not owners.get(key) for key in trailing_keys)
@@ -967,7 +1040,9 @@ def verify_bootstrap(target_date: str, *, pid: int | None = None, write: bool = 
                 "KORSTOCKSCAN_SCALP_TRAILING_VALUE_SHA256"
             ) != expected_trailing["value_sha256"] or manifest_env.get(
                 "KORSTOCKSCAN_SCALP_TRAILING_START_BY_MARKET_SHA256"
-            ) != expected_trailing["start_by_market_sha256"]:
+            ) != expected_trailing["start_by_market_sha256"] or manifest_env.get(
+                SCALP_TRAILING_MARKET_VECTOR_SHA_ENV_KEY
+            ) != expected_trailing["market_values_sha256"]:
                 findings.append("scalp_trailing_threshold_receipt_mismatch")
     if target_date >= "2026-09-23":
         current_delay_env, current_delay_handoff = _pre_submit_delay_handoff(target_date)
@@ -1016,7 +1091,9 @@ def verify_bootstrap(target_date: str, *, pid: int | None = None, write: bool = 
         if current.get("sha256") != receipt.get("sha256"):
             findings.append(f"source_receipt_hash_mismatch:{source_path}")
     for row in manifest.get("direct_family_receipts") or []:
-        if not isinstance(row, dict) or row.get("family") != "rising_missed_tp1_selector":
+        if not isinstance(row, dict) or row.get("family") not in {
+            "rising_missed_tp1_selector", "scalp_trailing_four_axis_selector"
+        }:
             continue
         receipt = row.get("source_receipt") or {}
         accepted, rejected = _load_direct_receipts(
@@ -1024,7 +1101,12 @@ def verify_bootstrap(target_date: str, *, pid: int | None = None, write: bool = 
         )
         if not accepted or rejected:
             reason = rejected[0].get("reason") if rejected else "receipt_missing"
-            findings.append(f"rising_missed_source_binding_invalid:{reason}")
+            label = (
+                "rising_missed_source_binding_invalid"
+                if row.get("family") == "rising_missed_tp1_selector"
+                else "scalp_trailing_source_binding_invalid"
+            )
+            findings.append(f"{label}:{reason}")
     if pid is not None and raw_env:
         expected = operator_policy_succession.read_operator_env(runtime_file)
         try:

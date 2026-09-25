@@ -264,6 +264,10 @@ def test_strict_completed_population_partitions_exit_and_forward_layers(monkeypa
     assert quality["source_gap_ids"] == ["3"]
     assert quality["excluded_ids_by_reason"] == {"source_gap_buy_fill_missing": ["3"]}
     assert [row["record_id"] for row in report["position_outcomes"]] == ["1", "2"]
+    operational = report["trailing_operational_input_replay"]
+    assert operational["strict_completed_position_ids"] == ["1", "2"]
+    assert operational["decision_authority"] == "report_only_shared_owner_review_required"
+    assert operational["research_candidate"] is None
     coverage = report["position_outcome_coverage"]
     assert coverage["exit_class_ids"]["trailing_observed"] == ["1"]
     assert coverage["exit_class_ids"]["other_exit_observed"] == ["2"]
@@ -485,6 +489,35 @@ def test_trailing_direct_input_receipt_preserves_trigger_and_source_gap():
         axis["candidate_value"] is None
         and axis["eligible_for_live_review"] is False
         for axis in readiness["axes"].values()
+    )
+
+
+def test_trailing_market_vector_payload_change_cannot_share_one_claimed_hash():
+    from src.engine.scalping.trailing_four_axis_replay import DEFAULT_VECTOR
+    from src.engine.scalping.trailing_threshold_policy import (
+        START_MARKETS, market_values_hash,
+    )
+
+    trade = _trade(1)
+    vector = {market: dict(DEFAULT_VECTOR) for market in START_MARKETS}
+    altered = {market: dict(values) for market, values in vector.items()}
+    altered["REGULAR"]["SCALP_TRAILING_LIMIT_STRONG"] = 0.9
+    claimed_hash = market_values_hash(vector)
+    for sequence, payload in enumerate((vector, altered), 1):
+        trade["timeline"].append({
+            "stage": "scalp_trailing_input_transition",
+            "fields": {
+                "event_sequence": sequence,
+                "position_key": "record:1",
+                "scalp_trailing_market_values": payload,
+                "scalp_trailing_market_values_sha256": claimed_hash,
+            },
+        })
+
+    outcomes, _ = report_mod._build_position_outcomes([trade], [])
+    assert outcomes[0]["trailing_market_values"] is None
+    assert outcomes[0]["trailing_replay_source_status"] != (
+        "grid_source_linked_paired_replay_pending"
     )
 
 
@@ -757,7 +790,7 @@ def test_holding_exit_observation_defaults_to_clean_baseline_window(
     assert {
         item["date"]
         for item in report["completed_population_quality"]["source_gap_dates"]
-    } == {"2026-06-05", "2026-06-06"}
+    } == {"2026-06-05"}  # Missing closed Saturday is not a trading census gap.
 
 
 def test_holding_exit_observation_uses_calendar_month_when_baseline_disabled(

@@ -72,6 +72,8 @@
 
 익절 전용 네 축과 polling/NXT 입력 품질축은 각자의 권한 범위에서 **한 번에 한 축**만 후보로 낸다. 공유 quote·REST·AI 운영축은 장후 보고서가 같은 계약의 진단·후보를 만들되, 각 기존 owner의 안전/부하/원천 품질 검사를 통과해야 한다. 특히 stale/conflict 허용 확대, hard/protect/emergency 지연, broker/account/order/cooldown·provider·수량/자본 변경은 익절 EV만으로 허용하지 않는다. `SCALP_SAFE_PROFIT`은 real 보유 AI 감시와 sim 소비를 함께 비교하기 전에는 익절 전용 정책으로 승격하지 않는다. 적격 후보가 없으면 incumbent carry다.
 
+2026-09-25 후속 [4축·3시장 튜닝 설계안](./scalp-trailing-four-axis-market-tuning-and-historical-evidence-plan-2026-09-25.md)은 위 한 축 후보 원칙을 연구 단계에서 재검토한다. 시작·점수·약폭·강폭의 상호작용이 입증되면 하나의 버전·하나의 canary로 묶은 복합 후보를 허용하는 방안을 제안한다. 이 설계안만으로 후보값이나 live 적용 권한이 생성되지 않으며, 운영 입력 품질축의 공유 owner 경계는 유지한다.
+
 후보 선택을 구현할 때에만 exact-date policy와 다음 PREOPEN bootstrap의 단일 값 매핑, 이전 값·hash 롤백, PID 소비 및 post-apply version 귀속을 연결한다. 날짜는 정책 버전의 유효일이지 트레일링을 켜는 런타임 날짜 gate가 아니다. 계산/추천→선택→bootstrap→실제 PID→자연 SELL→비용 후 EV·순이익은 별도 영수증으로 판정한다.
 
 ## 6. 구현 리뷰와 수용 게이트
@@ -80,3 +82,7 @@
 2. **삭제 동등성:** 제거 대상마다 호출자·문서·환경 역검색과 동일 입력 fast/normal replay를 남긴다. 30bp·보호 lock·공유 안전축은 별도 owner 변경 없이 유지하며 stop 우선순위와 익절 `trailing_peak_worsen_floor`는 동일하다.
 3. **영향 검증:** 구현 시 최초 회귀를 보존하고 수리→재리뷰를 반복한다. 관련 판정·호가·AI·보고서·bootstrap/strict consumer의 targeted pytest/compile, wrapper 변경 시 `bash -n`·계약 검사, `git diff --check`를 통과한다. Kiwoom 요청/parser/recovery 변경이 생기면 AGENTS의 공식 reference gate를 먼저 수행한다.
 4. **운영 판정:** 코드 PASS, 장후 source/terminal, 선택 릴리스, exact-date env, 실제 PID 소비와 새 자연 비용 후 효과를 각각 기록한다. 9/28 `HoldingExitPositionOutcomeLineageClosure`의 새 자연 표본은 이 계획의 첫 수용 입력이며, 과거 결손 영수증을 소급 합성하지 않는다. 실제 적용은 검증된 owner·정책 경계에서 별도로 판정한다.
+
+## 7. 9/25 운영 입력 민감도 작업본
+
+[운영 입력 재생·리뷰 기록](../audit-reports/2026-09-25-scalp-trailing-operational-input-replay-review.md)에 17개 유지 운영값의 세 시장별 관측 경계 비교, 평가별 shadow hash와 결손 격리, 공유 quote/REST·보유 AI 소유자 검토 상태를 기록했다. 이 계산은 행동이 바뀌는 후보의 비용 후 반사실 손익을 채우지 않으며 정책 후보·실제 적용을 생성하지 않는다. 선행 4축의 후행 경로 검열과 엄격 완료 모수 0건도 별도 OPEN 증거로 유지한다.

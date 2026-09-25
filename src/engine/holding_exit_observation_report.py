@@ -17,12 +17,16 @@ from src.engine.scalping.trailing_threshold_policy import (
     GRID_VERSION as SCALP_TRAILING_GRID_VERSION,
     bootstrap_receipt as scalp_trailing_bootstrap_receipt,
     start_values_hash as scalp_trailing_start_values_hash,
+    market_values_hash as scalp_trailing_market_values_hash,
     value_hash as scalp_trailing_value_hash,
 )
 from src.engine.scalping.trailing_start_replay import (
     replay_start_grid,
     summarize_start_grid,
 )
+from src.engine.scalping.trailing_four_axis_replay import summarize_four_axis
+from src.engine.scalping.trailing_operational_replay import summarize_operational_input_replay
+from src.engine.scalping.trailing_historical_scenario import summarize_legacy_neutral_scenarios
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 
@@ -620,7 +624,8 @@ _FLOW_INTERVENTION_STAGES = {
 
 
 def _trailing_policy_manifest_binding(
-    policy_date: str, observed_sha: str, observed_market_sha: str = ""
+    policy_date: str, observed_sha: str, observed_market_sha: str = "",
+    observed_vector_sha: str = "",
 ) -> dict:
     """Bind an effective value hash to its dated producer, not to a live PID."""
 
@@ -663,7 +668,7 @@ def _trailing_policy_manifest_binding(
         manifest.get("target_date") == policy_date
         and manifest.get("manifest_sha256") == manifest_sha
         and manifest.get("env_sha256") == hashlib.sha256(env_bytes).hexdigest()
-        and receipt.get("schema") == "scalp_trailing_threshold_receipt_v2"
+        and receipt.get("schema") == "scalp_trailing_threshold_receipt_v3"
         and receipt.get("value_sha256") == receipt_sha
         and receipt == expected_receipt
         and manifest["env_overrides"].get(
@@ -674,6 +679,10 @@ def _trailing_policy_manifest_binding(
         and manifest["env_overrides"].get(
             "KORSTOCKSCAN_SCALP_TRAILING_START_BY_MARKET_SHA256"
         ) == observed_market_sha
+        and receipt.get("market_values_sha256") == observed_vector_sha
+        and manifest["env_overrides"].get(
+            "KORSTOCKSCAN_SCALP_TRAILING_MARKET_VECTOR_SHA256"
+        ) == observed_vector_sha
     )
     return {
         "status": (
@@ -749,7 +758,7 @@ def _build_position_outcomes(
             post_sell_by_trade[trade_id].append(post_sell)
 
     outcomes: list[dict] = []
-    bootstrap_bindings: dict[tuple[str, str], dict] = {}
+    bootstrap_bindings: dict[tuple[str, str, str, str], dict] = {}
     for trade in trades:
         trade_id = _trade_id(trade)
         timeline = [
@@ -954,6 +963,23 @@ def _build_position_outcomes(
             for fields in trailing_transitions
         }
         market_sha = next(iter(market_shas), "")
+        vector_values = next(
+            (row.get("scalp_trailing_market_values") for row in trailing_transitions
+             if isinstance(row.get("scalp_trailing_market_values"), dict)), None,
+        )
+        vector_shas = {str(row.get("scalp_trailing_market_values_sha256") or "")
+                       for row in trailing_transitions}
+        vector_sha = next(iter(vector_shas), "")
+        try:
+            vector_valid = bool(vector_values and len(vector_shas) == 1
+                                and scalp_trailing_market_values_hash(vector_values)
+                                == vector_sha
+                                and all(
+                                    row.get("scalp_trailing_market_values") == vector_values
+                                    for row in trailing_transitions
+                                ))
+        except (KeyError, TypeError, ValueError):
+            vector_valid = False
         market_value_hashes = set()
         for row in trailing_transitions:
             try:
@@ -962,10 +988,10 @@ def _build_position_outcomes(
                 ))
             except (TypeError, ValueError):
                 market_value_hashes.add("")
-        binding_key = (policy_date, policy_sha, market_sha)
+        binding_key = (policy_date, policy_sha, market_sha, vector_sha)
         if is_trailing_observed and binding_key not in bootstrap_bindings:
             bootstrap_bindings[binding_key] = _trailing_policy_manifest_binding(
-                policy_date, policy_sha, market_sha
+                policy_date, policy_sha, market_sha, vector_sha
             )
         policy_binding = (
             bootstrap_bindings[binding_key] if is_trailing_observed
@@ -1001,6 +1027,13 @@ def _build_position_outcomes(
             trailing_replay_status = "source_gap_market_policy_values_hash"
         elif market_provenance != {"bootstrap_value_hash_matched"}:
             trailing_replay_status = "source_gap_market_policy_runtime_hash"
+        elif len(vector_shas) != 1 or vector_sha in {"", "-"}:
+            trailing_replay_status = "source_gap_market_vector_changed_or_missing"
+        elif not vector_valid:
+            trailing_replay_status = "source_gap_market_vector_values_hash"
+        elif {str(row.get("scalp_trailing_market_values_provenance") or "")
+              for row in trailing_transitions} != {"bootstrap_value_hash_matched"}:
+            trailing_replay_status = "source_gap_market_vector_runtime_hash"
         elif (
             observed_policy_provenance != {"bootstrap_value_hash_matched"}
             or observed_expected_shas != {policy_sha}
@@ -1210,6 +1243,8 @@ def _build_position_outcomes(
                 "trailing_policy_value_sha256": policy_sha or None,
                 "trailing_start_by_market_sha256": market_sha or None,
                 "trailing_start_by_market_values": market_values,
+                "trailing_market_values_sha256": vector_sha or None,
+                "trailing_market_values": vector_values if vector_valid else None,
                 "trailing_policy_values": policy_values if policy_values_valid else None,
                 "trailing_policy_date": policy_date or None,
                 "trailing_policy_binding": policy_binding,
@@ -2263,6 +2298,10 @@ def build_holding_exit_observation_report(
     for missing_date in dates:
         if missing_date in loaded_trade_dates:
             continue
+        # A closed weekend without a snapshot is not a missing trading-day
+        # census. Retain any saved weekend snapshot as an ordinary source.
+        if datetime.strptime(missing_date, "%Y-%m-%d").weekday() >= 5:
+            continue
         completed_gaps.append(
             {
                 "date": missing_date,
@@ -2340,6 +2379,42 @@ def build_holding_exit_observation_report(
     opportunity_cost, missed_entry_paths = _build_opportunity_cost(dates)
 
     same_symbol_reentry = _build_same_symbol_reentry(strict_trades)
+    four_axis_tuning = summarize_four_axis(
+        strict_trades, position_outcomes,
+        population_complete=not completed_gaps and census_id_contract_ok,
+    )
+    operational_input_replay = summarize_operational_input_replay(
+        strict_trades, position_outcomes,
+        population_complete=not completed_gaps and census_id_contract_ok,
+    )
+    historical_neutral_scenario = summarize_legacy_neutral_scenarios(
+        main_completed_rows,
+        clean_start=analysis_window["clean_tuning_baseline_date"][:10],
+        source_gap_dates=completed_gaps,
+    )
+    historical_source_availability = {
+        "schema": "scalp_trailing_historical_source_availability_v1",
+        "decision_authority": "source_inventory_only_no_threshold_apply",
+        "completed_main_ids": main_ids,
+        "valid_profit_ids": valid_ids,
+        "strict_completed_position_ids": strict_ids,
+        "strict_excluded_by_id": {
+            trade_id: reasons for trade_id, reasons in strict_exclusions.items() if reasons
+        },
+        "four_axis_source_gap_by_id": four_axis_tuning["source_gap_by_id"],
+        "historical_direct_ids": sorted(
+            trade_id for trade_id, grade in four_axis_tuning[
+                "evidence_grade_by_id"
+            ].items() if grade == "historical_direct"
+        ),
+        "historical_reconstructed_count": four_axis_tuning[
+            "evidence_grade_counts"
+        ].get("historical_reconstructed", 0),
+        "not_four_axis_eligible_ids": sorted(
+            set(valid_ids) - set(strict_ids)
+            | set(four_axis_tuning["source_gap_by_id"])
+        ),
+    }
     report = {
         "date": safe_date,
         # Kept for compatibility with existing readers. New readers should
@@ -2412,6 +2487,10 @@ def build_holding_exit_observation_report(
         "trailing_start_market_tuning": summarize_start_grid(
             position_outcomes, population_complete=not completed_gaps
         ),
+        "trailing_four_axis_market_tuning": four_axis_tuning,
+        "trailing_operational_input_replay": operational_input_replay,
+        "trailing_historical_neutral_scenario": historical_neutral_scenario,
+        "trailing_historical_source_availability": historical_source_availability,
         "soft_stop_rebound": _build_soft_stop_rebound(
             post_sell_rows,
             same_symbol_reentry,

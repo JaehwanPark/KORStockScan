@@ -879,6 +879,8 @@ def _observation_metrics(observation: dict[str, Any] | None) -> dict[str, Any]:
             trailing = item
             break
     readiness = observation.get("trailing_threshold_readiness") or {}
+    four_axis = observation.get("trailing_four_axis_market_tuning") or {}
+    operational_replay = observation.get("trailing_operational_input_replay") or {}
     funnel = readiness.get("funnel_ids") or {}
     operational_axes = readiness.get("operational_axes") or {}
     population = observation.get("completed_population_quality") or {}
@@ -904,7 +906,20 @@ def _observation_metrics(observation: dict[str, Any] | None) -> dict[str, Any]:
             funnel.get("grid_source_linked_ids") or []
         ),
         "trailing_operational_axis_count": len(operational_axes),
+        "trailing_operational_replay_status": (
+            operational_replay.get("status") or "source_gap_report_missing"
+        ),
+        "trailing_operational_replay_source_gap_count": len(
+            operational_replay.get("source_gap_by_id") or {}
+        ),
         "trailing_threshold_source_status": readiness.get("status") or "source_gap",
+        "trailing_four_axis_status": four_axis.get("status") or "source_gap_report_missing",
+        "trailing_four_axis_source_gap_count": len(
+            four_axis.get("source_gap_by_id") or {}
+        ),
+        "trailing_four_axis_research_candidate_only": bool(
+            four_axis.get("research_candidate")
+        ),
     }
 
 

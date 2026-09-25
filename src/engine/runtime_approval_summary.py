@@ -1091,11 +1091,13 @@ def build_runtime_approval_summary(
         for owner in PRIMARY_DIRECT_OWNERS if required_by_owner.get(owner)
     )
     trailing_path = (
-        DATA_DIR / "report" / "holding_exit_observation"
+        DATA_DIR / "report" / "monitor_snapshots"
         / f"holding_exit_observation_{target_date}.json"
     )
     trailing_payload, trailing_error, trailing_read_mode, _ = _read(trailing_path)
     trailing_readiness = trailing_payload.get("trailing_threshold_readiness") or {}
+    four_axis_tuning = trailing_payload.get("trailing_four_axis_market_tuning") or {}
+    operational_replay = trailing_payload.get("trailing_operational_input_replay") or {}
     trailing_status = (
         "source_gap_report_missing_or_unreadable" if trailing_error
         else "source_gap_report_exceeds_read_limit"
@@ -1116,6 +1118,16 @@ def build_runtime_approval_summary(
         ),
         "grid_source_linked_count": len(
             (trailing_readiness.get("funnel_ids") or {}).get("grid_source_linked_ids") or []
+        ),
+        "four_axis_status": four_axis_tuning.get("status") or "source_gap_report_missing",
+        "four_axis_source_gap_count": len(four_axis_tuning.get("source_gap_by_id") or {}),
+        "four_axis_research_candidate_only": bool(four_axis_tuning.get("research_candidate")),
+        "four_axis_runtime_selected": False,
+        "operational_replay_status": (
+            operational_replay.get("status") or "source_gap_report_missing"
+        ),
+        "operational_replay_source_gap_count": len(
+            operational_replay.get("source_gap_by_id") or {}
         ),
         "decision_authority": "optional_source_only_no_candidate_or_runtime_apply",
     }

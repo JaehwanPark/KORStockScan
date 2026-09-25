@@ -283,6 +283,7 @@ from src.engine.risk.manual_control_exclusion import (
 from src.trading.entry.orderbook_stability_observer import ORDERBOOK_STABILITY_OBSERVER
 from src.trading.market.quote_consistency import (
     QuoteConsistencyConfig,
+    _tick_size as quote_consistency_tick_size,
     build_quote_consistency_snapshot,
     quote_input_from_rest_orderbook,
     quote_input_from_ws,
@@ -353,11 +354,21 @@ from src.engine.scalping.scale_in_split_order_plan import (
 from src.trading.order.split_execution_math import scale_in_leg_ttl_seconds
 from src.engine.scalping.position_peak_ledger import POSITION_PEAK_LEDGER
 from src.engine.scalping.trailing_exit_decision import evaluate_trailing_take_profit
+from src.engine.scalping.trailing_operational_replay import (
+    GRID_VERSION as SCALP_TRAILING_OPERATIONAL_GRID_VERSION,
+    _digest as scalp_trailing_operational_digest,
+    operational_shadow_state as scalp_trailing_operational_shadow_state,
+)
 from src.engine.scalping.trailing_threshold_policy import (
     GRID_VERSION as SCALP_TRAILING_GRID_VERSION,
+    MARKET_ENV_KEYS as SCALP_TRAILING_MARKET_ENV_KEYS,
+    MARKET_VECTOR_SHA_ENV_KEY as SCALP_TRAILING_MARKET_VECTOR_SHA_ENV_KEY,
     MAX_POSITION_SAMPLES as SCALP_TRAILING_MAX_POSITION_SAMPLES,
     START_GRID_PCT as SCALP_TRAILING_START_GRID_PCT,
+    closed_exit_gap as scalp_trailing_closed_exit_gap,
     market_type_at as scalp_trailing_market_type_at,
+    market_values_from_env as scalp_trailing_market_values_from_env,
+    market_values_hash as scalp_trailing_market_values_hash,
     start_values_from_env as scalp_trailing_start_values_from_env,
     start_values_hash as scalp_trailing_start_values_hash,
     value_hash as scalp_trailing_value_hash,
@@ -19704,6 +19715,12 @@ def _scalp_trailing_policy_observation_fields() -> dict[str, Any]:
     market_expected = str(os.getenv(
         "KORSTOCKSCAN_SCALP_TRAILING_START_BY_MARKET_SHA256"
     ) or "").strip()
+    try:
+        market_values = scalp_trailing_market_values_from_env(os.environ, values)
+        vector_digest = scalp_trailing_market_values_hash(market_values)
+    except (KeyError, TypeError, ValueError):
+        market_values, vector_digest = {}, ""
+    vector_expected = str(os.getenv(SCALP_TRAILING_MARKET_VECTOR_SHA_ENV_KEY) or "").strip()
     return {
         "scalp_trailing_policy_values": values,
         "scalp_trailing_policy_value_sha256": digest or "-",
@@ -19725,37 +19742,63 @@ def _scalp_trailing_policy_observation_fields() -> dict[str, Any]:
             else "bootstrap_value_hash_mismatch"
             if market_expected else "runtime_values_only"
         ),
+        "scalp_trailing_market_values": market_values,
+        "scalp_trailing_market_values_sha256": vector_digest or "-",
+        "scalp_trailing_market_values_expected_sha256": vector_expected or "-",
+        "scalp_trailing_market_values_provenance": (
+            "bootstrap_value_hash_matched"
+            if vector_digest and vector_expected == vector_digest
+            else "bootstrap_value_hash_mismatch" if vector_expected
+            else "runtime_values_only"
+        ),
     }
 
 
-def _scalp_trailing_start_for_evaluation(now_ts: float) -> tuple[float, str | None]:
-    """Use one session value for both live paths; preserve the scalar default."""
+def _scalp_trailing_values_for_evaluation(now_ts: float) -> tuple[dict[str, float | int], str | None]:
+    """Apply an atomic, hash-bound market vector in either TP evaluator."""
 
-    base = _rule_float("SCALP_TRAILING_START_PCT", 0.6)
+    scalar = {
+        "SCALP_TRAILING_START_PCT": _rule_float("SCALP_TRAILING_START_PCT", 0.6),
+        "SCALP_TRAILING_STRONG_AI_SCORE": _rule_int("SCALP_TRAILING_STRONG_AI_SCORE", 75),
+        "SCALP_TRAILING_LIMIT_WEAK": _rule_float("SCALP_TRAILING_LIMIT_WEAK", 0.4),
+        "SCALP_TRAILING_LIMIT_STRONG": _rule_float("SCALP_TRAILING_LIMIT_STRONG", 0.8),
+    }
     market = scalp_trailing_market_type_at(now_ts)
     if market is None:
-        return base, None
+        return scalar, None
     try:
-        values = scalp_trailing_start_values_from_env(os.environ, base)
-        expected = str(os.getenv(
-            "KORSTOCKSCAN_SCALP_TRAILING_START_BY_MARKET_SHA256"
-        ) or "").strip()
-        if expected and expected != scalp_trailing_start_values_hash(values):
-            return base, market
-        if not expected and any(
-            key in os.environ
-            for key in (
-                "KORSTOCKSCAN_SCALP_TRAILING_START_PCT_PREMARKET",
-                "KORSTOCKSCAN_SCALP_TRAILING_START_PCT_REGULAR",
-                "KORSTOCKSCAN_SCALP_TRAILING_START_PCT_INTEGRATED_AFTERMARKET",
-            )
-        ):
-            return base, market
+        values = scalp_trailing_market_values_from_env(os.environ, scalar)
+        expected = str(os.getenv(SCALP_TRAILING_MARKET_VECTOR_SHA_ENV_KEY) or "").strip()
+        override_present = any(
+            env_key in os.environ
+            for keys in SCALP_TRAILING_MARKET_ENV_KEYS.values()
+            for env_key in keys.values()
+        )
+        if expected:
+            if expected != scalp_trailing_market_values_hash(values):
+                return scalar, market
+        elif override_present:
+            # Older bootstrap receipts may contain start overrides only.
+            start_expected = str(os.getenv(
+                "KORSTOCKSCAN_SCALP_TRAILING_START_BY_MARKET_SHA256"
+            ) or "").strip()
+            start_values = {key: float(values[key]["SCALP_TRAILING_START_PCT"])
+                            for key in values}
+            if not start_expected or start_expected != scalp_trailing_start_values_hash(start_values):
+                return scalar, market
+            if any(env_key in os.environ for key, keys in SCALP_TRAILING_MARKET_ENV_KEYS.items()
+                   if key != "SCALP_TRAILING_START_PCT" for env_key in keys.values()):
+                return scalar, market
         return values[market], market
     except (KeyError, TypeError, ValueError):
-        # Bootstrap verification rejects the bad value. Keep the existing
-        # scalar in a running process, while the observation marks the gap.
-        return base, market
+        return scalar, market
+
+
+def _scalp_trailing_start_for_evaluation(now_ts: float) -> tuple[float, str | None]:
+    """Compatibility reader for the former market-start-only contract."""
+
+    values, market = _scalp_trailing_values_for_evaluation(now_ts)
+    return float(values["SCALP_TRAILING_START_PCT"]), market
 
 
 def _scalp_trailing_arm_was_latched(stock: dict) -> bool:
@@ -19831,6 +19874,7 @@ def _scalp_exit_threshold_observation_fields(
     trailing_trigger_kind: str = "",
     current_ai_score=None,
     ai_score_usable: bool = False,
+    trailing_score_threshold: float | None = None,
 ) -> dict[str, Any]:
     """Record the evaluated branch, never a new source of exit authority."""
     try:
@@ -19896,7 +19940,8 @@ def _scalp_exit_threshold_observation_fields(
                 else "-"
             ),
             "exit_threshold_strong_score_effective": (
-                _rule_float("SCALP_TRAILING_STRONG_AI_SCORE", 75.0)
+                (trailing_score_threshold if trailing_score_threshold is not None
+                 else _rule_float("SCALP_TRAILING_STRONG_AI_SCORE", 75.0))
                 if rule == "scalp_trailing_take_profit"
                 else "-"
             ),
@@ -24173,10 +24218,12 @@ def _holding_score_role_log_fields(context: dict | None) -> dict:
 
 
 def _holding_strong_trailing_enabled(
-    holding_score_context: dict | None, current_ai_score
+    holding_score_context: dict | None, current_ai_score,
+    *, threshold: float | None = None,
 ) -> bool:
     context = holding_score_context if isinstance(holding_score_context, dict) else {}
-    threshold = _rule_float("SCALP_TRAILING_STRONG_AI_SCORE", 75)
+    if threshold is None:
+        threshold = _rule_float("SCALP_TRAILING_STRONG_AI_SCORE", 75)
     return bool(
         context.get("usable_for_negative_exit")
         and _safe_float(current_ai_score, 0.0) >= threshold
@@ -28962,6 +29009,10 @@ def _observe_scalp_trailing_input_transition(
     rest_snapshot: dict | None = None,
     quote_fields: dict | None = None,
     nxt_guard_fields: dict | None = None,
+    holding_profit_rate_at_eval: float | None = None,
+    holding_mark_price_at_eval: float | None = None,
+    holding_ai_gate_evidence: dict | None = None,
+    holding_rest_request_elapsed_ms: float | None = None,
 ) -> None:
     """Keep predeclared grid crossings and source quality without raw tick logging."""
 
@@ -29024,6 +29075,7 @@ def _observe_scalp_trailing_input_transition(
     )
     policy_fields = _scalp_trailing_policy_observation_fields()
     quote_config = QuoteConsistencyConfig.from_env()
+    ai_gate = holding_ai_gate_evidence or {}
     try:
         fast_poll_ms = max(
             50.0, float(os.getenv("KORSTOCKSCAN_SCALP_FAST_EXIT_POLL_MS", "250"))
@@ -29098,6 +29150,18 @@ def _observe_scalp_trailing_input_transition(
         if executable_bid > 0 and best_ask >= executable_bid
         else None
     )
+    quote_warn_tick_floor_bps = None
+    if rest_snapshot and _safe_float(quality.get("ws_rest_gap_bps"), None) is not None:
+        ws_mark_for_warning = quote_input_from_ws(snapshot, now_ts=now_ts).mark_price
+        rest_mark_for_warning = quote_input_from_rest_orderbook(
+            rest_snapshot, now_ts=now_ts
+        ).mark_price
+        if ws_mark_for_warning > 0 and rest_mark_for_warning > 0:
+            reference = int(round((ws_mark_for_warning + rest_mark_for_warning) / 2))
+            quote_warn_tick_floor_bps = (
+                5 * quote_consistency_tick_size(reference)
+                / max(reference, 1) * 10000.0
+            )
     market_type = scalp_trailing_market_type_at(now_ts)
     market_session = session_contract.resolve_market_session(
         datetime.fromtimestamp(float(now_ts), tz=_KST)
@@ -29204,6 +29268,74 @@ def _observe_scalp_trailing_input_transition(
         (key, value.armed, value.triggered)
         for key, value in grid_decisions.items()
     )
+    # Every proposed four-axis first crossing changes at least one of these
+    # bins. Persist that evaluation even when the incumbent branch is stable.
+    drawdown = (
+        max(0.0, (peak_price - executable_bid) / peak_price * 100.0)
+        if peak_price > 0 and executable_bid > 0 else None
+    )
+    four_axis_bins = (
+        math.floor(peak_profit_pct * 10 + 1e-9)
+        if peak_profit_pct is not None else None,
+        math.floor(drawdown * 10 + 1e-9) if drawdown is not None else None,
+        math.floor(ai_score / 5 + 1e-9) if ai_usable and math.isfinite(ai_score) else None,
+        executable_bid_qty >= _safe_int(stock.get("buy_qty"), 0) > 0,
+        policy_fields["scalp_trailing_market_values_sha256"],
+    )
+    rest_last_attempt = _safe_float(
+        stock.get("scalp_trailing_rest_last_attempt_at"), 0.0
+    )
+    rest_first_attempt = (
+        stock.get("scalp_trailing_rest_first_attempt")
+        if evaluator == "normal_rest_recovery" else rest_last_attempt <= 0
+    )
+    rest_since_last_attempt = (
+        stock.get("scalp_trailing_rest_elapsed_before_attempt_sec")
+        if evaluator == "normal_rest_recovery" else
+        max(0.0, now_ts - rest_last_attempt) if rest_last_attempt > 0 else None
+    )
+    fast_reuse_ws_age = _get_ws_snapshot_age_sec(snapshot)
+    operational_shadow_row = {
+        "holding_profit_rate_at_eval": holding_profit_rate_at_eval,
+        "holding_ai_elapsed_since_review_sec": ai_gate.get("elapsed_sec"),
+        "holding_ai_price_change_since_review_pct": ai_gate.get("price_change_pct"),
+        "holding_ai_gate_prerequisites_met": ai_gate.get("prerequisites_met"),
+        "holding_ai_sim_budget_target": ai_gate.get("sim_budget_target"),
+        "ai_score_age_sec": score_age_sec,
+        "holding_ai_fast_reuse_ws_age_sec": fast_reuse_ws_age,
+        "holding_rest_request_elapsed_ms": holding_rest_request_elapsed_ms,
+        "holding_rest_since_last_request_sec": rest_since_last_attempt,
+        "holding_rest_first_request_eligible": rest_first_attempt,
+        "nxt_trailing_bid_guard_ws_0b_age_ms": nxt_quality.get(
+            "nxt_trailing_bid_guard_ws_0b_age_ms"
+        ),
+        "nxt_trailing_bid_guard_ws_0d_age_ms": nxt_quality.get(
+            "nxt_trailing_bid_guard_ws_0d_age_ms"
+        ),
+        "nxt_trailing_bid_guard_ws_0d_item": nxt_quality.get(
+            "nxt_trailing_bid_guard_ws_0d_item"
+        ),
+        "nxt_trailing_bid_guard_ws_0d_route": nxt_quality.get(
+            "nxt_trailing_bid_guard_ws_0d_route"
+        ),
+        "quote_consistency_ws_age_ms": quality.get("quote_consistency_ws_age_ms"),
+        "quote_consistency_rest_age_ms": quality.get("quote_consistency_rest_age_ms"),
+        "ws_rest_gap_bps": quality.get("ws_rest_gap_bps"),
+        "operational_quote_warn_tick_floor_bps": quote_warn_tick_floor_bps,
+        "operational_executable_spread_bps": spread_bps,
+        "operational_mark_to_bid_gap_bps": (
+            max(0.0, (holding_mark_price_at_eval - executable_bid)
+                / holding_mark_price_at_eval * 10000.0)
+            if holding_mark_price_at_eval is not None
+            and holding_mark_price_at_eval > 0 and executable_bid > 0 else None
+        ),
+    }
+    operational_shadow_sha = scalp_trailing_operational_digest(
+        scalp_trailing_operational_shadow_state(
+            operational_shadow_row,
+            {key: float(value) for key, value in operational_values.items()},
+        )
+    )
     state = (
         bool(decision.armed),
         bool(decision.triggered),
@@ -29223,6 +29355,8 @@ def _observe_scalp_trailing_input_transition(
         operational_sha256,
         market_type,
         grid_state,
+        four_axis_bins,
+        operational_shadow_sha,
         bool(stock.get("scalp_trailing_arm_persist_gap")),
     )
     with ENTRY_LOCK:
@@ -29238,6 +29372,10 @@ def _observe_scalp_trailing_input_transition(
             max(0.0, now_ts - previous_eval)
             if previous_eval is not None and now_ts >= previous_eval else 0.0
         )
+        if previous_eval is not None and evaluation_gap > 2.0 and (
+            scalp_trailing_closed_exit_gap(previous_eval, now_ts)
+        ):
+            evaluation_gap = 0.0
         max_evaluation_gap = max(
             evaluation_gap,
             _safe_float(stock.get("scalp_trailing_grid_max_gap_since_event"), 0.0)
@@ -29325,6 +29463,9 @@ def _observe_scalp_trailing_input_transition(
             tuning_exit_allowed_by_clock=exit_allowed_by_clock,
             tuning_session_contract_version=market_session.contract_version,
             tuning_start_grid_version="start_0p3_to_1p2_step_0p1_v1",
+            tuning_four_axis_bin_version="start_0p1_width_0p1_score_5_v1",
+            tuning_operational_shadow_version=SCALP_TRAILING_OPERATIONAL_GRID_VERSION,
+            tuning_operational_shadow_sha256=operational_shadow_sha,
             tuning_grid_first_arm=json.dumps(new_arms),
             tuning_grid_first_trigger=json.dumps(new_triggers),
             tuning_grid_state=json.dumps(grid_state),
@@ -29415,10 +29556,16 @@ def _observe_scalp_trailing_input_transition(
             trailing_limit_pct=decision.threshold_pct,
             trailing_drawdown_pct=decision.drawdown_pct,
             strong=strong,
-            strong_score_threshold=_rule_float("SCALP_TRAILING_STRONG_AI_SCORE", 75),
+            strong_score_threshold=_scalp_trailing_values_for_evaluation(now_ts)[0][
+                "SCALP_TRAILING_STRONG_AI_SCORE"
+            ],
             ai_score=ai_score,
             ai_score_usable=ai_usable,
             ai_score_age_sec=score_age_sec,
+            ai_score_effective_at_epoch=(
+                _safe_float(stock.get("holding_score_last_effective_at"), None)
+                or _safe_float(stock.get("last_ai_reviewed_at"), None)
+            ),
             ai_score_ttl_sec=_holding_score_ttl_sec(is_critical_zone=True),
             ai_score_source=(
                 stock.get("holding_score_source")
@@ -29427,6 +29574,38 @@ def _observe_scalp_trailing_input_transition(
                 or "-"
             ),
             ai_score_data_quality=stock.get("holding_score_data_quality") or "-",
+            holding_profit_rate_at_eval=holding_profit_rate_at_eval,
+            holding_ai_elapsed_since_review_sec=ai_gate.get("elapsed_sec"),
+            holding_ai_price_change_since_review_pct=ai_gate.get("price_change_pct"),
+            holding_ai_gate_prerequisites_met=ai_gate.get("prerequisites_met"),
+            holding_ai_sim_budget_target=ai_gate.get("sim_budget_target"),
+            holding_ai_fast_reuse_ws_age_sec=fast_reuse_ws_age,
+            holding_rest_request_elapsed_ms=holding_rest_request_elapsed_ms,
+            holding_rest_since_last_request_sec=rest_since_last_attempt,
+            holding_rest_first_request_eligible=rest_first_attempt,
+            nxt_trailing_bid_guard_ws_0d_item=nxt_quality.get(
+                "nxt_trailing_bid_guard_ws_0d_item"
+            ),
+            nxt_trailing_bid_guard_ws_0d_route=nxt_quality.get(
+                "nxt_trailing_bid_guard_ws_0d_route"
+            ),
+            operational_ws_0d_best_bid=(
+                _safe_int(depth_row.get("best_bid"), 0) if depth_row else None
+            ),
+            operational_ws_0d_best_bid_qty=(
+                exact_bid_depth(depth_row, _safe_int(depth_row.get("best_bid"), 0))
+                if depth_row else None
+            ),
+            operational_rest_best_bid=(rest_snapshot or {}).get("best_bid"),
+            operational_rest_best_bid_qty=exact_bid_depth(
+                rest_snapshot or {},
+                _safe_int((rest_snapshot or {}).get("best_bid"), 0),
+            ) if rest_snapshot else None,
+            operational_executable_spread_bps=spread_bps,
+            operational_quote_warn_tick_floor_bps=quote_warn_tick_floor_bps,
+            operational_mark_to_bid_gap_bps=operational_shadow_row[
+                "operational_mark_to_bid_gap_bps"
+            ],
             operational_threshold_values=(
                 json.dumps(operational_values, sort_keys=True, separators=(",", ":"))
                 if include_values else "-"
@@ -29442,6 +29621,7 @@ def _observe_scalp_trailing_input_transition(
                     if key in {
                         "scalp_trailing_policy_values",
                         "scalp_trailing_start_by_market",
+                        "scalp_trailing_market_values",
                     } and isinstance(value, dict)
                     else value
                 )
@@ -29487,6 +29667,12 @@ def _recover_scalp_trailing_bid_for_normal(
     retry_after = _safe_float(stock.get("scalp_trailing_rest_retry_after"), 0.0)
     if now_ts < retry_after:
         return 0, "rest_retry_interval", {}
+    last_attempt = _safe_float(stock.get("scalp_trailing_rest_last_attempt_at"), 0.0)
+    stock["scalp_trailing_rest_first_attempt"] = last_attempt <= 0
+    stock["scalp_trailing_rest_elapsed_before_attempt_sec"] = (
+        max(0.0, now_ts - last_attempt) if last_attempt > 0 else None
+    )
+    stock["scalp_trailing_rest_last_attempt_at"] = now_ts
     stock["scalp_trailing_rest_retry_after"] = (
         now_ts + _holding_rest_quote_fallback_min_interval_sec()
     )
@@ -29565,7 +29751,8 @@ def evaluate_and_dispatch_fast_scalp_exit(
         stock, code, ws_data, buy_price=buy_price, now_ts=observed_at
     )
     peak_profit = calculate_net_profit_rate(buy_price, peak_price)
-    trailing_start_pct, _ = _scalp_trailing_start_for_evaluation(observed_at)
+    trailing_values, _ = _scalp_trailing_values_for_evaluation(observed_at)
+    trailing_start_pct = float(trailing_values["SCALP_TRAILING_START_PCT"])
     if (not fast_stop_enabled and not retry_pending
             and peak_profit < trailing_start_pct
             and not _scalp_trailing_arm_was_latched(stock)):
@@ -29720,16 +29907,12 @@ def evaluate_and_dispatch_fast_scalp_exit(
         is_critical_zone=True,
     )
     strong_trailing = _holding_strong_trailing_enabled(
-        score_context, current_ai_score
+        score_context, current_ai_score,
+        threshold=float(trailing_values["SCALP_TRAILING_STRONG_AI_SCORE"]),
     )
-    trailing_limit = _rule_float(
-        (
-            "SCALP_TRAILING_LIMIT_STRONG"
-            if strong_trailing
-            else "SCALP_TRAILING_LIMIT_WEAK"
-        ),
-        (0.8 if strong_trailing else 0.4),
-    )
+    trailing_limit = float(trailing_values[
+        "SCALP_TRAILING_LIMIT_STRONG" if strong_trailing else "SCALP_TRAILING_LIMIT_WEAK"
+    ])
     trailing_worsen = peak_profit - profit_rate
     trailing_decision = evaluate_trailing_take_profit(
         peak_price=peak_price,
@@ -29762,6 +29945,9 @@ def evaluate_and_dispatch_fast_scalp_exit(
         evaluator="fast",
         rest_snapshot=rest_snapshot,
         quote_fields=quote_fields,
+        holding_profit_rate_at_eval=profit_rate,
+        holding_mark_price_at_eval=mark_price,
+        holding_rest_request_elapsed_ms=rest_elapsed_ms if rest_state != "not_attempted" else None,
     )
     trailing_drawdown_pct = trailing_decision.drawdown_pct
     trigger_kind = ""
@@ -29961,6 +30147,9 @@ def evaluate_and_dispatch_fast_scalp_exit(
                 evaluator="fast_rest_confirmed",
                 rest_snapshot=wide_rest,
                 quote_fields=wide_quote_fields,
+                holding_profit_rate_at_eval=profit_rate,
+                holding_mark_price_at_eval=wide_mark_price,
+                holding_rest_request_elapsed_ms=wide_rest_elapsed_ms,
             )
             trailing_drawdown_pct = trailing_decision.drawdown_pct
             if fast_stop_enabled and emergency_pct is not None and profit_rate <= emergency_pct:
@@ -30117,15 +30306,14 @@ def evaluate_and_dispatch_fast_scalp_exit(
                 trailing_start_pct=trailing_start_pct,
                 trailing_limit_pct=trailing_limit,
                 trailing_drawdown_pct=trailing_drawdown_pct,
-                strong_trailing=_holding_strong_trailing_enabled(
-                    score_context, current_ai_score
-                ),
+                strong_trailing=strong_trailing,
                 trailing_peak_price=peak_price,
                 trailing_executable_bid=trusted_bid,
                 trailing_bid_source=trusted_bid_source,
                 trailing_trigger_kind=trigger_kind,
                 current_ai_score=current_ai_score,
                 ai_score_usable=bool(score_context.get("usable_for_negative_exit")),
+                trailing_score_threshold=float(trailing_values["SCALP_TRAILING_STRONG_AI_SCORE"]),
             ),
         )
     except Exception as exc:
@@ -82738,14 +82926,15 @@ def handle_holding_state(
             current_ai_score=current_ai_score,
         )
 
-    if (
+    holding_ai_gate_prerequisites = bool(
         strategy == "SCALPING"
         and ai_engine
         and radar
         and not opening_rotation_active
         and not is_sell_signal
         and not holding_context_forbidden_exit_candidate
-    ):
+    )
+    if holding_ai_gate_prerequisites:
         safe_profit_pct = _rule_float("SCALP_SAFE_PROFIT", 0.5)
         near_safe_profit_zone = abs(profit_rate - safe_profit_pct) <= 0.20
         is_critical_zone = (
@@ -84295,18 +84484,23 @@ def handle_holding_state(
         else:
             dynamic_stop_pct = soft_stop_pct
             dynamic_trailing_limit = _rule_float("SCALP_TRAILING_LIMIT_WEAK", 0.4)
-        scalp_trailing_start_pct, _ = _scalp_trailing_start_for_evaluation(now_ts)
+        trailing_values, _ = _scalp_trailing_values_for_evaluation(now_ts)
+        scalp_trailing_start_pct = float(trailing_values["SCALP_TRAILING_START_PCT"])
         strong_trailing = _holding_strong_trailing_enabled(
-            holding_score_exit_role_ctx, current_ai_score
+            holding_score_exit_role_ctx, current_ai_score,
+            threshold=float(trailing_values["SCALP_TRAILING_STRONG_AI_SCORE"]),
         )
+        tp_trailing_limit = float(trailing_values[
+            "SCALP_TRAILING_LIMIT_STRONG" if strong_trailing else "SCALP_TRAILING_LIMIT_WEAK"
+        ])
         trailing_decision = evaluate_trailing_take_profit(
             peak_price=scalp_tp_peak_price,
             executable_bid=trailing_decision_price,
             peak_profit_pct=scalp_tp_peak_profit,
             start_pct=scalp_trailing_start_pct,
             strong=strong_trailing,
-            weak_limit_pct=dynamic_trailing_limit,
-            strong_limit_pct=dynamic_trailing_limit,
+            weak_limit_pct=tp_trailing_limit,
+            strong_limit_pct=tp_trailing_limit,
             already_armed=_scalp_trailing_arm_was_latched(stock),
         )
         _scalp_trailing_latch_arm(
@@ -84330,6 +84524,17 @@ def handle_holding_state(
             evaluator="normal",
             quote_fields=holding_quote_fields,
             nxt_guard_fields=nxt_trailing_bid_guard_fields,
+            holding_profit_rate_at_eval=profit_rate,
+            holding_mark_price_at_eval=curr_p,
+            holding_ai_gate_evidence={
+                "elapsed_sec": time_elapsed,
+                "price_change_pct": price_change,
+                "prerequisites_met": holding_ai_gate_prerequisites,
+                "sim_budget_target": (
+                    _is_scalp_sim_ai_budget_target(stock, strategy)
+                    if holding_ai_gate_prerequisites else False
+                ),
+            },
         )
         scalp_trailing_peak_armed = trailing_decision.armed
         stagnation_observation = _evaluate_scalp_profit_stagnation_exit(
@@ -85525,8 +85730,8 @@ def handle_holding_state(
                     peak_profit_pct=scalp_tp_peak_profit,
                     start_pct=scalp_trailing_start_pct,
                     strong=strong_trailing,
-                    weak_limit_pct=dynamic_trailing_limit,
-                    strong_limit_pct=dynamic_trailing_limit,
+                    weak_limit_pct=tp_trailing_limit,
+                    strong_limit_pct=tp_trailing_limit,
                     already_armed=_scalp_trailing_arm_was_latched(stock),
                 )
                 _observe_scalp_trailing_input_transition_safe(
@@ -85548,6 +85753,17 @@ def handle_holding_state(
                     rest_snapshot=recovered_rest,
                     quote_fields=None,
                     nxt_guard_fields=nxt_trailing_bid_guard_fields,
+                    holding_profit_rate_at_eval=profit_rate,
+                    holding_mark_price_at_eval=curr_p,
+                    holding_ai_gate_evidence={
+                        "elapsed_sec": time_elapsed,
+                        "price_change_pct": price_change,
+                        "prerequisites_met": holding_ai_gate_prerequisites,
+                        "sim_budget_target": (
+                            _is_scalp_sim_ai_budget_target(stock, strategy)
+                            if holding_ai_gate_prerequisites else False
+                        ),
+                    },
                 )
                 if trailing_decision_price > 0:
                     trailing_decision_profit_rate = calculate_net_profit_rate(
@@ -86065,16 +86281,18 @@ def handle_holding_state(
                     hard_stop_pct=locals().get("hard_stop_pct"),
                     soft_stop_pct=locals().get("dynamic_stop_pct"),
                     trailing_start_pct=locals().get("scalp_trailing_start_pct"),
-                    trailing_limit_pct=locals().get("dynamic_trailing_limit"),
+                    trailing_limit_pct=locals().get("tp_trailing_limit"),
+                    trailing_score_threshold=(
+                        float(trailing_values["SCALP_TRAILING_STRONG_AI_SCORE"])
+                        if "trailing_values" in locals() else None
+                    ),
                     trailing_drawdown_pct=(
                         trailing_decision.drawdown_pct
                         if str(exit_rule or "").strip()
                         == "scalp_trailing_take_profit"
                         else None
                     ),
-                    strong_trailing=_holding_strong_trailing_enabled(
-                        holding_score_exit_role_ctx, current_ai_score
-                    ),
+                    strong_trailing=locals().get("strong_trailing", False),
                     trailing_peak_price=locals().get("scalp_tp_peak_price"),
                     trailing_executable_bid=locals().get(
                         "trailing_decision_price"

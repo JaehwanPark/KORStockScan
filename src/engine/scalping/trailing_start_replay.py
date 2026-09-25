@@ -119,11 +119,14 @@ def _validated_events(rows: list[dict]) -> tuple[list[dict], str | None]:
         peak = _number(row.get("peak_price"))
         peak_profit = _number(row.get("peak_profit_pct"))
         bid = _number(row.get("executable_bid"))
+        bid_qty = _number(row.get("executable_bid_qty"))
         strong = _flag(row.get("strong"))
         limit = _number(row.get("trailing_limit_pct"))
         if (peak is None or peak <= 0 or peak_profit is None or bid is None
                 or bid <= 0 or strong is None or limit is None or limit <= 0):
             return [], "source_gap_replay_decision_input"
+        if bid_qty is None or bid_qty <= 0 or not bid_qty.is_integer():
+            return [], "source_gap_executable_bid_depth"
         logged = _grid_state(row)
         if logged is None:
             return [], "source_gap_grid_state_missing"
@@ -248,8 +251,8 @@ def replay_start_grid(
             or any(not isinstance(leg, dict) or _epoch(leg.get("at")) is None
                    for leg in buys)):
         return {**base, "source_gap": "source_gap_buy_fill_clock"}
-    if rows[0]["_at"] < min(_epoch(leg["at"]) for leg in buys) - 1.0:
-        return {**base, "source_gap": "source_gap_pre_buy_observation"}
+    if rows[0]["_at"] < max(_epoch(leg["at"]) for leg in buys) - 1.0:
+        return {**base, "source_gap": "source_gap_pre_full_buy_observation"}
     sells = trade.get("sell_fill_legs")
     if (not isinstance(sells, list) or not sells
             or any(not isinstance(leg, dict) or _epoch(leg.get("at")) is None
@@ -352,10 +355,16 @@ def _weighted_ev(rows: list[tuple[dict, dict]]) -> float | None:
     return round(100.0 * delta / capital, 6)
 
 
+def _outcome_available_day(outcome: dict) -> str:
+    """Split by the date a completed outcome became available, when known."""
+
+    return str(outcome.get("completion_observed_date") or outcome.get("rec_date") or "")[:10]
+
+
 def _day_bootstrap_interval(rows: list[tuple[dict, dict]]) -> list[float] | None:
     groups: dict[str, list[tuple[dict, dict]]] = {}
     for outcome, candidate in rows:
-        day = str(outcome.get("rec_date") or "")[:10]
+        day = _outcome_available_day(outcome)
         groups.setdefault(day, []).append((outcome, candidate))
     if len(groups) < MIN_HOLDOUT_DAYS:
         return None
@@ -395,6 +404,11 @@ def summarize_start_grid(
         "forbidden_uses": "live_apply|actual_candidate_fill_claim|stop_delay",
         "strict_completed_position_ids": sorted(by_id),
         "population_complete": bool(population_complete),
+        "holdout_date_basis": "completion_observed_date_with_entry_date_fallback",
+        "entry_date_fallback_ids": sorted(
+            trade_id for trade_id, row in by_id.items()
+            if not row.get("completion_observed_date")
+        ),
         "markets": {},
     }
     for market in START_MARKETS:
@@ -433,7 +447,7 @@ def summarize_start_grid(
             rows_by_start[key] = candidate_rows
             eligible[key] = set(candidate_rows)
         common = set.intersection(*eligible.values()) if eligible else set()
-        dates = sorted({str(by_id[trade_id].get("rec_date") or "")[:10]
+        dates = sorted({_outcome_available_day(by_id[trade_id])
                         for trade_id in common})
         holdout_days = max(MIN_HOLDOUT_DAYS, math.ceil(len(dates) * 0.2))
         holdout = set(dates[-holdout_days:]) if len(dates) > holdout_days else set()
@@ -442,9 +456,9 @@ def summarize_start_grid(
             key = str(start)
             selected = [rows_by_start[key][trade_id] for trade_id in sorted(common)]
             train_rows = [pair for pair in selected
-                          if str(pair[0].get("rec_date") or "")[:10] not in holdout]
+                          if _outcome_available_day(pair[0]) not in holdout]
             holdout_rows = [pair for pair in selected
-                            if str(pair[0].get("rec_date") or "")[:10] in holdout]
+                            if _outcome_available_day(pair[0]) in holdout]
             context = {}
             for field in ("ai_class", "quote_state"):
                 buckets: dict[str, list[tuple[dict, dict]]] = {}
@@ -487,7 +501,7 @@ def summarize_start_grid(
                 "predecision_interactions": context,
             }
         enough = bool(
-            population_complete and len(common) == len(by_id) and not source_gaps
+            population_complete and common
             and len(dates) - len(holdout) >= MIN_TRAIN_DAYS
             and len(holdout) >= MIN_HOLDOUT_DAYS
             and all(
@@ -531,6 +545,9 @@ def summarize_start_grid(
             "incumbent_value_pct": incumbent_value,
             "exposed_ids": sorted(exposed),
             "common_grid_ids": sorted(common),
+            "excluded_ids": sorted(set(by_id) - common),
+            "excluded_count": len(set(by_id) - common),
+            "strict_completed_count": len(by_id),
             "source_gap_ids": source_gaps,
             "candidate_metrics": candidate_metrics,
             "research_candidate_value_pct": research_value,

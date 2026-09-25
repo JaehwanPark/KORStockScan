@@ -1,12 +1,18 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import threading
+import json
 
 import pytest
 
 from src.engine import sniper_state_handlers as handlers
 from src.engine import sniper_trade_utils
 from src.engine.scalping.exit_safety_monitor import ScalpExitSafetyMonitor
+from src.engine.scalping.trailing_operational_replay import (
+    GRID_VERSION as OPERATIONAL_GRID_VERSION,
+    _digest as operational_digest,
+    operational_shadow_state,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -53,6 +59,12 @@ def test_trailing_transition_keeps_type_specific_and_rest_source_clocks(monkeypa
         stock, "123456", bid_source="fresh_ws_executable_bid", **common
     )
     ws_fields = events[-1][1]
+    assert ws_fields["tuning_operational_shadow_version"] == OPERATIONAL_GRID_VERSION
+    assert ws_fields["tuning_operational_shadow_sha256"] == operational_digest(
+        operational_shadow_state(
+            ws_fields, json.loads(ws_fields["operational_threshold_values"])
+        )
+    )
     assert ws_fields["ws_trade_received_at_epoch"] is None
     assert ws_fields["ws_quote_received_at_epoch"] == 998.0
     assert ws_fields["bid_source_received_at_epoch"] == 998.0
@@ -148,6 +160,44 @@ def test_trailing_grid_uses_exact_route_depth_without_top_level_qty(monkeypatch)
     fields = events[-1][1]
     assert fields["executable_bid_qty"] == 20
     assert fields["tuning_grid_source_complete"] is True
+
+
+def test_operational_candidate_boundary_forces_a_transition_event(monkeypatch):
+    events = []
+    monkeypatch.setattr(
+        handlers, "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: events.append(fields),
+    )
+    at = datetime(2026, 9, 25, 10, tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
+    stock = {"id": 123, "code": "123456", "buy_price": 10000}
+    decision = handlers.evaluate_trailing_take_profit(
+        peak_price=10100, executable_bid=10050, peak_profit_pct=1.0,
+        start_pct=0.6, strong=False, weak_limit_pct=0.4,
+        strong_limit_pct=0.8,
+    )
+    common = dict(
+        ws_data={}, decision=decision, peak_price=10100,
+        executable_bid=10050, bid_source="missing", strong=False,
+        ai_score=50.0, ai_usable=True, start_pct=0.6,
+        evaluator="normal", holding_profit_rate_at_eval=0.9,
+        holding_ai_gate_evidence={"elapsed_sec": 25,
+                                  "price_change_pct": 0.0,
+                                  "prerequisites_met": True},
+    )
+    handlers._observe_scalp_trailing_input_transition(
+        stock, "123456", now_ts=at,
+        quote_fields={"quote_consistency_state": "consistent",
+                      "quote_consistency_ws_age_ms": 650}, **common,
+    )
+    handlers._observe_scalp_trailing_input_transition(
+        stock, "123456", now_ts=at + 0.2,
+        quote_fields={"quote_consistency_state": "consistent",
+                      "quote_consistency_ws_age_ms": 750}, **common,
+    )
+    assert len(events) == 2
+    assert events[0]["tuning_operational_shadow_sha256"] != events[1][
+        "tuning_operational_shadow_sha256"
+    ]
 
 
 def test_trailing_arm_persistence_failure_does_not_block_live_decision(monkeypatch):

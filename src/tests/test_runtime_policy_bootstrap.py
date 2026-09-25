@@ -647,3 +647,90 @@ def test_direct_summary_and_verifier_do_not_require_retired_common_reports(monke
     joined = json.dumps(report)
     assert "threshold_cycle_calibration" not in joined
     assert "threshold_cycle_ev_2026" not in joined
+
+
+def test_four_axis_selection_binds_report_parent_and_twelve_market_keys(
+    monkeypatch, tmp_path,
+):
+    from src.engine.scalping.trailing_four_axis_replay import DEFAULT_VECTOR
+    from src.engine.scalping.trailing_threshold_policy import (
+        SELECTED_POLICY_SCHEMA, START_MARKETS, market_values_hash,
+        selected_policy_env,
+    )
+    monkeypatch.setattr(bootstrap, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(bootstrap, "BOOTSTRAP_DIR", tmp_path / "bootstrap")
+    monkeypatch.setattr(bootstrap, "LEGACY_RUNTIME_DIR", tmp_path / "threshold_cycle" / "runtime_env")
+    monkeypatch.setattr(bootstrap, "OPERATOR_LOCK_DIR", tmp_path / "locks")
+    legacy = bootstrap.LEGACY_RUNTIME_DIR
+    _write(legacy / "threshold_runtime_env_2026-09-18.json",
+           {"target_date": "2026-09-18", "env_overrides": {"BASE": "1"}})
+    _write(legacy / "threshold_runtime_env_verify_2026-09-18.json", {"status": "pass"})
+    parent = bootstrap.scalp_trailing_bootstrap_receipt({"BASE": "1"}, {})[
+        "market_values_sha256"
+    ]
+    vector = {market: dict(DEFAULT_VECTOR) for market in START_MARKETS}
+    vector["REGULAR"]["SCALP_TRAILING_LIMIT_STRONG"] = 0.7
+    digest = market_values_hash(vector)
+    report = {
+        "date": "2026-09-18", "completed_population_quality": {"complete": True},
+        "trailing_four_axis_market_tuning": {
+            "population_complete": True,
+            "status": "research_candidate_holdout_positive_review_required",
+            "research_candidate": {
+                "values": vector, "market_values_sha256": digest,
+                "decision_authority": "research_candidate_requires_policy_selection",
+            },
+                "joint_selection_evidence": {
+                    "winner_sha256": digest, "tail_review_required": False,
+                    "holdout_conservative_delta_krw": 100,
+                    "holdout_conservative_worst_slippage_delta_krw": 10,
+                    "holdout_worst_slippage_min_day_ev_pct": 0.01,
+                },
+        },
+    }
+    report_path = (tmp_path / "report" / "monitor_snapshots"
+                   / "holding_exit_observation_2026-09-18.json")
+    _write(report_path, report)
+    policy = {
+        "schema": SELECTED_POLICY_SCHEMA,
+        "family": "scalp_trailing_four_axis_selector",
+        "source_date": "2026-09-18", "target_date": "2026-09-19",
+        "source_report_sha256": bootstrap._digest_bytes(report_path.read_bytes()),
+        "allowed_runtime_apply": True, "runtime_effect": True,
+        "apply_scope": "one_stage_canary", "market_values": vector,
+        "market_values_sha256": digest,
+        "rollback_market_values_sha256": parent,
+        "selection_review": {
+            "status": "reviewed_one_stage_canary", "candidate_sha256": digest,
+            "source_quality": "pass", "execution_model": "pass",
+            "same_stage_owner": "scalp_trailing_take_profit",
+            "rollback_sha256": parent,
+        },
+    }
+    policy["runtime_env_overrides"] = selected_policy_env(
+        policy, report, target_date="2026-09-19",
+        report_sha256=policy["source_report_sha256"],
+    )
+    policy_path = tmp_path / "selected.json"
+    _write(policy_path, policy)
+    manifest = bootstrap.build_manifest("2026-09-19", receipt_paths=[policy_path])
+    assert manifest["direct_family_receipts"][0]["family"] == "scalp_trailing_four_axis_selector"
+    assert manifest["scalp_trailing_threshold_receipt"]["market_values_sha256"] == digest
+    bootstrap.write_bootstrap("2026-09-19", receipt_paths=[policy_path])
+    assert bootstrap.verify_bootstrap("2026-09-19", write=False)["passed"] is True
+    original_report_bytes = report_path.read_bytes()
+    report["trailing_four_axis_market_tuning"]["joint_selection_evidence"][
+        "holdout_conservative_delta_krw"
+    ] = 0
+    _write(report_path, report)
+    verification = bootstrap.verify_bootstrap("2026-09-19", write=False)
+    assert verification["passed"] is False
+    assert any(finding.startswith("scalp_trailing_source_binding_invalid:")
+               for finding in verification["findings"])
+    report_path.write_bytes(original_report_bytes)
+    policy["rollback_market_values_sha256"] = "f" * 64
+    policy["selection_review"]["rollback_sha256"] = "f" * 64
+    _write(policy_path, policy)
+    rejected = bootstrap.build_manifest("2026-09-19", receipt_paths=[policy_path])
+    assert rejected["direct_family_receipts"] == []
+    assert rejected["direct_family_receipts_rejected"][0]["reason"] == "rollback_parent_hash_mismatch"
