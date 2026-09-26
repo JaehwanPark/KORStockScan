@@ -1067,6 +1067,31 @@ def test_full_population_gate_rejects_mixed_basis_or_incumbent_population(monkey
     assert 'strategy_machine_incumbent_population_mismatch' in strategy.promotion_errors(broken, parent, scope)
 
 
+def test_published_full_population_v4_keeps_exact_historical_score_contract(monkeypatch):
+    from src.engine.scalping import ai_action_outcome_calibration as calibration
+    one_research_candidate(monkeypatch)
+    parent = evidence.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1
+    scope = ('KRX', 'KRX_REGULAR')
+    candidate = deepcopy(calibration.build_main_strategy_refinement(
+        [machine_cost_row()], parent=parent, scope=scope,
+        source_contract={}, machine_policy_only=True,
+    )['candidate'])
+    prior_version = 'support_adjusted_win_rate_full_population_v4'
+    candidate['selection_score_version'] = prior_version
+    candidate['evidence']['evaluation_contract']['selection_version'] = prior_version
+    for arm in ('incumbent_train', 'train', 'holdout'):
+        economy = (candidate['evidence'].get(arm) or {}).get('economics')
+        if economy:
+            economy['selection_score_version'] = prior_version
+    candidate['evidence_sha256'] = strategy.digest(candidate['evidence'])
+    assert strategy.promotion_errors(candidate, parent, scope)
+    assert not strategy.promotion_errors(candidate, parent, scope, existing_publication=True)
+    broken = deepcopy(candidate)
+    broken['evidence']['train']['economics']['comparable_population_sha256'] = '0' * 64
+    broken['evidence_sha256'] = strategy.digest(broken['evidence'])
+    assert strategy.promotion_errors(broken, parent, scope, existing_publication=True)
+
+
 def test_full_population_parent_tie_is_retained(monkeypatch):
     from src.engine.scalping import ai_action_outcome_calibration as c
     one_research_candidate(monkeypatch)

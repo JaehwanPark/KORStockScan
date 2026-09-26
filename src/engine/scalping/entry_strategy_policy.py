@@ -754,6 +754,13 @@ def promotion_errors(candidate, parent, scope, *, existing_publication=False):
     errors = []
     if not isinstance(candidate, dict) or candidate.get('schema') != 'main_entry_strategy_candidate_v2':
         return ['strategy_candidate_schema_invalid']
+    # A frozen v4 publication keeps its original score contract on readback.
+    # New candidates still have to satisfy the current v5 contract.
+    expected_score_version = (
+        'support_adjusted_win_rate_full_population_v4'
+        if existing_publication and candidate.get('selection_score_version') == 'support_adjusted_win_rate_full_population_v4'
+        else MACHINE_SELECTION_VERSION
+    )
     if candidate.get('parent_policy') != parent or candidate.get('parent_sha256') != digest(parent) or candidate.get('scope') != list(scope):
         errors.append('strategy_candidate_parent_or_scope_mismatch')
     policy = candidate.get('policy') or {}
@@ -769,7 +776,7 @@ def promotion_errors(candidate, parent, scope, *, existing_publication=False):
     full_population = candidate.get('evaluation_basis') == MACHINE_EVALUATION_BASIS
     if full_population:
         contract = evidence.get('evaluation_contract') or {}
-        if (contract.get('selection_version') != MACHINE_SELECTION_VERSION
+        if (contract.get('selection_version') != expected_score_version
             or contract.get('evaluation_basis') != MACHINE_EVALUATION_BASIS
             or contract.get('parent_sha256') != digest(parent) or contract.get('scope') != list(scope)
             or any(not isinstance(contract.get(k), str) or len(contract[k]) != 64
@@ -779,12 +786,12 @@ def promotion_errors(candidate, parent, scope, *, existing_publication=False):
         train_economy = (evidence.get('train') or {}).get('economics') or {}
         if (baseline.get('comparable_population_sha256') != train_economy.get('comparable_population_sha256')
             or baseline.get('evaluation_basis') != MACHINE_EVALUATION_BASIS
-            or baseline.get('selection_score_version') != MACHINE_SELECTION_VERSION):
+            or baseline.get('selection_score_version') != expected_score_version):
             errors.append('strategy_machine_incumbent_population_mismatch')
         old_rank, new_rank = machine_admission_rank(baseline)[:4], machine_admission_rank(train_economy)[:4]
         if all(v is not None for v in old_rank) and (any(v is None for v in new_rank) or new_rank < old_rank):
             errors.append('strategy_machine_candidate_rank_below_incumbent')
-    if full_population and candidate.get('selection_score_version') != MACHINE_SELECTION_VERSION:
+    if full_population and candidate.get('selection_score_version') != expected_score_version:
         errors.append('strategy_machine_selection_version_invalid')
     if candidate.get('evaluation_basis') not in {None, 'machine_nonentry_opportunity_v1', MACHINE_EVALUATION_BASIS}:
         errors.append('strategy_machine_evaluation_basis_invalid')
@@ -801,7 +808,7 @@ def promotion_errors(candidate, parent, scope, *, existing_publication=False):
                 if (economy.get('unevaluated_existing_entry_changes') != []
                     or economy.get('evaluated_existing_entry_changed_count') != machine_existing_entry_changes(arm)):
                     errors.append(split + '_machine_existing_entries_changed_without_evaluation')
-                if (economy.get('selection_score_version') != MACHINE_SELECTION_VERSION
+                if (economy.get('selection_score_version') != expected_score_version
                     or economy.get('evaluation_basis') != MACHINE_EVALUATION_BASIS
                     or not isinstance(economy.get('comparable_population_sha256'), str)
                     or len(economy['comparable_population_sha256']) != 64
