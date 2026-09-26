@@ -2465,6 +2465,7 @@ class GPTSniperEngine:
         }
         policy_fields = {
             "entry_ai_soft_policy": policy.get("auxiliary_soft_policy"),
+            "entry_ai_selected_profile": policy.get("auxiliary_selected_profile"),
             "entry_ai_component_sha256": policy.get("auxiliary_policy_sha256"),
             "entry_setup_live_policy_status": policy.get("status"),
             "entry_setup_live_policy_scope_authority": policy.get("scope_authority"),
@@ -9356,6 +9357,7 @@ class GPTSniperEngine:
                 # Observe before first child adoption too: collection must not
                 # require the policy whose evidence it is meant to produce.
                 cutoff_ms = int(machine_input_fields.get("entry_machine_input_as_of", time.time()) * 1000)
+                machine_exact["entry_machine_input_as_of"] = cutoff_ms / 1000.0
                 snapshot, snapshot_status = (
                     prepared_micro_source if prepared_micro_source is not None
                     else load_live_dynamic_confirmation_source())
@@ -9430,6 +9432,33 @@ class GPTSniperEngine:
                     "setup": machine_setup,
                     "bundle_sha256": entry_setup_live_policy["machine_bundle_sha256"],
                 }
+                soft_policy = entry_setup_live_policy.get("auxiliary_soft_policy")
+                if (machine_assessment["action"] == "ENTER_NOW"
+                    and isinstance(soft_policy, dict)
+                    and soft_policy.get("schema") == "auxiliary_soft_policy_v2"):
+                    from src.engine.scalping.entry_setup_evidence import (
+                        select_auxiliary_soft_profile, validate_auxiliary_soft_policy,
+                    )
+                    from src.engine.scalping.mechanistic_entry_runtime_policy import (
+                        compact_auxiliary_prompt, compact_prompt_variant, digest,
+                    )
+                    if not validate_auxiliary_soft_policy(soft_policy):
+                        raise ValueError("auxiliary_soft_policy_invalid_before_provider")
+                    selected_profile, leaf = select_auxiliary_soft_profile(
+                        soft_policy, machine_setup
+                    )
+                    prompt_version = leaf["prompt_version"]
+                    prompt = compact_auxiliary_prompt(
+                        entry_setup_live_policy["auxiliary_historical_context"],
+                        prompt_version=prompt_version,
+                    )
+                    entry_setup_live_policy.update(
+                        selected_prompt_version=prompt_version,
+                        auxiliary_system_prompt=prompt,
+                        auxiliary_system_prompt_sha256=digest(prompt),
+                        auxiliary_prompt_variant=compact_prompt_variant(prompt_version),
+                        auxiliary_selected_profile=selected_profile,
+                    )
                 if machine_assessment["action"] != "ENTER_NOW":
                     decision = self._normalize_decision_quality_entry_result(
                         {},
@@ -10067,6 +10096,9 @@ class GPTSniperEngine:
                     entry_ai_prompt_variant=entry_setup_live_policy.get(
                         "auxiliary_prompt_variant"
                     ),
+                    auxiliary_selected_profile=entry_setup_live_policy.get(
+                        "auxiliary_selected_profile"
+                    ),
                     ai_base_candidate_sha256=entry_setup_live_policy.get(
                         "ai_base_candidate_sha256"
                     ),
@@ -10082,6 +10114,7 @@ class GPTSniperEngine:
                         for key in (
                             "auxiliary_system_prompt_sha256",
                             "entry_ai_prompt_variant",
+                            "auxiliary_selected_profile",
                         )
                         if trace_metadata_extra.get(key) not in (None, "")
                     }

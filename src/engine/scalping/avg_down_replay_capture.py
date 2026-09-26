@@ -140,6 +140,9 @@ def _file_snapshot(paths: set[Path]) -> dict:
 def policy_snapshot(handlers, now_ts: float) -> dict:
     """Freeze loaded rules plus selected external files, never credentials."""
     global _IMPLEMENTATION
+    from src.engine.scalping.position_peak_ledger import (
+        DEFAULT_LEDGER_PATH, POSITION_PEAK_LEDGER,
+    )
     if _IMPLEMENTATION is None:
         _IMPLEMENTATION = implementation_identity()
     if handlers.TRADING_RULES is None:
@@ -148,6 +151,7 @@ def policy_snapshot(handlers, now_ts: float) -> dict:
     # Only application policy env; credential-like keys never enter telemetry.
     environment = policy_environment()
     paths = {
+        POSITION_PEAK_LEDGER.path,
         DATA_DIR / "config" / "manual_control_excluded_codes.txt",
         DATA_DIR / "runtime" / "trade_pause_state.json",
         DATA_DIR.parent / "pause.flag",
@@ -171,12 +175,20 @@ def policy_snapshot(handlers, now_ts: float) -> dict:
             and (key.endswith("_POLICY_FILE") or key.endswith("_EXCLUDED_CODES_FILE"))
         ):
             paths.add(Path(value))
+    files = _file_snapshot(paths)
+    # The isolated worker imports the canonical ledger path. Tests may point
+    # the live singleton at an isolated source file; bind those same frozen
+    # bytes to the worker-visible path without reading current-day state there.
+    captured_peak = str(POSITION_PEAK_LEDGER.path.absolute())
+    canonical_peak = str(DEFAULT_LEDGER_PATH.absolute())
+    if captured_peak != canonical_peak:
+        files[canonical_peak] = files[captured_peak]
     selectors = {}  # Retired matrices no longer participate in live selection.
     snapshot = {
         "schema": SNAPSHOT_SCHEMA,
         "rules": _json_value(rules),
         "environment": environment,
-        "files": _file_snapshot(paths),
+        "files": files,
         "implementation": deepcopy(_IMPLEMENTATION),
         "loaded_code": loaded_code_identity(handlers),
         "adapter_scope": "existing_holding_policy_quote_counterfactual",

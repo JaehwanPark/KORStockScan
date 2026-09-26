@@ -2724,7 +2724,8 @@ def test_economic_observation_availability_binds_final_trace_clock(monkeypatch, 
     monkeypatch.setattr(pipeline,'emit_pipeline_event',lambda *args,**kw: events.append((args,kw)) or {'structured_append_succeeded':True})
     result=trace.record_ai_decision_trace(dict(action='BUY',score=80,provider_actual='openai',
         model='gpt-5.4-nano',evaluation_attempt_id='source-attempt',
-        entry_economic_plan_sha256='b'*64,entry_economic_source_status='recorded_source_only'),
+        entry_economic_plan_sha256='b'*64,entry_economic_writer_plan_sha256='b'*64,
+        entry_economic_source_status='recorded_source_only'),
         prompt_type='scalping_entry',prompt_version='test-compact',result_source='live',
         stock_code='005930',provider_called=True)
     assert result
@@ -2735,6 +2736,7 @@ def test_economic_observation_availability_binds_final_trace_clock(monkeypatch, 
     assert kw['fields']['evaluation_attempt_id']=='source-attempt'
     assert kw['fields']['entry_economic_decision_available_at']==rows[0]['decision_ts']
     assert kw['fields']['entry_economic_plan_sha256']=='b'*64
+    assert rows[0]['entry_economic_writer_plan_sha256']=='b'*64
     assert kw['fields']['actual_order_submitted'] is False
 
 

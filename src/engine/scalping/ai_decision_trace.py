@@ -2267,6 +2267,7 @@ def record_ai_decision_trace(
             "entry_ai_risk_verdict": _optional(merged, "entry_ai_risk_verdict"),
             "entry_ai_soft_policy_sha256": _optional(merged, "entry_ai_soft_policy_sha256"),
             "entry_ai_soft_policy": _optional(merged, "entry_ai_soft_policy"),
+            "entry_ai_selected_profile": _optional(merged, "entry_ai_selected_profile"),
             "entry_ai_component_sha256": _optional(merged, "entry_ai_component_sha256"),
             "entry_ai_effective_assessment": _optional(merged, "entry_ai_effective_assessment"),
             "entry_ai_risk_codes": (
@@ -2542,6 +2543,7 @@ def record_ai_decision_trace(
             "target_pct": _safe_number(_optional(merged, "ai_trace_target_pct")),
             "adverse_pct": _safe_number(_optional(merged, "ai_trace_adverse_pct")),
             "entry_economic_plan_sha256": merged.get("entry_economic_plan_sha256"),
+            "entry_economic_writer_plan_sha256": merged.get("entry_economic_writer_plan_sha256"),
             "entry_economic_source_status": merged.get("entry_economic_source_status"),
             "entry_economic_source_blocker": merged.get("entry_economic_source_blocker"),
             "actual_order_authority": bool(merged.get("actual_order_authority", False)),
@@ -2676,6 +2678,7 @@ def record_ai_decision_trace(
                 "entry_setup_live_policy_selected_prompt_version",
                 "auxiliary_system_prompt_sha256",
                 "entry_ai_prompt_variant",
+                "auxiliary_selected_profile",
             )
             if key in merged
         }

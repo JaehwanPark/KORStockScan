@@ -346,6 +346,8 @@ def _validate_ai_policy(ai: object, context: object) -> bool:
         from src.engine.scalping.entry_setup_evidence import validate_auxiliary_soft_policy
         if not validate_auxiliary_soft_policy(soft):
             return False
+        if soft.get("schema") == "auxiliary_soft_policy_v2" and soft["parent"]["prompt_version"] != version:
+            return False
     if version in COMPACT_AI_VARIANTS:
         return ai.get("variant") == compact_prompt_variant(version) and ai.get(
             "system_prompt"
@@ -359,6 +361,32 @@ def _validate_ai_policy(ai: object, context: object) -> bool:
             "system_prompt"
         ) == auxiliary_prompt(context)
     return False
+
+
+def _apply_auxiliary_candidate(ai: dict, *, policy: dict | None,
+                               prompt_version: str, context: object) -> dict:
+    """Apply an independently proven AI-stage delta to one AI component."""
+    from src.engine.scalping.entry_setup_evidence import validate_auxiliary_soft_policy
+    if prompt_version not in COMPACT_AI_VARIANTS:
+        raise ValueError("auxiliary_candidate_prompt_invalid")
+    if policy is not None and not validate_auxiliary_soft_policy(policy):
+        raise ValueError("auxiliary_candidate_soft_policy_invalid")
+    result = copy.deepcopy(ai)
+    if policy != ai.get("auxiliary_soft_policy"):
+        if policy is None:
+            result.pop("auxiliary_soft_policy", None)
+        else:
+            result["auxiliary_soft_policy"] = copy.deepcopy(policy)
+    if prompt_version != ai["prompt_version"]:
+        result.update(
+            prompt_version=prompt_version,
+            variant=compact_prompt_variant(prompt_version),
+            system_prompt=compact_auxiliary_prompt(context, prompt_version=prompt_version),
+        )
+        result["system_prompt_sha256"] = digest(result["system_prompt"])
+    if not _validate_ai_policy(result, context):
+        raise ValueError("auxiliary_candidate_component_invalid")
+    return result
 
 
 def compact_terminal_gate_allowed(source_receipt: dict) -> bool:
@@ -669,7 +697,10 @@ def publish_compact_evaluation(
         )
         if (not paired.valid(projection)
             or projection.get("artifact_content_sha256") != auxiliary_stage["source_projection_sha256"]
-            or paired.evaluate_auxiliary_stage(projection) != auxiliary_stage):
+            or paired.replay_auxiliary_stage(
+                projection, source,
+                history_root=Path(data_root) / "report/ai_entry_setup_paired_replay_batch"
+            ) != auxiliary_stage):
             raise ValueError("compact_auxiliary_stage_source_or_selection_invalid")
     target = next_target(publication_day)
     previous = load_effective(data_root=data_root, target_date=publication_day)
@@ -783,7 +814,9 @@ def publish_compact_evaluation(
                 if assessment.get("status") != "candidate_selected":
                     continue
                 candidate_policy = (assessment.get("selected") or {}).get("policy")
-                if not validate_auxiliary_soft_policy(candidate_policy):
+                candidate_prompt = ((assessment.get("selected") or {}).get("prompt_version")
+                                    or assessment.get("parent_prompt_versions", [None])[0])
+                if candidate_policy is not None and not validate_auxiliary_soft_policy(candidate_policy):
                     raise ValueError("compact_auxiliary_stage_candidate_invalid")
                 old_scoped = (previous.get("scope_policies") or {}).get(scope_key, previous)
                 current_scoped = ((existing or {}).get("scope_policies") or {}).get(
@@ -810,7 +843,7 @@ def publish_compact_evaluation(
                     or scope_parent_hashes != {digest(current_scoped["machine_policy"])}
                     or digest(current_ai) != digest(old_ai)):
                     raise ValueError("compact_auxiliary_stage_parent_conflict:" + scope_key)
-                selected_soft_scopes[scope_key] = candidate_policy
+                selected_soft_scopes[scope_key] = (candidate_policy, candidate_prompt)
         if existing:
             _atomic_write_json(
                 policy_root / "generations" / f"{existing['bundle_sha256']}.json",
@@ -840,11 +873,16 @@ def publish_compact_evaluation(
                 ai_policy["system_prompt_sha256"] = digest(
                     ai_policy["system_prompt"]
                 )
-        for scope_key, soft_policy in selected_soft_scopes.items():
+        for scope_key, (soft_policy, prompt_version) in selected_soft_scopes.items():
             if scope_key == "|".join(COHORT):
-                bundle["ai_policy"]["auxiliary_soft_policy"] = copy.deepcopy(soft_policy)
+                bundle["ai_policy"] = _apply_auxiliary_candidate(
+                    bundle["ai_policy"], policy=soft_policy,
+                    prompt_version=prompt_version, context=bundle.get("historical_context"))
             if scope_key in (bundle.get("scope_policies") or {}):
-                bundle["scope_policies"][scope_key]["ai_policy"]["auxiliary_soft_policy"] = copy.deepcopy(soft_policy)
+                scoped = bundle["scope_policies"][scope_key]
+                scoped["ai_policy"] = _apply_auxiliary_candidate(
+                    scoped["ai_policy"], policy=soft_policy,
+                    prompt_version=prompt_version, context=scoped.get("historical_context"))
         encoded_source = (
             json.dumps(source, ensure_ascii=False, indent=2) + "\n"
         ).encode()
@@ -1939,7 +1977,10 @@ def activate_dated_auxiliary_policy(
                 or stage.get('source_manifest_sha256') != source.get('source_manifest_sha256')
                 or stage.get('source_tuning_allowed') is not True
                 or stage.get('additional_provider_calls') != 0
-                or paired.evaluate_auxiliary_stage(projection) != stage):
+                or paired.replay_auxiliary_stage(
+                    projection, source,
+                    history_root=Path(data_root) / "report/ai_entry_setup_paired_replay_batch"
+                ) != stage):
                 raise ValueError('auxiliary_activation_stage_invalid')
             selected = {key.upper(): value for key, value in (stage.get('scope_results') or {}).items()
                         if value.get('status') == 'candidate_selected'}
@@ -1960,6 +2001,8 @@ def activate_dated_auxiliary_policy(
             for scope, assessment in selected.items():
                 old = for_cohort(previous, tuple(scope.split('|')))
                 candidate = (assessment.get('selected') or {}).get('policy')
+                candidate_prompt = ((assessment.get('selected') or {}).get('prompt_version')
+                                    or (assessment.get('parent_prompt_versions') or [None])[0])
                 parent_machine_hashes = set()
                 for parent_hash in assessment.get('parent_machine_bundle_sha256s') or []:
                     if re.fullmatch(r'[0-9a-f]{64}', str(parent_hash)) is None:
@@ -1972,15 +2015,22 @@ def activate_dated_auxiliary_policy(
                     parent_scope = for_cohort(parent_bundle, tuple(scope.split('|')))
                     if parent_scope:
                         parent_machine_hashes.add(digest(parent_scope['machine_policy']))
-                if (not old or not validate_auxiliary_soft_policy(candidate)
+                if (not old or (candidate is not None and not validate_auxiliary_soft_policy(candidate))
                     or assessment.get('parent_prompt_versions') != [old['ai_policy']['prompt_version']]
                     or assessment.get('parent_soft_policy_sha256s') != [digest(old['ai_policy'].get('auxiliary_soft_policy'))]
                     or parent_machine_hashes != {digest(old['machine_policy'])}):
                     raise ValueError('auxiliary_activation_parent_cas_failed:' + scope)
                 if scope in (dated.get('scope_policies') or {}):
-                    dated['scope_policies'][scope]['ai_policy']['auxiliary_soft_policy'] = copy.deepcopy(candidate)
+                    target_scope = dated['scope_policies'][scope]
+                    target_scope['ai_policy'] = _apply_auxiliary_candidate(
+                        target_scope['ai_policy'], policy=candidate,
+                        prompt_version=candidate_prompt,
+                        context=target_scope.get('historical_context'))
                 if scope == '|'.join(COHORT):
-                    dated['ai_policy']['auxiliary_soft_policy'] = copy.deepcopy(candidate)
+                    dated['ai_policy'] = _apply_auxiliary_candidate(
+                        dated['ai_policy'], policy=candidate,
+                        prompt_version=candidate_prompt,
+                        context=dated.get('historical_context'))
             encoded_source = (json.dumps(source, ensure_ascii=False, indent=2) + '\n').encode()
             dated['compact_source_file_sha256'] = hashlib.sha256(encoded_source).hexdigest()
         if previous is None or dated is None:
@@ -2014,7 +2064,10 @@ def activate_dated_auxiliary_policy(
         projection = paired.read(paired.report_path(data_root, source['target_date']).with_suffix('.source.json'))
         if (not paired.valid(source) or not paired.valid(stage)
             or not paired.valid(projection)
-            or paired.evaluate_auxiliary_stage(projection) != stage
+            or paired.replay_auxiliary_stage(
+                projection, source,
+                history_root=Path(data_root) / "report/ai_entry_setup_paired_replay_batch"
+            ) != stage
             or stage.get('artifact_content_sha256') != dated.get('auxiliary_stage_sha256')):
             raise ValueError('auxiliary_activation_stage_invalid')
         if (previous['machine_policy'] != dated['machine_policy']
@@ -2030,11 +2083,16 @@ def activate_dated_auxiliary_policy(
             selected = next((value for key, value in (stage.get('scope_results') or {}).items()
                              if key.upper() == scope), {})
             candidate = (selected.get('selected') or {}).get('policy')
+            candidate_prompt = ((selected.get('selected') or {}).get('prompt_version')
+                                or (selected.get('parent_prompt_versions') or [None])[0])
             if (not old or not parent or not successor
                 or selected.get('status') != 'candidate_selected'
-                or not validate_auxiliary_soft_policy(candidate)
+                or (candidate is not None and not validate_auxiliary_soft_policy(candidate))
                 or old['ai_policy'] != parent['ai_policy']
-                or successor['ai_policy'] != {**old['ai_policy'], 'auxiliary_soft_policy': candidate}):
+                or successor['ai_policy'] != _apply_auxiliary_candidate(
+                    old['ai_policy'], policy=candidate,
+                    prompt_version=candidate_prompt,
+                    context=old.get('historical_context'))):
                 raise ValueError('auxiliary_activation_parent_cas_failed:' + scope)
             if scope in (bundle.get('scope_policies') or {}):
                 bundle['scope_policies'][scope]['ai_policy'] = copy.deepcopy(successor['ai_policy'])
@@ -2180,11 +2238,16 @@ def _load_current_uncached(data_root: Path, target_date: str) -> dict | None:
             evaluation = next((value for key, value in (stage.get('scope_results') or {}).items()
                                if key.upper() == scope), {})
             candidate = (evaluation.get('selected') or {}).get('policy')
+            candidate_prompt = ((evaluation.get('selected') or {}).get('prompt_version')
+                                or (evaluation.get('parent_prompt_versions') or [None])[0])
             if (not old or not new or evaluation.get('status') != 'candidate_selected'
-                or not validate_auxiliary_soft_policy(candidate)
+                or (candidate is not None and not validate_auxiliary_soft_policy(candidate))
                 or digest(old['ai_policy']) != proof.get('parent_ai_sha256')
                 or digest(new['ai_policy']) != proof.get('candidate_ai_sha256')
-                or new['ai_policy'] != {**old['ai_policy'], 'auxiliary_soft_policy': candidate}):
+                or new['ai_policy'] != _apply_auxiliary_candidate(
+                    old['ai_policy'], policy=candidate,
+                    prompt_version=candidate_prompt,
+                    context=old.get('historical_context'))):
                 raise ValueError('auxiliary_activation_component_binding_invalid')
         return bundle if target_date >= bundle['target_date'] else None
     if activation.get('schema') == 'main_entry_winrate_activation_v1':

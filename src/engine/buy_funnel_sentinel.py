@@ -2816,7 +2816,9 @@ def _auxiliary_ai_semantics(rows, action: str, screen: str) -> dict[str, Any]:
     issues: list[str] = []
     latest = versioned[-1].fields
     versions = {str(row.fields.get("entry_ai_auxiliary_contract_version")) for row in versioned}
-    if versions != {"auxiliary_effective_assessment_v1"}:
+    if len(versions) != 1 or not versions <= {
+        "auxiliary_effective_assessment_v1", "auxiliary_effective_assessment_v2"
+    }:
         issues.append("auxiliary_contract_version_missing_or_conflicting")
     assessment = latest.get("entry_ai_effective_assessment")
     if isinstance(assessment, str):
@@ -2839,8 +2841,13 @@ def _auxiliary_ai_semantics(rows, action: str, screen: str) -> dict[str, Any]:
         issues.append("auxiliary_effective_verdict_screen_mismatch")
     elif errors is None or errors:
         issues.append("auxiliary_validation_error_screen_mismatch")
-    if assessment.get("schema") != "auxiliary_effective_assessment_v1":
+    if assessment.get("schema") != latest.get("entry_ai_auxiliary_contract_version"):
         issues.append("auxiliary_assessment_schema_invalid")
+    if assessment.get("schema") == "auxiliary_effective_assessment_v2":
+        profile = assessment.get("selected_profile")
+        if (not isinstance(profile, str) or not profile
+            or profile != latest.get("entry_ai_selected_profile")):
+            issues.append("auxiliary_selected_profile_mismatch")
     response_hash = str(assessment.get("validated_response_sha256") or "")
     if len(response_hash) != 64 or any(c not in "0123456789abcdef" for c in response_hash):
         issues.append("auxiliary_validated_response_hash_invalid")

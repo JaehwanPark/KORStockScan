@@ -448,6 +448,29 @@ def test_auxiliary_ai_semantic_receipt_matches_effective_screen():
     assert projection["rows"][0]["auxiliary_ai_semantics"]["soft_policy_sha256"] == policy_hash
 
 
+def test_auxiliary_v2_semantic_receipt_requires_selected_profile():
+    assessment = {
+        "schema": "auxiliary_effective_assessment_v2",
+        "raw_verdict": "VETO", "effective_verdict": "PASS",
+        "selected_profile": "leaf_0", "selected_profile_sha256": "e" * 64,
+        "validated_response_sha256": "d" * 64,
+        "soft_policy_sha256": "c" * 64, "validation_errors": [],
+    }
+    candidate = event(
+        screen="pass", entry_ai_auxiliary_contract_version="auxiliary_effective_assessment_v2",
+        entry_ai_effective_assessment=assessment,
+        entry_ai_soft_policy_sha256="c" * 64,
+        entry_ai_selected_profile="leaf_0",
+        entry_ai_advisory_verdict="VETO",
+        entry_ai_advisory_contract_valid="True",
+    )
+    row = sentinel._machine_primary_entry_funnel([candidate])["evaluation_ledger"][0]
+    assert row["auxiliary_ai_semantics"]["status"] == "receipt_match"
+    missing = event(**{**candidate.fields, "entry_ai_selected_profile": None})
+    bad = sentinel._machine_primary_entry_funnel([missing])["evaluation_ledger"][0]
+    assert "auxiliary_selected_profile_mismatch" in bad["conflict_reasons"]
+
+
 def test_auxiliary_ai_semantic_receipt_mismatch_is_reported_not_authorized():
     assessment = {
         "schema": "auxiliary_effective_assessment_v1",

@@ -859,10 +859,17 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("compact batch requires durable write and its own frozen selection")
         from src.engine.scalping import compact_auxiliary_paired_replay as compact
         report = None
+        compact_command_metrics = []
         if args.execute_compact_candidate or not args.finalize_compact:
+            command_started = time.perf_counter()
             report = compact.run(data_root=args.data_root, day=args.date, candidate_version=args.compact_candidate_version, execute=args.execute_compact_candidate, max_new=args.max_new_requests_per_cohort, timeout_sec=args.candidate_timeout_sec)
+            compact_command_metrics.append({"command": "execute_compact_candidate" if args.execute_compact_candidate else "evaluate_compact_candidate",
+                                            "elapsed_ms": round((time.perf_counter() - command_started) * 1000, 3),
+                                            "provider_calls": report.get("provider_calls_this_run"),
+                                            "prompt_provider_calls": report.get("auxiliary_prompt_provider_calls_this_run")})
         execution_failed = (report or {}).get("status") == "execution_failed"
         if args.finalize_compact:
+            command_started = time.perf_counter()
             report = compact.finalize(
                 data_root=args.data_root,
                 day=args.date,
@@ -870,7 +877,11 @@ def main(argv: list[str] | None = None) -> int:
                     args.publication_date or datetime.now(quality.KST).date().isoformat()
                 ),
             )
+            compact_command_metrics.append({"command": "finalize_compact",
+                                            "elapsed_ms": round((time.perf_counter() - command_started) * 1000, 3),
+                                            "provider_calls": 0, "prompt_provider_calls": 0})
         summary = {k:v for k,v in report.items() if k not in {"results", "chronological_validation", "strict_family_verification"}}
+        summary["compact_command_metrics"] = compact_command_metrics
         if "metrics" in summary:
             summary["metrics"] = {k:v for k,v in summary["metrics"].items() if k != "pairs"}
         if "scope_validation" in summary:

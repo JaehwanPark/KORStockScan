@@ -809,6 +809,8 @@ def test_runtime_pre_ai_producer_freezes_owner_inputs_without_submit(monkeypatch
     from src.tests.test_avg_down_policy_replay import exit_fixture
     policy_observation, _ = exit_fixture()
     policy_snapshot = deepcopy(policy_observation['policy_snapshot'])
+    from src.engine.scalping.position_peak_ledger import DEFAULT_LEDGER_PATH
+    canonical_peak = str(DEFAULT_LEDGER_PATH.absolute())
     day = datetime.now(sizing.KST).date().isoformat()
     slot='08:15:00' if 'PREMARKET' in session else '15:45:00' if session=='NXT_AFTERMARKET' else '16:15:00' if 'AFTERMARKET' in session else '10:00:00'
     frozen_clock=datetime.fromisoformat(day+'T'+slot+'+09:00')
@@ -861,11 +863,13 @@ def test_runtime_pre_ai_producer_freezes_owner_inputs_without_submit(monkeypatch
     assert 'entry_opportunity_replay_seed' not in cached['fields']
     if guard_allowed:
         assert result['entry_economic_source_status']=='recorded_source_only', result
+        assert result['entry_economic_writer_plan_sha256']==result['entry_economic_plan_sha256']
         event=_load_entry_events(day,rows=events)[0]
         plan=_price_ready_plan(event)
         assert plan['observation_only'] is True
         seed=json.loads(event.fields['entry_opportunity_replay_seed'])
         assert replay._entry_seed_valid(seed)
+        assert canonical_peak in seed['operating_contract']['policy_snapshot']['files']
         assert seed['operating_contract']['budget_krw'] > 0
         initial_exit = seed['operating_contract']['initial_fill_exit_state']
         assert initial_exit['position_tag'] == (position_tag or 'SCALP_BASE')

@@ -12,6 +12,7 @@ from src.engine.scalping.entry_strategy_policy import knob
 import hashlib
 import json
 import math
+from datetime import datetime
 from typing import Any
 
 from src.trading.order.tick_utils import get_tick_size
@@ -1584,6 +1585,41 @@ def build_entry_setup_evidence(
             exact_analysis=exact,
             micro_window=payload.get("mechanistic_micro_window"),
         )
+        evidence["auxiliary_materiality_v1"] = build_auxiliary_materiality(
+            exact_payload=payload, exact_analysis=exact,
+            context=evidence["mechanistic_context"],
+        )
+        try:
+            from src.engine.scalping.entry_strategy_policy import features as strategy_features
+            cap = _number(strategy_features(payload, evidence).get("market_cap_krw"))
+        except (ValueError, TypeError, KeyError):
+            cap = None
+        metadata = _as_dict(payload.get("strategy_metadata"))
+        cap_source = _as_dict(metadata.get("market_cap"))
+        raw_source = _as_dict(metadata.get("source"))
+        cutoff = _number(payload.get("entry_machine_input_as_of"))
+        try:
+            known = datetime.fromisoformat(str(cap_source.get("known_at"))).timestamp()
+            effective = datetime.fromisoformat(str(cap_source.get("effective_at"))).timestamp()
+        except (ValueError, TypeError):
+            known = effective = None
+        if (not raw_source or cutoff is None or known is None or effective is None
+            or known > cutoff or effective > cutoff):
+            cap = None
+        type_body = {
+            "schema": "auxiliary_predecision_type_v1",
+            "source_setup_sha256": evidence["mechanistic_context"]["context_sha256"],
+            "market_cap_band": (
+                "LT_100B_KRW" if cap is not None and cap < 100_000_000_000 else
+                "100B_TO_1T_KRW" if cap is not None and cap < 1_000_000_000_000 else
+                "GE_1T_KRW" if cap is not None else "UNKNOWN"
+            ),
+            "market_cap_source_sha256": cap_source.get("source_sha256") if cap is not None else None,
+            "market_cap_known_at": cap_source.get("known_at") if cap is not None else None,
+        }
+        evidence["auxiliary_predecision_type_v1"] = {
+            **type_body, "type_sha256": _canonical_sha256(type_body)
+        }
     evidence["evidence_sha256"] = _canonical_sha256(evidence)
     return evidence
 
@@ -2116,8 +2152,10 @@ def build_mechanistic_context(
 ) -> dict[str, Any]:
     """Freeze predecision observations, including the exact micro receipt."""
     payload = _as_dict(exact_payload)
+    features = _as_dict(payload.get("features"))
     body = {
         "symbol": str(payload.get("stock_code") or payload.get("symbol") or ""),
+        "source_cutoff": _number(payload.get("entry_machine_input_as_of")),
         "group": build_entry_predecision_group_observation(
             exact_payload=payload,
             exact_analysis=exact_analysis,
@@ -2126,8 +2164,85 @@ def build_mechanistic_context(
         ),
         "flow": build_mechanistic_entry_flow_observation(exact_analysis),
         "micro_window": micro_window,
+        "auxiliary_pressure_input": {
+            "buy_pressure_10t": _number(features.get("buy_pressure_10t")),
+            "net_aggressive_delta_10t": _number(features.get("net_aggressive_delta_10t")),
+            "tick_aggressor_pressure_usable": features.get("tick_aggressor_pressure_usable") is True,
+            "tick_aggressor_trusted_count": _number(features.get("tick_aggressor_trusted_count")),
+            "tick_context_stale": features.get("tick_context_stale"),
+            "quote_stale": features.get("quote_stale"),
+        },
+        "auxiliary_reward_risk_input": _as_dict(payload.get(
+            "entry_predecision_reward_risk_plan_v1")),
     }
     return {**body, "context_sha256": _canonical_sha256(body)}
+
+
+def build_auxiliary_materiality(
+    *, exact_payload: Any, exact_analysis: Any, context: dict
+) -> dict[str, Any]:
+    """Freeze bounded AI-risk measurements at the same predecision cutoff.
+
+    A missing denominator or actual predecision target/stop leaves that family
+    unsupported. Outcome labels must never be used to fill these fields.
+    """
+    payload, exact = _as_dict(exact_payload), _as_dict(exact_analysis)
+    flow = _as_dict(context.get("flow"))
+    execution = _as_dict(flow.get("execution_context"))
+    cutoff = payload.get("entry_machine_input_as_of")
+    source_id = flow.get("source_analysis_sha256")
+    spread = _number(execution.get("spread_bp"))
+    pressure_input = _as_dict(context.get("auxiliary_pressure_input"))
+    pressure = _number(pressure_input.get("buy_pressure_10t"))
+    source_usable = bool(source_id and _number(cutoff) is not None
+                         and _number(cutoff) == _number(context.get("source_cutoff"))
+                         and _as_dict(exact.get("source_quality")).get("status")
+                         in {"pass", "fresh_consistent"})
+    def record(value, unit, reason, source_override=None):
+        return {"value": value if source_usable else None, "unit": unit,
+                "source_id": (source_override or source_id) if source_usable else None,
+                "as_of": cutoff if source_usable else None,
+                "missing_reason": None if source_usable and value is not None else reason}
+    spread_excess = max(0.0, spread - 40.0) if spread is not None and spread >= 0 else None
+    # The 10-tick buy share has the same classified-volume denominator as the
+    # signed pressure measure. Never substitute a broader tape sample.
+    pressure_value = (max(0.0, 1.0 - 2.0 * pressure / 100.0)
+                      if pressure is not None and 0 <= pressure <= 100
+                      and pressure_input.get("tick_aggressor_pressure_usable") is True
+                      and (_number(pressure_input.get("tick_aggressor_trusted_count")) or 0) >= 10
+                      and pressure_input.get("tick_context_stale") is False
+                      and pressure_input.get("quote_stale") is False
+                      and _number(pressure_input.get("net_aggressive_delta_10t")) is not None
+                      else None)
+    # A plan must be frozen before the provider call at this exact cutoff.
+    # Historical outcomes and the provider's own upside/downside are excluded.
+    plan = _as_dict(context.get("auxiliary_reward_risk_input"))
+    target, stop, cost = (_number(plan.get(key)) for key in (
+        "target_return_pct", "stop_return_pct", "round_trip_cost_pct"))
+    plan_hash = plan.get("plan_sha256")
+    plan_valid = (plan.get("schema") == "entry_predecision_reward_risk_plan_v1"
+                  and isinstance(plan_hash, str) and len(plan_hash) == 64
+                  and all(c in "0123456789abcdef" for c in plan_hash)
+                  and plan_hash == _canonical_sha256({
+                      k: v for k, v in plan.items() if k != "plan_sha256"})
+                  and _number(plan.get("as_of")) == _number(cutoff)
+                  and target is not None and target > 0
+                  and stop is not None and stop < 0
+                  and cost is not None and cost >= 0)
+    reward_shortfall = (max(0.0, 1.0 - (target - cost) / (abs(stop) + cost))
+                        if plan_valid else None)
+    body = {
+        "schema": "auxiliary_materiality_v1",
+        "source_setup_sha256": context.get("context_sha256"),
+        "LIQUIDITY_FRAGILE": record(spread_excess, "bp", "spread_or_source_missing"),
+        "ADVERSE_TAPE": record(pressure_value, "signed_ratio", "trusted_two_sided_tape_missing"),
+        "REWARD_RISK_WEAK": record(
+            reward_shortfall, "net_reward_risk_shortfall",
+            "predecision_target_stop_cost_missing_or_invalid",
+            source_override=plan_hash if plan_valid else None,
+        ),
+    }
+    return {**body, "registry_sha256": _canonical_sha256(body)}
 
 
 def _mechanistic_hierarchy_selection(
@@ -2632,19 +2747,53 @@ def evaluate_auxiliary_policy(
     errors = validate_mechanistic_risk_screen(
         raw, setup_evidence=setup, policy=machine_policy
     ) if raw else ["ai_advisory_not_available"]
+    return _evaluate_auxiliary_policy_validated(raw, setup, soft_policy, errors)
+
+
+def _evaluate_auxiliary_policy_validated(raw, setup, soft_policy, validation_errors):
+    """Pure soft policy step after the exact raw-response contract was checked."""
+    errors = list(validation_errors)
     verdict = str(raw.get("risk_verdict") or "UNAVAILABLE").upper()
     effective = verdict
     reason = "raw_verdict_preserved"
     selected = _as_dict(soft_policy)
+    policy_envelope = selected
     if selected and not validate_auxiliary_soft_policy(selected):
         errors.append("auxiliary_soft_policy_invalid")
+    profile = "parent"
+    unsupported_materiality = []
+    if not errors and selected.get("schema") == "auxiliary_soft_policy_v2":
+        profile, selected = select_auxiliary_soft_profile(selected, setup)
     if not errors and selected:
         support = set(map(str, raw.get("supporting_fact_ids") or []))
         adverse = set(map(str, raw.get("contradicting_fact_ids") or []))
         codes = set(map(str, raw.get("risk_codes") or []))
-        hard = set(_risk_fact_bindings(setup)) & BLOCKING_VETO_RISK_CODES
+        bindings = _risk_fact_bindings(setup)
+        hard = set(bindings) & BLOCKING_VETO_RISK_CODES
+        materiality_within, materiality_exceeded = True, False
+        if policy_envelope.get("schema") == "auxiliary_soft_policy_v2":
+            materiality = auxiliary_materiality_values(setup)
+            bounds = selected["materiality_max"]
+            bound_risks = codes & set(bounds)
+            if verdict == "PASS":
+                bound_risks = {
+                    code for code, fact_ids in bindings.items()
+                    if code in bounds and adverse.intersection(fact_ids)
+                }
+            unsupported_materiality = sorted(
+                code for code in bound_risks if materiality.get(code) is None
+            )
+            materiality_supported = not unsupported_materiality
+            materiality_within = materiality_supported and all(
+                materiality[code] <= bounds[code] for code in bound_risks
+            )
+            materiality_exceeded = materiality_supported and any(
+                materiality[code] > bounds[code] for code in bound_risks
+            )
         if verdict == "PASS" and len(support) < selected["pass_min_positive_evidence_count"]:
             effective, reason = "CAUTION", "pass_positive_evidence_below_policy"
+        elif verdict == "PASS" and adverse and materiality_exceeded:
+            effective, reason = "CAUTION", "pass_soft_risk_materiality_exceeded"
         elif (
             verdict == "VETO"
             and codes <= {"LIQUIDITY_FRAGILE", "ADVERSE_TAPE", "REWARD_RISK_WEAK"}
@@ -2654,21 +2803,50 @@ def evaluate_auxiliary_policy(
             and len(support) >= selected["pass_min_positive_evidence_count"]
             and support.intersection({"structural_edge_floor", "early_session_structural_edge_floor"})
             and support.intersection({"trusted_supportive_trigger", "trigger_confirmed"})
+            and materiality_within
         ):
             effective, reason = "PASS", "soft_veto_evidence_below_policy"
     return {
-        "schema": "auxiliary_effective_assessment_v1",
+        "schema": ("auxiliary_effective_assessment_v2"
+                   if policy_envelope.get("schema") == "auxiliary_soft_policy_v2"
+                   else "auxiliary_effective_assessment_v1"),
         "raw_verdict": verdict,
         "effective_verdict": effective if not errors else "INVALID",
         "reason": reason if not errors else "raw_or_policy_invalid",
         "validated_response_sha256": _canonical_sha256(raw),
-        "soft_policy_sha256": _canonical_sha256(selected) if selected else None,
+        "soft_policy_sha256": _canonical_sha256(policy_envelope) if policy_envelope else None,
+        "selected_profile_sha256": _canonical_sha256(selected) if selected else None,
+        "selected_profile": profile,
+        "unsupported_materiality_codes": unsupported_materiality,
         "validation_errors": list(dict.fromkeys(errors)),
     }
 
 
 def validate_auxiliary_soft_policy(policy: Any) -> bool:
     value = _as_dict(policy)
+    if value.get("schema") == "auxiliary_soft_policy_v2":
+        if set(value) != {"schema", "parent", "leaves"}:
+            return False
+        if not _valid_auxiliary_profile(value.get("parent")):
+            return False
+        leaves = value.get("leaves")
+        if not isinstance(leaves, list) or len(leaves) > 12:
+            return False
+        seen = set()
+        for leaf in leaves:
+            if not isinstance(leaf, dict) or set(leaf) != {"match", "profile"}:
+                return False
+            match = leaf["match"]
+            if not isinstance(match, dict) or not match or not set(match) <= {
+                "price_tick_band", "market_cap_band", "liquidity_band",
+                "volatility_band", "structure_phase",
+            } or not all(isinstance(v, str) and v and v != "UNKNOWN" for v in match.values()):
+                return False
+            key = tuple(sorted(match.items()))
+            if key in seen or not _valid_auxiliary_profile(leaf["profile"]):
+                return False
+            seen.add(key)
+        return True
     return (
         set(value) == {
             "schema", "veto_min_independent_evidence_count",
@@ -2683,6 +2861,114 @@ def validate_auxiliary_soft_policy(policy: Any) -> bool:
             )
         )
     )
+
+
+def _valid_auxiliary_profile(value: Any) -> bool:
+    if not isinstance(value, dict) or set(value) != {
+        "veto_min_independent_evidence_count", "pass_min_positive_evidence_count",
+        "materiality_max", "prompt_version",
+    }:
+        return False
+    if not all(type(value[key]) is int and 1 <= value[key] <= 3 for key in (
+        "veto_min_independent_evidence_count", "pass_min_positive_evidence_count",
+    )):
+        return False
+    from src.engine.scalping.mechanistic_entry_runtime_policy import COMPACT_AI_VARIANTS
+    if value["prompt_version"] not in COMPACT_AI_VARIANTS:
+        return False
+    bounds = value["materiality_max"]
+    return isinstance(bounds, dict) and set(bounds) == {
+        "LIQUIDITY_FRAGILE", "ADVERSE_TAPE", "REWARD_RISK_WEAK",
+    } and all(type(bounds[key]) in (int, float) and math.isfinite(bounds[key])
+              and 0 <= bounds[key] <= maximum for key, maximum in (
+                  ("LIQUIDITY_FRAGILE", 500), ("ADVERSE_TAPE", 1),
+                  ("REWARD_RISK_WEAK", 10),
+              ))
+
+
+def select_auxiliary_soft_profile(policy: dict, setup: Any) -> tuple[str, dict]:
+    """Select an exact predecision leaf; a bad or unknown group uses parent."""
+    if policy.get("schema") != "auxiliary_soft_policy_v2":
+        return "parent", policy
+    context = _as_dict(_as_dict(setup).get("mechanistic_context"))
+    group = _as_dict(context.get("group"))
+    if context.get("context_sha256") != _canonical_sha256({
+        k: v for k, v in context.items() if k != "context_sha256"
+    }) or group.get("group_observation_sha256") != _canonical_sha256({
+        k: v for k, v in group.items() if k != "group_observation_sha256"
+    }):
+        return "parent", policy["parent"]
+    parts = _as_dict(group.get("key_parts"))
+    type_receipt = _as_dict(_as_dict(setup).get("auxiliary_predecision_type_v1"))
+    if (type_receipt.get("schema") == "auxiliary_predecision_type_v1"
+        and type_receipt.get("source_setup_sha256") == context.get("context_sha256")
+        and type_receipt.get("type_sha256") == _canonical_sha256({
+            k: v for k, v in type_receipt.items() if k != "type_sha256"
+        })):
+        parts = {**parts, "market_cap_band": type_receipt.get("market_cap_band")}
+    for index, leaf in enumerate(policy["leaves"]):
+        if all(parts.get(key) == value for key, value in leaf["match"].items()):
+            return f"leaf_{index}", leaf["profile"]
+    return "parent", policy["parent"]
+
+
+def auxiliary_materiality_values(setup: Any) -> dict[str, float | None]:
+    """Read only predecision values with a complete source and unit contract."""
+    registry = _as_dict(_as_dict(setup).get("auxiliary_materiality_v1"))
+    if registry.get("schema") != "auxiliary_materiality_v1" or registry.get(
+        "source_setup_sha256"
+    ) != _as_dict(_as_dict(setup).get("mechanistic_context")).get("context_sha256") or registry.get(
+        "registry_sha256"
+    ) != _canonical_sha256({k: v for k, v in registry.items() if k != "registry_sha256"}):
+        return {key: None for key in (
+            "LIQUIDITY_FRAGILE", "ADVERSE_TAPE", "REWARD_RISK_WEAK"
+        )}
+    values = {}
+    context = _as_dict(_as_dict(setup).get("mechanistic_context"))
+    flow = _as_dict(context.get("flow"))
+    execution = _as_dict(flow.get("execution_context"))
+    plan = _as_dict(context.get("auxiliary_reward_risk_input"))
+    plan_hash = plan.get("plan_sha256")
+    for key, unit in (("LIQUIDITY_FRAGILE", "bp"),
+                      ("ADVERSE_TAPE", "signed_ratio"),
+                      ("REWARD_RISK_WEAK", "net_reward_risk_shortfall")):
+        record = _as_dict(registry.get(key))
+        number = _number(record.get("value"))
+        values[key] = number if (record.get("unit") == unit
+            and record.get("source_id") == (plan_hash if key == "REWARD_RISK_WEAK"
+                                            else flow.get("source_analysis_sha256"))
+            and isinstance(record.get("source_id"), str) and record["source_id"]
+            and _number(record.get("as_of")) is not None
+            and _number(record.get("as_of")) == _number(context.get("source_cutoff"))
+            and number is not None and number >= 0) else None
+    spread = _number(execution.get("spread_bp"))
+    if spread is None or spread < 0 or values["LIQUIDITY_FRAGILE"] != max(0.0, spread - 40.0):
+        values["LIQUIDITY_FRAGILE"] = None
+    pressure_input = _as_dict(_as_dict(_as_dict(setup).get("mechanistic_context")).get(
+        "auxiliary_pressure_input"))
+    pressure = _number(pressure_input.get("buy_pressure_10t"))
+    if (pressure is None or not 0 <= pressure <= 100
+        or pressure_input.get("tick_aggressor_pressure_usable") is not True
+        or (_number(pressure_input.get("tick_aggressor_trusted_count")) or 0) < 10
+        or pressure_input.get("tick_context_stale") is not False
+        or pressure_input.get("quote_stale") is not False
+        or _number(pressure_input.get("net_aggressive_delta_10t")) is None
+        or values["ADVERSE_TAPE"] != max(0.0, 1.0 - 2.0 * pressure / 100.0)):
+        values["ADVERSE_TAPE"] = None
+    target, stop, cost = (_number(plan.get(key)) for key in (
+        "target_return_pct", "stop_return_pct", "round_trip_cost_pct"))
+    if (plan.get("schema") != "entry_predecision_reward_risk_plan_v1"
+        or not isinstance(plan_hash, str) or len(plan_hash) != 64
+        or any(c not in "0123456789abcdef" for c in plan_hash)
+        or plan_hash != _canonical_sha256({
+            k: v for k, v in plan.items() if k != "plan_sha256"})
+        or _number(plan.get("as_of")) != _number(context.get("source_cutoff"))
+        or target is None or target <= 0 or stop is None or stop >= 0
+        or cost is None or cost < 0
+        or values["REWARD_RISK_WEAK"] != max(
+            0.0, 1.0 - (target - cost) / (abs(stop) + cost))):
+        values["REWARD_RISK_WEAK"] = None
+    return values
 
 
 def compose_mechanistic_primary_decision(
@@ -2810,7 +3096,7 @@ def compose_mechanistic_primary_decision(
     )
     result.update(
         {
-            "entry_ai_auxiliary_contract_version": "auxiliary_effective_assessment_v1",
+            "entry_ai_auxiliary_contract_version": assessment["schema"],
             "primary_schema": MECHANISTIC_PRIMARY_DECISION_SCHEMA,
             "entry_primary_decision_owner": MECHANISTIC_PRIMARY_DECISION_OWNER,
             "entry_ai_role": MECHANISTIC_AI_ADVISORY_ROLE,
@@ -3180,6 +3466,27 @@ def validate_entry_setup_evidence(evidence: Any) -> list[str]:
         "elevated_depth_spread_fragility"
     ):
         errors.append("entry_setup_tail_recheck_without_fragility")
+    if "auxiliary_materiality_v1" in setup:
+        registry = _as_dict(setup["auxiliary_materiality_v1"])
+        context = _as_dict(setup.get("mechanistic_context"))
+        if (registry.get("schema") != "auxiliary_materiality_v1"
+            or registry.get("source_setup_sha256") != context.get("context_sha256")
+            or registry.get("registry_sha256") != _canonical_sha256({
+                key: value for key, value in registry.items() if key != "registry_sha256"
+            })):
+            errors.append("entry_setup_auxiliary_materiality_invalid")
+    if "auxiliary_predecision_type_v1" in setup:
+        type_receipt = _as_dict(setup["auxiliary_predecision_type_v1"])
+        context = _as_dict(setup.get("mechanistic_context"))
+        if (type_receipt.get("schema") != "auxiliary_predecision_type_v1"
+            or type_receipt.get("source_setup_sha256") != context.get("context_sha256")
+            or type_receipt.get("market_cap_band") not in {
+                "LT_100B_KRW", "100B_TO_1T_KRW", "GE_1T_KRW", "UNKNOWN"
+            }
+            or type_receipt.get("type_sha256") != _canonical_sha256({
+                key: value for key, value in type_receipt.items() if key != "type_sha256"
+            })):
+            errors.append("entry_setup_auxiliary_type_invalid")
     if (
         "LARGE_SELL_EXHAUSTION_RECHECK" in recheck_reasons
         and "hard_blocker:large_sell_print_present"

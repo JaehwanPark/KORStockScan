@@ -12085,6 +12085,7 @@ def _observe_entry_economics_before_ai(stock, code, ws_data, *, exact_payload,
             raise ValueError("atomic_observation_plan_invalid:" + str(fields.get("entry_execution_sizing_blockers")))
         fields["entry_economic_capacity_receipt"] = budget
         source.update(entry_economic_source_status="recorded_source_only",
+                      entry_economic_writer_plan_sha256=fields["entry_execution_sizing_plan_sha256"],
                       entry_economic_plan_sha256=fields["entry_execution_sizing_plan_sha256"])
         stage = "entry_ai_economic_plan_observed"
     except (ValueError, TypeError, KeyError, AttributeError) as exc:
@@ -33088,6 +33089,7 @@ def _machine_primary_entry_provenance_fields(source: dict | None) -> dict:
         "entry_ai_raw_risk_verdict",
         "entry_ai_effective_assessment",
         "entry_ai_soft_policy_sha256",
+        "entry_ai_selected_profile",
         "entry_ai_advisory_contract_valid",
         "entry_ai_advisory_contract_errors",
         "entry_ai_followup_disposition",
@@ -50633,6 +50635,7 @@ def _build_ai_ops_log_fields(
         "entry_ai_raw_risk_verdict",
         "entry_ai_effective_assessment",
         "entry_ai_soft_policy_sha256",
+        "entry_ai_selected_profile",
         "entry_ai_advisory_contract_valid",
         "entry_ai_advisory_contract_errors",
         "entry_ai_followup_disposition",

@@ -852,6 +852,99 @@ def test_auxiliary_soft_policy_preserves_raw_facts_and_machine_authority():
     )["effective_verdict"] == "CAUTION"
 
 
+def test_auxiliary_v2_uses_bound_predecision_materiality_and_leaf():
+    from src.engine.scalping import entry_setup_evidence as module
+    from src.engine.ai_prompt_contracts import ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION
+
+    setup, veto = _machine_screen_case("VETO")
+    context = setup["mechanistic_context"]
+    context["source_cutoff"] = 1790000000.0
+    context["flow"]["source_analysis_sha256"] = "a" * 64
+    context["flow"]["execution_context"]["spread_bp"] = 80.0
+    context["context_sha256"] = module._canonical_sha256({
+        key: value for key, value in context.items() if key != "context_sha256"
+    })
+    setup.pop("auxiliary_predecision_type_v1", None)
+    setup["auxiliary_materiality_v1"] = module.build_auxiliary_materiality(
+        exact_payload={"entry_machine_input_as_of": 1790000000.0},
+        exact_analysis={"source_quality": {"status": "fresh_consistent"}},
+        context=context,
+    )
+    setup["evidence_sha256"] = module._canonical_sha256({
+        key: value for key, value in setup.items() if key != "evidence_sha256"
+    })
+    parent = {
+        "veto_min_independent_evidence_count": 2,
+        "pass_min_positive_evidence_count": 2,
+        "materiality_max": {"LIQUIDITY_FRAGILE": 20.0,
+                            "ADVERSE_TAPE": 0.0, "REWARD_RISK_WEAK": 0.0},
+        "prompt_version": ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
+    }
+    policy = {"schema": "auxiliary_soft_policy_v2", "parent": parent, "leaves": []}
+    assert module.validate_auxiliary_soft_policy(policy)
+    from src.engine.ai_prompt_contracts import ENTRY_MACHINE_AUXILIARY_COMPACT_V1_PROMPT_VERSION
+    assert not module.validate_auxiliary_soft_policy({
+        **policy, "leaves": [{"match": {"price_tick_band": "GE_10BP"},
+                             "profile": {**parent,
+                                         "prompt_version": ENTRY_MACHINE_AUXILIARY_COMPACT_V1_PROMPT_VERSION}}],
+    })
+    assert module.auxiliary_materiality_values(setup)["LIQUIDITY_FRAGILE"] == 40.0
+    assert module.auxiliary_materiality_values(setup)["REWARD_RISK_WEAK"] is None
+    assert module.evaluate_auxiliary_policy(
+        veto, setup_evidence=setup, soft_policy=policy
+    )["effective_verdict"] == "VETO"
+    policy["leaves"] = [{"match": {"price_tick_band": "GE_10BP"},
+                          "profile": {**parent, "materiality_max": {
+                              **parent["materiality_max"], "LIQUIDITY_FRAGILE": 50.0}}}]
+    leaf = module.evaluate_auxiliary_policy(veto, setup_evidence=setup, soft_policy=policy)
+    assert (leaf["selected_profile"], leaf["effective_verdict"]) == ("leaf_0", "PASS")
+    missing = dict(setup)
+    missing.pop("auxiliary_materiality_v1")
+    missing["evidence_sha256"] = module._canonical_sha256({
+        key: value for key, value in missing.items() if key != "evidence_sha256"
+    })
+    assert module.evaluate_auxiliary_policy(
+        veto, setup_evidence=missing, soft_policy=policy
+    )["effective_verdict"] == "VETO"
+    stale = dict(setup)
+    stale["auxiliary_materiality_v1"] = {
+        **setup["auxiliary_materiality_v1"],
+        "LIQUIDITY_FRAGILE": {
+            **setup["auxiliary_materiality_v1"]["LIQUIDITY_FRAGILE"],
+            "as_of": 1790000001.0,
+        },
+    }
+    stale["auxiliary_materiality_v1"]["registry_sha256"] = module._canonical_sha256({
+        key: value for key, value in stale["auxiliary_materiality_v1"].items()
+        if key != "registry_sha256"
+    })
+    assert module.auxiliary_materiality_values(stale)["LIQUIDITY_FRAGILE"] is None
+    plan_body = {
+        "schema": "entry_predecision_reward_risk_plan_v1",
+        "as_of": 1790000000.0,
+        "target_return_pct": 0.6,
+        "stop_return_pct": -0.5,
+        "round_trip_cost_pct": 0.2,
+    }
+    plan = {**plan_body, "plan_sha256": module._canonical_sha256(plan_body)}
+    with_plan = dict(setup)
+    with_plan["mechanistic_context"] = {
+        **context, "auxiliary_reward_risk_input": plan,
+    }
+    with_plan["mechanistic_context"]["context_sha256"] = module._canonical_sha256({
+        key: value for key, value in with_plan["mechanistic_context"].items()
+        if key != "context_sha256"
+    })
+    with_plan["auxiliary_materiality_v1"] = module.build_auxiliary_materiality(
+        exact_payload={"entry_machine_input_as_of": 1790000000.0},
+        exact_analysis={"source_quality": {"status": "fresh_consistent"}},
+        context=with_plan["mechanistic_context"],
+    )
+    assert module.auxiliary_materiality_values(with_plan)["REWARD_RISK_WEAK"] == pytest.approx(3 / 7)
+    with_plan["mechanistic_context"]["auxiliary_reward_risk_input"]["round_trip_cost_pct"] = 0.3
+    assert module.auxiliary_materiality_values(with_plan)["REWARD_RISK_WEAK"] is None
+
+
 @pytest.mark.parametrize(
     "verdict,field,error",
     [
@@ -905,6 +998,10 @@ def _hierarchy_case(*, micro=None):
         **context,
         "context_sha256": module._canonical_sha256(context),
     }
+    # This fixture deliberately substitutes a synthetic hierarchy context;
+    # the natural predecision materiality receipt no longer describes it.
+    setup.pop("auxiliary_materiality_v1", None)
+    setup.pop("auxiliary_predecision_type_v1", None)
     setup["evidence_sha256"] = module._canonical_sha256(
         {k: v for k, v in setup.items() if k != "evidence_sha256"}
     )

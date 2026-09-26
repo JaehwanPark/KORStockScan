@@ -129,6 +129,15 @@
   - 완료 기준: 새 자연 원천일의 엄격 source/제외/기회·승패 분모에서 train/독립 holdout·승률 전용 후속 허들을 평가하고 합격 한 scope만 다음 거래일 CAS 발행, 미합격이면 마지막 검증된 활성 machine policy payload/hash를 유지한다. 전체 활성 stage의 최신 영수증·full strict `--require-summary-handoff`·controller/finalizer/cleanup/detector와 정책 직접 소비를 대사한다. stage별 compute wall/child CPU/peak RSS/swap·대기/재시도·후보/replay 수를 측정해 실제 병목만 결과 동등성 검증 후 최적화한다.
   - 경계: 후보 없음·승률 0/0·원천 결손을 승인 또는 손실 0으로 바꾸지 않는다. 기존 9/23 성공 영수증이나 frozen 성능 결과는 새 자연 원천일 완료 증거가 아니다.
 
+- [ ] `[DirectFamilySourceRepairCompactAuxiliary] 보조 AI 판정·장후·정책 소비 폐루프 결손 수리` (`Due: 2026-09-28`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~21:40`, `Track: RuntimeStability`)
+  - Source: [보완 구현계획](../proposals/auxiliary-ai-opportunity-error-tuning-runtime-implementation-plan-2026-09-22.md), [9/23 이관 전 owner](2026-09-23-stage2-todo-checklist.md).
+  - 현 상태: 9/23 고정 원천의 soft 근거 개수 3×3은 계산됐으나 74건 중 적격 11건, prompt exact 응답 0건이며 새 AI 정책과 9/28 자연 PID 소비는 미확정이다. 9/28 bootstrap의 `compact_auxiliary` receipt도 `valid=false`이므로 PREOPEN 정상 승격으로 해석하지 않는다.
+  - 9/26 코드 재검토: holdout의 후보 생성·중간/최종 순위 유입을 제거하고 prompt 입력/부모/모델/제공자 영수증을 묶었다. writer→trace→owner 해시 결손을 단계별로 노출하고 격리 holding 재생의 peak-state 원천을 동결했다. 희박 유형 leaf는 train 5기회 미만에서 생성하지 않는다. 관련 회귀 735건 PASS 및 leaf 회귀 2건 PASS; 9/23 고정 원천의 74/11/63과 기존 3×3 EV·전이는 동일하며 제공자 없는 격리 두 명령 재생은 약 3.89초(기존 HEAD 약 3.73초)로 정책은 incumbent carry다.
+  - 미종결 수용: 9/23은 독립 날짜 holdout과 prompt 변형의 실제 응답, 자연 writer→trace→owner 완료 경제성이 없으며 9/28 bootstrap receipt도 invalid다. 다음 적격 자연일의 source·후단 결과 및 실제 선택 릴리스/PID 소비를 확인하기 전에는 신규 AI 임계치 승격이나 비용 후 수익 개선을 주장하지 않는다.
+  - 구현 완료 기준: 실제 machine `ENTER_NOW`의 `entry_execution_sizing_plan_sha256` writer→AI trace `entry_economic_plan_sha256`→owner replay seed와 exact input/응답·근거·판정 전 수치/유형·비용 label producer를 연결한다. 기존 근거 개수 두 축, 세 bounded-risk materiality 수치, 가격·tick/시가총액·유동성·변동성·구조 상태 selector, compact prompt 변형 **네 조정축 전부**의 후보·동일 basis 평가·독립 holdout·단일 AI component CAS·v1/신규 loader·parent fallback·rollback·stage/PREOPEN/장중 경로를 코드와 fixture로 닫는다. 같은 frozen source의 분모·행동·EV 동등성과 stage wall/CPU/RSS/I/O·provider budget·후속 handoff 성능을 대조한다. source gap은 해당 leaf의 승격만 carry하며 구현 누락을 완료 처리하지 않는다.
+  - 운영 수용 기준: 자연일에서 네 축의 후보·선정/미선정·비용 EV와 stage terminal, 실제 PID의 AI 정책 hash·판정 변화·후단 주문 및 `COMPLETED + valid profit_rate`를 순서대로 대사한다. 적격 자연 근거가 없으면 원인별 `source_gap` 또는 `insufficient_independent_evidence`와 incumbent carry를 기록하고 운영·경제성 수용은 OPEN으로 남긴다.
+  - 권한 경계: 이 항목은 계획·증거 owner이며 현재 문서 변경만으로 AI threshold, prompt/provider, 주문, hard guard 또는 봇 PID를 변경하지 않는다. 기계 BLOCK/RECHECK 및 타 family의 표본을 AI 승격 근거로 전용하지 않는다.
+
 ## Project/Calendar 동기화
 
 문서/checklist를 수정했으면 parser 검증은 실행하고, Project/Calendar 동기화는 사용자가 아래 명령으로 수동 실행한다.
