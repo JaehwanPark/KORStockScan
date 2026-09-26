@@ -2340,6 +2340,9 @@ def _load_current_uncached(data_root: Path, target_date: str) -> dict | None:
                 raise ValueError('auxiliary_activation_component_binding_invalid')
         return bundle if target_date >= bundle['target_date'] else None
     if activation.get('schema') == 'main_auxiliary_operator_prompt_v1':
+        if target_date < bundle['target_date']:
+            _validate_bundle_sources(parent, data_root)
+            return parent if target_date >= parent['target_date'] else None
         evidence_hash = activation.get('evidence_sha256')
         if re.fullmatch(r'[0-9a-f]{64}', str(evidence_hash)) is None:
             raise ValueError('auxiliary_operator_evidence_hash_invalid')

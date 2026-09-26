@@ -54,6 +54,7 @@ def test_operator_prompt_stage_preserves_machine_and_other_scopes(tmp_path):
         now=datetime(2026, 9, 26, 12, tzinfo=policy.KST),
     )
     assert result['status'] == 'staged'
+    assert policy._load_current(tmp_path, '2026-09-26')['bundle_sha256'] == incumbent['bundle_sha256']
     selected = policy.load_effective(data_root=tmp_path, target_date='2026-09-28')
     assert selected['ai_policy']['prompt_version'] == evidence['prompt_version']
     assert selected['machine_policy'] == incumbent['machine_policy']
