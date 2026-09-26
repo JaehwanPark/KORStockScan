@@ -611,7 +611,7 @@ def _resolve_legacy_session(
             decision_market_scope="KRX",
             preferred_market_data_route=MARKET_DATA_ROUTE_UNKNOWN,
             entry_allowed_by_clock=False,
-            exit_allowed_by_clock=False,
+            exit_allowed_by_clock=clock < dt_time(8, 50),
             source_quality=SOURCE_QUALITY_PARTIAL,
             blocker=None,
         )
@@ -690,7 +690,7 @@ def _resolve_post_effective_session(
             decision_market_scope="KRX",
             preferred_market_data_route=MARKET_DATA_ROUTE_UNKNOWN,
             entry_allowed_by_clock=False,
-            exit_allowed_by_clock=False,
+            exit_allowed_by_clock=clock < dt_time(8, 50),
             source_quality=SOURCE_QUALITY_PARTIAL,
             blocker=None,
         )

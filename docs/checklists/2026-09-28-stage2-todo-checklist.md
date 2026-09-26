@@ -42,6 +42,12 @@
 
 ## 실행 항목
 
+- [ ] `[HoldingProfitExitSemanticClosure0928] 익절 투표 정책·의미 감시의 첫 자연 소비 대사` (`Due: 2026-09-28`, `Slot: INTRADAY`, `TimeWindow: 08:05~19:50`, `Track: RuntimeStability`)
+  - Source: [익절 추정 정책·의미 감시 구현계획](../proposals/holding-profit-exit-estimated-policy-and-semantic-closed-loop-plan-2026-09-26.md).
+  - 완료 기준: 프리마켓 08:05부터 정규장·통합애프터마켓까지 `holding-exit-sentinel` selector 경유 trigger 6개와 날짜별 JSON의 `profit_exit_semantics`를 확인한다. 동일 대상일 15셀 임시 정책 파일→장후 summary/strict→bootstrap manifest/env→선택 release→실제 Main PID의 정책 hash 및 첫 crossing·신호 전 표·SELL terminal/비용을 서로 다른 영수증으로 대사한다. 자연 표본이 없으면 `valid_empty`/`source_gap`과 코드 폐루프 검증을 구분해 기록하며 실현 EV를 만들지 않는다.
+  - 배포 기준: [9/26 코드 재검토·성능·배포 영수증](../audit-reports/2026-09-26-holding-profit-exit-semantic-rereview-deployment.md)의 구현 근거와 현재 `data/runtime/runtime_release_selection.json`의 선택 commit·cron 경유를 함께 확인한다. 메인 PID와 자연 v10 표는 9/28에 별도 수용한다.
+  - 권한 경계: 보고 전용 감시 결과로 SELL, 임계치, provider, bot restart 또는 hard/protect/emergency 안전을 변경하지 않는다.
+
 - [ ] `[DirectFamilySourceRepairEntryCancelWait] entry_cancel_wait 직접 family 원천·경제성 계약 수리` (`Due: 2026-09-28`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~21:40`, `Track: RuntimeStability`)
   - Source: [runtime_approval_summary_2026-09-23.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-09-23.json)
   - 증거: runtime_summary_sha256=`217322260aab303c475ceb696b74b18f275e95c4bcbbee084c6c25fe73f1ccb7`, source_artifact=`/home/ubuntu/KORStockScan/data/report/entry_cancel_wait_tuning/entry_cancel_wait_tuning_2026-09-23.json`.
@@ -81,9 +87,14 @@
 
 ## 9/24 복구에서 이관된 자연 원천 수용
 
+- [ ] `[PostcloseDashboardArchive0928] 장후 DB archive 예약 복구 후 첫 자연 terminal 확인` (`Due: 2026-09-28`, `Slot: POSTCLOSE`, `TimeWindow: 20:50~21:10`, `Track: RuntimeStability`)
+  - Source: [9/26 통합 점검](../audit-reports/2026-09-26-integrated-worktree-review-and-next-session-readiness.md), [현행 장후 목록](../audit-reports/2026-09-05-postclose-work-inventory.md).
+  - 완료 기준: 설치된 20:50 `archive` 예약의 선택 release·원천일과 wrapper의 `[START]`→`[DONE]`·압축/보존 결과를 대사한다. 9/16 이전 실행을 9/28 완료로 재사용하지 않는다.
+  - 권한 경계: 보고·보존 owner이며 정책·주문·provider·bot을 변경하지 않는다.
+
 - [ ] `[PostcloseFinalizerControllerTerminalReceipt] 다음 장후 controller·finalizer 실행 release 인계 확인` (`Due: 2026-09-28`, `Slot: POSTCLOSE`, `TimeWindow: 20:10~23:20`, `Track: RuntimeStability`)
   - Source: [9/24 전체 진단·복구](../audit-reports/2026-09-24-postclose-whole-result-diagnosis-and-recovery-plan.md), [9/24 완료 owner](2026-09-24-stage2-todo-checklist.md).
-  - 이관 증거: 9/23 원천일은 v3 장후 stage·strict/controller·최종화 `[DONE]`으로 완결했다. 설치된 widget/machine 장후 unit은 v3 `484129dc`, 반면 cron의 `run_runtime_release.sh finalize/controller`는 현재 선택된 매매 release `41cdf32a`를 따른다. 9/28 장전 선택 release bootstrap/loader는 검증됐고 실제 PID 소비는 그때 별도 확인한다.
+  - 이관 증거: 9/23 원천일은 v3 장후 stage·strict/controller·최종화 `[DONE]`으로 완결했다. 당시 widget/machine 장후 unit은 v3 `484129dc`, 당시 cron selector는 `41cdf32a`였다. 9/28 실행은 현재 selector와 각 독립 unit의 실제 pin·terminal을 다시 확인하고, 장전 bootstrap/loader와 실제 PID 소비도 분리한다.
   - 완료 기준: 다음 자연 장후 실행 전에 controller/finalizer의 실제 PID cwd·commit과 stage dispatcher의 최신 영수증 입력 계약·위젯 관측 전용 준비 판정을 대조한다. scoped postclose route를 바꿀 경우 운영 문서/checklist와 함께 review·검증하고 매매 release/PID·주문 권한을 임의로 변경하지 않는다. 실행 뒤 같은 원천일의 active stage→summary→strict→controller→cleanup→detector 최신 terminal과 비용·정책 분모를 확인한다.
   - 의미 감시 인계: [9/24 작업본 수리](../audit-reports/2026-09-24-machine-judgement-horizon-and-field-association-audit.md)의 `artifact_freshness.machine_result_semantics`가 실제 detector 실행 release에 포함됐는지 확인한다. 새 자연 원천에서 구조 적격·운영 paired·원천 계약 제외·compact 전량 제외의 경고/분모를 원본 보고서와 대사하고, `warning`을 경제성 0 또는 stage 실패로 치환하지 않는다. 기존 9/23 detector 영수증은 이 새 검사 소비 증거가 아니다.
 
@@ -96,6 +107,8 @@
   - 후속 진단: [과거 중립 추정 재생·리뷰](../audit-reports/2026-09-25-scalp-trailing-legacy-neutral-scenario-review.md)는 완료·유효 표시 329건에서 312건의 조건부 시나리오를 계산하고 MFE/규칙 추정·미식별 중립·비용/슬리피지 가정을 분리했다. 엄격 완료·비용 적격 0건과 현재 정책 미선택 상태는 유지한다. 주말 빈 보고서의 census 오판과 진입일 기준 검증 분할은 수리했으나 주중 원천 결손·구형 미봉인·후행 실행가격은 자연 수용에서 계속 확인한다.
   - 운영 입력 작업본: [17축 입력 민감도 재생·리뷰](../audit-reports/2026-09-25-scalp-trailing-operational-input-replay-review.md)는 polling/NXT·보유 AI·공유 quote/REST의 현행값과 진단 격자, 평가별 shadow hash, source gap·owner 안전 검토 상태를 장후 observation→sentinel/summary에 연결한다. 변경된 AI/시세·호출/체결의 비용 후 반사실과 선택 정책은 `null`로 유지한다. 다음 자연일에 exact ID·원천/정책 hash·fast/normal·3시장/route·성능과 공유 owner 안전 결과를 대사하고, 새 원천 이전의 작업본을 적용 증거로 승격하지 않는다.
   - 완료 기준: 신규 자연 완료 포지션 전량의 position→트레일링 arm/시세품질/강약/발동 전이→exit signal/effective threshold·AI/flow 실제 개입→order/fill 수량→exact fee-aware cost→terminal→1/3/5/10분 완전 관측을 동일 identity·원천일·hash로 검사한다. `trailing_threshold_readiness`의 네 축별 적격 ID와 source gap을 분리하고, paired replay·독립 holdout 전에는 임계치 후보나 자동 적용을 승인하지 않는다. 과거 2건과 미봉인 historical census는 소급 합성하지 않고 source gap으로 분리한다. 실제 정책/PID 소비는 별도 수용하며 hard safety·보유/청산 owner를 유지한다.
+  - 강약 폐루프 v2 인계: [구현계획](../proposals/scalp-trailing-mechanical-strength-closed-loop-tuning-plan-2026-09-25.md)의 3시장×8 강약값과 3시장×3 수익값을 한 정책으로 대사한다. 장후 `postclose_exit`의 trade review→post-sell→holding observation 세 파일·manifest 해시와 terminal, M1 첫 관측 진입일 이후의 별도 완료 census·strict 비용·미배치 ID, 후보별 500/1000ms 원시 0B 재계산·분류기×폭·검열·독립 완료일 holdout을 확인한다. 다음 PREOPEN은 hold/carry 또는 결합 v2 선택 영수증, 부모 hash·운영자 lock·한 시장 canary, 무후보 날짜의 선택 hash 유지와 실제 PID의 적용 hash를 구분한다. 자연 M1 표본이 없으면 수익성은 미식별로 남기고 합성 성능·정합 통과를 경제성으로 대체하지 않는다.
+  - 9/26 코드 배포: [재검토·성능·전환 영수증](../audit-reports/2026-09-26-scalp-trailing-mechanical-closed-loop-rereview-and-performance.md)의 구현 근거와 현재 `data/runtime/runtime_release_selection.json`의 선택 commit을 함께 확인한다. 메인 PID와 자연 M1 독립 검증은 9/28 실제 원천·정확 날짜 정책·완료 비용 결과와 분리 대사한다.
 
 - [ ] `[PostcloseWidgetEodSlotAdmission] 새 자연일 EOD 대기·위젯 계산 슬롯·격리 성능 검증` (`Due: 2026-09-28`, `Slot: POSTCLOSE`, `TimeWindow: 20:05~21:55`, `Track: RuntimeStability`)
   - Source: [9/24 전체 진단·복구](../audit-reports/2026-09-24-postclose-whole-result-diagnosis-and-recovery-plan.md), [9/24 이관 owner](2026-09-24-stage2-todo-checklist.md).

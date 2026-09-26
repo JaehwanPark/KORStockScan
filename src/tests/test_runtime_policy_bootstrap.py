@@ -1,9 +1,11 @@
 import json
 from pathlib import Path
+import pytest
 
 from src.engine.automation import runtime_policy_bootstrap as bootstrap
 from src.engine import runtime_approval_summary as summary_mod
 from src.engine import verify_threshold_cycle_postclose_chain as verifier
+from src.engine.automation import scalp_trailing_mechanical_policy_apply as scalp_publisher
 
 
 def _write(path: Path, payload: dict):
@@ -149,13 +151,13 @@ def test_bootstrap_rejects_missing_trailing_receipt_and_env_owner(monkeypatch, t
         "target_date": "2026-09-18", "status": "pass", "passed": True
     })
     manifest = bootstrap.write_bootstrap("2026-09-19")
-    manifest.pop("scalp_trailing_threshold_receipt")
+    manifest.pop("scalp_trailing_mechanical_policy_receipt")
     manifest["manifest_sha256"] = bootstrap._digest_json({
         key: value for key, value in manifest.items() if key != "manifest_sha256"
     })
     _write(bootstrap.manifest_path("2026-09-19"), manifest)
     result = bootstrap.verify_bootstrap("2026-09-19", write=False)
-    assert "scalp_trailing_threshold_receipt_missing" in result["findings"]
+    assert "scalp_trailing_mechanical_policy_receipt_missing" in result["findings"]
 
     manifest = bootstrap.write_bootstrap("2026-09-19")
     manifest["env_key_owners"].pop("KORSTOCKSCAN_SCALP_TRAILING_START_PCT")
@@ -164,7 +166,7 @@ def test_bootstrap_rejects_missing_trailing_receipt_and_env_owner(monkeypatch, t
     })
     _write(bootstrap.manifest_path("2026-09-19"), manifest)
     result = bootstrap.verify_bootstrap("2026-09-19", write=False)
-    assert "scalp_trailing_threshold_env_or_owner_missing" in result["findings"]
+    assert "scalp_trailing_mechanical_env_or_owner_missing" in result["findings"]
 
 
 def test_bootstrap_preserves_explicit_operator_handoff_veto(monkeypatch, tmp_path):
@@ -394,7 +396,7 @@ def test_bootstrap_applies_bounded_rising_missed_policy_before_operator_locks(
     assert manifest["direct_family_receipts"][0]["family"] == "rising_missed_tp1_selector"
 
     bootstrap.write_bootstrap("2026-09-19", receipt_paths=[receipt])
-    assert bootstrap.verify_bootstrap("2026-09-19", write=False)["passed"] is True
+    assert bootstrap.verify_bootstrap("2026-09-19", write=True)["passed"] is True
     source["economic_evaluation"]["validated_candidate_count"] = 0
     _write(
         bootstrap.RISING_MISSED_REPORT_DIR / "rising_missed_classifier_prior_2026-09-18.json",
@@ -649,13 +651,13 @@ def test_direct_summary_and_verifier_do_not_require_retired_common_reports(monke
     assert "threshold_cycle_ev_2026" not in joined
 
 
-def test_four_axis_selection_binds_report_parent_and_twelve_market_keys(
+def test_mechanical_selection_binds_postclose_parent_and_33_market_keys(
     monkeypatch, tmp_path,
 ):
-    from src.engine.scalping.trailing_four_axis_replay import DEFAULT_VECTOR
-    from src.engine.scalping.trailing_threshold_policy import (
-        SELECTED_POLICY_SCHEMA, START_MARKETS, market_values_hash,
-        selected_policy_env,
+    from src.engine.scalping.trailing_mechanical_policy import (
+        CLASSIFIER_VERSION, CONFIG_DEFAULTS, DEFAULTS, SELECTED_SCHEMA,
+        START_MARKETS, classifier_hash,
+        market_values_hash, selected_policy_env,
     )
     monkeypatch.setattr(bootstrap, "DATA_DIR", tmp_path)
     monkeypatch.setattr(bootstrap, "BOOTSTRAP_DIR", tmp_path / "bootstrap")
@@ -665,19 +667,34 @@ def test_four_axis_selection_binds_report_parent_and_twelve_market_keys(
     _write(legacy / "threshold_runtime_env_2026-09-18.json",
            {"target_date": "2026-09-18", "env_overrides": {"BASE": "1"}})
     _write(legacy / "threshold_runtime_env_verify_2026-09-18.json", {"status": "pass"})
-    parent = bootstrap.scalp_trailing_bootstrap_receipt({"BASE": "1"}, {})[
+    parent = bootstrap.scalp_trailing_bootstrap_receipt({"BASE": "1"}, source="rollback_incumbent") [
         "market_values_sha256"
     ]
-    vector = {market: dict(DEFAULT_VECTOR) for market in START_MARKETS}
-    vector["REGULAR"]["SCALP_TRAILING_LIMIT_STRONG"] = 0.7
+    vector = {market: dict(DEFAULTS) for market in START_MARKETS}
+    classifier_values = {market: dict(CONFIG_DEFAULTS) for market in START_MARKETS}
+    vector["REGULAR"]["SCALP_TRAILING_START_PCT"] = 0.5
     digest = market_values_hash(vector)
     report = {
-        "date": "2026-09-18", "completed_population_quality": {"complete": True},
-        "trailing_four_axis_market_tuning": {
+        "date": "2026-09-18", "meta": {"snapshot_profile": "postclose_exit"},
+        "completed_population_quality": {"complete": True},
+        "mechanical_population_quality": {"complete": True},
+        "trailing_mechanical_market_tuning": {
+            "schema": "scalp_trailing_mechanical_market_tuning_v2",
             "population_complete": True,
+            "holdout_days": ["2026-09-17", "2026-09-18"],
             "status": "research_candidate_holdout_positive_review_required",
+            "joint_three_market": {digest: {
+                "values": vector,
+                "train": {"n": 30, "paired_ev_pct": 0.1,
+                          "large_loss_worsened_ids": []},
+                "holdout": {"n": 10, "paired_ev_pct": 0.1,
+                            "large_loss_worsened_ids": [],
+                            "execution_slippage_sensitivity": {
+                                "100": {"paired_ev_pct": 0.01}}},
+            }},
             "research_candidate": {
-                "values": vector, "market_values_sha256": digest,
+                "values": vector, "classifier_parameters": classifier_values,
+                "market_values_sha256": digest,
                 "decision_authority": "research_candidate_requires_policy_selection",
             },
                 "joint_selection_evidence": {
@@ -691,14 +708,27 @@ def test_four_axis_selection_binds_report_parent_and_twelve_market_keys(
     report_path = (tmp_path / "report" / "monitor_snapshots"
                    / "holding_exit_observation_2026-09-18.json")
     _write(report_path, report)
+    manifest_path = (tmp_path / "report" / "monitor_snapshots" / "manifests"
+                     / "monitor_snapshot_manifest_2026-09-18_postclose_exit.json")
+    _write(manifest_path, {
+        "profile": "postclose_exit", "target_date": "2026-09-18",
+        "snapshot_paths": {"holding_exit_observation": str(report_path)},
+        "snapshot_sha256": {"holding_exit_observation": bootstrap._digest_bytes(
+            report_path.read_bytes())},
+    })
     policy = {
-        "schema": SELECTED_POLICY_SCHEMA,
-        "family": "scalp_trailing_four_axis_selector",
+        "schema": SELECTED_SCHEMA,
+        "family": "scalp_trailing_mechanical_three_axis_selector",
         "source_date": "2026-09-18", "target_date": "2026-09-19",
         "source_report_sha256": bootstrap._digest_bytes(report_path.read_bytes()),
+        "source_manifest_sha256": bootstrap._digest_bytes(manifest_path.read_bytes()),
         "allowed_runtime_apply": True, "runtime_effect": True,
         "apply_scope": "one_stage_canary", "market_values": vector,
+        "changed_market": "REGULAR",
         "market_values_sha256": digest,
+        "classifier_version": CLASSIFIER_VERSION,
+        "classifier_sha256": classifier_hash(),
+        "classifier_parameters": classifier_values,
         "rollback_market_values_sha256": parent,
         "selection_review": {
             "status": "reviewed_one_stage_canary", "candidate_sha256": digest,
@@ -711,15 +741,21 @@ def test_four_axis_selection_binds_report_parent_and_twelve_market_keys(
         policy, report, target_date="2026-09-19",
         report_sha256=policy["source_report_sha256"],
     )
+    assert len(policy["runtime_env_overrides"]) == 33
     policy_path = tmp_path / "selected.json"
     _write(policy_path, policy)
     manifest = bootstrap.build_manifest("2026-09-19", receipt_paths=[policy_path])
-    assert manifest["direct_family_receipts"][0]["family"] == "scalp_trailing_four_axis_selector"
-    assert manifest["scalp_trailing_threshold_receipt"]["market_values_sha256"] == digest
+    assert manifest["direct_family_receipts"][0]["family"] == "scalp_trailing_mechanical_three_axis_selector"
+    assert manifest["holding_path_vote_baseline_receipt"] == bootstrap.path_policy_baseline_receipt()
+    assert manifest["scalp_trailing_mechanical_policy_receipt"]["market_values_sha256"] == digest
+    assert manifest["scalp_trailing_mechanical_policy_receipt"]["schema"] == (
+        "scalp_trailing_mechanical_selected_receipt_v2"
+    )
     bootstrap.write_bootstrap("2026-09-19", receipt_paths=[policy_path])
-    assert bootstrap.verify_bootstrap("2026-09-19", write=False)["passed"] is True
+    assert bootstrap.verify_bootstrap("2026-09-19", write=True)["passed"] is True
+    valid_policy_bytes = policy_path.read_bytes()
     original_report_bytes = report_path.read_bytes()
-    report["trailing_four_axis_market_tuning"]["joint_selection_evidence"][
+    report["trailing_mechanical_market_tuning"]["joint_selection_evidence"][
         "holdout_conservative_delta_krw"
     ] = 0
     _write(report_path, report)
@@ -731,6 +767,119 @@ def test_four_axis_selection_binds_report_parent_and_twelve_market_keys(
     policy["rollback_market_values_sha256"] = "f" * 64
     policy["selection_review"]["rollback_sha256"] = "f" * 64
     _write(policy_path, policy)
-    rejected = bootstrap.build_manifest("2026-09-19", receipt_paths=[policy_path])
-    assert rejected["direct_family_receipts"] == []
-    assert rejected["direct_family_receipts_rejected"][0]["reason"] == "rollback_parent_hash_mismatch"
+    with pytest.raises(ValueError, match="rollback_parent_hash_mismatch"):
+        bootstrap.build_manifest("2026-09-19", receipt_paths=[policy_path])
+    policy_path.write_bytes(valid_policy_bytes)
+    carried = bootstrap.build_manifest("2026-09-25")
+    assert carried["scalp_trailing_mechanical_policy_receipt"]["market_values_sha256"] == digest
+    assert carried["env_overrides"]["KORSTOCKSCAN_SCALP_TRAILING_START_PCT_REGULAR"] == "0.5"
+    assert carried["scalp_trailing_selection_lineage"]["status"] == "carried_selected"
+    assert carried["scalp_trailing_selection_lineage"]["origin_target_date"] == "2026-09-19"
+
+
+def test_mechanical_publisher_requires_sealed_postclose_report_and_one_market(
+    monkeypatch, tmp_path,
+):
+    from src.engine.scalping.trailing_mechanical_policy import (
+        CONFIG_DEFAULTS, DEFAULTS, START_MARKETS, baseline_receipt,
+        market_values_hash,
+    )
+    report_dir = tmp_path / "monitor_snapshots"
+    monkeypatch.setattr(scalp_publisher, "REPORT_DIR", report_dir)
+    parent = baseline_receipt({}, source="rollback_incumbent")
+    monkeypatch.setattr(scalp_publisher, "build_manifest", lambda _: {
+        "scalp_trailing_mechanical_policy_receipt": parent,
+    })
+    values = {market: dict(DEFAULTS) for market in START_MARKETS}
+    classifier_values = {market: dict(CONFIG_DEFAULTS) for market in START_MARKETS}
+    classifier_values["REGULAR"]["strong_queue_min"] = 0.1
+    digest = market_values_hash(values, classifier_values)
+    report = {
+        "date": "2026-09-25", "meta": {"snapshot_profile": "postclose_exit"},
+        "completed_population_quality": {"complete": True},
+        "mechanical_population_quality": {"complete": True},
+        "trailing_mechanical_market_tuning": {
+            "schema": "scalp_trailing_mechanical_market_tuning_v2",
+            "population_complete": True,
+            "holdout_days": ["2026-09-24", "2026-09-25"],
+            "status": "research_candidate_holdout_positive_review_required",
+            "classifier_policy_research": {
+                "grid_sha256": "a" * 64,
+                "research_candidate": {"market_values_sha256": digest},
+                "candidates": {digest: {
+                    "values": values,
+                    "classifier_parameters": classifier_values,
+                    "changed_train_ids": [str(i) for i in range(10)],
+                    "changed_holdout_ids": [str(i) for i in range(5)],
+                    "changed_train_symbol_count": 2,
+                    "changed_holdout_symbol_count": 2,
+                    "train": {"n": 30, "paired_ev_pct": 0.1,
+                              "large_loss_worsened_ids": []},
+                    "holdout": {"n": 10, "paired_ev_pct": 0.1,
+                                "large_loss_worsened_ids": [],
+                                "execution_slippage_sensitivity": {
+                                    "100": {"paired_ev_pct": 0.01}}},
+                }},
+            },
+            "research_candidate": {
+                "values": values, "classifier_parameters": classifier_values,
+                "market_values_sha256": digest,
+                "decision_authority": "research_candidate_requires_policy_selection",
+            },
+            "joint_selection_evidence": {
+                "winner_sha256": digest, "tail_review_required": False,
+                "holdout_conservative_delta_krw": 100,
+                "holdout_conservative_worst_slippage_delta_krw": 50,
+                "holdout_worst_slippage_min_day_ev_pct": 0.01,
+            },
+        },
+    }
+    report_path = report_dir / "holding_exit_observation_2026-09-25.json"
+    _write(report_path, report)
+    trade_path = report_dir / "trade_review_2026-09-25.json"
+    post_sell_path = report_dir / "post_sell_feedback_2026-09-25.json"
+    _write(trade_path, {"date": "2026-09-25"})
+    _write(post_sell_path, {"date": "2026-09-25"})
+    manifest_path = (report_dir / "manifests"
+                     / "monitor_snapshot_manifest_2026-09-25_postclose_exit.json")
+    _write(manifest_path, {
+        "target_date": "2026-09-25", "profile": "postclose_exit",
+        "snapshot_kinds": ["trade_review", "post_sell_feedback", "holding_exit_observation"],
+        "snapshot_paths": {
+            "trade_review": str(trade_path),
+            "post_sell_feedback": str(post_sell_path),
+            "holding_exit_observation": str(report_path),
+        },
+        "snapshot_sha256": {
+            "trade_review": bootstrap._digest_bytes(trade_path.read_bytes()),
+            "post_sell_feedback": bootstrap._digest_bytes(post_sell_path.read_bytes()),
+            "holding_exit_observation": bootstrap._digest_bytes(report_path.read_bytes()),
+        },
+    })
+    selected = scalp_publisher.build_selection("2026-09-28")
+    assert selected["allowed_runtime_apply"] is True
+    assert selected["changed_market"] == "REGULAR"
+    assert len(selected["runtime_env_overrides"]) == 33
+    report["trailing_mechanical_market_tuning"]["classifier_policy_research"][
+        "candidates"][digest]["train"]["n"] = 1
+    _write(report_path, report)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["snapshot_sha256"]["holding_exit_observation"] = bootstrap._digest_bytes(
+        report_path.read_bytes())
+    _write(manifest_path, manifest)
+    assert scalp_publisher.build_selection("2026-09-28")["status"] == (
+        "hold_selection_contract"
+    )
+    report["trailing_mechanical_market_tuning"]["classifier_policy_research"][
+        "candidates"][digest]["train"]["n"] = 30
+    _write(report_path, report)
+    manifest["snapshot_sha256"]["holding_exit_observation"] = bootstrap._digest_bytes(
+        report_path.read_bytes())
+    _write(manifest_path, manifest)
+    post_sell_path.write_text("{}", encoding="utf-8")
+    assert scalp_publisher.build_selection("2026-09-28")["status"] == "hold_source_gap"
+    _write(post_sell_path, {"date": "2026-09-25"})
+    report_path.write_text("{}", encoding="utf-8")
+    held = scalp_publisher.build_selection("2026-09-28")
+    assert held["status"] == "hold_source_gap"
+    assert held["allowed_runtime_apply"] is False

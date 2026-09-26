@@ -14,11 +14,12 @@ cat >> "$TMP_CRON" <<EOF
 # stage2 ops cron
 * * * * 1-5 $PROJECT_DIR/deploy/run_system_metric_sampler_cron.sh >> $PROJECT_DIR/logs/system_metric_sampler_cron.log 2>&1 # SYSTEM_METRIC_SAMPLER_1MIN
 */5 8-19 * * 1-5 bash $PROJECT_DIR/deploy/run_runtime_release.sh buy-funnel \$(TZ=Asia/Seoul date +\%F) >> $PROJECT_DIR/logs/run_buy_funnel_sentinel_cron.log 2>&1 # BUY_FUNNEL_SENTINEL_ALL_SESSIONS_5MIN
-5-55/5 9 * * 1-5 $PROJECT_DIR/deploy/run_holding_exit_sentinel_intraday.sh \$(TZ=Asia/Seoul date +\%F) >> $PROJECT_DIR/logs/run_holding_exit_sentinel_cron.log 2>&1 # HOLDING_EXIT_SENTINEL_KRX_0905_0955
-*/5 10-14 * * 1-5 $PROJECT_DIR/deploy/run_holding_exit_sentinel_intraday.sh \$(TZ=Asia/Seoul date +\%F) >> $PROJECT_DIR/logs/run_holding_exit_sentinel_cron.log 2>&1 # HOLDING_EXIT_SENTINEL_KRX_1000_1455
-0-30/5 15 * * 1-5 $PROJECT_DIR/deploy/run_holding_exit_sentinel_intraday.sh \$(TZ=Asia/Seoul date +\%F) >> $PROJECT_DIR/logs/run_holding_exit_sentinel_cron.log 2>&1 # HOLDING_EXIT_SENTINEL_KRX_1500_1530
-*/5 16-18 * * 1-5 $PROJECT_DIR/deploy/run_holding_exit_sentinel_intraday.sh \$(TZ=Asia/Seoul date +\%F) >> $PROJECT_DIR/logs/run_holding_exit_sentinel_cron.log 2>&1 # HOLDING_EXIT_SENTINEL_AFTERMARKET_1600_1855
-0-50/5 19 * * 1-5 $PROJECT_DIR/deploy/run_holding_exit_sentinel_intraday.sh \$(TZ=Asia/Seoul date +\%F) >> $PROJECT_DIR/logs/run_holding_exit_sentinel_cron.log 2>&1 # HOLDING_EXIT_SENTINEL_AFTERMARKET_1900_1950
+5-55/5 8 * * 1-5 bash $PROJECT_DIR/deploy/run_runtime_release.sh holding-exit-sentinel \$(TZ=Asia/Seoul date +\%F) >> $PROJECT_DIR/logs/run_holding_exit_sentinel_cron.log 2>&1 # HOLDING_EXIT_SENTINEL_PREMARKET_0805_0855
+5-55/5 9 * * 1-5 bash $PROJECT_DIR/deploy/run_runtime_release.sh holding-exit-sentinel \$(TZ=Asia/Seoul date +\%F) >> $PROJECT_DIR/logs/run_holding_exit_sentinel_cron.log 2>&1 # HOLDING_EXIT_SENTINEL_KRX_0905_0955
+*/5 10-14 * * 1-5 bash $PROJECT_DIR/deploy/run_runtime_release.sh holding-exit-sentinel \$(TZ=Asia/Seoul date +\%F) >> $PROJECT_DIR/logs/run_holding_exit_sentinel_cron.log 2>&1 # HOLDING_EXIT_SENTINEL_KRX_1000_1455
+0-30/5 15 * * 1-5 bash $PROJECT_DIR/deploy/run_runtime_release.sh holding-exit-sentinel \$(TZ=Asia/Seoul date +\%F) >> $PROJECT_DIR/logs/run_holding_exit_sentinel_cron.log 2>&1 # HOLDING_EXIT_SENTINEL_KRX_1500_1530
+*/5 16-18 * * 1-5 bash $PROJECT_DIR/deploy/run_runtime_release.sh holding-exit-sentinel \$(TZ=Asia/Seoul date +\%F) >> $PROJECT_DIR/logs/run_holding_exit_sentinel_cron.log 2>&1 # HOLDING_EXIT_SENTINEL_AFTERMARKET_1600_1855
+0-50/5 19 * * 1-5 bash $PROJECT_DIR/deploy/run_runtime_release.sh holding-exit-sentinel \$(TZ=Asia/Seoul date +\%F) >> $PROJECT_DIR/logs/run_holding_exit_sentinel_cron.log 2>&1 # HOLDING_EXIT_SENTINEL_AFTERMARKET_1900_1950
 */5 8-19 * * 1-5 bash $PROJECT_DIR/deploy/run_with_owned_log.sh --owner rising_missed_intraday_feedback_cron --log $PROJECT_DIR/logs/run_rising_missed_intraday_feedback_cron.log $PROJECT_DIR/deploy/run_rising_missed_intraday_feedback.sh # RISING_MISSED_INTRADAY_FEEDBACK_5MIN
 5-55/5 9-14 * * 1-5 $PROJECT_DIR/deploy/run_intraday_ws_freshness_monitor.sh >> $PROJECT_DIR/logs/run_intraday_ws_freshness_monitor_cron.log 2>&1 # INTRADAY_WS_FRESHNESS_MONITOR_5MIN
 0,5,10,15,20 15 * * 1-5 $PROJECT_DIR/deploy/run_intraday_ws_freshness_monitor.sh >> $PROJECT_DIR/logs/run_intraday_ws_freshness_monitor_cron.log 2>&1 # INTRADAY_WS_FRESHNESS_MONITOR_5MIN

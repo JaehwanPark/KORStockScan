@@ -1,15 +1,12 @@
 # 장후작업 현행 활성 목록
 
-## 0. 현행 기준 — 2026-09-20 KST
+## 0. 현행 기준 — 2026-09-26 KST
 
 이 문서는 설치 schedule, 활성 wrapper 내부 호출, PREOPEN 소비자, 남은 점검 대상을 구분한다. 실행 이력과 이미 제거된 작업은 현행 작업으로 싣지 않는다. 결과 판정은 [장후 결과 점검 지시문](../postclose-tuning-result-review-task-instructions.md)을 따른다.
 
-현행 근거는 설치 `crontab -l`, systemd timer의 effective unit, 공통 router 선택 release wrapper, [2026-09-21 Stage2 체크리스트](../checklists/2026-09-21-stage2-todo-checklist.md), 직접 consumer다. 작업공간 파일의 존재만으로 설치 또는 자연 실행을 주장하지 않는다.
+현행 근거는 설치 `crontab -l`, systemd timer의 effective unit, 공통 router 선택 release wrapper, [2026-09-28 Stage2 체크리스트](../checklists/2026-09-28-stage2-todo-checklist.md), 직접 consumer다. 작업공간 파일의 존재만으로 설치 또는 자연 실행을 주장하지 않는다.
 
-- 공통 router 선택 release: `compact-aux-future-evidence-reviewed-20260920-a198c3b9b`
-- commit: `a198c3b9bb3e0d78bff3feebe05b3d394a467973`
-- 선택 시각: `2026-09-20T11:10:56+09:00`
-- 실제 PID 소비: `false` (`pending_next_normal_start`)
+- 공통 router 선택 release·commit·선택 시각은 `data/runtime/runtime_release_selection.json`의 현재 영수증이 소유한다. 9/26 통합 배포의 Main PID는 0이었으며 9/28 자연 소비는 별도 확인한다.
 
 ## 1. 설치 schedule
 
@@ -18,11 +15,14 @@
 | 1 | 19:30~19:59 매일 | `run_monitoring_instruction_refresh.sh --mode postclose` | 설치 ON. workspace 문서 갱신 owner이며 release router를 통하지 않는다. 반복 분은 wrapper lock·currentness 계약으로 판정한다. |
 | 2 | 20:05 평일 | `run_runtime_release.sh eod` | 설치 ON. 공통 선택 release에서 EOD DB 갱신을 수행한다. 장후 경제성 평가와 별도 owner다. |
 | 3 | 20:10 평일 | `run_runtime_release.sh postclose` | 설치 ON. 선택 release의 main postclose wrapper를 실행한다. `THRESHOLD_CYCLE_RUN_SWING_POSTCLOSE=false`, bot action은 `stop`이다. |
-| 4 | 20:10 평일 | `korstockscan-samsung-widget-evaluation.timer` | 설치 ON·waiting. effective `ExecStart`/working directory는 `low-price-carry-joint-economics-20260918`, `PYTHONPATH`·project/python은 `low-price-postclose-source-resume-20260918`로 갈라져 있다. 동일 source/runtime 계약이 입증되기 전에는 정상 handoff로 판정하지 않는다. |
-| 5 | 21:15 평일 | `korstockscan-machine-microstructure-final-refresh.timer` | 설치 ON·waiting. effective 실행·환경은 `market-weakness-final-review-20260918`이다. main summary/DONE보다 늦게 끝날 수 있어 모든 필수 producer terminal 뒤 최종 인계 owner가 필요하다. |
-| 6 | 다음 거래일 07:35 | `run_runtime_release.sh preopen` | 설치 ON. family publisher 결과로 runtime policy bootstrap을 생성·검증한다. 실제 PID 소비와 자연 주문·손익은 별도 acceptance다. |
+| 4 | 20:10 평일 | `run_runtime_release.sh controller`·`tuning` | 설치 ON. Main 선행 terminal과 같은 원천일 영수증을 확인한다. |
+| 5 | 20:10 평일 | `korstockscan-samsung-widget-evaluation.timer` | 설치 ON. 별도 unit의 effective release/policy pin과 실제 terminal을 당일 검증한다. |
+| 6 | 20:50 평일 | `run_runtime_release.sh archive` | 설치 ON. 원천 보존·압축 상태와 terminal을 별도 검증한다. |
+| 7 | 21:15 평일 | `korstockscan-machine-microstructure-final-refresh.timer` | 설치 ON. main summary/DONE보다 늦게 끝날 수 있으므로 최종 인계는 21:55 owner가 검증한다. |
+| 8 | 21:55 평일 | `run_runtime_release.sh finalize` | 설치 ON. 같은 원천일 active stage→summary/checklist→strict→controller→cleanup/detector를 확인한다. |
+| 9 | 다음 거래일 07:35 | `run_runtime_release.sh preopen` | 설치 ON. family publisher 결과로 runtime policy bootstrap을 생성·검증한다. 실제 PID 소비와 자연 주문·손익은 별도 acceptance다. |
 
-`controller`, `tuning`, `archive`, `finalize`는 선택 release router와 wrapper가 존재하지만 설치 crontab 실행행은 없다. 특히 crontab 주석과 main wrapper는 21:55 finalization이 late widget/machine 결과를 summary→checklist→strict verification에 다시 연결한다고 전제하지만, 현재 finalization은 설치되지 않았다. 더구나 finalization wrapper는 controller·tuning·archive terminal도 기다리므로 finalization 한 줄만 추가해서는 닫히지 않는다. 이 상태는 시간이 지나도 해소되지 않는 schedule/owner 계약 결손이다.
+20:50 archive는 9/26 점검에서 설치 누락을 발견해 기존 선택 release router 경유 예약을 복구했다. 21:05 paired replay는 수동 호환 wrapper로만 유지한다. 설치 여부와 실행 성공은 별도 영수증이다. 9/24·9/25 휴장일에 평일 예약이 실행돼 실패 terminal을 남겼으며, 9/28 개장일 성공으로 소급 대체하지 않는다.
 
 BUY funnel, HOLD/EXIT, panic-sell defense, rising-missed, WS freshness, market-opportunity census는 장중·aftermarket source producer다. 독립 장후 튜닝 작업으로 중복 기재하지 않는다.
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gzip
 import gc
+import hashlib
 import json
 import os
 import resource
@@ -111,6 +112,10 @@ def save_monitor_snapshot_manifest(
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "snapshot_kinds": sorted(tracked_paths.keys()),
         "snapshot_paths": tracked_paths,
+        "snapshot_sha256": {
+            key: hashlib.sha256(Path(path).read_bytes()).hexdigest()
+            for key, path in tracked_paths.items()
+        },
     }
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(
@@ -238,7 +243,7 @@ def save_monitor_snapshots_for_date_with_profile(
     from src.engine.wait6579_ev_cohort_report import build_wait6579_ev_cohort_report
 
     normalized_profile = str(profile or "full").strip().lower()
-    if normalized_profile not in {"full", "intraday_light"}:
+    if normalized_profile not in {"full", "intraday_light", "postclose_exit"}:
         raise ValueError(f"Unsupported monitor snapshot profile: {profile}")
     sleep_sec = max(0.0, float(io_delay_sec))
     trend_env_name = (
@@ -311,6 +316,11 @@ def save_monitor_snapshots_for_date_with_profile(
             "performance_tuning",
             "wait6579_ev_cohort",
         },
+        "postclose_exit": {
+            "trade_review",
+            "post_sell_feedback",
+            "holding_exit_observation",
+        },
     }
 
     send_alert = normalized_profile == "full"
@@ -354,6 +364,7 @@ def save_monitor_snapshots_for_date_with_profile(
             "%Y-%m-%d %H:%M:%S"
         )
         payload["meta"]["snapshot_kind"] = snapshot_kind
+        payload["meta"]["snapshot_profile"] = normalized_profile
         payload["meta"]["buy_pause_guard"] = buy_pause_guard
         result[snapshot_kind] = str(
             save_monitor_snapshot(snapshot_kind, target_date, payload)

@@ -214,7 +214,7 @@ def _candidate_pnl(trade: dict, row: dict) -> tuple[float | None, str | None]:
 def replay_start_grid(
     trade: dict, transitions: list[dict], *,
     actual_exit_rule: str, actual_exit_signal: dict,
-    incumbent_start_pct: float = 0.6,
+    incumbent_start_pct: float = 0.4,
     incumbent_by_market: dict[str, float] | None = None,
 ) -> dict:
     """Calculate paired source-only outcomes, preserving unobserved futures."""

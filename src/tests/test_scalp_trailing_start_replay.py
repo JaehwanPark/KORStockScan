@@ -107,6 +107,7 @@ def test_structured_pipeline_string_fields_round_trip_into_replay():
     replay = replay_start_grid(
         _trade(), [decoded], actual_exit_rule="scalp_hard_stop_pct",
         actual_exit_signal={"timestamp": "2026-09-25 09:30:10"},
+        incumbent_start_pct=0.6,
     )
     assert replay["source_gap"] is None
 
@@ -130,6 +131,10 @@ def test_bootstrap_receipt_seals_three_values_without_changing_scalar():
 
 def test_live_market_start_requires_matching_bootstrap_hash(monkeypatch):
     from src.engine import sniper_state_handlers as handlers
+    from src.engine.scalping.trailing_mechanical_policy import (
+        DEFAULTS as mechanical_defaults, START_MARKETS as mechanical_markets,
+        market_values_hash as mechanical_hash,
+    )
 
     values = {"PREMARKET": 0.7, "REGULAR": 0.6,
               "INTEGRATED_AFTERMARKET": 0.8}
@@ -141,13 +146,25 @@ def test_live_market_start_requires_matching_bootstrap_hash(monkeypatch):
         "KORSTOCKSCAN_SCALP_TRAILING_START_BY_MARKET_SHA256",
         start_values_hash(values),
     )
+    # The retired start-only receipt cannot select live M1 TP values.
+    assert handlers._scalp_trailing_start_for_evaluation(
+        _at("2026-09-25 17:00:00")
+    ) == (0.4, "INTEGRATED_AFTERMARKET")
+    vector = {market: dict(mechanical_defaults) for market in mechanical_markets}
+    for market, value in values.items():
+        vector[market]["SCALP_TRAILING_START_PCT"] = value
+        monkeypatch.setenv(f"KORSTOCKSCAN_SCALP_TRAILING_START_PCT_{market}", str(value))
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_TRAILING_MECHANICAL_VECTOR_SHA256",
+                       mechanical_hash(vector))
     assert handlers._scalp_trailing_start_for_evaluation(
         _at("2026-09-25 17:00:00")
     ) == (0.8, "INTEGRATED_AFTERMARKET")
+    # A running process keeps its verified bootstrap vector. Replacing one
+    # environment value without a new policy hash cannot reselect the vector.
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_TRAILING_START_PCT_REGULAR", "0.9")
     assert handlers._scalp_trailing_start_for_evaluation(
         _at("2026-09-25 17:00:00")
-    ) == (0.6, "INTEGRATED_AFTERMARKET")
+    ) == (0.8, "INTEGRATED_AFTERMARKET")
 
 
 def test_replay_models_only_earlier_sell_and_censors_later_sell():
@@ -161,6 +178,7 @@ def test_replay_models_only_earlier_sell_and_censors_later_sell():
         _trade(), rows,
         actual_exit_rule="scalp_trailing_take_profit",
         actual_exit_signal={"timestamp": "2026-09-25 09:32:00"},
+        incumbent_start_pct=0.6,
     )
     assert replay["source_gap"] is None
     regular = replay["markets"]["REGULAR"]
@@ -183,6 +201,7 @@ def test_other_exit_remains_in_replay_and_bad_path_fails_closed():
         _trade(), rows,
         actual_exit_rule="scalp_hard_stop_pct",
         actual_exit_signal={"timestamp": "2026-09-25 09:32:00"},
+        incumbent_start_pct=0.6,
     )
     assert replay["source_gap"] is None
     assert replay["markets"]["REGULAR"]["0.3"]["status"] == (
@@ -201,6 +220,7 @@ def test_other_exit_remains_in_replay_and_bad_path_fails_closed():
     bad = replay_start_grid(
         _trade(), rows, actual_exit_rule="scalp_hard_stop_pct",
         actual_exit_signal={"timestamp": "2026-09-25 09:32:00"},
+        incumbent_start_pct=0.6,
     )
     assert bad["source_gap"] == "source_gap_tuning_input_quality"
 
@@ -211,6 +231,7 @@ def test_market_denominator_keeps_unexposed_completed_position():
     replay = replay_start_grid(
         _trade(), rows, actual_exit_rule="scalp_hard_stop_pct",
         actual_exit_signal={"timestamp": "2026-09-25 09:30:10"},
+        incumbent_start_pct=0.6,
     )
     assert replay["source_gap"] is None
     outcome = {"record_id": "1", "rec_date": "2026-09-25",

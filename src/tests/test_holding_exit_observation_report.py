@@ -168,6 +168,46 @@ def test_completed_projection_rejects_terminal_event_id_mismatch():
     assert gaps[0]["reason"] == "sell_completed_id_census_mismatch"
 
 
+def test_mechanical_cohort_isolated_from_pre_generation_legacy_gap():
+    from src.engine.scalping.trailing_mechanical_strength import VERSION as CLASSIFIER_VERSION
+
+    old = {**_trade(1, rec_date="2026-09-20"), "strict_completion_status": "eligible"}
+    current = {**_trade(2, rec_date="2026-09-25"),
+               "strict_completion_status": "eligible"}
+    current["timeline"].append({
+        "stage": "scalp_trailing_input_transition",
+        "fields": {"classifier_version": CLASSIFIER_VERSION},
+    })
+    other_rule = {**_trade(3, rec_date="2026-09-26", exit_rule="scalp_soft_stop_pct"),
+                  "strict_completion_status": "eligible"}
+    bad_cost = {**_trade(4, rec_date="2026-09-26"),
+                "strict_completion_status": "source_gap_exact_cost_missing"}
+    rows = [old, current, other_rule, bad_cost]
+    strict = [old, current, other_rule]
+    cohort, quality = report_mod._mechanical_completed_cohort(
+        rows, strict,
+        [{"date": "2026-09-20", "reason": "legacy_completion_census_unsealed"},
+         {"date": "2026-09-26", "reason": "completed_position_id_partition_mismatch"}],
+    )
+    assert quality["complete"] is True
+    assert quality["start_entry_day"] == "2026-09-25"
+    assert quality["completed_main_ids"] == ["2", "3", "4"]
+    assert quality["excluded_completed_ids"] == ["4"]
+    assert {_trade_id["id"] for _trade_id in cohort} == {2, 3}
+    _, blocked = report_mod._mechanical_completed_cohort(
+        rows, strict, [{"date": "2026-09-26", "reason": "snapshot_missing"}],
+    )
+    assert blocked["complete"] is False
+    assert blocked["source_gap_dates"][0]["date"] == "2026-09-26"
+    _, unplaced = report_mod._mechanical_completed_cohort(
+        [*rows, {**_trade(5, rec_date="", sell_time="2026-09-26 10:00:00"),
+                 "completion_observed_date": "2026-09-26"}],
+        strict, [],
+    )
+    assert unplaced["complete"] is False
+    assert unplaced["unplaced_completed_ids"] == ["5"]
+
+
 def test_legacy_truncated_snapshot_is_excluded_not_treated_as_complete():
     snapshot = {
         "date": "2026-09-23",
@@ -409,7 +449,7 @@ def test_trailing_direct_input_receipt_preserves_trigger_and_source_gap():
         "exit_threshold_effective_pct": 0.4,
         "exit_threshold_trailing_start_pct": 0.6,
         "exit_threshold_trailing_arm_observed_pct": 1.1,
-        "exit_threshold_strong_score_effective": 75,
+        "exit_threshold_classifier_version": "mechanical_strength_v1",
         "exit_threshold_ai_score_observed": 50,
         "exit_threshold_ai_score_usable": False,
         "exit_threshold_peak_price": 10110,
@@ -438,9 +478,11 @@ def test_trailing_direct_input_receipt_preserves_trigger_and_source_gap():
     trade["timeline"].append(
         {
             "stage": "scalp_trailing_input_transition",
-            "fields": {
-                "armed": True,
-                "triggered": True,
+                "fields": {
+                    "armed": True,
+                    "triggered": True,
+                    "classifier_version": "mechanical_strength_v1",
+                    "classifier_state": "WEAK",
                 "source_gap": False,
                 "evaluation_at_epoch": 1780000001.0,
                 "bid_source_received_at_epoch": 1780000000.9,

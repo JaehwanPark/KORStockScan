@@ -41,6 +41,7 @@ from src.engine.scalping.entry_recheck_economics import (
     record_buy_receipt as record_recheck_buy_receipt,
 )
 from src.engine.scalping.position_peak_ledger import POSITION_PEAK_LEDGER
+from src.engine.ai.holding_exit_vote import buy_fill_identity_from_runtime
 from src.engine.scalping.main_lifecycle_journal import (
     BROKER_EXECUTION_MAX_NEGATIVE_LAG_SEC,
     BROKER_EXECUTION_MAX_RECEIVE_LAG_SEC,
@@ -824,6 +825,13 @@ _SELL_RECEIPT_SNAPSHOT_KEYS = (
     "broker_order_forbidden",
     "buy_price",
     "buy_qty",
+    "entry_filled_qty",
+    "add_filled_qty",
+    "_entry_receipt_filled_by_order_no",
+    "_entry_receipt_executions_by_order_no",
+    "_add_receipt_filled_by_order_no",
+    "_add_receipt_executions_by_order_no",
+    "holding_path_latest_tp_signal",
     "last_entry_receipt_economics_complete",
     "last_entry_receipt_quantity_contract_complete",
     "last_entry_receipt_execution_no",
@@ -2722,6 +2730,29 @@ def _build_sell_lifecycle_outbox_leg(
     return json.loads(json.dumps(leg, ensure_ascii=True, default=str))
 
 
+def _holding_path_terminal_lineage_fields(
+    target_stock: dict[str, Any], target_id: int,
+) -> dict[str, Any]:
+    """Bind a terminal leg to the frozen TP vote only for the same BUY generation."""
+    if str(target_stock.get("last_exit_rule") or "") != "scalp_trailing_take_profit":
+        return {}
+    signal = target_stock.get("holding_path_latest_tp_signal")
+    if not isinstance(signal, dict):
+        return {"holding_path_terminal_signal_binding": "source_gap_signal_missing"}
+    buy_identity = buy_fill_identity_from_runtime(target_stock)
+    if (signal.get("position_key") != f"record:{target_id}"
+            or not buy_identity
+            or signal.get("buy_fill_identity") != buy_identity
+            or not signal.get("signal_id")):
+        return {"holding_path_terminal_signal_binding": "source_gap_generation_mismatch"}
+    return {
+        "holding_path_terminal_signal_binding": "same_position_buy_generation",
+        "holding_path_signal_id": signal["signal_id"],
+        "holding_path_signal_at": signal.get("signal_at"),
+        "holding_path_policy_bundle_sha256": signal.get("policy_bundle_sha256"),
+    }
+
+
 def _standard_sell_partial_lifecycle_outbox_leg(
     target_stock: dict[str, Any],
     *,
@@ -2742,6 +2773,8 @@ def _standard_sell_partial_lifecycle_outbox_leg(
             realized_net_pnl_krw=float(receipt["incremental_net_pnl_krw"]),
         )
     event_fields = {
+        "exit_rule": target_stock.get("last_exit_rule") or "-",
+        **_holding_path_terminal_lineage_fields(target_stock, target_id),
         "order_no": receipt.get("order_no") or "-",
         "execution_no": receipt.get("execution_no") or "-",
         "sell_price": round(float(receipt["incremental_price"]), 4),
@@ -2948,6 +2981,7 @@ def _standard_sell_final_lifecycle_outbox_leg(
         else {}
     )
     event_fields = {
+        **_holding_path_terminal_lineage_fields(receipt_snapshot, target_id),
         "order_no": receipt_snapshot.get("sell_execution_order_no") or "-",
         "execution_no": (receipt_snapshot.get("sell_execution_execution_no") or "-"),
         "sell_price": round(weighted_sell_price, 4),

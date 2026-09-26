@@ -11377,7 +11377,7 @@ def evaluate_scalping_exit(
         getattr(TRADING_RULES, "SCALP_AI_MOMENTUM_DECAY_MIN_HOLD_SEC", 90) or 90
     )
     safe_profit_pct = getattr(TRADING_RULES, "SCALP_SAFE_PROFIT", 0.5)
-    trailing_start_pct = getattr(TRADING_RULES, "SCALP_TRAILING_START_PCT", 0.6)
+    trailing_start_pct = getattr(TRADING_RULES, "SCALP_TRAILING_START_PCT", 0.4)
     strong_trailing_ai_score = getattr(
         TRADING_RULES, "SCALP_TRAILING_STRONG_AI_SCORE", 75
     )
@@ -12151,6 +12151,8 @@ def run_sniper(is_test_mode=False):
         interval_sec=fast_exit_interval_sec,
         error_handler=lambda message: log_error(f"[SCALP_FAST_EXIT_MONITOR] {message}"),
     )
+    if WS_MANAGER is not None and hasattr(WS_MANAGER, "set_fast_exit_wakeup"):
+        WS_MANAGER.set_fast_exit_wakeup(fast_exit_monitor.wake)
     fast_exit_monitor.start()
     smoothing_source_only_observer = SmoothingSourceOnlyPathObserver(
         observer=lambda *, now_ts: (
@@ -15525,6 +15527,8 @@ def run_sniper(is_test_mode=False):
             log_error("[SNIPER_HEARTBEAT_FINALIZE_FAILED] " f"error={heartbeat_error}")
         smoothing_source_only_observer.stop()
         fast_exit_monitor.stop()
+        if WS_MANAGER is not None and hasattr(WS_MANAGER, "set_fast_exit_wakeup"):
+            WS_MANAGER.set_fast_exit_wakeup(None)
         async_coordinator = getattr(
             run_sniper,
             "scanner_async_eval_coordinator",

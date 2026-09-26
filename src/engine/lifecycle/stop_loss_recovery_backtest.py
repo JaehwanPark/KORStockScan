@@ -32,7 +32,6 @@ STOP_LOSS_LOGIC_AUDIT_ORDER = [
     "preset_tp_loss_exit",
     "protect_trailing",
     "scalp_hard_soft_stop",
-    "mfe_protect",
     "bad_entry",
     "fallback_open_reclaim",
     "swing_probe_sim_exit",
@@ -419,16 +418,6 @@ def _recommend_stop_line(family: str, rows: list[dict[str, Any]]) -> dict[str, A
                     "KORSTOCKSCAN_SCALP_HARD_STOP": "-5.0",
                 },
                 "rationale": "old -1.5/-2.5 exits cluster near loss median around 2%; evaluated MFE recovers about half after avg-down counterfactual",
-            }
-        )
-    elif family == "mfe_protect":
-        recommendation.update(
-            {
-                "confidence": "thin_sample_directional",
-                "recommended_runtime_env": {
-                    "KORSTOCKSCAN_SCALP_MFE_PROTECT_TRIGGER_PROFIT_PCT": "0.0",
-                },
-                "rationale": "positive-MFE giveback exits should remain profit-protective; do not recommend a negative trigger that turns MFE protect into a late loss exit",
             }
         )
     elif family == "protect_trailing":

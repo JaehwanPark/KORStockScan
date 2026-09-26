@@ -33,6 +33,42 @@ def _today_kst_str(now_kst: datetime | None = None) -> str:
     return (now_kst or datetime.now()).strftime("%Y-%m-%d")
 
 
+def _holding_profit_exit_semantics(root: Path, source_date: str) -> dict[str, Any]:
+    """Check the sentinel's exact-date semantic receipt separately from freshness."""
+    path = (root / "data/report/holding_exit_sentinel" /
+            f"holding_exit_sentinel_{source_date}.json")
+    if not path.exists() and not path.is_symlink():
+        return {"status": "not_assessed", "findings": []}
+    try:
+        if path.is_symlink() or path.stat().st_size > 8 * 1024 * 1024:
+            raise ValueError("untrusted_path_or_size")
+        report = json.loads(path.read_text(encoding="utf-8"))
+        semantics = report.get("profit_exit_semantics") or {}
+        if (report.get("target_date") != source_date
+                or semantics.get("target_date") != source_date
+                or semantics.get("schema") != "holding_profit_exit_semantics_v1"
+                or semantics.get("status") not in {
+                    "pass", "valid_empty", "source_gap", "policy_binding_gap",
+                    "runtime_not_consumed", "pending_terminal", "economics_null",
+                    "semantic_contract_invalid",
+                }):
+            raise ValueError("semantic_receipt_missing_or_invalid")
+    except (OSError, ValueError, TypeError, AttributeError) as exc:
+        return {"status": "source_invalid", "findings": [str(exc)]}
+    status = semantics["status"]
+    return {
+        "status": status,
+        "findings": ([status] if status in {
+            "source_gap", "policy_binding_gap", "runtime_not_consumed",
+            "economics_null",
+            "semantic_contract_invalid"
+        } else []),
+        "signal_count": (semantics.get("funnel") or {}).get("tp_signal_snapshots", 0),
+        "source_gap_count": len(semantics.get("source_gaps") or []),
+        "invalid_count": len(semantics.get("findings") or []),
+    }
+
+
 def _machine_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
     """Check exact-date machine economics separately from stage completion."""
     report_path = (root / "data/report/ai_decision_action_outcome_calibration"
@@ -486,6 +522,24 @@ ARTIFACT_REGISTRY: list[dict[str, Any]] = [
         "trading_day_only": True,
         "window_start": (9, 5),
         "window_end": (15, 30),
+    },
+    {
+        "id": "holding_exit_sentinel_premarket_report",
+        "path_template": "data/report/holding_exit_sentinel/holding_exit_sentinel_{date}.md",
+        "max_staleness_sec": 600,
+        "critical": False,
+        "trading_day_only": True,
+        "window_start": (8, 5),
+        "window_end": (8, 55),
+    },
+    {
+        "id": "holding_exit_sentinel_aftermarket_report",
+        "path_template": "data/report/holding_exit_sentinel/holding_exit_sentinel_{date}.md",
+        "max_staleness_sec": 600,
+        "critical": False,
+        "trading_day_only": True,
+        "window_start": (16, 0),
+        "window_end": (19, 50),
     },
     {
         "id": "panic_sell_defense_report",
@@ -1052,6 +1106,11 @@ class ArtifactFreshnessDetector(BaseDetector):
                 details[f"{aid}_status"] = "pass"
 
         if trading_day:
+            holding_semantics = _holding_profit_exit_semantics(PROJECT_ROOT, today)
+            details["holding_profit_exit_semantics"] = holding_semantics
+            if holding_semantics["findings"]:
+                warnings.append("holding_profit_exit_semantics: " + ", ".join(
+                    holding_semantics["findings"]))
             machine_semantics = _machine_result_semantics(PROJECT_ROOT, today)
             details["machine_result_semantics"] = machine_semantics
             if machine_semantics["findings"]:

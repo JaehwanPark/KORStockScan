@@ -24,7 +24,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--profile",
-        choices=("full", "intraday_light"),
+        choices=("full", "intraday_light", "postclose_exit"),
         default=os.getenv("MONITOR_SNAPSHOT_PROFILE", "full"),
         help="Snapshot build profile. default=full",
     )

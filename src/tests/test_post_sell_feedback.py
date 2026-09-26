@@ -253,7 +253,7 @@ def test_real_post_sell_candidate_handles_none_ai_provenance(monkeypatch, tmp_pa
             "last_exit_current_ai_score": None,
             "last_exit_ai_score_raw": None,
             "last_exit_ai_score_effective": None,
-            "last_exit_ai_result_source": None,
+            "last_exit_ai_result_source": "retired_holding_score",
             "last_exit_ai_data_quality": None,
         },
         code="441270",
@@ -267,12 +267,12 @@ def test_real_post_sell_candidate_handles_none_ai_provenance(monkeypatch, tmp_pa
     )
 
     assert candidate is not None
-    assert candidate["current_ai_score"] == 0.0
-    assert candidate["ai_score_raw"] == 0.0
-    assert candidate["ai_score_effective"] == 0.0
-    assert candidate["ai_result_source"] == "-"
+    assert candidate["current_ai_score"] is None
+    assert candidate["ai_score_raw"] is None
+    assert candidate["ai_score_effective"] is None
+    assert candidate["ai_result_source"] == "retired_holding_score"
     assert candidate["ai_data_quality"] == "-"
-    assert candidate["ai_score_raw_at_exit"] == 0.0
+    assert candidate["ai_score_raw_at_exit"] is None
 
 
 def test_record_and_evaluate_sim_post_sell_feedback_isolated(monkeypatch, tmp_path):

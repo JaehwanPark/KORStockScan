@@ -378,6 +378,7 @@ class KiwoomWSManager:
         self._tick_dispatch_event = threading.Event()
         self._pending_tick_events = {}
         self._tick_lock = threading.Lock()
+        self._fast_exit_wakeup = None
         self._state_dispatch_thread = None
         self._tick_dispatch_thread = None
         self._ws_thread = None
@@ -2477,6 +2478,12 @@ class KiwoomWSManager:
                 )
         if observation_only:
             return
+        wakeup = self._fast_exit_wakeup
+        if normalized_realtime_type in {"0B", "0D"} and callable(wakeup):
+            try:
+                wakeup(normalized_code)
+            except Exception as exc:
+                log_error(f"[WS] fast exit wakeup failed: {exc}")
         with self._tick_lock:
             self._pending_tick_events[code] = {"code": code, "data": data}
             if snapshot_target is not None:
@@ -2484,6 +2491,10 @@ class KiwoomWSManager:
                 # receive a detached, full latest-state snapshot at dispatch.
                 self._pending_tick_events[code]["_snapshot_target"] = snapshot_target
         self._tick_dispatch_event.set()
+
+    def set_fast_exit_wakeup(self, callback):
+        """Register a signal-only callback; the monitor reads the bounded journal."""
+        self._fast_exit_wakeup = callback if callable(callback) else None
 
     def _start_micro_reversion_forward_collector(self):
         """Lazy-load the default-off observer without changing subscriptions."""

@@ -1990,6 +1990,48 @@ if [ "$RUN_RISING_MISSED_CLASSIFIER_PRIOR" = "true" ] || [ "$RUN_RISING_MISSED_C
     "$PROJECT_DIR/data/report/rising_missed_classifier_prior/rising_missed_classifier_prior_${TARGET_DATE}.md" \
     "rising_missed_classifier_prior"
 fi
+wait_for_postclose_resources "scalp_trailing_postclose_exit_snapshot"
+scalp_exit_snapshot_started_epoch="$(date +%s)"
+run_postclose_cmd env MONITOR_SNAPSHOT_PROFILE=postclose_exit \
+  MONITOR_SNAPSHOT_ASYNC=0 MONITOR_SNAPSHOT_FORCE=1 \
+  "$PROJECT_DIR/deploy/run_monitor_snapshot_safe.sh" "$TARGET_DATE"
+wait_for_json_artifact \
+  "$PROJECT_DIR/data/report/monitor_snapshots/manifests/monitor_snapshot_manifest_${TARGET_DATE}_postclose_exit.json" \
+  "scalp_trailing_postclose_exit_snapshot.manifest"
+wait_for_json_artifact \
+  "$PROJECT_DIR/data/report/monitor_snapshots/holding_exit_observation_${TARGET_DATE}.json" \
+  "scalp_trailing_postclose_exit_snapshot.report"
+PYTHONPATH=. "$VENV_PY" - "$TARGET_DATE" "$scalp_exit_snapshot_started_epoch" <<'PY'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+from src.utils.constants import DATA_DIR
+
+target_date, started = sys.argv[1], int(sys.argv[2])
+directory = DATA_DIR / "report" / "monitor_snapshots"
+manifest_path = (directory / "manifests"
+                 / f"monitor_snapshot_manifest_{target_date}_postclose_exit.json")
+manifest = json.loads(manifest_path.read_bytes())
+expected = {"trade_review", "post_sell_feedback", "holding_exit_observation"}
+if (manifest_path.stat().st_mtime < started
+        or manifest.get("target_date") != target_date
+        or manifest.get("profile") != "postclose_exit"
+        or set(manifest.get("snapshot_kinds") or []) != expected):
+    raise SystemExit("postclose_exit_manifest_generation_invalid")
+for kind in expected:
+    path = directory / f"{kind}_{target_date}.json"
+    if (Path((manifest.get("snapshot_paths") or {}).get(kind, "")).resolve()
+            != path.resolve()
+            or (manifest.get("snapshot_sha256") or {}).get(kind)
+            != hashlib.sha256(path.read_bytes()).hexdigest()):
+        raise SystemExit(f"postclose_exit_source_hash_mismatch:{kind}")
+report = json.loads((directory / f"holding_exit_observation_{target_date}.json").read_bytes())
+if (report.get("date") != target_date
+        or (report.get("meta") or {}).get("snapshot_profile") != "postclose_exit"):
+    raise SystemExit("postclose_exit_report_generation_invalid")
+PY
 wait_for_postclose_resources "runtime_approval_summary"
 RUNTIME_APPROVAL_SCOPE_ARGS=("${POSTCLOSE_SWING_SCOPE_ARGS[@]}")
 if [[ "$RUN_PRODUCER_GAP_DISCOVERY" != "true" && "$RUN_PRODUCER_GAP_DISCOVERY" != "1" ]]; then

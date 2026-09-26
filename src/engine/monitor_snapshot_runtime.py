@@ -319,6 +319,7 @@ def pending_report_shell(snapshot_kind: str, target_date: str) -> dict[str, Any]
             "trailing_threshold_readiness": {},
             "trailing_start_market_tuning": {},
             "trailing_four_axis_market_tuning": {},
+            "trailing_mechanical_market_tuning": {},
             "trailing_operational_input_replay": {},
             "trailing_historical_neutral_scenario": {},
             "trailing_historical_source_availability": {},

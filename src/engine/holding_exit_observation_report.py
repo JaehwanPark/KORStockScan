@@ -20,14 +20,27 @@ from src.engine.scalping.trailing_threshold_policy import (
     market_values_hash as scalp_trailing_market_values_hash,
     value_hash as scalp_trailing_value_hash,
 )
+from src.engine.scalping.trailing_mechanical_policy import (
+    BASELINE_SCHEMA as SCALP_TRAILING_MECHANICAL_BASELINE_SCHEMA,
+    SELECTED_RECEIPT_SCHEMA as SCALP_TRAILING_MECHANICAL_SELECTED_RECEIPT_SCHEMA,
+    VECTOR_SHA_ENV_KEY as SCALP_TRAILING_MECHANICAL_VECTOR_SHA_ENV_KEY,
+    baseline_receipt as scalp_trailing_mechanical_bootstrap_receipt,
+    market_values_hash as scalp_trailing_mechanical_market_values_hash,
+    value_hash as scalp_trailing_mechanical_value_hash,
+)
+from src.engine.scalping.trailing_mechanical_strength import (
+    VERSION as SCALP_TRAILING_MECHANICAL_CLASSIFIER_VERSION,
+)
 from src.engine.scalping.trailing_start_replay import (
     replay_start_grid,
-    summarize_start_grid,
 )
 from src.engine.scalping.trailing_four_axis_replay import summarize_four_axis
+from src.engine.scalping.trailing_mechanical_replay import summarize_mechanical
+from src.engine.scalping.holding_path_vote_replay import summarize_holding_path_votes
+from src.engine.ai.holding_exit_vote import load_path_events_file, path_vote_store_path
 from src.engine.scalping.trailing_operational_replay import summarize_operational_input_replay
 from src.engine.scalping.trailing_historical_scenario import summarize_legacy_neutral_scenarios
-from src.utils.constants import DATA_DIR
+from src.utils.constants import DATA_DIR, TRADING_RULES
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 
 SCHEMA_VERSION = 2
@@ -355,6 +368,83 @@ def _collect_completed_trade_rows(
     return rows, gaps
 
 
+def _mechanical_completed_cohort(
+    main_rows: list[dict], strict_rows: list[dict], completed_gaps: list[dict],
+) -> tuple[list[dict], dict]:
+    """Seal the M1 entry cohort without inheriting pre-M1 census gaps.
+
+    The first observed v2 transition sets the inclusive entry day. All main
+    completed IDs entered on or after that day remain visible, including
+    invalid profit and missing broker-cost evidence. Only strict IDs can enter
+    the economic replay. A missing census day inside the cohort blocks it.
+    """
+
+    def valid_day(raw: Any) -> str | None:
+        value = str(raw or "")[:10]
+        try:
+            return value if datetime.strptime(value, "%Y-%m-%d").strftime(
+                "%Y-%m-%d") == value else None
+        except ValueError:
+            return None
+
+    first_days = sorted({
+        str(row.get("rec_date") or "")[:10]
+        for row in main_rows
+        if any(
+            isinstance(event, dict)
+            and event.get("stage") == "scalp_trailing_input_transition"
+            and (event.get("fields") or {}).get("classifier_version")
+            == SCALP_TRAILING_MECHANICAL_CLASSIFIER_VERSION
+            for event in row.get("timeline") or []
+        )
+        and valid_day(row.get("rec_date")) is not None
+        and str(row.get("rec_date") or "")[:10] >= "2026-06-05"
+    })
+    start_day = first_days[0] if first_days else None
+    cohort_rows = [row for row in main_rows
+                   if start_day and valid_day(row.get("rec_date"))
+                   and str(row.get("rec_date") or "")[:10] >= start_day]
+    unplaced_ids = sorted({
+        _trade_id(row) for row in main_rows
+        if start_day and valid_day(row.get("rec_date")) is None
+        and (valid_day(row.get("completion_observed_date")) or start_day)
+            >= start_day
+    })
+    cohort_ids = [_trade_id(row) for row in cohort_rows]
+    cohort_id_set = set(cohort_ids)
+    strict = [row for row in strict_rows if _trade_id(row) in cohort_id_set]
+    strict_ids = {_trade_id(row) for row in strict}
+    gaps = [gap for gap in completed_gaps
+            if start_day and str(gap.get("date") or "") >= start_day
+            and gap.get("reason") != "completed_position_id_partition_mismatch"]
+    valid_ids = {_trade_id(row) for row in cohort_rows
+                 if _is_valid_completed_trade(row)}
+    invalid_ids = {_trade_id(row) for row in cohort_rows
+                   if not _is_valid_completed_trade(row)}
+    valid_identity = bool(
+        len(cohort_ids) == len(cohort_id_set)
+        and all(cohort_ids) and valid_ids.isdisjoint(invalid_ids)
+        and valid_ids.union(invalid_ids) == cohort_id_set
+        and strict_ids.issubset(valid_ids)
+    )
+    quality = {
+        "schema": "mechanical_completed_entry_cohort_v1",
+        "classifier_version": SCALP_TRAILING_MECHANICAL_CLASSIFIER_VERSION,
+        "start_entry_day": start_day,
+        "entry_day_basis": "first_observed_v2_transition_in_sealed_completed_projection",
+        "complete": bool(start_day and not gaps and not unplaced_ids
+                         and valid_identity),
+        "source_gap_dates": gaps,
+        "completed_main_ids": cohort_ids,
+        "strict_completed_position_ids": sorted(strict_ids),
+        "excluded_completed_ids": sorted(set(cohort_ids) - strict_ids),
+        "unplaced_completed_ids": unplaced_ids,
+        "id_partition_reconciled": valid_identity,
+        "decision_authority": "cohort_source_quality_only",
+    }
+    return strict, quality
+
+
 def _collect_open_scalp_positions(
     snapshots: list[dict], target_date: str
 ) -> tuple[list[dict], str]:
@@ -655,6 +745,44 @@ def _trailing_policy_manifest_binding(
         ).hexdigest()
     except (TypeError, ValueError):
         return {"status": "source_gap_bootstrap_invalid", "path": str(path)}
+    mechanical_receipt = manifest.get("scalp_trailing_mechanical_policy_receipt")
+    if isinstance(mechanical_receipt, dict):
+        try:
+            mechanical_source = (
+                "reviewed_selected_candidate"
+                if any(isinstance(row, dict) and row.get("family")
+                       == "scalp_trailing_mechanical_three_axis_selector"
+                       for row in manifest.get("direct_family_receipts") or [])
+                else "operator_directed_m1_baseline"
+            )
+            expected_mechanical = scalp_trailing_mechanical_bootstrap_receipt(
+                manifest["env_overrides"], source=mechanical_source
+            )
+            valid_mechanical = bool(
+                manifest.get("target_date") == policy_date
+                and manifest.get("manifest_sha256") == manifest_sha
+                and manifest.get("env_sha256") == hashlib.sha256(env_bytes).hexdigest()
+                and mechanical_receipt.get("schema") == (
+                    SCALP_TRAILING_MECHANICAL_SELECTED_RECEIPT_SCHEMA
+                    if mechanical_source == "reviewed_selected_candidate"
+                    else SCALP_TRAILING_MECHANICAL_BASELINE_SCHEMA
+                )
+                and mechanical_receipt == expected_mechanical
+                and observed_vector_sha == mechanical_receipt.get("market_values_sha256")
+                and manifest["env_overrides"].get(
+                    SCALP_TRAILING_MECHANICAL_VECTOR_SHA_ENV_KEY
+                ) == observed_vector_sha
+            )
+        except (KeyError, TypeError, ValueError):
+            valid_mechanical = False
+        return {
+            "status": ("manifest_value_hash_matched_no_pid_proof"
+                       if valid_mechanical else "source_gap_bootstrap_binding_mismatch"),
+            "path": str(path),
+            "manifest_sha256": manifest_sha if valid_mechanical else None,
+            "value_sha256": observed_vector_sha if valid_mechanical else None,
+            "sources": manifest.get("env_key_owners") if valid_mechanical else None,
+        }
     receipt = manifest.get("scalp_trailing_threshold_receipt") or {}
     try:
         receipt_sha = scalp_trailing_value_hash(receipt["values"])
@@ -800,6 +928,10 @@ def _build_position_outcomes(
             for event in timeline
             if event.get("stage") == "scalp_trailing_input_transition"
         ]
+        mechanical_generation = any(
+            row.get("classifier_version") == "mechanical_strength_v1"
+            for row in trailing_transitions
+        )
         holding_start_events = [
             event for event in timeline
             if event.get("stage") == "holding_started"
@@ -874,7 +1006,9 @@ def _build_position_outcomes(
         try:
             policy_values_valid = (
                 isinstance(policy_values, dict)
-                and scalp_trailing_value_hash(policy_values) == policy_sha
+                and (scalp_trailing_mechanical_value_hash(policy_values)
+                     if mechanical_generation else scalp_trailing_value_hash(policy_values))
+                == policy_sha
             )
         except (KeyError, TypeError, ValueError):
             policy_values_valid = False
@@ -936,15 +1070,17 @@ def _build_position_outcomes(
             ),
             None,
         )
-        start_replay = replay_start_grid(
-            trade,
-            trailing_transitions,
-            actual_exit_rule=exit_rule,
-            actual_exit_signal=exit_signal,
-            incumbent_start_pct=_safe_float(
-                (policy_values or {}).get("SCALP_TRAILING_START_PCT"), 0.6
-            ) or 0.6,
-            incumbent_by_market=market_values,
+        start_replay = (
+            {"source_gap": "legacy_ai_start_replay_retired_for_mechanical_generation",
+             "markets": {}}
+            if mechanical_generation else replay_start_grid(
+                trade, trailing_transitions, actual_exit_rule=exit_rule,
+                actual_exit_signal=exit_signal,
+                incumbent_start_pct=_safe_float(
+                    (policy_values or {}).get("SCALP_TRAILING_START_PCT"), 0.4
+                ) or 0.4,
+                incumbent_by_market=market_values,
+            )
         )
         operational_binding = (
             _operational_manifest_binding(
@@ -972,7 +1108,9 @@ def _build_position_outcomes(
         vector_sha = next(iter(vector_shas), "")
         try:
             vector_valid = bool(vector_values and len(vector_shas) == 1
-                                and scalp_trailing_market_values_hash(vector_values)
+                                and (scalp_trailing_mechanical_market_values_hash(vector_values)
+                                     if mechanical_generation else
+                                     scalp_trailing_market_values_hash(vector_values))
                                 == vector_sha
                                 and all(
                                     row.get("scalp_trailing_market_values") == vector_values
@@ -997,7 +1135,9 @@ def _build_position_outcomes(
             bootstrap_bindings[binding_key] if is_trailing_observed
             else {"status": "not_applicable_non_trailing"}
         )
-        if not is_trailing_observed:
+        if mechanical_generation:
+            trailing_replay_status = "legacy_ai_replay_retired_for_mechanical_generation"
+        elif not is_trailing_observed:
             trailing_replay_status = "not_applicable_non_trailing"
         elif not trailing_transitions:
             trailing_replay_status = "source_gap_no_input_samples"
@@ -1222,6 +1362,18 @@ def _build_position_outcomes(
                     threshold_fields.get("exit_threshold_strong_score_effective"),
                     None,
                 ),
+                "trailing_classifier_version": (
+                    first_trigger.get("classifier_version")
+                    or (trailing_transitions[-1].get("classifier_version")
+                        if trailing_transitions else None)
+                ),
+                "trailing_classifier_state_at_first_trigger": (
+                    first_trigger.get("classifier_state") or None
+                ),
+                "trailing_classifier_source_gap_count": sum(
+                    str(row.get("classifier_state") or "") == "UNKNOWN"
+                    for row in trailing_transitions
+                ),
                 "exit_threshold_ai_score_observed": _safe_float(
                     threshold_fields.get("exit_threshold_ai_score_observed"), None
                 ),
@@ -1390,7 +1542,7 @@ def _build_position_outcomes(
             row["exit_rule"] == "scalp_trailing_take_profit"
             and row["exit_rule_provenance"] == "observed"
             and row["exit_threshold_trailing_start_pct"] is not None
-            and row["exit_threshold_strong_score_effective"] is not None
+            and row.get("trailing_classifier_version") == "mechanical_strength_v1"
             and row["exit_threshold_peak_price"] > 0
             and row["exit_threshold_executable_bid"] > 0
             and row["exit_threshold_trigger_kind"]
@@ -1630,6 +1782,7 @@ def _summarize_exit_rule_quality(
 def _build_trailing_threshold_readiness(
     outcomes: list[dict], open_positions: list[dict] | None = None,
     *, completed_valid_ids: list[str] | None = None,
+    mechanical_tuning: dict | None = None,
 ) -> dict:
     """Expose source-qualified denominators; never infer a tuning proposal."""
 
@@ -1648,38 +1801,22 @@ def _build_trailing_threshold_readiness(
         and row["exit_threshold_peak_price"] > 0
         and row["exit_threshold_executable_bid"] > 0
         and row["exit_threshold_trailing_start_pct"] is not None
-        and row["exit_threshold_strong_score_effective"] is not None
+        and row.get("trailing_classifier_version") == "mechanical_strength_v1"
     ]
     exact = [row for row in inputs if row["realized_pnl_krw"] is not None]
     forward = [row for row in exact if row["post_sell_status"] == "pass"]
-    source_linked = [
-        row for row in outcomes
-        if row.get("trailing_replay_source_status")
-        == "grid_source_linked_paired_replay_pending"
-    ]
-    fully_paired = [
-        row for row in source_linked
-        if not (row.get("trailing_start_market_replay") or {}).get("source_gap")
-        and all(
-            candidate.get("paired_delta_pnl_krw") is not None
-            for market in (row.get("trailing_start_market_replay") or {})
-                .get("markets", {}).values()
-            for candidate in market.values()
-        )
-        and (row.get("trailing_start_market_replay") or {}).get("markets")
-    ]
+    mechanical_eligible = set((mechanical_tuning or {}).get("evidence_grade_by_id") or {})
+    source_linked = [row for row in outcomes if row["record_id"] in mechanical_eligible]
+    paired_ids = set((mechanical_tuning or {}).get("joint_common_support_ids") or [])
+    fully_paired = [row for row in source_linked if row["record_id"] in paired_ids]
     arm = [
         row for row in source_linked
         if row["trailing_first_arm_at_epoch"] is not None
     ]
-    score = [
-        row
-        for row in source_linked
-        if str(row["exit_threshold_ai_score_usable"]).strip().lower()
-        in {"true", "1"}
-        and row["exit_threshold_ai_score_observed"] is not None
-        and (row.get("trailing_operational_inputs") or {}).get("ai_provider")
-    ]
+    classifier = [row for row in source_linked
+                  if row.get("trailing_classifier_version") == "mechanical_strength_v1"
+                  and row.get("trailing_classifier_state_at_first_trigger")
+                  in {"STRONG", "WEAK", "UNKNOWN"}]
     funnel = {
         "completed_valid_ids": (
             completed_valid_ids if completed_valid_ids is not None
@@ -1712,8 +1849,7 @@ def _build_trailing_threshold_readiness(
         ],
         "grid_source_linked_ids": [
             row["record_id"] for row in outcomes
-            if row.get("trailing_replay_source_status")
-            == "grid_source_linked_paired_replay_pending"
+            if row["record_id"] in mechanical_eligible
         ],
         "policy_manifest_bound_ids": [
             row["record_id"] for row in outcomes
@@ -1723,9 +1859,9 @@ def _build_trailing_threshold_readiness(
     }
     axis_inputs = {
         "SCALP_TRAILING_START_PCT": (arm, "pre_arm_quote_path_and_paired_replay_missing"),
-        "SCALP_TRAILING_STRONG_AI_SCORE": (
-            score,
-            "score_ttl_provider_lineage_and_paired_replay_missing",
+        "mechanical_strength_v1": (
+            classifier,
+            "direct_0b_0d_first_crossing_and_paired_replay_missing",
         ),
         "SCALP_TRAILING_LIMIT_WEAK": (
             [row for row in forward if row in source_linked and row["exit_threshold_key"] == "SCALP_TRAILING_LIMIT_WEAK"],
@@ -1782,8 +1918,7 @@ def _build_trailing_threshold_readiness(
         ]
         connected_rows = [
             row for row in observed_rows
-            if row.get("trailing_replay_source_status")
-            == "grid_source_linked_paired_replay_pending"
+            if row["record_id"] in mechanical_eligible
             and (
                 required_input is None
                 or (row.get("trailing_operational_inputs") or {}).get(required_input)
@@ -1828,10 +1963,10 @@ def _build_trailing_threshold_readiness(
         "operational_axes": operational_axes,
         "axes": {
             key: {
-                "unit": "score" if key == "SCALP_TRAILING_STRONG_AI_SCORE" else "pct",
+                "unit": "state" if key == "mechanical_strength_v1" else "pct",
                 "consumer_comparison": (
-                    "usable_score>=value_selects_strong"
-                    if key == "SCALP_TRAILING_STRONG_AI_SCORE" else
+                    "source_bound_book_and_trade_selects_strong"
+                    if key == "mechanical_strength_v1" else
                     "peak_profit>=value_arms"
                     if key == "SCALP_TRAILING_START_PCT" else
                     "armed_and_peak_to_bid_drawdown>=value_triggers"
@@ -2383,6 +2518,20 @@ def build_holding_exit_observation_report(
         strict_trades, position_outcomes,
         population_complete=not completed_gaps and census_id_contract_ok,
     )
+    four_axis_tuning["legacy_ai_policy"] = True
+    four_axis_tuning["research_candidate"] = None
+    four_axis_tuning["runtime_selected"] = None
+    four_axis_tuning["status"] = "legacy_ai_policy_retired"
+    mechanical_trades, mechanical_population_quality = _mechanical_completed_cohort(
+        main_completed_rows, strict_trades, completed_gaps,
+    )
+    mechanical_ids = {_trade_id(row) for row in mechanical_trades}
+    mechanical_tuning = summarize_mechanical(
+        mechanical_trades,
+        [row for row in position_outcomes
+         if str(row.get("record_id") or "") in mechanical_ids],
+        population_complete=mechanical_population_quality["complete"],
+    )
     operational_input_replay = summarize_operational_input_replay(
         strict_trades, position_outcomes,
         population_complete=not completed_gaps and census_id_contract_ok,
@@ -2391,6 +2540,14 @@ def build_holding_exit_observation_report(
         main_completed_rows,
         clean_start=analysis_window["clean_tuning_baseline_date"][:10],
         source_gap_dates=completed_gaps,
+    )
+    holding_path_vote_replay = summarize_holding_path_votes(
+        strict_trades,
+        load_events=lambda position_key: load_path_events_file(
+            path_vote_store_path(DATA_DIR, position_key), position_key,
+        ),
+        model=str(getattr(TRADING_RULES, "OPENAI_HOLDING_EXIT_VOTE_MODEL",
+                          "gpt-5.4-nano") or "gpt-5.4-nano"),
     )
     historical_source_availability = {
         "schema": "scalp_trailing_historical_source_availability_v1",
@@ -2461,6 +2618,7 @@ def build_holding_exit_observation_report(
             ),
             "target_sell_date_valid_rows": len(target_valid_trades),
         },
+        "mechanical_population_quality": mechanical_population_quality,
         "position_outcomes": position_outcomes,
         "position_outcome_coverage": position_coverage,
         "open_position_censoring": {
@@ -2483,11 +2641,17 @@ def build_holding_exit_observation_report(
         "trailing_threshold_readiness": _build_trailing_threshold_readiness(
             position_outcomes, open_positions,
             completed_valid_ids=[_trade_id(row) for row in valid_trades],
+            mechanical_tuning=mechanical_tuning,
         ),
-        "trailing_start_market_tuning": summarize_start_grid(
-            position_outcomes, population_complete=not completed_gaps
-        ),
+        "trailing_start_market_tuning": {
+            "status": "legacy_ai_policy_retired",
+            "decision_authority": "historical_diagnostic_only_no_runtime_apply",
+            "research_candidate": None,
+            "mechanical_owner": "trailing_mechanical_market_tuning",
+        },
         "trailing_four_axis_market_tuning": four_axis_tuning,
+        "holding_path_vote_replay": holding_path_vote_replay,
+        "trailing_mechanical_market_tuning": mechanical_tuning,
         "trailing_operational_input_replay": operational_input_replay,
         "trailing_historical_neutral_scenario": historical_neutral_scenario,
         "trailing_historical_source_availability": historical_source_availability,

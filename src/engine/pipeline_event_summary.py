@@ -47,6 +47,7 @@ HIGH_VOLUME_OBSERVATION_STAGES = frozenset(
         "scalping_scanner_runtime_queue_lag",
         "scalping_scanner_runtime_target_attach",
         "scalping_scanner_watching_runtime_skip",
+        "scalp_trailing_mechanical_input",
     }
 )
 HIGH_VOLUME_SUMMARY_FIELD_PRIORITY = (

@@ -56,7 +56,6 @@ OFF·퇴역 producer, 유효 frozen policy/checkpoint, 별도 custody/override·
 | 20:10 | tuning monitoring | predecessor 계약·단계 exit/status `success`·Parquet/DuckDB source hash/coverage |
 | 20:10 | widget evaluation systemd | advisory→auto policy→EOD wait→signal research→runtime policy의 같은 completed date·unit terminal |
 | 20:50 | dashboard DB archive | 최신 대상일 DONE·검증된 archive/source generation·보존 계약 |
-| 21:05 | AI entry setup paired replay follower | main wrapper가 소유한 `main_auxiliary_policy` receipt 확인만 수행; 학습 재호출 없음 |
 | 21:15 | machine final refresh systemd | capacity·collector·attribution·timing·weakness·allocation·legacy approval의 독립 stage 및 summary/controller 인계 |
 | 21:55부터, bounded | postclose finalization | predecessor 확인→최신 summary/tower/checklist/strict closure→cleanup→final detector receipt |
 | 장후 정기 5분, 21:50까지 및 finalization 후 | System Error Detector | 해당 run/stage/target의 unresolved critical·최신 terminal; 단순 이전 PASS 재사용 금지 |
@@ -186,7 +185,7 @@ v4는 실제 incumbent control·관측 depth의 보수적 체결 모델·공통 
 
 Entry owner 재사용은 legacy 고정 기간 `arms`가 아니라 독립 운영 청산 `operating_arms`의 비용·budget·stress·terminal hash를 소비한다. 검증 모델 scope/구현 버전이 일치하고 actual model calibration/holdout의 완료 가용 시점이 compact 학습보다 앞서야 한다. 모델 미지원·버전 불일치·운영 청산 결손은 승격 근거에서 제외한다. 일별 순익의 한 포지션 예약은 최초 주문 관측부터 청산까지 적용하며, 정상 atomic 운영 JSON generation의 크기를 이유로 누락 입력으로 바꾸지 않는다.
 
-Family strict 명령 `src.engine.verify_threshold_cycle_postclose_chain --date SOURCE_DATE --compact-summary-only --require-summary-handoff`는 최종 parent/정책/summary/checklist generation을 검증한다. PASS는 이 family의 연결 closure이며 전체 native DONE·실제 PID·주문·경제성 개선의 증거가 아니다. native는 Daily 뒤 family finalize/strict, 기존 21:05 follower는 bounded compact batch→finalize→strict로 실행한다. Cron/retired selector를 복원하거나 전체 native를 재실행하지 않는다. [CP0–CP5 계획](proposals/compact-auxiliary-ai-paired-economic-tuning-and-consumer-closed-loop-improvement-plan-2026-09-18.md)을 따른다.
+Family strict 명령 `src.engine.verify_threshold_cycle_postclose_chain --date SOURCE_DATE --compact-summary-only --require-summary-handoff`는 최종 parent/정책/summary/checklist generation을 검증한다. PASS는 이 family의 연결 closure이며 전체 native DONE·실제 PID·주문·경제성 개선의 증거가 아니다. native는 Daily 뒤 family finalize/strict를 실행한다. `run_ai_entry_setup_paired_replay_postclose.sh`는 현재 `main_auxiliary_policy --check`만 수행하는 수동 호환 wrapper이며 설치된 21:05 cron owner가 아니다. retired selector나 전체 native를 재실행하지 않는다. [CP0–CP5 계획](proposals/compact-auxiliary-ai-paired-economic-tuning-and-consumer-closed-loop-improvement-plan-2026-09-18.md)을 따른다.
 
 ### 5.1.6 AI quality source-label 통합
 
@@ -256,7 +255,7 @@ AVG_DOWN은 현재 Main holding bars와 WS tick/BBO로 공통 Main 기계 entry 
 
 ### 8.2 DONE controller와 AI replay
 
-wrapper terminal, 21:05 follower lock/terminal과 calibration/optimizer/holding/consumer generation을 대사한다. Provider0 metadata closure와 실제 replay·current compact 연구를 분리하고 disabled 또는 legacy source를 현재 prompt 효과로 재라벨링하지 않는다. controller DONE이 latest strict summary closure를 포함하는지 확인한다.
+wrapper terminal, `main_auxiliary_policy`의 실제 stage terminal과 calibration/optimizer/holding/consumer generation을 대사한다. Provider0 metadata closure와 실제 replay·current compact 연구를 분리하고 disabled 또는 legacy source를 현재 prompt 효과로 재라벨링하지 않는다. controller DONE이 latest strict summary closure를 포함하는지 확인한다.
 
 ### 8.3 Tuning monitoring과 archive
 

@@ -71,25 +71,30 @@ def test_bootstrap_contains_twelve_market_values_and_one_vector_hash():
     assert receipt["market_values_sha256"] == market_values_hash(receipt["market_values"])
 
 
-def test_runtime_market_vector_is_atomic_and_score_fallback_is_weak(monkeypatch):
+def test_runtime_mechanical_market_vector_is_atomic_and_score_does_not_select_tp(monkeypatch):
     from src.engine import sniper_state_handlers as handlers
+    from src.engine.scalping.trailing_mechanical_policy import (
+        TP_KEYS, market_values_hash as mechanical_values_hash,
+    )
 
     scalar = handlers._scalp_trailing_values_for_evaluation(_at("2026-09-25 10:00:00"))[0]
     incumbent = {market: dict(scalar) for market in START_MARKETS}
-    incumbent["REGULAR"][THRESHOLD_KEYS[1]] = 80
-    incumbent["REGULAR"][THRESHOLD_KEYS[2]] = 0.5
+    incumbent["REGULAR"]["SCALP_TRAILING_LIMIT_WEAK"] = 0.5
     for market, vector in incumbent.items():
         for key, value in vector.items():
             monkeypatch.setenv(f"KORSTOCKSCAN_{key}_{market}", str(value))
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_TRAILING_MARKET_VECTOR_SHA256",
-                       market_values_hash(incumbent))
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_TRAILING_MECHANICAL_VECTOR_SHA256",
+                       mechanical_values_hash(incumbent))
     effective, market = handlers._scalp_trailing_values_for_evaluation(
         _at("2026-09-25 10:00:00"))
-    assert market == "REGULAR" and effective[THRESHOLD_KEYS[1]] == 80
-    assert effective[THRESHOLD_KEYS[2]] == 0.5
+    assert market == "REGULAR" and effective["SCALP_TRAILING_LIMIT_WEAK"] == 0.5
+    assert set(effective) == set(TP_KEYS)
     assert not handlers._holding_strong_trailing_enabled(
         {"usable_for_negative_exit": False}, 99, threshold=80)
-    monkeypatch.setenv(f"KORSTOCKSCAN_{THRESHOLD_KEYS[2]}_REGULAR", "0.7")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_TRAILING_LIMIT_WEAK_REGULAR", "0.7")
+    effective, _ = handlers._scalp_trailing_values_for_evaluation(_at("2026-09-25 10:00:00"))
+    assert effective["SCALP_TRAILING_LIMIT_WEAK"] == 0.5
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_TRAILING_MECHANICAL_VECTOR_SHA256", "0" * 64)
     effective, _ = handlers._scalp_trailing_values_for_evaluation(_at("2026-09-25 10:00:00"))
     assert effective == scalar
 
@@ -363,7 +368,8 @@ def test_four_axis_start_only_matches_existing_start_replay_and_cache():
                           actual_exit_rule="scalp_trailing_take_profit")
     start = replay_start_grid(trade, [first, second],
                               actual_exit_rule="scalp_trailing_take_profit",
-                              actual_exit_signal=trade["exit_signal"])
+                              actual_exit_signal=trade["exit_signal"],
+                              incumbent_start_pct=0.6)
     assert four == fresh
     assert four["status"] == start["markets"]["REGULAR"]["0.3"]["status"]
     assert four["paired_delta_pnl_krw"] == start["markets"]["REGULAR"]["0.3"][

@@ -535,6 +535,49 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
         },
         "required": ["action", "score", "reason"],
     },
+    "holding_path_vote_v10": {
+        "type": "object",
+        "properties": {
+            "input_snapshot_id": {"type": "string"},
+            "votes": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "path_id": {"type": "string", "enum": [
+                            "EXIT_TRAILING_TP", "EXIT_SOFT_STOP",
+                            "EXIT_POST_ADD_FAIL",
+                            "EXIT_BAD_ENTRY_REFINED",
+                            "ADD_REBOUND",
+                        ]},
+                        "verdict": {"type": "string", "enum": ["PASS", "VETO"]},
+                        "conviction": {"type": "string", "enum": ["FIRM", "TENTATIVE"]},
+                        "reason_codes": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": ["path_id", "verdict", "conviction", "reason_codes"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        "required": ["input_snapshot_id", "votes"],
+        "additionalProperties": False,
+    },
+    "holding_exit_vote_v1": {
+        "type": "object",
+        "properties": {
+            "verdict": {"type": "string", "enum": ["PASS", "VETO"]},
+            "conviction": {"type": "string", "enum": ["FIRM", "TENTATIVE"]},
+            "reason_codes": {
+                "type": "array", "items": {"type": "string"},
+                "minItems": 1, "maxItems": 6,
+            },
+            "input_snapshot_id": {"type": "string"},
+        },
+        "required": [
+            "verdict", "conviction", "reason_codes", "input_snapshot_id"
+        ],
+        "additionalProperties": False,
+    },
     "holding_score_v2": {
         "type": "object",
         "properties": {

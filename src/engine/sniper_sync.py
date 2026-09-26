@@ -2916,6 +2916,19 @@ def periodic_account_sync():
                                 ),
                                 record_id=getattr(record, "id", None),
                                 fields={
+                                    "pipeline_lifecycle_population_scope": (
+                                        "real_record_bound"
+                                        if exact_execution
+                                        and str(target_snapshot.get("strategy")
+                                                or getattr(record, "strategy", ""))
+                                        .upper() == "SCALPING"
+                                        and getattr(record, "id", None) is not None
+                                        else "source_quality_gap"
+                                    ),
+                                    "exit_rule": (
+                                        target_snapshot.get("last_exit_rule")
+                                        or "-"
+                                    ),
                                     "metric_role": (
                                         "execution_quality_real_only"
                                         if exact_execution

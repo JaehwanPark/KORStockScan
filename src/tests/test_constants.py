@@ -225,7 +225,7 @@ def test_avg_down_market_on_stop_touch_runtime_env_override(monkeypatch):
     reloaded = importlib.reload(constants)
 
     assert reloaded.TRADING_RULES.SCALPING_AVG_DOWN_MARKET_ON_STOP_TOUCH_ENABLED is True
-    assert reloaded.TRADING_RULES.SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_ENABLED is True
+    assert reloaded.TRADING_RULES.SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_ENABLED is False
     assert reloaded.TRADING_RULES.SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_MAX_SEC == 4
     assert reloaded.TRADING_RULES.SCALP_STOP_LINE_TOUCH_AVG_DOWN_EXTRA_DIP_PCT == 0.25
     assert (
@@ -1111,7 +1111,7 @@ def test_trading_rules_real_pyramid_scale_in_quality_guard_env(monkeypatch):
     assert reloaded.TRADING_RULES.RECENT_EXIT_CANDIDATE_PYRAMID_BLOCK_SEC == 180
     assert reloaded.TRADING_RULES.SCALPING_PYRAMID_MAX_ADD_QTY_RATIO == 0.25
     assert reloaded.TRADING_RULES.SCALPING_PYRAMID_MIN_PROFIT_PCT == 1.1
-    assert reloaded.TRADING_RULES.SCALPING_PYRAMID_STRONG_CONTINUATION_ENABLED is True
+    assert reloaded.TRADING_RULES.SCALPING_PYRAMID_STRONG_CONTINUATION_ENABLED is False
     assert (
         reloaded.TRADING_RULES.SCALPING_PYRAMID_STRONG_CONTINUATION_MIN_PROFIT_PCT
         == 1.1
@@ -1363,7 +1363,7 @@ def test_trading_rules_scalp_sim_scale_in_execution_observation_env(monkeypatch)
     reloaded = importlib.reload(constants)
 
     assert (
-        reloaded.TRADING_RULES.SCALP_SIM_SCALE_IN_EXECUTION_OBSERVATION_ENABLED is True
+        reloaded.TRADING_RULES.SCALP_SIM_SCALE_IN_EXECUTION_OBSERVATION_ENABLED is False
     )
     assert reloaded.TRADING_RULES.SCALP_SIM_SCALE_IN_EXECUTION_ARMS == (
         "PASSIVE_BASELINE,MARKETABLE_OBSERVATION"
@@ -1563,6 +1563,7 @@ def test_scalping_entry_openai_http_primary_defaults_and_env_override(monkeypatc
 def test_holding_ai_models_and_openai_primary_fallback_defaults(monkeypatch):
     names = (
         "KORSTOCKSCAN_OPENAI_HOLDING_SCORE_MODEL",
+        "KORSTOCKSCAN_OPENAI_HOLDING_EXIT_VOTE_TIMEOUT_MS",
         "KORSTOCKSCAN_OPENAI_HOLDING_FLOW_MODEL",
         "KORSTOCKSCAN_OPENAI_HOLDING_FLOW_TIMEOUT_MS",
         "KORSTOCKSCAN_OPENAI_PRIMARY_BEDROCK_FALLBACK_ENDPOINTS",
@@ -1576,6 +1577,8 @@ def test_holding_ai_models_and_openai_primary_fallback_defaults(monkeypatch):
     reloaded = importlib.reload(constants)
 
     assert reloaded.TRADING_RULES.OPENAI_HOLDING_SCORE_MODEL == "gpt-5.4-nano"
+    assert reloaded.TRADING_RULES.OPENAI_HOLDING_EXIT_VOTE_MODEL == "gpt-5.4-nano"
+    assert reloaded.TRADING_RULES.OPENAI_HOLDING_EXIT_VOTE_TIMEOUT_MS == 7000
     assert reloaded.TRADING_RULES.OPENAI_HOLDING_FLOW_MODEL == "gpt-5.4-mini"
     assert reloaded.TRADING_RULES.OPENAI_HOLDING_FLOW_TIMEOUT_MS == 15000
     assert reloaded.TRADING_RULES.OPENAI_PRIMARY_BEDROCK_FALLBACK_ENDPOINTS == (

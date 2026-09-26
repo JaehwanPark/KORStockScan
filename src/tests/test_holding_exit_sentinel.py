@@ -1,6 +1,11 @@
 import json
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from src.engine import holding_exit_sentinel as sentinel
+from src.engine.ai.holding_exit_vote import PATH_POLICY_BY_MARKET, input_snapshot_id
+from src.engine.scalping.holding_profit_exit_semantics import audit_profit_exit_flow
+from src.engine.scalping.holding_path_vote_policy import policy_path
 
 
 def _event(
@@ -28,6 +33,201 @@ def _event(
         "emitted_at": f"{target_date}T{hhmmss}",
         "emitted_date": target_date,
     }
+
+
+def test_profit_semantics_accepts_premarket_zero_vote_first_crossing():
+    at = datetime(2026, 9, 28, 8, 30, tzinfo=ZoneInfo("Asia/Seoul"))
+    epoch = at.timestamp()
+    common = {"pipeline_lifecycle_population_scope": "real_record_bound"}
+    transition = sentinel.PipelineEvent(
+        at, "HOLDING_PIPELINE", "scalp_trailing_input_transition",
+        "Stock", "000001", "7", {
+            **common, "position_key": "record:7", "evaluator": "fast_rest_confirmed",
+            "first_crossing": json.dumps({
+                "at_epoch": epoch, "market": "PREMARKET",
+                "threshold_key": "SCALP_TRAILING_LIMIT_WEAK",
+            }),
+            "trailing_start_pct": "0.4", "tuning_exit_allowed_by_clock": "True",
+            "trigger_kind": "trailing_peak_worsen_floor",
+        },
+    )
+    snapshot = sentinel.PipelineEvent(
+        at + timedelta(seconds=1), "HOLDING_PIPELINE",
+        "holding_path_signal_snapshot", "Stock", "000001", "7", {
+            **common, "path_id": "EXIT_TRAILING_TP", "position_key": "record:7",
+            "market": "PREMARKET", "session_key": "2026-09-28",
+            "signal_id": "first", "signal_at": str(epoch),
+            "buy_fill_identity": "a" * 64, "vote_count": "0",
+            "decision": "INSUFFICIENT",
+            "signal_snapshot_ms": 4, "signal_provider_wait_ms": 0,
+            "policy_sha256": input_snapshot_id(
+                PATH_POLICY_BY_MARKET[("EXIT_TRAILING_TP", "PREMARKET")]),
+        },
+    )
+    report = audit_profit_exit_flow(
+        [transition, snapshot], target_date="2026-09-28",
+        load_votes=lambda _: [],
+    )
+    assert report["status"] == "pass"
+    assert report["by_market_trigger"] == {"PREMARKET|fast": 1}
+    assert report["by_market_trigger_kind"] == {
+        "PREMARKET|fast|trailing_peak_worsen_floor": 1,
+    }
+    assert report["latency_ms"]["signal_snapshot_ms"]["p99_ms"] == 4
+    assert report["latency_ms"]["signal_provider_wait_ms"]["p99_ms"] == 0
+    assert report["funnel"]["tp_decision_INSUFFICIENT"] == 1
+    broken = sentinel.PipelineEvent(
+        snapshot.emitted_at, snapshot.pipeline, snapshot.stage,
+        snapshot.stock_name, snapshot.stock_code, snapshot.record_id,
+        {**snapshot.fields, "policy_sha256": "0" * 64},
+    )
+    assert audit_profit_exit_flow(
+        [transition, broken], target_date="2026-09-28",
+        load_votes=lambda _: [],
+    )["status"] == "semantic_contract_invalid"
+    unconsumed = sentinel.PipelineEvent(
+        snapshot.emitted_at, snapshot.pipeline, snapshot.stage,
+        snapshot.stock_name, snapshot.stock_code, snapshot.record_id,
+        {**snapshot.fields, "policy_bundle_sha256": "b" * 64,
+         "policy_load_status": "baseline_policy_env_missing_or_mismatch"},
+    )
+    assert audit_profit_exit_flow(
+        [transition, unconsumed], target_date="2026-09-28",
+        load_votes=lambda _: [], policy_bundle_sha256="b" * 64,
+    )["status"] == "runtime_not_consumed"
+
+
+def test_profit_semantics_distinguishes_empty_and_missing_vote_source():
+    assert audit_profit_exit_flow(
+        [], target_date="2026-09-28", load_votes=lambda _: [],
+    )["status"] == "valid_empty"
+    at = datetime(2026, 9, 28, 9, 10, tzinfo=ZoneInfo("Asia/Seoul"))
+    signal = sentinel.PipelineEvent(
+        at, "HOLDING_PIPELINE", "holding_path_signal_snapshot",
+        "Stock", "000001", "8", {
+            "pipeline_lifecycle_population_scope": "real_record_bound",
+            "path_id": "EXIT_TRAILING_TP", "position_key": "record:8",
+            "market": "REGULAR", "session_key": "2026-09-28",
+            "signal_id": "first", "signal_at": str(at.timestamp()),
+            "buy_fill_identity": "a" * 64, "vote_count": "2",
+            "decision": "VETO",
+            "policy_sha256": input_snapshot_id(
+                PATH_POLICY_BY_MARKET[("EXIT_TRAILING_TP", "REGULAR")]),
+        },
+    )
+    report = audit_profit_exit_flow(
+        [signal], target_date="2026-09-28", load_votes=lambda _: [],
+    )
+    assert report["status"] == "source_gap"
+    assert "tp_vote_ledger_missing" in {
+        row["reason"] for row in report["source_gaps"]}
+
+
+def test_empty_natural_flow_still_detects_invalid_selected_policy(monkeypatch, tmp_path):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    selected = policy_path(tmp_path, "2026-09-28")
+    selected.parent.mkdir(parents=True)
+    selected.write_text('{"invalid": true}', encoding="utf-8")
+    report = sentinel.build_holding_exit_sentinel_report(
+        "2026-09-28", as_of=sentinel._parse_as_of("2026-09-28", "08:10:00"),
+    )
+    assert report["profit_exit_semantics"]["status"] == "policy_binding_gap"
+    assert report["profit_exit_semantics"]["funnel"].get(
+        "tp_signal_snapshots", 0) == 0
+
+
+def test_profit_semantics_detects_tp_exit_without_vote_snapshot():
+    at = datetime(2026, 9, 28, 9, 10, tzinfo=ZoneInfo("Asia/Seoul"))
+    exit_event = sentinel.PipelineEvent(
+        at, "HOLDING_PIPELINE", "exit_signal", "Stock", "000001", "8", {
+            "pipeline_lifecycle_population_scope": "real_record_bound",
+            "exit_rule": "scalp_trailing_take_profit",
+            "holding_path_signal_id": "missing",
+        },
+    )
+    report = audit_profit_exit_flow(
+        [exit_event], target_date="2026-09-28", load_votes=lambda _: [],
+    )
+    assert report["status"] == "source_gap"
+    assert report["funnel"]["tp_exit_signals"] == 1
+    assert "tp_exit_without_vote_snapshot" in {
+        row["reason"] for row in report["source_gaps"]}
+
+
+def test_profit_semantics_distinguishes_partial_terminal_and_cost_layers():
+    at = datetime(2026, 9, 28, 10, 0, tzinfo=ZoneInfo("Asia/Seoul"))
+    epoch = at.timestamp()
+    common = {"pipeline_lifecycle_population_scope": "real_record_bound"}
+
+    def event(offset, stage, fields):
+        return sentinel.PipelineEvent(
+            at + timedelta(seconds=offset), "HOLDING_PIPELINE", stage,
+            "Stock", "000001", "21", {**common, **fields},
+        )
+
+    transition = event(0, "scalp_trailing_input_transition", {
+        "position_key": "record:21", "evaluator": "normal",
+        "first_crossing": {"at_epoch": epoch, "market": "REGULAR",
+                           "threshold_key": "SCALP_TRAILING_LIMIT_WEAK"},
+        "trailing_start_pct": 0.4, "tuning_exit_allowed_by_clock": True,
+        "trigger_kind": "trailing_peak_worsen_floor",
+    })
+    snapshot = event(1, "holding_path_signal_snapshot", {
+        "path_id": "EXIT_TRAILING_TP", "position_key": "record:21",
+        "market": "REGULAR", "session_key": "2026-09-28",
+        "signal_id": "sig-21", "signal_at": epoch,
+        "buy_fill_identity": "a" * 64, "vote_count": 0,
+        "decision": "INSUFFICIENT",
+        "policy_sha256": input_snapshot_id(
+            PATH_POLICY_BY_MARKET[("EXIT_TRAILING_TP", "REGULAR")]),
+    })
+    exit_signal = event(2, "exit_signal", {
+        "exit_rule": "scalp_trailing_take_profit",
+        "holding_path_signal_id": "sig-21", "buy_qty": 2,
+    })
+    sent = event(3, "sell_order_sent", {
+        "exit_rule": "scalp_trailing_take_profit",
+        "holding_path_signal_id": "sig-21", "ord_no": "SELL-21", "qty": 2,
+    })
+    partial = event(4, "sell_partial_fill_progress", {
+        "exit_rule": "scalp_trailing_take_profit",
+        "holding_path_terminal_signal_binding": "same_position_buy_generation",
+        "holding_path_signal_id": "sig-21", "order_no": "SELL-21",
+    })
+    complete = event(5, "sell_completed", {
+        "exit_rule": "scalp_trailing_take_profit",
+        "holding_path_terminal_signal_binding": "same_position_buy_generation",
+        "holding_path_signal_id": "sig-21", "order_no": "SELL-21",
+        "remaining_sell_qty": 0,
+    })
+    pending = audit_profit_exit_flow(
+        [transition, snapshot, exit_signal, sent, partial],
+        target_date="2026-09-28", load_votes=lambda _: [],
+    )
+    assert pending["status"] == "pending_terminal"
+    assert pending["funnel"]["tp_sell_partial_fill"] == 1
+    observation = {
+        "completed_population_quality": {"strict_completed_position_ids": ["21"]},
+        "position_outcomes": [{
+            "record_id": "21", "sell_quantity_conserved": True,
+            "profit_rate": 0.5, "realized_pnl_krw": 100,
+            "exact_sell_fill_time": "2026-09-28T10:00:05+09:00",
+            "post_sell_status": "pass",
+        }],
+    }
+    closed = audit_profit_exit_flow(
+        [transition, snapshot, exit_signal, sent, partial, complete],
+        target_date="2026-09-28", load_votes=lambda _: [],
+        observation=observation,
+    )
+    assert closed["status"] == "pass"
+    assert closed["funnel"]["tp_forward_observed"] == 1
+    observation["completed_population_quality"]["strict_completed_position_ids"] = []
+    assert audit_profit_exit_flow(
+        [transition, snapshot, exit_signal, sent, partial, complete],
+        target_date="2026-09-28", load_votes=lambda _: [],
+        observation=observation,
+    )["status"] == "source_gap"
 
 
 def test_sell_drought_is_classified_without_cross_venue_denominator(

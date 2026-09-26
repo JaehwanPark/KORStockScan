@@ -13,8 +13,16 @@ from pathlib import Path
 from typing import Any
 
 from src.engine.automation.runtime_policy_bootstrap import (
+    _digest_json as _bootstrap_digest_json,
     direct_policy_digest,
     validate_rising_missed_policy_receipt,
+)
+from src.engine.scalping.holding_path_vote_policy import (
+    START_DATE as HOLDING_VOTE_POLICY_START_DATE,
+    create_bundle as create_holding_vote_policy,
+    policy_path as holding_vote_policy_path,
+    source_quality_from_observation,
+    validate_bundle as validate_holding_vote_policy,
 )
 from src.utils.constants import DATA_DIR
 
@@ -1097,7 +1105,9 @@ def build_runtime_approval_summary(
     trailing_payload, trailing_error, trailing_read_mode, _ = _read(trailing_path)
     trailing_readiness = trailing_payload.get("trailing_threshold_readiness") or {}
     four_axis_tuning = trailing_payload.get("trailing_four_axis_market_tuning") or {}
+    mechanical_tuning = trailing_payload.get("trailing_mechanical_market_tuning") or {}
     operational_replay = trailing_payload.get("trailing_operational_input_replay") or {}
+    holding_path_votes = trailing_payload.get("holding_path_vote_replay") or {}
     trailing_status = (
         "source_gap_report_missing_or_unreadable" if trailing_error
         else "source_gap_report_exceeds_read_limit"
@@ -1123,6 +1133,11 @@ def build_runtime_approval_summary(
         "four_axis_source_gap_count": len(four_axis_tuning.get("source_gap_by_id") or {}),
         "four_axis_research_candidate_only": bool(four_axis_tuning.get("research_candidate")),
         "four_axis_runtime_selected": False,
+        "mechanical_schema": mechanical_tuning.get("schema") or "source_gap_report_missing",
+        "mechanical_status": mechanical_tuning.get("status") or "source_gap_report_missing",
+        "mechanical_source_gap_count": len(mechanical_tuning.get("source_gap_by_id") or {}),
+        "mechanical_research_candidate_only": bool(mechanical_tuning.get("research_candidate")),
+        "mechanical_runtime_selected": False,
         "operational_replay_status": (
             operational_replay.get("status") or "source_gap_report_missing"
         ),
@@ -1131,6 +1146,131 @@ def build_runtime_approval_summary(
         ),
         "decision_authority": "optional_source_only_no_candidate_or_runtime_apply",
     }
+    exact_manifest_path = (DATA_DIR / "runtime" / "policy_bootstrap"
+                           / f"runtime_policy_bootstrap_{target_date}.json")
+    exact_verify_path = (DATA_DIR / "runtime" / "policy_bootstrap"
+                         / f"runtime_policy_bootstrap_verify_{target_date}.json")
+    exact_manifest = _load_json(exact_manifest_path)
+    exact_verify = _load_json(exact_verify_path)
+    exact_trailing_receipt = exact_manifest.get("scalp_trailing_mechanical_policy_receipt") or {}
+    exact_trailing_lineage = exact_manifest.get("scalp_trailing_selection_lineage") or {}
+    exact_manifest_self_hash_valid = bool(
+        exact_manifest.get("manifest_sha256")
+        and exact_manifest["manifest_sha256"] == _bootstrap_digest_json({
+            key: value for key, value in exact_manifest.items()
+            if key != "manifest_sha256"
+        })
+    )
+    selected_trailing = bool(
+        exact_manifest_self_hash_valid
+        and exact_manifest.get("target_date") == target_date
+        and exact_trailing_receipt.get("source") == "reviewed_selected_candidate"
+        and exact_trailing_lineage.get("market_values_sha256")
+            == exact_trailing_receipt.get("market_values_sha256")
+        and exact_trailing_lineage.get("status") in {
+            "newly_selected", "carried_selected"
+        }
+    )
+    exact_pid_consumed = bool(
+        selected_trailing
+        and exact_verify.get("target_date") == target_date
+        and exact_verify.get("passed") is True
+        and exact_verify.get("pid_passed") is True
+        and exact_verify.get("pid_env_available") is True
+        and isinstance(exact_verify.get("pid"), int)
+        and exact_verify["pid"] > 0
+        and exact_verify.get("manifest_sha256") == exact_manifest.get("manifest_sha256")
+    )
+    selected_hash = (exact_trailing_receipt.get("market_values_sha256")
+                     if selected_trailing else None)
+    trailing_lineage["mechanical_runtime_selected"] = selected_trailing
+    natural_outcome = ((mechanical_tuning.get("applied_generation_outcome") or {}).get(
+        selected_hash, {}) if selected_hash else {})
+    trailing_lineage["mechanical_closed_loop_attribution"] = {
+        "selected_policy_sha256": selected_hash,
+        "manifest_self_hash_valid": exact_manifest_self_hash_valid,
+        "selection_status": exact_trailing_lineage.get("status") if selected_trailing else None,
+        "selection_origin_target_date": (
+            exact_trailing_lineage.get("origin_target_date") if selected_trailing else None
+        ),
+        "selected_receipt_path": str(exact_manifest_path) if selected_trailing else None,
+        "selected_receipt_sha256": _sha(exact_manifest_path) if selected_trailing else None,
+        "preopen_verified": bool(selected_trailing and exact_verify.get("passed") is True
+                                 and exact_verify.get("manifest_sha256")
+                                 == exact_manifest.get("manifest_sha256")),
+        "actual_pid_consumed": exact_pid_consumed,
+        "natural_completed_ids": natural_outcome.get("completed_ids") or [],
+        "natural_realized_net_pnl_krw": natural_outcome.get("realized_net_pnl_krw"),
+        "natural_realized_notional_weighted_ev_pct": natural_outcome.get(
+            "realized_notional_weighted_ev_pct"),
+        "paired_policy_lift_established": False,
+        "decision_authority": "attribution_only_no_new_runtime_apply",
+    }
+    holding_path_vote_lineage = {
+        "source_report_path": str(trailing_path),
+        "source_report_sha256": _sha(trailing_path),
+        "source_date": trailing_payload.get("date"),
+        "schema": holding_path_votes.get("schema") or "source_gap_replay_missing",
+        "strict_population_count": holding_path_votes.get("strict_population_count"),
+        "path_market_status": {
+            key: {
+                "status": cell.get("status"),
+                "signal_count": cell.get("signal_count"),
+                "eligible_signal_count": cell.get("eligible_signal_count"),
+                "runtime_policy_sha256": cell.get("runtime_policy_sha256"),
+                "cost_after_paired_ev_krw": cell.get("cost_after_paired_ev_krw"),
+            }
+            for key, cell in (holding_path_votes.get("path_market") or {}).items()
+            if isinstance(cell, dict)
+        },
+        "allowed_runtime_apply": False,
+        "decision_authority": "path_market_research_only_no_runtime_apply",
+    }
+    holding_vote_policy_receipt = {
+        "status": "not_applicable_before_start_date",
+        "source_date": target_date,
+        "allowed_runtime_apply": False,
+    }
+    if target_date >= HOLDING_VOTE_POLICY_START_DATE:
+        from src.engine.build_next_stage2_checklist import _next_krx_trading_day
+        policy_target_date = _next_krx_trading_day(target_date)
+        policy_file = holding_vote_policy_path(DATA_DIR, policy_target_date)
+        holding_vote_policy_receipt = {
+            "status": "source_gap_replay_missing",
+            "source_date": target_date,
+            "target_date": policy_target_date,
+            "path": str(policy_file),
+            "allowed_runtime_apply": False,
+        }
+        if not trailing_error and holding_path_votes.get("schema") == "holding_path_vote_postclose_replay_v1":
+            try:
+                bundle = create_holding_vote_policy(
+                    source_date=target_date, target_date=policy_target_date,
+                    source_report_sha256=_sha(trailing_path),
+                    replay=holding_path_votes,
+                    source_quality=source_quality_from_observation(trailing_payload),
+                )
+                validate_holding_vote_policy(
+                    bundle, target_date=policy_target_date,
+                    source_report_sha256=_sha(trailing_path),
+                )
+                _atomic_write(policy_file, json.dumps(bundle, ensure_ascii=False,
+                                                    indent=2, sort_keys=True) + "\n")
+                holding_vote_policy_receipt = {
+                    "status": "estimated_provisional_published",
+                    "source_date": target_date, "target_date": policy_target_date,
+                    "path": str(policy_file),
+                    "bundle_sha256": bundle["bundle_sha256"],
+                    "source_report_sha256": bundle["source_report_sha256"],
+                    "policy_set_sha256": bundle["policy_set_sha256"],
+                    "cell_count": len(bundle["cells"]),
+                    "evidence_grade": bundle["evidence_grade"],
+                    "realized_paired_ev_krw": None,
+                    "allowed_runtime_apply": True,
+                }
+            except (OSError, ValueError, TypeError, KeyError) as exc:
+                holding_vote_policy_receipt["status"] = "source_gap_policy_invalid"
+                holding_vote_policy_receipt["reason"] = type(exc).__name__
     report = {
         "schema_version": 3, "report_type": "runtime_approval_summary", "date": target_date,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"), "status": status,
@@ -1141,6 +1281,8 @@ def build_runtime_approval_summary(
         "preopen_consumption_state": preopen_state, "natural_acceptance_state": natural_state,
         "preopen_consumption_receipt": preopen_receipt,
         "holding_exit_threshold_lineage": trailing_lineage,
+        "holding_path_vote_policy": holding_vote_policy_receipt,
+        "holding_path_vote_lineage": holding_path_vote_lineage,
         "policy_handoff_state": (
             "candidate_published" if handoff_states.get("candidate_published")
             else "blocked" if handoff_states.get("blocked")

@@ -878,10 +878,10 @@ def test_wide_spread_trailing_defers_when_rest_bbo_is_not_narrow(monkeypatch):
             1121,
         ),
     )
-    monkeypatch.setattr(
-        handlers,
-        "_fetch_rest_orderbook_snapshot_bounded",
-        lambda *args, **kwargs: (
+    rest_fetches = []
+    def fetch_rest(*args, **kwargs):
+        rest_fetches.append((args, kwargs))
+        return (
             {
                 "best_bid": 1121,
                 "best_ask": 1145,
@@ -889,8 +889,8 @@ def test_wide_spread_trailing_defers_when_rest_bbo_is_not_narrow(monkeypatch):
             },
             "ok",
             12.0,
-        ),
-    )
+        )
+    monkeypatch.setattr(handlers, "_fetch_rest_orderbook_snapshot_bounded", fetch_rest)
     monkeypatch.setattr(
         handlers,
         "calculate_net_profit_rate",
@@ -927,16 +927,27 @@ def test_wide_spread_trailing_defers_when_rest_bbo_is_not_narrow(monkeypatch):
         "status": "HOLDING",
         "buy_price": 1123,
         "buy_qty": 1,
+        "scalp_trailing_trusted_peak_price": 1140,
+        "scalp_trailing_peak_basis_price": 1123,
+        "scalp_trailing_peak_position_key": "record:117",
     }
 
     assert (
         handlers.evaluate_and_dispatch_fast_scalp_exit(
-            stock, "001520", {"curr": 1133}, now_ts=now_ts
+            stock, "001520", {"curr": 1133, "best_bid": 1121,
+                              "best_ask": 1145, "last_ws_update_ts": now_ts},
+            now_ts=now_ts
         )
         is False
     )
     assert dispatches == []
     assert not stock.get("exit_token")
+    assert handlers.evaluate_and_dispatch_fast_scalp_exit(
+        stock, "001520", {"curr": 1133, "best_bid": 1121,
+                          "best_ask": 1145, "last_ws_update_ts": now_ts + 0.1},
+        now_ts=now_ts + 0.1
+    ) is False
+    assert len(rest_fetches) == 1
 
 
 def test_fast_exit_dispatch_survives_claim_logging_failure(monkeypatch):

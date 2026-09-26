@@ -73,6 +73,8 @@ if ! PYTHONPATH=. "$VENV_PY" -m src.engine.automation.machine_entry_timing_tunin
 fi
 PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.scanner_lookup_attention_policy \
   --target-date "$TARGET_DATE" --write
+PYTHONPATH=. "$VENV_PY" -m src.engine.automation.scalp_trailing_mechanical_policy_apply \
+  --target-date "$TARGET_DATE" --write
 
 # Activate the next-day machine choice before bootstrap captures policy receipts.
 # A missing candidate carries the current machine; a broken staged receipt
@@ -99,6 +101,8 @@ rising_missed_policy="$PROJECT_DIR/data/report/rising_missed_classifier_prior/ri
 if [[ -s "$rising_missed_policy" ]]; then
   bootstrap_args+=(--receipt "$rising_missed_policy")
 fi
+scalp_trailing_policy="$PROJECT_DIR/data/report/scalp_trailing_mechanical_policy/scalp_trailing_mechanical_policy_${TARGET_DATE}.json"
+bootstrap_args+=(--receipt "$scalp_trailing_policy")
 PYTHONPATH=. "$VENV_PY" -m src.engine.automation.runtime_policy_bootstrap "${bootstrap_args[@]}"
 
 entry_setup_args=(

@@ -1,6 +1,7 @@
 import hashlib
 import json
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -285,21 +286,14 @@ def test_cron_drift_blocks_install(tmp_path, mode):
         router.render_crontab(before, tmp_path)
 
 
-def test_cron_allows_absent_optional_postclose_workers(tmp_path):
+@pytest.mark.parametrize("tag", sorted(router.TAGS))
+def test_cron_rejects_missing_scheduled_postclose_owner(tmp_path, tag):
     before = "\n".join(
-        line
-        for line in original_cron(tmp_path).splitlines()
-        if not any(
-            f"# {tag}" in line
-            for tag, op in router.TAGS.items()
-            if op not in router.REQUIRED_CRON_TARGETS
-        )
+        line for line in original_cron(tmp_path).splitlines()
+        if f"# {tag}" not in line
     ) + "\n"
-
-    after = router.render_crontab(before, tmp_path)
-
-    assert after.count("run_runtime_release.sh") == len(router.REQUIRED_CRON_TARGETS)
-    assert router.render_crontab(after, tmp_path) == after
+    with pytest.raises(ValueError, match="cron_target_missing_or_duplicate"):
+        router.render_crontab(before, tmp_path)
 
 
 def test_cron_check_never_installs(release, monkeypatch):
@@ -464,3 +458,23 @@ def test_submission_monitor_routes_selected_observer_without_start(release):
     plan = router.make_plan(workspace, root, "a" * 40, "buy-funnel", "2026-09-21")
     assert plan["command"] == ["/bin/bash", str(root / "deploy/run_buy_funnel_sentinel_intraday.sh"), "2026-09-21"]
     assert plan["cwd"] == str(root)
+
+
+def test_holding_exit_sentinel_routes_selected_release_without_start(release):
+    workspace, root, _, _ = release
+    plan = router.make_plan(workspace, root, "a" * 40, "holding-exit-sentinel", "2026-09-28")
+    assert plan["command"] == [
+        "/bin/bash", str(root / "deploy/run_holding_exit_sentinel_intraday.sh"),
+        "2026-09-28",
+    ]
+    assert plan["cwd"] == str(root)
+
+
+def test_stage2_holding_exit_cron_routes_all_session_rows_through_selector():
+    installer = (Path(__file__).resolve().parents[2] / "deploy" /
+                 "install_stage2_ops_cron.sh").read_text()
+    rows = [line for line in installer.splitlines()
+            if "# HOLDING_EXIT_SENTINEL_" in line]
+    assert len(rows) == 6
+    assert all("run_runtime_release.sh holding-exit-sentinel" in row
+               for row in rows)

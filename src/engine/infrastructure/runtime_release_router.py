@@ -39,8 +39,8 @@ TAGS = {
     "DASHBOARD_DB_ARCHIVE_2050": "archive",
 }
 CRON_TARGETS = frozenset({"start", *TAGS.values()})
-REQUIRED_CRON_TARGETS = frozenset({"start", "preopen", "postclose", "eod"})
-OPERATIONS = ("start", "restart", *OWNED, "paired-replay", "eod", "archive", "buy-funnel")
+REQUIRED_CRON_TARGETS = CRON_TARGETS
+OPERATIONS = ("start", "restart", *OWNED, "paired-replay", "eod", "archive", "buy-funnel", "holding-exit-sentinel")
 RELEASE_SET_LOCK = "runtime_release_set.lock"
 MAX_RELEASE_SET_UNITS = 256
 CORE_SYSTEMD_UNITS = (
@@ -423,6 +423,8 @@ def make_plan(
         ]
     elif operation == "buy-funnel":
         command = ["/bin/bash", str(root / "deploy/run_buy_funnel_sentinel_intraday.sh"), target_date]
+    elif operation == "holding-exit-sentinel":
+        command = ["/bin/bash", str(root / "deploy/run_holding_exit_sentinel_intraday.sh"), target_date]
     elif operation == "paired-replay":
         command = [
             "/bin/bash",
@@ -480,7 +482,7 @@ def make_plan(
 
 
 def render_crontab(original: str, workspace: Path) -> str:
-    """Replace only eight installed command prefixes, preserving schedules/env/tails.
+    """Replace the eight installed command prefixes, preserving schedules/env/tails.
 
     Missing, duplicate or unfamiliar entrypoints fail closed. Other services,
     machine timers and intraday observers are deliberately outside this router.

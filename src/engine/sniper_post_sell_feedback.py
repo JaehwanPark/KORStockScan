@@ -406,12 +406,13 @@ def _build_high_ai_hard_stop_conflict_fields(
     ai_transport_mode=None,
 ) -> dict:
     resolved_exit_rule = str(exit_rule or "-")
-    score = _safe_float(current_ai_score, 0.0)
+    score = None if current_ai_score is None else _safe_float(current_ai_score, 0.0)
     is_hard_stop = resolved_exit_rule in HIGH_AI_HARD_STOP_EXIT_RULES
-    is_conflict = bool(is_hard_stop and score >= HIGH_AI_HARD_STOP_SCORE_FLOOR)
+    is_conflict = bool(is_hard_stop and score is not None
+                       and score >= HIGH_AI_HARD_STOP_SCORE_FLOOR)
     if is_conflict:
         dimension_value = "high_ai_hard_stop_conflict"
-    elif is_hard_stop and score <= 0.0:
+    elif is_hard_stop and (score is None or score <= 0.0):
         dimension_value = "hard_stop_ai_score_missing"
     elif is_hard_stop:
         dimension_value = "hard_stop_ai_not_high"
@@ -421,13 +422,16 @@ def _build_high_ai_hard_stop_conflict_fields(
         "high_ai_hard_stop_conflict": is_conflict,
         "hard_stop_conflict_dimension": dimension_value,
         "hard_stop_conflict_score_floor": HIGH_AI_HARD_STOP_SCORE_FLOOR,
-        "hard_stop_conflict_ai_score_band": _ai_score_band(score),
+        "hard_stop_conflict_ai_score_band": (
+            _ai_score_band(score) if score is not None else "missing"),
         "hard_stop_conflict_runtime_effect": False,
         "hard_stop_conflict_allowed_runtime_apply": False,
         "hard_stop_conflict_hard_gate": False,
         "hard_stop_conflict_contract": dict(HIGH_AI_HARD_STOP_CONFLICT_CONTRACT),
-        "ai_score_at_exit": round(score, 1),
-        "ai_score_raw_at_exit": round(_safe_float(ai_score_raw, score), 1),
+        "ai_score_at_exit": round(score, 1) if score is not None else None,
+        "ai_score_raw_at_exit": (
+            round(_safe_float(ai_score_raw, 0.0), 1)
+            if ai_score_raw is not None else None),
         "ai_action_at_exit": str(ai_action or "-"),
         "ai_result_source_at_exit": str(ai_result_source or "-"),
         "ai_model_at_exit": str(ai_model or "-"),
@@ -844,16 +848,19 @@ def record_post_sell_candidate(
             return None
 
         resolved_exit_rule = str(exit_rule or stock.get("last_exit_rule") or "-")
-        resolved_ai_score = round(
-            _safe_float(current_ai_score, stock.get("last_exit_current_ai_score", 0.0)),
-            1,
+        retired_holding_score = (
+            str(stock.get("strategy") or strategy or "").upper() == "SCALPING"
+            and stock.get("last_exit_ai_result_source") == "retired_holding_score"
         )
-        resolved_ai_raw = round(
-            _safe_float(stock.get("last_exit_ai_score_raw"), resolved_ai_score), 1
-        )
-        resolved_ai_effective = round(
-            _safe_float(stock.get("last_exit_ai_score_effective"), resolved_ai_score), 1
-        )
+        if retired_holding_score:
+            resolved_ai_score = resolved_ai_raw = resolved_ai_effective = None
+        else:
+            resolved_ai_score = round(_safe_float(
+                current_ai_score, stock.get("last_exit_current_ai_score", 0.0)), 1)
+            resolved_ai_raw = round(_safe_float(
+                stock.get("last_exit_ai_score_raw"), resolved_ai_score), 1)
+            resolved_ai_effective = round(_safe_float(
+                stock.get("last_exit_ai_score_effective"), resolved_ai_score), 1)
         has_standard_exit_decision = any(
             key in stock
             for key in (

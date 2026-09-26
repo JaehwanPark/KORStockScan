@@ -37,6 +37,11 @@ from src.engine.ai_response_contracts import (
     normalize_ai_reason_language,
     normalize_gatekeeper_action_key,
 )
+from src.engine.ai.holding_exit_vote import (
+    PATH_IDS, PATH_PROMPT_VERSION, build_path_vote_input,
+    path_vote_input_hashes, input_snapshot_id,
+    normalize_path_vote_bundle, normalize_vote_response,
+)
 from src.engine.holding_exit_matrix_runtime import (
     build_holding_exit_matrix_runtime_context,
     merge_holding_exit_matrix_result_fields,
@@ -131,6 +136,8 @@ from src.engine.ai_prompt_contracts import (
     SCALPING_WATCHING_SYSTEM_PROMPT,
     SCALPING_WATCHING_HOT_SYSTEM_PROMPT,
     SCALPING_HOLDING_SYSTEM_PROMPT,
+    SCALPING_HOLDING_EXIT_VOTE_SYSTEM_PROMPT,
+    SCALPING_HOLDING_PATH_VOTE_SYSTEM_PROMPT,
     SCALPING_HOLDING_SCORE_SYSTEM_PROMPT,
     SCALPING_HOLDING_FLOW_SYSTEM_PROMPT,
     SCALPING_ENTRY_PRICE_PROMPT,
@@ -610,6 +617,9 @@ def _extract_openai_usage_meta(response: Any) -> dict[str, Any]:
     response_id = _get_usage_value(response, "id")
     if response_id not in (None, ""):
         meta["openai_response_id"] = str(response_id)
+    response_model = _get_usage_value(response, "model")
+    if response_model not in (None, ""):
+        meta["openai_response_model"] = str(response_model)
     usage = _get_usage_value(response, "usage")
     if not usage:
         return meta
@@ -11342,6 +11352,316 @@ class GPTSniperEngine:
         except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
             return {**blocked, "reason": "shared_main_rebound_contract_invalid",
                 "error_type": type(exc).__name__}
+
+    def evaluate_scalping_holding_path_votes(
+        self, stock_name, stock_code, ws_data, recent_ticks, recent_candles,
+        position_ctx, *, requested_paths, market, session_key, position_key,
+        buy_fill_identity, buy_fill_legs, route, transport_epoch, source_generation,
+        quote_observed_at, holding_context=None,
+        metadata_extra=None, expected_path_hashes=None,
+        path_policy_hashes=None,
+    ):
+        """One provider call returns one prospective vote for each requested path."""
+        paths = tuple(requested_paths)
+        if not paths or len(set(paths)) != len(paths) or set(paths) - PATH_IDS:
+            raise ValueError("invalid_holding_vote_paths")
+        model = str(getattr(TRADING_RULES, "OPENAI_HOLDING_EXIT_VOTE_MODEL",
+                            "gpt-5.4-nano") or "gpt-5.4-nano")
+        requested_at = time.time()
+        started = time.perf_counter()
+        preflight = ai_input_preflight(holding_context)
+        payload = build_path_vote_input(
+            stock_code=stock_code, ws_data=ws_data,
+            recent_ticks=recent_ticks, recent_candles=recent_candles,
+            position_ctx=position_ctx, requested_paths=paths, market=market,
+            session_key=session_key, position_key=position_key,
+            buy_fill_identity=buy_fill_identity, route=route,
+            transport_epoch=transport_epoch, source_generation=source_generation,
+            quote_observed_at=quote_observed_at, holding_context=holding_context,
+        )
+        hashes = path_vote_input_hashes(
+            payload, model=model, path_policy_hashes=path_policy_hashes,
+        )
+        snapshot_id = hashes["input_snapshot_id"]
+        payload["input_snapshot_id"] = snapshot_id
+        wrapped_prompt_sha256 = hashlib.sha256(
+            self._wrap_openai_prompt_contract(
+                SCALPING_HOLDING_PATH_VOTE_SYSTEM_PROMPT,
+                require_json=True, schema_name=PATH_PROMPT_VERSION,
+                endpoint_name="holding_path_vote",
+            ).encode("utf-8")
+        ).hexdigest()
+        timeout_ms = int(getattr(
+            TRADING_RULES, "OPENAI_HOLDING_EXIT_VOTE_TIMEOUT_MS", 7000
+        ) or 7000)
+        failure = None
+        if (expected_path_hashes is not None
+                and expected_path_hashes != hashes["path_decision_input_sha256"]):
+            failure = "input_changed_before_provider"
+        elif model != "gpt-5.4-nano":
+            failure = "holding_vote_model_mismatch"
+        elif self.ai_disabled:
+            failure = "engine_disabled"
+        elif not preflight.get("allowed"):
+            failure = "input_preflight_blocked"
+        elif not self.lock.acquire(blocking=False):
+            failure = "ai_lock_contention"
+        result = None
+        if failure is None:
+            # A failed or mocked transport must not inherit a prior call's receipt.
+            self._consume_last_transport_meta()
+            try:
+                result = self._call_openai_safe(
+                    SCALPING_HOLDING_PATH_VOTE_SYSTEM_PROMPT,
+                    json.dumps(payload, ensure_ascii=True, separators=(",", ":"),
+                               default=str),
+                    require_json=True,
+                    context_name=f"HOLDING_PATH_VOTE:{stock_name}",
+                    model_override=model, schema_name=PATH_PROMPT_VERSION,
+                    endpoint_name="holding_path_vote", symbol=stock_code,
+                    metadata_extra={**dict(metadata_extra or {}),
+                                    "prompt_version": PATH_PROMPT_VERSION,
+                                    "input_snapshot_id": snapshot_id},
+                    transport_mode_override="http",
+                    timeout_ms_override=timeout_ms,
+                )
+            finally:
+                self.lock.release()
+        response_model_actual = None
+        trace_prompt_sha256 = None
+        if isinstance(result, dict):
+            transport_meta = self._consume_last_transport_meta()
+            response_model_actual = str(
+                transport_meta.get("openai_response_model") or ""
+            )
+            trace_prompt_sha256 = transport_meta.get("ai_prompt_sha256")
+            result.update(transport_meta)
+            model_family_ok = bool(
+                response_model_actual == model
+                or re.fullmatch(r"gpt-5\.4-nano-\d{4}-\d{2}-\d{2}",
+                                response_model_actual)
+            )
+            if (not model_family_ok
+                    or transport_meta.get("openai_model") != model
+                    or transport_meta.get("openai_transport_mode") != "http"):
+                failure = "provider_response_model_missing_or_mismatch"
+                result = None
+            elif (trace_prompt_sha256 is not None
+                  and trace_prompt_sha256 != wrapped_prompt_sha256):
+                failure = "prompt_receipt_mismatch"
+                result = None
+            elif (time.time() - requested_at) * 1000 > timeout_ms:
+                failure = "provider_response_after_deadline"
+                result = None
+        if isinstance(result, dict):
+            result = self._annotate_analysis_result(
+                result, prompt_type="scalping_holding_path_votes",
+                prompt_version=PATH_PROMPT_VERSION,
+                response_ms=int((time.perf_counter() - started) * 1000),
+                parse_ok=True, parse_fail=False, fallback_score_50=False,
+                cache_hit=False, cache_mode="miss", result_source="live",
+                input_contract_fields={
+                    "ai_trace_endpoint_name": "holding_path_vote",
+                    "ai_input_schema": PATH_PROMPT_VERSION,
+                    "ai_input_snapshot_id": snapshot_id,
+                    "ai_trace_position_key": position_key,
+                    "ai_trace_market": market,
+                    "ai_trace_session_key": session_key,
+                    "ai_trace_source_route": route,
+                    "ai_trace_transport_epoch": transport_epoch,
+                    "ai_trace_source_generation": source_generation,
+                },
+            )
+        events = normalize_path_vote_bundle(
+            result, requested_paths=paths, expected_snapshot_id=snapshot_id,
+            position_key=position_key, market=market, session_key=session_key,
+            model=model, route=route, transport_epoch=transport_epoch,
+            source_generation=source_generation,
+            buy_fill_identity=buy_fill_identity, buy_fill_legs=buy_fill_legs,
+            quote_observed_at=quote_observed_at,
+            requested_at=requested_at,
+            received_at=time.time(),
+            path_policy_hashes=path_policy_hashes,
+        )
+        for event in events:
+            event["provider_called"] = failure is None or failure in {
+                "provider_response_model_missing_or_mismatch",
+                "provider_response_after_deadline",
+                "prompt_receipt_mismatch",
+            }
+            event["decision_input_sha256"] = hashes["decision_input_sha256"]
+            event["path_decision_input_sha256"] = (
+                hashes["path_decision_input_sha256"][event["path_id"]]
+            )
+            event["request_payload_sha256"] = hashes["request_payload_sha256"]
+            event["prompt_template_sha256"] = hashlib.sha256(
+                SCALPING_HOLDING_PATH_VOTE_SYSTEM_PROMPT.encode("ascii")
+            ).hexdigest()
+            event["prompt_sha256"] = wrapped_prompt_sha256
+            event["ai_trace_prompt_sha256"] = trace_prompt_sha256
+            event["engine_evaluation_elapsed_ms"] = int(
+                (time.perf_counter() - started) * 1000
+            )
+            event["openai_http_provider_ms"] = (
+                result.get("openai_http_provider_ms")
+                if isinstance(result, dict) else None
+            )
+            event["openai_response_model"] = response_model_actual
+            event["ai_decision_trace_id"] = (
+                result.get("ai_decision_trace_id") if isinstance(result, dict) else None
+            )
+            if failure is not None:
+                event["excluded_reason"] = failure
+        return events
+
+    def evaluate_scalping_holding_exit_vote(
+        self,
+        stock_name,
+        stock_code,
+        ws_data,
+        recent_ticks,
+        recent_candles,
+        position_ctx,
+        *,
+        market,
+        session_key,
+        position_key,
+        route,
+        transport_epoch,
+        source_generation,
+        holding_context=None,
+        metadata_extra=None,
+    ):
+        """Return one prospective exit-permission vote, never an order action."""
+        model = str(
+            getattr(TRADING_RULES, "OPENAI_HOLDING_EXIT_VOTE_MODEL", "gpt-5.4-nano")
+            or "gpt-5.4-nano"
+        )
+        prompt_version = "holding_exit_vote_v1"
+        requested_at = time.time()
+        started = time.perf_counter()
+        ws = ws_data if isinstance(ws_data, dict) else {}
+        position = position_ctx if isinstance(position_ctx, dict) else {}
+        quote = self._extract_quote_snapshot(ws)
+        preflight = ai_input_preflight(holding_context)
+        # Explicit fields prevent an old score, scale-in recommendation, or
+        # account/order metadata from leaking into the new vote input.
+        payload = {
+            "input_schema": prompt_version,
+            "purpose": "EXIT_PERMISSION",
+            "stock_code": str(stock_code or ""),
+            "market": str(market or ""),
+            "session_key": str(session_key or ""),
+            "position": {
+                key: position.get(key) for key in (
+                    "buy_price", "curr_price", "profit_rate", "peak_profit",
+                    "drawdown_from_peak_pct", "held_sec",
+                )
+            },
+            "quote": {
+                key: quote.get(key) for key in (
+                    "best_bid", "best_ask", "best_bid_qty", "best_ask_qty"
+                )
+            },
+            "last_ticks": [
+                dict(tick)
+                for tick in list(recent_ticks or [])[-10:]
+                if isinstance(tick, dict)
+            ],
+            "last_candles": [
+                dict(candle)
+                for candle in list(recent_candles or [])[-20:]
+                if isinstance(candle, dict)
+            ],
+            "source_quality": {
+                "status": preflight.get("status"),
+                "blockers": preflight.get("blockers"),
+            },
+            "source": {"route": str(route or ""),
+                       "transport_epoch": str(transport_epoch or ""),
+                       "source_generation": str(source_generation or "")},
+        }
+        snapshot_id = input_snapshot_id(payload)
+        payload["input_snapshot_id"] = snapshot_id
+        if self.ai_disabled or not bool(preflight.get("allowed")):
+            return normalize_vote_response(
+                {}, expected_snapshot_id=snapshot_id,
+                position_key=position_key, market=market, session_key=session_key,
+                model=model, prompt_version=prompt_version, route=route,
+                transport_epoch=transport_epoch,
+                source_generation=source_generation, requested_at=requested_at,
+                received_at=time.time(),
+            ) | {"excluded_reason": "engine_disabled" if self.ai_disabled
+                 else "input_preflight_blocked", "provider_called": False}
+        if not self.lock.acquire(blocking=False):
+            return normalize_vote_response(
+                {}, expected_snapshot_id=snapshot_id,
+                position_key=position_key, market=market, session_key=session_key,
+                model=model, prompt_version=prompt_version, route=route,
+                transport_epoch=transport_epoch,
+                source_generation=source_generation, requested_at=requested_at,
+                received_at=time.time(),
+            ) | {"excluded_reason": "ai_lock_contention", "provider_called": False}
+        try:
+            result = self._call_openai_safe(
+                SCALPING_HOLDING_EXIT_VOTE_SYSTEM_PROMPT,
+                json.dumps(payload, ensure_ascii=True, separators=(",", ":"), default=str),
+                require_json=True,
+                context_name=f"HOLDING_EXIT_VOTE:{stock_name}",
+                model_override=model,
+                schema_name=prompt_version,
+                endpoint_name="holding_exit_vote",
+                symbol=stock_code,
+                metadata_extra={**dict(metadata_extra or {}),
+                                "prompt_version": prompt_version,
+                                "input_snapshot_id": snapshot_id},
+                transport_mode_override="http",
+            )
+        finally:
+            self.lock.release()
+        response_is_object = isinstance(result, dict)
+        result = self._merge_last_transport_meta(
+            result if response_is_object else {}
+        )
+        result = self._annotate_analysis_result(
+            result,
+            prompt_type="scalping_holding_exit_vote",
+            prompt_version=prompt_version,
+            response_ms=int((time.perf_counter() - started) * 1000),
+            parse_ok=response_is_object,
+            parse_fail=not response_is_object,
+            fallback_score_50=False,
+            cache_hit=False,
+            cache_mode="miss",
+            result_source="live" if response_is_object else "parse_failure",
+            input_contract_fields={
+                "ai_trace_endpoint_name": "holding_exit_vote",
+                "ai_input_schema": prompt_version,
+                "ai_input_snapshot_id": snapshot_id,
+                "ai_trace_position_key": position_key,
+                "ai_trace_market": market,
+                "ai_trace_session_key": session_key,
+                "ai_trace_source_route": route,
+                "ai_trace_transport_epoch": transport_epoch,
+                "ai_trace_source_generation": source_generation,
+            },
+        )
+        received_at = time.time()
+        vote = normalize_vote_response(
+            result, expected_snapshot_id=snapshot_id,
+            position_key=position_key, market=market, session_key=session_key,
+            model=model, prompt_version=prompt_version, route=route,
+            transport_epoch=transport_epoch,
+            source_generation=source_generation, requested_at=requested_at,
+            received_at=received_at,
+        )
+        vote["provider_called"] = bool(
+            isinstance(result, dict) and result.get("provider_called", True)
+        )
+        vote["ai_decision_trace_id"] = (
+            result.get("ai_decision_trace_id") if isinstance(result, dict) else None
+        )
+        return vote
 
     def evaluate_scalping_holding_score(
         self,

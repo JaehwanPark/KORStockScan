@@ -13,7 +13,10 @@ def test_ai_response_schema_registry_covers_required_endpoints():
         "entry_price_v1",
         "entry_price_explicit_fill_value_v1",
         "holding_exit_v1",
+        "holding_exit_vote_v1",
+        "holding_path_vote_v10",
         "holding_score_v2",
+        "decision_quality_holding_score_v1",
         "holding_exit_flow_v1",
         "overnight_v1",
         "condition_entry_v1",
@@ -28,7 +31,6 @@ def test_ai_response_schema_registry_covers_required_endpoints():
         "stage_hook_workorder_discovery_ai_review_v1",
         "runtime_apply_gap_ai_review_v1",
         "swing_bottom_rebound_policy_ai_review_v1",
-        "one_share_threshold_opportunity_ai_review_v1",
         "swing_ai_structured_output_eval_v1",
     }
 

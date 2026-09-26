@@ -153,6 +153,15 @@ def source_paths(report_dir: Path, target_date: str, consumer: str) -> dict[str,
         # later normal bootstrap must not invalidate the immutable postclose
         # generation receipt merely because its previously absent file arrived.
         paths = {"runtime_approval_summary": summary_path}
+        from src.engine.scalping.holding_path_vote_policy import (
+            START_DATE as HOLDING_VOTE_POLICY_START_DATE,
+            policy_path as holding_vote_policy_path,
+        )
+        if target_date >= HOLDING_VOTE_POLICY_START_DATE:
+            from src.engine.build_next_stage2_checklist import _next_krx_trading_day
+            paths["holding_path_vote_policy"] = holding_vote_policy_path(
+                report_dir.parent, _next_krx_trading_day(target_date),
+            )
         if any(stage_path(report_dir, target_date, s).exists() for s in STAGE_REGISTRY):
             paths.update({f'stage_{stage}':stage_path(report_dir, target_date, stage)
                 for stage in active_stage_names(target_date) if stage != 'summary_handoff'})
@@ -303,6 +312,8 @@ def direct_future_handoff(summary: dict[str, Any], source_date: str) -> dict[str
         "manifest_path": preopen.get("manifest_path"),
         "verification_path": preopen.get("verification_path"),
         "policy_receipts": policies,
+        **({"holding_path_vote_policy": summary["holding_path_vote_policy"]}
+           if "holding_path_vote_policy" in summary else {}),
         "runtime_effect": False,
         "allowed_runtime_apply": False,
     }
@@ -340,6 +351,33 @@ def verify_summary_handoff(
         target_date >= COMMON_THRESHOLD_TUNING_RETIRED_FROM
         or summary.get("schema_version") == 3
     )
+    from src.engine.scalping.holding_path_vote_policy import (
+        START_DATE as HOLDING_VOTE_POLICY_START_DATE,
+        load_bundle as load_holding_vote_policy,
+    )
+    if direct_mode and target_date >= HOLDING_VOTE_POLICY_START_DATE:
+        receipt = summary.get("holding_path_vote_policy") or {}
+        from src.engine.build_next_stage2_checklist import _next_krx_trading_day
+        target_policy_date = _next_krx_trading_day(target_date)
+        observation_path = (report_dir / "monitor_snapshots" /
+                            f"holding_exit_observation_{target_date}.json")
+        try:
+            observation_sha = hashlib.sha256(observation_path.read_bytes()).hexdigest()
+            bundle = load_holding_vote_policy(
+                report_dir.parent, target_policy_date,
+                source_report_sha256=observation_sha,
+            )
+            if (receipt.get("status") != "estimated_provisional_published"
+                    or receipt.get("source_date") != target_date
+                    or receipt.get("target_date") != target_policy_date
+                    or receipt.get("bundle_sha256") != bundle["bundle_sha256"]
+                    or receipt.get("policy_set_sha256") != bundle["policy_set_sha256"]
+                    or receipt.get("source_report_sha256") != observation_sha
+                    or receipt.get("cell_count") != len(bundle["cells"])
+                    or receipt.get("allowed_runtime_apply") is not True):
+                issues.append("postclose_summary_handoff:holding_vote_policy_semantics_invalid")
+        except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+            issues.append("postclose_summary_handoff:holding_vote_policy_missing_or_invalid")
     intake = (
         build_intake(report_dir, target_date)
         if EFFECTIVE_DATE <= target_date < COMMON_THRESHOLD_TUNING_RETIRED_FROM

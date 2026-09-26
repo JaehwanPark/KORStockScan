@@ -3157,6 +3157,16 @@ def test_openai_usage_meta_includes_provider_response_id_without_usage():
     }
 
 
+def test_openai_usage_meta_keeps_actual_response_model_without_usage():
+    response = SimpleNamespace(
+        id="resp-holding-vote", model="gpt-5.4-nano", usage=None,
+    )
+    assert openai_module._extract_openai_usage_meta(response) == {
+        "openai_response_id": "resp-holding-vote",
+        "openai_response_model": "gpt-5.4-nano",
+    }
+
+
 def test_openai_reasoning_effort_auto_uses_none_for_gpt54_family(monkeypatch):
     monkeypatch.setattr(
         openai_module,

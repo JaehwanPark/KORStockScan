@@ -44,7 +44,11 @@ def test_resolve_market_session_after_effective_date_preserves_premarket():
     assert context.session_regime == contract.MARKET_SESSION_REGIME_LEGACY_PREMARKET
     assert context.open_venues == (contract.ACTUAL_EXECUTION_VENUE_KRX,)
     assert context.entry_allowed_by_clock is False
-    assert context.exit_allowed_by_clock is False
+    assert context.exit_allowed_by_clock is True
+    for hour, minute, allowed in ((8, 49, True), (8, 50, False), (8, 55, False)):
+        boundary = contract.resolve_market_session(
+            _kst_datetime(2026, 9, 14, hour, minute))
+        assert boundary.exit_allowed_by_clock is allowed
 
 
 @pytest.mark.parametrize(

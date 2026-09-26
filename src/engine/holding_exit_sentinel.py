@@ -17,13 +17,22 @@ from pathlib import Path
 from typing import Any
 
 from src.engine.sentinel_event_cache import update_and_load_cached_event_rows
+from src.engine.ai.holding_exit_vote import (
+    PATH_POLICY_BY_MARKET, load_path_events_file, path_vote_store_path,
+)
+from src.engine.scalping.holding_path_vote_policy import (
+    load_bundle as load_holding_vote_bundle,
+    policy_path as holding_vote_policy_path,
+    verify_source_handoff as verify_holding_vote_source_handoff,
+)
+from src.engine.scalping.holding_profit_exit_semantics import audit_profit_exit_flow
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 from src.utils.market_day import is_krx_trading_day
 
 IGNORED_STOCK_NAMES = {"TEST", "DUMMY", "MOCK"}
 DEFAULT_WINDOWS = (5, 10, 30)
-SESSION_START = time(9, 0)
+SESSION_START = time(8, 0)
 SENTINEL_END = time(15, 30)
 NXT_SENTINEL_START = time(16, 0)
 NXT_SENTINEL_END = time(19, 20)
@@ -880,6 +889,7 @@ def _observation_metrics(observation: dict[str, Any] | None) -> dict[str, Any]:
             break
     readiness = observation.get("trailing_threshold_readiness") or {}
     four_axis = observation.get("trailing_four_axis_market_tuning") or {}
+    mechanical = observation.get("trailing_mechanical_market_tuning") or {}
     operational_replay = observation.get("trailing_operational_input_replay") or {}
     funnel = readiness.get("funnel_ids") or {}
     operational_axes = readiness.get("operational_axes") or {}
@@ -919,6 +929,17 @@ def _observation_metrics(observation: dict[str, Any] | None) -> dict[str, Any]:
         ),
         "trailing_four_axis_research_candidate_only": bool(
             four_axis.get("research_candidate")
+        ),
+        "trailing_mechanical_schema": mechanical.get("schema") or "source_gap_report_missing",
+        "trailing_mechanical_status": mechanical.get("status") or "source_gap_report_missing",
+        "trailing_mechanical_source_gap_count": len(mechanical.get("source_gap_by_id") or {}),
+        "trailing_mechanical_research_candidate_only": bool(mechanical.get("research_candidate")),
+        "trailing_mechanical_classifier_policy_status": (
+            (mechanical.get("classifier_policy_research") or {}).get("status")
+            or "source_gap_report_missing"
+        ),
+        "trailing_mechanical_classifier_candidate_count": (
+            (mechanical.get("classifier_policy_research") or {}).get("candidate_count") or 0
         ),
     }
 
@@ -1176,6 +1197,33 @@ def build_holding_exit_sentinel_report(
 
     observation = load_observation_report(target_date)
     obs_metrics = _observation_metrics(observation)
+    vote_policies = PATH_POLICY_BY_MARKET
+    vote_policy_bundle_sha = None
+    vote_policy_status = "baseline_policy_not_published"
+    if holding_vote_policy_path(DATA_DIR, target_date).exists():
+        try:
+            vote_policy_bundle = load_holding_vote_bundle(DATA_DIR, target_date)
+            verify_holding_vote_source_handoff(DATA_DIR, vote_policy_bundle)
+            vote_policies = {
+                (path, market): vote_policy_bundle["cells"][f"{path}|{market}"]["policy"]
+                for path, market in PATH_POLICY_BY_MARKET
+            }
+            vote_policy_bundle_sha = vote_policy_bundle["bundle_sha256"]
+            vote_policy_status = "estimated_provisional_verified"
+        except (OSError, ValueError, TypeError, KeyError):
+            vote_policy_status = "policy_binding_gap"
+    profit_semantics = audit_profit_exit_flow(
+        events, target_date=target_date,
+        load_votes=lambda position_key: load_path_events_file(
+            path_vote_store_path(DATA_DIR, position_key), position_key,
+        ),
+        observation=observation, policies=vote_policies,
+        policy_bundle_sha256=vote_policy_bundle_sha,
+    )
+    profit_semantics["policy_status"] = vote_policy_status
+    profit_semantics["policy_bundle_sha256"] = vote_policy_bundle_sha
+    if vote_policy_status == "policy_binding_gap":
+        profit_semantics["status"] = "policy_binding_gap"
     global_classification = _classify(
         session_summary, baseline_summary, obs_metrics, as_of=as_of
     )
@@ -1302,6 +1350,7 @@ def build_holding_exit_sentinel_report(
             "metrics": obs_metrics,
             "decision_authority": "cross_venue_observation_diagnostic_only",
         },
+        "profit_exit_semantics": profit_semantics,
         "classification": classification,
         "followup": followup,
         "recommended_actions": _recommend_actions(classification),
@@ -1361,6 +1410,11 @@ def build_markdown(report: dict[str, Any]) -> str:
         f"- score50 raw-non50 neutralized: `{session.get('holding_score_raw_non50_neutralized_events', 0)}`",
         f"- soft_stop rebound above sell 10m: `{obs.get('soft_stop_rebound_above_sell_10m_rate', 0.0)}%`",
         f"- trailing missed-upside: `{obs.get('trailing_missed_upside_rate', 0.0)}%`",
+        f"- profit exit semantics: `{(report.get('profit_exit_semantics') or {}).get('status', 'not_assessed')}`",
+        f"- profit exit policy: `{(report.get('profit_exit_semantics') or {}).get('policy_status', 'not_assessed')}`",
+        f"- profit exit signal/submit/complete: `{(report.get('profit_exit_semantics') or {}).get('funnel', {}).get('tp_signal_snapshots', 0)}` / "
+        f"`{(report.get('profit_exit_semantics') or {}).get('funnel', {}).get('tp_sell_submitted', 0)}` / "
+        f"`{(report.get('profit_exit_semantics') or {}).get('funnel', {}).get('tp_sell_completed', 0)}`",
         f"- top reasons: `{_format_top(session['reason_top'])}`",
         "",
         "## 금지된 자동변경",

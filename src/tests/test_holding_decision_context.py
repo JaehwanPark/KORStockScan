@@ -1840,6 +1840,15 @@ def test_hard_and_protect_exit_candidates_prohibit_holding_context_work(
         opening_rotation_active=False,
         is_sell_signal=False,
         exit_requested=False,
+        profit_rate=-1.5,
+        trailing_stop_price=0,
+        current_price=9850,
+    )
+    assert state_handlers._holding_context_prohibited_exit_candidate(
+        strategy="SCALPING",
+        opening_rotation_active=False,
+        is_sell_signal=False,
+        exit_requested=False,
         profit_rate=0.2,
         trailing_stop_price=10_000,
         current_price=9_990,

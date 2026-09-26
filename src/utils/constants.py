@@ -524,14 +524,6 @@ class TradingConfig:
     SCALP_LOW_PROFIT_STAGNATION_MAX_ADJUSTED_PROFIT_PCT: float = 1.00
     SCALP_LOW_PROFIT_STAGNATION_MIN_HOLD_SEC: int = 1800
     SCALP_LOW_PROFIT_STAGNATION_ASSUMED_EXIT_SLIPPAGE_BPS: float = 15.0
-    SCALP_MFE_PROTECT_EXIT_ENABLED: bool = (
-        True  # real SCALPING positive-MFE giveback protection
-    )
-    SCALP_MFE_PROTECT_MIN_PEAK_PCT: float = 0.60
-    SCALP_MFE_PROTECT_TRIGGER_PROFIT_PCT: float = 0.10
-    SCALP_MFE_PROTECT_MIN_GIVEBACK_PCT: float = 0.55
-    SCALP_MFE_PROTECT_MIN_HOLD_SEC: int = 30
-    SCALP_MFE_PROTECT_MAX_AI_SCORE: int = 74
     SCALP_LATE_LOSS_AVG_DOWN_ENABLED: bool = (
         True  # real SCALPING final loss-sell intercept
     )
@@ -947,7 +939,7 @@ class TradingConfig:
     SCALP_PARTIAL_ONLY_TIMEOUT_SHADOW_MAX_PEAK_PCT: float = (
         0.20  # historical/replay 전용 기준
     )
-    SCALP_TRAILING_START_PCT: float = 0.6  # 초단타 트레일링 시작 수익률
+    SCALP_TRAILING_START_PCT: float = 0.4  # 고점의 비용 후 순수익 트레일링 시작률
     MIN_SCALP_LIQUIDITY: int = 500_000_000  # 최소 호가 잔량 대금 (5억)
     MAX_SCALP_SURGE_PCT: float = 20.0  # 초단타 진입 금지 급등률 (20%)
     MAX_INTRADAY_SURGE: float = 16.0  # 당일 시가 대비 최대 급등률 (1차 완화: 16%)
@@ -958,10 +950,10 @@ class TradingConfig:
     SCALP_TRAILING_STRONG_AI_SCORE: int = (
         75  # 보유 score가 이 값 이상이고 fresh/usable일 때 strong trailing 적용
     )
-    SCALP_TRAILING_LIMIT_STRONG = (
+    SCALP_TRAILING_LIMIT_STRONG: float = (
         0.8  # 💡 [신규] strong holding score일 때 허용하는 고점 대비 눌림폭 (%)
     )
-    SCALP_TRAILING_LIMIT_WEAK = 0.4  # 💡 [신규] strong holding score가 아니면 타이트하게 끊어내는 고점 대비 눌림폭 (%)
+    SCALP_TRAILING_LIMIT_WEAK: float = 0.4  # 💡 [신규] strong holding score가 아니면 타이트하게 끊어내는 고점 대비 눌림폭 (%)
     SCALP_PROTECT_TRAILING_SMOOTH_ENABLED: bool = (
         True  # 보호 트레일링은 단일 tick 대신 평탄화 이탈 확인
     )
@@ -1243,6 +1235,8 @@ class TradingConfig:
         7000  # holding_score_v2 position-state score timeout
     )
     OPENAI_HOLDING_SCORE_MODEL: str = "gpt-5.4-nano"
+    OPENAI_HOLDING_EXIT_VOTE_MODEL: str = "gpt-5.4-nano"
+    OPENAI_HOLDING_EXIT_VOTE_TIMEOUT_MS: int = 7000
     OPENAI_HOLDING_FLOW_TIMEOUT_MS: int = (
         15000  # holding_flow OpenAI primary plus Bedrock fallback total deadline
     )
@@ -2885,16 +2879,6 @@ def _build_trading_rules() -> TradingConfig:
     env_low_profit_stagnation_slippage_bps = _env_float(
         "KORSTOCKSCAN_SCALP_LOW_PROFIT_STAGNATION_ASSUMED_EXIT_SLIPPAGE_BPS"
     )
-    env_mfe_protect_enabled = _env_bool("KORSTOCKSCAN_SCALP_MFE_PROTECT_EXIT_ENABLED")
-    env_mfe_protect_min_peak = _env_float("KORSTOCKSCAN_SCALP_MFE_PROTECT_MIN_PEAK_PCT")
-    env_mfe_protect_trigger_profit = _env_float(
-        "KORSTOCKSCAN_SCALP_MFE_PROTECT_TRIGGER_PROFIT_PCT"
-    )
-    env_mfe_protect_min_giveback = _env_float(
-        "KORSTOCKSCAN_SCALP_MFE_PROTECT_MIN_GIVEBACK_PCT"
-    )
-    env_mfe_protect_min_hold = _env_int("KORSTOCKSCAN_SCALP_MFE_PROTECT_MIN_HOLD_SEC")
-    env_mfe_protect_max_ai = _env_int("KORSTOCKSCAN_SCALP_MFE_PROTECT_MAX_AI_SCORE")
     env_late_loss_avg_down_enabled = _env_bool(
         "KORSTOCKSCAN_SCALP_LATE_LOSS_AVG_DOWN_ENABLED"
     )
@@ -3171,12 +3155,6 @@ def _build_trading_rules() -> TradingConfig:
         or env_low_profit_stagnation_max_adjusted_profit is not None
         or env_low_profit_stagnation_min_hold is not None
         or env_low_profit_stagnation_slippage_bps is not None
-        or env_mfe_protect_enabled is not None
-        or env_mfe_protect_min_peak is not None
-        or env_mfe_protect_trigger_profit is not None
-        or env_mfe_protect_min_giveback is not None
-        or env_mfe_protect_min_hold is not None
-        or env_mfe_protect_max_ai is not None
         or env_late_loss_avg_down_enabled is not None
         or env_late_loss_avg_down_min_peak is not None
         or env_late_loss_avg_down_min_giveback is not None
@@ -4297,36 +4275,6 @@ def _build_trading_rules() -> TradingConfig:
                 env_low_profit_stagnation_slippage_bps
                 if env_low_profit_stagnation_slippage_bps is not None
                 else config.SCALP_LOW_PROFIT_STAGNATION_ASSUMED_EXIT_SLIPPAGE_BPS
-            ),
-            SCALP_MFE_PROTECT_EXIT_ENABLED=(
-                env_mfe_protect_enabled
-                if env_mfe_protect_enabled is not None
-                else config.SCALP_MFE_PROTECT_EXIT_ENABLED
-            ),
-            SCALP_MFE_PROTECT_MIN_PEAK_PCT=(
-                env_mfe_protect_min_peak
-                if env_mfe_protect_min_peak is not None
-                else config.SCALP_MFE_PROTECT_MIN_PEAK_PCT
-            ),
-            SCALP_MFE_PROTECT_TRIGGER_PROFIT_PCT=(
-                env_mfe_protect_trigger_profit
-                if env_mfe_protect_trigger_profit is not None
-                else config.SCALP_MFE_PROTECT_TRIGGER_PROFIT_PCT
-            ),
-            SCALP_MFE_PROTECT_MIN_GIVEBACK_PCT=(
-                env_mfe_protect_min_giveback
-                if env_mfe_protect_min_giveback is not None
-                else config.SCALP_MFE_PROTECT_MIN_GIVEBACK_PCT
-            ),
-            SCALP_MFE_PROTECT_MIN_HOLD_SEC=(
-                env_mfe_protect_min_hold
-                if env_mfe_protect_min_hold is not None
-                else config.SCALP_MFE_PROTECT_MIN_HOLD_SEC
-            ),
-            SCALP_MFE_PROTECT_MAX_AI_SCORE=(
-                env_mfe_protect_max_ai
-                if env_mfe_protect_max_ai is not None
-                else config.SCALP_MFE_PROTECT_MAX_AI_SCORE
             ),
             SCALP_LATE_LOSS_AVG_DOWN_ENABLED=(
                 env_late_loss_avg_down_enabled
@@ -5799,6 +5747,9 @@ def _build_trading_rules() -> TradingConfig:
         "KORSTOCKSCAN_OPENAI_HOLDING_SCORE_TIMEOUT_MS"
     )
     env_openai_holding_score_model = _env_str("KORSTOCKSCAN_OPENAI_HOLDING_SCORE_MODEL")
+    env_openai_holding_exit_vote_timeout_ms = _env_int(
+        "KORSTOCKSCAN_OPENAI_HOLDING_EXIT_VOTE_TIMEOUT_MS"
+    )
     env_openai_holding_flow_timeout_ms = _env_int(
         "KORSTOCKSCAN_OPENAI_HOLDING_FLOW_TIMEOUT_MS"
     )
@@ -5876,6 +5827,7 @@ def _build_trading_rules() -> TradingConfig:
         or env_openai_entry_price_timeout_ms is not None
         or env_openai_holding_score_timeout_ms is not None
         or env_openai_holding_score_model is not None
+        or env_openai_holding_exit_vote_timeout_ms is not None
         or env_openai_holding_flow_timeout_ms is not None
         or env_openai_holding_flow_model is not None
         or env_openai_primary_bedrock_fallback_endpoints is not None
@@ -5967,6 +5919,11 @@ def _build_trading_rules() -> TradingConfig:
                 env_openai_holding_score_model
                 if env_openai_holding_score_model is not None
                 else config.OPENAI_HOLDING_SCORE_MODEL
+            ),
+            OPENAI_HOLDING_EXIT_VOTE_TIMEOUT_MS=(
+                env_openai_holding_exit_vote_timeout_ms
+                if env_openai_holding_exit_vote_timeout_ms is not None
+                else config.OPENAI_HOLDING_EXIT_VOTE_TIMEOUT_MS
             ),
             OPENAI_HOLDING_FLOW_TIMEOUT_MS=(
                 env_openai_holding_flow_timeout_ms

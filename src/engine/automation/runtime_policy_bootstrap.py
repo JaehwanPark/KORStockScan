@@ -19,16 +19,27 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from src.engine.automation import operator_policy_succession
+from src.engine.ai.holding_exit_vote import path_policy_baseline_receipt
+from src.engine.scalping.holding_path_vote_policy import (
+    ENV_DATE as HOLDING_VOTE_ENV_DATE,
+    ENV_PATH as HOLDING_VOTE_ENV_PATH,
+    ENV_SHA as HOLDING_VOTE_ENV_SHA,
+    load_bundle as load_holding_vote_bundle,
+    policy_path as holding_vote_policy_path,
+    verify_source_handoff as verify_holding_vote_source_handoff,
+)
 from src.engine.lifecycle.retirement import (
     RETIRED_FAMILIES,
     retirement_env,
     without_retired_env,
 )
-from src.engine.scalping.trailing_threshold_policy import (
+from src.engine.scalping.trailing_mechanical_policy import (
+    CLASSIFIER_ENV_KEY as SCALP_TRAILING_CLASSIFIER_ENV_KEY,
+    CLASSIFIER_MARKET_ENV_KEYS as SCALP_TRAILING_CLASSIFIER_MARKET_ENV_KEYS,
     MARKET_ENV_KEYS as SCALP_TRAILING_MARKET_ENV_KEYS,
-    MARKET_VECTOR_SHA_ENV_KEY as SCALP_TRAILING_MARKET_VECTOR_SHA_ENV_KEY,
-    THRESHOLD_KEYS as SCALP_TRAILING_THRESHOLD_KEYS,
-    bootstrap_receipt as scalp_trailing_bootstrap_receipt,
+    TP_KEYS as SCALP_TRAILING_THRESHOLD_KEYS,
+    VECTOR_SHA_ENV_KEY as SCALP_TRAILING_MARKET_VECTOR_SHA_ENV_KEY,
+    baseline_receipt as scalp_trailing_bootstrap_receipt,
     selected_policy_env as scalp_trailing_selected_policy_env,
 )
 from src.utils.constants import DATA_DIR
@@ -52,6 +63,43 @@ PRE_SUBMIT_DELAY_ENV_KEYS = (
     "KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_FILE",
     "KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ACTIVE_DATE",
 )
+HOLDING_VOTE_ENV_KEYS = (HOLDING_VOTE_ENV_PATH, HOLDING_VOTE_ENV_SHA,
+                         HOLDING_VOTE_ENV_DATE)
+
+
+def _holding_vote_handoff(target_date: str) -> tuple[dict[str, str], dict[str, Any]]:
+    """Bind the exact target-date bundle to its postclose report bytes."""
+    policy_file = holding_vote_policy_path(DATA_DIR, target_date)
+    receipt: dict[str, Any] = {
+        "status": "baseline_policy_not_published", "target_date": target_date,
+        "path": str(policy_file), "allowed_runtime_apply": False,
+    }
+    if not policy_file.exists():
+        return {}, receipt
+    try:
+        bundle = load_holding_vote_bundle(DATA_DIR, target_date)
+        source_date = bundle["source_date"]
+        verify_holding_vote_source_handoff(DATA_DIR, bundle)
+    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+        receipt["status"] = "baseline_policy_rejected"
+        receipt["reason"] = str(exc)
+        return {}, receipt
+    receipt.update({
+        "status": "estimated_provisional_verified",
+        "source_date": source_date,
+        "source_report_sha256": bundle["source_report_sha256"],
+        "bundle_sha256": bundle["bundle_sha256"],
+        "policy_set_sha256": bundle["policy_set_sha256"],
+        "cell_count": len(bundle["cells"]),
+        "evidence_grade": bundle["evidence_grade"],
+        "realized_paired_ev_krw": None,
+        "allowed_runtime_apply": True,
+    })
+    return {
+        HOLDING_VOTE_ENV_PATH: str(policy_file),
+        HOLDING_VOTE_ENV_SHA: bundle["bundle_sha256"],
+        HOLDING_VOTE_ENV_DATE: target_date,
+    }, receipt
 
 
 def _pre_submit_delay_handoff(target_date: str) -> tuple[dict[str, str], dict[str, Any]]:
@@ -536,8 +584,13 @@ def _direct_runtime_env(
 ) -> tuple[dict[str, str], str | None]:
     raw = payload.get("runtime_env_overrides")
     if family == "scalp_trailing_four_axis_selector":
+        return {}, "legacy_ai_tp_policy_retired"
+    if family == "scalp_trailing_mechanical_three_axis_selector":
         if not isinstance(raw, dict) or set(raw) != {
             env_key for markets in SCALP_TRAILING_MARKET_ENV_KEYS.values()
+            for env_key in markets.values()
+        } | {
+            env_key for markets in SCALP_TRAILING_CLASSIFIER_MARKET_ENV_KEYS.values()
             for env_key in markets.values()
         }:
             return {}, "scalp_trailing_market_env_keys_invalid"
@@ -650,7 +703,7 @@ def _load_direct_receipts(
                 source_binding_error = validate_rising_missed_policy_receipt(
                     payload, source_report, target_date
                 )
-        if family == "scalp_trailing_four_axis_selector" and runtime_env_error is None:
+        if family == "scalp_trailing_mechanical_three_axis_selector" and runtime_env_error is None:
             source_date = str(payload.get("source_date") or "")
             try:
                 if date.fromisoformat(source_date).isoformat() != source_date:
@@ -661,6 +714,18 @@ def _load_direct_receipts(
                     raise ValueError("source_report_exceeds_read_limit")
                 source_bytes = source_path.read_bytes()
                 source_report = json.loads(source_bytes)
+                manifest_path = (DATA_DIR / "report" / "monitor_snapshots" / "manifests"
+                                 / f"monitor_snapshot_manifest_{source_date}_postclose_exit.json")
+                manifest_bytes = manifest_path.read_bytes()
+                source_manifest = json.loads(manifest_bytes)
+                if (source_manifest.get("profile") != "postclose_exit"
+                        or source_manifest.get("target_date") != source_date
+                        or source_manifest.get("snapshot_sha256", {}).get(
+                            "holding_exit_observation") != _digest_bytes(source_bytes)
+                        or Path(source_manifest.get("snapshot_paths", {}).get(
+                            "holding_exit_observation", "")).resolve() != source_path.resolve()
+                        or payload.get("source_manifest_sha256") != _digest_bytes(manifest_bytes)):
+                    raise ValueError("postclose_exit_manifest_binding_invalid")
                 expected_env = scalp_trailing_selected_policy_env(
                     payload, source_report, target_date=target_date,
                     report_sha256=_digest_bytes(source_bytes),
@@ -752,6 +817,10 @@ def build_manifest(
     direct_receipts, rejected_receipts = _load_direct_receipts(
         target_date, receipt_paths
     )
+    if any(row.get("family") == "scalp_trailing_mechanical_three_axis_selector"
+           and row.get("allowed_runtime_apply") is True
+           for row in rejected_receipts):
+        raise ValueError("selected_scalp_trailing_policy_invalid_fail_closed")
     delay_env, delay_handoff = _pre_submit_delay_handoff(target_date)
     locks, invalid_locks = _load_locks(target_date)
     applied_locks: list[dict[str, Any]] = []
@@ -764,9 +833,30 @@ def build_manifest(
         if key not in operator_values:
             env_owners[key] = "runtime_policy_bootstrap_exact_date_handoff"
     env_owners.update({key: "operator_runtime_override" for key in operator_values})
+    incumbent_trailing = incumbent.get("scalp_trailing_mechanical_policy_receipt") or {}
+    prior_selected_trailing = (
+        incumbent_trailing.get("source") == "reviewed_selected_candidate"
+        and isinstance(incumbent_trailing.get("market_values_sha256"), str)
+    )
+    # The 2026-09-25 operator direction supersedes the inherited 0.6% baseline.
+    # A later reviewed selector may replace it through an exact rollback parent.
+    start_keys = (
+        "KORSTOCKSCAN_SCALP_TRAILING_START_PCT",
+        *(SCALP_TRAILING_MARKET_ENV_KEYS["SCALP_TRAILING_START_PCT"].values()),
+    )
+    start_directive_active = target_date >= "2026-09-25" and not prior_selected_trailing
+    if start_directive_active:
+        for key in start_keys:
+            values[key] = "0.4"
+            env_owners[key] = "operator_directed_2026_09_25"
     accepted_direct_receipts = []
     for receipt in direct_receipts:
-        if receipt["family"] == "scalp_trailing_four_axis_selector":
+        if receipt["family"] in {
+            "nxt_rising_missed_tp1_partial_runner", "scalp_mfe_protect_exit"
+        }:
+            rejected_receipts.append({**receipt, "reason": "exit_owner_retired"})
+            continue
+        if receipt["family"] == "scalp_trailing_mechanical_three_axis_selector":
             if any(row["family"] == receipt["family"] for row in accepted_direct_receipts):
                 rejected_receipts.append({**receipt, "reason": "multiple_same_stage_candidates"})
                 continue
@@ -774,12 +864,14 @@ def build_manifest(
             operator_conflicts = sorted(
                 key for key, value in selected_env.items()
                 if key in operator_values and operator_values[key] != value
+                and not (start_directive_active and key in start_keys)
             )
             lock_conflicts = sorted({
                 key for lock in locks
                 if operator_policy_succession.classify(lock) != "inactive_archive"
                 for key, value in operator_policy_succession.lock_values(lock).items()
                 if key in selected_env and str(value) != selected_env[key]
+                and not (start_directive_active and key in start_keys)
             })
             if operator_conflicts or lock_conflicts:
                 rejected_receipts.append({
@@ -787,7 +879,19 @@ def build_manifest(
                     "env_keys": sorted(set(operator_conflicts + lock_conflicts)),
                 })
                 continue
-            parent = scalp_trailing_bootstrap_receipt(values, env_owners)[
+            parent_values = {
+                key: value for key, value in values.items()
+                if key not in {
+                    f"KORSTOCKSCAN_SCALP_TRAILING_STRONG_AI_SCORE_{market}"
+                    for market in ("PREMARKET", "REGULAR", "INTEGRATED_AFTERMARKET")
+                } and key not in {
+                    "KORSTOCKSCAN_SCALP_TRAILING_MARKET_VECTOR_SHA256",
+                    "KORSTOCKSCAN_SCALP_TRAILING_VALUE_SHA256",
+                    "KORSTOCKSCAN_SCALP_TRAILING_START_BY_MARKET_SHA256",
+                    SCALP_TRAILING_MARKET_VECTOR_SHA_ENV_KEY,
+                }
+            }
+            parent = scalp_trailing_bootstrap_receipt(parent_values, source="rollback_incumbent")[
                 "market_values_sha256"
             ]
             try:
@@ -796,8 +900,22 @@ def build_manifest(
                 rejected_receipts.append({**receipt, "reason": "selected_receipt_unreadable"})
                 continue
             if policy.get("rollback_market_values_sha256") != parent:
-                rejected_receipts.append({**receipt, "reason": "rollback_parent_hash_mismatch"})
-                continue
+                raise ValueError("selected_scalp_trailing_rollback_parent_hash_mismatch")
+            candidate_receipt = scalp_trailing_bootstrap_receipt(
+                {**parent_values, **selected_env}, source="reviewed_selected_candidate"
+            )
+            parent_receipt = scalp_trailing_bootstrap_receipt(
+                parent_values, source="rollback_incumbent"
+            )
+            changed_markets = [
+                market for market in candidate_receipt["market_values"]
+                if (candidate_receipt["market_values"][market]
+                    != parent_receipt["market_values"][market]
+                    or candidate_receipt["classifier_parameters"][market]
+                    != parent_receipt["classifier_parameters"][market])
+            ]
+            if len(changed_markets) != 1 or policy.get("changed_market") != changed_markets[0]:
+                raise ValueError("selected_scalp_trailing_one_market_canary_invalid")
         for key, value in receipt.get("runtime_env_overrides", {}).items():
             values[key] = str(value)
             env_owners[key] = f"direct_policy:{receipt['family']}"
@@ -819,6 +937,25 @@ def build_manifest(
             rejected_locks.append({**row, "reason": "inactive_archive"})
             continue
         lock_env = without_retired_env(operator_policy_succession.lock_values(lock))
+        superseded_start_keys = (
+            sorted(set(lock_env).intersection(start_keys))
+            if start_directive_active else []
+        )
+        for key in superseded_start_keys:
+            lock_env.pop(key, None)
+        if superseded_start_keys and not lock_env:
+            rejected_locks.append({
+                **row, "reason": "superseded_start_0p4_directive",
+                "env_keys": superseded_start_keys,
+            })
+            continue
+        legacy_tp_score_keys = {
+            f"KORSTOCKSCAN_SCALP_TRAILING_STRONG_AI_SCORE_{market}"
+            for market in ("PREMARKET", "REGULAR", "INTEGRATED_AFTERMARKET")
+        }
+        if legacy_tp_score_keys.intersection(lock_env):
+            rejected_locks.append({**row, "reason": "legacy_ai_tp_market_override_retired"})
+            continue
         conflicts = sorted(
             key
             for key, value in lock_env.items()
@@ -834,7 +971,10 @@ def build_manifest(
         for key, value in lock_env.items():
             values[key] = str(value)
             env_owners[key] = f"operator_lock:{lock.get('lock_id') or lock.get('family')}"
-        applied_locks.append({**row, "env_keys": sorted(lock_env)})
+        applied_locks.append({
+            **row, "env_keys": sorted(lock_env),
+            "superseded_env_keys": superseded_start_keys,
+        })
     # Retired exit deferrals must not return through operator or direct receipts.
     retired_keys = set(values) - set(without_retired_env(values))
     values = without_retired_env(values)
@@ -842,39 +982,92 @@ def build_manifest(
     off_values = retirement_env()
     values.update(off_values)
     env_owners.update({key: "explicit_retirement_off" for key in off_values})
-    trailing_receipt = scalp_trailing_bootstrap_receipt(values, env_owners)
+    if any(f"KORSTOCKSCAN_SCALP_TRAILING_STRONG_AI_SCORE_{market}" in operator_values
+           for market in ("PREMARKET", "REGULAR", "INTEGRATED_AFTERMARKET")):
+        raise ValueError("operator_legacy_ai_tp_market_override_requires_removal")
+    for market in ("PREMARKET", "REGULAR", "INTEGRATED_AFTERMARKET"):
+        legacy_score = f"KORSTOCKSCAN_SCALP_TRAILING_STRONG_AI_SCORE_{market}"
+        values.pop(legacy_score, None)
+        env_owners.pop(legacy_score, None)
+    for legacy_hash in (
+        "KORSTOCKSCAN_SCALP_TRAILING_MARKET_VECTOR_SHA256",
+        "KORSTOCKSCAN_SCALP_TRAILING_VALUE_SHA256",
+        "KORSTOCKSCAN_SCALP_TRAILING_START_BY_MARKET_SHA256",
+        SCALP_TRAILING_MARKET_VECTOR_SHA_ENV_KEY,
+    ):
+        values.pop(legacy_hash, None)
+        env_owners.pop(legacy_hash, None)
+    selected_direct = next((
+        row for row in direct_receipts
+        if row["family"] == "scalp_trailing_mechanical_three_axis_selector"
+    ), None)
+    current_trailing_hash = scalp_trailing_bootstrap_receipt(
+        values, source="rollback_incumbent"
+    )["market_values_sha256"]
+    carried_selection = bool(
+        not selected_direct and prior_selected_trailing
+        and current_trailing_hash == incumbent_trailing["market_values_sha256"]
+    )
+    trailing_source = (
+        "reviewed_selected_candidate"
+        if selected_direct or carried_selection
+        else "operator_directed_m1_baseline"
+    )
+    if start_directive_active and trailing_source == "operator_directed_m1_baseline":
+        for key in start_keys:
+            values[key] = "0.4"
+            env_owners[key] = "operator_directed_2026_09_25"
+    trailing_receipt = scalp_trailing_bootstrap_receipt(values, source=trailing_source)
+    trailing_selection_lineage = (
+        {"origin_target_date": target_date,
+         "origin_receipt": selected_direct["source_receipt"],
+         "market_values_sha256": trailing_receipt["market_values_sha256"],
+         "status": "newly_selected"}
+        if selected_direct else
+        {**(incumbent.get("scalp_trailing_selection_lineage") or {}),
+         "market_values_sha256": trailing_receipt["market_values_sha256"],
+         "status": "carried_selected"}
+        if carried_selection else None
+    )
     for key in SCALP_TRAILING_THRESHOLD_KEYS:
         env_key = f"KORSTOCKSCAN_{key}"
         if env_key not in values:
-            values[env_key] = str(trailing_receipt["values"][key])
+            values[env_key] = str(trailing_receipt["scalar_values"][key])
             env_owners[env_key] = "code_default"
     for threshold, markets in SCALP_TRAILING_MARKET_ENV_KEYS.items():
         for market, env_key in markets.items():
             if env_key not in values:
                 values[env_key] = str(trailing_receipt["market_values"][market][threshold])
-                env_owners[env_key] = trailing_receipt["market_value_sources"][market][threshold]
-    values["KORSTOCKSCAN_SCALP_TRAILING_VALUE_SHA256"] = trailing_receipt[
-        "value_sha256"
-    ]
-    env_owners["KORSTOCKSCAN_SCALP_TRAILING_VALUE_SHA256"] = (
-        "scalp_trailing_threshold_receipt"
-    )
-    values["KORSTOCKSCAN_SCALP_TRAILING_START_BY_MARKET_SHA256"] = (
-        trailing_receipt["start_by_market_sha256"]
-    )
-    env_owners["KORSTOCKSCAN_SCALP_TRAILING_START_BY_MARKET_SHA256"] = (
-        "scalp_trailing_threshold_receipt"
-    )
+                env_owners[env_key] = env_owners.get(
+                    f"KORSTOCKSCAN_{threshold}", "code_default"
+                )
+    for axis, markets in SCALP_TRAILING_CLASSIFIER_MARKET_ENV_KEYS.items():
+        for market, env_key in markets.items():
+            if env_key not in values:
+                values[env_key] = str(trailing_receipt["classifier_parameters"][market][axis])
+                env_owners[env_key] = "scalp_trailing_mechanical_policy_receipt"
+    values[SCALP_TRAILING_CLASSIFIER_ENV_KEY] = trailing_receipt["classifier_version"]
+    env_owners[SCALP_TRAILING_CLASSIFIER_ENV_KEY] = "scalp_trailing_mechanical_policy_receipt"
     values[SCALP_TRAILING_MARKET_VECTOR_SHA_ENV_KEY] = trailing_receipt[
         "market_values_sha256"
     ]
     env_owners[SCALP_TRAILING_MARKET_VECTOR_SHA_ENV_KEY] = (
-        "scalp_trailing_threshold_receipt"
+        "scalp_trailing_mechanical_policy_receipt"
     )
+    for key in HOLDING_VOTE_ENV_KEYS:
+        values.pop(key, None)
+        env_owners.pop(key, None)
+    holding_vote_env, holding_vote_receipt = _holding_vote_handoff(target_date)
+    values.update(holding_vote_env)
+    env_owners.update({key: "holding_path_vote_policy" for key in holding_vote_env})
     selected_families = sorted(
         str(item)
         for item in incumbent.get("selected_families") or []
         if str(item) not in RETIRED_FAMILIES
+        and str(item) not in {
+            "nxt_rising_missed_tp1_partial_runner", "scalp_mfe_protect_exit"
+        }
+        and str(item) != "scalp_trailing_four_axis_selector"
     )
     return {
         "schema_version": SCHEMA_VERSION,
@@ -918,7 +1111,10 @@ def build_manifest(
         "pre_submit_delay_handoff": delay_handoff,
         "direct_family_receipts_rejected": rejected_receipts,
         "env_key_owners": env_owners,
-        "scalp_trailing_threshold_receipt": trailing_receipt,
+        "scalp_trailing_mechanical_policy_receipt": trailing_receipt,
+        "scalp_trailing_selection_lineage": trailing_selection_lineage,
+        "holding_path_vote_baseline_receipt": path_policy_baseline_receipt(),
+        "holding_path_vote_policy_receipt": holding_vote_receipt,
         "env_overrides": dict(sorted(values.items())),
         "retired_key_scrubbed": sorted(
             retired_keys | (set(incumbent_values) - set(without_retired_env(incumbent_values)))
@@ -1013,9 +1209,18 @@ def verify_bootstrap(target_date: str, *, pid: int | None = None, write: bool = 
     if not isinstance(manifest_env, dict):
         findings.append("manifest_env_overrides_invalid")
         manifest_env = {}
-    trailing_receipt = manifest.get("scalp_trailing_threshold_receipt")
+    trailing_receipt = manifest.get("scalp_trailing_mechanical_policy_receipt")
+    if manifest.get("holding_path_vote_baseline_receipt") != path_policy_baseline_receipt():
+        findings.append("holding_path_vote_baseline_receipt_mismatch")
+    expected_vote_env, expected_vote_receipt = _holding_vote_handoff(target_date)
+    if manifest.get("holding_path_vote_policy_receipt") != expected_vote_receipt:
+        findings.append("holding_path_vote_policy_receipt_mismatch")
+    if any(manifest_env.get(key) != value for key, value in expected_vote_env.items()):
+        findings.append("holding_path_vote_policy_env_mismatch")
+    if not expected_vote_env and any(key in manifest_env for key in HOLDING_VOTE_ENV_KEYS):
+        findings.append("holding_path_vote_policy_stale_env")
     if trailing_receipt is None:
-        findings.append("scalp_trailing_threshold_receipt_missing")
+        findings.append("scalp_trailing_mechanical_policy_receipt_missing")
     else:
         owners = manifest.get("env_key_owners")
         trailing_keys = [f"KORSTOCKSCAN_{key}" for key in SCALP_TRAILING_THRESHOLD_KEYS]
@@ -1023,27 +1228,39 @@ def verify_bootstrap(target_date: str, *, pid: int | None = None, write: bool = 
             env_key for markets in SCALP_TRAILING_MARKET_ENV_KEYS.values()
             for env_key in markets.values()
         )
+        trailing_keys.extend(
+            env_key for markets in SCALP_TRAILING_CLASSIFIER_MARKET_ENV_KEYS.values()
+            for env_key in markets.values()
+        )
+        trailing_keys.extend((SCALP_TRAILING_CLASSIFIER_ENV_KEY,
+                              SCALP_TRAILING_MARKET_VECTOR_SHA_ENV_KEY))
         if (
             not isinstance(owners, dict)
             or any(key not in manifest_env or not owners.get(key) for key in trailing_keys)
         ):
-            findings.append("scalp_trailing_threshold_env_or_owner_missing")
+            findings.append("scalp_trailing_mechanical_env_or_owner_missing")
             owners = {}
         try:
-            expected_trailing = scalp_trailing_bootstrap_receipt(
-                manifest_env, owners
+            source = (
+                "reviewed_selected_candidate"
+                if any(isinstance(row, dict) and row.get("family")
+                       == "scalp_trailing_mechanical_three_axis_selector"
+                       for row in manifest.get("direct_family_receipts") or [])
+                else "operator_directed_m1_baseline"
             )
+            expected_trailing = scalp_trailing_bootstrap_receipt(manifest_env, source=source)
         except (KeyError, TypeError, ValueError):
-            findings.append("scalp_trailing_threshold_receipt_invalid")
+            findings.append("scalp_trailing_mechanical_policy_receipt_invalid")
         else:
             if trailing_receipt != expected_trailing or manifest_env.get(
-                "KORSTOCKSCAN_SCALP_TRAILING_VALUE_SHA256"
-            ) != expected_trailing["value_sha256"] or manifest_env.get(
-                "KORSTOCKSCAN_SCALP_TRAILING_START_BY_MARKET_SHA256"
-            ) != expected_trailing["start_by_market_sha256"] or manifest_env.get(
                 SCALP_TRAILING_MARKET_VECTOR_SHA_ENV_KEY
-            ) != expected_trailing["market_values_sha256"]:
-                findings.append("scalp_trailing_threshold_receipt_mismatch")
+            ) != expected_trailing["market_values_sha256"] or manifest_env.get(
+                SCALP_TRAILING_CLASSIFIER_ENV_KEY
+            ) != expected_trailing["classifier_version"]:
+                findings.append("scalp_trailing_mechanical_policy_receipt_mismatch")
+        if any(f"KORSTOCKSCAN_SCALP_TRAILING_STRONG_AI_SCORE_{market}" in manifest_env
+               for market in ("PREMARKET", "REGULAR", "INTEGRATED_AFTERMARKET")):
+            findings.append("legacy_ai_tp_market_override_present")
     if target_date >= "2026-09-23":
         current_delay_env, current_delay_handoff = _pre_submit_delay_handoff(target_date)
         if manifest.get("pre_submit_delay_handoff") != current_delay_handoff:
@@ -1092,7 +1309,7 @@ def verify_bootstrap(target_date: str, *, pid: int | None = None, write: bool = 
             findings.append(f"source_receipt_hash_mismatch:{source_path}")
     for row in manifest.get("direct_family_receipts") or []:
         if not isinstance(row, dict) or row.get("family") not in {
-            "rising_missed_tp1_selector", "scalp_trailing_four_axis_selector"
+            "rising_missed_tp1_selector", "scalp_trailing_mechanical_three_axis_selector"
         }:
             continue
         receipt = row.get("source_receipt") or {}
@@ -1134,6 +1351,7 @@ def verify_bootstrap(target_date: str, *, pid: int | None = None, write: bool = 
         "passed": passed,
         "findings": findings,
         "manifest_file": str(manifest_file),
+        "manifest_sha256": manifest.get("manifest_sha256"),
         "env_file": str(runtime_file),
         "pid": pid,
         "pid_passed": passed if pid is not None else None,

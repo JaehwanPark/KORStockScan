@@ -15,6 +15,7 @@ import time
 import math
 import threading
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar
 from dataclasses import replace as dataclass_replace
 from datetime import (
@@ -354,6 +355,22 @@ from src.engine.scalping.scale_in_split_order_plan import (
 from src.trading.order.split_execution_math import scale_in_leg_ttl_seconds
 from src.engine.scalping.position_peak_ledger import POSITION_PEAK_LEDGER
 from src.engine.scalping.trailing_exit_decision import evaluate_trailing_take_profit
+from src.engine.scalping.trailing_mechanical_policy import (
+    CLASSIFIER_ENV_KEY as SCALP_TRAILING_CLASSIFIER_ENV_KEY,
+    classifier_hash as scalp_trailing_classifier_hash,
+    runtime_policy_vector_snapshot as scalp_trailing_runtime_policy_vector_snapshot,
+    runtime_classifier_snapshot as scalp_trailing_runtime_classifier_snapshot,
+    MARKET_ENV_KEYS as SCALP_TRAILING_MARKET_ENV_KEYS,
+    TP_KEYS as SCALP_TRAILING_MECHANICAL_TP_KEYS,
+    VECTOR_SHA_ENV_KEY as SCALP_TRAILING_MARKET_VECTOR_SHA_ENV_KEY,
+    market_values_from_env as scalp_trailing_market_values_from_env,
+    market_values_hash as scalp_trailing_market_values_hash,
+    value_hash as scalp_trailing_mechanical_value_hash,
+)
+from src.engine.scalping.trailing_mechanical_strength import (
+    VERSION as SCALP_TRAILING_MECHANICAL_STRENGTH_VERSION,
+    classify_ws_history as classify_scalp_trailing_strength,
+)
 from src.engine.scalping.trailing_operational_replay import (
     GRID_VERSION as SCALP_TRAILING_OPERATIONAL_GRID_VERSION,
     _digest as scalp_trailing_operational_digest,
@@ -361,17 +378,12 @@ from src.engine.scalping.trailing_operational_replay import (
 )
 from src.engine.scalping.trailing_threshold_policy import (
     GRID_VERSION as SCALP_TRAILING_GRID_VERSION,
-    MARKET_ENV_KEYS as SCALP_TRAILING_MARKET_ENV_KEYS,
-    MARKET_VECTOR_SHA_ENV_KEY as SCALP_TRAILING_MARKET_VECTOR_SHA_ENV_KEY,
     MAX_POSITION_SAMPLES as SCALP_TRAILING_MAX_POSITION_SAMPLES,
     START_GRID_PCT as SCALP_TRAILING_START_GRID_PCT,
     closed_exit_gap as scalp_trailing_closed_exit_gap,
     market_type_at as scalp_trailing_market_type_at,
-    market_values_from_env as scalp_trailing_market_values_from_env,
-    market_values_hash as scalp_trailing_market_values_hash,
     start_values_from_env as scalp_trailing_start_values_from_env,
     start_values_hash as scalp_trailing_start_values_hash,
-    value_hash as scalp_trailing_value_hash,
 )
 from src.engine.scalping.scanner_async_eval import (
     ScannerAsyncEvalContext,
@@ -384,6 +396,29 @@ from src.engine.scalping.scanner_runtime_scheduler import ScannerGeneration
 from src.engine.ai.hot_path_ai_symbol_budget import (
     DEFAULT_HOT_PATH_AI_SYMBOL_BUDGET,
 )
+from src.engine.ai.holding_exit_vote import (
+    PATH_IDS,
+    PATH_POLICY_BY_MARKET,
+    PATH_PROMPT_VERSION,
+    buy_fill_identity_from_legs,
+    buy_fill_legs_from_runtime,
+    buy_fill_identity_from_runtime,
+    build_path_vote_input,
+    path_vote_input_gaps,
+    path_vote_input_hashes,
+    path_vote_claims_path,
+    read_path_vote_input_claim_history,
+    claim_path_vote_inputs,
+    release_path_vote_inputs,
+    input_snapshot_id as holding_path_policy_hash,
+    append_path_events_file,
+    load_path_events_file,
+    normalize_path_vote_bundle,
+    path_signal_snapshot,
+    path_vote_store_path,
+    validate_path_policy,
+)
+from src.engine.scalping.holding_path_vote_policy import runtime_policy_from_env
 
 # The deadline scheduler's first precheck is deliberately WS-only. This
 # context-local guard prevents nested diagnostic helpers from reading persisted
@@ -4038,90 +4073,6 @@ def _evaluate_scalp_low_profit_stagnation_hard_exit(
         "peak_improve": max(0.0, peak_improve),
         "max_profit_move": max_profit_move,
         "max_peak_improve": max_peak_improve,
-    }
-
-
-def _evaluate_scalp_mfe_protect_exit(
-    stock: dict | None,
-    *,
-    strategy: str | None,
-    profit_rate: float,
-    peak_profit: float,
-    current_ai_score: float,
-    held_sec: int,
-) -> dict:
-    if not _rule_bool("SCALP_MFE_PROTECT_EXIT_ENABLED", True):
-        return {"should_exit": False, "reason": "disabled"}
-    if not isinstance(stock, dict) or not _is_scalp_strategy(strategy):
-        return {"should_exit": False, "reason": "not_real_scalping"}
-    if _is_scalp_simulated_position(stock, strategy) or _has_sim_probe_provenance(
-        stock
-    ):
-        return {"should_exit": False, "reason": "simulated_position"}
-
-    min_peak_pct = max(0.0, _rule_float("SCALP_MFE_PROTECT_MIN_PEAK_PCT", 0.60))
-    trigger_profit_pct = _rule_float("SCALP_MFE_PROTECT_TRIGGER_PROFIT_PCT", 0.10)
-    min_giveback_pct = max(0.0, _rule_float("SCALP_MFE_PROTECT_MIN_GIVEBACK_PCT", 0.55))
-    min_hold_sec = max(0, _rule_int("SCALP_MFE_PROTECT_MIN_HOLD_SEC", 30))
-    max_ai_score = _rule_float("SCALP_MFE_PROTECT_MAX_AI_SCORE", 74.0)
-    min_protect_profit_pct = 0.0
-    giveback_pct = float(peak_profit) - float(profit_rate)
-
-    if held_sec < min_hold_sec:
-        return {
-            "should_exit": False,
-            "reason": "hold_time_below_min",
-            "held_sec": held_sec,
-        }
-    if peak_profit < min_peak_pct:
-        return {
-            "should_exit": False,
-            "reason": "peak_below_min",
-            "peak_profit": peak_profit,
-            "min_peak_pct": min_peak_pct,
-        }
-    if profit_rate > trigger_profit_pct:
-        return {
-            "should_exit": False,
-            "reason": "profit_above_trigger",
-            "profit_rate": profit_rate,
-            "trigger_profit_pct": trigger_profit_pct,
-        }
-    if profit_rate < min_protect_profit_pct:
-        return {
-            "should_exit": False,
-            "reason": "profit_below_protect_floor",
-            "profit_rate": profit_rate,
-            "min_protect_profit_pct": min_protect_profit_pct,
-            "trigger_profit_pct": trigger_profit_pct,
-        }
-    if giveback_pct < min_giveback_pct:
-        return {
-            "should_exit": False,
-            "reason": "giveback_below_min",
-            "giveback_pct": giveback_pct,
-            "min_giveback_pct": min_giveback_pct,
-        }
-    return {
-        "should_exit": True,
-        "exit_rule": "scalp_mfe_protect_exit",
-        "sell_reason_type": "PROFIT_PROTECT",
-        "profit_rate": profit_rate,
-        "peak_profit": peak_profit,
-        "giveback_pct": giveback_pct,
-        "min_peak_pct": min_peak_pct,
-        "trigger_profit_pct": trigger_profit_pct,
-        "min_protect_profit_pct": min_protect_profit_pct,
-        "min_giveback_pct": min_giveback_pct,
-        "min_hold_sec": min_hold_sec,
-        "max_ai_score": max_ai_score,
-        "current_ai_score": current_ai_score,
-        "score_gate_converted_to_prior": True,
-        "hard_gate_veto": False,
-        "score_prior_band": (
-            "hold_supportive" if current_ai_score > max_ai_score else "neutral_or_low"
-        ),
-        "ai_score_prior_weight": -0.3 if current_ai_score > max_ai_score else 0.0,
     }
 
 
@@ -19621,6 +19572,16 @@ def _holding_pipeline_observation_scope_fields(
 
 
 def _log_holding_pipeline(stock, code, stage, **fields):
+    if (stage in {"exit_signal", "sell_order_sent", "sell_completed"}
+            and str(fields.get("exit_rule") or stock.get("last_exit_rule") or "")
+                == "scalp_trailing_take_profit"):
+        signal = stock.get("holding_path_latest_tp_signal") or {}
+        if (signal.get("position_key") == _scalp_holding_source_position_key(stock, code)
+                and signal.get("buy_fill_identity") == buy_fill_identity_from_runtime(stock)):
+            fields.setdefault("holding_path_signal_id", signal.get("signal_id"))
+            fields.setdefault("holding_path_signal_at", signal.get("signal_at"))
+            fields.setdefault("holding_path_policy_bundle_sha256",
+                              signal.get("policy_bundle_sha256"))
     lineage = stock.get("_scale_in_applied_policy_lineage") or {}
     if lineage and stage in {"sell_completed", "add_buy_execution", "scale_in_submitted"}:
         fields.update({"scale_in_applied_" + key: value for key, value in lineage.items()})
@@ -19695,13 +19656,14 @@ def _log_holding_pipeline(stock, code, stage, **fields):
 
 def _scalp_trailing_policy_observation_fields() -> dict[str, Any]:
     values = {
-        "SCALP_TRAILING_START_PCT": _rule_float("SCALP_TRAILING_START_PCT", 0.6),
+        "SCALP_TRAILING_START_PCT": _rule_float("SCALP_TRAILING_START_PCT", 0.4),
         "SCALP_TRAILING_STRONG_AI_SCORE": _rule_int("SCALP_TRAILING_STRONG_AI_SCORE", 75),
         "SCALP_TRAILING_LIMIT_WEAK": _rule_float("SCALP_TRAILING_LIMIT_WEAK", 0.4),
         "SCALP_TRAILING_LIMIT_STRONG": _rule_float("SCALP_TRAILING_LIMIT_STRONG", 0.8),
     }
+    tp_values = {key: values[key] for key in SCALP_TRAILING_MECHANICAL_TP_KEYS}
     try:
-        digest = scalp_trailing_value_hash(values)
+        digest = scalp_trailing_mechanical_value_hash(tp_values)
     except (KeyError, TypeError, ValueError):
         digest = ""
     expected = str(os.getenv("KORSTOCKSCAN_SCALP_TRAILING_VALUE_SHA256") or "").strip()
@@ -19716,13 +19678,16 @@ def _scalp_trailing_policy_observation_fields() -> dict[str, Any]:
         "KORSTOCKSCAN_SCALP_TRAILING_START_BY_MARKET_SHA256"
     ) or "").strip()
     try:
-        market_values = scalp_trailing_market_values_from_env(os.environ, values)
-        vector_digest = scalp_trailing_market_values_hash(market_values)
+        (market_values, classifier_values, classifier_digest,
+         vector_digest) = scalp_trailing_runtime_policy_vector_snapshot(
+             tp_values,
+         )
     except (KeyError, TypeError, ValueError):
-        market_values, vector_digest = {}, ""
+        market_values, classifier_values, classifier_digest, vector_digest = {}, {}, "", ""
     vector_expected = str(os.getenv(SCALP_TRAILING_MARKET_VECTOR_SHA_ENV_KEY) or "").strip()
     return {
-        "scalp_trailing_policy_values": values,
+        "scalp_trailing_policy_values": tp_values,
+        "scalp_trailing_soft_stop_score": values["SCALP_TRAILING_STRONG_AI_SCORE"],
         "scalp_trailing_policy_value_sha256": digest or "-",
         "scalp_trailing_policy_expected_sha256": expected or "-",
         "scalp_trailing_policy_provenance": (
@@ -19743,6 +19708,12 @@ def _scalp_trailing_policy_observation_fields() -> dict[str, Any]:
             if market_expected else "runtime_values_only"
         ),
         "scalp_trailing_market_values": market_values,
+        "scalp_trailing_classifier_version": SCALP_TRAILING_MECHANICAL_STRENGTH_VERSION,
+        "scalp_trailing_classifier_sha256": (
+            classifier_digest
+            if classifier_values else "-"
+        ),
+        "scalp_trailing_classifier_parameters": classifier_values,
         "scalp_trailing_market_values_sha256": vector_digest or "-",
         "scalp_trailing_market_values_expected_sha256": vector_expected or "-",
         "scalp_trailing_market_values_provenance": (
@@ -19755,11 +19726,10 @@ def _scalp_trailing_policy_observation_fields() -> dict[str, Any]:
 
 
 def _scalp_trailing_values_for_evaluation(now_ts: float) -> tuple[dict[str, float | int], str | None]:
-    """Apply an atomic, hash-bound market vector in either TP evaluator."""
+    """Apply a score-free, hash-bound market vector in either TP evaluator."""
 
     scalar = {
-        "SCALP_TRAILING_START_PCT": _rule_float("SCALP_TRAILING_START_PCT", 0.6),
-        "SCALP_TRAILING_STRONG_AI_SCORE": _rule_int("SCALP_TRAILING_STRONG_AI_SCORE", 75),
+        "SCALP_TRAILING_START_PCT": _rule_float("SCALP_TRAILING_START_PCT", 0.4),
         "SCALP_TRAILING_LIMIT_WEAK": _rule_float("SCALP_TRAILING_LIMIT_WEAK", 0.4),
         "SCALP_TRAILING_LIMIT_STRONG": _rule_float("SCALP_TRAILING_LIMIT_STRONG", 0.8),
     }
@@ -19767,7 +19737,11 @@ def _scalp_trailing_values_for_evaluation(now_ts: float) -> tuple[dict[str, floa
     if market is None:
         return scalar, None
     try:
-        values = scalp_trailing_market_values_from_env(os.environ, scalar)
+        if str(os.getenv(SCALP_TRAILING_CLASSIFIER_ENV_KEY) or
+               SCALP_TRAILING_MECHANICAL_STRENGTH_VERSION) != (
+                   SCALP_TRAILING_MECHANICAL_STRENGTH_VERSION):
+            return scalar, market
+        values, _, _, digest = scalp_trailing_runtime_policy_vector_snapshot(scalar)
         expected = str(os.getenv(SCALP_TRAILING_MARKET_VECTOR_SHA_ENV_KEY) or "").strip()
         override_present = any(
             env_key in os.environ
@@ -19775,23 +19749,431 @@ def _scalp_trailing_values_for_evaluation(now_ts: float) -> tuple[dict[str, floa
             for env_key in keys.values()
         )
         if expected:
-            if expected != scalp_trailing_market_values_hash(values):
+            if expected != digest:
                 return scalar, market
         elif override_present:
-            # Older bootstrap receipts may contain start overrides only.
-            start_expected = str(os.getenv(
-                "KORSTOCKSCAN_SCALP_TRAILING_START_BY_MARKET_SHA256"
-            ) or "").strip()
-            start_values = {key: float(values[key]["SCALP_TRAILING_START_PCT"])
-                            for key in values}
-            if not start_expected or start_expected != scalp_trailing_start_values_hash(start_values):
-                return scalar, market
-            if any(env_key in os.environ for key, keys in SCALP_TRAILING_MARKET_ENV_KEYS.items()
-                   if key != "SCALP_TRAILING_START_PCT" for env_key in keys.values()):
-                return scalar, market
+            return scalar, market
         return values[market], market
     except (KeyError, TypeError, ValueError):
         return scalar, market
+
+
+def _scalp_trailing_mechanical_strength(
+    stock: dict, code: str, ws_data: dict | None, *, now_ts: float,
+    quote_fields: dict | None = None, executable_bid: int = 0,
+) -> tuple[bool, dict[str, Any]]:
+    """Consume one position's ordered 0B/0D history for TP width only."""
+
+    position_key = _scalp_holding_source_position_key(stock, code)
+    config = QuoteConsistencyConfig.from_env()
+    quality = quote_fields if isinstance(quote_fields, dict) else {}
+    depth_receipt = ws_quote_source_receipt(
+        ws_data or {}, now_ts=now_ts
+    ).get("depth_receipt") or {}
+    with ENTRY_LOCK:
+        previous = stock.get("scalp_trailing_mechanical_state")
+        if not isinstance(previous, dict) or previous.get("position_key") != position_key:
+            previous = {"position_key": position_key}
+            if stock.get("scalp_trailing_mechanical_event_gap_position_key") != position_key:
+                stock.pop("scalp_trailing_mechanical_event_gap", None)
+            if stock.get("scalp_trailing_mechanical_journal_gap_position_key") != position_key:
+                stock.pop("scalp_trailing_mechanical_journal_gap", None)
+        classifier_values, classifier_digest = scalp_trailing_runtime_classifier_snapshot()
+        market = scalp_trailing_market_type_at(now_ts)
+        decision, updated = classify_scalp_trailing_strength(
+            ws_data or {}, previous,
+            now_ms=int(now_ts * 1000),
+            max_quote_age_ms=int(config.max_ws_age_ms),
+            market=market,
+            config=classifier_values[market] if market is not None else None,
+        )
+        updated["position_key"] = position_key
+        event_gap_reason = (
+            "depth_sequence_or_time_gap"
+            if any(observation.get("reason") in {
+                "depth_sequence_gap", "depth_time_reversal", "depth_continuity_expired"
+            } for observation in decision.new_observations)
+            else ""
+        )
+        if event_gap_reason:
+            stock["scalp_trailing_mechanical_event_gap"] = event_gap_reason
+            stock["scalp_trailing_mechanical_event_gap_position_key"] = position_key
+        current_touch = updated.get("last_touch")
+        quote_blocked = bool(
+            str(quality.get("quote_consistency_state") or "").lower()
+            not in {"ok", "warning", "single_source"}
+            or _truthy_log_value(quality.get("quote_consistency_entry_blocked"))
+            or str(decision.source_item or "")[:6] != str(code or "")[:6]
+            or depth_receipt.get("item") != decision.source_item
+            or depth_receipt.get("transport_epoch") != decision.transport_epoch
+            or not isinstance(current_touch, tuple) or len(current_touch) != 4
+            or current_touch[1] <= 0
+            or _safe_int(executable_bid, 0) <= 0
+            or current_touch[0] != _safe_int(executable_bid, 0)
+        )
+        if quote_blocked:
+            updated["strong"] = False
+            updated["adverse_count"] = 0
+        stock["scalp_trailing_mechanical_state"] = updated
+    strength = "UNKNOWN" if quote_blocked else decision.state
+    reason = "quote_or_symbol_untrusted" if quote_blocked else decision.reason
+    fields = {
+        "classifier_version": SCALP_TRAILING_MECHANICAL_STRENGTH_VERSION,
+        "classifier_sha256": classifier_digest,
+        "classifier_state": strength,
+        "classifier_reason": reason,
+        "classifier_ofi_proxy": decision.ofi_proxy,
+        "classifier_queue_imbalance": decision.queue_imbalance,
+        "classifier_signed_trade_qty": decision.signed_trade_qty,
+        "classifier_quote_sequence": decision.quote_sequence,
+        "classifier_quote_received_at_ms": decision.quote_received_at_ms,
+        "classifier_trade_received_at_ms": decision.trade_received_at_ms,
+        "classifier_item": decision.source_item,
+        "classifier_transport_epoch": decision.transport_epoch,
+        "classifier_route_key": updated.get("route_key"),
+        "classifier_market": updated.get("market"),
+        "classifier_new_event_count": len(decision.new_observations),
+        "classifier_journal_gap": bool(stock.get("scalp_trailing_mechanical_journal_gap")),
+        "classifier_event_time_gap": bool(stock.get("scalp_trailing_mechanical_event_gap")),
+        "classifier_event_time_gap_reason": (
+            stock.get("scalp_trailing_mechanical_event_gap") or ""
+        ),
+        "_classifier_observations": decision.new_observations,
+    }
+    if decision.new_observations:
+        emitted = _log_holding_pipeline(
+            stock, code, "scalp_trailing_mechanical_input",
+            **fields,
+            classifier_events=json.dumps(
+                list(decision.new_observations), sort_keys=True,
+                separators=(",", ":"), allow_nan=False,
+            ),
+            classifier_position_key=position_key,
+            decision_authority="scalp_trailing_take_profit_strength_only",
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            runtime_effect=True,
+        )
+        if (not isinstance(emitted, dict)
+                or emitted.get("structured_append_succeeded") is not True):
+            with ENTRY_LOCK:
+                stock["scalp_trailing_mechanical_journal_gap"] = True
+                stock["scalp_trailing_mechanical_journal_gap_position_key"] = position_key
+            fields["classifier_journal_gap"] = True
+    return strength == "STRONG", fields
+
+
+def _scalp_trailing_mechanical_strength_safe(*args, **kwargs):
+    """A classifier or journal failure falls back to the existing weak TP width."""
+
+    try:
+        return _scalp_trailing_mechanical_strength(*args, **kwargs)
+    except Exception as exc:
+        stock = args[0] if args else None
+        if isinstance(stock, dict):
+            with ENTRY_LOCK:
+                stock["scalp_trailing_mechanical_state"] = {}
+                stock["scalp_trailing_mechanical_journal_gap"] = True
+                try:
+                    stock["scalp_trailing_mechanical_journal_gap_position_key"] = (
+                        _scalp_holding_source_position_key(stock, str(args[1]))
+                    )
+                except Exception:
+                    stock["scalp_trailing_mechanical_journal_gap_position_key"] = None
+        log_error(f"[SCALP_TRAILING_MECHANICAL] source gap: {type(exc).__name__}: {exc}")
+        try:
+            _, active_classifier_digest = scalp_trailing_runtime_classifier_snapshot()
+        except (KeyError, TypeError, ValueError):
+            active_classifier_digest = "-"
+        return False, {
+            "classifier_version": SCALP_TRAILING_MECHANICAL_STRENGTH_VERSION,
+            "classifier_sha256": active_classifier_digest,
+            "classifier_state": "UNKNOWN",
+            "classifier_reason": "classifier_or_journal_failure",
+            "classifier_new_event_count": 0,
+            "classifier_journal_gap": True,
+            "_classifier_observations": (),
+        }
+
+
+def _scalp_trailing_replay_observed_quotes(
+    stock: dict, code: str, mechanical_fields: dict[str, Any], *,
+    peak_price: int, buy_price: float, executable_bid: int,
+    bid_source: str, quote_fields: dict[str, Any], observed_at: float,
+) -> None:
+    """Latch the first trusted 0D crossing before the latest quote is used.
+
+    Only source-bound, bounded 0D/0B observations are replayed. An incomplete
+    event path is logged as a position source gap; the normal latest-price TP
+    evaluation still runs under its existing quote and order guards.
+    """
+
+    observations = mechanical_fields.pop("_classifier_observations", ())
+    position_key = _scalp_holding_source_position_key(stock, code)
+    prior = stock.get("scalp_trailing_event_peak_state")
+    if not isinstance(prior, dict) or prior.get("position_key") != position_key:
+        prior = {"position_key": position_key, "peak_price": peak_price,
+                 "last_quote_at_ms": mechanical_fields.get(
+                     "classifier_quote_received_at_ms")}
+        stock["scalp_trailing_event_peak_state"] = prior
+        if observations:
+            stock["scalp_trailing_mechanical_event_gap"] = "event_peak_baseline_missing"
+            stock["scalp_trailing_mechanical_event_gap_position_key"] = position_key
+            mechanical_fields["classifier_event_time_gap"] = True
+            mechanical_fields["classifier_event_time_gap_reason"] = (
+                "event_peak_baseline_missing"
+            )
+        mechanical_fields["classifier_event_replay"] = "[]"
+        return
+    if not observations:
+        prior["peak_price"] = max(_safe_int(prior.get("peak_price"), 0),
+                                  _safe_int(peak_price, 0))
+        if mechanical_fields.get("classifier_reason") == "position_or_transport_baseline":
+            baseline_at = _safe_int(
+                mechanical_fields.get("classifier_quote_received_at_ms"), 0
+            )
+            if baseline_at > 0:
+                prior["last_quote_at_ms"] = baseline_at
+        mechanical_fields["classifier_event_replay"] = "[]"
+        return
+    quality = quote_fields if isinstance(quote_fields, dict) else {}
+    valid_quote = bool(
+        bid_source in {"fresh_ws_executable_bid", "fresh_nxt_0d_executable_bid"}
+        and str(quality.get("quote_consistency_state") or "").lower()
+        in {"ok", "warning", "single_source"}
+        and not _truthy_log_value(quality.get("quote_consistency_entry_blocked"))
+        and _safe_int(executable_bid, 0) == _safe_int(observations[-1].get("best_bid"), 0)
+    )
+    last_at = _safe_int(prior.get("last_quote_at_ms"), 0)
+    event_peak = _safe_int(prior.get("peak_price"), 0)
+    now_ms = int(observed_at * 1000)
+    max_age = int(QuoteConsistencyConfig.from_env().max_ws_age_ms)
+    replay = []
+    validated = []
+    gap = "" if valid_quote else "event_quote_quality_unproven"
+    if not gap:
+        for observation in observations:
+            at_ms = _safe_int(observation.get("at_ms"), 0)
+            seq = _safe_int(observation.get("sequence"), 0)
+            touch = observation.get("touch")
+            trade_peak = _safe_int(observation.get("trade_peak_price_since_prior_depth"), -1)
+            if (seq <= 0 or at_ms < last_at or at_ms > now_ms
+                    or now_ms - at_ms > max_age
+                    or _safe_int(observation.get("previous_quote_at_ms"), 0) != last_at
+                    or not isinstance(touch, (tuple, list)) or len(touch) != 4
+                    or _safe_int(touch[0], 0) <= 0 or _safe_int(touch[1], 0) <= 0
+                    or _safe_int(touch[2], 0) < _safe_int(touch[0], 0)
+                    or trade_peak < 0 or observation.get("trade_peak_gap")
+                    or observation.get("reason") in {
+                        "depth_sequence_gap", "depth_time_reversal",
+                        "depth_continuity_expired", "depth_touch_invalid",
+                    }):
+                gap = "event_quote_peak_or_continuity_unproven"
+                break
+            event_peak = max(event_peak, trade_peak, _safe_int(touch[0], 0))
+            if event_peak > peak_price:
+                gap = "event_peak_exceeds_trusted_peak"
+                break
+            at_epoch = at_ms / 1000.0
+            event_values, event_market = _scalp_trailing_values_for_evaluation(at_epoch)
+            event_state = str(observation.get("state") or "UNKNOWN")
+            if event_state not in {"STRONG", "WEAK", "UNKNOWN"}:
+                gap = "event_classifier_state_invalid"
+                break
+            validated.append((at_ms, seq, touch, event_peak,
+                              event_values, event_market, event_state))
+            last_at = at_ms
+    if not gap:
+        armed = _scalp_trailing_arm_was_latched(stock)
+        for (at_ms, seq, touch, event_peak,
+             event_values, event_market, event_state) in validated:
+            at_epoch = at_ms / 1000.0
+            event_strong = event_state == "STRONG"
+            event_decision = evaluate_trailing_take_profit(
+                peak_price=event_peak, executable_bid=_safe_int(touch[0], 0),
+                peak_profit_pct=calculate_net_profit_rate(buy_price, event_peak),
+                start_pct=float(event_values["SCALP_TRAILING_START_PCT"]),
+                strong=event_strong,
+                weak_limit_pct=float(event_values["SCALP_TRAILING_LIMIT_WEAK"]),
+                strong_limit_pct=float(event_values["SCALP_TRAILING_LIMIT_STRONG"]),
+                already_armed=armed,
+            )
+            raw_triggered = event_decision.triggered
+            if event_decision.armed and not armed:
+                _scalp_trailing_latch_arm(
+                    stock, armed=True, observed_at=at_epoch,
+                    start_pct=float(event_values["SCALP_TRAILING_START_PCT"]),
+                    market=event_market,
+                )
+                armed = True
+            event_fields = {
+                "classifier_state": event_state,
+                "classifier_item": mechanical_fields.get("classifier_item"),
+                "classifier_transport_epoch": mechanical_fields.get(
+                    "classifier_transport_epoch"),
+                "classifier_route_key": mechanical_fields.get("classifier_route_key"),
+                "classifier_market": event_market,
+                "classifier_quote_sequence": seq,
+                "classifier_new_event_count": 1,
+                "crossing_basis": "first_trusted_event",
+            }
+            event_decision = _scalp_trailing_latch_first_crossing(
+                stock, code, event_decision, observed_at=at_epoch,
+                mechanical_fields=event_fields, market=event_market,
+                bid_source="fresh_ws_executable_bid",
+            )
+            replay.append({
+                "sequence": seq, "at_ms": at_ms, "peak_price": event_peak,
+                "peak_profit_pct": calculate_net_profit_rate(buy_price, event_peak),
+                "executable_bid": _safe_int(touch[0], 0),
+                "executable_bid_qty": _safe_int(touch[1], 0),
+                "classifier_state": event_state, "market": event_market,
+                "start_pct": float(event_values["SCALP_TRAILING_START_PCT"]),
+                "raw_limit_pct": (
+                    float(event_values["SCALP_TRAILING_LIMIT_STRONG"])
+                    if event_strong else
+                    float(event_values["SCALP_TRAILING_LIMIT_WEAK"])
+                ),
+                "limit_pct": event_decision.threshold_pct,
+                "armed": event_decision.armed,
+                "raw_triggered": raw_triggered,
+                "triggered": event_decision.triggered,
+            })
+    if gap:
+        stock["scalp_trailing_mechanical_event_gap"] = gap
+        stock["scalp_trailing_mechanical_event_gap_position_key"] = position_key
+        mechanical_fields["classifier_event_time_gap"] = True
+        mechanical_fields["classifier_event_time_gap_reason"] = gap
+        replay = []
+    prior["peak_price"] = max(event_peak, _safe_int(peak_price, 0))
+    prior["last_quote_at_ms"] = mechanical_fields.get("classifier_quote_received_at_ms")
+    mechanical_fields["classifier_event_replay"] = json.dumps(
+        replay, sort_keys=True, separators=(",", ":"), allow_nan=False
+    )
+
+
+def _scalp_trailing_replay_observed_quotes_safe(*args, **kwargs) -> None:
+    try:
+        with ENTRY_LOCK:
+            _scalp_trailing_replay_observed_quotes(*args, **kwargs)
+    except Exception as exc:
+        stock, code, fields = args[:3]
+        position_key = _scalp_holding_source_position_key(stock, code)
+        stock["scalp_trailing_mechanical_event_gap"] = "event_replay_exception"
+        stock["scalp_trailing_mechanical_event_gap_position_key"] = position_key
+        fields.pop("_classifier_observations", None)
+        fields["classifier_event_time_gap"] = True
+        fields["classifier_event_time_gap_reason"] = "event_replay_exception"
+        fields["classifier_event_replay"] = "[]"
+        log_error(f"[SCALP_TRAILING_MECHANICAL] event replay gap: {exc}")
+
+
+def _scalp_trailing_strength_and_event_replay(
+    stock: dict, code: str, ws_data: dict | None, *, now_ts: float,
+    quote_fields: dict[str, Any], executable_bid: int, bid_source: str,
+    peak_price: int, buy_price: float,
+) -> tuple[bool, dict[str, Any]]:
+    """Advance one position's classifier and TP crossing in the same order."""
+
+    with ENTRY_LOCK:
+        strong, fields = _scalp_trailing_mechanical_strength_safe(
+            stock, code, ws_data, now_ts=now_ts,
+            quote_fields=quote_fields, executable_bid=executable_bid,
+        )
+        _scalp_trailing_replay_observed_quotes_safe(
+            stock, code, fields, peak_price=peak_price, buy_price=buy_price,
+            executable_bid=executable_bid, bid_source=bid_source,
+            quote_fields=quote_fields, observed_at=now_ts,
+        )
+        return strong, fields
+
+
+def _scalp_trailing_latch_first_crossing(
+    stock: dict, code: str, decision, *, observed_at: float,
+    mechanical_fields: dict[str, Any], market: str | None,
+    bid_source: str = "",
+):
+    """Keep a confirmed TP crossing when a later strength update widens the band."""
+
+    position_key = _scalp_holding_source_position_key(stock, code)
+    try:
+        session = session_contract.resolve_market_session(
+            datetime.fromtimestamp(observed_at, tz=_KST)
+        )
+        exit_clock_open = bool(not session.blocker and session.exit_allowed_by_clock)
+    except (ValueError, OverflowError, TypeError):
+        exit_clock_open = False
+    if not exit_clock_open:
+        mechanical_fields["first_crossing"] = None
+        mechanical_fields["first_crossing_latched"] = False
+        mechanical_fields["first_crossing_clock_blocked"] = True
+        return dataclass_replace(decision, triggered=False, trigger_kind="")
+    quote_sequence = _safe_int(mechanical_fields.get("classifier_quote_sequence"), 0)
+    quote_identity = (
+        position_key,
+        mechanical_fields.get("classifier_item"),
+        mechanical_fields.get("classifier_transport_epoch"),
+        mechanical_fields.get("classifier_route_key"),
+        mechanical_fields.get("classifier_market") or market,
+    )
+    with ENTRY_LOCK:
+        previous_quote = stock.get("scalp_trailing_last_tp_quote")
+        same_quote = bool(
+            quote_sequence > 0
+            and isinstance(previous_quote, dict)
+            and previous_quote.get("identity") == quote_identity
+            and previous_quote.get("sequence") == quote_sequence
+        )
+        if quote_sequence > 0:
+            stock["scalp_trailing_last_tp_quote"] = {
+                "identity": quote_identity, "sequence": quote_sequence,
+            }
+        first = stock.get("scalp_trailing_first_crossing")
+        if (not isinstance(first, dict) or first.get("position_key") != position_key
+                or first.get("classifier_version") != SCALP_TRAILING_MECHANICAL_STRENGTH_VERSION
+                or first.get("threshold_key") not in {
+                    "SCALP_TRAILING_LIMIT_WEAK", "SCALP_TRAILING_LIMIT_STRONG"
+                }
+                or _safe_float(first.get("threshold_pct"), None) is None
+                or not 0 < float(first["threshold_pct"]) <= 100
+                or _safe_float(first.get("at_epoch"), None) is None
+                or float(first["at_epoch"]) > observed_at):
+            first = None
+        if (first is None and same_quote
+                and bid_source in {"fresh_ws_executable_bid", "fresh_nxt_0d_executable_bid"}
+                and decision.triggered):
+            mechanical_fields["crossing_quote_reused"] = True
+            decision = dataclass_replace(decision, triggered=False, trigger_kind="")
+        if first is None and decision.triggered and decision.price_usable:
+            first = {
+                "position_key": position_key,
+                "at_epoch": observed_at,
+                "market": market,
+                "classifier_version": SCALP_TRAILING_MECHANICAL_STRENGTH_VERSION,
+                "classifier_state": mechanical_fields.get("classifier_state"),
+                "quote_sequence": mechanical_fields.get("classifier_quote_sequence"),
+                "quote_route_key": mechanical_fields.get("classifier_route_key"),
+                "threshold_key": decision.threshold_key,
+                "threshold_pct": decision.threshold_pct,
+                "crossing_basis": mechanical_fields.get(
+                    "crossing_basis", "first_trusted_evaluation"
+                ),
+                "new_event_count": mechanical_fields.get("classifier_new_event_count"),
+            }
+            stock["scalp_trailing_first_crossing"] = first
+    if first and decision.price_usable:
+        decision = dataclass_replace(
+            decision, armed=True, triggered=True,
+            trigger_kind="trailing_peak_worsen_floor",
+            threshold_key=str(first["threshold_key"]),
+            threshold_pct=float(first["threshold_pct"]),
+        )
+    mechanical_fields["first_crossing"] = dict(first) if first else None
+    mechanical_fields["first_crossing_latched"] = bool(first)
+    mechanical_fields["selected_width_from_latch"] = bool(
+        first and float(first["at_epoch"]) < observed_at
+    )
+    return decision
 
 
 def _scalp_trailing_start_for_evaluation(now_ts: float) -> tuple[float, str | None]:
@@ -19934,16 +20316,11 @@ def _scalp_exit_threshold_observation_fields(
                 if rule == "scalp_trailing_take_profit"
                 else "-"
             ),
-            "exit_threshold_strong_score_key": (
-                "SCALP_TRAILING_STRONG_AI_SCORE"
-                if rule == "scalp_trailing_take_profit"
-                else "-"
-            ),
-            "exit_threshold_strong_score_effective": (
-                (trailing_score_threshold if trailing_score_threshold is not None
-                 else _rule_float("SCALP_TRAILING_STRONG_AI_SCORE", 75.0))
-                if rule == "scalp_trailing_take_profit"
-                else "-"
+            "exit_threshold_strong_score_key": "-",
+            "exit_threshold_strong_score_effective": "-",
+            "exit_threshold_classifier_version": (
+                SCALP_TRAILING_MECHANICAL_STRENGTH_VERSION
+                if rule == "scalp_trailing_take_profit" else "-"
             ),
             "exit_threshold_ai_score_observed": (
                 round(float(current_ai_score), 6)
@@ -22165,7 +22542,6 @@ def _resolve_same_symbol_loss_reentry_cooldown_sec(
         "protect_trailing_stop",
         "scalp_trailing_take_profit",
         "scalp_bad_entry_refined_canary",
-        "scalp_mfe_protect_exit",
         "reversal_add_post_eval_fail",
     }
     if str(exit_rule or "").strip() not in loss_exit_rules:
@@ -23955,9 +24331,6 @@ def _resolve_exit_decision_source(
     if rule == "daily_limit_up_immediate_exit":
         return "DAILY_LIMIT_UP_EXIT"
 
-    if rule == "scalp_mfe_protect_exit":
-        return "MFE_PROTECT_EXIT"
-
     if "trailing" in rule:
         return "TRAILING"
 
@@ -24920,7 +25293,7 @@ def _holding_context_prohibited_exit_candidate(
     trailing_stop_price: float,
     current_price: int,
 ) -> bool:
-    hard_stop_pct = min(
+    soft_stop_pct = max(
         _rule_float("SCALP_STOP", -1.5),
         _rule_float("SCALP_HARD_STOP", -2.5),
     )
@@ -24931,7 +25304,7 @@ def _holding_context_prohibited_exit_candidate(
             strategy == "SCALPING"
             and not opening_rotation_active
             and (
-                profit_rate <= hard_stop_pct
+                profit_rate <= soft_stop_pct
                 or (trailing_stop_price > 0 and current_price <= trailing_stop_price)
             )
         )
@@ -25143,6 +25516,25 @@ def _remember_exit_context(
     stock["last_exit_decision_source"] = exit_decision_source
     stock["last_exit_peak_profit"] = round(float(peak_profit or 0.0), 3)
     stock["last_exit_held_sec"] = max(0, int(held_sec or 0))
+    if str(stock.get("strategy") or "").upper() == "SCALPING":
+        # The path-vote consumer has no numeric holding score.  Do not turn its
+        # compatibility-only neutral value into an observed AI receipt.
+        stock["last_exit_current_ai_score"] = None
+        stock["last_exit_ai_score_raw"] = None
+        stock["last_exit_ai_score_effective"] = None
+        stock["last_exit_ai_action"] = "-"
+        stock["last_exit_ai_result_source"] = "retired_holding_score"
+        stock["last_exit_ai_model"] = "-"
+        stock["last_exit_ai_model_tier"] = "-"
+        stock["last_exit_ai_transport_mode"] = "-"
+        stock["last_exit_ai_data_quality"] = "insufficient"
+        if soft_stop_threshold_pct is not None:
+            stock["last_exit_soft_stop_threshold_pct"] = round(
+                float(soft_stop_threshold_pct), 3
+            )
+        else:
+            stock.pop("last_exit_soft_stop_threshold_pct", None)
+        return
     stock["last_exit_current_ai_score"] = round(float(current_ai_score or 0.0), 1)
     stock["last_exit_ai_score_raw"] = round(
         _safe_float(ai_score_raw, stock.get("holding_score_raw", current_ai_score)),
@@ -25732,7 +26124,6 @@ def _build_bad_entry_refined_decision(
             1.0,
             0.20
             + (0.08 * absorption_score)
-            + (0.05 if current_ai_score >= 55 else 0.0)
             + (0.05 if peak_profit >= 0 else 0.0)
             - (0.20 if thesis_invalidated else 0.0),
         ),
@@ -25762,8 +26153,6 @@ def _build_bad_entry_refined_decision(
         exclusion_reason = "loss_too_shallow"
     elif peak_profit > max_peak_pct:
         exclusion_reason = "peak_recovered"
-    elif float(current_ai_score or 0.0) > ai_limit:
-        exclusion_reason = "ai_recovered"
     elif not confirmation:
         exclusion_reason = "no_confirmation"
 
@@ -26702,7 +27091,6 @@ def _build_soft_stop_expert_decision(
             1.0,
             0.20
             + (0.08 * absorption_score)
-            + (0.05 if current_ai_score >= 55 else 0.0)
             + (0.05 if peak_profit >= 0 else 0.0)
             - (0.20 if thesis_invalidated else 0.0),
         ),
@@ -26885,33 +27273,11 @@ def _build_soft_stop_dynamic_grace_decision(
     positive_micro = bool(
         feature_valid and absorption_score >= 1 and not thesis_invalidated
     )
-    holding_score_ctx = _holding_score_runtime_context(
-        stock,
-        current_ai_score=current_ai_score,
-        now_ts=now_ts,
-        is_critical_zone=True,
-        microstructure_confirmed=positive_micro,
-    )
-    ai_score_usable = bool(holding_score_ctx.get("usable_for_soft_grace"))
-    ai_score_prior_pass = bool(ai_score_usable and current_ai_score >= min_ai_score)
-    ai_score_prior_weight = (
-        0.6
-        if ai_score_prior_pass
-        else (
-            -0.3
-            if ai_score_usable and current_ai_score >= (min_ai_score - 10.0)
-            else 0.0
-        )
-    )
-    ai_score_prior_band = (
-        "supportive"
-        if ai_score_prior_pass
-        else (
-            "low"
-            if ai_score_usable and current_ai_score >= (min_ai_score - 10.0)
-            else "neutral_or_unknown"
-        )
-    )
+    holding_score_ctx = {"source": "retired_holding_score"}
+    ai_score_usable = False
+    ai_score_prior_pass = False
+    ai_score_prior_weight = 0.0
+    ai_score_prior_band = "retired"
     strong_absorption_support = bool(absorption_score >= strong_absorption_min_score)
 
     started_at = _safe_float(stock.get("soft_stop_dynamic_grace_started_at"), 0.0)
@@ -26930,10 +27296,7 @@ def _build_soft_stop_dynamic_grace_decision(
     reason = "confirm_20s_soft_stop_micro_grace_modifier"
     if positive_micro:
         reason = "positive_micro_confirm_20s_soft_stop_micro_grace_modifier"
-    if positive_micro and (
-        strong_absorption_support
-        or (ai_score_usable and current_ai_score >= (min_ai_score + 5))
-    ):
+    if positive_micro and strong_absorption_support:
         reason = "strong_absorption_confirm_20s_soft_stop_micro_grace_modifier"
 
     active_band_lower = float(dynamic_stop_pct or 0.0) - max_worsen_pct
@@ -26970,7 +27333,7 @@ def _build_soft_stop_dynamic_grace_decision(
         skip_reason = "thesis_invalidated"
     elif not positive_micro:
         skip_reason = "micro_confirmation_missing"
-    elif not (ai_score_prior_pass or strong_absorption_support):
+    elif not strong_absorption_support:
         skip_reason = "composite_support_missing"
     elif grace_sec <= 0:
         skip_reason = "grace_sec_zero"
@@ -29013,6 +29376,7 @@ def _observe_scalp_trailing_input_transition(
     holding_mark_price_at_eval: float | None = None,
     holding_ai_gate_evidence: dict | None = None,
     holding_rest_request_elapsed_ms: float | None = None,
+    mechanical_fields: dict | None = None,
 ) -> None:
     """Keep predeclared grid crossings and source quality without raw tick logging."""
 
@@ -29169,6 +29533,10 @@ def _observe_scalp_trailing_input_transition(
     exit_allowed_by_clock = bool(
         not market_session.blocker and market_session.exit_allowed_by_clock
     )
+    if not exit_allowed_by_clock:
+        # The classifier journal may still describe this market, but a
+        # non-executable clock must not become a TP candidate path row.
+        return
     depth_receipt = quote_receipt.get("depth_receipt")
     depth_receipt = depth_receipt if isinstance(depth_receipt, dict) else {}
     depth_row = None
@@ -29268,17 +29636,16 @@ def _observe_scalp_trailing_input_transition(
         (key, value.armed, value.triggered)
         for key, value in grid_decisions.items()
     )
-    # Every proposed four-axis first crossing changes at least one of these
-    # bins. Persist that evaluation even when the incumbent branch is stable.
+    # Persist threshold bins when a candidate crossing can change.
     drawdown = (
         max(0.0, (peak_price - executable_bid) / peak_price * 100.0)
         if peak_price > 0 and executable_bid > 0 else None
     )
-    four_axis_bins = (
+    mechanical_bins = (
         math.floor(peak_profit_pct * 10 + 1e-9)
         if peak_profit_pct is not None else None,
         math.floor(drawdown * 10 + 1e-9) if drawdown is not None else None,
-        math.floor(ai_score / 5 + 1e-9) if ai_usable and math.isfinite(ai_score) else None,
+        (mechanical_fields or {}).get("classifier_state"),
         executable_bid_qty >= _safe_int(stock.get("buy_qty"), 0) > 0,
         policy_fields["scalp_trailing_market_values_sha256"],
     )
@@ -29355,7 +29722,7 @@ def _observe_scalp_trailing_input_transition(
         operational_sha256,
         market_type,
         grid_state,
-        four_axis_bins,
+        mechanical_bins,
         operational_shadow_sha,
         bool(stock.get("scalp_trailing_arm_persist_gap")),
     )
@@ -29397,7 +29764,11 @@ def _observe_scalp_trailing_input_transition(
         )
         if isinstance(previous_state, list):
             previous_state = tuple(previous_state)
-        if previous_key == position_key and previous_state == state and not heartbeat_due:
+        has_new_classifier_events = bool(
+            _safe_int((mechanical_fields or {}).get("classifier_new_event_count"), 0) > 0
+        )
+        if (previous_key == position_key and previous_state == state
+                and not heartbeat_due and not has_new_classifier_events):
             return
         stock["scalp_trailing_observation_position_key"] = position_key
         stock["scalp_trailing_observation_state"] = state
@@ -29464,6 +29835,7 @@ def _observe_scalp_trailing_input_transition(
             tuning_session_contract_version=market_session.contract_version,
             tuning_start_grid_version="start_0p3_to_1p2_step_0p1_v1",
             tuning_four_axis_bin_version="start_0p1_width_0p1_score_5_v1",
+            tuning_mechanical_bin_version="start_0p1_width_0p1_mechanical_v1",
             tuning_operational_shadow_version=SCALP_TRAILING_OPERATIONAL_GRID_VERSION,
             tuning_operational_shadow_sha256=operational_shadow_sha,
             tuning_grid_first_arm=json.dumps(new_arms),
@@ -29556,9 +29928,14 @@ def _observe_scalp_trailing_input_transition(
             trailing_limit_pct=decision.threshold_pct,
             trailing_drawdown_pct=decision.drawdown_pct,
             strong=strong,
-            strong_score_threshold=_scalp_trailing_values_for_evaluation(now_ts)[0][
-                "SCALP_TRAILING_STRONG_AI_SCORE"
-            ],
+            strong_score_threshold=None,
+            **{
+                key: (json.dumps(value, sort_keys=True, separators=(",", ":"))
+                      if key == "first_crossing" and isinstance(value, dict)
+                      else value)
+                for key, value in (mechanical_fields or {}).items()
+                if not key.startswith("_")
+            },
             ai_score=ai_score,
             ai_score_usable=ai_usable,
             ai_score_age_sec=score_age_sec,
@@ -29622,6 +29999,7 @@ def _observe_scalp_trailing_input_transition(
                         "scalp_trailing_policy_values",
                         "scalp_trailing_start_by_market",
                         "scalp_trailing_market_values",
+                        "scalp_trailing_classifier_parameters",
                     } and isinstance(value, dict)
                     else value
                 )
@@ -29756,7 +30134,43 @@ def evaluate_and_dispatch_fast_scalp_exit(
     if (not fast_stop_enabled and not retry_pending
             and peak_profit < trailing_start_pct
             and not _scalp_trailing_arm_was_latched(stock)):
-        return False
+        # Keep the position-local 0B/0D classifier current before the TP arm.
+        # This path uses the existing WS quote only and cannot request REST or
+        # dispatch an order. Otherwise the first armed evaluation would take a
+        # new baseline and discard all pre-arm source observations.
+        early_fields, _, _, _ = _build_quote_consistency_fields(
+            ws_data, side="sell", now_ts=observed_at
+        )
+        early_bid, early_bid_source = _trusted_scalp_trailing_bid(
+            ws_data, code=code, quote_fields=early_fields, now_ts=observed_at
+        )
+        _, early_mechanical_fields = _scalp_trailing_strength_and_event_replay(
+            stock, code, ws_data, now_ts=observed_at,
+            quote_fields=early_fields, executable_bid=early_bid,
+            bid_source=early_bid_source, peak_price=peak_price,
+            buy_price=buy_price,
+        )
+        early_decision = evaluate_trailing_take_profit(
+            peak_price=peak_price, executable_bid=early_bid,
+            peak_profit_pct=peak_profit, start_pct=trailing_start_pct,
+            strong=early_mechanical_fields.get("classifier_state") == "STRONG",
+            weak_limit_pct=float(trailing_values["SCALP_TRAILING_LIMIT_WEAK"]),
+            strong_limit_pct=float(trailing_values["SCALP_TRAILING_LIMIT_STRONG"]),
+            already_armed=_scalp_trailing_arm_was_latched(stock),
+        )
+        _observe_scalp_trailing_input_transition_safe(
+            stock, code, ws_data=ws_data, decision=early_decision,
+            peak_price=peak_price, executable_bid=early_bid,
+            bid_source=early_bid_source,
+            strong=early_decision.threshold_key == "SCALP_TRAILING_LIMIT_STRONG",
+            ai_score=_safe_float(stock.get("holding_score_effective"), 0.0),
+            ai_usable=False, start_pct=trailing_start_pct, now_ts=observed_at,
+            evaluator="fast_prearm", quote_fields=early_fields,
+            holding_profit_rate_at_eval=calculate_net_profit_rate(buy_price, early_bid),
+            mechanical_fields=early_mechanical_fields,
+        )
+        if not stock.get("scalp_trailing_first_crossing"):
+            return False
 
     rest_snapshot: dict[str, Any] = {}
     route_fields = _fast_exit_execution_route_fields(
@@ -29906,9 +30320,10 @@ def evaluate_and_dispatch_fast_scalp_exit(
         now_ts=observed_at,
         is_critical_zone=True,
     )
-    strong_trailing = _holding_strong_trailing_enabled(
-        score_context, current_ai_score,
-        threshold=float(trailing_values["SCALP_TRAILING_STRONG_AI_SCORE"]),
+    strong_trailing, mechanical_fields = _scalp_trailing_strength_and_event_replay(
+        stock, code, ws_data, now_ts=observed_at, quote_fields=quote_fields,
+        executable_bid=trusted_bid, bid_source=trusted_bid_source,
+        peak_price=peak_price, buy_price=buy_price,
     )
     trailing_limit = float(trailing_values[
         "SCALP_TRAILING_LIMIT_STRONG" if strong_trailing else "SCALP_TRAILING_LIMIT_WEAK"
@@ -29924,6 +30339,14 @@ def evaluate_and_dispatch_fast_scalp_exit(
         strong_limit_pct=trailing_limit,
         already_armed=_scalp_trailing_arm_was_latched(stock),
     )
+    trailing_decision = _scalp_trailing_latch_first_crossing(
+        stock, code, trailing_decision, observed_at=observed_at,
+        mechanical_fields=mechanical_fields,
+        market=scalp_trailing_market_type_at(observed_at),
+        bid_source=trusted_bid_source,
+    )
+    strong_trailing = trailing_decision.threshold_key == "SCALP_TRAILING_LIMIT_STRONG"
+    trailing_limit = trailing_decision.threshold_pct
     _scalp_trailing_latch_arm(
         stock, armed=trailing_decision.armed, observed_at=observed_at,
         start_pct=trailing_start_pct,
@@ -29948,6 +30371,7 @@ def evaluate_and_dispatch_fast_scalp_exit(
         holding_profit_rate_at_eval=profit_rate,
         holding_mark_price_at_eval=mark_price,
         holding_rest_request_elapsed_ms=rest_elapsed_ms if rest_state != "not_attempted" else None,
+        mechanical_fields=mechanical_fields,
     )
     trailing_drawdown_pct = trailing_decision.drawdown_pct
     trigger_kind = ""
@@ -29994,13 +30418,26 @@ def evaluate_and_dispatch_fast_scalp_exit(
             or mark_to_bid_gap_bps > confirmation_spread_bps
         )
         if wide_trailing_quote:
-            wide_rest, wide_rest_state, wide_rest_elapsed_ms = (
-                _fetch_rest_orderbook_snapshot_bounded(
-                    fast_rest_request_code,
-                    quote_config.emergency_rest_timeout_ms,
-                    explicit_request_code=True,
+            # WS wakeups can arrive much faster than the fallback REST clock.
+            # Reuse this evaluation's receipt, or bound rechecks by the same
+            # position-local retry clock used for blocked quotes.
+            if rest_snapshot and rest_state == "ok":
+                wide_rest, wide_rest_state, wide_rest_elapsed_ms = (
+                    rest_snapshot, rest_state, rest_elapsed_ms
                 )
-            )
+            else:
+                if observed_at < _safe_float(stock.get("fast_exit_rest_retry_after"), 0.0):
+                    return False
+                stock["fast_exit_rest_retry_after"] = (
+                    observed_at + max(1.0, _holding_rest_quote_fallback_min_interval_sec())
+                )
+                wide_rest, wide_rest_state, wide_rest_elapsed_ms = (
+                    _fetch_rest_orderbook_snapshot_bounded(
+                        fast_rest_request_code,
+                        quote_config.emergency_rest_timeout_ms,
+                        explicit_request_code=True,
+                    )
+                )
             wide_rest = dict(wide_rest or {})
             (
                 wide_quote_fields,
@@ -30131,6 +30568,14 @@ def evaluate_and_dispatch_fast_scalp_exit(
                 strong_limit_pct=trailing_limit,
                 already_armed=_scalp_trailing_arm_was_latched(stock),
             )
+            trailing_decision = _scalp_trailing_latch_first_crossing(
+                stock, code, trailing_decision, observed_at=observed_at,
+                mechanical_fields=mechanical_fields,
+                market=scalp_trailing_market_type_at(observed_at),
+                bid_source=trusted_bid_source,
+            )
+            strong_trailing = trailing_decision.threshold_key == "SCALP_TRAILING_LIMIT_STRONG"
+            trailing_limit = trailing_decision.threshold_pct
             _observe_scalp_trailing_input_transition_safe(
                 stock,
                 code,
@@ -30150,6 +30595,7 @@ def evaluate_and_dispatch_fast_scalp_exit(
                 holding_profit_rate_at_eval=profit_rate,
                 holding_mark_price_at_eval=wide_mark_price,
                 holding_rest_request_elapsed_ms=wide_rest_elapsed_ms,
+                mechanical_fields=mechanical_fields,
             )
             trailing_drawdown_pct = trailing_decision.drawdown_pct
             if fast_stop_enabled and emergency_pct is not None and profit_rate <= emergency_pct:
@@ -30166,6 +30612,13 @@ def evaluate_and_dispatch_fast_scalp_exit(
                 exit_rule = "scalp_trailing_take_profit"
             else:
                 return False
+
+    if (exit_rule == "scalp_trailing_take_profit" and not retry_pending
+            and not _holding_path_exit_proceeds(
+                stock, code, exit_rule=exit_rule, profit_rate=profit_rate,
+                ws_data=ws_data, signal_at=time.time(),
+            )):
+        return False
 
     exit_token = existing_exit_token or uuid4().hex
     with ENTRY_LOCK:
@@ -30313,7 +30766,7 @@ def evaluate_and_dispatch_fast_scalp_exit(
                 trailing_trigger_kind=trigger_kind,
                 current_ai_score=current_ai_score,
                 ai_score_usable=bool(score_context.get("usable_for_negative_exit")),
-                trailing_score_threshold=float(trailing_values["SCALP_TRAILING_STRONG_AI_SCORE"]),
+                trailing_score_threshold=None,
             ),
         )
     except Exception as exc:
@@ -45366,6 +45819,10 @@ def _scale_in_exit_authority_block_reason(stock: dict | None) -> str:
 
     if not isinstance(stock, dict):
         return "invalid_position_state"
+    if stock.get("holding_path_exit_hold"):
+        return "holding_path_exit_veto_defer_active"
+    if stock.get("holding_path_exit_candidate"):
+        return "holding_path_exit_candidate_active"
     sell_receipt_state = stock.get("_sell_execution_receipt_state")
     if (
         stock.get("sell_partial_exit_carry_active")
@@ -47662,7 +48119,6 @@ def _rest_quote_only_hard_stop_confirmation_block(
         "scalp_preset_hard_stop_pct",
         "scalp_hard_stop_pct",
         "scalp_soft_stop_pct",
-        "scalp_mfe_protect_exit",
         "scalp_trailing_take_profit",
     }:
         return False
@@ -47671,13 +48127,9 @@ def _rest_quote_only_hard_stop_confirmation_block(
     if float(profit_rate or 0.0) <= float(emergency_pct or -999.0):
         return False
     block_stage = (
-        "mfe_protect_rest_quote_only_confirmation_blocked"
-        if str(exit_rule or "").strip() == "scalp_mfe_protect_exit"
-        else (
-            "trailing_rest_quote_only_confirmation_blocked"
-            if str(exit_rule or "").strip() == "scalp_trailing_take_profit"
-            else "hard_stop_rest_quote_only_confirmation_blocked"
-        )
+        "trailing_rest_quote_only_confirmation_blocked"
+        if str(exit_rule or "").strip() == "scalp_trailing_take_profit"
+        else "hard_stop_rest_quote_only_confirmation_blocked"
     )
     _log_holding_pipeline(
         stock,
@@ -52782,6 +53234,625 @@ def _scalp_holding_source_position_key(stock: dict, code: str) -> str:
             token = uuid4().hex
             stock["scalp_holding_source_position_token"] = token
     return f"runtime:{code}:{token}"
+
+
+_HOLDING_PATH_MARKETS = (
+    "PREMARKET", "REGULAR", "INTEGRATED_AFTERMARKET",
+)
+_HOLDING_PATH_RULES = {
+    "scalp_trailing_take_profit": "EXIT_TRAILING_TP",
+    "scalp_soft_stop_pct": "EXIT_SOFT_STOP",
+    "scalp_bad_entry_refined_canary": "EXIT_BAD_ENTRY_REFINED",
+    "reversal_add_post_eval_fail": "EXIT_POST_ADD_FAIL",
+}
+_HOLDING_PATH_POLICY, _HOLDING_PATH_POLICY_RECEIPT = runtime_policy_from_env(
+    os.environ, data_root=DATA_DIR,
+)
+_HOLDING_VOTE_EXECUTOR = ThreadPoolExecutor(
+    max_workers=4, thread_name_prefix="holding-path-vote",
+)
+_HOLDING_VOTE_INFLIGHT: dict[str, Any] = {}
+_HOLDING_VOTE_INFLIGHT_LOCK = threading.Lock()
+
+
+def _holding_path_policy_for(path_id: str, market: str | None) -> dict[str, Any]:
+    """A long-lived process cannot keep yesterday's selected vote policy."""
+    key = (path_id, market)
+    loaded = _HOLDING_PATH_POLICY_RECEIPT.get("status") == "estimated_provisional_loaded"
+    target = _HOLDING_PATH_POLICY_RECEIPT.get("target_date")
+    today = datetime.now(_KST).date().isoformat()
+    if loaded and target != today:
+        return PATH_POLICY_BY_MARKET.get(key, {})
+    return _HOLDING_PATH_POLICY.get(key, {})
+
+
+def _schedule_holding_vote_review(code: str, runner) -> str:
+    """Bound provider work without waiting for it in the SELL decision loop."""
+    with _HOLDING_VOTE_INFLIGHT_LOCK:
+        for key, future in tuple(_HOLDING_VOTE_INFLIGHT.items()):
+            if future.done():
+                _HOLDING_VOTE_INFLIGHT.pop(key, None)
+        if code in _HOLDING_VOTE_INFLIGHT:
+            return "inflight_skip"
+        if len(_HOLDING_VOTE_INFLIGHT) >= 4:
+            return "worker_capacity_full"
+        try:
+            _HOLDING_VOTE_INFLIGHT[code] = _HOLDING_VOTE_EXECUTOR.submit(runner)
+        except RuntimeError:
+            return "worker_unavailable"
+    return "scheduled"
+
+
+def _holding_path_vote_paths(stock: dict, *, buy_price: float,
+                             curr_price: float) -> tuple[str, ...]:
+    paths = ["EXIT_TRAILING_TP", "EXIT_SOFT_STOP"]
+    if _rule_bool("SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED", False):
+        paths.append("EXIT_BAD_ENTRY_REFINED")
+    if stock.get("reversal_add_state") == "POST_ADD_EVAL":
+        paths.append("EXIT_POST_ADD_FAIL")
+    if (_rule_bool("REVERSAL_ADD_ENABLED", True)
+            and curr_price > 0 and curr_price < buy_price
+            and not stock.get("reversal_add_used")
+            and not _scale_in_exit_authority_block_reason(stock)):
+        paths.append("ADD_REBOUND")
+    return tuple(dict.fromkeys(paths))
+
+
+def _persist_holding_path_review_gap(
+    *, stock: dict, code: str, reason: str,
+    paths: tuple[str, ...] | None = None,
+    quote_generation: str | None = None,
+) -> str:
+    """Persist one due review failure so earlier votes cannot bridge the gap."""
+    now_ts = time.time()
+    market = scalp_trailing_market_type_at(now_ts)
+    if market is None:
+        return "market_unclassified"
+    selected_paths = paths or _holding_path_vote_paths(
+        stock, buy_price=_safe_float(stock.get("buy_price"), 0.0),
+        curr_price=_safe_float(stock.get("curr_price"), 0.0),
+    )
+    if (paths is None and _rule_bool("REVERSAL_ADD_ENABLED", True)
+            and not stock.get("reversal_add_used")
+            and not _scale_in_exit_authority_block_reason(stock)):
+        selected_paths = tuple(dict.fromkeys((*selected_paths, "ADD_REBOUND")))
+    if not selected_paths or set(selected_paths) - PATH_IDS:
+        return "invalid_gap_paths"
+    position_key = _scalp_holding_source_position_key(stock, code)
+    buy_fill_legs = buy_fill_legs_from_runtime(stock)
+    buy_fill_identity = buy_fill_identity_from_legs(buy_fill_legs)
+    if buy_fill_identity is None:
+        previous = [item for item in
+                    stock.get("holding_path_vote_ledger") or []
+                    if isinstance(item, dict) and item.get("status") == "VALID"]
+        buy_fill_identity = previous[-1].get("buy_fill_identity") if previous else None
+        buy_fill_legs = previous[-1].get("buy_fill_legs") if previous else None
+    session_key = datetime.fromtimestamp(now_ts, _KST).date().isoformat()
+    gap_generation = f"gap:{int(now_ts * 1_000_000)}:{uuid4().hex}"
+    events = normalize_path_vote_bundle(
+        None, requested_paths=selected_paths,
+        expected_snapshot_id=holding_path_policy_hash({
+            "position_key": position_key, "market": market,
+            "paths": selected_paths, "gap_generation": gap_generation,
+            "reason": reason, "quote_generation": quote_generation,
+        }),
+        position_key=position_key, market=market, session_key=session_key,
+        model=str(getattr(TRADING_RULES, "OPENAI_HOLDING_EXIT_VOTE_MODEL",
+                          "gpt-5.4-nano") or "gpt-5.4-nano"),
+        route="SOURCE_GAP", transport_epoch="SOURCE_GAP",
+        source_generation=gap_generation,
+        buy_fill_identity=buy_fill_identity,
+        buy_fill_legs=buy_fill_legs,
+        quote_observed_at=None,
+        requested_at=now_ts, received_at=now_ts,
+        path_policy_hashes={
+            path: holding_path_policy_hash(_holding_path_policy_for(path, market))
+            for path in selected_paths
+        },
+    )
+    for event in events:
+        event["excluded_reason"] = reason
+        event["provider_called"] = False
+        event["quote_generation_observed"] = quote_generation
+    try:
+        persisted, status = append_path_events_file(
+            path_vote_store_path(DATA_DIR, position_key), position_key, events,
+        )
+    except (OSError, ValueError):
+        _invalidate_holding_path_vote_store(stock, code, position_key)
+        return "vote_gap_store_failed"
+    if status == "appended":
+        with ENTRY_LOCK:
+            if _scalp_holding_source_position_key(stock, code) == position_key:
+                stock["holding_path_vote_ledger"] = persisted
+                stock["holding_path_vote_hydrated_position_key"] = position_key
+                stock.pop("holding_path_vote_store_gap", None)
+    else:
+        _invalidate_holding_path_vote_store(stock, code, position_key)
+    return status
+
+
+def _invalidate_holding_path_vote_store(stock: dict, code: str, position_key: str) -> None:
+    """A failed durable receipt cannot leave cached votes with decision authority."""
+    with ENTRY_LOCK:
+        if _scalp_holding_source_position_key(stock, code) == position_key:
+            stock["holding_path_vote_ledger"] = []
+            stock["holding_path_vote_store_gap"] = "durable_vote_store_unavailable"
+            stock.pop("holding_path_vote_hydrated_position_key", None)
+
+
+def _collect_holding_path_votes(
+    *, stock: dict, code: str, ai_engine, ws_data: dict,
+    recent_ticks: list, recent_candles: list, position_ctx: dict,
+    holding_context: dict | None, now_ts: float, min_interval_sec: float,
+    live_stock: dict | None = None,
+) -> str:
+    """Use the existing due holding review for one multi-path provider call."""
+    if _is_any_simulated_position(stock, stock.get("strategy")):
+        return "simulated_position"
+    if ai_engine is None or not hasattr(ai_engine, "evaluate_scalping_holding_path_votes"):
+        gap = _persist_holding_path_review_gap(
+            stock=stock, code=code, reason="vote_producer_missing",
+        )
+        return "vote_producer_missing" if gap == "appended" else f"vote_producer_missing:{gap}"
+    observed_now_ts = time.time()
+    if not 0.0 <= observed_now_ts - now_ts <= 30.0:
+        gap = _persist_holding_path_review_gap(
+            stock=stock, code=code, reason="input_snapshot_expired_or_future",
+        )
+        return "input_snapshot_expired_or_future" if gap == "appended" else f"input_snapshot_expired_or_future:{gap}"
+    market = scalp_trailing_market_type_at(observed_now_ts)
+    if market is None:
+        return "market_unclassified"
+    paths = _holding_path_vote_paths(
+        stock, buy_price=_safe_float(position_ctx.get("buy_price"), 0.0),
+        curr_price=_safe_float(position_ctx.get("curr_price"), 0.0),
+    )
+    policy_hashes = {
+        path: holding_path_policy_hash(_holding_path_policy_for(path, market))
+        for path in paths
+    }
+
+    def persist_gap(reason: str, quote_generation: str | None = None) -> str:
+        status = _persist_holding_path_review_gap(
+            stock=stock, code=code, reason=reason, paths=paths,
+            quote_generation=quote_generation,
+        )
+        return reason if status == "appended" else f"{reason}:{status}"
+
+    quote_receipt = ws_quote_source_receipt(ws_data or {}, now_ts=observed_now_ts)
+    if not quote_receipt.get("item") or quote_receipt.get("observed_epoch") is None:
+        return persist_gap("exact_quote_receipt_missing")
+    quote_age_sec = observed_now_ts - _safe_float(
+        quote_receipt.get("observed_epoch"), 0.0
+    )
+    if not 0.0 <= quote_age_sec <= 3.0:
+        return persist_gap("exact_quote_stale_or_future")
+    route = str(
+        quote_receipt.get("market_route")
+        or ""
+    ).strip()
+    transport_epoch = str(
+        quote_receipt.get("transport_epoch")
+        or ""
+    ).strip()
+    source_generation = ":".join(
+        str(value) for value in (
+            quote_receipt.get("item"),
+            quote_receipt.get("route_sequence")
+            if quote_receipt.get("route_sequence") is not None
+            else quote_receipt.get("observed_epoch"),
+        )
+    )
+    if not route or not transport_epoch or not source_generation:
+        return persist_gap("quote_provenance_missing", source_generation)
+    position_key = _scalp_holding_source_position_key(stock, code)
+    buy_fill_legs = buy_fill_legs_from_runtime(stock)
+    buy_fill_identity = buy_fill_identity_from_runtime(stock)
+    if buy_fill_identity is None:
+        return persist_gap("buy_fill_identity_missing", source_generation)
+    def live_generation_valid() -> bool:
+        owner = live_stock if live_stock is not None else stock
+        return (_scalp_holding_source_position_key(owner, code) == position_key
+                and buy_fill_identity_from_runtime(owner) == buy_fill_identity)
+    if not live_generation_valid():
+        return "position_changed_before_review"
+    store_path = path_vote_store_path(DATA_DIR, position_key)
+    if stock.get("holding_path_vote_hydrated_position_key") != position_key:
+        try:
+            prior_votes = load_path_events_file(store_path, position_key)
+        except (OSError, ValueError):
+            _invalidate_holding_path_vote_store(stock, code, position_key)
+            return "vote_store_hydration_failed"
+        with ENTRY_LOCK:
+            if _scalp_holding_source_position_key(stock, code) != position_key:
+                return "position_changed_before_hydration"
+            stock["holding_path_vote_ledger"] = prior_votes
+            stock["holding_path_vote_hydrated_position_key"] = position_key
+            stock.pop("holding_path_vote_store_gap", None)
+    session_key = datetime.fromtimestamp(observed_now_ts, _KST).date().isoformat()
+    model = str(getattr(TRADING_RULES, "OPENAI_HOLDING_EXIT_VOTE_MODEL",
+                        "") or "")
+    if model != "gpt-5.4-nano":
+        return persist_gap("holding_vote_model_mismatch", source_generation)
+    try:
+        full_payload = build_path_vote_input(
+            stock_code=code, ws_data=ws_data, recent_ticks=recent_ticks,
+            recent_candles=recent_candles, position_ctx=position_ctx,
+            requested_paths=paths, market=market, session_key=session_key,
+            position_key=position_key, buy_fill_identity=buy_fill_identity,
+            route=route, transport_epoch=transport_epoch,
+            source_generation=source_generation,
+            quote_observed_at=float(quote_receipt["observed_epoch"]),
+            holding_context=holding_context,
+        )
+        full_hashes = path_vote_input_hashes(
+            full_payload, model=model, path_policy_hashes=policy_hashes,
+        )
+        claims_file = path_vote_claims_path(DATA_DIR, position_key)
+        claimed_history = read_path_vote_input_claim_history(
+            claims_file, position_key
+        )
+    except (OSError, ValueError, TypeError) as exc:
+        return persist_gap(f"input_hash_unavailable:{type(exc).__name__}",
+                           source_generation)
+    input_gaps = path_vote_input_gaps(full_payload)
+    input_ready_paths = tuple(path for path in paths if not input_gaps[path])
+    for path in paths:
+        if input_gaps[path]:
+            gap_status = _persist_holding_path_review_gap(
+                stock=stock, code=code,
+                reason="path_input_missing:" + ",".join(input_gaps[path]),
+                paths=(path,), quote_generation=source_generation,
+            )
+            if gap_status != "appended":
+                return f"path_input_gap_store_failed:{gap_status}"
+    paths = input_ready_paths
+    if not paths:
+        return "path_input_missing"
+    paths = tuple(
+        path for path in paths
+        if full_hashes["path_decision_input_sha256"][path]
+        not in claimed_history.get(path, set())
+    )
+    if not paths:
+        _log_holding_pipeline(
+            stock, code, "holding_path_review",
+            status="unchanged_input_skip", market=market,
+            decision_input_sha256=full_hashes["decision_input_sha256"],
+            actual_order_submitted=False,
+        )
+        return "unchanged_input_skip"
+    payload = build_path_vote_input(
+        stock_code=code, ws_data=ws_data, recent_ticks=recent_ticks,
+        recent_candles=recent_candles, position_ctx=position_ctx,
+        requested_paths=paths, market=market, session_key=session_key,
+        position_key=position_key, buy_fill_identity=buy_fill_identity,
+        route=route, transport_epoch=transport_epoch,
+        source_generation=source_generation,
+        quote_observed_at=float(quote_receipt["observed_epoch"]),
+        holding_context=holding_context,
+    )
+    selected_policy_hashes = {path: policy_hashes[path] for path in paths}
+    hashes = path_vote_input_hashes(
+        payload, model=model, path_policy_hashes=selected_policy_hashes,
+    )
+    existing_paths = {
+        item.get("path_id") for item in stock.get("holding_path_vote_ledger") or []
+        if isinstance(item, dict)
+        and item.get("position_key") == position_key
+        and item.get("market") == market
+        and item.get("session_key") == session_key
+        and item.get("route") == route
+        and item.get("transport_epoch") == transport_epoch
+        and item.get("source_generation") == source_generation
+    }
+    if set(paths).issubset(existing_paths):
+        _log_holding_pipeline(
+            stock, code, "holding_path_review",
+            status="duplicate_quote_generation_skip", market=market,
+            quote_generation=source_generation,
+            actual_order_submitted=False,
+        )
+        return "duplicate_quote_generation_skip"
+
+    reserved_at = time.time()
+    try:
+        budget = DEFAULT_HOT_PATH_AI_SYMBOL_BUDGET.reserve(
+            code=code, endpoint="holding_path_vote", now_ts=reserved_at,
+            min_interval_sec=max(0.0, float(min_interval_sec)),
+        )
+    except (TypeError, ValueError):
+        return persist_gap("symbol_budget_input_invalid", source_generation)
+    if not budget.allowed:
+        return persist_gap(f"symbol_budget_{budget.reason}", source_generation)
+    pre_call_at = time.time()
+    if (not live_generation_valid()
+            or scalp_trailing_market_type_at(pre_call_at) != market):
+        DEFAULT_HOT_PATH_AI_SYMBOL_BUDGET.release(
+            code=code, endpoint="holding_path_vote", reserved_at=reserved_at,
+        )
+        return "position_or_market_changed_before_provider"
+    if not 0 <= pre_call_at - float(quote_receipt["observed_epoch"]) <= 3.0:
+        DEFAULT_HOT_PATH_AI_SYMBOL_BUDGET.release(
+            code=code, endpoint="holding_path_vote", reserved_at=reserved_at,
+        )
+        return persist_gap("quote_expired_before_provider", source_generation)
+    claim_started = time.perf_counter()
+    try:
+        claimed = claim_path_vote_inputs(
+            claims_file, position_key, hashes["path_decision_input_sha256"]
+        )
+    except (OSError, ValueError) as exc:
+        DEFAULT_HOT_PATH_AI_SYMBOL_BUDGET.release(
+            code=code, endpoint="holding_path_vote", reserved_at=reserved_at,
+        )
+        return persist_gap(f"input_claim_unavailable:{type(exc).__name__}",
+                           source_generation)
+    if not claimed:
+        DEFAULT_HOT_PATH_AI_SYMBOL_BUDGET.release(
+            code=code, endpoint="holding_path_vote", reserved_at=reserved_at,
+        )
+        return "unchanged_input_skip"
+    claim_ms = int((time.perf_counter() - claim_started) * 1000)
+    stock["holding_path_last_request_reserved_at"] = reserved_at
+    engine_call_started = time.perf_counter()
+    try:
+        events = ai_engine.evaluate_scalping_holding_path_votes(
+            str(stock.get("name") or code), code, ws_data, recent_ticks,
+            recent_candles, position_ctx, requested_paths=paths,
+            market=market, session_key=session_key, position_key=position_key,
+            buy_fill_identity=buy_fill_identity,
+            buy_fill_legs=buy_fill_legs,
+            route=route, transport_epoch=transport_epoch,
+            source_generation=source_generation,
+            quote_observed_at=float(quote_receipt["observed_epoch"]),
+            holding_context=holding_context,
+            expected_path_hashes=hashes["path_decision_input_sha256"],
+            path_policy_hashes=selected_policy_hashes,
+            metadata_extra={"record_id": stock.get("id"),
+                            "source_event_stage": "holding_path_vote"},
+        )
+    except Exception as exc:
+        stock["holding_path_last_provider_attempt_unconfirmed_at"] = reserved_at
+        failure_reason = (
+            "provider_timeout" if "timeout" in type(exc).__name__.lower()
+            else "producer_exception"
+        )
+        _log_holding_pipeline(stock, code, "holding_path_vote_source_gap",
+                              reason=failure_reason, error_type=type(exc).__name__)
+        return persist_gap(failure_reason, source_generation)
+    engine_call_ms = int((time.perf_counter() - engine_call_started) * 1000)
+    if not live_generation_valid():
+        return "position_changed_after_provider"
+    if not isinstance(events, list) or {item.get("path_id") for item in events
+                                       if isinstance(item, dict)} != set(paths):
+        return persist_gap("producer_path_set_mismatch", source_generation)
+    if any(item.get("provider_called") is True for item in events):
+        stock["holding_path_last_provider_attempt_at"] = reserved_at
+    if any(item.get("path_decision_input_sha256") !=
+           hashes["path_decision_input_sha256"].get(item.get("path_id"))
+           for item in events if isinstance(item, dict)):
+        return persist_gap("producer_input_hash_mismatch", source_generation)
+    if not any(item.get("provider_called") is True for item in events):
+        try:
+            released = release_path_vote_inputs(
+                claims_file, position_key,
+                hashes["path_decision_input_sha256"],
+            )
+        except (OSError, ValueError):
+            released = False
+        if not released:
+            return persist_gap("input_claim_release_failed", source_generation)
+        DEFAULT_HOT_PATH_AI_SYMBOL_BUDGET.release(
+            code=code, endpoint="holding_path_vote", reserved_at=reserved_at,
+        )
+    store_started = time.perf_counter()
+    try:
+        persisted, append_status = append_path_events_file(
+            store_path, position_key, events,
+        )
+    except (OSError, ValueError) as exc:
+        _invalidate_holding_path_vote_store(stock, code, position_key)
+        _log_holding_pipeline(stock, code, "holding_path_vote_source_gap",
+                              reason="store_failed", error_type=type(exc).__name__)
+        return "vote_store_failed"
+    if append_status != "appended":
+        _invalidate_holding_path_vote_store(stock, code, position_key)
+        return append_status
+    store_ms = int((time.perf_counter() - store_started) * 1000)
+    with ENTRY_LOCK:
+        if not live_generation_valid():
+            return "position_changed_after_call"
+        stock["holding_path_vote_ledger"] = persisted
+        stock.pop("holding_path_vote_store_gap", None)
+        if any(event.get("status") == "VALID" for event in events):
+            stock["holding_path_last_valid_vote_at"] = time.time()
+    _log_holding_pipeline(
+        stock, code, "holding_path_votes_collected",
+        position_key=position_key, market=market, session_key=session_key,
+        paths=list(paths), statuses=[event.get("status") for event in events],
+        decision_input_sha256=hashes["decision_input_sha256"],
+        request_payload_sha256=hashes["request_payload_sha256"],
+        engine_call_ms=engine_call_ms, vote_store_ms=store_ms,
+        vote_claim_ms=claim_ms,
+        provider_calls=1 if any(event.get("provider_called") for event in events) else 0,
+        append_status=append_status, actual_order_submitted=False,
+    )
+    return "appended"
+
+
+def _holding_path_signal_decision(
+    stock: dict, code: str, *, path_id: str, signal_id: str,
+    signal_at: float,
+) -> dict[str, Any]:
+    """A fixed signal ID reads only its own pre-signal sequence."""
+    snapshot_started = time.perf_counter()
+    market = scalp_trailing_market_type_at(signal_at)
+    policy = _holding_path_policy_for(path_id, market)
+    position_key = _scalp_holding_source_position_key(stock, code)
+    buy_fill_identity = buy_fill_identity_from_runtime(stock)
+    session_key = datetime.fromtimestamp(signal_at, _KST).date().isoformat()
+    snapshot_key = f"{position_key}:{buy_fill_identity}:{session_key}:{market}:{path_id}:{signal_id}"
+    if not stock.get("holding_path_vote_store_gap"):
+        try:
+            persisted = load_path_events_file(
+                path_vote_store_path(DATA_DIR, position_key), position_key,
+            )
+        except (OSError, ValueError):
+            _invalidate_holding_path_vote_store(stock, code, position_key)
+        else:
+            with ENTRY_LOCK:
+                if (_scalp_holding_source_position_key(stock, code) == position_key
+                        and buy_fill_identity_from_runtime(stock) == buy_fill_identity):
+                    stock["holding_path_vote_ledger"] = persisted
+                    stock["holding_path_vote_hydrated_position_key"] = position_key
+    with ENTRY_LOCK:
+        prior = (stock.get("holding_path_signal_snapshots") or {}).get(snapshot_key)
+        if isinstance(prior, dict):
+            return prior
+        snapshot = path_signal_snapshot(
+            ([] if stock.get("holding_path_vote_store_gap")
+             else stock.get("holding_path_vote_ledger")),
+            position_key=position_key,
+            market=market, session_key=session_key, path_id=path_id,
+            buy_fill_identity=buy_fill_identity,
+            model=str(getattr(TRADING_RULES, "OPENAI_HOLDING_EXIT_VOTE_MODEL",
+                              "gpt-5.4-nano") or "gpt-5.4-nano"),
+            signal_at=signal_at, policy=policy or {},
+        )
+        if stock.get("holding_path_vote_store_gap"):
+            snapshot["reason"] = "durable_vote_store_unavailable"
+        snapshot["policy_sha256"] = (
+            holding_path_policy_hash(policy) if isinstance(policy, dict) else None
+        )
+        policy_expired = (
+            _HOLDING_PATH_POLICY_RECEIPT.get("status") == "estimated_provisional_loaded"
+            and _HOLDING_PATH_POLICY_RECEIPT.get("target_date")
+            != datetime.now(_KST).date().isoformat()
+        )
+        snapshot["policy_bundle_sha256"] = (
+            None if policy_expired else _HOLDING_PATH_POLICY_RECEIPT.get("bundle_sha256")
+        )
+        snapshot["policy_load_status"] = (
+            "baseline_policy_expired" if policy_expired
+            else _HOLDING_PATH_POLICY_RECEIPT.get("status")
+        )
+        snapshot["signal_snapshot_ms"] = int(
+            (time.perf_counter() - snapshot_started) * 1000
+        )
+        snapshot["signal_provider_wait_ms"] = 0
+        snapshots = dict(stock.get("holding_path_signal_snapshots") or {})
+        snapshots[snapshot_key] = snapshot
+        stock["holding_path_signal_snapshots"] = dict(list(snapshots.items())[-32:])
+    try:
+        _log_holding_pipeline(stock, code, "holding_path_signal_snapshot",
+                              signal_id=signal_id, **snapshot,
+                              actual_order_submitted=False)
+    except Exception as exc:
+        log_error(f"holding_path_signal_snapshot_log_failed:{type(exc).__name__}")
+    if path_id == "EXIT_TRAILING_TP":
+        with ENTRY_LOCK:
+            stock["holding_path_latest_tp_signal"] = {
+                "position_key": position_key,
+                "buy_fill_identity": buy_fill_identity,
+                "signal_id": signal_id,
+                "signal_at": signal_at,
+                "policy_bundle_sha256": snapshot.get("policy_bundle_sha256"),
+            }
+    return snapshot
+
+
+def _holding_path_exit_proceeds(
+    stock: dict, code: str, *, exit_rule: str, profit_rate: float,
+    ws_data: dict, signal_at: float,
+) -> bool:
+    """Only a mature path-specific VETO may defer a soft SELL briefly."""
+    path_id = _HOLDING_PATH_RULES.get(str(exit_rule or ""))
+    if path_id is None:
+        return True
+    if stock.get("holding_path_vote_store_gap"):
+        stock.pop("holding_path_exit_hold", None)
+        return True
+    position_key = _scalp_holding_source_position_key(stock, code)
+    if path_id == "EXIT_TRAILING_TP":
+        first = stock.get("scalp_trailing_first_crossing") or {}
+        if _safe_float(first.get("at_epoch"), None) is None:
+            return True
+        signal_id = f"{first.get('at_epoch')}:{first.get('threshold_key')}"
+        frozen_signal_at = float(first["at_epoch"])
+    else:
+        frozen_signal_at = signal_at
+        previous = stock.get("holding_path_exit_candidate") or {}
+        if (previous.get("position_key") == position_key
+                and previous.get("exit_rule") == exit_rule):
+            signal_id = str(previous.get("signal_id") or "")
+        else:
+            signal_id = f"{exit_rule}:{signal_at:.6f}"
+            stock["holding_path_exit_candidate"] = {
+                "position_key": position_key, "exit_rule": exit_rule,
+                "signal_id": signal_id,
+            }
+    snapshot = _holding_path_signal_decision(
+        stock, code, path_id=path_id, signal_id=signal_id,
+        signal_at=frozen_signal_at,
+    )
+    if snapshot.get("decision") != "VETO":
+        stock.pop("holding_path_exit_hold", None)
+        return True
+    market = scalp_trailing_market_type_at(frozen_signal_at)
+    policy = _holding_path_policy_for(path_id, market)
+    if not validate_path_policy(policy):
+        return True
+    now_actual = time.time()
+    receipt = ws_quote_source_receipt(ws_data or {}, now_ts=now_actual)
+    quote_at = _safe_float(receipt.get("observed_epoch"), None)
+    if (quote_at is None or not 0 <= now_actual - quote_at <= 3.0
+            or not _pre_submit_input_snapshot_has_usable_quote(ws_data)):
+        return True
+    protect_pct = _safe_float(stock.get("protect_profit_pct"), None)
+    if (profit_rate <= _rule_float("SCALP_HARD_STOP", -2.5)
+            or profit_rate <= _rule_float("SCALP_PROTECT_TRAILING_EMERGENCY_PCT", -2.0)
+            or (protect_pct is not None and profit_rate <= protect_pct)
+            or stock.get("exit_requested") or _has_active_sell_order_pending(stock)):
+        return True
+    hold = stock.get("holding_path_exit_hold") or {}
+    if hold.get("signal_id") != signal_id or hold.get("path_id") != path_id:
+        started_at = frozen_signal_at
+        if path_id != "EXIT_TRAILING_TP":
+            for field in ("soft_stop_micro_grace_started_at",
+                          "soft_stop_dynamic_grace_started_at"):
+                prior_start = _safe_float(stock.get(field), None)
+                if prior_start is not None and 0 < prior_start <= now_actual:
+                    started_at = min(started_at, prior_start)
+        hold = {
+            "signal_id": signal_id, "path_id": path_id,
+            "started_at": started_at, "anchor_profit_rate": profit_rate,
+            "market": market,
+        }
+        stock["holding_path_exit_hold"] = hold
+    elapsed = max(0.0, now_actual - _safe_float(hold.get("started_at"), now_actual))
+    worsen = (_safe_float(hold.get("anchor_profit_rate"), profit_rate)
+              - profit_rate)
+    max_defer = min(
+        float(_rule_int("HOLDING_FLOW_OVERRIDE_MAX_DEFER_SEC", 90)),
+        90.0, _safe_float(policy.get("max_defer_sec"), 0.0),
+    )
+    max_worsen = (0.40 if path_id == "EXIT_TRAILING_TP"
+                  else _rule_float("HOLDING_FLOW_OVERRIDE_WORSEN_PCT", 0.80))
+    if (hold.get("market") != market or elapsed >= max_defer
+            or worsen >= max_worsen):
+        stock.pop("holding_path_exit_hold", None)
+        return True
+    _log_holding_pipeline(
+        stock, code, "holding_path_exit_veto_deferred",
+        exit_rule=exit_rule, path_id=path_id, signal_id=signal_id,
+        elapsed_sec=elapsed, max_defer_sec=max_defer,
+        profit_worsen_pct=worsen, max_worsen_pct=max_worsen,
+        vote_count=snapshot.get("vote_count"),
+        actual_order_submitted=False,
+    )
+    return False
 
 
 def _arm_smoothing_source_only_path(
@@ -75480,506 +76551,6 @@ def _latest_nxt_aftermarket_early_sell_quote_context(
     return fields, exact_view
 
 
-def _nxt_rising_missed_tp1_partial_runner_enabled(now_dt: datetime) -> bool:
-    if not _env_bool(
-        "KORSTOCKSCAN_NXT_RISING_MISSED_TP1_PARTIAL_RUNNER_ENABLED", False
-    ):
-        return False
-    active_date = str(
-        os.getenv("KORSTOCKSCAN_NXT_RISING_MISSED_TP1_PARTIAL_RUNNER_ACTIVE_DATE", "")
-    ).strip()
-    return bool(active_date and active_date == now_dt.strftime("%Y-%m-%d"))
-
-
-def _maybe_submit_nxt_rising_missed_tp1_partial_runner(
-    stock: dict,
-    code: str,
-    ws_data: dict,
-    *,
-    strategy: str,
-    curr_price: int,
-    buy_price: float,
-    now_ts: float,
-    now_dt: datetime,
-    admin_id,
-    quote_fields: dict | None = None,
-) -> bool:
-    if not _nxt_rising_missed_tp1_partial_runner_enabled(now_dt):
-        return False
-    if strategy != "SCALPING" or not _has_rising_missed_entry_lineage(stock):
-        return False
-    if stock.get("nxt_rising_missed_tp1_partial_pending") or stock.get(
-        "nxt_rising_missed_tp1_partial_applied"
-    ):
-        return False
-    sell_receipt_state = stock.get("_sell_execution_receipt_state")
-    if stock.get("sell_partial_exit_carry_active") or (
-        isinstance(sell_receipt_state, dict)
-        and (
-            _safe_int(sell_receipt_state.get("aggregate_cumulative_qty"), 0) > 0
-            or _safe_int(sell_receipt_state.get("carried_qty"), 0) > 0
-        )
-    ):
-        return False
-    if _has_active_sell_order_pending(stock) or _has_open_pending_entry_orders(stock):
-        return False
-    if not admin_id or curr_price <= 0 or buy_price <= 0:
-        return False
-
-    session_bucket = _rising_missed_nxt_session_bucket(now_ts)
-    if not session_bucket.startswith("nxt_"):
-        return False
-    exchange = _resolve_holding_sell_dmst_stex_tp(
-        stock,
-        code,
-        now_t=now_dt.time(),
-        observed_at=now_dt,
-    )
-    if exchange.get("blocked") or exchange.get("nxt_enabled") is not True:
-        return False
-
-    gross_profit_pct = (
-        (float(curr_price) - float(buy_price)) / float(buy_price)
-    ) * 100.0
-    trigger_pct = _env_float(
-        "KORSTOCKSCAN_NXT_RISING_MISSED_TP1_PARTIAL_TRIGGER_PCT", 1.30
-    )
-    if gross_profit_pct < trigger_pct:
-        return False
-
-    total_qty = _safe_int(stock.get("buy_qty"), 0)
-    min_remaining_qty = max(
-        1,
-        _env_int("KORSTOCKSCAN_NXT_RISING_MISSED_TP1_PARTIAL_MIN_REMAINING_QTY", 1),
-    )
-    if total_qty <= min_remaining_qty:
-        return False
-    ratio = min(
-        0.90,
-        max(0.10, _env_float("KORSTOCKSCAN_NXT_RISING_MISSED_TP1_PARTIAL_RATIO", 0.50)),
-    )
-    partial_qty = min(
-        total_qty - min_remaining_qty,
-        max(1, int(math.floor(total_qty * ratio))),
-    )
-    if partial_qty <= 0:
-        return False
-
-    quote_fields = quote_fields if isinstance(quote_fields, dict) else {}
-    quote_reason = (
-        str(quote_fields.get("quote_consistency_reason") or "").strip().lower()
-    )
-    if quote_reason in {"quote_stale", "stale_quote", "conflicted", "price_conflict"}:
-        return False
-    executable_sell_price = _safe_int(
-        ws_data.get("executable_sell_price")
-        or quote_fields.get("executable_sell_price"),
-        0,
-    )
-    if executable_sell_price <= 0:
-        return False
-
-    orderbook = ws_data.get("orderbook") if isinstance(ws_data, dict) else None
-    bids = orderbook.get("bids") if isinstance(orderbook, dict) else None
-    best_bid_row = bids[0] if isinstance(bids, list) and bids else {}
-    best_bid_price = _safe_int(
-        best_bid_row.get("price") if isinstance(best_bid_row, dict) else 0,
-        0,
-    )
-    best_bid_qty = _safe_int(
-        best_bid_row.get("volume") if isinstance(best_bid_row, dict) else 0,
-        0,
-    )
-    max_bid_gap_bps = max(
-        0,
-        _env_int("KORSTOCKSCAN_NXT_RISING_MISSED_TP1_PARTIAL_MAX_BID_GAP_BPS", 120),
-    )
-    bid_gap_bps = _price_gap_bps(
-        best_bid_price,
-        executable_sell_price,
-        basis_price=executable_sell_price,
-    )
-    required_bid_qty = partial_qty * 2
-    if (
-        best_bid_price <= 0
-        or best_bid_qty < required_bid_qty
-        or bid_gap_bps > max_bid_gap_bps
-    ):
-        if best_bid_price <= 0:
-            defer_reason = "fresh_bid_orderbook_unavailable"
-        elif best_bid_qty < required_bid_qty:
-            defer_reason = "best_bid_depth_below_limit_order_floor"
-        else:
-            defer_reason = "best_bid_gap_above_cap"
-        _log_holding_pipeline(
-            stock,
-            code,
-            "nxt_rising_missed_tp1_partial_deferred",
-            reason=defer_reason,
-            qty=partial_qty,
-            original_qty=total_qty,
-            executable_sell_price=executable_sell_price,
-            best_bid_price=best_bid_price,
-            best_bid_qty=best_bid_qty,
-            required_bid_qty=required_bid_qty,
-            bid_gap_bps=bid_gap_bps,
-            max_bid_gap_bps=max_bid_gap_bps,
-            actual_order_submitted=False,
-            broker_order_forbidden=True,
-            runtime_effect=True,
-            decision_authority="nxt_rising_missed_tp1_partial_runner_canary",
-        )
-        return False
-
-    pending_msg = (
-        f"🎯 **{stock.get('name', code)} NXT TP1 부분익절 주문 ({strategy})**\n"
-        f"gross: `{gross_profit_pct:+.2f}%` | 수량: `{partial_qty}/{total_qty}주`\n"
-        "잔여 수량은 runner로 계속 관리"
-    )
-    sell_submit_call_started_at = time.time()
-    sell_submit_context_fields = _new_sell_submit_context_fields(
-        stock,
-        code,
-        requested_qty=partial_qty,
-        started_at=sell_submit_call_started_at,
-        intended_route="NXT",
-        intended_effective_venue="NXT",
-        intended_session_bucket=_holding_sell_execution_session_bucket(
-            sell_submit_call_started_at
-        ),
-    )
-    sell_submit_generation = str(sell_submit_context_fields["sell_submit_generation"])
-    sell_submit_context_sha256 = str(
-        sell_submit_context_fields["sell_submit_context_sha256"]
-    )
-    _mutate_stock_state(
-        stock,
-        set_fields={
-            "status": "SELL_ORDERED",
-            "nxt_rising_missed_tp1_partial_pending": True,
-            "nxt_rising_missed_tp1_partial_applied": False,
-            "nxt_rising_missed_tp1_partial_requested_qty": partial_qty,
-            "nxt_rising_missed_tp1_partial_filled_qty": 0,
-            "nxt_rising_missed_tp1_partial_fill_amount": 0,
-            "nxt_rising_missed_tp1_partial_original_qty": total_qty,
-            "nxt_rising_missed_tp1_partial_trigger_price": curr_price,
-            "nxt_rising_missed_tp1_partial_trigger_profit_pct": round(
-                gross_profit_pct, 6
-            ),
-            "nxt_rising_missed_tp1_partial_triggered_at": now_ts,
-            "pending_sell_msg": pending_msg,
-            "sell_order_time": now_ts,
-            "sell_target_price": executable_sell_price,
-            "last_exit_rule": "nxt_rising_missed_tp1_partial_runner",
-            "last_exit_decision_source": "NXT_RISING_MISSED_TP1",
-            **sell_submit_context_fields,
-        },
-    )
-    if not _persist_sell_submit_pre_call_boundary(
-        stock,
-        code,
-        target_id=stock.get("id"),
-    ):
-        _mutate_stock_state(
-            stock,
-            set_fields={"nxt_rising_missed_tp1_partial_pending": False},
-        )
-        _log_holding_pipeline(
-            stock,
-            code,
-            "sell_submit_pre_call_custody_blocked",
-            qty=partial_qty,
-            exit_rule="nxt_rising_missed_tp1_partial_runner",
-            actual_order_submitted=False,
-            broker_order_forbidden=True,
-            runtime_effect=True,
-            decision_authority="durability_guard_only",
-        )
-        return False
-    submit_call_exception: Exception | None = None
-    try:
-        result = kiwoom_orders.send_smart_sell_order(
-            code=code,
-            qty=partial_qty,
-            token=KIWOOM_TOKEN,
-            ws_data=ws_data,
-            reason_type="PROFIT",
-            strategy=strategy,
-            bypass_open_time_block=False,
-            dmst_stex_tp="NXT",
-            owner_context=main_owner_context(
-                stock,
-                action="NXT_PARTIAL_SELL",
-                ordinal=sell_submit_generation,
-            ),
-        )
-    except Exception as exc:
-        submit_call_exception = exc
-        result = {"return_code": "exception", "return_msg": str(exc)}
-    response_contract = _classify_sell_submit_response(result)
-    ord_no = response_contract["order_no"]
-    with ENTRY_LOCK:
-        submit_response_state = _sell_submit_response_race_state(
-            stock,
-            generation=sell_submit_generation,
-            context_sha256=sell_submit_context_sha256,
-            requested_qty=partial_qty,
-            response_order_no=ord_no,
-        )
-        receipt_proof = (
-            dict(stock.get("_sell_submit_receipt_proof"))
-            if isinstance(stock.get("_sell_submit_receipt_proof"), dict)
-            else {}
-        )
-        if submit_response_state == "receipt_proved_custody_gap":
-            stock["sell_cancel_reconciliation_required"] = True
-            stock["sell_cancel_reconciliation_source"] = (
-                "nxt_tp1_receipt_submission_custody_retry_required"
-            )
-        elif submit_response_state == "receipt_proof_response_order_conflict":
-            stock["sell_cancel_reconciliation_required"] = True
-            stock["sell_cancel_reconciliation_source"] = (
-                "nxt_tp1_submit_response_order_conflicts_exact_receipt"
-            )
-
-    if submit_response_state == "stale_or_intervened":
-        log_error(
-            f"[NXT_TP1_SUBMIT_RESPONSE_STALE] {stock.get('name')}({code}) "
-            f"generation={sell_submit_generation}; state mutation skipped"
-        )
-        return False
-    if submit_response_state == "receipt_proof_response_order_conflict":
-        log_error(
-            f"[NXT_TP1_SUBMIT_RESPONSE_ORDER_CONFLICT] "
-            f"{stock.get('name')}({code}) response={ord_no or '-'} "
-            f"receipt={receipt_proof.get('order_no') or '-'}"
-        )
-        return False
-    if submit_response_state in {
-        "receipt_proved",
-        "receipt_proved_custody_gap",
-    }:
-        receipt_order_no = str(receipt_proof.get("order_no") or "").strip()
-        if response_contract["state"] == "success":
-            receipt_effective_venue = (
-                str(
-                    stock.get("last_sell_execution_cohort")
-                    or receipt_proof.get("intended_effective_venue")
-                    or "NXT"
-                )
-                .strip()
-                .upper()
-            )
-            receipt_session_bucket = str(
-                stock.get("last_sell_execution_session_bucket")
-                or receipt_proof.get("intended_session_bucket")
-                or session_bucket
-            ).strip()
-            _log_holding_pipeline(
-                stock,
-                code,
-                "sell_order_sent",
-                qty=partial_qty,
-                ord_no=receipt_order_no,
-                sell_reason_type="PROFIT",
-                exit_rule="nxt_rising_missed_tp1_partial_runner",
-                exit_decision_source="NXT_RISING_MISSED_TP1",
-                broker_route="NXT",
-                effective_venue=receipt_effective_venue,
-                exit_effective_venue=receipt_effective_venue,
-                market_session_bucket=receipt_session_bucket,
-                exit_market_session_bucket=receipt_session_bucket,
-                exit_market_session_time_source=(
-                    "exact_pre_response_broker_execution_receipt"
-                ),
-                sell_submit_response_corroboration_only=True,
-                exit_receipt_submission_custody_committed=(
-                    submit_response_state == "receipt_proved"
-                ),
-                **{
-                    **_real_sell_submission_contract_fields(),
-                    "runtime_effect": False,
-                },
-                **_exact_sell_submission_leg_fields(
-                    receipt_order_no,
-                    partial_qty,
-                ),
-            )
-        _log_holding_pipeline(
-            stock,
-            code,
-            (
-                "nxt_rising_missed_tp1_partial_order_sent"
-                if response_contract["state"] == "success"
-                else "nxt_tp1_submit_response_conflicted_with_receipt"
-            ),
-            qty=partial_qty,
-            original_qty=total_qty,
-            runner_qty=total_qty - partial_qty,
-            ord_no=receipt_order_no or "-",
-            response_error=(
-                str(result.get("return_msg") or "-")
-                if isinstance(result, dict)
-                else "-"
-            ),
-            actual_order_submitted=True,
-            broker_order_forbidden=False,
-            runtime_effect=False,
-            sell_submit_response_corroboration_only=True,
-            exit_receipt_submission_custody_committed=(
-                submit_response_state == "receipt_proved"
-            ),
-            decision_authority="exact_broker_receipt_corroboration_only",
-        )
-        return True
-    if submit_call_exception is not None:
-        _mutate_stock_state(
-            stock,
-            set_fields={
-                "sell_cancel_reconciliation_required": True,
-                "sell_cancel_reconciliation_source": (
-                    "nxt_tp1_submit_exception_after_call_started"
-                ),
-                "last_sell_order_error": str(submit_call_exception)[:240],
-            },
-        )
-        _log_holding_pipeline(
-            stock,
-            code,
-            "nxt_rising_missed_tp1_submit_ambiguous",
-            qty=partial_qty,
-            actual_order_submitted=False,
-            broker_order_forbidden=True,
-            runtime_effect=False,
-            decision_authority="broker_reconciliation_only",
-        )
-        return False
-    if response_contract["state"] == "ambiguous":
-        error = response_contract["message"] or "ambiguous_response"
-        broker_order_attempted = bool(response_contract.get("broker_order_attempted"))
-        _mutate_stock_state(
-            stock,
-            set_fields={
-                "sell_cancel_reconciliation_required": True,
-                "sell_cancel_reconciliation_source": (
-                    "nxt_tp1_submit_available_quantity_conflict"
-                    if "매도가능수량" in error
-                    else "nxt_tp1_submit_response_ambiguous"
-                ),
-                "last_sell_order_error": error[:240],
-            },
-        )
-        _log_holding_pipeline(
-            stock,
-            code,
-            "nxt_rising_missed_tp1_submit_ambiguous",
-            qty=partial_qty,
-            error=error,
-            ord_no=response_contract.get("order_no") or "-",
-            actual_order_submitted=broker_order_attempted,
-            broker_order_forbidden=not broker_order_attempted,
-            runtime_effect=False,
-            decision_authority=(
-                "broker_owner_registry_reconciliation_only"
-                if broker_order_attempted
-                else "broker_reconciliation_only"
-            ),
-        )
-        return False
-    if response_contract["state"] in {"definitive_reject", "local_no_call"}:
-        error = response_contract["message"] or "broker_rejected"
-        if not _commit_definitive_sell_reject_boundary(
-            stock,
-            code,
-            target_id=stock.get("id"),
-            generation=sell_submit_generation,
-        ):
-            _mutate_stock_state(
-                stock,
-                set_fields={
-                    "sell_cancel_reconciliation_required": True,
-                    "sell_cancel_reconciliation_source": (
-                        "nxt_tp1_reject_pending_custody_clear_failed"
-                    ),
-                    "last_sell_order_error": error[:240],
-                },
-            )
-            return False
-        _mutate_stock_state(
-            stock,
-            set_fields={
-                "status": "HOLDING",
-                "nxt_rising_missed_tp1_partial_pending": False,
-            },
-            pop_fields=[
-                "sell_odno",
-                "sell_order_time",
-                "pending_sell_msg",
-                "sell_target_price",
-                *_SELL_SUBMIT_CONTEXT_KEYS,
-            ],
-        )
-        _log_holding_pipeline(
-            stock,
-            code,
-            "nxt_rising_missed_tp1_partial_submit_failed",
-            error=error,
-            requested_qty=partial_qty,
-            gross_profit_pct=f"{gross_profit_pct:+.2f}",
-            actual_order_submitted=False,
-            runtime_effect=True,
-        )
-        return False
-    # Runtime can bind the exact response order number, but durable pending
-    # custody remains until the official receipt clears this generation.
-    success_custody_cleared = False
-    set_fields = {}
-    if ord_no:
-        set_fields["sell_odno"] = ord_no
-        set_fields["nxt_rising_missed_tp1_partial_ord_no"] = ord_no
-    _mutate_stock_state(
-        stock,
-        set_fields=set_fields,
-        pop_fields=(_SELL_SUBMIT_CONTEXT_KEYS if success_custody_cleared else ()),
-    )
-    _log_holding_pipeline(
-        stock,
-        code,
-        "sell_order_sent",
-        qty=partial_qty,
-        ord_no=ord_no or "-",
-        sell_reason_type="PROFIT",
-        exit_rule="nxt_rising_missed_tp1_partial_runner",
-        exit_decision_source="NXT_RISING_MISSED_TP1",
-        broker_route="NXT",
-        effective_venue="NXT",
-        exit_effective_venue="NXT",
-        market_session_bucket=session_bucket,
-        exit_market_session_bucket=session_bucket,
-        exit_market_session_time_source=("successful_sell_submit_response_received_at"),
-        **_real_sell_submission_contract_fields(),
-        **_exact_sell_submission_leg_fields(ord_no, partial_qty),
-    )
-    _log_holding_pipeline(
-        stock,
-        code,
-        "nxt_rising_missed_tp1_partial_order_sent",
-        qty=partial_qty,
-        original_qty=total_qty,
-        runner_qty=total_qty - partial_qty,
-        ord_no=ord_no or "-",
-        gross_profit_pct=f"{gross_profit_pct:+.2f}",
-        trigger_pct=f"{trigger_pct:.2f}",
-        session_bucket=session_bucket,
-        dmst_stex_tp="NXT",
-        actual_order_submitted=True,
-        runtime_effect=True,
-        decision_authority="nxt_rising_missed_tp1_partial_runner_canary",
-        **quote_fields,
-    )
-    return True
-
-
 def _cancel_reject_indicates_sor_exchange_mismatch(message: str) -> bool:
     text = str(message or "")
     return "571412" in text or "원주문이 SOR주문" in text
@@ -82523,23 +83094,6 @@ def handle_holding_state(
         )
         return
 
-    if (
-        not daily_limit_up_triggered
-        and _maybe_submit_nxt_rising_missed_tp1_partial_runner(
-            stock,
-            code,
-            ws_data,
-            strategy=strategy,
-            curr_price=curr_p,
-            buy_price=buy_p,
-            now_ts=now_ts,
-            now_dt=now_dt,
-            admin_id=admin_id,
-            quote_fields=holding_quote_fields,
-        )
-    ):
-        return
-
     if stock.get("exit_mode") == "SCALP_PRESET_TP":
         if daily_limit_up_triggered:
             log_info(
@@ -82695,10 +83249,7 @@ def handle_holding_state(
 
     last_ai_time = LAST_AI_CALL_TIMES.get(code, 0)
     current_ai_score = float(stock.get("rt_ai_prob", 0.5) or 0.5) * 100
-    near_ai_exit_score_limit = 35
     near_ai_exit_min_loss_pct = -0.7
-    momentum_decay_score_limit = _rule_int("SCALP_AI_MOMENTUM_DECAY_SCORE_LIMIT", 45)
-    momentum_decay_min_hold_sec = _rule_int("SCALP_AI_MOMENTUM_DECAY_MIN_HOLD_SEC", 90)
     last_ai_profit = stock.get("last_ai_profit", profit_rate)
     price_change = abs(profit_rate - last_ai_profit)
     time_elapsed = now_ts - last_ai_time
@@ -82855,23 +83406,8 @@ def handle_holding_state(
                 held_sec=held_sec,
                 config=_opening_rotation_exit_config(),
             )
-            if opening_rotation_exit.get("holding_ai_handoff_required"):
-                holding_action = _opening_rotation_holding_ai_once(
-                    stock=stock,
-                    code=code,
-                    ws_data=ws_data,
-                    ai_engine=ai_engine,
-                    profit_rate=profit_rate,
-                    peak_profit=peak_profit,
-                    held_sec=held_sec,
-                )
-                if holding_action == "EXIT":
-                    is_sell_signal = True
-                    sell_reason_type = "LOSS"
-                    exit_rule = "opening_rotation_holding_ai_early_exit"
-                    reason = (
-                        f"🧠 장초반 순환전략 holding AI 조기청산 ({profit_rate:+.2f}%)"
-                    )
+            # This retired family retains its mechanical protection and timeout
+            # exits for inherited positions, but cannot invoke the old score AI.
             if opening_rotation_exit.get("should_exit"):
                 is_sell_signal = True
                 sell_reason_type = str(
@@ -82936,1410 +83472,211 @@ def handle_holding_state(
     )
     if holding_ai_gate_prerequisites:
         safe_profit_pct = _rule_float("SCALP_SAFE_PROFIT", 0.5)
-        near_safe_profit_zone = abs(profit_rate - safe_profit_pct) <= 0.20
-        is_critical_zone = (
-            near_safe_profit_zone
-            or (profit_rate >= safe_profit_pct)
-            or (profit_rate < 0)
+        is_critical_zone = profit_rate < 0 or profit_rate >= safe_profit_pct - 0.20
+        dynamic_min_cd = _rule_int(
+            "AI_HOLDING_CRITICAL_MIN_COOLDOWN" if is_critical_zone
+            else "AI_HOLDING_MIN_COOLDOWN", 8 if is_critical_zone else 20,
         )
-        holding_score_ctx = _holding_score_runtime_context(
-            stock,
-            current_ai_score=current_ai_score,
-            now_ts=now_ts,
-            is_critical_zone=is_critical_zone,
-        )
-        if not holding_score_ctx["usable"]:
-            current_ai_score = holding_score_ctx["score"]
-
-        dynamic_min_cd = (
-            _rule_int("AI_HOLDING_CRITICAL_MIN_COOLDOWN", 8)
-            if is_critical_zone
-            else _rule_int("AI_HOLDING_MIN_COOLDOWN", 20)
-        )
-        dynamic_max_cd = (
-            _rule_int("AI_HOLDING_CRITICAL_COOLDOWN", 20)
-            if is_critical_zone
-            else _rule_int("AI_HOLDING_MAX_COOLDOWN", 90)
+        dynamic_max_cd = _rule_int(
+            "AI_HOLDING_CRITICAL_COOLDOWN" if is_critical_zone
+            else "AI_HOLDING_MAX_COOLDOWN", 20 if is_critical_zone else 90,
         )
         dynamic_price_trigger = 0.20 if is_critical_zone else 0.40
-        sim_ai_budget_target = _is_scalp_sim_ai_budget_target(stock, strategy)
-        if sim_ai_budget_target:
-            dynamic_min_cd = (
-                _rule_int("SCALP_SIM_AI_HOLDING_CRITICAL_COOLDOWN_SEC", 30)
-                if is_critical_zone
-                else _rule_int("SCALP_SIM_AI_HOLDING_MIN_COOLDOWN_SEC", 90)
-            )
-            dynamic_max_cd = _rule_int("SCALP_SIM_AI_HOLDING_MAX_COOLDOWN_SEC", 180)
-
         if time_elapsed > dynamic_min_cd and (
-            near_safe_profit_zone
+            abs(profit_rate - safe_profit_pct) <= 0.20
             or price_change >= dynamic_price_trigger
             or time_elapsed > dynamic_max_cd
         ):
-            holding_ai_review_started = time.perf_counter()
+            _scalp_holding_source_position_key(stock, code)
+            frozen_ws_data = {}
             try:
-                market_snapshot = _build_holding_ai_fast_snapshot(ws_data)
-                market_signature = tuple(market_snapshot.values())
-                reuse_sec = _resolve_holding_ai_fast_reuse_sec(dynamic_max_cd)
-                max_ws_age_sec = _rule_float(
-                    "AI_HOLDING_FAST_REUSE_MAX_WS_AGE_SEC", 1.5
+                frozen_stock = copy.deepcopy(stock)
+                frozen_ws_data = copy.deepcopy(ws_data)
+            except Exception as exc:
+                _persist_holding_path_review_gap(
+                    stock=stock, code=code,
+                    reason=f"vote_input_freeze_failed:{type(exc).__name__}",
                 )
-                ws_age_sec = _get_ws_snapshot_age_sec(ws_data)
-                fast_sig_matches = market_signature == stock.get(
-                    "last_ai_market_signature"
-                )
-                fast_sig_age = _resolve_reference_age_sec(
-                    stock.get("last_ai_market_signature_at"),
-                    fallback_ts=stock.get("last_ai_reviewed_at"),
-                    now_ts=now_ts,
-                )
-                fast_sig_age_str = (
-                    "-" if fast_sig_age is None else f"{fast_sig_age:.1f}"
-                )
-                sig_delta = _describe_snapshot_deltas(
-                    stock.get("last_ai_market_snapshot"), market_snapshot
-                )
-                near_ai_exit_band = abs(profit_rate - near_ai_exit_min_loss_pct) <= 0.20
-                near_safe_profit_band = near_safe_profit_zone
-                near_low_score_band = current_ai_score <= (near_ai_exit_score_limit + 5)
-                fast_sig_fresh = fast_sig_age is not None and fast_sig_age < reuse_sec
-                price_change_ok = price_change < (dynamic_price_trigger * 1.25)
-                ws_fresh = _holding_ai_fast_reuse_ws_fresh(
-                    ws_age_sec, max_ws_age_sec
-                )
-                shadow_action = "review"
-
-                if (
-                    fast_sig_matches
-                    and fast_sig_fresh
-                    and price_change_ok
-                    and ws_fresh
-                    and not near_ai_exit_band
-                    and not near_safe_profit_band
-                    and not near_low_score_band
-                ):
-                    shadow_action = "skip"
-                    _log_holding_pipeline(
-                        stock,
-                        code,
-                        "ai_holding_fast_reuse_band",
-                        **_build_observation_contract_fields("ops_volume_diagnostic"),
-                        profit_rate=f"{profit_rate:+.2f}",
-                        ai_score=f"{current_ai_score:.0f}",
-                        ai_exit_min_loss_pct=f"{near_ai_exit_min_loss_pct:+.2f}",
-                        safe_profit_pct=f"{safe_profit_pct:+.2f}",
-                        near_ai_exit=near_ai_exit_band,
-                        near_safe_profit=near_safe_profit_band,
-                        distance_to_ai_exit=f"{profit_rate - near_ai_exit_min_loss_pct:+.2f}",
-                        distance_to_safe_profit=f"{profit_rate - safe_profit_pct:+.2f}",
-                        action=shadow_action,
-                        telemetry_only=True,
-                    )
-                    _log_holding_pipeline(
-                        stock,
-                        code,
-                        "ai_holding_skip_unchanged",
-                        profit_rate=f"{profit_rate:+.2f}",
-                        ai_score=f"{current_ai_score:.0f}",
-                        held_sec=int(held_time_min * 60),
-                        price_change=f"{price_change:.2f}",
-                        reuse_sec=f"{reuse_sec:.1f}",
-                        age_sec=fast_sig_age_str,
-                        ws_age_sec="-" if ws_age_sec is None else f"{ws_age_sec:.2f}",
-                    )
-                else:
-                    _log_holding_pipeline(
-                        stock,
-                        code,
-                        "ai_holding_fast_reuse_band",
-                        **_build_observation_contract_fields("ops_volume_diagnostic"),
-                        profit_rate=f"{profit_rate:+.2f}",
-                        ai_score=f"{current_ai_score:.0f}",
-                        ai_exit_min_loss_pct=f"{near_ai_exit_min_loss_pct:+.2f}",
-                        safe_profit_pct=f"{safe_profit_pct:+.2f}",
-                        near_ai_exit=near_ai_exit_band,
-                        near_safe_profit=near_safe_profit_band,
-                        distance_to_ai_exit=f"{profit_rate - near_ai_exit_min_loss_pct:+.2f}",
-                        distance_to_safe_profit=f"{profit_rate - safe_profit_pct:+.2f}",
-                        action=shadow_action,
-                        telemetry_only=True,
-                    )
-                    _log_holding_pipeline(
-                        stock,
-                        code,
-                        "ai_holding_reuse_bypass",
-                        profit_rate=f"{profit_rate:+.2f}",
-                        ai_score=f"{current_ai_score:.0f}",
-                        held_sec=int(held_time_min * 60),
-                        price_change=f"{price_change:.2f}",
-                        reuse_sec=f"{reuse_sec:.1f}",
-                        age_sec=fast_sig_age_str,
-                        ws_age_sec="-" if ws_age_sec is None else f"{ws_age_sec:.2f}",
-                        sig_delta=sig_delta or "-",
-                        reason_codes=_reason_codes(
-                            sig_changed=fast_sig_matches,
-                            age_expired=fast_sig_fresh,
-                            price_move=price_change_ok,
-                            ws_stale=ws_fresh,
-                            near_ai_exit=not near_ai_exit_band,
-                            near_safe_profit=not near_safe_profit_band,
-                            near_low_score=not near_low_score_band,
-                        ),
-                    )
-                    sim_ai_budget_gate = _resolve_scalp_sim_ai_budget_decision(
-                        stock,
-                        strategy=strategy,
-                        now_ts=now_ts,
-                        profit_rate=profit_rate,
-                        peak_profit=peak_profit,
-                        held_sec=held_sec,
-                        current_ai_score=current_ai_score,
-                        market_signature=market_snapshot,
-                        is_critical_zone=is_critical_zone,
-                        near_ai_exit_band=near_ai_exit_band,
-                        near_safe_profit_band=near_safe_profit_band,
-                    )
-                    sim_ai_budget_skip = bool(
-                        sim_ai_budget_gate.get("target")
-                        and sim_ai_budget_gate.get("action") in {"reuse", "defer"}
-                    )
-                    if sim_ai_budget_skip:
-                        event_stage = (
-                            "scalp_sim_ai_holding_reuse"
-                            if sim_ai_budget_gate.get("action") == "reuse"
-                            else "scalp_sim_ai_holding_deferred"
+                frozen_stock = None
+            def _run_vote_review(stock=frozen_stock, ws_data=frozen_ws_data,
+                                 live_stock=stock):
+                review_started = time.perf_counter()
+                review_status = "source_unavailable"
+                review_phase_ms: dict[str, int] = {}
+                try:
+                    if not _is_any_simulated_position(stock, strategy):
+                        request_code = _resolve_holding_context_request_code(
+                            code, ws_data=ws_data, position_ctx=stock,
+                            decision_kind="holding_score", now_ts=now_ts,
                         )
-                        _mutate_stock_state(
-                            stock,
-                            set_fields={
-                                "scalp_sim_ai_last_feature_signature": sim_ai_budget_gate.get(
-                                    "feature_signature"
-                                ),
-                                "scalp_sim_ai_last_reuse_at": (
-                                    now_ts
-                                    if event_stage == "scalp_sim_ai_holding_reuse"
-                                    else stock.get("scalp_sim_ai_last_reuse_at")
-                                ),
-                                "scalp_sim_ai_last_deferred_at": (
-                                    now_ts
-                                    if event_stage == "scalp_sim_ai_holding_deferred"
-                                    else stock.get("scalp_sim_ai_last_deferred_at")
-                                ),
-                            },
+                        recent_ticks = kiwoom_utils.get_tick_history_ka10003(
+                            KIWOOM_TOKEN, request_code, limit=10,
                         )
-                        _log_holding_pipeline(
-                            stock,
-                            code,
-                            event_stage,
-                            **_scalp_sim_event_fields(
-                                sim_record_id=stock.get("sim_record_id"),
-                                entry_adm_candidate_id=stock.get(
-                                    "entry_adm_candidate_id"
-                                ),
-                                reuse_reason=sim_ai_budget_gate.get("reuse_reason"),
-                                defer_reason=sim_ai_budget_gate.get("defer_reason"),
-                                last_ai_action=sim_ai_budget_gate.get("last_ai_action"),
-                                last_ai_score=sim_ai_budget_gate.get("last_ai_score"),
-                                feature_signature=sim_ai_budget_gate.get(
-                                    "feature_signature"
-                                ),
-                                profit_rate=f"{profit_rate:+.2f}",
-                                peak_profit=f"{peak_profit:+.2f}",
-                                held_sec=int(held_sec),
-                                source_stage="ai_holding_review",
-                                decision_authority="sim_observation_only",
-                                runtime_effect=(
-                                    "sim_ai_reuse_only"
-                                    if event_stage == "scalp_sim_ai_holding_reuse"
-                                    else "sim_ai_deferred_review_only"
-                                ),
-                                budget_used_per_min=sim_ai_budget_gate.get(
-                                    "budget_used_per_min"
-                                ),
-                                budget_cap_per_min=sim_ai_budget_gate.get(
-                                    "budget_cap_per_min"
-                                ),
-                                state_changed=sim_ai_budget_gate.get("state_changed"),
-                                first_review=sim_ai_budget_gate.get("first_review"),
-                                critical=sim_ai_budget_gate.get("critical"),
-                                legacy_critical=sim_ai_budget_gate.get(
-                                    "legacy_critical"
-                                ),
-                                critical_class=sim_ai_budget_gate.get("critical_class"),
-                                critical_reason=sim_ai_budget_gate.get(
-                                    "critical_reason"
-                                ),
-                                soft_critical_deferred=sim_ai_budget_gate.get(
-                                    "soft_critical_deferred"
-                                ),
-                                hard_critical_bypass=sim_ai_budget_gate.get(
-                                    "hard_critical_bypass"
-                                ),
-                                loss_bucket=sim_ai_budget_gate.get("loss_bucket"),
-                                drawdown_pct=sim_ai_budget_gate.get("drawdown_pct"),
-                            ),
+                        review_phase_ms["tick_fetch"] = int(
+                            (time.perf_counter() - review_started) * 1000
                         )
-                        if event_stage == "scalp_sim_ai_holding_deferred":
-                            _log_holding_pipeline(
-                                stock,
-                                code,
-                                "sim_ai_budget_exhausted",
-                                **_scalp_sim_event_fields(
-                                    sim_record_id=stock.get("sim_record_id"),
-                                    entry_adm_candidate_id=stock.get(
-                                        "entry_adm_candidate_id"
-                                    ),
-                                    defer_reason=sim_ai_budget_gate.get("defer_reason"),
-                                    feature_signature=sim_ai_budget_gate.get(
-                                        "feature_signature"
-                                    ),
-                                    profit_rate=f"{profit_rate:+.2f}",
-                                    peak_profit=f"{peak_profit:+.2f}",
-                                    held_sec=int(held_sec),
-                                    source_stage="ai_holding_review",
-                                    decision_authority="sim_observation_only",
-                                    runtime_effect="sim_ai_deferred_review_only",
-                                    budget_used_per_min=sim_ai_budget_gate.get(
-                                        "budget_used_per_min"
-                                    ),
-                                    budget_cap_per_min=sim_ai_budget_gate.get(
-                                        "budget_cap_per_min"
-                                    ),
-                                    critical_class=sim_ai_budget_gate.get(
-                                        "critical_class"
-                                    ),
-                                    critical_reason=sim_ai_budget_gate.get(
-                                        "critical_reason"
-                                    ),
-                                    soft_critical_deferred=sim_ai_budget_gate.get(
-                                        "soft_critical_deferred"
-                                    ),
-                                    hard_critical_bypass=sim_ai_budget_gate.get(
-                                        "hard_critical_bypass"
-                                    ),
-                                    loss_bucket=sim_ai_budget_gate.get("loss_bucket"),
-                                    drawdown_pct=sim_ai_budget_gate.get("drawdown_pct"),
-                                ),
-                            )
-                        persist_scalp_simulator_state()
-                    elif sim_ai_budget_gate.get("target") and sim_ai_budget_gate.get(
-                        "critical_bypass"
-                    ):
-                        _log_holding_pipeline(
-                            stock,
-                            code,
-                            "sim_ai_critical_bypass",
-                            **_scalp_sim_event_fields(
-                                sim_record_id=stock.get("sim_record_id"),
-                                entry_adm_candidate_id=stock.get(
-                                    "entry_adm_candidate_id"
-                                ),
-                                call_reason=sim_ai_budget_gate.get("call_reason"),
-                                feature_signature=sim_ai_budget_gate.get(
-                                    "feature_signature"
-                                ),
-                                profit_rate=f"{profit_rate:+.2f}",
-                                peak_profit=f"{peak_profit:+.2f}",
-                                held_sec=int(held_sec),
-                                source_stage="ai_holding_review",
-                                decision_authority="sim_observation_only",
-                                runtime_effect="sim_ai_live_call_allowed",
-                                budget_used_per_min=sim_ai_budget_gate.get(
-                                    "budget_used_per_min"
-                                ),
-                                budget_cap_per_min=sim_ai_budget_gate.get(
-                                    "budget_cap_per_min"
-                                ),
-                                critical_class=sim_ai_budget_gate.get("critical_class"),
-                                critical_reason=sim_ai_budget_gate.get(
-                                    "critical_reason"
-                                ),
-                                soft_critical_deferred=sim_ai_budget_gate.get(
-                                    "soft_critical_deferred"
-                                ),
-                                hard_critical_bypass=sim_ai_budget_gate.get(
-                                    "hard_critical_bypass"
-                                ),
-                                loss_bucket=sim_ai_budget_gate.get("loss_bucket"),
-                                drawdown_pct=sim_ai_budget_gate.get("drawdown_pct"),
-                            ),
-                        )
-
-                    ai_decision = {
-                        "action": "HOLD",
-                        "score": current_ai_score,
-                        "reason": "holding_ai_not_called",
-                    }
-                    raw_ai_score = current_ai_score
-                    ai_cache_hit = False
-                    ai_call_skipped_reason = "-"
-                    recent_ticks = (
-                        []
-                        if sim_ai_budget_skip
-                        else kiwoom_utils.get_tick_history_ka10003(
-                            KIWOOM_TOKEN,
-                            _resolve_holding_context_request_code(
-                                code,
-                                ws_data=ws_data,
-                                position_ctx=stock,
-                                decision_kind="holding_score",
-                                now_ts=now_ts,
-                            ),
-                            limit=10,
-                        )
-                    )
-                    if sim_ai_budget_skip:
-                        recent_candles, recent_candle_meta = [], {}
-                    else:
+                        candle_started = time.perf_counter()
                         recent_candles, recent_candle_meta = (
                             _get_holding_minute_candles_with_meta(
-                                code,
-                                limit=60,
-                                legacy_limit=40,
-                                ws_data=ws_data,
-                                position_ctx=stock,
-                                decision_kind="holding_score",
+                                code, limit=60, legacy_limit=40, ws_data=ws_data,
+                                position_ctx=stock, decision_kind="holding_score",
                                 now_ts=now_ts,
                             )
                         )
-                    holding_ai_ws_data = ws_data
-                    holding_ai_orderbook_refresh_fields = {}
-                    if not sim_ai_budget_skip:
-                        holding_ai_ws_data, holding_ai_orderbook_refresh_fields = (
-                            _refresh_holding_ai_ws_snapshot(code, ws_data)
+                        review_phase_ms["candle_fetch"] = int(
+                            (time.perf_counter() - candle_started) * 1000
                         )
-                    if not sim_ai_budget_skip:
-                        record_market_inputs(
-                            code,
-                            now_ts=time.time(),
-                            holding_score_market_source={
-                                "request_code": _resolve_holding_context_request_code(
-                                    code,
-                                    ws_data=ws_data,
-                                    position_ctx=stock,
-                                    decision_kind="holding_score",
-                                    now_ts=now_ts,
-                                ),
-                                "recent_ticks": recent_ticks,
-                                "recent_candles": recent_candles,
-                                "recent_candle_meta": recent_candle_meta,
-                            },
+                        quote_started = time.perf_counter()
+                        vote_ws_data, _ = _refresh_holding_ai_ws_snapshot(code, ws_data)
+                        if not _pre_submit_input_snapshot_has_usable_quote(vote_ws_data):
+                            vote_ws_data, _ = _holding_ai_refresh_rest_orderbook_snapshot(
+                                code, vote_ws_data, strategy,
+                            )
+                        review_phase_ms["quote_refresh"] = int(
+                            (time.perf_counter() - quote_started) * 1000
                         )
-                    if (
-                        not sim_ai_budget_skip
-                        and not _pre_submit_input_snapshot_has_usable_quote(
-                            holding_ai_ws_data
-                        )
-                    ):
-                        holding_ai_ws_data, rest_refresh_fields = (
-                            _holding_ai_refresh_rest_orderbook_snapshot(
-                                code,
-                                holding_ai_ws_data,
-                                strategy,
-                            )
-                        )
-                        holding_ai_orderbook_refresh_fields.update(rest_refresh_fields)
-                    holding_ai_orderbook_present = bool(
-                        holding_ai_ws_data.get("orderbook")
-                    )
-                    holding_ai_orderbook_usable = (
-                        _pre_submit_input_snapshot_has_usable_quote(holding_ai_ws_data)
-                    )
-                    if strategy == "SCALPING" and not sim_ai_budget_skip:
-                        _record_main_rebound_entry_source(stock, code,
-                            recent_candles, recent_candle_meta, now_ts=time.time())
-                    holding_ai_recent_tick_count = len(recent_ticks or [])
-                    holding_score_preflight = {
-                        "blocked": False,
-                        "block_reason": "-",
-                        "data_quality": "not_evaluated",
-                        "source_quality_reason": "-",
-                    }
-                    if (
-                        (not sim_ai_budget_skip)
-                        and holding_ai_orderbook_usable
-                        and recent_ticks
-                    ):
-                        holding_context_now_ts = time.time()
-                        holding_score_preflight = (
-                            _holding_score_preflight_source_quality(
-                                holding_ai_ws_data,
-                                recent_ticks,
-                                recent_candles,
-                                now_ts=holding_context_now_ts,
-                            )
-                        )
-                    holding_score_preflight_blocked = bool(
-                        holding_score_preflight.get("blocked")
-                    )
-
-                    if (
-                        (not sim_ai_budget_skip)
-                        and holding_ai_orderbook_usable
-                        and recent_ticks
-                        and not holding_score_preflight_blocked
-                    ):
-                        if sim_ai_budget_gate.get("target"):
-                            used_after_record = _record_scalp_sim_ai_budget_call(now_ts)
-                        else:
-                            used_after_record = None
-                        holding_ai_curr_price = _safe_int(
-                            holding_ai_ws_data.get("curr"), 0
-                        )
-                        holding_ai_profit_rate = (
-                            calculate_net_profit_rate(buy_p, holding_ai_curr_price)
-                            if holding_ai_curr_price > 0 and buy_p > 0
-                            else profit_rate
-                        )
-                        holding_ai_peak_profit = max(
-                            peak_profit, holding_ai_profit_rate
-                        )
-                        holding_score_position_ctx = {
-                            "record_id": stock.get("id"),
-                            "buy_price": buy_p,
-                            "curr_price": holding_ai_curr_price,
-                            "profit_rate": holding_ai_profit_rate,
-                            "peak_profit": holding_ai_peak_profit,
-                            "drawdown_from_peak_pct": max(
-                                0.0, holding_ai_peak_profit - holding_ai_profit_rate
-                            ),
-                            "held_sec": held_sec,
-                            "buy_qty": stock.get("buy_qty"),
-                            "position_tag": stock.get("position_tag"),
-                            "entry_source": stock.get("entry_source")
-                            or stock.get("source_event_stage")
-                            or "-",
-                            "entry_time_context": _build_entry_time_context_from_stock(
-                                stock
-                            ),
-                            "avg_down_count": stock.get("avg_down_count", 0),
-                            "pyramid_count": stock.get("pyramid_count", 0),
-                            "prior_score": stock.get(
-                                "holding_score_raw", current_ai_score
-                            ),
-                            "prior_effective_score": stock.get(
-                                "holding_score_effective", current_ai_score
-                            ),
-                            "prior_score_source": holding_score_ctx.get("source", "-"),
-                            "prior_data_quality": holding_score_ctx.get(
-                                "data_quality", "insufficient"
-                            ),
-                            "prior_score_age_sec": holding_score_ctx.get("age_sec"),
-                            "prior_effective_usable": holding_score_ctx.get(
-                                "usable", False
-                            ),
-                            **holding_exit_micro_estimator_fields,
-                        }
-                        holding_context_now_ts = time.time()
-                        holding_context_source = _build_holding_ai_decision_context(
-                            stock=stock,
-                            code=code,
-                            ws_data=holding_ai_ws_data,
-                            decision_kind="holding_score",
-                            now_ts=holding_context_now_ts,
-                            recent_candles=recent_candles,
-                            candle_meta=recent_candle_meta,
-                            recent_ticks=recent_ticks,
-                            position_ctx=holding_score_position_ctx,
-                            include_disabled_forensics=True,
-                        )
-                        holding_context, forensic_context_candidate = (
-                            _holding_context_call_views(holding_context_source)
-                        )
-                        live_symbol_budget = None
-                        if not sim_ai_budget_gate.get("target") and hasattr(
-                            ai_engine, "evaluate_scalping_holding_score"
-                        ):
-                            live_symbol_budget = (
-                                DEFAULT_HOT_PATH_AI_SYMBOL_BUDGET.reserve(
-                                    code=code,
-                                    endpoint="holding_score",
-                                    now_ts=time.time(),
-                                    min_interval_sec=float(dynamic_min_cd),
-                                )
-                            )
-                            if not live_symbol_budget.allowed:
-                                ai_call_skipped_reason = "symbol_budget_deferred"
-                                _log_holding_pipeline(
-                                    stock,
-                                    code,
-                                    "ai_holding_symbol_budget_deferred",
-                                    metric_role="ops_volume_diagnostic",
-                                    decision_authority="ai_call_cadence_only",
-                                    window_policy=(
-                                        "rolling_process_local_per_symbol_all_live_ai_endpoints"
-                                    ),
-                                    sample_floor="one_live_holding_ai_call_attempt",
-                                    primary_decision_metric=(
-                                        "per_symbol_ai_call_count_and_service_share"
-                                    ),
-                                    source_quality_gate=(
-                                        "canonical_stock_code_and_fresh_holding_preflight"
-                                    ),
-                                    forbidden_uses=(
-                                        "standalone_buy_or_exit_decision,"
-                                        "threshold_mutation,"
-                                        "provider_route_change,order_price_change,"
-                                        "quantity_or_cap_change,broker_guard_bypass"
-                                    ),
-                                    runtime_effect=True,
-                                    allowed_runtime_apply=False,
-                                    actual_order_submitted=False,
-                                    broker_order_forbidden=True,
-                                    **live_symbol_budget.log_fields(),
-                                )
-                        if hasattr(ai_engine, "evaluate_scalping_holding_score") and (
-                            live_symbol_budget is None or live_symbol_budget.allowed
-                        ):
-                            metadata_extra = {
-                                "record_id": stock.get("id"),
-                                "sim_record_id": stock.get("sim_record_id"),
-                                "sim_parent_record_id": stock.get(
-                                    "sim_parent_record_id"
-                                ),
-                                "entry_adm_candidate_id": stock.get(
-                                    "entry_adm_candidate_id"
-                                ),
-                                "source_event_stage": (
-                                    "scalp_sim_holding_review"
-                                    if _is_scalp_simulator_target(stock)
-                                    else "holding_score"
-                                ),
-                            }
-                            holding_call_kwargs = {
-                                "metadata_extra": metadata_extra,
-                            }
-                            if holding_context is not None:
-                                holding_call_kwargs["holding_context"] = holding_context
-                            if forensic_context_candidate is not None:
-                                holding_call_kwargs["forensic_context_candidate"] = (
-                                    forensic_context_candidate
-                                )
-                            ai_decision = ai_engine.evaluate_scalping_holding_score(
-                                stock["name"],
-                                code,
-                                holding_ai_ws_data,
-                                recent_ticks,
-                                recent_candles,
-                                holding_score_position_ctx,
-                                **holding_call_kwargs,
-                            )
-                        elif (
-                            live_symbol_budget is not None
-                            and not live_symbol_budget.allowed
-                        ):
-                            ai_decision = {
-                                "action": "HOLD",
-                                "score": current_ai_score,
-                                "reason": "symbol_budget_deferred",
-                                "holding_score_data_quality": "insufficient",
-                                "holding_score_source": "symbol_budget_deferred",
-                                "holding_score_effective_usable": False,
-                                "ai_result_source": "symbol_budget_deferred",
-                                "ai_fallback_score_50": True,
-                            }
-                        else:
-                            ai_decision = {
-                                "action": "HOLD",
-                                "score": 50,
-                                "reason": "holding_score_v2_unavailable",
-                                "holding_score_data_quality": "insufficient",
-                                "holding_score_source": "engine_missing_method",
-                                "holding_score_effective_usable": False,
-                                "ai_result_source": "engine_missing_method",
-                                "ai_fallback_score_50": True,
-                            }
-                        raw_ai_score = ai_decision.get(
-                            "holding_score_raw", ai_decision.get("score", 50)
-                        )
-                        ai_cache_hit = bool(ai_decision.get("cache_hit", False))
-                        ai_result_source = (
-                            "fallback_score_50"
-                            if bool(ai_decision.get("ai_fallback_score_50"))
-                            else (
-                                ai_decision.get("ai_result_source")
-                                or ai_decision.get("result_source")
-                                or ai_decision.get("provider")
-                                or ai_decision.get("openai_transport_mode")
-                                or "model"
-                            )
-                        )
-                        ai_model_name = (
-                            ai_decision.get("ai_model")
-                            or ai_decision.get("model")
-                            or ai_decision.get("model_name")
-                            or "-"
-                        )
-                        holding_score_gate = _holding_score_acceptance_gate(ai_decision)
-                        if holding_score_gate["accepted"]:
-                            raw_score_non50_neutralized = False
-                            score50_origin = (
-                                "model_raw_score_50"
-                                if _safe_float(raw_ai_score, None) == 50.0
-                                else "-"
-                            )
-                            smoothed_score = int(
-                                (current_ai_score * 0.6)
-                                + (float(raw_ai_score or 50) * 0.4)
-                            )
-                            _mutate_stock_state(
-                                stock,
-                                set_fields={
-                                    "rt_ai_prob": smoothed_score / 100.0,
-                                    "last_ai_profit": profit_rate,
-                                    "last_ai_reviewed_at": now_ts,
-                                    "last_ai_market_signature": market_signature,
-                                    "last_ai_market_snapshot": market_snapshot,
-                                    "last_ai_market_signature_at": now_ts,
-                                    "holding_ai_score_source": ai_result_source,
-                                    "current_ai_score_source": ai_result_source,
-                                    "last_ai_result_source": ai_result_source,
-                                    "last_ai_model": ai_model_name,
-                                    "holding_ai_call_skipped_reason": "-",
-                                    "holding_score_input_schema": "holding_score_v2",
-                                    "holding_score_data_quality": holding_score_gate[
-                                        "data_quality"
-                                    ],
-                                    "holding_score_confidence": ai_decision.get(
-                                        "holding_score_confidence",
-                                        ai_decision.get("confidence", 0),
-                                    ),
-                                    "holding_score_basis": ai_decision.get(
-                                        "holding_score_basis",
-                                        ai_decision.get("score_basis", "-"),
-                                    ),
-                                    "holding_score_raw": raw_ai_score,
-                                    "holding_score_effective": smoothed_score,
-                                    "holding_score_source": ai_result_source,
-                                    "holding_score_raw_source": ai_result_source,
-                                    "holding_score_raw_data_quality": holding_score_gate[
-                                        "data_quality"
-                                    ],
-                                    "holding_score_effective_source": ai_result_source,
-                                    "holding_score_effective_from_prior": False,
-                                    "holding_score_source_quality_reason": ai_decision.get(
-                                        "holding_score_source_quality_reason", "-"
-                                    ),
-                                    "holding_score_score50_origin": score50_origin,
-                                    "holding_score_preflight_blocked": False,
-                                    "holding_score_preflight_block_reason": "-",
-                                    "holding_score_preflight_source_quality": holding_score_preflight.get(
-                                        "data_quality", "-"
-                                    ),
-                                    "holding_score_preflight_source_quality_reason": holding_score_preflight.get(
-                                        "source_quality_reason", "-"
-                                    ),
-                                    "holding_score_raw_score_non50_neutralized": raw_score_non50_neutralized,
-                                    "holding_score_action": ai_decision.get("action_v2")
-                                    or ai_decision.get("action")
-                                    or "HOLD",
-                                    "holding_score_effective_usable": True,
-                                    "holding_score_last_effective_at": now_ts,
-                                    "holding_score_age_sec": 0,
-                                    "holding_score_excluded_reason": "-",
-                                },
-                            )
-                            current_ai_score = smoothed_score
-                            ai_decision["holding_score_effective_usable"] = True
-                            ai_decision["holding_score_effective"] = smoothed_score
-                            ai_decision["holding_score_age_sec"] = 0
-                            ai_decision["holding_score_raw_source"] = ai_result_source
-                            ai_decision["holding_score_raw_data_quality"] = (
-                                holding_score_gate["data_quality"]
-                            )
-                            ai_decision["holding_score_effective_source"] = (
-                                ai_result_source
-                            )
-                            ai_decision["holding_score_effective_from_prior"] = False
-                            ai_decision["holding_score_score50_origin"] = score50_origin
-                            ai_decision["holding_score_preflight_blocked"] = False
-                            ai_decision["holding_score_preflight_block_reason"] = "-"
-                            ai_decision["holding_score_preflight_source_quality"] = (
-                                holding_score_preflight.get("data_quality", "-")
-                            )
-                            ai_decision[
-                                "holding_score_preflight_source_quality_reason"
-                            ] = holding_score_preflight.get(
-                                "source_quality_reason", "-"
-                            )
-                            ai_decision["holding_score_raw_score_non50_neutralized"] = (
-                                raw_score_non50_neutralized
-                            )
-                        else:
-                            holding_score_ctx = _holding_score_runtime_context(
-                                stock,
-                                current_ai_score=current_ai_score,
-                                now_ts=now_ts,
-                                is_critical_zone=is_critical_zone,
-                            )
-                            current_ai_score = holding_score_ctx["score"]
-                            effective_from_prior = bool(holding_score_ctx["usable"])
-                            effective_source = (
-                                "prior_valid"
-                                if effective_from_prior
-                                else "neutral_unusable"
-                            )
-                            raw_score_non50_neutralized = bool(
-                                _safe_float(raw_ai_score, None) not in (None, 50.0)
-                                and _safe_float(current_ai_score, None) == 50.0
-                                and not effective_from_prior
-                            )
-                            score50_origin = (
-                                "post_call_source_quality_neutralized"
-                                if raw_score_non50_neutralized
-                                else (
-                                    "fallback_score_50"
-                                    if bool(ai_decision.get("ai_fallback_score_50"))
-                                    else "-"
-                                )
-                            )
-                            _mutate_stock_state(
-                                stock,
-                                set_fields={
-                                    "last_ai_profit": profit_rate,
-                                    "last_ai_market_signature": market_signature,
-                                    "last_ai_market_snapshot": market_snapshot,
-                                    "last_ai_market_signature_at": now_ts,
-                                    "holding_ai_score_source": effective_source,
-                                    "current_ai_score_source": effective_source,
-                                    "last_ai_result_source": ai_result_source,
-                                    "last_ai_model": ai_model_name,
-                                    "holding_ai_call_skipped_reason": holding_score_gate[
-                                        "excluded_reason"
-                                    ],
-                                    "holding_score_input_schema": "holding_score_v2",
-                                    "holding_score_data_quality": holding_score_ctx[
-                                        "data_quality"
-                                    ],
-                                    "holding_score_confidence": ai_decision.get(
-                                        "holding_score_confidence",
-                                        ai_decision.get("confidence", 0),
-                                    ),
-                                    "holding_score_basis": ai_decision.get(
-                                        "holding_score_basis",
-                                        ai_decision.get("score_basis", "-"),
-                                    ),
-                                    "holding_score_raw": raw_ai_score,
-                                    "holding_score_effective": current_ai_score,
-                                    "holding_score_source": effective_source,
-                                    "holding_score_raw_source": ai_result_source,
-                                    "holding_score_raw_data_quality": holding_score_gate[
-                                        "data_quality"
-                                    ],
-                                    "holding_score_effective_source": effective_source,
-                                    "holding_score_effective_from_prior": effective_from_prior,
-                                    "holding_score_source_quality_reason": ai_decision.get(
-                                        "holding_score_source_quality_reason", "-"
-                                    ),
-                                    "holding_score_score50_origin": score50_origin,
-                                    "holding_score_preflight_blocked": False,
-                                    "holding_score_preflight_block_reason": "-",
-                                    "holding_score_preflight_source_quality": holding_score_preflight.get(
-                                        "data_quality", "-"
-                                    ),
-                                    "holding_score_preflight_source_quality_reason": holding_score_preflight.get(
-                                        "source_quality_reason", "-"
-                                    ),
-                                    "holding_score_raw_score_non50_neutralized": raw_score_non50_neutralized,
-                                    "holding_score_action": ai_decision.get("action_v2")
-                                    or ai_decision.get("action")
-                                    or "HOLD",
-                                    "holding_score_effective_usable": bool(
-                                        holding_score_ctx["usable"]
-                                    ),
-                                    "holding_score_age_sec": holding_score_ctx.get(
-                                        "age_sec"
-                                    ),
-                                    "holding_score_excluded_reason": holding_score_gate[
-                                        "excluded_reason"
-                                    ],
-                                },
-                            )
-                            ai_decision["holding_score_effective_usable"] = bool(
-                                holding_score_ctx["usable"]
-                            )
-                            ai_decision["holding_score_effective"] = current_ai_score
-                            ai_decision["holding_score_age_sec"] = (
-                                holding_score_ctx.get("age_sec")
-                            )
-                            ai_decision["holding_score_excluded_reason"] = (
-                                holding_score_gate["excluded_reason"]
-                            )
-                            ai_decision["holding_score_raw_source"] = ai_result_source
-                            ai_decision["holding_score_raw_data_quality"] = (
-                                holding_score_gate["data_quality"]
-                            )
-                            ai_decision["holding_score_effective_source"] = (
-                                effective_source
-                            )
-                            ai_decision["holding_score_effective_from_prior"] = (
-                                effective_from_prior
-                            )
-                            ai_decision["holding_score_score50_origin"] = score50_origin
-                            ai_decision["holding_score_preflight_blocked"] = False
-                            ai_decision["holding_score_preflight_block_reason"] = "-"
-                            ai_decision["holding_score_preflight_source_quality"] = (
-                                holding_score_preflight.get("data_quality", "-")
-                            )
-                            ai_decision[
-                                "holding_score_preflight_source_quality_reason"
-                            ] = holding_score_preflight.get(
-                                "source_quality_reason", "-"
-                            )
-                            ai_decision["holding_score_raw_score_non50_neutralized"] = (
-                                raw_score_non50_neutralized
-                            )
-                        ai_decision.update(
-                            _holding_score_role_log_fields(
-                                _holding_score_runtime_context(
-                                    stock,
-                                    current_ai_score=current_ai_score,
-                                    now_ts=now_ts,
-                                    is_critical_zone=is_critical_zone,
-                                )
-                            )
-                        )
-                        if sim_ai_budget_gate.get("target"):
-                            _mutate_stock_state(
-                                stock,
-                                set_fields={
-                                    "scalp_sim_ai_last_feature_signature": sim_ai_budget_gate.get(
-                                        "feature_signature"
-                                    ),
-                                    "scalp_sim_ai_last_action": ai_decision.get(
-                                        "action_v2"
-                                    )
-                                    or ai_decision.get("action"),
-                                    "scalp_sim_ai_last_score": raw_ai_score,
-                                    "scalp_sim_ai_last_raw_score": raw_ai_score,
-                                    "scalp_sim_ai_last_smoothed_score": current_ai_score,
-                                    "scalp_sim_ai_last_result_source": ai_decision.get(
-                                        "ai_result_source"
-                                    )
-                                    or ai_decision.get("result_source")
-                                    or ai_decision.get("provider")
-                                    or "-",
-                                    "scalp_sim_ai_last_model": ai_decision.get(
-                                        "ai_model"
-                                    )
-                                    or ai_decision.get("model")
-                                    or ai_decision.get("model_name")
-                                    or "-",
-                                    "scalp_sim_ai_last_model_tier": ai_decision.get(
-                                        "ai_model_tier"
-                                    )
-                                    or ai_decision.get("model_tier")
-                                    or "-",
-                                    "scalp_sim_ai_last_transport_mode": ai_decision.get(
-                                        "openai_transport_mode"
-                                    )
-                                    or ai_decision.get("transport_mode")
-                                    or ai_decision.get("provider_route")
-                                    or "-",
-                                    "scalp_sim_ai_last_data_quality": ai_decision.get(
-                                        "holding_score_data_quality"
-                                    )
-                                    or ai_decision.get("data_quality")
-                                    or "-",
-                                    "scalp_sim_ai_last_live_call_at": now_ts,
-                                    "scalp_sim_ai_live_call_count": _safe_int(
-                                        stock.get("scalp_sim_ai_live_call_count"), 0
-                                    )
-                                    + 1,
-                                },
-                            )
-                            _log_holding_pipeline(
-                                stock,
-                                code,
-                                "scalp_sim_ai_holding_live_call",
-                                **_scalp_sim_event_fields(
-                                    sim_record_id=stock.get("sim_record_id"),
-                                    entry_adm_candidate_id=stock.get(
-                                        "entry_adm_candidate_id"
-                                    ),
-                                    call_reason=sim_ai_budget_gate.get("call_reason"),
-                                    feature_signature=sim_ai_budget_gate.get(
-                                        "feature_signature"
-                                    ),
-                                    profit_rate=f"{profit_rate:+.2f}",
-                                    peak_profit=f"{peak_profit:+.2f}",
-                                    held_sec=int(held_sec),
-                                    source_stage="ai_holding_review",
-                                    decision_authority="sim_observation_only",
-                                    runtime_effect="sim_ai_live_call_only",
-                                    budget_used_per_min=used_after_record,
-                                    budget_cap_per_min=sim_ai_budget_gate.get(
-                                        "budget_cap_per_min"
-                                    ),
-                                    critical_class=sim_ai_budget_gate.get(
-                                        "critical_class"
-                                    ),
-                                    critical_reason=sim_ai_budget_gate.get(
-                                        "critical_reason"
-                                    ),
-                                    soft_critical_deferred=sim_ai_budget_gate.get(
-                                        "soft_critical_deferred"
-                                    ),
-                                    hard_critical_bypass=sim_ai_budget_gate.get(
-                                        "hard_critical_bypass"
-                                    ),
-                                    loss_bucket=sim_ai_budget_gate.get("loss_bucket"),
-                                    drawdown_pct=sim_ai_budget_gate.get("drawdown_pct"),
-                                    ai_action=ai_decision.get("action_v2")
-                                    or ai_decision.get("action"),
-                                    ai_score_raw=raw_ai_score,
-                                    ai_score_smoothed=current_ai_score,
-                                    current_ai_score=current_ai_score,
-                                    ai_result_source=ai_decision.get("ai_result_source")
-                                    or ai_decision.get("result_source")
-                                    or ai_decision.get("provider")
-                                    or "-",
-                                    ai_model=ai_decision.get("ai_model")
-                                    or ai_decision.get("model")
-                                    or ai_decision.get("model_name")
-                                    or "-",
-                                    ai_model_tier=ai_decision.get("ai_model_tier")
-                                    or ai_decision.get("model_tier")
-                                    or "-",
-                                    ai_transport_mode=ai_decision.get(
-                                        "openai_transport_mode"
-                                    )
-                                    or ai_decision.get("transport_mode")
-                                    or ai_decision.get("provider_route")
-                                    or "-",
-                                    ai_data_quality=ai_decision.get(
-                                        "holding_score_data_quality"
-                                    )
-                                    or ai_decision.get("data_quality")
-                                    or "-",
-                                    ai_cache="hit" if ai_cache_hit else "miss",
-                                ),
-                            )
-                            persist_scalp_simulator_state()
-                    else:
-                        if sim_ai_budget_skip:
-                            ai_call_skipped_reason = "sim_ai_budget_skip"
-                        elif (
-                            not holding_ai_orderbook_present
-                            and holding_ai_recent_tick_count <= 0
-                        ):
-                            ai_call_skipped_reason = (
-                                "missing_orderbook_and_recent_ticks"
-                            )
-                        elif not holding_ai_orderbook_present:
-                            ai_call_skipped_reason = "missing_orderbook"
-                        elif not holding_ai_orderbook_usable:
-                            ai_call_skipped_reason = "unusable_orderbook"
-                        elif holding_ai_recent_tick_count <= 0:
-                            ai_call_skipped_reason = "missing_recent_ticks"
-                        elif holding_score_preflight_blocked:
-                            ai_call_skipped_reason = "preflight_source_quality_blocked"
-                        else:
-                            ai_call_skipped_reason = "holding_ai_not_called"
-                        holding_score_ctx = _holding_score_runtime_context(
-                            stock,
-                            current_ai_score=current_ai_score,
-                            now_ts=now_ts,
-                            is_critical_zone=is_critical_zone,
-                        )
-                        current_ai_score = holding_score_ctx["score"]
-                        effective_from_prior = bool(holding_score_ctx["usable"])
-                        effective_source = (
-                            "prior_valid"
-                            if effective_from_prior
-                            else "neutral_unusable"
-                        )
-                        score50_origin = (
-                            "preflight_source_quality_blocked"
-                            if (
-                                holding_score_preflight_blocked
-                                and _safe_float(current_ai_score, None) == 50.0
-                                and not effective_from_prior
-                            )
-                            else (
-                                "not_called_neutral_unusable"
-                                if _safe_float(current_ai_score, None) == 50.0
-                                and not effective_from_prior
-                                else "-"
-                            )
-                        )
-                        _mutate_stock_state(
-                            stock,
-                            set_fields={
-                                "holding_ai_score_source": "holding_ai_not_called",
-                                "current_ai_score_source": "holding_ai_not_called",
-                                "last_ai_result_source": "-",
-                                "last_ai_model": "-",
-                                "holding_ai_call_skipped_reason": ai_call_skipped_reason,
-                                "holding_score_input_schema": "holding_score_v2",
-                                "holding_score_data_quality": holding_score_ctx[
-                                    "data_quality"
-                                ],
-                                "holding_score_confidence": stock.get(
-                                    "holding_score_confidence", 0
-                                ),
-                                "holding_score_basis": stock.get(
-                                    "holding_score_basis", "-"
-                                ),
-                                "holding_score_effective": current_ai_score,
-                                "holding_score_source": effective_source,
-                                "holding_score_raw_source": "holding_ai_not_called",
-                                "holding_score_raw_data_quality": holding_score_ctx[
-                                    "data_quality"
-                                ],
-                                "holding_score_effective_source": effective_source,
-                                "holding_score_effective_from_prior": effective_from_prior,
-                                "holding_score_source_quality_reason": holding_score_preflight.get(
-                                    "source_quality_reason", "-"
-                                ),
-                                "holding_score_score50_origin": score50_origin,
-                                "holding_score_preflight_blocked": holding_score_preflight_blocked,
-                                "holding_score_preflight_block_reason": holding_score_preflight.get(
-                                    "block_reason", "-"
-                                ),
-                                "holding_score_preflight_source_quality": holding_score_preflight.get(
-                                    "data_quality", "-"
-                                ),
-                                "holding_score_preflight_source_quality_reason": holding_score_preflight.get(
-                                    "source_quality_reason", "-"
-                                ),
-                                "holding_score_raw_score_non50_neutralized": False,
-                                "holding_score_effective_usable": bool(
-                                    holding_score_ctx["usable"]
-                                ),
-                                "holding_score_age_sec": holding_score_ctx.get(
-                                    "age_sec"
-                                ),
-                                "holding_score_excluded_reason": (
-                                    "-"
-                                    if holding_score_ctx["usable"]
-                                    else ai_call_skipped_reason
-                                ),
-                            },
-                        )
-                        ai_decision.update(
-                            {
-                                "holding_score_input_schema": "holding_score_v2",
-                                "holding_score_data_quality": holding_score_ctx[
-                                    "data_quality"
-                                ],
-                                "holding_score_effective": current_ai_score,
-                                "holding_score_source": effective_source,
-                                "holding_score_raw_source": "holding_ai_not_called",
-                                "holding_score_raw_data_quality": holding_score_ctx[
-                                    "data_quality"
-                                ],
-                                "holding_score_effective_source": effective_source,
-                                "holding_score_effective_from_prior": effective_from_prior,
-                                "holding_score_source_quality_reason": holding_score_preflight.get(
-                                    "source_quality_reason", "-"
-                                ),
-                                "holding_score_score50_origin": score50_origin,
-                                "holding_score_preflight_blocked": holding_score_preflight_blocked,
-                                "holding_score_preflight_block_reason": holding_score_preflight.get(
-                                    "block_reason", "-"
-                                ),
-                                "holding_score_preflight_source_quality": holding_score_preflight.get(
-                                    "data_quality", "-"
-                                ),
-                                "holding_score_preflight_source_quality_reason": holding_score_preflight.get(
-                                    "source_quality_reason", "-"
-                                ),
-                                "holding_score_raw_score_non50_neutralized": False,
-                                "holding_score_effective_usable": bool(
-                                    holding_score_ctx["usable"]
-                                ),
-                                "holding_score_age_sec": holding_score_ctx.get(
-                                    "age_sec"
-                                ),
-                                "holding_score_excluded_reason": (
-                                    "-"
-                                    if holding_score_ctx["usable"]
-                                    else ai_call_skipped_reason
-                                ),
-                            }
-                        )
-                        ai_decision.update(
-                            _holding_score_role_log_fields(holding_score_ctx)
-                        )
-                        if holding_score_preflight_blocked:
-                            blocked_trace = (
-                                _record_holding_score_upstream_preflight_trace(
-                                    stock=stock,
-                                    code=code,
-                                    ws_data=holding_ai_ws_data,
-                                    preflight=holding_score_preflight,
-                                )
-                            )
-                            for trace_key in (
-                                "ai_decision_trace_schema",
-                                "ai_decision_trace_id",
-                                "ai_decision_outcome_label_status",
-                                "ai_prompt_type",
-                                "ai_prompt_version",
-                                "ai_result_source",
-                                "ai_parse_ok",
-                                "ai_parse_fail",
-                                "ai_fallback_score_50",
-                                "ai_response_ms",
-                                "provider_called",
-                                "holding_score_preflight_blocked",
-                                "holding_score_preflight_block_reason",
-                                "holding_score_preflight_source_quality",
-                                "holding_score_preflight_source_quality_reason",
-                            ):
-                                if trace_key in blocked_trace:
-                                    ai_decision[trace_key] = blocked_trace[trace_key]
-
-                    # reversal_add: 수급 피처 저장 및 STAGNATION 상태 갱신
-                    if (not sim_ai_budget_skip) and _rule_bool(
-                        "REVERSAL_ADD_ENABLED", False
-                    ):
-                        reversal_add_score_ctx = _holding_score_runtime_context(
-                            stock,
-                            current_ai_score=current_ai_score,
-                            now_ts=now_ts,
-                            is_critical_zone=True,
-                        )
-                        reversal_add_ai_state_usable = bool(
-                            reversal_add_score_ctx.get("usable_for_state_history")
-                        )
-                        if (
-                            hasattr(ai_engine, "_extract_scalping_features")
+                        vote_source_ready = bool(
+                            _pre_submit_input_snapshot_has_usable_quote(vote_ws_data)
                             and recent_ticks
-                        ):
-                            try:
-                                feat = ai_engine._extract_scalping_features(
-                                    ws_data, recent_ticks, recent_candles
-                                )
-                                _mutate_stock_state(
-                                    stock,
-                                    set_fields={
-                                        "last_reversal_features": _reversal_feature_payload(
-                                            feat, now_ts
-                                        ),
-                                    },
-                                )
-                            except Exception as exc:
-                                log_error(
-                                    f"⚠️ [REVERSAL_ADD] feature extract failed ({code}): {exc}"
-                                )
-
-                        # AI bottom/history 갱신 (STAGNATION/REVERSAL_CANDIDATE 구간에서만)
-                        if stock.get("reversal_add_state") in (
-                            "STAGNATION",
-                            "REVERSAL_CANDIDATE",
-                        ):
-                            if reversal_add_ai_state_usable:
-                                _ra_hist = list(
-                                    stock.get("reversal_add_ai_history", [])
-                                )
-                                _ra_hist.append(current_ai_score)
-                                _mutate_stock_state(
-                                    stock,
-                                    set_fields={
-                                        "reversal_add_ai_history": _ra_hist[-4:],
-                                        "reversal_add_ai_bottom": min(
-                                            int(
-                                                stock.get("reversal_add_ai_bottom", 100)
-                                            ),
-                                            current_ai_score,
-                                        ),
-                                        "reversal_add_profit_floor": min(
-                                            float(
-                                                stock.get(
-                                                    "reversal_add_profit_floor", 0.0
-                                                )
-                                            ),
-                                            profit_rate,
-                                        ),
-                                    },
-                                )
-                            else:
-                                _log_holding_pipeline(
-                                    stock,
-                                    code,
-                                    "reversal_add_ai_history_skipped",
-                                    state=stock.get("reversal_add_state", "") or "-",
-                                    reason="holding_score_unusable_for_state_history",
-                                    profit_rate=f"{profit_rate:+.2f}",
-                                    ai_score=f"{current_ai_score:.0f}",
-                                    **_holding_score_role_log_fields(
-                                        reversal_add_score_ctx
-                                    ),
-                                )
-
-                        # STAGNATION 진입 판단
-                        _ra_pnl_min = _rule_float("REVERSAL_ADD_PNL_MIN", -0.45)
-                        _ra_pnl_max = _rule_float("REVERSAL_ADD_PNL_MAX", -0.10)
-                        if (
-                            not stock.get("reversal_add_state")
-                            and _ra_pnl_min <= profit_rate <= _ra_pnl_max
-                        ):
-                            if reversal_add_ai_state_usable:
-                                _mutate_stock_state(
-                                    stock,
-                                    set_fields={
-                                        "reversal_add_state": "STAGNATION",
-                                        "reversal_add_profit_floor": profit_rate,
-                                        "reversal_add_ai_bottom": current_ai_score,
-                                        "reversal_add_ai_history": [current_ai_score],
-                                    },
-                                )
-                            else:
-                                _log_holding_pipeline(
-                                    stock,
-                                    code,
-                                    "reversal_add_ai_history_skipped",
-                                    state="-",
-                                    reason="holding_score_unusable_for_state_history",
-                                    profit_rate=f"{profit_rate:+.2f}",
-                                    ai_score=f"{current_ai_score:.0f}",
-                                    **_holding_score_role_log_fields(
-                                        reversal_add_score_ctx
-                                    ),
-                                )
-                        # STAGNATION 리셋 조건
-                        elif stock.get("reversal_add_state") == "STAGNATION":
-                            if profit_rate < _ra_pnl_min or profit_rate > 0:
-                                _mutate_stock_state(
-                                    stock,
-                                    set_fields={
-                                        "reversal_add_state": "",
-                                        "reversal_add_profit_floor": 0.0,
-                                        "reversal_add_ai_bottom": 100,
-                                        "reversal_add_ai_history": [],
-                                    },
-                                )
-
-                        # REVERSAL_CANDIDATE 전이 판단 (실행 직전 후보 상태)
-                        _ra_state = stock.get("reversal_add_state", "")
-                        if _ra_state in ("STAGNATION", "REVERSAL_CANDIDATE"):
-                            _ra_floor = float(
-                                stock.get("reversal_add_profit_floor", 0.0)
-                            )
-                            _ra_margin = _rule_float(
-                                "REVERSAL_ADD_STAGNATION_LOW_FLOOR_MARGIN", 0.05
-                            )
-                            _ra_min_ai = _rule_int("REVERSAL_ADD_MIN_AI_SCORE", 60)
-                            _ra_min_hold = _rule_int("REVERSAL_ADD_MIN_HOLD_SEC", 20)
-                            _ra_max_hold = _rule_int("REVERSAL_ADD_MAX_HOLD_SEC", 120)
-                            _ra_bottom = int(stock.get("reversal_add_ai_bottom", 100))
-                            _ra_recovery_delta = _rule_int(
-                                "REVERSAL_ADD_MIN_AI_RECOVERY_DELTA", 15
-                            )
-                            _ra_hist = list(stock.get("reversal_add_ai_history", []))
-                            _ra_recovering_delta = (
-                                reversal_add_ai_state_usable
-                                and current_ai_score >= _ra_bottom + _ra_recovery_delta
-                            )
-                            _ra_recovering_consec = (
-                                reversal_add_ai_state_usable
-                                and len(_ra_hist) >= 2
-                                and _ra_hist[-1] > _ra_hist[-2]
-                                and current_ai_score > _ra_hist[-1]
-                            )
-
-                            _ra_feat = stock.get("last_reversal_features", {})
-                            _ra_supply_context = _reversal_add_runtime_supply_context(
-                                _ra_feat
-                            )
-                            _ra_supply_ok = bool(_ra_supply_context.get("supply_ok"))
-
-                            _ra_candidate_ok = (
-                                (_ra_pnl_min <= profit_rate <= _ra_pnl_max)
-                                and (_ra_min_hold <= held_sec <= _ra_max_hold)
-                                and (profit_rate >= _ra_floor - _ra_margin)
-                                and reversal_add_ai_state_usable
-                                and (_ra_recovering_delta or _ra_recovering_consec)
-                                and _ra_supply_ok
-                            )
-
-                            if _ra_candidate_ok and _ra_state != "REVERSAL_CANDIDATE":
-                                _mutate_stock_state(
-                                    stock,
-                                    set_fields={
-                                        "reversal_add_state": "REVERSAL_CANDIDATE"
-                                    },
-                                )
-                                _log_holding_pipeline(
-                                    stock,
-                                    code,
-                                    "reversal_add_candidate",
-                                    state="REVERSAL_CANDIDATE",
-                                    reason="candidate_ready",
-                                    profit_rate=f"{profit_rate:+.2f}",
-                                    ai_score=f"{current_ai_score:.0f}",
-                                    score_gate_converted_to_prior=True,
-                                    hard_gate_veto=False,
-                                    score_prior_band=(
-                                        "supportive"
-                                        if current_ai_score >= _ra_min_ai
-                                        else "low"
-                                    ),
-                                    ai_score_prior_weight=(
-                                        0.6 if current_ai_score >= _ra_min_ai else -0.3
-                                    ),
-                                    **_holding_score_role_log_fields(
-                                        reversal_add_score_ctx
-                                    ),
-                                )
-                            elif (
-                                not _ra_candidate_ok
-                            ) and _ra_state == "REVERSAL_CANDIDATE":
-                                _mutate_stock_state(
-                                    stock,
-                                    set_fields={"reversal_add_state": "STAGNATION"},
-                                )
-
-                    if not sim_ai_budget_skip:
-                        log_info(
-                            f"👁️ [AI 보유감시: {stock['name']}] 수익: {profit_rate:+.2f}% | "
-                            f"AI: {current_ai_score:.0f}점 | "
-                            f"갱신주기: {dynamic_max_cd}초 | AI캐시: {'HIT' if ai_cache_hit else 'MISS'}"
                         )
-                        _log_holding_pipeline(
-                            stock,
-                            code,
-                            "ai_holding_review",
-                            profit_rate=f"{profit_rate:+.2f}",
-                            ai_score=f"{current_ai_score:.0f}",
-                            held_sec=int(held_time_min * 60),
-                            price_change=f"{price_change:.2f}",
-                            review_cd_sec=dynamic_max_cd,
-                            review_ms=int(
-                                (time.perf_counter() - holding_ai_review_started) * 1000
-                            ),
-                            ai_cache="hit" if ai_cache_hit else "miss",
-                            ai_call_skipped_reason=ai_call_skipped_reason,
-                            holding_ai_orderbook_present=holding_ai_orderbook_present,
-                            holding_ai_orderbook_usable=holding_ai_orderbook_usable,
-                            holding_ai_recent_tick_count=holding_ai_recent_tick_count,
-                            holding_review_trigger_reason="fast_reuse_bypass",
-                            **holding_ai_orderbook_refresh_fields,
-                            **_build_ai_ops_log_fields(
-                                ai_decision,
-                                ai_score_raw=raw_ai_score,
-                                ai_score_after_bonus=current_ai_score,
-                                ai_cooldown_blocked=False,
-                            ),
+                        vote_preflight = (
+                            _holding_score_preflight_source_quality(
+                                vote_ws_data, recent_ticks, recent_candles,
+                                now_ts=time.time(),
+                            ) if vote_source_ready else {"blocked": True}
                         )
+                        if (str(vote_preflight.get("source_quality_reason") or "").startswith(
+                                "preflight_error:")
+                                or vote_preflight.get("data_quality") == "unknown"):
+                            vote_preflight["blocked"] = True
+                            vote_preflight["block_reason"] = "vote_preflight_unproven"
+                        review_phase_ms["preflight"] = int(
+                            (time.perf_counter() - quote_started) * 1000
+                        ) - review_phase_ms["quote_refresh"]
+                        if (_pre_submit_input_snapshot_has_usable_quote(vote_ws_data)
+                                and recent_ticks and not vote_preflight.get("blocked")):
+                            _record_main_rebound_entry_source(
+                                stock, code, recent_candles, recent_candle_meta,
+                                now_ts=time.time(),
+                            )
+                            with ENTRY_LOCK:
+                                if (_scalp_holding_source_position_key(live_stock, code)
+                                        == _scalp_holding_source_position_key(stock, code)
+                                        and buy_fill_identity_from_runtime(live_stock)
+                                        == buy_fill_identity_from_runtime(stock)):
+                                    live_stock["_main_rebound_entry_source"] = copy.deepcopy(
+                                        stock["_main_rebound_entry_source"])
+                            vote_price = _safe_int(vote_ws_data.get("curr"), 0)
+                            vote_profit = (
+                                calculate_net_profit_rate(buy_p, vote_price)
+                                if vote_price > 0 and buy_p > 0 else profit_rate
+                            )
+                            vote_peak = max(peak_profit, vote_profit)
+                            position_ctx = {
+                                "buy_price": buy_p, "curr_price": vote_price,
+                                "profit_rate": vote_profit, "peak_profit": vote_peak,
+                                "drawdown_from_peak_pct": max(0.0, vote_peak - vote_profit),
+                                "held_sec": held_sec,
+                                "reversal_add_state": stock.get("reversal_add_state"),
+                                "reversal_add_executed_at": stock.get(
+                                    "reversal_add_executed_at"
+                                ),
+                            }
+                            holding_context_source = _build_holding_ai_decision_context(
+                                stock=stock, code=code, ws_data=vote_ws_data,
+                                decision_kind="holding_score", now_ts=time.time(),
+                                recent_candles=recent_candles,
+                                candle_meta=recent_candle_meta,
+                                recent_ticks=recent_ticks, position_ctx=position_ctx,
+                                include_disabled_forensics=True,
+                            )
+                            holding_context, _ = _holding_context_call_views(
+                                holding_context_source,
+                            )
+                            review_phase_ms["context_build"] = int(
+                                (time.perf_counter() - quote_started) * 1000
+                            ) - review_phase_ms["quote_refresh"] - review_phase_ms["preflight"]
+                            collect_started = time.perf_counter()
+                            review_status = _collect_holding_path_votes(
+                                stock=stock, code=code, ai_engine=ai_engine,
+                                ws_data=vote_ws_data, recent_ticks=recent_ticks,
+                                recent_candles=recent_candles, position_ctx=position_ctx,
+                                holding_context=holding_context, now_ts=now_ts,
+                                min_interval_sec=float(dynamic_min_cd),
+                                live_stock=live_stock,
+                            )
+                            review_phase_ms["vote_collect"] = int(
+                                (time.perf_counter() - collect_started) * 1000
+                            )
+                        else:
+                            review_status = (
+                                "source_quality_blocked"
+                                if vote_source_ready else "quote_or_tape_unusable"
+                            )
+                            gap_status = _persist_holding_path_review_gap(
+                                stock=stock, code=code, reason=review_status,
+                                paths=_holding_path_vote_paths(
+                                    stock, buy_price=_safe_float(buy_p, 0.0),
+                                    curr_price=_safe_float(vote_ws_data.get("curr"), 0.0),
+                                ),
+                            )
+                            if gap_status != "appended":
+                                review_status = f"{review_status}:{gap_status}"
+                            _log_holding_pipeline(
+                                stock, code, "holding_path_vote_source_gap",
+                                reason=review_status,
+                                source_quality_reason=vote_preflight.get(
+                                    "source_quality_reason"
+                                ),
+                                actual_order_submitted=False,
+                            )
+                except Exception as exc:
+                    review_status = "review_exception"
+                    gap_status = _persist_holding_path_review_gap(
+                        stock=stock, code=code, reason=review_status,
+                    )
+                    if gap_status != "appended":
+                        review_status = f"{review_status}:{gap_status}"
+                    _log_holding_pipeline(
+                        stock, code, "holding_path_vote_source_gap",
+                        reason=review_status, error_type=type(exc).__name__,
+                        actual_order_submitted=False,
+                    )
+                finally:
+                    if (_scalp_holding_source_position_key(live_stock, code)
+                            == _scalp_holding_source_position_key(stock, code)
+                            and buy_fill_identity_from_runtime(live_stock)
+                            == buy_fill_identity_from_runtime(stock)):
+                        LAST_AI_CALL_TIMES[code] = now_ts
+                        live_stock["holding_path_last_review_at"] = now_ts
+                        live_stock["last_ai_profit"] = profit_rate
+                    stock["holding_path_last_review_at"] = now_ts
+                    stock["last_ai_profit"] = profit_rate
+                    _log_holding_pipeline(
+                        stock, code, "holding_path_review",
+                        status=review_status, review_ms=int(
+                            (time.perf_counter() - review_started) * 1000
+                        ),
+                        review_phase_ms=review_phase_ms,
+                        actual_order_submitted=False,
+                    )
+            schedule_status = (
+                _schedule_holding_vote_review(code, _run_vote_review)
+                if frozen_stock is not None else "vote_input_freeze_failed"
+            )
+            if schedule_status not in {"scheduled", "inflight_skip"}:
+                _persist_holding_path_review_gap(
+                    stock=stock, code=code, reason=schedule_status,
+                )
 
-            except Exception as e:
-                log_info(f"🚨 [보유 AI 감시 에러] {stock['name']}({code}): {e}")
-            finally:
-                with ENTRY_LOCK:
-                    LAST_AI_CALL_TIMES[code] = now_ts
-
-    holding_score_exit_role_ctx = _holding_score_runtime_context(
-        stock,
-        current_ai_score=current_ai_score,
-        now_ts=now_ts,
-        is_critical_zone=True,
-    )
-    holding_score_negative_exit_usable = bool(
-        holding_score_exit_role_ctx.get("usable_for_negative_exit")
-    )
+    # Historical score fields remain archived, but no active holding decision
+    # reads them after the path-vote conversion.
+    current_ai_score = 50.0
+    holding_score_exit_role_ctx = {
+        "usable_for_negative_exit": False,
+        "usable_for_scale_in_support": False,
+        "source": "retired_holding_score",
+    }
 
     # ── reversal_add POST_ADD_EVAL 집중 감시 ──────────────────
     if not is_sell_signal and stock.get("reversal_add_state") == "POST_ADD_EVAL":
@@ -84353,8 +83690,7 @@ def handle_holding_state(
         _ra_feature_usable = not bool(_ra_source_quality.get("reversal_feature_stale"))
         _ra_floor = float(stock.get("reversal_add_profit_floor", -1.0))
         _ra_post_fail = (
-            (holding_score_negative_exit_usable and current_ai_score < 55)
-            or profit_rate < _ra_floor - 0.05
+            profit_rate < _ra_floor - 0.05
             or (_ra_feature_usable and _ra_feat.get("large_sell_print_detected", False))
             or (
                 _ra_feature_usable
@@ -84366,7 +83702,7 @@ def handle_holding_state(
             sell_reason_type = "LOSS"
             reason = (
                 f"🚨 reversal_add POST_EVAL 실패 "
-                f"(AI:{current_ai_score:.0f}, profit:{profit_rate:.2f}%, "
+                f"(profit:{profit_rate:.2f}%, "
                 f"elapsed:{_ra_elapsed:.0f}s)"
             )
             exit_rule = "reversal_add_post_eval_fail"
@@ -84392,18 +83728,6 @@ def handle_holding_state(
         base_stop_pct = _rule_float("SCALP_STOP", -1.5)
         hard_stop_pct = _rule_float("SCALP_HARD_STOP", -2.5)
         safe_profit_pct = _rule_float("SCALP_SAFE_PROFIT", 0.5)
-        open_reclaim_peak_max_pct = _rule_float(
-            "SCALP_OPEN_RECLAIM_NEVER_GREEN_PEAK_MAX_PCT", 0.20
-        )
-        open_reclaim_hold_sec = _rule_int(
-            "SCALP_OPEN_RECLAIM_NEVER_GREEN_HOLD_SEC", 300
-        )
-        open_reclaim_score_buffer = _rule_int(
-            "SCALP_OPEN_RECLAIM_NEAR_AI_EXIT_SCORE_BUFFER", 5
-        )
-        open_reclaim_retrace_sustain_sec = _rule_int(
-            "SCALP_OPEN_RECLAIM_RETRACE_NEAR_AI_EXIT_SUSTAIN_SEC", 120
-        )
         if highest_prices.get(price_key, 0) > 0:
             drawdown = (
                 (highest_prices[price_key] - curr_p) / highest_prices[price_key] * 100
@@ -84480,15 +83804,14 @@ def handle_holding_state(
             holding_score_exit_role_ctx, current_ai_score
         ):
             dynamic_stop_pct = max(soft_stop_pct - 1.0, hard_stop_pct)
-            dynamic_trailing_limit = _rule_float("SCALP_TRAILING_LIMIT_STRONG", 0.8)
         else:
             dynamic_stop_pct = soft_stop_pct
-            dynamic_trailing_limit = _rule_float("SCALP_TRAILING_LIMIT_WEAK", 0.4)
         trailing_values, _ = _scalp_trailing_values_for_evaluation(now_ts)
         scalp_trailing_start_pct = float(trailing_values["SCALP_TRAILING_START_PCT"])
-        strong_trailing = _holding_strong_trailing_enabled(
-            holding_score_exit_role_ctx, current_ai_score,
-            threshold=float(trailing_values["SCALP_TRAILING_STRONG_AI_SCORE"]),
+        strong_trailing, mechanical_fields = _scalp_trailing_strength_and_event_replay(
+            stock, code, ws_data, now_ts=now_ts, quote_fields=holding_quote_fields,
+            executable_bid=trailing_decision_price, bid_source=trailing_bid_source,
+            peak_price=scalp_tp_peak_price, buy_price=buy_p,
         )
         tp_trailing_limit = float(trailing_values[
             "SCALP_TRAILING_LIMIT_STRONG" if strong_trailing else "SCALP_TRAILING_LIMIT_WEAK"
@@ -84503,6 +83826,14 @@ def handle_holding_state(
             strong_limit_pct=tp_trailing_limit,
             already_armed=_scalp_trailing_arm_was_latched(stock),
         )
+        trailing_decision = _scalp_trailing_latch_first_crossing(
+            stock, code, trailing_decision, observed_at=now_ts,
+            mechanical_fields=mechanical_fields,
+            market=scalp_trailing_market_type_at(now_ts),
+            bid_source=trailing_bid_source,
+        )
+        strong_trailing = trailing_decision.threshold_key == "SCALP_TRAILING_LIMIT_STRONG"
+        tp_trailing_limit = trailing_decision.threshold_pct
         _scalp_trailing_latch_arm(
             stock, armed=trailing_decision.armed, observed_at=now_ts,
             start_pct=scalp_trailing_start_pct,
@@ -84523,6 +83854,7 @@ def handle_holding_state(
             now_ts=now_ts,
             evaluator="normal",
             quote_fields=holding_quote_fields,
+            mechanical_fields=mechanical_fields,
             nxt_guard_fields=nxt_trailing_bid_guard_fields,
             holding_profit_rate_at_eval=profit_rate,
             holding_mark_price_at_eval=curr_p,
@@ -84572,16 +83904,6 @@ def handle_holding_state(
                     "_soft_stop_expert_shadow_logged_key",
                 ),
             )
-        _observe_bad_entry_block_candidate(
-            stock,
-            code,
-            strategy=strategy,
-            profit_rate=profit_rate,
-            peak_profit=peak_profit,
-            current_ai_score=current_ai_score,
-            held_sec=held_sec,
-            now_ts=now_ts,
-        )
         bad_entry_refined_decision = _build_bad_entry_refined_decision(
             stock,
             strategy=strategy,
@@ -84613,29 +83935,6 @@ def handle_holding_state(
             now_ts=now_ts,
         )
 
-        open_reclaim_near_ai_exit = (
-            profit_rate <= near_ai_exit_min_loss_pct
-            and holding_score_negative_exit_usable
-            and current_ai_score
-            <= (near_ai_exit_score_limit + open_reclaim_score_buffer)
-        )
-        default_near_ai_exit = (
-            profit_rate <= near_ai_exit_min_loss_pct
-            and holding_score_negative_exit_usable
-            and current_ai_score <= near_ai_exit_score_limit
-        )
-        open_reclaim_near_ai_exit_sustain_sec = _update_boolean_sustain_sec(
-            stock,
-            key="open_reclaim_near_ai_exit_started_at",
-            active=open_reclaim_near_ai_exit,
-            now_ts=now_ts,
-        )
-        _update_boolean_sustain_sec(
-            stock,
-            key="generic_near_ai_exit_started_at",
-            active=default_near_ai_exit,
-            now_ts=now_ts,
-        )
 
         if legacy_broker_recovered:
             _mutate_stock_state(
@@ -84696,66 +83995,6 @@ def handle_holding_state(
                 recovery_prob_shadow=f"{bad_entry_refined_decision.get('recovery_prob_shadow', 0.0):.3f}",
             )
 
-        else:
-            mfe_protect_exit = _evaluate_scalp_mfe_protect_exit(
-                stock,
-                strategy=strategy,
-                profit_rate=profit_rate,
-                peak_profit=peak_profit,
-                current_ai_score=current_ai_score,
-                held_sec=held_sec,
-            )
-            if mfe_protect_exit.get("should_exit"):
-                if _rest_quote_only_hard_stop_confirmation_block(
-                    stock,
-                    code,
-                    exit_rule="scalp_mfe_protect_exit",
-                    profit_rate=profit_rate,
-                    emergency_pct=-999.0,
-                    held_sec=held_sec,
-                    curr_price=curr_p,
-                    buy_price=buy_p,
-                    quote_fields=holding_ws_fields,
-                ):
-                    return
-                is_sell_signal = True
-                sell_reason_type = "PROFIT_PROTECT"
-                reason = (
-                    "🛡️ MFE 보호 청산 "
-                    f"(peak=+{peak_profit:.2f}%, giveback={_safe_float(mfe_protect_exit.get('giveback_pct'), 0.0):.2f}%p, "
-                    f"profit={profit_rate:+.2f}%, ai={current_ai_score:.0f})"
-                )
-                exit_rule = "scalp_mfe_protect_exit"
-                _log_holding_pipeline(
-                    stock,
-                    code,
-                    "scalp_mfe_protect_exit",
-                    decision_source="MFE_PROTECT_EXIT",
-                    exit_rule=exit_rule,
-                    sell_reason_type=sell_reason_type,
-                    profit_rate=f"{profit_rate:+.2f}",
-                    peak_profit=f"{peak_profit:+.2f}",
-                    giveback_pct=f"{_safe_float(mfe_protect_exit.get('giveback_pct'), 0.0):.2f}",
-                    min_peak_pct=f"{_safe_float(mfe_protect_exit.get('min_peak_pct'), 0.0):.2f}",
-                    trigger_profit_pct=f"{_safe_float(mfe_protect_exit.get('trigger_profit_pct'), 0.0):+.2f}",
-                    min_giveback_pct=f"{_safe_float(mfe_protect_exit.get('min_giveback_pct'), 0.0):.2f}",
-                    max_ai_score=f"{_safe_float(mfe_protect_exit.get('max_ai_score'), 0.0):.0f}",
-                    current_ai_score=f"{current_ai_score:.0f}",
-                    held_sec=held_sec,
-                    metric_role="bounded_tunable",
-                    decision_authority="real_scalping_mfe_protect_exit_runtime",
-                    window_policy="same_day_intraday_runtime",
-                    sample_floor="not_applicable_runtime_guard",
-                    primary_decision_metric="mfe_giveback_pct",
-                    source_quality_gate="real_holding_price_and_peak_profit_present",
-                    runtime_effect=True,
-                    forbidden_uses=(
-                        "entry_threshold_relaxation/provider_route_change/"
-                        "broker_guard_bypass/quantity_cap_change"
-                    ),
-                    actual_order_submitted=False,
-                    broker_order_forbidden=False,
-                )
 
         if not is_sell_signal and profit_rate <= dynamic_stop_pct:
             soft_stop_grace_enabled = _rule_bool(
@@ -85681,42 +84920,6 @@ def handle_holding_state(
                 )
                 exit_rule = "scalp_soft_stop_pct"
 
-        elif (
-            not is_sell_signal
-            and not legacy_broker_recovered
-            and pos_tag == "OPEN_RECLAIM"
-            and held_sec >= open_reclaim_hold_sec
-            and peak_profit <= open_reclaim_peak_max_pct
-            and profit_rate <= near_ai_exit_min_loss_pct
-            and holding_score_negative_exit_usable
-            and current_ai_score
-            <= (near_ai_exit_score_limit + open_reclaim_score_buffer)
-        ):
-            is_sell_signal = True
-            sell_reason_type = "LOSS"
-            reason = (
-                f"🧯 OPEN_RECLAIM never-green 조기정리 "
-                f"(hold={held_sec}s, peak={peak_profit:.2f}%, ai={current_ai_score:.0f})"
-            )
-            exit_rule = "scalp_open_reclaim_never_green"
-
-        elif (
-            not is_sell_signal
-            and not legacy_broker_recovered
-            and pos_tag == "OPEN_RECLAIM"
-            and held_sec >= open_reclaim_hold_sec
-            and peak_profit > open_reclaim_peak_max_pct
-            and open_reclaim_near_ai_exit_sustain_sec
-            >= open_reclaim_retrace_sustain_sec
-        ):
-            is_sell_signal = True
-            sell_reason_type = "LOSS"
-            reason = (
-                f"🧯 OPEN_RECLAIM 양전환 후 재약세 정리 "
-                f"(hold={held_sec}s, near_ai_exit={open_reclaim_near_ai_exit_sustain_sec}s, peak={peak_profit:.2f}%)"
-            )
-            exit_rule = "scalp_open_reclaim_retrace_exit"
-
         elif not is_sell_signal and scalp_trailing_peak_armed:
             if trailing_decision_price <= 0:
                 trailing_decision_price, trailing_bid_source, recovered_rest = (
@@ -85734,6 +84937,14 @@ def handle_holding_state(
                     strong_limit_pct=tp_trailing_limit,
                     already_armed=_scalp_trailing_arm_was_latched(stock),
                 )
+                trailing_decision = _scalp_trailing_latch_first_crossing(
+                    stock, code, trailing_decision, observed_at=now_ts,
+                    mechanical_fields=mechanical_fields,
+                    market=scalp_trailing_market_type_at(now_ts),
+                    bid_source=trailing_bid_source,
+                )
+                strong_trailing = trailing_decision.threshold_key == "SCALP_TRAILING_LIMIT_STRONG"
+                tp_trailing_limit = trailing_decision.threshold_pct
                 _observe_scalp_trailing_input_transition_safe(
                     stock,
                     code,
@@ -85752,6 +84963,7 @@ def handle_holding_state(
                     evaluator="normal_rest_recovery",
                     rest_snapshot=recovered_rest,
                     quote_fields=None,
+                    mechanical_fields=mechanical_fields,
                     nxt_guard_fields=nxt_trailing_bid_guard_fields,
                     holding_profit_rate_at_eval=profit_rate,
                     holding_mark_price_at_eval=curr_p,
@@ -85804,20 +85016,6 @@ def handle_holding_state(
                 exit_rule = "scalp_trailing_take_profit"
 
         # Retained source observations cannot select a separate real SELL.
-        _observe_scalp_tp_alternative(
-            stock,
-            code,
-            exit_rule="scalp_ai_momentum_decay",
-            would_exit=bool(
-                profit_rate >= safe_profit_pct
-                and holding_score_negative_exit_usable
-                and current_ai_score < momentum_decay_score_limit
-                and held_sec >= momentum_decay_min_hold_sec
-            ),
-            profit_rate=profit_rate,
-            peak_profit=peak_profit,
-            now_ts=now_ts,
-        )
         _observe_scalp_tp_alternative(
             stock,
             code,
@@ -85924,6 +85122,8 @@ def handle_holding_state(
         return
 
     if not is_sell_signal:
+        stock.pop("holding_path_exit_candidate", None)
+        stock.pop("holding_path_exit_hold", None)
         _clear_holding_flow_override_candidate(
             stock,
             code,
@@ -85958,32 +85158,11 @@ def handle_holding_state(
                 quote_fields=holding_ws_fields,
             ):
                 return
-        if (
-            not opening_rotation_active
-            and exit_rule not in {
-                "scalp_same_session_terminal_exit",
-                "scalp_trailing_take_profit",
-            }
+        if strategy == "SCALPING" and not _holding_path_exit_proceeds(
+            stock, code, exit_rule=exit_rule, profit_rate=profit_rate,
+            ws_data=ws_data, signal_at=time.time(),
         ):
-            if not _evaluate_holding_flow_override(
-                stock=stock,
-                code=code,
-                strategy=strategy,
-                ws_data=ws_data,
-                ai_engine=ai_engine,
-                exit_rule=exit_rule,
-                sell_reason_type=sell_reason_type,
-                reason=reason,
-                profit_rate=profit_rate,
-                peak_profit=peak_profit,
-                drawdown=_safe_float(locals().get("drawdown"), 0.0),
-                current_ai_score=current_ai_score,
-                held_sec=held_sec,
-                curr_price=curr_p,
-                buy_price=buy_p,
-                now_ts=now_ts,
-            ):
-                return
+            return
 
         hard_stop_revalidation_already_passed = False
         if str(exit_rule or "").strip() == "scalp_hard_stop_pct":
@@ -86282,10 +85461,7 @@ def handle_holding_state(
                     soft_stop_pct=locals().get("dynamic_stop_pct"),
                     trailing_start_pct=locals().get("scalp_trailing_start_pct"),
                     trailing_limit_pct=locals().get("tp_trailing_limit"),
-                    trailing_score_threshold=(
-                        float(trailing_values["SCALP_TRAILING_STRONG_AI_SCORE"])
-                        if "trailing_values" in locals() else None
-                    ),
+                    trailing_score_threshold=None,
                     trailing_drawdown_pct=(
                         trailing_decision.drawdown_pct
                         if str(exit_rule or "").strip()
@@ -88889,15 +88065,18 @@ def _evaluate_scale_in_signal(
         return None
     if signal.get("source_signal_id") == stock.get("last_avg_down_rebound_signal_id"):
         return None
-    # Retain the existing real holding-AI source/submit veto. No new provider call.
-    holding = _holding_score_runtime_context(stock, current_ai_score=current_ai_score,
-        now_ts=now_ts, is_critical_zone=True)
-    if not _real_stop_line_avg_down_ai_score_submit_authority(
-            current_ai_score=current_ai_score, holding_score_context=holding).get("allowed"):
-        stock["_main_rebound_entry_assessment"]["reason"] = "shared_main_rebound_holding_ai_veto"
+    add_snapshot = _holding_path_signal_decision(
+        stock, code, path_id="ADD_REBOUND",
+        signal_id=str(signal["source_signal_id"]), signal_at=time.time(),
+    )
+    if add_snapshot.get("decision") != "PASS":
+        stock["_main_rebound_entry_assessment"]["reason"] = (
+            "shared_main_rebound_add_vote_" + str(add_snapshot.get("reason") or "insufficient")
+        )
         return None
     signal.update(add_type="AVG_DOWN", reason="shared_main_rebound_entry",
-        profit_rate=profit_rate, peak_profit=peak_profit, current_ai_score=current_ai_score,
+        profit_rate=profit_rate, peak_profit=peak_profit,
+        holding_path_vote_snapshot=add_snapshot,
         held_sec=held_sec, stock_code=code,
         position_basis=[stock.get("buy_price"), stock.get("buy_qty")],
         stop_guard_pct=stop_guard_pct, signal_observed_at=now_ts, signal_source_digest=_main_rebound_source_digest(ws_data),
@@ -89149,8 +88328,22 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
     if str((action or {}).get("add_type") or "").upper() == "PYRAMID":
         return {"status": "blocked", "reason": "pyramid_permanently_retired", "qty": 0}
     if str((action or {}).get("add_type") or "").upper() == "AVG_DOWN":
+        if stock.get("holding_path_vote_store_gap"):
+            return {"status": "blocked", "reason": "add_vote_store_unavailable", "qty": 0}
         permit = stock.get("_main_rebound_entry_permit") or {}
         now_ts = time.time()
+        vote = (action or {}).get("holding_path_vote_snapshot") or {}
+        vote_market = scalp_trailing_market_type_at(now_ts)
+        vote_policy = _holding_path_policy_for("ADD_REBOUND", vote_market)
+        if (not isinstance(vote, dict)
+                or vote.get("path_id") != "ADD_REBOUND"
+                or vote.get("position_key") != _scalp_holding_source_position_key(stock, code)
+                or vote.get("decision") != "PASS"
+                or _safe_int(vote.get("vote_count"), 0) < 2
+                or not isinstance(vote_policy, dict)
+                or vote.get("policy_sha256") != holding_path_policy_hash(vote_policy)
+                or not 0 <= now_ts - _safe_float(vote.get("signal_at"), 0) <= 2.0):
+            return {"status": "blocked", "reason": "add_path_vote_missing_or_stale", "qty": 0}
         if (not permit or action != permit or action.get("reason") != "shared_main_rebound_entry"
                 or action.get("signal_source_digest") != _main_rebound_source_digest(ws_data)
                 or action.get("stock_code") != code

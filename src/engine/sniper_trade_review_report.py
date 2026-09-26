@@ -112,6 +112,10 @@ _DETAIL_HIDDEN_KEYS = {
     "scalp_trailing_policy_values",
     "scalp_trailing_start_by_market",
     "scalp_trailing_market_values",
+    "scalp_trailing_classifier_parameters",
+    "classifier_events",
+    "classifier_event_replay",
+    "first_crossing",
     "operational_threshold_values",
     "operational_threshold_sources",
 }
@@ -177,8 +181,10 @@ def _decode_threshold_json_fields(fields: dict) -> dict:
         "scalp_trailing_policy_values",
         "scalp_trailing_start_by_market",
         "scalp_trailing_market_values",
+        "scalp_trailing_classifier_parameters",
         "operational_threshold_values",
         "operational_threshold_sources",
+        "first_crossing",
     ):
         if key not in fields or fields[key] == "-":
             continue
@@ -189,6 +195,13 @@ def _decode_threshold_json_fields(fields: dict) -> dict:
         except (TypeError, ValueError):
             value = None
         fields[key] = value if isinstance(value, dict) else None
+    for key in ("classifier_events", "classifier_event_replay"):
+        if key in fields and not isinstance(fields[key], list):
+            try:
+                parsed_events = json.loads(fields[key])
+            except (TypeError, ValueError):
+                parsed_events = None
+            fields[key] = parsed_events if isinstance(parsed_events, list) else None
     return fields
 
 
@@ -611,7 +624,11 @@ def _build_timeline(events: list[HoldingEvent]) -> list[dict[str, Any]]:
         if (
             timeline
             and timeline[-1]["stage"] == event.stage
-            and event.stage != "scalp_trailing_input_transition"
+            and event.stage not in {
+                "scalp_trailing_input_transition", "scalp_trailing_mechanical_input",
+                "holding_path_signal_snapshot", "holding_path_votes_collected",
+                "holding_path_exit_veto_deferred",
+            }
         ):
             continue
         timeline.append(
@@ -1294,6 +1311,11 @@ _PROJECTION_EVENT_STAGES = {
     "scale_in_buy_order_terminal_confirmed",
     "scale_in_executed",
     "ai_holding_review",
+    "holding_path_review",
+    "holding_path_votes_collected",
+    "holding_path_vote_source_gap",
+    "holding_path_signal_snapshot",
+    "holding_path_exit_veto_deferred",
     "exit_signal",
     "sell_order_sent",
     "sell_order_failed",
@@ -1306,6 +1328,7 @@ _PROJECTION_EVENT_STAGES = {
     "holding_flow_override_force_exit",
     "holding_flow_override_confirm_exit",
     "scalp_trailing_input_transition",
+    "scalp_trailing_mechanical_input",
     "scalp_tp_alternative_observed",
 }
 

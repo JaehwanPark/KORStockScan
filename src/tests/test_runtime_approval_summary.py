@@ -65,6 +65,84 @@ def test_summary_completes_direct_evidence_without_fabricating_economics(monkeyp
     assert report["actual_order_submitted"] is False
 
 
+def test_mechanical_carried_selection_keeps_lineage_without_claiming_natural_lift(
+    monkeypatch, tmp_path,
+):
+    data = _patch(monkeypatch, tmp_path)
+    target = "2026-09-26"
+    _seed_required(target)
+    policy_sha = "a" * 64
+    bootstrap_dir = data / "runtime" / "policy_bootstrap"
+    manifest = {
+        "target_date": target,
+        "scalp_trailing_mechanical_policy_receipt": {
+            "source": "reviewed_selected_candidate",
+            "market_values_sha256": policy_sha,
+        },
+        "scalp_trailing_selection_lineage": {
+            "status": "carried_selected",
+            "origin_target_date": "2026-09-25",
+            "market_values_sha256": policy_sha,
+        },
+    }
+    manifest["manifest_sha256"] = mod._bootstrap_digest_json(manifest)
+    _write(bootstrap_dir / f"runtime_policy_bootstrap_{target}.json", manifest)
+    _write(bootstrap_dir / f"runtime_policy_bootstrap_verify_{target}.json", {
+        "target_date": target, "passed": True, "pid_passed": True,
+        "pid_env_available": True, "pid": 123,
+        "manifest_sha256": manifest["manifest_sha256"],
+    })
+    report = mod.build_runtime_approval_summary(target)
+    lineage = report["holding_exit_threshold_lineage"]
+    assert lineage["mechanical_runtime_selected"] is True
+    observed = lineage["mechanical_closed_loop_attribution"]
+    assert observed["selection_status"] == "carried_selected"
+    assert observed["selection_origin_target_date"] == "2026-09-25"
+    assert observed["actual_pid_consumed"] is True
+    assert observed["manifest_self_hash_valid"] is True
+    assert observed["natural_completed_ids"] == []
+    assert observed["paired_policy_lift_established"] is False
+    manifest["scalp_trailing_selection_lineage"]["origin_target_date"] = "2026-09-24"
+    _write(bootstrap_dir / f"runtime_policy_bootstrap_{target}.json", manifest)
+    tampered = mod.build_runtime_approval_summary(target)["holding_exit_threshold_lineage"]
+    assert tampered["mechanical_runtime_selected"] is False
+    assert tampered["mechanical_closed_loop_attribution"]["actual_pid_consumed"] is False
+
+
+def test_summary_publishes_estimated_holding_vote_policy_without_realized_ev(
+    monkeypatch, tmp_path,
+):
+    from src.engine import build_next_stage2_checklist
+    from src.engine.scalping.holding_path_vote_replay import summarize_holding_path_votes
+    from src.engine.scalping.holding_path_vote_policy import load_bundle
+
+    data = _patch(monkeypatch, tmp_path)
+    source_date, target_date = "2026-09-26", "2026-09-28"
+    monkeypatch.setattr(build_next_stage2_checklist, "_next_krx_trading_day",
+                        lambda _: target_date)
+    _seed_required(source_date)
+    replay = summarize_holding_path_votes(
+        [], load_events=lambda _: [], model="gpt-5.4-nano",
+    )
+    _write(data / "report" / "monitor_snapshots" /
+           f"holding_exit_observation_{source_date}.json", {
+               "date": source_date,
+               "holding_path_vote_replay": replay,
+               "completed_population_quality": {
+                   "complete": False, "strict_completed_position_ids": [],
+                   "db_completed_main_ids": [], "source_gap_ids": [],
+                   "source_gap_dates": [],
+               },
+           })
+    report = mod.build_runtime_approval_summary(source_date)
+    receipt = report["holding_path_vote_policy"]
+    assert receipt["status"] == "estimated_provisional_published"
+    assert receipt["realized_paired_ev_krw"] is None
+    bundle = load_bundle(data, target_date)
+    assert bundle["bundle_sha256"] == receipt["bundle_sha256"]
+    assert len(bundle["cells"]) == 15
+
+
 def test_main_mechanistic_report_flags_do_not_prove_future_owner_support():
     evidence = mod._economic_projection(
         "main_mechanistic_entry",

@@ -107,7 +107,7 @@ def start_values_hash(values: Mapping[str, Any]) -> str:
     if set(values) != set(START_MARKETS):
         raise ValueError("start_market_keys_mismatch")
     normalized = start_values_from_env(
-        {START_MARKET_ENV_KEYS[key]: values[key] for key in START_MARKETS}, 0.6
+        {START_MARKET_ENV_KEYS[key]: values[key] for key in START_MARKETS}, 0.4
     )
     payload = json.dumps(normalized, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("ascii")).hexdigest()
