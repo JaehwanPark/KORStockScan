@@ -6,6 +6,7 @@ import gzip
 import glob
 import hashlib
 import json
+import math
 import os
 import time
 from collections import Counter
@@ -35,6 +36,11 @@ def _today_kst_str(now_kst: datetime | None = None) -> str:
 
 def _holding_profit_exit_semantics(root: Path, source_date: str) -> dict[str, Any]:
     """Check the sentinel's exact-date semantic receipt separately from freshness."""
+    # The vote/terminal semantic payload was introduced for the next natural
+    # trading session. Older sentinel files are audit history, not malformed
+    # receipts under the new schema.
+    if source_date < "2026-09-28":
+        return {"status": "not_required_before_introduction", "findings": []}
     path = (root / "data/report/holding_exit_sentinel" /
             f"holding_exit_sentinel_{source_date}.json")
     if not path.exists() and not path.is_symlink():
@@ -222,6 +228,170 @@ def _machine_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
             findings.append('winrate_semantic_validation_failed')
     return {"status": "warning" if findings else "pass", "findings": sorted(set(findings)),
         "scopes": scope_details, "compact_exclusions": compact_exclusions}
+
+
+def _auxiliary_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
+    """Audit the bounded AI-stage receipt; selection is not live consumption."""
+    from src.engine.scalping import compact_auxiliary_paired_replay as paired
+
+    terminal_path = (root / "data/report/postclose_stage_terminal" / source_date
+                     / "main_auxiliary_policy.json")
+    terminal_source_sha = None
+    if terminal_path.exists() or terminal_path.is_symlink():
+        try:
+            if terminal_path.is_symlink() or terminal_path.stat().st_size > 1024 * 1024:
+                raise ValueError("auxiliary_terminal_untrusted_path_or_size")
+            terminal = json.loads(terminal_path.read_text(encoding="utf-8"))
+            receipt = terminal.get("receipt_sha256")
+            body = {k: v for k, v in terminal.items() if k != "receipt_sha256"}
+            digest = hashlib.sha256(json.dumps(body, ensure_ascii=True,
+                sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+            if (terminal.get("schema") != "postclose_stage_terminal_v2"
+                or terminal.get("stage_id") != "main_auxiliary_policy"
+                or terminal.get("source_date") != source_date or receipt != digest):
+                raise ValueError("auxiliary_terminal_identity_or_hash_invalid")
+            if terminal.get("status") == "succeeded" and terminal.get("exit_code") == 0:
+                source = ((terminal.get("sources") or {}).get(
+                    "compact_auxiliary_paired_economic") or {})
+                terminal_source_sha = source.get("sha256")
+                if (not isinstance(terminal_source_sha, str)
+                    or len(terminal_source_sha) != 64
+                    or any(c not in "0123456789abcdef" for c in terminal_source_sha)
+                    or source.get("path") != str((root /
+                        "data/report/ai_entry_setup_paired_replay_batch" /
+                        f"compact_auxiliary_paired_economic_{source_date}.json").resolve())):
+                    raise ValueError("auxiliary_terminal_source_binding_missing")
+        except (OSError, UnicodeError, ValueError, TypeError, AttributeError) as exc:
+            return {"status": "source_invalid", "findings": [str(exc)]}
+    path = existing_or_gzip_path(
+        root / "data/report/ai_entry_setup_paired_replay_batch"
+        / f"compact_auxiliary_paired_economic_{source_date}.json"
+    )
+    if not (path.exists() or path.is_symlink()):
+        if terminal_source_sha:
+            return {"status": "source_invalid", "findings": ["auxiliary_completed_report_missing"]}
+        return {"status": "not_assessed", "findings": []}
+    try:
+        if path.is_symlink() or path.stat().st_size > 64 * 1024 * 1024:
+            raise ValueError("auxiliary_report_untrusted_path_or_size")
+        opener = gzip.open if path.suffix == ".gz" else open
+        with opener(path, "rb") as handle:
+            raw = handle.read(64 * 1024 * 1024 + 1)
+        if len(raw) > 64 * 1024 * 1024:
+            raise ValueError("auxiliary_report_uncompressed_size_exceeded")
+        if terminal_source_sha and hashlib.sha256(raw).hexdigest() != terminal_source_sha:
+            raise ValueError("auxiliary_completed_report_generation_mismatch")
+        report = json.loads(raw)
+        stage = report.get("auxiliary_stage") or {}
+        if (not paired.valid(report)
+            or report.get("schema") != paired.SCHEMA
+            or report.get("target_date") != source_date
+            or not paired.valid(stage)
+            or stage.get("schema") != "auxiliary_ai_stage_evaluation_v1"
+            or stage.get("source_date") != source_date
+            or stage.get("source_projection_sha256") != report.get("source_projection_sha256")
+            or stage.get("source_manifest_sha256") != report.get("source_manifest_sha256")
+            or report.get("runtime_effect") is not False
+            or stage.get("runtime_effect") is not False
+            or stage.get("actual_order_submitted") is not False):
+            raise ValueError("auxiliary_stage_report_contract_invalid")
+        screened, eligible, excluded = (stage.get(k) for k in
+            ("screened_total", "eligible_count", "excluded_count"))
+        eligible_keys = stage.get("eligible_keys")
+        candidate_keys = stage.get("candidate_population_keys")
+        if (any(type(n) is not int or n < 0 for n in (screened, eligible, excluded))
+            or screened != eligible + excluded
+            or (eligible_keys is not None and (
+                not isinstance(eligible_keys, list)
+                or any(not isinstance(key, str) or not key for key in eligible_keys)
+                or len(eligible_keys) != eligible
+                or len(set(eligible_keys)) != eligible))
+            or not isinstance(stage.get("scope_results"), dict)):
+            raise ValueError("auxiliary_population_denominator_invalid")
+        if candidate_keys is not None and (
+            not isinstance(candidate_keys, list)
+            or any(not isinstance(key, str) or not key for key in candidate_keys)
+            or len(set(candidate_keys)) != len(candidate_keys)
+            or eligible_keys is None
+            or not set(candidate_keys) <= set(eligible_keys)
+            or any(not isinstance(v, dict)
+                   or type(v.get("eligible_count")) is not int
+                   or v["eligible_count"] < 0
+                   for v in stage["scope_results"].values())
+            or sum(v["eligible_count"] for v in stage["scope_results"].values())
+                != len(candidate_keys)):
+            raise ValueError("auxiliary_candidate_population_invalid")
+    except (OSError, EOFError, UnicodeError, ValueError, TypeError, AttributeError) as exc:
+        return {"status": "source_invalid", "findings": [str(exc)]}
+    findings: list[str] = []
+    if eligible_keys is None:
+        findings.append("auxiliary_eligible_identity_uninstrumented")
+    if stage.get("source_tuning_allowed") is not True:
+        findings.append("auxiliary_source_tuning_not_allowed")
+    scopes = {}
+    for scope, value in stage["scope_results"].items():
+        if not isinstance(value, dict):
+            findings.append("auxiliary_scope_selection_status_invalid")
+            continue
+        selected = value.get("selected") or {}
+        if not isinstance(selected, dict):
+            findings.append("auxiliary_scope_selection_status_invalid")
+            continue
+        status = value.get("status")
+        scopes[scope] = {"status": status, "eligible_count": value.get("eligible_count"),
+                         "holdout_day": value.get("holdout_day"),
+                         "paired_delta_ev_pct": selected.get("paired_delta_ev_pct"),
+                         "actual_fill_or_realized_pnl": False}
+        if status not in {"candidate_selected", "incumbent_carry"}:
+            findings.append("auxiliary_scope_selection_status_invalid")
+        train_delta = selected.get("train_paired_delta_ev_pct")
+        holdout_delta = selected.get("holdout_paired_delta_ev_pct")
+        if status == "candidate_selected" and (
+            stage.get("source_tuning_allowed") is not True
+            or candidate_keys is None
+            or type(selected.get("paired_delta_ev_pct")) not in (int, float)
+            or not math.isfinite(selected["paired_delta_ev_pct"])
+            or selected["paired_delta_ev_pct"] <= 0
+            or not isinstance(selected.get("policy"), dict)
+            or selected.get("policy_sha256") != paired.digest(selected["policy"])
+            or not selected.get("prompt_version")
+            or type(selected.get("train_count")) is not int or selected["train_count"] < 5
+            or type(selected.get("holdout_count")) is not int or selected["holdout_count"] < 3
+            or type(value.get("eligible_count")) is not int
+            or selected["train_count"] + selected["holdout_count"] != value["eligible_count"]
+            or value["eligible_count"] > eligible
+            or type(train_delta) not in (int, float) or not math.isfinite(train_delta) or train_delta <= 0
+            or type(holdout_delta) not in (int, float) or not math.isfinite(holdout_delta) or holdout_delta < 0
+            or any(type(selected.get(key)) is not int or selected[key] < 1 for key in (
+                "train_positive_count", "train_negative_count", "holdout_positive_count",
+                "holdout_negative_count", "train_pass_count", "holdout_pass_count",
+                "holdout_changed_count"))
+            or type(selected.get("train_changed_count")) is not int
+            or selected["train_changed_count"] < 2
+            or selected.get("successful_pass_changed_count") != 0
+            or selected.get("prompt_response_missing_count") != 0
+            or not value.get("holdout_day")
+        ):
+            findings.append("auxiliary_selected_without_independent_evidence")
+    if not eligible:
+        findings.append("auxiliary_economic_population_empty")
+    elif not any(isinstance(value, dict) and value.get("holdout_day")
+                 for value in stage["scope_results"].values()):
+        findings.append("auxiliary_independent_holdout_missing")
+    if any(f.endswith("invalid") or f == "auxiliary_selected_without_independent_evidence"
+           for f in findings):
+        status = "review_required"
+    elif findings:
+        status = "source_gap"
+    elif any(isinstance(v, dict) and v.get("status") == "candidate_selected"
+             for v in stage["scope_results"].values()):
+        status = "candidate_selected"
+    else:
+        status = "incumbent_carry"
+    return {"status": status,
+            "findings": sorted(set(findings)), "screened_total": screened,
+            "eligible_count": eligible, "excluded_count": excluded,
+            "scopes": scopes, "runtime_effect": False}
 
 
 def _reconcile_update_kospi_master_difference(
@@ -1123,6 +1293,11 @@ class ArtifactFreshnessDetector(BaseDetector):
             details["machine_result_semantics"] = machine_semantics
             if machine_semantics["findings"]:
                 warnings.append("machine_result_semantics: " + ", ".join(machine_semantics["findings"]))
+            auxiliary_semantics = _auxiliary_result_semantics(PROJECT_ROOT, today)
+            details["auxiliary_result_semantics"] = auxiliary_semantics
+            if auxiliary_semantics["findings"]:
+                warnings.append("auxiliary_result_semantics: " + ", ".join(
+                    auxiliary_semantics["findings"]))
 
         severity, summary = self._classify(issues, warnings)
         return DetectionResult(

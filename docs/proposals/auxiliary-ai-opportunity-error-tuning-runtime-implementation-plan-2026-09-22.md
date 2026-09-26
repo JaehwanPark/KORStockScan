@@ -181,6 +181,10 @@ soft materiality 수치는 82개 machine registry를 복사하지 않는다. 세
 | A6 | v1→새 AI schema validator/publisher/loader·장중 attempt | prompt/근거/수치/유형 단독·복합 재로드, 잘못된 candidate/schema/hash 거절, 동시 machine/AI CAS, stale response, mid-attempt 변경, rollback, 자정·재시작 carry, 단일 호출 지연 회귀 |
 | A7 | 고정 source 재생·stage terminal·PREOPEN/장중 소비·성능 수용 | 네 축별 후보·선정 disposition, soft-only 반영, AI activation 경고=deferred, source/후보/적용 전후/실제 PID·자연 호출·후단 주문/비용 별도 receipt; 같은 frozen source의 stage wall/CPU/RSS/I/O·resource 대기·provider budget·후속 handoff 도달 비교 |
 
+의미감시기는 장중 `ENTER_NOW`의 versioned AI 영수증에서 현행 prompt 해시 형식, raw→effective 전환 사유, v2 선택 profile 식별자·해시 형식, 화면 판정 및 미호출·transport 결손을 분리한다. 장후에는 bounded 보고서의 날짜·해시·원천 결합, 모집단 분모, 독립 날짜 holdout과 후보 선정 조건을 검사한다. prompt/profile 해시의 실제 정책 내용 일치와 PID 소비는 별도 원천 대사이며 이 감시만으로 증명하지 않는다. `source_gap`·현행 정책 승계·후보 선정·실제 PID 소비·체결 손익은 서로 다른 상태이며, 감시 결과는 주문·정책 변경 권한이 없다.
+
+장후 단계가 완료된 경우에는 `main_auxiliary_policy` terminal의 날짜·영수증 해시·보고서 경로·바이트 해시를 추가로 대사한다. 완료 후 보고서가 없거나 다른 세대이면 `not_assessed`로 통과시키지 않는다. 새 stage의 적격·후보 key와 유형별 분모, 선정 policy hash·짝비교 EV도 검사한다. 보유·청산 감시의 신규 `profit_exit_semantics` 계약은 9/28부터 적용하고 그 이전 역사적 보고서에는 소급 오류를 만들지 않는다.
+
 관련 테스트는 기존 compact replay, mechanistic policy, entry risk/composer, AI engine, submit handoff, stage controller 테스트에 추가한다. provider mock과 작은 paired fixtures로 구현 회귀를 하고 실제 후보 재생은 기존 budget 안에서 실행한다. Python compile·대상 pytest·diff/parser 후 재리뷰한다.
 
 **완료 보고는 학습 완료 / 정책 선정 / 발행 / 실제 PID 소비 / 자연 PASS·VETO 변화 / 실제 주문·비용 후 성과를 분리한다.** 한 영역의 근거가 부족하면 해당 상태와 다음 source를 명시한다. 다른 hard guard·scale-in·청산 튜닝은 후속 별도 작업으로 남긴다.

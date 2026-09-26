@@ -2810,8 +2810,21 @@ def _auxiliary_ai_semantics(rows, action: str, screen: str) -> dict[str, Any]:
     """Check the versioned auxiliary assessment receipt without granting authority."""
     if action != "ENTER_NOW":
         return {"status": "not_applicable_machine_nonentry", "issues": []}
+    from src.engine.ai_prompt_contracts import (
+        ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
+        ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION,
+    )
+    current_prompts = {ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
+                       ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION}
     versioned = [row for row in rows if row.fields.get("entry_ai_auxiliary_contract_version")]
     if not versioned:
+        # The current compact prompts always emit an effective assessment for
+        # a completed screen. Keep older uninstrumented rows distinguishable.
+        if screen in {"pass", "veto", "caution", "insufficient", "response_invalid"} and any(
+            row.fields.get("ai_prompt_version") in current_prompts for row in rows
+        ):
+            return {"status": "review_required", "issues": ["auxiliary_current_receipt_missing"],
+                    "runtime_effect": False, "decision_authority": "report_only_semantic_receipt_check"}
         return {"status": "legacy_uninstrumented", "issues": []}
     issues: list[str] = []
     latest = versioned[-1].fields
@@ -2820,18 +2833,37 @@ def _auxiliary_ai_semantics(rows, action: str, screen: str) -> dict[str, Any]:
         "auxiliary_effective_assessment_v1", "auxiliary_effective_assessment_v2"
     }:
         issues.append("auxiliary_contract_version_missing_or_conflicting")
+    prompt_version = latest.get("ai_prompt_version")
+    prompt_hash = latest.get("ai_prompt_sha256")
     assessment = latest.get("entry_ai_effective_assessment")
     if isinstance(assessment, str):
         try:
             assessment = json.loads(assessment)
         except (ValueError, TypeError):
             assessment = None
+    if screen in {"not_evaluated_transport", "not_evaluated_local"}:
+        if isinstance(assessment, dict) and (
+            assessment.get("effective_verdict") in {"PASS", "VETO", "CAUTION", "INSUFFICIENT"}
+            and not assessment.get("validation_errors")
+        ):
+            issues.append("auxiliary_unevaluated_has_valid_verdict")
+        return {"status": "review_required" if issues else "not_evaluated",
+                "contract_version": next(iter(versions)) if len(versions) == 1 else "conflicting",
+                "screen_status": screen, "issues": sorted(set(issues)),
+                "runtime_effect": False, "decision_authority": "report_only_semantic_receipt_check"}
+    if prompt_version in current_prompts and (
+        not isinstance(prompt_hash, str) or len(prompt_hash) != 64
+        or any(c not in "0123456789abcdef" for c in prompt_hash)
+    ):
+        issues.append("auxiliary_current_prompt_hash_missing_or_invalid")
     if not isinstance(assessment, dict):
         issues.append("auxiliary_effective_assessment_missing_or_invalid")
         assessment = {}
     errors = assessment.get("validation_errors")
     errors = errors if isinstance(errors, list) else None
     effective = str(assessment.get("effective_verdict") or "").upper()
+    raw_verdict = str(assessment.get("raw_verdict") or "").upper()
+    reason = assessment.get("reason")
     expected_screen = effective.lower()
     if screen == "response_invalid":
         expected_screen = "response_invalid"
@@ -2848,6 +2880,12 @@ def _auxiliary_ai_semantics(rows, action: str, screen: str) -> dict[str, Any]:
         if (not isinstance(profile, str) or not profile
             or profile != latest.get("entry_ai_selected_profile")):
             issues.append("auxiliary_selected_profile_mismatch")
+        profile_hash = assessment.get("selected_profile_sha256")
+        if (not isinstance(profile_hash, str) or len(profile_hash) != 64
+            or any(c not in "0123456789abcdef" for c in profile_hash)):
+            issues.append("auxiliary_selected_profile_hash_invalid")
+        if not assessment.get("soft_policy_sha256"):
+            issues.append("auxiliary_v2_soft_policy_missing")
     response_hash = str(assessment.get("validated_response_sha256") or "")
     if len(response_hash) != 64 or any(c not in "0123456789abcdef" for c in response_hash):
         issues.append("auxiliary_validated_response_hash_invalid")
@@ -2860,7 +2898,17 @@ def _auxiliary_ai_semantics(rows, action: str, screen: str) -> dict[str, Any]:
         or any(c not in "0123456789abcdef" for c in policy_hash)
     ):
         issues.append("auxiliary_soft_policy_hash_invalid")
-    raw_verdict = str(assessment.get("raw_verdict") or "").upper()
+    if not errors and effective in {"PASS", "VETO", "CAUTION", "INSUFFICIENT"}:
+        transitions = {
+            ("PASS", "CAUTION"): {"pass_positive_evidence_below_policy",
+                                    "pass_soft_risk_materiality_exceeded"},
+            ("VETO", "PASS"): {"soft_veto_evidence_below_policy"},
+        }
+        if raw_verdict == effective:
+            if reason != "raw_verdict_preserved":
+                issues.append("auxiliary_transition_reason_invalid")
+        elif reason not in transitions.get((raw_verdict, effective), set()) or not policy_hash:
+            issues.append("auxiliary_raw_effective_transition_invalid")
     recorded_raw = str(latest.get("entry_ai_advisory_verdict") or "").upper()
     if recorded_raw and raw_verdict != recorded_raw:
         issues.append("auxiliary_raw_verdict_mismatch")
@@ -2875,6 +2923,8 @@ def _auxiliary_ai_semantics(rows, action: str, screen: str) -> dict[str, Any]:
         "status": "review_required" if issues else "receipt_match",
         "contract_version": next(iter(versions)) if len(versions) == 1 else "conflicting",
         "screen_status": screen,
+        "prompt_version": prompt_version,
+        "prompt_sha256": prompt_hash,
         "raw_verdict": raw_verdict or None,
         "effective_verdict": effective or None,
         "soft_policy_sha256": policy_hash,

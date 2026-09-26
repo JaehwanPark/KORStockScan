@@ -452,6 +452,7 @@ def test_auxiliary_v2_semantic_receipt_requires_selected_profile():
     assessment = {
         "schema": "auxiliary_effective_assessment_v2",
         "raw_verdict": "VETO", "effective_verdict": "PASS",
+        "reason": "soft_veto_evidence_below_policy",
         "selected_profile": "leaf_0", "selected_profile_sha256": "e" * 64,
         "validated_response_sha256": "d" * 64,
         "soft_policy_sha256": "c" * 64, "validation_errors": [],
@@ -469,6 +470,60 @@ def test_auxiliary_v2_semantic_receipt_requires_selected_profile():
     missing = event(**{**candidate.fields, "entry_ai_selected_profile": None})
     bad = sentinel._machine_primary_entry_funnel([missing])["evaluation_ledger"][0]
     assert "auxiliary_selected_profile_mismatch" in bad["conflict_reasons"]
+
+
+@pytest.mark.parametrize("raw,effective,reason,policy,expected_issue", [
+    ("VETO", "PASS", "soft_veto_evidence_below_policy", None,
+     "auxiliary_raw_effective_transition_invalid"),
+    ("PASS", "VETO", "raw_verdict_preserved", "c" * 64,
+     "auxiliary_raw_effective_transition_invalid"),
+    ("PASS", "PASS", "soft_veto_evidence_below_policy", "c" * 64,
+     "auxiliary_transition_reason_invalid"),
+])
+def test_auxiliary_semantics_rejects_impossible_soft_transitions(
+    raw, effective, reason, policy, expected_issue,
+):
+    assessment = {"schema": "auxiliary_effective_assessment_v1",
+        "raw_verdict": raw, "effective_verdict": effective, "reason": reason,
+        "validated_response_sha256": "d" * 64,
+        "soft_policy_sha256": policy, "validation_errors": []}
+    candidate = event(screen=effective.lower(),
+        entry_ai_auxiliary_contract_version="auxiliary_effective_assessment_v1",
+        entry_ai_effective_assessment=assessment,
+        entry_ai_soft_policy_sha256=policy, entry_ai_advisory_verdict=raw)
+    row = sentinel._machine_primary_entry_funnel([candidate])["evaluation_ledger"][0]
+    assert expected_issue in row["conflict_reasons"]
+
+
+def test_auxiliary_current_prompt_missing_receipt_is_observable_gap():
+    from src.engine.ai_prompt_contracts import ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION
+    candidate = event(ai_prompt_version=ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION)
+    row = sentinel._machine_primary_entry_funnel([candidate])["evaluation_ledger"][0]
+    assert "auxiliary_current_receipt_missing" in row["conflict_reasons"]
+    legacy = sentinel._machine_primary_entry_funnel([event()])["evaluation_ledger"][0]
+    assert legacy["auxiliary_ai_semantics"]["status"] == "legacy_uninstrumented"
+
+
+def test_auxiliary_current_prompt_receipt_needs_prompt_identity():
+    from src.engine.ai_prompt_contracts import ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION
+    assessment = {"schema": "auxiliary_effective_assessment_v1",
+        "raw_verdict": "PASS", "effective_verdict": "PASS",
+        "reason": "raw_verdict_preserved", "validated_response_sha256": "d" * 64,
+        "soft_policy_sha256": None, "validation_errors": []}
+    candidate = event(ai_prompt_version=ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
+        entry_ai_auxiliary_contract_version="auxiliary_effective_assessment_v1",
+        entry_ai_effective_assessment=assessment,
+        entry_ai_advisory_verdict="PASS")
+    row = sentinel._machine_primary_entry_funnel([candidate])["evaluation_ledger"][0]
+    assert "auxiliary_current_prompt_hash_missing_or_invalid" in row["conflict_reasons"]
+
+
+def test_auxiliary_transport_without_response_is_not_economic_rejection():
+    candidate = event(screen="not_evaluated_transport",
+        entry_ai_auxiliary_contract_version="auxiliary_effective_assessment_v2")
+    row = sentinel._machine_primary_entry_funnel([candidate])["evaluation_ledger"][0]
+    assert row["auxiliary_ai_semantics"]["status"] == "not_evaluated"
+    assert row["auxiliary_ai_semantics"]["issues"] == []
 
 
 def test_auxiliary_ai_semantic_receipt_mismatch_is_reported_not_authorized():

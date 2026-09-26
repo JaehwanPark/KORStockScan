@@ -16,10 +16,21 @@ from src.engine.error_detectors.artifact_freshness import (
     ARTIFACT_REGISTRY,
     _reconcile_update_kospi_master_difference,
     _machine_result_semantics,
+    _auxiliary_result_semantics,
+    _holding_profit_exit_semantics,
 )
 from src.engine.scalping.micro_reversion.symbol_master import SymbolLookupStatus
 
 _TRADING_MOCK = "src.engine.error_detectors.artifact_freshness.is_krx_trading_day"
+
+
+def test_holding_profit_semantics_does_not_retroactively_reject_old_report(tmp_path):
+    path = tmp_path / "data/report/holding_exit_sentinel/holding_exit_sentinel_2026-09-23.json"
+    path.parent.mkdir(parents=True)
+    path.write_text('{"target_date":"2026-09-23"}')
+    assert _holding_profit_exit_semantics(tmp_path, "2026-09-23")["status"] == (
+        "not_required_before_introduction")
+    assert _holding_profit_exit_semantics(tmp_path, "2026-09-28")["status"] == "not_assessed"
 
 
 def test_machine_result_semantics_detects_successful_stage_with_unbound_economics(tmp_path, monkeypatch):
@@ -125,6 +136,104 @@ def test_machine_result_semantics_rejects_unknown_winrate_sidecar_schema(tmp_pat
             disposition='successor_selected', machine_policy_sha256=runtime_policy.digest(machine)),
         scope_policies={'KRX|KRX_REGULAR': {'machine_disposition': 'successor_selected'}}))
     assert 'winrate_successor_hurdle_invalid' in _machine_result_semantics(tmp_path, day)['findings']
+
+
+def test_auxiliary_semantics_separates_source_gap_from_invalid_selection(tmp_path):
+    from src.engine.scalping import compact_auxiliary_paired_replay as paired
+    day = "2026-09-26"
+    path = (tmp_path / "data/report/ai_entry_setup_paired_replay_batch"
+            / f"compact_auxiliary_paired_economic_{day}.json")
+    path.parent.mkdir(parents=True)
+    scope = {"status": "incumbent_carry", "eligible_count": 2,
+             "holdout_day": None, "selected": {}}
+    stage = paired.sealed({"schema": "auxiliary_ai_stage_evaluation_v1",
+        "source_date": day, "source_projection_sha256": "a" * 64,
+        "source_manifest_sha256": "b" * 64, "source_tuning_allowed": True,
+        "screened_total": 3, "eligible_count": 2, "excluded_count": 1,
+        "eligible_keys": ["one", "two"], "scope_results": {"KRX|KRX_REGULAR": scope},
+        "runtime_effect": False, "actual_order_submitted": False})
+
+    def write(current):
+        report = paired.sealed({"schema": paired.SCHEMA, "target_date": day,
+            "source_projection_sha256": "a" * 64,
+            "source_manifest_sha256": "b" * 64,
+            "runtime_effect": False, "auxiliary_stage": current})
+        path.write_text(json.dumps(report))
+
+    write(stage)
+    result = _auxiliary_result_semantics(tmp_path, day)
+    assert result["status"] == "source_gap"
+    assert result["findings"] == ["auxiliary_independent_holdout_missing"]
+    assert result["runtime_effect"] is False
+
+    scope["status"] = "candidate_selected"
+    scope["selected"] = {"train_count": 1, "holdout_count": 0,
+        "train_paired_delta_ev_pct": 0.2, "holdout_paired_delta_ev_pct": 0.1,
+        "successful_pass_changed_count": 0, "prompt_response_missing_count": 0}
+    stage = paired.sealed({k: v for k, v in stage.items()
+                           if k != "artifact_content_sha256"} | {"scope_results": {"KRX|KRX_REGULAR": scope}})
+    write(stage)
+    result = _auxiliary_result_semantics(tmp_path, day)
+    assert result["status"] == "review_required"
+    assert "auxiliary_selected_without_independent_evidence" in result["findings"]
+
+    scope["holdout_day"] = "2026-09-25"
+    scope["eligible_count"] = 8
+    scope["selected"].update(train_count=5, holdout_count=3,
+        paired_delta_ev_pct=0.15, policy={"schema": "auxiliary_soft_policy_v1"},
+        policy_sha256=paired.digest({"schema": "auxiliary_soft_policy_v1"}),
+        prompt_version="entry_machine_auxiliary_compact_v3",
+        train_positive_count=1, train_negative_count=1,
+        holdout_positive_count=1, holdout_negative_count=1,
+        train_pass_count=1, holdout_pass_count=1,
+        train_changed_count=2, holdout_changed_count=1)
+    stage = paired.sealed({k: v for k, v in stage.items()
+                           if k != "artifact_content_sha256"} | {
+                               "screened_total": 9, "eligible_count": 8,
+                               "eligible_keys": [f"key-{i}" for i in range(8)],
+                               "candidate_population_keys": [f"key-{i}" for i in range(8)],
+                               "scope_results": {"KRX|KRX_REGULAR": scope}})
+    write(stage)
+    result = _auxiliary_result_semantics(tmp_path, day)
+    assert result["status"] == "candidate_selected"
+    assert result["scopes"]["KRX|KRX_REGULAR"]["actual_fill_or_realized_pnl"] is False
+
+    broken = paired.sealed({k: v for k, v in stage.items()
+                            if k != "artifact_content_sha256"} | {
+                                "candidate_population_keys": ["key-0"]})
+    write(broken)
+    assert _auxiliary_result_semantics(tmp_path, day)["findings"] == [
+        "auxiliary_candidate_population_invalid"]
+    write(stage)
+
+    report = json.loads(path.read_text())
+    report["auxiliary_stage"]["eligible_count"] = 3
+    path.write_text(json.dumps(paired.sealed(report)))
+    assert _auxiliary_result_semantics(tmp_path, day)["findings"] == [
+        "auxiliary_stage_report_contract_invalid"]
+
+
+def test_auxiliary_completed_terminal_requires_exact_report_generation(tmp_path):
+    day = "2026-09-26"
+    path = (tmp_path / "data/report/ai_entry_setup_paired_replay_batch"
+            / f"compact_auxiliary_paired_economic_{day}.json")
+    terminal_path = (tmp_path / "data/report/postclose_stage_terminal" / day
+                     / "main_auxiliary_policy.json")
+    terminal_path.parent.mkdir(parents=True)
+    terminal = {"schema": "postclose_stage_terminal_v2",
+                "stage_id": "main_auxiliary_policy", "source_date": day,
+                "status": "succeeded", "exit_code": 0,
+                "sources": {"compact_auxiliary_paired_economic": {
+                    "path": str(path.resolve()), "sha256": "a" * 64}}}
+    terminal["receipt_sha256"] = hashlib.sha256(json.dumps(terminal,
+        ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    terminal_path.write_text(json.dumps(terminal))
+    assert _auxiliary_result_semantics(tmp_path, day)["findings"] == [
+        "auxiliary_completed_report_missing"]
+    path.parent.mkdir(parents=True)
+    path.write_text("{}")
+    assert _auxiliary_result_semantics(tmp_path, day)["findings"] == [
+        "auxiliary_completed_report_generation_mismatch"]
 
 
 def _update_kospi_partial_payload() -> dict:
