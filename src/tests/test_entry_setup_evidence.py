@@ -1255,6 +1255,8 @@ def test_balanced_codes_require_their_own_facts_and_caution_has_existing_recheck
     assert "entry_risk_veto_requires_blocking_risk" in validate_entry_risk_adjudication(
         {**risk, "risk_verdict": "VETO"}, setup_evidence=evidence
     )
+    schema = entry_risk_adjudication_openai_schema(evidence)
+    assert "VETO" not in schema["properties"]["risk_verdict"]["enum"]
 
 
 def test_balanced_unconfirmed_is_not_invalidated_or_missing_required_source():
@@ -3331,7 +3333,7 @@ def test_risk_schema_excludes_unfounded_insufficient_for_adverse_tape(state):
                 'corroborated_risk_codes': ['ADVERSE_TAPE'],
                 'risk_fact_bindings': {'ADVERSE_TAPE': ['program_flow_net_and_delta_sell']}}
     schema = entry_risk_adjudication_openai_schema(evidence)
-    assert set(schema['properties']['risk_verdict']['enum']) == {'PASS', 'CAUTION', 'VETO'}
+    assert set(schema['properties']['risk_verdict']['enum']) == {'PASS', 'CAUTION'}
     response = _risk('INSUFFICIENT', ['ADVERSE_TAPE'], contradict=['program_flow_net_and_delta_sell'])
     assert 'entry_risk_unfounded_insufficient' in validate_entry_risk_adjudication(response, setup_evidence=evidence)
     evidence.update(setup_state='INSUFFICIENT', corroborated_risk_codes=['SOURCE_QUALITY_GAP'],

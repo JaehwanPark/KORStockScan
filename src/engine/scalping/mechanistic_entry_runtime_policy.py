@@ -196,7 +196,7 @@ def validate(bundle: dict, *, target_date: str) -> None:
         activation = bundle["strategy_activation"]
         try:
             effective = datetime.fromisoformat(activation["effective_from"])
-            if (activation["schema"] not in {"main_entry_activation_v2", "main_entry_activation_v3", "main_auxiliary_activation_v1", "main_entry_winrate_activation_v1"}
+            if (activation["schema"] not in {"main_entry_activation_v2", "main_entry_activation_v3", "main_auxiliary_activation_v1", "main_auxiliary_operator_prompt_v1", "main_entry_winrate_activation_v1"}
                 or activation["lifetime"] != "until_superseded"
                 or effective.tzinfo is None
                 or effective.astimezone(KST).date().isoformat() > target_date
@@ -1804,12 +1804,25 @@ def activate_dated_winrate_policy(*, data_root: Path, target_date: str, now: dat
                     return dict(status='already_active', bundle_sha256=previous['bundle_sha256'])
         if previous['bundle_sha256'] == staged['bundle_sha256']:
             return dict(status='already_active', bundle_sha256=previous['bundle_sha256'])
-        if previous['bundle_sha256'] != proof['parent_bundle_sha256']:
+        prompt_parent = (previous.get('strategy_activation') or {}).get('parent_bundle_sha256')
+        prompt_only_parent = ((previous.get('strategy_activation') or {}).get('schema')
+                              == 'main_auxiliary_operator_prompt_v1'
+                              and prompt_parent == proof['parent_bundle_sha256'])
+        if prompt_only_parent:
+            ancestor = _read(policy_root / 'generations' / f'{prompt_parent}.json')
+            validate(ancestor, target_date=ancestor['target_date'])
+            prompt_only_parent = previous['machine_policy'] == ancestor['machine_policy']
+        if previous['bundle_sha256'] != proof['parent_bundle_sha256'] and not prompt_only_parent:
             raise ValueError('winrate_activation_parent_cas_failed')
         if proof['disposition'] == 'incumbent_carried':
             return dict(status='incumbent_carry', bundle_sha256=previous['bundle_sha256'],
                         machine_policy_sha256=digest(previous['machine_policy']))
         bundle = copy.deepcopy(staged)
+        if prompt_only_parent:
+            bundle['ai_policy'] = copy.deepcopy(previous['ai_policy'])
+            for scope, value in (bundle.get('scope_policies') or {}).items():
+                value['ai_policy'] = copy.deepcopy(previous['scope_policies'][scope]['ai_policy'])
+            bundle['previous_bundle_sha256'] = previous['bundle_sha256']
         bundle['publication_date'] = target_date
         bundle['target_date'] = target_date
         bundle['generated_at'] = current.isoformat()
@@ -2136,6 +2149,78 @@ def activate_dated_auxiliary_policy(
         return {'status': 'activated', 'scopes': sorted(proofs), **receipt}
 
 
+def activate_operator_auxiliary_prompt(
+    *, data_root: Path, target_date: str, evidence: dict,
+    now: datetime | None = None,
+) -> dict:
+    """Stage one explicitly directed prompt axis for the next session.
+
+    This is an operator override, not an economic holdout promotion. Machine,
+    soft thresholds, other venues, provider and execution guards are inherited.
+    """
+    current = (now or datetime.now(KST)).astimezone(KST)
+    if (target_date != next_target(current.date().isoformat())
+        or evidence.get('schema') != 'auxiliary_prompt_operator_review_v1'
+        or evidence.get('prompt_version') != ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION
+        or evidence.get('scope') != 'KRX|KRX_REGULAR'
+        or evidence.get('operator_direction') != 'explicit_prompt_change'
+        or evidence.get('independent_holdout_claimed') is not False):
+        raise ValueError('auxiliary_operator_evidence_invalid')
+    policy_root = root(data_root)
+    with (policy_root / 'publisher.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        staged = _load_current(data_root, target_date)
+        if (staged and (staged.get('strategy_activation') or {}).get('schema')
+                == 'main_auxiliary_operator_prompt_v1'):
+            if (staged['strategy_activation'].get('evidence_sha256') == digest(evidence)
+                    and staged['strategy_activation'].get('prompt_version') == evidence['prompt_version']):
+                return {'status': 'already_staged', 'bundle_sha256': staged['bundle_sha256']}
+            raise ValueError('auxiliary_operator_existing_stage_conflict')
+        parent = load_effective(data_root=data_root, target_date=current.date().isoformat())
+        if parent is None:
+            raise ValueError('auxiliary_operator_parent_missing')
+        prompt_version = evidence['prompt_version']
+        prior_ai = for_cohort(parent, tuple(COHORT))['ai_policy']
+        new_ai = _apply_auxiliary_candidate(
+            prior_ai, policy=prior_ai.get('auxiliary_soft_policy'),
+            prompt_version=prompt_version, context=parent.get('historical_context'))
+        if prior_ai == new_ai:
+            return {'status': 'already_selected', 'bundle_sha256': parent['bundle_sha256']}
+        bundle = copy.deepcopy(parent)
+        bundle['ai_policy'] = copy.deepcopy(new_ai)
+        if bundle.get('scope_policies'):
+            bundle['scope_policies']['KRX|KRX_REGULAR']['ai_policy'] = copy.deepcopy(new_ai)
+        bundle.update(target_date=target_date, publication_date=current.date().isoformat(),
+                      previous_bundle_sha256=parent['bundle_sha256'],
+                      generated_at=current.isoformat(),
+                      strategy_activation={
+                          'schema': 'main_auxiliary_operator_prompt_v1',
+                          'effective_from': current.isoformat(),
+                          'lifetime': 'until_superseded',
+                          'parent_bundle_sha256': parent['bundle_sha256'],
+                          'scope': 'KRX|KRX_REGULAR',
+                          'prompt_version': prompt_version,
+                          'evidence_sha256': digest(evidence),
+                      })
+        bundle.pop('bundle_sha256', None)
+        bundle['bundle_sha256'] = digest(bundle)
+        validate(bundle, target_date=target_date)
+        _atomic_write_json(policy_root / 'generations' / f"{parent['bundle_sha256']}.json", parent)
+        _atomic_write_json(policy_root / 'sources' / f"{digest(evidence)}.json", evidence)
+        _atomic_write_json(policy_root / 'generations' / f"{bundle['bundle_sha256']}.json", bundle)
+        receipt = {'schema': 'main_entry_current_v2',
+                   'bundle_sha256': bundle['bundle_sha256'],
+                   'previous_bundle_sha256': parent['bundle_sha256'],
+                   'effective_from': current.isoformat()}
+        receipt['receipt_sha256'] = digest(receipt)
+        _atomic_write_json(policy_root / 'current.json', receipt)
+        if load_effective(data_root=data_root, target_date=target_date)['bundle_sha256'] != bundle['bundle_sha256']:
+            raise ValueError('auxiliary_operator_readback_failed')
+        return {'status': 'staged', 'target_date': target_date,
+                'scope': 'KRX|KRX_REGULAR', 'prompt_version': prompt_version,
+                'rollback_bundle_sha256': parent['bundle_sha256'], **receipt}
+
+
 def _load_current(data_root: Path, target_date: str) -> dict | None:
     """Reuse a validated generation only while every read dependency is intact."""
     key = (str(data_root.resolve()), target_date)
@@ -2254,6 +2339,33 @@ def _load_current_uncached(data_root: Path, target_date: str) -> dict | None:
                     context=old.get('historical_context'))):
                 raise ValueError('auxiliary_activation_component_binding_invalid')
         return bundle if target_date >= bundle['target_date'] else None
+    if activation.get('schema') == 'main_auxiliary_operator_prompt_v1':
+        evidence_hash = activation.get('evidence_sha256')
+        if re.fullmatch(r'[0-9a-f]{64}', str(evidence_hash)) is None:
+            raise ValueError('auxiliary_operator_evidence_hash_invalid')
+        evidence = _read(root(data_root) / 'sources' / f'{evidence_hash}.json')
+        scope = activation.get('scope')
+        prompt_version = activation.get('prompt_version')
+        old = for_cohort(parent, tuple(str(scope).split('|')))
+        new = for_cohort(bundle, tuple(str(scope).split('|')))
+        if (digest(evidence) != evidence_hash
+            or evidence.get('schema') != 'auxiliary_prompt_operator_review_v1'
+            or evidence.get('prompt_version') != prompt_version
+            or scope != 'KRX|KRX_REGULAR'
+            or prompt_version != ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION
+            or not old or not new
+            or bundle['machine_policy'] != parent['machine_policy']
+            or bundle.get('winrate_selection') != parent.get('winrate_selection')
+            or bundle.get('all_continuous_adopted') != parent.get('all_continuous_adopted')
+            or bundle['ai_policy'] != _apply_auxiliary_candidate(
+                old['ai_policy'], policy=old['ai_policy'].get('auxiliary_soft_policy'),
+                prompt_version=prompt_version, context=old.get('historical_context'))
+            or new['ai_policy'] != bundle['ai_policy']
+            or any(value['machine_policy'] != parent['scope_policies'][key]['machine_policy']
+                   or (key != scope and value['ai_policy'] != parent['scope_policies'][key]['ai_policy'])
+                   for key, value in (bundle.get('scope_policies') or {}).items())):
+            raise ValueError('auxiliary_operator_component_binding_invalid')
+        return bundle if target_date >= bundle['target_date'] else None
     if activation.get('schema') == 'main_entry_winrate_activation_v1':
         stage_hash = activation.get('stage_bundle_sha256')
         if re.fullmatch(r'[0-9a-f]{64}', str(stage_hash)) is None:
@@ -2269,6 +2381,9 @@ def _load_current_uncached(data_root: Path, target_date: str) -> dict | None:
             or staged.get('bundle_sha256') != stage_hash
             or staged.get('winrate_selection') != bundle.get('winrate_selection')
             or staged_scope['machine_policy'] != new['machine_policy']
+            or bundle['ai_policy'] != parent['ai_policy']
+            or any(value['ai_policy'] != ((parent.get('scope_policies') or {}).get(scope) or {}).get('ai_policy')
+                   for scope, value in (bundle.get('scope_policies') or {}).items())
             or digest(old['machine_policy']) != scope_proof.get('parent_machine_sha256')
             or digest(new['machine_policy']) != scope_proof.get('candidate_machine_sha256')
             or activation.get('parent_bundle_sha256') != bundle.get('previous_bundle_sha256')):

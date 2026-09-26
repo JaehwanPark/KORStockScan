@@ -39,6 +39,35 @@ def initial(tmp_path):
     )
 
 
+def test_operator_prompt_stage_preserves_machine_and_other_scopes(tmp_path):
+    incumbent = initial(tmp_path)
+    evidence = {
+        'schema': 'auxiliary_prompt_operator_review_v1',
+        'prompt_version': policy.ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION,
+        'scope': 'KRX|KRX_REGULAR',
+        'operator_direction': 'explicit_prompt_change',
+        'independent_holdout_claimed': False,
+        'research_dates': ['2026-09-22', '2026-09-23'],
+    }
+    result = policy.activate_operator_auxiliary_prompt(
+        data_root=tmp_path, target_date='2026-09-28', evidence=evidence,
+        now=datetime(2026, 9, 26, 12, tzinfo=policy.KST),
+    )
+    assert result['status'] == 'staged'
+    selected = policy.load_effective(data_root=tmp_path, target_date='2026-09-28')
+    assert selected['ai_policy']['prompt_version'] == evidence['prompt_version']
+    assert selected['machine_policy'] == incumbent['machine_policy']
+    assert policy.activate_operator_auxiliary_prompt(
+        data_root=tmp_path, target_date='2026-09-28', evidence=evidence,
+        now=datetime(2026, 9, 26, 12, tzinfo=policy.KST),
+    )['status'] == 'already_staged'
+    source = policy.root(tmp_path) / 'sources' / f"{policy.digest(evidence)}.json"
+    source.write_text('{}')
+    policy._CURRENT_CACHE.clear()
+    with pytest.raises(ValueError, match='auxiliary_operator_component_binding_invalid'):
+        policy.load_effective(data_root=tmp_path, target_date='2026-09-28')
+
+
 def test_winrate_stage_requires_explicit_preopen_activation(tmp_path, monkeypatch):
     from src.engine.scalping import entry_strategy_policy as strategy
     previous = copy.deepcopy(initial(tmp_path))
@@ -145,6 +174,16 @@ def test_winrate_stage_requires_explicit_preopen_activation(tmp_path, monkeypatc
     with pytest.raises(ValueError, match='winrate_candidate_contract_invalid'):
         policy.stage_winrate_policy(source_path, data_root=tmp_path,
             now=datetime(2026, 9, 24, 14, tzinfo=policy.KST))
+    prompt_evidence = {
+        'schema': 'auxiliary_prompt_operator_review_v1',
+        'prompt_version': policy.ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION,
+        'scope': 'KRX|KRX_REGULAR', 'operator_direction': 'explicit_prompt_change',
+        'independent_holdout_claimed': False,
+    }
+    assert policy.activate_operator_auxiliary_prompt(
+        data_root=tmp_path, target_date='2026-09-28', evidence=prompt_evidence,
+        now=datetime(2026, 9, 26, 12, tzinfo=policy.KST),
+    )['status'] == 'staged'
     class FrozenDateTime(datetime):
         @classmethod
         def now(cls, tz=None):
@@ -154,6 +193,7 @@ def test_winrate_stage_requires_explicit_preopen_activation(tmp_path, monkeypatc
         target_date='2026-09-28', now=FrozenDateTime.now(policy.KST))
     assert activated['status'] == 'activated'
     assert policy.load_effective(data_root=tmp_path, target_date='2026-09-28')['machine_policy'] == candidate
+    assert policy.load_effective(data_root=tmp_path, target_date='2026-09-28')['ai_policy']['prompt_version'] == prompt_evidence['prompt_version']
     repeated = policy.activate_dated_winrate_policy(data_root=tmp_path,
         target_date='2026-09-28', now=FrozenDateTime.now(policy.KST))
     assert repeated == {'status': 'already_active', 'bundle_sha256': activated['bundle_sha256']}
