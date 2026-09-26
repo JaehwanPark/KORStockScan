@@ -31,6 +31,18 @@ def test_holding_profit_semantics_does_not_retroactively_reject_old_report(tmp_p
     assert _holding_profit_exit_semantics(tmp_path, "2026-09-23")["status"] == (
         "not_required_before_introduction")
     assert _holding_profit_exit_semantics(tmp_path, "2026-09-28")["status"] == "not_assessed"
+    current_md = path.with_name("holding_exit_sentinel_2026-09-28.md")
+    current_md.write_text("# observed\n")
+    assert _holding_profit_exit_semantics(tmp_path, "2026-09-28")["findings"] == [
+        "holding_semantic_json_missing_with_markdown_report"]
+
+
+def test_machine_semantics_requires_full_report_when_sidecar_exists(tmp_path):
+    folder = tmp_path / "data/report/ai_decision_action_outcome_calibration"
+    folder.mkdir(parents=True)
+    (folder / "winrate_policy_2026-09-28.json").write_text("{}")
+    assert _machine_result_semantics(tmp_path, "2026-09-28")["findings"] == [
+        "machine_full_report_missing_with_winrate_sidecar"]
 
 
 def test_machine_result_semantics_detects_successful_stage_with_unbound_economics(tmp_path, monkeypatch):

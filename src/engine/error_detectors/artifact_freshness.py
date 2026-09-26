@@ -44,6 +44,10 @@ def _holding_profit_exit_semantics(root: Path, source_date: str) -> dict[str, An
     path = (root / "data/report/holding_exit_sentinel" /
             f"holding_exit_sentinel_{source_date}.json")
     if not path.exists() and not path.is_symlink():
+        markdown = path.with_suffix(".md")
+        if markdown.exists() or markdown.is_symlink():
+            return {"status": "source_invalid", "findings": [
+                "holding_semantic_json_missing_with_markdown_report"]}
         return {"status": "not_assessed", "findings": []}
     try:
         if path.is_symlink() or path.stat().st_size > 8 * 1024 * 1024:
@@ -80,8 +84,12 @@ def _machine_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
     report_path = (root / "data/report/ai_decision_action_outcome_calibration"
                    / f"ai_decision_action_outcome_calibration_{source_date}.json")
     if not (report_path.exists() or report_path.is_symlink()):
-        # The scheduled artifact/cron owners detect absence. This semantic
-        # check runs only after a report exists, including historical review.
+        # A standalone win-rate sidecar is evidence that the machine family
+        # ran; do not mark its missing full-evaluation partner unassessed.
+        sidecar = report_path.with_name(f"winrate_policy_{source_date}.json")
+        if sidecar.exists() or sidecar.is_symlink():
+            return {"status": "source_invalid", "findings": [
+                "machine_full_report_missing_with_winrate_sidecar"]}
         return {"status": "not_assessed", "findings": []}
     try:
         if report_path.is_symlink() or report_path.stat().st_size > 64 * 1024 * 1024:
