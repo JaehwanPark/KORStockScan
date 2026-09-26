@@ -884,6 +884,7 @@ def evaluate_auxiliary_stage(projection, prompt_results=None):
         ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
         ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION,
         ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION,
+        ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION,
     )
     from src.engine.scalping.mechanistic_entry_runtime_policy import compact_auxiliary_prompt
     from copy import deepcopy
@@ -984,7 +985,7 @@ def evaluate_auxiliary_stage(projection, prompt_results=None):
         prompt_variants = (
             ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
             ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION,
-            ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION,
+            ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION,
         )
         prompt_candidates = [version for version in prompt_variants
                              if len(parent_versions) == 1 and version != parent_versions[0]]
@@ -1252,11 +1253,12 @@ def auxiliary_prompt_results_complete(population, results, eligible_keys):
         ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
         ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION,
         ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION,
+        ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION,
     )
     variants = (
         ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
         ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION,
-        ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION,
+        ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION,
     )
     return all(
         row["incumbent_prompt_version"] == version
@@ -2565,11 +2567,12 @@ def run(
             ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
             ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION,
             ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION,
+            ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION,
         )
         variants = (
             ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
             ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION,
-            ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION,
+            ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION,
         )
         stage_population = (
             auxiliary_population_projection(projection, path.parent)
@@ -2621,7 +2624,7 @@ def run(
                         if runner is None:
                             from src.engine.scalping.micro_reversion.provider_budget import (
                                 ProviderBudgetLedger, load_reviewed_pricing_artifact,
-                                AttemptIdentity, TokenCeiling,
+                                AttemptIdentity, conservative_token_ceiling,
                             )
                             now = datetime.now(KST)
                             if ledger is None:
@@ -2636,8 +2639,11 @@ def run(
                                 )
                             attempt = AttemptIdentity(row.get("source_date"), key, identity,
                                 "compact_auxiliary_prompt", PROMPT_PROVIDER, PROMPT_MODEL, 1)
-                            permit = ledger.reserve_attempt(attempt, token_ceiling=TokenCeiling(
-                                len(json.dumps(row["input"]).encode()) + len(prompt.encode()) + 4096, 512))
+                            permit = ledger.reserve_attempt(
+                                attempt, token_ceiling=conservative_token_ceiling(
+                                    json.dumps(request, ensure_ascii=True, sort_keys=True).encode(),
+                                    b"x" * 4096, max_output_tokens=512,
+                                ))
                             calls += 1
                             prompt_calls += 1
                             result = quality.execute_openai_prompt_v2_candidate(
@@ -2755,7 +2761,7 @@ def run(
                         ProviderBudgetLedger,
                         load_reviewed_pricing_artifact,
                         AttemptIdentity,
-                        TokenCeiling,
+                        conservative_token_ceiling,
                     )
 
                     now = datetime.now(KST)
@@ -2783,11 +2789,9 @@ def run(
                     )
                     permit = ledger.reserve_attempt(
                         attempt,
-                        token_ceiling=TokenCeiling(
-                            len(json.dumps(row["input"]).encode())
-                            + len(prompt.encode())
-                            + 4096,
-                            512,
+                        token_ceiling=conservative_token_ceiling(
+                            json.dumps(request, ensure_ascii=True, sort_keys=True).encode(),
+                            b"x" * 4096, max_output_tokens=512,
                         ),
                     )
                     calls += 1

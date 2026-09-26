@@ -152,15 +152,18 @@ def test_auxiliary_stage_replays_good_pass_and_bad_pass_on_fixed_denominator(mon
     from src.engine.ai_prompt_contracts import (
         ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
         ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION,
-        ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION,
+        ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION,
     )
     from src.engine.scalping.entry_setup_evidence import entry_risk_adjudication_openai_schema
     from src.engine.scalping.mechanistic_entry_runtime_policy import compact_auxiliary_prompt
+    from src.engine.scalping import mechanistic_entry_runtime_policy as runtime_policy
+    assert runtime_policy.AI_VERSION == ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION
+    assert ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION in runtime_policy.COMPACT_AI_VARIANTS
     prompt_results = {}
     for version in (
         ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
         ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION,
-        ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION,
+        ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION,
     ):
         prompt = compact_auxiliary_prompt(prompt_version=version)
         prompt_results[version] = {}
@@ -183,26 +186,26 @@ def test_auxiliary_stage_replays_good_pass_and_bad_pass_on_fixed_denominator(mon
     prompt_stage = compact.evaluate_auxiliary_stage(projection, prompt_results)
     assert prompt_stage["scope_results"]["KRX|KRX_REGULAR"]["prompt_candidate_status"] == "complete"
     assert compact.auxiliary_prompt_result_matches(
-        rows[0], ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION,
-        prompt_results[ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION][rows[0]["evaluation_key"]],
+        rows[0], ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION,
+        prompt_results[ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION][rows[0]["evaluation_key"]],
     )
     assert compact.auxiliary_prompt_results_complete(
         projection, prompt_results, {row["evaluation_key"] for row in rows},
     )
     bad_provider = compact.sealed({
-        **prompt_results[ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION][rows[0]["evaluation_key"]],
+        **prompt_results[ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION][rows[0]["evaluation_key"]],
         "provider_provenance": {"provider": "other", "model": compact.PROMPT_MODEL,
                                 "provider_call_succeeded": True},
     })
     assert not compact.auxiliary_prompt_result_matches(
-        rows[0], ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION, bad_provider)
-    prompt_results[ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION][rows[0]["evaluation_key"]] = compact.sealed({
-        **prompt_results[ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION][rows[0]["evaluation_key"]],
+        rows[0], ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION, bad_provider)
+    prompt_results[ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION][rows[0]["evaluation_key"]] = compact.sealed({
+        **prompt_results[ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION][rows[0]["evaluation_key"]],
         "candidate_identity": "0" * 64,
     })
     assert not compact.auxiliary_prompt_result_matches(
-        rows[0], ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION,
-        prompt_results[ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION][rows[0]["evaluation_key"]],
+        rows[0], ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION,
+        prompt_results[ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION][rows[0]["evaluation_key"]],
     )
     assert not compact.auxiliary_prompt_results_complete(
         projection, prompt_results, {row["evaluation_key"] for row in rows},
@@ -644,6 +647,45 @@ def test_compact_checkpoint_reuse_economics_rejoin_and_source_block(monkeypatch,
     report = compact.run(data_root=blocked, day="2026-09-17", execute=True, runner=lambda _: pytest.fail("blocked source cannot call provider"))
     assert report["status"] == "source_contract_blocked"
     assert report["evaluation_state"] == "blocked_source"
+
+
+def test_compact_builtin_provider_path_reserves_valid_token_ceiling(monkeypatch, tmp_path):
+    from src.engine.scalping import entry_setup_evidence as evidence
+    from src.engine.scalping.micro_reversion import provider_budget as budget
+    row = operating_compact_row()
+    proof = full_compact_proof()
+    projection = compact.sealed({
+        "owner_execution_model_validation": proof["owner_execution_model_validation"],
+        "rows": [row], "screened_total": 1, "source_manifest_sha256": "d" * 64,
+        "source_tuning_allowed": True, "exclusion_counts": {}, **compact.AUTHORITY,
+    })
+    monkeypatch.setattr(compact, "prepare", lambda *_: projection)
+    monkeypatch.setattr(compact, "candidate_direction_selection", lambda *_: compact_candidate_selection())
+    monkeypatch.setattr(compact, "runtime_inference_cost_receipt", lambda *_: proof["runtime_inference_cost_receipt"])
+    monkeypatch.setattr(evidence, "entry_risk_adjudication_openai_schema", lambda *_: {})
+    monkeypatch.setattr(evidence, "validate_entry_risk_adjudication", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(budget, "load_reviewed_pricing_artifact", lambda *_args, **_kwargs: object())
+    reserved = []
+    class Ledger:
+        def __init__(self, **_kwargs):
+            pass
+        def reserve_attempt(self, _attempt, *, token_ceiling):
+            reserved.append(token_ceiling)
+            return type("Permit", (), {"reservation_id": "test-reservation"})()
+        def settle_attempt(self, *_args, **_kwargs):
+            return type("Settlement", (), {"actual_cost_usd": 0})()
+    monkeypatch.setattr(budget, "ProviderBudgetLedger", Ledger)
+    monkeypatch.setattr(quality, "execute_openai_prompt_v2_candidate", lambda *_args, **_kwargs: {
+        "candidate_response": {"risk_verdict": "PASS"},
+        "provider_provenance": {"input_tokens": 10, "output_tokens": 5,
+                                "response_sha256": "f" * 64},
+    })
+    report = compact.run(data_root=tmp_path, day="2026-09-17", execute=True, max_new=1)
+    assert report["provider_calls_this_run"] == 1
+    assert not report["execution_errors"]
+    assert len(reserved) == 1
+    assert reserved[0].input_token_ceiling >= reserved[0].input_utf8_bytes > 0
+    assert reserved[0].max_output_tokens == 512
 
 
 @lru_cache(maxsize=1)

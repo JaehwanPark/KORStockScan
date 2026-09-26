@@ -754,6 +754,9 @@ ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION = (
 ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION = (
     "entry_machine_auxiliary_compact_risk_v2"
 )
+ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION = (
+    "entry_machine_auxiliary_compact_contract_v4"
+)
 BALANCED_ENTRY_PROMPT_VERSIONS = frozenset(
     {
         DECISION_QUALITY_V2_14_2_BALANCED_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
@@ -767,6 +770,7 @@ MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS = frozenset(
         ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
         ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION,
         ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION,
+        ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION,
     }
 )
 AUXILIARY_ENTRY_RISK_PROMPT_VERSIONS = (
@@ -2271,6 +2275,17 @@ that support, VETO this point and cite the exact adverse binding.
 """.strip()
 
 
+_MACHINE_AUXILIARY_COMPACT_CONTRACT_SUFFIX = """
+
+Output contract clarification for the exact supplied risk_fact_bindings:
+- NO_BLOCKING_RISK is permitted only for PASS and must be the sole risk code. Never include it for CAUTION or VETO.
+- For CAUTION, choose at least one non-NO_BLOCKING_RISK code from risk_fact_bindings and cite a corresponding adverse fact ID.
+- For VETO, choose a bound code in SOURCE_QUALITY_GAP, STRUCTURE_INVALIDATED, DISTRIBUTION_RISK, OVEREXTENSION_CHASE, or LIQUIDITY_UNUSABLE and cite its bound adverse fact ID. A bounded tape, fragile liquidity, weak reward/risk, or missing confirmation code alone is not a VETO; use CAUTION if the point is not PASS.
+- PASS only if no such blocking code is currently bound and the required setup and trigger support exists. Cite at least one adverse fact for every bound risk code, even if support compensates it.
+Do not change the economic judgment merely to satisfy this output contract.
+"""
+
+
 _MACHINE_AUXILIARY_COMPACT_ENTRY_RULES = (
     _MACHINE_AUXILIARY_COMPACT_V2_ENTRY_RULES.replace(
         "fact and one trigger-support fact. Cite current support that compensates\n"
@@ -2306,6 +2321,8 @@ def machine_auxiliary_compact_entry_system_prompt(
         )
     if prompt_version == ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION:
         return _MACHINE_AUXILIARY_COMPACT_ENTRY_RULES
+    if prompt_version == ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION:
+        return _MACHINE_AUXILIARY_COMPACT_ENTRY_RULES + _MACHINE_AUXILIARY_COMPACT_CONTRACT_SUFFIX
     if prompt_version == ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION:
         return (
             _MACHINE_AUXILIARY_COMPACT_ENTRY_RULES
