@@ -581,6 +581,8 @@ def test_entry_sizing_persists_venue_resolution_with_allocator_event_fields():
         "consistent_explicit:"
     )
     assert sizing_fields["sizing_tier_reason_at_allocation"] == fields["tier_reason"]
+    assert fields["quantity_type"] == "KRX_PARENT"
+    assert sizing_fields["quantity_type"] == "KRX_PARENT"
 
 
 def _fresh_holding_score_fields(score=30, *, now_ts=None):

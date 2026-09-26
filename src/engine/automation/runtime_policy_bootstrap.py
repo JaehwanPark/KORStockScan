@@ -28,6 +28,11 @@ from src.engine.scalping.holding_path_vote_policy import (
     policy_path as holding_vote_policy_path,
     verify_source_handoff as verify_holding_vote_source_handoff,
 )
+from src.engine.scalping.initial_quantity_activation import (
+    ENV_FILE as INITIAL_QUANTITY_ENV_FILE,
+    ENV_SHA as INITIAL_QUANTITY_ENV_SHA,
+    selected_initial_quantity_env,
+)
 from src.engine.lifecycle.retirement import (
     RETIRED_FAMILIES,
     retirement_env,
@@ -47,6 +52,7 @@ from src.utils.constants import DATA_DIR
 SCHEMA_VERSION = 1
 REPORT_TYPE = "runtime_policy_bootstrap"
 BOOTSTRAP_DIR = DATA_DIR / "runtime" / "policy_bootstrap"
+INITIAL_QUANTITY_CURRENT = DATA_DIR / "runtime" / "initial_quantity" / "current.json"
 LEGACY_RUNTIME_DIR = DATA_DIR / "threshold_cycle" / "runtime_env"
 OPERATOR_LOCK_DIR = DATA_DIR / "threshold_cycle" / "operator_runtime_env_locks"
 RISING_MISSED_REPORT_DIR = DATA_DIR / "report" / "rising_missed_classifier_prior"
@@ -833,6 +839,34 @@ def build_manifest(
         if key not in operator_values:
             env_owners[key] = "runtime_policy_bootstrap_exact_date_handoff"
     env_owners.update({key: "operator_runtime_override" for key in operator_values})
+    initial_quantity_receipt = None
+    if INITIAL_QUANTITY_CURRENT.is_file():
+        current = _load_json(INITIAL_QUANTITY_CURRENT)
+        initial_effective = date.fromisoformat(str(current["effective_from"]))
+        if date.fromisoformat(target_date) >= initial_effective:
+            if any(key.startswith("KORSTOCKSCAN_POSITION_SIZING_POLICY_")
+                   or key in (INITIAL_QUANTITY_ENV_FILE, INITIAL_QUANTITY_ENV_SHA)
+                   for key in operator_values):
+                raise ValueError("operator_position_sizing_policy_conflicts_with_initial_baseline")
+            for key in tuple(values):
+                if key.startswith("KORSTOCKSCAN_POSITION_SIZING_POLICY_"):
+                    values.pop(key)
+                    env_owners.pop(key, None)
+            initial_env = selected_initial_quantity_env(
+                INITIAL_QUANTITY_CURRENT, target_date)
+            values.update(initial_env)
+            env_owners.update({
+                key: "initial_quantity_current_verified" for key in initial_env
+            })
+            initial_quantity_receipt = {
+                "current_file": str(INITIAL_QUANTITY_CURRENT.resolve()),
+                "current_file_sha256": _digest_bytes(
+                    INITIAL_QUANTITY_CURRENT.read_bytes()),
+                "current_content_sha256": current["current_content_sha256"],
+                "policy_file_sha256": initial_env[INITIAL_QUANTITY_ENV_SHA],
+                "source_date": current["source_date"],
+                "effective_from": current["effective_from"],
+            }
     incumbent_trailing = incumbent.get("scalp_trailing_mechanical_policy_receipt") or {}
     prior_selected_trailing = (
         incumbent_trailing.get("source") == "reviewed_selected_candidate"
@@ -937,6 +971,10 @@ def build_manifest(
             rejected_locks.append({**row, "reason": "inactive_archive"})
             continue
         lock_env = without_retired_env(operator_policy_succession.lock_values(lock))
+        if any(key in lock_env for key in (
+            INITIAL_QUANTITY_ENV_FILE, INITIAL_QUANTITY_ENV_SHA
+        )) and INITIAL_QUANTITY_ENV_FILE in values:
+            raise ValueError("operator_lock_conflicts_with_initial_quantity_current")
         superseded_start_keys = (
             sorted(set(lock_env).intersection(start_keys))
             if start_directive_active else []
@@ -1108,6 +1146,7 @@ def build_manifest(
         "operator_locks_rejected": rejected_locks,
         "operator_override_sources": operator_sources,
         "direct_family_receipts": direct_receipts,
+        "initial_quantity_policy_receipt": initial_quantity_receipt,
         "pre_submit_delay_handoff": delay_handoff,
         "direct_family_receipts_rejected": rejected_receipts,
         "env_key_owners": env_owners,
@@ -1209,6 +1248,38 @@ def verify_bootstrap(target_date: str, *, pid: int | None = None, write: bool = 
     if not isinstance(manifest_env, dict):
         findings.append("manifest_env_overrides_invalid")
         manifest_env = {}
+    if INITIAL_QUANTITY_CURRENT.is_file():
+        try:
+            current = _load_json(INITIAL_QUANTITY_CURRENT)
+            initial_effective = date.fromisoformat(str(current["effective_from"]))
+            if date.fromisoformat(target_date) >= initial_effective:
+                expected_initial_env = selected_initial_quantity_env(
+                    INITIAL_QUANTITY_CURRENT, target_date)
+                if any(manifest_env.get(key) != value
+                       for key, value in expected_initial_env.items()):
+                    findings.append("initial_quantity_policy_env_mismatch")
+                if any((manifest.get("env_key_owners") or {}).get(key)
+                       != "initial_quantity_current_verified"
+                       for key in expected_initial_env):
+                    findings.append("initial_quantity_policy_owner_mismatch")
+                expected_initial_receipt = {
+                    "current_file": str(INITIAL_QUANTITY_CURRENT.resolve()),
+                    "current_file_sha256": _digest_bytes(
+                        INITIAL_QUANTITY_CURRENT.read_bytes()),
+                    "current_content_sha256": current["current_content_sha256"],
+                    "policy_file_sha256": expected_initial_env[
+                        INITIAL_QUANTITY_ENV_SHA],
+                    "source_date": current["source_date"],
+                    "effective_from": current["effective_from"],
+                }
+                if manifest.get("initial_quantity_policy_receipt") != expected_initial_receipt:
+                    findings.append("initial_quantity_policy_receipt_mismatch")
+        except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+            findings.append(f"initial_quantity_current_invalid:{type(exc).__name__}")
+    elif (manifest.get("initial_quantity_policy_receipt") is not None
+          or any(key in manifest_env for key in (
+              INITIAL_QUANTITY_ENV_FILE, INITIAL_QUANTITY_ENV_SHA))):
+        findings.append("initial_quantity_current_missing")
     trailing_receipt = manifest.get("scalp_trailing_mechanical_policy_receipt")
     if manifest.get("holding_path_vote_baseline_receipt") != path_policy_baseline_receipt():
         findings.append("holding_path_vote_baseline_receipt_mismatch")

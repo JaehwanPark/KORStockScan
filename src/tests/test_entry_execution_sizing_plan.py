@@ -51,6 +51,34 @@ def _write_policy(tmp_path, name, payload):
     return path, hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def test_quantity_execution_policy_effective_from_persists_without_active_date_env(
+    tmp_path, monkeypatch,
+):
+    from src.engine.scalping.entry_execution_sizing_plan import _runtime_policy
+    payload = {
+        "schema_version": ENTRY_EXECUTION_SIZING_POLICY_SCHEMA,
+        "policy_owner": OWNER, "policy_version": "sizing:seed",
+        "source_date": "2026-09-23", "effective_from": "2026-09-24",
+        "runtime_apply_allowed": True,
+    }
+    path, sha = _write_policy(tmp_path, "sizing_seed.json", payload)
+    prefix = "KORSTOCKSCAN_ENTRY_EXECUTION_SIZING_POLICY_"
+    for suffix, value in {
+        "ENABLED": "true", "FILE": str(path), "VERSION": "sizing:seed",
+        "SOURCE_DATE": "2026-09-23", "SHA256": sha,
+    }.items():
+        monkeypatch.setenv(prefix + suffix, value)
+    monkeypatch.delenv(prefix + "ACTIVE_DATE", raising=False)
+    assert _runtime_policy(
+        prefix=prefix, schema=ENTRY_EXECUTION_SIZING_POLICY_SCHEMA,
+        owner=OWNER, active_date="2026-09-28", persistent=True,
+    )[1] == "loaded"
+    assert _runtime_policy(
+        prefix=prefix, schema=ENTRY_EXECUTION_SIZING_POLICY_SCHEMA,
+        owner=OWNER, active_date="2026-09-23", persistent=True,
+    )[1] == "policy_not_yet_effective"
+
+
 def test_dated_price_and_integrated_sizing_policies_bind_without_new_authority(
     tmp_path, monkeypatch
 ):

@@ -143,6 +143,13 @@
   - 운영 수용 기준: 자연일에서 네 축의 후보·선정/미선정·비용 EV와 stage terminal, 실제 PID의 AI 정책 hash·판정 변화·후단 주문 및 `COMPLETED + valid profit_rate`를 순서대로 대사한다. 적격 자연 근거가 없으면 원인별 `source_gap` 또는 `insufficient_independent_evidence`와 incumbent carry를 기록하고 운영·경제성 수용은 OPEN으로 남긴다.
   - 권한 경계: 이 항목은 계획·증거 owner이며 현재 문서 변경만으로 AI threshold, prompt/provider, 주문, hard guard 또는 봇 PID를 변경하지 않는다. 기계 BLOCK/RECHECK 및 타 family의 표본을 AI 승격 근거로 전용하지 않는다.
 
+## 최초 수량 유형 정책
+
+- [ ] `[InitialQuantityBaselinePid0928] 최초 수량 유형 기본정책의 장전·PID 소비 대사` (`Due: 2026-09-28`, `Slot: PREOPEN`, `TimeWindow: 07:35~09:30`, `Track: RuntimeStability`)
+  - Source: [최초 수량 유형 정책 계획 §13](../proposals/scalping-initial-entry-quantity-type-policy-closed-loop-plan-2026-09-26.md).
+  - 완료 기준: 9/23까지 완료 거래 387건·익절 244건에서 생산한 초기 후보의 stage/replay/후행 원천 SHA → `data/runtime/initial_quantity/current.json` → 불변 초기 기본정책 파일 SHA → 9/28 bootstrap manifest/env/verify → 선택 release → 실제 Main PID의 파일·SHA 및 첫 자연 수량 유형 영수증을 각각 대사한다. 기본정책의 모든 유형은 기존 5단계 수량·주문 형상·프로필 시간을 유지한다. 장전 영수증만으로 주문 체결이나 비용 후 효과를 주장하지 않는다.
+  - 권한 경계: 최초 정책에는 부모 대비 우월성·후속 갱신 표본 허들을 요구하지 않는다. 후속 분할·총시간 변경은 순차 실주문 취소 terminal 안전 경로를 검증하기 전까지 활성화하지 않으며 broker/account/quantity/cap/hard safety와 AVG_DOWN 원진입 pin을 보존한다.
+
 ## Project/Calendar 동기화
 
 문서/checklist를 수정했으면 parser 검증은 실행하고, Project/Calendar 동기화는 사용자가 아래 명령으로 수동 실행한다.

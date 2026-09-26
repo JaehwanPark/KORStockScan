@@ -15,7 +15,7 @@ import hashlib
 import json
 import os
 from dataclasses import dataclass
-from datetime import datetime, time
+from datetime import date, datetime, time
 from pathlib import Path
 from typing import Any, Iterable
 from zoneinfo import ZoneInfo
@@ -211,13 +211,40 @@ def position_sizing_policy_authority_valid(policy: dict[str, Any]) -> bool:
 
 def _runtime_position_sizing_policy(
     reference_time: Any,
+    quantity_type: str,
 ) -> tuple[str, tuple[float, ...], str, str | None, str | None]:
-    """Load only a dated, PREOPEN-verified sizing policy.
+    """Load a pinned initial-sizing policy from its effective date onward.
 
     A malformed or stale enabled policy never expands quantity: it falls back to
     the allowlisted flat-10 profile.  The ordinary default remains the existing
     five-stage profile when no policy was selected.
     """
+    from src.engine.scalping.initial_quantity_activation import (
+        ENV_FILE, ENV_SHA, load_pinned_baseline,
+    )
+    baseline_file = str(os.getenv(ENV_FILE) or "").strip()
+    baseline_sha = str(os.getenv(ENV_SHA) or "").strip().lower()
+    if baseline_file or baseline_sha:
+        if (not baseline_file or not baseline_sha
+                or str(os.getenv("KORSTOCKSCAN_POSITION_SIZING_POLICY_ENABLED", "")
+                       ).strip().lower() in {"1", "true", "yes", "on"}):
+            return (ROLLBACK_FORMULA_VERSION, _FLAT_10_TIER_RATIOS,
+                    "initial_policy_identity_conflict_fallback", None, None)
+        resolved = _coerce_reference_time(reference_time) or datetime.now(KST)
+        baseline, status = load_pinned_baseline(
+            Path(baseline_file), baseline_sha, resolved.date())
+        if baseline is None:
+            return (ROLLBACK_FORMULA_VERSION, _FLAT_10_TIER_RATIOS,
+                    status + "_fallback", None, None)
+        selected_type = baseline["type_policies"].get(quantity_type)
+        if (selected_type is None
+                or selected_type["ratio_mode"] != "parent_5stage"
+                or selected_type["selected_shape"] != "parent"
+                or selected_type["timeout_mode"] != "existing_runtime_profile"):
+            return (ROLLBACK_FORMULA_VERSION, _FLAT_10_TIER_RATIOS,
+                    "initial_policy_type_missing_fallback", None, None)
+        return (FORMULA_VERSION, DEFAULT_TIER_RATIOS, status,
+                baseline["policy_version"], baseline_sha)
     if str(
         os.getenv("KORSTOCKSCAN_POSITION_SIZING_POLICY_ENABLED", "")
     ).strip().lower() not in {"1", "true", "yes", "on"}:
@@ -238,21 +265,17 @@ def _runtime_position_sizing_policy(
     expected_source_date = str(
         os.getenv("KORSTOCKSCAN_POSITION_SIZING_POLICY_SOURCE_DATE", "")
     ).strip()
-    active_date = str(
-        os.getenv("KORSTOCKSCAN_POSITION_SIZING_POLICY_ACTIVE_DATE", "")
-    ).strip()
     resolved = _coerce_reference_time(reference_time) or datetime.now(KST)
     if (
         not path.is_file()
         or not expected_version
         or not expected_sha
         or not expected_source_date
-        or active_date != resolved.date().isoformat()
     ):
         return (
             ROLLBACK_FORMULA_VERSION,
             _FLAT_10_TIER_RATIOS,
-            "policy_env_or_date_invalid_fallback",
+            "policy_env_invalid_fallback",
             None,
             None,
         )
@@ -276,11 +299,21 @@ def _runtime_position_sizing_policy(
             None,
         )
     formula = str(policy.get("formula_version") or "")
+    try:
+        source_day = date.fromisoformat(expected_source_date)
+        # Existing v1 files used active_date as their first effective day.
+        # It is a lower bound only, never a same-day expiry or env gate.
+        effective_day = date.fromisoformat(str(
+            policy.get("effective_from") or policy.get("active_date") or ""))
+    except ValueError:
+        source_day = None
+        effective_day = None
     if (
         policy.get("schema_version") != POSITION_SIZING_POLICY_SCHEMA_VERSION
         or policy.get("policy_version") != expected_version
         or policy.get("source_date") != expected_source_date
-        or policy.get("active_date") != active_date
+        or source_day is None or effective_day is None
+        or not source_day < effective_day <= resolved.date()
         or policy.get("runtime_apply_allowed") is not True
         or policy.get("policy_content_sha256") != _policy_content_sha256(policy)
         or formula not in {FORMULA_VERSION, ROLLBACK_FORMULA_VERSION}
@@ -312,6 +345,7 @@ def _runtime_position_sizing_policy(
 
 def _position_sizing_policy_for_context(
     context: "ScalpingSizingContext",
+    quantity_type: str,
 ) -> tuple[str, tuple[float, ...], str, str | None, str | None]:
     """Keep the dated initial-entry policy out of scale-in authority.
 
@@ -322,7 +356,7 @@ def _position_sizing_policy_for_context(
 
     stage = str(context.allocation_stage or "").strip().lower()
     if stage not in _SCALE_IN_ALLOCATION_STAGES:
-        return _runtime_position_sizing_policy(context.reference_time)
+        return _runtime_position_sizing_policy(context.reference_time, quantity_type)
     initial_formula = str(context.initial_formula_version or "").strip()
     if initial_formula == ROLLBACK_FORMULA_VERSION:
         return (
@@ -378,6 +412,17 @@ class ScalpingSizingContext:
     simulation: bool = False
     initial_tier: int | None = None
     initial_formula_version: str | None = None
+    market_session_bucket: str | None = None
+    liquidity_band: str | None = None
+    volatility_band: str | None = None
+    extension_band: str | None = None
+    trusted_flow_state: str | None = None
+    trusted_flow_fresh: bool = False
+    feature_snapshot_at: Any = None
+    feature_route_key: str | None = None
+    feature_transport_epoch: str | None = None
+    classifier_route_key: str | None = None
+    classifier_transport_epoch: str | None = None
 
 
 @dataclass(frozen=True)
@@ -404,6 +449,8 @@ class ScalpingSizingDecision:
     policy_status: str = "policy_disabled_default"
     policy_version: str | None = None
     policy_sha256: str | None = None
+    quantity_type: str = "SAFE_UNKNOWN"
+    quantity_type_classifier_version: str = "initial_quantity_type_v1"
 
     def event_fields(self) -> dict[str, Any]:
         return {
@@ -429,6 +476,12 @@ class ScalpingSizingDecision:
             "position_sizing_policy_status": self.policy_status,
             "position_sizing_policy_version": self.policy_version or "-",
             "position_sizing_policy_sha256": self.policy_sha256 or "-",
+            "quantity_type": self.quantity_type,
+            "quantity_type_classifier_version": self.quantity_type_classifier_version,
+            "quantity_type_policy_row": (
+                self.quantity_type
+                if self.policy_status == "initial_policy_loaded" else "-"
+            ),
         }
 
 
@@ -543,8 +596,32 @@ def resolve_scalping_allocation(
 ) -> ScalpingSizingDecision:
     """Resolve the only supported scalping sizing decision."""
 
+    from src.engine.scalping.initial_quantity_type import (
+        CLASSIFIER_VERSION, classify_quantity_type,
+    )
+    quantity_type = (
+        "NOT_APPLICABLE_SCALE_IN"
+        if str(context.allocation_stage or "").strip().lower() in _SCALE_IN_ALLOCATION_STAGES
+        else classify_quantity_type({
+            "effective_venue": infer_scalping_venue(context.reference_time, context.effective_venue),
+            "market_session_bucket": context.market_session_bucket,
+            "source_signature": context.source_signature,
+            "reference_time": context.reference_time,
+            "price_krw": context.price_krw,
+            "liquidity_band": context.liquidity_band,
+            "volatility_band": context.volatility_band,
+            "extension_band": context.extension_band,
+            "trusted_flow_state": context.trusted_flow_state,
+            "trusted_flow_fresh": context.trusted_flow_fresh,
+            "feature_snapshot_at": context.feature_snapshot_at,
+            "feature_route_key": context.feature_route_key,
+            "feature_transport_epoch": context.feature_transport_epoch,
+            "classifier_route_key": context.classifier_route_key,
+            "classifier_transport_epoch": context.classifier_transport_epoch,
+        })
+    )
     formula_version, policy_ratios, policy_status, policy_version, policy_sha256 = (
-        _position_sizing_policy_for_context(context)
+        _position_sizing_policy_for_context(context, quantity_type)
     )
     ratios, config_valid = _validated_tier_ratios(policy_ratios)
     tier, reason, source_count, tokens, time_bucket, reference_text = _select_tier(
@@ -643,4 +720,6 @@ def resolve_scalping_allocation(
         policy_status=policy_status,
         policy_version=policy_version,
         policy_sha256=policy_sha256,
+        quantity_type=quantity_type,
+        quantity_type_classifier_version=CLASSIFIER_VERSION,
     )

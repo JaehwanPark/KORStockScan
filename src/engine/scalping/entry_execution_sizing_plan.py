@@ -13,7 +13,7 @@ import hashlib
 import json
 import math
 import os
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -68,6 +68,7 @@ def _runtime_policy(
     schema: str,
     owner: str,
     active_date: str | None = None,
+    persistent: bool = False,
 ) -> tuple[dict[str, Any] | None, str]:
     """Load one immutable dated policy without granting additional authority."""
 
@@ -79,8 +80,8 @@ def _runtime_policy(
     expected_active_date = str(os.getenv(f"{prefix}ACTIVE_DATE") or "").strip()
     expected_sha256 = str(os.getenv(f"{prefix}SHA256") or "").strip().lower()
     if not all(
-        (str(policy_path), expected_version, expected_source_date, expected_active_date, expected_sha256)
-    ) or not policy_path.is_file():
+        (str(policy_path), expected_version, expected_source_date, expected_sha256)
+    ) or (not persistent and not expected_active_date) or not policy_path.is_file():
         return None, "policy_identity_missing"
     try:
         encoded = policy_path.read_bytes()
@@ -94,14 +95,26 @@ def _runtime_policy(
         payload.get("policy_owner") == owner,
         payload.get("policy_version") == expected_version,
         payload.get("source_date") == expected_source_date,
-        payload.get("active_date") == expected_active_date,
+        (not persistent and payload.get("active_date") == expected_active_date)
+        or (persistent and (not expected_active_date
+                            or payload.get("active_date") == expected_active_date)),
         hashlib.sha256(encoded).hexdigest() == expected_sha256,
         payload.get("runtime_apply_allowed") is True,
     )
     if not all(checks):
         return None, "policy_contract_invalid"
     runtime_date = str(active_date or datetime.now(KST).date().isoformat())
-    if expected_active_date != runtime_date:
+    if persistent:
+        try:
+            source = date.fromisoformat(expected_source_date)
+            effective = date.fromisoformat(str(
+                payload.get("effective_from") or payload.get("active_date") or ""))
+            runtime = date.fromisoformat(runtime_date)
+        except ValueError:
+            return None, "policy_effective_date_invalid"
+        if not source < effective <= runtime:
+            return None, "policy_not_yet_effective"
+    elif expected_active_date != runtime_date:
         return None, "policy_inactive_date"
     return payload, "loaded"
 
@@ -204,6 +217,7 @@ def runtime_entry_execution_sizing_policy(
         schema=ENTRY_EXECUTION_SIZING_POLICY_SCHEMA,
         owner=OWNER,
         active_date=active_date,
+        persistent=True,
     )
     if policy is None:
         return None, status

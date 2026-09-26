@@ -9440,6 +9440,8 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(
             "pre_cap_qty",
             "binding_caps",
             "allocation_stage",
+            "quantity_type",
+            "quantity_type_classifier_version",
         )
         if qty_details.get(key) not in (None, "")
     }
@@ -11725,6 +11727,9 @@ _SCALPING_SIZING_STATE_FIELD_MAP = {
     "scalping_sizing_effective_qty": "effective_qty",
     "scalping_sizing_binding_caps": "binding_caps",
     "scalping_sizing_allocation_stage": "allocation_stage",
+    "scalping_sizing_quantity_type": "quantity_type",
+    "scalping_sizing_quantity_type_classifier_version": "quantity_type_classifier_version",
+    "scalping_sizing_quantity_type_policy_row": "quantity_type_policy_row",
 }
 
 
@@ -11851,6 +11856,9 @@ def _store_scalping_sizing_decision(
             "effective_qty",
             "binding_caps",
             "allocation_stage",
+            "quantity_type",
+            "quantity_type_classifier_version",
+            "quantity_type_policy_row",
         }
     }
     _mutate_stock_state(stock, set_fields=state_fields)
@@ -65844,6 +65852,20 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             stage_qty_cap=1 if general_entry_margin_authorized else None,
             initial_tier=initial_tier,
             initial_formula_version=initial_formula_version,
+            market_session_bucket=(
+                stock.get("market_session_bucket")
+                or runtime.get("market_session_bucket")
+            ),
+            liquidity_band=stock.get("entry_predecision_liquidity_band"),
+            volatility_band=stock.get("entry_predecision_volatility_band"),
+            extension_band=stock.get("entry_predecision_extension_band"),
+            trusted_flow_state=stock.get("entry_predecision_trusted_flow_state"),
+            trusted_flow_fresh=stock.get("entry_predecision_trusted_flow_fresh") is True,
+            feature_snapshot_at=stock.get("entry_predecision_feature_snapshot_at"),
+            feature_route_key=stock.get("entry_predecision_feature_route_key"),
+            feature_transport_epoch=stock.get("entry_predecision_feature_transport_epoch"),
+            classifier_route_key=runtime.get("classifier_route_key"),
+            classifier_transport_epoch=runtime.get("classifier_transport_epoch"),
         )
         sizing_decision = resolve_scalping_allocation(sizing_context)
         if opening_rotation_active:

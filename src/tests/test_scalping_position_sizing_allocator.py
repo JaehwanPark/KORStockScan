@@ -10,6 +10,21 @@ from src.engine.scalping import position_sizing_allocator as allocator
 KST = ZoneInfo("Asia/Seoul")
 
 
+def test_initial_quantity_type_receipt_does_not_expand_sizing_authority():
+    parent = allocator.resolve_scalping_allocation(
+        _context("2026-07-21T10:00:00", market_session_bucket="krx_regular",
+                 price=1900)
+    )
+    thin = allocator.resolve_scalping_allocation(
+        _context("2026-07-21T10:00:00", market_session_bucket="krx_regular",
+                 price=100)
+    )
+    assert parent.quantity_type == "KRX_PARENT"
+    assert thin.quantity_type == "KRX_THIN_HIGH_TICK"
+    assert thin.event_fields()["quantity_type_classifier_version"] == "initial_quantity_type_v1"
+    assert parent.ratio == thin.ratio
+
+
 def _context(
     at: str,
     source_signature="A,B,C",
@@ -388,13 +403,16 @@ def test_dated_position_sizing_policy_loads_and_invalid_hash_falls_back(
         "KORSTOCKSCAN_POSITION_SIZING_POLICY_SHA256": hashlib.sha256(
             policy_path.read_bytes()
         ).hexdigest(),
-        "KORSTOCKSCAN_POSITION_SIZING_POLICY_ACTIVE_DATE": "2026-09-14",
     }
     for key, value in env.items():
         monkeypatch.setenv(key, value)
     loaded = allocator.resolve_scalping_allocation(_context("2026-09-14T14:00:00"))
     assert loaded.formula_version == allocator.FORMULA_VERSION
     assert loaded.policy_status == "policy_loaded"
+    later = allocator.resolve_scalping_allocation(_context("2026-09-15T14:00:00"))
+    assert later.policy_status == "policy_loaded"
+    before = allocator.resolve_scalping_allocation(_context("2026-09-12T14:00:00"))
+    assert before.formula_version == allocator.ROLLBACK_FORMULA_VERSION
     monkeypatch.setenv("KORSTOCKSCAN_POSITION_SIZING_POLICY_SHA256", "bad")
     fallback = allocator.resolve_scalping_allocation(_context("2026-09-14T14:00:00"))
     assert fallback.formula_version == allocator.ROLLBACK_FORMULA_VERSION
@@ -431,7 +449,6 @@ def test_dated_flat10_policy_is_loaded_only_with_exact_ratio_contract(
         "KORSTOCKSCAN_POSITION_SIZING_POLICY_SHA256": hashlib.sha256(
             policy_path.read_bytes()
         ).hexdigest(),
-        "KORSTOCKSCAN_POSITION_SIZING_POLICY_ACTIVE_DATE": "2026-09-14",
     }.items():
         monkeypatch.setenv(key, value)
 
@@ -472,7 +489,6 @@ def test_dated_initial_entry_policy_does_not_change_scale_in_formula(
         "KORSTOCKSCAN_POSITION_SIZING_POLICY_SHA256": hashlib.sha256(
             policy_path.read_bytes()
         ).hexdigest(),
-        "KORSTOCKSCAN_POSITION_SIZING_POLICY_ACTIVE_DATE": "2026-09-14",
     }.items():
         monkeypatch.setenv(key, value)
 
