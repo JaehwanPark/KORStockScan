@@ -117,12 +117,14 @@
 
 - [ ] `[MainEntryWinRateInitialPolicy0928] 승률 단독 Main 초기 정책의 다음 장전 적용` (`Due: 2026-09-28`, `Slot: PREOPEN`, `TimeWindow: 06:30~09:00`, `Track: RuntimeStability`)
   - Source: [승률 단독 초기 정책](../audit-reports/2026-09-24-main-entry-three-market-win-rate-only-initial-policy-v1.md), [구현계획](../proposals/main-entry-winrate-initial-daily-tuning-runtime-implementation-plan-2026-09-24.md).
+  - 9/26 결손 보완계획: [전체 기계 임계치 장후·런타임 폐루프](../proposals/main-entry-machine-all-threshold-closed-loop-repair-plan-2026-09-26.md). 9/24·9/25 초기 frozen 재현 오류를 고친 검증 릴리스와 9/28 staged/parent hash 불변을 장전 activation 전에 확인한다. 전체 좌표의 계산 적격성은 초기 68.75bp 정책의 자동 확대 승인을 뜻하지 않는다.
   - 9/24 사전 영수증: [구현·추가 코드리뷰·배포](../audit-reports/2026-09-24-main-entry-winrate-implementation-review-deployment.md). 재검토 release `bd001179` 선택, 9/28 대기 정책 `4d08df81` 발행, 활성 parent `99cb0e3a` 유지. 장전 activation·실제 PID 소비는 미실행.
   - 완료 기준: `KRX|KRX_REGULAR`의 68.75bp·유효 VWAP 한정 `ENTER_NOW→BLOCK` 계약과 나머지 scope 불변을 구현·재검토·검증한 후, 9/28 immutable 초기 generation/source/parent/rollback hash를 발행한다. Plan Rebase의 main 기계 승률 권한 충돌을 적용 전에 수정하고, 날짜별 정책·`current.json`·장전 loader/bootstrap·선택 release·실제 PID의 exact scope hash와 효력 시작일을 대사한다. 실제 PID 증거 전에는 적용 완료로 닫지 않는다. 장전까지 검증이 닫히지 않으면 기존 정책을 유지하고 정확한 blocker를 기록한다.
   - 경계: 초기 채택에 후속 표본 허들을 소급하지 않는다. PREMARKET·통합 AFTERMARKET·NXT exact scope와 hard safety·AI 비승격·주문/수량/가격 owner를 유지한다.
 
 - [ ] `[MainEntryWinRateDailyPostclose0928] 승률 후속 허들·전체 장후 실행·성능 수용` (`Due: 2026-09-28`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~23:20`, `Track: RuntimeStability`)
   - Source: [구현계획](../proposals/main-entry-winrate-initial-daily-tuning-runtime-implementation-plan-2026-09-24.md), [장후 성능 기존 owner](../proposals/postclose-long-running-work-quality-preserving-optimization-plan-2026-09-23.md).
+  - 9/26 결손 보완계획: [전체 기계 임계치 장후·런타임 폐루프](../proposals/main-entry-machine-all-threshold-closed-loop-repair-plan-2026-09-26.md). Registry 82좌표의 source/evaluated/not_reached_budget 분모와 공통 5개 런타임 소비를 대사하고, 고정 초기 검증과 후속 일일 평가를 분리한다. 저장소 달력상 비거래일인 9/24·9/25는 날짜별 원천 부재로 새 `source_gap` terminal·`deferred` stage를 기록했다. 이 두 날짜의 후행 strict·신규 EV는 완료 불가이며, 9/28 자연일의 후보 성과는 장후에만 판정한다.
   - 9/24 frozen 계측: 9/23 원천으로 새 승률 stage 계산 1분 45초, 최대 RSS 약 1.0GB, swap 0; 새 자연 원천일 전체 stage 성능 영수증은 9/28에 취득한다.
   - 완료 기준: 새 자연 원천일의 엄격 source/제외/기회·승패 분모에서 train/독립 holdout·승률 전용 후속 허들을 평가하고 합격 한 scope만 다음 거래일 CAS 발행, 미합격이면 마지막 검증된 활성 machine policy payload/hash를 유지한다. 전체 활성 stage의 최신 영수증·full strict `--require-summary-handoff`·controller/finalizer/cleanup/detector와 정책 직접 소비를 대사한다. stage별 compute wall/child CPU/peak RSS/swap·대기/재시도·후보/replay 수를 측정해 실제 병목만 결과 동등성 검증 후 최적화한다.
   - 경계: 후보 없음·승률 0/0·원천 결손을 승인 또는 손실 0으로 바꾸지 않는다. 기존 9/23 성공 영수증이나 frozen 성능 결과는 새 자연 원천일 완료 증거가 아니다.

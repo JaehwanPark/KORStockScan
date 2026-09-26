@@ -203,10 +203,18 @@ def _machine_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
                     raise ValueError('winrate_terminal_binding_invalid')
                 bundle = runtime_policy.load(data_root=root / 'data', target_date=target)
                 selection = (bundle or {}).get('winrate_selection') or {}
-                if (selection.get('report_sha256') != winrate.get('artifact_content_sha256')
-                    or selection.get('disposition') != disposition
+                pending = (terminal.get('staged') or {}).get('status') == 'pending_initial_preserved'
+                if (pending and (winrate.get('pending_initial_bundle_sha256') != bundle['bundle_sha256']
+                    or winrate.get('pending_initial_target_date') != target
+                    or winrate.get('hurdle_errors') != ['initial_policy_pending_activation']
+                    or disposition != 'incumbent_carried'
+                    or selection.get('disposition') != 'initial_adopted'
+                    or selection.get('parent_bundle_sha256') != winrate.get('parent_bundle_sha256')
+                    or bundle.get('previous_bundle_sha256') != winrate.get('parent_bundle_sha256'))
+                    or not pending and (selection.get('report_sha256') != winrate.get('artifact_content_sha256')
+                    or selection.get('disposition') != disposition)
                     or selection.get('machine_policy_sha256') != runtime_policy.digest(bundle['machine_policy'])
-                    or (bundle.get('scope_policies') or {}).get('KRX|KRX_REGULAR', {}).get('machine_disposition') != disposition):
+                    or not pending and (bundle.get('scope_policies') or {}).get('KRX|KRX_REGULAR', {}).get('machine_disposition') != disposition):
                     findings.append('winrate_candidate_bundle_or_scope_mismatch')
             else:
                 findings.append('winrate_report_schema_invalid')

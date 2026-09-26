@@ -924,7 +924,7 @@ def _stage_output_issues(report_dir, day, stage):
             errors.append(f'{stage}:invalid_output:{name}')
         elif str(value.get('status', '')).lower() in {'failed', 'error', 'running', 'waiting', 'searching_train', 'pending'}:
             errors.append(f'{stage}:incomplete_output:{name}')
-        if name == 'machine_policy_terminal' and value.get('status') != 'completed':
+        if name == 'machine_policy_terminal' and value.get('status') not in {'completed', 'source_gap'}:
             errors.append(f'{stage}:search_incomplete')
         if name in {'machine_policy', 'machine_policy_terminal'}:
             from src.engine.scalping.ai_action_outcome_calibration import _artifact_content_sha256_valid
@@ -954,15 +954,21 @@ def _stage_output_issues(report_dir, day, stage):
         if (terminal.get('report_sha256') != report.get('artifact_content_sha256')
             or terminal.get('policy_sha256') != report.get('policy_sha256')):
             errors.append(f'{stage}:report_terminal_binding_invalid')
+        if terminal.get('status') == 'source_gap' and report.get('selection_basis') != 'win_rate_only':
+            errors.append(f'{stage}:source_gap_contract_invalid')
         if report.get('selection_basis') == 'win_rate_only':
             from src.engine.scalping import mechanistic_entry_runtime_policy as runtime_policy
             staged = terminal.get('staged') or {}
             counts = report.get('excluded_attempt_counts') or {}
             market_counts_valid = runtime_policy.winrate_market_census_valid(report)
             if (report.get('schema') != 'main_entry_winrate_policy_report_v1'
+                or (report.get('observation_status') == 'source_gap' and
+                    (terminal.get('status') != 'source_gap' or report.get('accepted_attempt_count') != 0
+                     or report.get('candidate_policy') is not None))
+                or (report.get('observation_status') != 'source_gap' and terminal.get('status') != 'completed')
                 or report.get('disposition') not in {'initial_adopted', 'successor_selected', 'incumbent_carried'}
                 or terminal.get('disposition') != report.get('disposition')
-                or staged.get('status') not in {'staged', 'already_staged'}
+                or staged.get('status') not in {'staged', 'already_staged', 'pending_initial_preserved'}
                 or type(report.get('input_attempt_count')) is not int
                 or type(report.get('accepted_attempt_count')) is not int
                 or type(report.get('source_contract_excluded_count')) is not int
@@ -977,10 +983,20 @@ def _stage_output_issues(report_dir, day, stage):
                     bundle = runtime_policy.load(data_root=Path(report_dir).parent,
                         target_date=staged['target_date'])
                     proof = (bundle or {}).get('winrate_selection') or {}
+                    pending = staged['status'] == 'pending_initial_preserved'
                     if (bundle.get('bundle_sha256') != staged.get('bundle_sha256')
-                        or proof.get('report_sha256') != report.get('artifact_content_sha256')
-                        or proof.get('machine_policy_sha256') != runtime_policy.digest(bundle['machine_policy'])
-                        or proof.get('disposition') != report['disposition']):
+                        or (pending and (report.get('pending_initial_bundle_sha256') != bundle['bundle_sha256']
+                            or report.get('pending_initial_target_date') != staged['target_date']
+                            or report.get('hurdle_errors') != ['initial_policy_pending_activation']
+                            or report['disposition'] != 'incumbent_carried'
+                            or proof.get('disposition') != 'initial_adopted'
+                            or proof.get('policy_version') != 'winrate_initial_v1'
+                            or proof.get('parent_bundle_sha256') != report.get('parent_bundle_sha256')
+                            or bundle.get('previous_bundle_sha256') != report.get('parent_bundle_sha256')
+                            or (bundle['machine_policy'].get('entry_situation_veto') or {}).get('threshold_bp') != 68.75))
+                        or (not pending and (proof.get('report_sha256') != report.get('artifact_content_sha256')
+                            or proof.get('disposition') != report['disposition']))
+                        or proof.get('machine_policy_sha256') != runtime_policy.digest(bundle['machine_policy'])):
                         errors.append(f'{stage}:winrate_staged_binding_invalid')
                 except (OSError, ValueError, TypeError, KeyError, AttributeError):
                     errors.append(f'{stage}:winrate_staged_binding_invalid')
@@ -1217,15 +1233,19 @@ def run_stage(stage, day, *, report_dir, project, publication=None, effective=No
             issues = _safe_stage_output_issues(report_dir, day, stage) if not rc else [f'command_exit:{rc}']
             if value['prerequisite_receipts'] != _stage_sources(prerequisites): issues.append('prerequisite_changed_during_consumption')
             if value['input_sources'] != _stage_sources(stage_input_paths(report_dir, day, stage)): issues.append('input_changed_during_consumption')
-            value.update(status=('deferred' if rc == 75 else 'failed') if rc or issues else 'succeeded',
-                exit_code=rc or (1 if issues else 0), issues=issues, finished_at=now(), heartbeat_at=now(),
+            machine_gap = (stage == 'main_machine_policy' and not rc and not issues and
+                _load_json(stage_artifacts(report_dir, day, stage)['machine_policy_terminal']).get('status') == 'source_gap')
+            if machine_gap:
+                issues.append('machine_observation_source_gap')
+            value.update(status='deferred' if machine_gap or rc == 75 else 'failed' if rc or issues else 'succeeded',
+                exit_code=75 if machine_gap else rc or (1 if issues else 0), issues=issues, finished_at=now(), heartbeat_at=now(),
                 sources=_stage_sources(stage_artifacts(report_dir, day, stage)))
-            if stage == 'main_machine_policy' and not issues:
+            if stage == 'main_machine_policy' and (not issues or machine_gap):
                 terminal = _load_json(stage_artifacts(report_dir, day, stage)['machine_policy_terminal'])
                 staging = terminal.get('staged') or {}
                 activation = (terminal.get('activation') or {}).get('status')
-                value['policy_disposition'] = (terminal.get('disposition')
-                    if terminal.get('selection_basis') == 'win_rate_only' and staging.get('status') in {'staged', 'already_staged'}
+                value['policy_disposition'] = ('source_gap' if machine_gap else terminal.get('disposition')
+                    if terminal.get('selection_basis') == 'win_rate_only' and staging.get('status') in {'staged', 'already_staged', 'pending_initial_preserved'}
                     else 'updated' if activation == 'activated' else 'incumbent_carry' if activation in {'already_active', 'incumbent_carry'} else 'no_valid_candidate')
                 value['policy_sha256'] = terminal.get('policy_sha256')
             if stage in {'widget_policy', 'episode_policy'} and not issues:

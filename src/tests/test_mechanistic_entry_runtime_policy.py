@@ -103,6 +103,29 @@ def test_winrate_stage_requires_explicit_preopen_activation(tmp_path, monkeypatc
     assert not (policy.root(tmp_path) / 'current.json').exists()
     assert policy.load(data_root=tmp_path, target_date='2026-09-28')['machine_policy'] == candidate
     assert policy.load_effective(data_root=tmp_path, target_date='2026-09-28')['machine_policy'] == previous['machine_policy']
+    pending = copy.deepcopy(report)
+    pending.update(target_date='2026-09-24', publication_date='2026-09-24',
+        disposition='incumbent_carried', candidate_policy=None, policy_by_scope={},
+        policy_sha256=policy.digest({}), candidate_threshold_bp=None,
+        hurdle_errors=['initial_policy_pending_activation'],
+        pending_initial_bundle_sha256=staged['bundle_sha256'],
+        pending_initial_target_date='2026-09-28')
+    pending['source_receipt']['target_date'] = '2026-09-24'
+    pending = calibration._with_artifact_content_sha256({k: v for k, v in pending.items()
+        if k != 'artifact_content_sha256'})
+    policy._atomic_write_json(source_path, pending)
+    carried = policy.stage_winrate_policy(source_path, data_root=tmp_path,
+        now=datetime(2026, 9, 24, 14, tzinfo=policy.KST))
+    assert carried['status'] == 'pending_initial_preserved'
+    assert policy.load(data_root=tmp_path, target_date='2026-09-28')['bundle_sha256'] == staged['bundle_sha256']
+    invalid_pending = copy.deepcopy(pending)
+    invalid_pending['pending_initial_bundle_sha256'] = 'f' * 64
+    invalid_pending = calibration._with_artifact_content_sha256({k: v for k, v in invalid_pending.items()
+        if k != 'artifact_content_sha256'})
+    policy._atomic_write_json(source_path, invalid_pending)
+    with pytest.raises(ValueError, match='winrate_pending_initial_contract_invalid'):
+        policy.stage_winrate_policy(source_path, data_root=tmp_path,
+            now=datetime(2026, 9, 24, 14, tzinfo=policy.KST))
     changed = copy.deepcopy(report)
     changed['candidate_policy']['thresholds']['min_score'] = -999
     changed['candidate_machine_policy_sha256'] = policy.digest(changed['candidate_policy'])

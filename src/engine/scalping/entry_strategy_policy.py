@@ -318,11 +318,11 @@ def select(policy, payload, setup):
         key = split['lt' if value < split['boundary'] else 'ge']
     profile = deepcopy(node['profile'])
     fallback = node.get('fallback_profile')
-    missing = sorted(k for k in profile if fallback and profile[k] != fallback[k] and not coordinate_supported(k, payload))
+    missing = sorted(k for k in profile if fallback and profile[k] != fallback[k] and not coordinate_supported(k, payload, setup))
     if missing:
         profile = deepcopy(fallback)
         for ancestor in node.get('fallback_ancestors', []):
-            if not any(profile[k] != ancestor[k] and not coordinate_supported(k, payload) for k in profile):
+            if not any(profile[k] != ancestor[k] and not coordinate_supported(k, payload, setup) for k in profile):
                 break
             profile = deepcopy(ancestor)
         reason = 'source_missing_parent'
@@ -481,14 +481,29 @@ def rebuild(setup, policy):
 
 
 # This is a search budget, not a claim that the Cartesian domain is exhausted.
-SEARCH_VERSION = 'balanced_machine_train_v2'
-SOURCE_COORDINATES = set(STRUCTURE_REGISTRY) | {'tape_supportive_score', 'tape_adverse_score', 'momentum_accelerating_score', 'momentum_fading_score', 'micro_confirmation_recipe', 'minimum_depletion_fraction_per_sec', 'minimum_trade_backed_ratio', 'maximum_refill_ratio'}
-SEARCH_BUDGET = {'control': 4, 'single': 20, 'local_joint': 24, 'selector_leaf': 32, 'broad_joint': 16}
+SEARCH_VERSION = 'balanced_machine_train_v3'
+COMMON_MICRO_COORDINATES = {'minimum_micro_net_aggressive_delta_10t': 'net_aggressive_delta_10t',
+    'minimum_micro_price_change_10t_pct': 'price_change_10t_pct'}
+COMMON_LIQUIDITY_COORDINATES = {'maximum_spread_bp': 'spread_bp',
+    'minimum_fillability_score': 'fillability_score',
+    'maximum_top3_ask_to_bid_ratio': 'top3_ask_to_bid_ratio'}
+SOURCE_COORDINATES = (set(STRUCTURE_REGISTRY) | set(COMMON_MICRO_COORDINATES) |
+    set(COMMON_LIQUIDITY_COORDINATES) | {'tape_supportive_score', 'tape_adverse_score',
+    'momentum_accelerating_score', 'momentum_fading_score', 'micro_confirmation_recipe',
+    'minimum_depletion_fraction_per_sec', 'minimum_trade_backed_ratio', 'maximum_refill_ratio'})
+SEARCH_BUDGET = {'control': 4, 'single': len(REGISTRY), 'local_joint': 6,
+                 'selector_leaf': 2, 'broad_joint': 2}
 
 
-def coordinate_supported(name, payload):
+def coordinate_supported(name, payload, setup=None):
     """Missing primitives use the inherited profile; corrupt primitives still fail replay."""
     facts = payload.get('features') or {}
+    if name in COMMON_MICRO_COORDINATES:
+        micro = (setup or {}).get('micro_recovery_observation') or {}
+        return micro.get('source_usable') is True and _number(micro.get(COMMON_MICRO_COORDINATES[name])) is not None
+    if name in COMMON_LIQUIDITY_COORDINATES:
+        inputs = ((setup or {}).get('tail_risk_assessment') or {}).get('inputs') or {}
+        return _number(inputs.get(COMMON_LIQUIDITY_COORDINATES[name])) is not None
     if name in STRUCTURE_REGISTRY:
         return bool((payload.get('entry_candle_context') or {}).get('strategy_completed_bars'))
     if name.startswith('tape_'):
@@ -517,6 +532,8 @@ def registry_contract():
         source=('strategy_completed_bars' if name in STRUCTURE_REGISTRY else
                 'trusted_aggressor' if name.startswith('tape_') else
                 'entry_momentum_score' if name.startswith('momentum_') else
+                'micro_recovery_observation' if name in COMMON_MICRO_COORDINATES else
+                'tail_risk_assessment.inputs' if name in COMMON_LIQUIDITY_COORDINATES else
                 'mechanistic_micro_window' if name in {'micro_confirmation_recipe', 'minimum_depletion_fraction_per_sec', 'minimum_trade_backed_ratio', 'maximum_refill_ratio'} else 'strategy_raw_input'),
         authority='machine_strategy_only') for name, spec in REGISTRY.items()}
 
@@ -676,7 +693,7 @@ def joint_candidates(parent, scope, *, domains=None, selectors=None, start=0, li
             domain_sha256=domain_hash, search_complete=cursor + 1 == total)
 
 
-MACHINE_SELECTION_VERSION = 'support_adjusted_win_rate_full_population_v4'
+MACHINE_SELECTION_VERSION = 'support_adjusted_win_rate_full_population_v5'
 MACHINE_EVALUATION_BASIS = 'machine_full_population_opportunity_v1'
 
 
@@ -698,10 +715,11 @@ def machine_support_adjusted_win_rate(economy):
 
 def machine_admission_rank(economy, *, node_count=1, complexity=0):
     adjusted = machine_support_adjusted_win_rate(economy)
-    values = [adjusted, _number(economy.get('selected_path_ev_pct')),
-              _number(economy.get('paired_admission_delta_pct'))]
-    return tuple(round(v, 10) if v is not None else None for v in values) + (
-        economy.get('selected_opportunity_count', 0), -node_count, -complexity)
+    # Path EV and paired profit remain cost-bound diagnostics. The Main machine
+    # selection contract ranks binary wins and support only.
+    values = [adjusted, _number(economy.get('win_rate_pct')),
+              _number(economy.get('selected_opportunity_count'))]
+    return tuple(round(v, 10) if v is not None else None for v in values) + (-node_count, -complexity)
 
 
 def select_report_candidate(source):

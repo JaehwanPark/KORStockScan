@@ -5306,6 +5306,11 @@ def test_winrate_opportunity_metric_uses_binary_labels_and_unique_opportunities(
     assert metrics['selected_opportunity_count'] == 2
     assert metrics['winning_attempt_count'] == 2
     assert metrics['win_rate_pct'] == pytest.approx(75)
+    assert metrics['net_path_ev_pct'] is None
+    net_metrics = _winrate_opportunity_metrics([
+        {**row, 'net_path_pct': value} for row, value in zip(rows, [1., -2., 3.])])
+    assert net_metrics['net_path_ev_pct'] == pytest.approx(1.25)
+    assert net_metrics['worst_net_path_pct'] == -2.
     assert _winrate_opportunity_metrics([])['win_rate_pct'] is None
 
 
@@ -5364,3 +5369,43 @@ def test_winrate_successor_requires_selected_opportunities_on_both_holdout_dates
     assert passing['candidate']['holdout']['source_dates'] == ['2026-09-29', '2026-09-30']
     assert len(passing['candidate_holdout_opportunity_manifest_sha256']) == 64
     assert runtime_policy.winrate_market_census_valid(passing)
+
+
+def test_winrate_pending_initial_does_not_rerun_frozen_census(monkeypatch, tmp_path):
+    from src.engine.scalping import entry_strategy_policy as strategy
+    from src.engine.scalping import entry_setup_evidence as setup_owner
+    from src.engine.scalping import mechanistic_entry_runtime_policy as runtime_policy
+
+    parent = {'strategy': {}}
+    pending_machine = {'strategy': {}, 'entry_situation_veto': calibration._winrate_veto_payload(68.75)}
+    pending = {'bundle_sha256': 'b' * 64, 'target_date': '2026-09-28',
+        'previous_bundle_sha256': 'a' * 64, 'machine_policy': pending_machine,
+        'winrate_selection': {'disposition': 'initial_adopted',
+            'policy_version': 'winrate_initial_v1', 'parent_bundle_sha256': 'a' * 64,
+            'machine_policy_sha256': strategy.digest(pending_machine)}}
+    monkeypatch.setattr(runtime_policy, 'load_effective', lambda **_: {'bundle_sha256': 'a' * 64})
+    monkeypatch.setattr(runtime_policy, 'for_cohort', lambda *_: {'machine_policy': parent})
+    monkeypatch.setattr(runtime_policy, 'load', lambda **_: pending)
+    monkeypatch.setattr(runtime_policy, 'next_target', lambda _: '2026-09-28')
+    monkeypatch.setattr(calibration, '_common_refinement_population',
+        lambda _paired, rows, **_: (rows, {'row_exclusion_reason_counts': {}}))
+    monkeypatch.setattr(calibration, '_machine_path_value', lambda _row: (0, None))
+    monkeypatch.setattr(calibration, '_machine_opportunity_id', lambda row: row['decision_trace_id'])
+    monkeypatch.setattr(strategy, 'completed_bar_rows', lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(setup_owner, 'validate_mechanistic_entry_threshold_policy', lambda _policy: [])
+    monkeypatch.setattr(calibration, 'mechanistic_entry_policy_decision',
+        lambda _setup, *, policy: {'action': 'ENTER_NOW'})
+    raw = {'features': {'curr_vs_micro_vwap_bp': 12.0,
+        'micro_vwap_available': True, 'minute_candle_window_fresh': True}}
+    row = {'source_date': '2026-09-24', 'effective_venue': 'KRX',
+        'session_bucket': 'KRX_REGULAR', 'decision_trace_id': 'day24:1',
+        'setup_evidence': {'strategy_raw_input': raw, 'strategy_raw_sha256': strategy.digest(raw)},
+        'entry_quality_path': {'first_hit': 'net_target_first'}}
+    report = calibration.build_winrate_policy_report([row],
+        source_receipt={'target_date': '2026-09-24'}, target_date='2026-09-24',
+        data_root=tmp_path, publication_day='2026-09-24')
+    assert report['disposition'] == 'incumbent_carried'
+    assert report['hurdle_errors'] == ['initial_policy_pending_activation']
+    assert report['pending_initial_bundle_sha256'] == pending['bundle_sha256']
+    assert report['accepted_attempt_count'] == 1
+    assert report['candidate_policy'] is None

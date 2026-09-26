@@ -1648,6 +1648,25 @@ def stage_winrate_policy(source_path: Path, *, data_root: Path, now: datetime | 
             if holdout_path.exists() and _read(holdout_path) != holdout_receipt:
                 raise ValueError('winrate_holdout_already_consumed')
         existing = load(data_root=data_root, target_date=target)
+        pending_hash = source.get('pending_initial_bundle_sha256')
+        if pending_hash is not None:
+            proof = (existing or {}).get('winrate_selection') or {}
+            if (disposition != 'incumbent_carried'
+                or source['policy_version'] != 'winrate_initial_v1'
+                or source['target_date'] <= '2026-09-23'
+                or source.get('hurdle_errors') != ['initial_policy_pending_activation']
+                or source.get('pending_initial_target_date') != target
+                or existing is None or existing['bundle_sha256'] != pending_hash
+                or existing.get('previous_bundle_sha256') != previous['bundle_sha256']
+                or proof.get('disposition') != 'initial_adopted'
+                or proof.get('policy_version') != 'winrate_initial_v1'
+                or proof.get('parent_bundle_sha256') != previous['bundle_sha256']
+                or proof.get('machine_policy_sha256') != digest(existing['machine_policy'])
+                or (existing['machine_policy'].get('entry_situation_veto') or {}).get('threshold_bp') != 68.75):
+                raise ValueError('winrate_pending_initial_contract_invalid')
+            return dict(status='pending_initial_preserved', target_date=target,
+                        bundle_sha256=pending_hash, disposition=disposition,
+                        machine_policy_sha256=digest(parent), current_unchanged=True)
         if existing and existing.get('winrate_selection'):
             if (existing['winrate_selection']['report_sha256'] == source['artifact_content_sha256']
                 and existing['winrate_selection']['parent_bundle_sha256'] == previous['bundle_sha256']):
@@ -1655,12 +1674,7 @@ def stage_winrate_policy(source_path: Path, *, data_root: Path, now: datetime | 
                     _atomic_write_json(holdout_path, holdout_receipt)
                 return dict(status='already_staged', target_date=target,
                             bundle_sha256=existing['bundle_sha256'], disposition=disposition)
-            if not (disposition == 'initial_adopted'
-                and existing['winrate_selection'].get('disposition') == 'initial_adopted'
-                and existing['winrate_selection'].get('parent_bundle_sha256') == previous['bundle_sha256']
-                and publication_day < target
-                and (_load_current(data_root, publication_day) or {}).get('bundle_sha256') != existing['bundle_sha256']):
-                raise ValueError('winrate_dated_generation_already_staged')
+            raise ValueError('winrate_dated_generation_already_staged')
         bundle = copy.deepcopy(previous)
         if existing and (existing.get('compact_promoted_scopes') or existing.get('auxiliary_soft_promoted_scopes')):
             if (existing['machine_policy'] != previous['machine_policy']
@@ -1806,6 +1820,9 @@ def activate_strategy_report(source_path: Path, *, data_root: Path, now: datetim
         active_scopes = active.get('scopes') or {active.get('scope'): active}
         for scope, result in sorted(evaluations.items()):
             candidate = result.get('candidate')
+            if (candidate or {}).get('evaluation_basis') == 'machine_full_population_opportunity_v1':
+                dispositions[scope] = ['machine_full_registry_research_only']
+                continue
             if result.get('promotion_pass') is not True or not candidate:
                 dispositions[scope] = result.get('promotion_errors') or [result.get('status')]
                 continue
