@@ -307,6 +307,8 @@ Error detector가 resource pressure로 cleanup을 호출해도 owner-integrated 
 bash deploy/install_error_detection_cron.sh
 ```
 
+이 설치기는 `ERROR_DETECTION_FULL` 07:00~21:50 두 예약만 소유한다. 21:55 최종화는 stage2 릴리스 라우터의 `POSTCLOSE_FINALIZATION_2155`가 소유하므로, 감지기 예약을 재설치할 때 그 행을 삭제하거나 직접 실행 경로로 되돌리지 않는다. 감지기 예약은 workspace의 현재 검토된 코드를 읽으며, 장후 최종화에서 부르는 감지기는 선택 릴리스의 코드를 읽는다. 두 경로의 commit을 배포 검증에서 각각 확인한다.
+
 수동 확인 명령:
 
 ```bash

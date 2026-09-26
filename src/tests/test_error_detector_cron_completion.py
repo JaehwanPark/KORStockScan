@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import tempfile
 import json
+import os
+import subprocess
 from datetime import datetime
 from contextlib import contextmanager
 from pathlib import Path
@@ -9,6 +11,27 @@ from pathlib import Path
 import pytest
 
 from src.engine.error_detectors.cron_completion import CronCompletionDetector
+
+
+def test_error_detector_cron_install_preserves_release_routed_finalization(tmp_path):
+    root = Path(__file__).resolve().parents[2]
+    state = tmp_path / "crontab.txt"
+    finalizer = ("55 21 * * 1-5 bash /home/ubuntu/KORStockScan/deploy/"
+                 "run_runtime_release.sh finalize $(TZ=Asia/Seoul date +\\%F) "
+                 "# POSTCLOSE_FINALIZATION_2155")
+    state.write_text(finalizer + "\n")
+    stub = tmp_path / "crontab"
+    stub.write_text('#!/bin/sh\nif [ "$1" = -l ]; then cat "$CRONTAB_STATE"; '
+                    'else cp "$1" "$CRONTAB_STATE"; fi\n')
+    stub.chmod(0o755)
+    env = {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}",
+           "CRONTAB_STATE": str(state)}
+    for _ in range(2):
+        subprocess.run(["bash", str(root / "deploy/install_error_detection_cron.sh")],
+                       env=env, check=True, capture_output=True, text=True)
+        lines = state.read_text().splitlines()
+        assert lines.count(finalizer) == 1
+        assert sum("# ERROR_DETECTION_FULL" in line for line in lines) == 2
 
 
 @pytest.mark.parametrize(
