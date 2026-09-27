@@ -1602,6 +1602,10 @@ def _refresh_cap_decision(
     """Rank bounded caps on paired full-cost trades; retain every loss."""
     if not rows or parent_mode not in {"parent_5stage", *_CAP_MODES}:
         return parent_mode, {}
+    dates = sorted({row["entry_date"] for row in rows})
+    holdout_date = dates[-1]
+    train_rows = [row for row in rows if row["entry_date"] < holdout_date]
+    holdout_rows = [row for row in rows if row["entry_date"] == holdout_date]
     parent_net = sum(row["actual_net_pnl_krw"] for row in rows)
     winner_weight = sum(row["actual_net_pnl_krw"] for row in rows
                         if row["actual_net_pnl_krw"] > 0
@@ -1613,7 +1617,7 @@ def _refresh_cap_decision(
         if winner_weight else None)
     metrics: dict[str, Any] = {}
     selected = parent_mode
-    best_rank = (parent_weighted if parent_weighted is not None else -math.inf, 0.0)
+    best_rank = (-math.inf, 0.0)
     for mode in _CAP_MODES:
         valid = [row for row in rows if (row.get("cap_candidates") or {}).get(
             mode, {}).get("status") == "paired"]
@@ -1636,11 +1640,36 @@ def _refresh_cap_decision(
                 else 0.0)
         coverage = len(valid) / len(rows)
         delta = candidate_net - parent_net
-        enough = (len(valid) >= minimum_count and coverage >= 0.8
-                  and len(daily) >= 3 and min(daily.values()) >= -0.001
-                  and daily[max(daily)] > 0 and delta > 0
+        train_valid = [row for row in train_rows if row["trade_id"] in valid_ids]
+        holdout_valid = [row for row in holdout_rows if row["trade_id"] in valid_ids]
+        train_delta = sum(daily[day] for day in dates[:-1])
+        holdout_delta = daily[holdout_date]
+        train_winner_weight = sum(row["actual_net_pnl_krw"] for row in train_rows
+                                  if row["actual_net_pnl_krw"] > 0
+                                  and row["actual_profit_rate"] > 0)
+        train_parent_weighted = (sum(
+            row["actual_net_pnl_krw"] * row["actual_profit_rate"]
+            for row in train_rows if row["actual_net_pnl_krw"] > 0
+            and row["actual_profit_rate"] > 0) / train_winner_weight
+            if train_winner_weight else None)
+        train_candidate_weighted = (sum(
+            row["actual_net_pnl_krw"] * (
+                row["cap_candidates"][mode]["candidate_net_pct_on_parent_notional"]
+                if row["trade_id"] in valid_ids else row["actual_profit_rate"])
+            for row in train_rows if row["actual_net_pnl_krw"] > 0
+            and row["actual_profit_rate"] > 0) / train_winner_weight
+            if train_winner_weight else None)
+        train_coverage = len(train_valid) / len(train_rows) if train_rows else 0.0
+        holdout_coverage = len(holdout_valid) / len(holdout_rows)
+        enough = (len(dates) >= 3 and len(train_valid) >= minimum_count
+                  and train_coverage >= 0.8 and holdout_coverage >= 0.8
+                  and min(daily.values()) >= -0.001
+                  and train_delta > 0 and holdout_delta >= 0 and delta > 0
                   and parent_weighted is not None and weighted is not None
-                  and weighted > parent_weighted + 1e-6)
+                  and weighted > parent_weighted + 1e-6
+                  and train_parent_weighted is not None
+                  and train_candidate_weighted is not None
+                  and train_candidate_weighted > train_parent_weighted + 1e-6)
         metrics[mode] = {
             "paired_count": len(valid), "type_count": len(rows),
             "coverage": round(coverage, 6),
@@ -1654,9 +1683,24 @@ def _refresh_cap_decision(
                 if parent_weighted is not None else None),
             "daily_delta_net_pnl_krw": {
                 day: round(value, 3) for day, value in sorted(daily.items())},
+            "train_dates": dates[:-1], "holdout_date": holdout_date,
+            "train_paired_count": len(train_valid),
+            "train_coverage": round(train_coverage, 6),
+            "holdout_paired_count": len(holdout_valid),
+            "holdout_coverage": round(holdout_coverage, 6),
+            "train_delta_net_pnl_krw": round(train_delta, 3),
+            "holdout_delta_net_pnl_krw": round(holdout_delta, 3),
+            "train_winner_weighted_net_pct": (
+                round(train_candidate_weighted, 6)
+                if train_candidate_weighted is not None else None),
+            "train_parent_winner_weighted_net_pct": (
+                round(train_parent_weighted, 6)
+                if train_parent_weighted is not None else None),
             "selection_eligible": enough,
         }
-        rank = (weighted if weighted is not None else -math.inf, delta)
+        rank = (train_candidate_weighted
+                if train_candidate_weighted is not None else -math.inf,
+                train_delta)
         if enough and mode != parent_mode and rank > best_rank:
             selected, best_rank = mode, rank
     return selected, metrics

@@ -145,6 +145,29 @@ def test_cap_selection_requires_winner_weighted_gain():
                          "candidate_net_pct_on_parent_notional": 1.5}}})
     selected, metrics = _refresh_cap_decision(rows, "parent_5stage", 3)
     assert selected == "parent_5stage"
+
+
+def test_cap_selection_reserves_latest_date_as_independent_holdout():
+    rows = []
+    for day in ("2026-09-28", "2026-09-29", "2026-09-30"):
+        for suffix in ("a", "b"):
+            rows.append({"trade_id": f"{day}-{suffix}", "entry_date": day,
+                         "actual_net_pnl_krw": 20.0, "actual_profit_rate": 2.0,
+                         "cap_candidates": {"cap_10pct": {
+                             "status": "paired", "candidate_net_pnl_krw": 25.0,
+                             "candidate_net_pct_on_parent_notional": 2.5}}})
+    selected, metrics = _refresh_cap_decision(rows, "parent_5stage", 5)
+    assert selected == "parent_5stage"
+    assert metrics["cap_10pct"]["train_paired_count"] == 4
+    assert metrics["cap_10pct"]["holdout_date"] == "2026-09-30"
+    selected, metrics = _refresh_cap_decision(rows, "parent_5stage", 3)
+    assert selected == "cap_10pct"
+    assert metrics["cap_10pct"]["holdout_paired_count"] == 2
+    rows[-1]["cap_candidates"]["cap_10pct"]["status"] = "source_gap"
+    selected, metrics = _refresh_cap_decision(rows, "parent_5stage", 3)
+    assert selected == "parent_5stage"
+    assert metrics["cap_10pct"]["coverage"] > 0.8
+    assert metrics["cap_10pct"]["holdout_coverage"] == 0.5
     assert metrics["cap_10pct"]["selection_eligible"] is False
 
 

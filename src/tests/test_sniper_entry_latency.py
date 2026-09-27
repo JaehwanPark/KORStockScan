@@ -54,11 +54,13 @@ def _assert_danger_hard_safety_block(result, *, danger_reasons=None):
 def test_post_sell_bbo_observer_runs_detached_from_trading_loop(monkeypatch):
     monkeypatch.setattr(state_handlers, "_ENTRY_CAPACITY_PENDING", {})
     from src.engine.scalping import avg_down_replay_capture as capture
+    from src.engine.scalping.position_peak_ledger import POSITION_PEAK_LEDGER
     monkeypatch.setattr(capture, "_POLICY_CACHE", {})
     rules = sniper_runtime.sniper_state_handlers.TRADING_RULES
     monkeypatch.setattr(capture, "policy_snapshot", lambda handlers, now_ts: {
         "rules": capture._json_value(vars(rules)), "environment": capture.policy_environment(),
         "files": {}, "matrix_selection": {},
+        "peak_ledger_source_path": str(POSITION_PEAK_LEDGER.path.absolute()),
     })
     calls = []
     capacity_calls = []
@@ -137,9 +139,18 @@ def test_main_entry_policy_supplier_refreshes_real_snapshot_and_keeps_failure_re
     import pytest
     with pytest.raises(ValueError, match="policy_cache_not_ready"):
         replay.freeze_entry_operating_context(handlers, {}, sizing, now_ts=100, strict=True)
-    assert capture.maintain_main_entry_policy_cache(handlers, now_ts=100)["status"] == "ready"
+    cache_result = capture.maintain_main_entry_policy_cache(handlers, now_ts=100)
+    assert cache_result["status"] == "ready", cache_result
     first = capture._cached_policy(handlers, 100)
     assert str(policy_file) in first["files"]
+    from src.engine.scalping import position_peak_ledger as peak_ledger
+    original_peak_path = peak_ledger.POSITION_PEAK_LEDGER.path
+    monkeypatch.setattr(peak_ledger.POSITION_PEAK_LEDGER, "path",
+                        tmp_path / "different_peak_source.json")
+    with pytest.raises(ValueError, match="peak_ledger_source_changed_since_snapshot"):
+        capture._cached_policy(handlers, 100)
+    monkeypatch.setattr(peak_ledger.POSITION_PEAK_LEDGER, "path",
+                        original_peak_path)
     policy_file.write_text('{"version":222}')
     with pytest.raises(ValueError, match="policy_file_changed_since_snapshot"):
         capture._cached_policy(handlers, 101)

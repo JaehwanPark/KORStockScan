@@ -189,6 +189,7 @@ def policy_snapshot(handlers, now_ts: float) -> dict:
         "rules": _json_value(rules),
         "environment": environment,
         "files": files,
+        "peak_ledger_source_path": captured_peak,
         "implementation": deepcopy(_IMPLEMENTATION),
         "loaded_code": loaded_code_identity(handlers),
         "adapter_scope": "existing_holding_policy_quote_counterfactual",
@@ -298,6 +299,13 @@ def _cached_policy(handlers, now_ts):
         raise ValueError("policy_environment_changed_since_snapshot")
     if _json_value(vars(handlers.TRADING_RULES)) != snapshot["rules"]:
         raise ValueError("loaded_rules_changed_since_snapshot")
+    from src.engine.scalping.position_peak_ledger import (
+        DEFAULT_LEDGER_PATH, POSITION_PEAK_LEDGER,
+    )
+    captured_peak = str(POSITION_PEAK_LEDGER.path.absolute())
+    if captured_peak != snapshot.get("peak_ledger_source_path"):
+        raise ValueError("peak_ledger_source_changed_since_snapshot")
+    canonical_peak = str(DEFAULT_LEDGER_PATH.absolute())
     # A newly published matrix can change selection without changing the old
     # file's mtime. Check the selector, not just captured file metadata.
     now = datetime.fromtimestamp(now_ts, tz=_KST).replace(tzinfo=None)
@@ -310,7 +318,10 @@ def _cached_policy(handlers, now_ts):
             raise ValueError("matrix_selection_changed_since_snapshot")
     for name, row in snapshot["files"].items():
         try:
-            stat = Path(name).stat()
+            actual_path = captured_peak if (
+                name == canonical_peak and captured_peak != canonical_peak
+            ) else name
+            stat = Path(actual_path).stat()
             if row is None or (stat.st_mtime_ns, stat.st_size) != (
                 row["mtime_ns"],
                 row["size"],
