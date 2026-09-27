@@ -9,6 +9,7 @@ import json
 from types import SimpleNamespace
 from pathlib import Path
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from unittest.mock import patch
 
 from src.engine.error_detectors.artifact_freshness import (
@@ -198,6 +199,22 @@ def test_initial_quantity_semantics_marks_missing_past_date_stage(
     assert result["status"] == "source_gap"
     assert result["postclose_stage_status"] == "source_gap"
     assert result["findings"] == ["initial_quantity_stage_missing_after_date"]
+
+
+def test_initial_quantity_semantics_attributes_corrupt_journal_to_its_date(
+        tmp_path, monkeypatch):
+    _quantity_semantic_fixture(tmp_path, monkeypatch)
+    directory = tmp_path / "data/runtime/initial_quantity/bundles"
+    directory.mkdir()
+    path = directory / ("d" * 64 + ".json")
+    path.write_text("{broken")
+    prior = datetime(2026, 9, 27, 10, 0, tzinfo=ZoneInfo("Asia/Seoul"))
+    os.utime(path, (prior.timestamp(), prior.timestamp()))
+    assert _initial_quantity_semantics(tmp_path, "2026-09-28")["findings"] == []
+    current = datetime(2026, 9, 28, 10, 0, tzinfo=ZoneInfo("Asia/Seoul"))
+    os.utime(path, (current.timestamp(), current.timestamp()))
+    assert _initial_quantity_semantics(tmp_path, "2026-09-28")["findings"] == [
+        "initial_quantity_bundle_invalid"]
 
 
 def test_artifact_detector_surfaces_initial_quantity_semantic_findings(

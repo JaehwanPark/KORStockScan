@@ -246,12 +246,15 @@ def _initial_quantity_semantics(
             if index >= 5000:
                 details["findings"].append("initial_quantity_bundle_inventory_oversize")
                 break
+            belongs_to_date = False
             try:
                 if path.is_symlink() or path.stat().st_size > 1024 * 1024:
                     raise ValueError("bundle_untrusted_or_oversize")
                 bundle = json.loads(path.read_text(encoding="utf-8"))
                 schedule = bundle.get("schedule") or {}
-                if str(schedule.get("order_start_at") or "")[:10] != source_date:
+                belongs_to_date = (
+                    str(schedule.get("order_start_at") or "")[:10] == source_date)
+                if not belongs_to_date:
                     if (not schedule.get("order_start_at")
                             and datetime.fromtimestamp(
                                 path.stat().st_mtime,
@@ -298,7 +301,14 @@ def _initial_quantity_semantics(
                         details["findings"].append(
                             "initial_quantity_bundle_policy_mismatch")
             except (OSError, ValueError, TypeError, KeyError, AttributeError):
-                details["findings"].append("initial_quantity_bundle_invalid")
+                try:
+                    file_day = datetime.fromtimestamp(
+                        path.lstat().st_mtime,
+                        ZoneInfo("Asia/Seoul")).date().isoformat()
+                except OSError:
+                    file_day = None
+                if belongs_to_date or file_day == source_date:
+                    details["findings"].append("initial_quantity_bundle_invalid")
     if details["findings"]:
         details["status"] = "source_invalid" if any(
             item not in {"initial_quantity_bundle_terminal_overdue",
