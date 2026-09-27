@@ -366,16 +366,25 @@ def compose_entry_execution_sizing_plan(
 
     immediate_qty = sum(_positive_int(item.get("qty")) for item in orders)
     continuation: dict[str, Any] | None = None
+    sequential_continuation: dict[str, Any] | None = None
     if len(orders) == 1 and isinstance(
         orders[0].get("entry_split_order_probe_continuation"), dict
     ):
         continuation = dict(orders[0]["entry_split_order_probe_continuation"])
+    if len(orders) == 1 and isinstance(
+        orders[0].get("initial_quantity_sequential_continuation"), dict
+    ):
+        sequential_continuation = dict(
+            orders[0]["initial_quantity_sequential_continuation"])
+    if continuation is not None and sequential_continuation is not None:
+        blockers.append("competing_deferred_entry_owners")
+    deferred_source = sequential_continuation or continuation
     residual_quantities = (
         [
             _positive_int(value)
-            for value in continuation.get("residual_quantities") or []
+            for value in deferred_source.get("residual_quantities") or []
         ]
-        if continuation is not None
+        if deferred_source is not None
         else []
     )
     deferred_qty = sum(residual_quantities)
@@ -386,11 +395,28 @@ def compose_entry_execution_sizing_plan(
         blockers.append("leg_count_exceeds_immediate_qty")
     if deferred_qty and any(value <= 0 for value in residual_quantities):
         blockers.append("nonpositive_residual_leg_qty")
-    if (
-        continuation is not None
-        and _positive_int(continuation.get("requested_qty")) != expected_total_qty
-    ):
+    if (deferred_source is not None
+            and _positive_int(deferred_source.get("requested_qty"))
+            != expected_total_qty):
         blockers.append("probe_continuation_requested_qty_mismatch")
+    if sequential_continuation is not None:
+        shape = str(sequential_continuation.get("selected_shape") or "")
+        from src.engine.scalping.entry_split_order_plan import (
+            build_initial_quantity_type_legs,
+        )
+        try:
+            exact = build_initial_quantity_type_legs(
+                total_qty=expected_total_qty,
+                selected_shape=shape,
+                probe_first=sequential_continuation.get("probe_first"),
+                route=sequential_continuation.get("route"),
+            )
+            if ([item["qty"] for item in exact] !=
+                    [_positive_int(orders[0].get("qty")), *residual_quantities]
+                    or len(exact) != 1 + len(residual_quantities)):
+                blockers.append("sequential_leg_quantity_mismatch")
+        except ValueError:
+            blockers.append("sequential_leg_contract_invalid")
     if conserved_total != expected_total_qty:
         blockers.append("quantity_conservation_failed")
 
@@ -473,7 +499,11 @@ def compose_entry_execution_sizing_plan(
             }
         )
     for residual_index, residual_qty in enumerate(residual_quantities, start=1):
-        candidate_id = f"probe_residual_resolver:leg{residual_index + 1}"
+        candidate_id = (
+            f"initial_quantity_p1:leg{residual_index + 1}"
+            if sequential_continuation is not None
+            else f"probe_residual_resolver:leg{residual_index + 1}"
+        )
         legs.append(
             {
                 "leg_index": len(orders) + residual_index,
@@ -481,7 +511,11 @@ def compose_entry_execution_sizing_plan(
                 "price_candidate_id": candidate_id,
                 "price_leg_id": candidate_id,
                 "numeric_price": None,
-                "execution_phase": "after_verified_probe_fill",
+                "execution_phase": (
+                    "after_verified_previous_leg_terminal"
+                    if sequential_continuation is not None
+                    else "after_verified_probe_fill"
+                ),
             }
         )
         price_plan.append(
@@ -490,7 +524,11 @@ def compose_entry_execution_sizing_plan(
                 "price_leg_id": candidate_id,
                 "numeric_price": None,
                 "order_type_code": "00",
-                "source": "probe_fill_price_resolver",
+                "source": (
+                    "initial_quantity_p1_at_actual_leg_submit"
+                    if sequential_continuation is not None
+                    else "probe_fill_price_resolver"
+                ),
             }
         )
     immediate_price_candidate_ids = {
@@ -568,6 +606,8 @@ def compose_entry_execution_sizing_plan(
         "immediate_qty": immediate_qty,
         "deferred_probe_residual_qty": deferred_qty,
         "leg_count": len(legs),
+        **({"initial_quantity_sequential_continuation": sequential_continuation}
+           if sequential_continuation is not None else {}),
         "legs": legs,
         "price_candidates": price_plan,
         "quantity_conservation_holds": conserved_total == expected_total_qty,

@@ -23,7 +23,7 @@ def test_initial_quantity_refresh_runs_before_summary_handoff():
     from src.engine.automation.postclose_summary_handoff import source_paths
 
     script = _text("deploy/run_threshold_cycle_postclose.sh")
-    producer = script.index("--parent-current \"$PROJECT_DIR/data/runtime/initial_quantity/current.json\"")
+    producer = script.index('--parent-current "$INITIAL_QUANTITY_CURRENT"')
     terminal = script.index("initial_quantity_refresh_stage_${TARGET_DATE}.json")
     summary = script.index("src.engine.runtime_approval_summary", producer)
     assert producer < terminal < summary
@@ -31,6 +31,11 @@ def test_initial_quantity_refresh_runs_before_summary_handoff():
     assert "initial_quantity_refresh_stage" in path
     assert path["initial_quantity_refresh_stage"].name == (
         "initial_quantity_refresh_stage_2026-09-28.json")
+    # The selected policy's effective lower bound owns the handoff, not a
+    # hardcoded rollout date in either producer or consumer.
+    assert '"$TARGET_DATE" > "2026-09-27"' not in script
+    assert "initial_quantity_refresh_stage" in source_paths(
+        ROOT / "data/report", "2026-09-27", "tower")
 
 
 def test_postclose_status_records_direct_owner_producer_flags():

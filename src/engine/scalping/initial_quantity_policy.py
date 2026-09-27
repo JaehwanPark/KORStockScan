@@ -442,6 +442,44 @@ def join_post_fill_paths(trades: list[dict[str, Any]], *, data_dir: Path = DATA_
                                         in (True, "True")):
                                     bucket["order_sent"].append({**event_row,
                                                                  "order_no": order_no})
+                                    initial_start = _timestamp(fields.get(
+                                        "initial_quantity_order_start_at"))
+                                    schedule_sha = str(fields.get(
+                                        "initial_quantity_schedule_sha256") or "")
+                                    policy_sha = str(fields.get(
+                                        "initial_quantity_policy_file_sha256") or "")
+                                    if (initial_start is not None
+                                            and initial_start <= emitted
+                                            and fields.get("initial_quantity_leg_index")
+                                            in (0, "0")
+                                            and fields.get("initial_quantity_attempt_id")
+                                            == attempt_id
+                                            and re.fullmatch(r"[0-9a-f]{64}", schedule_sha)
+                                            and re.fullmatch(r"[0-9a-f]{64}", policy_sha)
+                                            and any(
+                                                decision["fields"].get(
+                                                    "entry_submit_attempt_id") ==
+                                                attempt_id
+                                                and decision["fields"].get(
+                                                    "entry_execution_sizing_plan_sha256")
+                                                == plan_sha
+                                                and decision["fields"].get(
+                                                    "scalping_sizing_position_sizing_policy_sha256")
+                                                == policy_sha
+                                                for decision in bucket["decisions"])):
+                                        bucket["order_starts"].append({
+                                            "at": initial_start,
+                                            "order_no": order_no,
+                                            "source":
+                                                "initial_quantity_bundle_order_start_at",
+                                            "probe_applied": tag ==
+                                                "initial_quantity_probe_0",
+                                            "emitted_at": emitted,
+                                            "attempt_id": attempt_id,
+                                            "plan_sha": plan_sha,
+                                            "schedule_sha256": schedule_sha,
+                                            "policy_sha256": policy_sha,
+                                        })
                     elif (stage == "position_rebased_after_fill" and within_entry_join
                           and str(fields.get("entry_mode") or "").lower() == "normal"):
                         price = _number(fields.get("fill_price") or fields.get("avg_buy_price"))
@@ -1214,17 +1252,60 @@ def initial_replay_economics_valid(report: Any) -> bool:
     return True
 
 
+def _eligible_refresh_total_wait(
+    report: dict[str, Any], timeout_research: dict[str, Any] | None,
+    quantity_type: str, shape: str, minimum_count: int,
+) -> int | None:
+    """Choose a bounded T only with exact start clocks and dated EV support."""
+    if shape == "parent" or not isinstance(timeout_research, dict):
+        return None
+    selection = (timeout_research.get("selections") or {}).get(quantity_type) or {}
+    source_rows = [row for row in report.get("trades") or []
+                   if row.get("quantity_type") == quantity_type]
+    parent_net = sum(row["actual_net_pnl_krw"] for row in source_rows)
+    parent_ev = _number(selection.get("parent_costed_ev_pct"))
+    if parent_ev is None or len(source_rows) < minimum_count:
+        return None
+    ranked = []
+    for horizon in timeout_research.get("horizons_sec") or []:
+        if (type(horizon) is not int or horizon > 1200
+                or horizon < 6 * (3 if shape.startswith("three_leg") else 2)):
+            continue
+        metric = (selection.get("candidate_metrics") or {}).get(
+            f"{shape}:5:{horizon}") or {}
+        modeled = metric.get("modeled_count")
+        daily = metric.get("daily_conservative_delta_net_pnl_krw") or {}
+        ev = _number(metric.get("conservative_ev_pct"))
+        net = _number(metric.get("conservative_net_pnl_krw"))
+        if (type(modeled) is not int or modeled < minimum_count
+                or modeled / len(source_rows) < 0.8
+                or (metric.get("order_start_source_counts") or {}) != {
+                    "initial_quantity_bundle_order_start_at": modeled}
+                or metric.get("verified_cross_count", 0) <
+                    max(3, math.ceil(modeled * 0.05))
+                or ev is None or ev <= parent_ev + 0.10
+                or net is None or net <= parent_net
+                or not isinstance(daily, dict) or len(daily) < 3
+                or min(daily.values()) < 0
+                or daily[max(daily)] <= 0):
+            continue
+        ranked.append((ev, net, -horizon, horizon))
+    return max(ranked)[-1] if ranked else None
+
+
 def evaluate_refresh_quantity_candidate(
     report: dict[str, Any], *, parent_policy: dict[str, Any],
     pid_receipt: dict[str, Any] | None = None,
     terminal_receipt: dict[str, Any] | None = None,
     following_bars: dict[str, Any] | None = None,
+    timeout_research: dict[str, Any] | None = None,
     parent_policy_file_sha256: str | None = None,
     enforce_trade_lineage: bool = True,
 ) -> dict[str, Any]:
     """Apply stronger post-activation gates without reusing the seed sample."""
     from src.engine.scalping.initial_quantity_activation import (
-        baseline_policy_valid,
+        RUNTIME_REFRESH_SCHEMA, baseline_policy_valid,
+        refresh_parent_policy_valid,
     )
 
     if not isinstance(parent_policy, dict) or not isinstance(report, dict):
@@ -1234,6 +1315,8 @@ def evaluate_refresh_quantity_candidate(
     report_body = {key: value for key, value in report.items()
                    if key != "report_content_sha256"}
     is_initial_baseline = baseline_policy_valid(parent_policy)
+    is_v2_parent = (refresh_parent_policy_valid(parent_policy)
+                    and not is_initial_baseline)
     is_legacy_parent = (
         parent_policy.get("policy_content_sha256") == _digest(parent_body)
         and parent_policy.get("runtime_apply_allowed") is True
@@ -1245,7 +1328,7 @@ def evaluate_refresh_quantity_candidate(
                 and row["paired_count"] >= 0
                 for row in parent_policy["type_policies"].values())
     )
-    if (not (is_initial_baseline or is_legacy_parent)
+    if (not (is_initial_baseline or is_v2_parent or is_legacy_parent)
             or report.get("report_content_sha256") != _digest(report_body)
             or report.get("generation_kind") != "refresh_post_apply_replay"
             or report.get("schema_version") != REPORT_SCHEMA
@@ -1265,11 +1348,24 @@ def evaluate_refresh_quantity_candidate(
         )
         if not following_bar_source_valid(following_bars, report):
             raise ValueError("refresh_following_source_invalid")
+    if timeout_research is not None:
+        from src.engine.scalping.initial_quantity_timeout_research import (
+            timeout_research_valid,
+        )
+        if (not timeout_research_valid(timeout_research)
+                or timeout_research.get("source_date") != report.get("source_date")
+                or timeout_research.get("census") != report.get("census")):
+            raise ValueError("refresh_timeout_source_invalid")
     parent_hash = parent_policy["policy_content_sha256"]
     entry_dates = sorted({row["entry_date"] for row in report.get("trades") or []})
     blockers = []
+    expected_parent_status = (
+        "initial_policy_refresh_loaded"
+        if parent_policy.get("schema_version") == RUNTIME_REFRESH_SCHEMA else
+        "initial_policy_v2_loaded" if is_v2_parent else
+        "initial_policy_loaded")
     policy_bound_trades = sum(
-        row.get("applied_policy_status") == "initial_policy_loaded"
+        row.get("applied_policy_status") == expected_parent_status
         and row.get("applied_policy_file_sha256") == parent_policy_file_sha256
         and row.get("policy_decision_stage") == "entry_execution_sizing_plan"
         and (decision_at := _timestamp(row.get("policy_decision_at"))) is not None
@@ -1305,12 +1401,20 @@ def evaluate_refresh_quantity_candidate(
             "paired_count", 0)
         # The active first baseline intentionally stores no per-type training
         # count. Never turn that absent count into the five-trade refresh floor.
-        minimum_count = (30 if is_initial_baseline else
+        minimum_count = (30 if is_initial_baseline or is_v2_parent else
                          max(5, min(30, math.ceil(seeded_count * 0.2))))
-        best = "parent"
+        incumbent_shape = str((parent_policy.get("type_policies") or {}).get(
+            quantity_type, {}).get("selected_shape") or "parent")
+        best = incumbent_shape
+        best_ev = _number(selection.get("parent_ev_pct"))
         reasons = []
         for shape, metric in (selection.get("candidate_metrics") or {}).items():
-            if shape == "parent" or shape not in _SHAPES:
+            if shape == incumbent_shape or shape not in _SHAPES:
+                continue
+            if shape == "parent":
+                # In the replay, the parent arm is the actual applied trade.
+                # It cannot be treated as an independent counterfactual that
+                # justifies reverting an already active non-parent shape.
                 continue
             if (type(metric.get("paired_count")) is not int
                     or metric["paired_count"] < minimum_count
@@ -1332,10 +1436,10 @@ def evaluate_refresh_quantity_candidate(
                         result["candidate_net_pnl_krw"] - result["parent_net_pnl_krw"])
             if len(daily_delta) < 3 or min(daily_delta.values()) < 0 or daily_delta[max(daily_delta)] <= 0:
                 continue
-            if best == "parent" or metric["conservative_ev_pct"] > (
-                    selection["candidate_metrics"][best]["conservative_ev_pct"]):
+            if best_ev is None or metric["conservative_ev_pct"] > best_ev:
                 best = shape
-        if best == "parent":
+                best_ev = metric["conservative_ev_pct"]
+        if best == incumbent_shape:
             reasons.append("refresh_hurdles_or_evidence_not_met")
         elif following_bars is not None:
             following = (following_bars.get("weighted_by_type") or {}).get(
@@ -1345,14 +1449,25 @@ def evaluate_refresh_quantity_candidate(
             if (type(winner_count) is not int or winner_count <= 0
                     or type(observed) is not int
                     or observed / winner_count < 0.8):
-                best = "parent"
+                best = incumbent_shape
                 reasons.append("winner_following_lower_coverage_below_80pct")
+        selected_wait = _eligible_refresh_total_wait(
+            report, timeout_research, quantity_type, best, minimum_count)
+        parent_row = parent_policy["type_policies"][quantity_type]
+        if (selected_wait is not None
+                and parent_row.get("timeout_mode") == "selected_total_wait_sec"
+                and parent_row.get("selected_total_wait_sec") == selected_wait):
+            selected_wait = None
         type_decisions[quantity_type] = {"selected_shape": best,
+                                         "selected_total_wait_sec": selected_wait,
                                          "minimum_completed_count": minimum_count,
                                          "observed_completed_count": parent_count,
                                          "reason": reasons[0] if reasons else "post_apply_hurdles_passed"}
     state = ("eligible_source_only" if not blockers and any(
-        row["selected_shape"] != "parent" for row in type_decisions.values())
+        row["selected_shape"] != (parent_policy["type_policies"][name].get(
+            "selected_shape") or "parent")
+        or row["selected_total_wait_sec"] is not None
+        for name, row in type_decisions.items())
              else "carry_parent")
     return {"schema_version": "initial_entry_quantity_refresh_evaluation_v1",
             "generation_kind": "refresh", "source_date": report["source_date"],
@@ -1363,6 +1478,101 @@ def evaluate_refresh_quantity_candidate(
                if enforce_trade_lineage else {}),
             "type_decisions": type_decisions,
             "runtime_apply_allowed": False, "runtime_effect": False}
+
+
+def build_refresh_type_policy_candidate(
+    report: dict[str, Any], evaluation: dict[str, Any],
+    parent_policy: dict[str, Any], timeout_research: dict[str, Any],
+) -> dict[str, Any]:
+    """Seal eligible type choices without granting runtime or order authority."""
+    if not all(isinstance(value, dict) for value in (
+            report, evaluation, parent_policy, timeout_research)):
+        raise ValueError("refresh_type_candidate_source_invalid")
+    from src.engine.scalping.initial_quantity_activation import (
+        refresh_parent_policy_valid,
+    )
+    from src.engine.scalping.initial_quantity_timeout_research import (
+        timeout_research_valid,
+    )
+
+    decisions = evaluation.get("type_decisions") or {}
+    timeout_types = timeout_research.get("selections") or {}
+    if (report.get("generation_kind") != "refresh_post_apply_replay"
+            or report.get("cost_model") != COST_MODEL
+            or report.get("report_content_sha256") != _digest({
+                key: value for key, value in report.items()
+                if key != "report_content_sha256"})
+            or not refresh_parent_policy_valid(parent_policy)
+            or not timeout_research_valid(timeout_research)
+            or evaluation.get("state") != "eligible_source_only"
+            or evaluation.get("global_blockers")
+            or evaluation.get("report_content_sha256") !=
+            report["report_content_sha256"]
+            or evaluation.get("parent_policy_content_sha256") !=
+            parent_policy["policy_content_sha256"]
+            or set(decisions) != set(_TYPES)
+            or set(timeout_types) != set(_TYPES)
+            or timeout_research.get("source_date") != report.get("source_date")
+            or timeout_research.get("census") != report.get("census")):
+        raise ValueError("refresh_type_candidate_source_invalid")
+    types = {}
+    for name in _TYPES:
+        shape = decisions[name].get("selected_shape")
+        if (shape not in _SHAPES
+                or (name == "SAFE_UNKNOWN" and shape != "parent")):
+            raise ValueError("refresh_type_candidate_shape_invalid")
+        selected_wait = decisions[name].get("selected_total_wait_sec")
+        if (selected_wait is not None and selected_wait !=
+                _eligible_refresh_total_wait(
+                    report, timeout_research, name, shape,
+                    decisions[name]["minimum_completed_count"])):
+            raise ValueError("refresh_type_candidate_timeout_unsupported")
+        parent_row = parent_policy["type_policies"][name]
+        if selected_wait is not None:
+            timeout_mode = "selected_total_wait_sec"
+        elif shape == parent_row.get("selected_shape", "parent"):
+            timeout_mode = parent_row.get(
+                "timeout_mode", "existing_runtime_profile")
+            selected_wait = parent_row.get("selected_total_wait_sec")
+        else:
+            timeout_mode = "existing_runtime_profile"
+        types[name] = {
+            "ratio_mode": parent_row.get("ratio_mode", "parent_5stage"),
+            "selected_shape": shape,
+            "timeout_mode": timeout_mode,
+            "selected_total_wait_sec": selected_wait,
+        }
+    if all(row == {
+            "ratio_mode": parent_policy["type_policies"][name].get(
+                "ratio_mode", "parent_5stage"),
+            "selected_shape": parent_policy["type_policies"][name].get(
+                "selected_shape", "parent"),
+            "timeout_mode": parent_policy["type_policies"][name].get(
+                "timeout_mode", "existing_runtime_profile"),
+            "selected_total_wait_sec": parent_policy["type_policies"][name].get(
+                "selected_total_wait_sec"),
+        } for name, row in types.items()):
+        raise ValueError("refresh_type_candidate_no_selected_change")
+    body = {
+        "schema_version": "initial_entry_quantity_refresh_candidate_v1",
+        "generation_kind": "refresh_post_apply",
+        "source_date": report["source_date"],
+        "effective_from": (date.fromisoformat(report["source_date"])
+                           + timedelta(days=1)).isoformat(),
+        "cost_model": COST_MODEL,
+        "parent_policy_content_sha256": parent_policy["policy_content_sha256"],
+        "report_content_sha256": report["report_content_sha256"],
+        "evaluation_content_sha256": _digest(evaluation),
+        "timeout_research_content_sha256": timeout_research["report_content_sha256"],
+        "all_completed_initial_trades": report["census"]["all_completed_initial_trades"],
+        "type_policies": types,
+        "runtime_apply_allowed": False,
+        "runtime_effect": False,
+        "broker_order_forbidden": True,
+        "price_authority": False,
+        "quantity_cap_relaxation": False,
+    }
+    return {**body, "policy_content_sha256": _digest(body)}
 
 
 def publish_refresh_quantity_evaluation(
@@ -1379,14 +1589,14 @@ def publish_refresh_quantity_evaluation(
     policy publisher must consume it before any runtime change is possible.
     """
     from src.engine.scalping.initial_quantity_activation import (
-        baseline_policy_valid,
+        refresh_parent_policy_valid,
     )
 
     if (not parent_policy_path.is_absolute()
-            or not baseline_policy_valid(parent_policy)
+            or not refresh_parent_policy_valid(parent_policy)
             or json.loads(parent_policy_path.read_text(encoding="utf-8")) != parent_policy):
         raise ValueError("refresh_parent_file_invalid")
-    if str(report.get("source_date") or "") >= "2026-09-28" and timeout_research is None:
+    if timeout_research is None:
         raise ValueError("refresh_timeout_research_required")
     winners = [row for row in report.get("trades") or []
                if row.get("actual_net_pnl_krw", 0) > 0
@@ -1417,6 +1627,7 @@ def publish_refresh_quantity_evaluation(
         report, parent_policy=parent_policy, pid_receipt=pid_receipt,
         terminal_receipt=terminal_receipt,
         following_bars=following_bars,
+        timeout_research=timeout_research,
         parent_policy_file_sha256=_file_sha256(parent_policy_path))
     day = report["source_date"]
     report_path = output_dir / (
@@ -1426,6 +1637,20 @@ def publish_refresh_quantity_evaluation(
         f"initial_quantity_refresh_evaluation_{day}_{evaluation_hash[:12]}.json")
     report_file_sha = _write_immutable_json(report_path, report)
     evaluation_file_sha = _write_immutable_json(evaluation_path, evaluation)
+    candidate_receipt = {}
+    if evaluation["state"] == "eligible_source_only":
+        candidate = build_refresh_type_policy_candidate(
+            report, evaluation, parent_policy, timeout_research)
+        candidate_path = output_dir / (
+            f"initial_quantity_refresh_candidate_{day}_"
+            f"{candidate['policy_content_sha256'][:12]}.json")
+        candidate_receipt = {
+            "candidate_status": "source_only",
+            "candidate_path": str(candidate_path.resolve()),
+            "candidate_file_sha256": _write_immutable_json(
+                candidate_path, candidate),
+            "candidate_content_sha256": candidate["policy_content_sha256"],
+        }
     following_receipt = {"following_bar_source_status": "no_winners"}
     if following_bars is not None:
         following_hash = following_bars["report_content_sha256"]
@@ -1467,6 +1692,7 @@ def publish_refresh_quantity_evaluation(
         "evaluation_path": str(evaluation_path.resolve()),
         "evaluation_file_sha256": evaluation_file_sha,
         "evaluation_content_sha256": evaluation_hash,
+        **candidate_receipt,
         **following_receipt,
         **timeout_receipt,
         "pid_receipt": pid_receipt,
@@ -1501,10 +1727,9 @@ def refresh_quantity_stage_terminal_valid(receipt: Any) -> bool:
         if receipt.get("applied_policy_lineage_schema") not in (
                 None, "initial_quantity_trade_policy_binding_v1"):
             return False
-        if (str(receipt.get("source_date") or "") >= "2026-09-28"
-                and (receipt.get("applied_policy_lineage_schema") !=
-                     "initial_quantity_trade_policy_binding_v1"
-                     or receipt.get("timeout_research_status") != "source_bound")):
+        if (receipt.get("applied_policy_lineage_schema") !=
+                "initial_quantity_trade_policy_binding_v1"
+                or receipt.get("timeout_research_status") != "source_bound"):
             return False
         paths = {name: Path(receipt[f"{name}_path"])
                  for name in ("parent_policy", "report", "evaluation")}
@@ -1575,8 +1800,27 @@ def refresh_quantity_stage_terminal_valid(receipt: Any) -> bool:
             terminal_receipt=receipt["terminal_receipt"],
             following_bars=(following if receipt["following_bar_source_status"]
                             == "source_bound" else None),
+            timeout_research=timeout_research,
             parent_policy_file_sha256=receipt["parent_policy_file_sha256"],
             enforce_trade_lineage=bool(receipt.get("applied_policy_lineage_schema")))
+        if receipt.get("decision") == "eligible_source_only":
+            if (receipt.get("candidate_status") != "source_only"
+                    or not isinstance(timeout_research, dict)):
+                return False
+            candidate_path = Path(receipt["candidate_path"])
+            if (not candidate_path.is_absolute()
+                    or candidate_path.parent != paths["report"].parent
+                    or _file_sha256(candidate_path) !=
+                    receipt["candidate_file_sha256"]):
+                return False
+            candidate = json.loads(candidate_path.read_text(encoding="utf-8"))
+            if (candidate != build_refresh_type_policy_candidate(
+                    report, evaluation, parent, timeout_research)
+                    or candidate["policy_content_sha256"] !=
+                    receipt["candidate_content_sha256"]):
+                return False
+        elif any(key.startswith("candidate_") for key in receipt):
+            return False
         return bool(
             evaluation == expected
             and receipt["parent_policy_content_sha256"] == parent["policy_content_sha256"]

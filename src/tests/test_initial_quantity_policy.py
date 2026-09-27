@@ -9,12 +9,17 @@ from src.engine.trade_profit import (
     calculate_net_profit_rate, calculate_net_realized_pnl, get_trade_cost_rate,
 )
 from src.engine.scalping.initial_quantity_type import classify_quantity_type
+from src.engine.scalping.entry_split_order_plan import (
+    build_initial_quantity_type_legs,
+)
 from src.engine.scalping.initial_quantity_following_bars import (
     build_following_bar_source, following_bar_source_valid,
 )
 from src.engine.scalping.initial_quantity_activation import (
     ENV_FILE, ENV_SHA, baseline_policy_valid, build_initial_quantity_baseline,
+    build_initial_quantity_runtime_v2, runtime_v2_policy_valid,
     load_pinned_baseline, select_initial_quantity_baseline,
+    publish_initial_quantity_runtime_v2, select_initial_quantity_runtime_v2,
     selected_initial_quantity_env,
 )
 
@@ -26,6 +31,7 @@ from src.engine.scalping.initial_quantity_policy import (
     _type_from_decision_receipt,
     build_initial_quantity_policy,
     build_initial_quantity_replay,
+    build_refresh_type_policy_candidate,
     completed_trade_fact_census,
     evaluate_refresh_quantity_candidate,
     publish_refresh_quantity_evaluation,
@@ -77,6 +83,63 @@ def _facts(rows: list[dict], exit_day: str) -> list[dict]:
     return result
 
 
+@pytest.mark.parametrize("shape,count", [
+    ("two_leg_0_0p3", 2), ("three_leg_0_0p3_0p8", 3),
+    ("two_leg_0_1tick", 2), ("three_leg_0_1_2tick", 3),
+])
+@pytest.mark.parametrize("probe_first", [False, True])
+def test_initial_quantity_type_leg_templates_preserve_total_and_probe(
+        shape, count, probe_first):
+    legs = build_initial_quantity_type_legs(
+        total_qty=7, selected_shape=shape, probe_first=probe_first,
+        route="KRX")
+    assert len(legs) == count
+    assert sum(leg["qty"] for leg in legs) == 7
+    assert all(leg["price"] == 0 for leg in legs)
+    assert all(leg["route"] == "KRX" for leg in legs)
+    if probe_first:
+        assert legs[0]["qty"] == 1
+        assert legs[0]["tag"] == "initial_quantity_probe_0"
+    else:
+        assert legs[0]["qty"] == 4
+
+
+def test_initial_quantity_type_leg_templates_reject_one_share_split():
+    with pytest.raises(ValueError, match="quantity_insufficient"):
+        build_initial_quantity_type_legs(
+            total_qty=1, selected_shape="two_leg_0_1tick",
+            probe_first=True, route="KRX")
+
+
+@pytest.mark.parametrize("shape,leg_index,expected", [
+    ("two_leg_0_1tick", 1, 9990),
+    ("three_leg_0_1_2tick", 2, 9980),
+    ("two_leg_0_0p3", 1, 9970),
+    ("three_leg_0_0p3_0p8", 2, 9920),
+])
+def test_initial_quantity_p1_resolves_selected_successor_price(
+        shape, leg_index, expected):
+    from src.engine.sniper_entry_latency import resolve_scalping_entry_price
+
+    result = resolve_scalping_entry_price(
+        strategy_id="SCALPING", defensive_order_price=10000,
+        target_buy_price=0, best_bid=9990, best_ask=10010,
+        phase="initial_quantity_leg", probe_fill_price=10000,
+        fresh_mark_price=10000, continuation_action="ALLOW_NORMAL",
+        residual_leg_index=leg_index, initial_quantity_shape=shape,
+    )
+    assert result["allowed"] is True
+    assert result["resolved_order_price"] == expected
+    blocked = resolve_scalping_entry_price(
+        strategy_id="SCALPING", defensive_order_price=10000,
+        target_buy_price=0, best_bid=9990, best_ask=10010,
+        phase="initial_quantity_leg", probe_fill_price=10000,
+        continuation_action="BLOCK", residual_leg_index=leg_index,
+        initial_quantity_shape=shape,
+    )
+    assert blocked["allowed"] is False
+
+
 def test_first_parent_policy_can_be_selected_without_successor_uplift(
     tmp_path, monkeypatch,
 ):
@@ -118,6 +181,20 @@ def test_first_parent_policy_can_be_selected_without_successor_uplift(
     assert not baseline_policy_valid(malformed)
     stage_path = stage_dir / f"initial_quantity_stage_{day}.json"
     current = select_initial_quantity_baseline(stage_path, tmp_path / "runtime")
+    v2 = build_initial_quantity_runtime_v2(
+        stage, baseline, current["current_content_sha256"])
+    assert runtime_v2_policy_valid(v2)
+    assert v2["parent_policy_content_sha256"] == baseline["policy_content_sha256"]
+    assert v2["candidate_policy_content_sha256"] == stage[
+        "candidate_policy_content_sha256"]
+    assert all(row["ratio_mode"] == "parent_5stage"
+               for row in v2["type_policies"].values())
+    changed = copy.deepcopy(v2)
+    changed["type_policies"]["SAFE_UNKNOWN"]["selected_shape"] = "two_leg_0_1tick"
+    changed["policy_content_sha256"] = _digest({
+        key: value for key, value in changed.items()
+        if key != "policy_content_sha256"})
+    assert not runtime_v2_policy_valid(changed)
     env = selected_initial_quantity_env(
         tmp_path / "runtime" / "current.json", "2026-09-24")
     assert current["policy_content_sha256"] == baseline["policy_content_sha256"]
@@ -136,6 +213,42 @@ def test_first_parent_policy_can_be_selected_without_successor_uplift(
     monkeypatch.setenv(ENV_SHA, "0" * 64)
     assert resolve_scalping_allocation(
         _context_for_initial_baseline()).ratio == pytest.approx(0.10)
+    v2_dir = tmp_path / "v2_runtime"
+    parent_current = select_initial_quantity_baseline(stage_path, v2_dir)
+    v2_path = publish_initial_quantity_runtime_v2(
+        stage_path, v2_dir / "current.json", v2_dir)
+    assert json.loads(v2_path.read_text()) == build_initial_quantity_runtime_v2(
+        stage, baseline, parent_current["current_content_sha256"])
+    selected_v2 = select_initial_quantity_runtime_v2(
+        stage_path, v2_dir / "current.json")
+    assert selected_v2["parent_current_sha256"] == parent_current[
+        "current_content_sha256"]
+    env_v2 = selected_initial_quantity_env(
+        v2_dir / "current.json", "2026-09-30")
+    with pytest.raises(ValueError, match="current_invalid"):
+        selected_initial_quantity_env(
+            v2_dir / "current.json", "2026-09-23")
+    parent_archive = Path(selected_v2["parent_current_file"])
+    parent_archive_bytes = parent_archive.read_bytes()
+    assert json.loads(parent_archive_bytes) == parent_current
+    parent_archive.write_text("{broken")
+    with pytest.raises(ValueError, match="current_file_invalid"):
+        selected_initial_quantity_env(
+            v2_dir / "current.json", "2026-09-30")
+    parent_archive.write_bytes(parent_archive_bytes)
+    for key, value in env_v2.items():
+        monkeypatch.setenv(key, value)
+    decision_v2 = resolve_scalping_allocation(_context_for_initial_baseline())
+    assert decision_v2.policy_status == "initial_policy_v2_loaded"
+    assert decision_v2.ratio == pytest.approx(0.25)
+    assert decision_v2.event_fields()["quantity_type_policy_row"] == (
+        decision_v2.quantity_type)
+    with pytest.raises(ValueError, match="parent_current_invalid"):
+        publish_initial_quantity_runtime_v2(
+            stage_path, v2_dir / "current.json", v2_dir)
+    with pytest.raises(ValueError, match="parent_current_invalid"):
+        select_initial_quantity_runtime_v2(
+            stage_path, v2_dir / "current.json")
     with pytest.raises(ValueError, match="current_already_selected"):
         another = tmp_path / "other"
         another.mkdir()
@@ -144,6 +257,245 @@ def test_first_parent_policy_can_be_selected_without_successor_uplift(
         # A second selection with changed bytes must be rejected.
         (tmp_path / "runtime" / "current.json").write_text(json.dumps(altered))
         select_initial_quantity_baseline(stage_path, tmp_path / "runtime")
+
+
+def test_changed_initial_candidate_keeps_parent_rollback_and_builds_changed_v2(
+        monkeypatch, tmp_path):
+    from src.engine.scalping.initial_quantity_type import QUANTITY_TYPES
+    from src.engine.scalping import initial_quantity_policy as source
+
+    candidate = {
+        "source_date": "2026-09-23", "effective_from": "2026-09-24",
+        "following_bar_source_content_sha256": "a" * 64,
+        "policy_content_sha256": "b" * 64,
+        "report_content_sha256": "c" * 64,
+        "input_manifest_sha256": "d" * 64,
+        "all_completed_initial_trades": 1,
+        "classifier_version": "initial_quantity_type_v1",
+        "type_policies": {name: {
+            "ratio_mode": "parent_5stage",
+            "selected_shape": ("two_leg_0_1tick" if name == "KRX_PARENT"
+                               else "parent"),
+            "timeout_mode": "existing_runtime_profile",
+            "selected_total_wait_sec": None,
+        } for name in QUANTITY_TYPES},
+    }
+    candidate_path = tmp_path / "candidate.json"
+    candidate_path.write_text(json.dumps(candidate))
+    stage = {
+        "candidate_policy_path": str(candidate_path),
+        "following_bar_source_path": str(tmp_path / "following.json"),
+        "candidate_policy_file_sha256": "e" * 64,
+        "receipt_content_sha256": "f" * 64,
+    }
+    # This unit isolates activation after the producer's strict stage check.
+    monkeypatch.setattr(source, "initial_quantity_stage_terminal_valid",
+                        lambda value: value is stage)
+    baseline = build_initial_quantity_baseline(stage)
+    assert baseline_policy_valid(baseline)
+    assert baseline["type_policies"]["KRX_PARENT"]["selected_shape"] == "parent"
+    v2 = build_initial_quantity_runtime_v2(stage, baseline, "1" * 64)
+    assert runtime_v2_policy_valid(v2)
+    assert v2["type_policies"]["KRX_PARENT"]["selected_shape"] == (
+        "two_leg_0_1tick")
+
+
+def test_refresh_runtime_pointer_binds_parent_and_changed_type(
+        monkeypatch, tmp_path):
+    import hashlib
+    from src.engine.scalping.initial_quantity_type import QUANTITY_TYPES
+    from src.engine.scalping import initial_quantity_policy as source
+    from src.engine.scalping.position_sizing_allocator import (
+        resolve_scalping_allocation,
+    )
+    from src.engine.scalping.initial_quantity_activation import (
+        build_initial_quantity_refresh_runtime_policy,
+        runtime_refresh_policy_valid,
+    )
+
+    initial_candidate = {
+        "source_date": "2026-09-23", "effective_from": "2026-09-24",
+        "following_bar_source_content_sha256": "a" * 64,
+        "policy_content_sha256": "b" * 64,
+        "report_content_sha256": "c" * 64,
+        "input_manifest_sha256": "d" * 64,
+        "all_completed_initial_trades": 1,
+        "classifier_version": "initial_quantity_type_v1",
+        "type_policies": {name: {
+            "ratio_mode": "parent_5stage", "selected_shape": "parent",
+            "timeout_mode": "existing_runtime_profile",
+            "selected_total_wait_sec": None,
+        } for name in QUANTITY_TYPES},
+    }
+    seed_dir = tmp_path / "seed"
+    seed_dir.mkdir()
+    seed_candidate_path = seed_dir / "candidate.json"
+    seed_candidate_path.write_text(json.dumps(initial_candidate))
+    seed_stage = {
+        "candidate_policy_path": str(seed_candidate_path.resolve()),
+        "following_bar_source_path": str((seed_dir / "following.json").resolve()),
+        "candidate_policy_file_sha256": "e" * 64,
+        "receipt_content_sha256": "f" * 64,
+    }
+    seed_stage_path = seed_dir / "stage.json"
+    seed_stage_path.write_text(json.dumps(seed_stage))
+    monkeypatch.setattr(source, "initial_quantity_stage_terminal_valid",
+                        lambda value: value == seed_stage)
+    current_path = tmp_path / "runtime" / "current.json"
+    current = select_initial_quantity_baseline(
+        seed_stage_path, current_path.parent)
+    parent = json.loads(Path(current["policy_file"]).read_text())
+
+    refresh_dir = tmp_path / "refresh"
+    refresh_dir.mkdir()
+    refresh_candidate = {
+        "source_date": "2026-09-25", "effective_from": "2026-09-26",
+        "parent_policy_content_sha256": parent["policy_content_sha256"],
+        "policy_content_sha256": "1" * 64,
+        "type_policies": {name: {
+            "ratio_mode": "parent_5stage",
+            "selected_shape": ("two_leg_0_1tick" if name == "KRX_PARENT"
+                               else "parent"),
+            "timeout_mode": "existing_runtime_profile",
+            "selected_total_wait_sec": None,
+        } for name in QUANTITY_TYPES},
+    }
+    candidate_path = refresh_dir / "candidate.json"
+    candidate_path.write_text(json.dumps(refresh_candidate))
+    report_path = refresh_dir / "report.json"
+    report_path.write_text(json.dumps({
+        "census": {"input_manifest_sha256": "2" * 64}}))
+    refresh_stage = {
+        "schema_version": "initial_entry_quantity_refresh_stage_v1",
+        "decision": "eligible_source_only",
+        "source_date": "2026-09-25",
+        "candidate_path": str(candidate_path.resolve()),
+        "candidate_file_sha256": hashlib.sha256(
+            candidate_path.read_bytes()).hexdigest(),
+        "parent_policy_content_sha256": parent["policy_content_sha256"],
+        "report_path": str(report_path.resolve()),
+        "report_content_sha256": "3" * 64,
+        "evaluation_content_sha256": "4" * 64,
+        "timeout_research_content_sha256": "5" * 64,
+        "following_bar_source_status": "source_bound",
+        "following_bar_source_content_sha256": "6" * 64,
+        "all_completed_initial_trades": 31,
+        "receipt_content_sha256": "7" * 64,
+    }
+    stage_path = refresh_dir / "stage.json"
+    stage_path.write_text(json.dumps(refresh_stage))
+    monkeypatch.setattr(source, "refresh_quantity_stage_terminal_valid",
+                        lambda value: value == refresh_stage)
+    candidate = build_initial_quantity_refresh_runtime_policy(
+        refresh_stage, parent, current["current_content_sha256"])
+    assert runtime_refresh_policy_valid(candidate)
+    assert candidate["type_policies"]["KRX_PARENT"]["selected_shape"] == (
+        "two_leg_0_1tick")
+    selected = select_initial_quantity_runtime_v2(stage_path, current_path)
+    assert selected["parent_current_sha256"] == current[
+        "current_content_sha256"]
+    env = selected_initial_quantity_env(current_path, "2026-09-26")
+    assert env[ENV_FILE] == selected["policy_file"]
+    assert env[ENV_SHA] == selected["policy_file_sha256"]
+    with pytest.raises(ValueError):
+        select_initial_quantity_runtime_v2(stage_path, current_path)
+    second_parent = json.loads(Path(selected["policy_file"]).read_text())
+    second_candidate = copy.deepcopy(refresh_candidate)
+    second_candidate.update(
+        source_date="2026-09-27", effective_from="2026-09-28",
+        parent_policy_content_sha256=second_parent["policy_content_sha256"],
+        policy_content_sha256="8" * 64)
+    second_candidate["type_policies"]["KRX_THIN_HIGH_TICK"][
+        "selected_shape"] = "two_leg_0_1tick"
+    second_candidate["type_policies"]["KRX_PARENT"][
+        "ratio_mode"] = "cap_15pct"
+    second_candidate["type_policies"]["KRX_PARENT"].update(
+        timeout_mode="selected_total_wait_sec", selected_total_wait_sec=90)
+    second_candidate_path = refresh_dir / "candidate_second.json"
+    second_candidate_path.write_text(json.dumps(second_candidate))
+    second_stage = {
+        **refresh_stage, "source_date": "2026-09-27",
+        "candidate_path": str(second_candidate_path.resolve()),
+        "candidate_file_sha256": hashlib.sha256(
+            second_candidate_path.read_bytes()).hexdigest(),
+        "parent_policy_content_sha256": second_parent["policy_content_sha256"],
+        "receipt_content_sha256": "9" * 64,
+    }
+    second_stage_path = refresh_dir / "stage_second.json"
+    second_stage_path.write_text(json.dumps(second_stage))
+    monkeypatch.setattr(source, "refresh_quantity_stage_terminal_valid",
+                        lambda value: value in (refresh_stage, second_stage))
+    selected_second = select_initial_quantity_runtime_v2(
+        second_stage_path, current_path)
+    assert selected_second["parent_current_sha256"] == selected[
+        "current_content_sha256"]
+    second_env = selected_initial_quantity_env(current_path, "2026-09-28")
+    assert second_env[ENV_FILE] == selected_second["policy_file"]
+    for key, value in second_env.items():
+        monkeypatch.setenv(key, value)
+    capped = resolve_scalping_allocation(_context_for_initial_baseline())
+    assert capped.policy_status == "initial_policy_refresh_loaded"
+    assert capped.quantity_type == "KRX_PARENT"
+    assert capped.ratio == pytest.approx(0.15)
+    assert capped.event_fields()["quantity_type_policy_row"] == "KRX_PARENT"
+    from src.engine import sniper_state_handlers as handler
+    class EffectiveDateClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.fromisoformat(
+                "2026-09-28T09:30:00+09:00").astimezone(tz)
+    monkeypatch.setattr(handler, "datetime", EffectiveDateClock)
+    stock = {
+        "id": 101, "scalping_sizing_quantity_type": capped.quantity_type,
+        "scalping_sizing_quantity_type_policy_row": capped.event_fields()[
+            "quantity_type_policy_row"],
+        "scalping_sizing_position_sizing_policy_sha256": second_env[ENV_SHA],
+        "scalping_sizing_reference_time": "2026-09-28T09:29:50+09:00",
+        "effective_venue": "KRX",
+    }
+    orders, _ = handler._initial_quantity_sequential_plan(
+        stock, [{"qty": 5, "price": 10000, "tag": "parent",
+                 "dmst_stex_tp": "KRX"}], 5, {})
+    assert orders[0]["initial_quantity_sequential_continuation"][
+        "total_wait_sec"] == 90
+
+
+def test_refresh_wait_selection_requires_exact_start_and_dated_costed_edge():
+    from src.engine.scalping.initial_quantity_policy import (
+        _eligible_refresh_total_wait,
+    )
+
+    rows = [{"quantity_type": "KRX_PARENT", "actual_net_pnl_krw": 100,
+             "entry_date": f"2026-09-{24 + index // 10:02d}"}
+            for index in range(30)]
+    supported = {
+        "modeled_count": 30, "verified_cross_count": 3,
+        "order_start_source_counts": {
+            "initial_quantity_bundle_order_start_at": 30},
+        "conservative_ev_pct": 0.8,
+        "conservative_net_pnl_krw": 3100,
+        "daily_conservative_delta_net_pnl_krw": {
+            "2026-09-24": 30, "2026-09-25": 30,
+            "2026-09-26": 40},
+    }
+    research = {"horizons_sec": [60, 90], "selections": {
+        "KRX_PARENT": {"parent_costed_ev_pct": 0.5,
+                       "candidate_metrics": {
+                           "two_leg_0_1tick:5:60": {
+                               **supported, "conservative_ev_pct": 1.0,
+                               "order_start_source_counts": {
+                                   "entry_cancel_wait_submission_context_frozen_at":
+                                   30}},
+                           "two_leg_0_1tick:5:90": supported}}}}
+    assert _eligible_refresh_total_wait(
+        {"trades": rows}, research, "KRX_PARENT",
+        "two_leg_0_1tick", 30) == 90
+    research["selections"]["KRX_PARENT"]["candidate_metrics"][
+        "two_leg_0_1tick:5:90"]["daily_conservative_delta_net_pnl_krw"][
+            "2026-09-25"] = -1
+    assert _eligible_refresh_total_wait(
+        {"trades": rows}, research, "KRX_PARENT",
+        "two_leg_0_1tick", 30) is None
 
 
 def _context_for_initial_baseline():
@@ -597,6 +949,31 @@ def test_refresh_uses_only_new_entries_and_requires_post_apply_receipts(
                baseline_evaluation["type_decisions"].values())
     assert "parent_pid_consumption_missing" in baseline_evaluation["global_blockers"]
     assert "parent_trade_policy_binding_missing" in baseline_evaluation["global_blockers"]
+    v2_parent = build_initial_quantity_runtime_v2(
+        stage, active_baseline, "a" * 64)
+    v2_evaluation = evaluate_refresh_quantity_candidate(
+        refresh, parent_policy=v2_parent)
+    assert v2_evaluation["state"] == "carry_parent"
+    assert v2_evaluation["parent_policy_content_sha256"] == v2_parent[
+        "policy_content_sha256"]
+    assert all(row["minimum_completed_count"] == 30 for row in
+               v2_evaluation["type_decisions"].values())
+    changed_v2 = copy.deepcopy(v2_parent)
+    changed_v2["type_policies"]["KRX_PARENT"]["selected_shape"] = (
+        "two_leg_0_1tick")
+    changed_body = {key: value for key, value in changed_v2.items()
+                    if key not in {"policy_version", "policy_content_sha256"}}
+    changed_v2["policy_version"] = (
+        "initial-quantity-runtime-v2-" + _digest(changed_body)[:12])
+    changed_v2["policy_content_sha256"] = _digest({
+        key: value for key, value in changed_v2.items()
+        if key != "policy_content_sha256"})
+    assert runtime_v2_policy_valid(changed_v2)
+    changed_evaluation = evaluate_refresh_quantity_candidate(
+        refresh, parent_policy=changed_v2)
+    assert changed_evaluation["type_decisions"]["KRX_PARENT"][
+        "selected_shape"] == "two_leg_0_1tick"
+    assert changed_evaluation["state"] == "carry_parent"
     broken_baseline = copy.deepcopy(active_baseline)
     broken_baseline["type_policies"]["SAFE_UNKNOWN"]["selected_shape"] = "two_leg_0_1tick"
     with pytest.raises(ValueError, match="refresh_parent_or_replay_contract_invalid"):
@@ -608,10 +985,57 @@ def test_refresh_uses_only_new_entries_and_requires_post_apply_receipts(
         evaluate_refresh_quantity_candidate(None, parent_policy=active_baseline)
     parent_path = (tmp_path / "active_parent.json").resolve()
     _write_immutable_json(parent_path, active_baseline)
+    from src.engine.scalping.initial_quantity_timeout_research import (
+        build_timeout_research,
+    )
+    refresh_timeout = build_timeout_research(
+        new_day, data_dir=tmp_path,
+        fact_rows=refresh["census"]["input_fact_rows"],
+        entry_on_or_after=active_baseline["effective_from"])
+    synthetic_eligible = copy.deepcopy(baseline_evaluation)
+    synthetic_eligible["state"] = "eligible_source_only"
+    synthetic_eligible["global_blockers"] = []
+    synthetic_eligible["type_decisions"]["KRX_PARENT"]["selected_shape"] = (
+        "two_leg_0_1tick")
+    candidate = build_refresh_type_policy_candidate(
+        refresh, synthetic_eligible, active_baseline, refresh_timeout)
+    assert candidate["type_policies"]["KRX_PARENT"]["selected_shape"] == (
+        "two_leg_0_1tick")
+    assert candidate["type_policies"]["KRX_PARENT"]["selected_total_wait_sec"] is None
+    assert candidate["runtime_apply_allowed"] is False
+    assert candidate["broker_order_forbidden"] is True
+    with pytest.raises(ValueError, match="no_selected_change"):
+        build_refresh_type_policy_candidate(
+            refresh, {**synthetic_eligible,
+                      "type_decisions": {name: {"selected_shape": "parent"}
+                                         for name in synthetic_eligible["type_decisions"]}},
+            active_baseline, refresh_timeout)
+    from src.engine.scalping import initial_quantity_policy as policy_module
+    with monkeypatch.context() as patch:
+        patch.setattr(policy_module, "evaluate_refresh_quantity_candidate",
+                      lambda *_args, **_kwargs: synthetic_eligible)
+        eligible_stage = publish_refresh_quantity_evaluation(
+            refresh, parent_policy=active_baseline,
+            parent_policy_path=parent_path,
+            output_dir=tmp_path / "eligible_source_only_stage",
+            timeout_research=refresh_timeout)
+        assert refresh_quantity_stage_terminal_valid(eligible_stage)
+        from src.engine.scalping.initial_quantity_activation import (
+            build_initial_quantity_refresh_runtime_policy,
+            runtime_refresh_policy_valid,
+        )
+        runtime_candidate = build_initial_quantity_refresh_runtime_policy(
+            eligible_stage, active_baseline, "a" * 64)
+        assert runtime_refresh_policy_valid(runtime_candidate)
+        assert runtime_candidate["type_policies"]["KRX_PARENT"][
+            "selected_shape"] == "two_leg_0_1tick"
+        Path(eligible_stage["candidate_path"]).write_text("{}")
+        assert not refresh_quantity_stage_terminal_valid(eligible_stage)
     refresh_stage = publish_refresh_quantity_evaluation(
         refresh, parent_policy=active_baseline,
         parent_policy_path=parent_path,
-        output_dir=tmp_path / "refresh_stage")
+        output_dir=tmp_path / "refresh_stage",
+        timeout_research=refresh_timeout)
     assert refresh_stage["decision"] == "carry_parent"
     assert refresh_quantity_stage_terminal_valid(refresh_stage)
     selected_dir = tmp_path / "selected_refresh_parent"
@@ -656,13 +1080,14 @@ def test_refresh_uses_only_new_entries_and_requires_post_apply_receipts(
     empty_stage = publish_refresh_quantity_evaluation(
         empty, parent_policy=active_baseline,
         parent_policy_path=parent_path,
-        output_dir=tmp_path / "empty_refresh_stage")
+        output_dir=tmp_path / "empty_refresh_stage",
+        timeout_research=build_timeout_research(
+            new_day, data_dir=tmp_path,
+            fact_rows=empty["census"]["input_fact_rows"],
+            entry_on_or_after=active_baseline["effective_from"]))
     assert empty_stage["all_completed_initial_trades"] == 0
     assert empty_stage["decision"] == "carry_parent"
     assert refresh_quantity_stage_terminal_valid(empty_stage)
-    from src.engine.scalping.initial_quantity_timeout_research import (
-        build_timeout_research,
-    )
     future_day = "2026-09-28"
     future_empty = build_initial_quantity_replay(
         future_day, data_dir=tmp_path, fact_rows=before,
@@ -700,11 +1125,16 @@ def test_refresh_uses_only_new_entries_and_requires_post_apply_receipts(
     missing_following = evaluate_refresh_quantity_candidate(
         winning_refresh, parent_policy=active_baseline)
     assert "winner_following_source_missing" in missing_following["global_blockers"]
+    winning_timeout = build_timeout_research(
+        new_day, data_dir=tmp_path,
+        fact_rows=winning_refresh["census"]["input_fact_rows"],
+        entry_on_or_after=active_baseline["effective_from"])
     with pytest.raises(ValueError, match="refresh_winner_following_source_required"):
         publish_refresh_quantity_evaluation(
             winning_refresh, parent_policy=active_baseline,
             parent_policy_path=parent_path,
-            output_dir=tmp_path / "winning_refresh_stage")
+            output_dir=tmp_path / "winning_refresh_stage",
+            timeout_research=winning_timeout)
     winning_following = build_following_bar_source(
         winning_refresh, fetch=lambda code, base_dt, limit: (
             [{"source_timestamp": "20260923093200", "저가": 99}],
@@ -716,6 +1146,7 @@ def test_refresh_uses_only_new_entries_and_requires_post_apply_receipts(
         winning_refresh, parent_policy=active_baseline,
         parent_policy_path=parent_path,
         following_bars=winning_following,
+        timeout_research=winning_timeout,
         output_dir=tmp_path / "winning_refresh_stage")
     assert refresh_quantity_stage_terminal_valid(winning_stage)
     from src.utils import kiwoom_utils

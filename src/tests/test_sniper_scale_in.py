@@ -549,6 +549,8 @@ def test_entry_sizing_rejects_non_execution_venue_status_tokens(value):
 
 
 def test_entry_sizing_persists_venue_resolution_with_allocator_event_fields():
+    from dataclasses import replace
+
     decision = state_handlers.resolve_scalping_allocation(
         state_handlers.ScalpingSizingContext(
             allocation_stage="rising_missed_scout_initial",
@@ -559,6 +561,9 @@ def test_entry_sizing_persists_venue_resolution_with_allocator_event_fields():
             price_krw=10_000,
         )
     )
+    decision = replace(
+        decision, policy_status="initial_policy_loaded",
+        policy_version="initial-test", policy_sha256="a" * 64)
     stock = {"strategy": "SCALPING"}
 
     fields = state_handlers._store_scalping_sizing_decision(
@@ -583,6 +588,8 @@ def test_entry_sizing_persists_venue_resolution_with_allocator_event_fields():
     assert sizing_fields["sizing_tier_reason_at_allocation"] == fields["tier_reason"]
     assert fields["quantity_type"] == "KRX_PARENT"
     assert sizing_fields["quantity_type"] == "KRX_PARENT"
+    assert sizing_fields["position_sizing_policy_status"] == "initial_policy_loaded"
+    assert sizing_fields["position_sizing_policy_sha256"] == "a" * 64
 
 
 def _fresh_holding_score_fields(score=30, *, now_ts=None):
@@ -41235,6 +41242,397 @@ def test_retired_rising_missed_scout_intent_cannot_submit(intent, monkeypatch):
         pytest.fail("retired intent reached broker or budget")
     monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", forbidden)
     assert state_handlers._submit_watching_triggered_entry({}, "005930", {}, None, intent) is False
+
+
+def test_initial_bundle_restart_recovery_refreshes_without_buy_or_cancel(monkeypatch, tmp_path):
+    from src.engine.scalping.initial_quantity_bundle_state import (
+        bundle_state_path, create_indexed_bundle, new_bundle_state, next_bundle_state,
+        save_bundle_state_cas,
+    )
+    from src.engine.scalping.initial_quantity_timeout import build_bundle_timeout_schedule
+
+    schedule = build_bundle_timeout_schedule(
+        quantity_type="KRX_PARENT", policy_sha256="a" * 64,
+        decision_at="2026-09-28T09:29:50+09:00",
+        order_start_at="2026-09-28T09:30:00+09:00",
+        total_wait_sec=60, leg_count=1, cancel_confirm_reserve_sec=5,
+    )
+    initial = new_bundle_state(
+        attempt_id="recovery-attempt", code="005930", target_id="101",
+        schedule=schedule, requested_qty=1,
+        planned_legs=[{"leg_index": 0, "qty": 1, "price": 10000,
+                       "route": "KRX", "tag": "probe"}],
+    )
+    root = tmp_path / "runtime" / "initial_quantity" / "bundles"
+    path = bundle_state_path(root, initial["attempt_id"])
+    assert create_indexed_bundle(root, initial) == path
+    intent = next_bundle_state(initial, 0, {
+        "state": "SUBMIT_INTENT",
+        "submit_intent_at_epoch": schedule["order_start_at_epoch"],
+    })
+    save_bundle_state_cas(path, intent,
+                          expected_parent_sha256=initial["bundle_content_sha256"])
+    monkeypatch.setattr(state_handlers, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(state_handlers, "_request_broker_snapshot_refresh",
+                        lambda *args, **kwargs: refreshes.append((args, kwargs)))
+    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda *args, **kwargs: None)
+    monkeypatch.setattr(state_handlers, "_cancel_pending_entry_orders",
+                        lambda *args, **kwargs: pytest.fail("unexpected cancel"))
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "send_buy_order",
+                        lambda **kwargs: pytest.fail("duplicate BUY"))
+    refreshes = []
+    monkeypatch.setattr(state_handlers, "_manual_control_exclusion_blocked",
+                        lambda *args, **kwargs: False)
+    lost = {"id": 101, "strategy": "SCALPING", "status": "BUY_ORDERED"}
+    state_handlers.handle_buy_ordered_state(lost, "005930")
+    assert lost["initial_quantity_bundle"] == intent
+    assert lost["initial_quantity_bundle_indexed"] is True
+    assert len(refreshes) == 1
+    refreshes.clear()
+    stock = {"id": 101, "initial_quantity_bundle": initial}
+    state_handlers._reconcile_pending_entry_orders(stock, "000660", "SCALPING")
+    state_handlers._reconcile_pending_entry_orders(stock, "005930", "SWING")
+    assert stock["initial_quantity_bundle"] == initial
+    assert refreshes == []
+    state_handlers._reconcile_pending_entry_orders(stock, "005930", "SCALPING")
+    assert stock["initial_quantity_bundle"] == intent
+    assert len(refreshes) == 1
+
+
+def test_initial_bundle_missing_journal_blocks_cancel(monkeypatch, tmp_path):
+    from src.engine.scalping.initial_quantity_bundle_state import new_bundle_state
+    from src.engine.scalping.initial_quantity_timeout import build_bundle_timeout_schedule
+
+    schedule = build_bundle_timeout_schedule(
+        quantity_type="KRX_PARENT", policy_sha256="a" * 64,
+        decision_at="2026-09-28T09:29:50+09:00",
+        order_start_at="2026-09-28T09:30:00+09:00",
+        total_wait_sec=60, leg_count=1, cancel_confirm_reserve_sec=5,
+    )
+    initial = new_bundle_state(
+        attempt_id="lost-attempt", code="005930", target_id="101",
+        schedule=schedule, requested_qty=1,
+        planned_legs=[{"leg_index": 0, "qty": 1, "price": 10000,
+                       "route": "KRX", "tag": "probe"}],
+    )
+    monkeypatch.setattr(state_handlers, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(state_handlers, "_request_broker_snapshot_refresh",
+                        lambda *args, **kwargs: None)
+    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda *args, **kwargs: None)
+    monkeypatch.setattr(state_handlers, "_cancel_pending_entry_orders",
+                        lambda *args, **kwargs: pytest.fail("unexpected cancel"))
+    stock = {"id": 101, "initial_quantity_bundle": initial}
+    state_handlers._reconcile_pending_entry_orders(stock, "005930", "SCALPING")
+    assert stock["initial_quantity_bundle"] == initial
+
+
+@pytest.mark.parametrize("memory_present", [False, True])
+def test_initial_bundle_corrupt_target_index_requests_snapshot_without_buy(
+        monkeypatch, tmp_path, memory_present):
+    from src.engine.scalping.initial_quantity_bundle_state import (
+        bundle_target_index_path, create_indexed_bundle, new_bundle_state,
+    )
+    from src.engine.scalping.initial_quantity_timeout import build_bundle_timeout_schedule
+
+    schedule = build_bundle_timeout_schedule(
+        quantity_type="KRX_PARENT", policy_sha256="a" * 64,
+        decision_at="2026-09-28T09:29:50+09:00",
+        order_start_at="2026-09-28T09:30:00+09:00",
+        total_wait_sec=60, leg_count=1, cancel_confirm_reserve_sec=5,
+    )
+    initial = new_bundle_state(
+        attempt_id="corrupt-index-attempt", code="005930", target_id="101",
+        schedule=schedule, requested_qty=1,
+        planned_legs=[{"leg_index": 0, "qty": 1, "price": 10000,
+                       "route": "KRX", "tag": "probe"}],
+    )
+    root = tmp_path / "runtime" / "initial_quantity" / "bundles"
+    create_indexed_bundle(root, initial)
+    bundle_target_index_path(root, "005930", "101").write_text("{broken")
+    monkeypatch.setattr(state_handlers, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(state_handlers, "_manual_control_exclusion_blocked",
+                        lambda *args, **kwargs: False)
+    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda *args, **kwargs: None)
+    monkeypatch.setattr(state_handlers, "_cancel_pending_entry_orders",
+                        lambda *args, **kwargs: pytest.fail("unexpected cancel"))
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "send_buy_order",
+                        lambda **kwargs: pytest.fail("duplicate BUY"))
+    refreshes = []
+    monkeypatch.setattr(state_handlers, "_request_broker_snapshot_refresh",
+                        lambda *args, **kwargs: refreshes.append((args, kwargs)))
+    stock = {"id": 101, "strategy": "SCALPING", "status": "BUY_ORDERED"}
+    if memory_present:
+        stock.update(initial_quantity_bundle=initial,
+                     initial_quantity_bundle_indexed=True)
+        state_handlers._reconcile_pending_entry_orders(stock, "005930", "SCALPING")
+        state_handlers._reconcile_pending_entry_orders(stock, "005930", "SCALPING")
+    else:
+        state_handlers.handle_buy_ordered_state(stock, "005930")
+        state_handlers.handle_buy_ordered_state(stock, "005930")
+    assert len(refreshes) == 1
+    assert stock["status"] == "BUY_ORDERED"
+    assert stock.get("initial_quantity_bundle") == (initial if memory_present else None)
+
+
+def test_initial_bundle_transition_rejects_foreign_local_order(monkeypatch, tmp_path):
+    from src.engine.scalping.initial_quantity_bundle_state import (
+        bundle_state_path, new_bundle_state, next_bundle_state,
+        read_bundle_state, save_bundle_state_cas,
+    )
+    from src.engine.scalping.initial_quantity_timeout import build_bundle_timeout_schedule
+
+    schedule = build_bundle_timeout_schedule(
+        quantity_type="KRX_PARENT", policy_sha256="a" * 64,
+        decision_at="2026-09-28T09:29:50+09:00",
+        order_start_at="2026-09-28T09:30:00+09:00",
+        total_wait_sec=60, leg_count=1, cancel_confirm_reserve_sec=5,
+    )
+    initial = new_bundle_state(
+        attempt_id="foreign-order-attempt", code="005930", target_id="101",
+        schedule=schedule, requested_qty=1,
+        planned_legs=[{"leg_index": 0, "qty": 1, "price": 10000,
+                       "route": "KRX", "tag": "probe"}],
+    )
+    path = bundle_state_path(tmp_path / "runtime" / "initial_quantity" / "bundles",
+                             initial["attempt_id"])
+    save_bundle_state_cas(path, initial, expected_parent_sha256=None)
+    start = schedule["order_start_at_epoch"]
+    intent = next_bundle_state(initial, 0, {
+        "state": "SUBMIT_INTENT", "submit_intent_at_epoch": start,
+    })
+    save_bundle_state_cas(path, intent,
+                          expected_parent_sha256=initial["bundle_content_sha256"])
+    opened = next_bundle_state(intent, 0, {
+        "state": "OPEN", "submit_intent_at_epoch": start,
+        "broker_order_no": "0000123",
+    })
+    save_bundle_state_cas(path, opened,
+                          expected_parent_sha256=intent["bundle_content_sha256"])
+    monkeypatch.setattr(state_handlers, "DATA_DIR", tmp_path)
+    stock = {"id": 101, "initial_quantity_bundle": opened}
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "send_cancel_order",
+                        lambda **kwargs: pytest.fail("foreign symbol cancel"))
+    assert state_handlers._cancel_pending_entry_orders(stock, "000660") == "failed"
+    foreign = {"initial_quantity_leg_index": 0, "ord_no": "0000999",
+               "entry_submit_attempt_id": opened["attempt_id"], "qty": 1,
+               "price": 10000, "tag": "probe", "dmst_stex_tp": "KRX"}
+    next_state = {"state": "CANCEL_REQUESTED", "broker_order_no": "0000999",
+                  "submit_intent_at_epoch": start}
+    accepted, reason = state_handlers._initial_quantity_persist_leg_transition(
+        stock, foreign, next_state,
+    )
+    assert not accepted and reason == "initial_quantity_local_order_plan_mismatch"
+    assert read_bundle_state(path) == opened
+
+
+def test_initial_bundle_full_local_fill_waits_for_terminal_instead_of_cancel(
+        monkeypatch, tmp_path):
+    from datetime import datetime as local_datetime
+    from zoneinfo import ZoneInfo
+    from src.engine.scalping.initial_quantity_bundle_state import (
+        bundle_state_path, new_bundle_state, next_bundle_state,
+        save_bundle_state_cas,
+    )
+    from src.engine.scalping.initial_quantity_timeout import build_bundle_timeout_schedule
+
+    now = time.time()
+    kst = ZoneInfo("Asia/Seoul")
+    start_at = local_datetime.fromtimestamp(now - 70, kst).isoformat()
+    decision_at = local_datetime.fromtimestamp(now - 80, kst).isoformat()
+    schedule = build_bundle_timeout_schedule(
+        quantity_type="KRX_PARENT", policy_sha256="a" * 64,
+        decision_at=decision_at, order_start_at=start_at,
+        total_wait_sec=60, leg_count=1, cancel_confirm_reserve_sec=5,
+    )
+    initial = new_bundle_state(
+        attempt_id="full-fill-pending-proof", code="005930", target_id="101",
+        schedule=schedule, requested_qty=1,
+        planned_legs=[{"leg_index": 0, "qty": 1, "price": 10000,
+                       "route": "KRX", "tag": "probe"}],
+    )
+    path = bundle_state_path(tmp_path / "runtime" / "initial_quantity" / "bundles",
+                             initial["attempt_id"])
+    save_bundle_state_cas(path, initial, expected_parent_sha256=None)
+    start = schedule["order_start_at_epoch"]
+    intent = next_bundle_state(initial, 0, {
+        "state": "SUBMIT_INTENT", "submit_intent_at_epoch": start,
+    })
+    save_bundle_state_cas(path, intent,
+                          expected_parent_sha256=initial["bundle_content_sha256"])
+    opened = next_bundle_state(intent, 0, {
+        "state": "OPEN", "submit_intent_at_epoch": start,
+        "broker_order_no": "0000123",
+    })
+    save_bundle_state_cas(path, opened,
+                          expected_parent_sha256=intent["bundle_content_sha256"])
+    monkeypatch.setattr(state_handlers, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(state_handlers, "_initial_quantity_buy_leg_terminal_state",
+                        lambda *args, **kwargs: (None, "broker_terminal_pending"))
+    monkeypatch.setattr(state_handlers, "_request_broker_snapshot_refresh",
+                        lambda *args, **kwargs: refreshes.append((args, kwargs)))
+    monkeypatch.setattr(state_handlers, "_cancel_pending_entry_orders",
+                        lambda *args, **kwargs: pytest.fail("filled order cancelled"))
+    refreshes = []
+    stock = {"id": 101, "initial_quantity_bundle": opened,
+             "pending_entry_orders": [{"initial_quantity_leg_index": 0,
+                                        "ord_no": "0000123", "filled_qty": 1,
+                                        "status": "OPEN"}]}
+    state_handlers._reconcile_pending_entry_orders(stock, "005930", "SCALPING")
+    assert stock["initial_quantity_bundle"] == opened
+    assert len(refreshes) == 1
+
+
+def test_initial_dynamic_price_journal_rejects_local_order_price_drift(
+        monkeypatch, tmp_path):
+    from src.engine.scalping.initial_quantity_bundle_state import (
+        SCHEMA_DYNAMIC_PRICE, bundle_state_path, new_bundle_state,
+        next_bundle_state, read_bundle_state, save_bundle_state_cas,
+    )
+    from src.engine.scalping.initial_quantity_timeout import build_bundle_timeout_schedule
+
+    schedule = build_bundle_timeout_schedule(
+        quantity_type="KRX_PARENT", policy_sha256="a" * 64,
+        decision_at="2026-09-28T09:29:50+09:00",
+        order_start_at="2026-09-28T09:30:00+09:00",
+        total_wait_sec=60, leg_count=1, cancel_confirm_reserve_sec=5,
+    )
+    initial = new_bundle_state(
+        attempt_id="dynamic-runtime-price", code="005930", target_id="101",
+        schedule=schedule, requested_qty=1, schema=SCHEMA_DYNAMIC_PRICE,
+        planned_legs=[{"leg_index": 0, "qty": 1, "price": 0,
+                       "route": "KRX", "tag": "probe"}],
+    )
+    path = bundle_state_path(
+        tmp_path / "runtime" / "initial_quantity" / "bundles",
+        initial["attempt_id"],
+    )
+    save_bundle_state_cas(path, initial, expected_parent_sha256=None)
+    start = schedule["order_start_at_epoch"]
+    intent = next_bundle_state(initial, 0, {
+        "state": "SUBMIT_INTENT", "submit_intent_at_epoch": start,
+        "submit_price": 10000, "owner_client_intent_id": "test:dynamic-runtime-price:leg0"})
+    save_bundle_state_cas(path, intent,
+                          expected_parent_sha256=initial["bundle_content_sha256"])
+    opened = next_bundle_state(intent, 0, {
+        "state": "OPEN", "submit_intent_at_epoch": start,
+        "submit_price": 10000, "owner_client_intent_id": "test:dynamic-runtime-price:leg0",
+        "broker_order_no": "0000123"})
+    save_bundle_state_cas(path, opened,
+                          expected_parent_sha256=intent["bundle_content_sha256"])
+    monkeypatch.setattr(state_handlers, "DATA_DIR", tmp_path)
+    stock = {"id": 101, "initial_quantity_bundle": opened}
+    order = {"initial_quantity_leg_index": 0,
+             "entry_submit_attempt_id": initial["attempt_id"],
+             "ord_no": "0000123", "qty": 1, "price": 10010,
+             "tag": "probe", "dmst_stex_tp": "KRX",
+             "dmst_stex_tp_source": "request"}
+    next_leg_state = {"state": "PARTIAL", "submit_intent_at_epoch": start,
+                      "submit_price": 10000,
+                      "owner_client_intent_id": "test:dynamic-runtime-price:leg0",
+                      "broker_order_no": "0000123"}
+    accepted, reason = state_handlers._initial_quantity_persist_leg_transition(
+        stock, order, next_leg_state)
+    assert not accepted and reason == "initial_quantity_local_order_plan_mismatch"
+    assert read_bundle_state(path) == opened
+    order["price"] = 10000
+    accepted, reason = state_handlers._initial_quantity_persist_leg_transition(
+        stock, order, next_leg_state)
+    assert accepted, reason
+    assert reason == "initial_quantity_bundle_transition_persisted"
+    assert read_bundle_state(path) == stock["initial_quantity_bundle"]
+
+
+def test_initial_bundle_terminal_retires_index_and_hands_off_holding(
+        monkeypatch, tmp_path):
+    from datetime import datetime as local_datetime
+    from zoneinfo import ZoneInfo
+    from src.engine.scalping.initial_quantity_bundle_state import (
+        create_indexed_bundle, new_bundle_state, next_bundle_state,
+        read_bundle_for_target, save_bundle_state_cas,
+    )
+    from src.engine.scalping.initial_quantity_timeout import build_bundle_timeout_schedule
+
+    now = time.time()
+    kst = ZoneInfo("Asia/Seoul")
+    schedule = build_bundle_timeout_schedule(
+        quantity_type="KRX_PARENT", policy_sha256="a" * 64,
+        decision_at=local_datetime.fromtimestamp(now - 80, kst).isoformat(),
+        order_start_at=local_datetime.fromtimestamp(now - 70, kst).isoformat(),
+        total_wait_sec=60, leg_count=1, cancel_confirm_reserve_sec=5,
+    )
+    initial = new_bundle_state(
+        attempt_id="terminal-index-attempt", code="005930", target_id="101",
+        schedule=schedule, requested_qty=1,
+        planned_legs=[{"leg_index": 0, "qty": 1, "price": 10000,
+                       "route": "KRX", "tag": "probe"}],
+    )
+    root = tmp_path / "runtime" / "initial_quantity" / "bundles"
+    path = create_indexed_bundle(root, initial)
+    start = schedule["order_start_at_epoch"]
+    intent = next_bundle_state(initial, 0, {
+        "state": "SUBMIT_INTENT", "submit_intent_at_epoch": start,
+    })
+    save_bundle_state_cas(path, intent,
+                          expected_parent_sha256=initial["bundle_content_sha256"])
+    opened = next_bundle_state(intent, 0, {
+        "state": "OPEN", "submit_intent_at_epoch": start,
+        "broker_order_no": "0000123",
+    })
+    save_bundle_state_cas(path, opened,
+                          expected_parent_sha256=intent["bundle_content_sha256"])
+    terminal = next_bundle_state(opened, 0, {
+        "state": "TERMINAL_FILLED", "submit_intent_at_epoch": start,
+        "broker_order_no": "0000123", "terminal_confirmed": True,
+        "terminal_confirmed_at_epoch": start + 10,
+        "broker_terminal_receipt_id": "broker-proof",
+        "owner_registry_receipt_id": "owner-proof",
+        "account_position_receipt_id": "account-proof",
+        "broker_unfilled_qty": 0, "owner_registry_terminal": True,
+        "account_position_reconciled": True, "ordered_qty": 1,
+        "filled_qty": 1, "cancelled_qty": 0,
+    })
+    save_bundle_state_cas(path, terminal,
+                          expected_parent_sha256=opened["bundle_content_sha256"])
+    monkeypatch.setattr(state_handlers, "DATA_DIR", tmp_path)
+    stock = {"id": 101, "strategy": "SCALPING", "status": "BUY_ORDERED",
+             "buy_qty": 1, "entry_filled_qty": 1,
+             "initial_quantity_bundle": terminal,
+             "initial_quantity_bundle_indexed": True,
+             "pending_entry_orders": [{"ord_no": "0000123", "status": "FILLED",
+                                        "filled_qty": 1, "qty": 1}]}
+    state_handlers._reconcile_pending_entry_orders(stock, "005930", "SCALPING")
+    assert stock["status"] == "HOLDING"
+    assert "initial_quantity_bundle" not in stock
+    assert stock["initial_quantity_last_terminal_bundle"] == terminal
+    assert read_bundle_for_target(root, "005930", "101") == (
+        terminal, "target_bundle_terminal")
+    monkeypatch.setattr(state_handlers, "_manual_control_exclusion_blocked",
+                        lambda *args, **kwargs: False)
+    monkeypatch.setattr(state_handlers, "_request_broker_snapshot_refresh",
+                        lambda *args, **kwargs: None)
+    restored = {"id": 101, "strategy": "SCALPING", "status": "BUY_ORDERED",
+                "buy_qty": 1, "entry_filled_qty": 1,
+                "pending_entry_orders": [{"ord_no": "0000123", "status": "FILLED",
+                                           "filled_qty": 1, "qty": 1}]}
+    state_handlers.handle_buy_ordered_state(restored, "005930")
+    assert restored["initial_quantity_bundle"] == terminal
+    state_handlers._reconcile_pending_entry_orders(restored, "005930", "SCALPING")
+    assert restored["status"] == "HOLDING"
+    assert "initial_quantity_bundle" not in restored
+    from src.engine.scalping.initial_quantity_bundle_state import bundle_target_index_path
+    bundle_target_index_path(root, "005930", "101").unlink()
+    refreshes = []
+    monkeypatch.setattr(state_handlers, "_request_broker_snapshot_refresh",
+                        lambda *args, **kwargs: refreshes.append((args, kwargs)))
+    missing_index = {"id": 101, "strategy": "SCALPING",
+                     "status": "BUY_ORDERED", "buy_qty": 1,
+                     "entry_filled_qty": 1, "initial_quantity_bundle": terminal,
+                     "initial_quantity_bundle_indexed": True}
+    state_handlers._reconcile_pending_entry_orders(
+        missing_index, "005930", "SCALPING")
+    assert missing_index["status"] == "BUY_ORDERED"
+    assert missing_index["initial_quantity_bundle"] == terminal
+    assert len(refreshes) == 1
 
 
 def test_retired_rising_missed_restored_watching_intent_cannot_submit(monkeypatch):

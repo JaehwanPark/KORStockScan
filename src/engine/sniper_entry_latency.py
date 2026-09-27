@@ -824,6 +824,7 @@ def resolve_scalping_entry_price(
     fresh_mark_price: int = 0,
     continuation_action: str = "ALLOW_NORMAL",
     residual_leg_index: int = 0,
+    initial_quantity_shape: str | None = None,
 ) -> dict[str, Any]:
     """Resolve all scalping entry prices through the P1 authority.
 
@@ -884,7 +885,7 @@ def resolve_scalping_entry_price(
             or 80
         ),
     }
-    if normalized_phase not in {"post_probe", "leg_reprice"}:
+    if normalized_phase not in {"post_probe", "leg_reprice", "initial_quantity_leg"}:
         result["reason"] = "unsupported_resolver_phase"
         result["price_resolution_reason"] = result["reason"]
         return result
@@ -906,6 +907,45 @@ def resolve_scalping_entry_price(
         return result
     anchor = min(max(fill_price, bid), ask)
     leg_index = max(0, int(residual_leg_index or 0))
+
+    if normalized_phase == "initial_quantity_leg":
+        from src.trading.order.split_execution_math import pct_price_offset
+
+        shape_offsets = {
+            "two_leg_0_0p3": ("percent", (0.0, 0.3)),
+            "three_leg_0_0p3_0p8": ("percent", (0.0, 0.3, 0.8)),
+            "two_leg_0_1tick": ("tick", (0, 1)),
+            "three_leg_0_1_2tick": ("tick", (0, 1, 2)),
+        }
+        shape = shape_offsets.get(str(initial_quantity_shape or ""))
+        if shape is None or not 1 <= leg_index < len(shape[1]):
+            result["reason"] = "initial_quantity_shape_or_leg_invalid"
+            result["price_resolution_reason"] = result["reason"]
+            return result
+        offset = shape[1][leg_index]
+        resolved_price = (
+            move_price_by_ticks(anchor, -int(offset))
+            if shape[0] == "tick"
+            else pct_price_offset(anchor, float(offset))
+        )
+        if resolved_price <= 0 or resolved_price >= anchor:
+            result["reason"] = "initial_quantity_offset_collapsed"
+            result["price_resolution_reason"] = result["reason"]
+            return result
+        result.update({
+            "allowed": True,
+            "anchor_price": anchor,
+            "min_price": resolved_price,
+            "max_price": anchor,
+            "offset_profile": str(initial_quantity_shape),
+            "resolved_order_price": resolved_price,
+            "order_price": resolved_price,
+            "reason": "initial_quantity_shape_p1",
+            "price_resolution_reason": "initial_quantity_shape_p1",
+            "fresh_mark_price": _safe_price_int(fresh_mark_price),
+            "residual_leg_index": leg_index,
+        })
+        return result
 
     if action == "ALLOW_NARROW":
         profile = "narrow"

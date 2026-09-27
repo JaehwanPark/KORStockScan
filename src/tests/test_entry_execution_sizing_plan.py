@@ -45,6 +45,38 @@ def _priced(order):
     }
 
 
+def test_initial_quantity_sequential_continuation_keeps_deferred_prices_unbound():
+    continuation = {
+        "requested_qty": 5, "selected_shape": "three_leg_0_1_2tick",
+        "probe_first": True, "route": "KRX", "residual_quantities": [2, 2],
+    }
+    orders, fields = compose_entry_execution_sizing_plan(
+        [_priced({"qty": 1, "price": 10000,
+                  "initial_quantity_sequential_continuation": continuation})],
+        expected_total_qty=5, action_receipt=_receipt(),
+        quantity_policy_version="initial-v2", split_policy_version="initial-v2",
+    )
+    assert fields["entry_execution_sizing_valid"] is True
+    assert fields["entry_execution_sizing_plan"]["total_qty"] == 5
+    assert [leg["execution_phase"] for leg in fields[
+        "entry_execution_sizing_plan"]["legs"]] == [
+            "immediate", "after_verified_previous_leg_terminal",
+            "after_verified_previous_leg_terminal"]
+    assert orders[0]["qty"] == 1
+    assert all(candidate["numeric_price"] is None for candidate in fields[
+        "entry_execution_sizing_plan"]["price_candidates"][1:])
+
+    bad = dict(continuation, residual_quantities=[1, 3])
+    _, blocked = compose_entry_execution_sizing_plan(
+        [_priced({"qty": 1, "price": 10000,
+                  "initial_quantity_sequential_continuation": bad})],
+        expected_total_qty=5, action_receipt=_receipt(),
+        quantity_policy_version="initial-v2", split_policy_version="initial-v2",
+    )
+    assert "sequential_leg_quantity_mismatch" in blocked[
+        "entry_execution_sizing_blockers"]
+
+
 def _write_policy(tmp_path, name, payload):
     path = tmp_path / name
     path.write_text(json.dumps(payload), encoding="utf-8")

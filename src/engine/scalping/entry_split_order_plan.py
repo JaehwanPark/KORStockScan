@@ -6952,6 +6952,51 @@ def _build_probe_continuation(
     }
 
 
+def build_initial_quantity_type_legs(
+    *, total_qty: int, selected_shape: str, probe_first: bool,
+    route: str,
+) -> list[dict[str, Any]]:
+    """Allocate only quantities for a selected sequential initial shape.
+
+    Numeric prices are deliberately absent until P1 resolves each leg at its
+    actual submission time. The one-share probe, when used, occupies slot zero.
+    """
+    shape_legs = {
+        "two_leg_0_0p3": 2,
+        "three_leg_0_0p3_0p8": 3,
+        "two_leg_0_1tick": 2,
+        "three_leg_0_1_2tick": 3,
+    }
+    if (type(total_qty) is not int or total_qty <= 0
+            or selected_shape not in shape_legs
+            or route not in {"KRX", "NXT", "SOR"}
+            or type(probe_first) is not bool):
+        raise ValueError("initial_quantity_type_leg_contract_invalid")
+    count = min(total_qty, shape_legs[selected_shape])
+    if count < 2:
+        raise ValueError("initial_quantity_type_split_quantity_insufficient")
+    first_qty = 1 if probe_first else max(1, (total_qty + 1) // 2)
+    remaining = total_qty - first_qty
+    if remaining < count - 1:
+        first_qty -= (count - 1) - remaining
+        remaining = total_qty - first_qty
+    whole, extra = divmod(remaining, count - 1)
+    quantities = [first_qty] + [
+        whole + (1 if index < extra else 0)
+        for index in range(count - 1)
+    ]
+    if min(quantities) <= 0 or sum(quantities) != total_qty:
+        raise ValueError("initial_quantity_type_leg_conservation_invalid")
+    return [{
+        "leg_index": index,
+        "qty": qty,
+        "price": 0,
+        "route": route,
+        "tag": ("initial_quantity_probe_0" if index == 0 and probe_first
+                else f"initial_quantity_leg_{index}"),
+    } for index, qty in enumerate(quantities)]
+
+
 def build_probe_residual_orders(
     continuation: dict[str, Any],
     *,

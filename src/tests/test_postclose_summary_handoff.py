@@ -169,6 +169,20 @@ def test_explicitly_disabled_consumers_are_not_missing(tmp_path):
     assert result["checked_consumers"] == []
 
 
+def test_initial_quantity_direct_source_respects_effective_lower_bound_and_invalid_current(tmp_path):
+    reports = tmp_path / "data" / "report"
+    current = tmp_path / "data" / "runtime" / "initial_quantity" / "current.json"
+    assert "initial_quantity_refresh_stage" not in mod.source_paths(
+        reports, "2026-09-28", "tower")
+    current.parent.mkdir(parents=True)
+    current.write_text('{"effective_from":"2026-09-29"}')
+    assert "initial_quantity_refresh_stage" not in mod.source_paths(
+        reports, "2026-09-28", "tower")
+    current.write_text('{"effective_from":"invalid"}')
+    with pytest.raises(RuntimeError, match="initial_quantity_current_invalid"):
+        mod.source_paths(reports, "2026-09-28", "tower")
+
+
 def test_concurrent_source_change_prevents_publish(tmp_path):
     path = tmp_path / "source.json"
     paths = {"source": path}

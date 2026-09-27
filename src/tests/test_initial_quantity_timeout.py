@@ -17,6 +17,30 @@ from src.engine.trade_profit import (
 )
 
 
+def test_initial_quantity_budget_ignores_entry_cancel_wait_attribution(monkeypatch):
+    from src.engine import sniper_state_handlers as handler
+
+    monkeypatch.setattr(handler, "_entry_cancel_wait_profile_base_sec",
+                        lambda _stock: ("pullback", 600))
+    monkeypatch.setattr(handler, "_resolve_buy_order_timeout_sec",
+                        lambda *_args: (_ for _ in ()).throw(
+                            AssertionError("entry_cancel_wait_must_not_own_post_start")))
+    stock = {"entry_cancel_wait_attribution_result": {"cancel_wait_sec": 17}}
+    assert handler._initial_quantity_total_wait_sec(stock, {
+        "timeout_mode": "existing_runtime_profile",
+        "selected_total_wait_sec": None,
+    }) == 600
+    assert handler._initial_quantity_total_wait_sec(stock, {
+        "timeout_mode": "selected_total_wait_sec",
+        "selected_total_wait_sec": 1200,
+    }) == 1200
+    with pytest.raises(ValueError):
+        handler._initial_quantity_total_wait_sec(stock, {
+            "timeout_mode": "selected_total_wait_sec",
+            "selected_total_wait_sec": 1201,
+        })
+
+
 def test_timeout_ev_uses_same_sell_notional_cost_as_completed_trade_facts():
     cost = get_trade_cost_rate()
     legs = [(500, 100.0), (500, 99.0)]
@@ -116,6 +140,20 @@ def test_next_leg_requires_broker_terminal_and_never_extends_hard_deadline():
     assert late["action"] == "CANCEL" and late["budget_breached"] is True
     states[1] = {"state": "CANCEL_REQUESTED", "broker_order_no": "102"}
     assert next_bundle_timeout_action(plan, states, now_epoch=start + 70)["action"] == "RECONCILE"
+
+
+def test_durable_submit_intent_without_response_requires_reconciliation():
+    plan = _schedule(legs=2, total=60, reserve=5)
+    start = plan["order_start_at_epoch"]
+    states = [{"state": "SUBMIT_INTENT", "submit_intent_at_epoch": start},
+              {"state": "NOT_SUBMITTED"}]
+    assert next_bundle_timeout_action(plan, states, now_epoch=start + 1) == {
+        "action": "RECONCILE", "leg_index": 0,
+        "reason": "submit_identity_pending", "budget_breached": False}
+    states[0] = {"state": "UNCERTAIN", "submit_intent_at_epoch": start}
+    assert next_bundle_timeout_action(plan, states, now_epoch=start + 65) == {
+        "action": "RECONCILE", "leg_index": 0,
+        "reason": "submit_identity_pending", "budget_breached": True}
 
 
 def test_terminal_requires_reconciled_identity_quantity_and_observed_clock():
@@ -299,6 +337,63 @@ def test_native_pipeline_request_and_sent_bound_order_start_by_attempt(tmp_path)
                             for row in [*events, duplicate_sent]))
     ambiguous = join_post_fill_paths([trade], data_dir=tmp_path)["fact:1"]
     assert ambiguous["order_starts"] == []
+
+
+def test_durable_first_buy_clock_precedes_request_bracket_in_timeout_research(
+        tmp_path):
+    from src.engine.scalping.initial_quantity_timeout_research import (
+        _order_start_before_fill,
+    )
+    day = "2026-09-23"
+    root = tmp_path / "pipeline_events"
+    root.mkdir()
+    identity = {"entry_submit_attempt_id": "attempt-1",
+                "entry_execution_sizing_plan_sha256": "a" * 64,
+                "tag": "initial_quantity_leg_0"}
+    events = [
+        {"record_id": 1, "stock_code": "000001",
+         "stage": "entry_execution_sizing_plan",
+         "emitted_at": f"{day}T09:30:00.100000+09:00",
+         "fields": {"reference_time": f"{day}T09:30:00+09:00",
+                    "entry_execution_sizing_valid": True,
+                    "entry_submit_attempt_id": "attempt-1",
+                    "entry_execution_sizing_plan_sha256": "a" * 64,
+                    "scalping_sizing_position_sizing_policy_sha256": "c" * 64}},
+        {"record_id": 1, "stock_code": "000001", "stage": "order_leg_request",
+         "emitted_at": f"{day}T09:30:00.200000+09:00", "fields": identity},
+        {"record_id": 1, "stock_code": "000001", "stage": "order_leg_sent",
+         "emitted_at": f"{day}T09:30:00.600000+09:00",
+         "fields": {**identity, "broker_order_no": "0000101",
+                    "actual_order_submitted": "True",
+                    "initial_quantity_order_start_at":
+                        f"{day}T09:30:00.400000+09:00",
+                    "initial_quantity_schedule_sha256": "b" * 64,
+                    "initial_quantity_policy_file_sha256": "c" * 64,
+                    "initial_quantity_attempt_id": "attempt-1",
+                    "initial_quantity_leg_index": 0}},
+        {"record_id": 1, "stock_code": "000001",
+         "stage": "position_rebased_after_fill",
+         "emitted_at": f"{day}T09:30:00.900000+09:00",
+         "fields": {"entry_mode": "normal", "fill_price": "100",
+                    "fill_qty": "4", "order_no": "0000101",
+                    "broker_execution_observed_at":
+                        f"{day}T09:30:00+09:00"}},
+    ]
+    (root / f"pipeline_events_{day}.jsonl").write_text(
+        "".join(json.dumps(row) + "\n" for row in events))
+    trade = {"trade_id": "fact:1", "record_id": "1", "entry_date": day,
+             "stock_code": "000001",
+             "entry_at_fact_buy_time": f"{day}T09:30:00+09:00",
+             "exit_at": f"{day}T09:35:00+09:00", "buy_qty": 4}
+    joined = join_post_fill_paths([trade], data_dir=tmp_path)["fact:1"]
+    assert {row["source"] for row in joined["order_starts"]} == {
+        "initial_quantity_bundle_order_start_at",
+        "order_leg_request_to_sent_bracket"}
+    selected = _order_start_before_fill(
+        joined, joined["fills"][0], joined["decisions"][0])
+    assert selected["source"] == "initial_quantity_bundle_order_start_at"
+    assert selected["at"] == datetime.fromisoformat(
+        f"{day}T09:30:00.400000+09:00")
 
 
 def test_probe_one_share_is_first_slot_before_candidate_split_legs():

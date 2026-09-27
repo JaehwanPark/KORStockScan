@@ -182,6 +182,12 @@ def next_bundle_timeout_action(
         if state == "CANCEL_REQUESTED":
             return {"action": "RECONCILE", "leg_index": index,
                     "reason": "cancel_terminal_pending", "budget_breached": overdue}
+        if state in {"SUBMIT_INTENT", "UNCERTAIN"}:
+            # A crash or missing broker response after a durable submit intent
+            # may still have placed an order. Never classify it as a fresh
+            # unsent leg or retry it without exact broker/owner reconciliation.
+            return {"action": "RECONCILE", "leg_index": index,
+                    "reason": "submit_identity_pending", "budget_breached": overdue}
         if state in {"OPEN", "PARTIAL"}:
             if now_epoch >= slot["cancel_request_by_epoch"]:
                 return {"action": "CANCEL", "leg_index": index,

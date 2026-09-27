@@ -1568,15 +1568,43 @@ if [[ "$TARGET_DATE" > "2026-09-16" ]]; then
     "$PROJECT_DIR/data/report/entry_cancel_wait_tuning/entry_cancel_wait_tuning_${TARGET_DATE}.md" \
     "entry_cancel_wait_policy"
 fi
-if [[ "$TARGET_DATE" > "2026-09-27" ]]; then
+INITIAL_QUANTITY_CURRENT="$PROJECT_DIR/data/runtime/initial_quantity/current.json"
+INITIAL_QUANTITY_REFRESH_DIR=""
+if env PYTHONPATH=. "$VENV_PY" - "$TARGET_DATE" "$INITIAL_QUANTITY_CURRENT" <<'PY'
+import json
+import sys
+from datetime import date
+from pathlib import Path
+
+from src.engine.scalping.initial_quantity_activation import selected_initial_quantity_env
+
+try:
+    target = date.fromisoformat(sys.argv[1])
+    current_path = Path(sys.argv[2])
+    current = json.loads(current_path.read_text())
+    if target < date.fromisoformat(current["effective_from"]):
+        raise SystemExit(1)
+    selected_initial_quantity_env(current_path, target.isoformat())
+except (OSError, ValueError, KeyError, TypeError) as exc:
+    print(f"[threshold-cycle] initial_quantity_current_invalid: {type(exc).__name__}",
+          file=sys.stderr)
+    raise SystemExit(2)
+PY
+then
   INITIAL_QUANTITY_REFRESH_DIR="$PROJECT_DIR/data/report/initial_entry_quantity_type_policy/refresh_postclose_${TARGET_DATE}"
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.initial_quantity_policy \
     --as-of "$TARGET_DATE" \
-    --parent-current "$PROJECT_DIR/data/runtime/initial_quantity/current.json" \
+    --parent-current "$INITIAL_QUANTITY_CURRENT" \
     --output-dir "$INITIAL_QUANTITY_REFRESH_DIR"
   wait_for_json_artifact \
     "$INITIAL_QUANTITY_REFRESH_DIR/initial_quantity_refresh_stage_${TARGET_DATE}.json" \
     "initial_quantity_refresh_stage"
+else
+  INITIAL_QUANTITY_REFRESH_STATUS=$?
+  if [ "$INITIAL_QUANTITY_REFRESH_STATUS" -ne 1 ]; then
+    echo "[threshold-cycle] initial_quantity_current_validation_failed status=$INITIAL_QUANTITY_REFRESH_STATUS" >&2
+    exit "$INITIAL_QUANTITY_REFRESH_STATUS"
+  fi
 fi
 if [ "$RUN_SWING_LIFECYCLE_AUDIT" = "true" ] || [ "$RUN_SWING_LIFECYCLE_AUDIT" = "1" ]; then
   wait_for_postclose_resources "swing_daily_simulation"
@@ -2118,6 +2146,36 @@ wait_for_report_artifact \
   "$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.json" \
   "$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.md" \
   "threshold_cycle_postclose_verification_final"
+if [ -n "$INITIAL_QUANTITY_REFRESH_DIR" ]; then
+  INITIAL_QUANTITY_REFRESH_STAGE="$INITIAL_QUANTITY_REFRESH_DIR/initial_quantity_refresh_stage_${TARGET_DATE}.json"
+  INITIAL_QUANTITY_REFRESH_DECISION="$(env PYTHONPATH=. "$VENV_PY" - "$INITIAL_QUANTITY_REFRESH_STAGE" <<'PY'
+import json
+import sys
+from pathlib import Path
+from src.engine.scalping.initial_quantity_policy import refresh_quantity_stage_terminal_valid
+
+stage = json.loads(Path(sys.argv[1]).read_text())
+if not refresh_quantity_stage_terminal_valid(stage):
+    raise SystemExit("initial_quantity_refresh_stage_invalid")
+print(stage["decision"])
+PY
+)"
+  if [ "$INITIAL_QUANTITY_REFRESH_DECISION" = "eligible_source_only" ]; then
+    run_postclose_cmd "$PROJECT_DIR/deploy/with_runtime_release_set_lock.sh" \
+      env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.initial_quantity_activation \
+      --stage "$INITIAL_QUANTITY_REFRESH_STAGE" \
+      --parent-current "$INITIAL_QUANTITY_CURRENT" \
+      --output-dir "$PROJECT_DIR/data/runtime/initial_quantity" \
+      --select-current --require-selected-release
+    env PYTHONPATH=. "$VENV_PY" - "$INITIAL_QUANTITY_CURRENT" "$PREPARED_EFFECTIVE_DATE" <<'PY'
+import sys
+from pathlib import Path
+from src.engine.scalping.initial_quantity_activation import selected_initial_quantity_env
+
+selected_initial_quantity_env(Path(sys.argv[1]), sys.argv[2])
+PY
+  fi
+fi
 emit_postclose_marker "[DONE] threshold-cycle postclose target_date=$TARGET_DATE market_panic_breadth=$RUN_MARKET_PANIC_BREADTH_REPORT pipeline_event_verbosity=$RUN_PIPELINE_EVENT_VERBOSITY_REPORT observation_source_quality_audit=$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT intraday_ws_freshness_finalize=$RUN_INTRADAY_WS_FRESHNESS_FINALIZE opening_rotation_profile_tuning=$RUN_OPENING_ROTATION_PROFILE_TUNING ai_decision_quality_daily_materialization=$RUN_AI_DECISION_QUALITY_DAILY_MATERIALIZATION ai_decision_action_outcome_calibration=$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION codebase_performance_workorder=$RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT pattern_lab_currentness_audit=$RUN_PATTERN_LAB_CURRENTNESS_AUDIT pattern_lab_ai_review=$RUN_PATTERN_LAB_AI_REVIEW time_window_regime_counterfactual=$RUN_TIME_WINDOW_REGIME_COUNTERFACTUAL producer_gap_discovery=$RUN_PRODUCER_GAP_DISCOVERY stage_hook_workorder_discovery=$RUN_STAGE_HOOK_WORKORDER_DISCOVERY stage_hook_runtime_scaffold=$RUN_STAGE_HOOK_RUNTIME_SCAFFOLD pattern_lab_propagation_audit=$RUN_PATTERN_LAB_PROPAGATION_AUDIT scalp_entry_adm=$RUN_SCALP_ENTRY_ADM entry_split_order_plan=$RUN_ENTRY_SPLIT_ORDER_PLAN scale_in_split_order_plan=$RUN_SCALE_IN_SPLIT_ORDER_PLAN entry_ai_gate_backtest=$RUN_ENTRY_AI_GATE_BACKTEST entry_ai_gate_backtest_schedule=$ENTRY_AI_GATE_BACKTEST_SCHEDULE rising_missed_intraday_feedback_postclose=$RUN_RISING_MISSED_INTRADAY_FEEDBACK_POSTCLOSE scalping_pyramid_intraday_feedback_postclose=$RUN_SCALPING_PYRAMID_INTRADAY_FEEDBACK_POSTCLOSE scalping_pyramid_quality_calibration=$RUN_SCALPING_PYRAMID_QUALITY_CALIBRATION scalping_avg_down_recovery_calibration=$RUN_SCALPING_AVG_DOWN_RECOVERY_CALIBRATION rising_missed_classifier_prior=$RUN_RISING_MISSED_CLASSIFIER_PRIOR samsung_machine_entry_tuning=$RUN_SAMSUNG_MACHINE_ENTRY_TUNING low_price_two_leg_tuning=$RUN_LOW_PRICE_TWO_LEG_TUNING low_price_two_leg_candidate_recommendation=$RUN_LOW_PRICE_TWO_LEG_CANDIDATE_RECOMMENDATION institutional_flow_context=$RUN_INSTITUTIONAL_FLOW_CONTEXT microstructure_reaction_context=false microstructure_machine_evaluation=$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION lifecycle_decision_matrix=$RUN_LIFECYCLE_DECISION_MATRIX lifecycle_ai_context=$RUN_LIFECYCLE_AI_CONTEXT ldm_hypothesis_parent_refinement=$RUN_LDM_HYPOTHESIS_PARENT_REFINEMENT lifecycle_bucket_discovery=$RUN_LIFECYCLE_BUCKET_DISCOVERY lifecycle_bucket_windows=$RUN_LIFECYCLE_BUCKET_WINDOWS lifecycle_bucket_window_list=$LIFECYCLE_BUCKET_WINDOWS lifecycle_bucket_promotion_window=$LIFECYCLE_BUCKET_PROMOTION_WINDOW force_lifecycle_bucket_windows=$FORCE_LIFECYCLE_BUCKET_WINDOWS force_deep_audits=$FORCE_DEEP_AUDITS force_workorder_branch=$FORCE_WORKORDER_BRANCH runtime_apply_bridge=$RUN_RUNTIME_APPLY_BRIDGE latency_classifier_recommendation=$RUN_LATENCY_CLASSIFIER_RECOMMENDATION swing_lifecycle=$RUN_SWING_LIFECYCLE_AUDIT swing_strategy_discovery=$RUN_SWING_STRATEGY_DISCOVERY swing_lifecycle_matrix=$RUN_SWING_LIFECYCLE_MATRIX swing_lifecycle_bucket_discovery=$RUN_SWING_LIFECYCLE_BUCKET_DISCOVERY swing_ai_review_provider=$SWING_THRESHOLD_AI_REVIEW_PROVIDER swing_lifecycle_bucket_discovery_ai_provider=$SWING_LIFECYCLE_BUCKET_DISCOVERY_AI_PROVIDER pattern_lab_ai_review_provider=$PATTERN_LAB_AI_REVIEW_PROVIDER producer_gap_discovery_ai_provider=$PRODUCER_GAP_DISCOVERY_AI_PROVIDER stage_hook_workorder_discovery_ai_provider=$STAGE_HOOK_WORKORDER_DISCOVERY_AI_PROVIDER deepseek_swing_lab=$RUN_DEEPSEEK_SWING_LAB runtime_approval_summary=true next_stage2_checklist=true finished_at=$finished_at"
 # Late widget/machine sources are not terminal here.  Finalization owns the
 # single tower -> checklist -> strict summary-handoff generation after all

@@ -220,7 +220,7 @@ def _runtime_position_sizing_policy(
     five-stage profile when no policy was selected.
     """
     from src.engine.scalping.initial_quantity_activation import (
-        ENV_FILE, ENV_SHA, load_pinned_baseline,
+        ENV_FILE, ENV_SHA, load_pinned_initial_quantity_policy,
     )
     baseline_file = str(os.getenv(ENV_FILE) or "").strip()
     baseline_sha = str(os.getenv(ENV_SHA) or "").strip().lower()
@@ -231,19 +231,25 @@ def _runtime_position_sizing_policy(
             return (ROLLBACK_FORMULA_VERSION, _FLAT_10_TIER_RATIOS,
                     "initial_policy_identity_conflict_fallback", None, None)
         resolved = _coerce_reference_time(reference_time) or datetime.now(KST)
-        baseline, status = load_pinned_baseline(
+        baseline, status = load_pinned_initial_quantity_policy(
             Path(baseline_file), baseline_sha, resolved.date())
         if baseline is None:
             return (ROLLBACK_FORMULA_VERSION, _FLAT_10_TIER_RATIOS,
                     status + "_fallback", None, None)
         selected_type = baseline["type_policies"].get(quantity_type)
         if (selected_type is None
-                or selected_type["ratio_mode"] != "parent_5stage"
-                or selected_type["selected_shape"] != "parent"
-                or selected_type["timeout_mode"] != "existing_runtime_profile"):
+                or selected_type["ratio_mode"] not in {
+                    "parent_5stage", "cap_10pct", "cap_15pct", "cap_20pct"}
+                or selected_type["timeout_mode"] not in {
+                    "existing_runtime_profile", "selected_total_wait_sec"}):
             return (ROLLBACK_FORMULA_VERSION, _FLAT_10_TIER_RATIOS,
                     "initial_policy_type_missing_fallback", None, None)
-        return (FORMULA_VERSION, DEFAULT_TIER_RATIOS, status,
+        cap = {
+            "parent_5stage": MAX_RATIO, "cap_10pct": 0.10,
+            "cap_15pct": 0.15, "cap_20pct": 0.20,
+        }[selected_type["ratio_mode"]]
+        selected_ratios = tuple(min(value, cap) for value in DEFAULT_TIER_RATIOS)
+        return (FORMULA_VERSION, selected_ratios, status,
                 baseline["policy_version"], baseline_sha)
     if str(
         os.getenv("KORSTOCKSCAN_POSITION_SIZING_POLICY_ENABLED", "")
@@ -480,7 +486,9 @@ class ScalpingSizingDecision:
             "quantity_type_classifier_version": self.quantity_type_classifier_version,
             "quantity_type_policy_row": (
                 self.quantity_type
-                if self.policy_status == "initial_policy_loaded" else "-"
+                if self.policy_status in {
+                    "initial_policy_loaded", "initial_policy_v2_loaded",
+                    "initial_policy_refresh_loaded"} else "-"
             ),
         }
 

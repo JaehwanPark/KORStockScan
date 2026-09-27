@@ -86,9 +86,11 @@ def _order_start_before_fill(
                 first.get("emitted_at", latest_fill_at)]
     if not eligible:
         return None
+    durable = [row for row in eligible
+               if row["source"] == "initial_quantity_bundle_order_start_at"]
     direct = [row for row in eligible
               if row["source"] == "entry_cancel_wait_submission_context_frozen_at"]
-    selected = direct or eligible
+    selected = durable or direct or eligible
     return selected[0] if len(selected) == 1 else None
 
 
@@ -376,7 +378,8 @@ def build_timeout_research(
                     if (result["status"] == "modeled"
                             and result["quantity_type"] == actual_type):
                         paired[actual_type][key].append({**result,
-                                                         "trade_id": trade["trade_id"]})
+                                                         "trade_id": trade["trade_id"],
+                                                         "entry_date": trade["entry_date"]})
     selections = {}
     for quantity_type in QUANTITY_TYPES:
         source_rows = type_trades[quantity_type]
@@ -415,6 +418,11 @@ def build_timeout_research(
                         winner_weights[row["trade_id"]] * (
                             row["conservative_net_pct"] - row["parent_net_pct"])
                         for row in values if row["trade_id"] in winner_weights)
+                    daily_conservative_delta = defaultdict(float)
+                    for row in values:
+                        daily_conservative_delta[row["entry_date"]] += (
+                            row["conservative_net_pnl_krw"] -
+                            row["parent_net_pnl_krw"])
                     # Parent profit_rate is the canonical costed rate. PnL
                     # delta is reported separately to avoid false EV claims.
                     candidates[key] = {
@@ -443,6 +451,10 @@ def build_timeout_research(
                         "estimated_net_pnl_krw": round(parent_net + delta_net, 3),
                         "conservative_net_pnl_krw": round(
                             parent_net + delta_conservative_net, 3),
+                        "daily_conservative_delta_net_pnl_krw": {
+                            day: round(value, 3)
+                            for day, value in sorted(
+                                daily_conservative_delta.items())},
                         "estimated_ev_pct": (round(parent_ev + delta_ev / len(source_rows), 6)
                                              if source_rows and parent_ev is not None else None),
                         "conservative_ev_pct": (
@@ -596,8 +608,18 @@ def timeout_research_valid(report: Any) -> bool:
                         selection = report["selections"][quantity_type]
                         metric = selection["candidate_metrics"][key]
                         modeled = metric["modeled_count"]
+                        daily = metric.get(
+                            "daily_conservative_delta_net_pnl_krw")
                         if (type(modeled) is not int or not 0 <= modeled <=
                                 selection["all_completed_type_count"]
+                                or not isinstance(daily, dict)
+                                or len(daily) > modeled
+                                or any(not isinstance(day, str)
+                                       or len(day) != 10
+                                       or not isinstance(value, (int, float))
+                                       or isinstance(value, bool)
+                                       or not math.isfinite(value)
+                                       for day, value in daily.items())
                                 or not 0 <= selection["first_post_fill_lower_verified_route_epoch_count"]
                                 <= selection["first_post_fill_lower_count"]
                                 <= selection["all_completed_type_count"]
@@ -605,6 +627,7 @@ def timeout_research_valid(report: Any) -> bool:
                                 <= selection["all_completed_type_count"]
                                 or sum(metric["order_start_source_counts"].values()) != modeled
                                 or any(source not in {
+                                    "initial_quantity_bundle_order_start_at",
                                     "entry_cancel_wait_submission_context_frozen_at",
                                     "order_leg_request_to_sent_bracket"}
                                        for source in metric["order_start_source_counts"])

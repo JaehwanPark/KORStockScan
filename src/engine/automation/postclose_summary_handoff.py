@@ -138,6 +138,30 @@ def installed_producer_terminal_states(
     return result
 
 
+def _initial_quantity_refresh_due(report_dir: Path, target_date: str) -> bool:
+    """Bind the direct consumer to the selected policy, not a rollout date."""
+    current_path = report_dir.parent / "runtime" / "initial_quantity" / "current.json"
+    if not current_path.exists():
+        return False
+    try:
+        current = json.loads(current_path.read_text())
+        from datetime import date
+        target = date.fromisoformat(target_date)
+        effective = date.fromisoformat(current["effective_from"])
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise RuntimeError("initial_quantity_current_invalid") from exc
+    if target < effective:
+        return False
+    from src.engine.scalping.initial_quantity_activation import (
+        selected_initial_quantity_env,
+    )
+    try:
+        selected_initial_quantity_env(current_path, target_date)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise RuntimeError("initial_quantity_current_invalid") from exc
+    return True
+
+
 def source_paths(report_dir: Path, target_date: str, consumer: str) -> dict[str, Path]:
     summary_path = (
         report_dir
@@ -162,7 +186,7 @@ def source_paths(report_dir: Path, target_date: str, consumer: str) -> dict[str,
             paths["holding_path_vote_policy"] = holding_vote_policy_path(
                 report_dir.parent, _next_krx_trading_day(target_date),
             )
-        if target_date >= "2026-09-28":
+        if _initial_quantity_refresh_due(report_dir, target_date):
             paths["initial_quantity_refresh_stage"] = (
                 report_dir / "initial_entry_quantity_type_policy"
                 / f"refresh_postclose_{target_date}"
@@ -264,11 +288,7 @@ def source_receipt(paths: dict[str, Path], target_date: str) -> dict[str, Any]:
             )
             stage = json.loads(raw) if raw is not None else None
             if (not refresh_quantity_stage_terminal_valid(stage)
-                    or stage.get("source_date") != target_date
-                    or (target_date >= "2026-09-28"
-                        and (stage.get("timeout_research_status") != "source_bound"
-                             or stage.get("applied_policy_lineage_schema") !=
-                             "initial_quantity_trade_policy_binding_v1"))):
+                    or stage.get("source_date") != target_date):
                 raise RuntimeError("initial_quantity_refresh_stage_invalid")
         # Missing optional inputs are explicit, so a later arriving input invalidates
         # the summary. Permission/I/O errors must not look like optional absence.

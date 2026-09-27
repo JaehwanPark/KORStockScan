@@ -43635,6 +43635,133 @@ def _entry_cancel_wait_profile_base_sec(stock) -> tuple[str, int]:
     return profile, max(5, min(1200, _rule_int(rule_name, default)))
 
 
+def _initial_quantity_total_wait_sec(stock: dict, type_policy: dict) -> int:
+    """Freeze the post-BUY bundle budget independently of entry_cancel_wait.
+
+    entry_cancel_wait may delay the first order. Its attribution and scoped
+    timeout do not own the time after that order starts. An initial policy may
+    retain the old profile budget while exact post-start evidence is absent.
+    """
+    from src.engine.scalping.initial_quantity_timeout import MAX_BUNDLE_WAIT_SEC
+
+    if not isinstance(type_policy, dict):
+        raise ValueError("initial_quantity_type_policy_missing")
+    mode = type_policy.get("timeout_mode")
+    if mode == "existing_runtime_profile":
+        if type_policy.get("selected_total_wait_sec") is not None:
+            raise ValueError("initial_quantity_profile_timeout_conflict")
+        _, total = _entry_cancel_wait_profile_base_sec(stock)
+    elif mode == "selected_total_wait_sec":
+        total = type_policy.get("selected_total_wait_sec")
+    else:
+        raise ValueError("initial_quantity_timeout_mode_invalid")
+    if type(total) is not int or not 1 <= total <= MAX_BUNDLE_WAIT_SEC:
+        raise ValueError("initial_quantity_total_wait_invalid")
+    return total
+
+
+def _initial_quantity_sequential_plan(
+    stock: dict, planned_orders: list[dict], requested_qty: int,
+    entry_split_fields: dict,
+) -> tuple[list[dict], dict] | None:
+    """Bind a selected changed type to one immediate and later P1 legs.
+
+    A changed selection with missing sizing lineage is a hard block. The
+    legacy probe or market-first plan cannot be converted to a limit order by
+    this adapter; those cases must use an explicitly reviewed market contract.
+    """
+    from src.engine.scalping.initial_quantity_activation import (
+        ENV_FILE, ENV_SHA, RUNTIME_V2_SCHEMA, RUNTIME_REFRESH_SCHEMA,
+        load_pinned_initial_quantity_policy,
+    )
+    from src.engine.scalping.entry_split_order_plan import (
+        build_initial_quantity_type_legs,
+    )
+
+    path = str(os.getenv(ENV_FILE) or "").strip()
+    expected_sha = str(os.getenv(ENV_SHA) or "").strip().lower()
+    if not path and not expected_sha:
+        return None
+    if not path or not expected_sha:
+        raise ValueError("initial_quantity_policy_env_incomplete")
+    policy, status = load_pinned_initial_quantity_policy(
+        Path(path), expected_sha, datetime.now(_KST).date())
+    if policy is None:
+        raise ValueError("initial_quantity_policy_" + status)
+    if policy["schema_version"] not in {RUNTIME_V2_SCHEMA,
+                                        RUNTIME_REFRESH_SCHEMA}:
+        return None
+    quantity_type = str(stock.get("scalping_sizing_quantity_type") or "")
+    row = policy["type_policies"].get(quantity_type)
+    if row is None:
+        raise ValueError("initial_quantity_sizing_type_missing")
+    if row["selected_shape"] == "parent":
+        return None
+    if (status not in {"initial_policy_v2_loaded",
+                       "initial_policy_refresh_loaded"}
+            or stock.get("scalping_sizing_position_sizing_policy_sha256")
+            != expected_sha
+            or stock.get("scalping_sizing_quantity_type_policy_row")
+            != quantity_type):
+        raise ValueError("initial_quantity_sizing_policy_lineage_mismatch")
+    if (not planned_orders or type(requested_qty) is not int
+            or requested_qty < 2
+            or planned_orders[0].get("entry_split_order_market_first_leg_applied")):
+        raise ValueError("initial_quantity_market_or_probe_contract_unavailable")
+    first = planned_orders[0]
+    probe_first = bool(entry_split_fields.get(
+        "entry_split_order_probe_first_applied"))
+    if bool(first.get("entry_split_order_probe_first_applied")) != probe_first:
+        raise ValueError("initial_quantity_probe_contract_mismatch")
+    first_price = _safe_int(
+        first.get("price") or first.get("entry_split_order_market_reference_price"), 0)
+    route = str(first.get("dmst_stex_tp") or stock.get("effective_venue") or "").upper()
+    if first_price <= 0 or route not in {"KRX", "NXT", "SOR"}:
+        raise ValueError("initial_quantity_first_p1_or_route_invalid")
+    legs = build_initial_quantity_type_legs(
+        total_qty=requested_qty, selected_shape=row["selected_shape"],
+        probe_first=probe_first, route=route)
+    continuation = {
+        "requested_qty": requested_qty,
+        "selected_shape": row["selected_shape"],
+        "probe_first": probe_first,
+        "route": route,
+        "residual_quantities": [leg["qty"] for leg in legs[1:]],
+        "planned_legs": legs,
+        "quantity_type": quantity_type,
+        "policy_file_sha256": expected_sha,
+        "policy_content_sha256": policy["policy_content_sha256"],
+        "total_wait_sec": _initial_quantity_total_wait_sec(stock, row),
+        "decision_at": str(stock.get("scalping_sizing_reference_time") or ""),
+    }
+    first_order = {
+        **{key: value for key, value in first.items()
+           if key not in {"entry_split_order_probe_continuation",
+                          "entry_split_order_probe_first_applied",
+                          "entry_split_order_probe_bundle_id",
+                          "entry_split_order_execution_mode"}},
+        "qty": legs[0]["qty"], "tag": legs[0]["tag"],
+        "price": first_price,
+        "initial_quantity_probe_market": probe_first,
+        "order_type_code": "3" if probe_first else "00",
+                   "dmst_stex_tp": route,
+        "initial_quantity_sequential_continuation": continuation,
+    }
+    if probe_first:
+        release_unsubmitted_probe_reservation(
+            str(entry_split_fields.get("entry_split_order_probe_bundle_id") or ""),
+            reason="initial_quantity_sequential_bundle_owns_probe")
+    return [first_order], {
+        **entry_split_fields,
+        "entry_split_order_policy_applied": True,
+        "entry_split_order_policy_mode": "initial_quantity_sequential_v2",
+        "entry_split_order_leg_count": len(legs),
+        "entry_split_order_probe_first_applied": probe_first,
+        "initial_quantity_policy_file_sha256": expected_sha,
+        "initial_quantity_selected_shape": row["selected_shape"],
+    }
+
+
 def _split_ttl_profile_max_sec(profile: str) -> int:
     normalized = str(profile or "standard").strip().lower()
     if normalized == "reserve":
@@ -65501,6 +65628,16 @@ def observe_pre_submit_delay_quote(stock, code, ws_data, *, now_ts=None):
 @probe_submission_scope()
 @observe_submit_attempt(on_finish=_observe_entry_submit_finished)
 def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
+    if isinstance(stock.get("initial_quantity_bundle"), dict):
+        # The legacy loop submits every planned order in one invocation. Until
+        # its replacement has durable per-leg intent and terminal recovery,
+        # an attached sequential bundle must never enter that loop.
+        _log_entry_pipeline(
+            stock, code, "initial_quantity_sequential_dispatcher_missing",
+            actual_order_submitted=False, broker_order_forbidden=True,
+            runtime_effect=True,
+        )
+        return False
     pending_delay = stock.get("_pre_submit_delay_pending")
     if isinstance(pending_delay, dict):
         if time.monotonic() < pending_delay["due_monotonic"]:
@@ -69689,6 +69826,18 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 ),
             },
         )
+        try:
+            sequential_plan = _initial_quantity_sequential_plan(
+                stock, planned_orders, requested_qty, entry_split_fields)
+        except (OSError, TypeError, ValueError) as exc:
+            _log_entry_pipeline(
+                stock, code, "initial_quantity_sequential_plan_block",
+                reason=str(exc)[:160], actual_order_submitted=False,
+                broker_order_forbidden=True, runtime_effect=True,
+            )
+            return False
+        if sequential_plan is not None:
+            planned_orders, entry_split_fields = sequential_plan
         # Only the receipt validated and frozen at this submit invocation may
         # parent a sizing plan. Runtime/stock snapshots are provenance inputs
         # to the binder, not fallback authority: accepting either here would
@@ -69979,7 +70128,9 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         )
         if _entry_split_probe_first_deferred(entry_split_fields):
             return False
-        if entry_split_fields.get("entry_split_order_probe_first_applied"):
+        if (entry_split_fields.get("entry_split_order_probe_first_applied")
+                and entry_split_fields.get("entry_split_order_policy_mode")
+                != "initial_quantity_sequential_v2"):
             probe_order = planned_orders[0] if planned_orders else {}
             probe_bundle_id = str(
                 entry_split_fields.get("entry_split_order_probe_bundle_id") or ""
@@ -70755,31 +70906,96 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     break
         broker_submit_attempt_count += 1
         wait_submission = {}
+        sequential_first = isinstance(
+            planned_order.get("initial_quantity_sequential_continuation"), dict)
         if strategy == "SCALPING":
             try:
                 from src.engine.scalping.entry_cancel_wait_runtime import submission_fields
                 wait_submission = submission_fields({**stock, "code":code}, planned_order,
                     seed=entry_execution_sizing_fields.get("entry_opportunity_replay_seed"),
                     qty=qty, price=price, route=submit_dmst_stex_tp,
-                    timeout_sec=_resolve_buy_order_timeout_sec(stock, strategy), now_ts=time.time())
+                    timeout_sec=(
+                        planned_order["initial_quantity_sequential_continuation"][
+                            "total_wait_sec"] if sequential_first
+                        else _resolve_buy_order_timeout_sec(stock, strategy)),
+                    now_ts=time.time())
             except Exception:
                 # Observation loss is an economic source gap, never an order veto.
                 wait_submission = {"cancel_wait_source_gap":"submission_context_capture_failed"}
-        res = kiwoom_orders.send_buy_order(
-            code,
-            qty,
-            broker_price,
-            request["order_type_code"],
-            token=KIWOOM_TOKEN,
-            order_type_desc="매수" if strategy == "SCALPING" else "최유리지정가",
-            tif=request["tif"],
-            dmst_stex_tp=submit_dmst_stex_tp,
-            owner_context=main_owner_context(
-                stock,
-                action="ENTRY_BUY",
-                ordinal=f"{request['tag']}:{broker_submit_attempt_count}",
-            ),
-        )
+        try:
+            buy_owner_context = (
+                _initial_quantity_leg_owner_context(
+                    stock,
+                    str((submit_attempt_machine_lineage(stock, code) or {}).get(
+                        "evaluation_attempt_id") or ""), 0)
+                if sequential_first else main_owner_context(
+                    stock, action="ENTRY_BUY",
+                    ordinal=f"{request['tag']}:{broker_submit_attempt_count}"))
+        except (OwnerRegistryError, TypeError, ValueError) as exc:
+            _log_entry_pipeline(
+                stock, code, "initial_quantity_owner_intent_block",
+                reason=type(exc).__name__, actual_order_submitted=False,
+                broker_order_forbidden=True, runtime_effect=True)
+            break
+        if sequential_first:
+            try:
+                first_intent, intent_status = _initial_quantity_prepare_first_submit(
+                    stock, code, planned_order, qty=qty,
+                    broker_price=broker_price, submit_price=price,
+                    route=submit_dmst_stex_tp,
+                    now_ts=time.time(), owner_context=buy_owner_context,
+                    probe_ai_action=str(entry_ai_submit_authority.get(
+                        "entry_ai_submit_authority_action") or ""),
+                    probe_wait_contract=wait_probe_required)
+            except (KeyError, TypeError, ValueError, OSError) as exc:
+                first_intent, intent_status = None, type(exc).__name__
+            if first_intent is None:
+                _log_entry_pipeline(
+                    stock, code, "initial_quantity_first_intent_block",
+                    reason=intent_status, actual_order_submitted=False,
+                    broker_order_forbidden=True, runtime_effect=True)
+                break
+        try:
+            res = kiwoom_orders.send_buy_order(
+                code,
+                qty,
+                broker_price,
+                request["order_type_code"],
+                token=KIWOOM_TOKEN,
+                order_type_desc="매수" if strategy == "SCALPING" else "최유리지정가",
+                tif=request["tif"],
+                dmst_stex_tp=submit_dmst_stex_tp,
+                owner_context=buy_owner_context,
+            )
+        except Exception:
+            if not sequential_first:
+                raise
+            # The broker may have accepted the order before transport failed.
+            # Keep the durable intent for owner/broker reconciliation; no retry.
+            _request_broker_snapshot_refresh(
+                code, reason="initial_quantity_first_submit_uncertain")
+            _log_entry_pipeline(
+                stock, code, "initial_quantity_first_submit_uncertain",
+                reason="broker_call_exception", actual_order_submitted=True,
+                broker_order_forbidden=True, runtime_effect=True)
+            break
+        if sequential_first:
+            try:
+                response_open, response_status = (
+                    _initial_quantity_record_submit_response(
+                        stock, code, leg_index=0, response=res,
+                        expected_route=submit_dmst_stex_tp,
+                        owner_context=buy_owner_context))
+            except (KeyError, TypeError, ValueError, OSError) as exc:
+                response_open, response_status = False, type(exc).__name__
+                _request_broker_snapshot_refresh(
+                    code, reason="initial_quantity_submit_response_persist_failed")
+            if not response_open:
+                _log_entry_pipeline(
+                    stock, code, "initial_quantity_first_submit_uncertain",
+                    reason=response_status, actual_order_submitted=True,
+                    broker_order_forbidden=True, runtime_effect=True)
+                break
         if strategy == "SCALPING":
             try:
                 from src.engine.scalping.entry_cancel_wait_runtime import submission_response_fields
@@ -70994,6 +71210,10 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 "status": "OPEN",
                 "filled_qty": 0,
                 "sent_at": order_sent_ts,
+                **({
+                    "initial_quantity_leg_index": 0,
+                    "entry_submit_attempt_id": stock["initial_quantity_bundle"]["attempt_id"],
+                } if sequential_first else {}),
                 "dmst_stex_tp": response_broker_route,
                 "dmst_stex_tp_source": submit_dmst_stex_tp_source,
                 "broker_route": response_broker_route,
@@ -71181,6 +71401,17 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             stock,
             code,
             "order_leg_sent",
+            **({
+                "initial_quantity_order_start_at":
+                    stock["initial_quantity_bundle"]["schedule"]["order_start_at"],
+                "initial_quantity_schedule_sha256":
+                    stock["initial_quantity_bundle"]["schedule_sha256"],
+                "initial_quantity_policy_file_sha256":
+                    stock["initial_quantity_bundle"]["policy_sha256"],
+                "initial_quantity_attempt_id":
+                    stock["initial_quantity_bundle"]["attempt_id"],
+                "initial_quantity_leg_index": 0,
+            } if sequential_first else {}),
             tag=request["tag"],
             qty=qty,
             requested_qty=qty,
@@ -76817,6 +77048,727 @@ def _order_terminal_inventory_reconciliation(
     return True, "terminal_absence_and_inventory_exact", broker_qty
 
 
+def _initial_quantity_buy_leg_terminal_state(
+    stock: dict, code: str, order: dict, *, now_ts: float | None = None,
+) -> tuple[dict | None, str]:
+    """Bind one exact broker BUY terminal to Main custody and bundle identity.
+
+    A cancel ACK, an empty open-order snapshot, or symbol-level inventory alone
+    cannot release another leg. The caller must still apply the timeout state
+    machine and persist its transition before invoking a successor submit.
+    """
+    from src.engine.scalping.initial_quantity_terminal import (
+        read_initial_buy_leg_terminal,
+    )
+    from src.engine.scalping.initial_quantity_timeout import timeout_schedule_valid
+    from src.engine.scalping.initial_quantity_bundle_state import (
+        SCHEMA_DYNAMIC_PRICE, bundle_state_valid,
+    )
+
+    bundle = stock.get("initial_quantity_bundle") if isinstance(stock, dict) else None
+    if not bundle_state_valid(bundle) or not isinstance(order, dict):
+        return None, "initial_quantity_bundle_missing"
+    schedule = bundle.get("schedule")
+    states = bundle.get("leg_states")
+    leg_index = order.get("initial_quantity_leg_index")
+    order_no = str(order.get("ord_no") or "").strip()
+    if (not timeout_schedule_valid(schedule)
+            or type(leg_index) is not int
+            or not isinstance(states, list)
+            or len(states) != schedule["leg_count"]
+            or not 0 <= leg_index < len(states)
+            or not isinstance(states[leg_index], dict)
+            or states[leg_index].get("broker_order_no") != order_no
+            or states[leg_index].get("state") not in {
+                "OPEN", "PARTIAL", "CANCEL_REQUESTED"}
+            or bundle.get("code") != code
+            or str(bundle.get("target_id") or "") != str(stock.get("id") or "")
+            or not str(bundle.get("attempt_id") or "")
+            or bundle.get("attempt_id") != order.get("entry_submit_attempt_id")
+            or bundle.get("policy_sha256") != schedule["policy_sha256"]
+            or bundle.get("schedule_sha256") != schedule["schedule_sha256"]
+            or not KIWOOM_TOKEN):
+        return None, "initial_quantity_bundle_identity_invalid"
+    sent_at = _safe_float(order.get("sent_at"), 0.0)
+    current = time.time() if now_ts is None else now_ts
+    if (sent_at <= 0 or not isinstance(current, (int, float))
+            or isinstance(current, bool) or not math.isfinite(current)
+            or current < sent_at
+            or sent_at < schedule["slots"][leg_index]["slot_start_epoch"]
+            or sent_at < states[leg_index]["submit_intent_at_epoch"]
+            or sent_at >= schedule["slots"][leg_index]["cancel_request_by_epoch"]):
+        return None, "initial_quantity_leg_clock_invalid"
+    cancel_ack = order.get("cancel_acknowledged_at")
+    cancel_no = str(order.get("cancel_ack_order_no") or "").strip() or None
+    if cancel_ack and not cancel_no:
+        return None, "initial_quantity_cancel_child_identity_missing"
+    order_day = datetime.fromtimestamp(sent_at, _KST).date()
+    route = _entry_order_cancel_dmst_stex_tp(order)
+    ordered_qty = order.get("qty")
+    planned_leg = bundle["planned_legs"][leg_index]
+    expected_price = (
+        (0 if planned_leg["tag"] == "initial_quantity_probe_0"
+         else states[leg_index].get("submit_price"))
+        if bundle["schema"] == SCHEMA_DYNAMIC_PRICE
+        else planned_leg["price"])
+    if (type(ordered_qty) is not int or ordered_qty <= 0
+            or ordered_qty != planned_leg["qty"]
+            or order.get("price") != expected_price
+            or (bundle["schema"] == SCHEMA_DYNAMIC_PRICE
+                and planned_leg["tag"] == "initial_quantity_probe_0"
+                and (str(order.get("order_type")) != "3"
+                     or order.get("entry_order_guard_price") !=
+                     states[leg_index].get("submit_price")))
+            or order.get("tag") != planned_leg["tag"]
+            or route != planned_leg["route"]):
+        return None, "initial_quantity_order_plan_mismatch"
+    broker, broker_status = read_initial_buy_leg_terminal(
+        token=KIWOOM_TOKEN, order_date=order_day.isoformat(),
+        stock_code=code, route=route, order_no=order_no,
+        ordered_qty=ordered_qty, cancel_order_no=cancel_no,
+    )
+    if broker is None:
+        return None, broker_status
+    if _safe_int(order.get("filled_qty"), -1) != broker["filled_qty"]:
+        return None, "initial_quantity_local_broker_fill_mismatch"
+    expected_runtime_qty = _entry_bundle_filled_qty(stock)
+    if expected_runtime_qty < broker["filled_qty"]:
+        return None, "initial_quantity_runtime_fill_below_broker_leg"
+    context = main_owner_context(stock, action="ORDER_TERMINAL_RECONCILIATION")
+    if context is None:
+        return None, "initial_quantity_main_owner_context_missing"
+    order_nos = {order_no, cancel_no} - {None}
+    registry = default_order_owner_registry()
+    try:
+        if not registry.symbol_registered(code):
+            return None, "initial_quantity_main_owner_registry_missing"
+        for number in order_nos:
+            if registry.order_owner(order_date=order_day, broker_order_no=number) is None:
+                return None, "initial_quantity_exact_owner_order_missing"
+            registry.assert_owner(context=context, order_date=order_day,
+                                  broker_order_no=number)
+    except OwnerRegistryError as exc:
+        return None, "initial_quantity_owner_registry_invalid:" + type(exc).__name__
+    reconciled, custody_status, custody_qty = _order_terminal_inventory_reconciliation(
+        stock, code, order_nos, expected_runtime_qty=expected_runtime_qty,
+    )
+    if not reconciled:
+        return None, "initial_quantity_custody_unproved:" + custody_status
+    if (custody_status != "terminal_absence_and_owner_inventory_exact"
+            or custody_qty != expected_runtime_qty):
+        return None, "initial_quantity_custody_quantity_invalid"
+    try:
+        terminal_owners = [registry.assert_owner(
+            context=context, order_date=order_day, broker_order_no=number)
+            for number in sorted(order_nos)]
+    except OwnerRegistryError as exc:
+        return None, "initial_quantity_owner_terminal_read_failed:" + type(exc).__name__
+    if any(owner.get("state") != "ORDER_TERMINAL" for owner in terminal_owners):
+        return None, "initial_quantity_owner_terminal_missing"
+    owner_receipt = hashlib.sha256(json.dumps(
+        terminal_owners, ensure_ascii=True, sort_keys=True,
+        default=str, separators=(",", ":"),
+    ).encode()).hexdigest()
+    state = {
+        "state": ("TERMINAL_FILLED" if broker["filled_qty"] == ordered_qty
+                  else "TERMINAL_CANCELLED"),
+        **({"submit_price": states[leg_index]["submit_price"],
+            "owner_client_intent_id": states[leg_index]["owner_client_intent_id"]}
+           if bundle["schema"] == SCHEMA_DYNAMIC_PRICE else {}),
+        "terminal_confirmed": True,
+        "terminal_confirmed_at_epoch": current,
+        "submit_intent_at_epoch": states[leg_index].get(
+            "submit_intent_at_epoch"),
+        "broker_order_no": order_no,
+        "broker_terminal_receipt_id": broker["proof_sha256"],
+        "owner_registry_receipt_id": owner_receipt,
+        "account_position_receipt_id": f"all_venue:{code}:{custody_qty}:{current:.6f}",
+        "broker_unfilled_qty": 0,
+        "owner_registry_terminal": True,
+        "account_position_reconciled": True,
+        "ordered_qty": ordered_qty,
+        "filled_qty": broker["filled_qty"],
+        "cancelled_qty": broker["cancelled_qty"],
+    }
+    return state, "initial_quantity_leg_terminal_proved"
+
+
+def _initial_quantity_bundle_state_path(bundle: dict) -> Path:
+    from src.engine.scalping.initial_quantity_bundle_state import bundle_state_path
+
+    return bundle_state_path(
+        DATA_DIR / "runtime" / "initial_quantity" / "bundles",
+        bundle["attempt_id"],
+    )
+
+
+def _initial_quantity_leg_owner_context(
+    stock: dict, attempt_id: str, leg_index: int,
+) -> Any:
+    """Keep one recoverable Main client intent per attempted BUY leg."""
+    from src.trading.order.owner_custody_registry import OwnerOrderContext
+
+    target_id = str(stock.get("id") or "")
+    if (not target_id or not isinstance(attempt_id, str) or not attempt_id
+            or type(leg_index) is not int or not 0 <= leg_index <= 3):
+        raise ValueError("initial_quantity_leg_owner_identity_invalid")
+    owner_id = "main_scalping:" + target_id
+    attempt_digest = hashlib.sha256(attempt_id.encode()).hexdigest()[:24]
+    context = OwnerOrderContext(
+        owner_type="main_scalping", owner_id=owner_id,
+        position_id=owner_id,
+        client_intent_id=(f"{owner_id}:initial_quantity:{attempt_digest}:"
+                          f"leg{leg_index}"))
+    context.validate()
+    return context
+
+
+def _initial_quantity_prepare_first_submit(
+    stock: dict, code: str, planned_order: dict, *, qty: int,
+    broker_price: int, submit_price: int, route: str, now_ts: float,
+    owner_context: Any, probe_ai_action: str = "",
+    probe_wait_contract: bool = False,
+) -> tuple[dict | None, str]:
+    """Persist a selected sequential bundle and first intent before broker I/O."""
+    continuation = planned_order.get("initial_quantity_sequential_continuation")
+    if not isinstance(continuation, dict):
+        return None, "not_sequential"
+    from src.engine.scalping.initial_quantity_bundle_state import (
+        SCHEMA_DYNAMIC_PRICE, create_indexed_bundle, new_bundle_state,
+        persist_dynamic_leg_submit_intent,
+    )
+    from src.engine.scalping.initial_quantity_timeout import (
+        build_bundle_timeout_schedule,
+    )
+
+    target_id = str(stock.get("id") or "")
+    lineage = submit_attempt_machine_lineage(stock, code) or {}
+    attempt_id = str(lineage.get("evaluation_attempt_id") or "")
+    legs = continuation.get("planned_legs")
+    probe_market = bool(planned_order.get("initial_quantity_probe_market"))
+    if (not target_id or not attempt_id or not isinstance(legs, list)
+            or not legs or legs[0]["qty"] != qty
+            or legs[0]["tag"] != planned_order.get("tag")
+            or legs[0]["route"] != route
+            or type(submit_price) is not int or submit_price <= 0
+            or (probe_market and (
+                legs[0]["tag"] != "initial_quantity_probe_0"
+                or qty != 1 or broker_price != 0))
+            or (not probe_market and (
+                broker_price <= 0 or broker_price != submit_price))
+            or owner_context is None
+            or not str(getattr(owner_context, "client_intent_id", ""))
+            or stock.get("initial_quantity_bundle") is not None):
+        return None, "first_submit_plan_identity_invalid"
+    start = datetime.fromtimestamp(now_ts, _KST).isoformat()
+    schedule = build_bundle_timeout_schedule(
+        quantity_type=continuation["quantity_type"],
+        policy_sha256=continuation["policy_file_sha256"],
+        decision_at=continuation["decision_at"],
+        order_start_at=start,
+        total_wait_sec=continuation["total_wait_sec"],
+        leg_count=len(legs), cancel_confirm_reserve_sec=5,
+    )
+    bundle = new_bundle_state(
+        attempt_id=attempt_id, code=code, target_id=target_id,
+        schedule=schedule, requested_qty=continuation["requested_qty"],
+        planned_legs=legs, schema=SCHEMA_DYNAMIC_PRICE)
+    base_dir = DATA_DIR / "runtime" / "initial_quantity" / "bundles"
+    create_indexed_bundle(base_dir, bundle)
+    _mutate_stock_state(stock, set_fields={
+        "initial_quantity_bundle": bundle,
+        "initial_quantity_bundle_indexed": True,
+    })
+    intent = persist_dynamic_leg_submit_intent(
+        base_dir, bundle, leg_index=0,
+        submit_price=submit_price,
+        owner_client_intent_id=owner_context.client_intent_id,
+        now_epoch=now_ts)
+    _mutate_stock_state(stock, set_fields={
+        "initial_quantity_bundle": intent,
+        "status": "BUY_ORDERED",
+        "entry_requested_qty": continuation["requested_qty"],
+        "requested_buy_qty": continuation["requested_qty"],
+        **({
+            "entry_split_probe_ai_action_at_submit": str(probe_ai_action).upper(),
+            "entry_split_probe_wait_contract_at_submit": bool(probe_wait_contract),
+            "entry_split_probe_submitted_at": now_ts,
+            "probe_confirmation_count": 0,
+            "probe_confirmation_last_at": 0.0,
+            "probe_confirmation_last_state": "UNKNOWN",
+            "probe_confirmation_last_signature": "",
+        } if probe_market else {}),
+    })
+    return intent, "first_submit_intent_persisted"
+
+
+def _initial_quantity_record_submit_response(
+    stock: dict, code: str, *, leg_index: int, response: Any,
+    expected_route: str, owner_context: Any,
+) -> tuple[bool, str]:
+    """Commit exact ACK or uncertainty before local order state is advanced."""
+    from src.engine.scalping.initial_quantity_bundle_state import (
+        persist_dynamic_leg_submit_response,
+    )
+
+    intent = stock.get("initial_quantity_bundle")
+    if not isinstance(intent, dict):
+        return False, "initial_quantity_intent_missing"
+    number = _extract_broker_order_no(response)
+    response_route = str(
+        (response or {}).get("broker_route")
+        or (response or {}).get("effective_dmst_stex_tp")
+        or expected_route).strip().upper() if isinstance(response, dict) else ""
+    exact = bool(
+        isinstance(response, dict)
+        and str(response.get("return_code", response.get("rt_cd", ""))) == "0"
+        and not _owner_registry_broker_ambiguity(response)
+        and response_route == expected_route
+        and owner_context is not None
+        and intent["leg_states"][leg_index].get("owner_client_intent_id")
+        == getattr(owner_context, "client_intent_id", None)
+    )
+    if exact:
+        try:
+            registry = default_order_owner_registry()
+            if not registry.symbol_registered(code):
+                exact = False
+            else:
+                owner = registry.assert_owner(
+                    context=owner_context,
+                    order_date=datetime.fromtimestamp(
+                        intent["schedule"]["order_start_at_epoch"], _KST).date(),
+                    broker_order_no=number)
+                exact = bool(owner and owner.get("client_intent_id")
+                             == owner_context.client_intent_id)
+        except (OwnerRegistryError, TypeError, ValueError):
+            exact = False
+    successor = persist_dynamic_leg_submit_response(
+        DATA_DIR / "runtime" / "initial_quantity" / "bundles",
+        intent, leg_index=leg_index, broker_order_no=number or None,
+        owner_exact=exact)
+    _mutate_stock_state(stock, set_fields={"initial_quantity_bundle": successor})
+    if successor["leg_states"][leg_index]["state"] != "OPEN":
+        _request_broker_snapshot_refresh(
+            code, reason="initial_quantity_submit_response_uncertain")
+        return False, "initial_quantity_submit_response_uncertain"
+    return True, "initial_quantity_submit_open_persisted"
+
+
+def _initial_quantity_recover_submit_owner(
+    stock: dict, code: str, *, leg_index: int,
+) -> tuple[bool, str]:
+    """Recover only an exact already-bound owner; never retry a BUY."""
+    from src.engine.scalping.initial_quantity_bundle_state import (
+        SCHEMA_DYNAMIC_PRICE, next_bundle_state, read_bundle_state,
+        save_bundle_state_cas,
+    )
+    from src.trading.order.owner_custody_registry import OwnerOrderContext
+
+    bundle = stock.get("initial_quantity_bundle")
+    if (not isinstance(bundle, dict) or bundle.get("schema") != SCHEMA_DYNAMIC_PRICE
+            or type(leg_index) is not int
+            or not 0 <= leg_index < len(bundle["leg_states"])):
+        return False, "initial_quantity_owner_recovery_input_invalid"
+    prior = bundle["leg_states"][leg_index]
+    if prior["state"] not in {"SUBMIT_INTENT", "UNCERTAIN"}:
+        return False, "initial_quantity_owner_recovery_state_invalid"
+    owner_id = "main_scalping:" + bundle["target_id"]
+    context = OwnerOrderContext(
+        owner_type="main_scalping", owner_id=owner_id,
+        position_id=owner_id,
+        client_intent_id=prior["owner_client_intent_id"])
+    order_day = datetime.fromtimestamp(
+        bundle["schedule"]["order_start_at_epoch"], _KST).date()
+    planned = bundle["planned_legs"][leg_index]
+    registry = default_order_owner_registry()
+    try:
+        row = registry.intent_for_client(context=context)
+        if not isinstance(row, dict):
+            return False, "initial_quantity_owner_intent_unbound"
+        number = str(row.get("broker_order_no") or "")
+        if (row.get("state") not in {"ORDER_BOUND", "ORDER_TERMINAL"}
+                or row.get("order_date") != order_day.isoformat()
+                or row.get("symbol") != code
+                or row.get("side") != "BUY"
+                or row.get("action") != "NEW"
+                or row.get("route") != planned["route"]
+                or _safe_int(row.get("quantity"), -1) != planned["qty"]
+                or len(number) != 7 or not number.isdigit()
+                or (prior.get("broker_order_no")
+                    and prior["broker_order_no"] != number)):
+            return False, "initial_quantity_owner_intent_identity_invalid"
+        exact = registry.assert_owner(
+            context=context, order_date=order_day,
+            broker_order_no=number)
+        if (not isinstance(exact, dict)
+                or exact.get("client_intent_id") != context.client_intent_id):
+            return False, "initial_quantity_owner_order_unproved"
+        path = _initial_quantity_bundle_state_path(bundle)
+        if read_bundle_state(path) != bundle:
+            return False, "initial_quantity_owner_journal_changed"
+        successor = next_bundle_state(bundle, leg_index, {
+            **prior, "state": "OPEN", "broker_order_no": number})
+        save_bundle_state_cas(
+            path, successor,
+            expected_parent_sha256=bundle["bundle_content_sha256"])
+    except (OwnerRegistryError, KeyError, TypeError, ValueError, OSError) as exc:
+        return False, "initial_quantity_owner_recovery_failed:" + type(exc).__name__
+    _mutate_stock_state(stock, set_fields={"initial_quantity_bundle": successor})
+    _request_broker_snapshot_refresh(
+        code, reason="initial_quantity_owner_exact_order_recovered")
+    return True, "initial_quantity_owner_exact_order_recovered"
+
+
+def _initial_quantity_skip_unsent_leg(
+    stock: dict, code: str, *, leg_index: int, now_ts: float,
+) -> tuple[bool, str]:
+    """Close an elapsed slot only when no intent or broker call was possible."""
+    from src.engine.scalping.initial_quantity_bundle_state import (
+        SCHEMA_DYNAMIC_PRICE, bundle_state_valid, next_bundle_state, read_bundle_for_target,
+        read_bundle_state, save_bundle_state_cas,
+    )
+    from src.engine.scalping.initial_quantity_timeout import (
+        next_bundle_timeout_action,
+    )
+
+    bundle = stock.get("initial_quantity_bundle")
+    if (not bundle_state_valid(bundle)
+            or bundle["schema"] != SCHEMA_DYNAMIC_PRICE
+            or bundle["code"] != code):
+        return False, "initial_quantity_skip_bundle_invalid"
+    action = next_bundle_timeout_action(
+        bundle["schedule"], bundle["leg_states"], now_epoch=now_ts)
+    if (action.get("action") != "SKIP_LEG"
+            or action.get("leg_index") != leg_index
+            or bundle["leg_states"][leg_index]["state"] != "NOT_SUBMITTED"):
+        return False, "initial_quantity_skip_slot_invalid"
+    base_dir = DATA_DIR / "runtime" / "initial_quantity" / "bundles"
+    indexed, index_status = read_bundle_for_target(
+        base_dir, code, bundle["target_id"])
+    if index_status != "target_bundle_loaded" or indexed != bundle:
+        return False, "initial_quantity_skip_index_invalid"
+    if any(order.get("initial_quantity_leg_index") == leg_index
+           for order in _iter_pending_entry_orders(stock)
+           if isinstance(order, dict)):
+        return False, "initial_quantity_skip_local_order_present"
+    context = _initial_quantity_leg_owner_context(
+        stock, bundle["attempt_id"], leg_index)
+    try:
+        registry = default_order_owner_registry()
+        if (not registry.symbol_registered(code)
+                or registry.intent_for_client(context=context) is not None):
+            return False, "initial_quantity_skip_owner_intent_present_or_unavailable"
+    except (OwnerRegistryError, TypeError, ValueError, OSError):
+        return False, "initial_quantity_skip_owner_registry_unavailable"
+    path = _initial_quantity_bundle_state_path(bundle)
+    if read_bundle_state(path) != bundle:
+        return False, "initial_quantity_skip_journal_changed"
+    proof_base = (bundle["bundle_content_sha256"] + ":" +
+                  context.client_intent_id)
+    state = {
+        "state": "TERMINAL_SKIPPED",
+        "terminal_confirmed": True,
+        "terminal_confirmed_at_epoch": now_ts,
+        "order_absence_confirmed": True,
+        "order_absence_receipt_id": hashlib.sha256(
+            ("journal_unsent:" + proof_base).encode()).hexdigest(),
+        "owner_registry_receipt_id": hashlib.sha256(
+            ("exact_client_intent_absent:" + proof_base).encode()).hexdigest(),
+        "skip_reason": "insufficient_time_for_cancel_confirmation",
+    }
+    try:
+        successor = next_bundle_state(bundle, leg_index, state)
+        save_bundle_state_cas(
+            path, successor,
+            expected_parent_sha256=bundle["bundle_content_sha256"])
+    except (KeyError, TypeError, ValueError, OSError):
+        return False, "initial_quantity_skip_persist_failed"
+    _mutate_stock_state(stock, set_fields={"initial_quantity_bundle": successor})
+    return True, "initial_quantity_unsent_leg_skipped"
+
+
+def _initial_quantity_submit_successor_leg(
+    stock: dict, code: str, *, leg_index: int,
+) -> tuple[bool, str]:
+    """Submit one later leg after prior terminal and fresh hard-safety checks."""
+    from src.engine.scalping.initial_quantity_activation import (
+        ENV_FILE, ENV_SHA, RUNTIME_V2_SCHEMA, RUNTIME_REFRESH_SCHEMA,
+        load_pinned_initial_quantity_policy,
+    )
+    from src.engine.scalping.initial_quantity_bundle_state import (
+        SCHEMA_DYNAMIC_PRICE, persist_dynamic_leg_submit_intent,
+        read_bundle_for_target,
+    )
+    from src.engine.scalping.initial_quantity_timeout import (
+        next_bundle_timeout_action,
+    )
+
+    with _ENTRY_SPLIT_PROBE_RESIDUAL_LOCK:
+        now = time.time()
+        bundle = stock.get("initial_quantity_bundle")
+        if (not isinstance(bundle, dict)
+                or bundle.get("schema") != SCHEMA_DYNAMIC_PRICE
+                or bundle.get("code") != code
+                or bundle.get("target_id") != str(stock.get("id") or "")
+                or type(leg_index) is not int or leg_index <= 0
+                or leg_index >= len(bundle["planned_legs"])):
+            return False, "initial_quantity_successor_identity_invalid"
+        decision = next_bundle_timeout_action(
+            bundle["schedule"], bundle["leg_states"], now_epoch=now)
+        if decision.get("action") != "SUBMIT" or decision.get("leg_index") != leg_index:
+            return False, "initial_quantity_successor_slot_closed"
+        base_dir = DATA_DIR / "runtime" / "initial_quantity" / "bundles"
+        indexed, index_status = read_bundle_for_target(
+            base_dir, code, bundle["target_id"])
+        if index_status != "target_bundle_loaded" or indexed != bundle:
+            return False, "initial_quantity_successor_index_invalid"
+        path = str(os.getenv(ENV_FILE) or "").strip()
+        expected_sha = str(os.getenv(ENV_SHA) or "").strip().lower()
+        if not path or expected_sha != bundle["policy_sha256"]:
+            return False, "initial_quantity_successor_policy_changed"
+        policy, status = load_pinned_initial_quantity_policy(
+            Path(path), expected_sha, datetime.fromtimestamp(now, _KST).date())
+        if (status not in {"initial_policy_v2_loaded",
+                           "initial_policy_refresh_loaded"}
+                or policy is None
+                or policy["schema_version"] not in {
+                    RUNTIME_V2_SCHEMA, RUNTIME_REFRESH_SCHEMA}):
+            return False, "initial_quantity_successor_policy_unavailable"
+        row = policy["type_policies"].get(bundle["schedule"]["quantity_type"])
+        if (not isinstance(row, dict) or row["selected_shape"] == "parent"
+                or _initial_quantity_total_wait_sec(stock, row) !=
+                bundle["schedule"]["total_wait_sec"]):
+            return False, "initial_quantity_successor_policy_shape_or_time_changed"
+        planned = bundle["planned_legs"][leg_index]
+        route = planned["route"]
+        if (any(item["route"] != route for item in bundle["planned_legs"])
+                or _has_open_pending_entry_orders(stock)
+                or stock.get("entry_submit_identity_reconciliation_required")
+                or stock.get("exit_requested")
+                or _has_active_sell_order_pending(stock)
+                or is_buy_side_paused()
+                or not is_scalping_buy_time_allowed(
+                    datetime.fromtimestamp(now, _KST))
+                or _manual_control_exclusion_blocked(
+                    stock, code, pipeline="entry",
+                    stage="initial_quantity_successor_manual_block",
+                    new_entry=False)
+                or _safe_float((COOLDOWNS or {}).get(code), 0.0) > now):
+            return False, "initial_quantity_successor_hard_safety_block"
+        terminal_filled_qty = sum(
+            _safe_int(item.get("filled_qty"), 0)
+            for item in bundle["leg_states"][:leg_index])
+        if (terminal_filled_qty != _entry_bundle_filled_qty(stock)
+                or terminal_filled_qty != _safe_int(stock.get("buy_qty"), 0)
+                or terminal_filled_qty + sum(
+                    item["qty"] for item in bundle["planned_legs"][leg_index:])
+                > bundle["requested_qty"]):
+            return False, "initial_quantity_successor_inventory_or_qty_gap"
+        if terminal_filled_qty > 0:
+            buy_price = _safe_float(stock.get("buy_price"), 0.0)
+            mark = _safe_int(stock.get("current_price"), 0)
+            if buy_price <= 0 or mark <= 0:
+                return False, "initial_quantity_successor_position_price_missing"
+            pnl = calculate_net_profit_rate(buy_price, mark)
+            if (pnl <= _safe_float(stock.get("hard_stop_pct"),
+                                   _rule_float("SCALP_PRESET_HARD_STOP_PCT", -0.7))
+                    or (stock.get("protect_profit_pct") is not None
+                        and pnl <= _safe_float(stock.get("protect_profit_pct"), 0.0))
+                    or (stock.get("trailing_stop_price") is not None
+                        and mark <= _safe_int(stock.get("trailing_stop_price"), 0))):
+                return False, "initial_quantity_successor_exit_precedence"
+        if WS_MANAGER is None:
+            return False, "initial_quantity_successor_ws_missing"
+        ws_data = WS_MANAGER.get_latest_data(code) or {}
+        if not isinstance(ws_data, dict):
+            return False, "initial_quantity_successor_ws_invalid"
+        ws_route = str(ws_data.get("ws_route") or "").strip().upper()
+        ws_epoch = str(ws_data.get("market_data_transport_epoch") or "").strip()
+        if ws_route != route or not ws_epoch:
+            return False, "initial_quantity_successor_route_or_epoch_invalid"
+        quote, _, ask, _ = _build_quote_consistency_fields(
+            ws_data, side="buy", now_ts=now)
+        bid = _safe_int(quote.get("passive_buy_price"), 0)
+        state = str(quote.get("quote_consistency_state") or "").lower()
+        reason = str(quote.get("quote_consistency_reason") or "").lower()
+        if (state in {"missing", "diverged", "blocked"}
+                or reason in {"quote_stale", "stale_quote", "conflicted",
+                              "price_conflict"}
+                or bid <= 0 or ask <= 0 or bid > ask):
+            return False, "initial_quantity_successor_quote_invalid"
+        if bundle["planned_legs"][0]["tag"] == "initial_quantity_probe_0":
+            if (bundle["leg_states"][0]["state"] != "TERMINAL_FILLED"
+                    or bundle["leg_states"][0].get("filled_qty") != 1
+                    or _safe_float(stock.get("buy_price"), 0.0) <= 0):
+                return False, "initial_quantity_probe_terminal_fill_missing"
+            direction = _post_probe_direction_fields(
+                stock, ws_data, quote,
+                probe_fill_price=_safe_int(stock.get("buy_price"), 0),
+                code=code, now_ts=now)
+            action = str(direction.get("post_probe_continuation_action") or "").upper()
+            if (direction.get("post_probe_hard_veto")
+                    or action not in {"ALLOW_NORMAL", "ALLOW_NARROW",
+                                      "ALLOW_RECOVERED_WIDE"}):
+                return False, "initial_quantity_probe_direction_deferred"
+            if (str(stock.get("entry_split_probe_ai_action_at_submit") or "")
+                    .upper() == "WAIT"):
+                if not _wait_probe_contract_at_submit(stock, now_ts=now):
+                    return False, "initial_quantity_probe_wait_contract_missing"
+                ready, _ = _advance_wait_probe_confirmation(
+                    stock, direction, now_ts=now)
+                if not ready:
+                    return False, "initial_quantity_probe_wait_confirmation_pending"
+        reference = bundle["leg_states"][leg_index - 1].get("submit_price")
+        if type(reference) is not int or reference <= 0:
+            return False, "initial_quantity_successor_price_anchor_missing"
+        resolution = resolve_scalping_entry_price(
+            strategy_id="SCALPING", defensive_order_price=reference,
+            target_buy_price=0, best_bid=bid, best_ask=ask,
+            phase="initial_quantity_leg", probe_fill_price=reference,
+            fresh_mark_price=_safe_int(ws_data.get("curr"), 0),
+            residual_leg_index=leg_index,
+            initial_quantity_shape=row["selected_shape"])
+        price = _safe_int(resolution.get("resolved_order_price"), 0)
+        if not resolution.get("allowed") or price <= 0:
+            return False, "initial_quantity_successor_p1_price_invalid"
+        price_guard = _split_policy_pre_submit_price_guard_fields(
+            "SCALPING", price, bid, planned_order={
+                "entry_split_order_policy_applied": True,
+                "entry_split_order_price_offset_pct": (
+                    0.8 if "0p8" in row["selected_shape"] and leg_index == 2
+                    else 0.3 if "0p3" in row["selected_shape"] else 0),
+            })
+        if price_guard.get("pre_submit_price_guard_blocked"):
+            return False, "initial_quantity_successor_price_guard_block"
+        qty = planned["qty"]
+        account = _probe_residual_account_guard_fields(
+            code, unit_price=ask, residual_qty=qty)
+        if not account.get("account_guard_allowed"):
+            return False, "initial_quantity_successor_account_guard_block"
+        cap = _entry_setup_exploration_submit_cap_guard(
+            stock, qty=qty, now_ts=now, order_already_submitted=True)
+        if not cap.get("allowed"):
+            return False, "initial_quantity_successor_entry_cap_block"
+        broker_resolution = kiwoom_orders.describe_buy_order_resolution(
+            "00", price=price, tif="DAY", dmst_stex_tp=route)
+        if (str(broker_resolution.get("effective_dmst_stex_tp")) != route
+                or _safe_int(broker_resolution.get("effective_order_price"), -1)
+                != price):
+            return False, "initial_quantity_successor_broker_resolution_changed"
+        at = time.time()
+        if next_bundle_timeout_action(
+                bundle["schedule"], bundle["leg_states"],
+                now_epoch=at).get("action") != "SUBMIT":
+            return False, "initial_quantity_successor_slot_elapsed"
+        context = _initial_quantity_leg_owner_context(
+            stock, bundle["attempt_id"], leg_index)
+        try:
+            intent = persist_dynamic_leg_submit_intent(
+                base_dir, bundle, leg_index=leg_index, submit_price=price,
+                owner_client_intent_id=context.client_intent_id, now_epoch=at)
+        except (KeyError, TypeError, ValueError, OSError):
+            return False, "initial_quantity_successor_intent_persist_failed"
+        _mutate_stock_state(stock, set_fields={"initial_quantity_bundle": intent})
+        try:
+            response = kiwoom_orders.send_buy_order(
+                code, qty, price, "00", token=KIWOOM_TOKEN,
+                order_type_desc="매수", tif="DAY", dmst_stex_tp=route,
+                owner_context=context)
+        except Exception:
+            _request_broker_snapshot_refresh(
+                code, reason="initial_quantity_successor_submit_uncertain")
+            return False, "initial_quantity_successor_submit_uncertain"
+        try:
+            opened, response_status = _initial_quantity_record_submit_response(
+                stock, code, leg_index=leg_index, response=response,
+                expected_route=route, owner_context=context)
+        except (KeyError, TypeError, ValueError, OSError):
+            _request_broker_snapshot_refresh(
+                code, reason="initial_quantity_successor_response_persist_failed")
+            return False, "initial_quantity_successor_response_persist_failed"
+        if not opened:
+            return False, response_status
+        number = _extract_broker_order_no(response)
+        local = {
+            "tag": planned["tag"], "qty": qty, "price": price,
+            "ord_no": number, "tif": "DAY", "order_type": "00",
+            "status": "OPEN", "filled_qty": 0, "sent_at": time.time(),
+            "dmst_stex_tp": route, "dmst_stex_tp_source": "request",
+            "broker_route": route, "entry_order_guard_price": price,
+            "initial_quantity_leg_index": leg_index,
+            "entry_submit_attempt_id": bundle["attempt_id"],
+            "entry_price_resolver_phase": "initial_quantity_leg",
+            "entry_price_policy_sha256": policy["p1_price_policy_sha256"],
+            "quote_transport_epoch_at_submit": ws_epoch,
+        }
+        current_orders = list(_iter_pending_entry_orders(stock))
+        _mutate_stock_state(stock, set_fields={
+            "pending_entry_orders": [*current_orders, local],
+            "status": "BUY_ORDERED"})
+        return True, "initial_quantity_successor_submitted"
+
+
+def _initial_quantity_persist_leg_transition(
+    stock: dict, order: dict, next_state: dict,
+) -> tuple[bool, str]:
+    """Commit one leg transition before another broker-dependent action."""
+    from src.engine.scalping.initial_quantity_bundle_state import (
+        SCHEMA_DYNAMIC_PRICE, bundle_state_valid, next_bundle_state,
+        read_bundle_state, save_bundle_state_cas,
+    )
+
+    bundle = stock.get("initial_quantity_bundle")
+    if not isinstance(bundle, dict) or not isinstance(order, dict):
+        return False, "initial_quantity_bundle_missing"
+    if (not bundle_state_valid(bundle)
+            or bundle.get("target_id") != str(stock.get("id") or "")):
+        return False, "initial_quantity_bundle_identity_invalid"
+    index = order.get("initial_quantity_leg_index")
+    if type(index) is not int or not 0 <= index < len(bundle["leg_states"]):
+        return False, "initial_quantity_leg_index_invalid"
+    prior = bundle["leg_states"][index]
+    planned = bundle["planned_legs"][index]
+    expected_price = (next_state.get("submit_price")
+                      if bundle["schema"] == SCHEMA_DYNAMIC_PRICE
+                      else planned["price"])
+    if (bundle["schema"] == SCHEMA_DYNAMIC_PRICE
+            and planned["tag"] == "initial_quantity_probe_0"):
+        expected_price = 0
+    broker_number = prior.get("broker_order_no")
+    if (broker_number or next_state.get("broker_order_no")
+            or next_state.get("state") == "SUBMIT_INTENT") and (
+            (bool(broker_number)
+             and str(order.get("ord_no") or "") != broker_number)
+            or order.get("entry_submit_attempt_id") != bundle["attempt_id"]
+            or order.get("qty") != planned["qty"]
+            or order.get("price") != expected_price
+            or (bundle["schema"] == SCHEMA_DYNAMIC_PRICE
+                and planned["tag"] == "initial_quantity_probe_0"
+                and (str(order.get("order_type")) != "3"
+                     or order.get("entry_order_guard_price") !=
+                     next_state.get("submit_price")))
+            or order.get("tag") != planned["tag"]
+            or _entry_order_cancel_dmst_stex_tp(order) != planned["route"]):
+        return False, "initial_quantity_local_order_plan_mismatch"
+    try:
+        path = _initial_quantity_bundle_state_path(bundle)
+        persisted = read_bundle_state(path)
+        if persisted != bundle:
+            return False, "initial_quantity_bundle_restart_or_cas_gap"
+        successor = next_bundle_state(
+            bundle, index, next_state,
+        )
+        save_bundle_state_cas(
+            path, successor,
+            expected_parent_sha256=bundle["bundle_content_sha256"],
+        )
+    except (KeyError, TypeError, ValueError, OSError) as exc:
+        return False, "initial_quantity_bundle_persist_failed:" + type(exc).__name__
+    _mutate_stock_state(stock, set_fields={"initial_quantity_bundle": successor})
+    return True, "initial_quantity_bundle_transition_persisted"
+
+
 def _cancel_pending_entry_orders(
     stock, code, *, force=False, expired_only=False, now_ts=None, cancel_reason=None
 ):
@@ -76831,8 +77783,22 @@ def _cancel_pending_entry_orders(
 
     with ENTRY_LOCK:
         now_ts = float(now_ts or time.time())
+        initial_bundle = stock.get("initial_quantity_bundle")
+        if isinstance(initial_bundle, dict):
+            from src.engine.scalping.initial_quantity_bundle_state import bundle_state_valid
+            if (not bundle_state_valid(initial_bundle)
+                    or initial_bundle["code"] != code
+                    or initial_bundle["target_id"] != str(stock.get("id") or "")):
+                return "failed"
         open_orders = _open_entry_split_orders(stock)
         if not open_orders:
+            if isinstance(stock.get("initial_quantity_bundle"), dict):
+                # A missing local order list is not proof of broker absence.
+                # Keep the journal and target intact for exact reconciliation.
+                _request_broker_snapshot_refresh(
+                    code, reason="initial_quantity_local_order_absent",
+                )
+                return "pending"
             _clear_pending_entry_meta(
                 stock,
                 preserve_probe_runtime=_entry_split_probe_exit_authority_active(stock),
@@ -76855,6 +77821,13 @@ def _cancel_pending_entry_orders(
         cancel_ack_orders: list[dict] = []
         bundle_cancel_cooldown_eligible = False
         for order in open_orders:
+            if (isinstance(stock.get("initial_quantity_bundle"), dict)
+                    and order.get("cancel_terminal_pending")):
+                if not str(order.get("cancel_ack_order_no") or "").strip():
+                    had_failure = True
+                else:
+                    cancel_ack_orders.append(order)
+                continue
             ord_no = str(order.get("ord_no", "") or "").strip()
             sent_at = _safe_float(order.get("sent_at"), 0.0)
             order_age_sec = max(0.0, now_ts - sent_at) if sent_at > 0 else 0.0
@@ -76947,6 +77920,42 @@ def _cancel_pending_entry_orders(
                     wait_result.get("is_report_only", "true")
                 ).lower()
                 cancel_fields["actual_timeout_sec"] = str(timeout_sec)
+            initial_bundle = stock.get("initial_quantity_bundle")
+            if isinstance(initial_bundle, dict):
+                index = order.get("initial_quantity_leg_index")
+                states = initial_bundle.get("leg_states")
+                prior_state = (states[index] if isinstance(states, list)
+                               and type(index) is int and 0 <= index < len(states)
+                               and isinstance(states[index], dict) else {})
+                if prior_state.get("state") in {"OPEN", "PARTIAL"}:
+                    committed, journal_status = (
+                        _initial_quantity_persist_leg_transition(
+                            stock, order,
+                            {**prior_state, "state": "CANCEL_REQUESTED",
+                             "broker_order_no": ord_no},
+                        )
+                    )
+                    if not committed:
+                        had_failure = True
+                        cancel_fields["initial_quantity_journal_gap"] = journal_status
+                elif (prior_state.get("state") == "CANCEL_REQUESTED"
+                      and prior_state.get("broker_order_no") == ord_no):
+                    # The process may have crashed between durable intent and
+                    # the broker reply. Never repeat a possibly sent cancel.
+                    had_failure = True
+                    cancel_fields["initial_quantity_journal_gap"] = (
+                        "initial_quantity_cancel_reply_unknown"
+                    )
+                else:
+                    had_failure = True
+                    cancel_fields["initial_quantity_journal_gap"] = (
+                        "initial_quantity_cancel_state_invalid"
+                    )
+                if had_failure:
+                    _request_broker_snapshot_refresh(
+                        code, reason="initial_quantity_cancel_intent_uncertain",
+                    )
+                    continue
             _log_entry_pipeline(
                 stock, code, "entry_order_cancel_requested", **cancel_fields
             )
@@ -77190,14 +78199,77 @@ def _cancel_pending_entry_orders(
             return "failed"
 
         if cancel_ack_orders:
-            reconciled, reconcile_reason, broker_qty = (
-                _order_terminal_inventory_reconciliation(
-                    stock,
-                    code,
-                    [order.get("ord_no") for order in cancel_ack_orders],
-                    expected_runtime_qty=_entry_bundle_filled_qty(stock),
+            initial_bundle = stock.get("initial_quantity_bundle")
+            if isinstance(initial_bundle, dict):
+                from src.engine.scalping.initial_quantity_timeout import (
+                    next_bundle_timeout_action,
                 )
-            )
+
+                staged_states = copy.deepcopy(initial_bundle.get("leg_states"))
+                schedule = initial_bundle.get("schedule")
+                initial_terminal_reason = "initial_quantity_leg_terminal_unproved"
+                initial_terminal_valid = isinstance(staged_states, list)
+                initial_late_terminal = False
+                for order in cancel_ack_orders if initial_terminal_valid else ():
+                    terminal, initial_terminal_reason = (
+                        _initial_quantity_buy_leg_terminal_state(
+                            stock, code, order, now_ts=time.time(),
+                        )
+                    )
+                    index = order.get("initial_quantity_leg_index")
+                    if (terminal is None or type(index) is not int
+                            or not 0 <= index < len(staged_states)):
+                        initial_terminal_valid = False
+                        break
+                    staged_states[index] = terminal
+                if initial_terminal_valid:
+                    action = next_bundle_timeout_action(
+                        schedule, staged_states, now_epoch=time.time(),
+                    )
+                    initial_late_terminal = action.get("action") == "BLOCK_LATE_TERMINAL"
+                    initial_terminal_valid = action.get("action") not in {
+                        "BLOCK_INVALID_TIMEOUT_CONTRACT", "BLOCK_INVALID_LEG_STATE",
+                        "RECONCILE",
+                    }
+                    if not initial_terminal_valid:
+                        initial_terminal_reason = str(action.get("action"))
+                if initial_terminal_valid:
+                    if len(cancel_ack_orders) != 1:
+                        initial_terminal_valid = False
+                        initial_terminal_reason = (
+                            "initial_quantity_parallel_cancel_forbidden"
+                        )
+                    else:
+                        terminal_order = cancel_ack_orders[0]
+                        terminal_index = terminal_order["initial_quantity_leg_index"]
+                        initial_terminal_valid, initial_terminal_reason = (
+                            _initial_quantity_persist_leg_transition(
+                                stock, terminal_order,
+                                staged_states[terminal_index],
+                            )
+                        )
+                        if initial_terminal_valid and initial_late_terminal:
+                            _mutate_stock_state(stock, set_fields={
+                                "initial_quantity_budget_breached": True,
+                            })
+                if initial_terminal_valid:
+                    reconciled, reconcile_reason, broker_qty = (
+                        True, "initial_quantity_exact_terminal",
+                        _entry_bundle_filled_qty(stock),
+                    )
+                else:
+                    reconciled, reconcile_reason, broker_qty = (
+                        False, initial_terminal_reason, None,
+                    )
+            else:
+                reconciled, reconcile_reason, broker_qty = (
+                    _order_terminal_inventory_reconciliation(
+                        stock,
+                        code,
+                        [order.get("ord_no") for order in cancel_ack_orders],
+                        expected_runtime_qty=_entry_bundle_filled_qty(stock),
+                    )
+                )
             if not reconciled:
                 _mutate_stock_state(
                     stock,
@@ -77215,8 +78287,22 @@ def _cancel_pending_entry_orders(
                 )
                 return "pending"
             for order in cancel_ack_orders:
-                order["status"] = "CANCELLED"
-                order["cancelled_at"] = time.time()
+                bundle_now = stock.get("initial_quantity_bundle")
+                terminal_state = None
+                if isinstance(bundle_now, dict):
+                    leg_index = order.get("initial_quantity_leg_index")
+                    states = bundle_now.get("leg_states")
+                    if (type(leg_index) is int and isinstance(states, list)
+                            and 0 <= leg_index < len(states)):
+                        terminal_state = states[leg_index]
+                if (isinstance(terminal_state, dict)
+                        and terminal_state.get("state") == "TERMINAL_FILLED"):
+                    order["status"] = "FILLED"
+                    order["filled_qty"] = terminal_state["filled_qty"]
+                else:
+                    order["status"] = "CANCELLED"
+                    order["cancelled_at"] = time.time()
+                    cancelled_any = True
                 order.pop("cancel_terminal_pending", None)
                 try:
                     emitted = _log_holding_pipeline(
@@ -77243,7 +78329,6 @@ def _cancel_pending_entry_orders(
                         f"[ENTRY_CANCEL] source_gap_buy_terminal_evidence "
                         f"order={order.get('ord_no')} error={type(exc).__name__}"
                     )
-            cancelled_any = True
             _mutate_stock_state(
                 stock,
                 pop_fields=[
@@ -77256,6 +78341,24 @@ def _cancel_pending_entry_orders(
         remaining_open_orders = _open_entry_split_orders(stock)
         if remaining_open_orders:
             return "partial_cancelled" if cancelled_any else "pending"
+        initial_bundle = stock.get("initial_quantity_bundle")
+        if isinstance(initial_bundle, dict):
+            states = initial_bundle.get("leg_states")
+            if not isinstance(states, list) or not all(
+                    isinstance(item, dict) for item in states):
+                return "pending"
+            if any(item.get("state") == "NOT_SUBMITTED" for item in states):
+                # A terminal first leg does not finish the bundle. Keep the
+                # original target quantity and pinned plan for its later slot.
+                return "partial_cancelled" if cancelled_any else "pending"
+            if not all(item.get("state") in {
+                    "TERMINAL_FILLED", "TERMINAL_CANCELLED", "TERMINAL_SKIPPED",
+            } for item in states):
+                return "pending"
+            # The bundle reconciler owns final inventory conservation, target
+            # index retirement, and the HOLDING/WATCHING handoff. A cancel ACK
+            # path must not remove its recovery pointer independently.
+            return "pending"
 
         if (
             bundle_cancel_cooldown_eligible
@@ -79288,6 +80391,12 @@ def _resolve_live_entry_order_request(
     qty = int(planned_order.get("qty", 0) or 0)
     price = int(planned_order.get("price", default_price) or default_price or 0)
 
+    if strategy == "SCALPING" and planned_order.get("initial_quantity_probe_market") is True:
+        return {
+            "qty": qty, "price": 0, "guard_price": price,
+            "order_type_code": "3", "tif": "DAY", "tag": tag,
+        }
+
     if strategy == "SCALPING" and (
         (
             bool(planned_order.get("entry_split_order_market_first_leg_applied"))
@@ -79348,6 +80457,265 @@ def _resolve_live_entry_order_request(
 
 
 def _reconcile_pending_entry_orders(stock, code, strategy):
+    initial_bundle = stock.get("initial_quantity_bundle")
+    if isinstance(initial_bundle, dict):
+        from src.engine.scalping.initial_quantity_bundle_state import (
+            bundle_state_valid, recover_bundle_state,
+        )
+        from src.engine.scalping.initial_quantity_timeout import (
+            next_bundle_timeout_action,
+        )
+
+        if not bundle_state_valid(initial_bundle):
+            _log_entry_pipeline(
+                stock, code, "initial_quantity_bundle_invalid",
+                actual_order_submitted=False, broker_order_forbidden=True,
+                runtime_effect=True,
+            )
+            return
+        if (initial_bundle["code"] != code
+                or initial_bundle["target_id"] != str(stock.get("id") or "")
+                or strategy != "SCALPING"):
+            _log_entry_pipeline(
+                stock, code, "initial_quantity_bundle_runtime_identity_mismatch",
+                actual_order_submitted=False, broker_order_forbidden=True,
+                runtime_effect=True,
+            )
+            return
+        if stock.get("initial_quantity_bundle_indexed") is True:
+            from src.engine.scalping.initial_quantity_bundle_state import (
+                read_bundle_for_target,
+            )
+            indexed, index_status = read_bundle_for_target(
+                DATA_DIR / "runtime" / "initial_quantity" / "bundles",
+                code, initial_bundle["target_id"],
+            )
+            terminal_index = (
+                index_status == "target_bundle_terminal"
+                and indexed is not None
+                and indexed["attempt_id"] == initial_bundle["attempt_id"]
+                and all(item["state"] in {
+                    "TERMINAL_FILLED", "TERMINAL_CANCELLED", "TERMINAL_SKIPPED",
+                } for item in initial_bundle["leg_states"])
+            )
+            if not terminal_index and (
+                    index_status != "target_bundle_loaded" or indexed is None
+                    or indexed["attempt_id"] != initial_bundle["attempt_id"]):
+                _log_entry_pipeline(
+                    stock, code, "initial_quantity_target_index_gap",
+                    index_status=index_status,
+                    actual_order_submitted=False, broker_order_forbidden=True,
+                    runtime_effect=True,
+                )
+                now = time.time()
+                last = _safe_float(
+                    stock.get("initial_quantity_reconcile_requested_at"), 0.0,
+                )
+                if last <= 0 or now < last or now - last >= 5.0:
+                    _mutate_stock_state(stock, set_fields={
+                        "initial_quantity_reconcile_requested_at": now,
+                    })
+                    _request_broker_snapshot_refresh(
+                        code, reason="initial_quantity_target_index_gap",
+                    )
+                return
+        recovered, recovery_status = recover_bundle_state(
+            _initial_quantity_bundle_state_path(initial_bundle), initial_bundle,
+            indexed_journal_authority=(
+                stock.get("initial_quantity_bundle_indexed") is True),
+        )
+        if recovered is None or recovery_status == "bundle_journal_ahead":
+            if recovered is not None:
+                _mutate_stock_state(stock, set_fields={
+                    "initial_quantity_bundle": recovered,
+                })
+            _log_entry_pipeline(
+                stock, code, "initial_quantity_bundle_recovery_reconcile",
+                recovery_status=recovery_status,
+                actual_order_submitted=False, broker_order_forbidden=True,
+                runtime_effect=True,
+            )
+            now = time.time()
+            last = _safe_float(stock.get("initial_quantity_reconcile_requested_at"), 0.0)
+            if last <= 0 or now < last or now - last >= 5.0:
+                _mutate_stock_state(stock, set_fields={
+                    "initial_quantity_reconcile_requested_at": now,
+                })
+                _request_broker_snapshot_refresh(
+                    code, reason="initial_quantity_bundle_journal_recovery",
+                )
+            return
+        decision = next_bundle_timeout_action(
+            initial_bundle["schedule"], initial_bundle["leg_states"],
+            now_epoch=time.time(),
+        )
+        if (decision.get("action") == "RECONCILE"
+                and decision.get("reason") == "submit_identity_pending"
+                and initial_bundle.get("schema") ==
+                "initial_quantity_bundle_state_v2"):
+            recovered_owner, recovery_reason = _initial_quantity_recover_submit_owner(
+                stock, code, leg_index=decision["leg_index"])
+            if recovered_owner:
+                _log_entry_pipeline(
+                    stock, code, "initial_quantity_owner_exact_order_recovered",
+                    recovery_reason=recovery_reason,
+                    actual_order_submitted=False,
+                    broker_order_forbidden=True, runtime_effect=True)
+                return
+        if (decision.get("action") == "SKIP_LEG"
+                and initial_bundle.get("schema") ==
+                "initial_quantity_bundle_state_v2"):
+            skipped, skip_reason = _initial_quantity_skip_unsent_leg(
+                stock, code, leg_index=decision["leg_index"],
+                now_ts=time.time())
+            _log_entry_pipeline(
+                stock, code, "initial_quantity_skip_unsent_leg",
+                skip_reason=skip_reason, skipped=skipped,
+                actual_order_submitted=False,
+                broker_order_forbidden=True, runtime_effect=True)
+            if not skipped:
+                _request_broker_snapshot_refresh(
+                    code, reason="initial_quantity_skip_absence_unproved")
+            return
+        if (decision.get("action") == "SUBMIT"
+                and initial_bundle.get("schema") ==
+                "initial_quantity_bundle_state_v2"):
+            submitted, submit_reason = _initial_quantity_submit_successor_leg(
+                stock, code, leg_index=decision["leg_index"])
+            _log_entry_pipeline(
+                stock, code, "initial_quantity_successor_dispatch",
+                submit_reason=submit_reason, submitted=submitted,
+                actual_order_submitted=submitted,
+                broker_order_forbidden=not submitted,
+                runtime_effect=True)
+            return
+        if (decision.get("action") in {"DONE", "BLOCK_LATE_TERMINAL"}
+                and all(item["state"] in {
+                    "TERMINAL_FILLED", "TERMINAL_CANCELLED", "TERMINAL_SKIPPED",
+                } for item in initial_bundle["leg_states"])):
+            terminal_filled_qty = sum(
+                _safe_int(item.get("filled_qty"), 0)
+                for item in initial_bundle["leg_states"]
+            )
+            if (_has_open_pending_entry_orders(stock)
+                    or _entry_bundle_filled_qty(stock) != terminal_filled_qty
+                    or _safe_int(stock.get("buy_qty"), 0) != terminal_filled_qty):
+                _request_broker_snapshot_refresh(
+                    code, reason="initial_quantity_terminal_runtime_inventory_gap",
+                )
+                return
+            if stock.get("initial_quantity_bundle_indexed") is True:
+                from src.engine.scalping.initial_quantity_bundle_state import (
+                    retire_indexed_bundle,
+                )
+                try:
+                    retire_indexed_bundle(
+                        DATA_DIR / "runtime" / "initial_quantity" / "bundles",
+                        initial_bundle,
+                    )
+                except (OSError, ValueError) as exc:
+                    _log_entry_pipeline(
+                        stock, code, "initial_quantity_target_index_retire_failed",
+                        error_type=type(exc).__name__,
+                        actual_order_submitted=False, broker_order_forbidden=True,
+                        runtime_effect=True,
+                    )
+                    return
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    "initial_quantity_last_terminal_bundle": copy.deepcopy(initial_bundle),
+                    "initial_quantity_budget_breached":
+                        decision.get("action") == "BLOCK_LATE_TERMINAL",
+                    **({"status": "HOLDING" if terminal_filled_qty > 0 else "WATCHING"}
+                       if stock.get("status") == "BUY_ORDERED" else {}),
+                },
+                pop_fields=["initial_quantity_bundle",
+                            "initial_quantity_bundle_indexed"],
+            )
+            _clear_pending_entry_meta(stock)
+            return
+        if decision.get("action") in {"WAIT", "CANCEL"}:
+            index = decision.get("leg_index")
+            states = initial_bundle["leg_states"]
+            if (type(index) is int and 0 <= index < len(states)
+                    and states[index].get("state") in {"OPEN", "PARTIAL"}):
+                expected = initial_bundle["planned_legs"][index]["qty"]
+                matching = [order for order in _iter_pending_entry_orders(stock)
+                            if (isinstance(order, dict)
+                                and order.get("initial_quantity_leg_index") == index
+                                and str(order.get("ord_no") or "") ==
+                                states[index].get("broker_order_no"))]
+                if (len(matching) == 1
+                        and _safe_int(matching[0].get("filled_qty"), 0) == expected):
+                    now = time.time()
+                    last = _safe_float(stock.get("initial_quantity_full_fill_check_at"), 0.0)
+                    if last <= 0 or now < last or now - last >= 1.0:
+                        _mutate_stock_state(stock, set_fields={
+                            "initial_quantity_full_fill_check_at": now,
+                        })
+                        terminal, _ = _initial_quantity_buy_leg_terminal_state(
+                            stock, code, matching[0], now_ts=now,
+                        )
+                        if isinstance(terminal, dict) and terminal.get("state") == "TERMINAL_FILLED":
+                            staged = copy.deepcopy(states)
+                            staged[index] = terminal
+                            successor_action = next_bundle_timeout_action(
+                                initial_bundle["schedule"], staged, now_epoch=now,
+                            )["action"]
+                            if successor_action not in {
+                                    "RECONCILE", "BLOCK_INVALID_TIMEOUT_CONTRACT",
+                                    "BLOCK_INVALID_LEG_STATE",
+                            }:
+                                committed, _ = _initial_quantity_persist_leg_transition(
+                                    stock, matching[0], terminal,
+                                )
+                                if committed:
+                                    matching[0]["status"] = "FILLED"
+                                    if successor_action == "BLOCK_LATE_TERMINAL":
+                                        _mutate_stock_state(stock, set_fields={
+                                            "initial_quantity_budget_breached": True,
+                                        })
+                                    return
+                    # A locally complete fill cannot be made more terminal by
+                    # cancelling it. Requery exact broker/owner receipts and
+                    # keep later BUY legs closed until that proof arrives.
+                    now = time.time()
+                    last = _safe_float(stock.get("initial_quantity_reconcile_requested_at"), 0.0)
+                    if last <= 0 or now < last or now - last >= 5.0:
+                        _mutate_stock_state(stock, set_fields={
+                            "initial_quantity_reconcile_requested_at": now,
+                        })
+                        _request_broker_snapshot_refresh(
+                            code, reason="initial_quantity_full_fill_terminal_pending",
+                        )
+                    return
+        if decision.get("action") in {"CANCEL", "RECONCILE"}:
+            index = decision.get("leg_index")
+            if (type(index) is int
+                    and 0 <= index < len(initial_bundle["leg_states"])
+                    and _has_open_pending_entry_orders(stock)):
+                leg_state = initial_bundle["leg_states"][index].get("state")
+                if (decision["action"] == "CANCEL"
+                        or leg_state == "CANCEL_REQUESTED"):
+                    _cancel_pending_entry_orders(
+                        stock, code, force=True, expired_only=False,
+                        cancel_reason="initial_quantity_bundle_leg_deadline",
+                    )
+            if (decision["action"] == "RECONCILE"
+                    or not _has_open_pending_entry_orders(stock)):
+                now = time.time()
+                last = _safe_float(stock.get("initial_quantity_reconcile_requested_at"), 0.0)
+                if last <= 0 or now < last or now - last >= 5.0:
+                    _mutate_stock_state(stock, set_fields={
+                        "initial_quantity_reconcile_requested_at": now,
+                    })
+                    _request_broker_snapshot_refresh(
+                        code, reason="initial_quantity_submit_or_terminal_uncertain",
+                    )
+        # SUBMIT and SKIP require the separate durable dispatcher. Never let
+        # the legacy profile TTL or reprice branch act on this bundle.
+        return
     if not _has_open_pending_entry_orders(stock):
         return
 
@@ -90668,6 +92036,49 @@ def handle_buy_ordered_state(stock, code):
 
     raw_strategy = (stock.get("strategy") or "KOSPI_ML").upper()
     strategy = "SCALPING" if raw_strategy in ["SCALPING", "SCALP"] else raw_strategy
+
+    if strategy == "SCALPING" and not isinstance(stock.get("initial_quantity_bundle"), dict):
+        target_id = str(stock.get("id") or "")
+        if target_id:
+            from src.engine.scalping.initial_quantity_bundle_state import (
+                read_bundle_for_target,
+            )
+            recovered, recovery_status = read_bundle_for_target(
+                DATA_DIR / "runtime" / "initial_quantity" / "bundles",
+                code, target_id,
+            )
+            if recovered is not None:
+                _mutate_stock_state(stock, set_fields={
+                    "initial_quantity_bundle": recovered,
+                    "initial_quantity_bundle_indexed": True,
+                })
+                _request_broker_snapshot_refresh(
+                    code, reason="initial_quantity_target_journal_recovered",
+                )
+                return
+            if recovery_status != "target_index_absent":
+                _log_entry_pipeline(
+                    stock, code, "initial_quantity_target_journal_invalid",
+                    recovery_status=recovery_status,
+                    actual_order_submitted=False, broker_order_forbidden=True,
+                    runtime_effect=True,
+                )
+                now = time.time()
+                last = _safe_float(
+                    stock.get("initial_quantity_reconcile_requested_at"), 0.0,
+                )
+                if last <= 0 or now < last or now - last >= 5.0:
+                    _mutate_stock_state(stock, set_fields={
+                        "initial_quantity_reconcile_requested_at": now,
+                    })
+                    _request_broker_snapshot_refresh(
+                        code, reason="initial_quantity_target_journal_invalid",
+                    )
+                return
+
+    if isinstance(stock.get("initial_quantity_bundle"), dict):
+        _reconcile_pending_entry_orders(stock, code, strategy)
+        return
 
     probe_phase = str(stock.get("entry_split_probe_phase") or "").strip()
     if probe_phase in {"probe_submitting", "probe_submitted"}:
