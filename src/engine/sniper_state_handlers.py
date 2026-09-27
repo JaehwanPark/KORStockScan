@@ -11871,6 +11871,58 @@ def _store_scalping_sizing_decision(
     return event_fields
 
 
+def _initial_quantity_cap_research_context(
+    context: ScalpingSizingContext | None, decision: Any,
+) -> dict[str, Any] | None:
+    """Capture final allocator inputs for bounded, source-only cap replay."""
+    if (not isinstance(context, ScalpingSizingContext)
+            or decision is None
+            or context.allocation_stage != "initial_entry"
+            or context.simulation):
+        return None
+    cap_names = (
+        "max_position_qty_cap", "cash_orderable_qty_cap",
+        "remaining_position_qty_cap", "stage_qty_cap", "broker_qty_cap",
+    )
+    try:
+        receipt = {
+            "schema_version": "initial_quantity_cap_context_v1",
+            "budget_base_krw": int(context.budget_base_krw),
+            "price_krw": int(context.price_krw),
+            "safety_ratio": float(context.safety_ratio),
+            "absolute_budget_cap_krw": int(context.absolute_budget_cap_krw),
+            "current_position_qty": int(context.current_position_qty),
+            **{name: (None if getattr(context, name) is None
+                      else int(getattr(context, name))) for name in cap_names},
+            "broker_confirmed_one_share_floor": bool(
+                context.broker_confirmed_one_share_floor),
+            "min_one_share_floor_enabled": bool(
+                context.min_one_share_floor_enabled),
+            "actual_tier": int(decision.tier),
+            "actual_ratio": float(decision.ratio),
+            "actual_pre_cap_qty": int(decision.pre_cap_qty),
+            "actual_effective_qty": int(decision.effective_qty),
+            "quantity_type": str(decision.quantity_type),
+            "reference_time": str(decision.reference_time),
+        }
+        if (receipt["budget_base_krw"] < 0
+                or receipt["price_krw"] <= 0
+                or not math.isfinite(receipt["safety_ratio"])
+                or not 0 < receipt["safety_ratio"] <= 1
+                or receipt["absolute_budget_cap_krw"] < 0
+                or receipt["current_position_qty"] < 0
+                or any(receipt[name] is not None and receipt[name] < 0
+                       for name in cap_names)
+                or not math.isfinite(receipt["actual_ratio"])
+                or not 0 < receipt["actual_ratio"] <= 0.25
+                or receipt["actual_pre_cap_qty"] < 0
+                or receipt["actual_effective_qty"] < 0):
+            return None
+        return receipt
+    except (TypeError, ValueError, OverflowError, AttributeError):
+        return None
+
+
 def _canonicalize_rising_missed_venue_fields(
     fields: dict[str, Any] | None,
 ) -> dict[str, Any]:
@@ -12132,7 +12184,8 @@ def _log_entry_pipeline(stock, code, stage, **fields):
         # Preserve these input facts as parseable JSON, not Python dict repr.
         for key in ("market_data_health", "input_quote_source_receipt",
                     "entry_execution_sizing_plan", "entry_price_plan",
-                    "entry_opportunity_replay_seed", "entry_economic_capacity_receipt"):
+                    "entry_opportunity_replay_seed", "entry_economic_capacity_receipt",
+                    "initial_quantity_cap_research_context"):
             if isinstance(fields.get(key), dict):
                 fields[key] = json.dumps(fields[key], sort_keys=True, separators=(",", ":"))
     if stage == "ai_confirmed" or stage in _MACHINE_PRIMARY_LINEAGE_PIPELINE_STAGES:
@@ -70005,6 +70058,9 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             code,
             "entry_execution_sizing_plan",
             requested_qty=requested_qty,
+            initial_quantity_cap_research_context=(
+                _initial_quantity_cap_research_context(
+                    sizing_context, sizing_decision)),
             actual_order_submitted=False,
             broker_order_forbidden=False,
             runtime_effect=False,

@@ -24,6 +24,29 @@ from src.engine import kiwoom_orders
 from src.engine.scalping import entry_split_order_plan
 from src.engine.scalping import main_lifecycle_journal
 from src.engine.kiwoom_websocket import KiwoomWSManager
+
+
+def test_initial_quantity_cap_research_context_is_source_only_and_bounded():
+    from src.engine.scalping.position_sizing_allocator import ScalpingSizingContext
+
+    context = ScalpingSizingContext(
+        allocation_stage="initial_entry", reference_time=datetime.now(),
+        effective_venue="KRX", source_signature="SCANNER",
+        budget_base_krw=1_000_000, price_krw=10_000,
+        safety_ratio=0.95, absolute_budget_cap_krw=0,
+        cash_orderable_qty_cap=20)
+    decision = SimpleNamespace(tier=5, ratio=0.25, pre_cap_qty=23,
+                               effective_qty=20, quantity_type="KRX_PARENT",
+                               reference_time="2026-09-28T09:30:00+09:00")
+    receipt = state_handlers._initial_quantity_cap_research_context(
+        context, decision)
+    assert receipt["schema_version"] == "initial_quantity_cap_context_v1"
+    assert receipt["cash_orderable_qty_cap"] == 20
+    assert receipt["actual_effective_qty"] == 20
+    assert state_handlers._initial_quantity_cap_research_context(
+        replace(context, simulation=True), decision) is None
+    assert state_handlers._initial_quantity_cap_research_context(
+        replace(context, price_krw=0), decision) is None
 from src.engine.scalping.micro_estimator_state import (
     MicroEstimatorConfig,
     MicroEstimatorStore,

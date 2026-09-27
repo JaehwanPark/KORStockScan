@@ -396,6 +396,7 @@ def join_post_fill_paths(trades: list[dict[str, Any]], *, data_dir: Path = DATA_
                                     "position_sizing_policy_status",
                                     "position_sizing_policy_sha256",
                                     "initial_quantity_runtime_pid",
+                                    "initial_quantity_cap_research_context",
                                     "entry_submit_attempt_id",
                                     "entry_execution_sizing_plan_sha256",
                                     "scalping_sizing_quantity_type_policy_row",
@@ -626,6 +627,16 @@ def _paired_candidate(trade: dict[str, Any], path: dict[str, Any], shape: str) -
         bound_decision = (max(bound_decisions, key=lambda item: item["at"])
                           if bound_decisions else None)
         bound_fields = bound_decision["fields"] if bound_decision else {}
+        raw_cap_context = bound_fields.get("initial_quantity_cap_research_context")
+        try:
+            cap_context = (json.loads(raw_cap_context)
+                           if isinstance(raw_cap_context, str) else raw_cap_context)
+        except (ValueError, TypeError):
+            cap_context = None
+        if (not isinstance(cap_context, dict)
+                or cap_context.get("schema_version") !=
+                "initial_quantity_cap_context_v1"):
+            cap_context = None
         return {"status": "paired", "quantity_type": quantity_type,
                 "candidate_net_pct": trade["profit_rate"], "fill_state": "actual_parent",
                 "candidate_net_pnl_krw": trade["realized_net_pnl_krw"],
@@ -641,6 +652,8 @@ def _paired_candidate(trade: dict[str, Any], path: dict[str, Any], shape: str) -
                                                 or bound_fields.get("scalping_sizing_position_sizing_policy_sha256")),
                 "applied_policy_runtime_pid": bound_fields.get(
                     "initial_quantity_runtime_pid"),
+                **({"applied_cap_research_context": cap_context}
+                   if cap_context is not None else {}),
                 "fixed_exit_assumption": False}
     if path.get("source_gap"):
         return {"status": "path_source_gap",
@@ -839,6 +852,9 @@ def build_initial_quantity_replay(as_of: str, *, data_dir: Path = DATA_DIR,
                      "applied_policy_status": parent.get("applied_policy_status"),
                      "applied_policy_file_sha256": parent.get("applied_policy_file_sha256"),
                      "applied_policy_runtime_pid": parent.get("applied_policy_runtime_pid"),
+                     **({"applied_cap_research_context":
+                         parent["applied_cap_research_context"]}
+                        if "applied_cap_research_context" in parent else {}),
                      "policy_decision_stage": parent.get("policy_decision_stage"),
                      "policy_decision_at": parent.get("policy_decision_at"),
                      "entry_order_start_at": (matched_starts[0]["at"].isoformat()

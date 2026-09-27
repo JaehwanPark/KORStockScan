@@ -1287,6 +1287,10 @@ def test_refresh_uses_only_new_entries_and_requires_post_apply_receipts(
                position_sizing_policy_status="initial_policy_loaded",
                position_sizing_policy_sha256=parent_file_sha,
                initial_quantity_runtime_pid=1234,
+               initial_quantity_cap_research_context=json.dumps({
+                   "schema_version": "initial_quantity_cap_context_v1",
+                   "budget_base_krw": 1_000_000, "price_krw": 100,
+                   "actual_ratio": 0.25, "actual_effective_qty": 4}),
                quantity_type_policy_row="KRX_PARENT"),
         _event(13, "order_bundle_submitted", f"{new_day}T09:29:59+09:00",
                actual_order_submitted=True, effective_venue="KRX"),
@@ -1305,6 +1309,8 @@ def test_refresh_uses_only_new_entries_and_requires_post_apply_receipts(
         new_day, data_dir=tmp_path, fact_rows=before + winning_after,
         entry_on_or_after=active_baseline["effective_from"])
     assert bound_refresh["trades"][0]["applied_policy_file_sha256"] == parent_file_sha
+    assert bound_refresh["trades"][0]["applied_cap_research_context"][
+        "actual_ratio"] == 0.25
     assert bound_refresh["trades"][0]["policy_decision_stage"] == (
         "entry_execution_sizing_plan")
     bound_evaluation = evaluate_refresh_quantity_candidate(
