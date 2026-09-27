@@ -18,10 +18,213 @@ from src.engine.error_detectors.artifact_freshness import (
     _machine_result_semantics,
     _auxiliary_result_semantics,
     _holding_profit_exit_semantics,
+    _initial_quantity_semantics,
 )
 from src.engine.scalping.micro_reversion.symbol_master import SymbolLookupStatus
 
 _TRADING_MOCK = "src.engine.error_detectors.artifact_freshness.is_krx_trading_day"
+
+
+def _quantity_semantic_fixture(tmp_path, monkeypatch, *, shape="two_leg_0_1tick"):
+    from src.engine.scalping import initial_quantity_activation as activation
+
+    current = tmp_path / "data/runtime/initial_quantity/current.json"
+    current.parent.mkdir(parents=True)
+    current.write_text(json.dumps({"effective_from": "2026-09-24"}))
+    policy = current.with_name("policy.json")
+    policy.write_text(json.dumps({"policy_content_sha256": "c" * 64,
+        "type_policies": {
+        "KRX_PARENT": {"selected_shape": shape,
+                       "timeout_mode": "selected_total_wait_sec",
+                       "selected_total_wait_sec": 60}}}))
+    monkeypatch.setattr(activation, "selected_initial_quantity_env",
+                        lambda *_: {activation.ENV_FILE: str(policy),
+                                    activation.ENV_SHA: "a" * 64})
+    return current
+
+
+def test_initial_quantity_semantics_separates_missing_policy_and_valid_empty(
+        tmp_path, monkeypatch):
+    assert _initial_quantity_semantics(tmp_path, "2026-09-23")["status"] == (
+        "not_required_before_introduction")
+    assert _initial_quantity_semantics(tmp_path, "2026-09-28")["status"] == (
+        "source_invalid")
+    _quantity_semantic_fixture(tmp_path, monkeypatch)
+    from src.engine.scalping import initial_quantity_policy as producer
+    monkeypatch.setattr(producer, "refresh_quantity_stage_terminal_valid",
+                        lambda _: True)
+    stage = (tmp_path / "data/report/initial_entry_quantity_type_policy" /
+             "refresh_postclose_2026-09-28" /
+             "initial_quantity_refresh_stage_2026-09-28.json")
+    stage.parent.mkdir(parents=True)
+    stage.write_text(json.dumps({"all_completed_initial_trades": 0,
+                                 "decision": "carry_parent"}))
+    result = _initial_quantity_semantics(tmp_path, "2026-09-28")
+    assert result["status"] == "valid_empty"
+    assert result["postclose_stage_status"] == "valid_empty"
+    assert result["runtime_pid_status"] == "not_observed"
+    monkeypatch.setattr(producer, "refresh_quantity_stage_terminal_valid",
+                        lambda _: False)
+    invalid = _initial_quantity_semantics(tmp_path, "2026-09-28")
+    assert invalid["status"] == "source_invalid"
+    assert invalid["postclose_stage_status"] == "source_invalid"
+
+
+def test_initial_quantity_semantics_checks_bundle_quantity_shape_and_deadline(
+        tmp_path, monkeypatch):
+    from src.engine.scalping.initial_quantity_bundle_state import (
+        bundle_state_path, new_bundle_state,
+    )
+    from src.engine.scalping.initial_quantity_timeout import build_bundle_timeout_schedule
+
+    _quantity_semantic_fixture(tmp_path, monkeypatch)
+    schedule = build_bundle_timeout_schedule(
+        quantity_type="KRX_PARENT", policy_sha256="a" * 64,
+        decision_at="2026-09-28T09:29:50+09:00",
+        order_start_at="2026-09-28T09:30:00+09:00",
+        total_wait_sec=60, leg_count=2, cancel_confirm_reserve_sec=5)
+    bundle = new_bundle_state(
+        attempt_id="monitor-attempt", code="005930", target_id="123",
+        schedule=schedule, requested_qty=3,
+        planned_legs=[{"leg_index": index, "qty": qty, "price": 0,
+                       "route": "KRX", "tag": f"initial_quantity_leg_{index}"}
+                      for index, qty in enumerate((2, 1))])
+    directory = tmp_path / "data/runtime/initial_quantity/bundles"
+    directory.mkdir()
+    path = bundle_state_path(directory, bundle["attempt_id"])
+    path.write_text(json.dumps(bundle))
+    before = _initial_quantity_semantics(
+        tmp_path, "2026-09-28",
+        now_epoch=schedule["bundle_deadline_epoch"] - 1)
+    assert before["status"] == "pending_terminal"
+    assert before["findings"] == []
+    after = _initial_quantity_semantics(
+        tmp_path, "2026-09-28",
+        now_epoch=schedule["bundle_deadline_epoch"] + 1)
+    assert after["findings"] == ["initial_quantity_bundle_terminal_overdue"]
+    policy_path = tmp_path / "data/runtime/initial_quantity/policy.json"
+    selected = json.loads(policy_path.read_text())
+    selected["type_policies"]["KRX_PARENT"]["selected_total_wait_sec"] = 30
+    policy_path.write_text(json.dumps(selected))
+    mismatch = _initial_quantity_semantics(
+        tmp_path, "2026-09-28",
+        now_epoch=schedule["bundle_deadline_epoch"] - 1)
+    assert mismatch["findings"] == ["initial_quantity_bundle_policy_mismatch"]
+    selected["type_policies"]["KRX_PARENT"]["selected_total_wait_sec"] = 60
+    policy_path.write_text(json.dumps(selected))
+    bad = dict(bundle, requested_qty=4)
+    path.write_text(json.dumps(bad))
+    assert _initial_quantity_semantics(
+        tmp_path, "2026-09-28")["status"] == "source_invalid"
+
+
+def test_initial_quantity_semantics_rejects_missing_and_corrupt_pid_archive(
+        tmp_path, monkeypatch):
+    _quantity_semantic_fixture(tmp_path, monkeypatch)
+    verify_path = (tmp_path / "data/runtime/policy_bootstrap" /
+                   "runtime_policy_bootstrap_verify_2026-09-28.json")
+    verify_path.parent.mkdir(parents=True)
+    verify_path.write_text(json.dumps({"target_date": "2026-09-28",
+                                       "pid_passed": True}))
+    missing = _initial_quantity_semantics(tmp_path, "2026-09-28")
+    assert missing["runtime_pid_status"] == "not_observed"
+    assert missing["findings"] == ["initial_quantity_pid_archive_missing"]
+
+    body = {"schema_version": "initial_quantity_pid_verification_v1",
+            "target_date": "2026-09-28", "pid": 123,
+            "policy_file_sha256": "a" * 64,
+            "policy_content_sha256": "c" * 64,
+            "policy_file": str(tmp_path / "data/runtime/initial_quantity/policy.json"),
+            "manifest_sha256": "b" * 64,
+            "verification": {"target_date": "2026-09-28", "pid": 123,
+                             "manifest_sha256": "b" * 64,
+                             "status": "pass", "passed": True,
+                             "pid_passed": True, "pid_env_available": True,
+                             "findings": [], "pid_mismatches": []}}
+    digest = hashlib.sha256(json.dumps(body, ensure_ascii=True,
+        allow_nan=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    archive = (tmp_path / "data/runtime/policy_bootstrap" /
+               "verified_initial_quantity_pid/2026-09-28" /
+               f"initial_quantity_pid_123_{digest[:12]}.json")
+    archive.parent.mkdir(parents=True)
+    archive.write_text(json.dumps({**body, "receipt_content_sha256": digest}))
+    verified = _initial_quantity_semantics(tmp_path, "2026-09-28")
+    assert verified["runtime_pid_status"] == "verified_receipt"
+    assert verified["findings"] == []
+    archive.write_text(json.dumps({**body, "policy_file_sha256": "c" * 64,
+                                   "receipt_content_sha256": digest}))
+    corrupt = _initial_quantity_semantics(tmp_path, "2026-09-28")
+    assert corrupt["status"] == "source_invalid"
+    assert "initial_quantity_pid_receipt_invalid" in corrupt["findings"]
+
+
+def test_initial_quantity_semantics_uses_applied_ancestor_after_postclose_cas(
+        tmp_path, monkeypatch):
+    from src.engine.scalping import initial_quantity_activation as activation
+
+    current = _quantity_semantic_fixture(tmp_path, monkeypatch)
+    parent = current.with_name("parent.json")
+    current.rename(parent)
+    current.write_text(json.dumps({"effective_from": "2026-09-29",
+                                   "parent_current_file": str(parent)}))
+    seen = []
+
+    def selected(path, target):
+        seen.append((path.name, target))
+        return {activation.ENV_FILE: str(path.with_name("policy.json")),
+                activation.ENV_SHA: "a" * 64}
+
+    monkeypatch.setattr(activation, "selected_initial_quantity_env", selected)
+    assert _initial_quantity_semantics(tmp_path, "2026-09-28")["status"] == (
+        "policy_selected")
+    assert seen == [("current.json", "2026-09-29"),
+                    ("parent.json", "2026-09-24"),
+                    ("parent.json", "2026-09-28")]
+
+
+def test_initial_quantity_semantics_marks_missing_past_date_stage(
+        tmp_path, monkeypatch):
+    import src.engine.error_detectors.artifact_freshness as mod
+
+    _quantity_semantic_fixture(tmp_path, monkeypatch)
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 9, 29, 7, 0, tzinfo=tz)
+
+    monkeypatch.setattr(mod, "datetime", Clock)
+    result = _initial_quantity_semantics(tmp_path, "2026-09-28")
+    assert result["status"] == "source_gap"
+    assert result["postclose_stage_status"] == "source_gap"
+    assert result["findings"] == ["initial_quantity_stage_missing_after_date"]
+
+
+def test_artifact_detector_surfaces_initial_quantity_semantic_findings(
+        tmp_path, monkeypatch):
+    import src.engine.error_detectors.artifact_freshness as mod
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 9, 28, 21, 30)
+
+    monkeypatch.setattr(mod, "datetime", Clock)
+    monkeypatch.setattr(mod, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(mod, "ARTIFACT_REGISTRY", [])
+    monkeypatch.setattr(mod, "is_krx_trading_day", lambda *_: True)
+    monkeypatch.setattr(mod, "load_installed_crontab", lambda: "")
+    for name in ("_holding_profit_exit_semantics", "_machine_result_semantics",
+                 "_auxiliary_result_semantics"):
+        monkeypatch.setattr(mod, name, lambda *_: {"status": "not_assessed",
+                                                  "findings": []})
+    monkeypatch.setattr(mod, "_initial_quantity_semantics", lambda *_, **__: {
+        "status": "pending_terminal",
+        "findings": ["initial_quantity_bundle_terminal_overdue"]})
+    result = mod.ArtifactFreshnessDetector(dry_run=True).check()
+    assert result.details["initial_quantity_semantics"]["status"] == (
+        "pending_terminal")
+    assert result.severity == "warning"
 
 
 def test_holding_profit_semantics_does_not_retroactively_reject_old_report(tmp_path):

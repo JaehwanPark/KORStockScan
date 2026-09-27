@@ -13,6 +13,7 @@ from collections import Counter
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from src.utils.constants import PROJECT_ROOT
 from src.utils.jsonl_io import existing_or_gzip_path
@@ -77,6 +78,242 @@ def _holding_profit_exit_semantics(root: Path, source_date: str) -> dict[str, An
         "source_gap_count": len(semantics.get("source_gaps") or []),
         "invalid_count": len(semantics.get("findings") or []),
     }
+
+
+def _initial_quantity_semantics(
+    root: Path, source_date: str, *, now_epoch: float | None = None,
+) -> dict[str, Any]:
+    """Read-only quantity, sequential leg, and post-start timeout checks."""
+    if source_date < "2026-09-28":
+        return {"status": "not_required_before_introduction", "findings": []}
+    from src.engine.scalping.initial_quantity_activation import (
+        ENV_FILE, ENV_SHA, selected_initial_quantity_env,
+    )
+    from src.engine.scalping.initial_quantity_bundle_state import bundle_state_valid
+    from src.engine.scalping.initial_quantity_policy import (
+        refresh_quantity_stage_terminal_valid,
+    )
+
+    current_path = root / "data/runtime/initial_quantity/current.json"
+    if not current_path.is_file() or current_path.is_symlink():
+        return {"status": "source_invalid", "findings": [
+            "initial_quantity_current_missing_or_untrusted"]}
+    try:
+        if current_path.stat().st_size > 1024 * 1024:
+            raise ValueError("current_oversize")
+        # Postclose may have selected tomorrow's policy already. Validate that
+        # chain, then inspect the ancestor that actually applied on this date.
+        seen_current: set[Path] = set()
+        while True:
+            if current_path in seen_current or len(seen_current) >= 32:
+                raise ValueError("current_parent_cycle")
+            seen_current.add(current_path)
+            current = json.loads(current_path.read_text(encoding="utf-8"))
+            effective = str(current.get("effective_from") or "")
+            selected_initial_quantity_env(current_path, effective)
+            if effective <= source_date:
+                break
+            parent = current.get("parent_current_file")
+            if not isinstance(parent, str) or not parent:
+                raise ValueError("current_parent_missing")
+            current_path = Path(parent)
+            if (not current_path.is_absolute() or current_path.is_symlink()
+                    or not current_path.is_file()
+                    or current_path.stat().st_size > 1024 * 1024):
+                raise ValueError("current_parent_untrusted")
+        env = selected_initial_quantity_env(current_path, source_date)
+        policy_path = Path(env[ENV_FILE])
+        policy = json.loads(policy_path.read_text(encoding="utf-8"))
+        policy_sha = env[ENV_SHA]
+        rows = policy["type_policies"]
+        if not isinstance(rows, dict) or not rows:
+            raise ValueError("policy_types_missing")
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        return {"status": "source_invalid", "findings": [
+            "initial_quantity_current_binding_invalid:" + type(exc).__name__]}
+
+    details: dict[str, Any] = {
+        "status": "policy_selected", "findings": [],
+        "policy_file_sha256": policy_sha,
+        "quantity_type_count": len(rows),
+        "ratio_modes": dict(Counter(
+            str(row.get("ratio_mode")) for row in rows.values())),
+        "selected_shapes": dict(Counter(
+            str(row.get("selected_shape")) for row in rows.values())),
+        "timeout_modes": dict(Counter(
+            str(row.get("timeout_mode")) for row in rows.values())),
+        "runtime_pid_status": "not_observed",
+        "runtime_consumption_scope": "pid_env_receipt_only",
+        "postclose_stage_status": "not_observed",
+        "bundle_count": 0, "terminal_bundle_count": 0,
+        "open_bundle_count": 0,
+        "quantity_lineage_status": "not_observed",
+    }
+    stage_path = (root / "data/report/initial_entry_quantity_type_policy" /
+                  f"refresh_postclose_{source_date}" /
+                  f"initial_quantity_refresh_stage_{source_date}.json")
+    if stage_path.exists() or stage_path.is_symlink():
+        try:
+            if stage_path.is_symlink() or stage_path.stat().st_size > 1024 * 1024:
+                raise ValueError("stage_untrusted_or_oversize")
+            stage = json.loads(stage_path.read_text(encoding="utf-8"))
+            if not refresh_quantity_stage_terminal_valid(stage):
+                raise ValueError("stage_contract_invalid")
+            count = stage["all_completed_initial_trades"]
+            decision = stage["decision"]
+            details["postclose_stage_status"] = (
+                "valid_empty" if count == 0 and decision == "carry_parent"
+                else decision)
+            details["postclose_completed_trade_count"] = count
+        except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            details["findings"].append(
+                "initial_quantity_stage_invalid:" + type(exc).__name__)
+            details["postclose_stage_status"] = "source_invalid"
+    elif source_date < datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat():
+        details["postclose_stage_status"] = "source_gap"
+        details["findings"].append("initial_quantity_stage_missing_after_date")
+
+    archive_dir = (root / "data/runtime/policy_bootstrap" /
+                   "verified_initial_quantity_pid" / source_date)
+    if archive_dir.is_symlink():
+        details["findings"].append("initial_quantity_pid_archive_untrusted")
+    if archive_dir.is_dir() and not archive_dir.is_symlink():
+        verified = 0
+        for index, receipt_path in enumerate(sorted(
+                archive_dir.glob("initial_quantity_pid_*.json"))):
+            if index >= 64:
+                details["findings"].append("initial_quantity_pid_archive_oversize")
+                break
+            try:
+                if (receipt_path.is_symlink()
+                        or receipt_path.stat().st_size > 1024 * 1024):
+                    raise ValueError("pid_receipt_untrusted_or_oversize")
+                receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+                body = {k: v for k, v in receipt.items()
+                        if k != "receipt_content_sha256"}
+                digest = hashlib.sha256(json.dumps(
+                    body, ensure_ascii=True, allow_nan=False, sort_keys=True,
+                    separators=(",", ":")).encode()).hexdigest()
+                verification = receipt.get("verification") or {}
+                if (receipt.get("schema_version") !=
+                        "initial_quantity_pid_verification_v1"
+                        or receipt.get("target_date") != source_date
+                        or receipt_path.name != (
+                            f"initial_quantity_pid_{receipt.get('pid')}_"
+                            f"{str(receipt.get('receipt_content_sha256') or '')[:12]}.json")
+                        or receipt.get("policy_file_sha256") != policy_sha
+                        or receipt.get("policy_file") != str(policy_path.resolve())
+                        or receipt.get("policy_content_sha256") !=
+                        policy.get("policy_content_sha256")
+                        or receipt.get("receipt_content_sha256") != digest
+                        or verification.get("target_date") != source_date
+                        or verification.get("status") != "pass"
+                        or verification.get("passed") is not True
+                        or verification.get("pid_passed") is not True
+                        or verification.get("pid_env_available") is not True
+                        or verification.get("findings") != []
+                        or verification.get("pid_mismatches") != []
+                        or verification.get("pid") != receipt.get("pid")
+                        or verification.get("manifest_sha256") !=
+                        receipt.get("manifest_sha256")):
+                    raise ValueError("pid_receipt_binding_invalid")
+                verified += 1
+            except (OSError, ValueError, TypeError, AttributeError):
+                details["findings"].append("initial_quantity_pid_receipt_invalid")
+        if verified:
+            details["runtime_pid_status"] = "verified_receipt"
+            details["verified_pid_count"] = verified
+    latest_pid_path = (root / "data/runtime/policy_bootstrap" /
+                       f"runtime_policy_bootstrap_verify_{source_date}.json")
+    if (details["runtime_pid_status"] == "not_observed"
+            and latest_pid_path.is_file() and not latest_pid_path.is_symlink()):
+        try:
+            if latest_pid_path.stat().st_size > 1024 * 1024:
+                raise ValueError("pid_verify_oversize")
+            latest = json.loads(latest_pid_path.read_text(encoding="utf-8"))
+            if (latest.get("target_date") == source_date
+                    and latest.get("pid_passed") is True):
+                details["findings"].append("initial_quantity_pid_archive_missing")
+        except (OSError, ValueError, TypeError, AttributeError):
+            details["findings"].append("initial_quantity_pid_verify_invalid")
+
+    bundle_dir = root / "data/runtime/initial_quantity/bundles"
+    if bundle_dir.is_symlink():
+        details["findings"].append("initial_quantity_bundle_dir_untrusted")
+    if bundle_dir.is_dir() and not bundle_dir.is_symlink():
+        now = time.time() if now_epoch is None else now_epoch
+        for index, path in enumerate(bundle_dir.glob("*.json")):
+            if index >= 5000:
+                details["findings"].append("initial_quantity_bundle_inventory_oversize")
+                break
+            try:
+                if path.is_symlink() or path.stat().st_size > 1024 * 1024:
+                    raise ValueError("bundle_untrusted_or_oversize")
+                bundle = json.loads(path.read_text(encoding="utf-8"))
+                schedule = bundle.get("schedule") or {}
+                if str(schedule.get("order_start_at") or "")[:10] != source_date:
+                    if (not schedule.get("order_start_at")
+                            and datetime.fromtimestamp(
+                                path.stat().st_mtime,
+                                ZoneInfo("Asia/Seoul")).date().isoformat()
+                            == source_date):
+                        raise ValueError("bundle_date_missing")
+                    continue
+                if (not bundle_state_valid(bundle)
+                        or path.name != hashlib.sha256(
+                            bundle["attempt_id"].encode()).hexdigest() + ".json"):
+                    raise ValueError("bundle_contract_invalid")
+                details["bundle_count"] += 1
+                details["quantity_lineage_status"] = "journal_conservation_only"
+                states = bundle["leg_states"]
+                terminal = all(item["state"].startswith("TERMINAL_")
+                               for item in states)
+                if terminal:
+                    details["terminal_bundle_count"] += 1
+                else:
+                    details["open_bundle_count"] += 1
+                    if now > schedule["bundle_deadline_epoch"]:
+                        details["findings"].append(
+                            "initial_quantity_bundle_terminal_overdue")
+                if any(item.get("terminal_confirmed_at_epoch", 0) >
+                       schedule["slots"][index]["terminal_confirm_by_epoch"]
+                       for index, item in enumerate(states)
+                       if item["state"].startswith("TERMINAL_")):
+                    details["findings"].append(
+                        "initial_quantity_leg_terminal_after_slot")
+                if bundle["policy_sha256"] != policy_sha:
+                    details["findings"].append(
+                        "initial_quantity_bundle_policy_mismatch")
+                else:
+                    row = rows.get(schedule["quantity_type"]) or {}
+                    shape = row.get("selected_shape")
+                    expected = (2 if str(shape).startswith("two_leg_") else
+                                3 if str(shape).startswith("three_leg_") else 0)
+                    if (expected == 0 or bundle["requested_qty"] < 2
+                            or schedule["leg_count"] !=
+                            min(bundle["requested_qty"], expected)
+                            or (row.get("timeout_mode") == "selected_total_wait_sec"
+                                and row.get("selected_total_wait_sec") !=
+                                schedule["total_wait_sec"])):
+                        details["findings"].append(
+                            "initial_quantity_bundle_policy_mismatch")
+            except (OSError, ValueError, TypeError, KeyError, AttributeError):
+                details["findings"].append("initial_quantity_bundle_invalid")
+    if details["findings"]:
+        details["status"] = "source_invalid" if any(
+            item not in {"initial_quantity_bundle_terminal_overdue",
+                         "initial_quantity_leg_terminal_after_slot",
+                         "initial_quantity_stage_missing_after_date"}
+            for item in details["findings"]) else (
+                "source_gap" if "initial_quantity_stage_missing_after_date"
+                in details["findings"] else "pending_terminal")
+    elif details["bundle_count"] == 0 and details["postclose_stage_status"] == "valid_empty":
+        details["status"] = "valid_empty"
+    elif details["bundle_count"]:
+        details["status"] = (
+            "journal_terminal_observed" if not details["open_bundle_count"] else
+            "pending_terminal")
+    return details
 
 
 def _machine_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
@@ -1306,6 +1543,12 @@ class ArtifactFreshnessDetector(BaseDetector):
             if auxiliary_semantics["findings"]:
                 warnings.append("auxiliary_result_semantics: " + ", ".join(
                     auxiliary_semantics["findings"]))
+            quantity_semantics = _initial_quantity_semantics(
+                PROJECT_ROOT, today, now_epoch=now_ts)
+            details["initial_quantity_semantics"] = quantity_semantics
+            if quantity_semantics["findings"]:
+                warnings.append("initial_quantity_semantics: " + ", ".join(
+                    sorted(set(quantity_semantics["findings"]))))
 
         severity, summary = self._classify(issues, warnings)
         return DetectionResult(
