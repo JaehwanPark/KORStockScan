@@ -395,6 +395,7 @@ def join_post_fill_paths(trades: list[dict[str, Any]], *, data_dir: Path = DATA_
                                     "quantity_type_policy_row",
                                     "position_sizing_policy_status",
                                     "position_sizing_policy_sha256",
+                                    "initial_quantity_runtime_pid",
                                     "entry_submit_attempt_id",
                                     "entry_execution_sizing_plan_sha256",
                                     "scalping_sizing_quantity_type_policy_row",
@@ -638,6 +639,8 @@ def _paired_candidate(trade: dict[str, Any], path: dict[str, Any], shape: str) -
                                           or bound_fields.get("scalping_sizing_position_sizing_policy_status")),
                 "applied_policy_file_sha256": (bound_fields.get("position_sizing_policy_sha256")
                                                 or bound_fields.get("scalping_sizing_position_sizing_policy_sha256")),
+                "applied_policy_runtime_pid": bound_fields.get(
+                    "initial_quantity_runtime_pid"),
                 "fixed_exit_assumption": False}
     if path.get("source_gap"):
         return {"status": "path_source_gap",
@@ -835,6 +838,7 @@ def build_initial_quantity_replay(as_of: str, *, data_dir: Path = DATA_DIR,
                                                  if first_fill else None),
                      "applied_policy_status": parent.get("applied_policy_status"),
                      "applied_policy_file_sha256": parent.get("applied_policy_file_sha256"),
+                     "applied_policy_runtime_pid": parent.get("applied_policy_runtime_pid"),
                      "policy_decision_stage": parent.get("policy_decision_stage"),
                      "policy_decision_at": parent.get("policy_decision_at"),
                      "entry_order_start_at": (matched_starts[0]["at"].isoformat()
@@ -1364,6 +1368,15 @@ def evaluate_refresh_quantity_candidate(
         if parent_policy.get("schema_version") == RUNTIME_REFRESH_SCHEMA else
         "initial_policy_v2_loaded" if is_v2_parent else
         "initial_policy_loaded")
+    daily_pid_rows = (pid_receipt.get("daily_pid_receipts")
+                      if isinstance(pid_receipt, dict) else None)
+    pid_by_day = ({row.get("entry_date"): row.get("pid")
+                   for row in daily_pid_rows if isinstance(row, dict)}
+                  if isinstance(daily_pid_rows, list) else {})
+    pid_days_valid = (len(pid_by_day) == len(entry_dates)
+                      and set(pid_by_day) == set(entry_dates)
+                      and all(type(pid) is int and pid > 0
+                              for pid in pid_by_day.values()))
     policy_bound_trades = sum(
         row.get("applied_policy_status") == expected_parent_status
         and row.get("applied_policy_file_sha256") == parent_policy_file_sha256
@@ -1371,6 +1384,9 @@ def evaluate_refresh_quantity_candidate(
         and (decision_at := _timestamp(row.get("policy_decision_at"))) is not None
         and (entry_at := _timestamp(row.get("entry_fill_at"))) is not None
         and decision_at <= entry_at
+        and (not pid_receipt or pid_days_valid and
+             str(row.get("applied_policy_runtime_pid") or "") ==
+             str(pid_by_day.get(row["entry_date"])))
         for row in report.get("trades") or [])
     if (enforce_trade_lineage and report.get("trades")
             and policy_bound_trades != len(report["trades"])):
@@ -1384,6 +1400,7 @@ def evaluate_refresh_quantity_candidate(
     if not (isinstance(pid_receipt, dict)
             and pid_receipt.get("actual_pid_consumed") is True
             and pid_receipt.get("policy_content_sha256") == parent_hash
+            and pid_days_valid
             and str(pid_receipt.get("first_consumed_date") or "") <= (entry_dates[0] if entry_dates else "")):
         blockers.append("parent_pid_consumption_missing")
     if not (isinstance(terminal_receipt, dict)
@@ -1478,6 +1495,89 @@ def evaluate_refresh_quantity_candidate(
                if enforce_trade_lineage else {}),
             "type_decisions": type_decisions,
             "runtime_apply_allowed": False, "runtime_effect": False}
+
+
+def _natural_refresh_pid_receipt(
+    report: dict[str, Any], parent_policy: dict[str, Any],
+    parent_policy_path: Path, data_dir: Path,
+) -> dict[str, Any] | None:
+    """Read each entry day's verified Main PID/environment handoff.
+
+    A selected release or a PREOPEN manifest alone is insufficient. Missing
+    daily PID proof leaves the refresh evaluator's existing blocker in place.
+    """
+    from src.engine.scalping.initial_quantity_activation import ENV_FILE, ENV_SHA
+
+    days = sorted({row["entry_date"] for row in report.get("trades") or []})
+    if not days:
+        return None
+    parent_file_sha = _file_sha256(parent_policy_path)
+    bootstrap_dir = data_dir / "runtime" / "policy_bootstrap"
+    receipts = []
+    for day in days:
+        manifest_path = bootstrap_dir / f"runtime_policy_bootstrap_{day}.json"
+        verify_path = bootstrap_dir / f"runtime_policy_bootstrap_verify_{day}.json"
+        env_path = bootstrap_dir / f"runtime_policy_bootstrap_{day}.env"
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            verify = json.loads(verify_path.read_text(encoding="utf-8"))
+            env_sha = _file_sha256(env_path)
+            manifest_file_sha = _file_sha256(manifest_path)
+            verify_file_sha = _file_sha256(verify_path)
+        except (OSError, ValueError, TypeError):
+            return None
+        if not isinstance(manifest, dict) or not isinstance(verify, dict):
+            return None
+        manifest_body = {key: value for key, value in manifest.items()
+                         if key != "manifest_sha256"}
+        policy_receipt = manifest.get("initial_quantity_policy_receipt") or {}
+        env = manifest.get("env_overrides") or {}
+        if (manifest.get("target_date") != day
+                or manifest.get("manifest_sha256") != _digest(manifest_body)
+                or Path(str(manifest.get("env_file") or "")).resolve()
+                != env_path.resolve()
+                or manifest.get("env_sha256") != env_sha
+                or not isinstance(policy_receipt, dict)
+                or policy_receipt.get("policy_file_sha256") != parent_file_sha
+                or env.get(ENV_FILE) != str(parent_policy_path.resolve())
+                or env.get(ENV_SHA) != parent_file_sha
+                or verify.get("target_date") != day
+                or verify.get("manifest_sha256") != manifest["manifest_sha256"]
+                or Path(str(verify.get("manifest_file") or "")).resolve()
+                != manifest_path.resolve()
+                or Path(str(verify.get("env_file") or "")).resolve()
+                != env_path.resolve()
+                or (_timestamp(verify.get("verified_at")) is None
+                    or _timestamp(verify["verified_at"]).date().isoformat() != day)
+                or verify.get("status") != "pass"
+                or verify.get("passed") is not True
+                or verify.get("pid_passed") is not True
+                or verify.get("pid_env_available") is not True
+                or type(verify.get("pid")) is not int
+                or verify["pid"] <= 0
+                or verify.get("findings") != []
+                or verify.get("pid_mismatches") != []):
+            return None
+        receipts.append({"entry_date": day, "pid": verify["pid"],
+                         "manifest_file_sha256": manifest_file_sha,
+                         "verify_file_sha256": verify_file_sha,
+                         "env_file_sha256": env_sha})
+    return {"actual_pid_consumed": True,
+            "policy_content_sha256": parent_policy["policy_content_sha256"],
+            "policy_file_sha256": parent_file_sha,
+            "first_consumed_date": days[0], "daily_pid_receipts": receipts,
+            "data_root": str(data_dir.resolve()),
+            "source": "verified_daily_preopen_main_pid_env"}
+
+
+def _natural_refresh_terminal_receipt(report: dict[str, Any]) -> dict[str, Any]:
+    """Bind the already validated completed costed fact census to replay."""
+    census = report["census"]
+    return {"terminal": True,
+            "costed_completed_trade_count": census["all_completed_initial_trades"],
+            "report_content_sha256": report["report_content_sha256"],
+            "input_manifest_sha256": census["input_manifest_sha256"],
+            "source": "trade_performance_facts_completed_costed"}
 
 
 def build_refresh_type_policy_candidate(
@@ -1741,6 +1841,22 @@ def refresh_quantity_stage_terminal_valid(receipt: Any) -> bool:
         parent = json.loads(paths["parent_policy"].read_text(encoding="utf-8"))
         report = json.loads(paths["report"].read_text(encoding="utf-8"))
         evaluation = json.loads(paths["evaluation"].read_text(encoding="utf-8"))
+        if (receipt.get("terminal_receipt") is None
+                and receipt.get("decision") == "carry_parent"
+                and not any(key.startswith("candidate_") for key in receipt)):
+            pass  # Historical source-only stages had no derived cost receipt.
+        elif receipt.get("terminal_receipt") != _natural_refresh_terminal_receipt(report):
+            return False
+        pid_receipt = receipt.get("pid_receipt")
+        if pid_receipt is not None:
+            if (not isinstance(pid_receipt, dict)
+                    or pid_receipt.get("source") !=
+                    "verified_daily_preopen_main_pid_env"
+                    or not Path(str(pid_receipt.get("data_root") or "")).is_absolute()
+                    or pid_receipt != _natural_refresh_pid_receipt(
+                        report, parent, paths["parent_policy"],
+                        Path(pid_receipt["data_root"]))):
+                return False
         winners = [row for row in report.get("trades") or []
                    if row.get("actual_net_pnl_krw", 0) > 0
                    and row.get("actual_profit_rate", 0) > 0]
@@ -2160,13 +2276,22 @@ def main(argv: list[str] | None = None) -> int:
             entry_on_or_after=parent["effective_from"],
             path_cache=path_cache,
             performance=timeout_performance)
+        pid_receipt = _natural_refresh_pid_receipt(
+            report, parent, parent_path, args.data_dir)
+        terminal_receipt = _natural_refresh_terminal_receipt(report)
+        if (args.pid_receipt
+                and json.loads(args.pid_receipt.read_text(encoding="utf-8"))
+                != pid_receipt):
+            raise ValueError("refresh_pid_receipt_source_mismatch")
+        if (args.terminal_receipt
+                and json.loads(args.terminal_receipt.read_text(encoding="utf-8"))
+                != terminal_receipt):
+            raise ValueError("refresh_terminal_receipt_source_mismatch")
         stage = publish_refresh_quantity_evaluation(
             report, parent_policy=parent, parent_policy_path=parent_path,
             output_dir=args.output_dir,
-            pid_receipt=(json.loads(args.pid_receipt.read_text(encoding="utf-8"))
-                         if args.pid_receipt else None),
-            terminal_receipt=(json.loads(args.terminal_receipt.read_text(encoding="utf-8"))
-                              if args.terminal_receipt else None),
+            pid_receipt=pid_receipt,
+            terminal_receipt=terminal_receipt,
             following_bars=following_bars,
             timeout_research=timeout_research)
         if not refresh_quantity_stage_terminal_valid(stage):

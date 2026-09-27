@@ -12118,6 +12118,9 @@ def _observe_entry_economics_before_ai(stock, code, ws_data, *, exact_payload,
 
 
 def _log_entry_pipeline(stock, code, stage, **fields):
+    if stage == "entry_execution_sizing_plan" and fields.get(
+            "entry_execution_sizing_valid") is True:
+        fields["initial_quantity_runtime_pid"] = os.getpid()
     if stage in {"order_leg_sent", "order_leg_fail", "order_leg_no_response",
                  "entry_order_cancel_requested", "entry_order_cancel_confirmed",
                  "entry_order_cancel_failed"} and isinstance(stock, dict):

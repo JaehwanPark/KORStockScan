@@ -1,5 +1,6 @@
 import json
 import copy
+import hashlib
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -26,6 +27,8 @@ from src.engine.scalping.initial_quantity_activation import (
 from src.engine.scalping.initial_quantity_policy import (
     _write_immutable_json,
     _digest,
+    _natural_refresh_pid_receipt,
+    _natural_refresh_terminal_receipt,
     _paired_candidate,
     _fresh_observed_price,
     _type_from_decision_receipt,
@@ -46,6 +49,62 @@ from src.engine.scalping.initial_quantity_policy import (
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+
+
+def test_refresh_auto_receipts_require_verified_daily_pid_and_costed_census(tmp_path):
+    day = "2026-09-28"
+    parent_path = tmp_path / "policy.json"
+    parent_path.write_text('{"policy":"p"}', encoding="utf-8")
+    parent_sha = hashlib.sha256(parent_path.read_bytes()).hexdigest()
+    bootstrap = tmp_path / "runtime" / "policy_bootstrap"
+    bootstrap.mkdir(parents=True)
+    env_path = bootstrap / f"runtime_policy_bootstrap_{day}.env"
+    env_path.write_text("export EXAMPLE=1\n", encoding="utf-8")
+    manifest_path = bootstrap / f"runtime_policy_bootstrap_{day}.json"
+    manifest_body = {
+        "target_date": day,
+        "env_file": str(env_path),
+        "env_sha256": hashlib.sha256(env_path.read_bytes()).hexdigest(),
+        "env_overrides": {ENV_FILE: str(parent_path.resolve()), ENV_SHA: parent_sha},
+        "initial_quantity_policy_receipt": {"policy_file_sha256": parent_sha},
+    }
+    manifest = {**manifest_body, "manifest_sha256": _digest(manifest_body)}
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    verify_path = bootstrap / f"runtime_policy_bootstrap_verify_{day}.json"
+    verify = {"target_date": day, "manifest_sha256": manifest["manifest_sha256"],
+              "manifest_file": str(manifest_path), "env_file": str(env_path),
+              "verified_at": f"{day}T10:00:00+09:00", "status": "pass",
+              "passed": True, "pid_passed": True, "pid_env_available": True,
+              "pid": 1234, "findings": [], "pid_mismatches": []}
+    verify_path.write_text(json.dumps(verify), encoding="utf-8")
+    parent = {"policy_content_sha256": "a" * 64}
+    report = {"trades": [{"entry_date": day}], "report_content_sha256": "b" * 64,
+              "census": {"all_completed_initial_trades": 1,
+                         "input_manifest_sha256": "c" * 64}}
+    receipt = _natural_refresh_pid_receipt(report, parent, parent_path, tmp_path)
+    assert receipt["actual_pid_consumed"] is True
+    assert receipt["first_consumed_date"] == day
+    assert receipt["daily_pid_receipts"][0]["pid"] == 1234
+    two_day = {**report, "trades": [*report["trades"],
+                                  {"entry_date": "2026-09-29"}]}
+    assert _natural_refresh_pid_receipt(two_day, parent, parent_path, tmp_path) is None
+    assert _natural_refresh_terminal_receipt(report) == {
+        "terminal": True, "costed_completed_trade_count": 1,
+        "report_content_sha256": "b" * 64,
+        "input_manifest_sha256": "c" * 64,
+        "source": "trade_performance_facts_completed_costed"}
+    verify["pid_passed"] = False
+    verify_path.write_text(json.dumps(verify), encoding="utf-8")
+    assert _natural_refresh_pid_receipt(report, parent, parent_path, tmp_path) is None
+    verify["pid_passed"] = True
+    verify["verified_at"] = "2026-09-29T10:00:00+09:00"
+    verify_path.write_text(json.dumps(verify), encoding="utf-8")
+    assert _natural_refresh_pid_receipt(report, parent, parent_path, tmp_path) is None
+    verify["verified_at"] = f"{day}T10:00:00+09:00"
+    verify_path.write_text(json.dumps(verify), encoding="utf-8")
+    manifest["env_overrides"][ENV_SHA] = "0" * 64
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    assert _natural_refresh_pid_receipt(report, parent, parent_path, tmp_path) is None
 
 
 def _event(record_id: int, stage: str, at: str, **fields) -> dict:
@@ -1018,6 +1077,7 @@ def test_refresh_uses_only_new_entries_and_requires_post_apply_receipts(
             refresh, parent_policy=active_baseline,
             parent_policy_path=parent_path,
             output_dir=tmp_path / "eligible_source_only_stage",
+            terminal_receipt=_natural_refresh_terminal_receipt(refresh),
             timeout_research=refresh_timeout)
         assert refresh_quantity_stage_terminal_valid(eligible_stage)
         from src.engine.scalping.initial_quantity_activation import (
@@ -1203,6 +1263,7 @@ def test_refresh_uses_only_new_entries_and_requires_post_apply_receipts(
                entry_execution_sizing_plan_sha256=plan_sha,
                position_sizing_policy_status="initial_policy_loaded",
                position_sizing_policy_sha256=parent_file_sha,
+               initial_quantity_runtime_pid=1234,
                quantity_type_policy_row="KRX_PARENT"),
         _event(13, "order_bundle_submitted", f"{new_day}T09:29:59+09:00",
                actual_order_submitted=True, effective_venue="KRX"),
@@ -1229,6 +1290,24 @@ def test_refresh_uses_only_new_entries_and_requires_post_apply_receipts(
     assert bound_evaluation["parent_policy_bound_trade_count"] == 1
     assert "parent_trade_policy_binding_missing" not in bound_evaluation["global_blockers"]
     assert "parent_pid_consumption_missing" in bound_evaluation["global_blockers"]
+    pid_receipt = {"actual_pid_consumed": True,
+                   "policy_content_sha256": active_baseline["policy_content_sha256"],
+                   "first_consumed_date": new_day,
+                   "daily_pid_receipts": [{"entry_date": new_day, "pid": 1234}]}
+    cost_receipt = _natural_refresh_terminal_receipt(bound_refresh)
+    verified = evaluate_refresh_quantity_candidate(
+        bound_refresh, parent_policy=active_baseline,
+        parent_policy_file_sha256=parent_file_sha,
+        pid_receipt=pid_receipt, terminal_receipt=cost_receipt)
+    assert verified["parent_policy_bound_trade_count"] == 1
+    assert "parent_pid_consumption_missing" not in verified["global_blockers"]
+    assert "post_apply_terminal_cost_binding_missing" not in verified["global_blockers"]
+    pid_receipt["daily_pid_receipts"][0]["pid"] = 4321
+    wrong_pid = evaluate_refresh_quantity_candidate(
+        bound_refresh, parent_policy=active_baseline,
+        parent_policy_file_sha256=parent_file_sha,
+        pid_receipt=pid_receipt, terminal_receipt=cost_receipt)
+    assert "parent_trade_policy_binding_missing" in wrong_pid["global_blockers"]
     wrong_file = evaluate_refresh_quantity_candidate(
         bound_refresh, parent_policy=active_baseline,
         parent_policy_file_sha256="0" * 64)
