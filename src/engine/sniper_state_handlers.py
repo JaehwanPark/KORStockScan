@@ -11873,6 +11873,7 @@ def _store_scalping_sizing_decision(
 
 def _initial_quantity_cap_research_context(
     context: ScalpingSizingContext | None, decision: Any,
+    *, ws_data: dict | None = None, now_ts: float | None = None,
 ) -> dict[str, Any] | None:
     """Capture final allocator inputs for bounded, source-only cap replay."""
     if (not isinstance(context, ScalpingSizingContext)
@@ -11918,9 +11919,116 @@ def _initial_quantity_cap_research_context(
                 or receipt["actual_pre_cap_qty"] < 0
                 or receipt["actual_effective_qty"] < 0):
             return None
+        # This is evidence for offline counterfactuals only. An unbound 0D
+        # snapshot must never create executable quantity or an assumed fill.
+        if isinstance(ws_data, dict) and isinstance(now_ts, (int, float)):
+            from src.trading.market.quote_consistency import ws_quote_source_receipt
+            try:
+                quote = ws_quote_source_receipt(ws_data, now_ts=float(now_ts))
+            except (TypeError, ValueError, OverflowError, AttributeError):
+                quote = {}
+            depth = quote.get("depth_receipt") or {}
+            orderbook = ws_data.get("orderbook") or {}
+            asks = orderbook.get("asks") if isinstance(orderbook, dict) else None
+            observed = depth.get("observed_epoch")
+            venue = str(getattr(context, "effective_venue", "") or "").upper()
+            item = str(depth.get("item") or "")
+            route = str(depth.get("market_route") or "").upper()
+            if (quote.get("source_type") in {"0D", "0B"}
+                    and isinstance(observed, (int, float))
+                    and not isinstance(observed, bool)
+                    and 0 <= float(now_ts) - float(observed) <= 1.0
+                    and depth.get("transport_epoch") == quote.get("transport_epoch")
+                    and item and quote.get("item") == item
+                    and quote.get("market_route") == route
+                    and route in {"KRX", "NXT"} and route == venue
+                    and isinstance(asks, list)):
+                levels = []
+                for level in asks[:5]:
+                    if not isinstance(level, dict):
+                        break
+                    price = _safe_int(level.get("price"), 0)
+                    quantity = _safe_int(level.get("volume"), -1)
+                    if (price <= 0 or quantity < 0
+                            or levels and price <= levels[-1]["price_krw"]):
+                        break
+                    levels.append({"price_krw": price, "quantity": quantity})
+                if levels:
+                    receipt["ask_depth_source"] = {
+                        "observed_epoch": float(observed), "item": item,
+                        "market_route": route,
+                        "transport_epoch": depth["transport_epoch"],
+                        "levels": levels,
+                        "source_type": "ws_0D_bound_snapshot",
+                    }
         return receipt
     except (TypeError, ValueError, OverflowError, AttributeError):
         return None
+
+
+def _observe_initial_quantity_cap_following_tick(
+    stock: dict, code: str, ws_data: dict | None, *, now_ts: float,
+) -> None:
+    """Record a bounded source-only 0B print for later cap fill research."""
+    if not isinstance(stock, dict) or not isinstance(ws_data, dict):
+        return
+    trace = stock.get("_initial_quantity_cap_trace")
+    if not isinstance(trace, dict):
+        return
+    started = _safe_float(trace.get("started_at_epoch"), 0.0)
+    if started <= 0 or not 0 <= now_ts - started <= 1200:
+        _mutate_stock_state(stock, pop_fields=("_initial_quantity_cap_trace",))
+        return
+    tick = ws_data.get("last_trade_tick")
+    if not isinstance(tick, dict) or tick.get("aggressor_source") != (
+            "kiwoom_0b_signed_trade_volume"):
+        return
+    raw_volume = str(tick.get("aggressor_aux_raw_15") or
+                     tick.get("signed_trade_volume") or "").strip()
+    if not raw_volume.startswith("+"):
+        return
+    quantity = _safe_int(raw_volume, 0)
+    price = _safe_int(tick.get("price"), 0)
+    observed = _safe_float(tick.get("received_at_ms") or tick.get("ts"), 0.0)
+    if observed > 10_000_000_000:
+        observed /= 1000.0
+    if (quantity <= 0 or price <= 0 or observed <= 0
+            or not 0 <= now_ts - observed <= 1.0):
+        return
+    from src.trading.market.quote_consistency import ws_quote_source_receipt
+    try:
+        quote = ws_quote_source_receipt(ws_data, now_ts=now_ts)
+    except (TypeError, ValueError, OverflowError, AttributeError):
+        return
+    depth = quote.get("depth_receipt") or {}
+    if (quote.get("source_type") != "0B"
+            or abs(_safe_float(quote.get("observed_epoch"), 0.0)
+                   - observed) > 0.001
+            or depth.get("item") != trace.get("depth_item")
+            or depth.get("market_route") != trace.get("depth_route")
+            or depth.get("transport_epoch") != trace.get("transport_epoch")
+            or quote.get("transport_epoch") != trace.get("transport_epoch")
+            or quote.get("market_route") != trace.get("depth_route")):
+        return
+    identity = (observed, price, quantity, quote.get("item"),
+                quote.get("transport_epoch"))
+    if trace.get("last_tick_identity") == identity:
+        return
+    trace["last_tick_identity"] = identity
+    _log_holding_pipeline(
+        stock, code, "initial_quantity_cap_following_tick",
+        entry_submit_attempt_id=trace["entry_submit_attempt_id"],
+        entry_execution_sizing_plan_sha256=trace[
+            "entry_execution_sizing_plan_sha256"],
+        cap_tick_price_krw=price, cap_tick_quantity=quantity,
+        cap_tick_observed_epoch=observed,
+        cap_tick_item=quote["item"],
+        cap_tick_depth_item=depth["item"],
+        cap_tick_market_route=quote["market_route"],
+        cap_tick_transport_epoch=quote["transport_epoch"],
+        actual_order_submitted=False, broker_order_forbidden=True,
+        runtime_effect=False, decision_authority="source_only_cap_fill_research",
+    )
 
 
 def _canonicalize_rising_missed_venue_fields(
@@ -70053,14 +70161,19 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 **entry_execution_sizing_fields,
             )
             return False
+        cap_observed_at = time.time()
+        cap_attempt_id = submit_attempt_fields(stock, code).get(
+            "entry_submit_attempt_id")
+        _mutate_stock_state(stock, pop_fields=("_initial_quantity_cap_trace",))
+        cap_source = _initial_quantity_cap_research_context(
+            sizing_context, sizing_decision, ws_data=ws_data,
+            now_ts=cap_observed_at)
         _log_entry_pipeline(
             stock,
             code,
             "entry_execution_sizing_plan",
             requested_qty=requested_qty,
-            initial_quantity_cap_research_context=(
-                _initial_quantity_cap_research_context(
-                    sizing_context, sizing_decision)),
+            initial_quantity_cap_research_context=cap_source,
             actual_order_submitted=False,
             broker_order_forbidden=False,
             runtime_effect=False,
@@ -70071,6 +70184,24 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             ),
             **entry_execution_sizing_fields,
         )
+        if (cap_source is not None
+                and isinstance(cap_source.get("ask_depth_source"), dict)
+                and entry_execution_sizing_fields.get(
+                    "entry_execution_sizing_plan_sha256")
+                and cap_attempt_id):
+            _mutate_stock_state(stock, set_fields={
+                "_initial_quantity_cap_trace": {
+                    "started_at_epoch": cap_observed_at,
+                    "entry_submit_attempt_id": cap_attempt_id,
+                    "entry_execution_sizing_plan_sha256":
+                        entry_execution_sizing_fields[
+                            "entry_execution_sizing_plan_sha256"],
+                    "depth_item": cap_source["ask_depth_source"]["item"],
+                    "depth_route": cap_source["ask_depth_source"]["market_route"],
+                    "transport_epoch": cap_source["ask_depth_source"][
+                        "transport_epoch"],
+                },
+            })
         submit_revalidation_fields.update(entry_split_fields)
         wait_probe_required = bool(
             entry_ai_submit_authority.get(
@@ -84540,6 +84671,9 @@ def handle_holding_state(
         now_dt = datetime.fromtimestamp(float(now_ts), tz=_KST)
     now_t = now_dt.time()
 
+    _observe_initial_quantity_cap_following_tick(
+        stock, code, ws_data, now_ts=float(now_ts))
+
     _observe_avg_down_runtime_config(stock, code, now_ts)
     from src.engine.scalping.avg_down_replay_capture import (
         record_market_inputs,
@@ -92410,6 +92544,18 @@ def handle_buy_ordered_state(stock, code):
         new_entry=False,
     ):
         return
+
+    # Reuse the already subscribed in-memory WS snapshot. No new REST call,
+    # subscription, order, or timer authority is created by this observation.
+    if (isinstance(stock, dict)
+            and isinstance(stock.get("_initial_quantity_cap_trace"), dict)
+            and WS_MANAGER is not None):
+        try:
+            cap_ws = WS_MANAGER.get_latest_data(code)
+        except (AttributeError, KeyError, TypeError, ValueError):
+            cap_ws = None
+        _observe_initial_quantity_cap_following_tick(
+            stock, code, cap_ws, now_ts=time.time())
 
     cooldowns = COOLDOWNS
     alerted_stocks = ALERTED_STOCKS

@@ -25,6 +25,9 @@ from src.engine.scalping.initial_quantity_activation import (
 )
 
 from src.engine.scalping.initial_quantity_policy import (
+    _cap_candidate_trade,
+    _cap_target_qty,
+    _refresh_cap_decision,
     _write_immutable_json,
     _digest,
     _natural_refresh_pid_receipt,
@@ -40,15 +43,139 @@ from src.engine.scalping.initial_quantity_policy import (
     publish_refresh_quantity_evaluation,
     refresh_quantity_stage_terminal_valid,
     initial_quantity_policy_valid,
+    initial_replay_economics_valid,
     initial_quantity_stage_terminal_valid,
+    join_post_fill_paths,
     main as initial_quantity_main,
     publish_initial_quantity_candidate,
 )
 
 
+def _cap_context(*, budget=1000, price=100, actual_qty=2):
+    return {
+        "schema_version": "initial_quantity_cap_context_v1",
+        "budget_base_krw": budget, "price_krw": price,
+        "safety_ratio": 1.0, "absolute_budget_cap_krw": 0,
+        "current_position_qty": 0, "max_position_qty_cap": None,
+        "cash_orderable_qty_cap": None,
+        "remaining_position_qty_cap": None, "stage_qty_cap": None,
+        "broker_qty_cap": None,
+        "broker_confirmed_one_share_floor": False,
+        "min_one_share_floor_enabled": False,
+        "actual_tier": 5, "actual_ratio": 0.25,
+        "actual_pre_cap_qty": actual_qty,
+        "actual_effective_qty": actual_qty,
+    }
+
+
+def test_cap_replay_requires_exact_fills_and_keeps_unproved_extra_unfilled():
+    day = "2026-09-28T09:30:00+09:00"
+    context = _cap_context()
+    trade = {"buy_qty": 1, "buy_price": 100, "sell_price": 110,
+             "realized_net_pnl_krw": calculate_net_realized_pnl(
+                 100, 110, 1, cost_rate=get_trade_cost_rate())}
+    source = {"context": context, "attempt_id": "attempt-1",
+              "plan_sha256": "a" * 64,
+              "fills": [{"at": day, "price": 100, "qty": 1,
+                         "venue": "KRX"}], "following_ticks": []}
+    result = _cap_candidate_trade(trade, source, "cap_20pct",
+                                  get_trade_cost_rate())
+    assert result["status"] == "partial_unfilled"
+    assert result["target_qty"] == 2
+    assert result["modeled_filled_qty"] == 1
+    assert result["unfilled_qty"] == 1
+    assert _cap_target_qty(context, "cap_10pct") == 1
+    assert _cap_target_qty({**context, "actual_effective_qty": 3},
+                           "cap_10pct") is None
+
+    first = datetime.fromisoformat(day).timestamp()
+    source["context"] = {**context, "ask_depth_source": {
+        "source_type": "ws_0D_bound_snapshot", "observed_epoch": first - 1,
+        "item": "123456", "market_route": "KRX",
+        "transport_epoch": 4,
+        "levels": [{"price_krw": 101, "quantity": 2}],
+    }}
+    source["following_ticks"] = [{
+        "observed_epoch": first + 1, "price_krw": 101, "quantity": 2,
+        "item": "123456", "depth_item": "123456",
+        "market_route": "KRX", "transport_epoch": 4,
+        "attempt_id": "attempt-1", "plan_sha256": "a" * 64,
+    }]
+    paired = _cap_candidate_trade(trade, source, "cap_20pct",
+                                  get_trade_cost_rate())
+    assert paired["status"] == "paired"
+    assert paired["modeled_filled_qty"] == 2
+    source["following_ticks"][0]["transport_epoch"] = 5
+    assert _cap_candidate_trade(trade, source, "cap_20pct",
+                                get_trade_cost_rate())["status"] == "partial_unfilled"
+
+
+def test_cap_selection_keeps_losses_in_costed_population():
+    rows = []
+    for day in ("2026-09-28", "2026-09-29", "2026-09-30"):
+        rows.append({"trade_id": day, "entry_date": day,
+                     "actual_net_pnl_krw": -10.0, "actual_profit_rate": -1.0,
+                     "cap_candidates": {
+                         mode: {"status": "paired",
+                                "candidate_net_pnl_krw": -5.0,
+                                "candidate_net_pct_on_parent_notional": -0.5}
+                         for mode in ("cap_10pct", "cap_15pct", "cap_20pct")}})
+        rows.append({"trade_id": f"{day}-win", "entry_date": day,
+                     "actual_net_pnl_krw": 20.0, "actual_profit_rate": 2.0,
+                     "cap_candidates": {
+                         mode: {"status": "paired",
+                                "candidate_net_pnl_krw": 25.0,
+                                "candidate_net_pct_on_parent_notional": 2.5}
+                         for mode in ("cap_10pct", "cap_15pct", "cap_20pct")}})
+    selected, metrics = _refresh_cap_decision(rows, "parent_5stage", 3)
+    assert selected == "cap_10pct"
+    assert metrics[selected]["candidate_net_pnl_krw"] == 60.0
+    assert metrics[selected]["winner_weighted_net_pct"] == 2.5
+    rows[0]["cap_candidates"]["cap_10pct"]["status"] = "partial_unfilled"
+    assert _refresh_cap_decision(rows, "parent_5stage", 3)[0] != "cap_10pct"
+
+
+def test_cap_selection_requires_winner_weighted_gain():
+    rows = []
+    for day in ("2026-09-28", "2026-09-29", "2026-09-30"):
+        rows.append({"trade_id": day, "entry_date": day,
+                     "actual_net_pnl_krw": 20.0, "actual_profit_rate": 2.0,
+                     "cap_candidates": {"cap_10pct": {
+                         "status": "paired", "candidate_net_pnl_krw": 22.0,
+                         "candidate_net_pct_on_parent_notional": 1.5}}})
+    selected, metrics = _refresh_cap_decision(rows, "parent_5stage", 3)
+    assert selected == "parent_5stage"
+    assert metrics["cap_10pct"]["selection_eligible"] is False
+
+
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+
+
+def test_cap_following_ticks_stop_at_actual_exit(tmp_path):
+    day = "2026-09-28"
+    def tick(emitted: str, observed: str):
+        return _event(9, "initial_quantity_cap_following_tick", emitted,
+                      cap_tick_observed_epoch=datetime.fromisoformat(observed).timestamp(),
+                      cap_tick_price_krw=101, cap_tick_quantity=2,
+                      cap_tick_item="000001", cap_tick_depth_item="000001",
+                      cap_tick_market_route="KRX", cap_tick_transport_epoch=4,
+                      entry_submit_attempt_id="attempt-9",
+                      entry_execution_sizing_plan_sha256="a" * 64,
+                      actual_order_submitted=False,
+                      decision_authority="source_only_cap_fill_research")
+    _write_jsonl(tmp_path / "pipeline_events" / f"pipeline_events_{day}.jsonl", [
+        tick(f"{day}T09:30:30+09:00", f"{day}T09:30:30+09:00"),
+        tick(f"{day}T09:30:40+09:00", f"{day}T09:31:01+09:00"),
+        tick(f"{day}T09:31:01+09:00", f"{day}T09:30:59+09:00"),
+    ])
+    trade = {"trade_id": "fact:9", "record_id": "9", "entry_date": day,
+             "stock_code": "000001", "entry_at_fact_buy_time":
+             f"{day}T09:30:00+09:00", "exit_at": f"{day}T09:31:00+09:00",
+             "buy_qty": 2}
+    paths = join_post_fill_paths([trade], data_dir=tmp_path)
+    assert len(paths["fact:9"]["cap_ticks"]) == 1
 
 
 def test_refresh_auto_receipts_require_verified_daily_pid_and_costed_census(tmp_path):
@@ -555,6 +682,7 @@ def test_refresh_wait_selection_requires_exact_start_and_dated_costed_edge():
         "order_start_source_counts": {
             "initial_quantity_bundle_order_start_at": 30},
         "conservative_ev_pct": 0.8,
+        "winner_weighted_conservative_ev_pct": 0.9,
         "conservative_net_pnl_krw": 3100,
         "daily_conservative_delta_net_pnl_krw": {
             "2026-09-24": 30, "2026-09-25": 30,
@@ -562,6 +690,7 @@ def test_refresh_wait_selection_requires_exact_start_and_dated_costed_edge():
     }
     research = {"horizons_sec": [60, 90], "selections": {
         "KRX_PARENT": {"parent_costed_ev_pct": 0.5,
+                       "winner_weighted_parent_ev_pct": 0.6,
                        "candidate_metrics": {
                            "two_leg_0_1tick:5:60": {
                                **supported, "conservative_ev_pct": 1.0,
@@ -1286,11 +1415,15 @@ def test_refresh_uses_only_new_entries_and_requires_post_apply_receipts(
                entry_execution_sizing_plan_sha256=plan_sha,
                position_sizing_policy_status="initial_policy_loaded",
                position_sizing_policy_sha256=parent_file_sha,
+               quantity_type="KRX_PARENT",
+               quantity_type_classifier_version="initial_quantity_type_v1",
+               ratio=0.25, effective_qty=4,
                initial_quantity_runtime_pid=1234,
                initial_quantity_cap_research_context=json.dumps({
                    "schema_version": "initial_quantity_cap_context_v1",
                    "budget_base_krw": 1_000_000, "price_krw": 100,
-                   "actual_ratio": 0.25, "actual_effective_qty": 4}),
+                   "actual_ratio": 0.25, "actual_effective_qty": 4,
+                   "quantity_type": "KRX_PARENT"}),
                quantity_type_policy_row="KRX_PARENT"),
         _event(13, "order_bundle_submitted", f"{new_day}T09:29:59+09:00",
                actual_order_submitted=True, effective_venue="KRX"),
@@ -1311,6 +1444,14 @@ def test_refresh_uses_only_new_entries_and_requires_post_apply_receipts(
     assert bound_refresh["trades"][0]["applied_policy_file_sha256"] == parent_file_sha
     assert bound_refresh["trades"][0]["applied_cap_research_context"][
         "actual_ratio"] == 0.25
+    assert initial_replay_economics_valid(bound_refresh)
+    tampered_cap = copy.deepcopy(bound_refresh)
+    tampered_cap["trades"][0]["cap_candidates"]["cap_10pct"] = {
+        "status": "paired", "candidate_net_pnl_krw": 999999.0}
+    tampered_cap["report_content_sha256"] = _digest({
+        key: value for key, value in tampered_cap.items()
+        if key != "report_content_sha256"})
+    assert not initial_replay_economics_valid(tampered_cap)
     assert bound_refresh["trades"][0]["policy_decision_stage"] == (
         "entry_execution_sizing_plan")
     bound_evaluation = evaluate_refresh_quantity_candidate(

@@ -16,7 +16,7 @@ import resource
 import tempfile
 import time
 from collections import Counter, defaultdict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from src.trading.order.split_execution_math import pct_price_offset
@@ -35,6 +35,7 @@ BASELINE = date(2026, 6, 5)
 REPORT_SCHEMA = "initial_entry_quantity_completed_trade_replay_v1"
 POLICY_SCHEMA = "initial_entry_quantity_type_policy_v1"
 COST_MODEL = "canonical_sell_notional_only_v1"
+CAP_FILL_MODEL = "actual_fill_prefix_bound_0d_0b_partial_v1"
 MAX_QUOTE_AGE_MS = 1000.0
 LEG_TTL_SECONDS = 600
 _RECORD_ID = re.compile(r'"record_id"\s*:\s*(?:"([^"\\]*)"|(\d+))')
@@ -46,6 +47,8 @@ _SHAPES = {
     "three_leg_0_1_2tick": (0.5, (0, 1, 2)),
 }
 _TICK_SHAPES = {"two_leg_0_1tick", "three_leg_0_1_2tick"}
+_CAP_MODES = {"cap_10pct": 0.10, "cap_15pct": 0.15,
+              "cap_20pct": 0.20}
 
 
 def _select_initial_winner_shape(
@@ -311,7 +314,7 @@ def join_post_fill_paths(trades: list[dict[str, Any]], *, data_dir: Path = DATA_
         exit_clock = _exit_at(trade)
         result[trade["trade_id"]] = {
             "decisions": [], "fills": [], "prices": [], "order_starts": [],
-            "order_requests": [], "order_sent": [],
+            "order_requests": [], "order_sent": [], "cap_ticks": [],
             "source_path": None, "source_gap": [],
             "join_start": entry_clock - timedelta(hours=1) if entry_clock else None,
             "join_end": entry_clock + timedelta(hours=1) if entry_clock else None,
@@ -482,6 +485,35 @@ def join_post_fill_paths(trades: list[dict[str, Any]], *, data_dir: Path = DATA_
                                             "schedule_sha256": schedule_sha,
                                             "policy_sha256": policy_sha,
                                         })
+                    if (stage == "initial_quantity_cap_following_tick"
+                            and within_entry_join and bucket["price_end"] is not None
+                            and emitted <= bucket["price_end"]):
+                        observed_epoch = _number(fields.get("cap_tick_observed_epoch"))
+                        price = _number(fields.get("cap_tick_price_krw"))
+                        quantity = _number(fields.get("cap_tick_quantity"))
+                        observed_at = (datetime.fromtimestamp(observed_epoch, tz=timezone.utc)
+                                       if observed_epoch is not None and
+                                       0 < observed_epoch < 4_000_000_000 else None)
+                        if (observed_at is not None
+                                and bucket["price_start"] <= observed_at <= bucket["price_end"]
+                                and price is not None
+                                and quantity is not None and price > 0
+                                and quantity > 0 and price.is_integer()
+                                and quantity.is_integer()
+                                and fields.get("decision_authority") ==
+                                "source_only_cap_fill_research"
+                                and fields.get("actual_order_submitted") in (False, "False")):
+                            bucket["cap_ticks"].append({
+                                "observed_epoch": observed_epoch,
+                                "price_krw": int(price), "quantity": int(quantity),
+                                "item": str(fields.get("cap_tick_item") or ""),
+                                "depth_item": str(fields.get("cap_tick_depth_item") or ""),
+                                "market_route": str(fields.get("cap_tick_market_route") or ""),
+                                "transport_epoch": fields.get("cap_tick_transport_epoch"),
+                                "attempt_id": str(fields.get("entry_submit_attempt_id") or ""),
+                                "plan_sha256": str(fields.get(
+                                    "entry_execution_sizing_plan_sha256") or ""),
+                            })
                     elif (stage == "position_rebased_after_fill" and within_entry_join
                           and str(fields.get("entry_mode") or "").lower() == "normal"):
                         price = _number(fields.get("fill_price") or fields.get("avg_buy_price"))
@@ -533,6 +565,7 @@ def join_post_fill_paths(trades: list[dict[str, Any]], *, data_dir: Path = DATA_
                     bucket["order_starts"].clear()
                     bucket["order_requests"].clear()
                     bucket["order_sent"].clear()
+                    bucket["cap_ticks"].clear()
                     bucket["source_gap"].append("pipeline_changed_during_scan")
         if source_stable:
             for group in records.values():
@@ -582,6 +615,173 @@ def _costed_fixed_exit_pnl(
     buy_amount = sum(qty * price for qty, price in legs)
     sell_amount = sell_price * sum(qty for qty, _ in legs)
     return sell_amount - buy_amount - cost_rate * sell_amount
+
+
+def _cap_target_qty(context: Any, mode: str) -> int | None:
+    """Replay the allocator's ratio and every captured hard quantity cap."""
+    if not isinstance(context, dict) or mode not in _CAP_MODES:
+        return None
+    from src.engine.kiwoom_orders import describe_buy_capacity
+    from src.engine.scalping.position_sizing_allocator import DEFAULT_TIER_RATIOS
+
+    required_ints = ("budget_base_krw", "price_krw", "absolute_budget_cap_krw",
+                     "current_position_qty", "actual_tier", "actual_pre_cap_qty",
+                     "actual_effective_qty")
+    if (context.get("schema_version") != "initial_quantity_cap_context_v1"
+            or any(type(context.get(key)) is not int or context[key] < 0
+                   for key in required_ints)
+            or not 1 <= context["actual_tier"] <= len(DEFAULT_TIER_RATIOS)
+            or context["price_krw"] <= 0
+            or _number(context.get("safety_ratio")) is None
+            or not 0 < context["safety_ratio"] <= 1
+            or _number(context.get("actual_ratio")) is None
+            or not 0 < context["actual_ratio"] <= DEFAULT_TIER_RATIOS[
+                context["actual_tier"] - 1]):
+        return None
+    cap_names = ("max_position_qty_cap", "cash_orderable_qty_cap",
+                 "remaining_position_qty_cap", "stage_qty_cap", "broker_qty_cap")
+    if any(context.get(name) is not None
+           and (type(context[name]) is not int or context[name] < 0)
+           for name in cap_names):
+        return None
+
+    def allocate(ratio: float) -> tuple[int, int]:
+        price = context["price_krw"]
+        absolute = context["absolute_budget_cap_krw"]
+        allow_floor = bool(context.get("min_one_share_floor_enabled")) and (
+            absolute <= 0 or absolute >= price)
+        _, _, pre_cap, _ = describe_buy_capacity(
+            price, context["budget_base_krw"], ratio,
+            safety_ratio=context["safety_ratio"], max_budget=absolute,
+            allow_min_one_share_over_budget=allow_floor)
+        effective = max(0, pre_cap)
+        position_cap = context.get("max_position_qty_cap")
+        if position_cap is not None:
+            position_cap = max(0, position_cap - context["current_position_qty"])
+            if (context.get("broker_confirmed_one_share_floor") is True
+                    and context["current_position_qty"] == 0
+                    and context.get("stage_qty_cap") == 1
+                    and (context.get("broker_qty_cap") or 0) >= 1):
+                position_cap = max(1, position_cap)
+        for cap in (context.get("cash_orderable_qty_cap"), position_cap,
+                    context.get("remaining_position_qty_cap"),
+                    context.get("stage_qty_cap"), context.get("broker_qty_cap")):
+            if cap is not None:
+                effective = min(effective, cap)
+        return max(0, pre_cap), effective
+
+    actual = allocate(float(context["actual_ratio"]))
+    if actual != (context["actual_pre_cap_qty"],
+                  context["actual_effective_qty"]):
+        return None
+    cap_ratio = min(DEFAULT_TIER_RATIOS[context["actual_tier"] - 1],
+                    _CAP_MODES[mode])
+    return allocate(cap_ratio)[1]
+
+
+def _cap_candidate_trade(
+    trade: dict[str, Any], source: dict[str, Any], mode: str,
+    cost_rate: float,
+) -> dict[str, Any]:
+    """Use exact fills first; require bound depth and later prints for extras."""
+    context = source.get("context")
+    target = _cap_target_qty(context, mode)
+    if target is None:
+        return {"status": "allocator_context_missing_or_invalid"}
+    if target == 0:
+        return {"status": "zero_quantity_action_change_forbidden"}
+    fills = source.get("fills")
+    if not isinstance(fills, list) or not fills:
+        return {"status": "broker_fill_ledger_missing"}
+    ordered = sorted(fills, key=lambda item: str(item.get("at") or ""))
+    if (any(type(fill.get("qty")) is not int or fill["qty"] <= 0
+            or _number(fill.get("price")) is None or fill["price"] <= 0
+            or _timestamp(fill.get("at")) is None for fill in ordered)
+            or sum(fill["qty"] for fill in ordered) != trade["buy_qty"]
+            or abs(sum(fill["qty"] * fill["price"] for fill in ordered)
+                   / trade["buy_qty"] - trade["buy_price"]) > 1.0
+            or context["actual_effective_qty"] < trade["buy_qty"]):
+        return {"status": "broker_fill_ledger_fact_mismatch"}
+    remaining = target
+    candidate_legs: list[tuple[int, float]] = []
+    for fill in ordered:
+        taken = min(remaining, fill["qty"])
+        if taken:
+            candidate_legs.append((taken, fill["price"]))
+            remaining -= taken
+    extra_source = "not_needed"
+    if remaining:
+        depth = context.get("ask_depth_source")
+        ticks = source.get("following_ticks")
+        first_at = _timestamp(ordered[0]["at"])
+        if (isinstance(depth, dict) and isinstance(ticks, list)
+                and depth.get("source_type") == "ws_0D_bound_snapshot"
+                and depth.get("market_route") in {"KRX", "NXT"}
+                and type(depth.get("transport_epoch")) is int
+                and _number(depth.get("observed_epoch")) is not None
+                and isinstance(depth.get("levels"), list)
+                and all(fill.get("venue") == depth.get("market_route")
+                        for fill in ordered)
+                and first_at is not None
+                and 0 <= first_at.timestamp() - float(depth["observed_epoch"]) <= 120):
+            identity = (source.get("attempt_id"), source.get("plan_sha256"))
+            unique_ticks = {(_number(tick.get("observed_epoch")),
+                             tick.get("price_krw"), tick.get("quantity"),
+                             tick.get("item")): tick for tick in ticks
+                            if isinstance(tick, dict)
+                            and (tick.get("attempt_id"), tick.get("plan_sha256"))
+                            == identity
+                            and tick.get("depth_item") == depth.get("item")
+                            and tick.get("market_route") == depth.get("market_route")
+                            and tick.get("transport_epoch") ==
+                            depth.get("transport_epoch")
+                            and type(tick.get("observed_epoch")) in (int, float)
+                            and math.isfinite(tick["observed_epoch"])
+                            and type(tick.get("price_krw")) is int
+                            and type(tick.get("quantity")) is int
+                            and tick["quantity"] > 0}
+            previous_level_price = 0
+            for level in depth["levels"][:5]:
+                if (not isinstance(level, dict)
+                        or type(level.get("price_krw")) is not int
+                        or type(level.get("quantity")) is not int
+                        or level["price_krw"] <= 0 or level["quantity"] < 0):
+                    break
+                price = level["price_krw"]
+                if (price <= previous_level_price or price % get_tick_size(price)
+                        or candidate_legs and price <
+                        min(fill_price for _, fill_price in candidate_legs)):
+                    break
+                previous_level_price = price
+                observed_buy = sum(tick["quantity"] for tick in unique_ticks.values()
+                                   if tick["price_krw"] == price
+                                   and first_at.timestamp() <
+                                   tick["observed_epoch"] <=
+                                   first_at.timestamp() + 1200)
+                already_filled = sum(qty for qty, fill_price in candidate_legs
+                                     if fill_price == price)
+                available = max(0, min(level["quantity"], observed_buy)
+                                - already_filled)
+                taken = min(remaining, available)
+                if taken:
+                    candidate_legs.append((taken, price))
+                    remaining -= taken
+                if remaining == 0:
+                    break
+            extra_source = ("bound_depth_and_following_0b" if remaining == 0
+                            else "insufficient_bound_depth_or_following_0b")
+        else:
+            extra_source = "bound_depth_or_following_0b_missing"
+    pnl = _costed_fixed_exit_pnl(candidate_legs, trade["sell_price"], cost_rate)
+    if target == trade["buy_qty"] and remaining == 0:
+        pnl = trade["realized_net_pnl_krw"]
+    denominator = trade["buy_price"] * trade["buy_qty"]
+    return {"status": "paired" if remaining == 0 else "partial_unfilled",
+            "target_qty": target, "modeled_filled_qty": target - remaining,
+            "unfilled_qty": remaining, "extra_fill_source": extra_source,
+            "candidate_net_pnl_krw": round(pnl, 3),
+            "candidate_net_pct_on_parent_notional": round(pnl / denominator * 100, 6),
+            "parent_net_pnl_krw": trade["realized_net_pnl_krw"]}
 
 
 def _paired_candidate(trade: dict[str, Any], path: dict[str, Any], shape: str) -> dict[str, Any]:
@@ -635,7 +835,16 @@ def _paired_candidate(trade: dict[str, Any], path: dict[str, Any], shape: str) -
             cap_context = None
         if (not isinstance(cap_context, dict)
                 or cap_context.get("schema_version") !=
-                "initial_quantity_cap_context_v1"):
+                "initial_quantity_cap_context_v1"
+                or _number(cap_context.get("actual_ratio")) is None
+                or _number(bound_fields.get("ratio")) is None
+                or abs(_number(cap_context["actual_ratio"])
+                       - _number(bound_fields["ratio"])) > 1e-9
+                or _number(cap_context.get("actual_effective_qty")) is None
+                or _number(bound_fields.get("effective_qty")) is None
+                or _number(cap_context["actual_effective_qty"]) !=
+                _number(bound_fields["effective_qty"])
+                or cap_context.get("quantity_type") != quantity_type):
             cap_context = None
         return {"status": "paired", "quantity_type": quantity_type,
                 "candidate_net_pct": trade["profit_rate"], "fill_state": "actual_parent",
@@ -652,6 +861,10 @@ def _paired_candidate(trade: dict[str, Any], path: dict[str, Any], shape: str) -
                                                 or bound_fields.get("scalping_sizing_position_sizing_policy_sha256")),
                 "applied_policy_runtime_pid": bound_fields.get(
                     "initial_quantity_runtime_pid"),
+                "applied_cap_attempt_id": (sent_identity[0]
+                                           if bound_decision and sent_identity else None),
+                "applied_cap_plan_sha256": (sent_identity[1]
+                                            if bound_decision and sent_identity else None),
                 **({"applied_cap_research_context": cap_context}
                    if cap_context is not None else {}),
                 "fixed_exit_assumption": False}
@@ -832,6 +1045,38 @@ def build_initial_quantity_replay(as_of: str, *, data_dir: Path = DATA_DIR,
                           if first_fill else [])
         quantity_type = parent.get("quantity_type") or next(
             (x.get("quantity_type") for x in shape_rows.values() if x.get("quantity_type")), "SAFE_UNKNOWN")
+        cap_source = None
+        cap_candidates = None
+        if entry_on_or_after:
+            bound_context = parent.get("applied_cap_research_context")
+            bound_orders = {item["order_no"] for item in path.get("order_sent") or []
+                            if item.get("attempt_id") ==
+                            parent.get("applied_cap_attempt_id")
+                            and item.get("plan_sha") ==
+                            parent.get("applied_cap_plan_sha256")}
+            unique_fills = {}
+            for fill in path.get("fills") or []:
+                if not fill.get("order_no") or fill["order_no"] not in bound_orders:
+                    continue
+                identity = ((fill["order_no"], fill["execution_no"])
+                            if fill.get("order_no") and fill.get("execution_no")
+                            else (fill["at"].isoformat(), fill["price"],
+                                  fill["qty"]))
+                unique_fills[identity] = fill
+            cap_source = {
+                "context": bound_context,
+                "attempt_id": parent.get("applied_cap_attempt_id"),
+                "plan_sha256": parent.get("applied_cap_plan_sha256"),
+                "fills": [
+                    {"at": fill["at"].isoformat(), "price": fill["price"],
+                     "qty": fill["qty"], "venue": fill["venue"]}
+                    for fill in sorted(unique_fills.values(),
+                                       key=lambda item: item["at"])],
+                "following_ticks": path.get("cap_ticks") or [],
+            }
+            cap_candidates = {mode: _cap_candidate_trade(
+                trade, cap_source, mode, get_trade_cost_rate())
+                for mode in _CAP_MODES}
         for shape, value in list(shape_rows.items()):
             if (shape != "parent" and value.get("status") == "paired"
                     and value.get("quantity_type") != quantity_type):
@@ -861,6 +1106,9 @@ def build_initial_quantity_replay(as_of: str, *, data_dir: Path = DATA_DIR,
                                               if len(matched_starts) == 1 else None),
                      "actual_profit_rate": trade["profit_rate"],
                      "actual_net_pnl_krw": trade["realized_net_pnl_krw"],
+                     **({"cap_source": cap_source,
+                         "cap_candidates": cap_candidates}
+                        if entry_on_or_after else {}),
                      "source_gap": paths.get(trade["trade_id"], {}).get("source_gap", []),
                      "shapes": shape_rows})
         trade_seconds.append(time.perf_counter() - trade_started)
@@ -947,6 +1195,7 @@ def build_initial_quantity_replay(as_of: str, *, data_dir: Path = DATA_DIR,
     body = {"schema_version": REPORT_SCHEMA, "source_date": as_of,
             "classifier_version": CLASSIFIER_VERSION,
             "cost_model": COST_MODEL,
+            **({"cap_fill_model": CAP_FILL_MODEL} if entry_on_or_after else {}),
             "generation_kind": ("refresh_post_apply_replay" if entry_on_or_after
                                 else "initial_completed_trade_seed"),
             "runtime_effect": False, "runtime_apply_allowed": False,
@@ -957,7 +1206,11 @@ def build_initial_quantity_replay(as_of: str, *, data_dir: Path = DATA_DIR,
                 row["quantity_type"] for row in rows).items())),
             "selections": selections, "trades": rows,
             "model_limitations": ["fixed_actual_exit", "conditional_price_cross_is_not_broker_fill",
-                                   "quantity_expansion_not_estimated", "unclocked_price_excluded",
+                                   *(["quantity_expansion_requires_bound_depth_and_following_tick",
+                                      "partial_unfilled_not_promotable"]
+                                     if entry_on_or_after else
+                                     ["quantity_expansion_not_estimated"]),
+                                   "unclocked_price_excluded",
                                    "decision_and_fill_join_within_one_hour_of_fact_buy_time"]}
     if performance is not None:
         usage_end = resource.getrusage(resource.RUSAGE_SELF)
@@ -1085,7 +1338,8 @@ def initial_replay_economics_valid(report: Any) -> bool:
     if not isinstance(report, dict):
         return False
     if (report.get("generation_kind") == "refresh_post_apply_replay"
-            and report.get("cost_model") != COST_MODEL):
+            and (report.get("cost_model") != COST_MODEL
+                 or report.get("cap_fill_model") != CAP_FILL_MODEL)):
         return False
     if report.get("cost_model") not in (None, COST_MODEL):
         return False
@@ -1095,6 +1349,9 @@ def initial_replay_economics_valid(report: Any) -> bool:
             or len(rows) != census.get("all_completed_initial_trades")):
         return False
     seen: set[str] = set()
+    facts_by_id = {str(fact.get("recommendation_id")): fact
+                   for fact in census.get("input_fact_rows") or []
+                   if isinstance(fact, dict) and fact.get("recommendation_id") is not None}
     counts: Counter[str] = Counter()
     type_counts: Counter[str] = Counter()
     paired_by_type: dict[str, dict[str, list[dict[str, Any]]]] = defaultdict(
@@ -1124,6 +1381,28 @@ def initial_replay_economics_valid(report: Any) -> bool:
             or abs(parent["candidate_net_pnl_krw"] - row["actual_net_pnl_krw"]) > 1e-3
         ):
             return False
+        if report.get("generation_kind") == "refresh_post_apply_replay":
+            fact = facts_by_id.get(str(row.get("record_id") or ""))
+            source = row.get("cap_source")
+            candidates = row.get("cap_candidates")
+            if (not isinstance(fact, dict) or not isinstance(source, dict)
+                    or not isinstance(candidates, dict)
+                    or set(candidates) != set(_CAP_MODES)
+                    or source.get("context") !=
+                    row.get("applied_cap_research_context")
+                    or source.get("attempt_id") !=
+                    parent.get("applied_cap_attempt_id")
+                    or source.get("plan_sha256") !=
+                    parent.get("applied_cap_plan_sha256")):
+                return False
+            trade = {"buy_qty": fact.get("buy_qty"),
+                     "buy_price": fact.get("buy_price"),
+                     "sell_price": fact.get("sell_price"),
+                     "realized_net_pnl_krw": row["actual_net_pnl_krw"]}
+            if any(candidates[mode] != _cap_candidate_trade(
+                    trade, source, mode, get_trade_cost_rate())
+                    for mode in _CAP_MODES):
+                return False
         for shape, result in row["shapes"].items():
             if not isinstance(result, dict):
                 return False
@@ -1284,6 +1563,7 @@ def _eligible_refresh_total_wait(
                    if row.get("quantity_type") == quantity_type]
     parent_net = sum(row["actual_net_pnl_krw"] for row in source_rows)
     parent_ev = _number(selection.get("parent_costed_ev_pct"))
+    parent_winner = _number(selection.get("winner_weighted_parent_ev_pct"))
     if parent_ev is None or len(source_rows) < minimum_count:
         return None
     ranked = []
@@ -1297,6 +1577,7 @@ def _eligible_refresh_total_wait(
         daily = metric.get("daily_conservative_delta_net_pnl_krw") or {}
         ev = _number(metric.get("conservative_ev_pct"))
         net = _number(metric.get("conservative_net_pnl_krw"))
+        winner = _number(metric.get("winner_weighted_conservative_ev_pct"))
         if (type(modeled) is not int or modeled < minimum_count
                 or modeled / len(source_rows) < 0.8
                 or (metric.get("order_start_source_counts") or {}) != {
@@ -1304,13 +1585,81 @@ def _eligible_refresh_total_wait(
                 or metric.get("verified_cross_count", 0) <
                     max(3, math.ceil(modeled * 0.05))
                 or ev is None or ev <= parent_ev + 0.10
+                or parent_winner is None or winner is None
+                or winner <= parent_winner + 1e-6
                 or net is None or net <= parent_net
                 or not isinstance(daily, dict) or len(daily) < 3
                 or min(daily.values()) < 0
                 or daily[max(daily)] <= 0):
             continue
-        ranked.append((ev, net, -horizon, horizon))
+        ranked.append((winner, ev, net, -horizon, horizon))
     return max(ranked)[-1] if ranked else None
+
+
+def _refresh_cap_decision(
+    rows: list[dict[str, Any]], parent_mode: str, minimum_count: int,
+) -> tuple[str, dict[str, Any]]:
+    """Rank bounded caps on paired full-cost trades; retain every loss."""
+    if not rows or parent_mode not in {"parent_5stage", *_CAP_MODES}:
+        return parent_mode, {}
+    parent_net = sum(row["actual_net_pnl_krw"] for row in rows)
+    winner_weight = sum(row["actual_net_pnl_krw"] for row in rows
+                        if row["actual_net_pnl_krw"] > 0
+                        and row["actual_profit_rate"] > 0)
+    parent_weighted = (sum(
+        row["actual_net_pnl_krw"] * row["actual_profit_rate"]
+        for row in rows if row["actual_net_pnl_krw"] > 0
+        and row["actual_profit_rate"] > 0) / winner_weight
+        if winner_weight else None)
+    metrics: dict[str, Any] = {}
+    selected = parent_mode
+    best_rank = (parent_weighted if parent_weighted is not None else -math.inf, 0.0)
+    for mode in _CAP_MODES:
+        valid = [row for row in rows if (row.get("cap_candidates") or {}).get(
+            mode, {}).get("status") == "paired"]
+        valid_ids = {row["trade_id"] for row in valid}
+        candidate_net = parent_net + sum(
+            row["cap_candidates"][mode]["candidate_net_pnl_krw"]
+            - row["actual_net_pnl_krw"] for row in valid)
+        weighted = (sum(
+            row["actual_net_pnl_krw"] * (
+                row["cap_candidates"][mode]["candidate_net_pct_on_parent_notional"]
+                if row["trade_id"] in valid_ids else row["actual_profit_rate"])
+            for row in rows if row["actual_net_pnl_krw"] > 0
+            and row["actual_profit_rate"] > 0) / winner_weight
+            if winner_weight else None)
+        daily: dict[str, float] = defaultdict(float)
+        for row in rows:
+            daily[row["entry_date"]] += (
+                row["cap_candidates"][mode]["candidate_net_pnl_krw"]
+                - row["actual_net_pnl_krw"] if row["trade_id"] in valid_ids
+                else 0.0)
+        coverage = len(valid) / len(rows)
+        delta = candidate_net - parent_net
+        enough = (len(valid) >= minimum_count and coverage >= 0.8
+                  and len(daily) >= 3 and min(daily.values()) >= -0.001
+                  and daily[max(daily)] > 0 and delta > 0
+                  and parent_weighted is not None and weighted is not None
+                  and weighted > parent_weighted + 1e-6)
+        metrics[mode] = {
+            "paired_count": len(valid), "type_count": len(rows),
+            "coverage": round(coverage, 6),
+            "parent_net_pnl_krw": round(parent_net, 3),
+            "candidate_net_pnl_krw": round(candidate_net, 3),
+            "delta_net_pnl_krw": round(delta, 3),
+            "winner_weighted_net_pct": (round(weighted, 6)
+                                         if weighted is not None else None),
+            "parent_winner_weighted_net_pct": (
+                round(parent_weighted, 6)
+                if parent_weighted is not None else None),
+            "daily_delta_net_pnl_krw": {
+                day: round(value, 3) for day, value in sorted(daily.items())},
+            "selection_eligible": enough,
+        }
+        rank = (weighted if weighted is not None else -math.inf, delta)
+        if enough and mode != parent_mode and rank > best_rank:
+            selected, best_rank = mode, rank
+    return selected, metrics
 
 
 def evaluate_refresh_quantity_candidate(
@@ -1443,7 +1792,10 @@ def evaluate_refresh_quantity_candidate(
         incumbent_shape = str((parent_policy.get("type_policies") or {}).get(
             quantity_type, {}).get("selected_shape") or "parent")
         best = incumbent_shape
-        best_ev = _number(selection.get("parent_ev_pct"))
+        parent_winner = _number(selection.get("winner_weighted_parent_ev_pct"))
+        parent_ev = _number(selection.get("parent_ev_pct"))
+        best_rank = (parent_winner if parent_winner is not None else -math.inf,
+                     parent_ev if parent_ev is not None else -math.inf)
         reasons = []
         for shape, metric in (selection.get("candidate_metrics") or {}).items():
             if shape == incumbent_shape or shape not in _SHAPES:
@@ -1460,7 +1812,11 @@ def evaluate_refresh_quantity_candidate(
                     or metric.get("verified_route_epoch_price_cross_count", 0) < 1
                     or _number(metric.get("conservative_ev_pct")) is None
                     or _number(selection.get("parent_ev_pct")) is None
-                    or metric["conservative_ev_pct"] <= selection["parent_ev_pct"] + 0.10):
+                    or metric["conservative_ev_pct"] <= selection["parent_ev_pct"] + 0.10
+                    or parent_winner is None
+                    or _number(metric.get("winner_weighted_conservative_ev_pct")) is None
+                    or metric["winner_weighted_conservative_ev_pct"] <=
+                    parent_winner + 1e-6):
                 continue
             rows = [row for row in report.get("trades") or []
                     if row.get("quantity_type") == quantity_type]
@@ -1473,9 +1829,11 @@ def evaluate_refresh_quantity_candidate(
                         result["candidate_net_pnl_krw"] - result["parent_net_pnl_krw"])
             if len(daily_delta) < 3 or min(daily_delta.values()) < 0 or daily_delta[max(daily_delta)] <= 0:
                 continue
-            if best_ev is None or metric["conservative_ev_pct"] > best_ev:
+            rank = (metric["winner_weighted_conservative_ev_pct"],
+                    metric["conservative_ev_pct"])
+            if rank > best_rank:
                 best = shape
-                best_ev = metric["conservative_ev_pct"]
+                best_rank = rank
         if best == incumbent_shape:
             reasons.append("refresh_hurdles_or_evidence_not_met")
         elif following_bars is not None:
@@ -1491,11 +1849,20 @@ def evaluate_refresh_quantity_candidate(
         selected_wait = _eligible_refresh_total_wait(
             report, timeout_research, quantity_type, best, minimum_count)
         parent_row = parent_policy["type_policies"][quantity_type]
+        cap_rows = [row for row in report.get("trades") or []
+                    if row.get("quantity_type") == quantity_type]
+        selected_ratio, cap_metrics = _refresh_cap_decision(
+            cap_rows, parent_row.get("ratio_mode", "parent_5stage"),
+            minimum_count)
+        if quantity_type == "SAFE_UNKNOWN":
+            selected_ratio = "parent_5stage"
         if (selected_wait is not None
                 and parent_row.get("timeout_mode") == "selected_total_wait_sec"
                 and parent_row.get("selected_total_wait_sec") == selected_wait):
             selected_wait = None
         type_decisions[quantity_type] = {"selected_shape": best,
+                                         "selected_ratio_mode": selected_ratio,
+                                         "cap_candidate_metrics": cap_metrics,
                                          "selected_total_wait_sec": selected_wait,
                                          "minimum_completed_count": minimum_count,
                                          "observed_completed_count": parent_count,
@@ -1503,6 +1870,8 @@ def evaluate_refresh_quantity_candidate(
     state = ("eligible_source_only" if not blockers and any(
         row["selected_shape"] != (parent_policy["type_policies"][name].get(
             "selected_shape") or "parent")
+        or row["selected_ratio_mode"] != parent_policy["type_policies"][name].get(
+            "ratio_mode", "parent_5stage")
         or row["selected_total_wait_sec"] is not None
         for name, row in type_decisions.items())
              else "carry_parent")
@@ -1668,9 +2037,11 @@ def build_refresh_type_policy_candidate(
     timeout_types = timeout_research.get("selections") or {}
     if (report.get("generation_kind") != "refresh_post_apply_replay"
             or report.get("cost_model") != COST_MODEL
+            or report.get("cap_fill_model") != CAP_FILL_MODEL
             or report.get("report_content_sha256") != _digest({
                 key: value for key, value in report.items()
                 if key != "report_content_sha256"})
+            or not initial_replay_economics_valid(report)
             or not refresh_parent_policy_valid(parent_policy)
             or not timeout_research_valid(timeout_research)
             or evaluation.get("state") != "eligible_source_only"
@@ -1706,11 +2077,25 @@ def build_refresh_type_policy_candidate(
         else:
             timeout_mode = "existing_runtime_profile"
         types[name] = {
-            "ratio_mode": parent_row.get("ratio_mode", "parent_5stage"),
+            "ratio_mode": decisions[name].get(
+                "selected_ratio_mode", parent_row.get("ratio_mode", "parent_5stage")),
             "selected_shape": shape,
             "timeout_mode": timeout_mode,
             "selected_total_wait_sec": selected_wait,
         }
+        expected_ratio, expected_metrics = _refresh_cap_decision(
+            [row for row in report.get("trades") or []
+             if row.get("quantity_type") == name],
+            parent_row.get("ratio_mode", "parent_5stage"),
+            decisions[name].get("minimum_completed_count", 30))
+        if (types[name]["ratio_mode"] != expected_ratio
+                or ("cap_candidate_metrics" in decisions[name]
+                    and decisions[name]["cap_candidate_metrics"] != expected_metrics)
+                or ("cap_candidate_metrics" not in decisions[name]
+                    and expected_ratio != parent_row.get("ratio_mode", "parent_5stage"))
+                or (name == "SAFE_UNKNOWN"
+                    and types[name]["ratio_mode"] != "parent_5stage")):
+            raise ValueError("refresh_type_candidate_cap_unsupported")
     if all(row == {
             "ratio_mode": parent_policy["type_policies"][name].get(
                 "ratio_mode", "parent_5stage"),
@@ -1729,6 +2114,7 @@ def build_refresh_type_policy_candidate(
         "effective_from": (date.fromisoformat(report["source_date"])
                            + timedelta(days=1)).isoformat(),
         "cost_model": COST_MODEL,
+        "cap_fill_model": CAP_FILL_MODEL,
         "parent_policy_content_sha256": parent_policy["policy_content_sha256"],
         "report_content_sha256": report["report_content_sha256"],
         "evaluation_content_sha256": _digest(evaluation),

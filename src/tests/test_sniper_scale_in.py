@@ -47,6 +47,79 @@ def test_initial_quantity_cap_research_context_is_source_only_and_bounded():
         replace(context, simulation=True), decision) is None
     assert state_handlers._initial_quantity_cap_research_context(
         replace(context, price_krw=0), decision) is None
+
+
+def test_initial_quantity_cap_depth_and_following_tick_require_bound_source(monkeypatch):
+    from src.engine.scalping.position_sizing_allocator import ScalpingSizingContext
+    from src.trading.market import quote_consistency
+
+    context = ScalpingSizingContext(
+        allocation_stage="initial_entry", reference_time=datetime.now(),
+        effective_venue="KRX", source_signature="SCANNER",
+        budget_base_krw=1000, price_krw=100,
+        safety_ratio=1.0, absolute_budget_cap_krw=0)
+    decision = SimpleNamespace(tier=5, ratio=0.25, pre_cap_qty=2,
+                               effective_qty=2, quantity_type="KRX_PARENT",
+                               reference_time="2026-09-28T09:30:00+09:00")
+    now = datetime(2026, 9, 28, 9, 30,
+                   tzinfo=state_handlers._KST).timestamp()
+    monkeypatch.setattr(quote_consistency, "ws_quote_source_receipt",
+        lambda *_args, **_kwargs: {
+            "source_type": "0D", "item": "123456",
+            "market_route": "KRX",
+            "transport_epoch": 4,
+            "depth_receipt": {"item": "123456", "market_route": "KRX",
+                              "transport_epoch": 4, "observed_epoch": now},
+        })
+    ws = {"orderbook": {"asks": [{"price": 101, "volume": 3}]}}
+    source = state_handlers._initial_quantity_cap_research_context(
+        context, decision, ws_data=ws, now_ts=now)
+    assert source["ask_depth_source"]["levels"] == [
+        {"price_krw": 101, "quantity": 3}]
+    assert "ask_depth_source" not in state_handlers._initial_quantity_cap_research_context(
+        context, decision, ws_data=ws, now_ts=now + 2)
+    events = []
+    monkeypatch.setattr(state_handlers, "_log_holding_pipeline",
+                        lambda _stock, _code, stage, **fields:
+                        events.append((stage, fields)))
+    stock = {"id": 1, "_initial_quantity_cap_trace": {
+        "started_at_epoch": now, "entry_submit_attempt_id": "attempt-1",
+        "entry_execution_sizing_plan_sha256": "a" * 64,
+        "depth_item": "123456", "depth_route": "KRX",
+        "transport_epoch": 4}}
+    ws["last_trade_tick"] = {"aggressor_source":
+        "kiwoom_0b_signed_trade_volume", "signed_trade_volume": "+2",
+        "price": 101, "ts": now + 1}
+    monkeypatch.setattr(quote_consistency, "ws_quote_source_receipt",
+        lambda *_args, **_kwargs: {
+            "source_type": "0B", "item": "123456",
+            "observed_epoch": now + 1,
+            "market_route": "KRX", "transport_epoch": 4,
+            "depth_receipt": {"item": "123456", "market_route": "KRX",
+                              "transport_epoch": 4},
+        })
+    state_handlers._observe_initial_quantity_cap_following_tick(
+        stock, "123456", ws, now_ts=now + 1)
+    state_handlers._observe_initial_quantity_cap_following_tick(
+        stock, "123456", ws, now_ts=now + 1)
+    assert len(events) == 1
+    ws["last_trade_tick"]["signed_trade_volume"] = "+3"
+    monkeypatch.setattr(quote_consistency, "ws_quote_source_receipt",
+        lambda *_args, **_kwargs: {
+            "source_type": "0B", "item": "123456",
+            "observed_epoch": now + 0.5,
+            "market_route": "KRX", "transport_epoch": 4,
+            "depth_receipt": {"item": "123456", "market_route": "KRX",
+                              "transport_epoch": 4},
+        })
+    state_handlers._observe_initial_quantity_cap_following_tick(
+        stock, "123456", ws, now_ts=now + 1)
+    assert len(events) == 1
+    assert events[0][1]["cap_tick_quantity"] == 2
+    ws["last_trade_tick"]["signed_trade_volume"] = "-3"
+    state_handlers._observe_initial_quantity_cap_following_tick(
+        stock, "123456", ws, now_ts=now + 1)
+    assert len(events) == 1
 from src.engine.scalping.micro_estimator_state import (
     MicroEstimatorConfig,
     MicroEstimatorStore,
