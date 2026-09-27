@@ -9,7 +9,8 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from src.engine.scalping.initial_quantity_terminal import (
-    prove_initial_buy_leg_terminal,
+    prove_initial_buy_leg_open, prove_initial_buy_leg_terminal,
+    read_initial_buy_leg_terminal_discover,
 )
 
 
@@ -75,6 +76,144 @@ def _input(*, cancel: bool = True) -> dict:
             "observed_at_epoch": observed, "now_epoch": observed + .5}
 
 
+def test_exact_open_buy_recovery_requires_complete_current_census():
+    observed = datetime(2026, 9, 28, 9, 31, 21,
+                        tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
+    row = _row("0000123", qty="4", filled="1", remaining="3")
+    row.update(source_api="ka10075", qty=4, remaining_qty=3,
+               quantity_contract_valid=True,
+               remaining_quantity_contract_valid=True,
+               submitted_quantity_source_valid=True)
+    row["raw"] = {"ord_qty": "4", "oso_qty": "3", "ord_pric": "10000"}
+    args = {"order_date": "2026-09-28", "stock_code": "005930",
+            "route": "KRX", "order_no": "0000123", "ordered_qty": 4,
+            "submitted_price": 10000, "current_rows": [row],
+            "current_meta": {"request_succeeded": True,
+                             "normalization_contract_complete": True},
+            "observed_at_epoch": observed, "now_epoch": observed + .5}
+    proof = prove_initial_buy_leg_open(**args)
+    assert proof is not None
+    assert (proof["filled_qty"], proof["remaining_qty"]) == (1, 3)
+    for mutation in (
+        lambda x: x["current_meta"].update(normalization_contract_complete=False),
+        lambda x: x["current_rows"][0]["raw"].update(ord_pric="9990"),
+        lambda x: x["current_rows"][0].update(stex_tp="2"),
+        lambda x: x["current_rows"].append(deepcopy(x["current_rows"][0])),
+        lambda x: x["current_rows"].append({"orig_ord_no": "0000123"}),
+        lambda x: x["current_rows"][0]["raw"].update(oso_qty="0"),
+    ):
+        altered = deepcopy(args)
+        mutation(altered)
+        assert prove_initial_buy_leg_open(**altered) is None
+
+
+def test_orphaned_open_leg_restores_only_exact_broker_and_owner(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from src.engine import sniper_state_handlers as handler
+    from src.engine.scalping import initial_quantity_terminal as terminal_reader
+    from src.engine.scalping.initial_quantity_bundle_state import (
+        SCHEMA_DYNAMIC_PRICE, create_indexed_bundle, new_bundle_state,
+        persist_dynamic_leg_submit_intent, persist_dynamic_leg_submit_response,
+    )
+    from src.engine.scalping.initial_quantity_timeout import (
+        build_bundle_timeout_schedule,
+    )
+
+    schedule = build_bundle_timeout_schedule(
+        quantity_type="KRX_PARENT", policy_sha256="a" * 64,
+        decision_at="2026-09-28T09:29:50+09:00",
+        order_start_at="2026-09-28T09:30:00+09:00",
+        total_wait_sec=60, leg_count=2, cancel_confirm_reserve_sec=5)
+    start = schedule["order_start_at_epoch"]
+    initial = new_bundle_state(
+        attempt_id="orphan-open", code="005930", target_id="101",
+        schedule=schedule, requested_qty=2, schema=SCHEMA_DYNAMIC_PRICE,
+        planned_legs=[{"leg_index": 0, "qty": 1, "price": 0,
+                       "route": "KRX", "tag": "initial_quantity_leg_0"},
+                      {"leg_index": 1, "qty": 1, "price": 0,
+                       "route": "KRX", "tag": "initial_quantity_leg_1"}])
+    base = tmp_path / "runtime" / "initial_quantity" / "bundles"
+    create_indexed_bundle(base, initial)
+    intent = persist_dynamic_leg_submit_intent(
+        base, initial, leg_index=0, submit_price=10000,
+        owner_client_intent_id="owner-orphan-open", now_epoch=start)
+    opened = persist_dynamic_leg_submit_response(
+        base, intent, leg_index=0, broker_order_no="0000123",
+        owner_exact=True)
+    stock = {"id": 101, "status": "BUY_ORDERED",
+             "initial_quantity_bundle": opened,
+             "pending_entry_orders": [], "entry_filled_qty": 0, "buy_qty": 0}
+    monkeypatch.setattr(handler, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(handler, "KIWOOM_TOKEN", "test-token")
+    monkeypatch.setattr(handler, "_initial_quantity_leg_owner_context",
+                        lambda *_args: SimpleNamespace(
+                            client_intent_id="owner-orphan-open"))
+
+    class Registry:
+        valid = True
+
+        def symbol_registered(self, _code):
+            return True
+
+        def intent_for_client(self, *, context):
+            return ({"client_intent_id": context.client_intent_id,
+                     "state": "ORDER_BOUND", "order_date": "2026-09-28",
+                     "broker_order_no": "0000123", "symbol": "005930",
+                     "side": "BUY", "action": "NEW", "route": "KRX",
+                     "quantity": 1} if self.valid else None)
+
+        def assert_owner(self, **_kwargs):
+            return {"client_intent_id": "owner-orphan-open"}
+
+    registry = Registry()
+    monkeypatch.setattr(handler, "default_order_owner_registry",
+                        lambda: registry)
+    proof = {"filled_qty": 0, "proof_sha256": "b" * 64}
+    monkeypatch.setattr(terminal_reader, "read_initial_buy_leg_open",
+                        lambda **_kwargs: (proof, "broker_open_proved"))
+    monkeypatch.setattr(handler.time, "time", lambda: start + 1)
+    monkeypatch.setattr(handler, "_log_entry_pipeline",
+                        lambda *_args, **_kwargs: None)
+    handler._reconcile_pending_entry_orders(stock, "005930", "SCALPING")
+    assert len(stock["pending_entry_orders"]) == 1
+    assert stock["pending_entry_orders"][0]["ord_no"] == "0000123"
+    stock["pending_entry_orders"] = []
+    registry.valid = False
+    assert handler._initial_quantity_restore_open_local_order(
+        stock, "005930", leg_index=0)[0] is False
+    assert stock["pending_entry_orders"] == []
+    registry.valid = True
+    stock["entry_filled_qty"] = 1
+    stock["buy_qty"] = 1
+    monkeypatch.setattr(terminal_reader, "read_initial_buy_leg_open",
+                        lambda **_kwargs: (None, "broker_open_unproved"))
+    monkeypatch.setattr(
+        terminal_reader, "read_initial_buy_leg_terminal_discover",
+        lambda **_kwargs: ({"filled_qty": 1, "cancelled_qty": 0,
+                            "cancel_order_no": None},
+                           "broker_terminal_discovered"))
+    confirmed = {
+        **opened["leg_states"][0], "state": "TERMINAL_FILLED",
+        "terminal_confirmed": True,
+        "terminal_confirmed_at_epoch": start + 1,
+        "broker_terminal_receipt_id": "terminal-proof",
+        "owner_registry_receipt_id": "owner-proof",
+        "account_position_receipt_id": "account-proof",
+        "broker_unfilled_qty": 0, "owner_registry_terminal": True,
+        "account_position_reconciled": True,
+        "ordered_qty": 1, "filled_qty": 1, "cancelled_qty": 0,
+    }
+    monkeypatch.setattr(handler, "_initial_quantity_buy_leg_terminal_state",
+                        lambda *_args, **_kwargs: (
+                            confirmed, "initial_quantity_leg_terminal_proved"))
+    restored, status = handler._initial_quantity_restore_open_local_order(
+        stock, "005930", leg_index=0)
+    assert (restored, status) == (True, "initial_quantity_terminal_restored")
+    assert stock["initial_quantity_bundle"]["leg_states"][0]["state"] == (
+        "TERMINAL_FILLED")
+    assert stock["pending_entry_orders"] == []
+
+
 def test_partial_buy_requires_positive_confirmed_cancel_child_and_current_absence():
     args = _input()
     proof = prove_initial_buy_leg_terminal(**args)
@@ -112,6 +251,151 @@ def test_full_fill_needs_exact_date_and_no_open_child():
     assert (proof["filled_qty"], proof["cancelled_qty"]) == (4, 0)
     args["order_date"] = "2026-09-29"
     assert prove_initial_buy_leg_terminal(**args) is None
+
+
+def test_stranded_cancel_discovery_requires_one_confirmed_child():
+    args = _input()
+
+    class Client:
+        dated = args["dated_rows"]
+
+        def get_order_reference_snapshot_kt00007_with_meta(self, *_a, **_kw):
+            return self.dated, args["dated_meta"]
+
+        def get_unfilled_order_snapshot_ka10075_with_meta(self, *_a, **_kw):
+            return args["current_rows"], args["current_meta"]
+
+    client = Client()
+    observed = args["observed_at_epoch"]
+    proof, status = read_initial_buy_leg_terminal_discover(
+        token="test", order_date=args["order_date"],
+        stock_code=args["stock_code"], route=args["route"],
+        order_no=args["order_no"], ordered_qty=args["ordered_qty"],
+        client=client, clock=lambda: observed)
+    assert status == "broker_terminal_discovered"
+    assert proof["cancel_order_no"] == "0000124"
+    client.dated = [*args["dated_rows"],
+                    _row("0000125", qty="3", filled="0", remaining="0",
+                         original="0000123", confirmed="3",
+                         confirmation_time="09:31:20")]
+    assert read_initial_buy_leg_terminal_discover(
+        token="test", order_date=args["order_date"],
+        stock_code=args["stock_code"], route=args["route"],
+        order_no=args["order_no"], ordered_qty=args["ordered_qty"],
+        client=client, clock=lambda: observed)[0] is None
+
+
+@pytest.mark.parametrize("missing_local", [True, False])
+def test_stranded_cancel_requested_recovers_only_exact_terminal(
+    monkeypatch, tmp_path, missing_local,
+):
+    from types import SimpleNamespace
+    from src.engine import sniper_state_handlers as handler
+    from src.engine.scalping import initial_quantity_terminal as terminal_reader
+    from src.engine.scalping.initial_quantity_bundle_state import (
+        SCHEMA_DYNAMIC_PRICE, create_indexed_bundle, new_bundle_state,
+        next_bundle_state, persist_dynamic_leg_submit_intent,
+        persist_dynamic_leg_submit_response, read_bundle_for_target,
+        save_bundle_state_cas, bundle_state_path,
+    )
+    from src.engine.scalping.initial_quantity_timeout import (
+        build_bundle_timeout_schedule,
+    )
+
+    schedule = build_bundle_timeout_schedule(
+        quantity_type="KRX_PARENT", policy_sha256="a" * 64,
+        decision_at="2026-09-28T09:29:50+09:00",
+        order_start_at="2026-09-28T09:30:00+09:00",
+        total_wait_sec=60, leg_count=1, cancel_confirm_reserve_sec=5)
+    start = schedule["order_start_at_epoch"]
+    initial = new_bundle_state(
+        attempt_id="orphan-cancel", code="005930", target_id="101",
+        schedule=schedule, requested_qty=4, schema=SCHEMA_DYNAMIC_PRICE,
+        planned_legs=[{"leg_index": 0, "qty": 4, "price": 0,
+                       "route": "KRX", "tag": "initial_quantity_leg_0"}])
+    base = tmp_path / "runtime" / "initial_quantity" / "bundles"
+    create_indexed_bundle(base, initial)
+    intent = persist_dynamic_leg_submit_intent(
+        base, initial, leg_index=0, submit_price=10000,
+        owner_client_intent_id="owner-orphan-cancel", now_epoch=start)
+    opened = persist_dynamic_leg_submit_response(
+        base, intent, leg_index=0, broker_order_no="0000123",
+        owner_exact=True)
+    cancelled = next_bundle_state(opened, 0, {
+        **opened["leg_states"][0], "state": "CANCEL_REQUESTED"})
+    save_bundle_state_cas(bundle_state_path(base, "orphan-cancel"), cancelled,
+                          expected_parent_sha256=opened["bundle_content_sha256"])
+    local = {"tag": "initial_quantity_leg_0", "qty": 4,
+             "price": 10000, "ord_no": "0000123", "status": "PARTIAL",
+             "filled_qty": 1, "sent_at": start,
+             "dmst_stex_tp": "KRX", "dmst_stex_tp_source": "request",
+             "initial_quantity_leg_index": 0,
+             "entry_submit_attempt_id": "orphan-cancel"}
+    stock = {"id": 101, "status": "BUY_ORDERED",
+             "initial_quantity_bundle": cancelled,
+             "pending_entry_orders": [] if missing_local else [local],
+             "entry_filled_qty": 1, "buy_qty": 1}
+    monkeypatch.setattr(handler, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(handler, "KIWOOM_TOKEN", "test-token")
+    monkeypatch.setattr(handler, "_initial_quantity_leg_owner_context",
+                        lambda *_a: SimpleNamespace(
+                            client_intent_id="owner-orphan-cancel"))
+
+    class Registry:
+        def symbol_registered(self, _code):
+            return True
+
+        def intent_for_client(self, *, context):
+            return {"client_intent_id": context.client_intent_id,
+                    "state": "ORDER_BOUND", "order_date": "2026-09-28",
+                    "broker_order_no": "0000123", "symbol": "005930",
+                    "side": "BUY", "action": "NEW", "route": "KRX",
+                    "quantity": 4}
+
+        def assert_owner(self, **_kw):
+            return {"client_intent_id": "owner-orphan-cancel"}
+
+    monkeypatch.setattr(handler, "default_order_owner_registry", Registry)
+    discovered = {"filled_qty": 1, "cancelled_qty": 3,
+                  "cancel_order_no": "0000124"}
+    monkeypatch.setattr(terminal_reader,
+                        "read_initial_buy_leg_terminal_discover",
+                        lambda **_kw: (discovered,
+                                       "broker_terminal_discovered"))
+    monkeypatch.setattr(handler.time, "time", lambda: start + 10)
+
+    def terminal(_stock, _code, order, **_kw):
+        assert order["cancel_ack_order_no"] == "0000124"
+        return ({**cancelled["leg_states"][0],
+                 "state": "TERMINAL_CANCELLED",
+                 "terminal_confirmed": True,
+                 "terminal_confirmed_at_epoch": start + 10,
+                 "broker_terminal_receipt_id": "broker-proof",
+                 "owner_registry_receipt_id": "owner-proof",
+                 "account_position_receipt_id": "account-proof",
+                 "broker_unfilled_qty": 0,
+                 "owner_registry_terminal": True,
+                 "account_position_reconciled": True,
+                 "ordered_qty": 4, "filled_qty": 1,
+                 "cancelled_qty": 3},
+                "initial_quantity_leg_terminal_proved")
+
+    monkeypatch.setattr(handler, "_initial_quantity_buy_leg_terminal_state",
+                        terminal)
+    if missing_local:
+        restored, status = handler._initial_quantity_restore_open_local_order(
+            stock, "005930", leg_index=0)
+        assert (restored, status) == (True, "initial_quantity_terminal_restored")
+    else:
+        restored, status = handler._initial_quantity_reconcile_stranded_cancel(
+            stock, "005930", local)
+        assert (restored, status) == (
+            True, "initial_quantity_cancel_terminal_restored")
+        assert local["status"] == "CANCELLED"
+    assert read_bundle_for_target(base, "005930", "101")[0] == (
+        stock["initial_quantity_bundle"])
+    assert stock["initial_quantity_bundle"]["leg_states"][0]["state"] == (
+        "TERMINAL_CANCELLED")
 
 
 def test_unrelated_current_buy_does_not_hide_exact_terminal():
