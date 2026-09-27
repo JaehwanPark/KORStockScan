@@ -6,9 +6,34 @@ from copy import deepcopy
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from src.engine.scalping.initial_quantity_terminal import (
     prove_initial_buy_leg_terminal,
 )
+
+
+def test_sequential_bundle_owns_timeout_without_legacy_ttl(monkeypatch):
+    from src.engine import sniper_state_handlers as handler
+
+    monkeypatch.setattr(handler, "_decorate_entry_split_leg_ttls",
+                        lambda *_args: pytest.fail("legacy TTL on sequential BUY"))
+    monkeypatch.setattr(handler, "_resolve_buy_order_timeout_sec",
+                        lambda *_args: pytest.fail("legacy timeout on sequential BUY"))
+    order = {"initial_quantity_sequential_continuation": {
+        "total_wait_sec": 61, "planned_legs": [{}, {}]}}
+    context = {}
+    assert handler._bind_initial_buy_timeout_owner(
+        [order], {}, "SCALPING", context, sequential=True) == [order]
+    assert "split_leg_ttl_sec" not in order
+    assert context == {
+        "order_leg_ttl_sec": [31],
+        "order_bundle_hard_ttl_sec": 61,
+        "order_timeout_owner": "initial_quantity_bundle_timeout_schedule",
+    }
+    with pytest.raises(ValueError, match="immediate_leg_count"):
+        handler._bind_initial_buy_timeout_owner(
+            [order, order], {}, "SCALPING", {}, sequential=True)
 
 
 def _row(order_no: str, *, qty: str, filled: str, remaining: str,

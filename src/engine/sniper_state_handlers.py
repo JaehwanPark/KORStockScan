@@ -43762,6 +43762,44 @@ def _initial_quantity_sequential_plan(
     }
 
 
+def _bind_initial_buy_timeout_owner(
+    planned_orders: list[dict], stock: dict, strategy: str,
+    operating_context: dict | None, *, sequential: bool,
+) -> list[dict]:
+    """Keep legacy leg TTLs out of a policy-owned sequential BUY bundle."""
+    if sequential:
+        if len(planned_orders) != 1:
+            raise ValueError("initial_quantity_immediate_leg_count_invalid")
+        continuation = planned_orders[0].get(
+            "initial_quantity_sequential_continuation")
+        if not isinstance(continuation, dict):
+            raise ValueError("initial_quantity_continuation_missing")
+        total = continuation.get("total_wait_sec")
+        legs = continuation.get("planned_legs")
+        if (type(total) is not int or not 1 <= total <= 1200
+                or not isinstance(legs, list) or not 1 <= len(legs) <= 4):
+            raise ValueError("initial_quantity_timeout_plan_invalid")
+        if operating_context is not None:
+            operating_context["order_leg_ttl_sec"] = [
+                (total + len(legs) - 1) // len(legs)]
+            operating_context["order_bundle_hard_ttl_sec"] = total
+            operating_context["order_timeout_owner"] = (
+                "initial_quantity_bundle_timeout_schedule")
+        return planned_orders
+    decorated = _decorate_entry_split_leg_ttls(planned_orders, stock, strategy)
+    if operating_context is not None:
+        timeout = _resolve_buy_order_timeout_sec(stock, strategy)
+        operating_context["order_leg_ttl_sec"] = [
+            order.get("split_leg_ttl_sec") or timeout for order in decorated]
+        operating_context["order_bundle_hard_ttl_sec"] = max(
+            order.get("split_bundle_hard_ttl_sec") or timeout
+            for order in decorated)
+        operating_context["order_timeout_owner"] = (
+            "sniper_state_handlers._resolve_buy_order_timeout_sec/"
+            "_decorate_entry_split_leg_ttls")
+    return decorated
+
+
 def _split_ttl_profile_max_sec(profile: str) -> int:
     normalized = str(profile or "standard").strip().lower()
     if normalized == "reserve":
@@ -69844,12 +69882,9 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         # let an incomplete or stale receipt become a valid execution plan.
         machine_action_receipt = submit_attempt_machine_lineage(stock, code)
         if planned_orders and machine_action_receipt:
-            planned_orders = _decorate_entry_split_leg_ttls(planned_orders, stock, strategy)
-            if operating_context:
-                timeout=_resolve_buy_order_timeout_sec(stock,strategy)
-                operating_context["order_leg_ttl_sec"]=[o.get("split_leg_ttl_sec") or timeout for o in planned_orders]
-                operating_context["order_bundle_hard_ttl_sec"]=max(o.get("split_bundle_hard_ttl_sec") or timeout for o in planned_orders)
-                operating_context["order_timeout_owner"]="sniper_state_handlers._resolve_buy_order_timeout_sec/_decorate_entry_split_leg_ttls"
+            planned_orders = _bind_initial_buy_timeout_owner(
+                planned_orders, stock, strategy, operating_context,
+                sequential=sequential_plan is not None)
             if operating_context:
                 from src.engine.scalping.entry_split_order_plan import _context_bucket
                 operating_context["context_bucket"]=_context_bucket({**stock,**latency_gate,**entry_orderbook_micro_fields})
@@ -70908,16 +70943,13 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         wait_submission = {}
         sequential_first = isinstance(
             planned_order.get("initial_quantity_sequential_continuation"), dict)
-        if strategy == "SCALPING":
+        if strategy == "SCALPING" and not sequential_first:
             try:
                 from src.engine.scalping.entry_cancel_wait_runtime import submission_fields
                 wait_submission = submission_fields({**stock, "code":code}, planned_order,
                     seed=entry_execution_sizing_fields.get("entry_opportunity_replay_seed"),
                     qty=qty, price=price, route=submit_dmst_stex_tp,
-                    timeout_sec=(
-                        planned_order["initial_quantity_sequential_continuation"][
-                            "total_wait_sec"] if sequential_first
-                        else _resolve_buy_order_timeout_sec(stock, strategy)),
+                    timeout_sec=_resolve_buy_order_timeout_sec(stock, strategy),
                     now_ts=time.time())
             except Exception:
                 # Observation loss is an economic source gap, never an order veto.
@@ -70996,7 +71028,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     reason=response_status, actual_order_submitted=True,
                     broker_order_forbidden=True, runtime_effect=True)
                 break
-        if strategy == "SCALPING":
+        if strategy == "SCALPING" and not sequential_first:
             try:
                 from src.engine.scalping.entry_cancel_wait_runtime import submission_response_fields
                 _log_entry_pipeline(stock, code, "entry_cancel_wait_submission",
