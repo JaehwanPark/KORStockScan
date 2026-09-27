@@ -1568,6 +1568,16 @@ if [[ "$TARGET_DATE" > "2026-09-16" ]]; then
     "$PROJECT_DIR/data/report/entry_cancel_wait_tuning/entry_cancel_wait_tuning_${TARGET_DATE}.md" \
     "entry_cancel_wait_policy"
 fi
+if [[ "$TARGET_DATE" > "2026-09-27" ]]; then
+  INITIAL_QUANTITY_REFRESH_DIR="$PROJECT_DIR/data/report/initial_entry_quantity_type_policy/refresh_postclose_${TARGET_DATE}"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.initial_quantity_policy \
+    --as-of "$TARGET_DATE" \
+    --parent-current "$PROJECT_DIR/data/runtime/initial_quantity/current.json" \
+    --output-dir "$INITIAL_QUANTITY_REFRESH_DIR"
+  wait_for_json_artifact \
+    "$INITIAL_QUANTITY_REFRESH_DIR/initial_quantity_refresh_stage_${TARGET_DATE}.json" \
+    "initial_quantity_refresh_stage"
+fi
 if [ "$RUN_SWING_LIFECYCLE_AUDIT" = "true" ] || [ "$RUN_SWING_LIFECYCLE_AUDIT" = "1" ]; then
   wait_for_postclose_resources "swing_daily_simulation"
   run_postclose_cmd bash "$PROJECT_DIR/deploy/run_swing_daily_simulation_report.sh" "$TARGET_DATE"

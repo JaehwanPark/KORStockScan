@@ -11730,6 +11730,9 @@ _SCALPING_SIZING_STATE_FIELD_MAP = {
     "scalping_sizing_quantity_type": "quantity_type",
     "scalping_sizing_quantity_type_classifier_version": "quantity_type_classifier_version",
     "scalping_sizing_quantity_type_policy_row": "quantity_type_policy_row",
+    "scalping_sizing_position_sizing_policy_status": "position_sizing_policy_status",
+    "scalping_sizing_position_sizing_policy_version": "position_sizing_policy_version",
+    "scalping_sizing_position_sizing_policy_sha256": "position_sizing_policy_sha256",
 }
 
 
@@ -11859,6 +11862,9 @@ def _store_scalping_sizing_decision(
             "quantity_type",
             "quantity_type_classifier_version",
             "quantity_type_policy_row",
+            "position_sizing_policy_status",
+            "position_sizing_policy_version",
+            "position_sizing_policy_sha256",
         }
     }
     _mutate_stock_state(stock, set_fields=state_fields)

@@ -92,14 +92,17 @@ def build_bundle_timeout_schedule(
             or type(leg_count) is not int or not 1 <= leg_count <= 4
             or type(cancel_confirm_reserve_sec) is not int
             or cancel_confirm_reserve_sec < 1
-            or total_wait_sec / leg_count <= cancel_confirm_reserve_sec):
+            or total_wait_sec // leg_count <= cancel_confirm_reserve_sec):
         raise ValueError("initial_quantity_timeout_contract_invalid")
     slot_sec = total_wait_sec / leg_count
     start_epoch = start.timestamp()
     slots = []
+    whole_sec, extra_sec = divmod(total_wait_sec, leg_count)
+    elapsed_sec = 0
     for index in range(leg_count):
-        slot_start = start_epoch + index * slot_sec
-        slot_end = start_epoch + (index + 1) * slot_sec
+        slot_start = start_epoch + elapsed_sec
+        elapsed_sec += whole_sec + (1 if index < extra_sec else 0)
+        slot_end = start_epoch + elapsed_sec
         slots.append({
             "leg_index": index,
             "slot_start_epoch": slot_start,

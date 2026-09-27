@@ -12,7 +12,18 @@ from src.engine.scalping.initial_quantity_timeout import (
 )
 from src.engine.scalping import initial_quantity_timeout_research as research
 from src.engine.scalping.initial_quantity_policy import _digest, join_post_fill_paths
-from src.engine.trade_profit import calculate_net_profit_rate, calculate_net_realized_pnl
+from src.engine.trade_profit import (
+    calculate_net_profit_rate, calculate_net_realized_pnl, get_trade_cost_rate,
+)
+
+
+def test_timeout_ev_uses_same_sell_notional_cost_as_completed_trade_facts():
+    cost = get_trade_cost_rate()
+    legs = [(500, 100.0), (500, 99.0)]
+    expected = 1000 * 110 - (500 * 100 + 500 * 99) - cost * (1000 * 110)
+    assert research._net(legs, 110.0, cost) == pytest.approx(expected)
+    assert research._net(legs, 110.0, cost) == pytest.approx(
+        calculate_net_realized_pnl(99.5, 110, 1000, cost_rate=cost), abs=0.5)
 
 
 def _schedule(legs=3, total=120, reserve=5):
@@ -47,6 +58,13 @@ def test_timeout_schedule_partitions_total_from_order_start_and_includes_probe()
     assert _schedule(legs=3, total=1200)["bundle_deadline_epoch"] == (
         plan["order_start_at_epoch"] + 1200)
     assert _schedule(legs=4, total=1200)["per_leg_slot_sec"] == 300
+    uneven = _schedule(legs=4, total=61)
+    lengths = [slot["terminal_confirm_by_epoch"] - slot["slot_start_epoch"]
+               for slot in uneven["slots"]]
+    assert lengths == [16, 15, 15, 15]
+    assert uneven["slots"][-1]["terminal_confirm_by_epoch"] == (
+        uneven["order_start_at_epoch"] + 61)
+    assert timeout_schedule_valid(uneven)
     forged = copy.deepcopy(plan)
     forged["slots"][1]["terminal_confirm_by_epoch"] += 10
     assert not timeout_schedule_valid(forged)

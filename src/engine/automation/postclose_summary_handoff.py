@@ -162,6 +162,11 @@ def source_paths(report_dir: Path, target_date: str, consumer: str) -> dict[str,
             paths["holding_path_vote_policy"] = holding_vote_policy_path(
                 report_dir.parent, _next_krx_trading_day(target_date),
             )
+        if target_date >= "2026-09-28":
+            paths["initial_quantity_refresh_stage"] = (
+                report_dir / "initial_entry_quantity_type_policy"
+                / f"refresh_postclose_{target_date}"
+                / f"initial_quantity_refresh_stage_{target_date}.json")
         if any(stage_path(report_dir, target_date, s).exists() for s in STAGE_REGISTRY):
             paths.update({f'stage_{stage}':stage_path(report_dir, target_date, stage)
                 for stage in active_stage_names(target_date) if stage != 'summary_handoff'})
@@ -253,6 +258,18 @@ def source_receipt(paths: dict[str, Path], target_date: str) -> dict[str, Any]:
             raw = path.read_bytes()
         except FileNotFoundError:
             raw = None
+        if label == "initial_quantity_refresh_stage":
+            from src.engine.scalping.initial_quantity_policy import (
+                refresh_quantity_stage_terminal_valid,
+            )
+            stage = json.loads(raw) if raw is not None else None
+            if (not refresh_quantity_stage_terminal_valid(stage)
+                    or stage.get("source_date") != target_date
+                    or (target_date >= "2026-09-28"
+                        and (stage.get("timeout_research_status") != "source_bound"
+                             or stage.get("applied_policy_lineage_schema") !=
+                             "initial_quantity_trade_policy_binding_v1"))):
+                raise RuntimeError("initial_quantity_refresh_stage_invalid")
         # Missing optional inputs are explicit, so a later arriving input invalidates
         # the summary. Permission/I/O errors must not look like optional absence.
         sources[label] = {

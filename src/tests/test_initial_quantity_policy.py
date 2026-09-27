@@ -5,7 +5,9 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 import pytest
 
-from src.engine.trade_profit import calculate_net_profit_rate, calculate_net_realized_pnl
+from src.engine.trade_profit import (
+    calculate_net_profit_rate, calculate_net_realized_pnl, get_trade_cost_rate,
+)
 from src.engine.scalping.initial_quantity_type import classify_quantity_type
 from src.engine.scalping.initial_quantity_following_bars import (
     build_following_bar_source, following_bar_source_valid,
@@ -26,6 +28,8 @@ from src.engine.scalping.initial_quantity_policy import (
     build_initial_quantity_replay,
     completed_trade_fact_census,
     evaluate_refresh_quantity_candidate,
+    publish_refresh_quantity_evaluation,
+    refresh_quantity_stage_terminal_valid,
     initial_quantity_policy_valid,
     initial_quantity_stage_terminal_valid,
     main as initial_quantity_main,
@@ -204,7 +208,7 @@ def test_all_completed_trades_remain_in_denominator_and_no_cross_costs(tmp_path)
     assert rows["fact:12"]["shapes"]["two_leg_0_1tick"]["candidate_net_pct"] != facts[1]["profit_rate"]
     assert rows["fact:11"]["shapes"]["two_leg_0_1tick"]["candidate_net_pnl_krw"] > 0
     assert rows["fact:11"]["shapes"]["two_leg_0_0p3"]["status"] == "price_offset_collapsed"
-    assert report["selections"]["KRX_THIN_HIGH_TICK"]["selected_shape"] == "three_leg_0_1_2tick"
+    assert report["selections"]["KRX_THIN_HIGH_TICK"]["selected_shape"] == "two_leg_0_1tick"
     winner_selection = report["selections"]["KRX_THIN_HIGH_TICK"]
     assert winner_selection["winner_count"] == 1
     assert winner_selection["winner_weight_kind"] == "positive_realized_net_pnl_krw"
@@ -453,6 +457,9 @@ def test_split_anchor_uses_first_fill_and_original_notional_for_ev():
     assert result["counterfactual_anchor_price"] == 99.0
     assert result["parent_avg_buy_price"] == 100.0
     assert result["candidate_notional_denominator_krw"] == 400.0
+    assert result["candidate_net_pnl_krw"] == pytest.approx(
+        4 * 101 - (2 * 99 + 2 * 98) - get_trade_cost_rate() * (4 * 101),
+        abs=0.001)
     assert result["candidate_net_pnl_krw"] > trade["realized_net_pnl_krw"]
     assert result["verified_route_epoch_price_cross_count"] == 1
     assert result["candidate_net_pct"] == pytest.approx(
@@ -502,7 +509,9 @@ def test_immutable_stage_receipt_binds_report_candidate_and_rejects_conflict(tmp
         publish_initial_quantity_candidate(report, output_dir=output_dir)
 
 
-def test_refresh_uses_only_new_entries_and_requires_post_apply_receipts(tmp_path):
+def test_refresh_uses_only_new_entries_and_requires_post_apply_receipts(
+    tmp_path, monkeypatch,
+):
     prior_day, new_day = "2026-09-22", "2026-09-23"
     _quality(tmp_path, prior_day)
     _quality(tmp_path, new_day)
@@ -535,6 +544,340 @@ def test_refresh_uses_only_new_entries_and_requires_post_apply_receipts(tmp_path
     assert "parent_pid_consumption_missing" in evaluation["global_blockers"]
     assert "post_apply_terminal_cost_binding_missing" in evaluation["global_blockers"]
     assert evaluation["runtime_apply_allowed"] is False
+
+    following = build_following_bar_source(
+        seed_report, fetch=lambda code, base_dt, limit: (
+            [{"source_timestamp": "20260922093200", "저가": 99}],
+            {"api_id": "ka10080", "request_code": code,
+             "request_base_dt": base_dt,
+             "continuous_page_limit_reached": False}),
+    )
+    stage = publish_initial_quantity_candidate(
+        seed_report, output_dir=tmp_path / "baseline_stage",
+        following_bars=following)
+    active_baseline = build_initial_quantity_baseline(stage)
+    assert baseline_policy_valid(active_baseline)
+    baseline_evaluation = evaluate_refresh_quantity_candidate(
+        refresh, parent_policy=active_baseline)
+    assert baseline_evaluation["parent_policy_content_sha256"] == (
+        active_baseline["policy_content_sha256"])
+    assert baseline_evaluation["state"] == "carry_parent"
+    assert baseline_evaluation["runtime_apply_allowed"] is False
+    assert all(row["minimum_completed_count"] == 30 for row in
+               baseline_evaluation["type_decisions"].values())
+    assert "parent_pid_consumption_missing" in baseline_evaluation["global_blockers"]
+    assert "parent_trade_policy_binding_missing" in baseline_evaluation["global_blockers"]
+    broken_baseline = copy.deepcopy(active_baseline)
+    broken_baseline["type_policies"]["SAFE_UNKNOWN"]["selected_shape"] = "two_leg_0_1tick"
+    with pytest.raises(ValueError, match="refresh_parent_or_replay_contract_invalid"):
+        evaluate_refresh_quantity_candidate(
+            refresh, parent_policy=broken_baseline)
+    with pytest.raises(ValueError, match="refresh_parent_or_replay_contract_invalid"):
+        evaluate_refresh_quantity_candidate(refresh, parent_policy=None)
+    with pytest.raises(ValueError, match="refresh_parent_or_replay_contract_invalid"):
+        evaluate_refresh_quantity_candidate(None, parent_policy=active_baseline)
+    parent_path = (tmp_path / "active_parent.json").resolve()
+    _write_immutable_json(parent_path, active_baseline)
+    refresh_stage = publish_refresh_quantity_evaluation(
+        refresh, parent_policy=active_baseline,
+        parent_policy_path=parent_path,
+        output_dir=tmp_path / "refresh_stage")
+    assert refresh_stage["decision"] == "carry_parent"
+    assert refresh_quantity_stage_terminal_valid(refresh_stage)
+    selected_dir = tmp_path / "selected_refresh_parent"
+    select_initial_quantity_baseline(
+        tmp_path / "baseline_stage" / f"initial_quantity_stage_{prior_day}.json",
+        selected_dir)
+    replay_path = (tmp_path / "refresh_replay_input.json").resolve()
+    _write_immutable_json(replay_path, refresh)
+    assert initial_quantity_main([
+        "--replay", str(replay_path),
+        "--data-dir", str(tmp_path),
+        "--parent-current", str(selected_dir / "current.json"),
+        "--output-dir", str(tmp_path / "refresh_cli")]) == 0
+    cli_stage = json.loads((tmp_path / "refresh_cli" /
+                            f"initial_quantity_refresh_stage_{new_day}.json").read_text())
+    assert cli_stage["timeout_research_status"] == "source_bound"
+    assert refresh_quantity_stage_terminal_valid(cli_stage)
+    timeout_path = Path(cli_stage["timeout_research_path"])
+    timeout_report = json.loads(timeout_path.read_text())
+    assert timeout_report["generation_kind"] == "refresh_post_apply_timeout_research"
+    assert timeout_report["census"] == refresh["census"]
+    assert timeout_report["entry_on_or_after"] == active_baseline["effective_from"]
+    assert timeout_report["runtime_apply_allowed"] is False
+    from src.engine.automation.postclose_summary_handoff import source_receipt
+    cli_stage_path = (tmp_path / "refresh_cli" /
+                      f"initial_quantity_refresh_stage_{new_day}.json")
+    assert source_receipt({"initial_quantity_refresh_stage": cli_stage_path},
+                          new_day)["sources"]["initial_quantity_refresh_stage"]["sha256"]
+    with pytest.raises(RuntimeError, match="initial_quantity_refresh_stage_invalid"):
+        source_receipt({"initial_quantity_refresh_stage": cli_stage_path}, prior_day)
+    with pytest.raises(RuntimeError, match="initial_quantity_refresh_stage_invalid"):
+        source_receipt({"initial_quantity_refresh_stage": tmp_path / "missing.json"},
+                       new_day)
+    changed = copy.deepcopy(refresh_stage)
+    changed["report_file_sha256"] = "0" * 64
+    assert not refresh_quantity_stage_terminal_valid(changed)
+    timeout_path.write_text("{}", encoding="utf-8")
+    assert not refresh_quantity_stage_terminal_valid(cli_stage)
+    empty = build_initial_quantity_replay(
+        new_day, data_dir=tmp_path, fact_rows=before,
+        entry_on_or_after=active_baseline["effective_from"])
+    empty_stage = publish_refresh_quantity_evaluation(
+        empty, parent_policy=active_baseline,
+        parent_policy_path=parent_path,
+        output_dir=tmp_path / "empty_refresh_stage")
+    assert empty_stage["all_completed_initial_trades"] == 0
+    assert empty_stage["decision"] == "carry_parent"
+    assert refresh_quantity_stage_terminal_valid(empty_stage)
+    from src.engine.scalping.initial_quantity_timeout_research import (
+        build_timeout_research,
+    )
+    future_day = "2026-09-28"
+    future_empty = build_initial_quantity_replay(
+        future_day, data_dir=tmp_path, fact_rows=before,
+        entry_on_or_after=active_baseline["effective_from"])
+    future_timeout = build_timeout_research(
+        future_day, data_dir=tmp_path, fact_rows=before,
+        entry_on_or_after=active_baseline["effective_from"])
+    with pytest.raises(ValueError, match="refresh_timeout_research_required"):
+        publish_refresh_quantity_evaluation(
+            future_empty, parent_policy=active_baseline,
+            parent_policy_path=parent_path,
+            output_dir=tmp_path / "future_without_timeout")
+    future_stage = publish_refresh_quantity_evaluation(
+        future_empty, parent_policy=active_baseline,
+        parent_policy_path=parent_path,
+        timeout_research=future_timeout,
+        output_dir=tmp_path / "future_refresh_stage")
+    future_stage_path = (tmp_path / "future_refresh_stage" /
+                         f"initial_quantity_refresh_stage_{future_day}.json")
+    assert refresh_quantity_stage_terminal_valid(future_stage)
+    assert source_receipt({"initial_quantity_refresh_stage": future_stage_path},
+                          future_day)["sources"]["initial_quantity_refresh_stage"]["sha256"]
+    with pytest.raises(RuntimeError, match="initial_quantity_refresh_stage_invalid"):
+        source_receipt({"initial_quantity_refresh_stage":
+                        tmp_path / "empty_refresh_stage" /
+                        f"initial_quantity_refresh_stage_{new_day}.json"},
+                       future_day)
+    winning_after = _facts([{"recommendation_id": 13, "stock_code": "000001",
+                            "strategy": "SCALPING", "position_tag": "SCANNER",
+                            "buy_price": 100, "sell_price": 101, "buy_qty": 4,
+                            "sell_time": "09:35:00", "held_sec": 300}], new_day)
+    winning_refresh = build_initial_quantity_replay(
+        new_day, data_dir=tmp_path, fact_rows=before + winning_after,
+        entry_on_or_after=active_baseline["effective_from"])
+    missing_following = evaluate_refresh_quantity_candidate(
+        winning_refresh, parent_policy=active_baseline)
+    assert "winner_following_source_missing" in missing_following["global_blockers"]
+    with pytest.raises(ValueError, match="refresh_winner_following_source_required"):
+        publish_refresh_quantity_evaluation(
+            winning_refresh, parent_policy=active_baseline,
+            parent_policy_path=parent_path,
+            output_dir=tmp_path / "winning_refresh_stage")
+    winning_following = build_following_bar_source(
+        winning_refresh, fetch=lambda code, base_dt, limit: (
+            [{"source_timestamp": "20260923093200", "저가": 99}],
+            {"api_id": "ka10080", "request_code": code,
+             "request_base_dt": base_dt,
+             "continuous_page_limit_reached": False}),
+    )
+    winning_stage = publish_refresh_quantity_evaluation(
+        winning_refresh, parent_policy=active_baseline,
+        parent_policy_path=parent_path,
+        following_bars=winning_following,
+        output_dir=tmp_path / "winning_refresh_stage")
+    assert refresh_quantity_stage_terminal_valid(winning_stage)
+    from src.utils import kiwoom_utils
+    calls = []
+    monkeypatch.setattr(kiwoom_utils, "get_kiwoom_token", lambda: "test-token")
+
+    def fake_candles(token, code, *, limit, explicit_request_code, base_dt):
+        calls.append((token, code, limit, explicit_request_code, base_dt))
+        return ([{"source_timestamp": "20260923093200", "저가": 99}],
+                {"api_id": "ka10080", "request_code": code,
+                 "request_base_dt": base_dt,
+                 "continuous_page_limit_reached": False})
+
+    monkeypatch.setattr(kiwoom_utils, "get_minute_candles_ka10080_with_meta",
+                        fake_candles)
+    winning_replay_path = (tmp_path / "winning_refresh_replay_input.json").resolve()
+    _write_immutable_json(winning_replay_path, winning_refresh)
+    assert initial_quantity_main([
+        "--replay", str(winning_replay_path),
+        "--data-dir", str(tmp_path),
+        "--parent-current", str(selected_dir / "current.json"),
+        "--output-dir", str(tmp_path / "winning_refresh_cli")]) == 0
+    assert len(calls) == 1 and calls[0][0] == "test-token"
+    auto_stage = json.loads((tmp_path / "winning_refresh_cli" /
+                             f"initial_quantity_refresh_stage_{new_day}.json").read_text())
+    assert auto_stage["following_bar_source_status"] == "source_bound"
+    assert refresh_quantity_stage_terminal_valid(auto_stage)
+    attempts = []
+
+    def failed_token():
+        attempts.append(True)
+        raise RuntimeError("offline_fixture")
+
+    monkeypatch.setattr(kiwoom_utils, "get_kiwoom_token", failed_token)
+    assert initial_quantity_main([
+        "--replay", str(winning_replay_path),
+        "--data-dir", str(tmp_path),
+        "--parent-current", str(selected_dir / "current.json"),
+        "--output-dir", str(tmp_path / "winning_refresh_api_gap")]) == 0
+    assert len(attempts) == 1
+    gap_stage = json.loads((tmp_path / "winning_refresh_api_gap" /
+                            f"initial_quantity_refresh_stage_{new_day}.json").read_text())
+    gap_source = json.loads(Path(gap_stage["following_bar_source_path"]).read_text())
+    assert next(iter(gap_source["sources"].values()))["status"] == "fetch_failed"
+    assert refresh_quantity_stage_terminal_valid(gap_stage)
+
+    import hashlib
+    parent_file_sha = hashlib.sha256(parent_path.read_bytes()).hexdigest()
+    plan_sha = "b" * 64
+    _write_jsonl(tmp_path / "pipeline_events" / f"pipeline_events_{new_day}.jsonl", [
+        _event(13, "entry_execution_sizing_plan", f"{new_day}T09:29:00+09:00",
+               entry_execution_sizing_valid=True, effective_venue="KRX",
+               entry_submit_attempt_id="attempt-13",
+               entry_execution_sizing_plan_sha256=plan_sha,
+               position_sizing_policy_status="initial_policy_loaded",
+               position_sizing_policy_sha256=parent_file_sha,
+               quantity_type_policy_row="KRX_PARENT"),
+        _event(13, "order_bundle_submitted", f"{new_day}T09:29:59+09:00",
+               actual_order_submitted=True, effective_venue="KRX"),
+        _event(13, "order_leg_sent", f"{new_day}T09:29:59+09:00",
+               actual_order_submitted=True, broker_order_no="13",
+               entry_submit_attempt_id="attempt-13",
+               entry_execution_sizing_plan_sha256=plan_sha,
+               tag="first"),
+        _event(13, "position_rebased_after_fill", f"{new_day}T09:30:00+09:00",
+               entry_mode="normal", fill_price=100, fill_qty=4,
+               order_no="13", execution_no="one",
+               actual_execution_venue="KRX",
+               broker_execution_observed_at=f"{new_day}T09:30:00+09:00"),
+    ])
+    bound_refresh = build_initial_quantity_replay(
+        new_day, data_dir=tmp_path, fact_rows=before + winning_after,
+        entry_on_or_after=active_baseline["effective_from"])
+    assert bound_refresh["trades"][0]["applied_policy_file_sha256"] == parent_file_sha
+    assert bound_refresh["trades"][0]["policy_decision_stage"] == (
+        "entry_execution_sizing_plan")
+    bound_evaluation = evaluate_refresh_quantity_candidate(
+        bound_refresh, parent_policy=active_baseline,
+        parent_policy_file_sha256=parent_file_sha)
+    assert bound_evaluation["parent_policy_bound_trade_count"] == 1
+    assert "parent_trade_policy_binding_missing" not in bound_evaluation["global_blockers"]
+    assert "parent_pid_consumption_missing" in bound_evaluation["global_blockers"]
+    wrong_file = evaluate_refresh_quantity_candidate(
+        bound_refresh, parent_policy=active_baseline,
+        parent_policy_file_sha256="0" * 64)
+    assert "parent_trade_policy_binding_missing" in wrong_file["global_blockers"]
+    _write_jsonl(tmp_path / "pipeline_events" / f"pipeline_events_{new_day}.jsonl", [
+        _event(13, "entry_execution_sizing_plan", f"{new_day}T09:29:00+09:00",
+               entry_execution_sizing_valid=True, effective_venue="KRX",
+               entry_submit_attempt_id="attempt-13",
+               entry_execution_sizing_plan_sha256=plan_sha,
+               position_sizing_policy_status="initial_policy_loaded",
+               position_sizing_policy_sha256=parent_file_sha),
+        _event(13, "order_leg_sent", f"{new_day}T09:29:59+09:00",
+               actual_order_submitted=True, broker_order_no="13",
+               entry_submit_attempt_id="attempt-13",
+               entry_execution_sizing_plan_sha256="c" * 64,
+               tag="first"),
+        _event(13, "position_rebased_after_fill", f"{new_day}T09:30:00+09:00",
+               entry_mode="normal", fill_price=100, fill_qty=4,
+               order_no="13", execution_no="one",
+               actual_execution_venue="KRX",
+               broker_execution_observed_at=f"{new_day}T09:30:00+09:00"),
+    ])
+    mismatched = build_initial_quantity_replay(
+        new_day, data_dir=tmp_path, fact_rows=before + winning_after,
+        entry_on_or_after=active_baseline["effective_from"])
+    assert mismatched["trades"][0]["applied_policy_file_sha256"] is None
+    assert "parent_trade_policy_binding_missing" in evaluate_refresh_quantity_candidate(
+        mismatched, parent_policy=active_baseline,
+        parent_policy_file_sha256=parent_file_sha)["global_blockers"]
+
+
+def test_refresh_timeout_research_valid_empty_and_source_date_gate(tmp_path):
+    from src.engine.scalping.initial_quantity_timeout_research import (
+        build_timeout_research, timeout_research_valid,
+    )
+    from src.engine.automation.postclose_summary_handoff import source_receipt
+
+    day = "2026-09-28"
+    report = build_timeout_research(
+        day, data_dir=tmp_path, fact_rows=[], entry_on_or_after=day)
+    assert report["generation_kind"] == "refresh_post_apply_timeout_research"
+    assert report["cost_model"] == "canonical_sell_notional_only_v1"
+    assert report["census"]["all_completed_initial_trades"] == 0
+    assert report["entry_on_or_after"] == day
+    assert timeout_research_valid(report)
+    legacy_refresh = {**report, "cost_model": "buy_and_sell_notional_legacy"}
+    legacy_refresh["report_content_sha256"] = _digest({
+        key: value for key, value in legacy_refresh.items()
+        if key != "report_content_sha256"})
+    assert not timeout_research_valid(legacy_refresh)
+    no_cost_model = {key: value for key, value in report.items()
+                     if key != "cost_model"}
+    no_cost_model["report_content_sha256"] = _digest({
+        key: value for key, value in no_cost_model.items()
+        if key != "report_content_sha256"})
+    assert not timeout_research_valid(no_cost_model)
+    initial = build_timeout_research(day, data_dir=tmp_path, fact_rows=[])
+    assert not timeout_research_valid(initial)
+    legacy_path = tmp_path / "initial_quantity_refresh_stage_2026-09-28.json"
+    legacy_path.write_text("{}", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="initial_quantity_refresh_stage_invalid"):
+        source_receipt({"initial_quantity_refresh_stage": legacy_path}, day)
+
+
+def test_refresh_reuses_exact_pipeline_scan_for_timeout_research(tmp_path):
+    from src.engine.scalping.initial_quantity_timeout_research import build_timeout_research
+
+    day = "2026-09-28"
+    _quality(tmp_path, day)
+    facts = _facts([{"recommendation_id": 31, "stock_code": "000001",
+                    "strategy": "SCALPING", "position_tag": "SCANNER",
+                    "buy_price": 100, "sell_price": 101, "buy_qty": 4,
+                    "sell_time": "09:35:00", "held_sec": 300}], day)
+    _write_jsonl(tmp_path / "pipeline_events" / f"pipeline_events_{day}.jsonl", [
+        _event(31, "entry_execution_sizing_plan", f"{day}T09:29:50+09:00",
+               entry_execution_sizing_valid=True, effective_venue="KRX"),
+        _event(31, "position_rebased_after_fill", f"{day}T09:30:00+09:00",
+               entry_mode="normal", fill_price=100, fill_qty=4,
+               order_no="31", execution_no="one", actual_execution_venue="KRX",
+               broker_execution_observed_at=f"{day}T09:30:00+09:00"),
+        _event(31, "market_observation", f"{day}T09:31:00+09:00",
+               effective_venue="KRX", latest_price=99, ws_age_ms=0),
+    ])
+    cache = {}
+    replay = build_initial_quantity_replay(
+        day, data_dir=tmp_path, fact_rows=facts,
+        entry_on_or_after=day, path_cache=cache)
+    assert replay["cost_model"] == "canonical_sell_notional_only_v1"
+    from src.engine.scalping.initial_quantity_policy import initial_replay_economics_valid
+    legacy_refresh = {**replay, "cost_model": "buy_and_sell_notional_legacy"}
+    legacy_refresh["report_content_sha256"] = _digest({
+        key: value for key, value in legacy_refresh.items()
+        if key != "report_content_sha256"})
+    assert not initial_replay_economics_valid(legacy_refresh)
+    assert replay == build_initial_quantity_replay(
+        day, data_dir=tmp_path, fact_rows=facts, entry_on_or_after=day)
+    cached_perf = {}
+    cached = build_timeout_research(
+        day, data_dir=tmp_path, fact_rows=replay["census"]["input_fact_rows"],
+        entry_on_or_after=day, path_cache=cache, performance=cached_perf)
+    independent = build_timeout_research(
+        day, data_dir=tmp_path, fact_rows=facts, entry_on_or_after=day)
+    assert cached == independent
+    assert cached["pipeline_source_receipts"] == replay["pipeline_source_receipts"]
+    assert cached_perf["shared_pipeline_scan_reused"] is True
+    assert cached_perf["date_scan_seconds"] == {}
+    with pytest.raises(ValueError, match="timeout_research_shared_source_mismatch"):
+        build_timeout_research(day, data_dir=tmp_path, fact_rows=facts,
+                               entry_on_or_after=day,
+                               path_cache={**cache, "price_horizon_seconds": 600})
 
 
 def test_fact_buy_clock_fallback_is_labeled_without_broker_claim(tmp_path):

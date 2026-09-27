@@ -17,7 +17,8 @@ from pathlib import Path
 from typing import Any
 
 from src.engine.scalping.initial_quantity_policy import (
-    BASELINE, _SHAPES, _block_io_wait_ms, _digest, _exit_at, _quantity_parts,
+    BASELINE, COST_MODEL, _SHAPES, _block_io_wait_ms, _costed_fixed_exit_pnl, _digest,
+    _exit_at, _quantity_parts,
     _type_from_decision_receipt, _write_immutable_json,
     _paired_candidate, completed_trade_fact_census, join_post_fill_paths,
 )
@@ -124,11 +125,7 @@ def _first_lower_from_decision(
 
 
 def _net(legs: list[tuple[int, float]], sell_price: float, cost_rate: float) -> float:
-    if not legs:
-        return 0.0
-    buy = sum(qty * price for qty, price in legs)
-    sell = sell_price * sum(qty for qty, _ in legs)
-    return sell - buy - cost_rate * (buy + sell)
+    return _costed_fixed_exit_pnl(legs, sell_price, cost_rate)
 
 
 def _timeout_case(
@@ -282,16 +279,19 @@ def _timeout_case(
 def build_timeout_research(
     as_of: str, *, data_dir: Path = DATA_DIR,
     fact_rows: list[dict[str, Any]] | None = None,
+    entry_on_or_after: str | None = None,
     horizons: tuple[int, ...] = HORIZONS_SEC,
     reserves: tuple[int, ...] = CANCEL_CONFIRM_RESERVES_SEC,
+    path_cache: dict[str, Any] | None = None,
     performance: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Scan the whole completed-trade manifest once for all timeout arms."""
     started = time.perf_counter()
     usage_start = resource.getrusage(resource.RUSAGE_SELF)
     wait_start = _block_io_wait_ms()
-    trades, census = completed_trade_fact_census(as_of, fact_rows=fact_rows,
-                                                  data_dir=data_dir)
+    trades, census = completed_trade_fact_census(
+        as_of, fact_rows=fact_rows, data_dir=data_dir,
+        entry_on_or_after=entry_on_or_after)
     eligible = [trade for trade in trades
                 if census["source_quality_by_entry_date"][trade["entry_date"]]
                 ["tuning_input_allowed"]
@@ -299,9 +299,23 @@ def build_timeout_research(
                 ["tuning_input_allowed"]]
     scan_seconds: dict[str, float] = {}
     sources: dict[str, Any] = {}
-    paths = join_post_fill_paths(eligible, data_dir=data_dir,
-                                 scan_seconds=scan_seconds, source_receipts=sources,
-                                 price_horizon_seconds=max(horizons))
+    if path_cache is None:
+        paths = join_post_fill_paths(eligible, data_dir=data_dir,
+                                     scan_seconds=scan_seconds, source_receipts=sources,
+                                     price_horizon_seconds=max(horizons))
+    else:
+        cached_paths = path_cache.get("paths")
+        cached_horizon = path_cache.get("price_horizon_seconds")
+        if (path_cache.get("census") != census
+                or type(cached_horizon) is not int
+                or cached_horizon < max(horizons)
+                or not isinstance(cached_paths, dict)
+                or set(cached_paths) !=
+                {trade["trade_id"] for trade in eligible}
+                or not isinstance(path_cache.get("pipeline_source_receipts"), dict)):
+            raise ValueError("timeout_research_shared_source_mismatch")
+        paths = cached_paths
+        sources = path_cache["pipeline_source_receipts"]
     case_seconds = []
     counts = Counter()
     paired: dict[str, dict[str, list[dict[str, Any]]]] = defaultdict(lambda: defaultdict(list))
@@ -483,8 +497,11 @@ def build_timeout_research(
             "candidate_metrics": candidates,
         }
     body = {"schema": SCHEMA, "source_date": as_of,
-            "entry_on_or_after": BASELINE.isoformat(),
-            "generation_kind": "initial_completed_trade_timeout_research",
+            "cost_model": COST_MODEL,
+            "entry_on_or_after": entry_on_or_after or BASELINE.isoformat(),
+            "generation_kind": ("refresh_post_apply_timeout_research"
+                                if entry_on_or_after else
+                                "initial_completed_trade_timeout_research"),
             "runtime_effect": False, "runtime_apply_allowed": False,
             "broker_order_forbidden": True, "actual_order_submitted": False,
             "decision_clock_origin": "entry_execution_sizing_plan_pre_fill",
@@ -519,6 +536,7 @@ def build_timeout_research(
                                        if ordered else None),
             "candidate_case_count": len(case_seconds),
             "date_scan_seconds": scan_seconds,
+            "shared_pipeline_scan_reused": path_cache is not None,
         })
     return {**body, "report_content_sha256": _digest(body)}
 
@@ -537,6 +555,7 @@ def timeout_research_valid(report: Any) -> bool:
         reserves = report["cancel_confirm_reserves_sec"]
         if (report.get("schema") != SCHEMA
                 or report.get("report_content_sha256") != _digest(body)
+                or report.get("cost_model") != COST_MODEL
                 or report.get("runtime_effect") is not False
                 or report.get("runtime_apply_allowed") is not False
                 or report.get("broker_order_forbidden") is not True
@@ -544,7 +563,14 @@ def timeout_research_valid(report: Any) -> bool:
                 or report.get("max_bundle_wait_sec") != 1200
                 or report.get("timeout_clock_origin") !=
                 "same_order_submission_context_frozen_at_proxy"
-                or type(total) is not int or total <= 0
+                or type(total) is not int or total < 0
+                or (total == 0 and report.get("generation_kind") !=
+                    "refresh_post_apply_timeout_research")
+                or report.get("generation_kind") not in {
+                    "initial_completed_trade_timeout_research",
+                    "refresh_post_apply_timeout_research"}
+                or report.get("entry_on_or_after") != (
+                    census.get("entry_on_or_after") or BASELINE.isoformat())
                 or not isinstance(horizons, list) or not horizons
                 or not isinstance(reserves, list) or not reserves
                 or any(type(value) is not int or not 1 <= value <= 1200
@@ -592,7 +618,7 @@ def timeout_research_valid(report: Any) -> bool:
                                 or not 0 <= metric["verified_cross_count"] <=
                                 metric["conditional_cross_count"] <= modeled
                                 or abs(metric["coverage_of_all_completed"] -
-                                       round(modeled / total, 6)) > 1e-6
+                                       (round(modeled / total, 6) if total else 0.0)) > 1e-6
                                 or selection["policy_selected_total_wait_sec"] is not None):
                             return False
         return True
@@ -604,9 +630,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--as-of", required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--entry-on-or-after")
     args = parser.parse_args(argv)
     performance: dict[str, Any] = {}
-    report = build_timeout_research(args.as_of, performance=performance)
+    report = build_timeout_research(
+        args.as_of, entry_on_or_after=args.entry_on_or_after,
+        performance=performance)
     if not timeout_research_valid(report):
         raise ValueError("timeout_research_self_validation_failed")
     path = args.output_dir / (f"initial_quantity_timeout_research_{args.as_of}_"

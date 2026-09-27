@@ -34,6 +34,7 @@ from src.utils.jsonl_io import existing_or_gzip_path, open_text_auto
 BASELINE = date(2026, 6, 5)
 REPORT_SCHEMA = "initial_entry_quantity_completed_trade_replay_v1"
 POLICY_SCHEMA = "initial_entry_quantity_type_policy_v1"
+COST_MODEL = "canonical_sell_notional_only_v1"
 MAX_QUOTE_AGE_MS = 1000.0
 LEG_TTL_SECONDS = 600
 _RECORD_ID = re.compile(r'"record_id"\s*:\s*(?:"([^"\\]*)"|(\d+))')
@@ -101,19 +102,22 @@ def _source_quality_state(day: str, data_dir: Path) -> dict[str, Any]:
                                               or summary.get("raw_row_exclusion_applied"))}
 
 
-def _read_trade_facts(as_of: str) -> list[dict[str, Any]]:
+def _read_trade_facts(as_of: str, *, entry_on_or_after: str | None = None) -> list[dict[str, Any]]:
     """Read the completed-trade fact owner without mutating its database."""
     from sqlalchemy import or_
     from src.database.db_manager import DBManager
     from src.database.models import TradePerformanceFact
 
-    start, end = BASELINE, date.fromisoformat(as_of)
+    start = max(BASELINE, date.fromisoformat(entry_on_or_after)) if entry_on_or_after else BASELINE
+    end = date.fromisoformat(as_of)
     with DBManager().get_session() as session:
         facts = (session.query(TradePerformanceFact)
                  .filter(or_(TradePerformanceFact.rec_date >= start,
                              TradePerformanceFact.buy_time >= datetime.combine(
                                  start, datetime.min.time())),
-                         TradePerformanceFact.rec_date <= end,
+                         or_(TradePerformanceFact.rec_date <= end,
+                             TradePerformanceFact.buy_time < datetime.combine(
+                                 end + timedelta(days=1), datetime.min.time())),
                          TradePerformanceFact.strategy.in_(("SCALPING", "SCALP")),
                          TradePerformanceFact.position_tag.in_(("SCANNER", "SCALP_BASE")))
                  .order_by(TradePerformanceFact.recommendation_id).all())
@@ -139,7 +143,8 @@ def completed_trade_fact_census(as_of: str, *, fact_rows: list[dict[str, Any]] |
     """Seal every eligible completed initial position from the costed fact owner."""
     date.fromisoformat(as_of)
     refresh_start = date.fromisoformat(entry_on_or_after) if entry_on_or_after else None
-    source = _read_trade_facts(as_of) if fact_rows is None else list(fact_rows)
+    source = (_read_trade_facts(as_of, entry_on_or_after=entry_on_or_after)
+              if fact_rows is None else list(fact_rows))
     source = sorted(source, key=lambda item: str(item.get("recommendation_id") or "")
                     if isinstance(item, dict) else "")
     exclusions: Counter[str] = Counter()
@@ -357,6 +362,14 @@ def join_post_fill_paths(trades: list[dict[str, Any]], *, data_dir: Path = DATA_
                                     "quantity_type", "quantity_type_classifier_version",
                                     "scalping_sizing_quantity_type",
                                     "scalping_sizing_quantity_type_classifier_version",
+                                    "quantity_type_policy_row",
+                                    "position_sizing_policy_status",
+                                    "position_sizing_policy_sha256",
+                                    "entry_submit_attempt_id",
+                                    "entry_execution_sizing_plan_sha256",
+                                    "scalping_sizing_quantity_type_policy_row",
+                                    "scalping_sizing_position_sizing_policy_status",
+                                    "scalping_sizing_position_sizing_policy_sha256",
                                     "buy_pressure_10t", "tick_aggressor_pressure_usable",
                                     "tick_context_quality", "quote_stale", "quote_consistency_state",
                                     "classifier_route_key", "classifier_transport_epoch",
@@ -490,6 +503,17 @@ def _quantity_parts(qty: int, shape: str) -> list[int]:
     return [first, second, remaining - second]
 
 
+def _costed_fixed_exit_pnl(
+    legs: list[tuple[int, float]], sell_price: float, cost_rate: float,
+) -> float:
+    """Match trade_profit's sell-notional cost contract before final rounding."""
+    if not legs:
+        return 0.0
+    buy_amount = sum(qty * price for qty, price in legs)
+    sell_amount = sell_price * sum(qty for qty, _ in legs)
+    return sell_amount - buy_amount - cost_rate * sell_amount
+
+
 def _paired_candidate(trade: dict[str, Any], path: dict[str, Any], shape: str) -> dict[str, Any]:
     if shape == "parent":
         entry_at = _timestamp(trade.get("entry_at_fact_buy_time"))
@@ -497,7 +521,17 @@ def _paired_candidate(trade: dict[str, Any], path: dict[str, Any], shape: str) -
                      if entry_at and abs((item["at"] - entry_at).total_seconds()) <= 3600
                      and (item["at"] <= entry_at or item["stage"] == "order_bundle_submitted"
                           and (item["at"] - entry_at).total_seconds() <= 30)]
-        decision = min(decisions, key=lambda item: abs((item["at"] - entry_at).total_seconds())) if decisions else None
+        # The submitted bundle is often closer to the fill than the sizing
+        # decision.  It is an execution event, not proof of which policy
+        # calculated the quantity.  Keep that fallback for historical type
+        # research, but bind a refresh trade to the actual sizing event.
+        sizing_decisions = [item for item in decisions
+                            if item["stage"] == "entry_execution_sizing_plan"
+                            and item["at"] <= entry_at]
+        decision = (max(sizing_decisions, key=lambda item: item["at"])
+                    if sizing_decisions else
+                    min(decisions, key=lambda item: abs((item["at"] - entry_at).total_seconds()))
+                    if decisions else None)
         fields = dict(decision["fields"]) if decision else {}
         fields["effective_venue"] = fields.get("effective_venue") or fields.get("sizing_venue_at_allocation")
         if decision:
@@ -505,11 +539,37 @@ def _paired_candidate(trade: dict[str, Any], path: dict[str, Any], shape: str) -
         quantity_type = (_type_from_decision_receipt(
             fields, decision_at=decision["at"], entry_at=entry_at)
             if decision and entry_at else "SAFE_UNKNOWN")
+        first_fill = min(path.get("fills") or [], key=lambda item: item["at"],
+                         default=None)
+        order_no = str(first_fill.get("order_no") or "") if first_fill else ""
+        sent = [item for item in path.get("order_sent") or []
+                if order_no and item["order_no"] == order_no]
+        sent_identity = ((sent[0]["attempt_id"], sent[0]["plan_sha"])
+                         if sent and all(
+                             (item["attempt_id"], item["plan_sha"]) ==
+                             (sent[0]["attempt_id"], sent[0]["plan_sha"])
+                             for item in sent) else None)
+        bound_decisions = [item for item in sizing_decisions
+                           if sent_identity and (
+                               item["fields"].get("entry_submit_attempt_id"),
+                               item["fields"].get("entry_execution_sizing_plan_sha256"))
+                           == sent_identity]
+        bound_decision = (max(bound_decisions, key=lambda item: item["at"])
+                          if bound_decisions else None)
+        bound_fields = bound_decision["fields"] if bound_decision else {}
         return {"status": "paired", "quantity_type": quantity_type,
                 "candidate_net_pct": trade["profit_rate"], "fill_state": "actual_parent",
                 "candidate_net_pnl_krw": trade["realized_net_pnl_krw"],
                 "parent_net_pnl_krw": trade["realized_net_pnl_krw"],
                 "decision_snapshot_status": "joined" if decision else "missing_unknown_type",
+                "policy_decision_stage": (bound_decision["stage"]
+                                          if bound_decision else None),
+                "policy_decision_at": (bound_decision["at"].isoformat()
+                                       if bound_decision else None),
+                "applied_policy_status": (bound_fields.get("position_sizing_policy_status")
+                                          or bound_fields.get("scalping_sizing_position_sizing_policy_status")),
+                "applied_policy_file_sha256": (bound_fields.get("position_sizing_policy_sha256")
+                                                or bound_fields.get("scalping_sizing_position_sizing_policy_sha256")),
                 "fixed_exit_assumption": False}
     if path.get("source_gap"):
         return {"status": "path_source_gap",
@@ -603,12 +663,7 @@ def _paired_candidate(trade: dict[str, Any], path: dict[str, Any], shape: str) -
         elif any(x["price"] == limit for x in observations):
             touch_legs.append((qty, limit))
     def net_pnl(legs: list[tuple[int, float]]) -> float:
-        qty = sum(q for q, _ in legs)
-        if qty <= 0:
-            return 0.0
-        buy_amount = sum(q * price for q, price in legs)
-        sell_amount = trade["sell_price"] * qty
-        return sell_amount - buy_amount - cost_rate * (sell_amount + buy_amount)
+        return _costed_fixed_exit_pnl(legs, trade["sell_price"], cost_rate)
     no_extra_pnl = net_pnl([(first_qty, anchor)])
     crossed_pnl = net_pnl(conditionally_filled)
     touched_pnl = net_pnl(conditionally_filled + touch_legs)
@@ -646,7 +701,8 @@ def _paired_candidate(trade: dict[str, Any], path: dict[str, Any], shape: str) -
 def build_initial_quantity_replay(as_of: str, *, data_dir: Path = DATA_DIR,
                                   fact_rows: list[dict[str, Any]] | None = None,
                                   performance: dict[str, Any] | None = None,
-                                  entry_on_or_after: str | None = None) -> dict[str, Any]:
+                                  entry_on_or_after: str | None = None,
+                                  path_cache: dict[str, Any] | None = None) -> dict[str, Any]:
     started = time.perf_counter()
     usage_start = resource.getrusage(resource.RUSAGE_SELF)
     wait_start = _block_io_wait_ms()
@@ -660,9 +716,16 @@ def build_initial_quantity_replay(as_of: str, *, data_dir: Path = DATA_DIR,
                        ["tuning_input_allowed"]]
     date_scan_seconds: dict[str, float] = {}
     source_receipts: dict[str, Any] = {}
+    horizon = 1200 if path_cache is not None else LEG_TTL_SECONDS
     paths = join_post_fill_paths(eligible_trades, data_dir=data_dir,
                                  scan_seconds=date_scan_seconds,
-                                 source_receipts=source_receipts)
+                                 source_receipts=source_receipts,
+                                 price_horizon_seconds=horizon)
+    if path_cache is not None:
+        path_cache.update({"census": census, "paths": paths,
+                           "pipeline_source_receipts": source_receipts,
+                           "date_scan_seconds": date_scan_seconds,
+                           "price_horizon_seconds": horizon})
     counts: Counter[str] = Counter()
     paired: dict[str, dict[str, list[dict[str, Any]]]] = defaultdict(lambda: defaultdict(list))
     rows: list[dict[str, Any]] = []
@@ -702,6 +765,10 @@ def build_initial_quantity_replay(as_of: str, *, data_dir: Path = DATA_DIR,
                      "entry_fill_venue": first_fill.get("venue") if first_fill else None,
                      "entry_fill_clock_source": (first_fill.get("clock_source")
                                                  if first_fill else None),
+                     "applied_policy_status": parent.get("applied_policy_status"),
+                     "applied_policy_file_sha256": parent.get("applied_policy_file_sha256"),
+                     "policy_decision_stage": parent.get("policy_decision_stage"),
+                     "policy_decision_at": parent.get("policy_decision_at"),
                      "entry_order_start_at": (matched_starts[0]["at"].isoformat()
                                               if len(matched_starts) == 1 else None),
                      "actual_profit_rate": trade["profit_rate"],
@@ -796,6 +863,7 @@ def build_initial_quantity_replay(as_of: str, *, data_dir: Path = DATA_DIR,
                                      "selection_reason": "conditional_ev_with_parent_fallback" if best != "parent" else "parent_or_source_gap"}
     body = {"schema_version": REPORT_SCHEMA, "source_date": as_of,
             "classifier_version": CLASSIFIER_VERSION,
+            "cost_model": COST_MODEL,
             "generation_kind": ("refresh_post_apply_replay" if entry_on_or_after
                                 else "initial_completed_trade_seed"),
             "runtime_effect": False, "runtime_apply_allowed": False,
@@ -837,6 +905,7 @@ def build_initial_quantity_policy(
     date.fromisoformat(source_date)
     if (report.get("schema_version") != REPORT_SCHEMA
             or report.get("generation_kind") != "initial_completed_trade_seed"
+            or report.get("cost_model") != COST_MODEL
             or report.get("report_content_sha256") != _digest({
                 k: v for k, v in report.items() if k != "report_content_sha256"})):
         raise ValueError("initial_replay_integrity_invalid")
@@ -931,6 +1000,11 @@ def initial_replay_economics_valid(report: Any) -> bool:
         return type(value) in (int, float) and math.isfinite(value)
 
     if not isinstance(report, dict):
+        return False
+    if (report.get("generation_kind") == "refresh_post_apply_replay"
+            and report.get("cost_model") != COST_MODEL):
+        return False
+    if report.get("cost_model") not in (None, COST_MODEL):
         return False
     rows = report.get("trades")
     census = report.get("census") or {}
@@ -1121,21 +1195,34 @@ def evaluate_refresh_quantity_candidate(
     report: dict[str, Any], *, parent_policy: dict[str, Any],
     pid_receipt: dict[str, Any] | None = None,
     terminal_receipt: dict[str, Any] | None = None,
+    following_bars: dict[str, Any] | None = None,
+    parent_policy_file_sha256: str | None = None,
+    enforce_trade_lineage: bool = True,
 ) -> dict[str, Any]:
     """Apply stronger post-activation gates without reusing the seed sample."""
+    from src.engine.scalping.initial_quantity_activation import (
+        baseline_policy_valid,
+    )
+
+    if not isinstance(parent_policy, dict) or not isinstance(report, dict):
+        raise ValueError("refresh_parent_or_replay_contract_invalid")
     parent_body = {key: value for key, value in parent_policy.items()
                    if key != "policy_content_sha256"}
     report_body = {key: value for key, value in report.items()
                    if key != "report_content_sha256"}
-    if (parent_policy.get("policy_content_sha256") != _digest(parent_body)
-            or parent_policy.get("runtime_apply_allowed") is not True
-            or parent_policy.get("runtime_effect") is not True
-            or parent_policy.get("activation_state") != "reviewed_active"
-            or not isinstance(parent_policy.get("type_policies"), dict)
-            or set(parent_policy["type_policies"]) != set(_TYPES)
-            or any(type(row) is not dict or type(row.get("paired_count")) is not int
-                   or row["paired_count"] < 0
-                   for row in parent_policy["type_policies"].values())
+    is_initial_baseline = baseline_policy_valid(parent_policy)
+    is_legacy_parent = (
+        parent_policy.get("policy_content_sha256") == _digest(parent_body)
+        and parent_policy.get("runtime_apply_allowed") is True
+        and parent_policy.get("runtime_effect") is True
+        and parent_policy.get("activation_state") == "reviewed_active"
+        and isinstance(parent_policy.get("type_policies"), dict)
+        and set(parent_policy["type_policies"]) == set(_TYPES)
+        and all(type(row) is dict and type(row.get("paired_count")) is int
+                and row["paired_count"] >= 0
+                for row in parent_policy["type_policies"].values())
+    )
+    if (not (is_initial_baseline or is_legacy_parent)
             or report.get("report_content_sha256") != _digest(report_body)
             or report.get("generation_kind") != "refresh_post_apply_replay"
             or report.get("schema_version") != REPORT_SCHEMA
@@ -1149,9 +1236,30 @@ def evaluate_refresh_quantity_candidate(
             or (report.get("census") or {}).get("input_manifest_sha256")
             != _digest((report.get("census") or {}).get("input_fact_rows"))):
         raise ValueError("refresh_parent_or_replay_contract_invalid")
+    if following_bars is not None:
+        from src.engine.scalping.initial_quantity_following_bars import (
+            following_bar_source_valid,
+        )
+        if not following_bar_source_valid(following_bars, report):
+            raise ValueError("refresh_following_source_invalid")
     parent_hash = parent_policy["policy_content_sha256"]
     entry_dates = sorted({row["entry_date"] for row in report.get("trades") or []})
     blockers = []
+    policy_bound_trades = sum(
+        row.get("applied_policy_status") == "initial_policy_loaded"
+        and row.get("applied_policy_file_sha256") == parent_policy_file_sha256
+        and row.get("policy_decision_stage") == "entry_execution_sizing_plan"
+        and (decision_at := _timestamp(row.get("policy_decision_at"))) is not None
+        and (entry_at := _timestamp(row.get("entry_fill_at"))) is not None
+        and decision_at <= entry_at
+        for row in report.get("trades") or [])
+    if (enforce_trade_lineage and report.get("trades")
+            and policy_bound_trades != len(report["trades"])):
+        blockers.append("parent_trade_policy_binding_missing")
+    if following_bars is None and any(
+            row["actual_net_pnl_krw"] > 0 and row["actual_profit_rate"] > 0
+            for row in report["trades"]):
+        blockers.append("winner_following_source_missing")
     if len(entry_dates) < 3:
         blockers.append("independent_post_apply_dates_below_three")
     if not (isinstance(pid_receipt, dict)
@@ -1172,7 +1280,10 @@ def evaluate_refresh_quantity_candidate(
         parent_count = incumbent.get("paired_count", 0)
         seeded_count = ((parent_policy.get("type_policies") or {}).get(quantity_type) or {}).get(
             "paired_count", 0)
-        minimum_count = max(5, min(30, math.ceil(seeded_count * 0.2)))
+        # The active first baseline intentionally stores no per-type training
+        # count. Never turn that absent count into the five-trade refresh floor.
+        minimum_count = (30 if is_initial_baseline else
+                         max(5, min(30, math.ceil(seeded_count * 0.2))))
         best = "parent"
         reasons = []
         for shape, metric in (selection.get("candidate_metrics") or {}).items():
@@ -1203,6 +1314,16 @@ def evaluate_refresh_quantity_candidate(
                 best = shape
         if best == "parent":
             reasons.append("refresh_hurdles_or_evidence_not_met")
+        elif following_bars is not None:
+            following = (following_bars.get("weighted_by_type") or {}).get(
+                quantity_type) or {}
+            winner_count = selection.get("winner_count", 0)
+            observed = following.get("observed_minute_lower_count", 0)
+            if (type(winner_count) is not int or winner_count <= 0
+                    or type(observed) is not int
+                    or observed / winner_count < 0.8):
+                best = "parent"
+                reasons.append("winner_following_lower_coverage_below_80pct")
         type_decisions[quantity_type] = {"selected_shape": best,
                                          "minimum_completed_count": minimum_count,
                                          "observed_completed_count": parent_count,
@@ -1215,8 +1336,235 @@ def evaluate_refresh_quantity_candidate(
             "parent_policy_content_sha256": parent_hash,
             "report_content_sha256": report["report_content_sha256"],
             "state": state, "global_blockers": blockers,
+            **({"parent_policy_bound_trade_count": policy_bound_trades}
+               if enforce_trade_lineage else {}),
             "type_decisions": type_decisions,
             "runtime_apply_allowed": False, "runtime_effect": False}
+
+
+def publish_refresh_quantity_evaluation(
+    report: dict[str, Any], *, parent_policy: dict[str, Any],
+    parent_policy_path: Path, output_dir: Path,
+    pid_receipt: dict[str, Any] | None = None,
+    terminal_receipt: dict[str, Any] | None = None,
+    following_bars: dict[str, Any] | None = None,
+    timeout_research: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Seal a post-apply replay and carry/eligible research decision.
+
+    This receipt has no current-pointer or broker authority. A later reviewed
+    policy publisher must consume it before any runtime change is possible.
+    """
+    from src.engine.scalping.initial_quantity_activation import (
+        baseline_policy_valid,
+    )
+
+    if (not parent_policy_path.is_absolute()
+            or not baseline_policy_valid(parent_policy)
+            or json.loads(parent_policy_path.read_text(encoding="utf-8")) != parent_policy):
+        raise ValueError("refresh_parent_file_invalid")
+    if str(report.get("source_date") or "") >= "2026-09-28" and timeout_research is None:
+        raise ValueError("refresh_timeout_research_required")
+    winners = [row for row in report.get("trades") or []
+               if row.get("actual_net_pnl_krw", 0) > 0
+               and row.get("actual_profit_rate", 0) > 0]
+    if winners or following_bars is not None:
+        from src.engine.scalping.initial_quantity_following_bars import (
+            following_bar_source_valid,
+        )
+        if following_bars is None or not following_bar_source_valid(following_bars, report):
+            raise ValueError("refresh_winner_following_source_required")
+    if timeout_research is not None:
+        from src.engine.scalping.initial_quantity_timeout_research import (
+            timeout_research_valid,
+        )
+        if (not timeout_research_valid(timeout_research)
+                or timeout_research.get("generation_kind") !=
+                "refresh_post_apply_timeout_research"
+                or timeout_research.get("source_date") != report.get("source_date")
+                or timeout_research.get("entry_on_or_after") !=
+                (report.get("census") or {}).get("entry_on_or_after")
+                or timeout_research.get("census") != report.get("census")
+                or timeout_research.get("quantity_type_counts") !=
+                report.get("quantity_type_counts")
+                or timeout_research.get("pipeline_source_receipts") !=
+                report.get("pipeline_source_receipts")):
+            raise ValueError("refresh_timeout_research_source_mismatch")
+    evaluation = evaluate_refresh_quantity_candidate(
+        report, parent_policy=parent_policy, pid_receipt=pid_receipt,
+        terminal_receipt=terminal_receipt,
+        following_bars=following_bars,
+        parent_policy_file_sha256=_file_sha256(parent_policy_path))
+    day = report["source_date"]
+    report_path = output_dir / (
+        f"initial_quantity_refresh_replay_{day}_{report['report_content_sha256'][:12]}.json")
+    evaluation_hash = _digest(evaluation)
+    evaluation_path = output_dir / (
+        f"initial_quantity_refresh_evaluation_{day}_{evaluation_hash[:12]}.json")
+    report_file_sha = _write_immutable_json(report_path, report)
+    evaluation_file_sha = _write_immutable_json(evaluation_path, evaluation)
+    following_receipt = {"following_bar_source_status": "no_winners"}
+    if following_bars is not None:
+        following_hash = following_bars["report_content_sha256"]
+        following_path = output_dir / (
+            f"initial_quantity_refresh_following_bars_{day}_{following_hash[:12]}.json")
+        following_receipt = {
+            "following_bar_source_status": "source_bound",
+            "following_bar_source_path": str(following_path.resolve()),
+            "following_bar_source_file_sha256": _write_immutable_json(
+                following_path, following_bars),
+            "following_bar_source_content_sha256": following_hash,
+        }
+    timeout_receipt = {"timeout_research_status": "not_provided"}
+    if timeout_research is not None:
+        timeout_hash = timeout_research["report_content_sha256"]
+        timeout_path = output_dir / (
+            f"initial_quantity_refresh_timeout_research_{day}_{timeout_hash[:12]}.json")
+        timeout_receipt = {
+            "timeout_research_status": "source_bound",
+            "timeout_research_path": str(timeout_path.resolve()),
+            "timeout_research_file_sha256": _write_immutable_json(
+                timeout_path, timeout_research),
+            "timeout_research_content_sha256": timeout_hash,
+        }
+    body = {
+        "schema_version": "initial_entry_quantity_refresh_stage_v1",
+        "stage": "initial_entry_quantity_refresh",
+        "source_date": day,
+        "generation_kind": "refresh",
+        "stage_status": "complete_source_only",
+        "applied_policy_lineage_schema": "initial_quantity_trade_policy_binding_v1",
+        "terminal": True,
+        "parent_policy_path": str(parent_policy_path),
+        "parent_policy_file_sha256": _file_sha256(parent_policy_path),
+        "parent_policy_content_sha256": parent_policy["policy_content_sha256"],
+        "report_path": str(report_path.resolve()),
+        "report_file_sha256": report_file_sha,
+        "report_content_sha256": report["report_content_sha256"],
+        "evaluation_path": str(evaluation_path.resolve()),
+        "evaluation_file_sha256": evaluation_file_sha,
+        "evaluation_content_sha256": evaluation_hash,
+        **following_receipt,
+        **timeout_receipt,
+        "pid_receipt": pid_receipt,
+        "terminal_receipt": terminal_receipt,
+        "all_completed_initial_trades": report["census"]["all_completed_initial_trades"],
+        "decision": evaluation["state"],
+        "runtime_apply_allowed": False,
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+    }
+    stage = {**body, "receipt_content_sha256": _digest(body)}
+    _write_immutable_json(output_dir / f"initial_quantity_refresh_stage_{day}.json", stage)
+    return stage
+
+
+def refresh_quantity_stage_terminal_valid(receipt: Any) -> bool:
+    if not isinstance(receipt, dict):
+        return False
+    try:
+        body = {key: value for key, value in receipt.items()
+                if key != "receipt_content_sha256"}
+        if (receipt.get("schema_version") != "initial_entry_quantity_refresh_stage_v1"
+                or receipt.get("stage") != "initial_entry_quantity_refresh"
+                or receipt.get("generation_kind") != "refresh"
+                or receipt.get("stage_status") != "complete_source_only"
+                or receipt.get("terminal") is not True
+                or receipt.get("runtime_apply_allowed") is not False
+                or receipt.get("runtime_effect") is not False
+                or receipt.get("actual_order_submitted") is not False
+                or receipt.get("receipt_content_sha256") != _digest(body)):
+            return False
+        if receipt.get("applied_policy_lineage_schema") not in (
+                None, "initial_quantity_trade_policy_binding_v1"):
+            return False
+        if (str(receipt.get("source_date") or "") >= "2026-09-28"
+                and (receipt.get("applied_policy_lineage_schema") !=
+                     "initial_quantity_trade_policy_binding_v1"
+                     or receipt.get("timeout_research_status") != "source_bound")):
+            return False
+        paths = {name: Path(receipt[f"{name}_path"])
+                 for name in ("parent_policy", "report", "evaluation")}
+        if (any(not path.is_absolute() or not path.is_file()
+                or _file_sha256(path) != receipt[f"{name}_file_sha256"]
+                for name, path in paths.items())
+                or paths["report"].parent != paths["evaluation"].parent):
+            return False
+        parent = json.loads(paths["parent_policy"].read_text(encoding="utf-8"))
+        report = json.loads(paths["report"].read_text(encoding="utf-8"))
+        evaluation = json.loads(paths["evaluation"].read_text(encoding="utf-8"))
+        winners = [row for row in report.get("trades") or []
+                   if row.get("actual_net_pnl_krw", 0) > 0
+                   and row.get("actual_profit_rate", 0) > 0]
+        if receipt.get("following_bar_source_status") == "source_bound":
+            from src.engine.scalping.initial_quantity_following_bars import (
+                following_bar_source_valid,
+            )
+            following_path = Path(receipt["following_bar_source_path"])
+            if (not following_path.is_absolute()
+                    or following_path.parent != paths["report"].parent
+                    or _file_sha256(following_path) !=
+                    receipt["following_bar_source_file_sha256"]):
+                return False
+            following = json.loads(following_path.read_text(encoding="utf-8"))
+            if (not following_bar_source_valid(following, report)
+                    or following["report_content_sha256"] !=
+                    receipt["following_bar_source_content_sha256"]):
+                return False
+        elif (receipt.get("following_bar_source_status") != "no_winners"
+              or winners
+              or any(key.startswith("following_bar_source_") and key !=
+                     "following_bar_source_status" for key in receipt)):
+            return False
+        timeout_research = None
+        if receipt.get("timeout_research_status") == "source_bound":
+            from src.engine.scalping.initial_quantity_timeout_research import (
+                timeout_research_valid,
+            )
+            timeout_path = Path(receipt["timeout_research_path"])
+            if (not timeout_path.is_absolute()
+                    or timeout_path.parent != paths["report"].parent
+                    or _file_sha256(timeout_path) !=
+                    receipt["timeout_research_file_sha256"]):
+                return False
+            timeout_research = json.loads(timeout_path.read_text(encoding="utf-8"))
+            if (not timeout_research_valid(timeout_research)
+                    or timeout_research.get("generation_kind") !=
+                    "refresh_post_apply_timeout_research"
+                    or timeout_research.get("source_date") != report.get("source_date")
+                    or timeout_research.get("entry_on_or_after") !=
+                    (report.get("census") or {}).get("entry_on_or_after")
+                    or timeout_research.get("census") != report.get("census")
+                    or timeout_research.get("quantity_type_counts") !=
+                    report.get("quantity_type_counts")
+                    or timeout_research.get("pipeline_source_receipts") !=
+                    report.get("pipeline_source_receipts")
+                    or timeout_research.get("report_content_sha256") !=
+                    receipt["timeout_research_content_sha256"]):
+                return False
+        elif (receipt.get("timeout_research_status") not in (None, "not_provided")
+              or any(key.startswith("timeout_research_") and key !=
+                     "timeout_research_status" for key in receipt)):
+            return False
+        expected = evaluate_refresh_quantity_candidate(
+            report, parent_policy=parent,
+            pid_receipt=receipt["pid_receipt"],
+            terminal_receipt=receipt["terminal_receipt"],
+            following_bars=(following if receipt["following_bar_source_status"]
+                            == "source_bound" else None),
+            parent_policy_file_sha256=receipt["parent_policy_file_sha256"],
+            enforce_trade_lineage=bool(receipt.get("applied_policy_lineage_schema")))
+        return bool(
+            evaluation == expected
+            and receipt["parent_policy_content_sha256"] == parent["policy_content_sha256"]
+            and receipt["report_content_sha256"] == report["report_content_sha256"]
+            and receipt["evaluation_content_sha256"] == _digest(evaluation)
+            and receipt["source_date"] == report["source_date"]
+            and receipt["all_completed_initial_trades"] == report["census"]["all_completed_initial_trades"]
+            and receipt["decision"] == evaluation["state"]
+        )
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
 
 
 def initial_quantity_policy_valid(
@@ -1462,13 +1810,35 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=Path)
     parser.add_argument("--policy-output", type=Path)
     parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--data-dir", type=Path, default=DATA_DIR)
     parser.add_argument("--following-bars", type=Path)
+    parser.add_argument("--parent-current", type=Path)
+    parser.add_argument("--pid-receipt", type=Path)
+    parser.add_argument("--terminal-receipt", type=Path)
     args = parser.parse_args(argv)
     if bool(args.as_of) == bool(args.replay):
         parser.error("exactly one of --as-of or --replay is required")
     if args.output_dir and (args.output or args.policy_output):
         parser.error("--output-dir cannot be combined with explicit output paths")
+    if args.parent_current and (not args.output_dir or args.policy_output
+                                or args.output):
+        parser.error("refresh requires --output-dir and no seed output paths")
+    if (args.pid_receipt or args.terminal_receipt) and not args.parent_current:
+        parser.error("post-apply receipts require --parent-current")
+    parent = None
+    parent_path = None
+    if args.parent_current:
+        from src.engine.scalping.initial_quantity_activation import (
+            ENV_FILE, selected_initial_quantity_env,
+        )
+        target_date = args.as_of
+        if args.replay:
+            target_date = json.loads(args.replay.read_text(encoding="utf-8"))["source_date"]
+        env = selected_initial_quantity_env(args.parent_current, target_date)
+        parent_path = Path(env[ENV_FILE])
+        parent = json.loads(parent_path.read_text(encoding="utf-8"))
     performance: dict[str, Any] = {}
+    path_cache: dict[str, Any] | None = {} if parent is not None and not args.replay else None
     if args.replay:
         report = json.loads(args.replay.read_text(encoding="utf-8"))
         if (not isinstance(report, dict)
@@ -1478,9 +1848,70 @@ def main(argv: list[str] | None = None) -> int:
                 or not initial_replay_economics_valid(report)):
             raise ValueError("existing_replay_invalid")
     else:
-        report = build_initial_quantity_replay(args.as_of, performance=performance)
+        report = build_initial_quantity_replay(
+            args.as_of, data_dir=args.data_dir, performance=performance,
+            entry_on_or_after=parent["effective_from"] if parent else None,
+            path_cache=path_cache)
     following_bars = (json.loads(args.following_bars.read_text(encoding="utf-8"))
                       if args.following_bars else None)
+    if parent is not None:
+        following_performance: dict[str, Any] = {}
+        if following_bars is None and any(
+                row["actual_net_pnl_krw"] > 0 and row["actual_profit_rate"] > 0
+                for row in report["trades"]):
+            from src.engine.scalping.initial_quantity_following_bars import (
+                build_following_bar_source,
+            )
+            from src.utils import kiwoom_utils
+
+            token_state: dict[str, Any] = {"attempted": False, "token": None,
+                                           "error": None}
+
+            def fetch(code: str, base_dt: str, limit: int):
+                if not token_state["attempted"]:
+                    token_state["attempted"] = True
+                    try:
+                        token_state["token"] = kiwoom_utils.get_kiwoom_token()
+                    except Exception as exc:
+                        token_state["error"] = exc
+                if token_state["error"] is not None:
+                    raise token_state["error"]
+                return kiwoom_utils.get_minute_candles_ka10080_with_meta(
+                    token_state["token"], code, limit=limit, explicit_request_code=True,
+                    base_dt=base_dt)
+
+            following_bars = build_following_bar_source(
+                report, fetch=fetch, performance=following_performance)
+        from src.engine.scalping.initial_quantity_timeout_research import (
+            build_timeout_research,
+        )
+        timeout_performance: dict[str, Any] = {}
+        timeout_research = build_timeout_research(
+            report["source_date"],
+            data_dir=args.data_dir,
+            fact_rows=report["census"]["input_fact_rows"],
+            entry_on_or_after=parent["effective_from"],
+            path_cache=path_cache,
+            performance=timeout_performance)
+        stage = publish_refresh_quantity_evaluation(
+            report, parent_policy=parent, parent_policy_path=parent_path,
+            output_dir=args.output_dir,
+            pid_receipt=(json.loads(args.pid_receipt.read_text(encoding="utf-8"))
+                         if args.pid_receipt else None),
+            terminal_receipt=(json.loads(args.terminal_receipt.read_text(encoding="utf-8"))
+                              if args.terminal_receipt else None),
+            following_bars=following_bars,
+            timeout_research=timeout_research)
+        if not refresh_quantity_stage_terminal_valid(stage):
+            raise ValueError("refresh_stage_self_validation_failed")
+        print(json.dumps({"source_date": report["source_date"],
+                          "all_completed_initial_trades": stage["all_completed_initial_trades"],
+                          "decision": stage["decision"],
+                          "receipt_content_sha256": stage["receipt_content_sha256"],
+                          "performance": performance,
+                          "following_performance": following_performance,
+                          "timeout_performance": timeout_performance}))
+        return 0
     if args.output_dir:
         publish_initial_quantity_candidate(
             report, output_dir=args.output_dir, following_bars=following_bars)
