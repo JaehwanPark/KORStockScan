@@ -1,0 +1,40 @@
+{
+  "source_date": "2026-09-23",
+  "read_only": true,
+  "trades": 387,
+  "winner_count": 244,
+  "input_manifest_sha256": "e51534103c0a13361007c4c578080d308799ea136a3bbc6ada53a75baa5728ce",
+  "replay_report_content_sha256": "82f67add34cea136201f870c9b60a072aa6f97f60190ac65c969925035eb52d6",
+  "timeout_report_content_sha256": "9c86db19e087a85a91b2396a0542a9fd56d5f71bb3add24cfc60b09c596d9834",
+  "census_equal": true,
+  "source_equal": true,
+  "timeout_valid": true,
+  "replay_performance": {
+    "wall_seconds": 372.255,
+    "cpu_user_seconds": 351.32,
+    "cpu_system_seconds": 2.252,
+    "peak_rss_kb": 152592,
+    "swap_operations": 0,
+    "read_blocks": 14044248,
+    "write_blocks": 0,
+    "block_io_wait_ms": 0.0,
+    "trade_evaluation_p95_ms": 0.103,
+    "trade_evaluation_p99_ms": 0.131,
+    "census_count": 387
+  },
+  "timeout_performance": {
+    "wall_seconds": 0.558,
+    "cpu_user_seconds": 0.417,
+    "cpu_system_seconds": 0.007,
+    "peak_rss_kb": 152592,
+    "swap_operations": 0,
+    "read_blocks": 47808,
+    "write_blocks": 0,
+    "block_io_wait_ms": 0.0,
+    "case_evaluation_p95_ms": 0.006,
+    "case_evaluation_p99_ms": 0.008,
+    "candidate_case_count": 34056,
+    "shared_pipeline_scan_reused": true
+  },
+  "measurement_scope": "historical 2026-09-23 completed-trade census, replay and timeout search; excludes external following-bar API and regular postclose full chain"
+}
