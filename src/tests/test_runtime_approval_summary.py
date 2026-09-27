@@ -509,6 +509,48 @@ def test_next_effective_date_is_pending_until_preopen_verification(monkeypatch, 
     assert consumed["preopen_consumption_receipt"]["runtime_pid"] == 4321
 
 
+def test_current_future_summary_rejects_release_and_manifest_generation_mismatch(monkeypatch, tmp_path):
+    from src.engine.automation import runtime_policy_bootstrap as bootstrap
+
+    data = _patch(monkeypatch, tmp_path)
+    source, apply = "2026-09-23", "2026-09-28"
+    sources = {"policy": {"exists": True, "target_date_matches": True,
+                          "error": None, "effective_date": apply}}
+    state, _, receipt = mod._runtime_consumption_state(source, sources)
+    assert state == "pending" and receipt["manifest_sha256"] is None
+    root = data / "runtime" / "policy_bootstrap"
+    root.mkdir(parents=True)
+    env_file = root / f"runtime_policy_bootstrap_{apply}.env"
+    env_file.write_text("export TEST=true\n")
+    manifest = {"target_date": apply, "source_incumbent_target_date": "2026-09-19",
+        "selected_release_sha": "a" * 40, "env_file": str(env_file),
+        "env_sha256": hashlib.sha256(env_file.read_bytes()).hexdigest(),
+        "selected_families": []}
+    manifest["manifest_sha256"] = bootstrap._digest_json(manifest)
+    _write(root / f"runtime_policy_bootstrap_{apply}.json", manifest)
+    _write(root / f"runtime_policy_bootstrap_verify_{apply}.json", {
+        "target_date": apply, "status": "pass", "passed": True,
+        "manifest_sha256": manifest["manifest_sha256"], "pid": None,
+        "pid_passed": None, "pid_env_available": True})
+    selection = data / "runtime" / "runtime_release_selection.json"
+    _write(selection, {"schema": "runtime_release_selection_v1",
+                       "git_commit": "b" * 40, "release_root": "/releases/selected"})
+    state, _, receipt = mod._runtime_consumption_state(source, sources)
+    assert state == "rejected"
+    assert "selected_release_mismatch" in receipt["future_generation_issues"]
+    _write(selection, {"schema": "runtime_release_selection_v1",
+                       "git_commit": "a" * 40, "release_root": "/releases/selected"})
+    state, natural, receipt = mod._runtime_consumption_state(source, sources)
+    assert (state, natural) == ("verified", "not_due")
+    assert receipt["actual_pid_consumed"] is False
+    assert receipt["valid_empty"] is True
+    _write(selection, {"schema": "runtime_release_selection_v1",
+                       "git_commit": "a" * 40, "release_root": "relative/selected"})
+    state, _, receipt = mod._runtime_consumption_state(source, sources)
+    assert state == "rejected"
+    assert "selected_release_mismatch" in receipt["future_generation_issues"]
+
+
 def test_pending_maturity_requires_verified_future_generation_contract(monkeypatch, tmp_path):
     _patch(monkeypatch, tmp_path)
     target = "2026-09-19"

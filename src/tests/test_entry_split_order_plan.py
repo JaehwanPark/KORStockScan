@@ -114,6 +114,11 @@ def test_acknowledged_entry_leg_merges_duplicate_policy_receipts():
         order_resolution_fields={'broker_route':'KRX'}, entry_execution_cohort='KRX',
         split_leg_meta_fields={**stock, 'entry_split_order_policy_sha256':'leg-policy'},
         real_pre_submit_guard_fields={}, submit_revalidation_fields={},
+        buy_parent_id='attempt-1', buy_child_id='attempt-1:acknowledged-1',
+        buy_owner_type='main_scalping', buy_owner_id='main_scalping:1',
+        buy_account_key='account-a', buy_intent_id='intent-1',
+        buy_registry_mode='registry_managed', buy_owner_policy_fields={},
+        buy_planned_qty=None, sequential_first=False,
         _entry_price_ai_trace_fields=lambda _: {},
         _merge_entry_pipeline_field_groups=handlers._merge_entry_pipeline_field_groups,
         _log_entry_pipeline=lambda *args, **fields: fields)
@@ -126,6 +131,8 @@ def test_acknowledged_entry_leg_merges_duplicate_policy_receipts():
     assert event['broker_order_no'] == 'acknowledged-1'
     assert event['actual_order_submitted'] is True
     assert event['broker_order_forbidden'] is False
+    assert event['buy_parent_id'] == 'attempt-1'
+    assert event['owner_registry_intent_id'] == 'intent-1'
 
 
 @pytest.fixture(autouse=True)
@@ -5350,7 +5357,9 @@ def test_live_submit_split_branch_binds_or_releases_reservation(monkeypatch, tmp
     split_plan.update_probe_runtime_bundle('new-plan', phase='planned')
     calls, stock = [], {'id': 1}
     env = {**vars(handlers), 'stock': stock, 'code': '000001', 'strategy': 'SCALPING',
-           'ws_data': {}, 'curr_price': 1000,
+               'ws_data': {}, 'curr_price': 1000, 'sizing_decision': {},
+               '_initial_quantity_cap_research_context': lambda *a, **k: None,
+               'submit_attempt_fields': lambda *a: {},
            '_probe_residual_successor_source_fields': lambda *a, **k: {},
            'opening_rotation_active': mode == 'opening', 'sizing_context': {}, 'budget_context': {},
            'planned_orders': [probe], 'latency_gate': {}, 'latency_price_snapshot': {},

@@ -182,6 +182,123 @@ def test_required_summary_handoff_rejects_task_projection_drift(
     assert "direct_checklist_task_projection_mismatch" in report["issues"]
 
 
+def test_whole_chain_verification_rejects_failed_stage_with_current_marker(monkeypatch, tmp_path):
+    from src.engine.automation import postclose_summary_handoff as handoff
+
+    target = "2026-09-19"
+    _seed(monkeypatch, tmp_path, target)
+    stage = handoff.stage_path(mod.REPORT_DIR, target, "research_capacity")
+    _write(stage, {"source_date": target, "run_id": "failed-1", "status": "failed", "exit_code": 2})
+    _build_direct_checklist(monkeypatch, tmp_path, target)
+
+    report = mod.build_threshold_cycle_postclose_verification(
+        target, require_summary_handoff=True, require_whole_native_chain=True
+    )
+    assert report["status"] == "fail"
+    assert "postclose_stage_invalid:research_capacity" in report["issues"]
+    assert report["whole_native_chain_done_claimed"] is False
+
+
+def test_persisted_strict_receipt_detects_summary_and_stage_rewrite(monkeypatch, tmp_path):
+    from src.engine.automation import postclose_summary_handoff as handoff
+
+    target = "2026-09-19"
+    _seed(monkeypatch, tmp_path, target)
+    stage = handoff.stage_path(mod.REPORT_DIR, target, "research_capacity")
+    _write(stage, {"source_date": target, "run_id": "off-1", "status": "off",
+                   "off_reason": "explicit_schedule_disabled", "exit_code": 0})
+    _build_direct_checklist(monkeypatch, tmp_path, target)
+    strict = mod.build_threshold_cycle_postclose_verification(
+        target, require_summary_handoff=True
+    )
+    assert strict["status"] == "pass"
+    strict, _, _, attempt = mod._write_verification_receipts(target, strict, invocation={})
+    assert mod.current_strict_receipt_issues(attempt, target) == []
+
+    summary_path = mod._artifact_paths(target)["runtime_summary"]
+    original_summary = summary_path.read_bytes()
+    summary = json.loads(original_summary)
+    summary["generation_test"] = "changed"
+    _write(summary_path, summary)
+    assert "strict_summary_generation_stale" in mod.current_strict_receipt_issues(attempt, target)
+    summary_path.write_bytes(original_summary)
+
+    _write(stage, {"source_date": target, "run_id": "retry-2", "status": "failed", "exit_code": 2})
+    assert "strict_stage_generation_stale:research_capacity" in mod.current_strict_receipt_issues(attempt, target)
+
+
+def test_whole_chain_off_receipts_recover_with_new_checklist_and_strict(monkeypatch, tmp_path):
+    from src.engine.automation import postclose_summary_handoff as handoff
+
+    target = "2026-09-19"
+    _seed(monkeypatch, tmp_path, target)
+    for stage_name in handoff.active_stage_names(target):
+        if stage_name == "summary_handoff":
+            continue  # Controller creates this terminal after strict verification.
+        handoff._stage_write(handoff.stage_path(mod.REPORT_DIR, target, stage_name), {
+            "schema": handoff.STAGE_SCHEMA, "stage_id": stage_name,
+            "source_date": target, "run_id": f"off-{stage_name}",
+            "status": "off", "off_reason": "explicit_schedule_disabled", "exit_code": 0,
+        })
+    _build_direct_checklist(monkeypatch, tmp_path, target)
+    first = mod.build_threshold_cycle_postclose_verification(
+        target, require_summary_handoff=True, require_whole_native_chain=True
+    )
+    assert first["status"] == "pass"
+    assert first["verification_scope"] == "whole_native_chain"
+    _, _, _, old_attempt = mod._write_verification_receipts(target, first, invocation={})
+    assert mod.current_strict_receipt_issues(
+        old_attempt, target, require_whole_native_chain=True
+    ) == []
+
+    capacity = handoff.stage_path(mod.REPORT_DIR, target, "research_capacity")
+    handoff._stage_write(capacity, {
+        "schema": handoff.STAGE_SCHEMA, "stage_id": "research_capacity",
+        "source_date": target, "run_id": "retry-failed",
+        "status": "failed", "exit_code": 2,
+    })
+    assert "strict_stage_generation_stale:research_capacity" in mod.current_strict_receipt_issues(
+        old_attempt, target, require_whole_native_chain=True
+    )
+    _build_direct_checklist(monkeypatch, tmp_path, target)
+    assert "postclose_stage_invalid:research_capacity" in mod.build_threshold_cycle_postclose_verification(
+        target, require_summary_handoff=True, require_whole_native_chain=True
+    )["issues"]
+
+    handoff._stage_write(capacity, {
+        "schema": handoff.STAGE_SCHEMA, "stage_id": "research_capacity",
+        "source_date": target, "run_id": "retry-off",
+        "status": "off", "off_reason": "explicit_schedule_disabled", "exit_code": 0,
+    })
+    _build_direct_checklist(monkeypatch, tmp_path, target)
+    recovered = mod.build_threshold_cycle_postclose_verification(
+        target, require_summary_handoff=True, require_whole_native_chain=True
+    )
+    assert recovered["status"] == "pass"
+    _, _, _, new_attempt = mod._write_verification_receipts(target, recovered, invocation={})
+    assert mod.current_strict_receipt_issues(
+        new_attempt, target, require_whole_native_chain=True
+    ) == []
+
+
+def test_strict_rejects_checklist_rewrite_during_verification(monkeypatch, tmp_path):
+    target = "2026-09-19"
+    _seed(monkeypatch, tmp_path, target)
+    checklist = _build_direct_checklist(monkeypatch, tmp_path, target)
+    original = mod._direct_checklist_checks
+
+    def changed_after_check(*args):
+        result = original(*args)
+        checklist.write_text(checklist.read_text() + "\n<!-- retry -->\n")
+        return result
+
+    monkeypatch.setattr(mod, "_direct_checklist_checks", changed_after_check)
+    report = mod.build_threshold_cycle_postclose_verification(
+        target, require_summary_handoff=True
+    )
+    assert "strict_source_generation_changed_during_verification" in report["issues"]
+
+
 def test_main_mechanistic_scope_rejects_compact_only_report(
     monkeypatch, tmp_path
 ):

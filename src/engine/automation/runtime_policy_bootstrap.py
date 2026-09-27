@@ -1248,6 +1248,222 @@ def write_bootstrap(
     return manifest
 
 
+FUTURE_TRANSITION_SCHEMA = "direct_family_future_handoff_transition_v1"
+
+
+def future_handoff_transition_path(
+    source_date: str, target_date: str, summary_sha: str,
+    manifest_sha: str, verification_sha: str, *, data_dir: Path | None = None,
+) -> Path:
+    if (date.fromisoformat(source_date).isoformat() != source_date
+            or date.fromisoformat(target_date).isoformat() != target_date):
+        raise ValueError("future_transition_date_invalid")
+    root = Path(DATA_DIR if data_dir is None else data_dir).resolve()
+    return (root / "runtime" / "policy_bootstrap" / "future_handoff_transitions"
+            / target_date / f"{source_date}_{summary_sha[:16]}_{manifest_sha[:16]}_{verification_sha[:16]}.json")
+
+
+def future_handoff_transition_contract(
+    source_date: str, target_date: str, *, data_dir: Path | None = None,
+    allow_pid_receipt: bool = False,
+) -> dict[str, Any]:
+    """Bind an immutable postclose summary to a later bootstrap generation."""
+    try:
+        if (date.fromisoformat(source_date).isoformat() != source_date
+                or date.fromisoformat(target_date).isoformat() != target_date
+                or source_date >= target_date):
+            raise ValueError("invalid_date_order")
+    except (TypeError, ValueError):
+        return {"status": "blocked", "issues": ["future_transition_date_invalid"]}
+    data_dir = Path(DATA_DIR if data_dir is None else data_dir).resolve()
+    root = data_dir / "runtime" / "policy_bootstrap"
+    summary_path = data_dir / "report" / "runtime_approval_summary" / f"runtime_approval_summary_{source_date}.json"
+    manifest_file = root / f"runtime_policy_bootstrap_{target_date}.json"
+    verification_file = root / f"runtime_policy_bootstrap_verify_{target_date}.json"
+    env_file = root / f"runtime_policy_bootstrap_{target_date}.env"
+    selection_file = data_dir / "runtime" / "runtime_release_selection.json"
+    try:
+        raw = {label: path.read_bytes() for label, path in (
+            ("summary", summary_path), ("manifest", manifest_file),
+            ("verification", verification_file), ("env", env_file),
+            ("selection", selection_file),
+        )}
+        summary, manifest, verification, selection = (
+            json.loads(raw[label]) for label in ("summary", "manifest", "verification", "selection")
+        )
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        return {"status": "blocked", "issues": [f"future_transition_source_missing_or_invalid:{type(exc).__name__}"]}
+    if not all(isinstance(value, dict) for value in (summary, manifest, verification, selection)):
+        return {"status": "blocked", "issues": ["future_transition_object_required"]}
+    prior = summary.get("preopen_consumption_receipt") or {}
+    issues = []
+    if (summary.get("date") != source_date or not isinstance(prior, dict)
+            or prior.get("source_date") != source_date or prior.get("apply_date") != target_date
+            or prior.get("manifest_path") != str(manifest_file)
+            or prior.get("verification_path") != str(verification_file)):
+        issues.append("future_transition_summary_pointer_invalid")
+    if summary.get("preopen_consumption_state") == "off":
+        issues.append("future_transition_source_off")
+    incumbent_date = manifest.get("source_incumbent_target_date")
+    try:
+        valid_incumbent_date = (
+            isinstance(incumbent_date, str)
+            and date.fromisoformat(incumbent_date).isoformat() == incumbent_date
+            and incumbent_date < target_date
+        )
+    except ValueError:
+        valid_incumbent_date = False
+    if (manifest.get("target_date") != target_date
+            or not valid_incumbent_date
+            or not isinstance(manifest.get("selected_families"), list)
+            or not isinstance(manifest.get("direct_family_receipts", []), list)
+            or manifest.get("manifest_sha256") != _digest_json({
+                key: value for key, value in manifest.items() if key != "manifest_sha256"
+            })):
+        issues.append("future_transition_manifest_invalid")
+    if (manifest.get("env_file") != str(env_file)
+            or manifest.get("env_sha256") != _digest_bytes(raw["env"])):
+        issues.append("future_transition_env_invalid")
+    pid = verification.get("pid")
+    pid_receipt_present = (
+        type(pid) is int and pid > 0 and verification.get("pid_passed") is True
+        and verification.get("pid_env_available") is True
+    )
+    if (verification.get("target_date") != target_date
+            or verification.get("status") != "pass" or verification.get("passed") is not True
+            or verification.get("manifest_file") not in (None, str(manifest_file))
+            or verification.get("env_file") not in (None, str(env_file))
+            or verification.get("manifest_sha256") != manifest.get("manifest_sha256")
+            or (not pid_receipt_present and (pid is not None or verification.get("pid_passed") is not None))
+            or (pid_receipt_present and not allow_pid_receipt)
+            or verification.get("pid_env_available") is not True
+            or verification.get("findings", []) != []
+            or verification.get("pid_mismatches", []) != []):
+        issues.append("future_transition_verification_invalid")
+    commit = selection.get("git_commit")
+    if (selection.get("schema") != "runtime_release_selection_v1"
+            or not isinstance(commit, str) or len(commit) != 40
+            or any(char not in "0123456789abcdef" for char in commit)
+            or not Path(str(selection.get("release_root") or "")).is_absolute()
+            or manifest.get("selected_release_sha") != commit):
+        issues.append("future_transition_selected_release_mismatch")
+    if issues:
+        return {"status": "blocked", "issues": issues}
+    summary_sha = _digest_bytes(raw["summary"])
+    manifest_sha = _digest_bytes(raw["manifest"])
+    verification_sha = _digest_bytes(raw["verification"])
+    body = {
+        "schema": FUTURE_TRANSITION_SCHEMA,
+        "status": "linked",
+        "source_date": source_date,
+        "apply_date": target_date,
+        "source_summary_path": str(summary_path),
+        "source_summary_sha256": summary_sha,
+        "from_manifest_sha256": prior.get("manifest_sha256"),
+        "from_verification_sha256": prior.get("verification_sha256"),
+        "from_release_selection_sha256": prior.get("release_selection_sha256"),
+        "manifest_path": str(manifest_file),
+        "manifest_sha256": manifest_sha,
+        "manifest_content_sha256": manifest["manifest_sha256"],
+        "manifest_incumbent_target_date": incumbent_date,
+        "verification_path": str(verification_file),
+        "verification_sha256": verification_sha,
+        "env_path": str(env_file),
+        "env_sha256": manifest["env_sha256"],
+        "release_selection_path": str(selection_file),
+        "release_selection_sha256": _digest_bytes(raw["selection"]),
+        "selected_release_commit": commit,
+        "policy_receipts_sha256": _digest_json(manifest.get("direct_family_receipts") or []),
+        "valid_empty": manifest.get("selected_families") == [],
+        "pid_receipt_present": pid_receipt_present,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_pid_consumed": False,
+    }
+    body["transition_sha256"] = _digest_json(body)
+    return body
+
+
+def publish_future_handoff_transition(
+    target_date: str, *, data_dir: Path | None = None,
+    source_date: str | None = None,
+) -> dict[str, Any]:
+    """Write a content-addressed transition after a source-only bootstrap verify."""
+    try:
+        if date.fromisoformat(target_date).isoformat() != target_date:
+            raise ValueError("invalid_date")
+    except (TypeError, ValueError):
+        return {"status": "blocked", "issues": ["future_transition_date_invalid"]}
+    data_dir = Path(DATA_DIR if data_dir is None else data_dir).resolve()
+    manifest_file = data_dir / "runtime" / "policy_bootstrap" / f"runtime_policy_bootstrap_{target_date}.json"
+    try:
+        _load_json(manifest_file)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return {"status": "not_applicable", "reason": "manifest_missing_or_invalid"}
+    if source_date is None:
+        summary_dir = data_dir / "report" / "runtime_approval_summary"
+        candidates = []
+        for summary_path in sorted(summary_dir.glob("runtime_approval_summary_*.json")):
+            candidate = summary_path.stem.removeprefix("runtime_approval_summary_")
+            try:
+                if (date.fromisoformat(candidate).isoformat() != candidate
+                        or candidate >= target_date):
+                    continue
+                summary = _load_json(summary_path)
+            except (OSError, ValueError, json.JSONDecodeError):
+                continue
+            prior = summary.get("preopen_consumption_receipt") or {}
+            if (summary.get("date") == candidate and isinstance(prior, dict)
+                    and prior.get("source_date") == candidate
+                    and prior.get("apply_date") == target_date):
+                candidates.append(candidate)
+        if not candidates:
+            return {"status": "not_applicable", "reason": "source_summary_missing"}
+        results = [publish_future_handoff_transition(
+            target_date, data_dir=data_dir, source_date=candidate,
+        ) for candidate in candidates]
+        if len(results) == 1:
+            return results[0]
+        statuses = {row.get("status") for row in results}
+        overall = ("off" if statuses == {"off"} else "linked"
+                   if statuses <= {"linked", "off"} else "blocked")
+        return {"status": overall,
+                "source_date": None, "apply_date": target_date, "transitions": results}
+    summary_path = (data_dir / "report" / "runtime_approval_summary"
+                    / f"runtime_approval_summary_{source_date}.json")
+    try:
+        source_summary = _load_json(summary_path)
+    except (OSError, ValueError, json.JSONDecodeError):
+        source_summary = {}
+    prior = source_summary.get("preopen_consumption_receipt") or {}
+    if (source_summary.get("date") == source_date and isinstance(prior, dict)
+            and prior.get("source_date") == source_date
+            and prior.get("apply_date") == target_date
+            and source_summary.get("preopen_consumption_state") == "off"):
+        return {"status": "off", "source_date": source_date,
+                "apply_date": target_date, "reason": "source_summary_explicit_off"}
+    transition = future_handoff_transition_contract(source_date, target_date, data_dir=data_dir)
+    if transition.get("status") != "linked":
+        return transition
+    if future_handoff_transition_contract(source_date, target_date, data_dir=data_dir) != transition:
+        return {"status": "blocked", "issues": ["future_transition_source_changed_during_publish"]}
+    path = future_handoff_transition_path(
+        source_date, target_date, transition["source_summary_sha256"],
+        transition["manifest_sha256"], transition["verification_sha256"], data_dir=data_dir,
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    content = json.dumps(transition, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+    try:
+        with path.open("x", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except FileExistsError:
+        if path.read_text(encoding="utf-8") != content:
+            raise ValueError("future_transition_immutable_receipt_conflict")
+    return {**transition, "path": str(path)}
+
+
 def _read_proc_env(pid: int) -> dict[str, str]:
     raw = Path(f"/proc/{pid}/environ").read_bytes()
     return {
@@ -1518,8 +1734,16 @@ def main(argv: list[str] | None = None) -> int:
         result = write_bootstrap(args.target_date, receipt_paths=args.receipt)
         verification = verify_bootstrap(args.target_date)
         result["verification"] = verification
+        result["future_handoff_transition"] = (
+            publish_future_handoff_transition(args.target_date)
+            if verification["status"] == "pass"
+            else {"status": "blocked", "reason": "bootstrap_verification_failed"}
+        )
         print(json.dumps(result, ensure_ascii=False))
-        return 0 if verification["status"] == "pass" else 1
+        return 0 if (verification["status"] == "pass"
+                     and result["future_handoff_transition"]["status"] in {
+                         "linked", "not_applicable", "off"
+                     }) else 1
     result = verify_bootstrap(
         args.target_date,
         pid=args.pid,

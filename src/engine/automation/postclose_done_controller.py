@@ -16,6 +16,8 @@ from src.engine.build_next_stage2_checklist import build_next_stage2_checklist
 from src.engine.runtime_approval_summary import build_runtime_approval_summary
 from src.engine.verify_threshold_cycle_postclose_chain import (
     build_threshold_cycle_postclose_verification,
+    current_strict_receipt_issues,
+    _sha,
     _write_verification_receipts,
     _atomic_write,
 )
@@ -79,6 +81,25 @@ def done_terminal_receipt_issues(
             issues.append("controller_attempt_receipt_mismatch")
     except (OSError, ValueError):
         issues.append("controller_attempt_receipt_missing_or_invalid")
+    verifier_path = Path(str(report.get("verification_attempt_path") or ""))
+    expected_verifier_dir = (
+        DATA_DIR / "report" / "threshold_cycle_postclose_verification"
+        / "attempts" / target_date
+    ).resolve()
+    try:
+        verifier_owner_valid = verifier_path.resolve(strict=True).parent == expected_verifier_dir
+    except OSError:
+        verifier_owner_valid = False
+    if (not verifier_owner_valid or not report.get("verification_attempt_sha256")
+            or _sha(verifier_path) != report.get("verification_attempt_sha256")):
+        issues.append("controller_verification_attempt_missing_or_invalid")
+    else:
+        verifier = _load(verifier_path)
+        if verifier.get("run_id") != report.get("main_run_id"):
+            issues.append("controller_verification_main_run_mismatch")
+        issues.extend(current_strict_receipt_issues(
+            verifier_path, target_date, require_whole_native_chain=True
+        ))
     return issues
 
 
@@ -135,6 +156,7 @@ def build_postclose_done_controller(
             target_date,
             require_done_marker=not summary_handoff_only,
             require_summary_handoff=True,
+            require_whole_native_chain=require_independent_producers and not summary_handoff_only,
         )
         verifier, *_ = _write_verification_receipts(
             target_date,
@@ -146,13 +168,28 @@ def build_postclose_done_controller(
             },
         )
         actions.append("direct_postclose_verification_refreshed")
-        status = ("summary_verified" if summary_handoff_only else "done") if verifier.get("status") == "pass" else "blocked_direct_evidence_gap"
+        whole_pass = (verifier.get("status") == "pass"
+            and verifier.get("verification_scope") == "whole_native_chain"
+            and verifier.get("whole_native_chain_done_claimed") is True
+            and require_independent_producers and not summary_handoff_only)
+        if whole_pass:
+            strict_path = (verifier.get("verification_attempt") or {}).get("path")
+            freshness_issues = (
+                current_strict_receipt_issues(
+                    Path(strict_path), target_date, require_whole_native_chain=True
+                ) if strict_path else ["strict_attempt_missing"]
+            )
+            if freshness_issues:
+                verifier = {**verifier, "status": "fail",
+                    "issues": [*verifier.get("issues", []), *freshness_issues]}
+                whole_pass = False
+        status = "done" if whole_pass else (
+            "summary_verified" if verifier.get("status") == "pass" else "blocked_direct_evidence_gap"
+        )
     from src.engine.automation.postclose_summary_handoff import STAGE_REGISTRY, stage_path, stage_overview
     stage_state = None
     if any(stage_path(DATA_DIR / 'report', target_date, stage).exists() for stage in STAGE_REGISTRY):
         stage_state = stage_overview(DATA_DIR / 'report', target_date)
-        if status == 'summary_verified' and predecessor.get('status') == 'succeeded' and require_independent_producers:
-            status = 'done'
         stage_state['postclose_all_active_stages_complete'] = require_independent_producers and not independent_issues and verifier.get('status') == 'pass' and status == 'done'
     report = {
         "postclose_stage_status": stage_state,
@@ -186,6 +223,10 @@ def build_postclose_done_controller(
     report["attempt_path"] = str(attempt)
     report["main_run_id"] = predecessor.get("run_id")
     report["verification_attempt_path"] = (verifier.get("verification_attempt") or {}).get("path")
+    report["verification_attempt_sha256"] = (
+        _sha(Path(report["verification_attempt_path"]))
+        if report["verification_attempt_path"] else None
+    )
     serialized = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
     _atomic_write(attempt, serialized)
     _atomic_write(json_path, serialized)

@@ -44,6 +44,7 @@ from src.utils.constants import DATA_DIR, TRADING_RULES
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 
 SCHEMA_VERSION = 2
+SOR_KRX_POST_SELL_USER_OVERRIDE = "user_2026_09_27_sor_krx_reference_postclose"
 POST_FALLBACK_CUTOFF = datetime(2026, 4, 21, 9, 45)
 TARGET_EXIT_RULES = (
     "scalp_trailing_take_profit",
@@ -108,6 +109,39 @@ def _parse_aware_dt(value: Any) -> datetime | None:
     return parsed if parsed.tzinfo is not None else None
 
 
+def _sor_krx_post_sell_user_override(trade: dict, candidate: dict) -> bool:
+    """Admit a real SOR fill to KRX-reference postclose analysis only."""
+
+    return bool(
+        str(trade.get("effective_venue") or "").upper() == "KRX"
+        and str(trade.get("market_session_bucket") or "").lower() == "krx_regular"
+        and str(trade.get("exit_execution_broker_route") or "").upper() == "SOR"
+        and str(candidate.get("broker_route_requested") or "").upper() == "SOR"
+        and str(candidate.get("market_session_regime") or "").lower()
+        == "krx_regular"
+        and candidate.get("market_axes_source_quality_status")
+        == "route_contract_ready"
+        and str(trade.get("broker_actual_execution_venue") or "").upper()
+        == "UNKNOWN"
+        and str(candidate.get("actual_execution_venue") or "").upper()
+        == "UNKNOWN"
+        and str(trade.get("broker_actual_execution_venue_source") or "")
+        == "official_exchange_fields_ambiguous_or_missing"
+        and str(candidate.get("actual_execution_venue_source") or "")
+        == "official_exchange_fields_ambiguous_or_missing"
+        and str(trade.get("broker_actual_exchange_code") or "") == "0"
+        and str(trade.get("broker_actual_exchange_name") or "").upper()
+        in {"SOR", "통합"}
+        and str(trade.get("broker_sor_flag") or "").upper() == "Y"
+        and trade.get("terminal_population_scope") == "real_record_bound"
+        and trade.get("terminal_decision_authority")
+        == "broker_sell_fill_observation_only"
+        and trade.get("sell_quantity_conserved") is True
+        and trade.get("realized_pnl_krw_source")
+        == "broker_fill_prices_fee_aware"
+    )
+
+
 def _post_sell_binding_gap(trade: dict, candidate: dict) -> str | None:
     terminal_fill_at = _parse_aware_dt(trade.get("exact_sell_fill_time"))
     candidate_fill_at = _parse_aware_dt(candidate.get("exact_sell_fill_time"))
@@ -125,9 +159,19 @@ def _post_sell_binding_gap(trade: dict, candidate: dict) -> str | None:
     candidate_venue = str(candidate.get("actual_execution_venue") or "").upper()
     terminal_route = str(trade.get("exit_execution_broker_route") or "").upper()
     candidate_route = str(candidate.get("broker_route_requested") or "").upper()
+    override = _sor_krx_post_sell_user_override(trade, candidate)
+    unverified_sor_venue_relabel = bool(
+        terminal_route == "SOR"
+        and str(trade.get("broker_actual_execution_venue") or "").upper()
+        == "UNKNOWN"
+        and candidate_venue in {"KRX", "NXT"}
+        and candidate.get("actual_execution_venue_source")
+        == "official_exchange_fields_ambiguous_or_missing"
+    )
     if (candidate.get("market_axes_source_quality_status") != "route_contract_ready"
             or terminal_venue not in {"KRX", "NXT"}
-            or candidate_venue != terminal_venue
+            or (candidate_venue != terminal_venue and not override)
+            or unverified_sor_venue_relabel
             or terminal_route not in {"KRX", "NXT", "SOR"}
             or candidate_route != terminal_route):
         return "source_gap_post_sell_venue_route"
@@ -1259,6 +1303,7 @@ def _build_position_outcomes(
         exact_fill_time = str(trade.get("exact_sell_fill_time") or "").strip()
         horizon_forbidden = bool(trade.get("sell_time_forbidden_for_intraday_horizon"))
         matching = post_sell_by_trade.get(trade_id, [])
+        sor_krx_override_applied = False
         if not exact_fill_time or horizon_forbidden:
             post_sell_status = "not_observable_no_exact_fill_time"
         elif len(matching) > 1:
@@ -1288,7 +1333,12 @@ def _build_position_outcomes(
             ):
                 post_sell_status = "source_gap_custody_mismatch"
             if not post_sell_status.startswith("source_gap"):
-                post_sell_status = _post_sell_binding_gap(trade, matching[0]) or post_sell_status
+                binding_gap = _post_sell_binding_gap(trade, matching[0])
+                post_sell_status = binding_gap or post_sell_status
+                sor_krx_override_applied = bool(
+                    binding_gap is None
+                    and _sor_krx_post_sell_user_override(trade, matching[0])
+                )
             if post_sell_status == "pass" and not isinstance(
                 matching[0].get("metrics_10m"), dict
             ):
@@ -1464,6 +1514,20 @@ def _build_position_outcomes(
                 "sell_time_precision": trade.get("sell_time_precision"),
                 "post_sell_ids": [row["post_sell_id"] for row in matching],
                 "post_sell_status": post_sell_status,
+                "post_sell_reference_venue": (
+                    "KRX" if sor_krx_override_applied else None
+                ),
+                "post_sell_actual_execution_venue": (
+                    matching[0].get("actual_execution_venue")
+                    if len(matching) == 1 else None
+                ),
+                "post_sell_user_override": (
+                    SOR_KRX_POST_SELL_USER_OVERRIDE
+                    if sor_krx_override_applied else None
+                ),
+                "post_sell_actual_venue_verified": (
+                    False if sor_krx_override_applied else None
+                ),
                 "post_sell_layer": (
                     "pass" if post_sell_status == "pass" else
                     "partial_window" if post_sell_status == "partial_window" else
@@ -1521,6 +1585,15 @@ def _build_position_outcomes(
             for label in ("pass", "partial_window", "unmatured",
                           "not_observable_no_exact_fill_time", "source_gap")
         },
+        "sor_krx_reference_user_override_ids": [
+            row["record_id"] for row in outcomes
+            if row["post_sell_user_override"] == SOR_KRX_POST_SELL_USER_OVERRIDE
+        ],
+        "full_post_sell_user_override_trades": sum(
+            row["post_sell_status"] == "pass"
+            and row["post_sell_user_override"] == SOR_KRX_POST_SELL_USER_OVERRIDE
+            for row in outcomes
+        ),
         "exact_cost_trades": len(exact),
         "missing_exact_cost_trades": len(outcomes) - len(exact),
         "exact_cost_subset_pnl_krw": (

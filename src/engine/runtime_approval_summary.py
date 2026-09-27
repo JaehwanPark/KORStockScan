@@ -831,6 +831,37 @@ def _runtime_consumption_state(
     verification_path = runtime_dir / f"runtime_policy_bootstrap_verify_{apply_date}.json"
     manifest = _load_json(manifest_path)
     verification = _load_json(verification_path)
+    selection_path = DATA_DIR / "runtime" / "runtime_release_selection.json"
+    selection = _load_json(selection_path)
+    selected_commit = selection.get("git_commit") if selection.get("schema") == "runtime_release_selection_v1" else None
+    future_issues: list[str] = []
+    if target_date >= "2026-09-23" and effective_dates and (manifest_path.exists() or verification_path.exists()):
+        incumbent_date = manifest.get("source_incumbent_target_date")
+        try:
+            incumbent_date_valid = (
+                isinstance(incumbent_date, str)
+                and date.fromisoformat(incumbent_date).isoformat() == incumbent_date
+                and incumbent_date < apply_date
+            )
+        except ValueError:
+            incumbent_date_valid = False
+        if (manifest.get("target_date") != apply_date
+                or not incumbent_date_valid
+                or manifest.get("manifest_sha256") != _bootstrap_digest_json({
+                    key: value for key, value in manifest.items() if key != "manifest_sha256"
+                })):
+            future_issues.append("manifest_generation_invalid")
+        env_path = runtime_dir / f"runtime_policy_bootstrap_{apply_date}.env"
+        if (manifest.get("env_file") != str(env_path)
+                or manifest.get("env_sha256") != _sha(env_path)):
+            future_issues.append("env_generation_invalid")
+        if (not isinstance(selected_commit, str) or len(selected_commit) != 40
+                or any(char not in "0123456789abcdef" for char in selected_commit)
+                or not Path(str(selection.get("release_root") or "")).is_absolute()
+                or manifest.get("selected_release_sha") != selected_commit):
+            future_issues.append("selected_release_mismatch")
+        if verification_path.exists() and verification.get("manifest_sha256") != manifest.get("manifest_sha256"):
+            future_issues.append("verification_manifest_mismatch")
     runtime_pid = verification.get("pid")
     receipt_runtime_pid = (
         runtime_pid
@@ -845,6 +876,7 @@ def _runtime_consumption_state(
         and verification.get("target_date") == apply_date
         and verification.get("status") == "pass"
         and verification.get("passed") is True
+        and not future_issues
     )
     actual_pid_consumed = bool(
         bootstrap_verified
@@ -862,6 +894,14 @@ def _runtime_consumption_state(
         "manifest_sha256": _sha(manifest_path),
         "verification_path": str(verification_path),
         "verification_sha256": _sha(verification_path),
+        "release_selection_path": str(selection_path),
+        "release_selection_sha256": _sha(selection_path),
+        "selected_release_commit": selected_commit,
+        "manifest_content_sha256": manifest.get("manifest_sha256"),
+        "manifest_env_sha256": manifest.get("env_sha256"),
+        "manifest_selected_release_commit": manifest.get("selected_release_sha"),
+        "future_generation_issues": future_issues,
+        "valid_empty": bootstrap_verified and manifest.get("selected_families") == [],
         "runtime_pid": receipt_runtime_pid,
         "pid_passed": verification.get("pid_passed"),
         "pid_env_available": verification.get("pid_env_available"),
@@ -871,6 +911,9 @@ def _runtime_consumption_state(
         return "not_due", "not_applicable", receipt
     if bootstrap_verified:
         return "verified", ("pending" if actual_pid_consumed else "not_due"), receipt
+    if (verification.get("status") == "off"
+            and verification.get("off_reason") == "explicit_schedule_disabled"):
+        return "off", "not_due", receipt
     if verification_path.exists():
         return "rejected", "not_due", receipt
     if manifest_path.exists():

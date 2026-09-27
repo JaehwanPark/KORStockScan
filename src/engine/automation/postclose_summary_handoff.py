@@ -18,7 +18,7 @@ from src.engine.automation.postclose_workorder_contract import exact_equal
 
 SCHEMA = "postclose_summary_sources_v1"
 MARKER = "POSTCLOSE_SUMMARY_SOURCES"
-FUTURE_HANDOFF_SCHEMA = "direct_family_future_handoff_v1"
+FUTURE_HANDOFF_SCHEMA = "direct_family_future_handoff_v2"
 FUTURE_HANDOFF_MARKER = "DIRECT_FAMILY_FUTURE_HANDOFF"
 COMMON_THRESHOLD_TUNING_RETIRED_FROM = "2026-09-19"
 
@@ -347,7 +347,15 @@ def direct_future_handoff(summary: dict[str, Any], source_date: str) -> dict[str
         ),
         "source_preopen_state": summary.get("preopen_consumption_state"),
         "manifest_path": preopen.get("manifest_path"),
+        "manifest_sha256": preopen.get("manifest_sha256"),
         "verification_path": preopen.get("verification_path"),
+        "verification_sha256": preopen.get("verification_sha256"),
+        "release_selection_sha256": preopen.get("release_selection_sha256"),
+        "selected_release_commit": preopen.get("selected_release_commit"),
+        "manifest_content_sha256": preopen.get("manifest_content_sha256"),
+        "manifest_env_sha256": preopen.get("manifest_env_sha256"),
+        "source_reported_pid_receipt": preopen.get("actual_pid_consumed") is True,
+        "actual_pid_consumed": False,
         "policy_receipts": policies,
         **({"holding_path_vote_policy": summary["holding_path_vote_policy"]}
            if "holding_path_vote_policy" in summary else {}),
@@ -358,6 +366,110 @@ def direct_future_handoff(summary: dict[str, Any], source_date: str) -> dict[str
 
 def direct_future_handoff_marker(payload: dict[str, Any]) -> str:
     return f"<!-- {FUTURE_HANDOFF_MARKER} {json.dumps(payload, sort_keys=True)} -->"
+
+
+def inspect_future_handoff(
+    summary: dict[str, Any], source_date: str, *, report_dir: Path,
+) -> dict[str, Any]:
+    """Read the current future bootstrap without granting PREOPEN or PID authority."""
+    from src.engine.automation.runtime_policy_bootstrap import (
+        future_handoff_transition_contract,
+        future_handoff_transition_path,
+    )
+
+    preopen = summary.get("preopen_consumption_receipt") or {}
+    apply_date = preopen.get("apply_date") if isinstance(preopen, dict) else None
+    base = {"source_date": source_date, "apply_date": apply_date,
+            "actual_pid_consumed": False, "pid_receipt_present": False,
+            "valid_empty": False, "issues": []}
+    if not apply_date:
+        return {**base, "status": "not_applicable"}
+    try:
+        if (date.fromisoformat(source_date).isoformat() != source_date
+                or date.fromisoformat(apply_date).isoformat() != apply_date
+                or source_date >= apply_date):
+            raise ValueError("invalid_date_order")
+    except (TypeError, ValueError):
+        return {**base, "status": "rejected", "issues": ["future_pointer_date_invalid"]}
+    data_dir = Path(report_dir).resolve().parent
+    root = data_dir / "runtime" / "policy_bootstrap"
+    manifest_file = root / f"runtime_policy_bootstrap_{apply_date}.json"
+    verification_file = root / f"runtime_policy_bootstrap_verify_{apply_date}.json"
+    selection_file = data_dir / "runtime" / "runtime_release_selection.json"
+    if (summary.get("date") != source_date or preopen.get("source_date") != source_date
+            or preopen.get("manifest_path") != str(manifest_file)
+            or preopen.get("verification_path") != str(verification_file)):
+        return {**base, "status": "rejected", "issues": ["future_pointer_identity_invalid"]}
+    if summary.get("preopen_consumption_state") == "off":
+        return {**base, "status": "off", "issues": ["source_summary_explicit_off"]}
+    try:
+        manifest_raw = manifest_file.read_bytes()
+    except FileNotFoundError:
+        manifest_raw = None
+    except OSError:
+        return {**base, "status": "rejected", "issues": ["future_manifest_unreadable"]}
+    try:
+        verification_raw = verification_file.read_bytes()
+    except FileNotFoundError:
+        verification_raw = None
+    except OSError:
+        return {**base, "status": "rejected", "issues": ["future_verification_unreadable"]}
+    if manifest_raw is None or verification_raw is None:
+        if (manifest_raw is None and verification_raw is None
+                and preopen.get("manifest_sha256") is None
+                and preopen.get("verification_sha256") is None):
+            return {**base, "status": "pending"}
+        return {**base, "status": "stale", "issues": ["future_generation_missing_or_partial"]}
+    manifest_sha = hashlib.sha256(manifest_raw).hexdigest()
+    verification_sha = hashlib.sha256(verification_raw).hexdigest()
+    try:
+        selection_raw = selection_file.read_bytes()
+        selection = json.loads(selection_raw)
+        verification = json.loads(verification_raw)
+        manifest = json.loads(manifest_raw)
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return {**base, "status": "rejected", "issues": ["future_generation_unreadable"]}
+    if (not isinstance(selection, dict) or not isinstance(verification, dict)
+            or not isinstance(manifest, dict)):
+        return {**base, "status": "rejected", "issues": ["future_generation_object_invalid"]}
+    base["pid_receipt_present"] = (
+        type(verification.get("pid")) is int and verification["pid"] > 0
+        and verification.get("pid_passed") is True
+        and verification.get("pid_env_available") is True
+    )
+    if verification.get("status") in {"fail", "failed", "error"}:
+        return {**base, "status": "rejected", "issues": ["future_verification_failed"]}
+    if verification.get("status") == "off":
+        return {**base, "status": "off", "issues": ["future_verification_explicit_off"]}
+    contract = future_handoff_transition_contract(
+        source_date, apply_date, data_dir=data_dir,
+        allow_pid_receipt=base["pid_receipt_present"],
+    )
+    if contract.get("status") != "linked":
+        return {**base, "status": "stale", "issues": contract.get("issues", [])}
+    result = {**base, "valid_empty": contract["valid_empty"],
+              "manifest_sha256": manifest_sha, "verification_sha256": verification_sha,
+              "manifest_content_sha256": contract["manifest_content_sha256"],
+              "env_sha256": contract["env_sha256"],
+              "selected_release_commit": contract["selected_release_commit"]}
+    same = (
+        preopen.get("manifest_sha256") == manifest_sha
+        and preopen.get("verification_sha256") == verification_sha
+        and preopen.get("release_selection_sha256") == contract["release_selection_sha256"]
+        and preopen.get("selected_release_commit") == contract["selected_release_commit"]
+    )
+    if same:
+        return {**result, "status": (
+            "same_generation_pid_receipt_unconfirmed"
+            if base["pid_receipt_present"] else "same_generation_no_pid"
+        )}
+    path = future_handoff_transition_path(
+        source_date, apply_date, contract["source_summary_sha256"],
+        manifest_sha, verification_sha, data_dir=data_dir,
+    )
+    if _load_json(path) == contract:
+        return {**result, "status": "transitioned_no_pid", "transition_path": str(path)}
+    return {**result, "status": "stale", "issues": ["future_transition_missing_or_mismatched"]}
 
 
 def verify_summary_handoff(
@@ -388,6 +500,15 @@ def verify_summary_handoff(
         target_date >= COMMON_THRESHOLD_TUNING_RETIRED_FROM
         or summary.get("schema_version") == 3
     )
+    future_handoff = (
+        inspect_future_handoff(summary, target_date, report_dir=report_dir)
+        if direct_mode and target_date >= "2026-09-23"
+        else {"status": "not_applicable", "actual_pid_consumed": False, "issues": []}
+    )
+    if (future_handoff["status"] in {"stale", "rejected"}
+            or (future_handoff["status"] == "off"
+                and summary.get("preopen_consumption_state") != "off")):
+        issues.append("postclose_summary_handoff:future_preopen_generation_stale")
     from src.engine.scalping.holding_path_vote_policy import (
         START_DATE as HOLDING_VOTE_POLICY_START_DATE,
         load_bundle as load_holding_vote_policy,
@@ -512,6 +633,7 @@ def verify_summary_handoff(
     return {
         "status": "fail" if issues else "pass",
         "issues": issues,
+        "future_handoff": future_handoff,
         "checked_consumers": checked,
         "runtime_effect": False,
         "allowed_runtime_apply": False,
@@ -853,6 +975,21 @@ def _stage_sources(paths):
     result = {}
     for name, path in paths.items():
         path = Path(path)
+        # Exact AI storage may replace a closed-date plain source with a
+        # verified gzip. Keep the original logical path and decoded SHA in
+        # older stage receipts; validate the producer's date/schema contract.
+        if (path.parent.name in {'ai_decision_payloads', 'ai_decision_outcome_labels'}
+            and re.fullmatch(r'(ai_decision_payloads_\d{4}-\d{2}-\d{2}\.jsonl|ai_decision_outcome_labels_\d{4}-\d{2}-\d{2}\.json)', path.name)
+            and path.with_suffix(path.suffix + '.gz').exists()):
+            from src.engine.scalping.micro_reversion.storage_maintenance import validate_exact_ai_artifact_source
+            try:
+                source_date = date.fromisoformat(path.stem.rsplit('_', 1)[-1])
+                verified = validate_exact_ai_artifact_source(path, expected_date=source_date)
+                sha = verified['decoded_content_sha256']
+            except (OSError, ValueError, KeyError):
+                sha = None
+            result[name] = dict(path=str(path.resolve()), sha256=sha)
+            continue
         try:
             before = path.stat()
             h = hashlib.sha256()
@@ -886,6 +1023,14 @@ def stage_receipt_issues(report_dir, day, stage, *, code_hash=None):
         return []
     if value.get('status') != 'succeeded' or value.get('exit_code') != 0:
         return [f'{stage}:{value.get("status")}']
+    if stage == 'pre_submit_delay':
+        from src.engine.pipeline_event_summary import producer_source_ledger_issues
+        source_issues = producer_source_ledger_issues(Path(report_dir).parent, day)
+        if source_issues:
+            return [f'{stage}:{issue}' for issue in source_issues]
+        manifest = _load_json(stage_input_paths(report_dir, day, stage)['pipeline_summary_manifest'])
+        if value.get('pipeline_source_generation_sha256') != (manifest.get('raw_source_ledger') or {}).get('ledger_sha256'):
+            return [f'{stage}:pipeline_source_generation_changed']
     if code_hash is None:
         code_hash = _stage_code(stage, stage_commands(stage, day, value.get('publication_date') or day, recovery=value.get('recovery_mode', False)), Path(__file__).resolve().parents[3])
     if value.get('stage_code_sha256') != code_hash:
@@ -938,6 +1083,10 @@ def stage_receipt_issues(report_dir, day, stage, *, code_hash=None):
 
 def stage_input_paths(report_dir, day, stage):
     paths = {s:stage_path(report_dir, day, s) for s in STAGE_REGISTRY[stage][0]}
+    if stage == 'research_capacity':
+        root = Path(report_dir).parent / 'runtime' / 'machine_research_closed_loop' / 'native_capacity' / day
+        paths['native_cash'] = root / 'native_cash.json'
+        paths['native_inventory'] = root / 'native_inventory.json'
     if stage == 'summary_handoff':
         paths.update({s:stage_path(report_dir, day, s) for s in active_stage_names(day)
                       if s != 'summary_handoff'})
@@ -956,7 +1105,14 @@ def _stage_output_issues(report_dir, day, stage):
     from src.engine.automation.postclose_recommendation_intake import _report_date
     errors = []
     for name, path in stage_artifacts(report_dir, day, stage).items():
-        value = _load_json(path)
+        if (name == 'ai_decision_outcome_labels'
+            and path.with_suffix(path.suffix + '.gz').exists()):
+            from src.engine.scalping.micro_reversion.storage_maintenance import _read_owned_bytes
+            value = json.loads(_read_owned_bytes(path))
+            if not isinstance(value, dict):
+                value = {}
+        else:
+            value = _load_json(path)
         if not value or (_report_date(value) or value.get('source_date') or value.get('end_date')) != day:
             errors.append(f'{stage}:invalid_output:{name}')
         elif str(value.get('status', '')).lower() in {'failed', 'error', 'running', 'waiting', 'searching_train', 'pending'}:
@@ -975,6 +1131,11 @@ def _stage_output_issues(report_dir, day, stage):
                 or value.get('status') not in {'mature_label_rows_available','partial_horizons_keep_maturing'}
                 or generated.tzinfo is None or generated.astimezone(ZoneInfo('Asia/Seoul')) < datetime.fromisoformat(day + 'T20:00:00+09:00')):
                 errors.append(f'{stage}:label_contract_invalid')
+        if name == 'research_native_capacity':
+            from src.engine.monitoring.research_native_capacity_source import validate_existing
+            native = validate_existing(date.fromisoformat(day), directory=Path(report_dir).parent / 'runtime' / 'machine_research_closed_loop')
+            if native.get('status') != 'complete':
+                errors.append(f'{stage}:native_source_invalid:{native.get("reason")}')
         if name in {'episode_policy_refresh', 'widget_policy_refresh'}:
             from src.engine.monitoring.research_closed_loop import digest, read_object
             if (value.get('receipt_sha256') != digest({k:v for k,v in value.items() if k != 'receipt_sha256'})
@@ -1191,6 +1352,18 @@ def run_stage(stage, day, *, report_dir, project, publication=None, effective=No
         value['prerequisite_receipts'] = _stage_sources(prerequisites)
         if issues:
             return _stage_write(path, {**value, 'status':'deferred', 'exit_code':75, 'issues':issues, 'policy_disposition':'source_gap'})
+        if stage == 'pre_submit_delay':
+            from src.engine.pipeline_event_summary import seal_producer_summary_source, producer_source_ledger_issues
+            try:
+                source_manifest = seal_producer_summary_source(Path(report_dir).parent, day)
+                source_issues = producer_source_ledger_issues(Path(report_dir).parent, day)
+                if source_issues:
+                    raise ValueError(','.join(source_issues))
+                value['pipeline_source_generation_sha256'] = source_manifest['raw_source_ledger']['ledger_sha256']
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                return _stage_write(path, {**value, 'status':'deferred', 'exit_code':75,
+                    'issues':[f'pipeline_source_quality:{exc}'], 'policy_disposition':'source_gap',
+                    'finished_at':now()})
         if not execute:
             # Review-only intake is explicit: validates existing artifacts, never
             # claims that their calculation was executed by this new runner.
@@ -1267,9 +1440,17 @@ def run_stage(stage, day, *, report_dir, project, publication=None, effective=No
                             time.sleep(1)
                         rc = child.returncode
                 if rc: break
+            if stage == 'research_capacity' and not rc:
+                # Native files are produced by this command on the current
+                # source date; bind their final generation to the stage.
+                value['input_sources'] = _stage_sources(stage_input_paths(report_dir, day, stage))
             issues = _safe_stage_output_issues(report_dir, day, stage) if not rc else [f'command_exit:{rc}']
             if value['prerequisite_receipts'] != _stage_sources(prerequisites): issues.append('prerequisite_changed_during_consumption')
             if value['input_sources'] != _stage_sources(stage_input_paths(report_dir, day, stage)): issues.append('input_changed_during_consumption')
+            if stage == 'pre_submit_delay':
+                from src.engine.pipeline_event_summary import producer_source_ledger_issues
+                issues.extend(f'pipeline_source_quality:{issue}' for issue in
+                              producer_source_ledger_issues(Path(report_dir).parent, day))
             machine_gap = (stage == 'main_machine_policy' and not rc and not issues and
                 _load_json(stage_artifacts(report_dir, day, stage)['machine_policy_terminal']).get('status') == 'source_gap')
             if machine_gap:
@@ -1334,10 +1515,20 @@ def stage_overview(report_dir, day):
         pass
     policy_checks['widget'] = widget_authority != 'missing'
     ready = ready and all(policy_checks.values())
+    future_handoff = {"status": "not_applicable", "actual_pid_consumed": False}
+    if day >= "2026-09-23":
+        summary = _load_json(Path(report_dir) / "runtime_approval_summary" /
+                             f"runtime_approval_summary_{day}.json")
+        future_handoff = inspect_future_handoff(summary, day, report_dir=report_dir)
+        ready = ready and future_handoff["status"] in {
+            "same_generation_no_pid", "transitioned_no_pid",
+            "same_generation_pid_receipt_unconfirmed",
+        }
     return dict(schema='postclose_stage_overview_v2', source_date=day, effective_date=effective,
         stages={s:dict(status=v.get('status', 'pending'), issues=issues.get(s, []), policy_disposition=v.get('policy_disposition')) for s,v in states.items()},
         postclose_all_active_stages_complete=not any(issues.values()) and states['summary_handoff'].get('status') == 'succeeded',
         next_session_policy_ready=ready, policy_loader_checks=policy_checks,
+        future_handoff=future_handoff,
         widget_policy_authority=widget_authority, startup_contract=bootstrap.get('status', 'not_verified'))
 
 

@@ -744,6 +744,7 @@ def _validate_direct_summary(
         "pending",
         "rejected",
         "verified",
+        "off",
     }:
         raise RuntimeError("direct runtime summary preopen state invalid")
     if payload.get("natural_acceptance_state") not in {

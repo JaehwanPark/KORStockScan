@@ -1610,6 +1610,126 @@ def test_native_capacity_rejects_wrong_clock_before_account_or_token_helpers(tmp
     assert not (tmp_path/'native_capacity').exists()
 
 
+def _complete_native_capacity_fixture(directory, day):
+    from src.trading.order.owner_custody_registry import broker_account_key
+    captured = f'{day}T20:06:00+09:00'
+    cash = dict(schema=loop.SCHEMA, source_date=str(day), captured_at=captured,
+                producer_pid=123, cash_context=dict(account_deposit=100000,
+                cash_orderable_amount=200000, cash_orderable_qty_cap=10,
+                kt00011_requested_stock_code='005930',
+                kt00011_capacity_source_sha256='a'*64,
+                kt00011_capacity_contract_version=1),
+                additional_account_requests=0, **loop.AUTHORITY)
+    inventory = dict(schema=loop.SCHEMA, source_date=str(day),
+                     captured_at=f'{day}T20:05:55+09:00', producer_pid=123,
+                     successful_exchanges=['KRX','NXT'], inventory_by_code={},
+                     open_qty_by_code={}, open_orders_request_succeeded=True,
+                     additional_account_requests=0, **loop.AUTHORITY)
+    for name, body in (('cash',cash),('inventory',inventory)):
+        loop.atomic_write(directory/'native_capacity'/str(day)/f'native_{name}.json',
+                          {**body,'native_sha256':loop.digest(body)})
+    acquisition = dict(schema=loop.SCHEMA, source_date=str(day),
+                       account_scope_sha256=loop.digest(['broker_account',broker_account_key()]),
+                       capacity_role='postclose_diagnostic',
+                       attempted_at=f'{day}T20:05:50+09:00', captured_at=captured,
+                       status='complete', scope='native_account_once_not_per_candidate',
+                       order_requests=0, authentication_refresh_requests=0,
+                       base_helper_invocations=4, research_count_dependent_requests=0,
+                       native_cash_sha256=loop.digest(cash),
+                       native_inventory_sha256=loop.digest(inventory), **loop.AUTHORITY)
+    loop.atomic_write(directory/f'capacity_source_{day}.json',
+                      {**acquisition,'receipt_sha256':loop.digest(acquisition)})
+    return acquisition
+
+
+def test_closed_date_capacity_cli_reuses_verified_native_source_without_provider(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from src.engine.monitoring import research_native_capacity_source as source
+
+    day = date(2026, 9, 23)
+    _complete_native_capacity_fixture(tmp_path, day)
+    monkeypatch.setattr(loop, 'DIRECTORY', tmp_path)
+    monkeypatch.setattr(source, 'datetime', SimpleNamespace(
+        now=lambda tz: datetime.fromisoformat('2026-09-25T21:15:00+09:00'),
+        fromisoformat=datetime.fromisoformat,
+    ))
+    monkeypatch.setattr(source, 'acquire', lambda *a, **kw: pytest.fail('historical provider read'))
+    assert source.main(['--source-date', str(day), '--write']) == 0
+    assert source.validate_existing(day, directory=tmp_path)['status'] == 'complete'
+
+
+@pytest.mark.parametrize('damage', [
+    'receipt_hash', 'source_gap', 'wrong_date', 'native_hash', 'native_missing',
+    'native_pid', 'native_clock', 'account_scope',
+])
+def test_closed_date_capacity_reuse_rejects_invalid_generation(tmp_path, monkeypatch, damage):
+    from types import SimpleNamespace
+    from src.engine.monitoring import research_native_capacity_source as source
+
+    day = date(2026, 9, 23)
+    _complete_native_capacity_fixture(tmp_path, day)
+    receipt_path = tmp_path / f'capacity_source_{day}.json'
+    cash_path = tmp_path / 'native_capacity' / str(day) / 'native_cash.json'
+    inventory_path = tmp_path / 'native_capacity' / str(day) / 'native_inventory.json'
+    if damage == 'native_missing':
+        cash_path.unlink()
+    elif damage in {'receipt_hash', 'source_gap', 'wrong_date', 'account_scope'}:
+        receipt = loop.read_object(receipt_path)
+        field = {'receipt_hash': 'status', 'source_gap': 'status', 'wrong_date': 'source_date',
+                 'account_scope': 'account_scope_sha256'}[damage]
+        receipt[field] = {'receipt_hash': 'source_gap', 'source_gap': 'source_gap',
+                          'wrong_date': '2026-09-22',
+                          'account_scope': 'b'*64}[damage]
+        if damage != 'receipt_hash':
+            receipt['receipt_sha256'] = loop.digest({k:v for k,v in receipt.items()
+                                                     if k != 'receipt_sha256'})
+        loop.atomic_write(receipt_path, receipt)
+    else:
+        path = cash_path if damage in {'native_hash', 'native_clock'} else inventory_path
+        native = loop.read_object(path)
+        if damage == 'native_hash':
+            native['cash_context']['account_deposit'] += 1
+        elif damage == 'native_clock':
+            native['captured_at'] = '2026-09-24T20:06:00+09:00'
+        else:
+            native['producer_pid'] += 1
+        if damage != 'native_hash':
+            native['native_sha256'] = loop.digest({k:v for k,v in native.items()
+                                                   if k != 'native_sha256'})
+            receipt = loop.read_object(receipt_path)
+            receipt['native_cash_sha256' if path == cash_path else 'native_inventory_sha256'] = native['native_sha256']
+            receipt['receipt_sha256'] = loop.digest({k:v for k,v in receipt.items()
+                                                     if k != 'receipt_sha256'})
+            loop.atomic_write(receipt_path, receipt)
+        loop.atomic_write(path, native)
+    before = {path: path.read_bytes() for path in (receipt_path, cash_path, inventory_path)
+              if path.exists()}
+    monkeypatch.setattr(loop, 'DIRECTORY', tmp_path)
+    monkeypatch.setattr(source, 'datetime', SimpleNamespace(
+        now=lambda tz: datetime.fromisoformat('2026-09-25T21:15:00+09:00'),
+        fromisoformat=datetime.fromisoformat,
+    ))
+    monkeypatch.setattr(source, 'acquire', lambda *a, **kw: pytest.fail('historical provider read'))
+    assert source.validate_existing(day, directory=tmp_path)['status'] == 'invalid'
+    assert source.main(['--source-date', str(day), '--write']) == 1
+    assert all(path.read_bytes() == raw for path, raw in before.items())
+
+
+def test_capacity_cli_preserves_current_day_and_future_acquisition_guard(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from src.engine.monitoring import research_native_capacity_source as source
+
+    monkeypatch.setattr(loop, 'DIRECTORY', tmp_path)
+    monkeypatch.setattr(source, 'datetime', SimpleNamespace(
+        now=lambda tz: datetime.fromisoformat('2026-09-23T20:04:59+09:00'),
+    ))
+    monkeypatch.setattr(source, 'acquire', lambda *a, **kw: pytest.fail('early/future provider read'))
+    for day in ('2026-09-23', '2026-09-24'):
+        with pytest.raises(SystemExit) as exc:
+            source.main(['--source-date', day, '--write'])
+        assert exc.value.code == 2
+
+
 @pytest.mark.parametrize("scope", [None, {"006800"}])
 def test_registered_actual_episode_seed_consumes_native_books_without_discovery_admission(tmp_path, scope):
     from src.tests.test_dynamic_micro_confirmation import _live_snapshot

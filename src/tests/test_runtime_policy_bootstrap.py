@@ -14,6 +14,30 @@ def _write(path: Path, payload: dict):
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+def test_write_dispatch_publishes_future_transition_after_verify(monkeypatch):
+    calls = []
+    monkeypatch.setattr(bootstrap, "write_bootstrap", lambda *a, **k: {"target_date": a[0]})
+    monkeypatch.setattr(bootstrap, "verify_bootstrap", lambda *a, **k: {
+        "status": "pass", "passed": True, "pid": None,
+    })
+    monkeypatch.setattr(bootstrap, "publish_future_handoff_transition", lambda day: (
+        calls.append(day) or {"status": "linked"}
+    ))
+    assert bootstrap.main(["--date", "2026-09-28", "--write"]) == 0
+    assert calls == ["2026-09-28"]
+
+
+def test_write_dispatch_rejects_blocked_future_transition(monkeypatch):
+    monkeypatch.setattr(bootstrap, "write_bootstrap", lambda *a, **k: {"target_date": a[0]})
+    monkeypatch.setattr(bootstrap, "verify_bootstrap", lambda *a, **k: {
+        "status": "pass", "passed": True, "pid": None,
+    })
+    monkeypatch.setattr(bootstrap, "publish_future_handoff_transition", lambda day: {
+        "status": "blocked", "issues": ["future_transition_selected_release_mismatch"],
+    })
+    assert bootstrap.main(["--date", "2026-09-28", "--write"]) == 1
+
+
 def test_initial_quantity_pid_verification_archive_survives_daily_overwrite(
     monkeypatch, tmp_path,
 ):

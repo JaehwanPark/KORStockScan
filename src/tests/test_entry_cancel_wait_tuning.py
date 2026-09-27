@@ -40,6 +40,54 @@ def test_projected_real_submit_without_context_or_owner_cannot_be_verified_zero(
     assert mod._parents('2026-09-22',[failed],[])[1]==0
 
 
+def test_cancel_wait_parent_requires_same_submit_owner_account_and_explicit_parent(monkeypatch):
+    day = '2026-09-28'
+    context = dict(source_date=day, parent_id=None, child_id='probe',
+        requested_qty=2, stock_code='123456', broker_route='SOR',
+        actual_timeout_sec=90, wait_profile='standard', submitted_price=10000,
+        frozen_at=day+'T09:00:00+09:00', seed={})
+    context['sha256'] = mod._digest(context)
+    submit = dict(stage='entry_cancel_wait_submission', emitted_date=day,
+        record_id=42, stock_code='123456', fields=dict(
+            actual_order_submitted=True, broker_order_no='B1',
+            owner_registry_intent_id='I1',
+            entry_cancel_wait_submission_context=json.dumps(context)))
+    sent = dict(stage='order_leg_sent', emitted_date=day, record_id=42,
+        stock_code='123456', fields=dict(actual_order_submitted=True,
+            broker_order_no='B1', buy_parent_id='attempt-42',
+            buy_child_id='attempt-42:B1', owner_registry_intent_id='I1',
+            buy_owner_type='main_scalping', buy_owner_id='main_scalping:42',
+            buy_account_key='acct-a', broker_route='SOR', submitted_qty=2))
+    registry = [dict(intent_id='I1', owner_type='main_scalping', side='BUY',
+        action='NEW', account_key='acct-a', owner_id='main_scalping:42',
+        order_date=day, broker_order_no='B1', quantity=2, symbol='123456',
+        route='SOR', state='ORDER_BOUND')]
+    parents, unknown = mod._parents(day, [submit, sent], registry)
+    assert unknown == 0 and [p['parent_id'] for p in parents] == ['attempt-42']
+    sent['fields']['buy_account_key'] = 'acct-b'
+    with pytest.raises(ValueError, match='submission_owner'):
+        mod._parents(day, [submit, sent], registry)
+    sent['fields']['buy_account_key'] = 'acct-a'
+    sent['fields'].update(owner_registry_intent_id='',
+        buy_registry_mode='single_owner_unregistered',
+        buy_owner_policy_date=day, buy_owner_policy_selected=False,
+        buy_owner_policy_coexistence=False,
+        buy_owner_policy_reason='exact_date_policy_missing_legacy_exclusion_retained',
+        buy_owner_policy_hash='')
+    submit['fields']['owner_registry_intent_id'] = ''
+    from types import SimpleNamespace
+    from src.trading.config import symbol_owner_policy
+    monkeypatch.setattr(symbol_owner_policy, 'resolve_symbol_owner_policy',
+        lambda *a, **k: SimpleNamespace(target_date=day,
+            symbol_selected=False, coexistence_enabled=False,
+            reason='exact_date_policy_missing_legacy_exclusion_retained',
+            policy_hash=''))
+    parents, unknown = mod._parents(day, [submit, sent], [])
+    assert unknown == 0 and parents[0]['parent_id'] == 'attempt-42'
+    assert list(parents[0]['children'].values())[0]['intent_id'] is None
+    assert list(parents[0]['children'].values())[0]['terminal_reconciled'] is False
+
+
 def test_runtime_submission_log_merges_response_without_losing_dispatch_truth():
     import ast
     from pathlib import Path

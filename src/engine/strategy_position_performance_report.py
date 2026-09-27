@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import tempfile
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import delete
 
@@ -24,6 +25,7 @@ from src.engine.trade_profit import (
     calculate_net_realized_pnl,
     get_trade_cost_rate,
 )
+from src.utils.jsonl_io import iter_jsonl_objects_strict, read_json_object_strict_receipt
 
 _DB = DBManager()
 _PIPELINE_EVENTS_DIR = Path("data/pipeline_events")
@@ -32,6 +34,7 @@ _SCANNER_PROMOTION_STAGES = {
     "scalping_scanner_candidate_promoted",
     "scalping_scanner_runtime_target_attach",
 }
+_SCANNER_ARCHIVE_CONTRACT_FROM = "2026-09-23"
 _NOT_APPLICABLE_VALUES = {
     "",
     "-",
@@ -173,6 +176,21 @@ def _parse_datetime(value: Any) -> datetime | None:
     return None
 
 
+def _parse_scanner_clock(value: Any) -> datetime | None:
+    """Compare scanner events and BUY clocks in naive KST, as the fact mart does."""
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        raw = str(value or "").strip()
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            return _parse_datetime(value)
+    if parsed.tzinfo is not None:
+        return parsed.astimezone(ZoneInfo("Asia/Seoul")).replace(tzinfo=None)
+    return parsed
+
+
 def _parse_date(value: Any) -> date:
     raw = str(value or "").strip()
     if raw:
@@ -231,61 +249,192 @@ def _scanner_discovery_type(fields: dict[str, Any]) -> str:
     return "unknown_scanner_provenance"
 
 
-def _load_scanner_promotion_events(target_date: str, *, scale_in_projection=None) -> dict[str, list[dict[str, Any]]]:
+def _load_scanner_promotion_events(
+    target_date: str, *, scale_in_projection=None,
+    source_quality: dict[str, Any] | None = None,
+) -> dict[str, list[dict[str, Any]]]:
     path = _PIPELINE_EVENTS_DIR / f"pipeline_events_{target_date}.jsonl"
     by_code: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    if not path.exists():
-        return by_code
-    with path.open(encoding="utf-8") as handle:
-        for line in handle:
+    late_path = path.with_name(f"{path.stem}.late.jsonl")
+    quality: dict[str, Any] = {
+        "schema": "scanner_pipeline_source_quality_v1",
+        "status": "pending", "target_date": target_date,
+        "counts_complete": False,
+        "parts": [], "raw_line_count": 0, "raw_row_count": 0,
+        "scanner_candidate_count": 0,
+        "scanner_valid_count": 0, "scanner_duplicate_count": 0,
+        "scanner_quarantined_count": 0, "scanner_excluded_count": 0,
+        "scanner_unobserved_count": None,
+        "scanner_unobserved_reason": "raw_api_universe_not_observed",
+        "scanner_by_venue_session": {}, "scanner_by_stage": {},
+        "quarantine_reasons": {},
+    }
+    seen_scanner_hashes: set[str] = set()
+    scanner_identities: dict[tuple[str, str, str, str], str] = {}
+    seen_scale_in_hashes: set[str] = set()
+    projected_rows: list[dict[str, Any]] = []
+    venue_session: dict[str, int] = defaultdict(int)
+    stage_raw: dict[str, int] = defaultdict(int)
+    stage_valid: dict[str, int] = defaultdict(int)
+    quarantine_reasons: dict[str, int] = defaultdict(int)
+    if scale_in_projection is not None:
+        from src.engine.scalping.scale_in_split_order_plan import (
+            _project_relevant_input_event, _record_id, _event_time,
+        )
+    found_part = False
+    try:
+        for part in (path, late_path):
+            provenance: dict[str, Any] = {}
+            part_present = part.exists() or part.with_suffix(part.suffix + ".gz").exists()
             try:
-                event = json.loads(line)
-            except Exception:
+                rows = iter_jsonl_objects_strict(part, provenance=provenance)
+                for event in rows:
+                    found_part = True
+                    if scale_in_projection is not None:
+                        projected = _project_relevant_input_event(event, source_name="pipeline_events", event_date=target_date)
+                        if (projected is not None and _event_time(projected) is not None
+                                and _event_time(projected).date().isoformat() == target_date
+                                and _record_id(projected) in scale_in_projection["record_ids"]):
+                            digest = _canonical_sha256(event)
+                            if digest not in seen_scale_in_hashes:
+                                seen_scale_in_hashes.add(digest)
+                                projected_rows.append(projected)
+                    stage = event.get("stage")
+                    if stage not in _SCANNER_PROMOTION_STAGES:
+                        continue
+                    quality["scanner_candidate_count"] += 1
+                    stage_raw[stage] += 1
+                    digest = _canonical_sha256(event)
+                    if digest in seen_scanner_hashes:
+                        quality["scanner_duplicate_count"] += 1
+                        continue
+                    seen_scanner_hashes.add(digest)
+                    fields = event.get("fields") if isinstance(event.get("fields"), dict) else {}
+                    promotion_reason = _clean_scanner_value(fields.get("scanner_promotion_reason"))
+                    source_signature = _clean_scanner_value(fields.get("source_signature"))
+                    promotion_id = _clean_scanner_value(fields.get("scanner_promotion_id"))
+                    stock_code = str(event.get("stock_code") or fields.get("stock_code") or "").strip()[:10]
+                    emitted_at = _parse_scanner_clock(event.get("emitted_at") or event.get("event_time"))
+                    reason = None
+                    if not (promotion_reason or source_signature or promotion_id):
+                        reason = "promotion_identity_absent"
+                    elif not stock_code:
+                        reason = "stock_code_missing"
+                    elif emitted_at is None or emitted_at.date().isoformat() != target_date:
+                        reason = "emitted_date_invalid"
+                    elif (event.get("emitted_date") not in (None, target_date)
+                          or event.get("storage_partition_date") not in (None, target_date)):
+                        reason = "partition_date_mismatch"
+                    if reason:
+                        quality["scanner_quarantined_count"] += 1
+                        quarantine_reasons[reason] += 1
+                        continue
+                    if promotion_id:
+                        identity = (stage, stock_code, promotion_id, emitted_at.isoformat())
+                        existing = scanner_identities.setdefault(identity, digest)
+                        if existing != digest:
+                            raise ValueError("scanner_promotion_identity_conflict")
+                    payload = {
+                        "stock_code": stock_code,
+                        "emitted_at": emitted_at,
+                        "scanner_promotion_id": promotion_id,
+                        "scanner_promotion_reason": promotion_reason,
+                        "source_signature": source_signature,
+                        "scanner_source_role": _clean_scanner_value(
+                            fields.get("scanner_source_role") or fields.get("scanner_candidate_role")
+                        ),
+                        "scanner_priority_tier": _clean_scanner_value(fields.get("scanner_priority_tier")),
+                        "rising_missed_lineage": _clean_scanner_value(fields.get("rising_missed_lineage")),
+                        "effective_venue": _clean_scanner_value(fields.get("effective_venue") or fields.get("venue")),
+                        "market_session_bucket": _clean_scanner_value(fields.get("market_session_bucket") or fields.get("session")),
+                    }
+                    payload["scanner_discovery_type"] = _scanner_discovery_type(payload)
+                    by_code[stock_code].append(payload)
+                    quality["scanner_valid_count"] += 1
+                    stage_valid[stage] += 1
+                    venue = _clean_scanner_value(fields.get("effective_venue") or fields.get("venue")) or "UNKNOWN"
+                    session = _clean_scanner_value(fields.get("market_session_bucket") or fields.get("session")) or "UNKNOWN"
+                    venue_session[f"{venue}|{session}"] += 1
+            except FileNotFoundError:
+                if (part_present or part.exists()
+                        or part.with_suffix(part.suffix + ".gz").exists()):
+                    raise ValueError("scanner_source_part_disappeared") from None
                 continue
-            if scale_in_projection is not None:
-                from src.engine.scalping.scale_in_split_order_plan import _project_relevant_input_event, _record_id, _event_time
-                projected = _project_relevant_input_event(event, source_name="pipeline_events", event_date=target_date)
-                if projected is not None and _event_time(projected) is not None and _event_time(projected).date().isoformat() == target_date and _record_id(projected) in scale_in_projection["record_ids"]:
-                    scale_in_projection["rows"].append(projected)
-            if event.get("stage") not in _SCANNER_PROMOTION_STAGES:
-                continue
-            fields = (
-                event.get("fields") if isinstance(event.get("fields"), dict) else {}
+            found_part = True
+            archive = next(
+                (item for item in provenance["physical_representations"]
+                 if item["compression"] == "gzip"), None,
             )
-            promotion_reason = _clean_scanner_value(
-                fields.get("scanner_promotion_reason")
-            )
-            source_signature = _clean_scanner_value(fields.get("source_signature"))
-            promotion_id = _clean_scanner_value(fields.get("scanner_promotion_id"))
-            if not (promotion_reason or source_signature or promotion_id):
-                continue
-            stock_code = str(
-                event.get("stock_code") or fields.get("stock_code") or ""
-            ).strip()[:10]
-            if not stock_code:
-                continue
-            emitted_at = _parse_datetime(
-                event.get("emitted_at") or event.get("event_time")
-            )
-            payload = {
-                "stock_code": stock_code,
-                "emitted_at": emitted_at,
-                "scanner_promotion_id": promotion_id,
-                "scanner_promotion_reason": promotion_reason,
-                "source_signature": source_signature,
-                "scanner_source_role": _clean_scanner_value(
-                    fields.get("scanner_source_role")
-                    or fields.get("scanner_candidate_role")
-                ),
-                "scanner_priority_tier": _clean_scanner_value(
-                    fields.get("scanner_priority_tier")
-                ),
-                "rising_missed_lineage": _clean_scanner_value(
-                    fields.get("rising_missed_lineage")
-                ),
-            }
-            payload["scanner_discovery_type"] = _scanner_discovery_type(payload)
-            by_code[stock_code].append(payload)
+            archive_receipt_path = Path(f"{part}.gz.archive_receipt.json")
+            archive_read = None
+            if archive is not None:
+                try:
+                    archive_read = read_json_object_strict_receipt(archive_receipt_path)
+                except FileNotFoundError:
+                    pass
+            if archive_read is not None:
+                archive_receipt = archive_read.payload
+                if (not isinstance(archive_receipt, dict)
+                        or archive_receipt.get("schema") != "pipeline_raw_archive_identity_v1"
+                        or Path(str(archive_receipt.get("logical_path") or "")).resolve() != part.resolve()
+                        or archive_receipt.get("logical_content_sha256") != provenance["source_content_sha256"]):
+                    raise ValueError("scanner_archive_receipt_generation_mismatch")
+                generation = archive_receipt.get("archive_generation") or {}
+                provenance["archive_receipt"] = {
+                    "status": "verified_logical_content",
+                    "path": str(archive_receipt_path),
+                    "sha256": archive_read.raw_sha256,
+                    "physical_size_matches": (
+                        isinstance(generation, dict)
+                        and generation.get("size_bytes") == archive["stored_bytes"]
+                    ),
+                }
+            elif archive is not None:
+                provenance["archive_receipt"] = {"status": "not_observed"}
+            else:
+                provenance["archive_receipt"] = {"status": "not_applicable"}
+            quality["parts"].append(provenance)
+            quality["raw_line_count"] += int(provenance["source_line_count"])
+            quality["raw_row_count"] += int(provenance["source_json_object_row_count"])
+    except (ValueError, OSError, UnicodeError) as exc:
+        quality.update(status="source_blocked", reason=str(exc),
+                       scanner_unobserved_reason="source_generation_invalid")
+        if source_quality is not None:
+            source_quality.update(quality)
+        raise FactSyncSourceError(f"scanner_pipeline_source_invalid:{exc}") from exc
+    if not found_part:
+        if target_date < _SCANNER_ARCHIVE_CONTRACT_FROM:
+            quality.update(status="legacy_source_missing", reason="pre_archive_contract")
+            if source_quality is not None:
+                source_quality.update(quality)
+            return by_code
+        quality.update(status="source_missing", reason="base_and_late_absent",
+                       scanner_unobserved_reason="source_missing")
+        if source_quality is not None:
+            source_quality.update(quality)
+        raise FactSyncSourceError("scanner_pipeline_source_missing")
+    quality["scanner_excluded_count"] = (
+        quality["scanner_duplicate_count"] + quality["scanner_quarantined_count"]
+    )
+    quality["counts_complete"] = True
+    quality["status"] = "valid_empty" if quality["scanner_valid_count"] == 0 else "complete"
+    quality["quarantine_reasons"] = dict(sorted(quarantine_reasons.items()))
+    quality["scanner_by_venue_session"] = dict(sorted(venue_session.items()))
+    quality["scanner_by_stage"] = {
+        stage: {"raw": stage_raw[stage], "valid": stage_valid[stage],
+                "excluded": stage_raw[stage] - stage_valid[stage]}
+        for stage in sorted(stage_raw)
+    }
+    quality["source_generation_sha256"] = _canonical_sha256([
+        {"logical_source_path": part["logical_source_path"],
+         "source_content_sha256": part["source_content_sha256"],
+         "source_content_bytes": part["source_content_bytes"]}
+        for part in quality["parts"]
+    ])
+    if source_quality is not None:
+        source_quality.update(quality)
+    if scale_in_projection is not None:
+        scale_in_projection["rows"].extend(projected_rows)
     for events in by_code.values():
         events.sort(key=lambda item: item.get("emitted_at") or datetime.min)
     return by_code
@@ -300,14 +449,34 @@ def _select_scanner_event_for_trade(
     events = events_by_code.get(str(fact.get("stock_code") or "").strip()[:10]) or []
     if not events:
         return None
+    fact_venue = _clean_scanner_value(fact.get("effective_venue"))
+    fact_session = _clean_scanner_value(fact.get("market_session_bucket"))
+    expected_promotion_id = _clean_scanner_value(
+        fact.get("scanner_expected_promotion_id") or fact.get("scanner_promotion_id")
+    )
+    def compatible(event: dict[str, Any]) -> bool:
+        event_venue = _clean_scanner_value(event.get("effective_venue"))
+        event_session = _clean_scanner_value(event.get("market_session_bucket"))
+        return (
+            (not expected_promotion_id
+             or event.get("scanner_promotion_id") == expected_promotion_id)
+            and
+            (not fact_venue or fact_venue == "UNKNOWN" or not event_venue
+             or event_venue == "UNKNOWN" or fact_venue == event_venue)
+            and (not fact_session or fact_session == "UNKNOWN" or not event_session
+                 or event_session == "UNKNOWN" or fact_session == event_session)
+        )
     buy_time = fact.get("buy_time")
     if isinstance(buy_time, str):
-        buy_time = _parse_datetime(buy_time)
+        buy_time = _parse_scanner_clock(buy_time)
+    elif isinstance(buy_time, datetime) and buy_time.tzinfo is not None:
+        buy_time = _parse_scanner_clock(buy_time)
     if isinstance(buy_time, datetime):
         before = [
             event
             for event in events
             if event.get("emitted_at") and event["emitted_at"] <= buy_time
+            and compatible(event)
         ]
         if before:
             return before[-1]
@@ -320,13 +489,42 @@ def _enrich_scanner_provenance(
     facts: list[dict[str, Any]],
     target_date: str,
     *, scale_in_projection=None,
+    scanner_source_quality: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    events_by_code = (_load_scanner_promotion_events(target_date) if scale_in_projection is None else _load_scanner_promotion_events(target_date, scale_in_projection=scale_in_projection))
+    needs_source = any(
+        fact.get("strategy") == "SCALPING" and fact.get("position_tag") == "SCANNER"
+        for fact in facts
+    ) or bool(scale_in_projection and scale_in_projection.get("record_ids"))
+    if needs_source:
+        if scanner_source_quality is None:
+            events_by_code = (
+                _load_scanner_promotion_events(target_date)
+                if scale_in_projection is None else
+                _load_scanner_promotion_events(target_date, scale_in_projection=scale_in_projection)
+            )
+        else:
+            events_by_code = _load_scanner_promotion_events(
+                target_date, scale_in_projection=scale_in_projection,
+                source_quality=scanner_source_quality,
+            )
+    else:
+        events_by_code = {}
+        if scanner_source_quality is not None:
+            scanner_source_quality.update(
+                status="not_applicable", target_date=target_date,
+                reason="no_scanner_fact_or_scale_in_record",
+            )
     enriched: list[dict[str, Any]] = []
+    scanner_fact_count = 0
+    scanner_matched_count = 0
+    unmatched_fact_ids: list[int] = []
     for fact in facts:
         row = dict(fact)
         event = _select_scanner_event_for_trade(row, events_by_code)
+        if row.get("strategy") == "SCALPING" and row.get("position_tag") == "SCANNER":
+            scanner_fact_count += 1
         if event:
+            scanner_matched_count += 1
             row.update(
                 {
                     "scanner_provenance_status": "matched",
@@ -342,6 +540,8 @@ def _enrich_scanner_provenance(
                 }
             )
         elif row.get("strategy") == "SCALPING" and row.get("position_tag") == "SCANNER":
+            if len(unmatched_fact_ids) < 100:
+                unmatched_fact_ids.append(_safe_int(row.get("recommendation_id")))
             row.update(
                 {
                     "scanner_provenance_status": "missing",
@@ -357,10 +557,21 @@ def _enrich_scanner_provenance(
         else:
             row["scanner_provenance_status"] = "not_applicable"
         enriched.append(row)
+    if scanner_source_quality is not None:
+        scanner_source_quality.update(
+            scanner_fact_count=scanner_fact_count,
+            scanner_matched_fact_count=scanner_matched_count,
+            scanner_unmatched_fact_count=scanner_fact_count - scanner_matched_count,
+            scanner_unmatched_recommendation_ids=unmatched_fact_ids,
+            scanner_unmatched_ids_truncated=(scanner_fact_count - scanner_matched_count) > len(unmatched_fact_ids),
+        )
     return enriched
 
 
-def _build_trade_fact_rows(target_date: str, *, scale_in_projection=None) -> tuple[list[dict[str, Any]], list[str]]:
+def _build_trade_fact_rows(
+    target_date: str, *, scale_in_projection=None,
+    scanner_source_quality: dict[str, Any] | None = None,
+) -> tuple[list[dict[str, Any]], list[str]]:
     report = build_trade_review_report(
         target_date=target_date,
         since_time=None,
@@ -379,7 +590,11 @@ def _build_trade_fact_rows(target_date: str, *, scale_in_projection=None) -> tup
         status = str(row.get("status") or "").upper()
         buy_price = _safe_float(row.get("buy_price"))
         buy_qty = _safe_int(row.get("buy_qty"))
-        buy_time = _parse_datetime(row.get("buy_time"))
+        buy_time = (
+            _parse_scanner_clock(row.get("buy_time"))
+            if strategy == "SCALPING" and position_tag == "SCANNER"
+            else _parse_datetime(row.get("buy_time"))
+        )
         sell_price = _safe_float(row.get("sell_price"))
         sell_time = _parse_datetime(row.get("sell_time"))
         economics_complete = bool(
@@ -396,6 +611,9 @@ def _build_trade_fact_rows(target_date: str, *, scale_in_projection=None) -> tup
                 "rec_date": _parse_date(row.get("rec_date") or target_date),
                 "stock_code": str(row.get("code") or "").strip()[:10],
                 "stock_name": str(row.get("name") or ""),
+                "scanner_expected_promotion_id": _clean_scanner_value(row.get("scanner_promotion_id")),
+                "effective_venue": str(row.get("effective_venue") or ""),
+                "market_session_bucket": str(row.get("market_session_bucket") or ""),
                 "strategy": strategy,
                 "position_tag": position_tag,
                 "status": status,
@@ -434,7 +652,10 @@ def _build_trade_fact_rows(target_date: str, *, scale_in_projection=None) -> tup
                 ),
             }
         )
-    return _enrich_scanner_provenance(facts, target_date, scale_in_projection=scale_in_projection), warnings
+    return _enrich_scanner_provenance(
+        facts, target_date, scale_in_projection=scale_in_projection,
+        scanner_source_quality=scanner_source_quality,
+    ), warnings
 
 
 def _aggregate_daily_rows(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -926,9 +1147,15 @@ def _summary_db_payload(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _validate_fact_batch(
-    facts: list[dict[str, Any]], warnings: list[str], target_date: str
+    facts: list[dict[str, Any]], warnings: list[str], target_date: str,
+    *, scanner_source_quality: dict[str, Any] | None = None,
 ) -> list[str]:
     issues = [f"source_warning:{warning}" for warning in warnings]
+    if (target_date >= _SCANNER_ARCHIVE_CONTRACT_FROM and scanner_source_quality
+            and scanner_source_quality.get("scanner_unmatched_fact_count", 0) > 0):
+        issues.append(
+            f"scanner_lineage_unmatched:{scanner_source_quality['scanner_unmatched_fact_count']}"
+        )
     target = _parse_date(target_date)
     seen_ids: set[int] = set()
     for fact in facts:
@@ -959,6 +1186,7 @@ def _sync_status_payload(
     issues: list[str],
     prior_fact_count: int | None,
     source_digest: str,
+    scanner_source_quality: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     completed = [fact for fact in facts if _is_completed(fact)]
     economics_valid = [fact for fact in completed if _has_complete_economics(fact)]
@@ -975,6 +1203,7 @@ def _sync_status_payload(
         "warnings": warnings,
         "issues": issues,
         "source_digest": source_digest,
+        "scanner_source_quality": scanner_source_quality or {"status": "not_observed"},
     }
 
 
@@ -984,8 +1213,7 @@ def sync_trade_performance_for_date(target_date: str) -> dict[str, Any]:
     inventory = _query_actual_fill_inventory(target_date)
     projection = {"contract": "scale_in_execution_projection_v1", "target_date": target_date,
                   "record_ids": sorted({row["record_id"] for row in inventory}), "rows": []}
-    facts, warnings = (_build_trade_fact_rows(target_date, scale_in_projection=projection)
-                       if inventory else _build_trade_fact_rows(target_date))
+    scanner_source_quality: dict[str, Any] = {}
     rec_date = _parse_date(target_date)
 
     with _DB.get_session() as session:
@@ -994,8 +1222,29 @@ def sync_trade_performance_for_date(target_date: str) -> dict[str, Any]:
             .filter(TradePerformanceFact.rec_date == rec_date)
             .count()
         )
+    try:
+        facts, warnings = _build_trade_fact_rows(
+            target_date,
+            scale_in_projection=projection if inventory else None,
+            scanner_source_quality=scanner_source_quality,
+        )
+    except FactSyncSourceError as exc:
+        receipt = _write_status(
+            target_date,
+            _sync_status_payload(
+                status="source_blocked", facts=[], warnings=[],
+                issues=[str(exc)], prior_fact_count=prior_fact_count,
+                source_digest=_canonical_sha256([]),
+                scanner_source_quality=scanner_source_quality,
+            ),
+        )
+        raise FactSyncSourceError(
+            f"strategy_position_fact_sync_source_blocked:{receipt['artifact_sha256']}"
+        ) from exc
     source_digest = _canonical_sha256(facts)
-    issues = _validate_fact_batch(facts, warnings, target_date)
+    issues = _validate_fact_batch(
+        facts, warnings, target_date, scanner_source_quality=scanner_source_quality,
+    )
     if issues:
         receipt = _write_status(
             target_date,
@@ -1006,6 +1255,7 @@ def sync_trade_performance_for_date(target_date: str) -> dict[str, Any]:
                 issues=issues,
                 prior_fact_count=prior_fact_count,
                 source_digest=source_digest,
+                scanner_source_quality=scanner_source_quality,
             ),
         )
         raise FactSyncSourceError(
@@ -1053,6 +1303,7 @@ def sync_trade_performance_for_date(target_date: str) -> dict[str, Any]:
             issues=[],
             prior_fact_count=prior_fact_count,
             source_digest=source_digest,
+            scanner_source_quality=scanner_source_quality,
         )},
     )
 
@@ -1205,6 +1456,11 @@ def build_strategy_position_performance_report(
                 "realized_pnl_krw": _optional_int(fact["realized_pnl_krw"]),
                 "exit_rule": fact["exit_rule"],
                 "sell_reason_type": fact["sell_reason_type"],
+                "scanner_provenance_status": fact.get("scanner_provenance_status"),
+                "scanner_discovery_type": fact.get("scanner_discovery_type"),
+                "scanner_promotion_id": fact.get("scanner_promotion_id"),
+                "scanner_promotion_reason": fact.get("scanner_promotion_reason"),
+                "scanner_source_signature": fact.get("scanner_source_signature"),
                 "buy_time": (
                     fact["buy_time"].strftime("%Y-%m-%d %H:%M:%S")
                     if fact["buy_time"]

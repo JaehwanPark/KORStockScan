@@ -343,17 +343,28 @@ def _parents(target_date, events, registry):
     from src.engine.scalping.entry_split_order_plan import _safe_bool
     inventory={};fills=defaultdict(list)
     for event in registry:
-        if event.get('owner_type') != 'main_scalping' or event.get('side') != 'BUY' or event.get('action') != 'NEW':continue
+        if event.get('owner_type') != 'main_scalping' or event.get('side') != 'BUY' or event.get('action') != 'NEW':
+            continue
         key=event.get('intent_id')
         inventory.setdefault(key,{}).update(event)
-        if event.get('event') == 'FILL_RECORDED':fills[key].append(event)
-    by_number={}
-    for key,v in inventory.items():
-        if not v.get('broker_order_no'):continue
-        no=(v.get('order_date'),str(v['broker_order_no']))
-        if no in by_number and by_number[no][0]!=key:raise ValueError('submission_account_order_identity_conflict')
-        by_number[no]=(key,v)
-    parents={};unclassified=set();joined=set();joined_orders=set()
+        if event.get('event') == 'FILL_RECORDED':
+            fills[key].append(event)
+    sent_by_record_order={}
+    for event in events:
+        if event.get('stage')!='order_leg_sent' or event.get('emitted_date')!=target_date:
+            continue
+        f=event.get('fields') or {}
+        if not _safe_bool(f.get('actual_order_submitted')):
+            continue
+        no=str(f.get('broker_order_no') or f.get('ord_no') or '')
+        key=(str(event.get('record_id') or ''),no)
+        if key in sent_by_record_order and sent_by_record_order[key]!=event:
+            raise ValueError('submission_duplicate_order_projection_conflict')
+        sent_by_record_order[key]=event
+    parents={}
+    unclassified=set()
+    joined=set()
+    joined_sent=set()
     for event in events:
         if event.get('stage') != 'entry_cancel_wait_submission' or event.get('emitted_date') != target_date:continue
         f=event.get('fields') or {}
@@ -362,18 +373,60 @@ def _parents(target_date, events, registry):
         if (not isinstance(context,dict) or context.get('sha256') != _digest({k:v for k,v in context.items() if k!='sha256'})
             or context.get('source_date') != target_date):
             raise ValueError('submission_context_hash_or_date_invalid')
+        no=str(f.get('broker_order_no') or '')
+        sent=sent_by_record_order.get((str(event.get('record_id') or ''),no))
+        sf=(sent or {}).get('fields') or {}
         identity=str(f.get('owner_registry_intent_id') or '')
         actual=inventory.get(identity)
-        if not actual:
-            pair=by_number.get((target_date,str(f.get('broker_order_no'))));identity,actual=pair if pair else ('',None)
-        if not actual:
-            no=str(f.get('broker_order_no') or '')
-            unclassified.add(('order',target_date,no) if no else ('submission',_digest(event)))
+        policy_generation_valid=False
+        if sf.get('buy_registry_mode')=='single_owner_unregistered':
+            try:
+                from src.trading.config.symbol_owner_policy import resolve_symbol_owner_policy
+                policy=resolve_symbol_owner_policy(event.get('stock_code'),target_date=target_date)
+                policy_generation_valid=(policy.target_date==target_date
+                    and not policy.symbol_selected and not policy.coexistence_enabled
+                    and sf.get('buy_owner_policy_reason')==policy.reason
+                    and str(sf.get('buy_owner_policy_hash') or '')==policy.policy_hash)
+            except Exception:
+                policy_generation_valid=False
+        single_owner=(not identity and sent is not None
+            and sf.get('buy_registry_mode')=='single_owner_unregistered'
+            and policy_generation_valid
+            and str(sf.get('buy_owner_policy_selected')).lower()=='false'
+            and str(sf.get('buy_owner_policy_coexistence')).lower()=='false'
+            and sf.get('buy_owner_policy_date')==target_date
+            and not any(r.get('symbol')==event.get('stock_code')
+                and r.get('order_date')==target_date for r in registry))
+        if single_owner:
+            identity='source_only:'+_digest(sent)
+            actual=dict(order_date=target_date,broker_order_no=no,
+                quantity=context.get('requested_qty'),symbol=context.get('stock_code'),
+                route=context.get('broker_route'),owner_id=sf.get('buy_owner_id'),
+                account_key=sf.get('buy_account_key'),state='OPEN')
+        if (not actual or not sent or (not single_owner and not identity)
+            or sf.get('owner_registry_intent_id')!=str(f.get('owner_registry_intent_id') or '')):
+            unclassified.add(('order',target_date,str(event.get('record_id') or ''),
+                str(sf.get('buy_account_key') or ''),no) if no else ('submission',_digest(event)))
             continue
-        joined.add(identity)
-        if actual.get('broker_order_no'):
-            joined_orders.add((target_date,str(actual['broker_order_no'])))
-        seed=context.get('seed') or {};parent=context.get('parent_id') or 'unclassified:'+identity
+        account=str(sf.get('buy_account_key') or '')
+        parent_id=str(sf.get('buy_parent_id') or '')
+        child_id=str(sf.get('buy_child_id') or '')
+        record=str(event.get('record_id') or '')
+        if (not account or not parent_id or not child_id.startswith(parent_id+':')
+            or str(sent.get('stock_code') or '')!=str(event.get('stock_code') or '')
+            or sf.get('buy_owner_type')!='main_scalping'
+            or sf.get('buy_owner_id')!=f'main_scalping:{record}'
+            or actual.get('owner_id')!=sf.get('buy_owner_id')
+            or actual.get('account_key')!=account
+            or str(actual.get('broker_order_no') or '')!=no
+            or str(sf.get('submitted_qty') or '')!=str(actual.get('quantity') or '')
+            or str(sf.get('broker_route') or '')!=str(actual.get('route') or '')):
+            raise ValueError('submission_owner_account_parent_identity_conflict')
+        if not single_owner:
+            joined.add(identity)
+        joined_sent.add((record,no))
+        seed=context.get('seed') or {}
+        parent=context.get('parent_id') or parent_id
         if seed and (seed.get('operating_contract') or {}).get('broker_route')!=context['broker_route']:
             raise ValueError('submission_frozen_seed_broker_route_conflict')
         if (actual.get('order_date')!=target_date or actual.get('quantity')!=context['requested_qty']
@@ -386,24 +439,34 @@ def _parents(target_date, events, registry):
         child=dict(quantity=actual.get('quantity'),submitted_price=context['submitted_price'],
             submitted_at=context['frozen_at'],terminal_at=actual.get('observed_at_kst'),fills=fills[identity],
             terminal_reconciled=actual.get('state')=='ORDER_TERMINAL' and bool(actual.get('terminal_reconciliation')),
-            child_id=context['child_id'],intent_id=identity,broker_order_no=actual.get('broker_order_no'))
-        if identity in p['children'] and p['children'][identity] != child:raise ValueError('conflicting_submission_child')
+            child_id=context['child_id'],submit_child_id=child_id,submit_parent_id=parent_id,
+            account_key=account,owner_id=actual.get('owner_id'),
+            intent_id=None if single_owner else identity,
+            custody_mode='single_owner_unregistered' if single_owner else 'registry_managed',
+            broker_order_no=actual.get('broker_order_no'))
+        if identity in p['children'] and p['children'][identity] != child:
+            raise ValueError('conflicting_submission_child')
         p['children'][identity]=child
     for identity,actual in inventory.items():
-        if actual.get('order_date')!=target_date or identity in joined:continue
+        if actual.get('order_date')!=target_date or identity in joined:
+            continue
         client=str(actual.get('client_intent_id') or '')
         if ':AVG_DOWN:' in client or ':PYRAMID:' in client:continue
         # Missing producer events, unknown actions and rejected/ambiguous owner
         # attempts remain in the census; a verified projection zero is not enough.
         no=str(actual.get('broker_order_no') or '')
-        unclassified.add(('order',target_date,no) if no else ('intent',identity))
+        owner_record=str(actual.get('owner_id') or '').removeprefix('main_scalping:')
+        unclassified.add(('order',target_date,owner_record,
+            str(actual.get('account_key') or ''),no) if no else ('intent',identity))
     for event in events:
         if event.get('stage')!='order_leg_sent' or event.get('emitted_date')!=target_date:continue
         fields=event.get('fields') or {}
         if not _safe_bool(fields.get('actual_order_submitted')):continue
         no=str(fields.get('broker_order_no') or fields.get('ord_no') or '')
-        key=('order',target_date,no) if no else ('projection',_digest(event))
-        if no and (target_date,no) in joined_orders:continue
+        key=('order',target_date,str(event.get('record_id') or ''),
+            str(fields.get('buy_account_key') or ''),no) if no else ('projection',_digest(event))
+        if no and (str(event.get('record_id') or ''),no) in joined_sent:
+            continue
         unclassified.add(key)
     return list(parents.values()),len(unclassified)
 

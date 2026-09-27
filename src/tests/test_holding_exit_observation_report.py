@@ -441,6 +441,106 @@ def test_post_sell_pass_requires_mature_horizons_and_matching_anchor():
     assert outcomes[0]["post_sell_status"] == "source_gap_post_sell_venue_route"
 
 
+def test_sor_krx_user_override_keeps_real_fill_in_postclose_without_fake_venue():
+    trade = _trade(
+        1,
+        rec_date="2026-09-23",
+        buy_time="2026-09-23 09:30:00",
+        sell_time="2026-09-23 09:40:00",
+    )
+    trade.update({
+        "exact_sell_fill_time": "2026-09-23T09:40:00+09:00",
+        "market_session_bucket": "krx_regular",
+        "exit_execution_broker_route": "SOR",
+        "terminal_population_scope": "real_record_bound",
+        "terminal_decision_authority": "broker_sell_fill_observation_only",
+        "sell_quantity_conserved": True,
+        "realized_pnl_krw_source": "broker_fill_prices_fee_aware",
+        "broker_actual_execution_venue": "UNKNOWN",
+        "broker_actual_execution_venue_source": (
+            "official_exchange_fields_ambiguous_or_missing"
+        ),
+        "broker_actual_exchange_code": "0",
+        "broker_actual_exchange_name": "SOR",
+        "broker_sor_flag": "Y",
+    })
+    candidate = {
+        "post_sell_id": "sor-1",
+        "recommendation_id": 1,
+        "evaluation_status": "evaluated",
+        "signal_date": "2026-09-23",
+        "sell_time": "09:40:00",
+        "exact_sell_fill_time": "2026-09-23T09:40:00+09:00",
+        "sell_order_no": "S1",
+        "sell_execution_no": "SE1",
+        "market_axes_source_quality_status": "route_contract_ready",
+        "market_session_regime": "KRX_REGULAR",
+        "actual_execution_venue": "UNKNOWN",
+        "actual_execution_venue_source": (
+            "official_exchange_fields_ambiguous_or_missing"
+        ),
+        "broker_route_requested": "SOR",
+        "evaluated_at": "2026-09-23T09:51:00",
+        "minute_candle_source_quality": "pass",
+        **{f"metrics_{minute}m": {"bars": 1} for minute in (1, 3, 5, 10)},
+    }
+
+    outcomes, coverage = report_mod._build_position_outcomes([trade], [candidate])
+
+    assert outcomes[0]["post_sell_status"] == "pass"
+    assert outcomes[0]["post_sell_reference_venue"] == "KRX"
+    assert outcomes[0]["post_sell_actual_execution_venue"] == "UNKNOWN"
+    assert outcomes[0]["post_sell_actual_venue_verified"] is False
+    assert outcomes[0]["post_sell_user_override"] == (
+        report_mod.SOR_KRX_POST_SELL_USER_OVERRIDE
+    )
+    assert coverage["full_post_sell_observation_trades"] == 1
+    assert coverage["full_post_sell_user_override_trades"] == 1
+    assert coverage["sor_krx_reference_user_override_ids"] == ["1"]
+
+    for field, value in (
+        ("broker_actual_exchange_code", "1"),
+        ("broker_sor_flag", "N"),
+        ("market_session_bucket", "nxt_regular"),
+        ("sell_quantity_conserved", False),
+        ("terminal_population_scope", "sim_observation_only"),
+    ):
+        rejected, rejected_coverage = report_mod._build_position_outcomes(
+            [{**trade, field: value}], [candidate]
+        )
+        assert rejected[0]["post_sell_status"] == "source_gap_post_sell_venue_route"
+        assert rejected[0]["post_sell_user_override"] is None
+        assert rejected_coverage["full_post_sell_user_override_trades"] == 0
+
+    wrong_order = {**candidate, "sell_execution_no": "OTHER"}
+    rejected, _ = report_mod._build_position_outcomes([trade], [wrong_order])
+    assert rejected[0]["post_sell_status"] == "source_gap_post_sell_execution_identity"
+
+    relabeled = {**candidate, "actual_execution_venue": "KRX"}
+    rejected, _ = report_mod._build_position_outcomes([trade], [relabeled])
+    assert rejected[0]["post_sell_status"] == "source_gap_post_sell_venue_route"
+    assert rejected[0]["post_sell_user_override"] is None
+
+    for field, value in (
+        ("broker_route_requested", "NXT"),
+        ("market_session_regime", "nxt_regular"),
+        ("market_axes_source_quality_status", "route_source_quality_blocked"),
+    ):
+        rejected, _ = report_mod._build_position_outcomes(
+            [trade], [{**candidate, field: value}]
+        )
+        assert rejected[0]["post_sell_status"] == "source_gap_post_sell_venue_route"
+        assert rejected[0]["post_sell_user_override"] is None
+
+    partial = {**candidate, "minute_candle_source_quality": "partial_window"}
+    censored, coverage = report_mod._build_position_outcomes([trade], [partial])
+    assert censored[0]["post_sell_status"] == "partial_window"
+    assert censored[0]["post_sell_user_override"] == (
+        report_mod.SOR_KRX_POST_SELL_USER_OVERRIDE
+    )
+    assert coverage["full_post_sell_observation_trades"] == 0
+
+
 def test_trailing_direct_input_receipt_preserves_trigger_and_source_gap():
     trade = _trade(1)
     fields = {

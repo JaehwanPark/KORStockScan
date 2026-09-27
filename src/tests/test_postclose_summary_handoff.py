@@ -1,3 +1,5 @@
+import gzip
+import hashlib
 import json
 from pathlib import Path
 
@@ -245,6 +247,139 @@ def test_retired_handoff_records_future_bootstrap_without_hashing_it(tmp_path):
     assert mod.direct_future_handoff(payload, day)["manifest_path"].endswith(
         "runtime_policy_bootstrap_2026-09-21.json"
     )
+
+
+def test_future_handoff_requires_explicit_transition_after_rewrite(tmp_path):
+    from src.engine.automation import runtime_policy_bootstrap as bootstrap
+
+    data = tmp_path / "data"
+    reports = data / "report"
+    source, apply = "2026-09-23", "2026-09-28"
+    root = data / "runtime" / "policy_bootstrap"
+    manifest_path = root / f"runtime_policy_bootstrap_{apply}.json"
+    verify_path = root / f"runtime_policy_bootstrap_verify_{apply}.json"
+    env_path = root / f"runtime_policy_bootstrap_{apply}.env"
+    selection_path = data / "runtime" / "runtime_release_selection.json"
+    selected = "b" * 40
+    selection_path.parent.mkdir(parents=True)
+    selection_path.write_text(json.dumps({"schema": "runtime_release_selection_v1",
+                                          "git_commit": selected, "release_root": "/releases/selected"}))
+    summary_path = reports / "runtime_approval_summary" / f"runtime_approval_summary_{source}.json"
+    summary_path.parent.mkdir(parents=True)
+    summary = {"date": source, "preopen_consumption_state": "pending",
+        "preopen_consumption_receipt": {"source_date": source, "apply_date": apply,
+            "manifest_path": str(manifest_path), "manifest_sha256": None,
+            "verification_path": str(verify_path), "verification_sha256": None,
+            "release_selection_sha256": None, "selected_release_commit": None}}
+    summary_path.write_text(json.dumps(summary))
+    assert mod.inspect_future_handoff(summary, source, report_dir=reports)["status"] == "pending"
+
+    root.mkdir(parents=True)
+    env_path.write_text("export TEST=true\n")
+    manifest = {"target_date": apply, "source_incumbent_target_date": "2026-09-19",
+        "selected_release_sha": selected, "env_file": str(env_path),
+        "env_sha256": bootstrap._digest_bytes(env_path.read_bytes()),
+        "selected_families": []}
+    manifest["manifest_sha256"] = bootstrap._digest_json(manifest)
+    manifest_path.write_text(json.dumps(manifest))
+    verify_path.write_text(json.dumps({"target_date": apply, "status": "pass",
+        "passed": True, "manifest_sha256": manifest["manifest_sha256"],
+        "pid": None, "pid_passed": None, "pid_env_available": True}))
+    assert mod.inspect_future_handoff(summary, source, report_dir=reports)["status"] == "stale"
+    direct = mod.verify_summary_handoff(
+        source, report_dir=reports, checklist_path=tmp_path / "unused.md",
+        require_tower=False, require_checklist=False,
+    )
+    assert "postclose_summary_handoff:future_preopen_generation_stale" in direct["issues"]
+    transition = bootstrap.publish_future_handoff_transition(
+        apply, data_dir=data
+    )
+    assert transition["status"] == "linked"
+    linked = mod.inspect_future_handoff(summary, source, report_dir=reports)
+    assert linked["status"] == "transitioned_no_pid"
+    assert linked["actual_pid_consumed"] is False
+    assert linked["valid_empty"] is True
+    direct = mod.verify_summary_handoff(
+        source, report_dir=reports, checklist_path=tmp_path / "unused.md",
+        require_tower=False, require_checklist=False,
+    )
+    assert "postclose_summary_handoff:future_preopen_generation_stale" not in direct["issues"]
+    assert mod.stage_overview(reports, source)["future_handoff"]["status"] == "transitioned_no_pid"
+
+    original_verify = verify_path.read_bytes()
+    verify = json.loads(original_verify)
+    verify["verified_at"] = "2026-09-28T08:00:00+09:00"
+    verify_path.write_text(json.dumps(verify))
+    assert mod.inspect_future_handoff(summary, source, report_dir=reports)["status"] == "stale"
+    retry = bootstrap.publish_future_handoff_transition(apply, data_dir=data)
+    assert retry["status"] == "linked" and retry["path"] != transition["path"]
+    assert Path(transition["path"]).is_file() and Path(retry["path"]).is_file()
+    assert mod.inspect_future_handoff(summary, source, report_dir=reports)["status"] == "transitioned_no_pid"
+    later_source = "2026-09-24"
+    later_summary = {**summary, "date": later_source,
+        "preopen_consumption_receipt": {**summary["preopen_consumption_receipt"],
+                                         "source_date": later_source}}
+    later_path = summary_path.with_name(f"runtime_approval_summary_{later_source}.json")
+    later_path.write_text(json.dumps(later_summary))
+    both = bootstrap.publish_future_handoff_transition(apply, data_dir=data)
+    assert both["status"] == "linked" and len(both["transitions"]) == 2
+    assert {row["source_date"] for row in both["transitions"]} == {source, later_source}
+    assert mod.inspect_future_handoff(summary, source, report_dir=reports)["status"] == "transitioned_no_pid"
+    verify_path.write_bytes(original_verify)
+    failed_verify = json.loads(original_verify)
+    failed_verify.update(status="fail", passed=False)
+    verify_path.write_text(json.dumps(failed_verify))
+    assert mod.inspect_future_handoff(summary, source, report_dir=reports)["status"] == "rejected"
+    pid_verify = json.loads(original_verify)
+    pid_verify.update(pid=4321, pid_passed=True)
+    verify_path.write_text(json.dumps(pid_verify))
+    pid_state = mod.inspect_future_handoff(summary, source, report_dir=reports)
+    assert pid_state["status"] == "stale"
+    assert pid_state["pid_receipt_present"] is True
+    assert pid_state["actual_pid_consumed"] is False
+    summary["preopen_consumption_state"] = "off"
+    summary_path.write_text(json.dumps(summary))
+    assert mod.inspect_future_handoff(summary, source, report_dir=reports)["status"] == "off"
+    assert bootstrap.publish_future_handoff_transition(
+        apply, data_dir=data, source_date=source)["status"] == "off"
+    summary["preopen_consumption_state"] = "pending"
+    summary_path.write_text(json.dumps(summary))
+    verify_path.write_bytes(original_verify)
+    original_manifest = manifest_path.read_bytes()
+    wrong_date = json.loads(original_manifest)
+    wrong_date["target_date"] = "2026-09-29"
+    manifest_path.write_text(json.dumps(wrong_date))
+    assert mod.inspect_future_handoff(summary, source, report_dir=reports)["status"] == "stale"
+    manifest_path.write_bytes(original_manifest)
+    selection_path.write_text(json.dumps({"schema": "runtime_release_selection_v1",
+                                          "git_commit": "c" * 40, "release_root": "/releases/new"}))
+    assert mod.inspect_future_handoff(summary, source, report_dir=reports)["status"] == "stale"
+    selection_path.write_text(json.dumps({"schema": "runtime_release_selection_v1",
+                                          "git_commit": selected, "release_root": "/releases/selected"}))
+
+    summary["preopen_consumption_state"] = "verified"
+    receipt = summary["preopen_consumption_receipt"]
+    receipt["manifest_sha256"] = bootstrap._digest_bytes(manifest_path.read_bytes())
+    receipt["verification_sha256"] = bootstrap._digest_bytes(verify_path.read_bytes())
+    receipt["release_selection_sha256"] = bootstrap._digest_bytes(selection_path.read_bytes())
+    receipt["selected_release_commit"] = selected
+    summary_path.write_text(json.dumps(summary))
+    assert mod.inspect_future_handoff(summary, source, report_dir=reports)["status"] == "same_generation_no_pid"
+    pid_verify = json.loads(original_verify)
+    pid_verify.update(pid=4321, pid_passed=True)
+    verify_path.write_text(json.dumps(pid_verify))
+    receipt["verification_sha256"] = bootstrap._digest_bytes(verify_path.read_bytes())
+    summary_path.write_text(json.dumps(summary))
+    pid_state = mod.inspect_future_handoff(summary, source, report_dir=reports)
+    assert pid_state["status"] == "same_generation_pid_receipt_unconfirmed"
+    assert pid_state["pid_receipt_present"] is True
+    assert pid_state["actual_pid_consumed"] is False
+    selection_path.write_text(json.dumps({"schema": "runtime_release_selection_v1",
+                                          "git_commit": selected, "release_root": "/releases/moved"}))
+    assert mod.inspect_future_handoff(summary, source, report_dir=reports)["status"] == "stale"
+    selection_path.write_text(json.dumps({"schema": "runtime_release_selection_v1",
+                                          "git_commit": "c" * 40, "release_root": "/releases/new"}))
+    assert mod.inspect_future_handoff(summary, source, report_dir=reports)["status"] == "stale"
 
 
 def test_schema_v3_pre_retirement_source_uses_direct_handoff(tmp_path):
@@ -589,6 +724,87 @@ def test_stage_prerequisites_and_changed_generation(stage_environment):
     assert run('machine_timing')['status'] == 'deferred'
 
 
+def test_pre_submit_stage_rejects_unsealed_raw_generation(tmp_path, monkeypatch):
+    from src.engine.automation import postclose_summary_handoff as handoff
+
+    day = "2026-09-23"
+    reports = tmp_path / "data" / "report"
+    monkeypatch.setattr(handoff, "_stage_code", lambda *args, **kwargs: "fixture-code")
+    monkeypatch.setattr(handoff, "stage_commands", lambda *args, **kwargs: [["fixture"]])
+    called = []
+    result = handoff.run_stage(
+        "pre_submit_delay", day, report_dir=reports, project=tmp_path,
+        runner=lambda *args, **kwargs: called.append(args) or 0,
+    )
+    assert result["status"] == "deferred"
+    assert result["exit_code"] == 75
+    assert "raw_source_missing" in " ".join(result["issues"])
+    assert called == []
+    off = handoff.run_stage(
+        "pre_submit_delay", day, report_dir=reports, project=tmp_path,
+        runner=lambda *args, **kwargs: called.append(args) or 0, off=True,
+    )
+    assert off["status"] == "off"
+    assert handoff.stage_receipt_issues(reports, day, "pre_submit_delay") == []
+    assert called == []
+
+
+def test_pre_submit_receipt_binds_sealed_source_generation(tmp_path, monkeypatch):
+    from src.engine.pipeline_event_summary import (
+        ProducerSummaryCompactor, seal_producer_summary_source,
+    )
+
+    day = "2026-09-23"
+    data = tmp_path / "data"
+    reports = data / "report"
+    raw = data / "pipeline_events" / f"pipeline_events_{day}.jsonl"
+    raw.parent.mkdir(parents=True)
+    event = {"event_type": "pipeline_event", "pipeline": "ENTRY_PIPELINE",
+             "stage": "scalping_scanner_fast_precheck", "stock_code": "005930",
+             "emitted_at": f"{day}T10:00:00", "emitted_date": day,
+             "record_id": 1, "fields": {}}
+    raw.write_text(json.dumps(event) + "\n")
+    compactor = ProducerSummaryCompactor(
+        summary_dir=data / "pipeline_event_summaries", mode="shadow",
+    )
+    compactor.submit(event)
+    compactor.flush()
+    manifest = seal_producer_summary_source(data, day)
+    monkeypatch.setattr(mod, "_safe_stage_output_issues", lambda *args: [])
+    paths = mod.stage_artifacts(reports, day, "pre_submit_delay")
+    for path in paths.values():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"target_date": day}))
+    receipt = {"schema": mod.STAGE_SCHEMA, "stage_id": "pre_submit_delay",
+               "source_date": day, "status": "succeeded", "exit_code": 0,
+               "run_id": "fixture-run", "stage_code_sha256": "fixture-code",
+               "pipeline_source_generation_sha256": manifest["raw_source_ledger"]["ledger_sha256"],
+               "sources": mod._stage_sources(paths), "prerequisite_receipts": {},
+               "input_sources": mod._stage_sources(mod.stage_input_paths(reports, day, "pre_submit_delay"))}
+    mod._stage_write(mod.stage_path(reports, day, "pre_submit_delay"), receipt)
+    assert mod.stage_receipt_issues(reports, day, "pre_submit_delay", code_hash="fixture-code") == []
+
+    raw.write_text(raw.read_text() + json.dumps({**event, "record_id": 2}) + "\n")
+    assert "pre_submit_delay:raw_generation_changed" in mod.stage_receipt_issues(
+        reports, day, "pre_submit_delay", code_hash="fixture-code",
+    )
+
+    raw.write_text(json.dumps(event) + "\n")
+    monkeypatch.setattr(mod, "_stage_code", lambda *args, **kwargs: "fixture-code")
+    monkeypatch.setattr(mod, "stage_commands", lambda *args, **kwargs: [["fixture"]])
+
+    def drift_during_consumer(*args, **kwargs):
+        raw.write_text(raw.read_text() + json.dumps({**event, "record_id": 3}) + "\n")
+        return 0
+
+    result = mod.run_stage(
+        "pre_submit_delay", day, report_dir=reports, project=tmp_path,
+        runner=drift_during_consumer,
+    )
+    assert result["status"] == "failed"
+    assert "pipeline_source_quality:raw_generation_changed" in result["issues"]
+
+
 def test_summary_handoff_tracks_later_active_stage_generation(stage_environment):
     h, day, report, run, _produce = stage_environment
     assert run('summary_handoff')['status'] == 'succeeded'
@@ -614,6 +830,148 @@ def test_committed_label_intake_binds_payload_and_rejects_partial_file(stage_env
     label.write_text('{')
     assert run('outcome_labels', execute=False)['status'] == 'failed'
     assert run('collector_recommendation')['status'] == 'deferred'
+
+
+def test_exact_ai_storage_compression_preserves_stage_generation(stage_environment):
+    from datetime import date
+    from src.engine.scalping.micro_reversion.storage_maintenance import maintain_report_artifact_storage
+
+    h, day, report, run, produce = stage_environment
+    payload = report.parent / 'ai_decision_payloads' / f'ai_decision_payloads_{day}.jsonl'
+    payload.parent.mkdir(parents=True)
+    payload.write_text(json.dumps({
+        'schema': 'ai_decision_payload_v1', 'captured_at': day + 'T20:00:00+09:00',
+    }) + '\n')
+    produce(['fixture', 'outcome_labels'])
+    assert run('outcome_labels', execute=False)['status'] == 'succeeded'
+    assert run('collector_recommendation')['status'] == 'succeeded'
+    label = h.stage_artifacts(report, day, 'outcome_labels')['ai_decision_outcome_labels']
+    before = {path: (path.stat().st_size, h._stage_sources({'source': path})['source']['sha256'])
+              for path in (payload, label)}
+
+    result = maintain_report_artifact_storage(
+        [], as_of_date=date.fromisoformat('2026-09-22'), apply=True,
+        exact_ai_artifact_roots=[payload.parent, label.parent],
+        low_disk_watermark_bytes=0, critical_disk_watermark_bytes=0,
+    )
+    assert result['status'] == 'pass'
+    receipts = {row['logical_path']: row for row in
+                result['exact_ai_artifact_maintenance']['artifact_receipts']}
+    for path, (size, sha) in before.items():
+        assert not path.exists()
+        assert path.with_suffix(path.suffix + '.gz').exists()
+        assert receipts[str(path)]['trade_date'] == day
+        assert receipts[str(path)]['decoded_content_sha256'] == sha
+        assert receipts[str(path)]['decoded_content_bytes'] == size
+        assert h._stage_sources({'source': path})['source'] == {
+            'path': str(path.resolve()), 'sha256': sha,
+        }
+    assert h.stage_receipt_issues(report, day, 'outcome_labels') == []
+    assert h.stage_receipt_issues(report, day, 'collector_recommendation') == []
+
+
+@pytest.mark.parametrize('source_kind', ['payload', 'label'])
+@pytest.mark.parametrize('damage', ['corrupt', 'wrong_date', 'changed', 'missing'])
+def test_compressed_exact_ai_stage_rejects_source_drift(stage_environment, source_kind, damage):
+    from datetime import date
+    from src.engine.scalping.micro_reversion.storage_maintenance import (
+        maintain_report_artifact_storage, validate_exact_ai_artifact_source,
+    )
+
+    h, day, report, run, produce = stage_environment
+    payload = report.parent / 'ai_decision_payloads' / f'ai_decision_payloads_{day}.jsonl'
+    payload.parent.mkdir(parents=True)
+    payload.write_text(json.dumps({
+        'schema': 'ai_decision_payload_v1', 'captured_at': day + 'T20:00:00+09:00',
+    }) + '\n')
+    produce(['fixture', 'outcome_labels'])
+    assert run('outcome_labels', execute=False)['status'] == 'succeeded'
+    assert run('collector_recommendation')['status'] == 'succeeded'
+    label = h.stage_artifacts(report, day, 'outcome_labels')['ai_decision_outcome_labels']
+    source = payload if source_kind == 'payload' else label
+    original = source.read_bytes()
+    result = maintain_report_artifact_storage(
+        [], as_of_date=date.fromisoformat('2026-09-22'), apply=True,
+        exact_ai_artifact_roots=[payload.parent, label.parent],
+        low_disk_watermark_bytes=0, critical_disk_watermark_bytes=0,
+    )
+    assert result['status'] == 'pass'
+    compressed = source.with_suffix(source.suffix + '.gz')
+    assert h.stage_receipt_issues(report, day, 'outcome_labels') == []
+    assert h.stage_receipt_issues(report, day, 'collector_recommendation') == []
+
+    if damage == 'missing':
+        compressed.unlink()
+    elif damage == 'corrupt':
+        compressed.write_bytes(b'not a gzip stream')
+    else:
+        changed = json.loads(original)
+        if damage == 'wrong_date':
+            changed['captured_at' if source_kind == 'payload' else 'target_date'] = (
+                '2026-09-20T20:00:00+09:00' if source_kind == 'payload' else '2026-09-20'
+            )
+        else:
+            changed['revision'] = 2
+        compressed.write_bytes(gzip.compress((json.dumps(changed) + '\n').encode()))
+
+    expected = ('input_generation_changed' if source_kind == 'payload'
+                else 'output_generation_changed')
+    assert h.stage_receipt_issues(report, day, 'outcome_labels') == [f'outcome_labels:{expected}']
+    assert h.stage_receipt_issues(report, day, 'collector_recommendation') == [
+        'collector_recommendation:input_generation_changed'
+    ]
+    if damage == 'changed':
+        assert (validate_exact_ai_artifact_source(source, expected_date=date.fromisoformat(day))
+                ['decoded_content_sha256'] != hashlib.sha256(original).hexdigest())
+    else:
+        with pytest.raises((OSError, ValueError, FileNotFoundError)):
+            validate_exact_ai_artifact_source(source, expected_date=date.fromisoformat(day))
+    compressed.write_bytes(gzip.compress(original))
+    assert h.stage_receipt_issues(report, day, 'outcome_labels') == []
+    assert h.stage_receipt_issues(report, day, 'collector_recommendation') == []
+
+
+@pytest.mark.parametrize('source_kind', ['payload', 'label'])
+def test_compressed_exact_ai_stage_requires_matching_plain_copy(stage_environment, source_kind):
+    from datetime import date
+    from src.engine.scalping.micro_reversion.storage_maintenance import maintain_report_artifact_storage
+
+    h, day, report, run, produce = stage_environment
+    payload = report.parent / 'ai_decision_payloads' / f'ai_decision_payloads_{day}.jsonl'
+    payload.parent.mkdir(parents=True)
+    payload.write_text(json.dumps({
+        'schema': 'ai_decision_payload_v1', 'captured_at': day + 'T20:00:00+09:00',
+    }) + '\n')
+    produce(['fixture', 'outcome_labels'])
+    assert run('outcome_labels', execute=False)['status'] == 'succeeded'
+    assert run('collector_recommendation')['status'] == 'succeeded'
+    label = h.stage_artifacts(report, day, 'outcome_labels')['ai_decision_outcome_labels']
+    source = payload if source_kind == 'payload' else label
+    original = source.read_bytes()
+    assert maintain_report_artifact_storage(
+        [], as_of_date=date.fromisoformat('2026-09-22'), apply=True,
+        exact_ai_artifact_roots=[source.parent],
+        low_disk_watermark_bytes=0, critical_disk_watermark_bytes=0,
+    )['status'] == 'pass'
+    source.write_bytes(original)
+    assert h.stage_receipt_issues(report, day, 'outcome_labels') == []
+    source.write_bytes(original + b'{}\n')
+    expected = ('input_generation_changed' if source_kind == 'payload'
+                else 'output_generation_changed')
+    assert h.stage_receipt_issues(report, day, 'outcome_labels') == [
+        f'outcome_labels:{expected}'
+    ]
+
+
+def test_exact_ai_stage_keeps_off_and_failed_terminal_semantics(stage_environment):
+    h, day, report, run, _produce = stage_environment
+    payload = report.parent / 'ai_decision_payloads' / f'ai_decision_payloads_{day}.jsonl.gz'
+    payload.parent.mkdir(parents=True)
+    payload.write_bytes(b'broken gzip')
+    assert run('outcome_labels', off=True)['status'] == 'off'
+    assert h.stage_receipt_issues(report, day, 'outcome_labels') == []
+    assert run('outcome_labels', runner=lambda *args, **kwargs: 9)['status'] == 'failed'
+    assert h.stage_receipt_issues(report, day, 'outcome_labels') == ['outcome_labels:failed']
 
 
 def test_stage_detects_input_change_during_collector(stage_environment):
@@ -665,6 +1023,111 @@ def test_stage_group_attempts_every_independent_owner_after_failure(monkeypatch)
     monkeypatch.setattr(h, 'run_stage', run)
     assert h._stage_main(['--stage','machine_group','--date','2026-09-21']) == 1
     assert set(seen) == set(h.STAGE_OWNER_GROUPS['machine'][:6]) | {'summary_handoff','research_capacity'}
+
+
+def test_closed_capacity_failure_blocks_allocation_and_controller_then_binds_native_generation(stage_environment, monkeypatch):
+    from datetime import date, datetime
+    from types import SimpleNamespace
+    from src.engine.monitoring import research_native_capacity_source as native
+    from src.engine.automation import postclose_done_controller as controller
+    from src.engine.automation import machine_research_closed_loop_refresh as refresh
+    from src.engine.monitoring import research_closed_loop as loop
+
+    h, day, report, run, produce = stage_environment
+    capacity_root = report.parent / 'runtime' / 'machine_research_closed_loop'
+    # A report marked complete, without its frozen native generation, is not a
+    # successful capacity terminal and must not admit allocation.
+    failed = run('research_capacity')
+    assert failed['status'] == 'failed'
+    assert 'research_capacity:native_source_invalid:' in failed['issues'][0]
+    assert run('research_allocation')['status'] == 'deferred'
+
+    monkeypatch.setattr(controller, 'DATA_DIR', report.parent)
+    monkeypatch.setattr(controller, 'REPORT_DIR', report / 'postclose_done_controller')
+    monkeypatch.setattr(h, 'stage_overview', lambda *args: {})
+    monkeypatch.setattr(controller, 'build_runtime_approval_summary',
+                        lambda *args: pytest.fail('blocked controller rebuilt summary'))
+    def blocked_controller(*args, **kwargs):
+        receipt = controller.build_postclose_done_controller(
+            day, summary_handoff_only=True, require_independent_producers=True)
+        assert receipt['status'] == 'blocked_independent_producer'
+        assert 'research_capacity:failed' in receipt['blocked_reasons']
+        assert receipt['final_verifier_status'] == 'not_run'
+        return 1
+    assert run('summary_handoff', runner=blocked_controller)['status'] == 'failed'
+
+    captured = datetime.fromisoformat(day + 'T20:06:00+09:00')
+    monkeypatch.setattr(native, 'datetime', SimpleNamespace(
+        now=lambda tz: captured, fromisoformat=datetime.fromisoformat,
+    ))
+    adapters = dict(
+        inventory=lambda token: ([], {'KRX','NXT'}, {'normalization_contract_complete': True}),
+        unfilled=lambda token: ([], {'normalization_contract_complete': True,
+                                     'request_succeeded': True}),
+        deposit=lambda token: None,
+        deposit_meta=lambda: dict(source='api_fresh', raw_amount=100000),
+        capacity=lambda *args, **kwargs: dict(
+            cash_only_orderable_amount=200000, cash_only_orderable_qty=10,
+            cash_orderable_contract_status='valid', capacity_source_sha256='a'*64,
+            capacity_contract_version=1, requested_stock_code='005930',
+            error='', capacity_observed_at=captured.isoformat()),
+    )
+    assert native.acquire(date.fromisoformat(day), directory=capacity_root,
+                          token='fixture', adapters=adapters)['status'] == 'complete'
+    repaired = run('research_capacity', runner=lambda *args, **kwargs: 0)
+    assert repaired['status'] == 'succeeded'
+    assert repaired['run_id'] != failed['run_id']
+    assert (h.stage_path(report, day, 'research_capacity').parent / 'attempts' /
+            f"research_capacity_{failed['run_id']}.json").exists()
+    assert set(repaired['input_sources']) == {'native_cash','native_inventory'}
+    assert h.stage_receipt_issues(report, day, 'research_capacity') == []
+
+    # Limit this fixture to capacity→allocation: widget/episode receipts are
+    # separate owners, represented by stable exact-date terminal files.
+    for stage in ('widget_policy', 'episode_policy'):
+        path = h.stage_path(report, day, stage)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({'source_date': day, 'stage_id': stage}))
+    original_issues = h.stage_receipt_issues
+    monkeypatch.setattr(h, 'stage_receipt_issues',
+                        lambda root, source_date, stage, **kw: [] if stage in {'widget_policy','episode_policy'}
+                        else original_issues(root, source_date, stage, **kw))
+    monkeypatch.setattr(refresh, 'validate_current_receipt', lambda *args, **kwargs: True)
+    allocation = run('research_allocation')
+    assert allocation['status'] == 'succeeded'
+    assert set(allocation['prerequisite_receipts']) == {
+        'widget_policy', 'episode_policy', 'research_capacity'
+    }
+    assert allocation['prerequisite_receipts']['research_capacity']['sha256'] == (
+        h._stage_sources({'capacity': h.stage_path(report, day, 'research_capacity')})['capacity']['sha256']
+    )
+    assert h.stage_receipt_issues(report, day, 'research_allocation') == []
+    downstream = controller.build_postclose_done_controller(
+        day, summary_handoff_only=True, require_independent_producers=True)
+    assert downstream['status'] == 'blocked_independent_producer'
+    assert not any('research_capacity:' in issue or 'research_allocation:' in issue
+                   for issue in downstream['blocked_reasons'])
+    assert downstream['final_verifier_status'] == 'not_run'
+    cash = capacity_root / 'native_capacity' / day / 'native_cash.json'
+    cash.write_text(cash.read_text() + '\n')
+    assert h.stage_receipt_issues(report, day, 'research_capacity') == [
+        'research_capacity:input_generation_changed'
+    ]
+    blocked_again = run('research_allocation')
+    assert blocked_again['status'] == 'deferred'
+    assert 'research_capacity:input_generation_changed' in blocked_again['issues']
+    assert (h.stage_path(report, day, 'research_allocation').parent / 'attempts' /
+            f"research_allocation_{allocation['run_id']}.json").exists()
+    downstream = controller.build_postclose_done_controller(
+        day, summary_handoff_only=True, require_independent_producers=True)
+    assert 'research_capacity:input_generation_changed' in downstream['blocked_reasons']
+    assert 'research_allocation:deferred' in downstream['blocked_reasons']
+
+
+def test_research_capacity_explicit_off_does_not_require_native_source(stage_environment):
+    h, day, report, run, _produce = stage_environment
+    assert run('research_capacity', off=True)['status'] == 'off'
+    assert h.stage_receipt_issues(report, day, 'research_capacity') == []
 
 
 def test_family_source_read_does_not_require_peer(tmp_path, monkeypatch):

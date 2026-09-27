@@ -44,6 +44,16 @@ FLUSH_GRACE_SEC = 120
 def _producer_timing(manifest: dict[str, Any], target_date: str) -> dict[str, Any]:
     """Operational measurements, never an inferred baseline delta or EV."""
     missing = {"status": "missing_or_unbound", "runtime_latency_improvement": None}
+    raw_ledger = manifest.get("raw_source_ledger")
+    producer_manifest_sha = producer_manifest_fingerprint(manifest)
+    if isinstance(raw_ledger, dict):
+        # A postclose source seal extends the manifest after the intraday
+        # timing receipt was published. Preserve that exact preseal receipt.
+        producer_manifest_sha = producer_manifest_fingerprint(
+            {key: value for key, value in manifest.items() if key != "raw_source_ledger"}
+        )
+        if raw_ledger.get("producer_manifest_preseal_sha256") != producer_manifest_sha:
+            return missing
     pid = manifest.get("last_writer_pid")
     if (
         type(pid) is not int
@@ -57,7 +67,7 @@ def _producer_timing(manifest: dict[str, Any], target_date: str) -> dict[str, An
         receipt.get("timing_contract") == PRODUCER_TIMING_CONTRACT
         and receipt.get("target_date") == target_date
         and receipt.get("writer_pid") == pid
-        and receipt.get("manifest_sha256") == producer_manifest_fingerprint(manifest)
+        and receipt.get("manifest_sha256") == producer_manifest_sha
         and receipt.get("runtime_effect") is False
         and receipt.get("allowed_runtime_apply") is False
     ):

@@ -112,6 +112,7 @@ def _direct_checklist_checks(
     )
     apply_date = str(preopen.get("apply_date") or _next_krx_trading_day(target_date))
     checklist_path = stage2_checklist_path(apply_date)
+    checklist_sha256 = _sha(checklist_path)
     handoff = verify_summary_handoff(
         target_date,
         report_dir=REPORT_DIR,
@@ -146,14 +147,99 @@ def _direct_checklist_checks(
     normalized = checklist_text.replace("- [x]", "- [ ]").replace("- [X]", "- [ ]")
     if any(_render_task(task, apply_date)[0] not in normalized for task in expected_tasks):
         issues.append("direct_checklist_schedule_contract_mismatch")
+    if checklist_sha256 != _sha(checklist_path):
+        issues.append("direct_checklist_changed_during_verification")
     return {
         "status": "pass" if not issues else "fail",
         "path": str(checklist_path),
+        "verified_sha256": checklist_sha256,
         "apply_date": apply_date,
         "expected_task_ids": expected_ids,
         "actual_task_ids": actual_ids,
         "handoff": handoff,
     }, issues
+
+
+def _stage_generation(target_date: str) -> dict[str, dict[str, Any]]:
+    """Snapshot stage terminal bytes and identity without including the summary/controller."""
+    from src.engine.automation.postclose_summary_handoff import active_stage_names, stage_path
+
+    result = {}
+    for stage in active_stage_names(target_date):
+        if stage == "summary_handoff":
+            continue
+        path = stage_path(REPORT_DIR, target_date, stage)
+        value = _load(path)
+        result[stage] = {
+            "sha256": _sha(path),
+            "source_date": value.get("source_date"),
+            "publication_date": value.get("publication_date"),
+            "effective_date": value.get("effective_date"),
+            "run_id": value.get("run_id"),
+            "receipt_sha256": value.get("receipt_sha256"),
+            "status": value.get("status"),
+            "exit_code": value.get("exit_code"),
+            "input_sources": value.get("input_sources"),
+            "output_sources": value.get("sources"),
+            "prerequisite_receipts": value.get("prerequisite_receipts"),
+        }
+    return result
+
+
+def current_strict_receipt_issues(
+    attempt_path: Path, target_date: str, *, require_whole_native_chain: bool = False
+) -> list[str]:
+    """Check a stored strict attempt against the current generation, read only."""
+    report = _load(Path(attempt_path))
+    binding = report.get("generation_binding")
+    if (report.get("date") != target_date or report.get("status") != "pass"
+            or not isinstance(binding, dict)):
+        return ["strict_receipt_missing_or_invalid_generation"]
+    issues = []
+    attempt = report.get("verification_attempt") or {}
+    try:
+        if (attempt.get("immutable") is not True
+                or Path(str(attempt.get("path") or "")).resolve(strict=True)
+                != Path(attempt_path).resolve(strict=True)):
+            issues.append("strict_attempt_identity_invalid")
+    except OSError:
+        issues.append("strict_attempt_identity_invalid")
+    if require_whole_native_chain and (
+        report.get("verification_scope") != "whole_native_chain"
+        or report.get("whole_native_chain_done_claimed") is not True
+    ):
+        issues.append("strict_whole_chain_scope_missing")
+    if binding.get("source_date") != target_date:
+        issues.append("strict_source_date_mismatch")
+    if binding.get("summary_sha256") != _sha(_artifact_paths(target_date)["runtime_summary"]):
+        issues.append("strict_summary_generation_stale")
+    terminal = _load(_artifact_paths(target_date)["postclose_status"])
+    if (binding.get("main_terminal_sha256") != _sha(_artifact_paths(target_date)["postclose_status"])
+            or binding.get("main_run_id") != terminal.get("run_id")
+            or report.get("run_id") != terminal.get("run_id")):
+        issues.append("strict_main_terminal_generation_stale")
+    checklist = (report.get("checklist_handoff") or {}).get("path")
+    if binding.get("checklist_sha256") != _sha(Path(checklist or "")):
+        issues.append("strict_checklist_generation_stale")
+    expected_stages = binding.get("stages")
+    current_stages = _stage_generation(target_date)
+    if not isinstance(expected_stages, dict) or set(expected_stages) != set(current_stages):
+        issues.append("strict_stage_set_stale")
+    else:
+        for stage, current in current_stages.items():
+            if expected_stages[stage] != current:
+                issues.append(f"strict_stage_generation_stale:{stage}")
+    if require_whole_native_chain:
+        fresh = build_threshold_cycle_postclose_verification(
+            target_date, require_summary_handoff=True, require_whole_native_chain=True
+        )
+        issues.extend(f"strict_current_contract:{issue}" for issue in fresh["issues"])
+        if (binding.get("summary_sha256") != _sha(_artifact_paths(target_date)["runtime_summary"])
+                or binding.get("main_terminal_sha256") != _sha(_artifact_paths(target_date)["postclose_status"])
+                or binding.get("checklist_sha256") != _sha(Path(checklist or ""))
+                or expected_stages != _stage_generation(target_date)):
+            issues.append("strict_generation_changed_during_recheck")
+    return issues
 
 
 def _terminal_issues(target_date: str, terminal: dict, *, seal: bool = False,
@@ -207,12 +293,18 @@ def build_threshold_cycle_postclose_verification(
     require_done_marker: bool = True,
     disabled_stages: set[str] | None = None,
     require_summary_handoff: bool = False,
+    require_whole_native_chain: bool = False,
     allow_pending_entry_replay: bool = False,
     seal_main_run: bool = False,
     expected_run_id: str | None = None,
     effective_date: str | None = None,
 ) -> dict[str, Any]:
+    if require_whole_native_chain and (not require_summary_handoff or seal_main_run or not require_done_marker):
+        raise ValueError("whole_native_chain_requires_terminal_and_summary_handoff")
     paths = _artifact_paths(target_date)
+    initial_summary_sha = _sha(paths["runtime_summary"]) if require_summary_handoff else None
+    initial_terminal_sha = _sha(paths["postclose_status"]) if require_summary_handoff else None
+    initial_stages = _stage_generation(target_date) if require_summary_handoff else {}
     summary = _load(paths["runtime_summary"])
     postclose = _load(paths["postclose_status"])
     checks, issues = _direct_source_checks(summary)
@@ -265,15 +357,41 @@ def build_threshold_cycle_postclose_verification(
         issues.extend(checklist_issues)
     elif require_summary_handoff and paths["runtime_summary"].exists():
         checklist_handoff["status"] = "blocked_invalid_summary"
+    stages = _stage_generation(target_date) if require_summary_handoff else {}
+    if require_summary_handoff and (
+        initial_summary_sha != _sha(paths["runtime_summary"])
+        or initial_terminal_sha != _sha(paths["postclose_status"])
+        or initial_stages != stages
+        or (checklist_handoff.get("path") is not None
+            and checklist_handoff.get("verified_sha256") != _sha(Path(checklist_handoff["path"])))
+    ):
+        issues.append("strict_source_generation_changed_during_verification")
+    if require_whole_native_chain:
+        from src.engine.automation.postclose_summary_handoff import stage_receipt_issues
+        for stage in stages:
+            if stage_receipt_issues(REPORT_DIR, target_date, stage):
+                issues.append(f"postclose_stage_invalid:{stage}")
+    binding = (
+        {
+            "source_date": target_date,
+            "summary_sha256": _sha(paths["runtime_summary"]),
+            "main_terminal_sha256": _sha(paths["postclose_status"]),
+            "main_run_id": postclose.get("run_id"),
+            "checklist_sha256": checklist_handoff.get("verified_sha256"),
+            "stages": stages,
+        }
+        if require_summary_handoff else None
+    )
     status = "pass" if not issues else "fail"
     return {
         "schema_version": 3,
         "report_type": "threshold_cycle_postclose_verification",
-        "verification_scope": "main_precommit" if seal_main_run else ("main_terminal" if require_done_marker else "preterminal"),
-        "whole_native_chain_done_claimed": False,
+        "verification_scope": "main_precommit" if seal_main_run else ("whole_native_chain" if require_whole_native_chain else ("main_terminal" if require_done_marker else "preterminal")),
+        "whole_native_chain_done_claimed": require_whole_native_chain and status == "pass",
         "run_id": postclose.get("run_id"),
         "code_commit": postclose.get("code_commit"),
-        "completion_state": "failed" if issues else ("preterminal_verified" if not require_done_marker else "main_verified"),
+        "completion_state": "failed" if issues else ("whole_chain_verified" if require_whole_native_chain else ("preterminal_verified" if not require_done_marker else "main_verified")),
+        "generation_binding": binding,
         "date": target_date,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "status": status,

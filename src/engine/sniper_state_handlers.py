@@ -294,6 +294,7 @@ from src.trading.market.quote_consistency import (
 from src.trading.order.tick_utils import clamp_price_to_tick, move_price_down_by_bps
 from src.trading.order.owner_custody_registry import (
     OwnerRegistryError,
+    broker_account_key,
     default_order_owner_registry,
     main_owner_context,
 )
@@ -71159,6 +71160,22 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 reason=type(exc).__name__, actual_order_submitted=False,
                 broker_order_forbidden=True, runtime_effect=True)
             break
+        # Observation only. The order adapter independently resolves the
+        # exact-date policy; a failed read here cannot authorize or veto BUY.
+        try:
+            from src.trading.config.symbol_owner_policy import resolve_symbol_owner_policy
+            buy_owner_policy = resolve_symbol_owner_policy(
+                code, target_date=datetime.now(_KST).date())
+            buy_owner_policy_fields = {
+                "buy_owner_policy_date": buy_owner_policy.target_date,
+                "buy_owner_policy_selected": buy_owner_policy.symbol_selected,
+                "buy_owner_policy_coexistence": buy_owner_policy.coexistence_enabled,
+                "buy_owner_policy_hash": buy_owner_policy.policy_hash,
+                "buy_owner_policy_reason": buy_owner_policy.reason,
+            }
+        except Exception as exc:
+            buy_owner_policy_fields = {"buy_owner_policy_observation_gap":
+                                       type(exc).__name__}
         if sequential_first:
             try:
                 first_intent, intent_status = _initial_quantity_prepare_first_submit(
@@ -71419,6 +71436,37 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 "tick_aggressor_trusted_count"
             )
         order_sent_ts = route_recorded_at
+        try:
+            buy_parent_id = str(
+                submit_attempt_fields(stock, code).get("entry_submit_attempt_id") or ""
+            ).strip()
+        except Exception:
+            buy_parent_id = ""
+        buy_child_id = f"{buy_parent_id}:{ord_no}" if buy_parent_id else ""
+        try:
+            buy_account_key = broker_account_key() if buy_owner_context else ""
+        except OwnerRegistryError:
+            # The broker has already accepted this order. Keep the observer
+            # incomplete without changing the order path or inventing custody.
+            buy_account_key = ""
+        buy_owner_type = buy_owner_context.owner_type if buy_owner_context else ""
+        buy_owner_id = buy_owner_context.owner_id if buy_owner_context else ""
+        buy_intent_id = str(res.get("owner_registry_intent_id") or "").strip()
+        buy_registry_mode = (
+            "registry_managed" if buy_intent_id else
+            "single_owner_unregistered" if (
+                buy_owner_context is not None and buy_account_key
+                and buy_owner_policy_fields.get("buy_owner_policy_date")
+                    == datetime.fromtimestamp(order_sent_ts, _KST).date().isoformat()
+                and buy_owner_policy_fields.get("buy_owner_policy_selected") is False
+                and buy_owner_policy_fields.get("buy_owner_policy_coexistence") is False
+            ) else "unknown"
+        )
+        buy_plan = planned_order.get("entry_split_order_probe_continuation")
+        buy_planned_qty = (
+            _safe_int(buy_plan.get("requested_qty"), 0)
+            if isinstance(buy_plan, dict) else None
+        )
         successful_orders.append(
             {
                 "tag": request["tag"],
@@ -71432,6 +71480,11 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 "status": "OPEN",
                 "filled_qty": 0,
                 "sent_at": order_sent_ts,
+                "buy_parent_id": buy_parent_id,
+                "buy_child_id": buy_child_id,
+                "owner_registry_intent_id": buy_intent_id,
+                "buy_registry_mode": buy_registry_mode,
+                "buy_planned_qty": buy_planned_qty,
                 **({
                     "initial_quantity_leg_index": 0,
                     "entry_submit_attempt_id": stock["initial_quantity_bundle"]["attempt_id"],
@@ -71623,6 +71676,15 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             stock,
             code,
             "order_leg_sent",
+            buy_parent_id=buy_parent_id,
+            buy_child_id=buy_child_id,
+            buy_owner_type=buy_owner_type,
+            buy_owner_id=buy_owner_id,
+            buy_account_key=buy_account_key,
+            owner_registry_intent_id=buy_intent_id,
+            buy_registry_mode=buy_registry_mode,
+            **buy_owner_policy_fields,
+            buy_planned_qty=buy_planned_qty,
             **({
                 "initial_quantity_order_start_at":
                     stock["initial_quantity_bundle"]["schedule"]["order_start_at"],

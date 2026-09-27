@@ -1903,6 +1903,44 @@ def _exact_ai_physical_receipts(logical: Path) -> list[dict[str, object]]:
     return receipts
 
 
+def validate_exact_ai_artifact_source(
+    logical: Path,
+    *,
+    expected_date: date,
+    generation: ArtifactGenerationLease | None = None,
+) -> dict[str, object]:
+    """Return the decoded generation of an exact-date AI artifact.
+
+    The storage producer and the postclose stage reader use the same logical
+    path/date contract. Physical gzip bytes never replace decoded source SHA.
+    """
+    logical = Path(logical).absolute()
+    contract = EXACT_AI_ARTIFACT_ROOT_CONTRACTS.get(logical.parent.name)
+    if contract is None:
+        raise ValueError(f"exact_ai_artifact_root_invalid:{logical}")
+    pattern, kind, schema, timestamp_field = contract
+    matched = pattern.fullmatch(logical.name)
+    if matched is None or matched.group(1) != expected_date.isoformat():
+        raise ValueError(f"exact_ai_artifact_date_path_invalid:{logical}")
+    validation = (
+        _validate_exact_ai_jsonl(
+            logical, trade_date=expected_date, expected_schema=schema,
+            timestamp_field=timestamp_field, generation=generation,
+        )
+        if kind == "jsonl"
+        else _validate_exact_ai_json(
+            logical, trade_date=expected_date, expected_schema=schema,
+            generation=generation,
+        )
+    )
+    return {
+        "logical_path": str(logical),
+        "trade_date": expected_date.isoformat(),
+        "artifact_kind": kind,
+        **validation,
+    }
+
+
 def _maintain_exact_ai_artifact_storage(
     roots: Sequence[Path],
     *,
@@ -1921,7 +1959,7 @@ def _maintain_exact_ai_artifact_storage(
     normalized_roots: list[Path] = []
     logical_candidates: dict[
         Path,
-        tuple[Path, date, str, str, str],
+        tuple[Path, date, str],
     ] = {}
     receipts: list[dict[str, object]] = []
     census: dict[str, object] = {
@@ -1994,7 +2032,7 @@ def _maintain_exact_ai_artifact_storage(
         if root in normalized_roots:
             continue
         normalized_roots.append(root)
-        pattern, artifact_kind, expected_schema, timestamp_field = contract
+        pattern, artifact_kind, _, _ = contract
         try:
             children = sorted(root.iterdir())
         except OSError as exc:
@@ -2052,16 +2090,12 @@ def _maintain_exact_ai_artifact_storage(
                 root,
                 trade_date,
                 artifact_kind,
-                expected_schema,
-                timestamp_field,
             )
 
     for logical, (
         _,
         trade_date,
         artifact_kind,
-        expected_schema,
-        timestamp_field,
     ) in sorted(logical_candidates.items(), key=lambda item: str(item[0])):
         physical_bytes = 0
         try:
@@ -2092,21 +2126,8 @@ def _maintain_exact_ai_artifact_storage(
                     if pinned_generation is not None
                     else logical
                 )
-                validation = (
-                    _validate_exact_ai_jsonl(
-                        logical,
-                        trade_date=trade_date,
-                        expected_schema=expected_schema,
-                        timestamp_field=timestamp_field,
-                        generation=pinned_generation,
-                    )
-                    if artifact_kind == "jsonl"
-                    else _validate_exact_ai_json(
-                        logical,
-                        trade_date=trade_date,
-                        expected_schema=expected_schema,
-                        generation=pinned_generation,
-                    )
+                validation = validate_exact_ai_artifact_source(
+                    logical, expected_date=trade_date, generation=pinned_generation,
                 )
                 physical_receipts = list(validation.pop("physical_representations", []))
                 if not physical_receipts:

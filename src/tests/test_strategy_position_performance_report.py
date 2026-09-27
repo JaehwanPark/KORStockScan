@@ -1,4 +1,5 @@
 from contextlib import contextmanager
+import gzip
 import json
 
 import pytest
@@ -428,7 +429,7 @@ def test_source_warning_preserves_prior_generation_and_writes_blocked_receipt(
     monkeypatch.setattr(
         report_mod,
         "_build_trade_fact_rows",
-        lambda _target_date: ([], ["DB connection failed"]),
+        lambda _target_date, **_kwargs: ([], ["DB connection failed"]),
     )
     monkeypatch.setattr(report_mod._DB, "init_db", lambda: None)
     monkeypatch.setattr(report_mod._DB, "get_session", _session)
@@ -482,3 +483,310 @@ def test_existing_scanner_scan_projects_only_filled_ids_and_exact_date(monkeypat
     report_mod._load_scanner_promotion_events(day, scale_in_projection=projection)
     assert len(projection["rows"]) == 1
     assert projection["rows"][0]["record_id"] == "1"
+
+
+def test_scanner_promotion_reader_replays_gzip_only_source_into_fact(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "_PIPELINE_EVENTS_DIR", tmp_path)
+    day = "2026-09-23"
+    event = {"stage": "scalping_scanner_candidate_promoted",
+             "emitted_at": f"{day}T09:00:00+09:00", "stock_code": "005930",
+             "fields": {"scanner_promotion_id": "PROMO-1",
+                        "scanner_promotion_reason": "price_jump_start_acceleration"}}
+    logical = tmp_path / f"pipeline_events_{day}.jsonl"
+    with gzip.open(f"{logical}.gz", "wt", encoding="utf-8") as handle:
+        handle.write(json.dumps(event) + "\n")
+    events = report_mod._load_scanner_promotion_events(day)
+    assert [row["scanner_promotion_id"] for row in events["005930"]] == ["PROMO-1"]
+    fact = {"strategy": "SCALPING", "position_tag": "SCANNER",
+            "stock_code": "005930", "buy_time": f"{day} 09:05:00"}
+    assert report_mod._enrich_scanner_provenance([fact], day)[0]["scanner_provenance_status"] == "matched"
+
+
+@pytest.mark.parametrize("representation", ["plain", "gzip", "both"])
+def test_scanner_source_representations_have_one_logical_generation(
+    monkeypatch, tmp_path, representation,
+):
+    monkeypatch.setattr(report_mod, "_PIPELINE_EVENTS_DIR", tmp_path)
+    day = "2026-09-23"
+    event = {"stage": "scalping_scanner_candidate_promoted",
+             "emitted_at": f"{day}T09:00:00+09:00", "emitted_date": day,
+             "storage_partition_date": day, "stock_code": "005930",
+             "fields": {"scanner_promotion_id": "PROMO-1", "venue": "KRX",
+                        "market_session_bucket": "KRX_REGULAR"}}
+    logical = tmp_path / f"pipeline_events_{day}.jsonl"
+    raw = (json.dumps(event) + "\n").encode()
+    if representation in {"plain", "both"}:
+        logical.write_bytes(raw)
+    if representation in {"gzip", "both"}:
+        with gzip.open(f"{logical}.gz", "wb") as handle:
+            handle.write(raw)
+        (tmp_path / f"{logical.name}.gz.archive_receipt.json").write_text(json.dumps({
+            "schema": "pipeline_raw_archive_identity_v1",
+            "logical_path": str(logical),
+            "logical_content_sha256": report_mod.hashlib.sha256(raw).hexdigest(),
+            "archive_generation": {"size_bytes": (tmp_path / f"{logical.name}.gz").stat().st_size},
+        }))
+    quality = {}
+    rows = report_mod._load_scanner_promotion_events(day, source_quality=quality)
+    assert [row["scanner_promotion_id"] for row in rows["005930"]] == ["PROMO-1"]
+    assert quality["status"] == "complete"
+    assert quality["counts_complete"] is True
+    assert quality["scanner_candidate_count"] == quality["scanner_valid_count"] == 1
+    assert quality["scanner_excluded_count"] == 0
+    assert quality["raw_row_count"] == 1
+    assert quality["scanner_by_venue_session"] == {"KRX|KRX_REGULAR": 1}
+    assert quality["scanner_by_stage"] == {
+        "scalping_scanner_candidate_promoted": {"raw": 1, "valid": 1, "excluded": 0}
+    }
+    assert len(quality["source_generation_sha256"]) == 64
+    assert len(quality["parts"][0]["physical_representations"]) == (2 if representation == "both" else 1)
+    assert quality["parts"][0]["source_content_sha256"] == report_mod.hashlib.sha256(raw).hexdigest()
+    assert quality["parts"][0]["archive_receipt"]["status"] == (
+        "not_applicable" if representation == "plain" else "verified_logical_content"
+    )
+
+
+@pytest.mark.parametrize("late_compressed", [False, True])
+def test_scanner_reader_merges_late_part_once_and_keeps_scale_in_projection(
+    monkeypatch, tmp_path, late_compressed,
+):
+    monkeypatch.setattr(report_mod, "_PIPELINE_EVENTS_DIR", tmp_path)
+    day = "2026-09-23"
+    promoted = {"stage": "scalping_scanner_candidate_promoted",
+                "emitted_at": f"{day}T09:00:00+09:00", "stock_code": "005930",
+                "fields": {"scanner_promotion_id": "PROMO-1"}}
+    scale_in = {"stage": "scale_in_order_submitted", "emitted_at": f"{day}T10:00:00+09:00",
+                "stock_code": "005930", "strategy": "SCALPING",
+                "fields": {"record_id": "1", "add_type": "AVG_DOWN",
+                           "order_no": "BUY1", "request_qty": 4}}
+    base = tmp_path / f"pipeline_events_{day}.jsonl"
+    base.write_text("\n".join(map(json.dumps, [promoted, scale_in])) + "\n")
+    late = tmp_path / f"pipeline_events_{day}.late.jsonl"
+    late_content = "\n".join(map(json.dumps, [promoted, scale_in])) + "\n"
+    if late_compressed:
+        with gzip.open(f"{late}.gz", "wt") as handle:
+            handle.write(late_content)
+    else:
+        late.write_text(late_content)
+    projection = {"record_ids": {"1"}, "rows": []}
+    quality = {}
+    rows = report_mod._load_scanner_promotion_events(
+        day, scale_in_projection=projection, source_quality=quality,
+    )
+    assert len(rows["005930"]) == 1
+    assert len(projection["rows"]) == 1
+    assert quality["raw_row_count"] == 4
+    assert quality["scanner_candidate_count"] == 2
+    assert quality["scanner_valid_count"] == quality["scanner_duplicate_count"] == 1
+    assert len(quality["parts"]) == 2
+
+
+def test_scanner_trade_does_not_match_different_known_venue_or_session():
+    day = "2026-09-23"
+    event = {"emitted_at": report_mod._parse_datetime(f"{day} 09:00:00"),
+             "effective_venue": "NXT", "market_session_bucket": "NXT_REGULAR"}
+    fact = {"strategy": "SCALPING", "position_tag": "SCANNER",
+            "stock_code": "005930", "buy_time": f"{day} 09:05:00",
+            "effective_venue": "KRX", "market_session_bucket": "KRX_REGULAR"}
+    assert report_mod._select_scanner_event_for_trade(fact, {"005930": [event]}) is None
+    assert report_mod._select_scanner_event_for_trade(
+        {**fact, "effective_venue": "NXT", "market_session_bucket": "NXT_REGULAR"},
+        {"005930": [event]},
+    ) == event
+
+
+def test_scanner_utc_event_clock_is_compared_in_kst(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "_PIPELINE_EVENTS_DIR", tmp_path)
+    day = "2026-09-23"
+    (tmp_path / f"pipeline_events_{day}.jsonl").write_text(json.dumps({
+        "stage": "scalping_scanner_candidate_promoted",
+        "emitted_at": "2026-09-23T00:00:00Z", "emitted_date": day,
+        "storage_partition_date": day, "stock_code": "005930",
+        "fields": {"scanner_promotion_id": "PROMO-UTC"},
+    }) + "\n")
+    source = report_mod._load_scanner_promotion_events(day)
+    assert source["005930"][0]["emitted_at"].strftime("%H:%M") == "09:00"
+    assert report_mod._select_scanner_event_for_trade({
+        "strategy": "SCALPING", "position_tag": "SCANNER", "stock_code": "005930",
+        "buy_time": "2026-09-23T00:05:00Z",
+    }, source)["scanner_promotion_id"] == "PROMO-UTC"
+
+
+def test_scanner_trade_explicit_promotion_id_wins_over_newer_same_symbol_event():
+    day = "2026-09-23"
+    old = {"emitted_at": report_mod._parse_datetime(f"{day} 09:00:00"),
+           "scanner_promotion_id": "PROMO-OLD"}
+    new = {"emitted_at": report_mod._parse_datetime(f"{day} 09:03:00"),
+           "scanner_promotion_id": "PROMO-NEW"}
+    fact = {"strategy": "SCALPING", "position_tag": "SCANNER",
+            "stock_code": "005930", "buy_time": f"{day} 09:05:00",
+            "scanner_expected_promotion_id": "PROMO-OLD"}
+    assert report_mod._select_scanner_event_for_trade(
+        fact, {"005930": [old, new]},
+    ) == old
+
+
+def test_scanner_reader_distinguishes_quarantine_empty_missing_and_corrupt(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "_PIPELINE_EVENTS_DIR", tmp_path)
+    day = "2026-09-23"
+    logical = tmp_path / f"pipeline_events_{day}.jsonl"
+    quality = {}
+    with pytest.raises(report_mod.FactSyncSourceError, match="scanner_pipeline_source_missing"):
+        report_mod._load_scanner_promotion_events(day, source_quality=quality)
+    assert quality["status"] == "source_missing"
+    assert quality["counts_complete"] is False
+    logical.write_text("")
+    quality = {}
+    assert not report_mod._load_scanner_promotion_events(day, source_quality=quality)
+    assert quality["status"] == "valid_empty" and quality["raw_row_count"] == 0
+    wrong_day = {"stage": "scalping_scanner_candidate_promoted",
+                 "emitted_at": "2026-09-22T09:00:00+09:00", "stock_code": "005930",
+                 "fields": {"scanner_promotion_id": "PROMO-OLD"}}
+    logical.write_text(json.dumps(wrong_day) + "\n")
+    quality = {}
+    assert not report_mod._load_scanner_promotion_events(day, source_quality=quality)
+    assert quality["status"] == "valid_empty"
+    assert quality["scanner_candidate_count"] == quality["scanner_quarantined_count"] == 1
+    assert quality["quarantine_reasons"] == {"emitted_date_invalid": 1}
+    logical.write_text("{bad json}\n")
+    quality = {}
+    with pytest.raises(report_mod.FactSyncSourceError, match="scanner_pipeline_source_invalid"):
+        report_mod._load_scanner_promotion_events(day, source_quality=quality)
+    assert quality["status"] == "source_blocked"
+    assert quality["counts_complete"] is False
+    logical.unlink()
+    (tmp_path / f"{logical.name}.gz").write_bytes(b"bad gzip")
+    with pytest.raises(report_mod.FactSyncSourceError, match="scanner_pipeline_source_invalid"):
+        report_mod._load_scanner_promotion_events(day)
+
+
+def test_scanner_reader_rejects_conflicting_plain_gzip_and_promotion_identity(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "_PIPELINE_EVENTS_DIR", tmp_path)
+    day = "2026-09-23"
+    logical = tmp_path / f"pipeline_events_{day}.jsonl"
+    row = {"stage": "scalping_scanner_candidate_promoted",
+           "emitted_at": f"{day}T09:00:00+09:00", "stock_code": "005930",
+           "fields": {"scanner_promotion_id": "PROMO-1", "scanner_promotion_reason": "first"}}
+    logical.write_text(json.dumps(row) + "\n")
+    changed = {**row, "fields": {**row["fields"], "scanner_promotion_reason": "conflict"}}
+    with gzip.open(f"{logical}.gz", "wt") as handle:
+        handle.write(json.dumps(changed) + "\n")
+    with pytest.raises(report_mod.FactSyncSourceError, match="plain_gzip_conflict"):
+        report_mod._load_scanner_promotion_events(day)
+    (tmp_path / f"{logical.name}.gz").unlink()
+    logical.write_text("\n".join(map(json.dumps, [row, changed])) + "\n")
+    with pytest.raises(report_mod.FactSyncSourceError, match="promotion_identity_conflict"):
+        report_mod._load_scanner_promotion_events(day)
+
+
+def test_scanner_reader_rejects_archive_receipt_with_different_logical_sha(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "_PIPELINE_EVENTS_DIR", tmp_path)
+    day = "2026-09-23"
+    logical = tmp_path / f"pipeline_events_{day}.jsonl"
+    with gzip.open(f"{logical}.gz", "wt") as handle:
+        handle.write(json.dumps({"stage": "scalping_scanner_candidate_promoted",
+                                 "emitted_at": f"{day}T09:00:00+09:00",
+                                 "stock_code": "005930",
+                                 "fields": {"scanner_promotion_id": "PROMO-1"}}) + "\n")
+    receipt = tmp_path / f"{logical.name}.gz.archive_receipt.json"
+    receipt.write_text(json.dumps({"schema": "pipeline_raw_archive_identity_v1",
+                                   "logical_path": str(logical),
+                                   "logical_content_sha256": "0" * 64}))
+    with pytest.raises(report_mod.FactSyncSourceError, match="archive_receipt_generation_mismatch"):
+        report_mod._load_scanner_promotion_events(day)
+
+
+@pytest.mark.parametrize("source_kind", ["missing", "valid_empty"])
+def test_scanner_source_gap_preserves_prior_facts_and_records_reason(
+    monkeypatch, tmp_path, source_kind,
+):
+    from src.engine.scalping import scale_in_split_order_plan
+
+    day = "2026-09-23"
+    events = tmp_path / "pipeline_events"
+    events.mkdir()
+    monkeypatch.setattr(report_mod, "_PIPELINE_EVENTS_DIR", events)
+    monkeypatch.setattr(report_mod, "_FACT_SYNC_STATUS_DIR", tmp_path / "status")
+    monkeypatch.setattr(scale_in_split_order_plan, "_query_actual_fill_inventory", lambda _: [])
+    monkeypatch.setattr(report_mod, "build_trade_review_report", lambda **_kwargs: {
+        "meta": {"warnings": []},
+        "sections": {"recent_trades": [{
+            "id": 1, "rec_date": day, "code": "005930", "status": "HOLDING",
+            "strategy": "SCALPING", "position_tag": "SCANNER",
+            "buy_price": 1000, "buy_qty": 1, "buy_time": f"{day} 09:05:00",
+        }]},
+    })
+    if source_kind == "valid_empty":
+        (events / f"pipeline_events_{day}.jsonl").write_text("")
+    executed = []
+
+    class _Query:
+        def filter(self, *_args):
+            return self
+
+        def count(self):
+            return 7
+
+    class _Session:
+        def query(self, *_args):
+            return _Query()
+
+        def execute(self, statement):
+            executed.append(statement)
+
+    @contextmanager
+    def _session():
+        yield _Session()
+
+    monkeypatch.setattr(report_mod._DB, "init_db", lambda: None)
+    monkeypatch.setattr(report_mod._DB, "get_session", _session)
+    with pytest.raises(report_mod.FactSyncSourceError):
+        report_mod.sync_trade_performance_for_date(day)
+    assert executed == []
+    receipt = json.loads(
+        (tmp_path / "status" / f"strategy_position_fact_sync_{day}.status.json").read_text()
+    )
+    assert receipt["status"] == "source_blocked"
+    assert receipt["consumer_ready"] is False
+    assert receipt["prior_fact_count"] == 7
+    assert receipt["scanner_source_quality"]["status"] == (
+        "source_missing" if source_kind == "missing" else "valid_empty"
+    )
+    if source_kind == "valid_empty":
+        assert receipt["scanner_source_quality"]["scanner_unmatched_fact_count"] == 1
+        assert receipt["issues"] == ["scanner_lineage_unmatched:1"]
+    else:
+        assert "scanner_pipeline_source_missing" in receipt["issues"][0]
+
+
+def test_scanner_gzip_lineage_reaches_report_fallback_consumer(monkeypatch, tmp_path):
+    day = "2026-09-23"
+    monkeypatch.setattr(report_mod, "_PIPELINE_EVENTS_DIR", tmp_path)
+    logical = tmp_path / f"pipeline_events_{day}.jsonl"
+    with gzip.open(f"{logical}.gz", "wt") as handle:
+        handle.write(json.dumps({
+            "stage": "scalping_scanner_candidate_promoted",
+            "emitted_at": f"{day}T09:00:00+09:00", "stock_code": "005930",
+            "fields": {"scanner_promotion_id": "PROMO-1",
+                       "scanner_promotion_reason": "price_jump_start_acceleration"},
+        }) + "\n")
+    monkeypatch.setattr(report_mod, "build_trade_review_report", lambda **_kwargs: {
+        "meta": {"warnings": []}, "sections": {"recent_trades": [{
+            "id": 1, "rec_date": day, "code": "005930", "name": "Samsung",
+            "status": "HOLDING", "strategy": "SCALPING", "position_tag": "SCANNER",
+            "buy_price": 1000, "buy_qty": 1, "buy_time": f"{day} 09:05:00",
+        }]},
+    })
+
+    @contextmanager
+    def _broken_session():
+        raise RuntimeError("db unavailable")
+        yield None
+
+    monkeypatch.setattr(report_mod._DB, "init_db", lambda: None)
+    monkeypatch.setattr(report_mod._DB, "get_session", _broken_session)
+    payload = report_mod.build_strategy_position_performance_report(day)
+    scanner = payload["sections"]["scanner_discovery_rows"]
+    assert len(scanner) == 1
+    assert scanner[0]["scanner_discovery_type"] == "price_jump_acceleration"
+    assert scanner[0]["provenance_matched_count"] == 1

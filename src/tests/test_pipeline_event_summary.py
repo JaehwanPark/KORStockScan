@@ -1,4 +1,5 @@
 import gzip
+import hashlib
 import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -24,6 +25,168 @@ def _review_event(index=0):
         "record_id": index,
         "fields": {"source_quality_gate": "pass", "session": "KRX_REGULAR"},
     }
+
+
+def test_producer_source_ledger_binds_raw_summary_and_rejects_drift(tmp_path):
+    from src.engine.pipeline_event_summary import (
+        seal_producer_summary_source,
+        producer_source_ledger_issues,
+    )
+
+    day = "2026-09-08"
+    raw_dir = tmp_path / "pipeline_events"
+    raw_dir.mkdir()
+    raw = raw_dir / f"pipeline_events_{day}.jsonl"
+    event = _review_event(1)
+    event["emitted_date"] = day
+    excluded = {**_review_event(2), "emitted_date": day, "stage": "unrelated_stage"}
+    raw.write_text("".join(json.dumps(row) + "\n" for row in (event, excluded)))
+    summary_dir = tmp_path / "pipeline_event_summaries"
+    compactor = ProducerSummaryCompactor(summary_dir=summary_dir, mode="shadow")
+    compactor.submit(event)
+    compactor.flush()
+
+    manifest = seal_producer_summary_source(tmp_path, day)
+    ledger = manifest["raw_source_ledger"]
+    from src.engine import pipeline_event_verbosity_report as verbosity
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(verbosity, "_summary_dir", lambda: summary_dir)
+        assert verbosity._producer_timing(manifest, day)["status"] != "missing_or_unbound"
+    assert ledger["logical_sha256"] == hashlib.sha256(raw.read_bytes()).hexdigest()
+    assert ledger["parts"][0]["logical_end_offset"] == len(raw.read_bytes())
+    assert ledger["raw_count"] == 2
+    assert ledger["valid_count"] == 1
+    assert ledger["excluded_count"] == 1
+    assert ledger["quarantined_count"] == ledger["unobserved_count"] == 0
+    assert ledger["stages"][event["stage"]]["summary_event_count"] == 1
+    assert producer_source_ledger_issues(tmp_path, day) == []
+
+    summary = summary_dir / f"pipeline_event_producer_summary_{day}.jsonl"
+    original_summary = summary.read_text()
+    summary.write_text(original_summary + " ")
+    assert "summary_generation_changed" in producer_source_ledger_issues(tmp_path, day)
+    summary.write_text(original_summary)
+    assert producer_source_ledger_issues(tmp_path, day) == []
+
+    raw.write_text(raw.read_text() + json.dumps(_review_event(3)) + "\n")
+    assert "raw_generation_changed" in producer_source_ledger_issues(tmp_path, day)
+
+
+def test_producer_source_ledger_archive_late_and_source_quality(tmp_path):
+    from src.engine.pipeline_event_summary import (
+        seal_producer_summary_source,
+        producer_source_ledger_issues,
+    )
+
+    day = "2026-09-08"
+    raw_dir = tmp_path / "pipeline_events"
+    raw_dir.mkdir()
+    raw = raw_dir / f"pipeline_events_{day}.jsonl"
+    event = _review_event(1)
+    event["emitted_date"] = day
+    raw.write_text(json.dumps(event) + "\n" + "{broken}\n")
+    late = raw_dir / f"pipeline_events_{day}.late.jsonl"
+    next_day = {**_review_event(2), "emitted_at": "2026-09-09T00:00:01",
+                "emitted_date": "2026-09-09",
+                "storage_partition_date": day}
+    late.write_text(json.dumps(next_day) + "\n")
+    summary_dir = tmp_path / "pipeline_event_summaries"
+    compactor = ProducerSummaryCompactor(summary_dir=summary_dir, mode="shadow")
+    compactor.submit(event)
+    compactor.flush()
+
+    manifest = seal_producer_summary_source(tmp_path, day)
+    ledger = manifest["raw_source_ledger"]
+    assert (ledger["raw_count"], ledger["valid_count"], ledger["excluded_count"],
+            ledger["quarantined_count"], ledger["unobserved_count"]) == (3, 1, 0, 1, 1)
+    with gzip.open(str(raw) + ".gz", "wb") as stream:
+        stream.write(raw.read_bytes())
+    assert producer_source_ledger_issues(tmp_path, day) == []
+    raw.unlink()
+    assert producer_source_ledger_issues(tmp_path, day) == []
+    assert seal_producer_summary_source(tmp_path, day) == manifest
+    assert json.loads((summary_dir / f"pipeline_event_producer_summary_manifest_{day}.json").read_text()) == manifest
+    with gzip.open(str(raw) + ".gz", "wb") as stream:
+        stream.write(b"different\n")
+    assert producer_source_ledger_issues(tmp_path, day)
+
+
+@pytest.mark.parametrize("mutation", ["duplicate", "wrong_date", "plain_gzip_conflict", "off"])
+def test_producer_source_ledger_rejects_ambiguous_raw(tmp_path, mutation):
+    from src.engine.pipeline_event_summary import seal_producer_summary_source
+
+    day = "2026-09-08"
+    raw = tmp_path / "pipeline_events" / f"pipeline_events_{day}.jsonl"
+    raw.parent.mkdir()
+    event = {**_review_event(1), "emitted_date": day}
+    line = json.dumps(event) + "\n"
+    raw.write_text(line)
+    summary_dir = tmp_path / "pipeline_event_summaries"
+    compactor = ProducerSummaryCompactor(summary_dir=summary_dir, mode="shadow")
+    compactor.submit(event)
+    compactor.flush()
+    if mutation == "duplicate":
+        raw.write_text(line + line)
+    elif mutation == "wrong_date":
+        raw.write_text(json.dumps({**event, "emitted_date": "2026-09-07"}) + "\n")
+    elif mutation == "plain_gzip_conflict":
+        with gzip.open(str(raw) + ".gz", "wb") as stream:
+            stream.write(b"different\n")
+    else:
+        manifest_path = summary_dir / f"pipeline_event_producer_summary_manifest_{day}.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["mode"] = "off"
+        manifest_path.write_text(json.dumps(manifest))
+    with pytest.raises(ValueError):
+        seal_producer_summary_source(tmp_path, day)
+
+
+def test_producer_source_ledger_requires_explicit_empty_and_missing_is_gap(tmp_path):
+    from src.engine.pipeline_event_summary import (
+        seal_producer_summary_source,
+        producer_source_ledger_issues,
+    )
+
+    day = "2026-09-08"
+    with pytest.raises(ValueError, match="raw_source_missing"):
+        seal_producer_summary_source(tmp_path, day)
+    raw = tmp_path / "pipeline_events" / f"pipeline_events_{day}.jsonl"
+    raw.parent.mkdir()
+    raw.write_bytes(b"")
+    with pytest.raises(ValueError, match="producer_summary_manifest_missing"):
+        seal_producer_summary_source(tmp_path, day)
+    manifest = seal_producer_summary_source(tmp_path, day, explicit_valid_empty=True)
+    assert manifest["raw_source_ledger"]["status"] == "valid_empty"
+    assert producer_source_ledger_issues(tmp_path, day) == []
+
+
+def test_non_profile_duplicate_is_isolated_without_blocking_summary(tmp_path):
+    from src.engine.pipeline_event_summary import (
+        PRODUCER_PARITY_DETAIL_LEVEL, PRODUCER_SUMMARY_SCHEMA_VERSION,
+        PRODUCER_SUMMARY_STAGES, seal_producer_summary_source,
+    )
+
+    day = "2026-09-08"
+    raw = tmp_path / "pipeline_events" / f"pipeline_events_{day}.jsonl"
+    raw.parent.mkdir()
+    event = {**_review_event(1), "emitted_date": day, "stage": "unrelated_stage"}
+    raw.write_text((json.dumps(event) + "\n") * 2)
+    summary_dir = tmp_path / "pipeline_event_summaries"
+    summary_dir.mkdir()
+    summary_path = summary_dir / f"pipeline_event_producer_summary_{day}.jsonl"
+    (summary_dir / f"pipeline_event_producer_summary_manifest_{day}.json").write_text(
+        json.dumps({"schema_version": PRODUCER_SUMMARY_SCHEMA_VERSION,
+                    "summary_path": str(summary_path), "summary_row_count": 0,
+                    "summary_event_count": 0, "mode": "shadow",
+                    "summary_detail_level": PRODUCER_PARITY_DETAIL_LEVEL,
+                    "summary_stages": sorted(PRODUCER_SUMMARY_STAGES),
+                    "raw_suppression_enabled": False}))
+    manifest = seal_producer_summary_source(tmp_path, day, explicit_valid_empty=False)
+    ledger = manifest["raw_source_ledger"]
+    assert ledger["valid_count"] == 0
+    assert ledger["excluded_count"] == 2
+    assert ledger["duplicate_count"] == 1
+    assert ledger["duplicate_eligible_count"] == 0
 
 
 def test_async_submit_never_waits_for_slow_publish(tmp_path, monkeypatch):

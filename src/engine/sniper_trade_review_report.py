@@ -1333,6 +1333,368 @@ _PROJECTION_EVENT_STAGES = {
 }
 
 
+def _buy_parent_handoff_projection(
+    source_date: str,
+    entry_events: list[dict],
+    registry_events: list[dict],
+    holding_events: list[HoldingEvent],
+    trades: list[dict],
+    policy_generation: dict[str, tuple[str, str]] | None = None,
+) -> dict:
+    """Audit exact BUY submit -> owner -> fill -> holding, without inferring custody.
+
+    The first postclose reader treats a missing registry/fill as unobserved.
+    A matching count, symbol or order number alone cannot supply a parent.
+    This projection never changes an order or a runtime holding.
+    """
+    registry: dict[str, list[dict]] = defaultdict(list)
+    policy_generation = policy_generation or {}
+    by_order: dict[tuple[str, str, str], set[str]] = defaultdict(set)
+    by_broker_number: dict[str, set[tuple[str, str]]] = defaultdict(set)
+    for event in registry_events:
+        if not isinstance(event, dict) or event.get("order_date") != source_date:
+            continue
+        intent = str(event.get("intent_id") or "").strip()
+        if intent:
+            registry[intent].append(event)
+            by_order[(str(event.get("account_key") or ""), source_date,
+                      str(event.get("broker_order_no") or ""))].add(intent)
+            if event.get("broker_order_no"):
+                by_broker_number[str(event["broker_order_no"])].add(
+                    (str(event.get("account_key") or ""), intent))
+    trades_by_id = {str(row.get("id")): row for row in trades}
+    fills_by_key: dict[tuple[str, str, str], list[HoldingEvent]] = defaultdict(list)
+    buy_orders_by_record: dict[str, set[str]] = defaultdict(set)
+    sells_by_record: dict[str, list[HoldingEvent]] = defaultdict(list)
+    terminals: dict[tuple[str, str], HoldingEvent] = {}
+    cancels: dict[tuple[str, str], set[str]] = defaultdict(set)
+    for candidate in entry_events:
+        if not isinstance(candidate, dict) or candidate.get("emitted_date") != source_date:
+            continue
+        if candidate.get("stage") not in {
+            "entry_order_cancel_requested", "entry_order_cancel_confirmed"}:
+            continue
+        f = candidate.get("fields") or {}
+        original = str(f.get("orig_ord_no") or "").strip()
+        if original:
+            cancels[(str(candidate.get("record_id") or ""), original)].add(
+                str(candidate["stage"]))
+    for event in holding_events:
+        record = str(event.fields.get("id") or "")
+        order = str(event.fields.get("order_no") or "")
+        if event.stage == "position_rebased_after_fill":
+            fills_by_key[(record, event.code, order)].append(event)
+            buy_orders_by_record[record].add(order)
+        elif event.stage == "scale_in_executed":
+            buy_orders_by_record[record].add(order)
+        elif event.stage == "entry_buy_order_terminal_confirmed":
+            key = (record, str(event.fields.get("orig_ord_no") or ""))
+            if key in terminals and terminals[key] != event:
+                terminals[key] = HoldingEvent(event.timestamp, event.name,
+                    event.code, event.stage, {"terminal_conflict": "True"}, "")
+            else:
+                terminals[key] = event
+        elif event.stage in {"sell_partial_fill_progress", "sell_completed",
+                             "nxt_rising_missed_tp1_partial_fill_progress",
+                             "nxt_rising_missed_tp1_partial_sell_completed"}:
+            sells_by_record[record].append(event)
+
+    uncertain_attempts = []
+    for candidate in entry_events:
+        if not isinstance(candidate, dict) or candidate.get("emitted_date") != source_date:
+            continue
+        f = candidate.get("fields") or {}
+        if (candidate.get("stage") == "order_leg_no_response"
+            or (candidate.get("stage") == "order_leg_fail" and
+                (str(f.get("broker_response_success")).lower() == "true" or
+                 str(f.get("broker_submission_reconciliation_required")).lower() == "true"))):
+            uncertain_attempts.append({
+                "record_id": candidate.get("record_id"),
+                "attempt_id": f.get("entry_submit_attempt_id"),
+                "parent_id": None, "order_id": f.get("broker_order_no"),
+                "state": "broker_response_uncertain", "sellable_qty": None,
+            })
+    rows: list[dict] = []
+    seen: dict[tuple[str, str, str], dict] = {}
+    rows_by_key: dict[tuple[str, str, str], dict] = {}
+    counts = dict(raw=0, valid=0, excluded=0, quarantined=0, unobserved=0)
+    for event in entry_events:
+        if not isinstance(event, dict) or event.get("stage") != "order_leg_sent":
+            continue
+        if event.get("emitted_date") != source_date:
+            continue
+        fields = event.get("fields") or {}
+        if str(fields.get("actual_order_submitted")).lower() != "true":
+            continue
+        counts["raw"] += 1
+        record = str(event.get("record_id") or "")
+        code = str(event.get("stock_code") or "")[:6]
+        order = str(fields.get("broker_order_no") or fields.get("ord_no") or "").strip()
+        account = str(fields.get("buy_account_key") or "").strip()
+        key = (record, account, order)
+        if key in seen and seen[key] == event:
+            counts["excluded"] += 1
+            continue
+        reasons: list[str] = []
+        if key in seen:
+            reasons.append("conflicting_duplicate_submit")
+            prior = rows_by_key[key]
+            prior["source_quality_reasons"] = sorted(set(
+                prior["source_quality_reasons"] + ["conflicting_duplicate_submit"]))
+            prior["parent_id"] = prior["child_id"] = prior["sellable_qty"] = None
+            if prior["state"] == "unobserved":
+                counts["unobserved"] -= 1
+            elif prior["state"] != "quarantined":
+                counts["valid"] -= 1
+            if prior["state"] != "quarantined":
+                counts["quarantined"] += 1
+            prior["state"] = "quarantined"
+        seen[key] = event
+        parent = str(fields.get("buy_parent_id") or "").strip()
+        child = str(fields.get("buy_child_id") or "").strip()
+        attempt = str(fields.get("entry_submit_attempt_id") or "").strip()
+        intent = str(fields.get("owner_registry_intent_id") or "").strip()
+        owner = str(fields.get("buy_owner_id") or "").strip()
+        route = str(fields.get("broker_route") or "").strip().upper()
+        submitted = _safe_int(fields.get("submitted_qty"), -1)
+        requested = _safe_int(fields.get("requested_qty"), -1)
+        planned = _safe_int(fields.get("buy_planned_qty"), -1)
+        mode = str(fields.get("buy_registry_mode") or "")
+        single_owner = (
+            mode == "single_owner_unregistered" and not intent
+            and str(fields.get("buy_owner_policy_selected")).lower() == "false"
+            and str(fields.get("buy_owner_policy_coexistence")).lower() == "false"
+            and fields.get("buy_owner_policy_date") == source_date
+            and policy_generation.get(code) == (
+                str(fields.get("buy_owner_policy_reason") or ""),
+                str(fields.get("buy_owner_policy_hash") or ""))
+            and not any(row.get("symbol") == code for row in registry_events
+                        if isinstance(row, dict) and row.get("order_date") == source_date)
+        )
+        if (not all((record, code, order, account, parent, child, attempt,
+                     owner, route)) or (not intent and not single_owner)
+            or parent != attempt or not child.startswith(parent + ":")):
+            reasons.append("submit_parent_owner_identity_missing")
+        if fields.get("buy_owner_type") != "main_scalping" or owner != f"main_scalping:{record}":
+            reasons.append("main_owner_mismatch")
+        if submitted <= 0 or requested != submitted or (planned > 0 and planned < submitted):
+            reasons.append("submit_quantity_invalid")
+        journal = registry.get(intent, [])
+        if not journal and not single_owner:
+            reasons.append("registry_intent_missing")
+        immutable = ("account_key", "order_date", "broker_order_no", "owner_type",
+                     "owner_id", "symbol", "side", "action", "route", "quantity")
+        if journal and any(
+            any(row.get(name) != journal[0].get(name) for name in immutable)
+            for row in journal[1:]
+        ):
+            reasons.append("registry_intent_conflict")
+        if journal and (
+            (journal[0].get("account_key"), journal[0].get("order_date"),
+             str(journal[0].get("broker_order_no") or ""),
+             journal[0].get("owner_type"), journal[0].get("owner_id"),
+             journal[0].get("symbol"), journal[0].get("side"),
+             journal[0].get("action"), journal[0].get("route"),
+             _safe_int(journal[0].get("quantity"), -1))
+            != (account, source_date, order, "main_scalping", owner, code,
+                "BUY", "NEW", route, submitted)
+            or by_order[(account, source_date, order)] != {intent}
+            or by_broker_number[order] != {(account, intent)}
+        ):
+            reasons.append("registry_submit_identity_mismatch")
+        if single_owner and by_broker_number[order]:
+            reasons.append("single_owner_broker_order_registry_conflict")
+
+        verified_fills: list[dict] = []
+        cumulative = 0
+        seen_executions: set[str] = set()
+        journal_fill_rows = [row for row in journal if row.get("event") == "FILL_RECORDED"]
+        journal_fills = {str(row.get("execution_no") or ""): row
+                         for row in journal_fill_rows}
+        if len(journal_fills) != len(journal_fill_rows):
+            reasons.append("duplicate_registry_execution")
+        matched = sorted(fills_by_key.get((record, code, order), []),
+                         key=lambda item: item.timestamp)
+        for fill in matched:
+            f = fill.fields
+            execution = str(f.get("execution_no") or "").strip()
+            delta = _safe_int(f.get("fill_qty"), -1)
+            observed_cumulative = _safe_int(f.get("order_filled_qty"), -1)
+            remaining = _safe_int(f.get("order_remaining_qty"), -1)
+            if (not execution or execution in seen_executions or delta <= 0
+                or observed_cumulative != cumulative + delta
+                or observed_cumulative + remaining != submitted
+                or f.get("pipeline_lifecycle_population_scope") != "real_record_bound"
+                or str(f.get("actual_order_submitted")).lower() != "true"
+                or str(f.get("broker_order_forbidden")).lower() != "false"
+                or (not single_owner
+                    and _safe_int(journal_fills.get(execution, {}).get("filled_qty"), -1)
+                        != observed_cumulative)):
+                reasons.append("broker_fill_owner_or_quantity_mismatch")
+                continue
+            seen_executions.add(execution)
+            cumulative = observed_cumulative
+            verified_fills.append({"execution_id": execution, "qty": delta,
+                                   "at": fill.timestamp,
+                                   "price": _safe_float(f.get("fill_price"), default=float("nan"))})
+        if not single_owner and len(journal_fills) != len(verified_fills):
+            if journal_fills or matched:
+                reasons.append("fill_census_mismatch")
+        terminal_event = terminals.get((record, order))
+        terminal = terminal_event is not None
+        cancel_stages = cancels.get((record, order), set())
+        cancel_requested = "entry_order_cancel_requested" in cancel_stages
+        cancel_ack = "entry_order_cancel_confirmed" in cancel_stages
+        if cancel_ack and not cancel_requested:
+            reasons.append("cancel_ack_without_request")
+        registry_terminal = any(
+            row.get("state") == "ORDER_TERMINAL"
+            and bool(row.get("terminal_reconciliation")) for row in journal)
+        if (not single_owner and cumulative == submitted > 0
+            and not registry_terminal):
+            reasons.append("full_buy_registry_terminal_unobserved")
+        if terminal:
+            terminal_fields = terminal_event.fields
+            if (terminal_fields.get("terminal_conflict") == "True"
+                or _safe_int(terminal_fields.get("order_filled_qty"), -1) != cumulative
+                or _safe_int(terminal_fields.get("order_requested_qty"), -1) != submitted
+                or terminal_event.timestamp < max((row["at"] for row in verified_fills),
+                                                   default="")
+                or terminal_fields.get("terminal_reason") not in {
+                    "terminal_absence_and_owner_inventory_exact",
+                    "terminal_absence_and_inventory_exact"}
+                or (not single_owner and not registry_terminal)):
+                reasons.append("terminal_owner_unreconciled")
+        trade = trades_by_id.get(record)
+        sellable = None
+        if cumulative and not reasons and trade:
+            single_parent = buy_orders_by_record[record] == {order} and sum(
+                1 for item in entry_events if isinstance(item, dict)
+                and str(item.get("record_id") or "") == record
+                and item.get("stage") == "order_leg_sent"
+            ) == 1
+            sold = 0
+            seen_sells: set[tuple[str, str]] = set()
+            for sale in sorted(sells_by_record[record], key=lambda item: item.timestamp):
+                f = sale.fields
+                sale_id = (str(f.get("order_no") or ""),
+                           str(f.get("execution_no") or ""))
+                delta = _safe_int(f.get("main_lifecycle_exit_qty"), -1)
+                if (not all(sale_id) or sale_id in seen_sells or delta <= 0
+                    or _safe_int(f.get("cumulative_sell_qty"), -1) != sold + delta
+                    or f.get("pipeline_lifecycle_population_scope") != "real_record_bound"
+                    or str(f.get("actual_order_submitted")).lower() != "true"
+                    or str(f.get("broker_order_forbidden")).lower() != "false"
+                    or sold + delta > sum(item["qty"] for item in verified_fills
+                                          if item["at"] <= sale.timestamp)):
+                    reasons.append("sell_quantity_or_identity_unreconciled")
+                    break
+                seen_sells.add(sale_id)
+                sold += delta
+            if sold > cumulative:
+                reasons.append("sell_exceeds_verified_buy")
+            if (single_parent and not reasons
+                and str(trade.get("status") or "").upper() in
+                    {"HOLDING", "SELL_ORDERED", "COMPLETED"}
+                and _safe_int(trade.get("buy_qty"), -1) == cumulative):
+                sellable = cumulative - sold
+            elif not reasons:
+                reasons.append("position_quantity_or_parent_census_unreconciled")
+        row = {
+            "record_id": record or None, "attempt_id": attempt or None,
+            "observed_parent_id": parent or None,
+            "parent_id": parent if not reasons else None,
+            "child_id": child if not reasons else None,
+            "intent_id": intent or None, "order_id": order or None,
+            "execution_ids": [item["execution_id"] for item in verified_fills],
+            "owner_type": fields.get("buy_owner_type"), "owner_id": owner or None,
+            "custody_mode": mode or None,
+            "account_key": account or None, "route": route or None,
+            "session": fields.get("market_session_bucket"),
+            "submitted_at": event.get("emitted_at"),
+            "terminal_observed": terminal,
+            "cancel_requested": cancel_requested, "cancel_ack_observed": cancel_ack,
+            "planned_qty": planned if planned > 0 else None,
+            "submitted_qty": submitted if submitted > 0 else None,
+            "filled_qty": cumulative if verified_fills else None,
+            "unsubmitted_qty": planned - submitted if planned >= submitted > 0 else None,
+            "sellable_qty": sellable, "cost_krw": None,
+            "state": ("quarantined" if reasons else
+                      "cancel_ack_terminal_pending" if cancel_ack and not terminal else
+                      "cancel_pending" if cancel_requested and not terminal else
+                      "unobserved" if not verified_fills else
+                      "full" if cumulative == submitted else
+                      "partial_terminal" if terminal else "partial_open"),
+            "source_quality_reasons": sorted(set(reasons)),
+        }
+        rows.append(row)
+        rows_by_key[key] = row
+        counts["quarantined" if reasons else "unobserved" if not verified_fills
+               else "valid"] += 1
+    return {"source_date": source_date, "counts": counts, "rows": rows,
+            "response_uncertain_attempts": uncertain_attempts,
+            "authority": "source_only_no_order_or_position_mutation"}
+
+
+def _load_buy_parent_handoff_projection(
+    source_date: str, holding_events: list[HoldingEvent], trades: list[dict],
+    holding_status: str,
+) -> dict:
+    """Read the bounded submit census and owner journal for the first holder."""
+    empty = {"source_date": source_date,
+             "counts": {key: None for key in
+                        ("raw", "valid", "excluded", "quarantined", "unobserved")},
+             "rows": [], "authority": "source_only_no_order_or_position_mutation"}
+    if holding_status == "source_gap_structured_partition_missing":
+        return {**empty, "source_quality_status": holding_status}
+    try:
+        from src.engine.scalping import entry_split_order_plan as entry
+        sent, projection = entry._bounded_execution_projection(
+            source_date, stages={"order_leg_sent", "order_leg_no_response",
+                                 "order_leg_fail", "entry_order_cancel_requested",
+                                 "entry_order_cancel_confirmed"},
+            families=("dynamic_entry_price_resolver", "entry_price_execution_quality"),
+        )
+        registry, custody = entry._execution_registry_snapshot()
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        return {**empty, "source_quality_status":
+                "source_gap_buy_handoff_input:" + type(exc).__name__}
+    if projection.get("status") != "ready" or custody.get("status") != "verified":
+        return {**empty, "source_quality_status": "source_gap_buy_handoff_generation",
+                "entry_projection": projection, "owner_registry": custody}
+    policy_generation = {}
+    try:
+        from src.trading.config.symbol_owner_policy import resolve_symbol_owner_policy
+    except Exception:
+        resolve_symbol_owner_policy = None
+    for symbol in {str(row.get("stock_code") or "")[:6] for row in sent
+                   if (row.get("fields") or {}).get("buy_registry_mode")
+                   == "single_owner_unregistered"}:
+        if resolve_symbol_owner_policy is None:
+            break
+        try:
+            decision = resolve_symbol_owner_policy(symbol, target_date=source_date)
+            if (decision.target_date == source_date and not decision.symbol_selected
+                and not decision.coexistence_enabled):
+                policy_generation[symbol] = (decision.reason, decision.policy_hash)
+        except Exception:
+            continue
+    result = _buy_parent_handoff_projection(
+        source_date, sent, registry, holding_events, trades, policy_generation)
+    if holding_status != "structured_partition_read":
+        result["source_quality_status"] = "source_gap_holding_partition:" + holding_status
+    elif (result["counts"]["quarantined"] or result["counts"]["unobserved"]
+          or result["response_uncertain_attempts"]):
+        result["source_quality_status"] = "source_gap_buy_parent_handoff"
+    else:
+        result["source_quality_status"] = (
+            "ready" if result["counts"]["raw"] else "valid_empty"
+        )
+    result["entry_projection"] = projection
+    result["owner_registry"] = custody
+    return result
+
+
 def _completed_execution_ledger(trade: dict, events: list[HoldingEvent]) -> dict:
     """Reconcile broker fill deltas for one completed position, fail closed."""
 
@@ -1669,6 +2031,19 @@ def _completed_trade_projection(
         or terminal_fields.get("effective_venue"),
         "market_session_bucket": terminal_fields.get("main_lifecycle_session_bucket")
         or terminal_fields.get("market_session_bucket"),
+        "broker_actual_execution_venue": terminal_fields.get(
+            "broker_actual_execution_venue"
+        ),
+        "broker_actual_execution_venue_source": terminal_fields.get(
+            "broker_actual_execution_venue_source"
+        ),
+        "broker_actual_exchange_code": terminal_fields.get(
+            "broker_actual_exchange_code"
+        ),
+        "broker_actual_exchange_name": terminal_fields.get(
+            "broker_actual_exchange_name"
+        ),
+        "broker_sor_flag": terminal_fields.get("broker_sor_flag"),
         "entry_execution_broker_route": terminal_fields.get("broker_route"),
         "exit_execution_broker_route": terminal_fields.get(
             "broker_route_requested"
@@ -2128,6 +2503,10 @@ def build_trade_review_report(
         row for row in open_census_rows
         if _safe_int(row.get("id")) not in existing_ids
     )
+    buy_parent_handoff = _load_buy_parent_handoff_projection(
+        target_date, structured_projection_events, trade_rows,
+        trailing_source_status,
+    )
     unresolved_completion_ids = missing_completion_ids - {
         _safe_int(row.get("id")) for row in carry_rows
     }
@@ -2245,6 +2624,8 @@ def build_trade_review_report(
             "completed_trades": len(realized),
             "canonical_completed_trades": len(completed_projection),
             "open_scalp_position_projection_count": len(open_projection),
+            "buy_parent_handoff_counts": buy_parent_handoff["counts"],
+            "buy_parent_handoff_source_status": buy_parent_handoff["source_quality_status"],
             "open_scalp_position_projection_status": (
                 "current_db_census" if not open_census_warnings
                 else open_census_warnings[0]
@@ -2311,6 +2692,7 @@ def build_trade_review_report(
             "recent_trades": recent_trades,
             "completed_trade_projection": completed_projection,
             "open_scalp_position_projection": open_projection,
+            "buy_parent_handoff": buy_parent_handoff,
             "completed_trades": [
                 row
                 for row in visible_rows

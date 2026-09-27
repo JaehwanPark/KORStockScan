@@ -315,7 +315,15 @@ def test_late_summary_refresh_precedes_cleanup_and_failure_cannot_reuse_done(
         '(root / "postclose_done_controller_2026-09-09.json").write_text(payload, encoding="utf-8")\n'
         'PY\n'
         '  printf "summary\\n" >> "$PROJECT_DIR/order.txt"\n'
-        f'  exit {refresh_rc}\nfi\nexec "$REAL_PY" "$@"\n',
+        f'  exit {refresh_rc}\nfi\n'
+        # This wrapper-order fixture fabricates a controller report. Its
+        # strict-generation reader is covered by the controller/verifier tests.
+        'if [[ "${1:-}" == "-" && "${4:-}" =~ ^[0-9]+$ ]]; then\n'
+        '  if [[ "${MOCK_CONTROLLER_STATUS:-}" == "done" ]]; then\n'
+        '    printf \'{"status":"pass","issues":[]}\\n\'; exit 0\n'
+        '  fi\n'
+        '  printf \'{"status":"blocked","issues":["controller_report_not_done"]}\\n\'; exit 1\n'
+        'fi\nexec "$REAL_PY" "$@"\n',
     )
     env = {
         **_base_env(project, cleanup, detector),

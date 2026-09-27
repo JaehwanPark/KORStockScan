@@ -7,6 +7,7 @@ research symbol/grid/revision counts. Missing native capacity remains unknown.
 from __future__ import annotations
 
 import argparse
+import re
 from datetime import date, datetime, time
 import time as clocks
 from zoneinfo import ZoneInfo
@@ -18,6 +19,83 @@ from src.engine.monitoring.research_allocation_snapshot import (
 )
 
 KST = ZoneInfo("Asia/Seoul")
+
+
+def validate_existing(day, *, directory=loop.DIRECTORY):
+    """Check a frozen postclose acquisition without refreshing the account."""
+    def invalid(reason):
+        return dict(status="invalid", reason=reason, source_date=str(day), **loop.AUTHORITY)
+
+    try:
+        from src.trading.order.owner_custody_registry import broker_account_key
+        account_scope = loop.digest(["broker_account", broker_account_key()])
+        receipt = loop.read_object(directory / f"capacity_source_{day}.json")
+        if (
+            receipt.get("schema") != loop.SCHEMA
+            or receipt.get("source_date") != str(day)
+            or receipt.get("status") != "complete"
+            or receipt.get("capacity_role") != "postclose_diagnostic"
+            or receipt.get("scope") != "native_account_once_not_per_candidate"
+            or receipt.get("receipt_sha256") != loop.digest(
+                {key: value for key, value in receipt.items() if key != "receipt_sha256"}
+            )
+            or receipt.get("account_scope_sha256") != account_scope
+            or any(receipt.get(key) is not value for key, value in loop.AUTHORITY.items())
+            or any(receipt.get(key) != expected for key, expected in (
+                ("order_requests", 0), ("authentication_refresh_requests", 0),
+                ("research_count_dependent_requests", 0), ("base_helper_invocations", 4),
+            ))
+        ):
+            return invalid("native_capacity_receipt_invalid")
+        native_dir = directory / "native_capacity" / str(day)
+        cash = loop.read_object(native_dir / "native_cash.json")
+        inventory = loop.read_object(native_dir / "native_inventory.json")
+        for name, native in (("cash", cash), ("inventory", inventory)):
+            if (
+                native.get("schema") != loop.SCHEMA
+                or native.get("source_date") != str(day)
+                or native.get("native_sha256") != receipt.get(f"native_{name}_sha256")
+                or native.get("native_sha256") != loop.digest(
+                    {key: value for key, value in native.items() if key != "native_sha256"}
+                )
+                or native.get("additional_account_requests") != 0
+                or any(native.get(key) is not value for key, value in loop.AUTHORITY.items())
+            ):
+                return invalid("native_capacity_generation_invalid")
+        if (
+            type(cash.get("producer_pid")) is not int
+            or cash["producer_pid"] != inventory.get("producer_pid")
+            or set(inventory.get("successful_exchanges") or ()) != {"KRX", "NXT"}
+            or inventory.get("open_orders_request_succeeded") is not True
+            or not isinstance(inventory.get("inventory_by_code"), dict)
+            or not isinstance(inventory.get("open_qty_by_code"), dict)
+        ):
+            return invalid("native_capacity_custody_invalid")
+        context = cash.get("cash_context") or {}
+        if (
+            any(type(context.get(key)) is not int or context[key] < 0 for key in (
+                "account_deposit", "cash_orderable_amount", "cash_orderable_qty_cap"
+            ))
+            or context.get("kt00011_requested_stock_code") != "005930"
+            or not re.fullmatch(r"[0-9a-f]{64}", str(context.get("kt00011_capacity_source_sha256") or ""))
+        ):
+            return invalid("native_capacity_cash_contract_invalid")
+        attempted = datetime.fromisoformat(receipt["attempted_at"])
+        captured = datetime.fromisoformat(receipt["captured_at"])
+        cash_at = datetime.fromisoformat(cash["captured_at"])
+        inventory_at = datetime.fromisoformat(inventory["captured_at"])
+        if (
+            any(value.tzinfo is None or value.astimezone(KST).date() != day
+                for value in (attempted, captured, cash_at, inventory_at))
+            or attempted.astimezone(KST).time() < time(20, 5)
+            or captured != cash_at
+            or not attempted <= inventory_at <= cash_at
+            or not 0 <= (cash_at - inventory_at).total_seconds() <= 30
+        ):
+            return invalid("native_capacity_clock_invalid")
+        return receipt
+    except (OSError, ValueError, TypeError, KeyError, OverflowError, RuntimeError):
+        return invalid("native_capacity_source_missing_or_invalid")
 
 
 def acquire(day, *, directory=loop.DIRECTORY, token=None, adapters=None):
@@ -220,6 +298,10 @@ def main(argv=None):
     parser.add_argument("--write", action="store_true", required=True)
     args = parser.parse_args(argv)
     now = datetime.now(KST)
+    if args.source_date < now.date():
+        result = validate_existing(args.source_date, directory=loop.DIRECTORY)
+        print(result["status"])
+        return 0 if result["status"] == "complete" else 1
     if args.source_date != now.date() or now.time() < time(20, 5):
         parser.error(
             "native source acquisition requires current completed date after 20:05 KST"
