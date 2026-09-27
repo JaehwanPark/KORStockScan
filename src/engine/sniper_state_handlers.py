@@ -77158,6 +77158,7 @@ def _initial_quantity_buy_leg_terminal_state(
         token=KIWOOM_TOKEN, order_date=order_day.isoformat(),
         stock_code=code, route=route, order_no=order_no,
         ordered_qty=ordered_qty, cancel_order_no=cancel_no,
+        submitted_price=expected_price,
     )
     if broker is None:
         return None, broker_status
@@ -77536,7 +77537,8 @@ def _initial_quantity_restore_open_local_order(
         terminal_proof, terminal_status = read_initial_buy_leg_terminal_discover(
             token=KIWOOM_TOKEN, order_date=order_day.isoformat(),
             stock_code=code, route=planned["route"],
-            order_no=number, ordered_qty=planned["qty"])
+            order_no=number, ordered_qty=planned["qty"],
+            submitted_price=broker_price)
         if terminal_proof is None:
             return False, "initial_quantity_open_restore_" + terminal_status
         expected_terminal = prior_filled + terminal_proof["filled_qty"]
@@ -77638,6 +77640,9 @@ def _initial_quantity_reconcile_stranded_cancel(
     if (state.get("state") != "CANCEL_REQUESTED"
             or order.get("ord_no") != number
             or order.get("qty") != planned["qty"]
+            or order.get("price") != (
+                0 if planned["tag"] == "initial_quantity_probe_0"
+                else state.get("submit_price"))
             or order.get("tag") != planned["tag"]
             or _entry_order_cancel_dmst_stex_tp(order) != planned["route"]):
         return False, "initial_quantity_cancel_recovery_order_mismatch"
@@ -77650,7 +77655,8 @@ def _initial_quantity_reconcile_stranded_cancel(
     proof, status = read_initial_buy_leg_terminal_discover(
         token=KIWOOM_TOKEN, order_date=order_day.isoformat(),
         stock_code=code, route=planned["route"],
-        order_no=number, ordered_qty=planned["qty"])
+        order_no=number, ordered_qty=planned["qty"],
+        submitted_price=order["price"])
     if proof is None:
         return False, "initial_quantity_cancel_recovery_" + status
     prior_filled = sum(_safe_int(item.get("filled_qty"), 0)

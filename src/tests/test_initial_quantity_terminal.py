@@ -47,6 +47,7 @@ def _row(order_no: str, *, qty: str, filled: str, remaining: str,
             "side": "매수", "side_contract_valid": True,
             "route_contract_valid": True, "stex_tp": "1", "sor_yn": "N",
             "raw": {"ord_qty": qty, "cntr_qty": filled,
+                    "ord_uv": "10000" if original == "0000000" else "0",
                     "ord_remnq": remaining, "cnfm_qty": confirmed,
                     "cnfm_tm": confirmation_time,
                     "mdfy_cncl": "취소" if original != "0000000" else "",
@@ -249,6 +250,14 @@ def test_full_fill_needs_exact_date_and_no_open_child():
     proof = prove_initial_buy_leg_terminal(**args)
     assert proof is not None
     assert (proof["filled_qty"], proof["cancelled_qty"]) == (4, 0)
+    assert prove_initial_buy_leg_terminal(
+        **{**args, "submitted_price": 10000}) is not None
+    market = deepcopy(args)
+    market["dated_rows"][0]["raw"]["ord_uv"] = "0"
+    assert prove_initial_buy_leg_terminal(
+        **{**market, "submitted_price": 0}) is not None
+    assert prove_initial_buy_leg_terminal(
+        **{**market, "submitted_price": 10000}) is None
     args["order_date"] = "2026-09-29"
     assert prove_initial_buy_leg_terminal(**args) is None
 
@@ -271,9 +280,19 @@ def test_stranded_cancel_discovery_requires_one_confirmed_child():
         token="test", order_date=args["order_date"],
         stock_code=args["stock_code"], route=args["route"],
         order_no=args["order_no"], ordered_qty=args["ordered_qty"],
+        submitted_price=10000,
         client=client, clock=lambda: observed)
     assert status == "broker_terminal_discovered"
     assert proof["cancel_order_no"] == "0000124"
+    assert proof["submitted_price"] == 10000
+    client.dated = deepcopy(args["dated_rows"])
+    client.dated[0]["raw"]["ord_uv"] = "9990"
+    assert read_initial_buy_leg_terminal_discover(
+        token="test", order_date=args["order_date"],
+        stock_code=args["stock_code"], route=args["route"],
+        order_no=args["order_no"], ordered_qty=args["ordered_qty"],
+        submitted_price=10000, client=client,
+        clock=lambda: observed)[0] is None
     client.dated = [*args["dated_rows"],
                     _row("0000125", qty="3", filled="0", remaining="0",
                          original="0000123", confirmed="3",
@@ -282,6 +301,7 @@ def test_stranded_cancel_discovery_requires_one_confirmed_child():
         token="test", order_date=args["order_date"],
         stock_code=args["stock_code"], route=args["route"],
         order_no=args["order_no"], ordered_qty=args["ordered_qty"],
+        submitted_price=10000,
         client=client, clock=lambda: observed)[0] is None
 
 
@@ -387,6 +407,8 @@ def test_stranded_cancel_requested_recovers_only_exact_terminal(
             stock, "005930", leg_index=0)
         assert (restored, status) == (True, "initial_quantity_terminal_restored")
     else:
+        assert handler._initial_quantity_reconcile_stranded_cancel(
+            stock, "005930", {**local, "price": 9990})[0] is False
         restored, status = handler._initial_quantity_reconcile_stranded_cancel(
             stock, "005930", local)
         assert (restored, status) == (

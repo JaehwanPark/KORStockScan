@@ -172,7 +172,8 @@ def read_initial_buy_leg_open(
 
 def read_initial_buy_leg_terminal_discover(
     *, token: str, order_date: str, stock_code: str, route: str,
-    order_no: str, ordered_qty: int, client: Any = None,
+    order_no: str, ordered_qty: int, submitted_price: int | None = None,
+    client: Any = None,
     clock: Any = time.time,
 ) -> tuple[dict[str, Any] | None, str]:
     """Discover one confirmed cancel child or a full fill from exact receipts."""
@@ -209,6 +210,7 @@ def read_initial_buy_leg_terminal_discover(
     proof = prove_initial_buy_leg_terminal(
         order_date=order_date, stock_code=stock_code, route=route,
         order_no=order_no, ordered_qty=ordered_qty, cancel_order_no=child,
+        submitted_price=submitted_price,
         dated_rows=dated, dated_meta=dated_meta,
         current_rows=current, current_meta=current_meta,
         observed_at_epoch=observed, now_epoch=clock())
@@ -219,6 +221,7 @@ def read_initial_buy_leg_terminal_discover(
 def prove_initial_buy_leg_terminal(
     *, order_date: str, stock_code: str, route: str, order_no: str,
     ordered_qty: int, cancel_order_no: str | None,
+    submitted_price: int | None = None,
     dated_rows: list[dict[str, Any]], dated_meta: dict[str, Any],
     current_rows: list[dict[str, Any]], current_meta: dict[str, Any],
     observed_at_epoch: float, now_epoch: float,
@@ -242,6 +245,8 @@ def prove_initial_buy_leg_terminal(
                 and (_order_no(cancel_order_no) is None
                      or cancel_order_no == order_no))
             or type(ordered_qty) is not int or ordered_qty <= 0
+            or (submitted_price is not None
+                and (type(submitted_price) is not int or submitted_price < 0))
             or not isinstance(dated_rows, list) or not isinstance(current_rows, list)
             or any(not isinstance(row, dict) for row in dated_rows + current_rows)
             or any(not isinstance(meta, dict)
@@ -261,6 +266,11 @@ def prove_initial_buy_leg_terminal(
         return None
     root = _one_row(dated_rows, order_no)
     if root is None:
+        return None
+    raw_root = root.get("raw")
+    if (submitted_price is not None
+            and (not isinstance(raw_root, dict)
+                 or _qty(raw_root.get("ord_uv")) != submitted_price)):
         return None
     def identity(row: dict[str, Any]) -> bool:
         return bool(row.get("source_api") == "kt00007"
@@ -318,6 +328,8 @@ def prove_initial_buy_leg_terminal(
                 "order_date": order_date, "stock_code": stock_code,
                 "route": route, "order_no": order_no,
                 "cancel_order_no": cancel_order_no, "ordered_qty": ordered_qty,
+                **({"submitted_price": submitted_price}
+                   if submitted_price is not None else {}),
                 "filled_qty": filled, "cancelled_qty": cancelled,
                 "broker_unfilled_qty": 0, "observed_at_epoch": observed_at_epoch,
                 "dated_source_sha256": _digest({"rows": dated_rows, "meta": dated_meta}),
@@ -331,6 +343,7 @@ def prove_initial_buy_leg_terminal(
 def read_initial_buy_leg_terminal(
     *, token: str, order_date: str, stock_code: str, route: str,
     order_no: str, ordered_qty: int, cancel_order_no: str | None,
+    submitted_price: int | None = None,
     client: Any = None, clock: Any = time.time,
 ) -> tuple[dict[str, Any] | None, str]:
     """Read dated BUY and current unfilled through existing bounded clients.
@@ -364,6 +377,7 @@ def read_initial_buy_leg_terminal(
         order_date=order_date, stock_code=stock_code, route=route,
         order_no=order_no, ordered_qty=ordered_qty,
         cancel_order_no=cancel_order_no,
+        submitted_price=submitted_price,
         dated_rows=dated, dated_meta=dated_meta,
         current_rows=current, current_meta=current_meta,
         observed_at_epoch=observed, now_epoch=clock())
