@@ -48,6 +48,36 @@ _SHAPES = {
 _TICK_SHAPES = {"two_leg_0_1tick", "three_leg_0_1_2tick"}
 
 
+def _select_initial_winner_shape(
+    quantity_type: str, candidates: dict[str, dict[str, Any]],
+) -> str:
+    """Choose a first seed from observed winner-weighted shapes.
+
+    The first seed has no deployed predecessor to outperform. An unobserved
+    split has no shape evidence; ties and unknown types keep the parent.
+    """
+    best = "parent"
+    if quantity_type == "SAFE_UNKNOWN":
+        return best
+    parent_score = candidates.get("parent", {}).get(
+        "winner_weighted_conservative_ev_pct")
+    best_score = parent_score if isinstance(parent_score, (int, float)) else None
+    for shape in _SHAPES:
+        if shape == "parent":
+            continue
+        metric = candidates.get(shape) or {}
+        score = metric.get("winner_weighted_conservative_ev_pct")
+        if (metric.get("state") != "paired_with_parent_fallback"
+                or not isinstance(metric.get("winner_comparable_count"), int)
+                or metric["winner_comparable_count"] < 1
+                or not isinstance(score, (int, float))
+                or not math.isfinite(score)):
+            continue
+        if best_score is None or score > best_score + 1e-9:
+            best, best_score = shape, score
+    return best
+
+
 def _digest(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=True,
                                      separators=(",", ":")).encode()).hexdigest()
@@ -788,7 +818,6 @@ def build_initial_quantity_replay(as_of: str, *, data_dir: Path = DATA_DIR,
         incumbent = paired[quantity_type].get("parent") or []
         incumbent_ev = sum(x["candidate_net_pct"] for x in incumbent) / len(incumbent) if incumbent else None
         incumbent_net = sum(x["parent_net_pnl_krw"] for x in incumbent)
-        best = "parent"
         candidates: dict[str, Any] = {}
         for shape in _SHAPES:
             values = paired[quantity_type].get(shape) or []
@@ -847,11 +876,7 @@ def build_initial_quantity_replay(as_of: str, *, data_dir: Path = DATA_DIR,
                                  "conservative_net_pnl_krw": round(conservative_net, 3),
                                  "missing_paths_carry_parent": max(0, len(incumbent) - len(values)),
                                  "state": "paired_with_parent_fallback"}
-            if (shape != "parent" and quantity_type != "SAFE_UNKNOWN"
-                    and incumbent_ev is not None and verified_crossed >= 1
-                    and lower > incumbent_ev and conservative_net > incumbent_net):
-                if best == "parent" or lower > candidates[best]["conservative_ev_pct"]:
-                    best = shape
+        best = _select_initial_winner_shape(quantity_type, candidates)
         selections[quantity_type] = {"selected_shape": best, "parent_ev_pct": incumbent_ev,
                                      "winner_weight_kind": "positive_realized_net_pnl_krw",
                                      "winner_count": len(winners),
@@ -860,7 +885,7 @@ def build_initial_quantity_replay(as_of: str, *, data_dir: Path = DATA_DIR,
                                          round(weighted_parent, 6)
                                          if weighted_parent is not None else None),
                                      "candidate_metrics": candidates,
-                                     "selection_reason": "conditional_ev_with_parent_fallback" if best != "parent" else "parent_or_source_gap"}
+                                     "selection_reason": "initial_winner_weighted_shape" if best != "parent" else "parent_or_source_gap"}
     body = {"schema_version": REPORT_SCHEMA, "source_date": as_of,
             "classifier_version": CLASSIFIER_VERSION,
             "cost_model": COST_MODEL,
@@ -940,7 +965,7 @@ def build_initial_quantity_policy(
             raise ValueError("unknown_type_must_keep_parent")
         if shape != "parent" and (metric.get("state") != "paired_with_parent_fallback"
                                   or not isinstance(metric.get("paired_count"), int)
-                                  or metric.get("verified_route_epoch_price_cross_count", 0) < 1):
+                                  or metric.get("winner_comparable_count", 0) < 1):
             raise ValueError("selected_shape_pairing_missing")
         types[quantity_type] = {"ratio_mode": "parent_5stage",
                                 "selected_shape": shape,
@@ -1179,15 +1204,13 @@ def initial_replay_economics_valid(report: Any) -> bool:
                     or abs(metric_row["conservative_ev_pct"] - expected_conservative_ev) > 1e-6):
                 return False
         selected = selection.get("selected_shape")
-        if selected not in _SHAPES:
+        if (selected not in _SHAPES
+                or selected != _select_initial_winner_shape(
+                    quantity_type, metrics)
+                or selection.get("selection_reason") != (
+                    "initial_winner_weighted_shape" if selected != "parent"
+                    else "parent_or_source_gap")):
             return False
-        if selected != "parent":
-            selected_metric = metrics[selected]
-            if (quantity_type == "SAFE_UNKNOWN" or parent_ev is None
-                    or selected_metric.get("verified_route_epoch_price_cross_count", 0) < 1
-                    or selected_metric.get("conservative_ev_pct", float("-inf")) <= parent_ev
-                    or selected_metric.get("conservative_net_pnl_krw", float("-inf")) <= parent_net):
-                return False
     return True
 
 

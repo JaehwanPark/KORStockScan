@@ -208,7 +208,7 @@ def test_all_completed_trades_remain_in_denominator_and_no_cross_costs(tmp_path)
     assert rows["fact:12"]["shapes"]["two_leg_0_1tick"]["candidate_net_pct"] != facts[1]["profit_rate"]
     assert rows["fact:11"]["shapes"]["two_leg_0_1tick"]["candidate_net_pnl_krw"] > 0
     assert rows["fact:11"]["shapes"]["two_leg_0_0p3"]["status"] == "price_offset_collapsed"
-    assert report["selections"]["KRX_THIN_HIGH_TICK"]["selected_shape"] == "two_leg_0_1tick"
+    assert report["selections"]["KRX_THIN_HIGH_TICK"]["selected_shape"] == "parent"
     winner_selection = report["selections"]["KRX_THIN_HIGH_TICK"]
     assert winner_selection["winner_count"] == 1
     assert winner_selection["winner_weight_kind"] == "positive_realized_net_pnl_krw"
@@ -328,6 +328,14 @@ def test_all_completed_trades_remain_in_denominator_and_no_cross_costs(tmp_path)
         if key != "report_content_sha256"})
     with pytest.raises(ValueError, match="initial_replay_economics_invalid"):
         build_initial_quantity_policy(inflated_weight_report)
+    forged_selection_report = copy.deepcopy(report)
+    forged_selection_report["selections"]["KRX_THIN_HIGH_TICK"][
+        "selected_shape"] = "two_leg_0_1tick"
+    forged_selection_report["report_content_sha256"] = _digest({
+        key: value for key, value in forged_selection_report.items()
+        if key != "report_content_sha256"})
+    with pytest.raises(ValueError, match="initial_replay_economics_invalid"):
+        build_initial_quantity_policy(forged_selection_report)
     changed_report = {**report, "selections": {**report["selections"],
                       "SAFE_UNKNOWN": {**report["selections"]["SAFE_UNKNOWN"],
                                        "selected_shape": "two_leg_0_1tick"}}}
@@ -350,6 +358,28 @@ def test_all_completed_trades_remain_in_denominator_and_no_cross_costs(tmp_path)
     assert loss_shape["conservative_net_pct"] == loss_shape["candidate_net_pct"]
     assert loss_shape["conservative_net_pnl_krw"] == loss_shape["candidate_net_pnl_krw"]
     assert loss_shape["upper_net_pct"] > loss_shape["candidate_net_pct"]
+
+
+def test_initial_shape_uses_winner_weight_without_successor_uplift_gate():
+    from src.engine.scalping.initial_quantity_policy import (
+        _select_initial_winner_shape,
+    )
+
+    metrics = {
+        "parent": {"winner_weighted_conservative_ev_pct": 1.0},
+        "two_leg_0_1tick": {
+            "state": "paired_with_parent_fallback",
+            "winner_comparable_count": 1,
+            "winner_weighted_conservative_ev_pct": 1.2,
+            "verified_route_epoch_price_cross_count": 0,
+            "conservative_ev_pct": -0.5,
+        },
+    }
+    assert _select_initial_winner_shape("KRX_THIN_HIGH_TICK", metrics) == (
+        "two_leg_0_1tick")
+    assert _select_initial_winner_shape("SAFE_UNKNOWN", metrics) == "parent"
+    metrics["two_leg_0_1tick"]["winner_comparable_count"] = 0
+    assert _select_initial_winner_shape("KRX_THIN_HIGH_TICK", metrics) == "parent"
 
 
 def test_fact_census_rejects_open_positions_and_uncosted_profit_rates(tmp_path):
