@@ -105,6 +105,29 @@ def test_refresh_auto_receipts_require_verified_daily_pid_and_costed_census(tmp_
     manifest["env_overrides"][ENV_SHA] = "0" * 64
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     assert _natural_refresh_pid_receipt(report, parent, parent_path, tmp_path) is None
+    archive_dir = bootstrap / "verified_initial_quantity_pid" / day
+    archive_dir.mkdir(parents=True)
+    for pid in (1234, 2345):
+        archived_verify = {**verify, "pid": pid}
+        archived_body = {
+            "schema_version": "initial_quantity_pid_verification_v1",
+            "target_date": day, "pid": pid,
+            "verified_at": verify["verified_at"],
+            "manifest_sha256": manifest["manifest_sha256"],
+            "policy_file_sha256": parent_sha,
+            "policy_content_sha256": parent["policy_content_sha256"],
+            "policy_file": str(parent_path),
+            "verification": archived_verify,
+        }
+        digest = _digest(archived_body)
+        path = archive_dir / f"initial_quantity_pid_{pid}_{digest[:12]}.json"
+        path.write_text(json.dumps({**archived_body,
+                                    "receipt_content_sha256": digest}),
+                        encoding="utf-8")
+    archived_receipt = _natural_refresh_pid_receipt(
+        report, parent, parent_path, tmp_path)
+    assert {row["pid"] for row in archived_receipt["daily_pid_receipts"]} == {
+        1234, 2345}
 
 
 def _event(record_id: int, stage: str, at: str, **fields) -> dict:
@@ -1293,7 +1316,11 @@ def test_refresh_uses_only_new_entries_and_requires_post_apply_receipts(
     pid_receipt = {"actual_pid_consumed": True,
                    "policy_content_sha256": active_baseline["policy_content_sha256"],
                    "first_consumed_date": new_day,
-                   "daily_pid_receipts": [{"entry_date": new_day, "pid": 1234}]}
+                   "daily_pid_receipts": [
+                       {"entry_date": new_day, "pid": 1234,
+                        "verified_at": f"{new_day}T09:28:00+09:00"},
+                       {"entry_date": new_day, "pid": 2345,
+                        "verified_at": f"{new_day}T09:28:30+09:00"}]}
     cost_receipt = _natural_refresh_terminal_receipt(bound_refresh)
     verified = evaluate_refresh_quantity_candidate(
         bound_refresh, parent_policy=active_baseline,
@@ -1308,6 +1335,14 @@ def test_refresh_uses_only_new_entries_and_requires_post_apply_receipts(
         parent_policy_file_sha256=parent_file_sha,
         pid_receipt=pid_receipt, terminal_receipt=cost_receipt)
     assert "parent_trade_policy_binding_missing" in wrong_pid["global_blockers"]
+    pid_receipt["daily_pid_receipts"][0]["pid"] = 1234
+    pid_receipt["daily_pid_receipts"][0]["verified_at"] = (
+        f"{new_day}T09:30:00+09:00")
+    late_pid = evaluate_refresh_quantity_candidate(
+        bound_refresh, parent_policy=active_baseline,
+        parent_policy_file_sha256=parent_file_sha,
+        pid_receipt=pid_receipt, terminal_receipt=cost_receipt)
+    assert "parent_trade_policy_binding_missing" in late_pid["global_blockers"]
     wrong_file = evaluate_refresh_quantity_candidate(
         bound_refresh, parent_policy=active_baseline,
         parent_policy_file_sha256="0" * 64)

@@ -1370,13 +1370,15 @@ def evaluate_refresh_quantity_candidate(
         "initial_policy_loaded")
     daily_pid_rows = (pid_receipt.get("daily_pid_receipts")
                       if isinstance(pid_receipt, dict) else None)
-    pid_by_day = ({row.get("entry_date"): row.get("pid")
-                   for row in daily_pid_rows if isinstance(row, dict)}
-                  if isinstance(daily_pid_rows, list) else {})
-    pid_days_valid = (len(pid_by_day) == len(entry_dates)
-                      and set(pid_by_day) == set(entry_dates)
-                      and all(type(pid) is int and pid > 0
-                              for pid in pid_by_day.values()))
+    pid_by_day: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for pid_row in daily_pid_rows if isinstance(daily_pid_rows, list) else []:
+        if isinstance(pid_row, dict):
+            pid_by_day[str(pid_row.get("entry_date") or "")].append(pid_row)
+    pid_days_valid = (set(pid_by_day) == set(entry_dates)
+                      and all(type(item.get("pid")) is int
+                              and item["pid"] > 0
+                              and _timestamp(item.get("verified_at")) is not None
+                              for rows in pid_by_day.values() for item in rows))
     policy_bound_trades = sum(
         row.get("applied_policy_status") == expected_parent_status
         and row.get("applied_policy_file_sha256") == parent_policy_file_sha256
@@ -1384,9 +1386,11 @@ def evaluate_refresh_quantity_candidate(
         and (decision_at := _timestamp(row.get("policy_decision_at"))) is not None
         and (entry_at := _timestamp(row.get("entry_fill_at"))) is not None
         and decision_at <= entry_at
-        and (not pid_receipt or pid_days_valid and
-             str(row.get("applied_policy_runtime_pid") or "") ==
-             str(pid_by_day.get(row["entry_date"])))
+        and (not pid_receipt or pid_days_valid and any(
+            str(row.get("applied_policy_runtime_pid") or "") ==
+            str(pid_row["pid"])
+            and _timestamp(pid_row["verified_at"]) <= decision_at
+            for pid_row in pid_by_day[row["entry_date"]]))
         for row in report.get("trades") or [])
     if (enforce_trade_lineage and report.get("trades")
             and policy_bound_trades != len(report["trades"])):
@@ -1515,6 +1519,54 @@ def _natural_refresh_pid_receipt(
     bootstrap_dir = data_dir / "runtime" / "policy_bootstrap"
     receipts = []
     for day in days:
+        archived = []
+        archive_dir = bootstrap_dir / "verified_initial_quantity_pid" / day
+        for archive_path in sorted(archive_dir.glob("initial_quantity_pid_*.json")):
+            try:
+                archive = json.loads(archive_path.read_text(encoding="utf-8"))
+                archive_sha = _file_sha256(archive_path)
+            except (OSError, ValueError, TypeError):
+                continue
+            if not isinstance(archive, dict):
+                continue
+            archive_body = {key: value for key, value in archive.items()
+                            if key != "receipt_content_sha256"}
+            verify = archive.get("verification") or {}
+            verified_at = _timestamp(archive.get("verified_at"))
+            if (archive.get("schema_version") !=
+                    "initial_quantity_pid_verification_v1"
+                    or archive.get("receipt_content_sha256") !=
+                    _digest(archive_body)
+                    or archive_path.name !=
+                    f"initial_quantity_pid_{archive.get('pid')}_"
+                    f"{archive['receipt_content_sha256'][:12]}.json"
+                    or archive.get("target_date") != day
+                    or verified_at is None or verified_at.date().isoformat() != day
+                    or archive.get("policy_file_sha256") != parent_file_sha
+                    or archive.get("policy_content_sha256") !=
+                    parent_policy["policy_content_sha256"]
+                    or Path(str(archive.get("policy_file") or "")).resolve()
+                    != parent_policy_path.resolve()
+                    or not isinstance(verify, dict)
+                    or verify.get("pid_passed") is not True
+                    or verify.get("status") != "pass"
+                    or verify.get("passed") is not True
+                    or verify.get("pid_env_available") is not True
+                    or verify.get("pid") != archive.get("pid")
+                    or verify.get("target_date") != day
+                    or verify.get("verified_at") != archive.get("verified_at")
+                    or verify.get("manifest_sha256") !=
+                    archive.get("manifest_sha256")
+                    or verify.get("findings") != []
+                    or verify.get("pid_mismatches") != []):
+                continue
+            archived.append({"entry_date": day, "pid": archive["pid"],
+                             "verified_at": archive["verified_at"],
+                             "archive_path": str(archive_path.resolve()),
+                             "archive_file_sha256": archive_sha})
+        if archived:
+            receipts.extend(archived)
+            continue
         manifest_path = bootstrap_dir / f"runtime_policy_bootstrap_{day}.json"
         verify_path = bootstrap_dir / f"runtime_policy_bootstrap_verify_{day}.json"
         env_path = bootstrap_dir / f"runtime_policy_bootstrap_{day}.env"
@@ -1559,6 +1611,7 @@ def _natural_refresh_pid_receipt(
                 or verify.get("pid_mismatches") != []):
             return None
         receipts.append({"entry_date": day, "pid": verify["pid"],
+                         "verified_at": verify["verified_at"],
                          "manifest_file_sha256": manifest_file_sha,
                          "verify_file_sha256": verify_file_sha,
                          "env_file_sha256": env_sha})
@@ -1852,10 +1905,21 @@ def refresh_quantity_stage_terminal_valid(receipt: Any) -> bool:
             if (not isinstance(pid_receipt, dict)
                     or pid_receipt.get("source") !=
                     "verified_daily_preopen_main_pid_env"
-                    or not Path(str(pid_receipt.get("data_root") or "")).is_absolute()
-                    or pid_receipt != _natural_refresh_pid_receipt(
-                        report, parent, paths["parent_policy"],
-                        Path(pid_receipt["data_root"]))):
+                    or not Path(str(pid_receipt.get("data_root") or "")).is_absolute()):
+                return False
+            current_pid_source = _natural_refresh_pid_receipt(
+                report, parent, paths["parent_policy"],
+                Path(pid_receipt["data_root"]))
+            if (current_pid_source is None
+                    or any(pid_receipt.get(key) != current_pid_source.get(key)
+                           for key in ("actual_pid_consumed",
+                                       "policy_content_sha256",
+                                       "policy_file_sha256",
+                                       "first_consumed_date", "data_root", "source"))
+                    or not isinstance(pid_receipt.get("daily_pid_receipts"), list)
+                    or not pid_receipt["daily_pid_receipts"]
+                    or any(row not in current_pid_source["daily_pid_receipts"]
+                           for row in pid_receipt["daily_pid_receipts"])):
                 return False
         winners = [row for row in report.get("trades") or []
                    if row.get("actual_net_pnl_krw", 0) > 0

@@ -238,6 +238,62 @@ def verify_path(target_date: str) -> Path:
     return BOOTSTRAP_DIR / f"runtime_policy_bootstrap_verify_{target_date}.json"
 
 
+def _archive_initial_quantity_pid_verification(
+    target_date: str, verification: dict[str, Any], manifest: dict[str, Any],
+) -> Path | None:
+    """Keep successful Main PID policy proof across same-day restarts."""
+    policy = manifest.get("initial_quantity_policy_receipt")
+    env = manifest.get("env_overrides") or {}
+    if (verification.get("pid_passed") is not True
+            or verification.get("status") != "pass"
+            or verification.get("passed") is not True
+            or verification.get("pid_env_available") is not True
+            or verification.get("findings") != []
+            or verification.get("pid_mismatches") != []
+            or type(verification.get("pid")) is not int
+            or verification["pid"] <= 0
+            or not isinstance(policy, dict)):
+        return None
+    if (policy.get("policy_file_sha256") != env.get(INITIAL_QUANTITY_ENV_SHA)
+            or policy.get("current_file") != str(INITIAL_QUANTITY_CURRENT.resolve())
+            or verification.get("target_date") != target_date
+            or verification.get("manifest_sha256") != manifest.get("manifest_sha256")):
+        raise ValueError("initial_quantity_pid_archive_source_mismatch")
+    policy_file = Path(str(env.get(INITIAL_QUANTITY_ENV_FILE) or ""))
+    if (not policy_file.is_absolute() or not policy_file.is_file()
+            or _digest_bytes(policy_file.read_bytes()) !=
+            policy["policy_file_sha256"]):
+        raise ValueError("initial_quantity_pid_archive_policy_file_mismatch")
+    body = {
+        "schema_version": "initial_quantity_pid_verification_v1",
+        "target_date": target_date,
+        "pid": verification["pid"],
+        "verified_at": verification["verified_at"],
+        "manifest_sha256": manifest["manifest_sha256"],
+        "policy_file_sha256": policy["policy_file_sha256"],
+        "policy_content_sha256": _load_json(policy_file)[
+            "policy_content_sha256"],
+        "policy_file": str(policy_file.resolve()),
+        "verification": verification,
+    }
+    receipt = {**body, "receipt_content_sha256": _digest_json(body)}
+    path = (BOOTSTRAP_DIR / "verified_initial_quantity_pid" / target_date /
+            f"initial_quantity_pid_{verification['pid']}_"
+            f"{receipt['receipt_content_sha256'][:12]}.json")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    encoded = (json.dumps(receipt, ensure_ascii=False, sort_keys=True,
+                          indent=2) + "\n").encode()
+    try:
+        with path.open("xb") as handle:
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except FileExistsError:
+        if path.read_bytes() != encoded:
+            raise ValueError("initial_quantity_pid_archive_conflict")
+    return path
+
+
 def _digest_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
@@ -1436,6 +1492,8 @@ def verify_bootstrap(target_date: str, *, pid: int | None = None, write: bool = 
     }
     if write:
         _publish(verify_path(target_date), json.dumps(result, ensure_ascii=False, indent=2) + "\n")
+        if passed and pid is not None:
+            _archive_initial_quantity_pid_verification(target_date, result, manifest)
     return result
 
 

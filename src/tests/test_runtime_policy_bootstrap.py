@@ -1,4 +1,5 @@
 import json
+import hashlib
 from pathlib import Path
 import pytest
 
@@ -11,6 +12,48 @@ from src.engine.automation import scalp_trailing_mechanical_policy_apply as scal
 def _write(path: Path, payload: dict):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_initial_quantity_pid_verification_archive_survives_daily_overwrite(
+    monkeypatch, tmp_path,
+):
+    day = "2026-09-28"
+    monkeypatch.setattr(bootstrap, "BOOTSTRAP_DIR", tmp_path / "policy_bootstrap")
+    current = tmp_path / "current.json"
+    monkeypatch.setattr(bootstrap, "INITIAL_QUANTITY_CURRENT", current)
+    _write(current, {"current_content_sha256": "c" * 64})
+    policy_file = tmp_path / "policy.json"
+    _write(policy_file, {"policy_content_sha256": "p" * 64})
+    policy_file_sha = hashlib.sha256(policy_file.read_bytes()).hexdigest()
+    manifest = {
+        "manifest_sha256": "m" * 64,
+        "initial_quantity_policy_receipt": {
+            "policy_file_sha256": policy_file_sha,
+            "current_file": str(current.resolve()),
+        },
+        "env_overrides": {
+            bootstrap.INITIAL_QUANTITY_ENV_FILE: str(policy_file),
+            bootstrap.INITIAL_QUANTITY_ENV_SHA: policy_file_sha,
+        },
+    }
+    verify = {"status": "pass", "passed": True, "pid_passed": True,
+              "pid_env_available": True, "pid": 1234,
+              "target_date": day, "verified_at": f"{day}T08:00:00+09:00",
+              "manifest_sha256": "m" * 64, "findings": [],
+              "pid_mismatches": []}
+    archived = bootstrap._archive_initial_quantity_pid_verification(
+        day, verify, manifest)
+    assert archived.is_file()
+    assert bootstrap._archive_initial_quantity_pid_verification(
+        day, verify, manifest) == archived
+    assert json.loads(archived.read_text())["policy_file_sha256"] == policy_file_sha
+    verify["pid"] = 2345
+    assert bootstrap._archive_initial_quantity_pid_verification(
+        day, verify, manifest) != archived
+    assert archived.is_file()
+    verify["pid_passed"] = False
+    assert bootstrap._archive_initial_quantity_pid_verification(
+        day, verify, manifest) is None
 
 
 def _rising_source_report(
