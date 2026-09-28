@@ -8,6 +8,8 @@
 
 17:30~17:34 KST 새 PID의 167개 자연 probe에서도 판정 0건·`route_snapshot_missing` 166건이었다. 상승률 상위 후보의 반복 체류를 줄이고 실제 움직이는 상승 종목을 더 빨리 발견하기 위해 공식 `ka10023` 5분 거래량 급증 KOSPI/KOSDAQ 패널을 source-only로 추가한다. 기존 `ka10027`과 중복 코드는 한 큐 세대로 합치며 source kind별 결과를 남긴다. 이것은 최근 5초 체결 증명이 아니므로 정확 route WS 및 3초 최종 신선도 가드는 유지한다. 공식 요청·리뷰·실측 한계는 [활동성 원천 리뷰](../audit-reports/2026-09-28-zero-base-scanner-implementation-review-and-release-gates.md#1744-kst-활동성-원천-추가와-기계판정-전-병목-재리뷰)를 따른다.
 
+활동성 원천 배포 후에도 첫 158개 probe 중 기계판정 0건이었다. Main이 5초마다 임시 probe WS 구독을 감시종목 부재로 정리하는 소유권 충돌을 발견했다. 진행 중 probe 코드는 Main의 일반 구독 정리에서 제외하고, probe 종료 시 기존 해제 경로로 넘긴다. [구독 충돌 리뷰](../audit-reports/2026-09-28-zero-base-scanner-implementation-review-and-release-gates.md#1752-kst-임시-ws-구독과-main-정리-충돌-수리)의 새 PID 자연 수신 결과가 실제 개선 수용의 기준이다.
+
 감시 슬롯의 더 빠른 의미적 해제는 실제 zero-base WATCHING 세대에서 신선한 연속 비진입과 반전 부재, 동일 슬롯 경쟁이 확인된 뒤 별도로 판단한다. 기존 재생에서 5분 조기 퇴출 후보의 후행 회복이 있었고 10분 적격 후보는 0이므로 체류시간이나 `BLOCK` 횟수만으로 새 퇴출 임계치를 만들지 않는다.
 
 ## 16:59 KST 세션 경계 재리뷰

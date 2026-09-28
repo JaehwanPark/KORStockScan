@@ -1,5 +1,12 @@
 # 제로베이스 SCALPING 발견·기계판정 구현 리뷰와 릴리스 문턱 — 2026-09-28
 
+## 17:52 KST 임시 WS 구독과 Main 정리 충돌 수리
+
+- **자연 원인 영수증:** 활동성 패널 릴리스 `2cf7a3da5e9a0943fd76d9f24292a85b1321c6e6`의 Main PID `745183`는 17:47:43 기동·당일 bootstrap PASS, source clean·scanner flag=true·release-set PASS다. 17:48 첫 KOSPI/KOSDAQ `ka10023`은 각각 반환 198/194행, 양의 급증·상승 보통주 적격 134/93행이고 두 패널 모두 `observed_panel`이다. 17:47~17:51 probe 158건(활동성 134·상승률 24) 중 `route_snapshot_missing` 156, 발견 관측 만료 1, 0B 나이 초과 1, 기계판정 0이었다. 동시에 Main은 5초 간격 `WS_SUBSCRIPTION_PRUNE`에서 임시 probe 코드를 비활성 감시 종목으로 취급해 해제했다. 같은 probe가 진행 중인데 Main 정리가 구독을 제거하는 실제 소유권 충돌이며, 156건 전부의 유일한 원인이라고 단정하지 않는다.
+- **수정:** Main 구독 정리는 구독 목록을 읽은 뒤 `_ZERO_BASE_PROBE_IN_FLIGHT`의 잠금 보호 snapshot을 읽어 진행 중인 임시 probe 코드만 제외한다. probe가 끝나면 기존 release callback이 해당 구독을 정리하고, 이후에도 불필요한 구독은 Main 정리 대상이 된다. 다른 소유자의 정리·감시 상한, 정확 `_AL`/`_NX` 경로, 최종 신선도 3초, 주문·수량·가격·hard safety는 그대로다.
+- **포장 수리:** 첫 활동성 릴리스에 `configs/scalp_micro_reversion_canary_guard.toml`이 빠져 WS의 별도 canary monitor가 한 번 fail closed했다. 활성 릴리스에 **동일 커밋의** `configs`를 복원했다. 이 결손은 제로베이스 후보 기계판정 결과로 치환하지 않는다. 후속 릴리스에는 `.gitignore`와 `configs`를 처음부터 포함한다.
+- **공식 참조·검증:** 2026-09-28 17:52 KST 공식 원격 HEAD와 로컬 checkout이 `953e5dbff123f437ab4d11a78a95191a685eb51f`로 같고, `kiwoom/realtime/packets.py`의 REG/REMOVE 및 `kiwoom/core/ws_client.py`를 재확인했다. 패킷·FID·인증 흐름은 변경하지 않는다. 진행 중 probe를 유지하고 종료 후 일반 정리가 가능한 회귀를 추가했다. 영향 회귀 627건, Python compile, `git diff --check`, 문서 print-only parser 통과. 재기동과 자연 0B/0D/기계판정 영수증은 후속 결과에서 닫는다.
+
 ## 17:44 KST 활동성 원천 추가와 기계판정 전 병목 재리뷰
 
 - **결정 근거:** 선택 PID `738184`의 17:30:48~17:34:32 자연 probe 167건 중 기계판정은 0건이었다. 166건은 `route_snapshot_missing`이고, 이 중 많은 대상은 이전 상승률 패널에서 반복 재시도된 종목이다. 전 세션 기본 5초 대기만으로 애프터마켓의 정확 `_AL` 첫 0B·0D 결손이 해결됐다는 근거가 없다. 감시 편입도 0이므로 현재 감시 슬롯을 먼저 비우는 규칙은 이 단절점을 수리하지 않는다.

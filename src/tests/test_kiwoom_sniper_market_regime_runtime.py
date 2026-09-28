@@ -11331,6 +11331,40 @@ def test_scanner_promotion_pending_attach_prevents_prune_until_attach_resolution
         kiwoom_sniper_v2._SCANNER_PROMOTION_PENDING_ATTACH_UNTIL.clear()
 
 
+def test_zero_base_probe_lease_survives_main_ws_prune(monkeypatch):
+    published = []
+    monkeypatch.setattr(
+        kiwoom_sniper_v2, "WS_MANAGER",
+        SimpleNamespace(subscribed_codes={"123450", "123460"}),
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2, "event_bus",
+        SimpleNamespace(publish=lambda name, payload: published.append((name, payload))),
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2, "should_retain_ws_subscription",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.sniper_state_handlers,
+        "should_retain_rising_missed_nxt_post_block_subscription",
+        lambda *_args, **_kwargs: False,
+    )
+    with kiwoom_sniper_v2._ZERO_BASE_PROBE_LOCK:
+        kiwoom_sniper_v2._ZERO_BASE_PROBE_IN_FLIGHT.add("123450")
+    try:
+        kiwoom_sniper_v2._prune_ws_subscriptions_for_inactive_targets([])
+        assert published == [("COMMAND_WS_UNREG", {"codes": ["123460"]})]
+        published.clear()
+    finally:
+        with kiwoom_sniper_v2._ZERO_BASE_PROBE_LOCK:
+            kiwoom_sniper_v2._ZERO_BASE_PROBE_IN_FLIGHT.discard("123450")
+    kiwoom_sniper_v2._prune_ws_subscriptions_for_inactive_targets([])
+    assert len(published) == 1
+    assert published[0][0] == "COMMAND_WS_UNREG"
+    assert set(published[0][1]["codes"]) == {"123450", "123460"}
+
+
 def test_ws_prune_retains_widget_price_comparison_subscription(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_WS_PINNED_OBSERVATION_ITEMS", "005930_AL")
     published = []

@@ -1280,6 +1280,11 @@ def _prune_ws_subscriptions_for_inactive_targets(targets):
     subscribed_codes = list(getattr(WS_MANAGER, "subscribed_codes", set()) or [])
     if not subscribed_codes:
         return
+    # Probe leases are registered before their WS item. Snapshot after the
+    # subscriptions so an in-flight temporary REG cannot be pruned as an
+    # inactive WATCHING target while its 0B/0D wait is still running.
+    with _ZERO_BASE_PROBE_LOCK:
+        probe_codes = set(_ZERO_BASE_PROBE_IN_FLIGHT)
 
     active_codes = {
         str(t.get("code", "")).strip()[:6]
@@ -1290,7 +1295,7 @@ def _prune_ws_subscriptions_for_inactive_targets(targets):
     stale_codes = []
     for code in subscribed_codes:
         norm = str(code or "").strip()[:6]
-        if not norm or norm in active_codes:
+        if not norm or norm in active_codes or norm in probe_codes:
             continue
         # A completed sell may still own exact-route 1/3/5/10-minute BBO
         # attribution.  Preserve that frozen route before considering the
