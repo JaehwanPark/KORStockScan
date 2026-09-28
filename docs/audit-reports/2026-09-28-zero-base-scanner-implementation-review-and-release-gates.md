@@ -1,5 +1,13 @@
 # 제로베이스 SCALPING 발견·기계판정 구현 리뷰와 릴리스 문턱 — 2026-09-28
 
+## 18:54 KST WS 등록 영수증 재리뷰·수정·재기동
+
+- **자연 자료 대사:** 직전 Main PID `772431`의 18:39~18:45:59 probe 요청 444건 중 수락 결과 432건·진행 중 12건, 기계판정 12건(`RECHECK` 11·`BLOCK` 1), 감시 편입·제출 0건이었다. 결과 중 `route_snapshot_missing` 356건은 정확 `_AL` 자료 결손이다. 18:48 등록·해제 시각을 맞춘 10종목의 source-only `ka10003` 표본에서는 9종목에 구독 중 REST 체결 시각이 없었고, `068270_AL` 1종목은 18:48:48 체결 시각이 겹쳤으나 10초 구독에서 정확 WS 0B/0D가 없었다. REST 시각의 초 단위 정밀도와 공급자 전달 경로 차이 때문에 이 1건을 WS 누락의 확정 원인으로 단정하지 않는다. 다른 두 종목의 WS 첫 수신은 같은 시점에 확인됐다.
+- **코드 결함·수리:** `execute_subscribe()`의 비동기 REG 작업은 로그인 미준비·WS item 예산 거절·내부 전송 실패에도 정상 완료된 Future가 될 수 있었다. probe는 REG 완료 후 로컬 등록 item·현재 transport epoch·요청 0B/0D 기록을 대사한다. 전송 영수증이 없으면 10초 관측 대기 전에 `source_unavailable`로 종료하고 임시 구독을 정리한다. 로컬 기록은 broker ACK나 실수신 증거가 아니며, 기존 정확 route/3초 최종 신선도·기계 다섯 틱·감시/주문 hard guard는 유지한다. 위 10건은 REG 전송 로그가 있으므로 이 수정으로 그 수신 결손이 해소됐다고 주장하지 않는다.
+- **공식 계약·검증:** 18:50 KST 공식 `Kiwoom-Securities/Kiwoom-REST-API` HEAD `953e5dbff123f437ab4d11a78a95191a685eb51f`를 재조회하고 `kiwoom/realtime/packets.py`, `kiwoom/core/ws_client.py`, `kiwoom/_data/kiwoom_api_spec.json`의 REG/REMOVE·`refresh=1` 계약을 대조했다. 해당 revision에 `kiwoom_docs`는 없다. 요청 패킷·FID·REST·주문 wire는 변경하지 않았다. 결손 영수증의 즉시 종료 및 오래된 transport·타입 누락 회귀를 추가했고 probe/queue/runtime/Main/WS/읽기 제어 292건, Python compile, `git diff --check`가 통과했다.
+- **배포·기동:** 코드 커밋 `7c1f54dcabe19282bd3edcc5bc55e6ea9f431302`의 불변 릴리스 `/home/ubuntu/KORStockScan-runtime-releases/zero-base-reg-receipt-20260928-7c1f54dc`를 선택하고 직전 선택을 `tmp/zero-base-reg-receipt-selection-before-deploy-20260928T185404.json`에 백업했다. 정상 재기동된 Main PID `783930`은 새 릴리스 `src`를 소비한다. 9/28 정책 bootstrap `pass`, release-set `passed`/PID 결속 일치이며 기능 상태는 `not_assessed`다. 새 PID의 자연 probe·판정/감시/제출 및 terminal·비용 후 성과는 별도 수용한다.
+- **첫 자연 수신:** 새 PID의 18:55:11~18:56:04 KST 수락 probe 결과 60건은 활동성 53·상승률 7건, `source_unavailable` 59·`active_conflict` 1건이었다. `route_snapshot_missing` 46건, `0B_missing` 8건, `0B_age_exceeded` 4건, 기계판정·감시·제출은 이 창에서 0건이다. 새 등록 영수증 결손 사유는 이 창에서 발생하지 않았으므로 수정된 예외 경로의 실전 빈도나 정확 0B 수신 개선은 검증되지 않았다. 관측창은 짧고 장후 유동성을 포함하므로 정규장·프리마켓 수용으로 확대하지 않는다.
+
 ## 18:37 KST 애프터마켓 활동성 판정 도달 우선순위
 
 - **동일 세션 진단:** 17:54 이후 통합 애프터마켓의 `zero_base_probe_result`는 활동성 원천 1,311건 중 `assessed` 70건, 상승률 원천 615건 중 4건이었다. 활동성 도달률 약 5.3%, 상승률 약 0.7%다. 관측 구간에는 여러 PID·관측창·원천 버전이 섞였으므로 경제적 수익성이나 독립적인 8배 인과효과가 아니다. 다만 기계판정 도달이라는 현재 앞단 목표에서 상승률 원천이 기존 4분의 1 claim 예산을 지속 점유하는 것은 비효율 징후다. 두 원천 모두 그 구간에서 `ENTER_NOW`는 없다.
