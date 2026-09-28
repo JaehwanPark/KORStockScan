@@ -10,7 +10,6 @@ from datetime import datetime
 from pathlib import Path
 
 from src.engine import kiwoom_orders
-from src.engine.sniper_entry_latency import evaluate_live_buy_entry
 from src.trading.config.symbol_owner_policy import (
     KST,
     SymbolOwnerPolicyError,
@@ -23,17 +22,7 @@ from src.trading.order.owner_custody_registry import (
     main_owner_context,
 )
 from src.engine.trade_profit import calculate_net_profit_rate
-from src.engine.scalping.entry_ai_gate import evaluate_ai_score_prior
-from src.engine.scalping.entry_candle_context import (
-    build_entry_candle_context,
-    entry_candle_context_enabled,
-    fetch_entry_candles_with_meta,
-    resolve_entry_candle_session,
-    resolve_entry_candle_venue,
-)
 from src.database.models import RecommendationHistory
-from src.utils.constants import TRADING_RULES
-from src.utils.runtime_flags import is_trading_paused
 from src.utils import kiwoom_utils
 from src.utils.logger import log_error, log_info
 from src.utils.pipeline_event_logger import emit_pipeline_event
@@ -59,9 +48,7 @@ def bind_s15_dependencies(kiwoom_token=None, ws_manager=None, ai_engine=None, db
 # ==========================================
 # ⚡ [S15 v2] Fast-Track 상태 관리
 # ==========================================
-FAST_SCALP_POOL = {}
 FAST_TRADE_STATE = {}
-FAST_REENTRY_BLOCK = {}
 FAST_LOCK = threading.RLock()
 S15_FAST_TRACK_CONTRACT_VERSION = "s15_fast_track_v1"
 S15_CUSTODY_SCHEMA = "s15_fast_track_custody_v2"
@@ -273,156 +260,6 @@ def _weighted_avg(amount, qty):
     if qty <= 0:
         return 0
     return int(amount / qty)
-
-
-def _arm_s15_candidate(code, name, cnd_name, ttl_sec=180):
-    now = _now_ts()
-    expires_at = now + ttl_sec
-    with FAST_LOCK:
-        FAST_SCALP_POOL[code] = {
-            "name": name or code,
-            "armed_at": now,
-            "last_seen": now,
-            "base_condition": cnd_name,
-            "expires_at": expires_at,
-        }
-    try:
-        _save_armed_candidate_to_db(code, name, cnd_name, now, expires_at)
-    except Exception as exc:
-        log_error(f"🚨 S15 armed candidate DB 저장 실패 ({code}): {exc}")
-    _log_s15_event(
-        "s15_candidate_armed",
-        code,
-        name or code,
-        s15_condition_role="candidate_arm",
-        base_condition=cnd_name,
-        armed_at=now,
-        expires_at=expires_at,
-        ttl_sec=ttl_sec,
-    )
-
-
-def _unarm_s15_candidate(code):
-    with FAST_LOCK:
-        FAST_SCALP_POOL.pop(code, None)
-    _delete_armed_candidate_from_database(code)
-
-
-def _save_armed_candidate_to_db(code, name, cnd_name, armed_at, expires_at):
-    today = datetime.now().date()
-    if DB is None:
-        return
-    with DB.get_session() as session:
-        record = (
-            session.query(RecommendationHistory)
-            .filter_by(rec_date=today, stock_code=code, strategy="S15_CANDID")
-            .first()
-        )
-        if record:
-            record.stock_name = name
-            record.position_tag = "S15_CANDID:" + cnd_name
-            record.entry_armed_at_epoch = armed_at
-            # Legacy TTL persistence fields: nxt=armed_at, hard_stop_price=expires_at.
-            record.nxt = armed_at
-            record.hard_stop_price = expires_at
-            record.profit_rate = 0.0
-        else:
-            record = RecommendationHistory(
-                rec_date=today,
-                stock_code=code,
-                stock_name=name,
-                trade_type="SCALP",
-                strategy="S15_CANDID",
-                status="WATCHING",
-                position_tag="S15_CANDID:" + cnd_name,
-                prob=0.0,
-                entry_armed_at_epoch=armed_at,
-                # Legacy TTL persistence fields: nxt=armed_at, hard_stop_price=expires_at.
-                nxt=armed_at,
-                hard_stop_price=expires_at,
-                profit_rate=0.0,
-                buy_price=0,
-                buy_qty=0,
-            )
-            session.add(record)
-
-
-def _delete_armed_candidate_from_database(code):
-    today = datetime.now().date()
-    if DB is None:
-        return
-    with DB.get_session() as session:
-        session.query(RecommendationHistory).filter_by(
-            rec_date=today, stock_code=code, strategy="S15_CANDID"
-        ).delete()
-
-
-def _restore_armed_candidates_from_database():
-    """봇 재시작 시 DB에 저장된 S15_CANDID 후보들을 FAST_SCALP_POOL에 복원합니다."""
-    today = datetime.now().date()
-    now = _now_ts()
-    if DB is None:
-        return
-    with DB.get_session() as session:
-        records = (
-            session.query(RecommendationHistory)
-            .filter_by(rec_date=today, strategy="S15_CANDID", status="WATCHING")
-            .all()
-        )
-        for rec in records:
-            code = rec.stock_code
-            name = rec.stock_name
-            cnd_name = (
-                rec.position_tag.replace("S15_CANDID:", "") if rec.position_tag else ""
-            )
-            armed_at = (
-                rec.entry_armed_at_epoch
-                if rec.entry_armed_at_epoch
-                else (rec.nxt if rec.nxt else 0.0)
-            )
-            expires_at = (
-                rec.hard_stop_price
-                if rec.hard_stop_price
-                else (rec.profit_rate if rec.profit_rate else 0.0)
-            )
-            if expires_at < now:
-                session.query(RecommendationHistory).filter_by(
-                    rec_date=today, stock_code=code, strategy="S15_CANDID"
-                ).delete()
-                continue
-            with FAST_LOCK:
-                FAST_SCALP_POOL[code] = {
-                    "name": name or code,
-                    "cnd_name": cnd_name,
-                    "armed_at": armed_at,
-                    "expires_at": expires_at,
-                }
-        session.commit()
-
-
-def _is_s15_armed(code):
-    now = _now_ts()
-    need_unarm = False
-    with FAST_LOCK:
-        item = FAST_SCALP_POOL.get(code)
-        if not item:
-            return False
-        if item.get("expires_at", 0) < now:
-            FAST_SCALP_POOL.pop(code, None)
-            need_unarm = True
-        else:
-            return True
-    if need_unarm:
-        _unarm_s15_candidate(code)
-    return False
-
-
-def _is_s15_reentry_blocked(code):
-    return FAST_REENTRY_BLOCK.get(code, 0) > _now_ts()
-
-
-def _block_s15_reentry(code, seconds=60 * 60 * 6):
-    FAST_REENTRY_BLOCK[code] = _now_ts() + seconds
 
 
 def _get_fast_state(code):

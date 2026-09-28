@@ -120,9 +120,7 @@ class _DummyDB:
 
 def _bind_test_deps(active_targets, db, event_bus):
     handlers._CONDITION_STATE.clear()
-    s15.FAST_SCALP_POOL.clear()
     s15.FAST_TRADE_STATE.clear()
-    s15.FAST_REENTRY_BLOCK.clear()
     s15.DB = db
     handlers.bind_condition_dependencies(
         kiwoom_token="token",
