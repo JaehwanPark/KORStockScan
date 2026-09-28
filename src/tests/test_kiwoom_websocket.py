@@ -13,6 +13,14 @@ from src.engine.kiwoom_websocket import KiwoomWSManager
 _SESSION_ROUTE_REQUIRED = KiwoomWSManager._integrated_aftermarket_route_required
 
 
+def test_retired_vcp_and_s15_conditions_are_absent_from_ws_bootstrap():
+    keywords = set(kiwoom_websocket.SCALP_CONDITION_KEYWORDS)
+    assert not keywords.intersection({
+        "vcp_candid_01", "vcp_shooting_01", "vcp_shooting_next_01",
+        "s15_scan_base_01", "s15_trigger_break_01",
+    })
+
+
 class _FakeWS:
     def __init__(self, messages):
         self._messages = list(messages)
