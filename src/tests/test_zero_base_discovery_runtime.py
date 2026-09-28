@@ -30,6 +30,7 @@ def _panel(_token):
     return {"panels": [{"status": "observed_panel"}], "observations": [{
         "code": "123456", "route": "krx_nxt_integrated", "observed_epoch": T0,
         "source_sha256": "a" * 64, "source_scope": "observed_panel",
+        "source_kind": "activity",
         "name": "TEST", "market": "KOSPI", "venue": "KRX", "price": 10000,
     }]}
 
@@ -42,6 +43,7 @@ def test_runtime_durable_claim_machine_enter_and_late_result_rejection(tmp_path)
     assert summary["probe_requested_count"] == 1
     request = next(payload for event, payload in bus.events if event == PROBE_REQUEST_EVENT)
     assert state.exists()
+    assert request["claim"]["source_kind"] == "activity"
 
     bus.publish(PROBE_RESULT_EVENT, {
         **request, "result": "assessed", "machine_action": "ENTER_NOW",
@@ -59,6 +61,7 @@ def test_runtime_durable_claim_machine_enter_and_late_result_rejection(tmp_path)
     assert [event for event, _ in bus.events].count(MACHINE_ENTER_EVENT) == 1
     restored = ZeroBaseDiscoveryRuntime(event_bus=Bus(), session_date="2026-09-28", state_path=state)
     assert len(restored.queue.snapshot()["candidates"]) == 1
+    assert restored.queue.snapshot()["candidates"][0]["source_kind"] == "activity"
 
 
 def test_lost_probe_is_reclaimed_but_old_enter_cannot_promote(tmp_path):

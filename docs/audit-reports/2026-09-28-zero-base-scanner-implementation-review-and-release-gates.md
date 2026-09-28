@@ -1,12 +1,20 @@
 # 제로베이스 SCALPING 발견·기계판정 구현 리뷰와 릴리스 문턱 — 2026-09-28
 
+## 17:44 KST 활동성 원천 추가와 기계판정 전 병목 재리뷰
+
+- **결정 근거:** 선택 PID `738184`의 17:30:48~17:34:32 자연 probe 167건 중 기계판정은 0건이었다. 166건은 `route_snapshot_missing`이고, 이 중 많은 대상은 이전 상승률 패널에서 반복 재시도된 종목이다. 전 세션 기본 5초 대기만으로 애프터마켓의 정확 `_AL` 첫 0B·0D 결손이 해결됐다는 근거가 없다. 감시 편입도 0이므로 현재 감시 슬롯을 먼저 비우는 규칙은 이 단절점을 수리하지 않는다.
+- **추가 원천:** 공식 `ka10023`의 5분 거래량 급증 요청을 source-only로 KOSPI·KOSDAQ 각각 한 번씩 읽는다. 17:35 KST 통합 `stex_tp=3` source-only 시험에서 KOSPI 첫 응답 200행·`return_code=0`·공유 읽기 admission을 확인했다. 급증량 양수, 당일 상승률 양수, 순수 보통주 코드·이름과 현재가를 통과한 행만 발견 원장에 둔다. 정규장·애프터마켓은 통합 `_AL`/SOR, 프리마켓은 NXT `_NX` 계약을 따른다. 이는 최근 체결의 시각 증명이 아니라 발견 후보 확대이며, 정확 route WS 0B·0D와 최종 3초 신선도·기계 판정·주문 hard guard는 그대로다.
+- **세대·부하 리뷰:** 활동성 패널을 상승률 패널보다 먼저 읽고 동일 코드/route 중복을 한 세대로 합쳐 뒤늦게 받은 상승률 행이 진행 중인 probe를 무효화하지 않게 했다. source kind를 큐 snapshot·claim·probe 결과 로그까지 보존해 두 원천의 결과를 분리 대사한다. 기존 KOSPI·KOSDAQ 상승률 2패널에 source-only 단일 페이지 활동성 2패널을 더하므로 회차당 물리 조회가 최대 2회 늘 수 있다. 기존 공유 5회/초·source-only 4회/초 admission과 각 3초 대기 상한, 90초 스캔 간격, 10초당 최대 8 claim 및 WS/주문 가드는 유지한다. 응답 오류·읽기 보류·수신시각 결손은 해당 패널 `source_unavailable`이며 다른 정상 패널을 폐기하지 않는다.
+- **공식 참조:** 2026-09-28 17:24~17:44 KST 공식 원격/로컬 SHA `953e5dbff123f437ab4d11a78a95191a685eb51f`의 `kiwoom/_data/kiwoom_api_spec.json` `ka10023` POST `/api/dostk/rkinfo`, 요청 `mrkt_tp/sort_tp/tm_tp/tm/trde_qty_tp/stk_cnd/pric_tp/stex_tp`, 응답 `trde_qty_sdnin`·부호·continuation을 확인했다. `kiwoom/specs.py`, `kiwoom/core/ws_client.py`, `kiwoom/realtime/packets.py`, Postman도 앞 절과 같은 revision으로 대조했다. 이 revision에 `kiwoom_docs`는 없다. 5분 급증 목록이 매 항목의 최근 5초 체결을 보장한다는 공식 계약은 없으며 실제 수신은 새 PID에서 확인한다.
+- **검증·배포:** queue/source/runtime/probe/Main attach·Kiwoom 읽기 제어·scanner 원천 검증 265건 통과, Python compile·`git diff --check`·문서 print-only parser 통과. source-kind 큐 영속·claim 검사를 추가했으며 이에 대한 마지막 표적 회귀는 커밋 전 다시 실행한다. 릴리스 배포·기동·자연 source-kind별 수신 대사는 아래 후속 영수증으로 구분한다.
+
 ## 17:26 KST 기계판정 도달 우선 수리 리뷰
 
 - **새 PID 기준 병목:** 16:58~17:21 KST `zero_base_probe_result` 777건/428개 고유 코드 중 `assessed` 3건(`RECHECK` 2, `BLOCK` 1), `route_snapshot_missing` 608건, `probe_worker_capacity` 155건이었다. `zero_base_watch_attach`는 0건이다. 반복 시도와 source gap을 종목 수나 무수익으로 치환하지 않는다. 감시 슬롯 퇴출은 아직 이 단절점의 원인이 아니다.
 - **수정:** 정확 route 0B·0D와 0B 다섯 건을 기다리는 기본 상한을 전 세션 3초→5초로 늘렸다. 준비되면 즉시 반환한다. 최대 8개 claim/10초를 처리하는 실행 작업자는 2→5, 예약 한도는 8→12로 조정했다. 한쪽 수신에만 적용되던 프리마켓·통합 애프터마켓 추가 2초는 유지해 해당 최대 대기는 7초다. 실제 기다린 시간과 기본·실효 예산을 결과에 기록한다. 마지막 0B·0D의 3초 신선도, 정확 route/transport, 공유 REST 5/4 admission, 감시 상한, 주문·수량·가격·hard safety는 유지한다.
 - **리뷰 경계:** 새 동시성은 REG item을 더 오래/동시에 점유할 수 있다. 공유 WS item budget 및 실제 peak를 배포 후 별도 확인한다. 5초가 기계판정·실제 제출을 늘리는지와 `probe_capacity_deferred`, 3~5초 첫 수신, 기계 직전 자료 결손을 동일 PID/세션에서 대사하기 전에는 개선이라고 판정하지 않는다. 9/28 기존 감시 의미 재생에서 5분 조기 퇴출 후 회복이 관측되고 10분 적격 후보가 0이므로 새 라이브 퇴출 규칙을 넣지 않았다.
 - **공식 참조:** 2026-09-28 17:24 KST 공식 원격 HEAD와 `/tmp/kiwoom-rest-api-20260928` checkout이 모두 `953e5dbff123f437ab4d11a78a95191a685eb51f`였다. `kiwoom/realtime/packets.py`, `kiwoom/core/ws_client.py`, `kiwoom/specs.py`, `kiwoom/_data/kiwoom_api_spec.json`의 WebSocket/REG/REMOVE·0B/0D 및 Postman collection을 확인했다. 이 revision에는 `kiwoom_docs`가 없다. 패킷·FID·URL·인증·REG/REMOVE 형식은 수정하지 않았고, 공식 자료에는 첫 수신 보장 시간이나 고정 동시 item 한도가 없다.
-- **검증·상태:** zero-base probe/Main/queue/source와 Kiwoom 시장자료·읽기 제어 회귀 128건 통과. 다음 재리뷰·compile·diff·문서 parser를 거쳐 불변 릴리스에 담는다. 이 시점은 작업본 검증이며 배포/PID 소비·자연 판정 증거가 아니다.
+- **검증·배포:** zero-base probe/Main/queue/source와 Kiwoom 시장자료·읽기 제어 회귀 128건, Python compile, `git diff --check`, 문서 print-only parser가 통과했다. 커밋 `082ddd5139f4bce80e294b4c9b940afd1ec4085f`의 불변 릴리스 `/home/ubuntu/KORStockScan-runtime-releases/zero-base-fast-intake-20260928-082ddd51`를 선택했고, 선택 전 포인터는 `tmp/zero-base-fast-intake-selection-before-deploy-20260928T172857.json`에 보존했다. 첫 17:29 기동에서 릴리스의 `.gitignore`가 빠져 실행 중 생성된 Python 캐시가 source dirty로 잡히는 포장 결함을 발견했다. 같은 커밋의 `.gitignore`를 릴리스에 복원하고 재기동해 Main PID `738184`의 cwd/선택 커밋, `KORSTOCKSCAN_RUNTIME_SOURCE_DIRTY=false`, scanner flag=true, 당일 bootstrap PASS, release-set의 Main PID 결속 PASS를 확인했다. 17:30 신규 PID의 통합 `_AL` 임시 REG/REMOVE를 확인했다. source-only 수신·기계판정 증가, WS peak, 실제 주문·terminal·비용 후 경제성은 다음 자연 결과로 별도 대사한다.
 
 ## 16:59 KST 세션 경계 재리뷰·수정·재기동
 

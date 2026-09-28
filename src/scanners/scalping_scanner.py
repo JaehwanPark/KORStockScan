@@ -6881,6 +6881,7 @@ def run_zero_base_scanner(*, token, event_bus, is_test_mode=False):
                 fields={
                     "zero_base_route": claim.get("route"),
                     "zero_base_source_sha256": claim.get("source_sha256"),
+                    "zero_base_source_kind": claim.get("source_kind") or "unknown",
                     "zero_base_claim_count": claim.get("claim_count"),
                     "zero_base_probe_result": result.get("result"),
                     "zero_base_probe_reason": result.get("reason"),

@@ -4042,6 +4042,67 @@ def get_vi_triggered_ka10054(token, mrkt_tp="000", limit=60):
     return cleaned_list
 
 
+def get_zero_base_volume_surge_ka10023(
+    token, *, mrkt_tp, stex_tp, request_owner="zero_base_activity_panel",
+    request_class=REQUEST_CLASS_SOURCE_ONLY, read_rate_max_wait_sec=3.0,
+):
+    """Bounded, source-only volume-surge discovery; never a live trade receipt."""
+    payload = {
+        "mrkt_tp": str(mrkt_tp), "sort_tp": "1", "tm_tp": "1",
+        "tm": "5", "trde_qty_tp": "5", "stk_cnd": "4",
+        "pric_tp": "0", "stex_tp": str(stex_tp),
+    }
+    results, meta = fetch_kiwoom_api_continuous(
+        url=get_api_url("/api/dostk/rkinfo"), token=token, api_id="ka10023",
+        payload=payload, use_continuous=False, return_meta=True,
+        request_owner=request_owner, request_class=request_class,
+        request_code="not_applicable", read_rate_max_wait_sec=read_rate_max_wait_sec,
+    )
+    meta = dict(meta) if isinstance(meta, dict) else {}
+    response_codes = []
+    for response in results if isinstance(results, list) else []:
+        if not isinstance(response, dict):
+            break
+        code = response.get("return_code", response.get("rt_cd"))
+        if code in (None, ""):
+            break
+        response_codes.append(str(code).strip())
+    meta["response_page_count"] = len(results) if isinstance(results, list) else 0
+    meta["response_return_codes"] = response_codes
+    meta["response_contract_status"] = (
+        "verified_success"
+        if isinstance(results, list) and len(results) == len(response_codes)
+        and bool(response_codes) and all(code == "0" for code in response_codes)
+        else "verified_rejected" if response_codes and any(code != "0" for code in response_codes)
+        else "unverified"
+    )
+    rows = []
+    if meta["response_contract_status"] == "verified_success":
+        for response in results:
+            for source_rank, item in enumerate(response.get("trde_qty_sdnin", []) or [], 1):
+                if not isinstance(item, dict):
+                    continue
+                code_fields = _scanner_equity_code_fields(item.get("stk_cd"), "ka10023")
+                if not code_fields:
+                    continue
+                code = code_fields["Code"]
+                name = str(item.get("stk_nm") or "").strip()
+                price = _scanner_to_int(item.get("cur_prc"))
+                if not name or not is_valid_stock(code, name, current_price=price):
+                    continue
+                rows.append({
+                    **code_fields, "Name": name, "Price": price,
+                    "ChangeRate": _scanner_to_signed_float(item.get("flu_rt")),
+                    "Volume": _scanner_to_int(item.get("now_trde_qty")),
+                    "SurgeQty": _scanner_to_int(item.get("sdnin_qty")),
+                    "PreSig": item.get("pred_pre_sig"),
+                    "SourceRank": source_rank,
+                })
+                if len(rows) >= 200:
+                    return rows, meta
+    return rows, meta
+
+
 def scan_volume_spike_ka10023(token, mrkt_tp="000", trde_qty_tp=None, pric_tp=None):
     """[ka10023] 최근 n분간 거래량이 급증한 종목 스캔 (현재가 포함)"""
     url = get_api_url("/api/dostk/rkinfo")

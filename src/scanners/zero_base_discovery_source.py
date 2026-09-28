@@ -20,7 +20,7 @@ from src.utils import kiwoom_utils
 from src.utils.kiwoom_read_request_control import REQUEST_CLASS_SOURCE_ONLY
 
 
-SCHEMA = "zero_base_discovery_panel_v2"
+SCHEMA = "zero_base_discovery_panel_v3"
 PANEL_REQUESTS = (
     ("KOSPI", "001", "SOR", "3", "krx_nxt_integrated"),
     ("KOSDAQ", "101", "SOR", "3", "krx_nxt_integrated"),
@@ -38,8 +38,9 @@ def _sha256(value: dict) -> str:
     ).hexdigest()
 
 
-def fetch_discovery_panels(token, *, now_epoch=None, fetcher=None) -> dict:
-    """Read the session's KOSPI/KOSDAQ panels through the source-only gate."""
+def fetch_discovery_panels(token, *, now_epoch=None, fetcher=None,
+                           activity_fetcher=None) -> dict:
+    """Read bounded gain and recent-volume panels through the source-only gate."""
     observed_epoch = time.time() if now_epoch is None else float(now_epoch)
     context = session_contract.resolve_market_session(
         datetime.fromtimestamp(observed_epoch, tz=session_contract.KST)
@@ -55,29 +56,33 @@ def fetch_discovery_panels(token, *, now_epoch=None, fetcher=None) -> dict:
         return {"schema": SCHEMA, "panels": [], "observations": [],
                 "source_status": "integrated_buy_session_unavailable"}
     fetcher = fetcher or kiwoom_utils.get_top_fluctuation_ka10027
+    activity_fetcher = activity_fetcher or kiwoom_utils.get_zero_base_volume_surge_ka10023
     panels = []
-    observations = []
-    for market, mrkt_tp, venue, stex_tp, route in panel_requests:
+    observations_by_key = {}
+    # A recent-volume panel broadens intake; the exact-route WS probe remains
+    # the only source that may supply current microstructure to the machine.
+    requests = [(kind, *panel) for kind in ("activity", "gainers")
+                for panel in panel_requests]
+    for kind, market, mrkt_tp, venue, stex_tp, route in requests:
         request_epoch = time.time() if now_epoch is None else float(now_epoch)
         try:
-            rows, meta = fetcher(
-                token,
-                mrkt_tp=mrkt_tp,
-                trde_qty_cnd="0000",
-                limit=MAX_ROWS_PER_PANEL,
-                stex_tp=stex_tp,
-                sort_tp="1",
-                stk_cnd="4",
-                crd_cnd="0",
-                updown_incls="1",
-                pric_cnd="0",
-                trde_prica_cnd="0",
-                pure_equity_only=True,
-                request_owner="zero_base_discovery_panel",
-                request_class=REQUEST_CLASS_SOURCE_ONLY,
-                read_rate_max_wait_sec=3.0,
-                return_meta=True,
-            )
+            if kind == "activity":
+                rows, meta = activity_fetcher(
+                    token, mrkt_tp=mrkt_tp, stex_tp=stex_tp,
+                    request_owner="zero_base_activity_panel",
+                    request_class=REQUEST_CLASS_SOURCE_ONLY,
+                    read_rate_max_wait_sec=3.0,
+                )
+            else:
+                rows, meta = fetcher(
+                    token, mrkt_tp=mrkt_tp, trde_qty_cnd="0000",
+                    limit=MAX_ROWS_PER_PANEL, stex_tp=stex_tp, sort_tp="1",
+                    stk_cnd="4", crd_cnd="0", updown_incls="1",
+                    pric_cnd="0", trde_prica_cnd="0", pure_equity_only=True,
+                    request_owner="zero_base_discovery_panel",
+                    request_class=REQUEST_CLASS_SOURCE_ONLY,
+                    read_rate_max_wait_sec=3.0, return_meta=True,
+                )
         except Exception as exc:
             rows, meta = [], {"source_error": type(exc).__name__}
         meta = meta if isinstance(meta, dict) else {}
@@ -95,6 +100,7 @@ def fetch_discovery_panels(token, *, now_epoch=None, fetcher=None) -> dict:
             and receive_epoch >= request_epoch
         )
         panel = {
+            "kind": kind,
             "market": market,
             "venue": venue,
             "route": route,
@@ -122,6 +128,7 @@ def fetch_discovery_panels(token, *, now_epoch=None, fetcher=None) -> dict:
                 change_rate = float(row.get("ChangeRate"))
                 price = int(row.get("Price"))
                 volume = int(row.get("Volume"))
+                surge_qty = int(row.get("SurgeQty")) if kind == "activity" else 0
             except (TypeError, ValueError):
                 panel["rejected_count"] += 1
                 continue
@@ -133,6 +140,11 @@ def fetch_discovery_panels(token, *, now_epoch=None, fetcher=None) -> dict:
                 or change_rate <= 0
                 or price <= 0
                 or volume < 0
+                or (kind == "activity" and (
+                    volume == 0
+                    or surge_qty <= 0
+                    or str(row.get("PreSig") or "") not in {"", "1", "2"}
+                ))
             ):
                 panel["rejected_count"] += 1
                 continue
@@ -150,8 +162,12 @@ def fetch_discovery_panels(token, *, now_epoch=None, fetcher=None) -> dict:
                 "request_epoch": request_epoch,
                 "observed_epoch": receive_epoch,
                 "source_scope": "observed_panel",
+                "source_kind": kind,
             }
             row_payload["source_sha256"] = _sha256(row_payload)
-            observations.append(row_payload)
+            # Keep a single source generation per code/route per scan. Activity
+            # wins overlap; a later gainer response must not invalidate a probe.
+            observations_by_key.setdefault((code, route), row_payload)
             panel["eligible_count"] += 1
-    return {"schema": SCHEMA, "panels": panels, "observations": observations}
+    return {"schema": SCHEMA, "panels": panels,
+            "observations": list(observations_by_key.values())}

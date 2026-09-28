@@ -174,6 +174,7 @@ class ZeroBaseDiscoveryRuntime:
                 venue=row.get("venue") or "",
                 discovery_price=int(row.get("price") or 0),
                 discovery_volume=int(row.get("volume") or 0),
+                source_kind=row.get("source_kind") or "",
             )
             observed += status in {"queued", "updated"}
         dispatch = self.dispatch_due_probes(now_epoch=now_epoch)
