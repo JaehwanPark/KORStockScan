@@ -229,6 +229,8 @@ def test_partial_aftermarket_receipt_extends_bounded_wait_for_exact_pair():
     assert reason == "ready" and data
     assert observation["partial_extension_applied"] is True
     assert observation["wait_ms"] >= 30
+    assert observation["base_wait_budget_ms"] == 10
+    assert observation["effective_wait_budget_ms"] == 80
 
 
 def test_empty_receipt_does_not_extend_wait():
@@ -241,6 +243,7 @@ def test_empty_receipt_does_not_extend_wait():
     assert not data
     assert observation["partial_extension_applied"] is False
     assert observation["wait_ms"] < 60
+    assert observation["effective_wait_budget_ms"] == 10
 
 
 def test_probe_observation_counts_only_exact_route_and_transport():
@@ -269,7 +272,7 @@ def test_probe_observation_counts_only_exact_route_and_transport():
     assert observation["fifth_0b_ms"] is None
 
 
-def test_probe_waits_for_five_exact_ticks_within_same_three_second_cap():
+def test_probe_waits_for_five_exact_ticks_within_bounded_cap():
     snapshot = _snapshot(route="krx_nxt_integrated", item="123456_AL")
     key = "_AL|krx_nxt_integrated"
     calls = []

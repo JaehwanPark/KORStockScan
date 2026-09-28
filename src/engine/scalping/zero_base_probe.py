@@ -143,7 +143,7 @@ def probe_ws_observation(snapshot: dict, *, code: str, route: str,
 
 def wait_for_exact_probe_ws_data(ws_manager, *, code: str, route: str,
                                  after_epoch: float, now=time.time,
-                                 timeout_sec: float = 3.0,
+                                 timeout_sec: float = 5.0,
                                  partial_extension_sec: float = 0.0,
                                  poll_interval_sec: float = 0.05,
                                  min_exact_0b_count: int = 0) -> tuple[dict, dict, str]:
@@ -175,6 +175,11 @@ def wait_for_exact_probe_ws_data(ws_manager, *, code: str, route: str,
         if remaining > 0:
             time.sleep(min(max(0.01, poll_interval_sec), remaining))
     observation["wait_ms"] = round((time.monotonic() - started) * 1000)
+    observation["base_wait_budget_ms"] = round(max(0.0, timeout_sec) * 1000)
+    observation["effective_wait_budget_ms"] = round(
+        (max(0.0, timeout_sec) +
+         (min(2.0, partial_extension_sec) if partial_extension_applied else 0.0)) * 1000
+    )
     observation["wait_reason"] = source_reason
     observation["sample_target"] = min_exact_0b_count
     observation["sample_target_met"] = observation["exact_0b_count"] >= min_exact_0b_count
@@ -211,7 +216,7 @@ def run_zero_base_probe(
     candle_fetcher=None,
     context_builder=None,
     release_ws=None,
-    ws_wait_timeout_sec: float = 3.0,
+    ws_wait_timeout_sec: float = 5.0,
     ws_wait_partial_extension_sec: float = 0.0,
     ws_wait_min_exact_0b_count: int = 5,
 ) -> dict:

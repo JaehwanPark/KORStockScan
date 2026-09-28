@@ -2,6 +2,12 @@
 
 상태: **VCP/S15 신규 유입 퇴역과 통합 `_AL` 발견·기계 probe·Main 감시 경로를 구현하고, 사용자 요청으로 즉시 배포·재기동했다.** 현재 선택 릴리스·PID와 관측 범위는 [구현 리뷰](../audit-reports/2026-09-28-zero-base-scanner-implementation-review-and-release-gates.md)의 후속 영수증을 따른다. 자연 제출·체결·terminal·비용 후 경제성은 별도 미수용이다. 과거 KRX/NXT 분리 패널 시험은 잘못된 route 설계의 역사적 증거이며 운영 기준이 아니다. VCP/S15 재유입이 가능한 구 릴리스는 롤백 대상이 아니다.
 
+## 17:26 KST 기계판정 도달 우선 수리
+
+16:58~17:21 KST 신규 PID의 zero-base probe 결과 777건(428개 고유 코드) 중 기계판정은 3건, 감시 편입은 0건이었다. `route_snapshot_missing` 608건과 `probe_worker_capacity` 155건은 감시 슬롯 이전 단계에서 발생했다. 따라서 현재 감시 TTL을 줄이는 것은 이 병목의 직접 수리가 아니다. 전 세션의 정확 route WS 기본 수신 대기를 3초에서 5초로 늘리고, 입력이 일찍 완성되면 즉시 반환한다. 동시 프로브 작업자는 2개에서 5개, 작업 예약은 8개에서 12개로 늘리되 회차당 8개 발견 claim과 공유 REST admission, WS item budget을 유지한다. 대기 영수증에는 기본·실효 대기 예산을 남겨 다음 자연 PID에서 3~5초 신규 수신·기계판정·보류·WS 등록 수를 대사한다. 최종 판정 3초 신선도와 route/transport, 주문·수량·가격·하드 가드는 변경하지 않는다. 이 절은 작업본의 설계·검증이며 선택 릴리스나 자연 개선 영수증이 아니다.
+
+감시 슬롯의 더 빠른 의미적 해제는 실제 zero-base WATCHING 세대에서 신선한 연속 비진입과 반전 부재, 동일 슬롯 경쟁이 확인된 뒤 별도로 판단한다. 기존 재생에서 5분 조기 퇴출 후보의 후행 회복이 있었고 10분 적격 후보는 0이므로 체류시간이나 `BLOCK` 횟수만으로 새 퇴출 임계치를 만들지 않는다.
+
 ## 16:59 KST 세션 경계 재리뷰
 
 주문 직전에는 감시 당시의 route·broker·venue·market session bucket과 현재 KST 매수창/세션을 다시 묶는다. 프리마켓·정규장·통합 애프터마켓 중 이전 세션의 제로베이스 WATCHING은 기존 FIFO 만료 경로로 종료해 슬롯과 동일 코드 probe를 해방한다. 수정 커밋 `527f27a3`은 영향 회귀 678건 통과 후 불변 릴리스로 재기동됐고 Main PID `725217`의 선택 커밋·cwd, 당일 bootstrap 및 release-set 결속을 확인했다. 새 PID에서 통합 `_AL` REG/REMOVE가 자연 발생했다. 실제 세션 전환 만료와 다음 프리마켓 `_NX` 수신, 제출·체결·비용 후 성과는 별도 미관측이다. [세션 경계 리뷰 영수증](../audit-reports/2026-09-28-zero-base-scanner-implementation-review-and-release-gates.md#1659-kst-세션-경계-재리뷰수정재기동)에 근거한다.

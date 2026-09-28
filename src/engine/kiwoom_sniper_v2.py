@@ -328,8 +328,8 @@ bind_s15_dependencies(db=DB)
 
 # 💡 [스레드 안전성] 공유 상태 접근용 락
 _state_lock = threading.RLock()
-_ZERO_BASE_PROBE_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="zero-base-probe")
-_ZERO_BASE_PROBE_SLOTS = threading.BoundedSemaphore(8)
+_ZERO_BASE_PROBE_EXECUTOR = ThreadPoolExecutor(max_workers=5, thread_name_prefix="zero-base-probe")
+_ZERO_BASE_PROBE_SLOTS = threading.BoundedSemaphore(12)
 _ZERO_BASE_PROBE_IN_FLIGHT = set()
 _ZERO_BASE_PROBE_LOCK = threading.Lock()
 

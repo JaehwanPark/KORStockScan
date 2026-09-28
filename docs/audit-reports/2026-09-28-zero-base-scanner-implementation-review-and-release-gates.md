@@ -1,5 +1,13 @@
 # 제로베이스 SCALPING 발견·기계판정 구현 리뷰와 릴리스 문턱 — 2026-09-28
 
+## 17:26 KST 기계판정 도달 우선 수리 리뷰
+
+- **새 PID 기준 병목:** 16:58~17:21 KST `zero_base_probe_result` 777건/428개 고유 코드 중 `assessed` 3건(`RECHECK` 2, `BLOCK` 1), `route_snapshot_missing` 608건, `probe_worker_capacity` 155건이었다. `zero_base_watch_attach`는 0건이다. 반복 시도와 source gap을 종목 수나 무수익으로 치환하지 않는다. 감시 슬롯 퇴출은 아직 이 단절점의 원인이 아니다.
+- **수정:** 정확 route 0B·0D와 0B 다섯 건을 기다리는 기본 상한을 전 세션 3초→5초로 늘렸다. 준비되면 즉시 반환한다. 최대 8개 claim/10초를 처리하는 실행 작업자는 2→5, 예약 한도는 8→12로 조정했다. 한쪽 수신에만 적용되던 프리마켓·통합 애프터마켓 추가 2초는 유지해 해당 최대 대기는 7초다. 실제 기다린 시간과 기본·실효 예산을 결과에 기록한다. 마지막 0B·0D의 3초 신선도, 정확 route/transport, 공유 REST 5/4 admission, 감시 상한, 주문·수량·가격·hard safety는 유지한다.
+- **리뷰 경계:** 새 동시성은 REG item을 더 오래/동시에 점유할 수 있다. 공유 WS item budget 및 실제 peak를 배포 후 별도 확인한다. 5초가 기계판정·실제 제출을 늘리는지와 `probe_capacity_deferred`, 3~5초 첫 수신, 기계 직전 자료 결손을 동일 PID/세션에서 대사하기 전에는 개선이라고 판정하지 않는다. 9/28 기존 감시 의미 재생에서 5분 조기 퇴출 후 회복이 관측되고 10분 적격 후보가 0이므로 새 라이브 퇴출 규칙을 넣지 않았다.
+- **공식 참조:** 2026-09-28 17:24 KST 공식 원격 HEAD와 `/tmp/kiwoom-rest-api-20260928` checkout이 모두 `953e5dbff123f437ab4d11a78a95191a685eb51f`였다. `kiwoom/realtime/packets.py`, `kiwoom/core/ws_client.py`, `kiwoom/specs.py`, `kiwoom/_data/kiwoom_api_spec.json`의 WebSocket/REG/REMOVE·0B/0D 및 Postman collection을 확인했다. 이 revision에는 `kiwoom_docs`가 없다. 패킷·FID·URL·인증·REG/REMOVE 형식은 수정하지 않았고, 공식 자료에는 첫 수신 보장 시간이나 고정 동시 item 한도가 없다.
+- **검증·상태:** zero-base probe/Main/queue/source와 Kiwoom 시장자료·읽기 제어 회귀 128건 통과. 다음 재리뷰·compile·diff·문서 parser를 거쳐 불변 릴리스에 담는다. 이 시점은 작업본 검증이며 배포/PID 소비·자연 판정 증거가 아니다.
+
 ## 16:59 KST 세션 경계 재리뷰·수정·재기동
 
 - **리뷰 결함과 수정:** 종전 `_AL`·SOR 주문 결속은 감시 편입 당시의 `KRX`/통합 애프터마켓 표기만 확인하고 주문 시점의 세션을 다시 묶지 않았다. 또한 프리마켓·정규장 감시가 세션 전환 뒤에도 기존 최대 30분 TTL 동안 슬롯과 동일 코드의 새 세션 probe를 막을 수 있었다. 제로베이스 주문은 현재 KST 매수창, 정확 route·broker·effective venue·market session bucket을 함께 검사한다. 제로베이스 WATCHING은 기존 FIFO 만료 경로에서 세션이 달라지면 만료하며 `session_changed` terminal 이유를 남긴다. 기존 비활성 WS 구독 정리 주기가 해당 종목을 후속 해제한다. 다른 소유자의 감시·보유·매도는 이 규칙의 대상이 아니다.
