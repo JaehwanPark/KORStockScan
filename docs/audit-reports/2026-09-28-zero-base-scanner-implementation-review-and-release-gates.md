@@ -5,6 +5,9 @@
 - **동일 세션 진단:** 17:54 이후 통합 애프터마켓의 `zero_base_probe_result`는 활동성 원천 1,311건 중 `assessed` 70건, 상승률 원천 615건 중 4건이었다. 활동성 도달률 약 5.3%, 상승률 약 0.7%다. 관측 구간에는 여러 PID·관측창·원천 버전이 섞였으므로 경제적 수익성이나 독립적인 8배 인과효과가 아니다. 다만 기계판정 도달이라는 현재 앞단 목표에서 상승률 원천이 기존 4분의 1 claim 예산을 지속 점유하는 것은 비효율 징후다. 두 원천 모두 그 구간에서 `ENTER_NOW`는 없다.
 - **제한된 변경:** 통합 애프터마켓에 한해 활동성 7·상승률 1의 순환 claim으로 조정한다. 해당 원천의 적격 후보가 없으면 다른 원천으로 즉시 채우며, KOSPI/KOSDAQ 간 누적 claim 균형과 마지막 claim 순서·재기동 후 `_claim_sequence`는 유지한다. 프리마켓·정규장의 3:1 비율은 해당 세션의 비교 표본이 없어 유지한다. 패널 수·REST 요청 주기, 전체 probe 12개/10초·16 worker/24 예약, WS 56-item 예산, 감시 16슬롯, 기계·주문 hard guard는 그대로다. 상승률 원천은 8분의 1로 남아 탐색 표본을 보존한다.
 - **검증 문턱:** queue의 7:1 순서와 재기동 순서, 실제 애프터마켓 dispatch 12개 중 11:1, 기존 정규장 3:1·기본 가드를 재생으로 검증한다. 새 PID의 source-kind별 요청·수락·기계판정, 작업자/WS/REST 부하와 감시·제출을 분리 대사한다. 판정 도달률이 높아져도 수익성이나 실주문 품질을 증명하지 않는다.
+- **검증·배포:** queue/runtime/source/probe/Main attach 및 인접 WS·읽기 제어 368건, Python compile, `git diff --check`, 문서 print-only parser가 통과했다. 커밋 `59ebc9cd7b7849eb1b6146ef19a8abc6215aa129`의 불변 릴리스 `/home/ubuntu/KORStockScan-runtime-releases/zero-base-activity-rotation-20260928-59ebc9cd`를 선택·정상 재기동했고 이전 선택은 `tmp/zero-base-activity-rotation-selection-before-deploy-20260928T183841.json`에 보존했다. Main PID `772431`의 새 릴리스 cwd·선택 파일 PID 영수증, 9/28 정책 bootstrap PASS, release-set PASS를 확인했다. 기능·경제성은 `not_assessed`다.
+- **첫 자연 순환:** 18:39:00~18:41:54 KST 새 PID의 요청 180건, 수락 결과 167건/167코드, 확인 시 진행 중 claim 13건이다. 결과 원천은 활동성 146건(87.4%)·상승률 21건(12.6%)으로 7:1 순환에 가깝다. 기계판정 6건(`RECHECK` 5·`BLOCK` 1), 감시 편입·제출 0건이며 `route_snapshot_missing` 115건이 주된 source gap이다. WS 등록 30초 표본은 최대 39/56개, release-set의 PID 결속 PASS다. 이 표본은 판정 도달 개선이나 기대수익 향상 확증이 아니다.
+- **릴리스 정리:** 실행 프로세스 cwd와 release-set 소유자가 사용하지 않는 이전 중간 `025d80f0`·`df9649ef` worktree를 정리했다. 선택 `59ebc9cd`, 직전 되돌림 `57946bc9`, 앞선 프리마켓·세션 경계 이력과 공유 data는 보존했다. 정리 후 release-set과 Main PID `772431` 결속이 계속 PASS다.
 
 ## 18:30 KST 진행 중 probe 세대 보존
 
