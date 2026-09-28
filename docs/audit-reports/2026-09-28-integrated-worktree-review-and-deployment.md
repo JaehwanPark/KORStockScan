@@ -23,3 +23,10 @@
 ## 릴리스·런타임 수용 단계
 
 통합 커밋, 불변 릴리스 선택, 실제 PID/cwd/env, 당일 정책 handoff, 자연 발견→판정→제출, broker 체결·terminal, 실제 비용 후 성과는 서로 다른 영수증으로 기록한다. 아직 자연 제출/체결 및 비용 후 경제성은 확인되지 않았다. 퇴역 전용 `53854ced`는 rollback으로 유지한다. 다른 systemd/cron이 사용하는 릴리스와 세 별도 dirty worktree는 삭제하지 않는다.
+
+## 15:44 KST 통합 커밋·선택·재기동
+
+- 통합 커밋 `d8aa4a646f81917ef4a39b72c3eebbc4d7ee686b`를 불변 릴리스 `/home/ubuntu/KORStockScan-runtime-releases/integrated-all-work-20260928-d8aa4a64`에 생성하고 작업공간 `main`을 동일 커밋에 맞췄다. 기존 `main`의 `8e8def53` 위치는 `backup/main-before-integrated-20260928` 브랜치로 보존했다. 작업공간의 `src/docs/deploy/restart.sh`는 clean이며 릴리스의 런타임 소스도 clean이다.
+- 선택 전 포인터 백업은 `tmp/integrated-selection-before-deploy-20260928T154342.json`이다. 정상 재기동으로 Main PID `688047`을 얻었고 PID cwd=`/home/ubuntu/KORStockScan-runtime-releases/integrated-all-work-20260928-d8aa4a64/src`, `KORSTOCKSCAN_RUNTIME_SOURCE_DIRTY=false`, `KORSTOCKSCAN_ZERO_BASE_SCANNER_ENABLED=true`를 확인했다. 당일 정책 handoff는 15:43:51 KST PASS, release-set은 selected Main PID 결속 PASS 및 별도 systemd 소유자 124개 대사 PASS다. release-set의 `functional_runtime_health`는 `not_assessed`이므로 경제성이나 장후 기능 완료로 해석하지 않는다.
+- 실제 사용 경로 참조와 source clean을 확인한 뒤 중간 스캐너 릴리스 `scanner-retirement-20260928-review`, `scanner-zero-base-20260928-review`, `diagnostics`, `fairness`, `sourcegap`, `wswait` 6개만 제거했다. 현행 `d8aa4a64`, 직전 `71caed84`, 퇴역 전용 `53854ced`, 별도 systemd가 사용하는 `30e66ae5`, 다른 세션의 세 dirty worktree는 보존했다.
+- 재기동은 선택/PID/정책 영수증을 닫는다. 새 PID의 다음 자연 매수창에서 정확 `_AL` 입력·기계 action·WATCHING 편입·제출/체결을 대사하고, terminal과 실제 비용 후 순익을 별도 수용해야 한다.
