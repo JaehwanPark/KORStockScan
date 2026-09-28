@@ -71,10 +71,7 @@ def test_bot_main_import_normalizes_retired_inherited_runtime_authority(monkeypa
         "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_SPREAD_WORSEN_BPS"
         not in os.environ
     )
-    assert (
-        os.environ["KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED"]
-        == "false"
-    )
+    assert "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED" not in os.environ
     assert (
         "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_POLICY_FILE" not in os.environ
     )
@@ -112,8 +109,8 @@ def test_bot_main_script_reexecs_with_sanitized_runtime_env(monkeypatch):
     assert captured["argv"][0] == sys.executable
     assert "KORSTOCKSCAN_UPPER_LIMIT_WATCH_ENABLED" not in captured["environ"]
     assert (
-        captured["environ"]["KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED"]
-        == "false"
+        "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED"
+        not in captured["environ"]
     )
 
 

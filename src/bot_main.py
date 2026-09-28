@@ -59,9 +59,6 @@ from src.engine.daily_report_service import (
 from src.engine.log_archive_service import (
     archive_target_date_logs,
 )
-from src.engine.strategy_position_performance_report import (
-    sync_trade_performance_for_date,
-)
 from src.utils.constants import RESTART_FLAG_PATH, TRADING_RULES
 from src.engine.error_detectors.process_health import reset_heartbeat, write_heartbeat
 from src.engine.error_detector import (
@@ -244,7 +241,15 @@ def generate_monitor_archive_job(target_date: str | None = None):
     """장마감 핵심 모니터 요약과 날짜별 gzip 로그 아카이브를 생성합니다."""
     resolved_date = _resolve_target_date(target_date)
     try:
-        perf_sync = sync_trade_performance_for_date(resolved_date)
+        # The full pipeline JSONL is still append-only during the integrated
+        # aftermarket. Its strict whole-generation reader cannot seal a source
+        # while the live writer is active. The 20:10 postclose chain owns the
+        # exact fact sync after that session ends.
+        perf_sync = {
+            "status": "deferred_to_postclose",
+            "owner": "threshold_cycle_postclose",
+            "reason": "live_pipeline_source_unsealed",
+        }
         snapshot_paths = run_monitor_snapshot_isolated(resolved_date)
         archived_logs = archive_target_date_logs(
             resolved_date,

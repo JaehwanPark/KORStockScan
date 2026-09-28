@@ -8,6 +8,45 @@ from types import SimpleNamespace
 import src.bot_main as bot_main
 
 
+def test_monitor_archive_defers_live_fact_sync_to_postclose(monkeypatch, tmp_path):
+    from src.engine import strategy_position_performance_report as performance_report
+
+    monkeypatch.setattr(bot_main, "PROJECT_ROOT", tmp_path)
+    forbidden_sync = lambda _date: (_ for _ in ()).throw(
+        AssertionError("premature_fact_sync")
+    )
+    monkeypatch.setattr(
+        bot_main, "sync_trade_performance_for_date", forbidden_sync, raising=False
+    )
+    monkeypatch.setattr(
+        performance_report,
+        "sync_trade_performance_for_date",
+        forbidden_sync,
+    )
+    calls = []
+    monkeypatch.setattr(
+        bot_main,
+        "run_monitor_snapshot_isolated",
+        lambda date: calls.append(("snapshot", date)) or {"trade_review": "snapshot.json"},
+    )
+    monkeypatch.setattr(
+        bot_main,
+        "archive_target_date_logs",
+        lambda date, paths: calls.append(("archive", date)) or [{"path": "log.gz"}],
+    )
+
+    result = bot_main.generate_monitor_archive_job("2026-09-28")
+
+    assert calls == [("snapshot", "2026-09-28"), ("archive", "2026-09-28")]
+    assert result["performance_sync"] == {
+        "status": "deferred_to_postclose",
+        "owner": "threshold_cycle_postclose",
+        "reason": "live_pipeline_source_unsealed",
+    }
+    assert result["snapshots"] == {"trade_review": "snapshot.json"}
+    assert result["archived_logs"] == [{"path": "log.gz"}]
+
+
 def test_daily_report_dispatch_is_nonblocking_and_keeps_heartbeat_progress(
     monkeypatch,
 ):
