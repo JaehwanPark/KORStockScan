@@ -43,6 +43,8 @@ class Candidate:
     in_flight: bool = False
     discovery_volume: int = 0
     source_kind: str = ""
+    claimed_observed_epoch: float = 0.0
+    claimed_source_sha256: str = ""
 
 
 class DiscoveryQueue:
@@ -109,6 +111,8 @@ class DiscoveryQueue:
                     == (current.source_sha256, current.source_scope)
                     else "source_generation_conflict"
                 )
+            # Refresh the discovery hint without revoking an active WS probe.
+            # Its separate claimed source remains exact for result binding.
             current.observed_epoch = observed_epoch
             current.source_sha256 = source_sha256
             current.source_scope = source_scope
@@ -121,7 +125,6 @@ class DiscoveryQueue:
             current.source_kind = source_kind
             # A new source generation makes a prior BLOCK eligible again.
             current.next_due_epoch = min(current.next_due_epoch, received_epoch)
-            current.in_flight = False
             return "updated"
         self._candidates[key] = Candidate(
             code=code,
@@ -196,6 +199,8 @@ class DiscoveryQueue:
             candidate.last_claim_epoch = now_epoch
             candidate.claim_count += 1
             candidate.in_flight = True
+            candidate.claimed_observed_epoch = candidate.observed_epoch
+            candidate.claimed_source_sha256 = candidate.source_sha256
         self._claim_sequence += len(ready)
         return [
             {
@@ -224,6 +229,8 @@ class DiscoveryQueue:
             if row.in_flight and now_epoch - row.last_claim_epoch >= timeout_sec:
                 row.in_flight = False
                 row.claim_count += 1  # Invalidate any later result for the old claim.
+                row.claimed_observed_epoch = 0.0
+                row.claimed_source_sha256 = ""
                 row.last_result = "probe_capacity_deferred"
                 row.machine_action = ""
                 row.next_due_epoch = now_epoch
@@ -251,11 +258,12 @@ class DiscoveryQueue:
             raise ValueError("invalid assessment result")
         key = (str(claim.get("code") or ""), str(claim.get("route") or ""))
         row = self._candidates.get(key)
-        if row is None or any(
-            claim.get(field) != getattr(row, field)
-            for field in (
-                "observed_epoch", "source_sha256", "source_scope",
-                "claim_count", "last_claim_epoch",
+        if row is None or (
+            claim.get("observed_epoch") != row.claimed_observed_epoch
+            or claim.get("source_sha256") != row.claimed_source_sha256
+            or any(
+                claim.get(field) != getattr(row, field)
+                for field in ("source_scope", "claim_count", "last_claim_epoch")
             )
         ):
             return False
@@ -269,7 +277,11 @@ class DiscoveryQueue:
         row.last_result = result
         row.machine_action = machine_action
         row.next_due_epoch = next_due_epoch
+        if row.observed_epoch > row.claimed_observed_epoch:
+            row.next_due_epoch = min(row.next_due_epoch, row.last_seen_epoch)
         row.in_flight = False
+        row.claimed_observed_epoch = 0.0
+        row.claimed_source_sha256 = ""
         return True
 
     def snapshot(self) -> dict:
@@ -307,6 +319,14 @@ class DiscoveryQueue:
                 or row.discovery_price < 0
                 or type(row.discovery_volume) is not int
                 or row.discovery_volume < 0
+                or not isfinite(row.claimed_observed_epoch)
+                or row.claimed_observed_epoch < 0
+                or (row.claimed_source_sha256 and re.fullmatch(
+                    r"[0-9a-f]{64}", row.claimed_source_sha256,
+                ) is None)
+                or (not row.in_flight and (
+                    row.claimed_observed_epoch or row.claimed_source_sha256
+                ))
                 or not all(
                     isfinite(value) and value >= 0
                     for value in (
@@ -339,5 +359,7 @@ class DiscoveryQueue:
             if row.in_flight:
                 row.in_flight = False
                 row.next_due_epoch = min(row.next_due_epoch, row.last_claim_epoch)
+                row.claimed_observed_epoch = 0.0
+                row.claimed_source_sha256 = ""
             queue._candidates[key] = row
         return queue

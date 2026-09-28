@@ -1,11 +1,19 @@
 # 제로베이스 SCALPING 발견·기계판정 구현 리뷰와 릴리스 문턱 — 2026-09-28
 
+## 18:30 KST 진행 중 probe 세대 보존
+
+- **관측·원인:** 빠른 순환 PID `761794`의 18:19~18:28 통합 애프터마켓에는 매분 대략 60~72개 probe 요청과 48~64개 수락 결과가 기록됐다. 요청·결과는 10초 WS 대기를 사이에 둔 서로 다른 시점이므로 차이를 곧바로 유실 건수로 확정할 수 없다. 그러나 `DiscoveryQueue.observe()`가 약 66초마다 새 패널을 받을 때 기존 `in_flight`를 해제하고 원천 hash를 바꾼 뒤, `resolve()`는 이전 claim의 hash를 현재 행과 비교해 결과를 버리는 경로를 코드·회귀로 재현했다. 같은 코드의 새 claim이 아직 진행 중인 WS 관측과 겹칠 수도 있다. 이는 감시 16슬롯의 문제가 아니라 판정 전 결과 수용의 경합이다.
+- **수정·안전:** 진행 중 claim의 원천 시각/hash를 별도 영속 필드에 고정한다. 새 패널은 후보의 최신 원천을 갱신하되 실행 중 probe lease를 빼앗지 않는다. 결과는 고정된 claim과 claim 횟수·시각으로 정확히 결속하며, 새 관측이 있었다면 결과 처리 뒤 최신 세대를 다음 dispatch에 곧바로 열어 둔다. probe timeout·재기동은 이전 claim을 무효화한다. 기계 `ENTER_NOW`에는 여전히 결과 시각 5초, 정확 WS route/transport·최종 3초 신선도와 Main 주문 hard guard가 필요하다. 발견/REST/WS/감시 예산과 가격·수량 임계치는 바꾸지 않는다.
+- **리뷰·검증:** 새 패널이 진행 중인 probe와 겹친 재생에서 이전 결과 수락·중복 결과 거절·최신 세대 재claim을 검증했고, 재기동/timeout 후 늦은 결과는 거절된다. queue/runtime/source/probe/Main attach와 인접 WS·읽기 제어 366건, Python compile, `git diff --check`가 통과했다. 배포·현재 PID 결과 수락률·감시/제출은 아래 후속 영수증으로 구분한다.
+
 ## 18:15 KST 스캘핑 발견·probe 순환 가속
 
 - **관측·결정:** 1분 활동성 릴리스 PID `758822`의 18:12~18:14 통합 애프터마켓 probe 첫 74건에서 활동성 56건 중 기계판정 3건, 상승률 18건 중 0건이었다. 같은 PID의 30초 WS snapshot 표본은 최대 등록 37/56개였고, 네 발견 패널은 모두 `observed_panel`이었다. 고유 코드 74개를 처리한 동안 현재 회차 claim 상한 8개/10초와 애프터마켓 90초 재조회가 앞단 순환의 명시적 속도 한계다. 1분 원천의 우위·실제 기대수익은 이 표본으로 증명되지 않는다.
 - **수정:** 회차 claim을 8→12개로, 실행 worker를 10→16개, bounded 예약을 16→24개로 늘린다. 두 회차가 10초 WS 대기와 겹쳐도 예약 단계에서 먼저 잘리지 않게 재리뷰 중 20→24로 보완했다. 제로베이스 발견만 전 세션 최대 60초 간격으로 재조회한다. 기존 레거시 스캐너 주기는 건드리지 않는다. 10초마다 최대 12개 dispatch의 산술 상한은 분당 72개이며, 16 worker×10초 기본 점유의 이론 처리력은 분당 96개다. 실제 REST·REG 지연과 12초 부분 연장 때문에 보장 처리량이 아니며, 새 PID의 보류·고유 코드·WS peak로 검증한다. 30개 상시 item+최대 16 동시 임시 item의 46/56은 관측 당시의 거친 상한일 뿐 다른 owner 증가를 보증하지 않는다. 공유 WS 등록 hard budget·API 5/4 admission은 그대로 작동하며 초과는 source/capacity 영수증으로 남긴다.
 - **안전 경계:** source 관측 120초, 정확 `_AL`/`_NX` route·transport와 3초 최종 신선도, 기계 다섯 틱 계약, 감시 16개 슬롯, 주문·수량·가격·hard safety는 변경하지 않는다. 추가 claim은 기계 `ENTER_NOW` 또는 주문 권한을 만들지 않는다.
-- **검증·수용:** 기존 10초 뒤 추가 dispatch와 source 만료를 13개 후보 재생으로 검증했고 queue/source/probe/Main/WS 연계 영향 회귀 566건, 예약 24개 재리뷰 뒤 표적 회귀 40건, Python compile, `git diff --check`, 문서 print-only parser가 통과했다. 불변 릴리스로 재기동한 뒤 새 PID에서 REST 패널 성공/429, worker 보류, WS 등록 peak, 정확 0B/0D·기계판정·감시·제출을 분리 대사한다.
+- **검증·배포:** 기존 10초 뒤 추가 dispatch와 source 만료를 13개 후보 재생으로 검증했고 queue/source/probe/Main/WS 연계 영향 회귀 566건, 예약 24개 재리뷰 뒤 표적 회귀 40건, Python compile, `git diff --check`, 문서 print-only parser가 통과했다. 커밋 `025d80f00d08bd161983a07f9ff29cf8f14daef7`의 불변 릴리스 `/home/ubuntu/KORStockScan-runtime-releases/zero-base-fast-cycle-20260928-025d80f0`를 선택·정상 재기동했다. 이전 포인터는 `tmp/zero-base-fast-cycle-selection-before-deploy-20260928T181756.json`에 보존했다. Main PID `761794`의 새 릴리스 cwd, source clean, scanner flag=true, WS 56-item budget env, 9/28 정책 bootstrap PASS, release-set PID 결속 PASS를 확인했다. 기능 상태는 `not_assessed`다. 새 PID에서 REST 패널 성공/429, worker 보류, WS 등록 peak, 정확 0B/0D·기계판정·감시·제출을 분리 대사한다.
+- **첫 자연 결과:** 18:18:28, 18:19:35, 18:20:41 KST 새 PID의 발견 회차는 각각 약 66초 간격으로 실행됐고 KOSPI/KOSDAQ 활동성·상승률 네 패널이 모두 `observed_panel`이었다. 각 회차 관측 세대는 508/514/503, 요청은 12개씩이다. 18:18~18:21 약 2.5분의 probe 결과 135건/135개 고유 코드 중 `assessed` 2건(모두 `RECHECK`), source gap 132건, active conflict 1건이며 worker capacity 보류는 0건이었다. 30초 WS snapshot 표본의 등록 item은 최대 40/56개였고 해당 패널의 429·WS 오류 로그 신규 행은 확인되지 않았다. 이 짧은 애프터마켓 표본에서 감시 편입·제출은 0건이다. source gap과 미평가 후보는 수익성 없는 종목으로 취급하지 않는다.
+- **릴리스 정리:** 실행 중 프로세스 cwd와 release-set 소유자가 사용하지 않는 이번 연속 시험의 중간 worktree `082ddd51`, `2cf7a3da`, `5f7d7d76`, `b158b81a`, `c359a8d5` 다섯 개를 제거했다. 선택 `025d80f0`, 직전 `df9649ef` 되돌림 후보, 앞선 프리마켓·세션 경계 이력 릴리스와 공유 data는 보존했다. 정리 뒤 release-set PASS와 Main PID `761794` 결속을 다시 확인했다.
 
 ## 18:10 KST 활동성 발견 창 5분→1분
 

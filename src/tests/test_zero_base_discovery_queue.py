@@ -117,7 +117,10 @@ def test_exact_source_generation_and_route_block_stale_resolution():
     assert _observe(queue, "000001") == "queued"
     claim = queue.claim(now_epoch=T0 + 2, limit=1)[0]
     assert _observe(queue, "000001", epoch=T0 + 3, digest=HASH_B) == "updated"
+    assert queue.claim(now_epoch=T0 + 4, limit=1) == []
+    assert queue.resolve(claim, result="assessed", machine_action="ENTER_NOW", next_due_epoch=T0 + 30)
     assert not queue.resolve(claim, result="assessed", machine_action="ENTER_NOW", next_due_epoch=T0 + 30)
+    assert queue.claim(now_epoch=T0 + 5, limit=1)[0]["source_sha256"] == HASH_B
     assert _observe(queue, "000001", route="nxt_only") == "queued"
     assert _observe(queue, "000001", epoch=T0 + 3, digest=HASH_A) == "source_generation_conflict"
     assert len(queue.snapshot()["candidates"]) == 2
@@ -140,6 +143,23 @@ def test_source_gap_is_not_machine_block_and_restart_reclaims_inflight():
     assert not restored.resolve(second, result="assessed", machine_action="ENTER_NOW", next_due_epoch=T0 + 40)
     with pytest.raises(ValueError):
         DiscoveryQueue.restore(queue.snapshot(), session_date="2026-09-29")
+
+
+def test_refreshed_inflight_claim_timeout_still_rejects_late_result():
+    queue = DiscoveryQueue(DAY)
+    _observe(queue, "000001")
+    claim = queue.claim(now_epoch=T0 + 2, limit=1)[0]
+    assert _observe(queue, "000001", epoch=T0 + 3, digest=HASH_B) == "updated"
+    restored = DiscoveryQueue.restore(queue.snapshot(), session_date=DAY)
+    assert not restored.resolve(
+        claim, result="assessed", machine_action="ENTER_NOW", next_due_epoch=T0 + 30,
+    )
+    refreshed = restored.claim(now_epoch=T0 + 7, limit=1)[0]
+    assert refreshed["source_sha256"] == HASH_B
+    assert restored.abandon_expired_claims(now_epoch=T0 + 68, timeout_sec=60) == 1
+    assert not restored.resolve(
+        refreshed, result="assessed", machine_action="ENTER_NOW", next_due_epoch=T0 + 80,
+    )
 
 
 def test_invalid_or_cross_day_source_cannot_enter_queue():

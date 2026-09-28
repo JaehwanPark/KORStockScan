@@ -24,6 +24,12 @@
 
 새 PID의 첫 74개 probe에서 활동성 56건 중 기계판정 3건, WS 등록 표본 최대 37/56개였다. 앞단 순환을 빠르게 하기 위해 제로베이스의 발견 재조회 최대 60초, 10초당 claim 12개, 16 worker/24 예약으로 상향한다. 공유 API 5/4, WS 56-item hard budget, 감시 16-slot 및 기계·주문 가드는 유지한다. [순환 가속 리뷰](../audit-reports/2026-09-28-zero-base-scanner-implementation-review-and-release-gates.md#1815-kst-스캘핑-발견probe-순환-가속)의 새 PID에서 실제 처리량·수신·판정과 부하를 확인한다.
 
+커밋 `025d80f0`의 불변 릴리스가 Main PID `761794`로 정상 기동됐고 source clean·scanner flag·당일 정책 bootstrap·release-set 결속이 통과했다. 실제 분당 고유 probe·WS peak·기계판정·감시·제출 및 비용 후 결과는 별도다.
+
+빠른 발견 회차가 진행 중인 probe의 원천 hash와 lease를 덮는 경합을 추가로 확인했다. 현재 원천과 실행 중 claim을 분리해 새 발견을 즉시 기록하면서도 도착한 판정 결과를 정확히 결속하고, 다음 dispatch에서 새 세대를 사용할 수 있게 한다. 재기동·timeout의 오래된 결과는 계속 거절한다. [18:30 경합 리뷰](../audit-reports/2026-09-28-zero-base-scanner-implementation-review-and-release-gates.md#1830-kst-진행-중-probe-세대-보존)의 배포·자연 결과는 별도 대사한다.
+
+18:18~18:21 새 PID 자연 결과는 발견 약 66초 간격, 135개 고유 probe/약 2.5분, worker 보류 0, WS 등록 표본 최대 40/56이었다. 기계판정은 RECHECK 2건이며 감시 편입·제출은 0건이다. 앞단 처리량과 부하는 확인했지만, 현재 애프터마켓의 정확 WS 수신 결손을 기계가 무시하거나 원천 결손을 수익성 0으로 채우지 않는다. 정규장·프리마켓의 동일 경로 수신과 감시/제출·비용 후 결과는 자연 영수증으로 구분한다.
+
 감시 슬롯의 더 빠른 의미적 해제는 실제 zero-base WATCHING 세대에서 신선한 연속 비진입과 반전 부재, 동일 슬롯 경쟁이 확인된 뒤 별도로 판단한다. 기존 재생에서 5분 조기 퇴출 후보의 후행 회복이 있었고 10분 적격 후보는 0이므로 체류시간이나 `BLOCK` 횟수만으로 새 퇴출 임계치를 만들지 않는다.
 
 ## 16:59 KST 세션 경계 재리뷰

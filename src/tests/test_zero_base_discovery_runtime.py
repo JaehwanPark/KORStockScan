@@ -64,6 +64,33 @@ def test_runtime_durable_claim_machine_enter_and_late_result_rejection(tmp_path)
     assert restored.queue.snapshot()["candidates"][0]["source_kind"] == "activity"
 
 
+def test_new_discovery_does_not_drop_running_probe_result(tmp_path):
+    bus = Bus()
+    runtime = ZeroBaseDiscoveryRuntime(
+        event_bus=bus, session_date="2026-09-28", state_path=tmp_path / "state.json",
+    )
+    runtime.scan_once("token", fetcher=_panel, now_epoch=T0 + 1)
+    request = next(payload for event, payload in bus.events if event == PROBE_REQUEST_EVENT)
+    newer = _panel("token")
+    newer["observations"][0] = {
+        **newer["observations"][0],
+        "observed_epoch": T0 + 2,
+        "source_sha256": "c" * 64,
+    }
+    repeat = runtime.scan_once("token", fetcher=lambda _token: newer, now_epoch=T0 + 3)
+    assert repeat["observed_new_generation_count"] == 1
+    assert repeat["probe_requested_count"] == 0
+    bus.publish(PROBE_RESULT_EVENT, {
+        **request, "result": "assessed", "machine_action": "RECHECK",
+        "result_epoch": T0 + 4,
+    })
+    assert len(runtime.drain_results(now_epoch=T0 + 4)) == 1
+    assert runtime.queue.snapshot()["candidates"][0]["source_sha256"] == "c" * 64
+    assert runtime.dispatch_due_probes(now_epoch=T0 + 7)["probe_requested_count"] == 1
+    assert [payload["claim"]["source_sha256"] for event, payload in bus.events
+            if event == PROBE_REQUEST_EVENT][-1] == "c" * 64
+
+
 def test_lost_probe_is_reclaimed_but_old_enter_cannot_promote(tmp_path):
     bus = Bus()
     runtime = ZeroBaseDiscoveryRuntime(
