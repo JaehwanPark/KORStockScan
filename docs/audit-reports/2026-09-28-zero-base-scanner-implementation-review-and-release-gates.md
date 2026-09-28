@@ -1,5 +1,11 @@
 # 제로베이스 SCALPING 발견·기계판정 구현 리뷰와 릴리스 문턱 — 2026-09-28
 
+## 18:00 KST 짧은 수신창 보완과 처리량 경계
+
+- **수신 실측:** Main 구독 정리 충돌을 막은 PID `748532`의 17:54~17:58 첫 probe 167건은 기계판정 5건(`BLOCK` 1, `RECHECK` 4), 첫 정확 0B 10건·0D 37건, `route_snapshot_missing` 129건이었다. 수정 전 다른 후보·시간대의 0/158과 단순 효과율로 비교하지 않는다. 진행 중 임시 WS 구독을 Main이 정리한 로그는 새 PID에서 확인되지 않았고, probe 자체 종료의 REMOVE가 별도로 발생한다.
+- **보완:** 자료가 일찍 준비되면 즉시 반환하는 규칙을 유지하면서 전 세션 기본 임시 WS 관측 상한을 5초→10초로 늘린다. 프리마켓·통합 애프터마켓의 한쪽 수신일 때만 추가 최대 2초로 12초 상한이다. 긴 결손 대기로 큐가 막히지 않도록 worker 5→10, bounded 예약 12→16으로 조정한다. 회차당 claim 8·10초 dispatch, source 관측 120초, WS item hard budget 56, 공유 REST 5/4 admission과 최종 0B·0D 3초 신선도·기계 다섯 틱 계약·주문 안전 가드는 유지한다. 17:55 snapshot의 등록 item은 30/56이며 10개 동시 신규 probe의 이론상 40/56은 순간 peak·다른 owner의 동시 증감을 보증하지 않는다. 예산 초과는 기존 REG 거절로 남긴다.
+- **검증·수용:** 초기 WS 스냅샷이 비어 있다가 bounded 대기 안에 정확 route 0B·0D가 들어오는 회귀를 추가했다. 영향 회귀 409건, Python compile, `git diff --check`, 문서 print-only parser가 통과했다. 새 PID의 작업자 보류·WS peak·첫 수신·기계판정·제출은 후속 영수증으로 분리한다.
+
 ## 17:52 KST 임시 WS 구독과 Main 정리 충돌 수리
 
 - **자연 원인 영수증:** 활동성 패널 릴리스 `2cf7a3da5e9a0943fd76d9f24292a85b1321c6e6`의 Main PID `745183`는 17:47:43 기동·당일 bootstrap PASS, source clean·scanner flag=true·release-set PASS다. 17:48 첫 KOSPI/KOSDAQ `ka10023`은 각각 반환 198/194행, 양의 급증·상승 보통주 적격 134/93행이고 두 패널 모두 `observed_panel`이다. 17:47~17:51 probe 158건(활동성 134·상승률 24) 중 `route_snapshot_missing` 156, 발견 관측 만료 1, 0B 나이 초과 1, 기계판정 0이었다. 동시에 Main은 5초 간격 `WS_SUBSCRIPTION_PRUNE`에서 임시 probe 코드를 비활성 감시 종목으로 취급해 해제했다. 같은 probe가 진행 중인데 Main 정리가 구독을 제거하는 실제 소유권 충돌이며, 156건 전부의 유일한 원인이라고 단정하지 않는다.

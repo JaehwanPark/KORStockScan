@@ -246,6 +246,28 @@ def test_empty_receipt_does_not_extend_wait():
     assert observation["effective_wait_budget_ms"] == 10
 
 
+def test_late_exact_pair_arrives_after_initially_empty_ws_snapshot():
+    ready = _snapshot(route="krx_nxt_integrated", item="123456_AL")
+    key = "_AL|krx_nxt_integrated"
+    ready["recent_trade_ticks_by_route"] = {key: [
+        {"received_at_ms": 10500, "item": "123456_AL", "transport_epoch": 3}
+    ]}
+    ready["recent_depth_ticks_by_route"] = {key: [
+        {"received_at_ms": 10600, "item": "123456_AL", "transport_epoch": 3}
+    ]}
+    started = time.monotonic()
+    ws = SimpleNamespace(get_latest_data=lambda *_args: (
+        {} if time.monotonic() - started < 0.04 else ready
+    ))
+    data, observation, reason = wait_for_exact_probe_ws_data(
+        ws, code="123456", route="krx_nxt_integrated", after_epoch=10,
+        now=lambda: 11, timeout_sec=0.1, poll_interval_sec=0.005,
+    )
+    assert reason == "ready" and data
+    assert 35 <= observation["wait_ms"] < 100
+    assert observation["partial_extension_applied"] is False
+
+
 def test_probe_observation_counts_only_exact_route_and_transport():
     snapshot = _snapshot(route="krx_nxt_integrated", item="123456_AL")
     key = "_AL|krx_nxt_integrated"

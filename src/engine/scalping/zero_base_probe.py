@@ -143,7 +143,7 @@ def probe_ws_observation(snapshot: dict, *, code: str, route: str,
 
 def wait_for_exact_probe_ws_data(ws_manager, *, code: str, route: str,
                                  after_epoch: float, now=time.time,
-                                 timeout_sec: float = 5.0,
+                                 timeout_sec: float = 10.0,
                                  partial_extension_sec: float = 0.0,
                                  poll_interval_sec: float = 0.05,
                                  min_exact_0b_count: int = 0) -> tuple[dict, dict, str]:
@@ -216,7 +216,7 @@ def run_zero_base_probe(
     candle_fetcher=None,
     context_builder=None,
     release_ws=None,
-    ws_wait_timeout_sec: float = 5.0,
+    ws_wait_timeout_sec: float = 10.0,
     ws_wait_partial_extension_sec: float = 0.0,
     ws_wait_min_exact_0b_count: int = 5,
 ) -> dict:
