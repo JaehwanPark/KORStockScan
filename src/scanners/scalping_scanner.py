@@ -66,7 +66,7 @@ from src.engine.sniper_time import (
     scalping_prewarm_window,
     scalping_session_venue_provenance,
 )
-from src.utils.constants import TRADING_RULES
+from src.utils.constants import DATA_DIR, TRADING_RULES
 from src.utils.pipeline_event_logger import emit_pipeline_event
 from src.scanners.scanner_source_census import (
     observe_cycle,
@@ -76,6 +76,7 @@ from src.scanners.scanner_source_census import (
     source_target_market_data_route,
     source_target_venue,
 )
+from src.scanners.zero_base_discovery_runtime import ZeroBaseDiscoveryRuntime
 from src.trading.market import session_contract
 from sqlalchemy import func, or_
 
@@ -6817,6 +6818,94 @@ def run_scalper_iteration(
     )
 
 
+def _zero_base_scanner_enabled():
+    return str(os.getenv("KORSTOCKSCAN_ZERO_BASE_SCANNER_ENABLED", "false")).strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def _zero_base_log_event(stage, *, code="", name="", fields=None):
+    try:
+        emit_pipeline_event(
+            "ENTRY_PIPELINE", name or "-", code or "-", stage,
+            fields={
+                "metric_role": "funnel_count",
+                "decision_authority": "zero_base_discovery_probe_no_order_authority",
+                "window_policy": "same_kst_date_exact_route_source_generation",
+                "sample_floor": "one_discovery_or_probe_receipt",
+                "primary_decision_metric": "discovered_to_machine_assessed_count",
+                "source_quality_gate": "exact_route_fresh_ws_0b_0d_and_machine_bundle",
+                "forbidden_uses": (
+                    "standalone_buy,broker_submit,threshold_mutation,provider_change,"
+                    "order_price_or_quantity_change,hard_safety_bypass,whole_market_claim"
+                ),
+                "runtime_effect": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                **dict(fields or {}),
+            },
+        )
+    except Exception as exc:
+        log_error("[ZERO_BASE_RECEIPT] append failed: " + type(exc).__name__)
+
+
+def run_zero_base_scanner(*, token, event_bus, is_test_mode=False):
+    runtime = None
+    next_scan_epoch = 0.0
+    while True:
+        from src.engine.error_detectors.process_health import write_heartbeat
+
+        write_heartbeat("scalping_scanner")
+        now = datetime.now(KST)
+        session_date = now.date().isoformat()
+        if runtime is None or runtime.queue.session_date != session_date:
+            if runtime is not None:
+                runtime.close()
+            runtime = ZeroBaseDiscoveryRuntime(
+                event_bus=event_bus,
+                session_date=session_date,
+                state_path=(
+                    DATA_DIR / "runtime" / "zero_base_discovery_queue"
+                    / f"{session_date}.json"
+                ),
+            )
+            next_scan_epoch = 0.0
+        for result in runtime.drain_results():
+            claim = result["claim"]
+            _zero_base_log_event(
+                "zero_base_probe_result",
+                code=claim.get("code"),
+                name=result.get("candidate", {}).get("name"),
+                fields={
+                    "zero_base_route": claim.get("route"),
+                    "zero_base_source_sha256": claim.get("source_sha256"),
+                    "zero_base_claim_count": claim.get("claim_count"),
+                    "zero_base_probe_result": result.get("result"),
+                    "zero_base_probe_reason": result.get("reason"),
+                    "entry_mechanistic_action": result.get("machine_action") or "-",
+                    "machine_bundle_sha256": result.get("machine_bundle_sha256") or "-",
+                },
+            )
+        active_window = _active_scalping_buy_window(now)
+        if (active_window is not None or is_test_mode) and time.time() >= next_scan_epoch:
+            try:
+                summary = runtime.scan_once(token)
+                _zero_base_log_event(
+                    "zero_base_discovery_cycle",
+                    fields={
+                        "zero_base_observed_generation_count": summary["observed_new_generation_count"],
+                        "zero_base_probe_requested_count": summary["probe_requested_count"],
+                        "zero_base_probe_timeout_count": summary["probe_timeout_count"],
+                        "zero_base_queue_count": summary["queue_count"],
+                        "zero_base_panels": summary["panels"],
+                    },
+                )
+            except Exception as exc:
+                log_error("[ZERO_BASE_SCANNER] cycle failed: " + type(exc).__name__)
+            next_scan_epoch = time.time() + _resolve_scan_interval_sec(now.time())
+        time.sleep(0.5)
+
+
 # ==========================================
 # 🦅 스캘핑 스캐너 (전방 탐색조)
 # ==========================================
@@ -6860,6 +6949,12 @@ def run_scalper(is_test_mode=False):
 
     if not token:
         log_error("❌ 키움 토큰 발급 실패. 스캐너를 종료합니다.")
+        return
+
+    if _zero_base_scanner_enabled():
+        run_zero_base_scanner(
+            token=token, event_bus=event_bus, is_test_mode=is_test_mode,
+        )
         return
 
     configure_pruned_candidate_bbo_collector(token)

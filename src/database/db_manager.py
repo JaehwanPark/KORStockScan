@@ -1008,6 +1008,21 @@ class DBManager:
             df = df[
                 ~df["strategy"].astype(str).str.upper().isin({"S15_CANDID", "S15_FAST"})
             ]
+            # Retired VCP watch rows must not be rearmed on a new process.
+            # Broker-owned orders and holdings remain visible to their exit owner.
+            retired_vcp_watch = df["status"].astype(str).str.upper().eq("WATCHING") & (
+                df["position_tag"]
+                .astype(str)
+                .str.upper()
+                .isin({"VCP_CANDID", "VCP_SHOOTING", "VCP_NEXT"})
+            )
+            df = df[~retired_vcp_watch]
+            # A zero-base machine pass is provisional until Main attaches the
+            # same generation. A crash must not boot it as an entry target.
+            zero_base_provisional = df["status"].astype(str).str.upper().eq(
+                "PROBE_READY"
+            )
+            df = df[~zero_base_provisional]
             if df.empty:
                 return []
 

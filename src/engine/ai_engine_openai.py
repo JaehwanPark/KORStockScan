@@ -8511,6 +8511,7 @@ class GPTSniperEngine:
         entry_economics_observer=None,
         entry_input_refresher=None,
         entry_input_deadline_epoch=None,
+        machine_only=False,
     ):
         from src.engine.scalping.entry_setup_scalping_rollout import PATH_ENV, SHA_ENV
 
@@ -8523,6 +8524,15 @@ class GPTSniperEngine:
             )
             and bool(os.getenv(PATH_ENV) or os.getenv(SHA_ENV))
         )
+        if machine_only and not rollout_entry:
+            return {
+                "action": "WAIT",
+                "machine_evaluation_status": "machine_policy_not_selected",
+                "provider_called": False,
+                "ai_decision_outcome_eligible": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            }
         if rollout_entry:
             prompt_profile = "watching"
         economic_source_fields = {}
@@ -9253,6 +9263,19 @@ class GPTSniperEngine:
         machine_hot_payload = None
         machine_feature_packet = None
         machine_capture = {}
+        if machine_only and not (
+            is_scalping_entry_call
+            and decision_quality_v2_14_selected
+            and entry_setup_live_policy.get("machine_bundle_sha256")
+        ):
+            return {
+                "action": "WAIT",
+                "machine_evaluation_status": "machine_policy_not_selected",
+                "provider_called": False,
+                "ai_decision_outcome_eligible": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            }
         if (
             is_scalping_entry_call
             and decision_quality_v2_14_selected
@@ -9413,6 +9436,23 @@ class GPTSniperEngine:
                          'ai_component_sha256': entry_setup_live_policy.get('auxiliary_policy_sha256')}
                     ),
                 )
+                if machine_only:
+                    # Discovery probes have no provider, WATCHING, or order
+                    # authority. A later live WATCHING attempt gets a new
+                    # source generation and is assessed independently.
+                    return {
+                        "action": "WAIT",
+                        "entry_primary_decision_owner": "mechanistic_entry_adjudicator",
+                        "entry_mechanistic_action": machine_assessment["action"],
+                        "mechanistic_entry_assessment": machine_assessment,
+                        "machine_bundle_sha256": entry_setup_live_policy["machine_bundle_sha256"],
+                        "machine_evaluation_status": "assessed",
+                        **machine_capture,
+                        "provider_called": False,
+                        "ai_decision_outcome_eligible": False,
+                        "actual_order_submitted": False,
+                        "broker_order_forbidden": True,
+                    }
                 if machine_assessment["action"] in {"ENTER_NOW", "BLOCK", "RECHECK"} and callable(entry_economics_observer):
                     try:
                         economic_source_fields = entry_economics_observer(

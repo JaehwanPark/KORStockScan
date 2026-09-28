@@ -318,6 +318,8 @@ def fetch_entry_candles_with_meta(
     now_ts: Any = None,
     broker_route: str | None = None,
     allow_integrated_sor_execution_view: bool = False,
+    request_owner: str | None = None,
+    request_class: str | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Fetch entry candles from the route owned by the effective venue/session."""
 
@@ -347,11 +349,17 @@ def fetch_entry_candles_with_meta(
     )
     from src.utils import kiwoom_utils
 
+    request_purpose = {}
+    if request_owner is not None:
+        request_purpose["request_owner"] = request_owner
+    if request_class is not None:
+        request_purpose["request_class"] = request_class
     candles, source_meta = kiwoom_utils.get_minute_candles_ka10080_with_meta(
         token,
         request_code,
         limit=max(max(1, int(limit)), SOURCE_BAR_LIMIT),
         explicit_request_code=True,
+        **request_purpose,
     )
     metadata = dict(source_meta or {})
     metadata.update(

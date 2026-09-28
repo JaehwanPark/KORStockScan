@@ -1544,6 +1544,19 @@ def test_post_login_bootstrap_skips_condition_list_by_default(monkeypatch):
     assert collector.epochs == []
 
 
+def test_zero_base_bootstrap_skips_condition_list_when_swing_off(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_ZERO_BASE_SCANNER_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_WS_CONDITION_SEARCH_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_SWING_REAL_WATCHING_ENABLED", "false")
+    manager = KiwoomWSManager("test-token")
+    fake_ws = _FakeWS([])
+    manager.websocket = fake_ws
+    asyncio.run(manager._send_post_login_bootstrap())
+    assert not any(
+        json.loads(payload).get("trnm") == "CNSRLST" for payload in fake_ws.sent
+    )
+
+
 def test_post_login_bootstrap_restores_symbols_after_readiness_boundary(monkeypatch):
     monkeypatch.delenv("KORSTOCKSCAN_WS_CONDITION_SEARCH_ENABLED", raising=False)
     manager = KiwoomWSManager("test-token")
@@ -1699,6 +1712,59 @@ def test_condition_list_allows_conditions_when_explicitly_enabled(monkeypatch):
     assert manager.condition_dict == {
         "1": "scalp_candid_normal_01",
         "6": "kospi_short_swing_01",
+    }
+
+
+def test_zero_base_mode_subscribes_only_independent_swing_condition(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_ZERO_BASE_SCANNER_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_WS_CONDITION_SEARCH_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_SWING_REAL_WATCHING_ENABLED", "true")
+
+    async def no_sleep(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(kiwoom_websocket.asyncio, "sleep", no_sleep)
+    manager = KiwoomWSManager("test-token")
+    fake_ws = _FakeWS([])
+    manager.websocket = fake_ws
+    asyncio.run(manager._handle_message(json.dumps({
+        "trnm": "CNSRLST", "data": [
+            {"seq": "1", "name": "scalp_candid_normal_01"},
+            {"seq": "2", "name": "kospi_short_swing_01"},
+        ],
+    })))
+    assert [json.loads(payload)["seq"] for payload in fake_ws.sent] == ["2"]
+    assert manager.condition_dict == {"2": "kospi_short_swing_01"}
+
+
+def test_retired_vcp_s15_conditions_are_not_subscribed(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_WS_CONDITION_SEARCH_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_SWING_REAL_WATCHING_ENABLED", "true")
+
+    async def no_sleep(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(kiwoom_websocket.asyncio, "sleep", no_sleep)
+    manager = KiwoomWSManager("test-token")
+    fake_ws = _FakeWS([])
+    manager.websocket = fake_ws
+    names = (
+        "vcp_candid_01", "vcp_shooting_01", "vcp_shooting_next_01",
+        "s15_scan_base", "s15_trigger_break",
+        "s15_scan_base_01", "s15_trigger_break_01",
+        "scalp_candid_normal_01", "kospi_short_swing_01",
+    )
+    asyncio.run(manager._handle_message(json.dumps({
+        "trnm": "CNSRLST",
+        "data": [{"seq": str(i), "name": name} for i, name in enumerate(names)],
+    })))
+
+    sent = [json.loads(payload) for payload in fake_ws.sent]
+    assert [names[int(payload["seq"])] for payload in sent] == [
+        "scalp_candid_normal_01", "kospi_short_swing_01",
+    ]
+    assert set(manager.condition_dict.values()) == {
+        "scalp_candid_normal_01", "kospi_short_swing_01",
     }
 
 

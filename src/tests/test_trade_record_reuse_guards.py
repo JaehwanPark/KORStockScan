@@ -110,7 +110,7 @@ def test_get_active_targets_excludes_s15_fast_track_owned_rows(monkeypatch):
         assert "rising_missed_scout_position_cycle_active" in query
         assert "scanner_source_signature as source_signature" in query
         assert "status IN ('HOLDING', 'BUY_ORDERED', 'SELL_ORDERED')" in query
-        return pd.DataFrame(
+        rows = pd.DataFrame(
             [
                 {
                     "id": 1,
@@ -196,14 +196,28 @@ def test_get_active_targets_excludes_s15_fast_track_owned_rows(monkeypatch):
                 },
             ]
         )
+        retired_watch = rows.iloc[2].copy()
+        retired_watch["id"] = 4
+        retired_watch["code"] = "004444"
+        retired_watch["status"] = "WATCHING"
+        retired_watch["position_tag"] = "VCP_SHOOTING"
+        legacy_holding = retired_watch.copy()
+        legacy_holding["id"] = 5
+        legacy_holding["code"] = "005555"
+        legacy_holding["status"] = "HOLDING"
+        return pd.concat(
+            [rows, pd.DataFrame([retired_watch, legacy_holding])],
+            ignore_index=True,
+        )
 
     monkeypatch.setattr(pd, "read_sql", _fake_read_sql)
 
     targets = _ActiveTargetDB().get_active_targets()
 
-    assert [target["code"] for target in targets] == ["005930"]
-    assert targets[0]["strategy"] == "SCALPING"
-    assert targets[0]["rising_missed_scout_position_cycle_active"] is True
+    assert {target["code"] for target in targets} == {"005930", "005555"}
+    scanner = next(target for target in targets if target["code"] == "005930")
+    assert scanner["strategy"] == "SCALPING"
+    assert scanner["rising_missed_scout_position_cycle_active"] is True
 
 
 def test_save_recommendation_does_not_reuse_completed_trade_row():

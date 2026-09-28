@@ -61798,7 +61798,7 @@ def _handle_watching_strategy_branch(
     strong_vpw = runtime["strong_vpw"]
 
     if strategy == "SCALPING":
-        if pos_tag == "VCP_CANDID":
+        if pos_tag in {"VCP_CANDID", "VCP_SHOOTING", "VCP_NEXT"}:
             return False
 
         opening_rotation_handled = _handle_watching_opening_rotation(
@@ -82946,6 +82946,10 @@ def handle_watching_state(
     [WATCHING 상태] 진입 타점 감시 및 AI 교차 검증
     """
     global LAST_AI_CALL_TIMES
+
+    # Provisional zero-base rows cannot enter the live decision path.
+    if stock.get("zero_base_pending_db"):
+        return
 
     # Test/offline startup paths can construct WATCHING before the shared
     # containers are installed.  Treat that as an empty runtime view rather

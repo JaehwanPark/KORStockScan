@@ -145,16 +145,25 @@ SCALP_CONDITION_KEYWORDS = (
     "scalp_underpress_01",
     "scalp_shooting_01",
     "scalp_afternoon_01",
-    "vcp_candid_01",
-    "vcp_shooting_01",
-    "vcp_shooting_next_01",
-    "s15_scan_base_01",
-    "s15_trigger_break_01",
 )
 SWING_CONDITION_KEYWORDS = (
     "kospi_short_swing_01",
     "kospi_midterm_swing_01",
 )
+
+
+def _zero_base_discovery_enabled() -> bool:
+    return str(os.getenv("KORSTOCKSCAN_ZERO_BASE_SCANNER_ENABLED", "false")).strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def _zero_base_condition_intake_allowed(name):
+    return not _zero_base_discovery_enabled() or any(
+        keyword in str(name or "") for keyword in SWING_CONDITION_KEYWORDS
+    )
+
+
 _WS_HOT_RUNTIME_OVERRIDE_KEYS = frozenset(
     {
         "KORSTOCKSCAN_WS_ALTERNATE_ROUTE_MAX_CODES",
@@ -3063,14 +3072,19 @@ class KiwoomWSManager:
         if not self.websocket:
             return
 
-        if is_ws_condition_search_enabled():
+        if is_ws_condition_search_enabled() and (
+            not _zero_base_discovery_enabled()
+            or is_swing_real_watching_enabled()
+        ):
             print("🔍 [WS] HTS 조건검색식 목록(CNSRLST)을 요청합니다.")
             await self.websocket.send(json.dumps({"trnm": "CNSRLST"}))
         else:
             self.condition_dict.clear()
             print(
                 "[WS_CONDITION_SEARCH_DISABLED] HTS 조건검색식 목록 요청 생략 "
-                f"env={WS_CONDITION_SEARCH_ENABLED_ENV}"
+                f"env={WS_CONDITION_SEARCH_ENABLED_ENV} "
+                f"zero_base={_zero_base_discovery_enabled()} "
+                f"swing_enabled={is_swing_real_watching_enabled()}"
             )
 
         self._market_data_transport_epoch += 1
@@ -3281,7 +3295,12 @@ class KiwoomWSManager:
                 self.condition_dict.clear()
                 target_seqs = []
 
-                target_keywords = list(SCALP_CONDITION_KEYWORDS)
+                zero_base_discovery = _zero_base_discovery_enabled()
+                # The replacement scanner owns SCALPING discovery. Retain
+                # swing subscriptions under their independent runtime owner.
+                target_keywords = (
+                    [] if zero_base_discovery else list(SCALP_CONDITION_KEYWORDS)
+                )
                 if is_swing_real_watching_enabled():
                     target_keywords.extend(SWING_CONDITION_KEYWORDS)
                 # 🚨 주의: 다중 검색식을 찾을 때는 여기서 break를 쓰면 안 됩니다!
@@ -3347,6 +3366,8 @@ class KiwoomWSManager:
                 c_data = msg_dict.get("data") or []
                 seq = str(msg_dict.get("seq", "")).strip()
                 cnd_name = self.condition_dict.get(seq) or "UNKNOWN_CONDITION"
+                if not _zero_base_condition_intake_allowed(cnd_name):
+                    return
                 print(
                     f"[WS] CNSRREQ init load: {len(c_data)} items (seq={seq}, condition={cnd_name})"
                 )
@@ -3389,6 +3410,8 @@ class KiwoomWSManager:
 
                         # 기억해둔 번호로 검색식 이름을 알아냅니다.
                         cnd_name = self.condition_dict.get(seq) or "UNKNOWN_CONDITION"
+                        if not _zero_base_condition_intake_allowed(cnd_name):
+                            continue
 
                         if insert_type == "I":
                             if not _condition_match_intake_allowed(cnd_name):
@@ -5494,6 +5517,7 @@ class KiwoomWSManager:
                     print(f"🚨 [WS] 스레드 통신 간 에러 발생: {e}")
 
             future.add_done_callback(on_complete)
+            return future
 
     def execute_unsubscribe(self, codes):
         if not codes:

@@ -101,6 +101,12 @@ from src.engine.scalping.scanner_runtime_scheduler import (
 )
 from src.engine.ai.hot_path_ai_dispatcher import HotPathAIDispatcher
 from src.engine.scalping.scanner_async_eval import ScannerAsyncEvalCoordinator
+from src.engine.scalping.zero_base_probe import run_zero_base_probe
+from src.scanners.zero_base_discovery_runtime import (
+    MACHINE_ENTER_EVENT,
+    PROBE_REQUEST_EVENT,
+    PROBE_RESULT_EVENT,
+)
 from src.engine.scalping.entry_ai_gate import (
     entry_buy_decision_allowed,
     evaluate_ai_score_prior,
@@ -134,22 +140,11 @@ from src.engine.sniper_time import (
 from src.engine.sniper_s15_fast_track import (
     bind_s15_dependencies,
     _now_ts,
-    _arm_s15_candidate,
-    _unarm_s15_candidate,
-    _restore_armed_candidates_from_database,
-    _is_s15_armed,
-    _is_s15_reentry_blocked,
-    _block_s15_reentry,
     _get_fast_state,
-    _set_fast_state,
-    _pop_fast_state,
     _persist_fast_state,
     _finalize_s15_completed_state,
     _restore_fast_trade_states_from_journal,
     _weighted_avg,
-    create_s15_shadow_record,
-    update_s15_shadow_record,
-    execute_fast_track_scalp_v2,
 )
 from src.trading.market import session_contract
 from src.engine.sniper_condition_handlers import (
@@ -333,6 +328,10 @@ bind_s15_dependencies(db=DB)
 
 # 💡 [스레드 안전성] 공유 상태 접근용 락
 _state_lock = threading.RLock()
+_ZERO_BASE_PROBE_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="zero-base-probe")
+_ZERO_BASE_PROBE_SLOTS = threading.BoundedSemaphore(8)
+_ZERO_BASE_PROBE_IN_FLIGHT = set()
+_ZERO_BASE_PROBE_LOCK = threading.Lock()
 
 global ACTIVE_TARGETS
 ACTIVE_TARGETS = []
@@ -1531,8 +1530,8 @@ def check_watching_conditions(
 
     # 초단타 SCALPING 전략 검사
     if strategy == "SCALPING":
-        if pos_tag == "VCP_CANDID":
-            return "VCP_CANDID 태그로 인한 제외"
+        if pos_tag in {"VCP_CANDID", "VCP_SHOOTING", "VCP_NEXT"}:
+            return "퇴역한 VCP 진입 경로"
 
         ask_tot = _safe_int(ws_data.get("ask_tot"), 0)
         bid_tot = _safe_int(ws_data.get("bid_tot"), 0)
@@ -1562,67 +1561,63 @@ def check_watching_conditions(
                 f"cap={scalp_limits.get('bucket_label')})"
             )
 
-        if pos_tag == "VCP_NEXT":
-            # VCP_NEXT는 별도 검사 없이 통과
-            pass
-        else:
-            if radar is None:
-                return "radar 객체 없음"
-            momentum_ws_data = dict(ws_data or {})
-            momentum_ws_data["_position_tag"] = pos_tag
-            momentum_gate = evaluate_scalping_strength_momentum(momentum_ws_data)
-            if current_vpw < getattr(TRADING_RULES, "VPW_SCALP_LIMIT", 120):
-                return (
-                    f"VPW 불충족 (current_vpw={current_vpw:.1f} < VPW_SCALP_LIMIT, "
-                    f"dynamic_allowed={momentum_gate.get('allowed')}, "
-                    f"dynamic_reason={momentum_gate.get('reason')}, "
-                    f"dynamic_delta={float(momentum_gate.get('vpw_delta', 0.0) or 0.0):.1f}, "
-                    f"dynamic_buy_value={int(momentum_gate.get('window_buy_value', 0) or 0)}, "
-                    f"dynamic_profile={momentum_gate.get('threshold_profile')})"
-                )
-            if liquidity_value < min_liquidity:
-                return (
-                    f"유동성 불충족 (liquidity_value={liquidity_value:,.0f} < "
-                    f"MIN_LIQUIDITY={min_liquidity:,.0f}, cap={scalp_limits.get('bucket_label')})"
-                )
-
-            scanner_price = stock.get("buy_price") or 0
-            if scanner_price > 0:
-                gap_pct = (curr_price - scanner_price) / scanner_price * 100
-                if gap_pct >= 1.5:
-                    return f"포착가 대비 갭 상승 (gap_pct={gap_pct:.1f}% >= 1.5%)"
-
-            # AI score role gate: legacy diagnostic path follows the main entry submit contract.
-            current_ai_score = _legacy_current_ai_score(stock)
-            entry_score_role_gate = _legacy_entry_score_role_gate(
-                stock, ws_data, current_ai_score
+        if radar is None:
+            return "radar 객체 없음"
+        momentum_ws_data = dict(ws_data or {})
+        momentum_ws_data["_position_tag"] = pos_tag
+        momentum_gate = evaluate_scalping_strength_momentum(momentum_ws_data)
+        if current_vpw < getattr(TRADING_RULES, "VPW_SCALP_LIMIT", 120):
+            return (
+                f"VPW 불충족 (current_vpw={current_vpw:.1f} < VPW_SCALP_LIMIT, "
+                f"dynamic_allowed={momentum_gate.get('allowed')}, "
+                f"dynamic_reason={momentum_gate.get('reason')}, "
+                f"dynamic_delta={float(momentum_gate.get('vpw_delta', 0.0) or 0.0):.1f}, "
+                f"dynamic_buy_value={int(momentum_gate.get('window_buy_value', 0) or 0)}, "
+                f"dynamic_profile={momentum_gate.get('threshold_profile')})"
             )
-            if not entry_score_role_gate.get("entry_score_usable_for_entry_submit"):
-                return (
-                    "AI score source unusable "
-                    f"(reason={entry_score_role_gate.get('entry_score_excluded_reason', '-')}, "
-                    f"source={entry_score_role_gate.get('entry_score_source', 'unknown')})"
-                )
-            current_ai_action = entry_score_role_gate.get("entry_score_action") or "-"
-            if not entry_buy_decision_allowed(current_ai_action, current_ai_score):
-                score_prior = evaluate_ai_score_prior(
-                    current_ai_action,
-                    current_ai_score,
-                    usable=bool(
-                        entry_score_role_gate.get("entry_score_usable_for_entry_submit")
-                    ),
-                )
-                stock["legacy_entry_score_prior_band"] = score_prior.get(
-                    "score_prior_band"
-                )
-                stock["legacy_entry_score_prior_weight"] = score_prior.get(
-                    "ai_score_prior_weight"
-                )
-                stock["legacy_score_gate_converted_to_prior"] = True
-                return (
-                    f"AI action BUY 아님 "
-                    f"(action={current_ai_action}, current_ai_score={current_ai_score})"
-                )
+        if liquidity_value < min_liquidity:
+            return (
+                f"유동성 불충족 (liquidity_value={liquidity_value:,.0f} < "
+                f"MIN_LIQUIDITY={min_liquidity:,.0f}, cap={scalp_limits.get('bucket_label')})"
+            )
+
+        scanner_price = stock.get("buy_price") or 0
+        if scanner_price > 0:
+            gap_pct = (curr_price - scanner_price) / scanner_price * 100
+            if gap_pct >= 1.5:
+                return f"포착가 대비 갭 상승 (gap_pct={gap_pct:.1f}% >= 1.5%)"
+
+        # AI score role gate: legacy diagnostic path follows the main entry submit contract.
+        current_ai_score = _legacy_current_ai_score(stock)
+        entry_score_role_gate = _legacy_entry_score_role_gate(
+            stock, ws_data, current_ai_score
+        )
+        if not entry_score_role_gate.get("entry_score_usable_for_entry_submit"):
+            return (
+                "AI score source unusable "
+                f"(reason={entry_score_role_gate.get('entry_score_excluded_reason', '-')}, "
+                f"source={entry_score_role_gate.get('entry_score_source', 'unknown')})"
+            )
+        current_ai_action = entry_score_role_gate.get("entry_score_action") or "-"
+        if not entry_buy_decision_allowed(current_ai_action, current_ai_score):
+            score_prior = evaluate_ai_score_prior(
+                current_ai_action,
+                current_ai_score,
+                usable=bool(
+                    entry_score_role_gate.get("entry_score_usable_for_entry_submit")
+                ),
+            )
+            stock["legacy_entry_score_prior_band"] = score_prior.get(
+                "score_prior_band"
+            )
+            stock["legacy_entry_score_prior_weight"] = score_prior.get(
+                "ai_score_prior_weight"
+            )
+            stock["legacy_score_gate_converted_to_prior"] = True
+            return (
+                f"AI action BUY 아님 "
+                f"(action={current_ai_action}, current_ai_score={current_ai_score})"
+            )
 
     # 스윙 전략 검사 (KOSDAQ_ML / KOSPI_ML)
     elif strategy in ["KOSDAQ_ML", "KOSPI_ML"]:
@@ -5454,12 +5449,13 @@ def _scanner_evaluation_lifetime_anchor(target, now_ts=None):
 def _is_scalping_fifo_target(target):
     target = target or {}
     strategy = normalize_strategy(target.get("strategy"))
-    position_tag = normalize_position_tag(strategy, target.get("position_tag"))
-    return strategy == "SCALPING" and position_tag not in {
-        "VCP_CANDID",
-        "VCP_SHOOTING",
-        "VCP_NEXT",
-    }
+    return strategy == "SCALPING"
+
+
+def _is_zero_base_watch_target(target):
+    return str((target or {}).get("source_signature") or "").startswith(
+        "ZERO_BASE_DISCOVERY:"
+    )
 
 
 def _scalping_fifo_candidates(watching_stocks, now_ts):
@@ -5705,6 +5701,9 @@ def _scalping_watch_budget_overflow_candidates(targets, now_ts):
         and _is_scalping_fifo_target(target)
     ]
     total = _scalping_fifo_max_active()
+    if any(_is_zero_base_watch_target(target) for target in candidates):
+        overflow = max(0, len(candidates) - total)
+        return _scalping_fifo_overflow_candidates(candidates, now_ts)[:overflow]
     if not _scalping_watch_budget_reallocation_enabled():
         overflow = max(0, len(candidates) - total)
         return _scalping_fifo_overflow_candidates(candidates, now_ts)[:overflow]
@@ -5752,6 +5751,19 @@ def _scalping_attach_capacity_decision(new_target, now_ts, watching_targets=None
             if str((target or {}).get("status") or "").upper() == "WATCHING"
             and _is_scalping_fifo_target(target)
         ]
+    if _is_zero_base_watch_target(new_target):
+        total = _scalping_fifo_max_active()
+        return (
+            len(watching_targets) < total,
+            [],
+            {
+                "scanner_watch_budget_policy": "zero_base_global_watch_cap_v1",
+                "scanner_watch_budget_total": total,
+                "scanner_watch_budget_owner": GENERAL_SCALPING,
+                "scanner_watch_budget_candidate_overflow": len(watching_targets) >= total,
+                "scanner_watch_budget_replacement_count": 0,
+            },
+        )
     candidate = dict(new_target or {})
     candidate["_scanner_attach_capacity_candidate"] = True
     combined = [*watching_targets, candidate]
@@ -8482,6 +8494,357 @@ def _scanner_pipeline_stock_snapshot(stock_value):
     }
 
 
+def _zero_base_runtime_enabled():
+    return str(os.getenv("KORSTOCKSCAN_ZERO_BASE_SCANNER_ENABLED", "false")).strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def _zero_base_active_conflict(code):
+    with ENTRY_LOCK:
+        return any(
+            str((target or {}).get("code") or "").strip()[:6] == code
+            and str((target or {}).get("status") or "").upper()
+            not in {"EXPIRED", "COMPLETED", "CANCELLED"}
+            for target in ACTIVE_TARGETS
+        )
+
+
+def _zero_base_probe_result(request, result, reason):
+    event_bus.publish(
+        PROBE_RESULT_EVENT,
+        {
+            **dict(request or {}),
+            "schema": "zero_base_probe_result_v1",
+            "result": result,
+            "reason": reason,
+            "machine_action": "",
+            "result_epoch": time.time(),
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        },
+    )
+
+
+def _zero_base_attach_receipt(result, *, outcome, reason, record_id=None):
+    claim = (result or {}).get("claim") or {}
+    try:
+        emit_pipeline_event(
+            "ENTRY_PIPELINE", str(claim.get("code") or "-"),
+            str(claim.get("code") or "-"), "zero_base_watch_attach",
+            fields={
+                "metric_role": "funnel_count",
+                "decision_authority": "main_watching_attach_only",
+                "zero_base_attach_outcome": outcome,
+                "zero_base_attach_reason": reason,
+                "zero_base_route": claim.get("route"),
+                "zero_base_source_sha256": claim.get("source_sha256"),
+                "zero_base_machine_bundle_sha256": (result or {}).get("machine_bundle_sha256"),
+                "record_id": record_id,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            },
+        )
+    except Exception as exc:
+        log_error("[ZERO_BASE_ATTACH_RECEIPT] append failed: " + type(exc).__name__)
+
+
+def _zero_base_inbox_attach_receipt(payload, *, outcome, reason):
+    _zero_base_attach_receipt(
+        {
+            "claim": {
+                "code": (payload or {}).get("code"),
+                "route": (payload or {}).get("market_data_route"),
+                "source_sha256": str((payload or {}).get("source_signature") or "").removeprefix(
+                    "ZERO_BASE_DISCOVERY:"
+                ),
+            },
+            "machine_bundle_sha256": (payload or {}).get(
+                "zero_base_probe_machine_bundle_sha256"
+            ),
+        },
+        outcome=outcome, reason=reason, record_id=(payload or {}).get("record_id"),
+    )
+
+
+def _zero_base_release_probe_ws(code, item):
+    manager = WS_MANAGER
+    if manager is None or _zero_base_active_conflict(code):
+        return
+    with manager.lock:
+        source_only = code in manager._micro_reversion_observation_only_codes
+        micro_owned = code in manager._micro_reversion_observation_items_by_code
+        pinned = code in getattr(manager, "_pinned_observation_codes", set())
+        current_items = tuple(manager._registered_items_by_code.get(code) or ())
+    if source_only and not micro_owned and not pinned and (
+        item in current_items or not current_items
+    ):
+        manager.execute_unsubscribe([code])
+
+
+def handle_zero_base_probe_requested(request):
+    request = dict(request or {})
+    claim = request.get("claim") or {}
+    candidate = request.get("candidate") or {}
+    code = str(claim.get("code") or "")
+    if not _zero_base_runtime_enabled():
+        _zero_base_probe_result(request, "policy_unavailable", "zero_base_runtime_disabled")
+        return
+    if (
+        len(code) != 6 or not code.isdigit()
+        or candidate.get("code") != code
+        or candidate.get("route") != claim.get("route")
+        or candidate.get("source_sha256") != claim.get("source_sha256")
+    ):
+        _zero_base_probe_result(request, "source_unavailable", "invalid_probe_request")
+        return
+    if _zero_base_active_conflict(code):
+        _zero_base_probe_result(request, "active_conflict", "existing_runtime_target")
+        return
+    if evaluate_main_bot_control_exclusion(code).excluded:
+        _zero_base_probe_result(request, "active_conflict", "manual_control_exclusion")
+        return
+    if not _ZERO_BASE_PROBE_SLOTS.acquire(blocking=False):
+        _zero_base_probe_result(request, "probe_capacity_deferred", "probe_worker_capacity")
+        return
+    with _ZERO_BASE_PROBE_LOCK:
+        if code in _ZERO_BASE_PROBE_IN_FLIGHT:
+            _ZERO_BASE_PROBE_SLOTS.release()
+            _zero_base_probe_result(request, "probe_capacity_deferred", "same_code_probe_in_flight")
+            return
+        _ZERO_BASE_PROBE_IN_FLIGHT.add(code)
+
+    def worker():
+        deferred_cleanup = False
+
+        def release_probe_ws(release_code, release_item):
+            try:
+                _zero_base_release_probe_ws(release_code, release_item)
+            finally:
+                with _ZERO_BASE_PROBE_LOCK:
+                    _ZERO_BASE_PROBE_IN_FLIGHT.discard(release_code)
+
+        try:
+            try:
+                result = run_zero_base_probe(
+                    request,
+                    ws_manager=WS_MANAGER,
+                    ai_engine=AI_ENGINE,
+                    token=KIWOOM_TOKEN,
+                    release_ws=release_probe_ws,
+                )
+            except Exception as exc:
+                result = {
+                    **request,
+                    "schema": "zero_base_probe_result_v1",
+                    "result": "source_unavailable",
+                    "reason": "probe_exception:" + type(exc).__name__,
+                    "machine_action": "",
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                }
+            deferred_cleanup = bool(result.pop("_ws_cleanup_deferred", False))
+            result["result_epoch"] = time.time()
+            event_bus.publish(PROBE_RESULT_EVENT, result)
+        finally:
+            if not deferred_cleanup:
+                with _ZERO_BASE_PROBE_LOCK:
+                    _ZERO_BASE_PROBE_IN_FLIGHT.discard(code)
+            _ZERO_BASE_PROBE_SLOTS.release()
+
+    try:
+        _ZERO_BASE_PROBE_EXECUTOR.submit(worker)
+    except RuntimeError:
+        with _ZERO_BASE_PROBE_LOCK:
+            _ZERO_BASE_PROBE_IN_FLIGHT.discard(code)
+        _ZERO_BASE_PROBE_SLOTS.release()
+        _zero_base_probe_result(request, "probe_capacity_deferred", "probe_executor_unavailable")
+
+
+def _zero_base_finalize_candidate_record(payload, *, attached):
+    record_id = (payload or {}).get("record_id")
+    code = str((payload or {}).get("code") or "").strip()[:6]
+    if not record_id or not code:
+        return False
+    try:
+        with ENTRY_LOCK:
+            attached_target = next(
+                (target for target in ACTIVE_TARGETS
+                 if target.get("id") == record_id and target.get("code") == code
+                 and target.get("status") == "WATCHING"),
+                None,
+            )
+            if attached and attached_target is None:
+                return False
+            with DB.get_session() as session:
+                row = session.get(RecommendationHistory, int(record_id))
+                if (
+                    row is None
+                    or row.stock_code != code
+                    or row.status != "PROBE_READY"
+                    or not str(row.scanner_source_signature or "").startswith(
+                        "ZERO_BASE_DISCOVERY:"
+                    )
+                ):
+                    return False
+                row.status = "WATCHING" if attached else "EXPIRED"
+            if attached_target is not None and attached:
+                attached_target.pop("zero_base_pending_db", None)
+            return True
+    except Exception as exc:
+        log_error("[ZERO_BASE_ATTACH_DB] finalize failed: " + type(exc).__name__)
+        return False
+
+
+def _zero_base_rollback_uncommitted_target(payload):
+    record_id = (payload or {}).get("record_id")
+    code = str((payload or {}).get("code") or "").strip()[:6]
+    with ENTRY_LOCK:
+        ACTIVE_TARGETS[:] = [
+            target for target in ACTIVE_TARGETS
+            if not (target.get("id") == record_id and target.get("code") == code)
+        ]
+    if code and not _zero_base_active_conflict(code):
+        event_bus.publish("COMMAND_WS_UNREG", {"codes": [code], "source": "zero_base_attach_rollback"})
+
+
+def handle_zero_base_machine_enter(result):
+    result = dict(result or {})
+    claim = result.get("claim") or {}
+    candidate = result.get("candidate") or {}
+    code = str(claim.get("code") or "")
+    route = str(claim.get("route") or "")
+    now_epoch = time.time()
+    if (
+        not _zero_base_runtime_enabled()
+        or result.get("result") != "assessed"
+        or result.get("machine_action") != "ENTER_NOW"
+        or len(code) != 6 or not code.isdigit()
+        or candidate.get("code") != code
+        or candidate.get("route") != route
+        or candidate.get("source_sha256") != claim.get("source_sha256")
+        or route not in {"krx_only", "nxt_only"}
+        or not isinstance(result.get("result_epoch"), (int, float))
+        or not 0 <= now_epoch - result["result_epoch"] <= 5
+        or not isinstance(result.get("probe_price"), int)
+        or result["probe_price"] <= 0
+        or not all(
+            isinstance(result.get(field), (int, float))
+            and 0 <= now_epoch - result[field] <= 5
+            for field in ("probe_trade_epoch", "probe_depth_epoch")
+        )
+        or not is_scalping_buy_time_allowed(datetime.now().time())
+        or _zero_base_active_conflict(code)
+        or evaluate_main_bot_control_exclusion(code).excluded
+    ):
+        _zero_base_attach_receipt(result, outcome="rejected", reason="invalid_or_stale_machine_result")
+        return False
+    venue = "KRX" if route == "krx_only" else "NXT"
+    source_hash = str(claim.get("source_sha256") or "")
+    source_signature = "ZERO_BASE_DISCOVERY:" + source_hash
+    if len(source_hash) != 64 or any(char not in "0123456789abcdef" for char in source_hash):
+        _zero_base_attach_receipt(result, outcome="rejected", reason="source_hash_invalid")
+        return False
+    bundle_hash = str(result.get("machine_bundle_sha256") or "")
+    if len(bundle_hash) != 64 or any(char not in "0123456789abcdef" for char in bundle_hash):
+        _zero_base_attach_receipt(result, outcome="rejected", reason="machine_bundle_invalid")
+        return False
+    promotion_id = (
+        f"ZBPROM-{code}-{int(result['result_epoch'] * 1000)}-"
+        f"{int(claim.get('claim_count') or 0)}"
+    )
+    payload = {
+        "code": code,
+        "name": candidate.get("name") or code,
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "trade_type": "SCALP",
+        "status": "WATCHING",
+        "buy_price": result["probe_price"],
+        "current_price_observed": result["probe_price"],
+        "added_time": now_epoch,
+        "entry_armed_at_epoch": now_epoch,
+        "scanner_promotion_id": promotion_id,
+        "scanner_promotion_reason": "zero_base_machine_enter_now",
+        "scanner_promotion_emitted_epoch": now_epoch,
+        "source_signature": source_signature,
+        "scanner_watch_budget_owner": GENERAL_SCALPING,
+        "venue": venue,
+        "effective_venue": venue,
+        "market_data_route": route,
+        "market_session_bucket": scalping_session_venue_provenance(now_epoch).get(
+            "market_session_bucket"
+        ),
+        "zero_base_pending_db": True,
+        "zero_base_probe_machine_bundle_sha256": result.get("machine_bundle_sha256"),
+        "zero_base_probe_trade_epoch": result.get("probe_trade_epoch"),
+        "zero_base_probe_depth_epoch": result.get("probe_depth_epoch"),
+    }
+    with ENTRY_LOCK:
+        if _zero_base_active_conflict(code):
+            _zero_base_attach_receipt(result, outcome="rejected", reason="active_conflict")
+            return False
+        allowed, _, _ = _scalping_attach_capacity_decision(
+            payload, now_epoch,
+        )
+        if not allowed:
+            _zero_base_attach_receipt(result, outcome="deferred", reason="watch_capacity_full")
+            return False
+        try:
+            with DB.get_session() as session:
+                row = RecommendationHistory(
+                    rec_date=datetime.now().date(), stock_code=code,
+                    stock_name=payload["name"], buy_price=payload["buy_price"],
+                    trade_type="SCALP", strategy="SCALPING", status="PROBE_READY",
+                    position_tag="SCANNER", entry_armed_at_epoch=now_epoch,
+                    effective_venue=venue, venue_resolution="exact_zero_base_probe_route",
+                    market_session_bucket=payload["market_session_bucket"],
+                    scanner_promotion_id=promotion_id,
+                    scanner_promotion_reason=payload["scanner_promotion_reason"],
+                    scanner_promotion_emitted_epoch=now_epoch,
+                    scanner_source_signature=source_signature,
+                    scanner_watch_budget_owner=GENERAL_SCALPING,
+                    scanner_current_price_observed=result["probe_price"],
+                )
+                session.add(row)
+                session.flush()
+                payload["record_id"] = row.id
+        except Exception as exc:
+            log_error("[ZERO_BASE_ATTACH_DB] provisional insert failed: " + type(exc).__name__)
+            _zero_base_attach_receipt(result, outcome="rejected", reason="provisional_db_failed")
+            return False
+    with ENTRY_LOCK:
+        if _zero_base_active_conflict(code):
+            _zero_base_finalize_candidate_record(payload, attached=False)
+            _zero_base_attach_receipt(result, outcome="rejected", reason="conflict_after_provisional_insert", record_id=payload.get("record_id"))
+            return False
+        scheduler_mode = _scanner_scheduler_startup_mode()
+        accepted = (
+            handle_scalping_scanner_promoted_target(payload)
+            if scheduler_mode in {"deadline_v1", "async_v1"}
+            else _apply_scalping_scanner_promoted_target(
+                payload, mutation_lock=ENTRY_LOCK,
+            )
+        )
+    if scheduler_mode in {"deadline_v1", "async_v1"}:
+        if not accepted:
+            _zero_base_finalize_candidate_record(payload, attached=False)
+            _zero_base_attach_receipt(result, outcome="rejected", reason="scheduler_inbox_rejected", record_id=payload.get("record_id"))
+        else:
+            _zero_base_attach_receipt(result, outcome="queued", reason="scheduler_inbox_pending", record_id=payload.get("record_id"))
+        return bool(accepted)
+    finalized = _zero_base_finalize_candidate_record(payload, attached=bool(accepted))
+    if accepted and not finalized:
+        _zero_base_rollback_uncommitted_target(payload)
+    _zero_base_attach_receipt(
+        result,
+        outcome="attached" if accepted and finalized else "rejected",
+        reason="committed" if accepted and finalized else "attach_or_db_finalize_failed",
+        record_id=payload.get("record_id"),
+    )
+    return bool(accepted and finalized)
+
+
 def handle_scalping_scanner_promoted_target(payload):
     """Queue promoted targets for main-thread mutation in scheduler modes."""
 
@@ -8684,6 +9047,7 @@ def _apply_scalping_scanner_promoted_target(payload, *, mutation_lock=ENTRY_LOCK
                         "scanner_promotion_emitted_epoch": refresh_promotion_epoch,
                         "source_signature": refresh_source_signature,
                         "scanner_required_realtime_types": "0B",
+                        "zero_base_pending_db": bool(payload.get("zero_base_pending_db")),
                         **refresh_venue_fields,
                         **refresh_handoff_fields,
                         **refresh_context_updates,
@@ -8760,6 +9124,7 @@ def _apply_scalping_scanner_promoted_target(payload, *, mutation_lock=ENTRY_LOCK
             or "",
             "source_signature": payload.get("source_signature") or "",
             "scanner_required_realtime_types": "0B",
+            "zero_base_pending_db": bool(payload.get("zero_base_pending_db")),
             **_scanner_runtime_handoff_updates(
                 payload,
                 source="promotion_event_attach",
@@ -9362,12 +9727,22 @@ def _drain_scanner_promotion_inbox(scheduler, *, max_items):
             break
         drained += 1
         payload = dict(envelope.payload)
+        zero_base_provisional = bool(payload.get("zero_base_pending_db"))
+        if zero_base_provisional and _zero_base_active_conflict(
+            str(payload.get("code") or "").strip()[:6]
+        ):
+            _zero_base_finalize_candidate_record(payload, attached=False)
+            _zero_base_inbox_attach_receipt(payload, outcome="rejected", reason="active_conflict_at_inbox")
+            continue
         duplicate_target = _scanner_scheduler_coalesce_duplicate_inbox(
             scheduler,
             payload,
             inbox_enqueued_epoch=envelope.enqueued_epoch,
         )
         if duplicate_target is not None:
+            if zero_base_provisional:
+                _zero_base_finalize_candidate_record(payload, attached=False)
+                _zero_base_inbox_attach_receipt(payload, outcome="rejected", reason="duplicate_at_inbox")
             coalesced += 1
             continue
         attach_attempt_epoch = time.time()
@@ -9386,6 +9761,22 @@ def _drain_scanner_promotion_inbox(scheduler, *, max_items):
             ),
             None,
         )
+        if zero_base_provisional:
+            attached_ok = bool(
+                success and target is not None
+                and target.get("id") == payload.get("record_id")
+            )
+            finalized = _zero_base_finalize_candidate_record(
+                payload, attached=attached_ok,
+            )
+            if attached_ok and not finalized:
+                _zero_base_rollback_uncommitted_target(payload)
+            success = bool(attached_ok and finalized)
+            _zero_base_inbox_attach_receipt(
+                payload,
+                outcome="attached" if success else "rejected",
+                reason="committed" if success else "attach_or_db_finalize_failed",
+            )
         if success and target is not None:
             applied += 1
             # Capacity replacement may have removed another WATCHING symbol
@@ -11841,6 +12232,8 @@ def run_sniper(is_test_mode=False):
         event_bus.subscribe("ORDER_EXECUTED", handle_real_execution)
         event_bus.subscribe("CONDITION_MATCHED", handle_condition_matched)
         event_bus.subscribe("CONDITION_UNMATCHED", handle_condition_unmatched)
+        event_bus.subscribe(PROBE_REQUEST_EVENT, handle_zero_base_probe_requested)
+        event_bus.subscribe(MACHINE_ENTER_EVENT, handle_zero_base_machine_enter)
         event_bus.subscribe(
             "SCALPING_SCANNER_PROMOTION_BATCH_PENDING",
             handle_scalping_scanner_promotion_batch_pending,
@@ -12030,7 +12423,6 @@ def run_sniper(is_test_mode=False):
     bind_state_dependencies(active_targets=ACTIVE_TARGETS, ws_manager=WS_MANAGER)
     sniper_state_handlers.sanitize_pending_add_states(ACTIVE_TARGETS)
     bind_execution_dependencies(active_targets=ACTIVE_TARGETS)
-    _restore_armed_candidates_from_database()
     _restore_fast_trade_states_from_journal()
     # ==========================================
     # 💡 [추가 1] 봇 시작 시 불러온 종목들의 진입 시간 기록

@@ -3,8 +3,8 @@
 Also includes Big-Bite trigger detector helpers.
 """
 
-import threading
 import time
+import os
 from datetime import datetime, time as dt_time
 from typing import Tuple, Dict, Any
 
@@ -13,18 +13,6 @@ import pandas as pd
 
 from src.database.models import RecommendationHistory
 from src.engine.sniper_time import _in_time_window, scalping_session_venue_provenance
-from src.engine.sniper_s15_fast_track import (
-    _now_ts,
-    _arm_s15_candidate,
-    _unarm_s15_candidate,
-    _is_s15_armed,
-    _is_s15_reentry_blocked,
-    _get_fast_state,
-    _set_fast_state,
-    create_s15_shadow_record,
-    execute_fast_track_scalp_v2,
-    _log_s15_event,
-)
 from src.engine.sniper_position_tags import (
     default_position_tag_for_strategy,
     is_default_position_tag,
@@ -55,7 +43,7 @@ HYSTERESIS_USE_MA20 = False  # 3분봉 20MA 완전 이탈 체크 사용 여부 (
 UNMATCH_MAX_HOLD_SEC = 600  # 이탈 상태가 길게 지속될 때 최종 정리 (안전장치)
 
 HYSTERESIS_DROP_PCT_STRONG = (
-    0.006  # -0.6% (s15_trigger_break, scalp_candid_aggressive_01)
+    0.006  # -0.6% (scalp_candid_aggressive_01)
 )
 HYSTERESIS_DROP_PCT_MED = 0.012  # -1.2% (scalp_underpress_01, scalp_afternoon_01)
 HYSTERESIS_DROP_PCT_SWING = (
@@ -446,7 +434,7 @@ def _passes_vwap_reclaim_precheck(code):
 
 def _get_hysteresis_drop_pct(cnd_name):
     name = (cnd_name or "").lower()
-    if "s15_trigger_break" in name or "scalp_candid_aggressive_01" in name:
+    if "scalp_candid_aggressive_01" in name:
         return HYSTERESIS_DROP_PCT_STRONG
     if "scalp_underpress_01" in name or "scalp_afternoon_01" in name:
         return HYSTERESIS_DROP_PCT_MED
@@ -551,27 +539,6 @@ def resolve_condition_profile(cnd_name):
         profile["trade_type"] = "MAIN"
         profile["is_next_day_target"] = True
         profile["position_tag"] = default_position_tag_for_strategy("KOSPI_ML")
-    elif "vcp_candid_01" in cnd_name:
-        profile["start"], profile["end"] = dt_time(15, 30), dt_time(7, 0)
-        profile["is_next_day_target"] = True
-        profile["position_tag"] = "VCP_CANDID"
-    elif "vcp_shooting_01" in cnd_name:
-        profile["start"], profile["end"] = dt_time(9, 0), dt_time(15, 0)
-        profile["position_tag"] = "VCP_SHOOTING"
-    elif "vcp_shooting_next_01" in cnd_name:
-        profile["start"], profile["end"] = dt_time(15, 30), dt_time(23, 59, 59)
-        profile["is_next_day_target"] = True
-        profile["position_tag"] = "VCP_NEXT"
-    elif "s15_scan_base" in cnd_name:
-        profile["start"], profile["end"] = dt_time(9, 2), dt_time(10, 30)
-        profile["is_next_day_target"] = False
-        profile["position_tag"] = "S15_CANDID"
-        profile["use_debounce"] = False
-    elif "s15_trigger_break" in cnd_name:
-        profile["start"], profile["end"] = dt_time(9, 5), dt_time(11, 0)
-        profile["is_next_day_target"] = False
-        profile["position_tag"] = "S15_SHOOTING"
-        profile["use_debounce"] = False
     else:
         return None
 
@@ -607,6 +574,12 @@ def handle_condition_matched(payload):
     profile = resolve_condition_profile(cnd_name)
     if not profile:
         return
+    if (
+        profile["strategy"] == "SCALPING"
+        and str(os.getenv("KORSTOCKSCAN_ZERO_BASE_SCANNER_ENABLED", "false")).strip().lower()
+        in {"1", "true", "yes", "on"}
+    ):
+        return
 
     if not _in_time_window(now_t, profile["start"], profile["end"]):
         return
@@ -637,7 +610,6 @@ def handle_condition_matched(payload):
     is_debounce_target = (
         bool(profile.get("use_debounce", True))
         and not profile["is_next_day_target"]
-        and target_position_tag not in ["S15_CANDID", "S15_SHOOTING", "VCP_NEXT"]
     )
     if is_debounce_target:
         state = _CONDITION_STATE.get(key)
@@ -671,14 +643,8 @@ def handle_condition_matched(payload):
             else:
                 return
 
-    # 당일 감시망에 이미 있으면 일반 케이스는 스킵
-    # 단, VCP_SHOOTING/S15_SHOOTING은 별도 승격/fast-track 계약이 있으므로 통과
-    if _has_active_target(code, target_strategy):
-        if not is_next_day_target and target_position_tag not in {
-            "VCP_SHOOTING",
-            "S15_SHOOTING",
-        }:
-            return
+    if _has_active_target(code, target_strategy) and not is_next_day_target:
+        return
 
     if target_position_tag == "VWAP_RECLAIM":
         passed, precheck = _passes_vwap_reclaim_precheck(code)
@@ -711,275 +677,7 @@ def handle_condition_matched(payload):
         name = basic_info.get("Name", code)
         target_date = get_condition_target_date(is_next_day_target)
 
-        # =========================================================
-        # ⚡ [S15 v2] Fast-Track 하이패스
-        # =========================================================
-        if target_position_tag == "S15_CANDID":
-            _arm_s15_candidate(code, name, cnd_name, ttl_sec=180)
-            return
-
-        if target_position_tag == "S15_SHOOTING":
-            is_armed = _is_s15_armed(code)
-            reentry_blocked = _is_s15_reentry_blocked(code)
-            existing_fast_state = _get_fast_state(code)
-            rt = WS_MANAGER.get_latest_data(code) if WS_MANAGER else {}
-            trigger_price = int(float((rt or {}).get("curr", 0) or 0))
-            _log_s15_event(
-                "s15_trigger_received",
-                code,
-                name,
-                s15_condition_role="trigger_break",
-                condition_name=cnd_name,
-                armed=is_armed,
-                reentry_blocked=reentry_blocked,
-                existing_fast_state=bool(existing_fast_state),
-                trigger_price=trigger_price,
-            )
-            if not is_armed:
-                _log_s15_event(
-                    "s15_trigger_blocked",
-                    code,
-                    name,
-                    s15_condition_role="trigger_break",
-                    condition_name=cnd_name,
-                    s15_block_reason="not_armed",
-                    armed=False,
-                    reentry_blocked=reentry_blocked,
-                    existing_fast_state=bool(existing_fast_state),
-                    trigger_price=trigger_price,
-                )
-                return
-            if reentry_blocked:
-                _log_s15_event(
-                    "s15_trigger_blocked",
-                    code,
-                    name,
-                    s15_condition_role="trigger_break",
-                    condition_name=cnd_name,
-                    s15_block_reason="reentry_blocked",
-                    armed=True,
-                    reentry_blocked=True,
-                    existing_fast_state=bool(existing_fast_state),
-                    trigger_price=trigger_price,
-                )
-                return
-            if existing_fast_state:
-                _log_s15_event(
-                    "s15_trigger_blocked",
-                    code,
-                    name,
-                    s15_condition_role="trigger_break",
-                    condition_name=cnd_name,
-                    s15_block_reason="fast_state_exists",
-                    armed=True,
-                    reentry_blocked=False,
-                    existing_fast_state=True,
-                    trigger_price=trigger_price,
-                )
-                return
-
-            same_symbol_active = _find_active_target(
-                code,
-                target_strategy,
-                statuses={
-                    "BUY_ORDERED",
-                    "SELL_ORDERED",
-                    "HOLDING",
-                    "HOLDING_NEEDS_EXIT",
-                    "EXIT_SENT",
-                    "EXIT_RETRY",
-                },
-            )
-            if same_symbol_active:
-                _log_s15_event(
-                    "s15_trigger_blocked",
-                    code,
-                    name,
-                    s15_condition_role="trigger_break",
-                    condition_name=cnd_name,
-                    s15_block_reason="same_symbol_active_order_or_holding",
-                    armed=True,
-                    reentry_blocked=False,
-                    existing_fast_state=False,
-                    active_target_status=same_symbol_active.get("status"),
-                    active_target_position_tag=same_symbol_active.get("position_tag"),
-                    trigger_price=trigger_price,
-                )
-                return
-
-            if trigger_price <= 0:
-                _log_s15_event(
-                    "s15_trigger_blocked",
-                    code,
-                    name,
-                    s15_condition_role="trigger_break",
-                    condition_name=cnd_name,
-                    s15_block_reason="missing_price",
-                    armed=True,
-                    reentry_blocked=False,
-                    existing_fast_state=False,
-                    trigger_price=trigger_price,
-                )
-                return
-
-            shadow_id = create_s15_shadow_record(code, name)
-            state = {
-                "lock": threading.RLock(),
-                "name": name,
-                "status": "ARMED",
-                "buy_ord_no": "",
-                "sell_ord_no": "",
-                "pending_cancel_ord_no": "",
-                "req_buy_qty": 0,
-                "cum_buy_qty": 0,
-                "cum_buy_amount": 0,
-                "avg_buy_price": 0,
-                "cum_sell_qty": 0,
-                "cum_sell_amount": 0,
-                "avg_sell_price": 0,
-                "created_at": _now_ts(),
-                "updated_at": _now_ts(),
-                "target_price": 0,
-                "stop_price": 0,
-                "shadow_id": shadow_id,
-                "trigger_price": 0,
-            }
-            _set_fast_state(code, state)
-
-            state["trigger_price"] = trigger_price
-
-            threading.Thread(
-                target=execute_fast_track_scalp_v2,
-                args=(code, name, trigger_price, 0.10),
-                daemon=False,
-            ).start()
-            return
-        # =========================================================
-
         with DB.get_session() as session:
-            # =====================================================
-            # 1) VCP_SHOOTING: 전일 VCP_CANDID가 있어야 승격
-            # =====================================================
-            if target_position_tag == "VCP_SHOOTING":
-                candid_record = (
-                    session.query(RecommendationHistory)
-                    .filter_by(
-                        rec_date=target_date, stock_code=code, position_tag="VCP_CANDID"
-                    )
-                    .first()
-                )
-
-                if not candid_record:
-                    return
-
-                candid_record.position_tag = "VCP_SHOOTING"
-                candid_record.status = "WATCHING"
-                candid_record.strategy = "SCALPING"
-                candid_record.trade_type = "SCALP"
-
-                if not _has_active_target(code, "SCALPING"):
-                    marcap = (
-                        int(DB.get_latest_marcap(code) or 0) if DB is not None else 0
-                    )
-                    new_target = {
-                        "id": candid_record.id,
-                        "code": code,
-                        "name": name,
-                        "strategy": "SCALPING",
-                        "status": "WATCHING",
-                        "added_time": time.time(),
-                        "position_tag": "VCP_SHOOTING",
-                        "marcap": marcap,
-                    }
-                    ACTIVE_TARGETS.append(new_target)
-                    EVENT_BUS.publish("COMMAND_WS_REG", {"codes": [code]})
-
-                esc_name = _escape(name)
-                esc_code = _escape(code)
-                msg = (
-                    f"🎯 **[VCP 돌파 포착]**\n"
-                    f"종목: **{esc_name} ({esc_code})**\n"
-                    f"전일 CANDID 포착 후 금일 슈팅 조건을 만족하여 스캘핑 감시망에 투입됩니다."
-                )
-                EVENT_BUS.publish(
-                    "TELEGRAM_BROADCAST",
-                    {
-                        "message": msg,
-                        "audience": "ADMIN_ONLY",
-                        "parse_mode": "Markdown",
-                    },
-                )
-                log_key = f"{code}:{cnd_name}:vcp_shooting"
-                if _should_log_match_event(log_key):
-                    print(
-                        f"🎯 [조건검색 포착] {name}({code}) VCP_SHOOTING 승격 및 감시망 투입 (출처: {cnd_name})"
-                    )
-                return
-
-            # =====================================================
-            # 2) VCP_NEXT: 당일 SHOOTING 완료 종목만 다음날 예약
-            # =====================================================
-            elif target_position_tag == "VCP_NEXT":
-                today = datetime.now().date()
-                today_record = (
-                    session.query(RecommendationHistory)
-                    .filter_by(
-                        rec_date=today,
-                        stock_code=code,
-                        strategy="SCALPING",
-                        position_tag="VCP_SHOOTING",
-                    )
-                    .first()
-                )
-
-                if not today_record:
-                    return
-
-                next_record = _find_reusable_watch_record(
-                    session,
-                    rec_date=target_date,
-                    stock_code=code,
-                    strategy="SCALPING",
-                )
-
-                if not next_record:
-                    new_record = RecommendationHistory(
-                        rec_date=target_date,
-                        stock_code=code,
-                        stock_name=name,
-                        buy_price=0,
-                        trade_type="SCALP",
-                        strategy="SCALPING",
-                        status="WATCHING",
-                        position_tag="VCP_NEXT",
-                    )
-                    session.add(new_record)
-
-                    esc_name = _escape(name)
-                    esc_code = _escape(code)
-                    msg = (
-                        f"🌙 **[내일의 VCP 슈팅 예약]**\n"
-                        f"종목: **{esc_name} ({esc_code})**\n"
-                        f"금일 슈팅 후 강력한 마감 패턴을 보여 내일 시초가 매수를 예약합니다."
-                    )
-                    EVENT_BUS.publish(
-                        "TELEGRAM_BROADCAST",
-                        {
-                            "message": msg,
-                            "audience": "ADMIN_ONLY",
-                            "parse_mode": "Markdown",
-                        },
-                    )
-                    log_key = f"{code}:{cnd_name}:vcp_next"
-                    if _should_log_match_event(log_key):
-                        print(
-                            f"🌙 [조건검색 포착] {name}({code}) 익일 VCP_NEXT 예약 생성 (출처: {cnd_name})"
-                        )
-                return
-
-            # =====================================================
-            # 3) 일반 로직 / VCP_CANDID 저장
-            # =====================================================
             record = _find_reusable_watch_record(
                 session,
                 rec_date=target_date,
@@ -1092,33 +790,14 @@ def handle_condition_matched(payload):
 
             else:
                 if newly_created:
-                    if target_position_tag == "VCP_CANDID":
-                        esc_name = _escape(name)
-                        esc_code = _escape(code)
-                        msg = (
-                            f"🌙 **[VCP 스캘핑 예비 후보 포착]**\n"
-                            f"종목: **{esc_name} ({esc_code})**\n"
-                            f"내일 오전 VCP 슈팅 조건 만족 시 감시망에 투입됩니다."
-                        )
-
-                    elif target_position_tag == "S15_CANDID":
-                        esc_name = _escape(name)
-                        esc_code = _escape(code)
-                        msg = (
-                            f"🌙 **[S15 스캘핑 예비 후보 포착]**\n"
-                            f"종목: **{esc_name} ({esc_code})**\n"
-                            f"S15 슈팅 조건 만족 시 감시망에 투입됩니다."
-                        )
-
-                    else:
-                        esc_name = _escape(name)
-                        esc_code = _escape(code)
-                        esc_target_strategy = _escape(target_strategy)
-                        msg = (
-                            f"🌙 **[내일의 스윙 주도주 예약]**\n"
-                            f"종목: **{esc_name} ({esc_code})**\n"
-                            f"다음 영업일 감시망에 전략({esc_target_strategy})으로 자동 투입됩니다."
-                        )
+                    esc_name = _escape(name)
+                    esc_code = _escape(code)
+                    esc_target_strategy = _escape(target_strategy)
+                    msg = (
+                        f"🌙 **[내일의 스윙 주도주 예약]**\n"
+                        f"종목: **{esc_name} ({esc_code})**\n"
+                        f"다음 영업일 감시망에 전략({esc_target_strategy})으로 자동 투입됩니다."
+                    )
 
                     EVENT_BUS.publish(
                         "TELEGRAM_BROADCAST",
@@ -1149,13 +828,6 @@ def handle_condition_unmatched(payload):
 
     profile = resolve_condition_profile(cnd_name)
     if not profile:
-        return
-
-    if profile["position_tag"] == "S15_CANDID":
-        _unarm_s15_candidate(code)
-        return
-
-    if profile["position_tag"] == "S15_SHOOTING":
         return
 
     if ACTIVE_TARGETS is None or DB is None or EVENT_BUS is None:

@@ -3403,7 +3403,7 @@ def test_scalping_fifo_candidates_preserve_scanner_entry_armed_order():
 
     ordered = kiwoom_sniper_v2._scalping_fifo_candidates(watching, now_ts=4000.0)
 
-    assert [target["id"] for target in ordered] == [1, 2]
+    assert [target["id"] for target in ordered] == [3, 1, 2]
 
 
 def test_runtime_iteration_targets_prioritizes_recent_scanner_without_mutating_targets():

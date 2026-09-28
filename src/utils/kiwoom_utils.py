@@ -4444,7 +4444,10 @@ def _rest_trade_rows_cacheable(rows, source_meta, data):
             and receipt["receipt_binding_proven"])
 
 
-def get_tick_history_ka10003(token, code, limit=10, *, request_owner=None, request_class=None):
+def get_tick_history_ka10003(
+    token, code, limit=10, *, request_owner=None, request_class=None,
+    explicit_request_code=False,
+):
     """
     [ka10003] 주식체결정보요청.
 
@@ -4453,7 +4456,11 @@ def get_tick_history_ka10003(token, code, limit=10, *, request_owner=None, reque
     consumers must inspect ``aggressor_source`` before treating it as buy/sell
     pressure evidence.
     """
-    req_code = get_effective_kiwoom_code(code)
+    if explicit_request_code:
+        _raw_code, explicit_suffix = _split_kiwoom_market_suffix(code)
+        req_code = f"{normalize_stock_code(code)}{explicit_suffix}"
+    else:
+        req_code = get_effective_kiwoom_code(code)
     cache_key = (str(req_code), int(limit))
     cache_key = (_market_data_cache_scope(token), cache_key)
     cached = _cache_get("ka10003_ticks", cache_key)
@@ -4905,6 +4912,8 @@ def get_minute_candles_ka10080_with_meta(
     *,
     explicit_request_code=False,
     base_dt=None,
+    request_owner=None,
+    request_class=None,
 ):
     """
     [REST API] ka10080: 주식분봉차트조회
@@ -4935,6 +4944,11 @@ def get_minute_candles_ka10080_with_meta(
 
     page_size = 900
     max_pages = max(1, int((max(1, int(limit or 1)) + page_size - 1) / page_size) + 1)
+    purpose = {}
+    if request_owner is not None:
+        purpose["request_owner"] = request_owner
+    if request_class is not None:
+        purpose["request_class"] = request_class
     results, source_meta = _fetch_kiwoom_api_continuous_with_meta(
         url=url,
         token=token,
@@ -4942,6 +4956,7 @@ def get_minute_candles_ka10080_with_meta(
         payload=payload,
         use_continuous=True,
         max_pages=max_pages,
+        **purpose,
     )
     source_meta = _normalize_kiwoom_source_meta(
         source_meta, "ka10080", requested_limit=int(limit or 0)

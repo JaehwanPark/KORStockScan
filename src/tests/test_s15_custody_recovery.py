@@ -1509,33 +1509,6 @@ def test_s15_stale_order_number_without_generation_never_claims_open_sell(
     assert "open_sell_without_pending_generation" in reasons
 
 
-def test_s15_no_order_terminal_block_clears_durable_state(tmp_path, monkeypatch):
-    monkeypatch.setattr(s15, "S15_CUSTODY_DIR", tmp_path)
-    monkeypatch.setattr(s15, "AI_ENGINE", None)
-    monkeypatch.setattr(s15, "DB", None)
-    monkeypatch.setattr(
-        s15,
-        "WS_MANAGER",
-        SimpleNamespace(get_latest_data=lambda _code: {"curr": 10_000}),
-    )
-    monkeypatch.setattr(s15, "update_s15_shadow_record", lambda *args, **kwargs: True)
-    monkeypatch.setattr(s15, "_log_s15_event", lambda *args, **kwargs: None)
-    state = _state(
-        status="ARMED",
-        buy_ord_no="",
-        shadow_id=None,
-        cum_buy_qty=0,
-        cum_sell_qty=0,
-    )
-    s15.FAST_TRADE_STATE["123456"] = state
-    assert s15._persist_fast_state("123456", state) is True
-
-    s15.execute_fast_track_scalp_v2("123456", "TEST", 10_000)
-
-    assert "123456" not in s15.FAST_TRADE_STATE
-    assert not (tmp_path / "123456.json").exists()
-
-
 def test_s15_custody_enospc_keeps_runtime_state_and_cleans_temp(tmp_path, monkeypatch):
     monkeypatch.setattr(s15, "S15_CUSTODY_DIR", tmp_path)
     monkeypatch.setattr(

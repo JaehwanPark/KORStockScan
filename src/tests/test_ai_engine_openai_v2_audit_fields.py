@@ -29,6 +29,26 @@ def _build_engine():
     return engine
 
 
+def test_machine_only_without_selected_policy_never_calls_provider(monkeypatch):
+    from src.engine.scalping.entry_setup_scalping_rollout import PATH_ENV, SHA_ENV
+
+    engine = _build_engine()
+    monkeypatch.delenv(PATH_ENV, raising=False)
+    monkeypatch.delenv(SHA_ENV, raising=False)
+    monkeypatch.setattr(
+        engine, "_call_openai_safe",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("provider called")),
+    )
+    result = engine.analyze_target(
+        "TEST", _sample_ws_data(), _sample_ticks(), _sample_candles(),
+        strategy="SCALPING", prompt_profile="watching", machine_only=True,
+    )
+    assert result["action"] == "WAIT"
+    assert result["machine_evaluation_status"] == "machine_policy_not_selected"
+    assert result["provider_called"] is False
+    assert result["actual_order_submitted"] is False
+
+
 def test_micro_cache_hit_never_recounts_prior_computation_or_delivery(monkeypatch):
     import src.engine.ai_engine_openai as module
 

@@ -4211,6 +4211,54 @@ def test_machine_initial_policy_assesses_before_provider_cache_and_lock(
         assert result["entry_ai_screen_status"] == "not_requested_machine_nonentry"
 
 
+def test_selected_machine_only_returns_assessment_without_provider(monkeypatch):
+    from src.engine.scalping import mechanistic_entry_runtime_policy as policy
+    from src.engine.scalping.entry_setup_evidence import MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1
+    from src.engine.scalping.entry_setup_scalping_rollout import PATH_ENV
+    from src.tests.test_entry_setup_evidence import _exact_analysis, _recovery_analysis
+
+    monkeypatch.setenv(PATH_ENV, "/test-selected-machine-only")
+    engine = _build_engine()
+    monkeypatch.setattr(engine, "_call_openai_safe", lambda *_a, **_k: pytest.fail("provider called"))
+    monkeypatch.setattr(engine, "_cache_get", lambda *_a: pytest.fail("AI cache called"))
+    monkeypatch.setattr(openai_module, "resolve_live_prompt_policy", lambda **_kw: {
+        "enabled": True,
+        "status": "active_bounded_krx_canary",
+        "selected_prompt_version": policy.AI_VERSION,
+        "primary_decision_owner": "mechanistic_entry_adjudicator",
+        "ai_role": "auxiliary_risk_screen_pass_veto_no_promotion",
+        "mechanistic_threshold_policy": MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
+        "machine_bundle_sha256": "b" * 64,
+    })
+    monkeypatch.setattr(openai_module, "TRADING_RULES", replace(
+        openai_module.TRADING_RULES,
+        OPENAI_ANALYZE_TARGET_PROMPT_VERSION=(
+            DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
+        ),
+    ))
+    analysis = _exact_analysis()
+    analysis["executable_liquidity"].update(
+        spread_bp=20.0, fillability_score=70.0, top3_ask_to_bid_ratio=0.8,
+    )
+    monkeypatch.setattr(openai_module, "build_exact_payload_analysis_v1", lambda *_a, **_k: analysis)
+    monkeypatch.setattr(
+        openai_module, "build_v2_13_recovery_confirmation_analysis_v1",
+        lambda *_a, **_k: _recovery_analysis(clean=True),
+    )
+    ws_data = _sample_ws_data()
+    ws_data["scanner_promotion_id"] = "ZBPROM-005930-machine-only"
+    result = engine.analyze_target(
+        "test", ws_data, _sample_ticks(), _sample_candles(),
+        strategy="SCALPING", prompt_profile="watching",
+        candle_context=_allowed_entry_candle_context(), machine_only=True,
+    )
+    assert result["machine_evaluation_status"] == "assessed"
+    assert result["entry_mechanistic_action"] in {"ENTER_NOW", "RECHECK", "BLOCK"}
+    assert result["machine_bundle_sha256"] == "b" * 64
+    assert result["provider_called"] is False
+    assert result["actual_order_submitted"] is False
+
+
 @pytest.mark.parametrize("feature_shortfall", [False, True])
 def test_machine_policy_preflight_block_preserves_source_invalid_receipt(
     monkeypatch, feature_shortfall
