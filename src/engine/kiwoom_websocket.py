@@ -5970,6 +5970,30 @@ class KiwoomWSManager:
             target = self.realtime_data.get(code, {})
             return self._snapshot_target(target) if target else {}
 
+    def get_exact_item_data(self, code, item):
+        """Read the registered item's owning view without mixing route stores."""
+        code = self._normalize_code(code)
+        raw_item = str(item or "").strip().upper()
+        item = self._explicit_ws_item(raw_item, code) or (
+            code if raw_item == code else None
+        )
+        if not code or not item:
+            return {}
+        with self.lock:
+            if (
+                item not in self._registered_items_by_code.get(code, ())
+                or self._registered_item_epochs.get(item)
+                != self._market_data_transport_epoch
+            ):
+                return {}
+            observation_only = item in self._micro_reversion_observation_only_items
+            store = (
+                self._micro_reversion_observation_route_data
+                if observation_only else self.realtime_data
+            )
+            target = store.get(item if observation_only else code)
+            return self._snapshot_target(target) if target else {}
+
     def get_all_data(self, codes):
         """Return dict of latest data for multiple codes, acquiring lock once."""
         if isinstance(codes, str):

@@ -421,6 +421,9 @@ def test_zero_base_uses_global_watch_cap_without_owner_quota_or_eviction(monkeyp
 def test_late_registration_keeps_same_code_probe_reserved_until_cleanup(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_ZERO_BASE_SCANNER_ENABLED", "true")
     monkeypatch.setattr(main, "ACTIVE_TARGETS", [])
+    monkeypatch.setattr(main, "scalping_session_venue_provenance", lambda _epoch: {
+        "market_session_regime": main.session_contract.MARKET_SESSION_REGIME_KRX_REGULAR,
+    })
     monkeypatch.setattr(main, "_ZERO_BASE_PROBE_IN_FLIGHT", set())
     monkeypatch.setattr(main, "_ZERO_BASE_PROBE_SLOTS", threading.BoundedSemaphore(8))
     monkeypatch.setattr(main, "_ZERO_BASE_PROBE_EXECUTOR", SimpleNamespace(

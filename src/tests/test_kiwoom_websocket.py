@@ -21,6 +21,41 @@ def test_retired_vcp_and_s15_conditions_are_absent_from_ws_bootstrap():
     })
 
 
+def test_exact_item_reader_uses_observation_store_and_current_registration():
+    manager = KiwoomWSManager("test-token")
+    manager._market_data_transport_epoch = 3
+    manager._registered_items_by_code["005930"] = (
+        "005930", "005930_NX", "005930_AL",
+    )
+    manager._registered_item_epochs.update({
+        "005930": 3, "005930_NX": 3, "005930_AL": 3,
+    })
+    manager._micro_reversion_observation_only_items.update({
+        "005930_NX", "005930_AL",
+    })
+    regular = manager._ensure_target_defaults("005930")
+    regular["curr"] = 70000
+    nxt = manager._ensure_target_defaults(
+        "005930_NX", store=manager._micro_reversion_observation_route_data,
+    )
+    nxt["curr"] = 70050
+    integrated = manager._ensure_target_defaults(
+        "005930_AL", store=manager._micro_reversion_observation_route_data,
+    )
+    integrated["curr"] = 70100
+
+    assert manager.get_exact_item_data("005930", "005930")["curr"] == 70000
+    assert manager.get_exact_item_data("005930", "005930_NX")["curr"] == 70050
+    assert manager.get_exact_item_data("005930", "005930_AL")["curr"] == 70100
+    assert manager.get_latest_data("005930")["curr"] == 70000
+
+    manager._registered_item_epochs["005930_AL"] = 2
+    assert manager.get_exact_item_data("005930", "005930_AL") == {}
+    manager._registered_item_epochs["005930_AL"] = 3
+    manager._registered_items_by_code["005930"] = ("005930",)
+    assert manager.get_exact_item_data("005930", "005930_AL") == {}
+
+
 class _FakeWS:
     def __init__(self, messages):
         self._messages = list(messages)

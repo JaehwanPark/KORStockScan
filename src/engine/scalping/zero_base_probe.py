@@ -172,17 +172,20 @@ def probe_ws_observation(snapshot: dict, *, code: str, route: str,
 def wait_for_exact_probe_ws_data(ws_manager, *, code: str, route: str,
                                  after_epoch: float, now=time.time,
                                  timeout_sec: float = 10.0,
+                                 empty_timeout_sec: float = 3.0,
                                  partial_extension_sec: float = 0.0,
                                  poll_interval_sec: float = 0.05,
                                  min_exact_0b_count: int = 0) -> tuple[dict, dict, str]:
     """Use one bounded lease for fresh 0B/0D and the machine's WS tick floor."""
     started = time.monotonic()
     deadline = started + max(0.0, timeout_sec)
+    empty_deadline = started + min(max(0.0, timeout_sec), max(0.0, empty_timeout_sec))
     snapshot = {}
     source_reason = "route_snapshot_missing"
     partial_extension_applied = False
+    empty_source_flushed = False
     while True:
-        snapshot = ws_manager.get_latest_data(code) or {}
+        snapshot = probe_ws_snapshot(ws_manager, code=code, route=route)
         ws_data, source_reason = exact_probe_ws_data(
             snapshot, code=code, route=route, after_epoch=after_epoch,
             now_epoch=now(),
@@ -191,6 +194,15 @@ def wait_for_exact_probe_ws_data(ws_manager, *, code: str, route: str,
             snapshot, code=code, route=route, after_epoch=after_epoch,
         )
         if ws_data and observation["exact_0b_count"] >= min_exact_0b_count:
+            break
+        if (
+            not observation["exact_0b_count"]
+            and not observation["exact_0d_count"]
+            and observation["latest_0b_ms"] is None
+            and observation["latest_0d_ms"] is None
+            and time.monotonic() >= empty_deadline
+        ):
+            empty_source_flushed = True
             break
         if time.monotonic() >= deadline:
             one_sided = bool(observation["exact_0b_count"]) != bool(observation["exact_0d_count"])
@@ -205,14 +217,26 @@ def wait_for_exact_probe_ws_data(ws_manager, *, code: str, route: str,
     observation["wait_ms"] = round((time.monotonic() - started) * 1000)
     observation["base_wait_budget_ms"] = round(max(0.0, timeout_sec) * 1000)
     observation["effective_wait_budget_ms"] = round(
-        (max(0.0, timeout_sec) +
+        (min(max(0.0, timeout_sec), max(0.0, empty_timeout_sec))
+         if empty_source_flushed else
+         max(0.0, timeout_sec) +
          (min(2.0, partial_extension_sec) if partial_extension_applied else 0.0)) * 1000
     )
     observation["wait_reason"] = source_reason
     observation["sample_target"] = min_exact_0b_count
     observation["sample_target_met"] = observation["exact_0b_count"] >= min_exact_0b_count
     observation["partial_extension_applied"] = partial_extension_applied
+    observation["empty_source_flushed"] = empty_source_flushed
     return ws_data, observation, source_reason
+
+
+def probe_ws_snapshot(ws_manager, *, code: str, route: str) -> dict:
+    """Read the exact registered item, including an existing observation view."""
+    item = probe_item(code, route)
+    reader = getattr(ws_manager, "get_exact_item_data", None)
+    if callable(reader):
+        return reader(code, item) or {}
+    return ws_manager.get_latest_data(code) or {}
 
 
 def exact_probe_rest_sources(ticks, candle_meta, *, request_code, now_epoch):
@@ -374,7 +398,7 @@ def run_zero_base_probe(
             result["result"] = "required_feature_insufficient"
             result["reason"] = "candle_context_missing"
             return result
-        refreshed_snapshot = ws_manager.get_latest_data(code)
+        refreshed_snapshot = probe_ws_snapshot(ws_manager, code=code, route=route)
         result["ws_observation_pre_machine"] = probe_ws_observation(
             refreshed_snapshot or {}, code=code, route=route,
             after_epoch=registered_epoch,

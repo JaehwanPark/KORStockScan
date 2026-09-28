@@ -222,6 +222,49 @@ def test_existing_ws_owner_is_reused_without_changing_registration():
     assert calls == []
 
 
+def test_reused_observation_item_reads_exact_view_through_pre_machine_check(monkeypatch):
+    import src.engine.scalping.zero_base_probe as module
+
+    monkeypatch.setattr(module, "resolve_entry_candle_session", lambda: "SOR_AFTERMARKET")
+    exact = _snapshot(route="krx_nxt_integrated", item="123456_AL")
+    reads = []
+
+    def read_exact(code, item):
+        reads.append((code, item))
+        return exact
+
+    ws = SimpleNamespace(
+        subscribed_codes={"123456"},
+        _registered_items_by_code={"123456": ("123456_AL",)},
+        get_exact_item_data=read_exact,
+        get_latest_data=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("generic runtime view must not be used")
+        ),
+    )
+    result = run_zero_base_probe(
+        {"claim": {"code": "123456", "route": "krx_nxt_integrated",
+                   "observed_epoch": 10},
+         "candidate": {"code": "123456", "route": "krx_nxt_integrated"}},
+        ws_manager=ws,
+        ai_engine=SimpleNamespace(analyze_target=lambda *_args, **_kwargs: {
+            "machine_evaluation_status": "assessment_contract_invalid",
+            "machine_contract_error": "missing_stock_code",
+        }),
+        token="token", now=lambda: 11,
+        tick_fetcher=lambda *_args, **_kwargs: [{
+            "request_code": "123456_AL", "rest_received_ts_ms": 11000,
+        }],
+        candle_fetcher=lambda *_args, **_kwargs: (
+            [{"close": 10000}],
+            {"request_code": "123456_AL", "rest_received_ts_ms": 11000},
+        ),
+        context_builder=lambda *_args, **_kwargs: {"ready": True},
+        ws_wait_min_exact_0b_count=0,
+    )
+    assert result["reason"] != "route_snapshot_missing"
+    assert reads == [("123456", "123456_AL")] * 2
+
+
 def test_probe_waits_for_later_exact_0d_after_first_0b():
     first = _snapshot(route="krx_nxt_integrated", item="123456_AL")
     first["realtime_type_snapshots_by_route"]["_AL|krx_nxt_integrated"].pop("0D")
@@ -291,6 +334,54 @@ def test_empty_receipt_does_not_extend_wait():
     assert observation["partial_extension_applied"] is False
     assert observation["wait_ms"] < 60
     assert observation["effective_wait_budget_ms"] == 10
+
+
+def test_empty_exact_source_flushes_before_full_ws_wait():
+    ws = SimpleNamespace(get_latest_data=lambda *_args: {})
+    data, observation, reason = wait_for_exact_probe_ws_data(
+        ws, code="123456", route="krx_nxt_integrated", after_epoch=10,
+        now=lambda: 11, timeout_sec=0.2, empty_timeout_sec=0.03,
+        poll_interval_sec=0.005,
+    )
+    assert not data and reason == "route_snapshot_missing"
+    assert observation["empty_source_flushed"] is True
+    assert 20 <= observation["wait_ms"] < 100
+    assert observation["base_wait_budget_ms"] == 200
+    assert observation["effective_wait_budget_ms"] == 30
+
+
+def test_one_exact_stream_keeps_full_ws_wait_budget():
+    partial = _snapshot(route="krx_nxt_integrated", item="123456_AL")
+    partial["realtime_type_snapshots_by_route"]["_AL|krx_nxt_integrated"].pop("0B")
+    partial["recent_depth_ticks_by_route"] = {"_AL|krx_nxt_integrated": [
+        {"received_at_ms": 10500, "item": "123456_AL", "transport_epoch": 3}
+    ]}
+    ws = SimpleNamespace(get_latest_data=lambda *_args: partial)
+    data, observation, reason = wait_for_exact_probe_ws_data(
+        ws, code="123456", route="krx_nxt_integrated", after_epoch=10,
+        now=lambda: 11, timeout_sec=0.05, empty_timeout_sec=0.01,
+        poll_interval_sec=0.005,
+    )
+    assert not data and reason == "0B_missing"
+    assert observation["empty_source_flushed"] is False
+    assert observation["wait_ms"] >= 40
+    assert observation["effective_wait_budget_ms"] == 50
+
+
+def test_exact_typed_receipt_without_tick_history_is_not_empty_source():
+    partial = _snapshot(route="krx_nxt_integrated", item="123456_AL")
+    partial["realtime_type_snapshots_by_route"]["_AL|krx_nxt_integrated"].pop("0B")
+    ws = SimpleNamespace(get_latest_data=lambda *_args: partial)
+    data, observation, reason = wait_for_exact_probe_ws_data(
+        ws, code="123456", route="krx_nxt_integrated", after_epoch=10,
+        now=lambda: 11, timeout_sec=0.05, empty_timeout_sec=0.01,
+        poll_interval_sec=0.005,
+    )
+    assert not data and reason == "0B_missing"
+    assert observation["exact_0d_count"] == 0
+    assert observation["latest_0d_ms"] == 1000
+    assert observation["empty_source_flushed"] is False
+    assert observation["wait_ms"] >= 40
 
 
 def test_late_exact_pair_arrives_after_initially_empty_ws_snapshot():
