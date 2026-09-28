@@ -46,6 +46,101 @@ def test_trailing_transitions_survive_timeline_and_projection():
     assert "scalp_tp_alternative_observed" in report_mod._PROJECTION_EVENT_STAGES
 
 
+def test_shared_rebound_lineage_keeps_one_position_cost_and_exact_decision_join():
+    def event(stage, **fields):
+        return report_mod.HoldingEvent(
+            "2026-09-29 10:00:00", "TEST", "047040", stage,
+            {"id": "48376", **fields}, "",
+        )
+
+    events = [
+        event("avg_down_shared_rebound_blocked",
+              reason="shared_main_rebound_input_preflight_blocked",
+              preflight_primary_blocker="tick_context_stale"),
+        event("holding_path_signal_snapshot", path_id="ADD_REBOUND",
+              signal_id="signal-1", decision="PASS", buy_fill_identity="identity-1"),
+        event("avg_down_shared_rebound_signal", source_signal_id="signal-1",
+              position_episode_id="episode-1", scale_in_decision_id="decision-1",
+              buy_fill_identity="identity-1", machine_bundle_sha256="b" * 64),
+        event("scale_in_order_submitted", add_trigger="shared_main_rebound_entry",
+              actual_order_submitted=True, position_episode_id="episode-1",
+              scale_in_decision_id="decision-1", broker_order_no_list="0029199",
+              submitted_qty=1),
+        event("scale_in_executed", add_reason="shared_main_rebound_entry",
+              actual_order_submitted=True, position_episode_id="episode-1",
+              scale_in_decision_id="decision-1", order_no="0029199",
+              execution_no="131200", fill_qty=1),
+    ]
+    trade = {"id": 48376, "code": "047040", "strategy": "SCALPING"}
+    terminal = {"strict_completion_status": "eligible", "fill_cost_reconciled": True,
+                "realized_pnl_krw": 120, "profit_rate": 0.6,
+                "cost_basis": "broker_fill_prices_configured_cost_rate"}
+    result = report_mod._avg_down_rebound_lineage(trade, events, terminal)
+    assert result["decision_rows"][0]["status"] == "completed_exact_cost"
+    assert result["decision_rows"][0]["exact_fill_legs"] == [
+        {"order_no": "0029199", "execution_no": "131200", "qty": 1}
+    ]
+    assert result["position_terminal"]["realized_pnl_krw"] == 120
+    assert "realized_pnl_krw" not in result["decision_rows"][0]
+    assert result["incremental_add_effect_status"] == "unidentified_without_paired_no_add"
+    assert result["blocker_counts"] == [{"reason": "shared_main_rebound_input_preflight_blocked",
+                                          "primary_blocker": "tick_context_stale", "count": 1}]
+    json.dumps(result)
+
+
+def test_shared_rebound_lineage_does_not_join_unrelated_fill_or_invent_cost():
+    def event(stage, **fields):
+        return report_mod.HoldingEvent("2026-09-29 10:00:00", "TEST", "047040",
+                                       stage, {"id": "48376", **fields}, "")
+    events = [
+        event("avg_down_shared_rebound_signal", source_signal_id="signal-1",
+              position_episode_id="episode-1", scale_in_decision_id="decision-1"),
+        event("scale_in_executed", add_reason="shared_main_rebound_entry",
+              actual_order_submitted=True, position_episode_id="episode-other",
+              scale_in_decision_id="decision-2", order_no="0029199",
+              execution_no="131200", fill_qty=1),
+    ]
+    result = report_mod._avg_down_rebound_lineage(
+        {"id": 48376, "code": "047040", "strategy": "SCALPING"}, events,
+        {"strict_completion_status": "eligible", "fill_cost_reconciled": False,
+         "realized_pnl_krw": None, "profit_rate": None},
+    )
+    assert result["unjoined_fill_count"] == 1
+    assert result["decision_rows"][0]["status"] == "lineage_gap_valid_vote"
+    assert result["position_terminal"]["realized_pnl_krw"] is None
+
+
+def test_shared_rebound_lineage_separates_partial_add_fill_from_full_fill():
+    def event(stage, **fields):
+        return report_mod.HoldingEvent("2026-09-29 10:00:00", "TEST", "047040",
+                                       stage, {"id": "48376", **fields}, "")
+    events = [
+        event("holding_path_signal_snapshot", path_id="ADD_REBOUND",
+              signal_id="signal-1", decision="PASS", buy_fill_identity="identity-1"),
+        event("avg_down_shared_rebound_signal", source_signal_id="signal-1",
+              position_episode_id="episode-1", scale_in_decision_id="decision-1",
+              buy_fill_identity="identity-1"),
+        event("scale_in_order_submitted", add_trigger="shared_main_rebound_entry",
+              actual_order_submitted=True, position_episode_id="episode-1",
+              scale_in_decision_id="decision-1", broker_order_no_list="0029199",
+              submitted_qty=2),
+        event("scale_in_executed", add_reason="shared_main_rebound_entry",
+              actual_order_submitted=True, position_episode_id="episode-1",
+              scale_in_decision_id="decision-1", order_no="0029199",
+              execution_no="131200", fill_qty=1),
+    ]
+    terminal = {"strict_completion_status": "eligible", "fill_cost_reconciled": True,
+                "realized_pnl_krw": 120, "profit_rate": 0.6}
+    result = report_mod._avg_down_rebound_lineage(
+        {"id": 48376, "code": "047040", "strategy": "SCALPING"}, events, terminal,
+    )
+    decision = result["decision_rows"][0]
+    assert decision["fill_quality"] == "partial"
+    assert decision["exact_filled_qty"] == 1
+    assert decision["status"] == "partial_fill_completed_exact_cost"
+    assert result["incremental_add_effect_status"] == "unidentified_without_paired_no_add"
+
+
 def test_structured_trailing_projection_flags_wrong_partition_and_missing_id(
     monkeypatch, tmp_path
 ):
@@ -707,7 +802,8 @@ def test_prior_entry_fill_events_require_sealed_same_id_snapshot(monkeypatch):
         "metrics": {"open_scalp_position_projection_status": "current_db_census",
                     "open_scalp_position_projection_count": 1},
         "sections": {"open_scalp_position_projection": [{
-            "id": 42, "code": "123456", "timeline": [{
+            "id": 42, "code": "123456", "avg_down_rebound_blocker_summary": [],
+            "timeline": [{
                 "stage": "position_rebased_after_fill",
                 "timestamp": "2026-09-23 09:00:00",
                 "fields": {"id": "42", "order_no": "B1", "execution_no": "BE1"},
@@ -733,7 +829,8 @@ def test_prior_fill_events_include_intermediate_day_scale_in(monkeypatch):
             "metrics": {"open_scalp_position_projection_status": "current_db_census",
                         "open_scalp_position_projection_count": 1},
             "sections": {"open_scalp_position_projection": [{
-                "id": 42, "code": "123456", "timeline": [{
+                "id": 42, "code": "123456", "avg_down_rebound_blocker_summary": [],
+                "timeline": [{
                     "stage": stage, "timestamp": f"{day} 09:00:00",
                     "fields": {"id": "42", "order_no": "B1" if day.endswith("22") else "B2",
                                "execution_no": "BE1" if day.endswith("22") else "BE2"},
@@ -750,6 +847,62 @@ def test_prior_fill_events_include_intermediate_day_scale_in(monkeypatch):
         "position_rebased_after_fill", "scale_in_executed"
     ]
     assert set(receipts) == {"2026-09-22", "2026-09-23"}
+
+
+def test_open_position_rebound_blockers_carry_as_bounded_prior_day_counts(monkeypatch):
+    trade = {"id": 42, "rec_date": "2026-09-23", "status": "HOLDING",
+             "strategy": "SCALPING", "code": "123456", "buy_qty": 1}
+    blocked = [report_mod.HoldingEvent(
+        "2026-09-23 10:00:00", "TEST", "123456",
+        "avg_down_shared_rebound_blocked",
+        {"id": "42", "reason": "shared_main_rebound_input_preflight_blocked",
+         "preflight_primary_blocker": "tick_context_stale"}, "",
+    ) for _ in range(3)]
+    projection = report_mod._open_scalp_position_projection(trade, blocked)
+    assert projection["timeline"] == []
+    assert projection["avg_down_rebound_blocker_summary"] == [{
+        "reason": "shared_main_rebound_input_preflight_blocked",
+        "primary_blocker": "tick_context_stale", "machine_action": "-", "count": 3,
+    }]
+    snapshot = {"date": "2026-09-23", "meta": {"warnings": []},
+                "metrics": {"open_scalp_position_projection_status": "current_db_census",
+                            "open_scalp_position_projection_count": 1},
+                "sections": {"open_scalp_position_projection": [projection]}}
+    monkeypatch.setattr(report_mod, "load_monitor_snapshot", lambda *_: snapshot)
+    completed_trade = {**trade, "status": "COMPLETED"}
+    prior, receipts = report_mod._prior_entry_fill_events(
+        [completed_trade], "2026-09-24",
+    )
+    assert receipts["2026-09-23"]["status"] == "sealed_entry_snapshot"
+    lineage = report_mod._avg_down_rebound_lineage(completed_trade, prior["42"], None)
+    assert lineage["blocked_observation_count"] == 3
+    assert lineage["preflight_blocked_count"] == 3
+    assert lineage["prior_blocker_summary_gap_count"] == 0
+
+
+def test_prior_position_snapshot_without_rebound_summary_preserves_gap(monkeypatch):
+    snapshot = {"date": "2026-09-23", "meta": {"warnings": []},
+                "metrics": {"open_scalp_position_projection_status": "current_db_census",
+                            "open_scalp_position_projection_count": 1},
+                "sections": {"open_scalp_position_projection": [
+                    {"id": 42, "code": "123456", "timeline": []},
+                ]}}
+    monkeypatch.setattr(report_mod, "load_monitor_snapshot", lambda *_: snapshot)
+    trade = {"id": 42, "rec_date": "2026-09-23", "status": "COMPLETED",
+             "strategy": "SCALPING", "code": "123456"}
+    prior, _ = report_mod._prior_entry_fill_events([trade], "2026-09-24")
+    assert report_mod._avg_down_rebound_lineage(trade, prior["42"], None) is None
+    current_signal = report_mod.HoldingEvent(
+        "2026-09-24 10:00:00", "TEST", "123456",
+        "avg_down_shared_rebound_signal",
+        {"id": "42", "source_signal_id": "signal-1",
+         "position_episode_id": "episode-1", "scale_in_decision_id": "decision-1"}, "",
+    )
+    lineage = report_mod._avg_down_rebound_lineage(
+        trade, [*prior["42"], current_signal], None,
+    )
+    assert lineage["prior_blocker_summary_gap_count"] == 1
+    assert lineage["blocked_observation_count"] == 0
 
 
 def test_sell_day_completion_event_recovers_prior_entry_by_exact_id(monkeypatch):

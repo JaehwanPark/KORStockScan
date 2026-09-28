@@ -13,7 +13,6 @@ from src.engine.scalping.position_sizing_allocator import (
 )
 
 _DEFAULT_SCALE_IN_RATIO = 0.50
-_DEFAULT_SWING_PYRAMID_RATIO = 0.30
 _STOP_LINE_TOUCH_MANDATORY_AVG_DOWN_REASON = "stop_line_touch_mandatory_avg_down"
 _DEEP_RECOVERY_AVG_DOWN_REASON = "deep_recovery_avg_down"
 _SHALLOW_VOLATILITY_AVG_DOWN_REASON = "shallow_volatility_avg_down"
@@ -70,16 +69,8 @@ _SCALE_IN_RULES = {
     ("SCALPING", "AVG_DOWN", "default"): {
         "ratio": _DEFAULT_SCALE_IN_RATIO,
     },
-    ("SCALPING", "PYRAMID", "default"): {
-        "ratio": _DEFAULT_SCALE_IN_RATIO,
-        "floor_rule": "SCALPING_PYRAMID_ZERO_QTY_STAGE1_ENABLED",
-        "floor_default": False,
-    },
     ("DEFAULT", "AVG_DOWN", "default"): {
         "ratio": _DEFAULT_SCALE_IN_RATIO,
-    },
-    ("DEFAULT", "PYRAMID", "default"): {
-        "ratio": _DEFAULT_SWING_PYRAMID_RATIO,
     },
 }
 
@@ -228,51 +219,6 @@ def _ai_score_available_for_scale_in(stock, action=None, *, current_ai_score=Non
     return True, source or "-"
 
 
-def _real_pyramid_ai_score_submit_authority(
-    *,
-    ai_score_available,
-    current_ai_score,
-    holding_score_effective=None,
-    sim_uncapped_qty=False,
-):
-    """Real PYRAMID submit needs an evaluated non-sentinel score; strategy scoring still treats it as a prior."""
-    if sim_uncapped_qty:
-        return {
-            "allowed": True,
-            "reason": "not_applicable_sim_or_probe",
-            "sentinel_score_max": 50.0,
-        }
-    score = _safe_float(current_ai_score, None)
-    effective_score = _safe_float(holding_score_effective, score)
-    if not _safe_bool(ai_score_available, False):
-        return {
-            "allowed": False,
-            "reason": "ai_score_unavailable",
-            "sentinel_score_max": 50.0,
-        }
-    if score is None:
-        return {
-            "allowed": False,
-            "reason": "ai_score_missing",
-            "sentinel_score_max": 50.0,
-        }
-    if score <= 50.0:
-        return {
-            "allowed": False,
-            "reason": "ai_score_sentinel_50",
-            "sentinel_score_max": 50.0,
-        }
-    if effective_score is None or effective_score <= 50.0:
-        return {
-            "allowed": False,
-            "reason": "holding_score_sentinel_50",
-            "sentinel_score_max": 50.0,
-        }
-    return {
-        "allowed": True,
-        "reason": "evaluated_score_above_sentinel",
-        "sentinel_score_max": 50.0,
-    }
 
 
 def _has_explicit_ai_score_provenance(stock, action=None):
@@ -514,328 +460,14 @@ def resolve_holding_elapsed_sec(stock, *, now_dt=None, now_ts=None):
     return 0
 
 
-def _scalping_pyramid_quality_snapshot(stock, *, current_ai_score=None):
-    stock = stock if isinstance(stock, dict) else {}
-    feat = stock.get("last_reversal_features") or {}
-    if not isinstance(feat, dict):
-        feat = {}
-    ai_default = _safe_float(stock.get("rt_ai_prob"), 0.0) * 100.0
-    ai_score = (
-        current_ai_score
-        if current_ai_score is not None
-        else stock.get("current_ai_score")
-    )
-    raw_micro_vwap = feat.get("curr_vs_micro_vwap_bp")
-    ai_score_available, ai_score_source = _ai_score_available_for_scale_in(
-        stock,
-        current_ai_score=ai_score,
-    )
-    source_quality = reversal_feature_source_quality(feat)
-    source_stale = bool(feat and source_quality["reversal_feature_stale"])
-    pressure_usable = (
-        _safe_bool(source_quality.get("tick_aggressor_pressure_usable"), False)
-        or _safe_int(source_quality.get("tick_aggressor_trusted_count"), 0) > 0
-    )
-    return {
-        "current_ai_score": _safe_float(ai_score, ai_default),
-        "ai_score_source": ai_score_source,
-        "ai_score_available": ai_score_available,
-        "buy_pressure_10t": _safe_float(feat.get("buy_pressure_10t"), 0.0),
-        "tick_acceleration_ratio": _safe_float(
-            feat.get("tick_acceleration_ratio"), 0.0
-        ),
-        "large_sell_print_detected": _safe_bool(
-            feat.get("large_sell_print_detected"), True
-        ),
-        "curr_vs_micro_vwap_bp": _safe_float(raw_micro_vwap, None),
-        "reversal_feature_stale": source_stale,
-        "tick_aggressor_pressure_usable_bool": bool(pressure_usable),
-        **source_quality,
-    }
 
 
-def _scalping_pyramid_strong_continuation_context(
-    stock,
-    drawdown_from_peak,
-    is_new_high,
-    *,
-    current_ai_score=None,
-    min_profit_override=None,
-):
-    enabled = bool(
-        getattr(TRADING_RULES, "SCALPING_PYRAMID_STRONG_CONTINUATION_ENABLED", False)
-    )
-    base_min_profit = max(
-        0.0,
-        _safe_float(
-            min_profit_override if min_profit_override is not None else
-            getattr(TRADING_RULES, "SCALPING_PYRAMID_MIN_PROFIT_PCT", 1.5), 1.5
-        ),
-    )
-    strong_min_profit = _safe_float(
-        getattr(
-            TRADING_RULES, "SCALPING_PYRAMID_STRONG_CONTINUATION_MIN_PROFIT_PCT", 0.9
-        ),
-        0.9,
-    )
-    strong_min_profit = max(0.0, min(base_min_profit, strong_min_profit))
-    max_drawdown = max(
-        0.0,
-        _safe_float(
-            getattr(
-                TRADING_RULES,
-                "SCALPING_PYRAMID_STRONG_CONTINUATION_MAX_DRAWDOWN_PCT",
-                0.20,
-            ),
-            0.20,
-        ),
-    )
-    min_ai = _safe_float(
-        getattr(TRADING_RULES, "SCALPING_PYRAMID_MIN_AI_SCORE", 70), 70.0
-    )
-    min_buy_pressure = _safe_float(
-        getattr(TRADING_RULES, "SCALPING_PYRAMID_MIN_BUY_PRESSURE", 60.0), 60.0
-    )
-    min_tick_accel = _safe_float(
-        getattr(TRADING_RULES, "SCALPING_PYRAMID_MIN_TICK_ACCEL", 0.5), 0.5
-    )
-    max_micro_vwap_bp = _safe_float(
-        getattr(TRADING_RULES, "SCALPING_PYRAMID_MAX_MICRO_VWAP_BPS", 60.0),
-        60.0,
-    )
-    quality = _scalping_pyramid_quality_snapshot(
-        stock, current_ai_score=current_ai_score
-    )
-    micro_vwap_bp = quality["curr_vs_micro_vwap_bp"]
-    ai_score_ok = (
-        quality["ai_score_available"] and quality["current_ai_score"] >= min_ai
-    )
-    ai_score_real_support = (
-        quality["ai_score_available"] and quality["current_ai_score"] >= min_ai
-    )
-    checks = {
-        "enabled": enabled,
-        "new_high": bool(is_new_high),
-        "peak_hold_ok": float(drawdown_from_peak) <= max_drawdown,
-        "ai_score_ok": ai_score_ok,
-        "buy_pressure_support_ok": (
-            quality["tick_aggressor_pressure_usable_bool"]
-            and quality["buy_pressure_10t"] >= min_buy_pressure
-        ),
-        "tick_accel_ok": (not quality["reversal_feature_stale"])
-        and quality["tick_acceleration_ratio"] >= min_tick_accel,
-        "large_sell_clear": (
-            quality["tick_aggressor_pressure_usable_bool"]
-            and not quality["large_sell_print_detected"]
-        ),
-        "micro_vwap_available": micro_vwap_bp is not None,
-        "micro_vwap_not_overheated": (
-            (not quality["reversal_feature_stale"])
-            and micro_vwap_bp is not None
-            and micro_vwap_bp <= max_micro_vwap_bp
-        ),
-    }
-    strong_checks = {**checks, "ai_score_ok": ai_score_real_support}
-    strong_failed = [name for name, ok in strong_checks.items() if not ok]
-    return {
-        "base_min_profit_pct": round(base_min_profit, 4),
-        "strong_continuation_min_profit_pct": round(strong_min_profit, 4),
-        "strong_continuation_max_drawdown_pct": round(max_drawdown, 4),
-        "strong_continuation_failed_checks": ",".join(strong_failed),
-        "strong_continuation_allowed": not strong_failed,
-        "current_ai_score": round(quality["current_ai_score"], 4),
-        "ai_score_source": quality["ai_score_source"],
-        "ai_score_available": quality["ai_score_available"],
-        "ai_score_real_support": ai_score_real_support,
-        "min_ai_score": round(min_ai, 4),
-        "buy_pressure_10t": round(quality["buy_pressure_10t"], 4),
-        "min_buy_pressure": round(min_buy_pressure, 4),
-        "buy_pressure_support_ok": checks["buy_pressure_support_ok"],
-        "tick_acceleration_ratio": round(quality["tick_acceleration_ratio"], 4),
-        "min_tick_accel": round(min_tick_accel, 4),
-        "tick_accel_ok": checks["tick_accel_ok"],
-        "large_sell_print_detected": quality["large_sell_print_detected"],
-        "large_sell_clear": checks["large_sell_clear"],
-        "curr_vs_micro_vwap_bp": (
-            "-" if micro_vwap_bp is None else round(micro_vwap_bp, 4)
-        ),
-        "max_micro_vwap_bps": round(max_micro_vwap_bp, 4),
-        "micro_vwap_available": checks["micro_vwap_available"],
-        "minute_candle_context_quality": quality["minute_candle_context_quality"],
-        "minute_candle_window_fresh": quality["minute_candle_window_fresh"],
-        "minute_candle_latest_age_ms": quality["minute_candle_latest_age_ms"],
-        "micro_vwap_not_overheated": checks["micro_vwap_not_overheated"],
-        "reversal_feature_source_quality": quality["reversal_feature_source_quality"],
-        "reversal_feature_stale": quality["reversal_feature_stale"],
-        "reversal_feature_stale_reason": quality["reversal_feature_stale_reason"],
-        "tick_context_quality": quality["tick_context_quality"],
-        "tick_context_stale": quality["tick_context_stale"],
-        "tick_aggressor_trusted_count": quality["tick_aggressor_trusted_count"],
-        "tick_aggressor_pressure_usable": quality["tick_aggressor_pressure_usable"],
-        "tick_aggressor_pressure_usable_bool": quality[
-            "tick_aggressor_pressure_usable_bool"
-        ],
-        "tick_latest_age_ms": quality["tick_latest_age_ms"],
-        "tick_accel_source": quality["tick_accel_source"],
-        "quote_stale": quality["quote_stale"],
-        "quote_age_ms": quality["quote_age_ms"],
-        "quote_age_source": quality["quote_age_source"],
-        "feature_extracted_at": quality["feature_extracted_at"],
-        "ai_score_ok": checks["ai_score_ok"],
-    }
 
 
-def _pyramid_quality_decision(context):
-    """Classify PYRAMID quality as hard safety blocks plus composite support."""
-    min_ai = _safe_float(context.get("min_ai_score"), 70.0)
-    min_buy_pressure = _safe_float(context.get("min_buy_pressure"), 60.0)
-    min_tick = _safe_float(context.get("min_tick_accel"), 0.5)
-    max_micro = _safe_float(context.get("max_micro_vwap_bps"), 60.0)
-    ai_score = _safe_float(context.get("current_ai_score"), 0.0)
-    ai_available = _safe_bool(context.get("ai_score_available"), False)
-    buy_pressure = _safe_float(context.get("buy_pressure_10t"), 0.0)
-    tick_accel = _safe_float(context.get("tick_acceleration_ratio"), 0.0)
-    micro_value = context.get("curr_vs_micro_vwap_bp")
-    micro_vwap = None if micro_value == "-" else _safe_float(micro_value, None)
-    stale = _safe_bool(context.get("reversal_feature_stale"), False)
-    pressure_usable = (
-        _safe_bool(context.get("tick_aggressor_pressure_usable"), False)
-        or _safe_bool(context.get("tick_aggressor_pressure_usable_bool"), False)
-        or _safe_int(context.get("tick_aggressor_trusted_count"), 0) > 0
-    )
-    large_sell = _safe_bool(context.get("large_sell_print_detected"), True)
-
-    support_signals = []
-    risk_signals = []
-    hard_blockers = []
-    support_score = 0.0
-
-    if ai_available and ai_score >= min_ai:
-        support_score += 2.0
-        support_signals.append("ai_score_ok")
-    elif ai_available and ai_score >= min_ai - 5.0:
-        support_score += 1.0
-        support_signals.append("ai_score_borderline")
-        risk_signals.append("ai_score_below_min")
-    else:
-        risk_signals.append(
-            "ai_score_unavailable" if not ai_available else "ai_score_below_min"
-        )
-
-    if not pressure_usable:
-        risk_signals.append("tick_aggressor_pressure_unusable")
-    elif buy_pressure >= min_buy_pressure:
-        support_score += 1.0
-        support_signals.append("buy_pressure_ok")
-    elif buy_pressure >= min_buy_pressure - 5.0:
-        support_score += 0.5
-        support_signals.append("buy_pressure_borderline")
-        risk_signals.append("buy_pressure_below_min")
-    else:
-        risk_signals.append("buy_pressure_below_min")
-        if buy_pressure < max(0.0, min_buy_pressure - 30.0):
-            hard_blockers.append("buy_pressure_severe_below_min")
-
-    if not stale and tick_accel >= min_tick:
-        support_score += 1.0
-        support_signals.append("tick_accel_ok")
-    elif stale:
-        risk_signals.append("tick_accel_stale")
-    else:
-        risk_signals.append("tick_accel_below_min")
-
-    if micro_vwap is None:
-        risk_signals.append("micro_vwap_missing")
-    elif stale:
-        risk_signals.append("micro_context_stale")
-    elif micro_vwap <= max_micro:
-        support_score += 1.0
-        support_signals.append("micro_vwap_not_overheated")
-    elif micro_vwap <= max_micro + 20.0:
-        risk_signals.append("micro_vwap_overheated")
-    else:
-        risk_signals.append("micro_vwap_severe_overheated")
-        hard_blockers.append("micro_vwap_severe_overheated")
-
-    if not pressure_usable:
-        pass
-    elif large_sell:
-        risk_signals.append("large_sell_detected")
-        hard_blockers.append("large_sell_detected")
-    else:
-        support_score += 1.0
-        support_signals.append("large_sell_clear")
-
-    required_support_score = 4.0
-    has_fresh_micro_confirmation = ("tick_accel_ok" in support_signals) or (
-        "micro_vwap_not_overheated" in support_signals
-    )
-    if not has_fresh_micro_confirmation:
-        hard_blockers.append("fresh_micro_confirmation_missing")
-    allowed = not hard_blockers and support_score >= required_support_score
-    return {
-        "allowed": allowed,
-        "support_score": round(support_score, 4),
-        "required_support_score": required_support_score,
-        "score_gate_converted_to_prior": True,
-        "ai_score_prior_weight": (
-            0.6
-            if "ai_score_ok" in support_signals
-            else 0.3 if "ai_score_borderline" in support_signals else 0.0
-        ),
-        "score_prior_band": (
-            "supportive"
-            if "ai_score_ok" in support_signals
-            else (
-                "low"
-                if "ai_score_borderline" in support_signals
-                else "neutral_or_unknown"
-            )
-        ),
-        "support_signals": support_signals,
-        "risk_signals": risk_signals,
-        "hard_blockers": hard_blockers,
-    }
 
 
-def _pyramid_quality_reason(context, decision):
-    blockers = list(decision.get("hard_blockers") or [])
-    risks = list(decision.get("risk_signals") or [])
-    if blockers == ["fresh_micro_confirmation_missing"] and risks:
-        return (
-            risks[0]
-            if len(risks) == 1
-            else "pyramid_quality_blocked:" + ",".join(risks)
-        )
-    if blockers == ["micro_vwap_severe_overheated"]:
-        return "micro_vwap_overheated"
-    if blockers == ["buy_pressure_severe_below_min"]:
-        return "buy_pressure_below_min"
-    if blockers:
-        return (
-            blockers[0]
-            if len(blockers) == 1
-            else "pyramid_hard_blocked:" + ",".join(blockers)
-        )
-    if risks:
-        return (
-            risks[0]
-            if len(risks) == 1
-            else "pyramid_quality_blocked:" + ",".join(risks)
-        )
-    return "pyramid_quality_support_insufficient"
 
 
-def _merge_pyramid_score_prior_fields(result, quality_decision):
-    result["score_gate_converted_to_prior"] = bool(
-        quality_decision.get("score_gate_converted_to_prior", True)
-    )
-    result["hard_gate_veto"] = bool(quality_decision.get("hard_gate_veto", False))
-    result["score_prior_band"] = quality_decision.get(
-        "score_prior_band", "neutral_or_unknown"
-    )
-    result["ai_score_prior_weight"] = quality_decision.get("ai_score_prior_weight", 0.0)
-    return result
 
 
 def _unique_reasons(reasons):
@@ -862,257 +494,14 @@ def _is_rising_missed_scout_lineage(stock):
     return False
 
 
-def _apply_rising_missed_scout_pyramid_bridge(
-    result, stock, profit_rate, continuation_context, quality_decision
-):
-    if not isinstance(result, dict):
-        return result
-    if not bool(
-        getattr(TRADING_RULES, "RISING_MISSED_SCOUT_PYRAMID_BRIDGE_ENABLED", False)
-    ):
-        return result
-    if not _is_rising_missed_scout_lineage(stock):
-        return result
-
-    bridge_min_profit = max(
-        0.0,
-        _safe_float(
-            getattr(TRADING_RULES, "RISING_MISSED_SCOUT_PYRAMID_MIN_PROFIT_PCT", 0.70),
-            0.70,
-        ),
-    )
-    max_avg_down = max(
-        0,
-        _safe_int(
-            getattr(TRADING_RULES, "RISING_MISSED_SCOUT_PYRAMID_MAX_AVG_DOWN_COUNT", 1),
-            1,
-        ),
-    )
-    operator_reason = str(
-        getattr(
-            TRADING_RULES, "RISING_MISSED_SCOUT_PYRAMID_OPERATOR_OVERRIDE_REASON", ""
-        )
-        or ""
-    ).strip()
-    avg_down_count = _safe_int(stock.get("avg_down_count"), 0)
-    pyramid_count = _safe_int(stock.get("pyramid_count"), 0)
-    current_ai_score = _safe_float(continuation_context.get("current_ai_score"), 0.0)
-    ai_available = _safe_bool(continuation_context.get("ai_score_available"), False)
-    risk_signals = set(quality_decision.get("risk_signals") or [])
-    hard_blockers = set(quality_decision.get("hard_blockers") or [])
-
-    blockers = []
-    if profit_rate < bridge_min_profit:
-        blockers.append("profit_not_enough")
-    if avg_down_count > max_avg_down:
-        blockers.append("avg_down_count_exceeded")
-    if pyramid_count > 0:
-        blockers.append("pyramid_already_used")
-    ai_score_prior_low = bool(ai_available and current_ai_score < 68.0)
-    if _safe_bool(continuation_context.get("quote_stale"), False):
-        blockers.append("quote_stale")
-    if _safe_bool(continuation_context.get("reversal_feature_stale"), False):
-        blockers.append("micro_context_stale")
-    if _safe_bool(continuation_context.get("tick_context_stale"), False):
-        blockers.append("tick_accel_stale")
-    if not _safe_bool(
-        continuation_context.get("tick_aggressor_pressure_usable_bool"), False
-    ):
-        blockers.append("tick_aggressor_pressure_unusable")
-    if not _safe_bool(continuation_context.get("micro_vwap_available"), False):
-        blockers.append("micro_vwap_missing")
-
-    forbidden_quality = {
-        "fresh_micro_confirmation_missing",
-        "large_sell_detected",
-        "buy_pressure_severe_below_min",
-        "micro_vwap_severe_overheated",
-        "tick_accel_stale",
-        "micro_context_stale",
-    }
-    blockers.extend(sorted((hard_blockers | risk_signals) & forbidden_quality))
-    blockers = _unique_reasons(blockers)
-
-    bridge_fields = {
-        "rising_missed_scout_pyramid_bridge_enabled": True,
-        "rising_missed_scout_pyramid_bridge_lineage": True,
-        "rising_missed_scout_pyramid_bridge_min_profit_pct": round(
-            bridge_min_profit, 4
-        ),
-        "rising_missed_scout_pyramid_bridge_max_avg_down_count": max_avg_down,
-        "rising_missed_scout_pyramid_bridge_operator_override_reason": operator_reason
-        or "-",
-        "runtime_family": "rising_missed_scout_pyramid_bridge",
-        "runtime_family_candidate": "rising_missed_scout_pyramid_bridge",
-        "decision_authority": "same_day_operator_runtime_override",
-        "runtime_effect": False,
-        "allowed_runtime_apply": False,
-        "forbidden_uses": (
-            "threshold_full_relaxation|provider_route_change|bot_auto_restart|cap_release|"
-            "stale_quote_bypass|broker_guard_bypass|hard_safety_bypass"
-        ),
-        "avg_down_count": avg_down_count,
-        "pyramid_count": pyramid_count,
-        "score_gate_converted_to_prior": True,
-        "hard_gate_veto": False,
-        "score_prior_band": (
-            "neutral_or_unknown"
-            if not ai_available
-            else "low" if ai_score_prior_low else "supportive"
-        ),
-        "ai_score_prior_weight": (
-            0.0 if not ai_available else -0.3 if ai_score_prior_low else 0.6
-        ),
-    }
-    result.update(bridge_fields)
-    if blockers:
-        result["reason"] = "rising_missed_scout_pyramid_bridge_blocked:" + ",".join(
-            blockers
-        )
-        result["rising_missed_scout_pyramid_bridge_blockers"] = ",".join(blockers)
-        return result
-
-    result["should_add"] = True
-    result["add_type"] = "PYRAMID"
-    result["reason"] = "rising_missed_scout_pyramid_bridge_ok"
-    result["runtime_effect"] = True
-    result["rising_missed_scout_pyramid_bridge_blockers"] = "-"
-    result["rising_missed_scout_pyramid_bridge_applied"] = True
-    return result
 
 
-def _pyramid_runtime_prior_default_fields(runtime_prior_context):
-    prior = runtime_prior_context if isinstance(runtime_prior_context, dict) else {}
-    return {
-        "pyramid_runtime_prior_status": str(prior.get("status") or "missing"),
-        "pyramid_runtime_prior_sample_count": int(
-            _safe_float(prior.get("sample_count"), 0)
-        ),
-        "pyramid_runtime_prior_recovered_or_extended_rate": round(
-            _safe_float(prior.get("recovered_or_extended_rate"), 0.0),
-            4,
-        ),
-        "pyramid_runtime_prior_reversal_or_flat_rate": round(
-            _safe_float(prior.get("reversal_or_flat_rate"), 0.0),
-            4,
-        ),
-        "pyramid_runtime_prior_blocked_then_recovered_rate": round(
-            _safe_float(prior.get("blocked_then_recovered_rate"), 0.0),
-            4,
-        ),
-        "pyramid_runtime_prior_submitted_then_profit_rate": round(
-            _safe_float(prior.get("submitted_then_profit_rate"), 0.0),
-            4,
-        ),
-        "pyramid_runtime_prior_signal": str(prior.get("signal") or "neutral"),
-        "pyramid_runtime_prior_reason": str(prior.get("reason") or "-"),
-    }
 
 
-def _pyramid_borderline_soft_blockers(result, profit_rate):
-    if not isinstance(result, dict):
-        return []
-    reason = str(result.get("reason") or "")
-    failures = []
-    if reason.startswith("pyramid_quality_blocked:"):
-        failures = [
-            part.strip() for part in reason.split(":", 1)[1].split(",") if part.strip()
-        ]
-    elif reason:
-        failures = [reason]
-
-    soft_blockers = []
-    min_profit = _safe_float(result.get("min_profit_pct"), 0.0)
-    if "profit_not_enough" in failures and profit_rate >= min_profit - 0.3:
-        soft_blockers.append("profit_below_min_borderline")
-    ai_score = _safe_float(result.get("current_ai_score"), 0.0)
-    min_ai = _safe_float(result.get("min_ai_score"), 70.0)
-    if (
-        "ai_score_below_min" in failures
-        and result.get("ai_score_available") is True
-        and ai_score >= min_ai - 5.0
-    ):
-        soft_blockers.append("ai_score_below_min_borderline")
-    tick_accel = _safe_float(result.get("tick_acceleration_ratio"), 0.0)
-    min_tick = _safe_float(result.get("min_tick_accel"), 0.5)
-    if "tick_accel_below_min" in failures and tick_accel >= min_tick - 0.2:
-        soft_blockers.append("tick_accel_below_min_borderline")
-    micro_value = result.get("curr_vs_micro_vwap_bp")
-    micro_vwap = None if micro_value == "-" else _safe_float(micro_value, None)
-    max_micro = _safe_float(result.get("max_micro_vwap_bps"), 60.0)
-    if (
-        "micro_vwap_overheated" in failures
-        and micro_vwap is not None
-        and micro_vwap <= max_micro + 20.0
-    ):
-        soft_blockers.append("micro_vwap_overheated_borderline")
-    buy_pressure = _safe_float(result.get("buy_pressure_10t"), 0.0)
-    min_buy_pressure = _safe_float(result.get("min_buy_pressure"), 60.0)
-    if (
-        "buy_pressure_below_min" in failures
-        and result.get("buy_pressure_support_ok") is False
-        and buy_pressure >= min_buy_pressure - 5.0
-        and "buy_pressure_below_min_borderline" not in soft_blockers
-    ):
-        soft_blockers.append("buy_pressure_below_min_borderline")
-    return soft_blockers
 
 
-def _pyramid_support_is_weak(result):
-    ai_weak = False
-    if result.get("ai_score_available", True):
-        ai_score = _safe_float(result.get("current_ai_score"), 0.0)
-        min_ai = _safe_float(result.get("min_ai_score"), 70.0)
-        ai_weak = ai_score < min_ai + 5.0
-    buy_pressure = _safe_float(result.get("buy_pressure_10t"), 0.0)
-    min_buy_pressure = _safe_float(result.get("min_buy_pressure"), 60.0)
-    tick_accel = _safe_float(result.get("tick_acceleration_ratio"), 0.0)
-    min_tick = _safe_float(result.get("min_tick_accel"), 0.5)
-    return (
-        ai_weak or buy_pressure < min_buy_pressure + 5.0 or tick_accel < min_tick + 0.2
-    )
 
 
-def _apply_pyramid_runtime_prior_context(result, runtime_prior_context, profit_rate):
-    if not isinstance(result, dict):
-        return result
-    prior_fields = _pyramid_runtime_prior_default_fields(runtime_prior_context)
-    result.update(prior_fields)
-    signal = prior_fields["pyramid_runtime_prior_signal"]
-    status = prior_fields["pyramid_runtime_prior_status"]
-    if status in {"missing", "stale"} or signal == "neutral":
-        return result
-
-    soft_blockers = _pyramid_borderline_soft_blockers(result, profit_rate)
-    support_signals = []
-    risk_signals = []
-    if signal == "support":
-        support_signals.append("runtime_prior_support")
-    elif signal == "risk":
-        risk_signals.append("runtime_prior_risk")
-    if soft_blockers:
-        result["pyramid_runtime_prior_soft_blockers"] = ",".join(soft_blockers)
-
-    if signal == "support" and not result.get("should_add") and len(soft_blockers) == 1:
-        result["should_add"] = True
-        result["add_type"] = "PYRAMID"
-        result["reason"] = "scalping_pyramid_ok"
-        result["pyramid_runtime_prior_support_applied"] = True
-        result["pyramid_runtime_prior_relaxed_blocker"] = soft_blockers[0]
-    elif signal == "risk":
-        if result.get("should_add") and _pyramid_support_is_weak(result):
-            result["should_add"] = False
-            result["add_type"] = None
-            result["reason"] = "runtime_prior_risk"
-            result["pyramid_runtime_prior_risk_applied"] = True
-        elif not result.get("should_add") and len(soft_blockers) >= 2:
-            result["pyramid_runtime_prior_risk_applied"] = True
-
-    if support_signals:
-        result["pyramid_runtime_prior_support_signals"] = ",".join(support_signals)
-    if risk_signals:
-        result["pyramid_runtime_prior_risk_signals"] = ",".join(risk_signals)
-    return result
 
 
 def evaluate_scalping_pyramid(
@@ -1735,7 +1124,7 @@ def resolve_scale_in_order_price(
 ):
     """
     SCALPING 추가매수 주문 직전 P1 가격 resolver.
-    신규 BUY resolver와 분리해 AVG_DOWN/PYRAMID가 현재가 그대로 추격 제출되는 경로를 차단한다.
+    신규 BUY resolver와 분리해 AVG_DOWN이 현재가 그대로 추격 제출되는 경로를 차단한다.
     """
     ws_data = ws_data or {}
     action = action or {}
@@ -1799,7 +1188,7 @@ def resolve_scale_in_order_price(
         )
         return result
 
-    if add_type not in {"AVG_DOWN", "PYRAMID"}:
+    if add_type != "AVG_DOWN":
         result["reason"] = "invalid_add_type"
         return result
     if curr_price <= 0:
@@ -1853,9 +1242,6 @@ def resolve_scale_in_order_price(
         return result
 
     micro_vwap_bp = result["curr_vs_micro_vwap_bp"]
-    if add_type == "PYRAMID" and micro_vwap_bp > result["max_micro_vwap_bps"]:
-        result["reason"] = f"micro_vwap_bp>{result['max_micro_vwap_bps']:.1f}"
-        return result
     if (
         add_type == "AVG_DOWN"
         and stop_line_touched
@@ -2325,7 +1711,7 @@ def describe_dynamic_scale_in_qty(
         return details
 
     if normalized_strategy in {"KOSPI_ML", "KOSDAQ_ML", "MAIN"}:
-        if add_type not in {"AVG_DOWN", "PYRAMID"}:
+        if add_type != "AVG_DOWN":
             details.update(
                 {
                     "would_qty": 0,
@@ -2342,16 +1728,6 @@ def describe_dynamic_scale_in_qty(
                     "effective_qty": 0,
                     "qty": 0,
                     "qty_reason": "swing_avg_down_probe_missing",
-                }
-            )
-            return details
-        if add_type == "PYRAMID" and add_reason != "swing_pyramid_ok":
-            details.update(
-                {
-                    "would_qty": 0,
-                    "effective_qty": 0,
-                    "qty": 0,
-                    "qty_reason": "swing_pyramid_probe_missing",
                 }
             )
             return details
@@ -2382,189 +1758,7 @@ def describe_dynamic_scale_in_qty(
         )
         return details
 
-    action = action or {}
-    feat = stock.get("last_reversal_features") or {}
-    current_ai_score = _safe_float(
-        action.get(
-            "current_ai_score",
-            stock.get("current_ai_score", (stock.get("rt_ai_prob") or 0) * 100),
-        ),
-        0.0,
-    )
-    holding_score_effective = _safe_float(
-        action.get(
-            "holding_score_effective",
-            stock.get("holding_score_effective", current_ai_score),
-        ),
-        current_ai_score,
-    )
-    ai_score_available, ai_score_source = _ai_score_available_for_scale_in(
-        stock,
-        action,
-        current_ai_score=current_ai_score,
-    )
-    buy_pressure = _safe_float(feat.get("buy_pressure_10t"), 0.0)
-    tick_accel = _safe_float(feat.get("tick_acceleration_ratio"), 0.0)
-    large_sell = _safe_bool(feat.get("large_sell_print_detected"), True)
-    micro_vwap_bp = _safe_float(feat.get("curr_vs_micro_vwap_bp"), None)
-    feature_quality = reversal_feature_source_quality(feat)
-    feature_stale = bool(feat and feature_quality["reversal_feature_stale"])
-    pressure_usable = (
-        _safe_bool(feature_quality.get("tick_aggressor_pressure_usable"), False)
-        or _safe_int(feature_quality.get("tick_aggressor_trusted_count"), 0) > 0
-    )
-    profit_rate = _safe_float(action.get("profit_rate"), 0.0)
-    peak_profit = _safe_float(action.get("peak_profit"), profit_rate)
-    drawdown_from_peak = max(0.0, peak_profit - profit_rate)
-
-    if add_type == "PYRAMID":
-        min_ai = float(
-            getattr(TRADING_RULES, "SCALPING_PYRAMID_MIN_AI_SCORE", 70) or 70
-        )
-        min_buy_pressure = float(
-            getattr(TRADING_RULES, "SCALPING_PYRAMID_MIN_BUY_PRESSURE", 60.0) or 60.0
-        )
-        min_tick_accel = float(
-            getattr(TRADING_RULES, "SCALPING_PYRAMID_MIN_TICK_ACCEL", 0.5) or 0.5
-        )
-        max_micro_vwap_bp = float(
-            getattr(TRADING_RULES, "SCALPING_PYRAMID_MAX_MICRO_VWAP_BPS", 60.0) or 60.0
-        )
-        ai_score_prior_weight = (
-            0.6 if ai_score_available and current_ai_score >= min_ai else 0.0
-        )
-        hard_checks = {
-            "tick_accel_ok": (not feature_stale) and tick_accel >= min_tick_accel,
-            "peak_hold_ok": drawdown_from_peak <= 0.3,
-            "large_sell_clear": pressure_usable and not large_sell,
-            "micro_vwap_available": micro_vwap_bp is not None,
-            "micro_vwap_not_overheated": (
-                (not feature_stale)
-                and micro_vwap_bp is not None
-                and micro_vwap_bp <= max_micro_vwap_bp
-            ),
-        }
-        support_checks = {
-            "buy_pressure_support_ok": pressure_usable
-            and buy_pressure >= min_buy_pressure,
-            "ai_score_prior_supportive": ai_score_available
-            and current_ai_score >= min_ai,
-        }
-        quality_context = {
-            "current_ai_score": current_ai_score,
-            "ai_score_available": ai_score_available,
-            "min_ai_score": min_ai,
-            "score_gate_converted_to_prior": True,
-            "ai_score_prior_weight": ai_score_prior_weight,
-            "score_prior_band": (
-                "supportive" if ai_score_prior_weight > 0 else "neutral_or_unknown"
-            ),
-            "buy_pressure_10t": buy_pressure,
-            "min_buy_pressure": min_buy_pressure,
-            "tick_acceleration_ratio": tick_accel,
-            "min_tick_accel": min_tick_accel,
-            "large_sell_print_detected": large_sell,
-            "curr_vs_micro_vwap_bp": "-" if micro_vwap_bp is None else micro_vwap_bp,
-            "max_micro_vwap_bps": max_micro_vwap_bp,
-            "reversal_feature_stale": feature_stale,
-            "tick_aggressor_trusted_count": feature_quality.get(
-                "tick_aggressor_trusted_count", 0
-            ),
-            "tick_aggressor_pressure_usable": feature_quality.get(
-                "tick_aggressor_pressure_usable", False
-            ),
-            "tick_aggressor_pressure_usable_bool": bool(pressure_usable),
-        }
-        quality_decision = _pyramid_quality_decision(quality_context)
-        submit_authority = _real_pyramid_ai_score_submit_authority(
-            ai_score_available=ai_score_available,
-            current_ai_score=current_ai_score,
-            holding_score_effective=holding_score_effective,
-            sim_uncapped_qty=bool(details["sim_uncapped_qty"]),
-        )
-        details.update(
-            {
-                "current_ai_score": round(current_ai_score, 4),
-                "ai_score_source": ai_score_source,
-                "ai_score_available": ai_score_available,
-                "min_ai_score": min_ai,
-                "buy_pressure_10t": round(buy_pressure, 4),
-                "min_buy_pressure": min_buy_pressure,
-                "tick_acceleration_ratio": round(tick_accel, 4),
-                "min_tick_accel": min_tick_accel,
-                "curr_vs_micro_vwap_bp": (
-                    "-" if micro_vwap_bp is None else round(micro_vwap_bp, 4)
-                ),
-                "max_micro_vwap_bps": max_micro_vwap_bp,
-                "drawdown_from_peak": round(drawdown_from_peak, 4),
-                "large_sell_print_detected": large_sell,
-                **feature_quality,
-                **hard_checks,
-                **support_checks,
-                "pyramid_quality_support_score": quality_decision["support_score"],
-                "pyramid_quality_required_support_score": quality_decision[
-                    "required_support_score"
-                ],
-                "pyramid_quality_support_signals": ",".join(
-                    quality_decision["support_signals"]
-                )
-                or "-",
-                "pyramid_quality_risk_signals": ",".join(
-                    quality_decision["risk_signals"]
-                )
-                or "-",
-                "pyramid_quality_hard_blockers": ",".join(
-                    quality_decision["hard_blockers"]
-                )
-                or "-",
-                "pyramid_ai_score_submit_authority": bool(submit_authority["allowed"]),
-                "pyramid_ai_score_submit_authority_reason": submit_authority["reason"],
-                "pyramid_ai_score_sentinel_max": submit_authority["sentinel_score_max"],
-                "pyramid_holding_score_effective": round(holding_score_effective, 4),
-            }
-        )
-        if not submit_authority["allowed"]:
-            details.update(
-                {
-                    "would_qty": 0,
-                    "effective_qty": 0,
-                    "qty": 0,
-                    "qty_reason": "real_pyramid_ai_score_no_submit_authority:"
-                    + str(submit_authority["reason"]),
-                }
-            )
-            return details
-        if not hard_checks["peak_hold_ok"] or not quality_decision["allowed"]:
-            failed = ["peak_hold_ok"] if not hard_checks["peak_hold_ok"] else []
-            failed.extend(
-                quality_decision["hard_blockers"] or quality_decision["risk_signals"]
-            )
-            details.update(
-                {
-                    "would_qty": 0,
-                    "effective_qty": 0,
-                    "qty": 0,
-                    "qty_reason": "pyramid_evidence_insufficient:" + ",".join(failed),
-                }
-            )
-            return details
-        would_qty = max(
-            1,
-            int(
-                scalp_budget_qty
-                or legacy.get("template_qty", 0)
-                or legacy.get("qty", 0)
-                or 0
-            ),
-        )
-        if not details["sim_uncapped_qty"]:
-            details.update(
-                {
-                    "pyramid_sizing_mode": "dynamic_budget",
-                    "pyramid_position_ratio_cap_applied": False,
-                }
-            )
-    elif add_type == "AVG_DOWN":
+    if add_type == "AVG_DOWN":
         if add_reason not in _SCALPING_AVG_DOWN_SPECIAL_REASONS:
             details.update(
                 {

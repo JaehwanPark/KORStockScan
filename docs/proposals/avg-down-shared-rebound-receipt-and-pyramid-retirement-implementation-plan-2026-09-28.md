@@ -21,7 +21,8 @@
 - 물타기는 **Main 기계 진입 정책의 기존 날짜별 publisher→PREOPEN→실제 PID**를 사용한다. Main 보유의 현재 bars·WS tick/BBO에서 `PULLBACK_RECOVERY`, `RECOVERY_CONFIRMATION`, `MICRO_RECOVERY`의 `ENTER_NOW`만 후보가 된다. 후보에는 기존 2초 permit, `ADD_REBOUND` 투표, 공통 안전·수량·가격·현금·pending·cooldown·SELL 우선권이 그대로 적용된다. 진단 필드나 체결 복원은 독립 threshold·후보·승격·주문 권한이 아니다.
 - `scale_in_split`은 ADD가 허가된 뒤의 **수량·분할 실행 형태** 소유자다. 현행 체크리스트 `[DirectFamilySourceRepairScaleInSplit]`의 원천·경제성 수리와 본 계획의 **ADD 여부 판단·체결 식별자** 수리를 섞지 않는다. 정책 파일 존재, PREOPEN 검증, 선택 release, 실제 PID 소비, 자연 주문·체결, 순익을 각각 별도 영수증으로 판정한다.
 - Main/widget/episode/manual 및 venue/session의 custody를 유지한다. 기존 operator veto, bot state, hard/protect/emergency stop, stale/conflict, broker/account/order/수량/cap·cooldown, SELL/손절 우선권을 완화하지 않는다. 결손 입력은 `UNKNOWN` 또는 source gap이며 `NO_VALID_SETUP`, 0원 효과, 유효 투표로 바꾸지 않는다.
-- 이번 요청은 **구현계획 작성** 범위다. 계획 작성으로 코드 변경, 매매 프로세스 재기동, 정책·env·provider 변경, 주문 또는 과거 체결 재주입을 실행하지 않는다. 코드 구현 시 적용할 review·검증·운영 인계 조건을 아래에 정의한다.
+- 9/29 후속 요청으로 이 계획의 코드 구현·리뷰·보완을 진행한다. 코드 변경은 배포·실제 PID 소비·자연 주문·체결·비용 후 성과와 별도로 검증한다. 매매 프로세스 재기동, 정책·env·provider 변경, 주문 또는 과거 체결 재주입은 이 구현 요청에 포함되지 않는다.
+- S15와 VCP의 **신규 진입은 이미 제거된 상태**다. AVG_DOWN 반등 후보·원천이나 PYRAMID 대체 경로로 복원하지 않는다. 역사적 S15/VCP 보유·미결 주문의 복구, SELL·정산 custody는 실제 소비자가 남아 있는 범위에서 유지한다.
 
 ## 3. 구현 순서와 완료 조건
 
@@ -60,6 +61,8 @@
 
 ### A4. PYRAMID 신규 경로 퇴역 정리
 
+S15·VCP 신규 진입도 이미 퇴역했다. 이 단계에서 세 경로의 신규 판단·후보·주문을 재도입하지 않으며, 이름이 남은 과거 custody 복구·청산 소비자는 별도로 확인한다.
+
 1. runtime 진입/판단/수량/신규 주문, 장중 feedback, 장후 quality·후보, Daily intake, PREOPEN 적용, env scrub/cron/docs/tests의 PYRAMID 참조를 **소비자별**로 조사한다. `OFF/retired` guard와 과거 artifact 파서는 제거 대상과 구분한다. 새 PYRAMID 판단·후보·주문은 항상 0이어야 한다.
 2. 과거 주문의 pending 조회·체결 반영·취소/중복 방지·SELL/정산·원장·감사 기록은 유지한다. 이름에 `pyramid`가 들어가도 공통 미결 주문 재검증을 소유하는 `real_pyramid_scale_in_quality_guard_runtime` 같은 경로는 소비자를 확인한 뒤에만 이동/개명한다. 호환 읽기·migration 테스트 없이 저장된 enum/key를 삭제하지 않는다.
 3. 신규 진입 참조를 제거한 뒤 `PYRAMID` 문자열 검색뿐 아니라 실제 dispatch→executor, 장후 producer→candidate→publisher→PREOPEN→PID consumer를 호출 그래프로 재점검한다. 역사적 DB·보고서·immutable release는 정리 대상으로 삼지 않는다. Plan Rebase §5/§7 표현 충돌은 별도 명시 요청 전까지 변경하지 않고 handoff gap으로 보고한다.
@@ -75,4 +78,4 @@
 
 ## 4. 실행 소유자와 선행 관계
 
-현행 실행 owner는 [9/28 체크리스트](../checklists/2026-09-28-stage2-todo-checklist.md)의 `[AvgDownSharedReboundReceiptClosure0928]`다. 순서는 `A0 → A1·A2 → A3 → A4 → A5`이며 A1과 A2의 구현은 A0 원천 계약을 확인한 뒤 병행할 수 있다. A3의 자연 손익 수용은 A5의 PID 소비 및 실제 완료 표본에 의존하므로 같은 날 억지로 완료 처리하지 않는다. `[DirectFamilySourceRepairScaleInSplit]`은 별도 수량·분할 owner로 유지한다.
+9/28 최초 owner는 [9/28 체크리스트](../checklists/2026-09-28-stage2-todo-checklist.md)의 `[AvgDownSharedReboundReceiptClosure0928]`였고, 9/29 후속 구현·검토 owner는 [9/29 체크리스트](../checklists/2026-09-29-stage2-todo-checklist.md)의 같은 ID다. 구현 검토 근거는 [9/29 리뷰](../audit-reports/2026-09-29-avg-down-rebound-receipt-and-pyramid-retirement-implementation-review.md)에 둔다. 순서는 `A0 → A1·A2 → A3 → A4 → A5`다. A3 자연 손익 수용은 실제 PID 소비 및 완료 표본에 의존하므로 코드 검증만으로 완료 처리하지 않는다. `[DirectFamilySourceRepairScaleInSplit]`은 별도 수량·분할 owner로 유지한다.

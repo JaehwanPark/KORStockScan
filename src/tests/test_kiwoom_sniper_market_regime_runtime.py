@@ -681,6 +681,42 @@ def test_restore_holding_runtime_state_restores_durable_scalping_peak(monkeypatc
     assert targets[0]["position_peak_runtime_price"] == 1140
 
 
+def test_restore_holding_runtime_state_rehydrates_exact_buy_identity(monkeypatch, tmp_path):
+    from src.engine.ai.holding_exit_vote import (
+        buy_fill_identity_from_runtime, persist_buy_fill_receipt,
+    )
+    monkeypatch.setattr(kiwoom_sniper_v2, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(kiwoom_sniper_v2, "highest_prices", {})
+    monkeypatch.setattr(kiwoom_sniper_v2.POSITION_PEAK_LEDGER,
+                        "restore_peak", lambda stock: (0, "missing"))
+    stock = {
+        "id": 48376, "code": "047040", "name": "TEST", "status": "HOLDING",
+        "strategy": "SCALPING", "position_tag": "SCALP_BASE",
+        "buy_price": 19010.0, "buy_qty": 1,
+        "buy_time": "2026-09-28 10:40:55", "entry_filled_qty": 1,
+        "_entry_receipt_filled_by_order_no": {"0029186": 1},
+        "_entry_receipt_executions_by_order_no": {
+            "0029186": {"131176": {"cumulative_qty": 1}}
+        },
+    }
+    expected = persist_buy_fill_receipt(stock, tmp_path)
+    loaded = {key: stock[key] for key in (
+        "id", "code", "name", "status", "strategy", "position_tag",
+        "buy_price", "buy_qty", "buy_time",
+    )}
+    kiwoom_sniper_v2._restore_holding_runtime_state([loaded])
+    assert loaded["buy_fill_identity_restore_status"] == "restored"
+    assert buy_fill_identity_from_runtime(loaded) == expected
+    assert "buy_fill_identity_store_gap" not in loaded
+
+    stale = {**loaded, "buy_qty": 2}
+    for key in ("_entry_receipt_filled_by_order_no", "_entry_receipt_executions_by_order_no",
+                "entry_filled_qty", "buy_fill_identity_restore_status"):
+        stale.pop(key, None)
+    kiwoom_sniper_v2._restore_holding_runtime_state([stale])
+    assert stale["buy_fill_identity_store_gap"] == "position_generation_mismatch"
+
+
 def test_scalping_scanner_promoted_target_attaches_active_watching(monkeypatch):
     emitted = []
     published = []

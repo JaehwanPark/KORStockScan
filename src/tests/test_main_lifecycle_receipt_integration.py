@@ -26,6 +26,11 @@ COST_HASH = "a" * 64
 SYMBOL_HASH = "b" * 64
 
 
+@pytest.fixture(autouse=True)
+def _isolate_buy_fill_receipt_store(monkeypatch, tmp_path):
+    monkeypatch.setattr(execution_receipts, "DATA_DIR", tmp_path)
+
+
 def test_exit_signal_receipt_binds_only_same_buy_and_submit_generation(monkeypatch):
     monkeypatch.setattr(
         state_handlers, "buy_fill_identity_from_runtime",

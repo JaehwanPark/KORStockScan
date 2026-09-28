@@ -53,6 +53,40 @@ def test_integrated_panels_keep_unobserved_scope_and_shared_budget():
     assert len({row["source_sha256"] for row in result["observations"]}) == 2
 
 
+def test_integrated_aftermarket_keeps_both_discovery_panels():
+    epoch = datetime(2026, 9, 29, 16, 10,
+                     tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
+    calls = []
+
+    def fetcher(_token, **kwargs):
+        calls.append(("gainers", kwargs["mrkt_tp"], kwargs["stex_tp"]))
+        return [], {
+            "response_contract_status": "verified_success",
+            "read_rate_control_status": "admitted",
+            "rest_received_ts_ms": int((epoch + 1) * 1000),
+        }
+
+    def activity(_token, **kwargs):
+        calls.append(("activity", kwargs["mrkt_tp"], kwargs["stex_tp"]))
+        return [], {
+            "response_contract_status": "verified_success",
+            "read_rate_control_status": "admitted",
+            "rest_received_ts_ms": int((epoch + 1) * 1000),
+        }
+
+    result = fetch_discovery_panels(
+        "token", now_epoch=epoch, fetcher=fetcher, activity_fetcher=activity,
+    )
+
+    assert [row["kind"] for row in result["panels"]] == [
+        "activity", "activity", "gainers", "gainers",
+    ]
+    assert calls == [
+        ("activity", "001", "3"), ("activity", "101", "3"),
+        ("gainers", "001", "3"), ("gainers", "101", "3"),
+    ]
+
+
 def test_failed_or_conflicting_route_is_not_discovered():
     index = 0
 
@@ -99,23 +133,25 @@ def test_premarket_reads_nxt_panels_with_exact_nx_route():
     calls = []
 
     def fetcher(_token, **kwargs):
+        raise AssertionError("premarket must not request the low-yield gainer panel")
+
+    def activity(_token, **kwargs):
         calls.append(kwargs)
         base = "123450" if kwargs["mrkt_tp"] == "001" else "123460"
         return ([{"Code": base, "RawInstrumentCode": base + "_NX",
                   "Name": "TEST", "Price": 10000, "Volume": 1000,
-                  "ChangeRate": 1.5}], {
+                  "ChangeRate": 1.5, "SurgeQty": 500, "PreSig": "2"}], {
             "response_contract_status": "verified_success",
             "read_rate_control_status": "admitted",
             "rest_received_ts_ms": int((epoch + 1) * 1000),
         })
 
-    result = fetch_discovery_panels("token", now_epoch=epoch, fetcher=fetcher,
-                                    activity_fetcher=lambda *_args, **_kwargs: ([], {
-                                        "response_contract_status": "verified_success",
-                                        "read_rate_control_status": "admitted",
-                                        "rest_received_ts_ms": int((epoch + 1) * 1000),
-                                    }))
+    result = fetch_discovery_panels(
+        "token", now_epoch=epoch, fetcher=fetcher, activity_fetcher=activity,
+    )
     assert len(result["observations"]) == 2
+    assert [row["kind"] for row in result["panels"]] == ["activity", "activity"]
+    assert all(row["source_kind"] == "activity" for row in result["observations"])
     assert all(row["venue"] == "NXT" and row["route"] == "nxt_only"
                for row in result["observations"])
     assert all(call["stex_tp"] == "2" for call in calls)

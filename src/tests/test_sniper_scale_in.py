@@ -49,6 +49,21 @@ def test_initial_quantity_cap_research_context_is_source_only_and_bounded():
         replace(context, price_krw=0), decision) is None
 
 
+def test_buy_fill_identity_store_failure_blocks_later_add(monkeypatch):
+    monkeypatch.setattr(state_handlers, "_scale_in_exit_authority_block_reason",
+                        lambda _stock: None)
+    monkeypatch.setattr(receipts, "persist_buy_fill_receipt",
+                        lambda _stock, _data_dir: (_ for _ in ()).throw(OSError("disk")))
+    stock = {"id": 7, "code": "000007", "strategy": "SCALPING",
+             "buy_price": 100, "buy_qty": 1}
+    receipts._persist_buy_fill_receipt_or_block(stock, "000007")
+    assert stock["buy_fill_identity_store_gap"] == "OSError"
+    result = state_handlers.can_consider_scale_in(
+        stock, "000007", {"curr": 99}, "SCALPING", "BULL",
+    )
+    assert result == {"allowed": False, "reason": "buy_fill_identity_store_gap"}
+
+
 def test_initial_quantity_cap_depth_and_following_tick_require_bound_source(monkeypatch):
     from src.engine.scalping.position_sizing_allocator import ScalpingSizingContext
     from src.trading.market import quote_consistency
@@ -156,10 +171,11 @@ from src.engine.scalping.rising_missed_candidate import (
 
 
 @pytest.fixture(autouse=True)
-def _isolate_post_sell_artifacts(monkeypatch):
+def _isolate_post_sell_artifacts(monkeypatch, tmp_path):
     """Keep receipt tests from appending synthetic rows to live-day data."""
 
     monkeypatch.setattr(receipts, "record_post_sell_candidate", lambda **kwargs: None)
+    monkeypatch.setattr(receipts, "DATA_DIR", tmp_path)
 
 
 def _mock_exact_order_terminal(monkeypatch):
@@ -1335,9 +1351,11 @@ def test_general_entry_margin_one_share_position_blocks_real_scale_in(monkeypatc
         "reason": "general_entry_margin_one_share_position",
         "qty": 0,
     }
-    assert events[-1][0] == "scale_in_margin_authority_block"
-    assert events[-1][1]["actual_order_submitted"] is False
-    assert events[-1][1]["broker_order_forbidden"] is True
+    margin_events = [fields for stage, fields in events
+                     if stage == "scale_in_margin_authority_block"]
+    assert len(margin_events) == 1
+    assert margin_events[0]["actual_order_submitted"] is False
+    assert margin_events[0]["broker_order_forbidden"] is True
 
 
 def test_holding_sell_exchange_resolution_blocks_krx_only_during_nxt_time(monkeypatch):

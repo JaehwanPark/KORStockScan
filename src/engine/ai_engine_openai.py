@@ -11374,8 +11374,42 @@ class GPTSniperEngine:
                 recent_candles=list(recent_candles or []), source_meta=meta,
                 include_investor_source=False,
             )
-            if not ai_input_preflight(context).get("allowed"):
-                return {**blocked, "reason": "shared_main_rebound_input_preflight_blocked"}
+            preflight = ai_input_preflight(context)
+            if not preflight.get("allowed"):
+                snapshot_fields = ai_market_snapshot_log_fields(context)
+
+                def bounded_code(value):
+                    return (value if isinstance(value, str)
+                            and re.fullmatch(r"[A-Za-z0-9_:.|/-]{1,96}", value)
+                            else "invalid_or_missing_code")
+
+                def bounded_codes(value):
+                    if not isinstance(value, list):
+                        return []
+                    return [bounded_code(item) for item in value[:8]]
+
+                source_timing = snapshot_fields.get("ai_input_preflight_source_timing")
+                if not isinstance(source_timing, dict):
+                    source_timing = {}
+                source_timing = {
+                    name: {key: row.get(key) for key in (
+                        "observed_at", "age_ms", "quality", "freshness_limit_ms",
+                    )}
+                    for name, row in list(source_timing.items())[:8]
+                    if isinstance(name, str) and isinstance(row, dict)
+                }
+                return {**blocked, "reason": "shared_main_rebound_input_preflight_blocked",
+                    "preflight_primary_blocker": bounded_code(preflight.get("primary_blocker")),
+                    "preflight_primary_blocker_category": bounded_code(
+                        preflight.get("primary_blocker_category")),
+                    "preflight_blockers": bounded_codes(preflight.get("blockers")),
+                    "preflight_missing_sources": bounded_codes(preflight.get("missing_sources")),
+                    "source_clock_snapshot_id": snapshot_fields.get("ai_input_preflight_source_clock_snapshot_id"),
+                    "source_clock_captured_at": snapshot_fields.get("ai_input_preflight_source_clock_captured_at"),
+                    "source_timing": source_timing,
+                    "machine_bundle_sha256": bundle["bundle_sha256"],
+                    "policy_status": live.get("status"),
+                    "effective_venue": venue, "session_bucket": session}
             exact = self._build_entry_screen_hot_payload(
                 ws_data, recent_ticks, recent_candles, candle_context=context,
             )

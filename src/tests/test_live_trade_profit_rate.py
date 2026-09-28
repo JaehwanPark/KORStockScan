@@ -6,7 +6,6 @@ from types import SimpleNamespace
 import pytest
 
 import src.engine.sniper_execution_receipts as receipts
-import src.engine.sniper_s15_fast_track as s15
 import src.engine.sniper_sync as sniper_sync
 import src.engine.sniper_state_handlers as state_handlers
 from src.engine.scalping.main_lifecycle_journal import (
@@ -1772,39 +1771,6 @@ class _FailingSyncDB(_SyncDB):
                 raise RuntimeError("commit failed")
 
         return _FailingSession()
-
-
-class _S15Session:
-    def __init__(self, record=None):
-        self.record = record
-        self.added = None
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        return False
-
-    def query(self, *args, **kwargs):
-        return self
-
-    def filter_by(self, **kwargs):
-        return self
-
-    def first(self):
-        return self.record
-
-    def add(self, record):
-        self.record = record
-        self.added = record
-
-
-class _S15DB:
-    def __init__(self, session):
-        self._session = session
-
-    def get_session(self):
-        return self._session
 
 
 class _DummyLock:
@@ -4766,18 +4732,6 @@ def test_ensure_runtime_target_ignores_trailing_unified_disabled_stage(monkeypat
 
     assert target["odno"] == "0036511"
     assert "preset_tp_ord_no" not in target
-
-
-def test_s15_candidate_does_not_store_expiry_in_profit_rate():
-    session = _S15Session()
-    s15.DB = _S15DB(session)
-
-    s15._save_armed_candidate_to_db("123456", "TEST", "COND", 100.0, 160.0)
-
-    assert session.added is not None
-    assert session.added.profit_rate == 0.0
-    assert session.added.hard_stop_price == 160.0
-    assert session.added.nxt == 100.0
 
 
 def test_holding_state_uses_net_profit_rate_for_sell_decision(monkeypatch):
