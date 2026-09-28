@@ -58,6 +58,7 @@ def test_machine_only_probe_passes_only_exact_fresh_input_and_releases_ws(monkey
         get_latest_data=lambda *_args, **_kwargs: _snapshot(epoch=11),
     )
     machine_calls = []
+    context_calls = []
 
     class Machine:
         def analyze_target(self, *args, **kwargs):
@@ -78,13 +79,17 @@ def test_machine_only_probe_passes_only_exact_fresh_input_and_releases_ws(monkey
         candle_fetcher=lambda *_args, **_kwargs: (
             [{"close": 10000}], {"request_code": "123456", "rest_received_ts_ms": 11000},
         ),
-        context_builder=lambda *_args, **_kwargs: {"ready": True},
+        context_builder=lambda *_args, **kwargs: (
+            context_calls.append(kwargs), {"ready": True}
+        )[1],
         release_ws=lambda code, item: calls.append(("release", code, item)),
     )
     assert result["result"] == "assessed"
     assert result["machine_action"] == "ENTER_NOW"
     assert result["actual_order_submitted"] is False
     assert machine_calls[0]["machine_only"] is True
+    assert context_calls[0]["source_meta"]["multi_timeframe_auxiliary_fetch"] is False
+    assert context_calls[0]["include_investor_source"] is False
     assert calls[-1] == ("release", "123456", "123456")
 
 

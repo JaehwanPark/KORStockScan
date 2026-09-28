@@ -210,11 +210,15 @@ def run_zero_base_probe(
         ):
             result["reason"] = "rest_route_or_receive_clock_invalid"
             return result
+        # The probe owns only these two source-only REST reads. Do not let the
+        # shared context helper fan out into auxiliary index/investor requests.
+        probe_candle_meta = dict(candle_meta)
+        probe_candle_meta["multi_timeframe_auxiliary_fetch"] = False
         try:
             context = context_builder(
                 token, code, ws_data, venue=venue, session=session, limit=40,
                 model_bar_limit=20, now_ts=now(), recent_candles=candles,
-                source_meta=candle_meta, include_investor_source=False,
+                source_meta=probe_candle_meta, include_investor_source=False,
             )
         except Exception as exc:
             result["reason"] = "candle_context_failed:" + type(exc).__name__
