@@ -20,7 +20,7 @@ from src.utils import kiwoom_utils
 from src.utils.kiwoom_read_request_control import REQUEST_CLASS_SOURCE_ONLY
 
 
-SCHEMA = "zero_base_discovery_panel_v3"
+SCHEMA = "zero_base_discovery_panel_v4"
 PANEL_REQUESTS = (
     ("KOSPI", "001", "SOR", "3", "krx_nxt_integrated"),
     ("KOSDAQ", "101", "SOR", "3", "krx_nxt_integrated"),
@@ -101,6 +101,7 @@ def fetch_discovery_panels(token, *, now_epoch=None, fetcher=None,
         )
         panel = {
             "kind": kind,
+            "activity_window_minutes": 1 if kind == "activity" else None,
             "market": market,
             "venue": venue,
             "route": route,
@@ -163,6 +164,7 @@ def fetch_discovery_panels(token, *, now_epoch=None, fetcher=None,
                 "observed_epoch": receive_epoch,
                 "source_scope": "observed_panel",
                 "source_kind": kind,
+                "activity_window_minutes": 1 if kind == "activity" else None,
             }
             row_payload["source_sha256"] = _sha256(row_payload)
             # Keep a single source generation per code/route per scan. Activity

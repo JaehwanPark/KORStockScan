@@ -1,10 +1,17 @@
 # 제로베이스 SCALPING 발견·기계판정 구현 리뷰와 릴리스 문턱 — 2026-09-28
 
+## 18:10 KST 활동성 발견 창 5분→1분
+
+- **관측·판정:** 활동성 우선 릴리스 PID `755981`의 18:07~18:10 통합 애프터마켓 probe 첫 81건은 활동성 61건에서 기계판정 5건, 상승률 20건에서 0건이었다. source-only `ka10023`의 공식 `tm_tp=1`·`tm=1` 요청을 통합 KOSPI/KOSDAQ에 각각 한 번 실행했더니 양 시장 첫 응답 200/200행, 양의 급증·상승 부호 123/103행, 두 호출 모두 `return_code=0`·읽기 admission이었다. 상위 10종목의 별도 `ka10003` 표본에서 8개는 조회 시작 전후 수 초에 체결됐고 2개는 약 30~35초 이전 체결이 마지막이었다. 작은 비동시 표본이므로 1분 원천의 WS 수신률이나 기대수익 개선 증거는 아니다.
+- **수정:** 추가 API 호출 없이 기존 두 `ka10023` 활동성 패널의 `tm`만 5분에서 1분으로 바꾼다. 패널·관측 hash에 `activity_window_minutes=1`을 남겨 새 세대가 앞선 5분 자료와 구분되게 한다. 순수 보통주·양의 상승/급증, KOSPI/KOSDAQ·정확 `_AL`/`_NX`, 6:2 claim 순환, WS/REST 예산, 최종 3초 신선도·기계 입력 및 주문 hard guard는 그대로다. 1분 목록도 최근 5초 체결을 보장하지 않으므로 정확 route WS가 없으면 계속 source gap이다.
+- **공식 참조:** 2026-09-28 18:10 KST 공식 원격 HEAD와 로컬 checkout SHA `953e5dbff123f437ab4d11a78a95191a685eb51f`를 재확인했다. `kiwoom/_data/kiwoom_api_spec.json`의 `ka10023` POST `/api/dostk/rkinfo`, `tm_tp=1` 분 단위·`tm` 분 입력, `stex_tp=3` 통합, 응답 `trde_qty_sdnin`와 앞 절의 `kiwoom/specs.py`·`kiwoom/core/ws_client.py`·Postman 경계를 따른다. 명세가 1분 창의 모든 종목에 1분 내 마지막 체결을 보증하지 않는다.
+- **검증·수용:** 요청 payload·원천 hash/패널 기간·queue 영속/claim, 정확 WS 판정·읽기 제어 영향 회귀 105건, Python compile, `git diff --check`, 문서 print-only parser가 통과했다. 새 PID 자연 수신은 후속 영수증으로 닫는다. 원천 변경만으로 주문 권한이나 기대수익을 승인하지 않는다.
+
 ## 18:05 KST 활동성 후보의 판정 가능성 우선 순환
 
 - **동일 PID·세션 관측:** 10초 관측 릴리스 PID `752307`의 18:00:40~18:05 KST probe 178건/178개 코드 중 기계판정은 7건이었다. 활동성 원천 97건 중 7건(첫 0B 15·0D 31), 상승률 원천 81건 중 0건(첫 0B 2·0D 6)이다. 모두 같은 통합 애프터마켓 `_AL` route의 source-only 발견 후보이며, 시장 전체·정규장/프리마켓의 기대수익 비교는 아니다. 기계판정 7건은 모두 `RECHECK`였고 신규 감시·제출은 없었다. 30초 snapshot 표본의 WS 등록 item은 35~36/56, 신규 websocket error는 확인되지 않았으며 순간 전체 peak는 별도다.
 - **큐 변경:** 신규 발견 claim 8개 중 활동성 3·상승률 1의 반복 순서를 사용해 활동성 후보를 먼저 기계판정기에 보낸다. 해당 종류가 없으면 남은 후보로 즉시 채운다. source 종류와 무관하게 KOSPI/KOSDAQ 안에서 기존 마지막 claim·첫 발견 순서를 유지하며, 상승률 후보의 최소 1/4 순환을 보전한다. claim 순서를 queue snapshot에 영속화해 1개씩 dispatch하거나 PID가 재기동해도 상승률 후보가 사라지지 않는다. source-kind는 발견 우선순위일 뿐 ENTER_NOW, 감시 편입, 주문 허가가 아니다. 총 claim/worker/WS/REST 예산과 3초 최종 신선도·hard safety는 그대로다.
-- **검증·수용:** 활동성/상승률 두 시장의 6:2 순환, 단건 claim의 재기동 후 순서, 기존 source gap·세대·route 영향 회귀 56건, Python compile, `git diff --check`, 문서 print-only parser가 통과했다. 새 PID에서 source-kind별 첫 수신·기계판정, 감시·제출, API/WS 부하를 같은 세션으로 대사하고 비용 후 순익은 완료 체결 뒤 별도로 판단한다.
+- **검증·배포:** 활동성/상승률 두 시장의 6:2 순환, 단건 claim의 재기동 후 순서, 기존 source gap·세대·route 영향 회귀 56건, Python compile, `git diff --check`, 문서 print-only parser가 통과했다. 커밋 `c359a8d5a1f45cdd629af739b46051167400c1be`의 불변 릴리스 `/home/ubuntu/KORStockScan-runtime-releases/zero-base-activity-priority-20260928-c359a8d5`를 선택·정상 재기동했다. 이전 선택은 `tmp/zero-base-activity-priority-selection-before-deploy-20260928T180720.json`에 보존했다. Main PID `755981`의 새 릴리스 cwd, runtime source clean, scanner flag=true, 56-item budget env, 9/28 정책 bootstrap PASS, release-set의 PID 결속 PASS를 확인했다. release-set 기능 상태는 `not_assessed`다. 새 PID에서 source-kind별 첫 수신·기계판정, 감시·제출, API/WS 부하를 같은 세션으로 대사하고 비용 후 순익은 완료 체결 뒤 별도로 판단한다.
 
 ## 18:00 KST 짧은 수신창 보완과 처리량 경계
 

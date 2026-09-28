@@ -145,6 +145,7 @@ def test_recent_volume_panel_precedes_gainer_without_duplicate_generation():
                                     activity_fetcher=activity)
     assert len(result["observations"]) == 1
     assert result["observations"][0]["source_kind"] == "activity"
+    assert result["observations"][0]["activity_window_minutes"] == 1
     assert result["observations"][0]["route"] == "krx_nxt_integrated"
     assert result["panels"][0]["eligible_count"] == 1
     assert result["panels"][2]["eligible_count"] == 1
@@ -172,7 +173,7 @@ def test_activity_adapter_keeps_source_only_contract_and_equity_filter(monkeypat
     assert meta["response_contract_status"] == "verified_success"
     assert calls[0]["api_id"] == "ka10023"
     assert calls[0]["payload"] == {
-        "mrkt_tp": "001", "sort_tp": "1", "tm_tp": "1", "tm": "5",
+        "mrkt_tp": "001", "sort_tp": "1", "tm_tp": "1", "tm": "1",
         "trde_qty_tp": "5", "stk_cnd": "4", "pric_tp": "0", "stex_tp": "3",
     }
     assert calls[0]["request_class"] == REQUEST_CLASS_SOURCE_ONLY

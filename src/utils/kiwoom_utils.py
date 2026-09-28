@@ -4049,7 +4049,7 @@ def get_zero_base_volume_surge_ka10023(
     """Bounded, source-only volume-surge discovery; never a live trade receipt."""
     payload = {
         "mrkt_tp": str(mrkt_tp), "sort_tp": "1", "tm_tp": "1",
-        "tm": "5", "trde_qty_tp": "5", "stk_cnd": "4",
+        "tm": "1", "trde_qty_tp": "5", "stk_cnd": "4",
         "pric_tp": "0", "stex_tp": str(stex_tp),
     }
     results, meta = fetch_kiwoom_api_continuous(
