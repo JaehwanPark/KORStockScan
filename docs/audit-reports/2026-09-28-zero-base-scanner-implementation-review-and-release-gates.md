@@ -1,11 +1,18 @@
 # 제로베이스 SCALPING 발견·기계판정 구현 리뷰와 릴리스 문턱 — 2026-09-28
 
+## 18:15 KST 스캘핑 발견·probe 순환 가속
+
+- **관측·결정:** 1분 활동성 릴리스 PID `758822`의 18:12~18:14 통합 애프터마켓 probe 첫 74건에서 활동성 56건 중 기계판정 3건, 상승률 18건 중 0건이었다. 같은 PID의 30초 WS snapshot 표본은 최대 등록 37/56개였고, 네 발견 패널은 모두 `observed_panel`이었다. 고유 코드 74개를 처리한 동안 현재 회차 claim 상한 8개/10초와 애프터마켓 90초 재조회가 앞단 순환의 명시적 속도 한계다. 1분 원천의 우위·실제 기대수익은 이 표본으로 증명되지 않는다.
+- **수정:** 회차 claim을 8→12개로, 실행 worker를 10→16개, bounded 예약을 16→24개로 늘린다. 두 회차가 10초 WS 대기와 겹쳐도 예약 단계에서 먼저 잘리지 않게 재리뷰 중 20→24로 보완했다. 제로베이스 발견만 전 세션 최대 60초 간격으로 재조회한다. 기존 레거시 스캐너 주기는 건드리지 않는다. 10초마다 최대 12개 dispatch의 산술 상한은 분당 72개이며, 16 worker×10초 기본 점유의 이론 처리력은 분당 96개다. 실제 REST·REG 지연과 12초 부분 연장 때문에 보장 처리량이 아니며, 새 PID의 보류·고유 코드·WS peak로 검증한다. 30개 상시 item+최대 16 동시 임시 item의 46/56은 관측 당시의 거친 상한일 뿐 다른 owner 증가를 보증하지 않는다. 공유 WS 등록 hard budget·API 5/4 admission은 그대로 작동하며 초과는 source/capacity 영수증으로 남긴다.
+- **안전 경계:** source 관측 120초, 정확 `_AL`/`_NX` route·transport와 3초 최종 신선도, 기계 다섯 틱 계약, 감시 16개 슬롯, 주문·수량·가격·hard safety는 변경하지 않는다. 추가 claim은 기계 `ENTER_NOW` 또는 주문 권한을 만들지 않는다.
+- **검증·수용:** 기존 10초 뒤 추가 dispatch와 source 만료를 13개 후보 재생으로 검증했고 queue/source/probe/Main/WS 연계 영향 회귀 566건, 예약 24개 재리뷰 뒤 표적 회귀 40건, Python compile, `git diff --check`, 문서 print-only parser가 통과했다. 불변 릴리스로 재기동한 뒤 새 PID에서 REST 패널 성공/429, worker 보류, WS 등록 peak, 정확 0B/0D·기계판정·감시·제출을 분리 대사한다.
+
 ## 18:10 KST 활동성 발견 창 5분→1분
 
 - **관측·판정:** 활동성 우선 릴리스 PID `755981`의 18:07~18:10 통합 애프터마켓 probe 첫 81건은 활동성 61건에서 기계판정 5건, 상승률 20건에서 0건이었다. source-only `ka10023`의 공식 `tm_tp=1`·`tm=1` 요청을 통합 KOSPI/KOSDAQ에 각각 한 번 실행했더니 양 시장 첫 응답 200/200행, 양의 급증·상승 부호 123/103행, 두 호출 모두 `return_code=0`·읽기 admission이었다. 상위 10종목의 별도 `ka10003` 표본에서 8개는 조회 시작 전후 수 초에 체결됐고 2개는 약 30~35초 이전 체결이 마지막이었다. 작은 비동시 표본이므로 1분 원천의 WS 수신률이나 기대수익 개선 증거는 아니다.
 - **수정:** 추가 API 호출 없이 기존 두 `ka10023` 활동성 패널의 `tm`만 5분에서 1분으로 바꾼다. 패널·관측 hash에 `activity_window_minutes=1`을 남겨 새 세대가 앞선 5분 자료와 구분되게 한다. 순수 보통주·양의 상승/급증, KOSPI/KOSDAQ·정확 `_AL`/`_NX`, 6:2 claim 순환, WS/REST 예산, 최종 3초 신선도·기계 입력 및 주문 hard guard는 그대로다. 1분 목록도 최근 5초 체결을 보장하지 않으므로 정확 route WS가 없으면 계속 source gap이다.
 - **공식 참조:** 2026-09-28 18:10 KST 공식 원격 HEAD와 로컬 checkout SHA `953e5dbff123f437ab4d11a78a95191a685eb51f`를 재확인했다. `kiwoom/_data/kiwoom_api_spec.json`의 `ka10023` POST `/api/dostk/rkinfo`, `tm_tp=1` 분 단위·`tm` 분 입력, `stex_tp=3` 통합, 응답 `trde_qty_sdnin`와 앞 절의 `kiwoom/specs.py`·`kiwoom/core/ws_client.py`·Postman 경계를 따른다. 명세가 1분 창의 모든 종목에 1분 내 마지막 체결을 보증하지 않는다.
-- **검증·수용:** 요청 payload·원천 hash/패널 기간·queue 영속/claim, 정확 WS 판정·읽기 제어 영향 회귀 105건, Python compile, `git diff --check`, 문서 print-only parser가 통과했다. 새 PID 자연 수신은 후속 영수증으로 닫는다. 원천 변경만으로 주문 권한이나 기대수익을 승인하지 않는다.
+- **검증·배포:** 요청 payload·원천 hash/패널 기간·queue 영속/claim, 정확 WS 판정·읽기 제어 영향 회귀 105건, Python compile, `git diff --check`, 문서 print-only parser가 통과했다. 커밋 `df9649ef671672bbc4222cd71426951db200fc5c`의 불변 릴리스 `/home/ubuntu/KORStockScan-runtime-releases/zero-base-one-minute-20260928-df9649ef`를 선택·정상 재기동했다. 이전 선택은 `tmp/zero-base-one-minute-selection-before-deploy-20260928T181211.json`에 보존했다. Main PID `758822`의 새 릴리스 cwd, source clean, scanner flag=true, 56-item WS budget env, 9/28 정책 bootstrap PASS, release-set PID 결속 PASS를 확인했다. 기능 상태는 `not_assessed`다. 새 PID 자연 수신·제출은 후속 영수증으로 닫는다. 원천 변경만으로 주문 권한이나 기대수익을 승인하지 않는다.
 
 ## 18:05 KST 활동성 후보의 판정 가능성 우선 순환
 

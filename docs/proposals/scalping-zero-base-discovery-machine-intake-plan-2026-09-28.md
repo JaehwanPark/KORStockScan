@@ -20,6 +20,10 @@
 
 활동성 후보는 5분 급증 목록보다 매매 시점에 가까운 1분 급증 목록을 source-only로 사용한다. 18:10 KST 공식 `ka10023 tm=1` 통합 KOSPI/KOSDAQ 첫 응답 200/200행·양의 급증/상승 123/103행을 확인했고, 상위 10개 `ka10003` 표본의 8개에서 조회 전후 최근 수 초 체결을 보았다. 이 표본은 live 판정/순익 증거가 아니며 1분 목록도 정확 WS를 대체하지 않는다. 호출 수·순환·주문 가드를 그대로 두고 [1분 원천 리뷰](../audit-reports/2026-09-28-zero-base-scanner-implementation-review-and-release-gates.md#1810-kst-활동성-발견-창-5분1분)의 다음 PID 수신을 대사한다.
 
+커밋 `df9649ef`의 불변 릴리스가 Main PID `758822`로 기동됐고 source clean·scanner flag·당일 정책 bootstrap·release-set 결속이 통과했다. 1분 원천의 실제 WS·기계판정·감시·제출과 비용 후 결과는 별도다.
+
+새 PID의 첫 74개 probe에서 활동성 56건 중 기계판정 3건, WS 등록 표본 최대 37/56개였다. 앞단 순환을 빠르게 하기 위해 제로베이스의 발견 재조회 최대 60초, 10초당 claim 12개, 16 worker/24 예약으로 상향한다. 공유 API 5/4, WS 56-item hard budget, 감시 16-slot 및 기계·주문 가드는 유지한다. [순환 가속 리뷰](../audit-reports/2026-09-28-zero-base-scanner-implementation-review-and-release-gates.md#1815-kst-스캘핑-발견probe-순환-가속)의 새 PID에서 실제 처리량·수신·판정과 부하를 확인한다.
+
 감시 슬롯의 더 빠른 의미적 해제는 실제 zero-base WATCHING 세대에서 신선한 연속 비진입과 반전 부재, 동일 슬롯 경쟁이 확인된 뒤 별도로 판단한다. 기존 재생에서 5분 조기 퇴출 후보의 후행 회복이 있었고 10분 적격 후보는 0이므로 체류시간이나 `BLOCK` 횟수만으로 새 퇴출 임계치를 만들지 않는다.
 
 ## 16:59 KST 세션 경계 재리뷰

@@ -92,17 +92,17 @@ def test_panel_interval_does_not_limit_probe_dispatch_and_stale_rows_wait(tmp_pa
             "source_sha256": "a" * 64, "source_scope": "observed_panel",
             "name": "TEST", "market": "KOSPI", "venue": "KRX", "price": 10000,
         }
-        for code in range(1, 10)
+        for code in range(1, 14)
     ]}
     first = runtime.scan_once("token", fetcher=lambda _token: panel, now_epoch=T0 + 1)
-    assert first["probe_requested_count"] == 8
+    assert first["probe_requested_count"] == 12
     second = runtime.dispatch_due_probes(now_epoch=T0 + 11)
     assert second["probe_requested_count"] == 1
     assert [payload["claim"]["code"] for event, payload in bus.events
-            if event == PROBE_REQUEST_EVENT][-1] == "000009"
+            if event == PROBE_REQUEST_EVENT][-1] == "000013"
     stale = runtime.dispatch_due_probes(now_epoch=T0 + 121)
     assert stale["probe_requested_count"] == 0
-    assert stale["stale_candidate_count"] == 9
+    assert stale["stale_candidate_count"] == 13
 
 
 def test_session_handoff_does_not_claim_premarket_route_in_regular_session(tmp_path):

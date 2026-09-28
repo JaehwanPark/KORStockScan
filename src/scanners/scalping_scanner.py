@@ -6915,7 +6915,7 @@ def run_zero_base_scanner(*, token, event_bus, is_test_mode=False):
                 )
             except Exception as exc:
                 log_error("[ZERO_BASE_SCANNER] cycle failed: " + type(exc).__name__)
-            next_scan_epoch = time.time() + _resolve_scan_interval_sec(now.time())
+            next_scan_epoch = time.time() + min(60, _resolve_scan_interval_sec(now.time()))
             next_probe_epoch = time.time() + 10
         elif (active_window is not None or is_test_mode) and time.time() >= next_probe_epoch:
             try:
