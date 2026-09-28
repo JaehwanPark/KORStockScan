@@ -49,6 +49,11 @@ class ZeroBaseDiscoveryRuntime:
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(temporary, self.state_path)
+            directory_fd = os.open(self.state_path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
         finally:
             temporary.unlink(missing_ok=True)
 
