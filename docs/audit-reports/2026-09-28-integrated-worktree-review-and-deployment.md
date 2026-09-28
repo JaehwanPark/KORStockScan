@@ -41,3 +41,10 @@
 - `53854ced` 퇴역 전용 릴리스는 현재 소스에 없는 실질 추가 줄이 0개지만 VCP/S15가 다시 켜지지 않는 복구 지점이므로 보존했다. 9/24 trailing-lineage 작업본의 HEAD는 런타임 소스 고유 차이 0개이며 작업본 관리 기록으로 보존했다.
 
 독립 커밋의 고유 줄은 누락 기능의 증명이 아니다. 운영 역할, source 계약, 현행 테스트의 소유권이 달라질 수 있으므로 오늘의 통합 커밋은 검증된 당일 작업공간과 스캐너 릴리스를 기준으로 한다. 세 개의 dirty worktree 및 21개 독립 이력 작업본을 지우거나 현행 Main의 진입·청산 권한으로 승격하지 않았다.
+
+## 16:05 KST 오래된 미커밋 작업본 재점검·정리
+
+- 등록 worktree 75곳 중 `src` 수정이 남은 곳은 위 표의 3곳이었다. 대량의 `data`/`docs` 삭제 표시는 오래된 체크아웃의 생성물 경로 차이이며, 소스 작업으로 계산하지 않았다. 현재 선택 릴리스는 `integrated-all-work-20260928-factsync-50f91450`, 실제 Main PID 영수증은 `694346`이다. 아래 정리는 릴리스 선택이나 프로세스를 변경하지 않았다.
+- `exploration-lifecycle-20260911`: 현재 소스에 probe target 불일치 검증과 terminal guard 복원이 들어 있고, 남은 exploration identity 단독 추가매수 차단은 현행 `test_exploration_identity_does_not_claim_scale_in_authority` 및 앞선 5건 회귀 실패와 충돌한다. 실행 경로 참조·미추적 파일이 없음을 확인하고 `git worktree remove --force`로 작업본을 제거했다. 삭제 전 4개 소스·테스트 수정분은 `tmp/exploration-lifecycle-20260911-discarded-20260928.patch`에 보관했다(SHA-256 `df354fb95bc7fa1fa27394b5ad73d5f7c808efb31d6d727f95d942e1920c3a0a`). 브랜치 이력은 남겼다.
+- `ai-quality-economic`은 공식 원문 URL·byte hash를 요구하는 micro-reversion 원천 schema v3와 그 테스트가 현행 v2에 없는 고유 변경이다. 원천 캡처·이행 없이 병합하면 연구 입력을 차단하므로 작업본을 보존한다. `postclose-stepwise-20260917`에도 장후 NXT 재생·null 경제 지표·경로 검증 등 현재와 다른 고유 변경이 남아 있고, `data`/`docs`는 주 작업공간을 가리키는 링크다. 고유 변경의 현행 계약 검증 전에는 작업본을 보존한다. 두 작업본 모두 현재 Main 릴리스/PID 소비를 주장하지 않는다.
+- 제거 후 등록 worktree는 74곳, 미커밋 소스 작업본은 2곳이다. 주 작업공간 `src/deploy/restart.sh`는 정리 전후 변경이 없다.
