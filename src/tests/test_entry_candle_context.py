@@ -1347,7 +1347,8 @@ def test_runtime_call_sites_use_context_and_s15_no_longer_sends_empty_candles():
     assert "def execute_fast_track_scalp_v2" not in s15_source
     assert "candle_context=candle_context" in analysis_source
     assert "entry_candle_context" in ipo_source
-    for source in (state_source, s15_source, analysis_source, ipo_source):
+    assert "fetch_entry_candles_with_meta" not in s15_source
+    for source in (state_source, analysis_source, ipo_source):
         assert "fetch_entry_candles_with_meta" in source
     assert "get_minute_candles_ka10080_with_meta" not in s15_source
     assert "get_minute_candles_ka10080_with_meta" not in analysis_source

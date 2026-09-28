@@ -33,6 +33,11 @@ def _snapshot(route="krx_only", item="123456", epoch=11.0):
 def test_probe_rejects_cross_route_or_old_transport_without_machine_call():
     good, reason = exact_probe_ws_data(_snapshot(), code="123456", route="krx_only", after_epoch=10)
     assert reason == "ready" and good["curr"] == 10000
+    missing_transport = _snapshot()
+    missing_transport.pop("market_data_transport_epoch")
+    missing_transport["realtime_type_snapshots_by_route"]["KRX|krx_only"]["0B"]["transport_epoch"] = None
+    missing_transport["realtime_type_snapshots_by_route"]["KRX|krx_only"]["0D"]["transport_epoch"] = None
+    assert exact_probe_ws_data(missing_transport, code="123456", route="krx_only", after_epoch=10)[1] == "transport_epoch_missing"
     assert exact_probe_ws_data(_snapshot(epoch=9), code="123456", route="krx_only", after_epoch=10)[1] == "0B_stale_or_route_conflict"
     assert exact_probe_ws_data(_snapshot(route="nxt_only", item="123456_NX"), code="123456", route="krx_only", after_epoch=10)[1] == "route_snapshot_missing"
     mixed = _snapshot()

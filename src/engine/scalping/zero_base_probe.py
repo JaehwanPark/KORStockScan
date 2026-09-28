@@ -47,6 +47,8 @@ def exact_probe_ws_data(
     if not isinstance(typed, dict):
         return {}, "route_snapshot_missing"
     transport = snapshot.get("market_data_transport_epoch")
+    if type(transport) is not int or transport <= 0:
+        return {}, "transport_epoch_missing"
     for realtime_type in ("0B", "0D"):
         source = typed.get(realtime_type)
         if not isinstance(source, dict):
