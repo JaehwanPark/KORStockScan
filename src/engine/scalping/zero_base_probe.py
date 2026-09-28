@@ -144,8 +144,9 @@ def probe_ws_observation(snapshot: dict, *, code: str, route: str,
 def wait_for_exact_probe_ws_data(ws_manager, *, code: str, route: str,
                                  after_epoch: float, now=time.time,
                                  timeout_sec: float = 3.0,
-                                 poll_interval_sec: float = 0.05) -> tuple[dict, dict, str]:
-    """Use the full bounded lease for both fresh 0B and 0D on one route."""
+                                 poll_interval_sec: float = 0.05,
+                                 min_exact_0b_count: int = 0) -> tuple[dict, dict, str]:
+    """Use one bounded lease for fresh 0B/0D and the machine's WS tick floor."""
     started = time.monotonic()
     deadline = started + max(0.0, timeout_sec)
     snapshot = {}
@@ -156,16 +157,18 @@ def wait_for_exact_probe_ws_data(ws_manager, *, code: str, route: str,
             snapshot, code=code, route=route, after_epoch=after_epoch,
             now_epoch=now(),
         )
-        if ws_data or time.monotonic() >= deadline:
+        observation = probe_ws_observation(
+            snapshot, code=code, route=route, after_epoch=after_epoch,
+        )
+        if (ws_data and observation["exact_0b_count"] >= min_exact_0b_count) or time.monotonic() >= deadline:
             break
         remaining = deadline - time.monotonic()
         if remaining > 0:
             time.sleep(min(max(0.01, poll_interval_sec), remaining))
-    observation = probe_ws_observation(
-        snapshot, code=code, route=route, after_epoch=after_epoch,
-    )
     observation["wait_ms"] = round((time.monotonic() - started) * 1000)
     observation["wait_reason"] = source_reason
+    observation["sample_target"] = min_exact_0b_count
+    observation["sample_target_met"] = observation["exact_0b_count"] >= min_exact_0b_count
     return ws_data, observation, source_reason
 
 
@@ -199,6 +202,7 @@ def run_zero_base_probe(
     context_builder=None,
     release_ws=None,
     ws_wait_timeout_sec: float = 3.0,
+    ws_wait_min_exact_0b_count: int = 5,
 ) -> dict:
     """Observe one candidate. The caller owns bounded WS REG/REMOVE leases."""
     claim = dict(request.get("claim") or {})
@@ -263,6 +267,7 @@ def run_zero_base_probe(
         ws_data, observation, source_reason = wait_for_exact_probe_ws_data(
             ws_manager, code=code, route=route, after_epoch=registered_epoch,
             now=now, timeout_sec=ws_wait_timeout_sec,
+            min_exact_0b_count=ws_wait_min_exact_0b_count,
         )
         result["ws_observation"] = observation
         if not ws_data:

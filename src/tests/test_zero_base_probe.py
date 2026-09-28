@@ -108,6 +108,7 @@ def test_machine_only_probe_passes_only_exact_fresh_input_and_releases_ws(monkey
             context_calls.append(kwargs), {"ready": True}
         )[1],
         release_ws=lambda code, item: calls.append(("release", code, item)),
+        ws_wait_min_exact_0b_count=0,
     )
     assert result["result"] == "assessed"
     assert result["machine_action"] == "ENTER_NOW"
@@ -215,6 +216,31 @@ def test_probe_observation_counts_only_exact_route_and_transport():
     assert observation["fifth_0b_ms"] is None
 
 
+def test_probe_waits_for_five_exact_ticks_within_same_three_second_cap():
+    snapshot = _snapshot(route="krx_nxt_integrated", item="123456_AL")
+    key = "_AL|krx_nxt_integrated"
+    calls = []
+    def latest(_code):
+        calls.append(None)
+        count = 1 if len(calls) < 3 else 5
+        current = dict(snapshot)
+        current["recent_trade_ticks_by_route"] = {key: [
+            {"received_at_ms": 10100 + index * 100,
+             "item": "123456_AL", "transport_epoch": 3}
+            for index in range(count)
+        ]}
+        return current
+    data, observation, reason = wait_for_exact_probe_ws_data(
+        SimpleNamespace(get_latest_data=latest), code="123456",
+        route="krx_nxt_integrated", after_epoch=10, now=lambda: 11,
+        timeout_sec=0.2, poll_interval_sec=0.01, min_exact_0b_count=5,
+    )
+    assert reason == "ready" and data
+    assert len(calls) == 3
+    assert observation["sample_target_met"] is True
+    assert observation["fifth_0b_ms"] == 500
+
+
 def test_machine_contract_error_is_retained_without_promoting(monkeypatch):
     import src.engine.scalping.zero_base_probe as module
 
@@ -240,6 +266,7 @@ def test_machine_contract_error_is_retained_without_promoting(monkeypatch):
             [{"close": 10000}], {"request_code": "123456", "rest_received_ts_ms": 11000},
         ),
         context_builder=lambda *_args, **_kwargs: {"ready": True},
+        ws_wait_min_exact_0b_count=0,
     )
     assert result["result"] == "policy_unavailable"
     assert result["machine_contract_error"] == "missing_stock_code"
@@ -276,6 +303,7 @@ def test_missing_trusted_tape_is_a_feature_gap_not_a_policy_outage(monkeypatch):
             {"request_code": "123456_AL", "rest_received_ts_ms": 11000},
         ),
         context_builder=lambda *_args, **_kwargs: {"ready": True},
+        ws_wait_min_exact_0b_count=0,
     )
     assert result["result"] == "required_feature_insufficient"
     assert result["machine_contract_error"] == "strategy_tape_score_source_missing"
