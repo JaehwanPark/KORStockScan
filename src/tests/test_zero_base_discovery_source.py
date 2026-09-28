@@ -35,6 +35,7 @@ def test_four_exact_route_panels_keep_unobserved_scope_and_shared_budget():
     assert {row["source_scope"] for row in result["observations"]} == {"observed_panel"}
     assert all(row["page_limit_reached"] for row in result["panels"])
     assert all(call["request_class"] == REQUEST_CLASS_SOURCE_ONLY for call in calls)
+    assert all(call["read_rate_max_wait_sec"] == 3.0 for call in calls)
     assert all(call["limit"] == 200 and call["trde_qty_cnd"] == "0000" for call in calls)
     assert len({row["source_sha256"] for row in result["observations"]}) == 4
 

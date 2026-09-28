@@ -56,6 +56,7 @@ def fetch_discovery_panels(token, *, now_epoch=None, fetcher=None) -> dict:
                 pure_equity_only=True,
                 request_owner="zero_base_discovery_panel",
                 request_class=REQUEST_CLASS_SOURCE_ONLY,
+                read_rate_max_wait_sec=3.0,
                 return_meta=True,
             )
         except Exception as exc:
