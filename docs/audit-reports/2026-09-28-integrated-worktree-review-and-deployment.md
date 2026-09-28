@@ -30,3 +30,14 @@
 - 선택 전 포인터 백업은 `tmp/integrated-selection-before-deploy-20260928T154342.json`이다. 정상 재기동으로 Main PID `688047`을 얻었고 PID cwd=`/home/ubuntu/KORStockScan-runtime-releases/integrated-all-work-20260928-d8aa4a64/src`, `KORSTOCKSCAN_RUNTIME_SOURCE_DIRTY=false`, `KORSTOCKSCAN_ZERO_BASE_SCANNER_ENABLED=true`를 확인했다. 당일 정책 handoff는 15:43:51 KST PASS, release-set은 selected Main PID 결속 PASS 및 별도 systemd 소유자 124개 대사 PASS다. release-set의 `functional_runtime_health`는 `not_assessed`이므로 경제성이나 장후 기능 완료로 해석하지 않는다.
 - 실제 사용 경로 참조와 source clean을 확인한 뒤 중간 스캐너 릴리스 `scanner-retirement-20260928-review`, `scanner-zero-base-20260928-review`, `diagnostics`, `fairness`, `sourcegap`, `wswait` 6개만 제거했다. 현행 `d8aa4a64`, 직전 `71caed84`, 퇴역 전용 `53854ced`, 별도 systemd가 사용하는 `30e66ae5`, 다른 세션의 세 dirty worktree는 보존했다.
 - 재기동은 선택/PID/정책 영수증을 닫는다. 새 PID의 다음 자연 매수창에서 정확 `_AL` 입력·기계 action·WATCHING 편입·제출/체결을 대사하고, terminal과 실제 비용 후 순익을 별도 수용해야 한다.
+
+## 다른 세션의 커밋된 작업본 전수 대사
+
+릴리스 6개 정리 후 등록 worktree는 74개다. 현재 `main`의 조상 또는 동일 HEAD가 53개, 독립 이력 HEAD가 21개다. 조상 53개는 이력상 통합돼 있다. 독립 21개의 `src/deploy/restart.sh` 변경 파일과 현재 소스에 남은 추가 줄을 대조했다. 이는 **소스 존재·차이의 전수 점검**이며 각 독립 연구의 경제성·실제 PID 소비를 새로 승인하는 리뷰가 아니다.
+
+- `1218e485` 당일 full-workspace 이력은 추가 실질 소스 줄 1,097개 중 1,093개가 현재 소스에 남았다. 차이 4개는 이후 비용 영수증 분기에서 바뀐 표현이다. 9/28 당일 별도 운영 서비스가 쓰는 `30e66ae5`는 현재 `main`의 조상이며 계속 보존했다.
+- 9/26 holding-profit 두 릴리스(`d71b10e8`, `4ab3491d`)는 각 5,369/5,372개 실질 추가 줄 중 현재에 없는 줄이 57개로 동일하다. 9/25 trailing 두 릴리스(`6060f5d0`, `6c82414c`)에는 각각 59/91개의 현재에 없는 줄이 있다. 이들은 이전 정책·보고 계약이므로 현행 exit 소유권/임계치와 병합하지 않고 원본·롤백 이력을 보존했다. `eebdd3cd`와 `e61b5b05`의 실질 추가 줄은 현재에 모두 남아 있다.
+- 9/23–9/24 postclose 분기 11개는 각 0–91개 현재에 없는 실질 추가 줄이 있으며, 주로 finalizer 순서·policy helper·direct summary·semantic contract와 다음 체크리스트 생성기다. `postclose-whole-recovery-20260924-v3` 등 별도 자동화 참조가 남아 있어 정리 대상에서 제외했다. 이 분기의 고유 변경은 현재 장후 체인과 owner·날짜별 strict 영수증을 대조하는 별도 변경이 필요하며 Main 거래 릴리스에 자동 병합하지 않았다.
+- `53854ced` 퇴역 전용 릴리스는 현재 소스에 없는 실질 추가 줄이 0개지만 VCP/S15가 다시 켜지지 않는 복구 지점이므로 보존했다. 9/24 trailing-lineage 작업본의 HEAD는 런타임 소스 고유 차이 0개이며 작업본 관리 기록으로 보존했다.
+
+독립 커밋의 고유 줄은 누락 기능의 증명이 아니다. 운영 역할, source 계약, 현행 테스트의 소유권이 달라질 수 있으므로 오늘의 통합 커밋은 검증된 당일 작업공간과 스캐너 릴리스를 기준으로 한다. 세 개의 dirty worktree 및 21개 독립 이력 작업본을 지우거나 현행 Main의 진입·청산 권한으로 승격하지 않았다.
