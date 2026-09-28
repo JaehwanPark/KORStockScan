@@ -269,6 +269,7 @@ def run_zero_base_probe(
             result["result"] = (
                 "required_feature_insufficient"
                 if machine.get("ai_result_source") == "input_preflight_blocked"
+                or contract_error == "strategy_tape_score_source_missing"
                 else "policy_unavailable"
             )
             result["reason"] = str(machine.get("machine_evaluation_status") or "machine_not_assessed")

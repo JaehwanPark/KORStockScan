@@ -187,6 +187,42 @@ def test_machine_contract_error_is_retained_without_promoting(monkeypatch):
     assert result["machine_action"] == ""
 
 
+def test_missing_trusted_tape_is_a_feature_gap_not_a_policy_outage(monkeypatch):
+    import src.engine.scalping.zero_base_probe as module
+    monkeypatch.setattr(module, "resolve_entry_candle_session", lambda: "KRX_REGULAR")
+    ws = SimpleNamespace(
+        subscribed_codes={"123456"},
+        _registered_items_by_code={"123456": ("123456_AL",)},
+        wait_for_data=lambda *_args, **_kwargs: _snapshot(
+            route="krx_nxt_integrated", item="123456_AL", epoch=11,
+        ),
+        get_latest_data=lambda *_args, **_kwargs: _snapshot(
+            route="krx_nxt_integrated", item="123456_AL", epoch=11,
+        ),
+    )
+    machine = SimpleNamespace(analyze_target=lambda *_args, **_kwargs: {
+        "machine_evaluation_status": "assessment_contract_invalid",
+        "machine_contract_error": "strategy_tape_score_source_missing",
+    })
+    result = run_zero_base_probe(
+        {"claim": {"code": "123456", "route": "krx_nxt_integrated",
+                   "observed_epoch": 10},
+         "candidate": {"code": "123456", "route": "krx_nxt_integrated"}},
+        ws_manager=ws, ai_engine=machine, token="token", now=lambda: 11,
+        tick_fetcher=lambda *_args, **_kwargs: [{
+            "request_code": "123456_AL", "rest_received_ts_ms": 11000,
+        }],
+        candle_fetcher=lambda *_args, **_kwargs: (
+            [{"close": 10000}],
+            {"request_code": "123456_AL", "rest_received_ts_ms": 11000},
+        ),
+        context_builder=lambda *_args, **_kwargs: {"ready": True},
+    )
+    assert result["result"] == "required_feature_insufficient"
+    assert result["machine_contract_error"] == "strategy_tape_score_source_missing"
+    assert result["machine_action"] == ""
+
+
 def test_late_ws_registration_releases_only_after_registration_finishes():
     pending = Future()
     released = []
