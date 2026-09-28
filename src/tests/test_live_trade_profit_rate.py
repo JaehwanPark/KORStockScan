@@ -3180,6 +3180,10 @@ def test_periodic_account_sync_blocks_partial_venue_custody_snapshot(monkeypatch
         {"id": 991, "code": "123456", "status": "HOLDING", "buy_qty": 10}
     ]
     sniper_sync.STATE_LOCK = _DummyLock()
+    info_logs = []
+    error_logs = []
+    monkeypatch.setattr(sniper_sync, "log_info", info_logs.append)
+    monkeypatch.setattr(sniper_sync, "log_error", error_logs.append)
     monkeypatch.setattr(
         sniper_sync.kiwoom_utils,
         "get_account_balance_kt00005",
@@ -3196,6 +3200,18 @@ def test_periodic_account_sync_blocks_partial_venue_custody_snapshot(monkeypatch
     assert record.status == "HOLDING"
     assert record.buy_qty == 10
     assert sniper_sync.ACTIVE_TARGETS[0]["buy_qty"] == 10
+    assert any(
+        "inventory_complete=False" in message
+        and "successful_exchanges=KRX" in message
+        and "open_orders_verified=True" in message
+        for message in info_logs
+    )
+    assert any(
+        "PERIODIC_INVENTORY_RECONCILIATION_BLOCKED" in message
+        and "query_started_at=" in message
+        and "query_completed_at=" in message
+        for message in error_logs
+    )
 
 
 def test_periodic_account_sync_defers_s15_quantity_change_to_durable_recovery(
@@ -3948,6 +3964,8 @@ def test_execution_broker_snapshot_refresh_is_read_only(monkeypatch):
     sniper_sync.KIWOOM_TOKEN = "token"
     sniper_sync.DB = sentinel_db
     sniper_sync.ACTIVE_TARGETS = sentinel_targets
+    info_logs = []
+    monkeypatch.setattr(sniper_sync, "log_info", info_logs.append)
 
     monkeypatch.setattr(
         sniper_sync.kiwoom_utils,
@@ -3978,6 +3996,14 @@ def test_execution_broker_snapshot_refresh_is_read_only(monkeypatch):
     assert published[0]["inventory"][0]["qty"] == 1
     assert published[0]["open_orders"][0]["remaining_qty"] == 1
     assert published[0]["open_orders_request_succeeded"] is True
+    assert any(
+        "inventory_complete=True" in message
+        and "successful_exchanges=KRX,NXT" in message
+        and "open_orders_verified=True" in message
+        and "query_started_at=" in message
+        and "query_completed_at=" in message
+        for message in info_logs
+    )
 
 
 def test_periodic_account_sync_attaches_fresh_broker_reconciliation(monkeypatch):
@@ -4005,6 +4031,8 @@ def test_periodic_account_sync_attaches_fresh_broker_reconciliation(monkeypatch)
     sniper_sync.ACTIVE_TARGETS = [target]
     sniper_sync.HIGHEST_PRICES = {}
     sniper_sync.STATE_LOCK = _DummyLock()
+    info_logs = []
+    monkeypatch.setattr(sniper_sync, "log_info", info_logs.append)
     monkeypatch.setattr(
         sniper_sync.kiwoom_utils,
         "get_account_balance_kt00005",
@@ -4037,9 +4065,82 @@ def test_periodic_account_sync_attaches_fresh_broker_reconciliation(monkeypatch)
     assert target["open_sell_qty"] == 1
     assert target["entry_execution_broker_route"] == "SOR"
     assert "broker_route" not in target
+    assert any(
+        "PERIODIC_INVENTORY_RECONCILIATION_COMPLETED" in message
+        and "inventory_complete=True" in message
+        and "successful_exchanges=KRX,NXT" in message
+        for message in info_logs
+    )
     assert target["broker_reconciliation_source"] == "kt00005_plus_ka10075"
     assert target["broker_snapshot_at"] > 0
     assert "broker_snapshot_age_sec" not in target
+
+
+@pytest.mark.parametrize("retry_exchanges", [{"KRX", "NXT"}, {"KRX"}])
+def test_periodic_account_sync_enforces_complete_balance_after_token_retry(
+    monkeypatch, retry_exchanges
+):
+    calls = []
+    info_logs = []
+    error_logs = []
+    sniper_sync.KIWOOM_TOKEN = "token"
+    sniper_sync.DB = _SyncDB([], [])
+    sniper_sync.ACTIVE_TARGETS = []
+    sniper_sync.STATE_LOCK = _DummyLock()
+    monkeypatch.setattr(sniper_sync, "log_info", info_logs.append)
+    monkeypatch.setattr(sniper_sync, "log_error", error_logs.append)
+    monkeypatch.setattr(sniper_sync, "_refresh_kiwoom_token", lambda _reason: None)
+    monkeypatch.setattr(sniper_sync, "_recover_missing_broker_holdings", lambda *_args: 0)
+
+    def balance(_token):
+        calls.append(True)
+        return ([], set()) if len(calls) == 1 else ([], retry_exchanges)
+
+    monkeypatch.setattr(sniper_sync.kiwoom_utils, "get_account_balance_kt00005", balance)
+    monkeypatch.setattr(
+        sniper_sync.kiwoom_utils,
+        "get_unfilled_order_snapshot_ka10075_with_meta",
+        lambda *_args, **_kwargs: ([], {"request_succeeded": True}),
+    )
+    sniper_sync.periodic_account_sync()
+
+    assert len(calls) == 2
+    assert any(
+        "PERIODIC_INVENTORY_RECONCILIATION_COMPLETED" in message
+        and "inventory_complete=True" in message
+        for message in info_logs
+    ) == (retry_exchanges == {"KRX", "NXT"})
+    assert any(
+        "PERIODIC_INVENTORY_RECONCILIATION_BLOCKED" in message
+        for message in error_logs
+    ) == (retry_exchanges != {"KRX", "NXT"})
+
+
+def test_periodic_account_sync_logs_failed_balance_without_touching_custody(monkeypatch):
+    errors = []
+    record = type("Record", (), {"status": "HOLDING", "buy_qty": 1})()
+    sniper_sync.KIWOOM_TOKEN = "token"
+    sniper_sync.DB = _SyncDB([record], [])
+    sniper_sync.ACTIVE_TARGETS = [{"status": "HOLDING", "buy_qty": 1}]
+    monkeypatch.setattr(sniper_sync, "log_error", errors.append)
+    monkeypatch.setattr(sniper_sync, "_refresh_kiwoom_token", lambda _reason: None)
+
+    def failed_balance(_token):
+        raise RuntimeError("unavailable")
+
+    monkeypatch.setattr(
+        sniper_sync.kiwoom_utils, "get_account_balance_kt00005", failed_balance
+    )
+    sniper_sync.periodic_account_sync()
+
+    assert record.status == "HOLDING"
+    assert sniper_sync.ACTIVE_TARGETS[0]["buy_qty"] == 1
+    assert sum("PERIODIC_INVENTORY_READ_FAILED" in message for message in errors) == 2
+    assert any(
+        "PERIODIC_INVENTORY_RECONCILIATION_BLOCKED" in message
+        and "inventory_complete=False" in message
+        for message in errors
+    )
 
 
 def test_periodic_account_sync_does_not_remove_manual_control_exclusion_on_db_error(

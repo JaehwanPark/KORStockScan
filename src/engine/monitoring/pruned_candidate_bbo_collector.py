@@ -833,12 +833,32 @@ class PrunedCandidateBBOCollector:
         request_attempted = bool(
             session_end_epoch > 0 and request_started_epoch < session_end_epoch
         )
+        request_token = self._token
+        caller_fingerprint = (
+            kiwoom_utils.source_only_caller_fingerprint(
+                request_token,
+                target_date=(
+                    datetime.fromtimestamp(request_started_epoch, tz=KST)
+                    .date()
+                    .isoformat()
+                ),
+                api_id="ka10004",
+                path="/api/dostk/mrkcond",
+                payload={"stk_cd": request_code},
+                use_continuous=False,
+                max_pages=None,
+                max_retries=1,
+                read_rate_max_wait_sec=1.25,
+            )
+            if request_attempted
+            else None
+        )
         if not request_attempted:
             gap_reason = "request_skipped_outside_episode_session"
         else:
             try:
                 raw = self._fetch_quote(
-                    self._token,
+                    request_token,
                     request_code,
                     explicit_request_code=True,
                     max_retries=1,
@@ -954,6 +974,9 @@ class PrunedCandidateBBOCollector:
             "scanner_prune_observer_due_epoch": round(float(due_epoch), 6),
             "scanner_prune_observer_request_started_epoch": round(
                 request_started_epoch, 6
+            ),
+            "scanner_prune_observer_source_only_caller_fingerprint_sha256": (
+                caller_fingerprint
             ),
             "scanner_prune_observer_observed_epoch": round(observed_epoch, 6),
             "scanner_prune_observer_observed_at": datetime.fromtimestamp(

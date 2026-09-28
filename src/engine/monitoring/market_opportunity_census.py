@@ -210,6 +210,7 @@ PANEL_CONTRACTS = {
     },
 }
 
+
 PIPELINE_STAGE_MAP = {
     "source_seen": {
         "scalping_scanner_candidate_pruned",
@@ -381,9 +382,28 @@ def _normalized_source_payload_sha256(
     *, request_contract: dict[str, Any], rows: list[dict[str, Any]]
 ) -> str:
     """Hash the sanitized request contract and normalized response rows."""
+    source_rows = []
+    for row in rows:
+        if not isinstance(row, dict):
+            source_rows.append(row)
+            continue
+        bbo = row.get("executable_bbo_observation")
+        if isinstance(bbo, dict) and "source_only_caller_fingerprint_sha256" in bbo:
+            source_rows.append(
+                {
+                    **row,
+                    "executable_bbo_observation": {
+                        key: value
+                        for key, value in bbo.items()
+                        if key != "source_only_caller_fingerprint_sha256"
+                    },
+                }
+            )
+        else:
+            source_rows.append(row)
     payload = {
         "request_contract": request_contract,
-        "rows": rows,
+        "rows": source_rows,
     }
     canonical = json.dumps(
         payload,
@@ -687,6 +707,19 @@ def _capture_external_bbo_observation(
     request_code = f"{code}_NX" if venue == "NXT" else code
     expected_observed_venue = "NXT" if venue == "NXT" else "KRX"
     request_started_epoch = float(clock())
+    caller_fingerprint = kiwoom_utils.source_only_caller_fingerprint(
+        token,
+        target_date=(
+            datetime.fromtimestamp(request_started_epoch, tz=KST).date().isoformat()
+        ),
+        api_id="ka10004",
+        path="/api/dostk/mrkcond",
+        payload={"stk_cd": request_code},
+        use_continuous=False,
+        max_pages=None,
+        max_retries=1,
+        read_rate_max_wait_sec=EXTERNAL_BBO_SHARED_ADMISSION_WAIT_SEC,
+    )
     source_error = ""
     request_meta: dict[str, Any] = {}
     try:
@@ -780,6 +813,7 @@ def _capture_external_bbo_observation(
         "gap_reason": gap_reason,
         "request_attempted": True,
         "request_code": request_code,
+        "source_only_caller_fingerprint_sha256": caller_fingerprint,
         "response_request_code": response_code or None,
         "stock_code": code,
         "expected_observed_venue": expected_observed_venue,
@@ -865,15 +899,20 @@ def capture_market_snapshots(
     max_bbo_requests_per_run: int = EXTERNAL_BBO_MAX_REQUESTS_PER_RUN,
     bbo_request_reserver: Callable[[], dict[str, Any]] | None = None,
     clock: Callable[[], float] | None = None,
+    request_clock: Callable[[], float] | None = None,
     monotonic_clock: Callable[[], float] | None = None,
     sleeper: Callable[[float], None] | None = None,
+    panel_min_start_interval_sec: float = 0.0,
 ) -> list[dict[str, Any]]:
     """Fetch sanitized ka10027 and bounded exact-route BBO observations."""
     fetch = fetcher or kiwoom_utils.get_top_fluctuation_ka10027
     fetch_bbo = bbo_fetcher or kiwoom_utils.get_stock_orderbook_ka10004
     now_epoch = clock or time.time
+    request_epoch = request_clock or time.time
     monotonic = monotonic_clock or time.monotonic
     sleep = sleeper or time.sleep
+    if not math.isfinite(panel_min_start_interval_sec) or panel_min_start_interval_sec < 0:
+        raise ValueError("panel_min_start_interval_sec must be finite and nonnegative")
     bbo_request_budget = min(
         max(0, int(max_bbo_requests_per_run)),
         EXTERNAL_BBO_MAX_REQUESTS_PER_RUN,
@@ -909,6 +948,7 @@ def capture_market_snapshots(
     captured_at_text = observed_at.isoformat()
     records: list[dict[str, Any]] = []
     capture_started_monotonic = monotonic()
+    last_panel_request_started_monotonic: float | None = None
 
     # All primary scopes precede optional panels. Materialize iterables once.
     venues = tuple(venues)
@@ -930,8 +970,60 @@ def capture_market_snapshots(
                 "crd_cnd": "0",
                 **PANEL_CONTRACTS[panel],
             }
+            caller_fingerprint = kiwoom_utils.source_only_caller_fingerprint(
+                token,
+                target_date=target_date,
+                api_id="ka10027",
+                path="/api/dostk/rkinfo",
+                payload=request_contract,
+                use_continuous=True,
+                max_pages=1,
+                max_retries=3,
+                read_rate_max_wait_sec=1.25,
+                result_limit=limit,
+            )
             source_error = ""
             source_request_meta: dict[str, Any] = {}
+            pacing_waited_sec = 0.0
+            pacing_bypass_reason = ""
+            if (
+                panel_min_start_interval_sec
+                and last_panel_request_started_monotonic is not None
+            ):
+                while True:
+                    remaining = panel_min_start_interval_sec - (
+                        monotonic() - last_panel_request_started_monotonic
+                    )
+                    if remaining <= 0:
+                        break
+                    elapsed = max(0.0, monotonic() - capture_started_monotonic)
+                    current_at = (
+                        observed_at + timedelta(seconds=elapsed)
+                        if captured_at is not None else datetime.now(KST)
+                    )
+                    after_wait = current_at + timedelta(seconds=remaining)
+                    if elapsed + remaining > CAPTURE_CADENCE_TOLERANCE_SEC:
+                        pacing_bypass_reason = "capture_cadence_tolerance"
+                    elif after_wait.date().isoformat() != target_date or (
+                        _session_for_capture(venue=venue, captured_at=current_at)
+                        != _session_for_capture(venue=venue, captured_at=after_wait)
+                    ):
+                        pacing_bypass_reason = "session_or_date_boundary"
+                    else:
+                        before_wait = monotonic()
+                        sleep(remaining)
+                        after_sleep = monotonic()
+                        pacing_waited_sec += max(0.0, after_sleep - before_wait)
+                        if after_sleep <= before_wait:
+                            pacing_bypass_reason = "pacing_clock_not_advanced"
+                            break
+                    if pacing_bypass_reason:
+                        break
+            panel_request_started_monotonic = (
+                monotonic() if panel_min_start_interval_sec else capture_started_monotonic
+            )
+            last_panel_request_started_monotonic = panel_request_started_monotonic
+            panel_request_started_epoch = float(request_epoch())
             try:
                 fetch_result = fetch(
                     token,
@@ -962,6 +1054,7 @@ def capture_market_snapshots(
             except Exception as exc:  # preserve sanitized source-unavailable evidence
                 fetched = []
                 source_error = type(exc).__name__
+            panel_request_completed_epoch = float(request_epoch())
 
             if source_request_meta.get("rate_limit_retry_exhausted") is True or (
                 source_request_meta.get("rate_limit_detected") is True and not fetched
@@ -1161,6 +1254,21 @@ def capture_market_snapshots(
                         ),
                         "credential_fields_stored": [],
                         "request_control": {
+                            "source_only_caller_fingerprint_sha256": caller_fingerprint,
+                            "request_started_epoch": round(
+                                panel_request_started_epoch, 6
+                            ),
+                            "request_completed_epoch": round(
+                                panel_request_completed_epoch, 6
+                            ),
+                            "response_received_epoch": (
+                                source_request_meta.get("rest_received_ts_ms", 0) / 1000
+                                if isinstance(source_request_meta.get("rest_received_ts_ms"), int)
+                                else None
+                            ),
+                            "panel_min_start_interval_sec": panel_min_start_interval_sec,
+                            "panel_pacing_waited_sec": round(pacing_waited_sec, 6),
+                            "panel_pacing_bypass_reason": pacing_bypass_reason or None,
                             "request_owner": source_request_meta.get("request_owner"),
                             "request_pid": source_request_meta.get("request_pid"),
                             "request_class": source_request_meta.get("request_class"),
@@ -4811,6 +4919,10 @@ def main() -> None:
     parser.add_argument("--venues", default="KRX,NXT")
     parser.add_argument("--panels", default="all,liquid_common")
     parser.add_argument("--limit", type=int, default=200)
+    parser.add_argument(
+        "--panel-min-start-interval-sec", type=float, default=0.0,
+        help="Source-only ka10027 panel pacing candidate; incumbent is 0.",
+    )
     parser.add_argument("--snapshot-path")
     parser.add_argument("--pipeline-path")
     parser.add_argument("--ai-trace-path")
@@ -4851,6 +4963,7 @@ def main() -> None:
             venues=_parse_csv(args.venues),
             panels=_parse_csv(args.panels),
             limit=max(1, args.limit),
+            panel_min_start_interval_sec=args.panel_min_start_interval_sec,
             collect_executable_bbo=not args.skip_executable_bbo,
             bbo_request_reserver=lambda: _reserve_external_bbo_request(
                 bbo_budget_path,

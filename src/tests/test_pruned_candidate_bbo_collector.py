@@ -180,6 +180,10 @@ def test_collector_uses_exact_route_and_emits_source_only_bbo_receipt() -> None:
     assert event["fields"]["scanner_prune_observer_best_bid_qty"] == 200
     assert event["fields"]["scanner_prune_observer_best_ask_qty"] == 180
     assert event["fields"]["scanner_prune_observer_schedule_lag_sec"] == 0.0
+    assert len(
+        event["fields"]["scanner_prune_observer_source_only_caller_fingerprint_sha256"]
+    ) == 64
+    assert "TOKEN" not in str(event)
     assert event["fields"]["scanner_selection_pair_id"] == "a" * 64
     assert event["fields"]["scanner_selection_pair_role"] == "incoming"
     assert event["fields"]["decision_authority"] == (

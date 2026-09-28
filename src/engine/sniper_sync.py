@@ -92,6 +92,22 @@ def _inventory_custody_snapshot_complete(successful_exchanges) -> bool:
     return _INVENTORY_CUSTODY_REQUIRED_EXCHANGES.issubset(successful)
 
 
+def _inventory_read_receipt_fields(
+    successful_exchanges, *, started_at: datetime, completed_at: datetime
+) -> str:
+    successful = sorted(
+        {str(exchange or "").strip().upper() for exchange in (successful_exchanges or set())}
+        - {""}
+    )
+    return (
+        f"required_exchanges={','.join(sorted(_INVENTORY_CUSTODY_REQUIRED_EXCHANGES))} "
+        f"successful_exchanges={','.join(successful) or '-'} "
+        f"inventory_complete={_inventory_custody_snapshot_complete(successful_exchanges)} "
+        f"query_started_at={started_at.isoformat()} "
+        f"query_completed_at={completed_at.isoformat()}"
+    )
+
+
 def bind_sync_dependencies(
     *,
     kiwoom_token=None,
@@ -2319,16 +2335,30 @@ def refresh_broker_account_snapshot_read_only() -> bool:
         )
         return False
 
+    query_started_at = datetime.now(_KST)
     try:
         inventory, successful_exchanges = kiwoom_utils.get_account_balance_kt00005(
             KIWOOM_TOKEN
         )
     except Exception as exc:
-        log_error(f"🚨 [broker snapshot refresh] balance request failed: {exc}")
+        log_error(
+            "🚨 [broker snapshot refresh] balance request failed: "
+            f"{type(exc).__name__} "
+            + _inventory_read_receipt_fields(
+                set(), started_at=query_started_at, completed_at=datetime.now(_KST)
+            )
+        )
         return False
+    query_completed_at = datetime.now(_KST)
+    inventory_receipt = _inventory_read_receipt_fields(
+        successful_exchanges,
+        started_at=query_started_at,
+        completed_at=query_completed_at,
+    )
     if not successful_exchanges:
         log_error(
-            "🚨 [broker snapshot refresh] no successful balance exchange response"
+            "🚨 [broker snapshot refresh] no successful balance exchange response "
+            + inventory_receipt
         )
         return False
 
@@ -2365,7 +2395,8 @@ def refresh_broker_account_snapshot_read_only() -> bool:
         "[BROKER_SNAPSHOT_REFRESHED] "
         f"inventory={len(inventory or [])} "
         f"open_orders={len(open_orders or [])} "
-        f"open_orders_verified={open_orders_request_succeeded}"
+        f"open_orders_verified={open_orders_request_succeeded} "
+        + inventory_receipt
     )
     return open_orders_request_succeeded
 
@@ -2455,25 +2486,66 @@ def periodic_account_sync():
 
     if not KIWOOM_TOKEN:
         _refresh_kiwoom_token("토큰 없음(정기 동기화)")
-    real_inventory, successful_exchanges = kiwoom_utils.get_account_balance_kt00005(
-        KIWOOM_TOKEN
-    )
+    query_started_at = datetime.now(_KST)
+    try:
+        real_inventory, successful_exchanges = kiwoom_utils.get_account_balance_kt00005(
+            KIWOOM_TOKEN
+        )
+    except Exception as exc:
+        real_inventory, successful_exchanges = [], set()
+        log_error(
+            "[PERIODIC_INVENTORY_READ_FAILED] attempt=initial "
+            f"error_type={type(exc).__name__} "
+            + _inventory_read_receipt_fields(
+                successful_exchanges,
+                started_at=query_started_at,
+                completed_at=datetime.now(_KST),
+            )
+        )
     if not successful_exchanges:
         log_info("⚠️ [정기 동기화] 잔고 조회 실패 -> 토큰 재발급 후 재시도")
         _refresh_kiwoom_token("잔고 조회 실패(정기 동기화)")
         if KIWOOM_TOKEN:
-            real_inventory, successful_exchanges = (
-                kiwoom_utils.get_account_balance_kt00005(KIWOOM_TOKEN)
+            try:
+                real_inventory, successful_exchanges = (
+                    kiwoom_utils.get_account_balance_kt00005(KIWOOM_TOKEN)
+                )
+            except Exception as exc:
+                real_inventory, successful_exchanges = [], set()
+                log_error(
+                    "[PERIODIC_INVENTORY_READ_FAILED] attempt=retry "
+                    f"error_type={type(exc).__name__} "
+                    + _inventory_read_receipt_fields(
+                        successful_exchanges,
+                        started_at=query_started_at,
+                        completed_at=datetime.now(_KST),
+                    )
+                )
+        if not successful_exchanges:
+            log_error(
+                "[PERIODIC_INVENTORY_RECONCILIATION_BLOCKED] "
+                + _inventory_read_receipt_fields(
+                    successful_exchanges,
+                    started_at=query_started_at,
+                    completed_at=datetime.now(_KST),
+                )
+                + "; DB/runtime custody left unchanged"
             )
-        print("⚠️ [정기 동기화] 모든 거래소 잔고 조회 실패, 동기화를 건너뜁니다.")
-        return
+            print("⚠️ [정기 동기화] 모든 거래소 잔고 조회 실패, 동기화를 건너뜁니다.")
+            return
+    query_completed_at = datetime.now(_KST)
+    inventory_receipt = _inventory_read_receipt_fields(
+        successful_exchanges,
+        started_at=query_started_at,
+        completed_at=query_completed_at,
+    )
 
     try:
         real_codes = _aggregate_inventory_by_code(real_inventory)
     except ValueError as exc:
         log_error(
             "[PERIODIC_INVENTORY_RECONCILIATION_BLOCKED] "
-            f"reason={exc}; DB/runtime custody left unchanged"
+            f"reason={exc} {inventory_receipt}; DB/runtime custody left unchanged"
         )
         return
     broker_snapshot_at = datetime.now().timestamp()
@@ -2559,12 +2631,16 @@ def periodic_account_sync():
         open_orders_request_succeeded=unfilled_snapshot_ok,
         captured_at=broker_snapshot_at,
     )
+    log_info(
+        "[PERIODIC_INVENTORY_READ_RECEIPT] "
+        + inventory_receipt
+        + f" open_orders_verified={unfilled_snapshot_ok}"
+    )
     if not _inventory_custody_snapshot_complete(successful_exchanges):
         log_error(
             "[PERIODIC_INVENTORY_RECONCILIATION_BLOCKED] "
-            f"required={','.join(sorted(_INVENTORY_CUSTODY_REQUIRED_EXCHANGES))} "
-            f"successful={','.join(sorted(str(value).upper() for value in successful_exchanges)) or '-'}; "
-            "DB/runtime custody left unchanged"
+            + inventory_receipt
+            + "; DB/runtime custody left unchanged"
         )
         return
 
@@ -3406,6 +3482,11 @@ def periodic_account_sync():
                 )
         for code, reason in pending_manual_control_removals:
             _remove_manual_control_exclusion_for_completed_holding(code, reason=reason)
+        log_info(
+            "[PERIODIC_INVENTORY_RECONCILIATION_COMPLETED] "
+            + inventory_receipt
+            + f" synced_count={synced_count}"
+        )
 
     if synced_count > 0:
         print(

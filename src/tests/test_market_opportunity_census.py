@@ -404,6 +404,133 @@ def test_capture_distinguishes_ka10027_shared_budget_defer_from_natural_empty():
     assert "secret-token" not in json.dumps(rows, ensure_ascii=False)
 
 
+def test_capture_panel_pacing_preserves_scope_and_exact_request_receipts():
+    elapsed = [0.0]
+    starts = []
+
+    def fetch(_token, **kwargs):
+        starts.append((elapsed[0], kwargs["stex_tp"], kwargs["trde_qty_cnd"]))
+        elapsed[0] += 0.2
+        return [], {"response_contract_status": "verified_success", "response_page_count": 1,
+                    "request_attempt_count": 1, "read_rate_control_status": "admitted"}
+
+    rows = census.capture_market_snapshots(
+        "secret-token", target_date="2026-09-28",
+        captured_at=datetime.fromisoformat("2026-09-28T10:00:00+09:00"),
+        fetcher=fetch, request_clock=lambda: 1000.0 + elapsed[0],
+        monotonic_clock=lambda: elapsed[0],
+        sleeper=lambda seconds: elapsed.__setitem__(0, elapsed[0] + seconds),
+        panel_min_start_interval_sec=5.0,
+    )
+    assert [round(start[0], 1) for start in starts] == [0.0, 5.0, 10.0, 15.0]
+    assert [item[1:] for item in starts] == [
+        ("1", "0010"), ("2", "0010"), ("1", "0000"), ("2", "0000")
+    ]
+    controls = [row["source"]["request_control"] for row in rows]
+    assert [control["panel_pacing_waited_sec"] for control in controls] == [0.0, 4.8, 4.8, 4.8]
+    assert len({control["source_only_caller_fingerprint_sha256"] for control in controls}) == 4
+    assert all(control["request_attempt_count"] == 1 for control in controls)
+    assert all(control["request_completed_epoch"] >= control["request_started_epoch"] for control in controls)
+    assert "secret-token" not in json.dumps(rows)
+
+
+def test_capture_panel_pacing_bypasses_deadline_and_session_boundary():
+    for start_at, fetch_duration, expected_reason in (
+        ("2026-09-28T10:00:00+09:00", 58.0, "capture_cadence_tolerance"),
+        ("2026-09-28T15:29:58+09:00", 1.0, "session_or_date_boundary"),
+    ):
+        elapsed = [0.0]
+        starts = []
+
+        def fetch(_token, **_kwargs):
+            starts.append(elapsed[0])
+            if len(starts) == 1:
+                elapsed[0] += fetch_duration
+            return [], {"response_contract_status": "verified_success"}
+
+        rows = census.capture_market_snapshots(
+            "token", target_date="2026-09-28", captured_at=datetime.fromisoformat(start_at),
+            venues=("KRX", "NXT"), panels=("liquid_common",), fetcher=fetch,
+            monotonic_clock=lambda: elapsed[0],
+            sleeper=lambda seconds: elapsed.__setitem__(0, elapsed[0] + seconds),
+            panel_min_start_interval_sec=65.0 if fetch_duration == 58.0 else 5.0,
+        )
+        assert starts[1] == fetch_duration
+        assert rows[1]["source"]["request_control"]["panel_pacing_bypass_reason"] == expected_reason
+
+
+def test_capture_panel_pacing_rechecks_after_short_sleep():
+    elapsed = [0.0]
+    starts = []
+
+    def fetch(_token, **_kwargs):
+        starts.append(elapsed[0])
+        return [], {"response_contract_status": "verified_success"}
+
+    census.capture_market_snapshots(
+        "token", target_date="2026-09-28",
+        captured_at=datetime.fromisoformat("2026-09-28T10:00:00+09:00"),
+        venues=("KRX", "NXT"), panels=("liquid_common",), fetcher=fetch,
+        monotonic_clock=lambda: elapsed[0],
+        sleeper=lambda seconds: elapsed.__setitem__(0, elapsed[0] + max(1.0, seconds / 2)),
+        panel_min_start_interval_sec=5.0,
+    )
+    assert starts[1] >= 5.0
+
+
+def test_source_only_caller_fingerprint_is_exact_and_token_free():
+    kwargs = dict(target_date="2026-09-28", api_id="ka10027", path="/api/dostk/rkinfo",
+                  payload={"stex_tp": "1"}, use_continuous=True,
+                  max_pages=1, max_retries=3,
+                  read_rate_max_wait_sec=1.25)
+    first = kiwoom_utils.source_only_caller_fingerprint("token-A", **kwargs)
+    assert first == kiwoom_utils.source_only_caller_fingerprint("token-A", **kwargs)
+    assert first != kiwoom_utils.source_only_caller_fingerprint("token-B", **kwargs)
+    assert first != kiwoom_utils.source_only_caller_fingerprint("token-A", **{**kwargs, "target_date": "2026-09-29"})
+    assert first != kiwoom_utils.source_only_caller_fingerprint("token-A", **{**kwargs, "payload": {"stex_tp": "2"}})
+    assert first != kiwoom_utils.source_only_caller_fingerprint("token-A", **{**kwargs, "use_continuous": False})
+    assert first != kiwoom_utils.source_only_caller_fingerprint("token-A", **{**kwargs, "read_rate_max_wait_sec": 5.0})
+    assert first != kiwoom_utils.source_only_caller_fingerprint("token-A", **{**kwargs, "result_limit": 200})
+    assert "token-A" not in first
+
+
+def test_census_fingerprint_includes_normalized_result_limit():
+    def fetch(_token, **_kwargs):
+        return [], {"response_contract_status": "verified_success"}
+
+    def fingerprint(limit):
+        rows = census.capture_market_snapshots(
+            "token", target_date="2026-09-28",
+            captured_at=datetime.fromisoformat("2026-09-28T10:00:00+09:00"),
+            venues=("KRX",), panels=("liquid_common",), fetcher=fetch,
+            limit=limit,
+        )
+        return rows[0]["source"]["request_control"]["source_only_caller_fingerprint_sha256"]
+
+    assert fingerprint(20) != fingerprint(200)
+
+
+def test_source_only_fingerprint_does_not_change_normalized_market_payload_hash():
+    row = {
+        "stock_code": "005930",
+        "executable_bbo_observation": {"best_bid": 70000},
+    }
+    contract = {"stex_tp": "1"}
+    original = census._normalized_source_payload_sha256(
+        request_contract=contract, rows=[row]
+    )
+    with_fingerprint = {
+        **row,
+        "executable_bbo_observation": {
+            **row["executable_bbo_observation"],
+            "source_only_caller_fingerprint_sha256": "a" * 64,
+        },
+    }
+    assert census._normalized_source_payload_sha256(
+        request_contract=contract, rows=[with_fingerprint]
+    ) == original
+
+
 def test_capture_blocks_transition_and_classifies_integrated_without_inventing_actual_venue():
     fetch_calls = []
 

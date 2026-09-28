@@ -67,6 +67,43 @@ _SCANNER_CODE_NAMESPACE_BLOCK_LOGGED = set()
 _KST = ZoneInfo("Asia/Seoul")
 
 
+def source_only_caller_fingerprint(
+    token: str,
+    *,
+    target_date: str,
+    api_id: str,
+    path: str,
+    payload: dict[str, str],
+    use_continuous: bool,
+    max_pages: int | None,
+    max_retries: int,
+    read_rate_max_wait_sec: float,
+    result_limit: int | None = None,
+) -> str:
+    """Hash exact source-only caller scope; never persist token or payload."""
+    scope = {
+        "kst_date": target_date,
+        "token_sha256": hashlib.sha256(
+            str(resolve_kiwoom_request_token(token)).encode()
+        ).hexdigest(),
+        "origin": KIWOOM_BASE_URL,
+        "api_id": api_id,
+        "path": path,
+        "payload": payload,
+        "request_class": REQUEST_CLASS_SOURCE_ONLY,
+        "use_continuous": use_continuous,
+        "max_pages": max_pages,
+        "max_retries": max_retries,
+        "read_rate_max_wait_sec": read_rate_max_wait_sec,
+        "result_limit": result_limit,
+        "connect_timeout_sec": KIWOOM_CONNECT_TIMEOUT_SEC,
+        "read_timeout_sec": KIWOOM_READ_TIMEOUT_SEC,
+    }
+    return hashlib.sha256(
+        json.dumps(scope, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
 def _reset_kiwoom_process_cache_locks_after_fork():
     global _MARKET_DATA_CACHE_LOCK, _KIWOOM_TOKEN_PROCESS_LOCK
     _MARKET_DATA_CACHE_LOCK = threading.RLock()
