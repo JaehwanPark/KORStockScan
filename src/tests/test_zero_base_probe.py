@@ -3,7 +3,8 @@ from concurrent.futures import Future
 import time
 
 from src.engine.scalping.zero_base_probe import (
-    exact_probe_rest_sources, exact_probe_ws_data, run_zero_base_probe,
+    exact_probe_rest_sources, exact_probe_ws_data, probe_registration_receipt,
+    run_zero_base_probe,
     wait_for_exact_probe_ws_data,
 )
 
@@ -93,10 +94,21 @@ def test_machine_only_probe_passes_only_exact_fresh_input_and_releases_ws(monkey
     calls = []
     ws = SimpleNamespace(
         subscribed_codes=set(),
-        execute_subscribe=lambda *args, **kwargs: (calls.append((args, kwargs)), _completed_registration())[1],
+        _registered_items_by_code={},
+        _registered_item_epochs={},
+        _registered_item_types={},
+        _market_data_transport_epoch=3,
         wait_for_data=lambda *args, **kwargs: _snapshot(epoch=11),
         get_latest_data=lambda *_args, **_kwargs: _snapshot(epoch=11),
     )
+    def subscribe(*args, **kwargs):
+        calls.append((args, kwargs))
+        ws.subscribed_codes.add("123456")
+        ws._registered_items_by_code["123456"] = ("123456",)
+        ws._registered_item_epochs["123456"] = 3
+        ws._registered_item_types["123456"] = ("0B", "0D")
+        return _completed_registration()
+    ws.execute_subscribe = subscribe
     machine_calls = []
     context_calls = []
 
@@ -132,6 +144,41 @@ def test_machine_only_probe_passes_only_exact_fresh_input_and_releases_ws(monkey
     assert context_calls[0]["source_meta"]["multi_timeframe_auxiliary_fetch"] is False
     assert context_calls[0]["include_investor_source"] is False
     assert calls[-1] == ("release", "123456", "123456")
+
+
+def test_probe_registration_receipt_rejects_silent_send_failure_and_old_transport():
+    ws = SimpleNamespace(
+        subscribed_codes=set(), _registered_items_by_code={},
+        _registered_item_epochs={}, _registered_item_types={},
+        _market_data_transport_epoch=3,
+        execute_subscribe=lambda *_args, **_kwargs: _completed_registration(),
+        get_latest_data=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("WS wait must not start without a send receipt")
+        ),
+    )
+    released = []
+    request = {
+        "claim": {"code": "123456", "route": "krx_only", "observed_epoch": 10},
+        "candidate": {"code": "123456", "route": "krx_only"},
+    }
+    result = run_zero_base_probe(
+        request, ws_manager=ws, ai_engine=object(), token="token",
+        now=lambda: 11, release_ws=lambda code, item: released.append((code, item)),
+    )
+    assert result["reason"] == "ws_registration_not_recorded"
+    assert released == [("123456", "123456")]
+    ws.subscribed_codes.add("123456")
+    ws._registered_items_by_code["123456"] = ("123456",)
+    ws._registered_item_epochs["123456"] = 2
+    ws._registered_item_types["123456"] = ("0B", "0D")
+    assert probe_registration_receipt(ws, code="123456", item="123456") == (
+        "ws_registration_transport_mismatch"
+    )
+    ws._registered_item_epochs["123456"] = 3
+    ws._registered_item_types["123456"] = ("0B",)
+    assert probe_registration_receipt(ws, code="123456", item="123456") == (
+        "ws_registration_types_missing"
+    )
 
 
 def test_missing_bbo_never_calls_machine_and_releases_ws():

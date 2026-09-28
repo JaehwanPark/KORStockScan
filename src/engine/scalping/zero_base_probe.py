@@ -31,6 +31,34 @@ def probe_item(code: str, route: str) -> str:
     return builder(code) if builder and len(code) == 6 and code.isdigit() else ""
 
 
+def probe_registration_receipt(ws_manager, *, code: str, item: str) -> str:
+    """Check the local send receipt; it is not a broker subscription ACK."""
+    registered = getattr(ws_manager, "_registered_items_by_code", None)
+    if not isinstance(registered, dict):
+        return "ws_registration_receipt_missing"
+    lock = getattr(ws_manager, "lock", None)
+
+    def inspect() -> str:
+        if item not in (registered.get(code) or ()) or code not in (
+            getattr(ws_manager, "subscribed_codes", ()) or ()
+        ):
+            return "ws_registration_not_recorded"
+        transport = getattr(ws_manager, "_market_data_transport_epoch", None)
+        epochs = getattr(ws_manager, "_registered_item_epochs", None)
+        if (type(transport) is not int or transport <= 0
+                or not isinstance(epochs, dict) or epochs.get(item) != transport):
+            return "ws_registration_transport_mismatch"
+        types = getattr(ws_manager, "_registered_item_types", None)
+        if not isinstance(types, dict) or not {"0B", "0D"}.issubset(types.get(item) or ()):
+            return "ws_registration_types_missing"
+        return ""
+
+    if lock is None:
+        return inspect()
+    with lock:
+        return inspect()
+
+
 def exact_probe_ws_data(
     snapshot: dict, *, code: str, route: str, after_epoch: float,
     now_epoch: float | None = None, max_age_sec: float = 3.0,
@@ -279,6 +307,12 @@ def run_zero_base_probe(
                 return result
             except Exception as exc:
                 result["reason"] = "ws_registration_failed:" + type(exc).__name__
+                return result
+            registration_reason = probe_registration_receipt(
+                ws_manager, code=code, item=item,
+            )
+            if registration_reason:
+                result["reason"] = registration_reason
                 return result
         ws_data, observation, source_reason = wait_for_exact_probe_ws_data(
             ws_manager, code=code, route=route, after_epoch=registered_epoch,
