@@ -1,5 +1,12 @@
 # 제로베이스 SCALPING 발견·기계판정 구현 리뷰와 릴리스 문턱 — 2026-09-28
 
+## 16:59 KST 세션 경계 재리뷰·수정·재기동
+
+- **리뷰 결함과 수정:** 종전 `_AL`·SOR 주문 결속은 감시 편입 당시의 `KRX`/통합 애프터마켓 표기만 확인하고 주문 시점의 세션을 다시 묶지 않았다. 또한 프리마켓·정규장 감시가 세션 전환 뒤에도 기존 최대 30분 TTL 동안 슬롯과 동일 코드의 새 세션 probe를 막을 수 있었다. 제로베이스 주문은 현재 KST 매수창, 정확 route·broker·effective venue·market session bucket을 함께 검사한다. 제로베이스 WATCHING은 기존 FIFO 만료 경로에서 세션이 달라지면 만료하며 `session_changed` terminal 이유를 남긴다. 기존 비활성 WS 구독 정리 주기가 해당 종목을 후속 해제한다. 다른 소유자의 감시·보유·매도는 이 규칙의 대상이 아니다.
+- **재리뷰와 검증:** 첫 회귀에서 새 helper의 미정의 `KST` 이름을 발견해 `session_contract.KST`로 고쳤다. 수정 후 제로베이스 경로 51건, 인접 시장 세션·최초 수량·WS·조건검색 627건이 통과했다. 영향 Python compile과 `git diff --check`도 통과했다. 3초 0B/0D 신선도, Kiwoom 요청/응답 형식, 주문 수량·가격·하드 가드는 변경하지 않았다.
+- **공식 참조:** 2026-09-28 16:49:58 KST 원격 HEAD가 이전 검토와 같은 `953e5dbff123f437ab4d11a78a95191a685eb51f`임을 재확인했다. 로컬 공식 checkout의 `kiwoom/_data/kiwoom_api_spec.json` `kt10000` 주문 거래소 필드와 앞 절에 기록한 `kiwoom/specs.py`, `kiwoom/core`, `kiwoom/realtime`, Postman 경로를 대조했다. 이번 변경은 로컬 세션 권한 검사이며 주문 API 패킷을 바꾸지 않는다.
+- **배포·기동:** 커밋 `527f27a3f72c9a11405064fb90a06df99cf995d8`, 불변 릴리스 `/home/ubuntu/KORStockScan-runtime-releases/zero-base-session-bound-20260928-527f27a3`를 선택했다. 이전 선택 백업은 `tmp/zero-base-session-bound-selection-before-deploy-20260928T165734.json`이다. 16:57:48 정상 재기동 후 Main PID `725217`의 cwd가 새 릴리스 `src`와 일치하고 `KORSTOCKSCAN_ZERO_BASE_SCANNER_ENABLED=true`, runtime source clean, 9/28 정책 bootstrap PASS, release-set Main PID 결속 PASS다. 16:58 신규 PID에서 조건검색 목록 요청 생략, 통합 `_AL` probe REG/REMOVE 및 WS 연결·수신을 확인했다. 당시 Main은 HOLDING 1건·WATCHING 0건이어서 새 세션 만료와 주문 차단의 자연 발생은 관측되지 않았다. 다음 프리마켓 `_NX` 자연 수신, 실제 제출·체결·terminal·비용 후 경제성도 별도 OPEN이다.
+
 ## 16:32 KST 프리마켓 수신시점과 구현 리뷰
 
 - **관측 모집단:** 2026-09-28 source-only 연속 구독의 동일한 선택 23종목, `_AL` 0B/0D, 각 세션 15분(프리마켓 08:03–08:18, 통합 애프터마켓 16:00–16:15), 종목별 10초 간격 90개 anchor로 세션당 2,070개 anchor를 읽었다. 프리마켓은 SOR 관측 스트림으로, 새 NXT `_NX` 임시 REG의 수신률을 측정한 것이 아니다. 유효 signed 0B와 양의 BBO 0D의 *어느* 수신쌍이 anchor 뒤 3/5/10초 이내에 함께 나타나고 두 수신시각 차가 2초 이내인 anchor는 프리마켓 423/499/579, 통합 애프터마켓 414/586/852였다. 이것은 연속 구독의 도착 분포이며 새 probe의 성공률이나 제출률이 아니다.

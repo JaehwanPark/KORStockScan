@@ -2,6 +2,10 @@
 
 상태: **VCP/S15 신규 유입 퇴역과 통합 `_AL` 발견·기계 probe·Main 감시 경로를 구현하고, 사용자 요청으로 즉시 배포·재기동했다.** 현재 선택 릴리스·PID와 관측 범위는 [구현 리뷰](../audit-reports/2026-09-28-zero-base-scanner-implementation-review-and-release-gates.md)의 후속 영수증을 따른다. 자연 제출·체결·terminal·비용 후 경제성은 별도 미수용이다. 과거 KRX/NXT 분리 패널 시험은 잘못된 route 설계의 역사적 증거이며 운영 기준이 아니다. VCP/S15 재유입이 가능한 구 릴리스는 롤백 대상이 아니다.
 
+## 16:59 KST 세션 경계 재리뷰
+
+주문 직전에는 감시 당시의 route·broker·venue·market session bucket과 현재 KST 매수창/세션을 다시 묶는다. 프리마켓·정규장·통합 애프터마켓 중 이전 세션의 제로베이스 WATCHING은 기존 FIFO 만료 경로로 종료해 슬롯과 동일 코드 probe를 해방한다. 수정 커밋 `527f27a3`은 영향 회귀 678건 통과 후 불변 릴리스로 재기동됐고 Main PID `725217`의 선택 커밋·cwd, 당일 bootstrap 및 release-set 결속을 확인했다. 새 PID에서 통합 `_AL` REG/REMOVE가 자연 발생했다. 실제 세션 전환 만료와 다음 프리마켓 `_NX` 수신, 제출·체결·비용 후 성과는 별도 미관측이다. [세션 경계 리뷰 영수증](../audit-reports/2026-09-28-zero-base-scanner-implementation-review-and-release-gates.md#1659-kst-세션-경계-재리뷰수정재기동)에 근거한다.
+
 ## 16:32 KST 프리마켓 경로와 수신 대기 보완
 
 정규장·통합 애프터마켓의 통합 `stex_tp=3`·`_AL`·SOR 계약은 유지한다. 프리마켓만 기존 세션의 별도 NXT 경로로 KOSPI/KOSDAQ `stex_tp=2` 패널을 읽고, probe REST/WS와 감시 WS는 `_NX`, 주문은 NXT로 결속한다. 세션 변경 전후의 다른 route claim은 평가·승격하지 않는다. 두 저활동 세션에서 정확 0B/0D 중 한쪽만 3초 안에 도착하면 WS 관측을 최대 5초로 연장한다. 사용자의 후속 결정에 따라 프로브의 최종 기계판정 직전 동일 route·transport 신선도는 2초에서 3초로 변경했다. 두 신호 모두 없는 후보는 3초에 종료하고 추가 REST는 호출하지 않는다. 커밋 `16927a86`의 불변 릴리스가 16:43 KST 새 Main PID `717094`에서 기동했고, 통합 애프터마켓 자연 패널/프로브를 확인했다. 프리마켓 `_NX` 자연 결과는 아직 미관측이다.
@@ -12,7 +16,7 @@
 
 사용자 정정에 따라 정규장과 통합 애프터마켓의 독립 KRX/NXT 후보 패널을 제거했다. `ka10027`은 KOSPI·KOSDAQ 각각 `stex_tp=3`으로만 호출하고 관측 원장에는 `krx_nxt_integrated` 한 route를 남긴다. 임시 WS와 감시 WS는 종목코드 `_AL`, REST tick/분봉은 명시 `_AL`, 신규 스캐너의 주문 요청은 명시 `SOR`로 결속한다. Main 감시 코호트는 정규장 `KRX`, 통합 애프터마켓 `KRX_NXT_INTEGRATED`로 유지해 브로커 route와 시장 세션 분류를 혼동하지 않는다. 장전·전환·신규 BUY 마감 세션에는 통합 패널을 호출하지 않는다. 기존 분리 route queue 파일은 보존하고 `zero_base_discovery_queue_integrated_v2`에서 새로 시작한다. 종목별 SOR 적격·주문유형·잔고·hard guard는 기존 주문 owner가 계속 검사한다.
 
-잘못된 신규 스캐너를 14:38 퇴역 전용 릴리스 `53854ced`로 되돌려 PID `647108`의 기동·정책 검증을 확인했다. 정정된 `826f3d72`은 실제 통합 패널 2/2·400행·약 7.75초와 회귀 210건을 확인한 뒤 배포했고 PID `657079`에서 `_AL` REG/REMOVE 및 통합 queue의 자연 기계 `RECHECK` 1건을 관측했다. 리뷰 중 드러난 `strategy_tape_score_source_missing`은 신뢰 가능한 체결 주도 방향의 결손이므로 `policy_unavailable` 대신 `required_feature_insufficient`로 분류해 `d619923a`를 다시 배포했다. 현재 PID `661520`의 exact-date 정책 검증과 release-set 검사는 통과했다. REST `ka10003`의 가격변화 추정치를 신뢰 체결 방향으로 승격하지 않았으며, 기계 `ENTER_NOW`·실제 제출·비용 후 성과는 아직 확인되지 않았다.
+잘못된 신규 스캐너를 14:38 퇴역 전용 릴리스 `53854ced`로 되돌려 PID `647108`의 기동·정책 검증을 확인했다. 정정된 `826f3d72`은 실제 통합 패널 2/2·400행·약 7.75초와 회귀 210건을 확인한 뒤 배포했고 PID `657079`에서 `_AL` REG/REMOVE 및 통합 queue의 자연 기계 `RECHECK` 1건을 관측했다. 리뷰 중 드러난 `strategy_tape_score_source_missing`은 신뢰 가능한 체결 주도 방향의 결손이므로 `policy_unavailable` 대신 `required_feature_insufficient`로 분류해 `d619923a`를 다시 배포했다. 당시 PID `661520`의 exact-date 정책 검증과 release-set 검사는 통과했다. REST `ka10003`의 가격변화 추정치를 신뢰 체결 방향으로 승격하지 않았으며, 기계 `ENTER_NOW`·실제 제출·비용 후 성과는 아직 확인되지 않았다.
 
 ## 결정과 원천 경계
 
