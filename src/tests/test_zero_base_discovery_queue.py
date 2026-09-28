@@ -12,7 +12,7 @@ HASH_A = "a" * 64
 HASH_B = "b" * 64
 
 
-def _observe(queue, code, *, route="krx_only", epoch=T0, digest=HASH_A):
+def _observe(queue, code, *, route="krx_only", epoch=T0, digest=HASH_A, volume=0):
     return queue.observe(
         code=code,
         route=route,
@@ -20,6 +20,7 @@ def _observe(queue, code, *, route="krx_only", epoch=T0, digest=HASH_A):
         source_sha256=digest,
         source_scope="observed_panel",
         received_epoch=epoch + 1,
+        discovery_volume=volume,
     )
 
 
@@ -34,6 +35,17 @@ def test_unseen_candidates_rotate_and_recheck_does_not_starve_them():
     assert [row["code"] for row in queue.claim(now_epoch=T0 + 4, limit=1)] == ["000003"]
     assert [row["code"] for row in queue.claim(now_epoch=T0 + 5, limit=1)] == ["000001"]
     assert queue.claim(now_epoch=T0 + 6, limit=1) == []  # prior claim is in flight
+
+
+def test_same_age_unseen_candidates_use_liquidity_as_tie_breaker():
+    queue = DiscoveryQueue(DAY)
+    _observe(queue, "000001", volume=10)
+    _observe(queue, "000002", volume=100)
+    first = queue.claim(now_epoch=T0 + 2, limit=1)
+    assert first[0]["code"] == "000002"
+    assert first[0]["discovery_volume"] == 100
+    assert queue.resolve(first[0], result="source_unavailable", next_due_epoch=T0 + 2)
+    assert queue.claim(now_epoch=T0 + 3, limit=1)[0]["code"] == "000001"
 
 
 def test_exact_source_generation_and_route_block_stale_resolution():

@@ -41,6 +41,7 @@ class Candidate:
     machine_action: str = ""
     claim_count: int = 0
     in_flight: bool = False
+    discovery_volume: int = 0
 
 
 class DiscoveryQueue:
@@ -63,6 +64,7 @@ class DiscoveryQueue:
         market: str = "",
         venue: str = "",
         discovery_price: int = 0,
+        discovery_volume: int = 0,
     ) -> str:
         """Accept a fresh, exactly routed observation; never refresh it implicitly."""
         if re.fullmatch(r"\d{6}", code or "") is None:
@@ -74,6 +76,8 @@ class DiscoveryQueue:
         # No upstream producer currently proves whole-market coverage.
         if source_scope != "observed_panel":
             return "source_scope_unknown"
+        if type(discovery_volume) is not int or discovery_volume < 0:
+            return "source_volume_invalid"
         if not (
             isfinite(observed_epoch)
             and isfinite(received_epoch)
@@ -108,6 +112,7 @@ class DiscoveryQueue:
             current.market = market or current.market
             current.venue = venue or current.venue
             current.discovery_price = discovery_price or current.discovery_price
+            current.discovery_volume = discovery_volume
             # A new source generation makes a prior BLOCK eligible again.
             current.next_due_epoch = min(current.next_due_epoch, received_epoch)
             current.in_flight = False
@@ -125,6 +130,7 @@ class DiscoveryQueue:
             first_seen_epoch=received_epoch,
             last_seen_epoch=received_epoch,
             next_due_epoch=received_epoch,
+            discovery_volume=discovery_volume,
         )
         return "queued"
 
@@ -152,6 +158,7 @@ class DiscoveryQueue:
             key=lambda row: (
                 row.last_claim_epoch,
                 row.first_seen_epoch,
+                -row.discovery_volume,
                 row.code,
                 row.route,
             ),
@@ -171,6 +178,7 @@ class DiscoveryQueue:
                 "market": row.market,
                 "venue": row.venue,
                 "discovery_price": row.discovery_price,
+                "discovery_volume": row.discovery_volume,
                 "claim_count": row.claim_count,
                 "last_claim_epoch": row.last_claim_epoch,
             }
@@ -260,6 +268,8 @@ class DiscoveryQueue:
                 or (row.market and row.market not in {"KOSPI", "KOSDAQ"})
                 or (row.venue and row.venue not in {"KRX", "NXT", "SOR"})
                 or row.discovery_price < 0
+                or type(row.discovery_volume) is not int
+                or row.discovery_volume < 0
                 or not all(
                     isfinite(value) and value >= 0
                     for value in (
