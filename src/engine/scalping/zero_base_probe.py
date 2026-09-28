@@ -255,6 +255,9 @@ def run_zero_base_probe(
             return result
         action = str(machine.get("entry_mechanistic_action") or "").upper()
         if machine.get("machine_evaluation_status") != "assessed":
+            contract_error = machine.get("machine_contract_error")
+            if contract_error:
+                result["machine_contract_error"] = str(contract_error)[:160]
             result["result"] = (
                 "required_feature_insufficient"
                 if machine.get("ai_result_source") == "input_preflight_blocked"
