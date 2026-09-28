@@ -118,6 +118,25 @@ def test_missing_bbo_never_calls_machine_and_releases_ws():
     assert released == [("123456", "123456")]
 
 
+def test_existing_ws_owner_is_reused_without_changing_registration():
+    snapshot = _snapshot()
+    snapshot["realtime_type_snapshots_by_route"]["KRX|krx_only"].pop("0D")
+    calls = []
+    ws = SimpleNamespace(
+        subscribed_codes={"123456"},
+        execute_subscribe=lambda *_args, **_kwargs: calls.append("reg"),
+        wait_for_data=lambda *_args, **_kwargs: snapshot,
+    )
+    result = run_zero_base_probe(
+        {"claim": {"code": "123456", "route": "krx_only", "observed_epoch": 10},
+         "candidate": {"code": "123456", "route": "krx_only"}},
+        ws_manager=ws, ai_engine=object(), token="token", now=lambda: 11,
+        release_ws=lambda *_args: calls.append("remove"),
+    )
+    assert result["reason"] == "0D_missing"
+    assert calls == []
+
+
 def test_late_ws_registration_releases_only_after_registration_finishes():
     pending = Future()
     released = []

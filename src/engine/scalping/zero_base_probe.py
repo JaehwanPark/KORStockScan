@@ -149,11 +149,11 @@ def run_zero_base_probe(
     registered_epoch = now()
     deferred_release = False
     try:
-        registration = ws_manager.execute_subscribe(
-            [item], source="zero_base_probe", observation_only=True,
-            required_realtime_types=("0B", "0D"), realtime_types=("0B", "0D"),
-        )
         if not was_subscribed:
+            registration = ws_manager.execute_subscribe(
+                [item], source="zero_base_probe", observation_only=True,
+                required_realtime_types=("0B", "0D"), realtime_types=("0B", "0D"),
+            )
             if registration is None:
                 result["reason"] = "ws_registration_not_dispatched"
                 return result
