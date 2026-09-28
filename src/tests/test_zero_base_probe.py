@@ -13,7 +13,8 @@ def _completed_registration():
 
 
 def _snapshot(route="krx_only", item="123456", epoch=11.0):
-    key = "KRX|krx_only" if route == "krx_only" else "_NX|nxt_only"
+    key = {"krx_only": "KRX|krx_only", "nxt_only": "_NX|nxt_only",
+           "krx_nxt_integrated": "_AL|krx_nxt_integrated"}[route]
     return {
         "market_data_transport_epoch": 3,
         "last_realtime_type_item": {"0B": item, "0D": item},
@@ -48,6 +49,24 @@ def test_probe_rejects_cross_route_or_old_transport_without_machine_call():
         code="123456", route="nxt_only", after_epoch=10,
     )
     assert reason == "ready" and nxt["market_data_route"] == "nxt_only"
+    integrated, reason = exact_probe_ws_data(
+        _snapshot(route="krx_nxt_integrated", item="123456_AL"),
+        code="123456", route="krx_nxt_integrated", after_epoch=10,
+    )
+    assert reason == "ready" and integrated["effective_venue"] == "SOR"
+
+
+def test_integrated_probe_never_reuses_plain_route_subscription():
+    ws = SimpleNamespace(subscribed_codes={"123456"},
+                         _registered_items_by_code={"123456": ("123456",)})
+    result = run_zero_base_probe(
+        {"claim": {"code": "123456", "route": "krx_nxt_integrated",
+                   "observed_epoch": 10},
+         "candidate": {"code": "123456", "route": "krx_nxt_integrated"}},
+        ws_manager=ws, ai_engine=object(), token="token", now=lambda: 11,
+    )
+    assert result["reason"] == "exact_route_subscription_conflict"
+    assert result["result"] == "source_unavailable"
 
 
 def test_machine_only_probe_passes_only_exact_fresh_input_and_releases_ws(monkeypatch):

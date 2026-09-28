@@ -11,18 +11,19 @@ import json
 import math
 import re
 import time
+from datetime import datetime
+
+from src.trading.market import session_contract
 
 from src.scanners.scanner_source_census import source_target_market_data_route
 from src.utils import kiwoom_utils
 from src.utils.kiwoom_read_request_control import REQUEST_CLASS_SOURCE_ONLY
 
 
-SCHEMA = "zero_base_discovery_panel_v1"
+SCHEMA = "zero_base_discovery_panel_v2"
 PANEL_REQUESTS = (
-    ("KOSPI", "001", "KRX", "1", "krx_only"),
-    ("KOSDAQ", "101", "KRX", "1", "krx_only"),
-    ("KOSPI", "001", "NXT", "2", "nxt_only"),
-    ("KOSDAQ", "101", "NXT", "2", "nxt_only"),
+    ("KOSPI", "001", "SOR", "3", "krx_nxt_integrated"),
+    ("KOSDAQ", "101", "SOR", "3", "krx_nxt_integrated"),
 )
 MAX_ROWS_PER_PANEL = 200  # Current adapter's ten-page bound, not market coverage.
 
@@ -34,7 +35,17 @@ def _sha256(value: dict) -> str:
 
 
 def fetch_discovery_panels(token, *, now_epoch=None, fetcher=None) -> dict:
-    """Read four exact-route panels through the shared source-only rate gate."""
+    """Read integrated KOSPI/KOSDAQ panels through the shared source-only gate."""
+    observed_epoch = time.time() if now_epoch is None else float(now_epoch)
+    context = session_contract.resolve_market_session(
+        datetime.fromtimestamp(observed_epoch, tz=session_contract.KST)
+    )
+    if context.session_regime not in {
+        session_contract.MARKET_SESSION_REGIME_KRX_REGULAR,
+        session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET,
+    }:
+        return {"schema": SCHEMA, "panels": [], "observations": [],
+                "source_status": "integrated_buy_session_unavailable"}
     fetcher = fetcher or kiwoom_utils.get_top_fluctuation_ka10027
     panels = []
     observations = []

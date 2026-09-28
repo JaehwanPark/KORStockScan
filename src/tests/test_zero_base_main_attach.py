@@ -6,6 +6,8 @@ from queue import Empty
 from types import SimpleNamespace
 
 from src.engine import kiwoom_sniper_v2 as main
+from src.engine import sniper_state_handlers as handlers
+from src.engine import kiwoom_orders
 
 
 class _Session:
@@ -37,7 +39,7 @@ class _Record:
 def _result():
     now = time.time()
     claim = {
-        "code": "123456", "route": "krx_only", "source_sha256": "b" * 64,
+        "code": "123456", "route": "krx_nxt_integrated", "source_sha256": "b" * 64,
         "claim_count": 1,
     }
     return {
@@ -62,7 +64,7 @@ def _prepare(monkeypatch):
     )
     monkeypatch.setattr(main, "is_scalping_buy_time_allowed", lambda _time: True)
     monkeypatch.setattr(main, "scalping_session_venue_provenance", lambda _epoch: {
-        "market_session_bucket": "KRX_REGULAR",
+        "market_session_bucket": "krx_regular", "market_session_regime": "KRX_REGULAR",
     })
     monkeypatch.setattr(main, "_scalping_attach_capacity_decision", lambda *_args: (True, [], {}))
     monkeypatch.setattr(main, "_scanner_scheduler_startup_mode", lambda: "blocking_v0")
@@ -74,6 +76,9 @@ def test_enter_now_commits_only_matching_attached_watching_row(monkeypatch):
     rows, targets = _prepare(monkeypatch)
 
     def attach(payload):
+        assert payload["market_data_route"] == "krx_nxt_integrated"
+        assert payload["broker_route"] == "SOR"
+        assert payload["effective_venue"] == "KRX"
         targets.append({
             "id": payload["record_id"], "code": payload["code"],
             "status": "WATCHING", "zero_base_pending_db": True,
@@ -86,6 +91,51 @@ def test_enter_now_commits_only_matching_attached_watching_row(monkeypatch):
     assert "zero_base_pending_db" not in targets[0]
     assert main.handle_zero_base_machine_enter(_result()) is False
     assert len(rows) == 1
+
+
+def test_integrated_aftermarket_attaches_integrated_cohort_and_sor(monkeypatch):
+    rows, targets = _prepare(monkeypatch)
+    monkeypatch.setattr(main, "scalping_session_venue_provenance", lambda _epoch: {
+        "market_session_bucket": "KRX_NXT_AFTERMARKET",
+        "market_session_regime": "KRX_NXT_AFTERMARKET",
+    })
+    def attach(payload, **_kwargs):
+        targets.append({"id": payload["record_id"], "code": payload["code"], "status": "WATCHING"})
+        assert payload["effective_venue"] == "KRX_NXT_INTEGRATED"
+        assert payload["broker_route"] == "SOR"
+        return True
+    monkeypatch.setattr(main, "_apply_scalping_scanner_promoted_target", attach)
+    assert main.handle_zero_base_machine_enter(_result()) is True
+    assert rows[1].effective_venue == "KRX_NXT_INTEGRATED"
+
+
+def test_separate_nxt_candidate_is_rejected(monkeypatch):
+    rows, targets = _prepare(monkeypatch)
+    result = _result()
+    result["claim"]["route"] = "nxt_only"
+    result["candidate"]["route"] = "nxt_only"
+    assert main.handle_zero_base_machine_enter(result) is False
+    assert rows == {} and targets == []
+
+
+def test_zero_base_entry_request_binds_sor_and_fails_closed_on_lost_route():
+    stock = {
+        "source_signature": "ZERO_BASE_DISCOVERY:" + "b" * 64,
+        "market_data_route": "krx_nxt_integrated",
+        "broker_route": "SOR", "effective_venue": "KRX_NXT_INTEGRATED",
+    }
+    request = {"qty": 1, "price": 10000, "order_type_code": "00"}
+    assert handlers._bind_zero_base_sor_order_request(stock, request)
+    assert request["dmst_stex_tp"] == "SOR"
+    assert kiwoom_orders.describe_buy_order_resolution(
+        "00", price=10000, dmst_stex_tp=request["dmst_stex_tp"],
+    )["effective_dmst_stex_tp"] == "SOR"
+    for field, value in (("broker_route", "NXT"),
+                         ("market_data_route", "nxt_only"),
+                         ("effective_venue", "NXT")):
+        assert not handlers._bind_zero_base_sor_order_request(
+            {**stock, field: value}, {},
+        )
 
 
 def test_enter_now_failure_expires_provisional_row(monkeypatch):

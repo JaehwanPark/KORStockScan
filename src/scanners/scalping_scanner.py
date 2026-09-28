@@ -6866,7 +6866,7 @@ def run_zero_base_scanner(*, token, event_bus, is_test_mode=False):
                 event_bus=event_bus,
                 session_date=session_date,
                 state_path=(
-                    DATA_DIR / "runtime" / "zero_base_discovery_queue"
+                    DATA_DIR / "runtime" / "zero_base_discovery_queue_integrated_v2"
                     / f"{session_date}.json"
                 ),
             )

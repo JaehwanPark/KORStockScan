@@ -143,26 +143,36 @@ class DiscoveryQueue:
             raise ValueError("negative queue budget")
         if max_observation_age_sec is not None and max_observation_age_sec <= 0:
             raise ValueError("invalid observation age budget")
-        ready = sorted(
-            (
-                candidate
-                for candidate in self._candidates.values()
-                if candidate.next_due_epoch <= now_epoch
+        ready_by_cohort: dict[tuple[str, str], list[Candidate]] = {}
+        cohort_claims: dict[tuple[str, str], int] = {}
+        for candidate in self._candidates.values():
+            cohort = (candidate.market, candidate.route)
+            cohort_claims[cohort] = cohort_claims.get(cohort, 0) + candidate.claim_count
+            if (
+                candidate.next_due_epoch <= now_epoch
                 and not candidate.in_flight
                 and candidate.last_claim_epoch + min_interval_sec <= now_epoch
                 and (
                     max_observation_age_sec is None
                     or 0 <= now_epoch - candidate.observed_epoch <= max_observation_age_sec
                 )
-            ),
-            key=lambda row: (
+            ):
+                ready_by_cohort.setdefault(cohort, []).append(candidate)
+        for cohort_ready in ready_by_cohort.values():
+            cohort_ready.sort(key=lambda row: (
                 row.last_claim_epoch,
                 row.first_seen_epoch,
                 -row.discovery_volume,
                 row.code,
-                row.route,
-            ),
-        )[:limit]
+            ))
+        ready = []
+        while len(ready) < limit:
+            available = [key for key, rows in ready_by_cohort.items() if rows]
+            if not available:
+                break
+            cohort = min(available, key=lambda key: (cohort_claims[key], key))
+            ready.append(ready_by_cohort[cohort].pop(0))
+            cohort_claims[cohort] += 1
         for candidate in ready:
             candidate.last_claim_epoch = now_epoch
             candidate.claim_count += 1

@@ -8723,7 +8723,7 @@ def handle_zero_base_machine_enter(result):
         or candidate.get("code") != code
         or candidate.get("route") != route
         or candidate.get("source_sha256") != claim.get("source_sha256")
-        or route not in {"krx_only", "nxt_only"}
+        or route != "krx_nxt_integrated"
         or not isinstance(result.get("result_epoch"), (int, float))
         or not 0 <= now_epoch - result["result_epoch"] <= 5
         or not isinstance(result.get("probe_price"), int)
@@ -8739,7 +8739,15 @@ def handle_zero_base_machine_enter(result):
     ):
         _zero_base_attach_receipt(result, outcome="rejected", reason="invalid_or_stale_machine_result")
         return False
-    venue = "KRX" if route == "krx_only" else "NXT"
+    session_fields = scalping_session_venue_provenance(now_epoch)
+    session_regime = session_fields.get("market_session_regime")
+    if session_regime == session_contract.MARKET_SESSION_REGIME_KRX_REGULAR:
+        venue = "KRX"
+    elif session_regime == session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET:
+        venue = "KRX_NXT_INTEGRATED"
+    else:
+        _zero_base_attach_receipt(result, outcome="rejected", reason="integrated_route_session_unavailable")
+        return False
     source_hash = str(claim.get("source_sha256") or "")
     source_signature = "ZERO_BASE_DISCOVERY:" + source_hash
     if len(source_hash) != 64 or any(char not in "0123456789abcdef" for char in source_hash):
@@ -8772,9 +8780,8 @@ def handle_zero_base_machine_enter(result):
         "venue": venue,
         "effective_venue": venue,
         "market_data_route": route,
-        "market_session_bucket": scalping_session_venue_provenance(now_epoch).get(
-            "market_session_bucket"
-        ),
+        "broker_route": "SOR",
+        "market_session_bucket": session_fields.get("market_session_bucket"),
         "zero_base_pending_db": True,
         "zero_base_probe_machine_bundle_sha256": result.get("machine_bundle_sha256"),
         "zero_base_probe_trade_epoch": result.get("probe_trade_epoch"),
@@ -9056,6 +9063,8 @@ def _apply_scalping_scanner_promoted_target(payload, *, mutation_lock=ENTRY_LOCK
                         "scanner_promotion_reason": refresh_promotion_reason,
                         "scanner_promotion_emitted_epoch": refresh_promotion_epoch,
                         "source_signature": refresh_source_signature,
+                        "market_data_route": payload.get("market_data_route"),
+                        "broker_route": payload.get("broker_route"),
                         "scanner_required_realtime_types": "0B",
                         "zero_base_pending_db": bool(payload.get("zero_base_pending_db")),
                         **refresh_venue_fields,
@@ -9101,7 +9110,8 @@ def _apply_scalping_scanner_promoted_target(payload, *, mutation_lock=ENTRY_LOCK
                 )
                 event_bus.publish(
                     "COMMAND_WS_REG",
-                    {"codes": [code], "source": "scanner_runtime_target_refresh"},
+                    {"codes": [code + "_AL" if payload.get("market_data_route") == "krx_nxt_integrated" else code],
+                     "source": "scanner_runtime_target_refresh"},
                 )
                 return True
 
@@ -9133,6 +9143,8 @@ def _apply_scalping_scanner_promoted_target(payload, *, mutation_lock=ENTRY_LOCK
             )
             or "",
             "source_signature": payload.get("source_signature") or "",
+            "market_data_route": payload.get("market_data_route"),
+            "broker_route": payload.get("broker_route"),
             "scanner_required_realtime_types": "0B",
             "zero_base_pending_db": bool(payload.get("zero_base_pending_db")),
             **_scanner_runtime_handoff_updates(
@@ -9194,7 +9206,8 @@ def _apply_scalping_scanner_promoted_target(payload, *, mutation_lock=ENTRY_LOCK
 
     event_bus.publish(
         "COMMAND_WS_REG",
-        {"codes": [code], "source": "scanner_runtime_target_attach"},
+        {"codes": [code + "_AL" if payload.get("market_data_route") == "krx_nxt_integrated" else code],
+         "source": "scanner_runtime_target_attach"},
     )
     _log_scanner_runtime_target_attach(
         payload_for_log,

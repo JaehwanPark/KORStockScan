@@ -44022,6 +44022,13 @@ def _initial_quantity_sequential_plan(
     first_price = _safe_int(
         first.get("price") or first.get("entry_split_order_market_reference_price"), 0)
     route = str(first.get("dmst_stex_tp") or stock.get("effective_venue") or "").upper()
+    if str(stock.get("source_signature") or "").startswith("ZERO_BASE_DISCOVERY:"):
+        if (
+            stock.get("market_data_route") != "krx_nxt_integrated"
+            or stock.get("broker_route") != "SOR"
+        ):
+            raise ValueError("zero_base_initial_quantity_route_invalid")
+        route = "SOR"
     if first_price <= 0 or route not in {"KRX", "NXT", "SOR"}:
         raise ValueError("initial_quantity_first_p1_or_route_invalid")
     legs = build_initial_quantity_type_legs(
@@ -70740,6 +70747,12 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             default_order_type_code=order_type_code,
             default_price=final_price,
         )
+        if not _bind_zero_base_sor_order_request(stock, request):
+            _log_entry_pipeline(
+                stock, code, "zero_base_order_route_invalid",
+                actual_order_submitted=False, broker_order_forbidden=True,
+            )
+            continue
         qty = request["qty"]
         broker_price = request["price"]
         price = int(request.get("guard_price", broker_price) or broker_price or 0)
@@ -81077,6 +81090,21 @@ def _finalize_buy_order_submission(
         f"mode={stock.get('entry_mode', 'unknown')} requested_qty={requested_qty} "
         f"legs={len(entry_orders)} primary_ord_no={primary_ord_no}"
     )
+
+
+def _bind_zero_base_sor_order_request(stock: dict, request: dict) -> bool:
+    """Keep zero-base broker orders on the exact integrated probe route."""
+    if not str(stock.get("source_signature") or "").startswith("ZERO_BASE_DISCOVERY:"):
+        return True
+    if (
+        stock.get("market_data_route") != "krx_nxt_integrated"
+        or stock.get("broker_route") != "SOR"
+        or str(stock.get("effective_venue") or "")
+        not in {"KRX", "KRX_NXT_INTEGRATED"}
+    ):
+        return False
+    request["dmst_stex_tp"] = "SOR"
+    return True
 
 
 def _resolve_live_entry_order_request(

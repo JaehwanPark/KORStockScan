@@ -12,7 +12,7 @@ HASH_A = "a" * 64
 HASH_B = "b" * 64
 
 
-def _observe(queue, code, *, route="krx_only", epoch=T0, digest=HASH_A, volume=0):
+def _observe(queue, code, *, route="krx_only", market="", epoch=T0, digest=HASH_A, volume=0):
     return queue.observe(
         code=code,
         route=route,
@@ -21,6 +21,7 @@ def _observe(queue, code, *, route="krx_only", epoch=T0, digest=HASH_A, volume=0
         source_scope="observed_panel",
         received_epoch=epoch + 1,
         discovery_volume=volume,
+        market=market,
     )
 
 
@@ -46,6 +47,26 @@ def test_same_age_unseen_candidates_use_liquidity_as_tie_breaker():
     assert first[0]["discovery_volume"] == 100
     assert queue.resolve(first[0], result="source_unavailable", next_due_epoch=T0 + 2)
     assert queue.claim(now_epoch=T0 + 3, limit=1)[0]["code"] == "000001"
+
+
+def test_fresh_panel_cohorts_rotate_before_one_panel_exhausts_budget():
+    queue = DiscoveryQueue(DAY)
+    cohorts = (
+        ("KOSPI", "krx_only"), ("KOSDAQ", "krx_only"),
+        ("KOSPI", "nxt_only"), ("KOSDAQ", "nxt_only"),
+    )
+    code = 1
+    for market, route in cohorts:
+        for _ in range(20):
+            _observe(queue, f"{code:06d}", market=market, route=route)
+            code += 1
+    first = queue.claim(now_epoch=T0 + 2, limit=8)
+    assert len(first) == 8
+    assert {cohort: sum((row["market"], row["route"]) == cohort for row in first)
+            for cohort in cohorts} == {cohort: 2 for cohort in cohorts}
+    next_four = [queue.claim(now_epoch=T0 + 3 + index, limit=1)[0]
+                 for index in range(4)]
+    assert {(row["market"], row["route"]) for row in next_four} == set(cohorts)
 
 
 def test_exact_source_generation_and_route_block_stale_resolution():

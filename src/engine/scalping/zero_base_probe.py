@@ -145,7 +145,15 @@ def run_zero_base_probe(
         result["result"] = "policy_unavailable"
         result["reason"] = "runtime_dependency_missing"
         return result
-    was_subscribed = code in getattr(ws_manager, "subscribed_codes", set())
+    subscribed_codes = getattr(ws_manager, "subscribed_codes", set())
+    registered_items = getattr(ws_manager, "_registered_items_by_code", {})
+    if code in subscribed_codes and hasattr(ws_manager, "_registered_items_by_code"):
+        if item not in registered_items.get(code, ()):
+            result["reason"] = "exact_route_subscription_conflict"
+            return result
+        was_subscribed = True
+    else:
+        was_subscribed = code in subscribed_codes and item == code
     registered_epoch = now()
     deferred_release = False
     try:
