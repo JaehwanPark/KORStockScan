@@ -1,10 +1,16 @@
 # 제로베이스 SCALPING 발견·기계판정 구현 리뷰와 릴리스 문턱 — 2026-09-28
 
+## 18:05 KST 활동성 후보의 판정 가능성 우선 순환
+
+- **동일 PID·세션 관측:** 10초 관측 릴리스 PID `752307`의 18:00:40~18:05 KST probe 178건/178개 코드 중 기계판정은 7건이었다. 활동성 원천 97건 중 7건(첫 0B 15·0D 31), 상승률 원천 81건 중 0건(첫 0B 2·0D 6)이다. 모두 같은 통합 애프터마켓 `_AL` route의 source-only 발견 후보이며, 시장 전체·정규장/프리마켓의 기대수익 비교는 아니다. 기계판정 7건은 모두 `RECHECK`였고 신규 감시·제출은 없었다. 30초 snapshot 표본의 WS 등록 item은 35~36/56, 신규 websocket error는 확인되지 않았으며 순간 전체 peak는 별도다.
+- **큐 변경:** 신규 발견 claim 8개 중 활동성 3·상승률 1의 반복 순서를 사용해 활동성 후보를 먼저 기계판정기에 보낸다. 해당 종류가 없으면 남은 후보로 즉시 채운다. source 종류와 무관하게 KOSPI/KOSDAQ 안에서 기존 마지막 claim·첫 발견 순서를 유지하며, 상승률 후보의 최소 1/4 순환을 보전한다. claim 순서를 queue snapshot에 영속화해 1개씩 dispatch하거나 PID가 재기동해도 상승률 후보가 사라지지 않는다. source-kind는 발견 우선순위일 뿐 ENTER_NOW, 감시 편입, 주문 허가가 아니다. 총 claim/worker/WS/REST 예산과 3초 최종 신선도·hard safety는 그대로다.
+- **검증·수용:** 활동성/상승률 두 시장의 6:2 순환, 단건 claim의 재기동 후 순서, 기존 source gap·세대·route 영향 회귀 56건, Python compile, `git diff --check`, 문서 print-only parser가 통과했다. 새 PID에서 source-kind별 첫 수신·기계판정, 감시·제출, API/WS 부하를 같은 세션으로 대사하고 비용 후 순익은 완료 체결 뒤 별도로 판단한다.
+
 ## 18:00 KST 짧은 수신창 보완과 처리량 경계
 
 - **수신 실측:** Main 구독 정리 충돌을 막은 PID `748532`의 17:54~17:58 첫 probe 167건은 기계판정 5건(`BLOCK` 1, `RECHECK` 4), 첫 정확 0B 10건·0D 37건, `route_snapshot_missing` 129건이었다. 수정 전 다른 후보·시간대의 0/158과 단순 효과율로 비교하지 않는다. 진행 중 임시 WS 구독을 Main이 정리한 로그는 새 PID에서 확인되지 않았고, probe 자체 종료의 REMOVE가 별도로 발생한다.
 - **보완:** 자료가 일찍 준비되면 즉시 반환하는 규칙을 유지하면서 전 세션 기본 임시 WS 관측 상한을 5초→10초로 늘린다. 프리마켓·통합 애프터마켓의 한쪽 수신일 때만 추가 최대 2초로 12초 상한이다. 긴 결손 대기로 큐가 막히지 않도록 worker 5→10, bounded 예약 12→16으로 조정한다. 회차당 claim 8·10초 dispatch, source 관측 120초, WS item hard budget 56, 공유 REST 5/4 admission과 최종 0B·0D 3초 신선도·기계 다섯 틱 계약·주문 안전 가드는 유지한다. 17:55 snapshot의 등록 item은 30/56이며 10개 동시 신규 probe의 이론상 40/56은 순간 peak·다른 owner의 동시 증감을 보증하지 않는다. 예산 초과는 기존 REG 거절로 남긴다.
-- **검증·수용:** 초기 WS 스냅샷이 비어 있다가 bounded 대기 안에 정확 route 0B·0D가 들어오는 회귀를 추가했다. 영향 회귀 409건, Python compile, `git diff --check`, 문서 print-only parser가 통과했다. 새 PID의 작업자 보류·WS peak·첫 수신·기계판정·제출은 후속 영수증으로 분리한다.
+- **검증·배포:** 초기 WS 스냅샷이 비어 있다가 bounded 대기 안에 정확 route 0B·0D가 들어오는 회귀를 추가했다. 영향 회귀 409건, Python compile, `git diff --check`, 문서 print-only parser가 통과했다. 커밋 `b158b81a7ef7707740a99168676fded04c37395d`의 불변 릴리스 `/home/ubuntu/KORStockScan-runtime-releases/zero-base-ten-second-probe-20260928-b158b81a`에 `.gitignore`·`configs`를 처음부터 포함해 선택·정상 재기동했다. 선택 이전 포인터는 `tmp/zero-base-ten-second-selection-before-deploy-20260928T180029.json`에 보존했다. Main PID `752307`의 새 릴리스 cwd, runtime source clean, scanner flag=true, 56-item WS budget env, 9/28 정책 bootstrap PASS 및 release-set의 PID 결속 PASS를 확인했다. release-set의 기능 상태는 `not_assessed`다. 새 PID의 작업자 보류·WS peak·첫 수신·기계판정·제출은 후속 자연 영수증으로 분리한다.
 
 ## 17:52 KST 임시 WS 구독과 Main 정리 충돌 수리
 

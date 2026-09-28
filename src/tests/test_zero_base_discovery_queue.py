@@ -12,7 +12,8 @@ HASH_A = "a" * 64
 HASH_B = "b" * 64
 
 
-def _observe(queue, code, *, route="krx_only", market="", epoch=T0, digest=HASH_A, volume=0):
+def _observe(queue, code, *, route="krx_only", market="", epoch=T0, digest=HASH_A,
+             volume=0, kind=""):
     return queue.observe(
         code=code,
         route=route,
@@ -22,6 +23,7 @@ def _observe(queue, code, *, route="krx_only", market="", epoch=T0, digest=HASH_
         received_epoch=epoch + 1,
         discovery_volume=volume,
         market=market,
+        source_kind=kind,
     )
 
 
@@ -67,6 +69,47 @@ def test_fresh_panel_cohorts_rotate_before_one_panel_exhausts_budget():
     next_four = [queue.claim(now_epoch=T0 + 3 + index, limit=1)[0]
                  for index in range(4)]
     assert {(row["market"], row["route"]) for row in next_four} == set(cohorts)
+
+
+def test_active_volume_candidates_get_bounded_priority_without_starving_gainers():
+    queue = DiscoveryQueue(DAY)
+    for index in range(1, 13):
+        _observe(queue, f"{index:06d}", market="KOSPI" if index % 2 else "KOSDAQ",
+                 route="krx_nxt_integrated", kind="activity")
+    for index in range(13, 25):
+        _observe(queue, f"{index:06d}", market="KOSPI" if index % 2 else "KOSDAQ",
+                 route="krx_nxt_integrated", kind="gainers")
+
+    first = queue.claim(now_epoch=T0 + 2, limit=8)
+    assert [row["source_kind"] for row in first] == [
+        "activity", "activity", "activity", "gainers",
+        "activity", "activity", "activity", "gainers",
+    ]
+    assert {row["market"] for row in first if row["source_kind"] == "activity"} == {
+        "KOSPI", "KOSDAQ",
+    }
+    assert {row["market"] for row in first if row["source_kind"] == "gainers"} == {
+        "KOSPI", "KOSDAQ",
+    }
+    restored = DiscoveryQueue.restore(queue.snapshot(), session_date=DAY)
+    assert {row["source_kind"] for row in restored.snapshot()["candidates"]} == {
+        "activity", "gainers",
+    }
+
+
+def test_single_claim_calls_keep_source_rotation_after_restart():
+    queue = DiscoveryQueue(DAY)
+    for index in range(1, 9):
+        _observe(queue, f"{index:06d}", kind="activity")
+    for index in range(9, 17):
+        _observe(queue, f"{index:06d}", kind="gainers")
+    first = [queue.claim(now_epoch=T0 + 2 + index, limit=1)[0]["source_kind"]
+             for index in range(4)]
+    assert first == ["activity", "activity", "activity", "gainers"]
+    restored = DiscoveryQueue.restore(queue.snapshot(), session_date=DAY)
+    second = [restored.claim(now_epoch=T0 + 10 + index, limit=1)[0]["source_kind"]
+              for index in range(4)]
+    assert second == first
 
 
 def test_exact_source_generation_and_route_block_stale_resolution():

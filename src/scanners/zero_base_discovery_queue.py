@@ -51,6 +51,7 @@ class DiscoveryQueue:
     def __init__(self, session_date: str):
         self.session_date = date.fromisoformat(session_date).isoformat()
         self._candidates: dict[tuple[str, str], Candidate] = {}
+        self._claim_sequence = 0
 
     def observe(
         self,
@@ -150,10 +151,13 @@ class DiscoveryQueue:
             raise ValueError("negative queue budget")
         if max_observation_age_sec is not None and max_observation_age_sec <= 0:
             raise ValueError("invalid observation age budget")
-        ready_by_cohort: dict[tuple[str, str], list[Candidate]] = {}
-        cohort_claims: dict[tuple[str, str], int] = {}
+        ready_by_cohort: dict[tuple[str, str, str], list[Candidate]] = {}
+        cohort_claims: dict[tuple[str, str, str], int] = {}
         for candidate in self._candidates.values():
-            cohort = (candidate.market, candidate.route)
+            # Activity is a discovery hint, not an entry decision. Reserve one
+            # in four claims for other panels so they remain observable.
+            kind = "activity" if candidate.source_kind == "activity" else "gainers"
+            cohort = (candidate.market, candidate.route, kind)
             cohort_claims[cohort] = cohort_claims.get(cohort, 0) + candidate.claim_count
             if (
                 (eligible_routes is None or candidate.route in eligible_routes)
@@ -179,13 +183,20 @@ class DiscoveryQueue:
             available = [key for key, rows in ready_by_cohort.items() if rows]
             if not available:
                 break
-            cohort = min(available, key=lambda key: (cohort_claims[key], key))
+            preferred_kind = (
+                "gainers" if (self._claim_sequence + len(ready)) % 4 == 3
+                else "activity"
+            )
+            preferred = [key for key in available if key[2] == preferred_kind]
+            cohort = min(preferred or available,
+                         key=lambda key: (cohort_claims[key], key))
             ready.append(ready_by_cohort[cohort].pop(0))
             cohort_claims[cohort] += 1
         for candidate in ready:
             candidate.last_claim_epoch = now_epoch
             candidate.claim_count += 1
             candidate.in_flight = True
+        self._claim_sequence += len(ready)
         return [
             {
                 "code": row.code,
@@ -265,6 +276,7 @@ class DiscoveryQueue:
         return {
             "schema": SCHEMA,
             "session_date": self.session_date,
+            "claim_sequence": self._claim_sequence,
             "candidates": [
                 asdict(row)
                 for row in sorted(
@@ -278,6 +290,10 @@ class DiscoveryQueue:
         queue = cls(session_date)
         if snapshot.get("schema") != SCHEMA or snapshot.get("session_date") != queue.session_date:
             raise ValueError("queue snapshot date or schema mismatch")
+        sequence = snapshot.get("claim_sequence", 0)
+        if type(sequence) is not int or sequence < 0:
+            raise ValueError("invalid queue claim sequence")
+        queue._claim_sequence = sequence
         for raw in snapshot.get("candidates", []):
             row = Candidate(**raw)
             if (
