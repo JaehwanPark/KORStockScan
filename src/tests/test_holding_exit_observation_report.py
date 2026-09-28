@@ -90,6 +90,11 @@ def _trade(
         "profit_rate": profit_rate,
         "realized_pnl_krw": realized_pnl_krw,
         "entry_mode": entry_mode,
+        "exit_signal": {
+            "exit_rule": exit_rule,
+            "binding_status": "same_order_generation",
+            "inferred": False,
+        },
         "timeline": timeline,
     }
 
@@ -400,6 +405,18 @@ def test_position_outcome_distinguishes_exact_cost_ai_and_post_sell_quality():
     assert outcomes[1]["post_sell_status"] == "not_observable_no_exact_fill_time"
 
 
+def test_unbound_explicit_signal_is_not_observed_decision():
+    trade = _trade(42)
+    trade["exit_signal"] = {
+        "exit_rule": "scalp_trailing_take_profit",
+        "binding_status": "legacy_unbound",
+    }
+    outcomes, coverage = report_mod._build_position_outcomes([trade], [])
+    assert outcomes[0]["exit_rule_provenance"] == "inferred"
+    assert outcomes[0]["exit_signal_binding_status"] == "legacy_unbound"
+    assert coverage["observed_exit_signal_trades"] == 0
+
+
 def test_post_sell_pass_requires_mature_horizons_and_matching_anchor():
     trade = _trade(1, realized_pnl_krw=77)
     trade["exact_sell_fill_time"] = "2026-09-23T09:40:00+09:00"
@@ -559,6 +576,7 @@ def test_trailing_direct_input_receipt_preserves_trigger_and_source_gap():
     }
     trade["exit_signal"] = {
         "exit_rule": "scalp_trailing_take_profit",
+        "binding_status": "same_order_generation",
         "fields": fields,
     }
     trade["timeline"][1]["fields"].update(fields)

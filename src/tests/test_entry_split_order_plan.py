@@ -114,9 +114,10 @@ def test_acknowledged_entry_leg_merges_duplicate_policy_receipts():
         order_resolution_fields={'broker_route':'KRX'}, entry_execution_cohort='KRX',
         split_leg_meta_fields={**stock, 'entry_split_order_policy_sha256':'leg-policy'},
         real_pre_submit_guard_fields={}, submit_revalidation_fields={},
-        buy_parent_id='attempt-1', buy_child_id='attempt-1:acknowledged-1',
-        buy_owner_type='main_scalping', buy_owner_id='main_scalping:1',
-        buy_account_key='account-a', buy_intent_id='intent-1',
+            buy_parent_id='attempt-1', buy_child_id='attempt-1:acknowledged-1',
+            buy_owner_type='main_scalping', buy_owner_id='main_scalping:1',
+            buy_owner_context=None,
+            buy_account_key='account-a', buy_intent_id='intent-1',
         buy_registry_mode='registry_managed', buy_owner_policy_fields={},
         buy_planned_qty=None, sequential_first=False,
         _entry_price_ai_trace_fields=lambda _: {},
@@ -946,6 +947,271 @@ def test_postclose_report_blocks_selection_on_atomic_entry_contract_failure(
     assert atomic["daily_plan_invalid_count"] == 1
     assert atomic["daily_real_submit_missing_plan_count"] == 1
     assert report["recommended_policy"]["candidate_count"] == 0
+
+
+def _atomic_lineage_fixture(day="2026-09-28"):
+    core = {
+        "schema_version": "entry_execution_sizing_plan_v1",
+        "stage": "entry", "action_receipt_id": "action-1",
+        "effective_venue": "KRX", "market_session_bucket": "KRX_REGULAR",
+        "total_qty": 3, "immediate_qty": 1, "deferred_probe_residual_qty": 2,
+        "leg_count": 2, "legs": [{"leg_index": 1, "qty": 1}, {"leg_index": 2, "qty": 2}],
+        "valid": True, "blockers": [], "quantity_conservation_holds": True,
+    }
+    sha = split_plan._canonical_sha256(core)
+    fields = {"entry_execution_sizing_plan_id": f"entry-sizing-{sha[:24]}",
+              "entry_execution_sizing_plan_sha256": sha,
+              "entry_execution_sizing_action_receipt_id": "action-1",
+              "entry_execution_sizing_plan_emitted": True,
+              "entry_execution_sizing_valid": True,
+              "entry_execution_sizing_total_qty": 3,
+              "entry_execution_sizing_leg_count": 2,
+              "entry_submit_attempt_id": "attempt-1",
+              "stock_code": "005930", "record_id": "record-1",
+              "effective_venue": "KRX", "market_session_bucket": "KRX_REGULAR",
+              "source_date": day}
+    plan = {**fields, "stage": "entry_execution_sizing_plan",
+            "emitted_at": f"{day}T10:00:00+09:00",
+            "entry_execution_sizing_plan": core, "requested_qty": 3}
+    leg = {**fields, "stage": "order_leg_sent", "actual_order_submitted": True,
+           "emitted_at": f"{day}T10:00:01+09:00", "broker_order_no": "0012345",
+           "entry_split_order_leg_index": 0, "requested_qty": 1,
+           "submitted_qty": 1, "buy_parent_id": "attempt-1",
+           "buy_owner_type": "main_scalping",
+           "buy_owner_id": "main_scalping:record-1",
+           "buy_account_key": "account-1", "broker_route": "KRX"}
+    bundle = {**leg, "stage": "order_bundle_submitted",
+              "emitted_at": f"{day}T10:00:02+09:00", "requested_qty": 3}
+    source = {"status": "ready", "source_date": day,
+              "generation_sha256": "a" * 64}
+    return plan, leg, bundle, source
+
+
+def test_atomic_sizing_lineage_joins_plan_and_one_leg_without_double_count():
+    plan, leg, bundle, source = _atomic_lineage_fixture()
+    result = split_plan.build_atomic_execution_sizing_lineage(
+        "2026-09-28", [plan, leg, bundle], source_generation=source)
+    assert result["counts"]["raw_plan_events"] == 1
+    assert result["counts"]["raw_submit_events"] == 2
+    assert result["counts"]["unique_leg_orders"] == 1
+    assert result["counts"]["identity_joined_plan_count"] == 1
+    assert result["counts"]["valid_plan_count"] == 1
+    assert result["counts"]["unjoined_submit_count"] == 0
+    row = result["rows"][0]
+    assert (row["attempt_id"], row["plan_id"], row["submitted_qty"],
+            row["not_submitted_qty"]) == ("attempt-1", plan["entry_execution_sizing_plan_id"], 1, 2)
+    assert row["filled_qty"] is None
+    assert row["terminal_state"] == "not_observed"
+
+
+def test_atomic_sizing_lineage_quarantines_wrong_attempt_and_changed_plan():
+    plan, leg, bundle, source = _atomic_lineage_fixture()
+    wrong = {**leg, "entry_submit_attempt_id": "other-attempt"}
+    result = split_plan.build_atomic_execution_sizing_lineage(
+        "2026-09-28", [plan, wrong, bundle], source_generation=source)
+    assert result["counts"]["unjoined_submit_count"] == 1
+    assert result["source_quality_reason"] == "plan_or_owner_row_quarantined"
+    assert result["unjoined_submits"][0]["source_quality_reason"] == (
+        "submit_plan_identity_unjoined")
+    assert result["unjoined_submits"][0]["attempt_id"] == "other-attempt"
+    assert result["counts"]["valid_plan_count"] == 0
+    changed = {**plan, "entry_execution_sizing_plan": {
+        **plan["entry_execution_sizing_plan"], "total_qty": 4}}
+    result = split_plan.build_atomic_execution_sizing_lineage(
+        "2026-09-28", [changed, leg, bundle], source_generation=source)
+    assert result["counts"]["quarantined_plan_count"] == 1
+    assert result["source_quality_reason"] == "plan_or_owner_row_quarantined"
+    assert "plan_content_sha_mismatch" in result["rows"][0]["source_quality_reasons"]
+    owner_missing = {**leg, "buy_owner_id": None, "buy_account_key": None}
+    result = split_plan.build_atomic_execution_sizing_lineage(
+        "2026-09-28", [plan, owner_missing, bundle], source_generation=source)
+    assert result["counts"]["identity_joined_plan_count"] == 1
+    assert result["counts"]["quarantined_plan_count"] == 1
+    assert "submit_owner_account_route_missing" in result["rows"][0]["source_quality_reasons"]
+
+
+def test_atomic_sizing_lineage_separates_deferred_and_intentional_block():
+    plan, leg, bundle, source = _atomic_lineage_fixture()
+    deferred = {**plan, "record_id": "record-2", "entry_submit_attempt_id": "attempt-2",
+                "entry_execution_sizing_plan": None, "entry_execution_sizing_plan_id": None,
+                "entry_execution_sizing_plan_sha256": None,
+                "entry_execution_sizing_plan_emitted": False,
+                "entry_execution_sizing_valid": True}
+    blocked = {**deferred, "stage": "entry_execution_sizing_plan_block",
+               "record_id": "record-3", "entry_submit_attempt_id": "attempt-3",
+               "entry_execution_sizing_valid": False,
+               "entry_execution_sizing_blockers": ["planned_orders_missing"]}
+    result = split_plan.build_atomic_execution_sizing_lineage(
+        "2026-09-28", [plan, leg, bundle, deferred, blocked], source_generation=source)
+    assert result["counts"]["issued_plan_count"] == 1
+    assert result["counts"]["deferred_no_plan_count"] == 1
+    assert result["counts"]["blocked_no_plan_count"] == 1
+    assert result["counts"]["quarantined_plan_count"] == 0
+    no_receipt = {**blocked,
+                  "entry_execution_sizing_disposition": "blocked_no_action_receipt",
+                  "entry_execution_sizing_blockers": ["machine_action_receipt_absent"]}
+    result = split_plan.build_atomic_execution_sizing_lineage(
+        "2026-09-28", [no_receipt], source_generation=source)
+    assert result["counts"]["blocked_no_action_receipt_count"] == 1
+    assert result["counts"]["quarantined_plan_count"] == 0
+    corrupt = {**deferred, "entry_execution_sizing_blockers": ["unexpected"]}
+    result = split_plan.build_atomic_execution_sizing_lineage(
+        "2026-09-28", [corrupt], source_generation=source)
+    assert result["rows"][0]["state"] == "quarantined"
+    assert result["counts"]["quarantined_plan_count"] == 1
+
+
+def _atomic_registry_rows(day, qty, filled, *, terminal=False, cancel_pending=False):
+    common = {"intent_id": "intent-1", "account_key": "account-1",
+              "order_date": day, "symbol": "005930", "side": "BUY", "action": "NEW",
+              "quantity": qty, "route": "KRX", "owner_type": "main_scalping",
+              "owner_id": "main_scalping:record-1", "broker_order_no": "0012345",
+              "canceled_qty": 0}
+    rows = [{**common, "event": "ORDER_BOUND", "state": "ORDER_BOUND",
+             "filled_qty": 0}]
+    if filled:
+        rows.append({**common, "event": "FILL_RECORDED", "state": "ORDER_BOUND",
+                     "filled_qty": filled, "execution_no": "execution-1"})
+    if cancel_pending:
+        rows.append({**common, "intent_id": "cancel-1", "action": "CANCEL",
+                     "original_order_no": "0012345", "event": "INTENT_RESERVED",
+                     "state": "INTENT_RESERVED"})
+    if terminal:
+        rows.append({**common, "event": "ORDER_TERMINAL", "state": "ORDER_TERMINAL",
+                     "filled_qty": filled})
+        proof = {**common, "schema": "order_owner_terminal_reconciliation_v1",
+                 "filled_qty": filled, "receipt_sha256": "f" * 64}
+        rows.append({"intent_id": "intent-1", "account_key": "account-1",
+                     "event": "TERMINAL_RECONCILIATION_RECORDED",
+                     "observed_at_kst": f"{day}T10:15:00+09:00",
+                     "terminal_reconciliation": proof})
+    return rows
+
+
+def test_atomic_sizing_lineage_registry_full_partial_cancel_and_restart():
+    day = "2026-09-28"
+    plan, leg, bundle, source = _atomic_lineage_fixture(day)
+    leg = {**leg, "buy_owner_type": "main_scalping",
+           "buy_owner_id": "main_scalping:record-1",
+           "buy_account_key": "account-1", "owner_registry_intent_id": "intent-1",
+           "broker_route": "KRX"}
+    bundle = {**bundle, **{key: leg[key] for key in
+              ("buy_owner_type", "buy_owner_id", "buy_account_key",
+               "owner_registry_intent_id", "broker_route")}}
+    full = split_plan.build_atomic_execution_sizing_lineage(
+        day, [plan, leg, leg, bundle], source_generation=source,
+        registry_events=_atomic_registry_rows(day, 1, 1, terminal=True))
+    assert full["counts"]["excluded_duplicate_submit_event_count"] == 1
+    assert full["rows"][0]["terminal_state"] == "full"
+    assert full["rows"][0]["execution_ids"] == ["execution-1"]
+    assert full["rows"][0]["cost_krw"] is None
+
+    core = {**plan["entry_execution_sizing_plan"], "immediate_qty": 2,
+            "deferred_probe_residual_qty": 1,
+            "legs": [{"leg_index": 1, "qty": 2}, {"leg_index": 2, "qty": 1}]}
+    sha = split_plan._canonical_sha256(core)
+    fields = {"entry_execution_sizing_plan_id": f"entry-sizing-{sha[:24]}",
+              "entry_execution_sizing_plan_sha256": sha}
+    plan = {**plan, **fields, "entry_execution_sizing_plan": core}
+    leg = {**leg, **fields, "requested_qty": 2, "submitted_qty": 2}
+    bundle = {**bundle, **fields, "submitted_qty": 2}
+    partial = split_plan.build_atomic_execution_sizing_lineage(
+        day, [plan, leg, bundle], source_generation=source,
+        registry_events=_atomic_registry_rows(day, 2, 1))
+    assert partial["rows"][0]["terminal_state"] == "partial_open"
+    assert partial["rows"][0]["filled_qty"] == 1
+    cancel = split_plan.build_atomic_execution_sizing_lineage(
+        day, [plan, leg, bundle], source_generation=source,
+        registry_events=_atomic_registry_rows(day, 2, 1, cancel_pending=True))
+    assert cancel["rows"][0]["terminal_state"] == "cancel_pending"
+    resolved_cancel_journal = _atomic_registry_rows(day, 2, 1, cancel_pending=True)
+    resolved_cancel_journal.append({"intent_id": "cancel-1", "event": "ORDER_TERMINAL",
+                                    "state": "ORDER_TERMINAL"})
+    resolved = split_plan.build_atomic_execution_sizing_lineage(
+        day, [plan, leg, bundle], source_generation=source,
+        registry_events=resolved_cancel_journal)
+    assert resolved["rows"][0]["terminal_state"] == "partial_open"
+
+
+def test_atomic_sizing_lineage_uncertain_response_and_source_only_are_not_orders():
+    day = "2026-09-28"
+    plan, leg, bundle, source = _atomic_lineage_fixture(day)
+    uncertain = {**leg, "stage": "order_leg_no_response",
+                 "actual_order_submitted": False, "broker_order_no": None,
+                 "broker_submission_reconciliation_required": True}
+    pending = split_plan.build_atomic_execution_sizing_lineage(
+        day, [plan, uncertain], source_generation=source)
+    assert pending["counts"]["response_uncertain_attempt_count"] == 1
+    assert pending["counts"]["unique_leg_orders"] == 0
+    assert pending["rows"][0]["state"] == "response_uncertain"
+    sim_core = {**plan["entry_execution_sizing_plan"], "observation_only": True}
+    sha = split_plan._canonical_sha256(sim_core)
+    sim_plan = {**plan, "entry_execution_sizing_plan": sim_core,
+                "entry_execution_sizing_plan_id": f"entry-sizing-{sha[:24]}",
+                "entry_execution_sizing_plan_sha256": sha}
+    sim = split_plan.build_atomic_execution_sizing_lineage(
+        day, [sim_plan], source_generation=source)
+    assert sim["counts"]["excluded_source_only_plan_count"] == 1
+    assert sim["counts"]["valid_plan_count"] == 0
+    corrupt_sim = {**sim_plan, "entry_execution_sizing_plan_sha256": "0" * 64}
+    sim = split_plan.build_atomic_execution_sizing_lineage(
+        day, [corrupt_sim], source_generation=source)
+    assert sim["counts"]["excluded_source_only_plan_count"] == 0
+    assert sim["counts"]["quarantined_plan_count"] == 1
+
+
+def test_atomic_sizing_policy_reader_rejects_regenerated_source_generation(
+    monkeypatch, tmp_path
+):
+    day = "2026-09-28"
+    plan, leg, bundle, source = _atomic_lineage_fixture(day)
+    compact = tmp_path / "part-1.jsonl"
+    compact.write_text('{"stage":"order_leg_sent"}\n', encoding="utf-8")
+    source = {**source, "reader_projection": split_plan._atomic_sizing_projection_identity({
+        "status": "ready", "sources": [{"path": str(compact), "sha256": "c" * 64}],
+        "producer_census": {"manifest_sha256": "d" * 64},
+        "retained_event_count": 1, "full_population_coverage_verified": True})}
+    monkeypatch.setattr(split_plan, "_atomic_sizing_compact_inventory",
+                        lambda _day: [str(compact)])
+    lineage = split_plan.build_atomic_execution_sizing_lineage(
+        day, [plan, leg, bundle], source_generation=source)
+    monkeypatch.setattr(split_plan, "REPORT_DIR", tmp_path / "reports")
+    current = dict(source)
+    monkeypatch.setattr(split_plan, "_atomic_sizing_source_generation",
+                        lambda _day: current)
+    report_path = tmp_path / "entry_split_order_plan_2026-09-28.json"
+    policy = {
+        "schema_version": split_plan.POLICY_SCHEMA_VERSION,
+        "source_date": day, "source_report": str(report_path),
+        "policy_version": "entry_split_order_plan:2026-09-28:fixture",
+        "entry_execution_sizing_plan_schema": split_plan.ATOMIC_EXECUTION_SIZING_SCHEMA,
+        "entry_execution_sizing_policy": split_plan.ATOMIC_EXECUTION_SIZING_BASELINE_POLICY,
+        "entry_price_plan_schema": split_plan.ATOMIC_PRICE_PLAN_SCHEMA,
+        "runtime_apply_allowed": False,
+    }
+    report = {
+        "schema_version": split_plan.SCHEMA_VERSION,
+        "date": day,
+        "input_summary": {"atomic_execution_sizing": {"lineage": lineage}},
+        "recommended_policy": {
+            "policy_version": policy["policy_version"],
+            "entry_execution_sizing_plan_schema": split_plan.ATOMIC_EXECUTION_SIZING_SCHEMA,
+            "entry_execution_sizing_policy": split_plan.ATOMIC_EXECUTION_SIZING_BASELINE_POLICY,
+            "entry_price_plan_schema": split_plan.ATOMIC_PRICE_PLAN_SCHEMA,
+        },
+    }
+    report, policy = split_plan.bind_report_policy_generation(report, policy)
+    immutable = split_plan.generation_report_path(
+        day, report["artifact_generation_binding"]["generation_id"])
+    split_plan._write_json(immutable, report)
+    assert split_plan.policy_report_generation_contract_status(policy) == (
+        True, "generation_binding_valid")
+    compact.write_text('{"stage":"order_leg_fail"}\n', encoding="utf-8")
+    assert split_plan.policy_report_generation_contract_status(policy) == (
+        False, "atomic_sizing_reader_projection_stale")
+    current = {**source, "generation_sha256": "b" * 64}
+    assert split_plan.policy_report_generation_contract_status(policy) == (
+        False, "atomic_sizing_source_generation_stale")
 
 
 

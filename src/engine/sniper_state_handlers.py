@@ -19751,6 +19751,113 @@ def _holding_pipeline_observation_scope_fields(
     }
 
 
+def _exit_signal_receipt_fields(
+    stock: dict, code: str, fields: dict, *, now_ts: float | None = None,
+) -> dict[str, Any]:
+    """Freeze a real SCALPING exit decision for source-only order attribution."""
+    if (str(stock.get("strategy") or "").upper() not in {"SCALPING", "SCALP"}
+            or _is_any_simulated_position(stock, stock.get("strategy"))):
+        return {"exit_signal_binding_status": "not_applicable_nonreal_scalping"}
+    record_id = str(stock.get("id") or "").strip()
+    buy_identity = buy_fill_identity_from_runtime(stock)
+    if not record_id or not buy_identity:
+        stock.pop("_exit_signal_receipt", None)
+        return {"exit_signal_binding_status": "source_gap_buy_generation_missing"}
+    signal_at = datetime.fromtimestamp(
+        time.time() if now_ts is None else now_ts, tz=_KST,
+    ).isoformat(timespec="microseconds")
+    decision_input_keys = (
+        "reason", "sell_reason_type", "exit_decision_source", "profit_rate",
+        "peak_profit", "curr_price", "buy_price", "buy_qty",
+        "exit_threshold_status", "exit_threshold_key",
+        "exit_threshold_effective_pct", "exit_threshold_observed_pct",
+        "exit_threshold_trailing_start_pct",
+        "exit_threshold_trailing_arm_observed_pct",
+        "exit_threshold_classifier_version", "exit_threshold_peak_price",
+        "exit_threshold_executable_bid", "exit_threshold_bid_source",
+        "exit_threshold_trigger_kind", "holding_score_role_gate",
+        "holding_path_signal_id", "holding_path_signal_at",
+        "holding_path_policy_bundle_sha256",
+    )
+    contract = {
+        "schema": "holding_exit_signal_receipt_v1",
+        "source_date": signal_at[:10],
+        "signal_id": uuid4().hex,
+        "signal_at": signal_at,
+        "record_id": record_id,
+        "code": str(code or "").strip()[:6],
+        "position_key": _scalp_holding_source_position_key(stock, code),
+        "buy_fill_identity": buy_identity,
+        "strategy": str(stock.get("strategy") or "").upper(),
+        "position_tag": str(stock.get("position_tag") or ""),
+        "decision_owner_type": "main_scalping",
+        "exit_rule": str(fields.get("exit_rule") or "").strip(),
+        "policy_sha256": str(
+            fields.get("scalp_trailing_policy_value_sha256") or ""
+        ).strip(),
+        "threshold_key": str(fields.get("exit_threshold_key") or "").strip(),
+        "threshold_effective_pct": fields.get("exit_threshold_effective_pct"),
+        "context_venue": str(fields.get("holding_context_venue") or ""),
+        "context_session": str(fields.get("holding_context_session") or ""),
+        "decision_inputs": {
+            key: fields[key] for key in decision_input_keys if key in fields
+        },
+    }
+    canonical = json.dumps(contract, sort_keys=True, separators=(",", ":"),
+                           ensure_ascii=True, allow_nan=False, default=str)
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    stock["_exit_signal_receipt"] = {**contract, "sha256": digest}
+    return {
+        "exit_signal_binding_status": "decision_receipt_emitted",
+        "exit_signal_id": contract["signal_id"],
+        "exit_signal_at": signal_at,
+        "exit_signal_source_date": contract["source_date"],
+        "exit_signal_position_key": contract["position_key"],
+        "exit_signal_buy_fill_identity": buy_identity,
+        "exit_signal_contract": canonical,
+        "exit_signal_contract_sha256": digest,
+    }
+
+
+def _exit_signal_submission_fields(stock: dict, code: str, fields: dict) -> dict[str, Any]:
+    """Copy a decision reference only into its same-position SELL ACK."""
+    receipt = stock.get("_exit_signal_receipt")
+    if not isinstance(receipt, dict):
+        return {"exit_signal_binding_status": "source_gap_decision_receipt_missing"}
+    if (receipt.get("record_id") != str(stock.get("id") or "").strip()
+            or receipt.get("code") != str(code or "").strip()[:6]
+            or receipt.get("position_key") != _scalp_holding_source_position_key(
+                stock, code
+            )
+            or receipt.get("buy_fill_identity")
+            != buy_fill_identity_from_runtime(stock)):
+        return {"exit_signal_binding_status": "source_gap_buy_generation_mismatch"}
+    if receipt.get("exit_rule") != str(fields.get("exit_rule") or "").strip():
+        return {"exit_signal_binding_status": "source_gap_exit_rule_changed"}
+    generation = str(stock.get("sell_submit_generation") or "").strip()
+    context_sha = str(stock.get("sell_submit_context_sha256") or "").strip()
+    context = _sell_submit_context_payload(stock)
+    context_json = json.dumps(context, ensure_ascii=True, sort_keys=True,
+                              separators=(",", ":"), allow_nan=False)
+    if (not generation or len(context_sha) != 64
+            or hashlib.sha256(context_json.encode("utf-8")).hexdigest()
+            != context_sha):
+        return {"exit_signal_binding_status": "source_gap_submit_generation_missing"}
+    return {
+        "exit_signal_binding_status": "same_position_buy_generation",
+        "exit_signal_id": receipt["signal_id"],
+        "exit_signal_at": receipt["signal_at"],
+        "exit_signal_source_date": receipt["source_date"],
+        "exit_signal_position_key": receipt["position_key"],
+        "exit_signal_buy_fill_identity": receipt["buy_fill_identity"],
+        "exit_signal_contract_sha256": receipt["sha256"],
+        "sell_submit_generation": generation,
+        "sell_submit_context_sha256": context_sha,
+        "sell_submit_context_contract": context_json,
+        "exit_signal_submit_intended_route": context["intended_route"],
+    }
+
+
 def _log_holding_pipeline(stock, code, stage, **fields):
     if (stage in {"exit_signal", "sell_order_sent", "sell_completed"}
             and str(fields.get("exit_rule") or stock.get("last_exit_rule") or "")
@@ -19783,6 +19890,19 @@ def _log_holding_pipeline(stock, code, stage, **fields):
     fields.update(throttle_fields)
     for key, value in _holding_pipeline_observation_scope_fields(stock).items():
         fields.setdefault(key, value)
+    if stage in {"exit_signal", "sell_order_sent"}:
+        try:
+            fields.update(
+                _exit_signal_receipt_fields(stock, code, fields)
+                if stage == "exit_signal"
+                else _exit_signal_submission_fields(stock, code, fields)
+            )
+        except Exception as exc:
+            if stage == "exit_signal":
+                stock.pop("_exit_signal_receipt", None)
+            fields["exit_signal_binding_status"] = (
+                "source_gap_receipt_capture_failed:" + type(exc).__name__
+            )
     if _holding_stage_needs_probe_residual_causality(stage):
         for key, value in _probe_residual_scale_in_causal_fields(stock).items():
             fields.setdefault(key, value)
@@ -31226,6 +31346,27 @@ def _refresh_prepared_entry_inputs(code, ws_data, recent_ticks, candle_context):
             }
         )
         if refresh.get("pre_submit_ws_snapshot_refresh_applied"):
+            # The manager's aggregate frame can be from a concurrent KRX/NXT
+            # subscription. Rebind to the prepared route's own 0B/0D rows;
+            # absent or stale rows still fail the canonical preflight below.
+            from src.engine.scalping.ai_market_snapshot import (
+                route_partitioned_ws_view,
+            )
+            selected_ws, partition = route_partitioned_ws_view(
+                ws_data, candle_context,
+            )
+            if partition.get("used"):
+                route_rows = (
+                    ws_data.get("realtime_type_snapshots_by_route") or {}
+                ).get(partition["selected_key"], {})
+                transport_epoch = ws_data.get("market_data_transport_epoch")
+                if type(transport_epoch) is not int or any(
+                    type((route_rows.get(kind) or {}).get("transport_epoch")) is not int
+                    or route_rows[kind]["transport_epoch"] != transport_epoch
+                    for kind in ("0B", "0D")
+                ):
+                    raise ValueError("prepared_entry_route_partition_epoch_invalid")
+            ws_data = selected_ws
             # Do not resurrect old REST tape when the new WS frame lacks it.
             recent_ticks = list(ws_data.get("recent_trade_ticks") or [])
         candle_context = revalidate_entry_candle_snapshot(
@@ -70110,6 +70251,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     "entry_execution_sizing_plan_v1"
                 ),
                 "entry_execution_sizing_plan_emitted": False,
+                "entry_execution_sizing_disposition": "blocked_no_action_receipt",
                 "entry_execution_sizing_valid": False,
                 "entry_execution_sizing_blockers": ["machine_action_receipt_absent"],
                 "entry_execution_sizing_status": (
@@ -70124,6 +70266,11 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     "entry_execution_sizing_plan_v1"
                 ),
                 "entry_execution_sizing_plan_emitted": False,
+                "entry_execution_sizing_disposition": (
+                    "deferred_no_plan"
+                    if _entry_split_probe_first_deferred(entry_split_fields)
+                    else "blocked_no_plan"
+                ),
                 "entry_execution_sizing_valid": _entry_split_probe_first_deferred(
                     entry_split_fields
                 ),
@@ -71194,6 +71341,23 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     reason=intent_status, actual_order_submitted=False,
                     broker_order_forbidden=True, runtime_effect=True)
                 break
+            if strategy == "SCALPING":
+                try:
+                    from src.engine.scalping.entry_cancel_wait_runtime import (
+                        sequential_first_submission_fields,
+                    )
+                    wait_submission = sequential_first_submission_fields(
+                        {**stock, "code": code}, planned_order,
+                        intent=first_intent, owner_context=buy_owner_context,
+                        parent_id=str(submit_attempt_fields(stock, code).get(
+                            "entry_submit_attempt_id") or ""),
+                        qty=qty, price=price, route=submit_dmst_stex_tp,
+                        now_ts=time.time())
+                except (KeyError, TypeError, ValueError, OSError) as exc:
+                    wait_submission = {
+                        "cancel_wait_source_gap": (
+                            "sequential_first_context_capture_failed:"
+                            + type(exc).__name__)}
         try:
             res = kiwoom_orders.send_buy_order(
                 code,
@@ -71216,7 +71380,17 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             _log_entry_pipeline(
                 stock, code, "initial_quantity_first_submit_uncertain",
                 reason="broker_call_exception", actual_order_submitted=True,
-                broker_order_forbidden=True, runtime_effect=True)
+                broker_order_forbidden=True, runtime_effect=True,
+                **wait_submission)
+            if strategy == "SCALPING":
+                try:
+                    _log_entry_pipeline(
+                        stock, code, "entry_cancel_wait_submission",
+                        **wait_submission, broker_call_attempted=True,
+                        dispatch_disposition="response_uncertain",
+                        actual_order_submitted=False, runtime_effect=False)
+                except Exception as exc:
+                    log_error(f"[ENTRY_CANCEL_WAIT_UNCERTAIN_RECEIPT_GAP] code={code} reason={type(exc).__name__}")
             break
         if sequential_first:
             try:
@@ -71233,7 +71407,17 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 _log_entry_pipeline(
                     stock, code, "initial_quantity_first_submit_uncertain",
                     reason=response_status, actual_order_submitted=True,
-                    broker_order_forbidden=True, runtime_effect=True)
+                    broker_order_forbidden=True, runtime_effect=True,
+                    **wait_submission)
+                if strategy == "SCALPING":
+                    try:
+                        _log_entry_pipeline(
+                            stock, code, "entry_cancel_wait_submission",
+                            **wait_submission, broker_call_attempted=True,
+                            dispatch_disposition="response_uncertain",
+                            actual_order_submitted=False, runtime_effect=False)
+                    except Exception as exc:
+                        log_error(f"[ENTRY_CANCEL_WAIT_UNCERTAIN_RECEIPT_GAP] code={code} reason={type(exc).__name__}")
                 break
         if strategy == "SCALPING" and not sequential_first:
             try:
@@ -71680,6 +71864,8 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             buy_child_id=buy_child_id,
             buy_owner_type=buy_owner_type,
             buy_owner_id=buy_owner_id,
+            buy_owner_client_intent_id=(
+                buy_owner_context.client_intent_id if buy_owner_context else ""),
             buy_account_key=buy_account_key,
             owner_registry_intent_id=buy_intent_id,
             buy_registry_mode=buy_registry_mode,
@@ -71694,7 +71880,12 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     stock["initial_quantity_bundle"]["policy_sha256"],
                 "initial_quantity_attempt_id":
                     stock["initial_quantity_bundle"]["attempt_id"],
+                "initial_quantity_requested_qty":
+                    stock["initial_quantity_bundle"]["requested_qty"],
                 "initial_quantity_leg_index": 0,
+                **{key: wait_submission[key] for key in (
+                    "entry_cancel_wait_submission_context", "cancel_wait_timeout_owner",
+                    "cancel_wait_source_gap") if key in wait_submission},
             } if sequential_first else {}),
             tag=request["tag"],
             qty=qty,

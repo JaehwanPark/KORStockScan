@@ -57,6 +57,7 @@ def test_initial_quantity_sequential_continuation_keeps_deferred_prices_unbound(
         quantity_policy_version="initial-v2", split_policy_version="initial-v2",
     )
     assert fields["entry_execution_sizing_valid"] is True
+    assert fields["entry_execution_sizing_disposition"] == "issued"
     assert fields["entry_execution_sizing_plan"]["total_qty"] == 5
     assert [leg["execution_phase"] for leg in fields[
         "entry_execution_sizing_plan"]["legs"]] == [
@@ -75,6 +76,7 @@ def test_initial_quantity_sequential_continuation_keeps_deferred_prices_unbound(
     )
     assert "sequential_leg_quantity_mismatch" in blocked[
         "entry_execution_sizing_blockers"]
+    assert blocked["entry_execution_sizing_disposition"] == "blocked_plan"
 
 
 def _write_policy(tmp_path, name, payload):

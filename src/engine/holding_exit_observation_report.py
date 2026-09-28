@@ -938,9 +938,16 @@ def _build_position_outcomes(
         ]
         exit_signal = trade.get("exit_signal") or {}
         exit_rule = _exit_group(_exit_rule_from_trade(trade))
-        inferred = bool(exit_signal.get("inferred")) or not any(
+        exit_signal_binding_status = str(
+            exit_signal.get("binding_status") or "legacy_unbound"
+        )
+        inferred = (
+            exit_signal_binding_status != "same_order_generation"
+            or bool(exit_signal.get("inferred"))
+            or not any(
             event.get("stage") == "exit_signal" and not event.get("is_inferred")
             for event in timeline
+            )
         )
         role_event = next(
             (
@@ -1381,6 +1388,20 @@ def _build_position_outcomes(
                 "exact_sell_fill_time": exact_fill_time or None,
                 "exit_rule": exit_rule,
                 "exit_rule_provenance": "inferred" if inferred else "observed",
+                "exit_signal_binding_status": exit_signal_binding_status,
+                "exit_signal_policy_binding_status": (
+                    exit_signal.get("policy_binding_status") if not inferred else None
+                ),
+                "exit_signal_source_date": (
+                    exit_signal.get("fields") or {}
+                ).get("exit_signal_source_date"),
+                "exit_signal_contract_sha256": (
+                    exit_signal.get("fields") or {}
+                ).get("exit_signal_contract_sha256"),
+                "exit_signal_submission": (
+                    exit_signal.get("submission")
+                    if not inferred else None
+                ),
                 "exit_class": (
                     "exit_rule_missing" if exit_rule in {"", "-", "unknown"} else
                     "exit_rule_inferred" if inferred else
@@ -1607,6 +1628,9 @@ def _build_position_outcomes(
         "observed_exit_signal_trades": sum(
             row["exit_rule_provenance"] == "observed" for row in outcomes
         ),
+        "exit_signal_binding_status_counts": dict(Counter(
+            row["exit_signal_binding_status"] for row in outcomes
+        )),
         "effective_threshold_receipt_trades": sum(
             row["exit_threshold_status"] == "effective_value_observed"
             for row in outcomes

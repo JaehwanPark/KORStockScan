@@ -339,15 +339,86 @@ def _current_sources(target_date):
         actual_outcomes=outcome_contract,source_quality=quality)
 
 
-def _parents(target_date, events, registry):
+def _sequential_first_context_valid(context, sent, target_date):
+    from src.engine.scalping.initial_quantity_timeout import timeout_schedule_valid
+
+    fields = sent.get('fields') or {}
+    schedule = context.get('initial_quantity_schedule')
+    if not timeout_schedule_valid(schedule):
+        return False
+    try:
+        start = datetime.fromisoformat(schedule['order_start_at'])
+        frozen = datetime.fromisoformat(context['frozen_at'])
+        submitted = datetime.fromisoformat(fields['entry_split_submitted_at'])
+    except (KeyError, TypeError, ValueError):
+        return False
+    if (start.tzinfo is None or frozen.tzinfo is None or submitted.tzinfo is None
+            or not start <= frozen <= submitted):
+        return False
+    first_qty=context.get('requested_qty')
+    total_qty=context.get('plan_total_qty')
+    return bool(
+        context.get('schema') == 'entry_cancel_wait_submitted_paired_v2'
+        and context.get('timeout_owner') == 'initial_quantity_bundle_timeout_schedule'
+        and context.get('economic_eligible') is False
+        and context.get('observation_only') is True
+        and context.get('actual_timeout_sec') is None
+        and context.get('candidate_timeout_secs') == []
+        and context.get('source_date') == target_date
+        and schedule['order_start_at'][:10] == target_date
+        and bool(context.get('parent_id'))
+        and context.get('parent_id') == fields.get('buy_parent_id')
+        and bool(context.get('bundle_attempt_id'))
+        and context.get('bundle_attempt_id') == fields.get('initial_quantity_attempt_id')
+        and schedule['schedule_sha256'] == fields.get('initial_quantity_schedule_sha256')
+        and schedule['policy_sha256'] == fields.get('initial_quantity_policy_file_sha256')
+        and str(fields.get('initial_quantity_leg_index')) == '0'
+        and type(first_qty) is int and type(total_qty) is int
+        and 0 < first_qty <= total_qty
+        and str(total_qty) == str(fields.get('initial_quantity_requested_qty'))
+        and str(first_qty) == str(fields.get('submitted_qty'))
+        and str(context.get('submitted_price')) == str(fields.get('entry_split_submitted_price'))
+        and bool(context.get('child_id'))
+        and context.get('child_id') == fields.get('tag')
+        and context.get('stock_code') == sent.get('stock_code')
+        and context.get('broker_route') == fields.get('broker_route')
+        and context.get('session_bucket') == fields.get('market_session_bucket')
+        and context.get('owner_type') == fields.get('buy_owner_type') == 'main_scalping'
+        and bool(context.get('owner_id'))
+        and context.get('owner_id') == fields.get('buy_owner_id')
+        and bool(context.get('owner_client_intent_id'))
+        and context.get('owner_client_intent_id') == fields.get('buy_owner_client_intent_id')
+    )
+
+
+def _sequential_terminal_proof_valid(actual):
+    proof=actual.get('terminal_reconciliation')
+    sha=proof.get('receipt_sha256') if isinstance(proof,dict) else None
+    fields=('intent_id','account_key','order_date','broker_order_no',
+        'owner_type','owner_id','symbol','side','action','route',
+        'quantity','filled_qty')
+    return bool(actual.get('state')=='ORDER_TERMINAL'
+        and isinstance(proof,dict)
+        and proof.get('schema')=='order_owner_terminal_reconciliation_v1'
+        and isinstance(sha,str) and len(sha)==64
+        and all(char in '0123456789abcdef' for char in sha)
+        and all(proof.get(field)==actual.get(field) for field in fields))
+
+
+def _parents(target_date, events, registry, *, details=None):
     from src.engine.scalping.entry_split_order_plan import _safe_bool
-    inventory={};fills=defaultdict(list)
+    from src.trading.order.owner_custody_registry import OrderOwnerRegistry
+
+    states=OrderOwnerRegistry._state(registry)
+    inventory={key:row for key,row in states.items()
+        if row.get('owner_type')=='main_scalping'
+        and row.get('side')=='BUY' and row.get('action')=='NEW'}
+    cancel_inventory={key:row for key,row in states.items()
+        if row.get('side')=='BUY' and row.get('action')=='CANCEL'}
+    fills=defaultdict(list)
     for event in registry:
-        if event.get('owner_type') != 'main_scalping' or event.get('side') != 'BUY' or event.get('action') != 'NEW':
-            continue
         key=event.get('intent_id')
-        inventory.setdefault(key,{}).update(event)
-        if event.get('event') == 'FILL_RECORDED':
+        if key in inventory and event.get('event')=='FILL_RECORDED':
             fills[key].append(event)
     sent_by_record_order={}
     for event in events:
@@ -365,10 +436,48 @@ def _parents(target_date, events, registry):
     unclassified=set()
     joined=set()
     joined_sent=set()
+    accepted_context_hashes=set()
+    uncertain_contexts={}
     for event in events:
-        if event.get('stage') != 'entry_cancel_wait_submission' or event.get('emitted_date') != target_date:continue
+        if (event.get('stage')!='entry_cancel_wait_submission'
+                or event.get('emitted_date')!=target_date):
+            continue
+        fields=event.get('fields') or {}
+        if fields.get('dispatch_disposition')!='response_uncertain':
+            continue
+        context=_object(fields.get('entry_cancel_wait_submission_context'))
+        if (not isinstance(context,dict)
+                or context.get('sha256')!=_digest({k:v for k,v in context.items() if k!='sha256'})
+                or context.get('source_date')!=target_date
+                or context.get('timeout_owner')!='initial_quantity_bundle_timeout_schedule'):
+            raise ValueError('sequential_uncertain_context_invalid')
+        key=(str(event.get('record_id') or ''),context['sha256'])
+        uncertain_contexts[key]=context
+    submissions={}
+    for event in events:
+        if event.get('stage') != 'entry_cancel_wait_submission' or event.get('emitted_date') != target_date:
+            continue
+        fields=event.get('fields') or {}
+        if not _safe_bool(fields.get('actual_order_submitted')):continue
+        key=(str(event.get('record_id') or ''),str(fields.get('broker_order_no') or ''))
+        if key in submissions and submissions[key]!=event:
+            raise ValueError('cancel_wait_submission_duplicate_conflict')
+        submissions[key]=event
+    for key,sent in sent_by_record_order.items():
+        fields=sent.get('fields') or {}
+        if not fields.get('entry_cancel_wait_submission_context'):
+            continue
+        if fields.get('cancel_wait_timeout_owner') != 'initial_quantity_bundle_timeout_schedule':
+            raise ValueError('sequential_timeout_owner_missing')
+        if key in submissions:
+            existing=submissions[key].get('fields') or {}
+            if existing.get('entry_cancel_wait_submission_context') != fields.get('entry_cancel_wait_submission_context'):
+                raise ValueError('sequential_duplicate_submission_context_conflict')
+            continue
+        submissions[key]={**sent,'stage':'entry_cancel_wait_submission',
+            'fields':{**fields,'actual_order_submitted':True}}
+    for event in submissions.values():
         f=event.get('fields') or {}
-        if not _safe_bool(f.get('actual_order_submitted')):continue
         context=_object(f.get('entry_cancel_wait_submission_context'))
         if (not isinstance(context,dict) or context.get('sha256') != _digest({k:v for k,v in context.items() if k!='sha256'})
             or context.get('source_date') != target_date):
@@ -376,6 +485,10 @@ def _parents(target_date, events, registry):
         no=str(f.get('broker_order_no') or '')
         sent=sent_by_record_order.get((str(event.get('record_id') or ''),no))
         sf=(sent or {}).get('fields') or {}
+        sequential=context.get('timeout_owner')=='initial_quantity_bundle_timeout_schedule'
+        if sequential and (sent is None or not _sequential_first_context_valid(
+                context,sent,target_date)):
+            raise ValueError('sequential_schedule_or_first_leg_identity_invalid')
         identity=str(f.get('owner_registry_intent_id') or '')
         actual=inventory.get(identity)
         policy_generation_valid=False
@@ -397,6 +510,8 @@ def _parents(target_date, events, registry):
             and sf.get('buy_owner_policy_date')==target_date
             and not any(r.get('symbol')==event.get('stock_code')
                 and r.get('order_date')==target_date for r in registry))
+        if sequential and (single_owner or not identity):
+            raise ValueError('sequential_registry_owner_identity_missing')
         if single_owner:
             identity='source_only:'+_digest(sent)
             actual=dict(order_date=target_date,broker_order_no=no,
@@ -408,6 +523,8 @@ def _parents(target_date, events, registry):
             unclassified.add(('order',target_date,str(event.get('record_id') or ''),
                 str(sf.get('buy_account_key') or ''),no) if no else ('submission',_digest(event)))
             continue
+        if sequential and actual.get('client_intent_id') != context.get('owner_client_intent_id'):
+            raise ValueError('sequential_owner_client_intent_conflict')
         account=str(sf.get('buy_account_key') or '')
         parent_id=str(sf.get('buy_parent_id') or '')
         child_id=str(sf.get('buy_child_id') or '')
@@ -425,6 +542,8 @@ def _parents(target_date, events, registry):
         if not single_owner:
             joined.add(identity)
         joined_sent.add((record,no))
+        if sequential:
+            accepted_context_hashes.add((record,context['sha256']))
         seed=context.get('seed') or {}
         parent=context.get('parent_id') or parent_id
         if seed and (seed.get('operating_contract') or {}).get('broker_route')!=context['broker_route']:
@@ -432,25 +551,67 @@ def _parents(target_date, events, registry):
         if (actual.get('order_date')!=target_date or actual.get('quantity')!=context['requested_qty']
             or actual.get('symbol')!=context.get('stock_code') or actual.get('route')!=context['broker_route']):
             raise ValueError('submission_owner_quantity_symbol_route_conflict')
+        timeout_owner=('initial_quantity_bundle_timeout_schedule' if sequential
+                       else 'entry_cancel_wait_runtime')
+        profile=('initial_quantity_sequential' if sequential else context['wait_profile'])
         p=parents.setdefault(parent,dict(parent_id=parent,source_date=target_date,seed=seed,
-            incumbent_timeout_sec=context['actual_timeout_sec'],profile=context['wait_profile'],children={}))
-        if p['seed'] != seed or p['incumbent_timeout_sec'] != context['actual_timeout_sec']:
+            incumbent_timeout_sec=context['actual_timeout_sec'],profile=profile,
+            timeout_owner=timeout_owner,economic_eligible=not sequential,children={}))
+        if (p['seed'] != seed or p['incumbent_timeout_sec'] != context['actual_timeout_sec']
+                or p['timeout_owner'] != timeout_owner or p['profile'] != profile):
             raise ValueError('submission_parent_context_conflict')
         child=dict(quantity=actual.get('quantity'),submitted_price=context['submitted_price'],
-            submitted_at=context['frozen_at'],terminal_at=actual.get('observed_at_kst'),fills=fills[identity],
+            submitted_at=(sf.get('entry_split_submitted_at') if sequential else context['frozen_at']),
+            context_frozen_at=context['frozen_at'],
+            terminal_at=actual.get('observed_at_kst'),fills=fills[identity],
             terminal_reconciled=actual.get('state')=='ORDER_TERMINAL' and bool(actual.get('terminal_reconciliation')),
             child_id=context['child_id'],submit_child_id=child_id,submit_parent_id=parent_id,
             account_key=account,owner_id=actual.get('owner_id'),
             intent_id=None if single_owner else identity,
             custody_mode='single_owner_unregistered' if single_owner else 'registry_managed',
             broker_order_no=actual.get('broker_order_no'))
+        if sequential:
+            filled_qty=0
+            if fills[identity]:
+                filled_qty=fills[identity][-1].get('filled_qty')
+            if (type(filled_qty) is not int or filled_qty<0
+                    or filled_qty>actual.get('quantity',-1)):
+                raise ValueError('sequential_fill_quantity_invalid')
+            if actual.get('filled_qty') not in (None,filled_qty):
+                raise ValueError('sequential_fill_journal_state_conflict')
+            child['terminal_reconciled']=_sequential_terminal_proof_valid(actual)
+            cancel_pending=any(c.get('original_order_no')==no
+                and c.get('account_key')==account
+                and c.get('order_date')==target_date
+                and c.get('owner_id')==sf.get('buy_owner_id')
+                and c.get('state')!='ORDER_TERMINAL'
+                for c in cancel_inventory.values())
+            terminal_state=(
+                'full_terminal' if child['terminal_reconciled']
+                    and filled_qty==actual['quantity'] else
+                'partial_terminal' if child['terminal_reconciled']
+                    and filled_qty>0 else
+                'terminal_unfilled' if child['terminal_reconciled'] else
+                'terminal_unverified' if actual.get('state')=='ORDER_TERMINAL' else
+                'cancel_pending' if cancel_pending else
+                'partial_open' if filled_qty>0 else 'open')
+            child.update(filled_qty=filled_qty,cancel_pending=cancel_pending,
+                terminal_state=terminal_state,cost_krw=None)
         if identity in p['children'] and p['children'][identity] != child:
             raise ValueError('conflicting_submission_child')
         p['children'][identity]=child
+    unresolved_uncertain={key:context for key,context in uncertain_contexts.items()
+        if key not in accepted_context_hashes}
+    for key in unresolved_uncertain:
+        unclassified.add(('uncertain_sequential_submit',*key))
+    uncertain_client_ids={context.get('owner_client_intent_id')
+        for context in unresolved_uncertain.values()}
     for identity,actual in inventory.items():
         if actual.get('order_date')!=target_date or identity in joined:
             continue
         client=str(actual.get('client_intent_id') or '')
+        if client and client in uncertain_client_ids:
+            continue
         if ':AVG_DOWN:' in client or ':PYRAMID:' in client:continue
         # Missing producer events, unknown actions and rejected/ambiguous owner
         # attempts remain in the census; a verified projection zero is not enough.
@@ -468,6 +629,14 @@ def _parents(target_date, events, registry):
         if no and (str(event.get('record_id') or ''),no) in joined_sent:
             continue
         unclassified.add(key)
+    if details is not None:
+        details.update(response_uncertain_attempt_count=len(uncertain_contexts),
+            unresolved_uncertain_attempt_count=len(unresolved_uncertain),
+            resolved_uncertain_attempt_count=len(uncertain_contexts)-len(unresolved_uncertain),
+            sequential_source_only_parent_count=sum(
+                p.get('economic_eligible') is False for p in parents.values()),
+            economic_parent_count=sum(
+                p.get('economic_eligible') is True for p in parents.values()))
     return list(parents.values()),len(unclassified)
 
 
@@ -493,6 +662,8 @@ def _previous_state(target_date):
                 raise ValueError('cancel_wait_predecessor_original_projection_changed:'+source_day)
             reconstructed,_=_parents(source_day,original,registry)
             immutable=lambda p:(p['seed'],p['profile'],p['incumbent_timeout_sec'],
+                p.get('timeout_owner','entry_cancel_wait_runtime'),
+                p.get('economic_eligible',True),
                 {key:{k:c[k] for k in ('quantity','submitted_price','submitted_at','child_id','intent_id','broker_order_no')}
                  for key,c in p['children'].items()})
             originals={p['parent_id']:immutable(p) for p in reconstructed}
@@ -573,7 +744,10 @@ def _replay_parents(parents, outcomes, events, model):
         completed[key]=receipt
     for key in conflicts:completed.pop(key,None)
     for day in sorted({p['source_date'] for p in parents}):
-        day_parents=[p for p in parents if p['source_date']==day]
+        day_parents=[p for p in parents if p['source_date']==day
+            and p.get('economic_eligible',True) is True]
+        if not day_parents:
+            continue
         if entry._source_quality_summary(day).get('tuning_input_allowed') is not True:
             models += [dict(parent_id=p['parent_id'],source_date=day,complete=False,blocker='historical_source_quality_changed') for p in day_parents]
             continue
@@ -660,36 +834,66 @@ def build_report(target_date: str) -> dict[str, Any]:
     counts=dict(predecessor.get('source_counts') or {})
     parents=[p for p in predecessor.get('parents',[]) if p['source_date']!=target_date]
     state='source_gap';blocker=source['projection'].get('reason');unclassified=0
+    parent_details={}
     if source['projection'].get('status')=='ready' and source['registry'].get('status')=='verified' and source['source_quality'].get('tuning_input_allowed') is True:
-        try:new,unclassified=_parents(target_date,events,registry)
+        try:new,unclassified=_parents(target_date,events,registry,details=parent_details)
         except (ValueError,TypeError,KeyError,SyntaxError) as exc:
             new=[];unclassified=1;blocker=str(exc)
         parents+=new
         if unclassified:counts.pop(target_date,None)
         else:counts[target_date]=len(new)
-        state='no_submitted_orders' if not new and not unclassified else 'model_unvalidated'
+        state=('no_submitted_orders' if not new and not unclassified else
+            'source_only_sequential_excluded' if new and not unclassified
+                and not any(p.get('economic_eligible',True) for p in new) else
+            'model_unvalidated')
         blocker=blocker or 'actual_dispatch_or_parent_lineage_unclassified' if unclassified else None
     else:
         counts.pop(target_date,None)
     # Mature earlier pending parents using the same durable signed journal.
-    latest={};filled=defaultdict(list)
+    from src.trading.order.owner_custody_registry import OrderOwnerRegistry
+    latest=OrderOwnerRegistry._state(registry);filled=defaultdict(list)
+    cancel_inventory=[row for row in latest.values()
+        if row.get('side')=='BUY' and row.get('action')=='CANCEL']
     for e in registry:
-        key=e.get('intent_id');latest.setdefault(key,{}).update(e)
-        if e.get('event')=='FILL_RECORDED':filled[key].append(e)
+        if e.get('event')=='FILL_RECORDED':filled[e.get('intent_id')].append(e)
     parents=json.loads(json.dumps(parents))
     for p in parents:
         for key,c in p['children'].items():
             a=latest.get(key) or {}
             if a:
+                terminal=(_sequential_terminal_proof_valid(a)
+                    if p.get('timeout_owner')=='initial_quantity_bundle_timeout_schedule'
+                    else a.get('state')=='ORDER_TERMINAL' and bool(a.get('terminal_reconciliation')))
                 c.update(terminal_at=a.get('observed_at_kst'),fills=filled[key],
-                    terminal_reconciled=a.get('state')=='ORDER_TERMINAL' and bool(a.get('terminal_reconciliation')))
+                    terminal_reconciled=terminal)
+                if p.get('timeout_owner')=='initial_quantity_bundle_timeout_schedule':
+                    quantity=a.get('quantity')
+                    filled_qty=a.get('filled_qty',0)
+                    valid_quantity=(type(quantity) is int and quantity>0
+                        and type(filled_qty) is int and 0<=filled_qty<=quantity)
+                    cancel_pending=any(row.get('original_order_no')==a.get('broker_order_no')
+                        and row.get('account_key')==a.get('account_key')
+                        and row.get('owner_id')==a.get('owner_id')
+                        and row.get('order_date')==a.get('order_date')
+                        and row.get('state')!='ORDER_TERMINAL'
+                        for row in cancel_inventory)
+                    c.update(filled_qty=filled_qty if valid_quantity else None,
+                        cancel_pending=cancel_pending, cost_krw=None,
+                        terminal_state=(
+                            'terminal_unverified' if not valid_quantity else
+                            'full_terminal' if terminal and filled_qty==quantity else
+                            'partial_terminal' if terminal and filled_qty>0 else
+                            'terminal_unfilled' if terminal else
+                            'terminal_unverified' if a.get('state')=='ORDER_TERMINAL' else
+                            'cancel_pending' if cancel_pending else
+                            'partial_open' if filled_qty>0 else 'open'))
     # Do not retain old raw reads or silently treat unavailable windows as zero.
     identity=entry_operating_model_identity();model=_fit_model(predecessor.get('model_rows',[]),identity)
     from src.engine.monitoring import machine_microstructure_attribution as micro
     native_generation={d:micro._source_generation_contract({},extra_paths=[
         micro.OBSERVATION_ROOT/f'trade_date={d}',micro.DEFAULT_SOURCE_EXCLUSION_MANIFEST,
         micro.DEFAULT_CANARY_SNAPSHOT_PATH,micro.daily_canary_snapshot_path(date.fromisoformat(d),root=micro.CANARY_DAILY_SNAPSHOT_DIR)])
-        for d in {p['source_date'] for p in parents}}
+        for d in {p['source_date'] for p in parents if p.get('economic_eligible',True)}}
     from src.engine.scalping import entry_split_order_plan as entry
     preflight=_digest(dict(source=source,native=native_generation,historical_quality={d:entry._source_quality_summary(d) for d in native_generation},
         previous=previous,incumbent_source=incumbent_source,predecessor=predecessor.get('sha256'),model=identity,
@@ -714,7 +918,9 @@ def build_report(target_date: str) -> dict[str, Any]:
                 if model.get('validated'):rows,model_rows,native=_replay_parents(parents,outcomes,events,model)
         except (OSError,ValueError,KeyError,TypeError) as exc:
             state='source_gap';blocker='cancel_wait_replay_source:'+str(exc)
-    evaluation=evaluate_economic_search(rows,model,counts,consumed_holdouts=predecessor.get('consumed_holdouts',[])) if rows and not unclassified else dict(status=state,selected=None,paired_count=0,consumed_holdouts=predecessor.get('consumed_holdouts',[]))
+    economic_counts={day:sum(p['source_date']==day and p.get('economic_eligible',True)
+        for p in parents) for day in counts}
+    evaluation=evaluate_economic_search(rows,model,economic_counts,consumed_holdouts=predecessor.get('consumed_holdouts',[])) if rows and not unclassified else dict(status=state,selected=None,paired_count=0,consumed_holdouts=predecessor.get('consumed_holdouts',[]))
     if state=='source_gap' or unclassified:evaluation.update(status='source_gap',selected=None,blocker=blocker)
     elif counts.get(target_date)==0:evaluation.update(status='no_submitted_orders',selected=None)
     state=evaluation['status'];selected=evaluation.get('selected');ready=state=='economic_improvement_validated'
@@ -726,7 +932,8 @@ def build_report(target_date: str) -> dict[str, Any]:
         counts.pop(target_date,None)
         state='waiting_outcome';ready=False;blocker='prior_custody_or_completed_cost_unresolved'
         evaluation.update(status=state,selected=None,blocker=blocker)
-    elif state=='model_unvalidated' and any(not c['terminal_reconciled'] for p in parents for c in p['children'].values()):
+    elif state=='model_unvalidated' and any(not c['terminal_reconciled'] for p in parents
+        if p.get('economic_eligible',True) for c in p['children'].values()):
         state='waiting_outcome';evaluation.update(status=state,blocker='actual_order_terminal_reconciliation_pending')
     scopes=list(incumbent_source.get('previous_scope_overrides') or [])
     if ready:
@@ -753,6 +960,10 @@ def build_report(target_date: str) -> dict[str, Any]:
         previous_thresholds=previous,recommended_thresholds=dict(previous),incumbent_source=incumbent_source,
         registered_count=len(parents),invalid_row_count=unclassified,diagnostic_proxy_row_count=None,
         submission_census=dict(submitted_parent_count=counts.get(target_date),unclassified_count=unclassified,
+            economic_parent_count=parent_details.get('economic_parent_count'),
+            excluded_sequential_timeout_owner_count=parent_details.get('sequential_source_only_parent_count'),
+            response_uncertain_attempt_count=parent_details.get('response_uncertain_attempt_count'),
+            unresolved_uncertain_attempt_count=parent_details.get('unresolved_uncertain_attempt_count'),
             coverage_verified=source['projection'].get('status')=='ready' and source['registry'].get('status')=='verified' and not unclassified,
             unresolved_prior_custody_count=len(unresolved),zero_is_verified=state=='no_submitted_orders'),
         evidence_summary=dict(state=state,registered_count=len(parents),completed_candidate_count=evaluation.get('paired_count',0),

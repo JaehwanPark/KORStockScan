@@ -1,5 +1,7 @@
 """Account/DB sync helpers for the sniper engine."""
 
+import hashlib
+import json
 import time
 from datetime import date, datetime, timedelta, timezone
 from math import isclose
@@ -2776,12 +2778,12 @@ def periodic_account_sync():
                         )
                         exact_execution = None
                         exact_execution_reason = "exact_receipt_not_queried"
+                        receipt_trade_date = datetime.now().strftime("%Y%m%d")
                         if prior_partial_qty > 0:
                             exact_execution_reason = (
                                 "partial_realized_context_requires_fill_receipt"
                             )
                         else:
-                            receipt_trade_date = datetime.now().strftime("%Y%m%d")
                             receipt_rows, receipt_source_meta = (
                                 _sell_execution_snapshot(code, receipt_trade_date)
                             )
@@ -2839,6 +2841,45 @@ def periodic_account_sync():
                             reconciliation_state = (
                                 "broker_holding_absent_fill_receipt_missing"
                             )
+                        reconciliation_contract = None
+                        reconciliation_contract_text = None
+                        reconciliation_contract_sha256 = None
+                        if exact_execution:
+                            reconciliation_contract = {
+                                "schema": "sell_balance_reconciliation_source_v1",
+                                "source_api": "kt00007",
+                                "source_date": (
+                                    f"{receipt_trade_date[:4]}-"
+                                    f"{receipt_trade_date[4:6]}-"
+                                    f"{receipt_trade_date[6:8]}"
+                                ),
+                                "record_id": getattr(record, "id", None),
+                                "stock_code": code,
+                                "order_no": exact_execution.get("ord_no"),
+                                "order_time": exact_execution.get("order_time"),
+                                "submitted_qty": exact_execution.get("qty"),
+                                "filled_qty": exact_execution.get("filled_qty"),
+                                "remaining_qty": exact_execution.get("remaining_qty"),
+                                "execution_price": exact_execution.get(
+                                    "execution_price"
+                                ),
+                                "broker_route": exact_execution.get("stex_tp"),
+                                "broker_sor_flag": exact_execution.get("sor_yn"),
+                                "owner_buy_time": (
+                                    record.buy_time.isoformat()
+                                    if isinstance(record.buy_time, datetime) else None
+                                ),
+                                "broker_snapshot_at": datetime.fromtimestamp(
+                                    broker_snapshot_at, _KST
+                                ).isoformat(),
+                            }
+                            reconciliation_contract_text = json.dumps(
+                                reconciliation_contract, sort_keys=True,
+                                separators=(",", ":"), default=str,
+                            )
+                            reconciliation_contract_sha256 = hashlib.sha256(
+                                reconciliation_contract_text.encode("utf-8")
+                            ).hexdigest()
 
                         # A broker sell receipt can complete this row while the
                         # relatively slow account snapshot is being fetched.
@@ -2976,6 +3017,30 @@ def periodic_account_sync():
                                     "execution_match_reason": (exact_execution_reason),
                                     "execution_match_count": (
                                         1 if exact_execution else 0
+                                    ),
+                                    "sell_terminal_source_status": (
+                                        "balance_reconciled_price_only"
+                                        if exact_execution else
+                                        "balance_absent_receipt_missing"
+                                    ),
+                                    "sell_reconciliation_source_date": (
+                                        f"{receipt_trade_date[:4]}-"
+                                        f"{receipt_trade_date[4:6]}-"
+                                        f"{receipt_trade_date[6:8]}"
+                                    ),
+                                    "sell_reconciliation_normalized_sha256": (
+                                        reconciliation_contract_sha256
+                                    ),
+                                    "sell_reconciliation_source_contract": (
+                                        reconciliation_contract_text
+                                    ),
+                                    "sell_reconciliation_execution_no": None,
+                                    "broker_actual_fees_taxes_krw": None,
+                                    "configured_fee_estimate_krw": (
+                                        round((reconciled_sell_price - record.buy_price)
+                                              * getattr(record, "buy_qty", 0)
+                                              - realized_pnl_krw, 4)
+                                        if exact_execution else None
                                     ),
                                     "sell_price": (
                                         reconciled_sell_price

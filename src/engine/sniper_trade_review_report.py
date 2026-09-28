@@ -19,6 +19,8 @@ from src.engine.monitor_snapshot_runtime import guard_stdin_heavy_build
 from src.utils.constants import DATA_DIR, LOGS_DIR, POSTGRES_URL
 from src.utils.jsonl_io import existing_or_gzip_path, open_text_auto
 from src.engine.sniper_gatekeeper_replay import find_gatekeeper_snapshot_for_trade
+from src.engine import sniper_trade_utils
+from src.trading.market import session_contract
 
 _HOLDING_RE = re.compile(
     r"^\[(?P<timestamp>[^\]]+)\].*?\[HOLDING_PIPELINE\] "
@@ -49,6 +51,8 @@ _DISPLAY_STAGE_LABELS = {
     "sell_order_sent": "매도 주문 전송",
     "sell_order_failed": "매도 주문 실패",
     "sell_completed": "매도 체결 완료",
+    "sell_completion_reconciliation_gap": "매도 원천 미확인",
+    "sell_cancel_reconciliation_deferred": "매도 취소 확인 대기",
 }
 
 _EVENT_DETAIL_LABELS = {
@@ -687,6 +691,7 @@ def _build_exit_signal_payload(
     exit_decision_source: str | None = None,
     sell_reason_type: str | None = None,
     inferred: bool = False,
+    binding_status: str = "legacy_unbound",
 ) -> dict:
     fields = dict(event.fields)
     if reason is not None:
@@ -717,9 +722,9 @@ def _build_exit_signal_payload(
             )
         ),
         "fields": fields,
+        "inferred": inferred,
+        "binding_status": binding_status,
     }
-    if inferred:
-        payload["inferred"] = True
     return payload
 
 
@@ -801,48 +806,305 @@ def _infer_exit_decision_source(
     return ""
 
 
-def _build_exit_signal(events: list[HoldingEvent]) -> dict | None:
-    completed = next(
-        (event for event in reversed(events) if event.stage == "sell_completed"), None
-    )
-    completed_rule = (
-        _normalize_exit_rule(completed.fields.get("exit_rule")) if completed else ""
-    )
-    latest_explicit = next(
-        (
-            event
-            for event in reversed(events)
-            if event.stage == "exit_signal"
-            and _normalize_exit_rule(event.fields.get("exit_rule"))
-            and (not completed or event.timestamp <= completed.timestamp)
-        ),
-        None,
-    )
-    explicit = (
-        latest_explicit
-        if latest_explicit is not None
-        and (
-            not completed_rule
-            or _normalize_exit_rule(latest_explicit.fields.get("exit_rule"))
-            == completed_rule
+def _exit_event_order_no(event: HoldingEvent) -> str:
+    return str(next((event.fields.get(key) for key in (
+        "broker_order_no", "order_no", "sell_order_no", "ord_no"
+    ) if event.fields.get(key)), "") or "").strip()
+
+
+def _direct_exit_signal_binding(
+    events: list[HoldingEvent],
+) -> tuple[HoldingEvent | None, str]:
+    """Require one immutable decision -> same submit -> terminal order chain."""
+    ordered = sorted(events, key=_event_sort_key)
+    explicit = [row for row in ordered if row.stage == "exit_signal"]
+    if not explicit:
+        return None, "source_gap_explicit_signal_missing"
+    if not any(row.fields.get("exit_signal_contract") for row in explicit):
+        return None, "legacy_unbound"
+    terminal = next((row for row in reversed(ordered)
+                     if row.stage == "sell_completed"), None)
+    if terminal and not _exit_event_order_no(terminal):
+        return None, "source_gap_terminal_order_missing"
+    submissions = [row for row in ordered if row.stage == "sell_order_sent"
+                   and (not terminal or
+                        _exit_event_order_no(row) == _exit_event_order_no(terminal))
+                   and (not terminal or row.timestamp <= terminal.timestamp)]
+    if not submissions:
+        return None, "source_gap_submission_missing"
+    signatures = {(
+        row.fields.get("exit_signal_id"),
+        row.fields.get("exit_signal_contract_sha256"),
+        row.fields.get("exit_signal_position_key"),
+        row.fields.get("exit_signal_buy_fill_identity"),
+        row.fields.get("exit_signal_at"),
+        row.fields.get("exit_signal_source_date"),
+        row.fields.get("exit_signal_binding_status"),
+        row.fields.get("exit_signal_submit_intended_route"),
+        row.fields.get("sell_submit_generation"),
+        row.fields.get("sell_submit_context_sha256"),
+        row.fields.get("sell_submit_context_contract"),
+        row.fields.get("broker_route"),
+        row.fields.get("market_session_bucket"),
+        row.fields.get("qty") or row.fields.get("submitted_qty"),
+        row.fields.get("actual_order_submitted"),
+        row.fields.get("owner_id"),
+        row.fields.get("account_key"),
+        _exit_event_order_no(row),
+    ) for row in submissions}
+    if len(signatures) != 1:
+        return None, "source_gap_conflicting_submission"
+    submission = submissions[-1]
+    submit = submission.fields
+    signal_id = str(submit.get("exit_signal_id") or "").strip()
+    if not signal_id:
+        return None, "legacy_unbound"
+    signal_rows = [row for row in explicit
+                   if str(row.fields.get("exit_signal_id") or "").strip()
+                   == signal_id]
+    if not signal_rows:
+        return None, "source_gap_decision_missing_for_submission"
+    if len({(
+        row.fields.get("exit_signal_contract_sha256"),
+        row.fields.get("exit_signal_contract"),
+        row.fields.get("exit_signal_position_key"),
+        row.fields.get("exit_signal_buy_fill_identity"),
+        row.fields.get("exit_rule"),
+        row.fields.get("exit_threshold_key"),
+        row.fields.get("exit_threshold_effective_pct"),
+        row.fields.get("scalp_trailing_policy_value_sha256"),
+        row.fields.get("holding_context_venue"),
+        row.fields.get("holding_context_session"),
+        row.fields.get("exit_signal_source_date"),
+        row.fields.get("exit_signal_at"),
+        row.fields.get("pipeline_lifecycle_population_scope"),
+    ) for row in signal_rows}) != 1:
+        return None, "source_gap_conflicting_decision"
+    decision = signal_rows[-1]
+    fields = decision.fields
+    try:
+        raw = fields.get("exit_signal_contract")
+        contract = json.loads(raw) if isinstance(raw, str) else raw
+        context_raw = submit.get("sell_submit_context_contract")
+        context = (json.loads(context_raw) if isinstance(context_raw, str)
+                   else context_raw)
+        if not isinstance(contract, dict) or not isinstance(context, dict):
+            return None, "source_gap_contract_invalid"
+        decision_sha = hashlib.sha256(json.dumps(
+            contract, ensure_ascii=True, sort_keys=True, separators=(",", ":"),
+            allow_nan=False,
+        ).encode()).hexdigest()
+        context_sha = hashlib.sha256(json.dumps(
+            context, ensure_ascii=True, sort_keys=True, separators=(",", ":"),
+            allow_nan=False,
+        ).encode()).hexdigest()
+        signal_at = _parse_dt(contract.get("signal_at"))
+        decision_at = _parse_dt(decision.timestamp)
+        submitted_at = _parse_dt(submission.timestamp)
+        if signal_at and signal_at.tzinfo:
+            signal_at = signal_at.astimezone(ZoneInfo("Asia/Seoul")).replace(
+                tzinfo=None
+            )
+        started_at = datetime.fromtimestamp(
+            float(context.get("started_at")), tz=ZoneInfo("Asia/Seoul")
         )
-        else None
+        started_local = started_at.replace(tzinfo=None)
+        session = session_contract.resolve_market_session(started_at)
+        session_bucket = sniper_trade_utils.holding_sell_session_bucket(started_at)
+        expected_intended_session = (
+            session.session_regime if session.blocker is None else session_bucket
+        )
+    except (TypeError, ValueError, OSError, OverflowError):
+        return None, "source_gap_contract_invalid"
+    record = str(contract.get("record_id") or "")
+    rule = _normalize_exit_rule(contract.get("exit_rule"))
+    decision_input_keys = (
+        "reason", "sell_reason_type", "exit_decision_source", "profit_rate",
+        "peak_profit", "curr_price", "buy_price", "buy_qty",
+        "exit_threshold_status", "exit_threshold_key",
+        "exit_threshold_effective_pct", "exit_threshold_observed_pct",
+        "exit_threshold_trailing_start_pct",
+        "exit_threshold_trailing_arm_observed_pct",
+        "exit_threshold_classifier_version", "exit_threshold_peak_price",
+        "exit_threshold_executable_bid", "exit_threshold_bid_source",
+        "exit_threshold_trigger_kind", "holding_score_role_gate",
+        "holding_path_signal_id", "holding_path_signal_at",
+        "holding_path_policy_bundle_sha256",
     )
+    expected_inputs = {
+        key: str(fields[key]) for key in decision_input_keys if key in fields
+    }
+    raw_inputs = contract.get("decision_inputs")
+    actual_inputs = (
+        {key: str(value) for key, value in raw_inputs.items()}
+        if isinstance(raw_inputs, dict) else None
+    )
+    if (contract.get("schema") != "holding_exit_signal_receipt_v1"
+            or context.get("schema") != "sell_submit_pending_context_v1"
+            or not all((record, rule, signal_at, decision_at, submitted_at,
+                        contract.get("buy_fill_identity"),
+                        contract.get("position_key"),
+                        context.get("generation")))
+            or decision_sha != fields.get("exit_signal_contract_sha256")
+            or decision_sha != submit.get("exit_signal_contract_sha256")
+            or context_sha != submit.get("sell_submit_context_sha256")
+            or not (decision_at <= submitted_at
+                    and signal_at <= decision_at + timedelta(seconds=1))
+            or (decision_at - signal_at).total_seconds() > 60
+            or started_local < signal_at
+            or started_local > submitted_at + timedelta(seconds=1)
+            or contract.get("source_date") != str(contract.get("signal_at"))[:10]
+            or contract.get("source_date") != fields.get("exit_signal_source_date")
+            or contract.get("source_date") != submit.get("exit_signal_source_date")
+            or contract.get("signal_id") != signal_id
+            or contract.get("signal_at") != submit.get("exit_signal_at")
+            or contract.get("strategy") not in {"SCALPING", "SCALP"}
+            or contract.get("decision_owner_type") != "main_scalping"
+            or fields.get("pipeline_lifecycle_population_scope")
+            != "real_record_bound"
+            or submit.get("pipeline_lifecycle_population_scope")
+            != "real_record_bound"
+            or contract.get("record_id") != str(fields.get("id") or "")
+            or record != str(submit.get("id") or "")
+            or contract.get("code") != decision.code
+            or contract.get("code") != submission.code
+            or contract.get("position_key") != f"record:{record}"
+            or contract.get("position_key") != fields.get("exit_signal_position_key")
+            or contract.get("position_key") != submit.get("exit_signal_position_key")
+            or contract.get("buy_fill_identity") != fields.get(
+                "exit_signal_buy_fill_identity"
+            )
+            or contract.get("buy_fill_identity") != submit.get(
+                "exit_signal_buy_fill_identity"
+            )
+            or rule != _normalize_exit_rule(fields.get("exit_rule"))
+            or rule != _normalize_exit_rule(submit.get("exit_rule"))
+            or (terminal and terminal.fields.get("exit_rule") and
+                rule != _normalize_exit_rule(terminal.fields.get("exit_rule")))
+            or contract.get("threshold_key") != str(fields.get(
+                "exit_threshold_key") or "").strip()
+            or str(contract.get("threshold_effective_pct")) != str(
+                fields.get("exit_threshold_effective_pct")
+            )
+            or contract.get("policy_sha256") != str(fields.get(
+                "scalp_trailing_policy_value_sha256") or "").strip()
+            or contract.get("context_venue") != fields.get("holding_context_venue")
+            or contract.get("context_session") != fields.get("holding_context_session")
+            or actual_inputs != expected_inputs
+            or context.get("target_id") != _safe_int(record, -1)
+            or context.get("code") != decision.code
+            or context.get("generation") != submit.get("sell_submit_generation")
+            or context.get("requested_qty") != _safe_int(
+                submit.get("qty") or submit.get("submitted_qty"), -1
+            )
+            or _safe_int(context.get("requested_qty"), 0) <= 0
+            or context.get("intended_route") != submit.get(
+                "exit_signal_submit_intended_route"
+            )
+            or str(submit.get("broker_route") or "").upper()
+            not in {"KRX", "NXT", "SOR"}
+            or context.get("intended_session_bucket") != expected_intended_session
+            or submit.get("market_session_bucket") != session_bucket
+            or submit.get("exit_signal_binding_status")
+            != "same_position_buy_generation"
+            or str(submit.get("actual_order_submitted")).lower() != "true"
+            or str(submit.get("broker_order_forbidden")).lower() == "true"
+            or not _exit_event_order_no(submission)
+            or (terminal and (terminal.code != decision.code or
+                str(terminal.fields.get("id") or "") != record))):
+        return None, "source_gap_decision_submit_contract_mismatch"
+    return decision, "same_order_generation"
+
+
+def _build_exit_signal(
+    events: list[HoldingEvent], trade: dict | None = None,
+) -> dict | None:
+    explicit, binding_status = _direct_exit_signal_binding(events)
+    if explicit is not None and trade is not None:
+        raw = explicit.fields.get("exit_signal_contract")
+        contract = json.loads(raw) if isinstance(raw, str) else raw
+        signal_at = _parse_dt(contract.get("signal_at"))
+        if signal_at and signal_at.tzinfo:
+            signal_at = signal_at.astimezone(ZoneInfo("Asia/Seoul")).replace(
+                tzinfo=None
+            )
+        buy_at = _parse_dt(trade.get("buy_time"))
+        sell_at = _parse_dt(trade.get("sell_time"))
+        if buy_at and buy_at.tzinfo:
+            buy_at = buy_at.astimezone(ZoneInfo("Asia/Seoul")).replace(
+                tzinfo=None
+            )
+        if sell_at and sell_at.tzinfo:
+            sell_at = sell_at.astimezone(ZoneInfo("Asia/Seoul")).replace(
+                tzinfo=None
+            )
+        if (str(trade.get("id") or "") != contract.get("record_id")
+                or str(trade.get("code") or "")[:6] != contract.get("code")
+                or str(trade.get("strategy") or "").upper()
+                != contract.get("strategy")
+                or str(trade.get("position_tag") or "")
+                != contract.get("position_tag")
+                or not buy_at or not signal_at or signal_at < buy_at
+                or (sell_at and signal_at > sell_at + timedelta(seconds=1))):
+            explicit = None
+            binding_status = "source_gap_trade_custody_mismatch"
     if explicit is not None:
-        explicit_rule = _normalize_exit_rule(explicit.fields.get("exit_rule"))
-        return _build_exit_signal_payload(
-            explicit,
-            exit_rule=explicit_rule,
+        rule = _normalize_exit_rule(explicit.fields.get("exit_rule"))
+        payload = _build_exit_signal_payload(
+            explicit, exit_rule=rule,
             exit_decision_source=_infer_exit_decision_source(
-                exit_rule=explicit_rule,
-                reason=explicit.fields.get("reason"),
+                exit_rule=rule, reason=explicit.fields.get("reason"),
                 fields=explicit.fields,
             ),
-            inferred=False,
+            inferred=False, binding_status=binding_status,
         )
+        policy_sha = str(explicit.fields.get(
+            "scalp_trailing_policy_value_sha256") or "").strip()
+        payload["policy_sha256"] = policy_sha or None
+        if rule != "scalp_trailing_take_profit":
+            policy_status = "branch_value_only_no_policy_sha"
+        elif not re.fullmatch(r"[0-9a-f]{64}", policy_sha):
+            policy_status = "source_gap_policy_sha_missing"
+        elif (explicit.fields.get("scalp_trailing_policy_expected_sha256")
+              == policy_sha
+              and explicit.fields.get("scalp_trailing_policy_provenance")
+              == "bootstrap_value_hash_matched"):
+            policy_status = "bootstrap_hash_matched_no_pid_proof"
+        else:
+            policy_status = "observed_sha_bootstrap_unverified"
+        payload["policy_binding_status"] = policy_status
+        submission = next(
+            row for row in events if row.stage == "sell_order_sent"
+            and row.fields.get("exit_signal_id")
+            == explicit.fields.get("exit_signal_id")
+        )
+        payload["submission"] = {
+            "order_no": _exit_event_order_no(submission),
+            "attempt_id": submission.fields.get("attempt_id")
+            or submission.fields.get("main_lifecycle_attempt_id"),
+            "main_lifecycle_id": submission.fields.get("main_lifecycle_id"),
+            "owner_id": submission.fields.get("owner_id"),
+            "account_key": submission.fields.get("account_key"),
+            "broker_route": submission.fields.get("broker_route"),
+            "market_session_bucket": submission.fields.get(
+                "market_session_bucket"
+            ),
+            "submitted_qty": _safe_int(
+                submission.fields.get("submitted_qty")
+                or submission.fields.get("qty"), 0,
+            ),
+            "submitted_at": submission.timestamp,
+            "sell_submit_generation": submission.fields.get(
+                "sell_submit_generation"
+            ),
+            "sell_submit_context_sha256": submission.fields.get(
+                "sell_submit_context_sha256"
+            ),
+        }
+        return payload
     sell_completed = None
     fallback_exit_event = None
-    for event in reversed(events):
+    for event in reversed(sorted(events, key=_event_sort_key)):
         if event.stage not in {"exit_signal", "sell_order_sent", "sell_completed"}:
             continue
         if event.stage == "sell_completed" and sell_completed is None:
@@ -858,7 +1120,8 @@ def _build_exit_signal(events: list[HoldingEvent]) -> dict | None:
                     reason=event.fields.get("reason"),
                     fields=event.fields,
                 ),
-                inferred=(event.stage != "exit_signal"),
+                inferred=True,
+                binding_status=binding_status,
             )
 
         inferred_exit_rule = _infer_exit_rule_from_reason(event.fields.get("reason"))
@@ -872,6 +1135,7 @@ def _build_exit_signal(events: list[HoldingEvent]) -> dict | None:
                     fields=event.fields,
                 ),
                 inferred=True,
+                binding_status=binding_status,
             )
         if fallback_exit_event is None:
             fallback_exit_event = event
@@ -889,11 +1153,13 @@ def _build_exit_signal(events: list[HoldingEvent]) -> dict | None:
                 exit_decision_source="PRESET_HARD_STOP",
                 sell_reason_type="LOSS",
                 inferred=True,
+                binding_status=binding_status,
             )
     if fallback_exit_event:
         return _build_exit_signal_payload(
             fallback_exit_event,
-            inferred=(fallback_exit_event.stage != "exit_signal"),
+            inferred=True,
+            binding_status=binding_status,
         )
     return None
 
@@ -1255,7 +1521,7 @@ def _build_trade_row(trade: dict, events: list[HoldingEvent]) -> dict:
         }
     result_badge = _trade_result_badge(trade)
     timeline = _build_timeline(display_events)
-    exit_signal = _build_exit_signal(display_events)
+    exit_signal = _build_exit_signal(display_events, trade)
     if (
         exit_signal
         and exit_signal.get("inferred")
@@ -1323,6 +1589,8 @@ _PROJECTION_EVENT_STAGES = {
     "nxt_rising_missed_tp1_partial_fill_progress",
     "nxt_rising_missed_tp1_partial_sell_completed",
     "sell_completed",
+    "sell_completion_reconciliation_gap",
+    "sell_cancel_reconciliation_deferred",
     "holding_flow_override_defer_exit",
     "holding_flow_max_defer_bullish_extension",
     "holding_flow_override_force_exit",
@@ -1917,6 +2185,82 @@ def _completed_execution_ledger(trade: dict, events: list[HoldingEvent]) -> dict
     }
 
 
+def _sell_balance_reconciliation_generation_status(
+    trade: dict, event: HoldingEvent | None,
+) -> str:
+    if event is None or event.fields.get("decision_authority") != (
+        "broker_balance_reconciliation_only"
+    ):
+        return "not_applicable"
+    fields = event.fields
+    raw = fields.get("sell_reconciliation_source_contract")
+    sha = fields.get("sell_reconciliation_normalized_sha256")
+    if not raw or not sha:
+        return "legacy_unbound"
+    try:
+        contract = json.loads(raw) if isinstance(raw, str) else raw
+        if not isinstance(contract, dict):
+            return "invalid"
+        digest = hashlib.sha256(json.dumps(
+            contract, sort_keys=True, separators=(",", ":"),
+        ).encode("utf-8")).hexdigest()
+    except (TypeError, ValueError):
+        return "invalid"
+    source_date = str(contract.get("source_date") or "")
+    try:
+        order_time = str(contract["order_time"])
+        order_at = datetime.strptime(
+            source_date + order_time, "%Y-%m-%d%H%M%S"
+        )
+        buy_at = _parse_dt(contract.get("owner_buy_time"))
+        snapshot_at = _parse_dt(contract.get("broker_snapshot_at"))
+        if buy_at is None or snapshot_at is None:
+            return "invalid"
+        if buy_at.tzinfo is not None:
+            buy_at = buy_at.astimezone(ZoneInfo("Asia/Seoul")).replace(tzinfo=None)
+        if snapshot_at.tzinfo is not None:
+            snapshot_at = snapshot_at.astimezone(
+                ZoneInfo("Asia/Seoul")
+            ).replace(tzinfo=None)
+    except (KeyError, TypeError, ValueError):
+        return "invalid"
+    if (digest != sha
+            or contract.get("schema") != "sell_balance_reconciliation_source_v1"
+            or contract.get("source_api") != "kt00007"
+            or fields.get("sell_reconciliation_source_date") != source_date
+            or snapshot_at.date().isoformat() != source_date
+            or not buy_at <= order_at <= snapshot_at
+            or str(contract.get("record_id")) != str(trade.get("id"))
+            or contract.get("stock_code") != str(trade.get("code") or "")[:6]
+            or str(contract.get("order_no") or "") != str(
+                fields.get("sell_order_no") or ""
+            )
+            or _safe_int(contract.get("submitted_qty"), -1) <= 0
+            or _safe_int(contract.get("submitted_qty"), -1) != _safe_int(
+                contract.get("filled_qty"), -2
+            )
+            or _safe_int(contract.get("filled_qty"), -1) != _safe_int(
+                fields.get("sell_qty"), -2
+            )
+            or _safe_int(contract.get("filled_qty"), -1) != _safe_int(
+                trade.get("buy_qty"), -2
+            )
+            or _safe_int(contract.get("remaining_qty"), -1) != 0
+            or _safe_float(contract.get("execution_price"), -1) != _safe_float(
+                fields.get("sell_price"), -2
+            )
+            or _safe_float(contract.get("execution_price"), -1) != _safe_float(
+                trade.get("sell_price"), -2
+            )
+            or (str(contract.get("broker_sor_flag") or "").upper() != "Y"
+                and str(contract.get("broker_route") or "").upper()
+                not in {"1", "2", "KRX", "NXT", "SOR"})
+            or not contract.get("owner_buy_time")
+            or not contract.get("broker_snapshot_at")):
+        return "invalid"
+    return "normalized_contract_bound"
+
+
 def _completed_trade_projection(
     trade: dict, events: list[HoldingEvent], compiled: dict
 ) -> dict | None:
@@ -1929,6 +2273,9 @@ def _completed_trade_projection(
         profit = None
     terminal = next(
         (event for event in reversed(events) if event.stage == "sell_completed"), None
+    ) or next(
+        (event for event in reversed(events)
+         if event.stage == "sell_completion_reconciliation_gap"), None
     )
     terminal_fields = terminal.fields if terminal else {}
     ledger = _completed_execution_ledger(trade, events)
@@ -2002,6 +2349,8 @@ def _completed_trade_projection(
         strict_reasons.append("source_gap_profit_rate_unreconciled")
     if not fill_cost_reconciled or exact_pnl is None:
         strict_reasons.append("source_gap_exact_cost_missing")
+    if terminal_fields.get("decision_authority") == "broker_balance_reconciliation_only":
+        strict_reasons.append("source_gap_sell_balance_reconciliation_only")
     if terminal_fields.get("decision_authority") != "broker_sell_fill_observation_only":
         strict_reasons.append("source_gap_final_sell_authority")
     if terminal_fields.get("trade_review_economics_reconciled"):
@@ -2018,6 +2367,83 @@ def _completed_trade_projection(
         and occurrence_source == "official_fid_908"
         and _parse_dt(occurrence_time) is not None
         else None
+    )
+    balance_only = terminal_fields.get("decision_authority") == (
+        "broker_balance_reconciliation_only"
+    )
+    balance_generation_status = _sell_balance_reconciliation_generation_status(
+        trade, terminal
+    )
+    submission_identity_status = "not_applicable"
+    submission_fields = {}
+    if balance_only:
+        order_no = str(terminal_fields.get("sell_order_no") or "").strip()
+        submissions = [event for event in events
+            if event.stage == "sell_order_sent"
+            and str(event.fields.get("broker_order_no") or "").strip() == order_no
+            and order_no
+            and terminal is not None and event.timestamp <= terminal.timestamp]
+        signatures = {(
+            str(event.fields.get("attempt_id") or ""),
+            str(event.fields.get("main_lifecycle_id") or ""),
+            str(event.fields.get("broker_route") or ""),
+            str(event.fields.get("market_session_bucket") or ""),
+            str(event.fields.get("qty") or ""),
+            str(event.fields.get("requested_qty") or ""),
+            str(event.fields.get("sell_price") or ""),
+        ) for event in submissions}
+        if (len(signatures) == 1 and submissions
+                and all(str(event.fields.get("actual_order_submitted")).lower()
+                        == "true" and
+                        str(event.fields.get("broker_order_forbidden")).lower()
+                        == "false" for event in submissions)):
+            submission_identity_status = "matched_source_only"
+            submission_fields = submissions[0].fields
+        else:
+            submission_identity_status = (
+                "conflicting" if len(signatures) > 1 else "missing"
+            )
+        if (balance_generation_status == "normalized_contract_bound"
+                and submission_identity_status != "matched_source_only"):
+            balance_generation_status = "submission_unbound"
+        elif balance_generation_status == "normalized_contract_bound":
+            contract = terminal_fields["sell_reconciliation_source_contract"]
+            if isinstance(contract, str):
+                contract = json.loads(contract)
+            source_route = str(contract.get("broker_route") or "").upper()
+            requested_route = str(
+                submission_fields.get("broker_route") or ""
+            ).upper()
+            expected_route = (
+                "SOR" if str(contract.get("broker_sor_flag") or "").upper()
+                == "Y" else
+                "KRX" if source_route in {"1", "KRX"} else
+                "NXT" if source_route in {"2", "NXT"} else source_route
+            )
+            if requested_route != expected_route:
+                balance_generation_status = "submission_route_conflict"
+    configured_fee = _safe_float(
+        terminal_fields.get("main_lifecycle_configured_fee_estimate_krw",
+                            terminal_fields.get("configured_fee_estimate_krw")),
+        default=float("nan"),
+    )
+    if not math.isfinite(configured_fee) and exact_receipt:
+        configured_fee = _safe_float(
+            terminal_fields.get("main_lifecycle_fees_taxes_krw"),
+            default=float("nan"),
+        )
+    if (not math.isfinite(configured_fee) or configured_fee < 0
+            or not exact_receipt and not (
+                balance_only and balance_generation_status == "normalized_contract_bound"
+            )):
+        configured_fee = None
+    terminal_source_status = (
+        "balance_reconciled_price_only" if balance_only and
+        terminal_fields.get("reconciliation_result") ==
+        "broker_exact_order_fill_recovered" else
+        "balance_absent_receipt_missing" if balance_only else
+        "execution_receipt_exact_configured_cost" if exact_receipt else
+        "source_gap_unknown"
     )
     return {
         "id": trade.get("id"),
@@ -2054,6 +2480,47 @@ def _completed_trade_projection(
         "sell_order_no": terminal_fields.get("order_no")
         or terminal_fields.get("sell_order_no"),
         "sell_execution_no": terminal_fields.get("execution_no"),
+        "sell_terminal_source_status": terminal_source_status,
+        "sell_reconciliation_generation_status": balance_generation_status,
+        "sell_submission_identity_status": submission_identity_status,
+        "sell_submission_attempt_id": (
+            submission_fields.get("attempt_id") if balance_only else None
+        ),
+        "sell_submission_lifecycle_id": (
+            submission_fields.get("main_lifecycle_id") if balance_only else None
+        ),
+        "sell_submission_broker_route": (
+            submission_fields.get("broker_route") if balance_only else None
+        ),
+        "sell_submission_session_bucket": (
+            submission_fields.get("market_session_bucket")
+            if balance_only else None
+        ),
+        "sell_submission_owner_id": (
+            submission_fields.get("owner_id") if balance_only else None
+        ),
+        "sell_submission_account_key": (
+            submission_fields.get("account_key") if balance_only else None
+        ),
+        "sell_cancel_deferred_event_count": sum(
+            event.stage == "sell_cancel_reconciliation_deferred"
+            for event in events
+        ),
+        "sell_reconciliation_order_no": (
+            terminal_fields.get("sell_order_no") or terminal_fields.get("order_no")
+            if balance_only else None
+        ),
+        "sell_reconciliation_source_date": (
+            terminal_fields.get("sell_reconciliation_source_date")
+            if balance_only else None
+        ),
+        "sell_reconciliation_normalized_sha256": (
+            terminal_fields.get("sell_reconciliation_normalized_sha256")
+            if balance_only else None
+        ),
+        "configured_fee_estimate_krw": configured_fee,
+        "broker_actual_fees_taxes_krw": None,
+        "broker_actual_cost_observed": False,
         "cumulative_sell_qty": completed_sell_qty or None,
         "sell_quantity_conserved": quantity_conserved,
         **ledger,
@@ -2108,7 +2575,7 @@ def _completed_trade_projection(
             if exact_receipt
             else None
         ),
-        "exit_signal": _build_exit_signal(events),
+        "exit_signal": _build_exit_signal(events, trade),
         "timeline": [
             {
                 "stage": event.stage,
@@ -2553,6 +3020,11 @@ def build_trade_review_report(
         if open_projected is not None:
             open_projection.append(open_projected)
     projected_completed_ids = {_safe_int(row.get("id")) for row in completed_projection}
+    exit_signal_binding_counts = Counter(
+        str((row.get("exit_signal") or {}).get("binding_status")
+            or "source_gap_signal_missing")
+        for row in completed_projection
+    )
     if sell_completed_event_ids != projected_completed_ids:
         warnings.append(
             "sell_completed 이벤트와 완료 projection ID 불일치: "
@@ -2623,6 +3095,7 @@ def build_trade_review_report(
             "total_trades": len(visible_rows),
             "completed_trades": len(realized),
             "canonical_completed_trades": len(completed_projection),
+            "exit_signal_binding_counts": dict(exit_signal_binding_counts),
             "open_scalp_position_projection_count": len(open_projection),
             "buy_parent_handoff_counts": buy_parent_handoff["counts"],
             "buy_parent_handoff_source_status": buy_parent_handoff["source_quality_status"],

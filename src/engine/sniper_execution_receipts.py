@@ -2143,12 +2143,17 @@ def _main_lifecycle_exit_economics_fields(
     gross_pnl_krw = (sell_price - buy_price) * sell_qty
     fields = {
         "main_lifecycle_realized_net_pnl_krw": round(realized_net_pnl_krw, 4),
+        "main_lifecycle_cost_basis_source": "configured_trade_cost_rate",
+        "main_lifecycle_broker_actual_fees_taxes_krw": None,
     }
     implied_fees_taxes_krw = gross_pnl_krw - realized_net_pnl_krw
     if implied_fees_taxes_krw >= -0.01:
         fields["main_lifecycle_fees_taxes_krw"] = round(
             max(0.0, implied_fees_taxes_krw), 4
         )
+        fields["main_lifecycle_configured_fee_estimate_krw"] = fields[
+            "main_lifecycle_fees_taxes_krw"
+        ]
     resolved_decision_price = _safe_float(decision_price, 0.0)
     resolved_basis_source = str(decision_basis_source or "").strip()
     if decision_price is None:

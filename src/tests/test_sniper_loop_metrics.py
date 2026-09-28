@@ -388,23 +388,23 @@ def test_state_handler_deps_wrappers_no_longer_call_ensure():
 
 
 def test_run_sniper_loop_calls_ensure_state_handler_deps():
-    """run_sniper() 루프 상단에서 _ensure_state_handler_deps()가 호출되는지 검증.
-
-    소스 코드에 while True: 직후 _ensure_state_handler_deps() 호출이 있는지 확인.
-    """
+    """The main loop refreshes state-handler bindings each iteration."""
+    import ast
     import inspect
     from src.engine.kiwoom_sniper_v2 import run_sniper
 
-    source = inspect.getsource(run_sniper)
-    # while True: 이후 _ensure_state_handler_deps()가 루프 내에 존재하는지 확인
-    assert (
-        "_ensure_state_handler_deps()" in source
-    ), "run_sniper() does not contain _ensure_state_handler_deps() call"
-    # 루프 상단(while True 이후)에 위치하는지 확인
-    loop_section = source[source.find("while True:") : source.find("while True:") + 500]
-    assert (
-        "_ensure_state_handler_deps()" in loop_section
-    ), "_ensure_state_handler_deps() not found in loop top section"
+    function = ast.parse(inspect.getsource(run_sniper)).body[0]
+    loop = next(node for node in ast.walk(function)
+                if isinstance(node, ast.While)
+                and isinstance(node.test, ast.Constant)
+                and node.test.value is True)
+    assert any(
+        isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id == "_ensure_state_handler_deps"
+        for node in loop.body
+    ), "_ensure_state_handler_deps() not called directly by the main loop"
 
 
 def test_state_handler_dependency_snapshot_matches_bind_contract(monkeypatch):

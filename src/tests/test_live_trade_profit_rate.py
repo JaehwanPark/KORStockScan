@@ -3711,6 +3711,34 @@ def test_periodic_account_sync_recovers_unique_exact_sell_execution(
     )
     assert exact_fields["sell_time_precision"] == "order_second_not_fill_second"
     assert exact_fields["sell_time_forbidden_for_intraday_horizon"] is True
+    assert exact_fields["sell_terminal_source_status"] == "balance_reconciled_price_only"
+    assert exact_fields["broker_actual_fees_taxes_krw"] is None
+    assert exact_fields["sell_reconciliation_source_date"] == now.strftime("%Y-%m-%d")
+    assert len(exact_fields["sell_reconciliation_normalized_sha256"]) == 64
+    from src.engine import sniper_trade_review_report as trade_review
+    submitted = trade_review.HoldingEvent(
+        timestamp=(now - timedelta(minutes=1)).strftime("%Y-%m-%d %H:%M:%S"),
+        name="TEST", code="096770", stage="sell_order_sent",
+        fields={"id": str(record.id), "broker_order_no": "0015635",
+                "broker_route": "SOR", "actual_order_submitted": "True",
+                "broker_order_forbidden": "False", "attempt_id": "A1",
+                "main_lifecycle_id": "M1"}, raw_line="",
+    )
+    balance = trade_review.HoldingEvent(
+        timestamp=now.strftime("%Y-%m-%d %H:%M:%S"), name="TEST",
+        code="096770", stage="sell_completed",
+        fields={**exact_fields, "id": str(record.id)}, raw_line="",
+    )
+    trade = {"id": record.id, "code": "096770", "status": "COMPLETED",
+             "strategy": "SCALPING", "buy_price": record.buy_price,
+             "buy_qty": record.buy_qty, "sell_price": record.sell_price,
+             "profit_rate": record.profit_rate}
+    projection = trade_review._completed_trade_projection(
+        trade, [submitted, balance], trade)
+    assert projection["sell_reconciliation_generation_status"] == (
+        "normalized_contract_bound")
+    assert projection["realized_pnl_krw"] is None
+    assert projection["broker_actual_fees_taxes_krw"] is None
     assert exact_fields["sell_order_no"] == "0015635"
     assert exact_fields["broker_sell_submission_observed"] is True
     assert snapshot_calls == [

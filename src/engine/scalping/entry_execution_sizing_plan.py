@@ -646,6 +646,9 @@ def compose_entry_execution_sizing_plan(
         "entry_execution_sizing_quantity_increase_forbidden": True,
         "entry_execution_sizing_migration_baseline": plan_core["migration_baseline"],
         "entry_execution_sizing_plan_emitted": True,
+        "entry_execution_sizing_disposition": (
+            "issued" if not blockers else "blocked_plan"
+        ),
         "entry_execution_sizing_valid": not blockers,
         "entry_execution_sizing_blockers": blockers,
         "entry_execution_sizing_plan_sha256": _content_sha256(plan_core),

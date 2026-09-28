@@ -1,3 +1,4 @@
+import hashlib
 import json
 import pytest
 
@@ -189,6 +190,9 @@ def test_completed_projection_requires_exact_receipt_for_cost_and_fill_time():
     assert direct["broker_actual_exchange_code"] == "0"
     assert direct["broker_actual_exchange_name"] == "SOR"
     assert direct["broker_sor_flag"] == "Y"
+    assert direct["configured_fee_estimate_krw"] == 10
+    assert direct["broker_actual_fees_taxes_krw"] is None
+    assert direct["broker_actual_cost_observed"] is False
 
     event.fields["main_lifecycle_execution_occurrence_time_source"] = "missing"
     no_clock = report_mod._completed_trade_projection(base, [buy_event, event], base)
@@ -211,6 +215,131 @@ def test_completed_projection_requires_exact_receipt_for_cost_and_fill_time():
     assert sync_only["modeled_realized_pnl_krw"] == 50
     assert sync_only["exact_sell_fill_time"] is None
     assert sync_only["sell_time_forbidden_for_intraday_horizon"] is True
+
+
+def test_balance_reconciled_completion_preserves_missing_execution_and_cost():
+    trade = {"id": 47531, "rec_date": "2026-09-23", "code": "010060",
+             "status": "COMPLETED", "strategy": "SCALPING",
+             "buy_price": 195100, "buy_qty": 1, "sell_price": 201000,
+             "sell_time": "", "profit_rate": 2.79,
+             "realized_pnl_krw": 5438,
+             "realized_pnl_krw_source": "price_cost_model"}
+    submitted = report_mod.HoldingEvent(
+        timestamp="2026-09-23 09:07:00", name="OCI", code="010060",
+        stage="sell_order_sent", fields={"id": "47531",
+            "broker_order_no": "0012375", "broker_route": "SOR",
+            "actual_order_submitted": "True", "broker_order_forbidden": "False",
+            "attempt_id": "A1", "main_lifecycle_id": "M1"}, raw_line="")
+    reconciled = report_mod.HoldingEvent(
+        timestamp="2026-09-23 09:07:59", name="OCI", code="010060",
+        stage="sell_completed", fields={"id": "47531",
+            "sell_order_no": "0012375", "sell_qty": "1",
+            "decision_authority": "broker_balance_reconciliation_only",
+            "reconciliation_result": "broker_exact_order_fill_recovered",
+            "execution_match_reason": (
+                "unique_owner_cycle_kt00007_terminal_sell_execution"),
+            "sell_time_precision": "order_second_not_fill_second",
+            "realized_pnl_krw": "5438"}, raw_line="")
+    row = report_mod._completed_trade_projection(
+        trade, [submitted, reconciled], trade)
+    assert row["sell_terminal_source_status"] == "balance_reconciled_price_only"
+    assert row["sell_reconciliation_order_no"] == "0012375"
+    assert row["sell_submission_identity_status"] == "matched_source_only"
+    assert row["sell_submission_attempt_id"] == "A1"
+    assert row["sell_submission_lifecycle_id"] == "M1"
+    assert row["sell_execution_no"] is None
+    assert row["broker_actual_fees_taxes_krw"] is None
+    assert row["configured_fee_estimate_krw"] is None
+    assert row["realized_pnl_krw"] is None
+    assert row["strict_completion_status"] == "excluded"
+    assert row["sell_reconciliation_generation_status"] == "legacy_unbound"
+
+    assert "sell_completion_reconciliation_gap" in report_mod._PROJECTION_EVENT_STAGES
+    assert "sell_cancel_reconciliation_deferred" in report_mod._PROJECTION_EVENT_STAGES
+    deferred = report_mod.HoldingEvent(
+        timestamp="2026-09-23 09:07:49", name="OCI", code="010060",
+        stage="sell_cancel_reconciliation_deferred", fields={"id": "47531"},
+        raw_line="")
+    pending = report_mod._completed_trade_projection(
+        trade, [submitted, deferred, reconciled], trade)
+    assert pending["sell_cancel_deferred_event_count"] == 1
+    assert pending["realized_pnl_krw"] is None
+    contract = {
+        "schema": "sell_balance_reconciliation_source_v1",
+        "source_api": "kt00007", "source_date": "2026-09-23",
+        "record_id": 47531, "stock_code": "010060",
+        "order_no": "0012375", "order_time": "090700",
+        "submitted_qty": 1, "filled_qty": 1, "remaining_qty": 0,
+        "execution_price": 201000, "broker_route": "SOR",
+        "broker_sor_flag": "Y", "owner_buy_time": "2026-09-23T08:38:32",
+        "broker_snapshot_at": "2026-09-23T09:07:59+09:00",
+    }
+    raw = json.dumps(contract, sort_keys=True, separators=(",", ":"))
+    reconciled.fields.update(
+        sell_price="201000", sell_reconciliation_source_date="2026-09-23",
+        sell_reconciliation_source_contract=raw,
+        sell_reconciliation_normalized_sha256=hashlib.sha256(
+            raw.encode()).hexdigest(),
+        configured_fee_estimate_krw="462",
+    )
+    bound = report_mod._completed_trade_projection(
+        trade, [submitted, reconciled], trade)
+    assert bound["sell_reconciliation_generation_status"] == (
+        "normalized_contract_bound")
+    assert bound["configured_fee_estimate_krw"] == 462
+    assert bound["broker_actual_fees_taxes_krw"] is None
+    assert bound["realized_pnl_krw"] is None
+    reconciled.timestamp = "2026-09-24 00:00:02"
+    after_midnight = report_mod._completed_trade_projection(
+        trade, [submitted, reconciled], trade)
+    assert after_midnight["sell_reconciliation_generation_status"] == (
+        "normalized_contract_bound")
+    assert after_midnight["completion_observed_date"] == "2026-09-24"
+    reconciled.timestamp = "2026-09-23 09:07:59"
+    reconciled.fields["sell_reconciliation_source_date"] = "2026-09-22"
+    stale = report_mod._completed_trade_projection(
+        trade, [submitted, reconciled], trade)
+    assert stale["sell_reconciliation_generation_status"] == "invalid"
+    assert stale["configured_fee_estimate_krw"] is None
+
+    reconciled.fields["sell_reconciliation_source_date"] = "2026-09-23"
+    wrong_price = report_mod._completed_trade_projection(
+        {**trade, "sell_price": 202000}, [submitted, reconciled], trade)
+    assert wrong_price["sell_reconciliation_generation_status"] == "invalid"
+    submitted.fields["broker_order_no"] = "OTHER"
+    wrong_order = report_mod._completed_trade_projection(
+        trade, [submitted, reconciled], trade)
+    assert wrong_order["sell_submission_identity_status"] == "missing"
+    assert wrong_order["configured_fee_estimate_krw"] is None
+    submitted.fields["broker_order_no"] = "0012375"
+    submitted.fields["broker_route"] = "NXT"
+    wrong_route = report_mod._completed_trade_projection(
+        trade, [submitted, reconciled], trade)
+    assert wrong_route["sell_reconciliation_generation_status"] == (
+        "submission_route_conflict")
+    assert wrong_route["configured_fee_estimate_krw"] is None
+    submitted.fields["broker_route"] = "SOR"
+    conflicting_duplicate = report_mod.HoldingEvent(
+        timestamp="2026-09-23 09:07:01", name="OCI", code="010060",
+        stage="sell_order_sent", fields={**submitted.fields, "qty": "2"},
+        raw_line="")
+    conflicted = report_mod._completed_trade_projection(
+        trade, [submitted, conflicting_duplicate, reconciled], trade)
+    assert conflicted["sell_submission_identity_status"] == "conflicting"
+    assert conflicted["configured_fee_estimate_krw"] is None
+
+    gap = report_mod.HoldingEvent(
+        timestamp="2026-09-23 09:08:00", name="OCI", code="010060",
+        stage="sell_completion_reconciliation_gap",
+        fields={"id": "47531", "decision_authority": (
+            "broker_balance_reconciliation_only"),
+            "reconciliation_result": "broker_holding_absent_fill_receipt_missing"},
+        raw_line="",
+    )
+    missing = report_mod._completed_trade_projection(
+        trade, [submitted, gap], trade)
+    assert missing["sell_terminal_source_status"] == "balance_absent_receipt_missing"
+    assert missing["realized_pnl_krw"] is None
 
 
 def test_completed_execution_ledger_requires_buy_fill_and_conserves_all_sell_legs():
@@ -802,7 +931,8 @@ def test_explicit_exit_signal_precedes_later_terminal_inferred_rule():
 
     signal = report_mod._build_exit_signal(events)
 
-    assert signal.get("inferred", False) is False
+    assert signal.get("inferred") is True
+    assert signal["binding_status"] == "legacy_unbound"
     assert signal["exit_rule"] == "scalp_soft_stop_pct"
 
     events.insert(
@@ -811,6 +941,178 @@ def test_explicit_exit_signal_precedes_later_terminal_inferred_rule():
     )
     signal = report_mod._build_exit_signal(events)
     assert signal.get("inferred") is True
+
+
+def test_exit_signal_requires_exact_submission_generation_and_order():
+    contract = {
+        "schema": "holding_exit_signal_receipt_v1",
+        "source_date": "2026-09-28", "signal_id": "decision-1",
+        "signal_at": "2026-09-28T09:10:00.500000+09:00",
+        "record_id": "42", "code": "123456",
+        "position_key": "record:42", "buy_fill_identity": "buy-generation-1",
+        "strategy": "SCALPING", "position_tag": "SCANNER",
+        "decision_owner_type": "main_scalping",
+        "exit_rule": "scalp_trailing_take_profit",
+        "policy_sha256": "a" * 64,
+        "threshold_key": "SCALP_TRAILING_LIMIT_WEAK",
+        "threshold_effective_pct": 0.4,
+        "context_venue": "KRX", "context_session": "krx_regular",
+        "decision_inputs": {
+            "exit_threshold_key": "SCALP_TRAILING_LIMIT_WEAK",
+            "exit_threshold_effective_pct": 0.4,
+            "exit_threshold_executable_bid": 10060,
+        },
+    }
+    digest = hashlib.sha256(json.dumps(
+        contract, sort_keys=True, separators=(",", ":"),
+    ).encode()).hexdigest()
+    submit_contract = {
+        "schema": "sell_submit_pending_context_v1",
+        "generation": "submit-1", "target_id": 42, "code": "123456",
+        "requested_qty": 1, "owner_position_qty": 1,
+        "started_at": 1790554201.0, "intended_route": "SOR",
+        "intended_effective_venue": "KRX",
+        "intended_session_bucket": "KRX_REGULAR",
+    }
+    submit_sha = hashlib.sha256(json.dumps(
+        submit_contract, sort_keys=True, separators=(",", ":"),
+    ).encode()).hexdigest()
+    decision_fields = {
+        "id": "42", "exit_rule": contract["exit_rule"],
+        "exit_signal_id": contract["signal_id"],
+        "exit_signal_contract": json.dumps(contract, sort_keys=True,
+                                           separators=(",", ":")),
+        "exit_signal_contract_sha256": digest,
+        "exit_signal_position_key": contract["position_key"],
+        "exit_signal_buy_fill_identity": contract["buy_fill_identity"],
+        "exit_signal_source_date": contract["source_date"],
+        "exit_threshold_key": contract["threshold_key"],
+        "exit_threshold_effective_pct": contract["threshold_effective_pct"],
+        "exit_threshold_executable_bid": 10060,
+        "scalp_trailing_policy_value_sha256": contract["policy_sha256"],
+        "holding_context_venue": contract["context_venue"],
+        "holding_context_session": contract["context_session"],
+        "pipeline_lifecycle_population_scope": "real_record_bound",
+    }
+    submission_fields = {
+        "id": "42", "exit_rule": contract["exit_rule"],
+        "ord_no": "SELL-1", "exit_signal_id": "decision-1",
+        "exit_signal_contract_sha256": digest,
+        "exit_signal_position_key": "record:42",
+        "exit_signal_buy_fill_identity": "buy-generation-1",
+        "exit_signal_source_date": "2026-09-28",
+        "exit_signal_at": contract["signal_at"],
+        "exit_signal_binding_status": "same_position_buy_generation",
+        "exit_signal_submit_intended_route": "SOR",
+        "sell_submit_generation": "submit-1",
+        "sell_submit_context_sha256": submit_sha,
+        "sell_submit_context_contract": json.dumps(
+            submit_contract, sort_keys=True, separators=(",", ":")),
+        "broker_route": "SOR", "market_session_bucket": "krx_regular",
+        "qty": "1", "actual_order_submitted": "True",
+        "pipeline_lifecycle_population_scope": "real_record_bound",
+    }
+    def event(stage, timestamp, fields):
+        return report_mod.HoldingEvent(timestamp, "test", "123456", stage,
+                                       fields, "")
+    decision = event("exit_signal", "2026-09-28 09:10:00", decision_fields)
+    submission = event("sell_order_sent", "2026-09-28 09:10:01",
+                       submission_fields)
+    terminal = event("sell_completed", "2026-09-28 09:10:02", {
+        "id": "42", "exit_rule": contract["exit_rule"],
+        "order_no": "SELL-1",
+    })
+
+    linked = report_mod._build_exit_signal([decision, submission, terminal])
+    assert linked["inferred"] is False
+    assert linked["binding_status"] == "same_order_generation"
+    assert linked["policy_binding_status"] == "observed_sha_bootstrap_unverified"
+    assert linked["submission"]["order_no"] == "SELL-1"
+    assert linked["submission"]["sell_submit_context_sha256"] == submit_sha
+    trade = {
+        "id": 42, "code": "123456", "strategy": "SCALPING",
+        "position_tag": "SCANNER", "buy_time": "2026-09-28 09:00:00",
+        "sell_time": "2026-09-28 09:10:02",
+    }
+    assert report_mod._build_exit_signal([
+        decision, submission, terminal
+    ], trade)["binding_status"] == "same_order_generation"
+    assert report_mod._build_exit_signal([
+        decision, submission, terminal
+    ], {**trade, "position_tag": "MANUAL"})["binding_status"] == (
+        "source_gap_trade_custody_mismatch"
+    )
+
+    # The requested SOR route and broker-selected route are separate evidence.
+    broker_krx = event("sell_order_sent", submission.timestamp,
+                       {**submission_fields, "broker_route": "KRX"})
+    assert report_mod._build_exit_signal([
+        decision, broker_krx, terminal
+    ])["binding_status"] == "same_order_generation"
+    assert report_mod._build_exit_signal([
+        decision, submission, submission, terminal
+    ])["binding_status"] == "same_order_generation"
+    partial_context = {**submit_contract, "requested_qty": 2,
+                       "owner_position_qty": 2}
+    partial_sha = hashlib.sha256(json.dumps(
+        partial_context, sort_keys=True, separators=(",", ":"),
+    ).encode()).hexdigest()
+    partial_submission = event("sell_order_sent", submission.timestamp, {
+        **submission_fields, "qty": "2", "submitted_qty": "2",
+        "sell_submit_context_contract": json.dumps(
+            partial_context, sort_keys=True, separators=(",", ":")),
+        "sell_submit_context_sha256": partial_sha,
+    })
+    partial = event("sell_partial_fill_progress", "2026-09-28 09:10:01", {
+        "id": "42", "order_no": "SELL-1", "filled_qty": "1",
+        "remaining_qty": "1",
+    })
+    assert report_mod._build_exit_signal([
+        decision, partial_submission, partial, terminal
+    ])["binding_status"] == "same_order_generation"
+    cancel_pending = event("sell_cancel_reconciliation_deferred",
+                           "2026-09-28 09:10:02", {
+                               "id": "42", "order_no": "SELL-1",
+                           })
+    open_signal = report_mod._build_exit_signal([
+        decision, partial_submission, partial, cancel_pending
+    ])
+    assert open_signal["binding_status"] == "same_order_generation"
+    assert open_signal["submission"]["order_no"] == "SELL-1"
+
+    for changed in (
+        {"exit_signal_id": "stale-decision"},
+        {"ord_no": "SELL-OLD"},
+        {"sell_submit_context_sha256": ""},
+        {"qty": "2"},
+        {"exit_signal_source_date": "2026-09-27"},
+        {"broker_route": "UNKNOWN"},
+        {"pipeline_lifecycle_population_scope": "sim_observation_only"},
+    ):
+        invalid = event("sell_order_sent", submission.timestamp,
+                        {**submission_fields, **changed})
+        result = report_mod._build_exit_signal([decision, invalid, terminal])
+        assert result["inferred"] is True
+        assert result["binding_status"] != "same_order_generation"
+    changed_quote = event("exit_signal", decision.timestamp,
+                          {**decision_fields,
+                           "exit_threshold_executable_bid": 9999})
+    assert report_mod._build_exit_signal([
+        changed_quote, submission, terminal
+    ])["binding_status"] == "source_gap_decision_submit_contract_mismatch"
+    duplicate = event("exit_signal", decision.timestamp,
+                      {**decision_fields, "exit_signal_contract_sha256": "c" * 64})
+    result = report_mod._build_exit_signal([decision, duplicate, submission,
+                                            terminal])
+    assert result["inferred"] is True
+    conflicting_submit = event("sell_order_sent", submission.timestamp,
+                               {**submission_fields, "qty": "2"})
+    assert report_mod._build_exit_signal([
+        decision, submission, conflicting_submit, terminal
+    ])["binding_status"] == "source_gap_conflicting_submission"
+    assert report_mod._build_exit_signal([
+        submission, terminal
+    ])["binding_status"] == "source_gap_explicit_signal_missing"
 
 
 def test_trade_review_restores_completed_trade_from_holding_events(monkeypatch):

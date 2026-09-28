@@ -50,6 +50,45 @@ def submission_fields(stock, order, *, seed, qty, price, route, timeout_sec, now
         runtime_effect=False, allowed_runtime_apply=False)
 
 
+def sequential_first_submission_fields(
+    stock, order, *, intent, owner_context, parent_id, qty, price, route, now_ts,
+):
+    """Freeze first-leg evidence without giving cancel-wait ownership of its clock."""
+    from src.engine.scalping.initial_quantity_timeout import timeout_schedule_valid
+    from src.engine.scalping.strategy_owner_components import digest
+
+    schedule = intent.get("schedule") if isinstance(intent, dict) else None
+    if (not timeout_schedule_valid(schedule)
+            or not parent_id or not intent.get("attempt_id")
+            or owner_context is None
+            or not str(getattr(owner_context, "client_intent_id", ""))
+            or type(qty) is not int or qty <= 0
+            or type(price) is not int or price <= 0
+            or route not in {"KRX", "NXT", "SOR"}):
+        raise ValueError("sequential_cancel_wait_observation_identity_invalid")
+    frozen = datetime.fromtimestamp(now_ts, KST)
+    if frozen.date().isoformat() != schedule["order_start_at"][:10]:
+        raise ValueError("sequential_cancel_wait_observation_date_invalid")
+    context = dict(schema=ECONOMIC_SCHEMA, source_date=frozen.date().isoformat(),
+        frozen_at=frozen.isoformat(), parent_id=parent_id,
+        bundle_attempt_id=intent["attempt_id"],
+        child_id=str(order.get("tag") or ""), stock_code=stock.get("code"),
+        requested_qty=qty, plan_total_qty=intent.get("requested_qty"),
+        submitted_price=price, broker_route=route,
+        session_bucket=stock.get("market_session_bucket") or "-",
+        owner_type=getattr(owner_context, "owner_type", None),
+        owner_id=getattr(owner_context, "owner_id", None),
+        owner_client_intent_id=owner_context.client_intent_id,
+        timeout_owner="initial_quantity_bundle_timeout_schedule",
+        initial_quantity_schedule=schedule, actual_timeout_sec=None,
+        candidate_timeout_secs=[], economic_eligible=False,
+        observation_only=True)
+    context["sha256"] = digest(context)
+    return {"entry_cancel_wait_submission_context": json.dumps(
+        context, sort_keys=True, separators=(",", ":")),
+        "cancel_wait_timeout_owner": context["timeout_owner"]}
+
+
 def submission_response_fields(response):
     response = response if isinstance(response, dict) else {}
     number = str(response.get("ord_no") or response.get("odno") or "")

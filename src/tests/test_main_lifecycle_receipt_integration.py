@@ -26,6 +26,139 @@ COST_HASH = "a" * 64
 SYMBOL_HASH = "b" * 64
 
 
+def test_exit_signal_receipt_binds_only_same_buy_and_submit_generation(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers, "buy_fill_identity_from_runtime",
+        lambda stock: stock.get("test_buy_fill_identity"),
+    )
+    stock = {
+        "id": 42, "code": "123456", "strategy": "SCALPING",
+        "position_tag": "SCANNER", "test_buy_fill_identity": "buy-generation-1",
+    }
+    decision = state_handlers._exit_signal_receipt_fields(
+        stock, "123456", {
+            "exit_rule": "scalp_trailing_take_profit",
+            "exit_threshold_key": "SCALP_TRAILING_LIMIT_WEAK",
+            "exit_threshold_effective_pct": 0.4,
+            "scalp_trailing_policy_value_sha256": "a" * 64,
+            "holding_context_venue": "KRX",
+            "holding_context_session": "krx_regular",
+        }, now_ts=1790554200.0,
+    )
+    assert decision["exit_signal_id"]
+    contract = json.loads(decision["exit_signal_contract"])
+    assert contract["source_date"] == contract["signal_at"][:10]
+    assert contract["buy_fill_identity"] == "buy-generation-1"
+    stock.update({
+        "sell_submit_generation": "submit-1",
+        "sell_submit_target_id": 42,
+        "sell_submit_code": "123456",
+        "sell_submit_requested_qty": 1,
+        "sell_submit_owner_position_qty": 1,
+        "sell_submit_started_at": 1790554201.0,
+        "sell_submit_intended_route": "SOR",
+        "sell_submit_intended_effective_venue": "KRX",
+        "sell_submit_intended_session_bucket": "KRX_REGULAR",
+    })
+    stock["sell_submit_context_sha256"] = (
+        state_handlers._sell_submit_context_sha256(stock)
+    )
+    linked = state_handlers._exit_signal_submission_fields(
+        stock, "123456", {"exit_rule": "scalp_trailing_take_profit"},
+    )
+    assert linked["exit_signal_id"] == decision["exit_signal_id"]
+    assert linked["sell_submit_generation"] == "submit-1"
+    stock["test_buy_fill_identity"] = "buy-generation-2"
+    assert state_handlers._exit_signal_submission_fields(
+        stock, "123456", {"exit_rule": "scalp_trailing_take_profit"},
+    )["exit_signal_binding_status"] == "source_gap_buy_generation_mismatch"
+
+
+def test_holding_pipeline_emits_exit_decision_then_submit_reference(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(state_handlers, "buy_fill_identity_from_runtime",
+                        lambda _stock: "buy-generation-1")
+    monkeypatch.setattr(state_handlers, "emit_pipeline_event",
+                        lambda *args, **kwargs: emitted.append(kwargs["fields"]) or True)
+    monkeypatch.setattr(state_handlers, "pipeline_lifecycle_fields_safe",
+                        lambda *args, **kwargs: {})
+    monkeypatch.setattr(state_handlers, "observe_candidate_transition_safe",
+                        lambda *args, **kwargs: None)
+    monkeypatch.setattr(state_handlers, "scout_ai_execution_attribution_fields",
+                        lambda *args, **kwargs: {})
+    monkeypatch.setattr(state_handlers, "_strategy_owner_component_fields",
+                        lambda _stock: {})
+    monkeypatch.setattr(state_handlers, "_holding_pipeline_stable_block_log_decision",
+                        lambda *args: (True, {}))
+    monkeypatch.setattr(state_handlers, "_holding_pipeline_observation_scope_fields",
+                        lambda *args: {
+                            "holding_context_venue": "KRX",
+                            "holding_context_session": "krx_regular",
+                        })
+    stock = {"id": 42, "code": "123456", "name": "TEST",
+             "strategy": "SCALPING", "position_tag": "SCANNER"}
+    state_handlers._log_holding_pipeline(
+        stock, "123456", "exit_signal",
+        exit_rule="scalp_trailing_take_profit",
+        exit_threshold_key="SCALP_TRAILING_LIMIT_WEAK",
+        exit_threshold_effective_pct=0.4,
+        scalp_trailing_policy_value_sha256="a" * 64,
+    )
+    assert emitted[0]["exit_signal_binding_status"] == "decision_receipt_emitted"
+    stock.update({
+        "sell_submit_generation": "submit-1",
+        "sell_submit_target_id": 42, "sell_submit_code": "123456",
+        "sell_submit_requested_qty": 1,
+        "sell_submit_owner_position_qty": 1,
+        "sell_submit_started_at": 1790554201.0,
+        "sell_submit_intended_route": "SOR",
+        "sell_submit_intended_effective_venue": "KRX",
+        "sell_submit_intended_session_bucket": "KRX_REGULAR",
+    })
+    stock["sell_submit_context_sha256"] = (
+        state_handlers._sell_submit_context_sha256(stock)
+    )
+    state_handlers._log_holding_pipeline(
+        stock, "123456", "sell_order_sent",
+        exit_rule="scalp_trailing_take_profit", broker_order_no="SELL-1",
+        broker_route="SOR", market_session_bucket="krx_regular",
+        qty=1, actual_order_submitted=True,
+    )
+    assert emitted[1]["exit_signal_id"] == emitted[0]["exit_signal_id"]
+    assert emitted[1]["exit_signal_contract_sha256"] == (
+        emitted[0]["exit_signal_contract_sha256"]
+    )
+
+
+def test_exit_receipt_capture_failure_does_not_block_holding_pipeline(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(state_handlers, "emit_pipeline_event",
+                        lambda *args, **kwargs: emitted.append(kwargs["fields"]) or True)
+    monkeypatch.setattr(state_handlers, "pipeline_lifecycle_fields_safe",
+                        lambda *args, **kwargs: {})
+    monkeypatch.setattr(state_handlers, "observe_candidate_transition_safe",
+                        lambda *args, **kwargs: None)
+    monkeypatch.setattr(state_handlers, "scout_ai_execution_attribution_fields",
+                        lambda *args, **kwargs: {})
+    monkeypatch.setattr(state_handlers, "_strategy_owner_component_fields",
+                        lambda _stock: {})
+    monkeypatch.setattr(state_handlers, "_holding_pipeline_stable_block_log_decision",
+                        lambda *args: (True, {}))
+    monkeypatch.setattr(state_handlers, "_holding_pipeline_observation_scope_fields",
+                        lambda *args: {})
+    monkeypatch.setattr(state_handlers, "_exit_signal_receipt_fields",
+                        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("bad")))
+    stock = {"id": 42, "code": "123456", "name": "TEST",
+             "strategy": "SCALPING", "_exit_signal_receipt": {"stale": True}}
+    assert state_handlers._log_holding_pipeline(
+        stock, "123456", "exit_signal", exit_rule="scalp_soft_stop_pct"
+    ) is True
+    assert "_exit_signal_receipt" not in stock
+    assert emitted[0]["exit_signal_binding_status"] == (
+        "source_gap_receipt_capture_failed:ValueError"
+    )
+
+
 def test_execution_receipt_population_scope_requires_real_order_authority(monkeypatch):
     emitted = []
     monkeypatch.setattr(execution_receipts, "emit_pipeline_event", lambda *a, **kw: emitted.append(kw["fields"].copy()))
@@ -2566,6 +2699,9 @@ def test_exit_economics_uses_exact_decision_price_or_omits_slippage() -> None:
     )
     assert fields == {
         "main_lifecycle_fees_taxes_krw": 8.0,
+        "main_lifecycle_configured_fee_estimate_krw": 8.0,
+        "main_lifecycle_broker_actual_fees_taxes_krw": None,
+        "main_lifecycle_cost_basis_source": "configured_trade_cost_rate",
         "main_lifecycle_realized_net_pnl_krw": 12,
         "main_lifecycle_slippage_krw": 20.0,
         "main_lifecycle_slippage_basis_price": 10_010.0,

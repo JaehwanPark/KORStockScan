@@ -311,6 +311,148 @@ def test_watching_final_acquisition_recovers_prepared_stale_input_without_io(
     assert handlers._build_tick_source_quality_log_fields(fields) == fields
 
 
+@pytest.mark.parametrize(
+    "route_state", [
+        "fresh", "stale", "missing", "wrong_item", "wrong_epoch",
+        "boolean_epoch", "split_epoch", "missing_depth",
+    ],
+)
+def test_watching_final_refresh_reuses_only_prepared_exact_route(
+    monkeypatch, route_state,
+):
+    prepared = _ws(NOW - 0.1)
+    prepared.update(
+        market_suffix="_AL", market_route="krx_nxt_integrated",
+        market_data_transport_epoch=1,
+        last_realtime_type_item={"0B": "123456_AL", "0D": "123456_AL"},
+        last_realtime_type_market_suffix={"0B": "_AL", "0D": "_AL"},
+        last_realtime_type_market_route={
+            "0B": "krx_nxt_integrated", "0D": "krx_nxt_integrated",
+        },
+    )
+    context = build_entry_candle_context(
+        None, "123456", prepared, "KRX", "krx_regular", now_ts=NOW,
+        recent_candles=[{
+            "source_timestamp": "20260910135900", "시가": 10000,
+            "고가": 10010, "저가": 9990, "현재가": 10000, "거래량": 100,
+        }],
+        broker_route="SOR",
+    )
+    # The aggregate KRX tick is newer than the prepared integrated route.
+    latest = _ws(NOW + 4.95, price=10050)
+    latest["market_data_transport_epoch"] = 1
+    observed = NOW + (1 if route_state == "stale" else 4.9)
+    common = {
+        "item": "123456_AL", "market_suffix": "_AL",
+        "market_route": "krx_nxt_integrated", "transport_epoch": 1,
+        "observed_epoch": observed,
+    }
+    if route_state == "wrong_item":
+        common["item"] = "654321_AL"
+    if route_state == "wrong_epoch":
+        common["transport_epoch"] = 2
+    if route_state == "boolean_epoch":
+        common["transport_epoch"] = True
+    if route_state != "missing":
+        depth_book = {} if route_state == "missing_depth" else {
+            "bids": [{"price": 10020, "volume": 100}],
+            "asks": [{"price": 10030, "volume": 100}],
+        }
+        depth_row = {**common, "orderbook": depth_book}
+        if route_state == "split_epoch":
+            depth_row["transport_epoch"] = 2
+        latest["realtime_type_snapshots_by_route"] = {
+            "_AL|krx_nxt_integrated": {
+                "0B": {**common, "current_price": 10020},
+                "0D": depth_row,
+            },
+        }
+        latest["recent_trade_ticks_by_route"] = {
+            "_AL|krx_nxt_integrated": [
+                {"price": 10020, "received_ts": observed},
+            ],
+        }
+    monkeypatch.setattr(handlers.time, "time", lambda: NOW + 5)
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED", "true")
+    monkeypatch.setattr(
+        handlers, "WS_MANAGER",
+        SimpleNamespace(get_latest_data=lambda _code: latest),
+    )
+
+    ws, ticks, refreshed, fields = handlers._refresh_prepared_entry_inputs(
+        "123456", prepared, [], context,
+    )
+    preflight = snapshot_module.ai_input_preflight(refreshed)
+    if route_state == "fresh":
+        assert fields["entry_ai_final_ws_snapshot_refresh_applied"] is True
+        assert ws["curr"] == 10020
+        assert ws["best_bid"] == 10020
+        assert ws["best_ask"] == 10030
+        assert ticks == latest["recent_trade_ticks_by_route"][
+            "_AL|krx_nxt_integrated"
+        ]
+        assert preflight["source_allowed"] is True
+        assert "entry_ai_final_snapshot_revalidation_error" not in fields
+        from src.engine import ai_engine_openai as engine_module
+        *_, machine_fields = engine_module._final_entry_machine_inputs(
+            prepared, [], context,
+            refresher=lambda ws_data, recent_ticks, candle_context:
+                handlers._refresh_prepared_entry_inputs(
+                    "123456", ws_data, recent_ticks, candle_context,
+                ),
+        )
+        assert "entry_machine_input_error" not in machine_fields
+    else:
+        assert preflight["source_allowed"] is False
+        if route_state in {"wrong_epoch", "boolean_epoch", "split_epoch"}:
+            assert fields["entry_ai_final_snapshot_revalidation_error"] == (
+                "prepared_entry_route_partition_epoch_invalid"
+            )
+
+
+def test_watching_final_refresh_rebinds_krx_after_integrated_aggregate(
+    monkeypatch,
+):
+    prepared = _ws(NOW - 0.1)
+    prepared["market_data_transport_epoch"] = 1
+    latest = _ws(NOW + 4.9, price=10050)
+    latest.update(
+        market_suffix="_AL", market_route="krx_nxt_integrated",
+        market_data_transport_epoch=1,
+        last_realtime_type_item={"0B": "123456_AL", "0D": "123456_AL"},
+        last_realtime_type_market_suffix={"0B": "_AL", "0D": "_AL"},
+        last_realtime_type_market_route={
+            "0B": "krx_nxt_integrated", "0D": "krx_nxt_integrated",
+        },
+    )
+    common = {
+        "item": "123456", "market_suffix": "",
+        "market_route": "krx_regular", "transport_epoch": 1,
+        "observed_epoch": NOW + 4.9,
+    }
+    latest["realtime_type_snapshots_by_route"] = {"KRX|krx_regular": {
+        "0B": {**common, "current_price": 10020},
+        "0D": {**common, "orderbook": {
+            "bids": [{"price": 10020, "volume": 100}],
+            "asks": [{"price": 10030, "volume": 100}],
+        }},
+    }}
+    monkeypatch.setattr(handlers.time, "time", lambda: NOW + 5)
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED", "true")
+    monkeypatch.setattr(
+        handlers, "WS_MANAGER",
+        SimpleNamespace(get_latest_data=lambda _code: latest),
+    )
+
+    ws, _, context, fields = handlers._refresh_prepared_entry_inputs(
+        "123456", prepared, [], _context(),
+    )
+    assert ws["curr"] == 10020
+    assert ws["best_ask"] == 10030
+    assert snapshot_module.ai_input_preflight(context)["source_allowed"] is True
+    assert "entry_ai_final_snapshot_revalidation_error" not in fields
+
+
 @pytest.mark.parametrize("missing_tape", [False, True])
 def test_watching_final_quote_cannot_resurrect_old_tape(monkeypatch, missing_tape):
     context = _context()

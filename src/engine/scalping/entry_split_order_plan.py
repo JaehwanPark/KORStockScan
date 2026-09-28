@@ -200,9 +200,23 @@ CALIBRATION_EVENT_KEYS = frozenset(
         "entry_execution_sizing_quantity_increase_forbidden",
         "entry_execution_sizing_migration_baseline",
         "entry_execution_sizing_plan_emitted",
+        "entry_execution_sizing_disposition",
         "entry_execution_sizing_valid",
         "entry_execution_sizing_blockers",
         "entry_execution_sizing_plan_sha256",
+        "entry_execution_sizing_plan",
+        "entry_submit_attempt_id",
+        "buy_parent_id",
+        "buy_owner_type",
+        "buy_owner_id",
+        "buy_account_key",
+        "owner_registry_intent_id",
+        "buy_registry_mode",
+        "broker_submission_reconciliation_required",
+        "broker_response_success",
+        "broker_route",
+        "dmst_stex_tp",
+        "entry_split_order_leg_index",
         "entry_price_plan_schema",
         "entry_price_plan_id",
         "entry_price_plan_owner",
@@ -1580,7 +1594,26 @@ def policy_report_generation_contract_status(
         report = _load_json(Path(source_report))
     if not report:
         return False, "generation_source_report_missing_or_invalid"
-    return validate_report_policy_generation(report, policy)
+    valid, reason = validate_report_policy_generation(report, policy)
+    if not valid:
+        return valid, reason
+    if source_date >= ATOMIC_SIZING_LINEAGE_REQUIRED_FROM_DATE.isoformat():
+        lineage = ((report.get("input_summary") or {}).get("atomic_execution_sizing")
+                   or {}).get("lineage")
+        if not isinstance(lineage, dict) or lineage.get("schema") != ATOMIC_SIZING_LINEAGE_SCHEMA:
+            return False, "atomic_sizing_lineage_missing"
+        current = _atomic_sizing_source_generation(source_date)
+        recorded = lineage.get("source_generation")
+        if (not isinstance(recorded, dict) or recorded.get("status") != "ready"
+                or current.get("status") != "ready"
+                or recorded.get("generation_sha256") != current.get("generation_sha256")
+                or lineage.get("source_date") != source_date):
+            return False, "atomic_sizing_source_generation_stale"
+        previous_projection = recorded.get("reader_projection")
+        if isinstance(previous_projection, dict):
+            if not _atomic_sizing_projection_stamps_match(previous_projection, source_date):
+                return False, "atomic_sizing_reader_projection_stale"
+    return True, reason
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -1868,6 +1901,7 @@ def _iter_input_events(target_date: str) -> tuple[list[dict[str, Any]], dict[str
                     "entry_quantity_leg_four_arm_evaluation",
                     "order_bundle_submitted",
                     "order_leg_sent",
+                    "order_leg_no_response",
                     "order_leg_fail",
                     "order_bundle_failed",
                 }
@@ -1907,6 +1941,7 @@ def _iter_entry_split_input_rows(path: Path, *, hard_blocking_stages: set[str]):
         "order_bundle_submitted",
         "order_leg_sent",
         "order_leg_fail",
+        "order_leg_no_response",
         "order_bundle_failed",
         *hard_blocking_stages,
     }
@@ -2979,6 +3014,608 @@ def _is_real_submit_event(fields: dict[str, Any]) -> bool:
         _safe_bool(fields.get("actual_order_submitted"))
         and stage in {"order_bundle_submitted", "order_leg_sent"}
     )
+
+
+ATOMIC_SIZING_LINEAGE_SCHEMA = "entry_atomic_sizing_lineage_v1"
+ATOMIC_SIZING_LINEAGE_REQUIRED_FROM_DATE = date(2026, 9, 28)
+
+
+def _atomic_sizing_source_generation(target_date: str) -> dict[str, Any]:
+    """Use the sealed producer profile, never a bare file-exists assertion."""
+    from src.engine.pipeline_event_summary import (
+        producer_source_ledger_issues, producer_summary_paths,
+    )
+
+    _, path = producer_summary_paths(DATA_DIR / "pipeline_event_summaries", target_date)
+    manifest = _load_json(path)
+    ledger = manifest.get("raw_source_ledger")
+    if not isinstance(ledger, dict):
+        return {"status": "historical_unsealed" if target_date <
+                ATOMIC_SIZING_LINEAGE_REQUIRED_FROM_DATE.isoformat() else "source_gap",
+                "source_date": target_date, "generation_sha256": None,
+                "reason": "producer_raw_ledger_missing"}
+    try:
+        issues = producer_source_ledger_issues(DATA_DIR, target_date)
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        issues = [f"producer_raw_ledger_unreadable:{type(exc).__name__}"]
+    stage_names = ("entry_execution_sizing_plan", "entry_execution_sizing_plan_block",
+                   "order_leg_sent", "order_bundle_submitted")
+    stages = ledger.get("stages") or {}
+    stage_census = {name: stages.get(name, {}) for name in stage_names}
+    ready = not issues and ledger.get("source_date") == target_date and all(
+        isinstance(value, dict) for value in stage_census.values())
+    return {"status": "ready" if ready else "source_gap",
+            "source_date": target_date,
+            "generation_sha256": ledger.get("ledger_sha256") if ready else None,
+            "stage_census": stage_census,
+            "reason": None if ready else (issues[0] if issues else "stage_census_invalid")}
+
+
+def _atomic_sizing_core(value: Any) -> dict[str, Any] | None:
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, str) or len(value) > 2 * 1024 * 1024:
+        return None
+    try:
+        parsed = json.loads(value)
+    except ValueError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _atomic_sizing_projection_identity(
+    projection: dict[str, Any], stage_census: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Keep the compact reader generation separate from the raw producer seal."""
+    census = projection.get("producer_census") or {}
+    relevant = ("entry_execution_sizing_plan", "entry_execution_sizing_plan_block",
+                "order_leg_sent", "order_bundle_submitted")
+    valid_empty = (projection.get("status") == "source_gap"
+                   and projection.get("reason") == "execution_compact_coverage_unproven"
+                   and isinstance(stage_census, dict)
+                   and all(_safe_int((stage_census.get(stage) or {}).get("valid_count"), 0) == 0
+                           for stage in relevant))
+    sources = projection.get("sources") or []
+    stamps = []
+    for source in sources:
+        path = Path(str(source.get("path") or ""))
+        try:
+            stat_result = path.stat()
+            stamp = [stat_result.st_dev, stat_result.st_ino, stat_result.st_size,
+                     stat_result.st_mtime_ns, stat_result.st_ctime_ns]
+        except OSError:
+            stamp = None
+        stamps.append({"path": str(path), "stamp": stamp})
+    return {"status": "valid_empty" if valid_empty else projection.get("status"),
+            "sources": projection.get("sources") or [],
+            "source_stamps": stamps,
+            "producer_manifest_sha256": census.get("manifest_sha256"),
+            "retained_event_count": _safe_int(projection.get("retained_event_count"), 0),
+            "full_population_coverage_verified": (
+                projection.get("full_population_coverage_verified") is True or valid_empty)}
+
+
+def _atomic_sizing_compact_inventory(target_date: str) -> list[str]:
+    flat = existing_or_gzip_path(_threshold_events_path(target_date))
+    paths = ([flat] if flat.is_file() and flat.stat().st_size <= 64 * 1024 * 1024
+             else [])
+    directory = (DATA_DIR / "threshold_cycle" / f"date={target_date}"
+                 / "family=dynamic_entry_price_resolver")
+    paths.extend(sorted(directory.glob("part-*.jsonl*")))
+    return [str(path.resolve()) for path in paths]
+
+
+def _atomic_sizing_projection_stamps_match(identity: dict[str, Any], target_date: str) -> bool:
+    stamps = identity.get("source_stamps")
+    if not isinstance(stamps, list) or not all(isinstance(item, dict) for item in stamps):
+        return False
+    if _atomic_sizing_compact_inventory(target_date) != [item.get("path") for item in stamps]:
+        return False
+    for item in stamps:
+        try:
+            path = Path(item["path"])
+            if path.is_symlink():
+                return False
+            stat_result = path.stat()
+        except (OSError, TypeError, ValueError):
+            return False
+        observed = [stat_result.st_dev, stat_result.st_ino, stat_result.st_size,
+                    stat_result.st_mtime_ns, stat_result.st_ctime_ns]
+        if observed != item.get("stamp"):
+            return False
+    return True
+
+
+def _atomic_sizing_registry_terminal(
+    row: dict[str, Any], leg_events: list[dict[str, Any]],
+    registry_events: list[dict[str, Any]] | None,
+) -> None:
+    """Attach only exact local registry evidence; no broker-order-number fallback."""
+    if registry_events is None or not leg_events:
+        return
+    if (not row.get("account_key") or not row.get("owner_id")
+            or len(row.get("owner_registry_intent_ids") or []) != len(leg_events)):
+        return
+    from src.trading.order.owner_custody_registry import OrderOwnerRegistry
+    try:
+        registry_state = OrderOwnerRegistry._state(registry_events)
+    except (KeyError, TypeError, ValueError):
+        row["source_quality_reasons"].append("registry_state_invalid")
+        return
+    verified_qty = 0
+    verified_canceled = 0
+    canceled_observed = True
+    all_terminal = True
+    cancel_pending = False
+    executions: list[str] = []
+    terminal_times: list[str] = []
+    for leg in leg_events:
+        intent = str(leg.get("owner_registry_intent_id") or "")
+        order = str(leg.get("broker_order_no") or leg.get("ord_no") or "")
+        qty = _safe_int(leg.get("submitted_qty"), -1)
+        journal = [event for event in registry_events
+                   if isinstance(event, dict) and event.get("intent_id") == intent]
+        current = registry_state.get(intent)
+        if not journal or not intent or not order or not isinstance(current, dict):
+            return
+        if (current.get("account_key") != row["account_key"]
+                or current.get("order_date") != row["source_date"]
+                or current.get("symbol") != row["stock_code"]
+                or current.get("owner_type") != "main_scalping"
+                or current.get("owner_id") != row["owner_id"]
+                or current.get("side") != "BUY" or current.get("action") != "NEW"
+                or _safe_int(current.get("quantity"), -1) != qty
+                or str(current.get("broker_order_no") or "") != order
+                or (row.get("broker_route") and
+                    current.get("route") != row["broker_route"])):
+            row["source_quality_reasons"].append("registry_identity_mismatch")
+            return
+        if not any(event.get("event") == "ORDER_BOUND" for event in journal):
+            return
+        cumulative = 0
+        seen_execution: set[str] = set()
+        for event in journal:
+            if event.get("event") != "FILL_RECORDED":
+                continue
+            execution = str(event.get("execution_no") or "")
+            observed = _safe_int(event.get("filled_qty"), -1)
+            if (not execution or execution in seen_execution
+                    or observed <= cumulative or observed > qty):
+                row["source_quality_reasons"].append("registry_fill_progress_invalid")
+                return
+            seen_execution.add(execution)
+            executions.append(execution)
+            cumulative = observed
+        if _safe_int(current.get("filled_qty"), -1) != cumulative:
+            row["source_quality_reasons"].append("registry_fill_cumulative_mismatch")
+            return
+        verified_qty += cumulative
+        if current.get("canceled_qty") is None:
+            canceled_observed = False
+        else:
+            canceled = _safe_int(current.get("canceled_qty"), -1)
+            if canceled < 0 or cumulative + canceled > qty:
+                row["source_quality_reasons"].append("registry_cancel_quantity_invalid")
+                return
+            verified_canceled += canceled
+        proof = current.get("terminal_reconciliation")
+        terminal = (current.get("state") == "ORDER_TERMINAL"
+                    and isinstance(proof, dict)
+                    and proof.get("schema") == "order_owner_terminal_reconciliation_v1"
+                    and _valid_generation_id(proof.get("receipt_sha256"))
+                    and all(proof.get(field) == current.get(field) for field in (
+                        "intent_id", "account_key", "order_date", "broker_order_no",
+                        "owner_type", "owner_id", "symbol", "side", "action",
+                        "route", "quantity", "filled_qty")))
+        all_terminal = all_terminal and terminal
+        if terminal and isinstance(current.get("observed_at_kst"), str):
+            terminal_times.append(current["observed_at_kst"])
+        cancel_pending = cancel_pending or any(
+            cancel.get("action") == "CANCEL"
+            and cancel.get("original_order_no") == order
+            and cancel.get("account_key") == row["account_key"]
+            and cancel.get("order_date") == row["source_date"]
+            and cancel.get("owner_id") == row["owner_id"]
+            and cancel.get("state") != "ORDER_TERMINAL"
+            for cancel in registry_state.values())
+    row["filled_qty"] = verified_qty
+    row["unfilled_submitted_qty"] = row["submitted_qty"] - verified_qty
+    row["canceled_qty"] = verified_canceled if canceled_observed else None
+    row["remaining_order_qty"] = (
+        row["submitted_qty"] - verified_qty - verified_canceled
+        if canceled_observed else None)
+    row["execution_ids"] = executions
+    row["terminal_observed_at"] = max(terminal_times) if all_terminal and terminal_times else None
+    row["terminal_state"] = (
+        "full" if all_terminal and verified_qty == row["submitted_qty"] else
+        "partial_terminal" if all_terminal and verified_qty > 0 else
+        "terminal_unfilled" if all_terminal else
+        "cancel_pending" if cancel_pending else
+        "partial_open" if verified_qty > 0 else "open")
+
+
+def build_atomic_execution_sizing_lineage(
+    target_date: str,
+    events: list[dict[str, Any]],
+    *,
+    source_generation: dict[str, Any] | None = None,
+    registry_events: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Reconcile plan rows and real leg orders without counting bundle events twice.
+
+    This is source-only.  An absent broker terminal or cost never becomes zero.
+    """
+    from src.engine.scalping.entry_execution_sizing_plan import _content_sha256
+
+    if not _valid_iso_date(target_date):
+        raise ValueError("atomic_sizing_source_date_invalid")
+    source_generation = source_generation or {"status": "source_gap",
+        "source_date": target_date, "generation_sha256": None}
+    census_stages = {"entry_execution_sizing_plan", "entry_execution_sizing_plan_block",
+                     "order_leg_sent", "order_bundle_submitted"}
+    stages = census_stages | {"order_leg_fail", "order_leg_no_response"}
+    selected = [_event_fields(event) for event in events
+                if isinstance(event, dict) and str(_event_fields(event).get("stage") or "") in stages]
+    counts = dict(raw_plan_events=0, issued_plan_count=0, deferred_no_plan_count=0,
+                  blocked_no_plan_count=0, blocked_no_action_receipt_count=0,
+                  raw_submit_events=0, unique_leg_orders=0,
+                  identity_joined_plan_count=0, valid_plan_count=0,
+                  quarantined_plan_count=0,
+                  unobserved_plan_count=0, unjoined_submit_count=0,
+                  excluded_duplicate_plan_event_count=0,
+                  excluded_duplicate_submit_event_count=0,
+                  excluded_source_only_plan_count=0,
+                  response_uncertain_attempt_count=0)
+    rows: list[dict[str, Any]] = []
+    unjoined_submits: list[dict[str, Any]] = []
+    plans: dict[tuple[str, str, str, str, str], dict[str, Any]] = {}
+    attempts: dict[tuple[str, str, str], set[tuple[str, str, str, str, str]]] = defaultdict(set)
+    submits: list[dict[str, Any]] = []
+    uncertain_events: list[dict[str, Any]] = []
+    uncertain_attempts: set[tuple[str, str, str, str, str]] = set()
+    for event in selected:
+        stage = event["stage"]
+        day = str(event.get("source_date") or event.get("emitted_date")
+                  or _event_date(event) or "")[:10]
+        record = str(event.get("record_id") or "")
+        attempt = str(event.get("entry_submit_attempt_id") or event.get("buy_parent_id") or "")
+        plan_id = str(event.get("entry_execution_sizing_plan_id") or "")
+        plan_sha = str(event.get("entry_execution_sizing_plan_sha256") or "")
+        if stage in {"order_leg_sent", "order_bundle_submitted"}:
+            if _safe_bool(event.get("actual_order_submitted")):
+                counts["raw_submit_events"] += 1
+                submits.append(event)
+            continue
+        if stage in {"order_leg_fail", "order_leg_no_response"}:
+            uncertain_events.append(event)
+            continue
+        counts["raw_plan_events"] += 1
+        if not plan_id and event.get("entry_execution_sizing_plan_emitted") is not True:
+            observed_disposition = event.get("entry_execution_sizing_disposition")
+            disposition = (
+                "blocked_no_action_receipt"
+                if stage.endswith("_block") and
+                observed_disposition == "blocked_no_action_receipt" else
+                "blocked_no_plan" if stage.endswith("_block") else
+                "deferred_no_plan")
+            counts[f"{disposition}_count"] += 1
+            reasons = []
+            blockers = event.get("entry_execution_sizing_blockers")
+            blockers_present = blockers not in (None, "", "[]", "null", "None")
+            if isinstance(blockers, (list, tuple, dict)):
+                blockers_present = bool(blockers)
+            if day != target_date:
+                reasons.append("plan_date_mismatch")
+            if not record or not attempt:
+                reasons.append("plan_attempt_identity_missing")
+            if (plan_sha or event.get("entry_execution_sizing_plan") is not None
+                    or event.get("entry_execution_sizing_disposition") not in
+                    (None, disposition)
+                    or (disposition == "deferred_no_plan" and
+                        (_safe_bool(event.get("entry_execution_sizing_valid")) is not True
+                         or blockers_present))
+                    or (disposition.startswith("blocked_") and
+                        (_safe_bool(event.get("entry_execution_sizing_valid")) is not False
+                         or not blockers_present))):
+                reasons.append("no_plan_disposition_inconsistent")
+            if reasons:
+                counts["quarantined_plan_count"] += 1
+            rows.append({"source_date": day, "record_id": record,
+                         "attempt_id": attempt or None, "plan_id": None,
+                         "plan_sha256": None,
+                         "state": "quarantined" if reasons else disposition,
+                         "blockers": blockers,
+                         "source_quality_reasons": reasons, "submitted_qty": None,
+                         "not_submitted_qty": None, "filled_qty": None,
+                         "terminal_state": "not_observed"})
+            continue
+        counts["issued_plan_count"] += 1
+        core = _atomic_sizing_core(event.get("entry_execution_sizing_plan"))
+        if core is not None and core.get("observation_only") is True:
+            source_only_reasons = ["observation_only_plan"]
+            if (day != target_date or not record or not attempt
+                    or not _valid_generation_id(plan_sha)
+                    or _content_sha256(core) != plan_sha
+                    or plan_id != f"entry-sizing-{plan_sha[:24]}"):
+                source_only_reasons.append("source_only_identity_invalid")
+                counts["quarantined_plan_count"] += 1
+            else:
+                counts["excluded_source_only_plan_count"] += 1
+            rows.append({"source_date": day, "record_id": record,
+                         "attempt_id": attempt or None, "plan_id": plan_id or None,
+                         "plan_sha256": plan_sha or None,
+                         "state": ("quarantined" if len(source_only_reasons) > 1
+                                   else "excluded_source_only"),
+                         "source_quality_reasons": source_only_reasons,
+                         "submitted_qty": None, "not_submitted_qty": None,
+                         "filled_qty": None, "terminal_state": "not_observed"})
+            continue
+        reasons = []
+        if day != target_date:
+            reasons.append("plan_date_mismatch")
+        if not record or not attempt:
+            reasons.append("plan_attempt_identity_missing")
+        if core is None:
+            reasons.append("plan_core_missing_or_invalid")
+        elif (not _valid_generation_id(plan_sha)
+              or _content_sha256(core) != plan_sha):
+            reasons.append("plan_content_sha_mismatch")
+        if not plan_id or plan_id != f"entry-sizing-{plan_sha[:24]}":
+            reasons.append("plan_id_sha_mismatch")
+        total = _safe_int(event.get("entry_execution_sizing_total_qty"), -1)
+        if core is not None:
+            legs = core.get("legs")
+            if (core.get("valid") is not True
+                or _safe_bool(event.get("entry_execution_sizing_valid")) is not True
+                or core.get("stage") != "entry"
+                or core.get("action_receipt_id") != event.get("entry_execution_sizing_action_receipt_id")
+                or core.get("total_qty") != total
+                or core.get("leg_count") != _safe_int(event.get("entry_execution_sizing_leg_count"), -1)
+                or not isinstance(legs, list) or len(legs) != core.get("leg_count")
+                or any(not isinstance(leg, dict) for leg in legs)
+                or total <= 0 or sum(_safe_int(leg.get("qty"), -1)
+                    for leg in legs if isinstance(leg, dict)) != total
+                or _safe_int(core.get("immediate_qty"), -1)
+                   + _safe_int(core.get("deferred_probe_residual_qty"), -1) != total):
+                reasons.append("plan_quantity_action_or_leg_invalid")
+        key = (day, record, attempt, plan_id, plan_sha)
+        row = {"source_date": day, "record_id": record, "stock_code": event.get("stock_code"),
+               "attempt_id": attempt or None, "plan_id": plan_id or None,
+               "plan_sha256": plan_sha or None, "action_receipt_id": event.get("entry_execution_sizing_action_receipt_id"),
+               "plan_emitted_at": event.get("emitted_at"),
+               "effective_venue": event.get("effective_venue"),
+               "market_session_bucket": event.get("market_session_bucket"),
+               "owner_type": None, "account_key": None,
+               "plan_requested_qty": total if total > 0 else None,
+               "submitted_qty": None, "not_submitted_qty": None, "filled_qty": None,
+               "terminal_state": "not_observed", "broker_orders": [],
+               "state": "unobserved", "source_quality_reasons": reasons}
+        if key in plans:
+            if _canonical_sha256(event) != plans[key]["source_event_sha256"]:
+                plans[key]["row"]["source_quality_reasons"].append("conflicting_plan_duplicate")
+            else:
+                counts["excluded_duplicate_plan_event_count"] += 1
+            continue
+        rows.append(row)
+        plans[key] = {"row": row, "event": event,
+                      "source_event_sha256": _canonical_sha256(event),
+                      "core": core, "legs": {}, "bundles": [],
+                      "leg_indices": {}}
+        attempts[(day, record, attempt)].add(key)
+    for keys in attempts.values():
+        if len(keys) > 1:
+            for key in keys:
+                plans[key]["row"]["source_quality_reasons"].append("attempt_multiple_plans")
+    for event in submits:
+        day = str(event.get("source_date") or event.get("emitted_date")
+                  or _event_date(event) or "")[:10]
+        record = str(event.get("record_id") or "")
+        attempt = str(event.get("entry_submit_attempt_id") or event.get("buy_parent_id") or "")
+        key = (day, record, attempt, str(event.get("entry_execution_sizing_plan_id") or ""),
+               str(event.get("entry_execution_sizing_plan_sha256") or ""))
+        plan = plans.get(key)
+        if plan is None:
+            counts["unjoined_submit_count"] += 1
+            unjoined_submits.append({
+                "source_date": day, "record_id": record,
+                "attempt_id": attempt or None, "plan_id": key[3] or None,
+                "plan_sha256": key[4] or None, "stage": event["stage"],
+                "broker_order_no": event.get("broker_order_no") or event.get("ord_no"),
+                "owner_type": event.get("buy_owner_type"),
+                "account_key": event.get("buy_account_key"),
+                "submitted_qty": event.get("submitted_qty"),
+                "source_quality_reason": "submit_plan_identity_unjoined",
+            })
+            continue
+        row = plan["row"]
+        reason = None
+        if (day != target_date or event.get("stock_code") != row["stock_code"]
+            or event.get("entry_execution_sizing_action_receipt_id") != row["action_receipt_id"]
+            or event.get("effective_venue") != row["effective_venue"]
+            or event.get("market_session_bucket") != row["market_session_bucket"]):
+            reason = "submit_plan_scope_mismatch"
+        if (_safe_bool(event.get("broker_order_forbidden"))
+                or str(event.get("buy_owner_type") or "main_scalping") != "main_scalping"):
+            reason = "submit_real_owner_or_broker_authority_invalid"
+        order = str(event.get("broker_order_no") or event.get("ord_no") or "")
+        if not order:
+            reason = "submit_broker_order_missing"
+        if event["stage"] == "order_leg_sent":
+            quantity = _safe_int(event.get("submitted_qty"), -1)
+            if quantity <= 0 or quantity != _safe_int(event.get("requested_qty"), -1):
+                reason = "submit_leg_quantity_invalid"
+            leg_index = _safe_int(event.get("entry_split_order_leg_index"), -1)
+            core = plan.get("core") or {}
+            planned_legs = core.get("legs") if isinstance(core.get("legs"), list) else []
+            if (leg_index < 0 or leg_index >= len(planned_legs)
+                    or not isinstance(planned_legs[leg_index], dict)
+                    or quantity > _safe_int(planned_legs[leg_index].get("qty"), -1)):
+                reason = "submit_leg_plan_quantity_or_index_invalid"
+            prior_order = plan["leg_indices"].get(leg_index)
+            if prior_order and prior_order != order:
+                reason = "leg_index_multiple_broker_orders"
+            plan["leg_indices"][leg_index] = order
+            previous = plan["legs"].get(order)
+            if previous is not None:
+                if _canonical_sha256(previous) == _canonical_sha256(event):
+                    counts["excluded_duplicate_submit_event_count"] += 1
+                    continue
+                reason = "conflicting_order_leg_duplicate"
+            if any(_safe_int(prior.get("entry_split_order_leg_index"), -1) != leg_index
+                   for prior_order, prior in plan["legs"].items()
+                   if prior_order == order):
+                reason = "broker_order_multiple_leg_indices"
+            plan["legs"][order] = event
+        else:
+            if _safe_int(event.get("requested_qty"), -1) != row["plan_requested_qty"]:
+                reason = "bundle_plan_quantity_mismatch"
+            plan["bundles"].append(event)
+        if reason:
+            row["source_quality_reasons"].append(reason)
+    for event in uncertain_events:
+        uncertain = (event["stage"] == "order_leg_no_response"
+                     or _safe_bool(event.get("broker_submission_reconciliation_required"))
+                     or _safe_bool(event.get("broker_response_success")))
+        if not uncertain:
+            continue
+        day = str(event.get("source_date") or event.get("emitted_date")
+                  or _event_date(event) or "")[:10]
+        key = (day, str(event.get("record_id") or ""),
+               str(event.get("entry_submit_attempt_id") or event.get("buy_parent_id") or ""),
+               str(event.get("entry_execution_sizing_plan_id") or ""),
+               str(event.get("entry_execution_sizing_plan_sha256") or ""))
+        uncertain_attempts.add(key)
+        if key in plans:
+            plans[key]["row"].setdefault("response_uncertain_events", []).append(
+                {"stage": event["stage"], "at": event.get("emitted_at")})
+        else:
+            counts["unjoined_submit_count"] += 1
+            unjoined_submits.append({
+                "source_date": day, "record_id": key[1],
+                "attempt_id": key[2] or None, "plan_id": key[3] or None,
+                "plan_sha256": key[4] or None, "stage": event["stage"],
+                "broker_order_no": event.get("broker_order_no") or event.get("ord_no"),
+                "submitted_qty": None,
+                "source_quality_reason": "uncertain_attempt_plan_identity_unjoined",
+            })
+    for plan in plans.values():
+        row = plan["row"]
+        leg_events = list(plan["legs"].values())
+        row["broker_orders"] = sorted(plan["legs"])
+        row["submitted_legs"] = [
+            {"leg_index": event.get("entry_split_order_leg_index"),
+             "broker_order_no": event.get("broker_order_no") or event.get("ord_no"),
+             "owner_registry_intent_id": event.get("owner_registry_intent_id"),
+             "requested_qty": event.get("requested_qty"),
+             "submitted_qty": event.get("submitted_qty"),
+             "submitted_price": event.get("submitted_price") or event.get("order_price"),
+             "submitted_at": event.get("entry_split_submitted_at") or event.get("emitted_at"),
+             "broker_route": event.get("broker_route") or event.get("dmst_stex_tp"),
+             "market_session_bucket": event.get("market_session_bucket")}
+            for event in leg_events]
+        row["bundle_observation_count"] = len(plan["bundles"])
+        if leg_events:
+            counts["identity_joined_plan_count"] += 1
+            submitted = sum(_safe_int(event.get("submitted_qty"), 0) for event in leg_events)
+            row["submitted_qty"] = submitted
+            if row["plan_requested_qty"] is not None and 0 <= submitted <= row["plan_requested_qty"]:
+                row["not_submitted_qty"] = row["plan_requested_qty"] - submitted
+            else:
+                row["source_quality_reasons"].append("submit_exceeds_plan_quantity")
+            counts["unique_leg_orders"] += len(plan["legs"])
+            row["execution_role"] = (
+                "real_probe" if any(_safe_bool(event.get("entry_split_order_probe_first_applied"))
+                                    for event in leg_events) else "real_entry_leg")
+        if plan["bundles"] and not leg_events:
+            row["source_quality_reasons"].append("bundle_without_exact_leg")
+        if len(plan["bundles"]) > 1:
+            first = plan["bundles"][0]
+            if any(_canonical_sha256(item) != _canonical_sha256(first)
+                   for item in plan["bundles"][1:]):
+                row["source_quality_reasons"].append("conflicting_bundle_observation")
+            else:
+                counts["excluded_duplicate_submit_event_count"] += len(plan["bundles"]) - 1
+        owners = {str(event.get("buy_owner_type") or "") for event in leg_events if event.get("buy_owner_type")}
+        owner_ids = {str(event.get("buy_owner_id") or "") for event in leg_events if event.get("buy_owner_id")}
+        accounts = {str(event.get("buy_account_key") or "") for event in leg_events if event.get("buy_account_key")}
+        routes = {str(event.get("broker_route") or event.get("dmst_stex_tp") or "")
+                  for event in leg_events if event.get("broker_route") or event.get("dmst_stex_tp")}
+        if any(len(values) > 1 for values in (owners, owner_ids, accounts, routes)):
+            row["source_quality_reasons"].append("submit_owner_account_route_conflict")
+        elif leg_events and (owners != {"main_scalping"} or not owner_ids
+                             or not accounts or not routes):
+            row["source_quality_reasons"].append("submit_owner_account_route_missing")
+        else:
+            row["owner_type"] = next(iter(owners), None)
+            row["owner_id"] = next(iter(owner_ids), None)
+            row["account_key"] = next(iter(accounts), None)
+            row["broker_route"] = next(iter(routes), None)
+        intents = {str(event.get("owner_registry_intent_id") or "")
+                   for event in leg_events if event.get("owner_registry_intent_id")}
+        if len(intents) > 1:
+            row["source_quality_reasons"].append("multiple_registry_intents_for_plan")
+        row["owner_registry_intent_ids"] = sorted(intents)
+        row["execution_ids"] = []
+        row["remaining_order_qty"] = None
+        row["cost_krw"] = None
+        _atomic_sizing_registry_terminal(row, leg_events, registry_events)
+        row["source_quality_reasons"] = sorted(set(row["source_quality_reasons"]))
+        if row["source_quality_reasons"]:
+            row["state"] = "quarantined"
+            row["not_submitted_qty"] = None
+            counts["quarantined_plan_count"] += 1
+        elif leg_events:
+            row["state"] = ("valid_open_terminal_unobserved"
+                            if row["terminal_state"] == "not_observed"
+                            else f"valid_{row['terminal_state']}")
+            counts["valid_plan_count"] += 1
+        elif row.get("response_uncertain_events"):
+            row["state"] = "response_uncertain"
+            counts["unobserved_plan_count"] += 1
+        else:
+            counts["unobserved_plan_count"] += 1
+    counts["response_uncertain_attempt_count"] = len(uncertain_attempts)
+    stage_census = source_generation.get("stage_census")
+    producer_counts = None
+    census_mismatch = False
+    if isinstance(stage_census, dict):
+        producer_counts = {
+            stage: {name: _safe_int((stage_census.get(stage) or {}).get(name), 0)
+                    for name in ("raw_event_count", "valid_count", "excluded_count",
+                                 "quarantined_count", "unobserved_count")}
+            for stage in census_stages
+        }
+        retained = Counter(event["stage"] for event in selected)
+        census_mismatch = any(
+            retained[stage] > producer_counts[stage]["valid_count"] for stage in census_stages
+        )
+    projection = source_generation.get("reader_projection")
+    projection_ready = (not isinstance(projection, dict)
+                        or projection.get("status") in {"ready", "valid_empty"})
+    source_ready = (source_generation.get("status") == "ready"
+                    and source_generation.get("source_date") == target_date
+                    and _valid_generation_id(source_generation.get("generation_sha256"))
+                    and not census_mismatch and projection_ready)
+    status = ("ready" if source_ready and not counts["quarantined_plan_count"]
+              and not counts["unjoined_submit_count"] else "source_gap")
+    if census_mismatch:
+        quality_reason = "producer_stage_census_mismatch"
+    elif not source_ready:
+        quality_reason = source_generation.get("reason") or "source_generation_unverified"
+    elif counts["quarantined_plan_count"]:
+        quality_reason = "plan_or_owner_row_quarantined"
+    elif counts["unjoined_submit_count"]:
+        quality_reason = "submit_plan_identity_unjoined"
+    else:
+        quality_reason = None
+    return {"schema": ATOMIC_SIZING_LINEAGE_SCHEMA, "source_date": target_date,
+            "status": status, "source_generation": source_generation,
+            "producer_source_counts": producer_counts,
+            "source_quality_reason": quality_reason,
+            "counts": counts, "rows": rows,
+            "unjoined_submits": unjoined_submits,
+            "input_sha256": _canonical_sha256(selected),
+            "selection_blocked": status != "ready"}
 
 
 def _has_split_eligible_quantity_or_provenance(fields: dict[str, Any]) -> bool:
@@ -4805,7 +5442,7 @@ def _entry_operating_input_rows(replays):
             or entry_decision_version_identity(seed) is None):continue
         context=seed["operating_contract"];legs=seed.get("candidate_legs") or seed["legs"]
         n=len(legs);base=seed["legs"][0]["price"]
-        offsets=[];price=base
+        offsets=[]
         # Only the existing 0/1/2-tick menu is publishable; the price binder
         # remains the sole numeric owner in the future invocation.
         for x in legs:
@@ -5612,6 +6249,16 @@ def _refresh_execution_model_only(target_date, *, prepared_effective_date=None, 
     report = json.loads(predecessor_bytes)
     if report.get("date") != target_date:
         raise ValueError("entry_split_predecessor_date_invalid")
+    atomic_lineage = ((report.get("input_summary") or {}).get("atomic_execution_sizing")
+                      or {}).get("lineage")
+    if isinstance(atomic_lineage, dict) and atomic_lineage.get("schema") == ATOMIC_SIZING_LINEAGE_SCHEMA:
+        current_generation = _atomic_sizing_source_generation(target_date)
+        recorded_generation = atomic_lineage.get("source_generation") or {}
+        if (current_generation.get("status") != "ready"
+                or recorded_generation.get("status") != "ready"
+                or current_generation.get("generation_sha256")
+                   != recorded_generation.get("generation_sha256")):
+            raise ValueError("atomic_sizing_source_generation_stale")
     prepared_effective_date = prepared_effective_date or report.get("recommended_policy", {}).get("prepared_effective_date")
     if prepared_effective_date is not None:
         if date.fromisoformat(prepared_effective_date).isoformat() != prepared_effective_date or prepared_effective_date <= target_date:
@@ -5622,6 +6269,12 @@ def _refresh_execution_model_only(target_date, *, prepared_effective_date=None, 
         events, projection = [], dict(status="source_gap",reason=str(exc),raw_not_read=True,
             full_population_coverage_verified=False,owner="existing_execution_projection_and_producer_census",
             closure_test="atomic_date_hash_census_conservation_before_model_or_policy_consumption")
+    if (isinstance(atomic_lineage, dict)
+            and atomic_lineage.get("schema") == ATOMIC_SIZING_LINEAGE_SCHEMA):
+        expected_projection = (atomic_lineage.get("source_generation") or {}).get("reader_projection")
+        if isinstance(expected_projection, dict) and expected_projection != _atomic_sizing_projection_identity(
+                projection, current_generation.get("stage_census")):
+            raise ValueError("atomic_sizing_reader_projection_stale")
     actual_outcomes, actual_source = _bounded_actual_entry_outcomes(target_date)
     registry, registry_contract = _execution_registry_snapshot()
     from src.engine.sniper_missed_entry_counterfactual import _load_entry_events
@@ -5782,7 +6435,24 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
     daily_atomic_plan_missing_submit_count = (
         len(post_contract_submit_events) - daily_atomic_plan_submit_count
     )
+    registry, registry_contract = (
+        _execution_registry_snapshot()
+        if date.fromisoformat(target_date) >= date(2026, 9, 17)
+        else ([], {"status": "not_requested"})
+    )
+    atomic_source = _atomic_sizing_source_generation(target_date)
+    if isinstance(daily_load_summary.get("execution_projection"), dict):
+        atomic_source["reader_projection"] = _atomic_sizing_projection_identity(
+            daily_load_summary["execution_projection"], atomic_source.get("stage_census"))
+    atomic_lineage = build_atomic_execution_sizing_lineage(
+        target_date, daily_allowed_events, source_generation=atomic_source,
+        registry_events=registry if registry_contract.get("status") == "verified" else None,
+    )
+    atomic_lineage["registry_source"] = registry_contract
     if daily_atomic_plan_invalid_count or daily_atomic_plan_missing_submit_count:
+        atomic_contract_status = "fail"
+    elif (date.fromisoformat(target_date) >= ATOMIC_SIZING_LINEAGE_REQUIRED_FROM_DATE
+          and atomic_lineage["status"] != "ready"):
         atomic_contract_status = "fail"
     elif daily_atomic_plan_observed_count:
         atomic_contract_status = "pass"
@@ -6036,7 +6706,6 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
     source_quality_allowed = source_quality.get("tuning_input_allowed") is True
     model_validation = None
     if date.fromisoformat(target_date) >= date(2026, 9, 17):
-        registry, registry_contract = _execution_registry_snapshot()
         model_validation = build_execution_model_validation(target_date, daily_allowed_events,
             executable_replay["rows"], registry,
             source_contract={"projection": daily_load_summary.get("execution_projection"),
@@ -6250,6 +6919,7 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
             "post_submit_low_tick_band_scan": post_submit_low_tick_band_scan,
             "atomic_execution_sizing": {
                 "status": atomic_contract_status,
+                "lineage": atomic_lineage,
                 "daily_plan_observed_count": daily_atomic_plan_observed_count,
                 "daily_plan_valid_count": daily_atomic_plan_valid_count,
                 "daily_plan_invalid_count": daily_atomic_plan_invalid_count,

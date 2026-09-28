@@ -88,6 +88,243 @@ def test_cancel_wait_parent_requires_same_submit_owner_account_and_explicit_pare
     assert list(parents[0]['children'].values())[0]['terminal_reconciled'] is False
 
 
+def _sequential_first_fixture():
+    from src.engine.scalping.initial_quantity_timeout import build_bundle_timeout_schedule
+    day = '2026-09-28'
+    schedule = build_bundle_timeout_schedule(
+        quantity_type='KRX_PARENT', policy_sha256='a' * 64,
+        decision_at=day+'T08:59:00+09:00',
+        order_start_at=day+'T09:00:00+09:00', total_wait_sec=120,
+        leg_count=2, cancel_confirm_reserve_sec=5)
+    context = dict(schema='entry_cancel_wait_submitted_paired_v2',
+        source_date=day, frozen_at=day+'T09:00:01+09:00',
+        parent_id='attempt-42', bundle_attempt_id='evaluation-42',
+        child_id='initial_quantity_0', stock_code='123456',
+        requested_qty=2, plan_total_qty=5, submitted_price=10000,
+        broker_route='SOR', session_bucket='KRX_REGULAR',
+        owner_type='main_scalping', owner_id='main_scalping:42',
+        owner_client_intent_id='client-42',
+        timeout_owner='initial_quantity_bundle_timeout_schedule',
+        initial_quantity_schedule=schedule, actual_timeout_sec=None,
+        candidate_timeout_secs=[], economic_eligible=False, observation_only=True)
+    context['sha256'] = mod._digest(context)
+    sent = dict(stage='order_leg_sent', emitted_date=day, record_id=42,
+        stock_code='123456', fields=dict(actual_order_submitted=True,
+            broker_order_no='B1', buy_parent_id='attempt-42',
+            buy_child_id='attempt-42:B1', owner_registry_intent_id='I1',
+            buy_owner_type='main_scalping', buy_owner_id='main_scalping:42',
+            buy_owner_client_intent_id='client-42', buy_account_key='acct-a',
+            broker_route='SOR', market_session_bucket='KRX_REGULAR',
+            submitted_qty=2, entry_split_submitted_price=10000,
+            entry_split_submitted_at=day+'T09:00:02+09:00',
+            tag='initial_quantity_0', initial_quantity_leg_index=0,
+            initial_quantity_attempt_id='evaluation-42',
+            initial_quantity_requested_qty=5,
+            initial_quantity_schedule_sha256=schedule['schedule_sha256'],
+            initial_quantity_policy_file_sha256='a' * 64,
+            cancel_wait_timeout_owner='initial_quantity_bundle_timeout_schedule',
+            entry_cancel_wait_submission_context=json.dumps(context)))
+    registry = [dict(intent_id='I1', owner_type='main_scalping', side='BUY',
+        action='NEW', account_key='acct-a', owner_id='main_scalping:42',
+        client_intent_id='client-42',
+        order_date=day, broker_order_no='B1', quantity=2,
+        symbol='123456', route='SOR', state='ORDER_BOUND')]
+    return day, context, sent, registry
+
+
+def test_sequential_first_leg_is_source_only_parent_not_unclassified():
+    day, context, sent, registry = _sequential_first_fixture()
+    parents, unknown = mod._parents(day, [sent], registry)
+    assert unknown == 0
+    assert len(parents) == 1
+    assert parents[0]['timeout_owner'] == 'initial_quantity_bundle_timeout_schedule'
+    assert parents[0]['economic_eligible'] is False
+    assert parents[0]['children']['I1']['quantity'] == 2
+    duplicate = {**sent, 'stage': 'entry_cancel_wait_submission'}
+    parents, unknown = mod._parents(day, [sent, duplicate], registry)
+    assert unknown == 0 and len(parents) == 1
+    assert len(parents[0]['children']) == 1
+    changed = json.loads(json.dumps(sent))
+    changed['fields']['initial_quantity_schedule_sha256'] = 'b' * 64
+    with pytest.raises(ValueError, match='sequential_schedule'):
+        mod._parents(day, [changed], registry)
+
+
+def test_sequential_first_uncertain_attempt_stays_out_of_submitted_parents():
+    day, context, sent, registry = _sequential_first_fixture()
+    uncertain = dict(stage='entry_cancel_wait_submission',
+        emitted_date=day, record_id=42, stock_code='123456',
+        fields=dict(actual_order_submitted=False,
+            dispatch_disposition='response_uncertain', broker_call_attempted=True,
+            entry_cancel_wait_submission_context=json.dumps(context),
+            cancel_wait_timeout_owner='initial_quantity_bundle_timeout_schedule'))
+    unresolved_registry = [{**registry[0], 'broker_order_no': None,
+                            'state': 'INTENT_AMBIGUOUS'}]
+    details = {}
+    parents, unknown = mod._parents(
+        day, [uncertain, uncertain], unresolved_registry, details=details)
+    assert parents == [] and unknown == 1
+    assert details['response_uncertain_attempt_count'] == 1
+    assert details['unresolved_uncertain_attempt_count'] == 1
+    details = {}
+    parents, unknown = mod._parents(day, [uncertain, sent], registry, details=details)
+    assert unknown == 0 and len(parents) == 1
+    assert details['resolved_uncertain_attempt_count'] == 1
+
+
+def test_sequential_first_source_only_is_excluded_from_cancel_wait_replay():
+    day, _, sent, registry = _sequential_first_fixture()
+    parents, unknown = mod._parents(day, [sent], registry)
+    assert unknown == 0
+    assert mod._replay_parents(parents, [], [], {}) == ([], [], {})
+
+
+def test_sequential_first_partial_fill_and_cancel_pending_keep_null_cost():
+    day, _, sent, registry = _sequential_first_fixture()
+    fill = dict(intent_id='I1', owner_type='main_scalping', side='BUY',
+        action='NEW', event='FILL_RECORDED', filled_qty=1, execution_no='E1')
+    parents, unknown = mod._parents(day, [sent], registry+[fill])
+    assert unknown == 0
+    child = parents[0]['children']['I1']
+    assert child['terminal_state'] == 'partial_open'
+    assert child['filled_qty'] == 1 and child['cost_krw'] is None
+    cancel = dict(intent_id='C1', account_key='acct-a',
+        order_date=day, owner_id='main_scalping:42', side='BUY',
+        action='CANCEL', original_order_no='B1', state='INTENT_RESERVED')
+    parents, unknown = mod._parents(day, [sent], registry+[fill,cancel])
+    assert unknown == 0
+    assert parents[0]['children']['I1']['terminal_state'] == 'cancel_pending'
+    closed = dict(intent_id='C1', side='BUY', action='CANCEL',
+                  state='ORDER_TERMINAL')
+    parents, unknown = mod._parents(day, [sent], registry+[fill,cancel,closed])
+    assert unknown == 0
+    assert parents[0]['children']['I1']['terminal_state'] == 'partial_open'
+
+
+def test_sequential_first_report_counts_real_submit_without_economic_authority(
+    monkeypatch, tmp_path,
+):
+    day, _, sent, registry = _sequential_first_fixture()
+    monkeypatch.setattr(mod, 'REPORT_DIR', tmp_path)
+    monkeypatch.setattr(mod, '_incumbent', lambda _day: (
+        dict(mod.DEFAULT_THRESHOLDS), {'path': None}))
+    monkeypatch.setattr(mod, '_previous_state', lambda _day: {})
+    monkeypatch.setattr(mod, '_current_sources', lambda _day: (
+        [sent], registry, [], {'projection': {'status': 'ready'},
+        'registry': {'status': 'verified'},
+        'actual_outcomes': {'status': 'missing'},
+        'source_quality': {'tuning_input_allowed': True}}))
+    report = mod.build_report(day)
+    assert report['submission_census']['submitted_parent_count'] == 1
+    assert report['submission_census']['economic_parent_count'] == 0
+    assert report['submission_census']['excluded_sequential_timeout_owner_count'] == 1
+    assert report['submission_census']['zero_is_verified'] is False
+    assert report['evidence_summary']['state'] == 'source_only_sequential_excluded'
+    assert report['economic_tuning_input_allowed'] is False
+    assert report['recommended_thresholds'] == mod.DEFAULT_THRESHOLDS
+
+    fill = {**registry[0], 'event': 'FILL_RECORDED',
+            'filled_qty': 2, 'execution_no': 'E1'}
+    terminal = {**registry[0], 'event': 'ORDER_TERMINAL',
+                'state': 'ORDER_TERMINAL', 'filled_qty': 2}
+    proof = {key: terminal[key] for key in (
+        'intent_id','account_key','order_date','broker_order_no','owner_type',
+        'owner_id','symbol','side','action','route','quantity','filled_qty')}
+    proof.update(schema='order_owner_terminal_reconciliation_v1',
+                 receipt_sha256='f'*64)
+    receipt = dict(intent_id='I1', account_key='acct-a',
+                   event='TERMINAL_RECONCILIATION_RECORDED',
+                   terminal_reconciliation=proof)
+    monkeypatch.setattr(mod, '_current_sources', lambda _day: (
+        [sent], registry+[fill, terminal, receipt], [],
+        {'projection': {'status': 'ready'},
+         'registry': {'status': 'verified'},
+         'actual_outcomes': {'status': 'missing'},
+         'source_quality': {'tuning_input_allowed': True}}))
+    refreshed = mod.build_report(day)
+    child = refreshed['economic_state']['parents'][0]['children']['I1']
+    assert child['terminal_reconciled'] is True
+    assert child['terminal_state'] == 'full_terminal'
+    monkeypatch.setattr(mod, '_previous_state',
+                        lambda _day: report['economic_state'])
+    monkeypatch.setattr(mod, '_current_sources', lambda _day: (
+        [], registry+[fill, terminal, receipt], [],
+        {'projection': {'status': 'ready'},
+         'registry': {'status': 'verified'},
+         'actual_outcomes': {'status': 'missing'},
+         'source_quality': {'tuning_input_allowed': True}}))
+    resumed = mod.build_report('2026-09-29')
+    child = resumed['economic_state']['parents'][0]['children']['I1']
+    assert child['terminal_reconciled'] is True
+    assert child['terminal_state'] == 'full_terminal'
+
+
+def test_sequential_first_terminal_requires_exact_registry_proof():
+    day, _, sent, registry = _sequential_first_fixture()
+    fill = {**registry[0], 'event': 'FILL_RECORDED',
+            'filled_qty': 2, 'execution_no': 'E1'}
+    terminal = {**registry[0], 'event': 'ORDER_TERMINAL',
+                'state': 'ORDER_TERMINAL', 'filled_qty': 2}
+    proof = {key: terminal[key] for key in (
+        'intent_id','account_key','order_date','broker_order_no','owner_type',
+        'owner_id','symbol','side','action','route','quantity','filled_qty')}
+    proof.update(schema='order_owner_terminal_reconciliation_v1',
+                 receipt_sha256='f'*64)
+    receipt = {'intent_id': 'I1', 'account_key': 'acct-a',
+               'event': 'TERMINAL_RECONCILIATION_RECORDED',
+               'terminal_reconciliation': proof}
+    parents, unknown = mod._parents(day, [sent], registry+[fill,terminal,receipt])
+    assert unknown == 0
+    assert parents[0]['children']['I1']['terminal_state'] == 'full_terminal'
+    broken = {**receipt, 'terminal_reconciliation': {
+        **proof, 'broker_order_no': 'OTHER'}}
+    parents, unknown = mod._parents(day, [sent], registry+[fill,terminal,broken])
+    assert unknown == 0
+    assert parents[0]['children']['I1']['terminal_state'] == 'terminal_unverified'
+
+
+def test_sequential_first_context_freezes_before_broker_call():
+    import ast
+    from datetime import datetime
+    from types import SimpleNamespace
+    from src.engine import sniper_state_handlers as handlers
+    from src.engine.scalping.entry_cancel_wait_runtime import (
+        sequential_first_submission_fields,
+    )
+
+    day, expected, sent, _ = _sequential_first_fixture()
+    fields = sequential_first_submission_fields(
+        {'code': '123456', 'market_session_bucket': 'KRX_REGULAR'},
+        {'tag': 'initial_quantity_0'},
+        intent={'schedule': expected['initial_quantity_schedule'],
+                'attempt_id': 'evaluation-42', 'requested_qty': 5},
+        owner_context=SimpleNamespace(owner_type='main_scalping',
+            owner_id='main_scalping:42', client_intent_id='client-42'),
+        parent_id='attempt-42', qty=2, price=10000, route='SOR',
+        now_ts=datetime.fromisoformat(day+'T09:00:01+09:00').timestamp())
+    context = json.loads(fields['entry_cancel_wait_submission_context'])
+    assert context == expected
+    assert fields['cancel_wait_timeout_owner'] == (
+        'initial_quantity_bundle_timeout_schedule')
+    tree = ast.parse(Path(handlers.__file__).read_text())
+    owner = next(node for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+        and node.name == '_submit_watching_triggered_entry')
+    calls = [node for node in ast.walk(owner) if isinstance(node, ast.Call)]
+    first_intent = min(node.lineno for node in calls
+        if isinstance(node.func, ast.Name)
+        and node.func.id == '_initial_quantity_prepare_first_submit')
+    freeze = min(node.lineno for node in calls
+        if isinstance(node.func, ast.Name)
+        and node.func.id == 'sequential_first_submission_fields')
+    broker = min(node.lineno for node in calls
+        if isinstance(node.func, ast.Attribute)
+        and node.func.attr == 'send_buy_order')
+    assert first_intent < freeze < broker
+    assert sent['fields']['initial_quantity_schedule_sha256'] == context[
+        'initial_quantity_schedule']['schedule_sha256']
+
+
 def test_runtime_submission_log_merges_response_without_losing_dispatch_truth():
     import ast
     from pathlib import Path
