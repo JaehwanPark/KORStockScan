@@ -79,3 +79,16 @@ def test_invalid_or_cross_day_source_cannot_enter_queue():
         received_epoch=T0 + 1,
     ) == "source_scope_unknown"
     assert queue.snapshot()["candidates"] == []
+
+
+def test_stale_observation_cannot_consume_probe_budget_until_refreshed():
+    queue = DiscoveryQueue(DAY)
+    assert _observe(queue, "000001") == "queued"
+    assert queue.claim(
+        now_epoch=T0 + 121, limit=8, max_observation_age_sec=120,
+    ) == []
+    assert queue.stale_candidate_count(now_epoch=T0 + 121, max_observation_age_sec=120) == 1
+    assert _observe(queue, "000001", epoch=T0 + 122, digest=HASH_B) == "updated"
+    assert [row["code"] for row in queue.claim(
+        now_epoch=T0 + 123, limit=8, max_observation_age_sec=120,
+    )] == ["000001"]

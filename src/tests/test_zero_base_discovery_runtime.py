@@ -78,6 +78,30 @@ def test_lost_probe_is_reclaimed_but_old_enter_cannot_promote(tmp_path):
     assert all(event != MACHINE_ENTER_EVENT for event, _ in bus.events)
 
 
+def test_panel_interval_does_not_limit_probe_dispatch_and_stale_rows_wait(tmp_path):
+    bus = Bus()
+    runtime = ZeroBaseDiscoveryRuntime(
+        event_bus=bus, session_date="2026-09-28", state_path=tmp_path / "state.json",
+    )
+    panel = {"panels": [{"status": "observed_panel"}], "observations": [
+        {
+            "code": f"{code:06d}", "route": "krx_only", "observed_epoch": T0,
+            "source_sha256": "a" * 64, "source_scope": "observed_panel",
+            "name": "TEST", "market": "KOSPI", "venue": "KRX", "price": 10000,
+        }
+        for code in range(1, 10)
+    ]}
+    first = runtime.scan_once("token", fetcher=lambda _token: panel, now_epoch=T0 + 1)
+    assert first["probe_requested_count"] == 8
+    second = runtime.dispatch_due_probes(now_epoch=T0 + 11)
+    assert second["probe_requested_count"] == 1
+    assert [payload["claim"]["code"] for event, payload in bus.events
+            if event == PROBE_REQUEST_EVENT][-1] == "000009"
+    stale = runtime.dispatch_due_probes(now_epoch=T0 + 121)
+    assert stale["probe_requested_count"] == 0
+    assert stale["stale_candidate_count"] == 9
+
+
 def test_enabled_scanner_enters_new_owner_without_legacy_radar(monkeypatch):
     from src.scanners import scalping_scanner as scanner
 

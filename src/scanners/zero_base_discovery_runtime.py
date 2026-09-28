@@ -17,6 +17,7 @@ PROBE_REQUEST_EVENT = "ZERO_BASE_PROBE_REQUESTED"
 PROBE_RESULT_EVENT = "ZERO_BASE_PROBE_RESULT"
 MACHINE_ENTER_EVENT = "ZERO_BASE_MACHINE_ENTER"
 MAX_CLAIMS_PER_CYCLE = 8
+MAX_DISCOVERY_OBSERVATION_AGE_SEC = 120
 
 
 class ZeroBaseDiscoveryRuntime:
@@ -110,6 +111,32 @@ class ZeroBaseDiscoveryRuntime:
             self.event_bus.publish(MACHINE_ENTER_EVENT, result)
         return accepted
 
+    def dispatch_due_probes(self, *, now_epoch=None) -> dict:
+        now_epoch = time.time() if now_epoch is None else float(now_epoch)
+        abandoned = self.queue.abandon_expired_claims(
+            now_epoch=now_epoch, timeout_sec=60,
+        )
+        claims = self.queue.claim(
+            now_epoch=now_epoch, limit=MAX_CLAIMS_PER_CYCLE,
+            min_interval_sec=5,
+            max_observation_age_sec=MAX_DISCOVERY_OBSERVATION_AGE_SEC,
+        )
+        self._persist()  # Persist claims before an asynchronous callback can arrive.
+        for claim in claims:
+            self.event_bus.publish(
+                PROBE_REQUEST_EVENT,
+                {"claim": claim, "candidate": claim},
+            )
+        return {
+            "probe_requested_count": len(claims),
+            "probe_timeout_count": abandoned,
+            "stale_candidate_count": self.queue.stale_candidate_count(
+                now_epoch=now_epoch,
+                max_observation_age_sec=MAX_DISCOVERY_OBSERVATION_AGE_SEC,
+            ),
+            "queue_count": len(self.queue.snapshot()["candidates"]),
+        }
+
     def scan_once(self, token, *, fetcher=fetch_discovery_panels, now_epoch=None) -> dict:
         panel = fetcher(token)
         observed = 0
@@ -126,25 +153,10 @@ class ZeroBaseDiscoveryRuntime:
                 discovery_price=int(row.get("price") or 0),
             )
             observed += status in {"queued", "updated"}
-        now_epoch = time.time() if now_epoch is None else float(now_epoch)
-        abandoned = self.queue.abandon_expired_claims(
-            now_epoch=now_epoch, timeout_sec=60,
-        )
-        claims = self.queue.claim(
-            now_epoch=now_epoch, limit=MAX_CLAIMS_PER_CYCLE,
-            min_interval_sec=5,
-        )
-        self._persist()  # Persist claims before an asynchronous callback can arrive.
-        for claim in claims:
-            self.event_bus.publish(
-                PROBE_REQUEST_EVENT,
-                {"claim": claim, "candidate": claim},
-            )
+        dispatch = self.dispatch_due_probes(now_epoch=now_epoch)
         return {
             "panel_count": len(panel.get("panels") or []),
             "panels": list(panel.get("panels") or []),
             "observed_new_generation_count": observed,
-            "probe_requested_count": len(claims),
-            "probe_timeout_count": abandoned,
-            "queue_count": len(self.queue.snapshot()["candidates"]),
+            **dispatch,
         }

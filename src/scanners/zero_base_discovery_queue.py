@@ -128,10 +128,15 @@ class DiscoveryQueue:
         )
         return "queued"
 
-    def claim(self, *, now_epoch: float, limit: int, min_interval_sec: float = 0) -> list[dict]:
+    def claim(
+        self, *, now_epoch: float, limit: int, min_interval_sec: float = 0,
+        max_observation_age_sec: float | None = None,
+    ) -> list[dict]:
         """Return due generations, oldest last claim first, with a bounded budget."""
         if limit < 0 or min_interval_sec < 0:
             raise ValueError("negative queue budget")
+        if max_observation_age_sec is not None and max_observation_age_sec <= 0:
+            raise ValueError("invalid observation age budget")
         ready = sorted(
             (
                 candidate
@@ -139,6 +144,10 @@ class DiscoveryQueue:
                 if candidate.next_due_epoch <= now_epoch
                 and not candidate.in_flight
                 and candidate.last_claim_epoch + min_interval_sec <= now_epoch
+                and (
+                    max_observation_age_sec is None
+                    or 0 <= now_epoch - candidate.observed_epoch <= max_observation_age_sec
+                )
             ),
             key=lambda row: (
                 row.last_claim_epoch,
@@ -181,6 +190,14 @@ class DiscoveryQueue:
                 row.next_due_epoch = now_epoch
                 abandoned += 1
         return abandoned
+
+    def stale_candidate_count(self, *, now_epoch: float, max_observation_age_sec: float) -> int:
+        if max_observation_age_sec <= 0:
+            raise ValueError("invalid observation age budget")
+        return sum(
+            now_epoch - row.observed_epoch > max_observation_age_sec
+            for row in self._candidates.values()
+        )
 
     def resolve(
         self,

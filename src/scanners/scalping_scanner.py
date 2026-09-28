@@ -6852,6 +6852,7 @@ def _zero_base_log_event(stage, *, code="", name="", fields=None):
 def run_zero_base_scanner(*, token, event_bus, is_test_mode=False):
     runtime = None
     next_scan_epoch = 0.0
+    next_probe_epoch = 0.0
     while True:
         from src.engine.error_detectors.process_health import write_heartbeat
 
@@ -6870,6 +6871,7 @@ def run_zero_base_scanner(*, token, event_bus, is_test_mode=False):
                 ),
             )
             next_scan_epoch = 0.0
+            next_probe_epoch = 0.0
         for result in runtime.drain_results():
             claim = result["claim"]
             _zero_base_log_event(
@@ -6896,6 +6898,7 @@ def run_zero_base_scanner(*, token, event_bus, is_test_mode=False):
                         "zero_base_observed_generation_count": summary["observed_new_generation_count"],
                         "zero_base_probe_requested_count": summary["probe_requested_count"],
                         "zero_base_probe_timeout_count": summary["probe_timeout_count"],
+                        "zero_base_stale_candidate_count": summary["stale_candidate_count"],
                         "zero_base_queue_count": summary["queue_count"],
                         "zero_base_panels": summary["panels"],
                     },
@@ -6903,6 +6906,22 @@ def run_zero_base_scanner(*, token, event_bus, is_test_mode=False):
             except Exception as exc:
                 log_error("[ZERO_BASE_SCANNER] cycle failed: " + type(exc).__name__)
             next_scan_epoch = time.time() + _resolve_scan_interval_sec(now.time())
+            next_probe_epoch = time.time() + 10
+        elif (active_window is not None or is_test_mode) and time.time() >= next_probe_epoch:
+            try:
+                dispatch = runtime.dispatch_due_probes()
+                _zero_base_log_event(
+                    "zero_base_probe_dispatch_cycle",
+                    fields={
+                        "zero_base_probe_requested_count": dispatch["probe_requested_count"],
+                        "zero_base_probe_timeout_count": dispatch["probe_timeout_count"],
+                        "zero_base_stale_candidate_count": dispatch["stale_candidate_count"],
+                        "zero_base_queue_count": dispatch["queue_count"],
+                    },
+                )
+            except Exception as exc:
+                log_error("[ZERO_BASE_SCANNER] probe dispatch failed: " + type(exc).__name__)
+            next_probe_epoch = time.time() + 10
         time.sleep(0.5)
 
 
