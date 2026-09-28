@@ -3,6 +3,7 @@ from concurrent.futures import Future
 
 from src.engine.scalping.zero_base_probe import (
     exact_probe_rest_sources, exact_probe_ws_data, run_zero_base_probe,
+    wait_for_exact_probe_ws_data,
 )
 
 
@@ -132,6 +133,7 @@ def test_missing_bbo_never_calls_machine_and_releases_ws():
          "candidate": {"code": "123456", "route": "krx_only"}},
         ws_manager=ws, ai_engine=object(), token="token", now=lambda: 11,
         release_ws=lambda code, item: released.append((code, item)),
+        ws_wait_timeout_sec=0.01,
     )
     assert result["result"] == "source_unavailable"
     assert released == [("123456", "123456")]
@@ -144,16 +146,73 @@ def test_existing_ws_owner_is_reused_without_changing_registration():
     ws = SimpleNamespace(
         subscribed_codes={"123456"},
         execute_subscribe=lambda *_args, **_kwargs: calls.append("reg"),
-        wait_for_data=lambda *_args, **_kwargs: snapshot,
+        get_latest_data=lambda *_args, **_kwargs: snapshot,
     )
     result = run_zero_base_probe(
         {"claim": {"code": "123456", "route": "krx_only", "observed_epoch": 10},
          "candidate": {"code": "123456", "route": "krx_only"}},
         ws_manager=ws, ai_engine=object(), token="token", now=lambda: 11,
         release_ws=lambda *_args: calls.append("remove"),
+        ws_wait_timeout_sec=0.01,
     )
     assert result["reason"] == "0D_missing"
     assert calls == []
+
+
+def test_probe_waits_for_later_exact_0d_after_first_0b():
+    first = _snapshot(route="krx_nxt_integrated", item="123456_AL")
+    first["realtime_type_snapshots_by_route"]["_AL|krx_nxt_integrated"].pop("0D")
+    second = _snapshot(route="krx_nxt_integrated", item="123456_AL")
+    snapshots = iter((first, first, second))
+    ws = SimpleNamespace(get_latest_data=lambda *_args: next(snapshots))
+    data, observation, reason = wait_for_exact_probe_ws_data(
+        ws, code="123456", route="krx_nxt_integrated", after_epoch=10,
+        now=lambda: 11, timeout_sec=0.2, poll_interval_sec=0.01,
+    )
+    assert reason == "ready"
+    assert data["market_data_route"] == "krx_nxt_integrated"
+    assert observation["latest_0b_ms"] == 1000
+    assert observation["latest_0d_ms"] == 1000
+
+
+def test_probe_wait_timeout_retains_exact_route_gap():
+    partial = _snapshot(route="krx_nxt_integrated", item="123456_AL")
+    partial["realtime_type_snapshots_by_route"]["_AL|krx_nxt_integrated"].pop("0D")
+    ws = SimpleNamespace(get_latest_data=lambda *_args: partial)
+    data, observation, reason = wait_for_exact_probe_ws_data(
+        ws, code="123456", route="krx_nxt_integrated", after_epoch=10,
+        now=lambda: 11, timeout_sec=0.02, poll_interval_sec=0.01,
+    )
+    assert not data and reason == "0D_missing"
+    assert observation["wait_ms"] >= 10
+    assert observation["latest_0b_ms"] == 1000
+    assert observation["latest_0d_ms"] is None
+
+
+def test_probe_observation_counts_only_exact_route_and_transport():
+    snapshot = _snapshot(route="krx_nxt_integrated", item="123456_AL")
+    key = "_AL|krx_nxt_integrated"
+    snapshot["recent_trade_ticks_by_route"] = {key: [
+        {"received_at_ms": 10500, "item": "123456_AL", "transport_epoch": 3,
+         "aggressor_source": "kiwoom_0b_signed_trade_volume", "aggressor_side": "BUY"},
+        {"received_at_ms": 10600, "item": "123456_AL", "transport_epoch": 3},
+        {"received_at_ms": 10700, "item": "123456", "transport_epoch": 3},
+        {"received_at_ms": 10800, "item": "123456_AL", "transport_epoch": 2},
+    ]}
+    snapshot["recent_depth_ticks_by_route"] = {key: [
+        {"received_at_ms": 10400, "item": "123456_AL", "transport_epoch": 3},
+    ]}
+    ws = SimpleNamespace(get_latest_data=lambda *_args: snapshot)
+    _data, observation, reason = wait_for_exact_probe_ws_data(
+        ws, code="123456", route="krx_nxt_integrated", after_epoch=10,
+        now=lambda: 11, timeout_sec=0,
+    )
+    assert reason == "ready"
+    assert observation["first_0b_ms"] == 500
+    assert observation["first_0d_ms"] == 400
+    assert observation["exact_0b_count"] == 2
+    assert observation["signed_0b_count"] == 1
+    assert observation["fifth_0b_ms"] is None
 
 
 def test_machine_contract_error_is_retained_without_promoting(monkeypatch):

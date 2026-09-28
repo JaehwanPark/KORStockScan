@@ -6885,6 +6885,14 @@ def run_zero_base_scanner(*, token, event_bus, is_test_mode=False):
                     "zero_base_probe_result": result.get("result"),
                     "zero_base_probe_reason": result.get("reason"),
                     "zero_base_machine_contract_error": result.get("machine_contract_error") or "-",
+                    **{
+                        "zero_base_ws_" + key: value
+                        for key, value in (result.get("ws_observation") or {}).items()
+                    },
+                    **{
+                        "zero_base_ws_pre_machine_" + key: value
+                        for key, value in (result.get("ws_observation_pre_machine") or {}).items()
+                    },
                     "entry_mechanistic_action": result.get("machine_action") or "-",
                     "machine_bundle_sha256": result.get("machine_bundle_sha256") or "-",
                 },

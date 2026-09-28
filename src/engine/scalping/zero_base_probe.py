@@ -22,6 +22,8 @@ _ROUTE_ITEM = {
     "krx_nxt_integrated": lambda code: code + "_AL",
 }
 _ROUTE_VENUE = {"krx_only": "KRX", "nxt_only": "NXT", "krx_nxt_integrated": "SOR"}
+_ROUTE_KEY = {"krx_only": "KRX|krx_only", "nxt_only": "_NX|nxt_only",
+              "krx_nxt_integrated": "_AL|krx_nxt_integrated"}
 
 
 def probe_item(code: str, route: str) -> str:
@@ -37,11 +39,7 @@ def exact_probe_ws_data(
     item = probe_item(code, route)
     if not item or not isinstance(snapshot, dict):
         return {}, "invalid_probe_identity"
-    route_key = {
-        "krx_only": "KRX|krx_only",
-        "nxt_only": "_NX|nxt_only",
-        "krx_nxt_integrated": "_AL|krx_nxt_integrated",
-    }[route]
+    route_key = _ROUTE_KEY[route]
     route_snapshots = snapshot.get("realtime_type_snapshots_by_route") or {}
     typed = route_snapshots.get(route_key) if isinstance(route_snapshots, dict) else None
     if not isinstance(typed, dict):
@@ -89,6 +87,88 @@ def exact_probe_ws_data(
     return result, "ready"
 
 
+def probe_ws_observation(snapshot: dict, *, code: str, route: str,
+                         after_epoch: float) -> dict:
+    """Describe exact-route arrivals without promoting them to decision evidence."""
+    snapshot = snapshot if isinstance(snapshot, dict) else {}
+    key = _ROUTE_KEY[route]
+    route_snapshots = snapshot.get("realtime_type_snapshots_by_route")
+    typed = route_snapshots.get(key) if isinstance(route_snapshots, dict) else None
+    typed = typed if isinstance(typed, dict) else {}
+    transport = snapshot.get("market_data_transport_epoch")
+    transport = transport if type(transport) is int and transport > 0 else None
+    item = probe_item(code, route)
+    observed = {}
+    for kind in ("0B", "0D"):
+        source = typed.get(kind)
+        source = source if isinstance(source, dict) else {}
+        epoch = source.get("observed_epoch")
+        observed[kind] = (
+            round((epoch - after_epoch) * 1000)
+            if isinstance(epoch, (int, float)) and epoch >= after_epoch
+            and source.get("item") == item
+            and source.get("market_route") == route
+            and transport is not None and source.get("transport_epoch") == transport
+            else None
+        )
+    def arrivals(buffer_name):
+        buffers = snapshot.get(buffer_name)
+        rows = buffers.get(key) if isinstance(buffers, dict) else None
+        rows = rows if isinstance(rows, (list, tuple)) else []
+        return sorted((
+            (int(row["received_at_ms"] - after_epoch * 1000), row)
+            for row in rows if isinstance(row, dict)
+            and isinstance(row.get("received_at_ms"), (int, float))
+            and row["received_at_ms"] >= after_epoch * 1000
+            and row.get("item") == item
+            and transport is not None and row.get("transport_epoch") == transport
+        ), key=lambda arrival: arrival[0])
+    trades = arrivals("recent_trade_ticks_by_route")
+    depths = arrivals("recent_depth_ticks_by_route")
+    signed = [delay for delay, row in trades
+              if row.get("aggressor_source") == "kiwoom_0b_signed_trade_volume"
+              and row.get("aggressor_side") in {"BUY", "SELL"}]
+    return {
+        "first_0b_ms": trades[0][0] if trades else None,
+        "first_0d_ms": depths[0][0] if depths else None,
+        "latest_0b_ms": observed["0B"],
+        "latest_0d_ms": observed["0D"],
+        "exact_0b_count": len(trades),
+        "exact_0d_count": len(depths),
+        "signed_0b_count": len(signed),
+        "fifth_0b_ms": trades[4][0] if len(trades) >= 5 else None,
+        "fifth_signed_0b_ms": signed[4] if len(signed) >= 5 else None,
+    }
+
+
+def wait_for_exact_probe_ws_data(ws_manager, *, code: str, route: str,
+                                 after_epoch: float, now=time.time,
+                                 timeout_sec: float = 3.0,
+                                 poll_interval_sec: float = 0.05) -> tuple[dict, dict, str]:
+    """Use the full bounded lease for both fresh 0B and 0D on one route."""
+    started = time.monotonic()
+    deadline = started + max(0.0, timeout_sec)
+    snapshot = {}
+    source_reason = "route_snapshot_missing"
+    while True:
+        snapshot = ws_manager.get_latest_data(code) or {}
+        ws_data, source_reason = exact_probe_ws_data(
+            snapshot, code=code, route=route, after_epoch=after_epoch,
+            now_epoch=now(),
+        )
+        if ws_data or time.monotonic() >= deadline:
+            break
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(max(0.01, poll_interval_sec), remaining))
+    observation = probe_ws_observation(
+        snapshot, code=code, route=route, after_epoch=after_epoch,
+    )
+    observation["wait_ms"] = round((time.monotonic() - started) * 1000)
+    observation["wait_reason"] = source_reason
+    return ws_data, observation, source_reason
+
+
 def exact_probe_rest_sources(ticks, candle_meta, *, request_code, now_epoch):
     """Keep REST feature rows on the requested venue and bounded receive clock."""
     if not isinstance(ticks, list) or not ticks or not isinstance(candle_meta, dict):
@@ -118,6 +198,7 @@ def run_zero_base_probe(
     candle_fetcher=None,
     context_builder=None,
     release_ws=None,
+    ws_wait_timeout_sec: float = 3.0,
 ) -> dict:
     """Observe one candidate. The caller owns bounded WS REG/REMOVE leases."""
     claim = dict(request.get("claim") or {})
@@ -179,11 +260,11 @@ def run_zero_base_probe(
             except Exception as exc:
                 result["reason"] = "ws_registration_failed:" + type(exc).__name__
                 return result
-        snapshot = ws_manager.wait_for_data(code, timeout=3.0, require_trade=True)
-        ws_data, source_reason = exact_probe_ws_data(
-            snapshot, code=code, route=route, after_epoch=registered_epoch,
-            now_epoch=now(),
+        ws_data, observation, source_reason = wait_for_exact_probe_ws_data(
+            ws_manager, code=code, route=route, after_epoch=registered_epoch,
+            now=now, timeout_sec=ws_wait_timeout_sec,
         )
+        result["ws_observation"] = observation
         if not ws_data:
             result["reason"] = source_reason
             return result
@@ -238,6 +319,10 @@ def run_zero_base_probe(
             result["reason"] = "candle_context_missing"
             return result
         refreshed_snapshot = ws_manager.get_latest_data(code)
+        result["ws_observation_pre_machine"] = probe_ws_observation(
+            refreshed_snapshot or {}, code=code, route=route,
+            after_epoch=registered_epoch,
+        )
         ws_data, source_reason = exact_probe_ws_data(
             refreshed_snapshot, code=code, route=route,
             after_epoch=registered_epoch, now_epoch=now(),
