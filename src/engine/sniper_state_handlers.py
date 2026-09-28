@@ -81177,19 +81177,30 @@ def _bind_zero_base_order_request(stock: dict, request: dict) -> bool:
     """Bind zero-base orders to the exact observed session route."""
     if not str(stock.get("source_signature") or "").startswith("ZERO_BASE_DISCOVERY:"):
         return True
+    now_kst = datetime.now(_KST)
+    context = session_contract.resolve_market_session(now_kst)
+    if not is_scalping_buy_time_allowed(now_kst.time()):
+        return False
     route, broker, venue = (
         stock.get("market_data_route"), stock.get("broker_route"),
         str(stock.get("effective_venue") or ""),
     )
+    bucket = str(stock.get("market_session_bucket") or "")
     if route == "nxt_only":
-        now_kst = datetime.now(_KST)
-        context = session_contract.resolve_market_session(now_kst)
         if (broker != "NXT" or venue != "PREMARKET_KRX_LIKE"
+                or bucket != "krx_like_premarket"
                 or context.session_regime != session_contract.MARKET_SESSION_REGIME_LEGACY_PREMARKET
-                or not is_scalping_buy_time_allowed(now_kst.time())):
+                ):
             return False
-    elif (route != "krx_nxt_integrated" or broker != "SOR"
-          or venue not in {"KRX", "KRX_NXT_INTEGRATED"}):
+    elif route == "krx_nxt_integrated" and broker == "SOR":
+        expected_session = {
+            ("KRX", "krx_regular"): session_contract.MARKET_SESSION_REGIME_KRX_REGULAR,
+            ("KRX_NXT_INTEGRATED", "KRX_NXT_AFTERMARKET"):
+                session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET,
+        }.get((venue, bucket))
+        if expected_session is None or context.session_regime != expected_session:
+            return False
+    else:
         return False
     request["dmst_stex_tp"] = broker
     return True

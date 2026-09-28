@@ -209,11 +209,22 @@ def test_attached_premarket_watching_registers_nx_item(monkeypatch):
     })]
 
 
-def test_zero_base_entry_request_binds_sor_and_fails_closed_on_lost_route():
+def test_zero_base_entry_request_binds_sor_and_fails_closed_on_lost_route(monkeypatch):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    class _Clock:
+        @staticmethod
+        def now(_zone):
+            return datetime(2026, 9, 28, 16, 10, tzinfo=ZoneInfo("Asia/Seoul"))
+
+    monkeypatch.setattr(handlers, "datetime", _Clock)
+    monkeypatch.setattr(handlers, "is_scalping_buy_time_allowed", lambda _time: True)
     stock = {
         "source_signature": "ZERO_BASE_DISCOVERY:" + "b" * 64,
         "market_data_route": "krx_nxt_integrated",
         "broker_route": "SOR", "effective_venue": "KRX_NXT_INTEGRATED",
+        "market_session_bucket": "KRX_NXT_AFTERMARKET",
     }
     request = {"qty": 1, "price": 10000, "order_type_code": "00"}
     assert handlers._bind_zero_base_order_request(stock, request)
@@ -223,10 +234,63 @@ def test_zero_base_entry_request_binds_sor_and_fails_closed_on_lost_route():
     )["effective_dmst_stex_tp"] == "SOR"
     for field, value in (("broker_route", "NXT"),
                          ("market_data_route", "nxt_only"),
-                         ("effective_venue", "NXT")):
+                         ("effective_venue", "NXT"),
+                         ("market_session_bucket", "krx_regular")):
         assert not handlers._bind_zero_base_order_request(
             {**stock, field: value}, {},
         )
+
+
+def test_zero_base_sor_order_rejects_stale_session_cohort(monkeypatch):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    clock = {"hour": 9, "minute": 10}
+
+    class _Clock:
+        @staticmethod
+        def now(_zone):
+            return datetime(2026, 9, 28, clock["hour"], clock["minute"],
+                            tzinfo=ZoneInfo("Asia/Seoul"))
+
+    monkeypatch.setattr(handlers, "datetime", _Clock)
+    monkeypatch.setattr(handlers, "is_scalping_buy_time_allowed", lambda _time: True)
+    stock = {
+        "source_signature": "ZERO_BASE_DISCOVERY:" + "b" * 64,
+        "market_data_route": "krx_nxt_integrated", "broker_route": "SOR",
+        "effective_venue": "KRX", "market_session_bucket": "krx_regular",
+    }
+    assert handlers._bind_zero_base_order_request(stock, {})
+    clock.update(hour=16, minute=10)
+    assert not handlers._bind_zero_base_order_request(stock, {})
+    stock.update(effective_venue="KRX_NXT_INTEGRATED",
+                 market_session_bucket="KRX_NXT_AFTERMARKET")
+    assert handlers._bind_zero_base_order_request(stock, {})
+    clock.update(hour=19, minute=42)
+    assert not handlers._bind_zero_base_order_request(stock, {})
+
+
+def test_zero_base_watch_expires_on_session_transition():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    def epoch(hour, minute):
+        return datetime(2026, 9, 28, hour, minute,
+                        tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
+
+    premarket = {"effective_venue": "PREMARKET_KRX_LIKE",
+                 "market_session_bucket": "krx_like_premarket"}
+    regular = {"effective_venue": "KRX",
+               "market_session_bucket": "krx_regular"}
+    after = {"effective_venue": "KRX_NXT_INTEGRATED",
+             "market_session_bucket": "KRX_NXT_AFTERMARKET"}
+    assert main._zero_base_watch_session_matches(premarket, epoch(8, 40))
+    assert not main._zero_base_watch_session_matches(premarket, epoch(9, 0))
+    assert main._zero_base_watch_session_matches(regular, epoch(9, 10))
+    assert not main._zero_base_watch_session_matches(regular, epoch(16, 0))
+    assert main._zero_base_watch_session_matches(after, epoch(16, 10))
+    assert not main._zero_base_watch_session_matches(after, epoch(19, 40))
+    assert not main._zero_base_watch_session_matches({}, epoch(16, 10))
 
 
 def test_zero_base_premarket_entry_binds_nxt_only_during_buy_window(monkeypatch):
@@ -244,6 +308,7 @@ def test_zero_base_premarket_entry_binds_nxt_only_during_buy_window(monkeypatch)
         "source_signature": "ZERO_BASE_DISCOVERY:" + "b" * 64,
         "market_data_route": "nxt_only", "broker_route": "NXT",
         "effective_venue": "PREMARKET_KRX_LIKE",
+        "market_session_bucket": "krx_like_premarket",
     }
     request = {"qty": 1, "price": 10000, "order_type_code": "00"}
     assert handlers._bind_zero_base_order_request(stock, request)

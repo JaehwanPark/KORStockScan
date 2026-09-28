@@ -5458,6 +5458,23 @@ def _is_zero_base_watch_target(target):
     )
 
 
+def _zero_base_watch_session_matches(target, now_ts):
+    """A zero-base observation owns a single trading session."""
+    target = target or {}
+    expected = {
+        ("PREMARKET_KRX_LIKE", "krx_like_premarket"):
+            session_contract.MARKET_SESSION_REGIME_LEGACY_PREMARKET,
+        ("KRX", "krx_regular"):
+            session_contract.MARKET_SESSION_REGIME_KRX_REGULAR,
+        ("KRX_NXT_INTEGRATED", "KRX_NXT_AFTERMARKET"):
+            session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET,
+    }.get((target.get("effective_venue"), target.get("market_session_bucket")))
+    current = session_contract.resolve_market_session(
+        datetime.fromtimestamp(now_ts, tz=session_contract.KST)
+    ).session_regime
+    return expected is not None and current == expected
+
+
 def _scalping_fifo_candidates(watching_stocks, now_ts):
     return sorted(
         [t for t in watching_stocks if _is_scalping_fifo_target(t)],
@@ -5472,12 +5489,18 @@ def _record_machine_watch_terminal(target, *, now_ts):
     promotion = target.get("scanner_promotion_id")
     if not promotion or contract.get("scanner_promotion_id") != promotion:
         return
+    terminal_reason = (
+        "session_changed"
+        if _is_zero_base_watch_target(target)
+        and not _zero_base_watch_session_matches(target, now_ts)
+        else "ttl_expired" if now_ts > contract["deadline_epoch"] else "fifo_evicted"
+    )
     try:
         sniper_state_handlers._log_entry_pipeline(target, target.get("code"),
             "entry_machine_watch_terminal", scanner_promotion_id=promotion,
             watch_deadline_epoch=contract["deadline_epoch"], watch_terminal_epoch=now_ts,
             watch_terminal_owner=contract["owner"],
-            watch_terminal_reason="ttl_expired" if now_ts > contract["deadline_epoch"] else "fifo_evicted",
+            watch_terminal_reason=terminal_reason,
             actual_order_submitted=False, broker_order_forbidden=True)
     except Exception as exc:
         log_error("[MACHINE_WATCH_TERMINAL] observation failed: " + type(exc).__name__)
@@ -12824,6 +12847,10 @@ def run_sniper(is_test_mode=False):
                     if (
                         now_ts - _scanner_evaluation_lifetime_anchor(t, now_ts=now_ts)
                         > scalping_watching_ttl_sec
+                        or (
+                            _is_zero_base_watch_target(t)
+                            and not _zero_base_watch_session_matches(t, now_ts)
+                        )
                     ):
                         expired_ids.append(t["id"])
                         expired_names.append(t["name"])
