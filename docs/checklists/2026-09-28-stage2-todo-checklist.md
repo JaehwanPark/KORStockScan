@@ -223,6 +223,7 @@
   - 18:22 미사용 중간 zero-base 릴리스 worktree 5개를 실행 프로세스·release-set 소유자 대사 뒤 정리했다. 선택 `025d80f0`, 직전 되돌림 `df9649ef`, 앞선 프리마켓·세션 경계 이력 및 공유 data를 보존했고 정리 후 release-set/PID 결속 PASS다. [정리 영수증](../audit-reports/2026-09-28-zero-base-scanner-implementation-review-and-release-gates.md#1815-kst-스캘핑-발견probe-순환-가속)을 따른다.
   - 18:30 빠른 재조회가 진행 중 probe의 원천 hash를 덮고 `in_flight`를 해제해 도착한 결과를 버릴 수 있는 큐 경합을 확인했다. claim 세대를 별도로 영속해 실행 중 결과를 수용하면서 최신 발견은 다음 dispatch에 즉시 대기시키는 수정을 재생·인접 회귀 366건으로 검증했다. 커밋 `57946bc9`의 불변 릴리스로 정상 재기동해 Main PID `768143`의 선택 cwd·당일 정책·release-set PASS를 확인했다. 실제 결과 수락률·WS 수신·감시·제출은 별도 영수증으로 닫는다. [진행 중 probe 세대 리뷰](../audit-reports/2026-09-28-zero-base-scanner-implementation-review-and-release-gates.md#1830-kst-진행-중-probe-세대-보존)를 따른다.
   - 18:34 새 PID의 약 3분 영수증은 요청 216건, 수락 결과 204건/204코드, 확인 시 진행 중 12건으로 판정 전 큐 결과 소실 징후는 없었다. 기계판정 13건은 모두 비진입, 감시 편입·제출은 0건이었다. 정확 `_AL` 수신 결손(`route_snapshot_missing` 163/204)이 계속 주된 원인이며, 결과 수락과 경제적 성공을 혼동하지 않는다. WS 등록 시점 표본 28/56, release-set PASS·기능 `not_assessed`다. [새 PID 자연 수용](../audit-reports/2026-09-28-zero-base-scanner-implementation-review-and-release-gates.md#1830-kst-진행-중-probe-세대-보존)을 따른다.
+  - 18:37 통합 애프터마켓 누적 probe에서 활동성 70/1,311, 상승률 4/615만 기계판정에 도달했다. 섞인 PID 표본이므로 경제성·인과효과는 주장하지 않는다. 애프터마켓만 claim을 활동성 7:상승률 1로 조정하고 프리마켓·정규장 3:1, 전체 예산·hard guard를 유지하는 검증을 진행한다. [원천별 우선순위 리뷰](../audit-reports/2026-09-28-zero-base-scanner-implementation-review-and-release-gates.md#1837-kst-애프터마켓-활동성-판정-도달-우선순위)를 따른다.
 
 ## Project/Calendar 동기화
 

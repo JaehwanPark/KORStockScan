@@ -142,6 +142,10 @@ class ZeroBaseDiscoveryRuntime:
             min_interval_sec=5,
             max_observation_age_sec=MAX_DISCOVERY_OBSERVATION_AGE_SEC,
             eligible_routes=eligible_routes,
+            activity_claims_per_gainer=(
+                7 if regime == session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET
+                else 3
+            ),
         )
         self._persist()  # Persist claims before an asynchronous callback can arrive.
         for claim in claims:

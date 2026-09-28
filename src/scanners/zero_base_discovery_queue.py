@@ -148,17 +148,20 @@ class DiscoveryQueue:
         self, *, now_epoch: float, limit: int, min_interval_sec: float = 0,
         max_observation_age_sec: float | None = None,
         eligible_routes: set[str] | None = None,
+        activity_claims_per_gainer: int = 3,
     ) -> list[dict]:
         """Return due generations, oldest last claim first, with a bounded budget."""
         if limit < 0 or min_interval_sec < 0:
             raise ValueError("negative queue budget")
+        if type(activity_claims_per_gainer) is not int or activity_claims_per_gainer < 1:
+            raise ValueError("invalid source rotation budget")
         if max_observation_age_sec is not None and max_observation_age_sec <= 0:
             raise ValueError("invalid observation age budget")
         ready_by_cohort: dict[tuple[str, str, str], list[Candidate]] = {}
         cohort_claims: dict[tuple[str, str, str], int] = {}
         for candidate in self._candidates.values():
-            # Activity is a discovery hint, not an entry decision. Reserve one
-            # in four claims for other panels so they remain observable.
+            # Activity is a discovery hint, not an entry decision. Keep one
+            # bounded claim for gainers per source-rotation cycle.
             kind = "activity" if candidate.source_kind == "activity" else "gainers"
             cohort = (candidate.market, candidate.route, kind)
             cohort_claims[cohort] = cohort_claims.get(cohort, 0) + candidate.claim_count
@@ -187,7 +190,11 @@ class DiscoveryQueue:
             if not available:
                 break
             preferred_kind = (
-                "gainers" if (self._claim_sequence + len(ready)) % 4 == 3
+                "gainers" if (
+                    (self._claim_sequence + len(ready))
+                    % (activity_claims_per_gainer + 1)
+                    == activity_claims_per_gainer
+                )
                 else "activity"
             )
             preferred = [key for key in available if key[2] == preferred_kind]

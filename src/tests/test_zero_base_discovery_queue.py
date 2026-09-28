@@ -97,6 +97,24 @@ def test_active_volume_candidates_get_bounded_priority_without_starving_gainers(
     }
 
 
+def test_aftermarket_source_rotation_keeps_a_gainer_claim():
+    queue = DiscoveryQueue(DAY)
+    for index in range(1, 25):
+        _observe(queue, f"{index:06d}", route="krx_nxt_integrated", kind="activity")
+    for index in range(25, 33):
+        _observe(queue, f"{index:06d}", route="krx_nxt_integrated", kind="gainers")
+    first = queue.claim(
+        now_epoch=T0 + 2, limit=8, activity_claims_per_gainer=7,
+    )
+    assert [row["source_kind"] for row in first] == ["activity"] * 7 + ["gainers"]
+    second = DiscoveryQueue.restore(queue.snapshot(), session_date=DAY).claim(
+        now_epoch=T0 + 10, limit=8, activity_claims_per_gainer=7,
+    )
+    assert [row["source_kind"] for row in second] == ["activity"] * 7 + ["gainers"]
+    with pytest.raises(ValueError):
+        queue.claim(now_epoch=T0 + 11, limit=1, activity_claims_per_gainer=0)
+
+
 def test_single_claim_calls_keep_source_rotation_after_restart():
     queue = DiscoveryQueue(DAY)
     for index in range(1, 9):

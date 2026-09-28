@@ -132,6 +132,30 @@ def test_panel_interval_does_not_limit_probe_dispatch_and_stale_rows_wait(tmp_pa
     assert stale["stale_candidate_count"] == 13
 
 
+def test_aftermarket_dispatch_uses_activity_rotation_without_dropping_gainers(tmp_path):
+    bus = Bus()
+    runtime = ZeroBaseDiscoveryRuntime(
+        event_bus=bus, session_date="2026-09-28", state_path=tmp_path / "state.json",
+    )
+    after = datetime(2026, 9, 28, 18, 30, tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
+    observations = [
+        {
+            **_panel("token")["observations"][0],
+            "code": f"{code:06d}", "observed_epoch": after,
+            "source_kind": "activity" if code <= 12 else "gainers",
+        }
+        for code in range(1, 17)
+    ]
+    summary = runtime.scan_once(
+        "token", fetcher=lambda _token: {"panels": [], "observations": observations},
+        now_epoch=after + 1,
+    )
+    assert summary["probe_requested_count"] == 12
+    kinds = [payload["claim"]["source_kind"] for event, payload in bus.events
+             if event == PROBE_REQUEST_EVENT]
+    assert kinds == ["activity"] * 7 + ["gainers"] + ["activity"] * 4
+
+
 def test_session_handoff_does_not_claim_premarket_route_in_regular_session(tmp_path):
     bus = Bus()
     runtime = ZeroBaseDiscoveryRuntime(
