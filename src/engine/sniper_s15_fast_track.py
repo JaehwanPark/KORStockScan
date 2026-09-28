@@ -223,39 +223,6 @@ def _now_ts():
     return time.time()
 
 
-def _get_tick_size_for_price(price):
-    if hasattr(kiwoom_utils, "get_tick_size"):
-        return int(kiwoom_utils.get_tick_size(price))
-    if price < 2000:
-        return 1
-    if price < 5000:
-        return 5
-    if price < 20000:
-        return 10
-    if price < 50000:
-        return 50
-    if price < 200000:
-        return 100
-    if price < 500000:
-        return 500
-    return 1000
-
-
-def _price_ticks_up(curr_price, ticks=2):
-    price = int(curr_price)
-    for _ in range(ticks):
-        price += _get_tick_size_for_price(price)
-    return int(price)
-
-
-def _target_price_pct_up(avg_buy_price, pct=1.8):
-    ideal = avg_buy_price * (1 + (pct / 100.0))
-    price = int(avg_buy_price)
-    while price < ideal:
-        price += _get_tick_size_for_price(price)
-    return int(price)
-
-
 def _weighted_avg(amount, qty):
     if qty <= 0:
         return 0
@@ -1491,29 +1458,6 @@ def _recover_s15_custody(code, state):
         with state["lock"]:
             state["_recovery_thread_active"] = False
         _S15_RECOVERY_THREADS.discard(threading.current_thread())
-
-
-def create_s15_shadow_record(code, name):
-    if DB is None:
-        return None
-    try:
-        with DB.get_session() as session:
-            record = RecommendationHistory(
-                rec_date=datetime.now().date(),
-                stock_code=code,
-                stock_name=name,
-                buy_price=0,
-                trade_type="SCALP",
-                strategy="S15_FAST",
-                status="WATCHING",
-                position_tag="S15_FAST",
-            )
-            session.add(record)
-            session.flush()
-            return record.id
-    except Exception as exc:
-        log_error(f"🚨 S15 shadow record 생성 실패 ({code}): {exc}")
-        return None
 
 
 def update_s15_shadow_record(shadow_id, **kwargs):
