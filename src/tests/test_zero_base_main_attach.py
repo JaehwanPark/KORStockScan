@@ -2,6 +2,7 @@
 
 import time
 import threading
+from queue import Empty
 from types import SimpleNamespace
 
 from src.engine import kiwoom_sniper_v2 as main
@@ -91,6 +92,63 @@ def test_enter_now_failure_expires_provisional_row(monkeypatch):
     rows, targets = _prepare(monkeypatch)
     monkeypatch.setattr(main, "_apply_scalping_scanner_promoted_target", lambda _payload, **_kwargs: False)
     assert main.handle_zero_base_machine_enter(_result()) is False
+    assert rows[1].status == "EXPIRED"
+    assert targets == []
+
+
+def test_enter_now_attach_exception_expires_provisional_row(monkeypatch):
+    rows, targets = _prepare(monkeypatch)
+    events = []
+    monkeypatch.setattr(main, "event_bus", SimpleNamespace(
+        publish=lambda topic, payload: events.append((topic, payload)),
+    ))
+
+    def failed_attach(payload, **_kwargs):
+        targets.append({
+            "id": payload["record_id"], "code": payload["code"],
+            "status": "WATCHING", "zero_base_pending_db": True,
+        })
+        raise RuntimeError("partial_attach")
+
+    monkeypatch.setattr(main, "_apply_scalping_scanner_promoted_target", failed_attach)
+    assert main.handle_zero_base_machine_enter(_result()) is False
+    assert rows[1].status == "EXPIRED"
+    assert targets == []
+    assert events[-1][0] == "COMMAND_WS_UNREG"
+
+
+def test_inbox_attach_exception_expires_provisional_row_and_continues(monkeypatch):
+    rows, targets = _prepare(monkeypatch)
+    payload = {
+        "code": "123456", "strategy": "SCALPING", "record_id": 1,
+        "zero_base_pending_db": True,
+    }
+    rows[1] = _Record(
+        stock_code="123456", status="PROBE_READY",
+        scanner_source_signature="ZERO_BASE_DISCOVERY:" + "b" * 64,
+    )
+    inbox_items = [SimpleNamespace(payload=payload, enqueued_epoch=time.time())]
+
+    def get_nowait():
+        if inbox_items:
+            return inbox_items.pop(0)
+        raise Empty
+
+    monkeypatch.setattr(main, "_SCANNER_PROMOTION_INBOX", SimpleNamespace(get_nowait=get_nowait))
+    monkeypatch.setattr(main, "_scanner_scheduler_coalesce_duplicate_inbox", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(main, "event_bus", SimpleNamespace(publish=lambda *_args: None))
+
+    def failed_attach(attached_payload, **_kwargs):
+        targets.append({
+            "id": attached_payload["record_id"], "code": attached_payload["code"],
+            "status": "WATCHING", "zero_base_pending_db": True,
+        })
+        raise RuntimeError("partial_attach")
+
+    monkeypatch.setattr(main, "_apply_scalping_scanner_promoted_target", failed_attach)
+    summary = main._drain_scanner_promotion_inbox(SimpleNamespace(), max_items=1)
+    assert summary["drained"] == 1
+    assert summary["applied"] == 0
     assert rows[1].status == "EXPIRED"
     assert targets == []
 

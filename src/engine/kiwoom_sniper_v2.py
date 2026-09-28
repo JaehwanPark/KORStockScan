@@ -8819,13 +8819,23 @@ def handle_zero_base_machine_enter(result):
             _zero_base_attach_receipt(result, outcome="rejected", reason="conflict_after_provisional_insert", record_id=payload.get("record_id"))
             return False
         scheduler_mode = _scanner_scheduler_startup_mode()
-        accepted = (
-            handle_scalping_scanner_promoted_target(payload)
-            if scheduler_mode in {"deadline_v1", "async_v1"}
-            else _apply_scalping_scanner_promoted_target(
-                payload, mutation_lock=ENTRY_LOCK,
+        try:
+            accepted = (
+                handle_scalping_scanner_promoted_target(payload)
+                if scheduler_mode in {"deadline_v1", "async_v1"}
+                else _apply_scalping_scanner_promoted_target(
+                    payload, mutation_lock=ENTRY_LOCK,
+                )
             )
-        )
+        except Exception as exc:
+            log_error("[ZERO_BASE_ATTACH] attach failed: " + type(exc).__name__)
+            _zero_base_finalize_candidate_record(payload, attached=False)
+            _zero_base_rollback_uncommitted_target(payload)
+            _zero_base_attach_receipt(
+                result, outcome="rejected", reason="attach_exception",
+                record_id=payload.get("record_id"),
+            )
+            return False
     if scheduler_mode in {"deadline_v1", "async_v1"}:
         if not accepted:
             _zero_base_finalize_candidate_record(payload, attached=False)
@@ -9746,9 +9756,20 @@ def _drain_scanner_promotion_inbox(scheduler, *, max_items):
             coalesced += 1
             continue
         attach_attempt_epoch = time.time()
-        success = _apply_scalping_scanner_promoted_target(
-            payload, mutation_lock=ENTRY_LOCK
-        )
+        try:
+            success = _apply_scalping_scanner_promoted_target(
+                payload, mutation_lock=ENTRY_LOCK
+            )
+        except Exception as exc:
+            if not zero_base_provisional:
+                raise
+            log_error("[ZERO_BASE_ATTACH] inbox attach failed: " + type(exc).__name__)
+            _zero_base_finalize_candidate_record(payload, attached=False)
+            _zero_base_rollback_uncommitted_target(payload)
+            _zero_base_inbox_attach_receipt(
+                payload, outcome="rejected", reason="attach_exception",
+            )
+            continue
         attach_epoch = time.time()
         code = str(payload.get("code") or "").strip()[:6]
         target = next(
