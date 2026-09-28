@@ -28,7 +28,7 @@ class Bus:
 
 def _panel(_token):
     return {"panels": [{"status": "observed_panel"}], "observations": [{
-        "code": "123456", "route": "krx_only", "observed_epoch": T0,
+        "code": "123456", "route": "krx_nxt_integrated", "observed_epoch": T0,
         "source_sha256": "a" * 64, "source_scope": "observed_panel",
         "name": "TEST", "market": "KOSPI", "venue": "KRX", "price": 10000,
     }]}
@@ -85,7 +85,7 @@ def test_panel_interval_does_not_limit_probe_dispatch_and_stale_rows_wait(tmp_pa
     )
     panel = {"panels": [{"status": "observed_panel"}], "observations": [
         {
-            "code": f"{code:06d}", "route": "krx_only", "observed_epoch": T0,
+            "code": f"{code:06d}", "route": "krx_nxt_integrated", "observed_epoch": T0,
             "source_sha256": "a" * 64, "source_scope": "observed_panel",
             "name": "TEST", "market": "KOSPI", "venue": "KRX", "price": 10000,
         }
@@ -100,6 +100,24 @@ def test_panel_interval_does_not_limit_probe_dispatch_and_stale_rows_wait(tmp_pa
     stale = runtime.dispatch_due_probes(now_epoch=T0 + 121)
     assert stale["probe_requested_count"] == 0
     assert stale["stale_candidate_count"] == 9
+
+
+def test_session_handoff_does_not_claim_premarket_route_in_regular_session(tmp_path):
+    bus = Bus()
+    runtime = ZeroBaseDiscoveryRuntime(
+        event_bus=bus, session_date="2026-09-28", state_path=tmp_path / "state.json",
+    )
+    premarket = datetime(2026, 9, 28, 8, 59, 30,
+                         tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
+    regular = datetime(2026, 9, 28, 9, 0, 30,
+                       tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
+    runtime.queue.observe(
+        code="123456", route="nxt_only", observed_epoch=premarket,
+        source_sha256="a" * 64, source_scope="observed_panel",
+        received_epoch=premarket, market="KOSPI", venue="NXT",
+    )
+    assert runtime.dispatch_due_probes(now_epoch=regular)["probe_requested_count"] == 0
+    assert all(event != PROBE_REQUEST_EVENT for event, _payload in bus.events)
 
 
 def test_enabled_scanner_enters_new_owner_without_legacy_radar(monkeypatch):

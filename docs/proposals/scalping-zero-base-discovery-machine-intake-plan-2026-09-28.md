@@ -2,6 +2,12 @@
 
 상태: **VCP/S15 신규 유입 퇴역과 통합 `_AL` 발견·기계 probe·Main 감시 경로를 구현하고, 사용자 요청으로 즉시 배포·재기동했다.** 현재 선택 릴리스·PID와 관측 범위는 [구현 리뷰](../audit-reports/2026-09-28-zero-base-scanner-implementation-review-and-release-gates.md)의 후속 영수증을 따른다. 자연 제출·체결·terminal·비용 후 경제성은 별도 미수용이다. 과거 KRX/NXT 분리 패널 시험은 잘못된 route 설계의 역사적 증거이며 운영 기준이 아니다. VCP/S15 재유입이 가능한 구 릴리스는 롤백 대상이 아니다.
 
+## 16:32 KST 프리마켓 경로와 수신 대기 보완
+
+정규장·통합 애프터마켓의 통합 `stex_tp=3`·`_AL`·SOR 계약은 유지한다. 프리마켓만 기존 세션의 별도 NXT 경로로 KOSPI/KOSDAQ `stex_tp=2` 패널을 읽고, probe REST/WS와 감시 WS는 `_NX`, 주문은 NXT로 결속한다. 세션 변경 전후의 다른 route claim은 평가·승격하지 않는다. 두 저활동 세션에서 정확 0B/0D 중 한쪽만 3초 안에 도착하면 WS 관측을 최대 5초로 연장한다. 사용자의 후속 결정에 따라 프로브의 최종 기계판정 직전 동일 route·transport 신선도는 2초에서 3초로 변경했다. 두 신호 모두 없는 후보는 3초에 종료하고 추가 REST는 호출하지 않는다. 이 변경은 현재 작업공간의 구현·리뷰 단계이며 기존 PID에 적용됐다는 뜻이 아니다.
+
+관측 근거와 표본 한계는 [수신시점·프리마켓 구현 리뷰](../audit-reports/2026-09-28-zero-base-scanner-implementation-review-and-release-gates.md#1632-kst-프리마켓-수신시점과-구현-리뷰)를 따른다. 3초 값도 전체 시장에서 최적인 것으로 검증되지 않았다. 특히 프리마켓 비교는 `_AL` 연속 구독 23종목이지 새 `_NX` 임시 구독의 실제 수신 시험이 아니므로 다음 자연 프리마켓의 exact-route 수신·판정·주문 전 가드를 별도로 확인한다.
+
 ## 14:56 KST 통합 route 정정과 실제 기동
 
 사용자 정정에 따라 정규장과 통합 애프터마켓의 독립 KRX/NXT 후보 패널을 제거했다. `ka10027`은 KOSPI·KOSDAQ 각각 `stex_tp=3`으로만 호출하고 관측 원장에는 `krx_nxt_integrated` 한 route를 남긴다. 임시 WS와 감시 WS는 종목코드 `_AL`, REST tick/분봉은 명시 `_AL`, 신규 스캐너의 주문 요청은 명시 `SOR`로 결속한다. Main 감시 코호트는 정규장 `KRX`, 통합 애프터마켓 `KRX_NXT_INTEGRATED`로 유지해 브로커 route와 시장 세션 분류를 혼동하지 않는다. 장전·전환·신규 BUY 마감 세션에는 통합 패널을 호출하지 않는다. 기존 분리 route queue 파일은 보존하고 `zero_base_discovery_queue_integrated_v2`에서 새로 시작한다. 종목별 SOR 적격·주문유형·잔고·hard guard는 기존 주문 owner가 계속 검사한다.
@@ -66,7 +72,7 @@
 
 ## 13시대 구현·리뷰 갱신
 
-`KORSTOCKSCAN_ZERO_BASE_SCANNER_ENABLED=true`는 기존 스캐너 루프 대신 4개의 KRX/NXT `ka10027` 관측 패널을 읽는다. 각 패널은 최대 200행·최대 10페이지이며 `observed_panel`만 선언한다. 대기열은 KST 날짜·종목·정확 route·원천 SHA와 미평가 우선 순서를 보존하고, 회차당 최대 8개 probe를 claim한다. 2개 worker와 공유 Kiwoom 5회/초·source-only 4회/초 제한을 사용한다. 프로브는 WS 0B·0D만 임시 구독하고 동일 item·route·transport epoch·2초 이내의 새 시세를 확인한다. tick/candle REST는 정확 요청 코드를 고정하고 source-only로 분류한다. 기계 `ENTER_NOW`만 5초 이내의 source와 bundle SHA를 다시 확인해 Main의 기존 감시·AI 보조·주문 안전 경로에 넘긴다. `PROBE_READY` 임시 DB 행은 동일 ID의 메모리 감시 편입 성공에만 `WATCHING`으로 확정되며 재시작 loader는 임시 행을 재무장하지 않는다. 이 구조는 단독 주문 권한이 없다.
+`KORSTOCKSCAN_ZERO_BASE_SCANNER_ENABLED=true`는 기존 스캐너 루프 대신 세션별 KOSPI·KOSDAQ `ka10027` 2개 관측 패널을 읽는다. 각 패널은 최대 200행·최대 10페이지이며 `observed_panel`만 선언한다. 대기열은 KST 날짜·종목·정확 route·원천 SHA와 미평가 우선 순서를 보존하고, 회차당 최대 8개 probe를 claim한다. 2개 worker와 공유 Kiwoom 5회/초·source-only 4회/초 제한을 사용한다. 프로브는 WS 0B·0D만 임시 구독하고 동일 item·route·transport epoch·3초 이내의 새 시세를 확인한다. tick/candle REST는 정확 요청 코드를 고정하고 source-only로 분류한다. 기계 `ENTER_NOW`만 5초 이내의 source와 bundle SHA를 다시 확인해 Main의 기존 감시·AI 보조·주문 안전 경로에 넘긴다. `PROBE_READY` 임시 DB 행은 동일 ID의 메모리 감시 편입 성공에만 `WATCHING`으로 확정되며 재시작 loader는 임시 행을 재무장하지 않는다. 이 구조는 단독 주문 권한이 없다.
 
 새 모드에서는 SCALPING 조건검색식 `CNSRREQ`와 그 원시 `I/D` 신규 편입을 중단한다. swing 조건식은 기존 독립 enable과 소유권을 따른다. 이는 새 발견 owner와 기존 조건검색 owner가 동시에 같은 슬롯을 선점하지 않도록 하는 아키텍처 전환이다. 개별 기존 식의 수익률이 0이거나 새 패널이 그 식의 모든 기회를 대체한다는 주장이 아니다. VCP 3식·S15 2식의 bootstrap 구독 및 신규 후보/주문 dispatch는 제거했고, 직접 호출 가능한 S15 신규 매수 함수도 삭제했다. S15 보유·미결 주문용 journal, SELL/취소·동기화·영수증 호환 경로와 기존 DB/원시 기록은 실제 custody가 terminal로 확인될 때까지 유지한다. 원천/구독 절감량은 실제 새 PID 영수증으로 측정한다.
 

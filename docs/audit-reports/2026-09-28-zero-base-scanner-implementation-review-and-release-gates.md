@@ -1,5 +1,14 @@
 # 제로베이스 SCALPING 발견·기계판정 구현 리뷰와 릴리스 문턱 — 2026-09-28
 
+## 16:32 KST 프리마켓 수신시점과 구현 리뷰
+
+- **관측 모집단:** 2026-09-28 source-only 연속 구독의 동일한 선택 23종목, `_AL` 0B/0D, 각 세션 15분(프리마켓 08:03–08:18, 통합 애프터마켓 16:00–16:15), 종목별 10초 간격 90개 anchor로 세션당 2,070개 anchor를 읽었다. 프리마켓은 SOR 관측 스트림으로, 새 NXT `_NX` 임시 REG의 수신률을 측정한 것이 아니다. 유효 signed 0B와 양의 BBO 0D의 *어느* 수신쌍이 anchor 뒤 3/5/10초 이내에 함께 나타나고 두 수신시각 차가 2초 이내인 anchor는 프리마켓 423/499/579, 통합 애프터마켓 414/586/852였다. 이것은 연속 구독의 도착 분포이며 새 probe의 성공률이나 제출률이 아니다.
+- **최종 신선도 비교:** 같은 23종목·anchor에서 각 3/5/10초 종료시점의 *최신* 0B/0D를 비교하고 두 수신시각 차 2초 이내를 요구했다. 10초 종료시점에 쌍이 있던 프리마켓 453건 중 두 자료가 모두 최근 2초인 것은 369건, 3초인 것은 403건이었다. 통합 애프터마켓은 468건 중 각각 315건, 379건이다. 종료시점에 최근 2초 조건을 만족한 전체 anchor는 3/5/10초 순서로 프리마켓 363/380/369, 애프터마켓 301/322/315였다. 따라서 기다림을 늘려도 고정 2초 기준의 통과율은 단조 증가하지 않는다. 이 계산은 주문 유효성·순익을 평가하지 않으며 전체 시장이나 `_NX`에 대한 임계값 증거가 아니다.
+- **판정:** 신선한 동일 route·transport의 체결과 호가는 진입 판단에 필요한 원천 가드다. 정확한 **2초**는 종전 zero-base probe의 로컬 값이며 Kiwoom API가 명령한 수치도, 전 종목에서 경제적으로 최적인 값도 아니다. 사용자의 명시적 후속 지시에 따라 probe의 대기 종료·기계 직전 0B/0D 상한을 **3초**로 변경해 공유 AI 입력 preflight의 3초 상한과 맞췄다. 전체 시장 최적값이라는 주장은 아니다. 다음 자연 `_NX` 프리마켓과 `_AL` 애프터마켓의 대기 종료·기계 직전 0B/0D 나이, 기계 action, 실제 제출·체결·비용 후 결과를 분리 대사한다.
+- **구현·자체 리뷰:** 프리마켓만 `ka10027 stex_tp=2`, NXT `_NX` WS/REST, Main `PREMARKET_KRX_LIKE` 감시, 명시 NXT 주문으로 결속했다. 정규장/통합 애프터마켓 `stex_tp=3`·`_AL`·SOR는 유지한다. 첫 리뷰에서 구독 해제의 원래 plain-code 표기, 감시 등록의 `_NX` 누락, 세션 전환 뒤 옛 route claim 재평가, 최초 수량 후속 주문의 SOR 고정이 드러나 각각 수정했다. 신선도별 종료시점 재검토 후 두 저활동 세션은 정확 한쪽 자료만 3초 안에 받은 경우에만 최대 2초를 추가 대기하도록 축소했다. 두 자료 모두 없는 probe는 연장하지 않는다. 최종 3초·정확 route·transport 검사는 유지하며, 주문 직전의 별도 신선도와 보호 장치는 변경하지 않았다. 2-worker와 REST 공유 admission은 유지한다. 워커 점유 증가 가능성은 다음 자연 PID의 capacity-deferred와 함께 평가한다.
+- **공식 참조:** 2026-09-28 16:22–16:32 KST 원격 HEAD/checkout `953e5dbff123f437ab4d11a78a95191a685eb51f`를 확인했다. 이 revision에는 `kiwoom_docs`가 없다. `kiwoom/_data/kiwoom_api_spec.json`의 `ka10027`(POST `/api/dostk/rkinfo`, `stex_tp 1/2/3`, KOSPI 001/KOSDAQ 101, 응답·continuation), `ka10003`(`/api/dostk/stkinfo`), `ka10080`(`/api/dostk/chart`)의 plain/`_NX`/`_AL`, `kt10000`(`/api/dostk/ordr`, `dmst_stex_tp KRX/NXT/SOR`), 0B/0D FID·WebSocket `/api/dostk/websocket`, `kiwoom/specs.py`, `kiwoom/core/ws_client.py`, `kiwoom/realtime/packets.py`의 REG/REMOVE, Postman collection을 대조했다. 공식 명세는 프리마켓 `_NX` 자연 수신률·종목별 주문 가능성·전체 시장의 적정 3초 값을 보증하지 않는다. 계좌·실주문 API는 호출하지 않았다.
+- **검증 경계:** 관련 발견·queue·probe·Main·초기 수량·세션·캔들 회귀 265건과 인접 scanner runtime/WS 회귀 14건, Python compile, `git diff --check`를 통과했다. 현재 작업공간 코드의 리뷰 결과이며 선택 릴리스/실제 PID 소비, 다음 프리마켓 자연 수신·주문, terminal·비용 후 경제성은 별도 영수증이다.
+
 ## 15:23 KST WS 프로브 대기 보완·재리뷰·재기동
 
 - **원인 구분:** 14:56 이후 3초 임시 구독에서 0B를 먼저 받으면 공통 `wait_for_data(require_trade=True)`가 0D 수신 전에 반환했다. 해당 구간 `0D_missing` 30건 중 REG·첫 수신 로그를 대응할 수 있는 29건의 첫 수신은 0B였다. 이것은 조기 반환 결함의 증거이며, `route_snapshot_missing` 전체나 실제 체결 간격의 원인 증명은 아니다. 3초 내 정확 `_AL` 수신 건수·시각이 없던 기존 영수증으로 저유동성을 단정하지 않는다.

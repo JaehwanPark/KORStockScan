@@ -8598,6 +8598,20 @@ def handle_zero_base_probe_requested(request):
     ):
         _zero_base_probe_result(request, "source_unavailable", "invalid_probe_request")
         return
+    session_regime = scalping_session_venue_provenance(time.time()).get("market_session_regime")
+    expected_route = (
+        "nxt_only"
+        if session_regime == session_contract.MARKET_SESSION_REGIME_LEGACY_PREMARKET
+        else "krx_nxt_integrated"
+        if session_regime in {
+            session_contract.MARKET_SESSION_REGIME_KRX_REGULAR,
+            session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET,
+        }
+        else None
+    )
+    if claim.get("route") != expected_route:
+        _zero_base_probe_result(request, "source_unavailable", "probe_route_session_mismatch")
+        return
     if _zero_base_active_conflict(code):
         _zero_base_probe_result(request, "active_conflict", "existing_runtime_target")
         return
@@ -8632,6 +8646,12 @@ def handle_zero_base_probe_requested(request):
                     ai_engine=AI_ENGINE,
                     token=KIWOOM_TOKEN,
                     release_ws=release_probe_ws,
+                    ws_wait_partial_extension_sec=(
+                        2.0 if session_regime in {
+                            session_contract.MARKET_SESSION_REGIME_LEGACY_PREMARKET,
+                            session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET,
+                        } else 0.0
+                    ),
                 )
             except Exception as exc:
                 result = {
@@ -8705,7 +8725,18 @@ def _zero_base_rollback_uncommitted_target(payload):
             if not (target.get("id") == record_id and target.get("code") == code)
         ]
     if code and not _zero_base_active_conflict(code):
-        event_bus.publish("COMMAND_WS_UNREG", {"codes": [code], "source": "zero_base_attach_rollback"})
+        event_bus.publish("COMMAND_WS_UNREG", {
+            "codes": [_scanner_runtime_ws_item(code, (payload or {}).get("market_data_route"))],
+            "source": "zero_base_attach_rollback",
+        })
+
+
+def _scanner_runtime_ws_item(code, route):
+    if route == "krx_nxt_integrated":
+        return code + "_AL"
+    if route == "nxt_only":
+        return code + "_NX"
+    return code
 
 
 def handle_zero_base_machine_enter(result):
@@ -8723,7 +8754,7 @@ def handle_zero_base_machine_enter(result):
         or candidate.get("code") != code
         or candidate.get("route") != route
         or candidate.get("source_sha256") != claim.get("source_sha256")
-        or route != "krx_nxt_integrated"
+        or route not in {"krx_nxt_integrated", "nxt_only"}
         or not isinstance(result.get("result_epoch"), (int, float))
         or not 0 <= now_epoch - result["result_epoch"] <= 5
         or not isinstance(result.get("probe_price"), int)
@@ -8741,12 +8772,17 @@ def handle_zero_base_machine_enter(result):
         return False
     session_fields = scalping_session_venue_provenance(now_epoch)
     session_regime = session_fields.get("market_session_regime")
-    if session_regime == session_contract.MARKET_SESSION_REGIME_KRX_REGULAR:
-        venue = "KRX"
-    elif session_regime == session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET:
-        venue = "KRX_NXT_INTEGRATED"
+    if (session_regime == session_contract.MARKET_SESSION_REGIME_LEGACY_PREMARKET
+            and route == "nxt_only"):
+        venue, broker_route = "PREMARKET_KRX_LIKE", "NXT"
+    elif (session_regime == session_contract.MARKET_SESSION_REGIME_KRX_REGULAR
+          and route == "krx_nxt_integrated"):
+        venue, broker_route = "KRX", "SOR"
+    elif (session_regime == session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET
+          and route == "krx_nxt_integrated"):
+        venue, broker_route = "KRX_NXT_INTEGRATED", "SOR"
     else:
-        _zero_base_attach_receipt(result, outcome="rejected", reason="integrated_route_session_unavailable")
+        _zero_base_attach_receipt(result, outcome="rejected", reason="route_session_unavailable")
         return False
     source_hash = str(claim.get("source_sha256") or "")
     source_signature = "ZERO_BASE_DISCOVERY:" + source_hash
@@ -8780,7 +8816,7 @@ def handle_zero_base_machine_enter(result):
         "venue": venue,
         "effective_venue": venue,
         "market_data_route": route,
-        "broker_route": "SOR",
+        "broker_route": broker_route,
         "market_session_bucket": session_fields.get("market_session_bucket"),
         "zero_base_pending_db": True,
         "zero_base_probe_machine_bundle_sha256": result.get("machine_bundle_sha256"),
@@ -9110,7 +9146,7 @@ def _apply_scalping_scanner_promoted_target(payload, *, mutation_lock=ENTRY_LOCK
                 )
                 event_bus.publish(
                     "COMMAND_WS_REG",
-                    {"codes": [code + "_AL" if payload.get("market_data_route") == "krx_nxt_integrated" else code],
+                    {"codes": [_scanner_runtime_ws_item(code, payload.get("market_data_route"))],
                      "source": "scanner_runtime_target_refresh"},
                 )
                 return True
@@ -9206,7 +9242,7 @@ def _apply_scalping_scanner_promoted_target(payload, *, mutation_lock=ENTRY_LOCK
 
     event_bus.publish(
         "COMMAND_WS_REG",
-        {"codes": [code + "_AL" if payload.get("market_data_route") == "krx_nxt_integrated" else code],
+        {"codes": [_scanner_runtime_ws_item(code, payload.get("market_data_route"))],
          "source": "scanner_runtime_target_attach"},
     )
     _log_scanner_runtime_target_attach(

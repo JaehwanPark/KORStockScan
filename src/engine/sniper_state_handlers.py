@@ -44023,12 +44023,14 @@ def _initial_quantity_sequential_plan(
         first.get("price") or first.get("entry_split_order_market_reference_price"), 0)
     route = str(first.get("dmst_stex_tp") or stock.get("effective_venue") or "").upper()
     if str(stock.get("source_signature") or "").startswith("ZERO_BASE_DISCOVERY:"):
-        if (
-            stock.get("market_data_route") != "krx_nxt_integrated"
-            or stock.get("broker_route") != "SOR"
-        ):
+        if (stock.get("market_data_route"), stock.get("broker_route"),
+                stock.get("effective_venue")) not in {
+            ("krx_nxt_integrated", "SOR", "KRX"),
+            ("krx_nxt_integrated", "SOR", "KRX_NXT_INTEGRATED"),
+            ("nxt_only", "NXT", "PREMARKET_KRX_LIKE"),
+        }:
             raise ValueError("zero_base_initial_quantity_route_invalid")
-        route = "SOR"
+        route = stock["broker_route"]
     if first_price <= 0 or route not in {"KRX", "NXT", "SOR"}:
         raise ValueError("initial_quantity_first_p1_or_route_invalid")
     legs = build_initial_quantity_type_legs(
@@ -70826,7 +70828,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             default_order_type_code=order_type_code,
             default_price=final_price,
         )
-        if not _bind_zero_base_sor_order_request(stock, request):
+        if not _bind_zero_base_order_request(stock, request):
             _log_entry_pipeline(
                 stock, code, "zero_base_order_route_invalid",
                 actual_order_submitted=False, broker_order_forbidden=True,
@@ -81171,18 +81173,25 @@ def _finalize_buy_order_submission(
     )
 
 
-def _bind_zero_base_sor_order_request(stock: dict, request: dict) -> bool:
-    """Keep zero-base broker orders on the exact integrated probe route."""
+def _bind_zero_base_order_request(stock: dict, request: dict) -> bool:
+    """Bind zero-base orders to the exact observed session route."""
     if not str(stock.get("source_signature") or "").startswith("ZERO_BASE_DISCOVERY:"):
         return True
-    if (
-        stock.get("market_data_route") != "krx_nxt_integrated"
-        or stock.get("broker_route") != "SOR"
-        or str(stock.get("effective_venue") or "")
-        not in {"KRX", "KRX_NXT_INTEGRATED"}
-    ):
+    route, broker, venue = (
+        stock.get("market_data_route"), stock.get("broker_route"),
+        str(stock.get("effective_venue") or ""),
+    )
+    if route == "nxt_only":
+        now_kst = datetime.now(_KST)
+        context = session_contract.resolve_market_session(now_kst)
+        if (broker != "NXT" or venue != "PREMARKET_KRX_LIKE"
+                or context.session_regime != session_contract.MARKET_SESSION_REGIME_LEGACY_PREMARKET
+                or not is_scalping_buy_time_allowed(now_kst.time())):
+            return False
+    elif (route != "krx_nxt_integrated" or broker != "SOR"
+          or venue not in {"KRX", "KRX_NXT_INTEGRATED"}):
         return False
-    request["dmst_stex_tp"] = "SOR"
+    request["dmst_stex_tp"] = broker
     return True
 
 

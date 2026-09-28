@@ -79,15 +79,36 @@ def test_missing_response_clock_is_not_promoted_as_current_quote():
     assert all(row["status"] == "source_unavailable" for row in result["panels"])
 
 
-def test_premarket_and_transition_do_not_call_integrated_panels():
-    for hour, minute in ((8, 10), (15, 40)):
-        epoch = datetime(2026, 9, 28, hour, minute,
-                         tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
-        result = fetch_discovery_panels(
-            "token", now_epoch=epoch,
-            fetcher=lambda *_args, **_kwargs: (_ for _ in ()).throw(
-                AssertionError("integrated panel must not be fetched")
-            ),
-        )
-        assert result["source_status"] == "integrated_buy_session_unavailable"
-        assert result["observations"] == []
+def test_premarket_reads_nxt_panels_with_exact_nx_route():
+    epoch = datetime(2026, 9, 28, 8, 10,
+                     tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
+    calls = []
+
+    def fetcher(_token, **kwargs):
+        calls.append(kwargs)
+        return ([{"Code": "123456", "RawInstrumentCode": "123456_NX",
+                  "Name": "TEST", "Price": 10000, "Volume": 1000,
+                  "ChangeRate": 1.5}], {
+            "response_contract_status": "verified_success",
+            "read_rate_control_status": "admitted",
+            "rest_received_ts_ms": int((epoch + 1) * 1000),
+        })
+
+    result = fetch_discovery_panels("token", now_epoch=epoch, fetcher=fetcher)
+    assert len(result["observations"]) == 2
+    assert all(row["venue"] == "NXT" and row["route"] == "nxt_only"
+               for row in result["observations"])
+    assert all(call["stex_tp"] == "2" for call in calls)
+
+
+def test_transition_does_not_fetch_panels():
+    epoch = datetime(2026, 9, 28, 15, 40,
+                     tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
+    result = fetch_discovery_panels(
+        "token", now_epoch=epoch,
+        fetcher=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("transition panel must not be fetched")
+        ),
+    )
+    assert result["source_status"] == "integrated_buy_session_unavailable"
+    assert result["observations"] == []

@@ -118,6 +118,39 @@ def test_separate_nxt_candidate_is_rejected(monkeypatch):
     assert rows == {} and targets == []
 
 
+def test_premarket_nxt_candidate_attaches_exact_route(monkeypatch):
+    rows, targets = _prepare(monkeypatch)
+    monkeypatch.setattr(main, "scalping_session_venue_provenance", lambda _epoch: {
+        "market_session_bucket": "krx_like_premarket",
+        "market_session_regime": "krx_like_premarket",
+    })
+    result = _result()
+    result["claim"]["route"] = "nxt_only"
+    result["candidate"]["route"] = "nxt_only"
+
+    def attach(payload, **_kwargs):
+        assert payload["effective_venue"] == "PREMARKET_KRX_LIKE"
+        assert payload["market_data_route"] == "nxt_only"
+        assert payload["broker_route"] == "NXT"
+        targets.append({"id": payload["record_id"], "code": payload["code"],
+                        "status": "WATCHING"})
+        return True
+
+    monkeypatch.setattr(main, "_apply_scalping_scanner_promoted_target", attach)
+    assert main.handle_zero_base_machine_enter(result) is True
+    assert rows[1].effective_venue == "PREMARKET_KRX_LIKE"
+
+
+def test_integrated_candidate_is_rejected_in_premarket(monkeypatch):
+    rows, targets = _prepare(monkeypatch)
+    monkeypatch.setattr(main, "scalping_session_venue_provenance", lambda _epoch: {
+        "market_session_bucket": "krx_like_premarket",
+        "market_session_regime": "krx_like_premarket",
+    })
+    assert main.handle_zero_base_machine_enter(_result()) is False
+    assert rows == {} and targets == []
+
+
 def test_attached_integrated_watching_registers_al_item(monkeypatch):
     _rows, targets = _prepare(monkeypatch)
     published = []
@@ -148,6 +181,34 @@ def test_attached_integrated_watching_registers_al_item(monkeypatch):
     })]
 
 
+def test_attached_premarket_watching_registers_nx_item(monkeypatch):
+    _rows, targets = _prepare(monkeypatch)
+    published = []
+    monkeypatch.setattr(main, "event_bus", SimpleNamespace(
+        publish=lambda name, payload: published.append((name, payload)),
+    ))
+    monkeypatch.setattr(main, "_resolve_stock_marcap", lambda *_args: 0)
+    monkeypatch.setattr(main, "_resolve_scanner_runtime_record_id", lambda *_args: 1)
+    monkeypatch.setattr(main, "_scanner_identity_guard", lambda *_args: (True, {}))
+    monkeypatch.setattr(main, "_log_scanner_runtime_target_attach", lambda *_args, **_kwargs: None)
+    now = time.time()
+    assert main._apply_scalping_scanner_promoted_target({
+        "record_id": 1, "code": "123456", "name": "TEST",
+        "strategy": "SCALPING", "position_tag": "SCANNER",
+        "buy_price": 10000, "added_time": now,
+        "scanner_promotion_id": "ZBPROM-123456-1-1",
+        "scanner_promotion_emitted_epoch": now,
+        "source_signature": "ZERO_BASE_DISCOVERY:" + "b" * 64,
+        "venue": "PREMARKET_KRX_LIKE", "effective_venue": "PREMARKET_KRX_LIKE",
+        "market_data_route": "nxt_only",
+        "broker_route": "NXT", "market_session_bucket": "krx_like_premarket",
+    })
+    assert targets[0]["broker_route"] == "NXT"
+    assert published == [("COMMAND_WS_REG", {
+        "codes": ["123456_NX"], "source": "scanner_runtime_target_attach",
+    })]
+
+
 def test_zero_base_entry_request_binds_sor_and_fails_closed_on_lost_route():
     stock = {
         "source_signature": "ZERO_BASE_DISCOVERY:" + "b" * 64,
@@ -155,7 +216,7 @@ def test_zero_base_entry_request_binds_sor_and_fails_closed_on_lost_route():
         "broker_route": "SOR", "effective_venue": "KRX_NXT_INTEGRATED",
     }
     request = {"qty": 1, "price": 10000, "order_type_code": "00"}
-    assert handlers._bind_zero_base_sor_order_request(stock, request)
+    assert handlers._bind_zero_base_order_request(stock, request)
     assert request["dmst_stex_tp"] == "SOR"
     assert kiwoom_orders.describe_buy_order_resolution(
         "00", price=10000, dmst_stex_tp=request["dmst_stex_tp"],
@@ -163,9 +224,34 @@ def test_zero_base_entry_request_binds_sor_and_fails_closed_on_lost_route():
     for field, value in (("broker_route", "NXT"),
                          ("market_data_route", "nxt_only"),
                          ("effective_venue", "NXT")):
-        assert not handlers._bind_zero_base_sor_order_request(
+        assert not handlers._bind_zero_base_order_request(
             {**stock, field: value}, {},
         )
+
+
+def test_zero_base_premarket_entry_binds_nxt_only_during_buy_window(monkeypatch):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    class _Clock:
+        @staticmethod
+        def now(_zone):
+            return datetime(2026, 9, 28, 8, 10, tzinfo=ZoneInfo("Asia/Seoul"))
+
+    monkeypatch.setattr(handlers, "datetime", _Clock)
+    monkeypatch.setattr(handlers, "is_scalping_buy_time_allowed", lambda _time: True)
+    stock = {
+        "source_signature": "ZERO_BASE_DISCOVERY:" + "b" * 64,
+        "market_data_route": "nxt_only", "broker_route": "NXT",
+        "effective_venue": "PREMARKET_KRX_LIKE",
+    }
+    request = {"qty": 1, "price": 10000, "order_type_code": "00"}
+    assert handlers._bind_zero_base_order_request(stock, request)
+    assert request["dmst_stex_tp"] == "NXT"
+    for field, value in (("broker_route", "SOR"),
+                         ("market_data_route", "krx_nxt_integrated"),
+                         ("effective_venue", "NXT")):
+        assert not handlers._bind_zero_base_order_request({**stock, field: value}, {})
 
 
 def test_enter_now_failure_expires_provisional_row(monkeypatch):

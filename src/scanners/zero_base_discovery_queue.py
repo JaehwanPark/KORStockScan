@@ -137,6 +137,7 @@ class DiscoveryQueue:
     def claim(
         self, *, now_epoch: float, limit: int, min_interval_sec: float = 0,
         max_observation_age_sec: float | None = None,
+        eligible_routes: set[str] | None = None,
     ) -> list[dict]:
         """Return due generations, oldest last claim first, with a bounded budget."""
         if limit < 0 or min_interval_sec < 0:
@@ -149,6 +150,8 @@ class DiscoveryQueue:
             cohort = (candidate.market, candidate.route)
             cohort_claims[cohort] = cohort_claims.get(cohort, 0) + candidate.claim_count
             if (
+                (eligible_routes is None or candidate.route in eligible_routes)
+                and
                 candidate.next_due_epoch <= now_epoch
                 and not candidate.in_flight
                 and candidate.last_claim_epoch + min_interval_sec <= now_epoch

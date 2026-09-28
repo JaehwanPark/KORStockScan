@@ -8,6 +8,9 @@ from pathlib import Path
 from queue import Empty, SimpleQueue
 import re
 import time
+from datetime import datetime
+
+from src.trading.market import session_contract
 
 from src.scanners.zero_base_discovery_queue import DiscoveryQueue, RESULTS
 from src.scanners.zero_base_discovery_source import fetch_discovery_panels
@@ -118,6 +121,19 @@ class ZeroBaseDiscoveryRuntime:
 
     def dispatch_due_probes(self, *, now_epoch=None) -> dict:
         now_epoch = time.time() if now_epoch is None else float(now_epoch)
+        regime = session_contract.resolve_market_session(
+            datetime.fromtimestamp(now_epoch, tz=session_contract.KST)
+        ).session_regime
+        eligible_routes = (
+            {"nxt_only"}
+            if regime == session_contract.MARKET_SESSION_REGIME_LEGACY_PREMARKET
+            else {"krx_nxt_integrated"}
+            if regime in {
+                session_contract.MARKET_SESSION_REGIME_KRX_REGULAR,
+                session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET,
+            }
+            else set()
+        )
         abandoned = self.queue.abandon_expired_claims(
             now_epoch=now_epoch, timeout_sec=60,
         )
@@ -125,6 +141,7 @@ class ZeroBaseDiscoveryRuntime:
             now_epoch=now_epoch, limit=MAX_CLAIMS_PER_CYCLE,
             min_interval_sec=5,
             max_observation_age_sec=MAX_DISCOVERY_OBSERVATION_AGE_SEC,
+            eligible_routes=eligible_routes,
         )
         self._persist()  # Persist claims before an asynchronous callback can arrive.
         for claim in claims:

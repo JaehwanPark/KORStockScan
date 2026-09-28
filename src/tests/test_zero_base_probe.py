@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 from concurrent.futures import Future
+import time
 
 from src.engine.scalping.zero_base_probe import (
     exact_probe_rest_sources, exact_probe_ws_data, run_zero_base_probe,
@@ -55,6 +56,20 @@ def test_probe_rejects_cross_route_or_old_transport_without_machine_call():
         code="123456", route="krx_nxt_integrated", after_epoch=10,
     )
     assert reason == "ready" and integrated["effective_venue"] == "SOR"
+
+
+def test_probe_freshness_allows_three_seconds_but_rejects_older_receipt():
+    snapshot = _snapshot(route="nxt_only", item="123456_NX", epoch=10.5)
+    ready, reason = exact_probe_ws_data(
+        snapshot, code="123456", route="nxt_only", after_epoch=10,
+        now_epoch=13.5,
+    )
+    assert reason == "ready" and ready
+    blocked, reason = exact_probe_ws_data(
+        snapshot, code="123456", route="nxt_only", after_epoch=10,
+        now_epoch=13.501,
+    )
+    assert not blocked and reason == "0B_age_exceeded"
 
 
 def test_integrated_probe_never_reuses_plain_route_subscription():
@@ -188,6 +203,44 @@ def test_probe_wait_timeout_retains_exact_route_gap():
     assert observation["wait_ms"] >= 10
     assert observation["latest_0b_ms"] == 1000
     assert observation["latest_0d_ms"] is None
+
+
+def test_partial_aftermarket_receipt_extends_bounded_wait_for_exact_pair():
+    key = "_AL|krx_nxt_integrated"
+    partial = _snapshot(route="krx_nxt_integrated", item="123456_AL")
+    partial["realtime_type_snapshots_by_route"][key].pop("0D")
+    partial["recent_trade_ticks_by_route"] = {key: [
+        {"received_at_ms": 10500, "item": "123456_AL", "transport_epoch": 3}
+    ]}
+    full = _snapshot(route="krx_nxt_integrated", item="123456_AL")
+    full["recent_trade_ticks_by_route"] = partial["recent_trade_ticks_by_route"]
+    full["recent_depth_ticks_by_route"] = {key: [
+        {"received_at_ms": 10600, "item": "123456_AL", "transport_epoch": 3}
+    ]}
+    started = time.monotonic()
+    ws = SimpleNamespace(get_latest_data=lambda *_args: (
+        partial if time.monotonic() - started < 0.04 else full
+    ))
+    data, observation, reason = wait_for_exact_probe_ws_data(
+        ws, code="123456", route="krx_nxt_integrated", after_epoch=10,
+        now=lambda: 11, timeout_sec=0.01, partial_extension_sec=0.07,
+        poll_interval_sec=0.005, min_exact_0b_count=1,
+    )
+    assert reason == "ready" and data
+    assert observation["partial_extension_applied"] is True
+    assert observation["wait_ms"] >= 30
+
+
+def test_empty_receipt_does_not_extend_wait():
+    ws = SimpleNamespace(get_latest_data=lambda *_args: {})
+    data, observation, _reason = wait_for_exact_probe_ws_data(
+        ws, code="123456", route="nxt_only", after_epoch=10,
+        now=lambda: 11, timeout_sec=0.01, partial_extension_sec=0.07,
+        poll_interval_sec=0.005,
+    )
+    assert not data
+    assert observation["partial_extension_applied"] is False
+    assert observation["wait_ms"] < 60
 
 
 def test_probe_observation_counts_only_exact_route_and_transport():

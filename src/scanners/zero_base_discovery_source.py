@@ -25,6 +25,10 @@ PANEL_REQUESTS = (
     ("KOSPI", "001", "SOR", "3", "krx_nxt_integrated"),
     ("KOSDAQ", "101", "SOR", "3", "krx_nxt_integrated"),
 )
+PREMARKET_PANEL_REQUESTS = (
+    ("KOSPI", "001", "NXT", "2", "nxt_only"),
+    ("KOSDAQ", "101", "NXT", "2", "nxt_only"),
+)
 MAX_ROWS_PER_PANEL = 200  # Current adapter's ten-page bound, not market coverage.
 
 
@@ -35,21 +39,25 @@ def _sha256(value: dict) -> str:
 
 
 def fetch_discovery_panels(token, *, now_epoch=None, fetcher=None) -> dict:
-    """Read integrated KOSPI/KOSDAQ panels through the shared source-only gate."""
+    """Read the session's KOSPI/KOSDAQ panels through the source-only gate."""
     observed_epoch = time.time() if now_epoch is None else float(now_epoch)
     context = session_contract.resolve_market_session(
         datetime.fromtimestamp(observed_epoch, tz=session_contract.KST)
     )
-    if context.session_regime not in {
+    if context.session_regime == session_contract.MARKET_SESSION_REGIME_LEGACY_PREMARKET:
+        panel_requests = PREMARKET_PANEL_REQUESTS
+    elif context.session_regime in {
         session_contract.MARKET_SESSION_REGIME_KRX_REGULAR,
         session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET,
     }:
+        panel_requests = PANEL_REQUESTS
+    else:
         return {"schema": SCHEMA, "panels": [], "observations": [],
                 "source_status": "integrated_buy_session_unavailable"}
     fetcher = fetcher or kiwoom_utils.get_top_fluctuation_ka10027
     panels = []
     observations = []
-    for market, mrkt_tp, venue, stex_tp, route in PANEL_REQUESTS:
+    for market, mrkt_tp, venue, stex_tp, route in panel_requests:
         request_epoch = time.time() if now_epoch is None else float(now_epoch)
         try:
             rows, meta = fetcher(

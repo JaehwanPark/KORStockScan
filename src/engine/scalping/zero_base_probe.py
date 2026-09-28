@@ -33,7 +33,7 @@ def probe_item(code: str, route: str) -> str:
 
 def exact_probe_ws_data(
     snapshot: dict, *, code: str, route: str, after_epoch: float,
-    now_epoch: float | None = None, max_age_sec: float = 2.0,
+    now_epoch: float | None = None, max_age_sec: float = 3.0,
 ) -> tuple[dict, str]:
     """Reject stale or cross-route aggregate data before any machine call."""
     item = probe_item(code, route)
@@ -144,6 +144,7 @@ def probe_ws_observation(snapshot: dict, *, code: str, route: str,
 def wait_for_exact_probe_ws_data(ws_manager, *, code: str, route: str,
                                  after_epoch: float, now=time.time,
                                  timeout_sec: float = 3.0,
+                                 partial_extension_sec: float = 0.0,
                                  poll_interval_sec: float = 0.05,
                                  min_exact_0b_count: int = 0) -> tuple[dict, dict, str]:
     """Use one bounded lease for fresh 0B/0D and the machine's WS tick floor."""
@@ -151,6 +152,7 @@ def wait_for_exact_probe_ws_data(ws_manager, *, code: str, route: str,
     deadline = started + max(0.0, timeout_sec)
     snapshot = {}
     source_reason = "route_snapshot_missing"
+    partial_extension_applied = False
     while True:
         snapshot = ws_manager.get_latest_data(code) or {}
         ws_data, source_reason = exact_probe_ws_data(
@@ -160,8 +162,15 @@ def wait_for_exact_probe_ws_data(ws_manager, *, code: str, route: str,
         observation = probe_ws_observation(
             snapshot, code=code, route=route, after_epoch=after_epoch,
         )
-        if (ws_data and observation["exact_0b_count"] >= min_exact_0b_count) or time.monotonic() >= deadline:
+        if ws_data and observation["exact_0b_count"] >= min_exact_0b_count:
             break
+        if time.monotonic() >= deadline:
+            one_sided = bool(observation["exact_0b_count"]) != bool(observation["exact_0d_count"])
+            if not partial_extension_applied and partial_extension_sec > 0 and one_sided:
+                deadline = started + max(0.0, timeout_sec) + min(2.0, partial_extension_sec)
+                partial_extension_applied = True
+            else:
+                break
         remaining = deadline - time.monotonic()
         if remaining > 0:
             time.sleep(min(max(0.01, poll_interval_sec), remaining))
@@ -169,6 +178,7 @@ def wait_for_exact_probe_ws_data(ws_manager, *, code: str, route: str,
     observation["wait_reason"] = source_reason
     observation["sample_target"] = min_exact_0b_count
     observation["sample_target_met"] = observation["exact_0b_count"] >= min_exact_0b_count
+    observation["partial_extension_applied"] = partial_extension_applied
     return ws_data, observation, source_reason
 
 
@@ -202,6 +212,7 @@ def run_zero_base_probe(
     context_builder=None,
     release_ws=None,
     ws_wait_timeout_sec: float = 3.0,
+    ws_wait_partial_extension_sec: float = 0.0,
     ws_wait_min_exact_0b_count: int = 5,
 ) -> dict:
     """Observe one candidate. The caller owns bounded WS REG/REMOVE leases."""
@@ -267,6 +278,7 @@ def run_zero_base_probe(
         ws_data, observation, source_reason = wait_for_exact_probe_ws_data(
             ws_manager, code=code, route=route, after_epoch=registered_epoch,
             now=now, timeout_sec=ws_wait_timeout_sec,
+            partial_extension_sec=ws_wait_partial_extension_sec,
             min_exact_0b_count=ws_wait_min_exact_0b_count,
         )
         result["ws_observation"] = observation
