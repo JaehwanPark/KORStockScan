@@ -31,7 +31,9 @@ from src.trading.low_price_two_leg.economics import (
     ROUND_TRIP_COST_PCT,
     cost_contract as canonical_cost_contract,
 )
-from src.trading.low_price_two_leg.machine import DEFAULT_STATE_DIR
+from src.trading.low_price_two_leg.machine import (
+    DEFAULT_STATE_DIR, economic_state_source_sha256,
+)
 from src.trading.low_price_two_leg.policy_runtime import (
     APPLIED_DIR,
     CANDIDATE_DIR,
@@ -352,6 +354,7 @@ def _empty_row(profile_id: str, target_date: str, reason: str) -> dict:
         "symbol": PROFILES[profile_id].symbol if profile_id in PROFILES else "",
         "session": PROFILES[profile_id].session if profile_id in PROFILES else "",
         "target_date": target_date,
+        "state_source_sha256": None,
         "source_quality": "gap",
         "source_quality_reasons": [reason],
         "eligible_for_tuning": False,
@@ -661,6 +664,12 @@ def _apply_broker_realized_economics(
             ),
         }
         summary["matched"] += 1
+    for row in rows:
+        economics = row.get("broker_realized_economics") or {}
+        if economics.get("status") == "fixed_cost_fallback":
+            economics.update(selection_effect=False,
+                             realized_net_profit_krw=None,
+                             realized_net_return_pct=None)
     return summary
 
 
@@ -827,7 +836,13 @@ def reconcile_manual_exit_history(history, *, source_date, cost_pct, registry_pa
                 if row["outcome_complete_for_ev"]:
                     row["state_status"] = "COMPLETE"
                 previous_cost = row.get("broker_realized_economics")
-                row["broker_realized_economics"] = {"status": "fixed_cost_fallback", "reason": "manual_receipt_projection_requires_new_exact_cost_attribution"}
+                row["broker_realized_economics"] = {
+                    "status": "fixed_cost_fallback",
+                    "reason": "manual_receipt_projection_requires_new_exact_cost_attribution",
+                    "selection_effect": False,
+                    "realized_net_profit_krw": None,
+                    "realized_net_return_pct": None,
+                }
                 row["manual_exit_history_reconciliation"] = {"registry_sha256": summary["sha256"],
                     "original_state_status": original.get("state_status"), "original_held_legs": len(held),
                     "superseded_broker_realized_economics": previous_cost, "receipts": matches}
@@ -1033,6 +1048,8 @@ def extract_profile_row(
     if not isinstance(raw_legs, list):
         raw_legs = []
         reasons.append("legs_invalid")
+    if any(not isinstance(leg, dict) for leg in raw_legs):
+        reasons.append("raw_leg_shape_invalid")
     legs = [_sanitize_leg(leg, cost_pct) for leg in raw_legs if isinstance(leg, dict)]
     if attempted:
         parsed_target_date = date.fromisoformat(target_date)
@@ -1134,6 +1151,7 @@ def extract_profile_row(
         "symbol": profile.symbol,
         "session": profile.session,
         "target_date": target_date,
+        "state_source_sha256": economic_state_source_sha256(state),
         "source_quality": "pass" if not reasons else "gap",
         "source_quality_reasons": reasons,
         "eligible_for_tuning": not reasons and outcome_complete_for_ev,
@@ -1144,6 +1162,79 @@ def extract_profile_row(
         "state_status": state_status,
         "signal_features": features,
         "legs": legs,
+        "raw_leg_count": len(raw_legs),
+        "invalid_leg_count": sum(not isinstance(leg, dict) for leg in raw_legs),
+    }
+
+
+def _bind_durable_state_capture(row: dict, capture: dict) -> None:
+    """An attempted profile needs its exact persisted terminal generation."""
+    row["durable_observation_capture"] = capture
+    profile = capture.get("profile") if isinstance(capture, dict) else None
+    status = capture.get("status") if isinstance(capture, dict) else None
+    profile_valid = isinstance(profile, dict) and profile.get("status") == "pass"
+    missing_profile_observation = status in {"pass", "partial"} and not profile_valid
+    invalid_capture = status not in {"pass", "partial", "valid_empty"}
+    invalid_generation = bool(row.get("attempted") and (
+        status not in {"pass", "partial"} or not profile_valid
+        or not row.get("state_source_sha256")
+        or row["state_source_sha256"] != profile.get("latest_real_state_source_sha256")
+    ))
+    if missing_profile_observation or invalid_capture or invalid_generation:
+        row["source_quality"] = "gap"
+        row["eligible_for_tuning"] = False
+        reasons = row.setdefault("source_quality_reasons", [])
+        reason = (
+            "durable_state_generation_mismatch" if row.get("attempted") else
+            "durable_profile_observation_missing_or_invalid"
+        )
+        if reason not in reasons:
+            reasons.append(reason)
+
+
+def _profile_leg_lineage_census(row: dict, profile) -> dict:
+    """Keep state, raw events, and economic leg exclusions in distinct units."""
+    capture = row.get("durable_observation_capture") or {}
+    observed = capture.get("profile") or {}
+    state_present = bool(row.get("state_source_sha256"))
+    state_valid = state_present and row.get("source_quality") == "pass"
+    legs = row.get("legs") or []
+    attempted = bool(row.get("attempted"))
+    exact_cost = (row.get("broker_realized_economics") or {}).get("status") == "matched_exact"
+    by_leg = {}
+    for leg_id in profile.policy.entry_leg_ids if attempted else ():
+        matches = [leg for leg in legs if leg.get("leg_id") == leg_id]
+        valid = len(matches) == 1 and state_valid and matches[0].get("contract_valid") is True
+        by_leg[leg_id] = {
+            "original": len(matches), "valid": int(valid),
+            "quarantined": len(matches) - int(valid),
+            "unobserved": int(not matches),
+            "excluded_from_realized_economics": int(valid and (
+                not matches[0].get("completed") or not exact_cost)),
+            "status": matches[0].get("status") if len(matches) == 1 else "unknown",
+        }
+    return {
+        "profile_id": row.get("profile_id"),
+        "source_date": row.get("target_date"),
+        "state": {"original": int(state_present), "valid": int(state_valid),
+                  "quarantined": int(state_present and not state_valid),
+                  "unobserved": int(not state_present)},
+        "observation_events": {
+            "original": observed.get("events", 0) + observed.get("invalid_events", 0),
+            "valid": observed.get("events", 0),
+            "quarantined": observed.get("invalid_events", 0),
+            "unobserved": None,
+            "reason": "audit_does_not_allocate_expected_events_by_profile",
+        },
+        "legs": by_leg,
+        "unattributed_leg_original": max(0, row.get("raw_leg_count", 0) - sum(
+            leg["original"] for leg in by_leg.values()
+        )),
+        "unattributed_leg_quarantined": max(0, row.get("raw_leg_count", 0) - sum(
+            leg["original"] for leg in by_leg.values()
+        )),
+        "invalid_leg_count": row.get("invalid_leg_count", 0),
+        "count_contract": "event_and_state_counts_are_not_leg_or_economic_denominators",
     }
 
 
@@ -1224,6 +1315,14 @@ def _aggregate(rows: list[dict]) -> dict:
         if (row.get("broker_realized_economics") or {}).get("status") == "matched_exact"
     ]
     exact_cost_row_ids = {id(row) for row in exact_cost_rows}
+    fallback_broker_legs = [
+        leg for row in attempted_rows if id(row) not in exact_cost_row_ids
+        for leg in _completed_broker_legs(row)
+    ]
+    fallback_broker_notional = sum(
+        _as_int(leg.get("fill_price")) * _as_int(leg.get("buy_filled_qty"))
+        for leg in fallback_broker_legs
+    )
     fixed_cost_broker_profit = sum(
         _as_int(leg.get("fill_price"))
         * _as_int(leg.get("buy_filled_qty"))
@@ -1237,15 +1336,23 @@ def _aggregate(rows: list[dict]) -> dict:
         float(row["broker_realized_economics"]["realized_net_profit_krw"])
         for row in exact_cost_rows
     )
-    broker_realized_profit = fixed_cost_broker_profit + exact_broker_profit
+    exact_cost_completed_legs = sum(
+        len(_completed_broker_legs(row)) for row in exact_cost_rows
+    )
+    all_completed_have_exact_cost = bool(
+        broker_priced_completed
+        and len(broker_priced_completed) == len(completed)
+        and exact_cost_completed_legs == len(broker_priced_completed)
+    )
+    broker_realized_profit = exact_broker_profit if all_completed_have_exact_cost else None
     broker_completed_capital_occupied_krw_seconds = sum(
         _as_int(leg.get("fill_price"))
         * _as_int(leg.get("buy_filled_qty"))
         * float(leg["holding_duration_sec"])
         for leg in timed_broker_completed
     )
-    timed_broker_realized_profit = 0.0
-    for row in attempted_rows:
+    timed_broker_realized_profit = 0.0 if all_completed_have_exact_cost else None
+    for row in attempted_rows if all_completed_have_exact_cost else ():
         row_broker_legs = _completed_broker_legs(row)
         row_timed_legs = [
             leg
@@ -1262,14 +1369,9 @@ def _aggregate(rows: list[dict]) -> dict:
             timed_broker_realized_profit += float(
                 exact_economics["realized_net_profit_krw"]
             )
-        else:
-            timed_broker_realized_profit += sum(
-                _as_int(leg.get("fill_price"))
-                * _as_int(leg.get("buy_filled_qty"))
-                * float(leg["net_profit_pct"])
-                / 100.0
-                for leg in row_timed_legs
-            )
+        elif row_timed_legs:
+            timed_broker_realized_profit = None
+            break
     target_proxy_profit = sum(
         _as_int(leg.get("fill_price"))
         * _as_int(leg.get("buy_filled_qty"))
@@ -1291,7 +1393,7 @@ def _aggregate(rows: list[dict]) -> dict:
     realized_profit = broker_realized_profit if completed_notional else None
     ev = (
         broker_realized_profit / completed_notional * 100.0
-        if completed_notional
+        if completed_notional and broker_realized_profit is not None
         else None
     )
     fill_cohorts = {}
@@ -1362,16 +1464,25 @@ def _aggregate(rows: list[dict]) -> dict:
             leg.get("held") or not leg.get("terminal") for leg in all_legs
         ),
         "notional_weighted_ev_pct": round(ev, 6) if ev is not None else None,
+        "fixed_cost_estimate_ev_pct": (
+            round(fixed_cost_broker_profit / fallback_broker_notional * 100.0, 6)
+            if fallback_broker_notional else None
+        ),
         "fill_cohorts": fill_cohorts,
         "pooled_realized_ev_role": "all_fill_accounting_only_not_fill_quality_or_promotion",
         "realized_ev_status": (
-            "observed" if completed_notional else "no_broker_priced_completion"
+            "observed_exact" if realized_profit is not None else
+            "missing_exact_cost" if completed_notional else "no_broker_priced_completion"
         ),
         "broker_completed_notional_krw": completed_notional,
         "attempted_notional_return_pct_diagnostic": (
-            round(broker_realized_profit / attempted_notional * 100.0, 6)
+            round(realized_profit / attempted_notional * 100.0, 6)
             if attempted_notional and realized_profit is not None
             else None
+        ),
+        "attempted_notional_fixed_cost_return_pct_diagnostic": (
+            round(fixed_cost_broker_profit / attempted_notional * 100.0, 6)
+            if attempted_notional else None
         ),
         "full_fill_completed_legs": sum(
             _as_int(leg.get("buy_filled_qty")) == _as_int(leg.get("quantity"))
@@ -1426,16 +1537,18 @@ def _aggregate(rows: list[dict]) -> dict:
             round(realized_profit, 3) if realized_profit is not None else None
         ),
         "cost_adjusted_net_profit_krw_per_eligible_day": (
-            round(broker_realized_profit / eligible_days, 6)
+            round(realized_profit / eligible_days, 6)
             if eligible_days and realized_profit is not None
             else None
         ),
         "cost_adjusted_net_profit_krw_per_source_valid_observation_day": (
-            round(broker_realized_profit / source_valid_observation_days, 6)
+            round(realized_profit / source_valid_observation_days, 6)
             if source_valid_observation_days and realized_profit is not None
             else None
         ),
-        "exact_broker_realized_net_profit_krw": round(exact_broker_profit, 3),
+        "exact_broker_realized_net_profit_krw": (
+            round(exact_broker_profit, 3) if exact_cost_rows else None
+        ),
         "fixed_cost_estimate_net_profit_krw": round(fixed_cost_broker_profit, 3),
         "manual_exit_fixed_cost_estimate_net_profit_krw": round(
             manual_exit_fixed_cost_estimate_profit, 3
@@ -1451,7 +1564,8 @@ def _aggregate(rows: list[dict]) -> dict:
                 / (broker_completed_capital_occupied_krw_seconds / 3600.0),
                 9,
             )
-            if broker_completed_capital_occupied_krw_seconds > 0
+            if (broker_completed_capital_occupied_krw_seconds > 0
+                and timed_broker_realized_profit is not None)
             else None
         ),
         "target_price_proxy_notional_weighted_ev_pct": (
@@ -1858,6 +1972,23 @@ def build_report(
                     "observation_source_quality_audit_blocked"
                 )
             row["source_quality"] = "gap"
+    capture = (
+        durable_observation_manifest(target_date, source_quality_dir)
+        if source_preflight["tuning_input_allowed"] and parsed_date >= date(2026, 9, 17)
+        else {"status": "source_gap", "reason": "capture_not_admitted", "profiles": {}}
+    )
+    for profile_id, row in daily.items():
+        profile_capture = {
+            **{key: value for key, value in capture.items() if key != "profiles"},
+            "profile": capture["profiles"].get(profile_id),
+        }
+        if parsed_date >= date(2026, 9, 28):
+            _bind_durable_state_capture(row, profile_capture)
+        else:
+            # Older receipts did not carry a persisted state generation.
+            # Retain their historical diagnostic rows without inventing lineage.
+            row["durable_observation_capture"] = profile_capture
+            row["durable_generation_status"] = "legacy_unbound"
     for profile_id, row in daily.items():
         row["microstructure_prior_trading_day_diagnostic"] = micro_diagnostic(
             profile_id,
@@ -1889,6 +2020,10 @@ def build_report(
     manual_exit_reconciliation = reconcile_manual_exit_history(history,
         source_date=target_date, cost_pct=cost_pct,
         registry_path=state_dir.parent / "episode_manual_exit_receipts.json")
+    for profile_id, row in daily.items():
+        row["profile_leg_lineage_census"] = _profile_leg_lineage_census(
+            row, target_profiles[profile_id]
+        )
     dates = sorted(history)
     observed_date_set = {date.fromisoformat(item) for item in dates}
     unobserved_dates = [
@@ -2013,10 +2148,7 @@ def build_report(
     }
     from src.engine.monitoring.research_closed_loop import version_economics
 
-    capture = durable_observation_manifest(target_date, source_quality_dir) if report["source_quality_preflight"]["tuning_input_allowed"] and parsed_date >= date(2026, 9, 17) else {"status": "source_gap", "reason": "capture_not_admitted", "profiles": {}}
     report["durable_observation_manifest"] = capture
-    for pid, row in daily.items():
-        row["durable_observation_capture"] = {**{key: value for key, value in capture.items() if key != "profiles"}, "profile": capture["profiles"].get(pid)}
 
     native_version_rows = [
         row for day in sorted(history) for row in history[day].values()
@@ -2083,60 +2215,163 @@ def _cached_paired_contexts(profile, source_date):
 
 
 def durable_observation_manifest(target_date: str, source_quality_dir: Path) -> dict:
+    try:
+        return _durable_observation_manifest_unchecked(target_date, source_quality_dir)
+    except (OSError, EOFError, UnicodeError, ValueError) as exc:
+        return {"schema": "low_price_actual_capture_manifest_v1",
+                "target_date": target_date, "status": "source_gap",
+                "reason": f"native_source_unreadable:{type(exc).__name__}",
+                "profiles": {}, "event_count": 0, "invalid_event_count": 0}
+
+
+def _durable_observation_manifest_unchecked(target_date: str, source_quality_dir: Path) -> dict:
     """Final census first; stream only a declared native observation population."""
     import gzip
     audit = _read_json(source_quality_dir / f"observation_source_quality_audit_{target_date}.json") or {}
+    if not isinstance(audit, dict):
+        raise ValueError("native_audit_shape_invalid")
     source = audit.get("source") or {}
-    expected = (source.get("audited_stage_counts") or {}).get("low_price_actual_economic_observation", 0)
+    if not isinstance(source, dict):
+        raise ValueError("native_source_shape_invalid")
+    stage_counts = source.get("audited_stage_counts") or {}
+    if not isinstance(stage_counts, dict):
+        raise ValueError("native_stage_counts_shape_invalid")
+    expected = stage_counts.get("low_price_actual_economic_observation", 0)
+    if type(expected) is not int or expected < 0:
+        raise ValueError("native_expected_count_invalid")
     manifest = {"schema": "low_price_actual_capture_manifest_v1", "target_date": target_date,
         "source_path": source.get("pipeline_events"), "source_sha256": source.get("logical_content_sha256"),
         "source_generation": source.get("generation"), "expected_event_count": expected,
-        "event_count": 0, "invalid_event_count": 0, "profiles": {}, "status": "source_gap"}
-    if not expected:
-        manifest["reason"] = "native_durable_observation_population_absent"
+        "event_count": 0, "valid_event_count": 0, "invalid_event_count": 0,
+        "unobserved_event_count": 0, "invalid_reasons": {},
+        "profiles": {}, "status": "source_gap"}
+    if not source.get("pipeline_events") or not source.get("logical_content_sha256"):
+        manifest["reason"] = "native_source_path_or_sha_missing"
         return manifest
     raw = Path(source["pipeline_events"])
     if not raw.exists():
         raw = raw.with_name(raw.name + ".gz")
+    if not raw.is_file() or raw.is_symlink():
+        manifest["reason"] = "native_source_missing_or_symlink"
+        return manifest
     before = raw.stat()
     observed_bars = {}
+    seen_event_hashes = set()
+    logical_hash = hashlib.sha256()
+    target_profiles = _effective_report_profiles(date.fromisoformat(target_date))
+    modern_contract = date.fromisoformat(target_date) >= date(2026, 9, 28)
+    unattributed_invalid = 0
     opener = gzip.open if raw.suffix == ".gz" else open
     with opener(raw, "rb") as handle:
         for line in handle:
+            logical_hash.update(line)
             if b'low_price_actual_economic_observation' not in line:
                 continue
-            event = json.loads(line)
-            if event.get("stage") != "low_price_actual_economic_observation":
-                continue
-            manifest["event_count"] += 1
-            fields = event.get("fields") or {}
+            profile_id = None
             try:
+                event = json.loads(line)
+                if not isinstance(event, dict):
+                    raise ValueError("native_event_shape_invalid")
+                if event.get("stage") != "low_price_actual_economic_observation":
+                    continue
+                manifest["event_count"] += 1
+                fields = event.get("fields") or {}
+                if not isinstance(fields, dict):
+                    raise ValueError("native_fields_shape_invalid")
                 encoded = fields["observation_json"]
+                if not isinstance(encoded, str):
+                    raise ValueError("native_encoded_body_invalid")
                 body = json.loads(encoded)
+                if not isinstance(body, dict):
+                    raise ValueError("native_body_shape_invalid")
+                profile_id = str(body.get("profile_id") or "")
+                profile_owner = target_profiles.get(profile_id)
+                state_projection = body.get("state_projection")
+                state_sha = body.get("state_source_sha256")
+                observed_at = _aware_timestamp(body.get("observed_at_kst"))
+                features = body.get("signal_features") or {}
+                bar = body.get("last_evaluated_bar")
+                if not isinstance(features, dict) or (bar is not None and not isinstance(bar, str)):
+                    raise ValueError("observation_features_or_bar_invalid")
                 if (hashlib.sha256(encoded.encode()).hexdigest() != fields["observation_sha256"]
                     or body["schema"] != "low_price_actual_economic_observation_v1"
                     or body["logical_date"] != target_date or body["owner"] != "episode"
-                    or body["profile_id"] != fields["profile_id"]):
+                    or profile_id != fields["profile_id"] or profile_owner is None
+                    or not isinstance(body.get("policy_hash"), str)
+                    or (modern_contract and (
+                        body.get("symbol") != profile_owner.symbol
+                        or body.get("session") != profile_owner.session
+                        or body.get("policy_hash") != fields.get("policy_hash")
+                        or body.get("execution_mode") not in {"real", "sim"}
+                        or not isinstance(state_projection, dict)
+                        or not isinstance(state_sha, str) or len(state_sha) != 64
+                        or state_sha != economic_state_source_sha256(state_projection)
+                        or body.get("legs") != state_projection.get("legs")
+                        or body.get("position_qty") != state_projection.get("position_qty")
+                        or body.get("trade_date") != state_projection.get("trade_date")
+                        or observed_at is None
+                        or observed_at.astimezone(KST).date().isoformat() != target_date))):
                     raise ValueError("observation_lineage_invalid")
-                profile = manifest["profiles"].setdefault(body["profile_id"], {"events": 0, "bar_evaluations": 0, "policy_hashes": [], "signal_policy_bindings": []})
+                observation_hash = fields["observation_sha256"]
+                if modern_contract and observation_hash in seen_event_hashes:
+                    raise ValueError("duplicate_observation_identity")
+                seen_event_hashes.add(observation_hash)
+                profile = manifest["profiles"].setdefault(profile_id, {
+                    "events": 0, "real_events": 0, "sim_events": 0,
+                    "bar_evaluations": 0, "policy_hashes": [],
+                    "signal_policy_bindings": [],
+                    "latest_real_state_source_sha256": None,
+                    "latest_real_observed_at_kst": None,
+                })
+                mode = body.get("execution_mode") if modern_contract else "unknown"
+                if mode == "real":
+                    latest = profile["latest_real_observed_at_kst"]
+                    if latest is None or body["observed_at_kst"] > latest:
+                        profile["latest_real_observed_at_kst"] = body["observed_at_kst"]
+                        profile["latest_real_state_source_sha256"] = state_sha
+                    elif body["observed_at_kst"] == latest and state_sha != profile["latest_real_state_source_sha256"]:
+                        raise ValueError("same_clock_state_generation_conflict")
                 profile["events"] += 1
+                if mode in {"real", "sim"}:
+                    profile[f"{mode}_events"] += 1
                 if body.get("bar_source") and body.get("last_evaluated_bar"):
-                    observed_bars.setdefault(body["profile_id"], set()).add(body["last_evaluated_bar"])
+                    observed_bars.setdefault(body["profile_id"], set()).add(bar)
                     profile["bar_evaluations"] = len(observed_bars[body["profile_id"]])
                 if body["policy_hash"] not in profile["policy_hashes"]:
                     profile["policy_hashes"].append(body["policy_hash"])
-                signal = (body.get("signal_features") or {}).get("signal_bar")
-                signal_policy = (body.get("signal_features") or {}).get("runtime_policy_hash")
-                if signal and signal_policy == body["policy_hash"] and len(str(signal_policy)) == 64:
+                signal = features.get("signal_bar")
+                signal_policy = features.get("runtime_policy_hash")
+                if ((mode == "real" or not modern_contract) and signal
+                        and signal_policy == body["policy_hash"] and len(str(signal_policy)) == 64):
                     identity = f"{signal_policy}|{signal}"
                     if identity not in profile["signal_policy_bindings"]:
                         profile["signal_policy_bindings"].append(identity)
-            except (KeyError, TypeError, ValueError):
+                manifest["valid_event_count"] += 1
+            except (KeyError, TypeError, ValueError) as exc:
                 manifest["invalid_event_count"] += 1
+                reason = str(exc) if isinstance(exc, ValueError) else type(exc).__name__
+                manifest["invalid_reasons"][reason] = manifest["invalid_reasons"].get(reason, 0) + 1
+                invalid_profile = profile_id
+                if isinstance(invalid_profile, str) and invalid_profile in target_profiles:
+                    profile = manifest["profiles"].setdefault(invalid_profile, {"events": 0})
+                    profile["invalid_events"] = profile.get("invalid_events", 0) + 1
+                else:
+                    unattributed_invalid += 1
     after = raw.stat()
     stable = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) == (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
-    manifest.update(status="pass" if stable and manifest["event_count"] == expected and not manifest["invalid_event_count"] else "source_gap",
-        reason="native_capture_reconciled" if stable else "native_capture_generation_changed")
+    source_sha_matches = logical_hash.hexdigest() == manifest["source_sha256"]
+    source_complete = stable and source_sha_matches and manifest["event_count"] == expected
+    manifest["unobserved_event_count"] = max(0, expected - manifest["event_count"])
+    for profile in manifest["profiles"].values():
+        profile["status"] = "pass" if not profile.get("invalid_events") else "source_gap"
+    manifest.update(status=("valid_empty" if source_complete and expected == 0 else
+                            "pass" if source_complete and not manifest["invalid_event_count"] else
+                            "partial" if source_complete and not unattributed_invalid else "source_gap"),
+        reason=("native_capture_generation_changed" if not stable else
+                "native_source_sha_mismatch" if not source_sha_matches else
+                "native_capture_invalid_events" if manifest["invalid_event_count"] else
+                "native_capture_count_mismatch" if manifest["event_count"] != expected else
+                "native_capture_reconciled"))
     return manifest
 
 
@@ -2148,7 +2383,9 @@ def actual_execution_confirmation(rows, result):
         if not row.get("eligible_for_tuning") or not row.get("attempted"):
             continue
         capture = row.get("durable_observation_capture") or {}
-        if capture.get("status") != "pass" or capture.get("profile", {}).get("bar_evaluations", 0) == 0:
+        if (capture.get("status") not in {"pass", "partial"}
+                or capture.get("profile", {}).get("status") != "pass"
+                or capture.get("profile", {}).get("bar_evaluations", 0) == 0):
             return {"status": "source_gap", "reason": "actual_durable_observation_lineage_missing", "matched_legs": matched}
         features = row.get("signal_features") or {}
         signal_policy = features.get("runtime_policy_hash")

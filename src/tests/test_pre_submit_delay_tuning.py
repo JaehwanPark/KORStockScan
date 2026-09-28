@@ -8,6 +8,140 @@ from datetime import datetime, timezone, timedelta
 from src.engine.scalping import pre_submit_delay_tuning as delay
 
 
+def _delay_fixture(tmp_path, monkeypatch, *, quote_overrides=None):
+    monkeypatch.setattr(delay, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(delay, "REPORT_DIR", tmp_path / "report" / "pre_submit_delay_tuning")
+    monkeypatch.setattr(delay, "POLICY_DIR", tmp_path / "threshold_cycle" / "pre_submit_delay_policy")
+    source = tmp_path / "threshold_cycle" / "date=2026-09-23" / "family=pre_submit_delay"
+    source.mkdir(parents=True, exist_ok=True)
+    commit = {
+        "delay_intent_id": "intent-1", "entry_action": "ENTER_NOW",
+        "auxiliary_effective_action": "PASS", "owner": "main_scalping",
+        "planned_qty": "5", "route": "KRX", "market_session_bucket": "KRX_REGULAR",
+        "decision_committed_at_epoch": "100.0", "quote_transport_epoch": "7",
+        "delay_policy_sha256": "policy", "original_machine_observation_sha256": "machine",
+    }
+    commit["decision_source_sha256"] = delay.decision_source_sha256(commit)
+    quote = {
+        "delay_intent_id": "intent-1", "target_delay_sec": "30.0",
+        "actual_offset_sec": "30.0", "quote_observed_at_epoch": "130.0",
+        "decision_source_sha256": commit["decision_source_sha256"],
+        "quote_transport_epoch": "7", "route": "KRX", "quote_route": "KRX",
+        "ask_price": "1550", "best_bid": "1549", "ask_qty": "1",
+        "ws_last_0d_epoch": "129.8", "ws_last_0d_age_sec": "0.2",
+        "quote_valid": "True", "quote_consistency_state": "single_source",
+        "route_depth_source_sha256": "a" * 64,
+    }
+    quote.update(quote_overrides or {})
+    quote["quote_source_sha256"] = delay.quote_source_sha256(quote)
+    with (source / "part-execution-test.jsonl").open("w", encoding="utf-8") as handle:
+        for index, (stage, fields) in enumerate((
+            ("pre_submit_delay_committed", commit),
+            ("pre_submit_delay_quote_observed", quote),
+        )):
+            event = {
+                "schema_version": 1, "event_type": "threshold_cycle_event",
+                "family": "pre_submit_delay", "pipeline": "entry", "stage": stage,
+                "stock_name": "test", "stock_code": "355390", "record_id": 1,
+                "fields": fields, "emitted_at": "2026-09-23T09:00:00+09:00",
+                "emitted_date": "2026-09-23",
+            }
+            from src.engine.pipeline_event_summary import execution_projection_identity
+            event["execution_source_event_sha256"] = execution_projection_identity(event)
+            handle.write(json.dumps(event) + "\n")
+    return commit, quote
+
+
+def test_reader_quarantines_cross_epoch_and_mutated_quote_receipts(tmp_path, monkeypatch):
+    commit, quote = _delay_fixture(tmp_path, monkeypatch, quote_overrides={"quote_transport_epoch": "8"})
+    report = delay.build_report("2026-09-23", effective_date="2026-09-24", write=False)
+    assert report["eligible_attempt_count"] == 1
+    assert report["candidate_grid"][1]["source_valid_attempt_count"] == 0
+    assert report["missing_counts"]["30s_source_invalid"] == 1
+    assert report["source_quality_counts"]["quote_generation_or_epoch_mismatch"] == 1
+
+
+def test_reader_accepts_exact_generation_once_and_rejects_late_clock(tmp_path, monkeypatch):
+    _delay_fixture(tmp_path, monkeypatch)
+    report = delay.build_report("2026-09-23", effective_date="2026-09-24", write=False)
+    assert report["candidate_grid"][1]["source_valid_attempt_count"] == 1
+    assert report["source_quality_counts"]["quote_valid"] == 1
+    _delay_fixture(tmp_path, monkeypatch, quote_overrides={"quote_observed_at_epoch": "140.0"})
+    report = delay.build_report("2026-09-23", effective_date="2026-09-24", write=False)
+    assert report["candidate_grid"][1]["source_valid_attempt_count"] == 0
+    assert report["source_quality_counts"]["quote_clock_or_hash_invalid"] == 1
+
+
+def test_reader_quarantines_duplicate_horizon_and_unbound_terminal(tmp_path, monkeypatch):
+    _delay_fixture(tmp_path, monkeypatch)
+    source = (tmp_path / "threshold_cycle" / "date=2026-09-23" /
+              "family=pre_submit_delay" / "part-execution-test.jsonl")
+    rows = [json.loads(line) for line in source.read_text().splitlines()]
+    duplicate = json.loads(json.dumps(rows[1]))
+    duplicate["emitted_at"] = "2026-09-23T09:00:01+09:00"
+    duplicate["fields"]["ask_price"] = "1551"
+    duplicate["fields"]["quote_source_sha256"] = delay.quote_source_sha256(duplicate["fields"])
+    from src.engine.pipeline_event_summary import execution_projection_identity
+    duplicate["execution_source_event_sha256"] = execution_projection_identity(duplicate)
+    terminal = json.loads(json.dumps(rows[0]))
+    terminal["stage"] = "pre_submit_delay_intent_terminal"
+    terminal["fields"] = {
+        "delay_intent_id": "intent-1", "decision_source_sha256": "old-generation",
+        "submit_finished_at_epoch": "131.0",
+    }
+    terminal["execution_source_event_sha256"] = execution_projection_identity(terminal)
+    with source.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(duplicate) + "\n")
+        handle.write(json.dumps(terminal) + "\n")
+    report = delay.build_report("2026-09-23", effective_date="2026-09-24", write=False)
+    row = report["horizon_source_quality"][1]
+    assert row["eligible_attempt_count"] == 1
+    assert row["observed_attempt_count"] == 1
+    assert row["quarantined_attempt_count"] == 1
+    assert row["unobserved_attempt_count"] == 0
+    assert report["terminal_observation_count"] == 0
+    assert report["raw_terminal_observation_count"] == 1
+    assert report["source_quality_counts"]["terminal_unbound_or_clock_invalid"] == 1
+
+
+def test_reader_distinguishes_valid_empty_source_partition(tmp_path, monkeypatch):
+    monkeypatch.setattr(delay, "DATA_DIR", tmp_path)
+    source = tmp_path / "threshold_cycle" / "date=2026-09-23" / "family=pre_submit_delay"
+    source.mkdir(parents=True)
+    (source / "part-execution-empty.jsonl").write_text("", encoding="utf-8")
+    rows, receipt = delay._source_rows("2026-09-23")
+    assert rows == []
+    assert receipt["status"] == "valid_empty"
+    assert receipt["raw_event_count"] == 0
+
+
+def test_reader_keeps_uncertain_response_and_restart_gap_out_of_fill_economics(tmp_path, monkeypatch):
+    commit, _ = _delay_fixture(tmp_path, monkeypatch)
+    source = (tmp_path / "threshold_cycle" / "date=2026-09-23" /
+              "family=pre_submit_delay" / "part-execution-test.jsonl")
+    before = delay.build_report("2026-09-23", effective_date="2026-09-24", write=False)
+    assert before["eligible_terminal_unobserved_count"] == 1
+    assert before["horizon_source_quality"][2]["unobserved_attempt_count"] == 1
+    assert before["candidate_grid"][1]["paired_net_ev_pct"] is None
+
+    terminal = json.loads(source.read_text().splitlines()[0])
+    terminal["stage"] = "pre_submit_delay_intent_terminal"
+    terminal["fields"] = {
+        "delay_intent_id": "intent-1",
+        "decision_source_sha256": commit["decision_source_sha256"],
+        "submit_finished_at_epoch": "131.0", "submit_call_outcome": "raised",
+        "submit_call_broker_accepted": "False", "actual_order_submitted": "False",
+    }
+    from src.engine.pipeline_event_summary import execution_projection_identity
+    terminal["execution_source_event_sha256"] = execution_projection_identity(terminal)
+    with source.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(terminal) + "\n")
+    after = delay.build_report("2026-09-23", effective_date="2026-09-24", write=False)
+    assert after["terminal_status_counts"] == {"response_uncertain": 1}
+    assert after["eligible_terminal_unobserved_count"] == 0
+    assert after["candidate_grid"][1]["paired_net_ev_pct"] is None
+
+
 def test_decision_type_is_frozen_from_known_submit_inputs_and_reported_separately(tmp_path, monkeypatch):
     observed = delay.decision_type_snapshot(
         price=1564, ask=1564, bid=1561, venue="KRX", session="KRX_REGULAR",
@@ -43,10 +177,10 @@ def test_decision_type_is_frozen_from_known_submit_inputs_and_reported_separatel
     group = report["type_census"][0]
     assert group["type_key"] == observed["type_key"]
     assert group["eligible_attempt_count"] == 1
-    assert group["candidate_grid"][1]["source_valid_attempt_count"] == 1
+    assert group["candidate_grid"][1]["source_valid_attempt_count"] == 0
     assert group["candidate_grid"][1]["paired_net_ev_delta_pct"] is None
     assert report["selected_delay_sec"] is None
-    assert report["first_blocker"] == "exact_submit_terminal_receipt_missing"
+    assert report["first_blocker"] == "fresh_route_bound_horizon_quote_missing"
     policy = json.loads(delay.policy_path("2026-09-23").read_text())
     assert policy["type_policies"][observed["type_key"]]["selected_delay_sec"] is None
     assert policy["scope_policies"]["KRX|KRX_REGULAR"]["selected_delay_sec"] is None
@@ -168,12 +302,20 @@ def test_live_quote_observer_keeps_small_level_one_depth_as_valid_source(monkeyp
     stock = {"_pre_submit_delay_observation": {
         "id": "exact-intent", "committed_at_epoch": 100.0,
         "remaining_sec": [30.0], "route": "KRX",
+        "quote_transport_epoch": 7, "decision_source_sha256": "d" * 64,
     }}
     ws = {
         "ws_route": "KRX", "orderbook": {
             "asks": [{"price": 1564, "volume": 1}],
             "bids": [{"price": 1561, "volume": 31}],
         }, "last_realtime_type_ts": {"0D": 129.8},
+        "market_data_transport_epoch": 7,
+        "realtime_type_snapshots_by_route": {"KRX|krx": {"0D": {
+            "market_route": "KRX", "transport_epoch": 7,
+            "observed_epoch": 129.8,
+            "orderbook": {"asks": [{"price": 1564, "volume": 1}],
+                          "bids": [{"price": 1561, "volume": 31}]},
+        }}},
     }
     assert handlers.pre_submit_delay_observation_due(stock, now_ts=129.9) is False
     assert handlers.pre_submit_delay_observation_due(stock, now_ts=130.0) is True
@@ -181,8 +323,35 @@ def test_live_quote_observer_keeps_small_level_one_depth_as_valid_source(monkeyp
     assert events[0][0][2] == "pre_submit_delay_quote_observed"
     assert events[0][1]["ask_qty"] == 1
     assert events[0][1]["quote_valid"] is True
+    assert len(events[0][1]["quote_source_sha256"]) == 64
     assert events[0][1]["actual_order_submitted"] is False
     assert "_pre_submit_delay_observation" not in stock
+
+
+def test_live_quote_observer_rejects_cross_route_depth_even_with_fresh_flat_bbo(monkeypatch):
+    from src.engine import sniper_state_handlers as handlers
+
+    events = []
+    monkeypatch.setattr(handlers, "_log_entry_pipeline", lambda *a, **kw: events.append(kw))
+    monkeypatch.setattr(handlers, "_build_quote_consistency_fields",
+                        lambda *a, **kw: ({"quote_consistency_state": "single_source"}, 0, 0, 0))
+    stock = {"_pre_submit_delay_observation": {
+        "id": "intent", "committed_at_epoch": 100.0, "remaining_sec": [30.0],
+        "route": "KRX", "quote_transport_epoch": 7, "decision_source_sha256": "d" * 64,
+    }}
+    ws = {"ws_route": "KRX", "market_data_transport_epoch": 7,
+          "orderbook": {"asks": [{"price": 1564, "volume": 1}],
+                        "bids": [{"price": 1561, "volume": 31}]},
+          "last_realtime_type_ts": {"0D": 129.8},
+          "realtime_type_snapshots_by_route": {"NXT|nxt": {"0D": {
+              "market_route": "NXT", "transport_epoch": 7,
+              "observed_epoch": 129.8,
+              "orderbook": {"asks": [{"price": 1564, "volume": 1}],
+                            "bids": [{"price": 1561, "volume": 31}]},
+          }}}}
+    handlers.observe_pre_submit_delay_quote(stock, "355390", ws, now_ts=130.0)
+    assert events[0]["quote_valid"] is False
+    assert events[0]["route_depth_source_sha256"] is None
 
 
 def test_due_intent_requires_same_policy_owner_quantity_cap_and_route(monkeypatch):

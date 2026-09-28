@@ -31117,6 +31117,8 @@ def test_add_receipt_normalizes_cumulative_partial_fill(monkeypatch):
         fields for stage, fields in pipeline_events if stage == "scale_in_executed"
     ]
     assert [event["fill_qty"] for event in scale_in_events] == [37, 22]
+    assert [event["pre_fill_buy_qty"] for event in scale_in_events] == [1, 38]
+    assert [event["post_fill_buy_qty"] for event in scale_in_events] == [38, 60]
     assert scale_in_events[-1]["new_buy_qty"] == 60
     assert [event["pre_add_avg_price"] for event in scale_in_events] == [
         "29300.00",

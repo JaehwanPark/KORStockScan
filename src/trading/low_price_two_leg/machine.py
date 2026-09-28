@@ -36,6 +36,24 @@ def default_state_path(profile: MachineProfile) -> Path:
     return DEFAULT_STATE_DIR / f"{profile.profile_id}_state.json"
 
 
+_ECONOMIC_STATE_KEYS = (
+    "schema", "trade_date", "status", "attempt_consumed", "signal_features",
+    "legs", "position_qty", "owned_order_nos", "last_evaluated_bar",
+    "last_action", "blocked_reason",
+)
+
+
+def economic_state_projection(state: dict) -> dict:
+    """Stable persisted fields that the first economic reader must observe."""
+    return {key: state.get(key) for key in _ECONOMIC_STATE_KEYS}
+
+
+def economic_state_source_sha256(state: dict) -> str:
+    encoded = json.dumps(economic_state_projection(state), sort_keys=True,
+                         separators=(",", ":"), default=str)
+    return hashlib.sha256(encoded.encode()).hexdigest()
+
+
 class LowPriceTwoLegMachine(SamsungRegularTwoLegMachine):
     """One profile, one state file, and one exact broker-order ledger."""
 
@@ -98,6 +116,9 @@ class LowPriceTwoLegMachine(SamsungRegularTwoLegMachine):
             "owned_order_nos": self._state.get("owned_order_nos", []),
             "state_path": str(self.state_path), "runtime_pid": os.getpid(),
             "runtime_cwd": str(Path.cwd().resolve()), "fields": fields,
+            "execution_mode": "real" if self.live_enabled else "sim",
+            "state_projection": economic_state_projection(self._state),
+            "state_source_sha256": economic_state_source_sha256(self._state),
             "quote_source": "unavailable_in_state", "capital_source": "unavailable_in_state"}
         encoded = json.dumps(body, sort_keys=True, separators=(",", ":"), default=str)
         try:

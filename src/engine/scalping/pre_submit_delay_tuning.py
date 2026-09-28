@@ -35,11 +35,62 @@ SOURCE_STAGES = frozenset({
 REPORT_DIR = DATA_DIR / "report" / "pre_submit_delay_tuning"
 POLICY_DIR = DATA_DIR / "threshold_cycle" / "pre_submit_delay_policy"
 
+_DECISION_SOURCE_KEYS = (
+    "delay_intent_id", "decision_committed_at_epoch", "route",
+    "quote_transport_epoch", "delay_policy_sha256",
+    "original_machine_observation_sha256", "planned_qty", "owner",
+    "market_session_bucket",
+)
+_QUOTE_SOURCE_KEYS = (
+    "delay_intent_id", "decision_source_sha256", "target_delay_sec",
+    "actual_offset_sec", "quote_observed_at_epoch", "route", "quote_route",
+    "quote_transport_epoch", "ask_price", "best_bid", "ask_qty",
+    "ws_last_0d_epoch", "quote_consistency_state",
+    "quote_valid", "quote_source_reason", "route_depth_source_sha256",
+)
+
 
 def _digest(payload: Any) -> str:
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
     ).hexdigest()
+
+
+def decision_source_sha256(fields: dict[str, Any]) -> str:
+    """Logical generation shared by the observer and its first reader."""
+    return _digest({key: str(fields.get(key)) for key in _DECISION_SOURCE_KEYS})
+
+
+def quote_source_sha256(fields: dict[str, Any]) -> str:
+    return _digest({key: str(fields.get(key)) for key in _QUOTE_SOURCE_KEYS})
+
+
+def _quote_source_issue(commit: dict[str, Any], quote: dict[str, Any]) -> str | None:
+    expected = str(commit.get("decision_source_sha256") or "")
+    epoch = str(commit.get("quote_transport_epoch") or "")
+    if (not expected or expected != decision_source_sha256(commit)
+            or not str(commit.get("route") or "") or not epoch.isdecimal()
+            or expected != str(quote.get("decision_source_sha256") or "")
+            or epoch != str(quote.get("quote_transport_epoch") or "")):
+        return "quote_generation_or_epoch_mismatch"
+    committed = _number(commit.get("decision_committed_at_epoch"))
+    observed = _number(quote.get("quote_observed_at_epoch"))
+    offset = _number(quote.get("actual_offset_sec"))
+    horizon = _number(quote.get("target_delay_sec"))
+    depth = _number(quote.get("ws_last_0d_epoch"))
+    depth_sha = str(quote.get("route_depth_source_sha256") or "")
+    if (str(quote.get("quote_source_sha256") or "") != quote_source_sha256(quote)
+            or committed is None or observed is None or offset is None
+            or horizon is None or depth is None
+            or len(depth_sha) != 64 or any(char not in "0123456789abcdef" for char in depth_sha)
+            or abs(observed - committed - offset) > .01
+            or abs(offset - horizon) > 3.0
+            or not 0 <= observed - depth <= .7):
+        return "quote_clock_or_hash_invalid"
+    if (str(quote.get("route") or "") != str(commit.get("route") or "")
+            or str(quote.get("quote_route") or "") != str(commit.get("route") or "")):
+        return "quote_route_mismatch"
+    return None
 
 
 def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
@@ -83,9 +134,13 @@ def _source_rows(target_date: str) -> tuple[list[dict[str, Any]], dict[str, Any]
     rows: list[dict[str, Any]] = []
     source_hash = hashlib.sha256()
     total_bytes = 0
-    seen: set[str] = set()
+    seen: dict[str, str] = {}
+    raw_event_count = 0
+    duplicate_event_count = 0
+    stage_counts = Counter()
     source_dates: set[str] = set()
     for source_date, path in source_partitions:
+        source_dates.add(source_date)
         before = path.stat()
         if path.is_symlink() or before.st_size > 64 * 1024 * 1024:
             raise ValueError("delay_partition_invalid_or_unbounded")
@@ -100,13 +155,20 @@ def _source_rows(target_date: str) -> tuple[list[dict[str, Any]], dict[str, Any]
                     raise ValueError("delay_partition_date_or_family_mismatch")
                 if row.get("stage") not in SOURCE_STAGES:
                     continue
+                raw_event_count += 1
+                stage_counts[row["stage"]] += 1
                 identity = str(row.get("execution_source_event_sha256") or "")
                 if len(identity) != 64:
                     raise ValueError("delay_partition_identity_missing")
+                content_sha = _digest({key: value for key, value in row.items()
+                                       if key != "execution_source_event_sha256"})
+                if identity in seen and seen[identity] != content_sha:
+                    raise ValueError("delay_partition_identity_collision")
                 if identity not in seen:
                     rows.append(row)
-                    seen.add(identity)
-                    source_dates.add(source_date)
+                    seen[identity] = content_sha
+                else:
+                    duplicate_event_count += 1
         after = path.stat()
         if (before.st_ino, before.st_size, before.st_mtime_ns) != (
             after.st_ino, after.st_size, after.st_mtime_ns
@@ -124,8 +186,9 @@ def _source_rows(target_date: str) -> tuple[list[dict[str, Any]], dict[str, Any]
     if source_partitions != current_partitions:
         raise ValueError("delay_partition_inventory_changed")
     return rows, {
-        "status": "ready" if paths else "source_gap",
-        "first_blocker": None if paths else "clean_baseline_delay_observations_missing",
+        "status": "ready" if rows else "valid_empty" if paths else "source_gap",
+        "first_blocker": (None if rows else "valid_empty_delay_observations"
+                          if paths else "clean_baseline_delay_observations_missing"),
         "paths": [str(path) for path in paths],
         "window_policy": "clean_baseline_cumulative_through_target_date",
         "clean_tuning_baseline_date": baseline,
@@ -133,6 +196,10 @@ def _source_rows(target_date: str) -> tuple[list[dict[str, Any]], dict[str, Any]
         "source_dates": sorted(source_dates),
         "source_date_count": len(source_dates),
         "bytes_read": total_bytes,
+        "raw_event_count": raw_event_count,
+        "deduplicated_event_count": len(rows),
+        "duplicate_event_count": duplicate_event_count,
+        "raw_stage_counts": dict(stage_counts),
         "sha256": source_hash.hexdigest() if paths else None,
     }
 
@@ -367,6 +434,10 @@ def build_report(
     samples: dict[str, dict[float, dict[str, Any]]] = defaultdict(dict)
     terminals: dict[str, dict[str, Any]] = {}
     invalid = Counter()
+    source_quality = Counter()
+    conflicted: set[tuple[str, float]] = set()
+    commit_conflicts: set[str] = set()
+    terminal_conflicts: set[str] = set()
     for row in rows:
         fields = row.get("fields")
         if not isinstance(fields, dict):
@@ -376,20 +447,39 @@ def build_report(
         if not attempt:
             invalid["attempt_identity_missing"] += 1
             continue
+        attempt = "|".join((row["emitted_date"], str(row.get("record_id")),
+                            str(row.get("stock_code")), attempt))
         stage = row["stage"]
         if stage == "pre_submit_delay_committed":
             if attempt in commits and commits[attempt] != fields:
+                invalid["commit_conflict"] += 1
+                commit_conflicts.add(attempt)
+                commits.pop(attempt, None)
+            elif attempt in commit_conflicts:
                 invalid["commit_conflict"] += 1
             else:
                 commits[attempt] = fields
         elif stage == "pre_submit_delay_quote_observed":
             second = _number(fields.get("target_delay_sec"))
-            if second not in DELAYS_SEC or second in samples[attempt]:
+            if second not in DELAYS_SEC:
+                invalid["sample_duplicate_or_horizon_invalid"] += 1
+            elif second in samples[attempt]:
+                if samples[attempt][second] == fields:
+                    invalid["sample_exact_duplicate"] += 1
+                else:
+                    invalid["sample_duplicate_or_horizon_invalid"] += 1
+                    conflicted.add((attempt, second))
+                    samples[attempt].pop(second, None)
+            elif (attempt, second) in conflicted:
                 invalid["sample_duplicate_or_horizon_invalid"] += 1
             else:
                 samples[attempt][second] = fields
         else:
             if attempt in terminals and terminals[attempt] != fields:
+                invalid["terminal_conflict"] += 1
+                terminal_conflicts.add(attempt)
+                terminals.pop(attempt, None)
+            elif attempt in terminal_conflicts:
                 invalid["terminal_conflict"] += 1
             else:
                 terminals[attempt] = fields
@@ -401,6 +491,53 @@ def build_report(
         and (_number(commit.get("planned_qty")) or 0) > 0
         and str(commit.get("owner") or "") == "main_scalping"
     ]
+    excluded_commits = Counter()
+    eligible_set = set(eligible)
+    for key, commit in commits.items():
+        if key in eligible_set:
+            continue
+        if str(commit.get("owner") or "") != "main_scalping":
+            excluded_commits["other_or_unknown_owner"] += 1
+        elif str(commit.get("entry_action") or "") != "ENTER_NOW":
+            excluded_commits["not_enter_now"] += 1
+        elif str(commit.get("auxiliary_effective_action") or "") not in {"PASS", "CAUTION"}:
+            excluded_commits["auxiliary_not_eligible"] += 1
+        else:
+            excluded_commits["planned_quantity_missing_or_zero"] += 1
+    source_quality["orphan_quote_event"] = sum(
+        len(horizons) for key, horizons in samples.items() if key not in commits
+    )
+    source_quality["orphan_terminal_event"] = sum(
+        key not in commits for key in terminals
+    )
+    valid_terminals = 0
+    terminal_status = Counter()
+    for key, terminal in terminals.items():
+        commit = commits.get(key)
+        committed = _number((commit or {}).get("decision_committed_at_epoch"))
+        finished = _number(terminal.get("submit_finished_at_epoch")
+                           or terminal.get("terminal_finished_at_epoch"))
+        if (not commit or not commit.get("decision_source_sha256")
+                or commit["decision_source_sha256"] != decision_source_sha256(commit)
+                or terminal.get("decision_source_sha256") != commit["decision_source_sha256"]
+                or committed is None or finished is None or finished < committed
+                or (terminal.get("entry_submit_attempt_id")
+                    and commit.get("entry_submit_attempt_id")
+                    and terminal["entry_submit_attempt_id"] != commit["entry_submit_attempt_id"])):
+            source_quality["terminal_unbound_or_clock_invalid"] += 1
+            terminal_status["unbound_or_clock_invalid"] += 1
+        else:
+            valid_terminals += 1
+            if terminal.get("terminal_reason"):
+                terminal_status["unsubmitted_expired"] += 1
+            elif str(terminal.get("submit_call_broker_accepted") or "").lower() == "true":
+                terminal_status["broker_ack_execution_terminal_unobserved"] += 1
+            elif str(terminal.get("submit_call_outcome") or "") in {
+                "raised", "not_returned", "returned_other",
+            }:
+                terminal_status["response_uncertain"] += 1
+            else:
+                terminal_status["no_broker_ack_observed"] += 1
     type_by_attempt = {}
     for key in eligible:
         observed = commits[key].get("delay_decision_type")
@@ -418,6 +555,7 @@ def build_report(
             type_by_attempt[key] = "UNKNOWN"
     missing = Counter()
     diagnostic = []
+    horizon_source_quality = []
     valid_asks_by_type: dict[tuple[str, float], list[float]] = defaultdict(list)
     for second in DELAYS_SEC:
         comparable = []
@@ -425,16 +563,28 @@ def build_report(
             row = samples.get(key, {}).get(second)
             if not row:
                 missing[f"{second:g}s_missing"] += 1
+                source_quality["quote_unobserved_or_conflicted"] += 1
                 continue
+            issue = _quote_source_issue(commits[key], row)
             ask = _number(row.get("ask_price"))
             depth = _number(row.get("ask_qty"))
             if (
-                ask is None or ask <= 0 or depth is None or depth <= 0
+                issue is not None or ask is None or ask <= 0 or depth is None or depth <= 0
                 or str(row.get("quote_valid") or "").lower() != "true"
                 or row.get("route") != commits[key].get("route")
             ):
                 missing[f"{second:g}s_source_invalid"] += 1
+                source_quality[issue or "quote_source_invalid"] += 1
+                reason = str(row.get("quote_source_reason") or "unknown").lower()
+                if reason in {
+                    "horizon_late_or_early", "route_mismatch_or_missing",
+                    "route_depth_missing_conflicted_or_ambiguous",
+                    "transport_epoch_changed", "depth_stale_or_clock_invalid",
+                    "quote_stale_or_conflicted", "price_or_depth_invalid",
+                }:
+                    source_quality[f"producer_{reason}"] += 1
                 continue
+            source_quality["quote_valid"] += 1
             comparable.append((key, ask, depth))
             valid_asks_by_type[(type_by_attempt[key], second)].append(ask)
         diagnostic.append({
@@ -451,6 +601,18 @@ def build_report(
             "model_fill_error": None,
             "winner_retention": None,
             "candidate_passed": False,
+        })
+        observed_count = sum(second in samples.get(key, {}) for key in eligible)
+        valid_count = len(comparable)
+        conflicted_count = sum((key, second) in conflicted for key in eligible)
+        horizon_source_quality.append({
+            "delay_sec": second,
+            "eligible_attempt_count": len(eligible),
+            "observed_attempt_count": observed_count + conflicted_count,
+            "valid_attempt_count": valid_count,
+            "quarantined_attempt_count": observed_count - valid_count + conflicted_count,
+            "unobserved_attempt_count": len(eligible) - observed_count - conflicted_count,
+            "conflicted_attempt_count": conflicted_count,
         })
     type_counts = Counter(type_by_attempt.values())
     scope_by_attempt = {key: "|".join(type_by_attempt[key].split("|")[:2])
@@ -510,7 +672,7 @@ def build_report(
         blocker = "eligible_enter_now_auxiliary_pass_intent_missing"
     elif not any(row["source_valid_attempt_count"] for row in diagnostic[1:]):
         blocker = "fresh_route_bound_horizon_quote_missing"
-    elif not terminals:
+    elif not valid_terminals:
         blocker = "exact_submit_terminal_receipt_missing"
     else:
         blocker = "paired_fill_terminal_cost_model_not_validated"
@@ -525,8 +687,17 @@ def build_report(
         "existing_quote_census": existing_quote_census,
         "committed_attempt_count": len(commits),
         "eligible_attempt_count": len(eligible),
-        "terminal_observation_count": len(terminals),
+        "excluded_committed_attempt_count": len(commits) - len(eligible),
+        "excluded_commit_reasons": dict(excluded_commits),
+        "owner_census": dict(Counter(str(row.get("owner") or "UNKNOWN")
+                                     for row in commits.values())),
+        "terminal_observation_count": valid_terminals,
+        "raw_terminal_observation_count": len(terminals),
+        "terminal_status_counts": dict(terminal_status),
+        "eligible_terminal_unobserved_count": sum(key not in terminals for key in eligible),
         "invalid_counts": dict(invalid),
+        "source_quality_counts": dict(source_quality),
+        "horizon_source_quality": horizon_source_quality,
         "missing_counts": dict(missing),
         "candidate_grid": diagnostic,
         "decision_type_schema": "pre_submit_delay_decision_type_v1",

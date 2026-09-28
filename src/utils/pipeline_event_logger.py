@@ -28,6 +28,7 @@ _WRITE_LOCK = threading.RLock()
 _COMPACTOR_LOCK = threading.RLock()
 _PRODUCER_COMPACTOR: ProducerSummaryCompactor | None = None
 _RETIRING_COMPACTORS: list[ProducerSummaryCompactor] = []
+_TERMINATION_DRAIN_ACTIVE = False
 
 _TEXT_INFO_STAGE_KEYWORDS = (
     "order_submitted",
@@ -336,6 +337,8 @@ def _get_producer_compactor() -> ProducerSummaryCompactor | None:
                 sample_per_bucket=_compaction_sample_per_bucket(),
                 auto_flush=True,
             )
+        if _TERMINATION_DRAIN_ACTIVE:
+            _PRODUCER_COMPACTOR.enable_termination_drain()
         return _PRODUCER_COMPACTOR
 
 
@@ -346,6 +349,7 @@ def flush_pipeline_event_producer_summary(target_date: str | None = None) -> dic
 
 
 def _flush_producer_summary_at_exit() -> None:
+    global _TERMINATION_DRAIN_ACTIVE
     with _COMPACTOR_LOCK:
         compactors = list(_RETIRING_COMPACTORS)
         if _PRODUCER_COMPACTOR is not None:
@@ -359,11 +363,35 @@ def _flush_producer_summary_at_exit() -> None:
             log_error(f"[PIPELINE_EVENT] producer summary shutdown drain failed; raw retained: {exc}")
     with _COMPACTOR_LOCK:
         _RETIRING_COMPACTORS[:] = [c for c in failed if c is not _PRODUCER_COMPACTOR]
+        _TERMINATION_DRAIN_ACTIVE = False
 
 
 def drain_pipeline_event_summary_before_termination() -> None:
-    """Bounded drain for existing graceful self-SIGTERM paths; no signal changes."""
-    _flush_producer_summary_at_exit()
+    """Flush now, then synchronously publish any diagnostic rows before SIGTERM."""
+    global _TERMINATION_DRAIN_ACTIVE
+    with _COMPACTOR_LOCK:
+        _TERMINATION_DRAIN_ACTIVE = True
+        current = _PRODUCER_COMPACTOR
+        retiring = list(_RETIRING_COMPACTORS)
+        if current is not None:
+            current.enable_termination_drain()
+    failed = []
+    for compactor in retiring:
+        try:
+            compactor.close()
+        except Exception as exc:
+            failed.append(compactor)
+            log_error(f"[PIPELINE_EVENT] producer summary shutdown drain failed; raw retained: {exc}")
+    if current is not None:
+        try:
+            current.flush()
+        except Exception as exc:
+            log_error(f"[PIPELINE_EVENT] producer summary shutdown drain failed; raw retained: {exc}")
+    with _COMPACTOR_LOCK:
+        _RETIRING_COMPACTORS[:] = [
+            compactor for compactor in _RETIRING_COMPACTORS
+            if compactor not in retiring or compactor in failed
+        ]
 
 
 atexit.register(_flush_producer_summary_at_exit)

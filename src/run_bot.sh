@@ -316,8 +316,8 @@ while true; do
     unset KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_TTL_SEC
     unset KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_SPREAD_WORSEN_BPS
     # This release selects the reviewed zero-base SCALPING discovery owner.
-    # Apply after the dated policy and custody overlays so the child PID
-    # receives this release's exact scanner route.
+    # It is applied after dated policy/owner overlays so the PID receipt shows
+    # the effective scanner route selected by this immutable launcher.
     export KORSTOCKSCAN_ZERO_BASE_SCANNER_ENABLED=true
     export_runtime_source_provenance
 

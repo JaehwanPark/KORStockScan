@@ -155,8 +155,99 @@ def test_full_completed_projection_is_not_capped_by_recent_trades():
 
     rows, gaps = report_mod._collect_completed_trade_rows([snapshot])
 
-    assert gaps == []
+    assert gaps == [{"date": "2026-09-23",
+                     "reason": "legacy_completion_census_unsealed"}]
     assert {row["id"] for row in rows} == set(range(1, 13))
+
+
+def test_new_completed_census_rejects_stale_rows_and_cross_date_duplicate():
+    from src.engine.sniper_trade_review_report import completed_census_manifest
+
+    def snapshot(day, row):
+        result = {
+            "date": day, "code": None, "since": None,
+            "meta": {"warnings": [], "snapshot_profile": "postclose_exit",
+                     "sell_completed_event_ids": [row["id"]],
+                     "trailing_event_source_receipts": []},
+            "metrics": {"canonical_completed_trades": 1},
+            "sections": {"completed_trade_projection": [row]},
+        }
+        result["meta"]["completed_census_manifest"] = completed_census_manifest(result)
+        return result
+
+    first = snapshot("2026-09-28", {
+        **_trade(1, rec_date="2026-09-28", sell_time="2026-09-28 09:40:00"),
+        "completion_observed_date": "2026-09-28",
+    })
+    rows, gaps = report_mod._collect_completed_trade_rows([first])
+    assert [row["id"] for row in rows] == [1]
+    assert gaps == []
+
+    stale = json.loads(json.dumps(first))
+    stale["sections"]["completed_trade_projection"][0]["profit_rate"] = 99
+    rows, gaps = report_mod._collect_completed_trade_rows([stale])
+    assert rows == []
+    assert gaps[0]["reason"] == "completed_census_generation_mismatch"
+
+    missing = json.loads(json.dumps(first))
+    missing["meta"]["sell_completed_event_ids"] = [1, 2]
+    missing["meta"]["completed_census_manifest"] = completed_census_manifest(missing)
+    rows, gaps = report_mod._collect_completed_trade_rows([missing])
+    assert rows == []
+    assert gaps[0]["reason"] == "completed_census_id_mismatch"
+
+    wrong_profile = json.loads(json.dumps(first))
+    wrong_profile["meta"]["snapshot_profile"] = "intraday_light"
+    wrong_profile["meta"]["completed_census_manifest"] = (
+        completed_census_manifest(wrong_profile)
+    )
+    rows, gaps = report_mod._collect_completed_trade_rows([wrong_profile])
+    assert rows == []
+    assert gaps[0]["reason"] == "completed_census_profile_not_postclose_exit"
+
+    second = snapshot("2026-09-29", {
+        **_trade(1, rec_date="2026-09-28", sell_time="2026-09-29 09:40:00"),
+        "completion_observed_date": "2026-09-29",
+    })
+    rows, gaps = report_mod._collect_completed_trade_rows([first, second])
+    assert rows == []
+    assert any(gap["reason"] == "duplicate_completed_trade_conflict" for gap in gaps)
+
+
+def test_cost_subset_without_direct_exit_signal_is_not_policy_economics(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    trade = _trade(7, rec_date="2026-09-24", sell_time="2026-09-24 09:40:00")
+    trade.update({
+        "completion_observed_date": "2026-09-24",
+        "strict_completion_status": "eligible",
+        "strict_completion_reasons": [],
+        "terminal_population_scope": "real_record_bound",
+        "sell_quantity_conserved": True,
+        "terminal_profit_rate_reconciled": True,
+        "realized_pnl_krw_source": "broker_fill_prices_fee_aware",
+        "exit_signal": {"exit_rule": "scalp_trailing_take_profit",
+                        "binding_status": "legacy_unbound", "inferred": True},
+    })
+    from src.engine.sniper_trade_review_report import completed_census_manifest
+    snapshot = {
+        "date": "2026-09-24", "meta": {"sell_completed_event_ids": [7]},
+        "metrics": {"canonical_completed_trades": 1},
+        "sections": {"completed_trade_projection": [trade]},
+    }
+    snapshot["meta"]["completed_census_manifest"] = (
+        completed_census_manifest(snapshot)
+    )
+    _write_json(
+        tmp_path / "report" / "monitor_snapshots" / "trade_review_2026-09-24.json",
+        snapshot,
+    )
+    result = report_mod.build_holding_exit_observation_report(
+        target_date="2026-09-24", month_start="2026-09-24"
+    )
+    assert result["cost_input_complete"] is True
+    assert result["economic_input_complete"] is False
+    assert result["position_outcome_coverage"]["whole_cohort_pnl_krw"] is None
+    assert result["completed_population_quality"]["decision_economic_eligible_ids"] == []
 
 
 def test_completed_projection_rejects_terminal_event_id_mismatch():
@@ -170,7 +261,9 @@ def test_completed_projection_rejects_terminal_event_id_mismatch():
     rows, gaps = report_mod._collect_completed_trade_rows([snapshot])
 
     assert rows == []
-    assert gaps[0]["reason"] == "sell_completed_id_census_mismatch"
+    assert {gap["reason"] for gap in gaps} == {
+        "legacy_completion_census_unsealed", "sell_completed_id_census_mismatch"
+    }
 
 
 def test_mechanical_cohort_isolated_from_pre_generation_legacy_gap():
@@ -514,6 +607,16 @@ def test_sor_krx_user_override_keeps_real_fill_in_postclose_without_fake_venue()
     assert coverage["full_post_sell_observation_trades"] == 1
     assert coverage["full_post_sell_user_override_trades"] == 1
     assert coverage["sor_krx_reference_user_override_ids"] == ["1"]
+
+    cost_unknown = {**trade, "realized_pnl_krw": None,
+                    "realized_pnl_krw_source": "missing_exact_cost"}
+    retained, retained_coverage = report_mod._build_position_outcomes(
+        [cost_unknown], [candidate]
+    )
+    assert retained[0]["post_sell_status"] == "pass"
+    assert retained[0]["realized_pnl_krw"] is None
+    assert retained_coverage["exact_cost_trades"] == 0
+    assert retained_coverage["sor_krx_reference_user_override_ids"] == ["1"]
 
     for field, value in (
         ("broker_actual_exchange_code", "1"),

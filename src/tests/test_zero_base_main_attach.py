@@ -118,6 +118,36 @@ def test_separate_nxt_candidate_is_rejected(monkeypatch):
     assert rows == {} and targets == []
 
 
+def test_attached_integrated_watching_registers_al_item(monkeypatch):
+    _rows, targets = _prepare(monkeypatch)
+    published = []
+    monkeypatch.setattr(main, "event_bus", SimpleNamespace(
+        publish=lambda name, payload: published.append((name, payload)),
+    ))
+    monkeypatch.setattr(main, "_resolve_stock_marcap", lambda *_args: 0)
+    monkeypatch.setattr(main, "_resolve_scanner_runtime_record_id", lambda *_args: 1)
+    monkeypatch.setattr(main, "_scanner_identity_guard", lambda *_args: (True, {}))
+    monkeypatch.setattr(main, "_log_scanner_runtime_target_attach", lambda *_args, **_kwargs: None)
+    now = time.time()
+    attached = main._apply_scalping_scanner_promoted_target({
+        "record_id": 1, "code": "123456", "name": "TEST",
+        "strategy": "SCALPING", "position_tag": "SCANNER",
+        "buy_price": 10000, "added_time": now,
+        "scanner_promotion_id": "ZBPROM-123456-1-1",
+        "scanner_promotion_emitted_epoch": now,
+        "source_signature": "ZERO_BASE_DISCOVERY:" + "b" * 64,
+        "venue": "KRX", "effective_venue": "KRX",
+        "market_data_route": "krx_nxt_integrated",
+        "broker_route": "SOR", "market_session_bucket": "krx_regular",
+    })
+    assert attached is True
+    assert targets[0]["market_data_route"] == "krx_nxt_integrated"
+    assert targets[0]["broker_route"] == "SOR"
+    assert published == [("COMMAND_WS_REG", {
+        "codes": ["123456_AL"], "source": "scanner_runtime_target_attach",
+    })]
+
+
 def test_zero_base_entry_request_binds_sor_and_fails_closed_on_lost_route():
     stock = {
         "source_signature": "ZERO_BASE_DISCOVERY:" + "b" * 64,

@@ -1475,6 +1475,64 @@ os.kill(os.getpid(), signal.SIGTERM)
                         assert index > 0 and "drain_pipeline_event_summary_before_termination()" in ast.unparse(children[index - 1])
 
 
+def test_restart_drain_keeps_late_scanner_rows_bound_to_first_stage(monkeypatch, tmp_path):
+    from src.engine.automation import postclose_summary_handoff as handoff
+
+    _reset_logger_state(monkeypatch)
+    monkeypatch.setattr(logger_mod, "_RETIRING_COMPACTORS", [])
+    monkeypatch.setattr(logger_mod, "DATA_DIR", tmp_path / "data")
+    monkeypatch.setenv("PIPELINE_EVENT_HIGH_VOLUME_COMPACTION_MODE", "shadow")
+    monkeypatch.setenv("PIPELINE_EVENT_COMPACTION_FLUSH_SEC", "3600")
+    fields = {"scanner_promotion_id": "fixture-promotion", "broker_order_forbidden": True}
+    first = logger_mod.emit_pipeline_event(
+        "ENTRY_PIPELINE", "fixture", "122350", "scalping_scanner_fast_precheck",
+        record_id=47859, fields=fields,
+    )
+    day = first["emitted_date"]
+    logger_mod.drain_pipeline_event_summary_before_termination()
+    late = [
+        logger_mod.emit_pipeline_event(
+            "ENTRY_PIPELINE", "fixture", "122350", stage,
+            record_id=47859, fields=fields,
+        )
+        for stage in (
+            "scalping_scanner_promotion_latency_trace",
+            "scalping_scanner_heavy_eval_lag",
+            "scalping_scanner_heavy_eval_completion",
+        )
+    ]
+    assert all(row["structured_append_succeeded"] for row in late)
+
+    monkeypatch.setattr(handoff, "stage_commands", lambda *args, **kwargs: [["fixture"]])
+    monkeypatch.setattr(handoff, "_stage_code", lambda *args, **kwargs: "fixture-code")
+    monkeypatch.setattr(handoff, "stage_artifacts", lambda *args, **kwargs: {})
+    monkeypatch.setattr(handoff, "_safe_stage_output_issues", lambda *args: [])
+    report_dir = tmp_path / "data" / "report"
+    calls = []
+    receipt = handoff.run_stage(
+        "pre_submit_delay", day, report_dir=report_dir, project=tmp_path,
+        runner=lambda *args, **kwargs: calls.append(args) or 0,
+    )
+    assert receipt["status"] == "succeeded", receipt
+    assert len(calls) == 1
+    assert not handoff.stage_receipt_issues(
+        report_dir, day, "pre_submit_delay", code_hash="fixture-code"
+    )
+    manifest_path = tmp_path / "data" / "pipeline_event_summaries" / f"pipeline_event_producer_summary_manifest_{day}.json"
+    ledger = json.loads(manifest_path.read_text())["raw_source_ledger"]
+    assert (ledger["raw_count"], ledger["valid_count"], ledger["excluded_count"],
+            ledger["quarantined_count"], ledger["unobserved_count"]) == (4, 4, 0, 0, 0)
+
+    logger_mod.emit_pipeline_event(
+        "ENTRY_PIPELINE", "fixture", "122350", "scalping_scanner_fast_precheck",
+        record_id=47860, fields=fields,
+    )
+    assert "pre_submit_delay:raw_source_ledger_missing" in handoff.stage_receipt_issues(
+        report_dir, day, "pre_submit_delay", code_hash="fixture-code"
+    )
+    logger_mod._flush_producer_summary_at_exit()
+
+
 def test_mode_handover_keeps_old_compactor_for_shutdown_drain(monkeypatch, tmp_path):
     import threading
     _reset_logger_state(monkeypatch)

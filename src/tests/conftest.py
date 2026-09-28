@@ -19,7 +19,7 @@ def isolate_module_logs(tmp_path, monkeypatch):
     import src.utils.pipeline_event_logger as pipeline_event_logger
     from src.utils.constants import TRADING_RULES as DEFAULT_TRADING_RULES
 
-    for active_logger in logger._MODULE_LOGGERS.values():
+    for active_logger in tuple(logger._MODULE_LOGGERS.values()):
         for handler in list(active_logger.handlers):
             active_logger.removeHandler(handler)
             handler.close()
@@ -95,7 +95,7 @@ def isolate_module_logs(tmp_path, monkeypatch):
     sniper_state_handlers.datetime = _REAL_DATETIME
     sniper_state_handlers.TRADING_RULES = DEFAULT_TRADING_RULES
     assert _custody_snapshot() == production_custody_snapshot
-    for active_logger in logger._MODULE_LOGGERS.values():
+    for active_logger in tuple(logger._MODULE_LOGGERS.values()):
         for handler in list(active_logger.handlers):
             active_logger.removeHandler(handler)
             handler.close()

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import date, datetime
 import hashlib
 import json
@@ -18,18 +18,23 @@ from sqlalchemy import delete
 from src.database.db_manager import DBManager
 from src.database.models import StrategyPositionPerformanceDaily, TradePerformanceFact
 from src.engine.ai_response_contracts import normalize_gatekeeper_action_key
+from src.engine.log_archive_service import load_monitor_snapshot
 from src.engine.sniper_position_tags import normalize_position_tag, normalize_strategy
-from src.engine.sniper_trade_review_report import build_trade_review_report
+from src.engine.sniper_trade_review_report import (
+    COMPLETED_CENSUS_CONTRACT_FROM, build_trade_review_report,
+    verify_completed_census_manifest,
+)
 from src.engine.trade_profit import (
     calculate_net_profit_rate,
     calculate_net_realized_pnl,
     get_trade_cost_rate,
 )
+from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import iter_jsonl_objects_strict, read_json_object_strict_receipt
 
 _DB = DBManager()
-_PIPELINE_EVENTS_DIR = Path("data/pipeline_events")
-_FACT_SYNC_STATUS_DIR = Path("data/report/strategy_position_fact_sync")
+_PIPELINE_EVENTS_DIR = DATA_DIR / "pipeline_events"
+_FACT_SYNC_STATUS_DIR = DATA_DIR / "report" / "strategy_position_fact_sync"
 _SCANNER_PROMOTION_STAGES = {
     "scalping_scanner_candidate_promoted",
     "scalping_scanner_runtime_target_attach",
@@ -123,6 +128,35 @@ def _status_path(target_date: str) -> Path:
     return (
         _FACT_SYNC_STATUS_DIR / f"strategy_position_fact_sync_{target_date}.status.json"
     )
+
+
+def _saved_fact_generation_issue(
+    target_date: str, *, snapshot: dict | None = None,
+) -> str | None:
+    """Check a DB fact batch against the currently selected source snapshot."""
+    try:
+        receipt = json.loads(_status_path(target_date).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return "fact_sync_receipt_missing_or_invalid"
+    expected_sha = receipt.pop("artifact_sha256", None)
+    if expected_sha != _canonical_sha256(receipt):
+        return "fact_sync_receipt_sha_mismatch"
+    if (receipt.get("target_date") != target_date
+            or receipt.get("status") not in {"succeeded", "valid_empty"}):
+        return "fact_sync_receipt_not_current_success"
+    if snapshot is None:
+        snapshot = load_monitor_snapshot("trade_review", target_date)
+    if not isinstance(snapshot, dict):
+        return "trade_review_snapshot_missing"
+    issue = verify_completed_census_manifest(snapshot, target_date)
+    if issue:
+        return issue
+    census = snapshot["meta"]["completed_census_manifest"]
+    if (receipt.get("completed_census_run_ids") != [census["run_id"]]
+            or receipt.get("completed_census_projection_sha256")
+            != [census["projection_sha256"]]):
+        return "stale_fact_source_generation"
+    return None
 
 
 def _write_status(target_date: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -571,6 +605,7 @@ def _enrich_scanner_provenance(
 def _build_trade_fact_rows(
     target_date: str, *, scale_in_projection=None,
     scanner_source_quality: dict[str, Any] | None = None,
+    completion_census_quality: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     report = build_trade_review_report(
         target_date=target_date,
@@ -580,6 +615,22 @@ def _build_trade_fact_rows(
     )
     rows = list((report.get("sections", {}) or {}).get("recent_trades", []) or [])
     warnings = list((report.get("meta", {}) or {}).get("warnings", []) or [])
+    projection = (report.get("sections") or {}).get("completed_trade_projection")
+    if target_date >= COMPLETED_CENSUS_CONTRACT_FROM or isinstance(
+        (report.get("meta") or {}).get("completed_census_manifest"), dict
+    ):
+        issue = verify_completed_census_manifest(report, target_date)
+        if issue:
+            raise FactSyncSourceError(issue)
+    completion_by_id = {
+        str(item.get("id") or ""): item for item in projection or []
+        if isinstance(item, dict)
+    }
+    census = (report.get("meta") or {}).get("completed_census_manifest") or {}
+    if completion_census_quality is not None:
+        completion_census_quality.update(census)
+    if warnings and (target_date >= COMPLETED_CENSUS_CONTRACT_FROM or census):
+        raise FactSyncSourceError("trade_review_source_warning")
     facts: list[dict[str, Any]] = []
     for row in rows:
         strategy = normalize_strategy(row.get("strategy"))
@@ -605,6 +656,61 @@ def _build_trade_fact_rows(
             and sell_price > 0
             and sell_time is not None
         )
+        main_completion = (
+            (target_date >= COMPLETED_CENSUS_CONTRACT_FROM or bool(census))
+            and status == "COMPLETED" and strategy == "SCALPING"
+        )
+        completed_source = completion_by_id.get(str(row.get("id") or ""))
+        economics_source_status = "fixed_comparison_cost_model"
+        if main_completion:
+            identity_bound = bool(
+                completed_source
+                and str(completed_source.get("rec_date") or "")[:10]
+                == str(row.get("rec_date") or "")[:10]
+                and str(completed_source.get("code") or "")[:6]
+                == str(row.get("code") or "")[:6]
+                and normalize_position_tag(
+                    strategy, completed_source.get("position_tag")
+                ) == position_tag
+                and completed_source.get("completion_observed_date") == target_date
+                and completed_source.get("terminal_population_scope")
+                == "real_record_bound"
+                and _optional_float(completed_source.get("buy_price")) == buy_price
+                and _safe_int(completed_source.get("buy_qty")) == buy_qty
+                and _parse_datetime(completed_source.get("buy_time")) == buy_time
+                and _optional_float(completed_source.get("sell_price")) == sell_price
+                and _parse_datetime(completed_source.get("sell_time")) == sell_time
+            )
+            actual_cost_basis = bool(
+                identity_bound
+                and completed_source.get("strict_completion_status") == "eligible"
+                and completed_source.get("broker_actual_cost_observed") is True
+                and _optional_float(completed_source.get(
+                    "broker_actual_fees_taxes_krw"
+                )) is not None
+                and completed_source.get("realized_pnl_krw_source")
+                == "broker_actual_fee_reconciled"
+                and _optional_float(completed_source.get("realized_pnl_krw"))
+                is not None
+                and _optional_float(completed_source.get("profit_rate"))
+                is not None
+            )
+            decision_bound = bool(
+                identity_bound
+                and isinstance(completed_source.get("exit_signal"), dict)
+                and completed_source["exit_signal"].get("inferred") is False
+                and completed_source["exit_signal"].get("binding_status")
+                == "same_order_generation"
+            )
+            actual_cost = bool(actual_cost_basis and decision_bound)
+            economics_complete = bool(economics_complete and actual_cost)
+            economics_source_status = (
+                "broker_actual_cost_reconciled" if economics_complete else
+                "source_gap_completion_projection_identity" if not identity_bound else
+                "source_gap_broker_actual_cost_missing" if not actual_cost_basis else
+                "source_gap_exit_signal_unbound" if not decision_bound else
+                "source_gap_execution_price_or_clock"
+            )
         facts.append(
             {
                 "recommendation_id": _safe_int(row.get("id")),
@@ -626,14 +732,29 @@ def _build_trade_fact_rows(
                 # completed row without executable prices/times remains NULL,
                 # rather than becoming a misleading flat trade.
                 "profit_rate": (
+                    _optional_float(completed_source.get("profit_rate"))
+                    if main_completion and economics_complete else
                     calculate_net_profit_rate(buy_price, sell_price)
-                    if economics_complete
-                    else None
+                    if economics_complete else None
                 ),
                 "realized_pnl_krw": (
+                    int(round(float(completed_source["realized_pnl_krw"])))
+                    if main_completion and economics_complete else
                     calculate_net_realized_pnl(buy_price, sell_price, buy_qty)
-                    if economics_complete
-                    else None
+                    if economics_complete else None
+                ),
+                "economics_source_status": economics_source_status,
+                "completion_census_run_id": census.get("run_id") if main_completion else None,
+                "completion_census_projection_sha256": (
+                    census.get("projection_sha256") if main_completion else None
+                ),
+                "configured_fee_estimate_krw": (
+                    completed_source.get("configured_fee_estimate_krw")
+                    if main_completion and identity_bound else None
+                ),
+                "broker_actual_fees_taxes_krw": (
+                    completed_source.get("broker_actual_fees_taxes_krw")
+                    if main_completion and identity_bound else None
                 ),
                 "holding_seconds": _safe_int(row.get("holding_seconds"), default=0)
                 or None,
@@ -1187,6 +1308,7 @@ def _sync_status_payload(
     prior_fact_count: int | None,
     source_digest: str,
     scanner_source_quality: dict[str, Any] | None = None,
+    completion_census_quality: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     completed = [fact for fact in facts if _is_completed(fact)]
     economics_valid = [fact for fact in completed if _has_complete_economics(fact)]
@@ -1198,6 +1320,30 @@ def _sync_status_payload(
         "completed_count": len(completed),
         "economics_valid_completed_count": len(economics_valid),
         "economics_missing_completed_count": len(completed) - len(economics_valid),
+        "completed_source_quality_counts": dict(Counter(
+            str(fact.get("economics_source_status") or "unobserved")
+            for fact in completed
+        )),
+        "completed_census_run_ids": (
+            [str(completion_census_quality["run_id"])]
+            if completion_census_quality and completion_census_quality.get("run_id")
+            else []
+        ),
+        "completed_census_projection_sha256": (
+            [str(completion_census_quality["projection_sha256"])]
+            if completion_census_quality
+            and completion_census_quality.get("projection_sha256") else []
+        ),
+        "completed_census_source_status": (
+            completion_census_quality.get("source_receipts_status")
+            if completion_census_quality else "unobserved"
+        ),
+        "completed_census_counts": ({
+            key: completion_census_quality.get(key)
+            for key in ("raw_terminal_count", "raw_completion_event_count",
+                        "projected_count", "valid_profit_count", "strict_count",
+                        "excluded_count", "unobserved_count")
+        } if completion_census_quality else {}),
         "prior_fact_count": prior_fact_count,
         "warning_count": len(warnings),
         "warnings": warnings,
@@ -1214,6 +1360,7 @@ def sync_trade_performance_for_date(target_date: str) -> dict[str, Any]:
     projection = {"contract": "scale_in_execution_projection_v1", "target_date": target_date,
                   "record_ids": sorted({row["record_id"] for row in inventory}), "rows": []}
     scanner_source_quality: dict[str, Any] = {}
+    completion_census_quality: dict[str, Any] = {}
     rec_date = _parse_date(target_date)
 
     with _DB.get_session() as session:
@@ -1227,6 +1374,7 @@ def sync_trade_performance_for_date(target_date: str) -> dict[str, Any]:
             target_date,
             scale_in_projection=projection if inventory else None,
             scanner_source_quality=scanner_source_quality,
+            completion_census_quality=completion_census_quality,
         )
     except FactSyncSourceError as exc:
         receipt = _write_status(
@@ -1236,6 +1384,7 @@ def sync_trade_performance_for_date(target_date: str) -> dict[str, Any]:
                 issues=[str(exc)], prior_fact_count=prior_fact_count,
                 source_digest=_canonical_sha256([]),
                 scanner_source_quality=scanner_source_quality,
+                completion_census_quality=completion_census_quality,
             ),
         )
         raise FactSyncSourceError(
@@ -1256,6 +1405,7 @@ def sync_trade_performance_for_date(target_date: str) -> dict[str, Any]:
                 prior_fact_count=prior_fact_count,
                 source_digest=source_digest,
                 scanner_source_quality=scanner_source_quality,
+                completion_census_quality=completion_census_quality,
             ),
         )
         raise FactSyncSourceError(
@@ -1304,6 +1454,7 @@ def sync_trade_performance_for_date(target_date: str) -> dict[str, Any]:
             prior_fact_count=prior_fact_count,
             source_digest=source_digest,
             scanner_source_quality=scanner_source_quality,
+            completion_census_quality=completion_census_quality,
         )},
     )
 
@@ -1348,6 +1499,20 @@ def build_strategy_position_performance_report(
                     )
                     .all()
                 )
+
+            if summary_rows:
+                source_snapshot = load_monitor_snapshot("trade_review", target_date)
+                has_new_census = isinstance(
+                    ((source_snapshot or {}).get("meta") or {}).get(
+                        "completed_census_manifest"
+                    ), dict
+                )
+                if target_date >= COMPLETED_CENSUS_CONTRACT_FROM or has_new_census:
+                    issue = _saved_fact_generation_issue(
+                        target_date, snapshot=source_snapshot
+                    )
+                    if issue:
+                        raise FactSyncSourceError(issue)
 
             facts = (
                 session.query(
@@ -1437,7 +1602,7 @@ def build_strategy_position_performance_report(
         ]
         fact_rows = _enrich_scanner_provenance(fact_rows, target_date)
         return _build_report_payload(target_date, fact_rows, rows)
-    except Exception:
+    except Exception as exc:
         facts, _warnings = _build_trade_fact_rows(target_date)
         rows = _aggregate_daily_rows(facts)
         fact_rows = [
@@ -1481,7 +1646,18 @@ def build_strategy_position_performance_report(
             }
             for row in rows
         ]
-        return _build_report_payload(target_date, fact_rows, row_payloads)
+        payload = _build_report_payload(target_date, fact_rows, row_payloads)
+        payload["source_quality"] = {
+            "db_fact_cache_status": (
+                "stale_generation_rejected_rebuilt_read_only"
+                if isinstance(exc, FactSyncSourceError)
+                else "db_unavailable_rebuilt_read_only"
+            ),
+            "reason": (str(exc) if isinstance(exc, FactSyncSourceError)
+                       else "db_read_failed"),
+            "warning_count": len(_warnings),
+        }
+        return payload
 
 
 def main(argv: list[str] | None = None) -> int:

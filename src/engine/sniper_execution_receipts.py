@@ -11181,6 +11181,8 @@ def _handle_add_buy_execution(
         execution_no=execution_no or "-",
         fill_price=round(float(exec_price or 0.0), 4),
         fill_qty=int(exec_qty or 0),
+        pre_fill_buy_qty=int(old_qty or 0),
+        post_fill_buy_qty=int(new_qty or 0),
         bundle_requested_qty=int(requested_qty or 0),
         bundle_filled_qty=int(filled_qty or 0),
         order_requested_qty=int(order_requested_qty or 0),

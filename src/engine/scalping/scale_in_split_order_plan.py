@@ -32,13 +32,14 @@ from src.trading.order.split_execution_math import (
 )
 from src.trading.order.tick_utils import clamp_price_to_tick
 from src.utils.constants import DATA_DIR
-from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
+from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl, iter_jsonl_objects_strict
 from src.utils.market_day import count_krx_trading_days, is_krx_trading_day
 
 SCHEMA_VERSION = "scale_in_split_order_plan_v4"
 POLICY_SCHEMA_VERSION = "scale_in_split_order_policy_v4"
 ATOMIC_EXECUTION_SIZING_REQUIRED_FROM = "2026-09-15"
 ATOMIC_PRICE_PLAN_REQUIRED_FROM = "2026-09-16"
+POSITION_QUANTITY_RECEIPT_REQUIRED_FROM = "2026-09-28"
 ATOMIC_EXECUTION_SIZING_SCHEMA = "scale_in_execution_sizing_plan_v1"
 ATOMIC_EXECUTION_SIZING_BASELINE_POLICY = "avg_down_execution_sizing_baseline_v1"
 ATOMIC_PRICE_PLAN_SCHEMA = "scale_in_price_plan_v1"
@@ -75,6 +76,14 @@ _INPUT_PROJECTION_KEYS = (
     "stage",
     "position_episode_id",
     "scale_in_decision_id",
+    "main_lifecycle_id",
+    "main_lifecycle_attempt_id",
+    "main_lifecycle_record_id",
+    "main_lifecycle_venue",
+    "main_lifecycle_session_bucket",
+    "pipeline_lifecycle_population_scope",
+    "position_tag",
+    "account_id",
     "broker_session",
     "scale_in_quote_source_receipt",
     "market_data_effective_quote_observed_epoch",
@@ -122,6 +131,8 @@ _INPUT_PROJECTION_KEYS = (
     "order_requested_qty",
     "order_filled_qty",
     "fill_qty",
+    "pre_fill_buy_qty",
+    "post_fill_buy_qty",
     "request_price",
     "final_price",
     "resolved_price",
@@ -435,7 +446,9 @@ def _source_has_avg_down_attempt(path: Path) -> bool:
     return False
 
 
-def _iter_input_events(target_date: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def _iter_input_events(
+    target_date: str, *, strict: bool = False
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     clean_policy = clean_baseline_policy()
     events: list[dict[str, Any]] = []
     excluded_pre_baseline = 0
@@ -445,10 +458,10 @@ def _iter_input_events(target_date: str) -> tuple[list[dict[str, Any]], dict[str
         "pipeline_events": _pipeline_events_path(target_date),
         "threshold_events": _threshold_events_path(target_date),
     }
-    attempt_source_present = any(
+    attempt_source_present = strict or any(
         _source_has_avg_down_attempt(path) for path in source_paths.values()
     )
-    if not attempt_source_present:
+    if not attempt_source_present and not strict:
         return [], {
             "source_paths": {
                 name: (
@@ -470,21 +483,29 @@ def _iter_input_events(target_date: str) -> tuple[list[dict[str, Any]], dict[str
             "clean_tuning_baseline": clean_policy,
         }
     for source_name, path in source_paths.items():
-        for event in iter_jsonl(path):
-            source_event_count += 1
-            fields = _event_fields(event)
-            event_date = _event_date(fields) or target_date
-            if not is_date_allowed(event_date, clean_policy):
-                excluded_pre_baseline += 1
-                continue
-            if event_date != target_date:
-                excluded_other_date += 1
-                continue
-            projected = _project_relevant_input_event(
-                event, source_name=source_name, event_date=event_date
-            )
-            if projected is not None:
-                events.append(projected)
+        if strict and not existing_or_gzip_path(path).exists():
+            if source_name == "pipeline_events":
+                raise ValueError("execution_pipeline_source_missing")
+            continue
+        reader = iter_jsonl_objects_strict(path) if strict else iter_jsonl(path)
+        try:
+            for event in reader:
+                source_event_count += 1
+                fields = _event_fields(event)
+                event_date = _event_date(fields) or target_date
+                if not is_date_allowed(event_date, clean_policy):
+                    excluded_pre_baseline += 1
+                    continue
+                if event_date != target_date:
+                    excluded_other_date += 1
+                    continue
+                projected = _project_relevant_input_event(
+                    event, source_name=source_name, event_date=event_date
+                )
+                if projected is not None:
+                    events.append(projected)
+        except FileNotFoundError as exc:
+            raise ValueError("execution_source_disappeared") from exc
     return events, {
         "source_paths": {
             name: (
@@ -495,7 +516,14 @@ def _iter_input_events(target_date: str) -> tuple[list[dict[str, Any]], dict[str
             for name, path in source_paths.items()
         },
         "source_read_contract": {
-            "read_mode": "streaming_relevant_field_projection",
+            "read_mode": (
+                "strict_streaming_relevant_field_projection" if strict
+                else "streaming_relevant_field_projection"
+            ),
+            "status": (
+                "valid_empty" if strict and source_event_count == 0
+                else "complete" if strict else "not_strictly_verified"
+            ),
             "full_source_materialized": False,
             "source_event_count": source_event_count,
             "retained_event_count": len(events),
@@ -830,7 +858,10 @@ def _event_matches_anchor(
     event_record_id = _record_id(event)
     if anchor_record_id and event_record_id and anchor_record_id != event_record_id:
         return False
-    for key in ("position_episode_id", "broker_route", "broker_session"):
+    for key in (
+        "position_episode_id", "scale_in_decision_id", "broker_route",
+        "broker_session",
+    ):
         if anchor.get(key) and event.get(key) and anchor[key] != event[key]:
             return False
     stage = str(event.get("stage") or "")
@@ -1051,6 +1082,8 @@ def _counterfactual_for_anchor(
         "scale_in_receipt_quality_complete": False,
         "terminal_sell_price": None,
         "terminal_receipt_quality_complete": False,
+        "broker_actual_cost_krw": None,
+        "broker_actual_realized_pnl_krw": None,
         "real_outcome_joined": False,
         "additional_mfe_mae_joined": False,
         "actual_split_applied": _safe_bool(
@@ -1169,6 +1202,8 @@ def _counterfactual_for_anchor(
                 for key in (
                     "fill_price",
                     "fill_qty",
+                    "pre_fill_buy_qty",
+                    "post_fill_buy_qty",
                     "receipt_economics_complete",
                     "receipt_quantity_contract_complete",
                     "receipt_unit_fill_consistent",
@@ -1197,6 +1232,35 @@ def _counterfactual_for_anchor(
             terminal_event = terminal_event or event
     fill_rows = list(fill_rows_by_key.values())
     actual_fill_qty = sum(_safe_int(item.get("fill_qty"), 0) for item in fill_rows)
+    position_quantity_fields_present = bool(fill_rows) and all(
+        type(item.get("pre_fill_buy_qty")) is int
+        and type(item.get("post_fill_buy_qty")) is int
+        for item in fill_rows
+    )
+    position_quantity_verified = position_quantity_fields_present and all(
+        item["pre_fill_buy_qty"] >= 0
+        and item["post_fill_buy_qty"] - item["pre_fill_buy_qty"]
+        == _safe_int(item.get("fill_qty"), 0)
+        for item in fill_rows
+    )
+    ordered_fill_rows = sorted(
+        fill_rows,
+        key=lambda item: _event_time(item) or datetime.min.replace(tzinfo=timezone.utc),
+    )
+    if position_quantity_verified and any(
+        earlier["post_fill_buy_qty"] != later["pre_fill_buy_qty"]
+        for earlier, later in zip(ordered_fill_rows, ordered_fill_rows[1:])
+    ):
+        position_quantity_verified = False
+    anchor_date = str(anchor.get("source_date") or _event_date(anchor) or "")
+    if anchor_date < POSITION_QUANTITY_RECEIPT_REQUIRED_FROM:
+        position_quantity_status = "legacy_unobserved"
+    elif position_quantity_verified:
+        position_quantity_status = "verified"
+    elif not position_quantity_fields_present:
+        position_quantity_status = "missing_position_quantity_receipt"
+    else:
+        position_quantity_status = "position_quantity_mismatch"
     fill_notional = sum(
         _safe_int(item.get("fill_qty"), 0)
         * _price_from_fields(item, ("fill_price", "assumed_fill_price"))
@@ -1240,6 +1304,16 @@ def _counterfactual_for_anchor(
         if terminal_event and _event_time(terminal_event)
         else None
     )
+    terminal_lot_basis_complete = bool(
+        terminal_event
+        and _safe_int(terminal_event.get("sell_qty")) >= actual_fill_qty > 0
+        and terminal_event.get("profit_rate") is not None
+        and not any(
+            "partial" in str(event.get("stage") or "")
+            and _event_matches_anchor(event, anchor, exact_only=True)
+            for event in exact_events
+        )
+    )
     result.update(
         {
             "execution_price_samples": [
@@ -1253,21 +1327,31 @@ def _counterfactual_for_anchor(
                 "full_fill" if full_fill_complete else "partial_or_unfilled"
             ),
             "actual_fill_qty": actual_fill_qty,
+            "position_quantity_verified": (
+                position_quantity_verified
+                if position_quantity_status != "legacy_unobserved" else None
+            ),
+            "position_quantity_status": position_quantity_status,
             "actual_fill_price": actual_fill_price,
             "scale_in_receipt_quality_complete": scale_in_receipt_quality_complete,
             "terminal_sell_price": terminal_sell_price or None,
             "outcome_available_at": (_event_time(terminal_event).isoformat() if terminal_event and _event_time(terminal_event) else None),
-            "terminal_lot_basis_complete": bool(terminal_event and _safe_int(terminal_event.get("sell_qty")) >= actual_fill_qty > 0
-                and terminal_event.get("profit_rate") is not None
-                and not any("partial" in str(e.get("stage") or "") and _event_matches_anchor(e, anchor, exact_only=True) for e in exact_events)),
+            "terminal_lot_basis_complete": terminal_lot_basis_complete,
             "anchor_source": {key: value for key, value in anchor.items() if key in _INPUT_PROJECTION_KEYS or key in {"source_date", "source_name"}},
             "terminal_receipt_quality_complete": terminal_receipt_quality_complete,
             "real_outcome_joined": bool(
                 exact_identity
                 and full_fill_complete
                 and scale_in_receipt_quality_complete
+                and (
+                    position_quantity_status == "legacy_unobserved"
+                    or position_quantity_verified
+                )
                 and terminal_sell_price > 0
                 and terminal_receipt_quality_complete
+                and terminal_elapsed is not None
+                and terminal_elapsed >= 0
+                and terminal_lot_basis_complete
             ),
         }
     )
@@ -2588,17 +2672,68 @@ def _fact_sync_receipt(target_date: str) -> dict[str, Any]:
 
 def _conditioned_source_events(target_date: str, receipt: dict, records: set[str]) -> tuple[list, dict]:
     projection = receipt.get("scale_in_execution_projection")
+    if "scale_in_execution_projection" in receipt and (
+        not isinstance(projection, dict)
+        or projection.get("contract") != "scale_in_execution_projection_v1"
+    ):
+        raise ValueError("execution_projection_contract_invalid")
     if isinstance(projection, dict) and projection.get("contract") == "scale_in_execution_projection_v1":
         rows = projection.get("rows")
         if projection.get("target_date") != target_date or not isinstance(rows, list):
             raise ValueError("execution_projection_contract_invalid")
-        return rows, {"source_read_contract": {"read_mode": "exact_fact_sync_projection", "retained_event_count": len(rows)}}
+        selected: list[dict[str, Any]] = []
+        identities: dict[tuple[str, ...], str] = {}
+        duplicate_count = 0
+        for row in rows:
+            if not isinstance(row, dict) or row.get("source_date") != target_date:
+                raise ValueError("execution_projection_row_date_invalid")
+            stamp = _event_time(row)
+            if stamp is None or stamp.date().isoformat() != target_date:
+                raise ValueError("execution_projection_row_date_invalid")
+            identity = (
+                str(row.get("source_name") or ""),
+                str(row.get("stage") or ""),
+                _record_id(row),
+                _stock_code(row),
+                ",".join(sorted(_order_numbers(row))),
+                str(row.get("execution_no") or ""),
+                stamp.isoformat(),
+            )
+            digest = _semantic_digest(row)
+            previous = identities.get(identity)
+            if previous is not None:
+                if previous != digest:
+                    raise ValueError("execution_projection_identity_conflict")
+                duplicate_count += 1
+                continue
+            identities[identity] = digest
+            if _record_id(row) in records:
+                selected.append(row)
+        return selected, {"source_read_contract": {
+            "read_mode": "exact_fact_sync_projection",
+            "catalog_sha256": receipt.get("artifact_sha256") or _semantic_digest(receipt),
+            "projection_sha256": _semantic_digest(rows),
+            "pipeline_generation_sha256": (
+                receipt["scanner_source_quality"].get("source_generation_sha256")
+                if isinstance(receipt.get("scanner_source_quality"), dict)
+                else None
+            ),
+            "raw_row_count": len(rows),
+            "retained_event_count": len(selected),
+            "duplicate_count": duplicate_count,
+            "source_date": target_date,
+        }}
     paths = [_pipeline_events_path(target_date), _threshold_events_path(target_date)]
+    if not existing_or_gzip_path(paths[0]).exists():
+        raise ValueError("execution_pipeline_source_missing")
+    late_path = paths[0].with_name(f"{paths[0].stem}.late.jsonl")
+    if existing_or_gzip_path(late_path).exists():
+        raise ValueError("bounded_execution_projection_missing")
     for path in paths:
         resolved = existing_or_gzip_path(path)
         if resolved.exists() and (resolved.suffix == ".gz" or resolved.stat().st_size > 64 * 1024 * 1024):
             raise ValueError("bounded_execution_projection_missing")
-    rows, summary = _iter_input_events(target_date)
+    rows, summary = _iter_input_events(target_date, strict=True)
     return [r for r in rows if _record_id(r) in records], summary
 
 
@@ -2666,9 +2801,11 @@ def build_report(target_date: str) -> dict[str, Any]:
     ready = [r for r in applicable if r.get("status") == "COMPLETED" and r.get("sell_price")
              and r.get("sell_time") and r.get("profit_rate") is not None]
     source_rows = []
+    catalog_generations = {target_date: _semantic_digest(receipt)} if receipt else {}
     try:
         for day in sorted({r["source_date"] for r in ready} | {str(r["sell_time"])[:10] for r in ready}):
             source = receipt if day == target_date else _fact_sync_receipt(day)
+            catalog_generations[day] = _semantic_digest(source)
             for row in (source.get("scale_in_execution_projection") or {}).get("rows", []):
                 for fill in ready:
                     stamp = _event_time(row)
@@ -2685,6 +2822,10 @@ def build_report(target_date: str) -> dict[str, Any]:
     comparison_contract = {"contract": ECONOMIC_GATE_VERSION, "cost_rate": get_trade_cost_rate(),
                            "incumbent_buckets": (incumbent or {}).get("buckets", {})}
     versions = {str(fill["history_id"]): _semantic_digest({"fill": fill, "comparison": comparison_contract,
+                "fact_catalog_generations": {
+                    day: catalog_generations.get(day)
+                    for day in {fill["source_date"], str(fill["sell_time"])[:10]}
+                },
                 "source_rows": sorted((row for row in source_rows if _record_id(row) == fill["record_id"]),
                                       key=lambda r: (_event_time(r).isoformat(), _semantic_digest(r)))}) for fill in ready}
     key = _semantic_digest(versions)
@@ -2968,6 +3109,10 @@ def _build_report_from_events(target_date: str, *, input_events=None, incumbent=
         if isinstance(item, dict)
     )
     daily_attempt_outcomes = list(daily_attempt_outcomes_by_id.values())
+    position_quantity_status_counts = dict(Counter(
+        str(row.get("position_quantity_status") or "unobserved")
+        for row in daily_attempt_outcomes
+    ))
     rolling_unique_attempt_count = sum(
         _safe_int(item.get("unique_attempt_count"), 0) for item in candidates
     )
@@ -3002,6 +3147,7 @@ def _build_report_from_events(target_date: str, *, input_events=None, incumbent=
                 for item in candidates
             ),
             "daily_unique_attempt_count": len(daily_attempt_outcomes),
+            "position_quantity_status_counts": position_quantity_status_counts,
             "rolling_unique_attempt_count": rolling_unique_attempt_count,
             "rolling_eligible_runtime_attempt_count": rolling_eligible_attempt_count,
             "bucket_count": len(by_bucket),

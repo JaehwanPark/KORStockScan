@@ -13,6 +13,9 @@ from typing import Any
 
 from src.engine.automation.source_quality_clean_baseline import clean_baseline_policy
 from src.engine.monitor_snapshot_runtime import guard_stdin_heavy_build
+from src.engine.sniper_trade_review_report import (
+    COMPLETED_CENSUS_CONTRACT_FROM, verify_completed_census_manifest,
+)
 from src.engine.scalping.trailing_threshold_policy import (
     GRID_VERSION as SCALP_TRAILING_GRID_VERSION,
     bootstrap_receipt as scalp_trailing_bootstrap_receipt,
@@ -137,8 +140,9 @@ def _sor_krx_post_sell_user_override(trade: dict, candidate: dict) -> bool:
         and trade.get("terminal_decision_authority")
         == "broker_sell_fill_observation_only"
         and trade.get("sell_quantity_conserved") is True
-        and trade.get("realized_pnl_krw_source")
-        == "broker_fill_prices_fee_aware"
+        and bool(trade.get("sell_order_no"))
+        and bool(trade.get("sell_execution_no"))
+        and _parse_aware_dt(trade.get("exact_sell_fill_time")) is not None
     )
 
 
@@ -299,6 +303,8 @@ def _collect_completed_trade_rows(
     rows: list[dict] = []
     gaps: list[dict] = []
     seen: dict[str, dict] = {}
+    seen_dates: dict[str, str] = {}
+    conflicted_ids: set[str] = set()
     for snapshot in snapshots:
         if snapshot.get("code") or snapshot.get("since"):
             gaps.append(
@@ -315,6 +321,28 @@ def _collect_completed_trade_rows(
             continue
         sections = snapshot.get("sections") or {}
         projection = sections.get("completed_trade_projection")
+        snapshot_date = str(snapshot.get("date") or "")
+        if (snapshot_date >= COMPLETED_CENSUS_CONTRACT_FROM
+                and (snapshot.get("meta") or {}).get("snapshot_profile")
+                != "postclose_exit"):
+            gaps.append({
+                "date": snapshot_date,
+                "reason": "completed_census_profile_not_postclose_exit",
+            })
+            continue
+        if isinstance(projection, list) and (
+            (snapshot.get("meta") or {}).get("completed_census_manifest") is not None
+            or snapshot_date >= COMPLETED_CENSUS_CONTRACT_FROM
+        ):
+            issue = verify_completed_census_manifest(snapshot, snapshot_date)
+            if issue:
+                gaps.append({"date": snapshot_date, "reason": issue})
+                continue
+        elif isinstance(projection, list):
+            gaps.append({
+                "date": snapshot_date,
+                "reason": "legacy_completion_census_unsealed",
+            })
         recent = sections.get("recent_trades") or []
         candidates = projection if isinstance(projection, list) else recent
         completed = [
@@ -396,9 +424,11 @@ def _collect_completed_trade_rows(
             )
         for row in completed:
             trade_id = _trade_id(row)
+            if trade_id in conflicted_ids:
+                continue
             previous = seen.get(trade_id)
             if previous is not None:
-                if previous != row:
+                if previous != row or seen_dates[trade_id] != snapshot_date:
                     gaps.append(
                         {
                             "date": snapshot.get("date"),
@@ -406,8 +436,11 @@ def _collect_completed_trade_rows(
                             "id": trade_id,
                         }
                     )
+                    conflicted_ids.add(trade_id)
+                    rows = [item for item in rows if _trade_id(item) != trade_id]
                 continue
             seen[trade_id] = row
+            seen_dates[trade_id] = snapshot_date
             rows.append(row)
     return rows, gaps
 
@@ -568,9 +601,18 @@ def _strict_completed_reasons(row: dict, *, clean_start: str) -> list[str]:
         reasons.append("source_gap_sell_quantity_not_conserved")
     if row.get("terminal_profit_rate_reconciled") is not True:
         reasons.append("source_gap_profit_rate_unreconciled")
-    if (row.get("realized_pnl_krw_source") != "broker_fill_prices_fee_aware"
+    cost_source = row.get("realized_pnl_krw_source")
+    if (cost_source not in {"broker_fill_prices_fee_aware",
+                            "broker_actual_fee_reconciled"}
             or _safe_float(row.get("realized_pnl_krw"), None) is None):
         reasons.append("source_gap_exact_cost_missing")
+    if (str(row.get("completion_observed_date") or "")[:10]
+            >= COMPLETED_CENSUS_CONTRACT_FROM
+            and (cost_source != "broker_actual_fee_reconciled"
+                 or row.get("broker_actual_cost_observed") is not True
+                 or _safe_float(row.get("broker_actual_fees_taxes_krw"), None)
+                 is None)):
+        reasons.append("source_gap_broker_actual_cost_missing")
     return sorted(set(reasons))
 
 
@@ -2526,6 +2568,17 @@ def build_holding_exit_observation_report(
         performance_paths.append(str(perf_path))
 
     completed_rows, completed_gaps = _collect_completed_trade_rows(trade_snapshots)
+    census_receipts = [
+        item for snapshot in trade_snapshots
+        if isinstance(item := (snapshot.get("meta") or {}).get(
+            "completed_census_manifest"), dict)
+        and (str(snapshot.get("date") or "") < COMPLETED_CENSUS_CONTRACT_FROM
+             or (snapshot.get("meta") or {}).get("snapshot_profile")
+             == "postclose_exit")
+        and verify_completed_census_manifest(
+            snapshot, str(snapshot.get("date") or "")
+        ) is None
+    ]
     loaded_trade_dates = {str(item.get("date") or "") for item in trade_snapshots}
     for missing_date in dates:
         if missing_date in loaded_trade_dates:
@@ -2687,6 +2740,29 @@ def build_holding_exit_observation_report(
             "complete": not completed_gaps,
             "source_gap_dates": completed_gaps,
             "canonical_completed_rows": len(completed_rows),
+            "raw_terminal_events": sum(
+                int(item.get("raw_terminal_count") or 0) for item in census_receipts
+            ),
+            "raw_terminal_count_scope": (
+                "sealed_dates_only" if census_receipts else "unobserved"
+            ),
+            "sealed_source_generations": [{
+                "source_date": item.get("source_date"),
+                "profile": item.get("profile"),
+                "run_id": item.get("run_id"),
+                "source_receipts_sha256": item.get("source_receipts_sha256"),
+                "source_receipts_status": item.get("source_receipts_status"),
+                "input_generation_sha256": item.get("input_generation_sha256"),
+                "projection_sha256": item.get("projection_sha256"),
+                "raw_terminal_count": item.get("raw_terminal_count"),
+                "projected_count": item.get("projected_count"),
+                "unobserved_count": item.get("unobserved_count"),
+            } for item in census_receipts],
+            "quarantined_duplicate_ids": sorted({
+                gap["id"] for gap in completed_gaps
+                if gap.get("reason") == "duplicate_completed_trade_conflict"
+                and gap.get("id")
+            }),
             "main_completed_rows": len(main_completed_rows),
             "other_owner_excluded_rows": len(completed_rows) - len(main_completed_rows),
             "valid_profit_rows": len(valid_trades),
@@ -2779,12 +2855,25 @@ def build_holding_exit_observation_report(
             "post_fallback_cutoff": POST_FALLBACK_CUTOFF.strftime("%Y-%m-%d %H:%M:%S"),
         },
     }
-    economic_input_complete = bool(
+    cost_input_complete = bool(
         not completed_gaps
         and strict_trades
         and len(strict_trades) == len(valid_trades)
         and len(valid_trades) == len(main_completed_rows)
         and position_coverage["exact_cost_trades"] == len(strict_trades)
+    )
+    decision_economic_eligible_ids = sorted(
+        row["record_id"] for row in position_outcomes
+        if row["realized_pnl_krw"] is not None
+        and row["exit_rule_provenance"] == "observed"
+    )
+    report["completed_population_quality"][
+        "decision_economic_eligible_ids"
+    ] = decision_economic_eligible_ids
+    report["cost_input_complete"] = cost_input_complete
+    economic_input_complete = bool(
+        cost_input_complete
+        and len(decision_economic_eligible_ids) == len(strict_trades)
     )
     report["economic_input_complete"] = economic_input_complete
     tuning_input_complete = bool(
@@ -2794,8 +2883,7 @@ def build_holding_exit_observation_report(
         and position_coverage["full_post_sell_observation_trades"] == len(strict_trades)
     )
     report["tuning_input_complete"] = tuning_input_complete
-    if (completed_gaps or len(strict_trades) != len(valid_trades)
-            or len(valid_trades) != len(main_completed_rows)):
+    if not economic_input_complete:
         position_coverage["whole_cohort_pnl_krw"] = None
         for rule in position_coverage["by_exit_rule"].values():
             rule["whole_rule_pnl_krw"] = None

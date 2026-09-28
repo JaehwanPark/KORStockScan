@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import hashlib
 import json
 from dataclasses import replace
@@ -28,6 +29,7 @@ from src.engine.monitoring.low_price_two_leg_tuning import (
     extract_profile_row,
     load_realized_pnl_ka10073,
 )
+
 from src.engine.monitoring.low_price_two_leg_entry_spot_research import candidate_grid
 from src.trading.low_price_two_leg.gateway import (
     CurrentOpenOrderSnapshot,
@@ -150,6 +152,204 @@ from src.trading.low_price_two_leg.service import _profile_with_applied_policy
 from src.trading.order import regular_two_leg_machine as regular_machine_module
 from src.trading.order.regular_two_leg_machine import KST
 from src.trading.order.tick_utils import move_price_by_ticks
+
+
+def test_durable_low_price_capture_rejects_cross_profile_symbol_and_session(tmp_path):
+    from src.engine.monitoring.low_price_two_leg_tuning import durable_observation_manifest
+
+    day = "2026-09-28"
+    profile = PROFILES["cj_cgv_afternoon"]
+    body = {
+        "schema": "low_price_actual_economic_observation_v1",
+        "logical_date": day, "owner": "episode", "profile_id": profile.profile_id,
+        "symbol": "000000", "session": "WRONG_SESSION",
+        "policy_hash": "a" * 64, "observed_at_kst": "2026-09-28T15:00:00+09:00",
+        "trade_date": day, "legs": [], "position_qty": 0,
+    }
+    encoded = json.dumps(body, sort_keys=True, separators=(",", ":"))
+    source = tmp_path / f"pipeline_events_{day}.jsonl"
+    source.write_text(json.dumps({"stage": "low_price_actual_economic_observation",
+        "fields": {"profile_id": profile.profile_id, "observation_json": encoded,
+                   "observation_sha256": hashlib.sha256(encoded.encode()).hexdigest()}}) + "\n")
+    audit_dir = tmp_path / "audit"
+    audit_dir.mkdir()
+    (audit_dir / f"observation_source_quality_audit_{day}.json").write_text(json.dumps({
+        "source": {"pipeline_events": str(source), "logical_content_sha256": "source",
+                   "generation": {}, "audited_stage_counts": {
+                       "low_price_actual_economic_observation": 1}},
+    }))
+    result = durable_observation_manifest(day, audit_dir)
+    assert result["status"] == "source_gap"
+    assert result["invalid_event_count"] == 1
+
+
+def test_fixed_cost_low_price_estimate_never_becomes_realized_pnl():
+    from src.engine.monitoring.low_price_two_leg_tuning import _aggregate
+
+    row = _tuning_row("cj_cgv_afternoon", 1, strong=True)
+    row["broker_realized_economics"] = {
+        "status": "fixed_cost_fallback", "selection_effect": False,
+    }
+    summary = _aggregate([row])
+    assert summary["fixed_cost_estimate_net_profit_krw"] is not None
+    assert summary["broker_realized_net_profit_krw"] is None
+    assert summary["notional_weighted_ev_pct"] is None
+
+
+def test_low_price_first_reader_rejects_stale_state_generation():
+    from src.engine.monitoring.low_price_two_leg_tuning import _bind_durable_state_capture
+
+    row = {"attempted": True, "eligible_for_tuning": True,
+           "source_quality": "pass", "source_quality_reasons": [],
+           "state_source_sha256": "a" * 64}
+    capture = {"status": "pass", "profile": {
+        "latest_real_state_source_sha256": "b" * 64,
+    }}
+    _bind_durable_state_capture(row, capture)
+    assert row["eligible_for_tuning"] is False
+    assert row["source_quality"] == "gap"
+    assert "durable_state_generation_mismatch" in row["source_quality_reasons"]
+    no_attempt = {"attempted": False, "eligible_for_tuning": True,
+                  "source_quality": "pass", "source_quality_reasons": []}
+    _bind_durable_state_capture(no_attempt, {"status": "partial", "profile": None})
+    assert no_attempt["source_quality"] == "gap"
+    assert "durable_profile_observation_missing_or_invalid" in no_attempt["source_quality_reasons"]
+
+
+def test_low_price_native_capture_generation_accepts_real_and_isolates_duplicate(tmp_path):
+    from src.engine.monitoring.low_price_two_leg_tuning import (
+        _bind_durable_state_capture, durable_observation_manifest,
+    )
+    from src.trading.low_price_two_leg.machine import economic_state_source_sha256
+
+    day = "2026-09-28"
+    profile = PROFILES["cj_cgv_afternoon"]
+    state = {"schema": f"low_price_two_leg_{profile.profile_id}_state_v1",
+             "trade_date": day, "status": "NO_TRADE", "legs": [], "position_qty": 0}
+    state_sha = economic_state_source_sha256(state)
+
+    def event(mode, observed_at, owner_profile=profile):
+        owner_state = {**state, "schema": f"low_price_two_leg_{owner_profile.profile_id}_state_v1"}
+        body = {"schema": "low_price_actual_economic_observation_v1",
+                "logical_date": day, "owner": "episode", "profile_id": owner_profile.profile_id,
+                "symbol": owner_profile.symbol, "session": owner_profile.session,
+                "policy_hash": "a" * 64, "execution_mode": mode,
+                "observed_at_kst": observed_at, "trade_date": day,
+                "legs": [], "position_qty": 0,
+                "state_projection": {key: owner_state.get(key) for key in (
+                    "schema", "trade_date", "status", "attempt_consumed", "signal_features",
+                    "legs", "position_qty", "owned_order_nos", "last_evaluated_bar",
+                    "last_action", "blocked_reason")},
+                "state_source_sha256": economic_state_source_sha256(owner_state)}
+        encoded = json.dumps(body, sort_keys=True, separators=(",", ":"))
+        return json.dumps({"stage": "low_price_actual_economic_observation", "fields": {
+            "profile_id": owner_profile.profile_id, "policy_hash": "a" * 64,
+            "observation_json": encoded,
+            "observation_sha256": hashlib.sha256(encoded.encode()).hexdigest()}}) + "\n"
+
+    raw = event("sim", "2026-09-28T14:00:00+09:00") + event("real", "2026-09-28T14:01:00+09:00")
+    source = tmp_path / f"pipeline_events_{day}.jsonl"
+    audit_dir = tmp_path / "audit"
+    audit_dir.mkdir()
+
+    def audit(content, expected):
+        (audit_dir / f"observation_source_quality_audit_{day}.json").write_text(json.dumps({
+            "source": {"pipeline_events": str(source),
+                       "logical_content_sha256": hashlib.sha256(content.encode()).hexdigest(),
+                       "generation": {"source_date": day},
+                       "audited_stage_counts": {"low_price_actual_economic_observation": expected}},
+        }))
+
+    source.write_text(raw)
+    audit(raw, 2)
+    capture = durable_observation_manifest(day, audit_dir)
+    assert capture["status"] == "pass"
+    assert (capture["event_count"], capture["valid_event_count"], capture["invalid_event_count"]) == (2, 2, 0)
+    profile_capture = capture["profiles"][profile.profile_id]
+    assert (profile_capture["real_events"], profile_capture["sim_events"]) == (1, 1)
+    row = {"attempted": True, "eligible_for_tuning": True, "source_quality": "pass",
+           "state_source_sha256": state_sha, "source_quality_reasons": []}
+    _bind_durable_state_capture(row, {"status": capture["status"], "profile": profile_capture})
+    assert row["eligible_for_tuning"] is True
+
+    source.unlink()
+    with gzip.open(source.with_name(source.name + ".gz"), "wb") as handle:
+        handle.write(raw.encode())
+    assert durable_observation_manifest(day, audit_dir)["status"] == "pass"
+
+    other_profile = PROFILES["cj_cgv_late_morning"]
+    duplicate = (raw + event("real", "2026-09-28T14:01:00+09:00")
+                 + event("real", "2026-09-28T14:02:00+09:00", other_profile))
+    source.write_text(duplicate)
+    audit(duplicate, 4)
+    bad = durable_observation_manifest(day, audit_dir)
+    assert bad["status"] == "partial"
+    assert bad["invalid_reasons"]["duplicate_observation_identity"] == 1
+    assert bad["profiles"][profile.profile_id]["status"] == "source_gap"
+    assert bad["profiles"][other_profile.profile_id]["status"] == "pass"
+    unaffected = {"attempted": True, "eligible_for_tuning": True,
+                  "source_quality": "pass", "source_quality_reasons": [],
+                  "state_source_sha256": bad["profiles"][other_profile.profile_id]["latest_real_state_source_sha256"]}
+    _bind_durable_state_capture(unaffected, {"status": "partial",
+                                             "profile": bad["profiles"][other_profile.profile_id]})
+    assert unaffected["eligible_for_tuning"] is True
+
+    source.unlink()
+    source.with_name(source.name + ".gz").write_bytes(b"not-gzip")
+    assert durable_observation_manifest(day, audit_dir)["status"] == "source_gap"
+
+    malformed = json.loads(event("real", "2026-09-28T14:03:00+09:00"))
+    malformed_body = json.loads(malformed["fields"]["observation_json"])
+    malformed_body["signal_features"] = ["invalid"]
+    malformed_encoded = json.dumps(malformed_body, sort_keys=True, separators=(",", ":"))
+    malformed["fields"]["observation_json"] = malformed_encoded
+    malformed["fields"]["observation_sha256"] = hashlib.sha256(malformed_encoded.encode()).hexdigest()
+    bad_raw = json.dumps(malformed) + "\n"
+    source.write_text(bad_raw)
+    audit(bad_raw, 1)
+    shape_gap = durable_observation_manifest(day, audit_dir)
+    assert shape_gap["status"] == "partial"
+    assert shape_gap["invalid_reasons"]["observation_features_or_bar_invalid"] == 1
+
+
+def test_low_price_valid_empty_is_distinct_from_missing_source(tmp_path):
+    from src.engine.monitoring.low_price_two_leg_tuning import durable_observation_manifest
+
+    day = "2026-09-28"
+    source = tmp_path / f"pipeline_events_{day}.jsonl"
+    source.write_bytes(b"")
+    (tmp_path / f"observation_source_quality_audit_{day}.json").write_text(json.dumps({
+        "source": {"pipeline_events": str(source),
+                   "logical_content_sha256": hashlib.sha256(b"").hexdigest(),
+                   "audited_stage_counts": {"low_price_actual_economic_observation": 0}},
+    }))
+    assert durable_observation_manifest(day, tmp_path)["status"] == "valid_empty"
+    source.unlink()
+    assert durable_observation_manifest(day, tmp_path)["status"] == "source_gap"
+
+
+def test_low_price_profile_leg_census_keeps_no_fill_out_of_realized_denominator():
+    from src.engine.monitoring.low_price_two_leg_tuning import _profile_leg_lineage_census
+
+    profile = PROFILES["cj_cgv_afternoon"]
+    first, second = profile.policy.entry_leg_ids
+    row = {"profile_id": profile.profile_id, "target_date": "2026-09-28",
+           "attempted": True, "source_quality": "pass", "state_source_sha256": "a" * 64,
+           "raw_leg_count": 2, "invalid_leg_count": 0,
+           "legs": [{"leg_id": first, "contract_valid": True,
+                     "status": "NO_FILL", "completed": False},
+                    {"leg_id": second, "contract_valid": True,
+                     "status": "NO_FILL", "completed": False}],
+           "broker_realized_economics": {"status": "not_applicable"},
+           "durable_observation_capture": {"profile": {"events": 3, "invalid_events": 1}}}
+    census = _profile_leg_lineage_census(row, profile)
+    assert census["observation_events"]["original"] == 4
+    assert census["observation_events"]["quarantined"] == 1
+    assert [(census["legs"][leg]["valid"], census["legs"][leg]["excluded_from_realized_economics"])
+            for leg in (first, second)] == [(1, 1), (1, 1)]
+    row["source_quality"] = "gap"
+    blocked = _profile_leg_lineage_census(row, profile)
+    assert all(blocked["legs"][leg]["quarantined"] == 1 for leg in (first, second))
 
 
 @pytest.fixture(autouse=True)
@@ -3576,8 +3776,9 @@ def test_tuning_accepts_ten_share_partial_fill_and_weights_actual_quantity(
     )
 
     assert row["source_quality"] == "pass"
-    assert summary["notional_weighted_ev_pct"] == pytest.approx(completed_profit_pct)
-    assert summary["attempted_notional_return_pct_diagnostic"] == pytest.approx(
+    assert summary["notional_weighted_ev_pct"] is None
+    assert summary["fixed_cost_estimate_ev_pct"] == pytest.approx(completed_profit_pct)
+    assert summary["attempted_notional_fixed_cost_return_pct_diagnostic"] == pytest.approx(
         expected_ev, abs=1e-6
     )
     assert (
@@ -3692,9 +3893,12 @@ def test_skt_partial_fill_fixed_cost_fallback_is_also_negative():
         "reason": "ka10073_loader_not_configured",
         "realization_date": "2026-08-20",
         "realization_date_source": "target_fill_reconciliation_date",
-        "selection_effect": True,
+        "selection_effect": False,
+        "realized_net_profit_krw": None,
+        "realized_net_return_pct": None,
     }
-    assert summary["broker_realized_net_profit_krw"] < 0
+    assert summary["broker_realized_net_profit_krw"] is None
+    assert summary["fixed_cost_estimate_net_profit_krw"] < 0
     assert summary["exact_broker_cost_completed_legs"] == 0
     assert summary["fixed_cost_estimate_completed_legs"] == 1
 
@@ -3967,7 +4171,7 @@ def test_tuning_keeps_profiles_separate_without_subset_promotion(tmp_path):
     legacy_candidate["source_report_schema"] = "low_price_two_leg_tuning_report_v1"
     assert validate_candidate(legacy_candidate) == (True, "valid")
     assert candidate["policy_mutations"] == []
-    assert any(
+    assert not any(
         item["diagnostic_economic_conditions_passed"]
         for item in candidate["profiles"][target]["evaluation"]["alternatives"]
     )
@@ -4151,13 +4355,9 @@ def test_tuning_rare_profile_uses_five_days_and_eight_broker_legs(tmp_path):
     )
     assert ready["policy_mutations"] == []
     evaluation = ready["profiles"][target]["evaluation"]
-    selected_evidence = next(
-        item
-        for item in evaluation["alternatives"]
-        if item["diagnostic_economic_conditions_passed"]
-    )
-    assert selected_evidence["clean_baseline_cumulative_outcome"]["eligible_days"] == 5
-    assert selected_evidence["clean_baseline_cumulative_outcome"]["completed_legs"] == 8
+    assert all(not item["diagnostic_economic_conditions_passed"] for item in evaluation["alternatives"])
+    assert evaluation["alternatives"][0]["clean_baseline_cumulative_outcome"]["eligible_days"] == 5
+    assert evaluation["alternatives"][0]["clean_baseline_cumulative_outcome"]["completed_legs"] == 8
 
     below_floor_rows = json.loads(json.dumps(rows))
     below_floor_rows[1]["legs"][0].update(
@@ -4215,13 +4415,8 @@ def test_tuning_rejects_higher_per_trade_ev_when_daily_net_profit_falls(tmp_path
 
     assert candidate["policy_mutations"] == []
     alternative = candidate["profiles"][target]["evaluation"]["alternatives"][0]
-    assert alternative["notional_ev_uplift_pct"] > 0.0
-    assert (
-        alternative[
-            "cost_adjusted_net_profit_uplift_krw_per_source_valid_observation_day"
-        ]
-        < 0.0
-    )
+    assert alternative["notional_ev_uplift_pct"] is None
+    assert alternative["cost_adjusted_net_profit_uplift_krw_per_source_valid_observation_day"] is None
     assert alternative["ready"] is False
 
 
@@ -4662,7 +4857,8 @@ def test_actual_leg_lifecycle_timing_and_gross_diagnostics_are_preserved(tmp_pat
     assert summary["p90_reconciliation_confirmed_holding_duration_sec"] == 300.0
     assert summary["target_reconciliation_completion_within_180s_ratio"] == 0.5
     assert summary["broker_completed_capital_occupied_krw_seconds"] > 0
-    assert summary["broker_completed_net_return_per_capital_hour"] > 0
+    assert summary["broker_completed_net_return_per_capital_hour"] is None
+    assert summary["fixed_cost_estimate_net_profit_krw"] > 0
 
 
 def test_verified_manual_stop_loss_is_negative_ev_not_target_speed_success():
@@ -4724,7 +4920,7 @@ def test_verified_manual_stop_loss_is_negative_ev_not_target_speed_success():
     assert summary["manual_exit_loss_legs"] == 1
     assert summary["machine_target_completed_legs"] == 1
     assert summary["manual_exit_fixed_cost_estimate_net_profit_krw"] < 0
-    assert summary["broker_realized_net_profit_krw"] < 0
+    assert summary["broker_realized_net_profit_krw"] is None
     assert summary["target_reconciliation_completion_within_180s_count"] == 0
     assert summary["target_reconciliation_completion_within_180s_ratio"] == 0.0
 
@@ -5159,6 +5355,10 @@ def test_actual_paired_carry_generates_next_trading_policy_and_freezes(tmp_path,
     assert runtime.validate_candidate(candidate, require_source_files=True) == (True, "valid")
     effective = date.fromisoformat(candidate["effective_date"])
     applied, status = build_applied_policy(target_date=effective, candidate_dir=tmp_path / "candidates")
+    if publication is None and (effective - date.fromisoformat(target)).days > 7:
+        # An unset publication date uses the current clock; old candidates expire.
+        assert status == "baseline_candidate_stale"
+        return
     assert status == "incumbent_preserved"
     assert applied["policy_hash"] == candidate["policy_hash"]
     assert runtime.validate_applied(applied, target_date=effective)[0]
@@ -5210,7 +5410,7 @@ def test_actual_full_terminal_reproduction_requires_eight_native_legs():
             "buy_filled_qty": 10, "target_filled_qty": 10, "fill_price": 10000, "profit_exit_price": 10040}
         episodes.append({"signal_at": signal, "legs": [dict(model), dict(model)]})
         rows.append({"eligible_for_tuning": True, "attempted": True, "signal_features": {"signal_bar": signal, "runtime_policy_hash": "a" * 64},
-            "durable_observation_capture": {"status": "pass", "profile": {"bar_evaluations": 1, "signal_policy_bindings": [f"{'a' * 64}|{signal}"]}},
+            "durable_observation_capture": {"status": "pass", "profile": {"status": "pass", "bar_evaluations": 1, "signal_policy_bindings": [f"{'a' * 64}|{signal}"]}},
             "legs": [dict(actual), dict(actual)]})
     result = {"baseline": {"full": {"episodes": episodes}}}
     assert actual_execution_confirmation(rows, result)["status"] == "pass"
@@ -5223,6 +5423,7 @@ def test_actual_full_terminal_reproduction_requires_eight_native_legs():
 
 def test_paired_successor_selection_consumer_requires_promotion_adapter(tmp_path, monkeypatch):
     """Isolate native external proof admission; test selected writer/apply/loader."""
+    monkeypatch.setenv("POSTCLOSE_POLICY_PUBLICATION_DATE", "2026-09-17")
     from src.engine.monitoring import low_price_two_leg_tuning as tuner
     from src.trading.low_price_two_leg import policy_runtime as runtime
     from src.engine.monitoring.low_price_two_leg_entry_spot_research import baseline_candidate

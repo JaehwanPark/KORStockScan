@@ -1630,6 +1630,7 @@ class ProducerSummaryCompactor:
         self._submit_count = 0
         self._rejected_count = 0
         self._closed = False
+        self._termination_drain = False
         self._auto_flush = bool(auto_flush)
         self._stop = threading.Event()
         self._wake = threading.Event()
@@ -1682,6 +1683,12 @@ class ProducerSummaryCompactor:
                 raise TimeoutError("producer summary shutdown drain exceeded 5 seconds")
             if self._pending_batch is not None or self._groups:
                 self.flush()
+
+    def enable_termination_drain(self) -> None:
+        """Keep accepting rows after the first restart drain, flushing each submit."""
+        with self._lock:
+            if not self._closed:
+                self._termination_drain = True
 
     @property
     def enabled(self) -> bool:
@@ -1764,11 +1771,13 @@ class ProducerSummaryCompactor:
             "summary_recorded": True,
             "suppress_raw": suppress_raw,
             "lossless": lossless,
-            "_flush_requested": not self._auto_flush
-            and (
-                self.flush_sec == 0
-                or (pending_dates and pending_dates != {event_date})
-                or time.monotonic() - self._last_flush_monotonic >= self.flush_sec
+            "_flush_requested": self._termination_drain or (
+                not self._auto_flush
+                and (
+                    self.flush_sec == 0
+                    or (pending_dates and pending_dates != {event_date})
+                    or time.monotonic() - self._last_flush_monotonic >= self.flush_sec
+                )
             ),
         }
 

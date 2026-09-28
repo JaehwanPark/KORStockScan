@@ -65802,8 +65802,10 @@ def _observe_entry_submit_finished(stock, code, outcome):
         _log_pre_submit_delay_event(
             stock, code, "pre_submit_delay_intent_terminal",
             delay_intent_id=delay_intent["id"],
+            decision_source_sha256=delay_intent.get("decision_source_sha256"),
             selected_delay_sec=delay_intent["delay_sec"],
             committed_at_epoch=delay_intent["committed_at_epoch"],
+            submit_finished_at_epoch=time.time(),
             original_machine_observation_sha256=delay_intent.get("machine_observation_sha256"),
             resolved_machine_attempt_id=delay_intent.get("resolved_machine_attempt_id"),
             resolved_machine_observation_sha256=delay_intent.get("resolved_machine_observation_sha256"),
@@ -65869,7 +65871,9 @@ def expire_untriggered_pre_submit_delay(stock, code, *, now_mono=None, reason="t
         stock["_pre_submit_delay_last_terminal_parent"] = pending["promotion_id"]
     _log_pre_submit_delay_event(stock, code, "pre_submit_delay_intent_terminal",
         delay_intent_id=pending["id"], selected_delay_sec=pending["delay_sec"],
+        decision_source_sha256=pending.get("decision_source_sha256"),
         committed_at_epoch=pending["committed_at_epoch"],
+        terminal_finished_at_epoch=time.time(),
         terminal_reason=reason, submit_call_broker_accepted=False,
         actual_order_submitted=False, broker_order_forbidden=True,
         runtime_effect=True,
@@ -65922,6 +65926,7 @@ def observe_pre_submit_delay_quote(stock, code, ws_data, *, now_ts=None):
     state = stock.get("_pre_submit_delay_observation") if isinstance(stock, dict) else None
     if not isinstance(state, dict):
         return
+    from src.engine.scalping.pre_submit_delay_tuning import quote_source_sha256
     now = float(now_ts if now_ts is not None else time.time())
     remaining = state.get("remaining_sec") or []
     while remaining and now >= float(state["committed_at_epoch"]) + float(remaining[0]):
@@ -65938,26 +65943,80 @@ def observe_pre_submit_delay_quote(stock, code, ws_data, *, now_ts=None):
         quote_fields, _, _, _ = _build_quote_consistency_fields(ws_data or {}, side="buy", now_ts=now)
         quote_route = str((ws_data or {}).get("ws_route") or "").strip().upper()
         intended_route = str(state.get("route") or "").strip().upper()
+        transport_epoch = (ws_data or {}).get("market_data_transport_epoch")
+        route_rows = (ws_data or {}).get("realtime_type_snapshots_by_route") or {}
+        route_rows = route_rows if isinstance(route_rows, dict) else {}
+        route_depth = [row.get("0D") for row in route_rows.values()
+                       if isinstance(row, dict) and isinstance(row.get("0D"), dict)]
+        def same_depth(row):
+            book = row.get("orderbook")
+            if not isinstance(book, dict):
+                return False
+            asks = book.get("asks")
+            first = asks[0] if isinstance(asks, list) and asks and isinstance(asks[0], dict) else {}
+            return (_get_best_levels_from_ws({"orderbook": book}) == (ask, bid)
+                    and _safe_int(first.get("volume") or first.get("qty"), 0) == ask_qty)
+
+        depth_matches = [row for row in route_depth
+            if row.get("transport_epoch") == transport_epoch
+                    and str(row.get("market_route") or "").strip().upper() == quote_route
+                    and _safe_float(row.get("observed_epoch"), 0.0) == depth_epoch
+                    and same_depth(row)]
+        depth_bound = type(transport_epoch) is int and transport_epoch >= 0 and len(depth_matches) == 1
+        matched_depth = depth_matches[0] if depth_bound else None
+        depth_source_sha256 = (hashlib.sha256(json.dumps({
+            "market_route": matched_depth.get("market_route"),
+            "transport_epoch": matched_depth.get("transport_epoch"),
+            "observed_epoch": matched_depth.get("observed_epoch"),
+            "orderbook": matched_depth.get("orderbook"),
+        }, sort_keys=True, default=str, separators=(",", ":")).encode()).hexdigest()
+            if depth_bound else None)
         within_window = abs(offset - float(horizon)) <= 3.0
         source_valid = bool(
             within_window and quote_route and intended_route and quote_route == intended_route
+            and len(str(state.get("decision_source_sha256") or "")) == 64
+            and depth_bound and str(transport_epoch) == str(state.get("quote_transport_epoch") or "")
             and depth_age is not None and 0 <= depth_age <= 0.7
             and ask > 0 and bid > 0 and bid <= ask and ask_qty > 0
             and str(quote_fields.get("quote_consistency_state") or "").lower()
             not in {"stale", "conflicted", "diverged", "blocked", "missing"}
             and not _truthy_field(quote_fields.get("quote_consistency_entry_blocked"))
         )
-        _log_pre_submit_delay_event(stock, code, "pre_submit_delay_quote_observed",
+        if source_valid:
+            source_reason = "valid"
+        elif not within_window:
+            source_reason = "horizon_late_or_early"
+        elif not quote_route or quote_route != intended_route:
+            source_reason = "route_mismatch_or_missing"
+        elif not depth_bound:
+            source_reason = "route_depth_missing_conflicted_or_ambiguous"
+        elif str(transport_epoch) != str(state.get("quote_transport_epoch") or ""):
+            source_reason = "transport_epoch_changed"
+        elif depth_age is None or not 0 <= depth_age <= 0.7:
+            source_reason = "depth_stale_or_clock_invalid"
+        elif (str(quote_fields.get("quote_consistency_state") or "").lower()
+              in {"stale", "conflicted", "diverged", "blocked", "missing"}
+              or _truthy_field(quote_fields.get("quote_consistency_entry_blocked"))):
+            source_reason = "quote_stale_or_conflicted"
+        else:
+            source_reason = "price_or_depth_invalid"
+        quote_receipt = dict(
             delay_intent_id=state["id"], target_delay_sec=horizon,
             actual_offset_sec=round(offset, 3), ask_price=ask, best_bid=bid,
             ask_qty=ask_qty, route=intended_route, quote_route=quote_route,
+            quote_transport_epoch=transport_epoch,
+            route_depth_source_sha256=depth_source_sha256,
+            decision_source_sha256=state.get("decision_source_sha256"),
+            quote_observed_at_epoch=now,
             quote_valid=source_valid,
-            quote_source_reason=("valid" if source_valid else "horizon_or_route_or_fresh_depth_gap"),
+            quote_source_reason=source_reason,
             quote_consistency_state=quote_fields.get("quote_consistency_state"),
             quote_consistency_reason=quote_fields.get("quote_consistency_reason"),
             ws_last_0d_epoch=depth_epoch or None, ws_last_0d_age_sec=depth_age,
             actual_order_submitted=False, broker_order_forbidden=True,
             runtime_effect=False, decision_authority="source_only_pre_submit_delay_observation")
+        quote_receipt["quote_source_sha256"] = quote_source_sha256(quote_receipt)
+        _log_pre_submit_delay_event(stock, code, "pre_submit_delay_quote_observed", **quote_receipt)
     if not remaining:
         stock.pop("_pre_submit_delay_observation", None)
 
@@ -69996,7 +70055,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         return False
     if strategy == "SCALPING" and not opening_rotation_active and planned_orders and requested_qty > 0:
         from src.engine.scalping.pre_submit_delay_tuning import (
-            DELAYS_SEC, decision_type_snapshot, load_runtime_policy,
+            DELAYS_SEC, decision_source_sha256, decision_type_snapshot, load_runtime_policy,
         )
         machine_fields = stock.get("last_watching_ai_machine_primary_fields") or {}
         machine_key = (
@@ -70045,6 +70104,16 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 return False
             committed_at = time.time()
             delay_id = uuid4().hex
+            decision_receipt = dict(
+                delay_intent_id=delay_id, decision_committed_at_epoch=committed_at,
+                route=quote_route,
+                quote_transport_epoch=(ws_data or {}).get("market_data_transport_epoch"),
+                delay_policy_sha256=delay_policy["policy_sha256"],
+                original_machine_observation_sha256=machine_key[1],
+                planned_qty=requested_qty, owner="main_scalping",
+                market_session_bucket=stock.get("market_session_bucket"),
+            )
+            decision_receipt["decision_source_sha256"] = decision_source_sha256(decision_receipt)
             stock["_pre_submit_delay_pending"] = {
                 "id": delay_id, "machine_key": machine_key,
                 "promotion_id": promotion_id,
@@ -70058,22 +70127,22 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 "policy_sha256": delay_policy["policy_sha256"],
                 "planned_qty": requested_qty, "price_cap": final_price,
                 "route": quote_route, "decision_type": decision_type,
+                "decision_source_sha256": decision_receipt["decision_source_sha256"],
             }
             stock["_pre_submit_delay_observation"] = {
                 "id": delay_id, "committed_at_epoch": committed_at,
                 "remaining_sec": list(DELAYS_SEC), "route": quote_route,
+                "quote_transport_epoch": decision_receipt["quote_transport_epoch"],
+                "decision_source_sha256": decision_receipt["decision_source_sha256"],
             }
             committed_recorded = _log_pre_submit_delay_event(stock, code, "pre_submit_delay_committed",
-                delay_intent_id=delay_id, decision_committed_at_epoch=committed_at,
+                **decision_receipt,
                 entry_action="ENTER_NOW",
                 auxiliary_effective_action=_pre_submit_delay_auxiliary_verdict(machine_fields),
-                owner="main_scalping", planned_qty=requested_qty,
-                price_cap=final_price, route=quote_route,
+                price_cap=final_price,
                 effective_venue=stock.get("effective_venue"),
-                market_session_bucket=stock.get("market_session_bucket"),
                 delay_decision_type=json.dumps(decision_type, sort_keys=True, separators=(",", ":")),
                 delay_policy_status=delay_policy["status"],
-                delay_policy_sha256=delay_policy["policy_sha256"],
                 actual_order_submitted=False, broker_order_forbidden=True,
                 runtime_effect=False,
                 decision_authority="source_only_pre_submit_delay_observation")
@@ -70100,27 +70169,37 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             and stock.get("_pre_submit_delay_commit_key") != machine_key):
             committed_at = time.time()
             delay_id = uuid4().hex
+            decision_receipt = dict(
+                delay_intent_id=delay_id, decision_committed_at_epoch=committed_at,
+                route=quote_route,
+                quote_transport_epoch=(ws_data or {}).get("market_data_transport_epoch"),
+                delay_policy_sha256=delay_policy["policy_sha256"],
+                original_machine_observation_sha256=machine_key[1],
+                planned_qty=requested_qty, owner="main_scalping",
+                market_session_bucket=stock.get("market_session_bucket"),
+            )
+            decision_receipt["decision_source_sha256"] = decision_source_sha256(decision_receipt)
             stock["_pre_submit_delay_commit_key"] = machine_key
             stock["_pre_submit_delay_zero_intent"] = {
                 "id": delay_id, "delay_sec": 0.0,
                 "committed_at_epoch": committed_at,
                 "machine_observation_sha256": machine_key[1],
+                "decision_source_sha256": decision_receipt["decision_source_sha256"],
             }
             stock["_pre_submit_delay_observation"] = {
                 "id": delay_id, "committed_at_epoch": committed_at,
                 "remaining_sec": list(DELAYS_SEC), "route": quote_route,
+                "quote_transport_epoch": decision_receipt["quote_transport_epoch"],
+                "decision_source_sha256": decision_receipt["decision_source_sha256"],
             }
             _log_pre_submit_delay_event(stock, code, "pre_submit_delay_committed",
-                delay_intent_id=delay_id, decision_committed_at_epoch=committed_at,
+                **decision_receipt,
                 entry_action="ENTER_NOW",
                 auxiliary_effective_action=_pre_submit_delay_auxiliary_verdict(machine_fields),
-                owner="main_scalping", planned_qty=requested_qty,
-                price_cap=final_price, route=quote_route,
+                price_cap=final_price,
                 effective_venue=stock.get("effective_venue"),
-                market_session_bucket=stock.get("market_session_bucket"),
                 delay_decision_type=json.dumps(decision_type, sort_keys=True, separators=(",", ":")),
                 delay_policy_status=delay_policy["status"],
-                delay_policy_sha256=delay_policy["policy_sha256"],
                 actual_order_submitted=False, broker_order_forbidden=True,
                 runtime_effect=False, decision_authority="source_only_pre_submit_delay_observation")
             try:
@@ -82961,7 +83040,8 @@ def handle_watching_state(
     """
     global LAST_AI_CALL_TIMES
 
-    # Provisional zero-base rows cannot enter the live decision path.
+    # A zero-base candidate is persisted as provisional until Main confirms
+    # both the DB row and the WATCHING attach. Never evaluate it in between.
     if stock.get("zero_base_pending_db"):
         return
 

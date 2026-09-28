@@ -183,9 +183,9 @@ def test_completed_projection_requires_exact_receipt_for_cost_and_fill_time():
 
     direct = report_mod._completed_trade_projection(base, [buy_event, event], base)
 
-    assert direct["realized_pnl_krw"] == 40
+    assert direct["realized_pnl_krw"] is None
     assert direct["exact_sell_fill_time"] == "2026-09-23T09:10:01+09:00"
-    assert direct["strict_completion_status"] == "eligible"
+    assert direct["strict_completion_status"] == "excluded"
     assert direct["broker_actual_execution_venue"] == "UNKNOWN"
     assert direct["broker_actual_exchange_code"] == "0"
     assert direct["broker_actual_exchange_name"] == "SOR"
@@ -193,11 +193,15 @@ def test_completed_projection_requires_exact_receipt_for_cost_and_fill_time():
     assert direct["configured_fee_estimate_krw"] == 10
     assert direct["broker_actual_fees_taxes_krw"] is None
     assert direct["broker_actual_cost_observed"] is False
+    assert direct["configured_cost_estimated_pnl_krw"] == 40
+    assert direct["realized_pnl_krw"] is None
+    assert direct["strict_completion_status"] == "excluded"
+    assert "source_gap_broker_actual_cost_missing" in direct["strict_completion_reasons"]
 
     event.fields["main_lifecycle_execution_occurrence_time_source"] = "missing"
     no_clock = report_mod._completed_trade_projection(base, [buy_event, event], base)
-    assert no_clock["strict_completion_status"] == "eligible"
-    assert no_clock["realized_pnl_krw"] == 40
+    assert no_clock["strict_completion_status"] == "excluded"
+    assert no_clock["realized_pnl_krw"] is None
     assert no_clock["exact_sell_fill_time"] is None
 
     event.fields["main_lifecycle_fees_taxes_krw"] = "0"
@@ -1175,6 +1179,11 @@ def test_trade_review_restores_completed_trade_from_holding_events(monkeypatch):
     assert report["metrics"]["completed_trades"] == 1
     assert report["metrics"]["open_trades"] == 0
     assert report["metrics"]["realized_pnl_krw"] == -10290
+    assert report["metrics"]["realized_pnl_krw_basis"] == (
+        "legacy_display_configured_cost_model"
+    )
+    assert report["metrics"]["broker_actual_realized_pnl_krw"] is None
+    assert report["metrics"]["modeled_display_pnl_krw"] == -10290
 
     trade = report["sections"]["completed_trades"][0]
     assert trade["id"] == 1085
@@ -1550,6 +1559,8 @@ def test_trade_review_reconciles_completed_economics_without_losing_raw_event(
     )
 
     assert report["metrics"]["realized_pnl_krw"] == 18
+    assert report["metrics"]["broker_actual_realized_pnl_krw"] is None
+    assert report["metrics"]["modeled_display_pnl_krw"] == 18
     assert trade["profit_rate"] == 0.36
     assert trade["exit_signal"]["fields"]["buy_price"] == "5040.0"
     assert trade["exit_signal"]["fields"]["profit_rate"] == "0.36"

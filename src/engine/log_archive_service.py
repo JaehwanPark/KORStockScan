@@ -80,6 +80,14 @@ def load_monitor_snapshot(kind: str, target_date: str) -> dict | None:
 def save_monitor_snapshot(kind: str, target_date: str, payload: dict) -> Path:
     if not isinstance(payload, dict):
         raise TypeError("monitor_snapshot_payload_must_be_object")
+    if (kind == "trade_review" and isinstance(
+        (payload.get("meta") or {}).get("completed_census_manifest"), dict
+    )):
+        from src.engine.sniper_trade_review_report import completed_census_manifest
+
+        payload["meta"]["completed_census_manifest"] = (
+            completed_census_manifest(payload)
+        )
     path = _snapshot_path(kind, target_date)
     path.parent.mkdir(parents=True, exist_ok=True)
     file_descriptor, temp_name = tempfile.mkstemp(

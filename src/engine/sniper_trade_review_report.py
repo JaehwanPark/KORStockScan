@@ -22,6 +22,8 @@ from src.engine.sniper_gatekeeper_replay import find_gatekeeper_snapshot_for_tra
 from src.engine import sniper_trade_utils
 from src.trading.market import session_contract
 
+COMPLETED_CENSUS_CONTRACT_FROM = "2026-09-28"
+
 _HOLDING_RE = re.compile(
     r"^\[(?P<timestamp>[^\]]+)\].*?\[HOLDING_PIPELINE\] "
     r"(?P<name>.+?)\((?P<code>[^)]+)\) "
@@ -2323,7 +2325,7 @@ def _completed_trade_projection(
         and profit is not None
         and abs(profit - receipt_pnl / ledger["buy_fill_amount"] * 100.0) <= 0.02
     )
-    exact_receipt = (
+    configured_receipt = (
         terminal_fields.get("realized_pnl_krw_source") == "broker_fill_prices_fee_aware"
         and terminal_fields.get("decision_authority")
         == "broker_sell_fill_observation_only"
@@ -2339,16 +2341,21 @@ def _completed_trade_projection(
         and _safe_float(terminal_fields.get("main_lifecycle_fees_taxes_krw"), -1.0) >= 0
         and not terminal_fields.get("trade_review_economics_reconciled")
     )
-    exact_pnl = _safe_float(
+    configured_pnl = _safe_float(
         terminal_fields.get("realized_pnl_krw"), default=float("nan")
     )
-    if not exact_receipt or not math.isfinite(exact_pnl):
-        exact_pnl = None
+    if not configured_receipt or not math.isfinite(configured_pnl):
+        configured_pnl = None
+    # The existing terminal's fee fields come from get_trade_cost_rate().
+    # No current broker receipt supplies independently charged fees/taxes.
+    broker_actual_fee = None
+    exact_pnl = None
     strict_reasons = list(ledger["strict_completion_reasons"])
     if not rate_reconciled:
         strict_reasons.append("source_gap_profit_rate_unreconciled")
-    if not fill_cost_reconciled or exact_pnl is None:
+    if not fill_cost_reconciled or configured_pnl is None:
         strict_reasons.append("source_gap_exact_cost_missing")
+    strict_reasons.append("source_gap_broker_actual_cost_missing")
     if terminal_fields.get("decision_authority") == "broker_balance_reconciliation_only":
         strict_reasons.append("source_gap_sell_balance_reconciliation_only")
     if terminal_fields.get("decision_authority") != "broker_sell_fill_observation_only":
@@ -2363,7 +2370,7 @@ def _completed_trade_projection(
     )
     exact_fill_time = (
         occurrence_time
-        if exact_receipt
+        if configured_receipt
         and occurrence_source == "official_fid_908"
         and _parse_dt(occurrence_time) is not None
         else None
@@ -2427,13 +2434,13 @@ def _completed_trade_projection(
                             terminal_fields.get("configured_fee_estimate_krw")),
         default=float("nan"),
     )
-    if not math.isfinite(configured_fee) and exact_receipt:
+    if not math.isfinite(configured_fee) and configured_receipt:
         configured_fee = _safe_float(
             terminal_fields.get("main_lifecycle_fees_taxes_krw"),
             default=float("nan"),
         )
     if (not math.isfinite(configured_fee) or configured_fee < 0
-            or not exact_receipt and not (
+            or not configured_receipt and not (
                 balance_only and balance_generation_status == "normalized_contract_bound"
             )):
         configured_fee = None
@@ -2442,7 +2449,7 @@ def _completed_trade_projection(
         terminal_fields.get("reconciliation_result") ==
         "broker_exact_order_fill_recovered" else
         "balance_absent_receipt_missing" if balance_only else
-        "execution_receipt_exact_configured_cost" if exact_receipt else
+        "execution_receipt_exact_configured_cost" if configured_receipt else
         "source_gap_unknown"
     )
     return {
@@ -2519,8 +2526,11 @@ def _completed_trade_projection(
             if balance_only else None
         ),
         "configured_fee_estimate_krw": configured_fee,
-        "broker_actual_fees_taxes_krw": None,
+        "broker_actual_fees_taxes_krw": broker_actual_fee,
         "broker_actual_cost_observed": False,
+        "configured_cost_estimated_pnl_krw": (
+            int(round(configured_pnl)) if configured_pnl is not None else None
+        ),
         "cumulative_sell_qty": completed_sell_qty or None,
         "sell_quantity_conserved": quantity_conserved,
         **ledger,
@@ -2547,7 +2557,7 @@ def _completed_trade_projection(
         "profit_rate": profit,
         "realized_pnl_krw": int(round(exact_pnl)) if exact_pnl is not None else None,
         "realized_pnl_krw_source": (
-            "broker_fill_prices_fee_aware"
+            "broker_actual_fee_reconciled"
             if exact_pnl is not None
             else "missing_exact_cost"
         ),
@@ -2567,12 +2577,12 @@ def _completed_trade_projection(
         ),
         "main_lifecycle_fees_taxes_krw": (
             _safe_float(terminal_fields.get("main_lifecycle_fees_taxes_krw"), None)
-            if exact_receipt
+            if configured_receipt
             else None
         ),
         "main_lifecycle_slippage_krw": (
             _safe_float(terminal_fields.get("main_lifecycle_slippage_krw"), None)
-            if exact_receipt
+            if configured_receipt
             else None
         ),
         "exit_signal": _build_exit_signal(events, trade),
@@ -2860,6 +2870,104 @@ def _build_hard_stop_taxonomy(rows: list[dict], events: list[HoldingEvent]) -> d
     }
 
 
+def _completed_census_sha256(value: Any) -> str:
+    return hashlib.sha256(json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")).hexdigest()
+
+
+def completed_census_manifest(report: dict) -> dict:
+    """Bind the terminal ID universe to the untruncated completion projection."""
+    meta = report.get("meta") or {}
+    rows = (report.get("sections") or {}).get("completed_trade_projection") or []
+    receipts = meta.get("trailing_event_source_receipts") or []
+    row_receipts = [{
+        "id": str(row.get("id") or ""),
+        "completion_observed_date": row.get("completion_observed_date"),
+        "entry_date": row.get("rec_date"),
+        "owner_scope": row.get("terminal_population_scope"),
+        "strategy": row.get("strategy"),
+        "position_tag": row.get("position_tag"),
+        "owner_id": row.get("sell_submission_owner_id"),
+        "account_key": row.get("sell_submission_account_key"),
+        "session": row.get("market_session_bucket"),
+        "quantity": row.get("cumulative_sell_qty"),
+        "attempt_id": row.get("attempt_id"),
+        "order_no": row.get("sell_order_no"),
+        "execution_no": row.get("sell_execution_no"),
+        "route": row.get("exit_execution_broker_route"),
+        "configured_fee_estimate_krw": row.get("configured_fee_estimate_krw"),
+        "broker_actual_fees_taxes_krw": row.get("broker_actual_fees_taxes_krw"),
+        "strict_status": row.get("strict_completion_status"),
+        "source_quality_reasons": row.get("strict_completion_reasons") or [],
+        "row_sha256": _completed_census_sha256(row),
+    } for row in rows]
+    source_sha = _completed_census_sha256(receipts) if receipts else None
+    output_sha = _completed_census_sha256(rows)
+    return {
+        "schema": "trade_review_completed_census_v1",
+        "source_date": report.get("date"),
+        "profile": meta.get("snapshot_profile") or "unobserved_report_build",
+        "source_receipts_status": (
+            "structured_projection_receipts_observed" if receipts else "unobserved"
+        ),
+        "source_receipts_sha256": source_sha,
+        "input_generation_sha256": meta.get("completed_census_input_sha256"),
+        "projection_sha256": output_sha,
+        "run_id": _completed_census_sha256({
+            "date": report.get("date"), "source": source_sha,
+            "profile": meta.get("snapshot_profile") or "unobserved_report_build",
+            "input": meta.get("completed_census_input_sha256"),
+            "projection": output_sha,
+        })[:24],
+        "raw_terminal_ids": sorted(str(item) for item in
+                                   meta.get("sell_completed_event_ids") or []),
+        "raw_terminal_count": len(meta.get("sell_completed_event_ids") or []),
+        "raw_completion_event_count": int(meta.get("completion_event_id_count") or 0),
+        "projected_count": len(rows),
+        "valid_profit_count": sum(
+            row.get("profit_rate") is not None for row in rows
+        ),
+        "strict_count": sum(
+            row.get("strict_completion_status") == "eligible" for row in rows
+        ),
+        "excluded_count": sum(
+            row.get("strict_completion_status") != "eligible" for row in rows
+        ),
+        "unobserved_count": int(meta.get("completion_event_unresolved_id_count") or 0),
+        "rows": row_receipts,
+    }
+
+
+def verify_completed_census_manifest(report: dict, expected_date: str) -> str | None:
+    """Return an explicit source gap; never accept a rewritten projection on an old seal."""
+    if report.get("date") != expected_date:
+        return "completed_census_source_date_mismatch"
+    if report.get("code") or report.get("since"):
+        return "completed_census_filtered_source"
+    rows = (report.get("sections") or {}).get("completed_trade_projection")
+    if not isinstance(rows, list):
+        return "completed_census_projection_missing"
+    manifest = (report.get("meta") or {}).get("completed_census_manifest")
+    if not isinstance(manifest, dict):
+        return "completed_census_manifest_missing"
+    if manifest != completed_census_manifest(report):
+        return "completed_census_generation_mismatch"
+    ids = [str(row.get("id") or "").strip() for row in rows]
+    raw_ids = [str(item) for item in
+               (report.get("meta") or {}).get("sell_completed_event_ids") or []]
+    if (not all(ids) or len(set(ids)) != len(ids)
+            or sorted(ids) != sorted(raw_ids)
+            or len(rows) != (report.get("metrics") or {}).get("canonical_completed_trades")):
+        return "completed_census_id_mismatch"
+    if any(row.get("completion_observed_date") != expected_date
+           or str(row.get("status") or "").upper() != "COMPLETED"
+           for row in rows):
+        return "completed_census_completion_date_mismatch"
+    return None
+
+
 def build_trade_review_report(
     target_date: str,
     code: str | None = None,
@@ -3076,7 +3184,7 @@ def build_trade_review_report(
             }
         )
 
-    return {
+    report = {
         "date": target_date,
         "code": normalized_code,
         "scope": scope,
@@ -3090,6 +3198,20 @@ def build_trade_review_report(
             "available_stocks": available_stocks,
             "log_paths": [str(path) for path in log_paths],
             "trailing_event_source_receipts": trailing_source_receipts,
+            "completed_census_input_sha256": _completed_census_sha256({
+                "source_date": target_date,
+                "db_completed_rows": [row for row in trade_rows
+                                      if str(row.get("status") or "").upper()
+                                      == "COMPLETED"],
+                "terminal_events": [{
+                    "stage": event.stage, "timestamp": event.timestamp,
+                    "fields": event.fields,
+                } for event in all_events if event.stage in {
+                    "sell_completed", "sell_completion_reconciliation_gap",
+                    "sell_partial_fill_progress", "sell_order_sent",
+                }],
+                "structured_source_receipts": trailing_source_receipts,
+            }),
         },
         "metrics": {
             "total_trades": len(visible_rows),
@@ -3121,7 +3243,14 @@ def build_trade_review_report(
                 if realized
                 else 0.0
             ),
+            # Legacy web template formats this numeric display field directly.
+            # Economic readers use the separately sealed completion projection.
             "realized_pnl_krw": int(
+                sum(_safe_int(row.get("realized_pnl_krw")) for row in realized)
+            ),
+            "realized_pnl_krw_basis": "legacy_display_configured_cost_model",
+            "broker_actual_realized_pnl_krw": None,
+            "modeled_display_pnl_krw": int(
                 sum(_safe_int(row.get("realized_pnl_krw")) for row in realized)
             ),
             "holding_events": len(events),
@@ -3181,6 +3310,8 @@ def build_trade_review_report(
             "hard_stop_taxonomy": hard_stop_taxonomy,
         },
     }
+    report["meta"]["completed_census_manifest"] = completed_census_manifest(report)
+    return report
 
 
 def format_trade_review_summary(report: dict) -> str:
@@ -3194,7 +3325,11 @@ def format_trade_review_summary(report: dict) -> str:
     lines.append(f"- 종료 거래: {metrics.get('completed_trades', 0)}건")
     lines.append(f"- 미종료 거래: {metrics.get('open_trades', 0)}건")
     lines.append(f"- 평균 손익률: {metrics.get('avg_profit_rate', 0.0)}%")
-    lines.append(f"- 실현손익: {metrics.get('realized_pnl_krw', 0):,}원")
+    lines.append("- broker 실제 과금 후 실현손익: 원천 미확인")
+    if metrics.get("modeled_display_pnl_krw") is not None:
+        lines.append(
+            f"- 비용모델 표시 추정: {metrics['modeled_display_pnl_krw']:,}원"
+        )
     warnings = report.get("meta", {}).get("warnings", []) or []
     if warnings:
         lines.append("- 경고:")

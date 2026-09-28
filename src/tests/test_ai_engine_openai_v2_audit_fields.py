@@ -269,9 +269,7 @@ def test_openai_scalping_analyze_target_returns_feature_audit_fields(monkeypatch
     assert result["microstructure_reaction_context_sent"] is False
     assert result["microstructure_reaction_context_consumed"] is False
     assert result["microstructure_reaction_context_consumer"] == "none"
-    assert result["microstructure_reaction_context_delivery_state"] == (
-        "computed_not_sent"
-    )
+    assert result["microstructure_reaction_context_delivery_state"] == "not_attempted"
     assert result["tick_source_quality_fields_sent"] is True
     assert result["tick_sample_count"] == 10
     assert result["tick_accel_source"] == "computed_10ticks"

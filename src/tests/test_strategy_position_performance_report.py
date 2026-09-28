@@ -383,6 +383,89 @@ def test_completed_row_with_missing_execution_economics_stays_null(monkeypatch):
     assert rows[0]["realized_pnl_krw"] is None
 
 
+def test_main_completed_fact_requires_same_generation_and_actual_broker_cost(monkeypatch):
+    from src.engine.sniper_trade_review_report import completed_census_manifest
+
+    day = "2026-09-28"
+    row = {
+        "id": 1, "rec_date": day, "code": "111111", "status": "COMPLETED",
+        "strategy": "SCALPING", "position_tag": "SCALP_BASE",
+        "buy_price": 1000, "buy_qty": 1, "buy_time": f"{day} 09:00:00",
+        "sell_price": 1100, "sell_time": f"{day} 09:10:00",
+    }
+    projected = {
+        **row, "completion_observed_date": day,
+        "terminal_population_scope": "real_record_bound",
+        "strict_completion_status": "excluded",
+        "strict_completion_reasons": ["source_gap_broker_actual_cost_missing"],
+        "configured_fee_estimate_krw": 10,
+        "broker_actual_fees_taxes_krw": None,
+        "broker_actual_cost_observed": False,
+        "realized_pnl_krw": None,
+    }
+    report = {
+        "date": day, "code": None, "since": None,
+        "meta": {"warnings": [], "sell_completed_event_ids": [1],
+                 "trailing_event_source_receipts": []},
+        "metrics": {"canonical_completed_trades": 1},
+        "sections": {"recent_trades": [row],
+                     "completed_trade_projection": [projected]},
+    }
+    report["meta"]["completed_census_manifest"] = completed_census_manifest(report)
+    monkeypatch.setattr(report_mod, "build_trade_review_report", lambda **_kwargs: report)
+
+    facts, warnings = report_mod._build_trade_fact_rows(day)
+    assert warnings == []
+    assert facts[0]["profit_rate"] is None
+    assert facts[0]["realized_pnl_krw"] is None
+    assert facts[0]["economics_source_status"] == "source_gap_broker_actual_cost_missing"
+
+    report["sections"]["recent_trades"][0]["sell_price"] = 1200
+    mismatched, _ = report_mod._build_trade_fact_rows(day)
+    assert mismatched[0]["economics_source_status"] == (
+        "source_gap_completion_projection_identity"
+    )
+    assert mismatched[0]["realized_pnl_krw"] is None
+    report["sections"]["recent_trades"][0]["sell_price"] = 1100
+
+    report["meta"]["warnings"] = ["DB completion source missing"]
+    with pytest.raises(report_mod.FactSyncSourceError, match="trade_review_source_warning"):
+        report_mod._build_trade_fact_rows(day)
+    report["meta"]["warnings"] = []
+
+    report["sections"]["completed_trade_projection"][0]["configured_fee_estimate_krw"] = 99
+    with pytest.raises(report_mod.FactSyncSourceError, match="completed_census_generation_mismatch"):
+        report_mod._build_trade_fact_rows(day)
+
+
+def test_saved_fact_generation_rejects_rewritten_trade_review(monkeypatch, tmp_path):
+    from src.engine.sniper_trade_review_report import completed_census_manifest
+
+    day = "2026-09-28"
+    monkeypatch.setattr(report_mod, "_FACT_SYNC_STATUS_DIR", tmp_path)
+    snapshot = {
+        "date": day, "code": None, "since": None,
+        "meta": {"warnings": [], "sell_completed_event_ids": [],
+                 "trailing_event_source_receipts": []},
+        "metrics": {"canonical_completed_trades": 0},
+        "sections": {"completed_trade_projection": []},
+    }
+    snapshot["meta"]["completed_census_manifest"] = completed_census_manifest(snapshot)
+    monkeypatch.setattr(report_mod, "load_monitor_snapshot", lambda *_args: snapshot)
+    report_mod._write_status(day, {
+        "status": "valid_empty", "completed_census_run_ids": [
+            snapshot["meta"]["completed_census_manifest"]["run_id"]
+        ], "completed_census_projection_sha256": [
+            snapshot["meta"]["completed_census_manifest"]["projection_sha256"]
+        ],
+    })
+    assert report_mod._saved_fact_generation_issue(day) is None
+
+    snapshot["meta"]["trailing_event_source_receipts"] = [{"logical_sha256": "new"}]
+    snapshot["meta"]["completed_census_manifest"] = completed_census_manifest(snapshot)
+    assert report_mod._saved_fact_generation_issue(day) == "stale_fact_source_generation"
+
+
 def test_scanner_provenance_never_uses_future_promotion_event():
     fact = {
         "strategy": "SCALPING",

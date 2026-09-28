@@ -29,6 +29,31 @@ def test_monitor_snapshot_roundtrip(tmp_path, monkeypatch):
     assert not list(snapshot_dir.glob(".trade_review_2026-04-06.json.*.tmp"))
 
 
+def test_completed_census_seals_actual_saved_profile(tmp_path, monkeypatch):
+    from src.engine.sniper_trade_review_report import (
+        completed_census_manifest, verify_completed_census_manifest,
+    )
+
+    monkeypatch.setattr(service, "MONITOR_SNAPSHOT_DIR", tmp_path)
+    day = "2026-09-28"
+    payload = {
+        "date": day, "code": None, "since": None,
+        "meta": {"sell_completed_event_ids": [],
+                 "trailing_event_source_receipts": []},
+        "metrics": {"canonical_completed_trades": 0},
+        "sections": {"completed_trade_projection": []},
+    }
+    payload["meta"]["completed_census_manifest"] = completed_census_manifest(payload)
+    prior_run = payload["meta"]["completed_census_manifest"]["run_id"]
+    payload["meta"]["snapshot_profile"] = "postclose_exit"
+
+    service.save_monitor_snapshot("trade_review", day, payload)
+    loaded = service.load_monitor_snapshot("trade_review", day)
+    assert verify_completed_census_manifest(loaded, day) is None
+    assert loaded["meta"]["completed_census_manifest"]["profile"] == "postclose_exit"
+    assert loaded["meta"]["completed_census_manifest"]["run_id"] != prior_run
+
+
 def test_monitor_snapshot_atomic_write_preserves_previous_file_on_dump_failure(
     tmp_path, monkeypatch
 ):

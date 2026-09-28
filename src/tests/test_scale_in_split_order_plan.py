@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import ast
+import gzip
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -1555,6 +1556,151 @@ def test_terminal_sell_joins_lifecycle_not_buy_order_number():
     assert _anchor_from_events(events)["real_outcome_joined"] is False
 
 
+def test_scale_in_fill_position_quantity_contract_rejects_mismatch():
+    events = _economic_attempt_events(target_date="2026-09-28", idx=1)
+    fill = events[1]
+    fill.update(pre_fill_buy_qty=5, post_fill_buy_qty=7)
+    projected = split_plan._project_relevant_input_event(
+        fill, source_name="pipeline_events", event_date="2026-09-28"
+    )
+    assert projected["pre_fill_buy_qty"] == 5
+    assert projected["post_fill_buy_qty"] == 7
+    assert _anchor_from_events(events)["real_outcome_joined"] is True
+
+    fill["post_fill_buy_qty"] = 8
+    outcome = _anchor_from_events(events)
+    assert outcome["position_quantity_verified"] is False
+    assert outcome["position_quantity_status"] == "position_quantity_mismatch"
+    assert outcome["real_outcome_joined"] is False
+
+    fill.pop("post_fill_buy_qty")
+    outcome = _anchor_from_events(events)
+    assert outcome["position_quantity_status"] == "missing_position_quantity_receipt"
+    assert outcome["real_outcome_joined"] is False
+
+
+def test_scale_in_partial_fills_preserve_each_position_increment():
+    events = _economic_attempt_events(target_date="2026-09-28", idx=1)
+    first = events[1]
+    first.update(fill_qty=1, pre_fill_buy_qty=5, post_fill_buy_qty=6)
+    second = {**first, "execution_no": "EXEC1-B", "fill_qty": 1,
+              "pre_fill_buy_qty": 6, "post_fill_buy_qty": 7,
+              "emitted_at": "2026-09-28T09:05:02+09:00"}
+    events.append(second)
+    outcome = _anchor_from_events(events)
+    assert outcome["actual_fill_qty"] == 2
+    assert outcome["position_quantity_status"] == "verified"
+    assert outcome["real_outcome_joined"] is True
+
+    second["pre_fill_buy_qty"] = 99
+    second["post_fill_buy_qty"] = 100
+    outcome = _anchor_from_events(events)
+    assert outcome["position_quantity_status"] == "position_quantity_mismatch"
+    assert outcome["real_outcome_joined"] is False
+
+
+def test_scale_in_missing_terminal_lot_and_broker_cost_remain_unobserved():
+    events = _economic_attempt_events(target_date="2026-09-28", idx=1)
+    events[1].update(pre_fill_buy_qty=5, post_fill_buy_qty=7)
+    outcome = _anchor_from_events(events)
+    assert outcome["broker_actual_cost_krw"] is None
+    assert outcome["broker_actual_realized_pnl_krw"] is None
+    events[-1].pop("sell_qty")
+    outcome = _anchor_from_events(events)
+    assert outcome["terminal_lot_basis_complete"] is False
+    assert outcome["real_outcome_joined"] is False
+
+
+def test_scale_in_first_reader_rejects_wrong_date_and_conflicting_projection():
+    day = "2026-09-28"
+    event = _economic_attempt_events(target_date=day, idx=1)[1]
+    row = split_plan._project_relevant_input_event(
+        event, source_name="pipeline_events", event_date=day
+    )
+    receipt = {"artifact_sha256": "receipt-sha", "scale_in_execution_projection": {
+        "contract": "scale_in_execution_projection_v1", "target_date": day,
+        "record_ids": ["1"], "rows": [row],
+    }}
+    rows, summary = split_plan._conditioned_source_events(day, receipt, {"1"})
+    assert rows == [row]
+    assert summary["source_read_contract"]["catalog_sha256"] == "receipt-sha"
+
+    stale = deepcopy(receipt)
+    stale["scale_in_execution_projection"]["rows"][0]["source_date"] = "2026-09-27"
+    with pytest.raises(ValueError, match="execution_projection_row_date_invalid"):
+        split_plan._conditioned_source_events(day, stale, {"1"})
+
+    conflicting = deepcopy(receipt)
+    conflicting["scale_in_execution_projection"]["rows"].append(
+        {**row, "fill_qty": 999}
+    )
+    with pytest.raises(ValueError, match="execution_projection_identity_conflict"):
+        split_plan._conditioned_source_events(day, conflicting, {"1"})
+
+    repeated = deepcopy(receipt)
+    repeated["scale_in_execution_projection"]["rows"].append(deepcopy(row))
+    rows, summary = split_plan._conditioned_source_events(day, repeated, {"1"})
+    assert rows == [row]
+    assert summary["source_read_contract"]["duplicate_count"] == 1
+
+
+def test_scale_in_first_reader_missing_source_is_not_valid_empty(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    with pytest.raises(ValueError, match="execution_pipeline_source_missing"):
+        split_plan._conditioned_source_events("2026-09-28", {}, {"1"})
+    with pytest.raises(ValueError, match="execution_projection_contract_invalid"):
+        split_plan._conditioned_source_events(
+            "2026-09-28", {"scale_in_execution_projection": {"contract": "unknown"}},
+            {"1"},
+        )
+
+
+def test_scale_in_first_reader_rejects_damaged_small_source(monkeypatch, tmp_path):
+    data = _patch_dirs(monkeypatch, tmp_path)
+    day = "2026-09-28"
+    source = data / "pipeline_events" / f"pipeline_events_{day}.jsonl"
+    source.parent.mkdir(parents=True)
+    source.write_text('{"stage":"scale_in_order_submitted","add_type":"AVG_DOWN"\n')
+    with pytest.raises(ValueError, match="jsonl|execution_source"):
+        split_plan._conditioned_source_events(day, {}, {"1"})
+
+    source.write_text("")
+    rows, summary = split_plan._conditioned_source_events(day, {}, {"1"})
+    assert rows == []
+    assert summary["source_read_contract"]["status"] == "valid_empty"
+
+
+def test_scale_in_first_reader_requires_projection_for_late_partition(
+    monkeypatch, tmp_path
+):
+    data = _patch_dirs(monkeypatch, tmp_path)
+    day = "2026-09-28"
+    source = data / "pipeline_events" / f"pipeline_events_{day}.jsonl"
+    source.parent.mkdir(parents=True)
+    source.write_text("")
+    source.with_name(f"pipeline_events_{day}.late.jsonl").write_text("")
+    with pytest.raises(ValueError, match="bounded_execution_projection_missing"):
+        split_plan._conditioned_source_events(day, {}, {"1"})
+
+
+def test_scale_in_compressed_source_uses_signed_fact_projection(monkeypatch, tmp_path):
+    data = _patch_dirs(monkeypatch, tmp_path)
+    day = "2026-09-28"
+    source = data / "pipeline_events" / f"pipeline_events_{day}.jsonl.gz"
+    source.parent.mkdir(parents=True)
+    event = _economic_attempt_events(target_date=day, idx=1)[1]
+    with gzip.open(source, "wt", encoding="utf-8") as handle:
+        handle.write(json.dumps(event) + "\n")
+    with pytest.raises(ValueError, match="bounded_execution_projection_missing"):
+        split_plan._conditioned_source_events(day, {}, {"1"})
+    _write_fact_catalog(data, day, [event])
+    receipt = split_plan._fact_sync_receipt(day)
+    row = receipt["scale_in_execution_projection"]["rows"][0]
+    rows, summary = split_plan._conditioned_source_events(day, receipt, {"1"})
+    assert rows == [row]
+    assert summary["source_read_contract"]["catalog_sha256"] == split_plan._semantic_digest(receipt)
+
+
 @pytest.mark.parametrize(
     "touch_seconds,expected_fill", [(5, 1.0), (19, 1.0), (20, 0.5), (170, 0.5)]
 )
@@ -1899,6 +2045,37 @@ def test_public_filled_outcome_and_unchanged_revision_do_not_repeat_grid(monkeyp
     assert again["last_valid_evaluation"]["inventory_key"] == report["evaluation_state"]["inventory_key"]
     assert len(again["outcome_revisions"]) == 6
     assert len({r["attempt_id"] for r in again["outcome_revisions"]}) == 6
+
+
+def test_scale_in_fact_catalog_regeneration_invalidates_old_evaluation(
+    monkeypatch, tmp_path
+):
+    data = _patch_dirs(monkeypatch, tmp_path)
+    day = "2026-07-07"
+    _seed_independent_economic_reports(data)
+    _write_source_quality_pass(data, day)
+    events = [
+        event
+        for idx in (1, 2, 3)
+        for event in _economic_attempt_events(target_date=day, idx=idx)
+    ]
+    catalog_path = _write_fact_catalog(data, day, events)
+    monkeypatch.setattr(
+        split_plan, "_query_actual_fill_inventory",
+        lambda _: [_actual_inventory(day, idx) for idx in (1, 2, 3)],
+    )
+    first = split_plan.build_report(day)
+    assert first["evaluation_state"]["status"] == "evaluated"
+    split_plan.write_outputs(day, first)
+
+    catalog = json.loads(catalog_path.read_text())
+    catalog.pop("artifact_sha256")
+    catalog["source_digest"] = "new-producer-generation"
+    catalog["artifact_sha256"] = split_plan._semantic_digest(catalog)
+    catalog_path.write_text(json.dumps(catalog))
+    second = split_plan.build_report(day)
+    assert second["evaluation_state"]["status"] == "evaluated"
+    assert second["processed_inventory_key"] != first["processed_inventory_key"]
 
 
 def test_late_evaluation_cannot_reuse_consumed_earlier_fill_dates(monkeypatch, tmp_path):

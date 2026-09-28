@@ -85,6 +85,15 @@
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
 
+## 물타기 공통 반등·체결 식별자 폐루프
+
+- [ ] `[AvgDownSharedReboundReceiptClosure0928] 물타기 사전검사·재기동 체결 식별자·보유 건별 경제성 결속` (`Due: 2026-09-28`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~21:40`, `Track: RuntimeStability`)
+  - Source: [구현계획](../proposals/avg-down-shared-rebound-receipt-and-pyramid-retirement-implementation-plan-2026-09-28.md), [9/18 퇴역·공통 반등 검토](../audit-reports/2026-09-18-pyramid-retirement-avg-down-shared-rebound-review.md).
+  - 현재 결손: 대우건설 `047040`/보유 `48376`은 사전검사 차단의 세부 blocker·원천 시계가 이벤트에서 빠지고, 11:13경 재기동 후 `buy_fill_identity_missing`이 반복됐다. 최초 BUY 주문 `0029186`/체결 `131176`의 영속 원천과 복원 경로를 대사한다. 유효 ADD 투표·주문·체결·경제성은 아직 확인되지 않았다.
+  - 구현 순서: exact BUY 체결 원천·보유 ID 대사 → 제한된 preflight blocker 기록 → 멱등 영속화/재기동 복원과 미복원 ADD 차단 → 같은 보유 건의 반등·투표·실제 제출/체결·청산/비용 join → PYRAMID 신규 판단·튜닝·정책 잔재 제거와 과거 미결 주문/SELL 정산 보존 → review·표적 회귀·성능 비교.
+  - 완료 기준: 선택 release·설치 unit·실제 PID·정책 hash와 첫 자연 기회 영수증을 분리한다. 원천 적격/유효 반등/유효 투표/계획·제출·체결/정확 비용·완료의 단계별 분모와 ID 보존식이 성립하고, PYRAMID 신규 주문은 불가능하며 옛 주문 정산은 유지된다. 유효 자연 ADD·완료 표본이 없으면 수익성은 `null`, 수용은 `natural_first_use_pending`으로 이관한다.
+  - 권한 경계: 본 항목은 구현계획 owner이며 코드 변경·배포·재기동·주문을 승인하지 않는다. `[DirectFamilySourceRepairScaleInSplit]`은 ADD 허가 뒤 수량·분할 방식만 별도 소유한다. 원천·체결 ID를 합성하거나 hard safety/SELL 우선권을 완화하지 않는다.
+
 ## 9/24 복구에서 이관된 자연 원천 수용
 
 - [ ] `[PostcloseDashboardArchive0928] 장후 DB archive 예약 복구 후 첫 자연 terminal 확인` (`Due: 2026-09-28`, `Slot: POSTCLOSE`, `TimeWindow: 20:50~21:10`, `Track: RuntimeStability`)
@@ -187,6 +196,17 @@
   - 실행 범위: 첫 지시 시 S0만 실행하여 전체 `src`·`deploy`·설정/스케줄·등록 stage의 양방향 producer–artifact–consumer 목록과 활성/OFF/퇴역·owner·실제 dispatch를 대사한다. 기존 family별 OPEN owner는 유지한다. S1–S8은 S0 결과를 받은 뒤 각 단계 지시문으로 따로 착수한다.
   - 완료 기준: S0 실행일 보고서에 전수 발견 방법, 미분류/고아 경로, 선택 릴리스·PID 증거 수준, 다음 단계 결손 ID·owner가 있고 목록을 재검토했다. 이 항목의 완료는 결손 수리·정규 장후 실행·배포·자연 경제성 수용을 뜻하지 않는다.
   - 9/27 완료 증거: [S0 연결표·고아 후보·S1 인계](../audit-reports/2026-09-27-intraday-postclose-handoff-S0.md). S1–S5 조사와 실제 PID·자연 수용은 별도 OPEN 범위다.
+
+## 시장 발견→기계 판정 제로베이스 재설계
+
+- [ ] `[ScannerSemanticWatchReplacement0928] 시장 발견→기계 판정 새 대기열·조건검색/VCP/S15 퇴역` (`Due: 2026-09-28`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~21:40`, `Track: RuntimeStability`)
+  - Source: [9/28 제로베이스 재설계·배포 경로](../proposals/scalping-zero-base-discovery-machine-intake-plan-2026-09-28.md), [장기 점유·반전 부재 자연 재생](../proposals/scalping-scanner-semantic-watch-replacement-plan-2026-09-28.md), [상승 표본 1회 판정](../audit-reports/2026-09-28-kospi-positive-machine-one-pass-source-test.md). 기존 stable ID의 이전 감시퇴출 시험을 증거로 보존하고 새 발견·평가 대기열 owner로 범위를 이관한다.
+  - 결정 근거: 11:25:30 고정 KOSPI 보통주 상승 관측 113종목 중 코드·시각 연결의 스캐너 풀 91·승격 41·풀 미승격 50이다. 이 수치는 scanner pool의 정확 route 적격률이 아니다. 미승격 50의 첫 제외는 일반 슬롯 29, 회차 신규 상한 18, 상승 예약석 1, cooldown 2였다. 9/28 11:13 Main PID 기동 시 감시 상한 22, 조건검색 ON, WS 등록 상한 56이었다. 13개 조건식 구독 요청에 비해 cutoff 전 같은 condition 세대의 제출 0건과 출처 식별 결손이 있다. VCP 3식은 실제 구독되었고 clean baseline 이후 VCP_CANDID 6건에서 매수·완료 및 SHOOTING/NEXT 전환은 확인되지 않았다. S15 두 식은 실제 이름과 `_01` 구독 키워드가 달라 미구독이며 S15 추천·성과 표본이 없다. 이 근거는 수익률 0/음수를 뜻하지 않는다. 113은 시장 전수가 아니며 미평가 종목을 기계 `BLOCK`으로 채우지 않는다.
+  - 완료 기준: 공식 원천·route·시각·범위가 고정된 독립 발견 원장과 condition별 원시 유입→WS item/요청→유효 기계 입력/제출 원장을 만든다. 기존 스캐너와의 점수·상한·제출 수 비교로 선택하지 않는다. 새 `discovered→queued→probed→assessed→machine action→submitted→terminal` 큐의 공정성, 공유 5/4 읽기 예산, WS peak, source-gap, 주문·보유 custody 및 hard safety를 같은 세대에서 검증한다. VCP 3식과 S15 2식은 새 bootstrap/재연결 구독 및 신규 후보·주문 경로에서 제거하고, 전용 코드·복구/영수증/동기화 참조를 영향 리뷰와 회귀로 정리한다. 먼저 실제 PID cwd/env의 원장, DB·주문 소유권, 브로커 양 시장 미결·보유와 과거 WATCHING을 대사해 남은 청산/복구 소유권이 있으면 terminal까지 recovery-only 호환성을 보존한다. S15 작업공간 journal 원본과 역사적 DB/이벤트는 삭제하지 않는다. 다른 스캘핑 식은 유일 적격 기여와 WS 비용으로 별도 제거하며 swing과 기존 주문·보유 custody는 유지한다. 장기 점유 퇴출은 신선한 관측과 반전 부재가 확인된 세대에만 적용한다. 퇴역만 담은 불변 릴리스의 신구독 VCP/S15=0, 신규 VCP/S15 주문=0, custody 보전, 재활성 없는 롤백을 먼저 검증한 뒤 새 queue 릴리스의 영향 리뷰/회귀·PREOPEN을 닫는다. 장후 선택·정상 재기동·실제 PID 영수증 및 이후 제출·terminal·비용 후 결과를 각각 별도로 확인한다. 원천/판정 입력 결손은 `source_gap`으로 남긴다.
+  - 13시대 작업공간 진행: 독립 패널·영속 큐·정확 route 0B/0D probe·provider 없는 기계판정·Main 임시 DB→WATCHING 편입을 연결했다. 새 모드에서 SCALPING condition 구독/유입은 중단하고 swing은 유지한다. VCP/S15 신규 경로와 S15 직접 BUY 함수를 제거했으며 custody 복구 코드는 보존한다. 공식 Kiwoom SHA `953e5dbff123f437ab4d11a78a95191a685eb51f`를 재확인했다. 이는 릴리스/PID/자연 경제성 수용이 아니다. 남은 POSTCLOSE 문턱은 전체 리뷰·회귀, 원시 source/부하 실측, 적용 직전 custody 대사, 두 불변 릴리스·PREOPEN/실제 PID 수용이다.
+  - 14시대 재리뷰: 순수 VCP/S15 퇴역 릴리스 `53854ced`(신규 스캐너 코드 없음) 영향 회귀 1,545건과 새 발견 릴리스 `d525ece7` 확장 회귀 928건 및 예외·WS 재사용 보강 회귀 41/14건, S15 dead helper 제거 회귀 39건, 유동성 tie-break 회귀 13건 통과. source-only 4패널 실호출은 최대 200행씩 757개 관측/8.38초였고 전체 시장 전수는 아니다. 9/25·9/28 저장 패널의 큐 전용 재생에서 stale 120초 차단과 패널 사이 10초 dispatch를 검증했으나 실제 probe·제출 성과는 미관측이다. 14:00:49 KST 예비 custody는 VCP 과거 WATCHING 1건·매수 0, S15 journal 1개, 브로커 KRX/NXT 잔고 1·미결 0, VCP/S15 코드 중복 0이었다. 적용 직전 재대사가 필요하다. NXT 애프터마켓 체결은 20:00까지라 구조 재기동은 그 뒤의 POSTCLOSE 슬롯에서 수행한다.
+  - 14:56 사용자 즉시 배포·route 정정: KRX/NXT 분리 패널은 잘못된 운영 계약으로 확인해 신규 스캐너를 퇴역 전용 `53854ced`로 즉시 롤백·PID `647108`을 검증했다. `ka10027 stex_tp=3` 통합 2패널, `_AL` WS/REST, 명시 `SOR` 주문 요청 및 주문 직전 route fail-closed로 수정한 `826f3d72`은 source-only 2/2 패널·400행·7.75초와 회귀 210건 후 배포해 PID `657079`의 자연 통합 queue·`_AL` REG/REMOVE·기계 `RECHECK` 1건을 확인했다. 신뢰 체결 방향 결손을 원천 결손으로 재분류한 `d619923a`를 후속 적용해 현재 PID `661520`, bootstrap/release-set PASS다. 기존 분리 queue는 보존하고 신규 통합 queue로 시작했다. 자연 `ENTER_NOW`/제출·체결·terminal·비용 후 EV는 계속 OPEN이다. 자세한 공식 SHA·경로·수정 리뷰는 [제로베이스 구현 리뷰](../audit-reports/2026-09-28-zero-base-scanner-implementation-review-and-release-gates.md)를 따른다.
+  - 15:23 WS probe 대기 보완 릴리스 `71caed84`를 배포해 Main PID `676594`, 당일 bootstrap/release-set PASS를 확인했다. 정확 `_AL` 0B·0D와 0B 5건을 기존 3초 한도 내에서 기다릴 기회를 주고 결손은 그대로 원천 결손으로 남긴다. 다른 세션 작업본 통합 리뷰 및 후속 선택 결과는 [통합 작업본 리뷰](../audit-reports/2026-09-28-integrated-worktree-review-and-deployment.md)를 따른다. 새 PID의 자연 제출·체결·terminal·비용 후 EV는 OPEN이다.
 
 ## Project/Calendar 동기화
 
