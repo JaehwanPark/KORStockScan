@@ -74,6 +74,37 @@ def test_fixed_watch_route_and_post_receipt_warmup():
     assert fixed.observation_ready(target, bad, now_epoch=now + 11)[1] == "exact_0B_missing"
 
 
+def test_fixed_watch_entry_source_uses_exact_session_item_and_order_route():
+    import pytest
+    from src.engine import sniper_state_handlers as handlers
+
+    for hour, item, broker_route in (
+        (8, "005930_NX", "NXT"),
+        (10, "005930_AL", "SOR"),
+        (16, "005930_AL", "SOR"),
+    ):
+        now = epoch(hour)
+        session_route = fixed.session_route(now)
+        target = {
+            "code": "005930",
+            "watch_origin": fixed.WATCH_ORIGIN,
+            "watch_generation_id": fixed.generation_id(now, session_route),
+            "broker_route": broker_route,
+        }
+        assert handlers._fixed_watch_entry_source_route(target, now) == {
+            "item": item,
+            "broker_route": broker_route,
+        }
+        with pytest.raises(ValueError, match="fixed_watch_entry_session_route_conflict"):
+            handlers._fixed_watch_entry_source_route(
+                {**target, "broker_route": "NXT" if broker_route == "SOR" else "SOR"},
+                now,
+            )
+    assert handlers._fixed_watch_entry_source_route(
+        {"code": "005930", "watch_origin": "ZERO_BASE_DISCOVERY"}, epoch(16)
+    ) is None
+
+
 def test_broker_flat_requires_both_exchanges_and_zero_open_orders():
     from src.engine.scalping.ai_market_snapshot import (
         _clear_broker_account_snapshot_for_tests,

@@ -34,6 +34,7 @@ from sqlalchemy import or_
 
 from src.database.models import HoldingAddHistory, RecommendationHistory
 from src.engine import kiwoom_orders, sniper_trade_utils
+from src.engine.scalping import main_fixed_watch
 from src.trading.market import session_contract
 from src.engine.automation.source_quality_clean_baseline import (
     embedded_source_date_gate,
@@ -18928,6 +18929,25 @@ def _entry_ai_policy_position_tag(stock: dict | None) -> str:
     ):
         return "SCANNER"
     return actual_tag
+
+
+def _fixed_watch_entry_source_route(stock: dict | None, now_ts: float) -> dict | None:
+    """Bind fixed-watch REST/candle inputs to its current exact WS/order route."""
+    if not main_fixed_watch.is_fixed_watch(stock):
+        return None
+    route = main_fixed_watch.session_route(now_ts)
+    if (
+        route is None
+        or (stock or {}).get("watch_generation_id")
+        != main_fixed_watch.generation_id(now_ts, route)
+        or (stock or {}).get("broker_route")
+        != ("NXT" if route["route"] == "nxt_only" else "SOR")
+    ):
+        raise ValueError("fixed_watch_entry_session_route_conflict")
+    return {
+        "item": route["item"],
+        "broker_route": (stock or {})["broker_route"],
+    }
 
 
 def _log_ai_confirmed_terminal_no_budget(
@@ -41627,8 +41647,13 @@ def _retry_entry_ai_submit_authority_before_block(
                     ),
                 }
             )
+            fixed_source_route = _fixed_watch_entry_source_route(stock, time.time())
             recent_ticks = (
-                kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=10)
+                kiwoom_utils.get_tick_history_ka10003(
+                    KIWOOM_TOKEN,
+                    fixed_source_route["item"] if fixed_source_route else code,
+                    limit=10,
+                )
                 or []
             )
             recent_candles, candle_source_meta = fetch_entry_candles_with_meta(
@@ -41637,6 +41662,7 @@ def _retry_entry_ai_submit_authority_before_block(
                 retry_ws_data,
                 limit=40,
                 now_ts=now_ts,
+                broker_route=(fixed_source_route or {}).get("broker_route"),
                 allow_integrated_sor_execution_view=True,
             )
             fields["pre_submit_entry_ai_authority_retry_history_ready_elapsed_ms"] = (
@@ -41667,6 +41693,7 @@ def _retry_entry_ai_submit_authority_before_block(
                 now_ts=retry_context_now_ts,
                 recent_candles=recent_candles,
                 source_meta=candle_source_meta,
+                broker_route=(fixed_source_route or {}).get("broker_route"),
                 include_investor_source=True,
             )
             fields["pre_submit_entry_ai_authority_retry_context_build_elapsed_ms"] = (
@@ -47306,6 +47333,7 @@ def _apply_entry_ai_price_canary(
     candle_context = None
     entry_price_preflight = {}
     if candle_axis_active:
+        fixed_source_route = _fixed_watch_entry_source_route(stock, time.time())
         candle_context = build_entry_candle_context(
             KIWOOM_TOKEN,
             code,
@@ -47317,6 +47345,7 @@ def _apply_entry_ai_price_canary(
             now_ts=time.time(),
             recent_candles=recent_candles,
             source_meta=candle_source_meta,
+            broker_route=(fixed_source_route or {}).get("broker_route"),
             include_investor_source=True,
         )
         # Auxiliary context preparation may outlive the market snapshot taken
@@ -62576,8 +62605,13 @@ def _handle_watching_strategy_branch(
                             time.time(),
                         )
                     else:
+                        fixed_source_route = _fixed_watch_entry_source_route(
+                            stock, time.time()
+                        )
                         recent_ticks = kiwoom_utils.get_tick_history_ka10003(
-                            KIWOOM_TOKEN, code, limit=10
+                            KIWOOM_TOKEN,
+                            fixed_source_route["item"] if fixed_source_route else code,
+                            limit=10,
                         )
                         recent_candles, candle_source_meta = (
                             fetch_entry_candles_with_meta(
@@ -62586,6 +62620,7 @@ def _handle_watching_strategy_branch(
                                 ws_data,
                                 limit=40,
                                 now_ts=now_ts,
+                                broker_route=(fixed_source_route or {}).get("broker_route"),
                                 allow_integrated_sor_execution_view=True,
                             )
                         )
@@ -62623,6 +62658,7 @@ def _handle_watching_strategy_branch(
                                 now_ts=entry_context_now_ts,
                                 recent_candles=recent_candles,
                                 source_meta=candle_source_meta,
+                                broker_route=(fixed_source_route or {}).get("broker_route"),
                                 include_investor_source=True,
                             )
                             stock.pop("ai_wait_rebound_recheck_pending", None)
@@ -64412,6 +64448,9 @@ def _handle_watching_strategy_branch(
                         is_new_evaluation = False
                     else:
                         try:
+                            fixed_source_route = _fixed_watch_entry_source_route(
+                                stock, time.time()
+                            )
                             realtime_ctx = kiwoom_utils.build_realtime_analysis_context(
                                 token=KIWOOM_TOKEN,
                                 code=code,
@@ -64436,6 +64475,7 @@ def _handle_watching_strategy_branch(
                                     ws_data,
                                     limit=40,
                                     now_ts=now_ts,
+                                    broker_route=(fixed_source_route or {}).get("broker_route"),
                                     allow_integrated_sor_execution_view=True,
                                 )
                             )
@@ -64451,6 +64491,7 @@ def _handle_watching_strategy_branch(
                                 now_ts=gatekeeper_context_now_ts,
                                 recent_candles=gatekeeper_candles,
                                 source_meta=gatekeeper_candle_meta,
+                                broker_route=(fixed_source_route or {}).get("broker_route"),
                                 include_investor_source=True,
                             )
                             gatekeeper_snapshot_ws = dict(ws_data or {})
