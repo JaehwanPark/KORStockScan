@@ -123,8 +123,9 @@ class DiscoveryQueue:
             current.discovery_price = discovery_price or current.discovery_price
             current.discovery_volume = discovery_volume
             current.source_kind = source_kind
-            # A new source generation makes a prior BLOCK eligible again.
-            current.next_due_epoch = min(current.next_due_epoch, received_epoch)
+            # Refresh an assessed setup, but keep non-assessed retry deadlines.
+            if current.last_result in {"queued", "assessed"}:
+                current.next_due_epoch = min(current.next_due_epoch, received_epoch)
             return "updated"
         self._candidates[key] = Candidate(
             code=code,
@@ -252,6 +253,10 @@ class DiscoveryQueue:
             for row in self._candidates.values()
         )
 
+    def in_flight_count(self) -> int:
+        """Count all claimed probes, including prior-session claims awaiting expiry."""
+        return sum(row.in_flight for row in self._candidates.values())
+
     def resolve(
         self,
         claim: dict,
@@ -284,7 +289,7 @@ class DiscoveryQueue:
         row.last_result = result
         row.machine_action = machine_action
         row.next_due_epoch = next_due_epoch
-        if row.observed_epoch > row.claimed_observed_epoch:
+        if row.observed_epoch > row.claimed_observed_epoch and result == "assessed":
             row.next_due_epoch = min(row.next_due_epoch, row.last_seen_epoch)
         row.in_flight = False
         row.claimed_observed_epoch = 0.0

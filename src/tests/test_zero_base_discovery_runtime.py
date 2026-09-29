@@ -2,6 +2,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from src.scanners.zero_base_discovery_runtime import (
+    MAX_CONCURRENT_PROBES,
     MACHINE_ENTER_EVENT,
     PROBE_REQUEST_EVENT,
     PROBE_RESULT_EVENT,
@@ -122,11 +123,23 @@ def test_panel_interval_does_not_limit_probe_dispatch_and_stale_rows_wait(tmp_pa
         for code in range(1, 14)
     ]}
     first = runtime.scan_once("token", fetcher=lambda _token: panel, now_epoch=T0 + 1)
-    assert first["probe_requested_count"] == 12
+    assert first["probe_requested_count"] == MAX_CONCURRENT_PROBES == 5
+    assert first["probe_capacity_limit"] == 5
+    assert first["probe_claims_in_flight_count"] == 5
+    assert runtime.queue.in_flight_count() == 5
     second = runtime.dispatch_due_probes(now_epoch=T0 + 11)
-    assert second["probe_requested_count"] == 1
-    assert [payload["claim"]["code"] for event, payload in bus.events
-            if event == PROBE_REQUEST_EVENT][-1] == "000013"
+    assert second["probe_requested_count"] == 0
+    assert second["probe_claims_in_flight_count"] == 5
+    first_requests = [payload for event, payload in bus.events
+                      if event == PROBE_REQUEST_EVENT]
+    for request in first_requests[:2]:
+        bus.publish(PROBE_RESULT_EVENT, {
+            **request, "result": "source_unavailable",
+            "reason": "route_snapshot_missing",
+        })
+    assert len(runtime.drain_results(now_epoch=T0 + 12)) == 2
+    assert runtime.dispatch_due_probes(now_epoch=T0 + 13)["probe_requested_count"] == 2
+    assert runtime.queue.in_flight_count() == 5
     stale = runtime.dispatch_due_probes(now_epoch=T0 + 121)
     assert stale["probe_requested_count"] == 0
     assert stale["stale_candidate_count"] == 13
@@ -150,10 +163,21 @@ def test_aftermarket_dispatch_uses_activity_rotation_without_dropping_gainers(tm
         "token", fetcher=lambda _token: {"panels": [], "observations": observations},
         now_epoch=after + 1,
     )
-    assert summary["probe_requested_count"] == 12
+    assert summary["probe_requested_count"] == 5
     kinds = [payload["claim"]["source_kind"] for event, payload in bus.events
              if event == PROBE_REQUEST_EVENT]
-    assert kinds == ["activity"] * 7 + ["gainers"] + ["activity"] * 4
+    assert kinds == ["activity"] * 5
+    for request in [payload for event, payload in bus.events
+                    if event == PROBE_REQUEST_EVENT]:
+        bus.publish(PROBE_RESULT_EVENT, {
+            **request, "result": "source_unavailable",
+            "reason": "route_snapshot_missing",
+        })
+    assert len(runtime.drain_results(now_epoch=after + 2)) == 5
+    assert runtime.dispatch_due_probes(now_epoch=after + 3)["probe_requested_count"] == 5
+    kinds = [payload["claim"]["source_kind"] for event, payload in bus.events
+             if event == PROBE_REQUEST_EVENT]
+    assert kinds == ["activity"] * 7 + ["gainers"] + ["activity"] * 2
 
 
 def test_session_handoff_does_not_claim_premarket_route_in_regular_session(tmp_path):

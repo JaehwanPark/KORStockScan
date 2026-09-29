@@ -19,7 +19,8 @@ from src.scanners.zero_base_discovery_source import fetch_discovery_panels
 PROBE_REQUEST_EVENT = "ZERO_BASE_PROBE_REQUESTED"
 PROBE_RESULT_EVENT = "ZERO_BASE_PROBE_RESULT"
 MACHINE_ENTER_EVENT = "ZERO_BASE_MACHINE_ENTER"
-MAX_CLAIMS_PER_CYCLE = 12
+MAX_CONCURRENT_PROBES = 5
+MAX_CLAIMS_PER_CYCLE = MAX_CONCURRENT_PROBES
 MAX_DISCOVERY_OBSERVATION_AGE_SEC = 120
 
 
@@ -137,8 +138,11 @@ class ZeroBaseDiscoveryRuntime:
         abandoned = self.queue.abandon_expired_claims(
             now_epoch=now_epoch, timeout_sec=60,
         )
+        active_claims = self.queue.in_flight_count()
+        available_slots = max(0, MAX_CONCURRENT_PROBES - active_claims)
         claims = self.queue.claim(
-            now_epoch=now_epoch, limit=MAX_CLAIMS_PER_CYCLE,
+            now_epoch=now_epoch,
+            limit=min(MAX_CLAIMS_PER_CYCLE, available_slots),
             min_interval_sec=5,
             max_observation_age_sec=MAX_DISCOVERY_OBSERVATION_AGE_SEC,
             eligible_routes=eligible_routes,
@@ -155,6 +159,8 @@ class ZeroBaseDiscoveryRuntime:
             )
         return {
             "probe_requested_count": len(claims),
+            "probe_capacity_limit": MAX_CONCURRENT_PROBES,
+            "probe_claims_in_flight_count": self.queue.in_flight_count(),
             "probe_timeout_count": abandoned,
             "stale_candidate_count": self.queue.stale_candidate_count(
                 now_epoch=now_epoch,

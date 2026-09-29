@@ -5621,6 +5621,7 @@ class KiwoomWSManager:
                     print(f"🚨 [WS] REMOVE 스레드 통신 간 에러 발생: {e}")
 
             future.add_done_callback(on_complete)
+            return future
 
     def _normalize_micro_reversion_observation_items(self, items):
         normalized: OrderedDict[str, list[str]] = OrderedDict()

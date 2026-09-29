@@ -2,6 +2,8 @@ from types import SimpleNamespace
 from concurrent.futures import Future
 import time
 
+import pytest
+
 from src.engine.scalping.zero_base_probe import (
     exact_probe_rest_sources, exact_probe_ws_data, probe_registration_receipt,
     run_zero_base_probe,
@@ -474,6 +476,35 @@ def test_empty_exact_source_flushes_before_full_ws_wait():
     assert 20 <= observation["wait_ms"] < 100
     assert observation["base_wait_budget_ms"] == 200
     assert observation["effective_wait_budget_ms"] == 30
+
+
+@pytest.mark.parametrize("route,item,warmup,timeout", [
+    ("krx_nxt_integrated", "123456_AL", 10.0, 15.0),
+    ("nxt_only", "123456_NX", 15.0, 20.0),
+])
+@pytest.mark.parametrize("ready", [False, True])
+def test_exact_source_waits_for_session_probe_floor(
+    monkeypatch, route, item, warmup, timeout, ready,
+):
+    import src.engine.scalping.zero_base_probe as module
+
+    elapsed = [0.0]
+    monkeypatch.setattr(module.time, "monotonic", lambda: elapsed[0])
+    monkeypatch.setattr(
+        module.time, "sleep",
+        lambda seconds: elapsed.__setitem__(0, elapsed[0] + seconds),
+    )
+    ws = SimpleNamespace(
+        get_latest_data=lambda *_args: _snapshot(route, item) if ready else {},
+    )
+    data, observation, reason = wait_for_exact_probe_ws_data(
+        ws, code="123456", route=route, after_epoch=10,
+        now=lambda: 11, timeout_sec=timeout,
+        empty_timeout_sec=warmup, min_warmup_sec=warmup,
+    )
+    assert (reason == "ready" and bool(data)) is ready
+    assert warmup * 1000 <= observation["wait_ms"] < warmup * 1000 + 100
+    assert observation["empty_source_flushed"] is not ready
 
 
 def test_one_exact_stream_keeps_full_ws_wait_budget():

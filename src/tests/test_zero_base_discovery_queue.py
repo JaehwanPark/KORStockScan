@@ -163,6 +163,23 @@ def test_source_gap_is_not_machine_block_and_restart_reclaims_inflight():
         DiscoveryQueue.restore(queue.snapshot(), session_date="2026-09-29")
 
 
+@pytest.mark.parametrize("result", [
+    "source_unavailable", "required_feature_insufficient", "policy_unavailable",
+    "active_conflict", "probe_capacity_deferred",
+])
+def test_new_discovery_does_not_cancel_non_assessed_retry(result):
+    queue = DiscoveryQueue(DAY)
+    _observe(queue, "000001")
+    claim = queue.claim(now_epoch=T0 + 2, limit=1)[0]
+    assert queue.in_flight_count() == 1
+    assert _observe(queue, "000001", epoch=T0 + 3, digest=HASH_B) == "updated"
+    assert queue.resolve(claim, result=result, next_due_epoch=T0 + 64)
+    assert queue.in_flight_count() == 0
+    assert _observe(queue, "000001", epoch=T0 + 6, digest=HASH_A) == "updated"
+    assert queue.claim(now_epoch=T0 + 63, limit=1) == []
+    assert queue.claim(now_epoch=T0 + 64, limit=1)[0]["source_sha256"] == HASH_A
+
+
 def test_refreshed_inflight_claim_timeout_still_rejects_late_result():
     queue = DiscoveryQueue(DAY)
     _observe(queue, "000001")

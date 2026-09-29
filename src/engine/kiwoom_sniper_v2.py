@@ -105,6 +105,7 @@ from src.engine.scalping.scanner_async_eval import ScannerAsyncEvalCoordinator
 from src.engine.scalping.zero_base_probe import probe_item, run_zero_base_probe
 from src.scanners.zero_base_discovery_runtime import (
     MACHINE_ENTER_EVENT,
+    MAX_CONCURRENT_PROBES,
     PROBE_REQUEST_EVENT,
     PROBE_RESULT_EVENT,
 )
@@ -329,8 +330,10 @@ bind_s15_dependencies(db=DB)
 
 # 💡 [스레드 안전성] 공유 상태 접근용 락
 _state_lock = threading.RLock()
-_ZERO_BASE_PROBE_EXECUTOR = ThreadPoolExecutor(max_workers=16, thread_name_prefix="zero-base-probe")
-_ZERO_BASE_PROBE_SLOTS = threading.BoundedSemaphore(24)
+_ZERO_BASE_PROBE_EXECUTOR = ThreadPoolExecutor(
+    max_workers=MAX_CONCURRENT_PROBES, thread_name_prefix="zero-base-probe"
+)
+_ZERO_BASE_PROBE_SLOTS = threading.BoundedSemaphore(MAX_CONCURRENT_PROBES)
 _ZERO_BASE_PROBE_IN_FLIGHT = set()
 _ZERO_BASE_PROBE_LOCK = threading.Lock()
 
@@ -8618,7 +8621,7 @@ def _zero_base_release_probe_ws(code, item):
     if source_only and not micro_owned and not pinned and (
         item in current_items or not current_items
     ):
-        manager.execute_unsubscribe([code])
+        return manager.execute_unsubscribe([code])
 
 
 def _zero_base_probe_observation_profile(session_regime):
@@ -8627,9 +8630,9 @@ def _zero_base_probe_observation_profile(session_regime):
         session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET,
     }
     return {
-        "first_warmup_sec": 5.0 if thin_session else 3.0,
-        "first_timeout_sec": 15.0 if thin_session else 10.0,
-        "first_empty_timeout_sec": 8.0 if thin_session else 5.0,
+        "first_warmup_sec": 15.0 if thin_session else 10.0,
+        "first_timeout_sec": 20.0 if thin_session else 15.0,
+        "first_empty_timeout_sec": 15.0 if thin_session else 10.0,
         "recheck_warmup_sec": 3.0 if thin_session else 2.0,
         "recheck_timeout_sec": 10.0 if thin_session else 6.0,
         "recheck_empty_timeout_sec": 8.0 if thin_session else 5.0,
@@ -8686,13 +8689,43 @@ def handle_zero_base_probe_requested(request):
     def worker():
         deferred_cleanup = False
         retained_ws = False
+        slot_released = False
+        release_pending = False
+
+        def release_slot():
+            nonlocal slot_released
+            with _ZERO_BASE_PROBE_LOCK:
+                if not slot_released:
+                    _ZERO_BASE_PROBE_IN_FLIGHT.discard(code)
+                    _ZERO_BASE_PROBE_SLOTS.release()
+                    slot_released = True
 
         def release_probe_ws(release_code, release_item):
+            nonlocal release_pending
+            def on_remove_complete(future):
+                try:
+                    if future.result() is not True:
+                        log_error("[ZERO_BASE_PROBE_RELEASE] " + code + ":ws_remove_unconfirmed")
+                except Exception as exc:
+                    log_error("[ZERO_BASE_PROBE_RELEASE] " + code + ":" + type(exc).__name__)
+                finally:
+                    release_slot()
+
             try:
-                _zero_base_release_probe_ws(release_code, release_item)
-            finally:
-                with _ZERO_BASE_PROBE_LOCK:
-                    _ZERO_BASE_PROBE_IN_FLIGHT.discard(release_code)
+                completion = _zero_base_release_probe_ws(release_code, release_item)
+            except Exception:
+                release_slot()
+                raise
+            if callable(getattr(completion, "add_done_callback", None)):
+                release_pending = True
+                try:
+                    completion.add_done_callback(on_remove_complete)
+                except Exception:
+                    release_pending = False
+                    release_slot()
+                    raise
+            else:
+                release_slot()
 
         try:
             try:
@@ -8775,10 +8808,8 @@ def handle_zero_base_probe_requested(request):
                     except Exception as exc:
                         log_error("[ZERO_BASE_PROBE_RELEASE] " + code + ":" + type(exc).__name__)
             finally:
-                if not deferred_cleanup:
-                    with _ZERO_BASE_PROBE_LOCK:
-                        _ZERO_BASE_PROBE_IN_FLIGHT.discard(code)
-                _ZERO_BASE_PROBE_SLOTS.release()
+                if not deferred_cleanup and not release_pending:
+                    release_slot()
 
     try:
         _ZERO_BASE_PROBE_EXECUTOR.submit(worker)

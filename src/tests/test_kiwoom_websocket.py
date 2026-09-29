@@ -2437,6 +2437,26 @@ def test_execute_unsubscribe_removes_registered_item_budget_state(monkeypatch):
     assert "000001" not in manager.realtime_data
 
 
+def test_execute_unsubscribe_returns_remove_send_completion(monkeypatch):
+    from concurrent.futures import Future
+
+    manager = KiwoomWSManager("test-token")
+    manager.loop = SimpleNamespace(is_running=lambda: True)
+    manager.subscribed_codes = {"000001"}
+    manager._registered_items_by_code = {"000001": ("000001_AL",)}
+    completion = Future()
+
+    def schedule(coroutine, _loop):
+        coroutine.close()
+        return completion
+
+    monkeypatch.setattr(
+        kiwoom_websocket.asyncio, "run_coroutine_threadsafe", schedule,
+    )
+    assert manager.execute_unsubscribe(["000001"]) is completion
+    completion.set_result(True)
+
+
 def test_execute_unsubscribe_retains_widget_comparison_observation(monkeypatch):
     monkeypatch.delenv(kiwoom_websocket.WS_PINNED_OBSERVATION_ITEMS_ENV, raising=False)
     manager = KiwoomWSManager("test-token")

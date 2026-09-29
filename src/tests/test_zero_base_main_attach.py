@@ -281,9 +281,9 @@ def test_recheck_reuses_probe_lease_then_publishes_only_final_assessment(
     assert futures[0].exception() is None
     assert bool(errors) is release_raises
     assert len(calls) == 2
-    assert [call["ws_min_warmup_sec"] for call in calls] == [3.0, 2.0]
-    assert [call["ws_wait_timeout_sec"] for call in calls] == [10.0, 6.0]
-    assert [call["ws_wait_empty_timeout_sec"] for call in calls] == [5.0, 5.0]
+    assert [call["ws_min_warmup_sec"] for call in calls] == [10.0, 2.0]
+    assert [call["ws_wait_timeout_sec"] for call in calls] == [15.0, 6.0]
+    assert [call["ws_wait_empty_timeout_sec"] for call in calls] == [10.0, 5.0]
     assert released == [("123456", "123456_AL")]
     assert len(published) == 1
     assert published[0][1]["machine_action"] == expected_action
@@ -300,13 +300,58 @@ def test_recheck_reuses_probe_lease_then_publishes_only_final_assessment(
 ])
 def test_quiet_sessions_have_longer_bounded_probe_observation(regime):
     profile = main._zero_base_probe_observation_profile(regime)
-    assert profile["first_warmup_sec"] == 5.0
-    assert profile["first_timeout_sec"] == 15.0
-    assert profile["first_empty_timeout_sec"] == 8.0
+    assert profile["first_warmup_sec"] == 15.0
+    assert profile["first_timeout_sec"] == 20.0
+    assert profile["first_empty_timeout_sec"] == 15.0
     assert profile["recheck_warmup_sec"] == 3.0
     assert profile["recheck_timeout_sec"] == 10.0
     assert profile["recheck_empty_timeout_sec"] == 8.0
     assert profile["partial_extension_sec"] == 2.0
+
+
+def test_regular_session_has_ten_second_first_probe_floor():
+    profile = main._zero_base_probe_observation_profile(
+        session_contract.MARKET_SESSION_REGIME_KRX_REGULAR,
+    )
+    assert profile["first_warmup_sec"] == 10.0
+    assert profile["first_empty_timeout_sec"] == 10.0
+    assert profile["first_timeout_sec"] == 15.0
+
+
+@pytest.mark.parametrize("regime,route", [
+    (session_contract.MARKET_SESSION_REGIME_LEGACY_PREMARKET, "nxt_only"),
+    (session_contract.MARKET_SESSION_REGIME_KRX_REGULAR, "krx_nxt_integrated"),
+    (session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET, "krx_nxt_integrated"),
+])
+def test_probe_worker_hard_cap_is_five_in_every_buy_session(
+    monkeypatch, regime, route,
+):
+    tasks = []
+    events = []
+    slots = threading.BoundedSemaphore(5)
+    monkeypatch.setattr(main, "_zero_base_runtime_enabled", lambda: True)
+    monkeypatch.setattr(main, "_zero_base_active_conflict", lambda _code: False)
+    monkeypatch.setattr(main, "evaluate_main_bot_control_exclusion",
+                        lambda _code: SimpleNamespace(excluded=False))
+    monkeypatch.setattr(main, "scalping_session_venue_provenance",
+                        lambda _epoch: {"market_session_regime": regime})
+    monkeypatch.setattr(main, "_ZERO_BASE_PROBE_SLOTS", slots)
+    monkeypatch.setattr(main, "_ZERO_BASE_PROBE_IN_FLIGHT", set())
+    monkeypatch.setattr(main, "_ZERO_BASE_PROBE_EXECUTOR",
+                        SimpleNamespace(submit=tasks.append))
+    monkeypatch.setattr(main, "event_bus", SimpleNamespace(
+        publish=lambda event, payload: events.append((event, payload)),
+    ))
+    for number in range(6):
+        code = f"{number + 1:06d}"
+        claim = {"code": code, "route": route, "source_sha256": "b" * 64}
+        main.handle_zero_base_probe_requested({
+            "claim": claim, "candidate": dict(claim),
+        })
+    assert len(tasks) == 5
+    assert len(main._ZERO_BASE_PROBE_IN_FLIGHT) == 5
+    assert events[-1][1]["reason"] == "probe_worker_capacity"
+    assert not slots.acquire(blocking=False)
 
 
 def test_zero_base_entry_request_binds_sor_and_fails_closed_on_lost_route(monkeypatch):
@@ -518,17 +563,23 @@ def test_zero_base_uses_global_watch_cap_without_owner_quota_or_eviction(monkeyp
     assert allowed is False and replacements == []
 
 
-def test_late_registration_keeps_same_code_probe_reserved_until_cleanup(monkeypatch):
+@pytest.mark.parametrize("remove_sent", [True, False])
+def test_late_registration_keeps_same_code_probe_reserved_until_cleanup(
+    monkeypatch, remove_sent,
+):
     monkeypatch.setenv("KORSTOCKSCAN_ZERO_BASE_SCANNER_ENABLED", "true")
     monkeypatch.setattr(main, "ACTIVE_TARGETS", [])
     monkeypatch.setattr(main, "scalping_session_venue_provenance", lambda _epoch: {
         "market_session_regime": main.session_contract.MARKET_SESSION_REGIME_KRX_REGULAR,
     })
     monkeypatch.setattr(main, "_ZERO_BASE_PROBE_IN_FLIGHT", set())
-    monkeypatch.setattr(main, "_ZERO_BASE_PROBE_SLOTS", threading.BoundedSemaphore(8))
+    slots = threading.BoundedSemaphore(2)
+    monkeypatch.setattr(main, "_ZERO_BASE_PROBE_SLOTS", slots)
     monkeypatch.setattr(main, "_ZERO_BASE_PROBE_EXECUTOR", SimpleNamespace(
         submit=lambda fn: fn(),
     ))
+    errors = []
+    monkeypatch.setattr(main, "log_error", errors.append)
     monkeypatch.setattr(main, "evaluate_main_bot_control_exclusion", lambda _code: SimpleNamespace(excluded=False))
     events = []
     monkeypatch.setattr(main, "event_bus", SimpleNamespace(
@@ -542,11 +593,28 @@ def test_late_registration_keeps_same_code_probe_reserved_until_cleanup(monkeypa
                 "_ws_cleanup_deferred": True}
 
     monkeypatch.setattr(main, "run_zero_base_probe", probe)
-    monkeypatch.setattr(main, "_zero_base_release_probe_ws", lambda *_args: None)
+    remove_completion = Future()
+    monkeypatch.setattr(
+        main, "_zero_base_release_probe_ws", lambda *_args: remove_completion,
+    )
     request = {"claim": _result()["claim"], "candidate": _result()["candidate"]}
     main.handle_zero_base_probe_requested(request)
     assert "123456" in main._ZERO_BASE_PROBE_IN_FLIGHT
+    assert slots.acquire(blocking=False)
+    assert not slots.acquire(blocking=False)
+    slots.release()
     main.handle_zero_base_probe_requested(request)
     assert events[-1][1]["reason"] == "same_code_probe_in_flight"
     callbacks[0]("123456", "123456")
+    assert "123456" in main._ZERO_BASE_PROBE_IN_FLIGHT
+    assert slots.acquire(blocking=False)
+    assert not slots.acquire(blocking=False)
+    slots.release()
+    remove_completion.set_result(remove_sent)
     assert "123456" not in main._ZERO_BASE_PROBE_IN_FLIGHT
+    assert bool(errors) is not remove_sent
+    assert slots.acquire(blocking=False)
+    assert slots.acquire(blocking=False)
+    assert not slots.acquire(blocking=False)
+    slots.release()
+    slots.release()

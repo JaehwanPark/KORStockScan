@@ -6916,6 +6916,8 @@ def run_zero_base_scanner(*, token, event_bus, is_test_mode=False):
                     fields={
                         "zero_base_observed_generation_count": summary["observed_new_generation_count"],
                         "zero_base_probe_requested_count": summary["probe_requested_count"],
+                        "zero_base_probe_capacity_limit": summary["probe_capacity_limit"],
+                        "zero_base_probe_claims_in_flight_count": summary["probe_claims_in_flight_count"],
                         "zero_base_probe_timeout_count": summary["probe_timeout_count"],
                         "zero_base_stale_candidate_count": summary["stale_candidate_count"],
                         "zero_base_queue_count": summary["queue_count"],
@@ -6933,6 +6935,8 @@ def run_zero_base_scanner(*, token, event_bus, is_test_mode=False):
                     "zero_base_probe_dispatch_cycle",
                     fields={
                         "zero_base_probe_requested_count": dispatch["probe_requested_count"],
+                        "zero_base_probe_capacity_limit": dispatch["probe_capacity_limit"],
+                        "zero_base_probe_claims_in_flight_count": dispatch["probe_claims_in_flight_count"],
                         "zero_base_probe_timeout_count": dispatch["probe_timeout_count"],
                         "zero_base_stale_candidate_count": dispatch["stale_candidate_count"],
                         "zero_base_queue_count": dispatch["queue_count"],
