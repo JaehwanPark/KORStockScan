@@ -261,6 +261,66 @@ def _install_verified_symbol_master(monkeypatch):
     return fixture
 
 
+@pytest.mark.parametrize(
+    ("session", "expected_route"),
+    [
+        ("PREMARKET_KRX_LIKE", "NXT_ONLY"),
+        ("NXT_PREMARKET", "NXT_ONLY"),
+        ("KRX_REGULAR", "KRX_NXT_INTEGRATED"),
+        ("NXT_REGULAR_OVERLAP", "KRX_NXT_INTEGRATED"),
+        ("KRX_NXT_AFTERMARKET", "KRX_NXT_INTEGRATED"),
+        ("SESSION_TRANSITION", None),
+        ("UNKNOWN", None),
+    ],
+)
+def test_scanner_data_route_is_session_owned(session, expected_route):
+    assert (
+        mod._scanner_market_data_route({"market_session_bucket": session})
+        == expected_route
+    )
+
+
+def test_scanner_explicit_market_data_route_is_preserved_and_session_checked():
+    row = {
+        "market_session_bucket": "PREMARKET_KRX_LIKE",
+        "market_data_route": "nxt_only",
+        "effective_venue": "KRX",
+        "market_data_effective_best_bid": 100,
+        "market_data_effective_best_ask": 101,
+        "market_data_effective_quote_age_ms": 10,
+        "market_data_effective_price_source": "ws_executable_bbo",
+        "emitted_at": "2026-09-02T08:10:00+09:00",
+    }
+
+    observation, gap_reason = mod._scanner_executable_bbo_observation(row)
+
+    assert gap_reason == "pass"
+    assert observation["market_data_route"] == "NXT_ONLY"
+    assert observation["market_data_route_origin"] == "session_contract"
+    assert observation["declared_market_data_route"] == "NXT_ONLY"
+
+    row["market_data_route"] = "KRX_NXT_INTEGRATED"
+    observation, gap_reason = mod._scanner_executable_bbo_observation(row)
+    assert gap_reason == "pass"
+    assert observation["market_data_route"] == "NXT_ONLY"
+    assert observation["market_data_route_consistency"] == (
+        "explicit_route_session_mismatch"
+    )
+
+    row["market_data_route"] = "BROKER_NATIVE"
+    observation, gap_reason = mod._scanner_executable_bbo_observation(row)
+    assert gap_reason == "pass"
+    assert observation["market_data_route"] == "NXT_ONLY"
+    assert observation["market_data_route_consistency"] == "explicit_route_invalid"
+    assert observation["declared_market_data_route_raw"] == "BROKER_NATIVE"
+
+
+def test_route_and_venue_conflicts_are_diagnostic_not_bbo_quality_blockers():
+    conflicts = ["venue:conflicting_observation", "route:legacy_annotation", "code:id"]
+
+    assert mod._scanner_source_quality_metadata_conflicts(conflicts) == ["code:id"]
+
+
 def test_symbol_master_loader_uses_latest_prior_effective_dated_artifact(
     tmp_path, monkeypatch
 ):
@@ -705,7 +765,7 @@ def test_scanner_hotset_capacity_proxy_separates_queue_rank_and_right_censoring(
         return {
             "promotion_id": promotion_id,
             "code": code,
-            "venue": "KRX",
+            "venue": "UNKNOWN",
             "market_session_bucket": "KRX_REGULAR",
             "first_fast_precheck_queue_rank": queue_rank,
             "first_fast_precheck_watching_count": watching_count,
@@ -758,6 +818,12 @@ def test_scanner_hotset_capacity_proxy_separates_queue_rank_and_right_censoring(
         target_date="2026-09-02",
         symbol_master=symbol_master,
         symbol_master_binding=binding,
+    )
+
+    assert "authoritative_venue_missing" not in result["source_gap_counts"]
+    assert all(
+        row["market_data_route"] == "KRX_NXT_INTEGRATED"
+        for row in result["scenarios"]
     )
 
     scenario_by_capacity = {
@@ -968,8 +1034,11 @@ def test_scanner_funnel_missing_quote_age_stays_blocked_not_zero_ev(
             "market_session_bucket": "NXT_REGULAR",
             "source_census_count": 1,
             "eligible_verified_common_stock_candidate_count": 1,
+            "instrument_classification_unverified_count": 0,
+            "session_route_unresolved_count": 0,
             "official_symbol_master_excluded_count": 0,
             "exact_bbo_joined_count": 0,
+            "observed_exact_bbo_joined_count": 0,
             "exact_bbo_join_coverage_pct": 0.0,
             "resolved_outcome_count": 0,
             "source_capture_gap_count": 1,
@@ -1622,7 +1691,7 @@ def test_prune_bbo_acceptance_passes_twenty_resolved_per_group(monkeypatch) -> N
     assert attribution["source_capture_repair_required"] is False
 
 
-def test_scanner_funnel_does_not_borrow_lineage_venue_for_bbo_observation(
+def test_scanner_funnel_joins_bbo_without_venue_and_derives_route_from_session(
     tmp_path, monkeypatch
 ):
     _install_verified_symbol_master(monkeypatch)
@@ -1651,6 +1720,7 @@ def test_scanner_funnel_does_not_borrow_lineage_venue_for_bbo_observation(
                 "scalping_scanner_fast_precheck",
                 {
                     **common,
+                    "venue": "NXT",
                     "fast_precheck_result": "eligible_for_heavy_entry_eval",
                     "market_data_effective_best_bid": 100,
                     "market_data_effective_best_ask": 101,
@@ -1674,14 +1744,82 @@ def test_scanner_funnel_does_not_borrow_lineage_venue_for_bbo_observation(
     attribution = report["scanner_unique_funnel"]["economic_cohorts"][
         "executable_bbo_attribution"
     ]
+    assert attribution["exact_bbo_joined_count"] == 1
+    assert attribution["observed_exact_bbo_joined_count"] == 1
+    assert attribution["source_quality_adjusted_ev_pct"] is None
+    row = attribution["rows"][0]
+    assert row["bbo_join_status"] == "joined"
+    assert row["entry_market_data_route"] == "KRX_NXT_INTEGRATED"
+    assert row["venue_metadata_conflict_count"] == 1
+    assert row["venue_observation_conflict_count"] == 1
+    assert "authoritative_venue_missing" not in attribution["missing_reason_counts"]
+
+
+def test_scanner_bbo_join_is_independent_of_symbol_master_economic_gate(monkeypatch):
+    monkeypatch.setattr(
+        mod,
+        "comparison_cost_contract",
+        lambda _day: {"status": "verified", "round_trip_cost_pct": 0.7},
+    )
+    lineage = {
+        "promotion_id": "SCANPROM-UNKNOWN-MASTER-BBO",
+        "code": "000712",
+        "venue": "UNKNOWN",
+        "market_session_bucket": "KRX_REGULAR",
+        "eligible_for_heavy_entry_eval": True,
+        "runtime_queue_lag": True,
+        "decision_stage_stale_backoff": True,
+        "eviction_reasons": ["stale_queue_eviction"],
+        "stages": {"scalping_scanner_heavy_eval_completion": 1},
+        "metadata_conflicts": [],
+        "bbo_observations": [
+            {
+                "observed_at": "2026-08-31T09:10:00+09:00",
+                "observed_epoch": 1788135000.0,
+                "best_bid": 100.0,
+                "best_ask": 101.0,
+                "quote_age_ms": 10.0,
+                "source": "market_data_effective_bbo",
+                "source_provenance": "ws_executable_bbo",
+                "venue": "UNKNOWN",
+                "market_session_bucket": "KRX_REGULAR",
+                "market_data_route": "KRX_NXT_INTEGRATED",
+            },
+            {
+                "observed_at": "2026-08-31T09:10:02+09:00",
+                "observed_epoch": 1788135002.0,
+                "best_bid": 102.0,
+                "best_ask": 103.0,
+                "quote_age_ms": 10.0,
+                "source": "market_data_effective_bbo",
+                "source_provenance": "ws_executable_bbo",
+                "venue": "UNKNOWN",
+                "market_session_bucket": "KRX_REGULAR",
+                "market_data_route": "KRX_NXT_INTEGRATED",
+            },
+        ],
+    }
+
+    attribution = mod._scanner_bbo_economic_attribution(
+        [lineage],
+        [],
+        target_date="2026-08-31",
+        symbol_master=None,
+        symbol_master_binding={"status": "invalid"},
+    )
+
+    row = attribution["rows"][0]
+    assert row["bbo_join_status"] == "joined"
+    assert row["economic_eligibility_status"] == "instrument_classification_unverified"
+    assert row["first_hit_label"] == "sampled_path_right_censored_no_timeout_bbo"
+    assert row["economic_exclusion_reason"] == (
+        "official_symbol_master_binding_missing_or_invalid"
+    )
+    assert row["cost_adjusted_return_pct"] is None
+    assert attribution["observed_exact_bbo_joined_count"] == 1
     assert attribution["exact_bbo_joined_count"] == 0
     assert attribution["source_quality_adjusted_ev_pct"] is None
-    assert (
-        attribution["missing_reason_counts"][
-            "market_data_effective_bbo:authoritative_venue_missing"
-        ]
-        == 1
-    )
+    assert attribution["cohort_source_quality"][0]["source_capture_gap"] is False
 
 
 def test_scanner_funnel_keeps_venue_session_ev_separate(monkeypatch):
@@ -1896,8 +2034,11 @@ def test_scanner_funnel_excludes_unverified_symbol_without_blocking_verified_ev(
     assert attribution["source_quality_adjusted_ev_pct"] == 1.75019802
     assert attribution["source_capture_design_required"] is False
     excluded = next(row for row in attribution["rows"] if row["stock_code"] == "900710")
-    assert excluded["bbo_join_status"] == "excluded_official_symbol_master"
-    assert excluded["primary_exclusion_reason"] == "official_symbol_master_missing"
+    assert excluded["bbo_join_status"] == "joined"
+    assert excluded["economic_eligibility_status"] == "instrument_classification_unverified"
+    assert excluded["primary_exclusion_reason"] is None
+    assert excluded["cost_adjusted_return_pct"] is None
+    assert attribution["observed_exact_bbo_joined_count"] == 2
 
 
 def test_scanner_bbo_prebaseline_cost_contract_is_blocked_not_exception(monkeypatch):

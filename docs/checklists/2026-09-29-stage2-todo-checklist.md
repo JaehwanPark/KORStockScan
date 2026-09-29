@@ -11,6 +11,7 @@
 - 장중 runtime 변경은 사용자 명시 지시가 있을 때만 기존 `bounded_tunable` 단일 축에 한해 허용한다. fresh/conflict-free source, 유효 effective price, 단일 blocker 인과, same-stage owner 비충돌, before/after·PID/env provenance·rollback·즉시 attribution을 모두 남긴다. hard safety, stale/conflict, price freshness, broker/account/order/quantity/cooldown, provider, bot, cap, 요청수량은 변경하거나 우회하지 않는다.
 - 튜닝 데이터 기준은 `clean_tuning_baseline_date=2026-06-05`, `clean_tuning_baseline_ts_kst=2026-06-05T00:00:00+09:00`이다. 기준 이전 raw/report/analytics artifact는 archive/audit evidence로만 보고 EV/rolling/MTD/cumulative tuning, live-auto promotion, runtime approval, pattern lab promotion, real execution quality approval 입력으로 쓰지 않는다.
 - 개편 정책의 후속 갱신 입력은 현재 적용 정책을 incumbent로 고정하고 2026-09-29 당일 자연 원천부터 수집한다. 9/28 이전 자료는 새 기계·compact·직접 family 후보의 학습·비교·승계에 넣지 않는다. 오늘 장후 본 작업과 후속 작업은 예약대로 실행하며 원천 결손과 표본 부족은 성과 0으로 대체하지 않는다.
+- 비동기 `pre_submit_delay`와 atomic sizing consumer보다 먼저 대상일 producer summary를 raw pipeline 원천에 대사해 source ledger로 봉인하고, 동일 generation 영수증을 검증한다. 이 단계가 실패하면 하류 계산을 중단한다.
 - Baseline 이후 raw source-quality contract 결손은 날짜 전체 차단이 아니라 결손 row/window를 `raw_row_exclusion`으로 제외하는 것이 기본이다. 전체 block은 preflight missing/invalid, row/window exclusion 실패, 또는 결손을 안정적으로 특정할 수 없는 high-volume no-contract 상황에만 사용한다.
 - 장중과 장후에는 `observation_source_quality_audit --write` 또는 최신 artifact로 raw source-quality를 반복 확인한다. Hard contract gap은 결손 row/window 제외 또는 `source_quality_blocked` 없이는 튜닝 입력에 들어갈 수 없고, unknown-token warning은 hard block이 아니더라도 code-improvement workorder handoff 확인 대상이다.
 - provider transport/provenance 확인은 threshold 값, 주문가/수량 guard, 스윙 dry-run guard 변경과 분리한다.
@@ -102,8 +103,9 @@
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
 
 - [ ] `[MachineNonentryOutcomeLineageNaturalAcceptance0929] 기계 비진입 후행가격·캡처 결속 자연 수용` (`Due: 2026-09-29`, `Slot: POSTCLOSE`, `TimeWindow: 20:05~21:40`, `Track: RuntimeStability`)
-  - Source: [기계 비진입 후행경로 보완안](../proposals/machine-nonentry-outcome-lineage-remediation-plan-2026-09-29.md).
+  - Source: [기계 비진입 후행경로 보완안](../proposals/machine-nonentry-outcome-lineage-remediation-plan-2026-09-29.md), [기계·보조 AI 원천결손 방지안](../proposals/machine-auxiliary-source-gap-prevention-plan-2026-09-29.md).
   - 완료 기준: 배포된 producer의 probe 결과 digest와 해시 검증 캡처를 attempt별로 대사하고, 프리마켓 `_NX`·정규장/통합 애프터마켓 `_AL` 완료봉 캐시의 source date·route·세션·생성 해시를 장후 `main_machine_policy` 영수증까지 확인한다. 동일 `BLOCK/RECHECK` 모집단에서 10/30/60분 커버리지·비용 결속·첫 도달과 source gap을 재측정한다.
+  - 실행 순서 검증: 선택된 릴리스의 다음 장후 실행에서 원천 preflight의 정확 날짜·해시 결속 완료 뒤 4 GiB 자원 가드를 통과해 `main_machine_policy`가 시작되는지 확인한다. preflight 결손·차단은 stage terminal의 `source_quality_blocked`로 남고, 완료봉 캐시의 부분 결손 경로는 정확 route 외부 완료봉 조회 또는 source gap으로 남아야 한다. incumbent carry는 staged generation부터 current generation까지 유효한 bounded ancestry와 동일한 승계 증거·기계정책이 확인되어야 한다.
   - 권한 경계: 코드·테스트 통과와 실제 릴리스/PID 소비, 자연 장후 수집, 날짜·표본 허들, direct family 운영 경제성 결속을 각각 구분한다. 결손을 0수익으로 대체하거나 정책 기준·주문 가드를 변경하지 않는다.
 
 - [ ] `[EntryAiScoreAuthorityRemoval0929] 진입 AI Score 의 실시간 판단·장후 튜닝 권한 제거` (`Due: 2026-09-29`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~21:40`, `Track: RuntimeStability`)

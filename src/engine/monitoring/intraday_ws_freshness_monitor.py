@@ -144,17 +144,26 @@ SCANNER_UNIQUE_FUNNEL_METRIC_CONTRACT = {
 }
 
 SCANNER_EXECUTABLE_BBO_METRIC_CONTRACT = {
+    "contract_version": "scanner_executable_bbo_v2",
     "metric_role": "source_only_comparison_economics",
     "decision_authority": "scanner_funnel_executable_bbo_source_only",
     "window_policy": "daily_unique_scanner_promotion_or_prune_lineage",
     "sample_floor": (
-        "verified_official_common_stock_exact_promotion_venue_session_bbo_"
+        "verified_official_common_stock_exact_promotion_session_route_bbo_"
         "join_coverage_pct>=95_and_one_resolved_outcome"
     ),
     "primary_decision_metric": "source_quality_adjusted_ev_pct",
     "source_quality_gate": (
-        "exact_lineage_venue_session_fresh_executable_bbo_effective_dated_cost_"
-        "contract_and_verified_official_common_stock_master"
+        "exact_promotion_lineage_session_derived_market_data_route_and_fresh_"
+        "executable_bbo;venue_optional;EV_requires_effective_dated_cost_and_"
+        "verified_official_common_stock_master"
+    ),
+    "bbo_attribution_gate": (
+        "exact_promotion_lineage_fresh_executable_bbo_and_conflict_free_"
+        "session_route;missing_venue_does_not_block_quote_observation"
+    ),
+    "economic_eligibility_gate": (
+        "verified_official_common_stock_master_and_resolved_session_route"
     ),
     "forbidden_uses": [item for item in FORBIDDEN_USES if item != "EV"],
     "runtime_effect": False,
@@ -164,6 +173,7 @@ SCANNER_EXECUTABLE_BBO_METRIC_CONTRACT = {
 }
 
 SCANNER_HOTSET_CAPACITY_PROXY_METRIC_CONTRACT = {
+    "contract_version": "scanner_hotset_capacity_proxy_v2",
     "metric_role": "source_only_counterfactual_economics",
     "decision_authority": "scanner_hotset_rank_capacity_proxy_source_only",
     "window_policy": (
@@ -176,8 +186,9 @@ SCANNER_HOTSET_CAPACITY_PROXY_METRIC_CONTRACT = {
     ),
     "primary_decision_metric": "source_quality_adjusted_ev_pct",
     "source_quality_gate": (
-        "exact_promotion_first_queue_rank_venue_session_fresh_executable_bbo_"
-        "effective_dated_cost_contract_and_verified_official_common_stock_master"
+        "exact_promotion_first_queue_rank_session_route_fresh_executable_bbo_"
+        "effective_dated_cost_contract_and_verified_official_common_stock_master;"
+        "venue_optional"
     ),
     "forbidden_uses": [
         *[item for item in FORBIDDEN_USES if item != "EV"],
@@ -699,6 +710,65 @@ def _scanner_session_metadata(row: Mapping[str, Any]) -> str | None:
     return session if session and session != "UNKNOWN" else None
 
 
+def _scanner_market_data_route(row: Mapping[str, Any]) -> str | None:
+    """Resolve the scanner data route from the session contract, not venue."""
+    session = _scanner_session_metadata(row)
+    if not session:
+        return None
+    if session in {"CLOSED", "SESSION_TRANSITION", "NOT_APPLICABLE"}:
+        return None
+    if "PREMARKET" in session:
+        return "NXT_ONLY"
+    if any(token in session for token in ("REGULAR", "AFTERMARKET", "OVERLAP")):
+        return "KRX_NXT_INTEGRATED"
+    return None
+
+
+def _scanner_explicit_market_data_route(row: Mapping[str, Any]) -> str | None:
+    """Read a declared market-data route without deriving from venue metadata."""
+    raw_route = _valid_lineage_token(row.get("market_data_route"))
+    if not raw_route:
+        return None
+    route = raw_route.upper().replace("-", "_").replace(" ", "_")
+    if route in {"NXT_ONLY", "NXT"}:
+        return "NXT_ONLY"
+    if route in {"KRX_NXT_INTEGRATED", "INTEGRATED", "SOR"}:
+        return "KRX_NXT_INTEGRATED"
+    return "__INVALID_EXPLICIT_ROUTE__"
+
+
+def _scanner_route_consistency(
+    declared_route: str | None, session_route: str | None
+) -> str:
+    if declared_route == "__INVALID_EXPLICIT_ROUTE__":
+        return "explicit_route_invalid"
+    if declared_route and session_route and declared_route != session_route:
+        return "explicit_route_session_mismatch"
+    if declared_route and session_route:
+        return "explicit_route_match"
+    return "session_derived"
+
+
+def _scanner_row_economically_eligible(row: Mapping[str, Any]) -> bool:
+    """Economic comparison needs verified instrument class and a known route."""
+    return bool(
+        row.get("symbol_master_block_reason") is None
+        and _scanner_market_data_route(row) is not None
+    )
+
+
+def _scanner_source_quality_metadata_conflicts(
+    conflicts: Iterable[Any],
+) -> list[str]:
+    """Venue and route annotations are diagnostics; identity conflicts still gate."""
+    return [
+        str(conflict)
+        for conflict in conflicts
+        if str(conflict).partition(":")[0].strip().lower()
+        not in {"venue", "route", "market_data_route"}
+    ]
+
+
 def _scanner_executable_bbo_observation(
     row: Mapping[str, Any],
 ) -> tuple[dict[str, Any] | None, str]:
@@ -706,6 +776,11 @@ def _scanner_executable_bbo_observation(
 
     venue = _scanner_venue_metadata(row)
     market_session_bucket = _scanner_session_metadata(row)
+    expected_route = _scanner_market_data_route(row)
+    explicit_route = _scanner_explicit_market_data_route(row)
+    market_data_route = expected_route
+    route_origin = "session_contract" if expected_route else "unresolved"
+    route_consistency = _scanner_route_consistency(explicit_route, expected_route)
 
     candidates = (
         (
@@ -749,12 +824,6 @@ def _scanner_executable_bbo_observation(
         bid = _to_float(row.get(bid_key))
         ask = _to_float(row.get(ask_key))
         if bid is None and ask is None:
-            continue
-        if venue is None:
-            gap_reasons.append(f"{source}:authoritative_venue_missing")
-            continue
-        if market_session_bucket is None:
-            gap_reasons.append(f"{source}:authoritative_session_missing")
             continue
         if (
             bid is None
@@ -810,6 +879,15 @@ def _scanner_executable_bbo_observation(
             "source_provenance": source_provenance,
             "venue": venue,
             "market_session_bucket": market_session_bucket,
+            "market_data_route": market_data_route,
+            "market_data_route_origin": route_origin,
+            "declared_market_data_route": (
+                None if explicit_route == "__INVALID_EXPLICIT_ROUTE__" else explicit_route
+            ),
+            "declared_market_data_route_raw": _valid_lineage_token(
+                row.get("market_data_route")
+            ),
+            "market_data_route_consistency": route_consistency,
         }
         if source == "scanner_prune_observer_rest_bbo":
             stock_code = str(row.get("stock_code") or row.get("code") or "").strip()[:6]
@@ -1930,7 +2008,6 @@ def _nearest_rank_percentile(
 def _scanner_hotset_bbo_observations(
     lineage: Mapping[str, Any],
     *,
-    venue: str,
     session: str,
     trade_date: date,
 ) -> tuple[list[dict[str, Any]], Counter]:
@@ -1940,12 +2017,13 @@ def _scanner_hotset_bbo_observations(
         if not isinstance(raw_observation, dict):
             filter_reasons["bbo_observation_invalid_type"] += 1
             continue
-        if str(raw_observation.get("venue") or "").upper() != venue:
-            filter_reasons["bbo_observation_venue_mismatch_or_missing"] += 1
-            continue
-        if str(raw_observation.get("market_session_bucket") or "").upper() != session:
+        observation_session = str(raw_observation.get("market_session_bucket") or "").upper()
+        if (session not in {"", "UNKNOWN"}
+                and observation_session not in {"", "UNKNOWN", session}):
             filter_reasons["bbo_observation_session_mismatch_or_missing"] += 1
             continue
+        observation_route = _scanner_explicit_market_data_route(raw_observation)
+        expected_route = _scanner_market_data_route({"market_session_bucket": session})
         try:
             observed_at = datetime.fromisoformat(
                 str(raw_observation.get("observed_at") or "").replace("Z", "+00:00")
@@ -1971,6 +2049,19 @@ def _scanner_hotset_bbo_observations(
                 "best_ask": ask,
                 "observed_at": observed_at.isoformat(),
                 "observed_epoch": observed_at.timestamp(),
+                "market_data_route": (
+                    expected_route
+                    or _scanner_market_data_route({
+                        "market_session_bucket": observation_session or session,
+                    })
+                ),
+                "declared_market_data_route": (
+                    None if observation_route == "__INVALID_EXPLICIT_ROUTE__"
+                    else observation_route
+                ),
+                "market_data_route_consistency": _scanner_route_consistency(
+                    observation_route, expected_route
+                ),
             }
         )
     observations.sort(
@@ -2188,16 +2279,15 @@ def _scanner_hotset_capacity_counterfactual(
 
         observations, observation_filter_reasons = _scanner_hotset_bbo_observations(
             lineage,
-            venue=venue,
             session=session,
             trade_date=trade_date,
         )
         bbo_block_reason = None
-        if venue not in {"KRX", "PREMARKET_KRX_LIKE", "NXT"}:
-            bbo_block_reason = "authoritative_venue_missing"
-        elif session in {"", "UNKNOWN"}:
-            bbo_block_reason = "authoritative_session_missing"
-        elif lineage.get("metadata_conflicts"):
+        if _scanner_market_data_route({"market_session_bucket": session}) is None:
+            bbo_block_reason = "session_route_unresolved"
+        elif _scanner_source_quality_metadata_conflicts(
+            lineage.get("metadata_conflicts") or []
+        ):
             bbo_block_reason = "immutable_lineage_metadata_conflict"
         elif not observations:
             bbo_block_reason = (
@@ -2215,6 +2305,9 @@ def _scanner_hotset_capacity_counterfactual(
                 "stock_code": code,
                 "venue": venue,
                 "market_session_bucket": session,
+                "market_data_route": _scanner_market_data_route(
+                    {"market_session_bucket": session}
+                ),
                 "first_queue_rank": queue_rank,
                 "first_watching_count": _positive_integer_metadata(
                     lineage.get("first_fast_precheck_watching_count")
@@ -2223,6 +2316,15 @@ def _scanner_hotset_capacity_counterfactual(
                 "source_signature": str(lineage.get("source_signature") or ""),
                 "symbol_master_status": symbol_master_status,
                 "symbol_master_block_reason": symbol_master_block_reason,
+                "venue_metadata_conflict_count": sum(
+                    str(conflict).partition(":")[0].strip().lower() == "venue"
+                    for conflict in lineage.get("metadata_conflicts") or []
+                ),
+                "route_metadata_conflict_count": sum(
+                    str(conflict).partition(":")[0].strip().lower()
+                    in {"route", "market_data_route"}
+                    for conflict in lineage.get("metadata_conflicts") or []
+                ),
                 "bbo_join_status": "joined" if bbo_block_reason is None else "blocked",
                 "bbo_join_block_reason": bbo_block_reason,
                 "observations": observations,
@@ -2331,6 +2433,9 @@ def _scanner_hotset_capacity_counterfactual(
                         {
                             "venue": venue,
                             "market_session_bucket": session,
+                            "market_data_route": _scanner_market_data_route(
+                                {"market_session_bucket": session}
+                            ),
                             "capacity_proxy": capacity,
                             "gross_target_pct": gross_target_pct,
                             "adverse_stop_pct": adverse_stop_pct,
@@ -2577,6 +2682,36 @@ def _scanner_bbo_economic_attribution(
         venue = str(container.get("venue") or "UNKNOWN").upper()
         session = str(container.get("market_session_bucket") or "UNKNOWN").upper()
         metadata_conflicts = container.get("metadata_conflicts") or []
+        source_quality_conflicts = _scanner_source_quality_metadata_conflicts(
+            metadata_conflicts
+        )
+        venue_metadata_conflict_count = sum(
+            str(conflict).partition(":")[0].strip().lower() == "venue"
+            for conflict in metadata_conflicts
+        )
+        route_metadata_conflict_count = sum(
+            str(conflict).partition(":")[0].strip().lower()
+            in {"route", "market_data_route"}
+            for conflict in metadata_conflicts
+        )
+        venue_observation_conflict_count = sum(
+            1
+            for raw_observation in container.get("bbo_observations") or []
+            if isinstance(raw_observation, dict)
+            and _scanner_venue_metadata(raw_observation) is not None
+            and venue not in {"", "UNKNOWN"}
+            and _scanner_venue_metadata(raw_observation) != venue
+        )
+        route_observation_conflict_count = sum(
+            1
+            for raw_observation in container.get("bbo_observations") or []
+            if isinstance(raw_observation, dict)
+            and _scanner_route_consistency(
+                _scanner_explicit_market_data_route(raw_observation),
+                _scanner_market_data_route({"market_session_bucket": session}),
+            )
+            in {"explicit_route_invalid", "explicit_route_session_mismatch"}
+        )
         symbol_lookup = (
             symbol_master.lookup(stock_code, as_of=trade_date)
             if symbol_master is not None and stock_code
@@ -2593,20 +2728,19 @@ def _scanner_bbo_economic_attribution(
         for raw_observation in container.get("bbo_observations") or []:
             if not isinstance(raw_observation, dict):
                 continue
-            observation_venue = str(raw_observation.get("venue") or "").upper()
             observation_session = str(
                 raw_observation.get("market_session_bucket") or ""
             ).upper()
-            if observation_venue != venue:
-                observation_filter_reasons[
-                    "bbo_observation_venue_mismatch_or_missing"
-                ] += 1
-                continue
-            if observation_session != session:
+            if (session not in {"", "UNKNOWN"}
+                    and observation_session not in {"", "UNKNOWN", session}):
                 observation_filter_reasons[
                     "bbo_observation_session_mismatch_or_missing"
                 ] += 1
                 continue
+            observation_route = _scanner_explicit_market_data_route(raw_observation)
+            expected_route = _scanner_market_data_route(
+                {"market_session_bucket": session}
+            )
             try:
                 observation_at = datetime.fromisoformat(
                     str(raw_observation.get("observed_at") or "").replace("Z", "+00:00")
@@ -2627,6 +2761,19 @@ def _scanner_bbo_economic_attribution(
                     **raw_observation,
                     "observed_at": observation_at.isoformat(),
                     "observed_epoch": observation_at.timestamp(),
+                    "market_data_route": (
+                        expected_route
+                        or _scanner_market_data_route({
+                            "market_session_bucket": observation_session or session,
+                        })
+                    ),
+                    "declared_market_data_route": (
+                        None if observation_route == "__INVALID_EXPLICIT_ROUTE__"
+                        else observation_route
+                    ),
+                    "market_data_route_consistency": _scanner_route_consistency(
+                        observation_route, expected_route
+                    ),
                 }
             )
         observations.sort(
@@ -2670,6 +2817,19 @@ def _scanner_bbo_economic_attribution(
             symbol_master_block_reason = (
                 f"official_symbol_master_{symbol_master_status}"
             )
+        session_route = _scanner_market_data_route(
+            {"market_session_bucket": session}
+        )
+        economic_eligibility_status = (
+            "instrument_classification_unverified"
+            if symbol_master_block_reason is not None
+            else "session_route_unresolved"
+            if session_route is None
+            else "eligible_verified_common_stock"
+        )
+        economic_eligible = (
+            economic_eligibility_status == "eligible_verified_common_stock"
+        )
         bbo_join_block_reason = None
         prune_observer_health_gap_reason = None
         if prune_episode:
@@ -2698,11 +2858,7 @@ def _scanner_bbo_economic_attribution(
                 prune_observer_health_gap_reason = (
                     "prune_observer_worker_unhealthy_observed"
                 )
-        if venue not in {"KRX", "PREMARKET_KRX_LIKE", "NXT"}:
-            bbo_join_block_reason = "authoritative_venue_missing"
-        elif session in {"", "UNKNOWN"}:
-            bbo_join_block_reason = "authoritative_session_missing"
-        elif metadata_conflicts:
+        if source_quality_conflicts:
             bbo_join_block_reason = "immutable_lineage_metadata_conflict"
         elif prune_observer_health_gap_reason:
             bbo_join_block_reason = prune_observer_health_gap_reason
@@ -2714,15 +2870,12 @@ def _scanner_bbo_economic_attribution(
             )
         elif prune_episode and observations[0].get("scheduled_offset_sec") != 0:
             bbo_join_block_reason = "prune_offset_zero_executable_bbo_missing"
-        if bbo_join_block_reason or symbol_master_block_reason:
-            if bbo_join_block_reason:
-                missing_reason_counts[bbo_join_block_reason] += 1
-                for reason, count in (
-                    container.get("bbo_gap_reason_counts") or {}
-                ).items():
-                    missing_reason_counts[str(reason)] += int(count or 0)
-            if symbol_master_block_reason:
-                missing_reason_counts[symbol_master_block_reason] += 1
+        if bbo_join_block_reason:
+            missing_reason_counts[bbo_join_block_reason] += 1
+            for reason, count in (
+                container.get("bbo_gap_reason_counts") or {}
+            ).items():
+                missing_reason_counts[str(reason)] += int(count or 0)
             rows.append(
                 {
                     "cohort": cohort,
@@ -2730,6 +2883,10 @@ def _scanner_bbo_economic_attribution(
                     "stock_code": stock_code,
                     "venue": venue,
                     "market_session_bucket": session,
+                    "market_data_route": session_route,
+                    "session_route_status": (
+                        "resolved" if session_route is not None else "unresolved"
+                    ),
                     "prune_observer_selected": prune_observer_selected,
                     "observation_population_role": (
                         "bounded_observer_selected_episode"
@@ -2737,23 +2894,22 @@ def _scanner_bbo_economic_attribution(
                         else "full_funnel_census_not_observer_selected"
                     ),
                     "symbol_master_status": symbol_master_status,
-                    "bbo_join_status": (
-                        "source_quality_blocked"
-                        if bbo_join_block_reason
-                        else "excluded_official_symbol_master"
-                    ),
+                    "venue_metadata_conflict_count": venue_metadata_conflict_count,
+                    "venue_observation_conflict_count": venue_observation_conflict_count,
+                    "route_metadata_conflict_count": route_metadata_conflict_count,
+                    "route_observation_conflict_count": route_observation_conflict_count,
+                    "bbo_join_status": "source_quality_blocked",
                     "bbo_join_block_reason": bbo_join_block_reason,
                     "symbol_master_block_reason": symbol_master_block_reason,
-                    "primary_exclusion_reason": (
+                    "economic_eligibility_status": economic_eligibility_status,
+                    "economic_exclusion_reason": (
                         symbol_master_block_reason
-                        if symbol_master_block_reason
-                        else bbo_join_block_reason
+                        or ("session_route_unresolved" if session_route is None else None)
                     ),
-                    "first_hit_label": (
-                        "excluded_official_symbol_master"
-                        if symbol_master_block_reason
-                        else "unresolved_source_quality_blocked"
+                    "primary_exclusion_reason": (
+                        bbo_join_block_reason
                     ),
+                    "first_hit_label": "unresolved_source_quality_blocked",
                     "gross_return_pct": None,
                     "cost_adjusted_return_pct": None,
                 }
@@ -2811,11 +2967,12 @@ def _scanner_bbo_economic_attribution(
             gross_return_pct = (
                 (float(exit_observation["best_bid"]) - entry_ask) / entry_ask * 100.0
             )
-            cost_adjusted_return_pct = (
-                gross_return_pct - round_trip_cost_pct
-                if round_trip_cost_pct is not None
-                else None
-            )
+            if economic_eligible:
+                cost_adjusted_return_pct = (
+                    gross_return_pct - round_trip_cost_pct
+                    if round_trip_cost_pct is not None
+                    else None
+                )
         rows.append(
             {
                 "cohort": cohort,
@@ -2823,6 +2980,10 @@ def _scanner_bbo_economic_attribution(
                 "stock_code": stock_code,
                 "venue": venue,
                 "market_session_bucket": session,
+                "market_data_route": session_route,
+                "session_route_status": (
+                    "resolved" if session_route is not None else "unresolved"
+                ),
                 "prune_observer_selected": prune_observer_selected,
                 "observation_population_role": (
                     "bounded_observer_selected_episode"
@@ -2830,15 +2991,25 @@ def _scanner_bbo_economic_attribution(
                     else "full_funnel_census_not_observer_selected"
                 ),
                 "symbol_master_status": symbol_master_status,
+                "venue_metadata_conflict_count": venue_metadata_conflict_count,
+                "venue_observation_conflict_count": venue_observation_conflict_count,
+                "route_metadata_conflict_count": route_metadata_conflict_count,
+                "route_observation_conflict_count": route_observation_conflict_count,
                 "bbo_join_status": "joined",
                 "bbo_join_block_reason": None,
-                "symbol_master_block_reason": None,
+                "symbol_master_block_reason": symbol_master_block_reason,
+                "economic_eligibility_status": economic_eligibility_status,
+                "economic_exclusion_reason": (
+                    symbol_master_block_reason
+                    or ("session_route_unresolved" if session_route is None else None)
+                ),
                 "primary_exclusion_reason": None,
                 "entry_observed_at": entry.get("observed_at"),
                 "entry_best_bid": entry.get("best_bid"),
                 "entry_best_ask": entry.get("best_ask"),
                 "entry_quote_age_ms": entry.get("quote_age_ms"),
                 "entry_bbo_source": entry.get("source"),
+                "entry_market_data_route": entry.get("market_data_route"),
                 "entry_observer_anchor_generation_id": entry.get(
                     "observer_anchor_generation_id"
                 ),
@@ -2867,11 +3038,12 @@ def _scanner_bbo_economic_attribution(
 
     candidate_count = len(rows)
     eligible_rows = [
-        row for row in rows if row.get("symbol_master_block_reason") is None
+        row for row in rows if _scanner_row_economically_eligible(row)
     ]
     symbol_master_excluded_rows = [
         row for row in rows if row.get("symbol_master_block_reason") is not None
     ]
+    observed_joined_rows = [row for row in rows if row["bbo_join_status"] == "joined"]
     joined_rows = [row for row in eligible_rows if row["bbo_join_status"] == "joined"]
     resolved_rows = [
         row for row in joined_rows if row.get("cost_adjusted_return_pct") is not None
@@ -2884,7 +3056,7 @@ def _scanner_bbo_economic_attribution(
         dimensions: Mapping[str, str],
     ) -> dict[str, Any]:
         group_eligible_rows = [
-            row for row in group_rows if row.get("symbol_master_block_reason") is None
+            row for row in group_rows if _scanner_row_economically_eligible(row)
         ]
         group_joined_rows = [
             row for row in group_eligible_rows if row.get("bbo_join_status") == "joined"
@@ -2939,9 +3111,21 @@ def _scanner_bbo_economic_attribution(
             "status": group_status,
             "source_census_count": len(group_rows),
             "eligible_verified_common_stock_candidate_count": len(group_eligible_rows),
-            "official_symbol_master_excluded_count": len(group_rows)
-            - len(group_eligible_rows),
+            "instrument_classification_unverified_count": sum(
+                row.get("symbol_master_block_reason") is not None
+                for row in group_rows
+            ),
+            "session_route_unresolved_count": sum(
+                _scanner_market_data_route(row) is None for row in group_rows
+            ),
+            "official_symbol_master_excluded_count": sum(
+                row.get("symbol_master_block_reason") is not None
+                for row in group_rows
+            ),
             "exact_bbo_joined_count": len(group_joined_rows),
+            "observed_exact_bbo_joined_count": sum(
+                row["bbo_join_status"] == "joined" for row in group_rows
+            ),
             "exact_bbo_join_coverage_pct": group_coverage_pct,
             "resolved_outcome_count": len(group_resolved_rows),
             "resolved_return_sum_pct": (
@@ -3070,7 +3254,7 @@ def _scanner_bbo_economic_attribution(
             and row.get("market_session_bucket") == session
         ]
         cohort_eligible_rows = [
-            row for row in cohort_rows if row.get("symbol_master_block_reason") is None
+            row for row in cohort_rows if _scanner_row_economically_eligible(row)
         ]
         cohort_joined_rows = [
             row
@@ -3115,9 +3299,21 @@ def _scanner_bbo_economic_attribution(
                 "eligible_verified_common_stock_candidate_count": len(
                     cohort_eligible_rows
                 ),
-                "official_symbol_master_excluded_count": len(cohort_rows)
-                - len(cohort_eligible_rows),
+                "instrument_classification_unverified_count": sum(
+                    row.get("symbol_master_block_reason") is not None
+                    for row in cohort_rows
+                ),
+                "session_route_unresolved_count": sum(
+                    _scanner_market_data_route(row) is None for row in cohort_rows
+                ),
+                "official_symbol_master_excluded_count": sum(
+                    row.get("symbol_master_block_reason") is not None
+                    for row in cohort_rows
+                ),
                 "exact_bbo_joined_count": len(cohort_joined_rows),
+                "observed_exact_bbo_joined_count": sum(
+                    row["bbo_join_status"] == "joined" for row in cohort_rows
+                ),
                 "exact_bbo_join_coverage_pct": cohort_coverage_pct,
                 "resolved_outcome_count": len(cohort_resolved_rows),
                 "source_capture_gap_count": len(cohort_eligible_rows)
@@ -3265,7 +3461,12 @@ def _scanner_bbo_economic_attribution(
         "economic_candidate_count": candidate_count,
         "eligible_verified_common_stock_candidate_count": len(eligible_rows),
         "official_symbol_master_excluded_count": len(symbol_master_excluded_rows),
+        "instrument_classification_unverified_count": len(symbol_master_excluded_rows),
+        "session_route_unresolved_count": sum(
+            _scanner_market_data_route(row) is None for row in rows
+        ),
         "exact_bbo_joined_count": len(joined_rows),
+        "observed_exact_bbo_joined_count": len(observed_joined_rows),
         "exact_promotion_venue_session_bbo_join_coverage_pct": join_coverage_pct,
         "join_coverage_floor_pct": SCANNER_BBO_JOIN_COVERAGE_FLOOR_PCT,
         "resolved_outcome_count": len(resolved_rows),
