@@ -272,7 +272,9 @@ def test_recheck_reuses_probe_lease_then_publishes_only_final_assessment(
         return {**request, "result": followup_result,
                 "machine_action": "ENTER_NOW" if followup_result == "assessed" else "",
                 "reason": "trigger_confirmed" if followup_result == "assessed"
-                          else "route_snapshot_missing"}
+                          else "route_snapshot_missing",
+                "ws_observation": {"wait_ms": 6000,
+                                   "exact_0b_count": 0 if followup_result != "assessed" else 5}}
 
     monkeypatch.setattr(main, "run_zero_base_probe", probe_once)
     main.handle_zero_base_probe_requested(request)
@@ -287,6 +289,7 @@ def test_recheck_reuses_probe_lease_then_publishes_only_final_assessment(
     assert published[0][1]["machine_action"] == expected_action
     assert published[0][1]["recheck_attempts"] == 2
     assert published[0][1]["recheck_followup_result"] == followup_result
+    assert published[0][1]["recheck_followup_ws_observation"]["wait_ms"] == 6000
     assert slots.acquire(blocking=False)
     slots.release()
 

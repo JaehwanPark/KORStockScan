@@ -6892,6 +6892,10 @@ def run_zero_base_scanner(*, token, event_bus, is_test_mode=False):
                     "zero_base_recheck_followup_result": result.get("recheck_followup_result") or "-",
                     "zero_base_recheck_followup_reason": result.get("recheck_followup_reason") or "-",
                     **{
+                        "zero_base_recheck_followup_ws_" + key: value
+                        for key, value in (result.get("recheck_followup_ws_observation") or {}).items()
+                    },
+                    **{
                         "zero_base_ws_" + key: value
                         for key, value in (result.get("ws_observation") or {}).items()
                     },

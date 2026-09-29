@@ -8748,6 +8748,9 @@ def handle_zero_base_probe_requested(request):
                     )
                     result["recheck_followup_result"] = followup.get("result")
                     result["recheck_followup_reason"] = followup.get("reason")
+                    result["recheck_followup_ws_observation"] = (
+                        followup.get("ws_observation") or {}
+                    )
                 elif result.get("machine_action") == "RECHECK":
                     result["recheck_attempts"] = 1
                     result["recheck_followup_reason"] = "active_conflict_after_first_assessment"
