@@ -642,9 +642,11 @@ def _parents(target_date, events, registry, *, details=None):
 
 def _previous_state(target_date):
     from src.engine.scalping.entry_cancel_wait_runtime import ECONOMIC_SCHEMA
+    from src.engine.automation.source_quality_clean_baseline import policy_refresh_start_date
+    refresh_floor = policy_refresh_start_date(target_date)
     for path in sorted(REPORT_DIR.glob('entry_cancel_wait_tuning_*.json'),reverse=True):
         day=path.stem[-10:]
-        if not '2026-06-05' <= day < target_date or path.is_symlink() or path.stat().st_size>64*1024*1024:continue
+        if not refresh_floor <= day < target_date or path.is_symlink() or path.stat().st_size>64*1024*1024:continue
         payload=json.loads(path.read_text());state=payload.get('economic_state') or {}
         if payload.get('economic_schema') != ECONOMIC_SCHEMA:continue
         if state.get('sha256') != _digest({k:v for k,v in state.items() if k!='sha256'}):

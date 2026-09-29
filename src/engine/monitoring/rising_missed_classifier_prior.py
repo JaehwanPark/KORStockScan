@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from src.engine.monitoring.widget_comparison_cost import comparison_cost_contract
+from src.engine.automation.source_quality_clean_baseline import policy_refresh_start_date
 from src.utils.constants import DATA_DIR
 from src.utils.market_day import is_krx_trading_day
 
@@ -123,7 +124,7 @@ def _source_paths(target_date: str, explicit: Iterable[Path] = ()) -> list[Path]
             report_date = date.fromisoformat(suffix)
         except ValueError:
             continue
-        if CLEAN_BASELINE_DATE <= report_date <= maximum:
+        if date.fromisoformat(policy_refresh_start_date(target_date)) <= report_date <= maximum:
             rows.append((report_date, path))
     return [path for _, path in sorted(rows)[-MAX_SOURCE_DAYS:]]
 

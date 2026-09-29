@@ -11,6 +11,16 @@ from src.engine.scalping.entry_setup_scalping_rollout import AUTO_PROMOTION_SCOP
 build_report = calibration.build_report
 
 
+def test_forward_machine_transition_loader_skips_old_report_bytes(tmp_path):
+    old = tmp_path / "ai_prompt_detailed_paired_replay_2026-08-31.json"
+    old.write_text("invalid historical source", encoding="utf-8")
+    _, source_reports, census, _ = calibration._transition_rows(
+        tmp_path, target_date="2026-09-30"
+    )
+    assert source_reports == []
+    assert census["discovered_report_count"] == 0
+
+
 def _economic_row(index: int, ev: float = 0.4) -> dict:
     return {
         "decision_trace_id": f"economic-{index}",

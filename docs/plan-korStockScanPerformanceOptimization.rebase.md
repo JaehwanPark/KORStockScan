@@ -7,6 +7,8 @@ Note: This document does not own auto-parsed checklist items. Executable work it
 
 Tuning data decision baseline: clean tuning data starts at `2026-06-05 KST`, with full-day start timestamp `2026-06-05T00:00:00+09:00`. Raw/report/analytics data before this baseline is `archive_only_not_allowed_for_clean_tuning` and must not be used for EV, rolling/MTD/cumulative tuning, live-auto promotion, runtime approval, pattern lab promotion, or real execution quality approval. The policy artifact is `data/source_quality/clean_baseline_policy.json`; report and analytics residue enforcement is owned by [report-based-automation-traceability](./report-based-automation-traceability.md) and `threshold_cycle_postclose_verification`.
 
+Policy-refresh evidence starts with the next full KRX source date, `2026-09-30`. The policy actually selected and consumed by the runtime is the incumbent baseline. Earlier 2026-06~09-29 inputs and reports retain audit, custody and rollback roles but do not train, rank, or approve a successor for the revised postclose producers. A forward date is eligible only with its exact producer contract, selected-policy identity, source quality, terminal/cost and independent holdout receipts. No forward sample means `insufficient_sample` or `source_gap`, never measured zero edge. This forward boundary does not invalidate historical policy receipts or broker custody.
+
 Historical progress belongs in checklist/audit/archive or execution-delta records. Read only task-relevant evidence; do not recursively load linked history at session entry.
 
 ---
@@ -155,6 +157,8 @@ Unorganized report-only/legacy artifacts are managed by `calibration_source_bund
 | System Error Detector | Report-only detector and gated filesystem maintenance detector are separated. | Strategy threshold/order changes are forbidden. |
 
 ## 6. Quantitative Targets And Guards
+
+The §5 first-type quantity row describes how the selected initial baseline was originally built. Its current refresh uses the selected parent's effective date and the forward policy-refresh boundary above; it does not rebuild that baseline from 6~8월 raw inputs.
 
 | Metric/Guard | Baseline | Action |
 | --- | --- | --- |

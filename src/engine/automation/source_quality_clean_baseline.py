@@ -16,6 +16,7 @@ REPORT_QUARANTINE_DIR = DATA_DIR / "source_quality" / "report_quarantine"
 ANALYTICS_QUARANTINE_DIR = DATA_DIR / "source_quality" / "analytics_quarantine"
 DEFAULT_START_DATE = "2026-06-05"
 DEFAULT_START_TS_KST = "2026-06-05T00:00:00+09:00"
+DEFAULT_POLICY_REFRESH_START_DATE = "2026-09-30"
 DEFAULT_REASON = "operator_requested_oldest_clean_baseline_date_retirement_after_2026-06-05_source_quality_pass"
 DATE_TOKEN_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 FORBIDDEN_USES = [
@@ -75,6 +76,22 @@ def clean_baseline_policy() -> dict[str, Any]:
         "reason": payload.get("reason") or DEFAULT_REASON,
         "forbidden_uses": list(FORBIDDEN_USES),
     }
+
+
+def policy_refresh_start_date(target_date: str, policy: dict[str, Any] | None = None) -> str:
+    """Keep dated audits reproducible; new scheduled refreshes use forward evidence."""
+    if policy is None:
+        configured = _load_policy_file()
+        policy = {**configured, **clean_baseline_policy(),
+                  "policy_refresh_start_date": configured.get("policy_refresh_start_date")}
+    historical = str(policy.get("clean_tuning_baseline_date") or DEFAULT_START_DATE)
+    forward = str(policy.get("policy_refresh_start_date") or DEFAULT_POLICY_REFRESH_START_DATE)
+    target = date.fromisoformat(target_date)
+    historical_day = date.fromisoformat(historical)
+    forward_day = date.fromisoformat(forward)
+    if forward_day <= historical_day:
+        raise ValueError("policy_refresh_start_not_after_clean_baseline")
+    return forward if target >= forward_day else historical
 
 
 def is_date_allowed(source_date: str, policy: dict[str, Any] | None = None) -> bool:
@@ -380,12 +397,14 @@ def write_policy(
     *,
     clean_tuning_baseline_date: str = DEFAULT_START_DATE,
     clean_tuning_baseline_ts_kst: str = DEFAULT_START_TS_KST,
+    policy_refresh_start_date: str = DEFAULT_POLICY_REFRESH_START_DATE,
     reason: str = DEFAULT_REASON,
 ) -> dict[str, Any]:
     payload = {
         "enabled": True,
         "clean_tuning_baseline_date": clean_tuning_baseline_date,
         "clean_tuning_baseline_ts_kst": clean_tuning_baseline_ts_kst,
+        "policy_refresh_start_date": policy_refresh_start_date,
         "reason": reason,
         "written_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "runtime_effect": False,

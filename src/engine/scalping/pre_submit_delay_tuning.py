@@ -19,7 +19,10 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from src.engine.automation.source_quality_clean_baseline import clean_baseline_policy
+from src.engine.automation.source_quality_clean_baseline import (
+    clean_baseline_policy,
+    policy_refresh_start_date,
+)
 from src.utils.constants import DATA_DIR
 
 KST = timezone(timedelta(hours=9))
@@ -114,7 +117,7 @@ def policy_path(target_date: str) -> Path:
 
 
 def _source_rows(target_date: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    baseline = str(clean_baseline_policy().get("clean_tuning_baseline_date") or "2026-06-05")
+    baseline = policy_refresh_start_date(target_date)
     root = DATA_DIR / "threshold_cycle"
     source_partitions: list[tuple[str, Path]] = []
     if root.is_dir():
@@ -190,8 +193,11 @@ def _source_rows(target_date: str) -> tuple[list[dict[str, Any]], dict[str, Any]
         "first_blocker": (None if rows else "valid_empty_delay_observations"
                           if paths else "clean_baseline_delay_observations_missing"),
         "paths": [str(path) for path in paths],
-        "window_policy": "clean_baseline_cumulative_through_target_date",
-        "clean_tuning_baseline_date": baseline,
+        "window_policy": ("selected_policy_forward_through_target_date"
+                          if baseline != "2026-06-05" else
+                          "clean_baseline_cumulative_through_target_date"),
+        **({"refresh_start_date": baseline} if baseline != "2026-06-05" else {}),
+        "clean_tuning_baseline_date": clean_baseline_policy().get("clean_tuning_baseline_date"),
         "through_date": target_date,
         "source_dates": sorted(source_dates),
         "source_date_count": len(source_dates),

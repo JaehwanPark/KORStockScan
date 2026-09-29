@@ -26,6 +26,7 @@ from src.engine.scalping.risky_micro_episode import (
     evaluate_risky_micro_episode,
 )
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
+from src.engine.automation.source_quality_clean_baseline import policy_refresh_start_date
 
 
 class _PipelineReplay:
@@ -2934,7 +2935,7 @@ def _clean_baseline_rolling_latency_false_negative_candidates(
     eligible_paths: list[Path] = []
     for path in sorted(REPORT_DIR.glob(f"{prefix}*.json")):
         report_date = _daily_feedback_report_date(path)
-        if report_date and CLEAN_BASELINE_DATE <= report_date < target_date:
+        if report_date and policy_refresh_start_date(target_date) <= report_date < target_date:
             eligible_paths.append(path)
     prior_limit = max(0, LATENCY_FALSE_NEGATIVE_ROLLING_REPORT_DAYS - 1)
     for path in eligible_paths[-prior_limit:] if prior_limit else []:
@@ -4598,7 +4599,7 @@ def _clean_baseline_rolling_nxt_post_block_outcomes(
     eligible_paths = []
     for path in sorted(REPORT_DIR.glob(f"{prefix}*.json")):
         report_date = _daily_feedback_report_date(path)
-        if not report_date or not (CLEAN_BASELINE_DATE <= report_date < target_date):
+        if not report_date or not (policy_refresh_start_date(target_date) <= report_date < target_date):
             continue
         eligible_paths.append(path)
     prior_limit = max(0, NXT_POST_BLOCK_ROLLING_REPORT_DAYS - 1)
@@ -6735,7 +6736,7 @@ def _clean_baseline_rolling_risky_micro_outcomes(
     eligible_paths: list[Path] = []
     for path in sorted(REPORT_DIR.glob(f"{prefix}*.json")):
         report_date = _daily_feedback_report_date(path)
-        if report_date and CLEAN_BASELINE_DATE <= report_date < target_date:
+        if report_date and policy_refresh_start_date(target_date) <= report_date < target_date:
             eligible_paths.append(path)
     prior_limit = max(0, RISKY_MICRO_ROLLING_REPORT_DAYS - 1)
     for path in eligible_paths[-prior_limit:] if prior_limit else []:

@@ -23,6 +23,7 @@ from typing import Any, Callable
 from urllib import parse, request
 
 from src.engine.monitoring import widget_mechanical_entry_replay as mechanical_replay
+from src.engine.automation.source_quality_clean_baseline import policy_refresh_start_date
 from src.engine.monitoring.machine_recommendation_identity import bind_recommendation
 from src.engine.monitoring.samsung_widget_contract import (
     KST,
@@ -100,13 +101,14 @@ ConfigLoader = Callable[[], tuple[str, str]]
 
 def _dated_paths(directory: Path, prefix: str, *, through_date: date) -> list[Path]:
     selected: list[tuple[date, Path]] = []
+    refresh_floor = date.fromisoformat(policy_refresh_start_date(through_date.isoformat()))
     for path in directory.glob(f"{prefix}_*.json*"):
         raw_date = path.name.removeprefix(f"{prefix}_").split(".", 1)[0]
         try:
             artifact_date = date.fromisoformat(raw_date)
         except ValueError:
             continue
-        if CLEAN_BASELINE_DATE <= artifact_date <= through_date:
+        if refresh_floor <= artifact_date <= through_date:
             selected.append((artifact_date, path))
     return [path for _, path in sorted(selected)]
 
@@ -247,6 +249,8 @@ def history_anchor_issues(output_dir: Path, target_date: date, manifest: dict[st
                               through_date=target_date)
     candidates = [path for path in candidates if path.suffix == ".json"]
     if not candidates:
+        if target_date.isoformat() == policy_refresh_start_date(target_date.isoformat()):
+            return []
         return ["collector_history_anchor_missing"]
     try:
         anchor = json.loads(candidates[-1].read_text(encoding="utf-8"))
@@ -478,7 +482,7 @@ def _load_replay_history(
             report_date = date.fromisoformat(str(report.get("target_date") or ""))
         except ValueError:
             continue
-        if not CLEAN_BASELINE_DATE <= report_date <= through_date:
+        if not date.fromisoformat(policy_refresh_start_date(through_date.isoformat())) <= report_date <= through_date:
             continue
         if path is not None and not path.stem.endswith(f"_{report_date}"):
             continue

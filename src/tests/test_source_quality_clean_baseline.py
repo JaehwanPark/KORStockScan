@@ -3,6 +3,14 @@ import os
 from src.engine.automation import source_quality_clean_baseline as baseline
 
 
+def test_policy_refresh_window_preserves_historical_audits_and_starts_forward():
+    policy = {"clean_tuning_baseline_date": "2026-06-05",
+              "policy_refresh_start_date": "2026-09-30"}
+    assert baseline.policy_refresh_start_date("2026-09-29", policy) == "2026-06-05"
+    assert baseline.policy_refresh_start_date("2026-09-30", policy) == "2026-09-30"
+    assert baseline.policy_refresh_start_date("2026-10-01", policy) == "2026-09-30"
+
+
 def test_clean_baseline_filters_pre_baseline_dates(monkeypatch, tmp_path):
     monkeypatch.setattr(
         baseline, "POLICY_PATH", tmp_path / "clean_baseline_policy.json"

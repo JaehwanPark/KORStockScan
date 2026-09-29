@@ -20,6 +20,7 @@ from typing import Any
 
 from src.engine.automation.source_quality_clean_baseline import (
     clean_baseline_policy,
+    policy_refresh_start_date,
     is_date_allowed,
 )
 from src.trading.order.split_execution_math import (
@@ -1962,7 +1963,7 @@ def _iter_entry_split_input_rows(path: Path, *, hard_blocking_stages: set[str]):
 def _available_calibration_dates(target_date: str) -> list[str]:
     """Return clean-baseline source dates available through ``target_date``."""
     clean_policy = clean_baseline_policy()
-    baseline_date = str(clean_policy.get("clean_tuning_baseline_date") or "2026-06-05")
+    baseline_date = policy_refresh_start_date(target_date)
     dates = {target_date}
     source_specs = (
         (DATA_DIR / "pipeline_events", "pipeline_events_"),
@@ -2144,13 +2145,13 @@ def _merge_count_maps(
 
 def _latest_prior_cumulative_state(target_date: str) -> tuple[dict[str, Any], str]:
     policy = clean_baseline_policy()
-    baseline_date = str(policy.get("clean_tuning_baseline_date") or "")
+    baseline_date = policy_refresh_start_date(target_date)
     for path in sorted(
         REPORT_DIR.glob(f"{REPORT_TYPE}_*.json"),
         reverse=True,
     ):
         source_date = path.stem.removeprefix(f"{REPORT_TYPE}_")
-        if not source_date or source_date >= target_date:
+        if not source_date or not baseline_date <= source_date < target_date:
             continue
         payload = _load_json(path)
         try:
@@ -2180,7 +2181,7 @@ def _latest_prior_cumulative_state(target_date: str) -> tuple[dict[str, Any], st
             and state.get("window_policy")
             == "clean_baseline_cumulative_through_target_date"
             and str(state.get("through_date") or "") == source_date
-            and str(state.get("clean_tuning_baseline_date") or "") == baseline_date
+            and str(state.get("policy_refresh_start_date") or state.get("clean_tuning_baseline_date") or "") == baseline_date
         ):
             source_dates = [
                 str(value) for value in (state.get("source_dates") or []) if str(value)
@@ -5138,6 +5139,7 @@ def evaluate_entry_split_operating_economics(rows, model_rows, source_counts, *,
         lower_bound_method="observed_minimum_stressed_paired_net_minus_both_arm_empirical_error_envelopes_not_statistical_confidence_bound",
         source_quality_gate="exact_plan_order_terminal_cost_policy_scope_and_chronological_witnesses",
         forbidden_uses=["actual_profit_claim_from_cf", "increase_quantity_or_budget", "actual_sell_reused_for_cf_exit", "guard_bypass"])
+    refresh_floor = policy_refresh_start_date(target_date)
     try:
         if any(date.fromisoformat(day).isoformat()!=day or day < "2026-06-05" or day > target_date
                or type(n) is not int or n < 0 for day,n in source_counts.items()):
@@ -5163,11 +5165,11 @@ def evaluate_entry_split_operating_economics(rows, model_rows, source_counts, *,
                 and r.get("cost_complete") is True and r.get("exact_lineage") is True
                 and exact_decision_evidence(r)
                 and r.get("owner")=="main_scalping"
-                and "2026-06-05" <= str(r.get("source_date")) <= target_date
+                and refresh_floor <= str(r.get("source_date")) <= target_date
                 and all(numeric(r.get(k)) for k in ("vwap_error_bps", "receipt_clock_error_sec", "quantity_error",
                     "net_error_budget_pct", "capital_error_minutes", "reserve_error_minutes"))]
             declared=[r for key,r in actual_index.items() if key not in actual_conflicts
-                and "2026-06-05"<=str(r.get("source_date"))<=target_date]
+                and refresh_floor<=str(r.get("source_date"))<=target_date]
             declared_model_days=sorted({r["source_date"] for r in declared})
             check=dict(scope_sha256=scope, status="insufficient_sample", blockers=[], candidates=[])
             eligible_model_days=[]
@@ -5354,6 +5356,7 @@ def evaluate_entry_split_operating_economics(rows, model_rows, source_counts, *,
 
 def build_entry_split_post_apply_performance(actual_rows, *, target_date, rolling_days=20):
     """One real completed episode per applied version/scope; no modeled uplift."""
+    refresh_floor = policy_refresh_start_date(target_date)
     unique, conflicts={},set()
     for row in actual_rows:
         identity=str(row.get("episode_id") or "")
@@ -5365,7 +5368,7 @@ def build_entry_split_post_apply_performance(actual_rows, *, target_date, rollin
         and r.get("origin")=="real" and r.get("owner")=="main_scalping" and r.get("cost_complete") is True
         and r.get("exact_lineage") is True and r.get("pid_consumed") is True and r.get("policy_applied") is True
         and r.get("policy_version") and re.fullmatch(r"[a-f0-9]{64}",str(r.get("policy_sha256") or ""))
-        and "2026-06-05"<=str(r.get("completion_date"))<=target_date
+        and refresh_floor<=str(r.get("completion_date"))<=target_date
         and all(numeric(r.get(k)) for k in ("net_pnl_krw","profit_rate","budget_krw"))
         and r["budget_krw"]>0]
     exposure_fields=("capital_krw_minutes", "reserve_krw_minutes")
@@ -5639,7 +5642,7 @@ def _paired_economic_population_census(report, state, economics):
     operating replay recorded an explicit zero census for that exact date.
     """
     cumulative=report.get("cumulative_state") or {}
-    baseline=str(cumulative.get("clean_tuning_baseline_date") or "2026-06-05")
+    baseline=policy_refresh_start_date(str(state.get("through_date") or economics.get("source_date")))
     dates=sorted({str(d) for d in cumulative.get("source_dates",[])
         if baseline<=str(d)<=str(state.get("through_date") or economics.get("source_date"))})
     counts=state.get("source_counts") or economics.get("source_counts") or {}
@@ -5794,7 +5797,7 @@ def _operating_four_arm_events(economics):
 def _previous_operating_state(target_date):
     for path in sorted(REPORT_DIR.glob(f"{REPORT_TYPE}_????-??-??.json"),reverse=True):
         day=path.stem[-10:]
-        if day>=target_date or day<"2026-06-05":continue
+        if day>=target_date or day<policy_refresh_start_date(target_date):continue
         if path.is_symlink() or path.stat().st_size>64*1024*1024:continue
         state=(_load_json(path) or {}).get("operating_economic_state") or {}
         if not state:continue
@@ -6858,6 +6861,7 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
             "clean_tuning_baseline_date": clean_baseline_policy().get(
                 "clean_tuning_baseline_date"
             ),
+            "policy_refresh_start_date": policy_refresh_start_date(target_date),
             "source_dates": load_summary.get("source_dates") or [],
             "counts": counts,
             "sim_ev_values": {

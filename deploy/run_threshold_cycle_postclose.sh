@@ -232,6 +232,10 @@ RUN_RISING_MISSED_CLASSIFIER_PRIOR="${THRESHOLD_CYCLE_RUN_RISING_MISSED_CLASSIFI
 RUN_SAMSUNG_MACHINE_ENTRY_TUNING=false # retired: 005930 new entry belongs to Main fixed watch
 RUN_LOW_PRICE_TWO_LEG_TUNING="${THRESHOLD_CYCLE_RUN_LOW_PRICE_TWO_LEG_TUNING:-true}"
 RUN_LOW_PRICE_TWO_LEG_CANDIDATE_RECOMMENDATION="${THRESHOLD_CYCLE_RUN_LOW_PRICE_TWO_LEG_CANDIDATE_RECOMMENDATION:-true}"
+if [[ "$TARGET_DATE" > "2026-09-29" ]]; then
+  # This historical multi-month research producer has no forward-only window yet.
+  RUN_LOW_PRICE_TWO_LEG_CANDIDATE_RECOMMENDATION=false
+fi
 RUN_INSTITUTIONAL_FLOW_CONTEXT=false # permanently retired with its sole ADM/LDM consumer: scalping_adm_ldm_retirement_20260906
 RUN_LIFECYCLE_DECISION_MATRIX=false # permanently retired: scalping_adm_ldm_retirement_20260906
 RUN_LIFECYCLE_AI_CONTEXT=false # permanently retired: scalping_adm_ldm_retirement_20260906

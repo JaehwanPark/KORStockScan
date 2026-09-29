@@ -3560,6 +3560,9 @@ def main(argv: list[str] | None = None) -> int:
     end_date = date.fromisoformat(args.end_date) if args.end_date else target_date
     if end_date != target_date:
         raise ValueError("end_date_must_equal_target_date")
+    from src.engine.automation.source_quality_clean_baseline import policy_refresh_start_date
+    if date.fromisoformat(policy_refresh_start_date(target_date.isoformat())) > CLEAN_BASELINE_DATE:
+        raise ValueError("forward_candidate_research_window_not_migrated")
     start_date = (
         date.fromisoformat(args.start_date) if args.start_date else CLEAN_BASELINE_DATE
     )

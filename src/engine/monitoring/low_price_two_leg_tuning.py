@@ -272,10 +272,11 @@ RealizedPnlLoader = Callable[[str, str], list[dict[str, Any]]]
 
 
 def _clean_trading_dates_through(target_date: date) -> tuple[date, ...]:
+    from src.engine.automation.source_quality_clean_baseline import policy_refresh_start_date
     if target_date < CLEAN_BASELINE_DATE:
         raise ValueError("target_date_precedes_clean_baseline")
     selected: list[date] = []
-    current = CLEAN_BASELINE_DATE
+    current = date.fromisoformat(policy_refresh_start_date(target_date.isoformat()))
     while current <= target_date:
         if is_krx_trading_day(current):
             selected.append(current)
@@ -1705,6 +1706,8 @@ def _read_daily_history(path: Path, *, wanted=None) -> dict | None:
 def _load_history(
     output_dir: Path, target_date: date, cost_pct: float
 ) -> dict[str, dict[str, dict]]:
+    from src.engine.automation.source_quality_clean_baseline import policy_refresh_start_date
+    refresh_floor = date.fromisoformat(policy_refresh_start_date(target_date.isoformat()))
     target_profiles = _effective_report_profiles(target_date)
     history: dict[str, dict[str, dict]] = {}
     for path in sorted(output_dir.glob(f"{REPORT_TYPE}_*.json")):
@@ -1713,7 +1716,7 @@ def _load_history(
             report_date = date.fromisoformat(raw_date)
         except ValueError:
             continue
-        if not CLEAN_BASELINE_DATE <= report_date < target_date:
+        if not refresh_floor <= report_date < target_date:
             continue
         if not is_krx_trading_day(report_date):
             continue
@@ -2203,17 +2206,19 @@ def paired_search_handoff(target_date: str, *, output_dir=OUTPUT_DIR, candidate_
 
 
 def _cached_paired_contexts(profile, source_date):
+    from src.engine.automation.source_quality_clean_baseline import policy_refresh_start_date
     from src.engine.monitoring.low_price_two_leg_expanded_candidate_research import DEFAULT_SOURCE_CACHE_DIR, _load_source_cache
     from src.engine.monitoring.low_price_two_leg_entry_spot_research import build_day_contexts
+    refresh_start = date.fromisoformat(policy_refresh_start_date(source_date.isoformat()))
     for directory in sorted(DEFAULT_SOURCE_CACHE_DIR.glob("????-??-??"), reverse=True):
         try:
             end = date.fromisoformat(directory.name)
         except ValueError:
             continue
-        if end > source_date:
+        if end > source_date or end < refresh_start:
             continue
         cached = _load_source_cache(cache_dir=DEFAULT_SOURCE_CACHE_DIR, symbol=profile.symbol,
-            start_date=CLEAN_BASELINE_DATE, end_date=end,
+            start_date=refresh_start, end_date=end,
             expected_trading_day_count=len(_clean_trading_dates_through(end)))
         if cached is not None:
             return build_day_contexts(cached[0]), cached[1]["source_content_sha256"]

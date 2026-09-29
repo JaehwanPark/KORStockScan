@@ -21,6 +21,7 @@ from typing import Any
 from src.engine.automation.source_quality_clean_baseline import (
     clean_baseline_policy,
     is_date_allowed,
+    policy_refresh_start_date,
 )
 from src.engine.trade_profit import calculate_net_realized_pnl, get_trade_cost_rate
 from src.trading.order.split_execution_math import (
@@ -1931,10 +1932,11 @@ def _load_rolling_anchor_results(
     target_date: str,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     clean_policy = clean_baseline_policy()
+    refresh_start = policy_refresh_start_date(target_date)
     dated_paths: list[tuple[str, Path]] = []
     for path in REPORT_DIR.glob(f"{REPORT_TYPE}_*.json"):
         source_date = path.stem.removeprefix(f"{REPORT_TYPE}_")
-        if len(source_date) != 10 or source_date >= target_date:
+        if len(source_date) != 10 or not refresh_start <= source_date < target_date:
             continue
         if not is_date_allowed(source_date, clean_policy):
             continue
@@ -1976,6 +1978,7 @@ def _load_rolling_anchor_results(
             attempt_id = str(item.get("attempt_id") or "")
             if (
                 attempt_id
+                and refresh_start <= str(item.get("source_date") or "")
                 and is_date_allowed(str(item.get("source_date") or ""), clean_policy)
                 and str(item.get("source_date") or "") <= source_date
                 and item.get("replay_contract_version") == ECONOMIC_GATE_VERSION
@@ -2615,12 +2618,15 @@ def _query_actual_fill_inventory(target_date: str) -> list[dict[str, Any]]:
     from src.database.models import HoldingAddHistory, RecommendationHistory
     from src.engine.sniper_position_tags import is_default_position_tag, normalize_position_tag
 
+    refresh_start = policy_refresh_start_date(target_date)
     days = sorted(p.stem.removeprefix(f"{REPORT_TYPE}_") for p in REPORT_DIR.glob(f"{REPORT_TYPE}_*.json")
                   if len(p.stem.removeprefix(f"{REPORT_TYPE}_")) == 10
-                  and p.stem.removeprefix(f"{REPORT_TYPE}_") < target_date
+                  and refresh_start <= p.stem.removeprefix(f"{REPORT_TYPE}_") < target_date
                   and is_date_allowed(p.stem.removeprefix(f"{REPORT_TYPE}_"), clean_baseline_policy()))
     # Retain the existing report-date window, including excluded schema dates.
-    first = days[-19] if len(days) >= 19 else (days[0] if days else target_date)
+    first = days[-19] if len(days) >= 19 else (days[0] if days else (
+        refresh_start if refresh_start != clean_baseline_policy().get("clean_tuning_baseline_date") else target_date
+    ))
     start = datetime.fromisoformat(first)
     end = datetime.fromisoformat(target_date) + timedelta(days=1)
     with DBManager().get_session() as session:
@@ -2771,11 +2777,12 @@ def _validated_incumbent(target_date: str) -> dict[str, Any] | None:
 
 def build_report(target_date: str) -> dict[str, Any]:
     quality = _source_quality_summary(target_date)
+    refresh_start = policy_refresh_start_date(target_date)
     previous = _load_json(report_paths(target_date)[0])
     if not previous:
         paths = sorted(p for p in REPORT_DIR.glob(f"{REPORT_TYPE}_*.json")
                        if len(p.stem.removeprefix(f"{REPORT_TYPE}_")) == 10
-                       and p.stem.removeprefix(f"{REPORT_TYPE}_") < target_date)
+                       and refresh_start <= p.stem.removeprefix(f"{REPORT_TYPE}_") < target_date)
         previous = _load_json(paths[-1]) if paths else {}
     inventory, error, receipt = [], "", {}
     try:
@@ -2785,7 +2792,7 @@ def build_report(target_date: str) -> dict[str, Any]:
         error = str(exc) if isinstance(exc, ValueError) else f"execution_source_unavailable:{type(exc).__name__}"
     known = {}
     # Old reports are diagnostic exclusions only, never v4 economic approval.
-    for path in sorted(p for p in REPORT_DIR.glob(f"{REPORT_TYPE}_*.json") if len(p.stem.removeprefix(f"{REPORT_TYPE}_")) == 10 and p.stem.removeprefix(f"{REPORT_TYPE}_") <= target_date)[-20:]:
+    for path in sorted(p for p in REPORT_DIR.glob(f"{REPORT_TYPE}_*.json") if len(p.stem.removeprefix(f"{REPORT_TYPE}_")) == 10 and refresh_start <= p.stem.removeprefix(f"{REPORT_TYPE}_") <= target_date)[-20:]:
         day = path.stem.removeprefix(f"{REPORT_TYPE}_")
         if len(day) == 10 and day <= target_date:
             diagnostic = _load_json(path)
@@ -2901,11 +2908,11 @@ def build_report(target_date: str) -> dict[str, Any]:
                                                     population="actual_full_fill_conditioned_only", forbidden_population="unfilled_or_missed_entry_opportunities")
     report["actual_fill_inventory"] = inventory
     report_dates = sorted(p.stem.removeprefix(f"{REPORT_TYPE}_") for p in REPORT_DIR.glob(f"{REPORT_TYPE}_*.json")
-                          if len(p.stem.removeprefix(f"{REPORT_TYPE}_")) == 10 and p.stem.removeprefix(f"{REPORT_TYPE}_") < target_date)
+                          if len(p.stem.removeprefix(f"{REPORT_TYPE}_")) == 10 and refresh_start <= p.stem.removeprefix(f"{REPORT_TYPE}_") < target_date)
     revision_start = report_dates[-19] if len(report_dates) >= 19 else (report_dates[0] if report_dates else target_date)
     revisions = {row["attempt_id"]: row for row in previous.get("outcome_revisions", previous.get("daily_attempt_outcomes", []))
                  if isinstance(row, dict) and row.get("attempt_id") and row.get("replay_contract_version") == ECONOMIC_GATE_VERSION
-                 and revision_start <= str(row.get("source_date") or "") <= target_date}
+                 and max(refresh_start, revision_start) <= str(row.get("source_date") or "") <= target_date}
     for row in report.get("daily_attempt_outcomes") or []:
         revisions[row["attempt_id"]] = row
     report["outcome_revisions"] = list(revisions.values())

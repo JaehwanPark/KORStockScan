@@ -434,6 +434,44 @@ def test_auxiliary_population_binds_bounded_previous_day_sources(tmp_path):
         )
 
 
+def test_auxiliary_population_starts_at_forward_policy_date(tmp_path):
+    old_path = compact.report_path(tmp_path, "2026-09-29").with_suffix(".source.json")
+    old_path.parent.mkdir(parents=True, exist_ok=True)
+    old_path.write_text("invalid historical source", encoding="utf-8")
+    current = compact.sealed({
+        "schema": "compact_auxiliary_frozen_projection_v1",
+        "source_projection_contract": compact.SOURCE_PROJECTION_CONTRACT,
+        "target_date": "2026-09-30", "source_tuning_allowed": True,
+        "rows": [{"evaluation_key": "forward"}],
+    })
+    combined = compact.auxiliary_population_projection(current, old_path.parent)
+    assert [row["evaluation_key"] for row in combined["rows"]] == ["forward"]
+    assert combined["history_projection_sha256s"] == {}
+
+
+def test_forward_compact_candidate_plan_has_independent_selection(tmp_path):
+    candidate = "example_candidate"
+    selected = compact.sealed({
+        "schema": compact.CANDIDATE_SELECTION_SCHEMA,
+        "status": "candidate_selected",
+        "candidate_prompt_version": candidate,
+    })
+    old_plan = compact._candidate_plan_path(tmp_path, "2026-09-29", candidate)
+    compact.write(old_plan, compact.sealed({
+        "candidate_prompt_version": candidate,
+        "candidate_selection": selected,
+    }))
+    assert compact.frozen_candidate_selection(tmp_path, "2026-09-29") == selected
+    assert compact.frozen_candidate_selection(tmp_path, "2026-09-30") is None
+    new_plan = compact._candidate_plan_path(tmp_path, "2026-09-30", candidate)
+    assert new_plan != old_plan
+    compact.write(new_plan, compact.sealed({
+        "candidate_prompt_version": candidate,
+        "candidate_selection": selected,
+    }))
+    assert compact.frozen_candidate_selection(tmp_path, "2026-09-30") == selected
+
+
 def test_auxiliary_population_reads_archived_source_with_same_hash(tmp_path):
     import gzip
 

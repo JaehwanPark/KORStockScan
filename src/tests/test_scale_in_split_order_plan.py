@@ -70,6 +70,17 @@ def _write_pipeline_events(data_dir, target_date, events):
     )
 
 
+def test_forward_scale_in_rolling_loader_skips_old_report(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    old = split_plan.REPORT_DIR / "scale_in_split_order_plan_2026-08-31.json"
+    old.parent.mkdir(parents=True, exist_ok=True)
+    old.write_text("invalid historical report", encoding="utf-8")
+    rows, summary = split_plan._load_rolling_anchor_results("2026-09-30")
+    assert rows == []
+    assert summary["historical_source_dates"] == []
+    assert summary["excluded_dates"] == []
+
+
 def test_postclose_report_consumes_atomic_avg_down_sizing_receipt(
     monkeypatch, tmp_path
 ):

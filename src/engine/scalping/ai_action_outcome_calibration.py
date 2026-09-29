@@ -27,6 +27,7 @@ from typing import Any, Callable, Iterable, Mapping
 from zoneinfo import ZoneInfo
 
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
+from src.engine.automation.source_quality_clean_baseline import policy_refresh_start_date
 from src.trading.order.tick_utils import get_tick_size
 from src.engine.scalping.entry_setup_evidence import (
     MECHANISTIC_ENTRY_FLOW_OBSERVATION_SCHEMA,
@@ -46,6 +47,17 @@ from src.engine.scalping.entry_setup_evidence import (
 
 KST = ZoneInfo("Asia/Seoul")
 CLEAN_BASELINE_DATE = "2026-06-05"
+
+
+def _refresh_floor(target_date: str) -> str:
+    return policy_refresh_start_date(target_date)
+
+
+def _refresh_path_allowed(path: Path, target_date: str) -> bool:
+    match = re.search(r"\d{4}-\d{2}-\d{2}", path.name)
+    return bool(match and _refresh_floor(target_date) <= match.group() <= target_date)
+
+
 SCHEMA = "ai_decision_action_outcome_calibration_v2"
 POLICY_VERSION = "exact_decision_trace_cumulative_action_outcome_v5"
 PROBE_RISK_GATE_VERSION = "bounded_probe_recovery_risk_v2"
@@ -341,14 +353,18 @@ def _main_mechanistic_input_fingerprint(
         "report/entry_split_order_plan/entry_split_order_plan_*.json",
         "report/entry_cancel_wait_tuning/entry_cancel_wait_tuning_*.json",
     )
+    refresh_floor = _refresh_floor(target_date)
     for pattern in patterns:
         for path in data_root.glob(pattern):
             match = re.search(r"(\d{4}-\d{2}-\d{2})", path.name)
-            if match and CLEAN_BASELINE_DATE <= match.group(1) <= target_date:
+            if match and refresh_floor <= match.group(1) <= target_date:
                 candidates.add(path)
     pricing = data_root / "policy/micro_reversion/provider_pricing.json"
     if pricing.is_file():
         candidates.add(pricing)
+    refresh_policy = data_root / "source_quality/clean_baseline_policy.json"
+    if refresh_policy.is_file():
+        candidates.add(refresh_policy)
     incumbent = load_effective(data_root=data_root, target_date=incumbent_date or target_date)
     from src.engine.scalping.strategy_owner_replay import entry_operating_model_identity
     code_paths = [
@@ -762,10 +778,12 @@ def _transition_rows(
     conflicted_traces: dict[tuple[str, str, str, str, str], set[str]] = defaultdict(set)
     discovered_count = 0
     for path in sorted(paired_dir.glob("ai_prompt_detailed_paired_replay_*.json")):
+        if not _refresh_path_allowed(path, target_date):
+            continue
         report = _load_json(path)
         source_date = _report_date(path, report)
         if source_date and (
-            source_date < CLEAN_BASELINE_DATE or source_date > target_date
+            source_date < _refresh_floor(target_date) or source_date > target_date
         ):
             continue
         discovered_count += 1
@@ -1055,6 +1073,8 @@ def _mechanistic_source_rows(
     accepted_source_artifacts: list[dict[str, Any]] = []
 
     for path in sorted(paired_dir.glob("ai_prompt_detailed_paired_replay_*.json")):
+        if not _refresh_path_allowed(path, target_date):
+            continue
         observed_file_sha256 = _observed_file_sha256(path)
         if observed_file_sha256 is None:
             exclusions["source_file_hash_unavailable"] += 1
@@ -1063,7 +1083,7 @@ def _mechanistic_source_rows(
         source_date = _report_date(path, report)
         if (
             not source_date
-            or source_date < CLEAN_BASELINE_DATE
+            or source_date < _refresh_floor(target_date)
             or source_date > target_date
         ):
             continue
@@ -2345,6 +2365,7 @@ def _common_refinement_population(
     censored paths rather than manufacturing zero returns or synthetic AI.
     """
     excluded, accepted, seen, conflicted = Counter(), {}, {}, set()
+    refresh_floor = _refresh_floor(target_date)
     trace_keys = {}
     if not mechanistic_scope_supported(*cohort):
         raise ValueError("refinement_population_cohort_unsupported")
@@ -2448,7 +2469,7 @@ def _common_refinement_population(
             if (parts.get("venue"), parts.get("session_bucket")) != cohort:
                 excluded["different_cohort"] += 1
                 continue
-            if not CLEAN_BASELINE_DATE <= day <= target_date or (
+            if not refresh_floor <= day <= target_date or (
                 _kst_date_from_aware_timestamp(row.get("decision_ts")) != day
             ):
                 excluded["decision_date_invalid"] += 1
@@ -3677,11 +3698,13 @@ def _actual_entry_quality_source_audit(
             "main_scalping_lifecycle_paired_*.json"
         )
     ):
+        if not _refresh_path_allowed(path, target_date):
+            continue
         report = _load_json(path)
         source_date = _report_date(path, report)
         if (
             not source_date
-            or source_date < CLEAN_BASELINE_DATE
+            or source_date < _refresh_floor(target_date)
             or source_date > target_date
         ):
             continue
@@ -3760,11 +3783,13 @@ def _actual_entry_quality_source_audit(
         if path.with_suffix("").with_suffix(".json") not in outcome_paths
     )
     for path in outcome_paths:
+        if not _refresh_path_allowed(path, target_date):
+            continue
         report = _load_json(path)
         source_date = _report_date(path, report)
         if (
             not source_date
-            or source_date < CLEAN_BASELINE_DATE
+            or source_date < _refresh_floor(target_date)
             or source_date > target_date
         ):
             continue
@@ -4725,12 +4750,13 @@ def load_machine_observation_rows(
     result, counts = [], Counter()
     capture_populations = []
     completed_price_receipts = []
+    refresh_floor = _refresh_floor(target_date)
     for path in sorted((data_root / "ai_decision_payloads").glob("*.jsonl*")):
         match = re.search(r"(\d{4}-\d{2}-\d{2})\.jsonl", path.name)
         # Machine-only capture started on 9/13. The clean-baseline paired
         # replay loader supplies older evidence; opening every prior payload
         # archive here would add postclose I/O without creating a valid capture.
-        if not match or not max("2026-09-13", minimum_source_date) <= match[1] <= target_date:
+        if not match or not max("2026-09-13", minimum_source_date, refresh_floor) <= match[1] <= target_date:
             continue
         if path.suffix == ".gz" and path.with_suffix("").is_file():
             continue
@@ -4751,7 +4777,7 @@ def load_machine_observation_rows(
             evidence = source.get("setup_evidence")
             if (
                 not day
-                or not CLEAN_BASELINE_DATE <= day <= target_date
+                or not refresh_floor <= day <= target_date
                 or capture.get("machine_observation_sha256")
                 != hashlib.sha256(
                     _json_bytes(
@@ -5399,7 +5425,7 @@ def _compact_history_receipt(
         {
             str(row.get("source_date") or "")
             for row in rows
-            if CLEAN_BASELINE_DATE <= str(row.get("source_date") or "") < target_date
+            if _refresh_floor(target_date) <= str(row.get("source_date") or "") < target_date
         }
     )[-19:]
     for day in dates:
@@ -6421,6 +6447,7 @@ def build_mechanistic_hierarchy_candidate(
     ):
         raise ValueError("hierarchy_full_population_source_contract_invalid")
     rows, excluded, seen, last_anchor = [], Counter(), set(), {}
+    refresh_floor = _refresh_floor(target_date)
     for original in sorted(source_rows, key=lambda r: str(r.get("decision_ts") or "")):
         parts = _as_dict(
             _as_dict(original.get("entry_group_observation")).get("key_parts")
@@ -6429,7 +6456,7 @@ def build_mechanistic_hierarchy_candidate(
             excluded["different_cohort"] += 1
             continue
         if (
-            not CLEAN_BASELINE_DATE
+            not refresh_floor
             <= str(original.get("source_date") or "")
             <= target_date
             or original.get("entry_group_contract_valid") is not True
@@ -8064,6 +8091,8 @@ def _prior_ofi_outcome_rows(
     conflicted_keys: set[str] = set()
     directory = report_root / REPORT_SUBDIR
     for path in sorted(directory.glob("ai_decision_action_outcome_calibration_*.json")):
+        if not _refresh_path_allowed(path, target_date):
+            continue
         report = _load_json(path)
         source_date = _report_date(path, report)
         if not source_date or source_date >= target_date:
@@ -9428,7 +9457,7 @@ def build_machine_policy_report(rows, *, source_receipt, target_date, data_root=
                  if _is_sha256(published_hash) else {})
     published_scopes = published.get('selections') or published.get('strategy_refinements_by_scope') or {}
 
-    if training_through_date and not CLEAN_BASELINE_DATE <= training_through_date <= target_date:
+    if training_through_date and not _refresh_floor(target_date) <= training_through_date <= target_date:
         raise ValueError('strategy_training_boundary_invalid')
     scopes = sorted({(r['effective_venue'], r['session_bucket']) for r in rows})
     expected_scopes = {'KRX|KRX_REGULAR', 'PREMARKET_KRX_LIKE|PREMARKET_KRX_LIKE',
@@ -9545,6 +9574,8 @@ def build_main_mechanistic_report(
     previous_strategy = {}
     joint_population, joint_parents = [], {}
     for prior_path in sorted((report_root / "ai_decision_action_outcome_calibration").glob("ai_decision_action_outcome_calibration_*.json")):
+        if not _refresh_path_allowed(prior_path, target_date):
+            continue
         prior = compact.read(prior_path)
         if (_artifact_content_sha256_valid(prior) and prior.get("target_date", "9999") <= target_date):
             previous_strategy.update(prior.get("strategy_refinements_by_scope") or {})

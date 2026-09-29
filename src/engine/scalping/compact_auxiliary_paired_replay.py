@@ -18,6 +18,7 @@ from pathlib import Path
 import tempfile
 import time
 from zoneinfo import ZoneInfo
+from src.engine.automation.source_quality_clean_baseline import policy_refresh_start_date
 
 KST = ZoneInfo("Asia/Seoul")
 SCHEMA = "compact_auxiliary_paired_economic_v1"
@@ -822,7 +823,7 @@ def auxiliary_population_projection(current, parent, *, history_hashes=None):
         if source_day not in paths_by_day or path.suffix != ".gz":
             paths_by_day[source_day] = path
     for source_day, path in sorted(paths_by_day.items(), reverse=True):
-        if not ("2026-06-05" <= source_day < day):
+        if not (policy_refresh_start_date(day) <= source_day < day):
             continue
         if history_hashes is None and len(prior) >= 4:
             break
@@ -1496,10 +1497,10 @@ def scope_candidate_validation(pairs, rows, metrics, plan, *, candidate, now):
 
 
 def _comparison_signatures(parent, day, candidate):
-    paths = [parent / f"compact_candidate_plan_{candidate}.json"]
+    paths = [_candidate_plan_path(parent, day, candidate)]
     for path in parent.glob("compact_auxiliary_paired_economic_*.json"):
         source_day = path.stem.removeprefix("compact_auxiliary_paired_economic_")
-        if len(source_day) == 10 and "2026-06-05" <= source_day < day:
+        if len(source_day) == 10 and policy_refresh_start_date(day) <= source_day < day:
             paths.append(path)
     return {str(path): [path.stat().st_size, path.stat().st_mtime_ns] if path.exists() else None
             for path in sorted(paths)}
@@ -1841,6 +1842,9 @@ def candidate_selection_projections(parent, day, current):
     """Load only sealed current daily projections for incumbent-only learning."""
     projections = {}
     for path in sorted(parent.glob("compact_auxiliary_paired_economic_*.source.json")):
+        path_day = path.name.removeprefix("compact_auxiliary_paired_economic_").removesuffix(".source.json")
+        if not policy_refresh_start_date(day) <= path_day <= day:
+            continue
         value = read(path)
         source_day = value.get("target_date")
         if (
@@ -1850,7 +1854,7 @@ def candidate_selection_projections(parent, day, current):
                 SOURCE_PROJECTION_CONTRACT,
             }
             and isinstance(source_day, str)
-            and "2026-06-05" <= source_day <= day
+            and policy_refresh_start_date(day) <= source_day <= day
         ):
             projections[source_day] = value
     # Older sealed projections did not carry target_date; the caller passes the
@@ -2099,9 +2103,21 @@ def candidate_direction_selection(projections):
     return sealed(receipt)
 
 
-def frozen_candidate_selection(parent):
+def _candidate_plan_path(parent, day, candidate):
+    refresh_start = policy_refresh_start_date(day)
+    if refresh_start == "2026-06-05":
+        return parent / f"compact_candidate_plan_{candidate}.json"
+    return parent / f"compact_candidate_plan_forward_{refresh_start}_{candidate}.json"
+
+
+def frozen_candidate_selection(parent, day):
     selections = []
-    for path in sorted(parent.glob("compact_candidate_plan_*.json")):
+    refresh_start = policy_refresh_start_date(day)
+    pattern = ("compact_candidate_plan_*.json" if refresh_start == "2026-06-05"
+               else f"compact_candidate_plan_forward_{refresh_start}_*.json")
+    for path in sorted(parent.glob(pattern)):
+        if refresh_start == "2026-06-05" and path.name.startswith("compact_candidate_plan_forward_"):
+            continue
         plan = read(path)
         selection = plan.get("candidate_selection") or {}
         if (
@@ -2119,18 +2135,18 @@ def frozen_candidate_selection(parent):
     return selections[0] if selections else None
 
 
-def freeze_candidate_selection(parent, selection):
+def freeze_candidate_selection(parent, selection, day):
     """Serialize the outcome-blind candidate choice across daily workers."""
     lock_path = parent / "compact_candidate_selection.lock"
     with lock_path.open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        existing = frozen_candidate_selection(parent)
+        existing = frozen_candidate_selection(parent, day)
         if existing is not None:
             return existing
         if selection.get("status") != "candidate_selected":
             return selection
         candidate = selection.get("candidate_prompt_version")
-        plan_path = parent / f"compact_candidate_plan_{candidate}.json"
+        plan_path = _candidate_plan_path(parent, day, candidate)
         plan = read(plan_path)
         if plan and not valid(plan):
             raise ValueError("candidate_plan_hash_invalid")
@@ -2465,13 +2481,14 @@ def run(
                 if after != signatures[str(dependency)]:
                     raise ValueError("compact_source_generation_changed_during_freeze")
             write(projection_path, projection)
-        selection = frozen_candidate_selection(path.parent)
+        selection = frozen_candidate_selection(path.parent, day)
         if selection is None:
             selection = freeze_candidate_selection(
                 path.parent,
                 candidate_direction_selection(
                     candidate_selection_projections(path.parent, day, projection)
                 ),
+                day,
             )
         selected_candidate = selection.get("candidate_prompt_version")
         if candidate_version and selected_candidate and candidate_version != selected_candidate:
@@ -2496,7 +2513,7 @@ def run(
             cost_receipt=cost_receipt,
             candidate_selection=selection,
         )
-        frozen_plan = read(path.parent / f"compact_candidate_plan_{candidate}.json")
+        frozen_plan = read(_candidate_plan_path(path.parent, day, candidate))
         if (frozen_plan.get("scope_candidates") and frozen_plan.get("candidate_prompt_sha256")
                 and frozen_plan["candidate_prompt_sha256"] != digest(candidate_prompt)):
             raise ValueError("frozen_candidate_prompt_or_schema_changed")
@@ -2880,12 +2897,15 @@ def run(
             if metrics["paired_comparable_count"] == metrics["economic_eligible_count"]
             else "execution_deferred"
         )
-        plan_path = path.parent / f"compact_candidate_plan_{candidate}.json"
+        plan_path = _candidate_plan_path(path.parent, day, candidate)
         history = []
         coverage_history = []
         for old_path in sorted(
             path.parent.glob("compact_auxiliary_paired_economic_*.json")
         ):
+            old_day = old_path.name.removeprefix("compact_auxiliary_paired_economic_").removesuffix(".json")
+            if not policy_refresh_start_date(day) <= old_day < day:
+                continue
             old = read(old_path)
             if (
                 valid(old)

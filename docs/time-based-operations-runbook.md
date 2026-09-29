@@ -35,6 +35,8 @@ Raw lifecycle lineage and dedicated Entry AI gate/Samsung/AVG_DOWN/PYRAMID remai
 
 튜닝 데이터 기준은 `clean_tuning_baseline_date=2026-06-05`, `clean_tuning_baseline_ts_kst=2026-06-05T00:00:00+09:00`이다. 이 기준 이전 raw/report/analytics artifact는 archive/audit evidence로만 본다. EV, rolling/MTD/cumulative tuning, live-auto promotion, runtime approval, pattern lab promotion, real execution quality approval 입력으로 쓰지 않는다. `threshold_cycle_preopen_status`와 `threshold_cycle_postclose_status`는 운영 freshness status artifact라 이 제한에서 제외한다.
 
+2026-09-30 원천일부터 개편된 장후 정책 갱신은 `data/source_quality/clean_baseline_policy.json`의 `policy_refresh_start_date` 이후 날짜만 후보 입력으로 읽는다. 현재 선택·실제 소비 정책을 incumbent로 고정하고 이전 누적 수치는 역사적 감사·custody·rollback에만 남긴다. 아래 `clean_baseline_cumulative`/전체 KRX 거래일 설명은 2026-09-29까지의 기존 생산 계약 기록이며 새 정책 후속 승계에는 적용하지 않는다. 표본 부족은 후보 보류로 기록하며 결손을 0 수익으로 보간하지 않는다. 전체 과거 기간을 요구하는 저가 2단 후보 확장 연구는 전진 구간 계약으로 이관될 때까지 장후에서 OFF이고 직접 실행도 새 날짜의 후보 발행을 거부한다. 장후 소비 릴리스/PID 결속이 확인되기 전에는 6~8월 raw를 제거하지 않는다.
+
 ## 현행 운영·검토 경계 (2026-09-08)
 
 - [9/7 원천 복구](./audit-reports/2026-09-08-postclose-priority-repair-review.md)의 9/8 strict verifier/controller와 원래 9/7 cleanup/detector receipt를 분리한다. 새 source-date wrapper는 다시 자연 검증해야 하며 기존 receipt를 현재 PID/EV 증거로 쓰지 않는다. 비가역적 과거 market/ingress 결손은 다음 exact source acceptance이지 동일 날짜 반복 재실행 대상이 아니다.
