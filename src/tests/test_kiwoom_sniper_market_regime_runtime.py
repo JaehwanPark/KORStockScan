@@ -1061,6 +1061,43 @@ def test_scanner_runtime_target_venue_ignores_decision_scope_as_venue():
     assert fields["venue_source_quality_status"] == "pass"
 
 
+def test_zero_base_exact_data_route_does_not_override_explicit_session_venue():
+    regular = {
+        "venue": "KRX",
+        "effective_venue": "KRX",
+        "market_session_bucket": "krx_regular",
+        "market_data_route": "krx_nxt_integrated",
+        "broker_route": "SOR",
+    }
+    fields = kiwoom_sniper_v2._scanner_runtime_target_venue_fields(regular)
+    assert fields["effective_venue"] == "KRX"
+    assert fields["venue_source_quality_status"] == "pass"
+    assert fields["market_session_bucket"] == "krx_regular"
+    target = {**regular, **fields}
+    assert kiwoom_sniper_v2._zero_base_watch_session_matches(
+        target, datetime.fromisoformat("2026-09-29T09:09:00+09:00").timestamp()
+    )
+    assert (
+        kiwoom_sniper_v2.sniper_state_handlers._scanner_runtime_event_venue_fields(
+            target
+        )["effective_venue"]
+        == "KRX"
+    )
+
+    premarket = {
+        "venue": "PREMARKET_KRX_LIKE",
+        "effective_venue": "PREMARKET_KRX_LIKE",
+        "market_session_bucket": "krx_like_premarket",
+        "market_data_route": "nxt_only",
+        "broker_route": "NXT",
+    }
+    premarket_fields = kiwoom_sniper_v2._scanner_runtime_target_venue_fields(
+        premarket
+    )
+    assert premarket_fields["effective_venue"] == "PREMARKET_KRX_LIKE"
+    assert premarket_fields["venue_source_quality_status"] == "pass"
+
+
 def test_scanner_runtime_integrated_route_registers_without_actual_venue_inference(
     monkeypatch,
 ):

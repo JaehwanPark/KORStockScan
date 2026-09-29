@@ -2213,11 +2213,6 @@ def _scanner_runtime_target_venue_fields(payload, *, target=None):
         ),
         ("payload.effective_venue", payload.get("effective_venue")),
         ("payload.venue", payload.get("venue")),
-        ("payload.market_data_route", payload.get("market_data_route")),
-        (
-            "payload.scanner_market_gainer_market_data_route",
-            payload.get("scanner_market_gainer_market_data_route"),
-        ),
         (
             "target.rising_missed_effective_venue",
             target.get("rising_missed_effective_venue"),
@@ -2228,6 +2223,13 @@ def _scanner_runtime_target_venue_fields(payload, *, target=None):
         ),
         ("target.effective_venue", target.get("effective_venue")),
         ("target.venue", target.get("venue")),
+    )
+    route_fallback_candidates = (
+        ("payload.market_data_route", payload.get("market_data_route")),
+        (
+            "payload.scanner_market_gainer_market_data_route",
+            payload.get("scanner_market_gainer_market_data_route"),
+        ),
         ("target.market_data_route", target.get("market_data_route")),
         (
             "target.scanner_market_gainer_market_data_route",
@@ -2244,6 +2246,14 @@ def _scanner_runtime_target_venue_fields(payload, *, target=None):
         normalized_venue = cohort_aliases.get(normalized_venue, normalized_venue)
         if normalized_venue in _SCANNER_RUNTIME_SUPPORTED_COHORTS:
             explicit_venues.append((venue_source, normalized_venue))
+    # _AL market data is also used during KRX regular trading. Its integrated
+    # route cannot override an explicit session venue (KRX with SOR orders).
+    if not explicit_venues:
+        for venue_source, venue_value in route_fallback_candidates:
+            normalized_venue = str(venue_value or "").strip().upper()
+            normalized_venue = cohort_aliases.get(normalized_venue, normalized_venue)
+            if normalized_venue in _SCANNER_RUNTIME_SUPPORTED_COHORTS:
+                explicit_venues.append((venue_source, normalized_venue))
     unique_venues = {venue for _, venue in explicit_venues}
     if len(unique_venues) == 1:
         canonical_venue = next(iter(unique_venues))
