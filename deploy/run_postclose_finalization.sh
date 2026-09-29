@@ -331,6 +331,23 @@ PY
   echo "[INFO] postclose_finalization summary_handoff_verified target_date=${TARGET_DATE}"
 fi
 
+finalization_generation=""
+if [[ "$TARGET_DATE" > "2026-09-27" ]]; then
+  finalization_generation="$(env PYTHONPATH=. "$VENV_PY" - "$PROJECT_DIR" "$TARGET_DATE" <<'PY'
+import sys
+from pathlib import Path
+from src.engine.automation.postclose_finalization_generation import capture_finalization_generation
+
+receipt = capture_finalization_generation(Path(sys.argv[1]), sys.argv[2])
+print(receipt["chain_sha256"], receipt["snapshot_sha256"])
+PY
+)" || {
+    echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=finalization_generation_invalid"
+    run_final_detector || true
+    exit 1
+  }
+fi
+
 cleanup_budget="$(bounded_stage_budget "$CLEANUP_TIMEOUT_SEC")" || {
   echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=finish_by_cutoff_elapsed_before_cleanup"
   run_final_detector || true
@@ -348,10 +365,52 @@ echo "[INFO] postclose_finalization cleanup_done target_date=${TARGET_DATE}"
 
 # The child detector reports its live ancestor as pending, never as PASS.
 echo "[INFO] postclose_finalization target_date=${TARGET_DATE} cleanup=done detector_handoff=started"
+detector_started_after_ns="$(date +%s%N)"
 if ! run_final_detector; then
   echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=final_detector_failed"
   exit 1
 fi
+detector_generation_fields=""
+if [[ -n "$finalization_generation" ]]; then
+  detector_receipt="$(env PYTHONPATH=. "$VENV_PY" - "$PROJECT_DIR" "$TARGET_DATE" "$detector_started_after_ns" <<'PY'
+import sys
+from pathlib import Path
+from src.engine.automation.postclose_finalization_generation import capture_final_detector_receipt
+
+receipt = capture_final_detector_receipt(
+    Path(sys.argv[1]), sys.argv[2], started_after_ns=int(sys.argv[3])
+)
+print(receipt["run_id"], receipt["report_sha256"])
+PY
+)" || {
+    echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=final_detector_receipt_invalid"
+    exit 1
+  }
+  read -r detector_run_id detector_report_sha256 <<< "$detector_receipt"
+  detector_generation_fields=" detector_run_id=${detector_run_id} detector_report_sha256=${detector_report_sha256}"
+fi
+if [[ -n "$finalization_generation" ]]; then
+  current_generation="$(env PYTHONPATH=. "$VENV_PY" - "$PROJECT_DIR" "$TARGET_DATE" <<'PY'
+import sys
+from pathlib import Path
+from src.engine.automation.postclose_finalization_generation import capture_finalization_generation
+
+receipt = capture_finalization_generation(Path(sys.argv[1]), sys.argv[2])
+print(receipt["chain_sha256"], receipt["snapshot_sha256"])
+PY
+)" || {
+    echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=finalization_generation_changed_after_detector"
+    exit 1
+  }
+  if [[ "$current_generation" != "$finalization_generation" ]]; then
+    echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=finalization_generation_changed_after_detector"
+    exit 1
+  fi
+  read -r chain_sha256 snapshot_generation_sha256 <<< "$finalization_generation"
+  finalization_generation_fields=" chain_sha256=${chain_sha256} snapshot_generation_sha256=${snapshot_generation_sha256}"
+else
+  finalization_generation_fields=""
+fi
 detector_finished_at="$(TZ=Asia/Seoul date +%FT%T%z)"
-echo "[DONE] postclose_finalization target_date=${TARGET_DATE} cleanup=done detector=done finished_at=${detector_finished_at}"
-echo "[DONE] postclose_final_detector target_date=${TARGET_DATE} finalization=done detector=done finished_at=${detector_finished_at}"
+echo "[DONE] postclose_finalization target_date=${TARGET_DATE} cleanup=done detector=done${finalization_generation_fields}${detector_generation_fields} finished_at=${detector_finished_at}"
+echo "[DONE] postclose_final_detector target_date=${TARGET_DATE} finalization=done detector=done${finalization_generation_fields}${detector_generation_fields} finished_at=${detector_finished_at}"

@@ -267,6 +267,7 @@ def test_finalization_reserves_morning_margin_before_preopen():
     assert "POSTCLOSE_FINALIZATION_SUMMARY_TIMEOUT_SEC:-600" in script
     assert "POSTCLOSE_FINALIZATION_FINISH_BY_KST:-06:50" in script
     assert script.count('timeout --foreground "${') == 2
+    assert "bounded_stage_budget \"$DETECTOR_TIMEOUT_SEC\"" in script
     assert 'timeout --kill-after=10s "${summary_budget}s"' in script
     assert "reason=effective_date_hard_deadline" in script
     assert "--resolve-effective-today" in script

@@ -318,6 +318,7 @@ class CronCompletionDetector(BaseDetector):
             log_path = PROJECT_ROOT / job["log"]
             jid = job["id"]
             critical = job.get("critical", False)
+            completed_at: datetime | None = None
             today_str = source_day or _today_kst()
             effective_day = date.fromisoformat(_today_kst())
             job_now_total = now_total
