@@ -16,6 +16,7 @@ from itertools import product
 import json
 import math
 import os
+import time
 import re
 import tempfile
 from collections import Counter, defaultdict
@@ -5275,6 +5276,23 @@ def _machine_ai_natural_source_receipt(data_root: Path, target_date: str) -> dic
     }
 
 
+def _await_machine_ai_natural_source_receipt(
+    data_root: Path, target_date: str, *, max_wait_sec: float = 300,
+    now: datetime | None = None,
+) -> dict:
+    """Bind the current-day machine report after the parallel preflight writes."""
+    receipt = _machine_ai_natural_source_receipt(data_root, target_date)
+    now = now or datetime.now(KST)
+    if (receipt.get("status") != "missing" or target_date != now.date().isoformat()
+        or (now.hour, now.minute) < (20, 1)):
+        return receipt
+    deadline = time.monotonic() + max(0.0, max_wait_sec)
+    while receipt.get("status") == "missing" and time.monotonic() < deadline:
+        time.sleep(min(1.0, max(0.0, deadline - time.monotonic())))
+        receipt = _machine_ai_natural_source_receipt(data_root, target_date)
+    return receipt
+
+
 def _machine_evaluation_key(row: Mapping[str, Any], *, allow_attempt_fallback: bool = False) -> str:
     if row.get("watch_origin") == "MAIN_FIXED_WATCH":
         fixed_values = (
@@ -10196,6 +10214,9 @@ def main(argv: list[str] | None = None) -> int:
                     independent_machine=True, minimum_source_date='2026-09-22',
                     completed_price_fetcher=price_fetcher,
                     completed_price_as_of=price_as_of)
+                if args.write:
+                    source_receipt = _await_machine_ai_natural_source_receipt(
+                        args.data_root, args.target_date)
             result = build_winrate_policy_report(rows,
                 source_receipt=source_receipt,
                 target_date=args.target_date, data_root=args.data_root,

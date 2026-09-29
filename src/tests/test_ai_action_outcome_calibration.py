@@ -893,6 +893,22 @@ def test_machine_completed_source_recovery_waits_for_close_but_allows_past_date(
     assert eligible("2026-09-28", now=after_close, write=False) is False
 
 
+def test_machine_report_waits_for_parallel_exact_day_preflight_receipt(monkeypatch, tmp_path):
+    from datetime import datetime
+
+    reads = iter(({"status": "missing"},
+                  {"status": "ready", "machine_threshold_tuning_input_allowed": True}))
+    monkeypatch.setattr(calibration, "_machine_ai_natural_source_receipt",
+                        lambda *_args: next(reads))
+    monkeypatch.setattr(calibration.time, "sleep", lambda *_args: None)
+    receipt = calibration._await_machine_ai_natural_source_receipt(
+        tmp_path, "2026-09-29", max_wait_sec=1,
+        now=datetime.fromisoformat("2026-09-29T20:10:00+09:00"),
+    )
+    assert receipt["status"] == "ready"
+    assert receipt["machine_threshold_tuning_input_allowed"] is True
+
+
 def test_machine_probe_lineage_counts_two_assessments_as_two_captures():
     first, second = 'a' * 64, 'b' * 64
     captures = [{
