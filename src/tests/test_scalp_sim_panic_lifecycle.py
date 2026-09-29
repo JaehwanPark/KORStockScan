@@ -25,6 +25,7 @@ def _rules(**overrides):
 @pytest.fixture(autouse=True)
 def _state(monkeypatch, tmp_path):
     monkeypatch.setattr(state_handlers, "TRADING_RULES", _rules())
+    monkeypatch.setattr(state_handlers, "_is_scalp_live_simulator_enabled", lambda: True)
     monkeypatch.setattr(state_handlers, "ACTIVE_TARGETS", [])
     monkeypatch.setattr(state_handlers, "HIGHEST_PRICES", {})
     monkeypatch.setattr(

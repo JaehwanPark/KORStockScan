@@ -3644,7 +3644,9 @@ def _is_scalp_strategy(strategy: str | None) -> bool:
 
 
 def _is_scalp_live_simulator_enabled() -> bool:
-    return _rule_bool("SCALP_LIVE_SIMULATOR_ENABLED", True)
+    # The live simulator is retired. Keep historical receipt readers and
+    # settlement helpers, but never create or restore a runtime sim target.
+    return False
 
 
 def _scalp_live_simulator_owner() -> str:

@@ -227,7 +227,7 @@ class TradingConfig:
         True  # 스윙 OFI/QI observe/proposal-only context
     )
     SCALP_LIVE_SIMULATOR_ENABLED: bool = (
-        True  # 스캘핑 AI BUY 전체 대상 live simulator 기본 ON
+        True  # Legacy simulator receipt compatibility; runtime hard gate is OFF.
     )
     SCALP_LIVE_SIMULATOR_OWNER: str = "ScalpAiBuyAllLiveSimulator0511"
     SCALP_LIVE_SIMULATOR_FILL_POLICY: str = "signal_inclusive_best_ask_v1"

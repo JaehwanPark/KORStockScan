@@ -12,6 +12,8 @@ import src.engine.sniper_state_handlers as state_handlers
 from src.utils.constants import TRADING_RULES as CONFIG
 from src.utils.threshold_cycle_registry import threshold_family_for_stage
 
+RETIRED_RUNTIME_SIMULATOR_GATE = state_handlers._is_scalp_live_simulator_enabled
+
 
 class FakeEventBus:
     def __init__(self):
@@ -32,6 +34,9 @@ def _reset_state(monkeypatch, tmp_path):
         SCALP_SIM_PANIC_FORCE_NOOP=True,
     )
     monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    # Existing tests exercise historical simulator receipts, not the retired
+    # production activation gate.
+    monkeypatch.setattr(state_handlers, "_is_scalp_live_simulator_enabled", lambda: True)
     monkeypatch.setattr(state_handlers, "ACTIVE_TARGETS", [])
     monkeypatch.setattr(state_handlers, "EVENT_BUS", FakeEventBus())
     monkeypatch.setattr(state_handlers, "HIGHEST_PRICES", {})
@@ -91,6 +96,33 @@ def _reset_state(monkeypatch, tmp_path):
         ),
     )
     return captured_pipeline_events
+
+
+def test_retired_runtime_does_not_arm_or_restore_simulator(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers, "_is_scalp_live_simulator_enabled", RETIRED_RUNTIME_SIMULATOR_GATE
+    )
+    assert state_handlers._is_scalp_live_simulator_enabled() is False
+    legacy = {
+        "code": "000990",
+        "strategy": "SCALPING",
+        "status": "HOLDING",
+        "sim_record_id": "SCALPSIM-OLD",
+        "scalp_live_simulator": True,
+        "simulation_book": "scalp_ai_buy_all",
+        "actual_order_submitted": False,
+    }
+    state_handlers.ACTIVE_TARGETS.append(legacy)
+    result = state_handlers.sync_scalp_simulator_targets_from_state()
+    assert result["removed"] == 1
+    assert state_handlers.ACTIVE_TARGETS == []
+    assert not state_handlers.maybe_arm_scalp_live_simulator_from_buy_signal(
+        {"strategy": "SCALPING", "code": "000990"},
+        "000990",
+        {"curr": 1000},
+        {"strategy": "SCALPING", "is_trigger": True},
+    )
+    assert state_handlers.EVENT_BUS.published == []
 
 
 def test_scalp_simulator_arms_and_fills_without_real_buy_order(monkeypatch):

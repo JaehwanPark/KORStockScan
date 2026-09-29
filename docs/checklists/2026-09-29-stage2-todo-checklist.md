@@ -100,6 +100,14 @@
   - 코드 완료 기준: 대우건설 `047040`/보유 `48376`의 사전검사 세부 blocker와 원천 시계, 최초 BUY 주문·체결의 재기동 후 검증 복원, ADD 차단·주문·체결·청산의 동일 보유 결속, PYRAMID 신규 판단·주문 불가와 과거 pending·SELL 정산 유지, 표적 회귀·리뷰를 확인한다. S15·VCP 신규 진입은 퇴역 상태를 유지하고 옛 custody만 복구·정산한다.
   - 운영 수용 기준: 선택 release·실제 PID 소비, 첫 자연 원천·투표·주문 또는 미주문·체결, `COMPLETED + valid profit_rate`와 정확 비용의 충분한 동일 보유 표본을 별도 영수증으로 확인한다. 코드 통과를 실주문 또는 증분 순익으로 간주하지 않는다.
 
+- [ ] `[S5FIN05FinalDetectorGeneration0929] 최종 detector의 장후 원천 세대 수용` (`Due: 2026-09-29`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~21:40`, `Track: RuntimeStability`)
+  - Source: [S5 결손](../audit-reports/2026-09-27-intraday-postclose-handoff-S5.md) `S5-FIN-05`, [9/29 S6 수리 보고서](../audit-reports/2026-09-29-intraday-postclose-handoff-S6-S5-FIN-05.md). 9/28 finalizer 07:11 DONE 뒤 strict·controller 세대가 08:25·08:26에 변경된 건을 별도 역사적 결손으로 보존한다.
+  - 완료 기준: 새 자연 source date에서 `postclose_exit` 세 snapshot 논리 SHA·archive 선택, fresh controller/strict 세대, cleanup, 최종 detector의 결속된 DONE marker와 이후 detector PASS를 동일 세대로 검증한다. fixture 통과·선택 릴리스·실제 PID 소비·경제성은 각각 별도로 기록한다. 정규 장후·PREOPEN을 수리 검증 목적으로 다시 실행하지 않는다.
+
+- [ ] `[ScalpSimRuntimeRetirement0929] 기본 scalp simulator 신규 런타임·장후 기본 실행 퇴역` (`Due: 2026-09-29`, `Slot: INTRADAY`, `TimeWindow: 10:00~20:00`, `Track: RuntimeStability`)
+  - Source: 9/29 실제 `scalp_sim` 가상 보유와 `sim_post_sell` 최근 출력, [현행 기준](../plan-korStockScanPerformanceOptimization.rebase.md) §1/§5/§8.
+  - 완료 기준: 신규 sim 진입·재기동 복원·sim 전용 WS 등록이 중단되고 장후 `--evaluate-sim` 기본 실행이 OFF인 코드를 리뷰·회귀 검증한다. 과거 sim 원천과 real post-sell/holding/exit custody를 보존한다. 선택 릴리스와 실제 PID 소비, 자연 `scalp_sim=0`, 다음 장후 단계의 skip 영수증은 별도로 확인한다.
+
 ## Project/Calendar 동기화
 
 문서/checklist를 수정했으면 parser 검증은 실행하고, Project/Calendar 동기화는 사용자가 아래 명령으로 수동 실행한다.
