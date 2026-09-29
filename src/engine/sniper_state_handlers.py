@@ -12474,6 +12474,9 @@ def _log_entry_pipeline(stock, code, stage, **fields):
     )
     _remember_scanner_terminal_block(stock, stage, merged_fields)
     observe_candidate_transition_safe(stock, code, stage, merged_fields)
+    # The pipeline writer stringifies every value. Normalize receipts after
+    # provenance merge so a later echo cannot turn JSON into Python repr.
+    merged_fields = _machine_auxiliary_receipt_wire_fields(merged_fields)
     event_payload = emit_pipeline_event(
         "ENTRY_PIPELINE",
         stock.get("name"),
@@ -44593,12 +44596,13 @@ def _probe_residual_successor_source_fields(
     realtime = ws.get("last_realtime_type_ts") or {}
     realtime = realtime if isinstance(realtime, dict) else {}
     ticks = [row for row in (ws.get("recent_trade_ticks") or []) if isinstance(row, dict)]
+    raw_tick_at = max(
+        (_post_probe_source_epoch(row.get("received_at_ms")) for row in ticks),
+        default=0.0,
+    )
     tick_at = max(
         _post_probe_source_epoch(realtime.get("0B")),
-        max(
-            (_post_probe_source_epoch(row.get("received_at_ms")) for row in ticks),
-            default=0.0,
-        ),
+        raw_tick_at,
     )
     tick_event_at = max(
         (_post_probe_source_epoch(row.get("ts") or row.get("timestamp")) for row in ticks),
@@ -44616,6 +44620,29 @@ def _probe_residual_successor_source_fields(
         and not _truthy_field(ws.get("tick_context_stale"))
         and pressure is not None and math.isfinite(pressure)
     )
+    tick_source = "ws_derived_fields"
+    tick_quality = ws.get("tick_context_quality")
+    tick_pressure_usable = _truthy_field(ws.get("tick_aggressor_pressure_usable"))
+    if not tick_ready and ticks and raw_tick_at > 0:
+        # The AI feature packet may be current while the raw WS snapshot has
+        # no derived quality keys. Recompute from these exact, received ticks;
+        # never borrow the earlier AI result or a fresh 0B clock alone.
+        try:
+            packet = extract_scalping_feature_packet(ws, ticks, now=now_ts)
+        except (ValueError, TypeError, KeyError, AttributeError):
+            packet = {}
+        computed_pressure = _safe_float(packet.get("buy_pressure_10t"), None)
+        if (str(packet.get("tick_context_quality") or "").strip().lower() == "fresh_computed"
+                and _truthy_field(packet.get("tick_aggressor_pressure_usable"))
+                and not _truthy_field(packet.get("tick_context_stale"))
+                and computed_pressure is not None and math.isfinite(computed_pressure)):
+            tick_at = raw_tick_at
+            tick_age = now_ts - tick_at
+            pressure = computed_pressure
+            tick_ready = True
+            tick_source = "current_ws_ticks_recomputed"
+            tick_quality = packet.get("tick_context_quality")
+            tick_pressure_usable = True
     micro = _build_orderbook_micro_log_fields(
         _build_live_orderbook_micro_context(code, curr_price=curr_price)
     )
@@ -44630,8 +44657,11 @@ def _probe_residual_successor_source_fields(
         "stock_code": code,
         "ws_0b_at": tick_at,
         "ws_tick_event_at": tick_event_at,
-        "ws_tick_quality": ws.get("tick_context_quality"),
+        "ws_tick_quality": tick_quality,
+        "ws_tick_pressure_usable": tick_pressure_usable,
+        "ws_tick_ready": tick_ready,
         "ws_buy_pressure": pressure,
+        "ws_tick_proof_source": tick_source,
         "live_micro_at_ms": micro.get("orderbook_micro_captured_at_ms"),
         "live_micro_state": micro.get("orderbook_micro_state"),
         "live_micro_qi": micro.get("orderbook_micro_qi"),
@@ -44641,6 +44671,9 @@ def _probe_residual_successor_source_fields(
     }
     return {
         "entry_split_probe_successor_ws_tick_ready": tick_ready,
+        "entry_split_probe_successor_ws_tick_proof_source": tick_source,
+        "entry_split_probe_successor_ws_tick_quality": tick_quality,
+        "entry_split_probe_successor_ws_tick_pressure_usable": tick_pressure_usable,
         "entry_split_probe_successor_ws_tick_at": tick_at,
         "entry_split_probe_successor_ws_tick_event_at": tick_event_at,
         "entry_split_probe_successor_ws_tick_age_sec": tick_age,

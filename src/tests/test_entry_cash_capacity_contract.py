@@ -22,6 +22,23 @@ def test_source_capacity_bounded_wait_preserves_priority_and_normal_read(monkeyp
     assert "read_rate_max_wait_sec" not in calls[-1]
 
 
+def test_source_capacity_rate_deferral_is_not_reported_as_empty_broker_response(monkeypatch):
+    calls = []
+    def fetch(**kwargs):
+        calls.append(kwargs)
+        return ([], {"read_rate_control_status": "deferred",
+                     "read_rate_control_reason": "shared_read_rate_wait_budget_exhausted",
+                     "request_attempt_count": 0})
+    monkeypatch.setattr(kiwoom_utils, "fetch_kiwoom_api_continuous", fetch)
+    source = kiwoom_utils.get_orderable_by_margin_kt00011(
+        "fake", "005930", 10000, source_only=True)
+    assert calls[-1]["return_meta"] is True
+    assert source == {"error": "kt00011_source_read_deferred:shared_read_rate_wait_budget_exhausted"}
+    kiwoom_utils.get_orderable_by_margin_kt00011("fake", "005930", 10000)
+    assert "return_meta" not in calls[-1]
+
+
+
 def test_async_capacity_prefetch_reused_only_after_completion_and_exact_validation(monkeypatch):
     from datetime import datetime, timezone
     handlers._reset_entry_capacity_receipts()

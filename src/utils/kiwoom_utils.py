@@ -1095,15 +1095,27 @@ def get_orderable_by_margin_kt00011(token, code, unit_price=None, is_nxt=None, *
                  float(source_read_rate_max_wait_sec))), request_timeout=(0.15, 0.15))
         if source_only else {}
     )
-    results = fetch_kiwoom_api_continuous(
+    response = fetch_kiwoom_api_continuous(
         url=url,
         token=token,
         api_id="kt00011",
         payload=payload,
         use_continuous=False,
+        **({"return_meta": True} if source_only else {}),
         **source_bounds,
     )
+    # A source-only admission deferral has no broker response. Keep it distinct
+    # from an empty response after an HTTP attempt; live sizing is unchanged.
+    if source_only and isinstance(response, tuple) and len(response) == 2:
+        results, source_meta = response
+    else:
+        results, source_meta = response, {}
+    source_meta = source_meta if isinstance(source_meta, dict) else {}
     if not results:
+        if (source_only and source_meta.get("read_rate_control_status") == "deferred"
+                and int(source_meta.get("request_attempt_count") or 0) == 0):
+            reason = str(source_meta.get("read_rate_control_reason") or "deferred").strip()
+            return {"error": "kt00011_source_read_deferred:" + reason}
         return {}
 
     if not isinstance(results, (list, tuple)):

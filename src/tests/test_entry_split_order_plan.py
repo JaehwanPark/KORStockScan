@@ -95,6 +95,48 @@ def test_probe_successor_observer_uses_live_sources_and_excludes_negative(monkey
     assert split_plan._probe_residual_admission(gate, 3)[0] is False
 
 
+def test_probe_successor_recomputes_current_ws_ticks_when_derived_keys_are_absent(monkeypatch):
+    from src.engine import sniper_state_handlers as handlers
+
+    now = 1_790_120_000.0
+    seen = []
+    def feature_packet(ws, ticks, *, now):
+        seen.append((ws, ticks, now))
+        return {"tick_context_quality": "fresh_computed",
+                "tick_aggressor_pressure_usable": True,
+                "tick_context_stale": False, "buy_pressure_10t": 80}
+    monkeypatch.setattr(handlers, "extract_scalping_feature_packet", feature_packet)
+    monkeypatch.setattr(handlers, "_build_live_orderbook_micro_context",
+                        lambda *args, **kwargs: {})
+    ws = {"last_realtime_type_ts": {"0B": now - 0.1},
+          "recent_trade_ticks": [{"received_at_ms": int((now - 0.2) * 1000)}]}
+    proof = handlers._probe_residual_successor_source_fields(
+        "095610", ws, curr_price=10000, now_ts=now)
+    assert seen and seen[0][1] == ws["recent_trade_ticks"]
+    assert proof["entry_split_probe_successor_ws_tick_ready"] is True
+    assert proof["entry_split_probe_successor_ws_tick_proof_source"] == "current_ws_ticks_recomputed"
+    assert proof["entry_split_probe_successor_ws_tick_quality"] == "fresh_computed"
+    assert proof["entry_split_probe_successor_ws_tick_pressure_usable"] is True
+    assert proof["entry_split_probe_successor_ws_tick_age_sec"] == pytest.approx(0.2)
+    assert len(seen) == 1
+    gate = {**_probe_ready_gate("BUY"), **proof,
+            "orderbook_micro_ready": False, "tick_context_quality": "fresh_computed",
+            "tick_aggressor_pressure_usable": True, "buy_pressure_10t": 80}
+    assert split_plan._probe_residual_admission(gate, 3) == (
+        True, "ready", "price_tick,signed_pressure")
+    stale_ws = {**ws, "recent_trade_ticks": [
+        {"received_at_ms": int((now - 4.0) * 1000)}]}
+    stale = handlers._probe_residual_successor_source_fields(
+        "095610", stale_ws, curr_price=10000, now_ts=now)
+    assert split_plan._probe_residual_admission({**gate, **stale}, 3)[0] is False
+    assert len(seen) == 2
+    ws["recent_trade_ticks"] = [{"price": 10000}]
+    missing_clock = handlers._probe_residual_successor_source_fields(
+        "095610", ws, curr_price=10000, now_ts=now)
+    assert missing_clock["entry_split_probe_successor_ws_tick_ready"] is False
+    assert len(seen) == 2
+
+
 def test_acknowledged_entry_leg_merges_duplicate_policy_receipts():
     """Execute the real post-ack logging expression without a broker call."""
     import ast

@@ -37,6 +37,27 @@ def test_machine_auxiliary_receipt_is_json_on_string_valued_event_wire():
     assert fields["entry_ai_soft_policy_sha256"] == "a" * 64
 
 
+def test_machine_auxiliary_receipt_is_json_after_pipeline_provenance_merge(monkeypatch):
+    emitted = []
+    assessment = {"schema": "auxiliary_effective_assessment_v1",
+                  "raw_verdict": "PASS", "effective_verdict": "PASS",
+                  "validation_errors": []}
+    monkeypatch.setattr(state_handlers, "emit_pipeline_event",
+                        lambda *args, **kwargs: emitted.append(kwargs) or {})
+    monkeypatch.setattr(state_handlers, "_remember_scanner_terminal_block", lambda *_: None)
+    monkeypatch.setattr(state_handlers, "observe_candidate_transition_safe", lambda *_: None)
+    monkeypatch.setattr(state_handlers,
+        "_maybe_register_rising_missed_nxt_downstream_block_sampler", lambda *_: None)
+    state_handlers._log_entry_pipeline(
+        {"id": 8, "name": "TEST", "code": "005930", "strategy": "SCALPING"},
+        "005930", "scalp_entry_action_decision_snapshot",
+        entry_ai_effective_assessment=assessment,
+        entry_ai_advisory_contract_errors=[])
+    fields = emitted[0]["fields"]
+    assert json.loads(fields["entry_ai_effective_assessment"]) == assessment
+    assert json.loads(fields["entry_ai_advisory_contract_errors"]) == []
+
+
 def _assert_danger_hard_safety_block(result, *, danger_reasons=None):
     assert result["latency_state"] == "DANGER"
     assert result["latency_canary_applied"] is False

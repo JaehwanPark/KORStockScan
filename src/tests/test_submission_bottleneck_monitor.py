@@ -448,6 +448,25 @@ def test_auxiliary_ai_semantic_receipt_matches_effective_screen():
     assert projection["rows"][0]["auxiliary_ai_semantics"]["soft_policy_sha256"] == policy_hash
 
 
+def test_auxiliary_legacy_python_repr_echo_keeps_valid_pass_semantics():
+    assessment = {
+        "schema": "auxiliary_effective_assessment_v1",
+        "raw_verdict": "PASS", "effective_verdict": "PASS",
+        "reason": "raw_verdict_preserved", "validated_response_sha256": "d" * 64,
+        "soft_policy_sha256": None, "validation_errors": [],
+    }
+    candidate = event(entry_ai_auxiliary_contract_version="auxiliary_effective_assessment_v1",
+        entry_ai_effective_assessment=str(assessment), entry_ai_advisory_verdict="PASS",
+        entry_ai_soft_policy_sha256="None")
+    row = sentinel._machine_primary_entry_funnel([candidate])["evaluation_ledger"][0]
+    assert row["auxiliary_ai_semantics"]["status"] == "receipt_match"
+    assert row["conflict_reasons"] == []
+    malformed = event(entry_ai_auxiliary_contract_version="auxiliary_effective_assessment_v1",
+        entry_ai_effective_assessment="{'schema': unknown()}", entry_ai_advisory_verdict="PASS")
+    invalid = sentinel._machine_primary_entry_funnel([malformed])["evaluation_ledger"][0]
+    assert "auxiliary_assessment_schema_invalid" in invalid["conflict_reasons"]
+
+
 def test_auxiliary_v2_semantic_receipt_requires_selected_profile():
     assessment = {
         "schema": "auxiliary_effective_assessment_v2",

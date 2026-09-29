@@ -2840,7 +2840,15 @@ def _auxiliary_ai_semantics(rows, action: str, screen: str) -> dict[str, Any]:
         try:
             assessment = json.loads(assessment)
         except (ValueError, TypeError):
-            assessment = None
+            # Older pipeline echoes serialized a dict with str(), producing
+            # Python literals. Read that bounded legacy form without treating
+            # an unparseable receipt as a valid AI assessment.
+            try:
+                import ast
+                assessment = (ast.literal_eval(assessment)
+                              if len(assessment) <= 8192 else None)
+            except (ValueError, SyntaxError, TypeError, RecursionError, OverflowError):
+                assessment = None
     if screen in {"not_evaluated_transport", "not_evaluated_local"}:
         if isinstance(assessment, dict) and (
             assessment.get("effective_verdict") in {"PASS", "VETO", "CAUTION", "INSUFFICIENT"}
@@ -2891,6 +2899,8 @@ def _auxiliary_ai_semantics(rows, action: str, screen: str) -> dict[str, Any]:
         issues.append("auxiliary_validated_response_hash_invalid")
     policy_hash = assessment.get("soft_policy_sha256")
     event_policy_hash = latest.get("entry_ai_soft_policy_sha256")
+    if event_policy_hash in (None, "", "-", "None", "none", "null"):
+        event_policy_hash = None
     if policy_hash != event_policy_hash:
         issues.append("auxiliary_soft_policy_hash_mismatch")
     if policy_hash is not None and (
