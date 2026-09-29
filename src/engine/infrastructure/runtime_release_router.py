@@ -556,7 +556,10 @@ def render_crontab(original: str, workspace: Path) -> str:
             elif op != "finalize":
                 arguments = arguments[len(date_arg) :]
         # Do not accept --print-plan, an extra execution, or shell conditionals
-        # as an installed scheduled worker. Preserve conventional log redirects.
+        # as an installed scheduled worker. The scheduled finalizer must resolve
+        # the effective trading date and its immediately prior KRX source date.
+        if op == "finalize" and arguments.startswith(" --resolve-effective-today"):
+            arguments = arguments[len(" --resolve-effective-today") :]
         if not re.fullmatch(r"(?:\s+(?:>>?\s+[^\s;&|<>]+|2>&1))*\s*", arguments):
             raise ValueError(f"cron_arguments_unrecognized:{op}")
         if op == "start" and not marker:
@@ -567,7 +570,7 @@ def render_crontab(original: str, workspace: Path) -> str:
             schedule = "0 6 * * * "
             redirections = arguments
             line = (
-                schedule + prefix + desired + redirections.rstrip()
+                schedule + prefix + desired + " --resolve-effective-today" + redirections.rstrip()
                 + " # POSTCLOSE_FINALIZATION_0600"
             )
         else:
