@@ -20,6 +20,61 @@ from src.engine.sniper_entry_latency import (
 from src.utils.constants import TRADING_RULES as CONFIG
 
 
+def test_orderbook_observer_uses_exact_ws_item_and_fails_closed_without_identity(
+    monkeypatch,
+):
+    requested = []
+    monkeypatch.setattr(
+        entry_latency_module, "ws_quote_source_receipt",
+        lambda frame, now_ts: {"item": frame.get("test_source_item")},
+    )
+    monkeypatch.setattr(
+        entry_latency_module.ORDERBOOK_STABILITY_OBSERVER,
+        "snapshot",
+        lambda item: requested.append(item) or {
+            "observer_healthy": True, "observer_transport_epoch": 1
+        },
+    )
+    frame = {"market_data_transport_epoch": 1, "test_source_item": "001820_AL"}
+    assert entry_latency_module._orderbook_stability_for_frame("001820", frame) == {
+        "observer_healthy": True, "observer_transport_epoch": 1
+    }
+    assert requested == ["001820_AL"]
+    frame["test_source_item"] = None
+    assert entry_latency_module._orderbook_stability_for_frame("001820", frame)[
+        "observer_missing_reason"
+    ] == "quote_source_identity_missing"
+    assert requested == ["001820_AL"]
+    frame["test_source_item"] = "353200_AL"
+    assert entry_latency_module._orderbook_stability_for_frame("001820", frame)[
+        "observer_missing_reason"
+    ] == "quote_source_identity_missing"
+    assert requested == ["001820_AL"]
+
+
+def test_live_micro_context_uses_exact_ws_item(monkeypatch):
+    requested = []
+    monkeypatch.setattr(
+        state_handlers, "ws_quote_source_receipt",
+        lambda frame, now_ts: {"item": "001820_AL"},
+    )
+    monkeypatch.setattr(
+        state_handlers.ORDERBOOK_STABILITY_OBSERVER,
+        "snapshot",
+        lambda item: requested.append(item) or {
+            "orderbook_micro": {"ready": True}, "observer_transport_epoch": 1
+        },
+    )
+    context = state_handlers._build_live_orderbook_micro_context(
+        "001820", curr_price=10_000, ws_data={"market_data_transport_epoch": 1}
+    )
+    assert context["ready"] is True
+    assert requested == ["001820_AL"]
+    assert state_handlers._build_live_orderbook_micro_context(
+        "001820", curr_price=10_000, ws_data={"market_data_transport_epoch": 2}
+    ) is None
+
+
 def test_machine_auxiliary_receipt_is_json_on_string_valued_event_wire():
     assessment = {"schema": "auxiliary_effective_assessment_v1", "raw_verdict": "VETO"}
     fields = state_handlers._build_ai_ops_log_fields({

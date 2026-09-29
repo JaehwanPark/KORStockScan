@@ -3341,6 +3341,10 @@ def test_allocator_probe_first_reserves_one_share_and_builds_fill_anchored_resid
     assert untrusted_fields["entry_split_order_probe_residual_admission_reason"] == (
         "ai_authority_missing_stale_or_untrusted"
     )
+    assert untrusted_fields["entry_split_order_probe_residual_admission_ai_ttl_sec"] == 3
+    assert untrusted_fields["entry_split_order_probe_residual_admission_ai_action"] == "WAIT"
+    assert untrusted_fields["entry_split_order_probe_residual_admission_ai_blocked"] is True
+    assert untrusted_fields["entry_split_order_probe_residual_admission_ai_trace_present"] is False
 
     drop_orders, _ = split_plan.apply_entry_split_order_policy(
         [{"tag": "normal", "qty": 4, "price": 8900, "tif": "DAY"}],
@@ -5663,7 +5667,14 @@ def test_live_submit_split_branch_binds_or_releases_reservation(monkeypatch, tmp
     probe = {'qty': 1, 'price': 1000, 'entry_split_order_probe_continuation': {'requested_qty': 5},
              'entry_split_order_probe_submit_best_ask': 1000}
     split_plan.update_probe_runtime_bundle('new-plan', phase='planned')
-    calls, stock = [], {'id': 1}
+    calls, stock = [], {
+        'id': 1,
+        'entry_armed': True,
+        'entry_armed_until': 999999,
+        'entry_signal_price': 1000,
+        'entry_signal_time': datetime(2026, 7, 20, tzinfo=timezone(timedelta(hours=9))),
+        'entry_signal_strategy_id': 'SCALPING',
+    }
     env = {**vars(handlers), 'stock': stock, 'code': '000001', 'strategy': 'SCALPING',
                'ws_data': {}, 'curr_price': 1000, 'sizing_decision': {},
                '_initial_quantity_cap_research_context': lambda *a, **k: None,
@@ -5680,7 +5691,7 @@ def test_live_submit_split_branch_binds_or_releases_reservation(monkeypatch, tmp
            '_decorate_entry_split_leg_ttls': lambda orders, *a: orders,
            'compose_entry_execution_sizing_plan': lambda orders, **k: (orders, {
                'entry_execution_sizing_valid': mode != 'invalid_sizing'}),
-           'clear_signal_reference': lambda *a: None,
+           'clear_signal_reference': handlers.clear_signal_reference,
            '_log_entry_pipeline': lambda stock, code, stage, **kw: calls.append((stage, kw))}
     exec(compile(module, '<live-pre-broker-branch>', 'exec'), env)
     assert env['run']([probe]) is (mode in {'probe', 'opening'})
@@ -5700,10 +5711,14 @@ def test_live_submit_split_branch_binds_or_releases_reservation(monkeypatch, tmp
         assert stages[-1] == 'entry_split_probe_capacity_deferred'
         assert calls[-1][1]['broker_order_forbidden'] is True
         assert 'order_bundle_failed' not in stages
+        assert stock.get('entry_armed') is None
+        assert stock.get('entry_signal_time') is None
     elif mode == 'admission_deferred':
         assert stages[-1] == 'entry_split_probe_admission_deferred'
         assert calls[-1][1]['broker_order_forbidden'] is True
         assert 'order_bundle_failed' not in stages
+        assert stock.get('entry_armed') is None
+        assert stock.get('entry_signal_time') is None
     elif mode == 'invalid_sizing':
         assert state['phase'] == 'aborted'
     else:

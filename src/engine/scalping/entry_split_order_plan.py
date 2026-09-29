@@ -8001,6 +8001,25 @@ def apply_entry_split_order_policy(
                 ),
                 "entry_split_order_probe_residual_admission_reason": admission_reason,
                 "entry_split_order_probe_residual_admission_groups": admission_groups,
+                "entry_split_order_probe_residual_admission_ai_age_sec": latency_gate.get(
+                    "entry_ai_submit_authority_confirmed_age_sec"
+                ),
+                "entry_split_order_probe_residual_admission_ai_ttl_sec": probe_config[
+                    "timeout_sec"
+                ],
+                "entry_split_order_probe_residual_admission_ai_action": latency_gate.get(
+                    "entry_ai_submit_authority_action"
+                ),
+                "entry_split_order_probe_residual_admission_ai_result_source": latency_gate.get(
+                    "entry_ai_submit_authority_result_source"
+                ),
+                "entry_split_order_probe_residual_admission_ai_blocked": latency_gate.get(
+                    "entry_ai_submit_authority_blocked"
+                ),
+                "entry_split_order_probe_residual_admission_ai_trace_present": bool(
+                    str(latency_gate.get("entry_ai_submit_authority_decision_trace_id") or "").strip()
+                    not in {"", "-", "none", "not_available", "not_evaluated"}
+                ),
                 **{
                     key: value for key, value in latency_gate.items()
                     if key.startswith("entry_split_probe_successor_")

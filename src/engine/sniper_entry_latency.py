@@ -80,6 +80,35 @@ _LATENCY_TRUE_OFI_DIRECT_CANARY_FORBIDDEN_USES = (
 _KST = timezone(timedelta(hours=9))
 
 
+def _orderbook_stability_for_frame(
+    code: str, ws_data: dict[str, Any] | None
+) -> dict[str, Any]:
+    if not code:
+        return {}
+    if ws_data is None:
+        return ORDERBOOK_STABILITY_OBSERVER.snapshot(code)
+    receipt = ws_quote_source_receipt(ws_data, now_ts=time.time())
+    item = str(receipt.get("item") or "")
+    if not item and "market_data_transport_epoch" not in ws_data:
+        item = code
+    if not item or (item != code and not item.startswith(f"{code}_")):
+        return {
+            "observer_healthy": False,
+            "observer_missing_reason": "quote_source_identity_missing",
+        }
+    snapshot = ORDERBOOK_STABILITY_OBSERVER.snapshot(item)
+    expected_epoch = ws_data.get("market_data_transport_epoch")
+    if expected_epoch is not None and (
+        type(expected_epoch) is not int
+        or snapshot.get("observer_transport_epoch") != expected_epoch
+    ):
+        return {
+            "observer_healthy": False,
+            "observer_missing_reason": "observer_transport_epoch_mismatch",
+        }
+    return snapshot
+
+
 def _safe_price_int(value: Any) -> int:
     try:
         return int(float(str(value).replace(",", "").strip()))
@@ -3876,6 +3905,7 @@ def _danger_latency_relief_runtime_enabled() -> bool:
 def _should_apply_latency_spread_relief_canary(
     *,
     code: str,
+    ws_data: dict[str, Any] | None = None,
     strategy_id: str,
     position_tag: str,
     signal_strength: float,
@@ -3947,7 +3977,12 @@ def _should_apply_latency_spread_relief_canary(
     if bool(
         getattr(TRADING_RULES, "SCALP_LATENCY_SPREAD_RELIEF_BLOCK_UNSTABLE_QUOTE", True)
     ):
-        stability = ORDERBOOK_STABILITY_OBSERVER.snapshot(code) if code else {}
+        stability = _orderbook_stability_for_frame(code, ws_data)
+        if (
+            (ws_data or {}).get("market_data_transport_epoch") is not None
+            and stability.get("observer_healthy") is not True
+        ):
+            return False, "orderbook_stability_unproven"
         if bool(stability.get("unstable_quote_observed")):
             return False, "unstable_quote_observed"
         if "print_quote_alignment" in stability:
@@ -4114,8 +4149,13 @@ def _should_apply_latency_wide_spread_passive_requote(
             True,
         )
     ):
-        stability = ORDERBOOK_STABILITY_OBSERVER.snapshot(code) if code else {}
+        stability = _orderbook_stability_for_frame(code, ws_data)
         diagnostics.update(stability)
+        if (
+            (ws_data or {}).get("market_data_transport_epoch") is not None
+            and stability.get("observer_healthy") is not True
+        ):
+            return False, "orderbook_stability_unproven", diagnostics
         if bool(stability.get("unstable_quote_observed")):
             return False, "unstable_quote_observed", diagnostics
 
@@ -4756,6 +4796,7 @@ def _should_apply_latency_ws_jitter_relief_canary(
 def _should_apply_latency_other_danger_relief_canary(
     *,
     code: str,
+    ws_data: dict[str, Any] | None = None,
     strategy_id: str,
     position_tag: str,
     signal_strength: float,
@@ -4832,7 +4873,12 @@ def _should_apply_latency_other_danger_relief_canary(
             True,
         )
     ):
-        stability = ORDERBOOK_STABILITY_OBSERVER.snapshot(code) if code else {}
+        stability = _orderbook_stability_for_frame(code, ws_data)
+        if (
+            (ws_data or {}).get("market_data_transport_epoch") is not None
+            and stability.get("observer_healthy") is not True
+        ):
+            return False, "orderbook_stability_unproven"
         if bool(stability.get("unstable_quote_observed")):
             return False, "unstable_quote_observed"
         if "print_quote_alignment" in stability:
@@ -5140,6 +5186,7 @@ def evaluate_live_buy_entry(
         other_danger_relief_ok, other_danger_relief_reason = (
             _should_apply_latency_other_danger_relief_canary(
                 code=code,
+                ws_data=ws_data,
                 strategy_id=strategy_id,
                 position_tag=str(stock.get("position_tag") or ""),
                 signal_strength=float(signal_strength or 0.0),
@@ -5233,6 +5280,7 @@ def evaluate_live_buy_entry(
         spread_relief_ok, spread_relief_reason = (
             _should_apply_latency_spread_relief_canary(
                 code=code,
+                ws_data=ws_data,
                 strategy_id=strategy_id,
                 position_tag=spread_relief_tag,
                 signal_strength=spread_relief_signal_score,
@@ -5520,7 +5568,7 @@ def evaluate_live_buy_entry(
         "latency_wide_spread_passive_requote_reason": latency_wide_spread_passive_requote_reason,
         "latency_wide_spread_passive_requote_context": latency_wide_spread_passive_requote_context,
         **pre_submit_quote_refresh,
-        "orderbook_stability": ORDERBOOK_STABILITY_OBSERVER.snapshot(code),
+        "orderbook_stability": _orderbook_stability_for_frame(code, ws_data),
     }
 
     if effective_decision == EntryDecision.ALLOW_NORMAL:

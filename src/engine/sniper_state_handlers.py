@@ -25749,6 +25749,7 @@ def _real_pyramid_micro_context_guard_context(
     strategy: str | None,
     add_type: str | None,
     curr_price: int,
+    ws_data: dict | None = None,
 ) -> dict | None:
     if _scale_in_quality_runtime_skipped():
         return None
@@ -25760,7 +25761,9 @@ def _real_pyramid_micro_context_guard_context(
         stock
     ):
         return None
-    micro = _build_live_orderbook_micro_context(code, curr_price=curr_price)
+    micro = _build_live_orderbook_micro_context(
+        code, curr_price=curr_price, ws_data=ws_data
+    )
     fields = _build_orderbook_micro_log_fields(micro)
     state = str(fields.get("orderbook_micro_state") or "missing").strip().lower()
     snapshot_age_ms = fields.get("orderbook_micro_snapshot_age_ms")
@@ -34340,9 +34343,27 @@ def _should_demote_entry_ai_price_skip(
     return entry_skip_demotion_allowed(orderbook_micro, state), state
 
 
-def _build_live_orderbook_micro_context(code: str, *, curr_price: int) -> dict | None:
+def _build_live_orderbook_micro_context(
+    code: str, *, curr_price: int, ws_data: dict | None = None
+) -> dict | None:
     try:
-        snapshot = ORDERBOOK_STABILITY_OBSERVER.snapshot(code)
+        source_item = code
+        if ws_data is not None:
+            receipt = ws_quote_source_receipt(ws_data, now_ts=time.time())
+            source_item = str(receipt.get("item") or "")
+            if not source_item and "market_data_transport_epoch" not in ws_data:
+                source_item = code
+            if not source_item or (
+                source_item != code and not source_item.startswith(f"{code}_")
+            ):
+                return None
+        snapshot = ORDERBOOK_STABILITY_OBSERVER.snapshot(source_item)
+        if ws_data is not None and "market_data_transport_epoch" in ws_data:
+            expected_epoch = ws_data["market_data_transport_epoch"]
+            if type(expected_epoch) is not int or snapshot.get(
+                "observer_transport_epoch"
+            ) != expected_epoch:
+                return None
     except Exception:
         return None
     if not isinstance(snapshot, dict):
@@ -35194,10 +35215,17 @@ def _evaluate_real_weak_pullback_entry_block(
             min_micro_positives,
         )
     )
+    micro_source = orderbook_fields if isinstance(orderbook_fields, dict) else {}
+    micro_source_missing = (
+        _missing_context_label(micro_state)
+        or micro_state == "insufficient"
+        or micro_source.get("orderbook_micro_ready") is False
+        or micro_source.get("orderbook_micro_observer_healthy") is False
+    )
     if positive_signal_count >= min_micro_positives and (
         positive_signal_count
         >= _rule_int("SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_MIN_MICRO_POSITIVES", 2)
-        or not _missing_context_label(micro_state)
+        or not micro_source_missing
     ):
         return {
             "blocked": False,
@@ -35225,7 +35253,7 @@ def _evaluate_real_weak_pullback_entry_block(
         )
     ).strip()
     missing_fields = []
-    if _missing_context_label(micro_state):
+    if micro_source_missing:
         missing_fields.append("orderbook_micro_state")
         if not micro_confirmation_fields_present:
             missing_fields.append(
@@ -44642,7 +44670,7 @@ def _probe_residual_successor_source_fields(
             tick_quality = packet.get("tick_context_quality")
             tick_pressure_usable = True
     micro = _build_orderbook_micro_log_fields(
-        _build_live_orderbook_micro_context(code, curr_price=curr_price)
+        _build_live_orderbook_micro_context(code, curr_price=curr_price, ws_data=ws)
     )
     micro_age = _safe_float(micro.get("orderbook_micro_snapshot_age_ms"), None)
     micro_ready = bool(
@@ -45133,6 +45161,7 @@ def _post_probe_direction_fields(
             curr_price=_safe_int(
                 quote_fields.get("canonical_mark_price") or ws_data.get("curr"), 0
             ),
+            ws_data=ws_data,
         )
         live_micro_fields = _build_orderbook_micro_log_fields(live_micro_context)
         live_micro_age_ms = _safe_float(
@@ -70528,6 +70557,10 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             ),
         )
         if _entry_split_probe_first_deferred(entry_split_fields):
+            # This attempt cannot submit. A later scanner pass must qualify a
+            # new signal instead of resuming the old arm past its 1.2 s clock.
+            _clear_entry_arm(stock)
+            clear_signal_reference(stock)
             return False
         if (entry_split_fields.get("entry_split_order_probe_first_applied")
                 and entry_split_fields.get("entry_split_order_policy_mode")
@@ -92094,6 +92127,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         strategy=strategy,
         add_type=add_type,
         curr_price=curr_price,
+        ws_data=ws_data,
     )
     if real_pyramid_micro_guard:
         _log_holding_pipeline(

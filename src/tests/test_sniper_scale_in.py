@@ -13059,6 +13059,42 @@ def test_real_weak_pullback_entry_block_blocks_caution_weak_even_without_spread_
     assert verdict["weak_pullback_entry_block_spread_ticks"] == 0
 
 
+def test_real_weak_pullback_missing_observer_is_source_quality_not_weak_micro(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_ENABLED=True,
+            SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_MIN_MICRO_POSITIVES=2,
+        ),
+    )
+    monkeypatch.setattr(
+        state_handlers, "_is_any_simulated_position", lambda *args, **kwargs: False
+    )
+    verdict = state_handlers._evaluate_real_weak_pullback_entry_block(
+        strategy="SCALPING",
+        stock={"name": "missing-observer"},
+        latency_gate={
+            "latency_state": "CAUTION",
+            "decision": "ALLOW_NORMAL",
+            "conditional_1tick_real_override_context": {"buy_pressure_ok": True},
+        },
+        pre_ai_fields={"strength_momentum_risk_state": "weak_momentum_context"},
+        guard_fields={},
+        orderbook_fields={
+            "orderbook_micro_state": "insufficient",
+            "orderbook_micro_ready": False,
+            "orderbook_micro_observer_healthy": False,
+        },
+    )
+    assert verdict["blocked"] is True
+    assert verdict["reason"] == "weak_pullback_micro_source_unavailable"
+    assert verdict["weak_pullback_entry_block_source_quality_state"] == "missing"
+
+
 def test_real_weak_pullback_entry_block_keeps_safe_submit_spread_requirement(
     monkeypatch,
 ):
@@ -34746,7 +34782,15 @@ def test_post_probe_nxt_requires_speed_and_distinguishes_wait_from_drop_authorit
     assert ai_drop["post_probe_hard_veto"] is True
 
 
-def test_entry_setup_exploration_defers_residual_decision_to_split_owner(monkeypatch):
+def test_entry_setup_exploration_defers_residual_decision_to_split_owner(
+    monkeypatch, tmp_path
+):
+    # The residual guard trips the probe circuit before calling the mocked
+    # abort handler. Keep that durable safety state out of the live tmp path.
+    probe_state_path = tmp_path / "entry_split_probe_runtime_state.json"
+    monkeypatch.setattr(
+        entry_split_order_plan, "PROBE_RUNTIME_STATE_PATH", probe_state_path
+    )
     aborts = []
     monkeypatch.setattr(
         state_handlers,
@@ -34773,6 +34817,9 @@ def test_entry_setup_exploration_defers_residual_decision_to_split_owner(monkeyp
 
     assert submitted is False
     assert aborts == [("123456", "probe_fill_submit_contract_missing", True)]
+    probe_state = json.loads(probe_state_path.read_text(encoding="utf-8"))
+    assert probe_state["circuit_open"] is True
+    assert probe_state["circuit_reason"] == "probe_fill_submit_contract_missing"
 
 
 def test_entry_setup_exploration_micro_relief_is_bounded_and_source_qualified():
