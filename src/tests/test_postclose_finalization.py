@@ -261,11 +261,11 @@ def test_finalization_reserves_morning_margin_before_preopen():
     script = WRAPPER.read_text(encoding="utf-8")
 
     assert "POSTCLOSE_FINALIZATION_WAIT_TIMEOUT_SEC:-3600" in script
-    assert "POSTCLOSE_FINALIZATION_HARD_DEADLINE_KST:-07:00" in script
+    assert "POSTCLOSE_FINALIZATION_HARD_DEADLINE_KST:-06:00" in script
     assert "POSTCLOSE_FINALIZATION_CLEANUP_TIMEOUT_SEC:-600" in script
     assert "POSTCLOSE_FINALIZATION_DETECTOR_TIMEOUT_SEC:-600" in script
     assert "POSTCLOSE_FINALIZATION_SUMMARY_TIMEOUT_SEC:-600" in script
-    assert "POSTCLOSE_FINALIZATION_FINISH_BY_KST:-07:20" in script
+    assert "POSTCLOSE_FINALIZATION_FINISH_BY_KST:-06:50" in script
     assert script.count('timeout --foreground "${') == 2
     assert 'timeout --kill-after=10s "${summary_budget}s"' in script
     assert "reason=effective_date_hard_deadline" in script

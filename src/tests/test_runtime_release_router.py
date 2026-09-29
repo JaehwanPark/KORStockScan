@@ -266,10 +266,12 @@ def test_cron_preserves_unrelated_env_schedule_date_and_logs(tmp_path):
     assert "AI_ENTRY_SETUP_PAIRED_REPLAY_POSTCLOSE" not in after
     assert after.count("KEEP_POLICY_ENV=true") == len(router.TAGS)
     assert after.count("$(TZ=Asia/Seoul date +\\%F)") == len(router.OWNED) - 1
-    assert "0 6 * * * KEEP_POLICY_ENV=true bash " in after
+    assert "0 6 * * * KEEP_POLICY_ENV=true bash " not in after
     assert "run_runtime_release.sh finalize --resolve-effective-today" in after
-    assert "POSTCLOSE_FINALIZATION_0600" in after
+    assert "POSTCLOSE_FINALIZATION_0500" in after
+    assert "0 5 * * * KEEP_POLICY_ENV=true bash " in after
     assert "POSTCLOSE_FINALIZATION_2155" not in after
+    assert "POSTCLOSE_FINALIZATION_0600" not in after
     assert after.count(">> /preserved.log 2>&1") == len(router.TAGS)
     assert router.render_crontab(after, tmp_path) == after
 

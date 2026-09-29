@@ -10,7 +10,15 @@ from pathlib import Path
 
 import pytest
 
-from src.engine.error_detectors.cron_completion import CronCompletionDetector
+from src.engine.error_detectors.cron_completion import CRON_JOB_REGISTRY, CronCompletionDetector
+
+
+def test_finalization_detector_window_precedes_preopen_scanner():
+    jobs = {job["id"]: job for job in CRON_JOB_REGISTRY}
+    assert jobs["postclose_finalization"]["window_start"] == (5, 0)
+    assert jobs["postclose_finalization"]["window_end"] == (6, 50)
+    assert jobs["log_rotation_cleanup"]["window_start"] == (5, 0)
+    assert jobs["log_rotation_cleanup"]["window_end"] == (6, 50)
 
 
 def test_error_detector_cron_install_preserves_release_routed_finalization(tmp_path):
