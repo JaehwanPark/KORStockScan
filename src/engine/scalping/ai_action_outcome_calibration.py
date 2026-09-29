@@ -4951,7 +4951,9 @@ def load_machine_observation_rows(
                     "decision_trace_id": ai_trace.get("decision_trace_id"),
                     "record_id": context.get("record_id") or ai_trace.get("record_id"),
                     "decision_stage": "entry",
-                    "invalid_reasons": [],
+                    # No exact chart route means even a plausible same-symbol
+                    # pipeline price cannot establish this decision's outcome.
+                    "invalid_reasons": ([] if exact_outcome_code else ["outcome_route_unproven"]),
                 }
                 if materialized_labels_only:
                     labeled = materialized_by_trace.get(
