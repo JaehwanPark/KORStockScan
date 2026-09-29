@@ -186,6 +186,28 @@ def test_fixed_watch_never_displaces_a_position_or_overfills_cap(monkeypatch):
     assert fixed.reconcile(empty_db, full, now_epoch=epoch(10), watch_cap=16)[0] == "fixed_watch_slot_wait"
 
 
+def test_stale_historical_watches_do_not_block_current_fixed_admission(monkeypatch):
+    monkeypatch.setattr(fixed, "enabled", lambda: True)
+    monkeypatch.setattr(fixed, "broker_and_owner_clear", lambda *_: (True, "verified_flat"))
+    db, targets = _TestDB(), []
+    with db.get_session() as session:
+        for old_date, strategy in (("2026-05-12", "SCALPING"), ("2026-05-14", "MANUAL")):
+            session.add(RecommendationHistory(
+                rec_date=datetime.fromisoformat(old_date).date(),
+                stock_code="005930", status="WATCHING", strategy=strategy,
+                position_tag="SCANNER", buy_qty=0,
+            ))
+    assert fixed.reconcile(db, targets, now_epoch=epoch(10), watch_cap=16)[0] == "armed"
+    assert len(targets) == 1 and targets[0]["watch_origin"] == fixed.WATCH_ORIGIN
+    with db.get_session() as session:
+        historical = session.query(RecommendationHistory).filter(
+            RecommendationHistory.stock_code == "005930",
+            RecommendationHistory.watch_origin.is_(None),
+        ).all()
+        assert len(historical) == 2
+        assert all(row.status == "WATCHING" for row in historical)
+
+
 def test_disabled_watch_waits_for_verified_flat_before_expiring(monkeypatch):
     monkeypatch.setattr(fixed, "enabled", lambda: True)
     monkeypatch.setattr(fixed, "broker_and_owner_clear", lambda *_: (True, "verified_flat"))

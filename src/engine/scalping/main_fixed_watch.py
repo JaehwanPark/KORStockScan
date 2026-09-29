@@ -80,6 +80,7 @@ def broker_and_owner_clear(now_epoch: float, route: dict) -> tuple[bool, str]:
 
 def reconcile(db, targets: list[dict], *, now_epoch: float, watch_cap: int) -> tuple[str, dict | None]:
     """Atomically own one zero-fill WATCHING row; do not submit an order."""
+    from sqlalchemy import and_, or_
     from src.database.models import RecommendationHistory
 
     active_statuses = ("WATCHING", "BUY_ORDERED", "HOLDING", "SELL_ORDERED")
@@ -125,7 +126,18 @@ def reconcile(db, targets: list[dict], *, now_epoch: float, watch_cap: int) -> t
     with db.get_session() as session:
         rows = session.query(RecommendationHistory).filter(
             RecommendationHistory.stock_code == SAMSUNG_CODE,
-            RecommendationHistory.status.in_(active_statuses),
+            or_(
+                RecommendationHistory.status.in_(
+                    ("BUY_ORDERED", "HOLDING", "SELL_ORDERED")
+                ),
+                and_(
+                    RecommendationHistory.status == "WATCHING",
+                    or_(
+                        RecommendationHistory.rec_date == trade_date,
+                        RecommendationHistory.watch_origin == WATCH_ORIGIN,
+                    ),
+                ),
+            ),
         ).with_for_update().all()
         if len(rows) > 1:
             return "same_symbol_db_conflict", None
