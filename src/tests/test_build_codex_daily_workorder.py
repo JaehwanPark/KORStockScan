@@ -153,7 +153,7 @@ def test_build_runbook_operational_checks_for_slot(monkeypatch):
     assert "swing_runtime_approval_2026-05-11.json" in "\n".join(
         postclose.artifact_checks
     )
-    assert postclose.time_window == "20:05~21:55"
+    assert postclose.time_window == "20:05~07:20"
     assert "monitoring_instruction_refresh/2026-05-11/intraday/status.json" in "\n".join(postclose.artifact_checks)
     assert "19:30" in postclose.decision_rule
     assert "19:59" in postclose.decision_rule
