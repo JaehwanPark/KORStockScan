@@ -115,10 +115,18 @@ def reconcile(db, targets: list[dict], *, now_epoch: float, watch_cap: int) -> t
     if (fixed_memory and fixed_memory[0].get("watch_generation_id") == generation
         and str(fixed_memory[0].get("watch_admission_id") or "").strip()
         and float(fixed_memory[0].get("entry_armed_at_epoch") or 0) > 0):
-        fixed_memory[0]["source_signature"] = (
-            f"MAIN_FIXED_WATCH:{fixed_memory[0].get('watch_admission_id')}"
-        )
-        return "already_watching", fixed_memory[0]
+        target = fixed_memory[0]
+        # DB restoration does not persist the execution/WS route fields.
+        # Rebind them on every idempotent reconciliation before evaluation.
+        target.update({
+            "source_signature": f"MAIN_FIXED_WATCH:{target['watch_admission_id']}",
+            "market_session_bucket": route["bucket"],
+            "effective_venue": route["venue"],
+            "venue_resolution": "main_fixed_watch_session_route",
+            "market_data_route": route["route"],
+            "broker_route": "NXT" if route["route"] == "nxt_only" else "SOR",
+        })
+        return "already_watching", target
 
     clear, reason = broker_and_owner_clear(now_epoch, route)
     if not clear:

@@ -171,11 +171,21 @@ def test_fixed_watch_admission_is_idempotent_and_rearms_session(monkeypatch):
     first_admission = targets[0]["watch_admission_id"]
     assert targets[0]["source_signature"] == f"MAIN_FIXED_WATCH:{first_admission}"
     assert not targets[0].get("scanner_promotion_id")
+    for key in ("broker_route", "market_data_route", "effective_venue", "market_session_bucket"):
+        targets[0].pop(key, None)
     assert fixed.reconcile(db, targets, now_epoch=epoch(8) + 5, watch_cap=16)[0] == "already_watching"
+    assert targets[0]["broker_route"] == "NXT"
+    assert targets[0]["market_data_route"] == "nxt_only"
     assert fixed.reconcile(db, targets, now_epoch=epoch(10), watch_cap=16)[0] == "armed"
     assert targets[0]["id"] == first_id
     assert targets[0]["watch_admission_id"] != first_admission
     assert targets[0]["source_signature"] == f"MAIN_FIXED_WATCH:{targets[0]['watch_admission_id']}"
+    assert targets[0]["broker_route"] == "SOR"
+    for key in ("broker_route", "market_data_route"):
+        targets[0].pop(key, None)
+    assert fixed.reconcile(db, targets, now_epoch=epoch(10) + 5, watch_cap=16)[0] == "already_watching"
+    assert targets[0]["broker_route"] == "SOR"
+    assert targets[0]["market_data_route"] == "krx_nxt_integrated"
     assert len(db.get_active_targets()) == 1
 
 
