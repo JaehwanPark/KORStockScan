@@ -654,6 +654,9 @@ def test_machine_nonentry_completed_bars_survive_probe_ws_removal_and_cache(
     assert calls == [("005930", "005930_AL")]
     assert census["completed_price_rows"] == 10
     assert census["evaluable"] == 1
+    assert census["machine_recheck_3m_price_covered"] == 1
+    assert census["machine_recheck_5m_price_covered"] == 1
+    assert census["machine_recheck_10m_price_covered"] == 1
     assert rows[0]["machine_action"] == "RECHECK"
     assert rows[0]["source_event_stage"] == "zero_base_probe_machine_only_v1"
     assert rows[0]["outcome_request_code"] == "005930_AL"
@@ -701,6 +704,8 @@ def test_machine_nonentry_completed_bars_survive_probe_ws_removal_and_cache(
     ("NXT", "NXT_PREMARKET", "nxt_only", "NXT", "005930_NX"),
     ("KRX", "KRX_REGULAR", "krx_nxt_integrated", "SOR", "005930_AL"),
     ("KRX_NXT_INTEGRATED", "KRX_NXT_AFTERMARKET", "krx_nxt_integrated", "SOR", "005930_AL"),
+    ("KRX_NXT_INTEGRATED", "KRX_NXT_AFTERMARKET", "krx_nxt_integrated", "NXT", "005930_AL"),
+    ("KRX", "KRX_REGULAR", "krx_only", "SOR", "005930"),
     ("KRX", "KRX_REGULAR", "nxt_only", "SOR", None),
 ])
 def test_machine_outcome_exact_request_route_requires_snapshot_proof(
@@ -725,7 +730,10 @@ def test_machine_outcome_exact_request_route_requires_snapshot_proof(
             direct, (venue, session)) == "NXT"
     if venue == "KRX_NXT_INTEGRATED":
         assert calibration._machine_capture_cost_reference_venue(
-            direct, (venue, session)) == "SOR"
+            direct, (venue, session)) == broker
+        assert calibration._machine_cost_route_compatible(
+            capture["label_context"], (venue, session)
+        ) is (broker == "SOR")
     capture["source"]["exact_payload"]["ai_market_snapshot_v1"]["snapshot_id"] = "other"
     assert calibration._machine_outcome_request_code(capture) is None
 
@@ -794,6 +802,95 @@ def test_machine_completed_price_gap_isolated_by_session_not_request_code(
     )
     assert mismatched_rows == []
     assert mismatched['rejected_route_count'] == 1
+
+
+@pytest.mark.parametrize("venue,session,broker,market_route,request_code,start", [
+    ("PREMARKET_KRX_LIKE", "PREMARKET_KRX_LIKE", "NXT", "nxt_only", "005930_NX", "08"),
+    ("KRX", "KRX_REGULAR", "SOR", "krx_nxt_integrated", "005930_AL", "09"),
+    ("KRX_NXT_INTEGRATED", "KRX_NXT_AFTERMARKET", "SOR",
+     "krx_nxt_integrated", "005930_AL", "16"),
+])
+def test_machine_completed_price_accepts_page_limit_only_after_target_day_covered(
+    tmp_path, venue, session, broker, market_route, request_code, start
+):
+    from datetime import datetime
+
+    day = "2026-09-29"
+    capture = {
+        "machine_observation_sha256": "a" * 64,
+        "captured_at": f"{day}T{start}:10:00+09:00",
+        "label_context": {
+            "stock_code": "005930", "effective_venue": venue,
+            "session_bucket": session, "broker_route": broker,
+            "market_data_route": market_route, "snapshot_id": "s1",
+        },
+        "source": {
+            "assessment": {"action": "RECHECK"},
+            "exact_payload": {"ai_market_snapshot_v1": {
+                "stock_code": "005930", "effective_venue": venue,
+                "session_bucket": session, "broker_route": broker,
+                "market_data_route": market_route, "snapshot_id": "s1",
+            }},
+        },
+    }
+    current_rows = [
+        {"source_timestamp": f"20260929{start}{minute:02d}00",
+         "현재가": 10000, "고가": 10010, "저가": 9990}
+        for minute in (11, 20)
+    ]
+
+    def fetcher(stock_code, code):
+        assert (stock_code, code) == ("005930", request_code)
+        return ([{"source_timestamp": "20260928140000", "현재가": 10000},
+                 *current_rows], {
+                     "api_id": "ka10080", "request_code": code,
+                     "request_base_dt": "20260929",
+                     "continuous_page_limit_reached": True,
+                     "sort_direction_detected": "descending",
+                     "last_http_status_code": 200,
+                 })
+
+    rows, receipt, _ = calibration._machine_completed_price_rows(
+        data_root=tmp_path, day=day, observations=[capture],
+        fetcher=fetcher, as_of=datetime.fromisoformat(day + "T20:10:00+09:00"),
+    )
+    assert receipt["status"] == "collected"
+    assert receipt["rejected_route_count"] == 0
+    assert [row["timestamp"][11:16] for row in rows] == [f"{start}:11", f"{start}:20"]
+    cache = json.loads((tmp_path / "report/machine_completed_price_source"
+                        / f"machine_completed_price_source_{day}.json").read_text())
+    assert cache["provenance"][0]["continuation_page_limit_reached"] is True
+    assert cache["provenance"][0]["pagination_target_day_covered"] is True
+
+    # A page limit reached while still inside today cannot prove an early
+    # decision's later window. It remains a source gap, never a no-edge label.
+    (tmp_path / "report/machine_completed_price_source"
+     / f"machine_completed_price_source_{day}.json").unlink()
+    def truncated_fetcher(stock_code, code):
+        _, meta = fetcher(stock_code, code)
+        return current_rows, meta
+
+    missing, partial, _ = calibration._machine_completed_price_rows(
+        data_root=tmp_path, day=day, observations=[capture],
+        fetcher=truncated_fetcher,
+        as_of=datetime.fromisoformat(day + "T20:10:00+09:00"),
+    )
+    assert missing == []
+    assert partial["status"] == "partial_source_gap"
+    assert partial["rejected_route_count"] == 1
+
+
+def test_machine_completed_source_recovery_waits_for_close_but_allows_past_date():
+    from datetime import datetime
+
+    eligible = calibration._machine_completed_fetch_eligible
+    before_close = datetime.fromisoformat("2026-09-29T19:59:00+09:00")
+    after_close = datetime.fromisoformat("2026-09-29T20:01:00+09:00")
+    assert eligible("2026-09-29", now=before_close, write=True) is False
+    assert eligible("2026-09-29", now=after_close, write=True) is True
+    assert eligible("2026-09-28", now=before_close, write=True) is True
+    assert eligible("2026-09-30", now=after_close, write=True) is False
+    assert eligible("2026-09-28", now=after_close, write=False) is False
 
 
 def test_machine_probe_lineage_counts_two_assessments_as_two_captures():

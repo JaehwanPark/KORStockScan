@@ -244,6 +244,7 @@ ENTRY_CONTEXT_SCHEMA = "entry_candle_context_v1"
 HOLDING_CONTEXT_SCHEMA = "holding_decision_context_v1"
 HORIZONS_MIN = (1, 3, 5, 10, 20, 30, 60)
 HORIZON_END_MAX_LAG_SEC = 90
+POSTCLOSE_COMPLETED_PRICE_LIMIT = 900  # Full 08:00-20:00 day is at most 720 one-minute bars.
 PROFIT_OPPORTUNITY_THRESHOLD_PCT = 1.0
 ENTRY_PATH_TARGET_PCT = 0.30
 ENTRY_PATH_ADVERSE_PCT = -0.70
@@ -3967,6 +3968,36 @@ def _request_code_for_venue(stock_code: Any, effective_venue: Any) -> str | None
     return None
 
 
+def _exact_outcome_request_code(label: dict, trace: dict) -> str | None:
+    """Bind an AI outcome chart to its exact decision market-data route."""
+    code = _normalize_stock_code(label.get("stock_code"))
+    venue = _venue(label.get("effective_venue"))
+    session = _session(label.get("session_bucket"))
+    route = str(label.get("market_data_route") or "").strip().lower()
+    broker = str(label.get("broker_route") or "").strip().upper()
+    if (not re.fullmatch(r"[0-9]{6}", code)
+        or not _venue_session_consistent(venue, session)
+        or not str(label.get("snapshot_id") or "").strip()
+        or not str(label.get("decision_ts") or "").strip()
+        or any(str(label.get(field) or "").strip().upper()
+               != str(trace.get(field) or "").strip().upper()
+               for field in ("stock_code", "decision_ts", "effective_venue", "session_bucket",
+                             "snapshot_id", "market_data_route", "broker_route"))):
+        return None
+    if route == "krx_nxt_integrated":
+        if (broker == "SOR" and (venue, session) in {
+            ("KRX", "KRX_REGULAR"), ("SOR", "KRX_REGULAR"),
+        }) or (broker in {"SOR", "NXT", "KRX"}
+               and (venue, session) == ("KRX_NXT_INTEGRATED", "KRX_NXT_AFTERMARKET")):
+            return code + "_AL"
+    if route == "nxt_only" and broker == "NXT":
+        if venue in {"NXT", "PREMARKET_KRX_LIKE"}:
+            return code + "_NX"
+    if route == "krx_only" and broker in {"KRX", "SOR"} and (venue, session) == ("KRX", "KRX_REGULAR"):
+        return code
+    return None
+
+
 def _venue_session_consistent(effective_venue: Any, session_bucket: Any) -> bool:
     venue = _venue(effective_venue)
     session = _session(session_bucket)
@@ -4150,6 +4181,46 @@ def load_kiwoom_completed_minute_price_rows(
             }
         )
     return prices, provenance
+
+
+def _postclose_ai_completed_fetcher(
+    token: str | None, target_date: str,
+) -> Callable[[str, str], tuple[list[dict[str, Any]], dict[str, Any]]]:
+    """Read one full exact-route day, rejecting incomplete chart provenance."""
+    from src.utils import kiwoom_utils
+    from src.utils.kiwoom_read_request_control import REQUEST_CLASS_SOURCE_ONLY
+
+    compact_day = target_date.replace("-", "")
+
+    def fetch(_stock_code: str, request_code: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        if not token:
+            return [], {"fetch_error": "cached_token_unavailable"}
+        candles, source_meta = kiwoom_utils.get_minute_candles_ka10080_with_meta(
+            token, request_code, limit=POSTCLOSE_COMPLETED_PRICE_LIMIT,
+            explicit_request_code=True, base_dt=compact_day,
+            request_owner="ai_decision_quality.completed_outcome",
+            request_class=REQUEST_CLASS_SOURCE_ONLY,
+        )
+        source_meta = source_meta if isinstance(source_meta, dict) else {}
+        if (source_meta.get("api_id") != "ka10080"
+            or source_meta.get("request_code") != request_code
+            or source_meta.get("request_base_dt") != compact_day
+            or source_meta.get("last_http_status_code") != 200
+            or source_meta.get("rate_limit_detected") is True
+            or source_meta.get("fetch_error")):
+            return [], {**source_meta, "fetch_error": "request_provenance_invalid"}
+        if source_meta.get("continuous_page_limit_reached"):
+            timestamps = [str(row.get("source_timestamp") or "")[:14]
+                          for row in candles or [] if isinstance(row, dict)]
+            if (source_meta.get("sort_direction_detected") != "descending"
+                or source_meta.get("continuous_next_key_missing") is True
+                or not any(len(ts) == 14 and ts.isdigit()
+                           and ts < compact_day + "000000" for ts in timestamps)):
+                return [], {**source_meta,
+                            "fetch_error": "target_day_continuation_unproven"}
+        return candles, source_meta
+
+    return fetch
 
 
 def merge_preferred_outcome_price_rows(
@@ -4724,6 +4795,9 @@ def mature_outcome_labels(
                     and _session(row.get("session_bucket")) == next_session_bucket
                     and _price_source_usable(row)
                 ]
+            elif stage == "entry" and "outcome_route_unproven" in invalid:
+                # An unproven route cannot inherit a plausible pipeline price.
+                window = []
             else:
                 window = [
                     row
@@ -31392,30 +31466,57 @@ def main(argv: list[str] | None = None) -> int:
             from src.utils import kiwoom_utils
 
             token = kiwoom_utils.get_cached_kiwoom_token()
-            source_route_labels = annotate_primary_cohort_eligibility(
+            annotated_pending = annotate_primary_cohort_eligibility(
                 labels=sources["pending"],
                 traces=sources["traces"],
                 payloads=sources["payloads"],
                 promotion=promotion,
             )
-            source_route_labels = [
-                row
-                for row in source_route_labels
-                if row.get("primary_cohort_eligible") is True
-            ]
-
-            def fetch_kiwoom_completed(
-                _stock_code: str, request_code: str
-            ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-                if not token:
-                    return [], {"fetch_error": "cached_token_unavailable"}
-                return kiwoom_utils.get_minute_candles_ka10080_with_meta(
-                    token,
-                    request_code,
-                    limit=500,
-                    explicit_request_code=True,
-                    base_dt=args.date.replace("-", ""),
+            traces_by_id: dict[str, list[dict[str, Any]]] = defaultdict(list)
+            for trace in sources["traces"]:
+                if trace.get("decision_trace_id"):
+                    traces_by_id[str(trace["decision_trace_id"])].append(trace)
+            pending_with_exact_routes = []
+            source_route_labels = []
+            for pending, annotated in zip(sources["pending"], annotated_pending):
+                prepared = dict(pending)
+                if pending.get("decision_stage") != "entry":
+                    # Keep unrelated holding/exit source selection unchanged.
+                    if annotated.get("primary_cohort_eligible") is True:
+                        legacy_code = _request_code_for_venue(
+                            pending.get("stock_code"), pending.get("effective_venue")
+                        )
+                        if legacy_code:
+                            source_route_labels.append({**annotated,
+                                                        "outcome_request_code": legacy_code})
+                    pending_with_exact_routes.append(prepared)
+                    continue
+                matches = traces_by_id.get(str(pending.get("decision_trace_id") or ""), [])
+                request_code = (
+                    _exact_outcome_request_code(annotated, matches[0])
+                    if (len(matches) == 1
+                        and matches[0].get("decision_stage") == "entry_screen"
+                        and matches[0].get("provider_called") is True)
+                    else None
                 )
+                if request_code:
+                    prepared["outcome_request_code"] = request_code
+                    source_route_labels.append({**annotated,
+                                                "outcome_request_code": request_code})
+                    if (annotated.get("session_bucket") == "KRX_NXT_AFTERMARKET"
+                        and str(annotated.get("broker_route") or "").upper() != "SOR"):
+                        # Preserve the exact _AL price while withholding SOR
+                        # order economics for an NXT/KRX broker-route probe.
+                        prepared["invalid_reasons"] = sorted(set(
+                            list(prepared.get("invalid_reasons") or [])
+                            + ["integrated_order_route_cost_gap"]
+                        ))
+                else:
+                    prepared["invalid_reasons"] = sorted(set(
+                        list(prepared.get("invalid_reasons") or [])
+                        + ["outcome_route_unproven"]
+                    ))
+                pending_with_exact_routes.append(prepared)
 
             (
                 kiwoom_prices,
@@ -31424,7 +31525,8 @@ def main(argv: list[str] | None = None) -> int:
                 target_date=args.date,
                 labels=source_route_labels,
                 as_of=as_of,
-                fetcher=fetch_kiwoom_completed,
+                fetcher=_postclose_ai_completed_fetcher(token, args.date),
+                request_code_resolver=lambda row: row.get("outcome_request_code"),
             )
             if args.outcome_price_source == "kiwoom_completed_1m":
                 prices = kiwoom_prices
@@ -31452,7 +31554,9 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 effective_outcome_price_source = "pipeline_fallback"
         labels = mature_outcome_labels(
-            pending_labels=sources["pending"],
+            pending_labels=(pending_with_exact_routes
+                            if args.outcome_price_source in {"auto", "kiwoom_completed_1m"}
+                            else sources["pending"]),
             price_rows=prices,
             lifecycle_rows=lifecycle,
             as_of=as_of,
@@ -31463,6 +31567,16 @@ def main(argv: list[str] | None = None) -> int:
             payloads=sources["payloads"],
             promotion=promotion,
         )
+        for label in labels:
+            route_exclusions = {
+                "outcome_route_unproven", "integrated_order_route_cost_gap"
+            } & set(label.get("invalid_reasons") or [])
+            if route_exclusions:
+                label["primary_cohort_eligible"] = False
+                label["primary_cohort_exclusion_reasons"] = sorted(set(
+                    list(label.get("primary_cohort_exclusion_reasons") or [])
+                    + list(route_exclusions)
+                ))
         label_report = {
             "schema": LABEL_REPORT_SCHEMA,
             "target_date": args.date,

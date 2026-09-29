@@ -64,7 +64,7 @@ MECHANISTIC_REFINEMENT_POLICY_VERSION = (
 HIERARCHICAL_ENTRY_QUALITY_SCHEMA = "hierarchical_entry_quality_walk_forward_v1"
 ENTRY_GROUP_OBSERVATION_SCHEMA = "entry_predecision_group_observation_v1"
 ENTRY_QUALITY_PATH_SCHEMA = "entry_quality_path_v1"
-MACHINE_COMPLETED_PRICE_CACHE_SCHEMA = "machine_completed_price_source_v1"
+MACHINE_COMPLETED_PRICE_CACHE_SCHEMA = "machine_completed_price_source_v2"
 MACHINE_COMPLETED_PRICE_MAX_ROUTES = 512
 MACHINE_DECISION_CASE_TABLE_SCHEMA = "mechanistic_entry_decision_case_table_v1"
 MAIN_MECHANISTIC_EVALUATION_CONTRACT_VERSION = (
@@ -4333,18 +4333,28 @@ def _machine_outcome_request_code(capture: dict) -> str | None:
         or route != str(snapshot.get("market_data_route") or "").lower()
         or broker != str(snapshot.get("broker_route") or "").upper()):
         return None
-    if (route == "krx_nxt_integrated" and broker == "SOR"
-        and ((venue, session) == ("KRX", "KRX_REGULAR")
-             or (venue, session) == ("KRX_NXT_INTEGRATED", "KRX_NXT_AFTERMARKET"))):
+    # The chart suffix follows the exact market-data route. A probe may carry
+    # an NXT broker route in the integrated aftermarket; that is an economic
+    # contract gap, but it does not turn its _AL market data into _NX bars.
+    if (route == "krx_nxt_integrated"
+        and ((broker == "SOR" and (venue, session) == ("KRX", "KRX_REGULAR"))
+             or (broker in {"KRX", "NXT", "SOR"}
+                 and (venue, session) == ("KRX_NXT_INTEGRATED", "KRX_NXT_AFTERMARKET")))):
         return code + "_AL"
     if (route == "nxt_only" and broker == "NXT"
         and venue in {"NXT", "PREMARKET_KRX_LIKE"}
         and session in {"NXT_PREMARKET", "PREMARKET_KRX_LIKE",
                         "NXT_REGULAR_OVERLAP", "NXT_AFTERMARKET"}):
         return code + "_NX"
-    if route == "krx_only" and broker == "KRX" and (venue, session) == ("KRX", "KRX_REGULAR"):
+    if route == "krx_only" and broker in {"KRX", "SOR"} and (venue, session) == ("KRX", "KRX_REGULAR"):
         return code
     return None
+
+
+def _machine_cost_route_compatible(context: dict, cohort: tuple[str, str]) -> bool:
+    """A chart route alone cannot certify integrated SOR order economics."""
+    return (cohort != ("KRX_NXT_INTEGRATED", "KRX_NXT_AFTERMARKET")
+            or str(context.get("broker_route") or "").upper() == "SOR")
 
 
 def _machine_probe_lineage_counts(
@@ -4581,6 +4591,8 @@ def _machine_completed_price_rows_locked(
     deferred_count = max(0, len(selected) - MACHINE_COMPLETED_PRICE_MAX_ROUTES)
     labels = [row[2] for row in selected[:MACHINE_COMPLETED_PRICE_MAX_ROUTES]]
 
+    target_day_covered: dict[tuple[str, str], bool] = {}
+
     def verified_fetcher(stock_code: str, request_code: str) -> tuple[list[dict], dict]:
         candles, source_meta = fetcher(stock_code, request_code)
         source_meta = _as_dict(source_meta)
@@ -4588,12 +4600,33 @@ def _machine_completed_price_rows_locked(
             or source_meta.get("request_code") != request_code
             or source_meta.get("request_base_dt") != day.replace("-", "")):
             return [], {**source_meta, "fetch_error": "request_provenance_mismatch"}
+        # ka10080 may still advertise an older-history continuation after its
+        # returned descending pages have already crossed the target-day start.
+        # That continuation cannot truncate today's observation window. Keep
+        # the page-limit provenance, but prove this boundary before using it.
+        if source_meta.get("continuous_page_limit_reached"):
+            timestamps = [str(row.get("source_timestamp") or "")[:14]
+                          for row in candles or [] if isinstance(row, dict)]
+            target_day_covered[(stock_code, request_code)] = bool(
+                source_meta.get("sort_direction_detected") == "descending"
+                and source_meta.get("last_http_status_code") == 200
+                and source_meta.get("rate_limit_detected") is not True
+                and source_meta.get("continuous_next_key_missing") is not True
+                and not source_meta.get("fetch_error")
+                and any(len(ts) == 14 and ts.isdigit()
+                        and ts < day.replace("-", "") + "000000"
+                        for ts in timestamps)
+            )
         return candles, source_meta
 
     prices, provenance = quality.load_kiwoom_completed_minute_price_rows(
         target_date=day, labels=labels, as_of=as_of, fetcher=verified_fetcher,
         request_code_resolver=lambda row: row.get("outcome_request_code"),
     )
+    for row in provenance:
+        row["pagination_target_day_covered"] = target_day_covered.get(
+            (str(row.get("stock_code")), str(row.get("request_code"))), False
+        )
     rejected_routes = {
         (str(row.get("stock_code")),
          _normalized_venue(row.get("effective_venue")),
@@ -4602,7 +4635,8 @@ def _machine_completed_price_rows_locked(
         for row in provenance
         if (row.get("api_id") != "ka10080"
             or row.get("fetch_error")
-            or row.get("continuation_page_limit_reached")
+            or (row.get("continuation_page_limit_reached")
+                and not row.get("pagination_target_day_covered"))
             or not row.get("target_completed_bar_count"))
     }
     prices = [row for row in prices if
@@ -4634,13 +4668,28 @@ def _machine_completed_price_rows_locked(
                     "price_row_count": len(prices)}, request_codes
 
 
+def _machine_completed_fetch_eligible(
+    target_date: str, *, now: datetime, write: bool,
+) -> bool:
+    """Allow exact-date source recovery after close, including a past day."""
+    if not write or now.utcoffset() is None:
+        return False
+    try:
+        target = date.fromisoformat(target_date)
+    except ValueError:
+        return False
+    today = now.astimezone(KST).date()
+    if target > today:
+        return False
+    return target < today or (now.astimezone(KST).hour, now.astimezone(KST).minute) >= (20, 1)
+
+
 def _postclose_machine_completed_fetcher(
     target_date: str, *, write: bool,
 ) -> tuple[Callable[[str, str], tuple[list[dict], dict]] | None, datetime | None]:
     """Use the existing source-only chart client after all market sessions close."""
     now = datetime.now(KST)
-    if (not write or now.date().isoformat() != target_date
-        or now.hour < 20 or (now.hour == 20 and now.minute < 1)):
+    if not _machine_completed_fetch_eligible(target_date, now=now, write=write):
         return None, None
     from src.utils import kiwoom_utils
     from src.utils.kiwoom_read_request_control import REQUEST_CLASS_SOURCE_ONLY
@@ -4875,6 +4924,12 @@ def load_machine_observation_rows(
                     _as_dict(cost_contract).get("session_bucket"),
                 ) != cohort:
                     full_cost = None
+                if not _machine_cost_route_compatible(context, cohort):
+                    # The integrated order contract is SOR. Preserve the exact
+                    # _AL price path, but do not validate NXT/KRX probe cost as
+                    # the economics of a prospective SOR entry.
+                    full_cost = None
+                    counts["integrated_order_route_cost_gap"] += 1
                 if full_cost is None:
                     counts["full_round_trip_cost_missing"] += 1
                     if not independent_machine:
@@ -4990,7 +5045,9 @@ def load_machine_observation_rows(
                 counts["machine_path_" + machine_action.lower() + "_" + (
                     "evaluable" if isinstance(entry_path, dict) and entry_path.get("status") == "evaluable"
                     else "source_gap_or_censored")] += 1
-                for horizon in (10, 30, 60):
+                # Scalping readiness is visible at 3/5/10 minutes. Longer
+                # horizons describe late outcomes and may end past a session.
+                for horizon in (3, 5, 10, 30, 60):
                     counts["machine_" + machine_action.lower() + f"_{horizon}m_" + (
                     "price_covered" if horizon_metrics.get(f"{horizon}m") and not outcome_price_gap
                         else "price_gap_or_pending")] += 1

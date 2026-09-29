@@ -597,7 +597,9 @@ def prepare(data_root, day):
         owner_replay = owner_rows.get(owner_key) or {}
         owner_valid = owner_replay_valid(owner_replay, row_identity)
         label_identity_reasons = [r for r in by_trace.get(key,{}).get("primary_cohort_exclusion_reasons") or []
-            if r in {"payload_trace_venue_mismatch","payload_trace_session_mismatch","canonical_context_venue_session_mismatch"}]
+            if r in {"payload_trace_venue_mismatch","payload_trace_session_mismatch",
+                     "canonical_context_venue_session_mismatch", "outcome_route_unproven",
+                     "integrated_order_route_cost_gap"}]
         reason = None
         if key in conflicts or payload_key in payload_conflicts:
             reason = "conflicting_exact_input"

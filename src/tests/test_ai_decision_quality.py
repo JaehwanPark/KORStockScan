@@ -2000,6 +2000,87 @@ def test_completed_bar_loader_preserves_exact_machine_request_route():
                                            if k != "source_request_code"})
 
 
+@pytest.mark.parametrize("venue,session,market_route,broker,expected", [
+    ("KRX", "KRX_REGULAR", "krx_nxt_integrated", "SOR", "005930_AL"),
+    ("PREMARKET_KRX_LIKE", "PREMARKET_KRX_LIKE", "nxt_only", "NXT", "005930_NX"),
+    ("KRX_NXT_INTEGRATED", "KRX_NXT_AFTERMARKET", "krx_nxt_integrated", "SOR", "005930_AL"),
+    ("KRX", "KRX_REGULAR", "krx_only", "KRX", "005930"),
+    ("KRX", "KRX_REGULAR", "krx_only", "SOR", "005930"),
+    ("KRX_NXT_INTEGRATED", "KRX_NXT_AFTERMARKET", "krx_nxt_integrated", "NXT", "005930_AL"),
+])
+def test_ai_outcome_chart_route_requires_exact_decision_trace(
+    venue, session, market_route, broker, expected
+):
+    label = {"stock_code": "005930", "snapshot_id": "exact-1",
+             "decision_ts": "2026-09-29T09:10:00+09:00",
+             "effective_venue": venue, "session_bucket": session,
+             "market_data_route": market_route, "broker_route": broker}
+    assert quality._exact_outcome_request_code(label, dict(label)) == expected
+    assert quality._exact_outcome_request_code(
+        label, {**label, "snapshot_id": "other"}
+    ) is None
+    assert quality._exact_outcome_request_code(
+        label, {**label, "decision_ts": "2026-09-29T09:11:00+09:00"}
+    ) is None
+    assert quality._exact_outcome_request_code(
+        label, {**label, "market_data_route": (
+            "krx_only" if market_route != "krx_only" else "nxt_only")}
+    ) is None
+
+
+def test_ai_postclose_completed_fetch_retains_early_integrated_market_bars(monkeypatch):
+    from src.utils import kiwoom_utils
+    from src.utils.kiwoom_read_request_control import REQUEST_CLASS_SOURCE_ONLY
+
+    calls = []
+    today = [{"source_timestamp": f"20260929{minute // 60 + 9:02d}{minute % 60:02d}00",
+              "현재가": 10000} for minute in range(600)]
+    previous = {"source_timestamp": "20260928150000", "현재가": 10000}
+
+    def chart(token, code, **kwargs):
+        calls.append((token, code, kwargs))
+        return [previous, *today][-kwargs["limit"]:], {
+            "api_id": "ka10080", "request_code": code,
+            "request_base_dt": "20260929", "last_http_status_code": 200,
+            "continuous_page_limit_reached": True,
+            "sort_direction_detected": "descending",
+        }
+
+    monkeypatch.setattr(kiwoom_utils, "get_minute_candles_ka10080_with_meta", chart)
+    fetch = quality._postclose_ai_completed_fetcher("read-token", "2026-09-29")
+    bars, meta = fetch("005930", "005930_AL")
+    assert len(bars) == 601
+    assert bars[1]["source_timestamp"] == "20260929090000"
+    assert meta["request_code"] == "005930_AL"
+    assert calls[0][2]["limit"] == 900
+    assert calls[0][2]["request_class"] == REQUEST_CLASS_SOURCE_ONLY
+    assert fetch("005930", "005930_NX")[0]  # exact suffix is passed through
+
+    def truncated(token, code, **kwargs):
+        _bars, metadata = chart(token, code, **kwargs)
+        return today[-500:], metadata
+
+    monkeypatch.setattr(kiwoom_utils, "get_minute_candles_ka10080_with_meta", truncated)
+    missing, reason = fetch("005930", "005930_AL")
+    assert missing == []
+    assert reason["fetch_error"] == "target_day_continuation_unproven"
+
+
+def test_unproven_ai_outcome_route_cannot_mature_from_pipeline_price():
+    pending = {**_pending(), "invalid_reasons": ["outcome_route_unproven"]}
+    prices = [{"timestamp": "2026-07-27T09:01:00+09:00",
+               "stock_code": "005930", "price": 102,
+               "effective_venue": "KRX", "session_bucket": "KRX_REGULAR",
+               "source_quality": "pass"}]
+    row = quality.mature_outcome_labels(
+        pending_labels=[pending], price_rows=prices, lifecycle_rows=[],
+        as_of=datetime(2026, 7, 27, 9, 2, tzinfo=KST),
+    )[0]
+    assert row["label_status"] == "pending"
+    assert row["horizon_metrics"] == {}
+    assert "outcome_route_unproven" in row["invalid_reasons"]
+
+
 def test_outcome_price_merge_prefers_kiwoom_for_same_route_minute():
     primary = [
         {
