@@ -460,6 +460,31 @@ def test_late_exact_pair_arrives_after_initially_empty_ws_snapshot():
     assert observation["partial_extension_applied"] is False
 
 
+def test_default_empty_wait_accepts_exact_pair_after_three_seconds(monkeypatch):
+    import src.engine.scalping.zero_base_probe as module
+
+    elapsed = [0.0]
+    monkeypatch.setattr(module.time, "monotonic", lambda: elapsed[0])
+    monkeypatch.setattr(
+        module.time, "sleep",
+        lambda seconds: elapsed.__setitem__(0, elapsed[0] + seconds),
+    )
+    ready = _snapshot(route="krx_nxt_integrated", item="123456_AL")
+    ws = SimpleNamespace(
+        get_latest_data=lambda *_args: ready if elapsed[0] >= 4.0 else {}
+    )
+
+    data, observation, reason = wait_for_exact_probe_ws_data(
+        ws, code="123456", route="krx_nxt_integrated", after_epoch=10,
+        now=lambda: 11, timeout_sec=10.0,
+    )
+
+    assert reason == "ready" and data
+    assert 4000 <= observation["wait_ms"] <= 4100
+    assert observation["empty_source_flushed"] is False
+    assert observation["base_wait_budget_ms"] == 10000
+
+
 def test_probe_observation_counts_only_exact_route_and_transport():
     snapshot = _snapshot(route="krx_nxt_integrated", item="123456_AL")
     key = "_AL|krx_nxt_integrated"
