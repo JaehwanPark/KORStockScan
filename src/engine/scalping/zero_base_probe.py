@@ -173,6 +173,7 @@ def wait_for_exact_probe_ws_data(ws_manager, *, code: str, route: str,
                                  after_epoch: float, now=time.time,
                                  timeout_sec: float = 10.0,
                                  empty_timeout_sec: float = 5.0,
+                                 min_warmup_sec: float = 0.0,
                                  partial_extension_sec: float = 0.0,
                                  poll_interval_sec: float = 0.05,
                                  min_exact_0b_count: int = 0) -> tuple[dict, dict, str]:
@@ -193,7 +194,8 @@ def wait_for_exact_probe_ws_data(ws_manager, *, code: str, route: str,
         observation = probe_ws_observation(
             snapshot, code=code, route=route, after_epoch=after_epoch,
         )
-        if ws_data and observation["exact_0b_count"] >= min_exact_0b_count:
+        if (ws_data and observation["exact_0b_count"] >= min_exact_0b_count
+                and time.monotonic() - started >= min_warmup_sec):
             break
         if (
             not observation["exact_0b_count"]
@@ -214,7 +216,10 @@ def wait_for_exact_probe_ws_data(ws_manager, *, code: str, route: str,
         remaining = deadline - time.monotonic()
         if remaining > 0:
             time.sleep(min(max(0.01, poll_interval_sec), remaining))
-    observation["wait_ms"] = round((time.monotonic() - started) * 1000)
+    elapsed = time.monotonic() - started
+    if ws_data and elapsed < max(0.0, min_warmup_sec):
+        ws_data, source_reason = {}, "warmup_timeout"
+    observation["wait_ms"] = round(elapsed * 1000)
     observation["base_wait_budget_ms"] = round(max(0.0, timeout_sec) * 1000)
     observation["effective_wait_budget_ms"] = round(
         (min(max(0.0, timeout_sec), max(0.0, empty_timeout_sec))
@@ -224,6 +229,7 @@ def wait_for_exact_probe_ws_data(ws_manager, *, code: str, route: str,
     )
     observation["wait_reason"] = source_reason
     observation["sample_target"] = min_exact_0b_count
+    observation["min_warmup_ms"] = round(max(0.0, min_warmup_sec) * 1000)
     observation["sample_target_met"] = observation["exact_0b_count"] >= min_exact_0b_count
     observation["partial_extension_applied"] = partial_extension_applied
     observation["empty_source_flushed"] = empty_source_flushed
@@ -269,8 +275,11 @@ def run_zero_base_probe(
     context_builder=None,
     release_ws=None,
     ws_wait_timeout_sec: float = 10.0,
+    ws_wait_empty_timeout_sec: float = 5.0,
+    ws_min_warmup_sec: float = 0.0,
     ws_wait_partial_extension_sec: float = 0.0,
     ws_wait_min_exact_0b_count: int = 5,
+    retain_ws_on_recheck: bool = False,
 ) -> dict:
     """Observe one candidate. The caller owns bounded WS REG/REMOVE leases."""
     claim = dict(request.get("claim") or {})
@@ -348,6 +357,8 @@ def run_zero_base_probe(
         ws_data, observation, source_reason = wait_for_exact_probe_ws_data(
             ws_manager, code=code, route=route, after_epoch=registered_epoch,
             now=now, timeout_sec=ws_wait_timeout_sec,
+            empty_timeout_sec=ws_wait_empty_timeout_sec,
+            min_warmup_sec=ws_min_warmup_sec,
             partial_extension_sec=ws_wait_partial_extension_sec,
             min_exact_0b_count=ws_wait_min_exact_0b_count,
         )
@@ -467,5 +478,9 @@ def run_zero_base_probe(
             result["reason"] = "machine_action_unknown"
     finally:
         if not was_subscribed and not deferred_release and callable(release_ws):
-            release_ws(code, item)
+            if (retain_ws_on_recheck and result["result"] == "assessed"
+                    and result["machine_action"] == "RECHECK"):
+                result["_ws_lease_retained"] = True
+            else:
+                release_ws(code, item)
     return result

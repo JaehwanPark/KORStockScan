@@ -102,7 +102,7 @@ from src.engine.scalping.scanner_runtime_scheduler import (
 )
 from src.engine.ai.hot_path_ai_dispatcher import HotPathAIDispatcher
 from src.engine.scalping.scanner_async_eval import ScannerAsyncEvalCoordinator
-from src.engine.scalping.zero_base_probe import run_zero_base_probe
+from src.engine.scalping.zero_base_probe import probe_item, run_zero_base_probe
 from src.scanners.zero_base_discovery_runtime import (
     MACHINE_ENTER_EVENT,
     PROBE_REQUEST_EVENT,
@@ -8621,6 +8621,22 @@ def _zero_base_release_probe_ws(code, item):
         manager.execute_unsubscribe([code])
 
 
+def _zero_base_probe_observation_profile(session_regime):
+    thin_session = session_regime in {
+        session_contract.MARKET_SESSION_REGIME_LEGACY_PREMARKET,
+        session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET,
+    }
+    return {
+        "first_warmup_sec": 5.0 if thin_session else 3.0,
+        "first_timeout_sec": 15.0 if thin_session else 10.0,
+        "first_empty_timeout_sec": 8.0 if thin_session else 5.0,
+        "recheck_warmup_sec": 3.0 if thin_session else 2.0,
+        "recheck_timeout_sec": 10.0 if thin_session else 6.0,
+        "recheck_empty_timeout_sec": 8.0 if thin_session else 5.0,
+        "partial_extension_sec": 2.0 if thin_session else 0.0,
+    }
+
+
 def handle_zero_base_probe_requested(request):
     request = dict(request or {})
     claim = request.get("claim") or {}
@@ -8669,6 +8685,7 @@ def handle_zero_base_probe_requested(request):
 
     def worker():
         deferred_cleanup = False
+        retained_ws = False
 
         def release_probe_ws(release_code, release_item):
             try:
@@ -8679,19 +8696,61 @@ def handle_zero_base_probe_requested(request):
 
         try:
             try:
-                result = run_zero_base_probe(
-                    request,
-                    ws_manager=WS_MANAGER,
-                    ai_engine=AI_ENGINE,
-                    token=KIWOOM_TOKEN,
-                    release_ws=release_probe_ws,
-                    ws_wait_partial_extension_sec=(
-                        2.0 if session_regime in {
-                            session_contract.MARKET_SESSION_REGIME_LEGACY_PREMARKET,
-                            session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET,
-                        } else 0.0
-                    ),
+                profile = _zero_base_probe_observation_profile(session_regime)
+
+                def observe_once(*, warmup_sec, timeout_sec, empty_timeout_sec,
+                                 retain_on_recheck):
+                    return run_zero_base_probe(
+                        request,
+                        ws_manager=WS_MANAGER,
+                        ai_engine=AI_ENGINE,
+                        token=KIWOOM_TOKEN,
+                        release_ws=release_probe_ws,
+                        ws_wait_timeout_sec=timeout_sec,
+                        ws_wait_empty_timeout_sec=empty_timeout_sec,
+                        ws_min_warmup_sec=warmup_sec,
+                        ws_wait_partial_extension_sec=profile["partial_extension_sec"],
+                        retain_ws_on_recheck=retain_on_recheck,
+                    )
+
+                result = observe_once(
+                    warmup_sec=profile["first_warmup_sec"],
+                    timeout_sec=profile["first_timeout_sec"],
+                    empty_timeout_sec=profile["first_empty_timeout_sec"],
+                    retain_on_recheck=True,
                 )
+                retained_ws = bool(result.pop("_ws_lease_retained", False))
+                if (result.get("result") == "assessed"
+                        and result.get("machine_action") == "RECHECK"
+                        and not _zero_base_active_conflict(code)):
+                    first = result
+                    try:
+                        followup = observe_once(
+                            warmup_sec=profile["recheck_warmup_sec"],
+                            timeout_sec=profile["recheck_timeout_sec"],
+                            empty_timeout_sec=profile["recheck_empty_timeout_sec"],
+                            retain_on_recheck=False,
+                        )
+                    except Exception as exc:
+                        followup = {
+                            "result": "source_unavailable",
+                            "reason": "recheck_probe_exception:" + type(exc).__name__,
+                        }
+                    followup.pop("_ws_lease_retained", None)
+                    result = (
+                        followup if followup.get("result") == "assessed"
+                        else first
+                    )
+                    result["recheck_attempts"] = 2
+                    result["recheck_first_reason"] = first.get("reason")
+                    result["recheck_first_ws_wait_ms"] = (
+                        (first.get("ws_observation") or {}).get("wait_ms")
+                    )
+                    result["recheck_followup_result"] = followup.get("result")
+                    result["recheck_followup_reason"] = followup.get("reason")
+                elif result.get("machine_action") == "RECHECK":
+                    result["recheck_attempts"] = 1
+                    result["recheck_followup_reason"] = "active_conflict_after_first_assessment"
             except Exception as exc:
                 result = {
                     **request,
@@ -8706,10 +8765,17 @@ def handle_zero_base_probe_requested(request):
             result["result_epoch"] = time.time()
             event_bus.publish(PROBE_RESULT_EVENT, result)
         finally:
-            if not deferred_cleanup:
-                with _ZERO_BASE_PROBE_LOCK:
-                    _ZERO_BASE_PROBE_IN_FLIGHT.discard(code)
-            _ZERO_BASE_PROBE_SLOTS.release()
+            try:
+                if retained_ws and not deferred_cleanup:
+                    try:
+                        release_probe_ws(code, probe_item(code, claim.get("route") or ""))
+                    except Exception as exc:
+                        log_error("[ZERO_BASE_PROBE_RELEASE] " + code + ":" + type(exc).__name__)
+            finally:
+                if not deferred_cleanup:
+                    with _ZERO_BASE_PROBE_LOCK:
+                        _ZERO_BASE_PROBE_IN_FLIGHT.discard(code)
+                _ZERO_BASE_PROBE_SLOTS.release()
 
     try:
         _ZERO_BASE_PROBE_EXECUTOR.submit(worker)

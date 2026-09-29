@@ -146,6 +146,78 @@ def test_machine_only_probe_passes_only_exact_fresh_input_and_releases_ws(monkey
     assert calls[-1] == ("release", "123456", "123456")
 
 
+def test_ready_ws_still_observes_minimum_warmup():
+    ws = SimpleNamespace(get_latest_data=lambda *_args: _snapshot(epoch=11))
+    data, observation, reason = wait_for_exact_probe_ws_data(
+        ws, code="123456", route="krx_only", after_epoch=10,
+        now=lambda: 11, timeout_sec=0.2, min_warmup_sec=0.04,
+        poll_interval_sec=0.005,
+    )
+    assert reason == "ready" and data
+    assert observation["wait_ms"] >= 40
+    assert observation["min_warmup_ms"] == 40
+
+
+def test_warmup_longer_than_lease_never_promotes_early_ready_snapshot():
+    ws = SimpleNamespace(get_latest_data=lambda *_args: _snapshot(epoch=11))
+    data, observation, reason = wait_for_exact_probe_ws_data(
+        ws, code="123456", route="krx_only", after_epoch=10,
+        now=lambda: 11, timeout_sec=0.01, min_warmup_sec=0.05,
+        poll_interval_sec=0.005,
+    )
+    assert not data and reason == "warmup_timeout"
+    assert observation["wait_reason"] == "warmup_timeout"
+
+
+def test_recheck_can_retain_owned_exact_subscription_for_one_followup(monkeypatch):
+    import src.engine.scalping.zero_base_probe as module
+
+    monkeypatch.setattr(module, "resolve_entry_candle_session", lambda: "KRX_REGULAR")
+    monkeypatch.setattr(module, "resolve_entry_candle_request_code", lambda *_args, **_kwargs: "123456")
+    ws = SimpleNamespace(
+        subscribed_codes=set(), _registered_items_by_code={},
+        _registered_item_epochs={}, _registered_item_types={},
+        _market_data_transport_epoch=3,
+        get_latest_data=lambda *_args: _snapshot(epoch=11),
+    )
+
+    def subscribe(*_args, **_kwargs):
+        ws.subscribed_codes.add("123456")
+        ws._registered_items_by_code["123456"] = ("123456",)
+        ws._registered_item_epochs["123456"] = 3
+        ws._registered_item_types["123456"] = ("0B", "0D")
+        return _completed_registration()
+
+    ws.execute_subscribe = subscribe
+    released = []
+    result = run_zero_base_probe(
+        {"claim": {"code": "123456", "route": "krx_only", "observed_epoch": 10},
+         "candidate": {"code": "123456", "route": "krx_only"}},
+        ws_manager=ws,
+        ai_engine=SimpleNamespace(analyze_target=lambda *_args, **_kwargs: {
+            "machine_evaluation_status": "assessed",
+            "entry_mechanistic_action": "RECHECK",
+            "mechanistic_entry_assessment": {"reason": "wait_for_trigger"},
+        }),
+        token="token", now=lambda: 11,
+        tick_fetcher=lambda *_args, **_kwargs: [{
+            "request_code": "123456", "rest_received_ts_ms": 11000,
+        }],
+        candle_fetcher=lambda *_args, **_kwargs: (
+            [{"close": 10000}],
+            {"request_code": "123456", "rest_received_ts_ms": 11000},
+        ),
+        context_builder=lambda *_args, **_kwargs: {"ready": True},
+        release_ws=lambda code, item: released.append((code, item)),
+        ws_wait_min_exact_0b_count=0,
+        retain_ws_on_recheck=True,
+    )
+    assert result["result"] == "assessed"
+    assert result["machine_action"] == "RECHECK"
+    assert result["_ws_lease_retained"] is True
+    assert released == []
+
+
 def test_probe_registration_receipt_rejects_silent_send_failure_and_old_transport():
     ws = SimpleNamespace(
         subscribed_codes=set(), _registered_items_by_code={},

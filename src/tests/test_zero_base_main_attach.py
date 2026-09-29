@@ -2,12 +2,15 @@
 
 import time
 import threading
+from concurrent.futures import Future
 from queue import Empty
 from types import SimpleNamespace
+import pytest
 
 from src.engine import kiwoom_sniper_v2 as main
 from src.engine import sniper_state_handlers as handlers
 from src.engine import kiwoom_orders
+from src.trading.market import session_contract
 
 
 class _Session:
@@ -207,6 +210,100 @@ def test_attached_premarket_watching_registers_nx_item(monkeypatch):
     assert published == [("COMMAND_WS_REG", {
         "codes": ["123456_NX"], "source": "scanner_runtime_target_attach",
     })]
+
+
+@pytest.mark.parametrize(
+    ("followup_result", "expected_action", "release_raises"),
+    [("assessed", "ENTER_NOW", False),
+     ("source_unavailable", "RECHECK", False),
+     ("assessed", "ENTER_NOW", True)],
+)
+def test_recheck_reuses_probe_lease_then_publishes_only_final_assessment(
+    monkeypatch, followup_result, expected_action, release_raises,
+):
+    published = []
+    calls = []
+    released = []
+    futures = []
+    errors = []
+    request = {
+        "claim": {"code": "123456", "route": "krx_nxt_integrated",
+                  "source_sha256": "b" * 64},
+        "candidate": {"code": "123456", "route": "krx_nxt_integrated",
+                      "source_sha256": "b" * 64},
+    }
+    monkeypatch.setattr(main, "_zero_base_runtime_enabled", lambda: True)
+    monkeypatch.setattr(main, "_zero_base_active_conflict", lambda _code: False)
+    monkeypatch.setattr(main, "evaluate_main_bot_control_exclusion",
+                        lambda _code: SimpleNamespace(excluded=False))
+    monkeypatch.setattr(main, "scalping_session_venue_provenance",
+                        lambda _epoch: {"market_session_regime": "KRX_REGULAR"})
+    slots = threading.BoundedSemaphore(1)
+    monkeypatch.setattr(main, "_ZERO_BASE_PROBE_SLOTS", slots)
+    monkeypatch.setattr(main, "_ZERO_BASE_PROBE_IN_FLIGHT", set())
+    def submit(worker):
+        future = Future()
+        futures.append(future)
+        try:
+            future.set_result(worker())
+        except Exception as exc:
+            future.set_exception(exc)
+        return future
+
+    monkeypatch.setattr(main, "_ZERO_BASE_PROBE_EXECUTOR",
+                        SimpleNamespace(submit=submit))
+    monkeypatch.setattr(main, "event_bus", SimpleNamespace(
+        publish=lambda event, payload: published.append((event, payload)),
+    ))
+    def release(code, item):
+        released.append((code, item))
+        if release_raises:
+            raise RuntimeError("release_failed")
+
+    monkeypatch.setattr(main, "_zero_base_release_probe_ws", release)
+    monkeypatch.setattr(main, "log_error", errors.append)
+
+    def probe_once(_request, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return {**request, "result": "assessed", "machine_action": "RECHECK",
+                    "reason": "trigger_pending", "ws_observation": {"wait_ms": 3000},
+                    "_ws_lease_retained": True}
+        return {**request, "result": followup_result,
+                "machine_action": "ENTER_NOW" if followup_result == "assessed" else "",
+                "reason": "trigger_confirmed" if followup_result == "assessed"
+                          else "route_snapshot_missing"}
+
+    monkeypatch.setattr(main, "run_zero_base_probe", probe_once)
+    main.handle_zero_base_probe_requested(request)
+    assert futures[0].exception() is None
+    assert bool(errors) is release_raises
+    assert len(calls) == 2
+    assert [call["ws_min_warmup_sec"] for call in calls] == [3.0, 2.0]
+    assert [call["ws_wait_timeout_sec"] for call in calls] == [10.0, 6.0]
+    assert [call["ws_wait_empty_timeout_sec"] for call in calls] == [5.0, 5.0]
+    assert released == [("123456", "123456_AL")]
+    assert len(published) == 1
+    assert published[0][1]["machine_action"] == expected_action
+    assert published[0][1]["recheck_attempts"] == 2
+    assert published[0][1]["recheck_followup_result"] == followup_result
+    assert slots.acquire(blocking=False)
+    slots.release()
+
+
+@pytest.mark.parametrize("regime", [
+    session_contract.MARKET_SESSION_REGIME_LEGACY_PREMARKET,
+    session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET,
+])
+def test_quiet_sessions_have_longer_bounded_probe_observation(regime):
+    profile = main._zero_base_probe_observation_profile(regime)
+    assert profile["first_warmup_sec"] == 5.0
+    assert profile["first_timeout_sec"] == 15.0
+    assert profile["first_empty_timeout_sec"] == 8.0
+    assert profile["recheck_warmup_sec"] == 3.0
+    assert profile["recheck_timeout_sec"] == 10.0
+    assert profile["recheck_empty_timeout_sec"] == 8.0
+    assert profile["partial_extension_sec"] == 2.0
 
 
 def test_zero_base_entry_request_binds_sor_and_fails_closed_on_lost_route(monkeypatch):
