@@ -355,6 +355,52 @@ def test_print_plan_never_starts_or_restarts(release, monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out)["release_root"] == str(root)
 
 
+def test_scheduled_finalizer_argument_resolves_through_runtime_router(
+    release, monkeypatch, capsys
+):
+    workspace, root, _, _ = release
+    monkeypatch.setattr(
+        router,
+        "__file__",
+        str(workspace / "src/engine/infrastructure/runtime_release_router.py"),
+    )
+    monkeypatch.setattr(
+        router.sys,
+        "argv",
+        ["router", "finalize", "--resolve-effective-today", "--print-plan"],
+    )
+    monkeypatch.setattr(
+        router.os, "execvpe", lambda *a: pytest.fail("must not execute")
+    )
+    monkeypatch.setattr(
+        subprocess, "run", lambda *a, **k: pytest.fail("must not start")
+    )
+
+    assert router.main() == 0
+    plan = json.loads(capsys.readouterr().out)
+    assert plan["release_root"] == str(root)
+    assert plan["operation"] == "finalize"
+    assert plan["command"][-1] == "--resolve-effective-today"
+
+
+def test_resolve_effective_today_is_rejected_for_other_operations(
+    release, monkeypatch, capsys
+):
+    workspace, _, _, _ = release
+    monkeypatch.setattr(
+        router,
+        "__file__",
+        str(workspace / "src/engine/infrastructure/runtime_release_router.py"),
+    )
+    monkeypatch.setattr(
+        router.sys,
+        "argv",
+        ["router", "postclose", "--resolve-effective-today"],
+    )
+    assert router.main() == 2
+    assert "resolve_effective_today_requires_finalize" in capsys.readouterr().err
+
+
 def test_missing_manifest_cannot_fall_back_to_workspace(release, monkeypatch, capsys):
     workspace, _, manifest, _ = release
     manifest.unlink()

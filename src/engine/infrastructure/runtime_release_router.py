@@ -642,6 +642,7 @@ def main() -> int:
         default=datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat(),
     )
     parser.add_argument("--print-plan", action="store_true")
+    parser.add_argument("--resolve-effective-today", action="store_true")
     parser.add_argument("--record-pid", type=int)
     parser.add_argument("--record-release-root")
     parser.add_argument("--record-git-commit")
@@ -652,6 +653,8 @@ def main() -> int:
     args = parser.parse_args()
     workspace = Path(__file__).resolve().parents[3]
     try:
+        if args.resolve_effective_today and args.operation != "finalize":
+            raise ValueError("resolve_effective_today_requires_finalize")
         root, commit = selected_release(workspace)
         if args.record_pid is not None:
             if (
