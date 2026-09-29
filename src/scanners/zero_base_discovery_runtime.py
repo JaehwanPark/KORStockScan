@@ -25,9 +25,11 @@ MAX_DISCOVERY_OBSERVATION_AGE_SEC = 120
 
 
 class ZeroBaseDiscoveryRuntime:
-    def __init__(self, *, event_bus, session_date: str, state_path: Path):
+    def __init__(self, *, event_bus, session_date: str, state_path: Path,
+                 claim_receipt_emitter=None):
         self.event_bus = event_bus
         self.state_path = Path(state_path)
+        self.claim_receipt_emitter = claim_receipt_emitter
         self.queue = self._restore(session_date)
         self._results = SimpleQueue()
         self.event_bus.subscribe(PROBE_RESULT_EVENT, self._receive_result)
@@ -153,6 +155,17 @@ class ZeroBaseDiscoveryRuntime:
         )
         self._persist()  # Persist claims before an asynchronous callback can arrive.
         for claim in claims:
+            if self.claim_receipt_emitter is not None:
+                self.claim_receipt_emitter(
+                    "zero_base_probe_claim",
+                    code=claim.get("code"), name=claim.get("name"),
+                    fields={
+                        "zero_base_source_sha256": claim.get("source_sha256"),
+                        "zero_base_route": claim.get("route"),
+                        "zero_base_claim_count": claim.get("claim_count"),
+                        "zero_base_claim_observed_epoch": claim.get("observed_epoch"),
+                    },
+                )
             self.event_bus.publish(
                 PROBE_REQUEST_EVENT,
                 {"claim": claim, "candidate": claim},

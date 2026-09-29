@@ -95,6 +95,11 @@
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
 
+- [ ] `[MachineNonentryOutcomeLineageNaturalAcceptance0929] 기계 비진입 후행가격·캡처 결속 자연 수용` (`Due: 2026-09-29`, `Slot: POSTCLOSE`, `TimeWindow: 20:05~21:40`, `Track: RuntimeStability`)
+  - Source: [기계 비진입 후행경로 보완안](../proposals/machine-nonentry-outcome-lineage-remediation-plan-2026-09-29.md).
+  - 완료 기준: 배포된 producer의 probe 결과 digest와 해시 검증 캡처를 attempt별로 대사하고, 프리마켓 `_NX`·정규장/통합 애프터마켓 `_AL` 완료봉 캐시의 source date·route·세션·생성 해시를 장후 `main_machine_policy` 영수증까지 확인한다. 동일 `BLOCK/RECHECK` 모집단에서 10/30/60분 커버리지·비용 결속·첫 도달과 source gap을 재측정한다.
+  - 권한 경계: 코드·테스트 통과와 실제 릴리스/PID 소비, 자연 장후 수집, 날짜·표본 허들, direct family 운영 경제성 결속을 각각 구분한다. 결손을 0수익으로 대체하거나 정책 기준·주문 가드를 변경하지 않는다.
+
 - [x] `[PostcloseEodGatedScheduleAndMorningFinalization] EOD 이후 장후 계산 및 다음 KRX 영업일 아침 finalization으로 일정 조정` (`Due: 2026-09-29`, `Slot: POSTCLOSE`, `TimeWindow: 20:05~06:50`, `Track: RuntimeStability`)
   - Source: [운영 runbook](../time-based-operations-runbook.md), [장후 결과 검토 지침](../postclose-tuning-result-review-task-instructions.md), [runtime release routing](../runtime-release-routing.md)
   - 변경 범위: main/widget/machine-refresh/archive 모두 exact-date EOD terminal 이후 heavy work를 시작한다. Finalization은 effective date의 직전 KRX source date를 선택해 05:00 예약, 06:00 predecessor deadline, 06:50 종료 상한을 적용한다.

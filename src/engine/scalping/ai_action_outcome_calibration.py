@@ -22,7 +22,7 @@ from collections import Counter, defaultdict
 from datetime import date, datetime
 from pathlib import Path
 from statistics import fmean
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 from zoneinfo import ZoneInfo
 
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
@@ -64,6 +64,8 @@ MECHANISTIC_REFINEMENT_POLICY_VERSION = (
 HIERARCHICAL_ENTRY_QUALITY_SCHEMA = "hierarchical_entry_quality_walk_forward_v1"
 ENTRY_GROUP_OBSERVATION_SCHEMA = "entry_predecision_group_observation_v1"
 ENTRY_QUALITY_PATH_SCHEMA = "entry_quality_path_v1"
+MACHINE_COMPLETED_PRICE_CACHE_SCHEMA = "machine_completed_price_source_v1"
+MACHINE_COMPLETED_PRICE_MAX_ROUTES = 512
 MACHINE_DECISION_CASE_TABLE_SCHEMA = "mechanistic_entry_decision_case_table_v1"
 MAIN_MECHANISTIC_EVALUATION_CONTRACT_VERSION = (
     "main_mechanistic_full_population_operating_scopes_v4"
@@ -4283,9 +4285,13 @@ def _machine_capture_cost_reference_venue(capture: dict, cohort: tuple[str, str]
     """Economic catalog venue is not the integrated market-data scope label."""
     if cohort[0] in {"KRX", "NXT"}:
         return cohort[0]
+    if (cohort == ("PREMARKET_KRX_LIKE", "PREMARKET_KRX_LIKE")
+        and (_machine_outcome_request_code(capture) or "").endswith("_NX")):
+        return "NXT"
     context = _as_dict(capture.get("label_context"))
     payload = _as_dict(_as_dict(capture.get("source")).get("exact_payload"))
-    snapshot = _as_dict(payload.get("ai_market_snapshot_v1"))
+    snapshot = (payload if payload.get("schema") == "ai_market_snapshot_v1"
+                else _as_dict(payload.get("ai_market_snapshot_v1")))
     route = str(context.get("broker_route") or "").upper()
     if (
         route in {"KRX", "NXT", "SOR"}
@@ -4299,9 +4305,358 @@ def _machine_capture_cost_reference_venue(capture: dict, cohort: tuple[str, str]
     return None
 
 
+def _machine_outcome_request_code(capture: dict) -> str | None:
+    """Bind an offline chart request to the captured executable market route."""
+    context = _as_dict(capture.get("label_context"))
+    payload = _as_dict(_as_dict(capture.get("source")).get("exact_payload"))
+    snapshot = (payload if payload.get("schema") == "ai_market_snapshot_v1"
+                else _as_dict(payload.get("ai_market_snapshot_v1")))
+    code = str(context.get("stock_code") or "")
+    venue = _normalized_venue(context.get("effective_venue"))
+    session = _normalized_session(context.get("session_bucket"))
+    route = str(context.get("market_data_route") or "").lower()
+    broker = str(context.get("broker_route") or "").upper()
+    if (not re.fullmatch(r"[0-9]{6}", code)
+        or not context.get("snapshot_id")
+        or context.get("snapshot_id") != snapshot.get("snapshot_id")
+        or code != str(snapshot.get("stock_code") or "")
+        or venue != _normalized_venue(snapshot.get("effective_venue"))
+        or session != _normalized_session(snapshot.get("session_bucket"))
+        or route != str(snapshot.get("market_data_route") or "").lower()
+        or broker != str(snapshot.get("broker_route") or "").upper()):
+        return None
+    if (route == "krx_nxt_integrated" and broker == "SOR"
+        and ((venue, session) == ("KRX", "KRX_REGULAR")
+             or (venue, session) == ("KRX_NXT_INTEGRATED", "KRX_NXT_AFTERMARKET"))):
+        return code + "_AL"
+    if (route == "nxt_only" and broker == "NXT"
+        and venue in {"NXT", "PREMARKET_KRX_LIKE"}
+        and session in {"NXT_PREMARKET", "PREMARKET_KRX_LIKE",
+                        "NXT_REGULAR_OVERLAP", "NXT_AFTERMARKET"}):
+        return code + "_NX"
+    if route == "krx_only" and broker == "KRX" and (venue, session) == ("KRX", "KRX_REGULAR"):
+        return code
+    return None
+
+
+def _machine_probe_lineage_counts(
+    observations: list[dict], receipts: list[dict],
+) -> dict[str, int]:
+    """Reconcile persisted probe results to verified captures, not clock proximity."""
+    counts = Counter()
+    captures = {
+        str(capture.get("machine_observation_sha256")): capture
+        for capture in observations
+        if capture.get("source_event_stage") == "zero_base_probe_machine_only_v1"
+    }
+    joined: set[str] = set()
+    attached: set[str] = set()
+    claims: set[tuple[str, str, str, int]] = set()
+    results: set[tuple[str, str, str, int]] = set()
+
+    def digest(value: Any) -> str:
+        value = str(value or "").strip().lower()
+        return value if re.fullmatch(r"[0-9a-f]{64}", value) else ""
+
+    def claim_key(receipt: dict) -> tuple[str, str, str, int] | None:
+        fields = _as_dict(receipt.get("fields"))
+        code = str(receipt.get("stock_code") or "")
+        source_sha = digest(fields.get("zero_base_source_sha256"))
+        route = str(fields.get("zero_base_route") or "")
+        try:
+            claim_count = int(fields.get("zero_base_claim_count"))
+        except (TypeError, ValueError):
+            return None
+        if (not re.fullmatch(r"[0-9]{6}", code) or not source_sha
+            or route not in {"nxt_only", "krx_nxt_integrated"}
+            or claim_count < 0):
+            return None
+        return code, source_sha, route, claim_count
+
+    def exact_capture(receipt: dict, capture_sha: str, *, first: bool) -> bool:
+        capture = captures.get(capture_sha)
+        if not capture:
+            return False
+        fields = _as_dict(receipt.get("fields"))
+        action = str(_as_dict(_as_dict(capture.get("source")).get("assessment")).get("action") or "").upper()
+        expected_action = (
+            "ENTER_NOW" if receipt.get("stage") == "zero_base_watch_attach"
+            else "RECHECK" if first
+            else str(fields.get("entry_mechanistic_action") or "").upper()
+        )
+        return (
+            str(receipt.get("stock_code") or "") == str(_as_dict(capture.get("label_context")).get("stock_code") or "")
+            and str(fields.get("zero_base_source_sha256") or "") == str(capture.get("zero_base_source_sha256") or "")
+            and str(fields.get("zero_base_route") or "") == str(capture.get("zero_base_route") or "")
+            and action == expected_action
+        )
+
+    for receipt in receipts:
+        fields = _as_dict(receipt.get("fields"))
+        stage = receipt.get("stage")
+        current = digest(fields.get("machine_observation_sha256"))
+        if stage == "zero_base_probe_claim":
+            counts["probe_claim_receipt"] += 1
+            key = claim_key(receipt)
+            if key:
+                if key in claims:
+                    counts["probe_claim_duplicate_receipt"] += 1
+                claims.add(key)
+            else:
+                counts["probe_claim_identity_invalid"] += 1
+            continue
+        if stage == "zero_base_watch_attach":
+            counts["probe_watch_attach_receipt"] += 1
+            if fields.get("zero_base_attach_outcome") == "attached":
+                if current and exact_capture(receipt, current, first=False):
+                    attached.add(current)
+                else:
+                    counts["probe_watch_attach_capture_gap"] += 1
+            continue
+        if stage != "zero_base_probe_result":
+            continue
+        counts["probe_result_receipt"] += 1
+        key = claim_key(receipt)
+        if key:
+            if key in results:
+                counts["probe_result_duplicate_receipt"] += 1
+            results.add(key)
+        else:
+            counts["probe_result_claim_identity_invalid"] += 1
+        if fields.get("zero_base_probe_result") != "assessed":
+            if fields.get("entry_mechanistic_action") == "SOURCE_INVALID":
+                counts["probe_source_invalid_result"] += 1
+                if current and exact_capture(receipt, current, first=False):
+                    joined.add(current)
+                    counts["probe_source_invalid_capture_exact_join"] += 1
+                else:
+                    counts["probe_source_invalid_capture_gap"] += 1
+            else:
+                counts["probe_result_before_assessment"] += 1
+            continue
+        counts["probe_assessed_result"] += 1
+        first = digest(fields.get("recheck_first_machine_observation_sha256"))
+        if not current:
+            counts["probe_assessed_capture_digest_missing"] += 1
+        digest_checks = [(current, False)]
+        if first and first != current:
+            digest_checks.append((first, True))
+        for candidate_sha, is_first in digest_checks:
+            if not candidate_sha:
+                continue
+            if exact_capture(receipt, candidate_sha, first=is_first):
+                if candidate_sha in joined:
+                    counts["probe_capture_digest_reused"] += 1
+                else:
+                    joined.add(candidate_sha)
+                    counts["probe_capture_exact_join"] += 1
+            else:
+                counts["probe_capture_missing_or_conflict"] += 1
+    counts["probe_capture_without_result"] = len(set(captures) - joined)
+    counts["probe_watch_attached_exact_capture"] = len(attached)
+    counts["probe_claim_without_result"] = len(claims - results)
+    counts["probe_result_without_claim"] = len(results - claims)
+    return dict(counts)
+
+
+def _machine_completed_price_rows(
+    *, data_root: Path, day: str, observations: list[dict],
+    fetcher: Callable[[str, str], tuple[list[dict], dict]] | None,
+    as_of: datetime | None,
+) -> tuple[list[dict], dict, set[str]]:
+    """Serialize one date's source-only fetch and immutable-generation reuse."""
+    if fetcher is None or as_of is None:
+        return _machine_completed_price_rows_locked(
+            data_root=data_root, day=day, observations=observations,
+            fetcher=None, as_of=None,
+        )
+    lock_path = (data_root / "report" / "machine_completed_price_source"
+                 / f"machine_completed_price_source_{day}.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a") as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        return _machine_completed_price_rows_locked(
+            data_root=data_root, day=day, observations=observations,
+            fetcher=fetcher, as_of=as_of,
+        )
+
+
+def _machine_completed_price_rows_locked(
+    *, data_root: Path, day: str, observations: list[dict],
+    fetcher: Callable[[str, str], tuple[list[dict], dict]] | None,
+    as_of: datetime | None,
+) -> tuple[list[dict], dict, set[str]]:
+    """Reuse one hash-bound completed-bar batch across cumulative postclose runs."""
+    from src.engine.scalping import ai_decision_quality as quality
+
+    manifest = _canonical_sha256(sorted(
+        str(c.get("machine_observation_sha256") or "") for c in observations
+    ))
+    path = (data_root / "report" / "machine_completed_price_source"
+            / f"machine_completed_price_source_{day}.json")
+    cache = _load_json(path)
+    expected_routes = {
+        (str(context.get("stock_code")),
+         _normalized_venue(context.get("effective_venue")),
+         _normalized_session(context.get("session_bucket")), request_code)
+        for capture in observations
+        for context in [_as_dict(capture.get("label_context"))]
+        for request_code in [_machine_outcome_request_code(capture)]
+        if request_code
+    }
+    expected_codes = {route[3] for route in expected_routes}
+    cached_as_of = quality._parse_ts(cache.get("as_of"))
+    if (cache.get("schema") == MACHINE_COMPLETED_PRICE_CACHE_SCHEMA
+        and cache.get("source_date") == day
+        and cache.get("capture_manifest_sha256") == manifest
+        and _artifact_content_sha256_valid(cache)
+        and cached_as_of is not None
+        and cached_as_of.date().isoformat() == day
+        and (cached_as_of.hour, cached_as_of.minute) >= (20, 1)
+        and isinstance(cache.get("prices"), list)
+        and isinstance(cache.get("provenance"), list)):
+        route_codes = set(cache.get("request_codes") or [])
+        prices = [p for p in cache["prices"] if
+                  isinstance(p, dict) and p.get("source_request_code") in route_codes
+                  and (str(p.get("stock_code")),
+                       _normalized_venue(p.get("effective_venue")),
+                       _normalized_session(p.get("session_bucket")),
+                       p.get("source_request_code")) in expected_routes
+                  and p.get("completed_bar_only") is True
+                  and p.get("source_api_id") == "ka10080"
+                  and (ts := quality._parse_ts(p.get("timestamp"))) is not None
+                  and ts.date().isoformat() == day and ts < cached_as_of
+                  and quality._price_source_usable(p)]
+        provenance_valid = all(
+            isinstance(row, dict)
+            and (str(row.get("stock_code")),
+                 _normalized_venue(row.get("effective_venue")),
+                 _normalized_session(row.get("session_bucket")),
+                 row.get("request_code")) in expected_routes
+            for row in cache["provenance"]
+        )
+        if (route_codes.issubset(expected_codes)
+            and provenance_valid and len(prices) == len(cache["prices"])):
+            reused_status = ("verified_cache_reused" if cache.get("source_status") == "complete"
+                             else "verified_cache_reused_partial_source_gap")
+            return prices, {"status": reused_status, "path": str(path),
+                            "artifact_content_sha256": cache["artifact_content_sha256"],
+                            "route_count": len(cache["provenance"]),
+                            "deferred_route_count": cache.get("deferred_route_count", 0),
+                            "rejected_route_count": cache.get("rejected_route_count", 0),
+                            "unproven_route_count": cache.get("unproven_route_count", 0),
+                            "price_row_count": len(prices)}, route_codes
+    if fetcher is None or as_of is None:
+        return [], {"status": "cache_missing_or_invalid" if cache else "cache_missing",
+                    "path": str(path)}, set()
+
+    route_labels = {}
+    unproven_count = 0
+    for capture in observations:
+        action = str(_as_dict(_as_dict(capture.get("source")).get("assessment")).get("action") or "").upper()
+        if action not in {"BLOCK", "RECHECK", "ENTER_NOW"}:
+            continue
+        request_code = _machine_outcome_request_code(capture)
+        if not request_code:
+            unproven_count += 1
+            continue
+        context = _as_dict(capture.get("label_context"))
+        key = (str(context["stock_code"]), _normalized_venue(context.get("effective_venue")),
+               _normalized_session(context.get("session_bucket")), request_code)
+        priority = 0 if action in {"BLOCK", "RECHECK"} else 1
+        value = (priority, str(capture.get("captured_at") or ""),
+                 {"stock_code": key[0], "effective_venue": key[1],
+                  "session_bucket": key[2], "outcome_request_code": request_code})
+        if key not in route_labels or value[:2] < route_labels[key][:2]:
+            route_labels[key] = value
+    selected = sorted(route_labels.values(), key=lambda row: row[:2])
+    deferred_count = max(0, len(selected) - MACHINE_COMPLETED_PRICE_MAX_ROUTES)
+    labels = [row[2] for row in selected[:MACHINE_COMPLETED_PRICE_MAX_ROUTES]]
+
+    def verified_fetcher(stock_code: str, request_code: str) -> tuple[list[dict], dict]:
+        candles, source_meta = fetcher(stock_code, request_code)
+        source_meta = _as_dict(source_meta)
+        if (source_meta.get("api_id") != "ka10080"
+            or source_meta.get("request_code") != request_code
+            or source_meta.get("request_base_dt") != day.replace("-", "")):
+            return [], {**source_meta, "fetch_error": "request_provenance_mismatch"}
+        return candles, source_meta
+
+    prices, provenance = quality.load_kiwoom_completed_minute_price_rows(
+        target_date=day, labels=labels, as_of=as_of, fetcher=verified_fetcher,
+        request_code_resolver=lambda row: row.get("outcome_request_code"),
+    )
+    rejected_routes = {
+        (str(row.get("stock_code")),
+         _normalized_venue(row.get("effective_venue")),
+         _normalized_session(row.get("session_bucket")),
+         row.get("request_code"))
+        for row in provenance
+        if (row.get("api_id") != "ka10080"
+            or row.get("fetch_error")
+            or row.get("continuation_page_limit_reached")
+            or not row.get("target_completed_bar_count"))
+    }
+    prices = [row for row in prices if
+              (str(row.get("stock_code")),
+               _normalized_venue(row.get("effective_venue")),
+               _normalized_session(row.get("session_bucket")),
+               row.get("source_request_code")) not in rejected_routes]
+    request_codes = {row["outcome_request_code"] for row in labels}
+    report = _with_artifact_content_sha256({
+        "schema": MACHINE_COMPLETED_PRICE_CACHE_SCHEMA,
+        "source_status": ("complete" if not rejected_routes and not deferred_count and not unproven_count
+                          else "partial_source_gap"),
+        "source_date": day, "generated_at": datetime.now(KST).isoformat(),
+        "as_of": as_of.isoformat(), "capture_manifest_sha256": manifest,
+        "request_codes": sorted(request_codes),
+        "deferred_route_count": deferred_count,
+        "rejected_route_count": len(rejected_routes),
+        "unproven_route_count": unproven_count,
+        "prices": prices, "provenance": provenance,
+        "runtime_effect": False, "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+    })
+    _atomic_write_json(path, report)
+    return prices, {"status": "collected" if not rejected_routes and not deferred_count and not unproven_count else "partial_source_gap",
+                    "path": str(path), "artifact_content_sha256": report["artifact_content_sha256"],
+                    "route_count": len(labels), "deferred_route_count": deferred_count,
+                    "rejected_route_count": len(rejected_routes),
+                    "unproven_route_count": unproven_count,
+                    "price_row_count": len(prices)}, request_codes
+
+
+def _postclose_machine_completed_fetcher(
+    target_date: str, *, write: bool,
+) -> tuple[Callable[[str, str], tuple[list[dict], dict]] | None, datetime | None]:
+    """Use the existing source-only chart client after all market sessions close."""
+    now = datetime.now(KST)
+    if (not write or now.date().isoformat() != target_date
+        or now.hour < 20 or (now.hour == 20 and now.minute < 1)):
+        return None, None
+    from src.utils import kiwoom_utils
+    from src.utils.kiwoom_read_request_control import REQUEST_CLASS_SOURCE_ONLY
+
+    token = kiwoom_utils.get_cached_kiwoom_token()
+    if not token:
+        return None, None
+
+    def fetcher(_stock_code: str, request_code: str) -> tuple[list[dict], dict]:
+        return kiwoom_utils.get_minute_candles_ka10080_with_meta(
+            token, request_code, limit=900, explicit_request_code=True,
+            base_dt=target_date.replace("-", ""),
+            request_owner="main_machine_policy.completed_outcome",
+            request_class=REQUEST_CLASS_SOURCE_ONLY,
+        )
+
+    return fetcher, now
+
+
 def load_machine_observation_rows(
     data_root: Path, *, target_date: str, materialized_labels_only: bool = False,
-    independent_machine: bool = False, minimum_source_date: str = '2026-09-13'
+    independent_machine: bool = False, minimum_source_date: str = '2026-09-13',
+    completed_price_fetcher: Callable[[str, str], tuple[list[dict], dict]] | None = None,
+    completed_price_as_of: datetime | None = None,
 ) -> tuple[list[dict], dict]:
     """Reuse the payload archive and existing path labeler, with no AI calls."""
     from src.engine.scalping import ai_decision_quality as quality
@@ -4311,6 +4666,7 @@ def load_machine_observation_rows(
 
     result, counts = [], Counter()
     capture_populations = []
+    completed_price_receipts = []
     for path in sorted((data_root / "ai_decision_payloads").glob("*.jsonl*")):
         match = re.search(r"(\d{4}-\d{2}-\d{2})\.jsonl", path.name)
         # Machine-only capture started on 9/13. The clean-baseline paired
@@ -4366,6 +4722,14 @@ def load_machine_observation_rows(
             by_day[day].append(capture)
         capture_populations.append(summarize_machine_capture_population([capture for observations in by_day.values() for capture in observations]))
         for day, observations in by_day.items():
+            unique_observations = {
+                capture["machine_observation_sha256"]: capture
+                for capture in observations
+            }
+            counts["duplicate_machine_capture_collapsed"] += (
+                len(observations) - len(unique_observations)
+            )
+            observations = list(unique_observations.values())
             cost_profiles_by_venue = {}
             ai_trace_index = {} if independent_machine else _machine_ai_trace_index(data_root, day)
             materialized_by_trace: dict[str, dict] = {}
@@ -4406,12 +4770,29 @@ def load_machine_observation_rows(
                 pipeline = existing_or_gzip_path(
                     data_root / "pipeline_events" / f"pipeline_events_{day}.jsonl"
                 )
+                probe_receipts: list[dict] = []
                 prices, lifecycle = quality.load_pipeline_price_and_lifecycle_rows(
                     iter_jsonl(pipeline) if pipeline and pipeline.is_file() else [],
                     stock_codes={
                         str(c.get("label_context", {}).get("stock_code") or "")
                         for c in observations
                     },
+                    probe_receipts=probe_receipts,
+                )
+                counts.update(_machine_probe_lineage_counts(observations, probe_receipts))
+                completed, completed_source, _completed_codes = (
+                    _machine_completed_price_rows(
+                        data_root=data_root, day=day, observations=observations,
+                        fetcher=(completed_price_fetcher if day == target_date else None),
+                        as_of=(completed_price_as_of if day == target_date else None),
+                    )
+                )
+                prices.extend(completed)
+                counts["completed_price_source_" + completed_source["status"]] += 1
+                completed_price_receipts.append({"source_date": day, **completed_source})
+                counts["completed_price_rows"] += len(completed)
+                counts["completed_price_deferred_routes"] += int(
+                    completed_source.get("deferred_route_count") or 0
                 )
             prices_by_symbol = defaultdict(list)
             for price in prices:
@@ -4421,6 +4802,17 @@ def load_machine_observation_rows(
                 lifecycle_by_symbol[event.get("stock_code")].append(event)
             for capture in observations:
                 context = dict(capture.get("label_context") or {})
+                captured_action = str(_as_dict(_as_dict(capture.get("source")).get("assessment")).get("action") or "").upper()
+                if captured_action in {"BLOCK", "RECHECK", "ENTER_NOW", "SOURCE_INVALID"}:
+                    counts["machine_capture_action_" + captured_action.lower()] += 1
+                    if capture.get("source_event_stage") == "zero_base_probe_machine_only_v1":
+                        counts["zero_base_capture_action_" + captured_action.lower()] += 1
+                exact_outcome_code = _machine_outcome_request_code(capture)
+                if not materialized_labels_only and exact_outcome_code:
+                    # A completed-price cohort cannot silently consume a plain
+                    # KRX pipeline price for an integrated _AL observation,
+                    # even when the completed-price source itself is absent.
+                    context["outcome_request_code"] = exact_outcome_code
                 ai_trace, ai_trace_join_status = ({}, 'independent_machine_no_ai_join') if independent_machine else _match_machine_ai_trace(
                     capture, context, ai_trace_index
                 )
@@ -4482,6 +4874,7 @@ def load_machine_observation_rows(
                 context["entry_conservative_execution_cost_pct"] = full_cost
                 # Fixed-exit CF cohort, not an assertion about the user's live stop.
                 context["adverse_pct"] = quality.ENTRY_PATH_ADVERSE_PCT
+                context["outcome_stop_owner"] = "fixed_counterfactual_entry_boundary"
                 if context.get("reference_price_type") != "executable_ask":
                     counts["executable_reference_missing"] += 1
                     if not independent_machine:
@@ -4522,6 +4915,34 @@ def load_machine_observation_rows(
                 horizon_metrics = labeled.get("horizon_metrics", {})
                 metric = horizon_metrics.get("10m", {})
                 entry_path = metric.get("entry_quality_path")
+                outcome_price_gap = None
+                if not materialized_labels_only and not exact_outcome_code:
+                    outcome_price_gap = "outcome_route_unproven"
+                    counts["outcome_route_unproven"] += 1
+                elif context.get("outcome_request_code"):
+                    decision_time = quality._parse_ts(capture["captured_at"])
+                    first_observation = (min((timestamp for price in
+                        prices_by_symbol[context.get("stock_code")] if
+                        quality._same_route(pending, price)
+                        and (timestamp := quality._parse_ts(price.get("timestamp")))
+                        and timestamp > decision_time), default=None)
+                        if decision_time is not None else None)
+                    if (first_observation is None or
+                        (first_observation - decision_time).total_seconds() >
+                            quality.HORIZON_END_MAX_LAG_SEC):
+                        outcome_price_gap = "initial_postdecision_price_gap"
+                        counts["initial_postdecision_price_gap"] += 1
+                if outcome_price_gap:
+                    for horizon_metric in horizon_metrics.values():
+                        if (isinstance(horizon_metric, dict)
+                            and isinstance(horizon_metric.get("entry_quality_path"), dict)):
+                            horizon_metric["entry_quality_path"] = {
+                                "schema": "entry_quality_path_v1",
+                                "status": "source_gap",
+                                "entry_quality_label": "CENSORED_OR_SOURCE_GAP",
+                                "label_reason": outcome_price_gap,
+                            }
+                    entry_path = metric.get("entry_quality_path")
                 if (
                     not isinstance(entry_path, dict)
                     or entry_path.get("status") != "evaluable"
@@ -4543,6 +4964,28 @@ def load_machine_observation_rows(
                 if machine_action not in {"BLOCK", "RECHECK", "ENTER_NOW"}:
                     counts["machine_action_invalid"] += 1
                     continue
+                action_key = "machine_" + machine_action.lower()
+                counts[action_key + (
+                    "_full_cost_valid" if full_cost is not None else "_full_cost_gap"
+                )] += 1
+                if isinstance(entry_path, dict) and entry_path.get("status") == "evaluable":
+                    first_hit = str(entry_path.get("first_hit") or "")
+                    if first_hit in {"net_target_first", "exact_stop_first"}:
+                        counts[action_key + "_first_hit_" + first_hit] += 1
+                else:
+                    path_reason = re.sub(
+                        r"[^a-z0-9_]+", "_",
+                        str(_as_dict(entry_path).get("label_reason") or
+                            _as_dict(entry_path).get("status") or "missing").lower(),
+                    )[:64]
+                    counts[action_key + "_path_reason_" + path_reason] += 1
+                counts["machine_path_" + machine_action.lower() + "_" + (
+                    "evaluable" if isinstance(entry_path, dict) and entry_path.get("status") == "evaluable"
+                    else "source_gap_or_censored")] += 1
+                for horizon in (10, 30, 60):
+                    counts["machine_" + machine_action.lower() + f"_{horizon}m_" + (
+                    "price_covered" if horizon_metrics.get(f"{horizon}m") and not outcome_price_gap
+                        else "price_gap_or_pending")] += 1
                 mc = evidence.get("mechanistic_context") or {}
                 cost = context.get("entry_conservative_execution_cost_pct")
                 correlation = _as_dict(labeled.get("correlation"))
@@ -4604,6 +5047,12 @@ def load_machine_observation_rows(
                         "source_date": day,
                         "stock_code": context.get("stock_code"),
                         "decision_snapshot_id": context.get("snapshot_id"),
+                        "source_event_stage": capture.get("source_event_stage"),
+                        "zero_base_source_sha256": capture.get("zero_base_source_sha256"),
+                        "zero_base_route": capture.get("zero_base_route"),
+                        "outcome_request_code": context.get("outcome_request_code"),
+                        "outcome_stop_owner": context.get("outcome_stop_owner"),
+                        "outcome_stop_distance_pct": context.get("adverse_pct"),
                         "effective_venue": cohort[0],
                         "session_bucket": cohort[1],
                         "bundle_sha256": capture.get("bundle_sha256"),
@@ -4708,7 +5157,8 @@ def load_machine_observation_rows(
     }
     population["partitions"] = [partition for part in capture_populations for partition in part["partitions"]]
     population["economic_exclusions_do_not_erase_capture_population"] = True
-    return result, {**dict(counts), "microstructure_capture_population": population}
+    return result, {**dict(counts), "microstructure_capture_population": population,
+                    "completed_price_cache_receipts": completed_price_receipts}
 
 
 def _machine_ai_natural_source_receipt(data_root: Path, target_date: str) -> dict:
@@ -9652,8 +10102,12 @@ def main(argv: list[str] | None = None) -> int:
                 rows, counts = [], {'source_gap': source_receipt.get('status')}
             else:
                 cost_source = ensure_machine_economic_reference(data_root=args.data_root, target_date=args.target_date) if args.write else {}
+                price_fetcher, price_as_of = _postclose_machine_completed_fetcher(
+                    args.target_date, write=args.write)
                 rows, counts = load_machine_observation_rows(args.data_root, target_date=args.target_date,
-                    independent_machine=True, minimum_source_date='2026-09-22')
+                    independent_machine=True, minimum_source_date='2026-09-22',
+                    completed_price_fetcher=price_fetcher,
+                    completed_price_as_of=price_as_of)
             result = build_winrate_policy_report(rows,
                 source_receipt=source_receipt,
                 target_date=args.target_date, data_root=args.data_root,
@@ -9694,7 +10148,12 @@ def main(argv: list[str] | None = None) -> int:
             from src.engine.scalping.mechanistic_entry_runtime_policy import load_effective
             load_effective(data_root=args.data_root, target_date=datetime.now(KST).date().isoformat())
             cost_source = ensure_machine_economic_reference(data_root=args.data_root, target_date=args.target_date) if args.write else {}
-            rows, source_counts = load_machine_observation_rows(args.data_root, target_date=args.target_date, independent_machine=True)
+            price_fetcher, price_as_of = _postclose_machine_completed_fetcher(
+                args.target_date, write=args.write)
+            rows, source_counts = load_machine_observation_rows(
+                args.data_root, target_date=args.target_date, independent_machine=True,
+                completed_price_fetcher=price_fetcher,
+                completed_price_as_of=price_as_of)
             result = build_machine_policy_report(rows,
                 source_receipt=_machine_ai_natural_source_receipt(args.data_root, args.target_date),
                 target_date=args.target_date, data_root=args.data_root, limit=args.search_limit,

@@ -723,6 +723,43 @@ def test_stage_failure_does_not_cancel_independent_machine(stage_environment, fa
     assert h.stage_receipt_issues(report, day, 'main_machine_policy', code_hash='new-code') == ['main_machine_policy:code_changed']
 
 
+def test_machine_stage_validates_bound_completed_price_generation(stage_environment):
+    from src.engine.scalping.ai_action_outcome_calibration import _with_artifact_content_sha256
+
+    h, day, report_dir, run, _produce = stage_environment
+    assert run('main_machine_policy')['status'] == 'succeeded'
+    cache_path = (report_dir / 'machine_completed_price_source'
+                  / f'machine_completed_price_source_{day}.json')
+    cache_path.parent.mkdir(parents=True)
+    cache = _with_artifact_content_sha256({
+        'schema': 'machine_completed_price_source_v1', 'source_date': day,
+        'prices': [], 'provenance': [],
+    })
+    cache_path.write_text(json.dumps(cache))
+    paths = h.stage_artifacts(report_dir, day, 'main_machine_policy')
+    machine = json.loads(paths['machine_policy'].read_text())
+    machine['observation_source_counts'] = {'completed_price_cache_receipts': [{
+        'source_date': day, 'path': str(cache_path),
+        'artifact_content_sha256': cache['artifact_content_sha256'],
+    }]}
+    machine = _with_artifact_content_sha256(machine)
+    paths['machine_policy'].write_text(json.dumps(machine))
+    terminal = json.loads(paths['machine_policy_terminal'].read_text())
+    terminal['report_sha256'] = machine['artifact_content_sha256']
+    paths['machine_policy_terminal'].write_text(json.dumps(_with_artifact_content_sha256(terminal)))
+    assert h._stage_output_issues(report_dir, day, 'main_machine_policy') == []
+    cache['prices'].append({'stock_code': '005930'})
+    cache_path.write_text(json.dumps(_with_artifact_content_sha256(cache)))
+    assert 'main_machine_policy:completed_price_source_generation_changed' in h._stage_output_issues(
+        report_dir, day, 'main_machine_policy')
+    machine['observation_source_counts']['completed_price_cache_receipts'] = [{
+        'source_date': day, 'path': str(cache_path), 'status': 'collected',
+    }]
+    paths['machine_policy'].write_text(json.dumps(_with_artifact_content_sha256(machine)))
+    assert 'main_machine_policy:completed_price_source_receipts_invalid' in h._stage_output_issues(
+        report_dir, day, 'main_machine_policy')
+
+
 def test_stage_prerequisites_and_changed_generation(stage_environment):
     h, day, report, run, produce = stage_environment
     deferred = run('machine_timing')

@@ -90,6 +90,25 @@ def test_machine_observation_keeps_exact_input_without_provider_request(
     assert not (tmp_path / "ai_decision_outcomes").exists()
 
 
+def test_machine_capture_preserves_zero_base_source_lineage(monkeypatch, tmp_path):
+    _enable(monkeypatch, tmp_path)
+    result = trace.capture_machine_observation(
+        exact_payload={"stock_code": "005930", "best_ask": 10000,
+                       "effective_venue": "KRX", "session_bucket": "KRX_REGULAR",
+                       "snapshot_id": "snapshot-1"},
+        setup_evidence={"setup_state": "WAIT_CONFIRMATION"},
+        assessment={"action": "RECHECK"}, bundle_sha256="b" * 64,
+        metadata={"source_event_stage": "zero_base_probe_machine_only_v1",
+                  "zero_base_source_sha256": "a" * 64,
+                  "zero_base_route": "krx_nxt_integrated"},
+    )
+    row = _rows(trace._payload_path(trace._date_text()))[0]
+    assert result["machine_observation_sha256"] == row["machine_observation_sha256"]
+    assert row["source_event_stage"] == "zero_base_probe_machine_only_v1"
+    assert row["zero_base_source_sha256"] == "a" * 64
+    assert row["zero_base_route"] == "krx_nxt_integrated"
+
+
 def test_revision_receipt_is_bounded_exact_attempt_and_capture_only():
     state = {}
     first = {"machine_capture_status": "captured", "machine_observation_sha256": "a" * 64,

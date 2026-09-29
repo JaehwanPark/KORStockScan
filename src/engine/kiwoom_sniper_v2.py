@@ -8582,6 +8582,7 @@ def _zero_base_attach_receipt(result, *, outcome, reason, record_id=None):
                 "zero_base_route": claim.get("route"),
                 "zero_base_source_sha256": claim.get("source_sha256"),
                 "zero_base_machine_bundle_sha256": (result or {}).get("machine_bundle_sha256"),
+                "machine_observation_sha256": (result or {}).get("machine_observation_sha256"),
                 "record_id": record_id,
                 "actual_order_submitted": False,
                 "broker_order_forbidden": True,
@@ -8603,6 +8604,9 @@ def _zero_base_inbox_attach_receipt(payload, *, outcome, reason):
             },
             "machine_bundle_sha256": (payload or {}).get(
                 "zero_base_probe_machine_bundle_sha256"
+            ),
+            "machine_observation_sha256": (payload or {}).get(
+                "zero_base_probe_machine_observation_sha256"
             ),
         },
         outcome=outcome, reason=reason, record_id=(payload or {}).get("record_id"),
@@ -8775,6 +8779,8 @@ def handle_zero_base_probe_requested(request):
                         else first
                     )
                     result["recheck_attempts"] = 2
+                    result["recheck_first_machine_observation_sha256"] = first.get(
+                        "machine_observation_sha256")
                     result["recheck_first_reason"] = first.get("reason")
                     result["recheck_first_ws_wait_ms"] = (
                         (first.get("ws_observation") or {}).get("wait_ms")
@@ -8959,6 +8965,8 @@ def handle_zero_base_machine_enter(result):
         "market_session_bucket": session_fields.get("market_session_bucket"),
         "zero_base_pending_db": True,
         "zero_base_probe_machine_bundle_sha256": result.get("machine_bundle_sha256"),
+        "zero_base_probe_machine_observation_sha256": result.get(
+            "machine_observation_sha256"),
         "zero_base_probe_trade_epoch": result.get("probe_trade_epoch"),
         "zero_base_probe_depth_epoch": result.get("probe_depth_epoch"),
     }

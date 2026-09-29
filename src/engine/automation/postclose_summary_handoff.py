@@ -1215,6 +1215,41 @@ def _stage_output_issues(report_dir, day, stage):
     if stage == 'main_machine_policy':
         paths = stage_artifacts(report_dir, day, stage)
         report, terminal = _load_json(paths['machine_policy']), _load_json(paths['machine_policy_terminal'])
+        from src.engine.scalping.ai_action_outcome_calibration import (
+            MACHINE_COMPLETED_PRICE_CACHE_SCHEMA, _artifact_content_sha256_valid,
+        )
+        source_counts = report.get('observation_source_counts') or {}
+        if not isinstance(source_counts, dict):
+            errors.append(f'{stage}:completed_price_source_receipts_invalid')
+            source_counts = {}
+        receipts = source_counts.get('completed_price_cache_receipts') or []
+        if not isinstance(receipts, list):
+            errors.append(f'{stage}:completed_price_source_receipts_invalid')
+            receipts = []
+        for receipt in receipts:
+            if not isinstance(receipt, dict):
+                errors.append(f'{stage}:completed_price_source_receipts_invalid')
+                continue
+            if not receipt.get('artifact_content_sha256'):
+                if receipt.get('status') not in {'cache_missing', 'cache_missing_or_invalid'}:
+                    errors.append(f'{stage}:completed_price_source_receipts_invalid')
+                continue
+            source_day = receipt.get('source_date')
+            if not isinstance(source_day, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}', source_day) or source_day > day:
+                errors.append(f'{stage}:completed_price_source_date_invalid')
+                continue
+            expected_path = (Path(report_dir).parent / 'report' / 'machine_completed_price_source'
+                             / f'machine_completed_price_source_{source_day}.json')
+            if (not isinstance(receipt.get('path'), str)
+                or Path(receipt['path']).resolve() != expected_path.resolve()):
+                errors.append(f'{stage}:completed_price_source_path_invalid')
+                continue
+            cache = _load_json(expected_path)
+            if (cache.get('schema') != MACHINE_COMPLETED_PRICE_CACHE_SCHEMA
+                or cache.get('source_date') != source_day
+                or not _artifact_content_sha256_valid(cache)
+                or cache.get('artifact_content_sha256') != receipt['artifact_content_sha256']):
+                errors.append(f'{stage}:completed_price_source_generation_changed')
         if (terminal.get('report_sha256') != report.get('artifact_content_sha256')
             or terminal.get('policy_sha256') != report.get('policy_sha256')):
             errors.append(f'{stage}:report_terminal_binding_invalid')

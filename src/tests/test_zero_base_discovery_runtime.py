@@ -39,12 +39,18 @@ def _panel(_token):
 def test_runtime_durable_claim_machine_enter_and_late_result_rejection(tmp_path):
     bus = Bus()
     state = tmp_path / "2026-09-28.json"
-    runtime = ZeroBaseDiscoveryRuntime(event_bus=bus, session_date="2026-09-28", state_path=state)
+    claim_receipts = []
+    runtime = ZeroBaseDiscoveryRuntime(
+        event_bus=bus, session_date="2026-09-28", state_path=state,
+        claim_receipt_emitter=lambda *args, **kwargs: claim_receipts.append((args, kwargs)),
+    )
     summary = runtime.scan_once("token", fetcher=_panel, now_epoch=T0 + 1)
     assert summary["probe_requested_count"] == 1
     request = next(payload for event, payload in bus.events if event == PROBE_REQUEST_EVENT)
     assert state.exists()
     assert request["claim"]["source_kind"] == "activity"
+    assert claim_receipts[0][0] == ("zero_base_probe_claim",)
+    assert claim_receipts[0][1]["fields"]["zero_base_source_sha256"] == "a" * 64
 
     bus.publish(PROBE_RESULT_EVENT, {
         **request, "result": "assessed", "machine_action": "ENTER_NOW",

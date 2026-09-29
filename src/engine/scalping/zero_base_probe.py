@@ -464,12 +464,18 @@ def run_zero_base_probe(
             result["reason"] = str(machine.get("machine_evaluation_status") or "machine_not_assessed")
         elif action == "SOURCE_INVALID":
             result["reason"] = "machine_source_invalid"
+            result["machine_action"] = action
+            result["machine_capture_status"] = machine.get("machine_capture_status")
+            result["machine_observation_sha256"] = machine.get("machine_observation_sha256")
+            result["machine_observation_id"] = machine.get("machine_observation_sha256")
         elif action in {"ENTER_NOW", "RECHECK", "BLOCK"}:
             result["result"] = "assessed"
             result["reason"] = str((machine.get("mechanistic_entry_assessment") or {}).get("reason") or "machine_assessed")
             result["machine_action"] = action
             result["machine_bundle_sha256"] = machine.get("machine_bundle_sha256")
-            result["machine_observation_id"] = machine.get("machine_observation_id")
+            result["machine_capture_status"] = machine.get("machine_capture_status")
+            result["machine_observation_sha256"] = machine.get("machine_observation_sha256")
+            result["machine_observation_id"] = machine.get("machine_observation_sha256")
             result["probe_price"] = ws_data["curr"]
             result["probe_trade_epoch"] = ws_data["zero_base_probe_trade_epoch"]
             result["probe_depth_epoch"] = ws_data["zero_base_probe_depth_epoch"]

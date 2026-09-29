@@ -1164,9 +1164,15 @@ def capture_machine_observation(
         }
     )
     context, context_redacted = _sanitize(context)
-    redacted = redacted or context_redacted
+    lineage, lineage_redacted = _sanitize({
+        "source_event_stage": (metadata or {}).get("source_event_stage"),
+        "zero_base_source_sha256": (metadata or {}).get("zero_base_source_sha256"),
+        "zero_base_route": (metadata or {}).get("zero_base_route"),
+    })
+    redacted = redacted or context_redacted or lineage_redacted
     body = {
         "schema": "mechanistic_entry_observation_v1",
+        **lineage,
         "runtime_consumption": dict(pid=os.getpid(), cwd=str(Path.cwd()),
             process_start_ticks=Path('/proc/self/stat').read_text().split(') ', 1)[1].split()[19],
             bundle_sha256=bundle_sha256, ai_component_sha256=(metadata or {}).get('ai_component_sha256'), policy_sha256=(assessment.get('strategy_selection') or {}).get('policy_sha256'),

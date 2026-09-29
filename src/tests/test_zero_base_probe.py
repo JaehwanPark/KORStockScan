@@ -88,7 +88,8 @@ def test_integrated_probe_never_reuses_plain_route_subscription():
     assert result["result"] == "source_unavailable"
 
 
-def test_machine_only_probe_passes_only_exact_fresh_input_and_releases_ws(monkeypatch):
+@pytest.mark.parametrize("action", ["ENTER_NOW", "SOURCE_INVALID"])
+def test_machine_only_probe_passes_only_exact_fresh_input_and_releases_ws(monkeypatch, action):
     import src.engine.scalping.zero_base_probe as module
 
     monkeypatch.setattr(module, "resolve_entry_candle_session", lambda: "KRX_REGULAR")
@@ -118,8 +119,10 @@ def test_machine_only_probe_passes_only_exact_fresh_input_and_releases_ws(monkey
         def analyze_target(self, *args, **kwargs):
             machine_calls.append(kwargs)
             return {"machine_evaluation_status": "assessed",
-                    "entry_mechanistic_action": "ENTER_NOW",
+                    "entry_mechanistic_action": action,
                     "machine_bundle_sha256": "a" * 64,
+                    "machine_capture_status": "captured",
+                    "machine_observation_sha256": "c" * 64,
                     "mechanistic_entry_assessment": {"reason": "test_pass"}}
 
     result = run_zero_base_probe(
@@ -139,13 +142,38 @@ def test_machine_only_probe_passes_only_exact_fresh_input_and_releases_ws(monkey
         release_ws=lambda code, item: calls.append(("release", code, item)),
         ws_wait_min_exact_0b_count=0,
     )
-    assert result["result"] == "assessed"
-    assert result["machine_action"] == "ENTER_NOW"
+    assert result["result"] == ("assessed" if action == "ENTER_NOW" else "source_unavailable")
+    assert result["machine_action"] == action
+    assert result["machine_observation_id"] == "c" * 64
+    assert result["machine_observation_sha256"] == "c" * 64
+    assert result["machine_capture_status"] == "captured"
     assert result["actual_order_submitted"] is False
     assert machine_calls[0]["machine_only"] is True
     assert context_calls[0]["source_meta"]["multi_timeframe_auxiliary_fetch"] is False
     assert context_calls[0]["include_investor_source"] is False
     assert calls[-1] == ("release", "123456", "123456")
+
+
+def test_probe_attach_receipt_keeps_capture_digest_without_order_authority(monkeypatch):
+    from src.engine import kiwoom_sniper_v2 as sniper
+
+    emitted = []
+    monkeypatch.setattr(sniper, "emit_pipeline_event", lambda *args, **kwargs:
+                        emitted.append((args, kwargs)))
+    sniper._zero_base_attach_receipt({
+        "claim": {"code": "005930", "route": "krx_nxt_integrated",
+                  "source_sha256": "a" * 64},
+        "machine_observation_sha256": "b" * 64,
+    }, outcome="attached", reason="committed")
+    assert emitted[-1][0][3] == "zero_base_watch_attach"
+    assert emitted[-1][1]["fields"]["machine_observation_sha256"] == "b" * 64
+    assert emitted[-1][1]["fields"]["actual_order_submitted"] is False
+    sniper._zero_base_inbox_attach_receipt({
+        "code": "005930", "market_data_route": "krx_nxt_integrated",
+        "source_signature": "ZERO_BASE_DISCOVERY:" + "a" * 64,
+        "zero_base_probe_machine_observation_sha256": "b" * 64,
+    }, outcome="attached", reason="committed")
+    assert emitted[-1][1]["fields"]["machine_observation_sha256"] == "b" * 64
 
 
 def test_ready_ws_still_observes_minimum_warmup():

@@ -1969,6 +1969,37 @@ def test_kiwoom_completed_minute_loader_excludes_forming_and_wrong_session_bars(
     assert provenance[0]["target_completed_bar_count"] == 1
 
 
+def test_completed_bar_loader_preserves_exact_machine_request_route():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from src.engine.scalping import ai_decision_quality as quality
+
+    calls = []
+    def fetcher(code, request_code):
+        calls.append((code, request_code))
+        return ([{"source_timestamp": "20260727100100", "현재가": 101,
+                  "고가": 102, "저가": 100}], {"api_id": "ka10080"})
+
+    prices, provenance = quality.load_kiwoom_completed_minute_price_rows(
+        target_date="2026-07-27",
+        labels=[{"stock_code": "005930", "effective_venue": "KRX",
+                 "session_bucket": "KRX_REGULAR", "market_data_route": "krx_nxt_integrated"}],
+        as_of=datetime(2026, 7, 27, 10, 3, tzinfo=ZoneInfo("Asia/Seoul")),
+        fetcher=fetcher,
+        request_code_resolver=lambda row: row["stock_code"] + "_AL",
+    )
+    assert calls == [("005930", "005930_AL")]
+    assert prices[0]["effective_venue"] == "KRX"
+    assert prices[0]["source_request_code"] == "005930_AL"
+    assert provenance[0]["request_code"] == "005930_AL"
+    label = {"effective_venue": "KRX", "session_bucket": "KRX_REGULAR",
+             "outcome_request_code": "005930_AL"}
+    assert quality._same_route(label, prices[0])
+    assert not quality._same_route(label, {**prices[0], "source_request_code": "005930"})
+    assert not quality._same_route(label, {k: v for k, v in prices[0].items()
+                                           if k != "source_request_code"})
+
+
 def test_outcome_price_merge_prefers_kiwoom_for_same_route_minute():
     primary = [
         {
@@ -2429,6 +2460,19 @@ def test_kiwoom_completed_minute_loader_accepts_nxt_overlap_session():
     )
 
     assert prices[0]["session_bucket"] == "NXT_REGULAR_OVERLAP"
+
+
+def test_pipeline_probe_receipts_collected_in_existing_price_scan():
+    receipts = []
+    prices, lifecycle = quality.load_pipeline_price_and_lifecycle_rows(
+        [{"emitted_at": "2026-09-29T10:00:00+09:00",
+          "stock_code": "005930", "stage": "zero_base_probe_result",
+          "fields": {"zero_base_probe_result": "assessed",
+                     "machine_observation_sha256": "a" * 64}}],
+        stock_codes={"000001"}, probe_receipts=receipts,
+    )
+    assert prices == [] and lifecycle == []
+    assert receipts[0]["fields"]["machine_observation_sha256"] == "a" * 64
 
 
 def test_pipeline_lifecycle_preserves_entry_price_trace_for_order_correlation():

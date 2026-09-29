@@ -3478,6 +3478,7 @@ def load_pipeline_price_and_lifecycle_rows(
     stock_codes: set[str] | None = None,
     window_start: datetime | None = None,
     window_end: datetime | None = None,
+    probe_receipts: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     price_buckets: dict[tuple[str, str, str, datetime], dict[str, Any]] = {}
     post_block_meta_by_evaluation: dict[str, dict[str, Any]] = {}
@@ -3489,6 +3490,22 @@ def load_pipeline_price_and_lifecycle_rows(
         timestamp = _parse_ts(row.get("emitted_at") or fields.get("event_ts"))
         code = _normalize_stock_code(row.get("stock_code") or fields.get("stock_code"))
         stage = str(row.get("stage") or "")
+        if probe_receipts is not None and stage in {
+            "zero_base_probe_claim", "zero_base_probe_result",
+            "zero_base_watch_attach"
+        }:
+            probe_receipts.append({
+                "stage": stage, "stock_code": code,
+                "emitted_at": timestamp.isoformat() if timestamp else None,
+                "fields": {key: fields.get(key) for key in (
+                    "zero_base_source_sha256", "zero_base_route",
+                    "zero_base_claim_count",
+                    "zero_base_probe_result", "entry_mechanistic_action",
+                    "machine_observation_sha256",
+                    "recheck_first_machine_observation_sha256",
+                    "machine_capture_status", "zero_base_attach_outcome",
+                )},
+            })
         if stock_codes is not None and code not in stock_codes:
             continue
         if (
@@ -3957,6 +3974,7 @@ def _venue_session_consistent(effective_venue: Any, session_bucket: Any) -> bool
         "KRX": {"KRX_REGULAR"},
         "SOR": {"KRX_REGULAR"},
         "KRX_NXT_INTEGRATED": {"KRX_NXT_AFTERMARKET"},
+        "PREMARKET_KRX_LIKE": {"PREMARKET_KRX_LIKE", "NXT_PREMARKET"},
         "NXT": {
             "NXT_PREMARKET",
             "PREMARKET_KRX_LIKE",
@@ -3989,6 +4007,7 @@ def load_kiwoom_completed_minute_price_rows(
     labels: Iterable[dict[str, Any]],
     as_of: datetime,
     fetcher: Callable[[str, str], tuple[list[dict[str, Any]], dict[str, Any]]],
+    request_code_resolver: Callable[[dict[str, Any]], str | None] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Load completed ka10080 bars for exact label routes.
 
@@ -3998,27 +4017,27 @@ def load_kiwoom_completed_minute_price_rows(
     freshness or order authority.
     """
 
-    routes = sorted(
-        {
-            (
-                _normalize_stock_code(row.get("stock_code")),
-                _venue(row.get("effective_venue")),
-                _session(row.get("session_bucket")),
-            )
-            for row in labels
-            if _normalize_stock_code(row.get("stock_code"))
-            and _venue(row.get("effective_venue"))
-            and _session(row.get("session_bucket"))
-        }
-    )
+    routes = sorted({
+        (
+            _normalize_stock_code(row.get("stock_code")),
+            _venue(row.get("effective_venue")),
+            _session(row.get("session_bucket")),
+            (request_code_resolver(row) if request_code_resolver is not None
+             else _request_code_for_venue(row.get("stock_code"), row.get("effective_venue"))),
+        )
+        for row in labels
+        if _normalize_stock_code(row.get("stock_code"))
+        and _venue(row.get("effective_venue"))
+        and _session(row.get("session_bucket"))
+    }, key=lambda route: (route[0], route[1], route[2], route[3] or ""))
     target_compact = target_date.replace("-", "")
     current_minute = as_of.replace(second=0, microsecond=0)
     prices: list[dict[str, Any]] = []
     provenance: list[dict[str, Any]] = []
     fetch_cache: dict[tuple[str, str], tuple[list[dict[str, Any]], dict[str, Any]]] = {}
-    for code, venue, session in routes:
-        request_code = _request_code_for_venue(code, venue)
-        if request_code is None or not _venue_session_consistent(venue, session):
+    for code, venue, session, request_code in routes:
+        if (request_code not in {code, f"{code}_NX", f"{code}_AL"}
+            or not _venue_session_consistent(venue, session)):
             provenance.append(
                 {
                     "stock_code": code,
@@ -4033,8 +4052,9 @@ def load_kiwoom_completed_minute_price_rows(
                     "continuation_observed": False,
                     "continuation_page_limit_reached": False,
                     "fetch_error": (
-                        "unsupported_effective_venue"
-                        if request_code is None
+                        "unsupported_effective_venue" if request_code is None
+                        else "unsupported_or_conflicting_request_code"
+                        if request_code not in {code, f"{code}_NX", f"{code}_AL"}
                         else "venue_session_conflict"
                     ),
                     "source_quality_status": "source_quality_blocked",
@@ -4111,6 +4131,8 @@ def load_kiwoom_completed_minute_price_rows(
                 "session_bucket": session,
                 "request_code": request_code,
                 "api_id": source_meta.get("api_id") or "ka10080",
+                "response_request_code": source_meta.get("request_code"),
+                "request_base_dt": source_meta.get("request_base_dt"),
                 "received_count": source_meta.get("received_count"),
                 "target_completed_bar_count": len(route_prices),
                 "coverage_start": min(timestamps) if timestamps else None,
@@ -4417,6 +4439,11 @@ def _same_route(label: dict[str, Any], price: dict[str, Any]) -> bool:
     session = _session(label.get("session_bucket"))
     observed_session = _session(price.get("session_bucket"))
     if session and (not observed_session or session != observed_session):
+        return False
+    exact_request_code = str(label.get("outcome_request_code") or "").strip().upper()
+    if exact_request_code and exact_request_code != str(
+        price.get("source_request_code") or ""
+    ).strip().upper():
         return False
     return _price_source_usable(price)
 

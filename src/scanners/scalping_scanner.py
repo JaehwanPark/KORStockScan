@@ -6865,6 +6865,7 @@ def run_zero_base_scanner(*, token, event_bus, is_test_mode=False):
             runtime = ZeroBaseDiscoveryRuntime(
                 event_bus=event_bus,
                 session_date=session_date,
+                claim_receipt_emitter=_zero_base_log_event,
                 state_path=(
                     DATA_DIR / "runtime" / "zero_base_discovery_queue_integrated_v2"
                     / f"{session_date}.json"
@@ -6905,6 +6906,10 @@ def run_zero_base_scanner(*, token, event_bus, is_test_mode=False):
                     },
                     "entry_mechanistic_action": result.get("machine_action") or "-",
                     "machine_bundle_sha256": result.get("machine_bundle_sha256") or "-",
+                    "machine_capture_status": result.get("machine_capture_status"),
+                    "machine_observation_sha256": result.get("machine_observation_sha256"),
+                    "recheck_first_machine_observation_sha256": result.get(
+                        "recheck_first_machine_observation_sha256"),
                 },
             )
         active_window = _active_scalping_buy_window(now)

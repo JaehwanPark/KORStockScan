@@ -540,6 +540,7 @@ def test_machine_capture_matures_with_existing_cost_owner_without_ai(
             "effective_venue": "KRX",
             "session_bucket": "KRX_REGULAR",
             "source_quality": "pass",
+            "source_request_code": "005930",
         }
         for i in range(1, 21)
     ]
@@ -559,6 +560,13 @@ def test_machine_capture_matures_with_existing_cost_owner_without_ai(
             "best_ask": 10000,
             "effective_venue": "KRX",
             "session_bucket": "KRX_REGULAR",
+            "snapshot_id": "snapshot-cost-owner", "broker_route": "KRX",
+            "market_data_route": "krx_only",
+            "ai_market_snapshot_v1": {
+                "stock_code": "005930", "effective_venue": "KRX",
+                "session_bucket": "KRX_REGULAR",
+                "snapshot_id": "snapshot-cost-owner", "broker_route": "KRX",
+                "market_data_route": "krx_only"},
             "conservative_execution_cost_pct": 0.02,
         },
         setup_evidence=setup,
@@ -587,6 +595,259 @@ def test_machine_capture_matures_with_existing_cost_owner_without_ai(
         "conservative_execution_cost_pct"
     ] == pytest.approx(0.20)
     assert rows[0]["machine_action"] == "RECHECK"
+
+
+def test_machine_nonentry_completed_bars_survive_probe_ws_removal_and_cache(
+    monkeypatch, tmp_path
+):
+    from datetime import datetime
+    from src.engine.scalping import ai_decision_trace as trace
+    from src.tests.test_ai_decision_trace import _enable
+    from src.tests.test_entry_setup_evidence import _hierarchy_case
+
+    _enable(monkeypatch, tmp_path)
+    day = "2026-09-29"
+    now = datetime.fromisoformat(day + "T10:00:00+09:00")
+    monkeypatch.setattr(trace, "_now", lambda: now)
+    monkeypatch.setattr(calibration, "_hierarchy_cost_profiles", lambda *_args: {
+        "005930": {"profile_id": "reviewed", "economic_source_sha256": "a" * 64,
+                   "buy_fee_bps": 1, "sell_fee_bps": 1,
+                   "statutory_sell_tax_bps": 15, "uncertainty_buffer_bps": 1},
+    })
+    from src.engine.scalping import ai_decision_quality as quality
+    monkeypatch.setattr(quality, "load_pipeline_price_and_lifecycle_rows",
+                        lambda *_args, **_kwargs: ([], []))
+    capture = trace.capture_machine_observation(
+        exact_payload={
+            "stock_code": "005930", "best_ask": 10000,
+            "snapshot_id": "snapshot-1", "effective_venue": "KRX",
+            "session_bucket": "KRX_REGULAR", "broker_route": "SOR",
+            "market_data_route": "krx_nxt_integrated",
+            "ai_market_snapshot_v1": {
+                "stock_code": "005930", "effective_venue": "KRX",
+                "session_bucket": "KRX_REGULAR",
+                "snapshot_id": "snapshot-1", "broker_route": "SOR",
+                "market_data_route": "krx_nxt_integrated"},
+            "conservative_execution_cost_pct": 0.02,
+        },
+        setup_evidence=_hierarchy_case()[0],
+        assessment={"action": "RECHECK"}, bundle_sha256="b" * 64,
+        metadata={"source_event_stage": "zero_base_probe_machine_only_v1",
+                  "zero_base_source_sha256": "c" * 64,
+                  "zero_base_route": "krx_nxt_integrated"},
+    )
+    assert capture["machine_capture_status"] == "captured"
+    calls = []
+    def fetcher(code, request_code):
+        calls.append((code, request_code))
+        return ([{"source_timestamp": day.replace("-", "") + f"10{i:02d}00",
+                  "현재가": 10050, "고가": 10055, "저가": 10000}
+                 for i in range(1, 11)], {"api_id": "ka10080",
+                                            "request_code": request_code,
+                                            "request_base_dt": day.replace("-", "")})
+
+    rows, census = calibration.load_machine_observation_rows(
+        tmp_path, target_date=day, independent_machine=True,
+        completed_price_fetcher=fetcher,
+        completed_price_as_of=datetime.fromisoformat(day + "T20:10:00+09:00"),
+    )
+    assert calls == [("005930", "005930_AL")]
+    assert census["completed_price_rows"] == 10
+    assert census["evaluable"] == 1
+    assert rows[0]["machine_action"] == "RECHECK"
+    assert rows[0]["source_event_stage"] == "zero_base_probe_machine_only_v1"
+    assert rows[0]["outcome_request_code"] == "005930_AL"
+    assert rows[0]["outcome_stop_owner"] == "fixed_counterfactual_entry_boundary"
+    assert rows[0]["outcome_stop_distance_pct"] == quality.ENTRY_PATH_ADVERSE_PCT
+    assert rows[0]["entry_quality_contract_valid"] is True
+    cache = (tmp_path / "report/machine_completed_price_source"
+             / f"machine_completed_price_source_{day}.json")
+    assert cache.is_file()
+    again, census_again = calibration.load_machine_observation_rows(
+        tmp_path, target_date=day, independent_machine=True,
+        completed_price_fetcher=lambda *_args: pytest.fail("cache not reused"),
+        completed_price_as_of=datetime.fromisoformat(day + "T20:11:00+09:00"),
+    )
+    assert census_again["completed_price_source_verified_cache_reused"] == 1
+    assert again[0]["entry_quality_contract_valid"] is True
+    archive = tmp_path / "ai_decision_payloads" / f"ai_decision_payloads_{day}.jsonl"
+    original_line = archive.read_text().splitlines()[0]
+    with archive.open("a") as handle:
+        handle.write(original_line + "\n")
+    deduped, dedupe_census = calibration.load_machine_observation_rows(
+        tmp_path, target_date=day, independent_machine=True,
+    )
+    assert dedupe_census["duplicate_machine_capture_collapsed"] == 1
+    assert len(deduped) == 1
+    assert dedupe_census["completed_price_source_verified_cache_reused"] == 1
+    cache.unlink()
+    monkeypatch.setattr(quality, "load_pipeline_price_and_lifecycle_rows",
+                        lambda *_args, **_kwargs: ([{
+                            "stock_code": "005930", "effective_venue": "KRX",
+                            "session_bucket": "KRX_REGULAR",
+                            "timestamp": day + "T10:01:00+09:00", "price": 10050,
+                            "source_quality": "pass",
+                        }], []))
+    missing, missing_census = calibration.load_machine_observation_rows(
+        tmp_path, target_date=day, independent_machine=True,
+    )
+    assert missing_census["completed_price_source_cache_missing"] == 1
+    assert missing[0]["outcome_request_code"] == "005930_AL"
+    assert missing[0]["entry_quality_contract_valid"] is False
+
+
+@pytest.mark.parametrize("venue,session,route,broker,expected", [
+    ("PREMARKET_KRX_LIKE", "PREMARKET_KRX_LIKE", "nxt_only", "NXT", "005930_NX"),
+    ("NXT", "NXT_PREMARKET", "nxt_only", "NXT", "005930_NX"),
+    ("KRX", "KRX_REGULAR", "krx_nxt_integrated", "SOR", "005930_AL"),
+    ("KRX_NXT_INTEGRATED", "KRX_NXT_AFTERMARKET", "krx_nxt_integrated", "SOR", "005930_AL"),
+    ("KRX", "KRX_REGULAR", "nxt_only", "SOR", None),
+])
+def test_machine_outcome_exact_request_route_requires_snapshot_proof(
+    venue, session, route, broker, expected
+):
+    capture = {"label_context": {
+        "stock_code": "005930", "effective_venue": venue,
+        "session_bucket": session, "broker_route": broker,
+        "market_data_route": route, "snapshot_id": "snapshot-1"},
+        "source": {"exact_payload": {"ai_market_snapshot_v1": {
+            "stock_code": "005930", "effective_venue": venue,
+            "session_bucket": session, "snapshot_id": "snapshot-1", "market_data_route": route,
+            "broker_route": broker}}}}
+    assert calibration._machine_outcome_request_code(capture) == expected
+    direct = {**capture, "source": {"exact_payload": {
+        "schema": "ai_market_snapshot_v1",
+        **capture["source"]["exact_payload"]["ai_market_snapshot_v1"],
+    }}}
+    assert calibration._machine_outcome_request_code(direct) == expected
+    if venue == "PREMARKET_KRX_LIKE":
+        assert calibration._machine_capture_cost_reference_venue(
+            direct, (venue, session)) == "NXT"
+    if venue == "KRX_NXT_INTEGRATED":
+        assert calibration._machine_capture_cost_reference_venue(
+            direct, (venue, session)) == "SOR"
+    capture["source"]["exact_payload"]["ai_market_snapshot_v1"]["snapshot_id"] = "other"
+    assert calibration._machine_outcome_request_code(capture) is None
+
+
+def test_machine_completed_price_gap_isolated_by_session_not_request_code(
+    monkeypatch, tmp_path
+):
+    from datetime import datetime
+
+    day = '2026-09-29'
+    captures = []
+    for session in ('NXT_PREMARKET', 'NXT_AFTERMARKET'):
+        captures.append({
+            'machine_observation_sha256': session,
+            'captured_at': day + 'T08:00:00+09:00',
+            'label_context': {
+                'stock_code': '005930', 'effective_venue': 'NXT',
+                'session_bucket': session, 'broker_route': 'NXT',
+                'market_data_route': 'nxt_only', 'snapshot_id': 's1',
+            },
+            'source': {
+                'assessment': {'action': 'RECHECK'},
+                'exact_payload': {'ai_market_snapshot_v1': {
+                    'stock_code': '005930', 'effective_venue': 'NXT',
+                    'session_bucket': session,
+                    'snapshot_id': 's1', 'broker_route': 'NXT',
+                    'market_data_route': 'nxt_only',
+                }},
+            },
+        })
+    calls = []
+    def fetcher(code, request_code):
+        calls.append((code, request_code))
+        return ([{'source_timestamp': '20260929081000', '현재가': 10000,
+                  '고가': 10000, '저가': 10000}], {
+                      'api_id': 'ka10080', 'request_code': request_code,
+                      'request_base_dt': day.replace('-', ''),
+                  })
+
+    rows, receipt, _codes = calibration._machine_completed_price_rows(
+        data_root=tmp_path, day=day, observations=captures,
+        fetcher=fetcher, as_of=datetime.fromisoformat(day + 'T20:10:00+09:00'),
+    )
+    assert calls == [('005930', '005930_NX')]
+    assert receipt['status'] == 'partial_source_gap'
+    assert receipt['rejected_route_count'] == 1
+    assert len(rows) == 1 and rows[0]['session_bucket'] == 'NXT_PREMARKET'
+    (tmp_path / 'report/machine_completed_price_source'
+     / f'machine_completed_price_source_{day}.json').unlink()
+    monkeypatch.setattr(calibration, 'MACHINE_COMPLETED_PRICE_MAX_ROUTES', 1)
+    _limited_rows, limited, _codes = calibration._machine_completed_price_rows(
+        data_root=tmp_path, day=day, observations=captures,
+        fetcher=fetcher, as_of=datetime.fromisoformat(day + 'T20:10:00+09:00'),
+    )
+    assert limited['status'] == 'partial_source_gap'
+    assert limited['deferred_route_count'] == 1
+    (tmp_path / 'report/machine_completed_price_source'
+     / f'machine_completed_price_source_{day}.json').unlink()
+    mismatched_rows, mismatched, _codes = calibration._machine_completed_price_rows(
+        data_root=tmp_path, day=day, observations=captures,
+        fetcher=lambda code, request_code: (
+            [{'source_timestamp': '20260929081000', '현재가': 10000}],
+            {'api_id': 'ka10080', 'request_code': code,
+             'request_base_dt': day.replace('-', '')}),
+        as_of=datetime.fromisoformat(day + 'T20:10:00+09:00'),
+    )
+    assert mismatched_rows == []
+    assert mismatched['rejected_route_count'] == 1
+
+
+def test_machine_probe_lineage_counts_two_assessments_as_two_captures():
+    first, second = 'a' * 64, 'b' * 64
+    captures = [{
+        'machine_observation_sha256': value,
+        'source_event_stage': 'zero_base_probe_machine_only_v1',
+        'zero_base_source_sha256': 'c' * 64,
+        'zero_base_route': 'krx_nxt_integrated',
+        'label_context': {'stock_code': '005930'},
+        'source': {'assessment': {'action': action}},
+    } for value, action in ((first, 'RECHECK'), (second, 'ENTER_NOW'))]
+    common = {'zero_base_source_sha256': 'c' * 64,
+              'zero_base_route': 'krx_nxt_integrated',
+              'zero_base_claim_count': '1'}
+    receipts = [{
+        'stage': 'zero_base_probe_result', 'stock_code': '005930',
+        'fields': {**common, 'zero_base_probe_result': 'assessed',
+                   'entry_mechanistic_action': 'ENTER_NOW',
+                   'machine_observation_sha256': second,
+                   'recheck_first_machine_observation_sha256': first},
+    }, {
+        'stage': 'zero_base_watch_attach', 'stock_code': '005930',
+        'fields': {**common, 'zero_base_attach_outcome': 'attached',
+                   'machine_observation_sha256': second},
+    }, {
+        'stage': 'zero_base_probe_claim', 'stock_code': '005930',
+        'fields': common,
+    }]
+    census = calibration._machine_probe_lineage_counts(captures, receipts)
+    assert census['probe_result_receipt'] == 1
+    assert census['probe_assessed_result'] == 1
+    assert census['probe_capture_exact_join'] == 2
+    assert census['probe_capture_without_result'] == 0
+    assert census['probe_watch_attached_exact_capture'] == 1
+    assert census['probe_claim_without_result'] == 0
+    assert census['probe_result_without_claim'] == 0
+    receipts[0]['fields']['zero_base_source_sha256'] = 'd' * 64
+    conflicting = calibration._machine_probe_lineage_counts(captures, receipts)
+    assert conflicting['probe_capture_missing_or_conflict'] == 2
+    assert conflicting['probe_capture_without_result'] == 2
+    assert conflicting['probe_claim_without_result'] == 1
+    invalid_capture = {**captures[0],
+                       'machine_observation_sha256': 'd' * 64,
+                       'source': {'assessment': {'action': 'source_invalid'}}}
+    invalid_receipt = {
+        'stage': 'zero_base_probe_result', 'stock_code': '005930',
+        'fields': {**common, 'zero_base_probe_result': 'source_unavailable',
+                   'entry_mechanistic_action': 'SOURCE_INVALID',
+                   'machine_observation_sha256': 'd' * 64},
+    }
+    invalid = calibration._machine_probe_lineage_counts([invalid_capture], [invalid_receipt])
+    assert invalid['probe_source_invalid_capture_exact_join'] == 1
+    assert invalid['probe_capture_without_result'] == 0
 
 
 def test_machine_capture_normalizes_runtime_session_for_scope_lookup(
@@ -628,6 +889,7 @@ def test_machine_capture_normalizes_runtime_session_for_scope_lookup(
             "effective_venue": "KRX",
             "session_bucket": "KRX_REGULAR",
             "source_quality": "pass",
+            "source_request_code": "005930",
         }
         for i in range(1, 21)
     ]
@@ -645,6 +907,13 @@ def test_machine_capture_normalizes_runtime_session_for_scope_lookup(
             "effective_venue": "KRX",
             # This is the actual casing persisted by _request_context.
             "session_bucket": "krx_regular",
+            "snapshot_id": "snapshot-lowercase", "broker_route": "KRX",
+            "market_data_route": "krx_only",
+            "ai_market_snapshot_v1": {
+                "stock_code": "005930", "effective_venue": "KRX",
+                "session_bucket": "krx_regular",
+                "snapshot_id": "snapshot-lowercase", "broker_route": "KRX",
+                "market_data_route": "krx_only"},
             "conservative_execution_cost_pct": 0.02,
         },
         setup_evidence=setup,
