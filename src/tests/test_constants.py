@@ -1299,7 +1299,6 @@ def test_trading_rules_ai_cadence_defaults_are_rate_limited(monkeypatch):
     assert reloaded.TRADING_RULES.AI_HOLDING_MAX_COOLDOWN == 180
     assert reloaded.TRADING_RULES.AI_HOLDING_CRITICAL_MIN_COOLDOWN == 20
     assert reloaded.TRADING_RULES.AI_HOLDING_CRITICAL_COOLDOWN == 45
-    assert reloaded.TRADING_RULES.AI_SCORE_50_BUY_HOLD_OVERRIDE_ENABLED is True
 
 
 def test_trading_rules_scalp_sim_candidate_window_defaults_and_env_override(
@@ -1411,7 +1410,6 @@ def test_trading_rules_ai_cadence_env_override(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_AI_HOLDING_MAX_COOLDOWN", "240")
     monkeypatch.setenv("KORSTOCKSCAN_AI_HOLDING_CRITICAL_MIN_COOLDOWN", "30")
     monkeypatch.setenv("KORSTOCKSCAN_AI_HOLDING_CRITICAL_COOLDOWN", "75")
-    monkeypatch.setenv("KORSTOCKSCAN_AI_SCORE_50_BUY_HOLD_OVERRIDE_ENABLED", "false")
     monkeypatch.setenv("KORSTOCKSCAN_AI_WATCHING_STATE_CHANGE_REFRESH_ENABLED", "true")
     monkeypatch.setenv(
         "KORSTOCKSCAN_AI_WATCHING_STATE_CHANGE_BUY_PRESSURE_DELTA", "12.5"
@@ -1427,7 +1425,6 @@ def test_trading_rules_ai_cadence_env_override(monkeypatch):
     assert reloaded.TRADING_RULES.AI_HOLDING_MAX_COOLDOWN == 240
     assert reloaded.TRADING_RULES.AI_HOLDING_CRITICAL_MIN_COOLDOWN == 30
     assert reloaded.TRADING_RULES.AI_HOLDING_CRITICAL_COOLDOWN == 75
-    assert reloaded.TRADING_RULES.AI_SCORE_50_BUY_HOLD_OVERRIDE_ENABLED is False
 
 
 def test_trading_rules_error_detector_env_override(monkeypatch):

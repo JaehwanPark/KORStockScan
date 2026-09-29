@@ -20037,17 +20037,20 @@ def test_watching_state_reuses_cached_ai_action_during_cooldown_without_local_ac
 
 
 @pytest.mark.parametrize(
-    ("bridge_enabled", "ai_action", "expected_submit"),
+    ("bridge_enabled", "ai_action", "ai_score", "result_source", "expected_submit"),
     [
-        (False, "BUY", False),
-        (True, "BUY", True),
-        (True, "WAIT", False),
+        (False, "BUY", 50, "live", True),
+        (True, "BUY", 70, "live", True),
+        (True, "WAIT", 70, "live", False),
+        (False, "BUY", 50, "input_preflight_blocked", False),
     ],
 )
-def test_rising_missed_normal_buy_bridge_controls_first_ai_score_prior_path(
+def test_first_ai_buy_action_no_longer_needs_score_prior_bridge(
     monkeypatch,
     bridge_enabled,
     ai_action,
+    ai_score,
+    result_source,
     expected_submit,
 ):
     class FixedDateTime(datetime):
@@ -20080,9 +20083,9 @@ def test_rising_missed_normal_buy_bridge_controls_first_ai_score_prior_path(
         def analyze_target(self, *args, **kwargs):
             return {
                 "action": ai_action,
-                "score": 70,
+                "score": ai_score,
                 "reason": "low score prior",
-                "ai_result_source": "live",
+                "ai_result_source": result_source,
                 "ai_parse_ok": True,
             }
 
@@ -20184,19 +20187,9 @@ def test_rising_missed_normal_buy_bridge_controls_first_ai_score_prior_path(
     if expected_submit:
         submitted_stock, code, runtime = submit_calls[0]
         assert code == "123456"
-        assert (
-            by_stage["rising_missed_normal_buy_bridge_unlocked"][
-                "rising_missed_normal_buy_bridge_allowed"
-            ]
-            is True
-        )
-        assert (
-            by_stage["rising_missed_normal_buy_bridge_unlocked"][
-                "score_gate_converted_to_prior"
-            ]
-            is True
-        )
-        assert submitted_stock["rising_missed_normal_buy_bridge_allowed"] is True
+        assert "rising_missed_normal_buy_bridge_unlocked" not in by_stage
+        assert "first_ai_wait" not in by_stage
+        assert submitted_stock.get("rising_missed_normal_buy_bridge_allowed") is not True
         assert submitted_stock.get("rising_missed_one_share_entry_forced") is None
         assert submitted_stock.get("rising_missed_one_share_scout") is None
         assert submitted_stock.get("forced_entry_qty") is None
@@ -22575,7 +22568,7 @@ def test_scalping_pre_ai_context_reaches_ai_and_blocks_low_liquidity_at_submit(
 
     by_stage = {stage: fields for stage, fields in logs}
     assert "ai_confirmed" in by_stage
-    assert "scalp_sim_entry_armed" in by_stage
+    assert "scalp_sim_entry_armed" not in by_stage
     assert by_stage["blocked_strength_momentum"]["gate_action"] == "risk_context_only"
     assert by_stage["blocked_vpw"]["gate_action"] == "risk_context_only"
     assert by_stage["blocked_liquidity"]["gate_action"] == "risk_context_only"
@@ -23590,7 +23583,7 @@ def test_scalping_overbought_reaches_ai_but_submit_requires_pullback_or_rebreak(
 
     by_stage = {stage: fields for stage, fields in logs}
     assert "ai_confirmed" in by_stage
-    assert "scalp_sim_entry_armed" in by_stage
+    assert "scalp_sim_entry_armed" not in by_stage
     assert by_stage["blocked_overbought"]["gate_action"] == "risk_context_only"
     assert by_stage["blocked_overbought"]["risk_bucket"] == "chase_risk"
     assert (

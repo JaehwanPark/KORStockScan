@@ -343,6 +343,20 @@ def test_entry_ai_gate_role_gate_and_threshold_helper(monkeypatch):
     assert usable["entry_score_usable_for_entry_submit"] is True
     assert usable["entry_score_usable_for_recheck"] is False
 
+    for unevaluated in (
+        {"ai_result_source": "input_preflight_blocked"},
+        {
+            "ai_result_source": "live",
+            "ai_decision_evaluation_status": "not_evaluated_provider_or_preflight",
+        },
+    ):
+        blocked = gate.evaluate_entry_score_role_gate(
+            {"action": "BUY", "score": 50, **unevaluated},
+            ws_data={"quote_stale": False},
+        )
+        assert blocked["entry_score_usable_for_entry_submit"] is False
+        assert blocked["entry_score_usable_for_recheck"] is False
+
     valid_wait_recheck = gate.evaluate_entry_score_role_gate(
         {
             "action": "WAIT",

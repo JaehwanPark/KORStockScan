@@ -12,6 +12,7 @@ UNUSABLE_RESULT_SOURCES = {
     "error",
     "fallback_score_50",
     "holding_ai_not_called",
+    "input_preflight_blocked",
     "insufficient",
     "lock_contention",
     "source_quality_insufficient",
@@ -22,6 +23,7 @@ UNUSABLE_RESULT_SOURCES = {
 UNUSABLE_RESULT_SOURCE_TOKENS = (
     "engine_disabled",
     "fallback_score_50",
+    "preflight",
     "insufficient",
     "lock_contention",
     "timeout",
@@ -167,6 +169,11 @@ def evaluate_entry_score_role_gate(
     parse_ok_value = result.get("ai_parse_ok")
     parse_ok = True if parse_ok_value in (None, "") else _truthy(parse_ok_value)
     fallback_50 = _truthy(result.get("ai_fallback_score_50"))
+    evaluation_status = str(
+        result.get("ai_decision_evaluation_status")
+        or result.get("decision_evaluation_status")
+        or ""
+    ).strip().lower()
     stale = any(
         _stale_flag(value)
         for value in (
@@ -181,9 +188,12 @@ def evaluate_entry_score_role_gate(
     unusable_source = source_l in UNUSABLE_RESULT_SOURCES or any(
         token in source_l for token in UNUSABLE_RESULT_SOURCE_TOKENS
     )
+    unevaluated = evaluation_status.startswith("not_evaluated")
     source_excluded_reason = ""
     if fallback_50:
         source_excluded_reason = "fallback_score_50"
+    elif unevaluated:
+        source_excluded_reason = f"decision_not_evaluated:{evaluation_status}"
     elif parse_fail or not parse_ok:
         source_excluded_reason = "parse_fail_or_not_ok"
     elif unusable_source:

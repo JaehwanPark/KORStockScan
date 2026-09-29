@@ -27,7 +27,6 @@ from src.engine.sniper_state_handlers import (
     _scale_in_feature_contract_defaults,
     _without_entry_pipeline_fields,
     _resolve_wait6579_probe_entry_unlock,
-    _should_apply_ai_score_50_buy_hold_override,
     _should_publish_watching_buy_analysis_telegram,
     _should_run_score65_74_recovery_probe,
     _should_first_ai_wait_for_big_bite,
@@ -6341,40 +6340,36 @@ def test_terminal_no_budget_merges_source_invalid_receipts(monkeypatch, with_att
     assert stock["last_watching_ai_source_quality_fields"] == old_quality
 
 
-def test_first_ai_big_bite_wait_does_not_block_strong_buy():
+def test_first_ai_big_bite_wait_uses_action_and_source_instead_of_score():
     assert (
         _should_first_ai_wait_for_big_bite(
-            {"action": "BUY", "score": 82},
-            82,
+            {"action": "BUY", "score": 50},
             big_bite_confirmed=False,
-            entry_score_threshold=75,
+            ai_source_usable=True,
         )
         is False
     )
     assert (
         _should_first_ai_wait_for_big_bite(
             {"action": "WAIT", "score": 74},
-            74,
             big_bite_confirmed=False,
-            entry_score_threshold=75,
+            ai_source_usable=True,
         )
         is True
     )
     assert (
         _should_first_ai_wait_for_big_bite(
-            {"action": "BUY", "score": 74},
-            74,
+            {"action": "BUY", "score": 50},
             big_bite_confirmed=False,
-            entry_score_threshold=75,
+            ai_source_usable=False,
         )
         is True
     )
     assert (
         _should_first_ai_wait_for_big_bite(
             {"action": "WAIT", "score": 62},
-            62,
             big_bite_confirmed=True,
-            entry_score_threshold=75,
+            ai_source_usable=False,
         )
         is False
     )
@@ -7795,74 +7790,41 @@ def test_score65_74_recovery_probe_unlock_rejects_missing_or_neutral_score(
     )
 
 
-def test_ai_score_50_buy_hold_override_blocks_neutral_and_fallback(monkeypatch):
-    rules = replace(TRADING_RULES, AI_SCORE_50_BUY_HOLD_OVERRIDE_ENABLED=True)
-    monkeypatch.setattr("src.engine.sniper_state_handlers.TRADING_RULES", rules)
-
-    assert (
-        _should_apply_ai_score_50_buy_hold_override(50, {"ai_fallback_score_50": False})
-        is True
+@pytest.mark.parametrize(
+    ("action", "source", "fallback", "score", "blocked"),
+    [
+        ("BUY", "live", False, 50, False),
+        ("WAIT", "live", False, 50, True),
+        ("BUY", "input_preflight_blocked", False, 50, True),
+        ("BUY", "live", True, 72, True),
+    ],
+)
+def test_watching_entry_uses_action_and_source_not_score_50(
+    action, source, fallback, score, blocked
+):
+    role_gate = handlers.evaluate_entry_score_role_gate(
+        {"action": action, "score": score, "ai_result_source": source,
+         "ai_fallback_score_50": fallback},
+        ai_action=action,
+        ai_score=score,
     )
-    assert (
-        _should_apply_ai_score_50_buy_hold_override(72, {"ai_fallback_score_50": True})
-        is True
+    assert handlers._entry_ai_watching_nonbuy_or_unusable(
+        action, role_gate
+    ) is blocked
+    assert handlers._entry_ai_wait_drop_cooldown_sec(
+        score, role_gate, {"AI_WAIT_DROP_COOLDOWN": 180}
+    ) == 0
+
+
+def test_watching_entry_preserves_evaluated_nonbuy_cooldown_and_wait_probe():
+    role_gate = {"entry_score_usable_for_entry_submit": True}
+    assert handlers._entry_ai_watching_nonbuy_or_unusable("WAIT", role_gate)
+    assert not handlers._entry_ai_watching_nonbuy_or_unusable(
+        "WAIT", role_gate, wait_probe_unlocked=True
     )
-    assert (
-        _should_apply_ai_score_50_buy_hold_override(72, {"ai_fallback_score_50": False})
-        is False
-    )
-
-
-def test_ai_score_50_buy_hold_override_can_be_disabled(monkeypatch):
-    rules = replace(TRADING_RULES, AI_SCORE_50_BUY_HOLD_OVERRIDE_ENABLED=False)
-    monkeypatch.setattr("src.engine.sniper_state_handlers.TRADING_RULES", rules)
-
-    assert (
-        _should_apply_ai_score_50_buy_hold_override(50, {"ai_fallback_score_50": True})
-        is False
-    )
-
-
-def test_ai_score_50_buy_hold_override_merges_duplicate_contract_fields(monkeypatch):
-    rules = replace(TRADING_RULES, AI_SCORE_50_BUY_HOLD_OVERRIDE_ENABLED=True)
-    monkeypatch.setattr("src.engine.sniper_state_handlers.TRADING_RULES", rules)
-    captured = {}
-
-    def fake_log(stock, code, stage, **fields):
-        captured.update(fields)
-        captured["code"] = code
-        captured["stage"] = stage
-
-    monkeypatch.setattr(handlers, "_log_entry_pipeline", fake_log)
-    cooldowns = {}
-
-    blocked = handlers._block_ai_score_50_buy_hold_override_if_needed(
-        stock={"id": 1, "name": "test"},
-        code="005930",
-        current_ai_score=50,
-        ai_decision={
-            "ai_result_source": "live",
-            "metric_role": "untrusted_ai_payload_role",
-            "decision_authority": "untrusted_ai_payload_authority",
-            "source_quality_gate": "untrusted_ai_payload_gate",
-        },
-        config={"AI_WAIT_DROP_COOLDOWN": 30, "BUY_SCORE_THRESHOLD": 75},
-        cooldowns=cooldowns,
-        now_ts=123.0,
-    )
-
-    assert blocked is True
-    assert cooldowns["005930"] == 153.0
-    assert captured["stage"] == "blocked_ai_score"
-    assert captured["metric_role"] == "entry_score_prior_provenance"
-    assert captured["decision_authority"] == (
-        "entry_score_prior_block_observation_only"
-    )
-    assert captured["source_quality_gate"] == (
-        "blocked_ai_score_entry_score_prior_contract"
-    )
-    assert captured["actual_order_submitted"] is False
-    assert captured["broker_order_forbidden"] is True
+    assert handlers._entry_ai_wait_drop_cooldown_sec(
+        72, role_gate, {"AI_WAIT_DROP_COOLDOWN": 180}
+    ) == 180
 
 
 def test_watching_buy_analysis_telegram_suppresses_sim_and_probe_context():

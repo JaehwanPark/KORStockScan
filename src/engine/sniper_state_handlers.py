@@ -19061,18 +19061,14 @@ def _log_machine_nonentry_terminal_if_needed(
 
 def _should_first_ai_wait_for_big_bite(
     ai_decision=None,
-    ai_score=None,
     *,
     big_bite_confirmed: bool = False,
-    entry_score_threshold: float = 75.0,
+    ai_source_usable: bool = False,
 ) -> bool:
     if big_bite_confirmed:
         return False
     action = str((ai_decision or {}).get("action") or "").upper()
-    score_value = _safe_float(
-        ai_score if ai_score is not None else (ai_decision or {}).get("score"), 0.0
-    )
-    return not (action == "BUY" and score_value >= float(entry_score_threshold))
+    return not (action == "BUY" and ai_source_usable)
 
 
 def _log_swing_entry_policy_evaluated(
@@ -57927,80 +57923,22 @@ def _validate_wait6579_probe_entry_unlock(
     return unlock, unlocked
 
 
-def _should_apply_ai_score_50_buy_hold_override(ai_score, ai_decision=None) -> bool:
-    if not _rule_bool("AI_SCORE_50_BUY_HOLD_OVERRIDE_ENABLED", True):
+def _entry_ai_watching_nonbuy_or_unusable(action, role_gate, *, wait_probe_unlocked=False):
+    """A score alone never grants or vetoes entry; action/source still matter."""
+    # The separately contracted WAIT probe keeps its existing owner path.
+    if wait_probe_unlocked:
         return False
-    if bool((ai_decision or {}).get("ai_fallback_score_50", False)):
-        return True
-    try:
-        return abs(float(ai_score or 0.0) - 50.0) < 1e-9
-    except Exception:
-        return False
+    usable = bool((role_gate or {}).get("entry_score_usable_for_entry_submit"))
+    return not usable or str(action or "").upper() != "BUY"
 
 
-def _block_ai_score_50_buy_hold_override_if_needed(
-    *,
-    stock,
-    code,
-    current_ai_score,
-    ai_decision,
-    config,
-    cooldowns,
-    now_ts,
-) -> bool:
-    if not _should_apply_ai_score_50_buy_hold_override(current_ai_score, ai_decision):
-        return False
-    entry_buy_score_threshold = get_entry_buy_score_threshold(config)
-    cooldown_time = config["AI_WAIT_DROP_COOLDOWN"]
-    with ENTRY_LOCK:
-        cooldowns[code] = now_ts + cooldown_time
-    ai_ops_fields = _build_ai_ops_log_fields(
-        ai_decision,
-        ai_score_raw=current_ai_score,
-        ai_score_after_bonus=current_ai_score,
-        entry_score_threshold=entry_buy_score_threshold,
-        big_bite_bonus_applied=False,
-        ai_cooldown_blocked=False,
-    )
-    ai_ops_fields = _ensure_ai_source_quality_fields(
-        ai_ops_fields,
-        stock,
-        not_evaluated_reason="ai_score_50_buy_hold_override_no_tick_audit",
-    )
-    pipeline_fields = _merge_entry_pipeline_field_groups(
-        _build_ai_overlap_log_fields(
-            stock=stock,
-            ai_score=current_ai_score,
-            momentum_tag=stock.get("entry_momentum_tag"),
-            threshold_profile=stock.get("entry_threshold_profile"),
-            overbought_blocked=False,
-            blocked_stage="blocked_ai_score",
-        ),
-        ai_ops_fields,
-        {
-            **_build_observation_contract_fields("entry_score_prior_provenance"),
-            "decision_authority": "entry_score_prior_block_observation_only",
-            "source_quality_gate": "blocked_ai_score_entry_score_prior_contract",
-            "allowed_runtime_apply": False,
-            "actual_order_submitted": False,
-            "broker_order_forbidden": True,
-            "forbidden_uses": (
-                "threshold mutation,order guard mutation,provider change,bot_restart,"
-                "broker order submit,score50_fallback_submit"
-            ),
-        },
-    )
-    _log_entry_pipeline(
-        stock,
-        code,
-        "blocked_ai_score",
-        threshold=entry_buy_score_threshold,
-        cooldown_sec=cooldown_time,
-        blocked_reason="ai_score_50_buy_hold_override",
-        ai_score_50_buy_hold_override=True,
-        **pipeline_fields,
-    )
-    return True
+def _entry_ai_wait_drop_cooldown_sec(score, role_gate, config):
+    """Do not turn an unevaluated source or neutral score into an entry lock."""
+    if not bool((role_gate or {}).get("entry_score_usable_for_entry_submit")):
+        return 0
+    if abs(_safe_float(score, 0.0) - 50.0) < 1e-9:
+        return 0
+    return max(0, _safe_int(config.get("AI_WAIT_DROP_COOLDOWN"), 0))
 
 
 def _scalp_ai_wait_rebound_recheck_decision(
@@ -64426,30 +64364,19 @@ def _handle_watching_strategy_branch(
                                     )
                         else:
                             log_info(
-                                f"⚠️ [{stock['name']}] AI 판단 보류(Score 50). 매수보류 override를 적용합니다."
+                                f"⚠️ [{stock['name']}] AI 점수 50. 행동·원천 검증 후 진입 여부를 판단합니다."
                             )
                             current_ai_score = 50
                 except Exception as e:
                     log_error(
                         f"🚨 [AI 엔진 오류] {stock['name']}({code}): {e} | "
-                        "Score 50 매수보류 override로 처리합니다."
+                        "AI 평가 실패로 처리합니다."
                     )
                     current_ai_score = 50
 
                 if ai_call_executed:
                     with ENTRY_LOCK:
                         LAST_AI_CALL_TIMES[code] = ai_call_completed_at
-
-                if _block_ai_score_50_buy_hold_override_if_needed(
-                    stock=stock,
-                    code=code,
-                    current_ai_score=current_ai_score,
-                    ai_decision=ai_decision,
-                    config=config,
-                    cooldowns=cooldowns,
-                    now_ts=now_ts,
-                ):
-                    return False
 
                 wait6579_probe_entry_unlock, wait6579_probe_entry_unlocked = (
                     _validate_wait6579_probe_entry_unlock(
@@ -64476,16 +64403,19 @@ def _handle_watching_strategy_branch(
                             ai_action=current_ai_action_for_bridge,
                         )
                     )
-                    first_ai_wait_score_prior_block = (
+                    first_ai_wait_action_source_block = (
                         not wait6579_probe_entry_unlocked
                         and _should_first_ai_wait_for_big_bite(
                             ai_decision,
-                            current_ai_score,
                             big_bite_confirmed=big_bite_confirmed,
-                            entry_score_threshold=entry_buy_score_threshold,
+                            ai_source_usable=bool(
+                                entry_score_role_gate_for_bridge.get(
+                                    "entry_score_usable_for_entry_submit"
+                                )
+                            ),
                         )
                     )
-                    if first_ai_wait_score_prior_block:
+                    if first_ai_wait_action_source_block:
                         rising_missed_normal_buy_bridge_fields = _evaluate_rising_missed_normal_buy_bridge(
                             stock,
                             code,
@@ -64530,7 +64460,7 @@ def _handle_watching_strategy_branch(
                                 **rising_missed_normal_buy_bridge_fields,
                             )
                     if (
-                        first_ai_wait_score_prior_block
+                        first_ai_wait_action_source_block
                         and not rising_missed_normal_buy_bridge_fields.get(
                             "rising_missed_normal_buy_bridge_allowed"
                         )
@@ -64604,17 +64534,6 @@ def _handle_watching_strategy_branch(
                             ai_engine=ai_engine,
                         )
                         return False
-
-            if _block_ai_score_50_buy_hold_override_if_needed(
-                stock=stock,
-                code=code,
-                current_ai_score=current_ai_score,
-                ai_decision=ai_decision,
-                config=config,
-                cooldowns=cooldowns,
-                now_ts=now_ts,
-            ):
-                return False
 
             boost_applied_value = 0
             if big_bite_confirmed:
@@ -64725,15 +64644,10 @@ def _handle_watching_strategy_branch(
                 ai_score=current_ai_score,
                 ai_action=current_ai_action,
             )
-            blocked_ai_score_candidate = (
-                (
-                    not entry_score_role_gate.get(
-                        "entry_score_usable_for_entry_submit"
-                    )
-                    or current_ai_action != "BUY"
-                )
-                and current_ai_score != 50
-                and not wait6579_probe_entry_unlocked
+            blocked_ai_score_candidate = _entry_ai_watching_nonbuy_or_unusable(
+                current_ai_action,
+                entry_score_role_gate,
+                wait_probe_unlocked=wait6579_probe_entry_unlocked,
             )
             entry_score_prior = evaluate_ai_score_prior(
                 current_ai_action,
@@ -64744,28 +64658,31 @@ def _handle_watching_strategy_branch(
                 ),
             )
             if blocked_ai_score_candidate:
-                cooldown_time = config["AI_WAIT_DROP_COOLDOWN"]
-                with ENTRY_LOCK:
-                    cooldowns[code] = now_ts + cooldown_time
-                _mutate_stock_state(
-                    stock,
-                    set_fields={
-                        "ai_wait_cooldown_anchor_at": now_ts,
-                        "ai_wait_cooldown_anchor_until": now_ts + cooldown_time,
-                        "ai_wait_cooldown_anchor_price": _safe_int(
-                            (ws_data or {}).get("curr"), 0
-                        ),
-                        "ai_wait_cooldown_anchor_score": float(
-                            current_ai_score or 0.0
-                        ),
-                        "ai_wait_cooldown_anchor_action": current_ai_action,
-                        "ai_wait_cooldown_anchor_reason": str(
-                            (ai_decision or {}).get("reason")
-                            or stock.get("last_watching_ai_reason")
-                            or ""
-                        )[:240],
-                    },
+                cooldown_time = _entry_ai_wait_drop_cooldown_sec(
+                    current_ai_score, entry_score_role_gate, config
                 )
+                if cooldown_time:
+                    with ENTRY_LOCK:
+                        cooldowns[code] = now_ts + cooldown_time
+                    _mutate_stock_state(
+                        stock,
+                        set_fields={
+                            "ai_wait_cooldown_anchor_at": now_ts,
+                            "ai_wait_cooldown_anchor_until": now_ts + cooldown_time,
+                            "ai_wait_cooldown_anchor_price": _safe_int(
+                                (ws_data or {}).get("curr"), 0
+                            ),
+                            "ai_wait_cooldown_anchor_score": float(
+                                current_ai_score or 0.0
+                            ),
+                            "ai_wait_cooldown_anchor_action": current_ai_action,
+                            "ai_wait_cooldown_anchor_reason": str(
+                                (ai_decision or {}).get("reason")
+                                or stock.get("last_watching_ai_reason")
+                                or ""
+                            )[:240],
+                        },
+                    )
                 ai_ops_fields = _build_ai_ops_log_fields(
                     ai_decision,
                     ai_score_raw=current_ai_score,
@@ -64931,7 +64848,7 @@ def _handle_watching_strategy_branch(
                     "target_buy_price": final_target_buy_price,
                     "first_ai_big_bite_wait_bypassed": first_ai_big_bite_wait_bypassed,
                     "first_ai_big_bite_bypass_reason": (
-                        "strong_ai_buy_score_met"
+                        "trusted_ai_buy_action"
                         if first_ai_big_bite_wait_bypassed
                         else "not_applicable"
                     ),

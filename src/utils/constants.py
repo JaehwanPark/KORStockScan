@@ -1143,9 +1143,6 @@ class TradingConfig:
         False  # cooldown 내 상태변화 기반 1회 조기 재평가
     )
     AI_WATCHING_STATE_CHANGE_BUY_PRESSURE_DELTA: float = 10.0
-    AI_SCORE_50_BUY_HOLD_OVERRIDE_ENABLED: bool = (
-        True  # score=50 fallback/neutral 진입은 매수보류
-    )
     AI_WAIT6579_PROBE_CANARY_ENABLED: bool = (
         False  # 2026-04-27: soft_stop live canary 관찰 중 entry probe OFF
     )
@@ -2024,9 +2021,6 @@ def _build_trading_rules() -> TradingConfig:
     env_ai_holding_critical_cooldown = _env_int(
         "KORSTOCKSCAN_AI_HOLDING_CRITICAL_COOLDOWN"
     )
-    env_ai_score_50_buy_hold = _env_bool(
-        "KORSTOCKSCAN_AI_SCORE_50_BUY_HOLD_OVERRIDE_ENABLED"
-    )
     if (
         env_wait6579_probe_enabled is not None
         or env_wait6579_probe_max_budget is not None
@@ -2057,7 +2051,6 @@ def _build_trading_rules() -> TradingConfig:
         or env_ai_holding_max_cooldown is not None
         or env_ai_holding_critical_min_cooldown is not None
         or env_ai_holding_critical_cooldown is not None
-        or env_ai_score_50_buy_hold is not None
     ):
         config = replace(
             config,
@@ -2210,11 +2203,6 @@ def _build_trading_rules() -> TradingConfig:
                 env_ai_holding_critical_cooldown
                 if env_ai_holding_critical_cooldown is not None
                 else config.AI_HOLDING_CRITICAL_COOLDOWN
-            ),
-            AI_SCORE_50_BUY_HOLD_OVERRIDE_ENABLED=(
-                env_ai_score_50_buy_hold
-                if env_ai_score_50_buy_hold is not None
-                else config.AI_SCORE_50_BUY_HOLD_OVERRIDE_ENABLED
             ),
         )
 
