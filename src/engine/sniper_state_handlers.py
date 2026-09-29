@@ -18909,6 +18909,27 @@ def _scanner_promotion_correlation_fields(
     return fields
 
 
+def _entry_ai_policy_position_tag(stock: dict | None) -> str:
+    """Select the existing machine owner for a verified fixed watch only.
+
+    The persisted position tag remains SCALP_BASE, so scanner queue and
+    postclose scanner populations cannot acquire this fixed admission.
+    """
+    row = stock if isinstance(stock, dict) else {}
+    actual_tag = normalize_position_tag("SCALPING", row.get("position_tag"))
+    if (
+        actual_tag == "SCALP_BASE"
+        and str(row.get("watch_origin") or "") == "MAIN_FIXED_WATCH"
+        and str(row.get("code") or "")[:6] == "005930"
+        and str(row.get("watch_admission_id") or "").startswith(
+            f"FIXED-{datetime.now(_KST).date()}-005930-"
+        )
+        and str(row.get("watch_generation_id") or "").strip()
+    ):
+        return "SCANNER"
+    return actual_tag
+
+
 def _log_ai_confirmed_terminal_no_budget(
     stock,
     code,
@@ -41720,9 +41741,7 @@ def _retry_entry_ai_submit_authority_before_block(
             metadata_extra={
                 **_scanner_promotion_correlation_fields(stock or {}),
                 "record_id": (stock or {}).get("id"),
-                "position_tag": normalize_position_tag(
-                    "SCALPING", (stock or {}).get("position_tag")
-                ),
+                "position_tag": _entry_ai_policy_position_tag(stock),
                 "sim_record_id": (stock or {}).get("sim_record_id"),
                 "sim_parent_record_id": (stock or {}).get("sim_parent_record_id"),
                 "entry_adm_candidate_id": (stock or {}).get("entry_adm_candidate_id"),
@@ -61337,9 +61356,7 @@ def _resolve_scanner_async_entry_ai(
                 metadata_extra={
                     **_scanner_promotion_correlation_fields(stock_snapshot),
                     "record_id": stock_snapshot.get("id"),
-                    "position_tag": normalize_position_tag(
-                        "SCALPING", stock_snapshot.get("position_tag")
-                    ),
+                    "position_tag": _entry_ai_policy_position_tag(stock_snapshot),
                     "sim_record_id": stock_snapshot.get("sim_record_id"),
                     "sim_parent_record_id": stock_snapshot.get("sim_parent_record_id"),
                     "entry_adm_candidate_id": stock_snapshot.get(
@@ -62632,7 +62649,7 @@ def _handle_watching_strategy_branch(
                                 metadata_extra={
                                     **_scanner_promotion_correlation_fields(stock),
                                     "record_id": stock.get("id"),
-                                    "position_tag": pos_tag,
+                                    "position_tag": _entry_ai_policy_position_tag(stock),
                                     "sim_record_id": stock.get("sim_record_id"),
                                     "sim_parent_record_id": stock.get(
                                         "sim_parent_record_id"
@@ -63106,7 +63123,7 @@ def _handle_watching_strategy_branch(
                                 metadata_extra={
                                     **_scanner_promotion_correlation_fields(stock),
                                     "record_id": stock.get("id"),
-                                    "position_tag": pos_tag,
+                                    "position_tag": _entry_ai_policy_position_tag(stock),
                                     "sim_record_id": stock.get("sim_record_id"),
                                     "sim_parent_record_id": stock.get(
                                         "sim_parent_record_id"
@@ -63326,7 +63343,7 @@ def _handle_watching_strategy_branch(
                                 metadata_extra={
                                     **_scanner_promotion_correlation_fields(stock),
                                     "record_id": stock.get("id"),
-                                    "position_tag": pos_tag,
+                                    "position_tag": _entry_ai_policy_position_tag(stock),
                                     "sim_record_id": stock.get("sim_record_id"),
                                     "sim_parent_record_id": stock.get(
                                         "sim_parent_record_id"
