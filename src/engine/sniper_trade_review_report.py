@@ -1578,6 +1578,10 @@ _PROJECTION_EVENT_STAGES = {
     "entry_buy_order_terminal_confirmed",
     "scale_in_buy_order_terminal_confirmed",
     "scale_in_executed",
+    "avg_down_shared_rebound_blocked",
+    "avg_down_shared_rebound_signal",
+    "scale_in_order_submitted",
+    "scale_in_order_leg_submitted",
     "ai_holding_review",
     "holding_path_review",
     "holding_path_votes_collected",
@@ -2611,6 +2615,8 @@ def _open_scalp_position_projection(trade: dict, events: list[HoldingEvent]) -> 
         event for event in events
         if event.stage in {
             "position_rebased_after_fill", "holding_started", "scale_in_executed",
+            "avg_down_shared_rebound_signal", "holding_path_signal_snapshot",
+            "scale_in_order_submitted", "scale_in_order_leg_submitted",
             "entry_buy_order_terminal_confirmed",
             "scale_in_buy_order_terminal_confirmed",
             "sell_partial_fill_progress",
@@ -2623,6 +2629,12 @@ def _open_scalp_position_projection(trade: dict, events: list[HoldingEvent]) -> 
         event.fields.get("pipeline_lifecycle_population_scope") == "real_record_bound"
         for event in observed
     )
+    rebound_blockers = Counter(
+        (str(event.fields.get("reason") or "unknown"),
+         str(event.fields.get("preflight_primary_blocker") or "-"),
+         str(event.fields.get("machine_action") or "-"))
+        for event in events if event.stage == "avg_down_shared_rebound_blocked"
+    )
     return {
         "id": trade.get("id"),
         "rec_date": trade.get("rec_date"),
@@ -2633,10 +2645,190 @@ def _open_scalp_position_projection(trade: dict, events: list[HoldingEvent]) -> 
         "buy_qty": trade.get("buy_qty"),
         "real_position_observed": real_observed,
         "censor_reason": "open_position_no_completed_economics",
+        "avg_down_rebound_blocker_summary": [
+            {"reason": reason, "primary_blocker": primary,
+             "machine_action": action, "count": count}
+            for (reason, primary, action), count in sorted(rebound_blockers.items())
+        ],
         "timeline": [
             {"stage": event.stage, "timestamp": event.timestamp, "fields": dict(event.fields)}
             for event in observed
         ],
+    }
+
+
+def _avg_down_rebound_lineage(
+    trade: dict, events: list[HoldingEvent], completed: dict | None,
+) -> dict | None:
+    """Attribute exact shared-rebound stages to one position, without CF PnL."""
+    if str(trade.get("strategy") or "").upper() not in {"SCALPING", "SCALP"}:
+        return None
+    blocked = [event for event in events
+               if event.stage == "avg_down_shared_rebound_blocked"]
+    blocker_summary_gaps = [event for event in events
+                            if event.stage == "avg_down_shared_rebound_blocker_summary_gap"]
+    signals = [event for event in events
+               if event.stage == "avg_down_shared_rebound_signal"]
+    votes = [event for event in events
+             if event.stage == "holding_path_signal_snapshot"
+             and event.fields.get("path_id") == "ADD_REBOUND"]
+    submitted = [event for event in events
+                 if event.stage == "scale_in_order_submitted"
+                 and event.fields.get("add_trigger") == "shared_main_rebound_entry"
+                 and str(event.fields.get("actual_order_submitted")).lower() == "true"]
+    fills = [event for event in events
+             if event.stage == "scale_in_executed"
+             and event.fields.get("add_reason") == "shared_main_rebound_entry"
+             and str(event.fields.get("actual_order_submitted")).lower() == "true"]
+    if not (blocked or signals or votes or submitted or fills):
+        return None
+    vote_by_signal = defaultdict(list)
+    for vote in votes:
+        vote_by_signal[str(vote.fields.get("signal_id") or "")].append(vote)
+    submit_by_decision = defaultdict(list)
+    fill_by_decision = defaultdict(list)
+    for event in submitted:
+        submit_by_decision[str(event.fields.get("scale_in_decision_id") or "")].append(event)
+    for event in fills:
+        fill_by_decision[str(event.fields.get("scale_in_decision_id") or "")].append(event)
+    decision_rows = []
+    seen_decisions = set()
+    for event in signals:
+        fields = event.fields
+        decision_id = str(fields.get("scale_in_decision_id") or "")
+        episode_id = str(fields.get("position_episode_id") or "")
+        signal_id = str(fields.get("source_signal_id") or "")
+        if not decision_id or not episode_id or not signal_id or decision_id in seen_decisions:
+            decision_rows.append({"decision_id": decision_id or None,
+                                  "status": "lineage_gap_signal_identity"})
+            continue
+        seen_decisions.add(decision_id)
+        matching_votes = [vote for vote in vote_by_signal.get(signal_id, [])
+                          if vote.fields.get("path_id") == "ADD_REBOUND"
+                          and vote.fields.get("decision") == "PASS"
+                          and vote.fields.get("buy_fill_identity")
+                          == fields.get("buy_fill_identity")]
+        matching_submits = [row for row in submit_by_decision.get(decision_id, [])
+                            if row.fields.get("position_episode_id") == episode_id]
+        matching_fills = [row for row in fill_by_decision.get(decision_id, [])
+                          if row.fields.get("position_episode_id") == episode_id]
+        orders = sorted({part.strip() for row in matching_submits
+                         for part in str(row.fields.get("broker_order_no_list") or "").split(",")
+                         if part.strip() and part.strip() != "-"})
+        exact_fills = {(str(row.fields.get("order_no") or ""),
+                        str(row.fields.get("execution_no") or "")):
+                       _safe_int(row.fields.get("fill_qty"), 0)
+                       for row in matching_fills
+                       if str(row.fields.get("order_no") or "") in orders
+                       and str(row.fields.get("execution_no") or "") not in {"", "-"}}
+        submitted_qty = sum(_safe_int(row.fields.get("submitted_qty"), 0)
+                            for row in matching_submits)
+        filled_qty = sum(exact_fills.values())
+        valid_fills = bool(matching_fills and len(exact_fills) == len(matching_fills)
+                           and all(qty > 0 for qty in exact_fills.values())
+                           and 0 < filled_qty <= submitted_qty)
+        fill_quality = ("full" if valid_fills and filled_qty == submitted_qty
+                        else "partial" if valid_fills else
+                        "lineage_gap" if matching_fills else "no_fill")
+        if not matching_votes:
+            status = "lineage_gap_valid_vote"
+        elif not matching_submits:
+            status = "valid_signal_no_submit"
+        elif not matching_fills:
+            status = "submitted_no_fill"
+        elif not valid_fills:
+            status = "lineage_gap_exact_fill"
+        elif not completed:
+            status = "partial_fill_open_or_censored" if fill_quality == "partial" else "open_or_censored"
+        elif (completed.get("strict_completion_status") != "eligible"
+              or completed.get("fill_cost_reconciled") is not True
+              or completed.get("realized_pnl_krw") is None
+              or completed.get("profit_rate") is None):
+            status = "terminal_cost_gap"
+        else:
+            status = ("partial_fill_completed_exact_cost" if fill_quality == "partial"
+                      else "completed_exact_cost")
+        decision_rows.append({
+            "decision_id": decision_id, "position_episode_id": episode_id,
+            "source_signal_id": signal_id, "machine_bundle_sha256": fields.get("machine_bundle_sha256"),
+            "buy_fill_identity": fields.get("buy_fill_identity"),
+            "valid_vote_count": len(matching_votes),
+            "submitted_order_numbers": orders,
+            "submitted_qty": submitted_qty,
+            "exact_filled_qty": filled_qty if valid_fills else None,
+            "fill_quality": fill_quality,
+            "exact_fill_legs": [
+                {"order_no": order, "execution_no": execution, "qty": qty}
+                for (order, execution), qty in sorted(exact_fills.items())
+            ],
+            "status": status,
+        })
+    def observation_count(event: HoldingEvent) -> int:
+        if event.fields.get("_sealed_rebound_blocker_summary") is True:
+            return max(1, _safe_int(event.fields.get("observation_count"), 1))
+        return 1
+
+    blocker_counts = Counter()
+    for row in blocked:
+        blocker_counts[(str(row.fields.get("reason") or "unknown"),
+                        str(row.fields.get("preflight_primary_blocker") or "-"))] += observation_count(row)
+    exact_terminal = bool(completed and completed.get("strict_completion_status") == "eligible"
+                          and completed.get("fill_cost_reconciled") is True
+                          and completed.get("realized_pnl_krw") is not None
+                          and completed.get("profit_rate") is not None)
+    joined_decisions = {
+        (row.get("decision_id"), row.get("position_episode_id"))
+        for row in decision_rows if row.get("position_episode_id")
+    }
+    return {
+        "record_id": trade.get("id"), "code": trade.get("code"),
+        "blocker_counts": [
+            {"reason": reason, "primary_blocker": primary, "count": count}
+            for (reason, primary), count in sorted(blocker_counts.items())
+        ],
+        "blocked_observation_count": sum(observation_count(row) for row in blocked),
+        "prior_blocker_summary_gap_count": len(blocker_summary_gaps),
+        "preflight_blocked_count": sum(
+            observation_count(row)
+            for row in blocked
+            if row.fields.get("reason") == "shared_main_rebound_input_preflight_blocked"
+        ),
+        "valid_machine_block_count": sum(
+            observation_count(row)
+            for row in blocked
+            if row.fields.get("reason") == "shared_main_rebound_not_confirmed"
+            and row.fields.get("machine_action") == "BLOCK"
+        ),
+        "machine_enter_vote_gap_count": sum(
+            observation_count(row) for row in blocked
+            if row.fields.get("machine_action") == "ENTER_NOW"
+            and str(row.fields.get("reason") or "").startswith(
+                "shared_main_rebound_add_vote_"
+            )
+        ),
+        "valid_add_vote_snapshot_count": sum(
+            row.fields.get("decision") == "PASS" for row in votes
+        ),
+        "decision_rows": decision_rows,
+        "unjoined_submit_count": sum(
+            (row.fields.get("scale_in_decision_id"),
+             row.fields.get("position_episode_id")) not in joined_decisions
+            for row in submitted
+        ),
+        "unjoined_fill_count": sum(
+            (row.fields.get("scale_in_decision_id"),
+             row.fields.get("position_episode_id")) not in joined_decisions
+            for row in fills
+        ),
+        "position_terminal": {
+            "status": "completed_exact_cost" if exact_terminal else (
+                "terminal_cost_gap" if completed else "open_or_censored"),
+            "realized_pnl_krw": completed.get("realized_pnl_krw") if exact_terminal else None,
+            "profit_rate": completed.get("profit_rate") if exact_terminal else None,
+            "cost_basis": completed.get("cost_basis") if completed else None,
+        },
+        "incremental_add_effect_status": "unidentified_without_paired_no_add",
+        "authority": "diagnostic_only_no_independent_avg_down_policy",
     }
 
 
@@ -2690,9 +2882,45 @@ def _prior_entry_fill_events(
         }
         for row in rows:
             trade_id = str(row["id"])
+            blocker_summary = row.get("avg_down_rebound_blocker_summary")
+            valid_summary = (
+                isinstance(blocker_summary, list)
+                and all(isinstance(item, dict)
+                        and all(isinstance(item.get(key), str) for key in (
+                            "reason", "primary_blocker", "machine_action"))
+                        and isinstance(item.get("count"), int)
+                        and not isinstance(item["count"], bool)
+                        and 0 < item["count"] <= 100_000
+                        for item in blocker_summary)
+            )
+            if valid_summary:
+                for item in blocker_summary:
+                    events_by_id[trade_id].append(HoldingEvent(
+                        timestamp=f"{prior_date} 23:59:59",
+                        name=str(row.get("name") or "-"),
+                        code=str(row.get("code") or "-")[:6],
+                        stage="avg_down_shared_rebound_blocked",
+                        fields={"id": trade_id, "reason": item["reason"],
+                                "preflight_primary_blocker": item["primary_blocker"],
+                                "machine_action": item["machine_action"],
+                                "observation_count": item["count"],
+                                "_sealed_rebound_blocker_summary": True},
+                        raw_line="",
+                    ))
+            else:
+                events_by_id[trade_id].append(HoldingEvent(
+                    timestamp=f"{prior_date} 23:59:59",
+                    name=str(row.get("name") or "-"),
+                    code=str(row.get("code") or "-")[:6],
+                    stage="avg_down_shared_rebound_blocker_summary_gap",
+                    fields={"id": trade_id, "reason": "prior_summary_missing_or_invalid"},
+                    raw_line="",
+                ))
             for item in row.get("timeline") or []:
                 if not isinstance(item, dict) or item.get("stage") not in {
                     "position_rebased_after_fill", "scale_in_executed",
+                    "avg_down_shared_rebound_signal", "holding_path_signal_snapshot",
+                    "scale_in_order_submitted", "scale_in_order_leg_submitted",
                     "entry_buy_order_terminal_confirmed",
                     "scale_in_buy_order_terminal_confirmed",
                     "sell_partial_fill_progress",
@@ -3097,6 +3325,7 @@ def build_trade_review_report(
     compiled_rows = []
     completed_projection = []
     open_projection = []
+    avg_down_rebound_lineage_rows = []
     for trade in trade_rows:
         matched = _match_trade_events(trade, all_events)
         prior_date = str(trade.get("rec_date") or "")[:10]
@@ -3127,6 +3356,13 @@ def build_trade_review_report(
         open_projected = _open_scalp_position_projection(trade, matched)
         if open_projected is not None:
             open_projection.append(open_projected)
+        rebound_lineage = _avg_down_rebound_lineage(
+            trade, matched,
+            projected if projected is not None
+            and projected.get("completion_observed_date") == target_date else None,
+        )
+        if rebound_lineage is not None:
+            avg_down_rebound_lineage_rows.append(rebound_lineage)
     projected_completed_ids = {_safe_int(row.get("id")) for row in completed_projection}
     exit_signal_binding_counts = Counter(
         str((row.get("exit_signal") or {}).get("binding_status")
@@ -3219,6 +3455,11 @@ def build_trade_review_report(
             "canonical_completed_trades": len(completed_projection),
             "exit_signal_binding_counts": dict(exit_signal_binding_counts),
             "open_scalp_position_projection_count": len(open_projection),
+            "avg_down_rebound_position_count": len(avg_down_rebound_lineage_rows),
+            "avg_down_rebound_exact_cost_position_count": sum(
+                row["position_terminal"]["status"] == "completed_exact_cost"
+                for row in avg_down_rebound_lineage_rows
+            ),
             "buy_parent_handoff_counts": buy_parent_handoff["counts"],
             "buy_parent_handoff_source_status": buy_parent_handoff["source_quality_status"],
             "open_scalp_position_projection_status": (
@@ -3294,6 +3535,7 @@ def build_trade_review_report(
             "recent_trades": recent_trades,
             "completed_trade_projection": completed_projection,
             "open_scalp_position_projection": open_projection,
+            "avg_down_rebound_lineage": avg_down_rebound_lineage_rows,
             "buy_parent_handoff": buy_parent_handoff,
             "completed_trades": [
                 row

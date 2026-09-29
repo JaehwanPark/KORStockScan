@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import json
+import datetime as datetime_module
 from collections import deque
 import os
 import re
 import time
-from datetime import date, datetime
+from datetime import date, datetime, time as datetime_time, timedelta
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from src.utils.constants import PROJECT_ROOT
 from src.utils.market_day import is_krx_trading_day
@@ -59,6 +61,15 @@ def _kst_time_tuple() -> tuple[int, int]:
 def _disabled_job_ids() -> set[str]:
     raw = os.environ.get("KORSTOCKSCAN_DISABLED_CRON_JOBS", "")
     return {item.strip() for item in raw.split(",") if item.strip()}
+
+
+def _adjacent_krx_trading_day(day: date, *, step: int) -> date:
+    candidate = day
+    for _ in range(14):
+        candidate += timedelta(days=step)
+        if is_krx_trading_day(candidate):
+            return candidate
+    raise ValueError("adjacent_krx_trading_day_unresolved")
 
 
 CRON_INSTALL_MARKERS: dict[str, list[str]] = {
@@ -232,20 +243,23 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
     {
         "id": "log_rotation_cleanup",
         "log": "logs/log_rotation_cleanup_cron.log",
-        "window_start": (21, 55),
-        "window_end": (23, 55),
+        "window_start": (5, 0),
+        "window_end": (6, 50),
         "mode": "once",
         "critical": False,
+        "trading_day_only": True,
+        "source_date_role": "previous_krx_trading_day",
     },
     {
         "id": "postclose_finalization",
         "log": "logs/postclose_finalization_cron.log",
-        "window_start": (21, 55),
-        "window_end": (23, 55),
+        "window_start": (5, 0),
+        "window_end": (6, 50),
         "mode": "once",
         "critical": True,
         "trading_day_only": True,
         "terminal_error_immediate": True,
+        "source_date_role": "previous_krx_trading_day",
     },
     {
         "id": "system_metric_sampler",
@@ -304,7 +318,28 @@ class CronCompletionDetector(BaseDetector):
             log_path = PROJECT_ROOT / job["log"]
             jid = job["id"]
             critical = job.get("critical", False)
+            completed_at: datetime | None = None
             today_str = source_day or _today_kst()
+            effective_day = date.fromisoformat(_today_kst())
+            job_now_total = now_total
+            if job.get("source_date_role") == "previous_krx_trading_day":
+                job_now_total = now_h * 60 + now_m
+                if source_day:
+                    today_str = source_day
+                    effective_day = _adjacent_krx_trading_day(
+                        date.fromisoformat(source_day), step=1
+                    )
+                else:
+                    today_str = _adjacent_krx_trading_day(
+                        effective_day, step=-1
+                    ).isoformat()
+                current_day = date.fromisoformat(_today_kst())
+                if current_day < effective_day:
+                    job_now_total = -1
+                elif current_day > effective_day:
+                    job_now_total = 24 * 60
+                details[f"{jid}_source_date"] = today_str
+                details[f"{jid}_effective_date"] = effective_day.isoformat()
             if jid == "postclose_finalization" and _finalization_self_audit(today_str):
                 details[f"{jid}_status"] = "pending_self_audit"
                 warnings.append("postclose_finalization: live ancestor awaits this detector; no terminal PASS claimed")
@@ -313,7 +348,12 @@ class CronCompletionDetector(BaseDetector):
             if jid in _disabled_job_ids():
                 details[f"{jid}_status"] = "disabled_by_env"
                 continue
-            if job.get("trading_day_only", False) and not trading_day:
+            job_trading_day = (
+                is_krx_trading_day(effective_day)
+                if job.get("source_date_role") == "previous_krx_trading_day"
+                else trading_day
+            )
+            if job.get("trading_day_only", False) and not job_trading_day:
                 details[f"{jid}_status"] = "skip_non_trading_day"
                 continue
             install_markers = CRON_INSTALL_MARKERS.get(jid)
@@ -333,8 +373,8 @@ class CronCompletionDetector(BaseDetector):
 
             ws_total = ws_h * 60 + ws_m
             we_total = we_h * 60 + we_m
-            past_window_start = now_total >= ws_total
-            past_window_end = now_total > we_total
+            past_window_start = job_now_total >= ws_total
+            past_window_end = job_now_total > we_total
 
             if not past_window_start:
                 details[f"{jid}_status"] = "not_yet_due"
@@ -425,9 +465,9 @@ class CronCompletionDetector(BaseDetector):
                     issues.append(f"{jid}: finished with error after window end")
                     details[f"{jid}_status"] = "fail"
                 elif self._bounded_postclose_running(job, today_str):
-                    warnings.append(f"{jid}: exact-date owner running before 23:20")
+                    warnings.append(f"{jid}: exact-date owner running before effective-date 06:00")
                     details[f"{jid}_status"] = "in_progress"
-                    details[f"{jid}_running_deadline"] = "23:20"
+                    details[f"{jid}_running_deadline"] = "06:00 effective date"
                 elif past_window_end:
                     issues.append(f"{jid}: no completion marker after window end")
                     details[f"{jid}_status"] = "fail"
@@ -446,6 +486,72 @@ class CronCompletionDetector(BaseDetector):
                     details[f"{jid}_status"] = "pass"
                 else:
                     details[f"{jid}_status"] = "unknown"
+
+            if (job.get("source_date_role") == "previous_krx_trading_day"
+                    and details.get(f"{jid}_status") == "pass"):
+                owner_done = self._last_owner_done_line(today_lines, jid)
+                completed_at = self._marker_finished_at(owner_done)
+                cutoff = datetime_module.datetime.combine(
+                    effective_day, datetime_time(we_h, we_m), ZoneInfo("Asia/Seoul")
+                )
+                if completed_at is None:
+                    details[f"{jid}_status"] = "fail"
+                    issues.append(f"{jid}: terminal completion time missing")
+                elif completed_at > cutoff:
+                    details[f"{jid}_status"] = "recovered_late"
+                    details[f"{jid}_completed_at"] = completed_at.isoformat()
+                    warnings.append(
+                        f"{jid}: recovered after effective-date {we_h:02d}:{we_m:02d} cutoff"
+                    )
+
+            if (jid == "postclose_finalization" and today_str >= "2026-09-28"
+                    and details.get(f"{jid}_status") in {"pass", "recovered_late"}):
+                from src.engine.automation.postclose_finalization_generation import (
+                    finalization_marker_issues,
+                )
+
+                done_lines = [
+                    line for line in today_lines.splitlines()
+                    if re.search(r"\[DONE\]\s+postclose_finalization\b", line)
+                ]
+                marker = done_lines[-1] if done_lines else ""
+                chain = re.search(r"\bchain_sha256=([0-9a-f]{64})\b", marker)
+                snapshot = re.search(
+                    r"\bsnapshot_generation_sha256=([0-9a-f]{64})\b", marker
+                )
+                detector_run = re.search(r"\bdetector_run_id=(cron-[A-Za-z0-9-]+)\b", marker)
+                detector_sha = re.search(r"\bdetector_report_sha256=([0-9a-f]{64})\b", marker)
+                generation_issues = finalization_marker_issues(
+                    PROJECT_ROOT, today_str,
+                    chain.group(1) if chain else "",
+                    snapshot.group(1) if snapshot else "",
+                )
+                if not detector_run or not detector_sha:
+                    generation_issues.append("final_detector_attempt_unbound")
+                if generation_issues:
+                    details[f"{jid}_generation_issues"] = generation_issues
+                    # The 9/28 receipt was written before this release was selected.
+                    # Keep its unresolved lineage visible without failing every new run.
+                    historical_unbound = (
+                        today_str == "2026-09-28"
+                        and not any((chain, snapshot, detector_run, detector_sha))
+                        and set(generation_issues) <= {
+                            "finalization_generation_unbound",
+                            "final_detector_attempt_unbound",
+                        }
+                        and self._selected_release_after_marker(completed_at)
+                    )
+                    if historical_unbound:
+                        details[f"{jid}_status"] = "historical_gap"
+                        details[f"{jid}_historical_receipt_before_selection"] = True
+                        warnings.append(
+                            f"{jid}: 2026-09-28 historical generation receipt unbound"
+                        )
+                    else:
+                        details[f"{jid}_status"] = "fail"
+                        issues.append(
+                            f"{jid}: finalization generation invalid ({','.join(generation_issues)})"
+                        )
 
             if has_error:
                 details[f"{jid}_error_lines"] = self._count_errors(recent_lines)
@@ -629,6 +735,38 @@ class CronCompletionDetector(BaseDetector):
             if _DONE_MARKER.search(line):
                 return "done"
         return "none"
+
+    @staticmethod
+    def _last_owner_done_line(today_lines: str, owner: str) -> str:
+        pattern = re.compile(rf"^\[DONE\]\s+{re.escape(owner)}\b")
+        return next(
+            (line for line in reversed(today_lines.splitlines()) if pattern.search(line)),
+            "",
+        )
+
+    @staticmethod
+    def _marker_finished_at(line: str) -> datetime | None:
+        match = re.search(r"\bfinished_at=(\S+)", line)
+        if match is None:
+            return None
+        try:
+            completed_at = datetime_module.datetime.fromisoformat(match.group(1))
+        except ValueError:
+            return None
+        return completed_at if completed_at.tzinfo is not None else None
+
+    @staticmethod
+    def _selected_release_after_marker(completed_at: datetime | None) -> bool:
+        if completed_at is None:
+            return False
+        path = PROJECT_ROOT / "data/runtime/runtime_release_selection.json"
+        try:
+            selected_at = datetime_module.datetime.fromisoformat(
+                json.loads(path.read_text(encoding="utf-8"))["selected_at_kst"]
+            )
+            return selected_at.tzinfo is not None and completed_at < selected_at
+        except (OSError, KeyError, ValueError, TypeError, json.JSONDecodeError):
+            return False
 
     @staticmethod
     def _classify(issues: list[str], warnings: list[str]) -> tuple[str, str]:

@@ -229,6 +229,107 @@ def test_winrate_stage_requires_explicit_preopen_activation(tmp_path, monkeypatc
             now=datetime(2026, 10, 1, 20, tzinfo=policy.KST))
 
 
+def test_winrate_carry_reuses_existing_immutable_generation_after_source_repair(tmp_path, monkeypatch):
+    from src.engine.scalping import entry_strategy_policy as strategy
+
+    previous = copy.deepcopy(initial(tmp_path))
+    previous['machine_policy'] = strategy.seed(
+        previous['machine_policy'], ('KRX', 'KRX_REGULAR')
+    )
+    previous['bundle_sha256'] = policy.digest(
+        {k: v for k, v in previous.items() if k != 'bundle_sha256'}
+    )
+    policy._atomic_write_json(policy.root(tmp_path) / 'policy_2026-09-14.json', previous)
+    policy._atomic_write_json(
+        policy.root(tmp_path) / 'generations' / f"{previous['bundle_sha256']}.json",
+        previous,
+    )
+    parent_machine = policy.for_cohort(
+        previous, ('KRX', 'KRX_REGULAR')
+    )['machine_policy']
+    markets = {
+        scope: {
+            'market': market,
+            'input_attempt_count': 0,
+            'accepted_attempt_count': 0,
+            'source_contract_excluded_count': 0,
+            'source_contract_exclusion_reasons': {},
+            'excluded_attempt_counts': {},
+            'gross_label_difference_count': 0,
+            'source_state': 'no_rows',
+        }
+        for scope, market in (
+            ('KRX|KRX_REGULAR', 'REGULAR'),
+            ('PREMARKET_KRX_LIKE|PREMARKET_KRX_LIKE', 'PREMARKET'),
+            ('KRX_NXT_INTEGRATED|KRX_NXT_AFTERMARKET', 'AFTERMARKET'),
+        )
+    }
+    report = calibration._with_artifact_content_sha256({
+        'schema': 'main_entry_winrate_policy_report_v1',
+        'target_date': '2026-09-24',
+        'publication_date': '2026-09-24',
+        'report_scope': 'main_entry_winrate',
+        'selection_basis': 'win_rate_only',
+        'policy_version': 'winrate_initial_v1',
+        'disposition': 'incumbent_carried',
+        'source_contract_sha256': 'a' * 64,
+        'evaluated_attempt_manifest_sha256': 'b' * 64,
+        'source_receipt': {'target_date': '2026-09-24'},
+        'parent_bundle_sha256': previous['bundle_sha256'],
+        'parent_machine_policy_sha256': policy.digest(parent_machine),
+        'candidate_machine_policy_sha256': None,
+        'candidate_policy': None,
+        'policy_by_scope': {},
+        'policy_sha256': policy.digest({}),
+        'candidate_threshold_bp': None,
+        'input_attempt_count': 0,
+        'accepted_attempt_count': 0,
+        'source_contract_excluded_count': 0,
+        'source_contract_exclusion_reasons': {},
+        'excluded_attempt_counts': {},
+        'situation_attempt_counts': {},
+        'market_census': markets,
+        'gross_label_difference_count': 0,
+        'hurdle_errors': ['eligible_candidate_absent'],
+    })
+    source_path = tmp_path / 'winrate_carry.json'
+    policy._atomic_write_json(source_path, report)
+    now = datetime(2026, 9, 24, 20, tzinfo=policy.KST)
+    first = policy.stage_winrate_policy(
+        source_path, data_root=tmp_path, now=now, publication_day='2026-09-24'
+    )
+    assert first['status'] == 'staged'
+    target_path = policy.root(tmp_path) / f"policy_{first['target_date']}.json"
+    original_bundle = target_path.read_bytes()
+
+    updated = copy.deepcopy(report)
+    updated['evaluated_attempt_manifest_sha256'] = 'c' * 64
+    updated['source_receipt']['source_manifest_sha256'] = 'd' * 64
+    updated = calibration._with_artifact_content_sha256({
+        k: v for k, v in updated.items() if k != 'artifact_content_sha256'
+    })
+    policy._atomic_write_json(source_path, updated)
+    real_load = policy.load
+
+    def load_with_later_overlay(*, data_root, target_date):
+        existing = real_load(data_root=data_root, target_date=target_date)
+        if target_date == '2026-09-25' and existing is not None:
+            existing = copy.deepcopy(existing)
+            existing['previous_bundle_sha256'] = 'e' * 64
+        return existing
+
+    monkeypatch.setattr(policy, 'load', load_with_later_overlay)
+    reused = policy.stage_winrate_policy(
+        source_path, data_root=tmp_path, now=now, publication_day='2026-09-24'
+    )
+
+    assert reused['status'] == 'existing_incumbent_preserved'
+    assert reused['bundle_sha256'] == first['bundle_sha256']
+    assert reused['current_report_sha256'] == updated['artifact_content_sha256']
+    assert reused['bundle_report_sha256'] == report['artifact_content_sha256']
+    assert target_path.read_bytes() == original_bundle
+
+
 def test_winrate_successor_publisher_rechecks_both_holdout_dates_and_winrate_hurdles():
     report = {'target_date': '2026-10-01',
         'train_dates': ['2026-09-24', '2026-09-28', '2026-09-29'],

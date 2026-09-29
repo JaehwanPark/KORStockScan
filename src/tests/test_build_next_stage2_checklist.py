@@ -399,8 +399,8 @@ def test_build_next_stage2_checklist_generates_next_trading_day_and_tasks(
     assert "[IntradaySourceQualityGateCheck0511]" in text
     assert "[PostcloseSourceQualityGateReview0511]" in text
     assert "## 장전 체크리스트 (07:45~09:00)" in text
-    assert "## 장후 체크리스트 (16:25~21:55)" in text
-    assert "TimeWindow: 21:40~21:55" in next(
+    assert "## 장후 체크리스트 (16:25~06:50)" in text
+    assert "TimeWindow: 06:50~07:15" in next(
         line
         for line in text.splitlines()
         if "[PostcloseSourceQualityGateReview0511]" in line
@@ -566,10 +566,10 @@ def test_build_next_stage2_checklist_skips_optional_tasks_when_optional_artifact
     assert summary["tasks"] == [
         "ThresholdEnvAutoApplyPreopen0526",
         "IntradaySourceQualityGateCheck0526",
+        "PostcloseSourceQualityGateReview0526",
         "ThresholdDailyEVReport0526",
         "HumanInterventionSummary0526",
         "MachineMicroPolicyApprovalSourceGap0526",
-        "PostcloseSourceQualityGateReview0526",
     ]
     assert "source_status=missing" in text
     assert "CodeImprovementWorkorderReview0526" not in text

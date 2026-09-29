@@ -37,6 +37,9 @@ from src.engine.ai.holding_exit_vote import (
     research_decision,
     signal_snapshot,
     vote_store_path,
+    buy_fill_identity_from_runtime,
+    persist_buy_fill_receipt,
+    restore_buy_fill_receipt,
 )
 
 BUY_IDENTITY = input_snapshot_id([["BUY-1", "FILL-1", 1]])
@@ -527,3 +530,151 @@ def test_corrupt_vote_file_is_not_silently_ignored(tmp_path):
     path.write_text("{invalid json\n")
     with pytest.raises(ValueError, match="vote_store_json_corrupt"):
         load_votes_file(path, "record:7")
+
+
+def test_exact_buy_fill_receipt_survives_two_restarts_and_add_leg(tmp_path):
+    stock = {
+        "id": 48376, "code": "047040", "buy_time": "2026-09-28 10:40:55",
+        "buy_price": 19010.0, "buy_qty": 1, "entry_filled_qty": 1,
+        "_entry_receipt_filled_by_order_no": {"0029186": 1},
+        "_entry_receipt_executions_by_order_no": {
+            "0029186": {"131176": {"cumulative_qty": 1, "order_qty": 1}}
+        },
+    }
+    identity = persist_buy_fill_receipt(stock, tmp_path)
+    for _ in range(2):
+        restored = {key: stock[key] for key in ("id", "code", "buy_time", "buy_price", "buy_qty")}
+        assert restore_buy_fill_receipt(restored, tmp_path) == "restored"
+        assert buy_fill_identity_from_runtime(restored) == identity
+    stock.update(buy_qty=2, buy_price=18990.0,
+        _add_receipt_filled_by_order_no={"0029199": 1},
+        _add_receipt_executions_by_order_no={
+            "0029199": {"131200": {"cumulative_qty": 1, "order_qty": 1}}
+        })
+    new_identity = persist_buy_fill_receipt(stock, tmp_path)
+    assert new_identity != identity
+    restored = {key: stock[key] for key in ("id", "code", "buy_time", "buy_price", "buy_qty")}
+    assert restore_buy_fill_receipt(restored, tmp_path) == "restored"
+    assert buy_fill_identity_from_runtime(restored) == new_identity
+
+
+def test_exact_buy_fill_receipt_matches_db_naive_kst_buy_time(tmp_path):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    stock = {
+        "id": 48376, "code": "047040",
+        "buy_time": datetime(2026, 9, 28, 10, 40, 55,
+                             tzinfo=ZoneInfo("Asia/Seoul")),
+        "buy_price": 19010.0, "buy_qty": 1, "entry_filled_qty": 1,
+        "_entry_receipt_filled_by_order_no": {"0029186": 1},
+        "_entry_receipt_executions_by_order_no": {
+            "0029186": {"131176": {"cumulative_qty": 1}}
+        },
+    }
+    identity = persist_buy_fill_receipt(stock, tmp_path)
+    restored = {
+        "id": stock["id"], "code": stock["code"],
+        "buy_time": datetime(2026, 9, 28, 10, 40, 55),
+        "buy_price": stock["buy_price"], "buy_qty": stock["buy_qty"],
+    }
+    assert restore_buy_fill_receipt(restored, tmp_path) == "restored"
+    assert buy_fill_identity_from_runtime(restored) == identity
+
+
+def test_exact_buy_fill_receipt_rejects_stale_or_tampered_position(tmp_path):
+    stock = {
+        "id": 7, "code": "000007", "buy_time": "2026-09-29 09:01:00",
+        "buy_price": 100.0, "buy_qty": 1, "entry_filled_qty": 1,
+        "_entry_receipt_filled_by_order_no": {"123": 1},
+        "_entry_receipt_executions_by_order_no": {
+            "123": {"456": {"cumulative_qty": 1}}
+        },
+    }
+    persist_buy_fill_receipt(stock, tmp_path)
+    assert restore_buy_fill_receipt({**stock, "buy_qty": 2}, tmp_path) == "position_generation_mismatch"
+    assert restore_buy_fill_receipt({**stock, "buy_time": "2026-09-29 10:01:00"}, tmp_path) == "position_generation_mismatch"
+    path = tmp_path / "runtime" / "holding_buy_fill_receipts" / "7.json"
+    payload = json.loads(path.read_text())
+    payload["receipt_fields"]["_entry_receipt_executions_by_order_no"]["123"]["456"]["cumulative_qty"] = 2
+    path.write_text(json.dumps(payload))
+    target = {key: stock[key] for key in ("id", "code", "buy_time", "buy_price", "buy_qty")}
+    assert restore_buy_fill_receipt(target, tmp_path) == "receipt_identity_conflict"
+    assert "_entry_receipt_filled_by_order_no" not in target
+
+
+def test_legacy_vote_exact_legs_recover_initial_buy_without_raw_day_scan(tmp_path):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from src.engine.ai.holding_exit_vote import (
+        PATH_SCHEMA, buy_fill_identity_from_legs, path_vote_store_path,
+    )
+    stock = {"id": 48376, "code": "047040", "buy_qty": 1,
+             "buy_price": 19010.0, "buy_time": "2026-09-28 10:40:54",
+             "add_count": 0, "avg_down_count": 0, "pyramid_count": 0}
+    legs = [{"order_no": "0029186", "execution_no": "131176", "qty": 1}]
+    requested = datetime(2026, 9, 28, 10, 41, 43,
+                         tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
+    row = {"schema": PATH_SCHEMA, "position_key": "record:48376",
+           "path_id": "ADD_REBOUND", "purpose": "ADD_PERMISSION",
+           "status": "INSUFFICIENT", "path_policy_sha256": "a" * 64,
+           "buy_fill_legs": legs, "buy_fill_identity": buy_fill_identity_from_legs(legs),
+           "requested_at": requested, "received_at": requested + 0.1,
+           "persisted_at": requested + 0.2}
+    path = path_vote_store_path(tmp_path, "record:48376")
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(row) + "\n")
+    assert restore_buy_fill_receipt(stock, tmp_path) == "restored_from_path_vote"
+    assert stock["_entry_receipt_filled_by_order_no"] == {"0029186": 1}
+    assert buy_fill_identity_from_runtime(stock) == row["buy_fill_identity"]
+    second_boot = {key: stock[key] for key in ("id", "code", "buy_qty", "buy_price", "buy_time")}
+    assert restore_buy_fill_receipt(second_boot, tmp_path) == "restored"
+
+
+def test_legacy_vote_recovery_rejects_add_history_and_conflicting_identities(tmp_path):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from src.engine.ai.holding_exit_vote import (
+        PATH_SCHEMA, buy_fill_identity_from_legs, path_vote_store_path,
+    )
+    stock = {"id": 7, "code": "000007", "buy_qty": 1,
+             "buy_price": 100.0, "buy_time": "2026-09-28 10:40:54"}
+    requested = datetime(2026, 9, 28, 10, 41,
+                         tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
+    rows = []
+    for index, execution in enumerate(("111", "222")):
+        legs = [{"order_no": "123", "execution_no": execution, "qty": 1}]
+        rows.append({"schema": PATH_SCHEMA, "position_key": "record:7",
+                     "path_id": "ADD_REBOUND", "purpose": "ADD_PERMISSION",
+                     "status": "INSUFFICIENT", "path_policy_sha256": "a" * 64,
+                     "buy_fill_legs": legs,
+                     "buy_fill_identity": buy_fill_identity_from_legs(legs),
+                     "requested_at": requested + index,
+                     "received_at": requested + index + 0.1,
+                     "persisted_at": requested + index + 0.2})
+    path = path_vote_store_path(tmp_path, "record:7")
+    path.parent.mkdir(parents=True)
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    assert restore_buy_fill_receipt(stock, tmp_path) == "legacy_vote_buy_identity_conflict"
+    assert "_entry_receipt_filled_by_order_no" not in stock
+    assert restore_buy_fill_receipt({**stock, "add_count": 1}, tmp_path) == "legacy_vote_add_legs_unclassified"
+
+
+def test_legacy_vote_recovery_rejects_malformed_valid_row_without_boot_crash(tmp_path):
+    from src.engine.ai.holding_exit_vote import (
+        PATH_SCHEMA, buy_fill_identity_from_legs, path_vote_store_path,
+    )
+
+    stock = {"id": 7, "code": "000007", "buy_qty": 1,
+             "buy_price": 100.0, "buy_time": "2026-09-28 10:40:54"}
+    path = path_vote_store_path(tmp_path, "record:7")
+    path.parent.mkdir(parents=True)
+    legs = [{"order_no": "123", "execution_no": "456", "qty": 1}]
+    path.write_text(json.dumps({
+        "schema": PATH_SCHEMA, "position_key": "record:7",
+        "path_id": "ADD_REBOUND", "purpose": "ADD_PERMISSION",
+        "status": "VALID", "path_policy_sha256": "a" * 64,
+        "buy_fill_identity": buy_fill_identity_from_legs(legs), "buy_fill_legs": legs,
+        "quote_observed_at": 1.0, "requested_at": "invalid",
+    }) + "\n")
+    assert restore_buy_fill_receipt(stock, tmp_path) == "legacy_vote_store_invalid"

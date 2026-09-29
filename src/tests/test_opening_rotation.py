@@ -35,6 +35,11 @@ _ORIGINAL_SCANNER_RUNTIME_EVENT_VENUE_FIELDS = (
 
 
 @pytest.fixture(autouse=True)
+def _isolate_buy_fill_receipt_store(monkeypatch, tmp_path):
+    monkeypatch.setattr(sniper_execution_receipts, "DATA_DIR", tmp_path)
+
+
+@pytest.fixture(autouse=True)
 def _active_krx_opening_policy_for_runtime_unit_tests(monkeypatch):
     """Keep legacy unit fixtures explicit about the reviewed PREOPEN state."""
 

@@ -4,9 +4,41 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 VENV_PY="${VENV_PY:-$PROJECT_DIR/.venv/bin/python}"
-TARGET_DATE="${1:-$(TZ=Asia/Seoul date +%F)}"
+SCHEDULED_EFFECTIVE_TODAY=false
+TARGET_EFFECTIVE_DATE=""
+if [[ "${1:-}" == "--resolve-effective-today" ]]; then
+  SCHEDULED_EFFECTIVE_TODAY=true
+  TARGET_EFFECTIVE_DATE="$(TZ=Asia/Seoul date +%F)"
+  TARGET_DATE="$(PYTHONPATH="$SCRIPT_DIR/.." "$VENV_PY" - "$TARGET_EFFECTIVE_DATE" <<'PY'
+from datetime import date, timedelta
+import sys
+from src.utils.market_day import is_krx_trading_day
+
+effective = date.fromisoformat(sys.argv[1])
+if not is_krx_trading_day(effective):
+    print("SKIP_NON_TRADING_EFFECTIVE_DATE")
+    raise SystemExit(0)
+source = effective - timedelta(days=1)
+for _ in range(14):
+    if is_krx_trading_day(source):
+        print(source.isoformat())
+        break
+    source -= timedelta(days=1)
+else:
+    raise SystemExit("previous_krx_trading_date_unresolved")
+PY
+)" || exit 2
+  if [[ "$TARGET_DATE" == "SKIP_NON_TRADING_EFFECTIVE_DATE" ]]; then
+    echo "[SKIP] postclose_finalization effective_date=${TARGET_EFFECTIVE_DATE} reason=non_trading_effective_date"
+    exit 0
+  fi
+elif [[ -z "${1:-}" ]]; then
+  TARGET_DATE="$(TZ=Asia/Seoul date +%F)"
+else
+  TARGET_DATE="$1"
+fi
 RECOVERY_MODE=false
-if [[ "${2:-}" == "--recover-closed-target" ]]; then
+if [[ "${2:-}" == "--recover-closed-target" && "$SCHEDULED_EFFECTIVE_TODAY" == "false" ]]; then
   RECOVERY_MODE=true
 elif [[ -n "${2:-}" ]]; then
   echo "[FAIL] postclose_finalization reason=unknown_mode"
@@ -19,18 +51,19 @@ elif [[ -n "${3:-}" || $# -gt 3 ]]; then
   echo "[FAIL] postclose_finalization reason=unknown_cleanup_recovery_mode"
   exit 2
 fi
-WAIT_TIMEOUT_SEC="${POSTCLOSE_FINALIZATION_WAIT_TIMEOUT_SEC:-5100}"
+WAIT_TIMEOUT_SEC="${POSTCLOSE_FINALIZATION_WAIT_TIMEOUT_SEC:-3600}"
 POLL_SEC="${POSTCLOSE_FINALIZATION_POLL_SEC:-30}"
-HARD_DEADLINE_KST="${POSTCLOSE_FINALIZATION_HARD_DEADLINE_KST:-23:20}"
+HARD_DEADLINE_KST="${POSTCLOSE_FINALIZATION_HARD_DEADLINE_KST:-06:00}"
 CLEANUP_TIMEOUT_SEC="${POSTCLOSE_FINALIZATION_CLEANUP_TIMEOUT_SEC:-600}"
 DETECTOR_TIMEOUT_SEC="${POSTCLOSE_FINALIZATION_DETECTOR_TIMEOUT_SEC:-600}"
 SUMMARY_TIMEOUT_SEC="${POSTCLOSE_FINALIZATION_SUMMARY_TIMEOUT_SEC:-600}"
+FINALIZATION_FINISH_BY_KST="${POSTCLOSE_FINALIZATION_FINISH_BY_KST:-06:50}"
 ALLOW_NONCURRENT_TARGET="${POSTCLOSE_FINALIZATION_ALLOW_NONCURRENT_TARGET:-false}"
 OWNED_LOG_RUNNER="${POSTCLOSE_FINALIZATION_OWNED_LOG_RUNNER:-$SCRIPT_DIR/run_with_owned_log.sh}"
 CLEANUP_RUNNER="${POSTCLOSE_FINALIZATION_CLEANUP_RUNNER:-$SCRIPT_DIR/run_logs_rotation_cleanup_cron.sh}"
 ERROR_DETECTION_RUNNER="${POSTCLOSE_FINALIZATION_ERROR_DETECTION_RUNNER:-$SCRIPT_DIR/run_error_detection.sh}"
 
-if [[ ! "$WAIT_TIMEOUT_SEC" =~ ^[0-9]+$ || ! "$POLL_SEC" =~ ^[1-9][0-9]*$ || ! "$CLEANUP_TIMEOUT_SEC" =~ ^[1-9][0-9]*$ || ! "$DETECTOR_TIMEOUT_SEC" =~ ^[1-9][0-9]*$ || ! "$SUMMARY_TIMEOUT_SEC" =~ ^[1-9][0-9]*$ || ! "$HARD_DEADLINE_KST" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]]; then
+if [[ ! "$WAIT_TIMEOUT_SEC" =~ ^[0-9]+$ || ! "$POLL_SEC" =~ ^[1-9][0-9]*$ || ! "$CLEANUP_TIMEOUT_SEC" =~ ^[1-9][0-9]*$ || ! "$DETECTOR_TIMEOUT_SEC" =~ ^[1-9][0-9]*$ || ! "$SUMMARY_TIMEOUT_SEC" =~ ^[1-9][0-9]*$ || ! "$HARD_DEADLINE_KST" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ || ! "$FINALIZATION_FINISH_BY_KST" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]]; then
   echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=invalid_wait_config"
   exit 2
 fi
@@ -49,8 +82,27 @@ PY
   fi
   WAIT_TIMEOUT_SEC=0
 fi
-if [[ "$RECOVERY_MODE" != "true" && "$ALLOW_NONCURRENT_TARGET" != "true" && "$TARGET_DATE" != "$(TZ=Asia/Seoul date +%F)" ]]; then
-  echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=noncurrent_target_for_final_detector"
+if [[ -z "$TARGET_EFFECTIVE_DATE" ]]; then
+  TARGET_EFFECTIVE_DATE="$(PYTHONPATH="$SCRIPT_DIR/.." "$VENV_PY" - "$TARGET_DATE" <<'PY'
+from datetime import date, timedelta
+import sys
+from src.utils.market_day import is_krx_trading_day
+
+candidate = date.fromisoformat(sys.argv[1]) + timedelta(days=1)
+for _ in range(14):
+    if is_krx_trading_day(candidate):
+        print(candidate.isoformat())
+        break
+    candidate += timedelta(days=1)
+else:
+    raise SystemExit("effective_krx_trading_date_unresolved")
+PY
+)" || exit 2
+fi
+if [[ "$RECOVERY_MODE" != "true" && "$ALLOW_NONCURRENT_TARGET" != "true" \
+    && "$TARGET_DATE" != "$(TZ=Asia/Seoul date +%F)" \
+    && "$TARGET_EFFECTIVE_DATE" != "$(TZ=Asia/Seoul date +%F)" ]]; then
+  echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} effective_date=${TARGET_EFFECTIVE_DATE} reason=noncurrent_target_for_final_detector"
   exit 2
 fi
 
@@ -62,7 +114,33 @@ if ! flock -n 8; then
   exit 75
 fi
 started_at="$(TZ=Asia/Seoul date +%FT%T%z)"
-echo "[START] postclose_finalization target_date=${TARGET_DATE} recovery=${RECOVERY_MODE} wait_timeout_sec=${WAIT_TIMEOUT_SEC} hard_deadline_kst=${HARD_DEADLINE_KST} started_at=${started_at}"
+echo "[START] postclose_finalization target_date=${TARGET_DATE} effective_date=${TARGET_EFFECTIVE_DATE} recovery=${RECOVERY_MODE} wait_timeout_sec=${WAIT_TIMEOUT_SEC} hard_deadline_kst=${HARD_DEADLINE_KST} started_at=${started_at}"
+
+remaining_before_finalization_cutoff() {
+  "$VENV_PY" - "$TARGET_EFFECTIVE_DATE" "$FINALIZATION_FINISH_BY_KST" <<'PY'
+from datetime import date, datetime, time
+from zoneinfo import ZoneInfo
+import sys
+deadline = datetime.combine(date.fromisoformat(sys.argv[1]), time.fromisoformat(sys.argv[2]), ZoneInfo("Asia/Seoul"))
+print(max(0, int((deadline - datetime.now(ZoneInfo("Asia/Seoul"))).total_seconds())))
+PY
+}
+
+bounded_stage_budget() {
+  local requested="$1"
+  local remaining
+  if [[ "$RECOVERY_MODE" == "true" || "$ALLOW_NONCURRENT_TARGET" == "true" ]]; then
+    printf '%s\n' "$requested"
+    return 0
+  fi
+  remaining="$(remaining_before_finalization_cutoff)" || return 1
+  (( remaining > 0 )) || return 1
+  if (( requested < remaining )); then
+    printf '%s\n' "$requested"
+  else
+    printf '%s\n' "$remaining"
+  fi
+}
 
 predecessor_state() {
   env PYTHONPATH=. "$VENV_PY" - "$PROJECT_DIR" "$TARGET_DATE" <<'PY'
@@ -149,10 +227,13 @@ PY
 
 run_final_detector() {
   local detector_args=(full)
-  if [[ "$RECOVERY_MODE" == "true" ]]; then
-    detector_args+=("$TARGET_DATE")
-  fi
-  timeout --foreground "${DETECTOR_TIMEOUT_SEC}s" bash "$OWNED_LOG_RUNNER" \
+  local detector_budget
+  detector_args+=("$TARGET_DATE")
+  detector_budget="$(bounded_stage_budget "$DETECTOR_TIMEOUT_SEC")" || {
+    echo "[SKIP] postclose_final_detector target_date=${TARGET_DATE} reason=finish_by_cutoff_elapsed"
+    return 1
+  }
+  timeout --foreground "${detector_budget}s" bash "$OWNED_LOG_RUNNER" \
     --owner error_detection_cron \
     --log "$PROJECT_DIR/logs/run_error_detection_cron.log" \
     env POSTCLOSE_FINALIZATION_DETECTOR_PARENT_PID="$$" POSTCLOSE_FINALIZATION_DETECTOR_DATE="$TARGET_DATE" \
@@ -162,11 +243,17 @@ run_final_detector() {
 waited=0
 while true; do
   if [[ "$RECOVERY_MODE" != "true" && "$ALLOW_NONCURRENT_TARGET" != "true" ]]; then
-    current_hm="$(TZ=Asia/Seoul date +%H:%M)"
-    current_total=$((10#${current_hm%:*} * 60 + 10#${current_hm#*:}))
-    deadline_total=$((10#${HARD_DEADLINE_KST%:*} * 60 + 10#${HARD_DEADLINE_KST#*:}))
-    if ((current_total >= deadline_total)); then
-      echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=same_date_hard_deadline current_kst=${current_hm} hard_deadline_kst=${HARD_DEADLINE_KST}"
+    deadline_reached="$(TZ=Asia/Seoul "$VENV_PY" - "$TARGET_EFFECTIVE_DATE" "$HARD_DEADLINE_KST" <<'PY'
+from datetime import date, datetime, time
+from zoneinfo import ZoneInfo
+import sys
+deadline = datetime.combine(date.fromisoformat(sys.argv[1]), time.fromisoformat(sys.argv[2]), ZoneInfo("Asia/Seoul"))
+print("true" if datetime.now(ZoneInfo("Asia/Seoul")) >= deadline else "false")
+PY
+)"
+    if [[ "$deadline_reached" == "true" ]]; then
+      current_kst="$(TZ=Asia/Seoul date +%FT%T)"
+      echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} effective_date=${TARGET_EFFECTIVE_DATE} reason=effective_date_hard_deadline current_kst=${current_kst} hard_deadline_kst=${HARD_DEADLINE_KST}"
       run_final_detector || true
       exit 1
     fi
@@ -208,7 +295,12 @@ if [[ "$TARGET_DATE" > "2026-09-08" ]]; then
   # Reuse the controller after exact independent terminal validation. No EV,
   # provider, workorder producer, live apply, or whole-wrapper recovery here.
   controller_started_after_ns="$(date +%s%N)"
-  if ! timeout --kill-after=10s "${SUMMARY_TIMEOUT_SEC}s" env PYTHONPATH=. \
+  summary_budget="$(bounded_stage_budget "$SUMMARY_TIMEOUT_SEC")" || {
+    echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=finish_by_cutoff_elapsed_before_summary"
+    run_final_detector || true
+    exit 1
+  }
+  if ! timeout --kill-after=10s "${summary_budget}s" env PYTHONPATH=. \
     POSTCLOSE_DONE_CONTROLLER_REQUIRE_CODEX_COMPLETED=false "$VENV_PY" \
     -m src.engine.automation.postclose_done_controller --date "$TARGET_DATE" \
     --require-independent-producers --max-attempts 2 --predecessor-timeout-sec 0; then
@@ -239,7 +331,29 @@ PY
   echo "[INFO] postclose_finalization summary_handoff_verified target_date=${TARGET_DATE}"
 fi
 
-if ! timeout --foreground "${CLEANUP_TIMEOUT_SEC}s" bash "$OWNED_LOG_RUNNER" \
+finalization_generation=""
+if [[ "$TARGET_DATE" > "2026-09-27" ]]; then
+  finalization_generation="$(env PYTHONPATH=. "$VENV_PY" - "$PROJECT_DIR" "$TARGET_DATE" <<'PY'
+import sys
+from pathlib import Path
+from src.engine.automation.postclose_finalization_generation import capture_finalization_generation
+
+receipt = capture_finalization_generation(Path(sys.argv[1]), sys.argv[2])
+print(receipt["chain_sha256"], receipt["snapshot_sha256"])
+PY
+)" || {
+    echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=finalization_generation_invalid"
+    run_final_detector || true
+    exit 1
+  }
+fi
+
+cleanup_budget="$(bounded_stage_budget "$CLEANUP_TIMEOUT_SEC")" || {
+  echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=finish_by_cutoff_elapsed_before_cleanup"
+  run_final_detector || true
+  exit 1
+}
+if ! timeout --foreground "${cleanup_budget}s" bash "$OWNED_LOG_RUNNER" \
   --owner log_rotation_cleanup_cron \
   --log "$PROJECT_DIR/logs/log_rotation_cleanup_cron.log" \
   env TARGET_DATE="$TARGET_DATE" "$CLEANUP_RUNNER" 30 "${cleanup_recovery_args[@]}"; then
@@ -251,10 +365,52 @@ echo "[INFO] postclose_finalization cleanup_done target_date=${TARGET_DATE}"
 
 # The child detector reports its live ancestor as pending, never as PASS.
 echo "[INFO] postclose_finalization target_date=${TARGET_DATE} cleanup=done detector_handoff=started"
+detector_started_after_ns="$(date +%s%N)"
 if ! run_final_detector; then
   echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=final_detector_failed"
   exit 1
 fi
+detector_generation_fields=""
+if [[ -n "$finalization_generation" ]]; then
+  detector_receipt="$(env PYTHONPATH=. "$VENV_PY" - "$PROJECT_DIR" "$TARGET_DATE" "$detector_started_after_ns" <<'PY'
+import sys
+from pathlib import Path
+from src.engine.automation.postclose_finalization_generation import capture_final_detector_receipt
+
+receipt = capture_final_detector_receipt(
+    Path(sys.argv[1]), sys.argv[2], started_after_ns=int(sys.argv[3])
+)
+print(receipt["run_id"], receipt["report_sha256"])
+PY
+)" || {
+    echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=final_detector_receipt_invalid"
+    exit 1
+  }
+  read -r detector_run_id detector_report_sha256 <<< "$detector_receipt"
+  detector_generation_fields=" detector_run_id=${detector_run_id} detector_report_sha256=${detector_report_sha256}"
+fi
+if [[ -n "$finalization_generation" ]]; then
+  current_generation="$(env PYTHONPATH=. "$VENV_PY" - "$PROJECT_DIR" "$TARGET_DATE" <<'PY'
+import sys
+from pathlib import Path
+from src.engine.automation.postclose_finalization_generation import capture_finalization_generation
+
+receipt = capture_finalization_generation(Path(sys.argv[1]), sys.argv[2])
+print(receipt["chain_sha256"], receipt["snapshot_sha256"])
+PY
+)" || {
+    echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=finalization_generation_changed_after_detector"
+    exit 1
+  }
+  if [[ "$current_generation" != "$finalization_generation" ]]; then
+    echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=finalization_generation_changed_after_detector"
+    exit 1
+  fi
+  read -r chain_sha256 snapshot_generation_sha256 <<< "$finalization_generation"
+  finalization_generation_fields=" chain_sha256=${chain_sha256} snapshot_generation_sha256=${snapshot_generation_sha256}"
+else
+  finalization_generation_fields=""
+fi
 detector_finished_at="$(TZ=Asia/Seoul date +%FT%T%z)"
-echo "[DONE] postclose_finalization target_date=${TARGET_DATE} cleanup=done detector=done finished_at=${detector_finished_at}"
-echo "[DONE] postclose_final_detector target_date=${TARGET_DATE} finalization=done detector=done finished_at=${detector_finished_at}"
+echo "[DONE] postclose_finalization target_date=${TARGET_DATE} cleanup=done detector=done${finalization_generation_fields}${detector_generation_fields} finished_at=${detector_finished_at}"
+echo "[DONE] postclose_final_detector target_date=${TARGET_DATE} finalization=done detector=done${finalization_generation_fields}${detector_generation_fields} finished_at=${detector_finished_at}"

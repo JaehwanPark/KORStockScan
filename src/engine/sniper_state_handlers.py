@@ -53943,6 +53943,8 @@ def _collect_holding_path_votes(
     )
     if not route or not transport_epoch or not source_generation:
         return persist_gap("quote_provenance_missing", source_generation)
+    if stock.get("buy_fill_identity_store_gap"):
+        return persist_gap("buy_fill_identity_store_gap", source_generation)
     position_key = _scalp_holding_source_position_key(stock, code)
     buy_fill_legs = buy_fill_legs_from_runtime(stock)
     buy_fill_identity = buy_fill_identity_from_runtime(stock)
@@ -89379,11 +89381,23 @@ def handle_holding_state(
             scale_in_gate=gate, scale_in_action=action, reason="shared_main_rebound_entry", force=True)
         _process_scale_in_action(stock, code, ws_data, action, admin_id)
     elif now_ts - float(stock.get("last_add_block_log_ts", 0) or 0) >= 30:
-        assessment = stock.get("_main_rebound_entry_assessment") or {}
+        assessment = (stock.get("_main_rebound_entry_assessment") or {}) if gate.get("allowed") else {}
         _log_holding_pipeline(stock, code, "avg_down_shared_rebound_blocked",
             reason=gate.get("reason") if not gate.get("allowed") else assessment.get("reason", "shared_main_rebound_source_unavailable"),
             machine_action=assessment.get("machine_action"),
             structure_phase_family=assessment.get("structure_phase_family"),
+            source_signal_id=assessment.get("source_signal_id"),
+            preflight_primary_blocker=assessment.get("preflight_primary_blocker"),
+            preflight_primary_blocker_category=assessment.get("preflight_primary_blocker_category"),
+            preflight_blockers=assessment.get("preflight_blockers"),
+            preflight_missing_sources=assessment.get("preflight_missing_sources"),
+            source_clock_snapshot_id=assessment.get("source_clock_snapshot_id"),
+            source_clock_captured_at=assessment.get("source_clock_captured_at"),
+            source_timing=assessment.get("source_timing"),
+            machine_bundle_sha256=assessment.get("machine_bundle_sha256"),
+            policy_status=assessment.get("policy_status"),
+            effective_venue=assessment.get("effective_venue"),
+            session_bucket=assessment.get("session_bucket"),
             decision_authority="shared_main_mechanistic_rebound_entry",
             runtime_effect=False, actual_order_submitted=False, broker_order_forbidden=True)
         stock["last_add_block_log_ts"] = now_ts
@@ -89409,6 +89423,11 @@ def can_consider_scale_in(
     exit_authority_reason = _scale_in_exit_authority_block_reason(stock)
     if exit_authority_reason:
         return {"allowed": False, "reason": exit_authority_reason}
+
+    if str(strategy or "").upper() == "SCALPING" and stock.get(
+        "buy_fill_identity_store_gap"
+    ):
+        return {"allowed": False, "reason": "buy_fill_identity_store_gap"}
 
     scale_in_recheck_allowed = bool(
         stock.get("entry_split_probe_scale_in_recheck_allowed")
@@ -90376,6 +90395,10 @@ def _evaluate_scale_in_signal(
     _log_holding_pipeline(stock, code, "avg_down_shared_rebound_signal",
         source_signal_id=signal["source_signal_id"], machine_bundle_sha256=signal["machine_bundle_sha256"],
         machine_policy_version=signal["machine_policy_version"],
+        holding_path_vote_signal_id=signal["source_signal_id"],
+        holding_path_vote_decision=add_snapshot.get("decision"),
+        holding_path_vote_policy_sha256=add_snapshot.get("policy_sha256"),
+        buy_fill_identity=add_snapshot.get("buy_fill_identity"),
         position_episode_id=signal.get("position_episode_id"),
         scale_in_decision_id=signal.get("scale_in_decision_id"),
         decision_authority="shared_main_mechanistic_rebound_entry", runtime_effect=False,
@@ -90617,6 +90640,8 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
     if str((action or {}).get("add_type") or "").upper() == "PYRAMID":
         return {"status": "blocked", "reason": "pyramid_permanently_retired", "qty": 0}
     if str((action or {}).get("add_type") or "").upper() == "AVG_DOWN":
+        if stock.get("buy_fill_identity_store_gap"):
+            return {"status": "blocked", "reason": "buy_fill_identity_store_gap", "qty": 0}
         if stock.get("holding_path_vote_store_gap"):
             return {"status": "blocked", "reason": "add_vote_store_unavailable", "qty": 0}
         permit = stock.get("_main_rebound_entry_permit") or {}

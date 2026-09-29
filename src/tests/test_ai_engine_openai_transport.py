@@ -8590,7 +8590,20 @@ def test_shared_rebound_producer_uses_real_entry_core_and_never_provider(monkeyp
             "mechanistic_threshold_policy": bundle["machine_policy"],
             "selected_prompt_version": next(iter(openai_module.AUXILIARY_ENTRY_RISK_PROMPT_VERSIONS))}
     monkeypatch.setattr(openai_module, "resolve_live_prompt_policy", resolve)
-    monkeypatch.setattr(openai_module, "ai_input_preflight", lambda c: {"allowed": case != "source_gap"})
+    monkeypatch.setattr(openai_module, "ai_input_preflight", lambda c: {
+        "allowed": case != "source_gap",
+        "primary_blocker": "tick_context_stale",
+        "primary_blocker_category": "stale_source",
+        "blockers": ["tick_context_stale", "quote_missing"],
+        "missing_sources": ["quote"],
+    })
+    monkeypatch.setattr(openai_module, "ai_market_snapshot_log_fields", lambda c: {
+        "ai_input_preflight_source_clock_snapshot_id": "snapshot-1",
+        "ai_input_preflight_source_clock_captured_at": "2026-09-29T10:00:00+09:00",
+        "ai_input_preflight_source_timing": {
+            "tick": {"observed_at": "2026-09-29T09:59:00+09:00", "age_ms": 60000,
+                     "quality": "stale", "freshness_limit_ms": 3000}},
+    })
     monkeypatch.setattr(micro_confirmation, "load_live_dynamic_confirmation_source", lambda: (None, "source_gap"))
     monkeypatch.setattr(engine, "_build_entry_screen_hot_payload", lambda *a, **k: {
         "current": {"price": 9950},
@@ -8619,6 +8632,11 @@ def test_shared_rebound_producer_uses_real_entry_core_and_never_provider(monkeyp
     assert scopes[0]["effective_venue"] == "KRX"
     assert scopes[0]["session_bucket"] == "krx_regular"
     assert result["should_add"] is (case in {"rebound", "pullback"}), result
+    if case == "source_gap":
+        assert result["preflight_primary_blocker"] == "tick_context_stale"
+        assert result["preflight_blockers"] == ["tick_context_stale", "quote_missing"]
+        assert result["source_clock_snapshot_id"] == "snapshot-1"
+        assert result["machine_bundle_sha256"] == "b" * 64
     if result["should_add"]:
         assert result["machine_action"] == "ENTER_NOW"
         assert result["machine_bundle_sha256"] == "b" * 64

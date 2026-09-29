@@ -310,6 +310,13 @@ def run_zero_base_probe(
     registered_epoch = now()
     deferred_release = False
     try:
+        if was_subscribed and hasattr(ws_manager, "_registered_item_epochs"):
+            registration_reason = probe_registration_receipt(
+                ws_manager, code=code, item=item,
+            )
+            if registration_reason:
+                result["reason"] = registration_reason
+                return result
         if not was_subscribed:
             registration = ws_manager.execute_subscribe(
                 [item], source="zero_base_probe", observation_only=True,
@@ -346,7 +353,13 @@ def run_zero_base_probe(
         )
         result["ws_observation"] = observation
         if not ws_data:
-            result["reason"] = source_reason
+            registration_reason = (
+                probe_registration_receipt(ws_manager, code=code, item=item)
+                if source_reason == "route_snapshot_missing"
+                and hasattr(ws_manager, "_registered_item_epochs")
+                else ""
+            )
+            result["reason"] = registration_reason or source_reason
             return result
         tick_fetcher = tick_fetcher or kiwoom_utils.get_tick_history_ka10003
         candle_fetcher = candle_fetcher or fetch_entry_candles_with_meta

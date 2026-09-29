@@ -41,7 +41,10 @@ from src.engine.scalping.entry_recheck_economics import (
     record_buy_receipt as record_recheck_buy_receipt,
 )
 from src.engine.scalping.position_peak_ledger import POSITION_PEAK_LEDGER
-from src.engine.ai.holding_exit_vote import buy_fill_identity_from_runtime
+from src.engine.ai.holding_exit_vote import (
+    buy_fill_identity_from_runtime,
+    persist_buy_fill_receipt,
+)
 from src.engine.scalping.main_lifecycle_journal import (
     BROKER_EXECUTION_MAX_NEGATIVE_LAG_SEC,
     BROKER_EXECUTION_MAX_RECEIVE_LAG_SEC,
@@ -1495,6 +1498,23 @@ def _log_holding_pipeline(*args, **kwargs):
             f"stage={stage or '-'}: {exc}"
         )
         return None
+
+
+def _persist_buy_fill_receipt_or_block(stock: dict[str, Any], code: str) -> None:
+    """Keep a missing durable BUY identity from authorizing a later ADD."""
+    if normalize_strategy(stock.get("strategy")) != "SCALPING":
+        return
+    try:
+        identity = persist_buy_fill_receipt(stock, DATA_DIR)
+    except (OSError, TypeError, ValueError) as exc:
+        stock["buy_fill_identity_store_gap"] = type(exc).__name__
+        log_error(
+            f"[BUY_FILL_IDENTITY_STORE_GAP] record_id={stock.get('id')} "
+            f"code={code} error={type(exc).__name__}"
+        )
+        return
+    stock.pop("buy_fill_identity_store_gap", None)
+    stock["buy_fill_identity_store_sha256"] = identity
 
 
 def _emit_execution_receipt_submission_custody(
@@ -11086,6 +11106,7 @@ def _handle_add_buy_execution(
         **split_leg_fields,
     }
     history_note = _split_receipt_history_note(split_leg_fields)
+    _persist_buy_fill_receipt_or_block(target_stock, code)
     _update_db_for_add(
         target_id,
         exec_price,
@@ -12086,6 +12107,7 @@ def _handle_entry_buy_execution(
         target_stock.pop("entry_partial_fill_deferred_at", None)
         target_stock.pop("pending_buy_msg", None)
 
+    _persist_buy_fill_receipt_or_block(target_stock, code)
     threading.Thread(
         target=_update_db_for_buy,
         args=(target_id, exec_price, now, buy_receipt_snapshot),

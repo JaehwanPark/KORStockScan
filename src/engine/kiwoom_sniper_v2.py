@@ -46,7 +46,7 @@ from sqlalchemy import text
 # 💡 Level 1 & 2 공통 모듈 (경로 및 패키지 구조에 맞게 통일)
 from src.utils import kiwoom_utils
 from src.utils.logger import log_error, log_info
-from src.utils.constants import RESTART_FLAG_PATH, TRADING_RULES
+from src.utils.constants import DATA_DIR, RESTART_FLAG_PATH, TRADING_RULES
 from src.utils.pipeline_event_logger import emit_pipeline_event
 from src.trading.samsung_morning_one_share.authority_handoff import (
     consume_guarded_restart_request,
@@ -86,6 +86,7 @@ from src.engine.scalping.position_sizing_allocator import (
     resolve_scalping_allocation,
 )
 from src.engine.scalping.position_peak_ledger import POSITION_PEAK_LEDGER
+from src.engine.ai.holding_exit_vote import restore_buy_fill_receipt
 from src.engine.scalping.micro_reversion.collection_targets import (
     load_exact_date_collection_targets,
 )
@@ -2212,11 +2213,6 @@ def _scanner_runtime_target_venue_fields(payload, *, target=None):
         ),
         ("payload.effective_venue", payload.get("effective_venue")),
         ("payload.venue", payload.get("venue")),
-        ("payload.market_data_route", payload.get("market_data_route")),
-        (
-            "payload.scanner_market_gainer_market_data_route",
-            payload.get("scanner_market_gainer_market_data_route"),
-        ),
         (
             "target.rising_missed_effective_venue",
             target.get("rising_missed_effective_venue"),
@@ -2227,6 +2223,13 @@ def _scanner_runtime_target_venue_fields(payload, *, target=None):
         ),
         ("target.effective_venue", target.get("effective_venue")),
         ("target.venue", target.get("venue")),
+    )
+    route_fallback_candidates = (
+        ("payload.market_data_route", payload.get("market_data_route")),
+        (
+            "payload.scanner_market_gainer_market_data_route",
+            payload.get("scanner_market_gainer_market_data_route"),
+        ),
         ("target.market_data_route", target.get("market_data_route")),
         (
             "target.scanner_market_gainer_market_data_route",
@@ -2243,6 +2246,14 @@ def _scanner_runtime_target_venue_fields(payload, *, target=None):
         normalized_venue = cohort_aliases.get(normalized_venue, normalized_venue)
         if normalized_venue in _SCANNER_RUNTIME_SUPPORTED_COHORTS:
             explicit_venues.append((venue_source, normalized_venue))
+    # _AL market data is also used during KRX regular trading. Its integrated
+    # route cannot override an explicit session venue (KRX with SOR orders).
+    if not explicit_venues:
+        for venue_source, venue_value in route_fallback_candidates:
+            normalized_venue = str(venue_value or "").strip().upper()
+            normalized_venue = cohort_aliases.get(normalized_venue, normalized_venue)
+            if normalized_venue in _SCANNER_RUNTIME_SUPPORTED_COHORTS:
+                explicit_venues.append((venue_source, normalized_venue))
     unique_venues = {venue for _, venue in explicit_venues}
     if len(unique_venues) == 1:
         canonical_venue = next(iter(unique_venues))
@@ -11788,6 +11799,17 @@ def _restore_holding_runtime_state(targets):
         stock["scale_in_locked"] = bool(stock.get("scale_in_locked", False))
         stock["hard_stop_price"] = _safe_float(stock.get("hard_stop_price"))
         stock["trailing_stop_price"] = _safe_float(stock.get("trailing_stop_price"))
+
+        if strategy == "SCALPING":
+            fill_restore = restore_buy_fill_receipt(stock, DATA_DIR)
+            if fill_restore not in {"restored", "restored_from_path_vote"}:
+                stock["buy_fill_identity_store_gap"] = fill_restore
+                log_error(
+                    f"[BOOT_BUY_FILL_IDENTITY_GAP] record_id={stock.get('id')} "
+                    f"code={code} reason={fill_restore}"
+                )
+            else:
+                stock["buy_fill_identity_restore_status"] = fill_restore
 
         if stock.get("buy_time") and not stock.get("holding_started_at"):
             stock["holding_started_at"] = stock.get("buy_time")

@@ -6,6 +6,8 @@ from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from src.engine.monitoring import widget_collector_expansion_recommendation as rec
 from src.engine.monitoring import widget_research_watch_collector as watch
 
@@ -466,6 +468,10 @@ def test_cli_writes_replay_and_recommendation_without_notification(tmp_path):
     output_dir = tmp_path / "output"
     for directory in (payload_dir, label_dir):
         directory.mkdir()
+    output_dir.mkdir()
+    (output_dir / "widget_collector_expansion_recommendation_2026-08-05.json").write_text(
+        json.dumps({"target_date": "2026-08-05", "source": {
+            "feature_paths": [], "replay_paths": []}}), encoding="utf-8")
     (payload_dir / "ai_decision_payloads_2026-08-06.jsonl").write_text(
         "", encoding="utf-8"
     )
@@ -513,6 +519,80 @@ def test_cli_writes_replay_and_recommendation_without_notification(tmp_path):
     assert report["status"] == "no_qualified_candidate"
     assert report["telegram_status"] == "not_requested"
     assert report["collector_created"] is False
+
+
+def test_collector_rejects_missing_prior_history_instead_of_valid_empty(tmp_path):
+    payload_dir = tmp_path / "payload"
+    label_dir = tmp_path / "labels"
+    replay_dir = tmp_path / "replay"
+    output_dir = tmp_path / "output"
+    for directory in (payload_dir, label_dir, replay_dir, output_dir):
+        directory.mkdir()
+    day = "2026-09-23"
+    prior = payload_dir / "ai_decision_payloads_2026-08-18.jsonl"
+    old_report = output_dir / "widget_collector_expansion_recommendation_2026-09-22.json"
+    old_report.write_text(json.dumps({"target_date": "2026-09-22", "source": {
+        "feature_paths": [str(prior)], "replay_paths": []}}))
+    (payload_dir / f"ai_decision_payloads_{day}.jsonl").write_text("")
+    (label_dir / f"ai_decision_outcome_labels_{day}.json").write_text(json.dumps({
+        "schema": "ai_decision_outcome_labels_v1", "target_date": day,
+        "generated_at": day + "T21:00:00+09:00", "status": "partial_horizons_keep_maturing",
+        "labels": [], "runtime_effect": False, "allowed_runtime_apply": False,
+        "actual_order_submitted": False, "broker_order_forbidden": True,
+    }))
+    assert rec.main(["--target-date", day, "--payload-dir", str(payload_dir),
+                     "--label-dir", str(label_dir), "--replay-dir", str(replay_dir),
+                     "--output-dir", str(output_dir), "--write"]) == rec.SOURCE_NOT_READY_EXIT_CODE
+    assert not (output_dir / f"widget_collector_expansion_recommendation_{day}.json").exists()
+
+
+def test_collector_history_manifest_preserves_logical_gzip_generation(tmp_path):
+    payload_dir, replay_dir = tmp_path / "payload", tmp_path / "replay"
+    payload_dir.mkdir()
+    replay_dir.mkdir()
+    day = date(2026, 8, 18)
+    plain = payload_dir / f"ai_decision_payloads_{day}.jsonl"
+    raw = b'{"captured_at":"2026-08-18T09:00:00+09:00"}\n'
+    plain.write_bytes(raw)
+    kw = dict(through_date=day, sentinel_dir=tmp_path / "sentinel",
+              watch_config_path=tmp_path / "config.json")
+    first = rec.history_input_manifest(payload_dir, replay_dir, **kw)
+    assert first["payload_file_count"] == 1
+    assert first["entries"][0]["raw_count"] == 1
+    archived = Path(str(plain) + ".gz")
+    archived.write_bytes(gzip.compress(raw))
+    assert rec.history_input_manifest(payload_dir, replay_dir, **kw) == first
+    plain.unlink()
+    assert rec.history_input_manifest(payload_dir, replay_dir, **kw) == first
+    plain.write_bytes(b'{"captured_at":"2026-08-18T09:01:00+09:00"}\n')
+    with pytest.raises(ValueError, match="representations_conflict"):
+        rec.history_input_manifest(payload_dir, replay_dir, **kw)
+    plain.unlink()
+    archived.write_bytes(gzip.compress(b'{"captured_at":"2026-08-17T09:00:00+09:00"}\n'))
+    with pytest.raises(ValueError, match="payload_date_invalid"):
+        rec.history_input_manifest(payload_dir, replay_dir, **kw)
+
+
+def test_collector_history_anchor_rejects_changed_prior_file(tmp_path):
+    payload_dir, replay_dir, output_dir = (tmp_path / name for name in
+                                         ("payload", "replay", "output"))
+    for folder in (payload_dir, replay_dir, output_dir):
+        folder.mkdir()
+    old = payload_dir / "ai_decision_payloads_2026-08-18.jsonl"
+    old.write_text('{}\n')
+    first = rec.history_input_manifest(payload_dir, replay_dir,
+                                       through_date=date(2026, 9, 22),
+                                       sentinel_dir=tmp_path / "sentinel",
+                                       watch_config_path=tmp_path / "config.json")
+    (output_dir / "widget_collector_expansion_recommendation_2026-09-22.json").write_text(
+        json.dumps({"source": {"history_input_manifest": first}}))
+    old.write_text('{"revision":2}\n')
+    second = rec.history_input_manifest(payload_dir, replay_dir,
+                                        through_date=date(2026, 9, 23),
+                                        sentinel_dir=tmp_path / "sentinel",
+                                        watch_config_path=tmp_path / "config.json")
+    assert rec.history_anchor_issues(output_dir, date(2026, 9, 23), second) == [
+        "collector_history_prior_generation_changed"]
 
 
 def test_source_artifact_gate_rejects_missing_or_authority_mismatched_label(

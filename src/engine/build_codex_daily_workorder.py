@@ -725,7 +725,7 @@ def build_runbook_operational_checks(
                 check_id=f"PostcloseAutomationHealthCheck{compact}",
                 title="장후 자동화체인 상태 확인",
                 slot="POSTCLOSE",
-                time_window="20:05~21:55",
+                time_window="20:05~06:50",
                 source="docs/time-based-operations-runbook.md",
                 section="장후 확인 절차",
                 artifact_checks=(

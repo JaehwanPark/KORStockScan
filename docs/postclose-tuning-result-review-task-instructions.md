@@ -50,14 +50,14 @@ OFF·퇴역 producer, 유효 frozen policy/checkpoint, 별도 custody/override·
 
 | 예약 | 실행 owner | 기계적 결과와 직접 소비 확인 |
 | --- | --- | --- |
-| 20:05 | KOSPI EOD update | 대상일 status/log terminal·DB latest date/rows; widget 시장 연구의 EOD 선행 |
-| 20:10 | main threshold-cycle postclose | status `succeeded`·최신 DONE·단계 결과·final verifier; final strict closure는 후행 단계 |
+| 20:05 | KOSPI EOD update | 대상일 status/log terminal·DB latest date/rows. 후처리 heavy stage는 정확일자 EOD terminal 전 계산을 시작하지 않음 |
+| 20:10 예약, EOD 완료 후 계산 | main threshold-cycle postclose | wrapper는 bounded EOD terminal을 기다린 뒤 자원 사용 단계를 시작한다. status `succeeded`·최신 DONE·단계 결과·final verifier; final strict closure는 후행 단계 |
 | 20:10 | DONE controller | predecessor/follower 대기·실패 reason·JSON `done`; 최신 verifier와 같은 generation |
 | 20:10 | tuning monitoring | predecessor 계약·단계 exit/status `success`·Parquet/DuckDB source hash/coverage |
-| 20:10 | widget evaluation systemd | advisory→auto policy→EOD wait→signal research→runtime policy의 같은 completed date·unit terminal |
-| 20:50 | dashboard DB archive | 최신 대상일 DONE·검증된 archive/source generation·보존 계약 |
-| 21:15 | machine final refresh systemd | capacity·collector·attribution·timing·weakness·allocation·legacy approval의 독립 stage 및 summary/controller 인계 |
-| 21:55부터, bounded | postclose finalization | predecessor 확인→최신 summary/tower/checklist/strict closure→cleanup→final detector receipt |
+| 20:10 예약, EOD 완료 후 계산 | widget evaluation systemd | 정확일자 EOD gate 후 advisory→auto policy→signal research→runtime policy의 같은 completed date·unit terminal |
+| 20:50 예약, EOD 완료 후 압축 | dashboard DB archive | EOD terminal 뒤 최신 대상일 DONE·검증된 archive/source generation·보존 계약 |
+| 21:15 예약, EOD 완료 후 계산 | machine final refresh systemd | EOD terminal 뒤 capacity·collector·attribution·timing·weakness·allocation·legacy approval의 독립 stage 및 summary/controller 인계 |
+| 다음 KRX 영업일 05:00, bounded | postclose finalization | 직전 KRX source date의 predecessor 확인→최신 summary/tower/checklist/strict closure→cleanup→source-date final detector receipt; 06:00 predecessor deadline, 06:50 종료 상한. 07:20 PREOPEN scanner 전 30분 확보 |
 | 장후 정기 5분, 21:50까지 및 finalization 후 | System Error Detector | 해당 run/stage/target의 unresolved critical·최신 terminal; 단순 이전 PASS 재사용 금지 |
 
 ### 3.1 공통 배포 경로와 독립 서비스 경계

@@ -681,6 +681,42 @@ def test_restore_holding_runtime_state_restores_durable_scalping_peak(monkeypatc
     assert targets[0]["position_peak_runtime_price"] == 1140
 
 
+def test_restore_holding_runtime_state_rehydrates_exact_buy_identity(monkeypatch, tmp_path):
+    from src.engine.ai.holding_exit_vote import (
+        buy_fill_identity_from_runtime, persist_buy_fill_receipt,
+    )
+    monkeypatch.setattr(kiwoom_sniper_v2, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(kiwoom_sniper_v2, "highest_prices", {})
+    monkeypatch.setattr(kiwoom_sniper_v2.POSITION_PEAK_LEDGER,
+                        "restore_peak", lambda stock: (0, "missing"))
+    stock = {
+        "id": 48376, "code": "047040", "name": "TEST", "status": "HOLDING",
+        "strategy": "SCALPING", "position_tag": "SCALP_BASE",
+        "buy_price": 19010.0, "buy_qty": 1,
+        "buy_time": "2026-09-28 10:40:55", "entry_filled_qty": 1,
+        "_entry_receipt_filled_by_order_no": {"0029186": 1},
+        "_entry_receipt_executions_by_order_no": {
+            "0029186": {"131176": {"cumulative_qty": 1}}
+        },
+    }
+    expected = persist_buy_fill_receipt(stock, tmp_path)
+    loaded = {key: stock[key] for key in (
+        "id", "code", "name", "status", "strategy", "position_tag",
+        "buy_price", "buy_qty", "buy_time",
+    )}
+    kiwoom_sniper_v2._restore_holding_runtime_state([loaded])
+    assert loaded["buy_fill_identity_restore_status"] == "restored"
+    assert buy_fill_identity_from_runtime(loaded) == expected
+    assert "buy_fill_identity_store_gap" not in loaded
+
+    stale = {**loaded, "buy_qty": 2}
+    for key in ("_entry_receipt_filled_by_order_no", "_entry_receipt_executions_by_order_no",
+                "entry_filled_qty", "buy_fill_identity_restore_status"):
+        stale.pop(key, None)
+    kiwoom_sniper_v2._restore_holding_runtime_state([stale])
+    assert stale["buy_fill_identity_store_gap"] == "position_generation_mismatch"
+
+
 def test_scalping_scanner_promoted_target_attaches_active_watching(monkeypatch):
     emitted = []
     published = []
@@ -1023,6 +1059,43 @@ def test_scanner_runtime_target_venue_ignores_decision_scope_as_venue():
     assert fields["effective_venue"] == "PREMARKET_KRX_LIKE"
     assert fields["market_session_bucket"] == "krx_like_premarket"
     assert fields["venue_source_quality_status"] == "pass"
+
+
+def test_zero_base_exact_data_route_does_not_override_explicit_session_venue():
+    regular = {
+        "venue": "KRX",
+        "effective_venue": "KRX",
+        "market_session_bucket": "krx_regular",
+        "market_data_route": "krx_nxt_integrated",
+        "broker_route": "SOR",
+    }
+    fields = kiwoom_sniper_v2._scanner_runtime_target_venue_fields(regular)
+    assert fields["effective_venue"] == "KRX"
+    assert fields["venue_source_quality_status"] == "pass"
+    assert fields["market_session_bucket"] == "krx_regular"
+    target = {**regular, **fields}
+    assert kiwoom_sniper_v2._zero_base_watch_session_matches(
+        target, datetime.fromisoformat("2026-09-29T09:09:00+09:00").timestamp()
+    )
+    assert (
+        kiwoom_sniper_v2.sniper_state_handlers._scanner_runtime_event_venue_fields(
+            target
+        )["effective_venue"]
+        == "KRX"
+    )
+
+    premarket = {
+        "venue": "PREMARKET_KRX_LIKE",
+        "effective_venue": "PREMARKET_KRX_LIKE",
+        "market_session_bucket": "krx_like_premarket",
+        "market_data_route": "nxt_only",
+        "broker_route": "NXT",
+    }
+    premarket_fields = kiwoom_sniper_v2._scanner_runtime_target_venue_fields(
+        premarket
+    )
+    assert premarket_fields["effective_venue"] == "PREMARKET_KRX_LIKE"
+    assert premarket_fields["venue_source_quality_status"] == "pass"
 
 
 def test_scanner_runtime_integrated_route_registers_without_actual_venue_inference(

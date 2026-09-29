@@ -1716,6 +1716,35 @@ def stage_winrate_policy(source_path: Path, *, data_root: Path, now: datetime | 
                     _atomic_write_json(holdout_path, holdout_receipt)
                 return dict(status='already_staged', target_date=target,
                             bundle_sha256=existing['bundle_sha256'], disposition=disposition)
+            proof = existing['winrate_selection']
+            existing_machine = for_cohort(existing, ('KRX', 'KRX_REGULAR'))['machine_policy']
+            if (
+                disposition == 'incumbent_carried'
+                and source.get('candidate_policy') is None
+                and proof.get('disposition') == 'incumbent_carried'
+                and proof.get('policy_version') == source.get('policy_version')
+                and proof.get('parent_bundle_sha256') == previous['bundle_sha256']
+                and existing_machine == parent
+                and existing.get('machine_policy') == parent
+                and proof.get('machine_policy_sha256') == digest(parent)
+                and source.get('parent_machine_policy_sha256') == digest(parent)
+            ):
+                # The dated target is already immutable. A new evaluation may
+                # carry the exact same parent after source repair; bind that
+                # current evaluation to the existing generation without
+                # rewriting the staged policy or its original proof.
+                if holdout_path is not None and not holdout_path.exists():
+                    _atomic_write_json(holdout_path, holdout_receipt)
+                return dict(
+                    status='existing_incumbent_preserved',
+                    target_date=target,
+                    bundle_sha256=existing['bundle_sha256'],
+                    disposition=disposition,
+                    machine_policy_sha256=digest(parent),
+                    current_report_sha256=source['artifact_content_sha256'],
+                    bundle_report_sha256=proof.get('report_sha256'),
+                    previous_bundle_sha256=previous['bundle_sha256'],
+                )
             raise ValueError('winrate_dated_generation_already_staged')
         bundle = copy.deepcopy(previous)
         if existing and (existing.get('compact_promoted_scopes') or existing.get('auxiliary_soft_promoted_scopes')):

@@ -181,6 +181,60 @@ def test_probe_registration_receipt_rejects_silent_send_failure_and_old_transpor
     )
 
 
+def test_reused_exact_item_with_old_transport_is_not_reported_as_missing_route():
+    item = "123456_NX"
+    ws = SimpleNamespace(
+        subscribed_codes={"123456"},
+        _registered_items_by_code={"123456": (item,)},
+        _registered_item_epochs={item: 2},
+        _registered_item_types={item: ("0B", "0D")},
+        _market_data_transport_epoch=3,
+        get_exact_item_data=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("stale registration must not start a WS wait")
+        ),
+    )
+    result = run_zero_base_probe(
+        {"claim": {"code": "123456", "route": "nxt_only", "observed_epoch": 10},
+         "candidate": {"code": "123456", "route": "nxt_only"}},
+        ws_manager=ws, ai_engine=object(), token="token", now=lambda: 11,
+    )
+    assert result["reason"] == "ws_registration_transport_mismatch"
+    assert result["result"] == "source_unavailable"
+
+
+def test_empty_exact_route_rechecks_transport_without_hiding_real_no_receipt():
+    item = "123456_NX"
+    ws = SimpleNamespace(
+        subscribed_codes={"123456"},
+        _registered_items_by_code={"123456": (item,)},
+        _registered_item_epochs={item: 3},
+        _registered_item_types={item: ("0B", "0D")},
+        _market_data_transport_epoch=3,
+        get_exact_item_data=lambda *_args: {},
+    )
+    request = {
+        "claim": {"code": "123456", "route": "nxt_only", "observed_epoch": 10},
+        "candidate": {"code": "123456", "route": "nxt_only"},
+    }
+    no_receipt = run_zero_base_probe(
+        request, ws_manager=ws, ai_engine=object(), token="token",
+        now=lambda: 11, ws_wait_timeout_sec=0.01,
+    )
+    assert no_receipt["reason"] == "route_snapshot_missing"
+    assert no_receipt["ws_observation"]["empty_source_flushed"] is True
+
+    def disconnect_during_wait(*_args):
+        ws._market_data_transport_epoch = 4
+        return {}
+
+    ws.get_exact_item_data = disconnect_during_wait
+    disconnected = run_zero_base_probe(
+        request, ws_manager=ws, ai_engine=object(), token="token",
+        now=lambda: 11, ws_wait_timeout_sec=0.01,
+    )
+    assert disconnected["reason"] == "ws_registration_transport_mismatch"
+
+
 def test_missing_bbo_never_calls_machine_and_releases_ws():
     snapshot = _snapshot()
     snapshot["realtime_type_snapshots_by_route"]["KRX|krx_only"].pop("0D")

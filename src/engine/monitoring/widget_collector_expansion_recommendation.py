@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import hashlib
 import json
 import os
 import sys
@@ -110,6 +111,164 @@ def _dated_paths(directory: Path, prefix: str, *, through_date: date) -> list[Pa
     return [path for _, path in sorted(selected)]
 
 
+def history_input_manifest(
+    payload_dir: Path, replay_dir: Path, *, through_date: date,
+    sentinel_dir: Path = DEFAULT_SENTINEL_DIR,
+    watch_config_path: Path = DEFAULT_RESEARCH_WATCH_CONFIG_PATH,
+) -> dict[str, Any]:
+    """Census the logical inputs before accepting an empty recommendation.
+
+    Physical compression is a representation change, not a new input row.
+    Counts here describe structurally decoded rows, not qualified opportunities.
+    """
+    entries: list[dict[str, Any]] = []
+    for kind, directory, prefix, suffix in (
+        ("payload", payload_dir, "ai_decision_payloads", ".jsonl"),
+        ("replay", replay_dir, "widget_mechanical_entry_replay", ".json"),
+    ):
+        if kind == "replay" and any(
+            path.name.endswith(".json.gz") for path in
+            _dated_paths(directory, prefix, through_date=through_date)
+        ):
+            raise ValueError("collector_history_replay_archive_unsupported")
+        logical_paths = {
+            path.with_name(path.name[:-3]) if path.suffix == ".gz" else path
+            for path in _dated_paths(directory, prefix, through_date=through_date)
+            if path.name.endswith(suffix) or (kind == "payload" and path.name.endswith(suffix + ".gz"))
+        }
+        for logical in sorted(logical_paths):
+            day = date.fromisoformat(logical.name.removeprefix(prefix + "_").split(".", 1)[0])
+            representations = [path for path in (logical, Path(str(logical) + ".gz")) if path.exists()]
+            if not representations or any(path.is_symlink() for path in representations):
+                raise ValueError(f"collector_history_source_missing_or_symlink:{logical}")
+            generations = []
+            for path in representations:
+                before = path.stat()
+                digest = hashlib.sha256()
+                byte_count = row_count = valid_count = 0
+                opener = gzip.open if path.suffix == ".gz" else open
+                with opener(path, "rb") as stream:
+                    if kind == "payload":
+                        for line in stream:
+                            digest.update(line)
+                            byte_count += len(line)
+                            if not line.strip():
+                                continue
+                            row = json.loads(line)
+                            if not isinstance(row, dict):
+                                raise ValueError(f"collector_history_payload_row_invalid:{logical}")
+                            captured = row.get("captured_at")
+                            if captured:
+                                observed = datetime.fromisoformat(str(captured))
+                                observed_date = (observed.astimezone(KST).date()
+                                                 if observed.tzinfo else observed.date())
+                                if observed_date != day:
+                                    raise ValueError(f"collector_history_payload_date_invalid:{logical}")
+                            row_count += 1
+                            valid_count += 1
+                    else:
+                        chunks = []
+                        for block in iter(lambda: stream.read(1024 * 1024), b""):
+                            digest.update(block)
+                            byte_count += len(block)
+                            chunks.append(block)
+                        report = json.loads(b"".join(chunks))
+                        if (not isinstance(report, dict)
+                            or report.get("schema") != "widget_mechanical_entry_replay_v1"
+                            or report.get("target_date") != day.isoformat()
+                            or not isinstance(report.get("rows"), list)
+                            or report.get("runtime_effect") is not False
+                            or report.get("allowed_runtime_apply") is not False
+                            or report.get("actual_order_submitted") is not False
+                            or report.get("broker_order_forbidden") is not True):
+                            raise ValueError(f"collector_history_replay_contract_invalid:{logical}")
+                        row_count = len(report["rows"])
+                        valid_count = sum(isinstance(row, dict) for row in report["rows"])
+                after = path.stat()
+                if ((before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+                    != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)):
+                    raise ValueError(f"collector_history_changed_during_read:{logical}")
+                generations.append((digest.hexdigest(), byte_count, row_count, valid_count))
+            if len(set(generations)) != 1:
+                raise ValueError(f"collector_history_representations_conflict:{logical}")
+            sha, byte_count, row_count, valid_count = generations[0]
+            entries.append({"kind": kind, "source_date": day.isoformat(),
+                            "path": str(logical.resolve()), "logical_sha256": sha,
+                            "logical_bytes": byte_count, "raw_count": row_count,
+                            "valid_count": valid_count, "excluded_count": row_count - valid_count,
+                            "quarantined_count": 0, "unobserved_count": None,
+                            "source_quality_reason": "structural_rows_only"})
+    # Names are display-only, but changed names still change report bytes.
+    replay_dates = {row["source_date"] for row in entries if row["kind"] == "replay"}
+    for replay_day in sorted(replay_dates):
+        for suffix in (".jsonl", ".jsonl.gz"):
+            path = sentinel_dir / f"buy_funnel_sentinel_events_{replay_day}{suffix}"
+            if not path.exists():
+                continue
+            if path.is_symlink():
+                raise ValueError(f"collector_history_sentinel_symlink:{path}")
+            before = path.stat()
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            after = path.stat()
+            if ((before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+                != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)):
+                raise ValueError(f"collector_history_changed_during_read:{path}")
+            entries.append({"kind": "display_name", "source_date": replay_day,
+                            "path": str(path.resolve()), "logical_sha256": digest,
+                            "logical_bytes": before.st_size, "raw_count": None,
+                            "valid_count": None, "excluded_count": None,
+                            "quarantined_count": None, "unobserved_count": None,
+                            "source_quality_reason": "display_only_not_economic_input"})
+    config_sha = None
+    config_bytes = None
+    if watch_config_path.exists():
+        if watch_config_path.is_symlink():
+            raise ValueError(f"collector_history_watch_config_symlink:{watch_config_path}")
+        raw = watch_config_path.read_bytes()
+        config_sha, config_bytes = hashlib.sha256(raw).hexdigest(), len(raw)
+    entries.append({"kind": "watch_config", "source_date": through_date.isoformat(),
+                    "path": str(watch_config_path.resolve()),
+                    "logical_sha256": config_sha, "logical_bytes": config_bytes,
+                    "raw_count": None, "valid_count": None, "excluded_count": None,
+                    "quarantined_count": None, "unobserved_count": None,
+                    "source_quality_reason": "operator_inventory_or_explicit_absence"})
+    entries.sort(key=lambda item: (item["kind"], item["source_date"], item["path"]))
+    encoded = json.dumps(entries, sort_keys=True, separators=(",", ":")).encode()
+    return {"schema": "collector_history_input_manifest_v1",
+            "source_date": through_date.isoformat(), "entries": entries,
+            "manifest_sha256": hashlib.sha256(encoded).hexdigest(),
+            "payload_file_count": sum(row["kind"] == "payload" for row in entries),
+            "replay_file_count": sum(row["kind"] == "replay" for row in entries)}
+
+
+def history_anchor_issues(output_dir: Path, target_date: date, manifest: dict[str, Any]) -> list[str]:
+    """Require a preceding report's known files; absence is unbound history."""
+    candidates = _dated_paths(output_dir, "widget_collector_expansion_recommendation",
+                              through_date=target_date)
+    candidates = [path for path in candidates if path.suffix == ".json"]
+    if not candidates:
+        return ["collector_history_anchor_missing"]
+    try:
+        anchor = json.loads(candidates[-1].read_text(encoding="utf-8"))
+        source = anchor["source"]
+        saved = source.get("history_input_manifest")
+        if isinstance(saved, dict) and saved.get("schema") == "collector_history_input_manifest_v1":
+            expected = {row["path"] for row in saved["entries"]}
+            current = {row["path"]: row for row in manifest["entries"]}
+            for row in saved["entries"]:
+                if (row["kind"] in {"payload", "replay"}
+                    and row["source_date"] < target_date.isoformat()
+                    and current.get(row["path"]) != row):
+                    return ["collector_history_prior_generation_changed"]
+        else:
+            expected = {str(Path(path).resolve()) for path in
+                        source["feature_paths"] + source["replay_paths"]}
+        actual = {row["path"] for row in manifest["entries"]}
+        return ["collector_history_known_file_missing"] if not expected <= actual else []
+    except (OSError, ValueError, KeyError, TypeError):
+        return ["collector_history_anchor_invalid"]
+
+
 def _load_names(paths: list[Path]) -> dict[str, str]:
     names: dict[str, str] = {}
     for replay_path in paths:
@@ -201,6 +360,7 @@ def _load_feature_history(
         "ai_decision_payloads",
         through_date=through_date,
     )
+    paths = [path for path in paths if path.name.endswith((".jsonl", ".jsonl.gz"))]
     logical_paths = {
         path.with_name(path.name[: -len(".gz")]) if path.suffix == ".gz" else path
         for path in paths
@@ -450,6 +610,7 @@ def build_recommendation_report(
     current_replay_report: dict[str, Any] | None = None,
     active_research_watch_codes: frozenset[str] = frozenset(),
     active_inventory_issues: tuple[str, ...] = (),
+    history_manifest: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build research recommendations without applying final-order exclusions.
 
@@ -705,6 +866,7 @@ def build_recommendation_report(
                 else None
             ),
             "feature_paths": feature_paths,
+            **({"history_input_manifest": history_manifest} if history_manifest is not None else {}),
             "active_widget_codes": sorted(IMPLEMENTED_WIDGET_CODES),
             "manual_control_exclusion_applied": False,
             "active_research_watch_inventory_issues": list(active_inventory_issues),
@@ -1093,6 +1255,15 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return SOURCE_NOT_READY_EXIT_CODE
+    try:
+        before_history = history_input_manifest(
+            args.payload_dir, args.replay_dir, through_date=target_date)
+        anchor_issues = history_anchor_issues(args.output_dir, target_date, before_history)
+    except (OSError, EOFError, ValueError, TypeError) as exc:
+        anchor_issues = [f"collector_history_source_invalid:{exc}"]
+    if anchor_issues:
+        print("widget_expansion_source_not_ready:" + ",".join(anchor_issues), file=sys.stderr)
+        return SOURCE_NOT_READY_EXIT_CODE
     replay_report = mechanical_replay.build_report_for_date(
         target_date,
         payload_dir=args.payload_dir,
@@ -1100,6 +1271,17 @@ def main(argv: list[str] | None = None) -> int:
     )
     if args.write:
         mechanical_replay.write_report(replay_report, output_dir=args.replay_dir)
+    try:
+        after_history = history_input_manifest(
+            args.payload_dir, args.replay_dir, through_date=target_date)
+    except (OSError, EOFError, ValueError, TypeError) as exc:
+        print(f"widget_expansion_source_not_ready:collector_history_source_invalid:{exc}", file=sys.stderr)
+        return SOURCE_NOT_READY_EXIT_CODE
+    before_entries = {(row["kind"], row["path"]): row for row in before_history["entries"]}
+    after_entries = {(row["kind"], row["path"]): row for row in after_history["entries"]}
+    if any(after_entries.get(key) != row for key, row in before_entries.items()):
+        print("widget_expansion_source_not_ready:collector_history_changed_during_consumption", file=sys.stderr)
+        return SOURCE_NOT_READY_EXIT_CODE
     active_codes, active_inventory_issues = _load_active_research_watch_inventory(
         target_date=target_date
     )
@@ -1110,7 +1292,15 @@ def main(argv: list[str] | None = None) -> int:
         current_replay_report=None if args.write else replay_report,
         active_research_watch_codes=active_codes,
         active_inventory_issues=tuple(active_inventory_issues),
+        history_manifest=after_history,
     )
+    try:
+        if history_input_manifest(args.payload_dir, args.replay_dir,
+                                  through_date=target_date) != after_history:
+            raise ValueError("collector_history_changed_during_consumption")
+    except (OSError, EOFError, ValueError, TypeError) as exc:
+        print(f"widget_expansion_source_not_ready:{exc}", file=sys.stderr)
+        return SOURCE_NOT_READY_EXIT_CODE
     report["telegram_status"] = "not_requested"
     output_path = args.output_dir / (
         f"widget_collector_expansion_recommendation_{target_date}.json"

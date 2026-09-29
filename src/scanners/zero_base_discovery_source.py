@@ -40,18 +40,23 @@ def _sha256(value: dict) -> str:
 
 def fetch_discovery_panels(token, *, now_epoch=None, fetcher=None,
                            activity_fetcher=None) -> dict:
-    """Read bounded gain and recent-volume panels through the source-only gate."""
+    """Read session-scoped panels through the source-only gate."""
     observed_epoch = time.time() if now_epoch is None else float(now_epoch)
     context = session_contract.resolve_market_session(
         datetime.fromtimestamp(observed_epoch, tz=session_contract.KST)
     )
     if context.session_regime == session_contract.MARKET_SESSION_REGIME_LEGACY_PREMARKET:
         panel_requests = PREMARKET_PANEL_REQUESTS
+        # In the 2026-09-29 08:03-08:37 premarket receipts, gainer-only
+        # symbols yielded no machine assessments and usually lacked exact _NX 0B/0D.
+        # Prefer the current one-minute NXT volume panel in this session.
+        panel_kinds = ("activity",)
     elif context.session_regime in {
         session_contract.MARKET_SESSION_REGIME_KRX_REGULAR,
         session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET,
     }:
         panel_requests = PANEL_REQUESTS
+        panel_kinds = ("activity", "gainers")
     else:
         return {"schema": SCHEMA, "panels": [], "observations": [],
                 "source_status": "integrated_buy_session_unavailable"}
@@ -61,7 +66,7 @@ def fetch_discovery_panels(token, *, now_epoch=None, fetcher=None,
     observations_by_key = {}
     # A recent-volume panel broadens intake; the exact-route WS probe remains
     # the only source that may supply current microstructure to the machine.
-    requests = [(kind, *panel) for kind in ("activity", "gainers")
+    requests = [(kind, *panel) for kind in panel_kinds
                 for panel in panel_requests]
     for kind, market, mrkt_tp, venue, stex_tp, route in requests:
         request_epoch = time.time() if now_epoch is None else float(now_epoch)

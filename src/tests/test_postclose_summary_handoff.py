@@ -672,6 +672,17 @@ def stage_environment(tmp_path, monkeypatch):
             if name == 'ai_decision_outcome_labels':
                 value.update(schema='ai_decision_outcome_labels_v1', generated_at=day+'T21:00:00+09:00',
                     status='mature_label_rows_available', labels=[])
+            if name == 'widget_collector_expansion_recommendation':
+                from src.engine.monitoring.widget_collector_expansion_recommendation import history_input_manifest
+                from datetime import date
+                history = history_input_manifest(
+                    report.parent / 'ai_decision_payloads', report / 'widget_mechanical_entry_replay',
+                    through_date=date.fromisoformat(day),
+                    sentinel_dir=report.parent / 'runtime' / 'sentinel_event_cache',
+                    watch_config_path=report.parent / 'config' / 'widget_research_watch_symbols.json')
+                value['source'] = {'history_input_manifest': history,
+                    'feature_paths': [row['path'] for row in history['entries'] if row['kind'] == 'payload'],
+                    'replay_paths': [row['path'] for row in history['entries'] if row['kind'] == 'replay']}
             path.parent.mkdir(parents=True, exist_ok=True); path.write_text(json.dumps(value))
         return 0
     def run(stage, **kwargs):
@@ -987,6 +998,137 @@ def test_stage_detects_input_change_during_collector(stage_environment):
     assert 'input_changed_during_consumption' in result['issues']
 
 
+def test_collector_receipt_rejects_removed_historical_payload(stage_environment):
+    from datetime import date
+    from src.engine.monitoring.widget_collector_expansion_recommendation import history_input_manifest
+
+    h, day, report, run, produce = stage_environment
+    payload_dir = report.parent / 'ai_decision_payloads'
+    payload_dir.mkdir(parents=True)
+    old = payload_dir / 'ai_decision_payloads_2026-08-18.jsonl'
+    old.write_text('{}\n')
+    def with_manifest(command, **kwargs):
+        result = produce(command, **kwargs)
+        if command[1] == 'collector_recommendation':
+            output = h.stage_artifacts(report, day, 'collector_recommendation')[
+                'widget_collector_expansion_recommendation']
+            value = json.loads(output.read_text())
+            history = history_input_manifest(
+                payload_dir, report / 'widget_mechanical_entry_replay',
+                through_date=date.fromisoformat(day),
+                sentinel_dir=report.parent / 'runtime' / 'sentinel_event_cache',
+                watch_config_path=report.parent / 'config' / 'widget_research_watch_symbols.json')
+            value['source'] = {'history_input_manifest': history,
+                'feature_paths': [row['path'] for row in history['entries'] if row['kind'] == 'payload'],
+                'replay_paths': [row['path'] for row in history['entries'] if row['kind'] == 'replay']}
+            output.write_text(json.dumps(value))
+        return result
+    assert run('outcome_labels')['status'] == 'succeeded'
+    assert run('collector_recommendation', runner=with_manifest)['status'] == 'succeeded'
+    assert h.stage_receipt_issues(report, day, 'collector_recommendation') == []
+    old.unlink()
+    assert 'collector_recommendation:history_generation_changed' in h.stage_receipt_issues(
+        report, day, 'collector_recommendation')
+
+
+def test_collector_stage_fails_when_child_omits_history_manifest(stage_environment):
+    h, day, report, run, produce = stage_environment
+    assert run('outcome_labels')['status'] == 'succeeded'
+    def omit_manifest(command, **kwargs):
+        result = produce(command, **kwargs)
+        if command[1] == 'collector_recommendation':
+            output = h.stage_artifacts(report, day, 'collector_recommendation')[
+                'widget_collector_expansion_recommendation']
+            value = json.loads(output.read_text())
+            value['source'].pop('history_input_manifest')
+            output.write_text(json.dumps(value))
+        return result
+    result = run('collector_recommendation', runner=omit_manifest)
+    assert result['status'] == 'failed'
+    assert result['issues'] == ['collector_recommendation:history_manifest_missing']
+
+
+def test_collector_history_receipt_rejects_late_and_changed_sources(stage_environment):
+    h, day, report, run, _produce = stage_environment
+    payload_dir = report.parent / 'ai_decision_payloads'
+    payload_dir.mkdir(parents=True)
+    old = payload_dir / 'ai_decision_payloads_2026-08-18.jsonl'
+    old.write_text('{}\n')
+    assert run('outcome_labels')['status'] == 'succeeded'
+    assert run('collector_recommendation')['status'] == 'succeeded'
+    assert h.stage_receipt_issues(report, day, 'collector_recommendation') == []
+    old.write_text('{"changed":true}\n')
+    assert h.stage_receipt_issues(report, day, 'collector_recommendation') == [
+        'collector_recommendation:history_generation_changed']
+    old.write_text('{}\n')
+    late = payload_dir / 'ai_decision_payloads_2026-08-19.jsonl'
+    late.write_text('{}\n')
+    assert h.stage_receipt_issues(report, day, 'collector_recommendation') == [
+        'collector_recommendation:history_generation_changed']
+
+
+@pytest.mark.parametrize('candidate_count', [0, 7])
+def test_collector_real_reader_same_generation_and_valid_empty(stage_environment, candidate_count):
+    from datetime import date
+    from src.engine.monitoring import widget_collector_expansion_recommendation as rec
+
+    h, day, report_dir, run, produce = stage_environment
+    payload_dir = report_dir.parent / 'ai_decision_payloads'
+    replay_dir = report_dir / 'widget_mechanical_entry_replay'
+    payload_dir.mkdir(parents=True)
+    replay_dir.mkdir(parents=True)
+    codes = [f'{100000 + index:06d}' for index in range(candidate_count)]
+    rows = []
+    for code in codes:
+        rows.extend({
+            'stock_code': code, 'effective_venue': 'KRX', 'session_bucket': 'krx_regular',
+            'entry_path_first_hit': 'target_first', 'end_return_pct': 0.8,
+            'mechanical_signal': True, 'mechanical_candidate_before_spread_gate': False,
+            'mechanical_source_issue': None, 'runtime_effect': False,
+            'actual_order_submitted': False, 'broker_order_forbidden': True,
+        } for _ in range(2))
+    (replay_dir / f'widget_mechanical_entry_replay_{day}.json').write_text(json.dumps({
+        'schema': 'widget_mechanical_entry_replay_v1', 'target_date': day,
+        'runtime_effect': False, 'allowed_runtime_apply': False,
+        'actual_order_submitted': False, 'broker_order_forbidden': True, 'rows': rows,
+    }))
+    payloads = [{
+        'schema': 'ai_decision_payload_v1', 'endpoint': 'analyze_target',
+        'replay_exact': True, 'runtime_effect': False, 'actual_order_submitted': False,
+        'broker_order_forbidden': True, 'symbol': code, 'effective_venue': 'KRX',
+        'session_bucket': 'krx_regular', 'sanitized_user_input': {'exact_payload': {
+            'features': {'entry_liquidity_score': 85, 'intraday_range_pct': 3.0,
+                         'spread_bp': 8.0}, 'quote': {'quote_stale': False},
+            'entry_candle_context': {'source_quality': {'status': 'fresh_consistent'}}}},
+    } for code in codes]
+    (payload_dir / f'ai_decision_payloads_{day}.jsonl').write_text(
+        ''.join(json.dumps(row) + '\n' for row in payloads))
+    def actual_reader(command, **kwargs):
+        if command[1] != 'collector_recommendation':
+            return produce(command, **kwargs)
+        manifest = rec.history_input_manifest(
+            payload_dir, replay_dir, through_date=date.fromisoformat(day),
+            sentinel_dir=report_dir.parent / 'runtime' / 'sentinel_event_cache',
+            watch_config_path=report_dir.parent / 'config' / 'widget_research_watch_symbols.json')
+        result = rec.build_recommendation_report(
+            target_date=date.fromisoformat(day), replay_dir=replay_dir,
+            payload_dir=payload_dir, history_manifest=manifest)
+        path = h.stage_artifacts(report_dir, day, 'collector_recommendation')[
+            'widget_collector_expansion_recommendation']
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(result))
+        return 0
+    assert run('outcome_labels')['status'] == 'succeeded'
+    result = run('collector_recommendation', runner=actual_reader)
+    assert result['status'] == 'succeeded'
+    assert h.stage_receipt_issues(report_dir, day, 'collector_recommendation') == []
+    assert result['history_input_generation_sha256']
+    output = json.loads(h.stage_artifacts(report_dir, day, 'collector_recommendation')[
+        'widget_collector_expansion_recommendation'].read_text())
+    assert len(output['recommendations']) == candidate_count
+    assert output['status'] == ('recommendations_ready' if candidate_count else 'no_qualified_candidate')
+
+
 def test_stage_lock_and_live_orphan_identity_prevent_duplicate(stage_environment):
     import fcntl, os
     h, day, report, run, produce = stage_environment
@@ -1214,6 +1356,60 @@ def test_stage_machine_rejects_sealed_but_unbound_terminal(stage_environment):
     value=json.loads(path.read_text()); value['report_sha256']='wrong'
     path.write_text(json.dumps(_with_artifact_content_sha256(value)))
     assert 'main_machine_policy:report_terminal_binding_invalid' in h._stage_output_issues(report, day, 'main_machine_policy')
+
+
+def test_existing_winrate_carry_binding_requires_same_parent_and_policy():
+    from src.engine.automation.postclose_summary_handoff import (
+        _existing_incumbent_winrate_binding_valid,
+    )
+    from src.engine.scalping import mechanistic_entry_runtime_policy as policy
+
+    machine = {'strategy': 'mechanistic_entry', 'thresholds': {'fixed': 1}}
+    previous = {'bundle_sha256': 'a' * 64, 'machine_policy': machine}
+    report = {
+        'artifact_content_sha256': 'b' * 64,
+        'publication_date': '2026-09-24',
+        'parent_bundle_sha256': previous['bundle_sha256'],
+        'parent_machine_policy_sha256': policy.digest(machine),
+        'policy_version': 'winrate_initial_v1',
+        'disposition': 'incumbent_carried',
+        'candidate_policy': None,
+    }
+    bundle = {
+        'bundle_sha256': 'c' * 64,
+        'previous_bundle_sha256': 'f' * 64,
+        'machine_policy': machine,
+        'winrate_selection': {
+            'report_sha256': 'd' * 64,
+            'disposition': 'incumbent_carried',
+            'policy_version': 'winrate_initial_v1',
+            'parent_bundle_sha256': previous['bundle_sha256'],
+            'machine_policy_sha256': policy.digest(machine),
+        },
+    }
+    staged = {
+        'bundle_sha256': bundle['bundle_sha256'],
+        'current_report_sha256': report['artifact_content_sha256'],
+        'bundle_report_sha256': bundle['winrate_selection']['report_sha256'],
+        'previous_bundle_sha256': previous['bundle_sha256'],
+        'machine_policy_sha256': policy.digest(machine),
+    }
+
+    assert _existing_incumbent_winrate_binding_valid(
+        report, staged, bundle, previous, policy
+    )
+    changed = dict(report, candidate_policy={'threshold': 'different'})
+    assert not _existing_incumbent_winrate_binding_valid(
+        changed, staged, bundle, previous, policy
+    )
+    changed_previous = dict(previous, bundle_sha256='e' * 64)
+    assert not _existing_incumbent_winrate_binding_valid(
+        report, staged, bundle, changed_previous, policy
+    )
+    changed_machine = dict(bundle, machine_policy={'strategy': 'other'})
+    assert not _existing_incumbent_winrate_binding_valid(
+        report, staged, changed_machine, previous, policy
+    )
 
 
 def test_family_publication_validation_uses_bounded_64_mib_read(tmp_path, monkeypatch):

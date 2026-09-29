@@ -388,6 +388,8 @@ def test_machine_ai_natural_source_audit_excludes_source_invalid_attempts(
         "source_invalid_excluded_trace_count": int(not feature_shortfall),
         "feature_insufficient_excluded_trace_count": int(feature_shortfall),
         "assessment_contract_invalid_trace_count": 0,
+        "assessment_contract_invalid_rows_isolated": True,
+        "assessment_contract_invalid_trace_ids": [],
         "accounted_trace_count": 1,
         "unaccounted_trace_count": 0,
         "status_counts": {

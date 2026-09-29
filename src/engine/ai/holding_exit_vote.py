@@ -7,13 +7,19 @@ policy and signal consumer.
 
 from __future__ import annotations
 
+import copy
+import fcntl
 import hashlib
 import json
 import math
 import os
-import fcntl
+import re
+import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 
 SCHEMA = "holding_exit_vote_v1"
@@ -782,6 +788,225 @@ def buy_fill_identity_from_runtime(stock: dict[str, Any]) -> str | None:
     return buy_fill_identity_from_legs(buy_fill_legs_from_runtime(stock))
 
 
+_BUY_FILL_RECEIPT_SCHEMA = "holding_buy_fill_receipt_v1"
+_BUY_FILL_RECEIPT_KEYS = (
+    "_entry_receipt_filled_by_order_no",
+    "_entry_receipt_executions_by_order_no",
+    "_add_receipt_filled_by_order_no",
+    "_add_receipt_executions_by_order_no",
+    "entry_filled_qty",
+)
+_BUY_FILL_RECEIPT_MAX_BYTES = 262144
+
+
+def _buy_fill_receipt_time(value: Any) -> str:
+    if isinstance(value, str) and value.strip():
+        try:
+            value = datetime.fromisoformat(value.strip())
+        except ValueError:
+            return ""
+    if not isinstance(value, datetime):
+        return ""
+    # recommendation_history.buy_time is a naive SQL DateTime in local KST,
+    # while accepted execution callbacks carry an aware KST timestamp.
+    if value.tzinfo is not None:
+        value = value.astimezone(ZoneInfo("Asia/Seoul")).replace(tzinfo=None)
+    return value.isoformat()
+
+
+def _buy_fill_receipt_path(data_dir: str | Path, stock: dict[str, Any]) -> Path | None:
+    record_id = stock.get("id")
+    try:
+        record_id = int(record_id)
+    except (TypeError, ValueError):
+        return None
+    if record_id <= 0:
+        return None
+    return Path(data_dir) / "runtime" / "holding_buy_fill_receipts" / f"{record_id}.json"
+
+
+def persist_buy_fill_receipt(
+    stock: dict[str, Any], data_dir: str | Path,
+    *, source: str = "accepted_broker_execution",
+) -> str:
+    """Atomically index exact accepted broker BUY legs for one real position."""
+    path = _buy_fill_receipt_path(data_dir, stock)
+    code = str(stock.get("code") or "").strip()[:6]
+    legs = buy_fill_legs_from_runtime(stock)
+    identity = buy_fill_identity_from_legs(legs)
+    qty = stock.get("buy_qty")
+    buy_time = _buy_fill_receipt_time(stock.get("buy_time"))
+    try:
+        buy_price = float(stock.get("buy_price"))
+    except (TypeError, ValueError):
+        buy_price = float("nan")
+    if (path is None or not re.fullmatch(r"[0-9]{6}", code)
+            or not buy_time or not identity or not math.isfinite(buy_price)
+            or buy_price <= 0
+            or stock.get("simulation_book") or stock.get("simulation_owner")
+            or not isinstance(qty, int) or isinstance(qty, bool)
+            or qty <= 0 or sum(leg["qty"] for leg in legs) != qty):
+        raise ValueError("exact_buy_fill_receipt_incomplete")
+    fields = {key: copy.deepcopy(stock.get(key)) for key in _BUY_FILL_RECEIPT_KEYS}
+    payload = {
+        "schema": _BUY_FILL_RECEIPT_SCHEMA,
+        "record_id": int(stock["id"]),
+        "code": code,
+        "buy_time": buy_time,
+        "buy_qty": qty,
+        "buy_price": buy_price,
+        "buy_fill_identity": identity,
+        "source": source,
+        "receipt_fields": fields,
+    }
+    encoded = (json.dumps(payload, sort_keys=True, separators=(",", ":"),
+                          ensure_ascii=True) + "\n").encode("ascii")
+    if len(encoded) > _BUY_FILL_RECEIPT_MAX_BYTES:
+        raise ValueError("exact_buy_fill_receipt_capacity_exceeded")
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    try:
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return identity
+
+
+def _restore_buy_fill_from_legacy_vote(
+    stock: dict[str, Any], data_dir: str | Path,
+) -> str:
+    """One-time bounded recovery for a pre-journal initial BUY position."""
+    if any(stock.get(key) for key in ("add_count", "avg_down_count", "pyramid_count",
+                                      "scale_in_filled_qty", "last_add_type")):
+        return "legacy_vote_add_legs_unclassified"
+    if (stock.get("pending_entry_orders") or stock.get("pending_add_order")
+            or stock.get("entry_partial_fill_pending")):
+        return "legacy_vote_pending_buy_unreconciled"
+    record_id = int(stock["id"])
+    position_key = f"record:{record_id}"
+    path = path_vote_store_path(data_dir, position_key)
+    try:
+        if path.stat().st_size > PATH_MAX_STORE_BYTES:
+            return "legacy_vote_store_too_large"
+        rows = load_path_events_file(path, position_key)
+    except FileNotFoundError:
+        return "legacy_vote_store_missing"
+    except (OSError, ValueError, UnicodeError, TypeError, KeyError, OverflowError):
+        return "legacy_vote_store_invalid"
+    buy_time = datetime.fromisoformat(_buy_fill_receipt_time(stock.get("buy_time")))
+    if buy_time.tzinfo is None:
+        buy_time = buy_time.replace(tzinfo=ZoneInfo("Asia/Seoul"))
+    buy_epoch = buy_time.timestamp()
+    now_epoch = time.time()
+    candidates = []
+    for row in rows:
+        legs = row.get("buy_fill_legs")
+        identity = buy_fill_identity_from_legs(legs)
+        requested_at = row.get("requested_at")
+        persisted_at = row.get("persisted_at")
+        if (not identity or identity != row.get("buy_fill_identity")
+                or not isinstance(requested_at, (int, float))
+                or not isinstance(persisted_at, (int, float))
+                or not buy_epoch <= requested_at <= persisted_at <= now_epoch
+                or sum(leg["qty"] for leg in legs) != stock["buy_qty"]
+                or any(not re.fullmatch(r"[0-9]{1,20}", leg["order_no"])
+                       or not re.fullmatch(r"[0-9]{1,20}", leg["execution_no"])
+                       for leg in legs)):
+            continue
+        candidates.append((persisted_at, identity, legs))
+    if not candidates:
+        return "legacy_vote_exact_buy_legs_missing"
+    if len({identity for _, identity, _ in candidates}) != 1:
+        return "legacy_vote_buy_identity_conflict"
+    _, identity, legs = max(candidates, key=lambda item: item[0])
+    fills: dict[str, int] = {}
+    executions: dict[str, dict[str, dict[str, int]]] = {}
+    for leg in legs:
+        order, execution, qty = leg["order_no"], leg["execution_no"], leg["qty"]
+        fills[order] = fills.get(order, 0) + qty
+        executions.setdefault(order, {})[execution] = {"cumulative_qty": fills[order]}
+    candidate = {**stock, "entry_filled_qty": stock["buy_qty"],
+                 "_entry_receipt_filled_by_order_no": fills,
+                 "_entry_receipt_executions_by_order_no": executions,
+                 "_add_receipt_filled_by_order_no": {},
+                 "_add_receipt_executions_by_order_no": {}}
+    if buy_fill_identity_from_runtime(candidate) != identity:
+        return "legacy_vote_reconstructed_identity_conflict"
+    try:
+        persist_buy_fill_receipt(candidate, data_dir, source="legacy_path_vote_exact_buy_legs")
+    except (OSError, TypeError, ValueError):
+        return "legacy_vote_receipt_persist_failed"
+    stock.update({key: copy.deepcopy(candidate[key]) for key in _BUY_FILL_RECEIPT_KEYS})
+    stock.pop("buy_fill_identity_store_gap", None)
+    return "restored_from_path_vote"
+
+
+def restore_buy_fill_receipt(stock: dict[str, Any], data_dir: str | Path) -> str:
+    """Restore only exact position-bound legs; any conflict preserves the ADD veto."""
+    path = _buy_fill_receipt_path(data_dir, stock)
+    if path is None:
+        return "record_id_missing"
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except FileNotFoundError:
+        if _buy_fill_receipt_time(stock.get("buy_time")):
+            return _restore_buy_fill_from_legacy_vote(stock, data_dir)
+        return "receipt_missing"
+    except OSError:
+        return "receipt_unreadable"
+    try:
+        with os.fdopen(fd, "rb") as handle:
+            if os.fstat(handle.fileno()).st_size > _BUY_FILL_RECEIPT_MAX_BYTES:
+                return "receipt_capacity_exceeded"
+            payload = json.loads(handle.read().decode("ascii"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return "receipt_unreadable"
+    if not isinstance(payload, dict) or payload.get("schema") != _BUY_FILL_RECEIPT_SCHEMA:
+        return "receipt_schema_invalid"
+    if payload.get("source") not in {
+        "accepted_broker_execution", "legacy_path_vote_exact_buy_legs",
+    }:
+        return "receipt_source_invalid"
+    position_buy_time = _buy_fill_receipt_time(stock.get("buy_time"))
+    receipt_buy_time = _buy_fill_receipt_time(payload.get("buy_time"))
+    if (not position_buy_time or not receipt_buy_time
+            or payload.get("record_id") != int(stock["id"])
+            or payload.get("code") != str(stock.get("code") or "").strip()[:6]
+            or receipt_buy_time != position_buy_time
+            or payload.get("buy_qty") != stock.get("buy_qty")):
+        return "position_generation_mismatch"
+    try:
+        receipt_price = float(payload.get("buy_price"))
+        position_price = float(stock.get("buy_price"))
+        if (not math.isfinite(receipt_price) or not math.isfinite(position_price)
+                or receipt_price <= 0 or position_price <= 0
+                or abs(receipt_price - position_price) > 0.01):
+            return "position_price_mismatch"
+    except (TypeError, ValueError):
+        return "position_price_missing"
+    fields = payload.get("receipt_fields")
+    if not isinstance(fields, dict) or set(fields) != set(_BUY_FILL_RECEIPT_KEYS):
+        return "receipt_fields_invalid"
+    candidate = {**stock, **fields}
+    legs = buy_fill_legs_from_runtime(candidate)
+    if (legs is None or sum(leg["qty"] for leg in legs) != stock["buy_qty"]
+            or buy_fill_identity_from_legs(legs) != payload.get("buy_fill_identity")):
+        return "receipt_identity_conflict"
+    stock.update(copy.deepcopy(fields))
+    stock.pop("buy_fill_identity_store_gap", None)
+    return "restored"
+
+
 def path_policy_baseline_receipt() -> dict[str, Any]:
     """Bind all live code-default path policies without granting selection."""
     hashes = {
@@ -993,6 +1218,10 @@ def _read_path_events(handle, position_key: str) -> list[dict[str, Any]]:
                     else "EXIT_PERMISSION"
                 )
                 or not isinstance(item.get("buy_fill_identity"), str)
+                or any(not isinstance(item.get(key), (int, float))
+                       or isinstance(item[key], bool)
+                       or not math.isfinite(item[key])
+                       for key in ("requested_at", "received_at"))
                 or item.get("status") == "VALID" and (
                     len(item["buy_fill_identity"]) != 64
                     or buy_fill_identity_from_legs(item.get("buy_fill_legs"))
@@ -1004,10 +1233,6 @@ def _read_path_events(handle, position_key: str) -> list[dict[str, Any]]:
                 or not isinstance(item.get("persisted_at"), (int, float))
                 or isinstance(item.get("persisted_at"), bool)
                 or not math.isfinite(item["persisted_at"])
-                or any(not isinstance(item.get(key), (int, float))
-                       or isinstance(item[key], bool)
-                       or not math.isfinite(item[key])
-                       for key in ("requested_at", "received_at"))
                 or item["requested_at"] > item["received_at"]
                 or item["received_at"] > item["persisted_at"]
                 or (item.get("status") == "VALID" and (
