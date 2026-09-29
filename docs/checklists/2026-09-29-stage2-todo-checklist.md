@@ -95,6 +95,22 @@
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
 
+- [x] `[PostcloseEodGatedScheduleAndMorningFinalization] EOD 이후 장후 계산 및 다음 KRX 영업일 아침 finalization으로 일정 조정` (`Due: 2026-09-29`, `Slot: POSTCLOSE`, `TimeWindow: 20:05~06:50`, `Track: RuntimeStability`)
+  - Source: [운영 runbook](../time-based-operations-runbook.md), [장후 결과 검토 지침](../postclose-tuning-result-review-task-instructions.md), [runtime release routing](../runtime-release-routing.md)
+  - 변경 범위: main/widget/machine-refresh/archive 모두 exact-date EOD terminal 이후 heavy work를 시작한다. Finalization은 effective date의 직전 KRX source date를 선택해 05:00 예약, 06:00 predecessor deadline, 06:50 종료 상한을 적용한다.
+  - 완료 기준: EOD `completed|completed_with_warnings` + exact target/latest quote date + positive row count gate, wrapper/test 리뷰 통과, immutable selected release의 cron route 및 두 비활성 systemd consumer pin, active timer 보존, finalizer 06:50 상한과 07:20 PREOPEN scanner 전 30분 margin을 검증한다. actual main PID/order authority는 변경하지 않는다.
+  - 배포 증거: selected release `db62ac287f783c8eed72344f5134680b3c118ed6`; cron `POSTCLOSE_FINALIZATION_0500` 및 `--resolve-effective-today` 검증, widget/machine systemd pin 및 timer active. 254개 표적 테스트 통과.
+  - authority 경계: main PID `1252310`은 기존 `4263bc0c`에서 계속 실행 중이며 재기동하지 않았다. 새 schedule release PID 소비는 미확인이다. 첫 자연 EOD terminal·아침 finalizer 결과는 다음 운영 영수증으로 확인한다.
+  - 권한 경계: resource guard를 약화하거나 source population/holdout/quality를 줄이지 않는다. 봇 재기동, 주문, policy/provider/threshold/safety 변경은 없다.
+
+- [x] `[PostcloseCronEffectiveDateReceiptRepair0929] 05:00 finalizer·cleanup detector 날짜 결속 및 누락 모듈 반영` (`Due: 2026-09-29`, `Slot: INTRADAY`, `TimeWindow: 12:15~20:05`, `Track: RuntimeStability`)
+  - Source: [9/29 error detection 영수증](/home/ubuntu/KORStockScan/data/report/error_detection/error_detection_2026-09-29.json), [runtime release routing](../runtime-release-routing.md).
+  - 원인: 9/29 effective date의 직전 KRX source date는 9/28인데 detector가 `target_date=2026-09-29` marker를 찾았다. 선택된 통합 릴리스에는 generation 검증 import의 소유 모듈과 finalizer 생산 경로도 빠져 있었다.
+  - 코드 영수증: immutable 후보 `bbde9aa790ccc111444cce962bab8f6a892eadf6`에서 날짜·마감시각·9/28 사전선택 영수증 경계를 수리하고 generation 모듈·wrapper를 결속했다. 표적 75개 테스트, compile, `bash -n`, diff 검증을 통과했다.
+  - 완료 기준: 승인된 전환 뒤 selector와 실제 bot PID가 같은 후보를 소비하고 새 error detection 영수증에서 `cron_completion`의 `no today marker` ERROR가 사라져야 한다. 9/28의 07:11 finalizer·08:28 cleanup은 `recovered_late`와 `historical_gap` 경고로 보존한다. 이후 source date의 marker·06:50 상한·generation 결속 결손은 계속 FAIL이다.
+  - 적용 영수증: 사용자가 즉시 릴리스 선택·재기동을 승인했다. selector와 실제 PID `1299512`(12:32:59 KST 시작)는 모두 `bbde9aa790ccc111444cce962bab8f6a892eadf6`을 가리키며 release-set/cron routing, runtime policy bootstrap 검증을 통과했다. 12:33:12 KST 새 error detection 영수증의 `cron_completion`은 `warning`이며 두 `no today marker` ERROR가 사라졌다. 늦은 완료와 9/28 generation 미결속, 별도 `panic_sell_defense` 경고는 유지된다.
+  - 권한 경계: 이 승인 범위는 수정 릴리스 선택과 main bot 재기동이다. 주문·provider·threshold·hard safety 변경 권한은 포함하지 않는다.
+
 - [ ] `[AvgDownSharedReboundReceiptClosure0928] 물타기 공통 반등·정확 체결 복원·불타기 퇴역 수용` (`Due: 2026-09-29`, `Slot: INTRADAY`, `TimeWindow: 08:00~20:00`, `Track: RuntimeStability`)
   - Source: [구현계획](../proposals/avg-down-shared-rebound-receipt-and-pyramid-retirement-implementation-plan-2026-09-28.md), [9/29 코드 리뷰](../audit-reports/2026-09-29-avg-down-rebound-receipt-and-pyramid-retirement-implementation-review.md). 9/28 동일 ID owner의 후속 건이다.
   - 코드 완료 기준: 대우건설 `047040`/보유 `48376`의 사전검사 세부 blocker와 원천 시계, 최초 BUY 주문·체결의 재기동 후 검증 복원, ADD 차단·주문·체결·청산의 동일 보유 결속, PYRAMID 신규 판단·주문 불가와 과거 pending·SELL 정산 유지, 표적 회귀·리뷰를 확인한다. S15·VCP 신규 진입은 퇴역 상태를 유지하고 옛 custody만 복구·정산한다.

@@ -21,10 +21,10 @@ mv "$TMP_CRON.filtered" "$TMP_CRON"
 
 cat >> "$TMP_CRON" <<EOF
 # EOD data chain and early shutdown maintenance
-# 20:05 is after the integrated KRX/NXT aftermarket close and keeps the data refresh parallel with postclose reporting.
+# 20:05 is after the integrated KRX/NXT aftermarket close. Heavy postclose consumers wait for its exact-date terminal.
 5 20 * * 1-5 cd $PROJECT_DIR && $PROJECT_DIR/.venv/bin/python src/utils/update_kospi.py >> $PROJECT_DIR/logs/update_kospi.log 2>&1 # UPDATE_KOSPI_EOD_2005
 50 20 * * 1-5 $PROJECT_DIR/deploy/run_dashboard_db_archive_cron.sh 0 >> $PROJECT_DIR/logs/dashboard_db_archive_cron.log 2>&1 # DASHBOARD_DB_ARCHIVE_2050
-# Cleanup is owned by the 21:55 postclose finalization gate after all long-lived
+# Cleanup is owned by the 06:00 next-KRX-session finalization gate after all long-lived
 # postclose writers reach their exact-date terminal state.
 EOF
 

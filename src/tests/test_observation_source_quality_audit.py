@@ -388,6 +388,8 @@ def test_machine_ai_natural_source_audit_excludes_source_invalid_attempts(
         "source_invalid_excluded_trace_count": int(not feature_shortfall),
         "feature_insufficient_excluded_trace_count": int(feature_shortfall),
         "assessment_contract_invalid_trace_count": 0,
+        "assessment_contract_invalid_rows_isolated": True,
+        "assessment_contract_invalid_trace_ids": [],
         "accounted_trace_count": 1,
         "unaccounted_trace_count": 0,
         "status_counts": {
@@ -555,6 +557,12 @@ def test_machine_ai_natural_source_audit_blocks_contract_invalid_attempts(
         ]
         == 1
     )
+    assert report["machine_attempt_conservation"][
+        "assessment_contract_invalid_rows_isolated"
+    ] is False
+    assert report["machine_attempt_conservation"][
+        "assessment_contract_invalid_trace_ids"
+    ] == []
     assert report["machine_threshold_tuning_input_allowed"] is False
     assert report["machine_threshold_tuning_blocked_reason"] == (
         "machine_assessment_contract_invalid"

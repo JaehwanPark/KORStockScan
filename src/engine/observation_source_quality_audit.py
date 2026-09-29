@@ -514,6 +514,10 @@ def _machine_ai_natural_source_consumption(
         for trace in machine_expected_traces
         if trace.get("machine_evaluation_status") == "assessment_contract_invalid"
     ]
+    contract_invalid_trace_ids = [
+        str(trace.get("decision_trace_id") or "").strip()
+        for trace in machine_contract_invalid_traces
+    ]
     machine_accounted_trace_count = (
         len(machine_source_invalid_traces)
         + len(machine_feature_insufficient_traces)
@@ -785,6 +789,13 @@ def _machine_ai_natural_source_consumption(
             ),
             "assessment_contract_invalid_trace_count": len(
                 machine_contract_invalid_traces
+            ),
+            "assessment_contract_invalid_rows_isolated": (
+                all(contract_invalid_trace_ids)
+                and len(set(contract_invalid_trace_ids)) == len(contract_invalid_trace_ids)
+            ),
+            "assessment_contract_invalid_trace_ids": sorted(
+                trace_id for trace_id in contract_invalid_trace_ids if trace_id
             ),
             "accounted_trace_count": machine_accounted_trace_count,
             "unaccounted_trace_count": machine_unaccounted_trace_count,

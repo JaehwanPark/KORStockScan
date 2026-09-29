@@ -1013,6 +1013,32 @@ def _stage_write(path, value):
     return value
 
 
+def _collector_history_issues(report_dir, day):
+    from src.engine.monitoring.widget_collector_expansion_recommendation import history_input_manifest
+    report = _load_json(stage_artifacts(report_dir, day, 'collector_recommendation')[
+        'widget_collector_expansion_recommendation'])
+    source = report.get('source') if isinstance(report.get('source'), dict) else {}
+    saved = source.get('history_input_manifest')
+    if not isinstance(saved, dict) or saved.get('schema') != 'collector_history_input_manifest_v1':
+        return ['collector_recommendation:history_manifest_missing']
+    entries = saved.get('entries')
+    if not isinstance(entries, list) or not all(isinstance(row, dict) for row in entries):
+        return ['collector_recommendation:history_manifest_invalid']
+    for kind, field in (('payload', 'feature_paths'), ('replay', 'replay_paths')):
+        if source.get(field) != [row.get('path') for row in entries if row.get('kind') == kind]:
+            return ['collector_recommendation:history_reader_paths_unbound']
+    try:
+        current = history_input_manifest(
+            Path(report_dir).parent / 'ai_decision_payloads',
+            Path(report_dir) / 'widget_mechanical_entry_replay',
+            through_date=date.fromisoformat(day),
+            sentinel_dir=Path(report_dir).parent / 'runtime' / 'sentinel_event_cache',
+            watch_config_path=Path(report_dir).parent / 'config' / 'widget_research_watch_symbols.json')
+    except (OSError, EOFError, ValueError, TypeError, KeyError) as exc:
+        return [f'collector_recommendation:history_source_invalid:{exc}']
+    return ([] if saved == current else ['collector_recommendation:history_generation_changed'])
+
+
 def stage_receipt_issues(report_dir, day, stage, *, code_hash=None):
     value = _load_json(stage_path(report_dir, day, stage))
     if (value.get('schema') != STAGE_SCHEMA or value.get('stage_id') != stage
@@ -1078,6 +1104,13 @@ def stage_receipt_issues(report_dir, day, stage, *, code_hash=None):
         return [f'{stage}:prerequisite_generation_changed']
     if value.get('input_sources') != _stage_sources(stage_input_paths(report_dir, day, stage)):
         return [f'{stage}:input_generation_changed']
+    if stage == 'collector_recommendation':
+        issues = _collector_history_issues(report_dir, day)
+        if issues:
+            return issues
+        report = _load_json(stage_artifacts(report_dir, day, stage)['widget_collector_expansion_recommendation'])
+        if value.get('history_input_generation_sha256') != report['source']['history_input_manifest']['manifest_sha256']:
+            return [f'{stage}:history_receipt_generation_changed']
     return _safe_stage_output_issues(report_dir, day, stage)
 
 
@@ -1099,6 +1132,39 @@ def stage_input_paths(report_dir, day, stage):
         paths['payloads'] = Path(report_dir).parent / 'ai_decision_payloads' / f'ai_decision_payloads_{day}.jsonl'
     if stage == 'outcome_labels': paths.pop('labels', None)
     return paths
+
+
+def _existing_incumbent_winrate_binding_valid(report, staged, bundle, previous, runtime_policy):
+    """Validate a fresh carry evaluation against an already staged immutable bundle."""
+    if not all(isinstance(value, dict) for value in (report, staged, bundle, previous)):
+        return False
+    try:
+        previous_machine = runtime_policy.for_cohort(
+            previous, ('KRX', 'KRX_REGULAR')
+        )['machine_policy']
+        existing_machine = runtime_policy.for_cohort(
+            bundle, ('KRX', 'KRX_REGULAR')
+        )['machine_policy']
+        machine_sha = runtime_policy.digest(previous_machine)
+    except (KeyError, TypeError, ValueError):
+        return False
+    proof = bundle.get('winrate_selection') or {}
+    return (
+        staged.get('current_report_sha256') == report.get('artifact_content_sha256')
+        and staged.get('bundle_report_sha256') == proof.get('report_sha256')
+        and staged.get('previous_bundle_sha256') == report.get('parent_bundle_sha256')
+        and proof.get('disposition') == 'incumbent_carried'
+        and proof.get('policy_version') == report.get('policy_version')
+        and proof.get('parent_bundle_sha256') == report.get('parent_bundle_sha256')
+        and proof.get('machine_policy_sha256') == machine_sha
+        and report.get('disposition') == 'incumbent_carried'
+        and report.get('candidate_policy') is None
+        and previous.get('bundle_sha256') == report.get('parent_bundle_sha256')
+        and bundle.get('machine_policy') == previous_machine
+        and existing_machine == previous_machine
+        and staged.get('machine_policy_sha256') == machine_sha
+        and report.get('parent_machine_policy_sha256') == machine_sha
+    )
 
 
 def _stage_output_issues(report_dir, day, stage):
@@ -1166,7 +1232,7 @@ def _stage_output_issues(report_dir, day, stage):
                 or (report.get('observation_status') != 'source_gap' and terminal.get('status') != 'completed')
                 or report.get('disposition') not in {'initial_adopted', 'successor_selected', 'incumbent_carried'}
                 or terminal.get('disposition') != report.get('disposition')
-                or staged.get('status') not in {'staged', 'already_staged', 'pending_initial_preserved'}
+                or staged.get('status') not in {'staged', 'already_staged', 'pending_initial_preserved', 'existing_incumbent_preserved'}
                 or type(report.get('input_attempt_count')) is not int
                 or type(report.get('accepted_attempt_count')) is not int
                 or type(report.get('source_contract_excluded_count')) is not int
@@ -1182,7 +1248,20 @@ def _stage_output_issues(report_dir, day, stage):
                         target_date=staged['target_date'])
                     proof = (bundle or {}).get('winrate_selection') or {}
                     pending = staged['status'] == 'pending_initial_preserved'
-                    if (bundle.get('bundle_sha256') != staged.get('bundle_sha256')
+                    reused_incumbent = staged['status'] == 'existing_incumbent_preserved'
+                    binding_invalid = (
+                        bundle.get('bundle_sha256') != staged.get('bundle_sha256')
+                        or proof.get('machine_policy_sha256') != runtime_policy.digest(bundle['machine_policy'])
+                    )
+                    if reused_incumbent:
+                        previous = runtime_policy.load_effective(
+                            data_root=Path(report_dir).parent,
+                            target_date=report.get('publication_date'),
+                        )
+                        binding_invalid = binding_invalid or not _existing_incumbent_winrate_binding_valid(
+                            report, staged, bundle, previous, runtime_policy
+                        )
+                    if (binding_invalid
                         or (pending and (report.get('pending_initial_bundle_sha256') != bundle['bundle_sha256']
                             or report.get('pending_initial_target_date') != staged['target_date']
                             or report.get('hurdle_errors') != ['initial_policy_pending_activation']
@@ -1192,9 +1271,10 @@ def _stage_output_issues(report_dir, day, stage):
                             or proof.get('parent_bundle_sha256') != report.get('parent_bundle_sha256')
                             or bundle.get('previous_bundle_sha256') != report.get('parent_bundle_sha256')
                             or (bundle['machine_policy'].get('entry_situation_veto') or {}).get('threshold_bp') != 68.75))
-                        or (not pending and (proof.get('report_sha256') != report.get('artifact_content_sha256')
+                        or (not pending and not reused_incumbent
+                            and (proof.get('report_sha256') != report.get('artifact_content_sha256')
                             or proof.get('disposition') != report['disposition']))
-                        or proof.get('machine_policy_sha256') != runtime_policy.digest(bundle['machine_policy'])):
+                        ):
                         errors.append(f'{stage}:winrate_staged_binding_invalid')
                 except (OSError, ValueError, TypeError, KeyError, AttributeError):
                     errors.append(f'{stage}:winrate_staged_binding_invalid')
@@ -1294,6 +1374,11 @@ def _stage_code(stage, commands, project, *, dispatcher_path=None):
         paths['next_stage2_checklist'] = project / 'src/engine/build_next_stage2_checklist.py'
     if stage == 'research_capacity':
         paths['native_capacity'] = project / 'src/engine/monitoring/research_native_capacity_source.py'
+    if stage == 'collector_recommendation':
+        for name in ('widget_mechanical_entry_replay', 'widget_comparison_cost',
+                     'machine_recommendation_identity', 'widget_research_watch_collector'):
+            paths[name] = project / f'src/engine/monitoring/{name}.py'
+        paths['exact_jsonl_reader'] = project / 'src/utils/jsonl_io.py'
     if stage == 'main_machine_policy':
         for name in ('entry_strategy_policy', 'entry_setup_evidence', 'ai_decision_quality', 'entry_candle_context', 'mechanistic_entry_runtime_policy'):
             paths[name] = project / f'src/engine/scalping/{name}.py'
@@ -1445,6 +1530,15 @@ def run_stage(stage, day, *, report_dir, project, publication=None, effective=No
                 # source date; bind their final generation to the stage.
                 value['input_sources'] = _stage_sources(stage_input_paths(report_dir, day, stage))
             issues = _safe_stage_output_issues(report_dir, day, stage) if not rc else [f'command_exit:{rc}']
+            if stage == 'collector_recommendation' and rc == 42:
+                value['policy_disposition'] = 'source_gap'
+            if stage == 'collector_recommendation' and not rc:
+                issues.extend(_collector_history_issues(report_dir, day))
+                if not issues:
+                    report = _load_json(stage_artifacts(report_dir, day, stage)['widget_collector_expansion_recommendation'])
+                    value['history_input_generation_sha256'] = report['source']['history_input_manifest']['manifest_sha256']
+                else:
+                    value['policy_disposition'] = 'source_gap'
             if value['prerequisite_receipts'] != _stage_sources(prerequisites): issues.append('prerequisite_changed_during_consumption')
             if value['input_sources'] != _stage_sources(stage_input_paths(report_dir, day, stage)): issues.append('input_changed_during_consumption')
             if stage == 'pre_submit_delay':
@@ -1463,7 +1557,7 @@ def run_stage(stage, day, *, report_dir, project, publication=None, effective=No
                 staging = terminal.get('staged') or {}
                 activation = (terminal.get('activation') or {}).get('status')
                 value['policy_disposition'] = ('source_gap' if machine_gap else terminal.get('disposition')
-                    if terminal.get('selection_basis') == 'win_rate_only' and staging.get('status') in {'staged', 'already_staged', 'pending_initial_preserved'}
+                    if terminal.get('selection_basis') == 'win_rate_only' and staging.get('status') in {'staged', 'already_staged', 'pending_initial_preserved', 'existing_incumbent_preserved'}
                     else 'updated' if activation == 'activated' else 'incumbent_carry' if activation in {'already_active', 'incumbent_carry'} else 'no_valid_candidate')
                 value['policy_sha256'] = terminal.get('policy_sha256')
             if stage in {'widget_policy', 'episode_policy'} and not issues:
