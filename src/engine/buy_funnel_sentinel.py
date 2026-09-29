@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
 import json
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -2409,6 +2410,43 @@ def _machine_primary_evaluation_key(event: PipelineEvent) -> str:
     return "machine:" + "|".join(components)
 
 
+def _machine_primary_fixed_watch_identity_components(event: PipelineEvent) -> dict[str, str]:
+    """Fixed watch has an admission identity, never a scanner promotion."""
+    machine = _machine_primary_identity_components(event)
+    return {
+        "watch_admission_id": _safe_str(event.fields.get("watch_admission_id")).strip(),
+        "watch_generation_id": _safe_str(event.fields.get("watch_generation_id")).strip(),
+        **{key: value for key, value in machine.items() if key != "scanner_promotion_id"},
+    }
+
+
+def _machine_primary_fixed_watch_identity_valid(event: PipelineEvent) -> bool:
+    if _safe_str(event.fields.get("watch_origin")).strip() != "MAIN_FIXED_WATCH":
+        return False
+    components = _machine_primary_fixed_watch_identity_components(event)
+    promotion = _machine_primary_identity_components(event)["scanner_promotion_id"]
+    if (promotion.lower() not in {"", "none", "null", "unknown", "-", "0"}
+        or not all(value and value.lower() not in {"none", "null", "unknown", "-", "0"}
+                   for value in components.values())):
+        return False
+    day = event.emitted_at.date().isoformat()
+    prefix = f"FIXED-{day}-{event.stock_code}-"
+    admission = components["watch_admission_id"]
+    if not admission.startswith(prefix):
+        return False
+    parts = admission[len(prefix):].rsplit("-", 2)
+    if len(parts) != 3:
+        return False
+    bucket, route, suffix = parts
+    if (not bucket or not route or len(suffix) != 12
+        or any(char not in "0123456789abcdef" for char in suffix)):
+        return False
+    admitted_bucket = "PREMARKET_KRX_LIKE" if bucket.upper() == "KRX_LIKE_PREMARKET" else bucket.upper()
+    expected = hashlib.sha256(f"{day}|{event.stock_code}|{bucket}|{route}".encode()).hexdigest()
+    return (admitted_bucket == components["session_bucket"]
+            and components["watch_generation_id"] == expected)
+
+
 def _is_machine_primary_event(event: PipelineEvent) -> bool:
     fields = event.fields
     return bool(
@@ -2956,11 +2994,23 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
     grouped: dict[str, list[PipelineEvent]] = defaultdict(list)
     identity_missing_event_count = 0
     identified_source_event_count = 0
+    fixed_watch_identified_event_count = 0
+    fixed_watch_identity_missing_event_count = 0
     source_event_count = 0
     for event in events:
         if event.pipeline != "ENTRY_PIPELINE" or not _is_machine_primary_event(event):
             continue
         source_event_count += 1
+        if _safe_str(event.fields.get("watch_origin")).strip() == "MAIN_FIXED_WATCH":
+            if _machine_primary_fixed_watch_identity_valid(event):
+                fixed_watch_identified_event_count += 1
+                identified_source_event_count += 1
+            else:
+                fixed_watch_identity_missing_event_count += 1
+                identity_missing_event_count += 1
+            # Scanner promotion and submit-parent reconciliation do not own
+            # fixed-watch admissions. They remain a separate source cohort.
+            continue
         key = _machine_primary_evaluation_key(event)
         if not key:
             identity_missing_event_count += 1
@@ -3399,6 +3449,11 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
         "broker_order_forbidden": True,
         "source_event_count": source_event_count,
         "identified_source_event_count": identified_source_event_count,
+        "scanner_identified_source_event_count": (
+            identified_source_event_count - fixed_watch_identified_event_count
+        ),
+        "fixed_watch_identified_event_count": fixed_watch_identified_event_count,
+        "fixed_watch_identity_missing_event_count": fixed_watch_identity_missing_event_count,
         "evaluation_identity_missing_event_count": identity_missing_event_count,
         "recovered_downstream_event_count": sum(
             len(stages) for stages in recovered_downstream_by_key.values()

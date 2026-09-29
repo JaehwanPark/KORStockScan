@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+import hashlib
 import json
 
 import pytest
@@ -767,6 +768,76 @@ def test_missing_identity_alias_does_not_mask_explicit_machine_receipt(missing):
     assert len(result["rows"]) == 1
     absent = event(policy_bundle_hash=missing, machine_bundle_sha256=missing)
     assert sentinel._machine_primary_evaluation_key(absent) == ""
+
+
+def test_fixed_watch_admission_is_not_a_scanner_identity_gap_or_denominator():
+    generation = hashlib.sha256(b"2026-09-21|005930|nxt_premarket|nxt_only").hexdigest()
+    fixed = event(action="BLOCK", screen="not_requested_machine_nonentry",
+        scanner_promotion_id="None", watch_origin="MAIN_FIXED_WATCH",
+        watch_admission_id="FIXED-2026-09-21-005930-nxt_premarket-nxt_only-abcdef123456",
+        watch_generation_id=generation)
+    funnel = sentinel._machine_primary_entry_funnel([fixed])
+    assert funnel["source_event_count"] == 1
+    assert funnel["fixed_watch_identified_event_count"] == 1
+    assert funnel["evaluation_identity_missing_event_count"] == 0
+    assert funnel["count_conservation"]["identified_plus_identity_missing_equals_raw"]
+    assert funnel["evaluation_count"] == 0
+    assert funnel["promotion_lifecycle"]["unique_promotion_count"] == 0
+    observed = monitor.snapshot([fixed], START)
+    assert observed["identity_observation"]["status"] == "unobservable"
+    assert observed["fixed_watch_identity_observation"]["identified_event_count"] == 1
+    assert observed["missing_identity_evidence"] == []
+    old = {"schema": monitor.SCHEMA, "date": START.date().isoformat(),
+        "source_as_of": (START - timedelta(seconds=1)).isoformat(),
+        "incidents": {"unbound_machine_identity": {
+            "status": "active", "scope": "unbound", "rule": "source_identity_missing",
+            "evidence_ids": observed["fixed_watch_identified_evidence"], "count": 1,
+            "first_seen": START.isoformat()}}}
+    corrected = monitor.evaluate(report([fixed], START), old, START)
+    assert "unbound_machine_identity" not in corrected["incidents"]
+    assert corrected["incidents"]["unbound_machine_identity_reclassified_fixed_watch"]["status"] == "reclassified"
+    assert corrected["fixed_watch_identity_observation"]["identified_event_count"] == 1
+    assert corrected["notification_pending"] == []
+
+
+def test_fixed_watch_and_scanner_machine_attempts_remain_separate():
+    generation = hashlib.sha256(b"2026-09-21|005930|nxt_premarket|nxt_only").hexdigest()
+    fixed = event(action="BLOCK", screen="not_requested_machine_nonentry",
+        scanner_promotion_id="-", watch_origin="MAIN_FIXED_WATCH",
+        watch_admission_id="FIXED-2026-09-21-005930-nxt_premarket-nxt_only-abcdef123456",
+        watch_generation_id=generation)
+    scanner = event(1, action="RECHECK", screen="not_requested_machine_nonentry")
+    funnel = sentinel._machine_primary_entry_funnel([fixed, scanner])
+    assert funnel["source_event_count"] == 2
+    assert funnel["identified_source_event_count"] == 2
+    assert funnel["fixed_watch_identified_event_count"] == 1
+    assert funnel["scanner_identified_source_event_count"] == 1
+    assert funnel["evaluation_count"] == 1
+    assert funnel["evaluation_ledger"][0]["scanner_promotion_id"] == "parent-1"
+    assert funnel["count_conservation"]["identified_plus_identity_missing_equals_raw"]
+
+
+def test_fixed_watch_missing_or_conflicting_identity_stays_a_source_gap():
+    generation = hashlib.sha256(b"2026-09-21|005930|nxt_premarket|nxt_only").hexdigest()
+    base = dict(action="BLOCK", screen="not_requested_machine_nonentry",
+        watch_origin="MAIN_FIXED_WATCH",
+        watch_admission_id="FIXED-2026-09-21-005930-nxt_premarket-nxt_only-abcdef123456",
+        watch_generation_id=generation)
+    missing = event(scanner_promotion_id="None", watch_generation_id="", **{
+        key: value for key, value in base.items() if key != "watch_generation_id"})
+    conflict = event(1, scanner_promotion_id="scanner-claim", **base)
+    malformed = event(2, scanner_promotion_id="None", watch_generation_id="f" * 64, **{
+        key: value for key, value in base.items() if key != "watch_generation_id"})
+    observed = monitor.snapshot([missing, conflict, malformed], START)
+    assert observed["identity_observation"]["status"] == "current_gap"
+    assert observed["identity_observation"]["missing_event_count"] == 3
+    assert observed["fixed_watch_identity_observation"]["identity_missing_event_count"] == 3
+    examples = observed["identity_observation"]["examples"]
+    assert any("watch_generation_id" in row["missing_fields"] for row in examples)
+    assert any("scanner_promotion_id" in row["conflicting_fields"] for row in examples)
+    assert any("fixed_watch_admission_generation_invalid" in row["identity_contract_issues"]
+        for row in examples)
+    assert observed["rows"] == []
 
 
 def test_missing_identity_detected_without_fake_denominator():

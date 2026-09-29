@@ -905,7 +905,8 @@ def snapshot(events, as_of):
     """Reuse already loaded events and the existing identity/terminal owner."""
     from src.engine.buy_funnel_sentinel import (
         _machine_primary_entry_funnel, _is_machine_primary_event, _machine_primary_evaluation_key,
-        _machine_primary_identity_components,
+        _machine_primary_identity_components, _machine_primary_fixed_watch_identity_components,
+        _machine_primary_fixed_watch_identity_valid,
     )
 
     now = stamp(as_of)
@@ -914,6 +915,11 @@ def snapshot(events, as_of):
     missing_rows = []
     historical_samples = []
     identified_clocks = []
+    fixed_watch_clocks = []
+    fixed_watch_evidence = []
+    def identity_evidence_id(event):
+        return hashlib.sha256(repr((event.emitted_at, event.stage, event.stock_code,
+            event.record_id, sorted(event.fields.items()))).encode()).hexdigest()
     # Reuse already loaded cache rows for legacy incident metadata only; no
     # second raw scan or historical funnel/recovery calculation. Bound output.
     for e in events:
@@ -922,17 +928,32 @@ def snapshot(events, as_of):
             continue
         if e.pipeline != "ENTRY_PIPELINE" or not _is_machine_primary_event(e):
             continue
-        if _machine_primary_evaluation_key(e):
+        fixed_watch = str(e.fields.get("watch_origin") or "").strip() == "MAIN_FIXED_WATCH"
+        if fixed_watch and _machine_primary_fixed_watch_identity_valid(e):
+            fixed_watch_evidence.append((at, identity_evidence_id(e)))
+            if (now - at).total_seconds() <= 2700:
+                fixed_watch_clocks.append(at)
+            continue
+        if not fixed_watch and _machine_primary_evaluation_key(e):
             if (now - at).total_seconds() <= 2700:
                 identified_clocks.append(at)
             continue
         detail = dict(
-            evidence_id=hashlib.sha256(repr((e.emitted_at, e.stage, e.stock_code,
-                e.record_id, sorted(e.fields.items()))).encode()).hexdigest(),
+            evidence_id=identity_evidence_id(e),
             occurred_at=at.isoformat(), stock_code=e.stock_code, stage=e.stage,
             record_id=e.record_id,
-            missing_fields=[k for k, v in _machine_primary_identity_components(e).items()
-                if not v or v.lower() in {"none", "null", "unknown", "-", "0"}])
+            missing_fields=[k for k, v in (
+                _machine_primary_fixed_watch_identity_components(e) if fixed_watch
+                else _machine_primary_identity_components(e)).items()
+                if not v or v.lower() in {"none", "null", "unknown", "-", "0"}],
+            conflicting_fields=["scanner_promotion_id"] if fixed_watch and
+                str(e.fields.get("scanner_promotion_id") or "").strip().lower()
+                not in {"", "none", "null", "unknown", "-", "0"} else [],
+            identity_contract_issues=["fixed_watch_admission_generation_invalid"]
+                if fixed_watch and not _machine_primary_fixed_watch_identity_valid(e)
+                and all(value and value.lower() not in {"none", "null", "unknown", "-", "0"}
+                    for value in _machine_primary_fixed_watch_identity_components(e).values())
+                else [])
         if (now - at).total_seconds() <= 2700:
             missing_rows.append(detail)
         else:
@@ -962,6 +983,8 @@ def snapshot(events, as_of):
     economic_history = defaultdict(list)
     for e in sorted(recent, key=lambda event: stamp(event.emitted_at)):
         if e.stage not in ECONOMIC_STAGES:
+            continue
+        if str(e.fields.get("watch_origin") or "").strip() == "MAIN_FIXED_WATCH":
             continue
         key = _machine_primary_evaluation_key(e)
         if key:
@@ -1020,6 +1043,20 @@ def snapshot(events, as_of):
         "auxiliary_ai_semantic_status_counts": funnel.get("auxiliary_ai_semantic_status_counts", {}),
         "auxiliary_ai_semantic_issue_counts": funnel.get("auxiliary_ai_semantic_issue_counts", {}),
         "identity_missing_events": funnel["evaluation_identity_missing_event_count"],
+        "fixed_watch_identified_evidence": [evidence for _, evidence in
+            sorted(fixed_watch_evidence, reverse=True)[:256]],
+        "fixed_watch_identity_observation": {
+            "schema": "fixed_watch_source_identity_v1",
+            "metric_role": "source_quality_gate", "decision_authority": "report_only",
+            "window_policy": "current_45_minutes", "sample_floor": "none_for_source_identity",
+            "primary_decision_metric": "identified_event_count",
+            "source_quality_gate": "exact_watch_admission_generation_attempt_scope_bundle",
+            "forbidden_uses": ["scanner_promotion_denominator", "submission_state",
+                "order_authority", "economic_acceptance"],
+            "identified_event_count": len(fixed_watch_clocks),
+            "identity_missing_event_count": funnel["fixed_watch_identity_missing_event_count"],
+            "latest_identified_at": max(fixed_watch_clocks).isoformat() if fixed_watch_clocks else None,
+        },
         "rows": [{k: r[k] for k in (
             "evaluation_key", "scanner_promotion_id", "stock_code", "effective_venue",
             "session_bucket", "policy_bundle_hash", "first_evaluated_at", "last_event_at",
@@ -1574,6 +1611,7 @@ def evaluate(report, state, now):
         result["blocker"] = "duplicate_or_reversed_source_snapshot"
         return result
     result.update(status="observing", source_as_of=as_of.isoformat())
+    result["fixed_watch_identity_observation"] = source.get("fixed_watch_identity_observation") or {}
     # Preserve the original incident as superseded evidence, without reporting
     # alias normalization as recovery or double-counting its exact attempts.
     for old_key, old in list(incidents.items()):
@@ -1715,6 +1753,18 @@ def evaluate(report, state, now):
     missing = source.get("missing_identity_evidence") or []
     key = "unbound_machine_identity"
     old = incidents.get(key, {})
+    old_evidence = set(old.get("evidence_ids") or [])
+    if old_evidence and old_evidence <= set(source.get("fixed_watch_identified_evidence") or []):
+        # Preserve the original alert and exact event hashes, while removing
+        # the false scanner-identity claim for a valid fixed-watch admission.
+        incidents["unbound_machine_identity_reclassified_fixed_watch"] = {
+            **old, "status": "reclassified", "scope": "fixed_watch",
+            "classification": "valid_fixed_watch_non_scanner_identity",
+            "correction_basis": "all_prior_evidence_ids_match_valid_fixed_watch_source_events",
+            "last_seen": now.isoformat(),
+        }
+        incidents.pop(key, None)
+        old = {}
     observation = source.get("identity_observation") or {}
     current_status = (observation.get("status") if observation.get("schema") == "machine_identity_recency_v1"
                       else "unobservable")
