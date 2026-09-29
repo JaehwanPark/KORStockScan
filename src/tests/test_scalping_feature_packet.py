@@ -467,6 +467,57 @@ def test_extract_scalping_feature_packet_prefers_fresh_ws_orderbook_touch_ticks(
     assert packet["tick_aggressor_pressure_usable"] is True
 
 
+def test_exact_probe_uses_two_trusted_ws_ticks_after_warmup_without_five_tick_gate():
+    ws_data = _sample_ws_data()
+    ws_data["zero_base_probe_exact_tick_source"] = "_AL|krx_nxt_integrated"
+    ws_data["recent_trade_ticks"] = [
+        {"time": "09:00:10", "price": 10110, "volume": 100,
+         "volume_source": "15_abs", "aggressor_side": "BUY",
+         "aggressor_source": "kiwoom_0b_signed_trade_volume"},
+        {"time": "09:00:09", "price": 10100, "volume": 30,
+         "volume_source": "15_abs", "aggressor_side": "SELL",
+         "aggressor_source": "kiwoom_0b_signed_trade_volume"},
+    ]
+    rest_ticks = [{"time": "09:00:10", "price": 10100, "volume": 999,
+                   "aggressor_source": "price_change_heuristic"}]
+    packet = extract_scalping_feature_packet(
+        ws_data, rest_ticks, _sample_candles(),
+        now=datetime.strptime("09:00:12", "%H:%M:%S"),
+    )
+    assert packet["feature_tick_source"] == "ws_exact_route"
+    assert packet["tick_sample_count"] == 2
+    assert packet["tick_aggressor_trusted_count"] == 2
+    assert packet["order_flow_pressure_source"] == "trusted_aggressor"
+    assert len(packet["_feature_tick_diagnostic_window"]) == 2
+    assert packet["_feature_tick_diagnostic_window"][0]["volume_source"] == "15_abs"
+    assert packet["_feature_tick_diagnostic_window"][0]["aggressor_source"] == (
+        "kiwoom_0b_signed_trade_volume"
+    )
+
+
+def test_exact_probe_tick_receipt_changes_with_pressure_provenance():
+    ws_data = _sample_ws_data()
+    ws_data["zero_base_probe_exact_tick_source"] = "_AL|krx_nxt_integrated"
+    ws_data["recent_trade_ticks"] = [{
+        "time": "09:00:10", "price": 10110, "volume": 100,
+        "volume_source": "15_abs", "aggressor_side": "BUY",
+        "aggressor_source": "kiwoom_0b_signed_trade_volume",
+        "best_ask": 10110, "best_bid": 10100,
+    }]
+    trusted = extract_scalping_feature_packet(
+        ws_data, [], _sample_candles(),
+        now=datetime.strptime("09:00:12", "%H:%M:%S"),
+    )
+    assert trusted["feature_tick_source"] == "ws_exact_route"
+    assert trusted["_feature_tick_diagnostic_window"][0]["best_ask"] == 10110
+    ws_data["recent_trade_ticks"][0]["best_ask"] = 10120
+    changed = extract_scalping_feature_packet(
+        ws_data, [], _sample_candles(),
+        now=datetime.strptime("09:00:12", "%H:%M:%S"),
+    )
+    assert changed["feature_tick_window_sha256"] != trusted["feature_tick_window_sha256"]
+
+
 def test_extract_scalping_feature_packet_prefers_cached_orderbook_touch_ws_ticks():
     ws_data = _sample_ws_data()
     ws_data["recent_trade_ticks"] = [

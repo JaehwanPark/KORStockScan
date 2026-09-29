@@ -68,6 +68,14 @@ def quote_source_sha256(fields: dict[str, Any]) -> str:
     return _digest({key: str(fields.get(key)) for key in _QUOTE_SOURCE_KEYS})
 
 
+def expected_route_for_session(session: Any) -> str | None:
+    """The delay family's executable quote route is fixed by the active session."""
+    bucket = str(session or "").strip().upper()
+    if not bucket or bucket in {"CLOSED", "SESSION_TRANSITION", "UNKNOWN"}:
+        return None
+    return "NXT_ONLY" if "PREMARKET" in bucket else "KRX_NXT_INTEGRATED"
+
+
 def _quote_source_issue(commit: dict[str, Any], quote: dict[str, Any]) -> str | None:
     expected = str(commit.get("decision_source_sha256") or "")
     epoch = str(commit.get("quote_transport_epoch") or "")
@@ -116,9 +124,13 @@ def policy_path(target_date: str) -> Path:
     return POLICY_DIR / f"pre_submit_delay_policy_{target_date}.json"
 
 
-def _source_rows(target_date: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def _source_rows(target_date: str, *, data_root: Path | None = None,
+                 allowed_current_ids: set[str] | None = None,
+                 strict_projection: bool = False) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    from src.engine.pipeline_event_summary import execution_projection_identity
+    strict_projection = strict_projection or target_date >= "2026-09-29"
     baseline = policy_refresh_start_date(target_date)
-    root = DATA_DIR / "threshold_cycle"
+    root = (Path(data_root) if data_root is not None else DATA_DIR) / "threshold_cycle"
     source_partitions: list[tuple[str, Path]] = []
     if root.is_dir():
         for directory in root.glob("date=*/family=" + FAMILY):
@@ -140,6 +152,8 @@ def _source_rows(target_date: str) -> tuple[list[dict[str, Any]], dict[str, Any]
     seen: dict[str, str] = {}
     raw_event_count = 0
     duplicate_event_count = 0
+    isolated_event_count = 0
+    duplicate_identities: set[str] = set()
     stage_counts = Counter()
     source_dates: set[str] = set()
     for source_date, path in source_partitions:
@@ -163,15 +177,22 @@ def _source_rows(target_date: str) -> tuple[list[dict[str, Any]], dict[str, Any]
                 identity = str(row.get("execution_source_event_sha256") or "")
                 if len(identity) != 64:
                     raise ValueError("delay_partition_identity_missing")
+                if strict_projection and identity != execution_projection_identity(row):
+                    raise ValueError("delay_partition_projection_identity_mismatch")
                 content_sha = _digest({key: value for key, value in row.items()
                                        if key != "execution_source_event_sha256"})
                 if identity in seen and seen[identity] != content_sha:
                     raise ValueError("delay_partition_identity_collision")
                 if identity not in seen:
-                    rows.append(row)
+                    if (allowed_current_ids is not None and source_date == target_date
+                            and identity not in allowed_current_ids):
+                        isolated_event_count += 1
+                    else:
+                        rows.append(row)
                     seen[identity] = content_sha
                 else:
                     duplicate_event_count += 1
+                    duplicate_identities.add(identity)
         after = path.stat()
         if (before.st_ino, before.st_size, before.st_mtime_ns) != (
             after.st_ino, after.st_size, after.st_mtime_ns
@@ -189,9 +210,13 @@ def _source_rows(target_date: str) -> tuple[list[dict[str, Any]], dict[str, Any]
     if source_partitions != current_partitions:
         raise ValueError("delay_partition_inventory_changed")
     return rows, {
-        "status": "ready" if rows else "valid_empty" if paths else "source_gap",
+        "status": "ready_with_isolation" if rows and isolated_event_count else
+                  "ready" if rows else "source_gap" if isolated_event_count else
+                  "valid_empty" if paths else "source_gap",
         "first_blocker": (None if rows else "valid_empty_delay_observations"
-                          if paths else "clean_baseline_delay_observations_missing"),
+                          if paths and not isolated_event_count else
+                          "no_matched_delay_source_events" if isolated_event_count else
+                          "clean_baseline_delay_observations_missing"),
         "paths": [str(path) for path in paths],
         "window_policy": ("selected_policy_forward_through_target_date"
                           if baseline != "2026-06-05" else
@@ -205,6 +230,8 @@ def _source_rows(target_date: str) -> tuple[list[dict[str, Any]], dict[str, Any]
         "raw_event_count": raw_event_count,
         "deduplicated_event_count": len(rows),
         "duplicate_event_count": duplicate_event_count,
+        "duplicate_event_identities": sorted(duplicate_identities),
+        "isolated_current_event_count": isolated_event_count,
         "raw_stage_counts": dict(stage_counts),
         "sha256": source_hash.hexdigest() if paths else None,
     }
@@ -288,7 +315,7 @@ def _validated_candidate(policy: dict[str, Any], report: dict[str, Any],
         return False
     if report.get("model_status") != "validated" or selected_policy.get("model_status") != "validated":
         return False
-    if (report.get("source") or {}).get("status") != "ready":
+    if (report.get("source") or {}).get("status") not in {"ready", "ready_with_isolation"}:
         return False
     rows = [
         row for row in grid
@@ -427,14 +454,136 @@ def _existing_quote_census(target_date: str) -> dict[str, Any]:
     return result
 
 
+def family_source_ledger_path(data_root: Path, target_date: str) -> Path:
+    return Path(data_root) / "pipeline_event_summaries" / f"pre_submit_delay_source_ledger_{target_date}.json"
+
+
+def seal_family_source_ledger(data_root: Path, target_date: str) -> dict[str, Any]:
+    """Bind exact raw/compact overlap without requiring unrelated summary stages."""
+    from src.engine.pipeline_event_summary import _producer_raw_ledger, load_summary_rows, producer_summary_paths
+
+    data_root = Path(data_root)
+    raw = _producer_raw_ledger(data_root, target_date, selected_stages=SOURCE_STAGES)
+    if not raw["parts"]:
+        raise ValueError("raw_source_missing")
+    if raw["source_quality_reasons"].get("invalid_json") or raw["source_quality_reasons"].get("incomplete_line"):
+        raise ValueError("unidentifiable_raw_source_quarantine")
+    compact_rows, compact = _source_rows(target_date, data_root=data_root, strict_projection=True)
+    raw_counts = Counter(identity for ids in raw["selected_execution_identities"].values() for identity in ids)
+    compact_counts = Counter(str(row.get("execution_source_event_sha256") or "")
+                             for row in compact_rows if row.get("emitted_date") == target_date)
+    compact_duplicates = set(compact["duplicate_event_identities"])
+    matched = sorted(identity for identity in raw_counts.keys() & compact_counts.keys()
+                     if raw_counts[identity] == compact_counts[identity] == 1
+                     and identity not in compact_duplicates)
+    raw_only = sorted(raw_counts.keys() - set(matched))
+    compact_only = sorted(compact_counts.keys() - set(matched))
+    summary_path, manifest_path = producer_summary_paths(data_root / "pipeline_event_summaries", target_date)
+    summary = {"status": "unobservable", "stage_event_counts": {}, "raw_summary_gap_by_stage": {}}
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        summary_rows = load_summary_rows(summary_path, include_samples=False, strict=True)
+        if (manifest.get("summary_path") != str(summary_path)
+                or manifest.get("summary_event_count") != sum(row["event_count"] for row in summary_rows)
+                or manifest.get("summary_storage_size_bytes") != summary_path.stat().st_size):
+            raise ValueError("summary_manifest_invalid")
+        counts = Counter()
+        for row in summary_rows:
+            if row.get("target_date") == target_date:
+                counts[row["stage"]] += row["event_count"]
+        summary = {"status": "observed", "stage_event_counts": dict(counts),
+                   "raw_summary_gap_by_stage": {
+                       stage: raw["stages"].get(stage, {}).get("valid_count", 0) - counts[stage]
+                       for stage in sorted(set(raw["stages"]) | set(counts))
+                       if raw["stages"].get(stage, {}).get("valid_count", 0) != counts[stage]},
+                   "manifest_last_writer_pid": manifest.get("last_writer_pid"),
+                   "manifest_updated_at": manifest.get("updated_at"),
+                   "flush_error_count": manifest.get("flush_error_count")}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        summary["reason"] = type(exc).__name__
+    ledger = {
+        "schema": "pre_submit_delay_family_source_ledger_v1", "source_date": target_date,
+        "status": "ready_with_isolation" if raw_only or compact_only else
+                  "ready" if matched else "valid_empty",
+        "metric_role": "source_quality_gate", "decision_authority": "report_only",
+        "window_policy": "exact_source_date_raw_compact_identity_intersection",
+        "sample_floor": "one_exact_matched_event", "primary_decision_metric": "matched_event_count",
+        "source_quality_gate": "raw_compact_exact_identity_and_stable_generation",
+        "forbidden_uses": ["order_authority", "missing_as_zero_ev", "summary_count_as_identity"],
+        "raw_parts": raw["parts"], "raw_logical_sha256": raw["logical_sha256"],
+        "raw_stage_counts": {stage: raw["stages"].get(stage, {}).get("valid_count", 0)
+                             for stage in sorted(SOURCE_STAGES)},
+        "compact_source_sha256": compact["sha256"], "compact_paths": compact["paths"],
+        "compact_stage_counts": compact["raw_stage_counts"],
+        "matched_event_ids": matched, "raw_only_event_ids": raw_only,
+        "compact_only_event_ids": compact_only, "summary_diagnostic": summary,
+        "runtime_effect": False,
+    }
+    ledger["ledger_sha256"] = _digest(ledger)
+    _atomic_json(family_source_ledger_path(data_root, target_date), ledger)
+    issues = family_source_ledger_issues(data_root, target_date)
+    if issues:
+        raise ValueError(",".join(issues))
+    return ledger
+
+
+def family_source_ledger_issues(data_root: Path, target_date: str) -> list[str]:
+    from src.engine.pipeline_event_summary import _part_snapshot_stamp, _source_part_path
+
+    data_root = Path(data_root)
+    path = family_source_ledger_path(data_root, target_date)
+    try:
+        ledger = json.loads(path.read_text(encoding="utf-8"))
+        if (ledger.get("schema") != "pre_submit_delay_family_source_ledger_v1"
+                or ledger.get("source_date") != target_date
+                or ledger.get("ledger_sha256") != _digest({k: v for k, v in ledger.items() if k != "ledger_sha256"})):
+            return ["family_source_ledger_invalid"]
+        raw_dir = data_root / "pipeline_events"
+        for part in ledger["raw_parts"]:
+            logical = _source_part_path(raw_dir, target_date, part["partition"])
+            if part["logical_path"] != str(logical.resolve()):
+                return ["raw_source_path_invalid"]
+            current = {str(item.resolve()): _part_snapshot_stamp(item)
+                       for item in (logical, Path(str(logical) + ".gz")) if item.exists()}
+            if current != {item["path"]: item["stamp"] for item in part["representations"]}:
+                return ["raw_generation_changed"]
+        if (Path(str(_source_part_path(raw_dir, target_date, "late"))).exists()
+                or Path(str(_source_part_path(raw_dir, target_date, "late")) + ".gz").exists()) != any(
+                    part["partition"] == "late" for part in ledger["raw_parts"]):
+            return ["raw_generation_changed"]
+        _, compact = _source_rows(target_date, data_root=data_root, strict_projection=True)
+        if compact["sha256"] != ledger["compact_source_sha256"] or compact["paths"] != ledger["compact_paths"]:
+            return ["compact_generation_changed"]
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        return ["family_source_ledger_missing_or_invalid"]
+    return []
+
+
 def build_report(
-    target_date: str, *, effective_date: str, write: bool = True
+    target_date: str, *, effective_date: str, write: bool = True,
+    require_family_ledger: bool = False,
 ) -> dict[str, Any]:
     date.fromisoformat(target_date)
     if date.fromisoformat(effective_date) <= date.fromisoformat(target_date):
         raise ValueError("delay_effective_date_not_after_source_date")
     started = time.monotonic()
-    rows, source = _source_rows(target_date)
+    allowed_ids = None
+    family_ledger = None
+    if require_family_ledger:
+        issues = family_source_ledger_issues(DATA_DIR, target_date)
+        if issues:
+            raise ValueError("delay_family_source_invalid:" + ",".join(issues))
+        family_ledger = json.loads(family_source_ledger_path(DATA_DIR, target_date).read_text(encoding="utf-8"))
+        allowed_ids = set(family_ledger["matched_event_ids"])
+    rows, source = _source_rows(target_date, allowed_current_ids=allowed_ids,
+                                strict_projection=require_family_ledger)
+    if family_ledger is not None:
+        if family_ledger["status"] == "valid_empty" and not rows:
+            source["status"] = "valid_empty"
+            source["first_blocker"] = "no_pre_submit_delay_events_observed"
+        source["family_source_ledger_sha256"] = family_ledger["ledger_sha256"]
+        source["raw_only_event_count"] = len(family_ledger["raw_only_event_ids"])
+        source["compact_only_event_count"] = len(family_ledger["compact_only_event_ids"])
     existing_quote_census = _existing_quote_census(target_date)
     commits: dict[str, dict[str, Any]] = {}
     samples: dict[str, dict[float, dict[str, Any]]] = defaultdict(dict)
@@ -673,7 +822,9 @@ def build_report(
             else source["first_blocker"]
         )
     elif not commits:
-        blocker = "exact_committed_intent_missing"
+        blocker = ("no_committed_intent_observed" if family_ledger is not None
+                   and family_ledger["status"] == "valid_empty" else
+                   "exact_committed_intent_missing")
     elif not eligible:
         blocker = "eligible_enter_now_auxiliary_pass_intent_missing"
     elif not any(row["source_valid_attempt_count"] for row in diagnostic[1:]):
@@ -682,6 +833,12 @@ def build_report(
         blocker = "exact_submit_terminal_receipt_missing"
     else:
         blocker = "paired_fill_terminal_cost_model_not_validated"
+    report_status = ("valid_empty" if blocker == "no_committed_intent_observed" else
+                     "model_not_validated" if blocker == "paired_fill_terminal_cost_model_not_validated" else
+                     "source_gap")
+    unselected_status = ("unselected_source_gap" if report_status == "source_gap" else
+                         "unselected_valid_empty" if report_status == "valid_empty" else
+                         "unselected_model_not_validated")
     report = {
         "schema": REPORT_SCHEMA,
         "source_date": target_date,
@@ -722,7 +879,7 @@ def build_report(
                            "quantity_increase", "safety_guard_bypass"],
         "incumbent_net_ev_pct": None,
         "selected_delay_sec": None,
-        "status": "source_gap",
+        "status": report_status,
         "first_blocker": blocker,
         "realized_pnl_not_double_counted": True,
         "runtime_effect": False,
@@ -745,19 +902,19 @@ def build_report(
         "scope_policies": {
             row["scope_key"]: {
                 "selected_delay_sec": None,
-                "selection_status": "unselected_source_gap",
+                "selection_status": unselected_status,
                 "runtime_apply_allowed": False,
             } for row in scope_diagnostic
         },
         "type_policies": {
             row["type_key"]: {
                 "selected_delay_sec": None,
-                "selection_status": "unselected_source_gap",
+                "selection_status": unselected_status,
                 "runtime_apply_allowed": False,
             } for row in type_diagnostic
         },
         "runtime_apply_allowed": False,
-        "selection_status": "unselected_source_gap",
+        "selection_status": unselected_status,
         "first_blocker": blocker,
         "paired_net_ev_delta_pct": None,
         "holdout_net_ev_delta_pct": None,
@@ -828,10 +985,14 @@ def load_runtime_policy(*, now: datetime | None = None,
             and policy.get("runtime_apply_allowed") is True
         )
         if selected is None and not selector_only:
-            if (policy.get("selection_status") == "unselected_source_gap"
-                    and policy.get("runtime_apply_allowed") is False
-                    and report.get("status") == "source_gap"):
-                return {**fallback, "status": "no_validated_delay_policy_source_gap"}
+            unresolved = {"source_gap": "unselected_source_gap",
+                          "valid_empty": "unselected_valid_empty",
+                          "model_not_validated": "unselected_model_not_validated"}
+            if (policy.get("selection_status") == unresolved.get(report.get("status"))
+                    and policy.get("runtime_apply_allowed") is False):
+                return {**fallback, "status": (
+                    "no_validated_delay_policy_source_gap" if report.get("status") == "source_gap"
+                    else "no_validated_delay_policy_not_evaluated")}
             return {**fallback, "status": "policy_delay_invalid"}
         if selected is not None and selected not in DELAYS_SEC:
             return {**fallback, "status": "policy_delay_invalid"}
@@ -881,8 +1042,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--date", required=True)
     parser.add_argument("--effective-date", required=True)
+    parser.add_argument("--require-family-ledger", action="store_true")
     args = parser.parse_args(argv)
-    result = build_report(args.date, effective_date=args.effective_date)
+    result = build_report(args.date, effective_date=args.effective_date,
+                          require_family_ledger=args.require_family_ledger)
     print(json.dumps({
         "status": result["status"],
         "first_blocker": result["first_blocker"],

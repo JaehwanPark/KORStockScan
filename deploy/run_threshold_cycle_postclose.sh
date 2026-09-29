@@ -14,6 +14,7 @@ ACTIVE_POSTCLOSE_PGID=""
 POSTCLOSE_GROUP_STARTING=false
 POSTCLOSE_PENDING_SIGNAL=""
 POSTCLOSE_OPERATING=false
+POSTCLOSE_LAST_RESOURCE_STATUS=""
 POSTCLOSE_SIGNAL_GRACE_SEC="${THRESHOLD_CYCLE_SIGNAL_GRACE_SEC:-3}"
 if ! [[ "$POSTCLOSE_SIGNAL_GRACE_SEC" =~ ^[0-9]+$ ]] || [ "$POSTCLOSE_SIGNAL_GRACE_SEC" -gt 30 ]; then
   POSTCLOSE_SIGNAL_GRACE_SEC=3
@@ -951,7 +952,7 @@ max_cpu_busy = float(sys.argv[6])
 max_sample_age = float(sys.argv[7])
 max_load1 = float(sys.argv[8])
 if not path.exists():
-    print(json.dumps({"ok": False, "issues": ["sampler_missing"]}))
+    print(json.dumps({"ok": False, "issues": ["sampler_missing"], "required_mem_mb": min_mem}))
     raise SystemExit(0)
 last = None
 with path.open("rb") as fh:
@@ -969,7 +970,7 @@ for line in lines[-200:]:
     except json.JSONDecodeError:
         continue
 if not last:
-    print(json.dumps({"ok": False, "issues": ["sampler_empty"]}))
+    print(json.dumps({"ok": False, "issues": ["sampler_empty"], "required_mem_mb": min_mem}))
     raise SystemExit(0)
 memory = last.get("memory") or {}
 cpu = last.get("cpu") or {}
@@ -1004,6 +1005,7 @@ print(json.dumps({
     "ok": not issues,
     "issues": issues,
     "mem_available_mb": round(mem_available, 1),
+    "required_mem_mb": round(min_mem, 1),
     "swap_free_mb": round(swap_free, 1),
     "swap_used_pct": round(swap_used_pct, 1),
     "iowait_pct": round(iowait, 1),
@@ -1058,6 +1060,7 @@ wait_for_postclose_resources() {
       return 0
     fi
     if [ "$waited" -ge "$POSTCLOSE_RESOURCE_WAIT_SEC" ]; then
+      POSTCLOSE_LAST_RESOURCE_STATUS="$status"
       echo "[threshold-cycle] resource guard timeout label=$label waited=${waited}s status=$status" >&2
       return 1
     fi
@@ -1455,12 +1458,6 @@ for spec in "main_machine_policy:$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" "l
     "$VENV_PY" -m src.engine.automation.postclose_summary_handoff --stage "$stage" --date "$TARGET_DATE" --off
   fi
 done
-# Launch the independent machine owner before any long family/AI producer.
-if [[ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" == "true" || "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" == "1" ]]; then
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.postclose_summary_handoff \
-    --stage main_machine_policy --date "$TARGET_DATE" --publication-date "$POLICY_PUBLICATION_DATE" "${POSTCLOSE_STAGE_RECOVERY_ARGS[@]}" --launch
-fi
-
 if [ "$RUN_SIM_POST_SELL_FEEDBACK" = "true" ] || [ "$RUN_SIM_POST_SELL_FEEDBACK" = "1" ]; then
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.sniper_post_sell_feedback \
     --date "$TARGET_DATE" \
@@ -1486,6 +1483,23 @@ if [ "$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT" = "true" ] || [ "$RUN_OBSERVATION_S
     "$PROJECT_DIR/data/report/observation_source_quality_audit/observation_source_quality_audit_${TARGET_DATE}.json" \
     "$PROJECT_DIR/data/report/observation_source_quality_audit/observation_source_quality_audit_${TARGET_DATE}.md" \
     "observation_source_quality_preflight"
+fi
+
+if [[ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" == "true" || "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" == "1" ]]; then
+  if ! wait_for_postclose_resources "main_machine_policy"; then
+    if ! "$VENV_PY" -m src.engine.automation.postclose_summary_handoff \
+        --stage main_machine_policy --date "$TARGET_DATE" --check; then
+      machine_resource_status="$POSTCLOSE_LAST_RESOURCE_STATUS"
+      "$VENV_PY" -m src.engine.automation.postclose_summary_handoff \
+        --stage main_machine_policy --date "$TARGET_DATE" \
+        --publication-date "$POLICY_PUBLICATION_DATE" \
+        --resource-guard-status "$machine_resource_status" || true
+      exit 1
+    fi
+  else
+    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.postclose_summary_handoff \
+      --stage main_machine_policy --date "$TARGET_DATE" --publication-date "$POLICY_PUBLICATION_DATE" "${POSTCLOSE_STAGE_RECOVERY_ARGS[@]}" --launch
+  fi
 fi
 
 
@@ -2077,6 +2091,10 @@ if (report.get("date") != target_date
         or (report.get("meta") or {}).get("snapshot_profile") != "postclose_exit"):
     raise SystemExit("postclose_exit_report_generation_invalid")
 PY
+# Wait for asynchronous policy producers and consumers before hashing their
+# source generations into the runtime summary and next-day checklist.
+run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.postclose_summary_handoff \
+  --stage wait --date "$TARGET_DATE" --timeout-sec 14400
 wait_for_postclose_resources "runtime_approval_summary"
 RUNTIME_APPROVAL_SCOPE_ARGS=("${POSTCLOSE_SWING_SCOPE_ARGS[@]}")
 if [[ "$RUN_PRODUCER_GAP_DISCOVERY" != "true" && "$RUN_PRODUCER_GAP_DISCOVERY" != "1" ]]; then
@@ -2109,9 +2127,8 @@ refresh_automation_trigger_decision_snapshot "final_consumer"
 wait_for_postclose_resources "build_next_stage2_checklist_final_refresh"
 run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.build_next_stage2_checklist --source-date "$TARGET_DATE"
 wait_for_file_artifact "$(next_stage2_checklist_path)" "next_stage2_checklist_final_refresh"
-# Independent failures remain in their own receipts; the native wrapper can
-# finish its own sources, while finalization checks the whole stage registry.
-"$VENV_PY" -m src.engine.automation.postclose_summary_handoff --stage wait --date "$TARGET_DATE" --timeout-sec 14400 || true
+# Independent failures remain in their own receipts; finalization checks the
+# whole stage registry after each asynchronous owner has reached terminal.
 if [[ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" == "true" || "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" == "1" ]]; then
 for stage in legacy_machine_report main_auxiliary_policy; do
   if "$VENV_PY" -m src.engine.automation.postclose_summary_handoff --stage "$stage" --date "$TARGET_DATE" --check; then

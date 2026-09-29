@@ -106,6 +106,35 @@ def exact_probe_ws_data(
     ):
         return {}, "required_bbo_trade_missing"
     result = dict(snapshot)
+    route_buffers = snapshot.get("recent_trade_ticks_by_route")
+    route_ticks = route_buffers.get(route_key) if isinstance(route_buffers, dict) else None
+    route_ticks = route_ticks if isinstance(route_ticks, (list, tuple)) else ()
+    # The aggregate buffer can contain an earlier item/route from this code.
+    # Bind the machine feature window to the same subscription as the 0B/0D
+    # readiness receipt. A short, quiet tape remains an honest short window.
+    exact_ticks = []
+    expected_suffix = route_key.split("|", 1)[0]
+    rejected = {"item_or_route": 0, "transport_epoch": 0, "before_registration": 0}
+    for tick in route_ticks:
+        if (not isinstance(tick, dict) or tick.get("item") != item
+            or tick.get("market_route") != route
+            or (tick.get("market_suffix") is not None
+                and (tick.get("market_suffix") or "KRX") != expected_suffix)):
+            rejected["item_or_route"] += 1
+        elif tick.get("transport_epoch") != transport:
+            rejected["transport_epoch"] += 1
+        elif (not isinstance(tick.get("received_at_ms"), (int, float))
+              or tick["received_at_ms"] < after_epoch * 1000):
+            rejected["before_registration"] += 1
+        else:
+            exact_ticks.append(tick)
+    result["recent_trade_ticks"] = exact_ticks
+    result["zero_base_probe_exact_tick_filter"] = {
+        "source_row_count": len(route_ticks), "accepted_row_count": len(exact_ticks),
+        "rejected_counts": rejected,
+    }
+    result["zero_base_probe_exact_tick_source"] = route_key
+    result["zero_base_probe_registered_epoch"] = after_epoch
     result["curr"] = int(trade["current_price"])
     result["orderbook"] = orderbook
     result["effective_venue"] = _ROUTE_VENUE[route]
@@ -245,9 +274,11 @@ def probe_ws_snapshot(ws_manager, *, code: str, route: str) -> dict:
     return ws_manager.get_latest_data(code) or {}
 
 
-def exact_probe_rest_sources(ticks, candle_meta, *, request_code, now_epoch):
+def exact_probe_rest_sources(ticks, candle_meta, *, request_code, now_epoch,
+                             allow_empty_ticks=False):
     """Keep REST feature rows on the requested venue and bounded receive clock."""
-    if not isinstance(ticks, list) or not ticks or not isinstance(candle_meta, dict):
+    if (not isinstance(ticks, list) or (not ticks and not allow_empty_ticks)
+        or not isinstance(candle_meta, dict)):
         return False
     if candle_meta.get("request_code") != request_code:
         return False
@@ -396,12 +427,14 @@ def run_zero_base_probe(
         except Exception as exc:
             result["reason"] = "required_rest_source_failed:" + type(exc).__name__
             return result
-        if not ticks or not candles:
+        exact_ws_ticks = ws_data.get("recent_trade_ticks") or []
+        if (not ticks and not exact_ws_ticks) or not candles:
             result["result"] = "required_feature_insufficient"
             result["reason"] = "tick_or_candle_missing"
             return result
         if not exact_probe_rest_sources(
             ticks, candle_meta, request_code=request_code, now_epoch=now(),
+            allow_empty_ticks=bool(exact_ws_ticks),
         ):
             result["reason"] = "rest_route_or_receive_clock_invalid"
             return result
@@ -455,6 +488,10 @@ def run_zero_base_probe(
             contract_error = machine.get("machine_contract_error")
             if contract_error:
                 result["machine_contract_error"] = str(contract_error)[:160]
+            for field in ("machine_feature_source_receipt", "machine_feature_tick_window",
+                          "machine_source_gap_kind"):
+                if field in machine:
+                    result[field] = machine[field]
             result["result"] = (
                 "required_feature_insufficient"
                 if machine.get("ai_result_source") == "input_preflight_blocked"

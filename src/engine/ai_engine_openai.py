@@ -9238,6 +9238,7 @@ class GPTSniperEngine:
         machine_first_context = None
         machine_hot_payload = None
         machine_feature_packet = None
+        machine_tick_window = []
         machine_capture = {}
         if machine_only and not (
             is_scalping_entry_call
@@ -9266,6 +9267,11 @@ class GPTSniperEngine:
                     ws_data, recent_ticks, recent_candles,
                     **({"now": datetime.fromtimestamp(machine_input_fields["entry_machine_input_as_of"], timezone.utc)}
                        if machine_input_fields else {}),
+                )
+                # The probe result owns a bounded replay receipt when machine
+                # construction fails before the normal observation capture.
+                machine_tick_window = machine_feature_packet.pop(
+                    "_feature_tick_diagnostic_window", []
                 )
                 if machine_input_fields:
                     machine_feature_packet["evaluation_as_of"] = machine_input_fields["entry_machine_input_as_of"]
@@ -9351,6 +9357,9 @@ class GPTSniperEngine:
                         or machine_exact.get("snapshot_id")
                         or f"machine-evaluation-{uuid.uuid4().hex}"
                     )
+                machine_input_fields["evaluation_attempt_id"] = machine_exact[
+                    "evaluation_attempt_id"
+                ]
                 from src.trading.market.micro_confirmation import (
                     load_live_dynamic_confirmation_source,
                 )
@@ -9533,6 +9542,26 @@ class GPTSniperEngine:
                         input_contract_fields=input_contract_fields,
                     )
             except (ValueError, TypeError, KeyError) as exc:
+                feature_receipt = {
+                    key: machine_feature_packet.get(key)
+                    for key in (
+                        "feature_tick_source", "feature_tick_selection_reason",
+                        "feature_tick_window_sha256", "tick_sample_count",
+                        "tick_aggressor_trusted_count", "trade_volume_source_counts",
+                        "order_flow_pressure_source", "feature_exact_tick_filter",
+                    )
+                } if isinstance(machine_feature_packet, dict) else {}
+                source_gap_kind = None
+                if str(exc) == "strategy_tape_score_source_missing":
+                    exact_filter = feature_receipt.get("feature_exact_tick_filter") or {}
+                    if (exact_filter.get("source_row_count", 0) > 0
+                        and exact_filter.get("accepted_row_count") == 0):
+                        source_gap_kind = "source_route_conflict"
+                    elif (feature_receipt.get("feature_tick_source") == "ws_exact_route"
+                          and int(feature_receipt.get("tick_aggressor_trusted_count") or 0) > 0):
+                        source_gap_kind = "feature_tick_selection_gap"
+                    else:
+                        source_gap_kind = "trusted_tape_source_insufficient"
                 return self._annotate_analysis_result(
                     _merge_runtime_fields(
                         {
@@ -9542,6 +9571,9 @@ class GPTSniperEngine:
                             "provider_called": False,
                             "machine_contract_error": str(exc),
                             "machine_evaluation_status": "assessment_contract_invalid",
+                            "machine_source_gap_kind": source_gap_kind,
+                            "machine_feature_source_receipt": feature_receipt,
+                            "machine_feature_tick_window": machine_tick_window,
                         }
                     ),
                     prompt_type=prompt_type,
@@ -9802,6 +9834,58 @@ class GPTSniperEngine:
                                     default=str,
                                 ).encode("utf-8")
                             ).hexdigest()
+                            if machine_first_context is not None:
+                                cost_source = replay_context.get(
+                                    "anticipatory_reversal_analysis_v1"
+                                ) or {}
+                                cost_source = (
+                                    cost_source.get("execution_cost") or {}
+                                    if isinstance(cost_source, dict)
+                                    else {}
+                                )
+                                if not isinstance(cost_source, dict):
+                                    cost_source = {}
+                                try:
+                                    pre_provider_cost = float(
+                                        cost_source.get("conservative_execution_cost_pct")
+                                    )
+                                except (TypeError, ValueError):
+                                    pre_provider_cost = None
+                                economic_source_fields["entry_cost_source_status"] = (
+                                    "exact_pre_provider_replay"
+                                    if pre_provider_cost is not None
+                                    and math.isfinite(pre_provider_cost)
+                                    and pre_provider_cost >= 0
+                                    and cost_source.get("cost_basis")
+                                    == "half_spread_plus_bounded_source_age_penalty"
+                                    and cost_source.get("fill_assumption")
+                                    == "counterfactual_only_no_fill_claim"
+                                    else "source_gap"
+                                )
+                                economic_source_fields["entry_cost_basis"] = (
+                                    cost_source.get("cost_basis")
+                                )
+                                economic_source_fields["entry_cost_scope"] = (
+                                    "counterfactual_friction_no_broker_fees"
+                                )
+                                economic_source_fields["entry_cost_contract_sha256"] = (
+                                    hashlib.sha256(
+                                        json.dumps(cost_source, ensure_ascii=False,
+                                                   sort_keys=True, separators=(",", ":"),
+                                                   default=str).encode("utf-8")
+                                    ).hexdigest()
+                                    if cost_source else None
+                                )
+                                economic_source_fields["entry_cost_replay_context_sha256"] = (
+                                    replay_context_sha256
+                                )
+                                economic_source_fields["entry_cost_evaluation_attempt_id"] = (
+                                    exact_payload.get("evaluation_attempt_id")
+                                )
+                                if economic_source_fields["entry_cost_source_status"] == "exact_pre_provider_replay":
+                                    economic_source_fields["entry_conservative_execution_cost_pct"] = round(
+                                        pre_provider_cost, 10
+                                    )
                             decision_quality_input = {
                                 "input_schema": entry_setup_live_input_schema,
                                 "entry_setup_evidence_v1": _entry_provider_ledger(entry_setup_evidence),

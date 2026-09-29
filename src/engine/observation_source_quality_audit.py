@@ -518,6 +518,11 @@ def _machine_ai_natural_source_consumption(
         str(trace.get("decision_trace_id") or "").strip()
         for trace in machine_contract_invalid_traces
     ]
+    machine_contract_invalid_rows_isolated = (
+        len(contract_invalid_trace_ids) == len(machine_contract_invalid_traces)
+        and all(contract_invalid_trace_ids)
+        and len(set(contract_invalid_trace_ids)) == len(contract_invalid_trace_ids)
+    )
     machine_accounted_trace_count = (
         len(machine_source_invalid_traces)
         + len(machine_feature_insufficient_traces)
@@ -791,8 +796,7 @@ def _machine_ai_natural_source_consumption(
                 machine_contract_invalid_traces
             ),
             "assessment_contract_invalid_rows_isolated": (
-                all(contract_invalid_trace_ids)
-                and len(set(contract_invalid_trace_ids)) == len(contract_invalid_trace_ids)
+                machine_contract_invalid_rows_isolated
             ),
             "assessment_contract_invalid_trace_ids": sorted(
                 trace_id for trace_id in contract_invalid_trace_ids if trace_id
@@ -865,7 +869,10 @@ def _machine_ai_natural_source_consumption(
             or invalid_json_sources
             or source_generation_changed
             or machine_unaccounted_trace_count
-            or machine_contract_invalid_traces
+            or (
+                machine_contract_invalid_traces
+                and not machine_contract_invalid_rows_isolated
+            )
         ),
         "machine_threshold_tuning_blocked_reason": (
             "machine_attempt_conservation_gap"
@@ -873,9 +880,10 @@ def _machine_ai_natural_source_consumption(
             else (
                 "machine_assessment_contract_invalid"
                 if machine_contract_invalid_traces
+                and not machine_contract_invalid_rows_isolated
                 else (
                     "machine_required_feature_blocked_before_assessment"
-                    if machine_feature_insufficient_traces
+                    if machine_feature_insufficient_traces and not captures
                     else (
                         "machine_source_quality_blocked_before_assessment"
                         if machine_expected_traces and not captures

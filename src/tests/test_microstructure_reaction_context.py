@@ -464,6 +464,25 @@ def test_kiwoom_0b_signed_trade_volume_source_is_trusted_before_touch_fallback()
     assert inferred["touch_confirms_signed"] is False
 
 
+def test_one_explicit_untrusted_volume_keeps_mixed_window_pressure_closed():
+    trusted = [{
+        "time": f"09:00:0{second}", "price": 10100,
+        "volume": 100, "volume_source": "15_abs",
+        "aggressor_side": "BUY",
+        "aggressor_source": "kiwoom_0b_signed_trade_volume",
+        "aggressor_quality": "signed_trade_volume_positive",
+    } for second in range(5, 0, -1)]
+    mixed = trusted + [{
+        **trusted[-1], "time": "09:00:00", "volume_source": "1030_1031_cumulative",
+    }]
+    snapshot = precompute_microstructure_reaction_inputs(
+        _ws_data(), mixed, now=datetime.strptime("09:00:06", "%H:%M:%S"),
+    )
+    assert snapshot["tick_aggressor_source_counts"]["kiwoom_0b_signed_trade_volume"] == 6
+    assert snapshot["tick_aggressor_trusted_count"] == 0
+    assert snapshot["tick_aggressor_pressure_usable"] is False
+
+
 def test_source_less_declared_side_is_not_pressure_usable():
     snapshot = precompute_microstructure_reaction_inputs(
         _ws_data(),

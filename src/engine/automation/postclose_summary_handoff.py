@@ -1050,12 +1050,12 @@ def stage_receipt_issues(report_dir, day, stage, *, code_hash=None):
     if value.get('status') != 'succeeded' or value.get('exit_code') != 0:
         return [f'{stage}:{value.get("status")}']
     if stage == 'pre_submit_delay':
-        from src.engine.pipeline_event_summary import producer_source_ledger_issues
-        source_issues = producer_source_ledger_issues(Path(report_dir).parent, day)
+        from src.engine.scalping.pre_submit_delay_tuning import family_source_ledger_issues
+        source_issues = family_source_ledger_issues(Path(report_dir).parent, day)
         if source_issues:
             return [f'{stage}:{issue}' for issue in source_issues]
-        manifest = _load_json(stage_input_paths(report_dir, day, stage)['pipeline_summary_manifest'])
-        if value.get('pipeline_source_generation_sha256') != (manifest.get('raw_source_ledger') or {}).get('ledger_sha256'):
+        ledger = _load_json(stage_input_paths(report_dir, day, stage)['pre_submit_delay_source_ledger'])
+        if value.get('pipeline_source_generation_sha256') != ledger.get('ledger_sha256'):
             return [f'{stage}:pipeline_source_generation_changed']
     if code_hash is None:
         code_hash = _stage_code(stage, stage_commands(stage, day, value.get('publication_date') or day, recovery=value.get('recovery_mode', False)), Path(__file__).resolve().parents[3])
@@ -1124,7 +1124,7 @@ def stage_input_paths(report_dir, day, stage):
         paths.update({s:stage_path(report_dir, day, s) for s in active_stage_names(day)
                       if s != 'summary_handoff'})
     if stage == 'pre_submit_delay':
-        paths['pipeline_summary_manifest'] = Path(report_dir).parent / 'pipeline_event_summaries' / f'pipeline_event_producer_summary_manifest_{day}.json'
+        paths['pre_submit_delay_source_ledger'] = Path(report_dir).parent / 'pipeline_event_summaries' / f'pre_submit_delay_source_ledger_{day}.json'
     if stage == 'widget_policy':
         paths['eod_status'] = Path(report_dir).parent / 'runtime' / 'update_kospi_status' / f'update_kospi_{day}.json'
     if stage in {'collector_recommendation', 'outcome_labels'}:
@@ -1134,7 +1134,57 @@ def stage_input_paths(report_dir, day, stage):
     return paths
 
 
-def _existing_incumbent_winrate_binding_valid(report, staged, bundle, previous, runtime_policy):
+def _machine_source_preflight_issue(report_dir, day):
+    """Require an exact-date, hash-bound preflight before machine calibration."""
+    source_path = (Path(report_dir) / 'observation_source_quality_audit'
+                   / f'observation_source_quality_audit_{day}.json')
+    binding = _load_json(Path(str(source_path) + '.final-contract.json'))
+    try:
+        source_bytes = source_path.read_bytes()
+        source = json.loads(source_bytes)
+    except (OSError, ValueError, TypeError):
+        return 'source_quality_preflight_missing_or_invalid'
+    if not isinstance(source, dict) or not binding:
+        return 'source_quality_preflight_missing_or_invalid'
+    if (source.get('target_date') != day
+        or source.get('audit_phase') != 'preflight'
+        or binding.get('schema') != 'observation_source_quality_final_binding_v1'
+        or binding.get('target_date') != day
+        or binding.get('audit_phase') != 'preflight'
+        or binding.get('artifact_sha256') != hashlib.sha256(source_bytes).hexdigest()
+        or binding.get('implementation_sha256') != source.get('consumer_implementation_sha256')):
+        return 'source_quality_preflight_identity_or_hash_invalid'
+    summary = source.get('summary')
+    generation = source.get('source')
+    if (source.get('status') not in {'pass', 'warning'}
+        or not isinstance(summary, dict)
+        or summary.get('tuning_input_allowed') is not True
+        or not isinstance(generation, dict)
+        or generation.get('generation_stable') is not True):
+        return 'source_quality_preflight_blocked'
+    raw_path = generation.get('pipeline_events')
+    raw_generation = generation.get('generation')
+    raw_root = Path(report_dir).parent / 'pipeline_events'
+    allowed_raw = {raw_root / f'pipeline_events_{day}.jsonl',
+                   raw_root / f'pipeline_events_{day}.jsonl.gz'}
+    if (not isinstance(raw_path, str) or not isinstance(raw_generation, dict)
+        or Path(raw_path).resolve() not in {path.resolve() for path in allowed_raw}):
+        return 'source_quality_preflight_raw_identity_invalid'
+    try:
+        stat = Path(raw_path).stat()
+    except OSError:
+        return 'source_quality_preflight_raw_generation_changed'
+    if any(getattr(stat, stat_field) != raw_generation.get(receipt_field)
+           for stat_field, receipt_field in (
+               ('st_dev', 'device'), ('st_ino', 'inode'),
+               ('st_size', 'size_bytes'), ('st_mtime_ns', 'mtime_ns'),
+               ('st_ctime_ns', 'ctime_ns'))):
+        return 'source_quality_preflight_raw_generation_changed'
+    return None
+
+
+def _existing_incumbent_winrate_binding_valid(report, staged, bundle, previous, runtime_policy,
+                                              staged_bundle=None, data_root=None):
     """Validate a fresh carry evaluation against an already staged immutable bundle."""
     if not all(isinstance(value, dict) for value in (report, staged, bundle, previous)):
         return False
@@ -1149,6 +1199,50 @@ def _existing_incumbent_winrate_binding_valid(report, staged, bundle, previous, 
     except (KeyError, TypeError, ValueError):
         return False
     proof = bundle.get('winrate_selection') or {}
+    staged_hash = staged.get('bundle_sha256')
+    same_generation = bundle.get('bundle_sha256') == staged_hash
+    preserving_descendant = bundle.get('bundle_sha256') == staged_hash
+    if isinstance(staged_bundle, dict):
+        preserving_descendant = preserving_descendant or (
+            staged_bundle.get('bundle_sha256') == staged_hash
+            and staged_bundle.get('target_date') == staged.get('target_date')
+            and bundle.get('previous_bundle_sha256') == staged_hash
+            and bundle.get('winrate_selection') == staged_bundle.get('winrate_selection')
+            and runtime_policy.for_cohort(bundle, ('KRX', 'KRX_REGULAR'))['machine_policy']
+                == runtime_policy.for_cohort(staged_bundle, ('KRX', 'KRX_REGULAR'))['machine_policy']
+        )
+    if not preserving_descendant and data_root is not None:
+        current = bundle
+        expected_proof = bundle.get('winrate_selection')
+        expected_machine = existing_machine
+        seen = {bundle.get('bundle_sha256')}
+        # A bounded chain permits independently receipted same-policy refreshes
+        # while rejecting a reparented or policy-changing generation.
+        for _ in range(8):
+            parent_hash = current.get('previous_bundle_sha256')
+            if (not isinstance(parent_hash, str) or len(parent_hash) != 64
+                or parent_hash in seen):
+                break
+            seen.add(parent_hash)
+            parent_path = (runtime_policy.root(Path(data_root)) / 'generations'
+                           / f'{parent_hash}.json')
+            try:
+                parent_generation = runtime_policy._read(parent_path)
+                runtime_policy.validate(parent_generation, target_date=staged.get('target_date'))
+                runtime_policy._validate_bundle_sources(parent_generation, Path(data_root))
+                parent_machine = runtime_policy.for_cohort(
+                    parent_generation, ('KRX', 'KRX_REGULAR'))['machine_policy']
+            except (OSError, ValueError, TypeError, KeyError, AttributeError):
+                break
+            if (parent_generation.get('bundle_sha256') != parent_hash
+                or parent_generation.get('target_date') != staged.get('target_date')
+                or parent_generation.get('winrate_selection') != expected_proof
+                or parent_machine != expected_machine):
+                break
+            if parent_hash == staged_hash:
+                preserving_descendant = True
+                break
+            current = parent_generation
     return (
         staged.get('current_report_sha256') == report.get('artifact_content_sha256')
         and staged.get('bundle_report_sha256') == proof.get('report_sha256')
@@ -1159,6 +1253,7 @@ def _existing_incumbent_winrate_binding_valid(report, staged, bundle, previous, 
         and proof.get('machine_policy_sha256') == machine_sha
         and report.get('disposition') == 'incumbent_carried'
         and report.get('candidate_policy') is None
+        and (same_generation or preserving_descendant)
         and previous.get('bundle_sha256') == report.get('parent_bundle_sha256')
         and bundle.get('machine_policy') == previous_machine
         and existing_machine == previous_machine
@@ -1284,17 +1379,19 @@ def _stage_output_issues(report_dir, day, stage):
                     proof = (bundle or {}).get('winrate_selection') or {}
                     pending = staged['status'] == 'pending_initial_preserved'
                     reused_incumbent = staged['status'] == 'existing_incumbent_preserved'
-                    binding_invalid = (
-                        bundle.get('bundle_sha256') != staged.get('bundle_sha256')
-                        or proof.get('machine_policy_sha256') != runtime_policy.digest(bundle['machine_policy'])
-                    )
                     if reused_incumbent:
                         previous = runtime_policy.load_effective(
                             data_root=Path(report_dir).parent,
                             target_date=report.get('publication_date'),
                         )
-                        binding_invalid = binding_invalid or not _existing_incumbent_winrate_binding_valid(
-                            report, staged, bundle, previous, runtime_policy
+                        binding_invalid = not _existing_incumbent_winrate_binding_valid(
+                            report, staged, bundle, previous, runtime_policy,
+                            data_root=Path(report_dir).parent,
+                        )
+                    else:
+                        binding_invalid = (
+                            bundle.get('bundle_sha256') != staged.get('bundle_sha256')
+                            or proof.get('machine_policy_sha256') != runtime_policy.digest(bundle['machine_policy'])
                         )
                     if (binding_invalid
                         or (pending and (report.get('pending_initial_bundle_sha256') != bundle['bundle_sha256']
@@ -1365,7 +1462,8 @@ def stage_commands(stage, day, publication, *, recovery=False):
         return [command('scalping.ai_action_outcome_calibration', *date_args,
                         '--winrate-policy-only', '--publication-date', publication)]
     if stage == 'pre_submit_delay':
-        return [command('scalping.pre_submit_delay_tuning', '--date', day, '--effective-date', _next_krx_trading_day(publication))]
+        return [command('scalping.pre_submit_delay_tuning', '--date', day,
+                        '--effective-date', _next_krx_trading_day(publication), '--require-family-ledger')]
     if stage == 'legacy_machine_report':
         return [command('scalping.ai_action_outcome_calibration', *date_args, '--machine-only', '--publication-date', publication)]
     if stage == 'main_auxiliary_policy':
@@ -1421,7 +1519,8 @@ def _stage_code(stage, commands, project, *, dispatcher_path=None):
 
 
 def run_stage(stage, day, *, report_dir, project, publication=None, effective=None,
-              recovery=False, execute=True, runner=None, timeout=14400, off=False, prerequisite_wait=0, stop_event=None):
+              recovery=False, execute=True, runner=None, timeout=14400, off=False,
+              prerequisite_wait=0, stop_event=None, resource_blocked=None):
     import os, fcntl, time, uuid
     from datetime import datetime
     from zoneinfo import ZoneInfo
@@ -1444,6 +1543,11 @@ def run_stage(stage, day, *, report_dir, project, publication=None, effective=No
                 return dict(stage_id=stage, status='running', exit_code=75, reason='existing_child_running')
         except (OSError, KeyError, IndexError):
             pass
+        if (resource_blocked is not None and old.get('status') == 'succeeded'
+            and not stage_receipt_issues(report_dir, day, stage, code_hash=code)
+            and old.get('publication_date') == publication
+            and old.get('effective_date') == effective):
+            return {**old, 'cache_reused': True}
         if not off and not execute and not stage_receipt_issues(report_dir, day, stage, code_hash=code) and old.get('publication_date') == publication and old.get('effective_date') == effective:
             return {**old, 'cache_reused': True}
         now = lambda: datetime.now(ZoneInfo('Asia/Seoul')).isoformat()
@@ -1458,6 +1562,12 @@ def run_stage(stage, day, *, report_dir, project, publication=None, effective=No
             _stage_write(path.parent / 'attempts' / f'{stage}_{old.get("run_id", uuid.uuid4().hex)}.json', old)
         if off:
             return _stage_write(path, {**value, 'status':'off', 'off_reason':'explicit_schedule_disabled', 'exit_code':0})
+        if resource_blocked is not None:
+            if stage != 'main_machine_policy' or not isinstance(resource_blocked, dict) or resource_blocked.get('ok') is not False:
+                raise ValueError('resource_blocked_receipt_invalid')
+            return _stage_write(path, {**value, 'status':'deferred', 'exit_code':75,
+                'issues':['resource_guard_timeout'], 'policy_disposition':'source_gap',
+                'resource_guard':resource_blocked, 'finished_at':now()})
         prerequisites = {s:stage_path(report_dir, day, s) for s in STAGE_REGISTRY[stage][0]}
         wait_deadline = time.monotonic() + prerequisite_wait
         while True:
@@ -1472,14 +1582,28 @@ def run_stage(stage, day, *, report_dir, project, publication=None, effective=No
         value['prerequisite_receipts'] = _stage_sources(prerequisites)
         if issues:
             return _stage_write(path, {**value, 'status':'deferred', 'exit_code':75, 'issues':issues, 'policy_disposition':'source_gap'})
+        if stage == 'main_machine_policy':
+            preflight_issue = _machine_source_preflight_issue(report_dir, day)
+            if preflight_issue:
+                return _stage_write(path, {**value, 'status':'deferred', 'exit_code':75,
+                    'issues':[preflight_issue], 'policy_disposition':'source_quality_blocked',
+                    'finished_at':now()})
+            preflight_path = (Path(report_dir) / 'observation_source_quality_audit'
+                              / f'observation_source_quality_audit_{day}.json')
+            value['source_quality_preflight_sha256'] = hashlib.sha256(preflight_path.read_bytes()).hexdigest()
+            binding_path = Path(str(preflight_path) + '.final-contract.json')
+            if _load_json(binding_path).get('artifact_sha256') != value['source_quality_preflight_sha256']:
+                return _stage_write(path, {**value, 'status':'deferred', 'exit_code':75,
+                    'issues':['source_quality_preflight_changed_before_consumption'],
+                    'policy_disposition':'source_quality_blocked', 'finished_at':now()})
         if stage == 'pre_submit_delay':
-            from src.engine.pipeline_event_summary import seal_producer_summary_source, producer_source_ledger_issues
+            from src.engine.scalping.pre_submit_delay_tuning import seal_family_source_ledger, family_source_ledger_issues
             try:
-                source_manifest = seal_producer_summary_source(Path(report_dir).parent, day)
-                source_issues = producer_source_ledger_issues(Path(report_dir).parent, day)
+                source_manifest = seal_family_source_ledger(Path(report_dir).parent, day)
+                source_issues = family_source_ledger_issues(Path(report_dir).parent, day)
                 if source_issues:
                     raise ValueError(','.join(source_issues))
-                value['pipeline_source_generation_sha256'] = source_manifest['raw_source_ledger']['ledger_sha256']
+                value['pipeline_source_generation_sha256'] = source_manifest['ledger_sha256']
             except (OSError, ValueError, KeyError, TypeError) as exc:
                 return _stage_write(path, {**value, 'status':'deferred', 'exit_code':75,
                     'issues':[f'pipeline_source_quality:{exc}'], 'policy_disposition':'source_gap',
@@ -1576,10 +1700,20 @@ def run_stage(stage, day, *, report_dir, project, publication=None, effective=No
                     value['policy_disposition'] = 'source_gap'
             if value['prerequisite_receipts'] != _stage_sources(prerequisites): issues.append('prerequisite_changed_during_consumption')
             if value['input_sources'] != _stage_sources(stage_input_paths(report_dir, day, stage)): issues.append('input_changed_during_consumption')
+            if stage == 'main_machine_policy':
+                preflight_path = (Path(report_dir) / 'observation_source_quality_audit'
+                                  / f'observation_source_quality_audit_{day}.json')
+                preflight_issue = _machine_source_preflight_issue(report_dir, day)
+                try:
+                    current_preflight_sha = hashlib.sha256(preflight_path.read_bytes()).hexdigest()
+                except OSError:
+                    current_preflight_sha = None
+                if (preflight_issue or current_preflight_sha != value.get('source_quality_preflight_sha256')):
+                    issues.append('source_quality_preflight_changed_during_consumption')
             if stage == 'pre_submit_delay':
-                from src.engine.pipeline_event_summary import producer_source_ledger_issues
+                from src.engine.scalping.pre_submit_delay_tuning import family_source_ledger_issues
                 issues.extend(f'pipeline_source_quality:{issue}' for issue in
-                              producer_source_ledger_issues(Path(report_dir).parent, day))
+                              family_source_ledger_issues(Path(report_dir).parent, day))
             machine_gap = (stage == 'main_machine_policy' and not rc and not issues and
                 _load_json(stage_artifacts(report_dir, day, stage)['machine_policy_terminal']).get('status') == 'source_gap')
             if machine_gap:
@@ -1674,6 +1808,7 @@ def _stage_main(argv):
     parser.add_argument('--off', action='store_true')
     parser.add_argument('--launch', action='store_true')
     parser.add_argument('--check', action='store_true')
+    parser.add_argument('--resource-guard-status')
     parser.add_argument('--timeout-sec', type=int, default=14400)
     args = parser.parse_args(argv); day = args.date.isoformat()
     from datetime import datetime
@@ -1707,6 +1842,8 @@ def _stage_main(argv):
         status = _load_json(stage_path(DATA_DIR / 'report', day, args.stage)).get('status', 'pending')
         if status in {'pending', 'running', 'deferred'}: return 75
         return 1 if stage_receipt_issues(DATA_DIR / 'report', day, args.stage) else 0
+    if args.resource_guard_status is not None and (args.stage != 'main_machine_policy' or args.launch or args.off):
+        parser.error('resource_guard_status_requires_machine_terminal')
     if args.launch:
         subprocess.Popen([sys.executable, '-m', 'src.engine.automation.postclose_summary_handoff', *[a for a in argv if a != '--launch']],
             cwd=PROJECT_ROOT, start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -1714,10 +1851,17 @@ def _stage_main(argv):
     if args.stage == 'overview':
         print(json.dumps(stage_overview(DATA_DIR / 'report', day))); return 0
     def run(s):
+        resource_blocked = None
+        if args.resource_guard_status is not None:
+            try:
+                resource_blocked = json.loads(args.resource_guard_status)
+            except json.JSONDecodeError:
+                parser.error('resource_guard_status_invalid_json')
         return run_stage(s, day, report_dir=DATA_DIR / 'report', project=PROJECT_ROOT,
             publication=args.publication_date, recovery=args.recover_closed_target,
             execute=not args.validate_existing, timeout=args.timeout_sec, off=args.off,
-            prerequisite_wait=0 if args.recover_closed_target else args.timeout_sec, stop_event=stop_event)
+            prerequisite_wait=0 if args.recover_closed_target else args.timeout_sec,
+            stop_event=stop_event, resource_blocked=resource_blocked)
     if args.stage == 'machine_group':
         # Waiting threads hold no compute slot; only two child stages run host-wide.
         results=[run('research_capacity')]

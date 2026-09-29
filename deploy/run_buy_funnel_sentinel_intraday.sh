@@ -96,6 +96,15 @@ if "${cmd[@]}" 2>&1 | tee -a "$LOG_FILE"; then
   echo "[DONE] buy funnel sentinel target_date=${TARGET_DATE} finished_at=${finished_at}" | tee -a "$LOG_FILE"
 else
   exit_code=$?
+  # The source-gap observer reads its own current-day bounded raw receipts.
+  # Sentinel failure makes its funnel evidence unobservable, not its independent
+  # probe/trace/pending receipts.
+  if [[ "$DRY_RUN" != "1" ]]; then
+    if ! PYTHONPATH=. "$VENV_PY" -m src.engine.monitoring.submission_bottleneck_monitor \
+      --report "$PROJECT_DIR/data/report/buy_funnel_sentinel/submission_bottleneck_source_${TARGET_DATE}.json" --source-only --notify; then
+      echo "[WARN] source-gap observer also failed target_date=${TARGET_DATE}" | tee -a "$LOG_FILE"
+    fi
+  fi
   finished_at="$(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S')"
   echo "[FAIL] buy funnel sentinel target_date=${TARGET_DATE} exit_code=${exit_code} finished_at=${finished_at}" | tee -a "$LOG_FILE"
   exit "$exit_code"

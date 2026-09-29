@@ -396,13 +396,14 @@ def _part_snapshot_stamp(path: Path) -> list[int]:
     return [st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns]
 
 
-def _producer_raw_ledger(data_dir: Path, target_date: str) -> dict[str, Any]:
+def _producer_raw_ledger(data_dir: Path, target_date: str, *, selected_stages=frozenset()) -> dict[str, Any]:
     raw_dir = data_dir / "pipeline_events"
     counts = Counter()
     reasons = Counter()
     stages: dict[str, dict[str, Any]] = {}
     logical_digest = hashlib.sha256()
     seen_rows: set[bytes] = set()
+    selected_identities: dict[str, list[str]] = {stage: [] for stage in selected_stages}
 
     def collect(line: bytes, part: str) -> None:
         logical_digest.update(line)
@@ -470,6 +471,8 @@ def _producer_raw_ledger(data_dir: Path, target_date: str) -> dict[str, Any]:
         if duplicate:
             counts["duplicate_eligible_count"] += 1
         entry["valid_count"] += 1
+        if stage in selected_stages:
+            selected_identities[stage].append(execution_projection_identity(payload))
         entry["raw_evidence_hash_sum"] = (
             entry["raw_evidence_hash_sum"] + event.evidence_hash) % IDENTITY_MODULUS
 
@@ -481,7 +484,7 @@ def _producer_raw_ledger(data_dir: Path, target_date: str) -> dict[str, Any]:
         raise ValueError("raw_source_ledger_count_mismatch")
     for entry in stages.values():
         entry["raw_evidence_hash_sum"] = f"{entry['raw_evidence_hash_sum']:064x}"
-    return {"schema": "pipeline_producer_raw_ledger_v1",
+    result = {"schema": "pipeline_producer_raw_ledger_v1",
             "source_date": target_date, "profile": "producer_summary",
             "status": "valid_empty" if counts["raw_count"] == 0 else
                       "ready_with_quarantine" if counts["quarantined_count"] or counts["duplicate_count"] else "ready",
@@ -491,6 +494,11 @@ def _producer_raw_ledger(data_dir: Path, target_date: str) -> dict[str, Any]:
             "parts": parts, "stages": stages,
             "logical_sha256": logical_digest.hexdigest(),
             "decoded_bytes": sum(part["decoded_bytes"] for part in parts)}
+    if selected_stages:
+        result["selected_execution_identities"] = {
+            stage: sorted(identities) for stage, identities in selected_identities.items()
+        }
+    return result
 
 
 def _stage_source_digest(value: Any) -> str:

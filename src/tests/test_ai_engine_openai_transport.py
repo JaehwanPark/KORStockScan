@@ -4458,6 +4458,13 @@ def test_machine_enter_now_ai_timeout_preserves_bounded_recheck(monkeypatch):
     assert result["entry_ai_full_entry_forbidden"] is True
     assert result["openai_transport_fail_closed"] is True
     assert result["machine_observation_sha256"] == "c" * 64
+    assert result["entry_cost_source_status"] == "exact_pre_provider_replay"
+    assert result["entry_conservative_execution_cost_pct"] > 0
+    assert result["entry_cost_basis"] == "half_spread_plus_bounded_source_age_penalty"
+    assert result["entry_cost_scope"] == "counterfactual_friction_no_broker_fees"
+    assert len(result["entry_cost_contract_sha256"]) == 64
+    assert len(result["entry_cost_replay_context_sha256"]) == 64
+    assert result["entry_cost_evaluation_attempt_id"] == result["evaluation_attempt_id"]
 
 
 def test_hot_entry_payload_preserves_timing_context() -> None:

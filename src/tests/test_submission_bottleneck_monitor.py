@@ -41,6 +41,197 @@ def active(state):
     return [r for r in state["incidents"].values() if r["status"] == "active"]
 
 
+def test_pre_submit_intraday_monitor_catches_scanner_parity_and_quote_gap_without_false_recovery(tmp_path):
+    from src.engine.pipeline_event_summary import ProducerSummaryCompactor, execution_projection_identity
+
+    day = "2026-09-29"
+    raw = tmp_path / "pipeline_events" / f"pipeline_events_{day}.jsonl"
+    raw.parent.mkdir()
+    scanner = {"event_type": "pipeline_event", "pipeline": "ENTRY_PIPELINE",
+               "stage": "scalping_scanner_fast_precheck", "stock_name": "test",
+               "stock_code": "355390", "record_id": 1, "fields": {},
+               "emitted_at": f"{day}T10:00:00", "emitted_date": day}
+    commit = {**scanner, "stage": "pre_submit_delay_committed", "record_id": 3,
+              "fields": {"delay_intent_id": "intent-1", "route": "",
+                         "market_session_bucket": "krx_regular"}}
+    quote = {**scanner, "stage": "pre_submit_delay_quote_observed", "record_id": 3,
+             "fields": {"delay_intent_id": "intent-1", "target_delay_sec": "0",
+                        "quote_route": "", "quote_valid": "False",
+                        "quote_source_reason": "route_mismatch_or_missing"}}
+    raw.write_text("".join(json.dumps(row) + "\n" for row in
+                           (scanner, {**scanner, "record_id": 2}, commit, quote)))
+    compact_dir = tmp_path / "threshold_cycle" / f"date={day}" / "family=pre_submit_delay"
+    compact_dir.mkdir(parents=True)
+    with (compact_dir / "part-execution-1000.jsonl").open("w") as handle:
+        for event in (commit, quote):
+            payload = {"schema_version": 1, "event_type": "threshold_cycle_event",
+                       "family": "pre_submit_delay", **{key: event[key] for key in
+                       ("pipeline", "stage", "stock_name", "stock_code", "record_id", "fields", "emitted_at", "emitted_date")},
+                       "execution_source_event_sha256": execution_projection_identity(event)}
+            handle.write(json.dumps(payload) + "\n")
+    compactor = ProducerSummaryCompactor(summary_dir=tmp_path / "pipeline_event_summaries", mode="shadow")
+    for event in (scanner, commit, quote):
+        compactor.submit(event)
+    compactor.flush()
+    early = monitor.pre_submit_delay_source_semantics(tmp_path, datetime(2026, 9, 29, 10, 1))
+    assert "producer_raw_summary_window_mismatch" not in early["issues"]
+    first = monitor.pre_submit_delay_source_semantics(tmp_path, datetime(2026, 9, 29, 10, 4))
+    assert first["sources"]["raw"] == "complete"
+    assert first["issues"]["producer_raw_summary_window_mismatch"] == 1
+    assert first["diagnostics"]["committed_route_derived_from_session"] == 1
+    assert "committed_route_missing" not in first["issues"]
+    assert first["issues"]["quote_source_invalid"] == 1
+    assert "zero_second_quote_missing" not in first["issues"]
+    manifest_path = tmp_path / "pipeline_event_summaries" / f"pipeline_event_producer_summary_manifest_{day}.json"
+    original_manifest = manifest_path.read_text()
+    slow_manifest = json.loads(original_manifest)
+    slow_manifest["flush_interval_sec"] = 3600
+    manifest_path.write_text(json.dumps(slow_manifest))
+    slow = monitor.pre_submit_delay_source_semantics(tmp_path, datetime(2026, 9, 29, 10, 4))
+    assert slow["issues"]["producer_summary_flush_interval_too_long"] == 1
+    assert "producer_raw_summary_window_mismatch" not in slow["issues"]
+    manifest_path.write_text(original_manifest)
+    result = {"as_of": first["as_of"], "incidents": {}, "notification_pending": [],
+              "status": "unobservable", "blocker": None}
+    monitor.attach_pre_submit_delay_source_semantics(result, first)
+    assert result["incidents"]["pre_submit_delay_intraday_source_gap"]["status"] == "active"
+    sent = []
+    monitor.notify(result, "monitor.json", send=sent.append)
+    assert len(sent) == 1
+    assert "[매수 지연 원천결손 점검]" in sent[0]
+    assert "producer_raw_summary_window_mismatch" in sent[0]
+    later = monitor.pre_submit_delay_source_semantics(
+        tmp_path, datetime(2026, 9, 29, 10, 15), first["cursor"])
+    assert later["status"] == "observed_no_gap"
+    result = {"as_of": later["as_of"], "incidents": result["incidents"],
+              "notification_pending": [], "status": "unobservable", "blocker": None}
+    monitor.attach_pre_submit_delay_source_semantics(result, later)
+    assert result["incidents"]["pre_submit_delay_intraday_source_gap"]["status"] == "historical_unresolved"
+    old_scopes = result["incidents"]["pre_submit_delay_intraday_source_gap"]["issues_by_scope"]
+    wrong_route = {**later, "healthy_by_scope": {
+        **{scope: 1 for scope in old_scopes if not scope.startswith("quote_source_invalid|")},
+        "quote_source_invalid|NXT_ONLY": 1}}
+    result["as_of"] = datetime(2026, 9, 29, 10, 20, tzinfo=monitor.KST).isoformat()
+    monitor.attach_pre_submit_delay_source_semantics(result, wrong_route)
+    assert result["incidents"]["pre_submit_delay_intraday_source_gap"]["status"] == "historical_unresolved"
+    same_route = {**later, "healthy_by_scope": {scope: 1 for scope in old_scopes}}
+    result["as_of"] = datetime(2026, 9, 29, 10, 25, tzinfo=monitor.KST).isoformat()
+    monitor.attach_pre_submit_delay_source_semantics(result, same_route)
+    assert result["incidents"]["pre_submit_delay_intraday_source_gap"]["status"] == "recovered"
+    sent.clear()
+    monitor.notify(result, "monitor.json", send=sent.append)
+    assert len(sent) == 1
+    assert "[매수 지연 원천 정상 관측]" in sent[0]
+
+
+def test_pre_submit_monitor_separates_unobservable_sources_from_count_mismatch(tmp_path, monkeypatch):
+    import os
+    from src.engine import pipeline_event_summary as summary_owner
+    from src.engine.pipeline_event_summary import ProducerSummaryCompactor
+
+    day = "2026-09-29"
+    raw = tmp_path / "pipeline_events" / f"pipeline_events_{day}.jsonl"
+    raw.parent.mkdir()
+    event = {"event_type": "pipeline_event", "pipeline": "ENTRY_PIPELINE",
+             "stage": "scalping_scanner_fast_precheck", "stock_name": "test",
+             "stock_code": "355390", "record_id": 1, "fields": {},
+             "emitted_at": f"{day}T10:00:00", "emitted_date": day}
+    raw.write_text(json.dumps(event) + "\n")
+    now = datetime(2026, 9, 29, 10, 4)
+    missing = monitor.pre_submit_delay_source_semantics(tmp_path, now)
+    assert missing["sources"]["summary"] == "unobservable"
+    assert missing["issues"]["producer_summary_unobservable_with_raw"] == 1
+    assert "producer_raw_summary_window_mismatch" not in missing["issues"]
+    compactor = ProducerSummaryCompactor(summary_dir=tmp_path / "pipeline_event_summaries", mode="shadow")
+    compactor.submit(event)
+    compactor.flush()
+    healthy = monitor.pre_submit_delay_source_semantics(tmp_path, now)
+    assert healthy["status"] == "observed_no_gap"
+    assert healthy["healthy_by_scope"]["producer_summary_unobservable_with_raw|scalping_scanner_fast_precheck"] == 1
+    raw.write_text("")
+    reset = monitor.pre_submit_delay_source_semantics(tmp_path, now, healthy["cursor"])
+    assert reset["sources"]["raw"] == "partial"
+    assert reset["status"] != "observed_no_gap"
+    raw.write_text(json.dumps(event) + "\n")
+    invalid_cursor = {**healthy["cursor"], "minutes": []}
+    reset = monitor.pre_submit_delay_source_semantics(tmp_path, now, invalid_cursor)
+    assert reset["sources"]["raw"] == "partial"
+    original_load = summary_owner.load_summary_rows
+
+    def changed_during_read(path, **kwargs):
+        rows = original_load(path, **kwargs)
+        before = path.stat()
+        os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000))
+        return rows
+
+    monkeypatch.setattr(summary_owner, "load_summary_rows", changed_during_read)
+    changed = monitor.pre_submit_delay_source_semantics(tmp_path, now)
+    assert changed["sources"]["summary"] == "unobservable"
+    assert changed["issues"]["producer_summary_unobservable_with_raw"] == 1
+    assert "producer_raw_summary_window_mismatch" not in changed["issues"]
+    monkeypatch.setattr(summary_owner, "load_summary_rows", original_load)
+    raw.write_text(json.dumps({**event, "emitted_at": "invalid-time"}) + "\n")
+    invalid_time = monitor.pre_submit_delay_source_semantics(tmp_path, now)
+    assert invalid_time["issues"]["raw_malformed_event"] == 1
+    assert invalid_time["sources"]["raw"] == "partial"
+    raw.write_text("x" * 100)
+    monkeypatch.setattr(monitor, "DELAY_RAW_BUDGET", 32)
+    unbounded = monitor.pre_submit_delay_source_semantics(tmp_path, now)
+    assert unbounded["sources"]["raw"] == "unobservable"
+    assert unbounded["issues"]["raw_cursor_backlog"] == 1
+
+
+def test_pre_submit_monitor_binds_intents_to_stock_and_record(tmp_path):
+    day = "2026-09-29"
+    raw = tmp_path / "pipeline_events" / f"pipeline_events_{day}.jsonl"
+    raw.parent.mkdir()
+    base = {"event_type": "pipeline_event", "pipeline": "ENTRY_PIPELINE",
+            "stock_name": "test", "emitted_at": f"{day}T10:00:00", "emitted_date": day}
+    commits = [{**base, "stage": "pre_submit_delay_committed", "stock_code": code,
+                "record_id": index, "fields": {"delay_intent_id": "same-id",
+                                               "market_session_bucket": "krx_regular"}}
+               for index, code in enumerate(("005930", "000660"), 1)]
+    quote = {**base, "stage": "pre_submit_delay_quote_observed", "stock_code": "000660",
+             "record_id": 2, "fields": {"delay_intent_id": "same-id", "target_delay_sec": 0}}
+    raw.write_text("".join(json.dumps(row) + "\n" for row in (*commits, quote)))
+    compact_dir = tmp_path / "threshold_cycle" / f"date={day}" / "family=pre_submit_delay"
+    compact_dir.mkdir(parents=True)
+    (compact_dir / "part-execution-1000.jsonl").write_text("{invalid\n")
+    observed = monitor.pre_submit_delay_source_semantics(tmp_path, datetime(2026, 9, 29, 10, 4))
+    assert observed["issues"]["zero_second_quote_missing"] == 1
+    assert observed["sources"]["compact"] == "unobservable"
+    assert observed["issues"]["compact_source_unobservable_with_raw"] == 3
+    assert "raw_compact_event_missing" not in observed["issues"]
+    raw.write_text("".join(json.dumps(row) + "\n" for row in
+                           (*commits, {**quote, "fields": {**quote["fields"], "target_delay_sec": "nan"}})))
+    invalid_horizon = monitor.pre_submit_delay_source_semantics(tmp_path, datetime(2026, 9, 29, 10, 4))
+    assert invalid_horizon["issues"]["quote_horizon_invalid"] == 1
+
+
+def test_pre_submit_source_cli_runs_without_sentinel_report_or_other_semantics(tmp_path, monkeypatch):
+    import sys
+
+    day = datetime.now(monitor.KST).date().isoformat()
+    monkeypatch.setattr(monitor, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(monitor, "source_gap_semantics", lambda *a, **k: pytest.fail("unrelated_source_called"))
+    monkeypatch.setattr(monitor, "machine_semantics", lambda *a, **k: pytest.fail("machine_semantics_called"))
+    monkeypatch.setattr(monitor, "notify", lambda *a, **k: None)
+    monkeypatch.setattr(monitor, "pre_submit_delay_source_semantics", lambda *a, **k: {
+        "schema": "pre_submit_delay_intraday_source_semantics_v1",
+        "status": "unobservable", "cursor": {"date": day}, "issues": {},
+        "issues_by_scope": {}, "healthy": {}, "healthy_by_scope": {},
+        "sources": {"raw": "unobservable", "summary": "unobservable", "compact": "unobservable"},
+        "examples": [],
+    })
+    monkeypatch.setattr(sys, "argv", ["monitor", "--report", str(tmp_path / "missing.json"),
+                                       "--delay-source-only", "--date", day, "--notify"])
+    assert monitor.main() == 0
+    saved = json.loads((tmp_path / "data/report/buy_funnel_sentinel" /
+                        "pre_submit_delay_source_monitor_latest.json").read_text())
+    assert saved["pre_submit_delay_source_semantics"]["status"] == "unobservable"
+    assert "source_gap_semantics" not in saved
+
+
 def _entry_axis_fixture(data_root, *, delay_handoff=None, mismatch_split_policy=False, delay_env=None):
     from src.engine.automation import runtime_policy_bootstrap as bootstrap_owner
     from src.engine.scalping import entry_split_order_plan as split_owner
@@ -750,7 +941,7 @@ def test_stored_pipeline_normalization_retains_terminal_and_premarket(tmp_path, 
     assert any(s["guard_blocked"] == 1 for s in result["scopes"].values())
 
 
-def test_wrapper_notifies_only_after_success_and_not_on_replay(tmp_path):
+def test_wrapper_observes_source_gaps_even_if_sentinel_fails_but_not_on_dry_run(tmp_path):
     import os
     import subprocess
     from pathlib import Path
@@ -758,13 +949,20 @@ def test_wrapper_notifies_only_after_success_and_not_on_replay(tmp_path):
     py = tmp_path / ".venv/bin/python"
     py.parent.mkdir(parents=True)
     calls = tmp_path / "calls.txt"
-    py.write_text('#!/bin/bash\nprintf "%s\\n" "$*" >> "$CALLS"\n')
+    py.write_text('#!/bin/bash\nprintf "%s\\n" "$*" >> "$CALLS"\n'
+                  'if [[ "$FAIL_SENTINEL" == "1" && "$*" == *"src.engine.buy_funnel_sentinel"* ]]; then exit 7; fi\n')
     py.chmod(0o755)
     env = {**os.environ, "PROJECT_DIR": str(tmp_path), "CALLS": str(calls),
         "BUY_FUNNEL_SENTINEL_COOLDOWN_SEC": "0"}
     wrapper = project / "deploy/run_buy_funnel_sentinel_intraday.sh"
     subprocess.run(["bash", str(wrapper), "2026-09-21"], env=env, check=True, capture_output=True)
     assert "submission_bottleneck_monitor" in calls.read_text()
+    calls.write_text("")
+    failed = subprocess.run(["bash", str(wrapper), "2026-09-21"],
+        env={**env, "FAIL_SENTINEL": "1"}, capture_output=True)
+    assert failed.returncode == 7
+    assert "submission_bottleneck_monitor" in calls.read_text()
+    assert "--source-only" in calls.read_text()
     calls.write_text("")
     subprocess.run(["bash", str(wrapper), "2026-09-21"], env={**env, "BUY_FUNNEL_SENTINEL_DRY_RUN": "1"}, check=True, capture_output=True)
     assert "submission_bottleneck_monitor" not in calls.read_text()
@@ -1070,6 +1268,317 @@ def test_valid_enter_to_recheck_revision_keeps_latest_cache_miss_observation_onl
     assert not any(i['rule'] == 'economic_producer_gap' for i in result['incidents'].values())
     row['economic_history'][-1]['machine_observation_sha256'] = 'c' * 64
     assert not monitor._nonentry_downstream_gap(row)
+
+
+def _source_gap_files(root, now, *, probes=(), traces=(), pending=()):
+    day = now.date().isoformat()
+    for directory, stem, rows in (
+        ("pipeline_events", "pipeline_events", probes),
+        ("ai_decision_trace", "ai_decision_trace", traces),
+        ("ai_decision_outcomes", "ai_decision_outcomes", pending),
+    ):
+        path = root / directory / f"{stem}_{day}.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+
+
+def _probe_source_row(now, result, reason, *, kind="-"):
+    return {"emitted_at": now.isoformat(), "pipeline": "ENTRY_PIPELINE",
+        "stage": "zero_base_probe_result", "stock_code": "005930",
+        "fields": {"zero_base_route": "krx_nxt_integrated",
+                   "zero_base_probe_result": result, "zero_base_probe_reason": reason,
+                   "machine_capture_status": "captured",
+                   "machine_observation_sha256": "c" * 64,
+                   "zero_base_machine_source_gap_kind": kind}}
+
+
+def _auxiliary_source_row(now, *, cost_status="exact_pre_provider_replay", cost=0.1):
+    return {"decision_ts": now.isoformat(), "decision_stage": "entry_screen",
+        "decision_trace_id": "trace-1", "evaluation_attempt_id": "attempt-1",
+        "stock_code": "005930", "effective_venue": "KRX",
+        "session_bucket": "krx_regular", "market_data_route": "krx_nxt_integrated",
+        "machine_evaluation_status": "assessed", "entry_mechanistic_action": "ENTER_NOW",
+        "machine_capture_status": "captured", "machine_observation_sha256": "d" * 64,
+        "entry_ai_screen_required": True, "entry_ai_screen_status": "not_evaluated_transport",
+        "provider_called": True, "result_source": "timeout",
+        "entry_cost_source_status": cost_status,
+        "entry_conservative_execution_cost_pct": cost,
+        "entry_cost_scope": "counterfactual_friction_no_broker_fees",
+        "entry_cost_basis": "half_spread_plus_bounded_source_age_penalty",
+        "entry_cost_evaluation_attempt_id": "attempt-1",
+        "entry_cost_contract_sha256": "a" * 64,
+        "entry_cost_replay_context_sha256": "b" * 64,
+        "reference_price": 10000}
+
+
+def test_intraday_source_semantics_separates_sparse_probe_from_auxiliary_cost_gap(tmp_path):
+    now = START + timedelta(minutes=10)
+    probe = _probe_source_row(now, "source_unavailable", "0B_missing")
+    trace = _auxiliary_source_row(now, cost_status=None, cost=None)
+    pending = dict(trace)
+    _source_gap_files(tmp_path, now, probes=[probe], traces=[trace], pending=[pending])
+    result = monitor.source_gap_semantics(tmp_path, now)
+    assert result["diagnostics"] == {"machine_probe:0B_missing": 1}
+    assert result["diagnostics_by_scope"] == {
+        "route:krx_nxt_integrated|machine_probe:0B_missing": 1}
+    assert result["issues"] == {"auxiliary_call:cost_receipt_missing": 1,
+                                 "auxiliary_pending:cost_receipt_missing": 1}
+    assert result["issues_by_scope"]["KRX|KRX_REGULAR|route:krx_nxt_integrated|auxiliary_call:cost_receipt_missing"] == 1
+    assert result["observed"]["auxiliary_called"] == 1
+    assert result["sources"]["probe"]["status"] == "complete"
+    assert result["runtime_effect"] is False
+
+
+def test_intraday_source_semantics_exact_cost_and_short_warmup_do_not_alert(tmp_path):
+    now = START + timedelta(minutes=10)
+    probe = _probe_source_row(now, "assessed", "machine_assessed")
+    probe["fields"]["zero_base_ws_exact_0b_count"] = "2"
+    trace = _auxiliary_source_row(now)
+    _source_gap_files(tmp_path, now, probes=[probe], traces=[trace], pending=[dict(trace)])
+    result = monitor.source_gap_semantics(tmp_path, now)
+    assert result["status"] == "observed_no_gap"
+    assert result["issues"] == result["diagnostics"] == {}
+    assert result["observed"]["auxiliary_cost_bound"] == 1
+    assert result["observed"]["auxiliary_pending_bound"] == 1
+
+
+def test_intraday_source_semantics_route_conflict_is_actionable_and_tail_is_bounded(tmp_path):
+    now = START + timedelta(minutes=10)
+    probe = _probe_source_row(now, "required_feature_insufficient", "machine_not_assessed",
+                              kind="source_route_conflict")
+    _source_gap_files(tmp_path, now, probes=[probe], traces=[], pending=[])
+    result = monitor.source_gap_semantics(tmp_path, now)
+    assert result["issues"] == {"machine_probe:source_route_conflict": 1}
+    assert result["status"] == "gap_observed"
+    assert result["sources"]["trace"]["status"] == "unobservable"
+    partial = monitor.source_gap_semantics(tmp_path, now, tail_bytes=20)
+    assert partial["sources"]["probe"]["status"] == "partial"
+    assert partial["status"] == "unobservable"
+
+
+def test_intraday_source_incident_requires_same_stage_recovery_receipt():
+    now = START + timedelta(minutes=10)
+    result = {"as_of": now.isoformat(), "incidents": {}, "notification_pending": []}
+    gap = {"issues": {"auxiliary_call:cost_receipt_missing": 1}, "examples": [],
+           "issues_by_scope": {"KRX|KRX_REGULAR|route:krx_nxt_integrated|auxiliary_call:cost_receipt_missing": 1},
+           "sources": {"probe": {"status": "complete"}, "trace": {"status": "complete"},
+                       "pending": {"status": "complete"}}, "observed": {"entry_traces": 1}}
+    monitor.attach_source_gap_semantics(result, gap)
+    result["as_of"] = (now + timedelta(minutes=5)).isoformat()
+    monitor.attach_source_gap_semantics(result, gap)
+    incident = result["incidents"]["machine_auxiliary_intraday_source_gap"]
+    assert incident["status"] == "active"
+    assert result["notification_pending"]
+    no_call = {**gap, "issues": {}, "observed": {"probe_assessed": 1, "machine_assessed": 1}}
+    monitor.attach_source_gap_semantics(result, no_call)
+    assert incident["status"] == "active"
+    assert result["incidents"]["machine_auxiliary_intraday_source_gap"]["status"] == "historical_unresolved"
+    recovered = {**no_call, "observed": {"auxiliary_cost_bound": 1},
+                 "healthy_by_scope": {"KRX|KRX_REGULAR|route:krx_nxt_integrated|auxiliary_call": 1}}
+    monitor.attach_source_gap_semantics(result, recovered)
+    assert result["incidents"]["machine_auxiliary_intraday_source_gap"]["status"] == "recovered"
+    assert result["incidents"]["machine_auxiliary_intraday_source_gap"]["historical_source_repaired"] is False
+
+
+def test_intraday_source_incident_cannot_recover_from_other_route_or_partial_tail():
+    now = START + timedelta(minutes=10)
+    result = {"as_of": now.isoformat(), "incidents": {}, "notification_pending": []}
+    gap = {"issues": {"auxiliary_call:cost_receipt_missing": 1}, "examples": [],
+           "issues_by_scope": {"KRX|KRX_REGULAR|route:krx_nxt_integrated|auxiliary_call:cost_receipt_missing": 1},
+           "sources": {"trace": {"status": "complete"}}, "observed": {}}
+    monitor.attach_source_gap_semantics(result, gap)
+    result["as_of"] = (now + timedelta(minutes=5)).isoformat()
+    monitor.attach_source_gap_semantics(result, gap)
+    healthy = {**gap, "issues": {}, "issues_by_scope": {},
+               "healthy_by_scope": {"KRX|KRX_REGULAR|route:nxt_only|auxiliary_call": 1}}
+    monitor.attach_source_gap_semantics(result, healthy)
+    assert result["incidents"]["machine_auxiliary_intraday_source_gap"]["status"] == "historical_unresolved"
+    healthy["healthy_by_scope"] = {"KRX|KRX_REGULAR|route:krx_nxt_integrated|auxiliary_call": 1}
+    healthy["sources"] = {"trace": {"status": "partial"}}
+    monitor.attach_source_gap_semantics(result, healthy)
+    assert result["incidents"]["machine_auxiliary_intraday_source_gap"]["status"] == "historical_unresolved"
+    healthy["sources"] = {"trace": {"status": "complete"}}
+    monitor.attach_source_gap_semantics(result, healthy)
+    assert result["incidents"]["machine_auxiliary_intraday_source_gap"]["status"] == "recovered"
+
+
+def test_intraday_source_incident_new_route_resets_timer_and_recurrence_renotifies():
+    now = START + timedelta(minutes=10)
+    result = {"as_of": now.isoformat(), "incidents": {}, "notification_pending": []}
+    base = {"issues": {"auxiliary_call:cost_receipt_missing": 1},
+            "issues_by_scope": {"KRX|KRX_REGULAR|route:nxt_only|auxiliary_call:cost_receipt_missing": 1},
+            "sources": {"trace": {"status": "complete"}}, "observed": {}, "examples": []}
+    monitor.attach_source_gap_semantics(result, base)
+    result["as_of"] = (now + timedelta(minutes=5)).isoformat()
+    monitor.attach_source_gap_semantics(result, base)
+    incident = result["incidents"]["machine_auxiliary_intraday_source_gap"]
+    assert incident["status"] == "active"
+    incident["notified_status"] = "active"
+    other_route = {**base, "issues_by_scope": {
+        "KRX|KRX_REGULAR|route:krx_nxt_integrated|auxiliary_call:cost_receipt_missing": 1}}
+    monitor.attach_source_gap_semantics(result, other_route)
+    incident = result["incidents"]["machine_auxiliary_intraday_source_gap"]
+    assert incident["status"] == "pending" and incident["first_seen"] == result["as_of"]
+    assert incident["notified_status"] is None
+    result["as_of"] = (now + timedelta(minutes=10)).isoformat()
+    monitor.attach_source_gap_semantics(result, other_route)
+    result["incidents"]["machine_auxiliary_intraday_source_gap"]["notified_status"] = "active"
+    monitor.attach_source_gap_semantics(result, {**other_route, "issues": {}, "issues_by_scope": {}})
+    assert result["incidents"]["machine_auxiliary_intraday_source_gap"]["status"] == "historical_unresolved"
+    monitor.attach_source_gap_semantics(result, other_route)
+    result["as_of"] = (now + timedelta(minutes=15)).isoformat()
+    monitor.attach_source_gap_semantics(result, other_route)
+    incident = result["incidents"]["machine_auxiliary_intraday_source_gap"]
+    assert incident["status"] == "active" and incident["notified_status"] is None
+    assert "machine_auxiliary_intraday_source_gap" in result["notification_pending"]
+
+
+def test_intraday_source_semantics_missing_pending_requires_complete_source(tmp_path):
+    now = START + timedelta(minutes=10)
+    trace = _auxiliary_source_row(now - timedelta(minutes=2))
+    trace["outcome_label_eligible"] = True
+    _source_gap_files(tmp_path, now,
+                      probes=[_probe_source_row(now, "assessed", "machine_assessed")],
+                      traces=[trace], pending=[])
+    empty = monitor.source_gap_semantics(tmp_path, now)
+    assert "auxiliary_pending:label_receipt_missing" not in empty["issues"]
+    _source_gap_files(tmp_path, now,
+                      probes=[_probe_source_row(now, "assessed", "machine_assessed")],
+                      traces=[trace], pending=[{**trace, "decision_trace_id": "other-trace"}])
+    observed = monitor.source_gap_semantics(tmp_path, now)
+    assert observed["issues"]["auxiliary_pending:label_receipt_missing"] == 1
+
+
+def test_intraday_source_semantics_reports_systemic_probe_coverage_without_broker_claim(tmp_path):
+    now = START + timedelta(minutes=10)
+    probes = [_probe_source_row(now - timedelta(seconds=index), "source_unavailable",
+                                "route_snapshot_missing") for index in range(10)]
+    _source_gap_files(tmp_path, now, probes=probes, traces=[], pending=[])
+    result = monitor.source_gap_semantics(tmp_path, now)
+    assert result["diagnostics"] == {"machine_probe:route_snapshot_missing": 10}
+    assert result["issues"] == {"machine_probe:coverage_degraded:krx_nxt_integrated": 1}
+    assert result["probe_route_assessed_counts"] == {}
+    assert result["remediation"][0]["automatic_repair_attempted"] is False
+    state = {"as_of": now.isoformat(), "incidents": {}, "notification_pending": []}
+    monitor.attach_source_gap_semantics(state, result)
+    assert state["incidents"]["machine_auxiliary_intraday_source_gap"]["category"] == "review_required"
+
+
+def test_intraday_probe_coverage_requires_complete_tail_and_counts_distinct_symbols(tmp_path):
+    now = START + timedelta(minutes=10)
+    probes = []
+    for index in range(10):
+        row = _probe_source_row(now, "source_unavailable", "route_snapshot_missing")
+        row["stock_code"] = f"{index:06d}"
+        probes.append(row)
+    _source_gap_files(tmp_path, now, probes=probes)
+    complete = monitor.source_gap_semantics(tmp_path, now)
+    assert complete["diagnostics"]["machine_probe:route_snapshot_missing"] == 10
+    assert complete["issues"]["machine_probe:coverage_degraded:krx_nxt_integrated"] == 1
+    path = tmp_path / "pipeline_events" / f"pipeline_events_{now.date()}.jsonl"
+    with path.open("ab") as stream:
+        stream.write(b'{"emitted_at":')
+    partial = monitor.source_gap_semantics(tmp_path, now)
+    assert partial["sources"]["probe"]["status"] == "partial"
+    assert "machine_probe:coverage_degraded:krx_nxt_integrated" not in partial["issues"]
+
+
+def test_intraday_auxiliary_pending_detects_cross_source_binding_mismatch(tmp_path):
+    now = START + timedelta(minutes=10)
+    trace = _auxiliary_source_row(now - timedelta(minutes=2))
+    trace["outcome_label_eligible"] = True
+    pending = {**trace, "entry_cost_contract_sha256": "f" * 64}
+    _source_gap_files(tmp_path, now, traces=[trace], pending=[pending])
+    result = monitor.source_gap_semantics(tmp_path, now)
+    assert result["issues"]["auxiliary_pending:trace_binding_mismatch"] == 1
+
+
+def test_intraday_machine_trace_invalid_contract_preserves_sparse_vs_missing_cause(tmp_path):
+    now = START + timedelta(minutes=10)
+    sparse = _auxiliary_source_row(now)
+    sparse.update(decision_trace_id="trace-sparse", machine_evaluation_status="assessment_contract_invalid",
+                  machine_source_gap_kind="trusted_tape_source_insufficient",
+                  machine_contract_error="strategy_tape_score_source_missing",
+                  entry_mechanistic_action=None, entry_ai_screen_required=False, provider_called=False)
+    missing = {**sparse, "decision_trace_id": "trace-missing", "machine_source_gap_kind": None,
+               "machine_contract_error": None}
+    capture = {**_auxiliary_source_row(now), "decision_trace_id": "trace-capture",
+               "machine_capture_status": "write_failed", "entry_ai_screen_required": False}
+    _source_gap_files(tmp_path, now, traces=[sparse, missing, capture])
+    result = monitor.source_gap_semantics(tmp_path, now)
+    assert result["diagnostics"] == {"machine_trace:trusted_tape_source_insufficient": 1}
+    assert result["issues"]["machine_trace:contract_error_receipt_missing"] == 1
+    assert result["issues"]["machine_trace:capture_receipt_missing_or_invalid"] == 1
+
+
+def test_intraday_probe_contract_failure_is_visible_without_trace(tmp_path):
+    now = START + timedelta(minutes=10)
+    sparse = _probe_source_row(now, "policy_unavailable", "assessment_contract_invalid",
+                               kind="trusted_tape_source_insufficient")
+    missing = _probe_source_row(now + timedelta(seconds=1), "policy_unavailable",
+                                "assessment_contract_invalid")
+    _source_gap_files(tmp_path, now, probes=[sparse, missing])
+    result = monitor.source_gap_semantics(tmp_path, now + timedelta(seconds=2))
+    assert result["diagnostics"]["machine_probe:trusted_tape_source_insufficient"] == 1
+    assert result["issues"]["machine_probe:contract_error_receipt_missing"] == 1
+    assert result["probe_route_counts"]["krx_nxt_integrated"] == 2
+
+
+def test_intraday_source_semantics_catches_missing_capture_and_pending_source(tmp_path):
+    now = START + timedelta(minutes=10)
+    probe = _probe_source_row(now, "assessed", "machine_assessed")
+    probe["fields"]["machine_capture_status"] = "write_failed"
+    trace = _auxiliary_source_row(now - timedelta(minutes=2))
+    trace["outcome_label_eligible"] = True
+    _source_gap_files(tmp_path, now, probes=[probe], traces=[trace])
+    (tmp_path / "ai_decision_outcomes" / f"ai_decision_outcomes_{now.date()}.jsonl").unlink()
+    result = monitor.source_gap_semantics(tmp_path, now)
+    assert result["issues"]["machine_probe:capture_receipt_missing_or_invalid"] == 1
+    assert result["issues"]["auxiliary_pending:source_file_missing"] == 1
+    assert result["sources"]["pending"]["status"] == "unobservable"
+
+
+def test_source_only_monitor_runs_when_sentinel_report_is_absent(tmp_path, monkeypatch):
+    import sys
+    monkeypatch.setattr(monitor, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(monitor, "machine_semantics", lambda *args, **kwargs:
+                        pytest.fail("source-only must not run policy receipt audit"))
+    monkeypatch.setattr(monitor, "entry_execution_tuning_semantics", lambda *args, **kwargs:
+                        pytest.fail("source-only must not run tuning receipt audit"))
+    monkeypatch.setattr(monitor, "source_gap_semantics", lambda *args, **kwargs: {
+        "status": "gap_observed", "issues": {"machine_probe:source_route_conflict": 1},
+        "examples": [], "sources": {}, "observed": {},
+    })
+    monkeypatch.setattr(sys, "argv", ["monitor", "--report", str(tmp_path / "missing.json"),
+                                       "--source-only"])
+    assert monitor.main() == 0
+    saved = json.loads((tmp_path / "data/report/buy_funnel_sentinel/"
+                        "submission_bottleneck_monitor_latest.json").read_text())
+    assert saved["status"] == "unobservable"
+    assert saved["source_gap_semantics"]["status"] == "gap_observed"
+    assert saved["incidents"]["machine_auxiliary_intraday_source_gap"]["status"] == "pending"
+
+
+def test_intraday_source_alert_names_cause_without_order_claim():
+    now = START + timedelta(minutes=10)
+    result = {"as_of": now.isoformat(), "incidents": {}, "notification_pending": [],
+              "scopes": {}, "identity_observation": {}, "notification_status": "idle"}
+    semantics = {"issues": {"auxiliary_call:cost_receipt_missing": 1},
+                 "issues_by_scope": {"KRX|KRX_REGULAR|route:krx_nxt_integrated|auxiliary_call:cost_receipt_missing": 1},
+                 "examples": [{"stock_code": "005930", "route": "krx_nxt_integrated",
+                               "reason": "cost_receipt_missing"}],
+                 "sources": {"trace": {"status": "complete"}},
+                 "observed": {"auxiliary_called": 1}}
+    monitor.attach_source_gap_semantics(result, semantics)
+    result["as_of"] = (now + timedelta(minutes=5)).isoformat()
+    monitor.attach_source_gap_semantics(result, semantics)
+    messages = []
+    monitor.notify(result, "monitor.json", send=messages.append)
+    assert len(messages) == 1
+    assert "판정 원천결손 점검" in messages[0]
+    assert "auxiliary_call:cost_receipt_missing" in messages[0]
+    assert "주문 수 아님" in messages[0]
+    assert "자동 매매 변경 없음" in messages[0]
 
 
 @pytest.mark.parametrize('mismatch', [None, 'action', 'screen', 'owner', 'before', 'partial_receipt'])

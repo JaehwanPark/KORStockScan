@@ -1518,16 +1518,16 @@ def test_restart_drain_keeps_late_scanner_rows_bound_to_first_stage(monkeypatch,
     assert not handoff.stage_receipt_issues(
         report_dir, day, "pre_submit_delay", code_hash="fixture-code"
     )
-    manifest_path = tmp_path / "data" / "pipeline_event_summaries" / f"pipeline_event_producer_summary_manifest_{day}.json"
-    ledger = json.loads(manifest_path.read_text())["raw_source_ledger"]
-    assert (ledger["raw_count"], ledger["valid_count"], ledger["excluded_count"],
-            ledger["quarantined_count"], ledger["unobserved_count"]) == (4, 4, 0, 0, 0)
+    from src.engine.scalping.pre_submit_delay_tuning import family_source_ledger_path
+    ledger = json.loads(family_source_ledger_path(tmp_path / "data", day).read_text())
+    assert sum(part["raw_count"] for part in ledger["raw_parts"]) == 4
+    assert ledger["summary_diagnostic"]["raw_summary_gap_by_stage"] == {}
 
     logger_mod.emit_pipeline_event(
         "ENTRY_PIPELINE", "fixture", "122350", "scalping_scanner_fast_precheck",
         record_id=47860, fields=fields,
     )
-    assert "pre_submit_delay:raw_source_ledger_missing" in handoff.stage_receipt_issues(
+    assert "pre_submit_delay:raw_generation_changed" in handoff.stage_receipt_issues(
         report_dir, day, "pre_submit_delay", code_hash="fixture-code"
     )
     logger_mod._flush_producer_summary_at_exit()

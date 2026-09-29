@@ -1776,6 +1776,150 @@ def test_mature_outcome_labels_calculates_mfe_mae_first_hit_and_correlation():
     assert row["correlation"]["realized_separate_from_counterfactual"] is True
 
 
+def test_machine_auxiliary_missing_live_stop_uses_explicit_counterfactual_only():
+    pending = {
+        **_pending("WAIT"),
+        "adverse_price": None,
+        "adverse_pct": None,
+        "entry_mechanistic_action": "ENTER_NOW",
+        "machine_observation_sha256": "a" * 64,
+        "entry_conservative_execution_cost_pct": 0.2,
+    }
+    rows = [{
+        "timestamp": f"2026-07-27T09:0{minute}:00+09:00",
+        "stock_code": "005930", "price": 100.5, "high": 100.5,
+        "low": 99.9, "close": 100.5, "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR", "source_quality": "pass",
+    } for minute in range(1, 6)]
+    label = quality.mature_outcome_labels(
+        pending_labels=[pending], price_rows=rows, lifecycle_rows=[],
+        as_of=datetime(2026, 7, 27, 9, 11, tzinfo=KST),
+    )[0]
+    assert label["outcome_stop_owner"] == "fixed_counterfactual_entry_boundary"
+    assert label["outcome_stop_distance_pct"] == quality.ENTRY_PATH_ADVERSE_PCT
+    assert label["horizon_metrics"]["3m"]["entry_quality_path"]["label_reason"] != (
+        "exact_stop_distance_missing_or_invalid"
+    )
+    assert label["stage_outcome"]["actual_fill_entry_quality_path"]["status"] == (
+        "not_applicable_no_actual_submit"
+    )
+    legacy = quality.mature_outcome_labels(
+        pending_labels=[{**pending, "machine_observation_sha256": None}],
+        price_rows=rows, lifecycle_rows=[],
+        as_of=datetime(2026, 7, 27, 9, 11, tzinfo=KST),
+    )[0]
+    assert legacy.get("outcome_stop_owner") is None
+    assert legacy["horizon_metrics"]["3m"]["entry_quality_path"]["label_reason"] == (
+        "exact_stop_distance_missing_or_invalid"
+    )
+    explicit = quality.mature_outcome_labels(
+        pending_labels=[{**pending, "adverse_price": 99.4}],
+        price_rows=rows, lifecycle_rows=[],
+        as_of=datetime(2026, 7, 27, 9, 11, tzinfo=KST),
+    )[0]
+    assert explicit.get("outcome_stop_owner") != "fixed_counterfactual_entry_boundary"
+    malformed = quality.mature_outcome_labels(
+        pending_labels=[{**pending, "adverse_pct": "invalid"}],
+        price_rows=rows, lifecycle_rows=[],
+        as_of=datetime(2026, 7, 27, 9, 11, tzinfo=KST),
+    )[0]
+    assert malformed.get("outcome_stop_owner") != "fixed_counterfactual_entry_boundary"
+    assert malformed["horizon_metrics"]["3m"]["entry_quality_path"]["label_reason"] == (
+        "exact_stop_distance_missing_or_invalid"
+    )
+    mismatched = quality.mature_outcome_labels(
+        pending_labels=[{**pending, "evaluation_attempt_id": "attempt-a",
+                         "entry_cost_evaluation_attempt_id": "attempt-b"}],
+        price_rows=rows, lifecycle_rows=[],
+        as_of=datetime(2026, 7, 27, 9, 11, tzinfo=KST),
+    )[0]
+    assert mismatched.get("outcome_stop_owner") != "fixed_counterfactual_entry_boundary"
+    assert mismatched["horizon_metrics"]["3m"]["entry_quality_path"]["label_reason"] == (
+        "conservative_execution_cost_missing_or_invalid"
+    )
+    wrong_basis = quality.mature_outcome_labels(
+        pending_labels=[{**pending, "entry_cost_source_status": "source_gap",
+                         "entry_cost_basis": "unknown_contract"}],
+        price_rows=rows, lifecycle_rows=[],
+        as_of=datetime(2026, 7, 27, 9, 11, tzinfo=KST),
+    )[0]
+    assert wrong_basis["horizon_metrics"]["3m"]["entry_quality_path"]["label_reason"] == (
+        "conservative_execution_cost_missing_or_invalid"
+    )
+    bound_cost = {
+        **pending, "evaluation_attempt_id": "attempt-a",
+        "entry_cost_evaluation_attempt_id": "attempt-a",
+        "entry_cost_source_status": "exact_pre_provider_replay",
+        "entry_cost_scope": "counterfactual_friction_no_broker_fees",
+        "entry_cost_basis": "half_spread_plus_bounded_source_age_penalty",
+        "entry_cost_contract_sha256": "b" * 64,
+        "entry_cost_replay_context_sha256": "c" * 64,
+    }
+    bound = quality.mature_outcome_labels(
+        pending_labels=[bound_cost], price_rows=rows, lifecycle_rows=[],
+        as_of=datetime(2026, 7, 27, 9, 11, tzinfo=KST),
+    )[0]
+    assert bound["horizon_metrics"]["3m"]["entry_quality_path"]["label_reason"] != (
+        "conservative_execution_cost_missing_or_invalid"
+    )
+    unbound = quality.mature_outcome_labels(
+        pending_labels=[{**bound_cost, "entry_cost_contract_sha256": None}],
+        price_rows=rows, lifecycle_rows=[],
+        as_of=datetime(2026, 7, 27, 9, 11, tzinfo=KST),
+    )[0]
+    assert unbound["horizon_metrics"]["3m"]["entry_quality_path"]["label_reason"] == (
+        "conservative_execution_cost_missing_or_invalid"
+    )
+
+
+def test_auxiliary_reuses_only_verified_machine_cache_for_requested_exact_route(monkeypatch):
+    from src.engine.scalping import ai_action_outcome_calibration as machine
+    from src.engine.scalping import entry_setup_evidence
+    from src.engine.scalping.ai_decision_trace import _json_bytes
+
+    monkeypatch.setattr(entry_setup_evidence, 'validate_entry_setup_evidence', lambda _value: [])
+    capture = {
+        'schema':'mechanistic_entry_observation_v1',
+        'captured_at':'2026-09-29T10:00:00+09:00',
+        'source':{'setup_evidence':{}}, 'redacted':False,
+        'provider_called':False, 'runtime_effect':False,
+        'allowed_runtime_apply':False, 'actual_order_submitted':False,
+        'broker_order_forbidden':True,
+    }
+    capture['machine_observation_sha256'] = hashlib.sha256(_json_bytes(capture)).hexdigest()
+    prices = [
+        {'stock_code':'005930', 'effective_venue':'KRX',
+         'session_bucket':'KRX_REGULAR', 'source_request_code':'005930_AL'},
+        {'stock_code':'000660', 'effective_venue':'KRX',
+         'session_bucket':'KRX_REGULAR', 'source_request_code':'000660_AL'},
+    ]
+    seen = []
+    def cached_rows(**kwargs):
+        seen.extend(kwargs['observations'])
+        return prices, {'status':'verified_cache_reused'}, {'005930_AL', '000660_AL'}
+    monkeypatch.setattr(machine, '_machine_completed_price_rows', cached_rows)
+    required = {('005930', 'KRX', 'KRX_REGULAR', '005930_AL')}
+    selected, receipt = quality._verified_machine_completed_prices_for_ai(
+        target_date='2026-09-29', payloads=[capture], required_routes=required,
+    )
+    assert selected == prices[:1]
+    assert receipt['status'] == 'verified_cache_reused'
+    assert seen == [capture]
+    seen.clear()
+    selected, receipt = quality._verified_machine_completed_prices_for_ai(
+        target_date='2026-09-29', payloads=[capture, capture],
+        required_routes=required,
+    )
+    assert selected == prices[:1]
+    assert seen == [capture]
+    invalid = {**capture, 'source':{'setup_evidence':{'tampered':True}}}
+    selected, receipt = quality._verified_machine_completed_prices_for_ai(
+        target_date='2026-09-29', payloads=[invalid], required_routes=required,
+    )
+    assert selected == []
+    assert receipt['status'] == 'verified_machine_capture_missing'
+
+
 def test_outcome_correlation_does_not_treat_missing_or_cross_symbol_as_zero_fill():
     labels = quality.mature_outcome_labels(
         pending_labels=[_pending()],

@@ -130,6 +130,7 @@ def _pre_submit_delay_handoff(target_date: str) -> tuple[dict[str, str], dict[st
     if not matches:
         return {}, {"status": "not_published", "target_date": target_date}
     saw_source_gap = False
+    saw_not_evaluated = False
     saw_invalid = False
     for effective_from, source_date, path, policy in sorted(matches, reverse=True):
         report_file = report_path(source_date)
@@ -145,7 +146,6 @@ def _pre_submit_delay_handoff(target_date: str) -> tuple[dict[str, str], dict[st
             and policy.get("effective_from") == report.get("effective_date") == effective_from
             and source_date < effective_from <= target_date
             and policy.get("expires_on", "") >= target_date
-            and policy.get("carry_forward_until_superseded") is True
             and digest == _digest({key: value for key, value in policy.items() if key != "policy_sha256"})
             and report.get("policy_sha256") == digest
             and policy.get("report_sha256")
@@ -158,16 +158,23 @@ def _pre_submit_delay_handoff(target_date: str) -> tuple[dict[str, str], dict[st
             and policy.get("runtime_apply_allowed") is True
         )
         unresolved = selected is None and not selector_only
+        unresolved_selection = {
+            "source_gap": "unselected_source_gap",
+            "valid_empty": "unselected_valid_empty",
+            "model_not_validated": "unselected_model_not_validated",
+        }.get(report.get("status"))
         if unresolved:
-            saw_source_gap = True
             valid = bool(valid
-                         and policy.get("selection_status") == "unselected_source_gap"
+                         and policy.get("selection_status") == unresolved_selection
+                         and unresolved_selection is not None
                          and policy.get("runtime_apply_allowed") is False
-                         and report.get("status") == "source_gap"
+                         and policy.get("carry_forward_until_superseded") is False
+                         and policy.get("expires_on") == effective_from
                          and report.get("runtime_effect") is False
                          and report.get("selected_delay_sec") is None)
         else:
-            valid = bool(valid and policy.get("runtime_apply_allowed") is True)
+            valid = bool(valid and policy.get("runtime_apply_allowed") is True
+                         and policy.get("carry_forward_until_superseded") is True)
         if selected is not None:
             valid = bool(valid and selected in DELAYS_SEC and selected > 0
                          and _validated_candidate(policy, report))
@@ -186,7 +193,7 @@ def _pre_submit_delay_handoff(target_date: str) -> tuple[dict[str, str], dict[st
                 branch_delays.append(delay_sec)
                 unresolved_branch = (
                     delay_sec is None and unresolved and isinstance(branch, dict)
-                    and branch.get("selection_status") == "unselected_source_gap"
+                    and branch.get("selection_status") == unresolved_selection
                     and branch.get("runtime_apply_allowed") is False
                 )
                 if unresolved_branch:
@@ -199,6 +206,10 @@ def _pre_submit_delay_handoff(target_date: str) -> tuple[dict[str, str], dict[st
             saw_invalid = True
             continue
         if unresolved:
+            if report.get("status") == "source_gap":
+                saw_source_gap = True
+            else:
+                saw_not_evaluated = True
             continue
         if not any(value and value > 0 for value in [selected, *branch_delays]):
             continue
@@ -218,6 +229,7 @@ def _pre_submit_delay_handoff(target_date: str) -> tuple[dict[str, str], dict[st
     return {}, {
         "status": (
             "no_validated_candidate_source_gap" if saw_source_gap
+            else "no_validated_candidate_not_evaluated" if saw_not_evaluated
             else "binding_invalid" if saw_invalid
             else "not_published"
         ),

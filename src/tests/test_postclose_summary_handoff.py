@@ -658,6 +658,24 @@ def stage_environment(tmp_path, monkeypatch):
     monkeypatch.setattr(h, 'stage_commands', lambda stage, *a, **kw: [['fixture', stage]])
     monkeypatch.setenv('KORSTOCKSCAN_WIDGET_EVALUATION_WAIT_FOR_EOD', 'false')
     day = '2026-09-21'; report = tmp_path / 'data' / 'report'
+    raw = report.parent / 'pipeline_events' / f'pipeline_events_{day}.jsonl'
+    raw.parent.mkdir(parents=True, exist_ok=True)
+    raw.write_text('{"stage":"fixture"}\n')
+    raw_stat = raw.stat()
+    preflight = report / 'observation_source_quality_audit' / f'observation_source_quality_audit_{day}.json'
+    preflight.parent.mkdir(parents=True, exist_ok=True)
+    source = {'target_date':day, 'audit_phase':'preflight', 'status':'pass',
+        'consumer_implementation_sha256':'audit-code',
+        'summary':{'tuning_input_allowed':True},
+        'source':{'generation_stable':True, 'pipeline_events':str(raw),
+                  'generation':{'device':raw_stat.st_dev, 'inode':raw_stat.st_ino,
+                                'size_bytes':raw_stat.st_size, 'mtime_ns':raw_stat.st_mtime_ns,
+                                'ctime_ns':raw_stat.st_ctime_ns}}}
+    preflight.write_text(json.dumps(source))
+    binding = {'schema':'observation_source_quality_final_binding_v1', 'target_date':day,
+        'audit_phase':'preflight', 'implementation_sha256':'audit-code',
+        'artifact_sha256':hashlib.sha256(preflight.read_bytes()).hexdigest()}
+    Path(str(preflight) + '.final-contract.json').write_text(json.dumps(binding))
     def produce(command, **kwargs):
         from src.engine.scalping.ai_action_outcome_calibration import _with_artifact_content_sha256
         stage = command[1]
@@ -689,6 +707,57 @@ def stage_environment(tmp_path, monkeypatch):
         return h.run_stage(stage, day, report_dir=report, project=tmp_path,
             runner=kwargs.pop('runner', produce), **kwargs)
     return h, day, report, run, produce
+
+
+def test_machine_stage_requires_exact_bound_preflight(stage_environment):
+    h, day, report, run, _produce = stage_environment
+    preflight = report / 'observation_source_quality_audit' / f'observation_source_quality_audit_{day}.json'
+    binding = Path(str(preflight) + '.final-contract.json')
+    assert h._machine_source_preflight_issue(report, day) is None
+    source = json.loads(preflight.read_text())
+    source['summary']['tuning_input_allowed'] = False
+    preflight.write_text(json.dumps(source))
+    assert h._machine_source_preflight_issue(report, day) == 'source_quality_preflight_identity_or_hash_invalid'
+    binding_body = json.loads(binding.read_text())
+    binding_body['artifact_sha256'] = hashlib.sha256(preflight.read_bytes()).hexdigest()
+    binding.write_text(json.dumps(binding_body))
+    blocked = run('main_machine_policy', runner=lambda *a, **kw: pytest.fail('preflight blocked'))
+    assert blocked['status'] == 'deferred'
+    assert blocked['policy_disposition'] == 'source_quality_blocked'
+    assert blocked['issues'] == ['source_quality_preflight_blocked']
+
+
+def test_machine_terminal_survives_later_final_audit_generation(stage_environment):
+    h, day, report, run, _produce = stage_environment
+    machine = run('main_machine_policy')
+    assert machine['status'] == 'succeeded'
+    assert machine['source_quality_preflight_sha256']
+    preflight = report / 'observation_source_quality_audit' / f'observation_source_quality_audit_{day}.json'
+    preflight.write_text(json.dumps({'target_date':day, 'audit_phase':'final'}))
+    assert h.stage_receipt_issues(report, day, 'main_machine_policy') == []
+
+
+def test_machine_stage_rejects_raw_generation_changed_after_preflight(stage_environment):
+    h, day, report, run, _produce = stage_environment
+    raw = report.parent / 'pipeline_events' / f'pipeline_events_{day}.jsonl'
+    raw.write_text(raw.read_text() + '{"stage":"late_writer"}\n')
+    assert h._machine_source_preflight_issue(report, day) == (
+        'source_quality_preflight_raw_generation_changed'
+    )
+    blocked = run('main_machine_policy', runner=lambda *a, **kw: pytest.fail('stale raw'))
+    assert blocked['status'] == 'deferred'
+    assert blocked['issues'] == ['source_quality_preflight_raw_generation_changed']
+
+
+def test_machine_resource_timeout_writes_deferred_terminal(stage_environment):
+    _h, _day, _report, run, _produce = stage_environment
+    blocked = run('main_machine_policy',
+        resource_blocked={'ok':False, 'mem_available_mb':3020.0,
+                          'required_mem_mb':4096.0, 'issues':['mem_available_mb=3020.0<4096.0']},
+        runner=lambda *a, **kw: pytest.fail('resource guard blocked'))
+    assert blocked['status'] == 'deferred'
+    assert blocked['issues'] == ['resource_guard_timeout']
+    assert blocked['resource_guard']['mem_available_mb'] == 3020.0
 
 
 def test_widget_eod_wait_does_not_acquire_compute_slot(stage_environment, monkeypatch):
@@ -724,7 +793,9 @@ def test_stage_failure_does_not_cancel_independent_machine(stage_environment, fa
 
 
 def test_machine_stage_validates_bound_completed_price_generation(stage_environment):
-    from src.engine.scalping.ai_action_outcome_calibration import _with_artifact_content_sha256
+    from src.engine.scalping.ai_action_outcome_calibration import (
+        MACHINE_COMPLETED_PRICE_CACHE_SCHEMA, _with_artifact_content_sha256,
+    )
 
     h, day, report_dir, run, _produce = stage_environment
     assert run('main_machine_policy')['status'] == 'succeeded'
@@ -732,7 +803,7 @@ def test_machine_stage_validates_bound_completed_price_generation(stage_environm
                   / f'machine_completed_price_source_{day}.json')
     cache_path.parent.mkdir(parents=True)
     cache = _with_artifact_content_sha256({
-        'schema': 'machine_completed_price_source_v1', 'source_date': day,
+        'schema': MACHINE_COMPLETED_PRICE_CACHE_SCHEMA, 'source_date': day,
         'prices': [], 'provenance': [],
     })
     cache_path.write_text(json.dumps(cache))
@@ -801,6 +872,7 @@ def test_pre_submit_receipt_binds_sealed_source_generation(tmp_path, monkeypatch
     from src.engine.pipeline_event_summary import (
         ProducerSummaryCompactor, seal_producer_summary_source,
     )
+    from src.engine.scalping.pre_submit_delay_tuning import seal_family_source_ledger
 
     day = "2026-09-23"
     data = tmp_path / "data"
@@ -817,7 +889,8 @@ def test_pre_submit_receipt_binds_sealed_source_generation(tmp_path, monkeypatch
     )
     compactor.submit(event)
     compactor.flush()
-    manifest = seal_producer_summary_source(data, day)
+    seal_producer_summary_source(data, day)
+    ledger = seal_family_source_ledger(data, day)
     monkeypatch.setattr(mod, "_safe_stage_output_issues", lambda *args: [])
     paths = mod.stage_artifacts(reports, day, "pre_submit_delay")
     for path in paths.values():
@@ -826,7 +899,7 @@ def test_pre_submit_receipt_binds_sealed_source_generation(tmp_path, monkeypatch
     receipt = {"schema": mod.STAGE_SCHEMA, "stage_id": "pre_submit_delay",
                "source_date": day, "status": "succeeded", "exit_code": 0,
                "run_id": "fixture-run", "stage_code_sha256": "fixture-code",
-               "pipeline_source_generation_sha256": manifest["raw_source_ledger"]["ledger_sha256"],
+               "pipeline_source_generation_sha256": ledger["ledger_sha256"],
                "sources": mod._stage_sources(paths), "prerequisite_receipts": {},
                "input_sources": mod._stage_sources(mod.stage_input_paths(reports, day, "pre_submit_delay"))}
     mod._stage_write(mod.stage_path(reports, day, "pre_submit_delay"), receipt)
@@ -1395,7 +1468,9 @@ def test_stage_machine_rejects_sealed_but_unbound_terminal(stage_environment):
     assert 'main_machine_policy:report_terminal_binding_invalid' in h._stage_output_issues(report, day, 'main_machine_policy')
 
 
-def test_existing_winrate_carry_binding_requires_same_parent_and_policy():
+def test_existing_winrate_carry_binding_requires_same_parent_and_policy(tmp_path):
+    from pathlib import Path
+
     from src.engine.automation.postclose_summary_handoff import (
         _existing_incumbent_winrate_binding_valid,
     )
@@ -1424,6 +1499,7 @@ def test_existing_winrate_carry_binding_requires_same_parent_and_policy():
             'machine_policy_sha256': policy.digest(machine),
         },
     }
+    proof = bundle['winrate_selection']
     staged = {
         'bundle_sha256': bundle['bundle_sha256'],
         'current_report_sha256': report['artifact_content_sha256'],
@@ -1434,6 +1510,73 @@ def test_existing_winrate_carry_binding_requires_same_parent_and_policy():
 
     assert _existing_incumbent_winrate_binding_valid(
         report, staged, bundle, previous, policy
+    )
+    preserving_child = {
+        **bundle,
+        'bundle_sha256': 'e' * 64,
+        'previous_bundle_sha256': bundle['bundle_sha256'],
+    }
+    assert _existing_incumbent_winrate_binding_valid(
+        report, {**staged, 'target_date': '2026-09-25'},
+        preserving_child, previous, policy, staged_bundle={
+            **bundle, 'target_date': '2026-09-25',
+        }
+    )
+    changed_child = dict(preserving_child, winrate_selection={
+        **bundle['winrate_selection'], 'report_sha256': 'f' * 64,
+    })
+    assert not _existing_incumbent_winrate_binding_valid(
+        report, {**staged, 'target_date': '2026-09-25'},
+        changed_child, previous, policy, staged_bundle={
+            **bundle, 'target_date': '2026-09-25',
+        }
+    )
+
+    staged_generation = {
+        **bundle, 'target_date': '2026-09-25', 'bundle_sha256': 'c' * 64,
+    }
+    middle_generation = {
+        **staged_generation, 'bundle_sha256': 'e' * 64,
+        'previous_bundle_sha256': staged_generation['bundle_sha256'],
+    }
+    current_generation = {
+        **middle_generation, 'bundle_sha256': 'f' * 64,
+        'previous_bundle_sha256': middle_generation['bundle_sha256'],
+    }
+    policy_root = tmp_path / 'mechanistic_entry_policy'
+    generations = policy_root / 'generations'
+    generations.mkdir(parents=True)
+    for generation in (staged_generation, middle_generation):
+        (generations / f"{generation['bundle_sha256']}.json").write_text(
+            json.dumps(generation)
+        )
+    fake_policy = type('Policy', (), {})()
+    fake_policy.root = lambda _root: policy_root
+    fake_policy._read = lambda path: json.loads(Path(path).read_text())
+    def validate_generation(value, target_date):
+        if value.get('target_date') != target_date:
+            raise ValueError('target_date_mismatch')
+    fake_policy.validate = validate_generation
+    fake_policy._validate_bundle_sources = lambda *_args: None
+    fake_policy.for_cohort = lambda value, _scope: {'machine_policy': value['machine_policy']}
+    fake_policy.digest = policy.digest
+    assert _existing_incumbent_winrate_binding_valid(
+        report, {**staged, 'bundle_sha256': staged_generation['bundle_sha256'],
+                 'target_date': '2026-09-25'},
+        current_generation, previous, fake_policy,
+        data_root=tmp_path,
+    )
+    changed_middle = dict(middle_generation, winrate_selection={
+        **proof, 'report_sha256': 'f' * 64,
+    })
+    (generations / f"{middle_generation['bundle_sha256']}.json").write_text(
+        json.dumps(changed_middle)
+    )
+    assert not _existing_incumbent_winrate_binding_valid(
+        report, {**staged, 'bundle_sha256': staged_generation['bundle_sha256'],
+                 'target_date': '2026-09-25'},
+        current_generation, previous, fake_policy,
+        data_root=tmp_path,
     )
     changed = dict(report, candidate_policy={'threshold': 'different'})
     assert not _existing_incumbent_winrate_binding_valid(
@@ -1511,7 +1654,8 @@ def test_pre_submit_delay_stage_command_resolves_next_session_effective_date():
 
     command = h.stage_commands('pre_submit_delay', '2026-09-23', '2026-09-23')[0]
 
-    assert command[-4:] == ['--date', '2026-09-23', '--effective-date', '2026-09-28']
+    assert command[-5:] == ['--date', '2026-09-23', '--effective-date', '2026-09-28',
+                            '--require-family-ledger']
 
 
 def test_market_weakness_waits_for_its_attribution_source(stage_environment):

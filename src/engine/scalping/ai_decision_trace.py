@@ -2281,6 +2281,20 @@ def record_ai_decision_trace(
             "entry_conservative_execution_cost_pct": _safe_number(
                 merged.get("entry_conservative_execution_cost_pct")
             ),
+            "entry_cost_source_status": _optional(
+                merged, "entry_cost_source_status"
+            ),
+            "entry_cost_basis": _optional(merged, "entry_cost_basis"),
+            "entry_cost_scope": _optional(merged, "entry_cost_scope"),
+            "entry_cost_contract_sha256": _optional(
+                merged, "entry_cost_contract_sha256"
+            ),
+            "entry_cost_replay_context_sha256": _optional(
+                merged, "entry_cost_replay_context_sha256"
+            ),
+            "entry_cost_evaluation_attempt_id": _optional(
+                merged, "entry_cost_evaluation_attempt_id"
+            ),
             "entry_structure_phase": _optional(merged, "entry_structure_phase"),
             "entry_structure_phase_policy_version": _optional(
                 merged, "entry_structure_phase_policy_version"
@@ -2682,6 +2696,10 @@ def record_ai_decision_trace(
                 "entry_required_feature_blockers",
                 "machine_capture_status",
                 "machine_observation_sha256",
+                "machine_contract_error",
+                "machine_source_gap_kind",
+                "machine_feature_source_receipt",
+                "machine_feature_tick_window",
                 "machine_revision_schema",
                 "machine_revision_parent_sha256",
                 "entry_decision_large_sell_print_detected",
@@ -2767,6 +2785,16 @@ def record_ai_decision_trace(
             "entry_setup_state": trace_row["entry_setup_state"],
             "entry_conservative_execution_cost_pct": trace_row[
                 "entry_conservative_execution_cost_pct"
+            ],
+            "entry_cost_source_status": trace_row["entry_cost_source_status"],
+            "entry_cost_basis": trace_row["entry_cost_basis"],
+            "entry_cost_scope": trace_row["entry_cost_scope"],
+            "entry_cost_contract_sha256": trace_row["entry_cost_contract_sha256"],
+            "entry_cost_replay_context_sha256": trace_row[
+                "entry_cost_replay_context_sha256"
+            ],
+            "entry_cost_evaluation_attempt_id": trace_row[
+                "entry_cost_evaluation_attempt_id"
             ],
             "entry_structure_phase": trace_row["entry_structure_phase"],
             "entry_structure_phase_policy_version": trace_row[

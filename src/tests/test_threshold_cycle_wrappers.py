@@ -38,6 +38,16 @@ def test_initial_quantity_refresh_runs_before_summary_handoff():
         ROOT / "data/report", "2026-09-27", "tower")
 
 
+def test_async_policy_stages_finish_before_summary_and_checklist_hashing():
+    script = _text("deploy/run_threshold_cycle_postclose.sh")
+    wait = script.index('--stage wait --date "$TARGET_DATE" --timeout-sec 14400')
+    summary = script.index("src.engine.runtime_approval_summary")
+    checklist = script.index("src.engine.build_next_stage2_checklist", summary)
+    verifier = script.index("src.engine.verify_threshold_cycle_postclose_chain", checklist)
+    assert wait < summary < checklist < verifier
+    assert "--stage wait --date \"$TARGET_DATE\" --timeout-sec 14400 || true" not in script
+
+
 def test_postclose_status_records_direct_owner_producer_flags():
     script = _text("deploy/run_threshold_cycle_postclose.sh")
     for flag in (
@@ -126,10 +136,12 @@ def test_compact_postclose_has_one_direct_evaluator_and_no_phase_coordinator():
 
 def test_main_machine_evaluation_precedes_compact_and_final_consumers():
     script = _text("deploy/run_threshold_cycle_postclose.sh")
+    preflight = script.index('--audit-phase preflight --write')
     machine = script.index('--stage main_machine_policy')
     episode = script.index('--stage episode_policy')
     auxiliary = script.index('for stage in legacy_machine_report main_auxiliary_policy')
-    assert machine < episode < auxiliary
+    assert preflight < machine < episode < auxiliary
+    assert 'wait_for_postclose_resources "main_machine_policy"' in script[preflight:machine]
     assert '--launch' in script[machine:episode]
 
 

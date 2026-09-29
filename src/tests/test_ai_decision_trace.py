@@ -348,6 +348,12 @@ def test_entry_cost_is_preserved_in_trace_and_pending_outcome(monkeypatch, tmp_p
             "reason": "bounded recheck",
             "ai_parse_ok": True,
             "entry_conservative_execution_cost_pct": 0.23,
+            "entry_cost_source_status": "exact_pre_provider_replay",
+            "entry_cost_basis": "half_spread_plus_bounded_source_age_penalty",
+            "entry_cost_scope": "counterfactual_friction_no_broker_fees",
+            "entry_cost_contract_sha256": "b" * 64,
+            "entry_cost_replay_context_sha256": "a" * 64,
+            "entry_cost_evaluation_attempt_id": "attempt-cost-1",
             "ai_trace_reference_price": 10000,
             "ai_trace_adverse_price": 9900,
             "ai_trace_effective_venue": "KRX",
@@ -364,6 +370,13 @@ def test_entry_cost_is_preserved_in_trace_and_pending_outcome(monkeypatch, tmp_p
     outcome_row = _rows(trace._outcome_path(trace._date_text()))[0]
     assert trace_row["entry_conservative_execution_cost_pct"] == 0.23
     assert outcome_row["entry_conservative_execution_cost_pct"] == 0.23
+    for row in (trace_row, outcome_row):
+        assert row["entry_cost_source_status"] == "exact_pre_provider_replay"
+        assert row["entry_cost_basis"] == "half_spread_plus_bounded_source_age_penalty"
+        assert row["entry_cost_scope"] == "counterfactual_friction_no_broker_fees"
+        assert row["entry_cost_contract_sha256"] == "b" * 64
+        assert row["entry_cost_replay_context_sha256"] == "a" * 64
+        assert row["entry_cost_evaluation_attempt_id"] == "attempt-cost-1"
 
 
 def test_trace_preserves_parent_entry_price_lineage(monkeypatch, tmp_path):

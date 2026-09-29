@@ -6887,6 +6887,7 @@ def run_zero_base_scanner(*, token, event_bus, is_test_mode=False):
                     "zero_base_probe_result": result.get("result"),
                     "zero_base_probe_reason": result.get("reason"),
                     "zero_base_machine_contract_error": result.get("machine_contract_error") or "-",
+                    "zero_base_machine_source_gap_kind": result.get("machine_source_gap_kind") or "-",
                     "zero_base_recheck_attempts": result.get("recheck_attempts") or 1,
                     "zero_base_recheck_first_reason": result.get("recheck_first_reason") or "-",
                     "zero_base_recheck_first_ws_wait_ms": result.get("recheck_first_ws_wait_ms"),

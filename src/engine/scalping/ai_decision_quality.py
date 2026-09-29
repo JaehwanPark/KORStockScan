@@ -4740,6 +4740,40 @@ def mature_outcome_labels(
         rows.sort(key=lambda row: row["_timestamp"])
     matured: list[dict[str, Any]] = []
     for pending in pending_labels:
+        pending = dict(pending)
+        entry_cost_pct = _number(pending.get("entry_conservative_execution_cost_pct"))
+        cost_attempt = pending.get("entry_cost_evaluation_attempt_id")
+        exact_cost_receipt = pending.get("entry_cost_source_status") == "exact_pre_provider_replay"
+        if (
+            (cost_attempt is not None and cost_attempt != pending.get("evaluation_attempt_id"))
+            or (exact_cost_receipt and (
+                not cost_attempt
+                or pending.get("entry_cost_scope") != "counterfactual_friction_no_broker_fees"
+                or pending.get("entry_cost_basis") != "half_spread_plus_bounded_source_age_penalty"
+                or re.fullmatch(r"[0-9a-f]{64}", str(pending.get("entry_cost_contract_sha256") or "")) is None
+                or re.fullmatch(r"[0-9a-f]{64}", str(pending.get("entry_cost_replay_context_sha256") or "")) is None
+            ))
+            or pending.get("entry_cost_source_status") not in (None, "exact_pre_provider_replay")
+            or pending.get("entry_cost_scope") not in (None, "counterfactual_friction_no_broker_fees")
+            or pending.get("entry_cost_basis") not in (None, "half_spread_plus_bounded_source_age_penalty")
+        ):
+            entry_cost_pct = None
+        machine_counterfactual = (
+            pending.get("decision_stage") == "entry"
+            and pending.get("entry_mechanistic_action") == "ENTER_NOW"
+            and (not pending.get("entry_cost_evaluation_attempt_id")
+                 or pending.get("entry_cost_evaluation_attempt_id")
+                 == pending.get("evaluation_attempt_id"))
+            and re.fullmatch(
+                r"[0-9a-f]{64}",
+                str(pending.get("machine_observation_sha256") or ""),
+            ) is not None
+        )
+        if (machine_counterfactual
+            and pending.get("adverse_pct") is None
+            and pending.get("adverse_price") is None):
+            pending["outcome_stop_owner"] = "fixed_counterfactual_entry_boundary"
+            pending["outcome_stop_distance_pct"] = ENTRY_PATH_ADVERSE_PCT
         decision_ts = _parse_ts(pending.get("decision_ts"))
         reference = _number(pending.get("reference_price"))
         code = _normalize_stock_code(pending.get("stock_code"))
@@ -4890,6 +4924,10 @@ def mature_outcome_labels(
                     )
                 )
                 exact_stop_distance_pct = _number(pending.get("adverse_pct"))
+                if (exact_stop_distance_pct is None and machine_counterfactual
+                    and pending.get("outcome_stop_owner")
+                    == "fixed_counterfactual_entry_boundary"):
+                    exact_stop_distance_pct = ENTRY_PATH_ADVERSE_PCT
                 if (
                     exact_stop_distance_pct is None
                     and adverse_price is not None
@@ -4902,9 +4940,7 @@ def mature_outcome_labels(
                     window=window,
                     decision_ts=decision_ts,
                     reference_price=reference,
-                    conservative_execution_cost_pct=_number(
-                        pending.get("entry_conservative_execution_cost_pct")
-                    ),
+                    conservative_execution_cost_pct=entry_cost_pct,
                     exact_stop_distance_pct=exact_stop_distance_pct,
                 )
                 entry_path_metrics = {
@@ -5086,9 +5122,7 @@ def mature_outcome_labels(
                             window=actual_window,
                             decision_ts=first_fill_at,
                             reference_price=first_fill_price,
-                            conservative_execution_cost_pct=_number(
-                                pending.get("entry_conservative_execution_cost_pct")
-                            ),
+                            conservative_execution_cost_pct=entry_cost_pct,
                             exact_stop_distance_pct=actual_stop_distance_pct,
                             entry_notional_krw=(
                                 first_fill_price * first_fill_qty
@@ -30353,6 +30387,59 @@ def _default_sources(
     }
 
 
+def _verified_machine_completed_prices_for_ai(
+    *, target_date: str, payloads: list[dict[str, Any]],
+    required_routes: set[tuple[str, str, str, str]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Reuse only the machine cache bound to this day's verified captures."""
+    if not required_routes:
+        return [], {"status": "no_exact_routes_requested"}
+    from src.engine.scalping import ai_action_outcome_calibration as machine
+    from src.engine.scalping.ai_decision_trace import _json_bytes
+    from src.engine.scalping.entry_setup_evidence import validate_entry_setup_evidence
+
+    captures: dict[str, dict[str, Any]] = {}
+    for row in payloads:
+        if not isinstance(row, dict) or row.get("schema") != "mechanistic_entry_observation_v1":
+            continue
+        captured_at = _parse_ts(row.get("captured_at"))
+        digest = str(row.get("machine_observation_sha256") or "")
+        source = row.get("source") or {}
+        if (
+            captured_at is None
+            or captured_at.astimezone(KST).date().isoformat() != target_date
+            or not re.fullmatch(r"[0-9a-f]{64}", digest)
+            or hashlib.sha256(_json_bytes({
+                key: value for key, value in row.items()
+                if key != "machine_observation_sha256"
+            })).hexdigest() != digest
+            or row.get("redacted") is not False
+            or row.get("provider_called") is not False
+            or row.get("runtime_effect") is not False
+            or row.get("allowed_runtime_apply") is not False
+            or row.get("actual_order_submitted") is not False
+            or row.get("broker_order_forbidden") is not True
+            or not isinstance(source, dict)
+            or validate_entry_setup_evidence(source.get("setup_evidence"))
+        ):
+            continue
+        captures[digest] = row
+    if not captures:
+        return [], {"status": "verified_machine_capture_missing"}
+    prices, receipt, _codes = machine._machine_completed_price_rows(
+        # Match the machine producer's duplicate collapse before hashing its
+        # capture manifest. Repeated archive rows cannot invalidate reuse.
+        data_root=DATA_DIR, day=target_date, observations=list(captures.values()),
+        fetcher=None, as_of=None,
+    )
+    return [row for row in prices if (
+        str(row.get("stock_code") or ""),
+        _venue(row.get("effective_venue")),
+        _session(row.get("session_bucket")),
+        str(row.get("source_request_code") or "").upper(),
+    ) in required_routes], receipt
+
+
 def _parse_control_prompt_versions(values: list[str]) -> dict[str, str]:
     selected: dict[str, str] = {}
     for value in values:
@@ -31463,9 +31550,6 @@ def main(argv: list[str] | None = None) -> int:
         effective_outcome_price_source = "pipeline"
         price_source_provenance: list[dict[str, Any]] = []
         if args.outcome_price_source in {"auto", "kiwoom_completed_1m"}:
-            from src.utils import kiwoom_utils
-
-            token = kiwoom_utils.get_cached_kiwoom_token()
             annotated_pending = annotate_primary_cohort_eligibility(
                 labels=sources["pending"],
                 traces=sources["traces"],
@@ -31518,16 +31602,73 @@ def main(argv: list[str] | None = None) -> int:
                     ))
                 pending_with_exact_routes.append(prepared)
 
-            (
-                kiwoom_prices,
-                price_source_provenance,
-            ) = load_kiwoom_completed_minute_price_rows(
-                target_date=args.date,
-                labels=source_route_labels,
-                as_of=as_of,
-                fetcher=_postclose_ai_completed_fetcher(token, args.date),
-                request_code_resolver=lambda row: row.get("outcome_request_code"),
+            required_routes = {
+                (str(row.get("stock_code") or ""),
+                 _venue(row.get("effective_venue")),
+                 _session(row.get("session_bucket")),
+                 str(row.get("outcome_request_code") or "").upper())
+                for row in source_route_labels
+                if row.get("decision_stage") == "entry"
+                and row.get("entry_mechanistic_action") == "ENTER_NOW"
+                and re.fullmatch(r"[0-9a-f]{64}",
+                                 str(row.get("machine_observation_sha256") or ""))
+            }
+            machine_prices, machine_price_receipt = (
+                _verified_machine_completed_prices_for_ai(
+                    target_date=args.date, payloads=sources["payloads"],
+                    required_routes=required_routes,
+                )
             )
+            exact_route_keys = {
+                (str(row.get("stock_code") or ""),
+                 _venue(row.get("effective_venue")),
+                 _session(row.get("session_bucket")),
+                 str(row.get("source_request_code") or "").upper())
+                for row in machine_prices
+            }
+            cache_complete = machine_price_receipt.get("status") == "verified_cache_reused"
+            missing_route_labels = [
+                row for row in source_route_labels
+                if not cache_complete or (str(row.get("stock_code") or ""),
+                    _venue(row.get("effective_venue")),
+                    _session(row.get("session_bucket")),
+                    str(row.get("outcome_request_code") or "").upper())
+                not in exact_route_keys
+            ]
+            price_source_provenance.append({
+                "source": "verified_machine_completed_price_cache",
+                "status": machine_price_receipt.get("status"),
+                "artifact_content_sha256": machine_price_receipt.get(
+                    "artifact_content_sha256"
+                ),
+                "reused_price_rows": len(machine_prices),
+                "routes_without_cache": len(missing_route_labels),
+            })
+            kiwoom_prices = []
+            kiwoom_provenance = []
+            if missing_route_labels:
+                from src.utils import kiwoom_utils
+
+                token = kiwoom_utils.get_cached_kiwoom_token()
+                kiwoom_prices, kiwoom_provenance = (
+                    load_kiwoom_completed_minute_price_rows(
+                        target_date=args.date,
+                        labels=missing_route_labels,
+                        as_of=as_of,
+                        fetcher=_postclose_ai_completed_fetcher(token, args.date),
+                        request_code_resolver=lambda row: row.get("outcome_request_code"),
+                    )
+                )
+            price_source_provenance.extend(kiwoom_provenance)
+            if machine_prices:
+                kiwoom_prices, suppressed = merge_preferred_outcome_price_rows(
+                    machine_prices, kiwoom_prices,
+                )
+                price_source_provenance.append({
+                    "source": "machine_cache_preferred_merge",
+                    "suppressed_same_route_minute_count": suppressed,
+                    "source_quality_status": "verified_cache_precedence_applied",
+                })
             if args.outcome_price_source == "kiwoom_completed_1m":
                 prices = kiwoom_prices
                 effective_outcome_price_source = "kiwoom_completed_1m"

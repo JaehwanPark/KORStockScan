@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from datetime import datetime
@@ -422,9 +423,26 @@ def extract_scalping_feature_packet(
         recent_candles = []
 
     ws_data = ws_data or {}
-    recent_ticks = _select_recent_ticks_for_feature_packet(
+    recent_ticks, feature_tick_source, feature_tick_reason = (
+        _select_recent_ticks_with_source(
         ws_data, recent_ticks, now=now
+        )
     )
+    diagnostic_window = [
+        {key: tick.get(key) for key in (
+            "item", "market_route", "market_suffix", "transport_epoch",
+            "received_at_ms", "time", "price", "volume", "volume_source",
+            "trade_volume_source", "tick_trade_value_source",
+            "trade_volume_1030_1031_vs_15_mismatch", "aggressor_side",
+            "trade_aggressor_side", "dir", "side", "aggressor_source",
+            "dir_source", "aggressor_quality", "aggressor_quote_source",
+            "aggressor_touch_side", "aggressor_touch_source",
+            "aggressor_touch_quality", "aggressor_touch_confirms_signed",
+            "best_ask", "best_bid", "ask_price", "bid_price", "ask", "bid",
+            "27", "28", "strength",
+        ) if key in tick}
+        for tick in recent_ticks[:10] if isinstance(tick, dict)
+    ]
     snapshot = precompute_microstructure_reaction_inputs(
         ws_data,
         recent_ticks,
@@ -750,6 +768,15 @@ def extract_scalping_feature_packet(
 
     return {
         "packet_version": SCALP_FEATURE_PACKET_VERSION,
+        "feature_tick_source": feature_tick_source,
+        "feature_tick_selection_reason": feature_tick_reason,
+        "feature_exact_tick_filter": ws_data.get("zero_base_probe_exact_tick_filter"),
+        "feature_tick_window_sha256": hashlib.sha256(
+            json.dumps(diagnostic_window, sort_keys=True, separators=(",", ":"),
+                       default=str).encode("utf-8")
+        ).hexdigest(),
+        **({"_feature_tick_diagnostic_window": diagnostic_window}
+           if ws_data.get("zero_base_probe_exact_tick_source") else {}),
         "market_data_health": snapshot.get("market_data_health"),
         "curr_price": curr_price,
         "latest_strength": latest_strength,
@@ -882,10 +909,19 @@ def extract_scalping_feature_packet(
 
 
 def _select_recent_ticks_for_feature_packet(ws_data, recent_ticks, *, now=None):
+    return _select_recent_ticks_with_source(ws_data, recent_ticks, now=now)[0]
+
+
+def _select_recent_ticks_with_source(ws_data, recent_ticks, *, now=None):
     rest_ticks = recent_ticks if isinstance(recent_ticks, list) else []
     ws_ticks = ws_data.get("recent_trade_ticks") if isinstance(ws_data, dict) else None
-    if not isinstance(ws_ticks, list) or len(ws_ticks) < 5:
-        return rest_ticks
+    exact_route = bool(
+        isinstance(ws_data, dict)
+        and ws_data.get("zero_base_probe_exact_tick_source")
+    )
+    minimum = 1 if exact_route else 5
+    if not isinstance(ws_ticks, list) or len(ws_ticks) < minimum:
+        return rest_ticks, "rest", "ws_tick_count_below_selection_floor"
     snapshot = precompute_microstructure_reaction_inputs(
         ws_data,
         ws_ticks,
@@ -893,21 +929,25 @@ def _select_recent_ticks_for_feature_packet(ws_data, recent_ticks, *, now=None):
         now=now,
     )
     age_ms = snapshot.get("tick_age_ms")
+    trusted_count = int(snapshot.get("tick_aggressor_trusted_count") or 0)
+    if age_ms is None or age_ms > 5000:
+        return rest_ticks, "rest", "ws_tick_event_time_stale_or_missing"
     touch_count = int(snapshot.get("tick_aggressor_orderbook_touch_count") or 0) + int(
         snapshot.get("tick_aggressor_cached_orderbook_touch_count") or 0
     )
-    trusted_count = int(snapshot.get("tick_aggressor_trusted_count") or 0)
     declared_volume_count = sum(
         int(count or 0)
         for count in (snapshot.get("trade_volume_source_counts") or {}).values()
     )
-    if (
-        age_ms is None
-        or age_ms > 5000
-        or (touch_count <= 0 and trusted_count <= 0 and declared_volume_count <= 0)
+    if exact_route and (
+        trusted_count <= 0 or not snapshot.get("tick_aggressor_pressure_usable")
     ):
-        return rest_ticks
-    return ws_ticks
+        return rest_ticks, "rest", "ws_tick_pressure_untrusted"
+    if not exact_route and not (
+        touch_count > 0 or trusted_count > 0 or declared_volume_count > 0
+    ):
+        return rest_ticks, "rest", "ws_tick_source_missing"
+    return ws_ticks, ("ws_exact_route" if exact_route else "ws_aggregate"), "trusted_pressure"
 
 
 def build_scalping_feature_audit_fields(packet):

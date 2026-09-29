@@ -467,6 +467,15 @@ def test_submission_monitor_routes_selected_observer_without_start(release):
     assert plan["cwd"] == str(root)
 
 
+def test_pre_submit_source_monitor_routes_selected_release_independently(release):
+    workspace, root, _, _ = release
+    plan = router.make_plan(workspace, root, "a" * 40, "pre-submit-source", "2026-09-29")
+    assert plan["command"][:3] == [str(root / ".venv/bin/python"), "-m",
+                                   "src.engine.monitoring.submission_bottleneck_monitor"]
+    assert plan["command"][-4:] == ["--delay-source-only", "--date", "2026-09-29", "--notify"]
+    assert plan["cwd"] == str(root)
+
+
 def test_holding_exit_sentinel_routes_selected_release_without_start(release):
     workspace, root, _, _ = release
     plan = router.make_plan(workspace, root, "a" * 40, "holding-exit-sentinel", "2026-09-28")
@@ -485,3 +494,13 @@ def test_stage2_holding_exit_cron_routes_all_session_rows_through_selector():
     assert len(rows) == 6
     assert all("run_runtime_release.sh holding-exit-sentinel" in row
                for row in rows)
+
+
+def test_stage2_pre_submit_source_monitor_has_independent_selected_release_trigger():
+    installer = (Path(__file__).resolve().parents[2] / "deploy" /
+                 "install_stage2_ops_cron.sh").read_text()
+    rows = [line for line in installer.splitlines() if "# PRE_SUBMIT_SOURCE_" in line]
+    assert len(rows) == 1
+    assert rows[0].startswith("2-57/5 8-19 ")
+    assert "run_runtime_release.sh pre-submit-source" in rows[0]
+    assert "!/PRE_SUBMIT_SOURCE_/" in installer

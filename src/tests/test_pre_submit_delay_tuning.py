@@ -72,6 +72,35 @@ def test_reader_accepts_exact_generation_once_and_rejects_late_clock(tmp_path, m
     assert report["source_quality_counts"]["quote_clock_or_hash_invalid"] == 1
 
 
+def test_valid_quote_and_terminal_report_model_gap_without_source_gap(tmp_path, monkeypatch):
+    commit, _ = _delay_fixture(tmp_path, monkeypatch)
+    source = (tmp_path / "threshold_cycle" / "date=2026-09-23" /
+              "family=pre_submit_delay" / "part-execution-test.jsonl")
+    from src.engine.pipeline_event_summary import execution_projection_identity
+    terminal = json.loads(source.read_text().splitlines()[0])
+    terminal["stage"] = "pre_submit_delay_intent_terminal"
+    terminal["fields"] = {"delay_intent_id": "intent-1",
+                          "decision_source_sha256": commit["decision_source_sha256"],
+                          "submit_finished_at_epoch": "131.0",
+                          "submit_call_outcome": "returned_false",
+                          "submit_call_broker_accepted": "False"}
+    terminal["execution_source_event_sha256"] = execution_projection_identity(terminal)
+    with source.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(terminal) + "\n")
+    report = delay.build_report("2026-09-23", effective_date="2026-09-24")
+    assert report["status"] == "model_not_validated"
+    assert report["source"]["status"] == "ready"
+    assert report["first_blocker"] == "paired_fill_terminal_cost_model_not_validated"
+    assert all(row["paired_net_ev_pct"] is None for row in report["candidate_grid"])
+    monkeypatch.setenv("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_FILE", str(delay.policy_path("2026-09-23")))
+    now = datetime(2026, 9, 24, 10, 0, tzinfo=timezone(timedelta(hours=9)))
+    assert delay.load_runtime_policy(now=now)["status"] == "no_validated_delay_policy_not_evaluated"
+    from src.engine.automation import runtime_policy_bootstrap as bootstrap
+    monkeypatch.setattr(bootstrap, "DATA_DIR", tmp_path)
+    assert bootstrap._pre_submit_delay_handoff("2026-09-24")[1]["status"] == "no_validated_candidate_not_evaluated"
+
+
 def test_reader_quarantines_duplicate_horizon_and_unbound_terminal(tmp_path, monkeypatch):
     _delay_fixture(tmp_path, monkeypatch)
     source = (tmp_path / "threshold_cycle" / "date=2026-09-23" /
@@ -352,6 +381,129 @@ def test_live_quote_observer_rejects_cross_route_depth_even_with_fresh_flat_bbo(
     handlers.observe_pre_submit_delay_quote(stock, "355390", ws, now_ts=130.0)
     assert events[0]["quote_valid"] is False
     assert events[0]["route_depth_source_sha256"] is None
+
+
+def test_session_route_uses_exact_partition_without_ws_route_or_flat_bbo(monkeypatch):
+    from src.engine import sniper_state_handlers as handlers
+
+    events = []
+    monkeypatch.setattr(handlers, "_log_entry_pipeline", lambda *a, **kw: events.append(kw))
+    stock = {"market_session_bucket": "KRX_REGULAR", "_pre_submit_delay_observation": {
+        "id": "intent", "committed_at_epoch": 100.0, "remaining_sec": [30.0],
+        "route": "KRX_NXT_INTEGRATED", "quote_transport_epoch": 7,
+        "decision_source_sha256": "d" * 64}}
+    ws = {"market_data_transport_epoch": 7,
+          "orderbook": {"asks": [{"price": 2000, "volume": 1}],
+                        "bids": [{"price": 1990, "volume": 1}]},
+          "realtime_type_snapshots_by_route": {"AL|krx_nxt_integrated": {"0D": {
+              "market_route": "krx_nxt_integrated", "transport_epoch": 7,
+              "observed_epoch": 129.8, "item": "355390_AL",
+              "orderbook": {"asks": [{"price": 1550, "volume": 2}],
+                            "bids": [{"price": 1549, "volume": 3}]}}}}}
+    assert handlers._pre_submit_delay_expected_route(stock, ws) == "KRX_NXT_INTEGRATED"
+    assert handlers._pre_submit_delay_expected_route(
+        {"market_session_bucket": "PREMARKET_KRX_LIKE"}, ws) == "NXT_ONLY"
+    assert handlers._pre_submit_delay_expected_route(
+        {"market_session_bucket": "krx_like_premarket"}, ws) == "NXT_ONLY"
+    assert handlers._pre_submit_delay_expected_route(
+        {"market_session_bucket": "krx_regular"}, ws) == "KRX_NXT_INTEGRATED"
+    handlers.observe_pre_submit_delay_quote(stock, "355390", ws, now_ts=130.0)
+    assert events[0]["quote_valid"] is True
+    assert events[0]["ask_price"] == 1550
+    assert events[0]["best_bid"] == 1549
+    assert events[0]["quote_route"] == "KRX_NXT_INTEGRATED"
+    premarket = {"market_session_bucket": "krx_like_premarket", "_pre_submit_delay_observation": {
+        "id": "pre-intent", "committed_at_epoch": 100.0, "remaining_sec": [30.0],
+        "route": "NXT_ONLY", "quote_transport_epoch": 7,
+        "decision_source_sha256": "e" * 64}}
+    nxt_depth = {**ws["realtime_type_snapshots_by_route"]["AL|krx_nxt_integrated"]["0D"],
+                 "market_route": "nxt_only", "item": "355390_NX"}
+    handlers.observe_pre_submit_delay_quote(
+        premarket, "355390", {**ws, "realtime_type_snapshots_by_route": {
+            "NX|nxt_only": {"0D": nxt_depth}}}, now_ts=130.0)
+    assert events[1]["quote_valid"] is True
+    assert events[1]["quote_route"] == "NXT_ONLY"
+
+
+def test_family_ledger_isolates_scanner_summary_gap_and_unmatched_family_raw(tmp_path, monkeypatch):
+    from src.engine.pipeline_event_summary import ProducerSummaryCompactor, execution_projection_identity
+    from src.engine.automation import postclose_summary_handoff as handoff
+
+    day = "2026-09-29"
+    monkeypatch.setattr(delay, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(delay, "REPORT_DIR", tmp_path / "report" / "pre_submit_delay_tuning")
+    monkeypatch.setattr(delay, "POLICY_DIR", tmp_path / "threshold_cycle" / "pre_submit_delay_policy")
+    raw_path = tmp_path / "pipeline_events" / f"pipeline_events_{day}.jsonl"
+    raw_path.parent.mkdir()
+    scanner = {"event_type": "pipeline_event", "pipeline": "ENTRY_PIPELINE",
+               "stage": "scalping_scanner_fast_precheck", "stock_name": "test",
+               "stock_code": "355390", "record_id": 1, "fields": {},
+               "emitted_at": f"{day}T10:00:00", "emitted_date": day}
+    commit = {**scanner, "stage": "pre_submit_delay_committed", "record_id": 3,
+              "fields": {"delay_intent_id": "intent-1", "entry_action": "ENTER_NOW",
+                         "auxiliary_effective_action": "PASS", "owner": "main_scalping"}}
+    raw_rows = [scanner, {**scanner, "record_id": 2}, commit,
+                {**commit, "record_id": 4, "fields": {**commit["fields"], "delay_intent_id": "intent-2"}}]
+    raw_path.write_text("".join(json.dumps(row) + "\n" for row in raw_rows))
+    compact_dir = tmp_path / "threshold_cycle" / f"date={day}" / "family=pre_submit_delay"
+    compact_dir.mkdir(parents=True)
+    compact = {"schema_version": 1, "event_type": "threshold_cycle_event",
+               "family": "pre_submit_delay", **{key: commit[key] for key in
+               ("pipeline", "stage", "stock_name", "stock_code", "record_id", "fields", "emitted_at", "emitted_date")},
+               "execution_source_event_sha256": execution_projection_identity(commit)}
+    (compact_dir / "part-execution-1000.jsonl").write_text(json.dumps(compact) + "\n")
+    compactor = ProducerSummaryCompactor(summary_dir=tmp_path / "pipeline_event_summaries", mode="shadow")
+    for row in (scanner, commit, raw_rows[3]):
+        compactor.submit(row)
+    compactor.flush()
+    ledger = delay.seal_family_source_ledger(tmp_path, day)
+    assert ledger["summary_diagnostic"]["raw_summary_gap_by_stage"]["scalping_scanner_fast_precheck"] == 1
+    assert ledger["status"] == "ready_with_isolation"
+    assert ledger["matched_event_ids"] == [execution_projection_identity(commit)]
+    assert len(ledger["raw_only_event_ids"]) == 1
+    assert delay.family_source_ledger_issues(tmp_path, day) == []
+    report = delay.build_report(day, effective_date="2026-09-30", write=False,
+                                require_family_ledger=True)
+    assert report["source"]["raw_only_event_count"] == 1
+    assert report["selected_delay_sec"] is None
+    monkeypatch.setattr(handoff, "_stage_code", lambda *args, **kwargs: "fixture-code")
+    terminal = handoff.run_stage(
+        "pre_submit_delay", day, report_dir=tmp_path / "report", project=tmp_path,
+        runner=lambda *args, **kwargs: delay.build_report(
+            day, effective_date="2026-09-30", require_family_ledger=True) and 0,
+    )
+    assert terminal["status"] == "succeeded"
+    assert handoff.stage_receipt_issues(tmp_path / "report", day, "pre_submit_delay",
+                                        code_hash="fixture-code") == []
+
+
+def test_sealed_family_valid_empty_does_not_claim_source_gap_or_enable_delay(tmp_path, monkeypatch):
+    from src.engine.automation import runtime_policy_bootstrap as bootstrap
+
+    day = "2026-09-29"
+    monkeypatch.setattr(delay, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(delay, "REPORT_DIR", tmp_path / "report" / "pre_submit_delay_tuning")
+    monkeypatch.setattr(delay, "POLICY_DIR", tmp_path / "threshold_cycle" / "pre_submit_delay_policy")
+    monkeypatch.setattr(bootstrap, "DATA_DIR", tmp_path)
+    raw = tmp_path / "pipeline_events" / f"pipeline_events_{day}.jsonl"
+    raw.parent.mkdir()
+    raw.write_text(json.dumps({"event_type": "pipeline_event", "pipeline": "ENTRY_PIPELINE",
+                               "stage": "unrelated_stage", "stock_code": "355390", "record_id": 1,
+                               "emitted_at": f"{day}T10:00:00", "emitted_date": day,
+                               "fields": {}}) + "\n")
+    ledger = delay.seal_family_source_ledger(tmp_path, day)
+    assert ledger["status"] == "valid_empty"
+    report = delay.build_report(day, effective_date="2026-09-30", require_family_ledger=True)
+    assert report["source"]["status"] == "valid_empty"
+    assert report["status"] == "valid_empty"
+    assert report["selected_delay_sec"] is None
+    monkeypatch.setenv("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_PRE_SUBMIT_DELAY_POLICY_FILE", str(delay.policy_path(day)))
+    now = datetime(2026, 9, 30, 10, 0, tzinfo=timezone(timedelta(hours=9)))
+    assert delay.load_runtime_policy(now=now)["status"] == "no_validated_delay_policy_not_evaluated"
+    env, handoff = bootstrap._pre_submit_delay_handoff("2026-09-30")
+    assert env == {}
+    assert handoff["status"] == "no_validated_candidate_not_evaluated"
 
 
 def test_due_intent_requires_same_policy_owner_quantity_cap_and_route(monkeypatch):

@@ -75,6 +75,44 @@ def test_probe_freshness_allows_three_seconds_but_rejects_older_receipt():
     assert not blocked and reason == "0B_age_exceeded"
 
 
+@pytest.mark.parametrize("route,item,key", [
+    ("nxt_only", "123456_NX", "_NX|nxt_only"),
+    ("krx_nxt_integrated", "123456_AL", "_AL|krx_nxt_integrated"),
+])
+def test_exact_probe_feature_ticks_exclude_aggregate_and_old_subscription(
+    route, item, key,
+):
+    snapshot = _snapshot(route=route, item=item)
+    snapshot["recent_trade_ticks"] = [
+        {"item": "123456", "market_route": "krx_only", "price": 99999}
+    ]
+    snapshot["recent_trade_ticks_by_route"] = {key: [
+        {"item": item, "market_route": route, "transport_epoch": 3,
+         "received_at_ms": 10800, "price": 10000},
+        {"item": item, "market_route": route, "transport_epoch": 3,
+         "received_at_ms": 9900, "price": 10001},
+        {"item": item, "market_route": route, "transport_epoch": 2,
+         "received_at_ms": 10900, "price": 10002},
+        {"item": "123456", "market_route": "krx_only", "transport_epoch": 3,
+         "received_at_ms": 10900, "price": 10003},
+        {"item": item, "market_route": route, "market_suffix": "_NX"
+         if route == "krx_nxt_integrated" else "_AL", "transport_epoch": 3,
+         "received_at_ms": 10900, "price": 10004},
+    ]}
+    data, reason = exact_probe_ws_data(
+        snapshot, code="123456", route=route, after_epoch=10,
+    )
+    assert reason == "ready"
+    assert [tick["price"] for tick in data["recent_trade_ticks"]] == [10000]
+    assert data["zero_base_probe_exact_tick_source"] == key
+    assert data["zero_base_probe_exact_tick_filter"] == {
+        "source_row_count": 5, "accepted_row_count": 1,
+        "rejected_counts": {"item_or_route": 2, "transport_epoch": 1,
+                            "before_registration": 1},
+    }
+    assert snapshot["recent_trade_ticks"][0]["price"] == 99999
+
+
 def test_integrated_probe_never_reuses_plain_route_subscription():
     ws = SimpleNamespace(subscribed_codes={"123456"},
                          _registered_items_by_code={"123456": ("123456",)})
@@ -715,6 +753,8 @@ def test_missing_trusted_tape_is_a_feature_gap_not_a_policy_outage(monkeypatch):
     machine = SimpleNamespace(analyze_target=lambda *_args, **_kwargs: {
         "machine_evaluation_status": "assessment_contract_invalid",
         "machine_contract_error": "strategy_tape_score_source_missing",
+        "machine_source_gap_kind": "trusted_tape_source_insufficient",
+        "machine_feature_source_receipt": {"feature_tick_source": "rest"},
     })
     result = run_zero_base_probe(
         {"claim": {"code": "123456", "route": "krx_nxt_integrated",
@@ -733,6 +773,8 @@ def test_missing_trusted_tape_is_a_feature_gap_not_a_policy_outage(monkeypatch):
     )
     assert result["result"] == "required_feature_insufficient"
     assert result["machine_contract_error"] == "strategy_tape_score_source_missing"
+    assert result["machine_source_gap_kind"] == "trusted_tape_source_insufficient"
+    assert result["machine_feature_source_receipt"]["feature_tick_source"] == "rest"
     assert result["machine_action"] == ""
 
 
@@ -782,3 +824,51 @@ def test_rest_probe_rejects_reused_or_cross_route_feature_rows():
     assert exact_probe_rest_sources([tick], candle, request_code="123456", now_epoch=11)
     assert not exact_probe_rest_sources([tick], candle, request_code="123456_NX", now_epoch=11)
     assert not exact_probe_rest_sources([tick], candle, request_code="123456", now_epoch=30)
+    assert not exact_probe_rest_sources([], candle, request_code="123456", now_epoch=11)
+    assert exact_probe_rest_sources(
+        [], candle, request_code="123456", now_epoch=11,
+        allow_empty_ticks=True,
+    )
+    assert not exact_probe_rest_sources(
+        [], candle, request_code="123456_NX", now_epoch=11,
+        allow_empty_ticks=True,
+    )
+
+
+def test_probe_uses_exact_ws_tick_when_rest_tick_history_is_empty(monkeypatch):
+    import src.engine.scalping.zero_base_probe as module
+    monkeypatch.setattr(module, "resolve_entry_candle_session", lambda: "KRX_REGULAR")
+    snapshot = _snapshot(epoch=11)
+    snapshot["recent_trade_ticks_by_route"] = {"KRX|krx_only": [{
+        "item": "123456", "market_route": "krx_only", "transport_epoch": 3,
+        "received_at_ms": 11000, "price": 10000, "volume": 1,
+    }]}
+    ws = SimpleNamespace(
+        subscribed_codes={"123456"},
+        _registered_items_by_code={"123456": ("123456",)},
+        wait_for_data=lambda *_args, **_kwargs: snapshot,
+        get_latest_data=lambda *_args, **_kwargs: snapshot,
+    )
+    received = []
+    machine = SimpleNamespace(analyze_target=lambda *args, **kwargs: (
+        received.append((args, kwargs)), {
+            "machine_evaluation_status": "assessed",
+            "entry_mechanistic_action": "BLOCK",
+        }
+    )[1])
+    result = run_zero_base_probe(
+        {"claim": {"code": "123456", "route": "krx_only", "observed_epoch": 10},
+         "candidate": {"code": "123456", "route": "krx_only"}},
+        ws_manager=ws, ai_engine=machine, token="token", now=lambda: 11,
+        tick_fetcher=lambda *_args, **_kwargs: [],
+        candle_fetcher=lambda *_args, **_kwargs: (
+            [{"close": 10000}],
+            {"request_code": "123456", "rest_received_ts_ms": 11000},
+        ),
+        context_builder=lambda *_args, **_kwargs: {"ready": True},
+        ws_wait_min_exact_0b_count=0,
+    )
+    assert received
+    assert received[0][0][2] == []
+    assert received[0][0][1]["recent_trade_ticks"][0]["price"] == 10000
+    assert result["machine_action"] == "BLOCK"

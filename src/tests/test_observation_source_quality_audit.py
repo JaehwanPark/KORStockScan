@@ -569,6 +569,78 @@ def test_machine_ai_natural_source_audit_blocks_contract_invalid_attempts(
     )
 
 
+def test_machine_ai_natural_source_audit_isolates_identified_contract_invalid_rows(
+    tmp_path: Path,
+):
+    day = "2026-09-14"
+    payload_path = (
+        tmp_path / "ai_decision_payloads" / f"ai_decision_payloads_{day}.jsonl"
+    )
+    trace_path = tmp_path / "ai_decision_trace" / f"ai_decision_trace_{day}.jsonl"
+    payload_path.parent.mkdir(parents=True)
+    trace_path.parent.mkdir(parents=True)
+    payload_path.write_text(
+        json.dumps({"schema": "mechanistic_entry_observation_v1"}) + "\n",
+        encoding="utf-8",
+    )
+    trace_path.write_text(
+        "".join(
+            json.dumps(row) + "\n"
+            for row in (
+                {
+                    "schema": "ai_decision_trace_v1",
+                    "decision_stage": "entry_screen",
+                    "decision_trace_id": "identified-contract-invalid",
+                    "machine_evaluation_expected": True,
+                    "machine_evaluation_status": "assessment_contract_invalid",
+                    "machine_source_invalid_receipt": False,
+                    "provider_called": False,
+                    "result_source": "mechanistic_contract_invalid",
+                },
+                {
+                    "schema": "ai_decision_trace_v1",
+                    "decision_stage": "entry_screen",
+                    "decision_trace_id": "valid-assessment",
+                    "machine_evaluation_expected": True,
+                    "machine_evaluation_status": "assessed",
+                    "machine_capture_status": "captured",
+                    "machine_observation_sha256": "a" * 64,
+                    "machine_source_invalid_receipt": False,
+                    "provider_called": False,
+                    "result_source": "live",
+                },
+                {
+                    "schema": "ai_decision_trace_v1",
+                    "decision_stage": "entry_screen",
+                    "decision_trace_id": "valid-feature-exclusion",
+                    "machine_evaluation_expected": True,
+                    "machine_evaluation_status": "required_feature_blocked_before_assessment",
+                    "machine_required_feature_receipt": True,
+                    "machine_source_invalid_receipt": False,
+                    "entry_mechanistic_action": "RECHECK",
+                    "entry_required_feature_blockers": ["required_feature_tape_stale"],
+                    "provider_called": False,
+                    "result_source": "input_preflight_blocked",
+                },
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    report = audit._machine_ai_natural_source_consumption(day, data_root=tmp_path)
+
+    assert report["machine_attempt_conservation"]["denominator_preserved"] is True
+    assert report["machine_attempt_conservation"]["accounted_trace_count"] == 3
+    assert report["machine_attempt_conservation"][
+        "assessment_contract_invalid_rows_isolated"
+    ] is True
+    assert report["machine_attempt_conservation"][
+        "assessment_contract_invalid_trace_ids"
+    ] == ["identified-contract-invalid"]
+    assert report["machine_threshold_tuning_input_allowed"] is True
+    assert report["machine_threshold_tuning_blocked_reason"] is None
+
+
 def test_machine_ai_natural_source_audit_isolates_compact_prompt_measurement(
     tmp_path: Path,
 ):

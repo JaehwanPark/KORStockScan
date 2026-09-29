@@ -65113,6 +65113,37 @@ def pre_submit_delay_observation_due(stock, *, now_ts=None):
                 >= float(state.get("committed_at_epoch") or 0) + float(targets[0]))
 
 
+def _pre_submit_delay_expected_route(stock, ws_data):
+    """Freeze the session's executable item route, not an optional WS alias."""
+    from src.engine.scalping.pre_submit_delay_tuning import expected_route_for_session
+    expected = expected_route_for_session((stock or {}).get("market_session_bucket"))
+    if expected:
+        return expected
+    # Historical tests and unknown sessions retain an observed route only.
+    from src.engine.scalping.ai_market_snapshot import preferred_ws_route
+    _, route = preferred_ws_route(ws_data or {})
+    return str(route or (ws_data or {}).get("ws_route") or "").strip().upper()
+
+
+def _pre_submit_delay_exact_depth(ws_data, expected_route, code=None):
+    """Select one route-owned 0D row; never combine it with the flat BBO."""
+    ws = ws_data if isinstance(ws_data, dict) else {}
+    partitions = ws.get("realtime_type_snapshots_by_route")
+    if not isinstance(partitions, dict) or not expected_route:
+        return None
+    transport_epoch = ws.get("market_data_transport_epoch")
+    if type(transport_epoch) is not int or transport_epoch < 0:
+        return None
+    suffix = {"NXT_ONLY": "_NX", "KRX_NXT_INTEGRATED": "_AL"}.get(expected_route)
+    matches = [value["0D"] for value in partitions.values()
+               if isinstance(value, dict) and isinstance(value.get("0D"), dict)
+               and str(value["0D"].get("market_route") or "").strip().upper() == expected_route
+               and value["0D"].get("transport_epoch") == transport_epoch
+               and (not suffix or not code or
+                    str(value["0D"].get("item") or "").strip().upper() == f"{code}{suffix}".upper())]
+    return matches[0] if len(matches) == 1 else None
+
+
 def expire_untriggered_pre_submit_delay(stock, code, *, now_mono=None, reason="trigger_not_current"):
     """Close a due intent without ordering if its normal trigger disappeared."""
     pending = stock.get("_pre_submit_delay_pending") if isinstance(stock, dict) else None
@@ -65185,39 +65216,31 @@ def observe_pre_submit_delay_quote(stock, code, ws_data, *, now_ts=None):
     while remaining and now >= float(state["committed_at_epoch"]) + float(remaining[0]):
         horizon = remaining.pop(0)
         offset = now - float(state["committed_at_epoch"])
-        ask, bid = _get_best_levels_from_ws(ws_data or {})
-        asks = ((ws_data or {}).get("orderbook") or {}).get("asks") or []
+        intended_route = str(state.get("route") or "").strip().upper()
+        matched_depth = _pre_submit_delay_exact_depth(ws_data, intended_route, code)
+        book = matched_depth.get("orderbook") if matched_depth else {}
+        book = book if isinstance(book, dict) else {}
+        ask, bid = _get_best_levels_from_ws({"orderbook": book})
+        asks = book.get("asks") or []
         first_ask = asks[0] if asks and isinstance(asks[0], dict) else {}
         ask_qty = _safe_int(first_ask.get("volume") or first_ask.get("qty"), 0)
-        type_ts = (ws_data or {}).get("last_realtime_type_ts") or {}
-        type_ts = type_ts if isinstance(type_ts, dict) else {}
-        depth_epoch = _safe_float(type_ts.get("0D"), 0.0)
+        depth_epoch = _safe_float(matched_depth.get("observed_epoch"), 0.0) if matched_depth else 0.0
         depth_age = now - depth_epoch if depth_epoch > 0 else None
-        quote_fields, _, _, _ = _build_quote_consistency_fields(ws_data or {}, side="buy", now_ts=now)
-        quote_route = str((ws_data or {}).get("ws_route") or "").strip().upper()
-        intended_route = str(state.get("route") or "").strip().upper()
+        # This receipt studies the executable 0D book. The runtime quote
+        # normalizer requires a trade mark and can call a book-only snapshot
+        # stale even when the exact 0D is fresh; it remains an order guard.
+        depth_fresh = matched_depth is not None and depth_age is not None and 0 <= depth_age <= 0.7
+        quote_fields = {
+            "quote_consistency_state": "single_source" if depth_fresh else "stale" if matched_depth else "missing",
+            "quote_consistency_reason": ("exact_route_0d_observation" if depth_fresh else
+                                         "exact_route_0d_stale" if matched_depth else "exact_route_0d_missing"),
+            "quote_consistency_entry_blocked": not depth_fresh,
+        }
+        quote_route = str(matched_depth.get("market_route") or "").strip().upper() if matched_depth else ""
         transport_epoch = (ws_data or {}).get("market_data_transport_epoch")
-        route_rows = (ws_data or {}).get("realtime_type_snapshots_by_route") or {}
-        route_rows = route_rows if isinstance(route_rows, dict) else {}
-        route_depth = [row.get("0D") for row in route_rows.values()
-                       if isinstance(row, dict) and isinstance(row.get("0D"), dict)]
-        def same_depth(row):
-            book = row.get("orderbook")
-            if not isinstance(book, dict):
-                return False
-            asks = book.get("asks")
-            first = asks[0] if isinstance(asks, list) and asks and isinstance(asks[0], dict) else {}
-            return (_get_best_levels_from_ws({"orderbook": book}) == (ask, bid)
-                    and _safe_int(first.get("volume") or first.get("qty"), 0) == ask_qty)
-
-        depth_matches = [row for row in route_depth
-            if row.get("transport_epoch") == transport_epoch
-                    and str(row.get("market_route") or "").strip().upper() == quote_route
-                    and _safe_float(row.get("observed_epoch"), 0.0) == depth_epoch
-                    and same_depth(row)]
-        depth_bound = type(transport_epoch) is int and transport_epoch >= 0 and len(depth_matches) == 1
-        matched_depth = depth_matches[0] if depth_bound else None
+        depth_bound = matched_depth is not None
         depth_source_sha256 = (hashlib.sha256(json.dumps({
+            "item": matched_depth.get("item"),
             "market_route": matched_depth.get("market_route"),
             "transport_epoch": matched_depth.get("transport_epoch"),
             "observed_epoch": matched_depth.get("observed_epoch"),
@@ -69321,7 +69344,8 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         )
         promotion_id = str(stock.get("scanner_promotion_id") or "")
         due_delay = stock.get("_pre_submit_delay_due")
-        quote_route = str((ws_data or {}).get("ws_route") or "").strip().upper()
+        quote_route = _pre_submit_delay_expected_route(stock, ws_data)
+        exact_depth = _pre_submit_delay_exact_depth(ws_data, quote_route, code)
         type_ask, type_bid = _get_best_levels_from_ws(ws_data or {})
         decision_type = decision_type_snapshot(
             price=final_price, ask=type_ask, bid=type_bid,
@@ -69332,7 +69356,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             decision_type=due_delay["decision_type"] if isinstance(due_delay, dict) else decision_type,
         )
         if isinstance(due_delay, dict):
-            if not pre_submit_delay_due_matches(
+            if exact_depth is None or not pre_submit_delay_due_matches(
                 due_delay, delay_policy, machine_fields, decision_type,
                 quote_route=quote_route, requested_qty=requested_qty,
                 final_price=final_price,
@@ -69345,10 +69369,9 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             due_delay["resolved_machine_attempt_id"] = machine_key[0]
             due_delay["resolved_machine_observation_sha256"] = machine_key[1]
         elif delay_policy["delay_sec"] > 0:
-            if (not all(machine_key) or not promotion_id or not quote_route
+            if (not all(machine_key) or not promotion_id or not quote_route or exact_depth is None
                     or not machine_fields.get("entry_mechanistic_policy_sha256")
                     or not machine_fields.get("entry_ai_soft_policy_sha256")
-                    or decision_type["venue"] == "UNKNOWN"
                     or decision_type["session_bucket"] == "UNKNOWN"
                     or str(machine_fields.get("entry_mechanistic_action") or "").upper() != "ENTER_NOW"
                     or _pre_submit_delay_auxiliary_verdict(machine_fields) not in {"PASS", "CAUTION"}
