@@ -798,6 +798,15 @@ def test_fixed_watch_admission_is_not_a_scanner_identity_gap_or_denominator():
     assert corrected["incidents"]["unbound_machine_identity_reclassified_fixed_watch"]["status"] == "reclassified"
     assert corrected["fixed_watch_identity_observation"]["identified_event_count"] == 1
     assert corrected["notification_pending"] == []
+    quiet_at = START + timedelta(minutes=11)
+    quiet = report([fixed], quiet_at)
+    quiet_corrected = monitor.evaluate(quiet, old, quiet_at)
+    assert quiet_corrected["status"] == "unobservable"
+    assert quiet_corrected["blocker"] == "missing_stale_or_noncurrent_sentinel_evidence"
+    assert "unbound_machine_identity" not in quiet_corrected["incidents"]
+    assert quiet_corrected["incidents"]["unbound_machine_identity_reclassified_fixed_watch"]["status"] == "reclassified"
+    wrong_date = {**quiet, "target_date": "2026-09-20"}
+    assert "unbound_machine_identity" in monitor.evaluate(wrong_date, old, quiet_at)["incidents"]
 
 
 def test_fixed_watch_and_scanner_machine_attempts_remain_separate():

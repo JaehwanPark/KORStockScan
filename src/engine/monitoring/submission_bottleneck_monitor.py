@@ -1601,6 +1601,31 @@ def evaluate(report, state, now):
         "source_quality_gate": "same_attempt_explicit_nonentry_cache_miss_only",
         "forbidden_uses": ["order_authority", "missing_as_zero_ev", "tuning_population_acceptance"],
     }
+    # A quiet machine window cannot prove normal current behavior. It can
+    # still correct an old alert when a fresh source snapshot binds every old
+    # evidence hash to a valid fixed-watch admission.
+    reclassification_source_current = (
+        report.get("target_date") == today and not report.get("dry_run")
+        and source.get("schema") == SCHEMA and as_of is not None
+        and 0 <= (now - as_of).total_seconds() <= 420
+        and (not prior.get("source_as_of") or
+            (stamp(prior["source_as_of"]) is not None
+             and as_of > stamp(prior["source_as_of"])))
+        and (source.get("fixed_watch_identity_observation") or {}).get("schema")
+            == "fixed_watch_source_identity_v1"
+    )
+    old_identity = incidents.get("unbound_machine_identity", {})
+    old_evidence = set(old_identity.get("evidence_ids") or [])
+    if (reclassification_source_current and old_identity.get("rule") == "source_identity_missing"
+        and old_evidence and old_evidence <= set(source.get("fixed_watch_identified_evidence") or [])):
+        incidents["unbound_machine_identity_reclassified_fixed_watch"] = {
+            **old_identity, "status": "reclassified", "scope": "fixed_watch",
+            "classification": "valid_fixed_watch_non_scanner_identity",
+            "correction_basis": "all_prior_evidence_ids_match_valid_fixed_watch_source_events",
+            "last_seen": now.isoformat(),
+        }
+        incidents.pop("unbound_machine_identity", None)
+        result["fixed_watch_identity_observation"] = source["fixed_watch_identity_observation"]
     if (report.get("target_date") != today or report.get("dry_run")
             or source.get("schema") != SCHEMA or not as_of or not latest
             or not 0 <= (now - as_of).total_seconds() <= 420
@@ -1753,18 +1778,6 @@ def evaluate(report, state, now):
     missing = source.get("missing_identity_evidence") or []
     key = "unbound_machine_identity"
     old = incidents.get(key, {})
-    old_evidence = set(old.get("evidence_ids") or [])
-    if old_evidence and old_evidence <= set(source.get("fixed_watch_identified_evidence") or []):
-        # Preserve the original alert and exact event hashes, while removing
-        # the false scanner-identity claim for a valid fixed-watch admission.
-        incidents["unbound_machine_identity_reclassified_fixed_watch"] = {
-            **old, "status": "reclassified", "scope": "fixed_watch",
-            "classification": "valid_fixed_watch_non_scanner_identity",
-            "correction_basis": "all_prior_evidence_ids_match_valid_fixed_watch_source_events",
-            "last_seen": now.isoformat(),
-        }
-        incidents.pop(key, None)
-        old = {}
     observation = source.get("identity_observation") or {}
     current_status = (observation.get("status") if observation.get("schema") == "machine_identity_recency_v1"
                       else "unobservable")
