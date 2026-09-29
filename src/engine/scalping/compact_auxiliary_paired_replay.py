@@ -29,10 +29,10 @@ AUTHORITY = dict(
     broker_order_forbidden=True,
 )
 CONTRACT = {
-    "schema": "compact_auxiliary_paired_promotion_v7",
+    "schema": "compact_auxiliary_paired_promotion_v8",
     "learning_episode_floor": 20,
     "holdout_episode_floor": 20,
-    "holdout_source_day_floor": 2,
+    "holdout_source_day_floor": 1,
     "minimum_response_coverage": 1.0,
     "same_cohort_only": True,
     "missing_economics_imputed": False,
@@ -968,8 +968,10 @@ def evaluate_auxiliary_stage(projection, prompt_results=None):
         parent_soft_hashes = sorted({digest(row.get("parent_auxiliary_soft_policy")) for row, _ in population})
         days = sorted({row.get("source_date") for row, _ in population})
         holdout_day = days[-1] if len(days) >= 2 else None
+        same_day_holdout_keys = _same_day_holdout_keys([row for row, _ in population])
         train_population = [(row, net) for row, net in population
-                            if holdout_day is None or row.get("source_date") != holdout_day]
+                            if (row["evaluation_key"] not in same_day_holdout_keys
+                                and (holdout_day is None or row.get("source_date") != holdout_day))]
         axis_support = Counter()
         for row, _ in train_population:
             setup = row["input"]["entry_setup_evidence_v1"]
@@ -1047,7 +1049,7 @@ def evaluate_auxiliary_stage(projection, prompt_results=None):
                     if cached_response is None:
                         prompt_missing += 1
                         pairs.append((row["incumbent_verdict"], row["incumbent_verdict"], net))
-                        dated_pairs.append((row.get("source_date"), row["incumbent_verdict"], row["incumbent_verdict"], net))
+                        dated_pairs.append((row.get("source_date"), row["evaluation_key"], row["incumbent_verdict"], row["incumbent_verdict"], net))
                         continue
                     response, response_errors = cached_response
                 assessment = _evaluate_auxiliary_policy_validated(
@@ -1062,7 +1064,7 @@ def evaluate_auxiliary_stage(projection, prompt_results=None):
                 else:
                     verdict = assessment["effective_verdict"]
                 pairs.append((row["incumbent_verdict"], verdict, net))
-                dated_pairs.append((row.get("source_date"), row["incumbent_verdict"], verdict, net))
+                dated_pairs.append((row.get("source_date"), row["evaluation_key"], row["incumbent_verdict"], verdict, net))
                 unsupported += int(bool(assessment.get("unsupported_materiality_codes")))
             passed = [(old, new, net) for old, new, net in pairs if new == "PASS"]
             pass_count = len(passed)
@@ -1079,8 +1081,10 @@ def evaluate_auxiliary_stage(projection, prompt_results=None):
             win_rate = pass_wins / pass_count if pass_count else None
             q = .6 * win_rate + .4 * balanced if win_rate is not None and balanced is not None else None
             delta = sum((int(new == "PASS") - int(old == "PASS")) * net for old, new, net in pairs) / len(pairs)
-            train = [(old, new, net) for day, old, new, net in dated_pairs if day != holdout_day]
-            holdout = [(old, new, net) for day, old, new, net in dated_pairs if day == holdout_day]
+            train = [(old, new, net) for day, key, old, new, net in dated_pairs
+                     if key not in same_day_holdout_keys and day != holdout_day]
+            holdout = [(old, new, net) for day, key, old, new, net in dated_pairs
+                       if key in same_day_holdout_keys or day == holdout_day]
             train_pass = [net for _, new, net in train if new == "PASS"]
             train_pass_wins = sum(net > 0 for net in train_pass)
             train_adjusted = machine_support_adjusted_win_rate({
@@ -1168,10 +1172,11 @@ def evaluate_auxiliary_stage(projection, prompt_results=None):
             "incumbent": incumbent, "selected": chosen, "candidates": trials,
             "selection_rank_version": "train_paired_net_ev_then_train_support_adjusted_win_rate_holdout_gate_v3",
             "selection_blocker": (None if ranked else
-                                  "insufficient_independent_evidence" if holdout_day is None else
+                                  "insufficient_independent_evidence" if holdout_day is None and not same_day_holdout_keys else
                                   "candidate_evaluated_but_not_promotable"),
             "axis_train_support_count": dict(axis_support),
             "holdout_day": holdout_day,
+            "same_day_holdout_keys": sorted(same_day_holdout_keys),
             "prompt_candidate_status": (
                 "complete" if prompt_candidates and all(
                     any(trial["prompt_version"] == version
@@ -1366,6 +1371,7 @@ def evaluate(rows, results):
                 for k in (
                     "evaluation_key",
                     "source_date",
+                    "decision_ts",
                     "effective_venue",
                     "session_bucket",
                     "broker_route",
@@ -1453,6 +1459,37 @@ def _scope_groups(rows):
     return groups
 
 
+def _same_day_holdout_keys(rows):
+    """Keep retries of one promotion together in a strict KST time split."""
+    days = {row.get("source_date") for row in rows}
+    if (len(days) != 1 or not isinstance(next(iter(days)), str)
+        or next(iter(days)) < "2026-09-29"):
+        return set()
+    day = next(iter(days))
+    groups = defaultdict(list)
+    try:
+        for row in rows:
+            stamp = datetime.fromisoformat(row["decision_ts"])
+            if (stamp.tzinfo is None or stamp.astimezone(KST).date().isoformat() != day
+                or not row.get("scanner_promotion_id") or not row.get("evaluation_key")):
+                return set()
+            groups[row["scanner_promotion_id"]].append((stamp, row["evaluation_key"]))
+    except (KeyError, TypeError, ValueError):
+        return set()
+    ordered = sorted((min(stamp for stamp, _ in values), promotion)
+                     for promotion, values in groups.items())
+    if len(ordered) < 2:
+        return set()
+    boundary = max(1, int(len(ordered) * .7))
+    train = {promotion for _, promotion in ordered[:boundary]}
+    held = {promotion for _, promotion in ordered[boundary:]}
+    if max(stamp for promotion in train for stamp, _ in groups[promotion]) >= min(
+        stamp for promotion in held for stamp, _ in groups[promotion]
+    ):
+        return set()
+    return {key for promotion in held for _, key in groups[promotion]}
+
+
 def scope_candidate_validation(pairs, rows, metrics, plan, *, candidate, now):
     """Freeze each policy scope only after every observed route can learn.
 
@@ -1461,6 +1498,8 @@ def scope_candidate_validation(pairs, rows, metrics, plan, *, candidate, now):
     """
     from src.engine.scalping.strategy_owner_replay import entry_operating_route_supported
     previous = plan.get("scope_candidates") or {}
+    same_day_holdout_keys = set((plan.get("candidate_selection") or {}).get(
+        "same_day_holdout_keys") or [])
     frozen = dict(previous)
     validations = {}
     for scope, population in _scope_groups(rows).items():
@@ -1475,22 +1514,30 @@ def scope_candidate_validation(pairs, rows, metrics, plan, *, candidate, now):
             exact = []
         routes = defaultdict(set)
         for pair in exact:
+            if pair["evaluation_key"] in same_day_holdout_keys:
+                continue
             if entry_operating_route_supported(pair["effective_venue"], pair["session_bucket"], pair["broker_route"]):
                 routes[pair["broker_route"]].add((pair["source_date"], pair["scanner_promotion_id"]))
         if not state and incumbent and incumbent != candidate and routes and all(
                 len(keys) >= CONTRACT["learning_episode_floor"] for keys in routes.values()):
             state = {"candidate_frozen_at": now.isoformat(), "incumbent_prompt_version": incumbent,
-                     "learning_manifest_sha256": digest(exact)}
+                     "learning_manifest_sha256": digest([p for p in exact
+                         if p["evaluation_key"] not in same_day_holdout_keys])}
             frozen[scope] = state
         cutoff = state.get("candidate_frozen_at")
         cutoff_day = cutoff[:10] if cutoff else now.date().isoformat()
+        same_day_keys = sorted(p["evaluation_key"] for p in exact
+                               if p["evaluation_key"] in same_day_holdout_keys)
         validations[scope] = {
             "incumbent_prompt_version": incumbent,
             "candidate_frozen_at": cutoff,
             "coverage": metrics.get("scope_coverage", {}).get(scope, {}),
             "chronological_validation": {"candidate_frozen_at": cutoff,
-                "learning_pairs": [p for p in exact if p["source_date"] <= cutoff_day],
-                "holdout_pairs": [p for p in exact if p["source_date"] > cutoff_day] if cutoff else [],
+                "same_day_holdout_keys": same_day_keys,
+                "learning_pairs": [p for p in exact if p["source_date"] <= cutoff_day
+                                   and p["evaluation_key"] not in same_day_holdout_keys],
+                "holdout_pairs": [p for p in exact if p["source_date"] > cutoff_day
+                                  or p["evaluation_key"] in same_day_holdout_keys] if cutoff else [],
                 "holdout_consumed": False},
         }
     return validations, frozen
@@ -1605,6 +1652,13 @@ def promotion_valid(report, *, incumbent, selected, source_manifest_sha256, effe
         proof.get("learning_pairs") or [],
         proof.get("holdout_pairs") or [],
     )
+    same_day_keys = set(proof.get("same_day_holdout_keys") or [])
+    selected_same_day_keys = set(selection.get("same_day_holdout_keys") or [])
+    if (not same_day_keys.issubset(selected_same_day_keys)
+        or any(p.get("evaluation_key") in selected_same_day_keys for p in learning)
+        or {p.get("evaluation_key") for p in holdout
+            if p.get("evaluation_key") in selected_same_day_keys} != same_day_keys):
+        return False
     try:
         frozen_day = (
             datetime.fromisoformat((scoped or report)["candidate_frozen_at"])
@@ -1621,11 +1675,28 @@ def promotion_valid(report, *, incumbent, selected, source_manifest_sha256, effe
     ):
         return False
     if any(p.get("source_date", "") > frozen_day for p in learning) or any(
-        p.get("source_date", "") <= frozen_day for p in holdout
+        p.get("source_date", "") <= frozen_day
+        and p.get("evaluation_key") not in same_day_keys for p in holdout
     ):
         return False
+    if same_day_keys:
+        try:
+            train_times = [datetime.fromisoformat(p["decision_ts"])
+                for p in learning if p.get("source_date") == frozen_day]
+            test_times = [datetime.fromisoformat(p["decision_ts"])
+                for p in holdout if p.get("evaluation_key") in same_day_keys]
+        except (KeyError, TypeError, ValueError):
+            return False
+        if (not train_times or not test_times
+            or any(stamp.tzinfo is None or stamp.astimezone(KST).date().isoformat() != frozen_day
+                   for stamp in train_times + test_times)
+            or not max(train_times) < min(test_times)):
+            return False
     keys = [p.get("evaluation_key") for p in learning + holdout]
     if not all(keys) or len(set(keys)) != len(keys):
+        return False
+    if ({(p.get("source_date"), p.get("scanner_promotion_id")) for p in learning}
+        & {(p.get("source_date"), p.get("scanner_promotion_id")) for p in holdout}):
         return False
     cohorts = defaultdict(lambda: [[], []])
     for i, rows in enumerate((learning, holdout)):
@@ -2004,9 +2075,18 @@ def candidate_direction_selection(projections):
         )
         grouped[scope].append((row, arm))
 
+    same_day_holdout_keys = set()
+    policy_scope_rows = defaultdict(list)
+    for scope, values in grouped.items():
+        policy_scope_rows[scope.rsplit("|", 1)[0]].extend(row for row, _ in values)
+    for rows in policy_scope_rows.values():
+        same_day_holdout_keys.update(_same_day_holdout_keys(rows))
+
     scope_evidence = {}
     ready_rows = []
     for scope, values in sorted(grouped.items()):
+        values = [(row, arm) for row, arm in values
+                  if row["evaluation_key"] not in same_day_holdout_keys]
         economics = _candidate_direction_economics(values)
         ready = (
             len(
@@ -2098,6 +2178,7 @@ def candidate_direction_selection(projections):
         "candidate_response_used_for_selection": False,
         "candidate_holdout_used_for_selection": False,
         "model_holdout_precedes_selection_population": True,
+        "same_day_holdout_keys": sorted(same_day_holdout_keys),
         **AUTHORITY,
     }
     return sealed(receipt)
@@ -2175,6 +2256,7 @@ def candidate_zero_disposition(rows, blockers, report):
         local_counts = Counter(blockers[r["evaluation_key"]][0] for r in _scope_groups(rows).get(scope, [])
                                if r["evaluation_key"] in blockers)
         train, held = chronology["learning_pairs"], chronology["holdout_pairs"]
+        same_day_keys = set(chronology.get("same_day_holdout_keys") or [])
         by_route = defaultdict(lambda: [[], []])
         for i, half in enumerate((train, held)):
             for pair in half:
@@ -2196,7 +2278,8 @@ def candidate_zero_disposition(rows, blockers, report):
         elif (coverage.get("denominator_preserved") is not True
               or len({p["evaluation_key"] for p in train + held}) != len(train) + len(held)
               or any(p["source_date"] > proof["candidate_frozen_at"][:10] for p in train)
-              or any(p["source_date"] <= proof["candidate_frozen_at"][:10] for p in held)
+              or any(p["source_date"] <= proof["candidate_frozen_at"][:10]
+                     and p["evaluation_key"] not in same_day_keys for p in held)
               or chronology.get("holdout_consumed") is not False):
             disposition = "source_gap"
         else:
@@ -2223,6 +2306,7 @@ def candidate_zero_disposition(rows, blockers, report):
     else:
         proof = report.get("chronological_validation") or {}
         learning, held = proof.get("learning_pairs") or [], proof.get("holdout_pairs") or []
+        same_day_keys = set(proof.get("same_day_holdout_keys") or [])
         complete = (len({(p["source_date"],p["scanner_promotion_id"]) for p in learning}) >= CONTRACT["learning_episode_floor"]
             and len({(p["source_date"],p["scanner_promotion_id"]) for p in held}) >= CONTRACT["holdout_episode_floor"]
             and len({p["source_date"] for p in held}) >= CONTRACT["holdout_source_day_floor"])
@@ -2230,7 +2314,8 @@ def candidate_zero_disposition(rows, blockers, report):
         frozen=report.get("candidate_frozen_at") or ""
         chronology=(len(keys)==len(set(keys)) and bool(frozen)
             and all(p["source_date"]<=frozen[:10] for p in learning)
-            and all(p["source_date"]>frozen[:10] for p in held)
+            and all(p["source_date"]>frozen[:10]
+                    or p["evaluation_key"] in same_day_keys for p in held)
             and proof.get("holdout_consumed") is False
             and report["metrics"].get("response_coverage")==1.)
         comparison = report["metrics"].get("operating_economic_comparison") or {}
@@ -2972,6 +3057,8 @@ def run(
         frozen_at = min((v["candidate_frozen_at"] for v in scope_validation.values()
                          if v["candidate_frozen_at"]), default=None)
         chronology = {"candidate_frozen_at": frozen_at,
+            "same_day_holdout_keys": sorted({key for v in scope_validation.values()
+                for key in v["chronological_validation"].get("same_day_holdout_keys", [])}),
             "learning_pairs": [p for v in scope_validation.values() for p in v["chronological_validation"]["learning_pairs"]],
             "holdout_pairs": [p for v in scope_validation.values() for p in v["chronological_validation"]["holdout_pairs"]],
             "holdout_consumed": False}

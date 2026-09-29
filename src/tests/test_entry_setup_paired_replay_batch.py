@@ -435,13 +435,13 @@ def test_auxiliary_population_binds_bounded_previous_day_sources(tmp_path):
 
 
 def test_auxiliary_population_starts_at_forward_policy_date(tmp_path):
-    old_path = compact.report_path(tmp_path, "2026-09-29").with_suffix(".source.json")
+    old_path = compact.report_path(tmp_path, "2026-09-28").with_suffix(".source.json")
     old_path.parent.mkdir(parents=True, exist_ok=True)
     old_path.write_text("invalid historical source", encoding="utf-8")
     current = compact.sealed({
         "schema": "compact_auxiliary_frozen_projection_v1",
         "source_projection_contract": compact.SOURCE_PROJECTION_CONTRACT,
-        "target_date": "2026-09-30", "source_tuning_allowed": True,
+        "target_date": "2026-09-29", "source_tuning_allowed": True,
         "rows": [{"evaluation_key": "forward"}],
     })
     combined = compact.auxiliary_population_projection(current, old_path.parent)
@@ -456,20 +456,20 @@ def test_forward_compact_candidate_plan_has_independent_selection(tmp_path):
         "status": "candidate_selected",
         "candidate_prompt_version": candidate,
     })
-    old_plan = compact._candidate_plan_path(tmp_path, "2026-09-29", candidate)
+    old_plan = compact._candidate_plan_path(tmp_path, "2026-09-28", candidate)
     compact.write(old_plan, compact.sealed({
         "candidate_prompt_version": candidate,
         "candidate_selection": selected,
     }))
-    assert compact.frozen_candidate_selection(tmp_path, "2026-09-29") == selected
-    assert compact.frozen_candidate_selection(tmp_path, "2026-09-30") is None
-    new_plan = compact._candidate_plan_path(tmp_path, "2026-09-30", candidate)
+    assert compact.frozen_candidate_selection(tmp_path, "2026-09-28") == selected
+    assert compact.frozen_candidate_selection(tmp_path, "2026-09-29") is None
+    new_plan = compact._candidate_plan_path(tmp_path, "2026-09-29", candidate)
     assert new_plan != old_plan
     compact.write(new_plan, compact.sealed({
         "candidate_prompt_version": candidate,
         "candidate_selection": selected,
     }))
-    assert compact.frozen_candidate_selection(tmp_path, "2026-09-30") == selected
+    assert compact.frozen_candidate_selection(tmp_path, "2026-09-29") == selected
 
 
 def test_auxiliary_population_reads_archived_source_with_same_hash(tmp_path):
@@ -978,6 +978,57 @@ def test_compact_signed_owner_cf_forward_holdout_positive_and_corruption():
     proof["chronological_validation"]["holdout_consumed"] = False
     proof["metrics"]["response_coverage"] = 0.9
     assert not compact.promotion_valid(compact.sealed(proof), **kwargs)
+
+
+def test_compact_first_forward_day_can_promote_with_disjoint_chronological_pairs():
+    from datetime import timedelta
+
+    rows = [operating_compact_row("2026-09-29", i) for i in range(40)]
+    start = datetime.fromisoformat("2026-09-29T09:00:00+09:00")
+    for index, row in enumerate(rows):
+        row["decision_ts"] = (start + timedelta(seconds=index)).isoformat()
+    metrics = compact.evaluate(rows, {row["evaluation_key"]: compact_result(row) for row in rows})
+    proof = full_compact_proof()
+    proof["target_date"] = "2026-09-29"
+    proof["metrics"] = metrics
+    proof["owner_execution_model_validation"]["source_date"] = "2026-09-29"
+    selection = {k: v for k, v in proof["candidate_selection"].items()
+                 if k != "artifact_content_sha256"}
+    selection["same_day_holdout_keys"] = [row["evaluation_key"] for row in rows[20:]]
+    proof["candidate_selection"] = compact.sealed(selection)
+    scopes, _ = compact.scope_candidate_validation(metrics["pairs"], rows,
+        {"scope_coverage": metrics["scope_coverage"]},
+        {"candidate_selection": proof["candidate_selection"]},
+        candidate=proof["candidate_prompt_version"],
+        now=datetime.fromisoformat("2026-09-29T20:00:00+09:00"))
+    proof["scope_validation"] = scopes
+    proof["candidate_frozen_at"] = scopes["KRX|KRX_REGULAR"]["candidate_frozen_at"]
+    proof["chronological_validation"] = scopes["KRX|KRX_REGULAR"]["chronological_validation"]
+    kwargs = dict(incumbent=proof["incumbent_prompt_version"],
+        selected=proof["candidate_prompt_version"], source_manifest_sha256="d" * 64)
+    assert compact.promotion_valid(compact.sealed(proof), **kwargs)
+    proof["chronological_validation"]["holdout_pairs"][0]["decision_ts"] = rows[0]["decision_ts"]
+    proof["scope_validation"]["KRX|KRX_REGULAR"]["chronological_validation"] = proof["chronological_validation"]
+    assert not compact.promotion_valid(compact.sealed(proof), **kwargs)
+
+
+def test_compact_first_forward_day_direction_excludes_same_day_holdout():
+    from datetime import timedelta
+
+    rows = [operating_compact_row("2026-09-29", i) for i in range(70)]
+    start = datetime.fromisoformat("2026-09-29T09:00:00+09:00")
+    for index, row in enumerate(rows):
+        row["decision_ts"] = (start + timedelta(seconds=index)).isoformat()
+    projection = compact.sealed(dict(target_date="2026-09-29",
+        source_projection_contract=compact.SOURCE_PROJECTION_CONTRACT,
+        projection_contract_sha256=compact.digest(compact.CONTRACT),
+        source_tuning_allowed=True,
+        owner_execution_model_validation=full_compact_proof()["owner_execution_model_validation"],
+        rows=rows, **compact.AUTHORITY))
+    selection = compact.candidate_direction_selection([projection])
+    assert selection["status"] == "candidate_selected"
+    assert selection["same_day_holdout_keys"] == [row["evaluation_key"] for row in rows[49:]]
+    assert selection["scope_evidence"]["KRX|KRX_REGULAR|KRX"]["learning_ready"] is True
 
 
 @pytest.mark.parametrize("promote", [False, True])

@@ -2,9 +2,9 @@
 
 ## 결정
 
-- 후속 정책 갱신의 첫 원천일은 `2026-09-30`이다. 선택되어 실제 소비되는 정책을 incumbent로 사용하고, 이전 원천의 누적 성과를 새 후보의 표본·비교·승계 근거로 사용하지 않는다. 과거 대상일의 재현은 기존 `2026-06-05` 계약으로 유지한다.
+- 후속 정책 갱신의 첫 원천일은 `2026-09-29`이다. 선택되어 실제 소비되는 정책을 incumbent로 사용하고, 9/28 이전 원천의 누적 성과를 새 후보의 표본·비교·승계 근거로 사용하지 않는다. 오늘 장후 작업은 오늘 원천으로 실행한다.
 - 새 표본이 없거나 source/terminal/cost 영수증이 부족하면 후보를 보류한다. 결손을 0 성과로 기록하지 않는다.
-- 6~8월 raw 파일 삭제는 아직 실행하지 않았다. 안전 조건을 확인한 뒤 해당 파일만 제거한다.
+- 6~8월 원천 JSONL/압축 파일 2,030개를 삭제했다. 정책·주문·source-quality 영수증과 파생 분석 자료는 보존했다.
 
 ## 확인한 장후 입력 경로
 
@@ -17,7 +17,7 @@
 
 원천 품질 감사, 당일 outcome label 생산, 선택 정책 조회와 미종결 주문 확인은 동일한 학습 표본이 아니다. 각 경로의 날짜·custody 용도를 구분하며 원자료 삭제 전 소비자를 재대사한다.
 
-## 2026-09-29 19:20 KST 점검 증거
+## 2026-09-29 19:20 KST 이전 점검 증거
 
 | 경로 | 6월 | 7월 | 8월 | 분류 |
 | --- | ---: | ---: | ---: | --- |
@@ -29,10 +29,16 @@
 
 월별 개수는 경로 또는 파일명에 해당 `YYYY-MM`이 들어간 일반 파일의 재귀 집계다. `pipeline_events`의 archive receipt 12개는 모두 9월 파일이며 6~8월 파일에는 해당 receipt가 없다. Parquet 존재만으로 JSONL과의 바이트·행·계약 동등성이 증명되지는 않는다.
 
-`data/runtime/runtime_release_selection.json`이 선택한 릴리스는 `samsung-main-route-restore-20260929-45bc11e1` (`45bc11e19ccdc75278bb6d263c16a4bcf5937461`)이다. Main PID `1454744`의 cwd도 이 릴리스 `src`였다. 크론의 `THRESHOLD_CYCLE_POSTCLOSE`는 평일 20:10에 `deploy/run_runtime_release.sh postclose`를 호출한다. 이 점검 시 장후 프로세스는 실행 중이지 않았으며, 작업공간의 새 로더는 선택 릴리스에 반영되지 않았다.
+당시 선택 릴리스는 `samsung-main-route-restore-20260929-45bc11e1` (`45bc11e19ccdc75278bb6d263c16a4bcf5937461`)이었다. 아래 현행 선택 릴리스 및 삭제 영수증으로 대체되었다.
 
-## 삭제 전 남은 확인
+## 2026-09-29 19:36 이후 현행 상태
 
-1. 수정 코드의 리뷰·검증을 닫고, 장후 소비 릴리스가 전진 입력 계약을 실제로 선택했는지 확인한다. 선택 경로, 크론, 실제 장후 프로세스와 이전/rollback 릴리스를 각각 대사한다.
-2. 6~8월 raw별 독립 보관본 또는 무손실 투영과 복원 영수증을 확인하고, source-quality exclusion·주문/custody·미종결 이력·열린 FD 의존성을 대사한다. 검증되지 않은 파일은 보존한다.
-3. 검증된 파일만 경로·크기·SHA-256·삭제 시각을 영수증에 남겨 제거하고, 이후 장후 source gap과 custody 회귀를 확인한다. 재계산으로 과거 수익을 새 정책의 성과로 승격하지 않는다.
+- 선택 릴리스 `integrated-machine-forward-20260929-4baaa98a` (`4baaa98ae8a715b477aafce0526b325f0a9b84d4`)가 Main PID `1507866`에서 실행 중이다. `bash deploy/run_runtime_release.sh postclose 2026-09-29 --print-plan`은 같은 릴리스의 장후 wrapper를 가리키고 `--check-cron`은 통과했다.
+- 공유 `data/source_quality/clean_baseline_policy.json`의 `policy_refresh_start_date`를 `2026-09-29`로 조정했고, 선택 릴리스의 helper가 오늘과 다음 날짜에 같은 시작일을 반환함을 확인했다. 오늘 `pipeline_events`, AI payload와 `threshold_events` 원천 파일이 존재한다.
+- 20:10 장후 본 작업·DONE controller·튜닝 후속과 다음 날 05:00 최종화 cron은 활성 상태다. 9/29 wrapper에서 구형 전체 기간을 요구하는 저가 후보 확장 단계만 설치된 cron env `THRESHOLD_CYCLE_RUN_LOW_PRICE_TWO_LEG_CANDIDATE_RECOMMENDATION=false`로 끈다. 한때 설치했던 전체 장후 건너뛰기 규칙은 정확히 원복했다.
+- [삭제 계획](../../data/source_quality/deletion_manifests/old_raw_2026-06_to_2026-08_20260929.plan.json)의 SHA-256은 `aa3e3cdd957a64acd8997b319501b0b471d8726ba88b069d7e83b861e8cd1aff`다. [삭제 영수증](../../data/source_quality/deletion_manifests/old_raw_2026-06_to_2026-08_20260929.plan.receipt.json)은 원천 파일 2,030개, 8,435,551,672 bytes의 제거와 잔여 파일 0개를 기록한다. 대상 파일의 열린 FD는 제거 직전 `lsof` 검사에서 0개였다.
+- 삭제 범위는 `pipeline_events`, AI decision payload/trace/request/prompt/outcome, threshold 날짜 파티션과 threshold event, gatekeeper snapshot, entry candidate lifecycle event, entry odds raw prediction, 과거 연구용 market data의 날짜별 JSONL/압축 파일이다. `analytics` Parquet, `source_quality/raw_row_exclusion`, report, policy, runtime 및 주문 custody, 오늘 원천은 제거 대상이 아니다. 과거 원본의 복구 가능성을 보장하는 독립 archive 영수증은 없으므로 과거 원천 재생은 퇴역한다.
+
+## 남은 자연 검증
+
+오늘 장후의 실제 시작·완료, 당일 원천만의 소비, 각 stage의 source gap/valid-empty/표본 부족 구분, controller 및 다음 날 최종화 영수증을 확인한다. 코드·라우팅 확인과 자연 생성·비용 후 성과는 별도다.

@@ -26,7 +26,7 @@ LEGACY_TEST_RESEARCH_PROFILES = {
 }
 
 
-@pytest.mark.parametrize("day", ["2026-09-30", "2026-10-01"])
+@pytest.mark.parametrize("day", ["2026-09-29", "2026-09-30", "2026-10-01"])
 def test_expanded_research_rejects_unmigrated_forward_window(day):
     with pytest.raises(ValueError, match="forward_candidate_research_window_not_migrated"):
         expanded.main(["--target-date", day])

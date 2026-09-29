@@ -9141,6 +9141,9 @@ def build_winrate_policy_report(rows, *, source_receipt, target_date, data_root=
     excluded = Counter()
     prepared, seen = [], set()
     for row in population:
+        if row.get('source_date', '') < _refresh_floor(target_date):
+            excluded['before_policy_refresh_start'] += 1
+            continue
         trace = row.get('decision_trace_id')
         if not trace or trace in seen:
             excluded['attempt_identity_missing_or_duplicate'] += 1
@@ -9175,7 +9178,7 @@ def build_winrate_policy_report(rows, *, source_receipt, target_date, data_root=
         value = strategy._number(feat.get('curr_vs_micro_vwap_bp'))
         available = feat.get('micro_vwap_available') is True
         fresh = feat.get('minute_candle_window_fresh') is True
-        prepared.append(dict(source_date=row['source_date'], decision_trace_id=trace,
+        prepared.append(dict(source_date=row['source_date'], decision_ts=row.get('decision_ts'), decision_trace_id=trace,
             opportunity_id=_machine_opportunity_id(row), parent_action=decision['action'],
             base_action=base_decision['action'],
             net_path_pct=net_path_pct,
@@ -9188,6 +9191,8 @@ def build_winrate_policy_report(rows, *, source_receipt, target_date, data_root=
     initial = 'entry_situation_veto' not in parent
     pending_initial = initial and target_date > '2026-09-23'
     pending_bundle = None
+    first_day_split = False
+    split_keys = None
     if pending_initial:
         pending_bundle = load(data_root=data_root, target_date=next_target(publication_day))
         selection = (pending_bundle or {}).get('winrate_selection') or {}
@@ -9213,10 +9218,33 @@ def build_winrate_policy_report(rows, *, source_receipt, target_date, data_root=
                 or any(not isinstance(day, str) or day <= '2026-09-23' for day in receipt['holdout_dates'])):
                 raise ValueError('winrate_holdout_consumption_invalid')
             consumed.update(receipt.get('holdout_dates') or [])
-        fresh_dates = [day for day in dates if day > '2026-09-23' and day not in consumed]
-        holdout_dates = fresh_dates[-2:] if len(fresh_dates) >= 2 else []
+        fresh_dates = [day for day in dates if day >= _refresh_floor(target_date) and day not in consumed]
+        holdout_dates = fresh_dates[-1:] if fresh_dates else []
         train_dates = [day for day in dates if day not in holdout_dates]
+        # On the first forward day, freeze a chronological opportunity split.
+        # Every attempt of one opportunity stays in the same half. A later day
+        # uses all earlier forward days for learning and its fresh day for test.
+        first_day_split = bool(len(dates) == 1 and dates == [target_date]
+                               and holdout_dates == [target_date])
+        split_keys = None
+        if first_day_split:
+            clocks = defaultdict(list)
+            for row in prepared:
+                try:
+                    stamp = datetime.fromisoformat(row['decision_ts'])
+                    if stamp.tzinfo is None or stamp.astimezone(KST).date().isoformat() != target_date:
+                        raise ValueError('wrong_day')
+                    clocks[row['opportunity_id']].append(stamp.isoformat())
+                except (TypeError, ValueError):
+                    clocks = {}
+                    break
+            ordered = sorted((min(times), key) for key, times in clocks.items())
+            cutoff = max(1, int(len(ordered) * .7))
+            split_keys = ({key for _, key in ordered[:cutoff]},
+                          {key for _, key in ordered[cutoff:]}) if len(ordered) >= 2 else (set(), set())
+            train_dates = [target_date]
         train_values = sorted({row['value_bp'] for row in prepared if row['source_date'] in train_dates
+                               and (not first_day_split or row['opportunity_id'] in split_keys[0])
                                and row['base_action'] == 'ENTER_NOW' and row['value_bp'] is not None})
         thresholds = (train_values if len(train_values) <= 9 else sorted({
             train_values[min(len(train_values) - 1, int((len(train_values) - 1) * q / 10))]
@@ -9227,8 +9255,16 @@ def build_winrate_policy_report(rows, *, source_receipt, target_date, data_root=
         return [row for row in source if
             (row['parent_action'] == 'ENTER_NOW' if threshold is None else
              row['base_action'] == 'ENTER_NOW' and (row['value_bp'] is None or row['value_bp'] < threshold))]
-    train = [row for row in prepared if row['source_date'] in train_dates]
-    holdout = [row for row in prepared if row['source_date'] in holdout_dates]
+    train = [row for row in prepared if row['source_date'] in train_dates
+             and (not first_day_split or row['opportunity_id'] in split_keys[0])]
+    holdout = [row for row in prepared if row['source_date'] in holdout_dates
+               and (not first_day_split or row['opportunity_id'] in split_keys[1])]
+    split_receipt = (dict(schema='chronological_opportunity_split_v1',
+        train_opportunities=sorted(split_keys[0]), holdout_opportunities=sorted(split_keys[1]),
+        accepted_opportunity_count=len({row['opportunity_id'] for row in prepared}),
+        train_last_ts=max((row['decision_ts'] for row in train), default=None),
+        holdout_first_ts=min((row['decision_ts'] for row in holdout), default=None))
+        if first_day_split else None)
     baseline_train, baseline_holdout = (_winrate_opportunity_metrics(selected(part, None))
                                        for part in (train, holdout))
     def paired_net_delta(part, candidate_rows):
@@ -9249,7 +9285,7 @@ def build_winrate_policy_report(rows, *, source_receipt, target_date, data_root=
         metrics = _winrate_opportunity_metrics(train_selected)
         kept_winners = {row['decision_trace_id'] for row in train_selected if row['win']}
         eligible_train = (initial or (
-            len(metrics['source_dates']) >= 3
+            len(metrics['source_dates']) >= 1
             and metrics['selected_opportunity_count'] >= 30
             and baseline_train['selected_opportunity_count'] > 0
             and metrics['selected_opportunity_count'] >= .5 * baseline_train['selected_opportunity_count']
@@ -9292,8 +9328,11 @@ def build_winrate_policy_report(rows, *, source_receipt, target_date, data_root=
             or candidate_holdout['winning_attempt_count'] != 3):
             errors.append('initial_frozen_reproduction_mismatch')
     elif not pending_initial:
-        if len(train_dates) < 3 or len(holdout_dates) < 2 or not holdout_dates or holdout_dates[0] <= '2026-09-23':
+        if not train_dates or not holdout_dates or holdout_dates[0] < _refresh_floor(target_date):
             errors.append('successor_independent_dates_insufficient')
+        if first_day_split and (not split_keys[0] or not split_keys[1]
+            or not split_receipt['train_last_ts'] < split_receipt['holdout_first_ts']):
+            errors.append('successor_chronological_opportunity_split_invalid')
         if candidate_holdout['source_dates'] != holdout_dates:
             errors.append('successor_holdout_date_coverage_insufficient')
         if not chosen:
@@ -9417,6 +9456,7 @@ def build_winrate_policy_report(rows, *, source_receipt, target_date, data_root=
         candidate_threshold_bp=threshold, candidate_search_count=len(thresholds),
         candidate_holdout_opportunity_manifest_sha256=holdout_opportunity_manifest_sha256,
         train_dates=train_dates, holdout_dates=holdout_dates,
+        chronological_opportunity_split=split_receipt,
         consumed_holdout_dates=sorted(consumed) if not initial else [],
         input_attempt_count=len(scope_rows), accepted_attempt_count=len(prepared),
         source_contract_excluded_count=len(scope_rows)-len(population),

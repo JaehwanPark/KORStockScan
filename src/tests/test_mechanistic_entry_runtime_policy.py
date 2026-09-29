@@ -224,7 +224,7 @@ def test_winrate_stage_requires_explicit_preopen_activation(tmp_path, monkeypatc
     successor_path = tmp_path / 'successor_report.json'
     policy._atomic_write_json(successor_path, successor)
     monkeypatch.setattr(policy, '_winrate_successor_hurdles_valid', lambda _source: True)
-    with pytest.raises(ValueError, match='winrate_candidate_contract_invalid'):
+    with pytest.raises(ValueError, match='winrate_stage_source_invalid'):
         policy.stage_winrate_policy(successor_path, data_root=tmp_path,
             now=datetime(2026, 10, 1, 20, tzinfo=policy.KST))
 
@@ -330,25 +330,25 @@ def test_winrate_carry_reuses_existing_immutable_generation_after_source_repair(
     assert target_path.read_bytes() == original_bundle
 
 
-def test_winrate_successor_publisher_rechecks_both_holdout_dates_and_winrate_hurdles():
+def test_winrate_successor_publisher_rechecks_fresh_holdout_and_winrate_hurdles():
     report = {'target_date': '2026-10-01',
-        'train_dates': ['2026-09-24', '2026-09-28', '2026-09-29'],
-        'holdout_dates': ['2026-09-30', '2026-10-01'], 'consumed_holdout_dates': [],
+        'train_dates': ['2026-09-29', '2026-09-30'],
+        'holdout_dates': ['2026-10-01'], 'consumed_holdout_dates': [],
         'baseline': {
-            'train': {'source_dates': ['2026-09-24', '2026-09-28', '2026-09-29'],
+            'train': {'source_dates': ['2026-09-29', '2026-09-30'],
                 'selected_attempt_count': 40, 'selected_opportunity_count': 40,
                 'winning_attempt_count': 24, 'win_rate_pct': 60.0,
                 'support_adjusted_win_rate_pct': 50.0},
-            'holdout': {'source_dates': ['2026-09-30', '2026-10-01'],
+            'holdout': {'source_dates': ['2026-10-01'],
                 'selected_attempt_count': 20, 'selected_opportunity_count': 20,
                 'winning_attempt_count': 12, 'win_rate_pct': 60.0,
                 'support_adjusted_win_rate_pct': 45.0}},
         'candidate': {
-            'train': {'source_dates': ['2026-09-24', '2026-09-28', '2026-09-29'],
+            'train': {'source_dates': ['2026-09-29', '2026-09-30'],
                 'selected_attempt_count': 32, 'selected_opportunity_count': 32,
                 'winning_attempt_count': 23, 'win_rate_pct': 71.875,
                 'support_adjusted_win_rate_pct': 58.0},
-            'holdout': {'source_dates': ['2026-09-30', '2026-10-01'],
+            'holdout': {'source_dates': ['2026-10-01'],
                 'selected_attempt_count': 16, 'selected_opportunity_count': 16,
                 'winning_attempt_count': 11, 'win_rate_pct': 68.75,
                 'support_adjusted_win_rate_pct': 52.0}}}
@@ -363,7 +363,7 @@ def test_winrate_successor_publisher_rechecks_both_holdout_dates_and_winrate_hur
     one_day['candidate']['holdout']['source_dates'] = ['2026-09-30']
     assert not policy._winrate_successor_hurdles_valid(one_day)
     reused = copy.deepcopy(report)
-    reused['consumed_holdout_dates'] = ['2026-09-30']
+    reused['consumed_holdout_dates'] = ['2026-10-01']
     assert not policy._winrate_successor_hurdles_valid(reused)
     weak = copy.deepcopy(report)
     weak['candidate']['holdout']['support_adjusted_win_rate_pct'] = 49.0

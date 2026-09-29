@@ -5706,7 +5706,7 @@ def test_winrate_opportunity_metric_uses_binary_labels_and_unique_opportunities(
     assert _winrate_opportunity_metrics([])['win_rate_pct'] is None
 
 
-def test_winrate_successor_requires_selected_opportunities_on_both_holdout_dates(monkeypatch, tmp_path):
+def test_winrate_successor_requires_selected_opportunities_on_fresh_holdout_day(monkeypatch, tmp_path):
     from src.engine.scalping import entry_strategy_policy as strategy
     from src.engine.scalping import entry_setup_evidence as setup_owner
     from src.engine.scalping import mechanistic_entry_runtime_policy as runtime_policy
@@ -5728,8 +5728,8 @@ def test_winrate_successor_requires_selected_opportunities_on_both_holdout_dates
     for day in ('2026-09-22', '2026-09-23', '2026-09-28'):
         rows += [(day, 10.0, True, i) for i in range(30)]
         rows += [(day, 60.0, False, i + 30) for i in range(10)]
-    rows += [('2026-09-29', 10.0, True, i) for i in range(20)]
-    rows += [('2026-09-29', 60.0, False, i + 20) for i in range(10)]
+    rows += [('2026-09-29', 10.0, True, i) for i in range(40)]
+    rows += [('2026-09-29', 60.0, False, i + 40) for i in range(10)]
     rows += [('2026-09-30', 100.0, False, i) for i in range(20)]
     population = []
     for day, value, win, index in rows:
@@ -5744,7 +5744,7 @@ def test_winrate_successor_requires_selected_opportunities_on_both_holdout_dates
     report = calibration.build_winrate_policy_report(population,
         source_receipt={'target_date': '2026-09-30'}, target_date='2026-09-30', data_root=tmp_path)
 
-    assert report['candidate']['holdout']['source_dates'] == ['2026-09-29']
+    assert report['candidate']['holdout']['source_dates'] == []
     assert report['candidate_search_count'] == 2
     assert report['disposition'] == 'incumbent_carried'
     assert 'successor_holdout_date_coverage_insufficient' in report['hurdle_errors']
@@ -5758,9 +5758,52 @@ def test_winrate_successor_requires_selected_opportunities_on_both_holdout_dates
     passing = calibration.build_winrate_policy_report(complete,
         source_receipt={'target_date': '2026-09-30'}, target_date='2026-09-30', data_root=tmp_path)
     assert passing['disposition'] == 'successor_selected'
-    assert passing['candidate']['holdout']['source_dates'] == ['2026-09-29', '2026-09-30']
+    assert passing['candidate']['holdout']['source_dates'] == ['2026-09-30']
     assert len(passing['candidate_holdout_opportunity_manifest_sha256']) == 64
     assert runtime_policy.winrate_market_census_valid(passing)
+
+
+def test_winrate_first_forward_day_uses_chronological_opportunity_holdout(monkeypatch, tmp_path):
+    from copy import deepcopy
+    from datetime import datetime, timedelta
+    from src.engine.scalping import entry_strategy_policy as strategy
+    from src.engine.scalping import entry_setup_evidence as setup_owner
+    from src.engine.scalping import mechanistic_entry_runtime_policy as runtime_policy
+
+    parent = {'strategy': {}, 'entry_situation_veto': calibration._winrate_veto_payload(68.75)}
+    monkeypatch.setattr(runtime_policy, 'load_effective', lambda **_: {'bundle_sha256': 'a' * 64})
+    monkeypatch.setattr(runtime_policy, 'for_cohort', lambda *_: {'machine_policy': parent})
+    monkeypatch.setattr(calibration, '_common_refinement_population',
+        lambda _paired, rows, **_: (rows, {'row_exclusion_reason_counts': {}}))
+    monkeypatch.setattr(calibration, '_machine_path_value', lambda _row: (0, None))
+    monkeypatch.setattr(calibration, '_machine_opportunity_id', lambda row: row['decision_trace_id'])
+    monkeypatch.setattr(strategy, 'completed_bar_rows', lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(setup_owner, 'validate_mechanistic_entry_threshold_policy', lambda _policy: [])
+    monkeypatch.setattr(calibration, 'mechanistic_entry_policy_decision',
+        lambda setup, *, policy: {'action': 'ENTER_NOW' if 'entry_situation_veto' not in policy
+            or setup['strategy_raw_input']['features']['curr_vs_micro_vwap_bp'] < 68.75 else 'BLOCK'})
+    start = datetime(2026, 9, 29, 9, tzinfo=calibration.KST)
+    rows = []
+    for index in range(100):
+        good = index < 40 or 70 <= index < 90
+        raw = {'features': {'curr_vs_micro_vwap_bp': 10.0 if good else 60.0,
+            'micro_vwap_available': True, 'minute_candle_window_fresh': True}}
+        rows.append({'source_date': '2026-09-29', 'decision_ts': (start + timedelta(seconds=index)).isoformat(),
+            'effective_venue': 'KRX', 'session_bucket': 'KRX_REGULAR',
+            'decision_trace_id': f'today:{index:03}',
+            'setup_evidence': {'strategy_raw_input': raw, 'strategy_raw_sha256': strategy.digest(raw)},
+            'entry_quality_path': {'first_hit': 'net_target_first' if good else 'exact_stop_first'}})
+    report = calibration.build_winrate_policy_report(rows,
+        source_receipt={'target_date': '2026-09-29'}, target_date='2026-09-29', data_root=tmp_path)
+    assert report['disposition'] == 'successor_selected'
+    assert report['train_dates'] == report['holdout_dates'] == ['2026-09-29']
+    assert report['chronological_opportunity_split']['accepted_opportunity_count'] == 100
+    assert report['candidate']['train']['selected_opportunity_count'] >= 30
+    assert report['candidate']['holdout']['selected_opportunity_count'] >= 10
+    assert runtime_policy._winrate_successor_hurdles_valid(report)
+    broken = deepcopy(report)
+    broken['chronological_opportunity_split']['holdout_opportunities'][0] = broken['chronological_opportunity_split']['train_opportunities'][0]
+    assert not runtime_policy._winrate_successor_hurdles_valid(broken)
 
 
 def test_winrate_pending_initial_does_not_rerun_frozen_census(monkeypatch, tmp_path):

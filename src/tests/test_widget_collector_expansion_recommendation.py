@@ -601,14 +601,14 @@ def test_collector_forward_window_skips_old_payload_and_starts_new_anchor(tmp_pa
     for folder in (payload_dir, replay_dir, output_dir):
         folder.mkdir()
     (payload_dir / "ai_decision_payloads_2026-08-18.jsonl").write_bytes(b"invalid old raw\n")
-    (payload_dir / "ai_decision_payloads_2026-09-30.jsonl").write_text(
-        '{"captured_at":"2026-09-30T09:00:00+09:00"}\n')
+    (payload_dir / "ai_decision_payloads_2026-09-29.jsonl").write_text(
+        '{"captured_at":"2026-09-29T09:00:00+09:00"}\n')
     manifest = rec.history_input_manifest(
-        payload_dir, replay_dir, through_date=date(2026, 9, 30),
+        payload_dir, replay_dir, through_date=date(2026, 9, 29),
         sentinel_dir=tmp_path / "sentinel", watch_config_path=tmp_path / "config.json")
     assert manifest["payload_file_count"] == 1
-    assert rec.history_anchor_issues(output_dir, date(2026, 9, 30), manifest) == []
-    assert rec.history_anchor_issues(output_dir, date(2026, 10, 1), manifest) == [
+    assert rec.history_anchor_issues(output_dir, date(2026, 9, 29), manifest) == []
+    assert rec.history_anchor_issues(output_dir, date(2026, 9, 30), manifest) == [
         "collector_history_anchor_missing"]
 
 

@@ -10,7 +10,7 @@
 
 - 장중 runtime 변경은 사용자 명시 지시가 있을 때만 기존 `bounded_tunable` 단일 축에 한해 허용한다. fresh/conflict-free source, 유효 effective price, 단일 blocker 인과, same-stage owner 비충돌, before/after·PID/env provenance·rollback·즉시 attribution을 모두 남긴다. hard safety, stale/conflict, price freshness, broker/account/order/quantity/cooldown, provider, bot, cap, 요청수량은 변경하거나 우회하지 않는다.
 - 튜닝 데이터 기준은 `clean_tuning_baseline_date=2026-06-05`, `clean_tuning_baseline_ts_kst=2026-06-05T00:00:00+09:00`이다. 기준 이전 raw/report/analytics artifact는 archive/audit evidence로만 보고 EV/rolling/MTD/cumulative tuning, live-auto promotion, runtime approval, pattern lab promotion, real execution quality approval 입력으로 쓰지 않는다.
-- 개편 정책의 후속 갱신 입력은 현재 적용 정책을 incumbent로 고정하고 2026-09-30 이후 자연 원천부터 수집한다. 9/29 이전 자료는 새 기계·compact·직접 family 후보의 학습·비교·승계에 넣지 않는다. 원천 결손과 표본 부족은 성과 0으로 대체하지 않는다.
+- 개편 정책의 후속 갱신 입력은 현재 적용 정책을 incumbent로 고정하고 2026-09-29 당일 자연 원천부터 수집한다. 9/28 이전 자료는 새 기계·compact·직접 family 후보의 학습·비교·승계에 넣지 않는다. 오늘 장후 본 작업과 후속 작업은 예약대로 실행하며 원천 결손과 표본 부족은 성과 0으로 대체하지 않는다.
 - Baseline 이후 raw source-quality contract 결손은 날짜 전체 차단이 아니라 결손 row/window를 `raw_row_exclusion`으로 제외하는 것이 기본이다. 전체 block은 preflight missing/invalid, row/window exclusion 실패, 또는 결손을 안정적으로 특정할 수 없는 high-volume no-contract 상황에만 사용한다.
 - 장중과 장후에는 `observation_source_quality_audit --write` 또는 최신 artifact로 raw source-quality를 반복 확인한다. Hard contract gap은 결손 row/window 제외 또는 `source_quality_blocked` 없이는 튜닝 입력에 들어갈 수 없고, unknown-token warning은 hard block이 아니더라도 code-improvement workorder handoff 확인 대상이다.
 - provider transport/provenance 확인은 threshold 값, 주문가/수량 guard, 스윙 dry-run guard 변경과 분리한다.
@@ -47,8 +47,8 @@
 
 - [ ] `[PostcloseForwardPolicyWindowAndRawRetirement0930] 현재 정책 기준 미래 장후 표본 및 6~8월 raw 퇴역` (`Due: 2026-09-29`, `Slot: POSTCLOSE`, `TimeWindow: 19:00~21:40`, `Track: RuntimeStability`)
   - Source: [forward evidence policy](../../data/source_quality/clean_baseline_policy.json), [운영 runbook](../time-based-operations-runbook.md).
-  - 완료 기준: 활성 장후 생산자·소비자의 입력 날짜와 정책 identity를 전수 대사해 2026-09-30 이후 자연 표본만 새 후보에 사용한다. 선택된 정책·이전 릴리스·실제 PID·systemd/cron 소비와 6~8월 raw의 archive/downstream/custody·열린 FD를 확인한 뒤 검증된 파일만 해시·삭제 영수증과 함께 제거한다. 장후 source gap, valid-empty, 표본 부족은 각각 구분한다.
-  - 권한 경계: 기존 정책·주문·provider·threshold·hard safety를 변경하지 않으며 이전 raw 삭제가 오늘 장후 구형 로더를 깨뜨리지 않게 한다. 코드 검증, 릴리스 선택, 자연 장후 결과, 비용 후 성과를 구분한다.
+  - 완료 기준: 활성 장후 생산자·소비자의 입력 날짜와 정책 identity를 대사해 2026-09-29 당일 자연 표본부터 새 후보에 사용한다. Main 기계판정·compact 보조 AI의 첫날 시간순 학습·검증 분리와 현 정책 대비 승계 조건을 검증하고, 다음 날부터 새 정책 구간의 적격 표본을 누적한다. 선택된 릴리스·실제 PID·cron 소비, 당일 raw 존재와 6~8월 raw의 열려 있는 FD를 확인하고 과거 raw의 파일별 해시·삭제 영수증을 남긴다. 장후 source gap, valid-empty, 표본 부족은 각각 구분한다.
+  - 권한 경계: 오늘 20:10 장후 본 작업·DONE controller·튜닝 후속과 다음 날 최종화는 실행한다. 구형 전체 기간 입력을 요구하는 저가 확장 후보 단계만 설치된 cron env로 OFF한다. 기존 정책·주문·provider·threshold·hard safety를 변경하지 않으며 정책·주문·source-quality 영수증을 보존한다. 코드 검증, 릴리스 선택, 자연 장후 결과, 비용 후 성과를 구분한다.
 
 - [ ] `[DirectFamilyScopeDecisionMainMechanisticEntry] main_mechanistic_entry 직접 family 지원 범위 계약 확정` (`Due: 2026-09-29`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~21:40`, `Track: RuntimeStability`)
   - Source: [runtime_approval_summary_2026-09-28.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-09-28.json)

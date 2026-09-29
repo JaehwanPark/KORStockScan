@@ -1496,16 +1496,45 @@ def _winrate_successor_hurdles_valid(source: dict) -> bool:
     train_dates = source.get('train_dates')
     holdout_dates = source.get('holdout_dates')
     consumed = source.get('consumed_holdout_dates')
-    if (not isinstance(train_dates, list) or len(train_dates) < 3
-        or not isinstance(holdout_dates, list) or len(holdout_dates) != 2
+    split = source.get('chronological_opportunity_split')
+    one_day = (train_dates == holdout_dates == [source.get('target_date')]
+               and source.get('target_date', '') >= '2026-09-29')
+    if (not isinstance(train_dates, list) or not train_dates
+        or not isinstance(holdout_dates, list) or len(holdout_dates) != 1
         or not isinstance(consumed, list)
         or any(not isinstance(day, str) for day in [*train_dates, *holdout_dates, *consumed])
         or train_dates != sorted(set(train_dates))
         or holdout_dates != sorted(set(holdout_dates))
-        or max(train_dates) >= min(holdout_dates)
+        or (max(train_dates) >= min(holdout_dates) and not one_day)
         or max(holdout_dates) > str(source.get('target_date') or '')
-        or min(holdout_dates) <= '2026-09-23'
+        or min(holdout_dates) < '2026-09-29'
         or set(holdout_dates) & set(consumed)):
+        return False
+    if one_day:
+        if (not isinstance(split, dict) or split.get('schema') != 'chronological_opportunity_split_v1'
+            or not isinstance(split.get('train_opportunities'), list)
+            or not isinstance(split.get('holdout_opportunities'), list)
+            or not split['train_opportunities'] or not split['holdout_opportunities']
+            or split['train_opportunities'] != sorted(set(split['train_opportunities']))
+            or split['holdout_opportunities'] != sorted(set(split['holdout_opportunities']))
+            or set(split['train_opportunities']) & set(split['holdout_opportunities'])
+            or len(split['train_opportunities']) + len(split['holdout_opportunities'])
+               != split.get('accepted_opportunity_count')
+            or not isinstance(split.get('train_last_ts'), str)
+            or not isinstance(split.get('holdout_first_ts'), str)
+            or not split['train_last_ts'] < split['holdout_first_ts']):
+            return False
+        try:
+            train_end = datetime.fromisoformat(split['train_last_ts'])
+            holdout_start = datetime.fromisoformat(split['holdout_first_ts'])
+            if (train_end.tzinfo is None or holdout_start.tzinfo is None
+                or train_end.astimezone(KST).date().isoformat() != source['target_date']
+                or holdout_start.astimezone(KST).date().isoformat() != source['target_date']
+                or train_end >= holdout_start):
+                return False
+        except (KeyError, ValueError):
+            return False
+    elif split is not None:
         return False
     try:
         for day in [*train_dates, *holdout_dates, *consumed]:
@@ -1526,7 +1555,7 @@ def _winrate_successor_hurdles_valid(source: dict) -> bool:
         if (not isinstance(observed_dates, list)
             or observed_dates != sorted(set(observed_dates))
             or any(day not in expected_dates for day in observed_dates)
-            or (len(observed_dates) < 3 if part == 'train' else observed_dates != holdout_dates)):
+            or observed_dates != expected_dates):
             return False
         for metric in (old, new):
             if (type(metric.get('selected_opportunity_count')) is not int
@@ -1589,7 +1618,7 @@ def stage_winrate_policy(source_path: Path, *, data_root: Path, now: datetime | 
         or not winrate_market_census_valid(source)
         or (source.get('policy_version') == 'winrate_successor_v1'
             and source.get('candidate_threshold_bp') is not None
-            and len(source.get('holdout_dates') or []) == 2
+            and len(source.get('holdout_dates') or []) == 1
             and re.fullmatch(r'[0-9a-f]{64}', str(source.get('candidate_holdout_opportunity_manifest_sha256'))) is None)
         or source.get('disposition') not in {'initial_adopted', 'successor_selected', 'incumbent_carried'}):
         raise ValueError('winrate_stage_source_invalid')
@@ -1674,7 +1703,7 @@ def stage_winrate_policy(source_path: Path, *, data_root: Path, now: datetime | 
         holdout_path = None
         holdout_receipt = None
         if (disposition != 'initial_adopted' and source.get('candidate_threshold_bp') is not None
-            and len(source.get('holdout_dates') or []) == 2):
+            and len(source.get('holdout_dates') or []) == 1):
             if re.fullmatch(r'[0-9a-f]{64}', str(source.get('candidate_holdout_opportunity_manifest_sha256'))) is None:
                 raise ValueError('winrate_holdout_opportunity_manifest_missing')
             holdout_days = source['holdout_dates']
