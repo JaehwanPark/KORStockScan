@@ -1,6 +1,6 @@
 # 기계 비진입 후행경로·장후 정책 보완안 — 2026-09-29
 
-상태: **코드 구현·리뷰 검증 완료, 배포 및 자연 장후 수용 대기**. 이 문서는 스캐너·감시 큐의 실제 기계판정 증가가 장후 미진입 기회비용 입력 증가로 이어지는지 확인한 결과다. 주문·정책·배포 권한을 부여하지 않으며, 2026-09-29 장후 결과는 아직 생성 전이다.
+상태: **코드 구현·리뷰 검증·릴리스 배포 완료, 자연 장후 수용 대기**. 이 문서는 스캐너·감시 큐의 실제 기계판정 증가가 장후 미진입 기회비용 입력 증가로 이어지는지 확인한 결과다. 주문·정책 권한을 부여하지 않으며, 2026-09-29 장후 결과는 아직 생성 전이다.
 
 ## 판정과 근거
 
@@ -59,3 +59,10 @@
 - Kiwoom 공식 참조 확인: 2026-09-29 13:52 KST에 [Kiwoom 공식 저장소](https://github.com/Kiwoom-Securities/Kiwoom-REST-API) commit `953e5dbff123f437ab4d11a78a95191a685eb51f`의 `kiwoom/_data/kiwoom_api_spec.json` `ka10080`, `kiwoom/specs.py`, `kiwoom/core/client.py`, `kiwoom/realtime`, Postman을 확인했다. 이 revision에는 `kiwoom_docs` 디렉터리가 없었다. 실제 REST 요청 구성은 기존 공용 client를 재사용하며 이번 변경은 요청 route 선택·완료봉 후행 소비에 한정한다.
 - 남은 수용: 배포된 producer/PID에서 새 digest 영수증이 자연 생성되고 9/29 장후 완료봉 캐시·`main_machine_policy` stage가 생성된 뒤, 위 172건을 동일 시도 기준으로 재측정한다. [오늘 체크리스트](../checklists/2026-09-29-stage2-todo-checklist.md)의 `[MachineNonentryOutcomeLineageNaturalAcceptance0929]`가 수용 owner다. 배포·재기동, 과거 장후 재실행, 실주문·정책 변경은 이 코드 작업의 완료 주장에 포함하지 않는다.
 - 리뷰·검증: 결과 이중 기록 위험을 기존 스캐너 `zero_base_probe_result` 영수증 보강으로 해소했고, source-invalid 캡처, 동일 요청 코드의 세션별 빈 응답, 완료봉 응답의 요청 코드·기준일 불일치, 512경로 초과, 캐시 변조, 중복 캡처, 후행 첫 가격 공백을 회귀 대상으로 추가했다. 관련 877개 pytest, 수정 후 장후 캐시 검증 1개 pytest, Python compile, `git diff --check`, 문서 링크 확인 및 체크리스트 print-only parser를 통과했다. 테스트 중 실제 Kiwoom REST 조회, 주문, 장후 작업 재실행은 수행하지 않았다.
+
+## 2026-09-29 14:53 KST 배포·기동 영수증
+
+- 리뷰 후 추가 결함 없이 후행자료·스캐너·캡처·장후 단계 및 인접 런타임 1,314개 pytest, 영향 Python compile, `git diff --check`, 체크리스트 print-only parser를 재검증했다. 공식 Kiwoom HEAD는 `953e5dbff123f437ab4d11a78a95191a685eb51f`로 기존 검토 revision과 같았다. 실제 REST 조회나 주문은 테스트에 포함되지 않았다.
+- 검증한 17개 코드·테스트·문서 파일을 commit `5aa9eca96747a5f0bf68a68d25b939db6bd8487d`에 봉인했다. 미추적 9/28 원천 재구축 전 백업 2개와 별도 세션의 새 `test_sniper_scale_in.py` 수정은 이 릴리스에 포함하지 않았다. 불변 릴리스는 `/home/ubuntu/KORStockScan-runtime-releases/machine-nonentry-lineage-20260929-5aa9eca9`이며 이전 선택 영수증은 `tmp/machine-nonentry-selection-before-20260929T1450.json`에 보존했다.
+- `restart --print-plan`과 9/29 `postclose --print-plan`, 8개 cron 경로를 확인하고 승인된 Main 재기동을 수행했다. 새 PID `1372580`의 `/proc` cwd와 정책 bootstrap 검증이 선택 릴리스와 일치하며 `--check-release-set`이 PASS다. 두 비활성 장후 systemd 서비스도 이 릴리스로 pin을 갱신했고 timer는 active이며 수동 장후 계산은 실행하지 않았다.
+- 재기동 뒤 14:53:17~19 KST의 PID `1372580` 기계 캡처에서 `zero_base_probe_machine_only_v1` 단계와 해시가 실제 기록됐고, 14:53:21까지 probe 결과 `assessed` 2건에 캡처 digest가 붙었다. 기동 직후 `runtime_dependency_missing` 5건 이후 평가가 진행됐지만, 이 짧은 창은 장후 완료봉 수신·비용 결속·정책 승격·실현손익의 증거가 아니다. 다음 수용은 체크리스트 `[MachineNonentryOutcomeLineageNaturalAcceptance0929]`에 남는다.
