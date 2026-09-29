@@ -232,16 +232,16 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
     {
         "id": "log_rotation_cleanup",
         "log": "logs/log_rotation_cleanup_cron.log",
-        "window_start": (21, 55),
-        "window_end": (23, 55),
+        "window_start": (6, 0),
+        "window_end": (7, 20),
         "mode": "once",
         "critical": False,
     },
     {
         "id": "postclose_finalization",
         "log": "logs/postclose_finalization_cron.log",
-        "window_start": (21, 55),
-        "window_end": (23, 55),
+        "window_start": (6, 0),
+        "window_end": (7, 20),
         "mode": "once",
         "critical": True,
         "trading_day_only": True,
@@ -425,9 +425,9 @@ class CronCompletionDetector(BaseDetector):
                     issues.append(f"{jid}: finished with error after window end")
                     details[f"{jid}_status"] = "fail"
                 elif self._bounded_postclose_running(job, today_str):
-                    warnings.append(f"{jid}: exact-date owner running before 23:20")
+                    warnings.append(f"{jid}: exact-date owner running before effective-date 07:00")
                     details[f"{jid}_status"] = "in_progress"
-                    details[f"{jid}_running_deadline"] = "23:20"
+                    details[f"{jid}_running_deadline"] = "07:00 effective date"
                 elif past_window_end:
                     issues.append(f"{jid}: no completion marker after window end")
                     details[f"{jid}_status"] = "fail"

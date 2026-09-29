@@ -2,6 +2,7 @@
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/eod_terminal_gate.sh"
 
 # Bash reads scripts lazily.  An editor replacing this wrapper while a long
 # postclose run is active can therefore make the running shell parse a mixture
@@ -788,6 +789,8 @@ fi
 started_at="$(TZ=Asia/Seoul date +%FT%T%z)"
 write_postclose_status running started 0 0
 emit_postclose_marker "[START] threshold-cycle postclose target_date=$TARGET_DATE recovery_reuse=$POSTCLOSE_RECOVERY_REUSE_MODE started_at=$started_at"
+wait_for_eod_terminal "$PROJECT_DIR" "$TARGET_DATE" threshold-cycle \
+  "${THRESHOLD_CYCLE_EOD_WAIT_SEC:-5400}" "${THRESHOLD_CYCLE_EOD_WAIT_INTERVAL_SEC:-30}"
 stop_postclose_bot_if_requested
 
 verified_reused_module() {

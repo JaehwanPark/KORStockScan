@@ -257,17 +257,19 @@ def test_cleanup_failure_preserves_detector_handoff_but_not_success_marker(tmp_p
     assert "[DONE] postclose_finalization" not in result.stdout
 
 
-def test_finalization_reserves_same_date_margin_before_midnight():
+def test_finalization_reserves_morning_margin_before_preopen():
     script = WRAPPER.read_text(encoding="utf-8")
 
-    assert "POSTCLOSE_FINALIZATION_WAIT_TIMEOUT_SEC:-5100" in script
-    assert "POSTCLOSE_FINALIZATION_HARD_DEADLINE_KST:-23:20" in script
+    assert "POSTCLOSE_FINALIZATION_WAIT_TIMEOUT_SEC:-3600" in script
+    assert "POSTCLOSE_FINALIZATION_HARD_DEADLINE_KST:-07:00" in script
     assert "POSTCLOSE_FINALIZATION_CLEANUP_TIMEOUT_SEC:-600" in script
     assert "POSTCLOSE_FINALIZATION_DETECTOR_TIMEOUT_SEC:-600" in script
     assert "POSTCLOSE_FINALIZATION_SUMMARY_TIMEOUT_SEC:-600" in script
+    assert "POSTCLOSE_FINALIZATION_FINISH_BY_KST:-07:20" in script
     assert script.count('timeout --foreground "${') == 2
-    assert 'timeout --kill-after=10s "${SUMMARY_TIMEOUT_SEC}s"' in script
-    assert "reason=same_date_hard_deadline" in script
+    assert 'timeout --kill-after=10s "${summary_budget}s"' in script
+    assert "reason=effective_date_hard_deadline" in script
+    assert "--resolve-effective-today" in script
 
 
 @pytest.mark.parametrize(

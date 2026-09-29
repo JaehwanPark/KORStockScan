@@ -3,6 +3,7 @@
 set -u
 
 SCRIPT_PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$SCRIPT_PROJECT_DIR/deploy/eod_terminal_gate.sh"
 PROJECT_DIR="${KORSTOCKSCAN_PROJECT_DIR:-$SCRIPT_PROJECT_DIR}"
 PYTHON_BIN="${KORSTOCKSCAN_PYTHON_BIN:-$PROJECT_DIR/.venv/bin/python}"
 
@@ -43,6 +44,10 @@ if (($# >= 1)); then
   fi
   completed_target_date="$requested_target_date"
 fi
+
+wait_for_eod_terminal "$PROJECT_DIR" "$completed_target_date" machine-micro-final-refresh \
+  "${MACHINE_MICRO_FINAL_REFRESH_EOD_WAIT_SEC:-5400}" \
+  "${MACHINE_MICRO_FINAL_REFRESH_EOD_WAIT_INTERVAL_SEC:-30}" || exit $?
 
 # Bind publication to the completed source before a long run crosses midnight.
 export POSTCLOSE_POLICY_PUBLICATION_DATE="${POSTCLOSE_POLICY_PUBLICATION_DATE:-$completed_target_date}"

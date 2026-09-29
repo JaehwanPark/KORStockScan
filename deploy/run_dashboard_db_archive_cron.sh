@@ -2,6 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/eod_terminal_gate.sh"
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 VENV_PY="$PROJECT_DIR/.venv/bin/python"
 RETENTION_DAYS="${1:-1}"
@@ -12,6 +13,8 @@ cd "$PROJECT_DIR"
 started_at="$(TZ=Asia/Seoul date +%FT%T%z)"
 echo "[START] dashboard_db_archive target_date=${TARGET_DATE} retention_days=${RETENTION_DAYS} started_at=${started_at}"
 trap 'failed_at="$(TZ=Asia/Seoul date +%FT%T%z)"; echo "[FAIL] dashboard_db_archive target_date=${TARGET_DATE} failed_at=${failed_at}"' ERR
+wait_for_eod_terminal "$PROJECT_DIR" "$TARGET_DATE" dashboard_db_archive \
+  "${DASHBOARD_ARCHIVE_EOD_WAIT_SEC:-5400}" "${DASHBOARD_ARCHIVE_EOD_WAIT_INTERVAL_SEC:-30}"
 PYTHONPATH=. "$VENV_PY" -m src.engine.compress_db_backfilled_files --days "$RETENTION_DAYS" >> "$PROJECT_DIR/logs/dashboard_db_archive.log" 2>&1
 finished_at="$(TZ=Asia/Seoul date +%FT%T%z)"
 echo "[DONE] dashboard_db_archive target_date=${TARGET_DATE} retention_days=${RETENTION_DAYS} finished_at=${finished_at}"

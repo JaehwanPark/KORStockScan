@@ -211,7 +211,8 @@ def test_all_operations_pin_release_and_target_date(release, op):
     assert str(root) in " ".join(plan["command"])
     assert "existing_exact_date_gates_unchanged" == plan["policy_authority"]
     if op in router.OWNED or op == "paired-replay":
-        assert plan["command"][-1] == "2026-09-11"
+        expected = "--resolve-effective-today" if op == "finalize" else "2026-09-11"
+        assert plan["command"][-1] == expected
     if op == "start":
         assert f"PYTHONPATH={root}" in plan["command"][-1]
         assert plan["cwd"] == str(root / "src")
@@ -264,7 +265,10 @@ def test_cron_preserves_unrelated_env_schedule_date_and_logs(tmp_path):
     assert after.count("run_runtime_release.sh") == len(router.CRON_TARGETS)
     assert "AI_ENTRY_SETUP_PAIRED_REPLAY_POSTCLOSE" not in after
     assert after.count("KEEP_POLICY_ENV=true") == len(router.TAGS)
-    assert after.count("$(TZ=Asia/Seoul date +\\%F)") == len(router.OWNED)
+    assert after.count("$(TZ=Asia/Seoul date +\\%F)") == len(router.OWNED) - 1
+    assert "0 6 * * * KEEP_POLICY_ENV=true bash " in after
+    assert "POSTCLOSE_FINALIZATION_0600" in after
+    assert "POSTCLOSE_FINALIZATION_2155" not in after
     assert after.count(">> /preserved.log 2>&1") == len(router.TAGS)
     assert router.render_crontab(after, tmp_path) == after
 

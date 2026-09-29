@@ -34,10 +34,11 @@ TAGS = {
     "THRESHOLD_CYCLE_POSTCLOSE": "postclose",
     "POSTCLOSE_DONE_CONTROLLER": "controller",
     "TUNING_MONITORING_POSTCLOSE": "tuning",
-    "POSTCLOSE_FINALIZATION_2155": "finalize",
+    "POSTCLOSE_FINALIZATION_0600": "finalize",
     "UPDATE_KOSPI_EOD_2005": "eod",
     "DASHBOARD_DB_ARCHIVE_2050": "archive",
 }
+LEGACY_TAGS = {"POSTCLOSE_FINALIZATION_2155": "finalize"}
 CRON_TARGETS = frozenset({"start", *TAGS.values()})
 REQUIRED_CRON_TARGETS = CRON_TARGETS
 OPERATIONS = ("start", "restart", *OWNED, "paired-replay", "eod", "archive", "buy-funnel", "holding-exit-sentinel")
@@ -419,7 +420,7 @@ def make_plan(
             "--log",
             str(workspace / "logs" / f"{owner}.log"),
             str(root / "deploy" / f"run_{script}.sh"),
-            target_date,
+            "--resolve-effective-today" if operation == "finalize" else target_date,
         ]
     elif operation == "buy-funnel":
         command = ["/bin/bash", str(root / "deploy/run_buy_funnel_sentinel_intraday.sh"), target_date]
@@ -507,7 +508,7 @@ def render_crontab(original: str, workspace: Path) -> str:
             result.append(line)
             continue
         tag = line.rsplit("#", 1)[-1].strip() if "#" in line else ""
-        op = TAGS.get(tag)
+        op = TAGS.get(tag) or LEGACY_TAGS.get(tag)
         if tag == "RUNTIME_RELEASE_START" or (
             "/usr/bin/tmux new-session -d -s bot " in line
             and f"cd {workspace}/src " in line
@@ -548,9 +549,12 @@ def render_crontab(original: str, workspace: Path) -> str:
         arguments, marker, comment = tail.partition("#")
         if op in OWNED or op == "paired-replay":
             date_arg = r" $(TZ=Asia/Seoul date +\%F)"
-            if not arguments.startswith(date_arg):
+            if op == "finalize" and arguments.startswith(date_arg):
+                arguments = arguments[len(date_arg) :]
+            elif op != "finalize" and not arguments.startswith(date_arg):
                 raise ValueError(f"cron_target_date_unrecognized:{op}")
-            arguments = arguments[len(date_arg) :]
+            elif op != "finalize":
+                arguments = arguments[len(date_arg) :]
         # Do not accept --print-plan, an extra execution, or shell conditionals
         # as an installed scheduled worker. Preserve conventional log redirects.
         if not re.fullmatch(r"(?:\s+(?:>>?\s+[^\s;&|<>]+|2>&1))*\s*", arguments):
@@ -559,7 +563,15 @@ def render_crontab(original: str, workspace: Path) -> str:
             tail = tail.rstrip() + " # RUNTIME_RELEASE_START"
         elif op == "start" and comment.strip() != "RUNTIME_RELEASE_START":
             raise ValueError("cron_start_marker_unrecognized")
-        line = schedule + prefix + desired + tail
+        if op == "finalize":
+            schedule = "0 6 * * * "
+            redirections = arguments
+            line = (
+                schedule + prefix + desired + redirections.rstrip()
+                + " # POSTCLOSE_FINALIZATION_0600"
+            )
+        else:
+            line = schedule + prefix + desired + tail
         result.append(line)
     if not REQUIRED_CRON_TARGETS.issubset(seen) or len(seen) != len(set(seen)):
         raise ValueError("cron_target_missing_or_duplicate")
