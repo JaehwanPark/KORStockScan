@@ -14,6 +14,17 @@ from src.engine.monitoring.machine_recommendation_identity import bind_recommend
 DATE = "2026-09-09"
 
 
+def test_samsung_machine_entry_source_retired_after_cutover(tmp_path):
+    target = "2026-09-30"
+    report_dir = tmp_path / "data" / "report"
+    paths = mod.source_paths(report_dir, target)
+    assert "samsung_machine_entry_tuning" not in paths
+    assert "samsung_machine_entry_tuning" in mod.source_paths(report_dir, DATE)
+    result = mod.build_intake(report_dir, target)
+    assert result["sources"]["samsung_machine_entry_tuning"]["status"] == "retired_not_applicable"
+    assert "samsung_machine_entry_tuning" not in result["missing_sources"]
+
+
 def write(path, payload):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload))

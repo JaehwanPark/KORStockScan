@@ -174,6 +174,9 @@ class DBManager:
                         "ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS market_session_bucket TEXT;"
                     )
                 )
+                conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS watch_origin TEXT;"))
+                conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS watch_admission_id TEXT;"))
+                conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS watch_generation_id TEXT;"))
                 conn.execute(
                     text(
                         "ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS scanner_promotion_id TEXT;"
@@ -967,6 +970,7 @@ class DBManager:
                         scale_in_locked, hard_stop_price, trailing_stop_price,
                         entry_armed_at_epoch,
                         effective_venue, venue_resolution, market_session_bucket,
+                        watch_origin, watch_admission_id, watch_generation_id,
                         scanner_promotion_id, scanner_promotion_reason,
                         scanner_promotion_emitted_epoch,
                         scanner_source_signature as source_signature,

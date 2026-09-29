@@ -66,3 +66,34 @@
 - 검증한 17개 코드·테스트·문서 파일을 commit `5aa9eca96747a5f0bf68a68d25b939db6bd8487d`에 봉인했다. 미추적 9/28 원천 재구축 전 백업 2개와 별도 세션의 새 `test_sniper_scale_in.py` 수정은 이 릴리스에 포함하지 않았다. 불변 릴리스는 `/home/ubuntu/KORStockScan-runtime-releases/machine-nonentry-lineage-20260929-5aa9eca9`이며 이전 선택 영수증은 `tmp/machine-nonentry-selection-before-20260929T1450.json`에 보존했다.
 - `restart --print-plan`과 9/29 `postclose --print-plan`, 8개 cron 경로를 확인하고 승인된 Main 재기동을 수행했다. 새 PID `1372580`의 `/proc` cwd와 정책 bootstrap 검증이 선택 릴리스와 일치하며 `--check-release-set`이 PASS다. 두 비활성 장후 systemd 서비스도 이 릴리스로 pin을 갱신했고 timer는 active이며 수동 장후 계산은 실행하지 않았다.
 - 재기동 뒤 14:53:17~19 KST의 PID `1372580` 기계 캡처에서 `zero_base_probe_machine_only_v1` 단계와 해시가 실제 기록됐고, 14:53:21까지 probe 결과 `assessed` 2건에 캡처 digest가 붙었다. 기동 직후 `runtime_dependency_missing` 5건 이후 평가가 진행됐지만, 이 짧은 창은 장후 완료봉 수신·비용 결속·정책 승격·실현손익의 증거가 아니다. 다음 수용은 체크리스트 `[MachineNonentryOutcomeLineageNaturalAcceptance0929]`에 남는다.
+
+## 추가 범위: 보정되지 않은 진입 AI Score 의 판단·장후 튜닝 권한 제거 (OPEN)
+
+이 절은 위의 완료·배포 기록과 별개의 후속 변경 범위다. 9/29 진입 추적에서 compact AI `PASS` 뒤 생성된 호환 점수 75가 원격 진입 가드에 의해 `WAIT` 점수 74로 낮아진 사례가 확인됐다. `74 < BUY_SCORE_THRESHOLD 75`가 최초 `WAIT` 원인이라는 해석은 잘못이다. 이 수치는 독립적으로 검증·장후 보정된 성공확률이나 기대수익이 아니므로 행동 변경, 재판정 선택, 장후 모집단 선택 및 정책 승계의 근거로 쓰지 않는다. 기계정책의 비용 결속 `selection_score`와 미세구조 신호·체결가능성 지표는 이름에 score가 있어도 이 진입 AI Score와 구분한다.
+
+### 수리할 생산자·소비자
+
+1. 실시간: `ai_engine_openai.py`의 provider `confidence`→호환 `score` 합성, `sniper_state_handlers.py`의 BUY/WAIT 점수 경계, 숫자 일관성·강한 미세구조 조건부 재평가의 `60~74` 선택, 현재 OFF인 `score65_74_recovery_probe`의 WAIT→BUY 해제 경로를 함께 검토한다. 재판정이 필요하면 새 attempt·신선한 동일 scope 원천으로 기존 기계판정부터 다시 통과시키거나, 기계 `ENTER_NOW`에서만 기존 compact 보조판정기를 재호출한다. 이전 AI 점수만으로 진입·해제·재호출하지 않는다. 명시적 VETO/CAUTION, 원천 결손과 기존 가격·지연·브로커·수량·쿨다운·hard safety는 그대로 우선한다.
+2. 장후 모집단: `score_recovery_observation.py`는 관찰 적격성에 `60 <= score <= 74` 및 profile의 `min_score/max_score`를 요구한다. `wait6579_ev_cohort_report.py`도 같은 `ai_score` 범위로 raw·비용 적격 cohort와 EV 요약을 만든다. 따라서 미세구조 축만 탐색하더라도 입력 모집단이 보정되지 않은 AI Score에 의해 선택된다. 이 점수 기반 적격성·비교 cohort를 정책 튜닝 입력에서 제거하고, 남길 진단 행은 `diagnostic_only`와 원천·비용·censor 구분을 명시한다. 점수 없는 행을 0점 또는 0수익으로 대체하지 않는다.
+3. 장후 후보·승계: `score_recovery_economics.py`의 `score_recovery_real_net_v1` profile은 `min_score/max_score`를 고정 포함한 채 실현 순경제성으로 미세구조 후보를 검색한다. `operator_policy_succession.py`는 이 평가를 `score65_74_recovery_probe`의 PREOPEN 후보 검증에 재사용한다. 기존 점수 결속 family의 자동 후보 생성·승계·PREOPEN 적용 권한을 끊는다. 점수와 독립된 기계/compact 판정 및 실제 순경제성 기반 대안을 설계할 경우 새 모집단·정책 identity·독립 holdout·소유권·롤백 계약을 별도로 검증한다. 이미 발행된 영수증과 운영자 lock은 임의로 고치거나 해제하지 않는다.
+4. 전파 점검: 장후 report → 후보 manifest → policy succession → PREOPEN loader → 실제 PID까지 `ai_score`, `confidence`, `score60_74`, `score65_74`, `BUY_SCORE_THRESHOLD`의 **판단·튜닝** 사용처를 전수 확인한다. 점수는 원본 추적·사후 진단에만 남길 수 있다. 다른 의미의 기계 선택 점수, 체결가능성 점수, 비용 후 EV와 안전 가드는 이름만으로 제거하지 않는다.
+
+완료 판정은 동일 attempt에서 AI Score 값만 바꾸어도 기계·compact verdict와 신선한 원천이 같으면 행동·재평가 선택·장후 후보·승계가 바뀌지 않음을 확인하는 것이다. `PASS` 뒤의 별도 위험 veto와 점수 경계 효과를 구분하고, source gap·VETO·DANGER·브로커 차단은 계속 차단한다. 코드 리뷰·표적 검증 후에도 선택 릴리스, PREOPEN, PID 소비, 자연 주문·체결, 비용 후 성과는 각각 별도 영수증으로 판정한다. 아래 코드 구현은 아직 릴리스·PID·장후 재실행에 적용되지 않았다.
+
+### 2026-09-29 코드 구현·리뷰 기록 (릴리스 미적용)
+
+- compact·기존 진입 응답의 호환 `score`를 검증된 `BUY=75`, `WAIT=50`, `DROP=0` 행동 표시로 고정하고 원래 점수·provider confidence는 진단 필드에 보존했다. 원격 BUY 위험 가드가 `WAIT`로 바꾸면 기계 PASS 제출 후보·probe intent도 해제한다. BUY/WAIT 결정, 수치 불일치 재평가와 강한 미세구조 재호출은 점수대 대신 행동·응답 출처·계약·명시적 위험 verdict·신선한 기계 입력을 따른다. 명시적 VETO/CAUTION을 재호출로 우회하지 않는다.
+- 점수 기반 신규 `WAIT 60~79` 후보 기록, `score65_74_recovery_probe`의 신규·복원 해제, 점수 기준 `rising_missed_normal_buy_bridge`를 중단했다. 제출 직전 재시도·신뢰 판단은 점수 `>0` 대신 행동·원천·계약·trace로 판정하며 `DROP=0`도 신뢰 가능한 명시적 veto로 처리한다. 지연 신호와 보조 목표가는 점수의 크기를 사용하지 않는다. 기존 DANGER·source freshness·브로커·수량·쿨다운 가드는 독립적으로 남는다.
+- 새 score-recovery 관찰은 정책 적격 `False`이고 과거 점수대 부합 여부만 진단으로 남긴다. 보고서의 점수 cohort는 퇴역·진단 전용으로 표시한다. `score_recovery_economics.evaluate_policy()`는 후보 0·적용 불가를 반환하고 정책 승계는 새 score family 승격을 거부한다. 과거 영수증·operator lock 파일은 변경하지 않았다. 이는 새로운 점수 독립 정책을 승인하거나 자연 경제성을 입증하지 않는다.
+- 자기 리뷰에서 과거 해제 상태의 재사용, `DROP` 점수 0을 미평가로 잘못 처리하던 경로, 재평가 결과의 점수 재작성, 지연/가격 소유자의 점수 사용을 추가로 찾아 보완했다. 영향 Python 파일의 compile과 `git diff --check`를 통과했다. 별도 회귀 테스트·불변 릴리스·PREOPEN·실제 PID·장후 재실행은 아직 수행하지 않았으며 현재 체크리스트 `[EntryAiScoreAuthorityRemoval0929]`를 OPEN으로 둔다.
+- 추가 리뷰에서 진입 안전 재확인의 `AI Score > 60`, 약한 AI 미세구조 가드의 숫자 경계, 제출 후 가격 재조정의 AI 점수 하한을 발견했다. 안전 재확인과 약한 AI 가드는 명시적 행동으로 판단한다. 가격 재조정은 원주문 AI 행동·계약·trace·snapshot이 결속되지 않은 과거 주문을 보류한다. `DANGER` 지연 완화에도 동일 원주문 계약을 요구한다. 지연 신호의 행동 입력은 신뢰 표시와 동일 attempt trace 일치까지 확인한다. 이 경로의 기존 미세구조·호가·수량·브로커 가드는 유지한다. 관측 품질 검사에서 허용하는 중립 `score_prior_band`·`score_prior_confidence` 값을 사용한다.
+- 장후 `entry_hurdle_backtest`의 점수 60~74 재확인 가상 건수를 개선 총계에서 제외하고 퇴역 진단으로 명시했다. 유동성 재평가의 `AI Score < 75` 제외 조건은 명시적 `BUY` 행동·신뢰 출처·신선도 확인으로 바꿨으며, 결손 행은 원천 결손으로 제외한다. `AI WAIT` 후속 작업은 점수대 재확인이 아닌 행동·원천·결과 결속 감사로 바꿨다. 해당 보고서의 가상 수량 계산은 원래부터 AI Score를 무시하는 것을 확인했다.
+- Big-Bite 특징의 점수 가산도 중단했다. Big-Bite 자체 확인·차단은 유지하며 `big_bite_boost_value=0`을 기록해 더 이상 가산 점수가 있다는 오해를 만들지 않는다.
+
+### 2026-09-29 추가 코드 리뷰·수리
+
+- 점수 기반 회복 probe 함수만 퇴역시키고 호출부의 `WAIT → BUY` 분기를 남긴 결함을 발견해 실제 실행 분기를 제거했다. 함수 결과를 강제로 `allowed=True`로 바꾸는 회귀에서도 주문·해제 이벤트가 없어야 한다. 기존 점수대 영수증 해석 헬퍼는 과거 자료 대사용으로만 남긴다.
+- 보통 SCALPING 주문의 제출 후 가격 재조정이 원주문 AI 계약 부재로 전부 보류되는 결함을 수정했다. 성공한 제출 시 같은 attempt의 `BUY`, 신뢰 출처, `pass` 계약, trace·snapshot 일치를 원주문에 고정하고 자식 주문까지 전달한다. 기존 계약 없는 주문은 AI 점수로 권한을 보충하지 않는다.
+- 시뮬레이터의 위험 구간 분류에 남은 진입 AI 점수 하한을 제거하고 동일 미세구조에서 점수 0·64·99의 분류 불변성을 확인했다. 출처가 없는 AI 행동을 음성 판정으로 기록하던 경로는 독립 `source gap`으로 분리했다. 조건검색 진입 호환 응답의 `confidence`는 보정된 확률처럼 보이지 않도록 `null`과 `uncalibrated_entry_ai_score` 상태를 기록한다.
+- 확장 회귀에서 매도 보류 영수증의 V2 세션 생산자가 `KRX_NXT_AFTERMARKET` 대문자를 쓰고 검증기는 소문자만 허용해 유효한 통합시장 매도를 차단하는 결함을 발견했다. 정규화 후 정확한 세 세션 이름만 허용하고 잘못된 접미사는 차단한다. 보유 AI 입력 5,454자 길이 초과는 같은 반응 지표의 이중 직렬화가 원인이었으며, 원본 값과 provenance를 별도 문맥에 유지한 채 중복 사본만 제거했다.
+- 회귀 검증 범위는 실시간 진입·주문 재조정·매도 영수증 1,504건과 AI 엔진·점수 기반 장후 cohort·경제성·승계 297건으로 모두 통과했다. 영향 Python compile, `git diff --check`, 문서 owner/link 확인 및 체크리스트 print-only parser도 통과했다. 이는 작업트리 코드 검증이며 현재 선택 릴리스·PID, PREOPEN 정책 소비, 자연 주문·체결 또는 비용 후 수익성의 영수증이 아니다.

@@ -2464,7 +2464,10 @@ def _common_refinement_population(
                     "evaluation_attempt_id", "stock_code",
                     "effective_venue", "session_bucket", "bundle_sha256",
                 ))
-                or (not allow_attempt_identity_fallback and not str(row.get("scanner_promotion_id") or "").strip())
+                or (not allow_attempt_identity_fallback
+                    and not str(row.get("scanner_promotion_id") or "").strip()
+                    and not (row.get("watch_origin") == "MAIN_FIXED_WATCH"
+                             and str(row.get("watch_admission_id") or "").strip()))
             ):
                 excluded["natural_machine_receipt_or_identity_invalid"] += 1
                 continue
@@ -2531,12 +2534,17 @@ def _common_refinement_population(
             excluded["paired_alias_of_natural_machine_attempt"] += 1
     result = sorted(accepted.values(), key=lambda r: (r["source_date"], r["decision_trace_id"]))
     sequence_groups = defaultdict(list)
+    def generation_identity(row):
+        if row.get("watch_origin") == "MAIN_FIXED_WATCH":
+            return row.get("watch_admission_id")
+        return row.get("scanner_promotion_id")
+
     natural_sequence_counts = Counter(
-        (r.get("source_date"), r.get("stock_code"), r.get("scanner_promotion_id"))
+        (r.get("source_date"), r.get("stock_code"), generation_identity(r))
         for r in natural_rows
     )
     for row in result:
-        key = (row.get("source_date"), row.get("stock_code"), row.get("scanner_promotion_id"))
+        key = (row.get("source_date"), row.get("stock_code"), generation_identity(row))
         sequence_groups[key].append(row)
     for key, rows in sequence_groups.items():
         original_count = natural_sequence_counts[key]
@@ -5039,6 +5047,9 @@ def load_machine_observation_rows(
                         "record_id": context.get("record_id")
                         or ai_trace.get("record_id"),
                         "scanner_promotion_id": scanner_promotion_id or None,
+                        "watch_origin": context.get("watch_origin"),
+                        "watch_admission_id": context.get("watch_admission_id"),
+                        "watch_generation_id": context.get("watch_generation_id"),
                         "scanner_promotion_identity_source": (
                             scanner_promotion_identity_source
                         ),
@@ -5206,6 +5217,16 @@ def _machine_ai_natural_source_receipt(data_root: Path, target_date: str) -> dic
 
 
 def _machine_evaluation_key(row: Mapping[str, Any], *, allow_attempt_fallback: bool = False) -> str:
+    if row.get("watch_origin") == "MAIN_FIXED_WATCH":
+        fixed_values = (
+            row.get("watch_admission_id"),
+            row.get("evaluation_attempt_id") or row.get("decision_trace_id"),
+            row.get("stock_code"), row.get("effective_venue"),
+            row.get("session_bucket"), row.get("bundle_sha256"),
+        )
+        if all(str(value or "").strip() for value in fixed_values):
+            return "machine-fixed:" + "|".join(str(value).strip() for value in fixed_values)
+        return ""
     values = (
         row.get("scanner_promotion_id"),
         row.get("evaluation_attempt_id") or row.get("decision_trace_id"),
@@ -5444,10 +5465,15 @@ def build_machine_decision_case_table(
     incomplete_attempt_identity_count = 0
     for row in sorted(rows, key=lambda item: str(item.get("decision_ts") or "")):
         action = str(row.get("machine_action") or "").upper()
+        source_identity = (
+            row.get("watch_admission_id")
+            if row.get("watch_origin") == "MAIN_FIXED_WATCH"
+            else row.get("scanner_promotion_id")
+        )
         exact_attempt_identity_complete = all(
             str(value or "").strip()
             for value in (
-                row.get("scanner_promotion_id"),
+                source_identity,
                 row.get("evaluation_attempt_id") or row.get("decision_trace_id"),
                 row.get("stock_code"),
                 row.get("effective_venue"),
@@ -5458,7 +5484,7 @@ def build_machine_decision_case_table(
         if not exact_attempt_identity_complete:
             incomplete_attempt_identity_count += 1
         attempt_key = (
-            str(row.get("scanner_promotion_id") or ""),
+            str(source_identity or ""),
             str(row.get("evaluation_attempt_id") or row.get("decision_trace_id") or ""),
             str(row.get("stock_code") or ""),
             str(row.get("effective_venue") or ""),
@@ -5639,6 +5665,9 @@ def build_machine_decision_case_table(
                 ),
                 "record_id": row.get("record_id"),
                 "scanner_promotion_id": row.get("scanner_promotion_id"),
+                "watch_origin": row.get("watch_origin"),
+                "watch_admission_id": row.get("watch_admission_id"),
+                "watch_generation_id": row.get("watch_generation_id"),
                 "scanner_promotion_identity_source": row.get(
                     "scanner_promotion_identity_source"
                 ),

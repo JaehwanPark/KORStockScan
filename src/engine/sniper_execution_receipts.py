@@ -4002,7 +4002,12 @@ def _validated_sell_pending_submit_context(
         return None, "pending_submit_effective_venue_invalid"
     if effective_venue == "KRX_NXT_INTEGRATED" and (
         route not in {"KRX", "NXT", "SOR"}
-        or not session_bucket.startswith("krx_nxt_aftermarket")
+        or session_bucket.lower()
+        not in {
+            "krx_nxt_aftermarket",
+            "krx_nxt_aftermarket_close_only",
+            "krx_nxt_aftermarket_terminal_exit",
+        }
     ):
         return None, "pending_submit_integrated_venue_context_invalid"
     if not session_bucket or len(session_bucket) > 128:

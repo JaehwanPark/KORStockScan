@@ -318,6 +318,7 @@ from src.engine.scalping.entry_reprice_after_submit import (
     POLICY_VERSION as ENTRY_REPRICE_POLICY_VERSION,
     RUNTIME_FAMILY as ENTRY_REPRICE_RUNTIME_FAMILY,
     EntryRepriceDecision,
+    _scout_parent_reprice_authority,
     evaluate_entry_reprice_after_submit,
 )
 from src.engine.scalping.market_data_enrichment import (
@@ -1031,6 +1032,8 @@ def _hydrate_scanner_promotion_runtime_context(
     if _SCANNER_FAST_PRECHECK_HYDRATION_FORBIDDEN.get():
         return {}
     if not isinstance(stock, dict):
+        return {}
+    if stock.get("watch_origin") == "MAIN_FIXED_WATCH":
         return {}
     anchor_epoch = _safe_float(stock.get("entry_armed_at_epoch"), 0.0)
     existing_promotion_epoch = _safe_float(
@@ -5504,7 +5507,6 @@ def _entry_ai_recheck_probe_state_fields(
         and parse_ok is not False
         and contract_status not in {"semantic_rejected", "schema_semantic_rejected"}
         and normalized_action in {"BUY", "WAIT", "DROP"}
-        and _safe_float(score, 0.0) > 0.0
         and trace_id
     )
     probe_intent = _trusted_entry_wait_probe_intent(
@@ -8251,14 +8253,12 @@ def _resolve_scalp_sim_panic_bottoming_entry_context(
     )
     large_sell = _boolish_true(reversal.get("large_sell_print_detected"))
 
-    min_score = _rule_float("SCALP_SIM_PANIC_BOTTOMING_MIN_AI_SCORE", 60.0)
     min_pressure = _rule_float("SCALP_SIM_PANIC_BOTTOMING_MIN_BUY_PRESSURE", 55.0)
     max_distance = _rule_float(
         "SCALP_SIM_PANIC_BOTTOMING_MAX_DISTANCE_FROM_HIGH_PCT", -3.0
     )
     min_strength = _rule_float("SCALP_SIM_PANIC_BOTTOMING_MIN_STRENGTH", 65.0)
     conditions = {
-        "ai_score": ai_score >= min_score,
         "buy_pressure": buy_pressure >= min_pressure,
         "distance_from_high": distance_from_high <= max_distance,
         "latest_strength": latest_strength >= min_strength,
@@ -12325,6 +12325,16 @@ def _log_entry_pipeline(stock, code, stage, **fields):
         if not key.startswith("entry_submit_attempt_")
     }
     record_id = stock.get("id") if isinstance(stock, dict) else None
+    fixed_watch_fields = (
+        {
+            "watch_origin": stock.get("watch_origin"),
+            "watch_admission_id": stock.get("watch_admission_id"),
+            "watch_generation_id": stock.get("watch_generation_id"),
+        }
+        if isinstance(stock, dict)
+        and stock.get("watch_origin") == "MAIN_FIXED_WATCH"
+        else {}
+    )
     scanner_venue_fields = (
         _scanner_runtime_event_venue_fields(stock)
         if (
@@ -12341,6 +12351,7 @@ def _log_entry_pipeline(stock, code, stage, **fields):
     merged_fields = _canonicalize_rising_missed_venue_fields(
         {
             **_scanner_promotion_correlation_fields(stock),
+            **fixed_watch_fields,
             **_rising_missed_tp1_observation_context_log_fields(stock),
             **_scalping_sizing_state_fields(stock),
             **scanner_venue_fields,
@@ -16099,16 +16110,6 @@ def _rising_missed_submit_safety_backoff_recovered(
         and not _boolish_true(stock.get("quote_stale"))
     )
     if reason_group == "stale_quote_with_weak_ai_or_strength":
-        ai_score = _safe_float(
-            _entry_submit_field(
-                ws_data,
-                stock,
-                key="ai_score",
-                aliases=("current_ai_score", "last_watching_ai_score", "rt_ai_score"),
-                default=None,
-            ),
-            None,
-        )
         ai_action = (
             str(
                 _entry_submit_field(
@@ -16137,9 +16138,7 @@ def _rising_missed_submit_safety_backoff_recovered(
             ),
             None,
         )
-        ai_recovered = bool(
-            ai_action == "BUY" or (ai_score is not None and ai_score > 60.0)
-        )
+        ai_recovered = ai_action == "BUY"
         strength_recovered = bool(
             strength_value is not None and strength_value >= 100.0
         )
@@ -18883,6 +18882,10 @@ def _scanner_promotion_correlation_fields(
             value = fast_precheck.get(key)
         if value not in (None, ""):
             fields[key] = value
+    if stock.get("watch_origin") == "MAIN_FIXED_WATCH":
+        for key in ("watch_origin", "watch_admission_id", "watch_generation_id"):
+            if stock.get(key) not in (None, ""):
+                fields[key] = stock[key]
     if _has_rising_missed_entry_lineage(stock):
         fields["rising_missed_entry_lineage"] = True
         fields["rising_missed_lineage_source"] = stock.get("rising_missed_lineage") or (
@@ -35405,10 +35408,10 @@ def _evaluate_real_weak_ai_micro_entry_block(
         .strip()
         .upper()
     )
-    if ai_score > max_ai_score:
+    if ai_action == "BUY":
         return {
             "blocked": False,
-            "reason": "ai_context_not_weak",
+            "reason": "explicit_buy_action_not_weak",
             "weak_ai_micro_entry_block_ai_score": f"{ai_score:.1f}",
             "weak_ai_micro_entry_block_ai_action": ai_action or "-",
             "weak_ai_micro_entry_block_max_ai_score": f"{max_ai_score:.1f}",
@@ -39747,13 +39750,7 @@ def _weak_ai_for_rising_missed_scout_quality_guard(
         and ai_score is not None
         and abs(ai_score - 50.0) < 0.0001
     )
-    ai_provenance_missing = bool(
-        (not ai_score_provenance_present and not ai_action_provenance_present)
-        or score_defaulted_without_action
-    )
-    weak_score = bool(
-        ai_score is not None and ai_score <= max_score and not ai_provenance_missing
-    )
+    ai_provenance_missing = not ai_action_provenance_present
     weak_action = bool(
         ai_action_provenance_present
         and ai_action in {"DROP", "WAIT", "NOT_EVALUATED", "UNAVAILABLE", "FAIL_CLOSED"}
@@ -39763,11 +39760,11 @@ def _weak_ai_for_rising_missed_scout_quality_guard(
         weak_source = "ai_unusable"
     elif weak_action:
         weak_source = "weak_ai_action"
-    elif weak_score:
-        weak_source = "weak_ai_score"
     elif ai_provenance_missing:
         weak_source = "ai_provenance_missing"
-    weak_ai = bool(unusable or weak_score or weak_action)
+    # Missing action provenance is a source gap, not a negative AI verdict.
+    # The caller has a separate stale-quote/source-gap veto for this case.
+    weak_ai = bool(unusable or weak_action)
     return weak_ai, {
         "rising_missed_scout_quality_guard_weak_ai": weak_ai,
         "rising_missed_scout_quality_guard_ai_score": (
@@ -40494,9 +40491,7 @@ def _entry_ai_submit_authority_fields(
         and stock_attempt_trusted
         and stock.get("last_watching_ai_attempt_zero_score_drop_trusted")
     )
-    stock_score_contract_valid = bool(
-        stock_score > 0.0 or stock_zero_score_drop_trusted
-    )
+    stock_score_contract_valid = stock_attempt_trusted
     stock_ai_fresh = bool(
         action_contract_enforced
         and stock_action_normalized not in {"", "-", "none", "not_evaluated"}
@@ -40517,7 +40512,11 @@ def _entry_ai_submit_authority_fields(
         and stock_zero_score_drop_trusted
     )
     selected_score_contract_valid = bool(
-        score > 0.0 or selected_zero_score_drop_trusted
+        normalized_action in {"buy", "wait", "drop"}
+        and (
+            not action_contract_enforced
+            or stock_attempt_trusted
+        )
     )
     fresh_prior = (
         result_source in {"live", "prior_valid"}
@@ -40530,7 +40529,8 @@ def _entry_ai_submit_authority_fields(
         action_contract_enforced and (not fresh_prior or not recognized_action)
     )
     fresh_drop_veto = bool(
-        action_contract_enforced and fresh_prior and normalized_action == "drop"
+        normalized_action == "drop"
+        and result_source in {"live", "prior_valid"}
     )
     wait_probe_intent_trace_aligned = bool(
         authoritative_action_source == "latest_stock_ai"
@@ -40578,9 +40578,12 @@ def _entry_ai_submit_authority_fields(
         "nat",
         "not_evaluated",
     }
-    missing_score = score <= 0.0
+    missing_decision = bool(
+        normalized_action not in {"buy", "wait", "drop"}
+        or result_source not in {"live", "prior_valid"}
+    )
     blocked = bool(
-        ((invalid_action or missing_score) and not fresh_prior)
+        ((invalid_action or missing_decision) and not fresh_prior)
         or fresh_drop_veto
         or wait_observation_only_veto
         or action_authority_unavailable
@@ -40602,8 +40605,8 @@ def _entry_ai_submit_authority_fields(
         reason = "entry_ai_result_stale_or_untrusted"
     elif action_authority_unavailable:
         reason = "entry_ai_action_conflict"
-    elif blocked and missing_score:
-        reason = "entry_ai_score_unavailable"
+    elif blocked and missing_decision:
+        reason = "entry_ai_decision_unavailable"
     elif blocked:
         reason = "entry_ai_action_not_evaluated"
 
@@ -40696,7 +40699,7 @@ def _resolve_latency_ai_signal_strength(
     *,
     now_ts: float | None = None,
 ) -> tuple[float, dict[str, Any]]:
-    """Prefer the latest trusted entry AI score over legacy probability fields."""
+    """Use a fresh entry action, never its uncalibrated numeric score."""
 
     stock = stock if isinstance(stock, dict) else {}
     observed_at = time.time() if now_ts is None else float(now_ts)
@@ -40722,10 +40725,16 @@ def _resolve_latency_ai_signal_strength(
     )
     max_age_sec = min(prior_max_age_sec, tight_max_age_sec)
     age_sec = max(0.0, observed_at - confirmed_at) if confirmed_at > 0.0 else None
+    trace_id = str(stock.get("last_watching_ai_decision_trace_id") or "").strip()
+    attempt_trace_id = str(
+        stock.get("last_watching_ai_attempt_decision_trace_id") or ""
+    ).strip()
     canonical_fresh = bool(
         action in {"BUY", "WAIT", "DROP"}
-        and score > 0.0
         and result_source in {"live", "prior_valid"}
+        and stock.get("last_watching_ai_attempt_trusted")
+        and trace_id
+        and trace_id == attempt_trace_id
         and age_sec is not None
         and age_sec <= max_age_sec
     )
@@ -40735,16 +40744,15 @@ def _resolve_latency_ai_signal_strength(
     resolved_strength = max(0.0, min(1.0, legacy_strength))
     source = "legacy_probability"
     if canonical_fresh:
-        resolved_strength = max(0.0, min(1.0, score / 100.0))
-        source = "latest_watching_ai"
+        resolved_strength = {"BUY": 0.75, "WAIT": 0.50, "DROP": 0.0}[action]
+        source = "latest_watching_ai_action"
     return resolved_strength, {
         "latency_ai_signal_authority_source": source,
         "latency_ai_signal_authority_action": (
             action if canonical_fresh else "not_authoritative"
         ),
-        "latency_ai_signal_authority_score": (
-            f"{score:.1f}" if canonical_fresh else f"{resolved_strength * 100.0:.1f}"
-        ),
+        "latency_ai_signal_authority_score": f"{resolved_strength * 100.0:.1f}",
+        "latency_ai_observed_legacy_score": f"{score:.1f}",
         "latency_ai_signal_authority_result_source": (
             result_source if canonical_fresh else "legacy"
         ),
@@ -40960,10 +40968,6 @@ def _evaluate_rising_missed_post_ai_hard_negative_submit_block(
         retry_fields.get("pre_submit_entry_ai_authority_retry_score"),
         _safe_float(stock.get("last_watching_ai_score"), 0.0),
     )
-    max_score = max(
-        0.0,
-        _env_float("KORSTOCKSCAN_RISING_MISSED_POST_AI_HARD_NEGATIVE_MAX_SCORE", 62.0),
-    )
     confirmed_at = _safe_float(stock.get("last_watching_ai_confirmed_at"), 0.0)
     ai_age_sec = max(0.0, float(now_ts) - confirmed_at) if confirmed_at > 0 else None
     max_ai_age_sec = max(
@@ -40984,7 +40988,6 @@ def _evaluate_rising_missed_post_ai_hard_negative_submit_block(
     )
     fresh_weak_ai = bool(
         action in {"WAIT", "DROP"}
-        and 0.0 < score <= max_score
         and result_source in {"live", "prior_valid"}
         and ai_age_sec is not None
         and ai_age_sec <= max_ai_age_sec
@@ -41800,7 +41803,6 @@ def _retry_entry_ai_submit_authority_before_block(
             and bool(ai_decision.get("ai_parse_ok", True))
             and contract_status not in {"semantic_rejected", "schema_semantic_rejected"}
             and action in {"BUY", "WAIT", "DROP"}
-            and score > 0.0
         )
         decision_trace_id = str(ai_decision.get("ai_decision_trace_id") or "")
         decision_snapshot_id = str(
@@ -41998,8 +42000,9 @@ def _retry_entry_ai_submit_authority_before_block(
                     "ok"
                     if retry_authority_success
                     else (
-                        "ai_score_unavailable"
-                        if score <= 0.0 and not transport_timeout
+                        "ai_decision_unavailable"
+                        if action not in {"BUY", "WAIT", "DROP"}
+                        and not transport_timeout
                         else (
                             "not_evaluated_transport_timeout"
                             if transport_timeout
@@ -42240,11 +42243,9 @@ def _maybe_recheck_fresh_spread_latency_with_ai(
         .strip()
         .lower()
     )
-    authority_score = _safe_float(authority.get("entry_ai_submit_authority_score"), 0.0)
     tight_fresh_authority = bool(
         authority_action in {"BUY", "WAIT"}
         and authority_result_source in {"live", "prior_valid"}
-        and authority_score > 0.0
         and ai_age_sec is not None
         and ai_age_sec <= max_ai_age_sec
     )
@@ -42324,7 +42325,6 @@ def _maybe_recheck_fresh_spread_latency_with_ai(
     tight_fresh_ai = bool(
         action in {"BUY", "WAIT"}
         and result_source in {"live", "prior_valid"}
-        and score > 0.0
         and ai_age_sec is not None
         and ai_age_sec <= max_ai_age_sec
     )
@@ -42380,7 +42380,7 @@ def _maybe_recheck_fresh_spread_latency_with_ai(
     if action not in {"BUY", "WAIT"}:
         fields["fresh_spread_ai_recheck_reason"] = "ai_action_not_buy_or_wait"
         return gate, snapshot, fields
-    if result_source not in {"live", "prior_valid"} or score <= 0.0:
+    if result_source not in {"live", "prior_valid"}:
         fields["fresh_spread_ai_recheck_reason"] = "ai_result_untrusted"
         return gate, snapshot, fields
     if not tight_fresh_ai:
@@ -42557,7 +42557,6 @@ def _maybe_apply_entry_passive_probe(
         str((stock or {}).get("last_watching_ai_action") or "").strip().upper()
     )
     watching_score = _safe_float((stock or {}).get("last_watching_ai_score"), 0.0)
-    min_score = float(_rule("SCALPING_ENTRY_PASSIVE_PROBE_MIN_AI_SCORE", 75) or 75)
     if watching_action != "WAIT":
         return candidate_price, {}
     max_qty = int(_rule("SCALPING_ENTRY_PASSIVE_PROBE_MAX_QTY", 1) or 1)
@@ -42582,7 +42581,7 @@ def _maybe_apply_entry_passive_probe(
     return adjusted_price, {
         "entry_order_lifecycle": "passive_probe",
         "entry_passive_probe_applied": True,
-        "entry_passive_probe_reason": "wait_score_danger_defensive_1share",
+        "entry_passive_probe_reason": "wait_action_danger_defensive_1share",
         "entry_passive_probe_original_price": _coerce_int_value(candidate_price),
         "entry_passive_probe_adjusted_price": _coerce_int_value(adjusted_price),
         "entry_passive_probe_floor_price": _coerce_int_value(floor_price),
@@ -42590,14 +42589,10 @@ def _maybe_apply_entry_passive_probe(
         "entry_passive_probe_max_below_bid_ticks": max_below_bid_ticks,
         "entry_passive_probe_ai_action": watching_action,
         "entry_passive_probe_ai_score": f"{watching_score:.1f}",
-        "entry_passive_probe_score_gate_converted_to_prior": True,
+        "entry_passive_probe_score_gate_converted_to_prior": False,
         "entry_passive_probe_hard_gate_veto": False,
-        "entry_passive_probe_score_prior_band": (
-            "supportive" if watching_score >= min_score else "low"
-        ),
-        "entry_passive_probe_ai_score_prior_weight": (
-            0.6 if watching_score >= min_score else -0.3
-        ),
+        "entry_passive_probe_score_prior_band": "diagnostic_only",
+        "entry_passive_probe_ai_score_prior_weight": 0.0,
         "entry_passive_probe_total_qty": total_qty,
     }
 
@@ -50069,18 +50064,10 @@ def _resolve_early_accel_recheck(
         ),
         "micro_vwap_usable": bool(features.get("micro_vwap_usable")),
         "quote_stale": bool(features.get("quote_stale")),
-        "score_gate_converted_to_prior": True,
+        "score_gate_converted_to_prior": False,
         "hard_gate_veto": False,
-        "score_prior_band": (
-            "supportive"
-            if _safe_float(current_ai_score, 50.0) >= get_entry_buy_score_threshold()
-            else "low"
-        ),
-        "ai_score_prior_weight": (
-            0.6
-            if _safe_float(current_ai_score, 50.0) >= get_entry_buy_score_threshold()
-            else -0.3
-        ),
+        "score_prior_band": "neutral_or_unknown",
+        "ai_score_prior_weight": 0.0,
     }
 
     if not _rule_bool("EARLY_ACCEL_RECHECK_RUNTIME_ENABLED", False):
@@ -50368,28 +50355,28 @@ def _resolve_early_accel_strong_bundle_recheck(
         return {"allowed": False, "skip_reason": "sim_or_probe_scope", **base}
     if action != "WAIT":
         return {"allowed": False, "skip_reason": "original_action_not_wait", **base}
-    min_score = max(0, _rule_int("EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MIN_SCORE", 60))
-    max_score = max(
-        min_score, _rule_int("EARLY_ACCEL_STRONG_BUNDLE_RECHECK_MAX_SCORE", 74)
-    )
-    numeric_score = _safe_float(ai_score, 0.0)
+    risk_verdict = str(
+        payload.get("decision_quality_model_risk_verdict")
+        or payload.get("risk_verdict")
+        or ""
+    ).upper()
+    if risk_verdict and risk_verdict != "PASS":
+        return {"allowed": False, "skip_reason": "explicit_ai_risk_not_pass", **base}
+    if (
+        str(payload.get("ai_result_source") or "").lower()
+        not in {"live", "prior_valid"}
+        or payload.get("ai_parse_ok") is not True
+        or str(payload.get("decision_quality_contract_status") or "").lower()
+        != "pass"
+    ):
+        return {"allowed": False, "skip_reason": "ai_source_untrusted", **base}
     base.update(
         {
-            "score_gate_converted_to_prior": True,
+            "score_gate_converted_to_prior": False,
             "hard_gate_veto": False,
-            "score_in_prior_band": bool(
-                float(min_score) <= numeric_score <= float(max_score)
-            ),
-            "score_prior_band": (
-                "supportive"
-                if float(min_score) <= numeric_score <= float(max_score)
-                else "low" if numeric_score < float(min_score) else "high"
-            ),
-            "ai_score_prior_weight": (
-                0.3
-                if float(min_score) <= numeric_score <= float(max_score)
-                else -0.2 if numeric_score < float(min_score) else 0.0
-            ),
+            "score_in_prior_band": False,
+            "score_prior_band": "neutral_or_unknown",
+            "ai_score_prior_weight": 0.0,
         }
     )
     if (
@@ -50486,9 +50473,9 @@ def _early_accel_strong_bundle_recheck_failure_class(recheck_action: str) -> str
     if action == "DROP":
         return "drop_action"
     if action == "BUY":
-        return "buy_score_below_min"
+        return "buy_action_unconsumed"
     if action == "WAIT":
-        return "wait_below_min_score"
+        return "wait_action"
     return "non_buy_action"
 
 
@@ -50743,21 +50730,12 @@ def _resolve_pre_submit_liquidity_relief(
         }
     if latency_state == "DANGER" and not latency_effectively_allowed:
         return {"allowed": False, "relief_skip_reason": "latency_danger", **base}
-    relief_min_ai_score = float(
-        _rule_int("PRE_SUBMIT_LIQUIDITY_RELIEF_MIN_AI_SCORE", 75)
-    )
-    relief_score = _safe_float(ai_score, 0.0)
     base.update(
         {
-            "score_gate_converted_to_prior": True,
+            "score_gate_converted_to_prior": False,
             "hard_gate_veto": False,
-            "score_prior_band": (
-                "supportive" if relief_score >= relief_min_ai_score else "low"
-            ),
-            "ai_score_prior_weight": (
-                0.6 if relief_score >= relief_min_ai_score else -0.3
-            ),
-            "min_ai_score": relief_min_ai_score,
+            "score_prior_band": "neutral_or_unknown",
+            "ai_score_prior_weight": 0.0,
         }
     )
     if not strong_bundle_path:
@@ -50952,25 +50930,30 @@ def _resolve_ai_numeric_consistency_recheck(
         return {"allowed": False, "skip_reason": "sim_or_probe_scope", **base}
     if action != "WAIT":
         return {"allowed": False, "skip_reason": "original_action_not_wait", **base}
+    risk_verdict = str(
+        payload.get("decision_quality_model_risk_verdict")
+        or payload.get("risk_verdict")
+        or ""
+    ).upper()
+    if risk_verdict and risk_verdict != "PASS":
+        return {"allowed": False, "skip_reason": "explicit_ai_risk_not_pass", **base}
+    if (
+        str(payload.get("ai_result_source") or "").lower()
+        not in {"live", "prior_valid"}
+        or payload.get("ai_parse_ok") is not True
+        or str(payload.get("decision_quality_contract_status") or "").lower()
+        != "pass"
+    ):
+        return {"allowed": False, "skip_reason": "ai_source_untrusted", **base}
     if not inconsistency:
         return {"allowed": False, "skip_reason": "no_numeric_inconsistency", **base}
-    score_floor = max(0, _rule_int("AI_NUMERIC_CONSISTENCY_RECHECK_MIN_SCORE", 60))
-    numeric_score = _safe_float(ai_score, 0.0)
     base.update(
         {
-            "score_gate_converted_to_prior": True,
+            "score_gate_converted_to_prior": False,
             "hard_gate_veto": False,
-            "score_in_prior_band": bool(float(score_floor) <= numeric_score <= 74.0),
-            "score_prior_band": (
-                "supportive"
-                if float(score_floor) <= numeric_score <= 74.0
-                else "low" if numeric_score < float(score_floor) else "high"
-            ),
-            "ai_score_prior_weight": (
-                0.3
-                if float(score_floor) <= numeric_score <= 74.0
-                else -0.2 if numeric_score < float(score_floor) else 0.0
-            ),
+            "score_in_prior_band": False,
+            "score_prior_band": "neutral_or_unknown",
+            "ai_score_prior_weight": 0.0,
         }
     )
     if stale_quote:
@@ -50985,12 +50968,6 @@ def _resolve_ai_numeric_consistency_recheck(
         1, _rule_int("AI_NUMERIC_CONSISTENCY_RECHECK_MIN_FEATURE_PASS_COUNT", 3)
     ):
         return {"allowed": True, "skip_reason": "allowed", **base}
-    if feature_pass_count >= 2 and 65.0 <= _safe_float(ai_score, 0.0) <= 74.0:
-        return {
-            "allowed": False,
-            "skip_reason": "strong_micro_override_candidate_only",
-            **base,
-        }
     return {
         "allowed": False,
         "skip_reason": "feature_bundle_below_recheck_floor",
@@ -56827,112 +56804,6 @@ def _score65_74_scanner_rising_micro_vwap_relief_allowed(
     return True, fields
 
 
-def _is_wait65_79_candidate(action, ai_score) -> bool:
-    if str(action or "WAIT").upper() == "BUY":
-        return False
-    try:
-        score = float(ai_score or 0.0)
-    except Exception:
-        return False
-    # Historical event name is retained; the active research band starts at 60.
-    return 60.0 <= score <= 79.0
-
-
-def _log_wait65_79_ev_candidate(
-    *,
-    stock,
-    code,
-    action,
-    ai_score,
-    ai_decision,
-    ws_data,
-    feature_probe,
-    ai_call_trigger_reason="-",
-):
-    from src.engine.scalping.score_recovery_observation import observation_fields
-
-    probe = feature_probe or {}
-    latency_state = (
-        str((ws_data or {}).get("latency_state", "") or "").strip().upper() or "-"
-    )
-    source_quality_fields = _ensure_ai_source_quality_fields(
-        _build_tick_source_quality_log_fields(probe),
-        stock,
-        not_evaluated_reason="wait65_79_ev_candidate_no_tick_audit",
-    )
-    _log_entry_pipeline(
-        stock,
-        code,
-        "wait65_79_ev_candidate",
-        action=str(action or "WAIT").upper(),
-        ai_score=f"{float(ai_score or 0.0):.1f}",
-        buy_pressure=f"{float(probe.get('buy_pressure', 0.0) or 0.0):.2f}",
-        tick_accel=f"{float(probe.get('tick_accel', 0.0) or 0.0):.3f}",
-        micro_vwap_bp=f"{float(probe.get('micro_vwap_bp', 0.0) or 0.0):.2f}",
-        latency_state=latency_state,
-        ai_call_trigger_reason=ai_call_trigger_reason or "-",
-        tuning_authority_excluded_reason=(
-            _entry_runtime_retry_exclusion_fields(ai_call_trigger_reason).get(
-                "tuning_authority_excluded_reason",
-                "-",
-            )
-        ),
-        **source_quality_fields,
-        parse_ok=bool((ai_decision or {}).get("ai_parse_ok", False)),
-        ai_response_ms=int((ai_decision or {}).get("ai_response_ms", 0) or 0),
-        terminal_blocker="-",
-        **observation_fields(
-            action=action,
-            score=ai_score,
-            decision=ai_decision or {},
-            probe=probe,
-            latency_state=latency_state,
-            source_blocked=_buy_recovery_probe_source_quality_hard_block(probe),
-            scope=_scanner_runtime_event_venue_fields(stock),
-            reference_price=(ws_data or {}).get("curr"),
-            policy={
-                "min_score": _rule_float("AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE", 60),
-                "max_score": _rule_float("AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE", 74),
-                "min_buy_pressure": _rule_float(
-                    "AI_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE", 65
-                ),
-                "min_tick_accel": _rule_float(
-                    "AI_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL", 1.2
-                ),
-                "min_micro_vwap_bp": _rule_float(
-                    "AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP", 0
-                ),
-            },
-        ),
-        **_build_observation_contract_fields("source_quality_gate"),
-    )
-
-
-_SCORE65_74_RECOVERY_PROBE_WAIT_NEGATIVE_REASON_TOKENS = (
-    "mixed signal",
-    "no clear",
-    "insufficient",
-    "unfavorable",
-    "below buy threshold",
-    "tick_acceleration_ratio below",
-    "tick acceleration below",
-    "absorption not confirmed",
-    "no clear two favorable",
-    "speed feature is unfavorable",
-    "하락",
-)
-
-
-
-
-
-
-
-
-
-
-
-
 def _score65_74_recovery_probe_wait_negative_reason(ai_decision) -> str:
     reason = str((ai_decision or {}).get("reason") or "").strip().lower()
     if not reason:
@@ -57570,228 +57441,12 @@ def _score65_74_recovery_probe_decision(
     code: str | None = None,
     now_ts: float | None = None,
 ) -> dict:
-    if not _rule_bool("AI_SCORE65_74_RECOVERY_PROBE_ENABLED", False):
-        return {
-            "allowed": False,
-            "evaluated": False,
-            "score65_74_recovery_probe_skip_reason": "disabled",
-        }
-    from src.engine.scalping.score_recovery_economics import (
-        runtime_profile,
-        runtime_scope_allowed,
-    )
-
-    if not runtime_scope_allowed(
-        _rule("AI_SCORE65_74_RECOVERY_PROBE_THRESHOLD_VERSION", "runtime_default"),
-        runtime_profile(_rule),
-        _scanner_runtime_event_venue_fields(stock or {}),
-    ):
-        return {
-            "allowed": False,
-            "evaluated": False,
-            "score65_74_recovery_probe_skip_reason": "approved_profile_or_scope_mismatch",
-        }
-    decision_contract_status = (
-        str((ai_decision or {}).get("decision_quality_contract_status") or "")
-        .strip()
-        .lower()
-    )
-    decision_reason = str((ai_decision or {}).get("reason") or "").strip().lower()
-    decision_score_semantics = (
-        str((ai_decision or {}).get("decision_quality_score_semantics") or "")
-        .strip()
-        .lower()
-    )
-    decision_evaluation_status = (
-        str((ai_decision or {}).get("decision_evaluation_status") or "").strip().lower()
-    )
-    decision_result_source = (
-        str(
-            (ai_decision or {}).get("ai_result_source")
-            or (ai_decision or {}).get("result_source")
-            or ""
-        )
-        .strip()
-        .lower()
-    )
-    input_preflight_status = (
-        str((ai_decision or {}).get("input_preflight_status") or "").strip().lower()
-    )
-    input_preflight_allowed = (ai_decision or {}).get("input_preflight_allowed")
-    if decision_evaluation_status.startswith("not_evaluated"):
-        return {
-            "allowed": False,
-            "evaluated": False,
-            "score65_74_recovery_probe_skip_reason": "ai_decision_not_evaluated",
-        }
-    if (
-        decision_result_source == "input_preflight_blocked"
-        or input_preflight_status == "blocked"
-        or input_preflight_allowed is False
-    ):
-        return {
-            "allowed": False,
-            "evaluated": False,
-            "score65_74_recovery_probe_skip_reason": "ai_input_preflight_blocked",
-        }
-    if (
-        decision_contract_status == "semantic_rejected"
-        or decision_reason == "decision_quality_v2_7_semantic_rejected"
-        or decision_score_semantics == "fail_closed_not_model_quality_score"
-    ):
-        return {
-            "allowed": False,
-            "evaluated": False,
-            "score65_74_recovery_probe_skip_reason": "ai_semantic_contract_rejected",
-        }
-    if bool((ai_decision or {}).get("ai_fallback_score_50", False)):
-        return {
-            "allowed": False,
-            "evaluated": False,
-            "score65_74_recovery_probe_skip_reason": "fallback_score_50",
-        }
-    decision_evidence = (
-        (ai_decision or {}).get("evidence")
-        if isinstance((ai_decision or {}).get("evidence"), dict)
-        else {}
-    )
-    if str(decision_evidence.get("adverse_risk") or "").strip().lower() == "blocking":
-        return {
-            "allowed": False,
-            "evaluated": True,
-            "score65_74_recovery_probe_skip_reason": (
-                "ai_blocking_adverse_risk_observation_only"
-            ),
-        }
-    if str((ai_decision or {}).get("action", "WAIT") or "WAIT").upper() == "BUY":
-        return {
-            "allowed": False,
-            "evaluated": False,
-            "score65_74_recovery_probe_skip_reason": "already_buy",
-        }
-
-    try:
-        score = float(ai_score or 0.0)
-    except Exception:
-        return {
-            "allowed": False,
-            "evaluated": False,
-            "score65_74_recovery_probe_skip_reason": "invalid_score",
-        }
-    if not math.isfinite(score):
-        return {
-            "allowed": False,
-            "evaluated": False,
-            "score65_74_recovery_probe_skip_reason": "invalid_score",
-        }
-    min_score = _rule_float("AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE", 60)
-    max_score = _rule_float("AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE", 74)
-    score_prior_fields = {
-        "score_gate_converted_to_prior": True,
-        "hard_gate_veto": False,
-        "score65_74_recovery_probe_score_in_prior_band": bool(
-            min_score <= score <= max_score
-        ),
-        "score_prior_band": (
-            "supportive"
-            if min_score <= score <= max_score
-            else "low" if score < min_score else "high"
-        ),
-        "ai_score_prior_weight": 0.3 if min_score <= score <= max_score else 0.0,
-    }
-    # Score remains a prior for evaluated model decisions, but neutral/fail-closed
-    # scores must never acquire BUY authority from microstructure alone.
-    if score <= 50.0:
-        return {
-            "allowed": False,
-            "evaluated": False,
-            "score65_74_recovery_probe_skip_reason": "neutral_or_fail_closed_score",
-            **score_prior_fields,
-        }
-
-    latency_state = str((ws_data or {}).get("latency_state", "") or "").strip().upper()
-    if latency_state == "DANGER":
-        return {
-            "allowed": False,
-            "evaluated": True,
-            "score65_74_recovery_probe_skip_reason": "latency_state_danger",
-            **score_prior_fields,
-        }
-
-    probe = feature_probe or _extract_buy_recovery_probe_features(
-        ai_engine,
-        ws_data,
-        recent_ticks,
-        recent_candles,
-    )
-    if not isinstance(probe, dict):
-        return {
-            "allowed": False,
-            "evaluated": True,
-            "score65_74_recovery_probe_skip_reason": "feature_probe_missing",
-            **score_prior_fields,
-        }
-    if _buy_recovery_probe_source_quality_hard_block(probe):
-        quote_stale_relief_allowed, quote_stale_relief_fields = (
-            _quote_stale_score65_74_probe_relief_allowed(
-                stock,
-                probe,
-            )
-        )
-        if quote_stale_relief_allowed:
-            probe = dict(probe)
-            probe["quote_stale"] = False
-        else:
-            return {
-                **_score65_74_recovery_probe_micro_guard(probe),
-                **quote_stale_relief_fields,
-                "allowed": False,
-                "evaluated": True,
-                "score65_74_recovery_probe_skip_reason": "source_quality_hard_block",
-                **score_prior_fields,
-            }
-    else:
-        quote_stale_relief_fields = {}
-    negative_reason = _score65_74_recovery_probe_wait_negative_reason(ai_decision)
-    if negative_reason:
-        return {
-            **_score65_74_recovery_probe_micro_guard(probe),
-            **quote_stale_relief_fields,
-            "allowed": False,
-            "evaluated": True,
-            "score65_74_recovery_probe_skip_reason": (
-                f"ai_wait_negative_reason_veto:{negative_reason}"
-            ),
-            **score_prior_fields,
-        }
-    guard = _score65_74_recovery_probe_repeat_guard(
-        stock,
-        code,
-        ws_data,
-        probe,
-        now_ts=now_ts,
-    )
-    micro_relief_allowed, micro_relief_fields = (
-        _score65_74_scanner_rising_micro_vwap_relief_allowed(
-            stock,
-            guard,
-        )
-    )
-    if micro_relief_allowed:
-        guard = {
-            **guard,
-            "allowed": True,
-            "score65_74_recovery_probe_skip_reason": "",
-        }
-    if quote_stale_relief_fields:
-        guard = {**guard, **quote_stale_relief_fields}
-    if micro_relief_fields:
-        guard = {**guard, **micro_relief_fields}
+    # This score-selected entry unlock has no calibrated score authority.
+    # Keep the historical receipt parser and state fields for reconciliation.
     return {
-        **guard,
-        **score_prior_fields,
-        "evaluated": True,
-        "allowed": bool(guard.get("allowed")),
+        "allowed": False,
+        "evaluated": False,
+        "score65_74_recovery_probe_skip_reason": "uncalibrated_ai_score_path_retired",
     }
 
 
@@ -57823,21 +57478,12 @@ def _resolve_wait6579_probe_entry_unlock(stock) -> dict:
         return {"unlocked": False, "source": "", "event_stage": ""}
     source = str((stock or {}).get("wait6579_probe_canary_source") or "")
     if source == "score65_74_recovery_probe":
-        armed_score = _safe_float(
-            (stock or {}).get("wait6579_probe_canary_score"),
-            None,
-        )
-        score_is_eligible = armed_score is not None and armed_score > 50.0
         return {
-            "unlocked": (
-                _rule_bool("AI_SCORE65_74_RECOVERY_PROBE_ENABLED", False)
-                and score_is_eligible
-            ),
+            "unlocked": False,
             "source": source,
             "event_stage": "score65_74_recovery_probe_entry_unlocked",
             "decision_source": "BUY_SCORE65_74_RECOVERY_PROBE",
-            "armed_score": armed_score,
-            "score_is_eligible": score_is_eligible,
+            "reason": "uncalibrated_ai_score_path_retired",
         }
     return {"unlocked": False, "source": source, "event_stage": ""}
 
@@ -57962,10 +57608,10 @@ def _entry_ai_watching_nonbuy_or_unusable(action, role_gate, *, wait_probe_unloc
 
 
 def _entry_ai_wait_drop_cooldown_sec(score, role_gate, config):
-    """Do not turn an unevaluated source or neutral score into an entry lock."""
+    """Only a trusted explicit DROP may start the non-entry cooldown."""
     if not bool((role_gate or {}).get("entry_score_usable_for_entry_submit")):
         return 0
-    if abs(_safe_float(score, 0.0) - 50.0) < 1e-9:
+    if str((role_gate or {}).get("entry_score_action") or "").upper() != "DROP":
         return 0
     return max(0, _safe_int(config.get("AI_WAIT_DROP_COOLDOWN"), 0))
 
@@ -58033,16 +57679,10 @@ def _scalp_ai_wait_rebound_recheck_decision(
             "ai_wait_rebound_recheck_anchor_score": f"{score:.1f}",
             "ai_wait_rebound_recheck_min_score": f"{min_score:.1f}",
             "ai_wait_rebound_recheck_max_score": f"{max_score:.1f}",
-            "ai_wait_rebound_recheck_score_gate_converted_to_prior": True,
+            "ai_wait_rebound_recheck_score_gate_converted_to_prior": False,
             "ai_wait_rebound_recheck_hard_gate_veto": False,
-            "ai_wait_rebound_recheck_score_prior_band": (
-                "candidate_band"
-                if min_score <= score <= max_score
-                else "outside_candidate_band"
-            ),
-            "ai_wait_rebound_recheck_ai_score_prior_weight": (
-                0.3 if min_score <= score <= max_score else 0.0
-            ),
+            "ai_wait_rebound_recheck_score_prior_band": "diagnostic_only",
+            "ai_wait_rebound_recheck_ai_score_prior_weight": 0.0,
         }
     )
     if action != "WAIT":
@@ -58404,16 +58044,10 @@ def _arm_ai_wait_rebound_recheck_anchor(
         {
             "ai_wait_rebound_anchor_min_score": f"{min_score:.1f}",
             "ai_wait_rebound_anchor_max_score": f"{max_score:.1f}",
-            "ai_wait_rebound_anchor_score_gate_converted_to_prior": True,
+            "ai_wait_rebound_anchor_score_gate_converted_to_prior": False,
             "ai_wait_rebound_anchor_hard_gate_veto": False,
-            "ai_wait_rebound_anchor_score_prior_band": (
-                "candidate_band"
-                if min_score <= score <= max_score
-                else "outside_candidate_band"
-            ),
-            "ai_wait_rebound_anchor_ai_score_prior_weight": (
-                0.3 if min_score <= score <= max_score else 0.0
-            ),
+            "ai_wait_rebound_anchor_score_prior_band": "diagnostic_only",
+            "ai_wait_rebound_anchor_ai_score_prior_weight": 0.0,
         }
     )
     if action != "WAIT":
@@ -62760,7 +62394,7 @@ def _handle_watching_strategy_branch(
             target_buy_price, used_drop_pct = radar.get_smart_target_price(
                 curr_price,
                 v_pw=current_vpw,
-                ai_score=current_ai_score,
+                ai_score=75.0,
                 ask_tot=ask_tot,
                 bid_tot=bid_tot,
             )
@@ -63088,7 +62722,6 @@ def _handle_watching_strategy_branch(
                                 "schema_semantic_rejected",
                             }
                             and str(action or "").upper() in {"BUY", "WAIT", "DROP"}
-                            and ai_score > 0.0
                         )
                         decision_trace_id = str(
                             ai_decision.get("ai_decision_trace_id") or ""
@@ -63416,17 +63049,6 @@ def _handle_watching_strategy_branch(
                                 ai_call_trigger_reason
                             ),
                         )
-                        if _is_wait65_79_candidate(action, ai_score):
-                            _log_wait65_79_ev_candidate(
-                                stock=stock,
-                                code=code,
-                                action=action,
-                                ai_score=ai_score,
-                                ai_decision=ai_decision,
-                                ws_data=ws_data,
-                                feature_probe=feature_probe,
-                                ai_call_trigger_reason=ai_call_trigger_reason,
-                            )
                         ai_numeric_consistency_recheck = (
                             _resolve_ai_numeric_consistency_recheck(
                                 stock,
@@ -63534,41 +63156,6 @@ def _handle_watching_strategy_branch(
                             recheck_score = _safe_float(
                                 (recheck_decision or {}).get("score"), 50.0
                             )
-                            recheck_buy_min_score = float(
-                                max(
-                                    0,
-                                    _rule_int(
-                                        "AI_NUMERIC_CONSISTENCY_RECHECK_BUY_MIN_SCORE",
-                                        75,
-                                    ),
-                                )
-                            )
-                            if (
-                                recheck_action == "BUY"
-                                and recheck_score < recheck_buy_min_score
-                            ):
-                                recheck_decision = dict(recheck_decision or {})
-                                base_reason = str(
-                                    recheck_decision.get("reason") or ""
-                                ).strip()
-                                below_min_reason = "numeric_consistency_recheck_buy_score_prior_low"
-                                recheck_decision["reason"] = (
-                                    f"{base_reason} | {below_min_reason}"
-                                    if base_reason
-                                    else below_min_reason
-                                )
-                                ai_numeric_consistency_recheck.update(
-                                    {
-                                        "score_gate_converted_to_prior": True,
-                                        "hard_gate_veto": False,
-                                        "score_prior_band": "low",
-                                        "ai_score_prior_weight": -0.3,
-                                    }
-                                )
-                            if recheck_action != "BUY":
-                                recheck_score = min(recheck_score, 74.0)
-                                recheck_decision = dict(recheck_decision or {})
-                                recheck_decision["score"] = recheck_score
                             recheck_reason = (
                                 str((recheck_decision or {}).get("reason") or "")[
                                     :120
@@ -63843,43 +63430,6 @@ def _handle_watching_strategy_branch(
                             recheck_score = _safe_float(
                                 (recheck_decision or {}).get("score"), 50.0
                             )
-                            recheck_buy_min_score = float(
-                                max(
-                                    0,
-                                    _rule_int(
-                                        "EARLY_ACCEL_STRONG_BUNDLE_RECHECK_BUY_MIN_SCORE",
-                                        75,
-                                    ),
-                                )
-                            )
-                            if (
-                                recheck_action == "BUY"
-                                and recheck_score < recheck_buy_min_score
-                            ):
-                                recheck_decision = dict(recheck_decision or {})
-                                base_reason = str(
-                                    recheck_decision.get("reason") or ""
-                                ).strip()
-                                below_min_reason = "early_accel_strong_bundle_recheck_buy_score_prior_low"
-                                recheck_decision["reason"] = (
-                                    f"{base_reason} | {below_min_reason}"
-                                    if base_reason
-                                    else below_min_reason
-                                )
-                                early_accel_strong_bundle_recheck.update(
-                                    {
-                                        "score_gate_converted_to_prior": True,
-                                        "hard_gate_veto": False,
-                                        "score_prior_band": "low",
-                                        "ai_score_prior_weight": -0.3,
-                                    }
-                                )
-                            if recheck_action != "BUY":
-                                recheck_score = min(
-                                    recheck_score, recheck_buy_min_score - 1.0
-                                )
-                                recheck_decision = dict(recheck_decision or {})
-                                recheck_decision["score"] = recheck_score
                             early_accel_recheck_reason = (
                                 str((recheck_decision or {}).get("reason") or "")[
                                     :120
@@ -63973,7 +63523,7 @@ def _handle_watching_strategy_branch(
                                 )
                             else:
                                 early_accel_strong_bundle_recheck["skip_reason"] = (
-                                    "recheck_wait_or_buy_below_min_score"
+                                    "recheck_non_buy_action"
                                 )
                                 early_accel_strong_bundle_recheck[
                                     "recheck_failure_class"
@@ -63993,333 +63543,6 @@ def _handle_watching_strategy_branch(
                                 "early_accel_strong_bundle_recheck_skipped",
                                 early_accel_strong_bundle_recheck,
                             )
-                        score65_74_probe_decision = (
-                            _score65_74_recovery_probe_decision(
-                                ai_decision,
-                                ai_score,
-                                ws_data,
-                                recent_ticks,
-                                recent_candles,
-                                ai_engine,
-                                feature_probe=feature_probe,
-                                stock=stock,
-                                code=code,
-                                now_ts=now_ts,
-                            )
-                        )
-                        if (
-                            not smoothing_buy_guard_blocked
-                            and score65_74_probe_decision.get("allowed")
-                        ):
-                            action = "BUY"
-                            reason = (
-                                f"{reason} | score65_74_recovery_probe:{float(ai_score or 0.0):.0f}"
-                                if reason
-                                else f"score65_74_recovery_probe:{float(ai_score or 0.0):.0f}"
-                            )
-                            ai_decision = dict(ai_decision or {})
-                            ai_decision["action"] = action
-                            ai_decision["score"] = ai_score
-                            ai_decision["reason"] = reason
-                            _mutate_stock_state(
-                                stock,
-                                set_fields={
-                                    "wait6579_probe_canary_armed": True,
-                                    "wait6579_probe_canary_source": "score65_74_recovery_probe",
-                                    "wait6579_probe_canary_score": f"{float(ai_score):.1f}",
-                                    "score65_74_recovery_probe_last_applied_at": now_ts,
-                                    "score65_74_recovery_probe_anchor_price": _safe_int(
-                                        (ws_data or {}).get("curr") or curr_price,
-                                        0,
-                                    ),
-                                    "score65_74_recovery_probe_last_buy_pressure": float(
-                                        feature_probe.get("buy_pressure", 0.0)
-                                        or 0.0
-                                    ),
-                                    "score65_74_recovery_probe_last_tick_accel": float(
-                                        feature_probe.get("tick_accel", 0.0) or 0.0
-                                    ),
-                                    "score65_74_recovery_probe_last_micro_vwap_bp": float(
-                                        feature_probe.get("micro_vwap_bp", 0.0)
-                                        or 0.0
-                                    ),
-                                    "score65_74_recovery_probe_last_micro_vwap_available": bool(
-                                        feature_probe.get(
-                                            "micro_vwap_available", False
-                                        )
-                                    ),
-                                    "score65_74_recovery_probe_last_minute_candle_context_quality": (
-                                        feature_probe.get(
-                                            "minute_candle_context_quality"
-                                        )
-                                        or "unknown"
-                                    ),
-                                    "score65_74_recovery_probe_last_minute_candle_window_fresh": bool(
-                                        feature_probe.get(
-                                            "minute_candle_window_fresh", False
-                                        )
-                                    ),
-                                    "score65_74_recovery_probe_last_minute_candle_latest_age_ms": (
-                                        feature_probe.get(
-                                            "minute_candle_latest_age_ms", "-"
-                                        )
-                                    ),
-                                    "score65_74_recovery_probe_last_tick_aggressor_trusted_count": (
-                                        feature_probe.get(
-                                            "tick_aggressor_trusted_count", 0
-                                        )
-                                    ),
-                                    "score65_74_recovery_probe_last_tick_aggressor_pressure_usable": bool(
-                                        feature_probe.get(
-                                            "tick_aggressor_pressure_usable", False
-                                        )
-                                    ),
-                                },
-                            )
-                            _log_entry_pipeline(
-                                stock,
-                                code,
-                                "score65_74_recovery_probe",
-                                **_score65_74_recovery_probe_success_contract_fields(),
-                                applied=True,
-                                decision_source="BUY_SCORE65_74_RECOVERY_PROBE",
-                                threshold_family="score65_74_recovery_probe",
-                                threshold_version=str(
-                                    _rule(
-                                        "AI_SCORE65_74_RECOVERY_PROBE_THRESHOLD_VERSION",
-                                        "runtime_default",
-                                    )
-                                    or "runtime_default"
-                                ),
-                                threshold_calibration_state=str(
-                                    _rule(
-                                        "AI_SCORE65_74_RECOVERY_PROBE_CALIBRATION_STATE",
-                                        "runtime_default",
-                                    )
-                                    or "runtime_default"
-                                ),
-                                threshold_applied_value=(
-                                    f"enabled=True|score={int(_rule('AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE', 60) or 60)}-"
-                                    f"{int(_rule('AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE', 74) or 74)}|"
-                                    f"budget={int(_rule('AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW', 0) or 0)}|qty=default"
-                                ),
-                                ai_score=f"{float(ai_score or 0.0):.1f}",
-                                buy_pressure=f"{float(feature_probe.get('buy_pressure', 0.0) or 0.0):.2f}",
-                                tick_accel=f"{float(feature_probe.get('tick_accel', 0.0) or 0.0):.3f}",
-                                micro_vwap_bp=f"{float(feature_probe.get('micro_vwap_bp', 0.0) or 0.0):.2f}",
-                                score65_74_recovery_probe_min_buy_pressure=(
-                                    f"{float(score65_74_probe_decision.get('score65_74_recovery_probe_min_buy_pressure') or 0.0):.2f}"
-                                ),
-                                score65_74_recovery_probe_min_tick_accel=(
-                                    f"{float(score65_74_probe_decision.get('score65_74_recovery_probe_min_tick_accel') or 0.0):.3f}"
-                                ),
-                                score65_74_recovery_probe_min_micro_vwap_bp=(
-                                    f"{float(score65_74_probe_decision.get('score65_74_recovery_probe_min_micro_vwap_bp') or 0.0):.2f}"
-                                ),
-                                score65_74_recovery_probe_configured_min_micro_vwap_bp=(
-                                    f"{float(score65_74_probe_decision.get('score65_74_recovery_probe_configured_min_micro_vwap_bp') or 0.0):.2f}"
-                                ),
-                                score65_74_recovery_probe_effective_micro_vwap_floor_bp=(
-                                    f"{float(score65_74_probe_decision.get('score65_74_recovery_probe_effective_micro_vwap_floor_bp') or 0.0):.2f}"
-                                ),
-                                score65_74_recovery_probe_strong_micro_override_enabled=bool(
-                                    score65_74_probe_decision.get(
-                                        "score65_74_recovery_probe_strong_micro_override_enabled",
-                                        False,
-                                    )
-                                ),
-                                score65_74_recovery_probe_strong_micro_override_applied=bool(
-                                    score65_74_probe_decision.get(
-                                        "score65_74_recovery_probe_strong_micro_override_applied",
-                                        False,
-                                    )
-                                ),
-                                score65_74_recovery_probe_strong_micro_min_buy_pressure=(
-                                    f"{float(score65_74_probe_decision.get('score65_74_recovery_probe_strong_micro_min_buy_pressure') or 0.0):.2f}"
-                                ),
-                                score65_74_recovery_probe_strong_micro_min_micro_vwap_bp=(
-                                    f"{float(score65_74_probe_decision.get('score65_74_recovery_probe_strong_micro_min_micro_vwap_bp') or 0.0):.2f}"
-                                ),
-                                score65_74_recovery_probe_strong_micro_source_quality_ok=bool(
-                                    score65_74_probe_decision.get(
-                                        "score65_74_recovery_probe_strong_micro_source_quality_ok",
-                                        False,
-                                    )
-                                ),
-                                score65_74_recovery_probe_quote_stale_relief_applied=bool(
-                                    score65_74_probe_decision.get(
-                                        "score65_74_recovery_probe_quote_stale_relief_applied",
-                                        False,
-                                    )
-                                ),
-                                score65_74_recovery_probe_quote_stale_relief_reason=(
-                                    score65_74_probe_decision.get(
-                                        "score65_74_recovery_probe_quote_stale_relief_reason",
-                                        "-",
-                                    )
-                                ),
-                                score65_74_recovery_probe_scanner_rising_micro_relief_applied=bool(
-                                    score65_74_probe_decision.get(
-                                        "score65_74_recovery_probe_scanner_rising_micro_relief_applied",
-                                        False,
-                                    )
-                                ),
-                                score65_74_recovery_probe_scanner_rising_micro_relief_reason=(
-                                    score65_74_probe_decision.get(
-                                        "score65_74_recovery_probe_scanner_rising_micro_relief_reason",
-                                        "-",
-                                    )
-                                ),
-                                latency_state=str(
-                                    (ws_data or {}).get("latency_state", "") or ""
-                                )
-                                .strip()
-                                .upper()
-                                or "-",
-                                **_build_tick_source_quality_log_fields(
-                                    feature_probe
-                                ),
-                                qty_cap=0,
-                                budget_cap_krw=int(
-                                    _rule(
-                                        "AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW", 0
-                                    )
-                                    or 0
-                                ),
-                            )
-                        elif (
-                            not smoothing_buy_guard_blocked
-                            and score65_74_probe_decision.get("evaluated")
-                        ):
-                            _log_entry_pipeline(
-                                stock,
-                                code,
-                                "score65_74_recovery_probe_blocked",
-                                **_score65_74_recovery_probe_block_contract_fields(),
-                                applied=False,
-                                decision_source="BUY_SCORE65_74_RECOVERY_PROBE",
-                                threshold_family="score65_74_recovery_probe",
-                                threshold_version=str(
-                                    _rule(
-                                        "AI_SCORE65_74_RECOVERY_PROBE_THRESHOLD_VERSION",
-                                        "runtime_default",
-                                    )
-                                    or "runtime_default"
-                                ),
-                                threshold_calibration_state=str(
-                                    _rule(
-                                        "AI_SCORE65_74_RECOVERY_PROBE_CALIBRATION_STATE",
-                                        "runtime_default",
-                                    )
-                                    or "runtime_default"
-                                ),
-                                score65_74_recovery_probe_skip_reason=(
-                                    score65_74_probe_decision.get(
-                                        "score65_74_recovery_probe_skip_reason"
-                                    )
-                                    or "-"
-                                ),
-                                ai_score=f"{float(ai_score or 0.0):.1f}",
-                                buy_pressure=f"{float(score65_74_probe_decision.get('buy_pressure') or 0.0):.2f}",
-                                tick_accel=f"{float(score65_74_probe_decision.get('tick_accel') or 0.0):.3f}",
-                                micro_vwap_bp=f"{float(score65_74_probe_decision.get('micro_vwap_bp') or 0.0):.2f}",
-                                score65_74_recovery_probe_min_buy_pressure=(
-                                    f"{float(score65_74_probe_decision.get('score65_74_recovery_probe_min_buy_pressure') or 0.0):.2f}"
-                                ),
-                                score65_74_recovery_probe_min_tick_accel=(
-                                    f"{float(score65_74_probe_decision.get('score65_74_recovery_probe_min_tick_accel') or 0.0):.3f}"
-                                ),
-                                score65_74_recovery_probe_min_micro_vwap_bp=(
-                                    f"{float(score65_74_probe_decision.get('score65_74_recovery_probe_min_micro_vwap_bp') or 0.0):.2f}"
-                                ),
-                                score65_74_recovery_probe_configured_min_micro_vwap_bp=(
-                                    f"{float(score65_74_probe_decision.get('score65_74_recovery_probe_configured_min_micro_vwap_bp') or 0.0):.2f}"
-                                ),
-                                score65_74_recovery_probe_effective_micro_vwap_floor_bp=(
-                                    f"{float(score65_74_probe_decision.get('score65_74_recovery_probe_effective_micro_vwap_floor_bp') or 0.0):.2f}"
-                                ),
-                                score65_74_recovery_probe_strong_micro_override_enabled=bool(
-                                    score65_74_probe_decision.get(
-                                        "score65_74_recovery_probe_strong_micro_override_enabled",
-                                        False,
-                                    )
-                                ),
-                                score65_74_recovery_probe_strong_micro_override_applied=bool(
-                                    score65_74_probe_decision.get(
-                                        "score65_74_recovery_probe_strong_micro_override_applied",
-                                        False,
-                                    )
-                                ),
-                                score65_74_recovery_probe_strong_micro_min_buy_pressure=(
-                                    f"{float(score65_74_probe_decision.get('score65_74_recovery_probe_strong_micro_min_buy_pressure') or 0.0):.2f}"
-                                ),
-                                score65_74_recovery_probe_strong_micro_min_micro_vwap_bp=(
-                                    f"{float(score65_74_probe_decision.get('score65_74_recovery_probe_strong_micro_min_micro_vwap_bp') or 0.0):.2f}"
-                                ),
-                                score65_74_recovery_probe_strong_micro_source_quality_ok=bool(
-                                    score65_74_probe_decision.get(
-                                        "score65_74_recovery_probe_strong_micro_source_quality_ok",
-                                        False,
-                                    )
-                                ),
-                                score65_74_recovery_probe_quote_stale_relief_applied=bool(
-                                    score65_74_probe_decision.get(
-                                        "score65_74_recovery_probe_quote_stale_relief_applied",
-                                        False,
-                                    )
-                                ),
-                                score65_74_recovery_probe_quote_stale_relief_reason=(
-                                    score65_74_probe_decision.get(
-                                        "score65_74_recovery_probe_quote_stale_relief_reason",
-                                        "-",
-                                    )
-                                ),
-                                score65_74_recovery_probe_scanner_rising_micro_relief_applied=bool(
-                                    score65_74_probe_decision.get(
-                                        "score65_74_recovery_probe_scanner_rising_micro_relief_applied",
-                                        False,
-                                    )
-                                ),
-                                score65_74_recovery_probe_scanner_rising_micro_relief_reason=(
-                                    score65_74_probe_decision.get(
-                                        "score65_74_recovery_probe_scanner_rising_micro_relief_reason",
-                                        "-",
-                                    )
-                                ),
-                                same_symbol_recovery_probe_cooldown_until=(
-                                    score65_74_probe_decision.get(
-                                        "same_symbol_recovery_probe_cooldown_until",
-                                        "-",
-                                    )
-                                ),
-                                same_symbol_recovery_probe_cooldown_remaining_sec=(
-                                    score65_74_probe_decision.get(
-                                        "same_symbol_recovery_probe_cooldown_remaining_sec",
-                                        "-",
-                                    )
-                                ),
-                                score65_74_recovery_probe_anchor_price=(
-                                    score65_74_probe_decision.get(
-                                        "score65_74_recovery_probe_anchor_price",
-                                        "-",
-                                    )
-                                ),
-                                score65_74_recovery_probe_current_price=(
-                                    score65_74_probe_decision.get(
-                                        "score65_74_recovery_probe_current_price",
-                                        "-",
-                                    )
-                                ),
-                                latency_state=str(
-                                    (ws_data or {}).get("latency_state", "") or ""
-                                )
-                                .strip()
-                                .upper()
-                                or "-",
-                                **_build_tick_source_quality_log_fields(
-                                    feature_probe
-                                ),
-                            )
                         _submit_watching_shared_prompt_shadow(
                             stock_name=stock["name"],
                             code=code,
@@ -64331,11 +63554,16 @@ def _handle_watching_strategy_branch(
                             candle_context=candle_context,
                         )
 
-                        if ai_score != 50:
+                        if action in {"BUY", "WAIT", "DROP"}:
+                            # Compatibility probability has no independent
+                            # entry-price or action authority. Keep it aligned
+                            # to the validated action, including WAIT=50.
+                            current_ai_score = {
+                                "BUY": 75.0, "WAIT": 50.0, "DROP": 0.0
+                            }[action]
                             _mutate_stock_state(
-                                stock, set_fields={"rt_ai_prob": ai_score / 100.0}
+                                stock, set_fields={"rt_ai_prob": current_ai_score / 100.0}
                             )
-                            current_ai_score = ai_score
                             log_info(
                                 f"💎 [VIP AI 확답 완료: {stock['name']}] {action} | 점수: {ai_score}점 | {reason}"
                             )
@@ -64393,7 +63621,7 @@ def _handle_watching_strategy_branch(
                                     )
                         else:
                             log_info(
-                                f"⚠️ [{stock['name']}] AI 점수 50. 행동·원천 검증 후 진입 여부를 판단합니다."
+                                f"⚠️ [{stock['name']}] AI 행동·원천 결손. 진입을 보류합니다."
                             )
                             current_ai_score = 50
                 except Exception as e:
@@ -64564,31 +63792,13 @@ def _handle_watching_strategy_branch(
                         )
                         return False
 
+            # Big-Bite is a separate feature guard. It cannot modify the
+            # action-coded compatibility score or create entry authority.
             boost_applied_value = 0
-            if big_bite_confirmed:
-                boost_applied_value = config["BIG_BITE_BOOST_SCORE"]
-            elif big_bite_armed:
-                boost_applied_value = config["BIG_BITE_ARMED_ENTRY_BONUS"]
-
-            if boost_applied_value:
-                current_ai_score = min(
-                    100.0, current_ai_score + boost_applied_value
-                )
-                _mutate_stock_state(
-                    stock,
-                    set_fields={
-                        "big_bite_boosted": bool(big_bite_confirmed),
-                        "big_bite_boost_value": boost_applied_value,
-                    },
-                )
-            else:
-                _mutate_stock_state(
-                    stock,
-                    set_fields={
-                        "big_bite_boosted": False,
-                        "big_bite_boost_value": 0,
-                    },
-                )
+            _mutate_stock_state(
+                stock,
+                set_fields={"big_bite_boosted": False, "big_bite_boost_value": 0},
+            )
 
             if (
                 ai_engine
@@ -64846,7 +64056,9 @@ def _handle_watching_strategy_branch(
                 radar.get_smart_target_price(
                     curr_price,
                     v_pw=current_vpw,
-                    ai_score=current_ai_score,
+                    # Neutral compatibility input: this price helper must not
+                    # chase or defer based on an uncalibrated entry AI score.
+                    ai_score=75.0,
                     ask_tot=ask_tot,
                     bid_tot=bid_tot,
                 )
@@ -64895,8 +64107,6 @@ def _handle_watching_strategy_branch(
                 },
             )
             is_trigger = True
-            if big_bite_confirmed:
-                _mutate_stock_state(stock, set_fields={"big_bite_boosted": True})
 
     elif strategy in ["KOSDAQ_ML", "KOSPI_ML"]:
         if radar is None:
@@ -66784,7 +65994,11 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             ),
         )
         if opening_rotation_active
-        else float(stock.get("rt_ai_prob", stock.get("prob", 0.0)) or 0.0)
+        else (
+            0.50
+            if normalize_strategy(strategy) == "SCALPING"
+            else float(stock.get("rt_ai_prob", stock.get("prob", 0.0)) or 0.0)
+        )
     )
     if opening_rotation_active:
         latency_ai_signal_authority_fields = {
@@ -68911,7 +68125,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         }:
             retry_submit_fields["ai_action"] = retry_action
             retry_latency_gate["ai_action"] = retry_action
-        if _safe_float(retry_score, 0.0) > 0:
+        if retry_score not in (None, "", "-"):
             retry_submit_fields["ai_score"] = retry_score
             retry_latency_gate["ai_score"] = retry_score
         if str(retry_source or "").strip():
@@ -71784,6 +70998,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     "quote_age_at_submit_ms"
                 ),
                 **_entry_price_ai_trace_fields(submit_revalidation_fields),
+                **_entry_reprice_parent_ai_receipt(stock, entry_ai_submit_authority),
                 **(
                     {
                         "ai_score": 0.0,
@@ -74454,182 +73669,15 @@ def _evaluate_rising_missed_normal_buy_bridge(
     entry_score_threshold,
     entry_score_role_gate,
 ) -> dict:
-    feature_enabled = _rising_missed_normal_buy_bridge_enabled()
-    current_ai_action = str(
-        (ai_decision or {}).get("action")
-        or stock.get("last_watching_ai_action")
-        or "WAIT"
-    ).upper()
-    score_value = _safe_float(current_ai_score, 0.0)
-    bridge_fields = {
+    """Retain the old receipt shape without granting a score-based BUY bridge."""
+    return {
         **_rising_missed_candidate_filter_fields(allowed=False),
-        "rising_missed_normal_buy_bridge_enabled": bool(feature_enabled),
+        "rising_missed_normal_buy_bridge_enabled": False,
         "rising_missed_normal_buy_bridge_allowed": False,
-        "rising_missed_normal_buy_bridge_reason": "not_evaluated",
+        "rising_missed_normal_buy_bridge_reason": "uncalibrated_ai_score_bridge_retired",
         "score_gate_converted_to_prior": False,
+        "actual_order_submitted": False,
     }
-    if not feature_enabled:
-        bridge_fields["rising_missed_normal_buy_bridge_reason"] = "feature_disabled"
-        return bridge_fields
-    if normalize_strategy(strategy) != "SCALPING":
-        bridge_fields["rising_missed_normal_buy_bridge_reason"] = (
-            "strategy_not_scalping"
-        )
-        return bridge_fields
-    if current_ai_action != "BUY":
-        bridge_fields["rising_missed_normal_buy_bridge_reason"] = (
-            "entry_ai_action_not_buy"
-        )
-        return bridge_fields
-    if score_value >= float(entry_score_threshold):
-        bridge_fields["rising_missed_normal_buy_bridge_reason"] = (
-            "score_prior_not_blocking"
-        )
-        return bridge_fields
-    if not bool(
-        (entry_score_role_gate or {}).get("entry_score_usable_for_entry_submit")
-    ):
-        bridge_fields["rising_missed_normal_buy_bridge_reason"] = (
-            "entry_score_source_quality_excluded"
-        )
-        bridge_fields.update(entry_score_role_log_fields(entry_score_role_gate))
-        return bridge_fields
-
-    watch_delta_refresh_fields = _refresh_rising_missed_watch_delta_from_current_price(
-        stock, curr_price
-    )
-    refreshed_positive_delta_pct = max(
-        _scanner_positive_delta_pct(stock),
-        _safe_float(
-            watch_delta_refresh_fields.get(
-                "rising_missed_watch_delta_refresh_observed_pct"
-            ),
-            0.0,
-        ),
-    )
-    decision = evaluate_rising_missed_normal_buy_bridge(
-        stock,
-        strategy=strategy,
-        position_tag=pos_tag,
-        feature_enabled=feature_enabled,
-        has_open_pending=_has_open_pending_entry_orders(stock),
-        already_holding=_already_holding_entry_position(stock),
-        current_ai_action=current_ai_action,
-        positive_delta_pct=refreshed_positive_delta_pct,
-        min_delta_pct=_scanner_rising_entry_min_delta_pct(),
-        current_price=curr_price,
-        max_entry_price_krw=_rising_missed_one_share_entry_max_price_krw(),
-        scout_budget_cap_krw=_rising_missed_scout_entry_budget_cap_krw(),
-        current_fluctuation_pct=_current_fluctuation_pct(stock, ws_data, runtime),
-        upper_limit_exclude_enabled=_rising_missed_upper_limit_exclude_enabled(),
-        upper_limit_exclude_pct=_rising_missed_upper_limit_exclude_pct(),
-    )
-    tp1_decision = None
-    tp1_recheck_fields: dict[str, Any] = {}
-    selector_active = bool(
-        _rising_missed_tp1_selector_enabled()
-        and _rising_missed_tp1_selector_active_date()
-        == _rising_missed_tp1_selector_current_date(runtime)
-    )
-    if decision.allowed and selector_active:
-        _resolved_ws, decision_input = resolve_rising_missed_decision_input(
-            stock,
-            code,
-            ws_data,
-            runtime,
-        )
-        tp1_decision = evaluate_rising_missed_tp1_candidate(
-            stock,
-            decision_input,
-            selector_enabled=True,
-            active_date=_rising_missed_tp1_selector_active_date(),
-            current_date=_rising_missed_tp1_selector_current_date(runtime),
-            current_ai_action=current_ai_action,
-            current_probe_intent=stock.get("last_watching_ai_probe_intent"),
-            nxt_price_jump_recovery_enabled=(
-                _rising_missed_nxt_price_jump_recovery_enabled(runtime)
-            ),
-            nxt_price_jump_recovery_configured=_env_bool(
-                "KORSTOCKSCAN_RISING_MISSED_NXT_PRICE_JUMP_RECOVERY_ENABLED",
-                False,
-            ),
-            positive_support_min=_rising_missed_tp1_positive_support_min(),
-            spread_caution_ratio=_rising_missed_tp1_spread_caution_ratio(),
-            chase_delta_pct=_rising_missed_tp1_chase_delta_pct(),
-            policy_sha256=str(
-                os.getenv("KORSTOCKSCAN_RISING_MISSED_TP1_POLICY_SHA256", "")
-            ).strip(),
-            nxt_price_jump_recovery_active_date=str(
-                os.getenv(
-                    "KORSTOCKSCAN_RISING_MISSED_NXT_PRICE_JUMP_RECOVERY_ACTIVE_DATE",
-                    "",
-                )
-            ).strip(),
-        )
-        tp1_decision = _confirm_rising_missed_tp1_wait_recovery(
-            stock,
-            tp1_decision,
-            now_ts=_runtime_action_now_ts(runtime),
-        )
-        _log_rising_missed_tp1_counterfactual_submit_safety(
-            stock,
-            code,
-            tp1_decision,
-            source_stage="rising_missed_normal_buy_bridge_candidate_gate",
-            ws_data=_resolved_ws,
-            now_ts=_runtime_action_now_ts(runtime),
-        )
-        if tp1_decision.deferred:
-            tp1_recheck_fields = _apply_rising_missed_freshness_envelope_recheck(
-                stock,
-                code,
-                {
-                    "rising_missed_scout_quality_guard_stale_ai_provenance_gap_blocked": True,
-                    "block_reason": tp1_decision.reason,
-                },
-                now_ts=_runtime_action_now_ts(runtime),
-            )
-    bridge_fields.update(watch_delta_refresh_fields)
-    bridge_fields.update(decision.log_fields or {})
-    if tp1_decision is not None:
-        bridge_fields.update(tp1_decision.log_fields or {})
-        bridge_fields.update(
-            _rising_missed_freshness_envelope_recheck_prefixed_fields(
-                tp1_recheck_fields
-            )
-        )
-        if not tp1_decision.allowed:
-            decision = type(decision)(
-                allowed=False,
-                reason=tp1_decision.reason,
-                log_fields=decision.log_fields,
-            )
-    bridge_fields.update(
-        {
-            "rising_missed_normal_buy_bridge_allowed": bool(decision.allowed),
-            "rising_missed_normal_buy_bridge_reason": decision.reason,
-            "score_gate_converted_to_prior": bool(decision.allowed),
-            "hard_gate_veto": False,
-            "entry_score_threshold": f"{float(entry_score_threshold):.1f}",
-            "rising_missed_normal_buy_bridge_score": f"{score_value:.1f}",
-            "rising_missed_normal_buy_bridge_source_stage": "first_ai_wait",
-            "decision_authority": (
-                "rising_missed_normal_buy_runtime_bridge"
-                if decision.allowed
-                else "rising_missed_normal_buy_runtime_bridge_blocked"
-            ),
-            "allowed_runtime_apply": bool(decision.allowed),
-            "actual_order_submitted": False,
-            "broker_order_forbidden": not bool(decision.allowed),
-            "runtime_effect": bool(decision.allowed),
-            **_rising_missed_candidate_filter_fields(allowed=bool(decision.allowed)),
-            "forbidden_uses": (
-                "threshold_mutation,order_guard_mutation,provider_change,bot_restart,"
-                "stale_submit_bypass,broker_guard_bypass,quantity_or_cap_change"
-            ),
-        }
-    )
-    return bridge_fields
 
 
 def _rising_missed_forced_scout_qty(stock: dict | None, runtime: dict | None) -> int:
@@ -74735,7 +73783,7 @@ def _recent_scanner_entry_ai_reuse_fields(
     score = _safe_float(stock.get("last_watching_ai_score"), 0.0)
     return {
         "rising_missed_entry_ai_retry_attempted": False,
-        "rising_missed_entry_ai_retry_success": bool(score > 0),
+        "rising_missed_entry_ai_retry_success": action in {"BUY", "WAIT", "DROP"},
         "rising_missed_entry_ai_retry_reason": "recent_valid_decision_reused",
         "rising_missed_entry_ai_retry_action": action,
         "rising_missed_entry_ai_retry_score": f"{score:.1f}",
@@ -74807,7 +73855,6 @@ def _record_scanner_entry_ai_attempt(
         normalized_source in {"live", "prior_valid"}
         and not transport_timeout
         and normalized_action in {"BUY", "WAIT", "DROP"}
-        and (float(score) > 0.0 or contract_valid_zero_score_drop)
         and contract_status not in {"semantic_rejected", "schema_semantic_rejected"}
         and parse_ok is not False
     )
@@ -75180,8 +74227,8 @@ def _maybe_retry_rising_missed_entry_ai_not_evaluated(
                             "not_evaluated_transport_timeout"
                             if result_source == "timeout"
                             else (
-                                "ai_score_unavailable"
-                                if score <= 0
+                                "ai_decision_unavailable"
+                                if effective_action not in {"BUY", "WAIT", "DROP"}
                                 else "ai_result_source_untrusted"
                             )
                         )
@@ -79199,6 +78246,48 @@ def _entry_reprice_float(name: str, default: float) -> float:
     return float(_rule_float(name, default))
 
 
+def _entry_reprice_parent_ai_receipt(
+    stock: dict | None, authority: dict | None
+) -> dict[str, Any]:
+    """Freeze an exact, trusted BUY parent for a later pending-order reprice."""
+    stock = stock if isinstance(stock, dict) else {}
+    authority = authority if isinstance(authority, dict) else {}
+    action = str(authority.get("entry_ai_submit_authority_action") or "").upper()
+    source = str(
+        authority.get("entry_ai_submit_authority_result_source") or ""
+    ).lower()
+    trace_id = str(
+        authority.get("entry_ai_submit_authority_decision_trace_id") or ""
+    ).strip()
+    snapshot_id = str(stock.get("last_watching_ai_snapshot_id") or "").strip()
+    if not (
+        action == "BUY"
+        and source in {"live", "prior_valid"}
+        and authority.get("entry_ai_submit_authority_fresh_prior") is True
+        and authority.get("entry_ai_submit_authority_latest_attempt_trusted") is True
+        and str(stock.get("last_watching_ai_action") or "").upper() == action
+        and str(stock.get("last_watching_ai_result_source") or "").lower() == source
+        and str(stock.get("last_watching_ai_attempt_contract_status") or "").lower()
+        == "pass"
+        and trace_id
+        and trace_id == str(stock.get("last_watching_ai_decision_trace_id") or "")
+        and trace_id
+        == str(stock.get("last_watching_ai_attempt_decision_trace_id") or "")
+        and snapshot_id
+        and snapshot_id
+        == str(stock.get("last_watching_ai_attempt_snapshot_id") or "")
+    ):
+        return {}
+    return {
+        "entry_reprice_parent_ai_action": action,
+        "entry_reprice_parent_ai_result_source": source,
+        "entry_reprice_parent_ai_contract_status": "pass",
+        "entry_reprice_parent_ai_decision_trace_id": trace_id,
+        "entry_reprice_parent_ai_snapshot_id": snapshot_id,
+        "entry_reprice_parent_ai_trusted_at_submit": True,
+    }
+
+
 def _entry_reprice_config() -> dict:
     config = {
         "enabled": _entry_reprice_bool("ENTRY_REPRICE_AFTER_SUBMIT_ENABLED", True),
@@ -79460,9 +78549,10 @@ def _entry_reprice_operator_latency_relief_fields(
         fields["entry_reprice_operator_latency_relief_reason"] = "spread_too_wide"
         return fields
 
-    score = _safe_float(order.get("ai_score"), 0.0)
-    if score < float(config.get("strong_score_floor") or 0.0):
-        fields["entry_reprice_operator_latency_relief_reason"] = "low_ai_score"
+    if _scout_parent_reprice_authority(order)["status"] != "authorized":
+        fields["entry_reprice_operator_latency_relief_reason"] = (
+            "parent_ai_contract_missing_or_untrusted"
+        )
         return fields
     action = (
         str(order.get("entry_reprice_action") or order.get("chosen_action") or "")
@@ -80801,7 +79891,9 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
         **{
             key: value
             for key, value in order.items()
-            if key.startswith("rising_missed_scout_parent_ai_")
+            if key.startswith(
+                ("rising_missed_scout_parent_ai_", "entry_reprice_parent_ai_")
+            )
         },
         "entry_reprice_action": order.get("entry_reprice_action"),
         "entry_adm_recommended_action": order.get("entry_adm_recommended_action"),

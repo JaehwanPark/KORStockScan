@@ -3478,7 +3478,7 @@ def test_analyze_target_operator_promotes_decision_quality_v2_7(monkeypatch):
     )
     assert analysis["observation_contract"]["runtime_effect"] is True
     assert result["action"] == "DROP"
-    assert result["score"] == 10
+    assert result["score"] == 0
     assert result["decision_quality_contract_status"] == "pass"
     assert result["semantic_validator_version"] == (
         openai_module.DECISION_QUALITY_V2_SEMANTIC_VALIDATOR_VERSION
@@ -3490,7 +3490,7 @@ def test_analyze_target_operator_promotes_decision_quality_v2_7(monkeypatch):
     assert result["ai_input_schema"] == "decision_quality_v2_7_entry_input"
     assert (
         result["decision_quality_score_semantics"]
-        == "confidence_clamped_to_legacy_action_band"
+        == "action_only_compatibility_score"
     )
 
 
@@ -3654,7 +3654,7 @@ def test_analyze_target_uses_active_v2_14_only_as_krx_bounded_probe(
     )
     assert result["ai_input_schema"] == "entry_setup_v2_14_live_input"
     assert result["action"] == "WAIT"
-    assert result["score"] == 70
+    assert result["score"] == 50
     assert result["entry_probe_intent"] is True
     assert result["entry_probe_first_required"] is True
     assert result["entry_ai_full_entry_forbidden"] is True
@@ -4658,7 +4658,7 @@ def test_decision_quality_v2_13_buy_maps_to_guarded_wait_probe(monkeypatch):
     assert result["decision_quality_contract_status"] == "pass"
     assert result["decision_quality_model_action"] == "BUY"
     assert result["action"] == "WAIT"
-    assert result["score"] == 64
+    assert result["score"] == 50
     assert result["evidence"]["trigger"] == "recovery_required"
     assert "recovery_trigger_required" in result["reason_codes"]
     assert "recovery_trigger_confirmed" not in result["reason_codes"]
@@ -4791,9 +4791,9 @@ def test_decision_quality_v2_14_live_adapter_uses_fixed_probe_prior_not_ai_score
     )
 
     assert result["action"] == "WAIT"
-    assert result["score"] == 70
+    assert result["score"] == 50
     assert result["decision_quality_score_semantics"] == (
-        "fixed_compatibility_prior_not_ai_quality_gate"
+        "action_only_compatibility_score"
     )
     assert result["entry_probe_intent"] is True
     assert result["entry_probe_first_required"] is True
@@ -5598,7 +5598,7 @@ def test_decision_quality_v2_7_repairs_non_buy_invalid_reason_code_only():
     )
 
     assert result["action"] == "DROP"
-    assert result["score"] == 11
+    assert result["score"] == 0
     assert result["decision_quality_contract_status"] == "pass"
     assert result["reason_codes"] == [
         "edge_absent",
@@ -5683,7 +5683,7 @@ def test_decision_quality_v2_7_repairs_non_buy_exact_ledger_classification():
     )
 
     assert result["action"] == "DROP"
-    assert result["score"] == 18
+    assert result["score"] == 0
     assert result["edge_state"] == "EDGE"
     assert result["evidence"]["positive_edge"] == "moderate"
     assert result["evidence"]["trigger"] == "confirmed"
@@ -6385,7 +6385,7 @@ def test_decision_quality_v2_7_keeps_blocking_wait_observation_only():
     )
 
     assert result["action"] == "WAIT"
-    assert result["score"] == 68
+    assert result["score"] == 50
     assert result["evidence"]["adverse_risk"] == "blocking"
     assert result["entry_probe_intent"] is False
     assert result["entry_probe_intent_status"] == "not_eligible"
@@ -7032,7 +7032,7 @@ def test_decision_quality_v2_7_repairs_stage_wait_alias_without_buy_authority():
     )
 
     assert result["action"] == "WAIT"
-    assert result["score"] == 65
+    assert result["score"] == 50
     assert result["decision_quality_model_action"] == "STAGE_WAIT"
     assert result["decision_quality_contract_status"] == "pass"
     assert result["evidence"]["positive_edge"] == "moderate"

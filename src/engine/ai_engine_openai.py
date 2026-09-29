@@ -2691,29 +2691,9 @@ class GPTSniperEngine:
             }.get(verdict, "insufficient"),
             "uncertainty": "medium" if probe_intent else "high",
         }
-        confidence = risk.get("confidence")
-        confidence = (
-            confidence
-            if isinstance(confidence, int) and not isinstance(confidence, bool)
-            else 0
-        )
-        # The legacy recheck handoff accepts a 69-74 score band.  V2.14 does
-        # not ask the model to score entry quality, so using model confidence
-        # here would create an accidental AI score gate.  Keep one neutral
-        # compatibility prior for every deterministically eligible probe.
-        score = (
-            max(75, confidence)
-            if machine_pass_submit_candidate
-            else (
-                70
-                if probe_intent
-                else (
-                    50
-                    if action == "WAIT"
-                    else min(49, max(0, round(49 * (1.0 - confidence / 100.0))))
-                )
-            )
-        )
+        # Legacy consumers still require this field. It encodes the validated
+        # action only; uncalibrated provider confidence has no entry authority.
+        score = {"BUY": 75, "WAIT": 50, "DROP": 0}.get(action, 0)
         return {
             **risk,
             **composed_for_live,
@@ -2743,15 +2723,7 @@ class GPTSniperEngine:
                 f"entry_setup_{version_token}_{venue_token}_bounded_probe_v1"
             ),
             "decision_quality_response_schema": ENTRY_RISK_ADJUDICATION_SCHEMA,
-            "decision_quality_score_semantics": (
-                "machine_pass_existing_submit_guard_candidate"
-                if machine_pass_submit_candidate
-                else (
-                    "fixed_compatibility_prior_not_ai_quality_gate"
-                    if probe_intent
-                    else "deterministic_setup_veto_or_insufficient"
-                )
-            ),
+            "decision_quality_score_semantics": "action_only_compatibility_score",
             "decision_quality_runtime_action_mapping": (
                 f"{version_token}_machine_pass_to_existing_submit_guard"
                 if machine_pass_submit_candidate
@@ -3577,12 +3549,7 @@ class GPTSniperEngine:
         )
         action = "WAIT" if v2_13_buy_probe_selected else candidate_action
         confidence = max(0, min(100, int(payload.get("confidence") or 0)))
-        if action == "BUY":
-            score = max(75, confidence)
-        elif action == "WAIT":
-            score = min(74, max(50, 50 + round(confidence * 0.24)))
-        else:
-            score = min(49, max(0, round(49 * (1.0 - confidence / 100.0))))
+        score = {"BUY": 75, "WAIT": 50, "DROP": 0}.get(action, 0)
         reason_codes = [
             str(code) for code in payload.get("reason_codes") or [] if str(code)
         ]
@@ -3727,7 +3694,7 @@ class GPTSniperEngine:
                 else (
                     "clean_continuation_wait_mapped_to_bounded_wait_probe"
                     if v2_13_clean_wait_probe_selected
-                    else "confidence_clamped_to_legacy_action_band"
+                    else "action_only_compatibility_score"
                 )
             ),
             "decision_quality_runtime_action_mapping": (
@@ -3851,10 +3818,11 @@ class GPTSniperEngine:
 
         allowed = {"BUY", "WAIT", "DROP"}
         action = raw_action if raw_action in allowed else "WAIT"
+        payload["entry_ai_raw_score"] = payload.get("score")
         payload["action"] = action
         payload["action_v2"] = action
         payload["action_schema"] = "entry_v1"
-        payload["score"] = score
+        payload["score"] = {"BUY": 75, "WAIT": 50, "DROP": 0}[action]
         payload["reason"] = reason_contract["reason"]
         payload["ai_reason_language_policy"] = reason_contract[
             "ai_reason_language_policy"
@@ -4114,9 +4082,18 @@ class GPTSniperEngine:
         )
 
         if risk_flags >= 2 or instant_strength_only:
-            score = int(result.get("score", 50))
             result["action"] = "WAIT"
-            result["score"] = min(score, 74)
+            result["action_v2"] = "WAIT"
+            result["score"] = 50
+            result["entry_machine_pass_submit_candidate"] = False
+            result["entry_probe_intent"] = False
+            result["remote_buy_guard_applied"] = True
+            result["decision_quality_runtime_action_mapping"] = (
+                "remote_buy_guard_wait"
+            )
+            result["decision_quality_score_semantics"] = (
+                "action_only_compatibility_score"
+            )
             result["reason"] = (
                 f"{result.get('reason', '')} | remote_buy_guard(risk={risk_flags})"
             )
@@ -4251,13 +4228,12 @@ class GPTSniperEngine:
             score = float(payload.get("score", payload.get("ai_score", 0.0)) or 0.0)
         except Exception:
             score = 0.0
-        if not contradiction and action != "BUY":
+        if not contradiction and action in {"WAIT", "WAIT_REQUOTE"}:
             feature_pass_count = (
                 int(position_pass) + int(accel >= 1.10) + int(supply_pass)
             )
             if (
                 feature_pass_count >= 3
-                and score >= 70.0
                 and (
                     "insufficient buy" in lowered
                     or "prevents buy" in lowered
@@ -9331,6 +9307,9 @@ class GPTSniperEngine:
                     "effective_venue",
                     "session_bucket",
                     "scanner_promotion_id",
+                    "watch_origin",
+                    "watch_admission_id",
+                    "watch_generation_id",
                     "snapshot_id",
                     "evaluation_attempt_id",
                     "entry_evaluation_attempt_id",
@@ -11071,6 +11050,12 @@ class GPTSniperEngine:
         reaction_fields = microstructure_reaction_model_fields(packet)
         if reaction_fields:
             market_flow_features["microstructure_reaction_context"] = reaction_fields
+            compact = market_flow_features.get("compact_features")
+            if isinstance(compact, dict):
+                # The dedicated reaction context keeps these values and their
+                # provenance; sending copies in the legacy bundle adds tokens.
+                for key in reaction_fields:
+                    compact.pop(key, None)
         payload = {
             "input_schema": "holding_score_v2",
             "position_context": {

@@ -5382,13 +5382,33 @@ class KiwoomWSManager:
                     self._required_realtime_types_by_code[code] = (
                         required_realtime_types
                     )
+        # A fixed Main watch can share a code with the read-only widget pin.
+        # Subscribed-by-code is insufficient when the watch needs a different
+        # exact Kiwoom item (_NX versus _AL). Register only that missing item.
+        fixed_route_missing_codes = set()
+        if source_key.startswith("main_fixed_watch"):
+            with self.lock:
+                for code in normalized_codes:
+                    registered = self._registered_items_by_code.get(code, ())
+                    if any(
+                        item not in registered
+                        or self._registered_item_epochs.get(item)
+                        != self._market_data_transport_epoch
+                        or not set(required_realtime_types or ()).issubset(
+                            self._registered_item_types.get(item, ())
+                        )
+                        for item in requested_items_by_code.get(code, ())
+                    ):
+                        fixed_route_missing_codes.add(code)
         new_targets = (
             normalized_codes
             if force
             else [
                 code
                 for code in normalized_codes
-                if code not in self.subscribed_codes or code in transitioned_source_only
+                if code not in self.subscribed_codes
+                or code in transitioned_source_only
+                or code in fixed_route_missing_codes
             ]
         )
         send_ready = bool(
@@ -5398,7 +5418,9 @@ class KiwoomWSManager:
             transition_targets = [
                 code
                 for code in new_targets
-                if code in transitioned_source_only or code in source_only_replacement
+                if code in transitioned_source_only
+                or code in source_only_replacement
+                or code in fixed_route_missing_codes
             ]
             regular_targets = [
                 code for code in new_targets if code not in transitioned_source_only

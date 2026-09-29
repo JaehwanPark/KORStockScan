@@ -332,9 +332,11 @@ def test_entry_ai_gate_role_gate_and_threshold_helper(monkeypatch):
     assert not gate.entry_buy_decision_allowed("WAIT", 90)
 
     low_prior = gate.evaluate_ai_score_prior("BUY", 69.9)
-    assert low_prior["score_gate_converted_to_prior"] is True
+    assert low_prior["score_gate_converted_to_prior"] is False
     assert low_prior["hard_gate_veto"] is False
-    assert low_prior["score_prior_band"] == "low"
+    assert low_prior["score_prior_band"] == "neutral_or_unknown"
+    assert low_prior["ai_score_prior_weight"] == 0.0
+    assert gate.evaluate_ai_score_prior("BUY", 99)["ai_score_prior_weight"] == 0.0
 
     usable = gate.evaluate_entry_score_role_gate(
         {"action": "BUY", "score": 72, "ai_result_source": "live", "ai_parse_ok": True},

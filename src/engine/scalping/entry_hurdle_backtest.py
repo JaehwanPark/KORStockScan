@@ -424,9 +424,6 @@ def _build_implemented_policy_backtest(
     liquidity_symbols: set[str] = set()
     liquidity_skip_reasons: Counter[str] = Counter()
     liquidity_excluded: Counter[str] = Counter()
-    ai_recheck_attempts: set[tuple[str, str, str, str]] = set()
-    ai_recheck_symbols: set[str] = set()
-    ai_recheck_excluded: Counter[str] = Counter()
     latest_liquidity_relief_by_record: dict[tuple[str, str], dict[str, Any]] = {}
 
     for source_date in source_dates:
@@ -438,10 +435,6 @@ def _build_implemented_policy_backtest(
                     '"stage": "pre_submit_liquidity_guard_block"',
                     '"stage":"pre_submit_liquidity_relief_skipped"',
                     '"stage": "pre_submit_liquidity_relief_skipped"',
-                    '"stage":"blocked_ai_score"',
-                    '"stage": "blocked_ai_score"',
-                    '"stage":"first_ai_wait"',
-                    '"stage": "first_ai_wait"',
                 ),
             )
             or ()
@@ -478,11 +471,22 @@ def _build_implemented_policy_backtest(
                 if str(merged_fields.get("latency_state") or "").upper() == "DANGER":
                     liquidity_excluded["latency_danger"] += 1
                     continue
-                if (
-                    merged_fields.get("ai_score") not in {None, "", "null", "none", "-"}
-                    and _safe_float(merged_fields.get("ai_score"), 0.0) < 75.0
+                ai_action = str(
+                    merged_fields.get("entry_ai_submit_authority_action")
+                    or merged_fields.get("ai_action")
+                    or ""
+                ).strip().upper()
+                if ai_action != "BUY":
+                    liquidity_excluded["ai_buy_action_missing_or_not_buy"] += 1
+                    continue
+                ai_source = str(
+                    merged_fields.get("entry_ai_submit_authority_result_source")
+                    or ""
+                ).strip().lower()
+                if ai_source not in {"live", "prior_valid"} or not _truthy(
+                    merged_fields.get("entry_ai_submit_authority_fresh_prior")
                 ):
-                    liquidity_excluded["ai_score_below_submit_min"] += 1
+                    liquidity_excluded["ai_buy_source_or_freshness_unbound"] += 1
                     continue
                 if not _signature_micro_pressure_path(merged_fields):
                     liquidity_excluded["signature_micro_pressure_not_met"] += 1
@@ -497,49 +501,13 @@ def _build_implemented_policy_backtest(
                     ] += 1
                 continue
 
-            if stage in {"blocked_ai_score", "first_ai_wait"}:
-                score = _safe_float(fields.get("ai_score"), 0.0)
-                if score < 60.0 or score > 74.0:
-                    ai_recheck_excluded["score_outside_60_74"] += 1
-                    continue
-                if _stale_flag(fields.get("quote_stale")) or _stale_flag(
-                    fields.get("tick_context_stale")
-                ):
-                    ai_recheck_excluded["stale_quote_or_tick_context"] += 1
-                    continue
-                if not _event_micro_context_usable(fields):
-                    ai_recheck_excluded["micro_source_quality_missing"] += 1
-                    continue
-                if not _signature_strong_bundle(fields.get("source_signature")):
-                    ai_recheck_excluded["source_signature_not_strong_bundle"] += 1
-                    continue
-                if not _micro_vwap_usable(fields):
-                    ai_recheck_excluded["micro_vwap_source_quality_missing"] += 1
-                    continue
-                if _safe_float(fields.get("curr_vs_micro_vwap_bp"), 0.0) < 0.0:
-                    ai_recheck_excluded["micro_vwap_negative"] += 1
-                    continue
-                ai_recheck_attempts.add(_event_key(event))
-                if code:
-                    ai_recheck_symbols.add(code)
-
     submitted_unique = _safe_int(stage_totals.get("order_bundle_submitted"), 0)
     budget_unique = _safe_int(stage_totals.get("budget_pass"), 0)
     conservative_submit_rate = (
         submitted_unique / budget_unique if budget_unique else 0.0
     )
-    blocked_ai = (
-        blocker_summary.get("blocked_ai_score")
-        if isinstance(blocker_summary.get("blocked_ai_score"), dict)
-        else {}
-    )
-    ai_missed_rate = _safe_float(blocked_ai.get("missed_winner_rate"), 0.0) / 100.0
     liquidity_count = len(liquidity_attempts)
-    ai_recheck_count = len(ai_recheck_attempts)
     liquidity_conservative = round(liquidity_count * conservative_submit_rate)
-    ai_recheck_conservative = round(
-        ai_recheck_count * conservative_submit_rate * max(ai_missed_rate, 0.0)
-    )
     return {
         "metric_role": "funnel_count",
         "decision_authority": "implemented_entry_logic_counterfactual_report_only",
@@ -557,7 +525,6 @@ def _build_implemented_policy_backtest(
         "implemented_policy_version": "entry_submit_recovery_v2_no_reprice_no_risk_expansion",
         "policy_changes_backtested": [
             "pre_submit_liquidity_signature_micro_pressure_relief",
-            "early_accel_strong_bundle_recheck_score_60_74",
         ],
         "liquidity_signature_micro_pressure_relief": {
             "eligible_attempts": liquidity_count,
@@ -568,21 +535,20 @@ def _build_implemented_policy_backtest(
             "excluded_reasons": _counter_to_plain(liquidity_excluded),
         },
         "ai_score_60_74_strong_bundle_recheck": {
-            "eligible_recheck_attempts": ai_recheck_count,
-            "unique_symbols": len(ai_recheck_symbols),
-            "blocked_ai_score_missed_winner_rate_used": round(
-                ai_missed_rate * 100.0, 2
-            ),
-            "conservative_estimated_order_submit_success": ai_recheck_conservative,
-            "upper_bound_recheck_attempts": ai_recheck_count,
-            "excluded_reasons": _counter_to_plain(ai_recheck_excluded),
+            "state": "retired_uncalibrated_ai_score_cohort",
+            "decision_authority": "diagnostic_only",
+            "eligible_recheck_attempts": None,
+            "unique_symbols": None,
+            "blocked_ai_score_missed_winner_rate_used": None,
+            "conservative_estimated_order_submit_success": None,
+            "upper_bound_recheck_attempts": None,
+            "excluded_reasons": {},
         },
         "total": {
-            "eligible_attempts": liquidity_count + ai_recheck_count,
-            "unique_symbols_upper_bound": len(liquidity_symbols | ai_recheck_symbols),
-            "conservative_estimated_order_submit_success": liquidity_conservative
-            + ai_recheck_conservative,
-            "upper_bound_order_submit_path_reentry": liquidity_count + ai_recheck_count,
+            "eligible_attempts": liquidity_count,
+            "unique_symbols_upper_bound": len(liquidity_symbols),
+            "conservative_estimated_order_submit_success": liquidity_conservative,
+            "upper_bound_order_submit_path_reentry": liquidity_count,
             "baseline_order_bundle_submitted": submitted_unique,
             "baseline_budget_pass": budget_unique,
             "baseline_submitted_to_budget_rate_pct": round(
@@ -694,12 +660,12 @@ def _next_action_diagnostics(
     if ai_wait:
         actions.append(
             {
-                "action_id": "review_ai_wait_score_recheck_scope",
+                "action_id": "audit_ai_wait_action_and_source_lineage",
                 "priority": 4,
-                "decision": "recheck_scope_candidate_not_threshold_relaxation",
-                "reason": "AI wait/score blocker has missed-winner skew but broad BUY threshold relaxation is forbidden",
+                "decision": "source_quality_diagnostic_only",
+                "reason": "AI WAIT observations require action, source and outcome lineage review",
                 "evidence": ai_wait,
-                "allowed_next_step": "evaluate bounded recheck/cohort routing using clean-baseline missed-winner evidence",
+                "allowed_next_step": "audit exact machine and compact attempts without using AI score cohorts for tuning",
                 "forbidden_uses": FORBIDDEN_USES,
                 "runtime_effect": False,
             }
@@ -1266,9 +1232,9 @@ def build_markdown(report: dict[str, Any]) -> str:
             f"- liquidity relief eligible/success: "
             f"`{liquidity_backtest.get('eligible_attempts', 0)}`/"
             f"`{liquidity_backtest.get('conservative_estimated_order_submit_success', 0)}`",
-            f"- AI 60-74 recheck eligible/success: "
-            f"`{ai_recheck_backtest.get('eligible_recheck_attempts', 0)}`/"
-            f"`{ai_recheck_backtest.get('conservative_estimated_order_submit_success', 0)}`",
+            f"- AI 60-74 recheck: "
+            f"`{ai_recheck_backtest.get('state', 'historical_diagnostic_only')}`; "
+            "excluded from improvement totals",
             "",
         ]
     )

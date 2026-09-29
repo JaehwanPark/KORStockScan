@@ -100,6 +100,13 @@
   - 완료 기준: 배포된 producer의 probe 결과 digest와 해시 검증 캡처를 attempt별로 대사하고, 프리마켓 `_NX`·정규장/통합 애프터마켓 `_AL` 완료봉 캐시의 source date·route·세션·생성 해시를 장후 `main_machine_policy` 영수증까지 확인한다. 동일 `BLOCK/RECHECK` 모집단에서 10/30/60분 커버리지·비용 결속·첫 도달과 source gap을 재측정한다.
   - 권한 경계: 코드·테스트 통과와 실제 릴리스/PID 소비, 자연 장후 수집, 날짜·표본 허들, direct family 운영 경제성 결속을 각각 구분한다. 결손을 0수익으로 대체하거나 정책 기준·주문 가드를 변경하지 않는다.
 
+- [ ] `[EntryAiScoreAuthorityRemoval0929] 진입 AI Score 의 실시간 판단·장후 튜닝 권한 제거` (`Due: 2026-09-29`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~21:40`, `Track: RuntimeStability`)
+  - Source: [기계 비진입 후행경로 보완안의 추가 범위](../proposals/machine-nonentry-outcome-lineage-remediation-plan-2026-09-29.md#추가-범위-보정되지-않은-진입-ai-score-의-판단장후-튜닝-권한-제거-open).
+  - 변경 범위: 진입 `confidence` 유래 호환 `score`의 BUY/WAIT 경계·조건부 재평가·점수대 해제 권한과 장후 `score_recovery_observation` → `wait6579_ev_cohort` → `score_recovery_economics` → `operator_policy_succession`의 점수 기반 모집단·후보·승계 권한을 함께 제거한다. score가 없는 입력은 결손으로 남기고 역사적 영수증은 진단용으로 보존한다.
+  - 코드 상태: 점수 독립 행동 표시, 원천·verdict 기반 재호출·사전제출 신뢰, 점수대 복구/브리지 퇴역, 장후 관찰·경제성·승계·백테스트 후보 차단을 구현했다. 리뷰에서 원주문 재조정 영수증·출처 결손·통합시장 매도 세션·보유 AI 입력 중복과, 점수 유래 목표가격·WAIT=50의 과거 호환 확률 잔류를 보완했다. 통합 영향 회귀 2,205건과 추가 표적 회귀 620건, Python compile·셸 문법·diff 검사·체크리스트 print-only parser가 통과했다. 불변 릴리스·PID·자연 장후 소비는 별도 확인한다.
+  - 완료 기준: 동일 기계·compact verdict와 동일 신선 원천에서 AI Score만 달리해도 행동, 재판정 선택, 장후 정책 후보 및 PREOPEN 승계가 달라지지 않는지 생산자부터 소비자까지 확인한다. 새 점수 독립 경로는 기계 재판정 또는 기존 compact 보조판정, 정확 비용·holdout과 소유 정책 계약을 별도로 검증한다. 코드 리뷰와 표적 검증, 릴리스 선택, 실제 PID 소비, 자연 결과를 구분한다.
+  - 권한 경계: 현재 선택 릴리스·운영자 lock·주문·provider·threshold·hard safety를 문서 변경만으로 수정하지 않는다. VETO/CAUTION, source gap, DANGER, broker/account/order/quantity/cooldown 가드는 유지한다.
+
 - [x] `[PostcloseEodGatedScheduleAndMorningFinalization] EOD 이후 장후 계산 및 다음 KRX 영업일 아침 finalization으로 일정 조정` (`Due: 2026-09-29`, `Slot: POSTCLOSE`, `TimeWindow: 20:05~06:50`, `Track: RuntimeStability`)
   - Source: [운영 runbook](../time-based-operations-runbook.md), [장후 결과 검토 지침](../postclose-tuning-result-review-task-instructions.md), [runtime release routing](../runtime-release-routing.md)
   - 변경 범위: main/widget/machine-refresh/archive 모두 exact-date EOD terminal 이후 heavy work를 시작한다. Finalization은 effective date의 직전 KRX source date를 선택해 05:00 예약, 06:00 predecessor deadline, 06:50 종료 상한을 적용한다.
@@ -128,6 +135,13 @@
 - [ ] `[ScalpSimRuntimeRetirement0929] 기본 scalp simulator 신규 런타임·장후 기본 실행 퇴역` (`Due: 2026-09-29`, `Slot: INTRADAY`, `TimeWindow: 10:00~20:00`, `Track: RuntimeStability`)
   - Source: 9/29 실제 `scalp_sim` 가상 보유와 `sim_post_sell` 최근 출력, [현행 기준](../plan-korStockScanPerformanceOptimization.rebase.md) §1/§5/§8.
   - 완료 기준: 신규 sim 진입·재기동 복원·sim 전용 WS 등록이 중단되고 장후 `--evaluate-sim` 기본 실행이 OFF인 코드를 리뷰·회귀 검증한다. 과거 sim 원천과 real post-sell/holding/exit custody를 보존한다. 선택 릴리스와 실제 PID 소비, 자연 `scalp_sim=0`, 다음 장후 단계의 skip 영수증은 별도로 확인한다.
+
+- [ ] `[SamsungMainFixedWatchRetirement0929] 삼성전자 Main 고정감시 이관 및 시간대별 독립 기계 퇴역` (`Due: 2026-09-29`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~21:40`, `Track: RuntimeStability`)
+  - Source: [구현계획](../proposals/samsung-main-fixed-watch-and-time-machine-retirement-plan-2026-09-29.md).
+  - 변경 범위: `005930`을 스캐너 없이 Main의 고정 WATCHING 기계판정 경로에 편입하고 총 감시 상한 안의 1칸·세션별 정확 WS route·출처/장후 결속을 보장한다. 오전·점심·오후 독립 기계의 신규 BUY, 기동 timer/preflight, 삼성 전용 장후/PREOPEN 후보 생산을 퇴역한다. widget 및 다른 episode의 독립 소유권과 과거 custody를 보존한다.
+  - 코드 완료 기준: 재기동·세션전환·동일 종목/owner 충돌에서 중복 감시/주문 없이 Main 기계판정에 도달하고, `BLOCK/RECHECK` 후행 데이터와 `source_gap`을 구분하며, scanner 분모에 고정감시를 혼합하지 않는다. 독립 세 서비스의 신규 BUY와 재활성화 경로 0건, 기존 미결·보유 SELL/복원 경로 보존, 표적 회귀·코드 리뷰를 확인한다.
+  - 운영 수용 기준: 적용 직전 broker/owner custody, 선택 release와 실제 Main PID·systemd/timer·WS 등록, 프리/정규/통합 애프터 세션별 자연 판정·주문/미주문·체결/terminal·비용 후 성과를 각각 대사한다. 기존 세 기계를 자동 롤백으로 재가동하지 않는다.
+  - 권한 경계: 이 계획/체크리스트는 서비스 중단·재기동·실주문 승인이 아니다. 수동 veto, source freshness, broker/account/order/quantity/cooldown, provider, cap 및 hard safety를 우회하지 않는다.
 
 ## Project/Calendar 동기화
 

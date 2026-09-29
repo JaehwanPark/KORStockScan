@@ -427,24 +427,12 @@ class KiwoomMiddayOneShareGateway:
         )
 
     def submit_limit_buy(self, *, price: int, quantity: int) -> SubmitResult:
+        """Retired entry API; cancel and SELL remain available for old custody."""
         self._require_write_authority()
-        price = self._validate_price(price)
-        quantity = validate_owned_leg_quantity(quantity)
-        if is_buy_side_paused():
-            return SubmitResult(False, return_code="TRADING_PAUSED")
-        response, body = self._post(
-            endpoint="/api/dostk/ordr",
-            api_id="kt10000",
-            payload={
-                "dmst_stex_tp": "SOR",
-                "stk_cd": "005930",
-                "ord_qty": str(quantity),
-                "ord_uv": str(price),
-                "trde_tp": "0",
-                "cond_uv": "",
-            },
+        return SubmitResult(
+            False, return_code="RETIRED_NEW_BUY",
+            return_msg="main_fixed_watch_replacement",
         )
-        return self._submit_result(response, body)
 
     def submit_limit_sell(self, *, price: int, quantity: int) -> SubmitResult:
         self._require_write_authority()

@@ -102,6 +102,16 @@ def _safe_float(value, default: float = 0.0) -> float:
         return default
 
 
+def _diagnostic_ai_score(value) -> float | None:
+    score = _safe_float(value, None)
+    return score if score is not None and math.isfinite(score) else None
+
+
+def _in_historical_score_band(value) -> bool:
+    score = _diagnostic_ai_score(value)
+    return score is not None and 60 <= score <= 74
+
+
 def _minute_candle_meta(
     candles: list[dict], meta: dict | None = None, *, requested_limit: int | None = None
 ) -> dict:
@@ -688,8 +698,11 @@ def _build_wait6579_candidates(target_date: str) -> list[dict]:
                     "stock_name": candidate_event.name,
                     "record_id": candidate_event.record_id or None,
                     "attempt_status": "ENTERED" if has_submitted else "MISSED",
-                    "ai_score": round(
-                        _safe_float(candidate_event.fields.get("ai_score"), 0.0), 1
+                    "ai_score": (
+                        round(value, 1)
+                        if (value := _diagnostic_ai_score(candidate_event.fields.get("ai_score")))
+                        is not None
+                        else None
                     ),
                     "action": str(
                         candidate_event.fields.get("action") or "WAIT"
@@ -1111,7 +1124,7 @@ def _counterfactual_summary(rows: list[dict]) -> dict:
     raw_score60_rows = [
         row
         for row in rows
-        if 60 <= _safe_float(row.get("ai_score"), 0.0) <= 74
+        if _in_historical_score_band(row.get("ai_score"))
         and score_recovery_cohort_member(row)
     ]
     score60_rows = [
@@ -1188,6 +1201,9 @@ def _counterfactual_summary(rows: list[dict]) -> dict:
         "score60_74_source_quality_or_cost_excluded_count": len(raw_score60_rows)
         - len(score60_rows),
         "score60_74_cost_contract_complete": bool(score60_rows),
+        "score60_74_decision_authority": "diagnostic_only_retired_ai_score_tuning",
+        "score60_74_allowed_runtime_apply": False,
+        "score60_74_population_state": "retired_score_selected_cohort",
         "score60_74_avg_close_10m_pct": _avg(
             [_safe_float(row.get("close_10m_pct"), 0.0) for row in score60_rows]
         ),
@@ -1421,8 +1437,11 @@ def build_wait6579_preflight_report(target_date: str) -> dict:
                 "stock_name": candidate.name,
                 "record_id": candidate.record_id or None,
                 "attempt_status": "ENTERED" if has_submitted else "MISSED",
-                "ai_score": round(
-                    _safe_float(candidate.fields.get("ai_score"), 0.0), 1
+                "ai_score": (
+                    round(value, 1)
+                    if (value := _diagnostic_ai_score(candidate.fields.get("ai_score")))
+                    is not None
+                    else None
                 ),
                 "terminal_blocker": terminal_event.stage,
                 "has_recovery_check": has_recovery_check,
@@ -1592,7 +1611,12 @@ def build_wait6579_ev_cohort_report(
                 "record_id": candidate.get("record_id"),
                 "attempt_status": str(candidate.get("attempt_status") or ""),
                 "action": str(candidate.get("action") or "WAIT"),
-                "ai_score": round(_safe_float(candidate.get("ai_score"), 0.0), 1),
+                "ai_score": (
+                    round(value, 1)
+                    if (value := _diagnostic_ai_score(candidate.get("ai_score")))
+                    is not None
+                    else None
+                ),
                 "buy_pressure": round(
                     _safe_float(candidate.get("buy_pressure"), 0.0), 3
                 ),
@@ -1681,7 +1705,7 @@ def build_wait6579_ev_cohort_report(
     score60_74_probe_candidates = sum(
         1
         for row in rows
-        if 60 <= _safe_float(row.get("ai_score"), 0.0) <= 74
+        if _in_historical_score_band(row.get("ai_score"))
         and score_recovery_cohort_member(row)
     )
     fill_split = _fill_split_rows(rows)

@@ -290,17 +290,18 @@ def test_gateway_manual_addon_buy_and_cancel_use_bounded_official_contract(
         order_authority=True,
         base_url="https://api.kiwoom.com",
     )
-    assert gateway.submit_manual_addon_limit_buy(
+    buy = gateway.submit_manual_addon_limit_buy(
         route="NXT", price=291_000, quantity=50
-    ).accepted
-    assert session.calls[0][1]["headers"]["api-id"] == "kt10000"
-    assert session.calls[0][1]["json"]["ord_qty"] == "50"
+    )
+    assert buy.return_code == "RETIRED_NEW_BUY"
+    assert session.calls == []
     assert gateway.cancel_manual_addon_remaining(route="NXT", order_no="101").accepted
-    assert session.calls[1][1]["headers"]["api-id"] == "kt10003"
-    assert session.calls[1][1]["json"]["cncl_qty"] == "0"
+    assert session.calls[0][1]["headers"]["api-id"] == "kt10003"
+    assert session.calls[0][1]["json"]["cncl_qty"] == "0"
 
-    with pytest.raises(ValueError, match="outside_1_to_50"):
-        gateway.submit_manual_addon_limit_buy(route="NXT", price=291_000, quantity=51)
+    assert gateway.submit_manual_addon_limit_buy(
+        route="NXT", price=291_000, quantity=51
+    ).return_code == "RETIRED_NEW_BUY"
 
 
 def test_gateway_manual_addon_reconciles_50_share_order_without_widening_normal_contract():

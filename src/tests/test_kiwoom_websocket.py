@@ -2683,6 +2683,45 @@ def test_execute_subscribe_preserves_source_only_route_item(monkeypatch):
     assert captured[0][1]["realtime_types"] == ("0B", "0D")
 
 
+def test_main_fixed_watch_registers_missing_exact_route_beside_widget_pin(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    manager._started = True
+    manager.loop = SimpleNamespace(is_running=lambda: True)
+    manager.subscribed_codes.add("005930")
+    manager._registered_items_by_code["005930"] = ("005930_AL",)
+    manager._registered_item_epochs["005930_AL"] = manager._market_data_transport_epoch
+    manager._registered_item_types["005930_AL"] = ("0B", "0D")
+    captured = []
+
+    def fake_send_reg(codes, **kwargs):
+        captured.append((list(codes), kwargs))
+
+        async def complete():
+            return None
+
+        return complete()
+
+    def fake_schedule(coro, loop):
+        coro.close()
+        return type("FakeFuture", (), {"add_done_callback": lambda self, callback: None})()
+
+    monkeypatch.setattr(manager, "_send_reg", fake_send_reg)
+    monkeypatch.setattr(kiwoom_websocket.asyncio, "run_coroutine_threadsafe", fake_schedule)
+
+    manager.execute_subscribe(
+        ["005930_NX"], source="main_fixed_watch_admission",
+        required_realtime_types=("0B", "0D"),
+    )
+    assert captured[0][0] == ["005930_NX"]
+    assert captured[0][1]["replace_existing"] is False
+
+    manager.execute_subscribe(
+        ["005930_AL"], source="main_fixed_watch_admission",
+        required_realtime_types=("0B", "0D"),
+    )
+    assert len(captured) == 1
+
+
 def test_execute_subscribe_preserves_multiple_explicit_routes_for_same_symbol(
     monkeypatch,
 ):

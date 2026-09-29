@@ -1758,6 +1758,12 @@ def _load_history(
 def _samsung_same_stage_owner(
     target_date: str, samsung_candidate_dir: Path
 ) -> dict[str, Any]:
+    if target_date >= "2026-09-30":
+        return {
+            "status": "samsung_entry_family_retired",
+            "mutation_present": False,
+            "source_path": "not_applicable_retired_samsung_entry_family",
+        }
     path = samsung_candidate_dir / (
         f"samsung_machine_entry_policy_candidate_{target_date}.json"
     )

@@ -397,24 +397,20 @@ def test_gateway_requests_integrated_sor_completed_minute_bars_only():
     }
 
 
-def test_gateway_hardcodes_sor_one_share_and_global_buy_pause(monkeypatch):
+def test_gateway_retires_buy_even_when_pause_changes(monkeypatch):
     monkeypatch.setattr(gateway_module, "is_buy_side_paused", lambda: False)
     session = FakeSession([FakeResponse({"return_code": 0, "ord_no": "123"})])
     gateway = KiwoomAfternoonOneShareGateway(
         request_session=session, token_loader=lambda: "TOKEN", order_authority=True
     )
     result = gateway.submit_limit_buy(price=98_000, quantity=10)
-    assert result.accepted is True
-    _, call = session.calls[0]
-    assert call["json"]["dmst_stex_tp"] == "SOR"
-    assert call["json"]["stk_cd"] == "005930"
-    assert call["json"]["ord_qty"] == "10"
+    assert result.return_code == "RETIRED_NEW_BUY"
     monkeypatch.setattr(gateway_module, "is_buy_side_paused", lambda: True)
     assert (
         gateway.submit_limit_buy(price=98_000, quantity=10).return_code
-        == "TRADING_PAUSED"
+        == "RETIRED_NEW_BUY"
     )
-    assert len(session.calls) == 1
+    assert session.calls == []
 
 
 def test_afternoon_state_and_gateway_surface_are_independent_from_morning_and_widget():

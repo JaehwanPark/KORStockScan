@@ -850,7 +850,7 @@ class FakeSession:
         return self.responses.pop(0)
 
 
-def test_gateway_hard_codes_symbol_quantity_limit_order_and_shared_token(monkeypatch):
+def test_gateway_retires_nxt_buy_without_any_order_call(monkeypatch):
     monkeypatch.setattr(gateway_module, "is_buy_side_paused", lambda: False)
     session = FakeSession([FakeResponse({"return_code": 0, "ord_no": "123"})])
     gateway = KiwoomOneShareGateway(
@@ -860,21 +860,12 @@ def test_gateway_hard_codes_symbol_quantity_limit_order_and_shared_token(monkeyp
         base_url="https://api.kiwoom.com",
     )
     result = gateway.submit_limit_buy(route="NXT", price=291_000, quantity=10)
-    assert result.accepted is True
-    _, call = session.calls[0]
-    assert call["headers"]["authorization"] == "Bearer SHARED_TOKEN"
-    assert call["headers"]["api-id"] == "kt10000"
-    assert call["json"] == {
-        "dmst_stex_tp": "NXT",
-        "stk_cd": "005930",
-        "ord_qty": "10",
-        "ord_uv": "291000",
-        "trde_tp": "0",
-        "cond_uv": "",
-    }
+    assert result.accepted is False
+    assert result.return_code == "RETIRED_NEW_BUY"
+    assert session.calls == []
 
 
-def test_gateway_supports_sor_regular_limit_orders(monkeypatch):
+def test_gateway_retires_sor_buy_without_any_order_call(monkeypatch):
     monkeypatch.setattr(gateway_module, "is_buy_side_paused", lambda: False)
     session = FakeSession([FakeResponse({"return_code": 0, "ord_no": "124"})])
     gateway = KiwoomOneShareGateway(
@@ -884,8 +875,8 @@ def test_gateway_supports_sor_regular_limit_orders(monkeypatch):
         base_url="https://api.kiwoom.com",
     )
     result = gateway.submit_limit_buy(price=297_500, quantity=10)
-    assert result.accepted is True
-    assert session.calls[0][1]["json"]["dmst_stex_tp"] == "SOR"
+    assert result.return_code == "RETIRED_NEW_BUY"
+    assert session.calls == []
 
 
 def test_gateway_rechecks_new_buy_authority_without_blocking_owned_sell(monkeypatch):
@@ -903,8 +894,8 @@ def test_gateway_rechecks_new_buy_authority_without_blocking_owned_sell(monkeypa
     sell = gateway.submit_limit_sell(route="SOR", price=298_000, quantity=10)
 
     assert buy.accepted is False
-    assert buy.return_code == "AUTHORITY_BLOCKED"
-    assert buy.return_msg == "main_bot_pid_handoff_pending"
+    assert buy.return_code == "RETIRED_NEW_BUY"
+    assert buy.return_msg == "main_fixed_watch_replacement"
     assert sell.accepted is True
     assert len(session.calls) == 1
     assert session.calls[0][1]["headers"]["api-id"] == "kt10001"
@@ -926,7 +917,7 @@ def test_gateway_write_is_disabled_without_both_authority_and_production():
         wrong_endpoint.submit_limit_buy(route="SOR", price=297_500, quantity=10)
 
 
-def test_gateway_rejects_direct_krx_route_for_regular_session(monkeypatch):
+def test_gateway_retirement_guard_precedes_legacy_route_validation(monkeypatch):
     monkeypatch.setattr(gateway_module, "is_buy_side_paused", lambda: False)
     gateway = KiwoomOneShareGateway(
         request_session=FakeSession([]),
@@ -934,8 +925,7 @@ def test_gateway_rejects_direct_krx_route_for_regular_session(monkeypatch):
         order_authority=True,
         base_url="https://api.kiwoom.com",
     )
-    with pytest.raises(ValueError, match="invalid_order_route"):
-        gateway.submit_limit_buy(route="KRX", price=297_500, quantity=10)
+    assert gateway.submit_limit_buy(route="KRX", price=297_500, quantity=10).return_code == "RETIRED_NEW_BUY"
 
 
 def test_gateway_open_price_uses_only_official_ka10080_fields():
@@ -1237,19 +1227,8 @@ def test_systemd_live_unit_uses_exact_two_leg_confirmation():
     assert not (
         project_root / "deploy/systemd/korstockscan-samsung-one-share-preflight.timer"
     ).exists()
-    assert (
-        'LEGACY_PREFLIGHT_TIMER="korstockscan-samsung-one-share-preflight.timer"'
-        in installer
-    )
-    assert (
-        "/bin/systemctl enable --now korstockscan-samsung-morning-one-share.timer"
-        in installer
-    )
-    assert 'installed_group="$(/bin/systemctl show' in installer
-    assert 'installed_group" != "ubuntu"' in installer
-    assert installer.index('installed_group="$(/bin/systemctl show') < installer.index(
-        "/bin/systemctl enable --now korstockscan-samsung-morning-one-share.timer"
-    )
+    assert "Samsung morning new-entry timer is retired" in installer
+    assert "systemctl enable" not in installer
     assert "PREFLIGHT_DEADLINE_HHMMSS" in preflight_script
     assert "compact_verify_detail" in preflight_script
     assert "pid_env_read_error" in preflight_script

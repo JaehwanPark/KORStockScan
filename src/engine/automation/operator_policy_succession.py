@@ -368,6 +368,8 @@ def succession_reason(
 ):
     """Additional ownership/baseline check; ordinary family gates run first."""
     family = candidate.get("family")
+    if family == SCORE:
+        return "uncalibrated_entry_ai_score_successor_retired"
     if family in SCALE_IN_RETIRED_CALIBRATION_FAMILIES:
         return "independent_scale_in_strategy_retired_20260918"
     if target_date < EFFECTIVE_DATE:
@@ -393,37 +395,7 @@ def succession_reason(
             and str(value).lower() in {"false", "0"}
         ):
             return "explicit_operator_off_veto"
-    if family == SCORE:
-        from src.engine.scalping.score_recovery_economics import (
-            evaluate_policy,
-            profile,
-        )
-
-        expected = {
-            k: current.get(SCORE_PREFIX + k.upper())
-            for k in (
-                "min_score",
-                "max_score",
-                "min_buy_pressure",
-                "min_tick_accel",
-                "min_micro_vwap_bp",
-            )
-        }
-        # Runtime uses the existing effective floor, even when the raw lock is 0.
-        expected["min_micro_vwap_bp"] = max(
-            float(expected["min_micro_vwap_bp"]),
-            float(current.get(SCORE_PREFIX + "EFFECTIVE_MIN_MICRO_VWAP_FLOOR_BP", 10)),
-        )
-        if profile(expected) != profile(candidate.get("current_values")):
-            return "economic_baseline_differs_from_effective_lock"
-        economics = evaluate_policy(
-            candidate.get("source_metrics") or {}, candidate.get("sample_floor", 20)
-        )
-        if not economics.get("ready") or economics.get("profile") != profile(
-            candidate.get("recommended_values")
-        ):
-            return "existing_family_economics_not_ready"
-    elif family in {PYRAMID, AVG_DOWN}:
+    if family in {PYRAMID, AVG_DOWN}:
         key = (
             "KORSTOCKSCAN_SCALPING_PYRAMID_MIN_PROFIT_PCT"
             if family == PYRAMID
@@ -521,6 +493,13 @@ def validate_receipt(manifest, runtime_dir, lock_dir):
         family = row["family"]
         if family in SCALE_IN_RETIRED_CALIBRATION_FAMILIES:
             continue
+        # Preserve verification of frozen historical receipts; reject any new
+        # score-family application from the next PREOPEN target onward.
+        if (
+            family == SCORE
+            and str(row.get("applied_target_date") or "") >= "2026-09-30"
+        ):
+            raise ValueError("uncalibrated_entry_ai_score_successor_retired")
         env = row["env_overrides"]
         if (
             row.get("stage") != POLICY_STAGES.get(family)

@@ -47,6 +47,7 @@ PRIMARY_DIRECT_OWNERS = (
     "rising_missed",
 )
 REQUIRED_DIRECT_OWNERS = frozenset(PRIMARY_DIRECT_OWNERS)
+SAMSUNG_MACHINE_ENTRY_RETIRED_FROM = "2026-09-30"
 
 PRODUCER_FLAG_BY_OWNER = {
     "source_quality": "observation_source_quality_audit",
@@ -260,6 +261,9 @@ def _owner_requirements(target_date: str) -> tuple[dict[str, bool], dict[str, An
     missing_flags: list[str] = []
     for owner in PRIMARY_DIRECT_OWNERS:
         flag = PRODUCER_FLAG_BY_OWNER.get(owner)
+        if owner == "machine_entry" and target_date >= SAMSUNG_MACHINE_ENTRY_RETIRED_FROM:
+            required[owner] = False
+            continue
         if owner == "pre_submit_delay" and target_date < "2026-09-23":
             required[owner] = False
             continue
@@ -952,7 +956,13 @@ def build_runtime_approval_summary(
                 == target_date
             )
         required = required_by_owner.get(owner, False)
-        applicability = "active_required" if required else ("not_applicable_disabled_by_wrapper" if owner in PRIMARY_DIRECT_OWNERS else "optional_handoff")
+        applicability = (
+            "retired_not_applicable"
+            if owner == "machine_entry" and target_date >= SAMSUNG_MACHINE_ENTRY_RETIRED_FROM
+            else "active_required" if required
+            else "not_applicable_disabled_by_wrapper" if owner in PRIMARY_DIRECT_OWNERS
+            else "optional_handoff"
+        )
         row = {
             "owner": owner, "path": str(path), "exists": path.exists(), "size_bytes": size_bytes,
             "sha256": artifact_sha256, "report_type": payload.get("report_type") or payload.get("schema"),
@@ -972,6 +982,16 @@ def build_runtime_approval_summary(
             projection = _economic_projection(owner, payload)
             row["economic_evidence"] = projection
             row["policy_owner"] = POLICY_OWNER_BY_SOURCE.get(owner)
+            if applicability == "retired_not_applicable":
+                row["status"] = "retired_not_applicable"
+                row["economic_evidence"].update({
+                    "comparison_status": "not_applicable",
+                    "resolution_mode": "retired_or_not_applicable",
+                    "policy_apply_allowed": False,
+                    "policy_handoff_state": "not_applicable",
+                    "candidate_count": 0,
+                })
+                row["policy_owner"] = None
         sources[owner] = row
         if required and error:
             blockers.append(f"{owner}:{error}")

@@ -17,6 +17,17 @@ PROFILE = dict(
 )
 
 
+def test_public_score_recovery_policy_is_retired_independent_of_metrics():
+    for metrics in ({}, real_metrics()):
+        evaluation = econ.evaluate(metrics)
+        search = econ.evaluate_policy(metrics)
+        assert evaluation["state"] == "retired"
+        assert evaluation["sample_count"] is None
+        assert evaluation["ready"] is False
+        assert search["policy_search"]["candidate_count"] == 0
+        assert search["policy_search"]["allowed_runtime_apply"] is False
+
+
 def test_empty_valid_days_trigger_maintenance_not_automatic_entry():
     from src.utils.market_day import is_krx_trading_day
 
@@ -27,7 +38,7 @@ def test_empty_valid_days_trigger_maintenance_not_automatic_entry():
             r = signed_report(day.isoformat(), count=0)
             books.append(econ.evidence_book(r, r["target_date"]))
         day += timedelta(days=1)
-    decision = econ.evaluate(
+    decision = econ._evaluate(
         {
             "score_recovery_current_profile": PROFILE,
             "score_recovery_real_economics": econ.merge_books(books),
@@ -107,25 +118,37 @@ def candidate(metrics=None):
     )
 
 
+def historical_approval_version(metrics):
+    """Construct a frozen historical receipt without reopening issuance."""
+    decision = econ._evaluate_policy(metrics)
+    assert decision["ready"]
+    return (
+        econ.VERSION_PREFIX
+        + decision["profile_hash"]
+        + ":"
+        + ",".join(decision["eligible_scopes"])
+    )
+
+
 
 
 @pytest.mark.parametrize("net", [0, -1])
 def test_nonpositive_net_is_not_approved(net):
-    assert not econ.evaluate(real_metrics(net))["ready"]
+    assert not econ._evaluate(real_metrics(net))["ready"]
 
 
 def test_many_small_wins_cannot_hide_large_loss():
     metrics = real_metrics()
     row = next(iter(metrics["score_recovery_real_economics"]["observations"].values()))
     row.update(net_krw=-2000, net_return_pct=-4)
-    assert not econ.evaluate(metrics)["ready"]
+    assert not econ._evaluate(metrics)["ready"]
 
 
 def test_positive_mean_without_dispersion_margin_is_not_approved():
     metrics = real_metrics()
     row = next(iter(metrics["score_recovery_real_economics"]["observations"].values()))
     row.update(net_krw=-500, net_return_pct=-1)
-    decision = econ.evaluate(metrics)
+    decision = econ._evaluate(metrics)
     assert decision["cohorts"][0]["mean_net_pct"] > 0
     assert not decision["ready"]
 
@@ -185,9 +208,11 @@ def test_profile_venue_dates_and_runtime_scope_are_separate():
     for i, row in enumerate(observations.values()):
         if i < 10:
             row.update(venue="NXT", session="nxt")
-    assert not econ.evaluate(metrics)["ready"]
+    assert not econ._evaluate(metrics)["ready"]
     metrics = real_metrics()
-    version = econ.approval_version(metrics)
+    with pytest.raises(ValueError, match="score_recovery_economics_not_ready"):
+        econ.approval_version(metrics)
+    version = historical_approval_version(metrics)
     assert econ.runtime_scope_allowed(
         version,
         PROFILE,
@@ -285,7 +310,7 @@ def test_observed_partial_losses_are_separate_and_veto_full_only_survivor_bias()
     second = copy.deepcopy(next(iter(partial.values())))
     second["date"] = "2026-09-04"
     partial["second-partial-day"] = second
-    decision = econ.evaluate(metrics)
+    decision = econ._evaluate(metrics)
     assert decision["sample_count"] == 20
     assert decision["cohorts"][0]["partial_loss_veto"] is True
     assert not decision["ready"]
@@ -298,12 +323,12 @@ def test_isolated_small_partial_loss_is_not_a_whole_scope_veto():
     )
     row.update(net_krw=-1, net_return_pct=-0.002, fill_class="partial_only")
     metrics["score_recovery_real_economics"]["partial_observations"]["partial"] = row
-    decision = econ.evaluate(metrics)
+    decision = econ._evaluate(metrics)
     assert decision["ready"]
     assert decision["cohorts"][0]["partial_net_krw_diagnostic"] == -1
     row["net_krw"] = -21
     row["net_return_pct"] = -21 / 50000 * 100
-    assert not econ.evaluate(metrics)["ready"]
+    assert not econ._evaluate(metrics)["ready"]
 
 
 def real_comparison_metrics(*, holdout_net=2):
@@ -348,7 +373,7 @@ def frequent_small_net_metrics(*, capital_multiplier=0.5, holdout_net=70):
 
 
 def test_more_profit_from_disproportionate_capital_is_not_selected():
-    d = econ.evaluate_policy(frequent_small_net_metrics(capital_multiplier=2))
+    d = econ._evaluate_policy(frequent_small_net_metrics(capital_multiplier=2))
     assert d["policy_search"]["selected_profile"] is None
 
 
@@ -357,7 +382,7 @@ def test_scaling_capital_at_identical_efficiency_is_not_alpha():
     for row in metrics["score_recovery_real_economics"]["observations"].values():
         if row["profile"] != PROFILE:
             row.update(net_krw=100, net_return_pct=0.2)
-    d = econ.evaluate_policy(metrics)
+    d = econ._evaluate_policy(metrics)
     assert d["policy_search"]["selected_profile"] is None
 
 
@@ -373,12 +398,12 @@ def test_missing_partial_capital_is_unknown_not_measured_no_edge():
         row.update(fill_class="partial_only", net_krw=1)
         row.pop("capital_hours")
         book["partial_observations"][day + "-partial"] = row
-    d = econ.evaluate_policy(metrics)
+    d = econ._evaluate_policy(metrics)
     assert d["policy_search"]["status"] == "comparison_source_incomplete"
 
 
 def test_frequency_cannot_hide_negative_holdout_net():
-    d = econ.evaluate_policy(frequent_small_net_metrics(holdout_net=-1))
+    d = econ._evaluate_policy(frequent_small_net_metrics(holdout_net=-1))
     assert d["policy_search"]["selected_profile"] is None
     assert d["policy_search"]["status"] == "holdout_not_improved"
 
@@ -398,7 +423,7 @@ def test_failed_holdout_keeps_baseline_without_searching_a_runner_up():
         second["net_krw"] = 1.5
         second["net_return_pct"] = 1.5 / second["notional_krw"] * 100
         book["observations"][key + "-runner-up"] = second
-    selected = econ.evaluate_policy(metrics)
+    selected = econ._evaluate_policy(metrics)
     assert selected["profile"] == PROFILE
     assert selected["policy_search"]["status"] == "holdout_not_improved"
     assert selected["policy_search"]["selected_profile"] is None
@@ -417,8 +442,8 @@ def test_reselection_cannot_drop_an_existing_eligible_venue():
         nxt = copy.deepcopy(row)
         nxt.update(venue="NXT", session=econ.SCOPES["NXT"])
         book["observations"][key + "-nxt"] = nxt
-    assert econ.evaluate(metrics)["eligible_scopes"] == ["KRX", "NXT"]
-    selected = econ.evaluate_policy(metrics)
+    assert econ._evaluate(metrics)["eligible_scopes"] == ["KRX", "NXT"]
+    selected = econ._evaluate_policy(metrics)
     assert selected["profile"] == PROFILE
     assert selected["eligible_scopes"] == ["KRX", "NXT"]
     assert selected["policy_search"]["status"] == "holdout_not_improved"
@@ -430,13 +455,13 @@ def test_partial_loss_reserve_never_exceeds_real_full_net():
     for index, row in enumerate(book["observations"].values()):
         row["notional_krw"] = 10**6 if index == 0 else 100
         row["net_return_pct"] = row["net_krw"] / row["notional_krw"] * 100
-    full = econ.evaluate(metrics)["cohorts"][0]
+    full = econ._evaluate(metrics)["cohorts"][0]
     assert full["full_edge_reserve_krw"] <= full["net_krw"]
     partial = copy.deepcopy(next(iter(book["observations"].values())))
     partial.update(net_krw=-21, fill_class="partial_only")
     partial["net_return_pct"] = -21 / partial["notional_krw"] * 100
     book["partial_observations"]["partial"] = partial
-    assert not econ.evaluate(metrics)["ready"]
+    assert not econ._evaluate(metrics)["ready"]
 
 
 def test_only_one_existing_bounded_rise_rebound_axis_is_searchable():
@@ -484,7 +509,7 @@ def test_partial_costs_cannot_make_a_worse_profile_look_like_an_improvement():
     )
     row.update(net_krw=-11, net_return_pct=-11 / 50000 * 100, fill_class="partial_only")
     book["partial_observations"]["partial"] = row
-    result = econ.evaluate_policy(metrics)
+    result = econ._evaluate_policy(metrics)
     assert result["policy_search"]["status"] == "holdout_not_improved"
     assert result["profile"] == PROFILE
 
@@ -544,7 +569,7 @@ def test_live_decision_rejects_unapproved_scope_before_other_entry_checks(monkey
         "AI_SCORE65_74_RECOVERY_PROBE_" + key.upper(): value
         for key, value in PROFILE.items()
     }
-    values["AI_SCORE65_74_RECOVERY_PROBE_THRESHOLD_VERSION"] = econ.approval_version(
+    values["AI_SCORE65_74_RECOVERY_PROBE_THRESHOLD_VERSION"] = historical_approval_version(
         metrics
     )
     monkeypatch.setattr(
@@ -563,5 +588,5 @@ def test_live_decision_rejects_unapproved_scope_before_other_entry_checks(monkey
     )
     assert (
         result["score65_74_recovery_probe_skip_reason"]
-        == "approved_profile_or_scope_mismatch"
+        == "uncalibrated_ai_score_path_retired"
     )

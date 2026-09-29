@@ -231,7 +231,10 @@ def normalize_condition_entry_from_scalping_result(result):
     reason = str(payload.get("reason") or "scalping_route").strip()[:240]
     return {
         "decision": decision,
-        "confidence": _coerce_confidence_score(payload.get("score", 0), 0),
+        # Entry score is an action compatibility token, not calibrated
+        # confidence.  Preserve the raw result for diagnostics only.
+        "confidence": None,
+        "confidence_status": "uncalibrated_entry_ai_score",
         "order_type": "MARKET" if decision == "BUY" else "NONE",
         "position_size_ratio": 1.0 if decision == "BUY" else 0.0,
         "invalidation_price": 0,

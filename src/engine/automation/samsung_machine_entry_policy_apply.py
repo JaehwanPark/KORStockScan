@@ -283,6 +283,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--write", action="store_true")
     args = parser.parse_args(argv)
     target_date = date.fromisoformat(args.target_date)
+    if target_date >= date(2026, 9, 30):
+        print(json.dumps({
+            "status": "retired_not_applicable",
+            "target_date": target_date.isoformat(),
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "reason": "samsung_new_entry_replaced_by_main_fixed_watch",
+        }, ensure_ascii=False, sort_keys=True))
+        return 4
     output_path = applied_path(target_date, applied_dir=args.applied_dir)
     if output_path.exists():
         try:

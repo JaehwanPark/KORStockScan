@@ -171,28 +171,47 @@ def publish_broker_account_snapshot(
 
     captured_epoch = float(captured_at if captured_at is not None else time.time())
     inventory_by_code: dict[str, dict[str, Any]] = {}
+    inventory_rows_valid = True
     for item in inventory or []:
         if not isinstance(item, dict):
+            inventory_rows_valid = False
             continue
         code = _base_code(item.get("code") or item.get("stock_code"))
         if code:
+            # The account adapter promises one aggregate row per symbol. A
+            # duplicate is an incomplete census for fixed-watch admission;
+            # never let the last row overwrite a positive holding.
+            if code in inventory_by_code:
+                inventory_rows_valid = False
             inventory_by_code[code] = dict(item)
+        else:
+            inventory_rows_valid = False
 
     open_qty_by_code: dict[str, dict[str, int]] = {}
+    unverified_open_order_codes: set[str] = set()
+    open_order_rows_valid = True
     for item in open_orders or []:
         if not isinstance(item, dict):
+            open_order_rows_valid = False
             continue
         code = _base_code(item.get("code") or item.get("stock_code"))
         if not code:
+            open_order_rows_valid = False
             continue
         try:
+            if item.get("remaining_qty") in (None, ""):
+                raise ValueError("remaining_qty_missing")
+            raw_remaining = float(
+                str(item["remaining_qty"]).replace(",", "").strip()
+            )
+            if not raw_remaining.is_integer() or raw_remaining < 0:
+                raise ValueError("remaining_qty_invalid")
             remaining_qty = max(
                 0,
-                int(
-                    float(str(item.get("remaining_qty") or 0).replace(",", "").strip())
-                ),
+                int(raw_remaining),
             )
         except (TypeError, ValueError):
+            unverified_open_order_codes.add(code)
             remaining_qty = 0
         side = str(item.get("side") or "").strip().upper()
         row = open_qty_by_code.setdefault(
@@ -203,21 +222,63 @@ def publish_broker_account_snapshot(
             row["open_buy_qty"] += remaining_qty
         elif side in {"매도", "SELL", "S", "1"}:
             row["open_sell_qty"] += remaining_qty
+        elif remaining_qty:
+            unverified_open_order_codes.add(code)
 
     snapshot = {
         "captured_at": captured_epoch,
         "inventory_by_code": inventory_by_code,
+        "inventory_rows_valid": inventory_rows_valid,
         "successful_exchanges": {
             str(value or "").strip().upper()
             for value in (successful_exchanges or [])
             if str(value or "").strip()
         },
         "open_qty_by_code": open_qty_by_code,
+        "open_order_rows_valid": open_order_rows_valid,
+        "unverified_open_order_codes": unverified_open_order_codes,
         "open_orders_request_succeeded": bool(open_orders_request_succeeded),
     }
     with _BROKER_ACCOUNT_SNAPSHOT_LOCK:
         _BROKER_ACCOUNT_SNAPSHOT.clear()
         _BROKER_ACCOUNT_SNAPSHOT.update(snapshot)
+
+
+def broker_symbol_verified_flat(stock_code: str, *, now_ts: float) -> tuple[bool, str]:
+    """Require both exchange inventories and open orders before watch admission."""
+    code = _base_code(stock_code)
+    with _BROKER_ACCOUNT_SNAPSHOT_LOCK:
+        snapshot = dict(_BROKER_ACCOUNT_SNAPSHOT)
+    captured_at = _epoch(snapshot.get("captured_at"))
+    if captured_at is None or not 0 <= now_ts - captured_at <= 60:
+        return False, "broker_snapshot_missing_or_stale"
+    if not {"KRX", "NXT"}.issubset(snapshot.get("successful_exchanges") or set()):
+        return False, "broker_exchange_census_incomplete"
+    if snapshot.get("inventory_rows_valid") is not True:
+        return False, "broker_inventory_rows_invalid"
+    if not snapshot.get("open_orders_request_succeeded"):
+        return False, "broker_open_orders_unverified"
+    if snapshot.get("open_order_rows_valid") is not True:
+        return False, "broker_open_order_rows_invalid"
+    if code in (snapshot.get("unverified_open_order_codes") or set()):
+        return False, "broker_open_order_row_unverified"
+    inventory = (snapshot.get("inventory_by_code") or {}).get(code)
+    if inventory is not None:
+        try:
+            if inventory.get("qty") in (None, ""):
+                raise ValueError("quantity_missing")
+            raw_quantity = float(str(inventory["qty"]).replace(",", ""))
+            if not raw_quantity.is_integer():
+                raise ValueError("quantity_fractional")
+            quantity = int(raw_quantity)
+        except (TypeError, ValueError):
+            return False, "broker_inventory_quantity_invalid"
+        if quantity != 0:
+            return False, "broker_position_nonzero"
+    open_orders = (snapshot.get("open_qty_by_code") or {}).get(code) or {}
+    if int(open_orders.get("open_buy_qty") or 0) or int(open_orders.get("open_sell_qty") or 0):
+        return False, "broker_open_orders_nonzero"
+    return True, "verified_flat"
 
 
 def _broker_account_context(

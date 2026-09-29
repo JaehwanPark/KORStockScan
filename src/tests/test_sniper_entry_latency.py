@@ -2462,11 +2462,11 @@ def test_early_accel_strong_bundle_recheck_failure_class_is_canonical():
     )
     assert (
         state_handlers._early_accel_strong_bundle_recheck_failure_class("WAIT")
-        == "wait_below_min_score"
+        == "wait_action"
     )
     assert (
         state_handlers._early_accel_strong_bundle_recheck_failure_class("BUY")
-        == "buy_score_below_min"
+        == "buy_action_unconsumed"
     )
     assert (
         state_handlers._early_accel_strong_bundle_recheck_failure_class("UNKNOWN")
@@ -7500,6 +7500,8 @@ def test_latency_signal_strength_prefers_fresh_canonical_ai_and_rejects_stale(
         "last_watching_ai_result_source": "live",
         "last_watching_ai_confirmed_at": 195.0,
         "last_watching_ai_decision_trace_id": "trace-buy-82",
+        "last_watching_ai_attempt_decision_trace_id": "trace-buy-82",
+        "last_watching_ai_attempt_trusted": True,
     }
 
     resolved, fields = state_handlers._resolve_latency_ai_signal_strength(
@@ -7508,8 +7510,8 @@ def test_latency_signal_strength_prefers_fresh_canonical_ai_and_rejects_stale(
         now_ts=200.0,
     )
 
-    assert resolved == 0.82
-    assert fields["latency_ai_signal_authority_source"] == "latest_watching_ai"
+    assert resolved == 0.75
+    assert fields["latency_ai_signal_authority_source"] == "latest_watching_ai_action"
     assert fields["latency_ai_signal_authority_action"] == "BUY"
     assert fields["latency_ai_signal_authority_decision_trace_id"] == "trace-buy-82"
 

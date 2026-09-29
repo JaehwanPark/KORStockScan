@@ -481,20 +481,19 @@ def _evaluate(metrics, sample_floor=20):
 
 
 def evaluate(metrics, sample_floor=20):
-    try:
-        return _evaluate(metrics, sample_floor)
-    except (ValueError, TypeError, OverflowError, KeyError, AttributeError):
-        return {
-            "schema": SCHEMA,
-            "ready": False,
-            "sample_count": 0,
-            "state": "source_quality_blocked",
-            "reason": "malformed_real_economic_contract",
-            "eligible_scopes": [],
-            "cohorts": [],
-            "runtime_effect": False,
-            "allowed_runtime_apply": False,
-        }
+    # Historical score-selected economics may be inspected through the frozen
+    # reports, but cannot authorize a new score-recovery policy.
+    return {
+        "schema": SCHEMA,
+        "ready": False,
+        "sample_count": None,
+        "state": "retired",
+        "reason": "uncalibrated_entry_ai_score_tuning_retired",
+        "eligible_scopes": [],
+        "cohorts": [],
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
 
 
 def approval_version(metrics, sample_floor=20):
@@ -600,7 +599,7 @@ def _evaluate_policy(metrics, sample_floor=20):
     Observational version comparison is NOT a causal treatment-effect claim.
     The existing PREOPEN/AI/lock/safety owners remain in charge of application.
     """
-    baseline = evaluate(metrics, sample_floor)
+    baseline = _evaluate(metrics, sample_floor)
     search = {
         "schema": POLICY_SEARCH_SCHEMA,
         "status": "no_supported_alternative_profile",
@@ -641,7 +640,7 @@ def _evaluate_policy(metrics, sample_floor=20):
             profiles[digest(p)] = p
     ranked = []
     for key, p in sorted(profiles.items()):
-        candidate = evaluate(
+        candidate = _evaluate(
             {**metrics, "score_recovery_current_profile": p}, sample_floor
         )
         entry = {
@@ -730,23 +729,17 @@ def _evaluate_policy(metrics, sample_floor=20):
 
 
 def evaluate_policy(metrics, sample_floor=20):
-    try:
-        return _evaluate_policy(metrics, sample_floor)
-    except (ValueError, TypeError, OverflowError, KeyError, AttributeError):
-        result = evaluate({}, sample_floor)
-        result.update(
-            state="source_quality_blocked", reason="malformed_profile_search_contract"
-        )
-        result["policy_search"] = {
-            "schema": POLICY_SEARCH_SCHEMA,
-            "status": "source_contract_not_ready",
-            "candidate_count": 0,
-            "selected_profile": None,
-            "candidate_ledger": [],
-            "runtime_effect": False,
-            "allowed_runtime_apply": False,
-        }
-        return result
+    retired = evaluate(metrics, sample_floor)
+    retired["policy_search"] = {
+        "schema": POLICY_SEARCH_SCHEMA,
+        "status": "retired_uncalibrated_entry_ai_score",
+        "candidate_count": 0,
+        "selected_profile": None,
+        "candidate_ledger": [],
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+    return retired
 
 
 def policy_search_digest(metrics, sample_floor=20):

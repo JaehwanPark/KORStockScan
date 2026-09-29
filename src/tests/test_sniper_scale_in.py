@@ -3253,10 +3253,10 @@ def test_real_weak_ai_micro_entry_block_keeps_strong_buy_context():
     )
 
     assert decision["blocked"] is False
-    assert decision["reason"] == "ai_context_not_weak"
+    assert decision["reason"] == "explicit_buy_action_not_weak"
 
 
-def test_real_weak_ai_micro_entry_block_blocks_low_score_buy_action():
+def test_real_weak_ai_micro_entry_block_ignores_low_score_for_buy_action():
     decision = state_handlers._evaluate_real_weak_ai_micro_entry_block(
         strategy="SCALPING",
         stock={"last_watching_ai_action": "BUY", "last_watching_ai_score": 62.0},
@@ -3274,7 +3274,7 @@ def test_real_weak_ai_micro_entry_block_blocks_low_score_buy_action():
         },
     )
 
-    assert decision["blocked"] is True
+    assert decision["blocked"] is False
     assert decision["weak_ai_micro_entry_block_ai_action"] == "BUY"
 
 
@@ -3295,7 +3295,7 @@ def test_entry_ai_submit_authority_blocks_not_evaluated_zero_score():
     )
 
     assert decision["blocked"] is True
-    assert decision["block_reason"] == "entry_ai_score_unavailable"
+    assert decision["block_reason"] == "entry_ai_decision_unavailable"
     assert decision["threshold_family"] == "pre_submit_entry_ai_authority_guard"
     assert decision["actual_order_submitted"] is False
     assert decision["broker_order_forbidden"] is True
@@ -3322,7 +3322,7 @@ def test_entry_ai_submit_authority_normalizes_placeholder_result_source():
     )
 
     assert decision["blocked"] is True
-    assert decision["block_reason"] == "entry_ai_score_unavailable"
+    assert decision["block_reason"] == "entry_ai_decision_unavailable"
     assert decision["entry_ai_submit_authority_result_source"] == "not_available"
     assert decision["actual_order_submitted"] is False
     assert decision["broker_order_forbidden"] is True
@@ -3555,11 +3555,11 @@ def test_entry_ai_submit_authority_blocks_not_evaluated_positive_score_without_p
     )
 
     assert decision["blocked"] is True
-    assert decision["block_reason"] == "entry_ai_action_not_evaluated"
+    assert decision["block_reason"] == "entry_ai_decision_unavailable"
     assert decision["entry_ai_submit_authority_score"] == "72.0"
 
 
-def test_entry_ai_submit_authority_allows_fresh_prior_valid_score(monkeypatch):
+def test_entry_ai_submit_authority_rejects_prior_valid_score_without_action(monkeypatch):
     now_ts = 1_783_471_000.0
     monkeypatch.setattr(state_handlers.time, "time", lambda: now_ts)
 
@@ -3580,12 +3580,11 @@ def test_entry_ai_submit_authority_allows_fresh_prior_valid_score(monkeypatch):
         latency_signal_score=68.0,
     )
 
-    assert decision["blocked"] is False
-    assert decision["reason"] == "ok"
-    assert decision["entry_ai_submit_authority_fresh_prior"] is True
+    assert decision["blocked"] is True
+    assert decision["entry_ai_submit_authority_fresh_prior"] is False
 
 
-def test_entry_ai_submit_authority_allows_fresh_live_score(monkeypatch):
+def test_entry_ai_submit_authority_rejects_live_score_without_action(monkeypatch):
     now_ts = 1_783_471_000.0
     monkeypatch.setattr(state_handlers.time, "time", lambda: now_ts)
 
@@ -3607,9 +3606,8 @@ def test_entry_ai_submit_authority_allows_fresh_live_score(monkeypatch):
         latency_signal_score=61.0,
     )
 
-    assert decision["blocked"] is False
-    assert decision["reason"] == "ok"
-    assert decision["entry_ai_submit_authority_fresh_prior"] is True
+    assert decision["blocked"] is True
+    assert decision["entry_ai_submit_authority_fresh_prior"] is False
     assert (
         decision["entry_ai_submit_authority_decision_trace_id"]
         == "analyze_target:005930:trace"
@@ -3973,7 +3971,7 @@ def test_rising_missed_scout_rejects_stale_probe_intent_from_other_trace(monkeyp
     )
 
     assert decision["blocked"] is True
-    assert decision["reason"] == "fresh_ai_wait_observation_only_probe_veto"
+    assert decision["reason"] == "entry_ai_result_stale_or_untrusted"
     assert decision["entry_ai_submit_authority_wait_probe_intent"] is False
     assert (
         decision["entry_ai_submit_authority_wait_probe_intent_trace_aligned"] is False
@@ -4050,6 +4048,9 @@ def test_entry_ai_submit_authority_latest_fresh_drop_overrides_stale_buy_context
             "last_watching_ai_score": 31.0,
             "last_watching_ai_result_source": "live",
             "last_watching_ai_confirmed_at": now_ts - 0.1,
+            "last_watching_ai_attempt_trusted": True,
+            "last_watching_ai_decision_trace_id": "trace-drop",
+            "last_watching_ai_attempt_decision_trace_id": "trace-drop",
         },
         latency_gate={"ai_action": "BUY", "ai_score": 79.0},
         latency_signal_score=79.0,
@@ -4100,7 +4101,7 @@ def test_entry_ai_submit_authority_guard_fails_closed_for_expired_or_conflict(
 
     assert expired["reason"] == "entry_ai_result_stale_or_untrusted"
     assert expired["blocked"] is True
-    assert conflict["reason"] == "entry_ai_action_conflict"
+    assert conflict["reason"] == "entry_ai_result_stale_or_untrusted"
     assert conflict["blocked"] is True
 
 
@@ -4123,6 +4124,9 @@ def test_entry_ai_submit_authority_limits_fresh_wait_to_probe(monkeypatch):
             "last_watching_ai_score": 53.0,
             "last_watching_ai_result_source": "live",
             "last_watching_ai_confirmed_at": now_ts - 0.2,
+            "last_watching_ai_attempt_trusted": True,
+            "last_watching_ai_decision_trace_id": "trace-wait",
+            "last_watching_ai_attempt_decision_trace_id": "trace-wait",
         },
         latency_gate={"ai_action": "WAIT", "ai_score": 53.0},
         latency_signal_score=53.0,
@@ -5171,7 +5175,7 @@ def test_entry_ai_submit_authority_blocks_prior_valid_without_fresh_timestamp():
     )
 
     assert decision["blocked"] is True
-    assert decision["block_reason"] == "entry_ai_action_not_evaluated"
+    assert decision["block_reason"] == "entry_ai_decision_unavailable"
     assert decision["entry_ai_submit_authority_fresh_prior"] is False
 
 
@@ -5709,7 +5713,7 @@ def test_rising_missed_async_preflight_block_propagates_exact_blockers(
     )
 
     assert fields["rising_missed_entry_ai_retry_success"] is False
-    assert fields["rising_missed_entry_ai_retry_reason"] == "ai_score_unavailable"
+    assert fields["rising_missed_entry_ai_retry_reason"] == "ai_result_source_untrusted"
     assert fields["rising_missed_entry_ai_budget_refund_eligible"] is True
     assert fields["rising_missed_entry_ai_budget_refunded"] is True
     assert (
@@ -5953,10 +5957,9 @@ def test_rising_missed_normal_bridge_refreshes_live_delta_before_classification(
         entry_score_role_gate={"entry_score_usable_for_entry_submit": True},
     )
 
-    assert captured["positive_delta_pct"] == pytest.approx(7.532751, rel=1e-6)
-    assert stock["price_delta_since_first_seen_pct"] == "7.53"
-    assert result["rising_missed_watch_delta_refresh_applied"] is True
+    assert captured == {}
     assert result["rising_missed_normal_buy_bridge_allowed"] is False
+    assert result["rising_missed_normal_buy_bridge_reason"] == "uncalibrated_ai_score_bridge_retired"
 
 
 def test_scanner_fast_precheck_reallocates_not_rising_missed_without_recovery(
@@ -10161,12 +10164,9 @@ def test_rising_missed_normal_bridge_uses_common_tp1_resolver(monkeypatch):
         entry_score_role_gate={"entry_score_usable_for_entry_submit": True},
     )
 
-    assert len(resolver_calls) == 1
-    assert result["rising_missed_normal_buy_bridge_allowed"] is True
-    assert (
-        result["rising_missed_tp1_candidate_reason"]
-        == "rising_missed_tp1_candidate_pass"
-    )
+    assert resolver_calls == []
+    assert result["rising_missed_normal_buy_bridge_allowed"] is False
+    assert result["rising_missed_normal_buy_bridge_reason"] == "uncalibrated_ai_score_bridge_retired"
 
 
 
@@ -20446,9 +20446,9 @@ def test_ai_wait_rebound_recheck_uses_anchor_score_band_as_prior(monkeypatch):
 
     assert result["ai_wait_rebound_recheck_allowed"] is True
     assert result["ai_wait_rebound_recheck_reason"] == "price_rebound_after_wait"
-    assert result["ai_wait_rebound_recheck_score_gate_converted_to_prior"] is True
+    assert result["ai_wait_rebound_recheck_score_gate_converted_to_prior"] is False
     assert (
-        result["ai_wait_rebound_recheck_score_prior_band"] == "outside_candidate_band"
+        result["ai_wait_rebound_recheck_score_prior_band"] == "diagnostic_only"
     )
     assert result["ai_wait_rebound_recheck_ai_score_prior_weight"] == 0.0
 
@@ -20573,6 +20573,9 @@ def test_ai_numeric_consistency_recheck_failed_attempt_consumes_symbol_budget(
             self.calls += 1
             if self.calls == 1:
                 return {
+                    "ai_result_source": "live",
+                    "ai_parse_ok": True,
+                    "decision_quality_contract_status": "pass",
                     "action": "WAIT",
                     "score": 72,
                     "reason": "tick_acceleration_ratio < 1.10 so wait",
@@ -20737,6 +20740,9 @@ def test_ai_numeric_consistency_recheck_corrected_updates_last_reason(monkeypatc
             self.calls += 1
             if self.calls == 1:
                 return {
+                    "ai_result_source": "live",
+                    "ai_parse_ok": True,
+                    "decision_quality_contract_status": "pass",
                     "action": "WAIT",
                     "score": 72,
                     "reason": "tick_acceleration_ratio < 1.10 so wait",
@@ -20916,6 +20922,9 @@ def test_ai_numeric_consistency_recheck_buy_below_min_score_does_not_arm_entry(
             self.calls += 1
             if self.calls == 1:
                 return {
+                    "ai_result_source": "live",
+                    "ai_parse_ok": True,
+                    "decision_quality_contract_status": "pass",
                     "action": "WAIT",
                     "score": 72,
                     "reason": "tick_acceleration_ratio < 1.10 so wait",
@@ -21043,10 +21052,7 @@ def test_ai_numeric_consistency_recheck_buy_below_min_score_does_not_arm_entry(
     assert sent_orders == []
     assert stock["last_watching_ai_action"] == "BUY"
     assert stock["last_watching_ai_score"] == 74
-    assert (
-        "numeric_consistency_recheck_buy_score_prior_low"
-        in stock["last_watching_ai_reason"]
-    )
+    assert stock["last_watching_ai_reason"] == "corrected buy but score still below gate"
 
 
 def test_ai_numeric_consistency_recheck_does_not_count_untrusted_supply_axis(
@@ -21064,6 +21070,9 @@ def test_ai_numeric_consistency_recheck_does_not_count_untrusted_supply_axis(
         now_ts=1_000.0,
         strategy="SCALPING",
         ai_decision={
+            "ai_result_source": "live",
+            "ai_parse_ok": True,
+            "decision_quality_contract_status": "pass",
             "action": "WAIT",
             "score": 72,
             "reason": "supply described incorrectly",
@@ -21084,10 +21093,10 @@ def test_ai_numeric_consistency_recheck_does_not_count_untrusted_supply_axis(
     assert decision["supply_pass"] is False
     assert decision["tick_aggressor_pressure_usable"] is False
     assert decision["feature_pass_count"] == 2
-    assert decision["skip_reason"] == "strong_micro_override_candidate_only"
+    assert decision["skip_reason"] == "feature_bundle_below_recheck_floor"
 
 
-def test_score65_74_recovery_probe_cannot_submit_without_machine_action_receipt(
+def test_retired_score65_74_recovery_probe_cannot_submit(
     monkeypatch,
 ):
     from src.utils.constants import TRADING_RULES as CONFIG
@@ -21281,38 +21290,11 @@ def test_score65_74_recovery_probe_cannot_submit_without_machine_action_receipt(
     )
 
     stages = [stage for stage, _fields in logs]
-    assert "score65_74_recovery_probe" in stages
-    assert "first_ai_wait" not in stages
-    assert "score65_74_recovery_probe_entry_unlocked" in stages
-    probe_fields = next(
-        fields for stage, fields in logs if stage == "score65_74_recovery_probe"
-    )
-    assert probe_fields["metric_role"] == "bounded_tunable"
-    assert (
-        probe_fields["decision_authority"]
-        == "score65_74_recovery_probe_entry_unlock_only"
-    )
-    assert probe_fields["runtime_effect"] is True
-    assert probe_fields["allowed_runtime_apply"] is False
-    assert probe_fields["actual_order_submitted"] is False
-    assert probe_fields["broker_order_forbidden"] is True
-    assert "broker_guard_bypass" in probe_fields["forbidden_uses"]
-    assert "stale_submit_bypass" in probe_fields["forbidden_uses"]
+    assert "score65_74_recovery_probe" not in stages
+    assert "score65_74_recovery_probe_entry_unlocked" not in stages
+    assert "first_ai_wait" in stages
     assert sent_orders == []
     assert "order_bundle_submitted" not in stages
-    assert "entry_execution_sizing_plan_block" in stages
-    sizing_block = next(
-        fields for stage, fields in logs if stage == "entry_execution_sizing_plan_block"
-    )
-    assert sizing_block["entry_execution_sizing_valid"] is False
-    assert sizing_block["entry_execution_sizing_plan_emitted"] is False
-    assert (
-        sizing_block["entry_execution_sizing_status"]
-        == "blocked_machine_action_receipt_absent"
-    )
-    assert sizing_block["entry_execution_sizing_blockers"] == [
-        "machine_action_receipt_absent"
-    ]
 
 
 def test_score65_74_recovery_probe_blocks_observation_only_blocking_wait(
@@ -21345,9 +21327,9 @@ def test_score65_74_recovery_probe_blocks_observation_only_blocking_wait(
     )
 
     assert result["allowed"] is False
-    assert result["evaluated"] is True
+    assert result["evaluated"] is False
     assert result["score65_74_recovery_probe_skip_reason"] == (
-        "ai_blocking_adverse_risk_observation_only"
+        "uncalibrated_ai_score_path_retired"
     )
 
 

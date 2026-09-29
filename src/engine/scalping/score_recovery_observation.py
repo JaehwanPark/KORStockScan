@@ -78,7 +78,7 @@ def observation_fields(
         not in {"semantic_rejected", "invalid"}
         and str(evidence.get("adverse_risk") or "") != "blocking"
     )
-    eligible = bool(
+    historical_match = bool(
         complete
         and quality
         and str(action).upper() in {"WAIT", "WAIT_REQUOTE"}
@@ -88,6 +88,9 @@ def observation_fields(
         and observed["tick_accel"] >= max(0.0, values["min_tick_accel"])
         and observed["micro_vwap_bp"] > max(0.0, values["min_micro_vwap_bp"])
     )
+    # The score-selected cohort is retained as historical provenance only.
+    # Its membership must not feed a new tuning candidate.
+    eligible = False
     encoded = json.dumps(
         {**values, "venue": venue, "session": session},
         sort_keys=True,
@@ -101,10 +104,11 @@ def observation_fields(
             encoded.encode("ascii")
         ).hexdigest(),
         "score_recovery_observation_policy": encoded,
-        "score_recovery_observation_reason": (
-            "rise_rebound_observed"
-            if eligible
-            else "source_or_rise_rebound_contract_not_met"
+        "score_recovery_observation_reason": "ai_score_tuning_retired",
+        "score_recovery_observation_decision_authority": "diagnostic_only",
+        "score_recovery_observation_historical_match": historical_match,
+        "score_recovery_observation_score_source_state": (
+            "missing_or_invalid" if score is None else "observed_diagnostic_only"
         ),
         "score_recovery_observation_runtime_effect": False,
         "score_recovery_observation_reference_price": reference_price,
@@ -173,30 +177,12 @@ def observation_cohort_valid(metrics: dict) -> bool:
 
 
 def condition_feasibility(metrics: dict, sample_floor: int) -> dict:
-    """Diagnostic only: compare the inherited absolute floor to net edge.
-
-    This does not replace the reviewed live gate or estimate success probability
-    from old, missing-cost snapshots. Realized execution is never inferred.
-    """
+    """Preserve historical score-cohort evidence without a tuning decision."""
     count = finite(metrics.get("score60_74_cost_adjusted_sample_count")) or 0
     net = finite(metrics.get("score60_74_avg_cost_adjusted_expected_ev_pct"))
-    ready = (
-        count >= sample_floor
-        and net is not None
-        and metrics.get("score60_74_cost_contract_complete") is True
-    )
-    state = (
-        "evidence_not_ready"
-        if not ready
-        else (
-            "positive_edge_below_absolute_floor"
-            if 0 < net < 2
-            else "absolute_ev_floor_met" if net >= 2 else "no_positive_net_edge"
-        )
-    )
     return {
         "schema": "score_recovery_condition_feasibility_v1",
-        "state": state,
+        "state": "retired_uncalibrated_ai_score_tuning",
         "sample_count": int(count),
         "sample_floor": sample_floor,
         "primary_metric": "cost_adjusted_counterfactual_ev_pct",
@@ -205,15 +191,7 @@ def condition_feasibility(metrics: dict, sample_floor: int) -> dict:
         "legacy_absolute_ev_floor_pct": 2.0,
         "success_probability": None,
         "indefinite_wait_appropriate": False,
-        "next_action": (
-            "collect_exact_predecision_observations"
-            if not ready
-            else (
-                "review_absolute_floor_against_incremental_net_ev"
-                if 0 < net < 2
-                else "retain_existing_preopen_and_real_economic_gates"
-            )
-        ),
+        "next_action": "archive_diagnostic_only",
         "runtime_effect": False,
         "allowed_runtime_apply": False,
     }

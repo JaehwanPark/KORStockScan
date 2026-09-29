@@ -424,7 +424,7 @@ def test_lifecycle_matrix_ingests_panic_sim_rows_without_real_mix(
     )
 
 
-def test_entry_and_scale_in_are_blocked_for_sim_only_panic(monkeypatch, _state):
+def test_panic_entry_block_and_sim_scale_in_has_no_shared_main_owner(monkeypatch, _state):
     panic_context = {
         "panic_context_status": "OK",
         "panic_level": 2,
@@ -490,20 +490,10 @@ def test_entry_and_scale_in_are_blocked_for_sim_only_panic(monkeypatch, _state):
         held_sec=120,
     )
     assert result is None
-    assert any(stage == "scalp_sim_panic_scale_in_blocked" for stage, _ in _state)
-    scale_event = next(
-        fields
-        for stage, fields in _state
-        if stage == "scalp_sim_panic_scale_in_blocked"
+    assert not any(
+        stage in {"avg_down_shared_rebound_signal", "scalp_sim_panic_scale_in_blocked"}
+        for stage, _ in _state
     )
-    assert scale_event["decision_authority"] == "sim_observation_only"
-    assert (
-        scale_event["scalp_sim_candidate_window_blocked_reason"]
-        == "regression_duplicate_authority"
-    )
-    assert scale_event["scalp_sim_active_priority_seed_matched"] is True
-    assert scale_event["active_seed_id"] == "active_seed_panic"
-    assert scale_event["source_parent_bucket_id"] == "parent_positive_panic"
     event = next(
         fields for stage, fields in _state if stage == "scalp_sim_panic_entry_blocked"
     )
@@ -515,8 +505,9 @@ def test_entry_and_scale_in_are_blocked_for_sim_only_panic(monkeypatch, _state):
     assert event["real_order_allowed"] is False
 
 
+@pytest.mark.parametrize("diagnostic_ai_score", [0, 64, 99])
 def test_level1_breadth_risk_off_bottoming_candidate_allows_sim_entry(
-    monkeypatch, _state
+    monkeypatch, _state, diagnostic_ai_score
 ):
     panic_context = {
         "panic_context_status": "OK",
@@ -566,7 +557,7 @@ def test_level1_breadth_risk_off_bottoming_candidate_allows_sim_entry(
             "strategy": "SCALPING",
             "is_trigger": True,
             "now_ts": 1000.0,
-            "current_ai_score": 64,
+            "current_ai_score": diagnostic_ai_score,
         },
     )
     stages = [stage for stage, _ in _state]

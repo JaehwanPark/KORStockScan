@@ -57,6 +57,12 @@ def _base_order(**overrides):
         "tick_aggressor_trusted_count": 3,
         "latency_state": "SAFE",
         "mark_price_at_submit": 39885,
+        "entry_reprice_parent_ai_action": "BUY",
+        "entry_reprice_parent_ai_result_source": "live",
+        "entry_reprice_parent_ai_contract_status": "pass",
+        "entry_reprice_parent_ai_decision_trace_id": "trace-normal",
+        "entry_reprice_parent_ai_snapshot_id": "snapshot-normal",
+        "entry_reprice_parent_ai_trusted_at_submit": True,
     }
     order.update(overrides)
     return order
@@ -100,11 +106,61 @@ def test_helper_allows_tight_spread_continuation_without_negative_adm():
     assert decision.fields["reprice_price_mode"] == "tight_spread_best_ask_minus_1tick"
 
 
+def test_helper_requires_frozen_parent_and_ignores_ai_score():
+    kwargs = dict(
+        strategy="SCALPING",
+        elapsed_sec=16.0,
+        best_bid=39855,
+        best_ask=39915,
+        current_price=39900,
+        quote_age_ms=120.0,
+        orderbook_micro_state="neutral",
+    )
+    low = evaluate_entry_reprice_after_submit(order=_base_order(ai_score=0.0), **kwargs)
+    high = evaluate_entry_reprice_after_submit(order=_base_order(ai_score=99.0), **kwargs)
+    assert low.allowed and high.allowed
+    assert low.target_price == high.target_price
+
+    missing = _base_order(ai_score=99.0)
+    for key in list(missing):
+        if key.startswith("entry_reprice_parent_ai_"):
+            missing.pop(key)
+    blocked = evaluate_entry_reprice_after_submit(order=missing, **kwargs)
+    assert not blocked.allowed
+    assert blocked.reason == "parent_ai_contract_missing"
+
+
+def test_parent_receipt_requires_same_trusted_attempt():
+    stock = {
+        "last_watching_ai_action": "BUY",
+        "last_watching_ai_result_source": "live",
+        "last_watching_ai_attempt_contract_status": "pass",
+        "last_watching_ai_decision_trace_id": "trace-parent",
+        "last_watching_ai_attempt_decision_trace_id": "trace-parent",
+        "last_watching_ai_snapshot_id": "snapshot-parent",
+        "last_watching_ai_attempt_snapshot_id": "snapshot-parent",
+    }
+    authority = {
+        "entry_ai_submit_authority_action": "BUY",
+        "entry_ai_submit_authority_result_source": "live",
+        "entry_ai_submit_authority_fresh_prior": True,
+        "entry_ai_submit_authority_latest_attempt_trusted": True,
+        "entry_ai_submit_authority_decision_trace_id": "trace-parent",
+    }
+    receipt = state_handlers._entry_reprice_parent_ai_receipt(stock, authority)
+    assert receipt["entry_reprice_parent_ai_trusted_at_submit"] is True
+    assert receipt["entry_reprice_parent_ai_decision_trace_id"] == "trace-parent"
+    assert state_handlers._entry_reprice_parent_ai_receipt(
+        {**stock, "last_watching_ai_attempt_snapshot_id": "other"}, authority
+    ) == {}
+
+
 def test_helper_uses_frozen_scout_parent_not_latency_feature_score():
     decision = evaluate_entry_reprice_after_submit(
         order=_base_order(
             ai_score=0.0,
             rising_missed_scout_parent_ai_action="BUY",
+            rising_missed_scout_parent_ai_result_source="live",
             rising_missed_scout_parent_ai_contract_status="pass",
             rising_missed_scout_parent_ai_decision_trace_id="trace-010170",
             rising_missed_scout_parent_ai_snapshot_id="snapshot-010170",

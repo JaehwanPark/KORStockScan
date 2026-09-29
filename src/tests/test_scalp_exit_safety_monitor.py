@@ -2277,7 +2277,11 @@ def _persist_exact_sell_cancel_generation(
     assert receipts.persist_pending_sell_submit_custody(stock)
 
 
-def test_integrated_aftermarket_sell_pending_context_is_valid_for_sor():
+@pytest.mark.parametrize(
+    "session_bucket",
+    ["krx_nxt_aftermarket_close_only", "KRX_NXT_AFTERMARKET_CLOSE_ONLY"],
+)
+def test_integrated_aftermarket_sell_pending_context_is_valid_for_sor(session_bucket):
     from src.engine import sniper_execution_receipts as receipts
 
     stock = {
@@ -2294,7 +2298,7 @@ def test_integrated_aftermarket_sell_pending_context_is_valid_for_sor():
             started_at=handlers.time.time(),
             intended_route="SOR",
             intended_effective_venue="KRX_NXT_INTEGRATED",
-            intended_session_bucket="krx_nxt_aftermarket_close_only",
+            intended_session_bucket=session_bucket,
         )
     )
 
@@ -2306,7 +2310,10 @@ def test_integrated_aftermarket_sell_pending_context_is_valid_for_sor():
     assert receipts._sell_pending_submit_path(stock["id"]).exists()
 
 
-def test_integrated_aftermarket_sell_pending_context_rejects_wrong_session():
+@pytest.mark.parametrize("session_bucket", ["krx_regular", "krx_nxt_aftermarket_fake"])
+def test_integrated_aftermarket_sell_pending_context_rejects_wrong_session(
+    session_bucket,
+):
     from src.engine import sniper_execution_receipts as receipts
 
     stock = {
@@ -2323,7 +2330,7 @@ def test_integrated_aftermarket_sell_pending_context_rejects_wrong_session():
             started_at=handlers.time.time(),
             intended_route="SOR",
             intended_effective_venue="KRX_NXT_INTEGRATED",
-            intended_session_bucket="krx_regular",
+            intended_session_bucket=session_bucket,
         )
     )
 

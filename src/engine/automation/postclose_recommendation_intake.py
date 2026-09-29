@@ -42,6 +42,13 @@ SOURCE_LABELS = (
     "machine_entry_timing_tuning",
     "machine_microstructure_policy_approval",
 )
+SAMSUNG_MACHINE_ENTRY_RETIRED_FROM = "2026-09-30"
+
+
+def active_source_labels(target_date: str) -> tuple[str, ...]:
+    if target_date >= SAMSUNG_MACHINE_ENTRY_RETIRED_FROM:
+        return tuple(label for label in SOURCE_LABELS if label != "samsung_machine_entry_tuning")
+    return SOURCE_LABELS
 IMPLEMENT = {"implement_now", "code_patch_required", "already_implemented"}
 COMPLETED = {"already_implemented_verified", "implemented_pass1", "implemented_pass2"}
 DISPOSITIONS = COMPLETED | {
@@ -64,7 +71,7 @@ def source_paths(report_dir: Path, target_date: str) -> dict[str, Path]:
         / (
             f"{label}_{'postclose_' if label == 'machine_microstructure_policy_approval' else ''}{target_date}.json"
         )
-        for label in SOURCE_LABELS
+        for label in active_source_labels(target_date)
     }
     result["postclose_recommendation_dispositions"] = (
         report_dir
@@ -412,7 +419,11 @@ def build_intake(report_dir: Path, target_date: str) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     sources = {}
     issues = []
-    for label in SOURCE_LABELS:
+    if target_date >= SAMSUNG_MACHINE_ENTRY_RETIRED_FROM:
+        sources["samsung_machine_entry_tuning"] = {
+            "sha256": None, "status": "retired_not_applicable"
+        }
+    for label in active_source_labels(target_date):
         payload, sha, error = _read(paths[label])
         sources[label] = {"sha256": sha, "status": error or "loaded"}
         if error:
@@ -694,7 +705,7 @@ def build_intake(report_dir: Path, target_date: str) -> dict[str, Any]:
         }
     )
     missing_sources = [
-        label for label in SOURCE_LABELS if sources[label]["status"] == "missing"
+        label for label in active_source_labels(target_date) if sources[label]["status"] == "missing"
     ]
     return {
         "schema": SCHEMA,

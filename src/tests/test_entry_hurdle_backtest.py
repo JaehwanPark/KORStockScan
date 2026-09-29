@@ -155,6 +155,9 @@ def test_entry_hurdle_backtest_classifies_overblocking_from_existing_artifacts(
                         "emitted_at": "2026-06-05T10:00:00+09:00",
                         "fields": {
                             "ai_score": "82.0",
+                            "entry_ai_submit_authority_action": "BUY",
+                            "entry_ai_submit_authority_result_source": "live",
+                            "entry_ai_submit_authority_fresh_prior": "True",
                             "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
                             "curr_vs_micro_vwap_bp": "43.69",
                             "micro_vwap_available": "True",
@@ -275,7 +278,7 @@ def test_entry_hurdle_backtest_classifies_overblocking_from_existing_artifacts(
         "trace_latency_refresh_recovered_downstream_blocker",
         "review_pre_submit_liquidity_relief_scope",
         "review_overbought_gate_miss_ev_recovery_scope",
-        "review_ai_wait_score_recheck_scope",
+        "audit_ai_wait_action_and_source_lineage",
         "audit_late_entry_price_drift_guard_context",
     ]
     assert all(
@@ -291,16 +294,13 @@ def test_entry_hurdle_backtest_classifies_overblocking_from_existing_artifacts(
         ]
         == 1
     )
-    assert (
-        policy_backtest["ai_score_60_74_strong_bundle_recheck"][
-            "eligible_recheck_attempts"
-        ]
-        == 2
+    assert policy_backtest["ai_score_60_74_strong_bundle_recheck"]["state"] == (
+        "retired_uncalibrated_ai_score_cohort"
     )
     assert policy_backtest["ai_score_60_74_strong_bundle_recheck"][
-        "excluded_reasons"
-    ] == {"stale_quote_or_tick_context": 1}
-    assert policy_backtest["total"]["eligible_attempts"] == 3
+        "eligible_recheck_attempts"
+    ] is None
+    assert policy_backtest["total"]["eligible_attempts"] == 1
     assert policy_backtest["total"]["conservative_estimated_order_submit_success"] == 0
     overbought = report["summary"]["overbought_gate_counterfactual"]
     assert overbought["decision"] == (

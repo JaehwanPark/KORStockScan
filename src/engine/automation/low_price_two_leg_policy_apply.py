@@ -120,7 +120,8 @@ def build_applied_policy(
         dates = [path.name.removeprefix("samsung_machine_entry_policy_candidate_").removesuffix(".json")
             for path in samsung_dir.glob("samsung_machine_entry_policy_candidate_????-??-??.json")]
         previous = max((day for day in dates if day < target_date.isoformat()), default=candidate["source_date"])
-        if _samsung_same_stage_owner(previous, samsung_dir)["mutation_present"]:
+        if (target_date < date(2026, 9, 30)
+                and _samsung_same_stage_owner(previous, samsung_dir)["mutation_present"]):
             raise ValueError("same_stage_samsung_policy_owner_conflict_at_preopen")
     candidate_source_policies = _candidate_policies(
         candidate, target_date=candidate_date

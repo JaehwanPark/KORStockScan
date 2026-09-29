@@ -103,6 +103,7 @@ from src.engine.scalping.scanner_runtime_scheduler import (
 from src.engine.ai.hot_path_ai_dispatcher import HotPathAIDispatcher
 from src.engine.scalping.scanner_async_eval import ScannerAsyncEvalCoordinator
 from src.engine.scalping.zero_base_probe import probe_item, run_zero_base_probe
+from src.engine.scalping import main_fixed_watch
 from src.scanners.zero_base_discovery_runtime import (
     MACHINE_ENTER_EVENT,
     MAX_CONCURRENT_PROBES,
@@ -2908,6 +2909,8 @@ def _krx_open_epoch_for(now_dt):
 
 def _is_krx_open_watchlist_reset_candidate(target, *, now_dt=None):
     target = target or {}
+    if main_fixed_watch.is_fixed_watch(target):
+        return False
     if str(target.get("status") or "").upper() != "WATCHING":
         return False
     if target.get("buy_time") not in (None, "", 0):
@@ -5468,7 +5471,7 @@ def _scanner_evaluation_lifetime_anchor(target, now_ts=None):
 def _is_scalping_fifo_target(target):
     target = target or {}
     strategy = normalize_strategy(target.get("strategy"))
-    return strategy == "SCALPING"
+    return strategy == "SCALPING" and not main_fixed_watch.is_fixed_watch(target)
 
 
 def _is_zero_base_watch_target(target):
@@ -5742,7 +5745,10 @@ def _scalping_watch_budget_overflow_candidates(targets, now_ts):
         if str((target or {}).get("status") or "").upper() == "WATCHING"
         and _is_scalping_fifo_target(target)
     ]
-    total = _scalping_fifo_max_active()
+    total = max(0, _scalping_fifo_max_active() - int(main_fixed_watch.enabled()))
+    if main_fixed_watch.enabled():
+        overflow = max(0, len(candidates) - total)
+        return _scalping_fifo_overflow_candidates(candidates, now_ts)[:overflow]
     if any(_is_zero_base_watch_target(target) for target in candidates):
         overflow = max(0, len(candidates) - total)
         return _scalping_fifo_overflow_candidates(candidates, now_ts)[:overflow]
@@ -5794,15 +5800,16 @@ def _scalping_attach_capacity_decision(new_target, now_ts, watching_targets=None
             and _is_scalping_fifo_target(target)
         ]
     if _is_zero_base_watch_target(new_target):
-        total = _scalping_fifo_max_active()
+        total = max(0, _scalping_fifo_max_active() - int(main_fixed_watch.enabled()))
+        ordinary_count = sum(_is_scalping_fifo_target(t) for t in watching_targets)
         return (
-            len(watching_targets) < total,
+            ordinary_count < total,
             [],
             {
                 "scanner_watch_budget_policy": "zero_base_global_watch_cap_v1",
                 "scanner_watch_budget_total": total,
                 "scanner_watch_budget_owner": GENERAL_SCALPING,
-                "scanner_watch_budget_candidate_overflow": len(watching_targets) >= total,
+                "scanner_watch_budget_candidate_overflow": ordinary_count >= total,
                 "scanner_watch_budget_replacement_count": 0,
             },
         )
@@ -6165,9 +6172,13 @@ def _initial_ws_registration_groups(targets, now_ts=None):
         if _is_scanner_watching_target(target):
             scanner_targets.append(target)
             continue
-        if code not in seen_priority:
-            priority_codes.append(code)
-            seen_priority.add(code)
+        priority_item = code
+        if main_fixed_watch.is_fixed_watch(target):
+            route = main_fixed_watch.session_route(now_ts)
+            priority_item = route["item"] if route else ""
+        if priority_item and priority_item not in seen_priority:
+            priority_codes.append(priority_item)
+            seen_priority.add(priority_item)
 
     overflow_ids = {
         _target_key(item)
@@ -6184,6 +6195,45 @@ def _initial_ws_registration_groups(targets, now_ts=None):
             seen_scanner.add(code)
 
     return priority_codes, scanner_codes
+
+
+def _reconcile_main_fixed_watch(targets, *, now_ts, publish_reg):
+    if main_fixed_watch.enabled():
+        exclusion = evaluate_main_bot_control_exclusion(
+            main_fixed_watch.SAMSUNG_CODE
+        )
+        if exclusion.excluded:
+            return "manual_control_excluded"
+    try:
+        with ENTRY_LOCK:
+            outcome, target = main_fixed_watch.reconcile(
+                DB, targets, now_epoch=now_ts,
+                watch_cap=_scalping_fifo_max_active(),
+            )
+    except Exception as exc:
+        log_error(f"[MAIN_FIXED_WATCH] reconcile failed: {type(exc).__name__}: {exc}")
+        return "reconcile_error"
+    if outcome == "armed" and target is not None:
+        route = main_fixed_watch.session_route(now_ts)
+        if publish_reg and route is not None:
+            event_bus.publish("COMMAND_WS_REG", {
+                "codes": [route["item"]],
+                "source": "main_fixed_watch_admission",
+                "required_realtime_types": ("0B", "0D"),
+            })
+        log_info(
+            "[MAIN_FIXED_WATCH] armed "
+            f"id={target.get('id')} admission={target.get('watch_admission_id')} "
+            f"generation={target.get('watch_generation_id')} item={route['item'] if route else '-'}"
+        )
+    elif outcome not in {"already_watching", "disabled", "outside_supported_session"}:
+        last_reason = getattr(_reconcile_main_fixed_watch, "last_wait_reason", "")
+        last_log = getattr(_reconcile_main_fixed_watch, "last_wait_log_epoch", 0.0)
+        if outcome != last_reason or now_ts - last_log >= 60:
+            log_info(f"[MAIN_FIXED_WATCH] admission waiting reason={outcome}")
+            _reconcile_main_fixed_watch.last_wait_reason = outcome
+            _reconcile_main_fixed_watch.last_wait_log_epoch = now_ts
+    return outcome
 
 
 def _runtime_iteration_targets(targets, now_ts):
@@ -11779,8 +11829,12 @@ def attach_db_poll_target_if_missing(db_target, targets, now_ts):
         ):
             targets[:] = [target for target in targets if target is not dt]
             return False
-    reg_payload = {"codes": [code]}
-    if dt["strategy"] == "SCALPING" and dt["position_tag"] == "SCANNER":
+    fixed_route = main_fixed_watch.session_route(now_ts) if main_fixed_watch.is_fixed_watch(dt) else None
+    reg_payload = {"codes": [fixed_route["item"] if fixed_route else code]}
+    if main_fixed_watch.is_fixed_watch(dt):
+        reg_payload["source"] = "main_fixed_watch_db_restore"
+        reg_payload["required_realtime_types"] = ("0B", "0D")
+    elif dt["strategy"] == "SCALPING" and dt["position_tag"] == "SCANNER":
         reg_payload["source"] = "scanner_db_poll_attach"
     event_bus.publish("COMMAND_WS_REG", reg_payload)
 
@@ -12425,6 +12479,7 @@ def run_sniper(is_test_mode=False):
         log_error(f"[SELL_POSTCOMMIT_RECOVERY_PENDING] result={postcommit_recovery}")
     sync_balance_with_db()
     init_market_regime_service()
+    _reconcile_main_fixed_watch(ACTIVE_TARGETS, now_ts=time.time(), publish_reg=False)
 
     if WS_MANAGER:
         try:
@@ -12725,10 +12780,7 @@ def run_sniper(is_test_mode=False):
     )
     widget_observation_items = list(pinned_ws_observation_items())
     boot_priority_items = widget_observation_items + [
-        code
-        for code in priority_codes
-        if str(code or "").strip()[:6]
-        not in {item[:6] for item in widget_observation_items}
+        item for item in priority_codes if item not in widget_observation_items
     ]
     if boot_priority_items:
         event_bus.publish(
@@ -12937,6 +12989,13 @@ def run_sniper(is_test_mode=False):
                     attach_db_poll_target_if_missing(dt, targets, now_ts)
                 last_db_poll_time = now_ts
             _db_elapsed_ms = (time.perf_counter() - _t0_db) * 1000
+            if (main_fixed_watch.enabled() or any(
+                main_fixed_watch.is_fixed_watch(target) for target in targets
+            )) and now_ts - getattr(
+                run_sniper, "last_fixed_watch_reconcile_time", 0.0
+            ) >= 5.0:
+                _reconcile_main_fixed_watch(targets, now_ts=now_ts, publish_reg=True)
+                run_sniper.last_fixed_watch_reconcile_time = now_ts
 
             # =====================================================
             # WATCHING TTL / FIFO
@@ -14598,8 +14657,34 @@ def run_sniper(is_test_mode=False):
                     and code in scanner_ws_snapshot_cache
                 ):
                     ws_data = scanner_ws_snapshot_cache.get(code) or {}
+                elif status == "WATCHING" and main_fixed_watch.is_fixed_watch(stock):
+                    route = main_fixed_watch.session_route(now_ts)
+                    ws_data = (
+                        WS_MANAGER.get_exact_item_data(code, route["item"])
+                        if WS_MANAGER is not None and route is not None
+                        else {}
+                    )
                 else:
                     ws_data = WS_MANAGER.get_latest_data(code) if WS_MANAGER else {}
+                if status == "WATCHING" and main_fixed_watch.is_fixed_watch(stock):
+                    if not main_fixed_watch.enabled():
+                        continue
+                    ready, wait_reason = main_fixed_watch.observation_ready(
+                        stock, ws_data, now_epoch=now_ts,
+                    )
+                    if not ready:
+                        if now_ts - float(stock.get("_fixed_last_wait_log_epoch") or 0) >= 10:
+                            stock["_fixed_last_wait_log_epoch"] = now_ts
+                            sniper_state_handlers._log_entry_pipeline(
+                                stock, code, "main_fixed_watch_observation_wait",
+                                watch_origin=main_fixed_watch.WATCH_ORIGIN,
+                                watch_admission_id=stock.get("watch_admission_id"),
+                                watch_generation_id=stock.get("watch_generation_id"),
+                                source_quality_reason=wait_reason,
+                                actual_order_submitted=False,
+                                broker_order_forbidden=True,
+                            )
+                        continue
                 revive_quote_barrier_fields = {}
                 if _is_scanner_watching_target(stock):
                     ws_data, revive_quote_barrier_fields = (

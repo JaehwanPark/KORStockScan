@@ -304,12 +304,11 @@ def _same_stage_owner_guard(
     widget_policy_dir: Path = WIDGET_POLICY_DIR,
     effective_date: date | None = None,
 ) -> dict[str, Any]:
-    paths = (
-        low_price_candidate_dir
-        / f"low_price_two_leg_policy_candidate_{target_date.isoformat()}.json",
-        samsung_candidate_dir
-        / f"samsung_machine_entry_policy_candidate_{target_date.isoformat()}.json",
-    )
+    paths = [low_price_candidate_dir
+             / f"low_price_two_leg_policy_candidate_{target_date.isoformat()}.json"]
+    if target_date < date(2026, 9, 30):
+        paths.append(samsung_candidate_dir
+                     / f"samsung_machine_entry_policy_candidate_{target_date.isoformat()}.json")
     owners: list[dict[str, Any]] = []
     for path in paths:
         payload = _read_json(path)

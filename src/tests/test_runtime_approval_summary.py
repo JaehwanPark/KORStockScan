@@ -243,6 +243,22 @@ def test_wrapper_disabled_owner_is_not_required(monkeypatch, tmp_path):
     assert report["owner_contract"]["fallback_used"] is True
 
 
+def test_samsung_machine_entry_retired_source_is_not_required_after_cutover(monkeypatch, tmp_path):
+    _patch(monkeypatch, tmp_path)
+    target = "2026-09-30"
+    _seed_required(target)
+    mod._paths(target)["machine_entry"].unlink()
+
+    report = mod.build_runtime_approval_summary(target)
+
+    source = report["sources"]["machine_entry"]
+    assert source["required"] is False
+    assert source["applicability"] == "retired_not_applicable"
+    assert source["status"] == "retired_not_applicable"
+    assert source["policy_owner"] is None
+    assert not any(reason.startswith("machine_entry:") for reason in report["blocking_reasons"])
+
+
 def test_large_report_uses_semantically_bound_candidate_companion(monkeypatch, tmp_path):
     _patch(monkeypatch, tmp_path)
     target = "2026-09-19"

@@ -18,6 +18,7 @@ from src.engine.ai_prompt_contracts import (
     SCALPING_WATCHING_HOT_SYSTEM_PROMPT,
     SCALPING_WATCHING_SYSTEM_PROMPT,
     SWING_SYSTEM_PROMPT,
+    normalize_condition_entry_from_scalping_result,
 )
 from src.engine.ai_response_contracts import normalize_ai_reason_language
 from src.engine.ai_response_contracts import (
@@ -858,7 +859,7 @@ def test_remote_entry_guard_uses_trusted_pressure_axes(monkeypatch):
     )
 
     assert result["action"] == "WAIT"
-    assert result["score"] == 74
+    assert result["score"] == 50
     assert "remote_buy_guard" in result["reason"]
 
 
@@ -1570,6 +1571,10 @@ def test_holding_score_v2_payload_stays_compact_for_low_latency(monkeypatch):
     assert set(market_flow).issuperset(
         {"compact_features", "tick_summary", "candle_summary"}
     )
+    assert not (
+        set(market_flow["compact_features"])
+        & set(market_flow["microstructure_reaction_context"])
+    )
     assert "feature_packet" not in market_flow
     assert "audit_fields" not in market_flow
     assert "recent_ticks_latest_first" not in market_flow
@@ -1974,7 +1979,7 @@ def test_analyze_target_cache_ignores_transient_market_timestamps(monkeypatch):
     assert call_count["value"] == 1
     assert first["cache_hit"] is False
     assert second["cache_hit"] is True
-    assert second["score"] == 61
+    assert second["score"] == 50
 
 
 def test_gatekeeper_cache_ignores_captured_at(monkeypatch):
@@ -2246,7 +2251,7 @@ def test_holding_cache_profile_absorbs_micro_market_noise(monkeypatch):
     assert call_count["value"] == 1
     assert first["cache_hit"] is False
     assert second["cache_hit"] is True
-    assert second["score"] == 58
+    assert second["score"] == 50
 
 
 def test_scalping_entry_prompts_align_default_runtime_buy_band():
@@ -2963,6 +2968,16 @@ def test_analyze_target_uses_shared_prompt_when_split_disabled(monkeypatch):
     assert result["ai_prompt_version"] == "split_disabled_v1"
 
 
+@pytest.mark.parametrize("raw_score", [0, 50, 74, 88, 100])
+def test_condition_entry_confidence_has_no_score_authority(raw_score):
+    result = normalize_condition_entry_from_scalping_result(
+        {"action": "BUY", "score": raw_score, "reason": "candidate"}
+    )
+    assert result["decision"] == "BUY"
+    assert result["confidence"] is None
+    assert result["confidence_status"] == "uncalibrated_entry_ai_score"
+
+
 def test_condition_entry_and_exit_reuse_scalping_routes(monkeypatch):
     engine = _build_engine()
     used_models = []
@@ -3005,7 +3020,8 @@ def test_condition_entry_and_exit_reuse_scalping_routes(monkeypatch):
     ]
     assert used_schemas == ["entry_v1", "holding_score_v2"]
     assert entry["decision"] == "BUY"
-    assert entry["confidence"] == 88
+    assert entry["confidence"] is None
+    assert entry["confidence_status"] == "uncalibrated_entry_ai_score"
     assert exit_result["decision"] == "TRIM"
     assert exit_result["trim_ratio"] == 0.5
 
@@ -3176,7 +3192,7 @@ def test_openai_analyze_target_waits_min_interval_instead_of_score50_cooldown(
     assert len(sleeps) == 1
     assert abs(sleeps[0] - 0.3) < 1e-9
     assert result["action"] == "BUY"
-    assert result["score"] == 88
+    assert result["score"] == 75
     assert result["ai_result_source"] == "live"
     assert result["ai_fallback_score_50"] is False
     assert result["openai_min_interval_wait_ms"] == 300
@@ -3219,7 +3235,7 @@ def test_openai_analyze_target_waits_for_lock_contention_retry(monkeypatch):
     assert acquire_calls
     assert acquire_calls[0][1] > 0
     assert result["action"] == "BUY"
-    assert result["score"] == 88
+    assert result["score"] == 75
     assert result["ai_result_source"] == "live"
     assert result["ai_fallback_score_50"] is False
 

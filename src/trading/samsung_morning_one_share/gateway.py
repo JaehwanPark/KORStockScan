@@ -492,66 +492,23 @@ class KiwoomOneShareGateway:
     def submit_limit_buy(
         self, *, price: int, quantity: int, route: str = "SOR"
     ) -> SubmitResult:
+        """Historical entry API retained for custody recovery; BUY is retired."""
         self._require_write_authority()
-        route = self._validate_route(route)
-        price = self._validate_price(price)
-        quantity = validate_owned_leg_quantity(quantity)
-        if self.new_buy_authority_guard is not None:
-            authority_ready, authority_reason = self.new_buy_authority_guard()
-            if not authority_ready:
-                return SubmitResult(
-                    False,
-                    return_code="AUTHORITY_BLOCKED",
-                    return_msg=str(authority_reason or "new_buy_authority_unavailable"),
-                )
-        if is_buy_side_paused():
-            return SubmitResult(False, return_code="TRADING_PAUSED")
-        response, body = self._post(
-            endpoint="/api/dostk/ordr",
-            api_id="kt10000",
-            payload={
-                "dmst_stex_tp": route,
-                "stk_cd": "005930",
-                "ord_qty": str(quantity),
-                "ord_uv": str(price),
-                "trde_tp": "0",
-                "cond_uv": "",
-            },
+        return SubmitResult(
+            False, return_code="RETIRED_NEW_BUY",
+            return_msg="main_fixed_watch_replacement",
         )
-        return self._submit_result(response, body)
 
     def submit_manual_addon_limit_buy(
         self, *, price: int, quantity: int, route: str
     ) -> SubmitResult:
-        """Submit one explicitly authorized manual-add-on BUY leg.
-
-        This method is intentionally separate from ``submit_limit_buy`` so the
-        normal episode quantity cannot inherit this separate override by accident.
-        """
+        """Retired manual add-on BUY; existing positions retain SELL custody."""
 
         self._require_write_authority()
-        route = self._validate_route(route)
-        price = self._validate_price(price)
-        if isinstance(quantity, bool) or int(quantity) != quantity:
-            raise ValueError("invalid_manual_addon_quantity")
-        quantity = int(quantity)
-        if not 1 <= quantity <= 50:
-            raise ValueError("manual_addon_quantity_outside_1_to_50")
-        if is_buy_side_paused():
-            return SubmitResult(False, return_code="TRADING_PAUSED")
-        response, body = self._post(
-            endpoint="/api/dostk/ordr",
-            api_id="kt10000",
-            payload={
-                "dmst_stex_tp": route,
-                "stk_cd": "005930",
-                "ord_qty": str(quantity),
-                "ord_uv": str(price),
-                "trde_tp": "0",
-                "cond_uv": "",
-            },
+        return SubmitResult(
+            False, return_code="RETIRED_NEW_BUY",
+            return_msg="main_fixed_watch_replacement",
         )
-        return self._submit_result(response, body)
 
     def submit_limit_sell(
         self, *, price: int, quantity: int, route: str = "SOR"

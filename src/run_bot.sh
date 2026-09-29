@@ -319,6 +319,9 @@ while true; do
     # It is applied after dated policy/owner overlays so the PID receipt shows
     # the effective scanner route selected by this immutable launcher.
     export KORSTOCKSCAN_ZERO_BASE_SCANNER_ENABLED=true
+    # Explicit Main fixed-watch cutover. An operator false value remains the
+    # scoped rollback; admission still requires exact broker and owner facts.
+    export KORSTOCKSCAN_MAIN_FIXED_WATCH_005930_ENABLED="${KORSTOCKSCAN_MAIN_FIXED_WATCH_005930_ENABLED:-true}"
     export_runtime_source_provenance
 
     # 봇 실행 (경로나 파일명은 환경에 맞게 수정)

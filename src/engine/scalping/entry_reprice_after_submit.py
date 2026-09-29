@@ -89,29 +89,30 @@ def _block(reason: str, fields: dict[str, Any]) -> EntryRepriceDecision:
 
 
 def _scout_parent_reprice_authority(order: dict[str, Any]) -> dict[str, Any]:
-    """Resolve the frozen Entry-AI parent for a rising-missed scout reprice.
+    """Resolve a frozen Entry-AI parent for a pending-order reprice.
 
     A scout order is submitted only after the normal runtime guard has already
     accepted its frozen parent.  Its latency feature score is diagnostic and
     must not replace that parent when a later reprice evaluates fresh quotes.
-    Non-scout orders retain the legacy score gate until they have their own
-    canonical parent contract.
+    Orders without a frozen parent contract cannot use an AI score as a
+    substitute for reprice authority.
     """
 
     prefixes = (
         "rising_missed_scout_parent_ai_",
         "scout_ai_parent_",
+        "entry_reprice_parent_ai_",
     )
-    scoped = any(
-        key.startswith(prefix)
-        for key in order
-        for prefix in prefixes
+    prefix = next(
+        (prefix for prefix in prefixes if any(key.startswith(prefix) for key in order)),
+        None,
     )
-    if not scoped:
+    if prefix is None:
         return {
             "scoped": False,
-            "status": "legacy_score_fallback",
-            "reason": "",
+            "scope": "unbound_order",
+            "status": "parent_ai_contract_missing",
+            "reason": "parent_ai_contract_missing",
             "action": "",
             "contract_status": "",
             "trace_id": "",
@@ -120,18 +121,23 @@ def _scout_parent_reprice_authority(order: dict[str, Any]) -> dict[str, Any]:
         }
 
     def field(name: str) -> Any:
-        return order.get(f"rising_missed_scout_parent_ai_{name}") or order.get(
-            f"scout_ai_parent_{name}"
-        )
+        return order.get(f"{prefix}{name}")
 
     action = str(field("action") or "").strip().upper()
+    result_source = str(field("result_source") or "").strip().lower()
     contract_status = str(field("contract_status") or "").strip().lower()
     trace_id = str(field("decision_trace_id") or "").strip()
     snapshot_id = str(field("snapshot_id") or "").strip()
     score = _safe_float(field("score"), 0.0)
     base = {
         "scoped": True,
+        "scope": (
+            "entry_reprice_parent"
+            if prefix == "entry_reprice_parent_ai_"
+            else "rising_missed_scout"
+        ),
         "action": action or "NOT_EVALUATED",
+        "result_source": result_source or "unreported",
         "contract_status": contract_status or "unreported",
         "trace_id": trace_id or "-",
         "snapshot_id": snapshot_id or "-",
@@ -139,7 +145,17 @@ def _scout_parent_reprice_authority(order: dict[str, Any]) -> dict[str, Any]:
     }
     if action in {"VETO", "DROP", "NO_BUY_AI", "WAIT", "REJECT"}:
         return {**base, "status": "explicit_veto", "reason": "parent_ai_veto"}
-    if action == "BUY" and contract_status == "pass" and trace_id and snapshot_id:
+    if (
+        action == "BUY"
+        and result_source in {"live", "prior_valid"}
+        and contract_status == "pass"
+        and trace_id
+        and snapshot_id
+        and (
+            prefix != "entry_reprice_parent_ai_"
+            or _safe_bool(field("trusted_at_submit"))
+        )
+    ):
         return {**base, "status": "authorized", "reason": ""}
     return {
         **base,
@@ -310,13 +326,10 @@ def evaluate_entry_reprice_after_submit(
     parent_authority = _scout_parent_reprice_authority(order)
     fields.update(
         {
-            "reprice_parent_authority_scope": (
-                "rising_missed_scout"
-                if parent_authority["scoped"]
-                else "legacy_score_fallback"
-            ),
+            "reprice_parent_authority_scope": parent_authority["scope"],
             "reprice_parent_authority_status": parent_authority["status"],
             "reprice_parent_action": parent_authority["action"] or "-",
+            "reprice_parent_result_source": parent_authority.get("result_source", "-"),
             "reprice_parent_contract_status": (
                 parent_authority["contract_status"] or "-"
             ),
@@ -358,11 +371,8 @@ def evaluate_entry_reprice_after_submit(
         return _block("parent_ai_veto", fields)
     if parent_authority["status"] == "source_quality_blocked":
         return _block("source_quality_blocked", fields)
-    if (
-        parent_authority["status"] == "legacy_score_fallback"
-        and score < float(strong_score_floor)
-    ):
-        return _block("low_ai_score", fields)
+    if parent_authority["status"] == "parent_ai_contract_missing":
+        return _block("parent_ai_contract_missing", fields)
     if action not in {"BUY_DEFENSIVE", "BUY_NOW"}:
         return _block("action_not_buy", fields)
     if micro_state in {"bearish", "strong_bearish"}:

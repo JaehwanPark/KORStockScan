@@ -100,44 +100,13 @@ def evaluate_ai_score_prior(
     )
     score_value = _safe_float(score, 0.0)
     action_value = str(action or "").strip().upper() or "-"
-    if not usable:
-        band = "neutral_or_unknown"
-        weight = 0.0
-        confidence = "unknown"
-        reason = "score_unusable_neutral_prior"
-    elif score_value >= threshold + 5.0:
-        band = "high"
-        weight = 1.0
-        confidence = "high"
-        reason = "score_prior_high"
-    elif score_value >= threshold:
-        band = "supportive"
-        weight = 0.6
-        confidence = "medium"
-        reason = "score_prior_supportive"
-    elif score_value >= threshold - 10.0:
-        band = "low"
-        weight = -0.3
-        confidence = "medium"
-        reason = "score_prior_low"
-    else:
-        band = "very_low"
-        weight = -0.6
-        confidence = "medium"
-        reason = "score_prior_very_low"
-
-    if action_value != "BUY":
-        weight = min(weight, 0.0)
-        if usable:
-            reason = "ai_action_not_buy_score_prior"
-
     return {
-        "score_gate_converted_to_prior": True,
+        "score_gate_converted_to_prior": False,
         "hard_gate_veto": False,
-        "score_prior_band": band,
-        "ai_score_prior_weight": round(float(weight), 4),
-        "score_prior_confidence": confidence,
-        "score_prior_reason": reason,
+        "score_prior_band": "neutral_or_unknown",
+        "ai_score_prior_weight": 0.0,
+        "score_prior_confidence": "unknown",
+        "score_prior_reason": "entry_ai_score_no_decision_authority",
         "score_prior_threshold": round(float(threshold), 4),
         "score_prior_action": action_value,
         "score_prior_score": round(float(score_value), 4),

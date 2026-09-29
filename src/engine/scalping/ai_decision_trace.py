@@ -721,6 +721,12 @@ def _request_context(
         or metadata.get("snapshot_id"),
         "scanner_promotion_id": _first_value(parsed, ("scanner_promotion_id",))
         or metadata.get("scanner_promotion_id"),
+        "watch_origin": _first_value(parsed, ("watch_origin",))
+        or metadata.get("watch_origin"),
+        "watch_admission_id": _first_value(parsed, ("watch_admission_id",))
+        or metadata.get("watch_admission_id"),
+        "watch_generation_id": _first_value(parsed, ("watch_generation_id",))
+        or metadata.get("watch_generation_id"),
         "effective_venue": _first_value(parsed, ("effective_venue",))
         or metadata.get("effective_venue"),
         "session_bucket": _first_value(
@@ -1035,7 +1041,10 @@ def bind_machine_observation_revision(state, capture, *, symbol, bundle_sha256):
     """
     if not isinstance(state, dict) or capture.get("machine_capture_status") != "captured":
         return
-    key = [capture.get("scanner_promotion_id"), capture.get("evaluation_attempt_id"),
+    source_identity = capture.get("scanner_promotion_id")
+    if capture.get("watch_origin") == "MAIN_FIXED_WATCH":
+        source_identity = capture.get("watch_admission_id")
+    key = [source_identity, capture.get("evaluation_attempt_id"),
            symbol, capture.get("effective_venue"),
            capture.get("market_session_bucket"), bundle_sha256, os.getpid()]
     digest = capture.get("machine_observation_sha256")
@@ -1109,6 +1118,9 @@ def capture_machine_observation(
             )
         ),
         "scanner_promotion_id": context.get("scanner_promotion_id"),
+        "watch_origin": context.get("watch_origin"),
+        "watch_admission_id": context.get("watch_admission_id"),
+        "watch_generation_id": context.get("watch_generation_id"),
         **(
             {
                 "venue": "KRX_NXT_INTEGRATED",
@@ -1181,6 +1193,9 @@ def capture_machine_observation(
             consumed_at=now.isoformat()),
         "captured_at": now.isoformat(),
         "scanner_promotion_id": context.get("scanner_promotion_id"),
+        "watch_origin": context.get("watch_origin"),
+        "watch_admission_id": context.get("watch_admission_id"),
+        "watch_generation_id": context.get("watch_generation_id"),
         "label_context": context,
         "bundle_sha256": bundle_sha256,
         "source": source,
@@ -1359,6 +1374,9 @@ def capture_ai_request(
             "symbol": context.get("stock_code") or str(symbol or "") or None,
             "snapshot_id": context.get("snapshot_id"),
             "scanner_promotion_id": context.get("scanner_promotion_id"),
+            "watch_origin": context.get("watch_origin"),
+            "watch_admission_id": context.get("watch_admission_id"),
+            "watch_generation_id": context.get("watch_generation_id"),
             "effective_venue": context.get("effective_venue"),
             "session_bucket": context.get("session_bucket"),
             "broker_route": context.get("broker_route"),
@@ -1494,6 +1512,9 @@ def capture_ai_request(
             "ai_trace_broker_order_no": context.get("broker_order_no"),
             "ai_trace_snapshot_id": context.get("snapshot_id"),
             "ai_trace_scanner_promotion_id": context.get("scanner_promotion_id"),
+            "ai_trace_watch_origin": context.get("watch_origin"),
+            "ai_trace_watch_admission_id": context.get("watch_admission_id"),
+            "ai_trace_watch_generation_id": context.get("watch_generation_id"),
             "ai_trace_effective_venue": context.get("effective_venue"),
             "ai_trace_session_bucket": context.get("session_bucket"),
             "ai_trace_broker_route": context.get("broker_route"),
@@ -1914,6 +1935,9 @@ def record_ai_decision_trace(
                 "ai_trace_scanner_promotion_id",
                 "scanner_promotion_id",
             ),
+            "watch_origin": _optional(merged, "ai_trace_watch_origin", "watch_origin"),
+            "watch_admission_id": _optional(merged, "ai_trace_watch_admission_id", "watch_admission_id"),
+            "watch_generation_id": _optional(merged, "ai_trace_watch_generation_id", "watch_generation_id"),
             "endpoint": _optional(
                 merged,
                 "ai_trace_endpoint_name",
@@ -2712,6 +2736,9 @@ def record_ai_decision_trace(
             "broker_order_no": trace_row["broker_order_no"],
             "snapshot_id": trace_row["snapshot_id"],
             "scanner_promotion_id": trace_row["scanner_promotion_id"],
+            "watch_origin": trace_row.get("watch_origin"),
+            "watch_admission_id": trace_row.get("watch_admission_id"),
+            "watch_generation_id": trace_row.get("watch_generation_id"),
             "action": trace_row["action"],
             "score": trace_row["score"],
             "confidence": trace_row["confidence"],
