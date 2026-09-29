@@ -21,6 +21,183 @@ def test_finalization_detector_window_precedes_preopen_scanner():
     assert jobs["log_rotation_cleanup"]["window_end"] == (6, 50)
 
 
+@pytest.mark.parametrize(
+    ("finalized_at", "cleaned_at", "expected_status", "expected_severity"),
+    [
+        ("06:42:00", "06:45:00", "pass", "pass"),
+        ("07:11:31", "08:28:17", "recovered_late", "warning"),
+    ],
+)
+def test_morning_finalization_checks_previous_source_date_and_completion_time(
+    monkeypatch, tmp_path, finalized_at, cleaned_at, expected_status, expected_severity
+):
+    import src.engine.automation.postclose_finalization_generation as generation
+    import src.engine.error_detectors.cron_completion as cc
+
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    (logs_dir / "postclose_finalization_cron.log").write_text(
+        "[DONE] postclose_finalization target_date=2026-09-28 "
+        f"finished_at=2026-09-29T{finalized_at}+0900 "
+        f"chain_sha256={'a' * 64} snapshot_generation_sha256={'b' * 64} "
+        f"detector_run_id=cron-abc detector_report_sha256={'c' * 64}\n"
+    )
+    (logs_dir / "log_rotation_cleanup_cron.log").write_text(
+        "[DONE] log_rotation_cleanup target_date=2026-09-28 "
+        f"finished_at=2026-09-29T{cleaned_at}+0900\n"
+    )
+    monkeypatch.setattr(cc, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(cc, "_today_kst", lambda: "2026-09-29")
+    monkeypatch.setattr(cc, "_kst_time_tuple", lambda: (12, 16))
+    monkeypatch.setattr(
+        cc, "CRON_JOB_REGISTRY",
+        [
+            dict(job)
+            for job in CRON_JOB_REGISTRY
+            if job["id"] in {"postclose_finalization", "log_rotation_cleanup"}
+        ],
+    )
+    monkeypatch.setattr(
+        cc, "load_installed_crontab", lambda: "0 5 * * * # POSTCLOSE_FINALIZATION_0500"
+    )
+    monkeypatch.setattr(generation, "finalization_marker_issues", lambda *_: [])
+
+    result = CronCompletionDetector(dry_run=True).check()
+
+    assert result.details["postclose_finalization_source_date"] == "2026-09-28"
+    assert result.details["postclose_finalization_effective_date"] == "2026-09-29"
+    assert result.details["postclose_finalization_status"] == expected_status
+    assert result.details["log_rotation_cleanup_status"] == expected_status
+    assert result.severity == expected_severity
+    assert "no today marker" not in result.summary
+
+
+def test_morning_finalization_for_current_source_date_is_due_next_trading_day(
+    monkeypatch, tmp_path
+):
+    import src.engine.error_detectors.cron_completion as cc
+
+    monkeypatch.setattr(cc, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(cc, "_today_kst", lambda: "2026-09-29")
+    monkeypatch.setattr(cc, "_kst_time_tuple", lambda: (12, 16))
+    monkeypatch.setattr(
+        cc, "CRON_JOB_REGISTRY",
+        [dict(job) for job in CRON_JOB_REGISTRY if job["id"] == "postclose_finalization"],
+    )
+    monkeypatch.setattr(
+        cc, "load_installed_crontab", lambda: "0 5 * * * # POSTCLOSE_FINALIZATION_0500"
+    )
+    detector = CronCompletionDetector(dry_run=True)
+    detector.postclose_source_date = "2026-09-29"
+
+    result = detector.check()
+
+    assert result.details["postclose_finalization_effective_date"] == "2026-09-30"
+    assert result.details["postclose_finalization_status"] == "not_yet_due"
+    assert result.severity == "pass"
+
+
+def test_morning_cleanup_still_fails_when_previous_source_receipt_is_missing(
+    monkeypatch, tmp_path
+):
+    import src.engine.error_detectors.cron_completion as cc
+
+    log_path = tmp_path / "logs/log_rotation_cleanup_cron.log"
+    log_path.parent.mkdir()
+    log_path.write_text(
+        "[DONE] log_rotation_cleanup target_date=2026-09-25 "
+        "finished_at=2026-09-28T06:30:00+0900\n"
+    )
+    monkeypatch.setattr(cc, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(cc, "_today_kst", lambda: "2026-09-29")
+    monkeypatch.setattr(cc, "_kst_time_tuple", lambda: (12, 16))
+    monkeypatch.setattr(
+        cc, "CRON_JOB_REGISTRY",
+        [dict(job) for job in CRON_JOB_REGISTRY if job["id"] == "log_rotation_cleanup"],
+    )
+    monkeypatch.setattr(
+        cc, "load_installed_crontab", lambda: "0 5 * * * # POSTCLOSE_FINALIZATION_0500"
+    )
+
+    result = CronCompletionDetector(dry_run=True).check()
+
+    assert result.details["log_rotation_cleanup_source_date"] == "2026-09-28"
+    assert result.details["log_rotation_cleanup_status"] == "fail"
+    assert result.severity == "fail"
+
+
+def test_explicit_previous_source_date_keeps_morning_window_open(
+    monkeypatch, tmp_path
+):
+    import src.engine.error_detectors.cron_completion as cc
+
+    log_path = tmp_path / "logs/log_rotation_cleanup_cron.log"
+    log_path.parent.mkdir()
+    log_path.write_text("")
+    monkeypatch.setattr(cc, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(cc, "_today_kst", lambda: "2026-09-29")
+    monkeypatch.setattr(cc, "_kst_time_tuple", lambda: (5, 10))
+    monkeypatch.setattr(
+        cc, "CRON_JOB_REGISTRY",
+        [dict(job) for job in CRON_JOB_REGISTRY if job["id"] == "log_rotation_cleanup"],
+    )
+    monkeypatch.setattr(
+        cc, "load_installed_crontab", lambda: "0 5 * * * # POSTCLOSE_FINALIZATION_0500"
+    )
+    detector = CronCompletionDetector(dry_run=True)
+    detector.postclose_source_date = "2026-09-28"
+
+    result = detector.check()
+
+    assert result.details["log_rotation_cleanup_status"] == "warning"
+    assert "no today marker yet" in result.summary
+
+
+@pytest.mark.parametrize(
+    ("source_date", "effective_date", "selected_at", "expected_status"),
+    [
+        ("2026-09-28", "2026-09-29", "2026-09-29T12:04:57+09:00", "historical_gap"),
+        ("2026-09-28", "2026-09-29", "2026-09-29T06:00:00+09:00", "fail"),
+        ("2026-09-29", "2026-09-30", "2026-09-30T12:04:57+09:00", "fail"),
+    ],
+)
+def test_only_preselection_0928_unbound_generation_is_historical(
+    monkeypatch, tmp_path, source_date, effective_date, selected_at, expected_status
+):
+    import src.engine.automation.postclose_finalization_generation as generation
+    import src.engine.error_detectors.cron_completion as cc
+
+    log_path = tmp_path / "logs/postclose_finalization_cron.log"
+    log_path.parent.mkdir()
+    log_path.write_text(
+        f"[DONE] postclose_finalization target_date={source_date} "
+        f"finished_at={effective_date}T07:11:31+0900\n"
+    )
+    selection_path = tmp_path / "data/runtime/runtime_release_selection.json"
+    selection_path.parent.mkdir(parents=True)
+    selection_path.write_text(json.dumps({"selected_at_kst": selected_at}))
+    monkeypatch.setattr(cc, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(cc, "_today_kst", lambda: effective_date)
+    monkeypatch.setattr(cc, "_kst_time_tuple", lambda: (12, 16))
+    monkeypatch.setattr(
+        cc, "CRON_JOB_REGISTRY",
+        [dict(job) for job in CRON_JOB_REGISTRY if job["id"] == "postclose_finalization"],
+    )
+    monkeypatch.setattr(
+        cc, "load_installed_crontab", lambda: "0 5 * * * # POSTCLOSE_FINALIZATION_0500"
+    )
+    monkeypatch.setattr(
+        generation,
+        "finalization_marker_issues",
+        lambda *_: ["finalization_generation_unbound"],
+    )
+
+    result = CronCompletionDetector(dry_run=True).check()
+
+    assert result.details["postclose_finalization_status"] == expected_status
+    assert result.severity == ("warning" if expected_status == "historical_gap" else "fail")
+
+
 def test_error_detector_cron_install_preserves_release_routed_finalization(tmp_path):
     root = Path(__file__).resolve().parents[2]
     state = tmp_path / "crontab.txt"
