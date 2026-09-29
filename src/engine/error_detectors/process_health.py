@@ -6,7 +6,7 @@ import os
 import subprocess
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from src.utils.constants import PROJECT_ROOT, TRADING_RULES
 from src.utils.market_day import is_krx_trading_day
@@ -43,6 +43,25 @@ _SAMSUNG_MORNING_PREFLIGHT_UNIT = "korstockscan-samsung-one-share-preflight.serv
 _SAMSUNG_MORNING_TIMER_UNIT = "korstockscan-samsung-morning-one-share.timer"
 _SAMSUNG_MORNING_AUTHORITY_SCHEMA = "samsung_morning_two_episode_authority_v7"
 _SAMSUNG_MORNING_HANDOFF_SCHEMA = "samsung_morning_main_bot_pid_handoff_v1"
+_SAMSUNG_ONE_SHARE_RETIRED_DATE = date(2026, 9, 29)
+_SAMSUNG_RETIRED_TIMER_UNITS = (
+    "korstockscan-samsung-morning-one-share.timer",
+    "korstockscan-samsung-one-share-preflight.timer",
+    "korstockscan-samsung-midday-one-share.timer",
+    "korstockscan-samsung-midday-one-share-preflight.timer",
+    "korstockscan-samsung-afternoon-one-share.timer",
+    "korstockscan-samsung-afternoon-one-share-preflight.timer",
+    "korstockscan-samsung-morning-manual-addon-20260813.timer",
+)
+_SAMSUNG_RETIRED_SERVICE_UNITS = (
+    "korstockscan-samsung-morning-one-share.service",
+    "korstockscan-samsung-one-share-preflight.service",
+    "korstockscan-samsung-midday-one-share.service",
+    "korstockscan-samsung-midday-one-share-preflight.service",
+    "korstockscan-samsung-afternoon-one-share.service",
+    "korstockscan-samsung-afternoon-one-share-preflight.service",
+    "korstockscan-samsung-morning-manual-addon-20260813.service",
+)
 _SYSTEMD_QUERY_ATTEMPTS = 2
 _SYSTEMD_QUERY_TIMEOUT_SEC = 3
 
@@ -167,9 +186,13 @@ class ProcessHealthDetector(BaseDetector):
             ).strip()
         samsung_severity = samsung_morning.get("severity")
         if samsung_severity == "fail":
+            retired = str(samsung_morning.get("status") or "").startswith("retirement_")
             samsung_summary = (
-                "Samsung morning expected runtime is not healthy: "
-                f"{samsung_morning.get('reason') or 'unknown'}."
+                (
+                    "Samsung retired one-share expected set is not healthy: "
+                    if retired else "Samsung morning expected runtime is not healthy: "
+                )
+                + f"{samsung_morning.get('reason') or 'unknown'}."
             )
             if result.severity == "fail":
                 result.summary = f"{result.summary} {samsung_summary}"
@@ -177,9 +200,12 @@ class ProcessHealthDetector(BaseDetector):
                 result.summary = samsung_summary
             result.severity = "fail"
             result.recommended_action = (
-                f"{result.recommended_action} "
-                "Inspect the exact-date authority and preflight/live systemd "
-                "transaction; do not bypass runtime-env or broker safety guards."
+                f"{result.recommended_action} " + (
+                    "Inspect retired timers and service PIDs; keep old BUY gateways disabled."
+                    if retired
+                    else "Inspect the exact-date authority and preflight/live systemd "
+                    "transaction; do not bypass runtime-env or broker safety guards."
+                )
             ).strip()
         elif samsung_severity == "warning" and result.severity != "fail":
             result.severity = "warning"
@@ -798,8 +824,66 @@ def _load_postclose_bot_isolation(now_ts: float, max_age_sec: int) -> dict | Non
     }
 
 
+def _retired_samsung_one_share_expected_set(now: datetime) -> dict:
+    """A retired BUY owner must have no scheduled or running entry process."""
+
+    timers = {unit: _systemd_unit_state(unit) for unit in _SAMSUNG_RETIRED_TIMER_UNITS}
+    services = {unit: _systemd_unit_state(unit) for unit in _SAMSUNG_RETIRED_SERVICE_UNITS}
+    details = {
+        "target_date": now.date().isoformat(),
+        "runtime_effect": False,
+        "runtime_mutation": "none",
+        "timers": timers,
+        "services": services,
+    }
+    if any(
+        state.get("query_error")
+        or not state.get("LoadState")
+        or not state.get("ActiveState")
+        or (state.get("LoadState") != "not-found" and not state.get("UnitFileState"))
+        for state in (*timers.values(), *services.values())
+    ):
+        return {
+            **details,
+            "severity": "fail",
+            "status": "retirement_unverified",
+            "reason": "retired_unit_unreadable",
+        }
+    if any(
+        state.get("UnitFileState") in {"enabled", "enabled-runtime", "linked"}
+        or state.get("ActiveState") in {"active", "activating", "reloading"}
+        for state in timers.values()
+    ):
+        return {
+            **details,
+            "severity": "fail",
+            "status": "retirement_breached",
+            "reason": "retired_timer_enabled_or_active",
+        }
+    if any(
+        state.get("ActiveState") in {"active", "activating", "reloading"}
+        or int(state.get("MainPID") or 0) > 0
+        for state in services.values()
+    ):
+        return {
+            **details,
+            "severity": "fail",
+            "status": "retirement_breached",
+            "reason": "retired_service_running",
+        }
+    return {
+        **details,
+        "severity": "pass",
+        "status": "retired_one_share_timers_inactive",
+        "reason": "main_fixed_watch_replacement",
+    }
+
+
 def _samsung_morning_runtime_contract(now: datetime) -> dict:
     """Read-only expected-set check for the 07:57 Samsung morning owner."""
+
+    if now.date() >= _SAMSUNG_ONE_SHARE_RETIRED_DATE:
+        return _retired_samsung_one_share_expected_set(now)
 
     target_date = now.date().isoformat()
     current_minute = now.hour * 60 + now.minute

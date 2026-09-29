@@ -29,6 +29,74 @@ _ORIGINAL_WIDGET_RUNTIME_RELEASE_CONTRACT = (
 )
 
 
+def test_retired_samsung_expected_set_accepts_disabled_timers(monkeypatch):
+    monkeypatch.setattr(
+        process_health_module, "_systemd_unit_state",
+        lambda unit: {
+            "unit": unit,
+            "LoadState": "loaded",
+            "UnitFileState": "disabled",
+            "ActiveState": "inactive",
+            "MainPID": 0,
+        },
+    )
+    result = _ORIGINAL_SAMSUNG_MORNING_RUNTIME_CONTRACT(
+        datetime.fromisoformat("2026-09-29T17:05:00+09:00")
+    )
+    assert result["severity"] == "pass"
+    assert result["status"] == "retired_one_share_timers_inactive"
+
+
+def test_retired_samsung_expected_set_detects_reenabled_timer(monkeypatch):
+    def unit_state(unit):
+        enabled = unit == "korstockscan-samsung-morning-one-share.timer"
+        return {
+            "unit": unit,
+            "LoadState": "loaded",
+            "UnitFileState": "enabled" if enabled else "disabled",
+            "ActiveState": "active" if enabled else "inactive",
+            "MainPID": 0,
+        }
+
+    monkeypatch.setattr(process_health_module, "_systemd_unit_state", unit_state)
+    result = _ORIGINAL_SAMSUNG_MORNING_RUNTIME_CONTRACT(
+        datetime.fromisoformat("2026-09-29T17:05:00+09:00")
+    )
+    assert result["severity"] == "fail"
+    assert result["reason"] == "retired_timer_enabled_or_active"
+
+
+def test_retired_samsung_expected_set_rejects_incomplete_systemd_state(monkeypatch):
+    monkeypatch.setattr(
+        process_health_module,
+        "_systemd_unit_state",
+        lambda unit: {"unit": unit, "UnitFileState": "disabled"},
+    )
+    result = _ORIGINAL_SAMSUNG_MORNING_RUNTIME_CONTRACT(
+        datetime.fromisoformat("2026-09-29T17:05:00+09:00")
+    )
+    assert result["severity"] == "fail"
+    assert result["reason"] == "retired_unit_unreadable"
+
+
+def test_retired_samsung_expected_set_accepts_removed_units(monkeypatch):
+    monkeypatch.setattr(
+        process_health_module,
+        "_systemd_unit_state",
+        lambda unit: {
+            "unit": unit,
+            "LoadState": "not-found",
+            "ActiveState": "inactive",
+            "UnitFileState": "",
+            "MainPID": 0,
+        },
+    )
+    result = _ORIGINAL_SAMSUNG_MORNING_RUNTIME_CONTRACT(
+        datetime.fromisoformat("2026-09-29T17:05:00+09:00")
+    )
+    assert result["severity"] == "pass"
+
+
 @pytest.fixture(autouse=True)
 def _force_trading_day(monkeypatch, tmp_path):
     monkeypatch.setattr(
