@@ -1140,7 +1140,25 @@ class DBManager:
                     return None
                 return _safe_bool(value)
 
+            def _safe_optional_text(value):
+                if value is None or pd.isna(value):
+                    return None
+                return str(value).strip() or None
+
             for t in targets:
+                # read_sql/to_dict may turn a nullable TEXT column into float
+                # NaN when other active rows make pandas infer a numeric dtype.
+                # Keep absent scanner/fixed-watch lineage absent, including in
+                # the strict machine snapshot and the pipeline identity receipt.
+                for key in (
+                    "watch_origin", "watch_admission_id", "watch_generation_id",
+                    "scanner_promotion_id", "scanner_promotion_reason",
+                    "source_signature", "scanner_watch_budget_owner",
+                ):
+                    t[key] = _safe_optional_text(t.get(key))
+                t["scanner_promotion_emitted_epoch"] = _safe_optional_float(
+                    t.get("scanner_promotion_emitted_epoch")
+                )
                 t["prob"] = _safe_float(t.get("prob"), default_prob)
                 t["buy_qty"] = _safe_int(t.get("buy_qty"))
                 t["buy_price"] = _safe_float(t.get("buy_price"))

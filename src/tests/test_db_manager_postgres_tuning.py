@@ -225,3 +225,36 @@ def test_get_active_targets_filters_only_swing_watching_by_default(monkeypatch):
         "consistent_submitted_legs"
     )
     assert scanner_target["entry_execution_route_recorded_at"] == (1_786_676_000.25)
+
+
+def test_get_active_targets_keeps_fixed_watch_null_scanner_lineage_out_of_machine_input(monkeypatch):
+    from src.engine.scalping.entry_setup_evidence import build_entry_setup_evidence
+
+    db = object.__new__(DBManager)
+    db.get_session = lambda: _FakeSessionContext()
+    rows = pd.DataFrame([{
+        "id": 48997, "date": "2026-09-30", "code": "005930",
+        "name": "Samsung", "type": "SCALP", "status": "WATCHING",
+        "strategy": "SCALPING", "position_tag": "SCALP_BASE", "prob": 0.5,
+        "watch_origin": "MAIN_FIXED_WATCH", "watch_admission_id": "FIXED-test",
+        "watch_generation_id": "a" * 64,
+        "scanner_promotion_id": float("nan"),
+        "scanner_promotion_reason": float("nan"),
+        "scanner_promotion_emitted_epoch": float("nan"),
+        "source_signature": float("nan"),
+        "scanner_watch_budget_owner": float("nan"),
+    }])
+    monkeypatch.setattr(pd, "read_sql", lambda query, bind: rows.copy())
+
+    target = db.get_active_targets()[0]
+    for key in ("scanner_promotion_id", "scanner_promotion_reason",
+                "scanner_promotion_emitted_epoch", "source_signature",
+                "scanner_watch_budget_owner"):
+        assert target[key] is None
+    # The strict machine raw-input hash used to fail here with a JSON NaN error.
+    result = build_entry_setup_evidence(
+        exact_payload={"scanner_promotion_id": target["scanner_promotion_id"],
+                       "current": {}, "features": {}},
+        exact_analysis={}, recovery_analysis={}, balanced_policy=True,
+    )
+    assert len(result["strategy_raw_sha256"]) == 64

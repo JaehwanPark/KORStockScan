@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 import uuid
 from datetime import datetime
@@ -25,6 +26,15 @@ def is_fixed_watch(target) -> bool:
         str((target or {}).get("watch_origin") or "") == WATCH_ORIGIN
         and str((target or {}).get("code") or "")[:6] == SAMSUNG_CODE
     )
+
+
+def _normalize_numeric_scanner_nulls(target: dict) -> None:
+    """Remove pandas numeric nulls without changing a real scanner claim."""
+    for key in ("scanner_promotion_id", "scanner_promotion_reason",
+                "scanner_promotion_emitted_epoch", "scanner_watch_budget_owner"):
+        value = target.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and not math.isfinite(value):
+            target[key] = None
 
 
 def session_route(now_epoch: float) -> dict | None:
@@ -112,6 +122,8 @@ def reconcile(db, targets: list[dict], *, now_epoch: float, watch_cap: int) -> t
     fixed_memory = [t for t in memory_rows if is_fixed_watch(t) and t.get("status") == "WATCHING"]
     if len(memory_rows) > 1 or (memory_rows and len(fixed_memory) != 1):
         return "same_symbol_runtime_conflict", None
+    if fixed_memory:
+        _normalize_numeric_scanner_nulls(fixed_memory[0])
     if (fixed_memory and fixed_memory[0].get("watch_generation_id") == generation
         and str(fixed_memory[0].get("watch_admission_id") or "").strip()
         and float(fixed_memory[0].get("entry_armed_at_epoch") or 0) > 0):
@@ -198,6 +210,7 @@ def reconcile(db, targets: list[dict], *, now_epoch: float, watch_cap: int) -> t
         if len(recovered) != 1:
             return "fixed_watch_db_reload_missing", None
         target = recovered[0]
+        _normalize_numeric_scanner_nulls(target)
         targets.append(target)
     target.update({
         "watch_origin": WATCH_ORIGIN, "watch_admission_id": admission_id,

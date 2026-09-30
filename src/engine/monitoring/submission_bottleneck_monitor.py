@@ -194,7 +194,11 @@ def source_gap_semantics(data_root, now, *, tail_bytes=SOURCE_TAIL_BYTES):
                 or fields.get("zero_base_machine_contract_error") not in (None, "", "-")):
             kind = str(fields.get("zero_base_machine_source_gap_kind") or "").strip("- ")
             contract_error = str(fields.get("zero_base_machine_contract_error") or "").strip("- ")
-            kind = kind or contract_error or (
+            kind = kind or (
+                "machine_source_nonfinite"
+                if contract_error.startswith("Out of range float values are not JSON compliant:")
+                else contract_error
+            ) or (
                 "contract_error_receipt_missing" if reason == "assessment_contract_invalid" else reason)
             record("machine_probe", kind, row,
                    diagnostic=kind == "trusted_tape_source_insufficient",
@@ -236,6 +240,8 @@ def source_gap_semantics(data_root, now, *, tail_bytes=SOURCE_TAIL_BYTES):
         elif status == "assessment_contract_invalid":
             kind = str(row.get("machine_source_gap_kind") or row.get("machine_contract_error")
                        or "contract_error_receipt_missing")
+            if kind.startswith("Out of range float values are not JSON compliant:"):
+                kind = "machine_source_nonfinite"
             record("machine_trace", kind, row,
                    diagnostic=kind == "trusted_tape_source_insufficient")
         elif row.get("machine_contract_error"):
@@ -1881,6 +1887,15 @@ def notify(result, path, send=None):
             obs = result.get("identity_observation") or {}
             examples = obs.get("examples") or item.get("examples") or []
             sample = examples[0] if examples else {}
+            identity_details = []
+            if sample.get("missing_fields"):
+                identity_details.append("누락 필드: " + ", ".join(sample["missing_fields"]))
+            if sample.get("conflicting_fields"):
+                identity_details.append("충돌 필드: " + ", ".join(sample["conflicting_fields"]))
+            if sample.get("identity_contract_issues"):
+                identity_details.append("식별 계약: " + ", ".join(sample["identity_contract_issues"]))
+            if not identity_details:
+                identity_details.append("식별 결손 세부정보: 미확인(구형 이력)")
             messages.append(
                 f'{item["status"]}: source_identity_missing\n'
                 f'현재 최근10분: {item.get("current_status", "unobservable")} '
@@ -1889,7 +1904,7 @@ def notify(result, path, send=None):
                 f'현재 결손 발생: {obs.get("current_missing_first_at") or item.get("occurred_first_at") or "미확인(구형 이력)"} ~ '
                 f'{obs.get("current_missing_last_at") or item.get("occurred_last_at") or "미확인(구형 이력)"}\n'
                 f'종목: {sample.get("stock_code") or "미확인(구형 이력)"} / '
-                f'누락 필드: {", ".join(sample.get("missing_fields") or []) or "미확인(구형 이력)"}\n'
+                f'{" / ".join(identity_details)}\n'
                 f'대표 발생시각: {sample.get("occurred_at") or "미확인(구형 이력)"}')
             continue
         if item["rule"] == "enter_now_scarcity":

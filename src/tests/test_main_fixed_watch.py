@@ -189,6 +189,24 @@ def test_fixed_watch_admission_is_idempotent_and_rearms_session(monkeypatch):
     assert len(db.get_active_targets()) == 1
 
 
+def test_fixed_watch_reconcile_clears_only_numeric_null_scanner_identity(monkeypatch):
+    monkeypatch.setattr(fixed, "enabled", lambda: True)
+    monkeypatch.setattr(fixed, "broker_and_owner_clear", lambda *_: (True, "verified_flat"))
+    db, targets = _TestDB(), []
+    assert fixed.reconcile(db, targets, now_epoch=epoch(10), watch_cap=16)[0] == "armed"
+    target = targets[0]
+    target.update(scanner_promotion_id=float("nan"),
+                  scanner_promotion_reason=float("nan"),
+                  scanner_promotion_emitted_epoch=float("nan"))
+    assert fixed.reconcile(db, targets, now_epoch=epoch(10) + 1, watch_cap=16)[0] == "already_watching"
+    assert target["scanner_promotion_id"] is None
+    assert target["scanner_promotion_reason"] is None
+    assert target["scanner_promotion_emitted_epoch"] is None
+    target["scanner_promotion_id"] = "real-scanner-promotion"
+    assert fixed.reconcile(db, targets, now_epoch=epoch(10) + 2, watch_cap=16)[0] == "already_watching"
+    assert target["scanner_promotion_id"] == "real-scanner-promotion"
+
+
 def test_fixed_watch_new_date_preserves_old_admission_and_replaces_memory(monkeypatch):
     monkeypatch.setattr(fixed, "enabled", lambda: True)
     monkeypatch.setattr(fixed, "broker_and_owner_clear", lambda *_: (True, "verified_flat"))

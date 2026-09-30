@@ -849,6 +849,22 @@ def test_fixed_watch_missing_or_conflicting_identity_stays_a_source_gap():
     assert observed["rows"] == []
 
 
+def test_fixed_watch_identity_alert_names_conflict_instead_of_legacy_missing_field():
+    generation = hashlib.sha256(b"2026-09-21|005930|nxt_premarket|nxt_only").hexdigest()
+    bad = event(action="BLOCK", screen="not_requested_machine_nonentry",
+        when=START + timedelta(minutes=9), scanner_promotion_id="nan",
+        watch_origin="MAIN_FIXED_WATCH",
+        watch_admission_id="FIXED-2026-09-21-005930-nxt_premarket-nxt_only-abcdef123456",
+        watch_generation_id=generation)
+    state = tick([bad], 10)
+    state = tick([bad], 15, state)
+    sent = []
+    monitor.notify(state, "fixture.json", send=sent.append)
+    assert len(sent) == 1
+    assert "충돌 필드: scanner_promotion_id" in sent[0]
+    assert "누락 필드: 미확인(구형 이력)" not in sent[0]
+
+
 def test_missing_identity_detected_without_fake_denominator():
     events = [event(evaluation_attempt_id="", scanner_promotion_id="")]
     state = tick(events, 10)
@@ -1589,6 +1605,21 @@ def test_intraday_machine_trace_invalid_contract_preserves_sparse_vs_missing_cau
     assert result["diagnostics"] == {"machine_trace:trusted_tape_source_insufficient": 1}
     assert result["issues"]["machine_trace:contract_error_receipt_missing"] == 1
     assert result["issues"]["machine_trace:capture_receipt_missing_or_invalid"] == 1
+
+
+def test_intraday_nonfinite_machine_contract_has_specific_source_reason(tmp_path):
+    now = START + timedelta(minutes=10)
+    error = "Out of range float values are not JSON compliant: nan"
+    probe = _probe_source_row(now, "policy_unavailable", "assessment_contract_invalid")
+    probe["fields"]["zero_base_machine_contract_error"] = error
+    trace = _auxiliary_source_row(now)
+    trace.update(machine_evaluation_status="assessment_contract_invalid",
+                 machine_contract_error=error, entry_mechanistic_action=None,
+                 entry_ai_screen_required=False, provider_called=False)
+    _source_gap_files(tmp_path, now, probes=[probe], traces=[trace])
+    result = monitor.source_gap_semantics(tmp_path, now)
+    assert result["issues"]["machine_probe:machine_source_nonfinite"] == 1
+    assert result["issues"]["machine_trace:machine_source_nonfinite"] == 1
 
 
 def test_intraday_probe_contract_failure_is_visible_without_trace(tmp_path):
