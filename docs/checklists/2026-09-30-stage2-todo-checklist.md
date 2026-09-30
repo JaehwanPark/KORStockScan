@@ -95,8 +95,6 @@
   - Source: [원천결손 재발 방지 계획](../proposals/machine-auxiliary-source-gap-prevention-plan-2026-09-29.md), [운영 절차](../time-based-operations-runbook.md).
   - 완료 기준: 선택 릴리스와 실제 5분 Sentinel 소비를 먼저 확인한 뒤, `submission_bottleneck_monitor_latest.json`의 프리·정규·통합 애프터 경로별 probe/trace/pending 최근 10분 원천 커버리지와 원인별 분해를 대사한다. 희소 체결 진단과 경로·선택 틱·캡처·보조 AI 비용/pending 결손의 알림을 구분하고, 원천 부재·부분 tail은 정상으로 닫지 않는다. 같은 단계의 새 정상 영수증 없이 recovery를 주장하지 않으며 후행 1/3/5/10분 가격·경제성은 별도 장후 수용으로 남긴다.
   - 권한 경계: source-quality/report-only 알림이다. 자동 조회·주문·threshold·provider·bot·수량·hard safety 변경이나 과거 원천 복구 권한이 없다.
-  - 08:38 KST 원천결손: `nxt_only` 6개 최근 프로브는 당일 관측 전용 target의 `_AL`과 정확 `_NX` 요구가 충돌했다. 결손 ID는 당일 `pipeline_events`의 claim/result 동일 SHA로 고정한다. 다음 거래일 source-only target에 정확 `_NX`가 포함되는지, 새 PID의 REG와 해당 route 0B/0D 및 새 probe 영수증이 연결되는지 확인한다. 최근 10분에서 결손이 빠졌다는 이유로 복구 완료 처리하지 않는다.
-  - 공식 참조 gate: 2026-09-30 08:51 KST upstream `Kiwoom-Securities/Kiwoom-REST-API` HEAD `953e5dbff123f437ab4d11a78a95191a685eb51f`; `kiwoom/realtime/packets.py`, `kiwoom/core/ws_client.py`, `kiwoom/realtime/{events,decoders,schemas}.py`, `kiwoom/specs.py`, Postman을 대조했다. 현행 checkout에 `kiwoom_docs`는 없어 새 wire 의미를 추정하지 않았다. REG/REMOVE 구현은 변경하지 않고 다음 영업일 기존 관측 전용 target 입력만 제한적으로 보강한다.
 
 ## Project/Calendar 동기화
 
