@@ -327,6 +327,7 @@ def save_monitor_snapshots_for_date_with_profile(
         "postclose_exit": {
             "trade_review",
             "post_sell_feedback",
+            "missed_entry_counterfactual",
             "holding_exit_observation",
         },
     }

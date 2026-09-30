@@ -305,7 +305,7 @@ def test_archive_and_replay_daily_log_slice(tmp_path, monkeypatch):
 
 
 def test_save_monitor_snapshots_for_date_includes_expected_snapshot_sources(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, capsys
 ):
     snapshot_dir = tmp_path / "monitor_snapshots"
     snapshot_dir.mkdir(parents=True, exist_ok=True)
@@ -402,6 +402,20 @@ def test_save_monitor_snapshots_for_date_includes_expected_snapshot_sources(
     assert saved is not None
     assert saved["meta"]["snapshot_kind"] == "missed_entry_counterfactual"
     assert saved["meta"]["buy_pause_guard"] == {"status": "ok"}
+    postclose_result = service.save_monitor_snapshots_for_date_with_profile(
+        "2026-04-09", profile="postclose_exit"
+    )
+    assert "missed_entry_counterfactual" in postclose_result
+    postclose_stages = [
+        event["snapshot_kind"]
+        for line in capsys.readouterr().out.splitlines()
+        if (event := json.loads(line)).get("event") == "monitor_snapshot_stage_start"
+        and event.get("profile") == "postclose_exit"
+    ]
+    assert postclose_stages == [
+        "trade_review", "post_sell_feedback",
+        "missed_entry_counterfactual", "holding_exit_observation",
+    ]
     holding_exit_saved = service.load_monitor_snapshot(
         "holding_exit_observation", "2026-04-09"
     )

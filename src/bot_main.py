@@ -277,16 +277,17 @@ def generate_monitor_archive_job(target_date: str | None = None):
 
 
 def run_monitor_snapshot_isolated(target_date: str) -> dict[str, str]:
-    """Build the heavy full snapshot in the resource-isolated wrapper process."""
+    """Build the live-session light snapshot outside the bot's memory scope."""
     wrapper = PROJECT_ROOT / "deploy" / "run_monitor_snapshot_safe.sh"
+    profile = "intraday_light"
     env = os.environ.copy()
+    env.pop("ALLOW_EXISTING_FULL_BUILD_WITH_BOT", None)
     env.update(
         {
             "MONITOR_SNAPSHOT_ASYNC": "0",
             "MONITOR_SNAPSHOT_FORCE": "1",
-            "MONITOR_SNAPSHOT_PROFILE": "full",
+            "MONITOR_SNAPSHOT_PROFILE": profile,
             "MONITOR_SNAPSHOT_IO_DELAY_SEC": "1.0",
-            "ALLOW_EXISTING_FULL_BUILD_WITH_BOT": "1",
         }
     )
     try:
@@ -296,7 +297,11 @@ def run_monitor_snapshot_isolated(target_date: str) -> dict[str, str]:
     timeout_sec = max(60, worker_timeout_sec + 60)
     started_ns = time.time_ns()
     completed = subprocess.run(
-        [str(wrapper), target_date],
+        [
+            "systemd-run", "--user", "--scope", "--collect",
+            "-p", "MemoryMax=2G", "-p", "MemorySwapMax=512M",
+            str(wrapper), target_date,
+        ],
         cwd=PROJECT_ROOT,
         env=env,
         check=False,
@@ -317,7 +322,7 @@ def run_monitor_snapshot_isolated(target_date: str) -> dict[str, str]:
         / "report"
         / "monitor_snapshots"
         / "manifests"
-        / f"monitor_snapshot_manifest_{target_date}_full.json"
+        / f"monitor_snapshot_manifest_{target_date}_{profile}.json"
     )
     if (
         not manifest_path.exists()
@@ -327,7 +332,7 @@ def run_monitor_snapshot_isolated(target_date: str) -> dict[str, str]:
             f"isolated monitor snapshot manifest is not fresh: {manifest_path}"
         )
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if manifest.get("target_date") != target_date or manifest.get("profile") != "full":
+    if manifest.get("target_date") != target_date or manifest.get("profile") != profile:
         raise RuntimeError(
             f"isolated monitor snapshot manifest contract mismatch: {manifest_path}"
         )

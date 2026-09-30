@@ -141,7 +141,7 @@ def test_daily_report_dispatch_runs_only_in_due_minute(monkeypatch):
     assert dispatched == ["daily_report"]
 
 
-def test_monitor_snapshot_runs_in_resource_isolated_wrapper(monkeypatch, tmp_path):
+def test_monitor_snapshot_runs_in_memory_isolated_light_scope(monkeypatch, tmp_path):
     project_root = tmp_path
     manifest_path = (
         project_root
@@ -149,7 +149,7 @@ def test_monitor_snapshot_runs_in_resource_isolated_wrapper(monkeypatch, tmp_pat
         / "report"
         / "monitor_snapshots"
         / "manifests"
-        / "monitor_snapshot_manifest_2026-07-28_full.json"
+        / "monitor_snapshot_manifest_2026-07-28_intraday_light.json"
     )
     captured: dict[str, object] = {}
 
@@ -159,7 +159,7 @@ def test_monitor_snapshot_runs_in_resource_isolated_wrapper(monkeypatch, tmp_pat
         manifest_path.parent.mkdir(parents=True)
         manifest_path.write_text(
             (
-                '{"target_date":"2026-07-28","profile":"full",'
+                '{"target_date":"2026-07-28","profile":"intraday_light",'
                 '"snapshot_paths":{"trade_review":"/tmp/trade_review.json"}}'
             ),
             encoding="utf-8",
@@ -173,6 +173,8 @@ def test_monitor_snapshot_runs_in_resource_isolated_wrapper(monkeypatch, tmp_pat
 
     assert result == {"trade_review": "/tmp/trade_review.json"}
     assert captured["command"] == [
+        "systemd-run", "--user", "--scope", "--collect",
+        "-p", "MemoryMax=2G", "-p", "MemorySwapMax=512M",
         str(project_root / "deploy" / "run_monitor_snapshot_safe.sh"),
         "2026-07-28",
     ]
@@ -181,9 +183,9 @@ def test_monitor_snapshot_runs_in_resource_isolated_wrapper(monkeypatch, tmp_pat
     assert captured["text"] is True
     assert captured["env"]["MONITOR_SNAPSHOT_ASYNC"] == "0"
     assert captured["env"]["MONITOR_SNAPSHOT_FORCE"] == "1"
-    assert captured["env"]["MONITOR_SNAPSHOT_PROFILE"] == "full"
+    assert captured["env"]["MONITOR_SNAPSHOT_PROFILE"] == "intraday_light"
     assert captured["env"]["MONITOR_SNAPSHOT_IO_DELAY_SEC"] == "1.0"
-    assert captured["env"]["ALLOW_EXISTING_FULL_BUILD_WITH_BOT"] == "1"
+    assert "ALLOW_EXISTING_FULL_BUILD_WITH_BOT" not in captured["env"]
 
 
 def test_monitor_snapshot_isolated_wrapper_failure_is_not_silent(
@@ -220,12 +222,12 @@ def test_monitor_snapshot_isolated_wrapper_rejects_stale_manifest(
         / "report"
         / "monitor_snapshots"
         / "manifests"
-        / "monitor_snapshot_manifest_2026-07-28_full.json"
+        / "monitor_snapshot_manifest_2026-07-28_intraday_light.json"
     )
     manifest_path.parent.mkdir(parents=True)
     manifest_path.write_text(
         (
-            '{"target_date":"2026-07-28","profile":"full",'
+            '{"target_date":"2026-07-28","profile":"intraday_light",'
             '"snapshot_paths":{"trade_review":"/tmp/stale.json"}}'
         ),
         encoding="utf-8",
