@@ -16,6 +16,9 @@ from pathlib import Path
 from typing import Any
 
 from src.engine.automation.runtime_policy_bootstrap import build_manifest
+from src.engine.automation.postclose_finalization_generation import (
+    snapshot_kinds_for_date,
+)
 from src.engine.scalping.trailing_mechanical_policy import (
     CLASSIFIER_VERSION, SELECTED_SCHEMA, START_MARKETS, classifier_hash,
     market_values_hash, selected_policy_env,
@@ -55,12 +58,11 @@ def _source(target_date: str) -> tuple[dict[str, Any], bytes, str, str]:
             or date.fromisoformat(source_date).isoformat() != source_date
             or not "2026-06-05" <= source_date < target_date
             or (date.fromisoformat(target_date) - date.fromisoformat(source_date)).days > 7
-            or set(manifest.get("snapshot_kinds") or []) != {
-                "trade_review", "post_sell_feedback", "holding_exit_observation"
-            }):
+            or set(manifest.get("snapshot_kinds") or [])
+            != snapshot_kinds_for_date(source_date)):
         raise ValueError("postclose_exit_manifest_invalid")
     source_bytes = {}
-    for kind in ("trade_review", "post_sell_feedback", "holding_exit_observation"):
+    for kind in sorted(snapshot_kinds_for_date(source_date)):
         expected = REPORT_DIR / f"{kind}_{source_date}.json"
         recorded = (manifest.get("snapshot_paths") or {}).get(kind)
         if not isinstance(recorded, str) or Path(recorded).resolve() != expected.resolve():

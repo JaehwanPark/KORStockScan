@@ -96,11 +96,6 @@
   - 완료 기준: 선택 릴리스와 실제 5분 Sentinel 소비를 먼저 확인한 뒤, `submission_bottleneck_monitor_latest.json`의 프리·정규·통합 애프터 경로별 probe/trace/pending 최근 10분 원천 커버리지와 원인별 분해를 대사한다. 희소 체결 진단과 경로·선택 틱·캡처·보조 AI 비용/pending 결손의 알림을 구분하고, 원천 부재·부분 tail은 정상으로 닫지 않는다. 같은 단계의 새 정상 영수증 없이 recovery를 주장하지 않으며 후행 1/3/5/10분 가격·경제성은 별도 장후 수용으로 남긴다.
   - 권한 경계: source-quality/report-only 알림이다. 자동 조회·주문·threshold·provider·bot·수량·hard safety 변경이나 과거 원천 복구 권한이 없다.
 
-- [ ] `[MonitorSnapshotOomIsolation0930] 15:45 아카이브 OOM 재발 방지 기동 검증` (`Due: 2026-10-01`, `Slot: INTRADAY`, `TimeWindow: 15:45~16:10`, `Track: RuntimeStability`)
-  - Source: [시간대별 운영 절차](../time-based-operations-runbook.md).
-  - 완료 기준: 실제 PID가 새 릴리스를 소비한 상태에서 15:45 작업이 별도 메모리 제한 scope로 `intraday_light` manifest를 만들고, 실패시 봇 heartbeat 및 16:00 통합 애프터마켓 WS가 유지되는지 확인한다. 장후 `postclose_exit` 보고의 독립 완료 여부도 구분해 확인한다.
-  - 권한 경계: report-only 관측이다. 주문·정책·threshold·provider 변경이나 장후 결과의 성공 간주는 허용하지 않는다.
-
 ## Project/Calendar 동기화
 
 문서/checklist를 수정했으면 parser 검증은 실행하고, Project/Calendar 동기화는 사용자가 아래 명령으로 수동 실행한다.

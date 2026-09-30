@@ -11,9 +11,23 @@ from datetime import datetime
 from pathlib import Path
 
 
-SNAPSHOT_KINDS = frozenset({
+LEGACY_SNAPSHOT_KINDS = frozenset({
     "trade_review", "post_sell_feedback", "holding_exit_observation",
 })
+SNAPSHOT_KINDS = frozenset({
+    "trade_review", "post_sell_feedback", "missed_entry_counterfactual",
+    "holding_exit_observation",
+})
+MISSED_ENTRY_SNAPSHOT_FROM = "2026-09-30"
+
+
+def snapshot_kinds_for_date(target_date: str) -> frozenset[str]:
+    """Keep sealed pre-rollout manifests valid; require the new source afterward."""
+    return (
+        SNAPSHOT_KINDS
+        if str(target_date) >= MISSED_ENTRY_SNAPSHOT_FROM
+        else LEGACY_SNAPSHOT_KINDS
+    )
 
 
 class FinalizationGenerationError(ValueError):
@@ -150,16 +164,17 @@ def capture_finalization_generation(project: Path, target_date: str) -> dict:
     paths = manifest.get("snapshot_paths") or {}
     sources = manifest.get("snapshot_sha256") or {}
     kinds = manifest.get("snapshot_kinds")
+    expected_kinds = snapshot_kinds_for_date(target_date)
     if (manifest.get("target_date") != target_date
             or manifest.get("profile") != "postclose_exit"
             or not isinstance(kinds, list)
             or not all(isinstance(kind, str) for kind in kinds)
-            or set(kinds) != SNAPSHOT_KINDS
-            or not isinstance(paths, dict) or set(paths) != SNAPSHOT_KINDS
-            or not isinstance(sources, dict) or set(sources) != SNAPSHOT_KINDS):
+            or set(kinds) != expected_kinds
+            or not isinstance(paths, dict) or set(paths) != expected_kinds
+            or not isinstance(sources, dict) or set(sources) != expected_kinds):
         raise FinalizationGenerationError("postclose_exit_manifest_contract_invalid")
     source_modes = {}
-    for kind in sorted(SNAPSHOT_KINDS):
+    for kind in sorted(expected_kinds):
         path = snapshot_dir / f"{kind}_{target_date}.json"
         try:
             owner_matches = Path(str(paths[kind])).resolve() == path.resolve()

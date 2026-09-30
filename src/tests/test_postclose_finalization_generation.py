@@ -12,6 +12,7 @@ from src.engine.automation.postclose_finalization_generation import (
     capture_final_detector_receipt,
     capture_finalization_generation,
     finalization_marker_issues,
+    snapshot_kinds_for_date,
 )
 
 
@@ -25,36 +26,36 @@ def _write_json(path: Path, payload: dict) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _fixture(root: Path) -> tuple[Path, Path]:
+def _fixture(root: Path, day: str = DAY) -> tuple[Path, Path]:
     report = root / "data/report"
     summary_sha = _write_json(
-        report / "runtime_approval_summary" / f"runtime_approval_summary_{DAY}.json",
-        {"date": DAY, "status": "complete"},
+        report / "runtime_approval_summary" / f"runtime_approval_summary_{day}.json",
+        {"date": day, "status": "complete"},
     )
     main_sha = _write_json(
         report / "threshold_cycle_postclose_status"
-        / f"threshold_cycle_postclose_{DAY}.status.json",
-        {"target_date": DAY, "run_id": "main-run"},
+        / f"threshold_cycle_postclose_{day}.status.json",
+        {"target_date": day, "run_id": "main-run"},
     )
-    checklist_path = root / "docs/checklists" / f"{DAY}-next.md"
+    checklist_path = root / "docs/checklists" / f"{day}-next.md"
     checklist_path.parent.mkdir(parents=True, exist_ok=True)
     checklist_path.write_text("# Next day\n")
     checklist_sha = hashlib.sha256(checklist_path.read_bytes()).hexdigest()
     stage_sha = _write_json(
-        report / "postclose_stage_terminal" / DAY / "research_capacity.json",
-        {"source_date": DAY, "status": "succeeded"},
+        report / "postclose_stage_terminal" / day / "research_capacity.json",
+        {"source_date": day, "status": "succeeded"},
     )
     strict_dir = report / "threshold_cycle_postclose_verification"
-    strict_attempt = strict_dir / "attempts" / DAY / "strict.json"
+    strict_attempt = strict_dir / "attempts" / day / "strict.json"
     strict = {
-        "date": DAY,
+        "date": day,
         "status": "pass",
         "verification_scope": "whole_native_chain",
         "whole_native_chain_done_claimed": True,
         "run_id": "main-run",
         "checklist_handoff": {"path": str(checklist_path)},
         "generation_binding": {
-            "source_date": DAY,
+            "source_date": day,
             "main_run_id": "main-run",
             "summary_sha256": summary_sha,
             "main_terminal_sha256": main_sha,
@@ -63,11 +64,11 @@ def _fixture(root: Path) -> tuple[Path, Path]:
         },
     }
     strict_sha = _write_json(strict_attempt, strict)
-    _write_json(strict_dir / f"threshold_cycle_postclose_verification_{DAY}.json", strict)
+    _write_json(strict_dir / f"threshold_cycle_postclose_verification_{day}.json", strict)
     controller_dir = report / "postclose_done_controller"
-    controller_attempt = controller_dir / "attempts" / f"{DAY}_attempt.json"
+    controller_attempt = controller_dir / "attempts" / f"{day}_attempt.json"
     controller = {
-        "date": DAY,
+        "date": day,
         "status": "done",
         "whole_native_chain_done_claimed": True,
         "final_verifier_status": "pass",
@@ -77,24 +78,32 @@ def _fixture(root: Path) -> tuple[Path, Path]:
         "verification_attempt_sha256": strict_sha,
     }
     _write_json(controller_attempt, controller)
-    _write_json(controller_dir / f"postclose_done_controller_{DAY}.json", controller)
+    _write_json(controller_dir / f"postclose_done_controller_{day}.json", controller)
 
     snapshots = report / "monitor_snapshots"
     paths = {}
     shas = {}
-    for kind in ("trade_review", "post_sell_feedback", "holding_exit_observation"):
-        path = snapshots / f"{kind}_{DAY}.json"
-        shas[kind] = _write_json(path, {"date": DAY, "kind": kind})
+    for kind in snapshot_kinds_for_date(day):
+        path = snapshots / f"{kind}_{day}.json"
+        shas[kind] = _write_json(path, {"date": day, "kind": kind})
         paths[kind] = str(path)
-    manifest_path = snapshots / "manifests" / f"monitor_snapshot_manifest_{DAY}_postclose_exit.json"
+    manifest_path = snapshots / "manifests" / f"monitor_snapshot_manifest_{day}_postclose_exit.json"
     _write_json(manifest_path, {
-        "target_date": DAY,
+        "target_date": day,
         "profile": "postclose_exit",
         "snapshot_kinds": sorted(paths),
         "snapshot_paths": paths,
         "snapshot_sha256": shas,
     })
     return strict_attempt, manifest_path
+
+
+def test_snapshot_manifest_contract_preserves_legacy_and_requires_current_source(tmp_path):
+    assert "missed_entry_counterfactual" not in snapshot_kinds_for_date("2026-09-29")
+    assert "missed_entry_counterfactual" in snapshot_kinds_for_date("2026-09-30")
+    _fixture(tmp_path, day="2026-09-30")
+    captured = capture_finalization_generation(tmp_path, "2026-09-30")
+    assert captured["snapshot_modes"]
 
 
 def test_finalization_rejects_new_strict_generation_after_old_done(tmp_path):
