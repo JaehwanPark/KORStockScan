@@ -11,13 +11,93 @@ from src.engine.scalping import entry_split_order_plan as split_plan
 from src.engine import sniper_post_sell_feedback as post_sell_feedback
 
 
-def test_probe_circuit_test_run_cannot_write_live_state(tmp_path):
+def test_probe_violation_test_run_cannot_write_live_state(tmp_path):
     isolated_path = tmp_path / "runtime" / "entry_split_probe_runtime_state.json"
     assert split_plan.PROBE_RUNTIME_STATE_PATH == isolated_path
 
-    split_plan.trip_probe_runtime_circuit("probe_fill_submit_contract_missing")
+    split_plan.record_probe_runtime_violation("probe_fill_submit_contract_missing")
 
-    assert json.loads(isolated_path.read_text(encoding="utf-8"))["circuit_open"] is True
+    state = json.loads(isolated_path.read_text(encoding="utf-8"))
+    assert state["last_probe_violation_reason"] == "probe_fill_submit_contract_missing"
+    assert "circuit_open" not in state
+
+
+def test_legacy_probe_circuit_does_not_block_unrelated_reservations(
+    monkeypatch, tmp_path
+):
+    now = datetime(2026, 9, 30, 11, 15, tzinfo=timezone(timedelta(hours=9)))
+    path = tmp_path / "probe-state.json"
+    path.write_text(
+        json.dumps({
+            "schema_version": split_plan.PROBE_RUNTIME_STATE_SCHEMA_VERSION,
+            "target_date": "2026-09-30",
+            "submitted_bundle_count": 0,
+            "bundles": {},
+            "circuit_open": True,
+            "circuit_reason": "probe_fill_submit_contract_missing",
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(split_plan, "PROBE_RUNTIME_STATE_PATH", path)
+    monkeypatch.setattr(
+        split_plan,
+        "_probe_runtime_config",
+        lambda **_: {"enabled": True, "probe_qty": 1, "max_bundles": 2},
+    )
+    contract = {
+        "continuation": {
+            "requested_qty": 3,
+            "residual_qty": 2,
+            "residual_quantities": [2],
+        },
+        "probe_submit_best_ask": 10010,
+    }
+
+    first, reason = split_plan._reserve_probe_runtime_bundle(
+        stock={"id": 1, "code": "123456"}, total_qty=3,
+        submit_contract=contract, now=now,
+    )
+    split_plan.record_probe_runtime_violation("probe_fill_submit_contract_missing", now=now)
+    second, second_reason = split_plan._reserve_probe_runtime_bundle(
+        stock={"id": 2, "code": "654321"}, total_qty=3,
+        submit_contract=contract, now=now,
+    )
+
+    state = json.loads(path.read_text(encoding="utf-8"))
+    assert first and second and first != second
+    assert (reason, second_reason) == ("reserved", "reserved")
+    assert set(state["bundles"]) == {first, second}
+    assert state["last_probe_violation_reason"] == "probe_fill_submit_contract_missing"
+    assert "circuit_open" not in state
+
+
+def test_invalid_probe_state_still_blocks_new_reservation(monkeypatch, tmp_path):
+    now = datetime(2026, 9, 30, 11, 15, tzinfo=timezone(timedelta(hours=9)))
+    path = tmp_path / "probe-state.json"
+    path.write_text("{invalid", encoding="utf-8")
+    monkeypatch.setattr(split_plan, "PROBE_RUNTIME_STATE_PATH", path)
+    monkeypatch.setattr(
+        split_plan,
+        "_probe_runtime_config",
+        lambda **_: {"enabled": True, "probe_qty": 1, "max_bundles": 2},
+    )
+
+    bundle, reason = split_plan._reserve_probe_runtime_bundle(
+        stock={"id": 1, "code": "123456"}, total_qty=3,
+        submit_contract={
+            "continuation": {
+                "requested_qty": 3,
+                "residual_qty": 2,
+                "residual_quantities": [2],
+            },
+            "probe_submit_best_ask": 10010,
+        },
+        now=now,
+    )
+
+    assert bundle == ""
+    assert reason == "probe_runtime_state_invalid"
+    assert path.read_text(encoding="utf-8") == "{invalid"
 
 
 def _probe_ready_gate(action="WAIT"):
@@ -3822,7 +3902,7 @@ def test_probe_runtime_restart_recovery_restores_bundle_and_fails_closed_on_mism
     mismatch = split_plan.recover_probe_runtime_bundle_for_stock(
         mismatched_stock, now=now
     )
-    assert mismatch["circuit_open"] is True
+    assert mismatch["probe_bundle_blocked"] is True
     assert mismatched_stock["entry_split_probe_phase"] == "aborted"
     assert mismatched_stock["entry_split_probe_scale_in_forbidden"] is True
     assert mismatched_stock["probe_expand_forbidden"] is True
@@ -3834,8 +3914,8 @@ def test_probe_runtime_restart_recovery_restores_bundle_and_fails_closed_on_mism
     assert mismatched_stock["entry_execution_route_recorded_at"] == 100.0
     assert mismatched_stock["entry_execution_cohort"] == "KRX"
     state = split_plan._load_json(state_path)
-    assert state["circuit_open"] is True
-    assert state["circuit_reason"] == "probe_restart_recovery_quantity_mismatch"
+    assert "circuit_open" not in state
+    assert state["last_probe_violation_reason"] == "probe_restart_recovery_quantity_mismatch"
     assert (
         state["bundles"]["123456-probe-restart"]["entry_split_probe_scale_in_forbidden"]
         is True
@@ -3874,7 +3954,7 @@ def test_probe_submitted_restart_mismatch_keeps_confirmed_route_fail_closed(
     assert result == {
         "recovered": False,
         "reason": "probe_restart_recovery_quantity_mismatch",
-        "circuit_open": True,
+        "probe_bundle_blocked": True,
     }
     assert stock["entry_split_probe_phase"] == "aborted"
     assert stock["entry_split_probe_scale_in_forbidden"] is True
@@ -3917,7 +3997,7 @@ def test_probe_restart_mismatch_does_not_overwrite_existing_execution_route(
 
     result = split_plan.recover_probe_runtime_bundle_for_stock(stock, now=now)
 
-    assert result["circuit_open"] is True
+    assert result["probe_bundle_blocked"] is True
     assert stock["entry_execution_broker_route"] == "NXT"
     assert stock["entry_execution_broker_route_resolution"] == "broker_fill_receipt"
     assert stock["entry_execution_route_recorded_at"] == 90.0
@@ -4162,7 +4242,7 @@ def test_probe_runtime_restart_clears_pending_recheck_without_opening_circuit(
         == "post_probe_recheck_cleared_on_restart"
     )
     state = split_plan._load_json(state_path)
-    assert state["circuit_open"] is False
+    assert "circuit_open" not in state
     persisted = state["bundles"]["123456-probe-recheck-restart"]
     assert persisted["phase"] == "aborted"
     assert persisted["residual_terminal_qty"] == 4
@@ -4411,7 +4491,7 @@ def test_probe_runtime_restart_ignores_partial_complete_bundle(monkeypatch, tmp_
     assert result == {"recovered": False, "reason": "no_incomplete_bundle"}
     assert "entry_split_probe_bundle_id" not in stock
     state = split_plan._load_json(state_path)
-    assert state["circuit_open"] is False
+    assert "circuit_open" not in state
 
 
 def test_allocator_date_bounded_policy_becomes_inactive(monkeypatch, tmp_path):

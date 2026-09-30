@@ -291,8 +291,6 @@ def _empty_probe_runtime_state(target_date: str) -> dict[str, Any]:
         "schema_version": PROBE_RUNTIME_STATE_SCHEMA_VERSION,
         "target_date": target_date,
         "submitted_bundle_count": 0,
-        "circuit_open": False,
-        "circuit_reason": "",
         "bundles": {},
     }
 
@@ -306,13 +304,20 @@ def _load_probe_runtime_state(target_date: str) -> dict[str, Any]:
         or payload.get("schema_version") != PROBE_RUNTIME_STATE_SCHEMA_VERSION
     ):
         state = _empty_probe_runtime_state(target_date)
-        state["circuit_open"] = True
-        state["circuit_reason"] = "runtime_state_unreadable_or_schema_mismatch"
+        state["runtime_state_invalid"] = True
+        state["runtime_state_invalid_reason"] = "runtime_state_unreadable_or_schema_mismatch"
         return state
     if str(payload.get("target_date") or "") != target_date:
         return _empty_probe_runtime_state(target_date)
     if not isinstance(payload.get("bundles"), dict):
-        payload["bundles"] = {}
+        state = _empty_probe_runtime_state(target_date)
+        state["runtime_state_invalid"] = True
+        state["runtime_state_invalid_reason"] = "probe_bundles_invalid"
+        return state
+    # Legacy global circuit flags can survive a release change. A failed
+    # bundle remains locally aborted; it cannot veto unrelated symbols.
+    for legacy_key in ("circuit_open", "circuit_reason", "circuit_opened_at"):
+        payload.pop(legacy_key, None)
     return payload
 
 
@@ -926,8 +931,8 @@ def recover_probe_runtime_bundle_for_stock(
             )
         )
         if not quantity_matches:
-            # The phase/quantity disagreement must keep the probe circuit
-            # fail-closed, but it does not invalidate broker-confirmed route
+            # The phase/quantity disagreement aborts this bundle, but it does
+            # not invalidate broker-confirmed route
             # provenance captured from the successful submit response.  In
             # particular, a restart can observe one filled share while the
             # durable bundle still says ``probe_submitted``.  Dropping the
@@ -940,9 +945,10 @@ def recover_probe_runtime_bundle_for_stock(
                 for key, value in _probe_recovered_execution_provenance(bundle).items()
                 if stock.get(key) in (None, "")
             }
-            payload["circuit_open"] = True
-            payload["circuit_reason"] = "probe_restart_recovery_quantity_mismatch"
-            payload["circuit_opened_at"] = datetime.now(timezone.utc).isoformat()
+            payload["last_probe_violation_reason"] = (
+                "probe_restart_recovery_quantity_mismatch"
+            )
+            payload["last_probe_violation_at"] = datetime.now(timezone.utc).isoformat()
             bundle["phase"] = "aborted"
             bundle["reason"] = "probe_restart_recovery_quantity_mismatch"
             bundle["recovered_actual_qty"] = actual_qty
@@ -966,7 +972,7 @@ def recover_probe_runtime_bundle_for_stock(
             return {
                 "recovered": False,
                 "reason": "probe_restart_recovery_quantity_mismatch",
-                "circuit_open": True,
+                "probe_bundle_blocked": True,
             }
 
         soft_abort = _safe_bool(bundle.get("soft_abort"))
@@ -1241,13 +1247,18 @@ def update_probe_runtime_bundle(
         return dict(bundle)
 
 
-def trip_probe_runtime_circuit(reason: str, *, now: datetime | None = None) -> None:
+def record_probe_runtime_violation(reason: str, *, now: datetime | None = None) -> None:
+    """Record one failed probe contract without blocking other symbols."""
     target_date = _kst_date(now)
     with _PROBE_RUNTIME_STATE_LOCK:
         payload = _load_probe_runtime_state(target_date)
-        payload["circuit_open"] = True
-        payload["circuit_reason"] = str(reason or "invariant_violation")
-        payload["circuit_opened_at"] = datetime.now(timezone.utc).isoformat()
+        if payload.get("runtime_state_invalid"):
+            return
+        payload["last_probe_violation_reason"] = str(reason or "invariant_violation")
+        payload["last_probe_violation_at"] = datetime.now(timezone.utc).isoformat()
+        payload["probe_violation_count"] = _safe_int(
+            payload.get("probe_violation_count"), 0
+        ) + 1
         _write_probe_runtime_state(payload)
 
 
@@ -1285,8 +1296,8 @@ def _reserve_probe_runtime_bundle(
     target_date = _kst_date(now)
     with _PROBE_RUNTIME_STATE_LOCK:
         payload = _load_probe_runtime_state(target_date)
-        if _safe_bool(payload.get("circuit_open")):
-            return "", "probe_circuit_open"
+        if payload.get("runtime_state_invalid"):
+            return "", "probe_runtime_state_invalid"
         current_count = _safe_int(payload.get("submitted_bundle_count"), 0)
         active_bundle_count = sum(
             1

@@ -28938,7 +28938,7 @@ def test_probe_fill_recovers_submit_contract_before_residual_callback(
         "probe_fill_submit_contract_recovery_only"
     )
     state = entry_split_order_plan.probe_runtime_state_snapshot(now=test_now)
-    assert state["circuit_open"] is False
+    assert "circuit_open" not in state
     assert state["bundles"]["123456-probe-race"]["phase"] == "probe_filled"
     assert state["bundles"]["123456-probe-race"]["actual_submitted_qty"] == 1
 
@@ -28948,7 +28948,7 @@ def test_probe_residual_missing_submit_contract_has_canonical_abort(monkeypatch)
     pipeline_events = []
     monkeypatch.setattr(
         state_handlers,
-        "trip_probe_runtime_circuit",
+        "record_probe_runtime_violation",
         lambda reason: circuit_reasons.append(reason),
     )
     monkeypatch.setattr(
@@ -34800,8 +34800,8 @@ def test_entry_setup_exploration_defers_residual_decision_to_split_owner(
     assert submitted is False
     assert aborts == [("123456", "probe_fill_submit_contract_missing", True)]
     probe_state = json.loads(probe_state_path.read_text(encoding="utf-8"))
-    assert probe_state["circuit_open"] is True
-    assert probe_state["circuit_reason"] == "probe_fill_submit_contract_missing"
+    assert "circuit_open" not in probe_state
+    assert probe_state["last_probe_violation_reason"] == "probe_fill_submit_contract_missing"
 
 
 def test_entry_setup_exploration_micro_relief_is_bounded_and_source_qualified():

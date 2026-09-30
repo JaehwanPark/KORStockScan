@@ -26,7 +26,7 @@ from src.engine.scalping.opening_rotation import (
 from src.engine.scalping.entry_split_order_plan import (
     ENTRY_SPLIT_ECONOMIC_RECEIPT_KEYS,
     recover_probe_submit_contract_for_fill,
-    trip_probe_runtime_circuit,
+    record_probe_runtime_violation,
     update_probe_runtime_bundle,
 )
 from src.engine.scalping.entry_candidate_lifecycle_state import (
@@ -11504,7 +11504,7 @@ def _handle_entry_buy_execution(
             target_stock.get("entry_split_probe_order_no") or ""
         ).strip()
         if probe_order_no and order_no and probe_order_no != order_no:
-            trip_probe_runtime_circuit("probe_receipt_order_number_mismatch")
+            record_probe_runtime_violation("probe_receipt_order_number_mismatch")
             target_stock["entry_split_probe_phase"] = "aborted"
             target_stock["entry_split_probe_abort_reason"] = (
                 "probe_receipt_order_number_mismatch"
@@ -11523,7 +11523,7 @@ def _handle_entry_buy_execution(
                     probe_expand_forbidden=True,
                 )
         elif effective_exec_qty != 1 or int(new_qty or 0) != 1:
-            trip_probe_runtime_circuit("probe_fill_quantity_invariant")
+            record_probe_runtime_violation("probe_fill_quantity_invariant")
             target_stock["entry_split_probe_phase"] = "aborted"
             target_stock["entry_split_probe_abort_reason"] = (
                 "probe_fill_quantity_invariant"

@@ -197,12 +197,12 @@ def _quarantine_prebaseline_scalping_ghost(
 
 
 def _emit_probe_recovery_event(target: dict, recovery: dict) -> None:
-    if not (recovery.get("recovered") or recovery.get("circuit_open")):
+    if not (recovery.get("recovered") or recovery.get("probe_bundle_blocked")):
         return
     code = str(target.get("code") or target.get("stock_code") or "").strip()[:6]
     stage = (
         "probe_restart_recovery_blocked"
-        if recovery.get("circuit_open")
+        if recovery.get("probe_bundle_blocked")
         else "probe_restart_recovered"
     )
     try:
@@ -610,7 +610,7 @@ def _ensure_runtime_target(record, *, buy_qty=None, buy_price=None):
         if strategy == "SCALPING" and position_tag != OPENING_ROTATION_POSITION_TAG:
             target.setdefault("exit_mode", "SCALP_PRESET_TP")
         probe_recovery = recover_probe_runtime_bundle_for_stock(target)
-        if probe_recovery.get("recovered") or probe_recovery.get("circuit_open"):
+        if probe_recovery.get("recovered") or probe_recovery.get("probe_bundle_blocked"):
             log_info(
                 f"[ENTRY_SPLIT_PROBE_RECOVERY] {code} "
                 f"result={probe_recovery.get('reason')} "
@@ -668,7 +668,7 @@ def _ensure_runtime_target(record, *, buy_qty=None, buy_price=None):
     elif strategy == "SCALPING" and position_tag == OPENING_ROTATION_POSITION_TAG:
         target.pop("exit_mode", None)
     probe_recovery = recover_probe_runtime_bundle_for_stock(target)
-    if probe_recovery.get("recovered") or probe_recovery.get("circuit_open"):
+    if probe_recovery.get("recovered") or probe_recovery.get("probe_bundle_blocked"):
         log_info(
             f"[ENTRY_SPLIT_PROBE_RECOVERY] {code} "
             f"result={probe_recovery.get('reason')} "

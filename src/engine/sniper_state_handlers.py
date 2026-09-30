@@ -344,7 +344,7 @@ from src.engine.scalping.entry_split_order_plan import (
     build_probe_residual_orders,
     probe_submission_scope,
     release_unsubmitted_probe_reservation,
-    trip_probe_runtime_circuit,
+    record_probe_runtime_violation,
     update_probe_runtime_bundle,
 )
 from src.engine.scalping.entry_execution_sizing_plan import (
@@ -28852,7 +28852,7 @@ def _dispatch_scalp_preset_exit(
             )
         cancel_state = _cancel_pending_entry_orders(stock, code, force=False)
         if cancel_state not in {"cancelled", "resolved"}:
-            trip_probe_runtime_circuit("probe_residual_cancel_before_exit_failed")
+            record_probe_runtime_violation("probe_residual_cancel_before_exit_failed")
             _mutate_stock_state(
                 stock,
                 set_fields={
@@ -69866,7 +69866,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             ).strip()
             probe_continuation = probe_order.get("entry_split_order_probe_continuation")
             if not probe_bundle_id or not isinstance(probe_continuation, dict):
-                trip_probe_runtime_circuit("probe_plan_missing_runtime_contract")
+                record_probe_runtime_violation("probe_plan_missing_runtime_contract")
                 _log_entry_pipeline(
                     stock,
                     code,
@@ -70869,7 +70869,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 else "broker_order_number_missing_after_success_response"
             )
             if probe_first_order:
-                trip_probe_runtime_circuit(identity_failure_reason)
+                record_probe_runtime_violation(identity_failure_reason)
                 _abort_entry_split_probe_residual(
                     stock,
                     code,
@@ -82828,7 +82828,7 @@ def _submit_entry_split_probe_residual_locked(
     post_probe_resolver_enabled = _post_probe_price_resolver_enabled()
 
     if stock.get("entry_split_probe_residual_claimed"):
-        trip_probe_runtime_circuit("duplicate_residual_claim")
+        record_probe_runtime_violation("duplicate_residual_claim")
         _abort_entry_split_probe_residual(
             stock, code, "duplicate_residual_claim", preserve_position=True
         )
@@ -82862,7 +82862,7 @@ def _submit_entry_split_probe_residual_locked(
                 )
             },
         )
-        trip_probe_runtime_circuit(reason)
+        record_probe_runtime_violation(reason)
         _abort_entry_split_probe_residual(
             stock,
             code,
@@ -82872,7 +82872,7 @@ def _submit_entry_split_probe_residual_locked(
         )
         return False
     if requested_qty <= 1 or filled_qty != 1 or fill_price <= 0:
-        trip_probe_runtime_circuit("probe_runtime_quantity_invariant")
+        record_probe_runtime_violation("probe_runtime_quantity_invariant")
         _abort_entry_split_probe_residual(
             stock, code, "probe_runtime_quantity_invariant", preserve_position=True
         )
@@ -83039,7 +83039,7 @@ def _submit_entry_split_probe_residual_locked(
 
     continuation = stock.get("entry_split_probe_continuation")
     if not isinstance(continuation, dict):
-        trip_probe_runtime_circuit("probe_continuation_missing")
+        record_probe_runtime_violation("probe_continuation_missing")
         _abort_entry_split_probe_residual(
             stock, code, "probe_continuation_missing", preserve_position=True
         )
@@ -83369,7 +83369,7 @@ def _submit_entry_split_probe_residual_locked(
         resolved_leg_prices=resolved_leg_prices,
     )
     if not plan_fields.get("allowed") or not residual_orders:
-        trip_probe_runtime_circuit(
+        record_probe_runtime_violation(
             str(plan_fields.get("reason") or "residual_plan_failed")
         )
         _abort_entry_split_probe_residual(
@@ -83745,7 +83745,7 @@ def _submit_entry_split_probe_residual_locked(
             )
         except Exception as exc:
             failure_reason = "residual_broker_submit_exception"
-            trip_probe_runtime_circuit(failure_reason)
+            record_probe_runtime_violation(failure_reason)
             log_error(
                 f"[ENTRY_SPLIT_PROBE_RESIDUAL] {stock.get('name', code)}({code}) "
                 f"broker submit exception: {exc}"
@@ -83781,7 +83781,7 @@ def _submit_entry_split_probe_residual_locked(
                 ),
                 entry_split_probe_scale_in_forbidden=True,
             )
-            trip_probe_runtime_circuit("residual_owner_registry_bind_ambiguous")
+            record_probe_runtime_violation("residual_owner_registry_bind_ambiguous")
             _log_entry_pipeline(
                 stock,
                 code,
@@ -83808,7 +83808,7 @@ def _submit_entry_split_probe_residual_locked(
         order_no = _extract_broker_order_no(response)
         if not order_no:
             failure_reason = "residual_broker_order_number_missing"
-            trip_probe_runtime_circuit(failure_reason)
+            record_probe_runtime_violation(failure_reason)
             break
         sent_at = time.time()
         if wait_probe_confirmation_ready:
@@ -84053,7 +84053,7 @@ def _submit_entry_split_probe_residual_locked(
         1 + sum(_safe_int(order.get("qty"), 0) for order in successful_orders)
         != requested_qty
     ):
-        trip_probe_runtime_circuit("residual_submitted_quantity_invariant")
+        record_probe_runtime_violation("residual_submitted_quantity_invariant")
         _abort_entry_split_probe_residual(
             stock,
             code,
@@ -92206,7 +92206,7 @@ def handle_buy_ordered_state(stock, code):
                     **_entry_split_probe_observation_contract_fields(stock),
                 )
             else:
-                trip_probe_runtime_circuit("probe_timeout_cancel_failed")
+                record_probe_runtime_violation("probe_timeout_cancel_failed")
                 _log_entry_pipeline(
                     stock,
                     code,
