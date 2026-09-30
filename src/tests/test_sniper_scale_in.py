@@ -4961,6 +4961,58 @@ def test_machine_recheck_terminal_keeps_each_revision_without_order_authority(mo
     assert calls[1][1]["machine_revision_parent_sha256"] == "a" * 64
 
 
+def test_probe_submit_receipt_keeps_machine_revision_chain(monkeypatch):
+    from src.engine import buy_funnel_sentinel as sentinel
+
+    emitted = []
+    monkeypatch.setattr(
+        state_handlers,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, record_id=None, fields=None: emitted.append(
+            (stage, dict(fields or {}))
+        ),
+    )
+    lineage = {
+        "entry_primary_decision_owner": "mechanistic_entry_adjudicator",
+        "entry_mechanistic_action": "ENTER_NOW",
+        "entry_ai_screen_status": "pass",
+        "evaluation_attempt_id": "probe-attempt",
+        "scanner_promotion_id": "probe-promotion",
+        "machine_observation_sha256": "a" * 64,
+        "machine_revision_schema": "exact_machine_revision_v1",
+        "machine_revision_parent_sha256": "",
+    }
+    stock = {
+        "id": 1, "name": "probe", "code": "005930", "strategy": "SCALPING",
+        "last_watching_ai_machine_primary_fields": lineage,
+    }
+    state_handlers._log_entry_pipeline(
+        stock, "005930", "probe_submitted", probe_bundle_id="bundle-1",
+        order_no="12345", qty=1, actual_order_submitted=True,
+        broker_order_forbidden=False,
+    )
+    stage, probe_fields = emitted[0]
+    assert stage == "probe_submitted"
+    assert probe_fields["machine_observation_sha256"] == "a" * 64
+    assert probe_fields["machine_revision_schema"] == "exact_machine_revision_v1"
+    assert probe_fields["actual_order_submitted"] is True
+
+    base = datetime(2026, 9, 30, 11, 48, 10)
+    rows = [
+        sentinel.PipelineEvent(
+            base + timedelta(milliseconds=index), "ENTRY_PIPELINE", event_stage,
+            "probe", "005930", "1", fields,
+        )
+        for index, (event_stage, fields) in enumerate(
+            [("ai_confirmed", lineage), ("probe_submitted", probe_fields),
+             ("order_leg_sent", lineage)]
+        )
+    ]
+    _, status, conflicts = sentinel._machine_revision_rows(rows)
+    assert status == "single_revision"
+    assert conflicts == []
+
+
 def test_pre_submit_entry_ai_authority_retry_rebases_stale_quote_before_ai(
     monkeypatch,
 ):

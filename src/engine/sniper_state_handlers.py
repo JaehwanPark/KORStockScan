@@ -12110,6 +12110,7 @@ _MACHINE_PRIMARY_LINEAGE_PIPELINE_STAGES = frozenset(
         "order_leg_no_response",
         "order_leg_fail",
         "order_leg_sent",
+        "probe_submitted",
         "order_bundle_failed",
         "order_bundle_submitted",
         "broker_submit_failed",
