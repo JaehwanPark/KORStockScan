@@ -6886,6 +6886,7 @@ def run_zero_base_scanner(*, token, event_bus, is_test_mode=False):
                     "zero_base_claim_count": claim.get("claim_count"),
                     "zero_base_probe_result": result.get("result"),
                     "zero_base_probe_reason": result.get("reason"),
+                    "zero_base_rest_source_gap_detail": result.get("rest_source_gap_detail"),
                     "zero_base_machine_contract_error": result.get("machine_contract_error") or "-",
                     "zero_base_machine_source_gap_kind": result.get("machine_source_gap_kind") or "-",
                     "zero_base_recheck_attempts": result.get("recheck_attempts") or 1,

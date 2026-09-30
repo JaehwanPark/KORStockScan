@@ -5,7 +5,8 @@ import time
 import pytest
 
 from src.engine.scalping.zero_base_probe import (
-    exact_probe_rest_sources, exact_probe_ws_data, probe_registration_receipt,
+    exact_probe_rest_source_issue, exact_probe_rest_sources, exact_probe_ws_data,
+    probe_registration_receipt,
     run_zero_base_probe,
     wait_for_exact_probe_ws_data,
 )
@@ -833,6 +834,60 @@ def test_rest_probe_rejects_reused_or_cross_route_feature_rows():
         [], candle, request_code="123456_NX", now_epoch=11,
         allow_empty_ticks=True,
     )
+    assert exact_probe_rest_source_issue(
+        [tick], candle, request_code="123456_NX", now_epoch=11,
+    ) == "candle_route_mismatch"
+    assert exact_probe_rest_source_issue(
+        [tick], candle, request_code="123456", now_epoch=22,
+    ) == "tick_receive_clock_invalid"
+
+
+def test_probe_fetches_short_lived_ticks_after_slow_candle_source(monkeypatch):
+    import src.engine.scalping.zero_base_probe as module
+    monkeypatch.setattr(module, "resolve_entry_candle_session", lambda: "KRX_REGULAR")
+    clock = [11.0]
+    calls = []
+    ws = SimpleNamespace(
+        subscribed_codes={"123456"},
+        _registered_items_by_code={"123456": ("123456_AL",)},
+        get_exact_item_data=lambda *_args: _snapshot(
+            route="krx_nxt_integrated", item="123456_AL", epoch=clock[0],
+        ),
+    )
+
+    def candle_fetcher(*_args, **_kwargs):
+        calls.append("candle")
+        clock[0] += 11
+        return ([{"close": 10000}], {
+            "request_code": "123456_AL",
+            "rest_received_ts_ms": int(clock[0] * 1000),
+        })
+
+    def tick_fetcher(*_args, **_kwargs):
+        calls.append("tick")
+        return [{
+            "request_code": "123456_AL",
+            "rest_received_ts_ms": int(clock[0] * 1000),
+        }]
+
+    result = run_zero_base_probe(
+        {"claim": {"code": "123456", "route": "krx_nxt_integrated",
+                   "observed_epoch": 10},
+         "candidate": {"code": "123456", "route": "krx_nxt_integrated"}},
+        ws_manager=ws,
+        ai_engine=SimpleNamespace(analyze_target=lambda *_args, **_kwargs: {
+            "machine_evaluation_status": "assessed",
+            "entry_mechanistic_action": "RECHECK",
+        }),
+        token="token", now=lambda: clock[0],
+        tick_fetcher=tick_fetcher,
+        candle_fetcher=candle_fetcher,
+        context_builder=lambda *_args, **_kwargs: {"ready": True},
+        ws_wait_min_exact_0b_count=0,
+    )
+    assert calls == ["candle", "tick"]
+    assert result["result"] == "assessed"
+    assert result.get("rest_source_gap_detail") is None
 
 
 def test_probe_uses_exact_ws_tick_when_rest_tick_history_is_empty(monkeypatch):

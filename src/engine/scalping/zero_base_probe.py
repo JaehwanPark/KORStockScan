@@ -277,21 +277,30 @@ def probe_ws_snapshot(ws_manager, *, code: str, route: str) -> dict:
 def exact_probe_rest_sources(ticks, candle_meta, *, request_code, now_epoch,
                              allow_empty_ticks=False):
     """Keep REST feature rows on the requested venue and bounded receive clock."""
+    return not exact_probe_rest_source_issue(
+        ticks, candle_meta, request_code=request_code, now_epoch=now_epoch,
+        allow_empty_ticks=allow_empty_ticks,
+    )
+
+
+def exact_probe_rest_source_issue(ticks, candle_meta, *, request_code, now_epoch,
+                                  allow_empty_ticks=False):
+    """Identify the failed source field without retaining market data or credentials."""
     if (not isinstance(ticks, list) or (not ticks and not allow_empty_ticks)
         or not isinstance(candle_meta, dict)):
-        return False
+        return "source_shape_invalid"
     if candle_meta.get("request_code") != request_code:
-        return False
+        return "candle_route_mismatch"
     candle_received = candle_meta.get("rest_received_ts_ms")
     if not isinstance(candle_received, int) or not 0 <= now_epoch - candle_received / 1000 <= 120:
-        return False
+        return "candle_receive_clock_invalid"
     for tick in ticks:
         if not isinstance(tick, dict) or tick.get("request_code") != request_code:
-            return False
+            return "tick_route_mismatch"
         received = tick.get("rest_received_ts_ms")
         if not isinstance(received, int) or not 0 <= now_epoch - received / 1000 <= 10:
-            return False
-    return True
+            return "tick_receive_clock_invalid"
+    return ""
 
 
 def run_zero_base_probe(
@@ -412,17 +421,19 @@ def run_zero_base_probe(
             code, venue=venue, session=session, ws_data=ws_data,
         )
         try:
-            ticks = tick_fetcher(
-                token, request_code, limit=10,
-                request_owner="zero_base_machine_probe",
-                request_class=REQUEST_CLASS_SOURCE_ONLY,
-                explicit_request_code=True,
-            )
             candles, candle_meta = candle_fetcher(
                 token, code, ws_data, venue=venue, session=session, limit=40,
                 now_ts=now(), allow_integrated_sor_execution_view=True,
                 request_owner="zero_base_machine_probe",
                 request_class=REQUEST_CLASS_SOURCE_ONLY,
+            )
+            # The tick clock has a 10-second bound. Fetch it last so a slow
+            # candle response cannot age a fresh tick before validation.
+            ticks = tick_fetcher(
+                token, request_code, limit=10,
+                request_owner="zero_base_machine_probe",
+                request_class=REQUEST_CLASS_SOURCE_ONLY,
+                explicit_request_code=True,
             )
         except Exception as exc:
             result["reason"] = "required_rest_source_failed:" + type(exc).__name__
@@ -432,11 +443,13 @@ def run_zero_base_probe(
             result["result"] = "required_feature_insufficient"
             result["reason"] = "tick_or_candle_missing"
             return result
-        if not exact_probe_rest_sources(
+        rest_source_issue = exact_probe_rest_source_issue(
             ticks, candle_meta, request_code=request_code, now_epoch=now(),
             allow_empty_ticks=bool(exact_ws_ticks),
-        ):
+        )
+        if rest_source_issue:
             result["reason"] = "rest_route_or_receive_clock_invalid"
+            result["rest_source_gap_detail"] = rest_source_issue
             return result
         # The probe owns only these two source-only REST reads. Do not let the
         # shared context helper fan out into auxiliary index/investor requests.
