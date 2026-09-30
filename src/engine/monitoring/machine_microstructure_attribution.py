@@ -52,6 +52,7 @@ from src.engine.scalping.micro_reversion.collection_targets import (
     COLLECTION_TARGET_SCHEMA,
     build_collection_targets,
     load_exact_date_collection_targets,
+    load_zero_base_route_gap_scopes,
     write_collection_targets,
 )
 from src.engine.monitoring.machine_lifecycle_turnover_policy_research import (
@@ -8861,6 +8862,14 @@ def build_report(
         if report_root == DATA_DIR / "report"
         else runtime_root / "scalp_micro_reversion_collection_targets"
     )
+    zero_base_route_gap_source = (
+        load_zero_base_route_gap_scopes(
+            target_date, root=report_root.parent / "pipeline_events",
+            collection_target_root=collection_target_root,
+        )
+        if is_krx_trading_day(target_day)
+        else {"status": "not_trading_day", "scopes": []}
+    )
     registration_receipt = _runtime_registration_receipt_status(
         target_date,
         collection_target_root=collection_target_root,
@@ -9539,10 +9548,12 @@ def build_report(
         collection_targets = build_collection_targets(
             report,
             generated_at=generated,
+            zero_base_gap_scopes=zero_base_route_gap_source["scopes"],
         )
         selected_collection_targets = collection_targets["selected_targets"]
         report["collection_feedback"] = {
             "schema": collection_targets["schema"],
+            "zero_base_route_gap_source": zero_base_route_gap_source,
             "effective_date": collection_targets["effective_date"],
             "status": collection_targets["status"],
             "coverage_policy": collection_targets["budget"]["coverage_policy"],
@@ -10146,6 +10157,11 @@ def main() -> int:
         extra_paths=(
             args.source_exclusion_manifest,
             canary_snapshot,
+            args.report_root.parent / "pipeline_events"
+            / f"pipeline_events_{target_date.isoformat()}.jsonl",
+            args.report_root.parent / "runtime"
+            / "scalp_micro_reversion_collection_targets"
+            / f"scalp_micro_reversion_collection_targets_{target_date.isoformat()}.json",
             args.widget_state
             or (
                 DEFAULT_WIDGET_AUTO_TRADE_STATE_PATH
@@ -10161,7 +10177,14 @@ def main() -> int:
     if args.write:
         write_report(report, args.output_dir)
         if is_krx_trading_day(target_date):
-            collection_payload = build_collection_targets(report)
+            collection_payload = build_collection_targets(
+                report,
+                zero_base_gap_scopes=(
+                    report.get("collection_feedback", {})
+                    .get("zero_base_route_gap_source", {})
+                    .get("scopes", ())
+                ),
+            )
             if args.collection_target_root is None:
                 write_collection_targets(collection_payload)
             else:

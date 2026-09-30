@@ -7,6 +7,7 @@ import pytest
 from src.engine.scalping.micro_reversion.collection_targets import (
     build_collection_targets,
     load_exact_date_collection_targets,
+    load_zero_base_route_gap_scopes,
     write_collection_targets,
 )
 
@@ -19,6 +20,88 @@ def _report(gaps):
         "target_date": "2026-08-14",
         "producer_consumer_gaps": gaps,
     }
+
+
+def test_exact_probe_conflict_augments_only_next_session_observation_route(tmp_path):
+    source_date = "2026-09-30"
+    source_sha = "a" * 64
+    rows = [
+        {"stage": "zero_base_probe_claim", "stock_code": "010140",
+         "emitted_date": source_date, "emitted_at": "2026-09-30T08:38:18",
+         "fields": {"zero_base_route": "nxt_only",
+                    "zero_base_source_sha256": source_sha}},
+        {"stage": "zero_base_probe_result", "stock_code": "010140",
+         "emitted_date": source_date, "emitted_at": "2026-09-30T08:38:19",
+         "fields": {"zero_base_route": "nxt_only",
+                    "zero_base_source_sha256": source_sha,
+                    "zero_base_probe_result": "source_unavailable",
+                    "zero_base_probe_reason": "exact_route_subscription_conflict",
+                    "entry_mechanistic_action": "-",
+                    "actual_order_submitted": "False"}},
+        {"stage": "zero_base_probe_claim", "stock_code": "034020",
+         "emitted_date": source_date, "emitted_at": "2026-09-30T08:38:19",
+         "fields": {"zero_base_route": "nxt_only",
+                    "zero_base_source_sha256": "b" * 64}},
+        {"stage": "zero_base_probe_result", "stock_code": "034020",
+         "emitted_date": source_date, "emitted_at": "2026-09-30T08:38:20",
+         "fields": {"zero_base_route": "nxt_only",
+                    "zero_base_source_sha256": "b" * 64,
+                    "zero_base_probe_result": "source_unavailable",
+                    "zero_base_probe_reason": "exact_route_subscription_conflict",
+                    "entry_mechanistic_action": "-",
+                    "actual_order_submitted": "False"}},
+    ]
+    path = tmp_path / f"pipeline_events_{source_date}.jsonl"
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    target_root = tmp_path / "targets"
+    owner_report = {"schema": "machine_microstructure_attribution_v1",
+                    "target_date": "2026-09-29",
+                    "producer_consumer_gaps": [{
+                        "owner": "widget", "scope_id": "010140",
+                        "scope_kind": "active_widget_owner", "symbol": "010140",
+                        "expected_venues": ["SOR"],
+                        "gap_class": "micro_symbol_not_observed",
+                    }]}
+    write_collection_targets(
+        build_collection_targets(owner_report), root=target_root,
+    )
+    source = load_zero_base_route_gap_scopes(
+        source_date, root=tmp_path, collection_target_root=target_root,
+    )
+    assert source["status"] == "complete"
+    assert source["conflict_event_count"] == 2
+    assert source["matched_event_count"] == 1
+    assert source["scopes"][0]["source_sha256"] == source_sha
+
+    report = {"schema": "machine_microstructure_attribution_v1",
+              "target_date": source_date,
+              "producer_consumer_gaps": [{
+                  "owner": "widget", "scope_id": "010140",
+                  "scope_kind": "active_widget_owner", "symbol": "010140",
+                  "expected_venues": ["SOR"],
+                  "gap_class": "micro_symbol_not_observed",
+              }]}
+    payload = build_collection_targets(
+        report, zero_base_gap_scopes=source["scopes"], max_symbols=1,
+    )
+    assert payload["effective_date"] == "2026-10-01"
+    assert payload["selected_targets"][0]["registration_items"] == [
+        "010140_NX", "010140_AL",
+    ]
+    assert payload["selected_targets"][0]["trading_target_created"] is False
+    assert payload["selected_targets"][0]["actual_order_submitted"] is False
+
+    prospective = dict(report)
+    prospective["producer_consumer_gaps"] = [{
+        **report["producer_consumer_gaps"][0],
+        "scope_kind": "prospective_widget_research",
+    }]
+    bounded = build_collection_targets(
+        prospective, zero_base_gap_scopes=source["scopes"], max_symbols=1,
+    )
+    assert bounded["selected_targets"][0]["registration_items"] == [
+        "010140_NX",
+    ]
 
 
 def test_unobserved_symbols_become_bounded_next_trading_day_targets():

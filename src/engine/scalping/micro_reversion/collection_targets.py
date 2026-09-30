@@ -8,6 +8,7 @@ data boundary.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -47,9 +48,130 @@ REPAIRABLE_GAPS = frozenset(
         "micro_symbol_not_observed",
         "micro_anchor_window_not_observed",
         "micro_post_anchor_not_observed",
+        "zero_base_exact_route_subscription_conflict",
     }
 )
 POLICY_SAMPLE_ACCUMULATION = "micro_policy_sample_accumulation"
+MAX_ZERO_BASE_GAP_SOURCE_BYTES = 128 * 1024 * 1024
+MAX_ZERO_BASE_GAP_EVENTS = 256
+
+
+def load_zero_base_route_gap_scopes(
+    source_date: str, *, root: Path = DATA_DIR / "pipeline_events",
+    collection_target_root: Path = COLLECTION_TARGET_ROOT,
+) -> dict[str, Any]:
+    """Bind current-date premarket probe conflicts to their discovery claims.
+
+    This is next-session observation input only.  It cannot recreate a missing
+    tick or turn a failed probe into a machine decision.
+    """
+    path = root / f"pipeline_events_{source_date}.jsonl"
+    if date.fromisoformat(source_date) < date(2026, 9, 29):
+        return {"status": "not_applicable", "path": str(path), "scopes": []}
+    current_targets = load_exact_date_collection_targets(
+        source_date, root=collection_target_root,
+    )
+    if current_targets.get("status") != "loaded":
+        return {"status": "unobservable",
+                "reason": "current_source_only_target_"
+                + str(current_targets.get("status") or "missing"),
+                "path": str(path), "scopes": []}
+    target_payload = current_targets.get("payload") or {}
+    current_target = {
+        "path": current_targets["path"],
+        "semantic_sha256": hashlib.sha256(json.dumps(
+            target_payload, sort_keys=True, ensure_ascii=True,
+            separators=(",", ":"),
+        ).encode()).hexdigest(),
+    }
+    owned_items = {
+        row.get("symbol"): set(row.get("registration_items") or ())
+        for row in target_payload.get("selected_targets") or ()
+        if isinstance(row, dict)
+    }
+    try:
+        size = path.stat().st_size
+    except OSError as exc:
+        return {"status": "unobservable", "reason": type(exc).__name__,
+                "path": str(path), "scopes": []}
+    if size > MAX_ZERO_BASE_GAP_SOURCE_BYTES:
+        return {"status": "unobservable", "reason": "source_size_limit",
+                "path": str(path), "scopes": []}
+    claims: dict[str, tuple[str, str, datetime]] = {}
+    conflicts: list[tuple[str, str, datetime, str]] = []
+    digest = hashlib.sha256()
+    malformed = 0
+    read_bytes = 0
+    try:
+        with path.open("rb") as source:
+            for raw in source:
+                read_bytes += len(raw)
+                if read_bytes > MAX_ZERO_BASE_GAP_SOURCE_BYTES:
+                    return {"status": "unobservable", "reason": "source_size_limit",
+                            "path": str(path), "scopes": []}
+                digest.update(raw)
+                try:
+                    row = json.loads(raw)
+                except (ValueError, UnicodeDecodeError):
+                    malformed += 1
+                    continue
+                if (not isinstance(row, dict)
+                        or row.get("emitted_date") != source_date
+                        or row.get("stage") not in {
+                            "zero_base_probe_claim", "zero_base_probe_result"
+                        }):
+                    continue
+                fields = row.get("fields")
+                if not isinstance(fields, dict):
+                    continue
+                code = _normalize_symbol(row.get("stock_code"))
+                route = fields.get("zero_base_route")
+                source_sha = fields.get("zero_base_source_sha256")
+                if (not code or route != "nxt_only"
+                        or not isinstance(source_sha, str)
+                        or len(source_sha) != 64
+                        or any(char not in "0123456789abcdef" for char in source_sha)):
+                    continue
+                try:
+                    emitted = datetime.fromisoformat(row["emitted_at"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if emitted.tzinfo is not None:
+                    emitted = emitted.astimezone(KST).replace(tzinfo=None)
+                if emitted.date().isoformat() != source_date:
+                    continue
+                if row["stage"] == "zero_base_probe_claim":
+                    claims[source_sha] = (code, route, emitted)
+                elif (fields.get("zero_base_probe_result") == "source_unavailable"
+                      and fields.get("zero_base_probe_reason")
+                      == "exact_route_subscription_conflict"
+                      and fields.get("entry_mechanistic_action") in (None, "", "-")
+                      and fields.get("actual_order_submitted") in (False, "False")):
+                    conflicts.append((code, route, emitted, source_sha))
+                    if len(conflicts) > MAX_ZERO_BASE_GAP_EVENTS:
+                        return {"status": "unobservable", "reason": "event_limit",
+                                "path": str(path), "scopes": []}
+    except OSError as exc:
+        return {"status": "unobservable", "reason": type(exc).__name__,
+                "path": str(path), "scopes": []}
+    scopes = []
+    seen = set()
+    for code, route, result_at, source_sha in conflicts:
+        claim = claims.get(source_sha)
+        if (claim is None or claim[:2] != (code, route)
+                or not 0 <= (result_at - claim[2]).total_seconds() <= 120
+                or (code, source_sha) in seen
+                or not owned_items.get(code)
+                or f"{code}_NX" in owned_items[code]):
+            continue
+        seen.add((code, source_sha))
+        scopes.append({"symbol": code, "route": route,
+                       "source_sha256": source_sha,
+                       "result_at": result_at.isoformat()})
+    return {"status": "partial" if malformed else "complete", "path": str(path),
+            "source_sha256": digest.hexdigest(), "malformed_rows": malformed,
+            "conflict_event_count": len(conflicts), "matched_event_count": len(scopes),
+            "current_target": current_target, "scopes": scopes}
 COLLECTION_TARGET_METRIC_CONTRACT = {
     "metric_role": (
         "full_active_owner_exact_route_collection_coverage_and_bounded_"
@@ -160,6 +282,7 @@ def build_collection_targets(
     *,
     max_symbols: int | None = None,
     generated_at: datetime | None = None,
+    zero_base_gap_scopes: tuple[dict[str, Any], ...] | list[dict[str, Any]] = (),
 ) -> dict[str, Any]:
     """Build exact-date source-only subscriptions without collapsing owner routes."""
 
@@ -266,6 +389,24 @@ def build_collection_targets(
                 collection_reason=POLICY_SAMPLE_ACCUMULATION,
             )
 
+    # The probe's exact _NX receipt was absent, so only the next session's
+    # source-only collection may be augmented.  No past 0B/0D or machine
+    # decision is reconstructed from this gap.
+    for gap in zero_base_gap_scopes:
+        if not isinstance(gap, dict) or gap.get("route") != "nxt_only":
+            continue
+        source_sha = gap.get("source_sha256")
+        if (not isinstance(source_sha, str) or len(source_sha) != 64
+                or any(char not in "0123456789abcdef" for char in source_sha)
+                or str(gap.get("result_at") or "")[:10] != source_date.isoformat()):
+            continue
+        merge_scope(
+            {"owner": "zero_base_probe_source_only", "scope_id": source_sha,
+             "scope_kind": "prospective_zero_base_exact_route_gap",
+             "symbol": gap.get("symbol"), "expected_venues": ("NXT",)},
+            collection_reason="zero_base_exact_route_subscription_conflict",
+        )
+
     candidates: list[dict[str, Any]] = []
     effective_key = effective_date.isoformat()
     rotation_index = _rotation_index(effective_date)
@@ -359,7 +500,10 @@ def build_collection_targets(
             # owner.  Prospective research remains bounded to one rotated
             # route because it has no active execution lineage to repair.
             selected_venues = (
-                venues if row["active_owner"] else [venues[venue_phase % len(venues)]]
+                venues if row["active_owner"] else
+                ["NXT"] if "zero_base_exact_route_subscription_conflict"
+                in row["gap_classes"] else
+                [venues[venue_phase % len(venues)]]
             )
             row["expected_venues"] = selected_venues
             row["registration_items"] = [
