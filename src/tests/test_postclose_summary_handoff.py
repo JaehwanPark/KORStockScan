@@ -737,6 +737,31 @@ def test_machine_terminal_survives_later_final_audit_generation(stage_environmen
     assert h.stage_receipt_issues(report, day, 'main_machine_policy') == []
 
 
+def test_machine_closed_date_recovery_accepts_exact_bound_final_audit(stage_environment, monkeypatch):
+    h, day, report, run, _produce = stage_environment
+    from src.engine import observation_source_quality_audit as audit_owner
+    first = run('main_machine_policy')
+    assert first['status'] == 'succeeded'
+    audit = report / 'observation_source_quality_audit' / f'observation_source_quality_audit_{day}.json'
+    binding = Path(str(audit) + '.final-contract.json')
+    source = json.loads(audit.read_text())
+    source['audit_phase'] = 'final'
+    audit.write_text(json.dumps(source))
+    final_binding = json.loads(binding.read_text())
+    final_binding['audit_phase'] = 'final'
+    final_binding['artifact_sha256'] = hashlib.sha256(audit.read_bytes()).hexdigest()
+    binding.write_text(json.dumps(final_binding))
+    assert h._machine_source_preflight_issue(report, day) == 'source_quality_preflight_identity_or_hash_invalid'
+    monkeypatch.setattr(audit_owner, 'check_audit_reusable', lambda *args, **kwargs: {'reusable': False})
+    assert h._machine_source_preflight_issue(report, day, recovery=True) == 'source_quality_final_audit_not_reusable'
+    monkeypatch.setattr(audit_owner, 'check_audit_reusable', lambda *args, **kwargs: {'reusable': True})
+    assert h._machine_source_preflight_issue(report, day, recovery=True) is None
+    second = run('main_machine_policy', recovery=True)
+    assert second['status'] == 'succeeded'
+    assert second['source_quality_audit_phase'] == 'final'
+    assert second['source_quality_preflight_sha256'] == final_binding['artifact_sha256']
+
+
 def test_machine_stage_rejects_raw_generation_changed_after_preflight(stage_environment):
     h, day, report, run, _produce = stage_environment
     raw = report.parent / 'pipeline_events' / f'pipeline_events_{day}.jsonl'

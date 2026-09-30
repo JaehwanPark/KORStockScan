@@ -1142,8 +1142,8 @@ def stage_input_paths(report_dir, day, stage):
     return paths
 
 
-def _machine_source_preflight_issue(report_dir, day):
-    """Require an exact-date, hash-bound preflight before machine calibration."""
+def _machine_source_preflight_issue(report_dir, day, *, recovery=False):
+    """Require a bound audit; closed-date recovery may use its final successor."""
     source_path = (Path(report_dir) / 'observation_source_quality_audit'
                    / f'observation_source_quality_audit_{day}.json')
     binding = _load_json(Path(str(source_path) + '.final-contract.json'))
@@ -1154,14 +1154,19 @@ def _machine_source_preflight_issue(report_dir, day):
         return 'source_quality_preflight_missing_or_invalid'
     if not isinstance(source, dict) or not binding:
         return 'source_quality_preflight_missing_or_invalid'
+    phase = source.get('audit_phase')
     if (source.get('target_date') != day
-        or source.get('audit_phase') != 'preflight'
+        or phase not in ({'preflight', 'final'} if recovery else {'preflight'})
         or binding.get('schema') != 'observation_source_quality_final_binding_v1'
         or binding.get('target_date') != day
-        or binding.get('audit_phase') != 'preflight'
+        or binding.get('audit_phase') != phase
         or binding.get('artifact_sha256') != hashlib.sha256(source_bytes).hexdigest()
         or binding.get('implementation_sha256') != source.get('consumer_implementation_sha256')):
         return 'source_quality_preflight_identity_or_hash_invalid'
+    if recovery and phase == 'final':
+        from src.engine.observation_source_quality_audit import check_audit_reusable
+        if check_audit_reusable(day, audit_phase='final', artifact_path=source_path).get('reusable') is not True:
+            return 'source_quality_final_audit_not_reusable'
     summary = source.get('summary')
     generation = source.get('source')
     if (source.get('status') not in {'pass', 'warning'}
@@ -1623,7 +1628,7 @@ def run_stage(stage, day, *, report_dir, project, publication=None, effective=No
         if issues:
             return _stage_write(path, {**value, 'status':'deferred', 'exit_code':75, 'issues':issues, 'policy_disposition':'source_gap'})
         if stage == 'main_machine_policy':
-            preflight_issue = _machine_source_preflight_issue(report_dir, day)
+            preflight_issue = _machine_source_preflight_issue(report_dir, day, recovery=recovery)
             if preflight_issue:
                 return _stage_write(path, {**value, 'status':'deferred', 'exit_code':75,
                     'issues':[preflight_issue], 'policy_disposition':'source_quality_blocked',
@@ -1631,6 +1636,7 @@ def run_stage(stage, day, *, report_dir, project, publication=None, effective=No
             preflight_path = (Path(report_dir) / 'observation_source_quality_audit'
                               / f'observation_source_quality_audit_{day}.json')
             value['source_quality_preflight_sha256'] = hashlib.sha256(preflight_path.read_bytes()).hexdigest()
+            value['source_quality_audit_phase'] = _load_json(preflight_path).get('audit_phase')
             binding_path = Path(str(preflight_path) + '.final-contract.json')
             if _load_json(binding_path).get('artifact_sha256') != value['source_quality_preflight_sha256']:
                 return _stage_write(path, {**value, 'status':'deferred', 'exit_code':75,
@@ -1743,7 +1749,7 @@ def run_stage(stage, day, *, report_dir, project, publication=None, effective=No
             if stage == 'main_machine_policy':
                 preflight_path = (Path(report_dir) / 'observation_source_quality_audit'
                                   / f'observation_source_quality_audit_{day}.json')
-                preflight_issue = _machine_source_preflight_issue(report_dir, day)
+                preflight_issue = _machine_source_preflight_issue(report_dir, day, recovery=recovery)
                 try:
                     current_preflight_sha = hashlib.sha256(preflight_path.read_bytes()).hexdigest()
                 except OSError:
