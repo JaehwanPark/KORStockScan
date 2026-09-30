@@ -519,6 +519,12 @@ def test_cli_writes_replay_and_recommendation_without_notification(tmp_path):
     assert report["status"] == "no_qualified_candidate"
     assert report["telegram_status"] == "not_requested"
     assert report["collector_created"] is False
+    # A retry rewrites only its own exact-date replay; prior inputs stay sealed.
+    assert rec.main(
+        ["--target-date", "2026-08-06", "--payload-dir", str(payload_dir),
+         "--label-dir", str(label_dir), "--replay-dir", str(replay_dir),
+         "--output-dir", str(output_dir), "--write"]
+    ) == 0
 
 
 def test_collector_rejects_missing_prior_history_instead_of_valid_empty(tmp_path):
@@ -610,6 +616,34 @@ def test_collector_forward_window_skips_old_payload_and_starts_new_anchor(tmp_pa
     assert rec.history_anchor_issues(output_dir, date(2026, 9, 29), manifest) == []
     assert rec.history_anchor_issues(output_dir, date(2026, 9, 30), manifest) == [
         "collector_history_anchor_missing"]
+
+
+def test_collector_anchor_ignores_history_retired_by_forward_window(tmp_path):
+    payload_dir, replay_dir, output_dir = (tmp_path / name for name in
+                                          ("payload", "replay", "output"))
+    for folder in (payload_dir, replay_dir, output_dir):
+        folder.mkdir()
+    old = payload_dir / "ai_decision_payloads_2026-09-28.jsonl"
+    current = payload_dir / "ai_decision_payloads_2026-09-29.jsonl"
+    old.write_text('{"captured_at":"2026-09-28T09:00:00+09:00"}\n')
+    current.write_text('{"captured_at":"2026-09-29T09:00:00+09:00"}\n')
+    kwargs = dict(sentinel_dir=tmp_path / "sentinel",
+                  watch_config_path=tmp_path / "config.json")
+    historical = rec.history_input_manifest(
+        payload_dir, replay_dir, through_date=date(2026, 9, 28), **kwargs)
+    active = rec.history_input_manifest(
+        payload_dir, replay_dir, through_date=date(2026, 9, 30), **kwargs)
+    # Model a prior report produced before the forward-window change.
+    retained = next(row for row in active["entries"] if row["source_date"] == "2026-09-29")
+    historical["entries"].append(retained)
+    (output_dir / "widget_collector_expansion_recommendation_2026-09-30.json").write_text(
+        json.dumps({"source": {"history_input_manifest": historical}}))
+    assert rec.history_anchor_issues(output_dir, date(2026, 9, 30), active) == []
+    current.write_text('{"captured_at":"2026-09-29T09:01:00+09:00"}\n')
+    changed = rec.history_input_manifest(
+        payload_dir, replay_dir, through_date=date(2026, 9, 30), **kwargs)
+    assert rec.history_anchor_issues(output_dir, date(2026, 9, 30), changed) == [
+        "collector_history_prior_generation_changed"]
 
 
 def test_source_artifact_gate_rejects_missing_or_authority_mismatched_label(

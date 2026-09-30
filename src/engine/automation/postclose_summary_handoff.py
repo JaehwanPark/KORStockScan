@@ -917,8 +917,8 @@ FAMILY_ARTIFACT_MAX_BYTES = 64 * 1024 * 1024
 STAGE_REGISTRY = {
     'main_machine_policy': ((), ('machine_policy', 'machine_policy_terminal')),
     'pre_submit_delay': ((), ('pre_submit_delay_tuning', 'pre_submit_delay_policy')),
-    'main_auxiliary_policy': (('outcome_labels',), ('compact_auxiliary_paired_economic',)),
     'legacy_machine_report': ((), ('ai_decision_action_outcome_calibration',)),
+    'main_auxiliary_policy': (('outcome_labels', 'legacy_machine_report'), ('compact_auxiliary_paired_economic',)),
     'outcome_labels': ((), ('ai_decision_outcome_labels',)),
     'widget_policy': ((), ('widget_advisory_calibration', 'widget_auto_trade_policy_calibration', 'widget_symbol_signal_policy_research', 'widget_symbol_runtime_policy_apply', 'widget_policy_refresh')),
     'episode_policy': ((), ('low_price_two_leg_expanded_candidate_research', 'episode_policy_refresh')),
@@ -1114,6 +1114,14 @@ def stage_receipt_issues(report_dir, day, stage, *, code_hash=None):
     return _safe_stage_output_issues(report_dir, day, stage)
 
 
+def _joint_research_peer_off(report_dir, day):
+    """The joint allocation has no active peer when episode policy is OFF."""
+    receipt = _load_json(stage_path(report_dir, day, 'episode_policy'))
+    return (receipt.get('status') == 'off'
+            and receipt.get('off_reason') == 'explicit_schedule_disabled'
+            and not stage_receipt_issues(report_dir, day, 'episode_policy'))
+
+
 def stage_input_paths(report_dir, day, stage):
     paths = {s:stage_path(report_dir, day, s) for s in STAGE_REGISTRY[stage][0]}
     if stage == 'research_capacity':
@@ -1262,6 +1270,38 @@ def _existing_incumbent_winrate_binding_valid(report, staged, bundle, previous, 
     )
 
 
+def _staged_winrate_generation_preserved(staged, bundle, runtime_policy, data_root):
+    """Accept a later same-policy bundle only with an intact archived parent chain."""
+    expected = staged.get('bundle_sha256')
+    if bundle.get('bundle_sha256') == expected:
+        return True
+    current = bundle
+    seen = {current.get('bundle_sha256')}
+    proof = current.get('winrate_selection')
+    machine = runtime_policy.for_cohort(current, ('KRX', 'KRX_REGULAR'))['machine_policy']
+    for _ in range(8):
+        parent_hash = current.get('previous_bundle_sha256')
+        if not isinstance(parent_hash, str) or len(parent_hash) != 64 or parent_hash in seen:
+            return False
+        seen.add(parent_hash)
+        path = runtime_policy.root(Path(data_root)) / 'generations' / f'{parent_hash}.json'
+        try:
+            parent = runtime_policy._read(path)
+            runtime_policy.validate(parent, target_date=staged.get('target_date'))
+            runtime_policy._validate_bundle_sources(parent, Path(data_root))
+            parent_machine = runtime_policy.for_cohort(parent, ('KRX', 'KRX_REGULAR'))['machine_policy']
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+            return False
+        if (parent.get('bundle_sha256') != parent_hash
+            or parent.get('winrate_selection') != proof
+            or parent_machine != machine):
+            return False
+        if parent_hash == expected:
+            return True
+        current = parent
+    return False
+
+
 def _stage_output_issues(report_dir, day, stage):
     from src.engine.automation.postclose_recommendation_intake import _report_date
     errors = []
@@ -1390,7 +1430,8 @@ def _stage_output_issues(report_dir, day, stage):
                         )
                     else:
                         binding_invalid = (
-                            bundle.get('bundle_sha256') != staged.get('bundle_sha256')
+                            not _staged_winrate_generation_preserved(
+                                staged, bundle, runtime_policy, Path(report_dir).parent)
                             or proof.get('machine_policy_sha256') != runtime_policy.digest(bundle['machine_policy'])
                         )
                     if (binding_invalid
@@ -1405,8 +1446,7 @@ def _stage_output_issues(report_dir, day, stage):
                             or (bundle['machine_policy'].get('entry_situation_veto') or {}).get('threshold_bp') != 68.75))
                         or (not pending and not reused_incumbent
                             and (proof.get('report_sha256') != report.get('artifact_content_sha256')
-                            or proof.get('disposition') != report['disposition']))
-                        ):
+                            or proof.get('disposition') != report['disposition']))):
                         errors.append(f'{stage}:winrate_staged_binding_invalid')
                 except (OSError, ValueError, TypeError, KeyError, AttributeError):
                     errors.append(f'{stage}:winrate_staged_binding_invalid')
@@ -1465,7 +1505,7 @@ def stage_commands(stage, day, publication, *, recovery=False):
         return [command('scalping.pre_submit_delay_tuning', '--date', day,
                         '--effective-date', _next_krx_trading_day(publication), '--require-family-ledger')]
     if stage == 'legacy_machine_report':
-        return [command('scalping.ai_action_outcome_calibration', *date_args, '--machine-only', '--publication-date', publication)]
+        return [command('scalping.ai_action_outcome_calibration', *date_args, '--machine-only', '--publication-date', publication, '--activate-now')]
     if stage == 'main_auxiliary_policy':
         common = ['--date', day, '--compact-only', '--write']
         return [command('scalping.entry_setup_paired_replay_batch', *common, '--execute-compact-candidate'),
@@ -1859,7 +1899,9 @@ def _stage_main(argv):
                 parser.error('resource_guard_status_invalid_json')
         return run_stage(s, day, report_dir=DATA_DIR / 'report', project=PROJECT_ROOT,
             publication=args.publication_date, recovery=args.recover_closed_target,
-            execute=not args.validate_existing, timeout=args.timeout_sec, off=args.off,
+            execute=not args.validate_existing, timeout=args.timeout_sec,
+            off=args.off or (s == 'research_allocation' and
+                             _joint_research_peer_off(DATA_DIR / 'report', day)),
             prerequisite_wait=0 if args.recover_closed_target else args.timeout_sec,
             stop_event=stop_event, resource_blocked=resource_blocked)
     if args.stage == 'machine_group':

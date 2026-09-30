@@ -1933,9 +1933,6 @@ def activate_strategy_report(source_path: Path, *, data_root: Path, now: datetim
         active_scopes = active.get('scopes') or {active.get('scope'): active}
         for scope, result in sorted(evaluations.items()):
             candidate = result.get('candidate')
-            if (candidate or {}).get('evaluation_basis') == 'machine_full_population_opportunity_v1':
-                dispositions[scope] = ['machine_full_registry_research_only']
-                continue
             if result.get('promotion_pass') is not True or not candidate:
                 dispositions[scope] = result.get('promotion_errors') or [result.get('status')]
                 continue

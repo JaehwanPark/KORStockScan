@@ -1731,6 +1731,7 @@ def _maintain_provider_budget_ledger_storage(
     census = {
         "ledger_count": 0,
         "ledger_bytes": 0,
+        "current_date_deferred_count": 0,
         "retention_candidate_count": 0,
         "retention_candidate_bytes": 0,
     }
@@ -1765,6 +1766,14 @@ def _maintain_provider_budget_ledger_storage(
         physical_bytes = 0
         try:
             ledger_path = _validated_descendant(root, ledger_path)
+            # The runtime trade date is mutable and its summary may not be
+            # published yet. Storage maintenance owns closed generations only.
+            if trade_date == datetime.now(KST).date() and trade_date in protected_dates:
+                if (not ledger_path.is_file()
+                        or ledger_path.with_suffix(f"{ledger_path.suffix}.gz").exists()):
+                    raise ValueError("current_provider_budget_storage_generation_invalid")
+                census["current_date_deferred_count"] += 1
+                continue
             ledger_actions, failure, physical_bytes, age_days = (
                 _maintain_one_provider_budget_ledger(
                     ledger_path,
@@ -2787,6 +2796,7 @@ def maintain_report_artifact_storage(
     provider_budget_census = {
         "ledger_count": 0,
         "ledger_bytes": 0,
+        "current_date_deferred_count": 0,
         "retention_candidate_count": 0,
         "retention_candidate_bytes": 0,
     }

@@ -481,7 +481,7 @@ def rebuild(setup, policy):
 
 
 # This is a search budget, not a claim that the Cartesian domain is exhausted.
-SEARCH_VERSION = 'balanced_machine_train_v3'
+SEARCH_VERSION = 'balanced_machine_train_v4'
 COMMON_MICRO_COORDINATES = {'minimum_micro_net_aggressive_delta_10t': 'net_aggressive_delta_10t',
     'minimum_micro_price_change_10t_pct': 'price_change_10t_pct'}
 COMMON_LIQUIDITY_COORDINATES = {'maximum_spread_bp': 'spread_bp',
@@ -581,7 +581,51 @@ def _mutate_tree(base, values, selector):
     return candidate
 
 
-def _balanced_candidates(parent, scope, domains, selectors, start, limit, priority_coordinates=None, search_seed=None):
+ADMISSION_EXPANSION_DIRECTION = {
+    'lower': frozenset({
+        'structural_positive_returns', 'structural_positive_slopes',
+        'early_positive_returns', 'early_positive_slopes', 'early_return_floor_pct',
+        'early_drawdown_floor_pct', 'tape_supportive_score', 'tape_adverse_score',
+        'momentum_accelerating_score', 'momentum_fading_score', 'trigger_buy_pressure',
+        'reversal_tick_acceleration', 'short_drawdown_floor_pct', 'probe_buy_pressure',
+        'volume_absent_ratio', 'volume_confirm_ratio', 'deep_drawdown_pct',
+        'distribution_return_5m_pct', 'distribution_return_10m_pct',
+        'distribution_drawdown_pct', 'distribution_volume_ratio',
+        'recovery_positive_windows', 'minimum_depletion_fraction_per_sec',
+        'minimum_trade_backed_ratio', 'minimum_micro_net_aggressive_delta_10t',
+        'minimum_micro_price_change_10t_pct', 'absorption_count', 'absorption_buy_pressure',
+        'deceleration_margin_pct', 'rejection_wick_ratio', 'rejection_rebound_pct',
+        'reference_reclaim_bp', 'recovery_tick_acceleration', 'prior_adverse_drawdown_pct',
+        'fresh_precursor_count', 'degraded_precursor_count', 'non_tape_precursor_count',
+        'clean_drawdown_pct', 'clean_precursor_count', 'tail_fillability',
+        'relative_weakness_pct_point', 'recovery_drawdown_pct',
+    }),
+    'higher': frozenset({
+        'overextension_runup_pct', 'overextension_vwap_bp', 'overextension_ma5_bp',
+        'ask_wall_spread_bp', 'ask_wall_ratio', 'probe_runup_pct', 'probe_spread_bp', 'depth_adverse_ratio',
+        'depth_supportive_ratio', 'top1_supportive_ratio', 'cost_low_spread_bp',
+        'cost_observable_spread_bp', 'cost_extreme_spread_bp', 'tail_spread_bp',
+        'tail_top3_ratio', 'late_watch_sec', 'material_extension_pct', 'repromotion_count',
+        'maximum_refill_ratio', 'clean_max_cost_pct',
+    }),
+}
+
+
+def admission_expansion_value(name, values, incumbent):
+    """Return the smallest registered one-coordinate relaxation, if any."""
+    direction = ('lower' if name in ADMISSION_EXPANSION_DIRECTION['lower'] else
+                 'higher' if name in ADMISSION_EXPANSION_DIRECTION['higher'] else None)
+    if direction == 'lower':
+        options = [value for value in values if value < incumbent]
+        return max(options) if options else None
+    if direction == 'higher':
+        options = [value for value in values if value > incumbent]
+        return min(options) if options else None
+    return None
+
+
+def _balanced_candidates(parent, scope, domains, selectors, start, limit, priority_coordinates=None, search_seed=None,
+                         admission_expansion=False):
     base = seed(parent, scope) if 'strategy' not in parent else deepcopy(parent)
     inherited = default_profile(base)
     active = [n for n in domains if any(v != inherited[n] for v in domains[n])]
@@ -620,8 +664,13 @@ def _balanced_candidates(parent, scope, domains, selectors, start, limit, priori
                 chosen = active
             for n in chosen:
                 options = [v for v in domains[n] if v != inherited[n]]
-                offset = int(digest([order_seed, group, index, n])[:8], 16)
-                values[n] = options[offset % len(options)]
+                expansion = admission_expansion and group == 'single' and len(chosen) == 1
+                target = admission_expansion_value(n, domains[n], inherited[n]) if expansion else None
+                if target is not None:
+                    values[n] = target
+                else:
+                    offset = int(digest([order_seed, group, index, n])[:8], 16)
+                    values[n] = options[offset % len(options)]
             if group == 'selector_leaf':
                 feature, boundary, side = split_options[index % len(split_options)]
                 selector = (feature, boundary, 'both' if index % 4 == 3 else side)
@@ -639,7 +688,8 @@ def _balanced_candidates(parent, scope, domains, selectors, start, limit, priori
             break
 
 
-def joint_candidates(parent, scope, *, domains=None, selectors=None, start=0, limit=96, local_first=False, priority_coordinates=None, search_seed=None):
+def joint_candidates(parent, scope, *, domains=None, selectors=None, start=0, limit=96, local_first=False,
+                     priority_coordinates=None, search_seed=None, admission_expansion=False):
     """Bounded traversal of a declared Cartesian domain, with resumable cursor.
 
     Coprime stride visits every combination once; all coordinates participate
@@ -648,7 +698,8 @@ def joint_candidates(parent, scope, *, domains=None, selectors=None, start=0, li
     """
     domains = domains or {name: list(spec[1]) for name, spec in REGISTRY.items()}
     if local_first:
-        yield from _balanced_candidates(parent, scope, domains, selectors or [None], start, limit, priority_coordinates, search_seed)
+        yield from _balanced_candidates(parent, scope, domains, selectors or [None], start, limit,
+            priority_coordinates, search_seed, admission_expansion=admission_expansion)
         return
     names = sorted(domains)
     if set(names) - set(REGISTRY) or any(not domains[n] for n in names):
@@ -693,7 +744,7 @@ def joint_candidates(parent, scope, *, domains=None, selectors=None, start=0, li
             domain_sha256=domain_hash, search_complete=cursor + 1 == total)
 
 
-MACHINE_SELECTION_VERSION = 'support_adjusted_win_rate_full_population_v5'
+MACHINE_SELECTION_VERSION = 'support_adjusted_win_rate_full_population_v6'
 MACHINE_EVALUATION_BASIS = 'machine_full_population_opportunity_v1'
 
 
@@ -714,10 +765,10 @@ def machine_support_adjusted_win_rate(economy):
 
 
 def machine_admission_rank(economy, *, node_count=1, complexity=0):
-    adjusted = machine_support_adjusted_win_rate(economy)
-    # Path EV and paired profit remain cost-bound diagnostics. The Main machine
-    # selection contract ranks binary wins and support only.
-    values = [adjusted, _number(economy.get('win_rate_pct')),
+    # Main entry selection ranks cost-bound target-first wins and unique
+    # opportunity support. Paired path EV is retained as separate evidence.
+    values = [machine_support_adjusted_win_rate(economy),
+              _number(economy.get('win_rate_pct')),
               _number(economy.get('selected_opportunity_count'))]
     return tuple(round(v, 10) if v is not None else None for v in values) + (-node_count, -complexity)
 
@@ -754,11 +805,14 @@ def promotion_errors(candidate, parent, scope, *, existing_publication=False):
     errors = []
     if not isinstance(candidate, dict) or candidate.get('schema') != 'main_entry_strategy_candidate_v2':
         return ['strategy_candidate_schema_invalid']
-    # A frozen v4 publication keeps its original score contract on readback.
-    # New candidates still have to satisfy the current v5 contract.
+    # Frozen v4/v5 publications keep their original score contract on readback.
+    # New candidates use the current full-population win-rate contract.
     expected_score_version = (
-        'support_adjusted_win_rate_full_population_v4'
-        if existing_publication and candidate.get('selection_score_version') == 'support_adjusted_win_rate_full_population_v4'
+        candidate.get('selection_score_version')
+        if existing_publication and candidate.get('selection_score_version') in {
+            'support_adjusted_win_rate_full_population_v4',
+            'support_adjusted_win_rate_full_population_v5',
+        }
         else MACHINE_SELECTION_VERSION
     )
     if candidate.get('parent_policy') != parent or candidate.get('parent_sha256') != digest(parent) or candidate.get('scope') != list(scope):
@@ -774,6 +828,9 @@ def promotion_errors(candidate, parent, scope, *, existing_publication=False):
         errors.append('strategy_candidate_evidence_hash_invalid')
     evidence = candidate.get('evidence') or {}
     full_population = candidate.get('evaluation_basis') == MACHINE_EVALUATION_BASIS
+    legacy_full_publication = full_population and existing_publication and expected_score_version != MACHINE_SELECTION_VERSION
+    legacy_nonentry_publication = (existing_publication
+        and candidate.get('evaluation_basis') == 'machine_nonentry_opportunity_v1')
     if full_population:
         contract = evidence.get('evaluation_contract') or {}
         if (contract.get('selection_version') != expected_score_version
@@ -791,19 +848,50 @@ def promotion_errors(candidate, parent, scope, *, existing_publication=False):
         old_rank, new_rank = machine_admission_rank(baseline)[:4], machine_admission_rank(train_economy)[:4]
         if all(v is not None for v in old_rank) and (any(v is None for v in new_rank) or new_rank < old_rank):
             errors.append('strategy_machine_candidate_rank_below_incumbent')
+        holdout = evidence.get('holdout') or {}
+        if not legacy_full_publication:
+            if not holdout:
+                errors.append('strategy_machine_independent_holdout_missing')
+            else:
+                baseline_holdout = (evidence.get('incumbent_holdout') or {}).get('economics') or {}
+                candidate_holdout = holdout.get('economics') or {}
+                if (baseline_holdout.get('comparable_population_sha256')
+                        != candidate_holdout.get('comparable_population_sha256')
+                    or baseline_holdout.get('selection_score_version') != expected_score_version
+                    or baseline_holdout.get('evaluation_basis') != MACHINE_EVALUATION_BASIS):
+                    errors.append('strategy_machine_holdout_population_mismatch')
+                else:
+                    old_holdout_rank = machine_admission_rank(baseline_holdout)
+                    new_holdout_rank = machine_admission_rank(candidate_holdout)
+                    no_incumbent_entry = baseline_holdout.get('selected_opportunity_count') == 0
+                    if (any(value is None for value in new_holdout_rank[:3])
+                        or (no_incumbent_entry and new_holdout_rank[1] <= 0)
+                        or (not no_incumbent_entry and
+                            (any(value is None for value in old_holdout_rank[:3])
+                             or new_holdout_rank < old_holdout_rank))):
+                        errors.append('strategy_machine_holdout_rank_below_incumbent')
     if full_population and candidate.get('selection_score_version') != expected_score_version:
         errors.append('strategy_machine_selection_version_invalid')
     if candidate.get('evaluation_basis') not in {None, 'machine_nonentry_opportunity_v1', MACHINE_EVALUATION_BASIS}:
         errors.append('strategy_machine_evaluation_basis_invalid')
     if candidate.get('evaluation_basis') in {'machine_nonentry_opportunity_v1', MACHINE_EVALUATION_BASIS}:
         # Machine opportunity selection is independent of auxiliary AI and
-        # portfolio replay. Net losses remain evidence, not a profit floor.
+        # portfolio replay. Paired economics must be observed, but does not
+        # replace the approved win-rate objective or impose an EV floor.
         for split in ('train', 'holdout'):
             arm = evidence.get(split) or {}
             if split == 'holdout' and not arm:
                 continue
             days, ids = arm.get('source_dates') or [], arm.get('opportunity_ids') or []
             economy = arm.get('economics') or {}
+            if not (legacy_full_publication or legacy_nonentry_publication):
+                minimum = 10 if split == 'train' else 3
+                changed_ids = arm.get('changed_opportunity_ids') or []
+                if (len(set(ids)) < minimum or len(ids) != len(set(ids))
+                    or not set(changed_ids) <= set(ids)
+                    or len(changed_ids) != len(set(changed_ids))
+                    or (split == 'holdout' and len(changed_ids) < 3)):
+                    errors.append(split + '_machine_support_insufficient')
             if full_population:
                 if (economy.get('unevaluated_existing_entry_changes') != []
                     or economy.get('evaluated_existing_entry_changed_count') != machine_existing_entry_changes(arm)):
@@ -835,6 +923,10 @@ def promotion_errors(candidate, parent, scope, *, existing_publication=False):
                 if (ev is None or worst is None
                     or win_rate is None or not 0 <= win_rate <= 100):
                     errors.append(split + '_machine_selected_path_invalid')
+                from src.engine.scalping.ai_action_outcome_calibration import CATASTROPHIC_LOSS_PCT
+                if worst is None or (not (legacy_full_publication or legacy_nonentry_publication)
+                                     and worst <= CATASTROPHIC_LOSS_PCT):
+                    errors.append(split + '_machine_catastrophic_path_guard_failed')
             elif split == 'train':
                 errors.append('train_machine_no_selected_entry' if full_population else 'train_machine_no_recovered_entry')
         train, holdout = evidence.get('train') or {}, evidence.get('holdout') or {}

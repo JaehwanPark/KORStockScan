@@ -333,10 +333,10 @@ def test_main_mechanistic_scope_rejects_compact_only_report(
     assert "main_machine_future_policy_missing_or_ambiguous" in result["issues"]
 
 
-def test_machine_admission_selection_does_not_claim_runtime_strategy_activation():
+def test_qualified_machine_admission_selection_requires_runtime_strategy_activation():
     for basis in ("machine_full_population_opportunity_v1", "machine_nonentry_opportunity_v1"):
         selected = ("KRX|KRX_REGULAR", {"promotion_pass": True, "candidate": {"evaluation_basis": basis}})
-        assert mod._selected_strategy_requires_runtime_activation(selected) is False
+        assert mod._selected_strategy_requires_runtime_activation(selected) is True
     runtime_selected = ("KRX|KRX_REGULAR", {"promotion_pass": True, "candidate": {"evaluation_basis": "runtime_owner_replay_v1"}})
     assert mod._selected_strategy_requires_runtime_activation(runtime_selected) is True
     assert mod._selected_strategy_requires_runtime_activation(None) is False

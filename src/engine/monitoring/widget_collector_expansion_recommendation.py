@@ -257,9 +257,14 @@ def history_anchor_issues(output_dir: Path, target_date: date, manifest: dict[st
         source = anchor["source"]
         saved = source.get("history_input_manifest")
         if isinstance(saved, dict) and saved.get("schema") == "collector_history_input_manifest_v1":
-            expected = {row["path"] for row in saved["entries"]}
+            refresh_floor = policy_refresh_start_date(target_date.isoformat())
+            # A new forward policy window deliberately drops earlier history.
+            # Keep the anchor for sources still inside the current window.
+            retained = [row for row in saved["entries"]
+                        if row["source_date"] >= refresh_floor]
+            expected = {row["path"] for row in retained}
             current = {row["path"]: row for row in manifest["entries"]}
-            for row in saved["entries"]:
+            for row in retained:
                 if (row["kind"] in {"payload", "replay"}
                     and row["source_date"] < target_date.isoformat()
                     and current.get(row["path"]) != row):
@@ -1273,8 +1278,10 @@ def main(argv: list[str] | None = None) -> int:
         payload_dir=args.payload_dir,
         label_dir=args.label_dir,
     )
+    written_replay_path = None
     if args.write:
-        mechanical_replay.write_report(replay_report, output_dir=args.replay_dir)
+        written_replay_path, _ = mechanical_replay.write_report(
+            replay_report, output_dir=args.replay_dir)
     try:
         after_history = history_input_manifest(
             args.payload_dir, args.replay_dir, through_date=target_date)
@@ -1283,7 +1290,15 @@ def main(argv: list[str] | None = None) -> int:
         return SOURCE_NOT_READY_EXIT_CODE
     before_entries = {(row["kind"], row["path"]): row for row in before_history["entries"]}
     after_entries = {(row["kind"], row["path"]): row for row in after_history["entries"]}
-    if any(after_entries.get(key) != row for key, row in before_entries.items()):
+    own_replay_key = ("replay", str(written_replay_path.resolve())) if written_replay_path else None
+    try:
+        own_replay_valid = (written_replay_path is None or
+                            json.loads(written_replay_path.read_text(encoding="utf-8")) == replay_report)
+    except (OSError, ValueError, TypeError):
+        own_replay_valid = False
+    if (not own_replay_valid or
+        any(after_entries.get(key) != row for key, row in before_entries.items()
+            if key != own_replay_key)):
         print("widget_expansion_source_not_ready:collector_history_changed_during_consumption", file=sys.stderr)
         return SOURCE_NOT_READY_EXIT_CODE
     active_codes, active_inventory_issues = _load_active_research_watch_inventory(

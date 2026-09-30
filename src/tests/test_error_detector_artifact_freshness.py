@@ -26,8 +26,10 @@ from src.engine.scalping.micro_reversion.symbol_master import SymbolLookupStatus
 _TRADING_MOCK = "src.engine.error_detectors.artifact_freshness.is_krx_trading_day"
 
 
-def _quantity_semantic_fixture(tmp_path, monkeypatch, *, shape="two_leg_0_1tick"):
+def _quantity_semantic_fixture(tmp_path, monkeypatch, *, shape="two_leg_0_1tick",
+                               complete_stage=False):
     from src.engine.scalping import initial_quantity_activation as activation
+    from src.engine.scalping import initial_quantity_policy as producer
 
     current = tmp_path / "data/runtime/initial_quantity/current.json"
     current.parent.mkdir(parents=True)
@@ -41,6 +43,15 @@ def _quantity_semantic_fixture(tmp_path, monkeypatch, *, shape="two_leg_0_1tick"
     monkeypatch.setattr(activation, "selected_initial_quantity_env",
                         lambda *_: {activation.ENV_FILE: str(policy),
                                     activation.ENV_SHA: "a" * 64})
+    if complete_stage:
+        monkeypatch.setattr(producer, "refresh_quantity_stage_terminal_valid",
+                            lambda _: True)
+        stage = (tmp_path / "data/report/initial_entry_quantity_type_policy" /
+                 "refresh_postclose_2026-09-28" /
+                 "initial_quantity_refresh_stage_2026-09-28.json")
+        stage.parent.mkdir(parents=True)
+        stage.write_text(json.dumps({"all_completed_initial_trades": 0,
+                                     "decision": "carry_parent"}))
     return current
 
 
@@ -78,7 +89,7 @@ def test_initial_quantity_semantics_checks_bundle_quantity_shape_and_deadline(
     )
     from src.engine.scalping.initial_quantity_timeout import build_bundle_timeout_schedule
 
-    _quantity_semantic_fixture(tmp_path, monkeypatch)
+    _quantity_semantic_fixture(tmp_path, monkeypatch, complete_stage=True)
     schedule = build_bundle_timeout_schedule(
         quantity_type="KRX_PARENT", policy_sha256="a" * 64,
         decision_at="2026-09-28T09:29:50+09:00",
@@ -121,7 +132,7 @@ def test_initial_quantity_semantics_checks_bundle_quantity_shape_and_deadline(
 
 def test_initial_quantity_semantics_rejects_missing_and_corrupt_pid_archive(
         tmp_path, monkeypatch):
-    _quantity_semantic_fixture(tmp_path, monkeypatch)
+    _quantity_semantic_fixture(tmp_path, monkeypatch, complete_stage=True)
     verify_path = (tmp_path / "data/runtime/policy_bootstrap" /
                    "runtime_policy_bootstrap_verify_2026-09-28.json")
     verify_path.parent.mkdir(parents=True)
@@ -163,7 +174,7 @@ def test_initial_quantity_semantics_uses_applied_ancestor_after_postclose_cas(
         tmp_path, monkeypatch):
     from src.engine.scalping import initial_quantity_activation as activation
 
-    current = _quantity_semantic_fixture(tmp_path, monkeypatch)
+    current = _quantity_semantic_fixture(tmp_path, monkeypatch, complete_stage=True)
     parent = current.with_name("parent.json")
     current.rename(parent)
     current.write_text(json.dumps({"effective_from": "2026-09-29",
@@ -177,7 +188,7 @@ def test_initial_quantity_semantics_uses_applied_ancestor_after_postclose_cas(
 
     monkeypatch.setattr(activation, "selected_initial_quantity_env", selected)
     assert _initial_quantity_semantics(tmp_path, "2026-09-28")["status"] == (
-        "policy_selected")
+        "valid_empty")
     assert seen == [("current.json", "2026-09-29"),
                     ("parent.json", "2026-09-24"),
                     ("parent.json", "2026-09-28")]
@@ -203,7 +214,7 @@ def test_initial_quantity_semantics_marks_missing_past_date_stage(
 
 def test_initial_quantity_semantics_attributes_corrupt_journal_to_its_date(
         tmp_path, monkeypatch):
-    _quantity_semantic_fixture(tmp_path, monkeypatch)
+    _quantity_semantic_fixture(tmp_path, monkeypatch, complete_stage=True)
     directory = tmp_path / "data/runtime/initial_quantity/bundles"
     directory.mkdir()
     path = directory / ("d" * 64 + ".json")
@@ -466,6 +477,64 @@ def test_auxiliary_completed_terminal_requires_exact_report_generation(tmp_path)
     path.write_text("{}")
     assert _auxiliary_result_semantics(tmp_path, day)["findings"] == [
         "auxiliary_completed_report_generation_mismatch"]
+
+
+def test_auxiliary_semantics_checks_bound_labels_and_primary_economics(tmp_path):
+    from src.engine.scalping import compact_auxiliary_paired_replay as paired
+    day = "2026-09-30"
+    label_path = (tmp_path / "data/report/ai_decision_outcome_labels"
+                  / f"ai_decision_outcome_labels_{day}.json")
+    label_path.parent.mkdir(parents=True)
+    labels = {"schema": "ai_decision_outcome_labels_v1", "target_date": day,
+              "labels": [{"decision_stage": "entry_screen",
+                          "evaluation_label_contract": {"diagnostic_price_path": {"status": "source_gap"}}}],
+              "label_contract_status_counts": {"source_gap": 1}}
+    label_path.write_text(json.dumps(labels))
+    report_path = (tmp_path / "data/report/ai_entry_setup_paired_replay_batch"
+                   / f"compact_auxiliary_paired_economic_{day}.json")
+    report_path.parent.mkdir(parents=True)
+    stage = paired.sealed({"schema": "auxiliary_ai_stage_evaluation_v1",
+        "source_date": day, "source_projection_sha256": "a" * 64,
+        "source_manifest_sha256": "b" * 64, "source_tuning_allowed": True,
+        "screened_total": 1, "eligible_count": 0, "excluded_count": 1,
+        "eligible_keys": [], "scope_results": {},
+        "runtime_effect": False, "actual_order_submitted": False})
+    report = paired.sealed({"schema": paired.SCHEMA, "target_date": day,
+        "source_projection_sha256": "a" * 64, "source_manifest_sha256": "b" * 64,
+        "runtime_effect": False, "auxiliary_stage": stage,
+        "source_label_report_sha256": paired.digest(labels),
+        "status": "source_contract_blocked",
+        "metrics": {"screened_total": 1, "paired_comparable_count": 0,
+                    "source_excluded_count": 1},
+        "prospective_source_contract": {"first_source_gap": "writer_plan_hash_missing",
+            "source_lineage_counts": {"prompt_exact_input_present": 1,
+                                      "writer_trace_plan_joined": 0}}})
+    report_path.write_text(json.dumps(report))
+    result = _auxiliary_result_semantics(tmp_path, day)
+    assert result["status"] == "source_gap"
+    assert set(result["findings"]) == {
+        "auxiliary_economic_population_empty", "auxiliary_primary_economics_source_blocked",
+        "auxiliary_exact_plan_lineage_missing", "auxiliary_outcome_label_source_gap"}
+    labels["labels"][0]["decision_stage"] = "holding"
+    label_path.write_text(json.dumps(labels))
+    assert _auxiliary_result_semantics(tmp_path, day) == {
+        "status": "source_invalid", "findings": ["auxiliary_label_report_binding_invalid"]}
+    labels["labels"][0]["evaluation_label_contract"]["diagnostic_price_path"]["status"] = "available"
+    labels["label_contract_status_counts"] = {"available": 1}
+    label_path.write_text(json.dumps(labels))
+    report["source_label_report_sha256"] = paired.digest(labels)
+    report["status"] = "incumbent_carried"
+    report["metrics"]["paired_comparable_count"] = 1
+    report["metrics"]["source_excluded_count"] = 0
+    report["prospective_source_contract"]["first_source_gap"] = None
+    report_path.write_text(json.dumps(paired.sealed(report)))
+    recovered = _auxiliary_result_semantics(tmp_path, day)
+    assert recovered["findings"] == ["auxiliary_economic_population_empty"]
+    assert recovered["outcome_label_source_gap_count"] == 0
+    report.pop("source_label_report_sha256")
+    report_path.write_text(json.dumps(paired.sealed(report)))
+    assert "auxiliary_outcome_label_binding_missing" in (
+        _auxiliary_result_semantics(tmp_path, day)["findings"])
 
 
 def _update_kospi_partial_payload() -> dict:
@@ -984,7 +1053,7 @@ class TestArtifactFreshnessDetector:
     def test_step_scoped_skip_marker_is_terminal_success(self, monkeypatch, tmp_path):
         import src.engine.error_detectors.artifact_freshness as af
 
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d")
         logs_dir = tmp_path / "logs"
         logs_dir.mkdir(parents=True)
         (logs_dir / "threshold_cycle_postclose_cron.log").write_text(
@@ -1010,6 +1079,14 @@ class TestArtifactFreshnessDetector:
                 "src.engine.error_detectors.artifact_freshness.load_installed_crontab",
                 return_value=None,
             ),
+            patch("src.engine.error_detectors.artifact_freshness._holding_profit_exit_semantics",
+                  return_value={"findings": []}),
+            patch("src.engine.error_detectors.artifact_freshness._machine_result_semantics",
+                  return_value={"findings": []}),
+            patch("src.engine.error_detectors.artifact_freshness._auxiliary_result_semantics",
+                  return_value={"findings": []}),
+            patch("src.engine.error_detectors.artifact_freshness._initial_quantity_semantics",
+                  return_value={"findings": []}),
         ):
             result = ArtifactFreshnessDetector().check()
 

@@ -782,7 +782,9 @@ def test_widget_eod_wait_does_not_acquire_compute_slot(stage_environment, monkey
 @pytest.mark.parametrize("failed_stage", ["market_weakness", "main_auxiliary_policy", "widget_policy", "episode_policy", "summary_handoff"])
 def test_stage_failure_does_not_cancel_independent_machine(stage_environment, failed_stage):
     h, day, report, run, produce = stage_environment
-    if failed_stage == 'main_auxiliary_policy': run('outcome_labels')
+    if failed_stage == 'main_auxiliary_policy':
+        run('outcome_labels')
+        run('legacy_machine_report')
     if failed_stage == 'market_weakness': run('machine_attribution')
     failed = run(failed_stage, runner=lambda *a, **kw: 9)
     machine = run('main_machine_policy')
@@ -1382,6 +1384,50 @@ def test_research_capacity_explicit_off_does_not_require_native_source(stage_env
     assert h.stage_receipt_issues(report, day, 'research_capacity') == []
 
 
+def test_retired_episode_disables_joint_research_only_with_valid_receipt(stage_environment):
+    h, day, report, run, _produce = stage_environment
+    assert h._joint_research_peer_off(report, day) is False
+    receipt = run('episode_policy', off=True)
+    assert receipt['status'] == 'off'
+    assert h._joint_research_peer_off(report, day) is True
+    path = h.stage_path(report, day, 'episode_policy')
+    path.write_text(path.read_text().replace(receipt['receipt_sha256'], '0' * 64))
+    assert h._joint_research_peer_off(report, day) is False
+
+
+def test_staged_winrate_descendant_requires_same_proof_and_machine(tmp_path):
+    import json
+    from types import SimpleNamespace
+    from src.engine.automation import postclose_summary_handoff as h
+    parent_hash = 'a' * 64
+    child_hash = 'b' * 64
+    proof = {'disposition': 'incumbent_carried'}
+    parent = {'bundle_sha256': parent_hash, 'target_date': '2026-10-01',
+              'winrate_selection': proof, 'machine_policy': {'version': 1}}
+    child = {'bundle_sha256': child_hash, 'target_date': '2026-10-01',
+             'previous_bundle_sha256': parent_hash,
+             'winrate_selection': proof, 'machine_policy': {'version': 1}}
+    generations = tmp_path / 'generations'
+    generations.mkdir()
+    (generations / f'{parent_hash}.json').write_text(json.dumps(parent))
+    runtime = SimpleNamespace(
+        root=lambda data_root: data_root,
+        _read=lambda path: json.loads(path.read_text()),
+        validate=lambda value, target_date: value['target_date'] == target_date or
+                 (_ for _ in ()).throw(ValueError('wrong date')),
+        _validate_bundle_sources=lambda value, data_root: None,
+        for_cohort=lambda value, cohort: value,
+    )
+    staged = {'bundle_sha256': parent_hash, 'target_date': '2026-10-01'}
+    assert h._staged_winrate_generation_preserved(staged, child, runtime, tmp_path)
+    child['winrate_selection'] = {'disposition': 'successor_selected'}
+    assert not h._staged_winrate_generation_preserved(staged, child, runtime, tmp_path)
+    child['winrate_selection'] = proof
+    parent['machine_policy'] = {'version': 2}
+    (generations / f'{parent_hash}.json').write_text(json.dumps(parent))
+    assert not h._staged_winrate_generation_preserved(staged, child, runtime, tmp_path)
+
+
 def test_family_source_read_does_not_require_peer(tmp_path, monkeypatch):
     from datetime import date
     from src.engine.automation import machine_research_closed_loop_refresh as phase
@@ -1656,6 +1702,13 @@ def test_pre_submit_delay_stage_command_resolves_next_session_effective_date():
 
     assert command[-5:] == ['--date', '2026-09-23', '--effective-date', '2026-09-28',
                             '--require-family-ledger']
+
+
+def test_machine_strategy_refresh_runs_before_auxiliary_ai():
+    from src.engine.automation import postclose_summary_handoff as h
+    command = h.stage_commands('legacy_machine_report', '2026-09-30', '2026-09-30')[0]
+    assert '--machine-only' in command and '--activate-now' in command
+    assert 'legacy_machine_report' in h.STAGE_REGISTRY['main_auxiliary_policy'][0]
 
 
 def test_market_weakness_waits_for_its_attribution_source(stage_environment):

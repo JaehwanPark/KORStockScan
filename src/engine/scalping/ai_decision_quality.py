@@ -520,6 +520,7 @@ STAGE_ALIASES = {
     "analyze_target": "entry",
     "gatekeeper": "entry",
     "entry": "entry",
+    "entry_screen": "entry",
     "entry_price": "entry_price",
     "post_probe": "post_probe",
     "scale_in": "scale_in",
@@ -31564,7 +31565,8 @@ def main(argv: list[str] | None = None) -> int:
             source_route_labels = []
             for pending, annotated in zip(sources["pending"], annotated_pending):
                 prepared = dict(pending)
-                if pending.get("decision_stage") != "entry":
+                pending_stage = str(pending.get("decision_stage") or "").strip().lower()
+                if pending_stage not in {"entry", "entry_screen"}:
                     # Keep unrelated holding/exit source selection unchanged.
                     if annotated.get("primary_cohort_eligible") is True:
                         legacy_code = _request_code_for_venue(
@@ -31579,7 +31581,8 @@ def main(argv: list[str] | None = None) -> int:
                 request_code = (
                     _exact_outcome_request_code(annotated, matches[0])
                     if (len(matches) == 1
-                        and matches[0].get("decision_stage") == "entry_screen"
+                        and str(matches[0].get("decision_stage") or "").strip().lower()
+                        in {"entry", "entry_screen"}
                         and matches[0].get("provider_called") is True)
                     else None
                 )
@@ -31608,7 +31611,8 @@ def main(argv: list[str] | None = None) -> int:
                  _session(row.get("session_bucket")),
                  str(row.get("outcome_request_code") or "").upper())
                 for row in source_route_labels
-                if row.get("decision_stage") == "entry"
+                if str(row.get("decision_stage") or "").strip().lower()
+                in {"entry", "entry_screen"}
                 and row.get("entry_mechanistic_action") == "ENTER_NOW"
                 and re.fullmatch(r"[0-9a-f]{64}",
                                  str(row.get("machine_observation_sha256") or ""))
@@ -31626,10 +31630,11 @@ def main(argv: list[str] | None = None) -> int:
                  str(row.get("source_request_code") or "").upper())
                 for row in machine_prices
             }
-            cache_complete = machine_price_receipt.get("status") == "verified_cache_reused"
+            cache_verified = machine_price_receipt.get("status") in {
+                "verified_cache_reused", "verified_cache_reused_partial_source_gap"}
             missing_route_labels = [
                 row for row in source_route_labels
-                if not cache_complete or (str(row.get("stock_code") or ""),
+                if not cache_verified or (str(row.get("stock_code") or ""),
                     _venue(row.get("effective_venue")),
                     _session(row.get("session_bucket")),
                     str(row.get("outcome_request_code") or "").upper())

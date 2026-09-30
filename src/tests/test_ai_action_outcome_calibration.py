@@ -2944,6 +2944,10 @@ def test_machine_only_report_does_not_scan_unrelated_pipeline_history(
     from src.engine.scalping import mechanistic_entry_runtime_policy as runtime_policy
 
     rows, receipt = _natural_refinement_fixture()
+    # These rows have exact date-scoped machine attempt IDs but no scanner
+    # lifecycle promotion ID; the primary publisher must use verified fallback.
+    for row in rows:
+        row["scanner_promotion_id"] = None
     parent = json.loads(json.dumps(calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1))
     parent["thresholds"]["maximum_spread_bp"] = 20
     monkeypatch.setattr(
@@ -2981,6 +2985,9 @@ def test_machine_only_report_does_not_scan_unrelated_pipeline_history(
     assert report["report_scope"] == "main_mechanistic_entry"
     assert report["noncompact_sections_refreshed"] is True
     assert report["machine_full_evaluation"]["full_population_count"] == len(rows)
+    machine_selection = report["strategy_refinements_by_scope"]["KRX|KRX_REGULAR"]
+    assert machine_selection["population_count"] == len(rows)
+    assert machine_selection["source_acceptance"]["attempt_identity_fallback_count"] == len(rows)
     assert report["ofi_smoothing_audit"]["status"] == "not_recomputed_machine_only"
     assert report["hierarchical_entry_quality"]["policy_candidate"] is None
     assert report["hierarchical_entry_quality"]["runtime_extension"][

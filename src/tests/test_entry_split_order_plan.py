@@ -1135,6 +1135,47 @@ def test_atomic_sizing_lineage_joins_plan_and_one_leg_without_double_count():
     assert row["terminal_state"] == "not_observed"
 
 
+def test_atomic_sizing_lineage_resolves_exact_immediate_plan_leg_index():
+    plan, leg, bundle, source = _atomic_lineage_fixture()
+    core = {**plan["entry_execution_sizing_plan"], "total_qty": 1,
+            "immediate_qty": 1, "deferred_probe_residual_qty": 0,
+            "leg_count": 1, "legs": [{"leg_index": 1, "qty": 1,
+                                       "execution_phase": "immediate"}]}
+    digest = split_plan._canonical_sha256(core)
+    identity = {"entry_execution_sizing_plan_id": f"entry-sizing-{digest[:24]}",
+                "entry_execution_sizing_plan_sha256": digest,
+                "entry_execution_sizing_total_qty": 1,
+                "entry_execution_sizing_leg_count": 1}
+    plan = {**plan, **identity, "entry_execution_sizing_plan": core,
+            "requested_qty": 1}
+    leg = {**leg, **identity, "requested_qty": 1}
+    leg.pop("entry_split_order_leg_index")
+    bundle = {**bundle, **identity, "requested_qty": 1}
+    report = split_plan.build_atomic_execution_sizing_lineage(
+        "2026-09-28", [plan, leg, bundle], source_generation=source)
+    row = report["rows"][0]
+    assert row["source_quality_reasons"] == []
+    assert row["submitted_legs"][0]["leg_index"] is None
+    assert row["submitted_legs"][0]["resolved_plan_leg_index"] == 1
+    assert row["submitted_qty"] == 1
+
+    ambiguous = {**core, "total_qty": 2, "immediate_qty": 2, "leg_count": 2,
+                 "legs": [{"leg_index": 1, "qty": 1, "execution_phase": "immediate"},
+                          {"leg_index": 2, "qty": 1, "execution_phase": "immediate"}]}
+    digest = split_plan._canonical_sha256(ambiguous)
+    changed = {"entry_execution_sizing_plan_id": f"entry-sizing-{digest[:24]}",
+               "entry_execution_sizing_plan_sha256": digest,
+               "entry_execution_sizing_total_qty": 2,
+               "entry_execution_sizing_leg_count": 2}
+    plan = {**plan, **changed, "entry_execution_sizing_plan": ambiguous,
+            "requested_qty": 2}
+    leg = {**leg, **changed}
+    bundle = {**bundle, **changed, "requested_qty": 2}
+    report = split_plan.build_atomic_execution_sizing_lineage(
+        "2026-09-28", [plan, leg, bundle], source_generation=source)
+    assert "submit_leg_plan_quantity_or_index_invalid" in report["rows"][0]["source_quality_reasons"]
+
+
 def test_atomic_sizing_lineage_quarantines_wrong_attempt_and_changed_plan():
     plan, leg, bundle, source = _atomic_lineage_fixture()
     wrong = {**leg, "entry_submit_attempt_id": "other-attempt"}

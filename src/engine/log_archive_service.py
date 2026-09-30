@@ -102,7 +102,66 @@ def save_monitor_snapshot(kind: str, target_date: str, payload: dict) -> Path:
         os.replace(tmp_path, path)
     finally:
         tmp_path.unlink(missing_ok=True)
+    if (kind == "trade_review"
+        and (payload.get("meta") or {}).get("snapshot_profile") == "postclose_exit"
+        and isinstance((payload.get("meta") or {}).get(
+            "completed_census_manifest"), dict)
+        and isinstance((payload.get("sections") or {}).get(
+            "open_scalp_position_projection"), list)):
+        _save_trade_review_completed_projection(path, payload)
     return path
+
+
+def _save_trade_review_completed_projection(path: Path, payload: dict) -> Path:
+    """Seal the small holding/exit input beside a potentially huge snapshot."""
+    from src.engine.sniper_trade_review_report import verify_completed_census_manifest
+
+    target_date = str(payload.get("date") or "")
+    issue = verify_completed_census_manifest(payload, target_date)
+    if issue:
+        raise ValueError(f"trade_review_completed_projection_invalid:{issue}")
+    sections = payload.get("sections") or {}
+    if not isinstance(sections.get("open_scalp_position_projection"), list):
+        raise ValueError("trade_review_open_position_projection_missing")
+    stat = path.stat()
+    body = {
+        "schema": "trade_review_completed_projection_sidecar_v1",
+        "date": target_date,
+        "code": payload.get("code"),
+        "since": payload.get("since"),
+        "meta": {key: (payload.get("meta") or {}).get(key) for key in (
+            "warnings", "snapshot_profile", "completed_census_manifest",
+            "sell_completed_event_ids", "completion_event_id_count",
+            "trailing_event_source_receipts", "completed_census_input_sha256",
+        )},
+        "metrics": {key: (payload.get("metrics") or {}).get(key) for key in (
+            "canonical_completed_trades", "completed_trades",
+            "open_scalp_position_projection_count",
+            "open_scalp_position_projection_status",
+        )},
+        "sections": {key: sections[key] for key in (
+            "completed_trade_projection", "open_scalp_position_projection")},
+        "snapshot_identity": {
+            "device": stat.st_dev, "inode": stat.st_ino, "size": stat.st_size,
+            "mtime_ns": stat.st_mtime_ns, "ctime_ns": stat.st_ctime_ns,
+        },
+    }
+    body["artifact_sha256"] = hashlib.sha256(json.dumps(
+        body, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+    ).encode("utf-8")).hexdigest()
+    destination = path.with_suffix(".completed_projection.json")
+    fd, name = tempfile.mkstemp(prefix=f".{destination.name}.", suffix=".tmp",
+                                dir=destination.parent)
+    temporary = Path(name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(body, handle, ensure_ascii=False, separators=(",", ":"))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return destination
 
 
 def save_monitor_snapshot_manifest(
@@ -121,7 +180,7 @@ def save_monitor_snapshot_manifest(
         "snapshot_kinds": sorted(tracked_paths.keys()),
         "snapshot_paths": tracked_paths,
         "snapshot_sha256": {
-            key: hashlib.sha256(Path(path).read_bytes()).hexdigest()
+            key: _sha256_file(Path(path))
             for key, path in tracked_paths.items()
         },
     }
@@ -130,6 +189,49 @@ def save_monitor_snapshot_manifest(
         json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     return manifest_path
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def verified_postclose_exit_snapshot_manifest(target_date: str, *, data_root: Path = DATA_DIR) -> Path | None:
+    """Reuse only a sealed exact-date snapshot whose raw pipeline has not advanced."""
+    from src.engine.holding_exit_observation_report import _verified_trade_review_projection
+
+    directory = Path(data_root) / "report" / "monitor_snapshots"
+    manifest_path = directory / "manifests" / f"monitor_snapshot_manifest_{target_date}_postclose_exit.json"
+    expected = {"trade_review", "post_sell_feedback", "missed_entry_counterfactual",
+                "holding_exit_observation"}
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if (manifest.get("target_date") != target_date
+            or manifest.get("profile") != "postclose_exit"
+            or set(manifest.get("snapshot_kinds") or []) != expected):
+            return None
+        pipeline = Path(data_root) / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
+        if pipeline.exists() and pipeline.stat().st_mtime > manifest_path.stat().st_mtime:
+            return None
+        for kind in expected:
+            path = directory / f"{kind}_{target_date}.json"
+            if Path((manifest.get("snapshot_paths") or {}).get(kind, "")).resolve() != path.resolve():
+                return None
+            if _sha256_file(path) != (manifest.get("snapshot_sha256") or {}).get(kind):
+                return None
+        if _verified_trade_review_projection(directory / f"trade_review_{target_date}.json",
+                                             target_date) is None:
+            return None
+        holding = json.loads((directory / f"holding_exit_observation_{target_date}.json").read_text())
+        if (holding.get("date") != target_date
+            or (holding.get("meta") or {}).get("snapshot_profile") != "postclose_exit"):
+            return None
+        return manifest_path
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
 
 
 def archived_log_path(log_path: Path, target_date: str) -> Path:

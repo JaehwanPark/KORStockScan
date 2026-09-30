@@ -237,6 +237,7 @@ run_final_detector() {
     --owner error_detection_cron \
     --log "$PROJECT_DIR/logs/run_error_detection_cron.log" \
     env POSTCLOSE_FINALIZATION_DETECTOR_PARENT_PID="$$" POSTCLOSE_FINALIZATION_DETECTOR_DATE="$TARGET_DATE" \
+    POSTCLOSE_PREPARED_EFFECTIVE_DATE="$TARGET_EFFECTIVE_DATE" \
     bash "$ERROR_DETECTION_RUNNER" "${detector_args[@]}"
 }
 
@@ -300,7 +301,7 @@ if [[ "$TARGET_DATE" > "2026-09-08" ]]; then
     run_final_detector || true
     exit 1
   }
-  if ! timeout --kill-after=10s "${summary_budget}s" env PYTHONPATH=. \
+  if ! timeout --kill-after=10s "${summary_budget}s" env PYTHONPATH=. POSTCLOSE_STAGE_WORKER=1 \
     POSTCLOSE_DONE_CONTROLLER_REQUIRE_CODEX_COMPLETED=false "$VENV_PY" \
     -m src.engine.automation.postclose_done_controller --date "$TARGET_DATE" \
     --require-independent-producers --max-attempts 2 --predecessor-timeout-sec 0; then

@@ -62,6 +62,10 @@ OFF·퇴역 producer, 유효 frozen policy/checkpoint, 별도 custody/override·
 
 ### 3.1 공통 배포 경로와 독립 서비스 경계
 
+정확일자 `episode_policy`가 유효한 `explicit_schedule_disabled` 영수증으로 OFF이면, 두 family가 필요한 공동 `research_allocation`도 OFF로 닫는다. 퇴역 episode 연구 파일을 합성하거나 widget 단독 결과를 공동 배분 성공으로 기록하지 않는다.
+
+장후 모니터 스냅샷의 대용량 거래 리뷰는 원본 파일 identity·자체 해시·완료 census 계약이 맞는 축약본으로 보유·청산 보고서에 전달한다. 복구 실행의 재사용은 정확일자 네 산출물 해시, 프로필, 완료 축약본 및 원천 pipeline의 시각 경계가 모두 일치할 때만 허용한다. 하나라도 바뀌면 정상 생산 경로를 다시 실행한다.
+
 기계 BLOCK/RECHECK 정책은 날짜가 같은 원천 감사 preflight의 해시·허용 receipt와 자원 가드를 통과한 뒤 `main_machine_policy`로 dispatch한다. main 계산은 AI/위젯/에피소드 연구 성공을 기다리지 않으며, preflight 뒤 독립적인 긴 연구보다 먼저 실행한다. 같은 wrapper의 `outcome_labels`, `episode_policy`, `legacy_machine_report`, `main_auxiliary_policy`는 독립 worker이며 후행 AI follower는 receipt만 검증한다. `run_machine_microstructure_final_refresh.sh`는 `machine_group` 호환 진입점이며 collector 실패가 attribution/weakness/timing/approval을 취소하지 않는다. Widget/episode는 자기 완료 연구만 발행하며 공동 allocation은 별도 계산한다. allocation stage는 family 보고서·정책을 덮어쓰지 않는다.
 
 Wrapper는 비동기 `pre_submit_delay` 및 atomic sizing consumer를 시작하기 전에 대상일 producer summary를 동일 대상일 raw pipeline 원천과 대사해 source ledger로 봉인한다. raw가 날짜·프로파일 검증을 통과하고 중복·격리 결손이 없는데 요약 count/hash만 어긋나면 해당 거래일 raw에서 summary를 재구성하고 stage별 count/hash를 다시 확인한 뒤 봉인한다. raw 검증 또는 재구성 대사가 실패하면 하류 계산을 진행하지 않는다.
@@ -69,6 +73,14 @@ Wrapper는 비동기 `pre_submit_delay` 및 atomic sizing consumer를 시작하�
 `main_machine_policy`는 `--winrate-policy-only --publication-date <원 발행일>`로 exact `KRX|KRX_REGULAR`의 비용 결속 첫 도달 승패·고유 기회 승률을 계산한다. 초기 68.75bp와 후속 train/독립 holdout 허들을 분리하고, 같은 원천일의 입력·제외·상황·승패 분모와 parent/candidate/staged bundle hash를 terminal까지 대사한다. incumbent carry 검증은 staged generation과 날짜가 같은 후속 generation의 유한 ancestry를 따라가며, 각 generation의 원천·승계 증거·machine policy가 일치하는 경우에만 허용한다. 장후에는 다음 거래일 정책을 대기 발행하며 `current.json`을 옮기지 않는다. `legacy_machine_report`는 EV 진단을 계속 생산하지만 대기 중인 승률 machine 정책을 덮어쓰지 않는다. 장전 `--activate-dated-winrate`가 정확한 parent CAS·원천·정책을 확인한 뒤 pointer를 전환하고, 별도의 bootstrap/loader/선택 release/실제 PID 대사가 이어진다. 후보 없음·원천 결손은 마지막 검증 정책 payload/hash를 carry하며 0/0 승률로 환산하지 않는다.
 
 Threshold-cycle 최종 closure는 대상일 owner stage가 terminal이고, recovery에서 재사용하는 stage는 `--check`로 code/output/input/prerequisite hash가 모두 유효한 뒤 진행한다. stale collector/research downstream은 predecessor 순서로 갱신한다. main policy를 재계산하면 stale `main_auxiliary_policy`도 summary 전에 갱신하고, 비동기 policy producer/consumer의 terminal을 `postclose_summary_handoff --stage wait`로 확인한 다음 summary와 checklist의 source hash를 고정한다. candidate and active policy hashes are compared within the same exact scope. 그 다음 `runtime_approval_summary` → checklist → blocking `summary_handoff` → scoped/global strict verifier 순서로 생성·검증한다. summary/checklist를 owner stage 완료 전에 생성해 둔 경우 final consumer로 재사용하지 않는다.
+
+`collector_recommendation` 복구에서는 현재 정책 refresh 시작일 이후의 과거 payload/replay만 이전 세대와 대사한다. 같은 단계가 다시 쓴 대상일 replay는 작성한 본문과 파일을 정확히 비교한 뒤 수용하며, 그 외 원천의 실행 중 변경은 계속 차단한다.
+
+보관 정리는 현재 거래일의 미완결 provider 예산 ledger를 읽거나 압축하지 않고 `current_date_deferred_count`로 명시한다. 닫힌 거래일 ledger의 manifest·summary 결속 검증은 유지한다.
+
+최종 오류 탐지는 원천일과 다음 거래일의 준비 예정일을 각각 `POSTCLOSE_FINALIZATION_DETECTOR_DATE`와 `POSTCLOSE_PREPARED_EFFECTIVE_DATE`로 전달한다. 장전 생산 시각 전의 정책 bootstrap은 미래 예정 상태로 기록한다.
+
+최종화 wrapper는 전체 DONE controller를 `POSTCLOSE_STAGE_WORKER=1`로 직접 실행한다. 단계 dispatcher로 되돌아가 요약 전용 `summary_verified`가 전체 `done` 영수증을 덮어쓰지 않게 하고, 새 controller·strict 영수증을 검증한 뒤 정리·최종 detector를 실행한다.
 
 날짜별 `data/report/postclose_stage_terminal/YYYY-MM-DD/<stage>.json`의 v2 receipt가 완료 기준이다. source/publication/effective date, code/output/input/prerequisite hash, run/PID/start ticks, heartbeat, exit/status, 정책 hash/disposition을 확인한다. 같은 stage는 flock 하나를 사용하고 무거운 child는 host 전체 두 개로 제한한다. 선행 단계가 pending/running일 때 compute slot 밖에서 최대4시간 기다리며 선행 실패/입력 변경은 deferred/failed로 기록한다. Summary/controller는 같은 registry를 사용하고 자기 output/receipt는 source hash 집합에서 제외한다. v1 terminal은 과거 대상일 검증에만 유지하며 새 stage 성공으로 합성하지 않는다.
 

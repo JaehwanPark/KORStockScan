@@ -3412,7 +3412,7 @@ def build_atomic_execution_sizing_lineage(
         plans[key] = {"row": row, "event": event,
                       "source_event_sha256": _canonical_sha256(event),
                       "core": core, "legs": {}, "bundles": [],
-                      "leg_indices": {}}
+                      "leg_indices": {}, "resolved_leg_indices": {}}
         attempts[(day, record, attempt)].add(key)
     for keys in attempts.values():
         if len(keys) > 1:
@@ -3459,14 +3459,34 @@ def build_atomic_execution_sizing_lineage(
             leg_index = _safe_int(event.get("entry_split_order_leg_index"), -1)
             core = plan.get("core") or {}
             planned_legs = core.get("legs") if isinstance(core.get("legs"), list) else []
-            if (leg_index < 0 or leg_index >= len(planned_legs)
-                    or not isinstance(planned_legs[leg_index], dict)
-                    or quantity > _safe_int(planned_legs[leg_index].get("qty"), -1)):
+            immediate_legs = [leg for leg in planned_legs if isinstance(leg, dict)
+                              and leg.get("execution_phase") == "immediate"]
+            if immediate_legs:
+                matched = [leg for leg in immediate_legs
+                           if _safe_int(leg.get("leg_index"), -1) == leg_index]
+            else:
+                # Historical plans used positional, zero-based submit indices.
+                matched = ([planned_legs[leg_index]]
+                           if 0 <= leg_index < len(planned_legs)
+                           and isinstance(planned_legs[leg_index], dict) else [])
+            if (not matched and len(immediate_legs) == 1
+                    and (leg_index < 0 or
+                         (leg_index == 0 and _safe_bool(
+                             event.get("entry_split_order_probe_first_applied"))))):
+                # A single immediate leg has an unambiguous frozen plan
+                # identity. Preserve the raw field and record the resolution.
+                matched = immediate_legs
+            resolved_index = ((_safe_int(matched[0].get("leg_index"), -1)
+                               if immediate_legs else leg_index)
+                              if len(matched) == 1 else -1)
+            if (resolved_index < 0 or len(matched) != 1
+                    or quantity > _safe_int(matched[0].get("qty"), -1)):
                 reason = "submit_leg_plan_quantity_or_index_invalid"
-            prior_order = plan["leg_indices"].get(leg_index)
+            prior_order = plan["leg_indices"].get(resolved_index)
             if prior_order and prior_order != order:
                 reason = "leg_index_multiple_broker_orders"
-            plan["leg_indices"][leg_index] = order
+            plan["leg_indices"][resolved_index] = order
+            plan["resolved_leg_indices"][order] = resolved_index
             previous = plan["legs"].get(order)
             if previous is not None:
                 if _canonical_sha256(previous) == _canonical_sha256(event):
@@ -3516,6 +3536,8 @@ def build_atomic_execution_sizing_lineage(
         row["broker_orders"] = sorted(plan["legs"])
         row["submitted_legs"] = [
             {"leg_index": event.get("entry_split_order_leg_index"),
+             "resolved_plan_leg_index": plan["resolved_leg_indices"].get(
+                 str(event.get("broker_order_no") or event.get("ord_no") or "")),
              "broker_order_no": event.get("broker_order_no") or event.get("ord_no"),
              "owner_registry_intent_id": event.get("owner_registry_intent_id"),
              "requested_qty": event.get("requested_qty"),

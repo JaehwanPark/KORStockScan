@@ -2051,9 +2051,20 @@ if [ "$RUN_RISING_MISSED_CLASSIFIER_PRIOR" = "true" ] || [ "$RUN_RISING_MISSED_C
 fi
 wait_for_postclose_resources "scalp_trailing_postclose_exit_snapshot"
 scalp_exit_snapshot_started_epoch="$(date +%s)"
-run_postclose_cmd env MONITOR_SNAPSHOT_PROFILE=postclose_exit \
-  MONITOR_SNAPSHOT_ASYNC=0 MONITOR_SNAPSHOT_FORCE=1 \
-  "$PROJECT_DIR/deploy/run_monitor_snapshot_safe.sh" "$TARGET_DATE"
+scalp_exit_snapshot_manifest="$PROJECT_DIR/data/report/monitor_snapshots/manifests/monitor_snapshot_manifest_${TARGET_DATE}_postclose_exit.json"
+if [ "$POSTCLOSE_RECOVERY_REUSE_MODE" = "true" ] && PYTHONPATH=. "$VENV_PY" - "$TARGET_DATE" <<'PY'
+import sys
+from src.engine.log_archive_service import verified_postclose_exit_snapshot_manifest
+raise SystemExit(0 if verified_postclose_exit_snapshot_manifest(sys.argv[1]) else 1)
+PY
+then
+  scalp_exit_snapshot_started_epoch="$(date -r "$scalp_exit_snapshot_manifest" +%s)"
+  emit_postclose_marker "[REUSE] exact postclose_exit snapshot target_date=$TARGET_DATE manifest=$scalp_exit_snapshot_manifest"
+else
+  run_postclose_cmd env MONITOR_SNAPSHOT_PROFILE=postclose_exit \
+    MONITOR_SNAPSHOT_ASYNC=0 MONITOR_SNAPSHOT_FORCE=1 \
+    "$PROJECT_DIR/deploy/run_monitor_snapshot_safe.sh" "$TARGET_DATE"
+fi
 wait_for_json_artifact \
   "$PROJECT_DIR/data/report/monitor_snapshots/manifests/monitor_snapshot_manifest_${TARGET_DATE}_postclose_exit.json" \
   "scalp_trailing_postclose_exit_snapshot.manifest"
@@ -2073,7 +2084,8 @@ directory = DATA_DIR / "report" / "monitor_snapshots"
 manifest_path = (directory / "manifests"
                  / f"monitor_snapshot_manifest_{target_date}_postclose_exit.json")
 manifest = json.loads(manifest_path.read_bytes())
-expected = {"trade_review", "post_sell_feedback", "holding_exit_observation"}
+expected = {"trade_review", "post_sell_feedback", "missed_entry_counterfactual",
+            "holding_exit_observation"}
 if (manifest_path.stat().st_mtime < started
         or manifest.get("target_date") != target_date
         or manifest.get("profile") != "postclose_exit"
@@ -2081,10 +2093,14 @@ if (manifest_path.stat().st_mtime < started
     raise SystemExit("postclose_exit_manifest_generation_invalid")
 for kind in expected:
     path = directory / f"{kind}_{target_date}.json"
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
     if (Path((manifest.get("snapshot_paths") or {}).get(kind, "")).resolve()
             != path.resolve()
             or (manifest.get("snapshot_sha256") or {}).get(kind)
-            != hashlib.sha256(path.read_bytes()).hexdigest()):
+            != digest.hexdigest()):
         raise SystemExit(f"postclose_exit_source_hash_mismatch:{kind}")
 report = json.loads((directory / f"holding_exit_observation_{target_date}.json").read_bytes())
 if (report.get("date") != target_date

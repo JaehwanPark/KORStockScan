@@ -8933,7 +8933,8 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
     machine_scores = list((previous or {}).get('machine_candidate_scores') or []) if machine_policy_only and start else []
     research_candidates = deepcopy((previous or {}).get('research_candidates') or []) if (previous or {}).get('input_sha256') == input_sha256 else []
     for candidate, progress in strategy.joint_candidates(parent, scope, domains=domains, selectors=selectors, start=start, limit=limit,
-            **({'local_first': True, 'priority_coordinates': priority_coordinates, 'search_seed': input_sha256} if machine_policy_only else {})):
+            **({'local_first': True, 'priority_coordinates': priority_coordinates,
+                'search_seed': input_sha256, 'admission_expansion': True} if machine_policy_only else {})):
         result["search"] = progress
         counts = group_counts.setdefault(progress.get('group', 'legacy'), dict(attempted=0, invalid=0, evaluated=0, deduplicated=0, coordinates=[]))
         counts['attempted'] += 1
@@ -8991,8 +8992,9 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
                 profile_changes={k:v for k,v in strategy.default_profile(candidate).items()
                                  if v != strategy.default_profile(parent)[k]},
                 economics=economy, action_transition_counts=evidence['action_transition_counts']))
-            if (delta is not None and selected_ev is not None and win_rate is not None
-                and worst is not None and score[0] is not None
+            if (delta is not None and selected_ev is not None
+                and win_rate is not None and worst is not None
+                and worst > CATASTROPHIC_LOSS_PCT and score[0] is not None
                 and not economy['unevaluated_existing_entry_changes']
                 and (best_score is None or score > best_score)):
                 best, best_evidence, best_score = candidate, evidence, score
@@ -9038,6 +9040,7 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
         if best is not None and holdout:
             try:
                 machine_evidence['holdout'] = evaluate(holdout, best)
+                machine_evidence['incumbent_holdout'] = evaluate(holdout, parent)
                 holdout_status = 'evaluated_after_selection'
             except (ValueError, TypeError, KeyError) as exc:
                 holdout_status = 'unsupported'
@@ -9048,8 +9051,8 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
             policy=best, policy_sha256=strategy.digest(best), evidence=machine_evidence,
             evidence_sha256=strategy.digest(machine_evidence), selected_without_holdout=True)
             if best is not None else None)
-        if best is not None and holdout:
-            result['incumbent_evidence']['holdout'] = evaluate(holdout, parent)
+        if 'incumbent_holdout' in machine_evidence:
+            result['incumbent_evidence']['holdout'] = machine_evidence['incumbent_holdout']
         errors = strategy.promotion_errors(candidate, parent, scope) if candidate else ['no_evaluable_machine_candidate']
         if best == parent:
             errors.append('candidate_equals_incumbent')
@@ -9656,7 +9659,8 @@ def build_main_mechanistic_report(
             source_receipt=source_receipt, paired_contract=paired_contract,
             natural_conflicting_attempt_identity_count=case_table["conflicting_attempt_identity_count"],
             natural_conflicting_evaluation_keys=case_table["conflicting_evaluation_keys"],
-            cohort=cohort, operating_projection=operating_projection)
+            cohort=cohort, operating_projection=operating_projection,
+            allow_attempt_identity_fallback=True)
         strategy_population, strategy_contract = population, contract
         population, contract = _current_structure_population(population, contract)
         contract["economic_kernel_sha256"] = _canonical_sha256({
@@ -9671,6 +9675,10 @@ def build_main_mechanistic_report(
         contract["frozen_hierarchy"] = previous_hierarchy.get(scope)
         strategy_evaluations[scope] = build_main_strategy_refinement(
             strategy_population, parent=scope_parent, scope=cohort, source_contract={**strategy_contract, "economic_kernel_sha256": contract["economic_kernel_sha256"]}, previous=previous_strategy.get(scope), machine_policy_only=True)
+        strategy_evaluations[scope]["source_acceptance"] = {
+            key: value for key, value in strategy_contract.items()
+            if key not in {"natural_machine_source_receipt", "paired_source_contract"}
+        }
         evaluated = build_clean_baseline_mechanistic_refinement(
             report_root / PAIRED_SUBDIR, target_date=target_date,
             source_rows=population, source_contract=contract, parent_policy=scope_parent)
@@ -10427,6 +10435,20 @@ def main(argv: list[str] | None = None) -> int:
     if args.activate_now:
         from src.engine.scalping.mechanistic_entry_runtime_policy import activate_strategy_report
         activation_receipt = activate_strategy_report(path, data_root=args.data_root)
+        if args.write:
+            from src.engine.scalping.mechanistic_entry_runtime_policy import root as machine_policy_root
+            current_path = machine_policy_root(args.data_root) / 'current.json'
+            current_receipt = _load_json(current_path)
+            activation_path = path.with_name(f'machine_strategy_activation_{args.target_date}.json')
+            activation_artifact = _with_artifact_content_sha256(dict(
+                schema='main_machine_strategy_activation_v1', target_date=args.target_date,
+                generated_at=datetime.now(KST).isoformat(),
+                source_report_sha256=report.get('artifact_content_sha256'),
+                activation=activation_receipt,
+                current_receipt_sha256=hashlib.sha256(current_path.read_bytes()).hexdigest(),
+                current_bundle_sha256=current_receipt.get('bundle_sha256'),
+                actual_pid_consumed=False))
+            _atomic_write_json(activation_path, activation_artifact)
         print(json.dumps({"strategy_activation": activation_receipt}))
     if args.require_policy_publication:
         if not args.write:

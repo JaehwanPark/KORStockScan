@@ -159,6 +159,7 @@ def test_final_done_follows_bound_seal_and_no_retired_finalizer_dependencies():
     assert main.index("write_postclose_status producers_completed") < main.index("--seal-main-run") < main.index('[DONE] threshold-cycle postclose')
     finalizer = (root / "deploy/run_postclose_finalization.sh").read_text()
     assert "--require-independent-producers" in finalizer
+    assert 'env PYTHONPATH=. POSTCLOSE_STAGE_WORKER=1 \\' in finalizer
     assert 'checks["tuning_artifact"]' not in finalizer
     assert 'checks["controller_artifact"]' not in finalizer
     assert 'checks["dashboard_log"]' not in finalizer

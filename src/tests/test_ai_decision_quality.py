@@ -1920,6 +1920,74 @@ def test_auxiliary_reuses_only_verified_machine_cache_for_requested_exact_route(
     assert receipt['status'] == 'verified_machine_capture_missing'
 
 
+@pytest.mark.parametrize("stage,matching,expected", [
+    ("entry_screen", True, {("005930", "KRX", "KRX_REGULAR", "005930_AL")}),
+    ("entry_screen", False, set()),
+    ("holding", True, set()),
+])
+def test_outcome_materialization_requests_only_exact_auxiliary_entry_route(
+    monkeypatch, stage, matching, expected
+):
+    pending = {**_pending(), "decision_stage": stage,
+               "snapshot_id": "snapshot-1", "market_data_route": "krx_nxt_integrated",
+               "broker_route": "SOR", "machine_observation_sha256": "a" * 64,
+               "entry_mechanistic_action": "ENTER_NOW"}
+    trace = {**pending, "provider_called": True,
+             "snapshot_id": "snapshot-1" if matching else "other-snapshot"}
+    monkeypatch.setattr(quality, "_default_sources", lambda *_a, **_k: {
+        "pending": [pending], "traces": [trace], "payloads": [], "pipeline_paths": []})
+    monkeypatch.setattr(quality, "load_promotion_for_target_date",
+                        lambda *_a: ({}, None, None))
+    monkeypatch.setattr(quality, "load_pipeline_price_and_lifecycle_rows",
+                        lambda *_a, **_k: ([], []))
+    monkeypatch.setattr(quality, "annotate_primary_cohort_eligibility",
+                        lambda **kwargs: kwargs["labels"])
+    seen = []
+    class RouteCaptured(Exception):
+        pass
+    def capture_routes(**kwargs):
+        seen.append(kwargs["required_routes"])
+        raise RouteCaptured
+    monkeypatch.setattr(quality, "_verified_machine_completed_prices_for_ai", capture_routes)
+    with pytest.raises(RouteCaptured):
+        quality.main(["--date", "2026-07-27", "--mode", "mature",
+                      "--as-of", "2026-07-27T16:30:00+09:00"])
+    assert seen == [expected]
+
+
+def test_auxiliary_exact_route_uses_verified_partial_machine_cache_without_rest(monkeypatch):
+    from src.utils import kiwoom_utils
+    pending = {**_pending(), "decision_stage": "entry_screen",
+               "snapshot_id": "snapshot-1", "market_data_route": "krx_nxt_integrated",
+               "broker_route": "SOR", "machine_observation_sha256": "a" * 64,
+               "entry_mechanistic_action": "ENTER_NOW"}
+    trace = {**pending, "provider_called": True}
+    price = {"stock_code": "005930", "effective_venue": "KRX",
+             "session_bucket": "KRX_REGULAR", "source_request_code": "005930_AL",
+             "timestamp": "2026-07-27T09:01:00+09:00", "price": 100}
+    monkeypatch.setattr(quality, "_default_sources", lambda *_a, **_k: {
+        "pending": [pending], "traces": [trace], "payloads": [], "pipeline_paths": []})
+    monkeypatch.setattr(quality, "load_promotion_for_target_date",
+                        lambda *_a: ({}, None, None))
+    monkeypatch.setattr(quality, "load_pipeline_price_and_lifecycle_rows",
+                        lambda *_a, **_k: ([], []))
+    monkeypatch.setattr(quality, "annotate_primary_cohort_eligibility",
+                        lambda **kwargs: kwargs["labels"])
+    monkeypatch.setattr(quality, "_verified_machine_completed_prices_for_ai",
+                        lambda **_k: ([price], {"status": "verified_cache_reused_partial_source_gap"}))
+    monkeypatch.setattr(kiwoom_utils, "get_cached_kiwoom_token",
+                        lambda: pytest.fail("verified exact route must not request REST"))
+    seen = {}
+    def mature(**kwargs):
+        seen.update(kwargs)
+        return [{**pending, "label_status": "pending", "horizon_metrics": {}}]
+    monkeypatch.setattr(quality, "mature_outcome_labels", mature)
+    assert quality.main(["--date", "2026-07-27", "--mode", "mature",
+                         "--as-of", "2026-07-27T16:30:00+09:00"]) == 0
+    assert seen["price_rows"] == [price]
+    assert seen["pending_labels"][0]["outcome_request_code"] == "005930_AL"
+
+
 def test_outcome_correlation_does_not_treat_missing_or_cross_symbol_as_zero_fill():
     labels = quality.mature_outcome_labels(
         pending_labels=[_pending()],
@@ -1950,6 +2018,28 @@ def test_outcome_correlation_does_not_treat_missing_or_cross_symbol_as_zero_fill
     assert correlation["matched_event_count"] == 0
     assert correlation["actual_order_submitted"] is None
     assert correlation["fill_observed"] is None
+
+
+def test_entry_screen_uses_entry_primary_horizon_for_late_outcome_labels():
+    pending = {**_pending(), "decision_stage": "entry_screen"}
+    label = quality.mature_outcome_labels(
+        pending_labels=[pending],
+        price_rows=[
+            {
+                "timestamp": "2026-07-27T09:10:00+09:00",
+                "stock_code": "005930",
+                "price": 101,
+                "effective_venue": "KRX",
+                "session_bucket": "KRX_REGULAR",
+                "source_quality": "pass",
+            }
+        ],
+        lifecycle_rows=[],
+        as_of=datetime(2026, 7, 27, 9, 11, tzinfo=KST),
+    )[0]
+    assert label["decision_stage"] == "entry_screen"
+    assert label["horizon_metrics"].get("10m") is not None
+    assert quality._primary_metric(label) is label["horizon_metrics"]["10m"]
 
 
 def test_quality_baseline_classifies_false_drop():

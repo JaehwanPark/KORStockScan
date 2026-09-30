@@ -583,6 +583,78 @@ def _auxiliary_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
         findings.append("auxiliary_eligible_identity_uninstrumented")
     if stage.get("source_tuning_allowed") is not True:
         findings.append("auxiliary_source_tuning_not_allowed")
+    economic = report.get("metrics") or {}
+    if not isinstance(economic, dict):
+        return {"status": "source_invalid", "findings": ["auxiliary_economic_metrics_invalid"]}
+    economic_screened = economic.get("screened_total")
+    economic_compared = economic.get("paired_comparable_count")
+    if report.get("status") == "source_contract_blocked":
+        if (type(economic_screened) is not int or economic_screened < 0
+            or type(economic_compared) is not int or economic_compared < 0
+            or economic_compared > economic_screened):
+            return {"status": "source_invalid", "findings": ["auxiliary_economic_denominator_invalid"]}
+        if economic_screened and not economic_compared:
+            findings.append("auxiliary_primary_economics_source_blocked")
+    prospective = report.get("prospective_source_contract") or {}
+    if not isinstance(prospective, dict):
+        return {"status": "source_invalid", "findings": ["auxiliary_source_lineage_invalid"]}
+    lineage = prospective.get("source_lineage_counts") or {}
+    if not isinstance(lineage, dict):
+        return {"status": "source_invalid", "findings": ["auxiliary_source_lineage_invalid"]}
+    first_gap = prospective.get("first_source_gap")
+    if (first_gap == "writer_plan_hash_missing"
+        and type(lineage.get("prompt_exact_input_present")) is int
+        and lineage["prompt_exact_input_present"] > 0
+        and lineage.get("writer_trace_plan_joined") == 0):
+        findings.append("auxiliary_exact_plan_lineage_missing")
+    label_gap_count = 0
+    label_hash = report.get("source_label_report_sha256")
+    if type(economic_screened) is int and economic_screened > 0 and not label_hash:
+        findings.append("auxiliary_outcome_label_binding_missing")
+    if label_hash:
+        label_path = existing_or_gzip_path(
+            root / "data/report/ai_decision_outcome_labels"
+            / f"ai_decision_outcome_labels_{source_date}.json")
+        try:
+            if (not isinstance(label_hash, str) or len(label_hash) != 64
+                or any(c not in "0123456789abcdef" for c in label_hash)
+                or label_path.is_symlink()):
+                raise ValueError("auxiliary_label_report_untrusted_path_or_size")
+            if not label_path.exists():
+                raise ValueError("auxiliary_label_report_missing")
+            if label_path.stat().st_size > 64 * 1024 * 1024:
+                raise ValueError("auxiliary_label_report_untrusted_path_or_size")
+            opener = gzip.open if label_path.suffix == ".gz" else open
+            with opener(label_path, "rb") as handle:
+                label_raw = handle.read(64 * 1024 * 1024 + 1)
+            if len(label_raw) > 64 * 1024 * 1024:
+                raise ValueError("auxiliary_label_report_uncompressed_size_exceeded")
+            labels = json.loads(label_raw)
+            if not isinstance(labels, dict):
+                raise ValueError("auxiliary_label_report_binding_invalid")
+            counts = labels.get("label_contract_status_counts")
+            label_rows = labels.get("labels")
+            actual_counts = Counter()
+            if isinstance(label_rows, list):
+                for row in label_rows:
+                    role = row.get("evaluation_label_contract") if isinstance(row, dict) else None
+                    price_path = role.get("diagnostic_price_path") if isinstance(role, dict) else None
+                    status = price_path.get("status") if isinstance(price_path, dict) else None
+                    actual_counts[status] += 1
+            if (labels.get("schema") != "ai_decision_outcome_labels_v1"
+                or labels.get("target_date") != source_date
+                or paired.digest(labels) != label_hash
+                or not isinstance(label_rows, list)
+                or not isinstance(counts, dict)
+                or any(type(n) is not int or n < 0 for n in counts.values())
+                or sum(counts.values()) != len(label_rows)
+                or dict(actual_counts) != counts):
+                raise ValueError("auxiliary_label_report_binding_invalid")
+            label_gap_count = counts.get("source_gap", 0)
+        except (OSError, EOFError, UnicodeError, ValueError, TypeError, AttributeError) as exc:
+            return {"status": "source_invalid", "findings": [str(exc)]}
+        if label_gap_count:
+            findings.append("auxiliary_outcome_label_source_gap")
     scopes = {}
     for scope, value in stage["scope_results"].items():
         if not isinstance(value, dict):
@@ -646,6 +718,10 @@ def _auxiliary_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
     return {"status": status,
             "findings": sorted(set(findings)), "screened_total": screened,
             "eligible_count": eligible, "excluded_count": excluded,
+            "economic_screened_total": economic_screened,
+            "paired_comparable_count": economic_compared,
+            "outcome_label_source_gap_count": label_gap_count,
+            "first_source_gap": first_gap,
             "scopes": scopes, "runtime_effect": False}
 
 

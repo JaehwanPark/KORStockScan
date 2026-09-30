@@ -290,11 +290,52 @@ def _load_saved_snapshots(
         if path is None:
             continue
         try:
+            if snapshot_kind == "trade_review":
+                projected = _verified_trade_review_projection(path, target_date)
+                if projected is not None:
+                    snapshots.append(projected)
+                    paths.append(str(path.with_suffix(".completed_projection.json")))
+                    continue
+                # Unsealed multi-gigabyte inputs are an explicit source gap;
+                # parsing them can OOM the whole postclose chain.
+                if path.stat().st_size > 256 * 1024 * 1024:
+                    continue
             snapshots.append(_read_json(path))
             paths.append(str(path))
         except Exception:
             continue
     return snapshots, paths
+
+
+def _verified_trade_review_projection(path: Path, target_date: str) -> dict | None:
+    sidecar = path.with_suffix(".completed_projection.json")
+    if not sidecar.is_file():
+        return None
+    try:
+        projected = _read_json(sidecar)
+        declared = projected.get("artifact_sha256")
+        content = {key: value for key, value in projected.items()
+                   if key != "artifact_sha256"}
+        actual = hashlib.sha256(json.dumps(
+            content, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+        ).encode("utf-8")).hexdigest()
+        stat = path.stat()
+        identity = projected.get("snapshot_identity") or {}
+        expected_identity = {
+            "device": stat.st_dev, "inode": stat.st_ino, "size": stat.st_size,
+            "mtime_ns": stat.st_mtime_ns, "ctime_ns": stat.st_ctime_ns,
+        }
+        if (projected.get("schema") != "trade_review_completed_projection_sidecar_v1"
+            or projected.get("date") != target_date
+            or projected.get("code") or projected.get("since")
+            or identity != expected_identity or declared != actual
+            or verify_completed_census_manifest(projected, target_date) is not None
+            or not isinstance((projected.get("sections") or {}).get(
+                "open_scalp_position_projection"), list)):
+            return None
+        return projected
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
 
 
 def _collect_completed_trade_rows(

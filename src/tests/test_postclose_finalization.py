@@ -112,6 +112,7 @@ def _run(
     _write_executable(
         detector,
         'printf "detector\\n" >> "$PROJECT_DIR/order.txt"\n'
+        'printf "%s\\n" "${POSTCLOSE_PREPARED_EFFECTIVE_DATE:-}" > "$PROJECT_DIR/prepared-date.txt"\n'
         f"exit {detector_exit_code}\n",
     )
     if ready:
@@ -153,6 +154,7 @@ def test_finalization_waits_for_exact_terminal_chain_then_cleans_and_detects(tmp
     detector_done = result.stdout.index("[DONE] postclose_final_detector")
     assert finalization_done < detector_done
     assert "detector_handoff=started" in result.stdout
+    assert (tmp_path / "project/prepared-date.txt").read_text().strip() == "2026-09-03"
 
 
 @pytest.mark.parametrize("prior_failure", [True, False])

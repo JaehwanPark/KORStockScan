@@ -1874,6 +1874,26 @@ def test_report_artifact_maintenance_compresses_valid_closed_provider_budget_led
     )
 
 
+def test_report_artifact_maintenance_defers_unsealed_runtime_budget_ledger(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "offline_provider_budget"
+    root.mkdir()
+    today = datetime.now(ZoneInfo("Asia/Seoul")).date()
+    active = root / f"ai_micro_reversion_provider_budget_{today}.jsonl"
+    active.write_text('{"unsealed":true}\n', encoding="utf-8")
+
+    result = maintain_report_artifact_storage(
+        [root], as_of_date=today - timedelta(days=1), apply=True,
+    )
+
+    assert result["status"] == "pass"
+    assert result["provider_budget_ledger_census"]["current_date_deferred_count"] == 1
+    assert result["provider_budget_ledger_census"]["ledger_count"] == 0
+    assert active.exists()
+    assert not active.with_suffix(".jsonl.gz").exists()
+
+
 def test_report_artifact_maintenance_rejects_unbound_provider_budget_ledger(
     tmp_path: Path,
 ) -> None:

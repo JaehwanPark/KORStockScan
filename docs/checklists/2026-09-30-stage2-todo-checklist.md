@@ -94,6 +94,7 @@
 - [ ] `[MainAuxiliaryIntradaySourceSemanticAcceptance0930] 기계·보조 AI 장중 원천 의미감시 자연 수용` (`Due: 2026-09-30`, `Slot: INTRADAY`, `TimeWindow: 08:00~20:00`, `Track: RuntimeStability`)
   - Source: [원천결손 재발 방지 계획](../proposals/machine-auxiliary-source-gap-prevention-plan-2026-09-29.md), [운영 절차](../time-based-operations-runbook.md).
   - 완료 기준: 선택 릴리스와 실제 5분 Sentinel 소비를 먼저 확인한 뒤, `submission_bottleneck_monitor_latest.json`의 프리·정규·통합 애프터 경로별 probe/trace/pending 최근 10분 원천 커버리지와 원인별 분해를 대사한다. 희소 체결 진단과 경로·선택 틱·캡처·보조 AI 비용/pending 결손의 알림을 구분하고, 원천 부재·부분 tail은 정상으로 닫지 않는다. 같은 단계의 새 정상 영수증 없이 recovery를 주장하지 않으며 후행 1/3/5/10분 가격·경제성은 별도 장후 수용으로 남긴다.
+  - 장후 결손 확인: 기존 `[DirectFamilySourceRepairCompactAuxiliary]`가 당일 `entry_screen` 정확 경로 라벨, 라벨 보고서 해시·행별 상태, 주 경제성 비교 가능 건수 및 동일 attempt의 실행계획 해시·owner 결속을 대사한다. 9/30의 6건 라벨 `source_gap`·주 비교 가능 0건은 코드 수리 검증만으로 해소 처리하지 않는다. 장중 감시의 최근 10분 정상 상태를 장후 가격·비용 수용으로 대체하지 않는다.
   - 권한 경계: source-quality/report-only 알림이다. 자동 조회·주문·threshold·provider·bot·수량·hard safety 변경이나 과거 원천 복구 권한이 없다.
 
 ## Project/Calendar 동기화

@@ -29,6 +29,84 @@ def test_monitor_snapshot_roundtrip(tmp_path, monkeypatch):
     assert not list(snapshot_dir.glob(".trade_review_2026-04-06.json.*.tmp"))
 
 
+def test_postclose_trade_review_completed_projection_is_sealed_and_consumed(tmp_path, monkeypatch):
+    from src.engine import holding_exit_observation_report as holding
+    from src.engine.sniper_trade_review_report import completed_census_manifest
+
+    snapshot_dir = tmp_path / "report" / "monitor_snapshots"
+    snapshot_dir.mkdir(parents=True)
+    monkeypatch.setattr(service, "MONITOR_SNAPSHOT_DIR", snapshot_dir)
+    monkeypatch.setattr(service, "MONITOR_SNAPSHOT_MANIFEST_DIR", snapshot_dir / "manifests")
+    day = "2026-09-30"
+    payload = {
+        "date": day, "code": None, "since": None,
+        "meta": {"warnings": [], "snapshot_profile": "postclose_exit",
+                 "sell_completed_event_ids": [],
+                 "trailing_event_source_receipts": []},
+        "metrics": {"canonical_completed_trades": 0, "completed_trades": 0,
+                    "open_scalp_position_projection_count": 0,
+                    "open_scalp_position_projection_status": "current_db_census"},
+        "sections": {"completed_trade_projection": [],
+                     "open_scalp_position_projection": []},
+    }
+    payload["meta"]["completed_census_manifest"] = completed_census_manifest(payload)
+    path = service.save_monitor_snapshot("trade_review", day, payload)
+    monkeypatch.setattr(holding, "_monitor_snapshot_path",
+                        lambda kind, target: path if kind == "trade_review" and target == day else None)
+    snapshots, sources = holding._load_saved_snapshots("trade_review", [day])
+    assert len(snapshots) == 1
+    assert snapshots[0]["schema"] == "trade_review_completed_projection_sidecar_v1"
+    assert sources == [str(path.with_suffix(".completed_projection.json"))]
+    sidecar = path.with_suffix(".completed_projection.json")
+    altered = json.loads(sidecar.read_text())
+    altered["metrics"]["canonical_completed_trades"] = 1
+    sidecar.write_text(json.dumps(altered))
+    assert holding._verified_trade_review_projection(path, day) is None
+
+
+def test_postclose_snapshot_reuse_requires_exact_hashes_and_pipeline_cutoff(tmp_path, monkeypatch):
+    from src.engine.sniper_trade_review_report import completed_census_manifest
+
+    directory = tmp_path / "report" / "monitor_snapshots"
+    directory.mkdir(parents=True)
+    monkeypatch.setattr(service, "MONITOR_SNAPSHOT_DIR", directory)
+    monkeypatch.setattr(service, "MONITOR_SNAPSHOT_MANIFEST_DIR", directory / "manifests")
+    day = "2026-09-30"
+    trade = {"date": day, "code": None, "since": None,
+             "meta": {"warnings": [], "snapshot_profile": "postclose_exit",
+                      "sell_completed_event_ids": [],
+                      "trailing_event_source_receipts": []},
+             "metrics": {"canonical_completed_trades": 0,
+                         "open_scalp_position_projection_count": 0},
+             "sections": {"completed_trade_projection": [],
+                          "open_scalp_position_projection": []}}
+    trade["meta"]["completed_census_manifest"] = completed_census_manifest(trade)
+    paths = {"trade_review": service.save_monitor_snapshot("trade_review", day, trade)}
+    for kind in ("post_sell_feedback", "missed_entry_counterfactual",
+                 "holding_exit_observation"):
+        paths[kind] = service.save_monitor_snapshot(
+            kind, day, {"date": day, "meta": {"snapshot_profile": "postclose_exit"}})
+    pipeline = tmp_path / "pipeline_events" / f"pipeline_events_{day}.jsonl"
+    pipeline.parent.mkdir()
+    pipeline.write_text('{}\n')
+    manifest = service.save_monitor_snapshot_manifest(
+        day, profile="postclose_exit",
+        snapshots={kind: str(path.resolve()) for kind, path in paths.items()})
+    assert service.verified_postclose_exit_snapshot_manifest(day, data_root=tmp_path) == manifest
+    paths["post_sell_feedback"].write_text('{}')
+    assert service.verified_postclose_exit_snapshot_manifest(day, data_root=tmp_path) is None
+    service.save_monitor_snapshot(
+        "post_sell_feedback", day, {"date": day, "meta": {"snapshot_profile": "postclose_exit"}})
+    service.save_monitor_snapshot_manifest(
+        day, profile="postclose_exit",
+        snapshots={kind: str(path.resolve()) for kind, path in paths.items()})
+    assert service.verified_postclose_exit_snapshot_manifest(day, data_root=tmp_path) == manifest
+    import os
+    newer = manifest.stat().st_mtime_ns + 2_000_000_000
+    os.utime(pipeline, ns=(newer, newer))
+    assert service.verified_postclose_exit_snapshot_manifest(day, data_root=tmp_path) is None
+
+
 def test_completed_census_seals_actual_saved_profile(tmp_path, monkeypatch):
     from src.engine.sniper_trade_review_report import (
         completed_census_manifest, verify_completed_census_manifest,

@@ -479,9 +479,7 @@ def _scanner_scope(target_date: str) -> dict[str, Any]:
 def _selected_strategy_requires_runtime_activation(selected_strategy: tuple | None) -> bool:
     if not selected_strategy or selected_strategy[1].get('promotion_pass') is not True:
         return False
-    return (selected_strategy[1].get('candidate') or {}).get('evaluation_basis') not in {
-        'machine_full_population_opportunity_v1', 'machine_nonentry_opportunity_v1',
-    }
+    return bool(selected_strategy[1].get('candidate'))
 
 
 def _main_mechanistic_scope(target_date: str, effective_date: str | None = None, publication_date: str | None = None) -> dict[str, Any]:
