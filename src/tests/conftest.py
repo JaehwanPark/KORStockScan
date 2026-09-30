@@ -11,6 +11,7 @@ def isolate_module_logs(tmp_path, monkeypatch):
     from src.engine.ai.hot_path_ai_symbol_budget import (
         DEFAULT_HOT_PATH_AI_SYMBOL_BUDGET,
     )
+    from src.engine.scalping import entry_split_order_plan
     from src.engine.scalping.position_peak_ledger import POSITION_PEAK_LEDGER
     import src.engine.sniper_state_handlers as sniper_state_handlers
     import src.engine.sniper_execution_receipts as sniper_execution_receipts
@@ -32,6 +33,13 @@ def isolate_module_logs(tmp_path, monkeypatch):
     # handler tests intentionally exercise real logging paths, so keep JSONL and
     # threshold compact events inside the pytest temp dir.
     monkeypatch.setattr(pipeline_event_logger, "DATA_DIR", tmp_path / "data")
+    # Probe circuit trips persist across process restarts. Every test must use
+    # its own state file, including tests that reach the circuit indirectly.
+    monkeypatch.setattr(
+        entry_split_order_plan,
+        "PROBE_RUNTIME_STATE_PATH",
+        tmp_path / "runtime" / "entry_split_probe_runtime_state.json",
+    )
     # State-handler tests can persist sim/probe positions even when their
     # broker calls are mocked. Keep those local files out of the running
     # monitor's source population, preserving the default-path session gate.

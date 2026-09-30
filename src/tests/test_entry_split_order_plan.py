@@ -11,6 +11,15 @@ from src.engine.scalping import entry_split_order_plan as split_plan
 from src.engine import sniper_post_sell_feedback as post_sell_feedback
 
 
+def test_probe_circuit_test_run_cannot_write_live_state(tmp_path):
+    isolated_path = tmp_path / "runtime" / "entry_split_probe_runtime_state.json"
+    assert split_plan.PROBE_RUNTIME_STATE_PATH == isolated_path
+
+    split_plan.trip_probe_runtime_circuit("probe_fill_submit_contract_missing")
+
+    assert json.loads(isolated_path.read_text(encoding="utf-8"))["circuit_open"] is True
+
+
 def _probe_ready_gate(action="WAIT"):
     return {
         "latency_state": "SAFE", "canonical_mark_price": 10000,
