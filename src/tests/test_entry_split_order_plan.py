@@ -5267,6 +5267,24 @@ def test_bounded_refresh_reuses_revision_and_rejects_stale_policy(monkeypatch, t
 
 
 
+def test_repaired_atomic_source_generation_requires_daily_rebuild(monkeypatch):
+    target = "2026-09-30"
+    lineage = {"schema": split_plan.ATOMIC_SIZING_LINEAGE_SCHEMA,
+        "source_generation": {"status": "source_gap", "generation_sha256": None}}
+    report = {"input_summary": {"atomic_execution_sizing": {"lineage": lineage}}}
+    current = {"status": "ready", "generation_sha256": "a" * 64}
+    monkeypatch.setattr(split_plan, "_atomic_sizing_source_generation", lambda _day: current)
+
+    assert split_plan._same_date_atomic_source_requires_rebuild(target, report)
+
+    lineage["source_generation"] = {"status": "ready", "generation_sha256": "a" * 64}
+    assert not split_plan._same_date_atomic_source_requires_rebuild(target, report)
+    lineage["source_generation"]["generation_sha256"] = "b" * 64
+    assert split_plan._same_date_atomic_source_requires_rebuild(target, report)
+    current.update(status="source_gap", generation_sha256=None)
+    assert not split_plan._same_date_atomic_source_requires_rebuild(target, report)
+
+
 def test_real_atomic_producer_wire_compact_decoder_roundtrip(monkeypatch, tmp_path):
     from types import SimpleNamespace
     from src.tests.test_strategy_owner_replay import entry_owner_event

@@ -6375,6 +6375,22 @@ def _refresh_execution_model_only(target_date, *, prepared_effective_date=None, 
     return report
 
 
+def _same_date_atomic_source_requires_rebuild(target_date: str, report: dict[str, Any]) -> bool:
+    """Rebuild frozen daily inputs when a previously missing source seal is repaired."""
+    lineage = (((report.get("input_summary") or {}).get("atomic_execution_sizing") or {}).get("lineage"))
+    if not isinstance(lineage, dict) or lineage.get("schema") != ATOMIC_SIZING_LINEAGE_SCHEMA:
+        return False
+    current = _atomic_sizing_source_generation(target_date)
+    recorded = lineage.get("source_generation") or {}
+    return bool(
+        current.get("status") == "ready"
+        and (
+            recorded.get("status") != "ready"
+            or current.get("generation_sha256") != recorded.get("generation_sha256")
+        )
+    )
+
+
 def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
     target_date = str(target_date).strip()
     predecessor = report_paths(target_date)[0]
@@ -6385,7 +6401,12 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
         if prior_report.get("date") == target_date and prior_report.get("cumulative_state"):
             # The research-only kernel cannot establish primary operating EV.
             # Refresh exact execution revisions without re-running its grid.
-            return refresh_execution_model_only(target_date, write=write)
+            # If this day's atomic source seal was missing at first run and is now
+            # ready, refresh-only would reject the stale lineage forever. Rebuild
+            # the date from current sources; cumulative inputs still come from the
+            # latest strictly earlier, contract-valid report.
+            if not _same_date_atomic_source_requires_rebuild(target_date, prior_report):
+                return refresh_execution_model_only(target_date, write=write)
     source_quality = _source_quality_summary(target_date)
     daily_events, daily_load_summary = _iter_input_events(target_date)
     from src.engine.scalping.strategy_owner_replay import build_entry_opportunity_replays
