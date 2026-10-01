@@ -774,6 +774,33 @@ def test_frozen_machine_policy_revalidates_without_researching_holdout(monkeypat
     assert 'candidate_equals_incumbent' in unchanged_result['promotion_errors']
 
 
+def test_same_input_unsupported_machine_holdout_replays_frozen_candidate(monkeypatch):
+    from src.engine.scalping import ai_action_outcome_calibration as c
+    one_research_candidate(monkeypatch)
+    rows = [machine_cost_row(), machine_cost_row('adverse_first')]
+    rows[1].update(source_date='2026-09-11', decision_trace_id='held-attempt')
+    rows[1]['comparison']['entry_cost_contract']['source_date'] = '2026-09-11'
+    kwargs = dict(parent=evidence.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
+        scope=('KRX', 'KRX_REGULAR'), source_contract={}, machine_policy_only=True,
+        training_through_date='2026-09-10')
+    previous = c.build_main_strategy_refinement(rows, **kwargs)
+    assert previous['search_complete'] and previous['holdout_status'] == 'evaluated_after_selection'
+    previous['holdout_status'] = 'unsupported'
+    previous['candidate']['evidence'].pop('incumbent_holdout')
+    previous['candidate']['evidence']['holdout'] = {'blocker': 'strategy_completed_bar_source_missing'}
+    previous['candidate']['evidence_sha256'] = strategy.digest(previous['candidate']['evidence'])
+    monkeypatch.setattr(strategy, 'joint_candidates', lambda *a, **kw: pytest.fail('researched holdout'))
+    replay = c.build_main_strategy_refinement(rows, previous=previous, **kwargs)
+    assert replay['holdout_status'] == 'evaluated_after_selection'
+    assert replay['selection_state'] == 'holdout_evaluated'
+    assert replay['search_complete'] is True
+    assert replay['evaluated_candidate_count'] == previous['evaluated_candidate_count']
+    assert replay['candidate']['policy_sha256'] == previous['candidate']['policy_sha256']
+    assert replay['candidate']['evidence']['holdout']['source_dates'] == ['2026-09-11']
+    assert replay['candidate']['evidence']['incumbent_holdout']['source_dates'] == ['2026-09-11']
+    assert replay['candidate']['evidence_sha256'] == strategy.digest(replay['candidate']['evidence'])
+
+
 def test_old_machine_rank_allows_new_search_and_ordinary_promotion_gates(monkeypatch):
     from src.engine.scalping import ai_action_outcome_calibration as calibration
     one_research_candidate(monkeypatch)
@@ -1013,6 +1040,22 @@ def test_successor_keeps_parent_missing_source_fallback():
     new, receipt = strategy.select(successor, raw, original)
     assert old == new
     assert receipt['fallback_reason'] == 'source_missing_parent'
+
+
+def test_nested_structure_fallback_uses_supported_ancestor_without_bars():
+    source = setup()
+    assert not source['strategy_raw_input']['entry_candle_context'].get('strategy_completed_bars')
+    first = strategy._mutate_tree(policy(),
+        {'structure_volume_divergence': .25}, ('fillability_score', 44, 'ge'))
+    nested = strategy._mutate_tree(first,
+        {'overextension_vwap_bp': 120}, ('price', 44350, 'ge'))
+    selected, receipt = strategy.select(nested, source['strategy_raw_input'], source)
+    assert receipt['fallback_reason'] == 'source_missing_parent'
+    assert 'structure_volume_divergence' in receipt['unsupported_coordinates']
+    assert selected['structure_volume_divergence'] == strategy.REGISTRY['structure_volume_divergence'][0]
+    rebuilt, _, replay_receipt = strategy.rebuild(source, nested)
+    assert rebuilt['strategy_selection']['fallback_reason'] == 'source_missing_parent'
+    assert replay_receipt['profile_sha256'] == strategy.digest(selected)
 
 
 def test_machine_component_rollback_preserves_latest_ai(tmp_path):

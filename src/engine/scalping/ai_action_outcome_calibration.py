@@ -8698,6 +8698,7 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
     # Same input/selection is immutable; retries do not optimize on used holdout.
     if (previous and previous.get('input_sha256') == input_sha256 and previous.get('candidate')
         and previous.get('selection_state') in {'holdout_evaluated', 'published'}
+        and not (machine_policy_only and previous.get('holdout_status') == 'unsupported')
         and (not machine_policy_only or previous.get('selection_basis') == strategy.MACHINE_SELECTION_VERSION)):
         return previous
     dates = sorted({r["source_date"] for r in population})
@@ -8888,14 +8889,24 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
         result['search_domain']['priority_coordinates'] = priority_coordinates
         result['evaluated_candidate_count'] = previous.get('evaluated_candidate_count', 0)
     frozen = (previous or {}).get('candidate') or {}
-    if (not training_through_date and frozen.get('parent_sha256') == strategy.digest(parent)
+    same_input_unsupported_holdout = (machine_policy_only and previous
+        and previous.get('input_sha256') == input_sha256
+        and previous.get('selection_basis') == strategy.MACHINE_SELECTION_VERSION
+        and previous.get('selection_state') == 'holdout_evaluated'
+        and previous.get('search_complete') is True
+        and previous.get('holdout_status') == 'unsupported'
+        and previous.get('training_through_date') == result['training_through_date'])
+    frozen_holdout_revision = (not training_through_date
         and frozen.get('evidence', {}).get('holdout', {}).get('source_dates')
-        and max(frozen['evidence']['holdout']['source_dates']) >= dates[-1]):
+        and max(frozen['evidence']['holdout']['source_dates']) >= dates[-1])
+    if (frozen.get('parent_sha256') == strategy.digest(parent)
+        and (same_input_unsupported_holdout or frozen_holdout_revision)):
         frozen = deepcopy(frozen)
         try:
             frozen['evidence'] = {**frozen['evidence'], 'train': evaluate(train, frozen['policy']), 'holdout': evaluate(holdout, frozen['policy'])}
             if machine_policy_only:
                 frozen['evidence']['incumbent_train'] = evaluate(train, parent)
+                frozen['evidence']['incumbent_holdout'] = evaluate(holdout, parent)
         except (ValueError, TypeError, KeyError) as exc:
             if machine_policy_only:
                 finalize_coverage(start)
@@ -8917,6 +8928,16 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
                 machine_evidence=frozen['evidence'], auxiliary_ai_required=False,
                 selection_basis=(previous or {}).get('selection_basis'),
                 holdout_status='evaluated_after_selection',
+                search_complete=bool((previous or {}).get('search_complete')),
+                search=(previous or {}).get('search'),
+                evaluated_candidate_count=(previous or {}).get('evaluated_candidate_count', 0),
+                selection_state='holdout_evaluated',
+                incumbent_evidence=dict(train=frozen['evidence']['incumbent_train'],
+                                        holdout=frozen['evidence']['incumbent_holdout']),
+                train_checkpoint=(previous or {}).get('train_checkpoint'),
+                machine_candidate_scores=(previous or {}).get('machine_candidate_scores'),
+                candidate_blockers=(previous or {}).get('candidate_blockers'),
+                research_candidates=(previous or {}).get('research_candidates'),
                 runtime_effect=False, allowed_runtime_apply=False)
         return {**result, 'candidate': frozen, 'promotion_pass': not errors,
             'promotion_errors': errors, 'status': 'eligible' if not errors else 'hold_candidate',

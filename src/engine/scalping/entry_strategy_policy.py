@@ -318,14 +318,21 @@ def select(policy, payload, setup):
         key = split['lt' if value < split['boundary'] else 'ge']
     profile = deepcopy(node['profile'])
     fallback = node.get('fallback_profile')
-    missing = sorted(k for k in profile if fallback and profile[k] != fallback[k] and not coordinate_supported(k, payload, setup))
+    # A leaf can inherit a nondefault coordinate through several mutations.
+    # Its immediate fallback can require the same unavailable source, so walk
+    # ancestors until every nondefault coordinate has its own input.
+    def unsupported(value):
+        return sorted(k for k in value if value[k] != REGISTRY[k][0]
+                      and not coordinate_supported(k, payload, setup))
+    missing = unsupported(profile)
     if missing:
-        profile = deepcopy(fallback)
-        for ancestor in node.get('fallback_ancestors', []):
-            if not any(profile[k] != ancestor[k] and not coordinate_supported(k, payload, setup) for k in profile):
+        for ancestor in [fallback, *(node.get('fallback_ancestors') or [])]:
+            if isinstance(ancestor, dict) and not unsupported(ancestor):
+                profile = deepcopy(ancestor)
+                reason = 'source_missing_parent'
                 break
-            profile = deepcopy(ancestor)
-        reason = 'source_missing_parent'
+        # A root without a supported ancestor keeps its original profile so
+        # the replay kernel reports the precise missing/truncated source.
     return profile, dict(schema=SCHEMA, kernel=KERNEL, policy_sha256=digest(policy),
         selector_sha256=digest(strategy), features=values, path=path, leaf=key,
         fallback_reason=reason, unsupported_coordinates=missing, effective_thresholds=profile, profile_sha256=digest(profile))
