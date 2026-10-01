@@ -2953,7 +2953,7 @@ def test_failed_remove_keeps_source_only_suppression_and_blocks_promotion_reg(
     async def failed_remove(*args, **kwargs):
         return False
 
-    monkeypatch.setattr(manager, "_send_remove", failed_remove)
+    monkeypatch.setattr(manager, "_send_remove_impl", failed_remove)
     monkeypatch.setattr(
         "src.utils.kiwoom_utils.get_effective_kiwoom_code",
         lambda code: f"{code}_AL",
@@ -4451,3 +4451,118 @@ def test_observation_only_al_demotion_does_not_repromote_runtime_item(monkeypatc
     asyncio.run(manager._send_reg(["005930_AL"],observation_only=True,realtime_types=["0B","0D"]))
     assert "005930_AL" in manager._micro_reversion_observation_only_items
     assert manager._runtime_primary_items_by_code.get("005930") != "005930_AL"
+
+
+def _exact_probe_manager():
+    manager = KiwoomWSManager("test-token")
+    manager.websocket = _FakeWS([])
+    manager._session_ready.set()
+    manager._market_data_transport_epoch = 8
+    manager.subscribed_codes = {"010140"}
+    manager._registered_items_by_code["010140"] = ("010140_AL",)
+    manager._registered_item_epochs["010140_AL"] = 8
+    manager._registered_item_types["010140_AL"] = ("0B", "0D", "0w", "0F")
+    manager._ensure_target_defaults("010140")["curr"] = 12345
+    return manager
+
+
+def test_exact_probe_adds_nx_preserves_al_and_removes_only_owned_item():
+    manager = _exact_probe_manager()
+    async def scenario():
+        receipt = await manager._acquire_exact_probe_item("010140_NX", "lease-1")
+        assert receipt["registered"] is True
+        assert manager._registered_items_by_code["010140"] == ("010140_AL", "010140_NX")
+        assert manager._registered_item_epochs["010140_NX"] == 8
+        assert manager._registered_item_types["010140_NX"] == ("0B", "0D")
+        assert "010140" not in manager._micro_reversion_observation_only_codes
+        assert manager.get_latest_data("010140")["curr"] == 12345
+        repeated = await manager._acquire_exact_probe_item("010140_NX", "lease-1")
+        assert repeated["created"] is True
+        assert len(manager.websocket.sent) == 1
+        assert (await manager._acquire_exact_probe_item("010140_NX", "other"))["registered"] is False
+        assert await manager._release_exact_probe_item("010140_NX", "other") is True
+        assert len(manager.websocket.sent) == 1
+        assert await manager._release_exact_probe_item("010140_NX", "lease-1") is True
+        assert manager._registered_items_by_code["010140"] == ("010140_AL",)
+        assert manager._registered_item_types["010140_AL"] == ("0B", "0D", "0w", "0F")
+        assert "010140_NX" not in manager._micro_reversion_observation_only_items
+    asyncio.run(scenario())
+    packets = [json.loads(raw) for raw in manager.websocket.sent]
+    assert packets[0]["trnm"] == "REG" and packets[0]["refresh"] == "1"
+    assert all(row["item"] == ["010140_NX"] for row in packets[0]["data"])
+    assert packets[1] == {"trnm": "REMOVE", "grp_no": "1",
+                         "data": [{"item": ["010140_NX"], "type": ["0B", "0D"]}]}
+
+
+@pytest.mark.parametrize("condition", ["budget", "not_ready", "invalid_existing", "borrowed", "adopted", "reconnect"])
+def test_exact_probe_budget_borrowing_adoption_and_epoch_boundaries(monkeypatch, condition):
+    manager = _exact_probe_manager()
+    async def scenario():
+        if condition == "budget":
+            monkeypatch.setattr(manager, "_max_registered_item_count", lambda: 1)
+        elif condition == "not_ready":
+            manager._session_ready.clear()
+        elif condition in {"invalid_existing", "borrowed"}:
+            manager._registered_items_by_code["010140"] += ("010140_NX",)
+            manager._registered_item_epochs["010140_NX"] = 7 if condition == "invalid_existing" else 8
+            manager._registered_item_types["010140_NX"] = ("0B", "0D")
+        receipt = await manager._acquire_exact_probe_item("010140_NX", "lease-1")
+        if condition in {"budget", "not_ready", "invalid_existing"}:
+            assert receipt["registered"] is False
+        else:
+            assert receipt["registered"] is True
+        if condition == "adopted":
+            manager._exact_probe_item_leases["010140_NX"]["adopted"] = True
+        elif condition == "reconnect":
+            manager._market_data_transport_epoch = 9
+        before = len(manager.websocket.sent)
+        await manager._release_exact_probe_item("010140_NX", "lease-1")
+        assert len(manager.websocket.sent) == before
+        assert manager._registered_items_by_code["010140"][0] == "010140_AL"
+        if condition in {"borrowed", "adopted"}:
+            assert "010140_NX" in manager._registered_items_by_code["010140"]
+        if condition == "reconnect":
+            assert manager._registered_items_by_code["010140"] == ("010140_AL",)
+    asyncio.run(scenario())
+
+
+def test_exact_probe_send_failure_retains_custody_for_item_cleanup(monkeypatch):
+    manager = _exact_probe_manager()
+    async def uncertain_send(*args, **kwargs):
+        return None  # Native transport reports no confirmed registration.
+    monkeypatch.setattr(manager, "_send_reg_impl", uncertain_send)
+    async def scenario():
+        receipt = await manager._acquire_exact_probe_item("010140_NX", "lease-1")
+        assert receipt["registered"] is False and receipt["created"] is True
+        assert "010140_NX" in manager._exact_probe_item_leases
+        await manager._release_exact_probe_item("010140_NX", "lease-1")
+        assert manager._registered_items_by_code["010140"] == ("010140_AL",)
+        assert "010140_NX" not in manager._exact_probe_item_leases
+    asyncio.run(scenario())
+    assert json.loads(manager.websocket.sent[0])["trnm"] == "REMOVE"
+
+
+def test_exact_probe_adoption_during_remove_serializes_restore_without_touching_al(monkeypatch):
+    manager = _exact_probe_manager()
+    manager._started = True
+    packets = []
+    async def scenario():
+        manager.loop = asyncio.get_running_loop()
+        await manager._acquire_exact_probe_item("010140_NX", "lease-1")
+        async def send(raw):
+            packet = json.loads(raw)
+            packets.append(packet)
+            if packet["trnm"] == "REMOVE":
+                manager.execute_subscribe(["010140_NX"], source="other_observation_owner",
+                                          observation_only=True, realtime_types=("0B", "0D"))
+        manager.websocket.send = send
+        assert await manager._release_exact_probe_item("010140_NX", "lease-1") is True
+        assert "010140_NX" not in manager._registered_item_epochs
+        for completion in tuple(manager._pending_loop_futures):
+            await asyncio.wrap_future(completion)
+        assert manager._registered_item_epochs["010140_NX"] == 8
+        assert manager._registered_items_by_code["010140"] == ("010140_AL", "010140_NX")
+        assert "010140_NX" not in manager._exact_probe_item_leases
+    asyncio.run(scenario())
+    assert [packet["trnm"] for packet in packets] == ["REMOVE", "REG"]
+    assert all(row["item"] == ["010140_NX"] for packet in packets for row in packet["data"])

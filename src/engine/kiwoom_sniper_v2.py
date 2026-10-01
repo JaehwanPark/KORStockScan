@@ -33,6 +33,7 @@ import signal
 import shlex
 import socket
 import time
+import uuid
 from datetime import datetime
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -8663,8 +8664,10 @@ def _zero_base_inbox_attach_receipt(payload, *, outcome, reason):
     )
 
 
-def _zero_base_release_probe_ws(code, item):
+def _zero_base_release_probe_ws(code, item, lease_id=None):
     manager = WS_MANAGER
+    if lease_id and callable(getattr(manager, "execute_release_exact_probe_item", None)):
+        return manager.execute_release_exact_probe_item(item, lease_id)
     if manager is None or _zero_base_active_conflict(code):
         return
     with manager.lock:
@@ -8741,6 +8744,7 @@ def handle_zero_base_probe_requested(request):
         _ZERO_BASE_PROBE_IN_FLIGHT.add(code)
 
     def worker():
+        probe_lease_id = uuid.uuid4().hex
         deferred_cleanup = False
         retained_ws = False
         slot_released = False
@@ -8754,7 +8758,7 @@ def handle_zero_base_probe_requested(request):
                     _ZERO_BASE_PROBE_SLOTS.release()
                     slot_released = True
 
-        def release_probe_ws(release_code, release_item):
+        def release_probe_ws(release_code, release_item, lease_id=None):
             nonlocal release_pending
             def on_remove_complete(future):
                 try:
@@ -8766,7 +8770,8 @@ def handle_zero_base_probe_requested(request):
                     release_slot()
 
             try:
-                completion = _zero_base_release_probe_ws(release_code, release_item)
+                completion = (_zero_base_release_probe_ws(release_code, release_item, lease_id)
+                              if lease_id else _zero_base_release_probe_ws(release_code, release_item))
             except Exception:
                 release_slot()
                 raise
@@ -8798,6 +8803,7 @@ def handle_zero_base_probe_requested(request):
                         ws_min_warmup_sec=warmup_sec,
                         ws_wait_partial_extension_sec=profile["partial_extension_sec"],
                         retain_ws_on_recheck=retain_on_recheck,
+                        ws_lease_id=probe_lease_id,
                     )
 
                 result = observe_once(
@@ -8860,7 +8866,8 @@ def handle_zero_base_probe_requested(request):
             try:
                 if retained_ws and not deferred_cleanup:
                     try:
-                        release_probe_ws(code, probe_item(code, claim.get("route") or ""))
+                        release_probe_ws(code, probe_item(code, claim.get("route") or ""),
+                                         probe_lease_id if callable(getattr(WS_MANAGER, "execute_acquire_exact_probe_item", None)) else None)
                     except Exception as exc:
                         log_error("[ZERO_BASE_PROBE_RELEASE] " + code + ":" + type(exc).__name__)
             finally:

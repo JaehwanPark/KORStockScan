@@ -1,0 +1,234 @@
+"""Preserve verified same-day policies across an authorized immutable code handoff.
+
+Ownership: startup automation. This does not create PREOPEN success, policies,
+orders, or trading authority; the native custody and bootstrap gates still apply.
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import subprocess
+from datetime import datetime, timedelta
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+from src.engine.automation import runtime_policy_bootstrap as bootstrap
+from src.engine.infrastructure.runtime_release_router import selected_release
+from src.utils.constants import DATA_DIR
+from src.utils.market_day import is_krx_trading_day
+
+KST = ZoneInfo("Asia/Seoul")
+CONFIRM = "APPROVED_INTRADAY_POLICY_PRESERVING_RELEASE_HANDOFF"
+
+
+def _sha(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def _read(path):
+    value = json.loads(Path(path).read_text())
+    if not isinstance(value, dict):
+        raise ValueError("intraday_handoff_object_required")
+    return value
+
+
+def _paths(day, commit):
+    root = DATA_DIR / "runtime/policy_bootstrap/intraday_handoff" / day
+    return root / f"{commit}.json", root / f"{commit}.consumed.json"
+
+
+def _identity(pid):
+    proc = Path("/proc") / str(int(pid))
+    fields = (proc / "stat").read_text().rsplit(")", 1)[1].split()
+    if fields[0] == "Z":
+        raise ValueError("intraday_pid_zombie")
+    cmdline = (proc / "cmdline").read_bytes().split(b"\0")
+    if not any(arg.endswith(b"bot_main.py") for arg in cmdline):
+        raise ValueError("intraday_pid_not_main")
+    return {"pid": int(pid), "start_ticks": fields[19], "cwd": str((proc / "cwd").resolve(strict=True))}
+
+
+def _selection():
+    root, commit = selected_release(DATA_DIR.parent)
+    if Path.cwd().resolve() not in (root, root / "src"):
+        raise ValueError("intraday_handoff_selected_root_required")
+    return root, commit
+
+
+def _today(day, now):
+    current = (now or datetime.now(KST)).astimezone(KST)
+    if day != current.date().isoformat() or not is_krx_trading_day(current.date()):
+        raise ValueError("intraday_handoff_not_current_trading_day")
+    return current
+
+
+def _preopen_path(day):
+    return DATA_DIR / "report/threshold_cycle_preopen_status" / f"threshold_cycle_preopen_{day}.status.json"
+
+
+def _preopen(day):
+    value = _read(_preopen_path(day))
+    updated = datetime.fromisoformat(str(value.get("updated_at") or ""))
+    if (value.get("target_date") != day or value.get("status") != "succeeded"
+            or value.get("exit_code") != 0 or value.get("runtime_env_exists") is not True
+            or updated.tzinfo is None or updated.astimezone(KST).date().isoformat() != day):
+        raise ValueError("intraday_original_preopen_invalid")
+    return value
+
+
+def _checked_bootstrap(day, pid):
+    check = bootstrap.verify_bootstrap(day, pid=pid, write=False)
+    if check.get("status") != "pass":
+        raise ValueError("intraday_bootstrap_invalid:" + ",".join(check.get("findings") or []))
+    return check
+
+
+def prepare(day, *, old_pid, previous_root, confirm, now=None):
+    current = _today(day, now)
+    if confirm != CONFIRM:
+        raise ValueError("intraday_handoff_explicit_authority_required")
+    root, commit = _selection()
+    previous = Path(previous_root).resolve(strict=True)
+    managed = (DATA_DIR.parent.parent / f"{DATA_DIR.parent.name}-runtime-releases").resolve()
+    if previous.parent != managed or previous == root:
+        raise ValueError("intraday_previous_release_invalid")
+    old_commit = subprocess.check_output(["git", "-C", str(previous), "rev-parse", "HEAD"], text=True).strip()
+    dirty = subprocess.check_output(["git", "-C", str(previous), "status", "--porcelain", "--", "src", "deploy", "restart.sh"], text=True).strip()
+    original = _preopen(day)
+    # A subsequent same-day handoff may use the preceding verified consumption.
+    if original.get("selected_release_commit") != old_commit:
+        prior_path, prior_consumed = _paths(day, old_commit)
+        prior = _read(prior_path)
+        if (_sha(_preopen_path(day)) != prior["preopen_sha256"]
+                or _read(prior_consumed).get("handoff_sha256") != _sha(prior_path)):
+            raise ValueError("intraday_previous_consumption_invalid")
+    old_identity = _identity(old_pid)
+    if dirty or old_identity["cwd"] != str(previous / "src"):
+        raise ValueError("intraday_previous_pid_or_release_invalid")
+    check = _checked_bootstrap(day, old_pid)
+    prepared_index = DATA_DIR / "runtime/policy_bootstrap/prepared" / day / "latest.json"
+    prepared = _read(prepared_index)
+    receipt_path = Path(prepared["receipt_path"])
+    prepared_root = prepared_index.parent.resolve()
+    if (receipt_path.resolve().parent.parent != prepared_root
+            or _sha(receipt_path) != prepared.get("receipt_sha256")):
+        raise ValueError("intraday_original_prepared_invalid")
+    frozen = [bootstrap.env_path(day), bootstrap.manifest_path(day), _preopen_path(day), prepared_index, receipt_path]
+    # All native source receipts remain independently validated by the launcher.
+    hashes = {str(path): _sha(path) for path in frozen}
+    if _identity(old_pid) != old_identity:
+        raise ValueError("intraday_old_pid_changed_during_prepare")
+    payload = {"schema": "intraday_policy_preserving_release_handoff_v1", "status": "prepared_verified",
+               "target_date": day, "selected_release_commit": commit, "release_root": str(root),
+               "previous_release_root": str(previous), "previous_release_commit": old_commit,
+               "old_pid_identity": old_identity, "prepared_at": current.isoformat(),
+               "first_launch_before": (current + timedelta(minutes=15)).isoformat(),
+               "preopen_sha256": hashes[str(_preopen_path(day))], "frozen_files": hashes,
+               "prepared_receipt_path": str(receipt_path), "prepared_receipt_sha256": _sha(receipt_path),
+               "manifest_sha256": check.get("manifest_sha256"), "actual_pid_consumed": False,
+               "policy_effect": "unchanged", "authority": confirm}
+    path, _ = _paths(day, commit)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # A receipt is immutable. Repeating preparation cannot silently replace it.
+    content = json.dumps(payload, sort_keys=True, indent=2) + "\n"
+    with path.open("x", encoding="utf-8") as output:
+        output.write(content)
+        output.flush()
+        os.fsync(output.fileno())
+    return verify(day, commit, now=current)
+
+
+def verify(day, commit, *, now=None):
+    findings = []
+    payload = {}
+    try:
+        current = _today(day, now)
+        root, selected = _selection()
+        path, consumed_path = _paths(day, commit)
+        payload = _read(path)
+        if (selected != commit or payload.get("schema") != "intraday_policy_preserving_release_handoff_v1"
+                or payload.get("status") != "prepared_verified" or payload.get("authority") != CONFIRM
+                or payload.get("target_date") != day or payload.get("selected_release_commit") != commit
+                or payload.get("release_root") != str(root) or payload.get("actual_pid_consumed") is not False):
+            raise ValueError("intraday_handoff_identity_invalid")
+        _preopen(day)
+        frozen = payload["frozen_files"]
+        required = {str(bootstrap.env_path(day)), str(bootstrap.manifest_path(day)), str(_preopen_path(day)),
+                    str(DATA_DIR / "runtime/policy_bootstrap/prepared" / day / "latest.json"),
+                    payload["prepared_receipt_path"]}
+        if set(frozen) != required or any(_sha(name) != sha for name, sha in frozen.items()):
+            raise ValueError("intraday_preserved_generation_changed")
+        start = datetime.fromisoformat(payload["prepared_at"])
+        deadline = datetime.fromisoformat(payload["first_launch_before"])
+        if (start.tzinfo is None or deadline.tzinfo is None or start > current
+                or deadline != start + timedelta(minutes=15)):
+            raise ValueError("intraday_handoff_clock_invalid")
+        consumed = None
+        if consumed_path.exists():
+            consumed = _read(consumed_path)
+            if (consumed.get("handoff_sha256") != _sha(path) or consumed.get("target_date") != day
+                    or consumed.get("selected_release_commit") != commit
+                    or consumed.get("actual_pid_consumed") is not True
+                    or consumed.get("release_root") != str(root)):
+                raise ValueError("intraday_consumption_invalid")
+        elif current > deadline:
+            raise ValueError("intraday_first_launch_window_expired")
+    except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError) as exc:
+        findings.append(str(exc))
+    return {"status": "pass" if not findings else "fail", "target_date": day,
+            "findings": findings, "basis": "intraday_policy_preserving_handoff",
+            "handoff": payload, "actual_pid_consumed": False}
+
+
+def consume(day, *, pid, now=None):
+    _, commit = _selection()
+    path, consumed_path = _paths(day, commit)
+    if not path.exists():
+        return {"status": "pass", "basis": "native_preopen", "actual_pid_consumed": False}
+    check = verify(day, commit, now=now)
+    if check["status"] != "pass":
+        return check
+    identity = _identity(pid)
+    if identity["cwd"] != str(Path(check["handoff"]["release_root"]) / "src"):
+        raise ValueError("intraday_new_pid_root_invalid")
+    verified = _checked_bootstrap(day, pid)
+    if _identity(pid) != identity:
+        raise ValueError("intraday_new_pid_changed_during_verify")
+    payload = {"schema": "intraday_policy_preserving_consumption_v1", "status": "pass", "target_date": day,
+               "selected_release_commit": commit, "release_root": check["handoff"]["release_root"],
+               "handoff_sha256": _sha(path), "pid_identity": identity, "actual_pid_consumed": True,
+               "manifest_sha256": verified.get("manifest_sha256"),
+               "verified_at": (now or datetime.now(KST)).isoformat()}
+    bootstrap._publish(consumed_path, json.dumps(payload, sort_keys=True, indent=2) + "\n")
+    return payload
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--prepare", action="store_true")
+    group.add_argument("--verify", action="store_true")
+    group.add_argument("--consume", action="store_true")
+    parser.add_argument("--target-date", required=True)
+    parser.add_argument("--old-pid", type=int)
+    parser.add_argument("--pid", type=int)
+    parser.add_argument("--previous-root")
+    parser.add_argument("--confirm")
+    args = parser.parse_args(argv)
+    try:
+        if args.prepare:
+            result = prepare(args.target_date, old_pid=args.old_pid, previous_root=args.previous_root, confirm=args.confirm)
+        elif args.consume:
+            result = consume(args.target_date, pid=args.pid)
+        else:
+            result = verify(args.target_date, _selection()[1])
+    except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError) as exc:
+        result = {"status": "fail", "findings": [str(exc)]}
+    print(json.dumps(result, ensure_ascii=False))
+    return 0 if result["status"] == "pass" else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

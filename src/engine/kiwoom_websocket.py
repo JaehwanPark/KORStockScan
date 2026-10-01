@@ -411,6 +411,8 @@ class KiwoomWSManager:
         self._registered_items_by_code = {}
         self._registered_item_epochs = {}
         self._registered_item_types = {}
+        self._exact_probe_item_leases = {}
+        self._registration_wire_lock = asyncio.Lock()
         self._implicit_runtime_route_codes = set()
         self._runtime_primary_items_by_code = {}
         self._last_runtime_route_reconcile_ts = float("-inf")
@@ -1252,9 +1254,9 @@ class KiwoomWSManager:
         return KiwoomWSManager._flag_enabled(raw, default=False)
 
     def _registered_item_count_locked(self):
-        return sum(
-            len(tuple(items or ())) for items in self._registered_items_by_code.values()
-        )
+        registered = {item for items in self._registered_items_by_code.values() for item in items or ()}
+        uncertain = set(getattr(self, "_exact_probe_item_leases", {})).difference(registered)
+        return len(registered) + len(uncertain)
 
     def is_pinned_observation_subscription(self, code):
         normalized = self._normalize_code(code)
@@ -1386,6 +1388,10 @@ class KiwoomWSManager:
                 for code, items in self._registered_items_by_code.items()
                 if not is_pinned_ws_observation_registration(code, tuple(items or ()))
             )
+            # Unconfirmed probe sends still occupy bounded broker item custody.
+            registered = {item for items in self._registered_items_by_code.values() for item in items or ()}
+            planned_item_count += len(set(getattr(self, "_exact_probe_item_leases", {}))
+                                      .difference(registered).difference(register_items))
             for code in normalized_codes or []:
                 candidate_items = tuple(items_by_code.get(code) or ())
                 if not candidate_items:
@@ -3087,6 +3093,9 @@ class KiwoomWSManager:
                 f"swing_enabled={is_swing_real_watching_enabled()}"
             )
 
+        with self.lock:
+            for item, lease in list(self._exact_probe_item_leases.items()):
+                self._discard_exact_probe_item_locked(item, lease["lease_id"])
         self._market_data_transport_epoch += 1
         self._route_realtime_sequence.clear()
         if self.is_reconnected:
@@ -4746,7 +4755,143 @@ class KiwoomWSManager:
         self._tick_dispatch_thread.start()
         self._ws_thread.start()
 
-    async def _send_remove(
+    def _wire_lock(self):
+        if not hasattr(self, "_exact_probe_item_leases"):
+            self._exact_probe_item_leases = {}
+        if not hasattr(self, "_registration_wire_lock"):
+            self._registration_wire_lock = asyncio.Lock()
+        return self._registration_wire_lock
+
+    async def _send_reg(self, *args, **kwargs):
+        async with self._wire_lock():
+            return await self._send_reg_impl(*args, **kwargs)
+
+    async def _send_remove(self, *args, **kwargs):
+        async with self._wire_lock():
+            return await self._send_remove_impl(*args, **kwargs)
+
+    def _discard_exact_probe_item_locked(self, item, lease_id):
+        lease = self._exact_probe_item_leases.get(item)
+        if not lease or lease["lease_id"] != lease_id:
+            return False
+        self._exact_probe_item_leases.pop(item, None)
+        if lease.get("adopted"):
+            return False
+        code = self._normalize_code(item)
+        remaining = tuple(x for x in self._registered_items_by_code.get(code, ()) if x != item)
+        if remaining:
+            self._registered_items_by_code[code] = remaining
+        else:
+            self._registered_items_by_code.pop(code, None)
+            self.subscribed_codes.discard(code)
+            self._micro_reversion_observation_only_codes.discard(code)
+        self._registered_item_epochs.pop(item, None)
+        self._registered_item_types.pop(item, None)
+        self._micro_reversion_observation_only_items.discard(item)
+        self._micro_reversion_observation_route_data.pop(item, None)
+        return True
+
+    def _dispatch_exact_probe_operation(self, operation):
+        future = asyncio.run_coroutine_threadsafe(operation, self.loop)
+        with self._pending_future_lock:
+            self._pending_loop_futures.add(future)
+        def completed(fut):
+            with self._pending_future_lock:
+                self._pending_loop_futures.discard(fut)
+        future.add_done_callback(completed)
+        return future
+
+    def execute_acquire_exact_probe_item(self, item, lease_id):
+        """Add only a missing observation item; never replace another route."""
+        if (not lease_id or not self._started or self._stop_event.is_set()
+                or not self.loop or not self.loop.is_running()):
+            return None
+        code = self._normalize_code(item)
+        if not code or item not in (code, code + "_NX", code + "_AL"):
+            raise ValueError("invalid_exact_probe_item")
+        return self._dispatch_exact_probe_operation(
+            self._acquire_exact_probe_item(item, lease_id))
+
+    async def _acquire_exact_probe_item(self, item, lease_id):
+        code = self._normalize_code(item)
+        async with self._wire_lock():
+            epoch = self._market_data_transport_epoch
+            socket = self.websocket
+            receipt = {"item": item, "lease_id": lease_id, "transport_epoch": epoch,
+                       "created": False, "registered": False}
+            with self.lock:
+                existing = self._exact_probe_item_leases.get(item)
+                if existing and existing["lease_id"] != lease_id:
+                    return {**receipt, "reason": "exact_probe_item_already_leased"}
+                if item in self._registered_items_by_code.get(code, ()):
+                    valid = (self._registered_item_epochs.get(item) == epoch
+                             and {"0B", "0D"}.issubset(self._registered_item_types.get(item, ())))
+                    return {**receipt, "registered": valid, "created": bool(existing),
+                            "reason": "existing_exact_item" if valid else "existing_exact_item_invalid"}
+                if (not socket or not self._session_ready.is_set() or epoch <= 0
+                        or self._registered_item_count_locked() >= self._max_registered_item_count()):
+                    return {**receipt, "reason": "exact_probe_session_or_item_budget_unavailable"}
+                self._exact_probe_item_leases[item] = {"lease_id": lease_id, "epoch": epoch}
+                self._micro_reversion_observation_only_items.add(item)
+                self._micro_reversion_observation_route_data.pop(item, None)
+                if code not in self.subscribed_codes:
+                    self._micro_reversion_observation_only_codes.add(code)
+            def current():
+                return (self.websocket is socket and self._market_data_transport_epoch == epoch
+                        and not self._stop_event.is_set()
+                        and self._exact_probe_item_leases.get(item, {}).get("lease_id") == lease_id)
+            await self._send_reg_impl(
+                [item], source="zero_base_exact_probe", observation_only=True,
+                realtime_types=("0B", "0D"), remove_before_reg=False,
+                replace_existing=False, enforce_item_budget=True, dispatch_guard=current)
+            with self.lock:
+                valid = (current() and item in self._registered_items_by_code.get(code, ())
+                         and self._registered_item_epochs.get(item) == epoch)
+                # Keep custody on uncertain sends; the caller must attempt exact REMOVE.
+            result = {**receipt, "created": True, "registered": valid,
+                      "reason": "additive_exact_item" if valid else "exact_probe_registration_unconfirmed"}
+            print("[ZERO_BASE_EXACT_WS_LEASE] " + json.dumps(result, sort_keys=True))
+            return result
+
+    def execute_release_exact_probe_item(self, item, lease_id):
+        if not self.loop or not self.loop.is_running() or self._stop_event.is_set():
+            return None
+        return self._dispatch_exact_probe_operation(
+            self._release_exact_probe_item(item, lease_id))
+
+    async def _release_exact_probe_item(self, item, lease_id):
+        async with self._wire_lock():
+            with self.lock:
+                lease = self._exact_probe_item_leases.get(item)
+                if not lease or lease["lease_id"] != lease_id:
+                    return True  # Reused/adopted item: no probe REMOVE authority.
+                if lease.get("adopted"):
+                    self._exact_probe_item_leases.pop(item, None)
+                    return True
+                epoch = lease["epoch"]
+                if epoch != self._market_data_transport_epoch:
+                    self._discard_exact_probe_item_locked(item, lease_id)
+                    return True
+                lease["removing"] = True
+            if not self.websocket or not self._session_ready.is_set():
+                with self.lock:
+                    lease.pop("removing", None)
+                return False
+            packet = {"trnm": "REMOVE", "grp_no": "1", "data": [
+                {"item": [item], "type": ["0B", "0D"]}]}
+            # An uncertain REMOVE must not leave a trusted registration receipt.
+            with self.lock:
+                self._registered_item_epochs.pop(item, None)
+                self._registered_item_types.pop(item, None)
+            await self.websocket.send(json.dumps(packet))
+            with self.lock:
+                self._discard_exact_probe_item_locked(item, lease_id)
+            print("[ZERO_BASE_EXACT_WS_LEASE] " + json.dumps({
+                "item": item, "lease_id": lease_id, "transport_epoch": epoch,
+                "phase": "released", "actual_order_submitted": False}, sort_keys=True))
+            return True
+
+    async def _send_remove_impl(
         self,
         codes,
         *,
@@ -4833,6 +4978,7 @@ class KiwoomWSManager:
                 await self.websocket.send(json.dumps(remove_packet))
                 with self.lock:
                     for item in batch_items:
+                        getattr(self, "_exact_probe_item_leases", {}).pop(item, None)
                         getattr(self, "_registered_item_epochs", {}).pop(item, None)
                         getattr(self, "_registered_item_types", {}).pop(item, None)
                 now_ts = time.time()
@@ -4866,7 +5012,7 @@ class KiwoomWSManager:
             print(f"🚨 [WS] _send_remove 내부 치명적 에러 발생: {e}")
             return False
 
-    async def _send_reg(
+    async def _send_reg_impl(
         self,
         codes,
         *,
@@ -4887,6 +5033,10 @@ class KiwoomWSManager:
             if dispatch_guard is not None and not dispatch_guard():
                 return
             remove_before_reg = self._flag_enabled(remove_before_reg, default=False)
+            if source != "zero_base_exact_probe":
+                with self.lock:
+                    for item in codes:
+                        getattr(self, "_exact_probe_item_leases", {}).pop(str(item), None)
             requested_realtime_types = self._normalize_required_realtime_types(
                 realtime_types
             ) or ("0B", "0D", "0w", "0F")
@@ -4982,7 +5132,7 @@ class KiwoomWSManager:
 
             if self.websocket and self._session_ready.is_set():
                 if remove_before_reg:
-                    remove_sent = await self._send_remove(
+                    remove_sent = await self._send_remove_impl(
                         normalized_codes,
                         update_local_state=False,
                         source=source,
@@ -5331,6 +5481,23 @@ class KiwoomWSManager:
                 if requested_item not in requested_items:
                     requested_items.append(requested_item)
         source_key = str(source or "").lower()
+        adopted_pending_items = []
+        if source_key != "zero_base_exact_probe":
+            with self.lock:
+                for items in requested_items_by_code.values():
+                    for item in items:
+                        lease = getattr(self, "_exact_probe_item_leases", {}).get(item)
+                        if lease:
+                            lease["adopted"] = True
+                            if lease.get("removing") or item not in self._registered_items_by_code.get(self._normalize_code(item), ()):
+                                adopted_pending_items.append(item)
+        if adopted_pending_items and self.loop and self.loop.is_running() and not self._stop_event.is_set():
+            # An in-flight REMOVE cannot be recalled. Serialize the new owner's
+            # additive REG after it and invalidate the removed receipt meanwhile.
+            self._dispatch_exact_probe_operation(self._send_reg(
+                adopted_pending_items, source=source, observation_only=observation_only,
+                realtime_types=required_realtime_types or realtime_types,
+                replace_existing=False, remove_before_reg=False, enforce_item_budget=True))
         requested_types = set(self._normalize_required_realtime_types(
             required_realtime_types or realtime_types) or ("0B", "0D", "0w", "0F"))
         clock = datetime.now(KST).strftime("%H:%M")
@@ -5596,9 +5763,18 @@ class KiwoomWSManager:
         items_by_code_snapshot = {}
         with self.lock:
             items_by_code_snapshot = {
-                code: tuple(self._registered_items_by_code.get(code) or ())
-                for code in normalized_codes
+                code: tuple(OrderedDict.fromkeys((
+                    *tuple(self._registered_items_by_code.get(code) or ()),
+                    *(item for item in getattr(self, "_exact_probe_item_leases", {})
+                      if self._normalize_code(item) == code),
+                ))) for code in normalized_codes
             }
+            # Cancel pending exact registrations before a code owner's REMOVE.
+            for item in list(getattr(self, "_exact_probe_item_leases", {})):
+                if self._normalize_code(item) in normalized_codes:
+                    self._exact_probe_item_leases.pop(item, None)
+                    self._micro_reversion_observation_only_items.discard(item)
+                    self._micro_reversion_observation_route_data.pop(item, None)
 
         self.subscribed_codes.difference_update(normalized_codes)
         with self.lock:

@@ -156,6 +156,7 @@ def prepare(source_date: str, *, target_date: str | None = None,
 def verify_prepared(target_date: str, *, require_today: bool = False,
                     now: datetime | None = None, generation_only: bool = False) -> dict[str, Any]:
     findings = []
+    handoff_basis = ""
     current = (now or datetime.now(KST)).astimezone(KST)
     if require_today and target_date != current.date().isoformat():
         findings.append("preopen_target_not_today")
@@ -176,9 +177,17 @@ def verify_prepared(target_date: str, *, require_today: bool = False,
         _, selection_path, commit = _selected_release()
         source = _source_receipts(receipt["source_date"], target_date,
                                   **({"generation_only": True} if generation_only else {}))
-        if (receipt["selected_release_commit"] != commit
-                or receipt["selection_sha256"] != _sha(selection_path)
-                or any(receipt.get(key) != value for key, value in source.items())):
+        release_changed = (receipt["selected_release_commit"] != commit
+                           or receipt["selection_sha256"] != _sha(selection_path))
+        if release_changed:
+            from src.engine.automation.intraday_release_handoff import verify as verify_intraday
+            handoff = verify_intraday(target_date, commit, now=now)
+            preserved = handoff.get("handoff") or {}
+            if (handoff["status"] != "pass" or preserved.get("prepared_receipt_path") != str(receipt_path)
+                    or preserved.get("prepared_receipt_sha256") != _sha(receipt_path)):
+                raise ValueError("prepared_source_or_release_changed")
+            handoff_basis = "intraday_preserved_preopen_generation"
+        if any(receipt.get(key) != value for key, value in source.items()):
             raise ValueError("prepared_source_or_release_changed")
         output_dir = receipt_path.parent
         for key, path in (
@@ -225,7 +234,9 @@ def verify_prepared(target_date: str, *, require_today: bool = False,
         "status": "pass" if not findings else "fail",
         "findings": findings,
         "source_date": receipt.get("source_date"),
-        "selected_release_commit": receipt.get("selected_release_commit"),
+        "selected_release_commit": commit if handoff_basis and not findings else receipt.get("selected_release_commit"),
+        "preserved_preopen_commit": receipt.get("selected_release_commit") if handoff_basis else None,
+        "handoff_basis": handoff_basis,
         "actual_pid_consumed": False,
         "runtime_effect": False,
         "validation_scope": "sealed_generation" if generation_only else "current_full_contract",
@@ -246,11 +257,13 @@ def verify_preopen_completion(
                 or receipt.get("status") != "succeeded"
                 or receipt.get("exit_code") != 0
                 or receipt.get("runtime_env_exists") is not True
-                or receipt.get("selected_release_commit") != selected_release_commit
                 or updated.tzinfo is None
                 or updated.astimezone(KST).date().isoformat() != target_date
                 or current.date().isoformat() != target_date):
             findings.append("exact_preopen_status_not_succeeded_on_selected_release")
+        elif receipt.get("selected_release_commit") != selected_release_commit:
+            from src.engine.automation.intraday_release_handoff import verify as verify_intraday
+            return verify_intraday(target_date, selected_release_commit, now=now)
     except (OSError, ValueError, TypeError):
         findings.append("exact_preopen_status_missing_or_invalid")
     return {"status": "pass" if not findings else "fail", "target_date": target_date,

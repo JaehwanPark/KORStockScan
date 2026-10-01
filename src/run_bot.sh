@@ -92,6 +92,8 @@ record_threshold_runtime_env_pid_handoff() {
         printf '%s\n' "$verify_output"
         return 1
     fi
+    PYTHONPATH=.. ../.venv/bin/python -m src.engine.automation.intraday_release_handoff \
+        --consume --target-date "$target_date" --pid "$bot_pid" || return 1
     echo "✅ threshold runtime env PID 소비 receipt 기록: target_date=$target_date pid=$bot_pid"
 }
 

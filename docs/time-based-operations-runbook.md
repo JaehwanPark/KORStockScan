@@ -1,5 +1,11 @@
 # Time-Based Operations Runbook
 
+## Intraday exact-route observation augmentation
+
+Under an explicitly authorized source repair, the zero-base probe can add a missing exact item beside the existing trading route using REG `refresh=1`, only `0B/0D`, and the existing item budget. Each bounded worker has one item lease across its single RECHECK. It evaluates only fresh exact-item observations on the current connection epoch; a sent packet or registration receipt alone is not readiness. The observation item has a separate route store and cannot overwrite the existing trading view.
+
+Cleanup removes only the leased item and types. Reused items are borrowed, not removed. A new owner adopting the item revokes probe REMOVE custody; adoption during a dispatched REMOVE serializes a new additive REG and invalidates the removed receipt until registration/fresh observations return. Unconfirmed sends retain bounded custody for exact cleanup; reconnect discards unadopted ephemeral items rather than restoring them. Transport conflicts, missing fresh observations, REST clock/route gaps and thin tape remain separate failures. Historical failed attempts are preserved; new valid attempts do not repair them retroactively. Intraday immutable-code replacement follows [release handoff](runtime-release-routing.md#authorized-intraday-policy-preserving-code-handoff), not a new PREOPEN/policy calculation.
+
 ## Explicit postclose recovery after the deadline (2026-09-10)
 
 Cron completion distinguishes cleanup execution from its finalization prerequisite. When the latest exact-source finalization terminal explicitly failed before cleanup and no cleanup run marker exists for that source, cleanup is `blocked_by_finalization`, with the parent reason and log receipt. This is a warning about withheld work, never cleanup PASS. Finalization remains FAIL. Unknown reasons, another source date, a changing generation, a newer recovery START, or any recorded cleanup run preserve the ordinary cleanup checks; missing cleanup evidence alone is still a failure after its window. An approved next-session policy carry and its prepared/PREOPEN receipts do not turn a failed source-date postclose chain into DONE.

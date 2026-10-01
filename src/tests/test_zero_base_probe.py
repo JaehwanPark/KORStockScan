@@ -927,3 +927,76 @@ def test_probe_uses_exact_ws_tick_when_rest_tick_history_is_empty(monkeypatch):
     assert received[0][0][2] == []
     assert received[0][0][1]["recent_trade_ticks"][0]["price"] == 10000
     assert result["machine_action"] == "BLOCK"
+
+
+def test_exact_probe_lease_reaches_machine_with_nx_beside_existing_al(monkeypatch):
+    import src.engine.scalping.zero_base_probe as module
+    from concurrent.futures import Future
+    calls = []
+    ws = SimpleNamespace(
+        subscribed_codes={"123456"},
+        _registered_items_by_code={"123456": ("123456_AL",)},
+        _registered_item_epochs={"123456_AL": 3},
+        _registered_item_types={"123456_AL": ("0B", "0D")},
+        _market_data_transport_epoch=3,
+        get_exact_item_data=lambda code, item: _snapshot(epoch=11, route="nxt_only", item="123456_NX"),
+    )
+    def acquire(item, lease_id):
+        assert item == "123456_NX"
+        ws._registered_items_by_code["123456"] += (item,)
+        ws._registered_item_epochs[item] = 3
+        ws._registered_item_types[item] = ("0B", "0D")
+        calls.append(("acquire", item, lease_id))
+        completion = Future()
+        completion.set_result({"registered": True, "created": True, "item": item})
+        return completion
+    ws.execute_acquire_exact_probe_item = acquire
+    ws.execute_release_exact_probe_item = lambda item, lease_id: calls.append(("release", item, lease_id))
+    monkeypatch.setattr(module, "resolve_entry_candle_session", lambda: "LEGACY_PREMARKET")
+    monkeypatch.setattr(module, "resolve_entry_candle_request_code", lambda *a, **kw: "123456_NX")
+    engine = SimpleNamespace(analyze_target=lambda *a, **kw: (
+        calls.append(("machine", kw["machine_only"])),
+        {"machine_evaluation_status": "assessed", "entry_mechanistic_action": "BLOCK",
+         "mechanistic_entry_assessment": {"reason": "valid_source"}},
+    )[1])
+    result = run_zero_base_probe(
+        {"claim": {"code": "123456", "route": "nxt_only", "observed_epoch": 10},
+         "candidate": {"code": "123456", "route": "nxt_only"}},
+        ws_manager=ws, ai_engine=engine, token="test", now=lambda: 11, ws_lease_id="same-probe",
+        ws_wait_min_exact_0b_count=0,
+        tick_fetcher=lambda *a, **kw: [{"request_code": "123456_NX", "rest_received_ts_ms": 11000}],
+        candle_fetcher=lambda *a, **kw: ([{"close": 10000}], {"request_code": "123456_NX", "rest_received_ts_ms": 11000}),
+        context_builder=lambda *a, **kw: {"ready": True},
+    )
+    assert result["result"] == "assessed" and result["machine_action"] == "BLOCK"
+    assert ("machine", True) in calls
+    assert calls[-1] == ("release", "123456_NX", "same-probe")
+    assert ws._registered_items_by_code["123456"][0] == "123456_AL"
+    assert result["actual_order_submitted"] is False
+
+
+def test_exact_probe_late_registration_defers_only_lease_cleanup():
+    from concurrent.futures import Future
+    from concurrent.futures import TimeoutError
+    cleanup = []
+    class LateFuture(Future):
+        def result(self, timeout=None):
+            if timeout is not None:
+                raise TimeoutError()
+            return super().result()
+    completion = LateFuture()
+    ws = SimpleNamespace(
+        subscribed_codes={"123456"}, _registered_items_by_code={"123456": ("123456_AL",)},
+        execute_acquire_exact_probe_item=lambda item, lease: completion,
+        execute_release_exact_probe_item=lambda item, lease: cleanup.append((item, lease)),
+    )
+    result = run_zero_base_probe(
+        {"claim": {"code": "123456", "route": "nxt_only", "observed_epoch": 10},
+         "candidate": {"code": "123456", "route": "nxt_only"}},
+        ws_manager=ws, ai_engine=object(), token="test", now=lambda: 11, ws_lease_id="timed-out",
+    )
+    assert result["reason"] == "ws_registration_timeout" and result["_ws_cleanup_deferred"] is True
+    assert not cleanup
+    completion.set_result({"registered": True})
+    assert cleanup == [("123456_NX", "timed-out")]
+    assert ws._registered_items_by_code["123456"] == ("123456_AL",)

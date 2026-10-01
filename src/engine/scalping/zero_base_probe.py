@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import uuid
 from concurrent.futures import TimeoutError as FutureTimeoutError
 
 from src.engine.scalping.entry_candle_context import (
@@ -320,6 +321,7 @@ def run_zero_base_probe(
     ws_wait_partial_extension_sec: float = 0.0,
     ws_wait_min_exact_0b_count: int = 5,
     retain_ws_on_recheck: bool = False,
+    ws_lease_id: str | None = None,
 ) -> dict:
     """Observe one candidate. The caller owns bounded WS REG/REMOVE leases."""
     claim = dict(request.get("claim") or {})
@@ -347,27 +349,43 @@ def run_zero_base_probe(
         result["result"] = "policy_unavailable"
         result["reason"] = "runtime_dependency_missing"
         return result
+    exact_lease = callable(getattr(ws_manager, "execute_acquire_exact_probe_item", None))
+    lease_id = ws_lease_id or uuid.uuid4().hex
+    lease_requested = False
+
+    def cleanup():
+        if exact_lease:
+            return ws_manager.execute_release_exact_probe_item(item, lease_id)
+        if callable(release_ws):
+            return release_ws(code, item)
+
+    def release():
+        if exact_lease and callable(release_ws):
+            return release_ws(code, item, lease_id)
+        return cleanup()
+
     subscribed_codes = getattr(ws_manager, "subscribed_codes", set())
     registered_items = getattr(ws_manager, "_registered_items_by_code", {})
     if code in subscribed_codes and hasattr(ws_manager, "_registered_items_by_code"):
-        if item not in registered_items.get(code, ()):
+        if item not in registered_items.get(code, ()) and not exact_lease:
             result["reason"] = "exact_route_subscription_conflict"
             return result
-        was_subscribed = True
+        was_subscribed = item in registered_items.get(code, ())
     else:
         was_subscribed = code in subscribed_codes and item == code
     registered_epoch = now()
     deferred_release = False
     try:
-        if was_subscribed and hasattr(ws_manager, "_registered_item_epochs"):
+        if not exact_lease and was_subscribed and hasattr(ws_manager, "_registered_item_epochs"):
             registration_reason = probe_registration_receipt(
                 ws_manager, code=code, item=item,
             )
             if registration_reason:
                 result["reason"] = registration_reason
                 return result
-        if not was_subscribed:
-            registration = ws_manager.execute_subscribe(
+        if exact_lease or not was_subscribed:
+            lease_requested = exact_lease
+            registration = ws_manager.execute_acquire_exact_probe_item(item, lease_id) if exact_lease else ws_manager.execute_subscribe(
                 [item], source="zero_base_probe", observation_only=True,
                 required_realtime_types=("0B", "0D"), realtime_types=("0B", "0D"),
             )
@@ -375,11 +393,17 @@ def run_zero_base_probe(
                 result["reason"] = "ws_registration_not_dispatched"
                 return result
             try:
-                registration.result(timeout=3.0)
+                lease_receipt = registration.result(timeout=3.0)
+                if exact_lease:
+                    result["ws_registration"] = lease_receipt
+                    if not isinstance(lease_receipt, dict) or lease_receipt.get("registered") is not True:
+                        result["reason"] = (lease_receipt.get("reason", "ws_registration_unconfirmed")
+                                            if isinstance(lease_receipt, dict) else "ws_registration_unconfirmed")
+                        return result
             except FutureTimeoutError:
-                if callable(release_ws):
+                if exact_lease or callable(release_ws):
                     registration.add_done_callback(
-                        lambda _future: release_ws(code, item)
+                        lambda _future: release()
                     )
                     deferred_release = True
                     result["_ws_cleanup_deferred"] = True
@@ -533,10 +557,10 @@ def run_zero_base_probe(
             result["result"] = "policy_unavailable"
             result["reason"] = "machine_action_unknown"
     finally:
-        if not was_subscribed and not deferred_release and callable(release_ws):
+        if (lease_requested or not was_subscribed) and not deferred_release and (exact_lease or callable(release_ws)):
             if (retain_ws_on_recheck and result["result"] == "assessed"
                     and result["machine_action"] == "RECHECK"):
                 result["_ws_lease_retained"] = True
             else:
-                release_ws(code, item)
+                release()
     return result
