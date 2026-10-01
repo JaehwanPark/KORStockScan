@@ -578,6 +578,11 @@ def _machine_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
                 selection = (bundle or {}).get('winrate_selection') or {}
                 pending = (terminal.get('staged') or {}).get('status') == 'pending_initial_preserved'
                 reused = (terminal.get('staged') or {}).get('status') == 'existing_incumbent_preserved'
+                if not pending and not reused:
+                    from src.engine.automation.postclose_summary_handoff import _staged_winrate_generation_preserved
+                    if not _staged_winrate_generation_preserved(terminal['staged'], bundle,
+                            runtime_policy, root / 'data'):
+                        findings.append('winrate_candidate_bundle_or_scope_mismatch')
                 if reused:
                     from src.engine.automation.postclose_summary_handoff import _existing_incumbent_winrate_binding_valid
                     previous = runtime_policy.load_effective(data_root=root / 'data', target_date=winrate.get('publication_date'))
@@ -941,6 +946,7 @@ def _auxiliary_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
             "paired_comparable_count": economic_compared,
             "outcome_label_source_gap_count": label_gap_count,
             "first_source_gap": first_gap,
+            "source_lineage_counts": lineage,
             "source_date": source_date, "report_sha256": report["artifact_content_sha256"],
             "artifact": str(path), "execution": "report_observed",
             "publication": report.get("selection_disposition"),
@@ -1038,8 +1044,15 @@ def _semantic_alerts(name, semantics, source_date):
     return [{"source_date": source_date, "stage": name,
              "scope": scope, "reason": reason, "status": semantics.get("status"),
              "artifact": semantics.get("artifact"), "generation": semantics.get("report_sha256"),
-             "affected": semantics.get("outcome_label_source_gap_count"),
-             "eligible": (semantics.get("scopes", {}).get(scope, {}).get("eligible_count",
+             "affected": (semantics.get("outcome_label_source_gap_count")
+                          if reason == "auxiliary_outcome_label_source_gap" else None),
+             "eligible": (semantics.get("paired_comparable_count")
+                          if reason == "auxiliary_primary_economics_source_blocked"
+                          else semantics.get("source_lineage_counts", {}).get("writer_trace_plan_joined")
+                          if reason == "auxiliary_exact_plan_lineage_missing"
+                          else (semantics["economic_screened_total"] - semantics["outcome_label_source_gap_count"])
+                          if reason == "auxiliary_outcome_label_source_gap" and type(semantics.get("economic_screened_total")) is int
+                          else semantics.get("scopes", {}).get(scope, {}).get("eligible_count",
                            semantics.get("scopes", {}).get(scope, {}).get("eligible",
                            semantics.get("eligible_count")))),
              "total": (semantics.get("economic_screened_total") if reason in {

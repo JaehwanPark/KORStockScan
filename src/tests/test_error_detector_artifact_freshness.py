@@ -117,6 +117,16 @@ def test_auxiliary_v4_diagnostic_only_population_is_not_a_candidate(tmp_path):
     assert _semantic_alerts("main_auxiliary_policy", result, day) == []
 
 
+def test_semantic_alert_denominator_does_not_mix_current_economics_and_cumulative_cf():
+    result = {"status": "source_gap", "eligible_count": 10, "screened_total": 44,
+        "economic_screened_total": 6, "paired_comparable_count": 0,
+        "outcome_label_source_gap_count": 6, "source_lineage_counts": {"writer_trace_plan_joined": 0},
+        "findings": ["auxiliary_primary_economics_source_blocked", "auxiliary_outcome_label_source_gap",
+                     "auxiliary_exact_plan_lineage_missing"]}
+    alerts = _semantic_alerts("main_auxiliary_policy", result, "2026-09-30")
+    assert all(a["total"] == 6 and a["eligible"] == 0 for a in alerts)
+
+
 def test_prepared_semantics_does_not_claim_future_pid_or_ignore_stale_release(tmp_path, monkeypatch):
     from src.engine.automation import next_preopen_readiness as readiness
     target = "2026-10-02"
