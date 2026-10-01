@@ -12,7 +12,7 @@
 | 보조 AI | 자연 판정 6시도의 1·3·5·10분 가격 경로는 정확 `_AL` 완료봉으로 확인됨. 5건은 정확 손절 거리 및 동일 시도의 사전 주문 계획·소유자 결속이 없고, 1건은 자연 응답 transport가 무효. 경제 비교 가능쌍 0. | `source_contract_blocked`, 기존 `contract_v4` 유지. 가격 결손으로 오분류하지 않음. |
 | 보조 AI 사전 계획 | 6건 모두 writer·trace 계획 해시 0. 최초 결손은 probe 예약이 필요한 범위 3건, 정확 브로커 예산 2건, 공통 지연 가드 1건. 관측 전용 경로는 예약·계좌 금액·체결을 합성하지 않음. | 과거 원천 복구 불가. 다음 자연 시도에서 정확 계획·소유자·비용 결속 검증 필요. |
 | 보조 AI 별도 판단 품질 | 9/29~30 44건 중 고정 10분 진단 모집단 10건(학습 5, holdout 5). 기존 정책 대비 승계 후보 없음. 후보 프롬프트 응답은 중복 시도 오류로 새 완료본이 없음. | 진단 모집단은 주 운영 경제성 비교쌍 0건을 대체하지 않음. |
-| 진입 분할·취소·저가주 | `entry_split` 운영 비교는 실주문 2시도의 주문 소유자 등록·완료 비용 결속이 없어 0쌍. `entry_cancel_wait`는 실제 dispatch/parent lineage 미분류로 0쌍. 저가주 2단도 profile별 결속 부족. | 세 family 모두 비용 후 우위 정책 승계 근거 없음. |
+| 진입 분할·취소·저가주 | `entry_split` 운영 비교는 실주문 2시도의 주문 소유자 등록·완료 비용 결속이 없어 0쌍. `entry_cancel_wait`의 2건(066570·402340)은 원본 `order_leg_sent`가 `single_owner_unregistered`이고 소유자 등록 ID·계좌 키가 없어 실제 제출은 확인되지만 경제성 부모로 분류할 수 없다. 저가주 2단도 profile별 결속 부족. | 세 family 모두 비용 후 우위 정책 승계 근거 없음. 이 두 제출을 0건 주문이나 2건 수익으로 바꾸지 않음. |
 | 제출 전 지연 | 운영 절대 경로 기준 `pre_submit_delay` 단계·원천 ledger 영수증 유효. 모형은 `model_not_validated`이므로 기존 정책 유지. | 상대 경로로 점검할 때 나타난 `compact_generation_changed`는 점검 오탐. |
 | 기타 활성 단계 | `widget_policy`, `collector_recommendation`, `machine_attribution`, `machine_timing`, `market_weakness`, `research_capacity`, `legacy_policy_approval` 영수증 유효. `episode_policy`와 공동 `research_allocation`은 명시 OFF. 위젯·attribution의 PARTIAL/warning 및 timing 표본 축적은 별도 경제성·자연 증거 결손으로 보존. | 단계 종료를 수익 개선 또는 다음 PID 소비로 승격하지 않음. |
 
@@ -24,7 +24,9 @@
 
 첫 복구 재실행은 준비일 결손을 통과했으나, 현재 selector가 바뀌었다는 이유로 10/1 07:35의 원래 장전 세대를 `selected_release_mismatch`로 거부했다. 선택 변경 기록을 역추적하면 `90c06298`은 03:18에 선택되어 장전 생성·검증 시점에 유효했고 07:48에 교체되었다. 과거 선택 백업의 연속성, 시각, 해당 불변 릴리스의 Git HEAD와 코드 청결성을 검증해 **그 날짜의 장전 사실만** 결속하도록 수리한다. 이 경우에도 현재 선택 릴리스의 장전 승인이나 실제 PID 소비는 생기지 않는다. 선택 기록 또는 원본 릴리스 검증이 안 되면 계속 `source_gap`으로 막는다.
 
-두 번째 복구 실행에서 15개 활성 단계 영수증 검사가 모두 통과했고 `summary_handoff=succeeded`, strict `pass`였다. 전체 controller를 별도로 실행해 `done`과 whole-chain strict `pass`를 확인했다. 여기서 controller가 `summary_verified` 파일을 `done`으로 교체하며 요약 단계 영수증의 출력 해시가 낡아지는 추가 결함을 발견했다. 검증된 최종 controller 출력에 한해 요약 영수증을 다시 봉인하고, 다른 입력·코드·전제 결손이 있으면 봉인하지 않도록 수리했다. **최종 릴리스에서 다시 봉인한 뒤 단계 영수증 전체를 재확인해야 이 결함이 닫힌다.**
+두 번째 복구 실행에서 15개 활성 단계 영수증 검사가 모두 통과했고 `summary_handoff=succeeded`, strict `pass`였다. 전체 controller를 별도로 실행해 `done`과 whole-chain strict `pass`를 확인했다. 여기서 controller가 `summary_verified` 파일을 `done`으로 교체하며 요약 단계 영수증의 출력 해시가 낡아지는 추가 결함을 발견했다. 검증된 최종 controller 출력에 한해 요약 영수증을 다시 봉인하고, 다른 입력·코드·전제 결손이 있으면 봉인하지 않도록 수리했다. 최종 릴리스 `c13464b3`에서 재실행한 뒤 **활성 단계 영수증 결손 0건, controller `done`, strict 현재 세대 검증 결손 0건, 인계 `pass`**를 확인했다. 독립 서비스 release-set 검사와 예약 경로 8개 검사도 통과했다. 메인 봇 PID는 없으며 오늘 재기동하지 않았다.
+
+이후 직접 정책 영수증을 대조하면서 한 날짜 결함을 더 찾았다. 9/30 원천을 10/1에 재계산한 새 기계·보조 AI 정책은 10/2 파일에 결속돼 있지만, 요약은 과거 장전 준비일 10/1을 정책 파일 선택에도 사용했다. 그 결과 오래된 10/1 기계 정책을 새 평가의 정책으로 읽고 보조 AI의 정책 영수증을 무효로 표시했다. 요약의 **과거 장전 검증일은 10/1**, **늦은 정책 발행 적용일은 10/2**로 분리한다. 이 수리 이후 새 경제성 우위가 생기는 것은 아니며, 최신 10/2 정책이 새 보고서의 해시·fingerprint와 일치하는지만 다시 검증한다.
 
 ## 10/2 장전 종료 조건
 

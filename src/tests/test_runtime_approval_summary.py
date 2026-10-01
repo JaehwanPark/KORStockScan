@@ -48,6 +48,29 @@ def _seed_required(target_date: str) -> None:
         )
 
 
+def test_late_publication_selects_new_policy_without_relabeling_preopen(monkeypatch, tmp_path):
+    data = _patch(monkeypatch, tmp_path)
+    root = data / "runtime" / "mechanistic_entry_policy"
+    source = "2026-09-30"
+    _write(root / "policy_2026-10-01.json", {
+        "target_date": "2026-10-01", "compact_evaluation_source_date": source,
+        "machine_evaluation_source": {"source_date": source},
+    })
+    _write(root / "policy_2026-10-02.json", {
+        "target_date": "2026-10-02", "compact_evaluation_source_date": source,
+        "machine_evaluation_source": {"source_date": source},
+    })
+    monkeypatch.setenv("POSTCLOSE_PREPARED_EFFECTIVE_DATE", "2026-10-01")
+    monkeypatch.setenv("POSTCLOSE_POLICY_PUBLICATION_DATE", "2026-10-01")
+    paths = mod._paths(source)
+    assert paths["compact_policy"].name == "policy_2026-10-02.json"
+    assert paths["main_mechanistic_policy"].name == "policy_2026-10-02.json"
+    assert paths["runtime_bootstrap"].name == "runtime_policy_bootstrap_2026-09-30.json"
+    with pytest.raises(ValueError, match="policy_publication_before_source_date"):
+        monkeypatch.setenv("POSTCLOSE_POLICY_PUBLICATION_DATE", "2026-09-29")
+        mod._paths(source)
+
+
 def test_summary_completes_direct_evidence_without_fabricating_economics(monkeypatch, tmp_path):
     _patch(monkeypatch, tmp_path)
     target = "2026-09-19"

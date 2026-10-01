@@ -102,6 +102,14 @@ def _paths(target_date: str) -> dict[str, Path]:
     requested_effective = os.environ.get("POSTCLOSE_PREPARED_EFFECTIVE_DATE")
     if requested_effective:
         date.fromisoformat(requested_effective)
+    publication = os.environ.get("POSTCLOSE_POLICY_PUBLICATION_DATE")
+    if publication:
+        from src.engine.build_next_stage2_checklist import _next_krx_trading_day
+        if date.fromisoformat(publication) < date.fromisoformat(target_date):
+            raise ValueError("policy_publication_before_source_date")
+        policy_effective = _next_krx_trading_day(publication)
+    else:
+        policy_effective = requested_effective
     report = DATA_DIR / "report"
     threshold = DATA_DIR / "threshold_cycle"
     compact_policies = []
@@ -113,7 +121,7 @@ def _paths(target_date: str) -> dict[str, Path]:
             payload = json.loads(candidate.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        if requested_effective and payload.get("target_date") != requested_effective:
+        if policy_effective and payload.get("target_date") != policy_effective:
             continue
         if payload.get("compact_evaluation_source_date") == target_date:
             compact_policies.append(candidate)
@@ -132,7 +140,7 @@ def _paths(target_date: str) -> dict[str, Path]:
     expansion_policies = []
     for candidate in sorted((DATA_DIR / "runtime/low_price_two_leg_auto_expansion").glob("low_price_two_leg_auto_expansion_????-??-??.json")):
         payload = _load_json(candidate)
-        if payload.get("source_date") == target_date and (not requested_effective or payload.get("effective_date") == requested_effective):
+        if payload.get("source_date") == target_date and (not policy_effective or payload.get("effective_date") == policy_effective):
             expansion_policies.append(candidate)
     return {
         "source_quality": report / "observation_source_quality_audit" / f"observation_source_quality_audit_{target_date}.json",
