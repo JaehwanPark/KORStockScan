@@ -1593,6 +1593,39 @@ def _launcher_ai_context_overlay(target_date: str) -> dict[str, str]:
     return authoritative_runtime_env(target_date)
 
 
+def bootstrap_source_receipt_issues(manifest: dict[str, Any], *, max_source_bytes: int | None = None) -> list[str]:
+    """Check source bytes shared by full verification and report-only monitoring."""
+    findings = []
+    receipt_rows = [manifest.get("source_incumbent")]
+    receipt_rows.extend(manifest.get("operator_override_sources") or [])
+    receipt_rows.extend(
+        row.get("source_receipt")
+        for row in (manifest.get("operator_locks_applied") or [])
+        if isinstance(row, dict)
+    )
+    receipt_rows.extend(
+        row.get("source_receipt")
+        for row in (manifest.get("direct_family_receipts") or [])
+        if isinstance(row, dict)
+    )
+    for receipt in receipt_rows:
+        if not isinstance(receipt, dict) or not receipt.get("path"):
+            findings.append("source_receipt_missing")
+            continue
+        source_path = Path(str(receipt["path"]))
+        try:
+            if max_source_bytes is not None and source_path.stat().st_size > max_source_bytes:
+                findings.append(f"source_receipt_size_exceeded:{source_path}")
+                continue
+            current = _file_receipt(source_path)
+        except OSError:
+            findings.append(f"source_receipt_unreadable:{source_path}")
+            continue
+        if current.get("sha256") != receipt.get("sha256"):
+            findings.append(f"source_receipt_hash_mismatch:{source_path}")
+    return findings
+
+
 def verify_bootstrap(
     target_date: str, *, pid: int | None = None, write: bool = True,
     output_dir: Path | None = None,
@@ -1742,30 +1775,7 @@ def verify_bootstrap(
         != target_date
     ):
         findings.append("exact_date_runtime_apply_date_mismatch")
-    receipt_rows = [manifest.get("source_incumbent")]
-    receipt_rows.extend(manifest.get("operator_override_sources") or [])
-    receipt_rows.extend(
-        row.get("source_receipt")
-        for row in (manifest.get("operator_locks_applied") or [])
-        if isinstance(row, dict)
-    )
-    receipt_rows.extend(
-        row.get("source_receipt")
-        for row in (manifest.get("direct_family_receipts") or [])
-        if isinstance(row, dict)
-    )
-    for receipt in receipt_rows:
-        if not isinstance(receipt, dict) or not receipt.get("path"):
-            findings.append("source_receipt_missing")
-            continue
-        source_path = Path(str(receipt["path"]))
-        try:
-            current = _file_receipt(source_path)
-        except OSError:
-            findings.append(f"source_receipt_unreadable:{source_path}")
-            continue
-        if current.get("sha256") != receipt.get("sha256"):
-            findings.append(f"source_receipt_hash_mismatch:{source_path}")
+    findings.extend(bootstrap_source_receipt_issues(manifest))
     for row in manifest.get("direct_family_receipts") or []:
         if not isinstance(row, dict) or row.get("family") not in {
             "rising_missed_tp1_selector", "scalp_trailing_mechanical_three_axis_selector"

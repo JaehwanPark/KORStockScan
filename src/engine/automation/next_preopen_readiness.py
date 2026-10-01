@@ -184,7 +184,31 @@ def verify_prepared(target_date: str, *, require_today: bool = False,
         ):
             if receipt.get(key) != _sha(path):
                 raise ValueError(f"prepared_{key}_changed")
-        check = bootstrap.verify_bootstrap(target_date, output_dir=output_dir, write=False)
+        if generation_only:
+            # Reuse the sealed full PASS; no policy/economics re-evaluation.
+            manifest = _read(bootstrap.manifest_path(target_date, output_dir=output_dir))
+            check = _read(bootstrap.verify_path(target_date, output_dir=output_dir))
+            errors = bootstrap.bootstrap_source_receipt_issues(manifest, max_source_bytes=64 * 1024 * 1024)
+            quantity = manifest.get("initial_quantity_policy_receipt")
+            if quantity:
+                current_path = Path(quantity["current_file"])
+                if _sha(current_path) != quantity["current_file_sha256"]:
+                    errors.append("prepared_initial_quantity_generation_changed")
+                else:
+                    current_quantity = _read(current_path)
+                    for key in ("policy_file", "stage_file", "parent_policy_file", "parent_current_file"):
+                        if current_quantity.get(key) and (Path(current_quantity[key]).stat().st_size > 64 * 1024 * 1024
+                                or _sha(Path(current_quantity[key])) != current_quantity[key + "_sha256"]):
+                            errors.append("prepared_initial_quantity_source_changed")
+            elif bootstrap.INITIAL_QUANTITY_CURRENT.exists():
+                errors.append("prepared_initial_quantity_generation_changed")
+            if (manifest.get("target_date") != target_date
+                or check.get("target_date") != target_date
+                or manifest.get("manifest_sha256") != receipt["manifest_content_sha256"]
+                or check.get("findings") or errors):
+                raise ValueError("prepared_sealed_generation_changed:" + ",".join(errors))
+        else:
+            check = bootstrap.verify_bootstrap(target_date, output_dir=output_dir, write=False)
         if (check.get("status") != "pass"
                 or check.get("manifest_sha256") != receipt["manifest_content_sha256"]):
             raise ValueError("prepared_bootstrap_changed:" + ",".join(check.get("findings") or []))

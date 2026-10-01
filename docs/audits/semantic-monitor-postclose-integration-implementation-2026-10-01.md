@@ -28,4 +28,12 @@
 
 실제 읽기 전용 health의 process/auth/resource/stale-lock은 PASS이며 artifact/cron은 과거 원천·일정 결손으로 FAIL, log는 warning이다. 전체 health GREEN을 주장하지 않는다. 보조 라벨 source gap 6건·writer plan 결손·운영 비교 0/6은 보존되고, 의미적 인계 `done`/prepared PASS와는 별개다. Telegram은 mock 계약만 검증했고 정규 알림 자연 소비는 기존 예약에서 확인한다.
 
+### 유효 준비본의 최종 성능 보완
+
+`167b0535`에서 실제 유효 준비본을 포함한 재측정은 artifact-only wall/CPU 1.695배, 정규 full wall 1.342배·CPU 1.376배로 상대 목표를 초과했다. 위 초기 측정은 작업본의 release identity mismatch로 준비본의 후속 검증이 생략된 범위였으므로 최종 수용 근거로 사용하지 않는다.
+
+원인은 generation-only 경로가 초기수량 정책 경제성까지 다시 검증한 구간이었다. 기존 bootstrap 원천 SHA 대사 블록을 같은 owner의 공통 순수 함수로 추출했다. 정규 감시는 봉인된 full PASS·manifest/env/검증 파일·incumbent/operator/lock/direct-family 원천·초기수량 current 및 네 원천 파일의 현재 해시를 확인하며 파일당 64 MiB 제한을 적용한다. 경제성을 재계산하거나 정책을 다시 선택하지 않는다. 정식 prepare/verify/PREOPEN 기본 전체 재검증은 그대로다. mock 회귀는 gen-only 경제성 재호출 금지와 원천 변경 차단을 추가 검증한다.
+
+보완 작업본의 같은 봉인 입력 정규 full 3회 비교 중앙값은 wall 0.6778→0.8024초(1.184배), CPU 0.6120→0.7297초(1.192배), RSS 170,712→175,732 KiB(1.029배)였다. 최종 불변 릴리스 재검증·새 준비본·코드 provenance와 실제 owner pin은 배포 인계 영수증에서 확인한다. 작업이 자정을 넘겼어도 승인된 기동 대상일은 **2026-10-02**, 닫힌 평가 원천은 **2026-09-30**으로 유지한다.
+
 실제 내일 PREOPEN·Main PID·Widget 날짜 전환·Episode 당일 preflight/live 소비는 `FinalPolicyStartupAcceptance1002`, 자연 v7/v4 장후 생성은 기존 해당 장후 owner가 확인한다. 준비 PASS를 미래 정상 기동이나 수익의 증명으로 취급하지 않는다.

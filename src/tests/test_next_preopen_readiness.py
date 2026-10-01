@@ -94,7 +94,7 @@ def test_prepare_isolated_then_detects_source_and_release_drift(monkeypatch, tmp
     for path in (controller, summary, policy):
         _json(path, {"source_date": source})
 
-    def receipts(_source, _target):
+    def receipts(_source, _target, **kwargs):
         assert (_source, _target) == (source, target)
         return {"controller_path": str(controller), "controller_sha256": readiness._sha(controller),
                 "summary_path": str(summary), "summary_sha256": readiness._sha(summary),
@@ -106,13 +106,14 @@ def test_prepare_isolated_then_detects_source_and_release_drift(monkeypatch, tmp
     def write(day, *, output_dir):
         output_dir.mkdir(parents=True, exist_ok=True)
         _json(readiness.bootstrap.manifest_path(day, output_dir=output_dir),
-              {"manifest_sha256": "m" * 64})
+              {"manifest_sha256": "m" * 64, "target_date": day,
+               "source_incumbent": readiness.bootstrap._file_receipt(controller)})
         readiness.bootstrap.env_path(day, output_dir=output_dir).write_text("export TEST=1\n")
         return {"selected_release_sha": selected[0], "source_incumbent_target_date": "2026-10-01",
                 "manifest_sha256": "m" * 64}
 
     def verify(day, *, output_dir, write=True):
-        result = {"status": "pass", "findings": [], "manifest_sha256": "m" * 64}
+        result = {"status": "pass", "findings": [], "manifest_sha256": "m" * 64, "target_date": day}
         if write:
             _json(readiness.bootstrap.verify_path(day, output_dir=output_dir), result)
         return result
@@ -122,6 +123,15 @@ def test_prepare_isolated_then_detects_source_and_release_drift(monkeypatch, tmp
     now = datetime(2026, 10, 1, 17, 0, tzinfo=KST)
     assert readiness.prepare(source, target_date=target, now=now)["status"] == "prepared_verified"
     assert readiness.verify_prepared(target, now=now)["status"] == "pass"
+    with monkeypatch.context() as bounded:
+        bounded.setattr(readiness.bootstrap, "INITIAL_QUANTITY_CURRENT", tmp_path / "quantity-absent.json")
+        bounded.setattr(readiness.bootstrap, "verify_bootstrap", lambda *a, **kw: (_ for _ in ()).throw(
+            AssertionError("report-only generation check must not rerun policy economics")))
+        assert readiness.verify_prepared(target, now=now, generation_only=True)["status"] == "pass"
+        original = controller.read_bytes()
+        controller.write_text("{}")
+        assert readiness.verify_prepared(target, now=now, generation_only=True)["status"] == "fail"
+        controller.write_bytes(original)
     assert readiness.verify_prepared(target, require_today=True, now=now)["status"] == "fail"
     selected[0] = "b" * 40
     assert readiness.verify_prepared(target, now=now)["status"] == "fail"
