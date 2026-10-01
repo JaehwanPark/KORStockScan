@@ -30,3 +30,16 @@
 6. 같은 코드 릴리스에 정책만 갱신된 정상 흐름은 매일 commit·배포나 Main 수동 기동을 요구하지 않는다. active Widget의 정책 날짜 전환을 검증한다. 정책 결손·stale·CAS·custody/broker guard 실패는 원인을 복구하고 해당 owner부터 재검증하며 우회하지 않는다.
 
 실제 PID 정책 소비·주문·체결·terminal·비용 후 성과는 별도 수용이다. 외부 Project/Calendar sync는 실행하지 않는다.
+
+## 실제 배포와 최종 검증
+
+- 코드 커밋: `0a8fa0a0522c09261570bf961d737b328894a5b9`. 선택 릴리스: `/home/ubuntu/KORStockScan-runtime-releases/integrated-postclose-startup-20261001-0a8fa0a0`.
+- 새 wrapper/단계/장전 표적 시험 **320 PASS**, 불변 릴리스의 기동·정책 관련 11개 파일 **733 PASS / 43.58초**. 새 회귀 2개를 포함하며 기존 wrapper 실패 3개를 해소했다. 쉘 문법·compile·diff 검사와 print-only parser 통과.
+- 공통 selector와 13개 service/template override를 전환했다. release-set readback에서 122개 Episode instance의 source commit과 366개 기존 policy pin이 통과했다. cron 8개와 10/2 preopen/postclose plan이 새 릴리스를 가리킨다.
+- active Widget, Samsung/Doosan/Hanwha collector, fill notifier 5개를 재기동했다. 실제 PID cwd가 새 릴리스와 일치하고 `NRestarts=0`이다. Widget PID `2650386`; 10/1 기동 영수증의 선언된 systemd 환경 10개와 dated policy hash 비교 `verified_requested_startup_fields`, findings 0. 이 영수증은 내일 날짜 전환 소비나 수익을 증명하지 않는다.
+- 첫 준비 시도는 selector의 이전 선택 backup이 `data/runtime`에 있어 과거 generation을 검증하지 못해 fail-closed였다. 기존 내용 그대로 canonical `tmp`의 절대 backup으로 보존하고 정식 selector backup 필드를 수리했다. 과거 manifest·요약·strict·controller hash 또는 정책을 고쳐 쓰지 않았다. 이후 준비와 재검증 모두 통과했다.
+- [10/2 새 준비본](../../data/runtime/policy_bootstrap/prepared/2026-10-02/latest.json) `prepared_verified`; 같은 새 릴리스의 `--verify` `pass`, findings 0. 닫힌 9/30 controller·요약과 기존 10/2 Main policy hash는 유지된다. 운영 당일 env와 Main PID는 아직 생성하지 않았다.
+- [통합 전환 영수증](../../data/runtime/startup_readiness/2026-10-02/integrated_release_transition/transition.json), [실제 PID·미래일 정책 로더 확인](../../data/runtime/startup_readiness/2026-10-02/integrated_release_readback.json), [Widget 기동 필드 검증](../../data/runtime/startup_readiness/2026-10-02/widget_deployment_startup_verification.json)을 보존한다. 이전 selector backup과 새 override 목록은 rollback 증거이며 live 상태 ledger를 복원 대상으로 삼지 않는다.
+- Episode 58 ready·기존 격리 3, Widget 3종목·4세션은 불변이다. Widget evaluation 10/2 20:10, machine final refresh 10/2 21:15 timer는 active이고 현재 둘 다 PID 0이다. 원래 schedule을 변경하지 않았다.
+
+실제 10/2 07:32 custody·07:35 PREOPEN·07:55 Main PID 및 Widget 날짜 전환·각 Episode preflight/live 소비는 `[FinalPolicyStartupAcceptance1002]`에서 확인한다. 10/1의 중단/실패 분석 흔적을 성공으로 덮지 않는다. 05시 10/1 finalization의 원천 결손 실패는 현재 9/30 기반 10/2 준비와 별도 세대다.
