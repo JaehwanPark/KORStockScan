@@ -1,5 +1,7 @@
 # Report-Based Automation Traceability
 
+현행 장후 실행 구성은 [장후작업 현행 활성 목록](./audit-reports/2026-09-05-postclose-work-inventory.md)이 소유한다. 10/2 설치 대사 기준 삼성 독립 튜닝·PYRAMID·AVG_DOWN legacy calibration·정규 sim과 공통 Daily/EV는 퇴역/OFF다. 기존 AVG_DOWN shared-rebound·actual scale-in과 real post-sell 원천은 별도 owner다. 아래 날짜별 과거 schema/consumer 설명은 현행 예약이나 정책 활성화 권한을 복원하지 않는다.
+
 ## 2026-09-19 common tuning retirement
 
 `daily_threshold_cycle_report`, `threshold_cycle_ev_report`, generic `threshold_cycle_preopen_apply`, calibration wrapper는 현행 producer/consumer에서 제거됐다. 이전 날짜 설명은 당시 schema의 감사 문맥일 뿐 현재 실행 owner가 아니다. 현행 경로는 family evaluator와 dated publisher가 직접 정책 receipt를 만들고, `automation.runtime_policy_bootstrap`이 검증된 incumbent·유효 operator lock·명시 OFF와 family receipt byte hash를 exact-date env/manifest로 합성하는 구조다. Bootstrap은 EV를 계산하거나 source-only/sim/probe/CF를 실거래 후보로 바꾸지 않는다.
@@ -91,7 +93,7 @@ PREOPEN applied-policy 검증으로만 소비한다. 이전 주문·보유는 �
 
 - [9/7 source 복구](./audit-reports/2026-09-08-postclose-priority-repair-review.md)는 NXT 실제 lifecycle2·과거 순손익 +453원의 귀속 복원이다. headline null과 복원된 특정 cohort 손익은 서로 다른 집합이다. AI source/metadata terminal도 provider replay 또는 live promotion 성공이 아니다. 과거 market18행·identity2행과 machine ingress-loss는 합성/반복 재실행으로 닫지 않고 기존 checklist의 다음 exact-date source에서 확인한다.
 
-- 상세검토 상태는 [장후작업 목록](./audit-reports/2026-09-05-postclose-work-inventory.md), 실행·복구와 추천 구현은 명시적으로 호출된 [장후 모니터링 지시문](./postclose-tuning-result-review-task-instructions.md)을 따른다. 문서 현행화/읽기 요청은 그 지시문의 실행 요청이 아니다.
+- 설치 예약·stage 의존·내부 producer·정책 소비·OFF/퇴역 구분은 [장후작업 현행 활성 목록](./audit-reports/2026-09-05-postclose-work-inventory.md), 실행·복구와 추천 구현은 명시적으로 호출된 [장후 지시문](./postclose-tuning-result-review-task-instructions.md)을 따른다. 당일 OPEN·Acceptance와 날짜별 결과는 checklist/원 artifact가 소유한다. 문서 현행화/읽기는 실행 요청이 아니다.
 - #8/#9/#11 및 #119/#23/#49/#76/#78/#82의 완료 보완을 자연 산출물·PREOPEN/PID·실수익 확인과 분리한다. #77은 [R0–R3 보완 리뷰](audit-reports/2026-09-07-main-ai-r0-r3-remediation-review.md)에서 격리·연구/누적 심사·paired 명목 비교를 보완했다. 새 결함/계약 변경/필수 handoff 실패 없이는 상세검토를 다시 열지 않는다. #79/#80 전체 검토 완료를 연결부 시험으로 대체하지 않는다.
 - #11 preflight는 예정 전 `not_yet_due`이며 수동 진단을 자연 실행으로 기록하지 않는다. row/window/cohort 결손은 안정적으로 격리하고, 전역 계약 결손·격리 불가는 전체 차단한다. #74 final audit와 consumer별 실제 tuning 허용을 대사한다.
 - #77/#81의 R0–R3 실행기·인계·legacy/current-axis runtime은 완전 제거한다. 예약 호출과 SKIP producer도 없으며 과거 표본·승인으로 복원하지 않는다. 지속적 offline prompt/input 연구와 별도 KRX `entry_setup_live_policy` 승격·PREOPEN·receipt는 독립 계약이다.

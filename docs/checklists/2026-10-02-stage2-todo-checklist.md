@@ -40,6 +40,10 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 
 ## Main 기계판정 미진입 회복 우선순위
 
+- [ ] `[ErrorDetectorDaemonLogDedup1002] 동일 장후 실패의 daemon 반복 ERROR 기록 수리` (`Due: 2026-10-02`, `Slot: INTRADAY`, `TimeWindow: 08:05~08:45`, `Track: RuntimeStability`)
+  - Source: [daemon 반복 경보 수리](../audits/error-detector-daemon-incident-dedup-review-2026-10-02.md), [운영 출력 계약](../time-based-operations-runbook.md).
+  - Acceptance: bot/standalone 매 주기 health FAIL·검사/heartbeat 유지, 동일 사고 로그·ADMIN 알림 1회, 새 원천/사유/심각도·실제 PASS/재발·날짜 전환·handler 실패 회귀를 검증한다. 기존 사용자 배포/재기동 승인 아래 정책 실행값·원천 FAIL·독립 owner를 보존하고 정식 준비/PREOPEN/guarded restart/PID 소비를 각각 대사한다. 정확일자 launcher gate 미충족이면 현재 PID를 중단하지 않는다.
+
 - [x] `[CronFinalizationDependencyRepair1002] 아침 최종화 실패와 cleanup 미실행 원인 분리` (`Due: 2026-10-02`, `Slot: PREOPEN`, `TimeWindow: 07:00~07:30`, `Track: RuntimeStability`)
   - Source: [아침 경보 원인·수리](../audits/morning-finalization-dependency-alert-review-2026-10-02.md), [운영 복구 계약](../time-based-operations-runbook.md).
   - Acceptance: exact-source 최신 pre-cleanup FAIL에서만 cleanup을 `blocked_by_finalization`으로 분리하고 실제 parent FAIL·이미 실행한 cleanup FAIL을 유지한다. 다른 날짜/owner·recovery START·세대 변경 반례, 표적 회귀·compile/diff·parser와 선택 릴리스의 실제 순수 감시 결과를 검증한다. 배포 후 승인된 9/30 기반 10/2 prepared를 정식 재생성·전체 verify하며 정책/독립 서비스 pin/예약을 보존한다.

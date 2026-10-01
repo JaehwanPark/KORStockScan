@@ -13,7 +13,7 @@
 - `checklists/YYYY-MM-DD-stage2-todo-checklist.md`: 당일 실행 항목의 유일한 소유 문서.
 - `time-based-operations-runbook.md`: 장전, 장중, 장후, 20:05 EOD 데이터 갱신과 20:10 POSTCLOSE controller 확인 절차.
 - `report-based-automation-traceability.md`: report 산출물, downstream consumer, runtime mutation 금지선, postclose chain contract.
-- [장후 상세검토 진행목록](audit-reports/2026-09-05-postclose-work-inventory.md): stable index별 코드 검토 완료와 기존 OPEN 자연/경제성 acceptance를 분리한다.
+- [장후작업 현행 활성 목록](audit-reports/2026-09-05-postclose-work-inventory.md): 설치 cron/timer, 15개 stage의 의존관계, main 내부 producer, 최종화·정책 소비와 OFF/퇴역 작업을 구분한다. 당일 OPEN·Acceptance는 checklist, 날짜별 결과는 원 artifact·감사 기록이 소유한다.
 - [장후 모니터링 지시문](postclose-tuning-result-review-task-instructions.md): 명시적으로 호출했을 때만 bounded recovery·safe-scope 추천 fixed-point를 수행한다. 이 문서의 열람/현행화는 실행 권한이 아니다.
 - `intraday-monitoring-task-instructions.md`: 메인 봇·위젯·에피소드 매매기계와 micro-reversion·AI 판단품질·smoothing·위젯·에피소드 튜닝축의 장중 점검 계약.
 - `widget-signal-auto-trading-runbook.md`: 위젯 매매의 독립 owner, 정책과 청산 계약.

@@ -4,7 +4,7 @@
 
 작업별로 **실행 정상성 / 분석 유효성 / 결손·결함 / 달성 가능성 / 직접 소비·다음 조치**를 따로 판정한다. exit 0·DONE·파일 생성·코드 존재·표본 증가를 경제성 성공으로 대체하지 않는다. 후보가 없어도 유효한 비교 끝에 incumbent carry가 나온 것은 의도한 분석결과일 수 있다.
 
-현행 활성 목록은 [장후작업 목록](audit-reports/2026-09-05-postclose-work-inventory.md)이 소유한다. 설치 cron·systemd 유효 설정과 실제 실행 release/snapshot으로 목록을 대사한다. 과거 PID·commit·완료 이력을 지시문에 누적하지 않는다. 원칙·active/observe/OFF·rollback은 [Plan Rebase §1–§8](plan-korStockScanPerformanceOptimization.rebase.md), 실행 ID·Due·Acceptance는 현재 KST 체크리스트가 소유한다. [runbook](time-based-operations-runbook.md), [traceability](report-based-automation-traceability.md), [release routing](runtime-release-routing.md)은 필요한 해당 계약만 읽는다.
+설치 예약·stage 의존·내부 producer·정책 소비·OFF/퇴역 구성은 [장후작업 현행 활성 목록](audit-reports/2026-09-05-postclose-work-inventory.md)이 소유한다. 설치 cron·systemd 유효 설정과 실제 실행 release/snapshot으로 목록을 대사한다. 날짜별 결과는 원 artifact/감사 기록, 당일 OPEN·Acceptance는 현재 KST 체크리스트가 소유한다. 과거 PID·commit·완료 이력을 지시문에 누적하지 않는다. 원칙·active/observe/OFF·rollback은 [Plan Rebase §1–§8](plan-korStockScanPerformanceOptimization.rebase.md), 운영 계약은 [runbook](time-based-operations-runbook.md), [traceability](report-based-automation-traceability.md), [release routing](runtime-release-routing.md)의 필요한 절을 따른다.
 
 문서 자동 현행화는 [게시 계약](monitoring-instruction-refresh.md)을 따른다. 자동 문서 정비가 장후 점검·거래 실행·추천 구현을 호출하지 않는다.
 
@@ -46,7 +46,7 @@ OFF·퇴역 producer, 유효 frozen policy/checkpoint, 별도 custody/override·
 
 ## 3. 현재 장후 실행 owner
 
-아래는 정기 실행 owner다. 상세 활성 producer·조건부 단계·embedded 출력·후행 소비는 [현행 목록 §4](audit-reports/2026-09-05-postclose-work-inventory.md#4-2010-main-wrapper-상세-목록)을 따른다. wrapper의 시작 예약과 내부 단계의 실제 완료 시각을 혼동하지 않는다.
+아래는 정기 실행 owner다. stage 등록/의존은 [현행 목록 §2](audit-reports/2026-09-05-postclose-work-inventory.md#2-stage-영수증과-의존관계), 독립 timer는 §3, main 내부 producer·조건부 단계·embedded 출력은 [§4](audit-reports/2026-09-05-postclose-work-inventory.md#4-2010-main-wrapper-상세-목록), 최종화/정책 소비는 §5를 따른다. wrapper의 예약과 실제 완료 시각을 구분한다.
 
 | 예약 | 실행 owner | 기계적 결과와 직접 소비 확인 |
 | --- | --- | --- |
@@ -70,7 +70,7 @@ OFF·퇴역 producer, 유효 frozen policy/checkpoint, 별도 custody/override·
 
 Wrapper는 비동기 `pre_submit_delay` 및 atomic sizing consumer를 시작하기 전에 대상일 producer summary를 동일 대상일 raw pipeline 원천과 대사해 source ledger로 봉인한다. raw가 날짜·프로파일 검증을 통과하고 중복·격리 결손이 없는데 요약 count/hash만 어긋나면 해당 거래일 raw에서 summary를 재구성하고 stage별 count/hash를 다시 확인한 뒤 봉인한다. raw 검증 또는 재구성 대사가 실패하면 하류 계산을 진행하지 않는다.
 
-`main_machine_policy`는 `--winrate-policy-only --publication-date <원 발행일>`로 exact `KRX|KRX_REGULAR`의 비용 결속 첫 도달 승패·고유 기회 승률을 계산한다. 초기 68.75bp와 후속 train/독립 holdout 허들을 분리하고, 같은 원천일의 입력·제외·상황·승패 분모와 parent/candidate/staged bundle hash를 terminal까지 대사한다. incumbent carry 검증은 staged generation과 날짜가 같은 후속 generation의 유한 ancestry를 따라가며, 각 generation의 원천·승계 증거·machine policy가 일치하는 경우에만 허용한다. 장후에는 다음 거래일 정책을 대기 발행하며 `current.json`을 옮기지 않는다. `legacy_machine_report`는 EV 진단을 계속 생산하지만 대기 중인 승률 machine 정책을 덮어쓰지 않는다. 장전 `--activate-dated-winrate`가 정확한 parent CAS·원천·정책을 확인한 뒤 pointer를 전환하고, 별도의 bootstrap/loader/선택 release/실제 PID 대사가 이어진다. 후보 없음·원천 결손은 마지막 검증 정책 payload/hash를 carry하며 0/0 승률로 환산하지 않는다.
+`main_machine_policy`는 `--winrate-policy-only --publication-date <원 발행일>`로 exact `KRX|KRX_REGULAR`의 비용 결속 첫 도달 승패·고유 기회 승률을 계산한다. 초기 68.75bp와 후속 train/독립 holdout 허들을 분리하고, 같은 원천일의 입력·제외·상황·승패 분모와 parent/candidate/staged bundle hash를 terminal까지 대사한다. incumbent carry 검증은 staged generation과 날짜가 같은 후속 generation의 유한 ancestry를 따라가며, 각 generation의 원천·승계 증거·machine policy가 일치하는 경우에만 허용한다. 장후에는 다음 거래일 정책을 대기 발행하며 `current.json`을 옮기지 않는다. `legacy_machine_report`는 이름을 유지한 full Main 평가·전략 정제 owner이며 현재 `--machine-only --write --activate-now`로 적격 전략 generation을 검증한다. 기존 publisher의 scope/source/비용/독립 검증과 parent CAS를 통과한 current 선택은 새 attempt부터 다음 적격 generation까지 승계한다. 승률 dated staging, full 전략 current 선택, compact dated consumer를 각각 대사하며 current 파일 선택을 실제 PID 소비로 표시하지 않는다. 장전 `--activate-dated-winrate`가 정확한 parent CAS·원천·정책을 확인한 뒤 pointer를 전환하고, 별도의 bootstrap/loader/선택 release/실제 PID 대사가 이어진다. 후보 없음·원천 결손은 마지막 검증 정책 payload/hash를 carry하며 0/0 승률로 환산하지 않는다.
 
 Threshold-cycle 최종 closure는 대상일 owner stage가 terminal이고, recovery에서 재사용하는 stage는 `--check`로 code/output/input/prerequisite hash가 모두 유효한 뒤 진행한다. stale collector/research downstream은 predecessor 순서로 갱신한다. main policy를 재계산하면 stale `main_auxiliary_policy`도 summary 전에 갱신하고, 비동기 policy producer/consumer의 terminal을 `postclose_summary_handoff --stage wait`로 확인한 다음 summary와 checklist의 source hash를 고정한다. candidate and active policy hashes are compared within the same exact scope. 그 다음 `runtime_approval_summary` → checklist → blocking `summary_handoff` → scoped/global strict verifier 순서로 생성·검증한다. summary/checklist를 owner stage 완료 전에 생성해 둔 경우 final consumer로 재사용하지 않는다.
 

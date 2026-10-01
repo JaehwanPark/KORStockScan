@@ -250,3 +250,30 @@ def test_monitor_snapshot_isolated_wrapper_rejects_stale_manifest(
         assert "manifest is not fresh" in str(exc)
     else:
         raise AssertionError("stale manifest must not close the scheduler job")
+
+
+def test_error_detection_loop_writes_each_health_report_but_logs_one_incident(monkeypatch):
+    from src.engine.error_detectors.base import DetectionResult
+    import src.utils.logger as logger
+    reports, errors, alerts, heartbeats = [], [], [], []
+    failure = DetectionResult('cron_completion', 'cron', 'fail', 'terminal failure')
+    class FakeEngine:
+        def __init__(self, **kwargs): pass
+        def run_all(self): return [failure]
+        def build_report(self, results): return {'target_date': '2026-10-02', 'severity': results[0].severity}
+        def write_report(self, report): reports.append(report)
+    def stop_after_four(_interval):
+        if len(reports) == 4: raise KeyboardInterrupt
+    monkeypatch.setattr(bot_main, 'ErrorDetectionEngine', FakeEngine)
+    monkeypatch.setattr(bot_main, 'write_heartbeat', lambda name: heartbeats.append(name))
+    monkeypatch.setattr(bot_main.time, 'sleep', stop_after_four)
+    monkeypatch.setattr(logger, 'log_error', errors.append)
+    bus = SimpleNamespace(publish=lambda *args: alerts.append(args))
+    import pytest
+    with pytest.raises(KeyboardInterrupt):
+        bot_main.error_detection_loop(60, bus)
+    assert len(reports) == len(heartbeats) == 4
+    assert all(r['severity'] == 'fail' for r in reports)
+    assert errors == ['[ERROR_DETECTION] cron_completion: terminal failure']
+    assert len(alerts) == 1 and alerts[0][0] == 'SYSTEM_HEALTH_ALERT'
+    assert alerts[0][1]['audience'] == 'ADMIN_ONLY'

@@ -62,6 +62,37 @@ MODE_DETECTOR_MAP = {
 }
 
 
+def iter_daemon_alert_events(results, state, *, target_date):
+    """Emit incident transitions; commit only after the caller handles an event.
+
+    Full health reports remain independent of this in-memory output filter.
+    A warning is not recovery, and a date rollover cannot repair an old failure.
+    """
+    for result in results:
+        did = result.detector_id
+        previous = state.get(did)
+        is_alert = result.severity == "fail" or (
+            did == "kiwoom_auth_8005_restart" and result.severity == "warning"
+        )
+        if is_alert:
+            details = result.details or {}
+            source_binding = (
+                {key: value for key, value in details.items()
+                 if key.endswith("_source_date") or key.endswith("_predecessor")}
+                if did == "cron_completion" else {}
+            )
+            identity = (target_date, result.severity, result.summary,
+                        json.dumps(source_binding, sort_keys=True, default=str))
+            if previous is None or previous["identity"] != identity:
+                yield "alert", result
+                state[did] = {"identity": identity, "target_date": target_date}
+        elif result.severity == "pass" and previous is not None:
+            kind = ("recovered" if previous["target_date"] == target_date
+                    else "current_date_pass")
+            yield kind, result
+            state.pop(did, None)
+
+
 class ErrorDetectionEngine:
     def __init__(
         self,
@@ -484,15 +515,22 @@ def main():
 
 def _daemon_loop(interval: int, dry_run: bool, mode: str = "full"):
     log_info(f"[ERROR_DETECTION] Daemon mode started, interval={interval}s mode={mode}")
+    alert_state = {}
     while True:
         try:
             engine = ErrorDetectionEngine(dry_run=dry_run, mode=mode)
             results = engine.run_all()
             report = engine.build_report(results)
             engine.write_report(report)
-            for r in results:
-                if r.severity == "fail":
+            for kind, r in iter_daemon_alert_events(
+                results, alert_state, target_date=report["target_date"]
+            ):
+                if kind == "alert":
                     log_error(f"[ERROR_DETECTION] {r.detector_id}: {r.summary}")
+                elif kind == "recovered":
+                    log_info(f"[ERROR_DETECTION] {r.detector_id}: recovered to pass")
+                else:
+                    log_info(f"[ERROR_DETECTION] {r.detector_id}: current-date check passed; previous-date failure preserved")
         except Exception as e:
             log_error(f"[ERROR_DETECTION] Daemon loop error: {e}")
         time.sleep(interval)

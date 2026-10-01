@@ -63,6 +63,7 @@ from src.utils.constants import RESTART_FLAG_PATH, TRADING_RULES
 from src.engine.error_detectors.process_health import reset_heartbeat, write_heartbeat
 from src.engine.error_detector import (
     ErrorDetectionEngine,
+    iter_daemon_alert_events,
     REPORT_DIR as ERROR_REPORT_DIR,
 )
 from src.trading.samsung_morning_one_share.authority_handoff import (
@@ -162,7 +163,6 @@ def error_detection_loop(interval: int, event_bus):
     from src.utils.logger import log_info as ed_log_info
 
     alert_state: dict[str, dict] = {}
-    ALERT_COOLDOWN_SEC = 600
     while True:
         try:
             write_heartbeat("error_detection")
@@ -170,45 +170,23 @@ def error_detection_loop(interval: int, event_bus):
             results = engine.run_all()
             report = engine.build_report(results)
             engine.write_report(report)
-            now_ts = time.time()
-            for r in results:
-                did = r.detector_id
-                prev = alert_state.get(did, {})
-                prev_severity = prev.get("severity", "pass")
-                prev_summary_hash = prev.get("summary_hash", "")
-                prev_ts = prev.get("ts", 0)
-                curr_summary_hash = str(hash(r.summary))
-                is_alert_severity = r.severity == "fail" or (
-                    r.detector_id == "kiwoom_auth_8005_restart"
-                    and r.severity == "warning"
-                )
-
-                if is_alert_severity:
+            for kind, r in iter_daemon_alert_events(
+                results, alert_state, target_date=report["target_date"]
+            ):
+                if kind == "alert":
                     ed_log_error(f"[ERROR_DETECTION] {r.detector_id}: {r.summary}")
-                    is_transition = prev_severity != r.severity
-                    is_new_summary = curr_summary_hash != prev_summary_hash
-                    cooldown_ok = (now_ts - prev_ts) >= ALERT_COOLDOWN_SEC
-                    if is_transition or (is_new_summary and cooldown_ok):
-                        event_bus.publish(
-                            "SYSTEM_HEALTH_ALERT",
-                            {
-                                "message": f"{r.detector_id}: {r.summary}",
-                                "audience": "ADMIN_ONLY",
-                                "parse_mode": "HTML",
-                            },
-                        )
-                        alert_state[did] = {
-                            "severity": r.severity,
-                            "summary_hash": curr_summary_hash,
-                            "ts": now_ts,
-                        }
-                elif r.severity == "pass" and prev_severity in {"fail", "warning"}:
+                    event_bus.publish(
+                        "SYSTEM_HEALTH_ALERT",
+                        {
+                            "message": f"{r.detector_id}: {r.summary}",
+                            "audience": "ADMIN_ONLY",
+                            "parse_mode": "HTML",
+                        },
+                    )
+                elif kind == "recovered":
                     ed_log_info(f"[ERROR_DETECTION] {r.detector_id}: recovered to pass")
-                    alert_state[did] = {
-                        "severity": "pass",
-                        "summary_hash": "",
-                        "ts": now_ts,
-                    }
+                else:
+                    ed_log_info(f"[ERROR_DETECTION] {r.detector_id}: current-date check passed; previous-date failure preserved")
         except Exception as e:
             ed_log_error(f"[ERROR_DETECTION] Daemon loop error: {e}")
         time.sleep(interval)

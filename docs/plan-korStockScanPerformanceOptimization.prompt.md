@@ -12,7 +12,8 @@
 | producer/consumer·R0–R6·Metric Decision Contract | [Traceability](./report-based-automation-traceability.md)의 해당 계약 |
 | collector/report/apply/env 운영 | [Threshold README](../data/threshold_cycle/README.md)의 해당 절 |
 | clean tuning 기준 | [Policy artifact](../data/source_quality/clean_baseline_policy.json) |
-| 완료된 검토의 근거가 필요한 경우 | [Stable-index inventory](./audit-reports/2026-09-05-postclose-work-inventory.md)의 해당 행과 직접 evidence |
+| 현재 장후작업 구성·예약·stage·OFF/퇴역·정책 소비 확인 | [장후작업 현행 활성 목록](./audit-reports/2026-09-05-postclose-work-inventory.md)의 해당 owner와 직접 코드/설치 근거 |
+| 완료된 검토의 근거가 필요한 경우 | 해당 checklist의 완료 기록과 연결된 audit/원 artifact; 현행 목록을 과거 실행 결과로 사용하지 않음 |
 | 과거 결정/변경 확인을 요청받은 경우 | [Execution delta](./plan-korStockScanPerformanceOptimization.execution-delta.md), [archive](./archive/)의 해당 기록 |
 
 현재 owner는 당일 checklist에서 찾는다. 과거 완료 ID·PID·선택값을 현재 상태로 복제하지 않는다. 문서 열람·정비는 그 안의 monitoring/repair/restart 실행 요청이 아니다. 변경 검증과 사용자 수동 sync 규칙은 AGENTS.md §3/§5를 따른다.

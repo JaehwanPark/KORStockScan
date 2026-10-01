@@ -1,138 +1,153 @@
 # 장후작업 현행 활성 목록
 
-## 0. 현행 기준 — 2026-09-26 KST
+## 0. 현행 기준 — 2026-10-02 KST
 
-이 문서는 설치 schedule, 활성 wrapper 내부 호출, PREOPEN 소비자, 남은 점검 대상을 구분한다. 실행 이력과 이미 제거된 작업은 현행 작업으로 싣지 않는다. 결과 판정은 [장후 결과 점검 지시문](../postclose-tuning-result-review-task-instructions.md)을 따른다.
+이 문서는 설치 예약, stage, wrapper 내부 producer, 정책 소비, OFF/퇴역 작업의 현행 목록을 소유한다. 파일명은 기존 참조 주소로 유지한다. 당일 OPEN·Acceptance는 [10/2 체크리스트](../checklists/2026-10-02-stage2-todo-checklist.md), 원칙·권한은 [Plan Rebase](../plan-korStockScanPerformanceOptimization.rebase.md), 결과 점검·승인된 복구는 [장후 지시문](../postclose-tuning-result-review-task-instructions.md)이 소유한다. 문서 현행화는 작업 실행·보고서 재생성·배포·매매 재기동을 호출하지 않는다.
 
-현행 근거는 설치 `crontab -l`, systemd timer의 effective unit, 공통 router 선택 release wrapper, [2026-09-28 Stage2 체크리스트](../checklists/2026-09-28-stage2-todo-checklist.md), 직접 consumer다. 작업공간 파일의 존재만으로 설치 또는 자연 실행을 주장하지 않는다.
+확인 근거는 설치 `crontab -l`, 두 독립 systemd timer/service의 effective 설정, [선택 릴리스 영수증](../../data/runtime/runtime_release_selection.json), 소비 release의 wrapper/dispatcher다. 확인 시 공통 selector는 `9dcbd482`, Widget/machine 분석 service pin은 `0a8fa0a0`다. 이후 값은 원 영수증을 따른다. 독립 승인 root와 실제 worker/PID 소비를 구분한다.
 
-- 공통 router 선택 release·commit·선택 시각은 `data/runtime/runtime_release_selection.json`의 현재 영수증이 소유한다. 9/26 통합 배포의 Main PID는 0이었으며 9/28 자연 소비는 별도 확인한다.
+코드 owner는 [main wrapper](../../deploy/run_threshold_cycle_postclose.sh), [stage registry·dispatcher](../../src/engine/automation/postclose_summary_handoff.py), [Widget wrapper](../../deploy/run_widget_evaluation.sh), [machine wrapper](../../deploy/run_machine_microstructure_final_refresh.sh), [finalizer](../../deploy/run_postclose_finalization.sh)다. 작업본과 소비 root의 해당 코드도 대사한다. 과거 성공/실패를 현행 예약 또는 미래 자연 성공으로 복제하지 않는다.
+
+정책 갱신 원천은 사용자 지정 **2026-09-29 이후 적격 자료**다. 첫날에도 비용·원천·독립 시간순 검증 조건을 통과하면 후보를 판정하며 이후 적격 날짜를 누적한다. 기계 v7/보조 v4 신규 선택 계약은 **10/2 원천의 장후 계산부터** 적용한다. 일반 clean-baseline 하한과 과거 감사·custody·rollback 보존은 별도다.
 
 ## 1. 설치 schedule
 
-| 순서 | 시각 | 설치 owner | 현행 상태와 점검 경계 |
-| --- | --- | --- | --- |
-| 1 | 19:30~19:59 매일 | `run_monitoring_instruction_refresh.sh --mode postclose` | 설치 ON. workspace 문서 갱신 owner이며 release router를 통하지 않는다. 반복 분은 wrapper lock·currentness 계약으로 판정한다. |
-| 2 | 20:05 평일 | `run_runtime_release.sh eod` | 설치 ON. 공통 선택 release에서 EOD DB 갱신을 수행한다. 장후 경제성 평가와 별도 owner다. |
-| 3 | 20:10 평일 | `run_runtime_release.sh postclose` | 설치 ON. 선택 release의 main postclose wrapper를 실행한다. `THRESHOLD_CYCLE_RUN_SWING_POSTCLOSE=false`, bot action은 `stop`이다. |
-| 4 | 20:10 평일 | `run_runtime_release.sh controller`·`tuning` | 설치 ON. Main 선행 terminal과 같은 원천일 영수증을 확인한다. |
-| 5 | 20:10 평일 | `korstockscan-samsung-widget-evaluation.timer` | 설치 ON. 별도 unit의 effective release/policy pin과 실제 terminal을 당일 검증한다. |
-| 6 | 20:50 평일 | `run_runtime_release.sh archive` | 설치 ON. 원천 보존·압축 상태와 terminal을 별도 검증한다. |
-| 7 | 21:15 평일 | `korstockscan-machine-microstructure-final-refresh.timer` | 설치 ON. main summary/DONE보다 늦게 끝날 수 있으므로 최종 인계는 21:55 owner가 검증한다. |
-| 8 | 21:55 평일 | `run_runtime_release.sh finalize` | 설치 ON. 같은 원천일 active stage→summary/checklist→strict→controller→cleanup/detector를 확인한다. |
-| 9 | 다음 거래일 07:35 | `run_runtime_release.sh preopen` | 설치 ON. family publisher 결과로 runtime policy bootstrap을 생성·검증한다. 실제 PID 소비와 자연 주문·손익은 별도 acceptance다. |
+시각은 KST 예약 시각이다. EOD·자원·선행 대기 뒤의 실제 계산 시각은 run receipt가 소유한다.
 
-20:50 archive는 9/26 점검에서 설치 누락을 발견해 기존 선택 release router 경유 예약을 복구했다. 21:05 paired replay는 수동 호환 wrapper로만 유지한다. 설치 여부와 실행 성공은 별도 영수증이다. 9/24·9/25 휴장일에 평일 예약이 실행돼 실패 terminal을 남겼으며, 9/28 개장일 성공으로 소급 대체하지 않는다.
-
-BUY funnel, HOLD/EXIT, panic-sell defense, rising-missed, WS freshness, market-opportunity census는 장중·aftermarket source producer다. 독립 장후 튜닝 작업으로 중복 기재하지 않는다.
-
-## 2. main postclose wrapper의 현행 호출 순서
-
-아래 순서는 선택 release의 실제 코드 순서다. wrapper terminal, 경제성 승인, 다음 PREOPEN 소비, 실제 PID 소비를 서로 대체하지 않는다.
-
-| 순서 | owner | 역할과 판정 경계 |
+| 시각 | 설치 owner | 실행·점검 경계 |
 | --- | --- | --- |
-| 1 | `scalping.ai_action_outcome_calibration --ensure-economic-reference-only` | 비용 근거를 준비한다. 결손을 0으로 대체하지 않는다. |
-| 2 | `sniper_post_sell_feedback` | sim 결과와 후행 source를 정리한다. 실현 손익이나 승인으로 승격하지 않는다. |
-| 3 | `monitoring.rising_missed_intraday_feedback` | miss/blocker/후행 결과 진단을 만든다. |
-| 4 | `observation_source_quality_audit --audit-phase preflight` | exact-date 원천 admission과 row/window exclusion을 판정한다. |
-| 5 | `low_price_two_leg_expanded_candidate_research` → `low_price_two_leg_auto_expansion_policy` | 저가주 확장 family의 연구와 dated handoff다. |
-| 6 | `market_panic_breadth_collector --report-only` | 시장 context를 만든다. 주문 권한은 없다. |
-| 7 | `strategy_position_performance_report --sync` | real/sim, full/partial, `COMPLETED + valid profit_rate`, 비용 fact를 정리한다. |
-| 8 | `scale_in_split_order_plan` | 실제 ADD 원자성, 비용 차감 paired EV, 정책 receipt를 평가한다. |
-| 9 | `entry_split_order_plan` | submitted/no-submit/no-fill, 4-arm 비용 EV, 정책 receipt를 평가한다. |
-| 10 | `ai_decision_quality` | 오판 분석용 source label과 receipt를 materialize한다. 후보 선택·경제성 승격 owner는 아니다. |
-| 11 | `automation.entry_cancel_wait_tuning` | 실제 제출·취소·native exit/cost 기반 cancel-wait family를 평가한다. |
-| 12 | Swing 계열 | 기본 OFF. 현재 설치 env의 `THRESHOLD_CYCLE_RUN_SWING_POSTCLOSE=false`에서 실행하지 않는다. |
-| 13 | `pipeline_event_verbosity_report` | 운영 진단이다. EV 근거가 아니다. |
-| 14 | `observation_source_quality_audit --audit-phase final` | 최종 원천 품질과 경제성 admission을 다시 판정한다. |
-| 15 | `samsung_machine_entry_tuning` | 삼성 machine-entry 관측과 candidate receipt를 만든다. 2026-09-17 summary에서는 report-only·runtime 변경 없음이다. |
-| 16 | `low_price_two_leg_tuning` | actual/HELD/terminal/cost 기반 저가주 family 경제성을 평가한다. |
-| 17 | `ai_action_outcome_calibration --machine-only --require-policy-publication` | 메인 기계판정 full population을 평가하고 다음 거래일 incumbent/candidate 정책을 발행한다. compact와 별도 owner다. |
-| 18 | `entry_setup_paired_replay_batch --compact-only --execute-compact-candidate` → `--finalize-compact` | compact 보조 AI의 exact pre-AI plan 기반 paired 평가와 dated policy를 발행한다. 과거 결손은 제외하고 미래 정상 계약에서 새 표본을 기다린다. |
-| 19 | 성능/regime/producer-gap/stage-hook 분기 | 기본 OFF. 명시적 flag가 있을 때만 실행하며 현행 필수 owner가 아니다. |
-| 20 | `intraday_ws_freshness_monitor --finalize --monitor-only` | WS 품질을 마감하고 scanner family 입력을 정리한다. |
-| 21 | Swing propagation/review | Swing가 활성일 때만 실행한다. |
-| 22 | `rising_missed_classifier_prior` | 동일 attempt 비용 차감 paired 평가와 next-PREOPEN receipt를 만든다. 검증된 edge가 없으면 incumbent를 보존한다. |
-| 23 | `runtime_approval_summary` | 각 family의 직접 원천·경제성·정책·consumer 상태를 요약한다. 공통 후보를 만들지 않는다. |
-| 24 | `build_next_stage2_checklist` | source repair, 자연 성숙, handoff 항목을 다음 거래일 checklist에 투영한다. |
-| 25 | `verify_threshold_cycle_postclose_chain --main-mechanistic-summary-only` / `--compact-summary-only` | family scoped 검증이다. main의 summary/checklist 미검증, compact의 적용일 다중 파일 선택 결함을 확인했다. 아래 통합 계획에서 보완한다. |
-| 26 | `verify_threshold_cycle_postclose_chain --allow-pending-done-marker` | DONE 전 direct-family chain을 검증한다. |
-| 27 | `sync_docs_backlog_to_project --print-backlog-only` | 문서 parser만 검증한다. 외부 Project/Calendar sync는 실행하지 않는다. |
-| 28 | status/DONE marker | wrapper의 기계적 terminal을 기록한다. 경제성·자연 소비 승인과 분리한다. |
-| 29 | `verify_threshold_cycle_postclose_chain` final | DONE 뒤 strict를 실행하지만 terminal 날짜·exit code·실행 세대 검사와 immutable attempt 보존이 부족하다. 독립 widget/machine 최종 인계도 별도 보완 대상이다. |
+| 매일 19:30~19:59 | `run_monitoring_instruction_refresh.sh --mode postclose` | workspace 문서 갱신. 문서 currentness/lock만 확인하며 장후 계산을 실행하지 않는다. |
+| 평일 20:05 | router `eod` | 정확일자 EOD DB/status. 후처리의 선행 owner다. |
+| 평일 20:10 | router `postclose` | main wrapper. 설치 `BOT_ACTION=stop`, Swing OFF, Episode 신규 후보 연구 OFF. 전용 family 계산. |
+| 평일 20:10 | router `controller`, `tuning` | main/독립 선행 terminal과 같은 원천일 결과를 확인. 긴 대기는 계산 성공이 아니다. |
+| 평일 20:10 | `korstockscan-samsung-widget-evaluation.timer` | 호환 이름이며 기존 Widget 범위 전체의 `widget_policy`를 실행한다. |
+| 평일 20:50 | router `archive` | EOD 이후 DB archive·검증된 원천 보존. 경제성 정책 owner가 아니다. |
+| 평일 21:15 | `korstockscan-machine-microstructure-final-refresh.timer` | `machine_group`: capacity→독립 6개 stage→summary. Main/compact 정책은 main wrapper가 launch한다. |
+| 다음 KRX 거래일 05:00, 최대 06:50 | router `finalize --resolve-effective-today` | 직전 KRX 원천의 선행 확인→전체 controller/strict→cleanup→최종 detector→장전 준비. 선행 대기는 06:00에 끝나며 비거래일은 skip. |
+| 평일 07:00~20:55 매 5분, 21:00~21:50 매 5분 | router `error-detection` | 정규 full 감시. source-date final detector는 finalizer 내부 인계. 매매 권한 변경 없음. |
 
-### 2.1 별도 timer 내부 활성 작업
+`log_rotation_cleanup`은 finalization 내부 후행이다. `postclose_exit` snapshot도 main 내부 호출이며 별도 장후 cron을 추가하지 않는다. 두 timer는 설치 active이며 다음 예약의 자연 성공은 별도 확인한다.
 
-main의 29개 행은 OFF 분기·검증·marker를 포함하며 전체 경제 튜너 수가 아니다. 다음 독립 호출도 전체 재생성/최종 소비 검증 대상이다. 선택 release의 내부 호출과 설치 unit의 실제 import root는 별도로 대사한다.
+## 2. Stage 영수증과 의존관계
 
-| owner | 내부 호출 순서 | 점검 경계 |
+Registry의 15개 이름은 실제 계산 수나 경제 튜너 수가 아니다. `off/explicit_schedule_disabled`, `deferred/failed`, 정상 carry와 후보 선정을 exact-source terminal로 구분한다. `data/report/postclose_stage_terminal/YYYY-MM-DD/<stage>.json` v2의 source/publication/effective date, code/input/output/prerequisite hash, run/PID/시작·heartbeat·exit, policy disposition을 확인한다.
+
+| stage | 실행·선행 | 역할 |
 | --- | --- | --- |
-| widget evaluation | `monitoring.widget_advisory_calibration` → `widget_auto_trade_policy_calibration` → EOD gate → `widget_symbol_signal_policy_research` → `widget_symbol_runtime_policy` | 4개 producer와 EOD gate. 현 wrapper의 과거 target 지정 및 EOD as-of 계약 보완이 필요하다. |
-| machine final refresh | `monitoring.research_native_capacity_source` → `widget_collector_expansion_recommendation` → `machine_microstructure_attribution` → `automation.market_weakness_hysteresis_tuning` → `machine_entry_timing_tuning` → `machine_research_closed_loop_refresh` → `machine_microstructure_policy_approval` → `build_next_stage2_checklist` | 8개 호출. 과거 복구에서 현재 계좌/cost를 당시 값으로 채우지 않고 단계별 rc·정책·최종 consumer를 확인한다. |
+| `main_machine_policy` | main launch; 원천 preflight·자원 | `ai_action_outcome_calibration --winrate-policy-only`; 승률 정책/terminal·완료봉 원천·제외 분모·dated handoff. |
+| `pre_submit_delay` | main launch; family source ledger | 첫 제출 지연 튜닝/정책. 진입판정·분할 shape와 별도 축. |
+| `outcome_labels` | main launch | `ai_decision_quality --mode postclose`; exact route 후행 라벨. 후보 선정 권한 없음. |
+| `legacy_machine_report` | main launch | 이름을 유지한 full Main 평가·전략 정제. 현재 `--machine-only --activate-now`; 적격 전략의 current 선택까지 포함. |
+| `main_auxiliary_policy` | main launch; labels + full Main report | compact 응답→paired full-cost 경제성→선정·발행·consumer. |
+| `episode_policy` | main, 현재 OFF | expanded research/episode refresh 주소. 9/29 이후 forward-only 미지원 신규 연구 OFF. 기존 Episode 실매매/applied 정책은 유지. |
+| `widget_policy` | Widget timer; EOD | advisory→auto policy calibration→signal research→family refresh/정책 적용 보고. |
+| `research_capacity` | machine group 첫 단계 | native cash/inventory·capacity source receipt. 과거 원천을 현재 계좌 값으로 합성하지 않는다. |
+| `collector_recommendation` | machine group; labels | 기존 bounded collector 추천·exact source/replay 검증. |
+| `machine_attribution` | machine group | owner/route/시각/비용 결속 진단·다음 관측 manifest. |
+| `machine_timing` | machine group; attribution | 진입 확인 지연·rebound 연구 및 exact-date timing 정책. |
+| `market_weakness` | machine group; attribution | activation/release hysteresis와 exact-date 정책. |
+| `research_allocation` | machine group; Widget + Episode + capacity | 공동 자본 비교. 유효 Episode OFF면 공동 stage도 OFF. Widget 단독 연구를 공동 성공으로 바꾸지 않는다. |
+| `legacy_policy_approval` | machine group; attribution | 승인 queue/기존 PREOPEN handoff/원천 followup. 자체 주문·env 변경 없음. |
+| `summary_handoff` | 그룹 끝·최종 closure | producer/summary/checklist/strict와 controller 결속. summary-only `summary_verified`와 전체 `done` 구분. |
 
-## 3. 최근 직접 결과 — source date 2026-09-17
+`main_machine_policy` recovery의 빈 commands는 기존 발행물의 원천·승계 검증이며 새 계산으로 세지 않는다. OFF도 유효 terminal을 요구하며 missing을 OFF로 추정하지 않는다.
 
-`runtime_approval_summary_2026-09-17.json`은 직접 원천 `11/11`을 찾았고 `direct_evidence_complete`로 끝났지만, 경제성 결과는 `mixed`, validated edge `0`, 신규 policy candidate `0`이다. 다음 적용일은 2026-09-21이며 PREOPEN은 아직 `pending`, 실제 PID 소비는 `false`다.
+## 3. 독립 timer 내부 작업
 
-| family | 현재 결과 | EV·정책 해석 | 다음 상태 |
-| --- | --- | --- | --- |
-| `entry_cancel_wait` | 과거 `source_gap`; `execution_compact_coverage_unproven` | 9/17 manifest에 신규 execution census가 없어 ΔEV·실제 이익은 null. 미래 producer/평가 구현은 존재한다 | 현재 release의 미래 생성 회귀·summary 분류 재확인 |
-| `entry_split` | 과거 `source_gap`; `operating_paired_source_missing` | ES0–ES6 구현·회귀는 존재한다. 9/17 자료의 운영 비교 결손만으로 미래 구현 부재를 단정할 수 없다 | 기존 지원 입력 producer→평가→소비 검증·자연 표본 분리 |
-| `scale_in_split` | `insufficient_sample`; applicable paired fill `0` | 확인된 fill 5건이 있어도 현 평가 scope에 적용 가능한 표본이 0이라 EV는 null, incumbent 보존 | 자연 표본 대기와 closure-test 명시 보완 |
-| `low_price_two_leg` | `mixed`; `actual_sample_floor` | no-trade/no-fill과 held/custody/source-gap이 섞여 비용 차감 우위를 확정하지 못함, handoff blocked | 구조 수리와 자연 표본을 분리해야 함 |
-| `main_mechanistic_entry` | summary상 `insufficient_sample`; full population `1715` | 1715는 운영 유효 paired 수가 아니다. 진단 ΔEV `+0.0054462573%p`는 실제 순익이 아니며 changed 8건의 운영 평가 미지원·candidate `0` | 메인 계획 §14 ME8–ME13 계약 보완 후 자연 검증 |
-| `compact_auxiliary` | 과거 source gap; paired sample `0` | 과거 21건은 복구 불가로 제외했다. 미래 exact-plan producer 계약은 구현됐으며 신규 candidate `0`, incumbent 보존 | 첫 미래 자연 표본·독립 holdout 대기 |
-| `rising_missed` | `measured_no_edge`; 17일·302 paired, 후보 6 | 비용 차감 edge가 확인되지 않아 incumbent 보존 | terminal incumbent; 새 결함 없으면 재점검 대상 아님 |
-| `machine_entry`, `source_quality`, `ws_freshness` | `not_applicable` 또는 진단 | 직접 EV 승격 family가 아니다 | 원천/진단 owner로 유지 |
+### 3.1 Widget
 
-## 4. 남은 점검 대상
+outer wrapper→`widget_policy` dispatcher→정확일자 EOD gate→`widget_advisory_calibration`→`widget_auto_trade_policy_calibration`→`widget_symbol_signal_policy_research`→`machine_research_closed_loop_refresh --family widget` 순서다. 마지막 owner가 runtime policy/refresh를 결속한다. recovery는 검증된 기존 연구의 family refresh이며 전체 신규 연구 성공으로 기록하지 않는다.
 
-### 4.1 구현·계약 보완과 기존 구현 재확인
+기존 운영·명시 watch, `PASS_WITH_DATE_EXCLUSIONS`, 비용·동일 기회·holdout, deferred 모집단을 보존한다. 연구 max100/추가 history backfill 기본10의 기존 한도는 지시문·producer 계약을 따른다.
 
-상세 근거·수리 owner·회귀·재생성 순서는 [장후 통합 검증·복구·다음 PREOPEN 준비 계획](../proposals/postclose-integrated-verification-recovery-and-next-preopen-readiness-plan-2026-09-20.md)을 따른다. 9/17 실패와 9/18 봇 중지/관측 미적재를 구분하며, 9/18을 정상 무거래나 휴장으로 간주하지 않는다.
+### 3.2 Machine group
 
-| 우선순위 | 대상 | 재확인한 문제 | 완료 판정 |
-| --- | --- | --- | --- |
-| 1 | 목록 25–29번 | scoped 적용일/summary 검사, preterminal PASS 의미, terminal 날짜·exit·run identity, DONE 선발행, 덮어쓰는 immutable attempt | 다른 날짜·exit17의 성공 marker를 거부하고 현재 실행의 필수 증거에만 최종 DONE 발행 |
-| 2 | late-source·복구 날짜·기동 release | finalizer 미설치/폐기 의존, widget 혼합 root, 과거 target 제한, 현재 계좌를 과거 원천으로 쓸 위험 | 현재 활성 owner만 최종 인계. 서비스 내부 source 정렬·서비스 간 호환 검증. 명시 source9/17→publication→effective9/21 준비 |
-| 3 | main mechanistic 및 summary | future 계약을 보고서 flag로 verified 추정, full population을 paired로 표기. 메인 §14 보완은 별도 세션 owner | ME8–ME13 실제 지원 입력·경제성·미래 생성 회귀 인계 후 분류 갱신. 자연 대기만으로 종결하지 않음 |
-| 4 | cancel-wait / entry split | 과거 census/운영 원천 결손은 확인되지만 기존 미래 emitter·ES/CW 회귀가 있어 미구현 단정은 정정 | 기존 producer→projection/census→평가→정책 소비 회귀를 확인하고 과거 결손·자연 표본·신규 결함 분리 |
-| 5 | low-price actual/expansion | sample floor·durable source·custody 혼재, expansion receipt의 `target_date_matches=false` | 날짜 selector와 원천 결손을 별도 수리. profile별 분모·no-fill·held·유효 비용 비교 보존 |
-| 6 | direct-family closure metadata / scale-in | 일부 closure test missing, terminal clock 결손과 비교 부적격 혼재 | 검증된 future 계약의 owner/version/closure를 전달. 실제 미래 writer 미입증 상태는 repair로 유지 |
+capacity 후 collector·attribution·timing·weakness·allocation·legacy approval을 독립 dispatch하고, attribution 후속은 자기 선행을 기다린다. 마지막 summary를 인계한다. main machine·compact·labels·Episode는 그룹의 검증 대상이며 이 timer가 다시 계산하는 목록에 포함하지 않는다. heavy child는 host 공통 두 slot, waiting은 slot 밖에서 수행한다. collector 실패가 다른 독립 분석을 취소하지 않는다.
 
-### 4.2 위 계약이 검증된 후의 자연 acceptance와 별도 intake
+timing/weakness는 report와 다음 날짜 policy/evidence를 쓸 수 있고 attribution은 관측 manifest를 쓸 수 있다. unit exit/stop만으로 정책 미작성·오염을 판정하지 않고 실제 SHA·생성시각·carry/후보·consumer를 대사한다.
 
-- `DirectFamilyPreopenPolicyHandoff`: 9/21 07:35 PREOPEN부터 07:55/07:57/07:58 기동까지 날짜·hash·scope·accepted/rejected와 실제 PID 소비를 확인한다. 기존 08:45 시간창은 늦으므로 기존 ID를 유지해 바로잡는다.
-- `main_mechanistic_entry`: ME8–ME13 인계 완료 후 미래 exact changed-decision replay·독립 holdout·완료 비용 손익을 확인한다.
-- `compact_auxiliary`: 검증된 미래 exact pre-AI plan·stop·cost·owner·route 원천의 첫 자연 표본과 독립 holdout을 확인한다.
-- `scale_in_split`: terminal clock 생성 계약을 확인한 뒤 수량 2 이상이며 실제 분할 비교 가능한 ADD fill을 기다린다.
-- 정책별 자연 적용: 결정 변경·주문·체결·terminal·적용 버전별 중복 제거 손익은 배포·파일 생성과 분리한다.
-- `LowPriceExpandedResearchRepair0918`: 날짜 receipt/producer 결손은 먼저 수리하고 PREOPEN 실소비·자연 경제성을 확인한다.
-- `KiwoomCommonHealthOpportunityCostAcceptance0917`: 공통 health·실행 모델·compact 정책의 자연 소비와 실제 성과 owner를 보존한다.
-- `CodeImprovementWorkorderReview0918`: 자연 표본 대기가 아니라 사용자 구현 지시가 필요한 native recommendation을 판별하는 수동 intake다.
+## 4. 20:10 main wrapper 상세 목록
 
-시간은 유효 표본·독립 holdout·완료 손익의 축적을 도울 수 있다. 날짜·원천/identity·완료 판정·schedule·closure 결함은 구현/설치 계약을 고쳐야 한다. 후보0·null을 임의로 no-edge·0으로 바꾸지 않는다.
+현재 설치 설정의 논리 호출 순서다. launch는 완료 순서를 뜻하지 않는다. early source/resource/command 실패 뒤의 후행은 미실행으로 남긴다. OFF 분기는 §6에 모았다.
 
-## 5. PREOPEN 및 장중 소비 순서
+| 순서 | producer/제어 | 역할·후행 소비 |
+| --- | --- | --- |
+| 1 | EOD gate·실행 snapshot/run ID·bot isolation·자원 admission | 원천일/발행일/예정 적용일 고정. 설치 stop 동작은 기존 owner 권한. |
+| 2 | `ai_action_outcome_calibration --ensure-economic-reference-only` | 검증 비용·완료봉 근거 준비. live budget/정책 발행 없음. |
+| 3 | 비활성 stage OFF receipt | 현재 Episode 연구 OFF 포함. |
+| 4 | `monitoring.rising_missed_intraday_feedback` | miss/blocker·후행 진단. retired scout 복원 없음. |
+| 5 | `observation_source_quality_audit --audit-phase preflight` | 불량 row/window 제외, 전역 원천 결손 차단. |
+| 6 | `main_machine_policy` launch | 비용 결속 첫 도달 승률·dated 정책. 독립 AI/Widget 연구 완료를 기다리지 않는다. |
+| 7 | `market_panic_breadth_collector` | 시장 context/report. |
+| 8 | `strategy_position_performance_report` | exact trade fact-sync receipt 검증·실제 체결/terminal/cost census. `SKIP_DB`는 명시 skip. |
+| 9 | `scalping.scale_in_split_order_plan` | 적용 가능한 실제 ADD fill의 조건부 비용 비교·정책. |
+| 10 | source ledger 봉인→`pre_submit_delay` launch | 원천 summary/count/hash 대사 후 첫 제출 지연 평가. |
+| 11 | `scalping.entry_split_order_plan` | submit/no-fill·운영 owner·cost/budget·동일 모집단 분할 비교. |
+| 12 | `outcome_labels` launch | 검증 완료봉 exact route 재사용·기존 제한된 보강 또는 source gap. |
+| 13 | `automation.entry_cancel_wait_tuning` | 취소 대기·native 청산 비용 비교·정확 적용일 정책. |
+| 14 | `scalping.initial_quantity_policy` 조건부 refresh | 유효 current가 source date에 적용되면 immutable refresh stage. effective 전 skip, current 손상 실패. |
+| 15 | `pipeline_event_verbosity_report` | 운영 진단. primary 경제성 분모와 별도. |
+| 16 | `observation_source_quality_audit --audit-phase final` | 최종 consumer admission·원천 품질. |
+| 17 | `monitoring.low_price_two_leg_tuning` | 기존 actual/held/custody/terminal/cost 경제성. 신규 Episode 탐색 OFF와 별도. |
+| 18 | `legacy_machine_report`, `main_auxiliary_policy` launch | full Main 전략 정제; labels/full report 이후 compact 평가·승계. |
+| 19 | `intraday_ws_freshness_monitor --finalize --monitor-only` | 증분 state·symbol master·통합 scanner lookup-attention section. |
+| 20 | `monitoring.rising_missed_classifier_prior` | 정확 attempt 비용 차감 비교·next PREOPEN receipt. |
+| 21 | `run_monitor_snapshot_safe.sh`, profile `postclose_exit` | trade_review/post_sell_feedback/missed_entry_counterfactual/holding_exit_observation 네 산출물의 날짜·manifest/SHA. holding/exit 및 PREOPEN 원천. |
+| 22 | stage `wait`→`runtime_approval_summary` | 비동기 main family terminal 뒤 직접 family·정책·consumer 요약. 독립 timer 전체 완료와 별도. |
+| 23 | `build_next_stage2_checklist` | 다음 KRX 거래일 owner·source repair/자연 수용 투영. |
+| 24 | 성공한 full Main/compact scoped verifier | `--require-summary-handoff`·정확 publication/effective date. scoped PASS와 전체 closure 구분. |
+| 25 | preterminal verifier→print-only parser→`--seal-main-run --expected-run-id` verifier | pending DONE 검증·실제 run 봉인. 최신 실패를 과거 PASS로 덮지 않는다. |
+| 26 | `initial_quantity_activation` 조건부→main status/DONE | 적격 refresh만 release-set lock/parent CAS로 선택. main DONE과 독립 작업 전체 DONE 구분. |
 
-1. family publisher가 dated policy 또는 incumbent receipt를 만든다.
-2. `automation.runtime_policy_bootstrap`이 검증된 incumbent, operator override/lock, explicit retirement OFF를 합성한다.
-3. bootstrap은 EV를 계산하거나 후보를 만들지 않는다. 날짜·원천 hash·self hash·scope가 틀리면 fail closed한다.
-4. entry setup과 holding policy consumer는 family별 artifact를 직접 검증한다.
-5. `src/run_bot.sh`가 exact-date bootstrap env를 소비한다. 기존 실행 PID에 hot reload하지 않는다.
-6. 자연 PID 소비, 주문, 체결, terminal, 비용 반영 EV는 release 선택과 별도 acceptance다.
+<a id="44-ev승인최종검증-단계"></a>
 
-## 6. 현행 필수 작업이 아닌 코드
+## 5. 최종화와 정책 소비
 
-| 코드 owner | 현행 분류 |
+### 5.1 전체 장후 closure
+
+필수 stage의 유효 terminal/OFF→source generation→summary/tower/checklist→strict `--require-summary-handoff`→전체 controller `done`→cleanup→exact-source 최종 detector→장전 prepared를 확인한다. finalizer는 controller를 `POSTCLOSE_STAGE_WORKER=1`로 실행하고 `summary_verified`가 전체 `done`을 덮지 않게 검증한다. code/input/output/prerequisite/strict checklist generation 변경 시 이전 PASS를 재사용하지 않는다.
+
+선행 실패/timeout/deadline이면 cleanup을 실행하지 않는다. cron은 exact-source 최신 pre-cleanup FAIL과 cleanup run 부재를 `blocked_by_finalization`으로 구분하며 parent FAIL을 유지한다. 실제 cleanup 실패·미상 원인·다른 날짜는 일반 판정이다. 복구는 원본 FAIL을 보존한 승인된 `--recover-closed-target`와 정식 선행 재검증을 따른다.
+
+### 5.2 정책별 선택 경계
+
+| owner | 선택·소비 경계 |
 | --- | --- |
-| `runtime_apply_gap_audit`, `key_lineage_ledger`, `conversion_lane` | 비활성 진단. 직접 family 검증의 완료 조건이 아니다. |
-| `build_code_improvement_workorder` | main wrapper에서 OFF. 사용자 구현 지시가 있을 때만 쓰는 수동 작업본이며 자동 runtime 변경 owner가 아니다. |
-| `run_ai_entry_setup_paired_replay_postclose.sh` | 수동 호환 wrapper. 설치 schedule의 owner가 아니다. |
-| Swing discovery/lifecycle/pattern modules | 기본 OFF. 명시적 Swing scope에서만 실행한다. |
-| performance/regime/producer-gap/stage-hook modules | 기본 OFF. 코드 존재를 설치 또는 당일 결손으로 해석하지 않는다. |
+| Main 승률 | dated staging→정확 날짜 `--activate-dated-winrate`/parent CAS→PREOPEN/bootstrap/PID. |
+| Main full 전략 정제 | `--machine-only --write --activate-now`→적격 scope/source/비용/승계 검증→immutable generation/current parent CAS. 현행 지속 계약은 새 attempt부터 소비하고 다음 적격 generation까지 승계한다. current·dated handoff·PID 각각 확인. |
+| Compact 보조 AI | paired full-cost/응답/독립 검증→machine 부모 결속 publisher/dated consumer/PREOPEN. CAUTION 후행 경로·원천/비용 결손을 성공으로 대체하지 않는다. |
+| Entry/submit/scale-in/timing/weakness/수량/holding/exit | 전용 publisher·bounded 축·부모/날짜·override/lock·rollback/loader 계약. 공통 보고서 성공으로 새 live 권한을 만들지 않는다. |
+| Widget/Episode | applied policy·profile/격리·systemd pin·loader/preflight/live. Episode 연구 OFF와 기존 매매 owner 소비는 별개. |
 
-## 7. 공통 결과 점검 순서
+v7/v4 후보는 해당 계획의 source-date 계약과 기존 publisher/승계 권한을 모두 만족해야 한다. 10/2 장중의 이미 선정된 정책을 문서 현행화로 바꾸지 않는다. 계획의 다음 거래일 적용 목표와 실제 activation/dated receipt를 함께 대사한다.
 
-각 활성 owner를 `terminal → 원천 날짜·해시·표본/제외 분모 → 비용 반영 paired EV·일별 순익·tail·노출 → 독립 holdout → policy receipt → 직접 runtime consumer → 자연 PID·결정·주문·terminal` 순서로 확인한다. `PASS`, `DONE`, 파일 존재, release receipt는 경제성 승인과 분리한다. source gap, no-trade, no-fill, partial, held, custody-censored를 서로 대체하지 않는다. ETA를 입증할 수 없으면 `null`로 둔다.
+격리된 `next_preopen_readiness --prepare/--verify`와 실제 당일 활성화/PID 소비를 구분한다. release 변경 시 정식 준비·전체 verify를 다시 수행한다. 07:35 PREOPEN→07:55 Main→Widget 날짜 전환/Episode 예약의 자연 receipt를 확인한다. `postclose_all_active_stages_complete`와 `next_session_policy_ready`는 별도 상태다.
+
+## 6. OFF·퇴역·수동 작업
+
+| owner | 현행 분류 |
+| --- | --- |
+| common Daily/EV tuning·generic workorder runner, ADM/LDM·bucket/bridge·institutional aggregate | 퇴역. dedicated family와 원천은 유지. |
+| `sniper_post_sell_feedback --evaluate-sim`, base scalp sim/candidate-window/AI-budget, scalp-sim tower/prior/overnight | 정규 Main sim chain 퇴역. explicit 과거 replay는 감사용. real post-sell feedback snapshot은 독립 원천. |
+| `samsung_machine_entry_tuning`, PYRAMID·AVG_DOWN legacy quality/recovery calibration, opening rotation | 퇴역/고정 OFF. 삼성 Main fixed-watch와 현행 AVG_DOWN shared-rebound owner는 별도. |
+| Episode expanded research·공동 allocation | forward-only 미지원 연구 OFF; 유효 Episode OFF에 따른 공동 allocation OFF. 기존 low-price tuning/실매매/applied 정책 유지. |
+| Swing discovery/lifecycle/pattern 및 공유 currentness/AI review/propagation | 설치 Swing OFF에 따라 OFF. Main pattern 실험으로 세지 않는다. |
+| entry AI gate backtest | `on_demand`, critical chain OFF. 수동 진단은 자연 예약이 아니다. |
+| performance workorder·time-window regime·producer-gap source/discovery·stage-hook workorder/scaffold | 기본 OFF. 별도 flag/승인 범위만 허용. |
+| `runtime_apply_gap_audit`, `key_lineage_ledger`, `conversion_lane` | 비활성 진단. direct-family 완료 조건이 아니다. |
+| `run_ai_entry_setup_paired_replay_postclose.sh` | 수동 호환 wrapper. 추가 설치 owner가 아니다. |
+
+## 7. 현재 결과·남은 수용의 소유자
+
+날짜별 결과는 원 artifact·감사 기록이 소유한다. 과거 분모/EV/선정값과 완료 검토를 현재 OPEN으로 누적하지 않는다.
+
+- [10/2 checklist](../checklists/2026-10-02-stage2-todo-checklist.md)의 `FinalPolicyStartupAcceptance1002`, `EntryDecisionSourcePreopen1002`, `MainMachineMissedEntryLogicReady1002`, `MainMachineMissedEntryPriority1002`, `CompactAuxiliaryPassVetoLogicReady1002`, `CompactAuxiliaryPassVetoPostclose1002`의 해당 Acceptance를 확인한다. 완료된 과거 수리를 중복 등록하지 않는다.
+- 새 계산·샘플 성능: [Main 계획](../proposals/main-machine-missed-entry-priority-postclose-plan-2026-10-01.md), [compact 계획](../proposals/compact-auxiliary-pass-veto-postclose-remediation-plan-2026-10-01.md), [구현·리뷰 기록](../audits/entry-postclose-remediation-implementation-review-2026-10-01.md).
+- 의미감시·세대/분모·purge·원천/정상 carry: [감시 연계 계획](../proposals/semantic-monitor-postclose-integration-repair-plan-2026-10-01.md), [구현·배포 기록](../audits/semantic-monitor-postclose-integration-implementation-2026-10-01.md).
+- 전일 원천 결손·최종화 실패와 별도의 당일 준비: [10/2 아침 점검](../audits/morning-finalization-dependency-alert-review-2026-10-02.md), [현재 prepared index](../../data/runtime/policy_bootstrap/prepared/2026-10-02/latest.json). 이 근거로 10/1 전체 장후 DONE을 주장하지 않는다.
+- 원 코드·historical PREOPEN 소유권을 검증하는 과거 릴리스는 현재 consumer가 참조할 수 있다. 미선택/미기동만으로 불필요한 복사본이라 추정하지 않는다. 보존/복원은 위 감사와 runtime release 계약을 따른다.
+
+각 작업을 `실행 정상성 / 분석 유효성 / 결손·결함 / 달성 가능성 / 직접 소비·다음 조치`로 판정한다. full/partial/no-fill/held/custody, actual/sim/probe/CF, 진단 가격 경로/주 경제성을 구분한다. 결측 비용·손익은 null/source gap이며 valid-empty·무기회·zero EV로 대체하지 않는다. 유입/성숙 근거가 없으면 ETA는 null이다.
+
+<a id="6-다음-상세검토-우선순위"></a>
+과거 proposal/checklist의 명시 anchor는 주소 호환용이다. 현재 수용·우선순위는 이 절과 당일 checklist가 소유하며 오래된 Due/PID/완료 상태를 승계하지 않는다.

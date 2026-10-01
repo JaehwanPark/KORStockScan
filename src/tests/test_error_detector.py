@@ -463,3 +463,89 @@ def test_recovery_dispatcher_passes_scope_to_real_log_scanner(tmp_path, monkeypa
     assert result.severity == "fail"
     assert result.details["file_new_errors"][log.name] == 1000
     assert not scanner_module.SCAN_STATE_PATH.exists()
+
+
+def test_daemon_alert_events_keep_health_fail_and_ignore_observation_clocks():
+    from src.engine.error_detector import iter_daemon_alert_events
+    state = {}
+    results = [DetectionResult('cron_completion', 'cron', 'fail', 'terminal failure',
+               {'postclose_finalization_source_date': '2026-10-01',
+                'poll_clock': 'first'})]
+    assert [kind for kind, _ in iter_daemon_alert_events(results, state, target_date='2026-10-02')] == ['alert']
+    for clock in ['second', 'third', 'fourth']:
+        results[0].details['poll_clock'] = clock
+        results[0].checked_at = clock
+        assert list(iter_daemon_alert_events(results, state, target_date='2026-10-02')) == []
+        assert results[0].severity == 'fail'
+
+
+def test_daemon_alert_events_realert_new_source_or_terminal_reason():
+    from src.engine.error_detector import iter_daemon_alert_events
+    state = {}
+    r = DetectionResult('cron_completion', 'cron', 'fail', 'terminal failure',
+                        {'postclose_finalization_source_date': '2026-10-01',
+                         'log_rotation_cleanup_predecessor': {'reason': 'first'}})
+    for source, reason in [('2026-10-01', 'first'), ('2026-10-02', 'first'), ('2026-10-02', 'second')]:
+        r.details['postclose_finalization_source_date'] = source
+        r.details['log_rotation_cleanup_predecessor']['reason'] = reason
+        assert [kind for kind, _ in iter_daemon_alert_events([r], state, target_date='2026-10-02')] == ['alert']
+
+
+def test_daemon_alert_events_warning_is_not_recovery_and_recurrence_alerts():
+    from src.engine.error_detector import iter_daemon_alert_events
+    state = {}
+    def events(severity):
+        r = DetectionResult('cron_completion', 'cron', severity, severity)
+        return [kind for kind, _ in iter_daemon_alert_events([r], state, target_date='2026-10-02')]
+    assert events('fail') == ['alert']
+    assert events('warning') == []
+    assert state
+    assert events('pass') == ['recovered']
+    assert not state
+    assert events('pass') == []
+    assert events('fail') == ['alert']
+
+
+def test_daemon_alert_events_date_rollover_does_not_claim_historical_recovery():
+    from src.engine.error_detector import iter_daemon_alert_events
+    state = {}
+    fail = DetectionResult('cron_completion', 'cron', 'fail', 'terminal failure')
+    assert [k for k, _ in iter_daemon_alert_events([fail], state, target_date='2026-10-02')] == ['alert']
+    passed = DetectionResult('cron_completion', 'cron', 'pass', 'ok')
+    assert [k for k, _ in iter_daemon_alert_events([passed], state, target_date='2026-10-05')] == ['current_date_pass']
+    assert fail.severity == 'fail'
+    assert [k for k, _ in iter_daemon_alert_events([fail], state, target_date='2026-10-05')] == ['alert']
+
+
+def test_daemon_alert_events_auth_warning_escalation_and_failed_handler_retry():
+    from src.engine.error_detector import iter_daemon_alert_events
+    state = {}
+    r = DetectionResult('kiwoom_auth_8005_restart', 'auth', 'warning', 'pending')
+    pending = iter_daemon_alert_events([r], state, target_date='2026-10-02')
+    assert next(pending)[0] == 'alert'
+    pending.close()  # Consumer failed: it has not acknowledged the alert.
+    assert not state
+    assert [k for k, _ in iter_daemon_alert_events([r], state, target_date='2026-10-02')] == ['alert']
+    assert list(iter_daemon_alert_events([r], state, target_date='2026-10-02')) == []
+    r.severity = 'fail'
+    assert [k for k, _ in iter_daemon_alert_events([r], state, target_date='2026-10-02')] == ['alert']
+
+
+def test_standalone_daemon_keeps_reporting_an_unresolved_incident(monkeypatch):
+    from src.engine import error_detector as module
+    reports, errors = [], []
+    result = DetectionResult('cron_completion', 'cron', 'fail', 'terminal failure')
+    class FakeEngine:
+        def __init__(self, **kwargs): pass
+        def run_all(self): return [result]
+        def build_report(self, results): return {'target_date': '2026-10-02', 'severity': results[0].severity}
+        def write_report(self, report): reports.append(report)
+    def stop_after_four(_interval):
+        if len(reports) == 4: raise KeyboardInterrupt
+    monkeypatch.setattr(module, 'ErrorDetectionEngine', FakeEngine)
+    monkeypatch.setattr(module, 'log_error', errors.append)
+    monkeypatch.setattr(module, 'log_info', lambda _message: None)
+    monkeypatch.setattr(module.time, 'sleep', stop_after_four)
+    with pytest.raises(KeyboardInterrupt): module._daemon_loop(60, True)
+    assert len(reports) == 4 and all(r['severity'] == 'fail' for r in reports)
+    assert errors == ['[ERROR_DETECTION] cron_completion: terminal failure']

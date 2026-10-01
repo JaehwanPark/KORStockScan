@@ -111,32 +111,31 @@ Smoothing은 순간적인 tick·호가·OFI/QI 흔들림 때문에 진입·보�
 
 ## 장후 작업 흐름
 
-장후 작업은 당일 이벤트를 복기해 다음 장전의 bounded 후보를 만드는 자동화 체인입니다. 현재 소비되는 핵심 경로만 요약하면 다음과 같습니다.
+장후 작업은 당일 원천을 검증하고 전용 owner별 평가·승계·정책 발행과 다음 기동 준비를 수행하는 자동화 체인입니다. 핵심 경로는 다음과 같습니다.
 
-진행상태는 [장후 상세검토 목록](docs/audit-reports/2026-09-05-postclose-work-inventory.md), 실행·복구·허용 추천 구현은 명시적으로 호출된 [모니터링 지시문](docs/postclose-tuning-result-review-task-instructions.md)을 따릅니다. 문서 현행화는 그 절차의 실행 요청이 아닙니다. 완료 검토와 자연 산출물·PID·실수익 acceptance를 구분하며, ADM/LDM·bucket·greenfield·전용 institutional aggregate는 퇴역, Swing은 OFF입니다. 남아 있는 비-LDM sim producer는 source-only이며 현재 우선 상세튜닝 대상이 아닙니다.
+설치 예약·stage 의존관계·내부 producer·정책 소비·OFF/퇴역 구성은 [장후작업 현행 활성 목록](docs/audit-reports/2026-09-05-postclose-work-inventory.md), 당일 실행·Acceptance는 checklist가 소유합니다. 실행·복구는 명시적으로 호출된 [장후 지시문](docs/postclose-tuning-result-review-task-instructions.md)을 따릅니다. 문서 현행화는 실행 요청이 아닙니다. ADM/LDM·bucket·greenfield·전용 institutional aggregate와 정규 scalp-sim chain은 퇴역, Swing과 Episode 신규 후보 연구는 OFF입니다. 기존 Widget/Episode 실매매·승인 정책과 real post-sell 관찰은 각 owner에서 유지합니다.
 
 ```text
 장중 raw event와 broker receipt 종료
   -> source-quality audit
   -> entry / submit / holding / scale-in / exit lifecycle 재구성
-  -> micro-reversion / AI / widget / episode calibration
-  -> rolling·cumulative EV와 반사실 비교
-  -> PREOPEN apply candidate 또는 source-only workorder
-  -> artifact 순서·consumer·provenance verifier
-  -> control tower / checklist 최종 refresh
-  -> strict verifier --require-summary-handoff
-  -> controller DONE
-  -> 다음 세션 post-apply attribution
+  -> Main 승률·full 전략 / compact AI / 전용 family 평가
+  -> 독립 Widget / machine-group stage terminal과 OFF receipt
+  -> owner별 비용·검증·후보 또는 정상 carry·정책 소비
+  -> summary / tower / checklist / strict verifier
+  -> 전체 controller DONE
+  -> 다음 거래일 05:00 최종화 / cleanup / source-date detector
+  -> 격리된 장전 prepare·verify
+  -> 실제 PREOPEN / PID / 다음 세션 attribution
 ```
 
 1. **Source-quality preflight:** clean baseline, 필수 필드, venue, 시각, executable price와 provenance를 검증합니다. 결손 row/window를 안정적으로 격리해 정상 입력을 보존하고, 전역 계약 결손·격리 실패는 전체 차단합니다. 예약 stage 전 미생성은 실패가 아닙니다.
 2. **Lifecycle 복기:** 실제 주문, 미진입, probe/residual, scale-in, 부분익절·trailing·최종 청산을 같은 흐름으로 재구성하되 real·sim·source-only를 분리합니다.
-3. **Calibration:** 네 튜닝축과 smoothing 경로를 raw 대안과 비교하고 비용 반영 EV, MFE/MAE, first-hit, 표본 충족 여부를 계산합니다.
-4. **적용 후보 생성:** 기존 owner의 한 축만 바꾸는 bounded PREOPEN 후보와 rollback 값을 만듭니다. 계측·리포트·provenance 결손은 `runtime_effect=false` workorder로 분리합니다.
+3. **평가:** 기계 v7은 미진입 회복 우선·성공 보존, 보조 v4는 PASS/VETO/CAUTION의 full-cost 비교와 동결 후보 검증을 적용합니다. 새 계약은 10/2 원천의 장후 계산부터이며 갱신 원천은 9/29 이후 적격 자료입니다. 전용 family의 진단·경제성 분모와 source gap을 구분합니다.
+4. **정책 선택:** dated PREOPEN 정책, Main full 전략의 검증된 current/parent CAS, 독립 Widget/Episode 정책은 각 owner의 적용 경계를 따릅니다. 후보 부족·결손은 기존 유효 정책 승계와 원천 수리로 구분하고 정책 선택을 PID 소비로 대신하지 않습니다.
 5. **검증과 종료:** producer/consumer 순서, AI provider, artifact freshness, runtime env와 apply plan을 검증합니다. tower와 마지막 checklist의 exact source hash 및 strict verifier 명령이 성공한 뒤에만 controller가 `DONE`을 표시합니다. 이전 PASS artifact로 새 명령 실패를 숨기지 않습니다.
 
-[9/7 원천의 자정 이후 보완](docs/audit-reports/2026-09-08-postclose-priority-repair-review.md)은 요약 세대와 실제 체결·손익 귀속을 복구했습니다. 복원된 과거 손익을 새 튜닝 수익으로 세지 않으며, 미대사 headline 손익은 0이 아닌 null로 남깁니다. [별도 승인 위젯·에피소드의 9/8 적용](docs/audit-reports/2026-09-07-widget-episode-recommendation-implementation-review.md)은 독립된 승인·policy/설치 receipt입니다. 자연 PID·체결·비용 차감 EV는 [9/8 checklist](docs/checklists/2026-09-08-stage2-todo-checklist.md)의 기존 acceptance에서 확인합니다.
-6. **다음 세션 귀속:** 실제 PID가 어떤 env와 policy를 읽었는지 확인하고, 적용 전후 outcome을 다음 rolling 갱신에 돌려줍니다.
+6. **최종화와 다음 기동:** main wrapper DONE 뒤 독립 작업·전체 controller/strict·cleanup·최종 detector를 확인합니다. 장전 준비 PASS와 전체 장후 완료는 별도이며 실제 PREOPEN/PID·적용 버전의 비용 후 outcome을 자연 receipt로 확인합니다.
 
 장후 리포트의 존재 자체는 효과의 증거가 아닙니다. 누가 소비했는지, sim 또는 runtime에 실제 반영됐는지, 반영 후 EV가 어떻게 변했는지까지 연결돼야 합니다. 전체 계약은 [Report Automation Traceability](docs/report-based-automation-traceability.md)를 따릅니다.
 
