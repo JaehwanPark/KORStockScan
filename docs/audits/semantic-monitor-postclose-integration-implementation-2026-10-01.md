@@ -43,3 +43,5 @@
 보조 v4 producer의 `candidate_population_keys`는 purge 이전 full-cost 집단이고 scope `eligible_count`는 purge 이후 집단이다. 감시기의 분모를 producer의 `full_cost_candidate_population_count`에 맞춰 정상 purge를 결손으로 오인하지 않도록 보완했다. 파일 읽기 중 세대가 바뀌는 경우는 `unobservable`로 분리하며 경보·거짓 복구를 발생시키지 않는다. 보조 terminal도 같은 bounded stable reader를 사용한다. 실제 변조·잘못된 schema/date/hash의 차단은 유지한다.
 
 `43f37b3f`의 실제 정식 prepare가 자정 이후 `preopen_target_not_next_operating_day`로 실패해 준비 완료로 처리하지 않았다. 오래된 닫힌 원천의 준비 대상일 계산이 10/2 00:36에도 10/5로 넘어가는 경계 결함이었다. 아직 열리지 않은 현재 거래일은 07:35 전까지만 유지하도록 수정했다. 비거래일·07:35 이후는 다음 거래일이며 future-source 차단, controller/정책/릴리스 전체 검증과 day-of 활성화 권한은 그대로다. 자정·07:34·07:35·주말 및 당일 prepare/verify 회귀를 추가했다.
+
+`8fb30f2b`의 정식 준비/verify 및 실제 code provenance·release-set/독립 소비 pin 대사는 통과했으나 full 성능은 wall 1.215배·CPU 1.227배로 목표를 초과했다. native 승계 owner에 읽기 전용 generation-only 옵션을 추가해 **전체 검증된 현재 bundle과 같은 machine/proof**를 유지하는 archive마다 같은 정책 좌표를 다시 검증하지 않도록 했다. archive bounded stable read·전체 내용 seal/날짜/권한 header·부모 chain·동일 machine/proof와 native 원천 검증은 유지한다. 정식 stage의 기본 전체 검증은 변경하지 않는다. 같은 정책·원천 변경·seal 변조 반례 회귀를 통과했고 작업본 3회 비교는 wall 1.141배·CPU 1.145배였다. 최종 불변 릴리스에서 다시 측정한다.

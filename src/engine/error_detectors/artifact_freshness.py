@@ -587,7 +587,7 @@ def _machine_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
                 if not pending and not reused:
                     from src.engine.automation.postclose_summary_handoff import _staged_winrate_generation_preserved
                     if not _staged_winrate_generation_preserved(terminal['staged'], bundle,
-                            runtime_policy, root / 'data'):
+                            runtime_policy, root / 'data', generation_only=True):
                         findings.append('winrate_candidate_bundle_or_scope_mismatch')
                 if reused:
                     from src.engine.automation.postclose_summary_handoff import _existing_incumbent_winrate_binding_valid

@@ -1503,6 +1503,38 @@ def test_staged_winrate_descendant_requires_same_proof_and_machine(tmp_path):
     assert not h._staged_winrate_generation_preserved(staged, child, runtime, tmp_path)
 
 
+def test_winrate_generation_only_retains_seal_source_and_same_policy_checks(tmp_path):
+    import hashlib
+    import json
+    from types import SimpleNamespace
+    from src.engine.automation import postclose_summary_handoff as h
+    def digest(value):
+        return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+    parent = {'target_date': '2026-10-02', 'schema': 'sealed-test',
+              'machine_policy': {'version': 1}, 'winrate_selection': {'disposition': 'incumbent_carried'}}
+    parent['bundle_sha256'] = digest(parent)
+    child = {**parent, 'previous_bundle_sha256': parent['bundle_sha256'], 'bundle_sha256': 'b' * 64}
+    path = tmp_path / 'generations' / (parent['bundle_sha256'] + '.json')
+    path.parent.mkdir()
+    path.write_text(json.dumps(parent))
+    checked = []
+    runtime = SimpleNamespace(root=lambda root: root, digest=digest,
+        _read=lambda p: json.loads(p.read_text()), for_cohort=lambda value, cohort: value,
+        validate=lambda *a, **kw: (_ for _ in ()).throw(AssertionError('current policy already validated')),
+        _validate_bundle_sources=lambda value, root: checked.append(value['bundle_sha256']))
+    staged = {'bundle_sha256': parent['bundle_sha256'], 'target_date': '2026-10-02'}
+    assert h._staged_winrate_generation_preserved(staged, child, runtime, tmp_path, generation_only=True)
+    assert checked == [parent['bundle_sha256']]
+    child['machine_policy'] = {'version': 2}
+    assert not h._staged_winrate_generation_preserved(staged, child, runtime, tmp_path, generation_only=True)
+    child['machine_policy'] = parent['machine_policy']
+    runtime._validate_bundle_sources = lambda *a: (_ for _ in ()).throw(ValueError('source changed'))
+    assert not h._staged_winrate_generation_preserved(staged, child, runtime, tmp_path, generation_only=True)
+    parent['machine_policy'] = {'version': 3}
+    path.write_text(json.dumps(parent))
+    assert not h._staged_winrate_generation_preserved(staged, child, runtime, tmp_path, generation_only=True)
+
+
 def test_family_source_read_does_not_require_peer(tmp_path, monkeypatch):
     from datetime import date
     from src.engine.automation import machine_research_closed_loop_refresh as phase

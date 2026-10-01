@@ -1329,7 +1329,8 @@ def _existing_incumbent_winrate_binding_valid(report, staged, bundle, previous, 
     )
 
 
-def _staged_winrate_generation_preserved(staged, bundle, runtime_policy, data_root):
+def _staged_winrate_generation_preserved(staged, bundle, runtime_policy, data_root,
+                                        *, generation_only=False):
     """Accept a later same-policy bundle only with an intact archived parent chain."""
     expected = staged.get('bundle_sha256')
     if bundle.get('bundle_sha256') == expected:
@@ -1345,8 +1346,22 @@ def _staged_winrate_generation_preserved(staged, bundle, runtime_policy, data_ro
         seen.add(parent_hash)
         path = runtime_policy.root(Path(data_root)) / 'generations' / f'{parent_hash}.json'
         try:
+            if generation_only and (path.is_symlink() or path.stat().st_size > FAMILY_ARTIFACT_MAX_BYTES):
+                return False
             parent = runtime_policy._read(path)
-            runtime_policy.validate(parent, target_date=staged.get('target_date'))
+            if generation_only:
+                # The caller fully validates the current bundle. Ancestors must
+                # retain its exact machine/proof below; do not rerun the same
+                # policy coordinate validation at each archived generation.
+                if (parent.get('bundle_sha256') != runtime_policy.digest({
+                        k: v for k, v in parent.items() if k != 'bundle_sha256'})
+                    or parent.get('target_date') != staged.get('target_date')
+                    or any(parent.get(k) != bundle.get(k) for k in (
+                        'schema', 'cohort', 'role_contract', 'adoption_basis',
+                        'actual_order_submitted', 'hard_guards_unchanged'))):
+                    return False
+            else:
+                runtime_policy.validate(parent, target_date=staged.get('target_date'))
             runtime_policy._validate_bundle_sources(parent, Path(data_root))
             parent_machine = runtime_policy.for_cohort(parent, ('KRX', 'KRX_REGULAR'))['machine_policy']
         except (OSError, ValueError, TypeError, KeyError, AttributeError):
