@@ -1049,6 +1049,13 @@ def stage_receipt_issues(report_dir, day, stage, *, code_hash=None):
         return []
     if value.get('status') != 'succeeded' or value.get('exit_code') != 0:
         return [f'{stage}:{value.get("status")}']
+    if stage == 'summary_handoff' and (
+        value.get('prepared_effective_date') is not None
+        or value.get('publication_date', day) > day
+    ):
+        from src.engine.build_next_stage2_checklist import _next_krx_trading_day
+        if value.get('prepared_effective_date') != _next_krx_trading_day(day):
+            return ['summary_handoff:prepared_source_session_mismatch']
     if stage == 'pre_submit_delay':
         from src.engine.scalping.pre_submit_delay_tuning import family_source_ledger_issues
         source_issues = family_source_ledger_issues(Path(report_dir).parent, day)
@@ -1603,6 +1610,10 @@ def run_stage(stage, day, *, report_dir, project, publication=None, effective=No
             heartbeat_at=now(), prerequisite_receipts={}, sources={}, retryable=True,
             policy_disposition='incumbent_carry', computation_executed=execute,
             checkpoint=str(report_dir / 'ai_decision_action_outcome_calibration') if stage == 'main_machine_policy' else None)
+        if stage == 'summary_handoff':
+            # Summary/PREOPEN reconciliation belongs to the original source
+            # day even if policy publication and recovery occur later.
+            value['prepared_effective_date'] = _next_krx_trading_day(day)
         if old:
             _stage_write(path.parent / 'attempts' / f'{stage}_{old.get("run_id", uuid.uuid4().hex)}.json', old)
         if off:
@@ -1703,7 +1714,8 @@ def run_stage(stage, day, *, report_dir, project, publication=None, effective=No
             value['resource_admission_wait_sec'] = round(time.monotonic() - admission_started, 3)
             value.update(status='running', heartbeat_at=now()); _stage_write(path, value)
             env = {**os.environ, 'PYTHONPATH':str(project), 'POSTCLOSE_STAGE_WORKER':'1', 'POSTCLOSE_SOURCE_DATE':day,
-                'POSTCLOSE_POLICY_PUBLICATION_DATE':publication, 'POSTCLOSE_PREPARED_EFFECTIVE_DATE':effective}
+                'POSTCLOSE_POLICY_PUBLICATION_DATE':publication,
+                'POSTCLOSE_PREPARED_EFFECTIVE_DATE':value.get('prepared_effective_date', effective)}
             rc = 0
             child = None
             for command in commands:

@@ -1293,6 +1293,34 @@ def test_stage_publication_date_is_pinned_and_invalid_future_rejected(stage_envi
         run('machine_attribution', publication='2099-01-01')
 
 
+def test_late_summary_recovery_uses_source_day_prepared_session(stage_environment):
+    h, day, report, run, _produce = stage_environment
+    from src.engine.build_next_stage2_checklist import _next_krx_trading_day
+    seen = []
+
+    def capture(_command, *, env, cwd):
+        seen.append((env['POSTCLOSE_POLICY_PUBLICATION_DATE'],
+                     env['POSTCLOSE_PREPARED_EFFECTIVE_DATE']))
+        return _produce(_command, env=env, cwd=cwd)
+
+    result = run('summary_handoff', publication='2026-09-23',
+                 recovery=True, runner=capture)
+    assert result['status'] == 'succeeded'
+    assert result['publication_date'] == '2026-09-23'
+    assert result['effective_date'] == _next_krx_trading_day('2026-09-23')
+    assert result['prepared_effective_date'] == _next_krx_trading_day(day)
+    assert seen == [('2026-09-23', _next_krx_trading_day(day))]
+    assert h.stage_receipt_issues(report, day, 'summary_handoff') == []
+    h._stage_write(h.stage_path(report, day, 'summary_handoff'), {
+        **result, 'prepared_effective_date': result['effective_date'],
+    })
+    assert h.stage_receipt_issues(report, day, 'summary_handoff') == [
+        'summary_handoff:prepared_source_session_mismatch'
+    ]
+    with pytest.raises(ValueError, match='stage_date_contract_invalid'):
+        run('summary_handoff', publication='2026-09-23', effective=_next_krx_trading_day(day))
+
+
 def test_stage_group_attempts_every_independent_owner_after_failure(monkeypatch):
     from src.engine.automation import postclose_summary_handoff as h
     seen = []
