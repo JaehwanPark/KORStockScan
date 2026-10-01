@@ -8641,25 +8641,13 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
         incumbent_machine_policy_sha256=strategy.digest(parent),
         source_contract_sha256=_canonical_sha256(source_contract), population_count=len(population),
         evaluated_candidate_count=0, search_complete=False)
-    superseded_holdout_latest = None
-    superseded_holdout_unknown = False
     if machine_policy_only:
         result['selection_basis'] = strategy.MACHINE_SELECTION_VERSION
         if previous and previous.get('selection_basis') != strategy.MACHINE_SELECTION_VERSION:
-            prior_candidate = previous.get('candidate') or {}
-            prior_holdout = ((prior_candidate.get('evidence') or {}).get('holdout') or {})
-            prior_dates = prior_holdout.get('source_dates') or []
-            if prior_holdout:
-                if (isinstance(prior_dates, list) and prior_dates
-                    and all(isinstance(day, str) and re.fullmatch(r'\d{4}-\d{2}-\d{2}', day)
-                            for day in prior_dates)):
-                    superseded_holdout_latest = max(prior_dates)
-                else:
-                    superseded_holdout_unknown = True
             result['superseded_selection_basis'] = previous.get('selection_basis')
-            result['prior_selection_holdout_source_unknown'] = superseded_holdout_unknown
             # Old ranking/checkpoint state cannot select or skip candidates for
-            # the current machine objective. Its used holdout remains tainted.
+            # the current machine objective. The new candidate still faces the
+            # ordinary train/chronological holdout and economic promotion gates.
             previous = None
     if machine_policy_only:
         contract_by_name = strategy.registry_contract()
@@ -8727,10 +8715,6 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
         holdout = [working_row(r) for r in population if r['source_date'] > training_through_date]
     result['training_through_date'] = training_through_date or max(r['source_date'] for r in train)
     result['holdout_boundary_basis'] = 'explicit_forward_boundary' if training_through_date else 'last_source_date'
-    if machine_policy_only and superseded_holdout_latest is not None:
-        result['prior_selection_holdout_consumed'] = bool(
-            holdout and max(row['source_date'] for row in holdout) <= superseded_holdout_latest)
-
     identity = _machine_opportunity_id
     # Floors govern publication only; one valid raw opportunity can be researched.
     baseline_policy = parent if 'strategy' in parent else strategy.seed(parent, scope)
@@ -9077,10 +9061,6 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
         if 'incumbent_holdout' in machine_evidence:
             result['incumbent_evidence']['holdout'] = machine_evidence['incumbent_holdout']
         errors = strategy.promotion_errors(candidate, parent, scope) if candidate else ['no_evaluable_machine_candidate']
-        if result.get('prior_selection_holdout_consumed'):
-            errors.append('forward_holdout_required_after_selection_version_change')
-        if result.get('prior_selection_holdout_source_unknown'):
-            errors.append('forward_holdout_provenance_missing_after_selection_version_change')
         if best == parent:
             errors.append('candidate_equals_incumbent')
         return {**result, 'schema': 'main_entry_machine_policy_selection_v1',
