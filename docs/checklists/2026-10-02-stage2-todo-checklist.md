@@ -40,10 +40,11 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 
 ## Main 기계판정 미진입 회복 우선순위
 
-- [ ] `[CronFinalizationDependencyRepair1002] 아침 최종화 실패와 cleanup 미실행 원인 분리` (`Due: 2026-10-02`, `Slot: PREOPEN`, `TimeWindow: 07:00~07:30`, `Track: RuntimeStability`)
+- [x] `[CronFinalizationDependencyRepair1002] 아침 최종화 실패와 cleanup 미실행 원인 분리` (`Due: 2026-10-02`, `Slot: PREOPEN`, `TimeWindow: 07:00~07:30`, `Track: RuntimeStability`)
   - Source: [아침 경보 원인·수리](../audits/morning-finalization-dependency-alert-review-2026-10-02.md), [운영 복구 계약](../time-based-operations-runbook.md).
   - Acceptance: exact-source 최신 pre-cleanup FAIL에서만 cleanup을 `blocked_by_finalization`으로 분리하고 실제 parent FAIL·이미 실행한 cleanup FAIL을 유지한다. 다른 날짜/owner·recovery START·세대 변경 반례, 표적 회귀·compile/diff·parser와 선택 릴리스의 실제 순수 감시 결과를 검증한다. 배포 후 승인된 9/30 기반 10/2 prepared를 정식 재생성·전체 verify하며 정책/독립 서비스 pin/예약을 보존한다.
   - 10/1 장후 계산은 raw/archive 결손과 scale-in source block으로 미종결이다. 성공 마커 합성·Main wrapper 재실행·정책 재계산·API/실주문 호출 없이 보존하며, 기동/새 장후 자연 수용은 기존 각 owner가 맡는다.
+  - 완료 근거: `9dcbd482` 불변 릴리스 표적 84 PASS. 삭제돼 검증에 필요했던 historical release 3개를 원 archive Git SHA와 동일한 경로로 복원하고 정책/닫힌 controller·summary는 보존했다. 정식 10/2 prepared 재생성·전체 verify PASS, env/정책 불변, cron 8개·release-set/122 Episode/366 pin 검증 PASS. 07:15 자연 full detector의 artifact PASS·새 code 소비와 cleanup `blocked_by_finalization`, 원 finalization FAIL 보존을 확인했다. 매매 서비스 재기동은 없다.
 
 - [x] `[PostcloseSemanticMonitorContractRepair1002] 새 장후 계약의 의미감시·알림 호환성 보완` (`Due: 2026-10-02`, `Slot: INTRADAY`, `TimeWindow: 09:00~19:50`, `Track: RuntimeStability`)
   - Source: [10/1 의미감시 연계 보완계획](../proposals/semantic-monitor-postclose-integration-repair-plan-2026-10-01.md), [구현·배포 기록](../audits/semantic-monitor-postclose-integration-implementation-2026-10-01.md). 사용자 후속 승인은 감시기 구현·배포와 내일 기동 준비까지이며 오늘 Main 선행 기동·매매 권한 변경은 포함하지 않는다.
@@ -56,6 +57,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
   - 통합 배포 후속: [10/1 통합 릴리스·다음 기동 인계](../audits/integrated-release-next-startup-handoff-2026-10-01.md)에 따라 새 선택 릴리스와 서비스 pin, 재생성한 10/2 준비본, 현재 active Widget/collector 소비를 검증한다. 위 `459d718f`는 배포 이전 준비 근거이며 최종 릴리스는 deployment receipt를 따른다. 당일 Main/Episode 자연 기동 수용은 OPEN을 유지한다.
   - 배포 종결 근거: `0a8fa0a0` 불변 릴리스 733 PASS; 공통 selector·13 service/template pin 전환, Episode instance 122개·policy pin 366개 및 cron 8개 검증 통과. Widget/collector/notifier 5개 실제 PID cwd 일치, Widget 기동 필드 검증 pass. 같은 릴리스의 10/2 prepared 재생성·verify pass. Main은 오늘 기동하지 않았다. 당일 자연 수용을 완료로 표시하지 않는다.
   - 감시 배포 후속: [최종 의미감시 배포](../audits/semantic-monitor-postclose-integration-implementation-2026-10-01.md)의 `c6453530` selector·10/2 정식 prepared/전체 verify PASS, 표적 602 PASS와 실제 감시 code 소비를 확인했다. Main/매매 코드는 `0a8fa0a0`와 같고 독립 서비스 pin/PID·정책·예약은 유지한다. 자정 이후에도 10/2 기동 대상을 유지했으며 Main은 07:55 예약 전에 시작하지 않았다. 아래 실제 PREOPEN/PID/당일 소비 수용은 OPEN이다.
+  - 07시 경보 후속: [원인 분리·배포](../audits/morning-finalization-dependency-alert-review-2026-10-02.md)의 `9dcbd482`가 최신 selector다. 바뀐 runtime 코드는 cron 감시기뿐이고 정식 10/2 prepared·전체 verify PASS, 동일 env·주정책·독립 owner pin을 확인했다. 초기 준비 실패는 삭제된 historical release 3개 복원으로 해소했으며 과거 stage/hash를 덮지 않았다. 현재 예정 07:35 PREOPEN/07:55 Main print-plan은 이 최신 릴리스를 소비한다.
   - Acceptance: 07:32 exact-date custody, 07:35 PREOPEN succeeded·선택 릴리스, 07:55 Main 실제 PID cwd/commit/bootstrap 소비, Widget 날짜 전환 정책 소비, 최초 Episode 당일 preflight·서비스 정책 hash를 확인한다. 이후 profile은 자신의 예약 시각에 같은 당일 영수증으로 확인한다. 준비 PASS만으로 PID/체결/순이익을 완료 처리하지 않는다. 10/1 원천 결손의 05시 finalization 실패를 9/30 기반 10/2 준비 실패로 혼동하거나 성공으로 덮지 않는다. 정당한 custody/broker/quote safety 차단과 장애를 구분하고 실제 결손이 있으면 artifact·첫 실패 단계·수리 범위·재검증을 기록한다.
 
 - [ ] `[EntryDecisionSourcePreopen1002] 기계·보조 원천 기록과 현행 정책 장전 결속 확인` (`Due: 2026-10-02`, `Slot: PREOPEN`, `TimeWindow: 07:00~07:30`, `Track: MainEntry`)

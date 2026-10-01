@@ -18,3 +18,11 @@
 최종 표적 회귀 **84 PASS / 3.48초**, compile·diff·audit 링크·print-only parser 통과. 설치 wrapper 시험이 실제 배포 lock을 사용해 별도 디스크 정리와 충돌한 기존 fixture 결함도 고쳤다. 시험의 PROJECT_DIR/runtime lock을 임시 경로로 격리하고 기존 cron stub·finalizer 보존 기대를 유지했다. 실제 lock 보유 작업을 중단하거나 우회하지 않았다.
 
 이 수리는 감시 원인 분류의 종결이며 10/1 전체 장후 DONE을 의미하지 않는다. 10/1 계산의 closure는 복구 불가능한 원천 결손으로 blocked다. 새 유효 원천·정책 생성은 기존 10/2 기계/보조 POSTCLOSE owner가 확인하며, 과거 결손을 새 표본으로 소급 대체하지 않는다.
+
+## 배포·장전 준비 종결
+
+- 선택 release `cron-finalization-dependency-20261002-9dcbd482`, source commit `9dcbd482f0737e577ccf35b059ca17ab15d258e1`. 물리 root에서 표적 회귀 **84 PASS / 5.33초**. 이전 `c6453530`와 runtime source diff는 `error_detectors/cron_completion.py`뿐이며 매매·정책·bootstrap 코드는 동일하다.
+- 첫 정식 prepare/verify는 삭제된 historical release 때문에 stage code 및 historical PREOPEN ownership을 확인하지 못해 FAIL이었다. 별도 디스크 정리의 삭제 명세·보존 Git ref와 원 stage SHA를 메모리 계산으로 대사해 필요한 세 root만 복원했다: `integrated-postclose-review-20261001-90c06298`, `postclose-final-audit-recovery-20261001-faf65ec6`, `machine-holdout-source-replay-20261001-c7cf32b1`. 각 원래 경로·Git SHA·clean source를 보존하며 현재 실행 release로 선택하지 않는다. 이 경로는 현재 장전/장후의 historical proof consumer가 필요로 하므로 단순 미선택이라는 이유로 삭제하면 안 된다. [복원 영수증](../../data/runtime/startup_readiness/2026-10-02/cron_finalization_dependency_transition/9dcbd482/historical_release_restoration.json).
+- 복원 후 `next_preopen_readiness --prepare --source-date 2026-09-30 --target-date 2026-10-02`, `--verify --target-date 2026-10-02` 모두 PASS/결손 0. [현재 준비본](../../data/runtime/policy_bootstrap/prepared/2026-10-02/latest.json)의 env bytes·Main/compact policy receipts는 배포 직전과 같다. 원 source controller/summary bytes 불변을 확인했다. 실패한 최초 시도를 PASS로 수정하지 않았다.
+- 07:10·07:15 정규 full detector가 새 root/commit을 실제 소비했다. 07:15 artifact freshness PASS, cron은 원 finalization FAIL만 보고하고 cleanup `blocked_by_finalization`과 부모 marker를 기록한다. 정규 health의 전체 severity는 원 실패 때문에 FAIL이며 GREEN으로 주장하지 않는다. [최종 readback](../../data/runtime/startup_readiness/2026-10-02/cron_finalization_dependency_transition/9dcbd482/readback.final.json).
+- cron bytes/8 route 불변, release-set PASS, Episode 122 instance·366 policy pin 및 독립 Widget owner source pin 유지. 07:35 PREOPEN/07:55 Main start print-plan은 최신 selector다. 매매 서비스 재기동·예약 선행 실행·주문·API·정책 재계산은 없다. 실제 기동은 기존 `FinalPolicyStartupAcceptance1002`가 담당한다.
