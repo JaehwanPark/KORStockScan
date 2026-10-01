@@ -53,7 +53,8 @@ fi
 env PYTHONPATH=. POSTCLOSE_DONE_CONTROLLER_REQUIRE_CODEX_COMPLETED=false "$VENV_PY" -m src.engine.automation.postclose_done_controller "${controller_args[@]}"
 
 controller_report="$PROJECT_DIR/data/report/postclose_done_controller/postclose_done_controller_${TARGET_DATE}.json"
-controller_status="$("$VENV_PY" - "$controller_report" <<'PY'
+read_controller_status() {
+  "$VENV_PY" - "$controller_report" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -66,7 +67,15 @@ except Exception:
     raise SystemExit(0)
 print(str(payload.get("status") or "missing"))
 PY
-)"
+}
+controller_status="$(read_controller_status)"
+if [[ "$controller_status" == "summary_verified" && "$DRY_RUN" != "1" && "$DRY_RUN" != "true" ]]; then
+  env PYTHONPATH=. POSTCLOSE_STAGE_WORKER=1 \
+    POSTCLOSE_DONE_CONTROLLER_REQUIRE_CODEX_COMPLETED=false \
+    "$VENV_PY" -m src.engine.automation.postclose_done_controller \
+    "${controller_args[@]}" --require-independent-producers
+  controller_status="$(read_controller_status)"
+fi
 
 
 if [[ "$RUN_CODEX" == "1" || "$RUN_CODEX" == "true" ]]; then
@@ -120,7 +129,10 @@ PY
     exit 1
   fi
   if [[ "$REQUIRE_CODEX_COMPLETED" == "1" || "$REQUIRE_CODEX_COMPLETED" == "true" ]]; then
-    env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.postclose_done_controller "${controller_args[@]}" --require-codex-completed
+    env PYTHONPATH=. POSTCLOSE_STAGE_WORKER=1 "$VENV_PY" \
+      -m src.engine.automation.postclose_done_controller \
+      "${controller_args[@]}" --require-independent-producers --require-codex-completed
+    controller_status="$(read_controller_status)"
   fi
 else
   echo "[SKIP] codex_workorder_runner target_date=${TARGET_DATE} reason=disabled_by_default set_POSTCLOSE_DONE_CONTROLLER_RUN_CODEX=true_to_opt_in"

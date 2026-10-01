@@ -26,6 +26,9 @@ def test_postclose_prepares_isolated_preopen_and_start_requires_day_of_completio
     launcher = _text("src/run_bot.sh")
     assert controller.index('controller_status="$(') < controller.index(
         "src.engine.automation.next_preopen_readiness")
+    assert 'controller_status" == "summary_verified"' in controller
+    assert controller.index('POSTCLOSE_STAGE_WORKER=1') < controller.index(
+        'src.engine.automation.next_preopen_readiness')
     assert "--prepare --source-date \"$TARGET_DATE\"" in controller
     assert finalizer.index("capture_final_detector_receipt") < finalizer.index(
         "next_preopen_readiness")
