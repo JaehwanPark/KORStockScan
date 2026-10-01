@@ -126,6 +126,67 @@ def test_morning_cleanup_still_fails_when_previous_source_receipt_is_missing(
     assert result.severity == "fail"
 
 
+@pytest.mark.parametrize(
+    ("parent_markers", "cleanup_markers", "cleanup_status"),
+    [
+        ("[FAIL] postclose_finalization target_date=2026-10-01 reason=predecessor_terminal_failure\n", "", "blocked_by_finalization"),
+        ("[FAIL] postclose_finalization target_date=2026-10-01 reason=predecessor_timeout\n", "", "blocked_by_finalization"),
+        ("[FAIL] postclose_finalization target_date=2026-09-30 reason=predecessor_terminal_failure\n", "", "fail"),
+        ("[FAIL] postclose_finalization target_date=2026-10-01 reason=cleanup_failed\n", "", "fail"),
+        ("[FAIL] other_job target_date=2026-10-01 text=[FAIL] postclose_finalization reason=predecessor_terminal_failure\n", "", "fail"),
+        ("[FAIL] postclose_finalization target_date=2026-10-01 reason=predecessor_terminal_failure\n[START] postclose_finalization target_date=2026-10-01\n", "", "fail"),
+        ("[FAIL] postclose_finalization target_date=2026-10-01 reason=predecessor_terminal_failure\n", "[START] log_rotation_cleanup target_date=2026-10-01\n[FAIL] log_rotation_cleanup target_date=2026-10-01\n", "fail"),
+    ],
+)
+def test_cleanup_dependency_preserves_parent_failure_and_cleanup_authority(
+    monkeypatch, tmp_path, parent_markers, cleanup_markers, cleanup_status
+):
+    import src.engine.error_detectors.cron_completion as cc
+
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "postclose_finalization_cron.log").write_text(parent_markers)
+    (logs / "log_rotation_cleanup_cron.log").write_text(cleanup_markers)
+    monkeypatch.setattr(cc, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(cc, "_today_kst", lambda: "2026-10-02")
+    monkeypatch.setattr(cc, "_kst_time_tuple", lambda: (7, 0))
+    monkeypatch.setattr(cc, "CRON_JOB_REGISTRY", [
+        dict(job) for job in CRON_JOB_REGISTRY
+        if job["id"] in {"postclose_finalization", "log_rotation_cleanup"}
+    ])
+    monkeypatch.setattr(cc, "load_installed_crontab", lambda: "0 5 * * * # POSTCLOSE_FINALIZATION_0500")
+    result = CronCompletionDetector(dry_run=True).check()
+    assert result.details["log_rotation_cleanup_status"] == cleanup_status
+    assert result.severity == "fail"  # Parent failure is never excused.
+    if cleanup_status == "blocked_by_finalization":
+        assert result.details["postclose_finalization_status"] == "fail"
+        assert "log_rotation_cleanup: no today marker" not in result.summary
+        assert result.details["log_rotation_cleanup_predecessor"]["source_date"] == "2026-10-01"
+
+
+def test_cleanup_dependency_does_not_accept_a_changing_parent_generation(monkeypatch, tmp_path):
+    import src.engine.error_detectors.cron_completion as cc
+
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    parent = logs / "postclose_finalization_cron.log"
+    parent.write_text("[FAIL] postclose_finalization target_date=2026-10-01 reason=predecessor_terminal_failure\n")
+    monkeypatch.setattr(cc, "PROJECT_ROOT", tmp_path)
+    original = cc.CronCompletionDetector._read_once_markers
+
+    def read_and_change(path, day):
+        result = original(path, day)
+        if path == parent:
+            with parent.open("a") as stream:
+                stream.write("[START] postclose_finalization target_date=2026-10-01\n")
+        return result
+
+    monkeypatch.setattr(cc.CronCompletionDetector, "_read_once_markers", staticmethod(read_and_change))
+    assert cc.CronCompletionDetector._cleanup_predecessor_failure(
+        logs / "log_rotation_cleanup_cron.log", "2026-10-01"
+    ) is None
+
+
 def test_explicit_previous_source_date_keeps_morning_window_open(
     monkeypatch, tmp_path
 ):
@@ -200,6 +261,7 @@ def test_only_preselection_0928_unbound_generation_is_historical(
 
 def test_error_detector_cron_install_preserves_release_routed_finalization(tmp_path):
     root = Path(__file__).resolve().parents[2]
+    (tmp_path / "data/runtime").mkdir(parents=True)
     state = tmp_path / "crontab.txt"
     finalizer = ("55 21 * * 1-5 bash /home/ubuntu/KORStockScan/deploy/"
                  "run_runtime_release.sh finalize $(TZ=Asia/Seoul date +\\%F) "
@@ -210,7 +272,7 @@ def test_error_detector_cron_install_preserves_release_routed_finalization(tmp_p
                     'else cp "$1" "$CRONTAB_STATE"; fi\n')
     stub.chmod(0o755)
     env = {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}",
-           "CRONTAB_STATE": str(state)}
+           "CRONTAB_STATE": str(state), "PROJECT_DIR": str(tmp_path)}
     for _ in range(2):
         subprocess.run(["bash", str(root / "deploy/install_error_detection_cron.sh")],
                        env=env, check=True, capture_output=True, text=True)

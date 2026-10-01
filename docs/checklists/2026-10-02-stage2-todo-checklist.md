@@ -40,6 +40,11 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 
 ## Main 기계판정 미진입 회복 우선순위
 
+- [ ] `[CronFinalizationDependencyRepair1002] 아침 최종화 실패와 cleanup 미실행 원인 분리` (`Due: 2026-10-02`, `Slot: PREOPEN`, `TimeWindow: 07:00~07:30`, `Track: RuntimeStability`)
+  - Source: [아침 경보 원인·수리](../audits/morning-finalization-dependency-alert-review-2026-10-02.md), [운영 복구 계약](../time-based-operations-runbook.md).
+  - Acceptance: exact-source 최신 pre-cleanup FAIL에서만 cleanup을 `blocked_by_finalization`으로 분리하고 실제 parent FAIL·이미 실행한 cleanup FAIL을 유지한다. 다른 날짜/owner·recovery START·세대 변경 반례, 표적 회귀·compile/diff·parser와 선택 릴리스의 실제 순수 감시 결과를 검증한다. 배포 후 승인된 9/30 기반 10/2 prepared를 정식 재생성·전체 verify하며 정책/독립 서비스 pin/예약을 보존한다.
+  - 10/1 장후 계산은 raw/archive 결손과 scale-in source block으로 미종결이다. 성공 마커 합성·Main wrapper 재실행·정책 재계산·API/실주문 호출 없이 보존하며, 기동/새 장후 자연 수용은 기존 각 owner가 맡는다.
+
 - [x] `[PostcloseSemanticMonitorContractRepair1002] 새 장후 계약의 의미감시·알림 호환성 보완` (`Due: 2026-10-02`, `Slot: INTRADAY`, `TimeWindow: 09:00~19:50`, `Track: RuntimeStability`)
   - Source: [10/1 의미감시 연계 보완계획](../proposals/semantic-monitor-postclose-integration-repair-plan-2026-10-01.md), [구현·배포 기록](../audits/semantic-monitor-postclose-integration-implementation-2026-10-01.md). 사용자 후속 승인은 감시기 구현·배포와 내일 기동 준비까지이며 오늘 Main 선행 기동·매매 권한 변경은 포함하지 않는다.
   - Acceptance: P0~P3의 버전·same-day split/purge·기계 v7/보조 v4 선정·full-cost 분모·현재 stage generation·준비/소비 구분·조치 warning mock 알림과 중복/recovery 계약을 리뷰·보완·재리뷰한다. 기존 owner 함수를 재사용하고 표적 회귀·compile/diff, wrapper 변경 시 bash/계약 시험, 실제 감시 root/selector 및 bounded 성능을 확인한다. 코드 완료와 선택 릴리스·자연 소비·정책 성과를 분리한다. 자연 장후 수용은 아래 기존 기계/보조 Postclose owner가 맡으며, 기동은 `FinalPolicyStartupAcceptance1002`를 유지한다.

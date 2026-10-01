@@ -383,6 +383,17 @@ class CronCompletionDetector(BaseDetector):
                 )
                 continue
 
+            if jid == "log_rotation_cleanup":
+                blocked = self._cleanup_predecessor_failure(log_path, today_str)
+                if blocked:
+                    details[f"{jid}_status"] = "blocked_by_finalization"
+                    details[f"{jid}_predecessor"] = blocked
+                    warnings.append(
+                        f"{jid}: not started because postclose_finalization failed "
+                        f"before cleanup ({blocked['reason']}); no cleanup PASS claimed"
+                    )
+                    continue
+
             if not log_path.exists():
                 if job.get("mode", "once") == "once" and artifact_status == "done":
                     details[f"{jid}_status"] = "pass"
@@ -600,6 +611,53 @@ class CronCompletionDetector(BaseDetector):
         for item in paths:
             lines.extend(CronCompletionDetector._read_tail_lines(item, n))
         return "".join(lines[-n:])
+
+    @classmethod
+    def _cleanup_predecessor_failure(cls, cleanup_path: Path, source_date: str) -> dict | None:
+        def generation(path: Path) -> tuple | None:
+            try:
+                stat = path.stat()
+                return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+            except FileNotFoundError:
+                return ()
+            except OSError:
+                return None
+
+        parent_path = PROJECT_ROOT / "logs/postclose_finalization_cron.log"
+        before = (generation(cleanup_path), generation(parent_path))
+        if None in before:
+            return None
+        # A recorded cleanup run keeps its own success/failure authority.
+        if cls._read_once_markers(cleanup_path, source_date):
+            return None
+        markers = cls._read_once_markers(parent_path, source_date)
+        if before != (generation(cleanup_path), generation(parent_path)):
+            return None
+        if cls._last_terminal_marker(markers) != "error":
+            return None
+        latest = next(
+            (line for line in reversed(markers.splitlines()) if _ERROR_MARKER.search(line)),
+            "",
+        )
+        # Only explicit pre-cleanup terminal failures prove cleanup was withheld.
+        # Missing/unknown evidence and failures after cleanup remain independent.
+        match = re.match(
+            r"\[FAIL\]\s+postclose_finalization\b.*\breason="
+            r"(predecessor_terminal_failure|predecessor_timeout|predecessor_check_error|"
+            r"effective_date_hard_deadline|finish_by_cutoff_elapsed_before_summary|"
+            r"summary_handoff_refresh_failed|controller_terminal_receipt_invalid|"
+            r"finalization_generation_invalid|finish_by_cutoff_elapsed_before_cleanup)\b",
+            latest,
+        )
+        if not match:
+            return None
+        return {
+            "job_id": "postclose_finalization",
+            "source_date": source_date,
+            "reason": match.group(1),
+            "log": str(parent_path),
+            "terminal_marker": latest,
+        }
 
     @staticmethod
     def _read_once_markers(path: Path, today_str: str) -> str:
