@@ -230,6 +230,27 @@ def build_postclose_done_controller(
     serialized = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
     _atomic_write(attempt, serialized)
     _atomic_write(json_path, serialized)
+    if status == "done" and not summary_handoff_only:
+        from src.engine.automation.postclose_summary_handoff import (
+            reseal_summary_handoff_for_final_controller,
+        )
+        try:
+            reseal_summary_handoff_for_final_controller(
+                DATA_DIR / "report", target_date, json_path,
+            )
+        except (OSError, ValueError, BlockingIOError) as exc:
+            report["status"] = "blocked_direct_evidence_gap"
+            report["whole_native_chain_done_claimed"] = False
+            if isinstance(report.get("postclose_stage_status"), dict):
+                report["postclose_stage_status"]["postclose_all_active_stages_complete"] = False
+            report["blocked_reasons"] = [
+                *report["blocked_reasons"],
+                f"summary_handoff_final_controller_reseal_failed:{type(exc).__name__}",
+            ]
+            status = report["status"]
+            serialized = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
+            _atomic_write(attempt, serialized)
+            _atomic_write(json_path, serialized)
     _atomic_write(md_path,
         "\n".join([
             f"# Postclose done controller - {target_date}", "",

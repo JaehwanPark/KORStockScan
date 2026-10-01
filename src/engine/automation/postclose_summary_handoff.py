@@ -1018,6 +1018,48 @@ def _stage_write(path, value):
     return value
 
 
+def reseal_summary_handoff_for_final_controller(report_dir, day, controller_path):
+    """Bind the already verified summary stage to the final DONE controller.
+
+    The summary worker first writes ``summary_verified``. The subsequent
+    whole-chain controller replaces that output with ``done``; without this
+    bounded reseal, the successful stage immediately becomes stale.
+    """
+    import fcntl
+    path = stage_path(report_dir, day, 'summary_handoff')
+    if not path.exists():
+        return False  # Legacy dates have no independent summary stage.
+    expected = stage_artifacts(report_dir, day, 'summary_handoff')
+    owner = expected['postclose_done_controller']
+    if Path(controller_path).resolve() != owner.resolve():
+        raise ValueError('summary_handoff:final_controller_path_invalid')
+    with path.with_suffix('.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        value = _load_json(path)
+        issues = stage_receipt_issues(report_dir, day, 'summary_handoff')
+        if (value.get('status') != 'succeeded' or value.get('exit_code') != 0
+                or any(issue != 'summary_handoff:output_generation_changed' for issue in issues)):
+            raise ValueError('summary_handoff:final_controller_stage_invalid')
+        controller = _load_json(owner)
+        if (controller.get('date') != day or controller.get('status') != 'done'
+                or controller.get('whole_native_chain_done_claimed') is not True
+                or controller.get('final_verifier_status') != 'pass'):
+            raise ValueError('summary_handoff:final_controller_not_verified')
+        sources = _stage_sources(expected)
+        if not sources['postclose_done_controller']['sha256']:
+            raise ValueError('summary_handoff:final_controller_missing')
+        if value.get('sources') != sources:
+            value['sources'] = sources
+            value['final_controller_reseal'] = {
+                'status': 'done',
+                'controller_sha256': sources['postclose_done_controller']['sha256'],
+            }
+            _stage_write(path, value)
+        if stage_receipt_issues(report_dir, day, 'summary_handoff'):
+            raise ValueError('summary_handoff:final_controller_reseal_invalid')
+    return True
+
+
 def _collector_history_issues(report_dir, day):
     from src.engine.monitoring.widget_collector_expansion_recommendation import history_input_manifest
     report = _load_json(stage_artifacts(report_dir, day, 'collector_recommendation')[

@@ -963,6 +963,28 @@ def test_summary_handoff_tracks_later_active_stage_generation(stage_environment)
     ]
 
 
+def test_summary_handoff_reseals_verified_final_controller(stage_environment):
+    h, day, report, run, _produce = stage_environment
+    assert run('summary_handoff')['status'] == 'succeeded'
+    controller = h.stage_artifacts(report, day, 'summary_handoff')[
+        'postclose_done_controller']
+    controller.write_text(json.dumps({
+        'date': day, 'status': 'done',
+        'whole_native_chain_done_claimed': True,
+        'final_verifier_status': 'pass',
+    }))
+    assert h.stage_receipt_issues(report, day, 'summary_handoff') == [
+        'summary_handoff:output_generation_changed'
+    ]
+    assert h.reseal_summary_handoff_for_final_controller(report, day, controller) is True
+    receipt = h._load_json(h.stage_path(report, day, 'summary_handoff'))
+    assert receipt['final_controller_reseal']['status'] == 'done'
+    assert h.stage_receipt_issues(report, day, 'summary_handoff') == []
+    controller.write_text(json.dumps({'date': day, 'status': 'failed'}))
+    with pytest.raises(ValueError, match='final_controller_not_verified'):
+        h.reseal_summary_handoff_for_final_controller(report, day, controller)
+
+
 def test_committed_label_intake_binds_payload_and_rejects_partial_file(stage_environment):
     h, day, report, run, produce = stage_environment
     payload = report.parent / 'ai_decision_payloads' / f'ai_decision_payloads_{day}.jsonl'
