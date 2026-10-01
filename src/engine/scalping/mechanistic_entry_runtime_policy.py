@@ -810,6 +810,7 @@ def publish_compact_evaluation(
             if current_ai["prompt_version"] != old_ai["prompt_version"]:
                 raise ValueError("compact_future_stage_owner_conflict:" + scope_key)
         selected_soft_scopes = {}
+        deferred_soft_scopes = {}
         if auxiliary_stage and auxiliary_stage.get("source_tuning_allowed") is True:
             for source_scope, assessment in (auxiliary_stage.get("scope_results") or {}).items():
                 scope_key = source_scope.upper()
@@ -842,6 +843,12 @@ def publish_compact_evaluation(
                         continue
                     if scoped_parent:
                         scope_parent_hashes.add(digest(scoped_parent["machine_policy"]))
+                if (assessment.get('selection_rank_version') == 'train_top1_frozen_paired_net_ev_holdout_gate_v4'
+                    and scope_parent_hashes == {digest(old_scoped['machine_policy'])}
+                    and scope_parent_hashes != {digest(current_scoped['machine_policy'])}
+                    and digest(current_ai) == digest(old_ai)):
+                    deferred_soft_scopes[scope_key] = 'new_machine_parent_requires_auxiliary_revalidation'
+                    continue
                 if (assessment.get("parent_prompt_versions") != [old_ai["prompt_version"]]
                     or assessment.get("parent_soft_policy_sha256s") != [digest(old_ai.get("auxiliary_soft_policy"))]
                     or scope_parent_hashes != {digest(current_scoped["machine_policy"])}
@@ -923,6 +930,7 @@ def publish_compact_evaluation(
             compact_promoted_scopes=promoted_scopes,
             auxiliary_stage_sha256=auxiliary_stage.get("artifact_content_sha256") if auxiliary_stage else None,
             auxiliary_soft_promoted_scopes=sorted(selected_soft_scopes),
+            **({'auxiliary_soft_deferred_scopes': deferred_soft_scopes} if deferred_soft_scopes else {}),
             compact_evaluation_source={
                 "source_date": source_day,
                 "artifact_content_sha256": source["artifact_content_sha256"],

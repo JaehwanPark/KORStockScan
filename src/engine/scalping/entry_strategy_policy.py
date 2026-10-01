@@ -632,7 +632,7 @@ def admission_expansion_value(name, values, incumbent):
 
 
 def _balanced_candidates(parent, scope, domains, selectors, start, limit, priority_coordinates=None, search_seed=None,
-                         admission_expansion=False):
+                         admission_expansion=False, recovery_anchor=None):
     base = seed(parent, scope) if 'strategy' not in parent else deepcopy(parent)
     inherited = default_profile(base)
     active = [n for n in domains if any(v != inherited[n] for v in domains[n])]
@@ -651,28 +651,39 @@ def _balanced_candidates(parent, scope, domains, selectors, start, limit, priori
     tree_budget_full = len(base['strategy']['nodes']) > 20
     if tree_budget_full:
         split_options = []
-    groups = [g for g, count in SEARCH_BUDGET.items() for _ in range(count)]
-    domain_hash = digest([domains, selectors, parent, SEARCH_VERSION, SEARCH_BUDGET, priority_coordinates, search_seed])
-    counters = {g: 0 for g in SEARCH_BUDGET}
+    budget = ({'control': 4, 'single': len(REGISTRY), 'recovery_neighborhood': 6,
+               'independent_joint': 4} if recovery_anchor is not None else SEARCH_BUDGET)
+    groups = [g for g, count in budget.items() for _ in range(count)]
+    domain_hash = digest([domains, selectors, parent, SEARCH_VERSION, budget, priority_coordinates, search_seed])
+    counters = {g: 0 for g in budget}
+    anchor = None
     for cursor, allocated in enumerate(groups):
         index = counters[allocated]; counters[allocated] += 1
         group, reason = allocated, None
         if group == 'selector_leaf' and not split_options:
             group, reason = 'local_joint', 'parent_tree_node_budget' if tree_budget_full else 'no_train_selector_boundary'
         values, selector = {}, None
+        if group == 'recovery_neighborhood' and anchor is None:
+            anchor = recovery_anchor()
+        candidate_base = anchor if group == 'recovery_neighborhood' and anchor else base
+        candidate_profile = default_profile(candidate_base)
         if active and (group != 'control' or index):
             if group == 'single':
                 chosen = [active[index % len(active)]]
-            elif group in {'local_joint', 'selector_leaf'}:
+            elif group in {'local_joint', 'selector_leaf', 'recovery_neighborhood', 'independent_joint'}:
                 width = min(len(active), 2 + index % 2)
-                chosen = (list(templates[index % len(templates)]) if templates and index < len(templates) * 2 else
+                chosen = ([active[index % len(active)]] if group == 'recovery_neighborhood' and anchor else
+                          active[:2] if group == 'independent_joint' and index == 0 else
+                          list(templates[index % len(templates)]) if templates and index < len(templates) * 2 else
                           [active[(index * 3 + j) % len(active)] for j in range(width)])
             else:
                 chosen = active
             for n in chosen:
-                options = [v for v in domains[n] if v != inherited[n]]
-                expansion = admission_expansion and group == 'single' and len(chosen) == 1
-                target = admission_expansion_value(n, domains[n], inherited[n]) if expansion else None
+                options = [v for v in domains[n] if v != candidate_profile[n]]
+                if not options:
+                    continue
+                expansion = admission_expansion and (group == 'single' or group in {'independent_joint', 'recovery_neighborhood'})
+                target = admission_expansion_value(n, domains[n], candidate_profile[n]) if expansion else None
                 if target is not None:
                     values[n] = target
                 else:
@@ -683,7 +694,7 @@ def _balanced_candidates(parent, scope, domains, selectors, start, limit, priori
                 selector = (feature, boundary, 'both' if index % 4 == 3 else side)
                 if index == 0:
                     values = {}
-        candidate = _mutate_tree(base, values, selector) if values or selector else deepcopy(base)
+        candidate = _mutate_tree(candidate_base, values, selector) if values or selector else deepcopy(candidate_base)
         errors = validate(candidate['strategy'])
         if cursor >= start:
             yield (None if errors else candidate), dict(cursor=cursor+1, domain_size=len(groups),
@@ -696,7 +707,7 @@ def _balanced_candidates(parent, scope, domains, selectors, start, limit, priori
 
 
 def joint_candidates(parent, scope, *, domains=None, selectors=None, start=0, limit=96, local_first=False,
-                     priority_coordinates=None, search_seed=None, admission_expansion=False):
+                     priority_coordinates=None, search_seed=None, admission_expansion=False, recovery_anchor=None):
     """Bounded traversal of a declared Cartesian domain, with resumable cursor.
 
     Coprime stride visits every combination once; all coordinates participate
@@ -706,7 +717,7 @@ def joint_candidates(parent, scope, *, domains=None, selectors=None, start=0, li
     domains = domains or {name: list(spec[1]) for name, spec in REGISTRY.items()}
     if local_first:
         yield from _balanced_candidates(parent, scope, domains, selectors or [None], start, limit,
-            priority_coordinates, search_seed, admission_expansion=admission_expansion)
+            priority_coordinates, search_seed, admission_expansion=admission_expansion, recovery_anchor=recovery_anchor)
         return
     names = sorted(domains)
     if set(names) - set(REGISTRY) or any(not domains[n] for n in names):
@@ -752,6 +763,7 @@ def joint_candidates(parent, scope, *, domains=None, selectors=None, start=0, li
 
 
 MACHINE_SELECTION_VERSION = 'support_adjusted_win_rate_full_population_v6'
+RECOVERY_SELECTION_VERSION = 'missed_entry_recovery_priority_v7'
 MACHINE_EVALUATION_BASIS = 'machine_full_population_opportunity_v1'
 
 
@@ -774,6 +786,13 @@ def machine_support_adjusted_win_rate(economy):
 def machine_admission_rank(economy, *, node_count=1, complexity=0):
     # Main entry selection ranks cost-bound target-first wins and unique
     # opportunity support. Paired path EV is retained as separate evidence.
+    if economy.get('selection_score_version') == RECOVERY_SELECTION_VERSION:
+        recovered = economy.get('recovery_metrics') or {}
+        values = [machine_support_adjusted_win_rate(recovered),
+                  _number(recovered.get('successful_opportunity_weight')),
+                  machine_support_adjusted_win_rate(economy),
+                  _number(economy.get('selected_opportunity_count'))]
+        return tuple(round(v, 10) if v is not None else None for v in values) + (-node_count, -complexity)
     values = [machine_support_adjusted_win_rate(economy),
               _number(economy.get('win_rate_pct')),
               _number(economy.get('selected_opportunity_count'))]
@@ -816,9 +835,11 @@ def promotion_errors(candidate, parent, scope, *, existing_publication=False):
     # New candidates use the current full-population win-rate contract.
     expected_score_version = (
         candidate.get('selection_score_version')
-        if existing_publication and candidate.get('selection_score_version') in {
+        if candidate.get('selection_score_version') == RECOVERY_SELECTION_VERSION or
+        existing_publication and candidate.get('selection_score_version') in {
             'support_adjusted_win_rate_full_population_v4',
             'support_adjusted_win_rate_full_population_v5',
+            MACHINE_SELECTION_VERSION,
         }
         else MACHINE_SELECTION_VERSION
     )
@@ -835,7 +856,11 @@ def promotion_errors(candidate, parent, scope, *, existing_publication=False):
         errors.append('strategy_candidate_evidence_hash_invalid')
     evidence = candidate.get('evidence') or {}
     full_population = candidate.get('evaluation_basis') == MACHINE_EVALUATION_BASIS
-    legacy_full_publication = full_population and existing_publication and expected_score_version != MACHINE_SELECTION_VERSION
+    recovery = expected_score_version == RECOVERY_SELECTION_VERSION
+    if recovery and ((evidence.get('train') or {}).get('train_search_sha256')
+                     != (evidence.get('evaluation_contract') or {}).get('train_search_sha256')):
+        errors.append('strategy_frozen_training_source_mismatch')
+    legacy_full_publication = full_population and existing_publication and expected_score_version not in {MACHINE_SELECTION_VERSION, RECOVERY_SELECTION_VERSION}
     legacy_nonentry_publication = (existing_publication
         and candidate.get('evaluation_basis') == 'machine_nonentry_opportunity_v1')
     if full_population:
@@ -852,7 +877,9 @@ def promotion_errors(candidate, parent, scope, *, existing_publication=False):
             or baseline.get('evaluation_basis') != MACHINE_EVALUATION_BASIS
             or baseline.get('selection_score_version') != expected_score_version):
             errors.append('strategy_machine_incumbent_population_mismatch')
-        old_rank, new_rank = machine_admission_rank(baseline)[:4], machine_admission_rank(train_economy)[:4]
+        def population_rank(economy):
+            return machine_admission_rank({**economy, 'selection_score_version': MACHINE_SELECTION_VERSION})
+        old_rank, new_rank = population_rank(baseline)[:4], population_rank(train_economy)[:4]
         if all(v is not None for v in old_rank) and (any(v is None for v in new_rank) or new_rank < old_rank):
             errors.append('strategy_machine_candidate_rank_below_incumbent')
         holdout = evidence.get('holdout') or {}
@@ -868,8 +895,8 @@ def promotion_errors(candidate, parent, scope, *, existing_publication=False):
                     or baseline_holdout.get('evaluation_basis') != MACHINE_EVALUATION_BASIS):
                     errors.append('strategy_machine_holdout_population_mismatch')
                 else:
-                    old_holdout_rank = machine_admission_rank(baseline_holdout)
-                    new_holdout_rank = machine_admission_rank(candidate_holdout)
+                    old_holdout_rank = population_rank(baseline_holdout)
+                    new_holdout_rank = population_rank(candidate_holdout)
                     no_incumbent_entry = baseline_holdout.get('selected_opportunity_count') == 0
                     if (any(value is None for value in new_holdout_rank[:3])
                         or (no_incumbent_entry and new_holdout_rank[1] <= 0)
@@ -900,6 +927,22 @@ def promotion_errors(candidate, parent, scope, *, existing_publication=False):
                     or (split == 'holdout' and len(changed_ids) < 3)):
                     errors.append(split + '_machine_support_insufficient')
             if full_population:
+                if recovery:
+                    recovered = economy.get('recovery_metrics') or {}
+                    recovered_ids = recovered.get('opportunity_ids') or []
+                    n = _number(recovered.get('selected_opportunity_count'))
+                    weight = _number(recovered.get('successful_opportunity_weight'))
+                    rate = _number(recovered.get('win_rate_pct'))
+                    if (n is None or weight is None or rate is None or n <= 0
+                        or n != len(set(recovered_ids)) or len(recovered_ids) != len(set(recovered_ids))
+                        or not set(recovered_ids) <= set(ids) or not 0 < weight <= n
+                        or not math.isclose(rate, 100 * weight / n, abs_tol=1e-8)):
+                        errors.append(split + '_machine_recovery_metric_invalid')
+                    if (recovered.get('selected_opportunity_count', 0) < (1 if split == 'train' else 3)
+                        or (recovered.get('successful_opportunity_weight') or 0) <= 0):
+                        errors.append(split + '_machine_recovery_support_insufficient')
+                    if economy.get('existing_success_retention_rate_pct') not in (None, 100., 100):
+                        errors.append(split + '_machine_existing_success_lost')
                 if (economy.get('unevaluated_existing_entry_changes') != []
                     or economy.get('evaluated_existing_entry_changed_count') != machine_existing_entry_changes(arm)):
                     errors.append(split + '_machine_existing_entries_changed_without_evaluation')
@@ -937,8 +980,22 @@ def promotion_errors(candidate, parent, scope, *, existing_publication=False):
             elif split == 'train':
                 errors.append('train_machine_no_selected_entry' if full_population else 'train_machine_no_recovered_entry')
         train, holdout = evidence.get('train') or {}, evidence.get('holdout') or {}
+        from src.engine.scalping.postclose_entry_validation import split_manifest_valid
+        split_valid = recovery and split_manifest_valid(evidence.get('split_manifest') or {},
+            train.get('opportunity_ids', []), holdout.get('opportunity_ids', []))
+        if recovery:
+            manifest = evidence.get('split_manifest') or {}
+            for split, arm in (('train', train), ('holdout', holdout)):
+                identities = manifest.get(split + '_opportunity_ids') or []
+                if sorted(digest(tuple(key)) for key in identities) != sorted(arm.get('opportunity_ids') or []):
+                    errors.append(split + '_machine_split_identity_mismatch')
+        if recovery and (not split_valid or any(d < '2026-09-29' for d in train.get('source_dates', []) + holdout.get('source_dates', []))
+            or max(holdout.get('source_dates') or ['']) < '2026-10-02'
+            or not isinstance((evidence.get('evaluation_contract') or {}).get('train_search_sha256'), str)
+            or len((evidence.get('evaluation_contract') or {}).get('train_search_sha256', '')) != 64):
+            errors.append('strategy_machine_recovery_contract_invalid')
         if holdout and (not train.get('source_dates') or not holdout.get('source_dates')
-                       or max(train['source_dates']) >= min(holdout['source_dates'])
+                       or (not split_valid and max(train['source_dates']) >= min(holdout['source_dates']))
                        or set(train.get('opportunity_ids', [])) & set(holdout.get('opportunity_ids', []))):
             errors.append('strategy_machine_holdout_leak')
         if candidate.get('selected_without_holdout') is not True:

@@ -4211,6 +4211,8 @@ def test_widget_evaluation_wrapper_reuses_one_completed_date(
     monkeypatch.setenv("KORSTOCKSCAN_PROJECT_DIR", str(Path.cwd()))
     monkeypatch.setenv("KORSTOCKSCAN_PYTHON_BIN", str(fake_python))
     monkeypatch.setenv("KORSTOCKSCAN_WIDGET_EVALUATION_WAIT_FOR_EOD", "false")
+    monkeypatch.setenv("POSTCLOSE_STAGE_WORKER", "1")
+    monkeypatch.setenv("POSTCLOSE_SOURCE_DATE", "2026-08-14")
     monkeypatch.setenv("CALL_LOG", str(call_log))
 
     completed = subprocess.run(
@@ -4224,12 +4226,10 @@ def test_widget_evaluation_wrapper_reuses_one_completed_date(
     calls = call_log.read_text(encoding="utf-8").splitlines()
     assert calls == [
         "- 2026-08-14",
-        "-m src.engine.automation.postclose_summary_handoff --owner widget --date 2026-08-14 --phase started",
         "-m src.engine.monitoring.widget_advisory_calibration --target-date 2026-08-14 --write",
         "-m src.engine.monitoring.widget_auto_trade_policy_calibration --target-date 2026-08-14 --write",
         "-m src.engine.monitoring.widget_symbol_signal_policy_research --end-date 2026-08-14 --write",
-        "-m src.engine.monitoring.widget_symbol_runtime_policy --target-date 2026-08-14 --write",
-        "-m src.engine.automation.postclose_summary_handoff --owner widget --date 2026-08-14 --phase finished --exit-code 0",
+        "-m src.engine.automation.machine_research_closed_loop_refresh --source-date 2026-08-14 --family widget --write --source-wait-sec 0",
     ]
     assert "completed target_date=2026-08-14" in completed.stdout
 
@@ -4270,6 +4270,8 @@ def test_widget_evaluation_wrapper_requires_completed_same_date_eod(
     monkeypatch.setenv("KORSTOCKSCAN_PROJECT_DIR", str(tmp_path))
     monkeypatch.setenv("KORSTOCKSCAN_PYTHON_BIN", str(fake_python))
     monkeypatch.setenv("CALL_LOG", str(call_log))
+    monkeypatch.setenv("POSTCLOSE_STAGE_WORKER", "1")
+    monkeypatch.setenv("POSTCLOSE_SOURCE_DATE", "2026-08-14")
 
     completed = subprocess.run(
         ["bash", str(Path.cwd() / "deploy/run_widget_evaluation.sh")],
@@ -4309,6 +4311,8 @@ def test_widget_evaluation_wrapper_fails_closed_when_eod_failed(
     monkeypatch.setenv("KORSTOCKSCAN_PROJECT_DIR", str(tmp_path))
     monkeypatch.setenv("KORSTOCKSCAN_PYTHON_BIN", str(fake_python))
     monkeypatch.setenv("CALL_LOG", str(call_log))
+    monkeypatch.setenv("POSTCLOSE_STAGE_WORKER", "1")
+    monkeypatch.setenv("POSTCLOSE_SOURCE_DATE", "2026-08-14")
 
     completed = subprocess.run(
         ["bash", str(Path.cwd() / "deploy/run_widget_evaluation.sh")],
@@ -4320,8 +4324,37 @@ def test_widget_evaluation_wrapper_fails_closed_when_eod_failed(
     assert completed.returncode == 1
     assert "EOD failed target_date=2026-08-14 status=failed" in completed.stderr
     calls = call_log.read_text(encoding="utf-8")
-    assert "widget_auto_trade_policy_calibration" in calls
+    assert "widget_auto_trade_policy_calibration" not in calls
     assert "widget_symbol_signal_policy_research" not in calls
+
+
+@pytest.mark.parametrize("resolved", ["2026-08-14", "invalid-date"])
+def test_widget_evaluation_dispatcher_binds_resolved_date(tmp_path, monkeypatch, resolved):
+    call_log = tmp_path / "calls.log"
+    fake_python = tmp_path / "fake-python"
+    fake_python.write_text(
+        "#!/usr/bin/env bash\nset -eu\n"
+        'if [[ "${1:-}" == "-c" ]]; then\n'
+        f"  printf 'dependency startup banner\\n{resolved}\\n'\n"
+        "else\n"
+        '  printf \'%s\\n\' "$*" >> "$CALL_LOG"\nfi\n',
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+    monkeypatch.delenv("POSTCLOSE_STAGE_WORKER", raising=False)
+    monkeypatch.setenv("KORSTOCKSCAN_PROJECT_DIR", str(tmp_path))
+    monkeypatch.setenv("KORSTOCKSCAN_PYTHON_BIN", str(fake_python))
+    monkeypatch.setenv("CALL_LOG", str(call_log))
+    result = subprocess.run(["bash", str(Path.cwd() / "deploy/run_widget_evaluation.sh")],
+                            capture_output=True, text=True, check=False)
+    if resolved == "invalid-date":
+        assert result.returncode == 2
+        assert not call_log.exists()
+    else:
+        assert result.returncode == 0
+        assert call_log.read_text().splitlines() == [
+            "-m src.engine.automation.postclose_summary_handoff --stage widget_policy --date 2026-08-14"
+        ]
 
 
 def test_calibrated_widget_symbol_collector_separates_raw_scope_from_exact_date_seed():

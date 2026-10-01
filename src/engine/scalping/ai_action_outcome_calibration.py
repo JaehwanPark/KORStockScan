@@ -4735,7 +4735,7 @@ def _postclose_machine_completed_fetcher(
     return fetcher, now
 
 
-def load_machine_observation_rows(
+def _load_machine_observation_rows_uncached(
     data_root: Path, *, target_date: str, materialized_labels_only: bool = False,
     independent_machine: bool = False, minimum_source_date: str = '2026-09-13',
     completed_price_fetcher: Callable[[str, str], tuple[list[dict], dict]] | None = None,
@@ -5256,6 +5256,90 @@ def load_machine_observation_rows(
     population["economic_exclusions_do_not_erase_capture_population"] = True
     return result, {**dict(counts), "microstructure_capture_population": population,
                     "completed_price_cache_receipts": completed_price_receipts}
+
+
+def load_machine_observation_rows(data_root: Path, *, target_date: str,
+    materialized_labels_only: bool = False, independent_machine: bool = False,
+    minimum_source_date: str = '2026-09-13', completed_price_fetcher=None,
+    completed_price_as_of=None):
+    """Incremental sealed daily projections; unchanged history does not scan raw."""
+    options = dict(materialized_labels_only=materialized_labels_only,
+        independent_machine=independent_machine, minimum_source_date=minimum_source_date,
+        completed_price_fetcher=completed_price_fetcher, completed_price_as_of=completed_price_as_of)
+    if target_date < '2026-10-02':
+        return _load_machine_observation_rows_uncached(data_root, target_date=target_date, **options)
+    from src.engine.scalping import compact_auxiliary_paired_replay as compact
+    import fcntl
+    data_root = Path(data_root)
+    paths = {}
+    for path in (data_root / 'ai_decision_payloads').glob('*.jsonl*'):
+        match = re.search(r'(\d{4}-\d{2}-\d{2})\.jsonl', path.name)
+        if match and max('2026-09-29', minimum_source_date) <= match[1] <= target_date:
+            paths[match[1]] = path
+    rows, counts, partitions, prices, receipts = [], Counter(), [], [], []
+    capture_totals = Counter()
+    kernels = {name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
+               for name in ('ai_action_outcome_calibration.py', 'ai_decision_quality.py',
+                            'entry_strategy_policy.py', 'entry_setup_evidence.py',
+                            'entry_candle_context.py', 'ai_decision_trace.py',
+                            'microstructure_reaction_context.py')}
+    for day in sorted(paths):
+        def dependencies():
+            result = {}
+            names = [('ai_decision_payloads', f'ai_decision_payloads_{day}.jsonl'),
+                     ('ai_decision_trace', f'ai_decision_trace_{day}.jsonl'),
+                     ('pipeline_events', f'pipeline_events_{day}.jsonl'),
+                     ('report/observation_source_quality_audit', f'observation_source_quality_audit_{day}.json'),
+                     ('report/ai_decision_outcome_labels', f'ai_decision_outcome_labels_{day}.json'),
+                     ('runtime', f'ai_decision_quality_control_{day}.json'),
+                     ('report/micro_reversion_economic_reference', f'micro_reversion_economic_reference_{day}.json'),
+                     ('report/machine_completed_price_source', f'machine_completed_price_source_{day}.json')]
+            for directory, name in names:
+                p = existing_or_gzip_path(data_root / directory / name)
+                result[directory] = (list((p.stat().st_size, p.stat().st_mtime_ns, p.stat().st_ino, p.stat().st_ctime_ns)) if p and p.is_file() else None)
+            economic = _load_json(data_root / 'report/micro_reversion_economic_reference' / f'micro_reversion_economic_reference_{day}.json')
+            for source in economic.get('source_artifacts') or []:
+                p = Path(str(source.get('resolved_path') or ''))
+                result[str(p)] = [p.stat().st_size, p.stat().st_mtime_ns, p.stat().st_ctime_ns] if p.is_file() else None
+            return result
+        cache = data_root / 'report/machine_observation_projection' / f'machine_observation_projection_{day}_{int(materialized_labels_only)}_{int(independent_machine)}.json'
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        with cache.with_suffix('.lock').open('a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            before = dependencies()
+            value = compact.read(cache) if cache.is_file() and not cache.is_symlink() and cache.stat().st_size <= 64 * 1024 * 1024 else {}
+            price_as_of = (completed_price_as_of.isoformat() if completed_price_as_of else None) if day == target_date else None
+            if day < target_date and compact.valid(value):
+                price_as_of = (value.get('contract') or {}).get('completed_price_as_of')
+            contract = dict(schema='machine_observation_projection_v1', source_date=day,
+                dependencies=before, kernels=kernels,
+                completed_price_as_of=price_as_of)
+            reused = compact.valid(value) and value.get('contract') == contract
+            if not reused:
+                daily_rows, census = _load_machine_observation_rows_uncached(data_root,
+                    target_date=day, **{**options, 'minimum_source_date': day,
+                        'completed_price_fetcher': completed_price_fetcher if day == target_date else None,
+                        'completed_price_as_of': completed_price_as_of if day == target_date else None})
+                after = dependencies()
+                if any(before[key] != after[key] for key in before if key != 'report/machine_completed_price_source'):
+                    raise ValueError('machine_projection_source_changed:' + day)
+                contract['dependencies'] = after
+                value = compact.sealed(dict(contract=contract, rows=daily_rows, census=census,
+                    runtime_effect=False, actual_order_submitted=False, allowed_runtime_apply=False))
+                compact.write(cache, value)
+            rows.extend(value['rows'])
+            census = value['census']
+            counts.update({k:v for k,v in census.items() if isinstance(v, int)})
+            capture_totals.update({k:v for k,v in (census.get('microstructure_capture_population') or {}).items() if isinstance(v, int)})
+            partitions.extend((census.get('microstructure_capture_population') or {}).get('partitions') or [])
+            prices.extend(census.get('completed_price_cache_receipts') or [])
+            receipts.append(dict(source_date=day, artifact_content_sha256=value['artifact_content_sha256'],
+                cache_reused=reused, raw_reloaded=not reused))
+    population = {key: capture_totals[key] for key in
+                  ('verified_capture_count', 'unique_verified_capture_count', 'duplicate_capture_collapsed_count')}
+    population.update(partitions=partitions, economic_exclusions_do_not_erase_capture_population=True)
+    return rows, {**dict(counts), 'microstructure_capture_population': population,
+                  'completed_price_cache_receipts': prices, 'frozen_projection_receipts': receipts}
 
 
 def _machine_ai_natural_source_receipt(data_root: Path, target_date: str) -> dict:
@@ -8557,7 +8641,7 @@ def _machine_path_value(row):
     return round(boundary - cost, 12), None
 
 
-def _machine_admission_metrics(rows, actions, *, prepared_paths=None, full_population=True):
+def _machine_admission_metrics(rows, actions, *, prepared_paths=None, full_population=True, recovery=False):
     """Equal-opportunity immediate exposure study; no AI or realized PnL."""
     from src.engine.scalping import entry_strategy_policy as strategy
     if len(rows) != len(actions):
@@ -8570,11 +8654,22 @@ def _machine_admission_metrics(rows, actions, *, prepared_paths=None, full_popul
     selected, manifest, success, lost, avoided = [], [], [], [], []
     unknown_changes = []
     historical = Counter()
+    recovered_groups = defaultdict(list)
+    episode_timeline = defaultdict(list)
+    strata = defaultdict(lambda: defaultdict(set))
+    recovery_failure_ids = defaultdict(set)
+    stress_groups = defaultdict(list)
     for row, action, (value, reason) in zip(rows, actions, paths):
         baseline = (row.get('comparison') or {}).get('incumbent_machine_action')
         old, new = baseline == 'ENTER_NOW', action == 'ENTER_NOW'
         if baseline not in {'ENTER_NOW', 'BLOCK', 'RECHECK'}:
             reason = 'incumbent_action_unsupported'
+        if recovery:
+            from src.engine.scalping.postclose_entry_validation import opportunity_identity
+            key = strategy.digest(opportunity_identity(row))
+            # A later machine ENTER is still observed even when its cost/path
+            # cannot enter the economic comparison denominator.
+            episode_timeline[key].append((str(row.get('decision_ts') or ''), old, new))
         if not full_population and old:
             excluded['outside_nonentry_population'] += 1
             continue
@@ -8583,8 +8678,29 @@ def _machine_admission_metrics(rows, actions, *, prepared_paths=None, full_popul
             if old and not new:
                 unknown_changes.append(row.get('decision_trace_id'))
             continue
-        key = _machine_opportunity_id(row)
+        key = key if recovery else _machine_opportunity_id(row)
+        if recovery and not old and new:
+            recovered_groups[key].append(value > 0)
+        if recovery:
+            for dimension, label in (
+                ('parent_action', baseline), ('symbol', row.get('stock_code')),
+                ('hour', str(row.get('decision_ts') or '')[11:13]),
+                ('liquidity', _as_dict(_as_dict(_as_dict((row.get('setup_evidence') or {}).get('mechanistic_context')).get('group')).get('key_parts')).get('liquidity_band') or 'UNKNOWN'),
+                ('parent_blocker', (row.get('comparison') or {}).get('incumbent_machine_reason') or 'UNKNOWN')):
+                bucket = strata[dimension + ':' + str(label)]
+                bucket['eligible'].add(key)
+                if not old and value > 0:
+                    bucket['missed_success'].add(key)
+                    if new:
+                        bucket['recovered_success'].add(key)
+                if not old and new:
+                    bucket['recovered'].add(key)
+                    if value < 0:
+                        recovery_failure_ids[dimension + ':' + str(label)].add(key)
         groups[key].append((value if old else 0., value if new else 0., new))
+        if recovery:
+            stress_value = value - _number(row['comparison']['conservative_execution_cost_pct'])
+            stress_groups[key].append((stress_value if old else 0., stress_value if new else 0., new))
         manifest.append([key, row.get('decision_trace_id'), value, baseline])
         outcome = 'success' if value > 0 else 'failure' if value < 0 else 'neutral'
         historical[(row.get('comparison') or {}).get('historical_machine_action', baseline) + ':' + outcome] += 1
@@ -8629,6 +8745,46 @@ def _machine_admission_metrics(rows, actions, *, prepared_paths=None, full_popul
         auxiliary_ai_required=False, realized_pnl=False, portfolio_pnl=False)
     result.update(support_adjusted_win_rate_pct=strategy.machine_support_adjusted_win_rate(result),
         selection_score_version=strategy.MACHINE_SELECTION_VERSION if full_population else 'support_adjusted_win_rate_preserve_entries_v3')
+    if recovery:
+        fractions = [fmean(v) for v in recovered_groups.values()]
+        result.update(selection_score_version=strategy.RECOVERY_SELECTION_VERSION,
+            recovery_metrics=dict(selected_opportunity_count=len(fractions),
+                opportunity_ids=sorted(recovered_groups), successful_opportunity_weight=sum(fractions),
+                win_rate_pct=100 * fmean(fractions) if fractions else None,
+                comparison_unit='equal_opportunity_mean_binary_attempt_outcome'),
+            recovery_semantics='immediate_machine_admission_cf_later_entry_and_fill_unverified')
+        delayed = sum(any(old and stamp > min(t[0] for t in events if not t[1] and t[2])
+                          for stamp,old,_ in events)
+                      for key,events in episode_timeline.items() if key in recovered_groups)
+        prior = sum(any(old and stamp < min(t[0] for t in events if not t[1] and t[2])
+                        for stamp,old,_ in events)
+                    for key,events in episode_timeline.items() if key in recovered_groups)
+        paired_by_id = {key: fmean(v[1]-v[0] for v in values) for key,values in groups.items()}
+        selected_by_id = {key: [v[1] for v in values if v[2]] for key,values in groups.items()}
+        total_delta = sum(paired_by_id.values())
+        total_weight = sum(fmean(v > 0 for v in values) for values in selected_by_id.values() if values)
+        selected_n = sum(bool(values) for values in selected_by_id.values())
+        result['recovery_diagnostics'] = dict(
+            later_parent_enter_observed_opportunity_count=delayed,
+            earlier_parent_enter_observed_opportunity_count=prior,
+            parent_enter_not_observed_opportunity_count=sum(not any(old for _,old,_ in events)
+                for key,events in episode_timeline.items() if key in recovered_groups),
+            terminal_nonentry_proven=False,
+            cost_stress=dict(basis='same_checkpoint_double_recorded_round_trip_cost_not_path_replay',
+                paired_admission_delta_pct=fmean(fmean(v[1]-v[0] for v in values) for values in stress_groups.values()) if stress_groups else None,
+                worst_selected_path_pct=min((v[1] for values in stress_groups.values() for v in values if v[2]), default=None),
+                metric_role='diagnostic_not_selection_or_realized_pnl'),
+            strata={label: {**{name:len(ids) for name,ids in bucket.items()},
+                'recovered_failure': len(recovery_failure_ids[label]),
+                'recovered_failure_rate': len(recovery_failure_ids[label]) / len(bucket['recovered']) if bucket['recovered'] else None,
+                'missed_success_recall': len(bucket['recovered_success']) / len(bucket['missed_success']) if bucket['missed_success'] else None}
+                for label,bucket in strata.items()},
+            leave_one_block_out={label: dict(
+                remaining_opportunity_count=len(groups)-len(bucket['eligible']),
+                paired_admission_delta_pct=(total_delta-sum(paired_by_id[k] for k in bucket['eligible']))/(len(groups)-len(bucket['eligible'])) if len(groups)>len(bucket['eligible']) else None,
+                selected_win_rate_pct=100*(total_weight-sum(fmean(v > 0 for v in selected_by_id[k]) for k in bucket['eligible'] if selected_by_id[k]))/(selected_n-sum(bool(selected_by_id[k]) for k in bucket['eligible'])) if selected_n>sum(bool(selected_by_id[k]) for k in bucket['eligible']) else None)
+                for label,bucket in strata.items() if label.startswith(('symbol:', 'hour:'))},
+            sensitivity_role='diagnostic_only_no_candidate_reselection')
     return result
 
 
@@ -8636,14 +8792,20 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
     """Select on train only, then evaluate one frozen joint policy on holdout."""
     from copy import deepcopy
     from src.engine.scalping import entry_strategy_policy as strategy
+    from src.engine.scalping.postclose_entry_validation import chronological_split, NEW_LOGIC_SOURCE_DATE
+    calculation_date = (_as_dict(source_contract.get('natural_machine_source_receipt')).get('target_date')
+                        or max((r.get('source_date', '') for r in population), default=''))
+    recovery = (machine_policy_only and tuple(scope) == ('KRX', 'KRX_REGULAR')
+                and calculation_date >= NEW_LOGIC_SOURCE_DATE)
+    selection_version = strategy.RECOVERY_SELECTION_VERSION if recovery else strategy.MACHINE_SELECTION_VERSION
     result = dict(schema="main_entry_strategy_refinement_v2", scope=list(scope),
         status="source_gap", promotion_pass=False, candidate=None,
         incumbent_machine_policy_sha256=strategy.digest(parent),
         source_contract_sha256=_canonical_sha256(source_contract), population_count=len(population),
         evaluated_candidate_count=0, search_complete=False)
     if machine_policy_only:
-        result['selection_basis'] = strategy.MACHINE_SELECTION_VERSION
-        if previous and previous.get('selection_basis') != strategy.MACHINE_SELECTION_VERSION:
+        result['selection_basis'] = selection_version
+        if previous and previous.get('selection_basis') != selection_version:
             result['superseded_selection_basis'] = previous.get('selection_basis')
             # Old ranking/checkpoint state cannot select or skip candidates for
             # the current machine objective. The new candidate still faces the
@@ -8672,9 +8834,13 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
             research_only=True, parent_sha256=strategy.digest(parent)) for name in common}
     if not population:
         return {**result, "blocker": "strategy_population_empty"}
+    original_population = population
     supported, exclusions = [], []
     for row in population:
         setup = row.get('setup_evidence') or {}
+        if recovery and row.get('source_date', '') < '2026-09-29':
+            exclusions.append(dict(decision_trace_id=row.get('decision_trace_id'), reason='before_policy_refresh_start'))
+            continue
         raw = setup.get('strategy_raw_input')
         try:
             reason = ('strategy_predecision_primitives_missing' if not isinstance(raw, dict) or not raw
@@ -8693,13 +8859,13 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
     population = supported
     if not population:
         return {**result, 'blocker': 'strategy_no_supported_predecision_rows'}
-    input_sha256 = strategy.digest([source_contract, parent, population, strategy.SEARCH_VERSION, strategy.MACHINE_SELECTION_VERSION, training_through_date] if machine_policy_only else [source_contract, parent, population])
+    input_sha256 = strategy.digest([source_contract, parent, population, strategy.SEARCH_VERSION, selection_version, training_through_date] if machine_policy_only else [source_contract, parent, population])
     result['input_sha256'] = input_sha256
     # Same input/selection is immutable; retries do not optimize on used holdout.
     if (previous and previous.get('input_sha256') == input_sha256 and previous.get('candidate')
         and previous.get('selection_state') in {'holdout_evaluated', 'published'}
         and not (machine_policy_only and previous.get('holdout_status') == 'unsupported')
-        and (not machine_policy_only or previous.get('selection_basis') == strategy.MACHINE_SELECTION_VERSION)):
+        and (not machine_policy_only or previous.get('selection_basis') == selection_version)):
         return previous
     dates = sorted({r["source_date"] for r in population})
     if training_through_date and training_through_date < dates[0]:
@@ -8714,19 +8880,38 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
     if training_through_date:
         train = [working_row(r) for r in population if r['source_date'] <= training_through_date]
         holdout = [working_row(r) for r in population if r['source_date'] > training_through_date]
-    result['training_through_date'] = training_through_date or max(r['source_date'] for r in train)
+    split_manifest = None
+    if recovery:
+        train_rows, held_rows, split_manifest = chronological_split(population, training_through_date=training_through_date)
+        train, holdout = [working_row(r) for r in train_rows], [working_row(r) for r in held_rows]
+        result['split_manifest'] = split_manifest
+        result['source_exclusions'].extend(split_manifest['exclusions'])
+    result['training_through_date'] = training_through_date or max((r['source_date'] for r in train), default=None)
     result['holdout_boundary_basis'] = 'explicit_forward_boundary' if training_through_date else 'last_source_date'
-    identity = _machine_opportunity_id
+    if recovery:
+        from src.engine.scalping.postclose_entry_validation import opportunity_identity
+        identity = lambda row: strategy.digest(opportunity_identity(row))
+    else:
+        identity = _machine_opportunity_id
     # Floors govern publication only; one valid raw opportunity can be researched.
     baseline_policy = parent if 'strategy' in parent else strategy.seed(parent, scope)
     baseline_exclusions = []
+    setup_hashes = {id(row): strategy.digest(row['setup_evidence']) for row in train + holdout} if recovery else {}
+    baseline_cache = {}
     for row in train + holdout:
         try:
             incumbent_setup = row["setup_evidence"]
             if 'strategy' not in parent:
                 incumbent_setup, _, _ = strategy.rebuild(incumbent_setup, baseline_policy)
             # Rebuild facts while retaining every actual incumbent hierarchy rule.
-            baseline = mechanistic_entry_policy_decision(incumbent_setup, policy=parent)
+            cache_key = setup_hashes.get(id(row))
+            baseline = baseline_cache.get(cache_key) if recovery else None
+            if baseline is None:
+                baseline = mechanistic_entry_policy_decision(incumbent_setup, policy=parent)
+                if recovery:
+                    if len(baseline_cache) >= 64:
+                        baseline_cache.clear()
+                    baseline_cache[cache_key] = baseline
             action = baseline['action']
         except (ValueError, TypeError, KeyError) as exc:
             baseline_exclusions.append(dict(decision_trace_id=row['decision_trace_id'], reason=str(exc)))
@@ -8736,6 +8921,9 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
     excluded_ids = {item['decision_trace_id'] for item in baseline_exclusions}
     train = [r for r in train if r['decision_trace_id'] not in excluded_ids]
     holdout = [r for r in holdout if r['decision_trace_id'] not in excluded_ids]
+    if recovery:
+        split_manifest['train_opportunity_ids'] = [list(key) for key in sorted({opportunity_identity(r) for r in train})]
+        split_manifest['holdout_opportunity_ids'] = [list(key) for key in sorted({opportunity_identity(r) for r in holdout})]
     result['source_exclusions'].extend(baseline_exclusions)
     result['supported_population_count'] = len(train) + len(holdout)
     if not train:
@@ -8749,6 +8937,27 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
         result.update(blocker_owner='entry_setup_paired_replay_batch/strategy_owner_replay',
             closure_test='same_opportunities_candidate_auxiliary_exact_setup_and_complete_owner_cost_capital_replay')
     prepared_paths = {id(row): _machine_path_value(row) for row in train + holdout} if machine_policy_only else {}
+    if recovery:
+        adopted = {row['decision_trace_id']: prepared_paths[id(row)][1] for row in train + holdout}
+        excluded_reasons = {item.get('decision_trace_id') or item.get('attempt_id'): item['reason']
+                            for item in result['source_exclusions']}
+        coverage_strata = defaultdict(Counter)
+        for row in original_population:
+            trace = row.get('decision_trace_id')
+            reason = (adopted[trace] if trace in adopted else
+                      excluded_reasons.get(trace, 'chronology_purged_or_duplicate_attempt'))
+            context = _as_dict(_as_dict(_as_dict((row.get('setup_evidence') or {}).get('mechanistic_context')).get('group')).get('key_parts'))
+            for name, label in (('date', row.get('source_date')), ('symbol', row.get('stock_code')),
+                                ('hour', str(row.get('decision_ts') or '')[11:13]),
+                                ('liquidity', context.get('liquidity_band') or 'UNKNOWN'),
+                                ('cost_basis', _as_dict(_as_dict(row.get('comparison')).get('entry_cost_contract')).get('basis') or 'MISSING')):
+                bucket = coverage_strata[name + ':' + str(label)]
+                bucket['observed_attempts'] += 1
+                bucket['cost_path_adopted_attempts' if reason is None else 'excluded:' + reason] += 1
+        result['source_coverage'] = dict(comparison_unit='attempt_not_independent_opportunity',
+            strata={label: {**dict(counts), 'cost_path_adoption_rate': counts['cost_path_adopted_attempts']/counts['observed_attempts']}
+                    for label,counts in coverage_strata.items()},
+            market_undetected_recall_proven=False, actual_fill_recovery_proven=False)
     evaluation_cache = {}
     def evaluate(rows, candidate):
         cache_key = (tuple(id(r) for r in rows), strategy.digest(candidate))
@@ -8758,6 +8967,9 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
         fallback_counts = Counter()
         transitions, changed_attempts = Counter(), []
         skipped = Counter()
+        # Exact complete setup hashes only. Cache one arm, release before the
+        # next candidate; never key solely on symbol/features or reuse labels.
+        decision_cache, decision_hits, decision_misses = {}, 0, 0
         for row in rows:
             old = row["comparison"]["incumbent_machine_action"]
             # A cost/path exclusion is policy-independent. Keep it in the
@@ -8769,8 +8981,18 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
                 actions.append(None)
                 skipped[reason] += 1
                 continue
-            decision = (dict(action=row['comparison']['incumbent_machine_action']) if machine_policy_only and candidate == parent
-                        else mechanistic_entry_policy_decision(row["setup_evidence"], policy=candidate))
+            if machine_policy_only and candidate == parent:
+                decision = dict(action=row['comparison']['incumbent_machine_action'])
+            elif recovery and setup_hashes[id(row)] in decision_cache:
+                decision = decision_cache[setup_hashes[id(row)]]
+                decision_hits += 1
+            else:
+                decision = mechanistic_entry_policy_decision(row['setup_evidence'], policy=candidate)
+                decision_misses += 1
+                if recovery:
+                    if len(decision_cache) >= 64:
+                        decision_cache.clear()
+                    decision_cache[setup_hashes[id(row)]] = decision
             actions.append(decision['action'])
             fallback_counts[(decision.get('strategy_selection') or {}).get('fallback_reason', 'legacy')] += 1
             old = row["comparison"]["incumbent_machine_action"]
@@ -8797,7 +9019,7 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
                 provider_assessment = {k:v for k,v in decision.items() if k not in {'strategy_selection', 'effective_setup_evidence'}}
                 downstream = (downstream and bool(frozen_setup) and fact_hash(frozen_setup) == fact_hash(rebuilt)
                     and isinstance(frozen_assessment, dict) and frozen_assessment == provider_assessment)
-        economics = (_machine_admission_metrics(rows, actions, prepared_paths=[prepared_paths[id(r)] for r in rows]) if machine_policy_only else
+        economics = (_machine_admission_metrics(rows, actions, prepared_paths=[prepared_paths[id(r)] for r in rows], recovery=recovery) if machine_policy_only else
             _machine_sequence_operating_metrics(rows, {r["decision_trace_id"] for r in selected}, candidate))
         arm = dict(source_dates=sorted({r["source_date"] for r in rows}),
             opportunity_ids=sorted({identity(r) for r in rows}), changed_opportunity_ids=sorted(changed),
@@ -8814,6 +9036,10 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
                 excluded_nonentry_reason_counts=dict(skipped),
                 all_existing_entries_replayed=True,
                 transition_scope='replayed_rows_only')
+            if recovery:
+                arm['replay_coverage'].update(exact_setup_cache_hits=decision_hits,
+                    exact_setup_cache_misses=decision_misses, cache_scope='one_candidate_exact_complete_setup_hash')
+                arm['train_search_sha256'] = search_seed
             # Candidates are unique; retaining all detailed arms provides no
             # reuse and grows memory with candidate_count * population_count.
             evaluation_cache.clear()
@@ -8849,14 +9075,16 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
             step = max(1, (max(grid)-min(grid)) // 2) if isinstance(strategy.REGISTRY[name][0], int) else (max(grid)-min(grid))/2
             domains[name] = sorted(set(grid) | {max(low,min(grid)-step), min(high,max(grid)+step)})
     # Priority uses only predecision blockers/source support, never path labels.
+    search_seed = strategy.digest([train, parent, strategy.registry_contract(), strategy.SEARCH_VERSION, selection_version]) if recovery else input_sha256
+    result['train_search_sha256'] = search_seed
     blocker_text = ' '.join(str(r['comparison'].get('incumbent_machine_reason') or '') + ' ' +
         json.dumps(r['setup_evidence'].get('hard_blockers') or []) for r in train).lower()
-    prior_single = set((((previous or {}).get('train_checkpoint') or {}).get('group_counts') or {}).get('single', {}).get('coordinates') or [])
+    prior_single = set() if recovery else set((((previous or {}).get('train_checkpoint') or {}).get('group_counts') or {}).get('single', {}).get('coordinates') or [])
     priority_coordinates = sorted((k for k in domains if len(domains[k]) > 1), key=lambda k: (
         -int(any(token in blocker_text for token in k.split('_') if len(token) > 4)),
-        k in prior_single, -support[k], strategy.digest([input_sha256, k])))
+        k in prior_single, -support[k], strategy.digest([search_seed, k])))
     result['search_domain'] = dict(domains=domains, selectors=selectors, priority_coordinates=priority_coordinates,
-        budget=strategy.SEARCH_BUDGET, version=strategy.SEARCH_VERSION, search_seed=input_sha256,
+        budget=({'control': 4, 'single': len(strategy.REGISTRY), 'recovery_neighborhood': 6, 'independent_joint': 4} if recovery else strategy.SEARCH_BUDGET), version=strategy.SEARCH_VERSION, search_seed=search_seed,
         priority_basis='predecision_blockers_unvisited_source_support')
     if machine_policy_only:
         prior_coverage = ((previous or {}).get('coordinate_coverage') or {}) if (previous or {}).get('input_sha256') == input_sha256 else {}
@@ -8891,7 +9119,7 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
     frozen = (previous or {}).get('candidate') or {}
     same_input_unsupported_holdout = (machine_policy_only and previous
         and previous.get('input_sha256') == input_sha256
-        and previous.get('selection_basis') == strategy.MACHINE_SELECTION_VERSION
+        and previous.get('selection_basis') == selection_version
         and previous.get('selection_state') == 'holdout_evaluated'
         and previous.get('search_complete') is True
         and previous.get('holdout_status') == 'unsupported'
@@ -8914,10 +9142,12 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
                 'selection_status': 'frozen_candidate_replay_failed'}
         frozen['evidence_sha256'] = strategy.digest(frozen['evidence'])
         errors = strategy.promotion_errors(frozen, parent, scope)
-        if machine_policy_only and (previous or {}).get('selection_basis') != strategy.MACHINE_SELECTION_VERSION:
+        if machine_policy_only and (previous or {}).get('selection_basis') != selection_version:
             errors.append('frozen_selection_version_superseded')
         if machine_policy_only and frozen['policy'] == parent:
             errors.append('candidate_equals_incumbent')
+        if recovery and previous.get('train_search_sha256') != search_seed:
+            errors.append('frozen_selection_training_source_changed')
         if machine_policy_only:
             finalize_coverage(start)
             for item in coverage.values():
@@ -8942,7 +9172,7 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
         return {**result, 'candidate': frozen, 'promotion_pass': not errors,
             'promotion_errors': errors, 'status': 'eligible' if not errors else 'hold_candidate',
             'selection_status': ('frozen_before_same_holdout_revision' if not machine_policy_only or
-                (previous or {}).get('selection_basis') == strategy.MACHINE_SELECTION_VERSION
+                (previous or {}).get('selection_basis') == selection_version
                 else 'frozen_prior_selection_version')}
     saved = (previous or {}).get('train_checkpoint') or {} if start else {}
     best, best_evidence, best_score = saved.get('best'), saved.get('best_evidence'), saved.get('best_score')
@@ -8952,7 +9182,7 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
         result['incumbent_evidence'] = dict(train=incumbent_evidence)
         incumbent_score = _machine_admission_rank(incumbent_evidence['economics'],
             node_count=len(parent.get('strategy', {}).get('nodes') or {'root': {}}))
-        if all(v is not None for v in incumbent_score[:3]) and (best_score is None or incumbent_score >= best_score):
+        if not recovery and all(v is not None for v in incumbent_score[:3]) and (best_score is None or incumbent_score >= best_score):
             best, best_evidence, best_score = deepcopy(parent), incumbent_evidence, incumbent_score
     blockers = Counter((previous or {}).get('candidate_blockers') or {}) if start else Counter()
     visited = set(saved.get('visited_hashes') or [])
@@ -8960,9 +9190,17 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
     result['selection_state'] = 'searching_train'
     machine_scores = list((previous or {}).get('machine_candidate_scores') or []) if machine_policy_only and start else []
     research_candidates = deepcopy((previous or {}).get('research_candidates') or []) if (previous or {}).get('input_sha256') == input_sha256 else []
+    recovery_anchor = saved.get('recovery_anchor')
+    anchor_frozen = 'recovery_anchor' in saved
+    def freeze_anchor():
+        nonlocal recovery_anchor, anchor_frozen
+        if not anchor_frozen:
+            recovery_anchor, anchor_frozen = deepcopy(best), True
+        return recovery_anchor
     for candidate, progress in strategy.joint_candidates(parent, scope, domains=domains, selectors=selectors, start=start, limit=limit,
             **({'local_first': True, 'priority_coordinates': priority_coordinates,
-                'search_seed': input_sha256, 'admission_expansion': True} if machine_policy_only else {})):
+                'search_seed': search_seed, 'admission_expansion': True,
+                **({'recovery_anchor': freeze_anchor} if recovery else {})} if machine_policy_only else {})):
         result["search"] = progress
         counts = group_counts.setdefault(progress.get('group', 'legacy'), dict(attempted=0, invalid=0, evaluated=0, deduplicated=0, coordinates=[]))
         counts['attempted'] += 1
@@ -9013,6 +9251,11 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
             win_rate = economy.get('win_rate_pct')
             complexity = sum(sum(v != node.get('fallback_profile', strategy.default_profile(parent))[k] for k,v in node['profile'].items()) for node in candidate['strategy']['nodes'].values())
             score = _machine_admission_rank(economy, node_count=len(candidate['strategy']['nodes']), complexity=complexity)
+            qualified_recovery = (not recovery or
+                (economy['recovery_metrics']['successful_opportunity_weight'] > 0
+                 and economy['existing_success_retention_rate_pct'] in (None, 100.)
+                 and (strategy.machine_support_adjusted_win_rate(incumbent_evidence['economics']) is None
+                      or strategy.machine_support_adjusted_win_rate(economy) >= strategy.machine_support_adjusted_win_rate(incumbent_evidence['economics']))))
             machine_scores.append(dict(policy_sha256=strategy.digest(candidate),
                 search_group=progress.get('group'), node_count=len(candidate['strategy']['nodes']),
                 fallback_counts=evidence['fallback_counts'],
@@ -9024,10 +9267,13 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
                 and win_rate is not None and worst is not None
                 and worst > CATASTROPHIC_LOSS_PCT and score[0] is not None
                 and not economy['unevaluated_existing_entry_changes']
+                and qualified_recovery
                 and (best_score is None or score > best_score)):
                 best, best_evidence, best_score = candidate, evidence, score
             result['train_checkpoint'] = dict(best=best, best_evidence=best_evidence, best_score=best_score,
                 visited_hashes=sorted(visited), group_counts=group_counts)
+            if recovery and anchor_frozen:
+                result['train_checkpoint']['recovery_anchor'] = recovery_anchor
             result['machine_candidate_scores'] = machine_scores
             finalize_coverage(progress['cursor'])
             if checkpoint and (progress['cursor'] % 8 == 0 or progress['search_complete']):
@@ -9042,6 +9288,8 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
             best, best_evidence, best_score = candidate, evidence, score
     result['train_checkpoint'] = dict(best=best, best_evidence=best_evidence, best_score=best_score,
         visited_hashes=sorted(visited), group_counts=group_counts)
+    if recovery and anchor_frozen:
+        result['train_checkpoint']['recovery_anchor'] = recovery_anchor
     if machine_policy_only:
         finalize_coverage((result.get('search') or {}).get('cursor', start))
     result["search_complete"] = result.get("search", {}).get("search_complete", False)
@@ -9060,10 +9308,13 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
         'no_action_change_in_search_space' if result['search_complete'] else 'search_incomplete')
     if machine_policy_only:
         machine_evidence = dict(train=best_evidence, incumbent_train=incumbent_evidence,
-            evaluation_contract=dict(selection_version=strategy.MACHINE_SELECTION_VERSION,
+            evaluation_contract=dict(selection_version=selection_version,
                 evaluation_basis=strategy.MACHINE_EVALUATION_BASIS, input_sha256=input_sha256,
                 source_contract_sha256=result['source_contract_sha256'], parent_sha256=strategy.digest(parent),
                 scope=list(scope), training_through_date=result['training_through_date']))
+        if recovery:
+            machine_evidence['split_manifest'] = split_manifest
+            machine_evidence['evaluation_contract']['train_search_sha256'] = search_seed
         holdout_status = 'unavailable_or_no_candidate'
         if best is not None and holdout:
             try:
@@ -9074,23 +9325,25 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
                 holdout_status = 'unsupported'
                 machine_evidence['holdout'] = {'blocker': str(exc)}
         candidate = (dict(schema='main_entry_strategy_candidate_v2',
-            evaluation_basis=strategy.MACHINE_EVALUATION_BASIS, selection_score_version=strategy.MACHINE_SELECTION_VERSION, scope=list(scope),
+            evaluation_basis=strategy.MACHINE_EVALUATION_BASIS, selection_score_version=selection_version, scope=list(scope),
             parent_policy=deepcopy(parent), parent_sha256=strategy.digest(parent),
             policy=best, policy_sha256=strategy.digest(best), evidence=machine_evidence,
             evidence_sha256=strategy.digest(machine_evidence), selected_without_holdout=True)
             if best is not None else None)
         if 'incumbent_holdout' in machine_evidence:
             result['incumbent_evidence']['holdout'] = machine_evidence['incumbent_holdout']
-        errors = strategy.promotion_errors(candidate, parent, scope) if candidate else ['no_evaluable_machine_candidate']
+        missing_candidate_reason = ('no_recovery_qualified_candidate' if recovery and result['evaluated_candidate_count']
+                                    else 'no_evaluable_machine_candidate')
+        errors = strategy.promotion_errors(candidate, parent, scope) if candidate else [missing_candidate_reason]
         if best == parent:
             errors.append('candidate_equals_incumbent')
         return {**result, 'schema': 'main_entry_machine_policy_selection_v1',
-            'status': 'selected_machine_policy' if best is not None else 'no_evaluable_machine_candidate',
+            'status': 'selected_machine_policy' if best is not None else missing_candidate_reason,
             'machine_policy': best, 'machine_policy_sha256': strategy.digest(best) if best is not None else None,
             'machine_evidence': machine_evidence, 'auxiliary_ai_required': False,
             'machine_candidate_scores': machine_scores,
             'candidate': candidate, 'promotion_pass': not errors, 'promotion_errors': errors,
-            'selection_basis': strategy.MACHINE_SELECTION_VERSION,
+            'selection_basis': selection_version,
             'holdout_status': holdout_status, 'selection_state': 'holdout_evaluated',
             'runtime_effect': False, 'allowed_runtime_apply': False}
     if support_blocker:
@@ -9582,6 +9835,7 @@ def build_machine_policy_report(rows, *, source_receipt, target_date, data_root=
             if line.startswith('VmSwap:')))
     except (OSError, StopIteration, ValueError, IndexError):
         swap_kib = None
+    selection_version = ((selections.get('KRX|KRX_REGULAR') or {}).get('selection_basis') or strategy.MACHINE_SELECTION_VERSION)
     return _with_artifact_content_sha256(dict(schema='main_machine_policy_report_v1',
         target_date=target_date, generated_at=datetime.now(KST).isoformat(),
         search_resource_usage=dict(wall_sec=round(time.monotonic() - started_wall, 3),
@@ -9590,7 +9844,7 @@ def build_machine_policy_report(rows, *, source_receipt, target_date, data_root=
             current_swap_kib=swap_kib,
             evaluated_candidate_count=sum(row.get('evaluated_candidate_count', 0) for row in selections.values()),
             replay_population_count=sum(row.get('supported_population_count', 0) for row in selections.values())),
-        evaluation_basis=strategy.MACHINE_EVALUATION_BASIS, selection_score_version=strategy.MACHINE_SELECTION_VERSION,
+        evaluation_basis=strategy.MACHINE_EVALUATION_BASIS, selection_score_version=selection_version,
         policy_by_scope=policy, policy_sha256=strategy.digest(policy), selections=selections,
         missing_scope_coordinates=missing_scope_coordinates,
         report_scope='main_mechanistic_entry', noncompact_sections_refreshed=True,
@@ -9598,7 +9852,7 @@ def build_machine_policy_report(rows, *, source_receipt, target_date, data_root=
         status='machine_policy_generated' if policy else 'no_evaluable_machine_candidate',
         metric_role='sim_probe_ev', decision_authority='machine_policy_selection_only',
         window_policy='chronological_train_then_holdout_diagnostic', sample_floor='one_valid_episode_for_selection',
-        primary_decision_metric=strategy.MACHINE_SELECTION_VERSION, source_quality_gate='verified_raw_full_cost_terminal_path',
+        primary_decision_metric=selection_version, source_quality_gate='verified_raw_full_cost_terminal_path',
         auxiliary_ai_required=False, runtime_effect=False, allowed_runtime_apply=False,
         forbidden_uses=['realized_pnl', 'portfolio_pnl', 'auxiliary_ai_pass']))
 

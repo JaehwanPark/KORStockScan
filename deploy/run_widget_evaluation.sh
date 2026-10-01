@@ -14,7 +14,11 @@ cd "$PROJECT_DIR"
 export PYTHONPATH="$PROJECT_DIR"
 
 if [[ "${POSTCLOSE_STAGE_WORKER:-0}" != "1" ]]; then
-  target="${1:-$($PYTHON_BIN -c 'from src.engine.monitoring.widget_auto_trade_policy_calibration import resolve_completed_policy_target_date; print(resolve_completed_policy_target_date().isoformat())')}"
+  target="${1:-$($PYTHON_BIN -c 'from src.engine.monitoring.widget_auto_trade_policy_calibration import resolve_completed_policy_target_date; print(resolve_completed_policy_target_date().isoformat())' | tail -n 1)}"
+  if [[ ! "$target" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+    printf '[WIDGET_EVALUATION] invalid completed target date=%s\n' "$target" >&2
+    exit 2
+  fi
   stage_args=()
   if [[ "${2:-}" == "--recover-closed-target" ]]; then stage_args+=(--recover-closed-target); fi
   exec "$PYTHON_BIN" -m src.engine.automation.postclose_summary_handoff --stage widget_policy --date "$target" "${stage_args[@]}"
