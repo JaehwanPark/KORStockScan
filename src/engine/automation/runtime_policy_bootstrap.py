@@ -1275,6 +1275,105 @@ def future_handoff_transition_path(
             / target_date / f"{source_date}_{summary_sha[:16]}_{manifest_sha[:16]}_{verification_sha[:16]}.json")
 
 
+def release_selection_for_generation(
+    data_dir: Path, manifest: dict[str, Any], verification: dict[str, Any]
+) -> dict[str, Any]:
+    """Resolve the selector that owned a dated PREOPEN generation.
+
+    A later selector must not rewrite historical PREOPEN evidence. Historical
+    ownership requires the bounded backup chain, exact selection interval,
+    and the immutable release's Git identity; no current PID is inferred.
+    """
+    data_dir = Path(data_dir).resolve()
+    current_path = data_dir / "runtime" / "runtime_release_selection.json"
+    try:
+        current_raw = current_path.read_bytes()
+        if len(current_raw) > 1024 * 1024:
+            raise ValueError("selection_too_large")
+        current = json.loads(current_raw)
+    except (OSError, ValueError, TypeError):
+        return {"status": "invalid", "issues": ["release_selection_unreadable"]}
+    if not isinstance(current, dict) or current.get("schema") != "runtime_release_selection_v1":
+        return {"status": "invalid", "issues": ["release_selection_invalid"]}
+    selected = manifest.get("selected_release_sha")
+
+    def valid_identity(value: dict[str, Any]) -> bool:
+        commit = value.get("git_commit")
+        return (value.get("schema") == "runtime_release_selection_v1"
+                and isinstance(commit, str) and len(commit) == 40
+                and all(char in "0123456789abcdef" for char in commit)
+                and Path(str(value.get("release_root") or "")).is_absolute())
+    if not valid_identity(current):
+        return {"status": "invalid", "issues": ["release_selection_invalid"]}
+    if selected == current["git_commit"]:
+        return {"status": "current", "selection": current,
+                "selection_path": str(current_path),
+                "selection_sha256": _digest_bytes(current_raw), "issues": []}
+    try:
+        generated = datetime.fromisoformat(manifest["generated_at"])
+        verified = datetime.fromisoformat(verification["verified_at"])
+        successor_at = datetime.fromisoformat(current["selected_at_kst"])
+        if (generated.tzinfo is None or verified.tzinfo is None
+                or successor_at.tzinfo is None or generated > verified):
+            raise ValueError("generation_time_invalid")
+    except (KeyError, TypeError, ValueError):
+        return {"status": "invalid", "issues": ["release_selection_history_time_invalid"]}
+    workspace = data_dir.parent
+    backup_dir = workspace / "tmp"
+    managed_dir = workspace.parent / f"{workspace.name}-runtime-releases"
+    successor = current
+    visited: set[Path] = set()
+    for _ in range(32):
+        backup_name = successor.get("previous_selection_backup")
+        if not isinstance(backup_name, str):
+            break
+        backup = Path(backup_name)
+        if (not backup.is_absolute() or backup.parent != backup_dir
+                or backup in visited or backup.is_symlink()):
+            break
+        visited.add(backup)
+        try:
+            raw = backup.read_bytes()
+            if len(raw) > 1024 * 1024:
+                break
+            prior = json.loads(raw)
+            prior_at = datetime.fromisoformat(prior["selected_at_kst"])
+            next_at = datetime.fromisoformat(successor["selected_at_kst"])
+        except (OSError, ValueError, TypeError, KeyError):
+            break
+        if (not isinstance(prior, dict) or not valid_identity(prior)
+                or prior_at.tzinfo is None or next_at.tzinfo is None
+                or prior_at >= next_at
+                or successor.get("previous_git_commit") != prior["git_commit"]
+                or successor.get("previous_release_root") != prior["release_root"]):
+            break
+        if prior["git_commit"] == selected:
+            release = Path(prior["release_root"])
+            if (release.parent != managed_dir or not release.is_dir()
+                    or not (release / ".git").exists()
+                    or not prior_at <= generated <= verified < next_at):
+                break
+            try:
+                head = subprocess.check_output(
+                    ["git", "-C", str(release), "rev-parse", "HEAD"],
+                    text=True, timeout=5,
+                ).strip()
+                dirty = subprocess.check_output(
+                    ["git", "-C", str(release), "status", "--porcelain",
+                     "--untracked-files=all", "--", "src", "deploy", "restart.sh"],
+                    text=True, timeout=5,
+                )
+            except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                break
+            if head == selected and not dirty:
+                return {"status": "historical", "selection": prior,
+                        "selection_path": str(backup),
+                        "selection_sha256": _digest_bytes(raw), "issues": []}
+            break
+        successor = prior
+    return {"status": "invalid", "issues": ["release_selection_generation_unproven"]}
+
+
 def future_handoff_transition_contract(
     source_date: str, target_date: str, *, data_dir: Path | None = None,
     allow_pid_receipt: bool = False,
@@ -1293,20 +1392,20 @@ def future_handoff_transition_contract(
     manifest_file = root / f"runtime_policy_bootstrap_{target_date}.json"
     verification_file = root / f"runtime_policy_bootstrap_verify_{target_date}.json"
     env_file = root / f"runtime_policy_bootstrap_{target_date}.env"
-    selection_file = data_dir / "runtime" / "runtime_release_selection.json"
     try:
         raw = {label: path.read_bytes() for label, path in (
             ("summary", summary_path), ("manifest", manifest_file),
             ("verification", verification_file), ("env", env_file),
-            ("selection", selection_file),
         )}
-        summary, manifest, verification, selection = (
-            json.loads(raw[label]) for label in ("summary", "manifest", "verification", "selection")
+        summary, manifest, verification = (
+            json.loads(raw[label]) for label in ("summary", "manifest", "verification")
         )
     except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
         return {"status": "blocked", "issues": [f"future_transition_source_missing_or_invalid:{type(exc).__name__}"]}
-    if not all(isinstance(value, dict) for value in (summary, manifest, verification, selection)):
+    if not all(isinstance(value, dict) for value in (summary, manifest, verification)):
         return {"status": "blocked", "issues": ["future_transition_object_required"]}
+    selection_binding = release_selection_for_generation(data_dir, manifest, verification)
+    selection = selection_binding.get("selection") or {}
     prior = summary.get("preopen_consumption_receipt") or {}
     issues = []
     if (summary.get("date") != source_date or not isinstance(prior, dict)
@@ -1353,11 +1452,7 @@ def future_handoff_transition_contract(
             or verification.get("pid_mismatches", []) != []):
         issues.append("future_transition_verification_invalid")
     commit = selection.get("git_commit")
-    if (selection.get("schema") != "runtime_release_selection_v1"
-            or not isinstance(commit, str) or len(commit) != 40
-            or any(char not in "0123456789abcdef" for char in commit)
-            or not Path(str(selection.get("release_root") or "")).is_absolute()
-            or manifest.get("selected_release_sha") != commit):
+    if selection_binding["status"] == "invalid":
         issues.append("future_transition_selected_release_mismatch")
     if issues:
         return {"status": "blocked", "issues": issues}
@@ -1382,8 +1477,9 @@ def future_handoff_transition_contract(
         "verification_sha256": verification_sha,
         "env_path": str(env_file),
         "env_sha256": manifest["env_sha256"],
-        "release_selection_path": str(selection_file),
-        "release_selection_sha256": _digest_bytes(raw["selection"]),
+        "release_selection_path": selection_binding["selection_path"],
+        "release_selection_sha256": selection_binding["selection_sha256"],
+        "release_selection_status": selection_binding["status"],
         "selected_release_commit": commit,
         "policy_receipts_sha256": _digest_json(manifest.get("direct_family_receipts") or []),
         "valid_empty": manifest.get("selected_families") == [],

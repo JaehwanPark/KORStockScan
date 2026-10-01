@@ -15,6 +15,7 @@ from typing import Any
 from src.engine.automation.runtime_policy_bootstrap import (
     _digest_json as _bootstrap_digest_json,
     direct_policy_digest,
+    release_selection_for_generation,
     validate_rising_missed_policy_receipt,
 )
 from src.engine.scalping.holding_path_vote_policy import (
@@ -835,9 +836,8 @@ def _runtime_consumption_state(
     verification_path = runtime_dir / f"runtime_policy_bootstrap_verify_{apply_date}.json"
     manifest = _load_json(manifest_path)
     verification = _load_json(verification_path)
-    selection_path = DATA_DIR / "runtime" / "runtime_release_selection.json"
-    selection = _load_json(selection_path)
-    selected_commit = selection.get("git_commit") if selection.get("schema") == "runtime_release_selection_v1" else None
+    selection_binding = release_selection_for_generation(DATA_DIR, manifest, verification)
+    selected_commit = (selection_binding.get("selection") or {}).get("git_commit")
     future_issues: list[str] = []
     if target_date >= "2026-09-23" and effective_dates and (manifest_path.exists() or verification_path.exists()):
         incumbent_date = manifest.get("source_incumbent_target_date")
@@ -859,10 +859,7 @@ def _runtime_consumption_state(
         if (manifest.get("env_file") != str(env_path)
                 or manifest.get("env_sha256") != _sha(env_path)):
             future_issues.append("env_generation_invalid")
-        if (not isinstance(selected_commit, str) or len(selected_commit) != 40
-                or any(char not in "0123456789abcdef" for char in selected_commit)
-                or not Path(str(selection.get("release_root") or "")).is_absolute()
-                or manifest.get("selected_release_sha") != selected_commit):
+        if selection_binding["status"] == "invalid":
             future_issues.append("selected_release_mismatch")
         if verification_path.exists() and verification.get("manifest_sha256") != manifest.get("manifest_sha256"):
             future_issues.append("verification_manifest_mismatch")
@@ -898,8 +895,9 @@ def _runtime_consumption_state(
         "manifest_sha256": _sha(manifest_path),
         "verification_path": str(verification_path),
         "verification_sha256": _sha(verification_path),
-        "release_selection_path": str(selection_path),
-        "release_selection_sha256": _sha(selection_path),
+        "release_selection_path": selection_binding.get("selection_path"),
+        "release_selection_sha256": selection_binding.get("selection_sha256"),
+        "release_selection_status": selection_binding["status"],
         "selected_release_commit": selected_commit,
         "manifest_content_sha256": manifest.get("manifest_sha256"),
         "manifest_env_sha256": manifest.get("env_sha256"),

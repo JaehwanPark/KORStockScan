@@ -375,6 +375,7 @@ def inspect_future_handoff(
     from src.engine.automation.runtime_policy_bootstrap import (
         future_handoff_transition_contract,
         future_handoff_transition_path,
+        release_selection_for_generation,
     )
 
     preopen = summary.get("preopen_consumption_receipt") or {}
@@ -395,7 +396,6 @@ def inspect_future_handoff(
     root = data_dir / "runtime" / "policy_bootstrap"
     manifest_file = root / f"runtime_policy_bootstrap_{apply_date}.json"
     verification_file = root / f"runtime_policy_bootstrap_verify_{apply_date}.json"
-    selection_file = data_dir / "runtime" / "runtime_release_selection.json"
     if (summary.get("date") != source_date or preopen.get("source_date") != source_date
             or preopen.get("manifest_path") != str(manifest_file)
             or preopen.get("verification_path") != str(verification_file)):
@@ -423,15 +423,15 @@ def inspect_future_handoff(
     manifest_sha = hashlib.sha256(manifest_raw).hexdigest()
     verification_sha = hashlib.sha256(verification_raw).hexdigest()
     try:
-        selection_raw = selection_file.read_bytes()
-        selection = json.loads(selection_raw)
         verification = json.loads(verification_raw)
         manifest = json.loads(manifest_raw)
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         return {**base, "status": "rejected", "issues": ["future_generation_unreadable"]}
-    if (not isinstance(selection, dict) or not isinstance(verification, dict)
-            or not isinstance(manifest, dict)):
+    if not isinstance(verification, dict) or not isinstance(manifest, dict):
         return {**base, "status": "rejected", "issues": ["future_generation_object_invalid"]}
+    selection_binding = release_selection_for_generation(data_dir, manifest, verification)
+    if selection_binding["status"] == "invalid":
+        return {**base, "status": "stale", "issues": selection_binding["issues"]}
     base["pid_receipt_present"] = (
         type(verification.get("pid")) is int and verification["pid"] > 0
         and verification.get("pid_passed") is True
@@ -451,7 +451,8 @@ def inspect_future_handoff(
               "manifest_sha256": manifest_sha, "verification_sha256": verification_sha,
               "manifest_content_sha256": contract["manifest_content_sha256"],
               "env_sha256": contract["env_sha256"],
-              "selected_release_commit": contract["selected_release_commit"]}
+              "selected_release_commit": contract["selected_release_commit"],
+              "release_selection_status": selection_binding["status"]}
     same = (
         preopen.get("manifest_sha256") == manifest_sha
         and preopen.get("verification_sha256") == verification_sha
@@ -460,7 +461,11 @@ def inspect_future_handoff(
     )
     if same:
         return {**result, "status": (
-            "same_generation_pid_receipt_unconfirmed"
+            "historical_generation_pid_receipt_unconfirmed"
+            if selection_binding["status"] == "historical" and base["pid_receipt_present"]
+            else "historical_generation_no_pid"
+            if selection_binding["status"] == "historical"
+            else "same_generation_pid_receipt_unconfirmed"
             if base["pid_receipt_present"] else "same_generation_no_pid"
         )}
     path = future_handoff_transition_path(

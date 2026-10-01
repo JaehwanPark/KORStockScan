@@ -1,5 +1,6 @@
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -565,6 +566,73 @@ def test_current_future_summary_rejects_release_and_manifest_generation_mismatch
     state, _, receipt = mod._runtime_consumption_state(source, sources)
     assert state == "rejected"
     assert "selected_release_mismatch" in receipt["future_generation_issues"]
+
+
+def test_late_summary_binds_historical_preopen_selection_without_pid(monkeypatch, tmp_path):
+    from src.engine.automation import runtime_policy_bootstrap as bootstrap
+
+    workspace = tmp_path / "KORStockScan"
+    workspace.mkdir()
+    data = workspace / "data"
+    monkeypatch.setattr(mod, "DATA_DIR", data)
+    release = tmp_path / "KORStockScan-runtime-releases" / "preopen"
+    release.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(release)], check=True)
+    (release / "src").mkdir()
+    (release / "src" / "marker.txt").write_text("reviewed\n")
+    subprocess.run(["git", "-C", str(release), "add", "src/marker.txt"], check=True)
+    subprocess.run(["git", "-C", str(release), "-c", "user.name=Test",
+                    "-c", "user.email=test@example.invalid", "commit", "-qm", "source"], check=True)
+    commit = subprocess.check_output(["git", "-C", str(release), "rev-parse", "HEAD"], text=True).strip()
+    old = {"schema": "runtime_release_selection_v1", "git_commit": commit,
+           "release_root": str(release), "selected_at_kst": "2026-10-01T07:00:00+09:00"}
+    backup = workspace / "tmp" / "runtime-selection-before-next.json"
+    _write(backup, old)
+    current = {"schema": "runtime_release_selection_v1", "git_commit": "b" * 40,
+               "release_root": str(release.parent / "next"),
+               "selected_at_kst": "2026-10-01T08:00:00+09:00",
+               "previous_git_commit": commit, "previous_release_root": str(release),
+               "previous_selection_backup": str(backup)}
+    selection = data / "runtime" / "runtime_release_selection.json"
+    _write(selection, current)
+    source, apply = "2026-09-30", "2026-10-01"
+    root = data / "runtime" / "policy_bootstrap"
+    env = root / f"runtime_policy_bootstrap_{apply}.env"
+    env.parent.mkdir(parents=True)
+    env.write_text("export TEST=true\n")
+    manifest = {"target_date": apply, "source_incumbent_target_date": source,
+                "selected_release_sha": commit, "selected_families": [],
+                "env_file": str(env), "env_sha256": hashlib.sha256(env.read_bytes()).hexdigest(),
+                "generated_at": "2026-10-01T07:35:00+09:00"}
+    manifest["manifest_sha256"] = bootstrap._digest_json(manifest)
+    _write(root / f"runtime_policy_bootstrap_{apply}.json", manifest)
+    verification = {"target_date": apply, "status": "pass", "passed": True,
+                    "manifest_sha256": manifest["manifest_sha256"], "pid": None,
+                    "pid_passed": None, "pid_env_available": True,
+                    "verified_at": "2026-10-01T07:36:00+09:00"}
+    _write(root / f"runtime_policy_bootstrap_verify_{apply}.json", verification)
+    sources = {"policy": {"exists": True, "target_date_matches": True,
+                          "error": None, "effective_date": apply}}
+    state, natural, receipt = mod._runtime_consumption_state(source, sources)
+    assert (state, natural) == ("verified", "not_due")
+    assert receipt["release_selection_status"] == "historical"
+    assert receipt["release_selection_path"] == str(backup)
+    assert receipt["selected_release_commit"] == commit
+    assert receipt["actual_pid_consumed"] is False
+    from src.engine.automation.postclose_summary_handoff import inspect_future_handoff
+    report_dir = data / "report"
+    summary = {"date": source, "preopen_consumption_state": state,
+               "preopen_consumption_receipt": receipt}
+    _write(report_dir / "runtime_approval_summary" /
+           f"runtime_approval_summary_{source}.json", summary)
+    handoff = inspect_future_handoff(summary, source, report_dir=report_dir)
+    assert handoff["status"] == "historical_generation_no_pid"
+    assert handoff["actual_pid_consumed"] is False
+    backup.unlink()
+    state, _, receipt = mod._runtime_consumption_state(source, sources)
+    assert state == "rejected"
+    assert "selected_release_mismatch" in receipt["future_generation_issues"]
+    assert inspect_future_handoff(summary, source, report_dir=report_dir)["status"] == "stale"
 
 
 def test_pending_maturity_requires_verified_future_generation_contract(monkeypatch, tmp_path):
