@@ -1211,6 +1211,35 @@ def test_compact_public_finalization_uses_direct_pair_policy_consumer(tmp_path, 
     assert "compact_direct_consumer_invalid" in verify_compact_handoff(
         tmp_path, "2026-09-17"
     )["issues"]
+    compact.write(consumer_path, compact.sealed(consumer))
+    if not promote:
+        class AfterPreopenClock(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                observed_at = cls.fromisoformat("2026-09-21T10:00:00+09:00")
+                return observed_at.astimezone(tz) if tz else observed_at
+
+        monkeypatch.setattr(policy, "datetime", AfterPreopenClock)
+        frozen_bytes = Path(result["policy_path"]).read_bytes()
+        recovered = compact.sealed({**proof, "status": "source_contract_blocked",
+            "evaluation_state": "blocked_source", "candidate_improvement_proven": False,
+            "promotion_pass": False, "promotion_scopes": [],
+            "evaluation_fingerprint": compact.digest(["closed_date_recovery"])})
+        compact.write(compact.report_path(tmp_path, "2026-09-17"), recovered)
+        handoff = compact.finalize(
+            data_root=tmp_path, day="2026-09-17", publication_day="2026-09-18"
+        )
+        assert handoff["selection_disposition"] == "incumbent_preserved_after_preopen_recovery"
+        assert handoff["policy_source_mode"] == "verified_frozen_preopen_source"
+        assert Path(result["policy_path"]).read_bytes() == frozen_bytes
+        assert verify_compact_handoff(tmp_path, "2026-09-17")["status"] == "PASS"
+        snapshot = policy.root(tmp_path) / "sources" / f"{child['compact_source_file_sha256']}.json"
+        snapshot_bytes = snapshot.read_bytes()
+        snapshot.write_bytes(b"{}")
+        assert "compact_dated_policy_direct_binding_invalid" in verify_compact_handoff(
+            tmp_path, "2026-09-17"
+        )["issues"]
+        snapshot.write_bytes(snapshot_bytes)
 
 def test_compact_json_string_semantics_and_repeated_input_envelopes(tmp_path):
     import hashlib

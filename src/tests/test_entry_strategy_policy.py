@@ -732,7 +732,7 @@ def test_frozen_machine_policy_revalidates_without_researching_holdout(monkeypat
     assert 'candidate_equals_incumbent' in unchanged_result['promotion_errors']
 
 
-def test_old_machine_rank_freezes_used_holdout_without_research(monkeypatch):
+def test_old_machine_rank_allows_new_search_but_keeps_used_holdout_diagnostic(monkeypatch):
     from src.engine.scalping import ai_action_outcome_calibration as calibration
     one_research_candidate(monkeypatch)
     rows = [machine_cost_row(), machine_cost_row('adverse_first')]
@@ -742,12 +742,25 @@ def test_old_machine_rank_freezes_used_holdout_without_research(monkeypatch):
         scope=('KRX', 'KRX_REGULAR'), source_contract={}, machine_policy_only=True)
     previous = calibration.build_main_strategy_refinement(rows, **kwargs)
     previous['selection_basis'] = 'support_adjusted_win_rate_full_population_v4'
-    monkeypatch.setattr(strategy, 'joint_candidates', lambda *a, **kw: pytest.fail('used holdout researched'))
+    searched = []
+    def current_candidates(*args, **kwargs):
+        searched.append(kwargs['start'])
+        yield research_policy(), dict(cursor=1, domain_size=1,
+            domain_sha256='a' * 64, search_complete=True)
+    monkeypatch.setattr(strategy, 'joint_candidates', current_candidates)
     result = calibration.build_main_strategy_refinement(rows, previous=previous, **kwargs)
-    assert result['selection_status'] == 'frozen_prior_selection_version'
+    assert searched == [0]
+    assert result['evaluated_candidate_count'] == 1
+    assert result['selection_basis'] == strategy.MACHINE_SELECTION_VERSION
+    assert result['superseded_selection_basis'] == 'support_adjusted_win_rate_full_population_v4'
+    assert result['prior_selection_holdout_consumed'] is True
     assert result['promotion_pass'] is False
-    assert 'frozen_selection_version_superseded' in result['promotion_errors']
-    assert result['evaluated_candidate_count'] == previous['evaluated_candidate_count']
+    assert 'forward_holdout_required_after_selection_version_change' in result['promotion_errors']
+    unbound = deepcopy(previous)
+    unbound['candidate']['evidence']['holdout']['source_dates'] = []
+    unbound_result = calibration.build_main_strategy_refinement(rows, previous=unbound, **kwargs)
+    assert unbound_result['promotion_pass'] is False
+    assert 'forward_holdout_provenance_missing_after_selection_version_change' in unbound_result['promotion_errors']
 
 
 def test_machine_research_does_not_promote_unchanged_incumbent(monkeypatch):

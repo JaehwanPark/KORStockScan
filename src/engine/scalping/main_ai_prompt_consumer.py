@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import hashlib
 import json
 import os
 import tempfile
@@ -1202,6 +1203,55 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
     return report
 
 
+def frozen_compact_policy_source(data_root: Path, bundle: dict, paired: dict, source_day: str) -> dict | None:
+    """Verify the retained policy source when a closed-date replay is later than PREOPEN."""
+    from src.engine.scalping import compact_auxiliary_paired_replay as compact
+    from src.engine.scalping import mechanistic_entry_runtime_policy as policy
+
+    if not isinstance(bundle, dict) or not isinstance(paired, dict):
+        return None
+    source_hash = bundle.get("compact_source_file_sha256")
+    source = bundle.get("compact_evaluation_source") or {}
+    if not isinstance(source, dict):
+        return None
+    target = bundle.get("target_date")
+    publication = bundle.get("publication_date")
+    try:
+        date_contract_valid = (
+            isinstance(target, str) and isinstance(publication, str)
+            and policy.next_target(publication) == target
+            and datetime.now(compact.KST) >= datetime.fromisoformat(target + "T07:35:00+09:00")
+        )
+    except (ValueError, TypeError):
+        return None
+    if (not isinstance(source_hash, str) or len(source_hash) != 64
+            or any(char not in "0123456789abcdef" for char in source_hash)
+            or not date_contract_valid
+            or paired.get("evaluation_state") != "blocked_source"
+            or paired.get("status") != "source_contract_blocked"
+            or paired.get("candidate_improvement_proven") is not False
+            or bundle.get("compact_evaluation_source_date") != source_day
+            or source.get("source_date") != source_day
+            or source.get("artifact_content_sha256") != bundle.get("compact_paired_artifact_sha256")
+            or source.get("evaluation_fingerprint") != bundle.get("compact_evaluation_fingerprint")
+            or bundle.get("compact_paired_artifact_sha256") == paired.get("artifact_content_sha256")):
+        return None
+    path = policy.root(Path(data_root)) / "sources" / f"{source_hash}.json"
+    try:
+        if hashlib.sha256(path.read_bytes()).hexdigest() != source_hash:
+            return None
+        frozen = compact.read(path)
+    except OSError:
+        return None
+    if (not compact.valid(frozen) or frozen.get("target_date") != source_day
+            or frozen.get("artifact_content_sha256") != source["artifact_content_sha256"]
+            or frozen.get("evaluation_fingerprint") != source["evaluation_fingerprint"]):
+        return None
+    return {"policy_source_mode": "verified_frozen_preopen_source",
+            "policy_source_artifact_sha256": source["artifact_content_sha256"],
+            "policy_source_file_sha256": source_hash}
+
+
 def verify_compact_handoff(data_root: Path, source_day: str, *, effective_date: str | None = None, publication_date: str | None = None) -> dict:
     """Verify paired evidence, dated policy, consumer and checklist directly."""
     from src.engine.scalping import compact_auxiliary_paired_replay as compact
@@ -1239,6 +1289,21 @@ def verify_compact_handoff(data_root: Path, source_day: str, *, effective_date: 
             == paired.get("artifact_content_sha256")
         ):
             policies.append((path, value))
+    frozen_receipt = None
+    if len(policies) == 0:
+        frozen_policies = []
+        for path in sorted((data_root / "runtime/mechanistic_entry_policy").glob("policy_????-??-??.json")):
+            value = compact.read(path)
+            if (isinstance(value, dict)
+                    and (not effective_date or value.get("target_date") == effective_date)
+                    and (not publication_date or value.get("publication_date") == publication_date)
+                    and value.get("compact_evaluation_source_date") == source_day):
+                frozen_policies.append((path, value))
+        if len(frozen_policies) == 1:
+            candidate_path, candidate_bundle = frozen_policies[0]
+            frozen_receipt = frozen_compact_policy_source(data_root, candidate_bundle, paired, source_day)
+            if frozen_receipt is not None:
+                policies = [(candidate_path, candidate_bundle)]
     if len(policies) != 1:
         issues.append("compact_dated_policy_direct_binding_invalid")
         policy_path, bundle = Path("/nonexistent"), {}
@@ -1248,10 +1313,9 @@ def verify_compact_handoff(data_root: Path, source_day: str, *, effective_date: 
             if (
                 policy.load(data_root=data_root, target_date=bundle["target_date"])
                 != bundle
-                or bundle.get("compact_paired_artifact_sha256")
-                != paired.get("artifact_content_sha256")
-                or bundle.get("compact_evaluation_fingerprint")
-                != paired.get("evaluation_fingerprint")
+                or (frozen_receipt is None and (
+                    bundle.get("compact_paired_artifact_sha256") != paired.get("artifact_content_sha256")
+                    or bundle.get("compact_evaluation_fingerprint") != paired.get("evaluation_fingerprint")))
             ):
                 issues.append("compact_dated_policy_direct_binding_invalid")
         except (OSError, ValueError, KeyError):
@@ -1275,11 +1339,15 @@ def verify_compact_handoff(data_root: Path, source_day: str, *, effective_date: 
         "policy_path": str(policy_path.resolve()),
         "policy_bundle_sha256": bundle.get("bundle_sha256"),
     }
+    if frozen_receipt is not None:
+        expected_view.update(frozen_receipt)
     if (
         not compact.valid(consumer_report)
         or consumer_report.get("target_date") != publication_day
         or view.get("schema") != "compact_auxiliary_consumer_handoff_v3"
         or any(view.get(key) != value for key, value in expected_view.items())
+        or (frozen_receipt is not None and view.get("selection_disposition")
+            != "incumbent_preserved_after_preopen_recovery")
         or any(view.get(key) is not value for key, value in compact.AUTHORITY.items())
     ):
         issues.append("compact_direct_consumer_invalid")

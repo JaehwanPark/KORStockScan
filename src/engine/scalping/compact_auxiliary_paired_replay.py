@@ -3279,6 +3279,12 @@ def _finalize(*, data_root, day, publication_day):
         publication_day=publication_day,
         data_root=root,
     )
+    frozen_source = None
+    if bundle.get("compact_paired_artifact_sha256") != paired["artifact_content_sha256"]:
+        frozen_source = consumer.frozen_compact_policy_source(root, bundle, paired, day)
+        freeze_at = datetime.fromisoformat(bundle["target_date"] + "T07:35:00+09:00")
+        if frozen_source is None or datetime.now(KST) < freeze_at:
+            raise ValueError("compact_frozen_policy_source_invalid")
     view = {
         "schema": "compact_auxiliary_consumer_handoff_v3",
         "source_date": day,
@@ -3298,7 +3304,8 @@ def _finalize(*, data_root, day, publication_day):
         ),
         "policy_bundle_sha256": bundle["bundle_sha256"],
         "selection_disposition": (
-            "candidate_selected"
+            "incumbent_preserved_after_preopen_recovery" if frozen_source is not None
+            else "candidate_selected"
             if bundle.get("compact_promoted_scopes") or bundle.get("auxiliary_soft_promoted_scopes")
             else "incumbent_preserved"
         ),
@@ -3315,6 +3322,8 @@ def _finalize(*, data_root, day, publication_day):
         "actual_net_profit_improvement": None,
         **AUTHORITY,
     }
+    if frozen_source is not None:
+        view.update(frozen_source)
     consumer_path = (
         root
         / "report/main_ai_prompt_consumer"
