@@ -271,6 +271,48 @@ def test_immediate_generation_persists_over_dates_and_invalid_successor(tmp_path
         runtime.load_effective(data_root=tmp_path, target_date='2026-09-15')
 
 
+def test_strategy_successor_supersedes_winrate_source_receipt(tmp_path, monkeypatch):
+    from hashlib import sha256
+    from src.tests.test_mechanistic_entry_runtime_policy import initial
+    from src.engine.scalping import ai_action_outcome_calibration as calibration
+    incumbent = initial(tmp_path)
+    source = calibration._with_artifact_content_sha256(dict(
+        schema='main_entry_winrate_policy_report_v1', target_date='2026-09-11',
+        report_scope='main_entry_winrate', selection_basis='win_rate_only',
+        policy_version='winrate_initial_v1', disposition='incumbent_carried',
+        parent_bundle_sha256=incumbent['bundle_sha256'],
+        parent_machine_policy_sha256=runtime.digest(incumbent['machine_policy'])))
+    source_bytes = json.dumps(source).encode()
+    source_hash = sha256(source_bytes).hexdigest()
+    source_path = runtime.root(tmp_path) / 'sources' / f'{source_hash}.json'
+    source_path.write_bytes(source_bytes)
+    selected = deepcopy(incumbent)
+    selected.update(source_file_sha256=source_hash,
+        source_artifact_sha256=source['artifact_content_sha256'],
+        winrate_selection=dict(schema='main_entry_winrate_selection_v1',
+            disposition='incumbent_carried', report_sha256=source['artifact_content_sha256'],
+            parent_bundle_sha256=incumbent['bundle_sha256'],
+            policy_version='winrate_initial_v1',
+            machine_policy_sha256=runtime.digest(incumbent['machine_policy'])))
+    selected['bundle_sha256'] = runtime.digest({k:v for k,v in selected.items() if k != 'bundle_sha256'})
+    runtime._atomic_write_json(runtime.root(tmp_path) / 'policy_2026-09-14.json', selected)
+    runtime._atomic_write_json(runtime.root(tmp_path) / 'generations' / f"{selected['bundle_sha256']}.json", selected)
+    assert runtime._validate_bundle_sources(selected, tmp_path)['winrate_selection']
+
+    item = candidate(selected['machine_policy'])
+    real_load = runtime.load_effective
+    with monkeypatch.context() as patch:
+        patch.setattr(runtime, 'load_effective', lambda **kw: selected)
+        receipt = runtime.activate_strategy_report(
+            activation_source(tmp_path, item), data_root=tmp_path,
+            now=datetime(2026,9,14,12,tzinfo=runtime.KST))
+    assert receipt['status'] == 'activated'
+    active = real_load(data_root=tmp_path, target_date='2026-09-14')
+    assert active['machine_policy'] == item['policy']
+    assert 'winrate_selection' not in active
+    assert runtime._read(runtime.root(tmp_path) / 'generations' / f"{selected['bundle_sha256']}.json")['winrate_selection']
+
+
 def test_strategy_metadata_and_profile_mutations_invalidate_bundle(tmp_path):
     from src.tests.test_mechanistic_entry_runtime_policy import initial
     previous = initial(tmp_path)

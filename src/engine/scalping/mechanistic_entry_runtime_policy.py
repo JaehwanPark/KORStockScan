@@ -1966,6 +1966,11 @@ def activate_strategy_report(source_path: Path, *, data_root: Path, now: datetim
                         bundle_sha256=previous['bundle_sha256'],
                         reason='no_qualified_strategy_successor', dispositions=dispositions)
         bundle = copy.deepcopy(previous)
+        # This generation is sourced from the validated strategy report.  A
+        # carried win-rate receipt binds the *previous* source file and machine
+        # hash, so retaining it would make the new generation unreadable.
+        # The parent generation remains immutable for provenance and rollback.
+        bundle.pop('winrate_selection', None)
         source_bytes = source_path.read_bytes()
         source_hash = hashlib.sha256(source_bytes).hexdigest()
         stored = policy_root / "sources" / f"{source_hash}.json"
