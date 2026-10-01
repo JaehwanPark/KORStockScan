@@ -40,8 +40,12 @@ def target_after_postclose(source_date: str, *, now: datetime | None = None) -> 
     if source > current.date():
         raise ValueError("future_postclose_source_date")
     first = _next_trading_day(source)
-    if current.date() < first or (current.date() == first and current.time() < PREOPEN_START):
+    if current.date() < first:
         return first.isoformat()
+    # Late closure/release preparation retains today's still-unopened session,
+    # even when the sealed source predates the immediately preceding day.
+    if current.time() < PREOPEN_START and is_krx_trading_day(current.date()):
+        return current.date().isoformat()
     return _next_trading_day(current.date()).isoformat()
 
 

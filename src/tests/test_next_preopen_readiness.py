@@ -27,6 +27,18 @@ def test_target_after_postclose_handles_late_recovery_and_weekend(monkeypatch):
     assert readiness.target_after_postclose(
         "2026-10-02", now=datetime(2026, 10, 2, 21, 0, tzinfo=KST),
     ) == "2026-10-05"
+    assert readiness.target_after_postclose(
+        "2026-09-30", now=datetime(2026, 10, 2, 0, 36, tzinfo=KST),
+    ) == "2026-10-02"
+    assert readiness.target_after_postclose(
+        "2026-09-30", now=datetime(2026, 10, 2, 7, 34, tzinfo=KST),
+    ) == "2026-10-02"
+    assert readiness.target_after_postclose(
+        "2026-09-30", now=datetime(2026, 10, 2, 7, 35, tzinfo=KST),
+    ) == "2026-10-05"
+    assert readiness.target_after_postclose(
+        "2026-09-30", now=datetime(2026, 10, 3, 0, 36, tzinfo=KST),
+    ) == "2026-10-05"
 
 
 def test_source_receipt_rejects_unclosed_controller_and_changed_policy(monkeypatch, tmp_path):
@@ -123,6 +135,9 @@ def test_prepare_isolated_then_detects_source_and_release_drift(monkeypatch, tmp
     now = datetime(2026, 10, 1, 17, 0, tzinfo=KST)
     assert readiness.prepare(source, target_date=target, now=now)["status"] == "prepared_verified"
     assert readiness.verify_prepared(target, now=now)["status"] == "pass"
+    midnight = datetime(2026, 10, 2, 0, 36, tzinfo=KST)
+    assert readiness.prepare(source, target_date=target, now=midnight)["status"] == "prepared_verified"
+    assert readiness.verify_prepared(target, require_today=True, now=midnight)["status"] == "pass"
     with monkeypatch.context() as bounded:
         bounded.setattr(readiness.bootstrap, "INITIAL_QUANTITY_CURRENT", tmp_path / "quantity-absent.json")
         bounded.setattr(readiness.bootstrap, "verify_bootstrap", lambda *a, **kw: (_ for _ in ()).throw(
