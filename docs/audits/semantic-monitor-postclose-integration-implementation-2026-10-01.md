@@ -37,3 +37,7 @@
 보완 작업본의 같은 봉인 입력 정규 full 3회 비교 중앙값은 wall 0.6778→0.8024초(1.184배), CPU 0.6120→0.7297초(1.192배), RSS 170,712→175,732 KiB(1.029배)였다. 최종 불변 릴리스 재검증·새 준비본·코드 provenance와 실제 owner pin은 배포 인계 영수증에서 확인한다. 작업이 자정을 넘겼어도 승인된 기동 대상일은 **2026-10-02**, 닫힌 평가 원천은 **2026-09-30**으로 유지한다.
 
 실제 내일 PREOPEN·Main PID·Widget 날짜 전환·Episode 당일 preflight/live 소비는 `FinalPolicyStartupAcceptance1002`, 자연 v7/v4 장후 생성은 기존 해당 장후 owner가 확인한다. 준비 PASS를 미래 정상 기동이나 수익의 증명으로 취급하지 않는다.
+
+### 최종 경계 조건 리뷰
+
+보조 v4 producer의 `candidate_population_keys`는 purge 이전 full-cost 집단이고 scope `eligible_count`는 purge 이후 집단이다. 감시기의 분모를 producer의 `full_cost_candidate_population_count`에 맞춰 정상 purge를 결손으로 오인하지 않도록 보완했다. 파일 읽기 중 세대가 바뀌는 경우는 `unobservable`로 분리하며 경보·거짓 복구를 발생시키지 않는다. 보조 terminal도 같은 bounded stable reader를 사용한다. 실제 변조·잘못된 schema/date/hash의 차단은 유지한다.

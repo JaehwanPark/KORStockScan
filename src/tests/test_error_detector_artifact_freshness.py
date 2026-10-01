@@ -30,6 +30,30 @@ from src.engine.scalping.micro_reversion.symbol_master import SymbolLookupStatus
 _TRADING_MOCK = "src.engine.error_detectors.artifact_freshness.is_krx_trading_day"
 
 
+@pytest.mark.parametrize("owner", ["machine", "auxiliary", "handoff"])
+def test_semantic_generation_race_is_unobservable_not_corruption(tmp_path, monkeypatch, owner):
+    day = "2026-10-02"
+    paths = {
+        "machine": "data/report/postclose_stage_terminal/2026-10-02/legacy_machine_report.json",
+        "auxiliary": "data/report/postclose_stage_terminal/2026-10-02/main_auxiliary_policy.json",
+        "handoff": "data/report/postclose_stage_terminal/2026-10-02/widget_policy.json",
+    }
+    path = tmp_path / paths[owner]
+    path.parent.mkdir(parents=True)
+    path.write_text("{}")
+    def replaced_generation(*args, **kwargs):
+        raise ValueError("semantic_generation_changed_during_read")
+    monkeypatch.setattr("src.engine.error_detectors.artifact_freshness._semantic_object", replaced_generation)
+    if owner == "handoff":
+        result = _postclose_handoff_semantics(tmp_path, day, datetime(2026, 10, 2, tzinfo=ZoneInfo("Asia/Seoul")))
+    else:
+        result = {"machine": _machine_result_semantics, "auxiliary": _auxiliary_result_semantics}[owner](tmp_path, day)
+    assert result["status"] == "unobservable"
+    assert result["findings"] == []
+    assert result["reason"] == "semantic_generation_changed_during_read"
+    assert _semantic_alerts(owner, result, day) == []
+
+
 def test_auxiliary_v4_frozen_same_day_contract_and_cost_isolation():
     from src.engine.scalping import compact_auxiliary_paired_replay as paired
     day, scope = "2026-10-02", "KRX|KRX_REGULAR"
@@ -115,6 +139,17 @@ def test_auxiliary_v4_diagnostic_only_population_is_not_a_candidate(tmp_path):
     assert result["findings"] == ["auxiliary_independent_holdout_missing"]
     assert result["scopes"]["KRX|KRX_REGULAR"]["full_cost_count"] == 0
     assert _semantic_alerts("main_auxiliary_policy", result, day) == []
+    # Producer candidate keys are the pre-purge full-cost cohort, not the
+    # smaller train/holdout population retained after chronological purging.
+    scope.update(eligible_count=8, full_cost_candidate_population_count=10)
+    stage = paired.sealed({k:v for k,v in stage.items() if k != "artifact_content_sha256"} | {
+        "screened_total": 12, "eligible_count": 12,
+        "eligible_keys": [f"key-{i}" for i in range(12)],
+        "candidate_population_keys": [f"key-{i}" for i in range(10)],
+        "scope_results": {"KRX|KRX_REGULAR": scope}})
+    report = paired.sealed({k:v for k,v in report.items() if k != "artifact_content_sha256"} | {"auxiliary_stage": stage})
+    path.write_text(json.dumps(report))
+    assert "auxiliary_candidate_population_invalid" not in _auxiliary_result_semantics(tmp_path, day)["findings"]
 
 
 def test_semantic_alert_denominator_does_not_mix_current_economics_and_cumulative_cf():

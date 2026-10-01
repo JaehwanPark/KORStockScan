@@ -358,6 +358,12 @@ def _semantic_object(path: Path, *, limit: int = 64 * 1024 * 1024,
     return value, hashlib.sha256(raw).hexdigest()
 
 
+def _semantic_failure(exc):
+    if str(exc) == "semantic_generation_changed_during_read":
+        return {"status": "unobservable", "findings": [], "reason": str(exc)}
+    return {"status": "source_invalid", "findings": [str(exc)]}
+
+
 def _semantic_stage_binding(root, day, stage, *, artifact=None, artifact_sha=None, artifact_path=None):
     path = root / "data/report/postclose_stage_terminal" / day / f"{stage}.json"
     if not (path.exists() or path.is_symlink()):
@@ -393,7 +399,7 @@ def _machine_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
         if stage["status"] in {"failed", "blocked", "source_quality_blocked"}:
             return {"status": "source_invalid", "findings": ["machine_execution_failed"], "execution": stage}
     except (OSError, ValueError, TypeError, AttributeError) as exc:
-        return {"status": "source_invalid", "findings": [str(exc)]}
+        return _semantic_failure(exc)
     if not (report_path.exists() or report_path.is_symlink()):
         # A standalone win-rate sidecar is evidence that the machine family
         # ran; do not mark its missing full-evaluation partner unassessed.
@@ -416,7 +422,7 @@ def _machine_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
         if not isinstance(scopes, dict):
             raise ValueError("machine_scope_evaluations_missing")
     except (OSError, UnicodeError, ValueError, TypeError, AttributeError) as exc:
-        return {"status": "source_invalid", "findings": [str(exc)]}
+        return _semantic_failure(exc)
     findings: list[str] = []
     scope_details: dict[str, dict[str, Any]] = {}
     try:
@@ -424,7 +430,7 @@ def _machine_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
             artifact="ai_decision_action_outcome_calibration",
             artifact_sha=report_file_sha, artifact_path=report_path)
     except (OSError, ValueError, TypeError, AttributeError) as exc:
-        return {"status": "source_invalid", "findings": [str(exc)]}
+        return _semantic_failure(exc)
     for scope, row in scopes.items():
         if not isinstance(row, dict):
             findings.append("machine_scope_row_invalid")
@@ -692,7 +698,7 @@ def _auxiliary_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
         try:
             if terminal_path.is_symlink() or terminal_path.stat().st_size > 1024 * 1024:
                 raise ValueError("auxiliary_terminal_untrusted_path_or_size")
-            terminal = json.loads(terminal_path.read_text(encoding="utf-8"))
+            terminal, _ = _semantic_object(terminal_path, limit=1024 * 1024)
             receipt = terminal.get("receipt_sha256")
             body = {k: v for k, v in terminal.items() if k != "receipt_sha256"}
             digest = hashlib.sha256(json.dumps(body, ensure_ascii=True,
@@ -719,7 +725,7 @@ def _auxiliary_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
                         f"compact_auxiliary_paired_economic_{source_date}.json").resolve())):
                     raise ValueError("auxiliary_terminal_source_binding_missing")
         except (OSError, UnicodeError, ValueError, TypeError, AttributeError) as exc:
-            return {"status": "source_invalid", "findings": [str(exc)]}
+            return _semantic_failure(exc)
     path = existing_or_gzip_path(
         root / "data/report/ai_entry_setup_paired_replay_batch"
         / f"compact_auxiliary_paired_economic_{source_date}.json"
@@ -768,12 +774,13 @@ def _auxiliary_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
                    or type(v.get("eligible_count")) is not int
                    or v["eligible_count"] < 0
                    for v in stage["scope_results"].values())
-            or sum(v["eligible_count"] for v in stage["scope_results"].values()
-                if source_date < "2026-10-02" or v.get("full_cost_candidate_population_count", 0) > 0)
+            or sum(v["eligible_count"] if source_date < "2026-10-02"
+                   else v.get("full_cost_candidate_population_count", 0)
+                   for v in stage["scope_results"].values())
                 != len(candidate_keys)):
             raise ValueError("auxiliary_candidate_population_invalid")
     except (OSError, EOFError, UnicodeError, ValueError, TypeError, AttributeError) as exc:
-        return {"status": "source_invalid", "findings": [str(exc)]}
+        return _semantic_failure(exc)
     findings: list[str] = []
     if eligible_keys is None:
         findings.append("auxiliary_eligible_identity_uninstrumented")
@@ -863,7 +870,7 @@ def _auxiliary_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
             label_gap_count = sum((row.get("evaluation_label_contract") or {}).get(
                 "diagnostic_price_path", {}).get("status") == "source_gap" for row in entry_rows)
         except (OSError, EOFError, UnicodeError, ValueError, TypeError, KeyError, AttributeError) as exc:
-            return {"status": "source_invalid", "findings": [str(exc)]}
+            return _semantic_failure(exc)
         if label_gap_count:
             findings.append("auxiliary_outcome_label_source_gap")
     scopes = {}
@@ -1002,7 +1009,10 @@ def _postclose_handoff_semantics(root, source_date, now):
         if result["findings"]:
             result["status"] = "source_invalid"
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
-        result.update(status="source_invalid", findings=["postclose_handoff_contract_invalid"], error=str(exc))
+        if str(exc) == "semantic_generation_changed_during_read":
+            result.update(_semantic_failure(exc))
+        else:
+            result.update(status="source_invalid", findings=["postclose_handoff_contract_invalid"], error=str(exc))
     return result
 
 
