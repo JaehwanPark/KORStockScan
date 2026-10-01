@@ -40,15 +40,16 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 
 ## Main 기계판정 미진입 회복 우선순위
 
-- [ ] `[ErrorDetectorDaemonLogDedup1002] 동일 장후 실패의 daemon 반복 ERROR 기록 수리` (`Due: 2026-10-02`, `Slot: INTRADAY`, `TimeWindow: 08:20~09:30`, `Track: RuntimeStability`)
+- [x] `[ErrorDetectorDaemonLogDedup1002] 동일 장후 실패의 daemon 반복 ERROR 기록 수리` (`Due: 2026-10-02`, `Slot: INTRADAY`, `TimeWindow: 08:20~09:30`, `Track: RuntimeStability`)
   - Source: [daemon 반복 경보 수리](../audits/error-detector-daemon-incident-dedup-review-2026-10-02.md), [운영 출력 계약](../time-based-operations-runbook.md).
   - Acceptance: bot/standalone 매 주기 health FAIL·검사/heartbeat 유지, 동일 사고 로그·ADMIN 알림 1회, 새 원천/사유/심각도·실제 PASS/재발·날짜 전환·handler 실패 회귀를 검증한다. 기존 사용자 배포/재기동 승인 아래 정책 실행값·원천 FAIL·독립 owner를 보존하고 원래 준비/PREOPEN 보존·별도 당일 인계·guarded restart/PID 소비를 각각 대사한다. 검증된 당일 인계 또는 정확일자 launcher gate 미충족이면 현재 PID를 중단하지 않는다.
-  - 구현 수용: `24bf9ab6` 불변 root 76 PASS/4.64초, source clean. 당일 새 prepare가 `preopen_target_not_next_operating_day`로 차단돼 selector `9dcbd482` 복구, 기존 PID/정책 env/manifest/PREOPEN/준비본 불변과 08:12 PID verify PASS 확인. 현재 daemon 소비는 pending이며 원 finalization FAIL도 유지한다.
-  - 사용자 후속 승인: 장중 교체 불가라는 해석을 철회하고 원래 PREOPEN/정책 bytes를 보존하는 별도 당일 코드 인계를 구현한다. 새 root의 native bootstrap·기존 PID/custody 검증 후 승인된 guarded restart를 사용한다. 두 연속 health 관측·동일 사고 로그 중복 없음, 실제 new-PID와 불변 정책 영수증이 자연 수용이다. 원천 FAIL을 성공으로 만들지 않는다.
+  - 구현 수용: `24bf9ab6` 불변 root 76 PASS/4.64초, source clean. 당일 새 prepare가 `preopen_target_not_next_operating_day`로 차단돼 selector `9dcbd482` 복구, 기존 PID/정책 env/manifest/PREOPEN/준비본 불변과 08:12 PID verify PASS 확인. 08:12 당시 daemon 소비는 pending이었고 원 finalization FAIL을 유지했다.
+  - 사용자 후속 승인·종결: 장중 교체 불가라는 해석을 철회하고 원래 PREOPEN/정책 bytes를 보존하는 별도 당일 코드 인계를 구현했다. `1ac3fc80` 불변 root 434 PASS/17.27초, 기존 PID와 보존 prepared/당일 completion 검증 PASS 뒤 08:54 guarded restart 완료. PID 2764995/native env PASS·mismatch 0·별도 소비 영수증 확인. 정책/PREOPEN/준비본 5파일·독립 설정 407개·cron 불변. 08:54:26 최초 ERROR 1회 뒤 08:55:28/08:56:30 health tick 반복 출력 없음; 원 finalization FAIL 보존. [통합 리뷰·배포](../audits/intraday-exact-route-policy-preserving-handoff-review-2026-10-02.md).
 
 - [ ] `[ExactProbeIntradayRouteLeaseRepair1002] 기존 AL 보존과 누락 NX 관측 item 추가` (`Due: 2026-10-02`, `Slot: INTRADAY`, `TimeWindow: 08:20~09:30`, `Track: MainEntry`)
   - Source: [당일 인계·정확 경로 수리 리뷰](../audits/intraday-exact-route-policy-preserving-handoff-review-2026-10-02.md), [운영 원천 계약](../time-based-operations-runbook.md#intraday-exact-route-observation-augmentation).
   - Acceptance: 공식 upstream SHA/경로/시간, refresh=1·0B/0D·기존 item cap, AL와 매매 view 보존, same epoch의 새 정확 수신만 평가, borrowed/adopted/reconnect/지연 및 불확실 send·정확 item cleanup 회귀를 검증한다. 과거 실패는 유지하고 새 attempt 원천/기계 결과를 따로 남긴다. 위 daemon owner와 한 불변 root로 인계·배포하되 Widget/Episode pin/정책/예약·hard safety·주문 권한은 유지한다. 자연 해당 route 표본 없으면 not_observed로 남긴다.
+  - 구현·배포 수용: `1ac3fc80`/PID 2764995와 위 당일 인계·434 회귀 PASS 확인. 08:56 실제 WS epoch 1·27 item/cap 56·010140_AL 보존·정상 수신. 재기동 후 새 zero-base attempt가 없어 NX 추가→새 정확 0B/0D→기계판정→개별 cleanup 자연 수용은 `not_observed`; 과거 결손은 보존한다.
 
 - [x] `[CronFinalizationDependencyRepair1002] 아침 최종화 실패와 cleanup 미실행 원인 분리` (`Due: 2026-10-02`, `Slot: PREOPEN`, `TimeWindow: 07:00~07:30`, `Track: RuntimeStability`)
   - Source: [아침 경보 원인·수리](../audits/morning-finalization-dependency-alert-review-2026-10-02.md), [운영 복구 계약](../time-based-operations-runbook.md).
