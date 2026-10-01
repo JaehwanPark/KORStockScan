@@ -126,5 +126,14 @@ else
   echo "[SKIP] codex_workorder_runner target_date=${TARGET_DATE} reason=disabled_by_default set_POSTCLOSE_DONE_CONTROLLER_RUN_CODEX=true_to_opt_in"
 fi
 
+if [[ "$TARGET_DATE" > "2026-09-29" && "$DRY_RUN" != "1" && "$DRY_RUN" != "true" ]]; then
+  if [[ "$controller_status" != "done" ]]; then
+    echo "[FAIL] next_preopen_readiness target_date=${TARGET_DATE} controller_status=${controller_status}" >&2
+    exit 1
+  fi
+  env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.next_preopen_readiness \
+    --prepare --source-date "$TARGET_DATE"
+fi
+
 finished_at="$(TZ=Asia/Seoul date +%FT%T%z)"
 echo "[DONE] postclose_done_controller target_date=${TARGET_DATE} finished_at=${finished_at}"

@@ -13,14 +13,19 @@ mkdir -p "$PROJECT_DIR/logs" "$STATUS_DIR"
 
 write_status() {
   local status="$1" reason="${2:-}" exit_code="${3:-0}"
-  "$VENV_PY" - "$STATUS_FILE" "$TARGET_DATE" "$status" "$reason" "$exit_code" "$BOOTSTRAP_ENV" <<'PY'
+  "$VENV_PY" - "$STATUS_FILE" "$TARGET_DATE" "$status" "$reason" "$exit_code" "$BOOTSTRAP_ENV" "$PROJECT_DIR" <<'PY'
 import json
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
 
 path = Path(sys.argv[1])
 target_date, status, reason, exit_code, env_file = sys.argv[2:7]
+release_commit = subprocess.run(
+    ["git", "-C", sys.argv[7], "rev-parse", "HEAD"],
+    check=True, capture_output=True, text=True,
+).stdout.strip()
 payload = {
     "schema_version": 2,
     "report_type": "runtime_policy_preopen_status",
@@ -32,6 +37,7 @@ payload = {
     "runtime_effect": "approved_policy_bootstrap_only",
     "runtime_env_path": env_file,
     "runtime_env_exists": Path(env_file).exists(),
+    "selected_release_commit": release_commit,
 }
 path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 PY
@@ -56,6 +62,13 @@ fi
 cd "$PROJECT_DIR"
 
 echo "[START] runtime-policy preopen target_date=$TARGET_DATE"
+
+# The postclose owner prepares a non-live bootstrap. Recheck its exact source,
+# selected release and policy receipts before any target-day activation.
+if [[ "$TARGET_DATE" > "2026-10-01" ]]; then
+  PYTHONPATH=. "$VENV_PY" -m src.engine.automation.next_preopen_readiness \
+    --verify --target-date "$TARGET_DATE" --require-today
+fi
 
 # Family publishers retain their own evidence and apply contracts. Failures do
 # not manufacture a replacement candidate in the common bootstrap.

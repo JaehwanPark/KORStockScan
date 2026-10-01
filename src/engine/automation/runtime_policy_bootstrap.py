@@ -238,16 +238,16 @@ def _pre_submit_delay_handoff(target_date: str) -> tuple[dict[str, str], dict[st
     }
 
 
-def env_path(target_date: str) -> Path:
-    return BOOTSTRAP_DIR / f"runtime_policy_bootstrap_{target_date}.env"
+def env_path(target_date: str, *, output_dir: Path | None = None) -> Path:
+    return (BOOTSTRAP_DIR if output_dir is None else Path(output_dir)) / f"runtime_policy_bootstrap_{target_date}.env"
 
 
-def manifest_path(target_date: str) -> Path:
-    return BOOTSTRAP_DIR / f"runtime_policy_bootstrap_{target_date}.json"
+def manifest_path(target_date: str, *, output_dir: Path | None = None) -> Path:
+    return (BOOTSTRAP_DIR if output_dir is None else Path(output_dir)) / f"runtime_policy_bootstrap_{target_date}.json"
 
 
-def verify_path(target_date: str) -> Path:
-    return BOOTSTRAP_DIR / f"runtime_policy_bootstrap_verify_{target_date}.json"
+def verify_path(target_date: str, *, output_dir: Path | None = None) -> Path:
+    return (BOOTSTRAP_DIR if output_dir is None else Path(output_dir)) / f"runtime_policy_bootstrap_verify_{target_date}.json"
 
 
 def _archive_initial_quantity_pid_verification(
@@ -1236,7 +1236,8 @@ def build_manifest(
 
 
 def write_bootstrap(
-    target_date: str, *, receipt_paths: Iterable[Path] = ()
+    target_date: str, *, receipt_paths: Iterable[Path] = (),
+    output_dir: Path | None = None,
 ) -> dict[str, Any]:
     manifest = build_manifest(target_date, receipt_paths=receipt_paths)
     lines = [
@@ -1248,13 +1249,13 @@ def write_bootstrap(
     for key, value in manifest["env_overrides"].items():
         lines.append(f"export {key}={shlex.quote(str(value))}")
     env_content = "\n".join(lines) + "\n"
-    manifest["env_file"] = str(env_path(target_date))
+    manifest["env_file"] = str(env_path(target_date, output_dir=output_dir))
     manifest["env_sha256"] = _digest_bytes(env_content.encode("utf-8"))
     unsigned = dict(manifest)
     manifest["manifest_sha256"] = _digest_json(unsigned)
-    _publish(env_path(target_date), env_content)
+    _publish(env_path(target_date, output_dir=output_dir), env_content)
     _publish(
-        manifest_path(target_date),
+        manifest_path(target_date, output_dir=output_dir),
         json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
     )
     return manifest
@@ -1592,12 +1593,17 @@ def _launcher_ai_context_overlay(target_date: str) -> dict[str, str]:
     return authoritative_runtime_env(target_date)
 
 
-def verify_bootstrap(target_date: str, *, pid: int | None = None, write: bool = True) -> dict[str, Any]:
+def verify_bootstrap(
+    target_date: str, *, pid: int | None = None, write: bool = True,
+    output_dir: Path | None = None,
+) -> dict[str, Any]:
+    if output_dir is not None and pid is not None:
+        raise ValueError("prepared_bootstrap_cannot_claim_pid")
     findings: list[str] = []
     pid_mismatches: list[str] = []
     pid_env_available = pid is None
-    manifest_file = manifest_path(target_date)
-    runtime_file = env_path(target_date)
+    manifest_file = manifest_path(target_date, output_dir=output_dir)
+    runtime_file = env_path(target_date, output_dir=output_dir)
     try:
         manifest = _load_json(manifest_file)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
@@ -1607,6 +1613,8 @@ def verify_bootstrap(target_date: str, *, pid: int | None = None, write: bool = 
         findings.append("target_date_mismatch")
     if manifest.get("report_type") != REPORT_TYPE:
         findings.append("report_type_mismatch")
+    if manifest.get("env_file") != str(runtime_file):
+        findings.append("env_file_path_mismatch")
     unsigned = {key: value for key, value in manifest.items() if key != "manifest_sha256"}
     if not manifest.get("manifest_sha256") or manifest.get("manifest_sha256") != _digest_json(unsigned):
         findings.append("manifest_hash_mismatch")
@@ -1815,7 +1823,7 @@ def verify_bootstrap(target_date: str, *, pid: int | None = None, write: bool = 
         "verified_at": datetime.now().astimezone().isoformat(timespec="seconds"),
     }
     if write:
-        _publish(verify_path(target_date), json.dumps(result, ensure_ascii=False, indent=2) + "\n")
+        _publish(verify_path(target_date, output_dir=output_dir), json.dumps(result, ensure_ascii=False, indent=2) + "\n")
         if passed and pid is not None:
             _archive_initial_quantity_pid_verification(target_date, result, manifest)
     return result

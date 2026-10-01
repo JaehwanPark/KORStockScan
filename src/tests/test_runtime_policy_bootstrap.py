@@ -189,6 +189,17 @@ def test_bootstrap_carries_incumbent_applies_lock_and_scrubs_retired(monkeypatch
         for row in manifest["operator_locks_rejected"]
     )
     assert bootstrap.verify_bootstrap("2026-09-19")["status"] == "pass"
+    prepared_dir = tmp_path / "prepared" / "2026-09-19"
+    prepared = bootstrap.write_bootstrap(
+        "2026-09-19", receipt_paths=[receipt], output_dir=prepared_dir,
+    )
+    assert prepared["env_file"] == str(bootstrap.env_path("2026-09-19", output_dir=prepared_dir))
+    assert bootstrap.verify_bootstrap("2026-09-19", output_dir=prepared_dir)["status"] == "pass"
+    with pytest.raises(ValueError, match="prepared_bootstrap_cannot_claim_pid"):
+        bootstrap.verify_bootstrap("2026-09-19", output_dir=prepared_dir, pid=123)
+    bootstrap.env_path("2026-09-19", output_dir=prepared_dir).write_text("tampered\n")
+    assert bootstrap.verify_bootstrap("2026-09-19", output_dir=prepared_dir, write=False)["status"] == "fail"
+    assert bootstrap.verify_bootstrap("2026-09-19", write=False)["status"] == "pass"
     receipt.write_text("{}", encoding="utf-8")
     assert "source_receipt_hash_mismatch" in " ".join(
         bootstrap.verify_bootstrap("2026-09-19", write=False)["findings"]

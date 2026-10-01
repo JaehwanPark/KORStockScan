@@ -1,0 +1,148 @@
+import hashlib
+import json
+from datetime import datetime
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+import pytest
+
+from src.engine.automation import next_preopen_readiness as readiness
+
+KST = ZoneInfo("Asia/Seoul")
+
+
+def _json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+
+def test_target_after_postclose_handles_late_recovery_and_weekend(monkeypatch):
+    monkeypatch.setattr(readiness, "is_krx_trading_day", lambda day: day.weekday() < 5)
+    assert readiness.target_after_postclose(
+        "2026-09-30", now=datetime(2026, 10, 1, 2, 0, tzinfo=KST),
+    ) == "2026-10-01"
+    assert readiness.target_after_postclose(
+        "2026-09-30", now=datetime(2026, 10, 1, 17, 0, tzinfo=KST),
+    ) == "2026-10-02"
+    assert readiness.target_after_postclose(
+        "2026-10-02", now=datetime(2026, 10, 2, 21, 0, tzinfo=KST),
+    ) == "2026-10-05"
+
+
+def test_source_receipt_rejects_unclosed_controller_and_changed_policy(monkeypatch, tmp_path):
+    monkeypatch.setattr(readiness, "DATA_DIR", tmp_path)
+    source, target = "2026-09-30", "2026-10-02"
+    controller = tmp_path / "report/postclose_done_controller" / f"postclose_done_controller_{source}.json"
+    _json(controller, {"status": "done"})
+    summary = tmp_path / "report/runtime_approval_summary" / f"runtime_approval_summary_{source}.json"
+    policy = tmp_path / "runtime/mechanistic_entry_policy" / f"policy_{target}.json"
+    _json(policy, {"target_date": target})
+    policy_sha = hashlib.sha256(policy.read_bytes()).hexdigest()
+    receipt = {"path": str(policy), "sha256": policy_sha, "valid": True,
+               "target_date_matches": True}
+    _json(summary, {"date": source, "sources": {
+        "main_mechanistic_entry": {"policy_receipt": receipt},
+        "compact_auxiliary": {"policy_receipt": receipt},
+    }})
+    monkeypatch.setattr(readiness, "done_terminal_receipt_issues", lambda *a, **k: ["strict_failed"])
+    with pytest.raises(ValueError, match="postclose_controller_not_closed"):
+        readiness._source_receipts(source, target)
+    monkeypatch.setattr(readiness, "done_terminal_receipt_issues", lambda *a, **k: [])
+    assert readiness._source_receipts(source, target)["policy_receipts"][0]["sha256"] == policy_sha
+    policy.write_text("{}\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="target_policy_receipt_invalid"):
+        readiness._source_receipts(source, target)
+
+
+def test_selected_release_requires_router_validated_root_and_commit(monkeypatch, tmp_path):
+    release = tmp_path / "managed-release"
+    release.mkdir()
+    data = tmp_path / "workspace" / "data"
+    selection = data / "runtime/runtime_release_selection.json"
+    commit = "a" * 40
+    _json(selection, {"schema": "runtime_release_selection_v1",
+                      "release_root": str(release), "git_commit": commit})
+    monkeypatch.setattr(readiness, "DATA_DIR", data)
+    monkeypatch.chdir(release)
+    calls = []
+
+    def validated(workspace):
+        calls.append(workspace)
+        return release, commit
+
+    monkeypatch.setattr(readiness, "selected_release", validated)
+    assert readiness._selected_release() == (
+        json.loads(selection.read_text()), selection, commit)
+    assert calls == [data.parent]
+    _json(selection, {"schema": "runtime_release_selection_v1",
+                      "release_root": str(release), "git_commit": "b" * 40})
+    with pytest.raises(ValueError, match="selected_release_identity_mismatch"):
+        readiness._selected_release()
+
+
+def test_prepare_isolated_then_detects_source_and_release_drift(monkeypatch, tmp_path):
+    source, target = "2026-09-30", "2026-10-02"
+    monkeypatch.setattr(readiness, "PREPARED_DIR", tmp_path / "prepared")
+    monkeypatch.setattr(readiness, "is_krx_trading_day", lambda day: day.weekday() < 5)
+    selection = tmp_path / "selection.json"
+    _json(selection, {"git_commit": "a" * 40})
+    selected = ["a" * 40]
+    monkeypatch.setattr(readiness, "_selected_release", lambda: ({}, selection, selected[0]))
+    controller = tmp_path / "controller.json"
+    summary = tmp_path / "summary.json"
+    policy = tmp_path / "policy.json"
+    for path in (controller, summary, policy):
+        _json(path, {"source_date": source})
+
+    def receipts(_source, _target):
+        assert (_source, _target) == (source, target)
+        return {"controller_path": str(controller), "controller_sha256": readiness._sha(controller),
+                "summary_path": str(summary), "summary_sha256": readiness._sha(summary),
+                "policy_receipts": [{"family": "main_mechanistic_entry", "path": str(policy),
+                                     "sha256": readiness._sha(policy)}]}
+
+    monkeypatch.setattr(readiness, "_source_receipts", receipts)
+
+    def write(day, *, output_dir):
+        output_dir.mkdir(parents=True, exist_ok=True)
+        _json(readiness.bootstrap.manifest_path(day, output_dir=output_dir),
+              {"manifest_sha256": "m" * 64})
+        readiness.bootstrap.env_path(day, output_dir=output_dir).write_text("export TEST=1\n")
+        return {"selected_release_sha": selected[0], "source_incumbent_target_date": "2026-10-01",
+                "manifest_sha256": "m" * 64}
+
+    def verify(day, *, output_dir, write=True):
+        result = {"status": "pass", "findings": [], "manifest_sha256": "m" * 64}
+        if write:
+            _json(readiness.bootstrap.verify_path(day, output_dir=output_dir), result)
+        return result
+
+    monkeypatch.setattr(readiness.bootstrap, "write_bootstrap", write)
+    monkeypatch.setattr(readiness.bootstrap, "verify_bootstrap", verify)
+    now = datetime(2026, 10, 1, 17, 0, tzinfo=KST)
+    assert readiness.prepare(source, target_date=target, now=now)["status"] == "prepared_verified"
+    assert readiness.verify_prepared(target, now=now)["status"] == "pass"
+    assert readiness.verify_prepared(target, require_today=True, now=now)["status"] == "fail"
+    selected[0] = "b" * 40
+    assert readiness.verify_prepared(target, now=now)["status"] == "fail"
+    selected[0] = "a" * 40
+    policy.write_text("changed\n", encoding="utf-8")
+    assert readiness.verify_prepared(target, now=now)["status"] == "fail"
+    with pytest.raises(ValueError, match="preopen_target_not_next_operating_day"):
+        readiness.prepare(source, target_date="2026-10-05", now=now)
+
+
+def test_startup_requires_today_success_from_same_release(monkeypatch, tmp_path):
+    monkeypatch.setattr(readiness, "DATA_DIR", tmp_path)
+    target = "2026-10-02"
+    status = tmp_path / "report/threshold_cycle_preopen_status" / f"threshold_cycle_preopen_{target}.status.json"
+    receipt = {"target_date": target, "status": "succeeded", "exit_code": 0,
+               "runtime_env_exists": True, "selected_release_commit": "a" * 40,
+               "updated_at": "2026-10-02T07:36:00+09:00"}
+    _json(status, receipt)
+    now = datetime(2026, 10, 2, 7, 55, tzinfo=KST)
+    assert readiness.verify_preopen_completion(target, "a" * 40, now=now)["status"] == "pass"
+    assert readiness.verify_preopen_completion(target, "b" * 40, now=now)["status"] == "fail"
+    receipt["status"] = "failed"
+    _json(status, receipt)
+    assert readiness.verify_preopen_completion(target, "a" * 40, now=now)["status"] == "fail"

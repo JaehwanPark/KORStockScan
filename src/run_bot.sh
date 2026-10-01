@@ -72,6 +72,13 @@ verify_threshold_runtime_env_handoff() {
     echo "✅ threshold runtime env handoff 검증 통과: target_date=$target_date"
 }
 
+verify_exact_preopen_completion() {
+    local target_date="$1"
+    PYTHONPATH=.. ../.venv/bin/python -m src.engine.automation.next_preopen_readiness \
+        --verify-completion --target-date "$target_date" \
+        --selected-release-commit "$LAUNCHER_SOURCE_GIT_COMMIT"
+}
+
 record_threshold_runtime_env_pid_handoff() {
     local target_date="$1"
     local bot_pid="$2"
@@ -283,8 +290,12 @@ while true; do
     export KORSTOCKSCAN_SWING_INTRADAY_PROBE_MAX_DAILY=30
     export KORSTOCKSCAN_SWING_INTRADAY_PROBE_MAX_PER_SYMBOL=1
 
-    THRESHOLD_RUNTIME_ENV="../data/runtime/policy_bootstrap/runtime_policy_bootstrap_$(TZ=Asia/Seoul date +%F).env"
+    RUNTIME_TARGET_DATE="$(TZ=Asia/Seoul date +%F)"
+    THRESHOLD_RUNTIME_ENV="../data/runtime/policy_bootstrap/runtime_policy_bootstrap_${RUNTIME_TARGET_DATE}.env"
     wait_for_threshold_runtime_env "$THRESHOLD_RUNTIME_ENV" || exit 1
+    if [ "$RUNTIME_TARGET_DATE" \> "2026-10-01" ]; then
+        verify_exact_preopen_completion "$RUNTIME_TARGET_DATE" || exit 1
+    fi
     reset_runtime_policy_env_before_handoff
     if [ -f "$THRESHOLD_RUNTIME_ENV" ]; then
         echo "📌 threshold runtime env 적용: $THRESHOLD_RUNTIME_ENV"
@@ -293,7 +304,6 @@ while true; do
         . "$THRESHOLD_RUNTIME_ENV"
         set +a
     fi
-    RUNTIME_TARGET_DATE="$(TZ=Asia/Seoul date +%F)"
     apply_authoritative_ai_context_promotion "$RUNTIME_TARGET_DATE" || exit 1
     # Load custody identity after every general runtime/operator layer so none
     # can silently replace the account/registry bound by the apply receipt.

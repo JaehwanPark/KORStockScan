@@ -19,6 +19,24 @@ def test_postclose_wrapper_retires_common_daily_ev_and_generic_workorder():
     assert script.count("--require-summary-handoff") >= 2
 
 
+def test_postclose_prepares_isolated_preopen_and_start_requires_day_of_completion():
+    controller = _text("deploy/run_postclose_done_controller.sh")
+    finalizer = _text("deploy/run_postclose_finalization.sh")
+    preopen = _text("deploy/run_threshold_cycle_preopen.sh")
+    launcher = _text("src/run_bot.sh")
+    assert controller.index('controller_status="$(') < controller.index(
+        "src.engine.automation.next_preopen_readiness")
+    assert "--prepare --source-date \"$TARGET_DATE\"" in controller
+    assert finalizer.index("capture_final_detector_receipt") < finalizer.index(
+        "next_preopen_readiness")
+    assert preopen.index("next_preopen_readiness") < preopen.index(
+        "low_price_two_leg_policy_apply")
+    assert "--verify --target-date \"$TARGET_DATE\" --require-today" in preopen
+    assert launcher.index("verify_exact_preopen_completion") < launcher.index(
+        "record_threshold_runtime_env_pid_handoff")
+    assert 'verify_exact_preopen_completion "$RUNTIME_TARGET_DATE" || exit 1' in launcher
+
+
 def test_initial_quantity_refresh_runs_before_summary_handoff():
     from src.engine.automation.postclose_summary_handoff import source_paths
 
@@ -89,7 +107,7 @@ def test_preopen_uses_single_lock_and_exact_date_bootstrap():
 
 def test_launcher_fails_closed_on_bootstrap_and_verifies_before_bot():
     script = _text("src/run_bot.sh")
-    path = 'runtime_policy_bootstrap_$(TZ=Asia/Seoul date +%F).env'
+    path = 'runtime_policy_bootstrap_${RUNTIME_TARGET_DATE}.env'
     assert path in script
     assert "src.engine.automation.runtime_policy_bootstrap" in script
     assert script.index("wait_for_threshold_runtime_env") < script.index("bot_main.py")
