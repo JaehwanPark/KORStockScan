@@ -40,9 +40,11 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 
 ## Main 기계판정 미진입 회복 우선순위
 
-- [ ] `[ErrorDetectorDaemonLogDedup1002] 동일 장후 실패의 daemon 반복 ERROR 기록 수리` (`Due: 2026-10-02`, `Slot: INTRADAY`, `TimeWindow: 08:05~08:45`, `Track: RuntimeStability`)
+- [ ] `[ErrorDetectorDaemonLogDedup1002] 동일 장후 실패의 daemon 반복 ERROR 기록 수리` (`Due: 2026-10-02`, `Slot: POSTCLOSE`, `TimeWindow: 20:10~21:00`, `Track: RuntimeStability`)
   - Source: [daemon 반복 경보 수리](../audits/error-detector-daemon-incident-dedup-review-2026-10-02.md), [운영 출력 계약](../time-based-operations-runbook.md).
   - Acceptance: bot/standalone 매 주기 health FAIL·검사/heartbeat 유지, 동일 사고 로그·ADMIN 알림 1회, 새 원천/사유/심각도·실제 PASS/재발·날짜 전환·handler 실패 회귀를 검증한다. 기존 사용자 배포/재기동 승인 아래 정책 실행값·원천 FAIL·독립 owner를 보존하고 정식 준비/PREOPEN/guarded restart/PID 소비를 각각 대사한다. 정확일자 launcher gate 미충족이면 현재 PID를 중단하지 않는다.
+  - 구현 수용: `24bf9ab6` 불변 root 76 PASS/4.64초, source clean. 당일 새 prepare가 `preopen_target_not_next_operating_day`로 차단돼 selector `9dcbd482` 복구, 기존 PID/정책 env/manifest/PREOPEN/준비본 불변과 08:12 PID verify PASS 확인. 현재 daemon 소비는 pending이며 원 finalization FAIL도 유지한다.
+  - 다음 실행: 기존 20:10 Main 정상 종료 뒤 검증 root 선택과 다음 거래일 정식 준비를 결속한다. 다음 기동의 두 연속 health 관측·로그 중복 없음은 이 동일 ID의 자연 수용으로 남긴다. 장중 적용을 위해 날짜/commit gate를 우회하지 않는다.
 
 - [x] `[CronFinalizationDependencyRepair1002] 아침 최종화 실패와 cleanup 미실행 원인 분리` (`Due: 2026-10-02`, `Slot: PREOPEN`, `TimeWindow: 07:00~07:30`, `Track: RuntimeStability`)
   - Source: [아침 경보 원인·수리](../audits/morning-finalization-dependency-alert-review-2026-10-02.md), [운영 복구 계약](../time-based-operations-runbook.md).
