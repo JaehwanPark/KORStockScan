@@ -3,6 +3,44 @@ import json
 from src.engine import notify_error_detection_admin as notifier
 
 
+def test_semantic_warning_notifies_stably_and_unobservable_is_not_recovery(tmp_path, monkeypatch):
+    report, state = tmp_path / "report.json", tmp_path / "state.json"
+    sent = []
+    monkeypatch.setattr(notifier, "_load_telegram_config", lambda: ("token", "admin"))
+    monkeypatch.setattr(notifier, "_send_telegram", lambda *_args: sent.append(_args[-1]))
+    alert = {"source_date": "2026-10-02", "stage": "main_auxiliary_policy", "scope": "report",
+             "reason": "auxiliary_outcome_label_source_gap", "status": "source_gap",
+             "owner": "compact_auxiliary_paired_replay", "generation": "a" * 64,
+             "artifact": "/report/compact.json"}
+    payload = {"target_date": "2026-10-02", "timestamp": "2026-10-02T21:00:00+09:00",
+        "results": [{"detector_id": "artifact_freshness", "severity": "warning",
+                     "summary": "Semantic warnings", "details": {"semantic_alerts": [alert]}}]}
+    def notify():
+        report.write_text(json.dumps(payload))
+        return notifier.notify_from_report(report, mode="full", log_file="logs/health.log", state_file=state, now_ts=1000)
+    assert notify() == "sent"
+    alert["generation"] = "b" * 64
+    assert notify() == "duplicate_incident"
+    payload["results"][0]["details"] = {"auxiliary_result_semantics": {"status": "unobservable"}}
+    assert notify() == "no_alert"
+    assert json.loads(state.read_text())["active_incident_count"] == 1
+    for observed in (
+        {"status": "pass", "report_sha256": "c" * 64, "source_date": "2026-10-01"},
+        {"status": "source_invalid", "report_sha256": "c" * 64, "source_date": "2026-10-02"},
+    ):
+        payload["results"][0]["details"] = {"auxiliary_result_semantics": observed}
+        assert notify() == "no_alert"
+        assert json.loads(state.read_text())["active_incident_count"] == 1
+    payload["results"][0]["details"] = {"semantic_alerts": [alert]}
+    assert notify() == "duplicate_incident"
+    payload["results"][0]["details"] = {"auxiliary_result_semantics": {
+        "status": "incumbent_carry", "report_sha256": "c" * 64, "source_date": "2026-10-02"}}
+    assert notify() == "no_alert"
+    assert json.loads(state.read_text())["active_incident_count"] == 0
+    assert len(sent) == 1
+    assert "source=2026-10-02" in sent[0]
+
+
 def _write_report(path, *, severity="fail", summary="Cron job failures"):
     payload = {
         "timestamp": "2026-05-13T07:50:00+09:00",
@@ -17,6 +55,19 @@ def _write_report(path, *, severity="fail", summary="Cron job failures"):
         ],
     }
     path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_notifier_does_not_silently_deduplicate_undisplayed_incidents(tmp_path, monkeypatch):
+    sent = []
+    monkeypatch.setattr(notifier, "_load_telegram_config", lambda: ("token", "admin"))
+    monkeypatch.setattr(notifier, "_send_telegram", lambda *args: sent.append(args[-1]))
+    path = tmp_path / "report.json"
+    path.write_text(json.dumps({"results": [{"detector_id": f"detector-{i}",
+        "severity": "fail", "summary": f"failure-{i}"} for i in range(7)]}))
+    assert notifier.notify_from_report(path, mode="full", log_file="log",
+                                       state_file=tmp_path / "state.json") == "sent"
+    assert len(sent) == 3
+    assert all(f"failure-{i}" in "\n".join(sent) for i in range(7))
 
 
 def test_notify_from_report_skips_when_no_fail(tmp_path):

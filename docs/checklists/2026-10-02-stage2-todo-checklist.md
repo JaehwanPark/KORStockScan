@@ -40,6 +40,10 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 
 ## Main 기계판정 미진입 회복 우선순위
 
+- [ ] `[PostcloseSemanticMonitorContractRepair1002] 새 장후 계약의 의미감시·알림 호환성 보완` (`Due: 2026-10-02`, `Slot: INTRADAY`, `TimeWindow: 09:00~19:50`, `Track: RuntimeStability`)
+  - Source: [10/1 의미감시 연계 보완계획](../proposals/semantic-monitor-postclose-integration-repair-plan-2026-10-01.md), [구현·배포 기록](../audits/semantic-monitor-postclose-integration-implementation-2026-10-01.md). 사용자 후속 승인은 감시기 구현·배포와 내일 기동 준비까지이며 오늘 Main 선행 기동·매매 권한 변경은 포함하지 않는다.
+  - Acceptance: P0~P3의 버전·same-day split/purge·기계 v7/보조 v4 선정·full-cost 분모·현재 stage generation·준비/소비 구분·조치 warning mock 알림과 중복/recovery 계약을 리뷰·보완·재리뷰한다. 기존 owner 함수를 재사용하고 표적 회귀·compile/diff, wrapper 변경 시 bash/계약 시험, 실제 감시 root/selector 및 bounded 성능을 확인한다. 코드 완료와 선택 릴리스·자연 소비·정책 성과를 분리한다. 자연 장후 수용은 아래 기존 기계/보조 Postclose owner가 맡으며, 기동은 `FinalPolicyStartupAcceptance1002`를 유지한다.
+
 - [ ] `[FinalPolicyStartupAcceptance1002] 최종 재생성 정책의 Main·Episode·Widget 당일 소비 확인` (`Due: 2026-10-02`, `Slot: PREOPEN`, `TimeWindow: 07:32~09:10`, `Track: RuntimeStability`)
   - Source: [10/1 기동 준비·동일 정책 승계 리뷰](../audits/next-startup-final-policy-readiness-2026-10-01.md), [준비본](../../data/runtime/policy_bootstrap/prepared/2026-10-02/latest.json), [Episode 승계·로더 검증](../../data/runtime/startup_readiness/2026-10-02/policy_validation.json).
   - 준비 근거: Main 선택 릴리스 `459d718f`의 준비본 검증 pass. Episode 61개 실행값/정책 hash 불변으로 미래일 applied 발행, 58 ready·기존 격리 3 유지. Widget 10/2 로더 3종목·4session 유효, 실행값 불변. Episode timer 122개 10/2 예약 확인. 코드/릴리스/cron/systemd 변경과 현재 Main 기동은 없다.
@@ -55,6 +59,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
   - Source: [10/2 장후 적용 계획](../proposals/main-machine-missed-entry-priority-postclose-plan-2026-10-01.md). 현재 장중 선정 정책·PID를 건드리지 않고, 새 버전의 리뷰·수정·재검토·샘플 재생·wall/CPU/RSS 비교를 격리된 작업 경로에서 완료한다.
   - Acceptance: 86+6+4 슬롯에서 single 회복이 없는 결합 blocker fixture, 고유 기회 중복/성공·실패 집합 겹침, train seed의 holdout 불변, 같은 날 시간순 분할·관측기간 purge, 발행 readback·부모 CAS를 검증한다. 동일 입력 3회 wall/CPU 중앙값 ≤구버전×1.20, RSS ≤구버전×1.10+64MiB와 기존 절대 가드를 통과한다. 불합격이면 기존 장후 경로·정책을 유지한다.
 - [ ] `[MainMachineMissedEntryPriority1002] 미진입 상승 회복 우선 순위 장후 적용` (`Due: 2026-10-02`, `Slot: POSTCLOSE`, `TimeWindow: 20:05~23:50`, `Track: MainEntry`)
+  - Semantic acceptance: [의미감시 연계 계획](../proposals/semantic-monitor-postclose-integration-repair-plan-2026-10-01.md)에 따라 실제 감시 코드·원천일·generation을 대사하고 winrate stage와 full v7 scope의 정상 carry/원천 실패·발행 결과를 각각 확인한다. 감시 보완 미반영은 별도 미수용으로 남기며 생산자의 기존 source/발행/strict 안전 계약을 우회하지 않는다.
   - Source: [10/2 장후 적용 계획](../proposals/main-machine-missed-entry-priority-postclose-plan-2026-10-01.md). 위 로직·샘플 검증을 통과한 릴리스의 장후 생산자만 새 버전을 소비한다. 10/2 장중 선정 정책과 PID 판정은 유지한다.
   - Acceptance: 실제 세션/예약 stage 경계를 확인한다. 10/2의 사전 봉인된 검증 구간에서 후보 1개만 판정하고 미진입 회복 고유 기회 ≥3, 회복 성공 양수, 기존 성공 보존·전체 모집단·비용·부모/범위·발행 조건을 대조한다. M1/A1 합성은 같은 부모·입력 근거 없이 발행하지 않는다. 성공/실패/유효 carry, summary·strict·controller·finalization 세대를 확인하며 부족하면 원인과 기존 정책 승계를 남긴다. 적용일은 거래일 캘린더로 산출한다.
 
@@ -65,5 +70,6 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
   - Source: [보조 AI 장후 보완 계획](../proposals/compact-auxiliary-pass-veto-postclose-remediation-plan-2026-10-01.md). 장중 현행 프롬프트·정책·PID를 유지한다. 전일의 `DirectFamilySourceRepairCompactAuxiliary` 기록 전용 생산자 수리가 장전 선택 릴리스에 포함됐는지 확인한다. 장후 후보·발행 계산은 격리된 작업본에서 원천 생산자→라벨→선택→발행기·기존 번들 readback까지 리뷰·수정·재리뷰한다.
   - Acceptance: 0/6 주 비교 결손·10개 진단 PASS·23 trial 중 미응답 8개를 재현한다. risk/opportunity 변형의 생산·완료·재생 목록 일치, 학습 1위 holdout 실패/2위 통과여도 carry, 같은 날 독립 split, CAUTION 후 재진입, VETO 없는 PASS-only 평가, 비용 종류/plan hash 충돌, 중복 예약·응답 소실 회귀를 통과한다. 5일 초과 누적 projection fixture에서 초기 날짜 보존·검증일 격리·raw 전체 재로딩 방지를 확인한다. 동일 입력 3회 wall/CPU ≤구버전×1.20, RSS ≤구버전×1.10+64MiB와 원래 provider 예산을 지킨다. source 수리·독립 CF·owner 경제성을 구분하고 마찰비용 진단을 full-cost 정책 근거로 발행하지 않는다.
 - [ ] `[CompactAuxiliaryPassVetoPostclose1002] 보조 AI 새 로직의 10/2 장후 실행·승계 확인` (`Due: 2026-10-02`, `Slot: POSTCLOSE`, `TimeWindow: 20:05~23:50`, `Track: MainEntry`)
+  - Semantic acceptance: [의미감시 연계 계획](../proposals/semantic-monitor-postclose-integration-repair-plan-2026-10-01.md)의 same-day/full-cost/동결 선택·정확 응답·분모·report-terminal 결속과 조치 알림을 같은 자연 generation에서 확인한다. 후보 미발생은 `not_observed`, 필수 원천·실행 결손은 owner/artifact/closure test와 함께 `blocked`로 남기며 과거 결손을 복구로 표시하지 않는다.
   - Source: [보조 AI 장후 보완 계획](../proposals/compact-auxiliary-pass-veto-postclose-remediation-plan-2026-10-01.md). 위 검증을 통과한 선택 릴리스의 장후 생산자에만 새 로직을 적용한다.
   - Acceptance: 실제 세션/예약 stage 경계와 10/2 exact source, 비용 유형별 적격성, PASS/VETO/CAUTION 전이, 동결 후보 하나의 검증 및 기계 부모 결속을 대조한다. 해당 후보가 바꾸는 방향의 지원·비용·후보 응답·독립 검증이 부족하면 그 scope를 carry하고 연구·진단은 별도 완료 처리한다. 정책·summary·strict·controller·finalization 종결을 확인하며 다음 거래일 PID와 실현 순이익은 별도 확인한다.

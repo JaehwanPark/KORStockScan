@@ -20,10 +20,113 @@ from src.engine.error_detectors.artifact_freshness import (
     _auxiliary_result_semantics,
     _holding_profit_exit_semantics,
     _initial_quantity_semantics,
+    _auxiliary_scope_contract,
+    _postclose_handoff_semantics,
+    _semantic_stage_binding,
+    _semantic_alerts,
 )
 from src.engine.scalping.micro_reversion.symbol_master import SymbolLookupStatus
 
 _TRADING_MOCK = "src.engine.error_detectors.artifact_freshness.is_krx_trading_day"
+
+
+def test_auxiliary_v4_frozen_same_day_contract_and_cost_isolation():
+    from src.engine.scalping import compact_auxiliary_paired_replay as paired
+    day, scope = "2026-10-02", "KRX|KRX_REGULAR"
+    train = [[day, f"{i:06}", "KRX", "KRX_REGULAR", f"promotion-{i}"] for i in range(5)]
+    held = [[day, f"{i:06}", "KRX", "KRX_REGULAR", f"promotion-{i}"] for i in range(5, 8)]
+    manifest = {"version": "chronological_opportunity_purge_v1", "basis": "same_day_70_30_opportunities",
+        "train_opportunity_ids": train, "holdout_opportunity_ids": held,
+        "purged_opportunity_ids": [], "train_observation_end": day + "T10:00:00+09:00",
+        "holdout_start": day + "T10:01:00+09:00"}
+    candidate = {"policy": {"soft": "candidate"}, "prompt_version": "risk_v2",
+                 "evaluation_status": "evaluated"}
+    candidate["policy_sha256"] = paired.digest(candidate["policy"])
+    value = {"selection_rank_version": "train_top1_frozen_paired_net_ev_holdout_gate_v4",
+        "status": "candidate_selected", "split_manifest": manifest, "selected": candidate,
+        "frozen_train_choice": candidate, "full_cost_candidate_population_count": 8,
+        "candidates": [candidate], "completed_candidate_count": 1,
+        "holdout_selection_candidate_count": 1,
+        "cost_incomplete_diagnostic_count": 2, "current_machine_policy_sha256": "a" * 64,
+        "parent_prompt_versions": ["parent"], "parent_soft_policy_sha256s": ["b" * 64],
+        "train_population_sha256": "c" * 64,
+        "metric_authority": "full_cost_fixed_checkpoint_cf_not_owner_portfolio"}
+    receipt = paired.sealed({"schema": "auxiliary_train_selection_v1", "target_date": day,
+        "scopes": {scope: {**candidate, "machine_policy_sha256": "a" * 64,
+            "parent_prompt_version": "parent", "parent_soft_sha256": "b" * 64,
+            "train_population_sha256": "c" * 64, "split_manifest": manifest}}})
+    report = {"auxiliary_train_selection": receipt}
+    assert _auxiliary_scope_contract(value, report, day, scope) == []
+    value["selected"] = {**candidate, "prompt_version": "runner-up"}
+    assert "auxiliary_selected_without_frozen_full_cost_evidence" in _auxiliary_scope_contract(value, report, day, scope)
+    value["selected"] = candidate
+    value["full_cost_candidate_population_count"] = 0
+    assert "auxiliary_selected_without_frozen_full_cost_evidence" in _auxiliary_scope_contract(value, report, day, scope)
+    value["status"] = "incumbent_carry"
+    assert _auxiliary_scope_contract(value, report, day, scope) == []
+    manifest["holdout_start"] = manifest["train_observation_end"]
+    assert "auxiliary_chronological_split_invalid" in _auxiliary_scope_contract(value, report, day, scope)
+
+
+def test_semantic_stage_rejects_terminal_generation_mismatch(tmp_path):
+    day, stage = "2026-10-02", "legacy_machine_report"
+    path = tmp_path / "data/report/postclose_stage_terminal" / day / f"{stage}.json"
+    path.parent.mkdir(parents=True)
+    terminal = {"schema": "postclose_stage_terminal_v2", "source_date": day, "stage_id": stage,
+                "status": "succeeded", "exit_code": 0, "sources": {"report": {"sha256": "a" * 64}}}
+    terminal["receipt_sha256"] = hashlib.sha256(json.dumps(terminal, ensure_ascii=True,
+        sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    path.write_text(json.dumps(terminal))
+    assert _semantic_stage_binding(tmp_path, day, stage, artifact="report", artifact_sha="a" * 64)["status"] == "succeeded"
+    with pytest.raises(ValueError, match="generation_mismatch"):
+        _semantic_stage_binding(tmp_path, day, stage, artifact="report", artifact_sha="b" * 64)
+    with pytest.raises(ValueError, match="source_path_invalid"):
+        _semantic_stage_binding(tmp_path, day, stage, artifact="report", artifact_sha="a" * 64,
+                                artifact_path=tmp_path / "wrong.json")
+    terminal.update(status="failed", exit_code=2)
+    terminal.pop("receipt_sha256")
+    terminal["receipt_sha256"] = hashlib.sha256(json.dumps(terminal, ensure_ascii=True,
+        sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    path.write_text(json.dumps(terminal))
+    assert _machine_result_semantics(tmp_path, day)["findings"] == ["machine_execution_failed"]
+
+
+def test_auxiliary_v4_diagnostic_only_population_is_not_a_candidate(tmp_path):
+    from src.engine.scalping import compact_auxiliary_paired_replay as paired
+    day = "2026-10-02"
+    scope = {"status": "incumbent_carry", "eligible_count": 2, "selected": {},
+        "selection_rank_version": "train_top1_frozen_paired_net_ev_holdout_gate_v4",
+        "full_cost_candidate_population_count": 0, "cost_incomplete_diagnostic_count": 2,
+        "metric_authority": "full_cost_fixed_checkpoint_cf_not_owner_portfolio",
+        "split_manifest": {"train_opportunity_ids": [], "holdout_opportunity_ids": [], "purged_opportunity_ids": []},
+        "candidates": [], "completed_candidate_count": 0, "holdout_selection_candidate_count": 0}
+    stage = paired.sealed({"schema": "auxiliary_ai_stage_evaluation_v1", "source_date": day,
+        "source_projection_sha256": "a" * 64, "source_manifest_sha256": "b" * 64,
+        "source_tuning_allowed": True, "screened_total": 2, "eligible_count": 2, "excluded_count": 0,
+        "eligible_keys": ["one", "two"], "candidate_population_keys": [],
+        "scope_results": {"KRX|KRX_REGULAR": scope}, "runtime_effect": False, "actual_order_submitted": False})
+    report = paired.sealed({"schema": paired.SCHEMA, "target_date": day,
+        "source_projection_sha256": "a" * 64, "source_manifest_sha256": "b" * 64,
+        "runtime_effect": False, "auxiliary_stage": stage})
+    path = tmp_path / "data/report/ai_entry_setup_paired_replay_batch" / f"compact_auxiliary_paired_economic_{day}.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(report))
+    result = _auxiliary_result_semantics(tmp_path, day)
+    assert result["findings"] == ["auxiliary_independent_holdout_missing"]
+    assert result["scopes"]["KRX|KRX_REGULAR"]["full_cost_count"] == 0
+    assert _semantic_alerts("main_auxiliary_policy", result, day) == []
+
+
+def test_prepared_semantics_does_not_claim_future_pid_or_ignore_stale_release(tmp_path, monkeypatch):
+    from src.engine.automation import next_preopen_readiness as readiness
+    target = "2026-10-02"
+    index = tmp_path / "data/runtime/policy_bootstrap/prepared" / target / "latest.json"
+    index.parent.mkdir(parents=True)
+    index.write_text('{}')
+    monkeypatch.setattr(readiness, "verify_prepared", lambda _, **kw: {"status": "fail", "findings": ["prepared_source_or_release_changed"]})
+    result = _postclose_handoff_semantics(tmp_path, "2026-10-01", datetime(2026, 10, 1, 22))
+    assert result["findings"] == ["next_preopen_prepared_contract_invalid"]
+    assert result["consumption"] == "not_observed"
 
 
 def _quantity_semantic_fixture(tmp_path, monkeypatch, *, shape="two_leg_0_1tick",
@@ -805,6 +908,13 @@ def test_bounded_postclose_process_matches_argv_date_and_snapshot(
 
 
 class TestArtifactFreshnessDetector:
+    @pytest.fixture(autouse=True)
+    def isolated_runtime_root(self, tmp_path, monkeypatch):
+        # Registry fixtures must not consume the operator's live postclose data.
+        monkeypatch.setattr("src.engine.error_detectors.artifact_freshness.PROJECT_ROOT", tmp_path)
+        monkeypatch.setattr("src.engine.error_detectors.artifact_freshness._initial_quantity_semantics",
+                            lambda *a, **k: {"status": "not_assessed", "findings": []})
+
     def test_preopen_artifacts_allow_one_detector_interval_for_producer_race(self):
         preopen_artifacts = {
             artifact["id"]: artifact

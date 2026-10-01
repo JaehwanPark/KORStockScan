@@ -46,7 +46,8 @@ def _control_paths(target_date: str) -> tuple[Path, Path]:
 
 
 def done_terminal_receipt_issues(
-    report_path: Path, target_date: str, *, started_after_ns: int
+    report_path: Path, target_date: str, *, started_after_ns: int,
+    generation_only: bool = False,
 ) -> list[str]:
     """Require a fresh, exact-date whole-chain DONE receipt before final cleanup."""
     report_path = Path(report_path)
@@ -98,7 +99,8 @@ def done_terminal_receipt_issues(
         if verifier.get("run_id") != report.get("main_run_id"):
             issues.append("controller_verification_main_run_mismatch")
         issues.extend(current_strict_receipt_issues(
-            verifier_path, target_date, require_whole_native_chain=True
+            verifier_path, target_date, require_whole_native_chain=True,
+            **({"generation_only": True} if generation_only else {}),
         ))
     return issues
 

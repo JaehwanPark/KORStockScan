@@ -3,6 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+source "$SCRIPT_DIR/runtime_release_set_lock.sh"
+runtime_release_set_lock_acquire "$PROJECT_DIR"
 TMP_CRON="$(mktemp)"
 trap 'rm -f "$TMP_CRON"' EXIT
 
@@ -12,13 +14,13 @@ if grep -Eq 'run_error_detection|ERROR_DETECTION_FULL' "$TMP_CRON"; then
     echo "[INSTALL] error detection cron already installed. Updating..."
     # Finalization is owned by the release-routed stage2 cron installer.  An
     # error-detector reinstall must never replace or delete that owner.
-    awk '!/run_error_detection/ && !/ERROR_DETECTION_FULL/' "$TMP_CRON" > "$TMP_CRON.filtered"
+    awk '!/ERROR_DETECTION_FULL/ && !/run_error_detection[.]sh[[:space:]]+full([[:space:]]|$)/' "$TMP_CRON" > "$TMP_CRON.filtered"
     mv "$TMP_CRON.filtered" "$TMP_CRON"
 fi
 
 cat >> "$TMP_CRON" <<EOF
-*/5 7-20 * * 1-5 bash $PROJECT_DIR/deploy/run_with_owned_log.sh --owner error_detection_cron --log $PROJECT_DIR/logs/run_error_detection_cron.log bash $PROJECT_DIR/deploy/run_error_detection.sh full # ERROR_DETECTION_FULL
-0-50/5 21 * * 1-5 bash $PROJECT_DIR/deploy/run_with_owned_log.sh --owner error_detection_cron --log $PROJECT_DIR/logs/run_error_detection_cron.log bash $PROJECT_DIR/deploy/run_error_detection.sh full # ERROR_DETECTION_FULL
+*/5 7-20 * * 1-5 bash $PROJECT_DIR/deploy/run_runtime_release.sh error-detection # ERROR_DETECTION_FULL
+0-50/5 21 * * 1-5 bash $PROJECT_DIR/deploy/run_runtime_release.sh error-detection # ERROR_DETECTION_FULL
 EOF
 
 crontab "$TMP_CRON"

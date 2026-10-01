@@ -20,6 +20,10 @@
 
 ## 실행 항목
 
+- [x] `[PostcloseSemanticMonitorPlan1001] 현재 릴리스 장후작업 연계 의미감시 수정보완계획 수립` (`Due: 2026-10-01`, `Slot: POSTCLOSE`, `TimeWindow: 22:20~23:59`, `Track: RuntimeStability`)
+  - Source: [의미감시 연계 보완계획](../proposals/semantic-monitor-postclose-integration-repair-plan-2026-10-01.md), [통합 릴리스 인계](../audits/integrated-release-next-startup-handoff-2026-10-01.md).
+  - Acceptance: selector/HEAD·감시 소스·실제 cron·새 장후 버전·기존 의미 report를 대사하고 same-day 검증 오탐, full-cost/동결 선정 검사 누락, 의미 warning 알림 누락, generation/준비/PID 경계를 계획에 반영한다. 문서 링크·소유자·print-only parser를 검증한다. 계획 수립 완료이며 구현·배포·재기동/보고서 재생성 영수증이 아니다. 후속 코드 owner는 `PostcloseSemanticMonitorContractRepair1002`다.
+
 - [x] `[Postclose0930IndependentChainRecovery] 9월 30일 장후 독립 단계·최종 체인 복구` (`Due: 2026-10-01`, `Slot: POSTCLOSE`, `TimeWindow: 00:00~06:50`, `Track: RuntimeStability`)
   - Source: [장후 점검 운영 계약](../postclose-tuning-result-review-task-instructions.md), [단계 영수증](../../data/report/postclose_stage_terminal/2026-09-30/summary_handoff.json).
   - 이관: 9월 30일 23:39 모니터 스냅샷이 OOM 종료됐고, 정확일자 완료 포지션 축약본·네 산출물 해시 검증 및 퇴역 episode 공동 배분 OFF 수리를 적용했다. 수집기 원천 기간 및 자체 대상일 replay 재작성 계약을 보완해 재실행 성공했다. 원래 9월 30일 원천일과 수용 범위를 유지한다.

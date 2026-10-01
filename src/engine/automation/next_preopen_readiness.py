@@ -65,10 +65,11 @@ def _selected_release() -> tuple[dict[str, Any], Path, str]:
     return selection, path, commit
 
 
-def _source_receipts(source_date: str, target_date: str) -> dict[str, Any]:
+def _source_receipts(source_date: str, target_date: str, *, generation_only: bool = False) -> dict[str, Any]:
     controller_path = (DATA_DIR / "report" / "postclose_done_controller"
                        / f"postclose_done_controller_{source_date}.json")
-    issues = done_terminal_receipt_issues(controller_path, source_date, started_after_ns=0)
+    issues = done_terminal_receipt_issues(controller_path, source_date, started_after_ns=0,
+                                        **({"generation_only": True} if generation_only else {}))
     if issues:
         raise ValueError("postclose_controller_not_closed:" + ",".join(issues))
     summary_path = (DATA_DIR / "report" / "runtime_approval_summary"
@@ -149,7 +150,7 @@ def prepare(source_date: str, *, target_date: str | None = None,
 
 
 def verify_prepared(target_date: str, *, require_today: bool = False,
-                    now: datetime | None = None) -> dict[str, Any]:
+                    now: datetime | None = None, generation_only: bool = False) -> dict[str, Any]:
     findings = []
     current = (now or datetime.now(KST)).astimezone(KST)
     if require_today and target_date != current.date().isoformat():
@@ -169,7 +170,8 @@ def verify_prepared(target_date: str, *, require_today: bool = False,
                 or receipt.get("runtime_effect") is not False):
             raise ValueError("prepared_receipt_contract_invalid")
         _, selection_path, commit = _selected_release()
-        source = _source_receipts(receipt["source_date"], target_date)
+        source = _source_receipts(receipt["source_date"], target_date,
+                                  **({"generation_only": True} if generation_only else {}))
         if (receipt["selected_release_commit"] != commit
                 or receipt["selection_sha256"] != _sha(selection_path)
                 or any(receipt.get(key) != value for key, value in source.items())):
@@ -198,6 +200,7 @@ def verify_prepared(target_date: str, *, require_today: bool = False,
         "selected_release_commit": receipt.get("selected_release_commit"),
         "actual_pid_consumed": False,
         "runtime_effect": False,
+        "validation_scope": "sealed_generation" if generation_only else "current_full_contract",
     }
 
 

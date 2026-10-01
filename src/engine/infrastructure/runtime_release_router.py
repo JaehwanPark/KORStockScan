@@ -45,7 +45,7 @@ LEGACY_TAGS = {
 CRON_TARGETS = frozenset({"start", *TAGS.values()})
 REQUIRED_CRON_TARGETS = CRON_TARGETS
 OPERATIONS = ("start", "restart", *OWNED, "paired-replay", "eod", "archive", "buy-funnel",
-              "pre-submit-source", "holding-exit-sentinel")
+              "pre-submit-source", "holding-exit-sentinel", "error-detection")
 RELEASE_SET_LOCK = "runtime_release_set.lock"
 MAX_RELEASE_SET_UNITS = 256
 CORE_SYSTEMD_UNITS = (
@@ -428,6 +428,11 @@ def make_plan(
         ]
     elif operation == "buy-funnel":
         command = ["/bin/bash", str(root / "deploy/run_buy_funnel_sentinel_intraday.sh"), target_date]
+    elif operation == "error-detection":
+        command = ["/bin/bash", str(root / "deploy/run_with_owned_log.sh"),
+                   "--owner", "error_detection_cron", "--log",
+                   str(workspace / "logs/run_error_detection_cron.log"),
+                   "/bin/bash", str(root / "deploy/run_error_detection.sh"), "full"]
     elif operation == "pre-submit-source":
         command = [str(root / ".venv/bin/python"), "-m",
                    "src.engine.monitoring.submission_bottleneck_monitor",

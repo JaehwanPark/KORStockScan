@@ -326,10 +326,74 @@ def _initial_quantity_semantics(
     return details
 
 
+def _semantic_object(path: Path, *, limit: int = 64 * 1024 * 1024,
+                     hash_only: bool = False) -> tuple[dict, str]:
+    """Read one bounded, stable generation without following file symlinks."""
+    actual = existing_or_gzip_path(path)
+    if actual.is_symlink() or actual.stat().st_size > limit:
+        raise ValueError("semantic_artifact_untrusted_path_or_size")
+    before = actual.stat()
+    opener = gzip.open if actual.suffix == ".gz" else open
+    with opener(actual, "rb") as handle:
+        if hash_only:
+            digest, size = hashlib.sha256(), 0
+            while chunk := handle.read(128 * 1024):
+                size += len(chunk)
+                if size > limit:
+                    raise ValueError("semantic_artifact_uncompressed_size_exceeded")
+                digest.update(chunk)
+        else:
+            raw = handle.read(limit + 1)
+    after = actual.stat()
+    if (before.st_ino, before.st_mtime_ns, before.st_ctime_ns, before.st_size) != (
+            after.st_ino, after.st_mtime_ns, after.st_ctime_ns, after.st_size):
+        raise ValueError("semantic_generation_changed_during_read")
+    if hash_only:
+        return {}, digest.hexdigest()
+    if len(raw) > limit:
+        raise ValueError("semantic_artifact_uncompressed_size_exceeded")
+    value = json.loads(raw)
+    if not isinstance(value, dict):
+        raise ValueError("semantic_artifact_object_invalid")
+    return value, hashlib.sha256(raw).hexdigest()
+
+
+def _semantic_stage_binding(root, day, stage, *, artifact=None, artifact_sha=None, artifact_path=None):
+    path = root / "data/report/postclose_stage_terminal" / day / f"{stage}.json"
+    if not (path.exists() or path.is_symlink()):
+        return {"status": "not_assessed"}
+    value, _ = _semantic_object(path, limit=1024 * 1024)
+    body = {k: v for k, v in value.items() if k != "receipt_sha256"}
+    digest = hashlib.sha256(json.dumps(body, ensure_ascii=True, sort_keys=True,
+                                      separators=(",", ":")).encode()).hexdigest()
+    if (value.get("schema") != "postclose_stage_terminal_v2"
+        or value.get("source_date") != day or value.get("stage_id") != stage
+        or value.get("receipt_sha256") != digest):
+        raise ValueError(f"{stage}:terminal_identity_or_hash_invalid")
+    if value.get("status") == "succeeded":
+        if value.get("exit_code") != 0:
+            raise ValueError(f"{stage}:terminal_exit_invalid")
+        if artifact is not None:
+            source = (value.get("sources") or {}).get(artifact) or {}
+            if source.get("sha256") != artifact_sha or not artifact_sha:
+                raise ValueError(f"{stage}:completed_report_generation_mismatch")
+            if artifact_path is not None and source.get("path") != str(artifact_path.resolve()):
+                raise ValueError(f"{stage}:terminal_source_path_invalid")
+    return {"status": value.get("status"), "receipt_sha256": digest}
+
+
 def _machine_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
     """Check exact-date machine economics separately from stage completion."""
     report_path = (root / "data/report/ai_decision_action_outcome_calibration"
                    / f"ai_decision_action_outcome_calibration_{source_date}.json")
+    try:
+        stage = _semantic_stage_binding(root, source_date, "legacy_machine_report")
+        if stage["status"] in {"pending", "running"}:
+            return {"status": "unobservable", "findings": [], "execution": stage}
+        if stage["status"] in {"failed", "blocked", "source_quality_blocked"}:
+            return {"status": "source_invalid", "findings": ["machine_execution_failed"], "execution": stage}
+    except (OSError, ValueError, TypeError, AttributeError) as exc:
+        return {"status": "source_invalid", "findings": [str(exc)]}
     if not (report_path.exists() or report_path.is_symlink()):
         # A standalone win-rate sidecar is evidence that the machine family
         # ran; do not mark its missing full-evaluation partner unassessed.
@@ -341,7 +405,7 @@ def _machine_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
     try:
         if report_path.is_symlink() or report_path.stat().st_size > 64 * 1024 * 1024:
             return {"status": "source_invalid", "findings": ["machine_report_untrusted_path_or_size"]}
-        report = json.loads(report_path.read_text(encoding="utf-8"))
+        report, report_file_sha = _semantic_object(report_path)
         declared = report.get("artifact_content_sha256")
         body = {key: value for key, value in report.items() if key != "artifact_content_sha256"}
         actual = hashlib.sha256(json.dumps(body, ensure_ascii=True, sort_keys=True,
@@ -355,6 +419,12 @@ def _machine_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
         return {"status": "source_invalid", "findings": [str(exc)]}
     findings: list[str] = []
     scope_details: dict[str, dict[str, Any]] = {}
+    try:
+        execution = _semantic_stage_binding(root, source_date, "legacy_machine_report",
+            artifact="ai_decision_action_outcome_calibration",
+            artifact_sha=report_file_sha, artifact_path=report_path)
+    except (OSError, ValueError, TypeError, AttributeError) as exc:
+        return {"status": "source_invalid", "findings": [str(exc)]}
     for scope, row in scopes.items():
         if not isinstance(row, dict):
             findings.append("machine_scope_row_invalid")
@@ -374,7 +444,9 @@ def _machine_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
         if not full and not invalid:
             continue
         scope_details[scope] = {"full": full, "eligible": eligible,
-            "operating_paired": paired, "source_contract_invalid": invalid}
+            "operating_paired": paired, "source_contract_invalid": invalid,
+            "findings": []}
+        start = len(findings)
         if invalid:
             findings.append("machine_source_contract_exclusions")
         if full and not eligible:
@@ -383,6 +455,38 @@ def _machine_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
             findings.append("machine_operating_paired_unbound")
         if eligible and row.get("downstream_operating_evidence_complete") is not True:
             findings.append("machine_operating_economics_incomplete")
+        scope_details[scope]["findings"] = findings[start:]
+    selections = report.get("strategy_refinements_by_scope") or {}
+    if not isinstance(selections, dict):
+        findings.append("machine_selection_contract_invalid")
+        selections = {}
+    from src.engine.scalping import entry_strategy_policy as strategy
+    from src.engine.scalping.postclose_entry_validation import NEW_LOGIC_SOURCE_DATE
+    if source_date >= NEW_LOGIC_SOURCE_DATE and set(scope_details) - set(selections):
+        findings.append("machine_scope_selection_missing")
+    for scope, selection in selections.items():
+        if not isinstance(selection, dict):
+            findings.append("machine_selection_contract_invalid")
+            continue
+        if source_date >= NEW_LOGIC_SOURCE_DATE:
+            if selection.get("selection_basis") != strategy.RECOVERY_SELECTION_VERSION:
+                findings.append("machine_selection_version_invalid")
+            if selection.get("promotion_pass") is True:
+                candidate = selection.get("candidate") or {}
+                try:
+                    errors = strategy.promotion_errors(candidate, candidate.get("parent_policy"),
+                                                        tuple(scope.split("|")))
+                except (ValueError, TypeError, KeyError, AttributeError):
+                    errors = ["candidate_contract_invalid"]
+                if (errors or selection.get("promotion_errors")
+                    or candidate.get("selection_score_version") != strategy.RECOVERY_SELECTION_VERSION):
+                    findings.append("machine_selected_without_recovery_evidence")
+        scope_details.setdefault(scope, {}).update(
+            selection_status=selection.get("status"),
+            selection_version=selection.get("selection_basis"),
+            selection_blocker=selection.get("blocker"),
+            promotion_errors=selection.get("promotion_errors"),
+            source_excluded_count=len(selection.get("source_exclusions") or []))
     compact_path = (root / "data/report/ai_entry_setup_paired_replay_batch"
                     / f"compact_auxiliary_paired_economic_{source_date}.source.json")
     compact_exclusions: dict[str, int] = {}
@@ -422,7 +526,13 @@ def _machine_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
                 raise ValueError('winrate_report_untrusted_path_or_size')
             from src.engine.scalping import ai_action_outcome_calibration as calibration
             from src.engine.scalping import mechanistic_entry_runtime_policy as runtime_policy
-            winrate = json.loads(winrate_path.read_text(encoding='utf-8'))
+            winrate, winrate_file_sha = _semantic_object(winrate_path)
+            winrate_stage = _semantic_stage_binding(root, source_date, 'main_machine_policy',
+                artifact='machine_policy', artifact_sha=winrate_file_sha, artifact_path=winrate_path)
+            if winrate_stage['status'] in {'pending', 'running'}:
+                return {'status': 'unobservable', 'findings': [], 'execution': winrate_stage}
+            if winrate_stage['status'] in {'failed', 'blocked', 'source_quality_blocked'}:
+                findings.append('winrate_execution_failed')
             if winrate.get('schema') == 'main_entry_winrate_policy_report_v1':
                 if (not calibration._artifact_content_sha256_valid(winrate)
                     or winrate.get('target_date') != source_date
@@ -456,7 +566,9 @@ def _machine_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
                             or metrics.get('support_adjusted_win_rate_pct') is None):
                             findings.append('winrate_selected_zero_or_undefined')
                 terminal_path = winrate_path.with_name(f'winrate_policy_terminal_{source_date}.json')
-                terminal = json.loads(terminal_path.read_text(encoding='utf-8'))
+                terminal, terminal_sha = _semantic_object(terminal_path, limit=1024 * 1024)
+                _semantic_stage_binding(root, source_date, 'main_machine_policy',
+                    artifact='machine_policy_terminal', artifact_sha=terminal_sha, artifact_path=terminal_path)
                 target = (terminal.get('staged') or {}).get('target_date')
                 if (not calibration._artifact_content_sha256_valid(terminal)
                     or terminal.get('report_sha256') != winrate.get('artifact_content_sha256')
@@ -465,6 +577,13 @@ def _machine_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
                 bundle = runtime_policy.load(data_root=root / 'data', target_date=target)
                 selection = (bundle or {}).get('winrate_selection') or {}
                 pending = (terminal.get('staged') or {}).get('status') == 'pending_initial_preserved'
+                reused = (terminal.get('staged') or {}).get('status') == 'existing_incumbent_preserved'
+                if reused:
+                    from src.engine.automation.postclose_summary_handoff import _existing_incumbent_winrate_binding_valid
+                    previous = runtime_policy.load_effective(data_root=root / 'data', target_date=winrate.get('publication_date'))
+                    if not _existing_incumbent_winrate_binding_valid(winrate, terminal['staged'],
+                            bundle, previous, runtime_policy, data_root=root / 'data'):
+                        findings.append('winrate_candidate_bundle_or_scope_mismatch')
                 if (pending and (winrate.get('pending_initial_bundle_sha256') != bundle['bundle_sha256']
                     or winrate.get('pending_initial_target_date') != target
                     or winrate.get('hurdle_errors') != ['initial_policy_pending_activation']
@@ -472,17 +591,89 @@ def _machine_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
                     or selection.get('disposition') != 'initial_adopted'
                     or selection.get('parent_bundle_sha256') != winrate.get('parent_bundle_sha256')
                     or bundle.get('previous_bundle_sha256') != winrate.get('parent_bundle_sha256'))
-                    or not pending and (selection.get('report_sha256') != winrate.get('artifact_content_sha256')
+                    or not pending and not reused and (selection.get('report_sha256') != winrate.get('artifact_content_sha256')
                     or selection.get('disposition') != disposition)
                     or selection.get('machine_policy_sha256') != runtime_policy.digest(bundle['machine_policy'])
-                    or not pending and (bundle.get('scope_policies') or {}).get('KRX|KRX_REGULAR', {}).get('machine_disposition') != disposition):
+                    or not pending and not reused and (bundle.get('scope_policies') or {}).get('KRX|KRX_REGULAR', {}).get('machine_disposition') != disposition):
                     findings.append('winrate_candidate_bundle_or_scope_mismatch')
             else:
                 findings.append('winrate_report_schema_invalid')
         except (OSError, ValueError, TypeError, KeyError, AttributeError):
             findings.append('winrate_semantic_validation_failed')
     return {"status": "warning" if findings else "pass", "findings": sorted(set(findings)),
-        "scopes": scope_details, "compact_exclusions": compact_exclusions}
+        "scopes": scope_details, "compact_exclusions": compact_exclusions,
+        "source_date": source_date, "execution": execution,
+        "report_sha256": actual, "artifact": str(report_path),
+        "publication": "see_winrate_terminal_and_dated_bundle",
+        "consumption": "not_assessed_by_postclose_selection"}
+
+
+def _auxiliary_scope_contract(value, report, source_date, scope):
+    """Audit frozen evidence, never rerank candidates or execute a replay."""
+    from src.engine.scalping import compact_auxiliary_paired_replay as paired
+    from src.engine.scalping.postclose_entry_validation import (
+        NEW_LOGIC_SOURCE_DATE, split_manifest_valid,
+    )
+    if source_date < NEW_LOGIC_SOURCE_DATE:
+        return []
+    errors = []
+    if value.get("selection_rank_version") != "train_top1_frozen_paired_net_ev_holdout_gate_v4":
+        errors.append("auxiliary_selection_version_invalid")
+    manifest = value.get("split_manifest") or {}
+    try:
+        train = [tuple(row) for row in manifest["train_opportunity_ids"]]
+        held = [tuple(row) for row in manifest["holdout_opportunity_ids"]]
+        purged = [tuple(row) for row in manifest["purged_opportunity_ids"]]
+        if (any(len(row) != 5 or any(not isinstance(x, str) or not x for x in row)
+                for row in train + held + purged)
+            or any(len(rows) != len(set(rows)) for rows in (train, held, purged))
+            or set(purged) & (set(train) | set(held))
+            or (train and held and not split_manifest_valid(manifest, train, held))
+            or (value.get("status") == "candidate_selected" and (not train or not held))):
+            raise ValueError("split_invalid")
+    except (ValueError, TypeError, KeyError):
+        errors.append("auxiliary_chronological_split_invalid")
+    cost_count = value.get("full_cost_candidate_population_count")
+    diagnostic = value.get("cost_incomplete_diagnostic_count")
+    if (type(cost_count) is not int or cost_count < 0
+        or type(diagnostic) is not int or diagnostic < 0
+        or value.get("metric_authority") != "full_cost_fixed_checkpoint_cf_not_owner_portfolio"):
+        errors.append("auxiliary_full_cost_census_invalid")
+    trials = value.get("candidates")
+    if (not isinstance(trials, list) or any(not isinstance(t, dict) for t in trials)
+        or value.get("completed_candidate_count") != sum(
+            t.get("evaluation_status") == "evaluated" for t in trials)
+        or value.get("holdout_selection_candidate_count") != int(bool(value.get("frozen_train_choice")))):
+        errors.append("auxiliary_completed_response_census_invalid")
+    selected = value.get("selected") or {}
+    frozen = value.get("frozen_train_choice")
+    if frozen:
+        receipt = report.get("auxiliary_train_selection") or {}
+        saved = (receipt.get("scopes") or {}).get(scope) or {}
+        if (not paired.valid(receipt) or receipt.get("schema") != "auxiliary_train_selection_v1"
+            or receipt.get("target_date") != source_date
+            or any(not isinstance(value.get(key), str) or len(value[key]) != 64
+                   or any(c not in "0123456789abcdef" for c in value[key])
+                   for key in ("train_population_sha256", "current_machine_policy_sha256"))
+            or saved.get("policy_sha256") != frozen.get("policy_sha256")
+            or saved.get("policy") != frozen.get("policy")
+            or saved.get("prompt_version") != frozen.get("prompt_version")
+            or saved.get("machine_policy_sha256") != value.get("current_machine_policy_sha256")
+            or saved.get("parent_prompt_version") not in (value.get("parent_prompt_versions") or [])
+            or saved.get("parent_soft_sha256") not in (value.get("parent_soft_policy_sha256s") or [])
+            or saved.get("train_population_sha256") != value.get("train_population_sha256")
+            or saved.get("split_manifest") != manifest):
+            errors.append("auxiliary_frozen_selection_binding_invalid")
+    if value.get("status") == "candidate_selected":
+        if (not isinstance(frozen, dict) or selected != frozen
+            or value.get("holdout_errors") or not cost_count
+            or cost_count < selected.get("train_count", 0) + selected.get("holdout_count", 0)
+            or selected.get("evaluation_status") != "evaluated"
+            or selected.get("policy_sha256") != paired.digest(selected.get("policy"))
+            or (selected.get("train_veto_to_pass_count")
+                and not selected.get("holdout_veto_to_pass_count"))):
+            errors.append("auxiliary_selected_without_frozen_full_cost_evidence")
+    return errors
 
 
 def _auxiliary_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
@@ -505,6 +696,12 @@ def _auxiliary_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
                 or terminal.get("stage_id") != "main_auxiliary_policy"
                 or terminal.get("source_date") != source_date or receipt != digest):
                 raise ValueError("auxiliary_terminal_identity_or_hash_invalid")
+            if terminal.get("status") in {"pending", "running"}:
+                return {"status": "unobservable", "findings": [], "execution": terminal.get("status")}
+            if terminal.get("status") in {"failed", "blocked", "source_quality_blocked"}:
+                return {"status": "source_invalid", "findings": ["auxiliary_execution_failed"]}
+            if terminal.get("status") == "succeeded" and terminal.get("exit_code") != 0:
+                raise ValueError("auxiliary_terminal_exit_invalid")
             if terminal.get("status") == "succeeded" and terminal.get("exit_code") == 0:
                 source = ((terminal.get("sources") or {}).get(
                     "compact_auxiliary_paired_economic") or {})
@@ -527,16 +724,9 @@ def _auxiliary_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
             return {"status": "source_invalid", "findings": ["auxiliary_completed_report_missing"]}
         return {"status": "not_assessed", "findings": []}
     try:
-        if path.is_symlink() or path.stat().st_size > 64 * 1024 * 1024:
-            raise ValueError("auxiliary_report_untrusted_path_or_size")
-        opener = gzip.open if path.suffix == ".gz" else open
-        with opener(path, "rb") as handle:
-            raw = handle.read(64 * 1024 * 1024 + 1)
-        if len(raw) > 64 * 1024 * 1024:
-            raise ValueError("auxiliary_report_uncompressed_size_exceeded")
-        if terminal_source_sha and hashlib.sha256(raw).hexdigest() != terminal_source_sha:
+        report, file_sha = _semantic_object(path)
+        if terminal_source_sha and file_sha != terminal_source_sha:
             raise ValueError("auxiliary_completed_report_generation_mismatch")
-        report = json.loads(raw)
         stage = report.get("auxiliary_stage") or {}
         if (not paired.valid(report)
             or report.get("schema") != paired.SCHEMA
@@ -573,7 +763,8 @@ def _auxiliary_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
                    or type(v.get("eligible_count")) is not int
                    or v["eligible_count"] < 0
                    for v in stage["scope_results"].values())
-            or sum(v["eligible_count"] for v in stage["scope_results"].values())
+            or sum(v["eligible_count"] for v in stage["scope_results"].values()
+                if source_date < "2026-10-02" or v.get("full_cost_candidate_population_count", 0) > 0)
                 != len(candidate_keys)):
             raise ValueError("auxiliary_candidate_population_invalid")
     except (OSError, EOFError, UnicodeError, ValueError, TypeError, AttributeError) as exc:
@@ -650,8 +841,23 @@ def _auxiliary_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
                 or sum(counts.values()) != len(label_rows)
                 or dict(actual_counts) != counts):
                 raise ValueError("auxiliary_label_report_binding_invalid")
-            label_gap_count = counts.get("source_gap", 0)
-        except (OSError, EOFError, UnicodeError, ValueError, TypeError, AttributeError) as exc:
+            # Holding/exit labels are not the compact auxiliary population.
+            entry_rows = [row for row in label_rows
+                          if row.get("decision_stage") in {"entry", "entry_screen"}]
+            if source_date >= "2026-10-02" and economic_screened:
+                projection, _ = _semantic_object(path.with_name(
+                    f"compact_auxiliary_paired_economic_{source_date}.source.json"))
+                if (not paired.valid(projection) or projection.get("target_date") != source_date
+                    or projection.get("artifact_content_sha256") != report.get("source_projection_sha256")):
+                    raise ValueError("auxiliary_label_population_binding_invalid")
+                keys = {row["evaluation_key"] for row in projection["rows"]}
+                entry_rows = [row for row in entry_rows if row.get("decision_trace_id") in keys]
+                if (len(keys) != economic_screened or len(entry_rows) != len(keys)
+                    or {row.get("decision_trace_id") for row in entry_rows} != keys):
+                    raise ValueError("auxiliary_label_population_binding_invalid")
+            label_gap_count = sum((row.get("evaluation_label_contract") or {}).get(
+                "diagnostic_price_path", {}).get("status") == "source_gap" for row in entry_rows)
+        except (OSError, EOFError, UnicodeError, ValueError, TypeError, KeyError, AttributeError) as exc:
             return {"status": "source_invalid", "findings": [str(exc)]}
         if label_gap_count:
             findings.append("auxiliary_outcome_label_source_gap")
@@ -665,9 +871,22 @@ def _auxiliary_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
             findings.append("auxiliary_scope_selection_status_invalid")
             continue
         status = value.get("status")
+        try:
+            scope_findings = _auxiliary_scope_contract(value, report, source_date, scope)
+        except (ValueError, TypeError, KeyError, AttributeError):
+            scope_findings = ["auxiliary_scope_selection_contract_invalid"]
+        findings.extend(scope_findings)
+        independent = bool(value.get("holdout_day") or value.get("same_day_holdout_keys"))
         scopes[scope] = {"status": status, "eligible_count": value.get("eligible_count"),
                          "holdout_day": value.get("holdout_day"),
                          "paired_delta_ev_pct": selected.get("paired_delta_ev_pct"),
+                         "selection_version": value.get("selection_rank_version"),
+                         "selection_blocker": value.get("selection_blocker"),
+                         "holdout_errors": value.get("holdout_errors"),
+                         "full_cost_count": value.get("full_cost_candidate_population_count"),
+                         "cost_incomplete_diagnostic_count": value.get("cost_incomplete_diagnostic_count"),
+                         "metric_authority": value.get("metric_authority"),
+                         "findings": scope_findings,
                          "actual_fill_or_realized_pnl": False}
         if status not in {"candidate_selected", "incumbent_carry"}:
             findings.append("auxiliary_scope_selection_status_invalid")
@@ -697,15 +916,15 @@ def _auxiliary_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
             or selected["train_changed_count"] < 2
             or selected.get("successful_pass_changed_count") != 0
             or selected.get("prompt_response_missing_count") != 0
-            or not value.get("holdout_day")
+            or not independent
         ):
             findings.append("auxiliary_selected_without_independent_evidence")
     if not eligible:
         findings.append("auxiliary_economic_population_empty")
-    elif not any(isinstance(value, dict) and value.get("holdout_day")
+    elif not any(isinstance(value, dict) and (value.get("holdout_day") or value.get("same_day_holdout_keys"))
                  for value in stage["scope_results"].values()):
         findings.append("auxiliary_independent_holdout_missing")
-    if any(f.endswith("invalid") or f == "auxiliary_selected_without_independent_evidence"
+    if any(f.endswith("invalid") or f.startswith("auxiliary_selected_without_")
            for f in findings):
         status = "review_required"
     elif findings:
@@ -722,7 +941,118 @@ def _auxiliary_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
             "paired_comparable_count": economic_compared,
             "outcome_label_source_gap_count": label_gap_count,
             "first_source_gap": first_gap,
+            "source_date": source_date, "report_sha256": report["artifact_content_sha256"],
+            "artifact": str(path), "execution": "report_observed",
+            "publication": report.get("selection_disposition"),
+            "consumption": "not_assessed_by_postclose_selection",
             "scopes": scopes, "runtime_effect": False}
+
+
+def _postclose_handoff_semantics(root, source_date, now):
+    """Use native read-only closure/readiness checks; never prepare or apply."""
+    from src.engine.automation import next_preopen_readiness as readiness
+    from src.engine.automation.postclose_done_controller import done_terminal_receipt_issues
+    result = {"status": "not_assessed", "source_date": source_date,
+              "findings": [], "stages": {}, "consumption": "not_observed"}
+    try:
+        for stage in ("widget_policy", "episode_policy"):
+            result["stages"][stage] = _semantic_stage_binding(root, source_date, stage)
+            if result["stages"][stage]["status"] == "succeeded":
+                from src.engine.automation.postclose_summary_handoff import stage_artifacts
+                for name, path in stage_artifacts(root / "data/report", source_date, stage).items():
+                    _, sha = _semantic_object(path, hash_only=True)
+                    _semantic_stage_binding(root, source_date, stage, artifact=name,
+                                            artifact_sha=sha, artifact_path=path)
+            if result["stages"][stage]["status"] in {"failed", "blocked", "source_quality_blocked"}:
+                result["findings"].append(f"{stage}:execution_failed")
+        controller_path = (root / "data/report/postclose_done_controller"
+                           / f"postclose_done_controller_{source_date}.json")
+        if controller_path.exists() or controller_path.is_symlink():
+            controller, controller_sha = _semantic_object(controller_path)
+            result["status"] = controller.get("status", "source_invalid")
+            if controller.get("status") in {"failed", "blocked"}:
+                result["findings"].append("postclose_handoff_execution_failed")
+            if controller.get("status") == "done":
+                errors = done_terminal_receipt_issues(controller_path, source_date, started_after_ns=0,
+                                                     generation_only=True)
+                result["validation_scope"] = "sealed_generation_not_new_full_chain_verification"
+                if errors:
+                    result["findings"].append("postclose_handoff_generation_invalid")
+                    result["closure_errors"] = errors
+                else:
+                    result["report_sha256"] = controller_sha
+                    result["artifact"] = str(controller_path)
+        current = now.replace(tzinfo=ZoneInfo("Asia/Seoul")) if now.tzinfo is None else now.astimezone(ZoneInfo("Asia/Seoul"))
+        target = (current.date().isoformat() if current.hour * 60 + current.minute < 455
+                  else readiness._next_trading_day(current.date()).isoformat())
+        index = root / "data/runtime/policy_bootstrap/prepared" / target / "latest.json"
+        if index.exists() or index.is_symlink():
+            _semantic_object(index, limit=1024 * 1024)
+            check = readiness.verify_prepared(target, generation_only=True)
+            result["prepared"] = check
+            if check.get("status") != "pass":
+                result["findings"].append("next_preopen_prepared_contract_invalid")
+        # Actual PREOPEN/PID consumption remains in the startup detectors.
+        if result["findings"]:
+            result["status"] = "source_invalid"
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        result.update(status="source_invalid", findings=["postclose_handoff_contract_invalid"], error=str(exc))
+    return result
+
+
+def _semantic_alerts(name, semantics, source_date):
+    actionable = set("""
+        auxiliary_candidate_population_invalid auxiliary_completed_report_generation_mismatch
+        auxiliary_completed_report_missing auxiliary_execution_failed auxiliary_economic_denominator_invalid
+        auxiliary_economic_metrics_invalid auxiliary_exact_plan_lineage_missing
+        auxiliary_label_population_binding_invalid auxiliary_label_report_binding_invalid
+        auxiliary_label_report_missing auxiliary_outcome_label_binding_missing auxiliary_outcome_label_source_gap
+        auxiliary_population_denominator_invalid auxiliary_primary_economics_source_blocked
+        auxiliary_scope_selection_contract_invalid auxiliary_scope_selection_status_invalid
+        auxiliary_selected_without_independent_evidence auxiliary_source_lineage_invalid
+        auxiliary_source_tuning_not_allowed auxiliary_stage_report_contract_invalid
+        auxiliary_terminal_identity_or_hash_invalid auxiliary_terminal_source_binding_missing
+        auxiliary_chronological_split_invalid auxiliary_frozen_selection_binding_invalid
+        auxiliary_full_cost_census_invalid auxiliary_completed_response_census_invalid
+        auxiliary_selected_without_frozen_full_cost_evidence auxiliary_selection_version_invalid
+        auxiliary_eligible_identity_uninstrumented compact_operating_rows_all_excluded compact_projection_invalid
+        machine_execution_failed machine_exclusion_counts_invalid machine_full_report_missing_with_winrate_sidecar
+        machine_operating_economics_incomplete machine_operating_paired_unbound machine_population_count_invalid
+        machine_report_date_or_hash_invalid machine_scope_evaluations_missing machine_scope_row_invalid
+        machine_selected_without_recovery_evidence machine_selection_contract_invalid machine_selection_version_invalid
+        machine_scope_selection_missing machine_source_contract_exclusions
+        winrate_candidate_bundle_or_scope_mismatch winrate_market_denominator_invalid winrate_population_denominator_invalid
+        winrate_report_hash_or_scope_invalid winrate_report_schema_invalid winrate_successor_hurdle_invalid
+        winrate_selected_zero_or_undefined winrate_semantic_validation_failed winrate_terminal_binding_invalid
+        winrate_execution_failed next_preopen_prepared_contract_invalid postclose_handoff_contract_invalid
+        postclose_handoff_generation_invalid postclose_handoff_execution_failed
+        widget_policy:execution_failed episode_policy:execution_failed
+    """.split())
+    if semantics.get("status") in {"not_assessed", "unobservable"}:
+        return []
+    reasons = [reason for reason in semantics.get("findings", []) if reason in actionable]
+    if not reasons and semantics.get("status") == "source_invalid":
+        reasons = ["postclose_handoff_contract_invalid" if name == "postclose_handoff"
+                   else "auxiliary_stage_report_contract_invalid" if name == "main_auxiliary_policy"
+                   else "machine_report_date_or_hash_invalid"]
+    return [{"source_date": source_date, "stage": name,
+             "scope": scope, "reason": reason, "status": semantics.get("status"),
+             "artifact": semantics.get("artifact"), "generation": semantics.get("report_sha256"),
+             "affected": semantics.get("outcome_label_source_gap_count"),
+             "eligible": (semantics.get("scopes", {}).get(scope, {}).get("eligible_count",
+                           semantics.get("scopes", {}).get(scope, {}).get("eligible",
+                           semantics.get("eligible_count")))),
+             "total": (semantics.get("economic_screened_total") if reason in {
+                 "auxiliary_primary_economics_source_blocked", "auxiliary_exact_plan_lineage_missing",
+                 "auxiliary_outcome_label_source_gap", "auxiliary_outcome_label_binding_missing"}
+                 else semantics.get("scopes", {}).get(scope, {}).get("full", semantics.get("screened_total"))),
+             "owner": ("compact_auxiliary_paired_replay" if name == "main_auxiliary_policy"
+                       else "next_preopen_readiness" if name == "postclose_handoff"
+                       else "ai_action_outcome_calibration"),
+             "closure_test": "same_date_scope_source_selection_and_terminal_hashes"}
+            for reason in reasons
+            for scope in ([key for key, value in (semantics.get("scopes") or {}).items()
+                           if reason in value.get("findings", [])] or ["report"])]
 
 
 def _reconcile_update_kospi_master_difference(
@@ -1629,6 +1959,15 @@ class ArtifactFreshnessDetector(BaseDetector):
             if auxiliary_semantics["findings"]:
                 warnings.append("auxiliary_result_semantics: " + ", ".join(
                     auxiliary_semantics["findings"]))
+            handoff = _postclose_handoff_semantics(PROJECT_ROOT, today, now_dt)
+            details["postclose_handoff_semantics"] = handoff
+            if handoff["findings"]:
+                warnings.append("postclose_handoff_semantics: " + ", ".join(handoff["findings"]))
+            details["semantic_alerts"] = [alert for name, semantics in (
+                ("legacy_machine_report", machine_semantics),
+                ("main_auxiliary_policy", auxiliary_semantics),
+                ("postclose_handoff", handoff))
+                for alert in _semantic_alerts(name, semantics, today)]
             quantity_semantics = _initial_quantity_semantics(
                 PROJECT_ROOT, today, now_epoch=now_ts)
             details["initial_quantity_semantics"] = quantity_semantics

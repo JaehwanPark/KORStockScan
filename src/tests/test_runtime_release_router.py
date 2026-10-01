@@ -1,4 +1,5 @@
 import hashlib
+import os
 import json
 import subprocess
 from pathlib import Path
@@ -30,6 +31,40 @@ def release(tmp_path, monkeypatch):
         router, "git", lambda _, *args: "a" * 40 if args[0] == "rev-parse" else ""
     )
     return workspace, root, manifest, selection
+
+
+def test_error_detector_route_consumes_selected_release_and_keeps_log_owner(release):
+    workspace, root, _, _ = release
+    plan = router.make_plan(workspace, root, "a" * 40, "error-detection", "2026-10-02")
+    assert str(root / "deploy/run_error_detection.sh") in plan["command"]
+    assert str(workspace / "logs/run_error_detection_cron.log") in plan["command"]
+    assert plan["command"][-1] == "full"
+    assert plan["cwd"] == str(root)
+
+
+def test_error_cron_installer_preserves_unrelated_auth_and_finalizer(tmp_path):
+    workspace = tmp_path / "workspace"
+    (workspace / "data/runtime").mkdir(parents=True)
+    cron = tmp_path / "crontab.txt"
+    original = ("0 5 * * * bash /project/deploy/run_runtime_release.sh finalize # POSTCLOSE_FINALIZATION_0500\n"
+                "1 8 * * * bash /project/deploy/run_error_detection.sh auth_only # AUTH_ONLY\n"
+                "*/5 7-20 * * 1-5 bash /project/deploy/run_error_detection.sh full # ERROR_DETECTION_FULL\n")
+    cron.write_text(original)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    command = bin_dir / "crontab"
+    command.write_text('#!/bin/bash\nif [[ "$1" == "-l" ]]; then /bin/cat "$CRON_FIXTURE"; else /bin/cp "$1" "$CRON_FIXTURE"; fi\n')
+    command.chmod(0o755)
+    env = {**os.environ, "PROJECT_DIR": str(workspace), "CRON_FIXTURE": str(cron),
+           "PATH": str(bin_dir) + ":" + os.environ["PATH"]}
+    installer = Path(__file__).resolve().parents[2] / "deploy/install_error_detection_cron.sh"
+    for _ in range(2):
+        subprocess.run(["bash", str(installer)], env=env, check=True, capture_output=True)
+    result = cron.read_text()
+    assert original.splitlines()[0] in result
+    assert original.splitlines()[1] in result
+    assert result.count("# ERROR_DETECTION_FULL") == 2
+    assert result.count(" error-detection ") == 2
 
 
 def test_release_shares_operator_flag_and_docs(release):

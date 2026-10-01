@@ -81,6 +81,8 @@ Sentinel 본체가 실패해도 같은 wrapper는 독립 원천 감시를 실행
 
 ## 7. 장후 보조 AI 결과 의미감시 보완
 
+현재 릴리스의 기계 v7·보조 v4 및 다음 기동 연계 보완은 [10/1 의미감시 연계 계획](semantic-monitor-postclose-integration-repair-plan-2026-10-01.md)이 소유한다. 아래 9/30 수리·검증은 당시 작업본 영수증이며 이후 통합 배포 상태는 해당 계획의 현행 릴리스 대사를 따른다.
+
 - 9/30 원본 6건의 `entry_screen`이 가격 라벨 생성기의 `entry` 필터에서 빠져 정확 경로 요청이 0건이었다. 라벨 생성기는 두 단계 조건에 `entry_screen`을 포함하되 동일 trace의 종목·시각·snapshot·route·broker 및 기계 관측 해시 검증을 유지한다. 검증된 완료봉 캐시가 있어도 다른 원천품질 결손이나 후행 기간 미성숙은 별도로 남긴다.
 - 장후 `artifact_freshness`는 성공 terminal에 결박된 보조 AI 보고서에서 주 경제성 `screened_total`·`paired_comparable_count`와 최초 실행계획 lineage 결손을 검사한다. 보고서가 명시한 라벨 해시와 당일 라벨 보고서를 대사한 뒤 행별 `diagnostic_price_path.status` 집계를 확인한다. 비교 가능 0건, 해시 결손, 라벨 `source_gap`을 각각 원인으로 표시한다. 해시·날짜·집계가 불일치하면 `source_invalid`다.
 - 장중 10분 감시는 호출·비용·pending 영수증을 계속 맡고, 장후 감시는 완성된 라벨·경제성 보고서를 맡는다. 단계 `succeeded`는 생산 완료, `source_contract_blocked`는 비교 불가로 별도 표시한다. 보완 감시는 보고 전용이며 과거 라벨 재생성·정책 승계·실주문·재기동 권한이 없다.

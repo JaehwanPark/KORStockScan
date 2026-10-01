@@ -81,9 +81,24 @@ def _alert_results(report: dict) -> list[dict]:
     results = report.get("results")
     if not isinstance(results, list):
         return []
-    return [
-        item for item in results if isinstance(item, dict) and _is_alert_result(item)
-    ]
+    alerts = []
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        if _is_alert_result(item):
+            alerts.append(item)
+        if item.get("detector_id") != "artifact_freshness":
+            continue
+        for value in (item.get("details") or {}).get("semantic_alerts", []):
+            if (not isinstance(value, dict) or value.get("source_date") != report.get("target_date")
+                or value.get("stage") not in {"legacy_machine_report", "main_auxiliary_policy", "postclose_handoff"}
+                or value.get("status") in {"not_assessed", "unobservable"}
+                or not value.get("reason") or not value.get("owner")):
+                continue
+            alerts.append({"detector_id": "artifact_freshness", "severity": "warning",
+                "summary": value["reason"], "semantic_incident": value,
+                "recommended_action": f"{value['owner']}: {value.get('closure_test', '')}"})
+    return alerts
 
 
 def _fail_results(report: dict) -> list[dict]:
@@ -114,6 +129,10 @@ def _normalize_incident_summary(value: object) -> str:
 
 
 def _incident_fingerprint(item: dict) -> str:
+    semantic = item.get("semantic_incident")
+    if isinstance(semantic, dict):
+        return hashlib.sha256(json.dumps([semantic.get(k) for k in (
+            "source_date", "stage", "scope", "reason")], separators=(",", ":")).encode()).hexdigest()
     payload = {
         "detector_id": str(item.get("detector_id") or ""),
         "severity": str(item.get("severity") or "").lower(),
@@ -157,12 +176,17 @@ def _build_message(
             "- operational mutations: "
             + ", ".join(str(item) for item in operational_mutations)
         )
-    for item in fail_results[:5]:
+    for item in fail_results[:3]:
         detector_id = item.get("detector_id") or "-"
         severity = item.get("severity") or "-"
-        summary = item.get("summary") or "-"
-        action = item.get("recommended_action") or "-"
+        summary = str(item.get("summary") or "-")[:400]
+        action = str(item.get("recommended_action") or "-")[:200]
         lines.append(f"- {detector_id} [{severity}]: {summary}")
+        semantic = item.get("semantic_incident")
+        if isinstance(semantic, dict):
+            lines.append(f"  source={semantic['source_date']} stage={semantic['stage']} scope={semantic.get('scope')}")
+            lines.append(f"  affected/eligible/total={semantic.get('affected')}/{semantic.get('eligible')}/{semantic.get('total')}")
+            lines.append(f"  artifact={str(semantic.get('artifact'))[:250]} generation={semantic.get('generation')}")
         if action != "-":
             lines.append(f"  action: {action}")
     return "\n".join(lines)
@@ -191,12 +215,41 @@ def notify_from_report(
     fail_results = _alert_results(report)
     now = time.time() if now_ts is None else now_ts
     state = _load_state(state_file)
+    semantic_state = state.get("semantic_incidents")
+    semantic_state = semantic_state if isinstance(semantic_state, dict) else {}
+    details = next((r.get("details") or {} for r in report.get("results", [])
+                    if isinstance(r, dict) and r.get("detector_id") == "artifact_freshness"), {})
+    names = {"legacy_machine_report": "machine_result_semantics",
+             "main_auxiliary_policy": "auxiliary_result_semantics",
+             "postclose_handoff": "postclose_handoff_semantics"}
+    unresolved = {}
+    history = list(state.get("historical_semantic_incidents") or [])
+    for fingerprint, incident in semantic_state.items():
+        if not isinstance(incident, dict):
+            continue
+        observed = details.get(names.get(incident.get("stage"))) or {}
+        if incident.get("source_date") != report.get("target_date"):
+            history.append({**incident, "disposition": "historical_unrecovered"})
+        elif (observed.get("source_date") != incident.get("source_date")
+              or observed.get("status") not in {
+                  "pass", "warning", "source_gap", "review_required",
+                  "incumbent_carry", "candidate_selected", "done"}
+              or not observed.get("report_sha256")
+              or (incident.get("scope") not in {None, "report"}
+                  and incident.get("scope") not in (observed.get("scopes") or {}))
+              or incident.get("reason") in (observed.get("findings") or [])):
+            unresolved[fingerprint] = incident
+    for item in fail_results:
+        if isinstance(item.get("semantic_incident"), dict):
+            unresolved[_incident_fingerprint(item)] = item["semantic_incident"]
+    state.update(semantic_incidents=dict(list(unresolved.items())[-128:]),
+                 historical_semantic_incidents=history[-128:])
     if not fail_results:
         if state.get("active_incident_fingerprints"):
             _write_active_incident_state(
                 state_file,
                 state,
-                fingerprints=[],
+                fingerprints=list(unresolved),
                 report=report,
                 now=now,
             )
@@ -207,6 +260,7 @@ def notify_from_report(
         (_incident_fingerprint(item), item) for item in fail_results
     ]
     current_fingerprints = [fingerprint for fingerprint, _ in fingerprinted_results]
+    current_fingerprints.extend(unresolved)
     previous_fingerprints = {
         str(value)
         for value in state.get("active_incident_fingerprints", [])
@@ -245,11 +299,15 @@ def notify_from_report(
     if not token or not admin_id:
         return "missing_config"
 
-    message = _build_message(report, new_results, mode=mode, log_file=log_file)
-    _send_telegram(token, admin_id, message)
+    # Do not mark undisplayed incidents as notified. Persist only after every
+    # bounded message succeeds; transport failure remains retryable.
+    for offset in range(0, len(new_results), 3):
+        message = _build_message(report, new_results[offset:offset + 3], mode=mode, log_file=log_file)
+        _send_telegram(token, admin_id, message)
     _write_state(
         state_file,
         {
+            **state,
             "signature": sig,
             "active_incident_fingerprints": sorted(set(current_fingerprints)),
             "active_incident_count": len(set(current_fingerprints)),

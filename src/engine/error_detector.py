@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import time
+import subprocess
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -181,7 +183,23 @@ class ErrorDetectionEngine:
     def build_report(self, results: list[DetectionResult]) -> dict:
         now = datetime.now(KST)
         operational_mutations = self._operational_mutations(results)
+        root = Path(__file__).resolve().parents[2]
+        provenance = {"root": str(root), "source_sha256": {
+            name: hashlib.sha256((root / "src/engine" / name).read_bytes()).hexdigest()
+            for name in ("error_detector.py", "error_detectors/artifact_freshness.py",
+                         "notify_error_detection_admin.py")}}
+        try:
+            commit = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"],
+                                             text=True, timeout=3).strip()
+            selection = json.loads((PROJECT_ROOT / "data/runtime/runtime_release_selection.json").read_text())
+            provenance.update(commit=commit, selected_commit=selection.get("git_commit"),
+                selected_root=selection.get("release_root"),
+                selected_release_consumed=(commit == selection.get("git_commit")
+                                          and str(root) == selection.get("release_root")))
+        except (OSError, ValueError, subprocess.SubprocessError):
+            provenance["selected_release_consumed"] = None
         return {
+            "detector_code_provenance": provenance,
             "schema_version": REPORT_SCHEMA_VERSION,
             "report_type": REPORT_TYPE,
             "target_date": self.postclose_source_date or now.date().isoformat(),

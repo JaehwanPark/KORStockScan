@@ -250,6 +250,9 @@ def test_whole_chain_off_receipts_recover_with_new_checklist_and_strict(monkeypa
     assert mod.current_strict_receipt_issues(
         old_attempt, target, require_whole_native_chain=True
     ) == []
+    assert mod.current_strict_receipt_issues(
+        old_attempt, target, require_whole_native_chain=True, generation_only=True
+    ) == []
 
     capacity = handoff.stage_path(mod.REPORT_DIR, target, "research_capacity")
     handoff._stage_write(capacity, {
@@ -259,6 +262,9 @@ def test_whole_chain_off_receipts_recover_with_new_checklist_and_strict(monkeypa
     })
     assert "strict_stage_generation_stale:research_capacity" in mod.current_strict_receipt_issues(
         old_attempt, target, require_whole_native_chain=True
+    )
+    assert "strict_stage_generation_stale:research_capacity" in mod.current_strict_receipt_issues(
+        old_attempt, target, require_whole_native_chain=True, generation_only=True
     )
     _build_direct_checklist(monkeypatch, tmp_path, target)
     assert "postclose_stage_invalid:research_capacity" in mod.build_threshold_cycle_postclose_verification(

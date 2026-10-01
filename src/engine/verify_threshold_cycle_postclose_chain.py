@@ -187,9 +187,14 @@ def _stage_generation(target_date: str) -> dict[str, dict[str, Any]]:
 
 
 def current_strict_receipt_issues(
-    attempt_path: Path, target_date: str, *, require_whole_native_chain: bool = False
+    attempt_path: Path, target_date: str, *, require_whole_native_chain: bool = False,
+    generation_only: bool = False,
 ) -> list[str]:
-    """Check a stored strict attempt against the current generation, read only."""
+    """Check a stored strict attempt against the current generation, read only.
+
+    generation_only is a monitoring receipt check, never a new whole-chain PASS.
+    Authority-bearing callers retain the default full-contract recheck.
+    """
     report = _load(Path(attempt_path))
     binding = report.get("generation_binding")
     if (report.get("date") != target_date or report.get("status") != "pass"
@@ -229,16 +234,16 @@ def current_strict_receipt_issues(
         for stage, current in current_stages.items():
             if expected_stages[stage] != current:
                 issues.append(f"strict_stage_generation_stale:{stage}")
-    if require_whole_native_chain:
+    if require_whole_native_chain and not generation_only:
         fresh = build_threshold_cycle_postclose_verification(
             target_date, require_summary_handoff=True, require_whole_native_chain=True
         )
         issues.extend(f"strict_current_contract:{issue}" for issue in fresh["issues"])
-        if (binding.get("summary_sha256") != _sha(_artifact_paths(target_date)["runtime_summary"])
-                or binding.get("main_terminal_sha256") != _sha(_artifact_paths(target_date)["postclose_status"])
-                or binding.get("checklist_sha256") != _sha(Path(checklist or ""))
-                or expected_stages != _stage_generation(target_date)):
-            issues.append("strict_generation_changed_during_recheck")
+    if (binding.get("summary_sha256") != _sha(_artifact_paths(target_date)["runtime_summary"])
+            or binding.get("main_terminal_sha256") != _sha(_artifact_paths(target_date)["postclose_status"])
+            or binding.get("checklist_sha256") != _sha(Path(checklist or ""))
+            or expected_stages != _stage_generation(target_date)):
+        issues.append("strict_generation_changed_during_recheck")
     return issues
 
 
