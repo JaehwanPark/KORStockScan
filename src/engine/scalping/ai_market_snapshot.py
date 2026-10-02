@@ -1633,6 +1633,12 @@ def build_ai_market_snapshot(
                 {
                     "schema": candle_ctx.get("schema"),
                     "status": candle_quality.get("status"),
+                    "request_code": candle_ctx.get("request_code"),
+                    "source_request_code": _mapping(candle_quality, "source_meta").get(
+                        "entry_candle_request_code"
+                    ),
+                    "source_quality_blockers": candle_quality.get("blockers", []),
+                    "request_route_binding": candle_quality.get("request_route_binding"),
                 }
                 if candle_ctx
                 else None

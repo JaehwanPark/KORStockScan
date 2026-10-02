@@ -25,6 +25,7 @@ from src.engine.scalping.ai_market_snapshot import (
     enrich_investor_source,
     preferred_ws_route,
     realtime_type_provenance,
+    route_partitioned_ws_view,
 )
 from src.engine.kiwoom_orders import resolve_order_dmst_stex_tp
 from src.engine.scalping.multi_timeframe_context import (
@@ -37,6 +38,7 @@ from src.trading.market import session_contract
 SCHEMA = "entry_candle_context_v1"
 SOURCE_SCHEMA = "session_candle_source_v1"
 LOCAL_BREAKOUT_VERSION = "entry_local_breakout_completed_v1"
+CANDLE_ROUTE_BINDING_SCHEMA = "entry_candle_request_route_binding_v1"
 KST = ZoneInfo("Asia/Seoul")
 ADVERSE_REGIMES = {
     "failed_breakout",
@@ -342,6 +344,9 @@ def fetch_entry_candles_with_meta(
         allow_integrated_sor_execution_view=allow_integrated_sor_execution_view,
     )
     _, request_suffix = _split_code(request_code)
+    # Capture the connection generation before a slow REST call. A reconnect
+    # during the call cannot make that old chart belong to the new generation.
+    transport_epoch = ws.get("market_data_transport_epoch")
     request_venue = (
         "SOR"
         if request_suffix == "_AL" and allow_integrated_sor_execution_view
@@ -373,7 +378,82 @@ def fetch_entry_candles_with_meta(
             "multi_timeframe_auxiliary_fetch": True,
         }
     )
+    if type(transport_epoch) is int and transport_epoch > 0:
+        metadata["entry_candle_route_binding"] = {
+            "schema": CANDLE_ROUTE_BINDING_SCHEMA,
+            "request_code": request_code,
+            "session": session_value,
+            "broker_route": planned_broker_route,
+            "transport_epoch": transport_epoch,
+        }
     return list(candles or []), metadata
+
+
+def _bind_entry_candle_request_route(
+    ws, source_meta, *, code, venue, session, broker_route,
+    allow_integrated_sor_execution_view,
+):
+    """Bind existing exact WS rows to a fetched chart; never fetch or re-label."""
+    binding = source_meta.get("entry_candle_route_binding")
+    receipt = {"status": "not_applicable"}
+    if (binding is None or not allow_integrated_sor_execution_view
+            or venue != "KRX" or session != "krx_regular"
+            or "zero_base_probe_registered_epoch" in ws):
+        # Exact probes own their registration-bound tick filtering. Do not
+        # replace that narrower view with the entire route's shared buffer.
+        return ws, receipt
+    receipt = {"status": "blocked", "reason": "request_binding_invalid"}
+    if not isinstance(binding, dict):
+        return ws, receipt
+    request_code = str(binding.get("request_code") or "")
+    base, suffix = _split_code(request_code)
+    expected_base, _ = _split_code(code)
+    expected = resolve_entry_candle_request_code(
+        code, venue=venue, session=session, broker_route=broker_route,
+    )
+    allowed = {expected}
+    if venue == "KRX" and session == "krx_regular" and broker_route == "SOR":
+        allowed.add(f"{expected_base}_AL")
+    epoch = binding.get("transport_epoch")
+    if (
+        binding.get("schema") != CANDLE_ROUTE_BINDING_SCHEMA
+        or base != expected_base or request_code not in allowed
+        or source_meta.get("entry_candle_request_code") != request_code
+        or source_meta.get("request_code") != request_code
+        or source_meta.get("explicit_request_code") is not True
+        or binding.get("session") != session
+        or binding.get("broker_route") != broker_route
+        or type(epoch) is not int or epoch <= 0
+        or type(ws.get("market_data_transport_epoch")) is not int
+        or epoch != ws.get("market_data_transport_epoch")
+    ):
+        return ws, receipt
+    route = {"": "krx_only", "_NX": "nxt_only", "_AL": "krx_nxt_integrated"}[suffix]
+    route_key = f"{suffix or 'KRX'}|{route}"
+    partitions = ws.get("realtime_type_snapshots_by_route")
+    rows = partitions.get(route_key) if isinstance(partitions, dict) else None
+    receipt.update(request_code=request_code, route_key=route_key, transport_epoch=epoch)
+    if not isinstance(rows, dict) or any(
+        not isinstance(rows.get(kind), dict)
+        or type(rows[kind].get("transport_epoch")) is not int
+        or rows[kind].get("transport_epoch") != epoch
+        or rows[kind].get("item") != request_code
+        or rows[kind].get("market_suffix") != suffix
+        or rows[kind].get("market_route") != route
+        for kind in ("0B", "0D")
+    ):
+        receipt["reason"] = "exact_route_rows_missing_or_conflicting"
+        return ws, receipt
+    selected, partition = route_partitioned_ws_view(
+        ws, {"ws_suffix": suffix, "ws_route": route},
+    )
+    if not partition.get("used"):
+        receipt["reason"] = partition.get("reason")
+        return ws, receipt
+    # Selected rows retain their actual receive clocks. Canonical preflight
+    # still rejects old/future timestamps, absent values and insufficient tape.
+    receipt.update(status="bound", reason="exact_request_route_rows")
+    return selected, receipt
 
 
 def _number(value: Any, default: float = 0.0) -> float:
@@ -1020,6 +1100,18 @@ def build_session_candle_source(
             fetch_error = f"{type(exc).__name__}:{str(exc)[:120]}"
         fetch_ms = int((time.perf_counter() - fetch_started) * 1000)
     source_meta = dict(source_meta or {})
+    ws, request_route_binding = _bind_entry_candle_request_route(
+        ws, source_meta, code=code, venue=venue_value, session=session_value,
+        broker_route=str(broker_route or resolve_order_dmst_stex_tp(now=now)).upper(),
+        allow_integrated_sor_execution_view=allow_integrated_sor_execution_view,
+    )
+    if request_route_binding["status"] == "bound":
+        # A newer concurrent route must not replace the chart's request owner.
+        request_code = request_route_binding["request_code"]
+        _, request_suffix = _split_code(request_code)
+        ws_suffix, ws_route = _split_code(request_code)[1], {
+            "": "krx_only", "_NX": "nxt_only", "_AL": "krx_nxt_integrated",
+        }[request_suffix]
     supplied_request_code = str(
         source_meta.get("entry_candle_request_code")
         or source_meta.get("request_code")
@@ -1189,6 +1281,8 @@ def build_session_candle_source(
         )
     )
     quality_blockers = []
+    if request_route_binding["status"] == "blocked":
+        quality_blockers.append("candle_request_route_binding_invalid")
     if fetch_error:
         quality_blockers.append("fetch_error")
     if rest_request_code_conflict:
@@ -1357,6 +1451,7 @@ def build_session_candle_source(
         ),
         "source_quality": {
             "status": quality_status,
+            "request_route_binding": request_route_binding,
             "blockers": quality_blockers,
             "missing_bar_count": missing_bar_count,
             "max_consecutive_missing_bar_count": max_consecutive_missing_bar_count,
@@ -1432,6 +1527,7 @@ def build_session_candle_source(
                     "entry_candle_request_venue",
                     "entry_candle_request_session",
                     "entry_candle_request_broker_route",
+                    "entry_candle_route_binding",
                 }
             },
         },
@@ -1804,6 +1900,11 @@ def entry_candle_context_log_fields(
         "entry_candle_risk_flags": context.get("risk_flags", []),
         "entry_candle_source_quality_status": source.get("status"),
         "entry_candle_source_quality_blockers": source.get("blockers", []),
+        "entry_candle_request_code": context.get("request_code"),
+        "entry_candle_source_request_code": (source.get("source_meta") or {}).get(
+            "entry_candle_request_code"
+        ),
+        "entry_candle_request_route_binding": source.get("request_route_binding"),
         "entry_candle_decision_window_quality_status": decision_window.get("status"),
         "entry_candle_decision_window_quality_blockers": decision_window.get(
             "blockers", []

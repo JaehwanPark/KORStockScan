@@ -83,6 +83,11 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
   - Source: [10/2 장후 적용 계획](../proposals/main-machine-missed-entry-priority-postclose-plan-2026-10-01.md). 위 로직·샘플 검증을 통과한 릴리스의 장후 생산자만 새 버전을 소비한다. 10/2 장중 선정 정책과 PID 판정은 유지한다.
   - Acceptance: 실제 세션/예약 stage 경계를 확인한다. 10/2의 사전 봉인된 검증 구간에서 후보 1개만 판정하고 미진입 회복 고유 기회 ≥3, 회복 성공 양수, 기존 성공 보존·전체 모집단·비용·부모/범위·발행 조건을 대조한다. M1/A1 합성은 같은 부모·입력 근거 없이 발행하지 않는다. 성공/실패/유효 carry, summary·strict·controller·finalization 세대를 확인하며 부족하면 원인과 기존 정책 승계를 남긴다. 적용일은 거래일 캘린더로 산출한다.
 
+- [ ] `[CandleRequestRouteBindingRepair1002] Main 캔들 요청과 정확 WS 경로 결속 수리` (`Due: 2026-10-02`, `Slot: INTRADAY`, `TimeWindow: 09:30~15:20`, `Track: MainEntry`)
+  - Source: [캔들 요청 경로 결속 수리](../audits/candle-request-route-binding-repair-2026-10-02.md). 사용자 구현·반복 리뷰·배포·재기동 승인을 따른다.
+  - Acceptance: 요청 코드/연결 epoch를 REST 전에 고정하고 scanner venue·정확 0B/0D 경로·receive clock을 대사한다. 양방향 aggregate 전환, missing/stale/future·다른 종목/경로·bool/split/reconnect epoch·metadata 충돌, probe 등록 필터와 neutral holding 보존 회귀를 통과한다. 기존 정책/PREOPEN/준비본·독립 서비스 pin을 보존한 불변 배포와 guarded Main restart/PID 소비를 검증한다. 새 자연 원천만 인정하고 과거 결손·주문 없음·경제성 미검증을 보존한다.
+  - 코드 수용: 반복 리뷰·보완 후 522 PASS/9.10초, 구 릴리스에서도 재현된 historical rebound PREOPEN 3개만 분리. 로컬 결속 중앙값 0.01149ms/건. 배포/PID·새 자연 결속은 pending이다.
+
 ## 보조 AI PASS/VETO 원천·선택 보완
 
 - [ ] `[CompactAuxiliaryPassVetoLogicReady1002] 보조 AI 원천·판정 후보 로직과 샘플 성능 검증` (`Due: 2026-10-02`, `Slot: INTRADAY`, `TimeWindow: 09:00~15:20`, `Track: MainEntry`)

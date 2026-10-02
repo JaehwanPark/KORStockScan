@@ -13,10 +13,134 @@ from src.engine import sniper_state_handlers as handlers
 from src.engine.scalping import ai_market_snapshot as snapshot_module
 from src.engine.scalping.entry_candle_context import (
     build_entry_candle_context,
+    fetch_entry_candles_with_meta,
     revalidate_entry_candle_snapshot,
 )
 
 NOW = datetime(2026, 9, 10, 14, 0, 25, tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
+
+
+def _chart_route_ws(suffix, *, at=NOW - .1):
+    route = "krx_nxt_integrated" if suffix else "krx_only"
+    ws = _ws(at)
+    ws.update(market_data_transport_epoch=1, market_suffix=suffix, market_route=route,
+              last_realtime_type_item={k: f"123456{suffix}" for k in ("0B", "0D")},
+              last_realtime_type_market_suffix={k: suffix for k in ("0B", "0D")},
+              last_realtime_type_market_route={k: route for k in ("0B", "0D")})
+    key = f"{suffix or 'KRX'}|{route}"
+    common = dict(item=f"123456{suffix}", market_suffix=suffix,
+                  market_route=route, observed_epoch=at, transport_epoch=1)
+    ws["realtime_type_snapshots_by_route"] = {key: {
+        "0B": {**common, "current_price": 10000},
+        "0D": {**common, "orderbook": deepcopy(ws["orderbook"])},
+    }}
+    ws["recent_trade_ticks_by_route"] = {key: [
+        dict(price=10000, received_ts=at, item=f"123456{suffix}",
+             market_suffix=suffix, market_route=route),
+    ]}
+    return ws
+
+
+def _fetched_chart(monkeypatch, suffix):
+    from src.utils import kiwoom_utils
+    requests = []
+    def fetch(_token, request_code, **kwargs):
+        requests.append((request_code, kwargs))
+        return [dict(source_timestamp="20260910135900", 시가=10000,
+                     고가=10010, 저가=9990, 현재가=10000, 거래량=100)], {
+                         "api_id": "ka10080"}
+    monkeypatch.setattr(kiwoom_utils, "get_minute_candles_ka10080_with_meta", fetch)
+    bars, meta = fetch_entry_candles_with_meta(
+        None, "123456", _chart_route_ws(suffix), venue="KRX",
+        session="krx_regular", now_ts=NOW, broker_route="SOR",
+        allow_integrated_sor_execution_view=True,
+    )
+    assert requests[0][0] == f"123456{suffix}"
+    assert requests[0][1]["explicit_request_code"] is True
+    meta["multi_timeframe_auxiliary_fetch"] = False
+    return bars, meta
+
+
+def test_chart_request_binding_keeps_epoch_before_slow_rest(monkeypatch):
+    from src.utils import kiwoom_utils
+    ws = _chart_route_ws("_AL")
+    def fetch(*args, **kwargs):
+        ws["market_data_transport_epoch"] = 2
+        return [], {"api_id": "ka10080"}
+    monkeypatch.setattr(kiwoom_utils, "get_minute_candles_ka10080_with_meta", fetch)
+    _, meta = fetch_entry_candles_with_meta(
+        None, "123456", ws, venue="KRX", session="krx_regular", now_ts=NOW,
+        broker_route="SOR", allow_integrated_sor_execution_view=True,
+    )
+    assert meta["entry_candle_route_binding"]["transport_epoch"] == 1
+
+
+def test_chart_route_binding_preserves_probe_registration_filter(monkeypatch):
+    from src.engine.scalping.entry_candle_context import _bind_entry_candle_request_route
+    _, meta = _fetched_chart(monkeypatch, "_AL")
+    ws = _chart_route_ws("_AL")
+    ws["zero_base_probe_registered_epoch"] = NOW - .2
+    ws["recent_trade_ticks"] = []
+    before = deepcopy(ws)
+    selected, receipt = _bind_entry_candle_request_route(
+        ws, meta, code="123456", venue="KRX", session="krx_regular",
+        broker_route="SOR", allow_integrated_sor_execution_view=True,
+    )
+    assert receipt["status"] == "not_applicable"
+    assert selected == before
+
+
+@pytest.mark.parametrize("suffix", ["", "_AL"])
+def test_fetched_chart_survives_concurrent_route_change_without_relabel(monkeypatch, suffix):
+    bars, meta = _fetched_chart(monkeypatch, suffix)
+    opposite = _chart_route_ws("" if suffix else "_AL", at=NOW - .05)
+    frozen = _chart_route_ws(suffix)
+    opposite["realtime_type_snapshots_by_route"].update(frozen["realtime_type_snapshots_by_route"])
+    opposite["recent_trade_ticks_by_route"].update(frozen["recent_trade_ticks_by_route"])
+    before = deepcopy((opposite, meta, bars))
+    context = build_entry_candle_context(
+        None, "123456", opposite, "KRX", "krx_regular", now_ts=NOW,
+        recent_candles=bars, source_meta=meta, broker_route="SOR",
+    )
+    assert context["request_code"] == f"123456{suffix}"
+    assert context["source_quality"]["status"] == "fresh_consistent"
+    assert context["source_quality"]["request_route_binding"]["status"] == "bound"
+    assert context["ai_market_snapshot_v1"]["sources"]["bbo"]["age_ms"] == pytest.approx(100, abs=1)
+    assert snapshot_module.ai_input_preflight(context)["source_allowed"] is True
+    assert (opposite, meta, bars) == before
+    candle = context["ai_market_snapshot_v1"]["sources"]["candle"]["value"]
+    assert candle["request_code"] == candle["source_request_code"] == f"123456{suffix}"
+    assert candle["request_route_binding"]["transport_epoch"] == 1
+
+
+@pytest.mark.parametrize("damage", ["missing", "epoch", "bool_epoch", "row_epoch", "item",
+                                    "route", "stale", "future", "missing_depth", "metadata",
+                                    "other_symbol", "malformed_partitions"])
+def test_fetched_chart_binding_cannot_bypass_bad_source(monkeypatch, damage):
+    bars, meta = _fetched_chart(monkeypatch, "_AL")
+    ws = _chart_route_ws("")
+    exact = _chart_route_ws("_AL")
+    ws["realtime_type_snapshots_by_route"].update(exact["realtime_type_snapshots_by_route"])
+    ws["recent_trade_ticks_by_route"].update(exact["recent_trade_ticks_by_route"])
+    rows = ws["realtime_type_snapshots_by_route"]["_AL|krx_nxt_integrated"]
+    if damage == "missing": rows.pop("0D")
+    elif damage == "epoch": ws["market_data_transport_epoch"] = 2
+    elif damage == "bool_epoch": meta["entry_candle_route_binding"]["transport_epoch"] = True
+    elif damage == "row_epoch": rows["0D"]["transport_epoch"] = 2
+    elif damage == "item": rows["0D"]["item"] = "654321_AL"
+    elif damage == "route": rows["0D"]["market_route"] = "nxt_only"
+    elif damage in {"stale", "future"}:
+        for row in rows.values(): row["observed_epoch"] = NOW + (10 if damage == "future" else -5)
+    elif damage == "missing_depth": rows["0D"]["orderbook"] = {}
+    elif damage == "metadata": meta["entry_candle_request_code"] = "123456"
+    elif damage == "other_symbol": meta["entry_candle_route_binding"]["request_code"] = "654321_AL"
+    elif damage == "malformed_partitions": ws["realtime_type_snapshots_by_route"] = [rows]
+    context = build_entry_candle_context(
+        None, "123456", ws, "KRX", "krx_regular", now_ts=NOW,
+        recent_candles=bars, source_meta=meta, broker_route="SOR",
+    )
+    assert snapshot_module.ai_input_preflight(context)["source_allowed"] is False
+
 
 
 def _ws(at, *, price=10000):
