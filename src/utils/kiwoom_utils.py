@@ -35,6 +35,7 @@ from src.utils.kiwoom_read_request_control import (
     is_kiwoom_read_rate_limit,
     MarketReadSingleFlight,
     MarketReadJoinDeferred,
+    SharedCandleRead,
     REQUEST_CLASS_SOURCE_ONLY,
     DEFAULT_REQUIRED_MAX_WAIT_SEC,
     DEFAULT_SOURCE_ONLY_MAX_WAIT_SEC,
@@ -44,6 +45,7 @@ _MARKET_DATA_CACHE = {}
 _MARKET_DATA_CACHE_LOCK = threading.RLock()
 _MARKET_DATA_CACHE_MAX_ENTRIES = 2048
 _MARKET_READ_SINGLE_FLIGHT = MarketReadSingleFlight()
+_SHARED_CANDLE_READ = SharedCandleRead()
 _SINGLE_FLIGHT_MARKET_API_IDS = frozenset(
     {
         "ka10003",
@@ -5245,9 +5247,24 @@ def fetch_kiwoom_api_continuous(
                 _cache_set("ka10080_transport", key, result, ttl)
             return result
 
+        shared_scope = {name: value for name, value in scope.items() if name != "coordinator"}
+        shared_key = hashlib.sha256(json.dumps(shared_scope, sort_keys=True,
+                                               allow_nan=False).encode()).hexdigest()
+
+        def scoped_market_read():
+            if (api_id == "ka10080" and request_class == REQUEST_CLASS_SOURCE_ONLY
+                    and read_rate_coordinator is None):
+                def stable_scope_fetch():
+                    value = fetch_market_read()
+                    if hashlib.sha256(str(resolve_kiwoom_request_token(token)).encode()).hexdigest() != scope["token_digest"]:
+                        value[1]["read_shared_cache_scope_changed"] = True
+                    return value
+                return _SHARED_CANDLE_READ.run(shared_key, stable_scope_fetch, wait_sec=wait_sec)
+            return fetch_market_read()
+
         (results, meta), joined, elapsed = _MARKET_READ_SINGLE_FLIGHT.run(
             key,
-            fetch_market_read,
+            scoped_market_read,
             wait_sec=wait_sec,
         )
     except MarketReadJoinDeferred as exc:

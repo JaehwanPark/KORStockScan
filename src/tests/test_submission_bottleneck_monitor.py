@@ -1470,6 +1470,14 @@ def test_intraday_source_semantics_route_conflict_is_actionable_and_tail_is_boun
     assert partial["status"] == "unobservable"
 
 
+def test_probe_source_gap_keeps_candle_failure_reason(tmp_path):
+    now=START+timedelta(minutes=10)
+    row=_probe_source_row(now,"required_feature_insufficient","candle_source_missing")
+    _source_gap_files(tmp_path,now,probes=[row])
+    result=monitor.source_gap_semantics(tmp_path,now)
+    assert result["diagnostics"]=={"machine_probe:candle_source_missing":1}
+
+
 def test_intraday_source_incident_requires_same_stage_recovery_receipt():
     now = START + timedelta(minutes=10)
     result = {"as_of": now.isoformat(), "incidents": {}, "notification_pending": []}

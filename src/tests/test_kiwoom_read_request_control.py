@@ -193,6 +193,174 @@ def test_source_only_reserves_fifth_slot_for_critical_read(tmp_path: Path) -> No
     assert clock.sleeps == pytest.approx([1.001])
 
 
+def test_source_fifo_prevents_panel_barging_without_blocking_required_read(tmp_path):
+    clock = MutableClock()
+    coordinator = _coordinator(tmp_path, clock)
+    assert _acquire(coordinator).admitted
+    path = next(tmp_path.glob("*.json"))
+    state = json.loads(path.read_text())
+    older = {"ticket": "a"*32, "deadline": clock.value + 1}
+    state["source_waiters"] = [older]
+    path.write_text(json.dumps(state))
+    later = _acquire(_coordinator(tmp_path, clock), max_wait_sec=.025)
+    assert not later.admitted
+    state = json.loads(path.read_text())
+    assert len(state["request_epochs"]) == 1
+    assert state["source_waiters"] == [older]  # Timeout removes only its own ticket.
+    assert _acquire(coordinator, request_class="runtime_required").admitted
+    clock.value += 1
+    assert _acquire(coordinator).admitted
+    assert json.loads(path.read_text())["source_waiters"] == []
+
+
+def test_overslept_source_wait_cannot_rejoin_after_its_deadline(tmp_path):
+    clock=MutableClock();coordinator=_coordinator(tmp_path,clock)
+    for _ in range(4):assert _acquire(coordinator).admitted
+    coordinator.sleep=lambda seconds:setattr(clock,'value',clock.value+seconds+1)
+    result=_acquire(coordinator,max_wait_sec=1.1)
+    assert result.reason=='shared_read_rate_wait_budget_exhausted'
+    assert not result.admitted
+    state=json.loads(next(tmp_path.glob('*.json')).read_text())
+    assert state['source_waiters']==[]
+    assert len(state['request_epochs'])==4
+
+
+@pytest.mark.parametrize("pending", ["bad", [{"ticket": "x", "deadline": 1000}],
+                                     [{"ticket": "a"*32, "deadline": float("nan")}]] )
+def test_malformed_source_queue_fails_closed_without_disabling_required(tmp_path, pending):
+    clock = MutableClock()
+    coordinator = _coordinator(tmp_path, clock)
+    assert _acquire(coordinator).admitted
+    path = next(tmp_path.glob("*.json")); state = json.loads(path.read_text())
+    state["source_waiters"] = pending; path.write_text(json.dumps(state))
+    assert _acquire(coordinator).reason == "shared_read_rate_waiters_invalid"
+    assert _acquire(coordinator, request_class="execution_critical").admitted
+
+
+def _shared_candle_fixture(tmp_path, monkeypatch):
+    from src.utils import kiwoom_read_request_control as c
+    clock = [601.0]
+    monkeypatch.setattr(c.time, "time", lambda: clock[0])
+    calls=[]
+    def fetch():
+        calls.append(True)
+        return [{"return_code": 0, "stk_min_pole_chart_qry": [{
+            "cntr_tm": "20261002120000", "cur_prc": "101", "open_pric": "100",
+            "high_pric": "102", "low_pric": "99", "trde_qty": "10"}]}], {
+            "rest_received_ts_ms": int(clock[0]*1000), "api_id": "ka10080", "last_http_status_code": 200,
+            "read_rate_control_status": "admitted", "request_attempt_count": 1}
+    return c.SharedCandleRead(tmp_path), "a"*64, fetch, clock, calls
+
+
+def test_shared_candle_reuse_retains_original_receipt_and_does_not_renew_ttl(tmp_path, monkeypatch):
+    from src.utils.kiwoom_read_request_control import SharedCandleRead
+    cache,key,fetch,clock,calls = _shared_candle_fixture(tmp_path, monkeypatch)
+    original = cache.run(key, fetch, wait_sec=0)
+    clock[0]+=1
+    reused = SharedCandleRead(tmp_path).run(key, fetch, wait_sec=0)
+    assert len(calls)==1
+    assert reused[1]["rest_received_ts_ms"]==original[1]["rest_received_ts_ms"]==601000
+    assert reused[1]["read_response_cache_caller_http_attempt_count"]==0
+    clock[0]=604
+    cache.run(key, fetch, wait_sec=0)
+    assert len(calls)==2
+
+
+@pytest.mark.parametrize("fault", ["key", "minute", "future", "business", "gap", "corrupt", "token_changed"])
+def test_shared_candle_cache_isolation_and_rejection(tmp_path, monkeypatch, fault):
+    cache,key,fetch,clock,calls = _shared_candle_fixture(tmp_path, monkeypatch)
+    if fault=="minute":clock[0]=659.5
+    cache.run(key,fetch,wait_sec=0)
+    path=next(tmp_path.glob("*.json"))
+    if fault=="key":key="a"*63+"b" # Same slot, different wire scope.
+    elif fault=="minute":clock[0]+=1
+    elif fault=="future":clock[0]-=.1
+    elif fault=="corrupt":path.write_text("{")
+    else:
+        state=json.loads(path.read_text())
+        if fault=="business":state["value"][0][0]["return_code"]=1
+        if fault=="gap":state["value"][1]["continuous_next_key_missing"]=True
+        if fault=="token_changed":state["value"][1]["read_shared_cache_scope_changed"]=True
+        path.write_text(json.dumps(state))
+    cache.run(key,fetch,wait_sec=0)
+    assert len(calls)==2
+
+
+def test_shared_candle_can_join_another_process_without_transport(tmp_path, monkeypatch):
+    import subprocess,sys
+    cache,key,fetch,clock,calls = _shared_candle_fixture(tmp_path, monkeypatch)
+    cache.run(key,fetch,wait_sec=0)
+    script='''import sys,json
+from src.utils import kiwoom_read_request_control as c
+c.time.time=lambda:602.0
+def forbidden():raise AssertionError("duplicate HTTP")
+value=c.SharedCandleRead(sys.argv[1]).run("a"*64,forbidden,wait_sec=.2)
+print(json.dumps([value[1]["rest_received_ts_ms"],value[1]["read_response_cache_caller_http_attempt_count"]]))
+'''
+    r=subprocess.run([sys.executable,"-c",script,str(tmp_path)],check=True,capture_output=True,text=True,timeout=10)
+    assert json.loads(r.stdout.splitlines()[-1])==[601000,0]
+
+
+def test_shared_candle_busy_owner_timeout_never_starts_duplicate(tmp_path):
+    import fcntl
+    from src.utils.kiwoom_read_request_control import SharedCandleRead,MarketReadJoinDeferred
+    cache=SharedCandleRead(tmp_path);key="a"*64
+    path=tmp_path/f"{int(key[:8],16)%512:03d}.lock"
+    with path.open("w+") as owner:
+        owner.write(key);owner.flush();fcntl.flock(owner.fileno(),fcntl.LOCK_EX)
+        with pytest.raises(MarketReadJoinDeferred):
+            cache.run(key,lambda:pytest.fail("timed out follower must not duplicate"),wait_sec=.02)
+
+
+def test_shared_candle_inflight_processes_make_one_physical_read(tmp_path, monkeypatch):
+    import subprocess,sys,time
+    cache,key,fetch,clock,calls = _shared_candle_fixture(tmp_path, monkeypatch)
+    script='''import sys,json,time,pathlib
+from src.utils import kiwoom_read_request_control as c
+c.time.time=lambda:601.0
+root=pathlib.Path(sys.argv[1])
+def fetch():
+ (root/"owner-ready").write_text("ready")
+ time.sleep(.6)
+ return [{"return_code":0,"stk_min_pole_chart_qry":[{"cntr_tm":"20261002120000","cur_prc":"101","open_pric":"100","high_pric":"102","low_pric":"99","trde_qty":"10"}]}],{"api_id":"ka10080","last_http_status_code":200,"rest_received_ts_ms":601000,"read_rate_control_status":"admitted","request_attempt_count":1}
+c.SharedCandleRead(root).run("a"*64,fetch,wait_sec=1.25)
+'''
+    owner=subprocess.Popen([sys.executable,"-c",script,str(tmp_path)],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+    try:
+        deadline=time.monotonic()+5
+        while not (tmp_path/'owner-ready').exists():
+            assert time.monotonic()<deadline
+            time.sleep(.01)
+        value=cache.run(key,lambda:pytest.fail("inflight follower must not make second HTTP"),wait_sec=1.25)
+        assert value[1]['rest_received_ts_ms']==601000
+        assert value[1]['read_response_cache_caller_http_attempt_count']==0
+        owner.communicate(timeout=5)
+        assert owner.returncode==0
+    finally:
+        if owner.poll() is None:owner.kill();owner.communicate()
+
+
+def test_native_chart_transport_uses_shared_cache_only_for_source_scope(tmp_path, monkeypatch):
+    from src.utils import kiwoom_utils as ku
+    from src.utils.kiwoom_read_request_control import SharedCandleRead
+    cache,key,fetch,clock,calls=_shared_candle_fixture(tmp_path,monkeypatch)
+    monkeypatch.setattr(ku,'_SHARED_CANDLE_READ',cache)
+    monkeypatch.setattr(ku,'_MARKET_DATA_CACHE',{})
+    monkeypatch.setattr(ku,'_fetch_kiwoom_api_continuous_transport',lambda **kw:fetch())
+    kwargs=dict(url='https://api.kiwoom.com/api/dostk/chart',token='TEST-TOKEN',
+        api_id='ka10080',payload={'stk_cd':'005930_AL'},return_meta=True,
+        request_code='005930_AL',request_class='source_only')
+    first=ku.fetch_kiwoom_api_continuous(**kwargs)
+    ku._MARKET_DATA_CACHE.clear() # A different process has no local cache.
+    second=ku.fetch_kiwoom_api_continuous(**kwargs)
+    assert len(calls)==1
+    assert second[1]['read_shared_response_cache_status']=='hit'
+    assert first[1]['rest_received_ts_ms']==second[1]['rest_received_ts_ms']
+    kwargs['request_class']='runtime_required'
+    ku.fetch_kiwoom_api_continuous(**kwargs)
+    assert len(calls)==2
+
+
 def test_same_token_and_origin_share_window_across_paths(tmp_path: Path) -> None:
     clock = MutableClock()
     coordinator = _coordinator(tmp_path, clock)

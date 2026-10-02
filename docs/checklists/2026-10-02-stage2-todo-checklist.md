@@ -90,6 +90,11 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 
 ## 보조 AI PASS/VETO 원천·선택 보완
 
+- [ ] `[SharedReadContentionRepair1002] 공용 읽기 예산 경쟁·불필요한 probe 조회 보완` (`Due: 2026-10-02`, `Slot: INTRADAY`, `TimeWindow: 12:34~15:20`, `Track: MainEntry`)
+  - Source: [원천 읽기 경쟁 보완](../audits/shared-read-contention-repair-2026-10-02.md). 사용자 구현·반복 리뷰·배포·기동 승인.
+  - Acceptance: 분봉 결손 후 틱 미조회, 실제 feature owner의 정확 WS 선택/변경 시 gap, source-only FIFO/timeout cleanup/required slot 보호, 동일 분봉의 프로세스 간 원 receive-clock·TTL·실물 요청 수·권한 격리 회귀를 통과한다. 기존 동시 probe·발견 범위·한도·정책을 보존하고 guarded restart·정확일자 PID·WS 소비를 확인한다. 새 원천 영수증/판정과 비교 가능한 admission 감소는 별도 자연 수용으로 남기며, 표본 부재는 not_observed이고 과거 결손은 유지한다.
+  - 진행 근거: source/cache/feature/queue/monitor 320 PASS, native machine 3 PASS. 103590 원천·정책·주문 권한 소급 없음.
+
 - [ ] `[MainEntryEconomicLineageRepair1002] 계좌 여력 원천 준비와 후단 guard·residual 결속 수리` (`Due: 2026-10-02`, `Slot: INTRADAY`, `TimeWindow: 11:20~15:20`, `Track: MainEntry`)
   - Source: [108490 원천·후단 결속 보완 근거](../audits/main-entry-economic-source-lineage-repair-2026-10-02.md). 사용자 보완·반복 리뷰·배포·재기동 승인을 따른다.
   - Acceptance: 기존 source-only 한도 내 최종 가격 준비·동일 종목 오래된 queue 병합, 정확 계좌/가격/재고/freshness, guard와 bundle 귀속 residual 영수증·JSON 결속을 검증한다. 새 guard 두 단계의 forward 캐시 전환은 기존 raw prefix를 재로딩하거나 과거 복구를 주장하지 않는다. 기존 정책 5파일·독립 service pin·cron을 보존하고 guarded restart·정확일자 PID 소비를 확인한다. 새 자연 경제성/guard·residual 원천은 exact identity로 별도 수용하며 없으면 not_observed로 남긴다.

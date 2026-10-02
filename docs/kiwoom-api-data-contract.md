@@ -269,6 +269,26 @@ original independent transport. This does not coalesce account/order/auth,
 Existing cross-process admission, retries, cooldowns and all trading guards
 remain authoritative. See the [implementation and verification evidence](audit-reports/2026-09-17-market-read-singleflight-scoped-implementation.md).
 
+The approved [source read contention repair](audits/shared-read-contention-repair-2026-10-02.md)
+adds FIFO tickets for participating `source_only` callers in the same shared
+bucket. Tickets expire at the original caller deadline and consume no HTTP
+slot. Runtime-required/execution-critical reads keep their existing reservation
+and admission; old independently pinned consumers retain the same rate bucket
+but do not participate in FIFO until they consume the new implementation.
+Each continuation page reacquires admission, allowing waiting probes ahead of
+the next newly queued panel page. Page/row limits and continuation stay intact.
+
+Source-only, metadata-aware `ka10080` with the default coordinator may also join
+an exact request across processes. Token digest, origin/path, payload/route,
+KST date, class, continuation, retries and timeout/wait bounds must match.
+Successful complete chart responses retain their original receive clock and
+physical attempt count; follower HTTP count is zero. Retention is at most three
+seconds from request start, within the same minute and existing cache expiry,
+in 512 bounded slots. Collisions miss; failed/expired owner responses and follower
+timeouts defer without a replacement transport. Account, order, auth,
+execution-critical, runtime-required and custom-coordinator paths are excluded.
+No wire fields, route/FID mappings or Kiwoom limits change.
+
 ### Direct read-only collector receipts and local budgets
 
 `KiwoomReadOnlyClient.last_request_receipt` belongs to the calling thread.

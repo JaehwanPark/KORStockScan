@@ -21,6 +21,7 @@ import os
 import time
 import threading
 import tempfile
+import uuid
 from copy import deepcopy
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -149,6 +150,119 @@ class WidgetMarketResponseCache:
 
 class MarketReadJoinDeferred(RuntimeError):
     """A duplicate read cannot join within its own bounded wait budget."""
+
+
+class SharedCandleRead:
+    """Bounded cross-process exact chart reuse; original receipt clocks survive.
+
+    Only the source-only ka10080 caller below may use this surface. Slot
+    collisions fall back to normal admission, never reuse a different request.
+    """
+
+    def __init__(self, directory=None):
+        self.directory = Path(directory or DATA_DIR / "runtime" / "shared_candle_reads")
+
+    @staticmethod
+    def _valid(value, *, now, started):
+        try:
+            rows, meta = value
+            stamp = meta["rest_received_ts_ms"] / 1000
+            return (type(meta["rest_received_ts_ms"]) is int
+                and bool(rows) and all(WidgetMarketResponseCache._complete(row, "ka10080") for row in rows)
+                and meta.get("api_id") == "ka10080"
+                and str(meta.get("last_http_status_code")) == "200"
+                and meta.get("read_rate_control_status") == "admitted"
+                and not meta.get("continuous_next_key_missing")
+                and not meta.get("rate_limit_detected")
+                and not meta.get("read_shared_cache_scope_changed")
+                and 0 <= now - started < 3 and started <= stamp <= now
+                and int(started // 60) == int(now // 60)
+                and now < meta.get("read_response_cache_expires_at", started + 3))
+        except (ValueError, TypeError, KeyError, AttributeError):
+            return False
+
+    def run(self, key, fetch, *, wait_sec):
+        slot = f"{int(key[:8], 16) % 512:03d}"
+        cache_path, lock_path = (self.directory / (slot + suffix)
+                                 for suffix in (".json", ".lock"))
+        try:
+            self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+            lock = os.fdopen(os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600), "r+")
+        except OSError:
+            return fetch()
+        deadline = time.monotonic() + max(0.0, wait_sec)
+        owned = False
+        waited_for_owner = False
+        try:
+            while True:
+                try:
+                    fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    owned = True
+                    break
+                except BlockingIOError:
+                    waited_for_owner = True
+                    try:
+                        lock.seek(0)
+                        occupant = lock.read(64).strip()
+                    except OSError:
+                        return fetch()
+                    if occupant and occupant != key:
+                        return fetch()
+                    if time.monotonic() >= deadline:
+                        raise MarketReadJoinDeferred("shared_candle_join_wait_budget_exhausted")
+                    time.sleep(min(.01, max(0, deadline - time.monotonic())))
+                except OSError:
+                    return fetch()
+            try:
+                with cache_path.open("rb") as handle:
+                    raw = handle.read(2 * 1024 * 1024 + 1)
+                entry = json.loads(raw) if len(raw) <= 2 * 1024 * 1024 else {}
+                if (entry.get("key") == key
+                        and self._valid(entry["value"], now=time.time(), started=entry["started"])):
+                    rows, meta = entry["value"]
+                    meta.update(read_response_cache_status="hit",
+                                read_shared_response_cache_status="hit",
+                                read_response_cache_caller_http_attempt_count=0,
+                                read_response_cache_source_pid=entry["pid"])
+                    return rows, meta
+            except (OSError, ValueError, KeyError, TypeError, AttributeError, RecursionError):
+                pass
+            if waited_for_owner:
+                # The owner's source failed/expired. Preserve this follower's
+                # gap; joining must never amplify a failed request into a retry.
+                raise MarketReadJoinDeferred("shared_candle_join_source_missing")
+            try:
+                lock.seek(0)
+                lock.truncate()
+                lock.write(key)
+                lock.flush()
+            except OSError:
+                return fetch()
+            started = time.time()
+            value = fetch()
+            if self._valid(value, now=time.time(), started=started):
+                temporary = None
+                try:
+                    raw = json.dumps({"key": key, "started": started,
+                                      "pid": os.getpid(), "value": value}, allow_nan=False).encode()
+                    if len(raw) <= 2 * 1024 * 1024:
+                        with tempfile.NamedTemporaryFile(dir=self.directory, delete=False) as handle:
+                            temporary = Path(handle.name)
+                            handle.write(raw)
+                        os.replace(temporary, cache_path)
+                except (OSError, ValueError, TypeError, RecursionError):
+                    pass
+                finally:
+                    if temporary is not None:
+                        try:
+                            temporary.unlink(missing_ok=True)
+                        except OSError:
+                            pass
+            return value
+        finally:
+            if owned:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+            lock.close()
 
 
 class MarketReadSingleFlight:
@@ -460,6 +574,23 @@ class KiwoomReadRequestCoordinator:
         deadline = started + wait_budget
         last_requests_before = 0
         last_cooldown_remaining = 0.0
+        waited_once = False
+        ticket = uuid.uuid4().hex if normalized_class == REQUEST_CLASS_SOURCE_ONLY else None
+
+        def discard_ticket():
+            if ticket is None:
+                return
+            cleanup_handle = self._open_locked_state(state_path)
+            try:
+                cleanup_state, error = self._read_state(cleanup_handle)
+                pending = cleanup_state.get("source_waiters", [])
+                if not error and isinstance(pending, list):
+                    cleanup_state["source_waiters"] = [row for row in pending
+                        if isinstance(row, dict) and row.get("ticket") != ticket]
+                    self._write_state(cleanup_handle, cleanup_state)
+            finally:
+                fcntl.flock(cleanup_handle.fileno(), fcntl.LOCK_UN)
+                cleanup_handle.close()
 
         while True:
             handle = self._open_locked_state(state_path)
@@ -575,8 +706,51 @@ class KiwoomReadRequestCoordinator:
                 cooldown_remaining = max(0.0, cooldown_until - now)
                 last_requests_before = len(request_epochs)
                 last_cooldown_remaining = cooldown_remaining
+                turn = True
+                if ticket is not None:
+                    pending = state.get("source_waiters", [])
+                    valid = isinstance(pending, list) and len(pending) <= 128 and all(
+                        isinstance(row, dict) and isinstance(row.get("ticket"), str)
+                        and len(row["ticket"]) == 32
+                        and type(row.get("deadline")) in (int, float)
+                        and math.isfinite(row["deadline"])
+                        for row in pending)
+                    if not valid:
+                        return self._admission(admitted=False,
+                            reason="shared_read_rate_waiters_invalid",
+                            request_class=normalized_class, request_owner=owner,
+                            api_id=api_label, request_code=code_label, waited_sec=now-started,
+                            requests_before=len(request_epochs), effective_limit=effective_limit,
+                            max_limit=max_limit, cooldown_remaining=cooldown_remaining,
+                            scope_digest=digest)
+                    pending = [row for row in pending if row["deadline"] >= now]
+                    if waited_once and now > deadline:
+                        state["source_waiters"] = [row for row in pending if row["ticket"] != ticket]
+                        self._write_state(handle, state)
+                        return self._admission(admitted=False,
+                            reason="shared_read_rate_wait_budget_exhausted",
+                            request_class=normalized_class, request_owner=owner,
+                            api_id=api_label, request_code=code_label, waited_sec=now-started,
+                            requests_before=len(request_epochs), effective_limit=effective_limit,
+                            max_limit=max_limit, cooldown_remaining=cooldown_remaining,
+                            scope_digest=digest)
+                    if not any(row["ticket"] == ticket for row in pending):
+                        if len(pending) >= 128:
+                            return self._admission(admitted=False,
+                                reason="shared_read_rate_queue_capacity",
+                                request_class=normalized_class, request_owner=owner,
+                                api_id=api_label, request_code=code_label, waited_sec=now-started,
+                                requests_before=len(request_epochs), effective_limit=effective_limit,
+                                max_limit=max_limit, cooldown_remaining=cooldown_remaining,
+                                scope_digest=digest)
+                        pending.append({"ticket": ticket, "deadline": deadline})
+                    turn = pending[0]["ticket"] == ticket
+                    state["source_waiters"] = pending
+                    self._write_state(handle, state)
                 if cooldown_remaining > 0:
                     if normalized_class == REQUEST_CLASS_SOURCE_ONLY:
+                        state["source_waiters"] = [row for row in pending if row["ticket"] != ticket]
+                        self._write_state(handle, state)
                         return self._admission(
                             admitted=False,
                             reason="shared_read_rate_server_cooldown",
@@ -595,7 +769,10 @@ class KiwoomReadRequestCoordinator:
                 elif (
                     len(request_epochs) < max_limit
                     and len(request_epochs) < effective_limit
+                    and turn
                 ):
+                    if ticket is not None:
+                        state["source_waiters"] = [row for row in pending if row["ticket"] != ticket]
                     request_epochs.append(now)
                     state.update(
                         {
@@ -638,18 +815,20 @@ class KiwoomReadRequestCoordinator:
                         scope_digest=digest,
                     )
                 else:
-                    relevant_count = min(len(request_epochs), effective_limit)
-                    release_index = max(0, len(request_epochs) - relevant_count)
-                    delay = max(
-                        0.001,
-                        request_epochs[release_index] + self.window_sec - now + 0.001,
-                    )
+                    if len(request_epochs) < effective_limit and not turn:
+                        delay = 0.01
+                    else:
+                        relevant_count = min(len(request_epochs), effective_limit)
+                        release_index = max(0, len(request_epochs) - relevant_count)
+                        delay = max(0.001,
+                            request_epochs[release_index] + self.window_sec - now + 0.001)
             finally:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
                 handle.close()
 
             now_after_lock = float(self.clock())
             if now_after_lock + delay > deadline:
+                discard_ticket()
                 return self._admission(
                     admitted=False,
                     reason="shared_read_rate_wait_budget_exhausted",
@@ -665,6 +844,7 @@ class KiwoomReadRequestCoordinator:
                     scope_digest=digest,
                 )
             self.sleep(delay)
+            waited_once = True
 
     def record_rate_limit(
         self,

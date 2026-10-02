@@ -457,7 +457,62 @@ def test_reused_observation_item_reads_exact_view_through_pre_machine_check(monk
         ws_wait_min_exact_0b_count=0,
     )
     assert result["reason"] != "route_snapshot_missing"
-    assert reads == [("123456", "123456_AL")] * 2
+    assert reads == [("123456", "123456_AL")] * 3
+
+
+@pytest.mark.parametrize("fault", ["empty", "wrong_route", "stale"])
+def test_chart_failure_never_spends_followup_tick_budget(monkeypatch, fault):
+    import src.engine.scalping.zero_base_probe as module
+    snapshot = _snapshot(epoch=11)
+    ws = SimpleNamespace(subscribed_codes={"123456"},
+        get_latest_data=lambda *_args: snapshot)
+    meta = {"request_code": "OTHER" if fault == "wrong_route" else "123456",
+            "rest_received_ts_ms": -200000 if fault == "stale" else 11000,
+            "read_rate_control_reason": "shared_read_rate_wait_budget_exhausted"}
+    result = run_zero_base_probe(
+        {"claim": {"code": "123456", "route": "krx_only", "observed_epoch": 10},
+         "candidate": {"code": "123456", "route": "krx_only"}},
+        ws_manager=ws, ai_engine=object(), token="token", now=lambda: 11,
+        candle_fetcher=lambda *a, **k: ([] if fault == "empty" else [{"close": 10000}], meta),
+        tick_fetcher=lambda *a, **k: pytest.fail("chart failure must not fetch ticks"),
+        ws_wait_min_exact_0b_count=0,
+    )
+    assert result["result"] != "assessed"
+    if fault == "empty":
+        assert result["reason"] == result["machine_source_gap_kind"] == "candle_source_missing"
+        assert result["rest_source_gap_detail"] == "shared_read_rate_wait_budget_exhausted"
+
+
+def test_probe_skips_rest_only_for_actual_trusted_exact_feature_window():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from src.engine.scalping_feature_packet import _select_recent_ticks_with_source
+    epoch = datetime(2026, 10, 2, 12, 0, 11, tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
+    snapshot = _snapshot(epoch=epoch)
+    snapshot["recent_trade_ticks_by_route"] = {"KRX|krx_only": [{
+        "item": "123456", "market_route": "krx_only", "transport_epoch": 3,
+        "received_at_ms": epoch*1000, "time": "12:00:11", "price": 10000,
+        "volume": 10, "volume_source": "15_abs", "aggressor_side": "BUY",
+        "aggressor_source": "kiwoom_0b_signed_trade_volume"}]}
+    ws = SimpleNamespace(subscribed_codes={"123456"}, get_latest_data=lambda *a: snapshot)
+    seen=[]
+    def assess(*args, **kwargs):
+        selected, source, _ = _select_recent_ticks_with_source(args[1], args[2], now=epoch)
+        seen.append((source, selected))
+        return {"machine_evaluation_status": "assessed", "entry_mechanistic_action": "RECHECK"}
+    result = run_zero_base_probe(
+        {"claim": {"code": "123456", "route": "krx_only", "observed_epoch": epoch-1},
+         "candidate": {"code": "123456", "route": "krx_only"}},
+        ws_manager=ws, ai_engine=SimpleNamespace(analyze_target=assess), token="token",
+        now=lambda: epoch,
+        candle_fetcher=lambda *a, **k: ([{"close": 10000}], {
+            "request_code": "123456", "rest_received_ts_ms": int(epoch*1000)}),
+        context_builder=lambda *a, **k: {"ready": True},
+        tick_fetcher=lambda *a, **k: pytest.fail("trusted WS must replace REST tick read"),
+        ws_wait_min_exact_0b_count=0)
+    assert result["result"] == "assessed"
+    assert result["tick_read_source"] == seen[0][0] == "ws_exact_route"
+    assert len(seen[0][1]) == 1
 
 
 def test_probe_waits_for_later_exact_0d_after_first_0b():

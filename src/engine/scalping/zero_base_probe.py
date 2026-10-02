@@ -14,6 +14,7 @@ from src.engine.scalping.entry_candle_context import (
 )
 from src.utils import kiwoom_utils
 from src.utils.kiwoom_read_request_control import REQUEST_CLASS_SOURCE_ONLY
+from src.engine.scalping_feature_packet import _select_recent_ticks_with_source
 
 
 RESULT_SCHEMA = "zero_base_probe_result_v1"
@@ -451,9 +452,39 @@ def run_zero_base_probe(
                 request_owner="zero_base_machine_probe",
                 request_class=REQUEST_CLASS_SOURCE_ONLY,
             )
+            if not candles:
+                result["result"] = "required_feature_insufficient"
+                result["reason"] = "candle_source_missing"
+                result["machine_source_gap_kind"] = "candle_source_missing"
+                result["rest_source_gap_detail"] = str((candle_meta or {}).get(
+                    "read_rate_control_reason") or (candle_meta or {}).get(
+                    "source_error") or "candle_rows_missing")[:160]
+                return result
+            candle_issue = exact_probe_rest_source_issue(
+                [], candle_meta, request_code=request_code, now_epoch=now(),
+                allow_empty_ticks=True,
+            )
+            if candle_issue:
+                result["reason"] = "rest_route_or_receive_clock_invalid"
+                result["rest_source_gap_detail"] = candle_issue
+                return result
+            # Reuse exactly the machine feature owner's selection rule. Refresh
+            # after the chart read; a pre-read WS window may have aged/reconnected.
+            ws_data, source_reason = exact_probe_ws_data(
+                probe_ws_snapshot(ws_manager, code=code, route=route),
+                code=code, route=route, after_epoch=registered_epoch, now_epoch=now(),
+            )
+            if not ws_data:
+                result["reason"] = "pre_tick_" + source_reason
+                return result
+            _, tick_source, tick_selection_reason = _select_recent_ticks_with_source(
+                ws_data, [], now=now(),
+            )
+            result["tick_read_source"] = tick_source
+            result["tick_read_selection_reason"] = tick_selection_reason
             # The tick clock has a 10-second bound. Fetch it last so a slow
             # candle response cannot age a fresh tick before validation.
-            ticks = tick_fetcher(
+            ticks = [] if tick_source == "ws_exact_route" else tick_fetcher(
                 token, request_code, limit=10,
                 request_owner="zero_base_machine_probe",
                 request_class=REQUEST_CLASS_SOURCE_ONLY,
@@ -504,6 +535,15 @@ def run_zero_base_probe(
         if not ws_data:
             result["reason"] = "pre_machine_" + source_reason
             return result
+        if result.get("tick_read_source") == "ws_exact_route":
+            _, current_tick_source, _ = _select_recent_ticks_with_source(
+                ws_data, [], now=now(),
+            )
+            if current_tick_source != "ws_exact_route":
+                result["result"] = "required_feature_insufficient"
+                result["reason"] = "ws_tick_source_changed_before_machine"
+                result["machine_source_gap_kind"] = "trusted_tape_source_insufficient"
+                return result
         try:
             machine = ai_engine.analyze_target(
                 candidate.get("name") or code, ws_data, ticks, candles,

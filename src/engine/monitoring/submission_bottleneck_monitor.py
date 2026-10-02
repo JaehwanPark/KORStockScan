@@ -176,7 +176,10 @@ def source_gap_semantics(data_root, now, *, tail_bytes=SOURCE_TAIL_BYTES):
                 healthy("machine_probe", row, route)
         elif result == "required_feature_insufficient":
             kind = str(fields.get("zero_base_machine_source_gap_kind") or "").strip("- ")
-            kind = kind or "required_feature_insufficient_unclassified"
+            kind = kind or (reason if reason in {
+                "tick_or_candle_missing", "candle_source_missing", "candle_context_missing",
+                "ws_tick_source_changed_before_machine",
+            } else "required_feature_insufficient_unclassified")
             record("machine_probe", kind, row,
                    diagnostic=kind not in {"source_route_conflict", "feature_tick_selection_gap"},
                    code=row.get("stock_code"), route=route)
