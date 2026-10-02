@@ -58,3 +58,15 @@ The user explicitly reauthorized repeated code review, fixes, deployment and gua
 Re-review covers controller/engine/startup/shutdown consumers and diagnostic ledger separation. Targeted gate: **422 PASS / 5.82 seconds**, including slow/blocked lazy lookup, remaining SDK budget, priority/session/stop changes during lookup, concurrent tick/start, failed start plus failed cleanup, and stale-future cancellation isolation. No unresolved findings remain in this diagnostic scope. Python compile, diff whitespace and print-only parser validation PASS; exactly one current parsed owner. Immutable/PID follow-up is recorded after completion below.
 
 Additional natural evidence from the prior PID: the 108490 real decision at 10:58:02 KST was evaluated without timeout in **2718ms**. This one real request does not establish causal latency improvement, statistical optimality, an order or realized profit. Historical finalization/source failures remain separate.
+
+
+### Supplemental deployment acceptance
+
+- Immutable code **09a6a2dfa49d42381f653e8bcb57a0176653c555**, root `/home/ubuntu/KORStockScan-runtime-releases/main-ai-warmup-review-20261002-09a6a2df`: repeated gate **422 PASS / 9.09 seconds**, clean code/deploy source.
+- Native guarded restart completed **11:07:56 KST**. Previous PID 2809235 exited; exactly one new Main PID **2815486**, start ticks 52770763. Native env verification PASS, missing/mismatch 0; same-day consumed receipt PASS with `actual_pid_consumed=true`. Selected-root sealed-generation and completion checks PASS. Prepared verification's static `actual_pid_consumed=false` is distinct from the native consumed receipt.
+- Before/after conservation verifies five policy/PREOPEN/prepared files, 416 independent service pins and both cron hashes unchanged. No Widget/Episode restart or policy/source-report regeneration occurred.
+- New PID natural diagnostic key 0: **11:08:10, 2020.415ms**; key 1: **11:08:12, 2433.075ms**. Both completed with provider-call start observed, correct code/root/PID and diagnostic-only ledger. New PID repeat cadence is not yet observed; prior PID's two-cycle natural acceptance remains historical cadence evidence. No additional benchmark API calls were made for this repair.
+- Shared WS producer is the same new PID/code/root, connection available, writer loss 0 and projection errors 0. Registration is local sent-registry evidence, not broker acknowledgement or economic acceptance.
+- Evidence: `data/runtime/startup_readiness/2026-10-02/ai_warmup_review/{before.json,selection.before.json,selection.published.json,prepare.json,restart.log,prepared.verify.json,completion.verify.json,after.json,natural-acceptance.json}`; exact consumption: `data/runtime/policy_bootstrap/intraday_handoff/2026-10-02/09a6a2dfa49d42381f653e8bcb57a0176653c555.consumed.json`.
+
+The diagnostic repair/review/deployment/PID gate is closed. Actual latency causality, interval optimality and realized economics remain unestablished. Broad trading suites, postclose regeneration, manual orders and external Project/Calendar sync were outside this change's required validation.
