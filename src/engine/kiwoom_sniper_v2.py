@@ -12608,6 +12608,16 @@ def run_sniper(is_test_mode=False):
                 announce=True,
             )
             AI_ENGINE = ai_engine
+            # Explicit Main owner: other roles and offline engines never start it.
+            try:
+                if not is_test_mode:
+                    warmup_day = datetime.now().date()
+                    ai_engine.start_transport_warmup(
+                        allowed=lambda: datetime.now().date() == warmup_day
+                        and is_scalping_buy_time_allowed(datetime.now())
+                    )
+            except Exception as warmup_error:
+                log_error(f"[AI_TRANSPORT_WARMUP_START_FAILED] type={type(warmup_error).__name__}")
             print(
                 "🧠 메인 OpenAI AI 엔진 고정 완료 "
                 f"(FAST: {fast_model} / DEEP: {deep_model} / REPORT: {report_model})"
@@ -16233,6 +16243,9 @@ def run_sniper(is_test_mode=False):
         print("\n🛑 스나이퍼 매매 엔진 종료")
 
     finally:
+        warmup = getattr(AI_ENGINE, '_transport_warmup', None)
+        if warmup is not None:
+            warmup.stop()
         try:
             from src.engine.error_detectors.process_health import (
                 write_heartbeat as _sniper_final_heartbeat,

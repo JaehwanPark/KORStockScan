@@ -27,7 +27,8 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from itertools import cycle
 from typing import Any
-from openai import OpenAI, RateLimitError
+from openai import OpenAI, RateLimitError, DefaultHttpxClient
+import httpx
 
 from src.engine.ai_response_contracts import (
     AI_RESPONSE_SCHEMA_REGISTRY,
@@ -1094,13 +1095,44 @@ class GPTSniperEngine:
     def _rotate_client(self):
         """OpenAI API 클라이언트 교체"""
         self.current_key = next(self.key_cycle)
-        self.client = OpenAI(
-            api_key=self.current_key, max_retries=OPENAI_SDK_MAX_RETRIES
-        )
+        self.client = self._client_for_key(self.current_key)
         try:
             self.current_api_key_index = self.api_keys.index(self.current_key)
         except ValueError:
             self.current_api_key_index = 0
+
+    def _client_for_key(self, key):
+        # Key rotation retains its original order; each key retains its pool.
+        if not hasattr(self, '_http_clients'):
+            self._http_clients = {}
+            self._http_clients_lock = threading.Lock()
+        with self._http_clients_lock:
+            if key not in self._http_clients:
+                self._http_clients[key] = OpenAI(
+                    api_key=key, max_retries=OPENAI_SDK_MAX_RETRIES,
+                    http_client=DefaultHttpxClient(limits=httpx.Limits(
+                        max_connections=1000, max_keepalive_connections=100,
+                        keepalive_expiry=300)),
+                )
+            return self._http_clients[key]
+
+    def start_transport_warmup(self, *, allowed):
+        from src.engine.ai.transport_warmup import TransportWarmup
+        if getattr(self, '_transport_warmup', None) is not None:
+            return
+        clients = [self._client_for_key(key) for key in dict.fromkeys(self.api_keys)]
+        def record(receipt):
+            receipt.update(pid=os.getpid(), source_root=str(PROJECT_ROOT))
+            directory = PROJECT_ROOT / 'data/runtime/ai_transport_warmup'
+            directory.mkdir(parents=True, exist_ok=True)
+            path = directory / (datetime.now().strftime('%Y-%m-%d') + '.jsonl')
+            with path.open('a', encoding='utf-8') as stream:
+                stream.write(json.dumps(receipt, ensure_ascii=True) + '\n')
+        self._transport_warmup = TransportWarmup(
+            clients, allowed=lambda: allowed() and not self.ai_disabled,
+            busy=lambda: self.api_call_lock.locked() or self.lock.locked(), record=record,
+        )
+        self._transport_warmup.start()
 
     def set_model_names(
         self, *, fast_model=None, deep_model=None, report_model=None, announce=True
@@ -4674,6 +4706,9 @@ class GPTSniperEngine:
                 future_cancelled=True,
             )
         client = self.client
+        warmup = getattr(self, '_transport_warmup', None)
+        if warmup is not None and request.model_name == 'gpt-5.4-nano':
+            warmup.note_activity(client)
         future = self._get_http_deadline_executor().submit(
             client.responses.create,
             **provider_payload,

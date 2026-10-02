@@ -90,6 +90,10 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 
 ## 보조 AI PASS/VETO 원천·선택 보완
 
+- [ ] `[MainAiPeriodicWarmup1002] Main AI 주기 호출과 연결 재사용 적용` (`Due: 2026-10-02`, `Slot: INTRADAY`, `TimeWindow: 10:30~15:20`, `Track: MainEntry`)
+  - Source: [주기 비교·운영·리뷰 근거](../audits/main-ai-periodic-warmup-2026-10-02.md). 사용자의 주기 호출 요청과 최적 주기 점검을 따른다. 기존 구현·반복 리뷰·배포·재기동 승인을 적용하며 기존 정책과 독립 소비자 pin을 보존한다.
+  - Acceptance: 120/180/240초 비매매 비교와 300초 연결 유지의 직접 영수증, 키별 240초 초기값·최대 15회/시간, 실제 호출 우선·유휴/disabled/test/date 차단·late queue 경계·실패/캐시 불변을 검증한다. 불변 릴리스와 guarded Main handoff 후 새 PID의 키별 워밍업 영수증을 확인한다. 진단 호출은 AI 판정/원천/장후 학습 분모에 포함하지 않는다. 실제 판정 응답 회복과 통계적 최적 주기는 별도 관측이며 작은 진단 표본으로 종결했다고 주장하지 않는다.
+
 - [ ] `[CompactAuxiliaryPassVetoLogicReady1002] 보조 AI 원천·판정 후보 로직과 샘플 성능 검증` (`Due: 2026-10-02`, `Slot: INTRADAY`, `TimeWindow: 09:00~15:20`, `Track: MainEntry`)
   - Implementation evidence (10/1): [작업본 구현·리뷰·샘플 검증](../audits/entry-postclose-remediation-implementation-review-2026-10-01.md). 코드 수용과 실제 10/2 릴리스 소비·전체 자연 원천 수용을 구분하며 이 항목은 OPEN을 유지한다.
   - Source: [보조 AI 장후 보완 계획](../proposals/compact-auxiliary-pass-veto-postclose-remediation-plan-2026-10-01.md). 장중 현행 프롬프트·정책·PID를 유지한다. 전일의 `DirectFamilySourceRepairCompactAuxiliary` 기록 전용 생산자 수리가 장전 선택 릴리스에 포함됐는지 확인한다. 장후 후보·발행 계산은 격리된 작업본에서 원천 생산자→라벨→선택→발행기·기존 번들 readback까지 리뷰·수정·재리뷰한다.
