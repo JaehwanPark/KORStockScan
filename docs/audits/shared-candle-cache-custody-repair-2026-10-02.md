@@ -79,3 +79,27 @@ after the correction the full owner gate **88 PASS** and an actual Ubuntu probe
 of root PID 2901939 returned true. Final immutable publication/restart evidence
 is appended after this supplemental fix. Live cache join and overall admission
 rate improvement remain separate from this diagnostic repair.
+
+Final release **b096f7ca80186eb712bbbe17af92d08187ec1a8f** at
+`/home/ubuntu/KORStockScan-runtime-releases/shared-candle-custody-final-20261002-b096f7ca`
+repeated all **327 PASS/13.67s**; compile/diff/parser checks PASS. The second
+guarded restart succeeded, with singleton Main **2904478**, start ticks
+**54744253**, exact-date bootstrap and native consumption PASS. The pure Ubuntu
+consumer check at 16:37:38 confirmed PID presence, fresh heartbeat/threads PASS.
+Policy/PREOPEN/prepared (5), independent pins (416) and root/Ubuntu cron hashes
+are unchanged. The original five hashes also matched the first handoff; no
+policy re-publishing or independent service restart occurred.
+
+The 16:40 Ubuntu full detector has process/freshness PASS and only the existing
+prior-postclose cron terminal failure remains. Its scheduled sentinel/monitor
+completed **16:40:28** from the final root. The monitor still declares
+`no_identified_machine_evaluation`/unobservable for its current funnel evidence;
+normal artifact creation is not a claim of a successful trade or healed source
+identity. Current WS provenance is bound to final PID/commit and connected.
+Final slot census has every chart cache/lock file Ubuntu-owned/0600; original
+slot inode/mtime/size were retained during repair. The first fixed release had
+natural private Ubuntu-owned cache writes; live identical-request cross-user
+joining is still not_observed. A short final-PID log lookup found no deferred
+admissions, but lacks a matched workload denominator and proves no rate uplift.
+Direct closure evidence: `tmp/shared-candle-custody-repair-20261002/final-closure.json`
+and `data/runtime/startup_readiness/2026-10-02/shared_candle_custody_repair/final/`.
