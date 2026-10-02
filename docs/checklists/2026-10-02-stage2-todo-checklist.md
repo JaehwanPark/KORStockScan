@@ -90,10 +90,11 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 
 ## 보조 AI PASS/VETO 원천·선택 보완
 
-- [ ] `[SharedReadContentionRepair1002] 공용 읽기 예산 경쟁·불필요한 probe 조회 보완` (`Due: 2026-10-02`, `Slot: INTRADAY`, `TimeWindow: 12:34~15:20`, `Track: MainEntry`)
+- [x] `[SharedReadContentionRepair1002] 공용 읽기 예산 경쟁·불필요한 probe 조회 보완` (`Due: 2026-10-02`, `Slot: INTRADAY`, `TimeWindow: 12:34~15:20`, `Track: MainEntry`)
   - Source: [원천 읽기 경쟁 보완](../audits/shared-read-contention-repair-2026-10-02.md). 사용자 구현·반복 리뷰·배포·기동 승인.
   - Acceptance: 분봉 결손 후 틱 미조회, 실제 feature owner의 정확 WS 선택/변경 시 gap, source-only FIFO/timeout cleanup/required slot 보호, 동일 분봉의 프로세스 간 원 receive-clock·TTL·실물 요청 수·권한 격리 회귀를 통과한다. 기존 동시 probe·발견 범위·한도·정책을 보존하고 guarded restart·정확일자 PID·WS 소비를 확인한다. 새 원천 영수증/판정과 비교 가능한 admission 감소는 별도 자연 수용으로 남기며, 표본 부재는 not_observed이고 과거 결손은 유지한다.
   - 진행 근거: source/cache/feature/queue/monitor 320 PASS, native machine 3 PASS. 103590 원천·정책·주문 권한 소급 없음.
+  - 종결 근거: 최종 작업본·불변 `8d055923` 각각 722 PASS. 첫 restart는 기존 PID 종료 후 tmux 부재로 중단했으며, singleton 부재 확인 후 승인된 native supervisor를 복구했다. 14:35:24 PID 2877334 exact-date 소비/PID bootstrap·sealed generation PASS. 정책 5파일·독립 pin 416개·cron 불변. 새 PID WS 정상, 정확 WS 재사용→기계판정 captured 13건 확인(BLOCK/ENTER_NOW, 원 bundle 유지). 짧은 관측에서 새 PID admission 보류 0이나 비교 분모 부족으로 전체 감소율·경제성 개선 미주장. Live cross-process join은 not_observed, 독립 프로세스 fixture 수용 PASS. 코드·배포·직접 소비 수용을 종결하며 과거 103590 결손과 별도 historical postclose 실패는 유지한다.
 
 - [ ] `[MainEntryEconomicLineageRepair1002] 계좌 여력 원천 준비와 후단 guard·residual 결속 수리` (`Due: 2026-10-02`, `Slot: INTRADAY`, `TimeWindow: 11:20~15:20`, `Track: MainEntry`)
   - Source: [108490 원천·후단 결속 보완 근거](../audits/main-entry-economic-source-lineage-repair-2026-10-02.md). 사용자 보완·반복 리뷰·배포·재기동 승인을 따른다.
