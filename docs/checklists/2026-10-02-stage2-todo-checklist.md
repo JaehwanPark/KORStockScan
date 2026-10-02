@@ -90,6 +90,11 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 
 ## 보조 AI PASS/VETO 원천·선택 보완
 
+- [x] `[SharedReadSelectorCustodyRepair1002] 배포 후 ubuntu cron의 릴리스 선택 파일 접근 복구` (`Due: 2026-10-02`, `Slot: INTRADAY`, `TimeWindow: 14:53~15:10`, `Track: RuntimeStability`)
+  - Source: [선택 파일 소유권 사고·수리](../audits/shared-read-contention-repair-2026-10-02.md#selector-custody-incident-and-repair). 사용자 오류 복구 지시와 기존 보완·배포 승인.
+  - Acceptance: root publication/PID 기록 후 원 selector UID/GID·0600과 정책/릴리스 보존, 이전 bytes 보존·임시파일 cleanup 회귀, ubuntu 직접 router 소비와 다음 자연 cron/monitor/daemon freshness 복구를 확인한다. mtime 합성·알림 억제·freshness 완화로 종결하지 않는다.
+  - 종결: 파일만 ubuntu 소유권 복구(내용 SHA 불변); canonical PID writer와 local publisher/rollback custody 보완. 95 PASS·compile/diff PASS, 실제 root PID 영수증 기록 후 ubuntu 읽기 PASS. 15:00 자연 sentinel/monitor DONE, 15:01:33 artifact_freshness/process_health PASS·recovered 로그. PID 2877334/매매 릴리스·정책 유지, 추가 재기동 없음. 전일 postclose terminal FAIL은 별도 보존한다.
+
 - [x] `[SharedReadContentionRepair1002] 공용 읽기 예산 경쟁·불필요한 probe 조회 보완` (`Due: 2026-10-02`, `Slot: INTRADAY`, `TimeWindow: 12:34~15:20`, `Track: MainEntry`)
   - Source: [원천 읽기 경쟁 보완](../audits/shared-read-contention-repair-2026-10-02.md). 사용자 구현·반복 리뷰·배포·기동 승인.
   - Acceptance: 분봉 결손 후 틱 미조회, 실제 feature owner의 정확 WS 선택/변경 시 gap, source-only FIFO/timeout cleanup/required slot 보호, 동일 분봉의 프로세스 간 원 receive-clock·TTL·실물 요청 수·권한 격리 회귀를 통과한다. 기존 동시 probe·발견 범위·한도·정책을 보존하고 guarded restart·정확일자 PID·WS 소비를 확인한다. 새 원천 영수증/판정과 비교 가능한 admission 감소는 별도 자연 수용으로 남기며, 표본 부재는 not_observed이고 과거 결손은 유지한다.

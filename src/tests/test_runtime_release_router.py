@@ -120,6 +120,65 @@ def test_pid_receipt_rejects_non_release_child_cwd(release, monkeypatch):
         )
 
 
+@pytest.mark.parametrize("custody_failure", [False, True])
+def test_privileged_pid_writer_preserves_selector_custody(
+    release, monkeypatch, custody_failure
+):
+    workspace, root, manifest, _ = release
+    (root / "src").mkdir()
+    manifest.chmod(0o600)
+    original_bytes = manifest.read_bytes()
+    original_stat = Path.stat
+    original_readlink = os.readlink
+    original_replace = os.replace
+    calls = []
+
+    def stat_as_cron_owner(path, *args, **kwargs):
+        result = original_stat(path, *args, **kwargs)
+        if path == manifest:
+            fields = list(result)
+            fields[4:6] = [40001, 40002]
+            return os.stat_result(fields)
+        return result
+
+    def preserve_owner(path, uid, gid):
+        calls.append(("chown", uid, gid))
+        assert Path(path).stat().st_mode & 0o777 == 0o600
+        assert manifest.read_bytes() == original_bytes
+        if custody_failure:
+            raise PermissionError("custody_denied")
+
+    def publish(path, target):
+        assert calls == [("chown", 40001, 40002)]
+        calls.append(("replace",))
+        return original_replace(path, target)
+
+    monkeypatch.setattr(Path, "stat", stat_as_cron_owner)
+    monkeypatch.setattr(os, "chown", preserve_owner)
+    monkeypatch.setattr(os, "replace", publish)
+    monkeypatch.setattr(
+        os, "readlink", lambda path: str(root / "src")
+        if str(path).startswith("/proc/") else original_readlink(path)
+    )
+    if custody_failure:
+        with pytest.raises(PermissionError, match="custody_denied"):
+            router.record_runtime_pid_consumption(
+                workspace, pid=1234, release_root=root, git_commit="a" * 40
+            )
+        assert manifest.read_bytes() == original_bytes
+        assert calls == [("chown", 40001, 40002)]
+    else:
+        router.record_runtime_pid_consumption(
+            workspace, pid=1234, release_root=root, git_commit="a" * 40
+        )
+        assert json.loads(manifest.read_text())["actual_pid_receipt"]["pid"] == 1234
+        assert calls == [("chown", 40001, 40002), ("replace",)]
+    assert manifest.stat().st_mode & 0o777 == 0o600
+    assert sorted(p.name for p in manifest.parent.iterdir()) == [
+        "runtime_release_selection.json", "runtime_release_selection.lock"
+    ]
+
+
 @pytest.mark.parametrize(
     "key,value",
     [

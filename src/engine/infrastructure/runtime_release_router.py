@@ -397,14 +397,32 @@ def record_runtime_pid_consumption(
         selection["actual_pid_consumed"] = True
         selection["actual_pid_receipt"] = receipt
         selection["actual_pid_consumption_status"] = "pid_receipt_attested"
+        original_stat = manifest_path.stat()
         with tempfile.NamedTemporaryFile(
             "w", encoding="utf-8", dir=manifest_path.parent, delete=False
         ) as temporary:
-            json.dump(selection, temporary, ensure_ascii=False, indent=2)
-            temporary.write("\n")
             temporary_path = Path(temporary.name)
-        os.chmod(temporary_path, manifest_path.stat().st_mode & 0o777)
-        os.replace(temporary_path, manifest_path)
+            try:
+                json.dump(selection, temporary, ensure_ascii=False, indent=2)
+                temporary.write("\n")
+                temporary.flush()
+                os.fsync(temporary.fileno())
+            except BaseException:
+                temporary_path.unlink(missing_ok=True)
+                raise
+        try:
+            # A privileged launcher must not replace the cron user's private
+            # selector with a root-owned 0600 file. Preserve custody before
+            # publishing; failure leaves the existing selector untouched.
+            temp_stat = temporary_path.stat()
+            if (temp_stat.st_uid, temp_stat.st_gid) != (
+                original_stat.st_uid, original_stat.st_gid
+            ):
+                os.chown(temporary_path, original_stat.st_uid, original_stat.st_gid)
+            os.chmod(temporary_path, original_stat.st_mode & 0o777)
+            os.replace(temporary_path, manifest_path)
+        finally:
+            temporary_path.unlink(missing_ok=True)
     return receipt
 
 
