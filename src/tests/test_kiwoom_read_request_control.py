@@ -266,6 +266,73 @@ def test_shared_candle_reuse_retains_original_receipt_and_does_not_renew_ttl(tmp
     assert len(calls)==2
 
 
+def test_shared_candle_private_custody_keeps_existing_lock_inode(tmp_path, monkeypatch):
+    cache,key,fetch,clock,calls = _shared_candle_fixture(tmp_path, monkeypatch)
+    lock_path=tmp_path/f"{int(key[:8],16)%512:03d}.lock"
+    lock_path.write_text("")
+    lock_path.chmod(0o666)
+    before=lock_path.stat()
+    cache.run(key,fetch,wait_sec=0)
+    assert lock_path.stat().st_ino==before.st_ino
+    for path in (lock_path,next(tmp_path.glob('*.json'))):
+        actual,owner=path.stat(),tmp_path.stat()
+        assert (actual.st_uid,actual.st_gid)==(owner.st_uid,owner.st_gid)
+        assert actual.st_mode & 0o777==0o600
+
+
+@pytest.mark.parametrize('publication_failure',[False,True])
+def test_shared_candle_privileged_custody_before_publication(tmp_path, monkeypatch,publication_failure):
+    from src.utils import kiwoom_read_request_control as c
+    cache,key,fetch,clock,calls=_shared_candle_fixture(tmp_path,monkeypatch)
+    real_fstat=c.os.fstat
+    transfers=[]
+    def privileged_stat(fd):
+        state=list(real_fstat(fd))
+        state[4:6]=[40001,40002]
+        return c.os.stat_result(state)
+    def transfer(fd,uid,gid):
+        transfers.append((uid,gid))
+        assert not list(tmp_path.glob('*.json'))
+        if publication_failure and len(transfers)==2:
+            raise PermissionError('custody_denied')
+    monkeypatch.setattr(c.os,'fstat',privileged_stat)
+    monkeypatch.setattr(c.os,'fchown',transfer)
+    value=cache.run(key,fetch,wait_sec=0)
+    assert len(calls)==1
+    assert value[1]['rest_received_ts_ms']==601000
+    assert transfers==[(tmp_path.stat().st_uid,tmp_path.stat().st_gid)]*2
+    assert len(list(tmp_path.glob('*.json')))==(0 if publication_failure else 1)
+    assert not list(tmp_path.glob('tmp*'))
+
+
+def test_shared_candle_lock_custody_failure_closes_fd_and_uses_normal_read(tmp_path,monkeypatch):
+    from src.utils import kiwoom_read_request_control as c
+    cache,key,fetch,clock,calls=_shared_candle_fixture(tmp_path,monkeypatch)
+    captured=[]
+    def denied(fd):
+        captured.append(fd)
+        raise PermissionError('custody_denied')
+    monkeypatch.setattr(cache,'_bind_custody',denied)
+    value=cache.run(key,fetch,wait_sec=0)
+    assert len(calls)==1 and value[1]['rest_received_ts_ms']==601000
+    with pytest.raises(OSError):c.os.fstat(captured[0])
+    assert not list(tmp_path.glob('*.json'))
+
+
+def test_shared_candle_never_chowns_symlink_lock_target(tmp_path,monkeypatch):
+    cache,key,fetch,clock,calls=_shared_candle_fixture(tmp_path,monkeypatch)
+    unrelated=tmp_path/'unrelated'
+    unrelated.write_text('preserve')
+    unrelated.chmod(0o644)
+    lock_path=tmp_path/f"{int(key[:8],16)%512:03d}.lock"
+    lock_path.symlink_to(unrelated)
+    cache.run(key,fetch,wait_sec=0)
+    assert len(calls)==1
+    assert unrelated.read_text()=='preserve'
+    assert unrelated.stat().st_mode & 0o777==0o644
+    assert not list(tmp_path.glob('*.json'))
+
+
 @pytest.mark.parametrize("fault", ["key", "minute", "future", "business", "gap", "corrupt", "token_changed"])
 def test_shared_candle_cache_isolation_and_rejection(tmp_path, monkeypatch, fault):
     cache,key,fetch,clock,calls = _shared_candle_fixture(tmp_path, monkeypatch)

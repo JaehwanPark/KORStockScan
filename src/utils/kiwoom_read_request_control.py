@@ -162,6 +162,20 @@ class SharedCandleRead:
     def __init__(self, directory=None):
         self.directory = Path(directory or DATA_DIR / "runtime" / "shared_candle_reads")
 
+    def _bind_custody(self, fd):
+        """Keep private files readable by the shared directory's owner.
+
+        A root launcher can publish on behalf of the normal runtime user.
+        Preserve that user's custody on the descriptor, without replacing a
+        lock inode or widening permissions. Failure remains an optional miss.
+        """
+        owner = self.directory.stat()
+        current = os.fstat(fd)
+        if (current.st_uid, current.st_gid) != (owner.st_uid, owner.st_gid):
+            os.fchown(fd, owner.st_uid, owner.st_gid)
+        if os.fstat(fd).st_mode & 0o777 != 0o600:
+            os.fchmod(fd, 0o600)
+
     @staticmethod
     def _valid(value, *, now, started):
         try:
@@ -185,10 +199,15 @@ class SharedCandleRead:
         slot = f"{int(key[:8], 16) % 512:03d}"
         cache_path, lock_path = (self.directory / (slot + suffix)
                                  for suffix in (".json", ".lock"))
+        lock_fd = None
         try:
             self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-            lock = os.fdopen(os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600), "r+")
+            lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+            self._bind_custody(lock_fd)
+            lock = os.fdopen(lock_fd, "r+")
         except OSError:
+            if lock_fd is not None:
+                os.close(lock_fd)
             return fetch()
         deadline = time.monotonic() + max(0.0, wait_sec)
         owned = False
@@ -248,6 +267,7 @@ class SharedCandleRead:
                     if len(raw) <= 2 * 1024 * 1024:
                         with tempfile.NamedTemporaryFile(dir=self.directory, delete=False) as handle:
                             temporary = Path(handle.name)
+                            self._bind_custody(handle.fileno())
                             handle.write(raw)
                         os.replace(temporary, cache_path)
                 except (OSError, ValueError, TypeError, RecursionError):

@@ -289,6 +289,15 @@ timeouts defer without a replacement transport. Account, order, auth,
 execution-critical, runtime-required and custom-coordinator paths are excluded.
 No wire fields, route/FID mappings or Kiwoom limits change.
 
+Shared chart cache files inherit the cache directory's UID/GID, including when
+a privileged Main launcher writes on behalf of the normal runtime user. Lock
+and cache files remain `0600`; custody is set on the open descriptor before
+publication. Existing lock inodes are retained, and symlink lock targets are
+rejected. Optional custody/I/O failure uses normal admission or declines cache
+publication; it never grants an extra slot or refreshes a cached source clock.
+Existing private slot files may receive bounded ownership repair after the
+old writer has drained. See [mixed-user custody repair](audits/shared-candle-cache-custody-repair-2026-10-02.md).
+
 ### Direct read-only collector receipts and local budgets
 
 `KiwoomReadOnlyClient.last_request_receipt` belongs to the calling thread.
