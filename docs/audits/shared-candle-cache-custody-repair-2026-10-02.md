@@ -103,3 +103,34 @@ joining is still not_observed. A short final-PID log lookup found no deferred
 admissions, but lacks a matched workload denominator and proves no rate uplift.
 Direct closure evidence: `tmp/shared-candle-custody-repair-20261002/final-closure.json`
 and `data/runtime/startup_readiness/2026-10-02/shared_candle_custody_repair/final/`.
+
+## Additional requested review: first directory creation
+
+At the user's 16:43 re-review/deploy/restart instruction, current source and
+consumers were checked again. A new defect was reproduced in an isolated
+cache directory: when the shared directory is absent, a root first writer
+creates the directory and its lock as root/0700+0600 under Ubuntu's parent.
+The earlier file custody repair therefore does not prevent recurrence after
+directory removal. The live cache directory itself was still Ubuntu-owned;
+no production cache directory was removed to manufacture a sample.
+
+The existing helper now prepares its own directory with a descriptor, rejects
+directory symlinks, preserves non-root directory custody, and restores a
+root-owned cache directory to its non-root parent's UID/GID. Directory mode is
+0700; file mode remains 0600. A missing parent or directory custody failure
+uses normal admission without creating an inaccessible root-owned hierarchy.
+Lock inodes, exact request scopes and source TTLs remain unchanged.
+
+Review covered first creation, existing root directory, directory symlinks,
+descriptor closure/custody failure and missing-parent fallback. Final targeted
+gate **331 PASS/8.61s**, with only the same three deprecation warnings. Actual
+root producer and Ubuntu consumer tests covered both a newly created directory
+and the original root-owned repro: private Ubuntu custody, one mocked fetch
+per fixture, zero consumer fetches and source clock 601000 retained. Evidence:
+`tmp/shared-candle-directory-review-20261002/`. Official upstream HEAD was
+rechecked at 16:51 KST and remained 953e5dbff123f437ab4d11a78a95191a685eb51f;
+the previously inspected immutable protocol files remain unchanged. This
+supplemental fix does not modify the Kiwoom wire/response/continuation contract.
+
+Immutable deployment and current PID acceptance for this new defect follow
+below; the earlier b096f7ca receipt is retained as prior evidence.

@@ -162,6 +162,24 @@ class SharedCandleRead:
     def __init__(self, directory=None):
         self.directory = Path(directory or DATA_DIR / "runtime" / "shared_candle_reads")
 
+    def _prepare_directory(self):
+        # The runtime parent already owns custody. A privileged first writer
+        # must not recreate a private root directory below that user's parent.
+        # Missing parents leave this optional cache unavailable, rather than
+        # creating an inaccessible hierarchy on behalf of another runtime user.
+        self.directory.mkdir(exist_ok=True, mode=0o700)
+        fd = os.open(self.directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            current = os.fstat(fd)
+            if current.st_uid == 0:
+                owner = self.directory.parent.stat()
+                if owner.st_uid != 0:
+                    os.fchown(fd, owner.st_uid, owner.st_gid)
+            if os.fstat(fd).st_mode & 0o777 != 0o700:
+                os.fchmod(fd, 0o700)
+        finally:
+            os.close(fd)
+
     def _bind_custody(self, fd):
         """Keep private files readable by the shared directory's owner.
 
@@ -201,7 +219,7 @@ class SharedCandleRead:
                                  for suffix in (".json", ".lock"))
         lock_fd = None
         try:
-            self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+            self._prepare_directory()
             lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
             self._bind_custody(lock_fd)
             lock = os.fdopen(lock_fd, "r+")

@@ -333,6 +333,60 @@ def test_shared_candle_never_chowns_symlink_lock_target(tmp_path,monkeypatch):
     assert not list(tmp_path.glob('*.json'))
 
 
+def test_shared_candle_first_privileged_writer_inherits_runtime_parent(tmp_path,monkeypatch):
+    from src.utils import kiwoom_read_request_control as c
+    root=tmp_path/'fresh'
+    cache,key,fetch,clock,calls=_shared_candle_fixture(root,monkeypatch)
+    original_fstat=c.os.fstat
+    transfers=[]
+    def root_owned(fd):
+        state=list(original_fstat(fd));state[4:6]=[0,0]
+        return c.os.stat_result(state)
+    monkeypatch.setattr(c.os,'fstat',root_owned)
+    monkeypatch.setattr(c.os,'fchown',lambda fd,uid,gid:transfers.append((uid,gid)))
+    cache.run(key,fetch,wait_sec=0)
+    assert transfers==[(tmp_path.stat().st_uid,tmp_path.stat().st_gid)]*3
+    assert root.stat().st_mode & 0o777==0o700
+    assert len(calls)==1
+
+
+def test_shared_candle_rejects_directory_symlink_without_mutation(tmp_path,monkeypatch):
+    from src.utils.kiwoom_read_request_control import SharedCandleRead
+    cache,key,fetch,clock,calls=_shared_candle_fixture(tmp_path,monkeypatch)
+    target=tmp_path/'foreign';target.mkdir(mode=0o755)
+    link=tmp_path/'alias';link.symlink_to(target,target_is_directory=True)
+    SharedCandleRead(link).run(key,fetch,wait_sec=0)
+    assert len(calls)==1
+    assert target.stat().st_mode & 0o777==0o755
+    assert not list(target.iterdir())
+
+
+def test_shared_candle_directory_custody_failure_closes_descriptor(tmp_path,monkeypatch):
+    from src.utils import kiwoom_read_request_control as c
+    cache,key,fetch,clock,calls=_shared_candle_fixture(tmp_path/'fresh',monkeypatch)
+    original_fstat=c.os.fstat
+    captured=[]
+    def root_owned(fd):
+        state=list(original_fstat(fd));state[4:6]=[0,0]
+        return c.os.stat_result(state)
+    def denied(fd,uid,gid):
+        captured.append(fd)
+        raise PermissionError('directory_custody_denied')
+    monkeypatch.setattr(c.os,'fstat',root_owned)
+    monkeypatch.setattr(c.os,'fchown',denied)
+    cache.run(key,fetch,wait_sec=0)
+    assert len(calls)==1 and len(captured)==1
+    with pytest.raises(OSError):original_fstat(captured[0])
+    assert not list((tmp_path/'fresh').iterdir())
+
+
+def test_shared_candle_directory_failure_uses_one_normal_admission(tmp_path,monkeypatch):
+    cache,key,fetch,clock,calls=_shared_candle_fixture(tmp_path/'missing-parent'/'cache',monkeypatch)
+    result=cache.run(key,fetch,wait_sec=0)
+    assert len(calls)==1 and result[1]['rest_received_ts_ms']==601000
+    assert not (tmp_path/'missing-parent').exists()
+
+
 @pytest.mark.parametrize("fault", ["key", "minute", "future", "business", "gap", "corrupt", "token_changed"])
 def test_shared_candle_cache_isolation_and_rejection(tmp_path, monkeypatch, fault):
     cache,key,fetch,clock,calls = _shared_candle_fixture(tmp_path, monkeypatch)

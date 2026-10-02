@@ -297,6 +297,12 @@ rejected. Optional custody/I/O failure uses normal admission or declines cache
 publication; it never grants an extra slot or refreshes a cached source clock.
 Existing private slot files may receive bounded ownership repair after the
 old writer has drained. See [mixed-user custody repair](audits/shared-candle-cache-custody-repair-2026-10-02.md).
+The cache directory is private `0700`. If a privileged first writer creates it
+below a normal runtime user's existing parent, it inherits that parent's UID/GID;
+root-owned legacy cache directories under that parent follow the same repair.
+Directory symlinks are rejected. Missing parents or custody failure leave this
+optional cache unavailable and use normal read admission, without constructing
+a private root-owned parent hierarchy or changing source timestamps.
 
 ### Direct read-only collector receipts and local budgets
 
