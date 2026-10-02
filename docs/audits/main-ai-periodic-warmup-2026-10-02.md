@@ -34,3 +34,13 @@ Implementation/self-review fixed atomic cadence admission, test-mode/date isolat
 Final consolidated validation: **410 PASS / 5.28 seconds**. Python compile, diff whitespace and print-only checklist parser pass. No package installation or trading-suite expansion is needed for the closed diagnostic scope.
 
 Current selected policy/PREOPEN/prepared byte hashes and independent service pins must remain unchanged. Existing 10/1 finalization/source failure is separate and must not be converted to PASS by this transport work.
+
+## Deployment and natural cadence acceptance
+
+- Immutable code `c124f476f6b107ffeb3f65c446ff1f3c42dcf68d`, root `/home/ubuntu/KORStockScan-runtime-releases/main-ai-warmup-240s-20261002-c124f476`: repeated gate **410 PASS / 9.15 seconds**, source tree clean.
+- Guarded Main restart completed at 10:49:58 KST: old PID 2792150 exited, new PID **2809235**, start ticks 52663056, native cwd/root/code attested. Runtime bootstrap verification PASS, no missing/mismatched env. Same-day consumption receipt PASS/actual_pid_consumed=true; native release-cwd sealed-generation and completion checks PASS. Verification from workspace cwd intentionally rejects the selected-release identity and is not a native consumer check.
+- Conservation receipt confirms **five frozen policy/PREOPEN/prepared files**, **416 independent service pins**, root/Ubuntu cron hashes unchanged and exactly one Main PID. Policy manifest remains `7046d2a9feaf72c2d0893a18b0906108790ff12c57bbd5c3e30331e259bac4cb`.
+- Natural key 0 diagnostics: 10:50:15, 2316.405ms; 10:54:19, 1079.306ms; interval **244.146s**. Key 1: 10:50:17, 1737.514ms; 10:54:20, 930.450ms; interval **242.929s**. All four completed with OK in the same PID/root. The ten-second scheduler poll and execution/busy time can extend the 240-second minimum cadence; intervals are not a precise timer guarantee.
+- Evidence directory: `data/runtime/startup_readiness/2026-10-02/ai_periodic_warmup/{before.json,selection.before.json,selection.published.json,prepare.json,restart.log,prepared.verify.json,completion.verify.json,after.json,natural-acceptance.json}`. Native consumption: `data/runtime/policy_bootstrap/intraday_handoff/2026-10-02/c124f476f6b107ffeb3f65c446ff1f3c42dcf68d.consumed.json`. Diagnostic ledger: `data/runtime/ai_transport_warmup/2026-10-02.jsonl`.
+
+Code review, deployment/PID and natural periodic diagnostics are complete. Real entry-response latency recovery remains not observed; the initial period selection is not a statistical global optimum. Historical source/finalization and realized economics remain separate.

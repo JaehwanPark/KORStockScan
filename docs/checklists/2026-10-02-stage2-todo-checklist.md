@@ -90,9 +90,10 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 
 ## 보조 AI PASS/VETO 원천·선택 보완
 
-- [ ] `[MainAiPeriodicWarmup1002] Main AI 주기 호출과 연결 재사용 적용` (`Due: 2026-10-02`, `Slot: INTRADAY`, `TimeWindow: 10:30~15:20`, `Track: MainEntry`)
+- [x] `[MainAiPeriodicWarmup1002] Main AI 주기 호출과 연결 재사용 적용` (`Due: 2026-10-02`, `Slot: INTRADAY`, `TimeWindow: 10:30~15:20`, `Track: MainEntry`)
   - Source: [주기 비교·운영·리뷰 근거](../audits/main-ai-periodic-warmup-2026-10-02.md). 사용자의 주기 호출 요청과 최적 주기 점검을 따른다. 기존 구현·반복 리뷰·배포·재기동 승인을 적용하며 기존 정책과 독립 소비자 pin을 보존한다.
   - Acceptance: 120/180/240초 비매매 비교와 300초 연결 유지의 직접 영수증, 키별 240초 초기값·최대 15회/시간, 실제 호출 우선·유휴/disabled/test/date 차단·late queue 경계·실패/캐시 불변을 검증한다. 불변 릴리스와 guarded Main handoff 후 새 PID의 키별 워밍업 영수증을 확인한다. 진단 호출은 AI 판정/원천/장후 학습 분모에 포함하지 않는다. 실제 판정 응답 회복과 통계적 최적 주기는 별도 관측이며 작은 진단 표본으로 종결했다고 주장하지 않는다.
+  - 종결 근거: 작업본 410 PASS/5.28초, 불변 c124f476 410 PASS/9.15초. 10:49:58 guarded restart/PID 2809235·정확 정책 인계 PASS, 정책/PREOPEN/준비본 5파일·독립 pin 416개·cron·single Main 불변. 키별 최초 및 두 번째 주기의 자연 진단 4건 모두 정상; 간격 244.146/242.929초, 두 번째 응답 1.079/0.930초. 기존 실제 판정 분모와 실패 상태는 보존하며 실제 판정 응답 회복은 미관측이다.
 
 - [ ] `[CompactAuxiliaryPassVetoLogicReady1002] 보조 AI 원천·판정 후보 로직과 샘플 성능 검증` (`Due: 2026-10-02`, `Slot: INTRADAY`, `TimeWindow: 09:00~15:20`, `Track: MainEntry`)
   - Implementation evidence (10/1): [작업본 구현·리뷰·샘플 검증](../audits/entry-postclose-remediation-implementation-review-2026-10-01.md). 코드 수용과 실제 10/2 릴리스 소비·전체 자연 원천 수용을 구분하며 이 항목은 OPEN을 유지한다.
