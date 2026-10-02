@@ -1634,5 +1634,9 @@ def _pid_exists(pid: int) -> bool:
     try:
         os.kill(pid, 0)
         return True
+    except PermissionError:
+        # Signal 0 confirmed the PID exists but this observer cannot signal
+        # another runtime user. Freshness/thread checks still apply separately.
+        return True
     except OSError:
         return False

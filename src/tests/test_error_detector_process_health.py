@@ -29,6 +29,19 @@ _ORIGINAL_WIDGET_RUNTIME_RELEASE_CONTRACT = (
 )
 
 
+@pytest.mark.parametrize('error,alive', [
+    (PermissionError(1, 'different runtime user'), True),
+    (ProcessLookupError(3, 'no process'), False),
+    (OSError(5, 'unexpected I/O fault'), False),
+])
+def test_pid_presence_separates_signal_permission_from_absence(monkeypatch,error,alive):
+    def probe(pid,signal):
+        assert (pid,signal)==(1234,0)
+        raise error
+    monkeypatch.setattr(os,'kill',probe)
+    assert process_health_module._pid_exists(1234) is alive
+
+
 def test_retired_samsung_expected_set_accepts_disabled_timers(monkeypatch):
     monkeypatch.setattr(
         process_health_module, "_systemd_unit_state",

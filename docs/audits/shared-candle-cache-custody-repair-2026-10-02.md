@@ -59,7 +59,23 @@ Evidence is in `tmp/shared-candle-custody-repair-20261002/`.
 
 ## Deployment and natural acceptance
 
-Pending immutable validation, policy-preserving guarded restart, exact-date
-PID consumption, bounded existing-slot custody repair and the next scheduled
-Ubuntu report. Live identical-request cache joining needs a natural receipt;
-absence remains not_observed and is not manufactured through API calls.
+First immutable release `aa6b0123` repeated **239 PASS/10.93s** and completed a
+guarded restart at 16:27:35, PID 2901939/start ticks 54688643. Exact-date bootstrap
+and intraday consumption PASS; frozen files (5), independent pins (416), both
+cron hashes unchanged. The bounded slot repair checked 368 files and corrected
+365, retaining inode/mtime/size and 0600. Ubuntu denied locks became zero. Two
+natural cache writes from the new PID remained Ubuntu-owned/0600. The 16:30
+scheduled Ubuntu sentinel/monitor completed at 16:30:34; no manual report or
+model/API replay was used. Live identical-request joining remains not_observed;
+cache production and a mixed-UID fixture do not prove a live join or economics.
+
+Consumer re-review uncovered a second custody-related monitoring defect: the
+Ubuntu cron's signal-zero probe interpreted EPERM for a live root Main as a
+dead PID, while the same Main's own heartbeat/thread checks passed. The existing
+process-health owner now treats signal permission denial as PID presence;
+missing PID and other OS errors still fail, and heartbeat freshness/thread
+checks are unchanged. Its initial regression reproduced the false absence;
+after the correction the full owner gate **88 PASS** and an actual Ubuntu probe
+of root PID 2901939 returned true. Final immutable publication/restart evidence
+is appended after this supplemental fix. Live cache join and overall admission
+rate improvement remain separate from this diagnostic repair.
