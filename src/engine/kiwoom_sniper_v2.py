@@ -16243,9 +16243,11 @@ def run_sniper(is_test_mode=False):
         print("\n🛑 스나이퍼 매매 엔진 종료")
 
     finally:
-        warmup = getattr(AI_ENGINE, '_transport_warmup', None)
-        if warmup is not None:
-            warmup.stop()
+        try:
+            if getattr(AI_ENGINE, '_transport_warmup', None) is not None:
+                AI_ENGINE.stop_transport_warmup()
+        except Exception as warmup_error:
+            log_error(f"[AI_TRANSPORT_WARMUP_STOP_FAILED] type={type(warmup_error).__name__}")
         try:
             from src.engine.error_detectors.process_health import (
                 write_heartbeat as _sniper_final_heartbeat,

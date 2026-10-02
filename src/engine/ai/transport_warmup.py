@@ -19,16 +19,63 @@ class TransportWarmup:
         self.clock = clock
         self.last_activity = {}
         self.lock = threading.Lock()
+        self.lifecycle_lock = threading.Lock()
+        self.tick_lock = threading.Lock()
         self.stop_event = threading.Event()
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='ai-warmup-http')
         self.pending = None
         self.thread = None
+        self.deadline_sec = 5.0
 
     def note_activity(self, client):
         with self.lock:
             self.last_activity[id(client)] = self.clock()
 
     def tick(self):
+        if not self.tick_lock.acquire(blocking=False):
+            return
+        try:
+            self._tick()
+        finally:
+            self.tick_lock.release()
+
+    def _deferred_status(self):
+        if self.stop_event.is_set():
+            return 'stopped'
+        if not self.allowed():
+            return 'deferred_session'
+        if self.busy():
+            return 'deferred_live_priority'
+        return None
+
+    def _request(self, client, deadline, provider_started):
+        # SDK resource lookup can be lazy and slow; include it in the wall budget.
+        status = self._deferred_status()
+        if status:
+            return {'status': status}
+        create = client.responses.create
+        status = self._deferred_status()
+        if status:
+            return {'status': status}
+        remaining = deadline - self.clock()
+        if remaining <= 0:
+            return {'status': 'deadline_expired_before_provider'}
+        provider_started.set()
+        response = create(
+            model='gpt-5.4-nano',
+            instructions='This is a transport warmup diagnostic. Return only OK. Never make a trading decision.',
+            input='Return OK.', store=False, max_output_tokens=16,
+            reasoning={'effort': 'none'}, timeout=remaining,
+            metadata={'endpoint_name': 'transport_warmup_diagnostic', 'order_authority': 'none'},
+        )
+        usage = getattr(response, 'usage', None)
+        return {
+            'status': 'completed' if response.status == 'completed' and response.output_text.strip() == 'OK' else 'unexpected_response',
+            'input_tokens': getattr(usage, 'input_tokens', None),
+            'output_tokens': getattr(usage, 'output_tokens', None),
+        }
+
+    def _tick(self):
         if self.stop_event.is_set() or not self.allowed() or self.busy():
             return
         if self.pending is not None and not self.pending.done():
@@ -43,6 +90,8 @@ class TransportWarmup:
                 # Charge cadence at admission, including failed attempts.
                 self.last_activity[id(client)] = self.clock()
             started = self.clock()
+            deadline = started + self.deadline_sec
+            provider_started = threading.Event()
             receipt = {
                 'schema': 'ai_transport_warmup_v1', 'at': datetime.now().astimezone().isoformat(),
                 'key_index': index, 'model': 'gpt-5.4-nano', 'interval_sec': self.interval_sec,
@@ -55,32 +104,26 @@ class TransportWarmup:
                 'forbidden_uses': ['trading_verdict', 'tuning_input', 'policy_selection',
                                    'realized_pnl', 'live_latency_recovery_claim'],
             }
+            self.pending = None
             try:
-                self.pending = self.executor.submit(
-                    client.responses.create, model='gpt-5.4-nano',
-                    instructions='This is a transport warmup diagnostic. Return only OK. Never make a trading decision.',
-                    input='Return OK.', store=False, max_output_tokens=16,
-                    reasoning={'effort': 'none'}, timeout=5,
-                    metadata={'endpoint_name': 'transport_warmup_diagnostic', 'order_authority': 'none'},
-                )
-                response = self.pending.result(timeout=5)
-                usage = getattr(response, 'usage', None)
-                receipt.update(status='completed' if response.status == 'completed' and response.output_text.strip() == 'OK' else 'unexpected_response',
-                    input_tokens=getattr(usage, 'input_tokens', None),
-                    output_tokens=getattr(usage, 'output_tokens', None))
+                with self.lifecycle_lock:
+                    if self.stop_event.is_set():
+                        return
+                    self.pending = self.executor.submit(
+                        self._request, client, deadline, provider_started)
+                receipt.update(self.pending.result(timeout=max(0, deadline-self.clock())))
             except TimeoutError:
-                receipt.update(status='timeout', cancelled=self.pending.cancel())
+                receipt.update(status='timeout', cancelled=self.pending.cancel() if self.pending is not None else False)
             except Exception as exc:
                 receipt.update(status='error', error_type=type(exc).__name__)
             receipt['elapsed_ms'] = round((self.clock()-started)*1000, 3)
+            receipt['provider_call_started_at_receipt'] = provider_started.is_set()
             # No response text, credential, order state, cache or failure-state mutation.
             self.record(receipt)
             if self.pending is not None and not self.pending.done():
                 return
 
     def start(self):
-        if self.thread is not None:
-            return
         def run():
             while not self.stop_event.is_set():
                 try:
@@ -90,9 +133,17 @@ class TransportWarmup:
                     logging.getLogger(__name__).warning(
                         'AI warmup diagnostic failed: %s', type(exc).__name__)
                 self.stop_event.wait(10)
-        self.thread = threading.Thread(target=run, daemon=True, name='main-ai-warmup')
-        self.thread.start()
+        with self.lifecycle_lock:
+            if self.thread is not None or self.stop_event.is_set():
+                return
+            self.thread = threading.Thread(target=run, daemon=True, name='main-ai-warmup')
+            try:
+                self.thread.start()
+            except Exception:
+                self.thread = None
+                raise
 
     def stop(self):
-        self.stop_event.set()
-        self.executor.shutdown(wait=False, cancel_futures=True)
+        with self.lifecycle_lock:
+            self.stop_event.set()
+            self.executor.shutdown(wait=False, cancel_futures=True)

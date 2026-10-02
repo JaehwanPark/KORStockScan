@@ -2,6 +2,8 @@
 from concurrent.futures import Future
 from itertools import cycle
 from types import SimpleNamespace
+import threading
+import time
 
 import pytest
 
@@ -192,3 +194,170 @@ def test_main_start_is_role_test_and_session_gated():
     assert 'datetime.now().date() == warmup_day' in block
     assert 'is_scalping_buy_time_allowed(datetime.now())' in block
     assert 'start_transport_warmup(' not in source[:start]+source[end:]
+
+
+@pytest.mark.parametrize('change,expected', [
+    ('busy', 'deferred_live_priority'), ('allowed', 'deferred_session'),
+    ('stop', 'stopped'), ('deadline', 'deadline_expired_before_provider'),
+])
+def test_lazy_lookup_rechecks_live_session_stop_and_deadline(change, expected):
+    calls, receipts, now = [], [], [100.0]
+    state = {'busy': False, 'allowed': True}
+    class LazyClient:
+        @property
+        def responses(self):
+            if change == 'stop':
+                warmup.stop()
+            elif change == 'deadline':
+                now[0] += 6
+            else:
+                state[change] = change == 'busy'
+            return SimpleNamespace(create=lambda **kwargs: calls.append(kwargs))
+    warmup = TransportWarmup([LazyClient()], allowed=lambda: state['allowed'],
+        busy=lambda: state['busy'], record=receipts.append, clock=lambda: now[0])
+    try:
+        warmup.tick()
+        assert not calls
+        assert receipts[0]['status'] == expected
+        assert receipts[0]['provider_call_started_at_receipt'] is False
+    finally:
+        warmup.stop()
+
+
+def test_blocked_lazy_lookup_is_inside_deadline_and_cannot_send_late():
+    entered, release = threading.Event(), threading.Event()
+    calls, receipts = [], []
+    class LazyClient:
+        @property
+        def responses(self):
+            entered.set()
+            assert release.wait(1)
+            return SimpleNamespace(create=lambda **kwargs: calls.append(kwargs))
+    warmup = TransportWarmup([LazyClient()], allowed=lambda: True,
+        busy=lambda: False, record=receipts.append)
+    warmup.deadline_sec = 0.05
+    try:
+        started = time.monotonic()
+        warmup.tick()
+        assert entered.is_set() and time.monotonic()-started < 0.5
+        assert receipts[0]['status'] == 'timeout'
+        assert receipts[0]['provider_call_started_at_receipt'] is False
+        warmup.tick()
+        assert len(receipts) == 1
+        release.set()
+        assert warmup.pending.result(timeout=1)['status'] == 'deadline_expired_before_provider'
+        assert calls == []
+    finally:
+        release.set()
+        warmup.stop()
+
+
+def test_sdk_timeout_uses_remaining_budget_after_lookup():
+    warmup, calls, receipts, now = fixture_warmup()
+    original = warmup.clients[0].responses
+    class LazyClient:
+        @property
+        def responses(self):
+            now[0] += 2
+            return original
+    warmup.clients = (LazyClient(),)
+    try:
+        warmup.tick()
+        assert calls[0]['timeout'] == 3
+        assert receipts[0]['provider_call_started_at_receipt'] is True
+    finally:
+        warmup.stop()
+
+
+def test_concurrent_ticks_do_not_admit_duplicate_work():
+    entered, release = threading.Event(), threading.Event()
+    warmup, calls, receipts, _ = fixture_warmup()
+    create = warmup.clients[0].responses.create
+    def blocked(**kwargs):
+        entered.set()
+        assert release.wait(1)
+        return create(**kwargs)
+    warmup.clients[0].responses.create = blocked
+    thread = threading.Thread(target=warmup.tick)
+    try:
+        thread.start()
+        assert entered.wait(1)
+        warmup.tick()
+        release.set()
+        thread.join(1)
+        assert not thread.is_alive() and len(calls) == len(receipts) == 1
+    finally:
+        release.set()
+        warmup.stop()
+        thread.join(1)
+
+
+def test_stop_before_start_does_not_spawn_scheduler():
+    warmup, calls, _, _ = fixture_warmup()
+    warmup.stop()
+    warmup.start()
+    assert warmup.thread is None and not calls
+
+
+def test_simultaneous_start_keeps_one_scheduler():
+    warmup, calls, _, _ = fixture_warmup(allowed=False)
+    threads = [threading.Thread(target=warmup.start) for _ in range(8)]
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(1)
+        assert warmup.thread is not None and warmup.thread.is_alive()
+        assert len([t for t in threading.enumerate() if t.name == 'main-ai-warmup']) == 1
+    finally:
+        warmup.stop()
+        if warmup.thread is not None:
+            warmup.thread.join(1)
+
+
+def test_start_failure_detaches_even_if_diagnostic_shutdown_fails(monkeypatch, caplog):
+    from src.engine import ai_engine_openai as module
+    engine = module.GPTSniperEngine.__new__(module.GPTSniperEngine)
+    engine.api_keys = ['a']
+    engine._client_for_key = lambda key: object()
+    class BrokenWarmup:
+        def __init__(self, *args, **kwargs): pass
+        def start(self): raise RuntimeError('private start message')
+        def stop(self): raise ValueError('private stop message')
+    monkeypatch.setattr('src.engine.ai.transport_warmup.TransportWarmup', BrokenWarmup)
+    with pytest.raises(RuntimeError, match='private start message'):
+        engine.start_transport_warmup(allowed=lambda: True)
+    assert engine._transport_warmup is None
+    assert 'ValueError' in caplog.text and 'private stop message' not in caplog.text
+    with pytest.raises(RuntimeError):
+        engine.start_transport_warmup(allowed=lambda: True)
+
+
+def test_shutdown_failure_preserves_main_cleanup_and_live_state(caplog):
+    from src.engine import ai_engine_openai as module
+    engine = module.GPTSniperEngine.__new__(module.GPTSniperEngine)
+    def fail(): raise RuntimeError('private diagnostic failure')
+    engine._transport_warmup = SimpleNamespace(stop=fail)
+    engine._analysis_cache = {'live': 'unchanged'}
+    engine.consecutive_failures = 2
+    cleanup = []
+    engine.stop_transport_warmup()
+    cleanup.append('heartbeat and source cleanup continue')
+    assert cleanup and engine._transport_warmup is None
+    assert engine._analysis_cache == {'live': 'unchanged'} and engine.consecutive_failures == 2
+    assert 'RuntimeError' in caplog.text and 'private diagnostic failure' not in caplog.text
+
+
+def test_submit_timeout_does_not_cancel_a_stale_future(monkeypatch):
+    warmup, _, receipts, _ = fixture_warmup()
+    stale = Future()
+    stale.set_result(None)
+    warmup.pending = stale
+    def fail(*args, **kwargs): raise TimeoutError()
+    monkeypatch.setattr(warmup.executor, 'submit', fail)
+    try:
+        warmup.tick()
+        assert receipts[0]['status'] == 'timeout' and receipts[0]['cancelled'] is False
+        assert warmup.pending is None
+    finally:
+        warmup.stop()

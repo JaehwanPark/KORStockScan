@@ -15,6 +15,7 @@ if str(PROJECT_ROOT) not in sys.path:
 import time
 import copy
 import threading
+import logging
 import json
 import math
 import os
@@ -1132,7 +1133,22 @@ class GPTSniperEngine:
             clients, allowed=lambda: allowed() and not self.ai_disabled,
             busy=lambda: self.api_call_lock.locked() or self.lock.locked(), record=record,
         )
-        self._transport_warmup.start()
+        try:
+            self._transport_warmup.start()
+        except Exception:
+            self.stop_transport_warmup()
+            raise
+
+    def stop_transport_warmup(self):
+        """Diagnostic shutdown must never interrupt Main's remaining cleanup."""
+        warmup = getattr(self, '_transport_warmup', None)
+        self._transport_warmup = None
+        if warmup is not None:
+            try:
+                warmup.stop()
+            except Exception as exc:
+                logging.getLogger(__name__).warning(
+                    'AI warmup shutdown failed: %s', type(exc).__name__)
 
     def set_model_names(
         self, *, fast_model=None, deep_model=None, report_model=None, announce=True

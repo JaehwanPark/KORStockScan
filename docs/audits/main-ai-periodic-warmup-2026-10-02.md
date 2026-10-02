@@ -43,4 +43,18 @@ Current selected policy/PREOPEN/prepared byte hashes and independent service pin
 - Natural key 0 diagnostics: 10:50:15, 2316.405ms; 10:54:19, 1079.306ms; interval **244.146s**. Key 1: 10:50:17, 1737.514ms; 10:54:20, 930.450ms; interval **242.929s**. All four completed with OK in the same PID/root. The ten-second scheduler poll and execution/busy time can extend the 240-second minimum cadence; intervals are not a precise timer guarantee.
 - Evidence directory: `data/runtime/startup_readiness/2026-10-02/ai_periodic_warmup/{before.json,selection.before.json,selection.published.json,prepare.json,restart.log,prepared.verify.json,completion.verify.json,after.json,natural-acceptance.json}`. Native consumption: `data/runtime/policy_bootstrap/intraday_handoff/2026-10-02/c124f476f6b107ffeb3f65c446ff1f3c42dcf68d.consumed.json`. Diagnostic ledger: `data/runtime/ai_transport_warmup/2026-10-02.jsonl`.
 
-Code review, deployment/PID and natural periodic diagnostics are complete. Real entry-response latency recovery remains not observed; the initial period selection is not a statistical global optimum. Historical source/finalization and realized economics remain separate.
+Code review, deployment/PID and natural periodic diagnostics are complete. At the 10:54 acceptance snapshot, real entry-response latency recovery remained not observed; the initial period selection is not a statistical global optimum. Historical source/finalization and realized economics remain separate.
+
+
+## Supplemental review and repair (11:06 KST)
+
+The user explicitly reauthorized repeated code review, fixes, deployment and guarded restart. The existing stable checklist owner is reopened for newly found defects; prior acceptance remains historical evidence.
+
+1. Move lazy SDK Responses lookup into the diagnostic worker. One absolute five-second deadline now includes executor admission, lazy lookup and response wait; the SDK receives only the remaining budget. Recheck live priority, session/date/disabled status and stop after lookup. Expired preparation never starts a late provider call. A blocked worker can outlive the scheduler wait; it is not forcibly killed, and no second diagnostic is queued behind it.
+2. Serialize controller start/stop/admission and reject overlapping ticks without waiting. Stop-before-start creates no scheduler. Failed thread startup resets the thread; failed engine startup detaches the diagnostic controller even when its cleanup also fails.
+3. Isolate diagnostic shutdown errors from Main's heartbeat, scanner, exit-monitor and WS cleanup. Log exception types only. Diagnostic receipts distinguish deferred/expired preparation and record provider-call start only as observed at receipt time; they do not prove remote delivery or completion.
+4. Clear each pending handle before admission. Submission failure cannot cancel a prior completed future. Keep cadence 240 seconds, pool expiry 300 seconds, model/key rotation, SDK retries, existing live deadline, policies and all hard guards unchanged.
+
+Re-review covers controller/engine/startup/shutdown consumers and diagnostic ledger separation. Targeted gate: **422 PASS / 5.82 seconds**, including slow/blocked lazy lookup, remaining SDK budget, priority/session/stop changes during lookup, concurrent tick/start, failed start plus failed cleanup, and stale-future cancellation isolation. No unresolved findings remain in this diagnostic scope. Python compile, diff whitespace and print-only parser validation PASS; exactly one current parsed owner. Immutable/PID follow-up is recorded after completion below.
+
+Additional natural evidence from the prior PID: the 108490 real decision at 10:58:02 KST was evaluated without timeout in **2718ms**. This one real request does not establish causal latency improvement, statistical optimality, an order or realized profit. Historical finalization/source failures remain separate.
