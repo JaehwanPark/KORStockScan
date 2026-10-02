@@ -94,6 +94,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
   - Source: [108490 원천·후단 결속 보완 근거](../audits/main-entry-economic-source-lineage-repair-2026-10-02.md). 사용자 보완·반복 리뷰·배포·재기동 승인을 따른다.
   - Acceptance: 기존 source-only 한도 내 최종 가격 준비·동일 종목 오래된 queue 병합, 정확 계좌/가격/재고/freshness, guard와 bundle 귀속 residual 영수증·JSON 결속을 검증한다. 새 guard 두 단계의 forward 캐시 전환은 기존 raw prefix를 재로딩하거나 과거 복구를 주장하지 않는다. 기존 정책 5파일·독립 service pin·cron을 보존하고 guarded restart·정확일자 PID 소비를 확인한다. 새 자연 경제성/guard·residual 원천은 exact identity로 별도 수용하며 없으면 not_observed로 남긴다.
   - 진행 근거: 생산자·캐시·소비자 448 PASS/24.83초, 후단 guard·residual 23 PASS/2.99초, startup/router/handoff/warmup 148 PASS/3.39초. 정상 계좌 조회가 뒤에 왔어도 10:58 원 pre-AI 결손은 유지한다. 정책·guard·주문 권한 변경 없음.
+  - 배포·기동 근거: 불변 `a6014346`에서 동일 619 PASS 재검증 후 11:56:46 guarded Main restart·PID 2831000/정확일자 consumed PASS. 정책 5파일·독립 service pin 416개·cron 불변, single Main·새 PID WS 연결/원천 정상. 12:00 정기 sentinel/monitor 완료, lossless cache 16→18 forward 전환·rebuilt=false·decode 오류 0·과거 신규 guard 구간 미복원 명시. 새 005930 RECHECK 3건은 nonentry capacity gap을 보존한다. 남은 수용: 새 ENTER_NOW 정확 계좌 여력과 guard·bundle residual 영수증의 exact identity/freshness 자연 검증은 not_observed이며 해당 영수증 발생 시 대사한다. 과거 108490 복구·주문·경제성 개선이나 별도 historical postclose 종결을 주장하지 않는다.
 
 - [x] `[MainAiPeriodicWarmup1002] Main AI 주기 호출과 연결 재사용 적용` (`Due: 2026-10-02`, `Slot: INTRADAY`, `TimeWindow: 10:30~15:20`, `Track: MainEntry`)
   - Source: [주기 비교·운영·리뷰 근거](../audits/main-ai-periodic-warmup-2026-10-02.md). 사용자의 주기 호출 요청과 최적 주기 점검을 따른다. 기존 구현·반복 리뷰·배포·재기동 승인을 적용하며 기존 정책과 독립 소비자 pin을 보존한다.
