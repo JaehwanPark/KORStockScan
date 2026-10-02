@@ -42,6 +42,24 @@ def active(state):
     return [r for r in state["incidents"].values() if r["status"] == "active"]
 
 
+@pytest.mark.parametrize('stage,reason_field', [
+    ('pre_submit_weak_context_late_entry_guard_block','weak_context_guard_reason'),
+    ('real_weak_pullback_entry_block','reason'),
+])
+def test_quality_guard_terminal_survives_exact_monitor_projection(stage, reason_field):
+    lineage={'machine_revision_schema':'exact_machine_revision_v1',
+             'machine_observation_sha256':'a'*64, 'machine_revision_parent_sha256':''}
+    rows=[event(**lineage),event(stage=stage,when=START+timedelta(seconds=1),
+        actual_order_submitted='False',broker_order_forbidden='True',
+        **lineage, **{reason_field:'weak_momentum_context'})]
+    row=monitor.snapshot(rows,START+timedelta(seconds=2))['rows'][0]
+    assert row['conflict_reasons']==[]
+    assert row['final_state']=='final_guard_blocked'
+    assert row['broker_acceptance_observed'] is False
+    assert row['final_guard_evidence'][0]['stage']==stage
+    assert row['final_guard_evidence'][0]['reason']=='weak_momentum_context'
+
+
 def test_pre_submit_intraday_monitor_catches_scanner_parity_and_quote_gap_without_false_recovery(tmp_path):
     from src.engine.pipeline_event_summary import ProducerSummaryCompactor, execution_projection_identity
 

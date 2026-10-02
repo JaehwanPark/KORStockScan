@@ -81,9 +81,27 @@ def update_and_load_cached_event_rows(
     migration = verified_schema_migration or {}
     generation = {"device": stat.st_dev, "inode": stat.st_ino, "size_bytes": stat.st_size,
                   "mtime_ns": stat.st_mtime_ns, "ctime_ns": stat.st_ctime_ns}
-    if migration and migration.get("raw_generation") != generation:
+    forward = bool(migration and migration.get("population_proof") == "forward_only_stage_extension")
+    if forward and not (
+        migration.get("from_schema") == int(meta.get("schema_version") or 0)
+        and migration.get("to_schema") == schema_version
+        and migration.get("raw_offset") == raw_offset
+        and 0 <= raw_offset <= raw_size and not is_gzip_raw
+        and str(meta.get("raw_path")) == str(raw_path)
+        and meta.get("raw_inode") == raw_inode
+        and (migration.get("raw_generation") or {}).get("device") == stat.st_dev
+        and (migration.get("raw_generation") or {}).get("inode") == stat.st_ino
+        and stat.st_size >= (migration.get("raw_generation") or {}).get("size_bytes", raw_size + 1)
+        and (stat.st_size > migration["raw_generation"]["size_bytes"]
+             or (stat.st_mtime_ns == migration["raw_generation"].get("mtime_ns")
+                 and stat.st_ctime_ns == migration["raw_generation"].get("ctime_ns")))
+        and migration.get("historical_stage_coverage") == "not_backfilled_before_raw_offset"
+        and cache_path.exists()
+    ):
+        raise ValueError("forward_cache_schema_source_changed")
+    if migration and not forward and migration.get("raw_generation") != generation:
         raise ValueError("verified_cache_schema_source_changed")
-    schema_migrated = bool(migration and migration.get("population_proof") == "verified_zero_stage_census"
+    schema_migrated = forward or bool(migration and migration.get("population_proof") == "verified_zero_stage_census"
         and int(meta.get("schema_version") or 0) == migration.get("from_schema")
         and raw_offset == raw_size and not is_gzip_raw)
     stale_cache = (
@@ -146,13 +164,17 @@ def update_and_load_cached_event_rows(
                 if isinstance(row, dict):
                     rows.append(row)
 
-    if schema_migrated and len(rows) != meta.get("cache_event_count"):
+    if schema_migrated and len(rows) != int(meta.get("cache_event_count") or 0) + appended_cache_rows:
         raise ValueError("verified_cache_schema_population_changed")
-    if migration:
+    if migration and not forward:
         current = raw_path.stat()
         if generation != {"device": current.st_dev, "inode": current.st_ino, "size_bytes": current.st_size,
                           "mtime_ns": current.st_mtime_ns, "ctime_ns": current.st_ctime_ns}:
             raise ValueError("verified_cache_schema_source_changed")
+    if forward:
+        current = raw_path.stat()
+        if current.st_dev != stat.st_dev or current.st_ino != raw_inode or current.st_size < last_good_offset:
+            raise ValueError("forward_cache_schema_source_changed")
     final_stat_size = int(raw_path.stat().st_size) if raw_path.exists() else raw_size
     final_raw_size = (
         max(final_stat_size, last_good_offset) if is_gzip_raw else final_stat_size

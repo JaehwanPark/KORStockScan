@@ -5013,6 +5013,58 @@ def test_probe_submit_receipt_keeps_machine_revision_chain(monkeypatch):
     assert conflicts == []
 
 
+@pytest.mark.parametrize('stage', ['pre_submit_weak_context_late_entry_guard_block',
+                                  'real_weak_pullback_entry_block', 'residual_blocked'])
+def test_final_guard_and_residual_keep_exact_machine_receipt(monkeypatch, stage):
+    from src.engine import buy_funnel_sentinel as sentinel
+    emitted = []
+    monkeypatch.setattr(state_handlers, 'emit_pipeline_event',
+        lambda pipeline, name, code, stage, record_id=None, fields=None:
+            emitted.append((stage, dict(fields or {}))))
+    lineage = {'entry_primary_decision_owner': 'mechanistic_entry_adjudicator',
+        'entry_mechanistic_action': 'ENTER_NOW', 'entry_ai_screen_status': 'pass',
+        'evaluation_attempt_id': 'original-attempt', 'scanner_promotion_id': 'promotion',
+        'machine_observation_sha256': 'a'*64, 'machine_revision_schema': 'exact_machine_revision_v1',
+        'machine_revision_parent_sha256': '',
+        'entry_ai_effective_assessment': {'effective_verdict': 'PASS'}}
+    stock = {'id': 1, 'name': 'guard', 'code': '005930', 'strategy': 'SCALPING',
+        'entry_split_probe_bundle_id': 'original-bundle',
+        'entry_split_probe_machine_primary_receipt': {
+            'bundle_id': 'original-bundle', 'stock_code': '005930', 'fields': lineage},
+        'last_watching_ai_machine_primary_fields': lineage}
+    if stage == 'residual_blocked':
+        stock['last_watching_ai_machine_primary_fields'] = {
+            **lineage, 'evaluation_attempt_id': 'newer-attempt', 'machine_observation_sha256': 'b'*64}
+    state_handlers._log_entry_pipeline(stock, '005930', stage, reason='quality_guard_block',
+        actual_order_submitted=False, broker_order_forbidden=True)
+    fields = emitted[0][1]
+    assert fields['evaluation_attempt_id'] == 'original-attempt'
+    assert fields['machine_observation_sha256'] == 'a'*64
+    assert fields['machine_revision_schema'] == 'exact_machine_revision_v1'
+    assert json.loads(fields['entry_ai_effective_assessment'])['effective_verdict'] == 'PASS'
+    rows = [sentinel.PipelineEvent(datetime(2026,10,2,10,58,2), 'ENTRY_PIPELINE',
+                                  'ai_confirmed', 'guard', '005930', '1', lineage),
+            sentinel.PipelineEvent(datetime(2026,10,2,10,58,3), 'ENTRY_PIPELINE',
+                                  stage, 'guard', '005930', '1', fields)]
+    _, status, conflicts = sentinel._machine_revision_rows(rows)
+    assert status == 'single_revision' and not conflicts
+    assert fields['actual_order_submitted'] is False
+
+
+def test_residual_machine_receipt_does_not_bind_another_bundle(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(state_handlers, 'emit_pipeline_event',
+        lambda pipeline, name, code, stage, record_id=None, fields=None:
+            emitted.append(dict(fields or {})))
+    stock = {'id': 1, 'name': 'guard', 'code': '005930', 'strategy': 'SCALPING',
+        'entry_split_probe_bundle_id': 'new-bundle',
+        'entry_split_probe_machine_primary_receipt': {'bundle_id': 'old-bundle',
+            'stock_code': '005930', 'fields': {'evaluation_attempt_id': 'old-attempt'}}}
+    state_handlers._log_entry_pipeline(stock, '005930', 'residual_blocked',
+        actual_order_submitted=False)
+    assert emitted[0].get('evaluation_attempt_id') != 'old-attempt'
+
+
 def test_pre_submit_entry_ai_authority_retry_rebases_stale_quote_before_ai(
     monkeypatch,
 ):

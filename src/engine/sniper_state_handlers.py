@@ -2996,7 +2996,7 @@ def _read_entry_capacity_snapshot(code, price, *, source_only=False,
 
 
 def _prefetch_entry_capacity_for_async_evaluation(code, ws_data, deadline_epoch):
-    """Prepare evidence in the existing worker, before final quote refresh.
+    """Prepare evidence in the existing worker using its final evaluation frame.
 
     No delayed event/backfill is emitted. The later observer must independently
     validate the exact price, account/inventory generation and two-second age.
@@ -3034,8 +3034,15 @@ def _request_entry_capacity_preparation(stock, code, ws_data):
                 return True
             for expired in [k for k, v in _ENTRY_CAPACITY_PENDING.items() if v[2] <= now_ts]:
                 _ENTRY_CAPACITY_PENDING.pop(expired)
-            if key not in _ENTRY_CAPACITY_PENDING and len(_ENTRY_CAPACITY_PENDING) >= 8:
+            # Coalesce a changed quote for the same symbol instead of spending
+            # the existing worker on obsolete prices. No historical backfill.
+            obsolete_keys = [k for k, v in _ENTRY_CAPACITY_PENDING.items()
+                             if v[0] == code and k != key]
+            if (key not in _ENTRY_CAPACITY_PENDING
+                    and len(_ENTRY_CAPACITY_PENDING)-len(obsolete_keys) >= 8):
                 return False
+            for obsolete in obsolete_keys:
+                _ENTRY_CAPACITY_PENDING.pop(obsolete)
             _ENTRY_CAPACITY_PENDING.setdefault(key, (code, price, now_ts + 5.0))
         return True
     except Exception:
@@ -12104,6 +12111,8 @@ _MACHINE_PRIMARY_LINEAGE_PIPELINE_STAGES = frozenset(
         "entry_execution_sizing_plan",
         "entry_execution_sizing_plan_block",
         "pre_submit_price_guard_block",
+        "pre_submit_weak_context_late_entry_guard_block",
+        "real_weak_pullback_entry_block",
         "pre_submit_entry_ai_authority_async_pending",
         "pre_submit_entry_ai_authority_guard_block",
         "order_leg_owner_registry_reconciliation_required",
@@ -12189,6 +12198,9 @@ def _observe_entry_economics_before_ai(stock, code, ws_data, *, exact_payload,
             reuse_only=assessment.get("action") != "ENTER_NOW")
         if budget.get("kt00011_error") or budget.get("cash_orderable_qty_cap") is None:
             source["entry_economic_capacity_blocker"] = budget.get("kt00011_error") or "cash_quantity_missing"
+            if assessment.get("action") == "ENTER_NOW":
+                source["entry_economic_capacity_preparation_requested"] = _request_entry_capacity_preparation(
+                    snapshot, code, {"curr": current})
             raise ValueError("exact_broker_capacity_missing")
         budget = _apply_general_entry_margin_budget_authority(budget, unit_price=current)
         margin = bool(budget.get("general_entry_margin_one_share_authorized"))
@@ -12283,6 +12295,15 @@ def _observe_entry_economics_before_ai(stock, code, ws_data, *, exact_payload,
 
 
 def _log_entry_pipeline(stock, code, stage, **fields):
+    if stage == "residual_blocked" and isinstance(stock, dict):
+        # Residuals can outlive the latest AI decision. Use only bundle custody.
+        receipt = stock.get("entry_split_probe_machine_primary_receipt") or {}
+        bundle = fields.get("probe_bundle_id") or stock.get("entry_split_probe_bundle_id")
+        if (isinstance(receipt, dict) and bundle
+                and receipt.get("bundle_id") == bundle
+                and receipt.get("stock_code") == code):
+            fields = {**_machine_auxiliary_receipt_wire_fields(
+                _machine_primary_entry_provenance_fields(receipt.get("fields"))), **fields}
     if stage == "entry_execution_sizing_plan" and fields.get(
             "entry_execution_sizing_valid") is True:
         fields["initial_quantity_runtime_pid"] = os.getpid()
@@ -12301,8 +12322,6 @@ def _log_entry_pipeline(stock, code, stage, **fields):
                     "initial_quantity_cap_research_context"):
             if isinstance(fields.get(key), dict):
                 fields[key] = json.dumps(fields[key], sort_keys=True, separators=(",", ":"))
-    if stage == "ai_confirmed" or stage in _MACHINE_PRIMARY_LINEAGE_PIPELINE_STAGES:
-        fields = _machine_auxiliary_receipt_wire_fields(fields)
     if stage in _MACHINE_PRIMARY_LINEAGE_PIPELINE_STAGES and isinstance(stock, dict):
         # Downstream submit stages belong to the exact trusted AI attempt kept
         # on the watched stock.  Add provenance only; this does not authorize a
@@ -12313,6 +12332,8 @@ def _log_entry_pipeline(stock, code, stage, **fields):
             ),
             **fields,
         }
+    if stage == "ai_confirmed" or stage in _MACHINE_PRIMARY_LINEAGE_PIPELINE_STAGES:
+        fields = _machine_auxiliary_receipt_wire_fields(fields)
     if stage in {
         "ai_confirmed",
         "order_leg_sent",
@@ -61324,15 +61345,8 @@ def _resolve_scanner_async_entry_ai(
             source_meta=candle_source_meta,
             include_investor_source=True,
         )
-        capacity_prefetch = {"status": "skipped", "reason": "noninitial_or_nonreal_scope"}
-        if (_safe_int(stock_snapshot.get("buy_qty"), 0) <= 0
-                and not _is_any_simulated_position(stock_snapshot, stock_snapshot.get("strategy"))):
-            capacity_prefetch = _prefetch_entry_capacity_for_async_evaluation(
-                code, prepared_ws, async_context.deadline_epoch
-            )
         return {
             "source_quality_ok": True,
-            "entry_capacity_prefetch": capacity_prefetch,
             "recent_ticks": recent_ticks,
             "recent_candles": recent_candles,
             "candle_source_meta": candle_source_meta,
@@ -61358,6 +61372,15 @@ def _resolve_scanner_async_entry_ai(
                 refreshed.get("recent_ticks") or [],
                 refreshed.get("candle_context") or {},
             )
+            # Prepare once for the final quote, not the earlier preparation price.
+            # This remains the existing worker and the same source-only budget.
+            refreshed["entry_capacity_prefetch"] = {
+                "status": "skipped", "reason": "noninitial_or_nonreal_scope"}
+            stock_snapshot = async_context.stock_snapshot
+            if (_safe_int(stock_snapshot.get("buy_qty"), 0) <= 0
+                    and not _is_any_simulated_position(stock_snapshot, stock_snapshot.get("strategy"))):
+                refreshed["entry_capacity_prefetch"] = _prefetch_entry_capacity_for_async_evaluation(
+                    code, refreshed.get("ws_data") or {}, async_context.deadline_epoch)
         return refreshed
 
     def evaluate(
@@ -69888,6 +69911,11 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     "entry_bundle_id": probe_bundle_id,
                     "entry_split_probe_phase": "probe_submitting",
                     "entry_split_probe_bundle_id": probe_bundle_id,
+                    "entry_split_probe_machine_primary_receipt": {
+                        "bundle_id": probe_bundle_id, "stock_code": code,
+                        "fields": copy.deepcopy(_machine_primary_entry_provenance_fields(
+                            stock.get("last_watching_ai_machine_primary_fields"))),
+                    },
                     "entry_split_probe_requested_qty": requested_qty,
                     "entry_split_probe_target_qty": requested_qty,
                     "entry_split_probe_committed_qty": 1,
@@ -71315,7 +71343,10 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     "entry_bundle_id",
                 ],
             )
-        log_info(f"❌ [{stock['name']}] 매수 주문 전송 실패 (성공 주문 없음)")
+        if broker_submit_attempt_count == 0:
+            log_info(f"⛔ [{stock['name']}] 매수 주문 미제출 (브로커 호출 전 차단)")
+        else:
+            log_info(f"❌ [{stock['name']}] 매수 주문 전송 실패 (성공 주문 없음)")
         clear_signal_reference(stock)
         _log_entry_pipeline(
             stock,

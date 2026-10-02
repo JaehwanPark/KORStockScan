@@ -1067,7 +1067,7 @@ def snapshot(events, as_of):
             "evaluation_key", "scanner_promotion_id", "stock_code", "effective_venue",
             "session_bucket", "policy_bundle_hash", "first_evaluated_at", "last_event_at",
             "mechanistic_action", "ai_screen_status", "auxiliary_ai_semantics", "broker_acceptance_observed",
-            "final_guard_blocked", "final_state", "conflict_reasons", "source_invalid_decomposition", "economic_source",
+            "final_guard_blocked", "final_guard_evidence", "final_state", "conflict_reasons", "source_invalid_decomposition", "economic_source",
             "decision_history", "initial_observed_action", "latest_observed_action",
             "enter_now_observed", "economic_history", "revision_chain_status",
         )} for r in funnel["evaluation_ledger"]],
@@ -1736,7 +1736,7 @@ def evaluate(report, state, now):
                     "last_seen": now.isoformat(), "status": "active" if confirmed else "pending",
                     "evidence_ids": ids[:128], "promotion_ids": identities[:128],
                     "count": len(ids), "notified_status": old.get("notified_status"),
-                    "examples": [{k: r.get(k) for k in ("stock_code", "evaluation_key", "mechanistic_action", "final_state", "conflict_reasons", "auxiliary_ai_semantics", "source_invalid_decomposition", "economic_source")} for r in bad[:3]],
+                    "examples": [{k: r.get(k) for k in ("stock_code", "evaluation_key", "mechanistic_action", "final_state", "conflict_reasons", "auxiliary_ai_semantics", "source_invalid_decomposition", "economic_source", "final_guard_evidence")} for r in bad[:3]],
                     "owner": (bad[0].get("economic_source") or {}).get("owner") if rule == "economic_producer_gap" else "buy_funnel_sentinel.machine_primary_entry_funnel",
                     "closure_test": (
                         "same attempt publishes valid frozen economic proof"

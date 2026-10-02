@@ -298,3 +298,52 @@ def test_lossless_funnel_preserves_broker_ambiguity_stage(tmp_path):
     row = buy._payload_to_cache_row(payload, exclude_summary_stages=True)
     assert row is not None
     assert row["stage"] == "order_leg_owner_registry_reconciliation_required"
+
+
+def test_forward_guard_stage_extension_preserves_prefix_without_replay(tmp_path):
+    from src.engine.observation_source_quality_audit import _raw_generation
+    raw = _raw_path(tmp_path)
+    _write_lines(raw, [_event('10:00:00', 'ai_confirmed'),
+                      _event('10:01:00', 'real_weak_pullback_entry_block')])
+    args = dict(raw_path=raw, cache_dir=tmp_path/'cache', cache_name='forward',
+                target_date=TARGET_DATE, schema_version=15,
+                parse_payload=lambda r: r if r['stage']=='ai_confirmed' else None)
+    original, old = update_and_load_cached_event_rows(**args)
+    proof = {'from_schema':15, 'to_schema':17, 'raw_offset':old['raw_offset'],
+             'raw_generation':_raw_generation(raw), 'population_proof':'forward_only_stage_extension',
+             'historical_stage_coverage':'not_backfilled_before_raw_offset'}
+    with raw.open('a') as f:
+        f.write(json.dumps(_event('10:02:00','real_weak_pullback_entry_block'))+'\n')
+    parsed=[]
+    def parse(row):parsed.append(row);return row
+    rows, meta = update_and_load_cached_event_rows(**{**args,'schema_version':17,
+        'parse_payload':parse},verified_schema_migration=proof)
+    assert rows[:len(original)] == original and len(rows)==2
+    assert len(parsed)==1 and parsed[0]['emitted_at'].endswith('10:02:00')
+    assert not meta['rebuilt'] and meta['schema_migration_receipt']==proof
+    assert meta['appended_raw_lines']==1
+    _, later = update_and_load_cached_event_rows(**{**args,'schema_version':17,'parse_payload':parse})
+    assert later['schema_migration_receipt']['historical_stage_coverage']=='not_backfilled_before_raw_offset'
+
+
+def test_forward_guard_stage_extension_rejects_replaced_source(tmp_path):
+    import pytest
+    from src.engine.observation_source_quality_audit import _raw_generation
+    raw=_raw_path(tmp_path)
+    _write_lines(raw,[_event('10:00:00','ai_confirmed')])
+    args=dict(raw_path=raw,cache_dir=tmp_path/'cache',cache_name='forward',
+              target_date=TARGET_DATE,schema_version=15,parse_payload=lambda row:row)
+    _,old=update_and_load_cached_event_rows(**args)
+    proof={'from_schema':15,'to_schema':17,'raw_offset':old['raw_offset'],
+           'raw_generation':_raw_generation(raw),'population_proof':'forward_only_stage_extension',
+           'historical_stage_coverage':'not_backfilled_before_raw_offset'}
+    raw.unlink();_write_lines(raw,[_event('10:02:00','ai_confirmed')])
+    with pytest.raises(ValueError,match='forward_cache_schema_source_changed'):
+        update_and_load_cached_event_rows(**{**args,'schema_version':17},verified_schema_migration=proof)
+
+
+def test_guard_stages_survive_both_sentinel_cache_modes():
+    for stage in ['pre_submit_weak_context_late_entry_guard_block','real_weak_pullback_entry_block']:
+        for lossless in [False,True]:
+            payload=_event('10:00:00',stage,fields={'reason':'quality_guard_block'})
+            assert buy._payload_to_cache_row(payload,exclude_summary_stages=lossless)['stage']==stage

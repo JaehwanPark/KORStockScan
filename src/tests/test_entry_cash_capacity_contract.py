@@ -253,6 +253,23 @@ def test_legacy_preparation_is_coalesced_bounded_and_scope_checked(monkeypatch):
         handlers._reset_entry_capacity_receipts()
 
 
+def test_pending_preparation_replaces_obsolete_price_even_at_queue_capacity(monkeypatch):
+    handlers._reset_entry_capacity_receipts()
+    monkeypatch.setattr(handlers.time, "time", lambda: 1000.0)
+    monkeypatch.setattr(handlers, "_entry_capacity_receipt_key", lambda code, price: (code, price))
+    monkeypatch.setattr(handlers, "_is_any_simulated_position", lambda *args: False)
+    try:
+        for code in range(8):
+            assert handlers._request_entry_capacity_preparation({}, str(code), {"curr": 10000})
+        assert handlers._request_entry_capacity_preparation({}, '0', {"curr": 10001})
+        assert len(handlers._ENTRY_CAPACITY_PENDING) == 8
+        assert ('0', 10000) not in handlers._ENTRY_CAPACITY_PENDING
+        assert ('0', 10001) in handlers._ENTRY_CAPACITY_PENDING
+        assert not handlers._request_entry_capacity_preparation({}, 'extra', {"curr": 10000})
+    finally:
+        handlers._reset_entry_capacity_receipts()
+
+
 @pytest.mark.parametrize(
     "value,status,parsed",
     [

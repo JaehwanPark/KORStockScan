@@ -40,6 +40,8 @@ UPSTREAM_TERMINAL_STAGES = frozenset(
         "blocked_gap",
         "rising_missed_tick_speed_entry_block",
         "real_weak_ai_micro_entry_block",
+        "real_weak_pullback_entry_block",
+        "pre_submit_weak_context_late_entry_guard_block",
         "pre_submit_micro_unavailable_block",
         "rising_missed_reversal_pre_submit_block",
         "auth_zero_qty",
