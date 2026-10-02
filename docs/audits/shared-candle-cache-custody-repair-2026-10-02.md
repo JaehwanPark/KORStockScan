@@ -134,3 +134,25 @@ supplemental fix does not modify the Kiwoom wire/response/continuation contract.
 
 Immutable deployment and current PID acceptance for this new defect follow
 below; the earlier b096f7ca receipt is retained as prior evidence.
+
+Supplemental release **d19d0d7bf9d9bd5cb491c977648783ccffb11bdc**, root
+`/home/ubuntu/KORStockScan-runtime-releases/shared-candle-directory-20261002-d19d0d7b`,
+repeated **331 PASS/12.91s**. Compile/diff and print-only parser PASS. Source and
+consumer re-review found no remaining defects in this directory/file custody
+and PID presence scope. The authorized guarded restart succeeded at **16:57:14**,
+singleton Main **2909356**, start ticks **54866604**, exact-date bootstrap/native
+consumption PASS with no missing/mismatched env fields. Policy/PREOPEN/prepared
+five files, 416 independent pins and both cron hashes remain unchanged.
+
+Ubuntu process health at 16:58:38 PASS; current WS producer is bound to this
+PID/commit and connected. Live cache directory is Ubuntu/0700 and the closure
+census of 389 cache/lock files is entirely Ubuntu/0600. No production directory
+deletion or source timestamp change was used to validate first creation.
+The **17:00** scheduled Ubuntu sentinel/monitor completed **17:00:32** from this
+root; detector process/freshness checks PASS, and the prior-postclose terminal
+failure remains unchanged. The current monitor still reports unobservable
+funnel evidence (`no_identified_machine_evaluation`), not a trading success.
+Evidence: `tmp/shared-candle-directory-review-20261002/closure.json` and
+`data/runtime/startup_readiness/2026-10-02/shared_candle_directory_review/`.
+Live identical-request sharing, matched admission-rate reduction and economics
+remain unverified; the synthetic mixed-UID first-creation acceptance is complete.

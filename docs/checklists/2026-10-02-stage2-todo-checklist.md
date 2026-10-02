@@ -90,13 +90,14 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 
 ## 보조 AI PASS/VETO 원천·선택 보완
 
-- [ ] `[SharedCandleCustodyRepair1002] 공용 분봉 캐시의 혼합 사용자 소유권 보완·배포` (`Due: 2026-10-02`, `Slot: INTRADAY`, `TimeWindow: 16:17~17:00`, `Track: RuntimeStability`)
+- [x] `[SharedCandleCustodyRepair1002] 공용 분봉 캐시의 혼합 사용자 소유권 보완·배포` (`Due: 2026-10-02`, `Slot: INTRADAY`, `TimeWindow: 16:17~17:00`, `Track: RuntimeStability`)
   - Source: [분봉 캐시 소유권 수리](../audits/shared-candle-cache-custody-repair-2026-10-02.md). 사용자 보완·반복 리뷰·배포·재기동 승인.
   - Acceptance: directory UID/GID·0600·기존 lock inode와 원 receive-clock 보존, 권한 실패의 정상 admission/원자 발행 미수행·FD/temp cleanup·symlink 차단, 실제 root producer→ubuntu consumer 단일 합성 fetch를 검증한다. 정책/독립 pin/cron 보존과 immutable gate·guarded restart·exact-date PID 소비 뒤 기존 슬롯만 소유권 복구하고 다음 정기 report를 확인한다. 실물 동일 요청 join·budget 감소율·경제성은 자연 분모가 없으면 not_observed로 남긴다.
   - 코드 수용: 144+95=239 PASS, compile/diff PASS, 실제 혼합 UID fixture의 원 lock inode/0600/수신시각과 consumer 추가 fetch 0 확인. 배포·현재 자연 소비는 아래 감사 기록에서 별도로 종결한다.
   - 1차 소비·보완: aa6b0123/PID 2901939 bootstrap·consumed PASS, 정책 5파일/pin 416개/cron 불변. 368 슬롯 중 365 소유권 복구·새 PID cache writes ubuntu/0600, 16:30 정기 report DONE 확인. Ubuntu cron이 root PID의 EPERM을 종료로 오판한 consumer 결함을 추가 수리(원천 heartbeat/thread guard 유지), process-health 88 PASS; 이 보완을 포함한 최종 배포는 아래 감사 기록에서 확인한다.
   - 최종 종결: b096f7ca 불변 root 327 PASS/13.67s, guarded restart/PID 2904478/start ticks 54744253/당일 bootstrap·native consumed PASS. 정책 5파일/pin 416개/cron 보존, Ubuntu 직접 process health PASS, 16:40 정기 detector process/freshness PASS·sentinel/monitor 16:40:28 DONE. 캐시/lock 전부 ubuntu/0600, WS PID/commit 연결 확인. Monitor의 no_identified_machine_evaluation과 전일 postclose FAIL은 보존하며 자연 join·전체 감소율·경제성은 미확인으로 남긴다. 소유권/감시 결함 수리와 승인된 배포 수용을 종결한다.
   - 16:43 재리뷰 재개: 사용자 반복 리뷰·배포·재기동 승인으로 새 결함을 확인했다. 캐시 디렉터리 부재 시 root 첫 생성이 소유권을 root로 재설정하는 repro를 확인해 기존 stable ID를 재개한다. Parent custody·0700·directory symlink 차단/실패 시 정상 admission·FD cleanup 보완, 331 PASS와 실제 혼합 UID의 fresh/legacy directory fixture 수용 확인. 새 불변 배포·PID 소비 뒤 다시 종결하며 위 b096f7ca는 이전 receipt로 보존한다.
+  - 재리뷰 종결: d19d0d7b 불변 root 331 PASS/12.91s·compile/diff/parser PASS, 16:57:14 guarded restart/PID 2909356/start ticks 54866604/당일 bootstrap·consumed PASS. 정책 5파일/pin 416개/cron 불변, Ubuntu health·WS PID/commit 소비 확인, live directory ubuntu/0700·389 파일 ubuntu/0600. 17:00 정기 report 17:00:32 DONE·process/freshness PASS. 생산 캐시 삭제·clock 합성 없이 fresh/legacy directory 결함을 닫으며, 자연 join/전체 감소율/경제성 및 원 postclose FAIL·funnel unobservable은 별도 보존한다.
 
 - [x] `[SharedReadSelectorCustodyRepair1002] 배포 후 ubuntu cron의 릴리스 선택 파일 접근 복구` (`Due: 2026-10-02`, `Slot: INTRADAY`, `TimeWindow: 14:53~15:10`, `Track: RuntimeStability`)
   - Source: [선택 파일 소유권 사고·수리](../audits/shared-read-contention-repair-2026-10-02.md#selector-custody-incident-and-repair). 사용자 오류 복구 지시와 기존 보완·배포 승인.
