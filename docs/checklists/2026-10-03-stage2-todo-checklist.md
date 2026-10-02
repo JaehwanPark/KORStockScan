@@ -12,7 +12,7 @@
 
 ## 실행 항목
 
-- [ ] `[IntegratedWorkspaceBaseline1003] 기존 작업본 통합 commit·release 배포 및 기준선 청결 확인` (`Due: 2026-10-03`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: RuntimeStability`)
+- [x] `[IntegratedWorkspaceBaseline1003] 기존 작업본 통합 commit·release 배포 및 기준선 청결 확인` (`Due: 2026-10-03`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: RuntimeStability`)
   - Source: [통합 리뷰](../audits/integrated-workspace-baseline-review-2026-10-03.md).
   - Acceptance: 1945 tests PASS, compile/diff/parser PASS; immutable release HEAD/source/mount 검증, 공통 selector와 비활성 분석 service pin, cron/release-set PASS, 정책 hash 보존, trading PID 재기동 없음, git status 청결. 정확 commit/배포 결과는 `data/runtime/startup_readiness/2026-10-03/integrated_workspace_baseline/transition.json`에 보존한다.
-  - 완료 처리: 실행 영수증 확인 후 다음 원천 보완 작업을 별도 diff에서 진행한다. 미래 PREOPEN/PID는 이 항목의 완료 증거가 아니다.
+  - 완료: 통합 commit `24a4658d`, 08:30 KST 공통 route·비활성 분석 service 2개 pin 배포 PASS, 541개 정책/override/bootstrap hash 보존, 배포 후 workspace clean. 실제 service 재기동 0. 미래 PREOPEN/PID는 이 항목의 완료 증거가 아니다. 신규 원천 보완분은 별도 diff·격리 재생성으로 진행하고 배포를 대기한다.

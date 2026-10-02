@@ -29,6 +29,16 @@ Kiwoom 관련 기존 변경의 공식 근거는 [capacity 리뷰](entry-capacity
 
 ## 배포 경계와 영수증
 
-통합 commit의 detached managed worktree를 준비하고 runtime source 청결·공유 mount를 검증한 뒤 공통 selector를 기존 release-set/selection lock 아래 원자적으로 변경한다. 비활성 Widget 평가·machine 최종 분석 service는 기존 installer로 선택된 release에 pin한다. timer schedule과 매매 service pin/PID는 보존한다. 실제 transition/selector/route/service/policy hash 증거는 `data/runtime/startup_readiness/2026-10-03/integrated_workspace_baseline/`에 기록하며, 그 JSON의 commit/root가 배포의 정확한 소유자다.
+통합 commit의 detached managed worktree를 준비하고 runtime source 청결·공유 mount를 검증한 뒤 공통 selector를 기존 release-set/selection lock 아래 원자적으로 변경한다. 비활성 Widget 평가·machine 최종 분석 service는 현재 최우선 drop-in의 release 경로·commit 좌표만 갱신한다. 현재 200개 z prefix의 override가 기존 installer의 180개 z prefix보다 우선하므로 낮은 drop-in 추가로 배포했다고 판단하지 않았다. 두 최우선 파일을 백업하고 selection과 함께 기존 배포 lock 아래 갱신했으며 실패 시 원래 bytes를 복구하도록 처리했다. timer schedule과 매매 service pin/PID는 보존한다. 실제 transition/selector/route/service/policy hash 증거는 `data/runtime/startup_readiness/2026-10-03/integrated_workspace_baseline/`에 기록하며, 그 JSON의 commit/root가 배포의 정확한 소유자다.
 
 Selector 변경은 기동 중인 Widget PID 소비나 Main의 다음 PREOPEN 성공을 증명하지 않는다. selector·code 변경으로 이전 준비본의 release binding이 달라질 수 있으며, 다음 거래일 준비/검증은 기존 finalization/PREOPEN 소유자와 구분한다. 원천 결함 보완 후 재생성은 격리 출력에서 검증하고 신규 보완분 배포는 별도 지시까지 대기한다.
+
+## 실행 완료
+
+- 통합 commit: `24a4658db3ded4106446b30a954f33217af9042d`, 66 files.
+- 배포: 2026-10-03 08:30:10 KST, `integrated-workspace-baseline-20261003-24a4658d`.
+- immutable 동일 source의 배포 계약 재검증: **136 PASS / 6.19초**. 앞선 1945개 고유 tests와 중복이므로 합산해 새 표본으로 표시하지 않는다.
+- 공통 cron 8 routes·release-set PASS. 비활성 분석 service 2개 새 WorkingDirectory/ExecStart/commit pin 검증, timer active 유지. 정책/override/bootstrap 파일 **541개 SHA256 보존**.
+- Main PID 미소비, Widget PID **2744482**는 기존 `integrated-postclose-startup-20261001-0a8fa0a0` 유지. 매매 service 재기동 0회. 기존 failed Episode unit 3개는 별도 상태다.
+- 통합 commit 직후와 배포 직후 default workspace clean 확인. 이 완료 기록의 후속 문서 commit은 `src/deploy/restart.sh`를 변경하지 않으며, source release 선택 commit은 24a4658d로 유지한다. shared docs mount에 완료 기록이 반영된다.
+- 정확 영수증: [transition.json](/home/ubuntu/KORStockScan/data/runtime/startup_readiness/2026-10-03/integrated_workspace_baseline/transition.json), [acceptance.json](/home/ubuntu/KORStockScan/data/runtime/startup_readiness/2026-10-03/integrated_workspace_baseline/acceptance.json).
