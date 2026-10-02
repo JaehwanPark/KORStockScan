@@ -2918,7 +2918,8 @@ def test_episode_owner_identity_cannot_forge_collection_symbol(tmp_path):
     assert "999997" not in collection_symbols
 
 
-def test_prospective_widget_and_episode_target_date_episodes_create_anchors(tmp_path):
+@pytest.mark.parametrize("widget_schema", ["widget_symbol_signal_policy_research_v3", "widget_symbol_signal_policy_research_v4"])
+def test_prospective_widget_and_episode_target_date_episodes_create_anchors(tmp_path, widget_schema):
     target_date = "2026-08-14"
     report_root = tmp_path / "report"
     _write_json(
@@ -2926,7 +2927,7 @@ def test_prospective_widget_and_episode_target_date_episodes_create_anchors(tmp_
         / "widget_symbol_signal_policy_research"
         / f"widget_symbol_signal_policy_research_{target_date}.json",
         {
-            "schema": "widget_symbol_signal_policy_research_v3",
+            "schema": widget_schema,
             "end_date": target_date,
             "symbols": {
                 "111111": {

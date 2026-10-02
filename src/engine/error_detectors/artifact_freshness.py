@@ -8,9 +8,10 @@ import hashlib
 import json
 import math
 import os
+import re
 import time
 from collections import Counter
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -961,6 +962,217 @@ def _auxiliary_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
             "scopes": scopes, "runtime_effect": False}
 
 
+def _cancel_wait_monitor_source_date(root, day, *, data_root=None):
+    """Keep a native run's original date over midnight, including holidays."""
+    data_root = Path(data_root) if data_root is not None else Path(root)/'data'
+    previous = (datetime.fromisoformat(day) - timedelta(days=1)).date().isoformat()
+    for source_date in (day, previous):
+        path = data_root/'report/threshold_cycle_postclose_status'/f'threshold_cycle_postclose_{source_date}.status.json'
+        if path.exists() and not path.is_symlink():
+            try:
+                state, _ = _semantic_object(path, limit=1024*1024)
+                if (state.get('status') in {'running', 'producers_completed', 'succeeded', 'failed'}
+                    and state.get('target_date') == source_date and state.get('run_id')):
+                    return source_date
+            except (OSError, ValueError, TypeError):
+                pass
+    return day
+
+
+def _cancel_wait_native_execution(root, data_root, source_date):
+    """Read native wrapper receipts; cancel-wait has no launch-owned stage."""
+    result = {'status':'not_observed', 'source_date':source_date}
+    path = data_root/'report/threshold_cycle_postclose_status'/f'threshold_cycle_postclose_{source_date}.status.json'
+    if path.exists() or path.is_symlink():
+        state, sha = _semantic_object(path)
+        if state.get('target_date') != source_date:
+            raise ValueError('cancel_wait_native_run_date_invalid')
+        result.update(status=state.get('status'), status_sha256=sha, run_id=state.get('run_id'),
+                      code_commit=state.get('code_commit'))
+    log = root/'logs/threshold_cycle_postclose_cron.log'
+    if log.is_file() and not log.is_symlink():
+        before = log.stat()
+        with log.open('rb') as handle:
+            handle.seek(max(0, before.st_size - 4 * 1024 * 1024))
+            rows = handle.read().splitlines()
+        after = log.stat()
+        if (before.st_ino, before.st_size, before.st_mtime_ns) != (after.st_ino, after.st_size, after.st_mtime_ns):
+            result['command_status'] = 'generation_in_transition'
+            return result
+        for line in reversed(rows):
+            if b'[PERF] ' not in line:
+                continue
+            try:
+                metric = json.loads(line.split(b'[PERF] ', 1)[1])
+            except (ValueError, UnicodeError):
+                continue
+            if (metric.get('schema') != 'postclose_command_metrics_v1'
+                or metric.get('producer_module') != 'src.engine.automation.entry_cancel_wait_tuning'
+                or metric.get('target_date') != source_date
+                or (result.get('run_id') and metric.get('run_id') != result['run_id'])
+                or (result.get('code_commit') and metric.get('code_commit') != result['code_commit'])):
+                continue
+            result['command'] = metric
+            result['command_status'] = ('succeeded' if metric.get('measurement_complete') is True
+                and type(metric.get('exit_code')) is int and metric['exit_code'] == 0 else 'failed')
+            break
+    return result
+
+
+def _entry_cancel_wait_result_semantics(root, source_date, now=None, *, data_root=None):
+    from src.engine.automation import entry_cancel_wait_tuning as owner
+    root = Path(root)
+    data_root = Path(data_root) if data_root is not None else root/'data'
+    directory = data_root/'report/entry_cancel_wait_tuning'
+    path = directory/f'entry_cancel_wait_tuning_{source_date}.json'
+    policy_path = directory/f'entry_cancel_wait_policy_{source_date}.json'
+    result = {'status':'not_assessed', 'source_date':source_date, 'findings':[],
+              'artifact':str(path), 'runtime_effect':False, 'actual_pid_consumed':False,
+              'whole_native_chain_done_claimed':False}
+    reading_consumers = False
+    try:
+        execution = _cancel_wait_native_execution(root, data_root, source_date)
+        result['execution'] = execution
+        if execution.get('command_status') == 'generation_in_transition':
+            return {**result, 'status':'unobservable', 'reason':'generation_in_transition'}
+        if execution.get('command_status') == 'failed':
+            return {**result, 'status':'source_invalid', 'findings':['cancel_wait_execution_failed']}
+        if not path.exists() and not path.is_symlink():
+            if execution.get('command_status') == 'succeeded':
+                return {**result, 'status':'source_invalid', 'findings':['cancel_wait_completed_report_missing']}
+            current = now or datetime.now(ZoneInfo('Asia/Seoul'))
+            current = current.replace(tzinfo=ZoneInfo('Asia/Seoul')) if current.tzinfo is None else current.astimezone(ZoneInfo('Asia/Seoul'))
+            due = source_date < current.date().isoformat() or (source_date == current.date().isoformat() and current.hour >= 20)
+            return {**result, 'status':'pending' if due else 'not_yet_due'}
+        payload, report_sha = _semantic_object(path)
+        result['report_sha256'] = report_sha
+        if payload.get('date') != source_date:
+            raise ValueError('cancel_wait_report_date_or_hash_invalid')
+        if payload.get('reconciliation_contract_version') is None:
+            return {**result, **owner.validated_reconciliation_view(payload), 'findings':[]}
+        if not policy_path.exists() and execution.get('status') == 'running':
+            return {**result, 'status':'pending', 'reason':'policy_publication_pending'}
+        policy, policy_sha = _semantic_object(policy_path)
+        view = owner.validated_reconciliation_view(payload, policy, data_root=data_root,
+                                                    read_object=_semantic_object)
+        result.update(view, findings=list(view['findings']), policy_sha256=policy_sha)
+        if view.get('status') == 'unobservable':
+            return result
+        # Recheck the multi-file publication after reading the bound sources.
+        if (_semantic_object(path, hash_only=True)[1] != report_sha
+            or _semantic_object(policy_path, hash_only=True)[1] != policy_sha):
+            return {**result, 'status':'unobservable', 'findings':[], 'reason':'generation_in_transition'}
+        if (result['findings'] and execution.get('status') == 'running'
+            and execution.get('command_status') != 'succeeded'
+            and set(result['findings']) <= {'cancel_wait_stale_source_generation', 'cancel_wait_policy_binding_invalid'}):
+            return {**result, 'status':'pending', 'findings':[], 'reason':'producer_generation_pending'}
+        reuse_path = path.with_suffix('.reuse-contract.json')
+        if reuse_path.exists() or reuse_path.is_symlink():
+            reuse, _ = _semantic_object(reuse_path)
+            result['reuse'] = {'artifact_sha256':reuse.get('artifact_sha256'),
+                               'preflight_fingerprint':reuse.get('preflight_fingerprint')}
+            if (reuse.get('artifact_sha256') != report_sha
+                or reuse.get('preflight_fingerprint') != payload.get('preflight_fingerprint')):
+                result['findings'].append('cancel_wait_reuse_generation_invalid')
+        if view.get('findings'):
+            result['consumers'] = {'status':'not_assessed'}
+            return result
+        summary_path = data_root/'report/runtime_approval_summary'/f'runtime_approval_summary_{source_date}.json'
+        tower_path = data_root/'report/tuning_performance_control_tower'/f'tuning_performance_control_tower_{source_date}.json'
+        checklist = root/'docs/checklists'/f"{policy['effective_date']}-stage2-todo-checklist.md"
+        native_path = data_root/'report/threshold_cycle_postclose_status'/f'threshold_cycle_postclose_{source_date}.status.json'
+        def stamp(candidate):
+            actual = existing_or_gzip_path(candidate)
+            try:
+                value = actual.lstat()
+            except FileNotFoundError:
+                return None
+            return (str(actual), value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns, actual.is_symlink())
+        consumers = (summary_path, tower_path, checklist)
+        generation_paths = (*consumers, path, policy_path, native_path, reuse_path)
+        consumer_generation = tuple(stamp(candidate) for candidate in generation_paths)
+        result['consumers'] = dict(status='pending', summary='pending', tower='pending', checklist='pending')
+        reading_consumers = True
+        completed = execution.get('status') in {'producers_completed', 'succeeded'} and bool(execution.get('run_id'))
+        summary_sha = None
+        if summary_path.exists() or summary_path.is_symlink():
+            summary, summary_sha = _semantic_object(summary_path)
+            source = (summary.get('sources') or {}).get('entry_cancel_wait') or {}
+            summary_view = (source.get('economic_evidence') or {}).get('cancel_wait_reconciliation')
+            if summary.get('date') == source_date and source.get('sha256') == report_sha and summary_view == view:
+                result['consumers']['summary'] = 'verified'
+            elif source.get('sha256') == report_sha:
+                result['findings'].append('cancel_wait_consumer_projection_invalid')
+        expected = owner.handoff_view(payload, policy, policy_path)
+        if tower_path.exists() or tower_path.is_symlink():
+            tower, _ = _semantic_object(tower_path)
+            observed = tower.get('entry_cancel_wait_economic_tuning')
+            # Older successor generations are pending during the native chain.
+            receipt = tower.get('source_generation_contract') or {}
+            sources = receipt.get('sources') or {}
+            bound = (receipt.get('schema') == 'postclose_summary_sources_v1'
+                and receipt.get('source_date') == source_date
+                and (sources.get('entry_cancel_wait_tuning') or sources.get('entry_cancel_wait') or {}).get('sha256') == report_sha
+                and (sources.get('entry_cancel_wait_policy') or {}).get('sha256') == policy_sha
+                and summary_sha is not None
+                and (sources.get('runtime_approval_summary') or {}).get('sha256') == summary_sha)
+            if tower.get('date') == source_date and bound and observed == expected:
+                result['consumers']['tower'] = 'verified'
+            elif bound:
+                result['findings'].append('cancel_wait_consumer_projection_invalid')
+        if checklist.exists() or checklist.is_symlink():
+            if checklist.is_symlink() or checklist.stat().st_size > 8 * 1024 * 1024:
+                raise ValueError('cancel_wait_checklist_size_invalid')
+            with checklist.open('rb') as handle:
+                raw = handle.read(8 * 1024 * 1024 + 1)
+            if len(raw) > 8 * 1024 * 1024:
+                raise ValueError('cancel_wait_checklist_size_invalid')
+            text = raw.decode('utf-8')
+            markers = re.findall(r'<!-- POSTCLOSE_SUMMARY_SOURCES (.*?) -->', text)
+            receipt = json.loads(markers[0]) if len(markers) == 1 else {}
+            sources = receipt.get('sources') or {}
+            bound = (receipt.get('schema') == 'postclose_summary_sources_v1'
+                and receipt.get('source_date') == source_date
+                and (sources.get('entry_cancel_wait_tuning') or {}).get('sha256') == report_sha
+                and (sources.get('entry_cancel_wait_policy') or {}).get('sha256') == policy_sha
+                and summary_sha is not None
+                and (sources.get('runtime_approval_summary') or {}).get('sha256') == summary_sha)
+            if (bound and text.count(owner.checklist_handoff(expected)) == 1
+                and text.count('<!-- entry_cancel_wait_handoff:start -->') == 1
+                and text.count('<!-- entry_cancel_wait_handoff:end -->') == 1):
+                result['consumers']['checklist'] = 'verified'
+        if all(result['consumers'][stage] == 'verified' for stage in ('summary', 'tower', 'checklist')):
+            result['consumers']['status'] = 'verified'
+        elif completed:
+            result['findings'].append('cancel_wait_consumer_projection_invalid')
+        native_sha = (_semantic_object(native_path, hash_only=True)[1]
+            if native_path.exists() or native_path.is_symlink() else None)
+        if (tuple(stamp(candidate) for candidate in generation_paths) != consumer_generation
+            or _semantic_object(path, hash_only=True)[1] != report_sha
+            or _semantic_object(policy_path, hash_only=True)[1] != policy_sha
+            or native_sha != execution.get('status_sha256')
+            or owner.validated_reconciliation_view(payload, policy, data_root=data_root,
+                                                  read_object=_semantic_object) != view):
+            return {**result, 'status':'unobservable', 'findings':[], 'reason':'generation_in_transition'}
+        if result['findings']:
+            result['status'] = 'source_invalid'
+        result['findings'] = sorted(set(result['findings']))
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        failure = _semantic_failure(exc)
+        if reading_consumers and failure['status'] != 'unobservable':
+            try:
+                changed = tuple(stamp(candidate) for candidate in generation_paths) != consumer_generation
+            except OSError:
+                changed = False
+            if changed:
+                failure = _semantic_failure(ValueError('semantic_generation_changed_during_read'))
+            else:
+                failure['findings'] = sorted(set(result['findings'] + ['cancel_wait_consumer_projection_invalid']))
+                failure['error'] = str(exc)[:160]
+        result.update(failure)
+    return result
+
+
 def _postclose_handoff_semantics(root, source_date, now):
     """Use native read-only closure/readiness checks; never prepare or apply."""
     from src.engine.automation import next_preopen_readiness as readiness
@@ -1017,6 +1229,18 @@ def _postclose_handoff_semantics(root, source_date, now):
 
 
 def _semantic_alerts(name, semantics, source_date):
+    if name == "entry_cancel_wait_tuning":
+        if semantics.get("status") != "source_invalid":
+            return []
+        return [{"source_date":source_date, "stage":name, "scope":"report",
+            "reason":reason if reason.startswith("cancel_wait_") else "cancel_wait_reconciliation_ledger_invalid",
+            "status":semantics["status"], "artifact":semantics.get("artifact"),
+            "generation":semantics.get("report_sha256"),
+            "affected":semantics.get("unclassified_submission_count"),
+            "eligible":semantics.get("daily_submitted_parent_count"),
+            "owner":"EntryCancelWaitSourceReconciliation1002",
+            "closure_test":"same_date_original_source_ledger_policy_and_consumer_projection"}
+            for reason in semantics.get("findings", [])]
     actionable = set("""
         auxiliary_candidate_population_invalid auxiliary_completed_report_generation_mismatch
         auxiliary_completed_report_missing auxiliary_execution_failed auxiliary_economic_denominator_invalid
@@ -1967,6 +2191,13 @@ class ArtifactFreshnessDetector(BaseDetector):
             else:
                 details[f"{aid}_status"] = "pass"
 
+        cancel_wait_day = _cancel_wait_monitor_source_date(PROJECT_ROOT, today)
+        cancel_wait = None
+        if trading_day or cancel_wait_day != today:
+            cancel_wait = _entry_cancel_wait_result_semantics(PROJECT_ROOT, cancel_wait_day, now_dt)
+            details["entry_cancel_wait_result_semantics"] = cancel_wait
+            if cancel_wait["findings"]:
+                warnings.append("entry_cancel_wait_result_semantics: " + ", ".join(cancel_wait["findings"]))
         if trading_day:
             holding_semantics = _holding_profit_exit_semantics(PROJECT_ROOT, today)
             details["holding_profit_exit_semantics"] = holding_semantics
@@ -1989,14 +2220,18 @@ class ArtifactFreshnessDetector(BaseDetector):
             details["semantic_alerts"] = [alert for name, semantics in (
                 ("legacy_machine_report", machine_semantics),
                 ("main_auxiliary_policy", auxiliary_semantics),
-                ("postclose_handoff", handoff))
-                for alert in _semantic_alerts(name, semantics, today)]
+                ("postclose_handoff", handoff),
+                ("entry_cancel_wait_tuning", cancel_wait))
+                for alert in _semantic_alerts(name, semantics, cancel_wait_day if name == "entry_cancel_wait_tuning" else today)]
             quantity_semantics = _initial_quantity_semantics(
                 PROJECT_ROOT, today, now_epoch=now_ts)
             details["initial_quantity_semantics"] = quantity_semantics
             if quantity_semantics["findings"]:
                 warnings.append("initial_quantity_semantics: " + ", ".join(
                     sorted(set(quantity_semantics["findings"]))))
+
+        if not trading_day and cancel_wait is not None:
+            details["semantic_alerts"] = _semantic_alerts("entry_cancel_wait_tuning", cancel_wait, cancel_wait_day)
 
         severity, summary = self._classify(issues, warnings)
         return DetectionResult(

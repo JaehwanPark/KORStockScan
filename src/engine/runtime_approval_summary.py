@@ -674,9 +674,25 @@ def _first_blocker(owner: str, payload: dict[str, Any]) -> str | None:
     return str(value) if value is not None else None
 
 
-def _economic_projection(owner: str, payload: dict[str, Any]) -> dict[str, Any]:
+def _economic_projection(owner: str, payload: dict[str, Any], *, data_root=None) -> dict[str, Any]:
     economic = _economic_section(owner, payload)
     status = _comparison_status(owner, payload)
+    reconciliation = None
+    if owner == "entry_cancel_wait":
+        from src.engine.automation.entry_cancel_wait_tuning import validated_reconciliation_view
+        reconciliation = validated_reconciliation_view(payload, data_root=data_root)
+        if reconciliation.get("findings") or reconciliation.get("status") == "unobservable" or reconciliation.get("historical_state") == "source_gap":
+            status = "source_gap"
+        elif reconciliation.get("historical_state") == "waiting_outcome":
+            status = "pending_maturity"
+        elif reconciliation.get("daily_zero_is_verified") is True:
+            status = "insufficient_sample"
+        elif reconciliation.get("evaluation_status") == "economic_improvement_validated":
+            status = "validated_edge"
+        elif reconciliation.get("evaluation_status") in {"model_unvalidated", "waiting_outcome"}:
+            status = "pending_maturity"
+        elif reconciliation.get("evaluation_status") == "source_only_sequential_excluded":
+            status = "unsupported_scope"
     recommended = _dict_value(payload, "recommended_policy")
     policy_allowed_values = (
         (
@@ -705,6 +721,9 @@ def _economic_projection(owner: str, payload: dict[str, Any]) -> dict[str, Any]:
         economic.get("completed_candidate_count"), economic.get("applicable_receipt_count"),
         economic.get("eligible_sample_count"), economic.get("sample_count"),
     )
+    if reconciliation and reconciliation.get("status") != "not_evaluated_legacy":
+        paired_sample_count = economic.get("paired_count")
+        candidate_count = 1 if payload.get("economic_tuning_input_allowed") is True and isinstance(economic.get("selected"), dict) else 0
     source_day_count = _first_nonempty(
         economic.get("source_date_count"), economic.get("economic_source_date_count"),
         len(economic.get("source_counts") or {}) if isinstance(economic.get("source_counts"), dict) else None,
@@ -723,6 +742,12 @@ def _economic_projection(owner: str, payload: dict[str, Any]) -> dict[str, Any]:
         economic.get("future_source_contract_verified"),
         economic.get("producer_consumer_contract_verified"),
     ) is True
+    if reconciliation and reconciliation.get("status") in {"incumbent_carry", "candidate_selected"}:
+        future_contract_verified = True
+    if reconciliation and reconciliation.get("findings"):
+        first_blocker = reconciliation["findings"][0]
+    elif reconciliation and reconciliation.get("status") == "unobservable":
+        first_blocker = reconciliation.get("reason") or "cancel_wait_source_unobservable"
     if status == "pending_maturity" and not future_contract_verified:
         status = "source_gap"
         first_blocker = first_blocker or "future_generation_contract_unverified"
@@ -771,6 +796,7 @@ def _economic_projection(owner: str, payload: dict[str, Any]) -> dict[str, Any]:
     else:
         handoff = "not_applicable"
     return {
+        **({"cancel_wait_reconciliation": reconciliation} if reconciliation is not None else {}),
         "comparison_status": status,
         "diagnostic_terminal_proxy": economic.get("diagnostic_terminal_proxy"),
         "diagnostic_machine_selection": economic.get("diagnostic_machine_selection"),
@@ -985,7 +1011,7 @@ def build_runtime_approval_summary(
             "consumer_schema": payload.get("consumer_schema"),
         }
         if owner in PRIMARY_DIRECT_OWNERS:
-            projection = _economic_projection(owner, payload)
+            projection = _economic_projection(owner, payload, data_root=DATA_DIR if owner == "entry_cancel_wait" else None)
             row["economic_evidence"] = projection
             row["policy_owner"] = POLICY_OWNER_BY_SOURCE.get(owner)
             if applicability == "retired_not_applicable":
@@ -998,6 +1024,11 @@ def build_runtime_approval_summary(
                     "candidate_count": 0,
                 })
                 row["policy_owner"] = None
+        if owner == "pre_submit_delay":
+            from src.engine.scalping.pre_submit_delay_tuning import price_pattern_projection
+            row["price_pattern_analysis"] = price_pattern_projection(payload)
+            if row["price_pattern_analysis"]["status"] == "source_invalid":
+                row["error"] = error = "price_pattern_contract_invalid"
         sources[owner] = row
         if required and error:
             blockers.append(f"{owner}:{error}")
@@ -1401,6 +1432,21 @@ def build_runtime_approval_summary(
             f"`{economic.get('comparison_status') or '-'}` | `{economic.get('policy_handoff_state') or '-'}` | "
             f"`{economic.get('first_blocker') or '-'}` |"
         )
+    delay_analysis = sources.get("pre_submit_delay", {}).get("price_pattern_analysis") or {}
+    delay_selection = delay_analysis.get("selection") or {}
+    delay_validation = delay_selection.get("validation_statistics") or {}
+    lines.extend([
+        "", "## First-submit price pattern", "",
+        f"- analysis: `{delay_analysis.get('status', 'not_evaluated_legacy')}`; "
+        f"complete: `{delay_analysis.get('analysis_complete', False)}`",
+        f"- paired quote comparisons: `{delay_analysis.get('paired_comparison_count', 0)}`; "
+        f"research recommendation seconds: `{delay_analysis.get('recommended_delay_sec')}`",
+        f"- pattern validation: `{delay_selection.get('status', 'not_evaluated')}`; "
+        f"paired/eligible: `{delay_validation.get('paired_count', 0)}/{delay_validation.get('eligible_opportunity_count', 0)}`; "
+        f"mean/p10/p90 improvement bp: `{delay_validation.get('mean_paired_price_improvement_bp')}/"
+        f"{delay_validation.get('p10_price_improvement_bp')}/{delay_validation.get('p90_price_improvement_bp')}`",
+        "- authority: price-path diagnostic only; policy selection and realized economics are separate",
+    ])
     if blockers:
         lines.extend(["", "## Blocking reasons", *[f"- `{value}`" for value in blockers]])
     _atomic_write(md_path, "\n".join(lines) + "\n")

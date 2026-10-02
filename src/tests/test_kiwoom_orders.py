@@ -364,6 +364,10 @@ def test_get_deposit_applies_operator_floor_to_valid_kt00001_amount(monkeypatch)
 
     assert kiwoom_orders.get_deposit("TOKEN") == 3_000_000
     meta = kiwoom_orders.get_last_deposit_meta()
+    receipt = meta.pop("deposit_source_receipt")
+    assert receipt["raw_amount"] == 1_078_208
+    assert len(receipt["generation"]) == len(receipt["scope_sha256"]) == 64
+    assert receipt["observed_epoch"] > 0
     assert meta == {
         "source": "api_fresh",
         "amount": 3_000_000,
@@ -1859,3 +1863,62 @@ def test_get_deposit_returns_auth_failure_when_token_refresh_raises(
     errors = kiwoom_orders.get_last_deposit_errors()
     assert errors[-1]["return_code"] == "8005"
     assert kiwoom_orders.is_auth_failure_error(errors[-1]) is True
+
+
+
+def test_deposit_original_receipt_survives_cache_diagnostics(monkeypatch):
+    orders = kiwoom_orders
+    orders.reset_orderable_amount_cache()
+    monkeypatch.setattr(orders,"_LAST_SUCCESSFUL_DEPOSIT_BY_KEY",{})
+    monkeypatch.setattr(orders.time,"time",lambda:1000.0)
+    key=orders._deposit_cache_key("fixture-token")
+    orders._remember_successful_deposit(10000,cache_key=key,loop_cache_source="api_fresh")
+    receipt=orders._deposit_source_receipt(key)
+    assert receipt["observed_epoch"]==1000
+    orders._apply_kt00001_orderable_amount_floor(10000,source="api_fresh",source_receipt=receipt)
+    identity=orders.entry_capacity_deposit_identity("fixture-token")
+    orders._apply_kt00001_orderable_amount_floor(10000,source="loop_cache",source_receipt=receipt,age_sec=.5,cache_hit=True)
+    assert orders.entry_capacity_deposit_identity("fixture-token")==identity
+    assert orders.entry_capacity_deposit_identity("different-token")!=identity
+    orders._remember_successful_deposit(10000,cache_key=key,loop_cache_source="api_fresh")
+    updated=orders._deposit_source_receipt(key)
+    assert updated["generation"]!=receipt["generation"]
+    orders._apply_kt00001_orderable_amount_floor(10000,source="api_fresh",source_receipt=updated)
+    assert orders.entry_capacity_deposit_identity("fixture-token")!=identity
+    orders.reset_orderable_amount_cache()
+
+
+def test_unknown_or_fallback_deposit_metadata_keeps_conservative_identity(monkeypatch):
+    orders=kiwoom_orders
+    meta={"source":"loop_cache","age_sec":.5,"cache_hit":True,"fallback_used":False,"amount":10000}
+    monkeypatch.setattr(orders,"get_last_deposit_meta",lambda:meta)
+    assert orders.entry_capacity_deposit_identity("fixture-token")==meta
+    meta.update(source="cooldown_fallback",fallback_used=True)
+    assert orders.entry_capacity_deposit_identity("fixture-token")==meta
+
+
+def test_real_deposit_cache_retains_its_own_receipt_and_original_clock(monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(kiwoom_orders.time, "time", lambda: clock[0])
+    monkeypatch.setattr(sniper_config, "CONF", {"VIRTUAL_ORDERABLE_AMOUNT": 0})
+    monkeypatch.setattr(kiwoom_orders.kiwoom_utils, "get_api_url", lambda path: "https://example.test" + path)
+    posts = []
+    class Response:
+        status_code = 200
+        def json(self):
+            return {"return_code": 0, "ord_alow_amt": "10000"}
+    monkeypatch.setattr(kiwoom_orders.requests, "post", lambda *a, **kw: posts.append(kw) or Response())
+    assert kiwoom_orders.get_deposit("fixture-token") == 10000
+    first = kiwoom_orders.get_last_deposit_meta()["deposit_source_receipt"]
+    exposed = kiwoom_orders.get_last_deposit_meta()
+    exposed["deposit_source_receipt"]["generation"] = "c" * 64
+    assert kiwoom_orders.get_last_deposit_meta()["deposit_source_receipt"] == first
+    # A separate known-success record must not relabel an older cached value.
+    kiwoom_orders._remember_successful_deposit(10000, cache_key="token:fixture-token")
+    clock[0] += .5
+    assert kiwoom_orders.get_deposit("fixture-token") == 10000
+    cached = kiwoom_orders.get_last_deposit_meta()
+    assert cached["source"] == "loop_cache"
+    assert cached["deposit_source_receipt"] == first
+    assert cached["deposit_source_receipt"]["observed_epoch"] == 1000
+    assert len(posts) == 1

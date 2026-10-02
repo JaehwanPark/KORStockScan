@@ -577,7 +577,10 @@ def get_last_deposit_errors():
 
 def get_last_deposit_meta():
     """최근 주문가능금액 조회 출처와 cache 상태를 반환합니다."""
-    return dict(_LAST_DEPOSIT_META)
+    meta = dict(_LAST_DEPOSIT_META)
+    if isinstance(meta.get("deposit_source_receipt"), dict):
+        meta["deposit_source_receipt"] = dict(meta["deposit_source_receipt"])
+    return meta
 
 
 def reset_orderable_amount_cache():
@@ -621,6 +624,31 @@ def _set_last_deposit_meta(
     return meta
 
 
+def entry_capacity_deposit_identity(token):
+    """Normalize delivery diagnostics only for a proven original deposit receipt."""
+    meta = get_last_deposit_meta()
+    receipt = meta.get("deposit_source_receipt")
+    expected_scope = hashlib.sha256(_deposit_cache_key(token).encode()).hexdigest()
+    if (meta.get("source") not in {"api_fresh", "loop_cache"}
+            or meta.get("fallback_used") is not False
+            or not isinstance(receipt, dict)
+            or receipt.get("scope_sha256") != expected_scope
+            or not re.fullmatch(r"[0-9a-f]{64}", str(receipt.get("generation") or ""))
+            or type(receipt.get("observed_epoch")) not in (int, float)
+            or not 0 < receipt["observed_epoch"] <= time.time()
+            or receipt.get("raw_amount") != meta.get("raw_amount")):
+        return meta  # Unknown/fallback provenance retains conservative invalidation.
+    return {key: value for key, value in meta.items()
+            if key not in {"age_sec", "cache_hit", "source"}}
+
+
+def _deposit_source_receipt(cache_key, *, loop_cached=False):
+    with _ORDERABLE_AMOUNT_CACHE_LOCK:
+        records = _ORDERABLE_AMOUNT_CACHE if loop_cached else _LAST_SUCCESSFUL_DEPOSIT_BY_KEY
+        return dict((records.get(cache_key) or {}).get(
+            "source_receipt") or {})
+
+
 def _apply_kt00001_orderable_amount_floor(
     amount,
     *,
@@ -628,6 +656,7 @@ def _apply_kt00001_orderable_amount_floor(
     age_sec=None,
     cache_hit=False,
     fallback_used=False,
+    source_receipt=None,
 ):
     """Apply the operator-approved live budget floor only to valid kt00001 values."""
     global _LAST_DEPOSIT_FLOOR_LOG_MARKER
@@ -661,6 +690,7 @@ def _apply_kt00001_orderable_amount_floor(
             "minimum_floor_applied": floor_applied,
             "minimum_floor_authority": "operator_approved_2026_07_22",
             "minimum_floor_rollback_krw": 0,
+            **({"deposit_source_receipt": dict(source_receipt)} if source_receipt else {}),
         },
     )
     marker = (raw_amount, floor_amount)
@@ -1038,6 +1068,7 @@ def _store_loop_cached_deposit(amount, *, cache_key, source="api_fresh", now_ts=
             "amount": normalized,
             "updated_at": float(now_ts),
             "source": str(source or "api_fresh"),
+            "source_receipt": _deposit_source_receipt(cache_key),
         }
 
 
@@ -1050,13 +1081,20 @@ def _remember_successful_deposit(amount, *, cache_key=None, loop_cache_source=No
         normalized = 0
     if normalized <= 0:
         return
+    observed_epoch = time.time()
     _LAST_SUCCESSFUL_DEPOSIT = normalized
-    _LAST_SUCCESSFUL_DEPOSIT_AT = time.time()
+    _LAST_SUCCESSFUL_DEPOSIT_AT = observed_epoch
     if cache_key:
-        _LAST_SUCCESSFUL_DEPOSIT_BY_KEY[cache_key] = {
-            "amount": normalized,
-            "updated_at": _LAST_SUCCESSFUL_DEPOSIT_AT,
-        }
+        scope = hashlib.sha256(str(cache_key).encode()).hexdigest()
+        receipt = {"scope_sha256": scope, "raw_amount": normalized,
+                   "observed_epoch": observed_epoch,
+                   "generation": hashlib.sha256(
+                       f"{os.getpid()}:{time.monotonic_ns()}:{scope}".encode()).hexdigest()}
+        with _ORDERABLE_AMOUNT_CACHE_LOCK:
+            _LAST_SUCCESSFUL_DEPOSIT_BY_KEY[cache_key] = {
+                "amount": normalized, "updated_at": observed_epoch,
+                "source_receipt": receipt,
+            }
     _DEPOSIT_API_COOLDOWN_UNTIL = 0.0
     _DEPOSIT_API_COOLDOWN_REASON = ""
     if loop_cache_source:
@@ -1064,7 +1102,7 @@ def _remember_successful_deposit(amount, *, cache_key=None, loop_cache_source=No
             normalized,
             cache_key=cache_key or "orderable_amount",
             source=loop_cache_source,
-            now_ts=_LAST_SUCCESSFUL_DEPOSIT_AT,
+            now_ts=observed_epoch,
         )
 
 
@@ -1132,6 +1170,7 @@ def _get_deposit_real(token, cache_key):
             source="loop_cache",
             age_sec=loop_cached_age,
             cache_hit=True,
+            source_receipt=_deposit_source_receipt(cache_key, loop_cached=True),
         )
 
     if _DEPOSIT_API_COOLDOWN_UNTIL > now_ts:
@@ -1233,6 +1272,7 @@ def _get_deposit_real(token, cache_key):
                 return _apply_kt00001_orderable_amount_floor(
                     amount,
                     source="api_fresh",
+                    source_receipt=_deposit_source_receipt(cache_key) if amount > 0 else None,
                 )
 
             err_msg = data.get("return_msg") or data.get("err_msg") or "상세 사유 없음"

@@ -5,7 +5,306 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone, timedelta
 
+import pytest
+
 from src.engine.scalping import pre_submit_delay_tuning as delay
+
+
+def _price_pattern_fixture(tmp_path, monkeypatch, records, *, write=False):
+    """Lossless forward-day observations, with no order/fill/exit receipts."""
+    from src.engine.pipeline_event_summary import execution_projection_identity
+
+    monkeypatch.setattr(delay, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(delay, "REPORT_DIR", tmp_path / "report/pre_submit_delay_tuning")
+    monkeypatch.setattr(delay, "POLICY_DIR", tmp_path / "threshold_cycle/pre_submit_delay_policy")
+    day = "2026-10-02"
+    directory = tmp_path / "threshold_cycle" / f"date={day}" / "family=pre_submit_delay"
+    directory.mkdir(parents=True, exist_ok=True)
+    events = []
+    epoch = datetime(2026, 10, 2, 9, tzinfo=delay.KST).timestamp()
+    for index, record in enumerate(records):
+        stamp = epoch + record.get("offset", index * 300)
+        prices = record["prices"]
+        base = prices.get(0, 10000)
+        frozen_type = delay.decision_type_snapshot(
+            price=base, ask=base, bid=base - 1, venue="KRX", session="KRX_REGULAR")
+        commit = {
+            "delay_intent_id": f"intent-{index}", "entry_action": "ENTER_NOW",
+            "auxiliary_effective_action": "PASS", "owner": "main_scalping",
+            "planned_qty": 500, "route": "KRX_NXT_INTEGRATED",
+            "market_session_bucket": "KRX_REGULAR", "decision_committed_at_epoch": stamp,
+            "quote_transport_epoch": 7, "delay_policy_sha256": "parent-delay",
+            "original_machine_observation_sha256": record.get("machine", delay._digest(index)),
+            "price_cap": record.get("cap", base), "delay_decision_type": frozen_type,
+            **record.get("commit_overrides", {}),
+        }
+        commit["decision_source_sha256"] = delay.decision_source_sha256(commit)
+        stages = [("pre_submit_delay_committed", commit)]
+        for second, price in prices.items():
+            quote = {
+                "delay_intent_id": commit["delay_intent_id"], "target_delay_sec": second,
+                "actual_offset_sec": second, "quote_observed_at_epoch": stamp + second,
+                "decision_source_sha256": commit["decision_source_sha256"],
+                "quote_transport_epoch": 7, "route": commit["route"], "quote_route": commit["route"],
+                "ask_price": price, "best_bid": price - 1, "ask_qty": 1,
+                "ws_last_0d_epoch": stamp + second - .2,
+                "quote_valid": True, "quote_consistency_state": "single_source",
+                "route_depth_source_sha256": "a" * 64,
+                **record.get("quote_overrides", {}).get(second, {}),
+            }
+            quote["quote_source_sha256"] = delay.quote_source_sha256(quote)
+            stages.append(("pre_submit_delay_quote_observed", quote))
+        for stage, fields in stages:
+            event = {
+                "schema_version": 1, "event_type": "threshold_cycle_event",
+                "family": delay.FAMILY, "pipeline": "entry", "stage": stage,
+                "stock_name": "fixture", "stock_code": record.get("code", "005930"),
+                "record_id": index + 1, "fields": fields,
+                "emitted_at": datetime.fromtimestamp(stamp, delay.KST).isoformat(), "emitted_date": day,
+            }
+            event["execution_source_event_sha256"] = execution_projection_identity(event)
+            events.append(event)
+    (directory / "part-execution-fixture.jsonl").write_text(
+        "".join(json.dumps(row) + "\n" for row in events), encoding="utf-8")
+    return delay.build_report(day, effective_date="2026-10-05", write=write)
+
+
+def test_price_pattern_computes_without_actual_orders_or_terminal(tmp_path, monkeypatch):
+    report = _price_pattern_fixture(tmp_path, monkeypatch, [
+        {"prices": {0: 10000, 30: 9950, 60: 10050, 120: 10000, 180: 9900}},
+    ], write=True)
+    price = report["price_pattern_analysis"]
+    assert price["status"] == "computed" and price["analysis_complete"] is True
+    assert [row["mean_paired_price_improvement_bp"] for row in price["candidate_grid"]] == [0, 50, -50, 0, 100]
+    assert price["candidate_grid"][2]["price_cap_exceeded_count"] == 1
+    assert price["candidate_grid"][1]["paired_count"] == 1  # Depth 1 vs planned qty 500.
+    assert price["examples"][0]["price_change_bp"] == -50
+    assert price["examples"][0]["frozen_spread_bp"] is not None
+    assert len(price["examples"]) <= 8
+    assert report["terminal_observation_count"] == 0
+    assert report["first_blocker"] == "exact_submit_terminal_receipt_missing"
+    assert report["selected_delay_sec"] is None
+    assert all(row["paired_net_ev_delta_pct"] is None for row in report["candidate_grid"])
+    assert delay.price_pattern_projection(report)["analysis_complete"] is True
+    policy = json.loads(delay.policy_path("2026-10-02").read_text())
+    assert policy["runtime_apply_allowed"] is False
+    assert policy["report_sha256"] == delay._digest({k: v for k, v in report.items() if k != "policy_sha256"})
+    from src.engine.automation import postclose_summary_handoff as stages, runtime_policy_bootstrap as bootstrap
+    assert stages._stage_output_issues(tmp_path / "report", "2026-10-02", delay.FAMILY) == []
+    monkeypatch.setattr(bootstrap, "DATA_DIR", tmp_path)
+    assert bootstrap._pre_submit_delay_handoff("2026-10-05")[0] == {}
+
+
+@pytest.mark.parametrize("prices,status,counts", [
+    ({0: 10000, 30: 9950}, "partial", [1, 1, 0, 0, 0]),
+    ({30: 9950, 60: 10050}, "source_gap", [0, 0, 0, 0, 0]),
+    ({0: 10000}, "source_gap", [1, 0, 0, 0, 0]),
+])
+def test_price_pattern_partial_horizons_do_not_require_all_quotes(tmp_path, monkeypatch, prices, status, counts):
+    price = _price_pattern_fixture(tmp_path, monkeypatch, [{"prices": prices}])["price_pattern_analysis"]
+    assert price["status"] == status
+    assert [row["paired_count"] for row in price["candidate_grid"]] == counts
+    assert price["candidate_grid"][4]["mean_paired_price_improvement_bp"] is None
+
+
+def test_price_pattern_averages_paired_returns_not_prices(tmp_path, monkeypatch):
+    price = _price_pattern_fixture(tmp_path, monkeypatch, [
+        {"code": "000001", "prices": {0: 10000, 30: 9500}},
+        {"code": "000002", "prices": {0: 1000, 30: 1050}, "cap": None},
+    ])["price_pattern_analysis"]
+    row = price["candidate_grid"][1]
+    assert row["mean_paired_price_improvement_bp"] == 0
+    assert row["improved_count"] == row["worse_count"] == 1
+    assert row["coverage"] == 1 and row["improved_fraction"] == .5
+    assert (row["p10_price_improvement_bp"], row["p90_price_improvement_bp"]) == (-400, 400)
+    assert row["price_cap_unknown_count"] == 1
+
+
+def test_price_pattern_boolean_zero_horizon_cannot_supply_control_price(tmp_path, monkeypatch):
+    price = _price_pattern_fixture(tmp_path, monkeypatch, [{
+        "prices": {0: 10000, 30: 9950}, "quote_overrides": {0: {"target_delay_sec": False}},
+    }])["price_pattern_analysis"]
+    assert price["status"] == "source_gap"
+    assert all(row["paired_count"] == 0 for row in price["candidate_grid"])
+
+
+@pytest.mark.parametrize("overrides", [
+    {"quote_transport_epoch": 8}, {"quote_route": "NXT_ONLY"},
+    {"ask_price": True}, {"best_bid": 20000}, {"actual_offset_sec": -1},
+    {"quote_consistency_state": "conflicted"},
+])
+def test_price_pattern_isolates_invalid_horizon(tmp_path, monkeypatch, overrides):
+    price = _price_pattern_fixture(tmp_path, monkeypatch, [{
+        "prices": {0: 10000, 30: 9950, 60: 9900}, "quote_overrides": {30: overrides},
+    }])["price_pattern_analysis"]
+    assert price["status"] == "partial"
+    assert price["candidate_grid"][1]["paired_count"] == 0
+    assert price["candidate_grid"][2]["mean_paired_price_improvement_bp"] == 100
+
+
+@pytest.mark.parametrize("change,expected,recommended", [
+    (-50, "pattern_supported", 30), (50, "pattern_supported", 0),
+    (0, "no_price_difference", 0),
+])
+def test_price_pattern_validates_delay_immediate_and_ties(tmp_path, monkeypatch, change, expected, recommended):
+    price = _price_pattern_fixture(tmp_path, monkeypatch, [
+        {"prices": {0: 10000, 30: 10000 + change, 60: 10000 + change}} for _ in range(3)
+    ])["price_pattern_analysis"]
+    assert price["selection"]["status"] == expected
+    assert price["selection"]["comparison_delay_sec"] == 30  # Shortest tied delay.
+    assert price["recommended_delay_sec"] == recommended
+    assert price["selection"]["validation_paired_count"] == 1
+
+
+def test_price_pattern_does_not_reselect_from_validation(tmp_path, monkeypatch):
+    price = _price_pattern_fixture(tmp_path, monkeypatch, [
+        {"prices": {0: 10000, 30: 9900, 60: 9950}},
+        {"prices": {0: 10000, 30: 9900, 60: 9950}},
+        {"prices": {0: 10000, 30: 10100, 60: 9700}},
+    ])["price_pattern_analysis"]
+    assert price["recommended_delay_sec"] == 30
+    assert price["selection"]["status"] == "pattern_not_confirmed"
+    assert price["selection"]["validation_mean_price_improvement_bp"] == -100
+
+
+def test_price_pattern_validation_coverage_and_tail_use_frozen_candidate_pairs(tmp_path, monkeypatch):
+    report = _price_pattern_fixture(tmp_path, monkeypatch,
+        [{"prices": {0: 10000, 30: 9950}} for _ in range(4)] + [
+            {"prices": {0: 10000, 30: 10100}},
+            {"prices": {0: 10000}},
+            {"prices": {0: 10000, 30: 9800}},
+        ])
+    selection = report["price_pattern_analysis"]["selection"]
+    stats = selection["validation_statistics"]
+    assert selection["comparison_delay_sec"] == selection["recommended_delay_sec"] == 30
+    assert selection["status"] == "pattern_supported"
+    assert stats["eligible_opportunity_count"] == 3 and stats["paired_count"] == 2
+    assert stats["coverage"] == pytest.approx(2 / 3)
+    assert stats["improved_count"] == stats["worse_count"] == 1
+    assert stats["mean_paired_price_improvement_bp"] == stats["median_price_improvement_bp"] == 50
+    assert (stats["p10_price_improvement_bp"], stats["p90_price_improvement_bp"]) == (-70, 170)
+    assert delay.price_pattern_projection(report)["analysis_complete"] is True
+
+
+def test_price_pattern_purges_overlapping_learning_paths(tmp_path, monkeypatch):
+    price = _price_pattern_fixture(tmp_path, monkeypatch, [
+        {"offset": index * 30, "prices": {0: 10000, 30: 9900, 180: 9800}} for index in range(3)
+    ])["price_pattern_analysis"]
+    assert price["status"] == "partial" and price["analysis_complete"] is True
+    assert price["selection"]["purged_learning_count"] == 2
+    assert price["selection"]["status"] == "insufficient_sample"
+
+
+def test_price_pattern_keeps_first_retry_even_when_later_has_better_source(tmp_path, monkeypatch):
+    machine = "b" * 64
+    price = _price_pattern_fixture(tmp_path, monkeypatch, [
+        {"machine": machine, "prices": {30: 9950}},
+        {"machine": machine, "prices": {0: 10000, 30: 9900}},
+    ])["price_pattern_analysis"]
+    assert price["eligible_attempt_count"] == 2 and price["eligible_opportunity_count"] == 1
+    assert price["duplicate_intent_count"] == 1 and price["paired_comparison_count"] == 0
+    assert price["status"] == "source_gap"
+
+
+def test_price_pattern_unknown_retry_identity_keeps_prices_but_not_validation(tmp_path, monkeypatch):
+    price = _price_pattern_fixture(tmp_path, monkeypatch, [
+        {"machine": "", "prices": {0: 10000, 30: 9900}} for _ in range(3)
+    ])["price_pattern_analysis"]
+    assert price["paired_comparison_count"] == 3
+    assert price["retry_linkage_unknown_count"] == 3
+    assert price["selection"]["status"] == "insufficient_sample"
+
+
+def test_price_pattern_candidate_ranking_requires_common_learning_pairs(tmp_path, monkeypatch):
+    price = _price_pattern_fixture(tmp_path, monkeypatch, [
+        {"prices": {0: 10000, 30: 9900}}, {"prices": {0: 10000, 60: 9800}},
+        {"prices": {0: 10000, 30: 9900, 60: 9800}},
+    ])["price_pattern_analysis"]
+    assert price["analysis_complete"] is True
+    assert price["selection"]["status"] == "insufficient_comparable_pairs"
+    assert price["recommended_delay_sec"] is None
+
+
+def test_price_pattern_orphan_quotes_are_source_gap_not_valid_empty(tmp_path, monkeypatch):
+    _price_pattern_fixture(tmp_path, monkeypatch, [{"prices": {0: 10000, 30: 9900}}])
+    path = next((tmp_path / "threshold_cycle/date=2026-10-02/family=pre_submit_delay").glob("part-execution-*.jsonl"))
+    path.write_text("".join(line + "\n" for line in path.read_text().splitlines()
+                            if json.loads(line)["stage"] != "pre_submit_delay_committed"))
+    report = delay.build_report("2026-10-02", effective_date="2026-10-05", write=False)
+    assert report["price_pattern_analysis"]["status"] == "source_gap"
+    assert report["price_pattern_analysis"]["empty_population_verified"] is False
+    assert delay.price_pattern_projection(report)["status"] == "source_gap"
+
+
+def test_price_pattern_explicit_veto_is_valid_empty_without_price_pairs(tmp_path, monkeypatch):
+    report = _price_pattern_fixture(tmp_path, monkeypatch, [{
+        "prices": {0: 10000, 30: 9900}, "commit_overrides": {"auxiliary_effective_action": "VETO"},
+    }])
+    assert report["price_pattern_analysis"]["status"] == "valid_empty"
+    assert delay.price_pattern_projection(report)["status"] == "valid_empty"
+
+
+@pytest.mark.parametrize("mutation", ["nested_authority", "nonfinite_statistic", "false_complete", "outer_schema",
+                                      "wrong_metric", "selection_count", "validation_statistic", "zero_control",
+                                      "quantile_order", "unsupported_comparison", "duplicate_candidates", "boolean_grid"])
+def test_price_pattern_consumer_rejects_rehashed_semantic_contradictions(tmp_path, monkeypatch, mutation):
+    report = _price_pattern_fixture(tmp_path, monkeypatch, [{"prices": {0: 10000, 30: 9900}}])
+    section = report["price_pattern_analysis"]
+    if mutation == "nested_authority":
+        section["type_census"][0]["selection"]["runtime_apply_allowed"] = True
+    elif mutation == "nonfinite_statistic":
+        section["candidate_grid"][1]["mean_paired_price_improvement_bp"] = float("inf")
+    elif mutation == "false_complete":
+        section["status"] = "computed"
+    elif mutation == "outer_schema":
+        report["schema"] = "other_report"
+    elif mutation == "selection_count":
+        section["selection"]["learning_opportunity_count"] += 1
+    elif mutation == "validation_statistic":
+        section["selection"]["validation_statistics"]["p10_price_improvement_bp"] = 1
+    elif mutation == "zero_control":
+        section["candidate_grid"][0]["mean_paired_price_improvement_bp"] = 1
+    elif mutation == "quantile_order":
+        section["candidate_grid"][1]["median_price_improvement_bp"] = -1000
+    elif mutation == "unsupported_comparison":
+        section["selection"]["comparison_delay_sec"] = 60
+    elif mutation == "duplicate_candidates":
+        section["selection"]["candidate_delays_sec"] = [30, 30]
+    elif mutation == "boolean_grid":
+        section["candidate_grid"][0]["delay_sec"] = False
+    else:
+        section["primary_decision_metric"] = "realized_profit"
+    section["section_sha256"] = delay._digest({k: v for k, v in section.items() if k != "section_sha256"})
+    assert delay.price_pattern_projection(report)["status"] == "source_invalid"
+
+
+def test_price_pattern_consumer_rejects_supported_direction_contradiction(tmp_path, monkeypatch):
+    report = _price_pattern_fixture(tmp_path, monkeypatch, [
+        {"prices": {0: 10000, 30: 9900}} for _ in range(3)
+    ])
+    section = report["price_pattern_analysis"]
+    section["selection"]["validation_mean_price_improvement_bp"] = -100
+    section["section_sha256"] = delay._digest({k: v for k, v in section.items() if k != "section_sha256"})
+    assert delay.price_pattern_projection(report)["status"] == "source_invalid"
+
+
+def test_price_pattern_legacy_and_tampered_section_fail_separately(tmp_path, monkeypatch):
+    assert delay.price_pattern_projection({})["status"] == "not_evaluated_legacy"
+    report = _price_pattern_fixture(tmp_path, monkeypatch, [{"prices": {0: 10000, 30: 9900}}], write=True)
+    report["price_pattern_analysis"]["candidate_grid"][1]["paired_count"] = 3
+    section = report["price_pattern_analysis"]
+    section["section_sha256"] = delay._digest({k: v for k, v in section.items() if k != "section_sha256"})
+    assert delay.price_pattern_projection(report)["status"] == "source_invalid"
+    # Bind both outer hashes too: stage must still reject the semantic defect.
+    policy = json.loads(delay.policy_path("2026-10-02").read_text())
+    policy["report_sha256"] = delay._digest({k: v for k, v in report.items() if k != "policy_sha256"})
+    policy["policy_sha256"] = delay._digest({k: v for k, v in policy.items() if k != "policy_sha256"})
+    report["policy_sha256"] = policy["policy_sha256"]
+    delay._atomic_json(delay.report_path("2026-10-02"), report)
+    delay._atomic_json(delay.policy_path("2026-10-02"), policy)
+    from src.engine.automation import postclose_summary_handoff as stages
+    assert "pre_submit_delay:price_pattern_contract_invalid" in stages._stage_output_issues(
+        tmp_path / "report", "2026-10-02", delay.FAMILY)
 
 
 def _delay_fixture(tmp_path, monkeypatch, *, quote_overrides=None):

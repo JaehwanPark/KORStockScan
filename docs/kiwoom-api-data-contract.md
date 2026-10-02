@@ -9,6 +9,44 @@ quantity guards.
 
 ## Official Kiwoom Reference Gate
 
+### Entry Capacity Source Preparation And Receipt Identity
+
+The 2026-10-02 capacity change inspected current upstream
+`953e5dbff123f437ab4d11a78a95191a685eb51f` at
+`2026-10-02T18:04:27.741714+09:00`: specs, core client, packaged kt00001/kt00011
+spec and PRD/MOCK Postman. `kiwoom_docs` is absent from that commit tree.
+SDK JSON body versus Postman query representation remains a documented gap;
+the existing POST JSON envelope, headers, raw stock code, KRW price, parser
+and real/demo separation are unchanged. [Implementation evidence](audits/entry-capacity-source-read-budget-implementation-review-2026-10-02.md).
+
+A normal deposit receipt retains its original token-scope hash, observation
+clock, raw amount and fresh-query generation across loop-cache delivery. Main
+additionally binds account/origin/date, exact code/price, inventory/custody,
+floor authority and financial state. Delivery age/cache-hit/path alone may be
+normalized only with proven provenance; unknown/fallback state remains
+conservative. Source receipts retain the existing two-second entry/preparation
+and five-second cache-only nonentry age bounds. Account data never enters the
+shared market-data cache. Required sizing/submit/leg/residual/scale-in reads
+remain fresh and independently governed. Only a pre-decision preparation
+worker may join a source read within its existing deadline; frozen observers
+cannot wait for future evidence or backfill a prior attempt.
+The worker checks the deadline again after receipt completion. Late completion
+cannot be reported ready for an expired preparation. The upstream revision was
+rechecked at 2026-10-02T19:03:21+09:00 and remained unchanged.
+
+Purpose/admission/HTTP counters are diagnostics, not new order authority.
+kt00011 timeout attempts count as transmissions; missing transport metadata
+remains unknown, not zero. The shared 5/source-only 4 reserve, source wait,
+timeouts, retry/auth/cooldown and all broker/quantity/custody guards remain
+unchanged.
+Counters use request-start KST date and the current PID, retaining two dates so
+an out-of-order midnight completion cannot erase the current day's totals.
+Older late completions remain individual diagnostic rows. Their metric role,
+window, source gate and forbidden uses are recorded in the implementation
+evidence; counters cannot grant retries, policy promotion or trading authority.
+
+### Required References And Verification
+
 Adaptive-exit group clock follow-up at `2026-09-10T15:51:49+09:00`: upstream HEAD remains `234560d213acd8871ae344b5481aecd2f30287fa`. The official [1h portal guide](https://openapi.kiwoom.com/m/guide/apiguide/14/1h) identifies FID9068 as static/dynamic VI type (1/2), not activation/release state; FID1223/1224 are activation/release HHmmss timestamps. This supplements the earlier packaged-spec description gap, not permission to infer state from9068. Packet fields alone do not certify current collection continuity, complete halt history or a live clock. [Group receipt-only consumer and remaining source/service boundary](audit-reports/2026-09-10-adaptive-exit-group-decision-review.md#26-group-시계-결손의-주문-전환-차단과-기존-종료-유지). No wire/parser/auth/REG changes, additional subscription, or actual account/API calls were made.
 
 Adaptive-exit clock-gap reconciliation review at `2026-09-10T14:37:26+09:00`: upstream HEAD `234560d213acd8871ae344b5481aecd2f30287fa`, `kiwoom/specs.py`, `kiwoom/core/client.py`, packaged spec request/response for `kt00007`/`ka10075`/`kt10003`, and their PRD/MOCK Postman requests were inspected; `kiwoom_docs` is absent from this tree. [Scoped receipt and unchanged protocol/authority boundaries](audit-reports/2026-09-10-adaptive-exit-group-decision-review.md#24-시계-원천-결손과-원-주문-receipt-only-종료-연결). Unknown halt duration permits existing exact receipt reconciliation only, not a fabricated zero duration or any new order/cancel. No wire/parser/auth/REG changes or actual API calls were made.

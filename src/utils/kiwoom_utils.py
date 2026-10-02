@@ -1076,7 +1076,7 @@ def get_account_execution_snapshot_kt00008(token):
 
 
 def get_orderable_by_margin_kt00011(token, code, unit_price=None, is_nxt=None, *, source_only=False,
-                                  source_read_rate_max_wait_sec=0.0):
+                                  source_read_rate_max_wait_sec=0.0, request_purpose=None, read_meta=None):
     """
     [kt00011] 증거금율별주문가능수량조회요청
     - 종목별 증거금율(stk_profa_rt), 계좌증거금율(profa_rt), 적용증거금율(aplc_rt)
@@ -1091,7 +1091,7 @@ def get_orderable_by_margin_kt00011(token, code, unit_price=None, is_nxt=None, *
         payload["uv"] = str(int(float(unit_price)))
 
     source_bounds = (
-        dict(max_retries=1, request_owner="scale_in_budget_source",
+        dict(max_retries=1, request_owner=request_purpose or "scale_in_budget_source",
              request_class=REQUEST_CLASS_SOURCE_ONLY, request_code=req_code,
              read_rate_max_wait_sec=max(0.0, min(DEFAULT_SOURCE_ONLY_MAX_WAIT_SEC,
                  float(source_read_rate_max_wait_sec))), request_timeout=(0.15, 0.15))
@@ -1103,16 +1103,23 @@ def get_orderable_by_margin_kt00011(token, code, unit_price=None, is_nxt=None, *
         api_id="kt00011",
         payload=payload,
         use_continuous=False,
-        **({"return_meta": True} if source_only else {}),
+        **({"return_meta": True} if source_only or isinstance(read_meta, dict) else {}),
+        **({"request_owner": request_purpose} if request_purpose and not source_only else {}),
         **source_bounds,
     )
     # A source-only admission deferral has no broker response. Keep it distinct
     # from an empty response after an HTTP attempt; live sizing is unchanged.
-    if source_only and isinstance(response, tuple) and len(response) == 2:
+    if isinstance(response, tuple) and len(response) == 2:
         results, source_meta = response
     else:
         results, source_meta = response, {}
     source_meta = source_meta if isinstance(source_meta, dict) else {}
+    if isinstance(read_meta, dict):
+        read_meta.update({key: source_meta.get(key) for key in (
+            "request_attempt_count", "read_rate_control_status", "read_rate_control_reason",
+            "read_rate_control_waited_sec", "last_http_status_code",
+            "first_http_started_epoch", "last_http_started_epoch", "last_http_received_epoch",
+            "admission_attempt_count")})
     if not results:
         if (source_only and source_meta.get("read_rate_control_status") == "deferred"
                 and int(source_meta.get("request_attempt_count") or 0) == 0):
@@ -5361,6 +5368,8 @@ def _fetch_kiwoom_api_continuous_transport(
             current_failure_logged = False
             current_failure_kind = ""
             current_failure_detail = ""
+            if api_id == "kt00011":
+                meta["admission_attempt_count"] = int(meta.get("admission_attempt_count") or 0) + 1
             admission = coordinator.acquire(
                 token=active_token,
                 endpoint=url,
@@ -5421,6 +5430,11 @@ def _fetch_kiwoom_api_continuous_transport(
                 "api-id": api_id,
             }
             try:
+                if api_id == "kt00011":
+                    started_epoch = time.time()
+                    meta.setdefault("first_http_started_epoch", started_epoch)
+                    meta["last_http_started_epoch"] = started_epoch
+                    meta["request_attempt_count"] += 1  # Count a timeout as a sent attempt.
                 response = requests.post(
                     url,
                     headers=headers,
@@ -5432,9 +5446,12 @@ def _fetch_kiwoom_api_continuous_transport(
                     ),
                 )
                 response_received_ts_ms = int(time.time() * 1000)
-                meta["request_attempt_count"] = (
-                    int(meta.get("request_attempt_count") or 0) + 1
-                )
+                if api_id == "kt00011":
+                    meta["last_http_received_epoch"] = response_received_ts_ms / 1000.0
+                else:
+                    meta["request_attempt_count"] = (
+                        int(meta.get("request_attempt_count") or 0) + 1
+                    )
                 meta["last_http_status_code"] = response.status_code
 
                 if response.status_code == 200:

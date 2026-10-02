@@ -1,10 +1,17 @@
 import json
+import logging
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from src.model import common_v2, feature_engineering_v2
 from src.utils import update_kospi
+
+
+@pytest.fixture(autouse=True)
+def isolate_eod_contract_logger(monkeypatch):
+    monkeypatch.setattr(update_kospi, "logger", logging.getLogger("EodContractFixture"))
 
 
 def _raw_quote_fixture(rows: int = 80) -> pd.DataFrame:
@@ -126,7 +133,7 @@ def test_update_kospi_prepares_title_case_input_for_feature_ssot():
     assert "return_1d" in features.columns
 
 
-def test_update_kospi_status_payload_records_warning_steps(monkeypatch, tmp_path):
+def test_update_kospi_status_payload_records_required_producer_failure(monkeypatch, tmp_path):
     monkeypatch.setattr(
         update_kospi,
         "_load_latest_quote_state",
@@ -157,7 +164,7 @@ def test_update_kospi_status_payload_records_warning_steps(monkeypatch, tmp_path
     )
 
     written = json.loads(status_path.read_text(encoding="utf-8"))
-    assert written["status"] == "completed_with_warnings"
+    assert written["status"] == "failed"
     assert written["feature_source"] == "src.model.common_v2.calculate_all_features"
     assert written["failed_steps"] == ["recommend_daily_v2"]
 

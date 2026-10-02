@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import threading
+import uuid
 
 from dataclasses import asdict, replace
 from datetime import date, datetime, time
@@ -68,6 +70,10 @@ class LowPriceTwoLegMachine(SamsungRegularTwoLegMachine):
         adaptive_exit_services=None,
     ) -> None:
         self.profile = profile
+        self._economic_capture_lock = threading.RLock()
+        self._economic_capture_day = None
+        self._economic_capture_sequence = 0
+        self._economic_capture_previous_hash = None
         super().__init__(
             gateway=gateway,
             state_path=state_path or default_state_path(profile),
@@ -94,6 +100,12 @@ class LowPriceTwoLegMachine(SamsungRegularTwoLegMachine):
         return source
 
     def _record(self, now: datetime, action: str, **fields: object) -> None:
+        # Serialize capture and its predecessor proof within this producer;
+        # this lock owns recording only, never broker or decision calls.
+        with self._economic_capture_lock:
+            self._record_economic_transition(now, action, **fields)
+
+    def _record_economic_transition(self, now: datetime, action: str, **fields: object) -> None:
         super()._record(now, action, **fields)
         # Publish every completed-bar evaluation and ledger transition through
         # the existing lossless raw writer. The bounded state audit is not input.
@@ -120,7 +132,22 @@ class LowPriceTwoLegMachine(SamsungRegularTwoLegMachine):
             "state_projection": economic_state_projection(self._state),
             "state_source_sha256": economic_state_source_sha256(self._state),
             "quote_source": "unavailable_in_state", "capital_source": "unavailable_in_state"}
+        if self._economic_capture_day != body["logical_date"]:
+            self._economic_capture_day = body["logical_date"]
+            self._economic_capture_generation = uuid.uuid4().hex
+            self._economic_capture_sequence = 0
+            self._economic_capture_previous_hash = None
+        self._economic_capture_sequence += 1
+        body["capture_sequence"] = {
+            "schema": "low_price_capture_sequence_v1",
+            "generation_id": self._economic_capture_generation,
+            "sequence": self._economic_capture_sequence,
+            "previous_observation_sha256": self._economic_capture_previous_hash,
+        }
         encoded = json.dumps(body, sort_keys=True, separators=(",", ":"), default=str)
+        # Advance even on append failure. A subsequent receipt exposes the
+        # missing predecessor instead of silently normalizing source loss.
+        self._economic_capture_previous_hash = hashlib.sha256(encoded.encode()).hexdigest()
         try:
             receipt = emit_pipeline_event("LOW_PRICE_TWO_LEG", self.profile.name, self.profile.symbol,
                 "low_price_actual_economic_observation", fields={"logical_date": body["logical_date"],

@@ -5527,6 +5527,77 @@ def test_mechanistic_threshold_candidate_normalizes_strategy_parent_selection():
     assert validate_mechanistic_entry_threshold_policy(published) == []
 
 
+@pytest.mark.parametrize("veto", [False, True])
+def test_strategy_common_grid_reuse_preserves_complete_report_and_population(monkeypatch, veto):
+    from copy import deepcopy
+    from src.engine.scalping import entry_strategy_policy as strategy
+    from src.tests.test_entry_strategy_policy import raw, setup
+
+    rows, receipt = _natural_refinement_fixture()
+    rows, contract = calibration._common_refinement_population(
+        [], rows, target_date="2026-09-15", source_receipt=receipt, paired_contract={})
+    parent = strategy.seed(calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1, ("KRX", "KRX_REGULAR"))
+    parent['strategy']['nodes']['root']['profile'].update(
+        overextension_runup_pct=20, overextension_vwap_bp=120,
+        overextension_ma5_bp=120, tape_supportive_score=60)
+    if veto:
+        parent['entry_situation_veto'] = calibration._winrate_veto_payload(68.75)
+    for i, row in enumerate(rows):
+        payload = raw()
+        payload['features'].update(spread_bp=20 if i % 2 else 100,
+            micro_vwap_available=True, minute_candle_window_fresh=True,
+            curr_vs_micro_vwap_bp=60 if i % 3 else 90)
+        row['setup_evidence'] = setup(payload)
+        row['fingerprint'] = calibration._canonical_sha256(row['setup_evidence'])
+    original = deepcopy((rows, contract, parent))
+    grid = {k: (min(v), max(v)) for k, v in calibration.MECHANISTIC_COMMON_FEATURE_GRID.items()}
+    monkeypatch.setattr(calibration, 'MECHANISTIC_COMMON_FEATURE_GRID', grid)
+    calls = []
+    real_rows = calibration._mechanistic_policy_rows
+    def counted(*args, **kwargs):
+        calls.append(1)
+        return real_rows(*args, **kwargs)
+    monkeypatch.setattr(calibration, '_mechanistic_policy_rows', counted)
+    kwargs = dict(target_date="2026-09-15", source_rows=rows,
+                  source_contract=contract, parent_policy=parent)
+    fast = calibration.build_clean_baseline_mechanistic_refinement(Path('unused'), **kwargs)
+    fast_calls = len(calls)
+    calls.clear()
+    monkeypatch.setattr(calibration, '_mechanistic_selection_reuse_key', calibration._canonical_sha256)
+    baseline = calibration.build_clean_baseline_mechanistic_refinement(Path('unused'), **kwargs)
+    assert fast == baseline
+    assert fast_calls < len(calls)
+    assert (rows, contract, parent) == original
+
+
+def test_strategy_selection_reuse_keeps_other_authorities_and_legacy_thresholds():
+    from copy import deepcopy
+    from src.engine.scalping import entry_strategy_policy as strategy
+    parent = strategy.seed(calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1, ("KRX", "KRX_REGULAR"))
+    coords = {k: parent['thresholds'][k] for k in calibration.MECHANISTIC_COMMON_FEATURE_GRID}
+    one = calibration._mechanistic_threshold_policy(coords, parent)
+    two = deepcopy(one)
+    two['thresholds']['maximum_spread_bp'] = 40.
+    key = calibration._mechanistic_selection_reuse_key
+    assert key(one) == key(two)
+    two['strategy']['nodes']['root']['profile']['maximum_spread_bp'] = 40.
+    assert key(one) != key(two)
+    two = deepcopy(one)
+    two['entry_situation_veto'] = calibration._winrate_veto_payload(68.75)
+    assert key(one) != key(two)
+    two = deepcopy(one)
+    two['thresholds']['unknown_future_threshold'] = 1
+    assert key(two) == calibration._canonical_sha256(two)
+    two = deepcopy(one)
+    two['strategy']['nodes']['root']['profile'].pop('maximum_spread_bp')
+    assert key(two) == calibration._canonical_sha256(two)
+    legacy = deepcopy(one)
+    legacy.pop('strategy')
+    changed = deepcopy(legacy)
+    changed['thresholds']['maximum_spread_bp'] = 40.
+    assert key(legacy) != key(changed)
+
+
 def test_joint_frozen_bundle_qualifies_then_hash_date_and_subset_fail_closed(monkeypatch):
     import copy
     from datetime import datetime, timedelta

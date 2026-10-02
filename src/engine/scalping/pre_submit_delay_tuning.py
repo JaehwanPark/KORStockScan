@@ -29,6 +29,8 @@ KST = timezone(timedelta(hours=9))
 REPORT_SCHEMA = "pre_submit_delay_tuning_v1"
 POLICY_SCHEMA = "pre_submit_delay_policy_v1"
 FAMILY = "pre_submit_delay"
+PRICE_PATTERN_SCHEMA = "pre_submit_delay_price_pattern_v1"
+PRICE_PATTERN_ALGORITHM = "same_intent_paired_quote_chronological_v1"
 DELAYS_SEC = (0.0, 30.0, 60.0, 120.0, 180.0)
 SOURCE_STAGES = frozenset({
     "pre_submit_delay_committed",
@@ -559,6 +561,392 @@ def family_source_ledger_issues(data_root: Path, target_date: str) -> list[str]:
     return []
 
 
+def _price_number(value: Any) -> float | None:
+    try:
+        return None if isinstance(value, bool) else _number(value)
+    except OverflowError:
+        return None
+
+
+def _price_statistics(values: list[float], eligible_count: int) -> dict[str, Any]:
+    ordered = sorted(values)
+    count = len(ordered)
+
+    def quantile(fraction: float) -> float | None:
+        if not count:
+            return None
+        offset = (count - 1) * fraction
+        lower = int(offset)
+        upper = min(lower + 1, count - 1)
+        weight = offset - lower
+        return round(ordered[lower] * (1 - weight) + ordered[upper] * weight, 6)
+
+    improved = sum(value > 0 for value in values)
+    worse = sum(value < 0 for value in values)
+    return {
+        "paired_count": count,
+        "eligible_opportunity_count": eligible_count,
+        "coverage": count / eligible_count if eligible_count else None,
+        "improved_count": improved,
+        "worse_count": worse,
+        "unchanged_count": count - improved - worse,
+        "improved_fraction": improved / count if count else None,
+        "worse_fraction": worse / count if count else None,
+        "unchanged_fraction": (count - improved - worse) / count if count else None,
+        "mean_paired_price_improvement_bp": round(math.fsum(value / count for value in values), 6) if count else None,
+        "median_price_improvement_bp": quantile(.5),
+        "p10_price_improvement_bp": quantile(.1),
+        "p90_price_improvement_bp": quantile(.9),
+    }
+
+
+def _price_pattern_selection(opportunities: list[dict[str, Any]]) -> dict[str, Any]:
+    """Freeze one learning comparison before looking at validation prices."""
+    ordered = sorted((row for row in opportunities if row["retry_identity_verified"]),
+                     key=lambda row: (row["committed_at"], row["identity"]))
+    size = len(ordered)
+    split_count = min(size - 1, max(1, int(size * .7))) if size >= 2 else size
+    learning, validation = ordered[:split_count], ordered[split_count:]
+    cutoff = validation[0]["committed_at"] if validation else None
+    retained = [row for row in learning if cutoff is None or row["observation_end_at"] < cutoff]
+    result = {
+        "status": "insufficient_sample", "recommended_delay_sec": None,
+        "comparison_delay_sec": None, "validation_cutoff_epoch": cutoff,
+        "learning_opportunity_count": len(retained),
+        "validation_opportunity_count": len(validation),
+        "purged_learning_count": len(learning) - len(retained),
+        "retry_identity_excluded_count": len(opportunities) - size,
+        "candidate_delays_sec": [], "common_learning_pair_count": 0,
+        "learning_mean_price_improvement_bp": None,
+        "validation_mean_price_improvement_bp": None,
+        "validation_paired_count": 0,
+        "validation_statistics": _price_statistics([], len(validation)),
+        "learning_identity_sha256": _digest([row["identity"] for row in retained]),
+        "validation_identity_sha256": _digest([row["identity"] for row in validation]),
+        "runtime_apply_allowed": False,
+    }
+    if not retained:
+        return result
+    candidates = [second for second in DELAYS_SEC[1:]
+                  if any(second in row["pairs"] for row in retained)]
+    common = [row for row in retained if candidates and all(second in row["pairs"] for second in candidates)]
+    result.update(candidate_delays_sec=candidates, common_learning_pair_count=len(common),
+                  common_learning_identity_sha256=_digest([row["identity"] for row in common]))
+    if not common:
+        result["status"] = "insufficient_comparable_pairs"
+        return result
+    means = {second: math.fsum(row["pairs"][second] / len(common) for row in common)
+             for second in candidates}
+    selected = min(candidates, key=lambda second: (-means[second], second))
+    learning_mean = means[selected]
+    validation_values = [row["pairs"][selected] for row in validation if selected in row["pairs"]]
+    validation_mean = math.fsum(value / len(validation_values) for value in validation_values) if validation_values else None
+    result.update(
+        comparison_delay_sec=selected,
+        recommended_delay_sec=selected if learning_mean > 0 else 0.0,
+        learning_mean_price_improvement_bp=learning_mean,
+        validation_mean_price_improvement_bp=validation_mean,
+        validation_paired_count=len(validation_values),
+        validation_statistics=_price_statistics(validation_values, len(validation)),
+        validation_pair_identity_sha256=_digest([row["identity"] for row in validation if selected in row["pairs"]]),
+    )
+    if validation_mean is None:
+        return result
+    result["status"] = (
+        "no_price_difference" if learning_mean == validation_mean == 0 else
+        "pattern_supported" if (learning_mean > 0 and validation_mean > 0)
+        or (learning_mean <= 0 and validation_mean <= 0) else "pattern_not_confirmed"
+    )
+    return result
+
+
+def _build_price_pattern_analysis(
+    target_date: str, source: dict[str, Any], commits: dict[str, dict[str, Any]],
+    eligible: list[str], quotes: dict[str, dict[float, dict[str, Any]]],
+    quote_issues: dict[tuple[str, float], str], type_by_attempt: dict[str, str],
+    invalid_counts: dict[str, int],
+) -> dict[str, Any]:
+    exclusions = Counter()
+    seen_opportunities: set[tuple[str, ...]] = set()
+    opportunities = []
+    examples = []
+    duplicate_count = 0
+    for key in sorted(eligible, key=lambda item: (
+        _price_number(commits[item].get("decision_committed_at_epoch")) or 0, item
+    )):
+        commit = commits[key]
+        type_key = type_by_attempt[key]
+        frozen_type = commit.get("delay_decision_type")
+        if isinstance(frozen_type, str) and len(frozen_type) <= 4096:
+            try:
+                frozen_type = json.loads(frozen_type)
+            except ValueError:
+                frozen_type = None
+        spread = (_price_number(frozen_type.get("spread_bp"))
+                  if type_key != "UNKNOWN" and isinstance(frozen_type, dict) else None)
+        stamp = _price_number(commit.get("decision_committed_at_epoch"))
+        machine = str(commit.get("original_machine_observation_sha256") or "")
+        verified = len(machine) == 64 and all(char in "0123456789abcdef" for char in machine)
+        # The machine hash identifies the original decision, not a later retry.
+        # Keep parent policy, route, session and source date on that identity.
+        source_date, _, stock_code, _ = key.split("|", 3)
+        retry_key = tuple(str(value) for value in (
+            source_date, stock_code, commit.get("owner"), machine,
+            commit.get("delay_policy_sha256"), commit.get("entry_mechanistic_policy_sha256"),
+            commit.get("entry_ai_soft_policy_sha256"), commit.get("route"),
+            commit.get("market_session_bucket"),
+        ))
+        if verified and retry_key in seen_opportunities:
+            duplicate_count += 1
+            continue
+        if verified:
+            seen_opportunities.add(retry_key)
+        valid = {}
+        for second, quote in quotes.get(key, {}).items():
+            ask = _price_number(quote.get("ask_price"))
+            bid = _price_number(quote.get("best_bid"))
+            depth = _price_number(quote.get("ask_qty"))
+            observed = _price_number(quote.get("quote_observed_at_epoch"))
+            offset = _price_number(quote.get("actual_offset_sec"))
+            if (stamp is None or stamp <= 0 or (_price_number(commit.get("planned_qty")) or 0) <= 0
+                    or ask is None or bid is None or depth is None or observed is None or offset is None
+                    or _price_number(quote.get("target_delay_sec")) != second
+                    or not 0 < bid <= ask or depth <= 0 or offset < 0
+                    or str(quote.get("quote_consistency_state") or "").lower()
+                    not in {"single_source", "fresh_consistent"}):
+                quote_issues[(key, second)] = "price_quote_values_invalid"
+            else:
+                valid[second] = quote
+        pairs = {}
+        caps = {}
+        zero = valid.get(0.0)
+        cap = _price_number(commit.get("price_cap"))
+        for second in DELAYS_SEC:
+            delayed = valid.get(second)
+            if not zero:
+                exclusions[f"{second:g}s:zero_quote_missing_or_invalid"] += 1
+            elif not delayed:
+                exclusions[f"{second:g}s:" + quote_issues.get((key, second), "delayed_quote_missing")] += 1
+            else:
+                price = float(delayed["ask_price"])
+                gain = (float(zero["ask_price"]) - price) / float(zero["ask_price"]) * 10000
+                if not math.isfinite(gain):
+                    exclusions[f"{second:g}s:price_change_not_finite"] += 1
+                    continue
+                pairs[second] = gain
+                caps[second] = price > cap if cap is not None and cap > 0 else None
+                if second and len(examples) < 8:
+                    examples.append({
+                        "source_date": source_date, "stock_code": stock_code,
+                        "intent_event_key": key, "decision_source_sha256": commit["decision_source_sha256"],
+                        "delay_sec": second, "zero_ask_price": float(zero["ask_price"]),
+                        "delayed_ask_price": price, "price_change_bp": round(-gain, 6),
+                        "price_improvement_bp": round(gain, 6),
+                        "zero_quote_source_sha256": zero["quote_source_sha256"],
+                        "delayed_quote_source_sha256": delayed["quote_source_sha256"],
+                        "price_cap_exceeded": caps[second],
+                        "type_key": type_key, "frozen_spread_bp": spread,
+                    })
+        opportunities.append({
+            "identity": key, "committed_at": stamp or 0,
+            "observation_end_at": max((float(quote["quote_observed_at_epoch"]) for quote in valid.values()), default=stamp or 0),
+            "retry_identity_verified": verified, "pairs": pairs, "caps": caps,
+            "type_key": type_key, "scope_key": "|".join(type_key.split("|")[:2]) if type_key != "UNKNOWN" else "UNKNOWN",
+        })
+
+    def group_statistics(group: list[dict[str, Any]]) -> dict[str, Any]:
+        grid = []
+        for second in DELAYS_SEC:
+            paired = [row for row in group if second in row["pairs"]]
+            grid.append({
+                "delay_sec": second, **_price_statistics([row["pairs"][second] for row in paired], len(group)),
+                "price_cap_exceeded_count": sum(row["caps"][second] is True for row in paired),
+                "price_cap_unknown_count": sum(row["caps"][second] is None for row in paired),
+            })
+        selection = _price_pattern_selection(group)
+        if any(row["scope_key"] == "UNKNOWN" for row in group):
+            selection.update(status="mixed_or_unknown_scope_descriptive_only", recommended_delay_sec=None)
+        return {"eligible_opportunity_count": len(group), "candidate_grid": grid, "selection": selection}
+
+    overall = group_statistics(opportunities)
+    paired_count = sum(row["paired_count"] for row in overall["candidate_grid"][1:])
+    complete = bool(opportunities) and all(len(row["pairs"]) == len(DELAYS_SEC) for row in opportunities)
+    empty_verified = not eligible and (
+        source.get("status") == "valid_empty" or
+        (source.get("status") in {"ready", "ready_with_isolation"} and bool(commits)
+         and not any(invalid_counts.get(reason) for reason in ("fields_missing", "attempt_identity_missing", "commit_conflict"))
+         and all(commit.get("decision_source_sha256") == decision_source_sha256(commit)
+                 and commit.get("owner") in {"main_scalping", "widget", "episode", "manual"}
+                 and commit.get("entry_action") in {"ENTER_NOW", "RECHECK", "BLOCK"}
+                 and commit.get("auxiliary_effective_action") in {"PASS", "CAUTION", "VETO", "INSUFFICIENT", "NOT_EVALUATED"}
+                 and _price_number(commit.get("planned_qty")) is not None for commit in commits.values()))
+    )
+    status = ("computed" if complete else "partial" if paired_count else
+              "valid_empty" if empty_verified
+              else "source_gap")
+    scope_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    type_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for opportunity in opportunities:
+        scope_groups[opportunity["scope_key"]].append(opportunity)
+        type_groups[opportunity["type_key"]].append(opportunity)
+    scopes = sorted(scope_groups)
+    if len(scopes) > 1 or scopes == ["UNKNOWN"]:
+        overall["selection"].update(status="mixed_or_unknown_scope_descriptive_only", recommended_delay_sec=None)
+    section = {
+        "schema": PRICE_PATTERN_SCHEMA, "source_date": target_date,
+        "source_sha256": source.get("sha256"),
+        "algorithm_version": PRICE_PATTERN_ALGORITHM,
+        "algorithm_sha256": _digest({"version": PRICE_PATTERN_ALGORITHM, "delays": DELAYS_SEC, "learning_fraction": .7}),
+        "metric_role": "diagnostic_entry_price_timing", "decision_authority": "report_only",
+        "window_policy": "forward_from_20260929_same_intent_zero_vs_fixed_delay",
+        "sample_floor": {"price_pairs": 1, "independent_learning_validation": True},
+        "primary_decision_metric": "mean_paired_price_improvement_bp",
+        "source_quality_gate": "exact_intent_zero_and_delayed_route_epoch_hash_clock_quote_pair",
+        "forbidden_uses": ["realized_pnl", "net_ev", "execution_fill_claim", "runtime_apply",
+                           "entry_action_override", "price_quantity_or_safety_override"],
+        "status": status, "analysis_complete": status in {"computed", "partial", "valid_empty"},
+        "first_blocker": None if status != "source_gap" else "exact_zero_and_delayed_quote_pair_missing",
+        "eligible_attempt_count": len(eligible), "duplicate_intent_count": duplicate_count,
+        "retry_linkage_unknown_count": sum(not row["retry_identity_verified"] for row in opportunities),
+        "paired_comparison_count": paired_count,
+        "empty_population_verified": empty_verified,
+        "exclusion_counts": dict(sorted(exclusions.items())), **overall,
+        "examples": examples,
+        "scope_census": [{"scope_key": scope, **group_statistics(scope_groups[scope])}
+                         for scope in scopes],
+        "type_census": [{"type_key": kind, **group_statistics(type_groups[kind])}
+                        for kind in sorted(type_groups)],
+        "recommended_delay_sec": overall["selection"]["recommended_delay_sec"],
+        "runtime_effect": False, "runtime_apply_allowed": False, "actual_order_submitted": False,
+    }
+    section["section_sha256"] = _digest(section)
+    return section
+
+
+def price_pattern_projection(report: dict[str, Any]) -> dict[str, Any]:
+    """Bounded diagnostic consumption; this cannot grant runtime authority."""
+    section = report.get("price_pattern_analysis")
+    if section is None:
+        return {"status": "not_evaluated_legacy", "analysis_complete": False, "runtime_apply_allowed": False}
+
+    def validate_statistics(row: dict[str, Any], denominator: int) -> None:
+        count = row["paired_count"]
+        fields = ("improved_count", "worse_count", "unchanged_count")
+        metrics = ("mean_paired_price_improvement_bp", "median_price_improvement_bp",
+                   "p10_price_improvement_bp", "p90_price_improvement_bp")
+        if (type(count) is not int or not 0 <= count <= denominator
+                or type(row["eligible_opportunity_count"]) is not int
+                or row["eligible_opportunity_count"] != denominator
+                or any(type(row[field]) is not int or row[field] < 0 for field in fields)
+                or count != sum(row[field] for field in fields)
+                or row["coverage"] != (count / denominator if denominator else None)
+                or any(row[field.replace("_count", "_fraction")] != (row[field] / count if count else None) for field in fields)
+                or any((_price_number(row[field]) is None if count else row[field] is not None) for field in metrics)):
+            raise ValueError("price_pattern_counts_invalid")
+        if count and not (_price_number(row["p10_price_improvement_bp"]) <=
+                          _price_number(row["median_price_improvement_bp"]) <=
+                          _price_number(row["p90_price_improvement_bp"])):
+            raise ValueError("price_pattern_quantiles_invalid")
+
+    try:
+        if (not isinstance(section, dict) or section.get("schema") != PRICE_PATTERN_SCHEMA
+                or report.get("schema") != REPORT_SCHEMA or report.get("analysis_axis") != FAMILY
+                or str(section.get("source_date") or "") < "2026-09-29"
+                or section.get("source_date") != report.get("source_date")
+                or section.get("source_sha256") != (report.get("source") or {}).get("sha256")
+                or section.get("section_sha256") != _digest({k: v for k, v in section.items() if k != "section_sha256"})
+                or section.get("decision_authority") != "report_only"
+                or section.get("metric_role") != "diagnostic_entry_price_timing"
+                or section.get("primary_decision_metric") != "mean_paired_price_improvement_bp"
+                or section.get("algorithm_version") != PRICE_PATTERN_ALGORITHM
+                or section.get("algorithm_sha256") != _digest({"version": PRICE_PATTERN_ALGORITHM, "delays": DELAYS_SEC, "learning_fraction": .7})
+                or any(section.get(field) is not False for field in ("runtime_apply_allowed", "runtime_effect", "actual_order_submitted"))
+                or section.get("status") not in {"computed", "partial", "valid_empty", "source_gap"}
+                or section.get("analysis_complete") is not (section["status"] != "source_gap")):
+            raise ValueError("price_pattern_contract_invalid")
+        eligible = section["eligible_opportunity_count"]
+        groups = [section, *section["scope_census"], *section["type_census"]]
+        for group in groups:
+            denominator = group["eligible_opportunity_count"]
+            if type(denominator) is not int or denominator < 0:
+                raise ValueError("price_pattern_denominator_invalid")
+            grid = group["candidate_grid"]
+            if (not isinstance(grid, list) or [row.get("delay_sec") for row in grid] != list(DELAYS_SEC)
+                    or any(isinstance(row.get("delay_sec"), bool) for row in grid)):
+                raise ValueError("price_pattern_grid_invalid")
+            for row in grid:
+                validate_statistics(row, denominator)
+            zero = grid[0]
+            if (zero["improved_count"] or zero["worse_count"]
+                    or any(zero[field] != 0 for field in ("mean_paired_price_improvement_bp",
+                        "median_price_improvement_bp", "p10_price_improvement_bp", "p90_price_improvement_bp"))
+                    and zero["paired_count"]):
+                raise ValueError("price_pattern_zero_control_invalid")
+            selection = group["selection"]
+            recommendation = selection["recommended_delay_sec"]
+            comparison = selection["comparison_delay_sec"]
+            candidates = selection["candidate_delays_sec"]
+            if (selection["runtime_apply_allowed"] is not False
+                    or not isinstance(candidates, list)
+                    or candidates != [second for second in DELAYS_SEC[1:] if second in candidates]
+                    or (comparison is not None and comparison not in candidates)
+                    or selection["status"] not in {"insufficient_sample", "insufficient_comparable_pairs",
+                         "pattern_supported", "pattern_not_confirmed", "no_price_difference", "mixed_or_unknown_scope_descriptive_only"}
+                    or (recommendation is not None and (isinstance(recommendation, bool) or recommendation not in DELAYS_SEC))
+                    or (comparison is not None and (isinstance(comparison, bool) or comparison not in DELAYS_SEC[1:]))
+                    or any(type(selection[field]) is not int or selection[field] < 0 for field in (
+                        "learning_opportunity_count", "validation_opportunity_count", "common_learning_pair_count",
+                        "validation_paired_count", "purged_learning_count", "retry_identity_excluded_count"))
+                    or sum(selection[field] for field in ("learning_opportunity_count", "validation_opportunity_count",
+                        "purged_learning_count", "retry_identity_excluded_count")) != denominator
+                    or selection["common_learning_pair_count"] > selection["learning_opportunity_count"]
+                    or selection["validation_paired_count"] > selection["validation_opportunity_count"]
+                    or any(value is not None and _price_number(value) is None for value in (
+                        selection["learning_mean_price_improvement_bp"], selection["validation_mean_price_improvement_bp"]))
+                    or (selection["status"] in {"pattern_supported", "pattern_not_confirmed", "no_price_difference"}
+                        and (not selection["common_learning_pair_count"] or not selection["validation_paired_count"] or comparison is None))):
+                raise ValueError("price_pattern_selection_invalid")
+            learning_mean = selection["learning_mean_price_improvement_bp"]
+            validation_mean = selection["validation_mean_price_improvement_bp"]
+            validation_statistics = selection["validation_statistics"]
+            validate_statistics(validation_statistics, selection["validation_opportunity_count"])
+            if (validation_statistics["paired_count"] != selection["validation_paired_count"]
+                    or validation_statistics["mean_paired_price_improvement_bp"] !=
+                    (round(validation_mean, 6) if validation_mean is not None else None)):
+                raise ValueError("price_pattern_validation_statistics_invalid")
+            if selection["status"] in {"pattern_supported", "pattern_not_confirmed", "no_price_difference"}:
+                if learning_mean is None or validation_mean is None:
+                    raise ValueError("price_pattern_means_missing")
+                expected_selection = (
+                    "no_price_difference" if learning_mean == validation_mean == 0 else
+                    "pattern_supported" if (learning_mean > 0 and validation_mean > 0)
+                    or (learning_mean <= 0 and validation_mean <= 0) else "pattern_not_confirmed")
+                if selection["status"] != expected_selection or recommendation != (comparison if learning_mean > 0 else 0.0):
+                    raise ValueError("price_pattern_direction_invalid")
+        grid = section["candidate_grid"]
+        if section["paired_comparison_count"] != sum(row["paired_count"] for row in grid[1:]):
+            raise ValueError("price_pattern_pair_count_invalid")
+        if (section["paired_comparison_count"] and
+                (not isinstance(section["source_sha256"], str) or len(section["source_sha256"]) != 64)):
+            raise ValueError("price_pattern_source_hash_missing")
+        complete = eligible > 0 and all(row["paired_count"] == eligible for row in grid)
+        expected = ("computed" if complete else "partial" if section["paired_comparison_count"] else
+                    "valid_empty" if not eligible and section["empty_population_verified"] is True else "source_gap")
+        if (section["status"] != expected
+                or section["recommended_delay_sec"] != section["selection"]["recommended_delay_sec"]
+                or section["eligible_attempt_count"] != eligible + section["duplicate_intent_count"]
+                or any(sum(group["eligible_opportunity_count"] for group in section[name]) != eligible for name in ("scope_census", "type_census"))):
+            raise ValueError("price_pattern_status_invalid")
+        return {key: section[key] for key in (
+            "schema", "status", "analysis_complete", "source_date", "source_sha256", "section_sha256",
+            "eligible_opportunity_count", "paired_comparison_count", "candidate_grid",
+            "selection", "scope_census", "type_census", "recommended_delay_sec", "first_blocker", "runtime_apply_allowed",
+        )}
+    except (ValueError, TypeError, KeyError, AttributeError, OverflowError):
+        return {"status": "source_invalid", "analysis_complete": False,
+                "first_blocker": "price_pattern_contract_invalid", "runtime_apply_allowed": False}
+
+
 def build_report(
     target_date: str, *, effective_date: str, write: bool = True,
     require_family_ledger: bool = False,
@@ -711,12 +1099,16 @@ def build_report(
     missing = Counter()
     diagnostic = []
     horizon_source_quality = []
+    price_quotes: dict[str, dict[float, dict[str, Any]]] = defaultdict(dict)
+    price_quote_issues: dict[tuple[str, float], str] = {}
     valid_asks_by_type: dict[tuple[str, float], list[float]] = defaultdict(list)
     for second in DELAYS_SEC:
         comparable = []
         for key in eligible:
             row = samples.get(key, {}).get(second)
             if not row:
+                if (key, second) in conflicted:
+                    price_quote_issues[(key, second)] = "quote_conflicted"
                 missing[f"{second:g}s_missing"] += 1
                 source_quality["quote_unobserved_or_conflicted"] += 1
                 continue
@@ -728,6 +1120,7 @@ def build_report(
                 or str(row.get("quote_valid") or "").lower() != "true"
                 or row.get("route") != commits[key].get("route")
             ):
+                price_quote_issues[(key, second)] = issue or "quote_source_invalid"
                 missing[f"{second:g}s_source_invalid"] += 1
                 source_quality[issue or "quote_source_invalid"] += 1
                 reason = str(row.get("quote_source_reason") or "unknown").lower()
@@ -740,6 +1133,7 @@ def build_report(
                     source_quality[f"producer_{reason}"] += 1
                 continue
             source_quality["quote_valid"] += 1
+            price_quotes[key][second] = row
             comparable.append((key, ask, depth))
             valid_asks_by_type[(type_by_attempt[key], second)].append(ask)
         diagnostic.append({
@@ -886,6 +1280,11 @@ def build_report(
         "actual_order_submitted": False,
         "elapsed_sec": round(time.monotonic() - started, 4),
     }
+    if target_date >= "2026-09-29":
+        report["price_pattern_analysis"] = _build_price_pattern_analysis(
+            target_date, source, commits, eligible, price_quotes, price_quote_issues, type_by_attempt, dict(invalid),
+        )
+        report["elapsed_sec"] = round(time.monotonic() - started, 4)
     policy_selected = (
         _number(report.get("selected_delay_sec")) in DELAYS_SEC
         and _number(report.get("selected_delay_sec")) > 0
@@ -1048,6 +1447,7 @@ def main(argv: list[str] | None = None) -> int:
                           require_family_ledger=args.require_family_ledger)
     print(json.dumps({
         "status": result["status"],
+        "price_analysis": price_pattern_projection(result),
         "first_blocker": result["first_blocker"],
         "eligible_attempt_count": result["eligible_attempt_count"],
         "policy": str(policy_path(args.date)),

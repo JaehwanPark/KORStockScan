@@ -177,6 +177,10 @@ def source_paths(report_dir: Path, target_date: str, consumer: str) -> dict[str,
         # later normal bootstrap must not invalidate the immutable postclose
         # generation receipt merely because its previously absent file arrived.
         paths = {"runtime_approval_summary": summary_path}
+        cancel_path = report_dir / 'entry_cancel_wait_tuning' / f'entry_cancel_wait_tuning_{target_date}.json'
+        if target_date >= '2026-10-02' or cancel_path.exists():
+            paths['entry_cancel_wait_tuning'] = cancel_path
+            paths['entry_cancel_wait_policy'] = cancel_path.with_name(f'entry_cancel_wait_policy_{target_date}.json')
         from src.engine.scalping.holding_path_vote_policy import (
             START_DATE as HOLDING_VOTE_POLICY_START_DATE,
             policy_path as holding_vote_policy_path,
@@ -1525,7 +1529,7 @@ def _stage_output_issues(report_dir, day, stage):
                 except (OSError, ValueError, TypeError, KeyError, AttributeError):
                     errors.append(f'{stage}:winrate_staged_binding_invalid')
     if stage == 'pre_submit_delay':
-        from src.engine.scalping.pre_submit_delay_tuning import _digest
+        from src.engine.scalping.pre_submit_delay_tuning import _digest, price_pattern_projection
         paths = stage_artifacts(report_dir, day, stage)
         report = _load_json(paths['pre_submit_delay_tuning'])
         policy = _load_json(paths['pre_submit_delay_policy'])
@@ -1537,6 +1541,8 @@ def _stage_output_issues(report_dir, day, stage):
             or policy.get('report_sha256') != _digest({k:v for k,v in report.items() if k != 'policy_sha256'})
             or policy.get('policy_sha256') != _digest({k:v for k,v in policy.items() if k != 'policy_sha256'})):
             errors.append(f'{stage}:report_policy_binding_invalid')
+        if price_pattern_projection(report)['status'] == 'source_invalid':
+            errors.append(f'{stage}:price_pattern_contract_invalid')
     return errors
 
 
@@ -1693,7 +1699,12 @@ def run_stage(stage, day, *, report_dir, project, publication=None, effective=No
                 return _stage_write(path, {**value, 'status':'deferred', 'exit_code':75, 'issues':['stage_interrupted_at_saved_checkpoint']})
             issues = [e for s in prerequisites for e in stage_receipt_issues(report_dir, day, s)]
             waiting = any(_load_json(p).get('status', 'pending') in {'pending', 'running'} for p in prerequisites.values())
-            if not issues or not waiting or time.monotonic() >= wait_deadline:
+            terminal_blocked = any(
+                _load_json(p).get('status', 'pending') not in {'pending', 'running'}
+                and stage_receipt_issues(report_dir, day, s)
+                for s, p in prerequisites.items()
+            )
+            if not issues or terminal_blocked or not waiting or time.monotonic() >= wait_deadline:
                 break
             _stage_write(path, {**value, 'heartbeat_at':now(), 'reason':'prerequisite_pending', 'issues':issues})
             time.sleep(min(5, max(0, wait_deadline - time.monotonic())))
@@ -1916,7 +1927,7 @@ def stage_overview(report_dir, day):
 
 
 def _stage_main(argv):
-    import argparse, os, sys
+    import argparse, sys
     from concurrent.futures import ThreadPoolExecutor
     from src.utils.constants import DATA_DIR, PROJECT_ROOT
     parser = argparse.ArgumentParser(description='Independent postclose stage dispatcher')
@@ -1950,9 +1961,12 @@ def _stage_main(argv):
     if args.stage == 'wait':
         import time
         deadline = time.monotonic() + args.timeout_sec
-        required = tuple(stage for stage in ('main_machine_policy', 'main_auxiliary_policy',
-            'legacy_machine_report', 'episode_policy', 'outcome_labels', 'pre_submit_delay')
-            if stage in active_stage_names(day))
+        # The checklist binds every producer receipt, including independent
+        # stages. Rendering while any producer still updates its heartbeat
+        # would invalidate the generation immediately after publication.
+        # Summary/controller is the later consumer, never its own predecessor.
+        required = tuple(stage for stage in active_stage_names(day)
+                         if stage != 'summary_handoff')
         while any(_load_json(stage_path(DATA_DIR / 'report', day, s)).get('status', 'pending') in {'pending','running'} for s in required):
             if time.monotonic() >= deadline: return 75
             if stop_event.is_set(): return 75
@@ -1982,13 +1996,24 @@ def _stage_main(argv):
             execute=not args.validate_existing, timeout=args.timeout_sec,
             off=args.off or (s == 'research_allocation' and
                              _joint_research_peer_off(DATA_DIR / 'report', day)),
-            prerequisite_wait=0 if args.recover_closed_target else args.timeout_sec,
+            # Native recovery launches Main and compact together. Compact must
+            # wait for that live predecessor outside the compute slot; zero
+            # wait would defer it permanently before Main can finish.
+            prerequisite_wait=(args.timeout_sec if s == 'main_auxiliary_policy'
+                               else 0) if args.recover_closed_target else args.timeout_sec,
             stop_event=stop_event, resource_blocked=resource_blocked)
     if args.stage == 'machine_group':
-        # Waiting threads hold no compute slot; only two child stages run host-wide.
+        # Finish refreshed parents before launching their consumers. Otherwise
+        # a consumer can accept the previous succeeded parent receipt before
+        # the concurrent parent has published its new pending/running state.
+        # The existing host-wide two-child compute limit remains unchanged.
         results=[run('research_capacity')]
         with ThreadPoolExecutor(max_workers=6) as pool:
-            results += list(pool.map(run, STAGE_OWNER_GROUPS['machine'][:6]))
+            parents = ('collector_recommendation', 'machine_attribution')
+            results += list(pool.map(run, parents))
+            children = tuple(stage for stage in STAGE_OWNER_GROUPS['machine'][:6]
+                             if stage not in parents)
+            results += list(pool.map(run, children))
         results.append(run('summary_handoff'))
     else: results=[run(args.stage)]
     print(json.dumps([dict(stage=r.get('stage_id'), status=r['status'], exit_code=r['exit_code'], cache_reused=r.get('cache_reused',False)) for r in results]))

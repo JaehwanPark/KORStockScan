@@ -9323,6 +9323,36 @@ def write_report(target_date: str, *, audit_phase: str = "manual", verified_proj
         report["summary"]["blocked_reason"] = "raw_row_exclusion_revalidation_required"
         if report.get("status") == "pass":
             report["status"] = "warning"
+    if audit_phase == "preflight" and raw_path.exists():
+        from src.engine.pipeline_event_summary import (
+            seal_producer_summary_source, rebuild_producer_summary_source,
+            producer_summary_paths,
+        )
+        # This existing source owner runs after native bot isolation and raw-row
+        # quarantine, before atomic sizing readers require a sealed generation.
+        try:
+            if _raw_source_writer_active(target_date, raw_path):
+                raise ValueError("producer_source_writer_active")
+            try:
+                producer = seal_producer_summary_source(DATA_DIR, target_date)
+            except ValueError as exc:
+                if not str(exc).startswith(("producer_raw_summary_count_mismatch",
+                                            "producer_raw_summary_identity_mismatch")):
+                    raise
+                producer = rebuild_producer_summary_source(DATA_DIR, target_date)
+            _, producer_path = producer_summary_paths(DATA_DIR / "pipeline_event_summaries", target_date)
+            report["producer_source_ledger"] = {
+                "status": "ready", "path": str(producer_path),
+                "sha256": hashlib.sha256(producer_path.read_bytes()).hexdigest(),
+                "ledger_sha256": producer["raw_source_ledger"]["ledger_sha256"],
+                "source_reconstructed": bool(producer.get("source_reconstruction")),
+                "runtime_effect": False,
+            }
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            # Preserve independent usable cohorts. Exact source-dependent
+            # consumers keep their own strict ledger and economic guards.
+            report["producer_source_ledger"] = {"status": "source_gap", "reason": str(exc),
+                                                "runtime_effect": False}
     json_path, md_path = report_paths(target_date)
     json_path.parent.mkdir(parents=True, exist_ok=True)
     write_json_object_generation_safe(json_path, report)

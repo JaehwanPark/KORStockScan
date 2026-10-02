@@ -28,6 +28,15 @@ class FrozenRows(Sequence):
     def __len__(self):
         return len(self._offsets)
 
+    def extend(self, rows):
+        for row in rows:
+            self.append(row)
+
+    def __eq__(self, other):
+        if not isinstance(other, Sequence):
+            return NotImplemented
+        return len(self) == len(other) and all(left == right for left, right in zip(self, other))
+
     def __getitem__(self, index):
         if isinstance(index, slice):
             return [self[i] for i in range(*index.indices(len(self)))]

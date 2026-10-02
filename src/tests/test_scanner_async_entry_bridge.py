@@ -22,7 +22,8 @@ from src.engine import sniper_state_handlers as handlers
 def capacity_prefetch_calls(monkeypatch):
     calls = []
 
-    def prefetch(code, frame, deadline):
+    def prefetch(code, frame, deadline, **diagnostics):
+        assert diagnostics.get("correlation_id")
         calls.append((code, dict(frame), deadline))
         return {"status": "source_gap", "reason": "fixture_no_account_io"}
 

@@ -9,6 +9,51 @@ import pytest
 from src.engine import sniper_missed_entry_counterfactual as report_mod
 
 
+@pytest.mark.parametrize("stamp", [
+    "2026-10-02T10:00:00", "2026-10-02 10:00:00",
+    "2026-10-02T10:00:00+09:00", "2026-10-02T01:00:00+00:00",
+    "2026-10-02T01:00:00Z",
+])
+def test_counterfactual_clock_preserves_same_instant_on_local_kst_timeline(stamp):
+    from datetime import datetime
+    expected = datetime(2026, 10, 2, 10)
+    assert report_mod._parse_event_dt(stamp) == expected
+    assert report_mod._parse_event_dt(datetime.fromisoformat(stamp.replace("Z", "+00:00"))) == expected
+
+
+@pytest.mark.parametrize("stamp", ["2026-10-02T03:46:00+00:00", "2026-10-02 03:46:00+00:00", "20261002124600"])
+def test_counterfactual_minute_offset_is_converted_before_window_filter(stamp):
+    candidate = {"signal_date": "2026-10-02", "signal_time": "12:45:03", "signal_price": 10000}
+    candle = {"source_timestamp": stamp, "체결시간": "03:46:00", "시가": 10000,
+              "고가": 10100, "저가": 9900, "현재가": 10050}
+    actual = report_mod._compute_window_metrics(candidate, [candle], 15)
+    assert actual["bars"] == 1
+    assert actual["close_ret_pct"] == .5
+    assert report_mod._parse_minute_time("12:46:00", "2026-10-02", "invalid-original-date") is None
+
+
+def test_watch_cycle_mixed_offset_prices_preserve_source_guard_outcome():
+    from datetime import datetime, timedelta, timezone
+    day = "2026-10-02"
+    start = datetime.fromisoformat(day + "T10:00:00+09:00")
+    events = []
+    for minute, price in [(0, 10000), (1, 10060), (10, 9900), (20, 10100)]:
+        stamp = start + timedelta(minutes=minute)
+        text = stamp.replace(tzinfo=None).isoformat() if minute == 0 else stamp.astimezone(timezone.utc).isoformat()
+        events.append(report_mod.EntryEvent(emitted_at=text, signal_date=day, code="005930", name="Samsung", record_id="",
+            stage="scalping_scanner_real_source_guard_block" if minute == 0 else "market_price_observation",
+            fields={"current_price_observed": str(price), "effective_venue": "NXT",
+                    "market_session_bucket": "nxt_regular", "scanner_real_source_guard_skip_reason": "non_positive_rising_start"}))
+    mixed = report_mod._build_watch_cycle_participation_ledger(day, events, [])
+    local_events = copy.deepcopy(events)
+    for event in local_events:
+        event.emitted_at = report_mod._parse_event_dt(event.emitted_at).isoformat()
+    local = report_mod._build_watch_cycle_participation_ledger(day, local_events, [])
+    assert mixed["summary"] == local["summary"]
+    assert mixed["summary"]["unique_watch_cycle_count"] == 1
+    assert mixed["summary"]["scanner_source_guard_outcome_counts"] == {"missed_upside": 1}
+
+
 def _price_ready_row(
     monkeypatch,
     *,

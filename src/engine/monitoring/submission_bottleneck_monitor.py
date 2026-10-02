@@ -1448,6 +1448,10 @@ def entry_execution_tuning_semantics(data_root, now):
                 if len(result["examples"]) < 3:
                     result["examples"].append({"axis": "pre_submit_delay", "reason": "report_identity_invalid", "source_date": delay_report_date})
             delay_grid = delay_report.get("candidate_grid") or []
+            from src.engine.scalping.pre_submit_delay_tuning import price_pattern_projection
+            price_analysis = price_pattern_projection(delay_report)
+            if price_analysis["status"] == "source_invalid":
+                issues["pre_submit_delay_price_pattern_invalid"] += 1
             delay.update(
                 report_status="observed" if report_identity_valid else "invalid",
                 report_date=delay_report_date,
@@ -1457,6 +1461,9 @@ def entry_execution_tuning_semantics(data_root, now):
                 source_date_count=(delay_report.get("source") or {}).get("source_date_count"),
                 committed_count=delay_report.get("committed_attempt_count"),
                 completed_terminal_count=delay_report.get("terminal_observation_count"),
+                submit_call_terminal_count=delay_report.get("terminal_observation_count"),
+                terminal_count_semantics="submit_call_completion_not_fill_or_exit",
+                price_pattern_analysis=price_analysis,
                 candidate_count=len(delay_grid),
                 candidate_delays_sec=[row.get("delay_sec") for row in delay_grid[:8]],
                 report_blockers=[delay_report.get("first_blocker")] if delay_report.get("first_blocker") else [],
@@ -1509,6 +1516,13 @@ def entry_execution_tuning_semantics(data_root, now):
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
         delay.update(status="unobservable", reason=str(exc)[:160])
 
+    # Postclose artifact_freshness owns cancel-wait incidents. This projection
+    # provides the same diagnostics without creating a duplicate intraday alert.
+    from src.engine.error_detectors.artifact_freshness import _entry_cancel_wait_result_semantics, _cancel_wait_monitor_source_date
+    result["entry_cancel_wait"] = _entry_cancel_wait_result_semantics(data_root.parent,
+        _cancel_wait_monitor_source_date(data_root.parent,day,data_root=data_root), now,
+        data_root=data_root)
+    result["entry_cancel_wait"]["notification_owner"] = "artifact_freshness"
     result["issues"] = dict(issues)
     if issues:
         result["status"] = "review_required"

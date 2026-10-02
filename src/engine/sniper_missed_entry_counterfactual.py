@@ -484,9 +484,14 @@ def _ratio(numerator: int, denominator: int) -> float:
     )
 
 
+def _kst_wall_time(value: datetime) -> datetime:
+    """Use the existing local KST timeline without dropping an explicit offset."""
+    return value.astimezone(_KST).replace(tzinfo=None) if value.tzinfo is not None else value
+
+
 def _parse_event_dt(value) -> datetime | None:
     if isinstance(value, datetime):
-        return value
+        return _kst_wall_time(value)
     candidate = str(value or "").strip()
     if not candidate:
         return None
@@ -497,11 +502,11 @@ def _parse_event_dt(value) -> datetime | None:
         "%Y-%m-%d %H:%M:%S",
     ):
         try:
-            return datetime.strptime(candidate, fmt)
+            return _kst_wall_time(datetime.strptime(candidate, fmt))
         except Exception:
             continue
     try:
-        return datetime.fromisoformat(candidate)
+        return _kst_wall_time(datetime.fromisoformat(candidate.replace("Z", "+00:00")))
     except Exception:
         return None
 
@@ -511,17 +516,14 @@ def _parse_minute_time(
 ) -> datetime | None:
     source_text = str(source_timestamp or "").strip()
     if source_text:
-        for fmt in ("%Y%m%d%H%M%S", "%Y-%m-%d %H:%M:%S"):
-            try:
-                return datetime.strptime(
-                    source_text[: 14 if fmt == "%Y%m%d%H%M%S" else 19], fmt
-                )
-            except Exception:
-                continue
+        # A supplied source date/offset cannot be truncated or replaced with
+        # the candidate date when invalid. Broker compact timestamps are KST.
         try:
-            return datetime.fromisoformat(source_text)
-        except Exception:
-            pass
+            if re.fullmatch(r"\d{14}", source_text):
+                return datetime.strptime(source_text, "%Y%m%d%H%M%S")
+            return _kst_wall_time(datetime.fromisoformat(source_text.replace("Z", "+00:00")))
+        except (TypeError, ValueError, OverflowError):
+            return None
     try:
         return datetime.strptime(f"{signal_date} {value}", "%Y-%m-%d %H:%M:%S")
     except Exception:
@@ -1786,7 +1788,7 @@ def _build_microstructure_attempt_outcomes(
             conflicts.add(context_id)
         anchors[context_id] = signature
     rows = []
-    now = now or datetime.now()
+    now = _kst_wall_time(now or datetime.now())
     for context_id, (code, record_id, anchor, price, venue) in anchors.items():
         points = price_points_by_stock_venue.get((code, venue), [])
         start = bisect_right(points, (anchor, float("inf")))
@@ -1976,7 +1978,7 @@ def _build_watch_cycle_participation_ledger(
                 (
                     guard_blocked_at
                     if guard_blocked_at > 0
-                    else event_dt.timestamp() if event_dt is not None else event_index
+                    else event_dt.replace(tzinfo=_KST).timestamp() if event_dt is not None else event_index
                 )
                 * 1000.0
             )

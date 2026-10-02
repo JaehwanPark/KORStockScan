@@ -24,6 +24,8 @@ MONITOR_SNAPSHOT_MANIFEST_DIR = MONITOR_SNAPSHOT_DIR / "manifests"
 ANALYTICS_PARQUET_DIR = DATA_DIR / "analytics" / "parquet"
 THRESHOLD_CYCLE_DIR = DATA_DIR / "threshold_cycle"
 THRESHOLD_SNAPSHOT_DIR = THRESHOLD_CYCLE_DIR / "snapshots"
+POSTCLOSE_STATUS_DIR = DATA_DIR / 'report' / 'threshold_cycle_postclose_status'
+POSTCLOSE_CONTROLLER_DIR = DATA_DIR / 'report' / 'postclose_done_controller'
 CANONICAL_CONTEXT_MIN_AGE_DAYS = 1
 PIPELINE_SUMMARY_MIN_AGE_DAYS = 1
 THRESHOLD_PARTITION_MIN_AGE_DAYS = 30
@@ -330,6 +332,49 @@ def _gzip_jsonl_file(
         )
 
 
+
+def _postclose_source_protection(target_date: date, today: date) -> str | None:
+    """Keep native source representations until handoff and policy-day expiry."""
+    day = target_date.isoformat()
+    status_path = POSTCLOSE_STATUS_DIR / f"threshold_cycle_postclose_{day}.status.json"
+    if not status_path.exists() and not status_path.is_symlink():
+        return None  # Legacy files without a native postclose owner retain their contract.
+    try:
+        if status_path.is_symlink() or status_path.stat().st_size > 1024 * 1024:
+            return 'postclose_status_untrusted'
+        status = json.loads(status_path.read_text(encoding='utf-8'))
+        if not isinstance(status, dict) or status.get('target_date') != day:
+            return 'postclose_status_invalid'
+        if (status.get('status') != 'succeeded'
+                or type(status.get('exit_code')) is not int
+                or status.get('exit_code') != 0):
+            return 'postclose_native_not_closed'
+        from src.utils.market_day import is_krx_trading_day
+        candidate = target_date
+        for _ in range(14):
+            candidate += timedelta(days=1)
+            if is_krx_trading_day(candidate):
+                break
+        else:
+            return 'postclose_next_policy_day_unresolved'
+        if today <= candidate:
+            return f'postclose_policy_day_not_elapsed:{candidate.isoformat()}'
+        controller_path = POSTCLOSE_CONTROLLER_DIR / f'postclose_done_controller_{day}.json'
+        if controller_path.is_symlink() or controller_path.stat().st_size > 1024 * 1024:
+            return 'postclose_controller_untrusted'
+        controller = json.loads(controller_path.read_text(encoding='utf-8'))
+        if (not isinstance(controller, dict) or controller.get('date') != day
+                or controller.get('status') != 'done'
+                or controller.get('whole_native_chain_done_claimed') is not True):
+            return 'postclose_controller_not_closed'
+        from src.engine.automation.postclose_done_controller import done_terminal_receipt_issues
+        if done_terminal_receipt_issues(controller_path, day, started_after_ns=0,
+                                       generation_only=True):
+            return 'postclose_controller_receipt_invalid'
+    except (OSError, ValueError, TypeError):
+        return 'postclose_custody_receipt_missing_or_invalid'
+    return None
+
 def run(*, retention_days: int, today: date, dry_run: bool) -> dict:
     cutoff = today - timedelta(days=retention_days)
     stats = {
@@ -364,13 +409,27 @@ def run(*, retention_days: int, today: date, dry_run: bool) -> dict:
             "rows": 0,
         },
         "skipped_unverified": 0,
+        "skipped_postclose_protected": 0,
+        "postclose_protection_reasons": {},
         "errors": [],
     }
+
+    protection_cache = {}
+    def protected(target_date):
+        if target_date not in protection_cache:
+            protection_cache[target_date] = _postclose_source_protection(target_date, today)
+        reason = protection_cache[target_date]
+        if reason:
+            stats['skipped_postclose_protected'] += 1
+            stats['postclose_protection_reasons'][target_date.isoformat()] = reason
+        return bool(reason)
 
     # pipeline_events_*.jsonl only (already compressed .gz excluded)
     for path in sorted(PIPELINE_EVENTS_DIR.glob("pipeline_events_*.jsonl")):
         target_date = _date_from_pipeline_file(path)
         if target_date is None or target_date > cutoff:
+            continue
+        if protected(target_date):
             continue
         stats["pipeline"]["scanned"] += 1
         try:
@@ -395,6 +454,8 @@ def run(*, retention_days: int, today: date, dry_run: bool) -> dict:
             continue
         kind, target_date = parsed
         if target_date > cutoff:
+            continue
+        if protected(target_date):
             continue
         stats["snapshots"]["scanned"] += 1
         try:
@@ -421,6 +482,8 @@ def run(*, retention_days: int, today: date, dry_run: bool) -> dict:
         target_date = _date_from_threshold_snapshot_file(path)
         if target_date is None or target_date > cutoff:
             continue
+        if protected(target_date):
+            continue
         stats["threshold_snapshots"]["scanned"] += 1
         try:
             if not _threshold_backfill_exists(target_date):
@@ -444,6 +507,8 @@ def run(*, retention_days: int, today: date, dry_run: bool) -> dict:
     ):
         target_date = _date_from_named_file(path, "ai_canonical_context_candidates_")
         if target_date is None or target_date > canonical_cutoff:
+            continue
+        if protected(target_date):
             continue
         stats["canonical_context"]["scanned"] += 1
         try:
@@ -479,6 +544,8 @@ def run(*, retention_days: int, today: date, dry_run: bool) -> dict:
             target_date = _date_from_named_file(path, filename_prefix)
             if target_date is None or target_date > summary_cutoff:
                 continue
+            if protected(target_date):
+                continue
             stats["pipeline_summaries"]["scanned"] += 1
             try:
                 expected_rows = _summary_manifest_expected_rows(
@@ -506,6 +573,8 @@ def run(*, retention_days: int, today: date, dry_run: bool) -> dict:
     for date_dir in sorted(THRESHOLD_CYCLE_DIR.glob("date=????-??-??")):
         target_date = _parse_iso_date(date_dir.name.replace("date=", "", 1))
         if target_date is None or target_date > partition_cutoff:
+            continue
+        if protected(target_date):
             continue
         paths = sorted(date_dir.glob("family=*/part-*.jsonl"))
         stats["threshold_partitions"]["scanned"] += len(paths)
@@ -576,6 +645,11 @@ def main() -> int:
     stats = run(retention_days=args.days, today=today, dry_run=args.dry_run)
     mode = "DRY_RUN" if args.dry_run else "RUN"
     print(f"[DASHBOARD_ARCHIVE_{mode}] cutoff={stats['cutoff']}")
+    if stats.get('skipped_postclose_protected'):
+        print('[DASHBOARD_ARCHIVE_POSTCLOSE_PROTECTED] ' + json.dumps({
+            'count': stats['skipped_postclose_protected'],
+            'reasons': stats['postclose_protection_reasons'],
+        }, sort_keys=True))
     print(
         "[DASHBOARD_ARCHIVE_PIPELINE] "
         f"scanned={stats['pipeline']['scanned']} "

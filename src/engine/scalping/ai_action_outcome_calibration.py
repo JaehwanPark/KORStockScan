@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import io
 import fcntl
 import hashlib
 from itertools import product
@@ -2689,6 +2690,26 @@ def _mechanistic_policy_rows(
     return selected
 
 
+def _mechanistic_selection_reuse_key(threshold_policy: dict[str, Any]) -> str:
+    """Key actions only, for one immutable offline calibration population.
+
+    Strategy rebuild replaces every outer threshold with the selected complete
+    profile, including source-bound fallback profiles. Keep hierarchy, veto,
+    strategy, version and all other fields in the key. This does not cache a
+    decision receipt: its policy hash still belongs to the original candidate.
+    Invalid or future unknown contracts use their complete policy key instead.
+    """
+    from src.engine.scalping.entry_strategy_policy import REGISTRY
+
+    if ("strategy" not in threshold_policy
+            or validate_mechanistic_entry_threshold_policy(threshold_policy)
+            or not set(threshold_policy.get("thresholds", {})).issubset(REGISTRY)):
+        return _canonical_sha256(threshold_policy)
+    action_policy = dict(threshold_policy)
+    action_policy.pop("thresholds")
+    return "strategy_actions:" + _canonical_sha256(action_policy)
+
+
 def _mechanistic_policy_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
     terminal_values = []
     paired_deltas = []
@@ -3161,18 +3182,19 @@ def build_clean_baseline_mechanistic_refinement(
     if parent_policy is not None:
         # The exact incumbent, not historical AI BUY/WAIT, is the control.
         # Never mutate the frozen loader rows or relabel this as actual AI.
-        rows = [
-            {**row, "comparison": {
+        controlled_rows = []
+        for row in rows:
+            incumbent_action = mechanistic_entry_policy_decision(
+                row["setup_evidence"], policy=parent
+            ).get("action")
+            controlled_rows.append({**row, "comparison": {
                 **row["comparison"],
                 "historical_control_action": row["comparison"].get("control_action"),
-                "incumbent_machine_action": mechanistic_entry_policy_decision(row["setup_evidence"], policy=parent).get("action"),
-                "control_action": "BUY" if mechanistic_entry_policy_decision(
-                    row["setup_evidence"], policy=parent
-                ).get("action") == "ENTER_NOW" else "WAIT",
+                "incumbent_machine_action": incumbent_action,
+                "control_action": "BUY" if incumbent_action == "ENTER_NOW" else "WAIT",
                 "control_role": "same_population_current_machine_incumbent",
-            }}
-            for row in rows
-        ]
+            }})
+        rows = controlled_rows
     source_dates = list(source_contract["accepted_source_dates"])
     frozen = source_contract.get("frozen_selection") or {}
     frozen_valid = bool(frozen.get("incumbent_sha256") == _canonical_sha256(parent)
@@ -3218,17 +3240,27 @@ def build_clean_baseline_mechanistic_refinement(
     choices.sort(key=lambda policy: (policy_distance(policy), tuple(policy.values())))
     if frozen_valid:
         choices = [frozen["policy"]]
+    # This cache lives only for the fixed calibration_rows above. Holdout and
+    # paired economics still run the original shared kernel with exact policy
+    # receipts. Do not carry reuse across populations, source generations or
+    # strategy mutations, and do not remove any grid candidate or reorder it.
+    selection_reuse: dict[str, tuple[list[dict[str, Any]], str]] = {}
     for policy in choices:
-        selected = _mechanistic_policy_rows(calibration_rows, policy, parent_policy=parent)
-        selection_sha256 = _canonical_sha256(
-            [
-                {
-                    "decision_trace_id": row["decision_trace_id"],
-                    "fingerprint": row["fingerprint"],
-                }
+        replay_policy = _mechanistic_threshold_policy(policy, parent)
+        reuse_key = _mechanistic_selection_reuse_key(replay_policy)
+        cached_selection = selection_reuse.get(reuse_key)
+        if cached_selection is None:
+            selected = _mechanistic_policy_rows(calibration_rows, policy, parent_policy=parent)
+            selection_sha256 = _canonical_sha256([
+                {"decision_trace_id": row["decision_trace_id"], "fingerprint": row["fingerprint"]}
                 for row in selected
-            ]
-        )
+            ])
+            # Only strategy keys can collapse distinct policies. Bound memory
+            # for legacy grids, whose full keys cannot save a population scan.
+            if reuse_key.startswith("strategy_actions:"):
+                selection_reuse[reuse_key] = (selected, selection_sha256)
+        else:
+            selected, selection_sha256 = cached_selection
         if selection_sha256 in seen_selections:
             continue
         seen_selections.add(selection_sha256)
@@ -5258,6 +5290,60 @@ def _load_machine_observation_rows_uncached(
                     "completed_price_cache_receipts": completed_price_receipts}
 
 
+MACHINE_PROJECTION_MAX_BYTES = 1024 * 1024 * 1024
+
+
+def _read_machine_projection(path: Path, *, kernels: dict) -> dict:
+    """Read one bounded frozen partition; reject stale kernels before large reads."""
+    from src.engine.scalping import compact_auxiliary_paired_replay as compact
+    compressed = Path(str(path) + '.gz')
+    actual = compressed if compressed.is_file() else path
+    if not actual.is_file() or actual.is_symlink():
+        return {}
+    limit = 64 * 1024 * 1024 if actual.suffix == '.gz' else MACHINE_PROJECTION_MAX_BYTES
+    if actual.stat().st_size > limit:
+        return {}
+    before = actual.stat()
+    opener = gzip.open if actual.suffix == '.gz' else open
+    try:
+        with opener(actual, 'rt', encoding='utf-8') as handle:
+            prefix = handle.read(64 * 1024)
+            match = re.match(r'\s*\{\s*"contract"\s*:\s*', prefix)
+            if match:
+                contract, _ = json.JSONDecoder().raw_decode(prefix[match.end():])
+                if not isinstance(contract, dict) or contract.get('kernels') != kernels:
+                    return {}
+        with opener(actual, 'rb') as handle:
+            body = handle.read(MACHINE_PROJECTION_MAX_BYTES + 1)
+            if len(body) > MACHINE_PROJECTION_MAX_BYTES:
+                return {}
+        value = json.loads(body)
+        del body
+        after = actual.stat()
+        if (before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
+                after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+            raise ValueError('machine_projection_changed_during_read')
+        return value if isinstance(value, dict) and compact.valid(value) else {}
+    except (OSError, EOFError, UnicodeDecodeError, json.JSONDecodeError):
+        return {}
+
+
+def _write_machine_projection(path: Path, value: dict) -> None:
+    """Publish lossless compact gzip; semantic row/content hashes are unchanged."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, name = tempfile.mkstemp(prefix='.machine-projection-', dir=path.parent)
+    try:
+        with os.fdopen(descriptor, 'wb') as physical:
+            with gzip.GzipFile(fileobj=physical, mode='wb', compresslevel=1, mtime=0) as compressed:
+                with io.TextIOWrapper(compressed, encoding='utf-8') as handle:
+                    json.dump(value, handle, ensure_ascii=False, allow_nan=False, separators=(',', ':'))
+            physical.flush()
+            os.fsync(physical.fileno())
+        Path(name).replace(Path(str(path) + '.gz'))
+    finally:
+        Path(name).unlink(missing_ok=True)
+
+
 def load_machine_observation_rows(data_root: Path, *, target_date: str,
     materialized_labels_only: bool = False, independent_machine: bool = False,
     minimum_source_date: str = '2026-09-13', completed_price_fetcher=None,
@@ -5276,13 +5362,14 @@ def load_machine_observation_rows(data_root: Path, *, target_date: str,
         match = re.search(r'(\d{4}-\d{2}-\d{2})\.jsonl', path.name)
         if match and max('2026-09-29', minimum_source_date) <= match[1] <= target_date:
             paths[match[1]] = path
-    rows, counts, partitions, prices, receipts = [], Counter(), [], [], []
+    from src.engine.scalping.postclose_entry_validation import FrozenRows
+    rows, counts, partitions, prices, receipts = FrozenRows(), Counter(), [], [], []
     capture_totals = Counter()
     kernels = {name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
                for name in ('ai_action_outcome_calibration.py', 'ai_decision_quality.py',
                             'entry_strategy_policy.py', 'entry_setup_evidence.py',
                             'entry_candle_context.py', 'ai_decision_trace.py',
-                            'microstructure_reaction_context.py')}
+                            'microstructure_reaction_context.py', 'postclose_entry_validation.py')}
     for day in sorted(paths):
         def dependencies():
             result = {}
@@ -5307,14 +5394,14 @@ def load_machine_observation_rows(data_root: Path, *, target_date: str,
         with cache.with_suffix('.lock').open('a') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             before = dependencies()
-            value = compact.read(cache) if cache.is_file() and not cache.is_symlink() and cache.stat().st_size <= 64 * 1024 * 1024 else {}
+            value = _read_machine_projection(cache, kernels=kernels)
             price_as_of = (completed_price_as_of.isoformat() if completed_price_as_of else None) if day == target_date else None
-            if day < target_date and compact.valid(value):
+            if day < target_date and value:
                 price_as_of = (value.get('contract') or {}).get('completed_price_as_of')
             contract = dict(schema='machine_observation_projection_v1', source_date=day,
                 dependencies=before, kernels=kernels,
                 completed_price_as_of=price_as_of)
-            reused = compact.valid(value) and value.get('contract') == contract
+            reused = bool(value) and value.get('contract') == contract
             if not reused:
                 daily_rows, census = _load_machine_observation_rows_uncached(data_root,
                     target_date=day, **{**options, 'minimum_source_date': day,
@@ -5326,7 +5413,7 @@ def load_machine_observation_rows(data_root: Path, *, target_date: str,
                 contract['dependencies'] = after
                 value = compact.sealed(dict(contract=contract, rows=daily_rows, census=census,
                     runtime_effect=False, actual_order_submitted=False, allowed_runtime_apply=False))
-                compact.write(cache, value)
+                _write_machine_projection(cache, value)
             rows.extend(value['rows'])
             census = value['census']
             counts.update({k:v for k,v in census.items() if isinstance(v, int)})
@@ -5335,6 +5422,10 @@ def load_machine_observation_rows(data_root: Path, *, target_date: str,
             prices.extend(census.get('completed_price_cache_receipts') or [])
             receipts.append(dict(source_date=day, artifact_content_sha256=value['artifact_content_sha256'],
                 cache_reused=reused, raw_reloaded=not reused))
+            # Cumulative rows live in the existing disk-backed sequence. Release
+            # the daily rich payload before opening the next source partition.
+            del value
+            daily_rows = None
     population = {key: capture_totals[key] for key in
                   ('verified_capture_count', 'unique_verified_capture_count', 'duplicate_capture_collapsed_count')}
     population.update(partitions=partitions, economic_exclusions_do_not_erase_capture_population=True)

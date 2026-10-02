@@ -15,6 +15,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import statistics
 import tempfile
 import time
@@ -2268,6 +2269,7 @@ def _durable_observation_manifest_unchecked(target_date: str, source_quality_dir
     before = raw.stat()
     observed_bars = {}
     seen_event_hashes = set()
+    capture_chains = {}
     logical_hash = hashlib.sha256()
     target_profiles = _effective_report_profiles(date.fromisoformat(target_date))
     modern_contract = date.fromisoformat(target_date) >= date(2026, 9, 28)
@@ -2327,6 +2329,31 @@ def _durable_observation_manifest_unchecked(target_date: str, source_quality_dir
                 if modern_contract and observation_hash in seen_event_hashes:
                     raise ValueError("duplicate_observation_identity")
                 seen_event_hashes.add(observation_hash)
+                chain = body.get("capture_sequence")
+                linked_predecessor = False
+                chain_key = None
+                if chain is not None:
+                    if (not isinstance(chain, dict)
+                            or set(chain) != {"schema", "generation_id", "sequence", "previous_observation_sha256"}
+                            or chain.get("schema") != "low_price_capture_sequence_v1"
+                            or re.fullmatch(r"[0-9a-f]{32}", str(chain.get("generation_id"))) is None
+                            or type(chain.get("sequence")) is not int or chain["sequence"] < 1
+                            or type(body.get("runtime_pid")) is not int or body["runtime_pid"] < 1
+                            or not isinstance(body.get("runtime_cwd"), str) or not body["runtime_cwd"]
+                            or not isinstance(body.get("state_path"), str) or not body["state_path"]):
+                        raise ValueError("observation_capture_sequence_invalid")
+                    chain_key = (profile_id, body["execution_mode"], chain["generation_id"])
+                    previous = capture_chains.get(chain_key)
+                    identity = (body["runtime_pid"], body["runtime_cwd"], body["state_path"])
+                    if previous is None:
+                        if chain["sequence"] != 1 or chain["previous_observation_sha256"] is not None:
+                            raise ValueError("observation_capture_predecessor_missing")
+                    elif (chain["sequence"] != previous[0] + 1
+                          or chain["previous_observation_sha256"] != previous[1]
+                          or identity != previous[2]):
+                        raise ValueError("observation_capture_predecessor_mismatch")
+                    else:
+                        linked_predecessor = True
                 profile = manifest["profiles"].setdefault(profile_id, {
                     "events": 0, "real_events": 0, "sim_events": 0,
                     "bar_evaluations": 0, "policy_hashes": [],
@@ -2341,7 +2368,17 @@ def _durable_observation_manifest_unchecked(target_date: str, source_quality_dir
                         profile["latest_real_observed_at_kst"] = body["observed_at_kst"]
                         profile["latest_real_state_source_sha256"] = state_sha
                     elif body["observed_at_kst"] == latest and state_sha != profile["latest_real_state_source_sha256"]:
-                        raise ValueError("same_clock_state_generation_conflict")
+                        # A loop timestamp may cover several ledger transitions.
+                        # Only the producer's exact adjacent hash chain resolves
+                        # the tie; legacy raw order alone is not this proof.
+                        if (not linked_predecessor
+                                or profile.get("latest_real_observation_sha256") != chain["previous_observation_sha256"]):
+                            raise ValueError("same_clock_state_generation_conflict")
+                        profile["latest_real_state_source_sha256"] = state_sha
+                    if latest is None or body["observed_at_kst"] >= latest:
+                        profile["latest_real_observation_sha256"] = observation_hash
+                if chain_key is not None:
+                    capture_chains[chain_key] = (chain["sequence"], observation_hash, identity)
                 profile["events"] += 1
                 if mode in {"real", "sim"}:
                     profile[f"{mode}_events"] += 1

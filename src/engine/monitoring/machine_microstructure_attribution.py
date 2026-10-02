@@ -2538,6 +2538,7 @@ def _widget_inventory(
     research_schemas = (
         "widget_symbol_signal_policy_research_v2",
         "widget_symbol_signal_policy_research_v3",
+        "widget_symbol_signal_policy_research_v4",
     )
     expansion_schemas = ("widget_collector_expansion_recommendation_v1",)
     calibration = _read_target_json(

@@ -11,6 +11,7 @@ import os
 import stat
 import time
 import threading
+import tempfile
 from collections import Counter, deque
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -396,7 +397,8 @@ def _part_snapshot_stamp(path: Path) -> list[int]:
     return [st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns]
 
 
-def _producer_raw_ledger(data_dir: Path, target_date: str, *, selected_stages=frozenset()) -> dict[str, Any]:
+def _producer_raw_ledger(data_dir: Path, target_date: str, *, selected_stages=frozenset(),
+                         valid_event_observer=None) -> dict[str, Any]:
     raw_dir = data_dir / "pipeline_events"
     counts = Counter()
     reasons = Counter()
@@ -468,6 +470,8 @@ def _producer_raw_ledger(data_dir: Path, target_date: str, *, selected_stages=fr
                 entry["excluded_count"] += 1
             return
         counts["valid_count"] += 1
+        if valid_event_observer is not None:
+            valid_event_observer(payload)
         if duplicate:
             counts["duplicate_eligible_count"] += 1
         entry["valid_count"] += 1
@@ -516,6 +520,105 @@ def _logical_body_digest(path: Path) -> tuple[str | None, int]:
     if any(item != results[0] for item in results[1:]):
         raise ValueError("summary_plain_gzip_conflict")
     return results[0]
+
+
+def rebuild_producer_summary_source(data_dir: Path, target_date: str) -> dict[str, Any]:
+    """Reconstruct a closed source profile from retained raw, preserving originals.
+
+    This is source recovery, never a live producer timing or trading receipt.
+    The ordinary sealer remains strict and validates the reconstructed profile.
+    """
+    if date.fromisoformat(target_date).isoformat() != target_date:
+        raise ValueError("source_date_invalid")
+    data_dir = Path(data_dir).resolve()
+    directory = data_dir / "pipeline_event_summaries"
+    summary, manifest_path = producer_summary_paths(directory, target_date)
+    from src.engine.observation_source_quality_audit import _raw_source_writer_active
+    raw_path = existing_or_gzip_path(data_dir / "pipeline_events" / f"pipeline_events_{target_date}.jsonl")
+    if _raw_source_writer_active(target_date, raw_path):
+        raise ValueError("producer_reconstruction_writer_active")
+    if summary.is_symlink() or manifest_path.is_symlink():
+        raise ValueError("producer_reconstruction_symlink")
+    with manifest_path.with_suffix(".lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        before_summary = summary.read_bytes()
+        before_manifest = manifest_path.read_bytes()
+        original = json.loads(before_manifest)
+        if (not isinstance(original, dict) or original.get("mode") != "shadow"
+                or original.get("summary_stages") != sorted(PRODUCER_SUMMARY_STAGES)
+                or original.get("summary_detail_level") != PRODUCER_PARITY_DETAIL_LEVEL
+                or original.get("schema_version") != PRODUCER_SUMMARY_SCHEMA_VERSION
+                or original.get("raw_suppression_enabled") is not False
+                or original.get("summary_path") != str(summary)):
+            raise ValueError("producer_reconstruction_profile_invalid")
+        with tempfile.TemporaryDirectory(prefix=".source-recovery-", dir=directory) as private:
+            collector = ProducerSummaryCompactor(summary_dir=Path(private), mode="shadow",
+                                                 flush_sec=3600, auto_flush=False)
+            count = 0
+            def observe(payload):
+                nonlocal count
+                collector.submit(payload)
+                count += 1
+                if count % 1024 == 0:
+                    collector.flush(target_date=target_date)
+            try:
+                raw = _producer_raw_ledger(data_dir, target_date, valid_event_observer=observe)
+                if raw["duplicate_eligible_count"] or not raw["parts"]:
+                    raise ValueError("producer_reconstruction_raw_invalid")
+                collector.flush(target_date=target_date)
+            finally:
+                collector.close()
+            rebuilt, rebuilt_manifest = producer_summary_paths(Path(private), target_date)
+            candidate = _read_json(rebuilt_manifest)
+            if candidate.get("summary_event_count") != raw["valid_count"]:
+                raise ValueError("producer_reconstruction_count_invalid")
+            totals, hashes = Counter(), Counter()
+            for row in load_summary_rows(rebuilt, include_samples=False, strict=True):
+                totals[row["stage"]] += row["event_count"]
+                hashes[row["stage"]] = (hashes[row["stage"]] + int(row["evidence_hash_sum"], 16)) % IDENTITY_MODULUS
+            if any(totals[stage] != entry["valid_count"]
+                   or f"{hashes[stage]:064x}" != entry["raw_evidence_hash_sum"]
+                   for stage, entry in raw["stages"].items()):
+                raise ValueError("producer_reconstruction_identity_invalid")
+            # Publication cannot adopt source appended after the observed generation.
+            for part in raw["parts"]:
+                for representation in part["representations"]:
+                    if _part_snapshot_stamp(Path(representation["path"])) != representation["stamp"]:
+                        raise ValueError("producer_reconstruction_raw_changed")
+            if summary.read_bytes() != before_summary or manifest_path.read_bytes() != before_manifest:
+                raise ValueError("producer_reconstruction_predecessor_changed")
+            backup = directory / "recovery" / target_date / hashlib.sha256(before_manifest).hexdigest()
+            backup.mkdir(parents=True, exist_ok=True)
+            for path, content in ((backup / summary.name, before_summary),
+                                  (backup / manifest_path.name, before_manifest)):
+                if path.exists():
+                    if path.read_bytes() != content:
+                        raise ValueError("producer_reconstruction_backup_conflict")
+                else:
+                    with path.open("xb") as handle:
+                        handle.write(content)
+                        handle.flush()
+                        os.fsync(handle.fileno())
+            updated = {**original, "summary_event_count": candidate["summary_event_count"],
+                       "summary_row_count": candidate["summary_row_count"],
+                       "summary_storage_size_bytes": rebuilt.stat().st_size,
+                       "source_reconstruction": {"schema": "producer_retained_raw_recovery_v1",
+                           "source_date": target_date,
+                           "reconstructed_at": datetime.now().astimezone().isoformat(),
+                           "original_summary_sha256": hashlib.sha256(before_summary).hexdigest(),
+                           "original_manifest_sha256": hashlib.sha256(before_manifest).hexdigest(),
+                           "original_backup_directory": str(backup),
+                           "raw_logical_sha256": raw["logical_sha256"],
+                           "runtime_effect": False, "live_producer_timing_claimed": False}}
+            updated.pop("raw_source_ledger", None)
+            try:
+                rebuilt.replace(summary)
+                _write_json(manifest_path, updated)
+            except BaseException:
+                summary.write_bytes(before_summary)
+                manifest_path.write_bytes(before_manifest)
+                raise
+    return seal_producer_summary_source(data_dir, target_date)
 
 
 def seal_producer_summary_source(data_dir: Path, target_date: str,

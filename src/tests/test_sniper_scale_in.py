@@ -16708,14 +16708,15 @@ def test_entry_capacity_source_reuses_exact_receipt_but_normal_submit_reads_fres
     reused["raw"]["value"] = 99
     assert read("005930", 10000, source_only=True)["raw"]["value"] == 1
     read("005930", 10000)
-    assert calls == [{}, {}]  # Order-path requests are neither cached nor deferred.
+    assert len(calls) == 2
+    assert all(row["request_purpose"] == "entry_live_sizing" and "source_only" not in row for row in calls)
     read("005930", 10001, source_only=True)
     state[0] = "inventory-2"
     read("005930", 10000, source_only=True)
     clock[0] += 2.01
     read("005930", 10000, source_only=True)
     assert len(calls) == 5
-    assert calls[-3:] == [{"source_only": True}] * 3
+    assert all(row["source_only"] and row["request_purpose"] == "entry_operating_observation" for row in calls[-3:])
     state_handlers._reset_entry_capacity_receipts()
 
 
@@ -16792,7 +16793,7 @@ def test_resolve_scalp_cash_budget_context_prefers_kt00011_deposit_with_cash_qty
     monkeypatch.setattr(
         state_handlers.kiwoom_utils,
         "get_orderable_by_margin_kt00011",
-        lambda token, code, unit_price=None: {
+        lambda token, code, unit_price=None, **diagnostics: {
             "error": "",
             "deposit": 1_827_370,
             "cash_only_orderable_amount": 2_394_255,
@@ -16831,7 +16832,7 @@ def test_resolve_scalp_cash_budget_context_preserves_operator_kt00001_floor(
     monkeypatch.setattr(
         state_handlers.kiwoom_utils,
         "get_orderable_by_margin_kt00011",
-        lambda token, code, unit_price=None: {
+        lambda token, code, unit_price=None, **diagnostics: {
             "error": "",
             "deposit": 1_078_208,
             "cash_only_orderable_amount": 11_983_424,

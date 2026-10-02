@@ -904,7 +904,9 @@ def test_runtime_pre_ai_producer_freezes_owner_inputs_without_submit(monkeypatch
     assert {k:v for k,v in stock.items() if k != '_machine_observation_revision'} == before
     assert stock['_machine_observation_revision']['digest'] == 'c'*64
     assert requests == [('005930',10020,0,{'source_only':True,
-        'reuse_only': machine_action != 'ENTER_NOW'})]
+        'reuse_only': machine_action != 'ENTER_NOW', 'correlation_id': 'pre-ai-live',
+        'diagnostic_context': {'broker_route': broker_route, 'effective_venue': venue,
+            'session_bucket': session, 'mechanistic_action': machine_action}})]
     logger.flush_pipeline_event_producer_summary()
     day=datetime.now(sizing.KST).date().isoformat()
     events, source_contract=split._bounded_execution_projection(day)

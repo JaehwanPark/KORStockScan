@@ -52,6 +52,8 @@ Registry의 15개 이름은 실제 계산 수나 경제 튜너 수가 아니다.
 
 `main_machine_policy` recovery의 빈 commands는 기존 발행물의 원천·승계 검증이며 새 계산으로 세지 않는다. OFF도 유효 terminal을 요구하며 missing을 OFF로 추정하지 않는다.
 
+복구 Main과 compact를 함께 launch할 때 compact는 기존 제한(기본4시간) 안에서 선행 Main/labels 종료를 compute slot 밖에서 기다린다. terminal 실패·오염이 있는 peer는 다른 pending peer 때문에 대기하지 않고 deferred로 남긴다. 10/2 수리본의 코드 검증과 현재 소비 release는 [당일 복구 감사](../audits/postclose-semantic-source-monitoring-2026-10-02.md)를 따른다. 복구를 이유로 provider/예산·정책·주문 guard를 변경하지 않는다.
+
 ## 3. 독립 timer 내부 작업
 
 ### 3.1 Widget
@@ -62,7 +64,7 @@ outer wrapper→`widget_policy` dispatcher→정확일자 EOD gate→`widget_adv
 
 ### 3.2 Machine group
 
-capacity 후 collector·attribution·timing·weakness·allocation·legacy approval을 독립 dispatch하고, attribution 후속은 자기 선행을 기다린다. 마지막 summary를 인계한다. main machine·compact·labels·Episode는 그룹의 검증 대상이며 이 timer가 다시 계산하는 목록에 포함하지 않는다. heavy child는 host 공통 두 slot, waiting은 slot 밖에서 수행한다. collector 실패가 다른 독립 분석을 취소하지 않는다.
+capacity 완료 후 collector·attribution을 dispatch하고 두 부모의 현재 재실행이 terminal이 된 다음 timing·weakness·allocation·legacy approval을 dispatch한다. 후행은 자기 exact prerequisite receipt를 검증한다. 마지막 summary를 인계한다. main machine·compact·labels·Episode는 그룹의 검증 대상이며 이 timer가 다시 계산하는 목록에 포함하지 않는다. heavy child는 host 공통 두 slot, waiting은 slot 밖에서 수행한다. collector 실패가 다른 독립 분석을 취소하지 않는다.
 
 timing/weakness는 report와 다음 날짜 policy/evidence를 쓸 수 있고 attribution은 관측 manifest를 쓸 수 있다. unit exit/stop만으로 정책 미작성·오염을 판정하지 않고 실제 SHA·생성시각·carry/후보·consumer를 대사한다.
 
@@ -109,6 +111,10 @@ timing/weakness는 report와 다음 날짜 policy/evidence를 쓸 수 있고 att
 
 선행 실패/timeout/deadline이면 cleanup을 실행하지 않는다. cron은 exact-source 최신 pre-cleanup FAIL과 cleanup run 부재를 `blocked_by_finalization`으로 구분하며 parent FAIL을 유지한다. 실제 cleanup 실패·미상 원인·다른 날짜는 일반 판정이다. 복구는 원본 FAIL을 보존한 승인된 `--recover-closed-target`와 정식 선행 재검증을 따른다.
 
+### 5.1.1 보관 생산자의 장후 source custody
+
+Main DONE·DB 적재·snapshot manifest만으로 원 canonical 파일의 모든 후행 소비가 완료된 것은 아니다. 후속 보관 수리본의 `compress_db_backfilled_files`는 native 미종결, 다음 KRX 정책일 미경과, 전체 controller 미종결/receipt 검증 실패의 원천 날짜를 압축에서 보류한다. 같은 날짜의 raw·snapshot·threshold snapshot·canonical context·summary·partition과 보류 사유를 묶는다. metadata/깨진 symlink/불완전 receipt는 fail closed다. 보관 압축이 이미 발생했다면 봉인 manifest와 해제 hash가 같은 canonical snapshot만 복원하고 원 gzip을 보존한다. raw의 archive identity를 확인하며 representation 변경의 영향 ledger/최종 consumer를 재결속한다. cutoff/compute/정책/주문 한도를 바꾸지 않는다. 이 guard의 현재 선택 여부는 [10/2 감사 영수증](../audits/postclose-semantic-source-monitoring-2026-10-02.md)이 소유한다.
+
 ### 5.2 정책별 선택 경계
 
 | owner | 선택·소비 경계 |
@@ -151,3 +157,5 @@ v7/v4 후보는 해당 계획의 source-date 계약과 기존 publisher/승계 �
 
 <a id="6-다음-상세검토-우선순위"></a>
 과거 proposal/checklist의 명시 anchor는 주소 호환용이다. 현재 수용·우선순위는 이 절과 당일 checklist가 소유하며 오래된 Due/PID/완료 상태를 승계하지 않는다.
+
+장후 복구의 독립 machine 그룹은 부모 collector/attribution 완료 뒤 timing/weakness/allocation/approval을 실행하고 Main의 checklist 세대 발행은 모든 producer terminal 뒤 수행하도록 추가 검토했다. compute 슬롯·상한·예약은 유지한다. [10/2 실제 실패와 후속 수리 후보](../audits/postclose-semantic-source-monitoring-2026-10-02.md)의 selector/pin 영수증으로 실제 적용을 판정한다.

@@ -5400,6 +5400,74 @@ def test_actual_capture_disabled_never_claims_persisted(tmp_path, monkeypatch):
     assert machine.snapshot()["economic_capture"]["status"] == "source_gap"
 
 
+@pytest.mark.parametrize("defect", [None, "legacy", "previous_hash", "missing_event", "producer_identity", "new_generation"])
+def test_native_same_clock_transitions_require_exact_producer_chain(tmp_path, monkeypatch, defect):
+    from src.engine.monitoring.low_price_two_leg_tuning import durable_observation_manifest
+    import src.utils.pipeline_event_logger as logger
+    events = []
+    def emit(*args, **kwargs):
+        events.append({'stage': 'low_price_actual_economic_observation', 'fields': kwargs['fields']})
+        return {'structured_append_succeeded': True}
+    monkeypatch.setattr(logger, 'emit_pipeline_event', emit)
+    profile = PROFILES['cj_cgv_afternoon']
+    profile = replace(profile, policy=replace(profile.policy, runtime_policy_hash='a' * 64))
+    machine = LowPriceTwoLegMachine(profile=profile, gateway=object(),
+        state_path=tmp_path/'state.json', live_enabled=True)
+    day = '2026-09-28'
+    machine._state.update(trade_date=day, status='NO_TRADE', position_qty=0,
+        legs=[], schema=f'low_price_two_leg_{profile.profile_id}_state_v1')
+    now = datetime.fromisoformat(day+'T14:16:00+09:00')
+    machine._record(now, 'bar_evaluated_no_signal')
+    machine._record(now, 'entry_adverse_flow_decision')
+    bodies = [json.loads(e['fields']['observation_json']) for e in events]
+    assert bodies[0]['state_source_sha256'] != bodies[1]['state_source_sha256']
+    assert bodies[1]['capture_sequence']['previous_observation_sha256'] == events[0]['fields']['observation_sha256']
+    if defect == 'legacy':
+        for b in bodies: b.pop('capture_sequence')
+    elif defect == 'previous_hash': bodies[1]['capture_sequence']['previous_observation_sha256'] = 'b' * 64
+    elif defect == 'missing_event': bodies[1]['capture_sequence']['sequence'] = 3
+    elif defect == 'producer_identity': bodies[1]['runtime_pid'] += 1
+    elif defect == 'new_generation':
+        bodies[1]['capture_sequence'].update(generation_id='c'*32, sequence=1, previous_observation_sha256=None)
+    for e,b in zip(events,bodies):
+        encoded=json.dumps(b, sort_keys=True, separators=(',', ':'))
+        e['fields'].update(observation_json=encoded, observation_sha256=hashlib.sha256(encoded.encode()).hexdigest())
+    content=''.join(json.dumps(e)+'\n' for e in events)
+    source=tmp_path/f'pipeline_events_{day}.jsonl';source.write_text(content)
+    audit=tmp_path/'audit';audit.mkdir()
+    (audit/f'observation_source_quality_audit_{day}.json').write_text(json.dumps({'source':{
+        'pipeline_events':str(source),'logical_content_sha256':hashlib.sha256(content.encode()).hexdigest(),
+        'audited_stage_counts':{'low_price_actual_economic_observation':2}}}))
+    result=durable_observation_manifest(day,audit)
+    if defect is None:
+        assert result['status']=='pass', result
+        assert result['valid_event_count']==2
+        assert result['profiles'][profile.profile_id]['latest_real_state_source_sha256']==bodies[1]['state_source_sha256']
+    else:
+        assert result['status']=='partial', result
+        assert result['invalid_event_count']==1
+
+
+def test_native_capture_append_failure_exposes_missing_sequence_and_day_resets(tmp_path, monkeypatch):
+    import src.utils.pipeline_event_logger as logger
+    captured=[]
+    def emit(*args, **kwargs):
+        captured.append(json.loads(kwargs['fields']['observation_json']))
+        return {'structured_append_succeeded':len(captured)!=2}
+    monkeypatch.setattr(logger,'emit_pipeline_event',emit)
+    profile=PROFILES['cj_cgv_afternoon']
+    machine=LowPriceTwoLegMachine(profile=profile,gateway=object(),state_path=tmp_path/'state.json')
+    now=datetime.fromisoformat('2026-09-28T14:16:00+09:00')
+    for action in ('first','failed_append','third'):machine._record(now,action)
+    assert [b['capture_sequence']['sequence'] for b in captured]==[1,2,3]
+    encoded=json.dumps(captured[1],sort_keys=True,separators=(',',':'))
+    assert captured[2]['capture_sequence']['previous_observation_sha256']==hashlib.sha256(encoded.encode()).hexdigest()
+    machine._record(now+timedelta(days=1),'new_day')
+    last=captured[-1]['capture_sequence']
+    assert last['sequence']==1 and last['previous_observation_sha256'] is None
+    assert last['generation_id']!=captured[0]['capture_sequence']['generation_id']
+
+
 def test_actual_full_terminal_reproduction_requires_eight_native_legs():
     from src.engine.monitoring.low_price_two_leg_tuning import actual_execution_confirmation
     episodes, rows = [], []

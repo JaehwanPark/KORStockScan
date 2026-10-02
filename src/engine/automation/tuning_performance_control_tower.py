@@ -137,6 +137,13 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
             + list(verifier.get("issues") or [])
         ),
     }
+    from src.engine.automation.entry_cancel_wait_tuning import load_handoff_view
+    cancel_wait = load_handoff_view(target_date, REPORT_ROOT_DIR)
+    if cancel_wait is not None:
+        report["entry_cancel_wait_economic_tuning"] = cancel_wait
+        summary_view = (((summary.get("sources") or {}).get("entry_cancel_wait") or {}).get("economic_evidence") or {}).get("cancel_wait_reconciliation")
+        if summary.get("sources", {}).get("entry_cancel_wait") is not None and summary_view != cancel_wait["reconciliation"]:
+            raise ValueError("cancel_wait_summary_projection_generation_invalid")
     json_path, md_path = report_paths(target_date)
     assert_sources_unchanged(handoff_receipt, handoff_paths)
     json_path.parent.mkdir(parents=True, exist_ok=True)

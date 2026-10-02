@@ -1891,3 +1891,108 @@ def test_scheduled_stage_check_reports_pending_as_deferred(stage_environment, mo
     monkeypatch.setattr(constants, 'DATA_DIR', report.parent)
     h._stage_write(h.stage_path(report, day, 'main_auxiliary_policy'), {'status':status})
     assert h._stage_main(['--stage','main_auxiliary_policy','--date',day,'--check'])==75
+
+
+@pytest.mark.parametrize('stage,recovery,expected', [
+    ('main_auxiliary_policy', True, 123), ('main_auxiliary_policy', False, 123),
+    ('machine_timing', True, 0), ('machine_timing', False, 123),
+])
+def test_compact_recovery_keeps_bounded_prerequisite_wait(monkeypatch, stage, recovery, expected):
+    import signal
+    from src.engine.automation import postclose_summary_handoff as h
+    seen=[]
+    monkeypatch.setattr(signal, 'signal', lambda *a: None)
+    def run(s, *a, **kw):
+        seen.append(kw)
+        return dict(stage_id=s, status='succeeded', exit_code=0)
+    monkeypatch.setattr(h,'run_stage',run)
+    args=['--stage',stage,'--date','2026-09-28','--timeout-sec','123']
+    if recovery: args.append('--recover-closed-target')
+    assert h._stage_main(args)==0
+    assert seen[0]['prerequisite_wait']==expected
+    assert seen[0]['recovery'] is recovery
+
+
+def test_compact_wait_does_not_hide_terminal_failed_peer(stage_environment, monkeypatch):
+    import time
+    h,day,report,run,_produce=stage_environment
+    h._stage_write(h.stage_path(report,day,'outcome_labels'), {'status':'failed'})
+    h._stage_write(h.stage_path(report,day,'legacy_machine_report'), {'status':'running'})
+    monkeypatch.setattr(h,'stage_receipt_issues',lambda _report,_day,s,**kw:[s+':blocked'])
+    monkeypatch.setattr(time,'sleep',lambda _: pytest.fail('terminal failure must not wait'))
+    result=run('main_auxiliary_policy',prerequisite_wait=123)
+    assert result['status']=='deferred' and result['exit_code']==75
+    assert 'outcome_labels:blocked' in result['issues']
+
+
+@pytest.mark.parametrize("recovery", [False, True])
+def test_machine_group_refreshes_parents_before_consumers(monkeypatch, recovery):
+    import threading
+    from src.engine.automation import postclose_summary_handoff as h
+    completed = set()
+    lock = threading.Lock()
+    def run(stage, *args, **kwargs):
+        if stage in {'machine_timing', 'market_weakness', 'legacy_policy_approval'}:
+            with lock:
+                assert 'machine_attribution' in completed
+        if stage == 'summary_handoff':
+            with lock:
+                assert set(h.STAGE_OWNER_GROUPS['machine'][:6]) <= completed
+        with lock:
+            completed.add(stage)
+        return dict(stage_id=stage, status='succeeded', exit_code=0)
+    # Force the schedule that exposed the stale-parent race: if a single
+    # submission mixes parents and children, consumers run first.
+    import concurrent.futures
+    class ConsumerFirstPool:
+        def __init__(self, *, max_workers):
+            assert max_workers == 6
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            return False
+        def map(self, fn, items):
+            items = list(items)
+            parents = {'collector_recommendation', 'machine_attribution'}
+            if parents <= set(items) and len(items) > len(parents):
+                items.sort(key=lambda item: item in parents)
+            return [fn(item) for item in items]
+    monkeypatch.setattr(concurrent.futures, 'ThreadPoolExecutor', ConsumerFirstPool)
+    monkeypatch.setattr(h, 'run_stage', run)
+    args = ['--stage', 'machine_group', '--date', '2026-09-21']
+    if recovery:
+        args.append('--recover-closed-target')
+    assert h._stage_main(args) == 0
+    assert completed == set(h.STAGE_OWNER_GROUPS['machine'][:6]) | {'research_capacity', 'summary_handoff'}
+
+
+@pytest.mark.parametrize("independent", ['widget_policy', 'research_capacity', 'collector_recommendation'])
+def test_main_generation_wait_includes_independent_producers(monkeypatch, independent):
+    import time
+    from src.engine.automation import postclose_summary_handoff as h
+    finished = False
+    sleeps = []
+    def load(path):
+        # The summary consumer cannot block its own predecessor generation.
+        if path.stem == 'summary_handoff':
+            return {'status': 'running'}
+        return {'status': 'running' if path.stem == independent and not finished else 'succeeded'}
+    def sleep(seconds):
+        nonlocal finished
+        sleeps.append(seconds)
+        finished = True
+    monkeypatch.setattr(h, '_load_json', load)
+    monkeypatch.setattr(time, 'sleep', sleep)
+    monkeypatch.setattr(h, 'run_stage', lambda *a, **kw: pytest.fail('wait cannot launch a producer'))
+    assert h._stage_main(['--stage', 'wait', '--date', '2026-09-21']) == 0
+    assert sleeps == [1]
+
+
+def test_main_generation_wait_preserves_existing_timeout(monkeypatch):
+    import time
+    from src.engine.automation import postclose_summary_handoff as h
+    ticks = iter([0.0, 2.0])
+    monkeypatch.setattr(time, 'monotonic', lambda: next(ticks))
+    monkeypatch.setattr(time, 'sleep', lambda *a: pytest.fail('deadline already elapsed'))
+    monkeypatch.setattr(h, '_load_json', lambda p: {'status': 'running' if p.stem == 'widget_policy' else 'succeeded'})
+    assert h._stage_main(['--stage', 'wait', '--date', '2026-09-21', '--timeout-sec', '1']) == 75

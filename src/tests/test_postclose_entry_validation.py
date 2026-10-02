@@ -209,6 +209,46 @@ def test_cumulative_projection_keeps_first_day_beyond_four_days_and_streams_hash
     assert combined['artifact_content_sha256'] == replay['artifact_content_sha256']
 
 
+def test_machine_projection_large_cache_preserves_hash_rows_and_reuse(tmp_path):
+    import json
+    path = tmp_path / 'projection.json'
+    kernels = {'code.py': 'a' * 64}
+    value = compact.sealed({'contract': {'kernels': kernels},
+                            'rows': [{'evidence': 'x' * (65 * 1024 * 1024), 'cost': None}],
+                            'census': {'captured': 1}})
+    calibration._write_machine_projection(path, value)
+    compressed = path.with_suffix('.json.gz')
+    assert compressed.stat().st_size < 64 * 1024 * 1024
+    read = calibration._read_machine_projection(path, kernels=kernels)
+    assert read == value
+    assert read['artifact_content_sha256'] == compact.digest({k:v for k,v in value.items() if k != 'artifact_content_sha256'})
+    assert calibration._read_machine_projection(path, kernels={'code.py': 'b' * 64}) == {}
+
+
+def test_machine_projection_cache_invalid_inputs_do_not_create_rows(tmp_path, monkeypatch):
+    import json
+    path = tmp_path / 'projection.json'
+    kernels = {'code.py': 'a' * 64}
+    for payload in ([], {'contract': []}, {'contract': {'kernels': kernels}, 'rows': [{'cost': 1}]}):
+        path.write_text(json.dumps(payload))
+        assert calibration._read_machine_projection(path, kernels=kernels) == {}
+    value = compact.sealed({'contract': {'kernels': kernels}, 'rows': [{'evidence': 'x' * 4096}]})
+    calibration._write_machine_projection(path, value)
+    monkeypatch.setattr(calibration, 'MACHINE_PROJECTION_MAX_BYTES', 1024)
+    assert calibration._read_machine_projection(path, kernels=kernels) == {}
+
+
+def test_disk_backed_machine_rows_preserve_sequence_and_content_hash():
+    rows = machine_rows(3)
+    frozen = validation.FrozenRows()
+    frozen.extend(rows)
+    assert frozen == rows and rows == frozen
+    assert frozen[-1] == rows[-1] and frozen[1:] == rows[1:]
+    assert compact.digest({'rows': frozen, 'census': {'captured': 3}}) == compact.digest({'rows': rows, 'census': {'captured': 3}})
+    assert calibration._machine_admission_metrics(frozen, ['ENTER_NOW'] * 3, recovery=True) == calibration._machine_admission_metrics(rows, ['ENTER_NOW'] * 3, recovery=True)
+    assert calibration.build_machine_decision_case_table(frozen) == calibration.build_machine_decision_case_table(rows)
+
+
 def test_machine_daily_projection_reuses_raw_and_invalidates_changed_date(tmp_path, monkeypatch):
     directory = tmp_path / 'ai_decision_payloads'
     directory.mkdir()

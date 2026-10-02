@@ -84,3 +84,16 @@ def test_control_tower_binds_direct_generation_without_verifier_cycle(
     }
     assert "postclose_verifier" not in sources
     assert "threshold_cycle_ev" not in sources
+
+
+def test_actual_tower_publishes_cancel_wait_reconciliation(monkeypatch, tmp_path):
+    from src.tests.test_entry_cancel_wait_tuning import _reconciliation_fixture
+    from src.engine.automation import entry_cancel_wait_tuning as cancel
+    report, policy, _, policy_path = _reconciliation_fixture(tmp_path, monkeypatch, unknown_history=True)
+    _patch_dirs(monkeypatch, tmp_path)
+    tower = mod.build_tuning_performance_control_tower('2026-10-02')
+    view = cancel.handoff_view(report, policy, policy_path)
+    assert tower['entry_cancel_wait_economic_tuning'] == view
+    assert view['reconciliation']['daily_zero_is_verified'] is True
+    assert view['reconciliation']['unresolved_prior_custody_count'] is None
+    assert set(tower['source_generation_contract']['sources']) >= {'entry_cancel_wait_tuning','entry_cancel_wait_policy'}

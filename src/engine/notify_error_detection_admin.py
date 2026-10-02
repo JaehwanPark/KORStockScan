@@ -77,6 +77,23 @@ def _is_alert_result(item: dict) -> bool:
     )
 
 
+def _semantic_source_matches(report, item, value):
+    if value.get('source_date') == report.get('target_date'):
+        return True
+    if value.get('stage') != 'entry_cancel_wait_tuning':
+        return False
+    observed = (item.get('details') or {}).get('entry_cancel_wait_result_semantics') or {}
+    execution = observed.get('execution') or {}
+    try:
+        from datetime import date, timedelta
+        previous = (date.fromisoformat(report['target_date']) - timedelta(days=1)).isoformat()
+    except (KeyError, TypeError, ValueError):
+        return False
+    return (value.get('source_date') == previous == observed.get('source_date') == execution.get('source_date')
+            and execution.get('status') in {'running', 'producers_completed', 'succeeded', 'failed'}
+            and bool(execution.get('run_id')))
+
+
 def _alert_results(report: dict) -> list[dict]:
     results = report.get("results")
     if not isinstance(results, list):
@@ -90,8 +107,8 @@ def _alert_results(report: dict) -> list[dict]:
         if item.get("detector_id") != "artifact_freshness":
             continue
         for value in (item.get("details") or {}).get("semantic_alerts", []):
-            if (not isinstance(value, dict) or value.get("source_date") != report.get("target_date")
-                or value.get("stage") not in {"legacy_machine_report", "main_auxiliary_policy", "postclose_handoff"}
+            if (not isinstance(value, dict) or not _semantic_source_matches(report, item, value)
+                or value.get("stage") not in {"legacy_machine_report", "main_auxiliary_policy", "postclose_handoff", "entry_cancel_wait_tuning"}
                 or value.get("status") in {"not_assessed", "unobservable"}
                 or not value.get("reason") or not value.get("owner")):
                 continue
@@ -221,14 +238,19 @@ def notify_from_report(
                     if isinstance(r, dict) and r.get("detector_id") == "artifact_freshness"), {})
     names = {"legacy_machine_report": "machine_result_semantics",
              "main_auxiliary_policy": "auxiliary_result_semantics",
-             "postclose_handoff": "postclose_handoff_semantics"}
+             "postclose_handoff": "postclose_handoff_semantics",
+             "entry_cancel_wait_tuning": "entry_cancel_wait_result_semantics"}
     unresolved = {}
     history = list(state.get("historical_semantic_incidents") or [])
     for fingerprint, incident in semantic_state.items():
         if not isinstance(incident, dict):
             continue
         observed = details.get(names.get(incident.get("stage"))) or {}
-        if incident.get("source_date") != report.get("target_date"):
+        native_day = (observed.get("source_date") if incident.get("stage") == "entry_cancel_wait_tuning"
+            and _semantic_source_matches(report, {"details":details}, incident)
+            and (observed.get("execution") or {}).get("source_date") == observed.get("source_date")
+            else report.get("target_date"))
+        if incident.get("source_date") != native_day:
             history.append({**incident, "disposition": "historical_unrecovered"})
         elif (observed.get("source_date") != incident.get("source_date")
               or observed.get("status") not in {
@@ -237,6 +259,12 @@ def notify_from_report(
               or not observed.get("report_sha256")
               or (incident.get("scope") not in {None, "report"}
                   and incident.get("scope") not in (observed.get("scopes") or {}))
+              or (incident.get("stage") == "entry_cancel_wait_tuning"
+                  and incident.get("reason") == "cancel_wait_consumer_projection_invalid"
+                  and (observed.get("consumers") or {}).get("status") != "verified")
+              or (incident.get("stage") == "entry_cancel_wait_tuning"
+                  and incident.get("reason") in {"cancel_wait_execution_failed", "cancel_wait_completed_report_missing"}
+                  and (observed.get("execution") or {}).get("command_status") != "succeeded")
               or incident.get("reason") in (observed.get("findings") or [])):
             unresolved[fingerprint] = incident
     for item in fail_results:

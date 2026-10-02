@@ -9070,6 +9070,34 @@ def test_observation_source_quality_audit_writes_json_and_markdown(
     assert md_path.exists()
 
 
+@pytest.mark.parametrize("failure", ["producer_raw_summary_count_mismatch", "producer_summary_profile_invalid"])
+def test_preflight_repairs_only_retained_raw_summary_parity(tmp_path, monkeypatch, failure):
+    from src.engine import pipeline_event_summary as producer
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    day = "2026-05-15"
+    _write_events(tmp_path, day, [_event("unrelated_stage", {})])
+    calls = []
+    def seal(*args):
+        calls.append("seal")
+        raise ValueError(failure)
+    def rebuild(*args):
+        calls.append("rebuild")
+        _, path = producer.producer_summary_paths(tmp_path / "pipeline_event_summaries", day)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('{}\n')
+        return {"raw_source_ledger": {"ledger_sha256": "a" * 64}, "source_reconstruction": {"runtime_effect": False}}
+    monkeypatch.setattr(producer, "seal_producer_summary_source", seal)
+    monkeypatch.setattr(producer, "rebuild_producer_summary_source", rebuild)
+    report = audit.write_report(day, audit_phase="preflight")
+    if failure.endswith("count_mismatch"):
+        assert calls == ["seal", "rebuild"]
+        assert report["producer_source_ledger"]["status"] == "ready"
+        assert report["producer_source_ledger"]["source_reconstructed"] is True
+    else:
+        assert calls == ["seal"]
+        assert report["producer_source_ledger"]["status"] == "source_gap"
+
+
 def test_stdout_summary_omits_large_stage_contracts():
     report = {
         "report_type": "observation_source_quality_audit",

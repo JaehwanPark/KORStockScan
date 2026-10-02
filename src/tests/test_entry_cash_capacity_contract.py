@@ -58,12 +58,13 @@ def test_async_capacity_prefetch_reused_only_after_completion_and_exact_validati
     try:
         prefetched = handlers._prefetch_entry_capacity_for_async_evaluation("005930", {"curr": 10000}, 1005)
         assert prefetched == {"status": "ready", "reuse_status": "fresh_read"}
-        assert calls == [{"source_only": True, "source_read_rate_max_wait_sec": 1.25}]
+        assert calls == [{"source_only": True, "source_read_rate_max_wait_sec": 1.25,
+                          "request_purpose": "entry_capacity_prefetch", "read_meta": {}}]
         assert handlers._read_entry_capacity_snapshot("005930", 10000, source_only=True)["capacity_reuse_status"] == "exact_receipt_reused"
         assert len(calls) == 1
         handlers._read_entry_capacity_snapshot("005930", 10001, source_only=True)
         assert len(calls) == 2  # A final quote change cannot reuse the prepared price.
-        assert calls[-1] == {"source_only": True}
+        assert calls[-1] == {"source_only": True, "request_purpose": "entry_operating_observation", "read_meta": {}}
         clock[0] += 3
         handlers._read_entry_capacity_snapshot("005930", 10000, source_only=True)
         assert len(calls) == 3  # Queued/expired evidence never bypasses freshness.
@@ -125,7 +126,7 @@ def test_nonentry_capacity_reuses_exact_receipt_without_new_account_read(monkeyp
         assert "error" in read("005930", 10001, source_only=True, reuse_only=True)
         assert not calls
         read("005930", 10000, reuse_only=True)  # Normal sizing never uses this exemption.
-        assert len(calls) == 1 and calls[0] == {"unit_price": 10000}
+        assert len(calls) == 1 and calls[0] == {"unit_price": 10000, "request_purpose": "entry_live_sizing", "read_meta": {}}
     finally:
         handlers._reset_entry_capacity_receipts()
 
@@ -159,10 +160,11 @@ def test_nonentry_five_second_reuse_does_not_extend_entry_or_submit(monkeypatch,
         assert not calls
         assert not handlers._entry_capacity_receipt_valid(receipt, "005930", 10000, 1000)
         read("005930", 10000, source_only=True)  # ENTER_NOW still requires <=2s.
-        assert calls == [{"unit_price": 10000, "source_only": True}]
+        assert calls == [{"unit_price": 10000, "source_only": True,
+                          "request_purpose": "entry_operating_observation", "read_meta": {}}]
         handlers._ENTRY_CAPACITY_RECEIPTS[("005930", 10000)] = receipt
         read("005930", 10000, reuse_only=True)  # Live sizing never reuses it.
-        assert calls[-1] == {"unit_price": 10000}
+        assert calls[-1] == {"unit_price": 10000, "request_purpose": "entry_live_sizing", "read_meta": {}}
         assert len(calls) == 2
     finally:
         handlers._reset_entry_capacity_receipts()
@@ -226,7 +228,7 @@ def test_legacy_preparation_is_coalesced_bounded_and_scope_checked(monkeypatch):
     monkeypatch.setattr(handlers, "_is_any_simulated_position", lambda stock, strategy: stock.get("sim", False))
     monkeypatch.setattr(handlers, "_entry_capacity_receipt_key", lambda code, price: (generation[0], code, price))
     monkeypatch.setattr(handlers, "_prefetch_entry_capacity_for_async_evaluation",
-                        lambda *args: reads.append(args) or {"status": "ready"})
+                        lambda *args, **kwargs: reads.append(args) or {"status": "ready"})
     request = handlers._request_entry_capacity_preparation
     try:
         assert not request({"sim": True}, "005930", {"curr": 10000})
@@ -394,3 +396,261 @@ def test_nonfinite_applied_and_unselected_tiers_do_not_escape_source_parser(
     result = kiwoom_utils.get_orderable_by_margin_kt00011("fake", "005930", 10000)
     assert result["applied_orderable_contract_status"] == "invalid"
     assert result["applied_orderable_qty"] == 0
+
+
+@pytest.fixture
+def capacity_runtime(monkeypatch):
+    from datetime import datetime, timezone
+    handlers._reset_entry_capacity_receipts()
+    monkeypatch.setattr(handlers, "_entry_capacity_receipt_key", lambda code, price: (code, price))
+    monkeypatch.setattr(handlers, "log_info", lambda *args: None)
+    def receipt(code="005930", price=10000):
+        return {"return_code": 0, "cash_orderable_contract_status": "valid",
+                "capacity_observed_at": datetime.now(timezone.utc).isoformat(),
+                "capacity_source_sha256": "a" * 64,
+                "requested_stock_code": code, "requested_unit_price": price}
+    yield receipt
+    handlers._reset_entry_capacity_receipts()
+
+
+def test_preparation_join_and_frozen_observer_use_one_http(monkeypatch, capacity_runtime):
+    import threading, time
+    entered, release = threading.Event(), threading.Event()
+    calls = []
+    def fetch(token, code, unit_price=None, **kw):
+        calls.append(kw);entered.set();assert release.wait(1)
+        return capacity_runtime(code, unit_price)
+    monkeypatch.setattr(kiwoom_utils, "get_orderable_by_margin_kt00011", fetch)
+    result = []
+    owner = threading.Thread(target=lambda: result.append(handlers._prefetch_entry_capacity_for_async_evaluation(
+        "005930", {"curr": 10000}, time.time()+2)))
+    owner.start();assert entered.wait(1)
+    frozen = handlers._read_entry_capacity_snapshot("005930", 10000, source_only=True)
+    assert frozen["error"] == "capacity_source_inflight"
+    follower = threading.Thread(target=lambda: result.append(handlers._prefetch_entry_capacity_for_async_evaluation(
+        "005930", {"curr": 10000}, time.time()+2)))
+    follower.start();release.set();owner.join(2);follower.join(2)
+    assert not owner.is_alive() and not follower.is_alive()
+    assert len(calls)==1 and all(r["status"]=="ready" for r in result)
+    assert not handlers._ENTRY_CAPACITY_EVENTS and not handlers._ENTRY_CAPACITY_SOURCE_INFLIGHT
+
+
+def test_changed_price_preparation_queues_latest_without_second_parallel_http(monkeypatch, capacity_runtime):
+    import threading,time
+    entered,release=threading.Event(),threading.Event();calls=[]
+    def fetch(token,code,unit_price=None,**kw):
+        calls.append(unit_price);entered.set();assert release.wait(1)
+        return capacity_runtime(code,unit_price)
+    monkeypatch.setattr(kiwoom_utils,"get_orderable_by_margin_kt00011",fetch)
+    monkeypatch.setattr(handlers,"_is_any_simulated_position",lambda *a:False)
+    t=threading.Thread(target=lambda:handlers._prefetch_entry_capacity_for_async_evaluation("005930",{"curr":10000},time.time()+2))
+    t.start();assert entered.wait(1)
+    new=handlers._prefetch_entry_capacity_for_async_evaluation("005930",{"curr":10001},time.time()+2)
+    assert new["status"]=="source_gap" and calls==[10000]
+    assert ("005930",10001) in handlers._ENTRY_CAPACITY_PENDING
+    release.set();t.join(2)
+    assert handlers.prepare_pending_entry_capacity()["status"]=="ready"
+    assert calls==[10000,10001]
+
+
+def test_required_read_never_joins_or_reuses_source_preparation(monkeypatch, capacity_runtime):
+    import threading,time
+    entered,release=threading.Event(),threading.Event();calls=[]
+    def fetch(token,code,unit_price=None,**kw):
+        calls.append(kw)
+        if kw.get("source_only"):entered.set();assert release.wait(1)
+        return capacity_runtime(code,unit_price)
+    monkeypatch.setattr(kiwoom_utils,"get_orderable_by_margin_kt00011",fetch)
+    t=threading.Thread(target=lambda:handlers._prefetch_entry_capacity_for_async_evaluation("005930",{"curr":10000},time.time()+2))
+    t.start();assert entered.wait(1)
+    assert handlers._read_entry_capacity_snapshot("005930",10000)["capacity_reuse_status"]=="fresh_read"
+    assert len(calls)==2 and "source_only" not in calls[1]
+    release.set();t.join(2)
+    assert not handlers._ENTRY_CAPACITY_EVENTS
+
+
+def test_join_deadline_does_not_retry_failed_or_late_owner(monkeypatch, capacity_runtime):
+    import threading,time
+    entered,release=threading.Event(),threading.Event();calls=[]
+    def fetch(*a,**kw):
+        calls.append(kw);entered.set();assert release.wait(1);return {}
+    monkeypatch.setattr(kiwoom_utils,"get_orderable_by_margin_kt00011",fetch)
+    t=threading.Thread(target=lambda:handlers._read_entry_capacity_snapshot("005930",10000,source_only=True))
+    t.start();assert entered.wait(1)
+    started=time.time()
+    r=handlers._prefetch_entry_capacity_for_async_evaluation("005930",{"curr":10000},time.time()+.35)
+    assert r["status"]=="source_gap" and time.time()-started<.15
+    assert len(calls)==1
+    release.set();t.join(2)
+    assert not handlers._ENTRY_CAPACITY_INFLIGHT
+
+
+def test_capacity_read_diagnostics_failure_never_changes_outcome(monkeypatch, capacity_runtime):
+    monkeypatch.setattr(handlers,"log_info",lambda *a:(_ for _ in ()).throw(OSError("fixture")))
+    monkeypatch.setattr(kiwoom_utils,"get_orderable_by_margin_kt00011",lambda *a,**kw:capacity_runtime())
+    assert handlers._read_entry_capacity_snapshot("005930",10000,source_only=True)["return_code"]==0
+
+
+def test_timeout_http_count_is_not_zero_or_success(monkeypatch):
+    import requests
+    from src.utils.kiwoom_read_request_control import ReadRequestAdmission
+    class Coordinator:
+        def acquire(self, **kw):
+            return ReadRequestAdmission(
+                admitted=True, reason="admitted", request_class=kw["request_class"],
+                request_owner=kw["request_owner"], api_id=kw["api_id"],
+                request_code=kw["request_code"], pid=0, waited_sec=0,
+                requests_in_window_before=0, effective_limit=4, max_limit=5,
+                window_sec=1, cooldown_remaining_sec=0, scope_digest="scope")
+    monkeypatch.setattr(kiwoom_utils,"resolve_kiwoom_request_token",lambda t:t)
+    monkeypatch.setattr(kiwoom_utils.requests,"post",lambda *a,**kw:(_ for _ in ()).throw(requests.exceptions.ReadTimeout()))
+    _,meta=kiwoom_utils._fetch_kiwoom_api_continuous_transport("https://api.kiwoom.com/api/dostk/acnt", "fake", "kt00011", {"stk_cd":"005930"},max_retries=1,return_meta=True,read_rate_coordinator=Coordinator())
+    assert meta["request_attempt_count"]==1
+    assert meta["first_http_started_epoch"]>0 and meta.get("last_http_received_epoch") is None
+
+
+def test_deposit_delivery_diagnostics_do_not_repeat_exact_source_reads(monkeypatch, capacity_runtime):
+    from src.trading.order import owner_custody_registry
+    import hashlib
+
+    monkeypatch.setattr(handlers, "_entry_capacity_receipt_key", ORIGINAL_CAPACITY_KEY)
+    monkeypatch.setattr(handlers, "KIWOOM_TOKEN", "fixture-token")
+    monkeypatch.setattr(kiwoom_utils, "_market_data_cache_scope", lambda _: ("token-hash", "fixture", "2026-10-02"))
+    monkeypatch.setattr(owner_custody_registry, "broker_account_key", lambda: "fixture-account")
+    monkeypatch.setattr(handlers, "_scale_in_budget_inventory_signature", lambda: "inventory")
+    receipt = {"generation": "b" * 64, "observed_epoch": 1,
+               "scope_sha256": hashlib.sha256(b"token:fixture-token").hexdigest(), "raw_amount": 10000}
+    meta = {"source": "api_fresh", "fallback_used": False, "amount": 10000,
+            "raw_amount": 10000, "deposit_source_receipt": receipt}
+    monkeypatch.setattr(handlers.kiwoom_orders, "get_last_deposit_meta", lambda: dict(meta))
+    calls = []
+    monkeypatch.setattr(kiwoom_utils, "get_orderable_by_margin_kt00011",
+                        lambda *a, **kw: calls.append(kw) or capacity_runtime())
+    outputs = []
+    for index in range(10):
+        meta.update(source="api_fresh" if index == 0 else "loop_cache", cache_hit=bool(index), age_sec=index / 100)
+        outputs.append(handlers._read_entry_capacity_snapshot("005930", 10000, source_only=True))
+    assert len(calls) == 1
+    assert len({row["capacity_observed_at"] for row in outputs}) == 1
+    assert len({row["capacity_source_sha256"] for row in outputs}) == 1
+    receipt["generation"] = "c" * 64  # Same cash amount, genuinely new broker receipt.
+    handlers._read_entry_capacity_snapshot("005930", 10000, source_only=True)
+    assert len(calls) == 2
+
+
+ORIGINAL_CAPACITY_KEY = handlers._entry_capacity_receipt_key
+
+
+@pytest.mark.parametrize("index,new_value", [
+    (0, ("new-token", "origin", "day")), (1, "new-account"), (3, 10001),
+    (4, "new-inventory-custody"), (5, "new-deposit-floor-generation"),
+])
+def test_scope_changes_cannot_reuse_capacity_or_convert_other_price(monkeypatch, capacity_runtime, index, new_value):
+    key = [("token", "origin", "day"), "account", "005930", 10000, "inventory", "deposit"]
+    monkeypatch.setattr(handlers, "_entry_capacity_receipt_key", lambda *a: tuple(key))
+    calls = []
+    monkeypatch.setattr(kiwoom_utils, "get_orderable_by_margin_kt00011",
+                        lambda *a, **kw: calls.append(kw) or capacity_runtime(price=kw["unit_price"]))
+    handlers._read_entry_capacity_snapshot("005930", 10000, source_only=True)
+    key[index] = new_value
+    assert "error" in handlers._read_entry_capacity_snapshot("005930", key[3], source_only=True, reuse_only=True)
+    assert len(calls) == 1
+    handlers._read_entry_capacity_snapshot("005930", key[3], source_only=True)
+    assert len(calls) == 2
+
+
+def test_capacity_telemetry_keeps_denominators_and_exact_evidence(monkeypatch, capacity_runtime):
+    import json
+    logs = []
+    monkeypatch.setattr(handlers, "log_info", logs.append)
+    def fetch(*args, **kwargs):
+        kwargs["read_meta"].update(request_attempt_count=1, admission_attempt_count=1,
+                                   first_http_started_epoch=1, last_http_received_epoch=2)
+        return capacity_runtime()
+    monkeypatch.setattr(kiwoom_utils, "get_orderable_by_margin_kt00011", fetch)
+    for action in ("ENTER_NOW", "BLOCK", "RECHECK"):
+        handlers._read_entry_capacity_snapshot("005930", 10000, source_only=True,
+            reuse_only=action != "ENTER_NOW", correlation_id="attempt:" + action,
+            diagnostic_context={"mechanistic_action": action, "broker_route": "KRX"})
+    rows = [json.loads(line.split("] ", 1)[1]) for line in logs]
+    assert [row["result"] for row in rows] == ["fresh_success", "exact_reused", "exact_reused"]
+    assert [row["http_attempts"] for row in rows] == [1, 0, 0]
+    assert rows[-1]["purpose_totals"]["logical_requests"] == 3
+    assert rows[-1]["purpose_totals"]["exact_usable"] == 3
+    assert rows[-1]["purpose_totals"]["http_attempts"] == 1
+    assert all(row["capacity_source_sha256"] == "a" * 64 for row in rows)
+    assert len({row["request_id"] for row in rows}) == 3
+    assert all(row["correlation_id"] == "attempt:" + row["mechanistic_action"] for row in rows)
+
+
+def test_capacity_exception_cleans_up_and_is_not_cached_as_success(monkeypatch, capacity_runtime):
+    import json
+    logs = []
+    monkeypatch.setattr(handlers, "log_info", logs.append)
+    def failed(*args, **kwargs):
+        raise OSError("mock source failure")
+    monkeypatch.setattr(kiwoom_utils, "get_orderable_by_margin_kt00011", failed)
+    with pytest.raises(OSError):
+        handlers._read_entry_capacity_snapshot("005930", 10000, source_only=True)
+    assert not handlers._ENTRY_CAPACITY_EVENTS
+    assert not handlers._ENTRY_CAPACITY_SOURCE_INFLIGHT
+    assert not handlers._ENTRY_CAPACITY_INFLIGHT
+    assert not handlers._ENTRY_CAPACITY_RECEIPTS
+    row = json.loads(logs[-1].split("] ", 1)[1])
+    assert row["result"] == "http_failed"
+    assert row["http_attempts"] is None  # Unknown attempts are never asserted to be zero.
+
+
+def test_preparation_rechecks_deadline_after_scope_work(monkeypatch, capacity_runtime):
+    clock = [1000.0]
+    monkeypatch.setattr(handlers.time, "time", lambda: clock[0])
+    def slow_key(code, price):
+        clock[0] += .3
+        return (code, price)
+    monkeypatch.setattr(handlers, "_entry_capacity_receipt_key", slow_key)
+    monkeypatch.setattr(kiwoom_utils, "get_orderable_by_margin_kt00011",
+                        lambda *a, **kw: pytest.fail("Expired preparation must not start HTTP"))
+    result = handlers._prefetch_entry_capacity_for_async_evaluation("005930", {"curr": 10000}, 1000.5)
+    assert result == {"status": "source_gap", "reason": "capacity_preparation_deadline_deferred"}
+    assert not handlers._ENTRY_CAPACITY_INFLIGHT
+
+
+def test_explicit_unsupported_route_skips_only_capacity_preparation(monkeypatch, capacity_runtime):
+    import time
+    monkeypatch.setattr(kiwoom_utils, "get_orderable_by_margin_kt00011",
+                        lambda *a, **kw: pytest.fail("Explicit unsupported replay route needs no capacity source"))
+    result = handlers._prefetch_entry_capacity_for_async_evaluation("005930", {"curr": 10000}, time.time() + 1,
+        diagnostic_context={"broker_route": "unknown-route", "effective_venue": "KRX", "session_bucket": "KRX_REGULAR"})
+    assert result == {"status": "skipped", "reason": "explicit_unsupported_operating_route"}
+
+
+def test_late_preparation_response_is_not_ready_for_expired_worker(monkeypatch, capacity_runtime):
+    clock = [1000.0]
+    monkeypatch.setattr(handlers.time, "time", lambda: clock[0])
+    def late_response(*args, **kwargs):
+        clock[0] = 1001.1
+        return {"return_code": 0, "cash_orderable_contract_status": "valid",
+                "capacity_observed_at": "1970-01-01T00:16:41+00:00",
+                "capacity_source_sha256": "a" * 64,
+                "requested_stock_code": "005930", "requested_unit_price": 10000}
+    monkeypatch.setattr(kiwoom_utils, "get_orderable_by_margin_kt00011", late_response)
+    result = handlers._prefetch_entry_capacity_for_async_evaluation("005930", {"curr": 10000}, 1001)
+    assert result == {"status": "source_gap", "reason": "capacity_preparation_deadline_deferred"}
+    # The valid receipt keeps its original clock for a subsequent natural frame.
+    assert handlers._ENTRY_CAPACITY_RECEIPTS[("005930", 10000)]["capacity_observed_at"].endswith("00:16:41+00:00")
+    assert not handlers._ENTRY_CAPACITY_INFLIGHT
+
+
+def test_capacity_totals_preserve_out_of_order_midnight_completions(capacity_runtime):
+    def row(day):
+        return {"date": day, "purpose": "entry_operating_observation", "http_attempts": 1,
+                "admission_attempts": 1, "result": "fresh_success"}
+    totals = handlers._entry_capacity_read_totals
+    assert totals(row("2026-10-02"))["logical_requests"] == 1
+    assert totals(row("2026-10-03"))["logical_requests"] == 1
+    assert totals(row("2026-10-02"))["logical_requests"] == 2
+    assert totals(row("2026-10-03"))["logical_requests"] == 2
+    totals(row("2026-10-04"))
+    assert totals(row("2026-10-02"))["outside_retained_day_window"] is True
+    assert totals(row("2026-10-04"))["logical_requests"] == 2
+    assert len(handlers._ENTRY_CAPACITY_STATS["days"]) == 2

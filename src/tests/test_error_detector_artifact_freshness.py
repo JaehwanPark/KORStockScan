@@ -1561,7 +1561,8 @@ class TestArtifactFreshnessDetector:
     def test_missing_critical_artifact_warns_after_window_when_upstream_cron_still_in_progress(
         self, tmp_path
     ):
-        today = datetime.now().strftime("%Y-%m-%d")
+        fixed_now = datetime(2026, 9, 10, 9, 0)
+        today = fixed_now.strftime("%Y-%m-%d")
         cron_log = tmp_path / "postclose.log"
         cron_log.write_text(
             f"[START] threshold-cycle postclose target_date={today}\n", encoding="utf-8"
@@ -1581,11 +1582,14 @@ class TestArtifactFreshnessDetector:
         }
         with (
             patch(_TRADING_MOCK, return_value=True),
+            patch("src.engine.error_detectors.artifact_freshness.datetime", wraps=datetime) as clock,
+            patch("src.engine.error_detectors.artifact_freshness.time.time", return_value=fixed_now.timestamp()),
             patch(
                 "src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY",
                 [artifact],
             ),
         ):
+            clock.now.return_value = fixed_now
             detector = ArtifactFreshnessDetector()
             result = detector.check()
             assert result.severity == "warning"
@@ -1616,6 +1620,7 @@ class TestArtifactFreshnessDetector:
             assert result.details.get("test_skip_status") == "skip_non_trading_day"
 
     def test_past_window_end_exists_passes(self, tmp_path):
+        fixed_now = datetime(2026, 9, 10, 9, 0)
         log_file = tmp_path / "past_window.log"
         log_file.write_text("content", encoding="utf-8")
         artifact = {
@@ -1628,11 +1633,14 @@ class TestArtifactFreshnessDetector:
         }
         with (
             patch(_TRADING_MOCK, return_value=True),
+            patch("src.engine.error_detectors.artifact_freshness.datetime", wraps=datetime) as clock,
+            patch("src.engine.error_detectors.artifact_freshness.time.time", return_value=fixed_now.timestamp()),
             patch(
                 "src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY",
                 [artifact],
             ),
         ):
+            clock.now.return_value = fixed_now
             detector = ArtifactFreshnessDetector()
             result = detector.check()
             assert result.details.get("test_past_window_status") == "pass_after_window"
@@ -2114,3 +2122,206 @@ def test_submission_monitor_does_not_require_artifacts_before_installation(tmp_p
     assert detector.check().details['submission_bottleneck_monitor_status'] == 'not_required_before_introduction'
     detector.postclose_source_date = '2026-09-21'
     assert detector.check().severity == 'fail'  # future normal producer must exist
+
+
+@pytest.mark.parametrize('unknown', [False, True])
+def test_cancel_wait_detector_valid_carry_never_replays_or_alerts(tmp_path, monkeypatch, unknown):
+    from src.tests.test_entry_cancel_wait_tuning import _reconciliation_fixture
+    from src.engine.automation import entry_cancel_wait_tuning as cancel
+    from src.engine.error_detectors.artifact_freshness import _entry_cancel_wait_result_semantics
+    _reconciliation_fixture(tmp_path, monkeypatch, unknown_history=unknown)
+    monkeypatch.setattr(cancel, 'build_report', lambda *_a: pytest.fail('read-only monitor replayed producer'))
+    result = _entry_cancel_wait_result_semantics(tmp_path, '2026-10-02')
+    assert result['status'] == 'incumbent_carry'
+    assert result['findings'] == []
+    assert result['daily_zero_is_verified'] is True
+    assert result['historical_state'] == ('source_gap' if unknown else 'verified_empty')
+    assert _semantic_alerts('entry_cancel_wait_tuning', result, '2026-10-02') == []
+
+
+def test_cancel_wait_detector_false_zero_is_actionable_and_bound(tmp_path, monkeypatch):
+    from src.tests.test_entry_cancel_wait_tuning import _reconciliation_fixture, _reseal_reconciliation
+    from src.engine.automation import entry_cancel_wait_tuning as cancel
+    from src.engine.error_detectors.artifact_freshness import _entry_cancel_wait_result_semantics
+    report, policy, path, pp = _reconciliation_fixture(tmp_path, monkeypatch, unknown_history=True)
+    report['historical_reconciliation']['zero_is_verified'] = True
+    report['submission_census']['unresolved_prior_custody_count'] = 0
+    _reseal_reconciliation(report)
+    policy['report_proof_sha256'] = report['proof_sha256']
+    policy['sha256'] = cancel._digest({k:v for k,v in policy.items() if k != 'sha256'})
+    path.write_text(json.dumps(report)); pp.write_text(json.dumps(policy))
+    result = _entry_cancel_wait_result_semantics(tmp_path, '2026-10-02')
+    assert result['status'] == 'source_invalid'
+    assert 'cancel_wait_false_historical_zero' in result['findings']
+    alerts = _semantic_alerts('entry_cancel_wait_tuning', result, '2026-10-02')
+    assert any(a['reason'] == 'cancel_wait_false_historical_zero' for a in alerts)
+    assert all(a['owner'] == 'EntryCancelWaitSourceReconciliation1002' for a in alerts)
+
+
+def test_cancel_wait_legacy_future_and_read_race_do_not_alert(tmp_path, monkeypatch):
+    from src.engine.error_detectors import artifact_freshness as detector
+    now = datetime(2026, 10, 2, 19, tzinfo=ZoneInfo('Asia/Seoul'))
+    assert detector._entry_cancel_wait_result_semantics(tmp_path, '2026-10-02', now)['status'] == 'not_yet_due'
+    path = tmp_path/'data/report/entry_cancel_wait_tuning/entry_cancel_wait_tuning_2026-10-02.json'
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({'date':'2026-10-02','economic_schema':'legacy'}))
+    assert detector._entry_cancel_wait_result_semantics(tmp_path, '2026-10-02', now)['status'] == 'not_evaluated_legacy'
+    monkeypatch.setattr(detector, '_semantic_object', lambda *_a, **_k: (_ for _ in ()).throw(ValueError('semantic_generation_changed_during_read')))
+    result = detector._entry_cancel_wait_result_semantics(tmp_path, '2026-10-02', now)
+    assert result['status'] == 'unobservable'
+    assert detector._semantic_alerts('entry_cancel_wait_tuning', result, '2026-10-02') == []
+
+
+def test_cancel_wait_native_success_without_artifact_is_not_empty(tmp_path):
+    from src.engine.error_detectors.artifact_freshness import _entry_cancel_wait_result_semantics
+    log = tmp_path/'logs/threshold_cycle_postclose_cron.log'
+    log.parent.mkdir(parents=True)
+    log.write_text('[PERF] '+json.dumps(dict(schema='postclose_command_metrics_v1', target_date='2026-10-02',
+        producer_module='src.engine.automation.entry_cancel_wait_tuning', run_id='r1', code_commit='a'*40,
+        measurement_complete=True, exit_code=0))+'\n')
+    result = _entry_cancel_wait_result_semantics(tmp_path, '2026-10-02')
+    assert result['findings'] == ['cancel_wait_completed_report_missing']
+
+
+def test_cancel_wait_run_keeps_original_source_date_after_midnight(tmp_path, monkeypatch):
+    from src.tests.test_entry_cancel_wait_tuning import _reconciliation_fixture
+    from src.engine.error_detectors import artifact_freshness as detector
+    _reconciliation_fixture(tmp_path,monkeypatch,unknown_history=True)
+    status = tmp_path/'data/report/threshold_cycle_postclose_status/threshold_cycle_postclose_2026-10-02.status.json'
+    status.parent.mkdir(parents=True)
+    status.write_text(json.dumps(dict(target_date='2026-10-02',status='running',run_id='native-1002')))
+    original = detector._cancel_wait_monitor_source_date(tmp_path,'2026-10-03')
+    assert original == '2026-10-02'
+    result = detector._entry_cancel_wait_result_semantics(tmp_path,original,
+        datetime(2026,10,3,0,30,tzinfo=ZoneInfo('Asia/Seoul')))
+    assert result['source_date'] == '2026-10-02'
+    assert result['historical_state'] == 'source_gap'
+    assert result['unresolved_prior_custody_count'] is None
+
+
+@pytest.mark.parametrize('status', ['producers_completed', 'succeeded', 'failed'])
+def test_cancel_wait_finished_run_keeps_source_date_and_new_run_takes_precedence(tmp_path, status):
+    from src.engine.error_detectors import artifact_freshness as detector
+    directory = tmp_path/'data/report/threshold_cycle_postclose_status'
+    directory.mkdir(parents=True)
+    (directory/'threshold_cycle_postclose_2026-10-02.status.json').write_text(json.dumps(
+        dict(target_date='2026-10-02', status=status, run_id='native-1002')))
+    assert detector._cancel_wait_monitor_source_date(tmp_path, '2026-10-03') == '2026-10-02'
+    (directory/'threshold_cycle_postclose_2026-10-03.status.json').write_text(json.dumps(
+        dict(target_date='2026-10-03', status='running', run_id='native-1003')))
+    assert detector._cancel_wait_monitor_source_date(tmp_path, '2026-10-03') == '2026-10-03'
+
+
+def _cancel_wait_consumer_fixture(tmp_path, monkeypatch, status='succeeded'):
+    from src.tests.test_entry_cancel_wait_tuning import _reconciliation_fixture
+    from src.engine.automation import entry_cancel_wait_tuning as cancel
+    from src.engine.automation.postclose_summary_handoff import source_receipt, checklist_marker
+    report, policy, rp, pp = _reconciliation_fixture(tmp_path, monkeypatch)
+    view = cancel.handoff_view(report, policy, pp)
+    receipt = source_receipt({'entry_cancel_wait_tuning':rp, 'entry_cancel_wait_policy':pp}, '2026-10-02')
+    paths = {
+        'summary':tmp_path/'data/report/runtime_approval_summary/runtime_approval_summary_2026-10-02.json',
+        'tower':tmp_path/'data/report/tuning_performance_control_tower/tuning_performance_control_tower_2026-10-02.json',
+        'checklist':tmp_path/'docs/checklists/2026-10-06-stage2-todo-checklist.md',
+        'native':tmp_path/'data/report/threshold_cycle_postclose_status/threshold_cycle_postclose_2026-10-02.status.json',
+    }
+    for path in paths.values(): path.parent.mkdir(parents=True, exist_ok=True)
+    paths['summary'].write_text(json.dumps(dict(date='2026-10-02', sources={'entry_cancel_wait':dict(
+        sha256=receipt['sources']['entry_cancel_wait_tuning']['sha256'],
+        economic_evidence={'cancel_wait_reconciliation':view['reconciliation']})})))
+    receipt = source_receipt({'entry_cancel_wait_tuning':rp, 'entry_cancel_wait_policy':pp,
+        'runtime_approval_summary':paths['summary']}, '2026-10-02')
+    paths['tower'].write_text(json.dumps(dict(date='2026-10-02', entry_cancel_wait_economic_tuning=view,
+        source_generation_contract=receipt)))
+    paths['checklist'].write_text(checklist_marker(receipt)+'\n'+cancel.checklist_handoff(view))
+    paths['native'].write_text(json.dumps(dict(target_date='2026-10-02',status=status,run_id='native-1002')))
+    return paths
+
+
+@pytest.mark.parametrize('stage,mutation', [(stage, mutation)
+    for stage in ('summary', 'tower', 'checklist') for mutation in ('missing', 'stale', 'wrong_date', 'malformed')]
+    + [('checklist', 'duplicate'), ('summary', 'changed_bytes')])
+def test_cancel_wait_finished_consumers_cannot_remain_pending(tmp_path, monkeypatch, stage, mutation):
+    from src.engine.error_detectors import artifact_freshness as detector
+    paths = _cancel_wait_consumer_fixture(tmp_path, monkeypatch)
+    path = paths[stage]
+    if mutation == 'missing':
+        path.unlink()
+    elif mutation == 'malformed':
+        path.write_text('<!-- POSTCLOSE_SUMMARY_SOURCES {invalid} -->' if stage == 'checklist' else '{invalid}')
+    elif mutation == 'changed_bytes':
+        path.write_text(path.read_text()+'\n')
+    elif stage == 'checklist':
+        text = path.read_text()
+        text = (text.replace('entry_cancel_wait_handoff_sha256:', 'stale_handoff_sha256:') if mutation == 'stale'
+                else text.replace('"source_date": "2026-10-02"', '"source_date": "2026-10-01"') if mutation == 'wrong_date'
+                else text+'\n<!-- entry_cancel_wait_handoff:start -->\n<!-- entry_cancel_wait_handoff:end -->')
+        path.write_text(text)
+    else:
+        value = json.loads(path.read_text())
+        if mutation == 'wrong_date': value['date'] = '2026-10-01'
+        elif stage == 'summary':
+            value['sources']['entry_cancel_wait']['sha256'] = 'a'*64
+        else:
+            value['source_generation_contract']['sources']['entry_cancel_wait_tuning']['sha256'] = 'a'*64
+        path.write_text(json.dumps(value))
+    result = detector._entry_cancel_wait_result_semantics(tmp_path, '2026-10-02')
+    assert result['status'] == 'source_invalid'
+    assert 'cancel_wait_consumer_projection_invalid' in result['findings']
+
+
+def test_cancel_wait_running_consumers_are_pending_then_verified(tmp_path, monkeypatch):
+    from src.engine.error_detectors import artifact_freshness as detector
+    paths = _cancel_wait_consumer_fixture(tmp_path, monkeypatch, status='running')
+    text = paths['checklist'].read_text()
+    paths['checklist'].unlink()
+    result = detector._entry_cancel_wait_result_semantics(tmp_path, '2026-10-02')
+    assert result['findings'] == []
+    assert result['consumers']['status'] == 'pending'
+    paths['checklist'].write_text(text)
+    result = detector._entry_cancel_wait_result_semantics(tmp_path, '2026-10-02')
+    assert result['findings'] == []
+    assert result['consumers']['status'] == 'verified'
+
+
+@pytest.mark.parametrize('stage', ['summary', 'tower', 'checklist', 'native', 'report', 'registry', 'removed', 'malformed_during_read'])
+def test_cancel_wait_generation_change_during_consumer_read_is_unobservable(tmp_path, monkeypatch, stage):
+    from src.engine.error_detectors import artifact_freshness as detector
+    from src.tests.test_entry_cancel_wait_tuning import _append_registry_event
+    paths = _cancel_wait_consumer_fixture(tmp_path,monkeypatch)
+    paths['report'] = tmp_path/'data/report/entry_cancel_wait_tuning/entry_cancel_wait_tuning_2026-10-02.json'
+    paths['registry'] = tmp_path/'data/runtime/order_owner_registry.jsonl'
+    original_reader = detector._semantic_object
+    mutated = False
+    def reader(path, **kwargs):
+        nonlocal mutated
+        if path == paths['summary'] and not kwargs.get('hash_only') and not mutated and stage in {'removed', 'malformed_during_read'}:
+            mutated = True
+            if stage == 'removed': path.unlink()
+            else: path.write_text('{invalid}')
+        value = original_reader(path, **kwargs)
+        if path == paths['summary'] and not kwargs.get('hash_only') and not mutated:
+            mutated = True
+            if stage == 'registry':
+                _append_registry_event(paths['registry'], owner_type='main_scalping', day='2026-10-01')
+            else:
+                changed = paths[stage]
+                changed.write_text(changed.read_text()+'\n')
+        return value
+    monkeypatch.setattr(detector,'_semantic_object',reader)
+    result = detector._entry_cancel_wait_result_semantics(tmp_path,'2026-10-02')
+    assert mutated
+    assert result['status'] == 'unobservable'
+    assert result['findings'] == []
+    assert detector._semantic_alerts('entry_cancel_wait_tuning', result, '2026-10-02') == []
+
+
+def test_cancel_wait_consumer_error_preserves_known_reuse_finding(tmp_path, monkeypatch):
+    from src.engine.error_detectors import artifact_freshness as detector
+    paths = _cancel_wait_consumer_fixture(tmp_path, monkeypatch)
+    report = tmp_path/'data/report/entry_cancel_wait_tuning/entry_cancel_wait_tuning_2026-10-02.json'
+    report.with_suffix('.reuse-contract.json').write_text(json.dumps({'artifact_sha256':'invalid'}))
+    paths['summary'].write_text('{invalid}')
+    result = detector._entry_cancel_wait_result_semantics(tmp_path,'2026-10-02')
+    assert result['status'] == 'source_invalid'
+    assert set(result['findings']) == {'cancel_wait_reuse_generation_invalid', 'cancel_wait_consumer_projection_invalid'}

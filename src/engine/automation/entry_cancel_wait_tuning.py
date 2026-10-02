@@ -11,7 +11,7 @@ import os
 import tempfile
 import math
 from collections import defaultdict
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -26,6 +26,10 @@ from src.utils.constants import DATA_DIR
 REPORT_DIR = DATA_DIR / "report" / "entry_cancel_wait_tuning"
 SAMPLE_FLOOR = 5
 EXECUTABLE_EVIDENCE_DATE = "2026-09-17"
+RECONCILIATION_VERSION = "entry_cancel_wait_source_reconciliation_v1"
+RECONCILIATION_OWNER = "EntryCancelWaitSourceReconciliation1002"
+MAX_RECONCILIATION_METADATA_BYTES = 64 * 1024 * 1024
+_RECONCILIATION_VIEW_CACHE = {}
 
 
 def report_paths(target_date: str) -> tuple[Path, Path]:
@@ -397,7 +401,10 @@ def _sequential_terminal_proof_valid(actual):
     fields=('intent_id','account_key','order_date','broker_order_no',
         'owner_type','owner_id','symbol','side','action','route',
         'quantity','filled_qty')
-    return bool(actual.get('state')=='ORDER_TERMINAL'
+    return bool(type(actual.get('quantity')) is int and actual['quantity'] > 0
+        and type(actual.get('filled_qty')) is int and 0 <= actual['filled_qty'] <= actual['quantity']
+        and all(actual.get(field) is not None for field in fields)
+        and actual.get('state')=='ORDER_TERMINAL'
         and isinstance(proof,dict)
         and proof.get('schema')=='order_owner_terminal_reconciliation_v1'
         and isinstance(sha,str) and len(sha)==64
@@ -564,7 +571,7 @@ def _parents(target_date, events, registry, *, details=None):
             submitted_at=(sf.get('entry_split_submitted_at') if sequential else context['frozen_at']),
             context_frozen_at=context['frozen_at'],
             terminal_at=actual.get('observed_at_kst'),fills=fills[identity],
-            terminal_reconciled=actual.get('state')=='ORDER_TERMINAL' and bool(actual.get('terminal_reconciliation')),
+            terminal_reconciled=_sequential_terminal_proof_valid(actual),
             child_id=context['child_id'],submit_child_id=child_id,submit_parent_id=parent_id,
             account_key=account,owner_id=actual.get('owner_id'),
             intent_id=None if single_owner else identity,
@@ -636,8 +643,49 @@ def _parents(target_date, events, registry, *, details=None):
             sequential_source_only_parent_count=sum(
                 p.get('economic_eligible') is False for p in parents.values()),
             economic_parent_count=sum(
-                p.get('economic_eligible') is True for p in parents.values()))
+                p.get('economic_eligible') is True for p in parents.values()),
+            unclassified_identities=sorted(_digest(list(key)) for key in unclassified))
     return list(parents.values()),len(unclassified)
+
+
+def _unclassified_source_identities(target_date, events):
+    from src.engine.scalping.entry_split_order_plan import _safe_bool
+    sent = {(str(e.get('record_id') or ''), str((e.get('fields') or {}).get('broker_order_no') or (e.get('fields') or {}).get('ord_no') or '')):
+            (e.get('fields') or {}) for e in events if e.get('emitted_date') == target_date and e.get('stage') == 'order_leg_sent'}
+    keys = set()
+    for event in events:
+        if event.get('emitted_date') != target_date or event.get('stage') not in {'order_leg_sent','entry_cancel_wait_submission'}:
+            continue
+        fields = event.get('fields') or {}
+        if fields.get('dispatch_disposition') == 'response_uncertain':
+            keys.add(_digest(['uncertain', target_date, event.get('record_id'), fields.get('entry_cancel_wait_submission_context')]))
+        elif _safe_bool(fields.get('actual_order_submitted')):
+            record = str(event.get('record_id') or '')
+            no = str(fields.get('broker_order_no') or fields.get('ord_no') or '')
+            account = (sent.get((record,no)) or fields).get('buy_account_key') or ''
+            keys.add(_digest(['order', target_date, record, account, no]) if no else _digest(event))
+    return sorted(keys)
+
+
+def _reconciliation_dates(state):
+    days = set(state.get('source_counts') or {})
+    days.update(p['source_date'] for p in state.get('parents', []))
+    days.update(e['emitted_date'] for e in state.get('source_events', []))
+    days.update((state.get('submission_reconciliation') or {}).get('by_date') or {})
+    days.update(state.get('_verified_source_bindings') or {})
+    for day in days:
+        if not isinstance(day, str) or date.fromisoformat(day).isoformat() != day:
+            raise ValueError('cancel_wait_source_date_invalid')
+    return days
+
+
+def _source_binding(projection, registry_contract):
+    census = projection.get('producer_census') or {}
+    return dict(status=projection.get('status'),
+                projection_sha256=_digest(projection),
+                producer_manifest_sha256=census.get('manifest_sha256'),
+                retained_event_count=projection.get('retained_event_count'),
+                registry_tail_hash=registry_contract.get('tail_hash'))
 
 
 def _previous_state(target_date):
@@ -646,9 +694,15 @@ def _previous_state(target_date):
     refresh_floor = policy_refresh_start_date(target_date)
     for path in sorted(REPORT_DIR.glob('entry_cancel_wait_tuning_*.json'),reverse=True):
         day=path.stem[-10:]
-        if not refresh_floor <= day < target_date or path.is_symlink() or path.stat().st_size>64*1024*1024:continue
-        payload=json.loads(path.read_text());state=payload.get('economic_state') or {}
+        if not max(refresh_floor,EXECUTABLE_EVIDENCE_DATE) <= day < target_date:continue
+        if path.is_symlink() or path.stat().st_size > MAX_RECONCILIATION_METADATA_BYTES:
+            raise ValueError('cancel_wait_predecessor_path_or_size_invalid:'+str(path))
+        payload,_=_bounded_semantic_json(path);state=payload.get('economic_state') or {}
         if payload.get('economic_schema') != ECONOMIC_SCHEMA:continue
+        if payload.get('proof_sha256') and payload['proof_sha256'] != _digest({k:v for k,v in payload.items() if k not in ('generated_at','proof_sha256')}):
+            raise ValueError('cancel_wait_predecessor_report_hash_invalid')
+        if (payload.get('date', day) != day or state.get('through_date') != day):
+            raise ValueError('cancel_wait_predecessor_report_date_invalid')
         if state.get('sha256') != _digest({k:v for k,v in state.items() if k!='sha256'}):
             raise ValueError('cancel_wait_predecessor_state_invalid')
         from src.engine.scalping import entry_split_order_plan as entry
@@ -656,32 +710,70 @@ def _previous_state(target_date):
         registry,registry_contract=entry._execution_registry_snapshot()
         if state.get('parents') and registry_contract.get('status')!='verified':
             raise ValueError('cancel_wait_predecessor_registry_unverified')
-        for source_day in set(state.get('source_counts',{}))|{p['source_date'] for p in state.get('parents',[])}:
-            original,contract=entry._bounded_execution_projection(source_day,stages=CANCEL_WAIT_SUMMARY_STAGES | {'order_leg_sent'},
-                families=('dynamic_entry_price_resolver','entry_price_execution_quality'))
-            retained=[e for e in state.get('source_events',[]) if e.get('emitted_date')==source_day]
-            if contract.get('status')!='ready' or {_digest(e) for e in original}!={_digest(e) for e in retained}:
-                raise ValueError('cancel_wait_predecessor_original_projection_changed:'+source_day)
-            reconstructed,_=_parents(source_day,original,registry)
-            immutable=lambda p:(p['seed'],p['profile'],p['incumbent_timeout_sec'],
-                p.get('timeout_owner','entry_cancel_wait_runtime'),
-                p.get('economic_eligible',True),
-                {key:{k:c[k] for k in ('quantity','submitted_price','submitted_at','child_id','intent_id','broker_order_no')}
-                 for key,c in p['children'].items()})
-            originals={p['parent_id']:immutable(p) for p in reconstructed}
-            if any(originals.get(p['parent_id'])!=immutable(p) for p in state.get('parents',[]) if p['source_date']==source_day):
-                raise ValueError('cancel_wait_predecessor_frozen_context_changed:'+source_day)
-        relevant={p['parent_id'] for p in state.get('parents',[])}
+        bindings, rebuilt_parents, quarantined, rebuilt_events = {}, [], {}, []
+        rebuilt_counts = dict(state.get('source_counts') or {})
+        for source_day in sorted(_reconciliation_dates(state)):
+            if not refresh_floor <= source_day <= day:
+                raise ValueError('cancel_wait_predecessor_source_date_outside_scope')
+            try:
+                original,contract=entry._bounded_execution_projection(source_day,stages=CANCEL_WAIT_SUMMARY_STAGES | {'order_leg_sent'},
+                    families=('dynamic_entry_price_resolver','entry_price_execution_quality'))
+                retained=[e for e in state.get('source_events',[]) if e.get('emitted_date')==source_day]
+                expected={_digest(e) for e in retained}
+                prior_row=((state.get('submission_reconciliation') or {}).get('by_date') or {}).get(source_day) or {}
+                if not expected and prior_row.get('excluded_source_event_sha256s'):
+                    expected=set(prior_row['excluded_source_event_sha256s'])
+                if contract.get('status')!='ready' or {_digest(e) for e in original}!=expected:
+                    raise ValueError('cancel_wait_predecessor_original_projection_changed:'+source_day)
+                bindings[source_day] = _source_binding(contract, registry_contract)
+                reconstructed,unknown=_parents(source_day,original,registry)
+                if unknown:
+                    rebuilt_counts.pop(source_day, None)
+                else:
+                    rebuilt_counts[source_day] = len(reconstructed)
+                immutable=lambda p:(p['seed'],p['profile'],p['incumbent_timeout_sec'],
+                    p.get('timeout_owner','entry_cancel_wait_runtime'),
+                    p.get('economic_eligible',True),
+                    {key:{k:c[k] for k in ('quantity','submitted_price','submitted_at','child_id','intent_id','broker_order_no')}
+                     for key,c in p['children'].items()})
+                originals={p['parent_id']:immutable(p) for p in reconstructed}
+                if any(originals.get(p['parent_id'])!=immutable(p) for p in state.get('parents',[]) if p['source_date']==source_day):
+                    raise ValueError('cancel_wait_predecessor_frozen_context_changed:'+source_day)
+                rebuilt_parents.extend(reconstructed)
+                rebuilt_events.extend(original)
+            except (OSError, ValueError, TypeError, KeyError, SyntaxError) as exc:
+                retained=[e for e in state.get('source_events',[]) if e.get('emitted_date')==source_day]
+                refs=sorted({_digest(e) for e in retained})
+                if not refs:
+                    refs=(((state.get('submission_reconciliation') or {}).get('by_date') or {}).get(source_day) or {}).get('excluded_source_event_sha256s') or []
+                quarantined[source_day]=dict(reason=str(exc), excluded_source_event_sha256s=refs,
+                    artifact_path=str(path), artifact_sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+                bindings[source_day]=dict(status='source_gap', reason=str(exc))
+                rebuilt_counts.pop(source_day,None)
+        if quarantined and not any(v.get('status')=='ready' for v in bindings.values()):
+            raise ValueError(next(iter(quarantined.values()))['reason'])
+        relevant={p['parent_id'] for p in rebuilt_parents}
         for completion_day in {r['completion_date'] for r in state.get('actual_outcomes',[]) if r.get('plan_sha256') in relevant}:
             original,contract=entry._bounded_actual_entry_outcomes(completion_day)
             if contract.get('status')!='ready' or any(_digest(r) not in {_digest(o) for o in original}
                 for r in state.get('actual_outcomes',[]) if r.get('completion_date')==completion_day and r.get('plan_sha256') in relevant):
                 raise ValueError('cancel_wait_predecessor_original_cost_receipt_changed:'+completion_day)
-        return state
+        # Keep historical source bindings even when there are no classified
+        # parents or economic source counts. Old report bytes remain untouched.
+        result = json.loads(json.dumps(state))
+        result['_verified_source_bindings'] = bindings
+        result['parents'] = rebuilt_parents
+        result['source_events'] = rebuilt_events
+        result['actual_outcomes'] = [r for r in state.get('actual_outcomes',[]) if r.get('plan_sha256') in relevant]
+        if quarantined:
+            result['model_rows'] = [r for r in state.get('model_rows',[]) if r.get('source_date') and r['source_date'] not in quarantined]
+        result['_quarantined_sources'] = quarantined
+        result['source_counts'] = rebuilt_counts
+        return result
     return {}
 
 
-def _unresolved_prior_custody(target_date, registry, parents, outcomes):
+def _unresolved_prior_custody(target_date, registry, parents, outcomes, *, details=None):
     """A submission census zero alone does not prove zero exposure/PnL."""
     from src.engine.scalping.entry_split_order_plan import _canonical_sha256
     completed={r.get('plan_sha256') for r in outcomes if r.get('status')=='COMPLETED'
@@ -693,9 +785,145 @@ def _unresolved_prior_custody(target_date, registry, parents, outcomes):
     for event in registry:
         if event.get('owner_type')=='main_scalping' and event.get('side')=='BUY' and event.get('action')=='NEW':
             inventory.setdefault(event.get('intent_id'),{}).update(event)
-    return [key for key,row in inventory.items() if '2026-06-05' <= str(row.get('order_date','')) < target_date
-        and (row.get('state')!='ORDER_TERMINAL' or not row.get('terminal_reconciliation')
+    unresolved = [key for key,row in inventory.items() if '2026-06-05' <= str(row.get('order_date','')) < target_date
+        and (not _sequential_terminal_proof_valid(row)
              or (row.get('filled_qty',0)>0 and parent_by_intent.get(key) not in completed))]
+    for parent in parents:
+        if parent['source_date'] >= target_date:
+            continue
+        for key, child in parent['children'].items():
+            if key in inventory:
+                continue
+            filled = (child.get('fills') or [{}])[-1].get('filled_qty', 0)
+            if not child.get('terminal_reconciled') or (filled > 0 and parent['parent_id'] not in completed):
+                unresolved.append(key)
+    if details is not None:
+        open_keys, terminal_keys, cost_keys = set(), set(), set()
+        children = {key:(p, c) for p in parents if p['source_date'] < target_date
+                    for key, c in p['children'].items()}
+        for key in set(unresolved):
+            row = inventory.get(key)
+            parent, child = children.get(key, ({}, {}))
+            if row and row.get('state') != 'ORDER_TERMINAL' and row.get('broker_order_no'):
+                open_keys.add(key)
+            elif not row or not _sequential_terminal_proof_valid(row):
+                terminal_keys.add(key)
+            filled = row.get('filled_qty', 0) if row else (child.get('fills') or [{}])[-1].get('filled_qty', 0)
+            if filled and parent.get('parent_id') not in completed:
+                cost_keys.add(key)
+        details.update(known_open_order_count=len(open_keys),
+            terminal_unverified_count=len(terminal_keys),
+            filled_cost_unresolved_count=len(cost_keys))
+    return sorted(set(unresolved))
+
+
+def _history_dates(target_date):
+    from src.engine.automation.source_quality_clean_baseline import policy_refresh_start_date
+    from src.utils.market_day import is_krx_trading_day
+    if target_date < '2026-09-29':
+        return set()
+    cursor = date.fromisoformat(policy_refresh_start_date(target_date))
+    days = set()
+    while cursor < date.fromisoformat(target_date):
+        if is_krx_trading_day(cursor):
+            days.add(cursor.isoformat())
+        cursor += timedelta(days=1)
+    return days
+
+
+def _hydrate_missing_history(target_date, predecessor, registry, source):
+    """Use compact, sealed sources for forward dates absent from prior reports."""
+    from src.engine.scalping import entry_split_order_plan as entry
+    from src.engine.pipeline_event_summary import CANCEL_WAIT_SUMMARY_STAGES
+    bindings = predecessor.setdefault('_verified_source_bindings', {})
+    for day in sorted(_history_dates(target_date) - _reconciliation_dates(predecessor)):
+        try:
+            original, contract = entry._bounded_execution_projection(day,
+                stages=CANCEL_WAIT_SUMMARY_STAGES | {'order_leg_sent'},
+                families=('dynamic_entry_price_resolver', 'entry_price_execution_quality'))
+            bindings[day] = _source_binding(contract, source['registry'])
+            if contract.get('status') != 'ready':
+                continue
+            reconstructed, unknown = _parents(day, original, registry)
+            predecessor.setdefault('source_events', []).extend(original)
+            predecessor.setdefault('parents', []).extend(reconstructed)
+            if not unknown:
+                predecessor.setdefault('source_counts', {})[day] = len(reconstructed)
+        except (OSError, ValueError, TypeError, KeyError, SyntaxError) as exc:
+            bindings[day] = dict(status='source_gap', reason=str(exc))
+
+
+def _reconcile_history(target_date, events, registry, parents, outcomes, source,
+                       predecessor, current_details):
+    """Separate observed custody from the completeness of historical sources."""
+    from src.engine.automation.source_quality_clean_baseline import policy_refresh_start_date
+    from src.utils.market_day import is_krx_trading_day
+    floor = policy_refresh_start_date(target_date)
+    days = _reconciliation_dates(predecessor) | {target_date}
+    # The forward refresh window declares its trading dates. Earlier legacy
+    # audits retain only their declared dates, rather than replaying all history.
+    days.update(_history_dates(target_date))
+    bindings = dict(predecessor.get('_verified_source_bindings') or {})
+    bindings.update({day: row.get('source_binding', {}) for day, row in
+                     (predecessor.get('submission_reconciliation') or {}).get('by_date', {}).items()
+                     if day not in bindings})
+    bindings[target_date] = _source_binding(source['projection'], source['registry'])
+    by_date = {}
+    for day in sorted(days):
+        if day > target_date or day < floor:
+            continue
+        details = current_details if day == target_date else {}
+        retained = [p for p in parents if p['source_date'] == day]
+        reason = None
+        if day != target_date:
+            try:
+                reconstructed, _ = _parents(day, events, registry, details=details)
+                retained = reconstructed
+            except (ValueError, TypeError, KeyError, SyntaxError) as exc:
+                reason = str(exc)
+                details['unclassified_identities'] = _unclassified_source_identities(day, events)
+        unknown = details.get('unclassified_identities') or []
+        verified = bindings.get(day, {}).get('status') == 'ready'
+        if day == target_date:
+            verified = (verified and source['registry'].get('status') == 'verified'
+                        and source['source_quality'].get('tuning_input_allowed') is True)
+        by_date[day] = dict(source_binding=bindings.get(day),
+            source_event_sha256s=sorted({_digest(e) for e in events if e.get('emitted_date') == day}),
+            parent_identities=sorted(p['parent_id'] for p in retained),
+            excluded_source_event_sha256s=(predecessor.get('_quarantined_sources') or {}).get(day,{}).get('excluded_source_event_sha256s',[]),
+            classified_parent_count=len(retained), unclassified_identities=unknown,
+            unclassified_submission_count=len(unknown), coverage_verified=verified,
+            blocker=reason or ('historical_source_binding_missing' if not verified else
+                              'actual_dispatch_or_parent_lineage_unclassified' if unknown else None))
+    required = sorted(day for day in by_date if day < target_date)
+    missing = [day for day in required if not by_date[day]['coverage_verified']]
+    unknown = sorted({key for day in required for key in by_date[day]['unclassified_identities']})
+    custody = {}
+    unresolved = _unresolved_prior_custody(target_date, registry, parents, outcomes, details=custody)
+    registry_valid = source['registry'].get('status') == 'verified'
+    predecessor_gap = (source.get('predecessor', {}).get('status') == 'source_gap'
+                       or (predecessor.get('submission_reconciliation') or {}).get(
+                           'predecessor_source_gap') is True)
+    coverage = registry_valid and not missing and not predecessor_gap and not unknown
+    status = ('source_gap' if not coverage else 'waiting_outcome' if unresolved else 'verified_empty')
+    history = dict(contract_version=RECONCILIATION_VERSION, history_scope_start=floor,
+        history_scope_end=target_date, required_dates=required,
+        verified_dates=[day for day in required if day not in missing], missing_dates=missing,
+        unclassified_submission_count=len(unknown), known_unresolved_custody_count=len(unresolved),
+        unresolved_prior_custody_count=len(unresolved) if coverage else None,
+        coverage_verified=coverage, zero_is_verified=coverage and not unresolved,
+        status=status, blocker=('historical_submission_or_source_unreconciled' if not coverage else
+                              'prior_custody_or_completed_cost_unresolved' if unresolved else None),
+        **custody, custody_scope_start='2026-06-05',
+        owner=RECONCILIATION_OWNER,
+        closure_test='declared_dates_original_source_identity_and_owner_terminal_cost_reconciled')
+    ledger = dict(contract_version=RECONCILIATION_VERSION, by_date=by_date,
+                  unresolved_custody_identities=sorted(_digest(key) for key in unresolved),
+                  custody_counts=custody, quarantined_sources=predecessor.get('_quarantined_sources') or {},
+                  predecessor_source_gap=predecessor_gap,
+                  predecessor_source_failure=source.get('predecessor') or
+                      (predecessor.get('submission_reconciliation') or {}).get('predecessor_source_failure'))
+    return ledger, history
 
 
 def _fit_model(model_rows, identity):
@@ -830,7 +1058,13 @@ def build_report(target_date: str) -> dict[str, Any]:
     try:predecessor=_previous_state(target_date)
     except (OSError,ValueError,TypeError,KeyError) as exc:
         predecessor={};source['predecessor']=dict(status='source_gap',reason=str(exc),
+            artifacts=[dict(path=str(path), date=path.stem[-10:],
+                sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+                for path in REPORT_DIR.glob('entry_cancel_wait_tuning_*.json')
+                if path.stem[-10:] < target_date and not path.is_symlink()
+                and path.stat().st_size <= 64*1024*1024],
             excluded_from_economic_history=True,structural_gap_eta=None)
+    _hydrate_missing_history(target_date, predecessor, registry, source)
     outcomes=list({_digest(r):r for r in predecessor.get('actual_outcomes',[])+outcomes}.values())
     events=list({_digest(r):r for r in predecessor.get('source_events',[])+events}.values())
     counts=dict(predecessor.get('source_counts') or {})
@@ -840,7 +1074,9 @@ def build_report(target_date: str) -> dict[str, Any]:
     if source['projection'].get('status')=='ready' and source['registry'].get('status')=='verified' and source['source_quality'].get('tuning_input_allowed') is True:
         try:new,unclassified=_parents(target_date,events,registry,details=parent_details)
         except (ValueError,TypeError,KeyError,SyntaxError) as exc:
-            new=[];unclassified=1;blocker=str(exc)
+            new=[];blocker=str(exc)
+            parent_details['unclassified_identities'] = _unclassified_source_identities(target_date,events) or [_digest(dict(source_date=target_date,failure=str(exc)))]
+            unclassified=len(parent_details['unclassified_identities'])
         parents+=new
         if unclassified:counts.pop(target_date,None)
         else:counts[target_date]=len(new)
@@ -851,6 +1087,8 @@ def build_report(target_date: str) -> dict[str, Any]:
         blocker=blocker or 'actual_dispatch_or_parent_lineage_unclassified' if unclassified else None
     else:
         counts.pop(target_date,None)
+        parent_details['unclassified_identities'] = _unclassified_source_identities(target_date,events)
+        unclassified=len(parent_details['unclassified_identities'])
     # Mature earlier pending parents using the same durable signed journal.
     from src.trading.order.owner_custody_registry import OrderOwnerRegistry
     latest=OrderOwnerRegistry._state(registry);filled=defaultdict(list)
@@ -863,9 +1101,7 @@ def build_report(target_date: str) -> dict[str, Any]:
         for key,c in p['children'].items():
             a=latest.get(key) or {}
             if a:
-                terminal=(_sequential_terminal_proof_valid(a)
-                    if p.get('timeout_owner')=='initial_quantity_bundle_timeout_schedule'
-                    else a.get('state')=='ORDER_TERMINAL' and bool(a.get('terminal_reconciliation')))
+                terminal=_sequential_terminal_proof_valid(a)
                 c.update(terminal_at=a.get('observed_at_kst'),fills=filled[key],
                     terminal_reconciled=terminal)
                 if p.get('timeout_owner')=='initial_quantity_bundle_timeout_schedule':
@@ -889,6 +1125,12 @@ def build_report(target_date: str) -> dict[str, Any]:
                             'terminal_unverified' if a.get('state')=='ORDER_TERMINAL' else
                             'cancel_pending' if cancel_pending else
                             'partial_open' if filled_qty>0 else 'open'))
+    ledger, history = _reconcile_history(target_date, events, registry, parents,
+        outcomes, source, predecessor, parent_details)
+    daily_zero = (counts.get(target_date) == 0 and not unclassified
+                  and source['projection'].get('status') == 'ready'
+                  and source['registry'].get('status') == 'verified'
+                  and source['source_quality'].get('tuning_input_allowed') is True)
     # Do not retain old raw reads or silently treat unavailable windows as zero.
     identity=entry_operating_model_identity();model=_fit_model(predecessor.get('model_rows',[]),identity)
     from src.engine.monitoring import machine_microstructure_attribution as micro
@@ -899,7 +1141,8 @@ def build_report(target_date: str) -> dict[str, Any]:
     from src.engine.scalping import entry_split_order_plan as entry
     preflight=_digest(dict(source=source,native=native_generation,historical_quality={d:entry._source_quality_summary(d) for d in native_generation},
         previous=previous,incumbent_source=incumbent_source,predecessor=predecessor.get('sha256'),model=identity,
-        implementation=_implementation(),selection=SELECTION_RULE))
+        implementation=_implementation(),selection=SELECTION_RULE,
+        reconciliation=ledger,historical_reconciliation=history))
     current_path=report_paths(target_date)[0];receipt_path=current_path.with_suffix('.reuse-contract.json')
     if current_path.is_file() and receipt_path.is_file() and not current_path.is_symlink():
         cached=json.loads(current_path.read_text());receipt=json.loads(receipt_path.read_text())
@@ -908,7 +1151,8 @@ def build_report(target_date: str) -> dict[str, Any]:
             and cached.get('previous_thresholds')==previous
             and cached.get('proof_sha256')==_digest({k:v for k,v in cached.items() if k not in ('generated_at','proof_sha256')})
             and receipt.get('artifact_sha256')==hashlib.sha256(current_path.read_bytes()).hexdigest()
-            and receipt.get('preflight_fingerprint')==preflight):
+            and receipt.get('preflight_fingerprint')==preflight
+            and not validated_reconciliation_view(cached).get('findings')):
             return cached
     rows=[];model_rows=[];native={}
     if parents and source['projection'].get('status')=='ready':
@@ -929,9 +1173,14 @@ def build_report(target_date: str) -> dict[str, Any]:
     for key in ('incumbent_ev_pct','candidate_ev_pct','delta_ev_pct','mean_day_delta_krw',
                 'delta_ev_lower_bound_pct','day_delta_lower_bound_krw'):
         evaluation.setdefault(key,None)
+    if daily_zero or history['status'] != 'verified_empty':
+        evaluation.update({key:None for key in ('incumbent_ev_pct','candidate_ev_pct',
+            'delta_ev_pct','mean_day_delta_krw','delta_ev_lower_bound_pct','day_delta_lower_bound_krw')})
     unresolved=_unresolved_prior_custody(target_date,registry,parents,outcomes)
-    if counts.get(target_date)==0 and unresolved:
-        counts.pop(target_date,None)
+    if history['status']=='source_gap':
+        state='source_gap';ready=False;blocker=history['blocker']
+        evaluation.update(status=state,selected=None,blocker=blocker)
+    elif unresolved:
         state='waiting_outcome';ready=False;blocker='prior_custody_or_completed_cost_unresolved'
         evaluation.update(status=state,selected=None,blocker=blocker)
     elif state=='model_unvalidated' and any(not c['terminal_reconciled'] for p in parents
@@ -944,10 +1193,13 @@ def build_report(target_date: str) -> dict[str, Any]:
     state_body=dict(through_date=target_date,parents=parents,model_rows=model_rows,source_counts=counts,
         consumed_holdouts=evaluation['consumed_holdouts'],native_bindings=native,model_identity=identity,
         actual_outcomes=outcomes,source_events=events)
+    state_body['submission_reconciliation'] = ledger
     state_body['sha256']=_digest(state_body)
     source['native']=native
     body=dict(schema_version=2,economic_schema=ECONOMIC_SCHEMA,date=target_date,report_type='entry_cancel_wait_tuning',
+        reconciliation_contract_version=RECONCILIATION_VERSION,
         runtime_family=RUNTIME_FAMILY,policy_version=POLICY_VERSION,selection_rule_version=SELECTION_RULE,
+        implementation_sha256s=_implementation(),
         generated_at=datetime.now().astimezone().isoformat(timespec='seconds'),enabled=True,automatic_off_allowed=False,
         standalone_operational_family=True,runtime_effect=False,allowed_runtime_apply=True,
         decision_authority='next_preopen_bounded_entry_cancel_wait_policy',metric_role='primary_ev',
@@ -966,9 +1218,15 @@ def build_report(target_date: str) -> dict[str, Any]:
             excluded_sequential_timeout_owner_count=parent_details.get('sequential_source_only_parent_count'),
             response_uncertain_attempt_count=parent_details.get('response_uncertain_attempt_count'),
             unresolved_uncertain_attempt_count=parent_details.get('unresolved_uncertain_attempt_count'),
-            coverage_verified=source['projection'].get('status')=='ready' and source['registry'].get('status')=='verified' and not unclassified,
-            unresolved_prior_custody_count=len(unresolved),zero_is_verified=state=='no_submitted_orders'),
+            coverage_verified=source['projection'].get('status')=='ready' and source['registry'].get('status')=='verified' and source['source_quality'].get('tuning_input_allowed') is True and not unclassified,
+            source_date=target_date,coverage_scope='target_date_main_initial_buy_submission',
+            unresolved_prior_custody_count=history['unresolved_prior_custody_count'],
+            zero_is_verified=daily_zero),
+        historical_reconciliation=history,
         evidence_summary=dict(state=state,registered_count=len(parents),completed_candidate_count=evaluation.get('paired_count',0),
+            daily_state='no_submitted_orders' if daily_zero else
+                'source_gap' if counts.get(target_date) is None else 'submitted_orders_observed',
+            historical_state=history['status'],
             threshold_change_supported=ready,carry_forward_applied=not ready),
         profiles={p:dict(previous_threshold_sec=v,recommended_threshold_sec=v,calibration_state=state,
                     registered_count=sum(x['profile']==p for x in parents),completed_candidate_count=0,candidate_ev=[]) for p,v in previous.items()},
@@ -976,18 +1234,378 @@ def build_report(target_date: str) -> dict[str, Any]:
         preflight_fingerprint=preflight,
         scope_overrides=scopes)
     body['input_fingerprint']=_digest(dict(source=source,previous=previous,incumbent_source=incumbent_source,predecessor=predecessor.get('sha256'),model=identity,
-        implementation=_implementation(),selection=SELECTION_RULE))
+        implementation=_implementation(),selection=SELECTION_RULE,reconciliation=ledger))
     body['proof_sha256']=_digest({k:v for k,v in body.items() if k not in ('generated_at','proof_sha256')})
     return body
+
+
+def _bounded_semantic_json(path):
+    """One stable JSON receipt; no replay, source reconstruction, or writes."""
+    if path.is_symlink() or path.stat().st_size > 64 * 1024 * 1024:
+        raise ValueError('cancel_wait_artifact_path_or_size_invalid')
+    before = path.stat()
+    with path.open('rb') as handle:
+        raw = handle.read(MAX_RECONCILIATION_METADATA_BYTES + 1)
+    after = path.stat()
+    stamp = lambda value: (value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+    if stamp(before) != stamp(after):
+        raise ValueError('semantic_generation_changed_during_read')
+    value = json.loads(raw)
+    if not isinstance(value, dict):
+        raise ValueError('cancel_wait_artifact_object_invalid')
+    return value, hashlib.sha256(raw).hexdigest()
+
+
+def _sealed_census_matches(data_root, day, events, manifest):
+    """Check retained event identities against bounded producer metadata only."""
+    from collections import Counter
+    from src.engine.pipeline_event_summary import (producer_summary_paths,
+        CANCEL_WAIT_SUMMARY_STAGES, IDENTITY_CONTRACT, IDENTITY_MODULUS,
+        execution_projection_identity)
+    path, _ = producer_summary_paths(Path(data_root)/'pipeline_event_summaries', day)
+    stages = CANCEL_WAIT_SUMMARY_STAGES | {'order_leg_sent'}
+    if (manifest.get('identity_contract') != IDENTITY_CONTRACT
+        or not stages <= set(manifest.get('summary_stages') or [])):
+        return False
+    if path.is_symlink() or path.stat().st_size > 64 * 1024 * 1024:
+        return False
+    before = path.stat()
+    with path.open('rb') as handle:
+        raw = handle.read(MAX_RECONCILIATION_METADATA_BYTES + 1)
+    after = path.stat()
+    stamp = lambda value: (value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+    if stamp(before) != stamp(after):
+        raise ValueError('semantic_generation_changed_during_read')
+    if manifest.get('summary_storage_size_bytes') != len(raw):
+        return False
+    expected, expected_hash = Counter(), Counter()
+    for line in raw.splitlines():
+        row = json.loads(line)
+        stage = row.get('stage')
+        if stage not in stages:
+            continue
+        if (row.get('target_date') != day or row.get('identity_contract') != IDENTITY_CONTRACT
+            or row.get('execution_projection_identity_contract') != 'lossless_execution_projection_v1'
+            or type(row.get('event_count')) is not int or row['event_count'] < 0):
+            return False
+        expected[stage] += row['event_count']
+        expected_hash[stage] = (expected_hash[stage] + int(row['execution_projection_hash_sum'],16)) % IDENTITY_MODULUS
+    observed, observed_hash = Counter(), Counter()
+    for event in events:
+        stage = event.get('stage')
+        value = event.get('execution_source_event_sha256')
+        if stage not in stages or event.get('emitted_date') != day or value != execution_projection_identity(event):
+            return False
+        observed[stage] += 1
+        observed_hash[stage] = (observed_hash[stage] + int(value,16)) % IDENTITY_MODULUS
+    return expected == observed and expected_hash == observed_hash
+
+
+def _candidate_evidence_valid(payload):
+    """Enforce the existing economic promotion contract without replaying it."""
+    from src.engine.scalping.entry_cancel_wait_runtime import SELECTION_RULE
+    economic = payload['economic_evaluation']
+    model = payload['model_validation']
+    selected = economic.get('selected')
+    if not isinstance(selected, dict):
+        return False
+    training, held = selected.get('training') or {}, selected.get('holdout') or {}
+    paired = economic.get('paired_count')
+    current = payload['submission_census'].get('economic_parent_count')
+    sample = model.get('actual_sample_count')
+    if (economic.get('status') != 'economic_improvement_validated'
+        or economic.get('selection_rule_version') != SELECTION_RULE
+        or model.get('validated') is not True or type(sample) is not int or sample < 20
+        or selected.get('scope') != model.get('scope')
+        or type(paired) is not int or paired <= 0 or type(current) is not int or current < paired
+        or training.get('eligible') is not True or held.get('eligible') is not True
+        or held.get('paired_count') != paired):
+        return False
+    train_days, held_days = training.get('verification_dates') or [], held.get('verification_dates') or []
+    holdout = selected.get('holdout_date')
+    if (not train_days or held_days != [holdout]
+        or not model.get('available_after_date') < min(train_days) <= max(train_days) < holdout <= payload['date']):
+        return False
+    for key in ('delta_ev_pct','mean_day_delta_krw','delta_ev_lower_bound_pct','day_delta_lower_bound_krw'):
+        value = economic.get(key)
+        if type(value) not in (int,float) or not math.isfinite(value) or value <= 0 or held.get(key) != value:
+            return False
+    return True
+
+
+def _reconciliation_metadata_generation(data_root, by_date):
+    from src.engine.pipeline_event_summary import producer_summary_paths
+    paths = [Path(data_root)/'runtime/order_owner_registry.jsonl']
+    for day, row in sorted(by_date.items()):
+        if row['coverage_verified']:
+            paths.extend(producer_summary_paths(Path(data_root)/'pipeline_event_summaries',day))
+    generation = []
+    for path in paths:
+        stat = path.lstat()
+        generation.append((str(path.resolve()),stat.st_ino,stat.st_size,stat.st_mtime_ns,stat.st_ctime_ns,path.is_symlink()))
+    return tuple(generation)
+
+
+def validated_reconciliation_view(payload, policy=None, *, data_root=None, read_object=None):
+    """Validate the bounded report/ledger projection shared by every consumer.
+
+    ``data_root`` adds sealed generation/registry checks. It never calls the
+    producer, replay, an API, or a writer. Legacy v2 cannot prove historical zero.
+    """
+    from src.engine.scalping.entry_cancel_wait_runtime import ECONOMIC_SCHEMA
+    from src.engine.scalping.entry_split_order_plan import _safe_bool
+    from src.engine.automation.source_quality_clean_baseline import policy_refresh_start_date
+    from src.trading.order.owner_custody_registry import OwnerRegistryError
+    findings = []
+    result = dict(status='source_invalid', findings=findings, source_date=payload.get('date'),
+        owner=RECONCILIATION_OWNER, runtime_effect=False, allowed_runtime_apply=False,
+        actual_pid_consumed=False, whole_native_chain_done_claimed=False,
+        closure_test='same_date_original_source_ledger_policy_and_consumer_projection')
+    if payload.get('reconciliation_contract_version') is None:
+        result.update(status='not_evaluated_legacy', daily_zero_is_verified=None,
+                      historical_zero_is_verified=None, unresolved_prior_custody_count=None)
+        return result
+    try:
+        day = payload['date']
+        if day > datetime.now(KST).date().isoformat():
+            raise ValueError('cancel_wait_future_source_date_invalid')
+        if date.fromisoformat(day).isoformat() != day or payload.get('economic_schema') != ECONOMIC_SCHEMA:
+            findings.append('cancel_wait_report_date_or_hash_invalid')
+        if payload.get('proof_sha256') != _digest({k:v for k,v in payload.items() if k not in ('generated_at','proof_sha256')}):
+            findings.append('cancel_wait_report_date_or_hash_invalid')
+        state = payload['economic_state']
+        ledger = state['submission_reconciliation']
+        history = payload['historical_reconciliation']
+        census = payload['submission_census']
+        by_date = ledger['by_date']
+        if (state.get('through_date') != day
+            or state.get('sha256') != _digest({k:v for k,v in state.items() if k != 'sha256'})
+            or any(value != RECONCILIATION_VERSION for value in (
+                payload['reconciliation_contract_version'], ledger.get('contract_version'), history.get('contract_version')))):
+            findings.append('cancel_wait_reconciliation_ledger_invalid')
+        if any(date.fromisoformat(d).isoformat() != d or d > day for d in by_date):
+            findings.append('cancel_wait_reconciliation_ledger_invalid')
+        required = sorted(d for d in by_date if d < day)
+        declared = _reconciliation_dates(state) | _history_dates(day) | {day}
+        if not declared <= set(by_date):
+            findings.append('cancel_wait_history_source_binding_missing')
+        missing, unknown = [], set()
+        for d, row in by_date.items():
+            keys = row['unclassified_identities']
+            parents = [p for p in state['parents'] if p['source_date'] == d]
+            identities = sorted(p['parent_id'] for p in parents)
+            count = row['classified_parent_count']
+            source_count = state['source_counts'].get(d)
+            if source_count is not None and (type(source_count) is not int or source_count != len(parents) or keys):
+                findings.append('cancel_wait_reconciliation_ledger_invalid')
+            if (type(count) is not int or count < 0 or count != len(parents)
+                or len(set(identities)) != len(identities) or row.get('parent_identities') != identities
+                or not isinstance(keys, list) or len(set(keys)) != len(keys)
+                or type(row['unclassified_submission_count']) is not int
+                or row['unclassified_submission_count'] != len(keys)
+                or row.get('source_event_sha256s') != sorted({_digest(e) for e in state['source_events'] if e.get('emitted_date') == d})
+                or type(row.get('coverage_verified')) is not bool):
+                findings.append('cancel_wait_reconciliation_ledger_invalid')
+            orders = {(str(c.get('account_key') or ''), str(c['broker_order_no'])) for p in parents for c in p['children'].values()}
+            unbound = any(e.get('emitted_date') == d and e.get('stage') == 'order_leg_sent'
+                and _safe_bool((e.get('fields') or {}).get('actual_order_submitted'))
+                and (str((e.get('fields') or {}).get('buy_account_key') or ''),
+                     str((e.get('fields') or {}).get('broker_order_no') or (e.get('fields') or {}).get('ord_no') or '')) not in orders
+                for e in state['source_events'])
+            if unbound and not keys:
+                findings.append('cancel_wait_false_historical_zero' if d < day else 'cancel_wait_false_daily_zero')
+            if row['coverage_verified'] and ((row.get('source_binding') or {}).get('status') != 'ready'
+                or (row.get('source_binding') or {}).get('retained_event_count') != len([e for e in state['source_events'] if e.get('emitted_date') == d])):
+                findings.append('cancel_wait_history_source_binding_missing')
+            if d < day:
+                if not row['coverage_verified']:
+                    missing.append(d)
+                unknown.update(keys)
+        missing.sort()
+        unresolved = ledger['unresolved_custody_identities']
+        if len(set(unresolved)) != len(unresolved):
+            findings.append('cancel_wait_reconciliation_ledger_invalid')
+        registry_valid = (payload['source_contract']['registry'].get('status') == 'verified')
+        coverage = registry_valid and not missing and not unknown and not ledger['predecessor_source_gap']
+        total = len(unresolved) if coverage else None
+        expected_status = 'source_gap' if not coverage else 'waiting_outcome' if unresolved else 'verified_empty'
+        if (history.get('required_dates') != required or history.get('missing_dates') != missing
+            or history.get('verified_dates') != sorted(set(required) - set(missing))
+            or history.get('unclassified_submission_count') != len(unknown)
+            or type(history.get('unclassified_submission_count')) is not int
+            or history.get('known_unresolved_custody_count') != len(unresolved)
+            or type(history.get('known_unresolved_custody_count')) is not int
+            or type(history.get('coverage_verified')) is not bool or history['coverage_verified'] != coverage
+            or history.get('status') != expected_status
+            or history.get('history_scope_start') != policy_refresh_start_date(day)
+            or history.get('history_scope_end') != day):
+            findings.append('cancel_wait_reconciliation_ledger_invalid')
+        for key in ('known_open_order_count', 'terminal_unverified_count', 'filled_cost_unresolved_count'):
+            value = (ledger.get('custody_counts') or {}).get(key)
+            if type(value) is not int or not 0 <= value <= len(unresolved) or history.get(key) != value:
+                findings.append('cancel_wait_reconciliation_ledger_invalid')
+        if (history.get('unresolved_prior_custody_count') != total
+            or census.get('unresolved_prior_custody_count') != total
+            or (total is not None and (type(history.get('unresolved_prior_custody_count')) is not int
+                or type(census.get('unresolved_prior_custody_count')) is not int))
+            or type(history.get('zero_is_verified')) is not bool
+            or history['zero_is_verified'] != (coverage and not unresolved)):
+            findings.append('cancel_wait_false_historical_zero')
+        current = by_date[day]
+        count = state['source_counts'].get(day)
+        daily_coverage = current['coverage_verified'] and not current['unclassified_identities']
+        zero = daily_coverage and count == 0
+        if (count is not None and (type(count) is not int or count < 0)
+            or census.get('source_date') != day
+            or census.get('coverage_scope') != 'target_date_main_initial_buy_submission'
+            or census.get('submitted_parent_count') != count
+            or (count is not None and type(census.get('submitted_parent_count')) is not int)
+            or type(census.get('unclassified_count')) is not int
+            or census['unclassified_count'] != current['unclassified_submission_count']
+            or type(census.get('coverage_verified')) is not bool or census['coverage_verified'] != daily_coverage
+            or type(census.get('zero_is_verified')) is not bool or census['zero_is_verified'] != zero):
+            findings.append('cancel_wait_false_daily_zero')
+        economic = payload['economic_evaluation']
+        for key in ('incumbent_ev_pct','candidate_ev_pct','delta_ev_pct','mean_day_delta_krw',
+                    'delta_ev_lower_bound_pct','day_delta_lower_bound_krw'):
+            value = economic.get(key)
+            if value is not None and (type(value) not in (int,float) or not math.isfinite(value)):
+                findings.append('cancel_wait_economics_invalid')
+        if (type(payload.get('economic_tuning_input_allowed')) is not bool
+            or payload['evidence_summary'].get('state') != economic.get('status')
+            or payload['evidence_summary'].get('historical_state') != expected_status
+            or payload['evidence_summary'].get('daily_state') != ('no_submitted_orders' if zero else 'source_gap' if count is None else 'submitted_orders_observed')
+            or payload['evidence_summary'].get('threshold_change_supported') is not payload['economic_tuning_input_allowed']
+            or payload['evidence_summary'].get('carry_forward_applied') is not (not payload['economic_tuning_input_allowed'])):
+            findings.append('cancel_wait_evidence_projection_invalid')
+        if not coverage and (payload.get('economic_tuning_input_allowed') is not False
+            or economic.get('status') != 'source_gap' or economic.get('selected') is not None):
+            findings.append('cancel_wait_history_gap_erased')
+        if payload.get('economic_tuning_input_allowed') is True and not _candidate_evidence_valid(payload):
+            findings.append('cancel_wait_selected_without_economic_evidence')
+        if unresolved and payload.get('economic_tuning_input_allowed') is not False:
+            findings.append('cancel_wait_unresolved_custody_promoted')
+        if zero and (payload.get('economic_tuning_input_allowed') is not False
+            or economic.get('selected') is not None or any(economic.get(key) is not None for key in (
+                'incumbent_ev_pct','candidate_ev_pct','delta_ev_pct','mean_day_delta_krw',
+                'delta_ev_lower_bound_pct','day_delta_lower_bound_krw'))):
+            findings.append('cancel_wait_empty_economics_fabricated')
+        if not payload.get('economic_tuning_input_allowed') and payload.get('scope_overrides') != payload['incumbent_source'].get('previous_scope_overrides', []):
+            findings.append('cancel_wait_incumbent_carry_mapping_invalid')
+        if policy is not None:
+            from src.engine.automation.machine_entry_timing_tuning import _next_trading_date
+            pub = policy.get('publication_date')
+            allowed = payload.get('economic_tuning_input_allowed') is True
+            if (not isinstance(pub, str) or pub > datetime.now(KST).date().isoformat()
+                or policy.get('sha256') != _digest({k:v for k,v in policy.items() if k != 'sha256'})
+                or policy.get('schema') != ECONOMIC_SCHEMA or policy.get('runtime_family') != RUNTIME_FAMILY
+                or policy.get('source_date') != day or not day <= pub
+                or policy.get('effective_date') != _next_trading_date(date.fromisoformat(pub)).isoformat()
+                or policy.get('report_proof_sha256') != payload.get('proof_sha256')
+                or policy.get('evaluation_status') != payload['evidence_summary']['state']
+                or policy.get('previous_thresholds') != payload.get('previous_thresholds')
+                or policy.get('scope_overrides') != payload.get('scope_overrides')
+                or policy.get('disposition') != ('validated_scope_candidate' if allowed else 'incumbent_preserved')):
+                findings.append('cancel_wait_policy_binding_invalid')
+        cache_key = None
+        if data_root is not None:
+            generation = _reconciliation_metadata_generation(data_root,by_date)
+            if sum(item[2] * (2 if item[0].endswith('.json') else 1) for item in generation) > MAX_RECONCILIATION_METADATA_BYTES:
+                return {**result,'status':'source_invalid' if findings else 'unobservable',
+                    'findings':sorted(set(findings)), 'reason':'bounded_reconciliation_metadata_required'}
+            cache_key = (day,payload.get('proof_sha256'),_digest(policy),generation)
+            if not findings and cache_key in _RECONCILIATION_VIEW_CACHE:
+                return json.loads(json.dumps(_RECONCILIATION_VIEW_CACHE[cache_key]))
+            reader = read_object or _bounded_semantic_json
+            for d, row in by_date.items():
+                binding = row.get('source_binding') or {}
+                if not row['coverage_verified']:
+                    continue
+                from src.engine.pipeline_event_summary import producer_summary_paths
+                _, path = producer_summary_paths(Path(data_root)/'pipeline_event_summaries', d)
+                manifest, _ = reader(path)
+                from src.engine.scalping.entry_split_order_plan import _canonical_sha256
+                if binding.get('producer_manifest_sha256') != _canonical_sha256(manifest):
+                    findings.append('cancel_wait_stale_source_generation')
+                elif not _sealed_census_matches(data_root, d,
+                        [e for e in state['source_events'] if e.get('emitted_date') == d], manifest):
+                    findings.append('cancel_wait_history_source_binding_missing')
+                if reader(path)[0] != manifest:
+                    raise ValueError('semantic_generation_changed_during_read')
+            # An unrelated append does not invalidate a verified ancestor tail.
+            from src.trading.order.owner_custody_registry import OrderOwnerRegistry
+            path = Path(data_root)/'runtime/order_owner_registry.jsonl'
+            if path.is_symlink():
+                raise ValueError('cancel_wait_registry_path_invalid')
+            before = path.stat()
+            registry = OrderOwnerRegistry(path).verified_events_snapshot()
+            after = path.stat()
+            if (before.st_ino, before.st_size, before.st_mtime_ns) != (after.st_ino, after.st_size, after.st_mtime_ns):
+                raise ValueError('semantic_generation_changed_during_read')
+            expected_unresolved = sorted(_digest(key) for key in _unresolved_prior_custody(
+                day, registry, state['parents'], state['actual_outcomes']))
+            if expected_unresolved != unresolved:
+                findings.append('cancel_wait_false_historical_zero')
+            tail = payload['source_contract']['registry'].get('tail_hash')
+            hashes = [e.get('event_hash') for e in registry]
+            if tail != '0'*64 and tail not in hashes:
+                findings.append('cancel_wait_history_source_binding_missing')
+            elif any(e.get('owner_type') == 'main_scalping' and e.get('side') == 'BUY'
+                     and e.get('order_date', '9999') <= day for e in registry[(hashes.index(tail)+1) if tail in hashes else 0:]):
+                findings.append('cancel_wait_stale_registry_generation')
+        if data_root is not None and _reconciliation_metadata_generation(data_root,by_date) != generation:
+            raise ValueError('semantic_generation_changed_during_read')
+        result.update(status='source_invalid' if findings else 'candidate_selected' if payload.get('economic_tuning_input_allowed') else 'incumbent_carry',
+            reconciliation_contract_version=RECONCILIATION_VERSION, report_proof_sha256=payload.get('proof_sha256'),
+            daily_state=payload['evidence_summary'].get('daily_state'), daily_submitted_parent_count=count,
+            daily_zero_is_verified=zero, historical_state=expected_status,
+            historical_zero_is_verified=coverage and not unresolved, unresolved_prior_custody_count=total,
+            unclassified_submission_count=len(unknown), known_unresolved_custody_count=len(unresolved),
+            **(ledger.get('custody_counts') or {}),
+            missing_dates=missing, evaluation_status=payload['evidence_summary']['state'],
+            economic_tuning_input_allowed=payload['economic_tuning_input_allowed'])
+        if cache_key is not None and not findings:
+            if len(_RECONCILIATION_VIEW_CACHE) >= 8:
+                _RECONCILIATION_VIEW_CACHE.pop(next(iter(_RECONCILIATION_VIEW_CACHE)))
+            _RECONCILIATION_VIEW_CACHE[cache_key] = json.loads(json.dumps(result))
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, OwnerRegistryError) as exc:
+        if str(exc) == 'semantic_generation_changed_during_read':
+            return {**result, 'status':'unobservable', 'findings':[], 'reason':str(exc)}
+        findings.append('cancel_wait_reconciliation_ledger_invalid')
+        result['error'] = str(exc)[:160]
+    result['findings'] = sorted(set(findings))
+    return result
+
+
+def _without_registry_tail(payload):
+    result=json.loads(json.dumps(payload))
+    for key in ('generated_at','proof_sha256','preflight_fingerprint','input_fingerprint'):
+        result.pop(key,None)
+    result['source_contract']['registry'].pop('tail_hash',None)
+    result['economic_state'].pop('sha256',None)
+    for row in result['economic_state']['submission_reconciliation']['by_date'].values():
+        if row.get('source_binding'):
+            row['source_binding'].pop('registry_tail_hash',None)
+    return result
 
 
 def verify_report(payload, *, recompute=True):
     from src.engine.scalping.entry_cancel_wait_runtime import ECONOMIC_SCHEMA
     if payload.get('economic_schema')!=ECONOMIC_SCHEMA:return False,'cancel_wait_executable_schema_required'
     if payload.get('proof_sha256')!=_digest({k:v for k,v in payload.items() if k not in ('generated_at','proof_sha256')}):return False,'cancel_wait_report_hash_invalid'
+    view=validated_reconciliation_view(payload)
+    if view.get('findings'):return False,view['findings'][0]
     if recompute:
         current=build_report(payload['date'])
-        if current['proof_sha256']!=payload['proof_sha256']:return False,'cancel_wait_source_or_metric_revalidation_failed'
+        if current['proof_sha256']!=payload['proof_sha256']:
+            unrelated_append=(payload.get('economic_tuning_input_allowed') is False
+                and current.get('economic_tuning_input_allowed') is False
+                and payload.get('implementation_sha256s') == current.get('implementation_sha256s')
+                and bool(payload.get('implementation_sha256s'))
+                and payload['source_contract']['registry'].get('tail_hash') != current['source_contract']['registry'].get('tail_hash')
+                and _without_registry_tail(payload) == _without_registry_tail(current))
+            if not unrelated_append or validated_reconciliation_view(payload,data_root=DATA_DIR).get('status') != 'incumbent_carry':
+                return False,'cancel_wait_source_or_metric_revalidation_failed'
     return True,None
 
 
@@ -1018,9 +1636,13 @@ def handoff_view(payload, policy, policy_path):
     if (not valid or policy.get('report_proof_sha256')!=payload['proof_sha256']
         or policy.get('sha256')!=_digest({k:v for k,v in policy.items() if k!='sha256'})):
         raise ValueError(reason or 'cancel_wait_summary_policy_proof_invalid')
-    return dict(source_date=payload['date'],publication_date=policy['publication_date'],effective_date=policy['effective_date'],
+    recorded_policy,physical_policy_sha=_bounded_semantic_json(policy_path)
+    if recorded_policy != policy:raise ValueError('semantic_generation_changed_during_read')
+    reconciliation=validated_reconciliation_view(payload,policy)
+    if reconciliation.get('findings'):raise ValueError(reconciliation['findings'][0])
+    return dict(reconciliation=reconciliation,source_date=payload['date'],publication_date=policy['publication_date'],effective_date=policy['effective_date'],
         evaluation_status=payload['evidence_summary']['state'],policy_disposition=policy['disposition'],
-        report_proof_sha256=payload['proof_sha256'],policy_sha256=hashlib.sha256(policy_path.read_bytes()).hexdigest(),
+        report_proof_sha256=payload['proof_sha256'],policy_sha256=physical_policy_sha,
         previous_thresholds=payload['previous_thresholds'],scope_overrides=policy['scope_overrides'],
         economic_tuning_input_allowed=payload['economic_tuning_input_allowed'],
         delta_ev_pct=payload['economic_evaluation'].get('delta_ev_pct'),mean_day_delta_krw=payload['economic_evaluation'].get('mean_day_delta_krw'),
@@ -1031,18 +1653,35 @@ def load_handoff_view(target_date, report_dir):
     directory=report_dir/'entry_cancel_wait_tuning'
     rp=directory/f'entry_cancel_wait_tuning_{target_date}.json';pp=directory/f'entry_cancel_wait_policy_{target_date}.json'
     if not rp.is_file():return None
-    payload=json.loads(rp.read_text())
+    payload,_=_bounded_semantic_json(rp)
     if payload.get('schema_version')!=2:return None
-    return handoff_view(payload,json.loads(pp.read_text()),pp)
+    policy,_=_bounded_semantic_json(pp)
+    return handoff_view(payload,policy,pp)
 
 
 def checklist_handoff(view):
     return '\n'.join(['<!-- entry_cancel_wait_handoff:start -->',
         '<!-- entry_cancel_wait_handoff_sha256:'+_digest(view)+' -->','','## Entry cancel-wait 장후 handoff','',
         f"- 평가 {view['source_date']}; 발행 {view['publication_date']}; 적용 {view['effective_date']}. `{view['evaluation_status']}` / `{view['policy_disposition']}`.",
+        '- 당일/과거 대사: `'+json.dumps(view.get('reconciliation'),sort_keys=True)+'`.',
         '- common timeout `'+json.dumps(view['previous_thresholds'],sort_keys=True)+'` 보존; ΔEV `%p` / 평균 일별 순익 차이 `원/일`: `'+json.dumps([view['delta_ev_pct'],view['mean_day_delta_krw']])+'`.',
         '- 자연 원천/model/미사용 holdout·정규 PREOPEN/PID·비용 후 성과는 기존 owner `KiwoomCommonHealthOpportunityCostAcceptance0917`의 Acceptance다. 전체 native DONE/PID 소비를 주장하지 않는다.','',
         '<!-- entry_cancel_wait_handoff:end -->'])
+
+
+def upsert_checklist_handoff(content, source_date, target_date, report_dir):
+    view = load_handoff_view(source_date, report_dir)
+    if view is None or view['effective_date'] != target_date:
+        return content
+    start, end = '<!-- entry_cancel_wait_handoff:start -->', '<!-- entry_cancel_wait_handoff:end -->'
+    if content.count(start) != content.count(end) or content.count(start) > 1:
+        raise ValueError('cancel_wait_checklist_block_invalid')
+    if start not in content:
+        return content.rstrip() + '\n\n' + checklist_handoff(view) + '\n'
+    a, b = content.index(start), content.index(end) + len(end)
+    if b <= a:
+        raise ValueError('cancel_wait_checklist_block_invalid')
+    return content[:a] + checklist_handoff(view) + content[b:]
 
 
 def verify_handoff(target_date, *, require_summary=True):
@@ -1068,6 +1707,10 @@ def verify_handoff(target_date, *, require_summary=True):
                 checklist_path=DATA_DIR.parent/'docs'/'checklists'/f"{policy['effective_date']}-stage2-todo-checklist.md")
             issues+=result['issues']
             view=handoff_view(payload,policy,path)
+            summary=_bounded_semantic_json(DATA_DIR/'report/runtime_approval_summary'/f'runtime_approval_summary_{target_date}.json')[0]
+            summary_view=(((summary.get('sources') or {}).get('entry_cancel_wait') or {}).get('economic_evidence') or {}).get('cancel_wait_reconciliation')
+            if payload.get('reconciliation_contract_version') and summary_view != view['reconciliation']:
+                issues.append('cancel_wait_runtime_summary_projection_invalid')
             tower=json.loads((DATA_DIR/'report/tuning_performance_control_tower'/f'tuning_performance_control_tower_{target_date}.json').read_text())
             text=(DATA_DIR.parent/'docs/checklists'/f"{policy['effective_date']}-stage2-todo-checklist.md").read_text()
             if tower.get('entry_cancel_wait_economic_tuning')!=view or text.count(checklist_handoff(view))!=1:

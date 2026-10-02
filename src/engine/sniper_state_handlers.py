@@ -2887,18 +2887,27 @@ _ENTRY_CAPACITY_RECEIPTS: dict = {}
 _ENTRY_CAPACITY_INFLIGHT: dict = {}
 _ENTRY_CAPACITY_RETRY_AFTER: dict = {}
 _ENTRY_CAPACITY_PENDING: dict = {}
+_ENTRY_CAPACITY_EVENTS: dict = {}
+_ENTRY_CAPACITY_SOURCE_INFLIGHT: dict = {}
+_ENTRY_CAPACITY_STATS_LOCK = threading.Lock()
+_ENTRY_CAPACITY_STATS: dict = {}
 _ENTRY_NONENTRY_CAPACITY_REUSE_MAX_AGE_SEC = 5.0
 
 
 def _reset_entry_capacity_receipts():
     global _ENTRY_CAPACITY_LOCK, _ENTRY_CAPACITY_RECEIPTS
     global _ENTRY_CAPACITY_INFLIGHT, _ENTRY_CAPACITY_RETRY_AFTER
-    global _ENTRY_CAPACITY_PENDING
+    global _ENTRY_CAPACITY_PENDING, _ENTRY_CAPACITY_EVENTS, _ENTRY_CAPACITY_SOURCE_INFLIGHT
+    global _ENTRY_CAPACITY_STATS_LOCK, _ENTRY_CAPACITY_STATS
     _ENTRY_CAPACITY_LOCK = threading.Lock()
     _ENTRY_CAPACITY_RECEIPTS = {}
     _ENTRY_CAPACITY_INFLIGHT = {}
     _ENTRY_CAPACITY_RETRY_AFTER = {}
     _ENTRY_CAPACITY_PENDING = {}
+    _ENTRY_CAPACITY_EVENTS = {}
+    _ENTRY_CAPACITY_SOURCE_INFLIGHT = {}
+    _ENTRY_CAPACITY_STATS_LOCK = threading.Lock()
+    _ENTRY_CAPACITY_STATS = {}
 
 
 if hasattr(os, "register_at_fork"):
@@ -2910,7 +2919,7 @@ def _entry_capacity_receipt_key(code, price):
     return (kiwoom_utils._market_data_cache_scope(KIWOOM_TOKEN),
             hashlib.sha256(broker_account_key().encode()).hexdigest(),
             str(code), int(price), _scale_in_budget_inventory_signature(),
-            hashlib.sha256(json.dumps(kiwoom_orders.get_last_deposit_meta(),
+            hashlib.sha256(json.dumps(kiwoom_orders.entry_capacity_deposit_identity(KIWOOM_TOKEN),
                 sort_keys=True, default=str).encode()).hexdigest())
 
 
@@ -2930,44 +2939,177 @@ def _entry_capacity_receipt_valid(snapshot, code, price, now_ts, *, nonentry_obs
         return False
 
 
-def _read_entry_capacity_snapshot(code, price, *, source_only=False,
-                                  source_read_rate_max_wait_sec=0.0, reuse_only=False):
-    """Reuse successful exact receipts only for observation, never live sizing.
+def _entry_capacity_cache_miss(key, cached):
+    """Compare only the bounded, process-local receipt cache; never scan a ledger."""
+    if cached:
+        return "expired_or_invalid_receipt"
+    if len(key) != 6:
+        return "absent"
+    previous = next((k for k in reversed(_ENTRY_CAPACITY_RECEIPTS)
+                     if len(k) == 6 and k[2] == key[2]), None)
+    if previous is None:
+        return "absent"
+    changed = []
+    if previous[0] != key[0]:
+        changed.append("token_origin_or_date")
+    for index, reason in ((1, "account"), (3, "exact_price"),
+                          (4, "inventory_or_custody"), (5, "deposit_identity_or_unproven_diagnostics")):
+        if previous[index] != key[index]:
+            changed.append(reason)
+    return ",".join(changed) or "absent"
 
-    Runtime-required reads retain their original transport path. Observers
-    neither wait on an in-flight read nor adopt its future response. Account,
-    origin/token/day, exact price and inventory/custody generation bind reuse.
-    Only cache-only non-entry observations use five seconds; ENTER_NOW and
-    preparation retain two seconds, and normal sizing always reads afresh.
+
+def _entry_capacity_read_totals(row):
+    """Bounded per-day/PID counters published with existing diagnostic log rows."""
+    purposes = {"entry_capacity_prefetch", "entry_operating_observation", "entry_live_sizing",
+                "entry_pre_submit_capacity", "entry_residual_capacity", "scale_in_live_capacity"}
+    purpose = row["purpose"] if row["purpose"] in purposes else "other"
+    with _ENTRY_CAPACITY_STATS_LOCK:
+        days = _ENTRY_CAPACITY_STATS.setdefault("days", {})
+        outside_window = False
+        if row["date"] not in days and len(days) >= 2:
+            oldest = min(days)
+            if row["date"] < oldest:
+                outside_window = True
+            else:
+                days.pop(oldest)
+        bucket = {} if outside_window else days.setdefault(row["date"], {})
+        totals = bucket.setdefault(purpose, {
+            "logical_requests": 0, "http_attempts": 0, "unknown_http_requests": 0,
+            "admission_attempts": 0, "exact_usable": 0, "results": {}})
+        totals["logical_requests"] += 1
+        if row["http_attempts"] is None:
+            totals["unknown_http_requests"] += 1
+        else:
+            totals["http_attempts"] += row["http_attempts"]
+        totals["admission_attempts"] += row["admission_attempts"] or 0
+        totals["exact_usable"] += int(row["result"] in {"exact_reused", "fresh_success"})
+        results = totals["results"]
+        results[row["result"]] = results.get(row["result"], 0) + 1
+        return {**totals, "results": dict(results), "outside_retained_day_window": outside_window}
+
+
+def _read_entry_capacity_snapshot(code, price, *, source_only=False,
+                                  source_read_rate_max_wait_sec=0.0, reuse_only=False,
+                                  preparation_deadline_epoch=None, purpose=None,
+                                  correlation_id=None, diagnostic_context=None):
+    """Exact source reuse; only a pre-decision preparation worker may await it.
+
+    Already-frozen observers never wait for future account evidence. Required
+    sizing/submit reads remain fresh and independent of source-only preparation.
     """
+    started = time.time()
+    purpose = purpose or ("entry_operating_observation" if source_only else "entry_live_sizing")
+    read_meta = {}
+    key = None
+    fetch_started = False
+    request_id = uuid4().hex
+    joined_wait_sec = 0.0
+    diagnostic_context = diagnostic_context if isinstance(diagnostic_context, dict) else {}
+    def finish(snapshot, result, miss=None):
+        try:
+            # Whitelist fields: no broker payload, token, account number or error text.
+            row = {"request_id": request_id, "purpose": purpose, "pid": os.getpid(),
+                   "commit": os.getenv("KORSTOCKSCAN_RUNTIME_GIT_COMMIT", "unknown"),
+                   "code": str(code), "price": int(price), "source_only": source_only,
+                   "correlation_id": correlation_id, "started_epoch": started,
+                   "completed_epoch": time.time(), "result": result, "miss": miss,
+                   "scope_sha256": hashlib.sha256(repr(key).encode()).hexdigest() if key else None,
+                   "date": datetime.fromtimestamp(started, _KST).date().isoformat(),
+                   "http_attempts": read_meta.get("request_attempt_count") if fetch_started else 0,
+                   "admission_attempts": read_meta.get("admission_attempt_count") if fetch_started else 0,
+                   "http_first_started_epoch": read_meta.get("first_http_started_epoch"),
+                   "http_last_received_epoch": read_meta.get("last_http_received_epoch"),
+                   "admission_status": read_meta.get("read_rate_control_status"),
+                   "admission_waited_sec": read_meta.get("read_rate_control_waited_sec"),
+                   "joined_wait_sec": joined_wait_sec,
+                   "source_observed_at": snapshot.get("capacity_observed_at") if isinstance(snapshot, dict) else None,
+                   "capacity_source_sha256": snapshot.get("capacity_source_sha256") if isinstance(snapshot, dict) else None}
+            row.update({name: diagnostic_context.get(name) for name in (
+                "broker_route", "effective_venue", "session_bucket", "mechanistic_action")})
+            if key and len(key) == 6:
+                row.update({"account_scope_sha256": key[1], "inventory_custody_sha256": key[4],
+                            "deposit_identity_sha256": key[5]})
+            row["request_fingerprint"] = hashlib.sha256(json.dumps({
+                "scope": key[:4] if key else None, "source_only": source_only,
+                "max_wait_sec": source_read_rate_max_wait_sec,
+                "timeout": [0.15, 0.15] if source_only else "runtime_default",
+            }, sort_keys=True, default=str).encode()).hexdigest()
+            row["purpose_totals"] = _entry_capacity_read_totals(row)
+            log_info("[ENTRY_CAPACITY_READ] " + json.dumps(row, sort_keys=True, separators=(",", ":")))
+        except Exception:
+            pass  # Diagnostics cannot change an account/decision outcome.
+        return snapshot
     def fetch():
+        nonlocal fetch_started
         bounds = {"source_only": True} if source_only else {}
-        if source_only and source_read_rate_max_wait_sec > 0:
-            bounds["source_read_rate_max_wait_sec"] = source_read_rate_max_wait_sec
+        wait_budget = source_read_rate_max_wait_sec
+        if source_only and preparation_deadline_epoch is not None:
+            remaining = float(preparation_deadline_epoch) - time.time() - 0.30
+            if remaining <= 0:
+                return {"error": "capacity_preparation_deadline_deferred"}
+            wait_budget = min(wait_budget, remaining)
+        if source_only and wait_budget > 0:
+            bounds["source_read_rate_max_wait_sec"] = wait_budget
+        fetch_started = True
         return kiwoom_utils.get_orderable_by_margin_kt00011(
-            KIWOOM_TOKEN, code, unit_price=price,
-            **bounds)
+            KIWOOM_TOKEN, code, unit_price=price, request_purpose=purpose,
+            read_meta=read_meta, **bounds)
     try:
         key = _entry_capacity_receipt_key(code, price)
     except Exception:
-        return {"error": "capacity_scope_unavailable"} if source_only else fetch()
-    started = time.time()
+        if source_only:
+            return finish({"error": "capacity_scope_unavailable"}, "scope_changed")
+        return finish(fetch(), "required_fresh")
+    immediate = None
+    join_event = None
     with _ENTRY_CAPACITY_LOCK:
+        cached = _ENTRY_CAPACITY_RECEIPTS.get(key)
+        miss = _entry_capacity_cache_miss(key, cached)
         if source_only:
             if _ENTRY_CAPACITY_INFLIGHT.get(key):
-                return {"error": "capacity_source_inflight"}
+                if preparation_deadline_epoch is not None:
+                    join_event = _ENTRY_CAPACITY_EVENTS.get(key)
+                if join_event is None:
+                    immediate = ({"error": "capacity_source_inflight"}, "inflight")
+            elif _entry_capacity_receipt_valid(cached, code, price, started,
+                                               nonentry_observation=reuse_only):
+                immediate = ({**copy.deepcopy(cached), "capacity_reuse_status": "exact_receipt_reused",
+                              "capacity_reuse_max_age_sec": 5.0 if reuse_only else 2.0}, "exact_reused")
+            elif reuse_only:
+                immediate = ({"error": "capacity_observation_cache_miss_nonentry"}, "expired" if cached else "scope_changed")
+            elif started < _ENTRY_CAPACITY_RETRY_AFTER.get(key, 0):
+                immediate = ({"error": "capacity_source_retry_deferred"}, "deferred")
+            elif str(code) in _ENTRY_CAPACITY_SOURCE_INFLIGHT:
+                immediate = ({"error": "capacity_source_inflight_other_frame"}, "inflight")
+        if immediate is None and join_event is None:
+            _ENTRY_CAPACITY_RECEIPTS.pop(key, None)
+            _ENTRY_CAPACITY_PENDING.pop(key, None)
+            _ENTRY_CAPACITY_INFLIGHT[key] = _ENTRY_CAPACITY_INFLIGHT.get(key, 0) + 1
+            _ENTRY_CAPACITY_EVENTS.setdefault(key, threading.Event())
+            if source_only:
+                _ENTRY_CAPACITY_SOURCE_INFLIGHT[str(code)] = key
+    if immediate is not None:
+        return finish(immediate[0], immediate[1], miss if immediate[0].get("error") else None)
+    if join_event is not None:
+        from src.utils.kiwoom_read_request_control import DEFAULT_SOURCE_ONLY_MAX_WAIT_SEC
+        wait = max(0.0, min(DEFAULT_SOURCE_ONLY_MAX_WAIT_SEC, float(source_read_rate_max_wait_sec),
+                           float(preparation_deadline_epoch) - time.time() - 0.30))
+        join_started = time.monotonic()
+        joined = join_event.wait(wait)
+        joined_wait_sec = round(time.monotonic() - join_started, 6)
+        try:
+            unchanged = key == _entry_capacity_receipt_key(code, price)
+        except Exception:
+            unchanged = False
+        with _ENTRY_CAPACITY_LOCK:
             cached = _ENTRY_CAPACITY_RECEIPTS.get(key)
-            if _entry_capacity_receipt_valid(cached, code, price, started,
-                                             nonentry_observation=reuse_only):
-                return {**copy.deepcopy(cached), "capacity_reuse_status": "exact_receipt_reused",
-                        "capacity_reuse_max_age_sec": (
-                            _ENTRY_NONENTRY_CAPACITY_REUSE_MAX_AGE_SEC if reuse_only else 2.0)}
-            if reuse_only:
-                return {"error": "capacity_observation_cache_miss_nonentry"}
-            if started < _ENTRY_CAPACITY_RETRY_AFTER.get(key, 0):
-                return {"error": "capacity_source_retry_deferred"}
-        _ENTRY_CAPACITY_RECEIPTS.pop(key, None)
-        _ENTRY_CAPACITY_INFLIGHT[key] = _ENTRY_CAPACITY_INFLIGHT.get(key, 0) + 1
+            now_ts = time.time()
+            valid = (joined and unchanged and now_ts <= float(preparation_deadline_epoch)
+                     and _entry_capacity_receipt_valid(cached, code, price, now_ts))
+            result = {**copy.deepcopy(cached), "capacity_reuse_status": "exact_receipt_reused"} if valid else {
+                "error": "capacity_source_join_unavailable"}
+        return finish(result, "exact_reused" if valid else "inflight", "joined_preparation")
     try:
         snapshot = fetch()
         try:
@@ -2979,10 +3121,18 @@ def _read_entry_capacity_snapshot(code, price, *, source_only=False,
                 if len(_ENTRY_CAPACITY_RECEIPTS) >= 128:
                     _ENTRY_CAPACITY_RECEIPTS.pop(next(iter(_ENTRY_CAPACITY_RECEIPTS)))
                 _ENTRY_CAPACITY_RECEIPTS[key] = copy.deepcopy(snapshot)
-            return {**snapshot, "capacity_reuse_status": "fresh_read"}
+            return finish({**snapshot, "capacity_reuse_status": "fresh_read"}, "fresh_success", miss)
         if source_only and not unchanged:
-            return {"error": "capacity_inventory_changed_during_read"}
-        return snapshot
+            return finish({"error": "capacity_inventory_changed_during_read"}, "scope_changed", miss)
+        reason = str(snapshot.get("error") or "") if isinstance(snapshot, dict) else ""
+        result = "deferred" if "deferred" in reason else (
+            "http_failed" if (read_meta.get("last_http_status_code") not in (None, 200)
+                or (read_meta.get("request_attempt_count") and not read_meta.get("last_http_received_epoch")))
+            else "contract_invalid")
+        return finish(snapshot, result, miss)
+    except Exception:
+        finish(None, "http_failed" if fetch_started else "contract_invalid", miss)
+        raise
     finally:
         with _ENTRY_CAPACITY_LOCK:
             remaining = _ENTRY_CAPACITY_INFLIGHT[key] - 1
@@ -2990,12 +3140,18 @@ def _read_entry_capacity_snapshot(code, price, *, source_only=False,
                 _ENTRY_CAPACITY_INFLIGHT[key] = remaining
             else:
                 _ENTRY_CAPACITY_INFLIGHT.pop(key, None)
+                event = _ENTRY_CAPACITY_EVENTS.pop(key, None)
+                if event is not None:
+                    event.set()
+            if source_only and _ENTRY_CAPACITY_SOURCE_INFLIGHT.get(str(code)) == key:
+                _ENTRY_CAPACITY_SOURCE_INFLIGHT.pop(str(code), None)
             if len(_ENTRY_CAPACITY_RETRY_AFTER) >= 128:
                 _ENTRY_CAPACITY_RETRY_AFTER.pop(next(iter(_ENTRY_CAPACITY_RETRY_AFTER)))
             _ENTRY_CAPACITY_RETRY_AFTER[key] = time.time() + 0.5
 
 
-def _prefetch_entry_capacity_for_async_evaluation(code, ws_data, deadline_epoch):
+def _prefetch_entry_capacity_for_async_evaluation(code, ws_data, deadline_epoch, *,
+                                                correlation_id=None, diagnostic_context=None):
     """Prepare evidence in the existing worker using its final evaluation frame.
 
     No delayed event/backfill is emitted. The later observer must independently
@@ -3008,11 +3164,25 @@ def _prefetch_entry_capacity_for_async_evaluation(code, ws_data, deadline_epoch)
     remaining = float(deadline_epoch) - time.time() - 0.30
     if price <= 0 or remaining <= 0:
         return {"status": "skipped", "reason": "price_or_worker_budget_missing"}
+    diagnostic_context = diagnostic_context if isinstance(diagnostic_context, dict) else {}
+    route = diagnostic_context.get("broker_route")
+    venue = diagnostic_context.get("effective_venue")
+    session = diagnostic_context.get("session_bucket")
+    if route and venue and session:
+        from src.engine.scalping.strategy_owner_replay import entry_operating_route_supported
+        if not entry_operating_route_supported(venue, session, route):
+            return {"status": "skipped", "reason": "explicit_unsupported_operating_route"}
     try:
         receipt = _read_entry_capacity_snapshot(code, price, source_only=True,
-            source_read_rate_max_wait_sec=min(DEFAULT_SOURCE_ONLY_MAX_WAIT_SEC, remaining))
+            source_read_rate_max_wait_sec=min(DEFAULT_SOURCE_ONLY_MAX_WAIT_SEC, remaining),
+            preparation_deadline_epoch=deadline_epoch, purpose="entry_capacity_prefetch",
+            correlation_id=correlation_id, diagnostic_context=diagnostic_context)
+        if time.time() > float(deadline_epoch):
+            return {"status": "source_gap", "reason": "capacity_preparation_deadline_deferred"}
         if _entry_capacity_receipt_valid(receipt, code, price, time.time()):
             return {"status": "ready", "reuse_status": receipt.get("capacity_reuse_status")}
+        if receipt.get("error") == "capacity_source_inflight_other_frame":
+            _request_entry_capacity_preparation({}, code, {"curr": price})
         return {"status": "source_gap", "reason": receipt.get("error") or "kt00011_empty"}
     except Exception as exc:
         return {"status": "source_gap", "reason": type(exc).__name__ + ":" + str(exc)}
@@ -3027,6 +3197,7 @@ def _request_entry_capacity_preparation(stock, code, ws_data):
             return False
         key = _entry_capacity_receipt_key(code, price)
         now_ts = time.time()
+        created = False
         with _ENTRY_CAPACITY_LOCK:
             if _entry_capacity_receipt_valid(_ENTRY_CAPACITY_RECEIPTS.get(key), code, price, now_ts):
                 return True
@@ -3043,7 +3214,20 @@ def _request_entry_capacity_preparation(stock, code, ws_data):
                 return False
             for obsolete in obsolete_keys:
                 _ENTRY_CAPACITY_PENDING.pop(obsolete)
-            _ENTRY_CAPACITY_PENDING.setdefault(key, (code, price, now_ts + 5.0))
+            if key not in _ENTRY_CAPACITY_PENDING:
+                _ENTRY_CAPACITY_PENDING[key] = (code, price, now_ts + 5.0)
+                created = True
+            deadline = _ENTRY_CAPACITY_PENDING[key][2]
+        if created:
+            try:
+                log_info("[ENTRY_CAPACITY_PREPARATION] " + json.dumps({
+                    "preparation_id": hashlib.sha256(repr((key, deadline)).encode()).hexdigest(),
+                    "pid": os.getpid(), "code": str(code), "price": price,
+                    "result": "pending", "deadline_epoch": deadline,
+                    "scope_sha256": hashlib.sha256(repr(key).encode()).hexdigest(),
+                    "http_attempts": 0}, sort_keys=True, separators=(",", ":")))
+            except Exception:
+                pass
         return True
     except Exception:
         # The normal observer retains the authoritative missing-source cause.
@@ -3060,13 +3244,14 @@ def prepare_pending_entry_capacity():
     try:
         if time.time() >= deadline or key != _entry_capacity_receipt_key(code, price):
             return {"status": "skipped", "reason": "expired_or_changed_scope"}
-        return _prefetch_entry_capacity_for_async_evaluation(code, {"curr": price}, deadline)
+        return _prefetch_entry_capacity_for_async_evaluation(code, {"curr": price}, deadline,
+            correlation_id=hashlib.sha256(repr((key, deadline)).encode()).hexdigest())
     except Exception as exc:
         return {"status": "source_gap", "reason": type(exc).__name__ + ":" + str(exc)}
 
 
 def _resolve_scalp_cash_budget_context(code, unit_price, fallback_orderable_amount, *, source_only=False,
-                                      reuse_only=False):
+                                      reuse_only=False, purpose=None, correlation_id=None, diagnostic_context=None):
     fallback = max(0, _safe_int(fallback_orderable_amount, 0))
     deposit_meta = kiwoom_orders.get_last_deposit_meta()
     kt00001_floor_applied = bool(deposit_meta.get("minimum_floor_applied", False))
@@ -3098,6 +3283,8 @@ def _resolve_scalp_cash_budget_context(code, unit_price, fallback_orderable_amou
     try:
         snapshot = _read_entry_capacity_snapshot(
             code, _safe_int(unit_price, 0), source_only=source_only,
+            purpose=purpose, correlation_id=correlation_id,
+            diagnostic_context=diagnostic_context,
             **({"reuse_only": True} if source_only and reuse_only else {}),
         )
     except Exception as exc:
@@ -12195,7 +12382,10 @@ def _observe_entry_economics_before_ai(stock, code, ws_data, *, exact_payload,
         # Preserve every machine anchor; non-entry economics may use an exact
         # existing receipt but cannot issue another synchronous account read.
         budget = _resolve_scalp_cash_budget_context(code, current, 0, source_only=True,
-            reuse_only=assessment.get("action") != "ENTER_NOW")
+            reuse_only=assessment.get("action") != "ENTER_NOW",
+            correlation_id=capture.get("evaluation_attempt_id"),
+            diagnostic_context={"broker_route": broker_route, "effective_venue": venue,
+                "session_bucket": identity["market_session_bucket"], "mechanistic_action": assessment.get("action")})
         if budget.get("kt00011_error") or budget.get("cash_orderable_qty_cap") is None:
             source["entry_economic_capacity_blocker"] = budget.get("kt00011_error") or "cash_quantity_missing"
             if assessment.get("action") == "ENTER_NOW":
@@ -44538,7 +44728,7 @@ def _probe_residual_account_guard_fields(
         return fields
     try:
         deposit = max(0, _safe_int(kiwoom_orders.get_deposit(KIWOOM_TOKEN), 0))
-        budget = _resolve_scalp_cash_budget_context(code, unit_price, deposit)
+        budget = _resolve_scalp_cash_budget_context(code, unit_price, deposit, purpose="entry_residual_capacity")
     except Exception as exc:
         fields["account_guard_error"] = str(exc)
         return fields
@@ -61380,7 +61570,11 @@ def _resolve_scanner_async_entry_ai(
             if (_safe_int(stock_snapshot.get("buy_qty"), 0) <= 0
                     and not _is_any_simulated_position(stock_snapshot, stock_snapshot.get("strategy"))):
                 refreshed["entry_capacity_prefetch"] = _prefetch_entry_capacity_for_async_evaluation(
-                    code, refreshed.get("ws_data") or {}, async_context.deadline_epoch)
+                    code, refreshed.get("ws_data") or {}, async_context.deadline_epoch,
+                    correlation_id=async_context.request_id,
+                    diagnostic_context={name: (refreshed.get("ws_data") or {}).get(name)
+                        or stock_snapshot.get(name) for name in (
+                            "broker_route", "effective_venue", "session_bucket")})
         return refreshed
 
     def evaluate(
@@ -68977,7 +69171,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 _resolve_scalp_cash_budget_context(
                     code,
                     general_margin_pre_submit_price,
-                    deposit,
+                    deposit, purpose="entry_pre_submit_capacity",
                 ),
                 unit_price=general_margin_pre_submit_price,
             )
@@ -70214,7 +70408,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     _resolve_scalp_cash_budget_context(
                         code,
                         effective_leg_price,
-                        deposit,
+                        deposit, purpose="entry_pre_submit_capacity",
                     ),
                     unit_price=effective_leg_price,
                 )
@@ -90441,7 +90635,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         }
         if simulated_position
         else (
-            _resolve_scalp_cash_budget_context(code, qty_price, deposit)
+            _resolve_scalp_cash_budget_context(code, qty_price, deposit, purpose="scale_in_live_capacity")
             if strategy == "SCALPING"
             else {
                 "budget_base": deposit,

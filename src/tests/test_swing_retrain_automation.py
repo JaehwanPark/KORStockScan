@@ -845,3 +845,20 @@ def test_auto_retrain_status_tracks_promotion_guard():
         in script
     )
     assert 'write_status "blocked_ai_tier2" 0 "ai_tier2_not_approved"' in script
+
+
+def test_daily_recommendation_missing_panel_and_latest_rows_fail_closed(monkeypatch):
+    import pytest
+
+    latest = pd.Timestamp('2026-10-02')
+    monkeypatch.setattr(reco, 'get_latest_quote_date', lambda: latest)
+    monkeypatch.setattr(reco, 'get_top_kospi_codes', lambda limit=300: ['005930'])
+    monkeypatch.setattr(reco, 'build_panel_dataset', lambda *a, **k: pd.DataFrame())
+    monkeypatch.setattr(reco, '_save_recommendation_outputs', lambda *a, **k: (
+        _ for _ in ()).throw(AssertionError('invalid source must not publish')))
+    with pytest.raises(ValueError, match='panel_source_empty'):
+        reco.recommend_daily_v2(bull_mode='disabled')
+    monkeypatch.setattr(reco, 'build_panel_dataset', lambda *a, **k: pd.DataFrame(
+        [{'date': latest - pd.Timedelta(days=1), 'code': '005930'}]))
+    with pytest.raises(ValueError, match='latest_source_rows_missing'):
+        reco.recommend_daily_v2(bull_mode='disabled')

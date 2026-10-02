@@ -27,6 +27,64 @@ def _review_event(index=0):
     }
 
 
+@pytest.mark.parametrize("mutation", ["missing", "duplicate", "rewrite_during_read", "publish_failure", "profile_invalid"])
+def test_closed_producer_reconstruction_preserves_raw_and_originals(tmp_path, monkeypatch, mutation):
+    from src.engine import pipeline_event_summary as owner
+    day = "2026-09-08"
+    raw_dir = tmp_path / "pipeline_events"
+    raw_dir.mkdir()
+    events = [{**_review_event(i), "emitted_date": day} for i in (1, 2)]
+    if mutation == "duplicate":
+        events[1] = events[0]
+    raw = raw_dir / f"pipeline_events_{day}.jsonl"
+    raw.write_text("".join(json.dumps(row) + "\n" for row in events))
+    directory = tmp_path / "pipeline_event_summaries"
+    collector = ProducerSummaryCompactor(summary_dir=directory, mode="shadow")
+    collector.submit(events[0]); collector.flush(); collector.close()
+    summary, manifest = owner.producer_summary_paths(directory, day)
+    if mutation == "profile_invalid":
+        manifest.write_text("[]")
+    original = (summary.read_bytes(), manifest.read_bytes())
+    original_raw = raw.read_bytes()
+    if mutation == "rewrite_during_read":
+        submit = ProducerSummaryCompactor.submit
+        def change_source(self, payload, **kwargs):
+            result = submit(self, payload, **kwargs)
+            raw.write_bytes(original_raw + b" ")
+            return result
+        monkeypatch.setattr(ProducerSummaryCompactor, "submit", change_source)
+    if mutation == "publish_failure":
+        original_write = owner._write_json
+        def fail_commit(path, payload):
+            if path == manifest:
+                raise OSError("source recovery publication failed")
+            return original_write(path, payload)
+        monkeypatch.setattr(owner, "_write_json", fail_commit)
+    if mutation != "missing":
+        with pytest.raises((ValueError, OSError)):
+            owner.rebuild_producer_summary_source(tmp_path, day)
+        assert (summary.read_bytes(), manifest.read_bytes()) == original
+        return
+    recovered = owner.rebuild_producer_summary_source(tmp_path, day)
+    assert recovered["summary_event_count"] == 2
+    assert owner.producer_source_ledger_issues(tmp_path, day) == []
+    assert raw.read_bytes() == original_raw
+    proof = recovered["source_reconstruction"]
+    assert proof["source_date"] == day
+    assert proof["reconstructed_at"]
+    assert proof["runtime_effect"] is proof["live_producer_timing_claimed"] is False
+    backup = Path(proof["original_backup_directory"])
+    assert ((backup / summary.name).read_bytes(), (backup / manifest.name).read_bytes()) == original
+
+
+def test_producer_reconstruction_refuses_live_writer_before_mutation(tmp_path, monkeypatch):
+    from src.engine import pipeline_event_summary as owner
+    from src.engine import observation_source_quality_audit as audit
+    monkeypatch.setattr(audit, "_raw_source_writer_active", lambda *_: True)
+    with pytest.raises(ValueError, match="writer_active"):
+        owner.rebuild_producer_summary_source(tmp_path, "2026-10-02")
+
+
 def test_producer_source_ledger_binds_raw_summary_and_rejects_drift(tmp_path):
     from src.engine.pipeline_event_summary import (
         seal_producer_summary_source,

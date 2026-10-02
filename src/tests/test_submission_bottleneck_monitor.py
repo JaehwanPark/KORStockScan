@@ -10,6 +10,33 @@ from src.engine.monitoring import submission_bottleneck_monitor as monitor
 START = datetime(2026, 9, 21, 8, 5)
 
 
+def test_monitor_consumes_pre_submit_prices_separately_from_terminal_and_pid(tmp_path, monkeypatch):
+    from src.tests.test_pre_submit_delay_tuning import _price_pattern_fixture
+    from src.engine.automation import runtime_policy_bootstrap as bootstrap
+    _price_pattern_fixture(tmp_path, monkeypatch, [{"prices": {0: 10000, 30: 9900}}], write=True)
+    monkeypatch.setattr(bootstrap, "DATA_DIR", tmp_path)
+    result = monitor.entry_execution_tuning_semantics(tmp_path, datetime(2026, 10, 2, 19, 0))
+    price = result["pre_submit_delay"]["price_pattern_analysis"]
+    assert price["status"] == "partial" and price["analysis_complete"] is True
+    assert result["pre_submit_delay"]["submit_call_terminal_count"] == 0
+    assert result["pre_submit_delay"]["terminal_count_semantics"] == "submit_call_completion_not_fill_or_exit"
+    assert result["pre_submit_delay"]["runtime_consumption"] == "not_proven"
+    assert "pre_submit_delay_price_pattern_invalid" not in result["issues"]
+
+
+def test_monitor_rejects_pre_submit_price_section_with_wrong_source_date(tmp_path, monkeypatch):
+    from src.tests.test_pre_submit_delay_tuning import _price_pattern_fixture
+    from src.engine.scalping import pre_submit_delay_tuning as delay
+    from src.engine.automation import runtime_policy_bootstrap as bootstrap
+    report = _price_pattern_fixture(tmp_path, monkeypatch, [{"prices": {0: 10000, 30: 9900}}], write=True)
+    report["price_pattern_analysis"]["source_date"] = "2026-10-01"
+    delay.report_path("2026-10-02").write_text(json.dumps(report))
+    monkeypatch.setattr(bootstrap, "DATA_DIR", tmp_path)
+    result = monitor.entry_execution_tuning_semantics(tmp_path, datetime(2026, 10, 2, 19, 0))
+    assert result["issues"]["pre_submit_delay_price_pattern_invalid"] == 1
+    assert result["pre_submit_delay"]["price_pattern_analysis"]["analysis_complete"] is False
+
+
 def event(i=0, action="ENTER_NOW", screen="pass", stage="ai_confirmed", when=START, **extra):
     return sentinel.PipelineEvent(when, "ENTRY_PIPELINE", stage, "fixture", "005930", str(i), {
         "entry_primary_decision_owner": "mechanistic_entry_adjudicator",
@@ -1872,3 +1899,15 @@ def test_normal_notice_survives_cooldown_without_duplicate_ack():
     ready=tick([],16,normal)
     monitor.notify(ready,'fixture.json',send=sent.append)
     assert len(sent)==1 and '현재 정상 관측' in sent[0]
+
+
+def test_cancel_wait_intraday_projection_preserves_null_without_duplicate_alert(tmp_path, monkeypatch):
+    from src.tests.test_entry_cancel_wait_tuning import _reconciliation_fixture
+    _reconciliation_fixture(tmp_path, monkeypatch, unknown_history=True)
+    now = datetime.fromisoformat('2026-10-02T22:00:00+09:00')
+    result = monitor.entry_execution_tuning_semantics(tmp_path/'data', now)
+    cancel = result['entry_cancel_wait']
+    assert cancel['daily_zero_is_verified'] is True
+    assert cancel['unresolved_prior_custody_count'] is None
+    assert cancel['notification_owner'] == 'artifact_freshness'
+    assert not any('cancel_wait' in key for key in result['issues'])

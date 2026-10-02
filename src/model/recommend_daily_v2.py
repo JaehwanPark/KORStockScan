@@ -175,13 +175,11 @@ def recommend_daily_v2(bull_mode=None):
         codes, start_date, end_date, min_rows=120, include_labels=False
     )
     if panel.empty:
-        print("❌ 최신 패널 생성 실패")
-        return
+        raise ValueError("daily_recommendation_panel_source_empty")
 
     latest_rows = panel[panel["date"] == latest_date].copy()
     if latest_rows.empty:
-        print("❌ 최신 거래일 데이터가 없습니다.")
-        return
+        raise ValueError("daily_recommendation_latest_source_rows_missing")
 
     print(f"[2/4] 모델 로드 및 base score 생성 중... (bull_mode={bull_mode})")
     meta_artifact = load_model_artifact(META_MODEL_PATH)

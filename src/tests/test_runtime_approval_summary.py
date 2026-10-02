@@ -919,6 +919,34 @@ def test_pre_submit_delay_source_gap_has_owned_closure_test():
     assert row["policy_handoff_state"] == "blocked"
 
 
+def test_pre_submit_price_analysis_is_consumed_without_economic_promotion(tmp_path, monkeypatch):
+    from src.tests.test_pre_submit_delay_tuning import _price_pattern_fixture
+    data = _patch(monkeypatch, tmp_path)
+    _price_pattern_fixture(data, monkeypatch, [{"prices": {0: 10000, 30: 9900}}], write=True)
+    result = mod.build_runtime_approval_summary("2026-10-02", include_swing=False, include_producer_gap=False)
+    source = result["sources"]["pre_submit_delay"]
+    assert source["price_pattern_analysis"]["analysis_complete"] is True
+    assert source["price_pattern_analysis"]["paired_comparison_count"] == 1
+    assert source["economic_evidence"]["comparison_status"] == "source_gap"
+    assert source["economic_evidence"]["policy_apply_allowed"] is False
+    assert source["policy_receipt"]["valid"] is True
+    assert "First-submit price pattern" in mod.summary_paths("2026-10-02")[1].read_text()
+
+
+def test_pre_submit_price_analysis_invalid_diagnostic_does_not_claim_completion(tmp_path, monkeypatch):
+    from src.tests.test_pre_submit_delay_tuning import _price_pattern_fixture
+    from src.engine.scalping import pre_submit_delay_tuning as delay
+    data = _patch(monkeypatch, tmp_path)
+    report = _price_pattern_fixture(data, monkeypatch, [{"prices": {0: 10000, 30: 9900}}], write=True)
+    report["price_pattern_analysis"]["runtime_apply_allowed"] = True
+    _write(delay.report_path("2026-10-02"), report)
+    result = mod.build_runtime_approval_summary("2026-10-02", include_swing=False, include_producer_gap=False)
+    source = result["sources"]["pre_submit_delay"]
+    assert source["price_pattern_analysis"]["status"] == "source_invalid"
+    assert source["price_pattern_analysis"]["analysis_complete"] is False
+    assert source["error"] == "price_pattern_contract_invalid"
+
+
 def test_active_expansion_source_gap_is_not_retired_or_not_applicable(tmp_path):
     path = tmp_path / "study.json"
     _write(path, dict(target_date="2026-09-17", status="partial_source_quality",
@@ -994,3 +1022,23 @@ def test_explicit_prepared_date_does_not_slide_to_later_sibling(monkeypatch, tmp
     monkeypatch.setenv("POSTCLOSE_PREPARED_EFFECTIVE_DATE", "2026-09-24")
     with pytest.raises(ValueError, match="prepared_effective_date_missing"):
         mod._runtime_consumption_state("2026-09-21", sources)
+
+
+def test_cancel_wait_summary_preserves_history_gap_and_daily_empty(monkeypatch, tmp_path):
+    from src.tests.test_entry_cancel_wait_tuning import _reconciliation_fixture
+    report, _, _, _ = _reconciliation_fixture(tmp_path, monkeypatch, unknown_history=True)
+    evidence = mod._economic_projection('entry_cancel_wait', report)
+    assert evidence['comparison_status'] == 'source_gap'
+    assert evidence['policy_apply_allowed'] is False
+    assert evidence['cancel_wait_reconciliation']['daily_zero_is_verified'] is True
+    assert evidence['cancel_wait_reconciliation']['unresolved_prior_custody_count'] is None
+    assert evidence['paired_delta_ev_pct'] is None
+
+
+def test_cancel_wait_summary_valid_empty_is_insufficient_sample(monkeypatch, tmp_path):
+    from src.tests.test_entry_cancel_wait_tuning import _reconciliation_fixture
+    report, _, _, _ = _reconciliation_fixture(tmp_path, monkeypatch)
+    evidence = mod._economic_projection('entry_cancel_wait', report)
+    assert evidence['comparison_status'] == 'insufficient_sample'
+    assert evidence['cancel_wait_reconciliation']['historical_state'] == 'verified_empty'
+    assert evidence['candidate_cost_adjusted_ev_pct'] is None

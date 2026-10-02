@@ -2202,3 +2202,32 @@ def test_direct_family_source_change_keeps_existing_checklist(
     with pytest.raises(RuntimeError, match="changed_during_render"):
         mod.build_next_stage2_checklist(day)
     assert target.read_text(encoding="utf-8") == "original\n"
+
+
+def test_actual_cancel_wait_tower_checklist_and_scoped_strict_chain(monkeypatch, tmp_path):
+    from src.tests.test_entry_cancel_wait_tuning import _reconciliation_fixture
+    from src.tests.test_tuning_performance_control_tower import _patch_dirs as patch_tower
+    from src.engine.automation import entry_cancel_wait_tuning as cancel
+    from src.engine.automation import tuning_performance_control_tower as tower
+    from src.engine.automation import postclose_summary_handoff as handoff
+    report, policy, _, policy_path = _reconciliation_fixture(tmp_path, monkeypatch, unknown_history=True)
+    _patch_dirs(monkeypatch, tmp_path)
+    monkeypatch.setattr(mod, 'PROJECT_ROOT', tmp_path)
+    patch_tower(monkeypatch, tmp_path)
+    day = '2026-10-02'
+    summary = _direct_summary(day, apply_date='2026-10-06')
+    summary['sources']['entry_cancel_wait']['economic_evidence']['cancel_wait_reconciliation'] = cancel.validated_reconciliation_view(report)
+    _write_json(mod._direct_summary_path(day), summary)
+    tower.build_tuning_performance_control_tower(day)
+    result = mod.build_next_stage2_checklist(day)
+    path = Path(result['path'])
+    expected = cancel.checklist_handoff(cancel.handoff_view(report, policy, policy_path))
+    assert path.read_text().count(expected) == 1
+    assert '"unresolved_prior_custody_count": null' in path.read_text()
+    # Other families' prepared/PID gates are outside this isolated contract test.
+    monkeypatch.setattr(handoff, 'verify_summary_handoff', lambda *_a, **_k: {'issues':[]})
+    assert cancel.verify_handoff(day)['status'] == 'PASS'
+    path.write_text(path.read_text()+'\n'+expected)
+    checked = cancel.verify_handoff(day)
+    assert checked['status'] == 'FAIL'
+    assert 'cancel_wait_last_consumer_semantics_or_generation_invalid' in checked['issues']

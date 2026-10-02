@@ -14,6 +14,8 @@ def _isolate_new_archive_roots(tmp_path, monkeypatch):
     snapshot_dir = threshold_dir / "snapshots"
     for path in (canonical_dir, summary_dir, snapshot_dir):
         path.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(archive, "POSTCLOSE_STATUS_DIR", tmp_path / "optional" / "postclose_status")
+    monkeypatch.setattr(archive, "POSTCLOSE_CONTROLLER_DIR", tmp_path / "optional" / "postclose_controller")
     monkeypatch.setattr(archive, "CANONICAL_CONTEXT_DIR", canonical_dir)
     monkeypatch.setattr(archive, "PIPELINE_SUMMARY_DIR", summary_dir)
     monkeypatch.setattr(archive, "THRESHOLD_CYCLE_DIR", threshold_dir)
@@ -224,6 +226,8 @@ def test_run_compresses_canonical_context_and_streaming_consumer_reads_gzip(
         "candidate_id": "candidate-1",
     }
     raw_path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    monkeypatch.setattr(archive, "POSTCLOSE_STATUS_DIR", tmp_path / "optional" / "postclose_status")
+    monkeypatch.setattr(archive, "POSTCLOSE_CONTROLLER_DIR", tmp_path / "optional" / "postclose_controller")
     monkeypatch.setattr(archive, "CANONICAL_CONTEXT_DIR", canonical_dir)
     monkeypatch.setattr(consumer, "CONTEXT_CANDIDATE_DIR", canonical_dir)
 
@@ -304,3 +308,67 @@ def test_threshold_partition_expected_rows_uses_full_prior_part_and_tail_count()
         )
         == 17
     )
+
+
+@pytest.mark.parametrize('native_state', ['running', 'failed', 'succeeded'])
+def test_archive_preserves_postclose_inputs_through_next_policy_day(tmp_path, monkeypatch, native_state):
+    day = date(2026, 10, 2)
+    pipeline = tmp_path / 'pipeline'
+    snapshots = tmp_path / 'snapshots'
+    pipeline.mkdir()
+    snapshots.mkdir()
+    raw = pipeline / 'pipeline_events_2026-10-02.jsonl'
+    snapshot = snapshots / 'holding_exit_observation_2026-10-02.json'
+    raw.write_text('{}\n')
+    snapshot.write_text('{}')
+    archive.POSTCLOSE_STATUS_DIR.mkdir(parents=True)
+    (archive.POSTCLOSE_STATUS_DIR / 'threshold_cycle_postclose_2026-10-02.status.json').write_text(
+        json.dumps({'target_date': day.isoformat(), 'status': native_state, 'exit_code': 0}))
+    monkeypatch.setattr(archive, 'PIPELINE_EVENTS_DIR', pipeline)
+    monkeypatch.setattr(archive, 'MONITOR_SNAPSHOT_DIR', snapshots)
+    monkeypatch.setattr(archive, '_parquet_partition_exists', lambda *a: pytest.fail('protected source cannot reach ingestion/archive'))
+    for when in (day, date(2026, 10, 6)):
+        result = archive.run(retention_days=0, today=when, dry_run=False)
+        assert result['skipped_postclose_protected'] == 2
+        assert result['pipeline']['compressed'] == result['snapshots']['compressed'] == 0
+        assert raw.read_text() == '{}\n' and snapshot.read_text() == '{}'
+
+
+def test_archive_requires_whole_controller_after_policy_day(monkeypatch):
+    from src.engine.automation import postclose_done_controller as controller
+    monkeypatch.setattr(controller, 'done_terminal_receipt_issues', lambda *a, **kw: [])
+    day = date(2026, 10, 2)
+    archive.POSTCLOSE_STATUS_DIR.mkdir(parents=True)
+    archive.POSTCLOSE_CONTROLLER_DIR.mkdir(parents=True)
+    (archive.POSTCLOSE_STATUS_DIR / 'threshold_cycle_postclose_2026-10-02.status.json').write_text(
+        json.dumps({'target_date': day.isoformat(), 'status': 'succeeded', 'exit_code': 0}))
+    path = archive.POSTCLOSE_CONTROLLER_DIR / 'postclose_done_controller_2026-10-02.json'
+    for state, whole in [('summary_verified', False), ('done', False), ('done', True)]:
+        path.write_text(json.dumps({'date': day.isoformat(), 'status': state, 'whole_native_chain_done_claimed': whole}))
+        reason = archive._postclose_source_protection(day, date(2026, 10, 7))
+        assert (reason is None) is (state == 'done' and whole)
+
+
+@pytest.mark.parametrize('payload', ['{', '[]', '{"target_date": "2026-09-30", "status": "succeeded", "exit_code": 0}'])
+def test_archive_invalid_native_custody_receipt_fails_closed(payload):
+    archive.POSTCLOSE_STATUS_DIR.mkdir(parents=True)
+    (archive.POSTCLOSE_STATUS_DIR / 'threshold_cycle_postclose_2026-10-02.status.json').write_text(payload)
+    assert archive._postclose_source_protection(date(2026, 10, 2), date(2026, 10, 7)) is not None
+
+
+def test_archive_rejects_unverified_controller_done_claim(monkeypatch):
+    from src.engine.automation import postclose_done_controller as controller
+    monkeypatch.setattr(controller, 'done_terminal_receipt_issues', lambda *a, **kw: ['controller_verification_attempt_missing_or_invalid'])
+    archive.POSTCLOSE_STATUS_DIR.mkdir(parents=True)
+    archive.POSTCLOSE_CONTROLLER_DIR.mkdir(parents=True)
+    (archive.POSTCLOSE_STATUS_DIR / 'threshold_cycle_postclose_2026-10-02.status.json').write_text(
+        json.dumps({'target_date': '2026-10-02', 'status': 'succeeded', 'exit_code': 0}))
+    (archive.POSTCLOSE_CONTROLLER_DIR / 'postclose_done_controller_2026-10-02.json').write_text(
+        json.dumps({'date': '2026-10-02', 'status': 'done', 'whole_native_chain_done_claimed': True}))
+    assert archive._postclose_source_protection(date(2026, 10, 2), date(2026, 10, 7)) == 'postclose_controller_receipt_invalid'
+
+
+def test_archive_broken_native_status_symlink_fails_closed(tmp_path):
+    archive.POSTCLOSE_STATUS_DIR.mkdir(parents=True)
+    (archive.POSTCLOSE_STATUS_DIR / 'threshold_cycle_postclose_2026-10-02.status.json').symlink_to(tmp_path / 'missing_status')
+    assert archive._postclose_source_protection(date(2026, 10, 2), date(2026, 10, 7)) == 'postclose_status_untrusted'

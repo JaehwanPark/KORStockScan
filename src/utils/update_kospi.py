@@ -299,13 +299,7 @@ def _sanitize_daily_input(df: pd.DataFrame, code_str: str) -> pd.DataFrame:
 # 2. 공통 코드 정규화 헬퍼
 # ==========================================
 def _normalize_stock_code(code) -> str:
-    raw = str(code or "").strip().upper().replace(".0", "")
-    if raw.endswith("_AL"):
-        raw = raw[:-3]
-    if raw.startswith("A") and len(raw) >= 7:
-        raw = raw[1:]
-    digits = "".join(ch for ch in raw if ch.isdigit())
-    return digits[-6:].zfill(6) if digits else raw
+    return kiwoom_utils.normalize_stock_code(code)
 
 
 def _store_market_eligibility_rows(
@@ -577,6 +571,38 @@ def process_and_save_stock(code, token, session, is_nxt=False) -> pd.DataFrame:
 # ==========================================
 # 3. 전체 스케줄러 (배치 메인)
 # ==========================================
+def _upsert_daily_quote_batch(conn, frame: pd.DataFrame) -> int:
+    """Refresh received keys atomically without deleting unreceived history."""
+    if frame.empty:
+        return 0
+    keys = ["quote_date", "stock_code"]
+    if frame[keys].isna().any().any() or frame.duplicated(keys).any():
+        raise ValueError("daily_quote_batch_invalid_or_duplicate_identity")
+    if conn.dialect.name == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert
+    elif conn.dialect.name == "sqlite":
+        from sqlalchemy.dialects.sqlite import insert
+    else:
+        raise ValueError("daily_quote_batch_unsupported_dialect")
+    table = DailyStockQuote.__table__
+    if set(frame.columns) - set(table.columns.keys()):
+        raise ValueError("daily_quote_batch_unknown_columns")
+    columns = [column for column in frame.columns if column not in keys]
+    for start in range(0, len(frame), BULK_CHUNKSIZE):
+        chunk = frame.iloc[start:start + BULK_CHUNKSIZE].astype(object)
+        records = chunk.where(pd.notna(chunk), None).to_dict("records")
+        statement = insert(table).values(records)
+        if columns:
+            statement = statement.on_conflict_do_update(
+                index_elements=keys,
+                set_={column: getattr(statement.excluded, column) for column in columns},
+            )
+        else:
+            statement = statement.on_conflict_do_nothing(index_elements=keys)
+        conn.execute(statement)
+    return len(frame)
+
+
 def update_kospi_data():
     logger.info("📅 오늘이 주식시장 개장일인지 확인합니다...")
 
@@ -666,9 +692,27 @@ def update_kospi_data():
                 "error": str(db_e),
             }
 
-    kospi_codes = sorted({_normalize_stock_code(c) for c in kospi_codes if c})
+    source_codes = kospi_codes
+    excluded_symbol_identities = []
+    kospi_codes = []
+    for raw_code in source_codes:
+        identity = kiwoom_utils.kiwoom_stock_code_identity(raw_code)
+        if identity["is_equity_code"]:
+            kospi_codes.append(identity["canonical_code"])
+        else:
+            excluded_symbol_identities.append({
+                "raw_code": str(raw_code),
+                "canonical_code": identity["canonical_code"],
+                "reason": "unsupported_equity_namespace",
+            })
+    kospi_codes = sorted(set(kospi_codes))
+    if not kospi_codes:
+        return {"status": "failed", "reason": "supported_symbol_source_empty",
+                "excluded_symbol_identities": excluded_symbol_identities}
     total_count = len(kospi_codes)
     successful_codes = []
+    target_date = date.fromisoformat(_today_str())
+    target_date_codes = []
     inserted_rows = 0
     update_status = "completed"
     update_reason = None
@@ -706,6 +750,8 @@ def update_kospi_data():
             if df_stock is not None and not df_stock.empty:
                 all_stocks_data.append(df_stock)
                 successful_codes.append(code_str)
+                if (df_stock["quote_date"] == target_date).any():
+                    target_date_codes.append(code_str)
 
             if (i + 1) % PROGRESS_INTERVAL == 0:
                 logger.info(f" ⏳ 수집 진행 상황: [{i + 1}/{total_count}] 완료...")
@@ -720,80 +766,18 @@ def update_kospi_data():
 
         # 모든 데이터프레임을 하나로 합치기
         final_bulk_df = pd.concat(all_stocks_data, ignore_index=True)
-        cutoff_date = (datetime.now() - timedelta(days=CUTOFF_DAYS)).strftime(
-            "%Y-%m-%d"
-        )
-
-        # Filter out rows that already exist in DB to avoid duplicate key errors
-        existing_keys = set()
-        if not final_bulk_df.empty and successful_codes:
-            with db.engine.connect() as conn:
-                # Build query for existing keys using same condition as delete
-                query = text(f"""
-                    SELECT quote_date, stock_code
-                    FROM {TABLE_NAME}
-                    WHERE quote_date >= :cutoff
-                      AND stock_code = ANY(:codes)
-                """)
-                result = conn.execute(
-                    query, {"cutoff": cutoff_date, "codes": successful_codes}
-                )
-                existing_keys.update((row.quote_date, row.stock_code) for row in result)
-
-        # Filter final_bulk_df
-        if existing_keys:
-            row_keys = pd.MultiIndex.from_frame(
-                final_bulk_df[["quote_date", "stock_code"]]
-            )
-            existing_index = pd.MultiIndex.from_tuples(
-                list(existing_keys), names=["quote_date", "stock_code"]
-            )
-            mask = ~row_keys.isin(existing_index)
-            final_bulk_df = final_bulk_df[mask].copy()
-            logger.info(
-                f"⏩ Filtered out {len(existing_keys)} existing rows, {len(final_bulk_df)} new rows to insert"
-            )
-
-        # Attempt bulk insert with retry and fallback
+        # Conflict handling keeps both received history and unreceived keys.
         max_retries = 2
         inserted = False
         for attempt in range(max_retries):
             try:
                 with db.engine.begin() as conn:
-                    # 1. Delete existing data for these codes within cutoff
-                    delete_query = text(
-                        f"DELETE FROM {TABLE_NAME} WHERE quote_date >= :date AND stock_code = ANY(:codes)"
-                    )
-                    conn.execute(
-                        delete_query, {"date": cutoff_date, "codes": successful_codes}
-                    )
-
-                    # 2. Insert new data with adaptive method
-                    if attempt == 0:
-                        # First attempt: multi-row insert with configured chunk size
-                        final_bulk_df.to_sql(
-                            TABLE_NAME,
-                            con=conn,
-                            if_exists="append",
-                            index=False,
-                            chunksize=BULK_CHUNKSIZE,
-                            method="multi",
-                        )
-                    else:
-                        # Fallback: single-row inserts (slower but reliable)
-                        final_bulk_df.to_sql(
-                            TABLE_NAME,
-                            con=conn,
-                            if_exists="append",
-                            index=False,
-                            chunksize=BULK_CHUNKSIZE,
-                            method=None,
-                        )
+                    written_rows = _upsert_daily_quote_batch(conn, final_bulk_df)
 
                 logger.info(
                     f"✅ DB 일괄 삽입 성공! (총 {len(final_bulk_df)}행 적재 완료)"
                 )
-                inserted_rows = int(len(final_bulk_df))
+                inserted_rows = written_rows
                 inserted = True
                 break
             except Exception as e:
@@ -810,14 +794,22 @@ def update_kospi_data():
             update_reason = "bulk_insert_failed"
     else:
         logger.warning("⚠️ 수집된 데이터가 없어 DB 작업을 건너뜁니다.")
-        update_status = "completed_with_warnings"
+        update_status = "failed"
         update_reason = "no_collected_rows"
+
+    missing_target_codes = sorted(set(kospi_codes) - set(target_date_codes))
+    if update_status != "failed" and not target_date_codes:
+        update_status = "failed"
+        update_reason = "target_date_rows_missing"
+    elif update_status != "failed" and missing_target_codes:
+        update_status = "completed_with_warnings"
+        update_reason = update_reason or "target_date_symbol_gaps"
 
     logger.info(
         f"\n🎉 일일 업데이트 최종 완료! (성공: {len(successful_codes)} / {total_count} 종목)"
     )
 
-    finish_msg = f"✅ **KOSPI 일일 데이터 갱신 완료**\n총 **{len(successful_codes)} / {total_count}** 종목의 캔들 및 수급 데이터가 DB에 일괄 적재되었습니다.\n🟣 NXT 대상 플래그 반영: **{nxt_count}개**"
+    finish_msg = f"{'🚨' if update_status == 'failed' else '✅'} **KOSPI 일일 데이터 갱신: {update_status}**\n수신 **{len(successful_codes)} / {total_count}** 종목, 대상일 **{len(target_date_codes)}** 종목, 저장 **{inserted_rows}**행.\n🟣 NXT 대상 플래그 반영: **{nxt_count}개**"
     event_bus.publish(
         "TELEGRAM_BROADCAST",
         {"message": finish_msg, "audience": "ADMIN_ONLY", "parse_mode": "Markdown"},
@@ -828,6 +820,12 @@ def update_kospi_data():
         "total_count": int(total_count),
         "successful_count": int(len(successful_codes)),
         "inserted_rows": inserted_rows,
+        "target_date": target_date.isoformat(),
+        "target_date_symbol_count": len(target_date_codes),
+        "missing_target_date_codes": missing_target_codes,
+        "unreceived_codes": sorted(set(kospi_codes) - set(successful_codes)),
+        "excluded_symbol_identities": excluded_symbol_identities,
+        "storage_contract": "received_key_upsert_preserve_unreceived_history_v1",
         "nxt_count": int(nxt_count),
         "eligibility": eligibility_summary,
     }
@@ -936,6 +934,14 @@ def run_update_kospi_chain() -> dict:
             f"[FAIL] update_kospi target_date={target_date} finished_at={payload['finished_at']} status_path={status_path}"
         )
         raise
+
+    if steps[0]["status"] == "failed":
+        payload = _build_update_kospi_status(target_date, started_at, steps)
+        status_path = _write_update_kospi_status(payload)
+        logger.error(
+            f"[FAIL] update_kospi target_date={target_date} finished_at={payload['finished_at']} status_path={status_path}"
+        )
+        return payload
 
     logger.info("🚀 추천 모델(recommend_daily_v2.py)을 이어서 실행합니다...")
     try:
@@ -1057,9 +1063,9 @@ def _build_update_kospi_status(
         s["name"] for s in steps if s.get("status") == "completed_with_warnings"
     ]
 
-    if update_status == "failed":
+    if update_status == "failed" or failed_steps:
         status = "failed"
-    elif failed_steps or warning_steps:
+    elif warning_steps:
         status = "completed_with_warnings"
     elif update_status == "skipped_non_trading_day":
         status = "skipped_non_trading_day"
