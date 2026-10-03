@@ -13,10 +13,11 @@
 
 ## 실행 항목
 
-- [ ] `[PostcloseOutcomeReadinessClosure1003] 승패 시간 비대칭·미평가 변경 탈락 보완, 통합 배포·재생성·다음 기동 준비 검증` (`Due: 2026-10-03`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: RuntimeStability`)
+- [x] `[PostcloseOutcomeReadinessClosure1003] 승패 시간 비대칭·미평가 변경 탈락 보완, 통합 배포·재생성·다음 기동 준비 검증` (`Due: 2026-10-03`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: RuntimeStability`)
   - Source: [실행계획](../proposals/postclose-outcome-readiness-closure-plan-2026-10-03.md), 최신 사용자 배포·기동 승인.
   - Acceptance: 동일10분 CF 목표/손절 비교, 미평가 원천 제외와 전체 후보 탈락 분리, 리뷰→보완→회귀; immutable release와 독립 service route/PID, 정확10/2 재생성→tower/checklist/strict/controller→10/6 준비 검증; 삼성005930/그 외의 실제 loader 정책/hash 구분. 새 정책 부재는 검증된 carry, 에피소드 연구 OFF는 OFF receipt로 표시한다.
   - 추가 수용: Cancel wait 새 대사 계약을 실제 원천으로 발행하고 native controller의 tower 생성 누락을 보완한다. 관측 tower→checklist→direct strict→의미감시의 같은 report/policy/projection 결속을 확인하며 과거 census 결손은 null/source_gap과 기존 source repair owner로 인계한다.
+  - 완료: [전체 실행 리뷰](../audits/postclose-outcome-readiness-closure-review-2026-10-03.md). 기존 작업본e6d4d3b9 통합·5개 서비스 재기동 및 보완 선택본a17bd6d2 배포, 최신322 PASS·cancel83 PASS·compile/diff/parser.10/2 native 재생성·13 stage succeeded/2 OFF·direct10/10·whole strict/controller PASS/DONE,21:03 최종화·10/6 current_full_contract 준비 PASS. 완료 후 탐지 fail0/warning2·mutation0, 실제 위젯 PID/hash 대사·에피소드122 route/366 pin PASS. 삼성/그 외 Main은 공통 기본정책 승계이며 전용 정책 분리 적용 없음; 격리 에피소드3개 및 실제 미래 PREOPEN/PID·원천/실현 경제성 owner는 유지한다.
   - Handoff: 10/6 PREOPEN·07:55 실제 PID·자연 체결/성과는 기존 `DirectFamilyPreopenPolicyHandoff` 및 source repair owner에서 확인한다. 현재 준비 검증으로 해당 미래 항목을 닫지 않는다.
 
 - [x] `[PostcloseWinrateObjectiveMigration1003] 실제 기계·보조 승률 목적 이행 및 장후 성공 보존 제약 정리` (`Due: 2026-10-03`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: MainEntry`)
