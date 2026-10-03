@@ -92,6 +92,54 @@ def test_auxiliary_v4_frozen_same_day_contract_and_cost_isolation():
     assert "auxiliary_chronological_split_invalid" in _auxiliary_scope_contract(value, report, day, scope)
 
 
+@pytest.mark.parametrize('origin,generation,expected', [
+    ('MAIN_FIXED_WATCH', 'generation-1', True),
+    ('SCANNER', 'generation-1', False),
+    ('MAIN_FIXED_WATCH', 'unknown', False),
+])
+def test_auxiliary_split_validates_full_fixed_watch_identity(origin, generation, expected):
+    from src.engine.scalping import compact_auxiliary_paired_replay as paired
+    manifest = {'version': 'chronological_opportunity_purge_v1',
+        'train_opportunity_ids': [['2026-09-30', '000660', 'KRX', 'KRX_REGULAR', 'promotion-1']],
+        'holdout_opportunity_ids': [['2026-10-02', '005930', 'KRX', 'KRX_REGULAR',
+                                    origin, 'admission-1', generation]],
+        'purged_opportunity_ids': [], 'train_observation_end': '2026-09-30T10:10:00+09:00',
+        'holdout_start': '2026-10-02T09:00:00+09:00'}
+    value = {'status': 'incumbent_carry', 'selection_rank_version': paired.STAGE_SELECTION_VERSION,
+        'split_manifest': manifest, 'full_cost_candidate_population_count': 0,
+        'cost_incomplete_diagnostic_count': 2, 'metric_authority': 'full_cost_fixed_checkpoint_cf_not_owner_portfolio',
+        'candidates': [], 'completed_candidate_count': 0, 'holdout_selection_candidate_count': 0}
+    errors = _auxiliary_scope_contract(value, {}, '2026-10-02', 'KRX|KRX_REGULAR')
+    assert ('auxiliary_chronological_split_invalid' not in errors) is expected
+
+
+@pytest.mark.parametrize('status,promotion,candidate,expected', [
+    ('source_gap', False, None, True),
+    ('hold_candidate', False, None, True),
+    ('source_gap', True, None, False),
+    ('selected_machine_policy', False, {'version': 'old-candidate'}, False),
+])
+def test_machine_diagnostic_hold_does_not_require_current_promotion_version(
+    tmp_path, monkeypatch, status, promotion, candidate, expected,
+):
+    from src.engine.scalping import entry_strategy_policy as strategy
+    monkeypatch.setattr('src.engine.error_detectors.artifact_freshness._semantic_stage_binding',
+                        lambda *args, **kwargs: {'status': 'succeeded'})
+    day, scope = '2026-10-02', 'NXT|NXT_REGULAR'
+    report = {'target_date': day, 'machine_full_evaluation': {'scope_evaluations': {
+        scope: {'full_population_count': 0, 'current_structure_eligible_count': 0,
+                'paired_comparable_count': None, 'row_exclusion_reason_counts': {}}}},
+        'strategy_refinements_by_scope': {scope: {'status': status, 'promotion_pass': promotion,
+            'candidate': candidate, 'selection_basis': strategy.MACHINE_SELECTION_VERSION}}}
+    report['artifact_content_sha256'] = hashlib.sha256(json.dumps(report,
+        ensure_ascii=True, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    path = tmp_path / 'data/report/ai_decision_action_outcome_calibration' / f'ai_decision_action_outcome_calibration_{day}.json'
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(report))
+    result = _machine_result_semantics(tmp_path, day)
+    assert ('machine_selection_version_invalid' not in result['findings']) is expected
+
+
 def test_semantic_stage_rejects_terminal_generation_mismatch(tmp_path):
     day, stage = "2026-10-02", "legacy_machine_report"
     path = tmp_path / "data/report/postclose_stage_terminal" / day / f"{stage}.json"

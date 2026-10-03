@@ -41,4 +41,6 @@ KRX 정규7,069행과 기존 정확 보조 응답을 재사용했다. canonical 
 
 정리에서 발견한10/1 provider 예산 요약 결손은 기존 native budget owner로 복구했다. 원장40 records의20예약/20정산을 검증했고 원장·manifest SHA는 그대로 유지했다. 새 호출·예약·예산 변경0이다. 기존 정리의 미완료 판정을 보존하고 정리를 다시 실행해 storage PASS를 확인했다. 압축으로 변한 collector 이력 결속도 native collector→summary로 갱신했다.
 
+최종 warning 대사에서 비승격 빈 시장 진단의 기본 지원 버전을 정책 오류로 표시하고, 삼성 fixed-watch7항목 identity를5항목으로만 검사하는 오탐을 보완했다. 후보 없는 명시적 비승격 진단만 구분하며 승격 version 검사는 유지한다. native identity owner로 scanner5/fixed-watch7을 검증하고 잘못된 origin·generation, 중복·시간 겹침을 계속 거부한다. 관련292 PASS. 실제 운영/stop 원천 결손 경고는 그대로 남긴다.
+
 통합 커밋·immutable release 배포, 독립 systemd 경로와 실제 PID 확인,10/2 장후 재생성 및10/6 준비 검증을 이어 실행한다. 결과 receipt는 `tmp/postclose-outcome-readiness-closure-20261003/`와 `data/runtime/startup_readiness/2026-10-03/postclose_outcome_readiness/`에 보존한다. 이 문서의 현재 코드 검증은 운영 종결·미래 PREOPEN/PID를 대신하지 않는다.

@@ -476,7 +476,13 @@ def _machine_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
             findings.append("machine_selection_contract_invalid")
             continue
         if source_date >= NEW_LOGIC_SOURCE_DATE:
-            if selection.get("selection_basis") != strategy.RECOVERY_SELECTION_VERSION:
+            diagnostic_hold = (
+                selection.get('selection_basis') == strategy.MACHINE_SELECTION_VERSION
+                and selection.get('status') in {'source_gap', 'hold_candidate'}
+                and selection.get('promotion_pass') is False
+                and not selection.get('candidate'))
+            if (selection.get("selection_basis") != strategy.RECOVERY_SELECTION_VERSION
+                    and not diagnostic_hold):
                 findings.append("machine_selection_version_invalid")
             if selection.get("promotion_pass") is True:
                 candidate = selection.get("candidate") or {}
@@ -624,7 +630,7 @@ def _auxiliary_scope_contract(value, report, source_date, scope):
     """Audit frozen evidence, never rerank candidates or execute a replay."""
     from src.engine.scalping import compact_auxiliary_paired_replay as paired
     from src.engine.scalping.postclose_entry_validation import (
-        NEW_LOGIC_SOURCE_DATE, split_manifest_valid,
+        NEW_LOGIC_SOURCE_DATE, split_manifest_valid, opportunity_identity,
     )
     if source_date < NEW_LOGIC_SOURCE_DATE:
         return []
@@ -637,9 +643,19 @@ def _auxiliary_scope_contract(value, report, source_date, scope):
         train = [tuple(row) for row in manifest["train_opportunity_ids"]]
         held = [tuple(row) for row in manifest["holdout_opportunity_ids"]]
         purged = [tuple(row) for row in manifest["purged_opportunity_ids"]]
-        if (any(len(row) != 5 or any(not isinstance(x, str) or not x for x in row)
-                for row in train + held + purged)
-            or any(len(rows) != len(set(rows)) for rows in (train, held, purged))
+        for identity in train + held + purged:
+            if len(identity) == 5:
+                lineage = {'scanner_promotion_id': identity[4]}
+            elif len(identity) == 7 and identity[4] == 'MAIN_FIXED_WATCH':
+                lineage = dict(zip(('watch_origin', 'watch_admission_id',
+                                    'watch_generation_id'), identity[4:]))
+            else:
+                raise ValueError('opportunity_shape_invalid')
+            row = {**dict(zip(('source_date', 'stock_code', 'effective_venue',
+                              'session_bucket'), identity[:4])), **lineage}
+            if opportunity_identity(row) != identity:
+                raise ValueError('opportunity_identity_invalid')
+        if (any(len(rows) != len(set(rows)) for rows in (train, held, purged))
             or set(purged) & (set(train) | set(held))
             or (train and held and not split_manifest_valid(manifest, train, held))
             or (value.get("status") == "candidate_selected" and (not train or not held))):
