@@ -480,7 +480,10 @@ def _machine_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
                 selection.get('selection_basis') == strategy.MACHINE_SELECTION_VERSION
                 and selection.get('status') in {'source_gap', 'hold_candidate'}
                 and selection.get('promotion_pass') is False
-                and not selection.get('candidate'))
+                and ((selection.get('status') == 'source_gap' and not selection.get('candidate'))
+                     or (selection.get('status') == 'hold_candidate'
+                         and selection.get('runtime_effect') is False
+                         and selection.get('allowed_runtime_apply') is False)))
             if (selection.get("selection_basis") != strategy.RECOVERY_SELECTION_VERSION
                     and not diagnostic_hold):
                 findings.append("machine_selection_version_invalid")

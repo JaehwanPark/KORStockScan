@@ -113,14 +113,19 @@ def test_auxiliary_split_validates_full_fixed_watch_identity(origin, generation,
     assert ('auxiliary_chronological_split_invalid' not in errors) is expected
 
 
-@pytest.mark.parametrize('status,promotion,candidate,expected', [
-    ('source_gap', False, None, True),
-    ('hold_candidate', False, None, True),
-    ('source_gap', True, None, False),
-    ('selected_machine_policy', False, {'version': 'old-candidate'}, False),
+@pytest.mark.parametrize('status,promotion,candidate,runtime_effect,apply,expected', [
+    ('source_gap', False, None, False, False, True),
+    ('hold_candidate', False, None, False, False, True),
+    ('hold_candidate', False, {'version': 'held-diagnostic'}, False, False, True),
+    ('hold_candidate', False, {'version': 'held-diagnostic'}, True, False, False),
+    ('hold_candidate', False, {'version': 'held-diagnostic'}, False, True, False),
+    ('hold_candidate', False, {'version': 'held-diagnostic'}, None, False, False),
+    ('hold_candidate', False, {'version': 'held-diagnostic'}, False, None, False),
+    ('source_gap', True, None, False, False, False),
+    ('selected_machine_policy', False, {'version': 'old-candidate'}, False, False, False),
 ])
 def test_machine_diagnostic_hold_does_not_require_current_promotion_version(
-    tmp_path, monkeypatch, status, promotion, candidate, expected,
+    tmp_path, monkeypatch, status, promotion, candidate, runtime_effect, apply, expected,
 ):
     from src.engine.scalping import entry_strategy_policy as strategy
     monkeypatch.setattr('src.engine.error_detectors.artifact_freshness._semantic_stage_binding',
@@ -130,7 +135,8 @@ def test_machine_diagnostic_hold_does_not_require_current_promotion_version(
         scope: {'full_population_count': 0, 'current_structure_eligible_count': 0,
                 'paired_comparable_count': None, 'row_exclusion_reason_counts': {}}}},
         'strategy_refinements_by_scope': {scope: {'status': status, 'promotion_pass': promotion,
-            'candidate': candidate, 'selection_basis': strategy.MACHINE_SELECTION_VERSION}}}
+            'candidate': candidate, 'selection_basis': strategy.MACHINE_SELECTION_VERSION,
+            'runtime_effect': runtime_effect, 'allowed_runtime_apply': apply}}}
     report['artifact_content_sha256'] = hashlib.sha256(json.dumps(report,
         ensure_ascii=True, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     path = tmp_path / 'data/report/ai_decision_action_outcome_calibration' / f'ai_decision_action_outcome_calibration_{day}.json'
