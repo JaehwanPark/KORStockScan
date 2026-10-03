@@ -1611,6 +1611,37 @@ def test_policy_readiness_is_separate_from_failed_diagnostic(stage_environment, 
     assert not h.stage_overview(report, day)['next_session_policy_ready']
 
 
+def test_verified_off_episode_and_isolated_preparation_are_startup_ready(stage_environment, monkeypatch):
+    h, day, report, run, _ = stage_environment
+    from src.engine.automation import next_preopen_readiness as readiness
+    from src.engine.automation import low_price_two_leg_auto_expansion_policy as episode
+    from src.engine.scalping import mechanistic_entry_runtime_policy as main
+    from src.engine.monitoring.widget_symbol_runtime_policy import WidgetSymbolRuntimePolicyLoader
+    run('episode_policy', off=True)
+    monkeypatch.setattr(episode, 'load_policy', lambda *a, **kw: None)
+    monkeypatch.setattr(main, 'load_effective', lambda **kw: {'valid': True})
+    monkeypatch.setattr(WidgetSymbolRuntimePolicyLoader, 'resolve_all', lambda *a, **kw: {'operating': {}})
+    root = report.parent/'runtime'/'policy_bootstrap'/'prepared'/'2026-09-22'
+    root.mkdir(parents=True)
+    receipt = root/'generation'/'readiness.json';receipt.parent.mkdir()
+    receipt.write_text(json.dumps({'source_date': day}))
+    (root/'latest.json').write_text(json.dumps({'receipt_path': str(receipt)}))
+    monkeypatch.setattr(readiness, 'verify_prepared', lambda *a, **kw: {'status': 'pass'})
+    view = h.stage_overview(report, day)
+    assert view['next_session_policy_ready']
+    assert view['episode_policy_authority'] == 'explicit_schedule_disabled'
+    assert view['startup_basis'] == 'isolated_prepared_next_preopen'
+    assert view['day_of_activation_required'] and not view['actual_pid_consumed']
+    receipt.write_text(json.dumps({'source_date': '2026-09-20'}))
+    assert not h.stage_overview(report, day)['next_session_policy_ready']
+    receipt.write_text(json.dumps({'source_date': day}))
+    monkeypatch.setattr(readiness, 'verify_prepared', lambda *a, **kw: {'status': 'fail'})
+    assert not h.stage_overview(report, day)['next_session_policy_ready']
+    monkeypatch.setattr(readiness, 'verify_prepared', lambda *a, **kw: {'status': 'pass'})
+    monkeypatch.setattr(main, 'load_effective', lambda **kw: None)
+    assert not h.stage_overview(report, day)['next_session_policy_ready']
+
+
 def test_stage_machine_rejects_sealed_but_unbound_terminal(stage_environment):
     h, day, report, run, produce = stage_environment
     from src.engine.scalping.ai_action_outcome_calibration import _with_artifact_content_sha256

@@ -1888,6 +1888,23 @@ def stage_overview(report_dir, day):
         from src.engine.automation.runtime_policy_bootstrap import verify_bootstrap, manifest_path
         ready = (manifest_path(effective).parent.resolve() == (Path(report_dir).parent / 'runtime' / 'policy_bootstrap').resolve()
             and verify_bootstrap(effective, write=False).get('passed') is True)
+    startup_basis = 'dated_live_bootstrap' if ready else 'unverified'
+    if not ready:
+        # Before PREOPEN, only the isolated preparation exists. Its owner
+        # rechecks the current whole-chain, policies and selected release.
+        # Never create or activate tomorrow's live bootstrap here.
+        from src.engine.automation.next_preopen_readiness import verify_prepared
+        prepared_index = (Path(report_dir).parent / 'runtime' / 'policy_bootstrap' /
+                          'prepared' / effective / 'latest.json')
+        if prepared_index.is_file():
+            try:
+                prepared = verify_prepared(effective)
+                receipt = _load_json(Path(str(_load_json(prepared_index).get('receipt_path') or '')))
+                ready = prepared.get('status') == 'pass' and receipt.get('source_date') == day
+                if ready:
+                    startup_basis = 'isolated_prepared_next_preopen'
+            except (OSError, ValueError, TypeError, KeyError):
+                ready = False
     policy_checks = {}
     from src.engine.scalping.mechanistic_entry_runtime_policy import load_effective
     from src.engine.automation.low_price_two_leg_auto_expansion_policy import load_policy
@@ -1897,6 +1914,13 @@ def stage_overview(report_dir, day):
     except (OSError, ValueError, TypeError, KeyError): policy_checks['main'] = False
     try: policy_checks['episode'] = bool(load_policy(date.fromisoformat(effective), policy_dir=data_root / 'runtime' / 'low_price_two_leg_auto_expansion'))
     except (OSError, ValueError, TypeError, KeyError): policy_checks['episode'] = False
+    episode_authority = 'dated_policy' if policy_checks['episode'] else 'missing'
+    episode_state = states.get('episode_policy') or {}
+    if (not policy_checks['episode'] and episode_state.get('status') == 'off'
+        and episode_state.get('off_reason') == 'explicit_schedule_disabled'
+        and not issues.get('episode_policy')):
+        policy_checks['episode'] = True
+        episode_authority = 'explicit_schedule_disabled'
     widget_authority = 'missing'
     try:
         widget_loader = WidgetSymbolRuntimePolicyLoader(data_root / 'runtime' / 'widget_symbol_runtime_policy')
@@ -1914,16 +1938,19 @@ def stage_overview(report_dir, day):
         summary = _load_json(Path(report_dir) / "runtime_approval_summary" /
                              f"runtime_approval_summary_{day}.json")
         future_handoff = inspect_future_handoff(summary, day, report_dir=report_dir)
-        ready = ready and future_handoff["status"] in {
+        ready = ready and (startup_basis == 'isolated_prepared_next_preopen' or future_handoff["status"] in {
             "same_generation_no_pid", "transitioned_no_pid",
             "same_generation_pid_receipt_unconfirmed",
-        }
+        })
     return dict(schema='postclose_stage_overview_v2', source_date=day, effective_date=effective,
         stages={s:dict(status=v.get('status', 'pending'), issues=issues.get(s, []), policy_disposition=v.get('policy_disposition')) for s,v in states.items()},
         postclose_all_active_stages_complete=not any(issues.values()) and states['summary_handoff'].get('status') == 'succeeded',
         next_session_policy_ready=ready, policy_loader_checks=policy_checks,
         future_handoff=future_handoff,
-        widget_policy_authority=widget_authority, startup_contract=bootstrap.get('status', 'not_verified'))
+        widget_policy_authority=widget_authority, episode_policy_authority=episode_authority,
+        startup_basis=startup_basis, day_of_activation_required=startup_basis == 'isolated_prepared_next_preopen',
+        actual_pid_consumed=False,
+        startup_contract='prepared_verified' if startup_basis == 'isolated_prepared_next_preopen' else bootstrap.get('status', 'not_verified'))
 
 
 def _stage_main(argv):
