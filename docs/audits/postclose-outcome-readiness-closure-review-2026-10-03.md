@@ -37,4 +37,8 @@ KRX 정규7,069행과 기존 정확 보조 응답을 재사용했다. canonical 
 
 후속 검증에서 controller output 변경이 먼저 보고되어 summary input 변경이 가려지고, 실패한 최종 재결속이 stage receipt를 먼저 변경하는 결함을 확인했다. 입력·선행 세대를 쓰기 전에 별도로 검증하고 실패 이유를 controller에 보존했다. 변경된 입력으로 재결속할 때 원 영수증을 그대로 보존하는 회귀를 추가했다. 관련115 PASS. producer 복구 뒤 native summary stage를 먼저 갱신한 후 전체 최종화를 실행한다.
 
+전체 strict/controller와 cleanup·최종 detector를 통과한 뒤 PREOPEN 준비에서 Main 영수증 불일치가 드러났다. native Main stage는 새 승계 재평가와 기존 immutable 발행을 각각 검증했지만 summary 소비자가 두 report hash의 일치만 요구했다. 동일 정책·부모·정확 날짜·원 발행 원천 및 최신 native stage 결속이 모두 확인되는 기존 승계만 수용하고 원 발행/최신 평가 hash를 구분했다. 변경 후보·stale stage·다른 target은 거부한다. summary/controller/준비 관련159 PASS이며 정책 개선·PID 소비 권한을 추가하지 않는다.
+
+정리에서 발견한10/1 provider 예산 요약 결손은 기존 native budget owner로 복구했다. 원장40 records의20예약/20정산을 검증했고 원장·manifest SHA는 그대로 유지했다. 새 호출·예약·예산 변경0이다. 기존 정리의 미완료 판정을 보존하고 정리를 다시 실행해 storage PASS를 확인했다. 압축으로 변한 collector 이력 결속도 native collector→summary로 갱신했다.
+
 통합 커밋·immutable release 배포, 독립 systemd 경로와 실제 PID 확인,10/2 장후 재생성 및10/6 준비 검증을 이어 실행한다. 결과 receipt는 `tmp/postclose-outcome-readiness-closure-20261003/`와 `data/runtime/startup_readiness/2026-10-03/postclose_outcome_readiness/`에 보존한다. 이 문서의 현재 코드 검증은 운영 종결·미래 PREOPEN/PID를 대신하지 않는다.

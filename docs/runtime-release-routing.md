@@ -68,6 +68,8 @@ The postclose overview recognizes a fully rechecked isolated preparation for the
 
 The final controller reseal requires the summary stage's consumed input and prerequisite generations to remain current before writing its receipt. After producer recovery changes those generations, refresh the native `summary_handoff` stage before whole-chain finalization. A changed controller output alone cannot refresh a stale summary computation.
 
+A current Main win-rate carry evaluation can preserve an already staged immutable publication. Summary readiness accepts this only when the native Main stage validates `existing_incumbent_preserved`, the exact target, original publication sources, unchanged parent/policy and the current evaluation generation. The summary reports original publication and latest evaluation hashes separately. A changed candidate, stale stage or mismatched target remains invalid; this receipt does not establish policy improvement or PID consumption.
+
 Source review and dry-run routes do not prove economic improvement or validate unfinished adaptive exit. Actual day-specific candidate/env/activation, operator overrides, runtime verification, KRX/NXT authority, quota and broker guards remain owned by the existing PREOPEN/launcher/policy contracts. Current source selection, actual PID consumption and natural trade/economic evidence must be reported separately.
 
 ## Separately authorized machine supplement (2026-09-10)

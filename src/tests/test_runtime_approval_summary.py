@@ -493,6 +493,51 @@ def test_compact_direct_policy_receipt_is_bound_to_paired_evaluation(monkeypatch
     assert source["economic_evidence"]["policy_handoff_state"] == "incumbent_preserved"
 
 
+@pytest.mark.parametrize('stage_issues,staged_status,candidate,staged_day,expected', [
+    ([], 'existing_incumbent_preserved', None, '2026-10-06', True),
+    (['main_machine_policy:output_generation_changed'], 'existing_incumbent_preserved', None, '2026-10-06', False),
+    ([], 'staged', None, '2026-10-06', False),
+    ([], 'existing_incumbent_preserved', {'changed': True}, '2026-10-06', False),
+    ([], 'existing_incumbent_preserved', None, '2026-10-07', False),
+])
+def test_main_current_carry_keeps_original_publication_and_requires_native_stage(
+    monkeypatch, tmp_path, stage_issues, staged_status, candidate, staged_day, expected,
+):
+    from src.engine.scalping import mechanistic_entry_runtime_policy as policy
+    from src.engine.automation import postclose_summary_handoff as handoff
+
+    data = _patch(monkeypatch, tmp_path)
+    day = '2026-10-02'
+    _seed_required(day)
+    machine = {'version': 'incumbent'}
+    bundle = {'target_date': '2026-10-06', 'machine_policy': machine,
+              'machine_disposition': 'incumbent_carried',
+              'machine_evaluation_source': {'source_date': day, 'artifact_content_sha256': 'a' * 64},
+              'winrate_selection': {'report_sha256': 'a' * 64,
+                                   'machine_policy_sha256': policy.digest(machine),
+                                   'disposition': 'incumbent_carried'},
+              'bundle_sha256': 'b' * 64}
+    _write(data / 'runtime/mechanistic_entry_policy/policy_2026-10-06.json', bundle)
+    _write(data / f'report/ai_decision_action_outcome_calibration/winrate_policy_{day}.json', {
+        'schema': 'main_entry_winrate_policy_report_v1', 'selection_basis': 'win_rate_only',
+        'target_date': day, 'artifact_content_sha256': 'c' * 64,
+        'disposition': 'incumbent_carried', 'candidate_policy': candidate,
+    })
+    _write(handoff.stage_artifacts(data / 'report', day, 'main_machine_policy')[
+        'machine_policy_terminal'], {'staged': {'status': staged_status, 'target_date': staged_day}})
+    monkeypatch.setattr(policy, 'current_strategy_receipt', lambda **kwargs: {'status': 'valid'})
+    monkeypatch.setattr(policy, 'load', lambda **kwargs: bundle)
+    monkeypatch.setattr(handoff, 'stage_receipt_issues', lambda *args: stage_issues)
+
+    result = mod.build_runtime_approval_summary(day)['sources']['main_mechanistic_entry']
+    assert result['policy_receipt']['valid'] is expected
+    assert result['winrate_policy']['report_sha256'] == 'a' * 64
+    assert result['winrate_policy']['latest_evaluation_report_sha256'] == 'c' * 64
+    assert result['winrate_policy']['evaluation_binding'] == (
+        'sealed_current_incumbent_carry' if expected else 'unverified')
+    assert result['economic_evidence']['comparison_status'] != 'validated_edge'
+
+
 def test_next_effective_date_is_pending_until_preopen_verification(monkeypatch, tmp_path):
     data = _patch(monkeypatch, tmp_path)
     target = "2026-09-19"

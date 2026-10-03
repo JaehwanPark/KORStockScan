@@ -1137,19 +1137,46 @@ def build_runtime_approval_summary(
             if winrate:
                 winrate_source = _load_json(DATA_DIR / 'report' / 'ai_decision_action_outcome_calibration' /
                     f'winrate_policy_{target_date}.json')
+                original_report_bound = (
+                    winrate.get('report_sha256') == winrate_source.get('artifact_content_sha256')
+                    and machine_source.get('artifact_content_sha256')
+                        == winrate_source.get('artifact_content_sha256'))
+                refreshed_carry_bound = False
+                if policy_contract_valid and not original_report_bound:
+                    from src.engine.automation.postclose_summary_handoff import (
+                        stage_artifacts, stage_receipt_issues,
+                    )
+                    terminal = _load_json(stage_artifacts(
+                        DATA_DIR / 'report', target_date, 'main_machine_policy')[
+                            'machine_policy_terminal'])
+                    staged = terminal.get('staged')
+                    if not isinstance(staged, dict):
+                        staged = {}
+                    # A same-policy recovery keeps the original immutable
+                    # publication proof. Its fresh evaluation has a separate,
+                    # fully validated native stage receipt; never relabel it.
+                    refreshed_carry_bound = (
+                        staged.get('status') == 'existing_incumbent_preserved'
+                        and staged.get('target_date') == policy_payload.get('target_date')
+                        and winrate_source.get('disposition') == 'incumbent_carried'
+                        and winrate_source.get('candidate_policy') is None
+                        and not stage_receipt_issues(
+                            DATA_DIR / 'report', target_date, 'main_machine_policy'))
                 row['winrate_policy'] = dict(selection_basis=winrate_source.get('selection_basis'),
                     disposition=winrate.get('disposition'),
                     report_sha256=winrate.get('report_sha256'),
+                    latest_evaluation_report_sha256=winrate_source.get('artifact_content_sha256'),
+                    evaluation_binding=('original_publication' if original_report_bound else
+                        'sealed_current_incumbent_carry' if refreshed_carry_bound else 'unverified'),
                     machine_policy_sha256=winrate.get('machine_policy_sha256'),
                     source_date=winrate_source.get('target_date'),
                     actual_pid_consumed=False)
                 policy_receipt_valid = bool(policy_receipt_valid and policy_contract_valid
                     and winrate_source.get('schema') == 'main_entry_winrate_policy_report_v1'
                     and winrate_source.get('selection_basis') == 'win_rate_only'
-                    and winrate.get('report_sha256') == winrate_source.get('artifact_content_sha256')
+                    and (original_report_bound or refreshed_carry_bound)
                     and winrate.get('machine_policy_sha256') == machine_policy.digest(policy_payload['machine_policy'])
                     and winrate.get('disposition') == policy_payload.get('machine_disposition')
-                    and machine_source.get('artifact_content_sha256') == winrate_source.get('artifact_content_sha256')
                     and winrate_source.get('target_date') == target_date)
             else:
                 policy_receipt_valid = bool(
