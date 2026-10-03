@@ -97,7 +97,7 @@ def _direct_source_checks(summary: dict[str, Any]) -> tuple[list[dict[str, Any]]
 def _direct_checklist_checks(
     target_date: str, summary: dict[str, Any], summary_path: Path
 ) -> tuple[dict[str, Any], list[str]]:
-    from src.engine.automation.postclose_summary_handoff import verify_summary_handoff
+    from src.engine.automation.postclose_summary_handoff import direct_tower_required, verify_summary_handoff
     from src.engine.build_next_stage2_checklist import (
         _next_krx_trading_day,
         _project_direct_tasks,
@@ -117,7 +117,7 @@ def _direct_checklist_checks(
         target_date,
         report_dir=REPORT_DIR,
         checklist_path=checklist_path,
-        require_tower=False,
+        require_tower=direct_tower_required(target_date, summary),
         require_checklist=True,
     )
     issues = list(handoff.get("issues") or [])

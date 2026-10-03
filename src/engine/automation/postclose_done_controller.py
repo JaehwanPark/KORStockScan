@@ -150,8 +150,13 @@ def build_postclose_done_controller(
         status = "blocked_independent_producer"
         verifier = {"status": "not_run", "issues": independent_issues}
     else:
-        build_runtime_approval_summary(target_date)
+        summary = build_runtime_approval_summary(target_date)
         actions.append("runtime_approval_summary_refreshed")
+        from src.engine.automation.postclose_summary_handoff import direct_tower_required
+        if direct_tower_required(target_date, summary):
+            from src.engine.automation.tuning_performance_control_tower import build_tuning_performance_control_tower
+            build_tuning_performance_control_tower(target_date)
+            actions.append("direct_control_tower_refreshed")
         build_next_stage2_checklist(target_date)
         actions.append("next_stage2_checklist_refreshed")
         verifier = build_threshold_cycle_postclose_verification(

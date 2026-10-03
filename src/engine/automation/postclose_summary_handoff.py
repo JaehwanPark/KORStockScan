@@ -481,6 +481,18 @@ def inspect_future_handoff(
     return {**result, "status": "stale", "issues": ["future_transition_missing_or_mismatched"]}
 
 
+def direct_tower_required(target_date: str, summary: dict[str, Any]) -> bool:
+    """Require the report consumer for the issued cancel reconciliation contract."""
+    if target_date < '2026-10-02':
+        return False
+    from src.engine.automation.entry_cancel_wait_tuning import RECONCILIATION_VERSION
+    sources = summary.get('sources') or {}
+    source = sources.get('entry_cancel_wait') or {}
+    evidence = source.get('economic_evidence') or {}
+    view = evidence.get('cancel_wait_reconciliation') or {}
+    return view.get('reconciliation_contract_version') == RECONCILIATION_VERSION
+
+
 def verify_summary_handoff(
     target_date: str,
     *,
@@ -1635,6 +1647,7 @@ def _stage_code(stage, commands, project, *, dispatcher_path=None):
         return _stage_digest([_stage_sources(paths), code_contract()])
     if stage == 'summary_handoff':
         paths['next_stage2_checklist'] = project / 'src/engine/build_next_stage2_checklist.py'
+        paths['direct_tower'] = project / 'src/engine/automation/tuning_performance_control_tower.py'
     if stage == 'research_capacity':
         paths['native_capacity'] = project / 'src/engine/monitoring/research_native_capacity_source.py'
     if stage == 'collector_recommendation':

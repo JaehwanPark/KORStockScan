@@ -43,4 +43,8 @@ KRX 정규7,069행과 기존 정확 보조 응답을 재사용했다. canonical 
 
 최종 warning 대사에서 비승격 다른 시장 진단의 기본 지원 버전을 정책 오류로 표시하고, 삼성 fixed-watch7항목 identity를5항목으로만 검사하는 오탐을 보완했다. 후보 없는 source-gap 및 runtime/apply 모두 false인 보류 진단만 구분하며 승격 version 검사는 유지한다. 실제 원천 대사에서 premarket의 명시적 보류 후보도 이 경계에 포함해 재검증했다. native identity owner로 scanner5/fixed-watch7을 검증하고 잘못된 origin·generation, 중복·시간 겹침을 계속 거부한다. 실제 운영/stop 원천 결손 경고는 그대로 남긴다.
 
-통합 커밋·immutable release 배포, 독립 systemd 경로와 실제 PID 확인,10/2 장후 재생성 및10/6 준비 검증을 이어 실행한다. 결과 receipt는 `tmp/postclose-outcome-readiness-closure-20261003/`와 `data/runtime/startup_readiness/2026-10-03/postclose_outcome_readiness/`에 보존한다. 이 문서의 현재 코드 검증은 운영 종결·미래 PREOPEN/PID를 대신하지 않는다.
+전체 재점검에서 기존 Cancel wait v2 보고서에 새 대사 계약이 없는 것을 확인해 native CLI로 재생성했다. 83 PASS,1.71초·최대 RSS143,204KiB, 실제 API/provider 호출0·raw 재읽기0이다.10/2 당일 제출0은 검증됐고,9/29·9/30·10/1은 원 execution producer census가 없어 과거 확정 미해결 수를 null로 유지한다. 대기시간90/120/600/1200초·scope override 없음은 그대로다.
+
+새 실제 원천을 끝까지 대사하면서 consumer가 요구하는 tower를 native controller가 생성하지 않는 결함을 추가 발견했다. controller의 summary→관측 tower→checklist 생산 순서와 direct strict의 tower 요건을 새 계약에 연결했다. 기존 legacy 계약은 소급하지 않는다. 실제 tower 생산자를 controller로 실행한 뒤 의미감시가 소비를 수용하는 회귀와 tower 부재를 strict가 거부하는 회귀를 추가했다. 관련322 PASS. 코드/운영 문서·현재 checklist를 함께 검증한 뒤 선택 실행본에 배포하고 정확 세대를 다시 봉인한다.
+
+결과 receipt는 `tmp/postclose-outcome-readiness-closure-20261003/`와 `data/runtime/startup_readiness/2026-10-03/postclose_outcome_readiness/`에 보존한다. 최종 배포·실행·정책 결과는 아래 최종 수용에 기록하며 미래 PREOPEN/PID와 구분한다.

@@ -72,6 +72,8 @@ A current Main win-rate carry evaluation can preserve an already staged immutabl
 
 Artifact semantics accepts a legacy support diagnostic only for an explicit non-promoting `source_gap` without a candidate, or a `hold_candidate` whose runtime effect and apply authority are both explicitly false; current promotion version checks remain mandatory for selected candidates. Auxiliary split checks reconstruct the native scanner or full fixed-watch identity through the postclose identity owner and retain chronology, overlap and frozen-selection checks.
 
+For a published cancel-wait reconciliation contract from 2026-10-02, the native controller refreshes the direct report tower after the runtime summary and before the next checklist. Direct strict verification requires the tower's current source binding and cancel projection. Summary stage code custody includes the tower producer. Legacy reports without this contract retain their historical diagnostic boundary; the report tower does not revive common tuning search or grant runtime authority.
+
 Source review and dry-run routes do not prove economic improvement or validate unfinished adaptive exit. Actual day-specific candidate/env/activation, operator overrides, runtime verification, KRX/NXT authority, quota and broker guards remain owned by the existing PREOPEN/launcher/policy contracts. Current source selection, actual PID consumption and natural trade/economic evidence must be reported separately.
 
 ## Separately authorized machine supplement (2026-09-10)

@@ -182,6 +182,20 @@ def test_required_summary_handoff_rejects_task_projection_drift(
     assert "direct_checklist_task_projection_mismatch" in report["issues"]
 
 
+def test_new_cancel_contract_requires_actual_tower_in_direct_strict(monkeypatch, tmp_path):
+    from src.engine.automation.entry_cancel_wait_tuning import RECONCILIATION_VERSION
+    target = '2026-10-02'
+    summary = _seed(monkeypatch, tmp_path, target)
+    _build_direct_checklist(monkeypatch, tmp_path, target)
+    summary['sources']['entry_cancel_wait']['economic_evidence']['cancel_wait_reconciliation'] = {
+        'reconciliation_contract_version': RECONCILIATION_VERSION,
+    }
+    path = mod.REPORT_DIR / 'runtime_approval_summary' / f'runtime_approval_summary_{target}.json'
+    _write(path, summary)
+    _, issues = mod._direct_checklist_checks(target, summary, path)
+    assert any(issue.startswith('postclose_summary_handoff:tower:') for issue in issues)
+
+
 def test_whole_chain_verification_rejects_failed_stage_with_current_marker(monkeypatch, tmp_path):
     from src.engine.automation import postclose_summary_handoff as handoff
 

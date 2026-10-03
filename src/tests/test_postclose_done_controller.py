@@ -100,6 +100,33 @@ def test_controller_blocks_before_summary_when_predecessor_not_succeeded(monkeyp
     assert report["actions"] == []
 
 
+def test_controller_materializes_required_cancel_tower_and_detector_accepts_it(monkeypatch, tmp_path):
+    from src.tests.test_error_detector_artifact_freshness import _cancel_wait_consumer_fixture
+    from src.engine.error_detectors.artifact_freshness import _entry_cancel_wait_result_semantics
+    from src.engine.automation import tuning_performance_control_tower as tower
+    paths = _cancel_wait_consumer_fixture(tmp_path, monkeypatch)
+    paths['tower'].unlink()
+    data = tmp_path / 'data'
+    monkeypatch.setattr(mod, 'DATA_DIR', data)
+    monkeypatch.setattr(mod, 'REPORT_DIR', data / 'report/postclose_done_controller')
+    monkeypatch.setattr(tower, 'DATA_DIR', data)
+    monkeypatch.setattr(tower, 'REPORT_ROOT_DIR', data / 'report')
+    monkeypatch.setattr(tower, 'REPORT_DIR', paths['tower'].parent)
+    monkeypatch.setattr(mod, 'build_runtime_approval_summary',
+                        lambda day: json.loads(paths['summary'].read_text()))
+    monkeypatch.setattr(mod, 'build_next_stage2_checklist', lambda day: {})
+    monkeypatch.setattr(mod, 'build_threshold_cycle_postclose_verification',
+                        lambda *a, **k: {'status': 'pass', 'issues': []})
+    monkeypatch.setattr(mod, '_write_verification_receipts',
+                        lambda day, report, invocation: (report, None, None, None))
+    report = mod.build_postclose_done_controller('2026-10-02')
+    assert report['status'] == 'summary_verified'
+    assert report['actions'].index('direct_control_tower_refreshed') < report['actions'].index('next_stage2_checklist_refreshed')
+    result = _entry_cancel_wait_result_semantics(tmp_path, '2026-10-02')
+    assert result['findings'] == []
+    assert result['consumers']['status'] == 'verified'
+
+
 def test_controller_waits_for_running_predecessor_without_rerun(monkeypatch, tmp_path):
     data = tmp_path / "data"
     monkeypatch.setattr(mod, "DATA_DIR", data)
