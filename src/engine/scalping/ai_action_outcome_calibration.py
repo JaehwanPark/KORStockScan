@@ -94,6 +94,7 @@ ENTRY_QUALITY_LABELS = frozenset(
         "PROFIT_AFTER_DEEP_ADVERSE",
         "PROFIT_AFTER_SIDEWAYS",
         "CLEAN_FAST_LOSS_OR_ADVERSE",
+        "LOSS_AFTER_PRIMARY_WINDOW",
         "CENSORED_OR_SOURCE_GAP",
     }
 )
@@ -3640,7 +3641,7 @@ def _entry_quality_population_metrics(rows: list[dict[str, Any]]) -> dict[str, A
             "PROFIT_AFTER_SIDEWAYS",
         )
     )
-    adverse_count = labels["CLEAN_FAST_LOSS_OR_ADVERSE"]
+    adverse_count = labels["CLEAN_FAST_LOSS_OR_ADVERSE"] + labels["LOSS_AFTER_PRIMARY_WINDOW"]
     terminal_values = [
         value
         for row in rows
@@ -5123,15 +5124,14 @@ def _load_machine_observation_rows_uncached(
                         else "pipeline_lifecycle_unresolved"
                     )
                 ] += 1
-                scanner_promotion_ids = list(
-                    correlation.get("scanner_promotion_ids") or []
+                from src.engine.scalping.postclose_entry_validation import (
+                    source_identifier, source_identifiers,
                 )
-                if context.get("scanner_promotion_id") not in (None, "", "-"):
-                    scanner_promotion_ids.append(str(context["scanner_promotion_id"]))
-                scanner_promotion_ids = sorted(set(scanner_promotion_ids))
-                scanner_promotion_id = str(
-                    context.get("scanner_promotion_id") or ""
-                ).strip()
+                scanner_promotion_ids = source_identifiers([
+                    *source_identifiers(correlation.get("scanner_promotion_ids")),
+                    context.get("scanner_promotion_id"),
+                ])
+                scanner_promotion_id = source_identifier(context.get("scanner_promotion_id")) or ""
                 scanner_promotion_identity_source = (
                     "machine_capture"
                     if scanner_promotion_id
@@ -5794,6 +5794,7 @@ def build_machine_decision_case_table(
                 "PROFIT_AFTER_DEEP_ADVERSE": "deep_adverse_entry_candidate",
                 "PROFIT_AFTER_SIDEWAYS": "sideways_entry_candidate",
                 "CLEAN_FAST_LOSS_OR_ADVERSE": "false_positive_entry_candidate",
+                "LOSS_AFTER_PRIMARY_WINDOW": "false_positive_entry_candidate",
             }.get(label, "source_gap")
         elif action in {"BLOCK", "RECHECK"}:
             classification = {
@@ -5802,6 +5803,7 @@ def build_machine_decision_case_table(
                 "PROFIT_AFTER_DEEP_ADVERSE": "poor_timing_avoidance_candidate",
                 "PROFIT_AFTER_SIDEWAYS": "sideways_avoidance_candidate",
                 "CLEAN_FAST_LOSS_OR_ADVERSE": "correct_avoidance_candidate",
+                "LOSS_AFTER_PRIMARY_WINDOW": "correct_avoidance_candidate",
             }.get(label, "source_gap")
         else:
             classification = "source_gap"
@@ -6037,6 +6039,7 @@ def build_machine_decision_case_table(
         compact_screen_outcomes.get(key, 0)
         for key in (
             "PASS|CLEAN_FAST_LOSS_OR_ADVERSE",
+            "PASS|LOSS_AFTER_PRIMARY_WINDOW",
             "PASS|PROFIT_AFTER_DEEP_ADVERSE",
         )
     )
@@ -6125,6 +6128,7 @@ def build_machine_decision_case_table(
         economic_outcomes.get(key, 0)
         for key in (
             "PASS|CLEAN_FAST_LOSS_OR_ADVERSE",
+            "PASS|LOSS_AFTER_PRIMARY_WINDOW",
             "PASS|PROFIT_AFTER_DEEP_ADVERSE",
         )
     )
@@ -8719,13 +8723,22 @@ def _machine_path_value(row):
     # measure a profitable missed opportunity. Never infer an AI verdict.
     path = row.get('entry_quality_path') or {}
     path_cost = _number(path.get('conservative_execution_cost_pct'))
-    if (row.get('entry_quality_contract_valid') is not True
-        or path.get('schema') != 'entry_quality_path_v1'
+    if (path.get('schema') != 'entry_quality_path_v1'
         or path_cost is None or not math.isclose(path_cost, cost, rel_tol=0, abs_tol=1e-9)):
         return None, 'quality_path_cost_missing_or_mismatched'
+    # Retained v1 paths censored late stops while accepting equally late
+    # targets. Interpret that exact documented producer reason symmetrically;
+    # preserve the sealed source row and never infer a boundary for neither.
+    legacy_late_stop = (path.get('status') == 'censored_or_source_gap'
+        and path.get('label_reason') == 'exact_stop_first_outside_primary_window'
+        and path.get('first_hit') == 'exact_stop_first'
+        and (delay := _number(path.get('time_to_exact_stop_sec'))) is not None
+        and 180 < delay <= 600)
+    if row.get('entry_quality_contract_valid') is not True and not legacy_late_stop:
+        return None, 'terminal_path_censored'
     hit = path.get('first_hit')
     boundary = _number(path.get('gross_net_target_pct' if hit == 'net_target_first' else 'exact_stop_distance_pct'))
-    if (path.get('status') != 'evaluable' or hit not in {'net_target_first', 'exact_stop_first'}
+    if ((path.get('status') != 'evaluable' and not legacy_late_stop) or hit not in {'net_target_first', 'exact_stop_first'}
         or boundary is None or (hit == 'net_target_first' and boundary < 0)
         or (hit == 'exact_stop_first' and boundary >= 0)):
         return None, 'terminal_path_censored'
@@ -8883,7 +8896,9 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
     """Select on train only, then evaluate one frozen joint policy on holdout."""
     from copy import deepcopy
     from src.engine.scalping import entry_strategy_policy as strategy
-    from src.engine.scalping.postclose_entry_validation import chronological_split, NEW_LOGIC_SOURCE_DATE
+    from src.engine.scalping.postclose_entry_validation import (
+        chronological_split, NEW_LOGIC_SOURCE_DATE, OPPORTUNITY_IDENTITY_VERSION,
+    )
     calculation_date = (_as_dict(source_contract.get('natural_machine_source_receipt')).get('target_date')
                         or max((r.get('source_date', '') for r in population), default=''))
     recovery = (machine_policy_only and tuple(scope) == ('KRX', 'KRX_REGULAR')
@@ -8950,7 +8965,9 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
     population = supported
     if not population:
         return {**result, 'blocker': 'strategy_no_supported_predecision_rows'}
-    input_sha256 = strategy.digest([source_contract, parent, population, strategy.SEARCH_VERSION, selection_version, training_through_date] if machine_policy_only else [source_contract, parent, population])
+    input_sha256 = strategy.digest([source_contract, parent, population, strategy.SEARCH_VERSION,
+        selection_version, training_through_date, list(scope), OPPORTUNITY_IDENTITY_VERSION]
+        if machine_policy_only else [source_contract, parent, population])
     result['input_sha256'] = input_sha256
     # Same input/selection is immutable; retries do not optimize on used holdout.
     if (previous and previous.get('input_sha256') == input_sha256 and previous.get('candidate')
@@ -9066,7 +9083,7 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
             # A cost/path exclusion is policy-independent. Keep it in the
             # economic denominator manifest, but do not invent a replay action.
             # Every existing entry still replays, including unpriced entries:
-            # their changed admission must continue to block promotion.
+            # their changed admission remains an explicit excluded diagnostic.
             reason = prepared_paths[id(row)][1] if machine_policy_only else None
             if reason and old in {"BLOCK", "RECHECK"}:
                 actions.append(None)
@@ -9177,6 +9194,25 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
     result['search_domain'] = dict(domains=domains, selectors=selectors, priority_coordinates=priority_coordinates,
         budget=({'control': 4, 'single': len(strategy.REGISTRY), 'recovery_neighborhood': 6, 'independent_joint': 4} if recovery else strategy.SEARCH_BUDGET), version=strategy.SEARCH_VERSION, search_seed=search_seed,
         priority_basis='predecision_blockers_unvisited_source_support')
+    prior_search = (previous or {}).get('search') or {}
+    if machine_policy_only and previous and previous.get('input_sha256') == input_sha256:
+        if not recovery:
+            # Legacy search freezes its ordering before the first chunk;
+            # revisiting coordinates must not derive a new retry order.
+            frozen_priority = (previous.get('search_domain') or {}).get('priority_coordinates')
+            if isinstance(frozen_priority, list) and sorted(frozen_priority) == sorted(priority_coordinates):
+                result['search_domain']['priority_coordinates'] = frozen_priority
+        cursor, size = prior_search.get('cursor'), prior_search.get('domain_size')
+        resume_valid = (previous.get('scope') == list(scope)
+            and strategy.digest(previous.get('search_domain')) == strategy.digest(result['search_domain'])
+            and type(cursor) is int and type(size) is int and 0 <= cursor <= size and size > 0
+            and isinstance(prior_search.get('domain_sha256'), str)
+            and re.fullmatch(r'[0-9a-f]{64}', prior_search['domain_sha256']) is not None
+            and type(prior_search.get('search_complete')) is bool
+            and prior_search['search_complete'] == (cursor == size))
+        if not resume_valid:
+            previous = None
+            prior_search = {}
     if machine_policy_only:
         prior_coverage = ((previous or {}).get('coordinate_coverage') or {}) if (previous or {}).get('input_sha256') == input_sha256 else {}
         contract_by_name = strategy.registry_contract()
@@ -9207,6 +9243,9 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
         priority_coordinates = frozen_domain.get('priority_coordinates', priority_coordinates)
         result['search_domain']['priority_coordinates'] = priority_coordinates
         result['evaluated_candidate_count'] = previous.get('evaluated_candidate_count', 0)
+        # A completed no-candidate search emits no further iterator rows. Keep
+        # its exact progress so a retry cannot lose completion or restart it.
+        result['search'] = deepcopy(prior_search)
     frozen = (previous or {}).get('candidate') or {}
     same_input_unsupported_holdout = (machine_policy_only and previous
         and previous.get('input_sha256') == input_sha256
@@ -9343,10 +9382,7 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
             complexity = sum(sum(v != node.get('fallback_profile', strategy.default_profile(parent))[k] for k,v in node['profile'].items()) for node in candidate['strategy']['nodes'].values())
             score = _machine_admission_rank(economy, node_count=len(candidate['strategy']['nodes']), complexity=complexity)
             qualified_recovery = (not recovery or
-                (economy['recovery_metrics']['successful_opportunity_weight'] > 0
-                 and economy['existing_success_retention_rate_pct'] in (None, 100.)
-                 and (strategy.machine_support_adjusted_win_rate(incumbent_evidence['economics']) is None
-                      or strategy.machine_support_adjusted_win_rate(economy) >= strategy.machine_support_adjusted_win_rate(incumbent_evidence['economics']))))
+                strategy.machine_winrate_improves(economy, incumbent_evidence['economics']))
             machine_scores.append(dict(policy_sha256=strategy.digest(candidate),
                 search_group=progress.get('group'), node_count=len(candidate['strategy']['nodes']),
                 fallback_counts=evidence['fallback_counts'],
@@ -9357,7 +9393,6 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
             if (delta is not None and selected_ev is not None
                 and win_rate is not None and worst is not None
                 and worst > CATASTROPHIC_LOSS_PCT and score[0] is not None
-                and not economy['unevaluated_existing_entry_changes']
                 and qualified_recovery
                 and (best_score is None or score > best_score)):
                 best, best_evidence, best_score = candidate, evidence, score
@@ -9423,7 +9458,7 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
             if best is not None else None)
         if 'incumbent_holdout' in machine_evidence:
             result['incumbent_evidence']['holdout'] = machine_evidence['incumbent_holdout']
-        missing_candidate_reason = ('no_recovery_qualified_candidate' if recovery and result['evaluated_candidate_count']
+        missing_candidate_reason = ('no_winrate_qualified_candidate' if recovery and result['evaluated_candidate_count']
                                     else 'no_evaluable_machine_candidate')
         errors = strategy.promotion_errors(candidate, parent, scope) if candidate else [missing_candidate_reason]
         if best == parent:
@@ -9506,6 +9541,10 @@ def build_winrate_policy_report(rows, *, source_receipt, target_date, data_root=
     parent = scoped['machine_policy']
     if 'strategy' not in parent:
         raise ValueError('winrate_parent_raw_strategy_missing')
+    from src.engine.scalping.postclose_entry_validation import (
+        NEW_LOGIC_SOURCE_DATE, OPPORTUNITY_IDENTITY_VERSION, opportunity_identity,
+    )
+    native_identity_required = target_date >= NEW_LOGIC_SOURCE_DATE and 'entry_situation_veto' in parent
     base_policy = deepcopy(parent)
     base_policy.pop('entry_situation_veto', None)
     scope_rows = [row for row in rows if (row.get('effective_venue'), row.get('session_bucket')) == ('KRX', 'KRX_REGULAR')]
@@ -9542,6 +9581,13 @@ def build_winrate_policy_report(rows, *, source_receipt, target_date, data_root=
         if first_hit not in {'net_target_first', 'exact_stop_first'}:
             excluded['binary_terminal_missing'] += 1
             continue
+        opportunity_id = _machine_opportunity_id(row)
+        if native_identity_required:
+            try:
+                opportunity_id = strategy.digest(opportunity_identity(row))
+            except (ValueError, TypeError, KeyError):
+                excluded['native_opportunity_identity_missing'] += 1
+                continue
         try:
             decision = mechanistic_entry_policy_decision(setup, policy=parent)
             base_decision = (decision if base_policy == parent else
@@ -9554,7 +9600,7 @@ def build_winrate_policy_report(rows, *, source_receipt, target_date, data_root=
         available = feat.get('micro_vwap_available') is True
         fresh = feat.get('minute_candle_window_fresh') is True
         prepared.append(dict(source_date=row['source_date'], decision_ts=row.get('decision_ts'), decision_trace_id=trace,
-            opportunity_id=_machine_opportunity_id(row), parent_action=decision['action'],
+            opportunity_id=opportunity_id, parent_action=decision['action'],
             base_action=base_decision['action'],
             net_path_pct=net_path_pct,
             win=first_hit == 'net_target_first',
@@ -9654,19 +9700,32 @@ def build_winrate_policy_report(rows, *, source_receipt, target_date, data_root=
                 value if row['decision_trace_id'] in chosen_ids else 0.))
         return fmean(fmean(new - old for old, new in values) for values in groups.values())
     frozen = []
+    training_diagnostics = []
     baseline_train_winners = {row['decision_trace_id'] for row in selected(train, None) if row['win']}
     for threshold in thresholds:
         train_selected = selected(train, threshold)
         metrics = _winrate_opportunity_metrics(train_selected)
         kept_winners = {row['decision_trace_id'] for row in train_selected if row['win']}
-        eligible_train = (initial or (
-            len(metrics['source_dates']) >= 1
-            and metrics['selected_opportunity_count'] >= 30
-            and baseline_train['selected_opportunity_count'] > 0
-            and metrics['selected_opportunity_count'] >= .5 * baseline_train['selected_opportunity_count']
-            and (not baseline_train_winners or len(kept_winners) >= .8 * len(baseline_train_winners))
-            and metrics['win_rate_pct'] > baseline_train['win_rate_pct']
-            and metrics['support_adjusted_win_rate_pct'] - baseline_train['support_adjusted_win_rate_pct'] >= 5))
+        checks = {
+            'independent_train_source_date': len(metrics['source_dates']) >= 1,
+            'selected_opportunities_minimum_30': metrics['selected_opportunity_count'] >= 30,
+            'baseline_population_present': baseline_train['selected_opportunity_count'] > 0,
+            'baseline_coverage_minimum_50pct': metrics['selected_opportunity_count'] >= .5 * baseline_train['selected_opportunity_count'],
+            'raw_win_rate_improves': (metrics['win_rate_pct'] is not None
+                and baseline_train['win_rate_pct'] is not None
+                and metrics['win_rate_pct'] > baseline_train['win_rate_pct']),
+            'support_adjusted_win_rate_improves_5pp': (metrics['support_adjusted_win_rate_pct'] is not None
+                and baseline_train['support_adjusted_win_rate_pct'] is not None
+                and metrics['support_adjusted_win_rate_pct'] - baseline_train['support_adjusted_win_rate_pct'] >= 5),
+        }
+        eligible_train = initial or all(checks.values())
+        training_diagnostics.append(dict(threshold_bp=threshold, metrics=metrics,
+            retained_baseline_winning_attempt_count=len(kept_winners),
+            baseline_winning_attempt_count=len(baseline_train_winners),
+            successor_hurdles=checks, failed_successor_hurdles=[key for key, passed in checks.items() if not passed],
+            eligible_train=bool(metrics['selected_opportunity_count'] and eligible_train),
+            selection_mode='initial' if initial else 'successor',
+            holdout_used_for_candidate_selection=False, metric_role='sim_probe_ev'))
         if metrics['selected_opportunity_count'] and eligible_train:
             frozen.append((metrics['support_adjusted_win_rate_pct'], metrics['win_rate_pct'],
                            metrics['selected_opportunity_count'], threshold, metrics))
@@ -9723,10 +9782,6 @@ def build_winrate_policy_report(rows, *, source_receipt, target_date, data_root=
                 errors.append(part + '_winrate_hurdle_failed')
             if candidate['selected_opportunity_count'] < .5 * baseline['selected_opportunity_count']:
                 errors.append(part + '_coverage_hurdle_failed')
-            baseline_winners = {row['decision_trace_id'] for row in selected(train if part == 'train' else holdout, None) if row['win']}
-            kept_winners = {row['decision_trace_id'] for row in selected(train if part == 'train' else holdout, threshold) if row['win']}
-            if baseline_winners and len(kept_winners) < .8 * len(baseline_winners):
-                errors.append(part + '_winning_attempt_retention_failed')
     candidate_hash = strategy.digest(candidate_policy)
     market_census = {}
     for cohort in sorted({(row.get('effective_venue'), row.get('session_bucket')) for row in rows}):
@@ -9822,6 +9877,11 @@ def build_winrate_policy_report(rows, *, source_receipt, target_date, data_root=
         target_date=target_date, generated_at=datetime.now(KST).isoformat(),
         report_scope='main_entry_winrate', noncompact_sections_refreshed=True,
         policy_version='winrate_initial_v1' if initial else 'winrate_successor_v1',
+        selection_objective_version=('winrate_native_improvement_without_winner_retention_v3'
+            if native_identity_required else 'winrate_improvement_without_winner_retention_v2'),
+        opportunity_identity_contract=(OPPORTUNITY_IDENTITY_VERSION if native_identity_required
+            else 'legacy_scanner_or_exact_attempt_v1'),
+        success_retention_role='diagnostic_only',
         selection_basis='win_rate_only', disposition=disposition,
         source_contract_sha256=strategy.digest(contract), source_receipt=source_receipt,
         parent_bundle_sha256=current['bundle_sha256'], parent_machine_policy_sha256=strategy.digest(parent),
@@ -9829,6 +9889,7 @@ def build_winrate_policy_report(rows, *, source_receipt, target_date, data_root=
         policy_by_scope={'KRX|KRX_REGULAR': candidate_policy} if not errors else {},
         policy_sha256=strategy.digest({'KRX|KRX_REGULAR': candidate_policy} if not errors else {}),
         candidate_threshold_bp=threshold, candidate_search_count=len(thresholds),
+        candidate_training_diagnostics=training_diagnostics,
         candidate_holdout_opportunity_manifest_sha256=holdout_opportunity_manifest_sha256,
         train_dates=train_dates, holdout_dates=holdout_dates,
         chronological_opportunity_split=split_receipt,
@@ -9845,6 +9906,14 @@ def build_winrate_policy_report(rows, *, source_receipt, target_date, data_root=
         pending_initial_target_date=pending_bundle['target_date'] if pending_bundle else None,
         baseline=dict(train=baseline_train, holdout=baseline_holdout),
         candidate=dict(train=candidate_train, holdout=candidate_holdout),
+        success_retention_diagnostics={part: {
+            'baseline_wins': sum(row['win'] for row in selected(pop, None)),
+            'excluded_wins': sum(row['win'] for row in selected(pop, None)
+                if row['decision_trace_id'] not in {r['decision_trace_id'] for r in selected(pop, threshold)}),
+            'avoided_losses': sum(not row['win'] for row in selected(pop, None)
+                if row['decision_trace_id'] not in {r['decision_trace_id'] for r in selected(pop, threshold)}),
+            'role': 'diagnostic_only',
+        } for part, pop in (('train', train), ('holdout', holdout))} if chosen else None,
         paired_admission_delta_pct=dict(
             train=paired_net_delta(train, selected(train, threshold) if chosen else None),
             holdout=paired_net_delta(holdout, selected_holdout if chosen else None)),
@@ -9893,7 +9962,8 @@ def build_machine_policy_report(rows, *, source_receipt, target_date, data_root=
         contract['economic_kernel_sha256'] = _canonical_sha256({
             name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
             for name in ('ai_action_outcome_calibration.py', 'entry_strategy_policy.py',
-                         'ai_decision_quality.py', 'entry_setup_evidence.py', 'entry_candle_context.py')})
+                         'ai_decision_quality.py', 'entry_setup_evidence.py', 'entry_candle_context.py',
+                         'postclose_entry_validation.py')})
         checkpoint_path = data_root / 'report' / 'ai_decision_action_outcome_calibration' / f"machine_train_checkpoint_{target_date}_{'_'.join(cohort)}.json"
         saved = _load_json(checkpoint_path)
         prior_selection = prior.get('|'.join(cohort))

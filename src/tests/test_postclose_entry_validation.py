@@ -8,6 +8,7 @@ from src.engine.scalping import postclose_entry_validation as validation
 from src.engine.scalping import entry_strategy_policy as strategy
 from src.engine.scalping import ai_action_outcome_calibration as calibration
 from src.engine.scalping import compact_auxiliary_paired_replay as compact
+from src.engine.scalping import entry_setup_evidence as evidence
 
 
 def machine_rows(count=20, day='2026-10-02'):
@@ -97,7 +98,7 @@ def test_new_machine_same_day_selection_and_holdout_seed_invariance(monkeypatch)
     assert 'frozen_selection_training_source_changed' in revised['promotion_errors']
 
 
-def test_new_machine_recovery_rank_precedes_veto_without_using_ev():
+def test_new_machine_population_winrate_precedes_recovery_support_without_using_ev():
     base = {'selection_score_version': strategy.RECOVERY_SELECTION_VERSION,
             'win_rate_pct': 80., 'selected_opportunity_count': 100,
             'recovery_metrics': {'win_rate_pct': 90., 'selected_opportunity_count': 10,
@@ -105,6 +106,8 @@ def test_new_machine_recovery_rank_precedes_veto_without_using_ev():
     assert strategy.machine_admission_rank(base) == strategy.machine_admission_rank({**base, 'selected_path_ev_pct': -100})
     many = deepcopy(base)
     many['recovery_metrics'].update(selected_opportunity_count=20, successful_opportunity_weight=18.)
+    assert strategy.machine_admission_rank(many) == strategy.machine_admission_rank(base)
+    many['win_rate_pct'] = 90.
     assert strategy.machine_admission_rank(many) > strategy.machine_admission_rank(base)
 
 
@@ -177,7 +180,7 @@ def test_auxiliary_new_stage_preserves_good_pass_and_requires_exact_full_cost():
     scope = compact.evaluate_auxiliary_stage(projection)['scope_results']['KRX|KRX_REGULAR']
     assert scope['status'] == 'candidate_selected', scope
     assert scope['selected']['successful_pass_changed_count'] == 0
-    assert scope['selection_rank_version'] == 'train_top1_frozen_paired_net_ev_holdout_gate_v4'
+    assert scope['selection_rank_version'] == compact.STAGE_SELECTION_VERSION
     assert len(scope['candidates']) <= 33
     assert len(scope['prompt_variant_manifest']) == 2
     assert scope['completed_candidate_count'] < len(scope['candidates'])
@@ -188,6 +191,54 @@ def test_auxiliary_new_stage_preserves_good_pass_and_requires_exact_full_cost():
     scope = compact.evaluate_auxiliary_stage(projection)['scope_results']['KRX|KRX_REGULAR']
     assert scope['status'] == 'incumbent_carry'
     assert 'stage_full_cost_contract_missing' in scope['holdout_errors']
+
+
+def test_auxiliary_accepts_lost_winner_and_negative_ev_delta_when_both_winrates_improve(tmp_path):
+    rows = auxiliary_rows('2026-10-01') + auxiliary_rows('2026-10-02')
+    for row in (rows[0], rows[10]):
+        row['raw_response']['supporting_fact_ids'].pop()
+        row['ai_stage_path']['target_pct'] = 10.
+    projection = compact.sealed({'schema': 'compact_auxiliary_frozen_projection_v1',
+        'target_date': '2026-10-02', 'source_tuning_allowed': True, 'rows': rows})
+    stage = compact.evaluate_auxiliary_stage(projection)
+    scope = stage['scope_results']['KRX|KRX_REGULAR']
+    selected = scope['selected']
+    assert scope['status'] == 'candidate_selected'
+    assert selected['successful_pass_changed_count'] == 2
+    assert selected['paired_delta_ev_pct'] < 0
+    assert selected['train_pass_win_rate_pct'] == selected['holdout_pass_win_rate_pct'] == 100
+    assert scope['candidates'][0]['train_pass_win_rate_pct'] == 50
+    choices = compact.freeze_auxiliary_selection(tmp_path / 'choice.json', '2026-10-02', stage)
+    old = deepcopy(choices)
+    old['KRX|KRX_REGULAR']['selection_rank_version'] = 'train_top1_frozen_paired_net_ev_holdout_gate_v4'
+    with pytest.raises(ValueError, match='selection_invalid'):
+        compact.evaluate_auxiliary_stage(projection, frozen_choices=old)
+    # The incumbent preserves every win but is not an improving successor.
+    assert not compact.auxiliary_winrate_improves(scope['candidates'][0], scope['candidates'][0], 'train')
+    assert not compact.auxiliary_winrate_improves({**selected, 'train_pass_win_rate_pct': None}, scope['candidates'][0], 'train')
+
+
+def test_machine_winrate_contract_ignores_retention_and_rejects_unchanged_rate():
+    baseline = dict(win_rate_pct=60., selected_opportunity_count=100)
+    candidate = dict(win_rate_pct=90., selected_opportunity_count=60,
+        existing_success_retention_rate_pct=50., selected_path_ev_pct=-.1)
+    assert strategy.machine_winrate_improves(candidate, baseline)
+    assert not strategy.machine_winrate_improves({**candidate, 'win_rate_pct': 60.}, baseline)
+    assert not strategy.machine_winrate_improves({**candidate, 'selected_opportunity_count': 0}, baseline)
+
+
+def test_new_machine_publisher_retention_is_diagnostic(monkeypatch):
+    from src.tests.test_entry_strategy_policy import one_research_candidate
+    from src.engine.scalping.entry_setup_evidence import MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1
+    one_research_candidate(monkeypatch)
+    parent = MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1
+    result = calibration.build_main_strategy_refinement(machine_rows(), parent=parent,
+        scope=('KRX', 'KRX_REGULAR'), source_contract={}, machine_policy_only=True)
+    candidate = deepcopy(result['candidate'])
+    for part in ('train', 'holdout'):
+        candidate['evidence'][part]['economics']['existing_success_retention_rate_pct'] = 50.
+    candidate['evidence_sha256'] = strategy.digest(candidate['evidence'])
+    assert strategy.promotion_errors(candidate, parent, ('KRX', 'KRX_REGULAR')) == []
 
 
 def test_cumulative_projection_keeps_first_day_beyond_four_days_and_streams_hash(tmp_path):
@@ -428,3 +479,70 @@ def test_auxiliary_publisher_defers_old_machine_parent_without_overwriting_machi
     assert published['ai_policy'] == parent['ai_policy']
     assert published['auxiliary_soft_deferred_scopes'] == {'KRX|KRX_REGULAR': 'new_machine_parent_requires_auxiliary_revalidation'}
     assert policy.load(data_root=tmp_path, target_date='2026-09-21') == published
+
+
+@pytest.mark.parametrize("value", [None, "None", " null ", "nan", "-", " ", [], {}, 123])
+def test_native_opportunity_rejects_null_spellings_and_nonstring_ids(value):
+    row = machine_rows(1)[0]
+    with pytest.raises(ValueError, match="opportunity_lineage_missing"):
+        validation.opportunity_identity({**row, "scanner_promotion_id": value})
+
+
+def test_fixed_watch_native_identity_groups_retries_and_separates_generation():
+    row = {**machine_rows(1)[0], "watch_origin": "MAIN_FIXED_WATCH",
+           "watch_admission_id": "watch-native-1", "watch_generation_id": "generation-1",
+           "scanner_promotion_id": "None"}
+    key = validation.opportunity_identity(row)
+    assert key == validation.opportunity_identity({**row, "decision_trace_id": "retry"})
+    assert key != validation.opportunity_identity({**row, "watch_generation_id": "generation-2"})
+    assert key != validation.opportunity_identity({**row, "effective_venue": "NXT"})
+    for field in ("watch_admission_id", "watch_generation_id"):
+        with pytest.raises(ValueError, match="opportunity_lineage_missing"):
+            validation.opportunity_identity({**row, field: "None"})
+    assert validation.source_identifiers([None, "None", ["nested"], " native ", "native"]) == ["native"]
+
+
+def test_completed_no_recovery_candidate_retry_preserves_search_and_counts(monkeypatch):
+    rows = machine_rows(20)
+    for row in rows:
+        row['entry_quality_path']['first_hit'] = 'exact_stop_first'
+    kwargs = dict(parent=evidence.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
+        scope=('KRX', 'KRX_REGULAR'), source_contract={}, machine_policy_only=True)
+    first = calibration.build_main_strategy_refinement(rows, **kwargs)
+    assert first['search_complete'] is True
+    assert first['candidate'] is None
+    assert first['search']['cursor'] == first['search']['domain_size']
+    def no_more_candidates(*args, **kw):
+        assert kw['start'] == first['search']['cursor']
+        return iter(())
+    monkeypatch.setattr(strategy, 'joint_candidates', no_more_candidates)
+    again = calibration.build_main_strategy_refinement(rows, previous=first, **kwargs)
+    assert again['search_complete'] is True
+    assert again['search'] == first['search']
+    assert again['evaluated_candidate_count'] == first['evaluated_candidate_count']
+    assert again['candidate'] is None
+    assert again['machine_candidate_scores'] == first['machine_candidate_scores']
+    assert again['promotion_errors'] == first['promotion_errors']
+    assert again['selection_state'] == 'holdout_evaluated'
+
+
+def test_changed_search_domain_does_not_resume_prior_cursor(monkeypatch):
+    from src.tests.test_entry_strategy_policy import one_research_candidate
+    one_research_candidate(monkeypatch)
+    rows = machine_rows(20)
+    for row in rows:
+        row['entry_quality_path']['first_hit'] = 'exact_stop_first'
+    kwargs = dict(parent=evidence.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
+        scope=('KRX', 'KRX_REGULAR'), source_contract={}, machine_policy_only=True)
+    first = calibration.build_main_strategy_refinement(rows, **kwargs)
+    assert first['candidate'] is None
+    first['search_domain']['search_seed'] = 'invalid-generation'
+    seen = []
+    def candidates(*args, **kw):
+        seen.append(kw['start'])
+        return iter(())
+    monkeypatch.setattr(strategy, 'joint_candidates', candidates)
+    result = calibration.build_main_strategy_refinement(rows, previous=first, **kwargs)
+    assert seen == [0]
+    assert result['evaluated_candidate_count'] == 0
+    assert result['search_complete'] is False

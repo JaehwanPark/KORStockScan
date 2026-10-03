@@ -5824,6 +5824,11 @@ def test_winrate_successor_requires_selected_opportunities_on_fresh_holdout_day(
 
     assert report['candidate']['holdout']['source_dates'] == []
     assert report['candidate_search_count'] == 2
+    assert len(report['candidate_training_diagnostics']) == 2
+    for score in report['candidate_training_diagnostics']:
+        assert score['holdout_used_for_candidate_selection'] is False
+        assert score['eligible_train'] == bool(score['metrics']['selected_opportunity_count']
+            and all(score['successor_hurdles'].values()))
     assert report['disposition'] == 'incumbent_carried'
     assert 'successor_holdout_date_coverage_insufficient' in report['hurdle_errors']
     assert report['market_census']['PREMARKET_KRX_LIKE|PREMARKET_KRX_LIKE']['source_state'] == 'no_rows'
@@ -5879,6 +5884,37 @@ def test_winrate_first_forward_day_uses_chronological_opportunity_holdout(monkey
     assert report['candidate']['train']['selected_opportunity_count'] >= 30
     assert report['candidate']['holdout']['selected_opportunity_count'] >= 10
     assert runtime_policy._winrate_successor_hurdles_valid(report)
+    reduced = deepcopy(rows)
+    for index in [*range(5), *range(70, 75)]:
+        raw = reduced[index]['setup_evidence']['strategy_raw_input']
+        raw['features']['curr_vs_micro_vwap_bp'] = 60.
+        reduced[index]['setup_evidence']['strategy_raw_sha256'] = strategy.digest(raw)
+    losing_winners = calibration.build_winrate_policy_report(reduced,
+        source_receipt={'target_date': '2026-09-29'}, target_date='2026-09-29', data_root=tmp_path)
+    assert losing_winners['disposition'] == 'successor_selected'
+    assert losing_winners['success_retention_diagnostics']['holdout']['excluded_wins'] == 5
+    assert losing_winners['candidate']['holdout']['winning_attempt_count'] == 15
+    assert runtime_policy._winrate_successor_hurdles_valid(losing_winners)
+    native = deepcopy(rows)
+    for index, row in enumerate(native):
+        row.update(source_date='2026-10-02', stock_code=f'{index:06d}', scanner_promotion_id=f'native-{index}')
+        row['decision_ts'] = row['decision_ts'].replace('2026-09-29', '2026-10-02')
+    def current_report(population):
+        return calibration.build_winrate_policy_report(population,
+            source_receipt={'target_date': '2026-10-02'}, target_date='2026-10-02', data_root=tmp_path)
+    native_report = current_report(native)
+    assert native_report['disposition'] == 'successor_selected'
+    assert native_report['opportunity_identity_contract'] == 'native_scanner_or_fixed_watch_v2'
+    assert runtime_policy._winrate_successor_hurdles_valid(native_report)
+    assert not runtime_policy._winrate_successor_hurdles_valid({**native_report,
+        'selection_objective_version': 'winrate_improvement_without_winner_retention_v2'})
+    missing = current_report([{**row, 'scanner_promotion_id': None} for row in native])
+    assert missing['disposition'] == 'incumbent_carried'
+    assert missing['accepted_attempt_count'] == 0
+    assert missing['excluded_attempt_counts']['native_opportunity_identity_missing'] == 100
+    repeated = current_report([{**row, 'stock_code': '005930', 'scanner_promotion_id': 'one-native'} for row in native])
+    assert repeated['disposition'] == 'incumbent_carried'
+    assert repeated['chronological_opportunity_split']['accepted_opportunity_count'] == 1
     broken = deepcopy(report)
     broken['chronological_opportunity_split']['holdout_opportunities'][0] = broken['chronological_opportunity_split']['train_opportunities'][0]
     assert not runtime_policy._winrate_successor_hurdles_valid(broken)

@@ -353,6 +353,14 @@ def test_winrate_successor_publisher_rechecks_fresh_holdout_and_winrate_hurdles(
                 'winning_attempt_count': 11, 'win_rate_pct': 68.75,
                 'support_adjusted_win_rate_pct': 52.0}}}
     assert policy._winrate_successor_hurdles_valid(report)
+    # Keep only 75% of incumbent winners; larger loser rejection improves rate.
+    reduced = copy.deepcopy(report)
+    reduced['baseline']['train'].update(selected_attempt_count=60, selected_opportunity_count=60,
+        winning_attempt_count=30, win_rate_pct=50., support_adjusted_win_rate_pct=40.)
+    reduced['candidate']['train'].update(winning_attempt_count=22, win_rate_pct=68.75)
+    reduced['candidate']['holdout'].update(selected_attempt_count=10, selected_opportunity_count=10,
+        winning_attempt_count=9, win_rate_pct=90., support_adjusted_win_rate_pct=65.)
+    assert policy._winrate_successor_hurdles_valid(reduced)
     malformed = copy.deepcopy(report)
     malformed['candidate'] = ['wrong_type']
     assert not policy._winrate_successor_hurdles_valid(malformed)

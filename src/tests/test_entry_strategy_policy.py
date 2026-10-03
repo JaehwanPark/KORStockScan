@@ -198,6 +198,7 @@ def full_population_candidate(parent):
             evaluation_basis=strategy.MACHINE_EVALUATION_BASIS,
             selection_score_version=strategy.MACHINE_SELECTION_VERSION,
             comparable_population_sha256=strategy.digest(ids),
+            comparable_opportunity_count=count,
             comparable_attempt_count=count,
             transition_attempt_counts={'nonentry_success_recovered': count},
             selected_attempt_count=count, selected_opportunity_count=count,
@@ -945,9 +946,9 @@ def test_machine_train_best_is_resumed_before_holdout(monkeypatch):
     from src.engine.scalping import ai_action_outcome_calibration as c
     def candidates(*args, **kw):
         if kw['start'] == 0:
-            yield research_policy(), dict(cursor=1, domain_size=2, search_complete=False)
+            yield research_policy(), dict(cursor=1, domain_size=2, domain_sha256='a'*64, search_complete=False)
         else:
-            yield policy(), dict(cursor=2, domain_size=2, search_complete=True)
+            yield policy(), dict(cursor=2, domain_size=2, domain_sha256='a'*64, search_complete=True)
     monkeypatch.setattr(strategy, 'joint_candidates', candidates)
     kw = dict(parent=evidence.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1, scope=('KRX','KRX_REGULAR'),
               source_contract={}, machine_policy_only=True)
@@ -1392,3 +1393,33 @@ def test_machine_replay_keeps_unpriced_existing_entry_promotion_guard(monkeypatc
     assert len(calls) == 2
     assert result['promotion_pass'] is False
     assert result['machine_candidate_scores'][0]['economics']['unevaluated_existing_entry_changes'] == ['attempt-1']
+
+
+def test_machine_changed_unknown_outcome_is_diagnostic_with_comparable_support():
+    parent = evidence.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1
+    item = full_population_candidate(parent)
+    arm = item['evidence']['train']
+    arm['action_transition_counts']['ENTER_NOW->RECHECK'] = 1
+    arm['economics']['unevaluated_existing_entry_changes'] = ['unknown-trace']
+    item['evidence_sha256'] = strategy.digest(item['evidence'])
+    assert not strategy.promotion_errors(item, parent, ('KRX', 'KRX_REGULAR'))
+    arm['economics']['unevaluated_existing_entry_changes'].append('another-trace')
+    item['evidence_sha256'] = strategy.digest(item['evidence'])
+    assert 'train_machine_existing_entries_changed_without_evaluation' in strategy.promotion_errors(
+        item, parent, ('KRX', 'KRX_REGULAR'))
+
+
+@pytest.mark.parametrize('delay,accepted', [(367.529488, True), (600., True), (601., False), (None, False)])
+def test_retained_late_stop_is_cost_bound_loss_without_rewriting_source(delay, accepted):
+    from src.engine.scalping import ai_action_outcome_calibration as c
+    row = machine_cost_row('adverse_first')
+    row['entry_quality_contract_valid'] = False
+    row['entry_quality_path'].update(status='censored_or_source_gap',
+        label_reason='exact_stop_first_outside_primary_window', time_to_exact_stop_sec=delay)
+    original = deepcopy(row)
+    value, reason = c._machine_path_value(row)
+    assert row == original
+    if accepted:
+        assert value == pytest.approx(-.7) and reason is None
+    else:
+        assert value is None and reason == 'terminal_path_censored'

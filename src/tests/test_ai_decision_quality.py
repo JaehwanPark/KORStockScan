@@ -2571,8 +2571,9 @@ def test_entry_quality_path_does_not_call_late_bar_stop_a_short_window_loss():
         exact_stop_distance_pct=-1.0,
     )
 
-    assert result["entry_quality_label"] == "CENSORED_OR_SOURCE_GAP"
-    assert result["label_reason"] == "exact_stop_first_outside_primary_window"
+    assert result["entry_quality_label"] == "LOSS_AFTER_PRIMARY_WINDOW"
+    assert result["status"] == "evaluable"
+    assert result["outcome_window_sec"] == 600
     assert result["time_to_exact_stop_sec"] == 240
 
 
@@ -13989,3 +13990,24 @@ def test_retired_r0_r3_modes_are_rejected_before_io(mode, tmp_path, monkeypatch)
         quality.main(["--date", "2026-09-17", "--mode", mode, "--write", "--execute-candidate"])
     assert exc.value.code == 2
     assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize('promotion', [None, 'None', ' null ', [], [None], 123])
+def test_correlation_cannot_join_placeholder_scanner_provenance(promotion):
+    label = {'stock_code': '005930', 'decision_stage': 'entry',
+             'decision_ts': '2026-10-02T10:00:00+09:00', 'scanner_promotion_id': promotion}
+    row = {'stock_code': '005930', 'timestamp': '2026-10-02T10:00:01+09:00',
+           'scanner_promotion_id': promotion, 'stage': 'ai_confirmed'}
+    result = quality._correlation(label, [row])
+    assert result['scanner_promotion_ids'] == []
+    assert result['status'] != 'exact_matched'
+
+
+def test_correlation_native_trace_does_not_export_placeholder_scanner():
+    label = {'stock_code': '005930', 'decision_stage': 'entry',
+             'decision_ts': '2026-10-02T10:00:00+09:00', 'decision_trace_id': 'trace-native'}
+    row = {'stock_code': '005930', 'timestamp': '2026-10-02T10:00:01+09:00',
+           'decision_trace_id': 'trace-native', 'scanner_promotion_id': 'None', 'stage': 'ai_confirmed'}
+    result = quality._correlation(label, [row])
+    assert result['status'] == 'exact_matched'
+    assert result['scanner_promotion_ids'] == []

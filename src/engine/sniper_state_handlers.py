@@ -12349,6 +12349,9 @@ def _observe_entry_economics_before_ai(stock, code, ws_data, *, exact_payload,
               "entry_economic_source_closure_test": "pre_ai_owner_plan_to_independent_operating_replay"}
     identity = dict(evaluation_attempt_id=capture.get("evaluation_attempt_id"),
         scanner_promotion_id=capture.get("scanner_promotion_id"),
+        watch_origin=capture.get("watch_origin"),
+        watch_admission_id=capture.get("watch_admission_id"),
+        watch_generation_id=capture.get("watch_generation_id"),
         effective_venue=capture.get("effective_venue"),
         market_session_bucket=capture.get("session_bucket") or exact_payload.get("session_bucket"),
         machine_bundle_sha256=bundle_sha256, entry_mechanistic_action=assessment.get("action"),
@@ -12356,6 +12359,19 @@ def _observe_entry_economics_before_ai(stock, code, ws_data, *, exact_payload,
         machine_revision_schema=capture.get("machine_revision_schema"),
         machine_revision_parent_sha256=capture.get("machine_revision_parent_sha256"),
         entry_primary_decision_owner="mechanistic_entry_adjudicator", entry_ai_screen_pass=False)
+    from src.engine.scalping.auxiliary_source_contract import capsule
+    # Freeze independently of capacity/plan success. The exact input already
+    # lives in the machine observation; do not copy credentials or trading state.
+    source["entry_pre_ai_source_capsule"] = capsule(
+        {**identity, "stock_code": str(code)[:6],
+         "session_bucket": identity["market_session_bucket"],
+         "broker_route": exact_payload.get("broker_route"),
+         "decision_ts": capture.get("machine_observation_captured_at"),
+         "source_date": str(capture.get("machine_observation_captured_at") or "")[:10] or None,
+         "machine_policy_sha256": (assessment.get("strategy_selection") or {}).get("policy_sha256")},
+        producer="sniper_state_handlers._observe_entry_economics_before_ai", clock=now_ts,
+        references={"machine_capture_status": capture.get("machine_capture_status"),
+                    "machine_observation_sha256": capture.get("machine_observation_sha256")})
     try:
         if snapshot.get("code") and str(snapshot["code"])[:6] != str(code)[:6]:
             raise ValueError("watched_stock_symbol_conflict")
@@ -12386,6 +12402,7 @@ def _observe_entry_economics_before_ai(stock, code, ws_data, *, exact_payload,
             correlation_id=capture.get("evaluation_attempt_id"),
             diagnostic_context={"broker_route": broker_route, "effective_venue": venue,
                 "session_bucket": identity["market_session_bucket"], "mechanistic_action": assessment.get("action")})
+        source["entry_economic_capacity_receipt"] = copy.deepcopy(budget)
         if budget.get("kt00011_error") or budget.get("cash_orderable_qty_cap") is None:
             source["entry_economic_capacity_blocker"] = budget.get("kt00011_error") or "cash_quantity_missing"
             if assessment.get("action") == "ENTER_NOW":
@@ -12393,6 +12410,7 @@ def _observe_entry_economics_before_ai(stock, code, ws_data, *, exact_payload,
                     snapshot, code, {"curr": current})
             raise ValueError("exact_broker_capacity_missing")
         budget = _apply_general_entry_margin_budget_authority(budget, unit_price=current)
+        source["entry_economic_capacity_receipt"] = copy.deepcopy(budget)
         margin = bool(budget.get("general_entry_margin_one_share_authorized"))
         context = ScalpingSizingContext(allocation_stage="initial_entry",
             reference_time=datetime.fromtimestamp(now_ts, tz=_KST), effective_venue=venue,
@@ -12445,6 +12463,9 @@ def _observe_entry_economics_before_ai(stock, code, ws_data, *, exact_payload,
             raise ValueError("frozen_operating_contract_missing")
         orders, split = apply_entry_split_order_policy(orders, stock=snapshot,
             latency_gate=gate, operating_context=operating, observation_only=True)
+        if isinstance(split.get('entry_split_order_observation_probe_contract'), dict):
+            source['entry_economic_observation_probe_contract'] = json.dumps(
+                split['entry_split_order_observation_probe_contract'], sort_keys=True, separators=(',', ':'))
         if not orders:
             raise ValueError(split.get("entry_split_order_skip_reason") or "owner_split_plan_missing")
         orders = _decorate_entry_split_leg_ttls(orders, snapshot, "SCALPING")
@@ -12464,7 +12485,6 @@ def _observe_entry_economics_before_ai(stock, code, ws_data, *, exact_payload,
                 "sizing_context": context, "operating_context": operating})
         if fields.get("entry_execution_sizing_valid") is not True or not fields.get("entry_opportunity_replay_seed"):
             raise ValueError("atomic_observation_plan_invalid:" + str(fields.get("entry_execution_sizing_blockers")))
-        fields["entry_economic_capacity_receipt"] = budget
         source.update(entry_economic_source_status="recorded_source_only",
                       entry_economic_writer_plan_sha256=fields["entry_execution_sizing_plan_sha256"],
                       entry_economic_plan_sha256=fields["entry_execution_sizing_plan_sha256"])
@@ -12481,6 +12501,10 @@ def _observe_entry_economics_before_ai(stock, code, ws_data, *, exact_payload,
     if not isinstance(event, dict) or event.get("structured_append_succeeded") is not True:
         source.update(entry_economic_source_status="source_gap",
                       entry_economic_source_blocker="structured_pre_ai_observation_append_failed")
+    source["entry_pre_ai_source_append_receipt"] = {
+        "capsule_sha256": source["entry_pre_ai_source_capsule"]["sha256"],
+        "structured_append_succeeded": isinstance(event, dict) and event.get("structured_append_succeeded") is True,
+    }
     return source
 
 
@@ -12509,6 +12533,7 @@ def _log_entry_pipeline(stock, code, stage, **fields):
         for key in ("market_data_health", "input_quote_source_receipt",
                     "entry_execution_sizing_plan", "entry_price_plan",
                     "entry_opportunity_replay_seed", "entry_economic_capacity_receipt",
+                    "entry_pre_ai_source_capsule",
                     "initial_quantity_cap_research_context"):
             if isinstance(fields.get(key), dict):
                 fields[key] = json.dumps(fields[key], sort_keys=True, separators=(",", ":"))

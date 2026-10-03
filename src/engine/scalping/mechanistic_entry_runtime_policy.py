@@ -438,6 +438,7 @@ def compact_outcome_counts_valid(economic: dict) -> bool:
             counts.get(key, 0)
             for key in (
                 "PASS|CLEAN_FAST_LOSS_OR_ADVERSE",
+                "PASS|LOSS_AFTER_PRIMARY_WINDOW",
                 "PASS|PROFIT_AFTER_DEEP_ADVERSE",
             )
         ),
@@ -686,6 +687,10 @@ def publish_compact_evaluation(
     ):
         raise ValueError("compact_direct_evaluation_source_invalid")
     auxiliary_stage = source.get("auxiliary_stage")
+    if (source.get("policy_publication_forbidden") or source.get("partition_scope", "all") != "all"
+        or (isinstance(auxiliary_stage, dict) and (auxiliary_stage.get("policy_publication_forbidden")
+            or auxiliary_stage.get("partition_scope", "all") != "all"))):
+        raise ValueError("compact_partition_research_publication_forbidden")
     if auxiliary_stage is not None and (
         not paired.valid(auxiliary_stage)
         or auxiliary_stage.get("schema") != "auxiliary_ai_stage_evaluation_v1"
@@ -843,7 +848,7 @@ def publish_compact_evaluation(
                         continue
                     if scoped_parent:
                         scope_parent_hashes.add(digest(scoped_parent["machine_policy"]))
-                if (assessment.get('selection_rank_version') == 'train_top1_frozen_paired_net_ev_holdout_gate_v4'
+                if (assessment.get('selection_rank_version') in {paired.STAGE_SELECTION_VERSION, 'train_top1_frozen_paired_net_ev_holdout_gate_v4'}
                     and scope_parent_hashes == {digest(old_scoped['machine_policy'])}
                     and scope_parent_hashes != {digest(current_scoped['machine_policy'])}
                     and digest(current_ai) == digest(old_ai)):
@@ -1501,6 +1506,11 @@ def winrate_market_census_valid(source: dict) -> bool:
 def _winrate_successor_hurdles_valid(source: dict) -> bool:
     import math
 
+    objective = source.get('selection_objective_version')
+    if (objective is not None and str(source.get('target_date') or '') >= '2026-10-02'
+        and (objective != 'winrate_native_improvement_without_winner_retention_v3'
+             or source.get('opportunity_identity_contract') != 'native_scanner_or_fixed_watch_v2')):
+        return False
     train_dates = source.get('train_dates')
     holdout_dates = source.get('holdout_dates')
     consumed = source.get('consumed_holdout_dates')
@@ -1581,9 +1591,7 @@ def _winrate_successor_hurdles_valid(source: dict) -> bool:
         if (new['selected_opportunity_count'] < floor
             or new['selected_opportunity_count'] < .5 * old['selected_opportunity_count']
             or new['win_rate_pct'] <= old['win_rate_pct']
-            or new['support_adjusted_win_rate_pct'] - old['support_adjusted_win_rate_pct'] < 5
-            or (old['winning_attempt_count'] > 0
-                and new['winning_attempt_count'] < .8 * old['winning_attempt_count'])):
+            or new['support_adjusted_win_rate_pct'] - old['support_adjusted_win_rate_pct'] < 5):
             return False
     return True
 
@@ -1619,6 +1627,12 @@ def stage_winrate_policy(source_path: Path, *, data_root: Path, now: datetime | 
         or not calibration._artifact_content_sha256_valid(source)
         or source.get('selection_basis') != 'win_rate_only'
         or source.get('policy_version') not in {'winrate_initial_v1', 'winrate_successor_v1'}
+        or (source.get('policy_version') == 'winrate_successor_v1'
+            and (source.get('selection_objective_version') != (
+                'winrate_native_improvement_without_winner_retention_v3' if str(source.get('target_date') or '') >= '2026-10-02'
+                else 'winrate_improvement_without_winner_retention_v2')
+                or (str(source.get('target_date') or '') >= '2026-10-02'
+                    and source.get('opportunity_identity_contract') != 'native_scanner_or_fixed_watch_v2')))
         or re.fullmatch(r'[0-9a-f]{64}', str(source.get('source_contract_sha256'))) is None
         or re.fullmatch(r'[0-9a-f]{64}', str(source.get('evaluated_attempt_manifest_sha256'))) is None
         or (source.get('source_receipt') or {}).get('target_date') != source.get('target_date')

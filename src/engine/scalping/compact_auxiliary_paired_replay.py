@@ -19,6 +19,7 @@ import tempfile
 import time
 from zoneinfo import ZoneInfo
 from src.engine.automation.source_quality_clean_baseline import policy_refresh_start_date
+from src.engine.scalping import auxiliary_source_contract as source_contract
 
 KST = ZoneInfo("Asia/Seoul")
 SCHEMA = "compact_auxiliary_paired_economic_v1"
@@ -49,6 +50,9 @@ CONTRACT = {
     "candidate_direction_route_learning_floor_required": True,
 }
 SOURCE_PROJECTION_CONTRACT = "compact_pre_ai_execution_source_v9"
+NATIVE_WATCH_METADATA_CONTRACT = "exact_native_watch_metadata_v1"
+STAGE_SELECTION_VERSION = "train_top1_frozen_winrate_improvement_v5"
+NATIVE_WATCH_METADATA_MAX_SCAN_BYTES = 64 * 1024 * 1024
 CANDIDATE_SELECTION_SCHEMA = "compact_auxiliary_candidate_direction_v1"
 PROSPECTIVE_SOURCE_CONTRACT_SCHEMA = (
     "compact_auxiliary_prospective_source_contract_v1"
@@ -531,19 +535,27 @@ def bind_stage_full_cost(row, root, *, profile_cache=None):
         return row
     if row.get("source_date", "") < "2026-09-29":
         return row
-    key = (row['source_date'], row.get('effective_venue'))
+    # Trace sessions are historically lower case. Normalize spelling only for
+    # the registered cost scope; keep native row/opportunity identities intact.
+    scope = tuple(str(row.get(k) or "").upper() for k in ("effective_venue", "session_bucket"))
+    from src.engine.scalping.entry_setup_evidence import mechanistic_scope_supported
+    if not mechanistic_scope_supported(*scope):
+        return {**row, "ai_stage_path": {**path, "cost_scope": "counterfactual_friction_no_broker_fees",
+                                       "cost_binding_gap": "unsupported_exact_scope"}}
+    key = (row['source_date'], scope[0])
     profile_cache = {} if profile_cache is None else profile_cache
     if key not in profile_cache:
         profile_cache[key] = calibration._hierarchy_cost_profiles(Path(root), *key)
     profiles = profile_cache[key]
     contract = calibration._hierarchy_cost_contract(profiles.get(row.get("stock_code")) or {},
         row["source_date"], path.get("conservative_execution_cost_pct"),
-        (row.get("effective_venue"), row.get("session_bucket")))
+        scope)
     full_cost = calibration._full_entry_cost_pct(contract, source_date=row["source_date"])
     if full_cost is not None:
         path.update(recorded_friction_pct=path.get("conservative_execution_cost_pct"),
                     conservative_execution_cost_pct=full_cost, entry_cost_contract=contract,
-                    entry_cost_contract_sha256=digest(contract), cost_scope="full_round_trip_source_bound")
+                    entry_cost_contract_sha256=digest(contract), cost_scope="full_round_trip_source_bound",
+                    recorded_source_scope=[row.get("effective_venue"), row.get("session_bucket")])
     else:
         path["cost_scope"] = "counterfactual_friction_no_broker_fees"
     return {**row, "ai_stage_path": path}
@@ -556,14 +568,15 @@ def stage_full_cost_valid(row):
     cost = _full_entry_cost_pct(contract, source_date=row['source_date'])
     return (path.get('cost_scope') == 'full_round_trip_source_bound'
             and path.get('entry_cost_contract_sha256') == digest(contract)
-            and (contract.get('effective_venue'), contract.get('session_bucket')) == (row.get('effective_venue'), row.get('session_bucket'))
+            and (contract.get('effective_venue'), contract.get('session_bucket')) == tuple(
+                str(row.get(k) or "").upper() for k in ('effective_venue', 'session_bucket'))
             and cost is not None and finite(path.get('conservative_execution_cost_pct'))
             and math.isclose(cost, path['conservative_execution_cost_pct'], rel_tol=0, abs_tol=1e-9))
 
 
 def prepare(data_root, day):
     """Use actual compact screens, never fabricated AI for machine BLOCK rows."""
-    from src.utils.jsonl_io import iter_jsonl, existing_or_gzip_path
+    from src.utils.jsonl_io import iter_jsonl_objects_strict as iter_jsonl, existing_or_gzip_path
     from src.engine.scalping.ai_decision_trace import _json_bytes
     from src.engine.scalping import mechanistic_entry_runtime_policy as machine_policy_owner
     from src.engine.scalping.mechanistic_entry_runtime_policy import COMPACT_AI_VARIANTS
@@ -578,10 +591,13 @@ def prepare(data_root, day):
     receipt = source.get("machine_ai_natural_source_consumption") or {}
     manifest = receipt.get("source_manifest") or {}
     traces, conflicts = {}, set()
+    census_responses, census_machines = [], []
     trace_path = existing_or_gzip_path(
         root / "ai_decision_trace" / f"ai_decision_trace_{day}.jsonl"
     )
     for trace in iter_jsonl(trace_path) if trace_path else []:
+        if trace.get("decision_stage") == "entry_screen" and trace.get("prompt_version") in COMPACT_AI_VARIANTS:
+            census_responses.append(source_contract.response_record(trace))
         if (
             trace.get("decision_stage") != "entry_screen"
             or trace.get("prompt_version") not in COMPACT_AI_VARIANTS
@@ -595,12 +611,24 @@ def prepare(data_root, day):
         if key in traces and traces[key] != trace:
             conflicts.add(key)
         traces[key] = trace
+    # An envelope names one request, even when retries have different trace IDs.
+    envelopes = defaultdict(list)
+    for key, trace in traces.items():
+        if trace.get("request_envelope_sha256"):
+            envelopes[trace["request_envelope_sha256"]].append((key, trace))
+    for group in envelopes.values():
+        variants = {tuple(trace.get(k) for k in ("payload_sha256", "prompt_sha256", "evaluation_attempt_id", "stock_code"))
+                    for _, trace in group}
+        if len(variants) > 1:
+            conflicts.update(key for key, _ in group)
     wanted = {t.get("payload_sha256") for t in traces.values()}
     payloads, payload_conflicts = {}, set()
     payload_path = existing_or_gzip_path(
         root / "ai_decision_payloads" / f"ai_decision_payloads_{day}.jsonl"
     )
     for payload in iter_jsonl(payload_path) if payload_path else []:
+        if payload.get("schema") == "mechanistic_entry_observation_v1":
+            census_machines.append(source_contract.machine_record(payload))
         key = (
             payload.get("request_envelope_sha256"),
             payload.get("payload_sha256"),
@@ -666,7 +694,19 @@ def prepare(data_root, day):
             "entry_economic_writer_plan_sha256": trace.get("entry_economic_writer_plan_sha256"),
             "entry_economic_source_status": trace.get("entry_economic_source_status"),
             "entry_economic_source_blocker": trace.get("entry_economic_source_blocker"),
+            "entry_economic_observation_probe_contract": trace.get("entry_economic_observation_probe_contract"),
+            "auxiliary_source_capsule": trace.get("auxiliary_source_capsule"),
+            "entry_pre_ai_source_capsule": trace.get("entry_pre_ai_source_capsule"),
+            "entry_pre_ai_source_append_receipt": trace.get("entry_pre_ai_source_append_receipt"),
+            "entry_economic_guard_receipt": trace.get("entry_economic_guard_receipt"),
+            "entry_economic_capacity_blocker": trace.get("entry_economic_capacity_blocker"),
+            "entry_economic_capacity_receipt": trace.get("entry_economic_capacity_receipt"),
+            "machine_observation_sha256": trace.get("machine_observation_sha256"),
+            "request_envelope_sha256": trace.get("request_envelope_sha256"),
             "scanner_promotion_id": trace.get("scanner_promotion_id"),
+            "watch_origin": trace.get("watch_origin"),
+            "watch_admission_id": trace.get("watch_admission_id"),
+            "watch_generation_id": trace.get("watch_generation_id"),
             "stock_code": trace.get("stock_code"),
             "effective_venue": trace.get("effective_venue"),
             "session_bucket": trace.get("session_bucket"),
@@ -684,6 +724,9 @@ def prepare(data_root, day):
         reason = None
         if key in conflicts or payload_key in payload_conflicts:
             reason = "conflicting_exact_input"
+        elif trace.get("auxiliary_source_capsule") and source_contract.capsule_errors(
+                trace["auxiliary_source_capsule"], {**trace, "source_date": day}):
+            reason = "auxiliary_source_capsule_invalid"
         elif owner_key in owner_conflicts:
             reason = "conflicting_exact_owner_replay"
         elif (contract_exclusion := natural_response_contract_exclusion(trace)):
@@ -754,6 +797,9 @@ def prepare(data_root, day):
         {
             "schema": "compact_auxiliary_frozen_projection_v1",
             "source_projection_contract": SOURCE_PROJECTION_CONTRACT,
+            "native_watch_metadata_contract": NATIVE_WATCH_METADATA_CONTRACT,
+            "auxiliary_source_contract": source_contract.CONTRACT,
+            "source_census_inputs": {"machines": census_machines, "responses": census_responses},
             "target_date": day,
             "source_manifest_sha256": manifest.get("source_manifest_sha256"),
             "source_tuning_allowed": receipt.get("tuning_input_allowed") is True
@@ -965,13 +1011,24 @@ def auxiliary_population_projection(current, parent, *, history_hashes=None):
     return population
 
 
-def evaluate_auxiliary_stage(projection, prompt_results=None, *, frozen_choices=None):
+def evaluate_auxiliary_stage(projection, prompt_results=None, *, frozen_choices=None, partition_scope="all"):
     """Bounded deterministic AI-stage replay over actual machine ENTER_NOW calls.
 
     This independent basis deliberately does not inherit the legacy 20-row,
     owner-capital or exact-stop promotion gates.  An absent outcome remains a
     source gap, and one promotion receives one vote regardless of retry count.
     """
+    if partition_scope != "all":
+        if not valid(projection):
+            raise ValueError("partition_source_projection_invalid")
+        if frozen_choices is not None or prompt_results:
+            raise ValueError("partition_research_requires_retained_parent_responses")
+        rows = [row for row in projection.get("rows", []) if source_contract.selected(row, partition_scope)]
+        filtered = sealed({**projection, "rows": rows, "screened_total": len(rows),
+            "partition_scope": partition_scope, "unpartitioned_source_sha256": projection["artifact_content_sha256"]})
+        result = evaluate_auxiliary_stage(filtered)
+        return sealed({**result, "partition_scope": partition_scope, "policy_publication_forbidden": True,
+            "partition_contract": source_contract.CONTRACT})
     from src.engine.scalping.entry_setup_evidence import (
         evaluate_auxiliary_policy, _evaluate_auxiliary_policy_validated,
         validate_mechanistic_risk_screen, repair_mechanistic_pass_citations,
@@ -999,6 +1056,9 @@ def evaluate_auxiliary_stage(projection, prompt_results=None, *, frozen_choices=
 
     if not valid(projection) or projection.get("schema") != "compact_auxiliary_frozen_projection_v1":
         raise ValueError("auxiliary_stage_projection_invalid")
+    declared_partition = projection.get("partition_scope", "all")
+    if any(not source_contract.selected(row, declared_partition) for row in projection.get("rows", [])):
+        raise ValueError("auxiliary_declared_partition_population_conflict")
     seen, eligible, excluded = set(), [], Counter()
     for row in sorted(projection.get("rows") or [], key=lambda r: (
         str(r.get("decision_ts") or ""), str(r.get("evaluation_key") or ""))):
@@ -1011,6 +1071,12 @@ def evaluate_auxiliary_stage(projection, prompt_results=None, *, frozen_choices=
             excluded["duplicate_promotion_attempt"] += 1
             continue
         seen.add(opportunity)
+        if row.get("auxiliary_source_capsule") and source_contract.capsule_errors(row["auxiliary_source_capsule"], row):
+            excluded["auxiliary_source_capsule_invalid"] += 1
+            continue
+        if row.get("exclusion_reason") in {"conflicting_exact_input", "conflicting_exact_owner_replay", "frozen_payload_missing_or_invalid", "auxiliary_source_capsule_invalid"}:
+            excluded["source_identity_contract_invalid"] += 1
+            continue
         natural = row.get("natural_contract_evidence") or {}
         if natural.get("semantic_validation_status") != "pass" or natural.get("decision_quality_contract_status") != "pass":
             excluded["natural_response_invalid"] += 1
@@ -1138,7 +1204,8 @@ def evaluate_auxiliary_stage(projection, prompt_results=None, *, frozen_choices=
             if len(parent_versions) == 1 else []
         )
         frozen_scope = (frozen_choices or {}).get(scope) if current else None
-        if frozen_scope and (frozen_scope.get('policy_sha256') != digest(frozen_scope.get('policy'))
+        if frozen_scope and (frozen_scope.get('selection_rank_version') != STAGE_SELECTION_VERSION
+                             or frozen_scope.get('policy_sha256') != digest(frozen_scope.get('policy'))
                              or frozen_scope.get('prompt_version') not in
                              (parent_versions[0], *auxiliary_prompt_variants(parent_versions[0], current=True))):
             raise ValueError('auxiliary_train_selection_invalid')
@@ -1253,6 +1320,9 @@ def evaluate_auxiliary_stage(projection, prompt_results=None, *, frozen_choices=
                        if (key in same_day_holdout_keys or day == holdout_day) and (not current or key in held_keys)]
             train_pass = [net for _, new, net in train if new == "PASS"]
             train_pass_wins = sum(net > 0 for net in train_pass)
+            held_pass = [net for _, new, net in holdout if new == "PASS"]
+            held_wins = sum(net > 0 for net in held_pass)
+            held_rate = 100 * held_wins / len(held_pass) if held_pass else None
             train_adjusted = machine_support_adjusted_win_rate({
                 "win_rate_pct": (100 * train_pass_wins / len(train_pass)
                                  if train_pass else None),
@@ -1286,6 +1356,15 @@ def evaluate_auxiliary_stage(projection, prompt_results=None, *, frozen_choices=
                 "holdout_positive_count": sum(net > 0 for _, _, net in holdout),
                 "holdout_negative_count": sum(net < 0 for _, _, net in holdout),
                 "train_pass_count": sum(new == "PASS" for _, new, _ in train),
+                "train_pass_wins": train_pass_wins,
+                "train_pass_win_rate_pct": 100 * train_pass_wins / len(train_pass) if train_pass else None,
+                "holdout_pass_wins": held_wins,
+                "holdout_pass_win_rate_pct": held_rate,
+                "holdout_support_adjusted_win_rate_pct": machine_support_adjusted_win_rate({
+                    'win_rate_pct': held_rate, 'selected_opportunity_count': len(held_pass)}),
+                "holdout_successful_pass_changed_count": sum(old == 'PASS' and net > 0 and new != 'PASS' for old,new,net in holdout),
+                "train_failed_pass_avoided_count": sum(old == 'PASS' and net <= 0 and new != 'PASS' for old,new,net in train),
+                "holdout_failed_pass_avoided_count": sum(old == 'PASS' and net <= 0 and new != 'PASS' for old,new,net in holdout),
                 "train_support_adjusted_win_rate_pct": train_adjusted,
                 "train_pass_mean_net_pct": (round(sum(train_pass) / len(train_pass), 10)
                                             if train_pass else None),
@@ -1301,8 +1380,9 @@ def evaluate_auxiliary_stage(projection, prompt_results=None, *, frozen_choices=
                     (trial for trial in trials[1:] if trial["prompt_version"] == parent_versions[0]
                      and trial["train_count"] >= 5 and trial["train_paired_delta_ev_pct"] is not None),
                     key=lambda trial: (
-                        trial["train_paired_delta_ev_pct"],
                         trial["train_support_adjusted_win_rate_pct"] or -1,
+                        trial["train_pass_win_rate_pct"] or -1,
+                        trial["train_pass_count"],
                         trial["policy_sha256"] or "",
                     ), reverse=True,
                 )[:3]
@@ -1314,9 +1394,8 @@ def evaluate_auxiliary_stage(projection, prompt_results=None, *, frozen_choices=
         incumbent = trials[0]
         def rank(trial):
             return (
-                round(trial["train_paired_delta_ev_pct"], 10),
                 round(trial["train_support_adjusted_win_rate_pct"], 10),
-                trial["train_pass_mean_net_pct"],
+                trial["train_pass_win_rate_pct"],
                 trial["train_pass_count"],
             )
         incumbent_rank = (rank(incumbent)
@@ -1329,10 +1408,8 @@ def evaluate_auxiliary_stage(projection, prompt_results=None, *, frozen_choices=
                  "holdout_positive_count", "holdout_negative_count",
                  "train_pass_count", "holdout_pass_count"))
              and t["train_changed_count"] >= 2 and t["holdout_changed_count"] >= 1
-             and t["train_paired_delta_ev_pct"] > 0
-             and t["holdout_paired_delta_ev_pct"] >= 0
-             and t["successful_pass_changed_count"] == 0
-             and t["paired_delta_ev_pct"] > 0
+             and auxiliary_winrate_improves(t, incumbent, 'train')
+             and auxiliary_winrate_improves(t, incumbent, 'holdout')
              and t["prompt_response_missing_count"] == 0
              and t["train_support_adjusted_win_rate_pct"] is not None
              and (incumbent_rank is None or rank(t) > incumbent_rank)
@@ -1347,7 +1424,7 @@ def evaluate_auxiliary_stage(projection, prompt_results=None, *, frozen_choices=
             train_ranked = sorted((t for t in trials[1:]
                 if t['train_count'] >= 5 and t['train_changed_count'] >= 2
                 and all(t[field] >= 1 for field in ('train_positive_count', 'train_negative_count', 'train_pass_count'))
-                and t['train_paired_delta_ev_pct'] > 0 and t['train_successful_pass_changed_count'] == 0
+                and auxiliary_winrate_improves(t, incumbent, 'train')
                 and t['train_prompt_response_missing_count'] == 0
                 and t['train_support_adjusted_win_rate_pct'] is not None
                 and (incumbent_rank is None or rank(t) > incumbent_rank)), key=lambda t: (rank(t), t['policy_sha256'] or '', t['prompt_version']), reverse=True)
@@ -1386,7 +1463,8 @@ def evaluate_auxiliary_stage(projection, prompt_results=None, *, frozen_choices=
         scopes[scope] = {
             "status": "candidate_selected" if ranked else "incumbent_carry",
             "incumbent": incumbent, "selected": chosen, "candidates": trials,
-            "selection_rank_version": ("train_top1_frozen_paired_net_ev_holdout_gate_v4" if current else "train_paired_net_ev_then_train_support_adjusted_win_rate_holdout_gate_v3"),
+            "selection_rank_version": STAGE_SELECTION_VERSION if current else "train_winrate_improvement_holdout_gate_v5",
+            "successful_pass_retention_role": "diagnostic_only",
             **({"frozen_train_choice": frozen_train_choice, 'holdout_errors': holdout_errors,
                 'train_population_sha256': train_population_hash,
                 'split_manifest': split_manifest,
@@ -1424,8 +1502,37 @@ def evaluate_auxiliary_stage(projection, prompt_results=None, *, frozen_choices=
             "positive_path_count": positive_total, "negative_path_count": negative_total,
             "incumbent_net_ev_pct": round(sum(net * int(row["incumbent_verdict"] == "PASS") for row, net in population) / len(population), 10),
         }
+    census = projection.get("source_census_inputs") or {}
+    population_scope = projection.get("partition_scope", "all")
+    census_responses = census.get("responses", [])
+    if not census and projection.get("source_projection_contract") == SOURCE_PROJECTION_CONTRACT:
+        census_responses = [source_contract.projected_response_record(row) for row in projection.get("rows", [])]
+    diagnostics = {
+        **source_contract.DIAGNOSTIC_AUTHORITY,
+        "contract": source_contract.CONTRACT,
+        "partition_scope": population_scope,
+        "census_status": "recorded" if "source_census_inputs" in projection else "historical_machine_census_not_recorded",
+        "historical_machine_observed_count": None if not census else sum(
+            source_contract.selected(row, population_scope) for row in census.get("machines", [])),
+        "response_census_basis": "native_trace" if census else "sealed_v9_actual_provider_filter"
+            if projection.get("source_projection_contract") == SOURCE_PROJECTION_CONTRACT else "not_recorded",
+        "ledger": source_contract.ledger(census.get("machines", []), census_responses,
+            projection.get("rows", []), scope=population_scope,
+            stage_keys=[row["evaluation_key"] for row, _ in eligible]),
+        "plan_state_counts": dict(Counter(source_contract.plan_state(row)["state"] for row in projection.get("rows", []))),
+        "caution_lifecycle": source_contract.caution_lifecycle(projection.get("rows", [])),
+        "comparison_dispositions": {scope: "valid_no_change" if (
+            (evaluated := [trial for trial in result["candidates"] if trial.get("evaluation_status") == "evaluated"])
+            and all(trial.get("changed_count") == 0 for trial in evaluated)) else "changed_or_not_evaluated"
+            for scope, result in scopes.items()},
+        "operating_comparable_count": None,
+        "operating_comparable_status": "requires_independent_owner_paired_evaluation",
+    }
     return sealed({
         "schema": "auxiliary_ai_stage_evaluation_v1",
+        "partition_scope": population_scope,
+        "policy_publication_forbidden": population_scope != "all",
+        "source_diagnostics": diagnostics,
         "source_date": projection.get("target_date"),
         "source_projection_sha256": projection.get("current_projection_sha256")
                                     or projection["artifact_content_sha256"],
@@ -1577,10 +1684,24 @@ def replay_auxiliary_stage(projection, report, *, history_root=None):
             if results else evaluate_auxiliary_stage(projection, **kwargs))
 
 
+def auxiliary_winrate_improves(candidate, incumbent, split):
+    """Same-population PASS win rates; losing a past winner is not a veto."""
+    raw = candidate.get(split + '_pass_win_rate_pct')
+    old_raw = incumbent.get(split + '_pass_win_rate_pct')
+    adjusted = candidate.get(split + '_support_adjusted_win_rate_pct')
+    old_adjusted = incumbent.get(split + '_support_adjusted_win_rate_pct')
+    values = (raw, old_raw, adjusted, old_adjusted)
+    return (all(type(v) in (int, float) and math.isfinite(v) and 0 <= v <= 100 for v in values)
+            and raw > old_raw and adjusted >= old_adjusted)
+
+
 def freeze_auxiliary_selection(path, day, stage):
     """One immutable train choice per source day and scope, before held calls."""
+    if stage.get("policy_publication_forbidden") or stage.get("partition_scope", "all") != "all":
+        raise ValueError("partition_research_not_a_publishable_whole_scope_policy")
     previous = read(path)
     if Path(path).exists() and (not valid(previous) or previous.get('target_date') != day
+                     or previous.get('selection_rank_version') != STAGE_SELECTION_VERSION
                      or previous.get('schema') != 'auxiliary_train_selection_v1'):
         raise ValueError('auxiliary_train_selection_invalid')
     scopes = dict(previous.get('scopes') or {})
@@ -1589,12 +1710,14 @@ def freeze_auxiliary_selection(path, day, stage):
         if scope in scopes or candidate is None:
             continue
         scopes[scope] = dict(policy=candidate['policy'], policy_sha256=digest(candidate['policy']),
+            selection_rank_version=STAGE_SELECTION_VERSION,
             prompt_version=candidate['prompt_version'], machine_policy_sha256=assessment['current_machine_policy_sha256'],
             parent_prompt_version=assessment['parent_prompt_versions'][0],
             parent_soft_sha256=assessment['parent_soft_policy_sha256s'][0],
             train_population_sha256=assessment['train_population_sha256'],
             split_manifest=assessment['split_manifest'])
-    value = sealed(dict(schema='auxiliary_train_selection_v1', target_date=day, scopes=scopes, **AUTHORITY))
+    value = sealed(dict(schema='auxiliary_train_selection_v1', selection_rank_version=STAGE_SELECTION_VERSION,
+                        target_date=day, scopes=scopes, **AUTHORITY))
     write(path, value)
     return scopes
 
@@ -2620,6 +2743,80 @@ def candidate_zero_disposition(rows, blockers, report):
 
 
 
+def upgrade_native_watch_metadata(projection, data_root, day):
+    """Recover only exact native metadata from the unchanged trace generation."""
+    from src.engine.scalping.postclose_entry_validation import source_identifier
+    from src.utils.jsonl_io import iter_jsonl, existing_or_gzip_path
+
+    if not valid(projection):
+        raise ValueError("native_watch_metadata_projection_invalid")
+    if projection.get("native_watch_metadata_contract") == NATIVE_WATCH_METADATA_CONTRACT:
+        return projection
+    root = Path(data_root).resolve()
+    logical = root / "ai_decision_trace" / f"ai_decision_trace_{day}.jsonl"
+    actual = existing_or_gzip_path(logical)
+    rows = [dict(row) for row in projection.get("rows") or []]
+    fields = ("watch_origin", "watch_admission_id", "watch_generation_id")
+    wanted_rows = [row for row in rows if not source_identifier(row.get("scanner_promotion_id"))
+                   and not all(source_identifier(row.get(field)) for field in fields)]
+    wanted = {row.get("evaluation_key") for row in wanted_rows}
+    prior = (projection.get("dependency_signatures") or {}).get(str(logical))
+    signature = [actual.stat().st_size, actual.stat().st_mtime_ns] if actual and actual.exists() else None
+    matches, conflicts = {}, set()
+    status = "metadata_already_complete"
+    if not wanted:
+        return projection
+    if wanted:
+        status = "trace_generation_unavailable_or_changed"
+        if actual and actual.exists() and signature == prior:
+            identity_fields = ("stock_code", "decision_ts", "payload_sha256", "machine_bundle_sha256",
+                               "effective_venue", "session_bucket", *fields)
+            total_bytes = 0
+            for trace in iter_jsonl(actual):
+                total_bytes += len(json.dumps(trace, ensure_ascii=False).encode("utf-8"))
+                if total_bytes > NATIVE_WATCH_METADATA_MAX_SCAN_BYTES:
+                    matches.clear()
+                    status = "native_watch_metadata_trace_scan_budget_exceeded"
+                    break
+                key = trace.get("decision_trace_id")
+                if not source_identifier(key) or key not in wanted:
+                    continue
+                metadata = {field: trace.get(field) for field in identity_fields}
+                if key in matches and matches[key] != metadata:
+                    conflicts.add(key)
+                matches[key] = metadata
+            if signature != [actual.stat().st_size, actual.stat().st_mtime_ns]:
+                raise ValueError("native_watch_metadata_trace_generation_changed")
+            if status != "native_watch_metadata_trace_scan_budget_exceeded":
+                status = "exact_metadata_only"
+    repaired = 0
+    for row in rows:
+        key = row.get("evaluation_key")
+        trace = matches.get(key) or {}
+        if (not source_identifier(key) or key not in wanted or key in conflicts
+            or row.get("source_date") != day
+            or not all(source_identifier(trace.get(field)) for field in fields)
+            or not all(sha256_hex(row.get(field)) and row.get(field) == trace.get(field)
+                       for field in ("payload_sha256", "machine_bundle_sha256"))
+            or not all(isinstance(row.get(field), str) and row.get(field) == trace.get(field)
+                       for field in ("stock_code", "decision_ts"))
+            or not all(isinstance(row.get(field), str) and isinstance(trace.get(field), str)
+                       and row[field].upper() == trace[field].upper()
+                       for field in ("effective_venue", "session_bucket"))
+            or not str(row.get("decision_ts") or "").startswith(day + "T")
+            or any(source_identifier(row.get(field)) and row[field] != trace[field] for field in fields)):
+            continue
+        row.update({field: trace[field] for field in fields})
+        repaired += 1
+    return sealed({**projection, "rows": rows,
+        "native_watch_metadata_contract": NATIVE_WATCH_METADATA_CONTRACT,
+        "native_watch_metadata_upgrade": dict(status=status, repaired_rows=repaired,
+            unresolved_rows=len(wanted_rows) - repaired, conflicting_trace_keys=len(conflicts),
+            original_projection_sha256=projection.get("artifact_content_sha256"),
+            trace_generation_signature=signature, payloads_read=False,
+            economic_inputs_reconstructed=False)})
+
+
 def source_dependency_signatures(data_root, day):
     root = Path(data_root).resolve()
     paths = [root / "ai_decision_trace" / f"ai_decision_trace_{day}.jsonl",
@@ -2663,6 +2860,10 @@ def evaluation_fingerprint(
             ),
             "cost_contract_hash": digest(cost_receipt),
             "promotion_contract_hash": digest(CONTRACT),
+            "partition_scope": projection.get("partition_scope", "all"),
+            "source_diagnostics_contract": source_contract.CONTRACT,
+            "consumer_code_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+            "source_contract_code_sha256": hashlib.sha256(Path(source_contract.__file__).read_bytes()).hexdigest(),
         }
     )
 
@@ -2768,6 +2969,12 @@ def run(
         split_dependency = str(root / "report/entry_split_order_plan" / f"entry_split_order_plan_{day}.json")
         unchanged_raw = (valid(projection) and label_projection_matches and prior.get(label_dependency) == signatures.get(label_dependency)
             and all(prior.get(k) == v for k, v in signatures.items() if k not in (split_dependency, label_dependency)))
+        if unchanged_raw and projection.get("native_watch_metadata_contract") != NATIVE_WATCH_METADATA_CONTRACT:
+            upgraded = upgrade_native_watch_metadata(projection, root, day)
+            if upgraded["artifact_content_sha256"] != projection["artifact_content_sha256"]:
+                write(path.parent / "compact_source_generations" / (projection["artifact_content_sha256"] + ".json"), projection)
+                projection = upgraded
+                write(projection_path, projection)
         stage_fields_missing = (
             projection.get("schema") == "compact_auxiliary_frozen_projection_v1"
             and any("raw_response" not in row or "ai_stage_path" not in row
@@ -2953,9 +3160,10 @@ def run(
         ledger, calls, prompt_calls = None, 0, 0
         execution_errors = []
         prompt_source_gaps = []
-        frozen_selection_path = path.with_suffix('.aux_train_selection.json')
+        frozen_selection_path = path.with_suffix('.aux_train_selection_winrate_v5.json')
         frozen_selection = read(frozen_selection_path) if stage_logic_current(projection) else {}
         if stage_logic_current(projection) and frozen_selection_path.exists() and (not valid(frozen_selection)
+             or frozen_selection.get('selection_rank_version') != STAGE_SELECTION_VERSION
              or frozen_selection.get('target_date') != day
              or frozen_selection.get('schema') != 'auxiliary_train_selection_v1'):
             raise ValueError('auxiliary_train_selection_invalid')

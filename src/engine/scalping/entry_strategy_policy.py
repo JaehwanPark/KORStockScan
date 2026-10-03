@@ -763,7 +763,8 @@ def joint_candidates(parent, scope, *, domains=None, selectors=None, start=0, li
 
 
 MACHINE_SELECTION_VERSION = 'support_adjusted_win_rate_full_population_v6'
-RECOVERY_SELECTION_VERSION = 'missed_entry_recovery_priority_v7'
+LEGACY_RECOVERY_SELECTION_VERSION = 'missed_entry_recovery_priority_v7'
+RECOVERY_SELECTION_VERSION = 'full_population_winrate_priority_v8'
 MACHINE_EVALUATION_BASIS = 'machine_full_population_opportunity_v1'
 
 
@@ -786,7 +787,7 @@ def machine_support_adjusted_win_rate(economy):
 def machine_admission_rank(economy, *, node_count=1, complexity=0):
     # Main entry selection ranks cost-bound target-first wins and unique
     # opportunity support. Paired path EV is retained as separate evidence.
-    if economy.get('selection_score_version') == RECOVERY_SELECTION_VERSION:
+    if economy.get('selection_score_version') == LEGACY_RECOVERY_SELECTION_VERSION:
         recovered = economy.get('recovery_metrics') or {}
         values = [machine_support_adjusted_win_rate(recovered),
                   _number(recovered.get('successful_opportunity_weight')),
@@ -797,6 +798,19 @@ def machine_admission_rank(economy, *, node_count=1, complexity=0):
               _number(economy.get('win_rate_pct')),
               _number(economy.get('selected_opportunity_count'))]
     return tuple(round(v, 10) if v is not None else None for v in values) + (-node_count, -complexity)
+
+
+def machine_winrate_improves(candidate, incumbent):
+    """Strict population win improvement; retention and EV are diagnostics."""
+    new = _number(candidate.get('win_rate_pct'))
+    old = _number(incumbent.get('win_rate_pct'))
+    adjusted = machine_support_adjusted_win_rate(candidate)
+    baseline = machine_support_adjusted_win_rate(incumbent)
+    if new is None or adjusted is None:
+        return False
+    if incumbent.get('selected_opportunity_count') == 0:
+        return new > 0
+    return old is not None and baseline is not None and new > old and adjusted >= baseline
 
 
 def select_report_candidate(source):
@@ -840,6 +854,7 @@ def promotion_errors(candidate, parent, scope, *, existing_publication=False):
             'support_adjusted_win_rate_full_population_v4',
             'support_adjusted_win_rate_full_population_v5',
             MACHINE_SELECTION_VERSION,
+            LEGACY_RECOVERY_SELECTION_VERSION,
         }
         else MACHINE_SELECTION_VERSION
     )
@@ -856,11 +871,11 @@ def promotion_errors(candidate, parent, scope, *, existing_publication=False):
         errors.append('strategy_candidate_evidence_hash_invalid')
     evidence = candidate.get('evidence') or {}
     full_population = candidate.get('evaluation_basis') == MACHINE_EVALUATION_BASIS
-    recovery = expected_score_version == RECOVERY_SELECTION_VERSION
+    recovery = expected_score_version in {RECOVERY_SELECTION_VERSION, LEGACY_RECOVERY_SELECTION_VERSION}
     if recovery and ((evidence.get('train') or {}).get('train_search_sha256')
                      != (evidence.get('evaluation_contract') or {}).get('train_search_sha256')):
         errors.append('strategy_frozen_training_source_mismatch')
-    legacy_full_publication = full_population and existing_publication and expected_score_version not in {MACHINE_SELECTION_VERSION, RECOVERY_SELECTION_VERSION}
+    legacy_full_publication = full_population and existing_publication and expected_score_version not in {MACHINE_SELECTION_VERSION, RECOVERY_SELECTION_VERSION, LEGACY_RECOVERY_SELECTION_VERSION}
     legacy_nonentry_publication = (existing_publication
         and candidate.get('evaluation_basis') == 'machine_nonentry_opportunity_v1')
     if full_population:
@@ -882,6 +897,8 @@ def promotion_errors(candidate, parent, scope, *, existing_publication=False):
         old_rank, new_rank = population_rank(baseline)[:4], population_rank(train_economy)[:4]
         if all(v is not None for v in old_rank) and (any(v is None for v in new_rank) or new_rank < old_rank):
             errors.append('strategy_machine_candidate_rank_below_incumbent')
+        if expected_score_version == RECOVERY_SELECTION_VERSION and not machine_winrate_improves(train_economy, baseline):
+            errors.append('train_machine_winrate_not_improved')
         holdout = evidence.get('holdout') or {}
         if not legacy_full_publication:
             if not holdout:
@@ -889,6 +906,8 @@ def promotion_errors(candidate, parent, scope, *, existing_publication=False):
             else:
                 baseline_holdout = (evidence.get('incumbent_holdout') or {}).get('economics') or {}
                 candidate_holdout = holdout.get('economics') or {}
+                if expected_score_version == RECOVERY_SELECTION_VERSION and not machine_winrate_improves(candidate_holdout, baseline_holdout):
+                    errors.append('holdout_machine_winrate_not_improved')
                 if (baseline_holdout.get('comparable_population_sha256')
                         != candidate_holdout.get('comparable_population_sha256')
                     or baseline_holdout.get('selection_score_version') != expected_score_version
@@ -927,7 +946,7 @@ def promotion_errors(candidate, parent, scope, *, existing_publication=False):
                     or (split == 'holdout' and len(changed_ids) < 3)):
                     errors.append(split + '_machine_support_insufficient')
             if full_population:
-                if recovery:
+                if expected_score_version == LEGACY_RECOVERY_SELECTION_VERSION:
                     recovered = economy.get('recovery_metrics') or {}
                     recovered_ids = recovered.get('opportunity_ids') or []
                     n = _number(recovered.get('selected_opportunity_count'))
@@ -943,9 +962,21 @@ def promotion_errors(candidate, parent, scope, *, existing_publication=False):
                         errors.append(split + '_machine_recovery_support_insufficient')
                     if economy.get('existing_success_retention_rate_pct') not in (None, 100., 100):
                         errors.append(split + '_machine_existing_success_lost')
-                if (economy.get('unevaluated_existing_entry_changes') != []
-                    or economy.get('evaluated_existing_entry_changed_count') != machine_existing_entry_changes(arm)):
+                unknown_changes = economy.get('unevaluated_existing_entry_changes')
+                known_changes = economy.get('evaluated_existing_entry_changed_count')
+                # Unavailable outcomes are excluded identically from the two
+                # arms. They remain explicit diagnostics, not preservation of
+                # every incumbent entry. Reconcile all changed attempts.
+                if (not isinstance(unknown_changes, list)
+                    or any(not isinstance(trace, str) or not trace for trace in unknown_changes)
+                    or len(unknown_changes) != len(set(unknown_changes))
+                    or type(known_changes) is not int
+                    or known_changes + len(unknown_changes) != machine_existing_entry_changes(arm)
+                    or (expected_score_version == LEGACY_RECOVERY_SELECTION_VERSION and unknown_changes)):
                     errors.append(split + '_machine_existing_entries_changed_without_evaluation')
+                if (not existing_publication
+                    and economy.get('comparable_opportunity_count', 0) < (10 if split == 'train' else 3)):
+                    errors.append(split + '_machine_comparable_support_insufficient')
                 if (economy.get('selection_score_version') != expected_score_version
                     or economy.get('evaluation_basis') != MACHINE_EVALUATION_BASIS
                     or not isinstance(economy.get('comparable_population_sha256'), str)

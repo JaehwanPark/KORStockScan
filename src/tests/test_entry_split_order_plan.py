@@ -3377,6 +3377,25 @@ def test_allocator_probe_first_reserves_one_share_and_builds_fill_anchored_resid
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_MAX_BUNDLES", "1")
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_MARKET_FIRST_LEG_ENABLED", "false")
 
+    observed, observation_fields = split_plan.apply_entry_split_order_policy(
+        [{"tag": "normal", "qty": 10, "price": 10000, "tif": "DAY"}],
+        stock={"id": 7, "code": "123456", "strategy": "SCALPING"},
+        latency_gate={**_probe_ready_gate(), "best_ask_at_submit": 10050},
+        now=datetime(2026, 7, 20, 10, 0, tzinfo=timezone(timedelta(hours=9))),
+        observation_only=True,
+    )
+    assert observed == []  # Unknown residual fill prices cannot become orders.
+    assert not split_plan.PROBE_RUNTIME_STATE_PATH.exists()
+    observed_contract = observation_fields['entry_split_order_observation_probe_contract']
+    assert observed_contract['reservation_performed'] is False
+    assert observed_contract['order_authority_forbidden'] is True
+    assert observed_contract['requested_qty'] == 10
+    assert observed_contract['probe_qty'] == 1
+    assert observed_contract['residual_conditional_qty'] == 9
+    assert sum(observed_contract['continuation']['residual_quantities']) == 9
+    assert observed_contract['sha256'] == split_plan._canonical_sha256(
+        {key: value for key, value in observed_contract.items() if key != 'sha256'})
+
     orders, fields = split_plan.apply_entry_split_order_policy(
         [{"tag": "normal", "qty": 10, "price": 10000, "tif": "DAY"}],
         stock={"id": 7, "code": "123456", "strategy": "SCALPING"},

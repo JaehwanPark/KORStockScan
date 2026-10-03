@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import math
@@ -8187,8 +8188,27 @@ def apply_entry_split_order_policy(
             else {}
         )
         if observation_only:
+            # Preserve the issued conditional owner contract without reserving
+            # a live bundle or manufacturing unknown fill-anchored prices.
+            observed_probe = {
+                'schema': 'entry_pre_ai_conditional_probe_observation_v1',
+                'stock_code': stock.get('code'), 'observed_at': now.isoformat(),
+                'requested_qty': total_qty, 'probe_qty': 1,
+                'residual_conditional_qty': total_qty - 1,
+                'reference_best_ask': market_first_reference_price,
+                'continuation': copy.deepcopy(continuation),
+                'timeout_sec': probe_config['timeout_sec'],
+                'max_slippage_bps': probe_config['max_slippage_bps'],
+                'anchor_mode': probe_config['anchor_mode'],
+                'operating_context_sha256': _canonical_sha256(operating_context) if operating_context else None,
+                'reservation_performed': False, 'runtime_effect': False,
+                'order_authority_forbidden': True,
+                'owner_replay_status': 'unsupported_unknown_fill_anchored_prices',
+            }
+            observed_probe['sha256'] = _canonical_sha256(observed_probe)
             return [], {**fields, "entry_split_order_skip_reason":
-                        "unsupported_pre_ai_probe_reservation_scope"}
+                        "unsupported_pre_ai_probe_reservation_scope",
+                        'entry_split_order_observation_probe_contract': observed_probe}
         bundle_id, reservation_reason = _reserve_probe_runtime_bundle(
             stock=stock,
             total_qty=total_qty,

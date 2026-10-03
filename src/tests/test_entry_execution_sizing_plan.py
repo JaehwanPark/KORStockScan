@@ -901,6 +901,13 @@ def test_runtime_pre_ai_producer_freezes_owner_inputs_without_submit(monkeypatch
              'machine_capture_status':'captured','machine_observation_sha256':'c'*64}
     result=handlers._observe_entry_economics_before_ai(stock,'005930',ws,
         exact_payload=exact,assessment={'action':machine_action},capture=receipt,bundle_sha256='a'*64)
+    from src.engine.scalping import auxiliary_source_contract as auxiliary_source
+    assert auxiliary_source.capsule_errors(result['entry_pre_ai_source_capsule']) == []
+    assert result['entry_pre_ai_source_capsule']['identity']['evaluation_attempt_id'] == 'pre-ai-live'
+    assert result['entry_pre_ai_source_append_receipt']['structured_append_succeeded'] is True
+    assert result['entry_pre_ai_source_append_receipt']['capsule_sha256'] == result['entry_pre_ai_source_capsule']['sha256']
+    assert result['entry_economic_capacity_receipt']['cash_orderable_qty_cap'] == 40
+    assert result['entry_economic_capacity_receipt']['kt00011_capacity_source_sha256'] == '9'*64
     assert {k:v for k,v in stock.items() if k != '_machine_observation_revision'} == before
     assert stock['_machine_observation_revision']['digest'] == 'c'*64
     assert requests == [('005930',10020,0,{'source_only':True,
@@ -916,6 +923,7 @@ def test_runtime_pre_ai_producer_freezes_owner_inputs_without_submit(monkeypatch
     raw_event = next(payload for line in logger._event_path(day).read_text().splitlines()
                      if (payload := json.loads(line)).get("stage") in {"entry_ai_economic_plan_observed", "entry_ai_economic_source_gap"})
     cached = sentinel._payload_to_cache_row(raw_event, exclude_summary_stages=True)
+    assert json.loads(raw_event['fields']['entry_pre_ai_source_capsule']) == result['entry_pre_ai_source_capsule']
     assert cached is not None
     assert cached['fields']['machine_revision_schema'] == 'exact_machine_revision_v1'
     assert cached['fields']['machine_revision_parent_sha256'] == ''

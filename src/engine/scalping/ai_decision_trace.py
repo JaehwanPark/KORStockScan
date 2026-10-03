@@ -1221,6 +1221,7 @@ def capture_machine_observation(
     return {
         "machine_capture_status": "redacted_ineligible" if redacted else "captured",
         "machine_observation_sha256": digest,
+        "machine_observation_captured_at": now.isoformat(),
         # This is the frozen decision input, not the earlier feature probe.
         "entry_decision_large_sell_print_detected": (
             exact_payload.get("features", {}).get("large_sell_print_detected")
@@ -2590,6 +2591,12 @@ def record_ai_decision_trace(
             "entry_economic_writer_plan_sha256": merged.get("entry_economic_writer_plan_sha256"),
             "entry_economic_source_status": merged.get("entry_economic_source_status"),
             "entry_economic_source_blocker": merged.get("entry_economic_source_blocker"),
+            "entry_economic_observation_probe_contract": merged.get("entry_economic_observation_probe_contract"),
+            "entry_pre_ai_source_capsule": merged.get("entry_pre_ai_source_capsule"),
+            "entry_pre_ai_source_append_receipt": merged.get("entry_pre_ai_source_append_receipt"),
+            "entry_economic_guard_receipt": merged.get("entry_economic_guard_receipt"),
+            "entry_economic_capacity_blocker": merged.get("entry_economic_capacity_blocker"),
+            "entry_economic_capacity_receipt": merged.get("entry_economic_capacity_receipt"),
             "actual_order_authority": bool(merged.get("actual_order_authority", False)),
             "outcome_label_eligible": not outcome_label_exclusion_reasons,
             "outcome_label_exclusion_reasons": outcome_label_exclusion_reasons,
@@ -2911,6 +2918,17 @@ def record_ai_decision_trace(
             **STORAGE_SECURITY_CONTRACT,
             **OBSERVATION_CONTRACT,
         }
+        from src.engine.scalping.auxiliary_source_contract import capsule, digest as capsule_digest
+        trace_row["auxiliary_source_capsule"] = capsule(
+            {**trace_row, "source_date": target_date,
+             "schema_sha256": trace_row.get("response_schema_sha256"),
+             "system_prompt_sha256": trace_row.get("auxiliary_system_prompt_sha256"),
+             "machine_policy_sha256": merged.get("entry_mechanistic_policy_sha256")},
+            producer="ai_decision_trace.record_ai_decision_trace", clock=trace_row["decision_ts"],
+            references={"pre_ai_capsule": trace_row.get("entry_pre_ai_source_capsule"),
+                "pre_ai_append_receipt": trace_row.get("entry_pre_ai_source_append_receipt"),
+                "raw_response_sha256": capsule_digest({k: v for k, v in trace_row.items() if k.startswith("entry_ai_raw_")}),
+                "response_trace_append_contract": "presence_in_trace_file_is_append_evidence"})
         with _WRITE_LOCK:
             seen = _SEEN_TRACE_IDS.get(target_date)
             if seen is None:

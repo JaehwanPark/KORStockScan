@@ -629,7 +629,8 @@ def _auxiliary_scope_contract(value, report, source_date, scope):
     if source_date < NEW_LOGIC_SOURCE_DATE:
         return []
     errors = []
-    if value.get("selection_rank_version") != "train_top1_frozen_paired_net_ev_holdout_gate_v4":
+    version = value.get("selection_rank_version")
+    if version not in {"train_top1_frozen_paired_net_ev_holdout_gate_v4", paired.STAGE_SELECTION_VERSION}:
         errors.append("auxiliary_selection_version_invalid")
     manifest = value.get("split_manifest") or {}
     try:
@@ -677,6 +678,15 @@ def _auxiliary_scope_contract(value, report, source_date, scope):
             or saved.get("split_manifest") != manifest):
             errors.append("auxiliary_frozen_selection_binding_invalid")
     if value.get("status") == "candidate_selected":
+        if version == paired.STAGE_SELECTION_VERSION:
+            receipt = report.get('auxiliary_train_selection') or {}
+            saved = (receipt.get('scopes') or {}).get(scope) or {}
+            incumbent = (trials or [{}])[0]
+            if any(not paired.auxiliary_winrate_improves(selected, incumbent, part) for part in ('train', 'holdout')):
+                errors.append('auxiliary_selected_winrate_not_improved')
+            if (receipt.get('selection_rank_version') != paired.STAGE_SELECTION_VERSION
+                or saved.get('selection_rank_version') != paired.STAGE_SELECTION_VERSION):
+                errors.append('auxiliary_selection_objective_binding_invalid')
         if (not isinstance(frozen, dict) or selected != frozen
             or value.get("holdout_errors") or not cost_count
             or cost_count < selected.get("train_count", 0) + selected.get("holdout_count", 0)

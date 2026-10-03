@@ -141,7 +141,7 @@ def test_auxiliary_stage_replays_good_pass_and_bad_pass_on_fixed_denominator(mon
     assert scope["status"] == "candidate_selected"
     assert len(scope["candidates"]) <= 33  # parent plus bounded 32-candidate search
     assert scope["holdout_day"] == "2026-09-22"
-    assert scope["selection_rank_version"].startswith("train_paired_net_ev")
+    assert scope["selection_rank_version"] == "train_winrate_improvement_holdout_gate_v5"
     assert scope["axis_train_support_count"]["materiality:REWARD_RISK_WEAK"] == 0
     assert scope["eligible_successful_pass_count"] == 3
     assert scope["selected"]["good_pass_retention"] == 1
@@ -1255,6 +1255,9 @@ def test_compact_json_string_semantics_and_repeated_input_envelopes(tmp_path):
                  "provider_called": True, "provider_actual": "openai", "model": "gpt-5.4-nano",
                  "entry_mechanistic_action": "ENTER_NOW", "semantic_validation_status": "pass",
                  "decision_quality_contract_status": "pass", "entry_ai_risk_verdict": "PASS",
+                 "watch_origin": "MAIN_FIXED_WATCH", "watch_admission_id": "native-watch",
+                 "watch_generation_id": "native-generation",
+                 "entry_economic_observation_probe_contract": "conditional-source-only",
                  "payload_sha256": original_sha, "prompt_sha256": f"prompt-{i}", "request_envelope_sha256": f"env-{i}"}
         traces.append(trace)
         payloads.append({k: trace[k] for k in ["payload_sha256", "prompt_sha256", "request_envelope_sha256"]} | {
@@ -1269,6 +1272,11 @@ def test_compact_json_string_semantics_and_repeated_input_envelopes(tmp_path):
     result = compact.prepare(tmp_path, day)
     assert result["screened_total"] == 2
     assert result["exclusion_counts"] == {}
+    for row in result['rows']:
+        assert row['watch_origin'] == 'MAIN_FIXED_WATCH'
+        assert row['watch_admission_id'] == 'native-watch'
+        assert row['watch_generation_id'] == 'native-generation'
+        assert row['entry_economic_observation_probe_contract'] == 'conditional-source-only'
 
 
 def test_compact_recomputed_owner_economics_and_consumed_holdout(tmp_path):
@@ -2333,6 +2341,69 @@ def test_source_contract_code_upgrade_preserves_exclusions_without_raw_rescan(mo
     assert source['rows'][0]['exclusion_reason']=='exact_stop_distance_missing'
     assert result['metrics']['delta_net_ev_pct'] is None
     assert result['provider_calls_this_run']==0
+
+
+def test_native_watch_metadata_warm_cache_recovers_exact_trace_only(monkeypatch, tmp_path):
+    day = "2026-09-30"
+    row = compact_row()
+    row.update(scanner_promotion_id=None, source_date=day,
+        decision_ts=day + "T09:03:09+09:00", payload_sha256="a" * 64,
+        machine_bundle_sha256="b" * 64, input=None,
+        exclusion_reason="exact_stop_distance_missing", owner_replay=None)
+    trace = {key: row[key] for key in ("stock_code", "decision_ts", "payload_sha256",
+        "machine_bundle_sha256", "effective_venue", "session_bucket")}
+    trace.update(decision_trace_id=row["evaluation_key"], watch_origin="MAIN_FIXED_WATCH",
+        watch_admission_id="native-admission", watch_generation_id="native-generation")
+    trace_path = tmp_path / "ai_decision_trace" / f"ai_decision_trace_{day}.jsonl"
+    trace_path.parent.mkdir(parents=True)
+    trace_path.write_text(json.dumps(trace) + "\n")
+    projection = compact.sealed(dict(rows=[row], screened_total=1,
+        source_manifest_sha256="d" * 64, source_tuning_allowed=True,
+        exclusion_counts={"exact_stop_distance_missing": 1}, **compact.AUTHORITY))
+    monkeypatch.setattr(compact, "prepare", lambda *_: projection)
+    compact.run(data_root=tmp_path, day=day, execute=False)
+    monkeypatch.setattr(compact, "prepare", lambda *_: pytest.fail("warm metadata repair must not read payloads"))
+    result = compact.run(data_root=tmp_path, day=day, execute=False)
+    upgraded = compact.read(compact.report_path(tmp_path, day).with_suffix(".source.json"))
+    assert upgraded["rows"][0]["watch_admission_id"] == "native-admission"
+    assert upgraded["native_watch_metadata_upgrade"]["repaired_rows"] == 1
+    assert upgraded["rows"][0]["input"] is None
+    assert upgraded["rows"][0]["exclusion_reason"] == "exact_stop_distance_missing"
+    assert result["provider_calls_this_run"] == 0
+
+
+@pytest.mark.parametrize("damage", ["payload_sha256", "stock_code", "conflict", "generation", "budget", "evaluation_key"])
+def test_native_watch_metadata_upgrade_rejects_unbound_trace(tmp_path, monkeypatch, damage):
+    day = "2026-09-30"
+    row = compact_row()
+    row.update(scanner_promotion_id=None, source_date=day,
+        decision_ts=day + "T09:03:09+09:00", payload_sha256="a" * 64,
+        machine_bundle_sha256="b" * 64)
+    if damage == "evaluation_key":
+        row["evaluation_key"] = "None"
+    trace = {key: row[key] for key in ("stock_code", "decision_ts", "payload_sha256",
+        "machine_bundle_sha256", "effective_venue", "session_bucket")}
+    trace.update(decision_trace_id=row["evaluation_key"], watch_origin="MAIN_FIXED_WATCH",
+        watch_admission_id="native-admission", watch_generation_id="native-generation")
+    if damage in ("payload_sha256", "stock_code"):
+        trace[damage] = "wrong"
+    path = tmp_path / "ai_decision_trace" / f"ai_decision_trace_{day}.jsonl"
+    path.parent.mkdir(parents=True)
+    contents = [trace]
+    if damage == "conflict":
+        contents.append({**trace, "watch_generation_id": "other"})
+    path.write_text("".join(json.dumps(value) + "\n" for value in contents))
+    signatures = compact.source_dependency_signatures(tmp_path, day)
+    if damage == "generation":
+        signatures[str(path)] = [0, 0]
+    projection = compact.sealed(dict(rows=[row], dependency_signatures=signatures))
+    if damage == "budget":
+        monkeypatch.setattr(compact, "NATIVE_WATCH_METADATA_MAX_SCAN_BYTES", 1)
+    upgraded = compact.upgrade_native_watch_metadata(projection, tmp_path, day)
+    assert "watch_admission_id" not in upgraded["rows"][0]
+    assert upgraded["native_watch_metadata_upgrade"]["repaired_rows"] == 0
+    if damage == "budget":
+        assert upgraded["native_watch_metadata_upgrade"]["status"] == "native_watch_metadata_trace_scan_budget_exceeded"
 
 
 def test_source_contract_upgrade_reclassifies_historical_response_failure_without_raw_rescan(monkeypatch, tmp_path):

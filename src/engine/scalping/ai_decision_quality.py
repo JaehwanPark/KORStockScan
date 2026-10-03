@@ -255,6 +255,7 @@ ENTRY_QUALITY_LABEL_SCHEMA = "entry_quality_label_v1"
 ENTRY_QUALITY_REQUIRED_NET_EDGE_PCT = 0.10
 ENTRY_QUALITY_CHECKPOINTS_SEC = (30, 60, 180, 300)
 ENTRY_QUALITY_PRIMARY_WINDOW_SEC = 180
+ENTRY_QUALITY_OUTCOME_WINDOW_SEC = 600
 ENTRY_QUALITY_MAX_CADENCE_GAP_SEC = 90
 ENTRY_QUALITY_NEAR_STOP_RATIO = 0.80
 PROBE_RISK_CONTRACT_VERSION = "bounded_probe_recovery_risk_v1"
@@ -1933,6 +1934,7 @@ def _entry_quality_path_metrics(
         "label_schema": ENTRY_QUALITY_LABEL_SCHEMA,
         "required_net_edge_pct": ENTRY_QUALITY_REQUIRED_NET_EDGE_PCT,
         "primary_window_sec": ENTRY_QUALITY_PRIMARY_WINDOW_SEC,
+        "outcome_window_sec": ENTRY_QUALITY_OUTCOME_WINDOW_SEC,
         "checkpoint_seconds": list(ENTRY_QUALITY_CHECKPOINTS_SEC),
         "path_authority": "counterfactual_completed_bar_touch_not_actual_fill",
         "runtime_effect": False,
@@ -1956,6 +1958,8 @@ def _entry_quality_path_metrics(
             "label_reason": "exact_stop_distance_missing_or_invalid",
         }
 
+    window = [row for row in window
+              if decision_ts < row["_timestamp"] <= decision_ts + timedelta(seconds=ENTRY_QUALITY_OUTCOME_WINDOW_SEC)]
     gross_target_pct = round(
         conservative_execution_cost_pct + ENTRY_QUALITY_REQUIRED_NET_EDGE_PCT, 10
     )
@@ -2107,7 +2111,8 @@ def _entry_quality_path_metrics(
             entry_quality_label = "CLEAN_FAST_LOSS_OR_ADVERSE"
             label_reason = "exact_stop_reached_before_net_target_in_primary_window"
         else:
-            label_reason = "exact_stop_first_outside_primary_window"
+            entry_quality_label = "LOSS_AFTER_PRIMARY_WINDOW"
+            label_reason = "exact_stop_reached_before_net_target_after_primary_window"
     elif first_hit == "net_target_first":
         if (
             stop_proximity_ratio is not None
@@ -4523,6 +4528,7 @@ def _same_route(label: dict[str, Any], price: dict[str, Any]) -> bool:
 def _correlation(
     label: dict[str, Any], lifecycle_rows: list[dict[str, Any]]
 ) -> dict[str, Any]:
+    from src.engine.scalping.postclose_entry_validation import source_identifiers
     label_code = _normalize_stock_code(label.get("stock_code"))
     decision_ts = _parse_ts(label.get("decision_ts"))
     label_stage = _stage(label.get("decision_stage"))
@@ -4539,8 +4545,9 @@ def _correlation(
             "scanner_promotion_id",
             "evaluation_attempt_id",
         )
-        if label.get(key) not in (None, "", "-")
+        if key != "scanner_promotion_id" and label.get(key) not in (None, "", "-")
     }
+    identifiers.update(source_identifiers(label.get("scanner_promotion_id")))
     matched = []
     for row in lifecycle_rows:
         row_code = _normalize_stock_code(row.get("stock_code"))
@@ -4570,8 +4577,9 @@ def _correlation(
                 "scanner_promotion_id",
                 "evaluation_attempt_id",
             )
-            if row.get(key) not in (None, "", "-")
+            if key != "scanner_promotion_id" and row.get(key) not in (None, "", "-")
         }
+        values.update(source_identifiers(row.get("scanner_promotion_id")))
         if row_trace_id:
             values.add(row_trace_id)
         if identifiers and identifiers.intersection(values):
@@ -4611,13 +4619,10 @@ def _correlation(
             if row.get("broker_order_no") not in (None, "", "-")
         }
     )
-    scanner_promotion_ids = sorted(
-        {
-            str(row.get("scanner_promotion_id"))
-            for row in matched
-            if row.get("scanner_promotion_id") not in (None, "", "-")
-        }
-    )
+    scanner_promotion_ids = sorted({
+        value for row in matched
+        for value in source_identifiers(row.get("scanner_promotion_id"))
+    })
     evaluation_attempt_ids = sorted(
         {
             str(row.get("evaluation_attempt_id"))

@@ -11,6 +11,7 @@ import tempfile
 
 KST = timezone(timedelta(hours=9))
 NEW_LOGIC_SOURCE_DATE = "2026-10-02"
+OPPORTUNITY_IDENTITY_VERSION = "native_scanner_or_fixed_watch_v2"
 
 
 class FrozenRows(Sequence):
@@ -47,16 +48,36 @@ class FrozenRows(Sequence):
         self._file.close()
 
 
+def source_identifier(value):
+    """Keep native string identities; null spellings are never provenance."""
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return (value if value.lower() not in {
+        "", "-", "none", "null", "nan", "n/a", "unknown", "undefined",
+    } else None)
+
+
+def source_identifiers(value):
+    values = value if isinstance(value, (list, tuple, set)) else [value]
+    return sorted({identity for item in values if (identity := source_identifier(item))})
+
+
 def opportunity_identity(row):
-    values = tuple(row.get(key) for key in (
+    values = tuple(source_identifier(row.get(key)) for key in (
         "source_date", "stock_code", "effective_venue", "session_bucket",
-        "scanner_promotion_id",
     ))
-    if any(not isinstance(value, str) or not value for value in values):
+    if row.get("watch_origin") == "MAIN_FIXED_WATCH":
+        lineage = tuple(source_identifier(row.get(key)) for key in (
+            "watch_origin", "watch_admission_id", "watch_generation_id",
+        ))
+    else:
+        lineage = (source_identifier(row.get("scanner_promotion_id")),)
+    if any(value is None for value in (*values, *lineage)):
         raise ValueError("opportunity_lineage_missing")
     if datetime.fromisoformat(values[0]).date().isoformat() != values[0]:
         raise ValueError("opportunity_date_invalid")
-    return values
+    return (*values, *lineage)
 
 
 def decision_time(row):
