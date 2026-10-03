@@ -247,7 +247,7 @@ def build_postclose_done_controller(
                 report["postclose_stage_status"]["postclose_all_active_stages_complete"] = False
             report["blocked_reasons"] = [
                 *report["blocked_reasons"],
-                f"summary_handoff_final_controller_reseal_failed:{type(exc).__name__}",
+                f"summary_handoff_final_controller_reseal_failed:{type(exc).__name__}:{exc}",
             ]
             status = report["status"]
             serialized = json.dumps(report, ensure_ascii=False, indent=2) + "\n"

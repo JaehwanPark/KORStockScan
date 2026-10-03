@@ -35,4 +35,6 @@ KRX 정규7,069행과 기존 정확 보조 응답을 재사용했다. canonical 
 
 운영 점검에서 overview가 유효 OFF 에피소드 연구를 결손으로 처리하고 격리 준비물을 인식하지 않는 결함을 추가 보완한다. 현재 원천일·strict/controller·선택 release를 모두 재검증한 준비물만 수용하며 미래 live bootstrap을 만들지 않는다. 이 보완은 별도 리뷰·검사 후 Main/분석 경로에 배포하고, 코드가 동일한 위젯/수집 경로의 실제 PID 결속을 유지한다.
 
+후속 검증에서 controller output 변경이 먼저 보고되어 summary input 변경이 가려지고, 실패한 최종 재결속이 stage receipt를 먼저 변경하는 결함을 확인했다. 입력·선행 세대를 쓰기 전에 별도로 검증하고 실패 이유를 controller에 보존했다. 변경된 입력으로 재결속할 때 원 영수증을 그대로 보존하는 회귀를 추가했다. 관련115 PASS. producer 복구 뒤 native summary stage를 먼저 갱신한 후 전체 최종화를 실행한다.
+
 통합 커밋·immutable release 배포, 독립 systemd 경로와 실제 PID 확인,10/2 장후 재생성 및10/6 준비 검증을 이어 실행한다. 결과 receipt는 `tmp/postclose-outcome-readiness-closure-20261003/`와 `data/runtime/startup_readiness/2026-10-03/postclose_outcome_readiness/`에 보존한다. 이 문서의 현재 코드 검증은 운영 종결·미래 PREOPEN/PID를 대신하지 않는다.

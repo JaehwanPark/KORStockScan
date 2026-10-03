@@ -985,6 +985,27 @@ def test_summary_handoff_reseals_verified_final_controller(stage_environment):
         h.reseal_summary_handoff_for_final_controller(report, day, controller)
 
 
+def test_final_controller_reseal_preserves_receipt_when_summary_inputs_changed(stage_environment):
+    h, day, report, run, _produce = stage_environment
+    assert run('summary_handoff')['status'] == 'succeeded'
+    receipt_path = h.stage_path(report, day, 'summary_handoff')
+    original = receipt_path.read_bytes()
+    assert run('legacy_machine_report')['status'] == 'succeeded'
+    controller = h.stage_artifacts(report, day, 'summary_handoff')[
+        'postclose_done_controller']
+    controller.write_text(json.dumps({
+        'date': day, 'status': 'done',
+        'whole_native_chain_done_claimed': True,
+        'final_verifier_status': 'pass',
+    }))
+    assert h.stage_receipt_issues(report, day, 'summary_handoff') == [
+        'summary_handoff:output_generation_changed'
+    ]
+    with pytest.raises(ValueError, match='input_generation_changed'):
+        h.reseal_summary_handoff_for_final_controller(report, day, controller)
+    assert receipt_path.read_bytes() == original
+
+
 def test_committed_label_intake_binds_payload_and_rejects_partial_file(stage_environment):
     h, day, report, run, produce = stage_environment
     payload = report.parent / 'ai_decision_payloads' / f'ai_decision_payloads_{day}.jsonl'

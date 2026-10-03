@@ -1049,6 +1049,16 @@ def reseal_summary_handoff_for_final_controller(report_dir, day, controller_path
                 or controller.get('whole_native_chain_done_claimed') is not True
                 or controller.get('final_verifier_status') != 'pass'):
             raise ValueError('summary_handoff:final_controller_not_verified')
+        # Output drift is reported before input drift by stage_receipt_issues.
+        # Validate the consumed generation before changing the saved receipt.
+        # A refreshed controller cannot make an old summary computation current.
+        prerequisites = {s: str(stage_path(report_dir, day, s))
+                         for s in STAGE_REGISTRY['summary_handoff'][0]}
+        if value.get('prerequisite_receipts') != _stage_sources(prerequisites):
+            raise ValueError('summary_handoff:prerequisite_generation_changed')
+        if value.get('input_sources') != _stage_sources(
+                stage_input_paths(report_dir, day, 'summary_handoff')):
+            raise ValueError('summary_handoff:input_generation_changed')
         sources = _stage_sources(expected)
         if not sources['postclose_done_controller']['sha256']:
             raise ValueError('summary_handoff:final_controller_missing')

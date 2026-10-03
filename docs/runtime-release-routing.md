@@ -66,6 +66,8 @@ Restoring a cron backup is appropriate only after checking for subsequent unrela
 
 The postclose overview recognizes a fully rechecked isolated preparation for the same source date as `isolated_prepared_next_preopen`. This reports next-session readiness with `day_of_activation_required=true` and `actual_pid_consumed=false`; it creates no live bootstrap. A sealed `explicit_schedule_disabled` Episode research receipt satisfies the disabled research handoff without requiring an auto-expansion policy or enabling Episode research. Missing, stale or unverified OFF receipts still fail the handoff.
 
+The final controller reseal requires the summary stage's consumed input and prerequisite generations to remain current before writing its receipt. After producer recovery changes those generations, refresh the native `summary_handoff` stage before whole-chain finalization. A changed controller output alone cannot refresh a stale summary computation.
+
 Source review and dry-run routes do not prove economic improvement or validate unfinished adaptive exit. Actual day-specific candidate/env/activation, operator overrides, runtime verification, KRX/NXT authority, quota and broker guards remain owned by the existing PREOPEN/launcher/policy contracts. Current source selection, actual PID consumption and natural trade/economic evidence must be reported separately.
 
 ## Separately authorized machine supplement (2026-09-10)
