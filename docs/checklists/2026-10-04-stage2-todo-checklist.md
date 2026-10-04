@@ -22,11 +22,11 @@
 
 ## 실행 항목
 
-- [ ] `[IntegratedDeploymentDiskCleanup1004] 전체 작업본 통합 배포·다음세션 준비·검증된 사본 정리` (`Due: 2026-10-04`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: RuntimeStability`)
+- [x] `[IntegratedDeploymentDiskCleanup1004] 전체 작업본 통합 배포·다음세션 준비·검증된 사본 정리` (`Due: 2026-10-04`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: RuntimeStability`)
   - Source: 사용자 전체 작업본 통합 배포·정상기동 가능여부 재점검·디스크 정리 지시, [통합 실행 기록](../audits/integrated-deployment-and-disk-cleanup-review-2026-10-04.md), [release routing](../runtime-release-routing.md).
   - Acceptance: 모든 변경 파일 census·통합 리뷰/보완·표적 회귀·compile/location/diff/link/parser, 통합 commit·clean immutable release·selector 원자 전환·예약 owner 경로·새 release exact10/6 isolated 준비/full 검증·Main/Widget/Episode 정책/타이머/PID·격리 대사, 현재/직전/서비스/원천/증거/롤백 보호·삭제 manifest/archive ref·사후 route/hash/free-space 검증.
   - Boundary: 코드 배포·격리 준비·read-only 가동 점검과 검증된 불필요 사본 삭제. 매매 프로세스 기동·재기동/주문·새 정책 선택·API/provider/수집 확대·격리해제 없음. 독립 Widget/Episode의 변경 없는 live 소비 경로와 pin/custody는 보존하며 준비·실제 PID·경제성을 구분한다.
-  - 진행: 최초63파일 intake·통합회귀의 역사 kernel fixture 결함 보완, native 소비 검증은 그대로 유지하고 원 SHA의 Git byte 사본으로 fixture를 격리했다. 배포/준비/삭제 결과는 통합 실행 기록에 후속 기재한다.
+  - 완료: 전체64파일 통합commit9c0c0632·1,006tests/물리release209tests PASS·compile/location/bash/diff/parser, clean 불변release 선택과 실제 장후2unit pin 보완·exact10/6 isolated 준비/full 계약PASS. Main/Widget/Episode loader·124owner·122Episode unit/366pins·125timer대사, 현재WidgetPID3137231/e6 startup PASS·61baseline/58격리제외·3격리유지. 98정책/handoff seal불변·원가설/kernel bytes불변이며 장전계약은아래승인된release 경로세대로이전했다. 21worktree와closed pytest2개삭제·archive refs/4고유source-log 사본복구검증, 순가용+1.81GB·등록56→새release1추가→36. 실제당일PID/성과는미도래이며 매매기동/재기동/API/provider/정책선택/주문0. 상세는통합실행기록과삭제manifest다.
 
 - [x] `[SourceRepairNextSessionReview1004] 원천 수리 반복리뷰·다음세션 Main/Widget/Episode 준비 재점검` (`Due: 2026-10-04`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: RuntimeStability`)
   - Source: 사용자반복리뷰/다음영업일정상가동재점검지시, [재리뷰·준비검증](../audits/source-repair-repeat-review-and-next-session-readiness-2026-10-04.md), [선행준비계획](../proposals/samsung-premarket-forward-validation-and-source-release-preparation-plan-2026-10-04.md).
@@ -51,7 +51,7 @@
   - Acceptance:10/6이후 자연원천의exact parent/canonical/native/route/epoch/cost/label/원guard와kernel 검증, frozen두가설의Main 원binary/별도가격CF 소비 evaluator 구현·리뷰/회귀, 동일population parent 대비승률·비용·미확정 비교. 최초3적격날짜 한도·각binary3/독립2날짜 연구gate·parentempty 비교미식별·성공보존veto없음·조건재선정없음.
   - Boundary: 새tmp generation의오프라인 연구. source없음은waiting, canonical/route 결손은excluded/source_gap, parent/kernel변경은replan. archive CF는Main native/실현PnL을대체하지 않는다. 연구gate와정식publisher/운영경제성/runtime bridge를분리하며 실제매매/수집/배포/재기동권한없음.
   - 준비이력: `tmp/samsung-premarket-forward-preparation-20261004/final-v2-cold/source-inventory.json`의4경로부재·`waiting_new_source_date`였다. 기존정규장 `SamsungFrozenCandidateValidation1006`과별도소유다.
-  - 현재: 반복리뷰후 `tmp/source-review-next-session-readiness-20261004/forward-replanned-cold/frozen-contract.json`의40f567d0 계약을소비한다. 원parent/두가설/조건/비용/기간/미래3날짜한도동일·helper/validator kernel재검토세대이며458ce71a는역사receipt로보존한다. 원천4경로는여전히waiting이고새날짜성과/정식candidate 미검증이다.
+  - 현재: 통합배포후 `tmp/integrated-deployment-disk-cleanup-20261004/forward-release-bound/frozen-contract.json`의7a8ba145 계약을선택release 코드로소비한다. 원parent/두가설/조건/비용/기간/미래3날짜한도와kernel bytes는40f567d0 계약과동일하며차이는승인된불변release의물리코드경로뿐이다. 40f567d0/458ce71a는역사receipt로보존한다. 원천4경로는여전히waiting이고새날짜성과/정식candidate 미검증이다.
 
 - [x] `[EntrySetupSourceRepair1004] Entry setup family/state producer 수리·별도 역사 복구 소비 검증` (`Due: 2026-10-04`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: MainEntry`)
   - Source: [수리계획](../proposals/entry-setup-family-state-source-repair-plan-2026-10-04.md), 사용자 다음액션 실행 지시 및 선행 확인연구 리뷰§7.
