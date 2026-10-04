@@ -4773,16 +4773,25 @@ def _load_machine_observation_rows_uncached(
     independent_machine: bool = False, minimum_source_date: str = '2026-09-13',
     completed_price_fetcher: Callable[[str, str], tuple[list[dict], dict]] | None = None,
     completed_price_as_of: datetime | None = None,
+    source_setup_repairs: dict[str, dict] | None = None,
 ) -> tuple[list[dict], dict]:
-    """Reuse the payload archive and existing path labeler, with no AI calls."""
+    """Reuse archives with no AI calls; repair receipts are explicit offline opt-in.
+
+    The public cached loader never supplies repairs. Original capture hashes,
+    decisions and label inputs remain unchanged in this uncached repair lane.
+    """
     from src.engine.scalping import ai_decision_quality as quality
     from src.engine.scalping.entry_setup_evidence import validate_entry_setup_evidence
     from src.engine.scalping.ai_decision_trace import _json_bytes
     from src.engine.scalping.microstructure_reaction_context import bind_machine_microstructure_source, summarize_machine_capture_population
 
+    if source_setup_repairs and (not independent_machine or completed_price_fetcher is not None
+                                or completed_price_as_of is not None):
+        raise ValueError("source_setup_repairs_require_offline_independent_no_fetcher")
     result, counts = [], Counter()
     capture_populations = []
     completed_price_receipts = []
+    repaired_setups, repair_proofs = {}, {}
     refresh_floor = _refresh_floor(target_date)
     for path in sorted((data_root / "ai_decision_payloads").glob("*.jsonl*")):
         match = re.search(r"(\d{4}-\d{2}-\d{2})\.jsonl", path.name)
@@ -4802,6 +4811,11 @@ def _load_machine_observation_rows_uncached(
         ]
         if not captures:
             continue
+        archive_sha = None
+        if source_setup_repairs and any(
+                c.get("machine_observation_sha256") in source_setup_repairs for c in captures):
+            from src.engine.scalping.entry_setup_source_repair import file_sha256
+            archive_sha = file_sha256(path)
         by_day = defaultdict(list)
         for capture in captures:
             counts["captured"] += 1
@@ -4832,10 +4846,27 @@ def _load_machine_observation_rows_uncached(
                         ("broker_order_forbidden", True),
                     )
                 )
-                or validate_entry_setup_evidence(evidence)
             ):
                 counts["invalid_capture"] += 1
                 continue
+            if validate_entry_setup_evidence(evidence):
+                trace = capture["machine_observation_sha256"]
+                receipt = (source_setup_repairs or {}).get(trace)
+                if receipt is not None:
+                    from src.engine.scalping.entry_setup_source_repair import consume_receipt
+                    try:
+                        repaired_setups[trace], repair_proofs[trace] = consume_receipt(
+                            capture, receipt, source_path=path, source_sha256=archive_sha)
+                        counts["source_setup_repair_accepted"] += 1
+                    except (ValueError, TypeError, KeyError, AttributeError, OSError) as exc:
+                        counts["source_setup_repair_rejected"] += 1
+                        reason = re.sub(r"[^a-z0-9_]+", "_", str(exc).lower())[:96]
+                        counts["source_setup_repair_rejected_" + reason] += 1
+                        counts["invalid_capture"] += 1
+                        continue
+                else:
+                    counts["invalid_capture"] += 1
+                    continue
             by_day[day].append(capture)
         capture_populations.append(summarize_machine_capture_population([capture for observations in by_day.values() for capture in observations]))
         for day, observations in by_day.items():
@@ -5075,7 +5106,8 @@ def _load_machine_observation_rows_uncached(
                     counts["path_or_cost_missing"] += 1
                     if not independent_machine:
                         continue
-                evidence = dict(capture["source"]["setup_evidence"])
+                evidence = dict(repaired_setups.get(capture["machine_observation_sha256"],
+                                                    capture["source"]["setup_evidence"]))
                 if "strategy_raw_input" not in evidence:
                     from src.engine.scalping.entry_strategy_policy import digest as strategy_digest
                     raw = capture["source"].get("exact_payload")
@@ -5280,6 +5312,9 @@ def _load_machine_observation_rows_uncached(
                     }
                 )
                 counts["evaluable" if result[-1]["entry_quality_contract_valid"] else "retained_without_economic_outcome"] += 1
+                proof = repair_proofs.get(capture["machine_observation_sha256"])
+                if proof is not None:
+                    result[-1]["source_setup_repair"] = proof
     population = {
         key: sum(part[key] for part in capture_populations)
         for key in ("verified_capture_count", "unique_verified_capture_count", "duplicate_capture_collapsed_count")

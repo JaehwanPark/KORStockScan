@@ -87,6 +87,45 @@ def _recovery_analysis(*, clean=False, recovery=False, source_mode="fresh_dual")
     }
 
 
+@pytest.mark.parametrize("micro_price", [0.0, 0.05])
+def test_local_breakout_preserves_discovery_and_micro_confirmation_grammar(micro_price):
+    exact = _exact_analysis(structural_edge_floor=False, trusted_supportive_trigger=False)
+    exact["completed_structure"] = {
+        "phase": "range_or_no_setup",
+        "structure_contract_version": "entry_local_breakout_completed_v1",
+        "local_breakout": {"status": "no_confirmed_breakout", "recheck_required": True},
+    }
+    exact["executable_liquidity"] = {"state": "supportive", "execution_cost_state": "low"}
+    evidence = build_entry_setup_evidence(
+        exact_payload={"current": {"price": 15790},
+                       "features": _micro_features(price_change_10t_pct=micro_price)},
+        exact_analysis=exact, recovery_analysis=_recovery_analysis(),
+    )
+    assert evidence["setup_family"] == ("MICRO_RECOVERY" if micro_price else "NO_VALID_SETUP")
+    assert evidence["setup_state"] == ("WAIT_CONFIRMATION" if micro_price else "UNCONFIRMED")
+    assert evidence["recheck_reasons"] == [
+        "MICRO_PRICE_RESPONSE_RECHECK" if micro_price else "SETUP_DISCOVERY_RECHECK"]
+    assert evidence["local_breakout"]["recheck_required"] is True
+    assert validate_entry_setup_evidence(evidence) == []
+    decision = mechanistic_entry_policy_decision(evidence)
+    assert (decision["action"], decision["reason"]) == ("RECHECK", "local_breakout_confirmation_required")
+
+
+@pytest.mark.parametrize("source_status,adverse,expected", [
+    ("stale", False, "INSUFFICIENT"), ("pass", True, "INVALID")])
+def test_local_breakout_never_replaces_invalid_or_insufficient_source(source_status, adverse, expected):
+    exact = _exact_analysis(structural_edge_floor=False, trusted_supportive_trigger=False,
+                            adverse_distribution_no_edge=adverse)
+    exact["source_quality"]["status"] = source_status
+    exact["completed_structure"] = {"local_breakout": {"recheck_required": True}}
+    evidence = build_entry_setup_evidence(exact_payload={"current": {"price": 10000}},
+        exact_analysis=exact, recovery_analysis=_recovery_analysis())
+    assert evidence["setup_state"] == expected
+    assert "TRIGGER_CONFIRMATION_RECHECK" not in evidence["recheck_reasons"]
+    assert validate_entry_setup_evidence(evidence) == []
+    assert mechanistic_entry_policy_decision(evidence)["action"] == "BLOCK"
+
+
 def test_mechanistic_flow_observation_groups_predecision_shape_without_outcome():
     exact = {
         "schema": "exact_payload_analysis_v1",

@@ -13,6 +13,12 @@
 
 ## 실행 항목
 
+- [x] `[SamsungContinuousRecoverySourceResearch1003] 삼성전자 종일 회복 구간·체결 특징 복원·연속 시장 원천 연구` (`Due: 2026-10-03`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: MainEntry`)
+  - Source: [연구 실행계획](../proposals/samsung-continuous-recovery-source-research-plan-2026-10-03.md), 사용자 다음 연구 계획·실행 지시.
+  - Acceptance: 보유9/29·9/30·10/2 원천 SHA, 과거 정보 기반 구간, 원천 유효성과 adverse 분리, 같은 route/epoch tick·depth 순서 검증, 학습 고정→후단 ablation·Main parent 비교, 리뷰/수정/표적 회귀·문서 parser. 성공100%/80% 보존 veto 없음. 독립 후단·정식 native 지원수·실현 손익을 합성하지 않음.
+  - Boundary: offline 연구 산출물만 생성. 현재 정책·수집·provider·배포·재기동 변경 없음.10/6 기존 자연 수용/PREOPEN owner 유지.
+  - 완료: [최종 연구 리뷰](../audits/samsung-continuous-recovery-source-research-review-2026-10-03.md). Main519·보관 체결489,445/호가334,124행 연결,53개 과거 정보 기반 연구 구간,24개 fold/방식 및16개 특징 기여도 비교. 추가 체결 특징의 후단 우위는 미입증,09:43 기존 성공 재확인 및 native 지원수 합성0. 반복 리뷰/보완·80 tests·compile/diff·문서 parser, 원천27/kernel7·정책/인계98 hash 보존. source-02/run-02 확정, 정책 발행·배포·재기동0.
+
 - [x] `[PostcloseOutcomeReadinessClosure1003] 승패 시간 비대칭·미평가 변경 탈락 보완, 통합 배포·재생성·다음 기동 준비 검증` (`Due: 2026-10-03`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: RuntimeStability`)
   - Source: [실행계획](../proposals/postclose-outcome-readiness-closure-plan-2026-10-03.md), 최신 사용자 배포·기동 승인.
   - Acceptance: 동일10분 CF 목표/손절 비교, 미평가 원천 제외와 전체 후보 탈락 분리, 리뷰→보완→회귀; immutable release와 독립 service route/PID, 정확10/2 재생성→tower/checklist/strict/controller→10/6 준비 검증; 삼성005930/그 외의 실제 loader 정책/hash 구분. 새 정책 부재는 검증된 carry, 에피소드 연구 OFF는 OFF receipt로 표시한다.

@@ -1485,8 +1485,14 @@ def build_entry_setup_evidence(
 
     if (_as_dict(completed_structure.get("local_breakout")).get("recheck_required") is True
             and setup_state not in {"INVALID", "INSUFFICIENT"}):
-        setup_state = "WAIT_CONFIRMATION"
-        recheck_reasons.append("TRIGGER_CONFIRMATION_RECHECK")
+        # A local trigger wait cannot establish a supported setup family.
+        # Keep each family's confirmation grammar; the machine still checks
+        # local_breakout.recheck_required after hard BLOCKs, before entry.
+        if setup_family == "NO_VALID_SETUP":
+            recheck_reasons.append("SETUP_DISCOVERY_RECHECK")
+        elif setup_family != "MICRO_RECOVERY":
+            setup_state = "WAIT_CONFIRMATION"
+            recheck_reasons.append("TRIGGER_CONFIRMATION_RECHECK")
         contradicting_facts.append("trigger_confirmation_missing")
         corroborated_risk_codes.append("CONFIRMATION_MISSING")
 
