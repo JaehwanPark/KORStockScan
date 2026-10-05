@@ -70,4 +70,10 @@ H2는 원5초 TTL 내 같은 epoch의 직전 적격 capture에서 pressure<60, �
 
 ## 7. 발행·배포·장전 준비
 
-통합 commit·불변 release·10/6 지정 generation·strict/DONE/prepared의 마지막 readback은 후속 실행 완료 후 여기에 기록한다. Main의10/6 실제 activation/PID 소비는 `DirectFamilyPreopenPolicyHandoff`, 적용 후 비교는 `NonSamsungMachineForwardComparison1006`, Widget/Episode 실제 기동은 해당 기존 owner가 소유한다.
+- 코드 통합 `ee4b19db`, stage 표기 보완 `875de2b6`, 실제 dated 이력 보완 `3d0e5106`를 커밋했다. 선택된 불변 release는 `designated-machine-policy-20261005-3d0e5106`, 전체 commit은 `3d0e5106f6a9ce708d1701835198da46d3a831c5`다. 두 유휴 장후 분석 service도 이 경로로 대사했고 즉시 재기동하지 않았다.
+- 10/6 신규 지정 bundle은 `8fb91f19722f0eb3ebd71066e3813f0f892da23ab960604a5a5298427c437f7d`, KRX machine component는 `6b6fb2040270dab41a05e2a84bda0baed9c06714aa0b587997b2982a87df2b4a`다. 대상은 비삼성·KRX 정규장이다. 원 자동 보고서는 `candidate_selected=false`, stage는 `operator_designated`, 독립 검증은 `not_observed`다.
+- 원10/6 세대 `3c500f6a…`의 JSON bytes·원천·5단계 이력을 보관했다. 동일 요청 재실행은 `already_staged`, 원 장후 보고서 재소비는 `operator_designation_preserved`다. 현재 운영 포인터 `6785d52e…`는 불변이며9개 scope의 보조판정, KRX 정규장 외 machine도 불변이다. 삼성은519관측 행동/guard 차이0 근거를 유지했다.
+- source10/2 machine stage·summary stage succeeded, strict **PASS·issues0**, controller **DONE·whole_native_chain**,10/6 준비 **prepared_verified**를 확인했다. 준비 시각은10/5 16:09:42 KST, manifest content hash는 `fdeaf06c1b71a121bf84cc0cf77a0da7d387e946bee8bbefa972ba173dac8e43`다. [발행 결과](../../tmp/designated-machine-execution-20261005/designation-result.json), [최종 closure](../../tmp/designated-machine-execution-20261005/closure.json)를 따른다.
+- 검토 범위의 미해결 코드 결함0, 중복 제외606개 표적 회귀를 확인했다. 실제 재생·원천 대사 및 불변 release의 발행/loader 테스트도 통과했다. 향후10/6 자연 자료·실제 체결/수익 검증과 전체 거래 suite/API 호출은 이 작업에서 수행하지 않았다.
+- Main의10/6 실제 activation/PID 소비는 `DirectFamilyPreopenPolicyHandoff`, 적용 후 B0↔C0 비교는 `NonSamsungMachineForwardComparison1006`가 소유한다. 신규 지정은 당일 적용 준비 완료이며 현재 PID 적용/수익 검증 완료가 아니다. Widget PID3614517의 실제 cwd와 Episode unit은 기존 `e6d4d3b9` 승인 경로를 보존했다.
+- 삼성 H2/원흡수의 자연 검증은 기존 `SamsungFrozenCandidateValidation1006`로 인계한다. 과거 foreign/program veto2개의 역사 kernel 원본 결손은 §5대로 남아 있다. 이 결손을 삼성 후보 실전 적격이나 비삼성 지정 실패로 바꾸지 않는다.

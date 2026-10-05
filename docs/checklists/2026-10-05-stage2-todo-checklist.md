@@ -19,17 +19,19 @@
   - Result: [비삼성 상세계획](../proposals/non-samsung-designated-policy-and-postapply-comparison-implementation-plan-2026-10-05.md), [삼성 추가연구계획](../proposals/samsung-absorption-differential-and-path-research-plan-2026-10-05.md) 작성. 지정과 독립검증 상태 분리, B0/C0/I_t/P_t 분리, 삼성 동등성 및 최대7정책 유한 비교를 설계했다. 두 계획의 새 수용/연구 지표는 제안이며 현재 동작으로 표시하지 않는다.
   - Boundary: 문서만 수정. 코드·지정 발행·추가 연구 재계산·기동·원천 수집·10/6 준비 변경 없음. 보호 hash·문서 검증은 `tmp/designated-machine-and-samsung-planning-20261005/validation.json`에 기록한다.
 
-- [ ] `[NonSamsungDesignatedPolicyImplementation1005] 비삼성 고정 정책1회 지정·적용 후 비교 구현` (`Due: 2026-10-05`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: MainEntry`)
+- [x] `[NonSamsungDesignatedPolicyImplementation1005] 비삼성 고정 정책1회 지정·적용 후 비교 구현` (`Due: 2026-10-05`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: MainEntry`)
   - Source: [지정·장후 비교 상세계획](../proposals/non-samsung-designated-policy-and-postapply-comparison-implementation-plan-2026-10-05.md).
   - Acceptance: C0~C7의 지정 schema/발행/activation·기존 dated supersession/CAS·원 세대 보관·B0/C0/I_t/P_t 구분·양방향 비교·삼성 component 동등성·summary/strict/prepared 연결, 정상/거부/재실행/부분실패 회귀·리뷰/수정/재리뷰. 구현·준비와 실제 당일 PID 각각 증빙.
   - Boundary: 사용자 계획 실행으로 승인된 구현·지정 발행·통합 배포·정확일자 준비 owner. 대상10/6·비삼성 KRX 정규장 `pullback_p60_v0` 고정, 독립 검증 미완료 유지. 삼성/보조/타 family·계좌/주문/수량/손절/custody guard 권한 확대 없음.
   - Stop: 구현/준비 결과 또는 날짜 종료·parent 충돌·source 결함의 구체적 사유 확정. target 날짜 자동 연장 없음. 장후 비교는 `NonSamsungMachineForwardComparison1006`, 실제 Main 소비는 `DirectFamilyPreopenPolicyHandoff`에 인계.
+  - Result: [실행 리뷰](../audits/designated-machine-policy-and-samsung-differential-execution-review-2026-10-05.md). 코드 `3d0e5106` 배포,10/6 지정 bundle `8fb91f19…`/component `6b6fb204…`, 자동 selected=false·운영자 지정 분리.606개 표적 회귀·실제7,069관측 대사 차이0, strict PASS·DONE·prepared_verified. Main 실제 당일 PID/이후 성능은 후속 owner에 인계.
 
-- [ ] `[SamsungAbsorptionDifferentialResearch1005] 삼성 흡수 후보 원천 차이·가격경로 유한 추가연구` (`Due: 2026-10-05`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: Research`)
+- [x] `[SamsungAbsorptionDifferentialResearch1005] 삼성 흡수 후보 원천 차이·가격경로 유한 추가연구` (`Due: 2026-10-05`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: Research`)
   - Source: [삼성 추가연구계획](../proposals/samsung-absorption-differential-and-path-research-plan-2026-10-05.md).
   - Acceptance: R0중복 가설/원천 census→R1성공·손절·완전미도달/검열 차이→R2정책 전체/공통 사건→R3최대5변형과2대조 정책→R4권고/개선 없음/식별 불가·동결 인계. raw 시점/epoch/cost/stop·source 결손·metric/날짜 지원·표적 회귀/재리뷰 검증.
   - Boundary: 기존 원천만 소비하는 승인된 오프라인 연구. 전체519/fixed-watch206 구분, 삼성 양수 가격경로 지표는 신규 연구 제안이며 현재 운영 승률 계약 변경 아님. API·수집 확대·보조 AI 혼합·Widget 실현 수익 이식·삼성 정책 지정/발행/배포 없음.
   - Stop: 중복/원천 부재 가설을 닫고 최대7정책에서 후보1개 권고/개선 없음/판단 불가 확정. 임계값·종료기간 무한 추가 금지. 이후 자연 검증은 기존 `SamsungFrozenCandidateValidation1006` 소유.
+  - Result: [실행 리뷰](../audits/designated-machine-policy-and-samsung-differential-execution-review-2026-10-05.md).5변형+2대조 완료, H2 하나 동결·waiting_new_source_date. 전체 날짜 가중 경계 승률55.56→61.11%이나9/29 손절1건 감소에 한정되고 fixed-watch 개선은 미입증. 삼성 운영 정책 유지. 과거 veto2개 kernel 원본 결손은 기존 후속 owner에 명시.
 
 - [x] `[MachineAcceptanceRemediationSamsungPlan1005] 수용조건 결함보완계획 및 삼성 승계·추가 연구 필요성 점검` (`Due: 2026-10-05`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: MainEntry`)
   - Source: 사용자 결함보완계획 수립·삼성 정책 유지 사유 및 추가 연구 필요성 점검 요청.
