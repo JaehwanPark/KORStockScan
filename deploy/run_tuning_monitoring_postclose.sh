@@ -5,6 +5,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 VENV_PY="${VENV_PY:-$PROJECT_DIR/.venv/bin/python}"
 TARGET_DATE="${1:-$(TZ=Asia/Seoul date +%F)}"
+source "$SCRIPT_DIR/eod_terminal_gate.sh"
+source_calendar_state="$(postclose_source_calendar_state "$PROJECT_DIR" "$VENV_PY" "$TARGET_DATE")"
+if [[ "$source_calendar_state" == "non_trading" ]]; then
+  printf '[SKIP] tuning_monitoring_postclose target_date=%s reason=non_trading_source_date no_report_publication=true\n' "$TARGET_DATE"
+  exit 0
+fi
+[[ "$source_calendar_state" == "trading" ]] || exit 2
 DIFF_DAYS="${DIFF_DAYS:-3}"
 LOCK_FILE="${TUNING_MONITORING_LOCK_FILE:-$PROJECT_DIR/tmp/run_tuning_monitoring_postclose.lock}"
 LOCK_WAIT_SEC="${TUNING_MONITORING_LOCK_WAIT_SEC:-60}"

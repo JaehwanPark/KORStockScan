@@ -151,7 +151,8 @@ def test_native_controller_skips_holiday_before_predecessor_or_producer(monkeypa
 
 
 @pytest.mark.parametrize('name', ['run_threshold_cycle_postclose.sh', 'run_postclose_done_controller.sh',
-                                'run_widget_evaluation.sh', 'run_machine_microstructure_final_refresh.sh'])
+                                'run_widget_evaluation.sh', 'run_machine_microstructure_final_refresh.sh',
+                                'run_tuning_monitoring_postclose.sh'])
 def test_holiday_wrappers_skip_before_native_stage_publication(name):
     import os
     import subprocess

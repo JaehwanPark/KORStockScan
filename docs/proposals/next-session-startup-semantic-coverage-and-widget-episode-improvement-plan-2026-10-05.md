@@ -219,3 +219,8 @@ Episode의 세 고정 정의는 low-proximity 절반, profile 창 앞 절반, �
 ### 7.4 최종 검증에서 발견한 archive 표현 결함
 
 collector 재생은 `collector_history_known_file_missing`으로 실패했다.9/30 표시용 sentinel은 삭제가 아니라 gzip 보관이며 원 manifest는 압축 전/후의 물리 경로를 서로 다른 입력으로 계산했다. display-name census를 payload와 같은 **decoded logical bytes/SHA**로 대사하도록 보완했다. 실제9/30 archive는 기존387,900,466bytes/SHA와 정확히 같음을 [대사 원본](../../tmp/next-session-semantic-widget-episode-implementation-20261005/collector-archive-logical-diagnosis.json)으로 확인한다.9/29의 기존 empty gzip shadow는 nonempty 원본이 있을 때 표시용 제외 identity를 명시한다. 가격·판정·replay의 경제성 제외를 추가하지 않는다. nonempty 내용 충돌·손상·symlink·진짜 부재는 계속 차단하며 과거 경제 원천 generation 검사는 유지한다. 검토·표적 회귀 후 수정 release에서 해당 collector와 직후 소비자를 한 번 재수용한다.
+
+
+### 7.5 야간 후행 감시 wrapper
+
+동일한 휴장일 대기 경로가21:40 후행 tuning-monitoring wrapper에도 남아 있어 source calendar gate를 추가했다. 보고서·lock·선행 DONE 대기 이전에 SKIP하며 기존 영업일 감시·실제 source hash/실패 수용은 유지한다. 검토한 gate의 적용 범위는 Main/controller/Widget/final-refresh/후행 감시5개다. 다음날05:00 finalization은 이미 trading **effective date**에서 source10/2를 해석하고 최종 prepared를 재작성하는 기존 계약이므로 그 경계를 유지한다.
