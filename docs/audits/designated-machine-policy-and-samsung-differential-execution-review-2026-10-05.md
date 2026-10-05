@@ -77,3 +77,8 @@ H2는 원5초 TTL 내 같은 epoch의 직전 적격 capture에서 pressure<60, �
 - 검토 범위의 미해결 코드 결함0, 중복 제외606개 표적 회귀를 확인했다. 실제 재생·원천 대사 및 불변 release의 발행/loader 테스트도 통과했다. 향후10/6 자연 자료·실제 체결/수익 검증과 전체 거래 suite/API 호출은 이 작업에서 수행하지 않았다.
 - Main의10/6 실제 activation/PID 소비는 `DirectFamilyPreopenPolicyHandoff`, 적용 후 B0↔C0 비교는 `NonSamsungMachineForwardComparison1006`가 소유한다. 신규 지정은 당일 적용 준비 완료이며 현재 PID 적용/수익 검증 완료가 아니다. Widget PID3614517의 실제 cwd와 Episode unit은 기존 `e6d4d3b9` 승인 경로를 보존했다.
 - 삼성 H2/원흡수의 자연 검증은 기존 `SamsungFrozenCandidateValidation1006`로 인계한다. 과거 foreign/program veto2개의 역사 kernel 원본 결손은 §5대로 남아 있다. 이 결손을 삼성 후보 실전 적격이나 비삼성 지정 실패로 바꾸지 않는다.
+
+
+## 8. 원본 결손 후속 처리
+
+동일10/5 후속 점검에서 미참조 Git blob의 SHA-256이 일치하는 원 테스트 파일을 복구했다. 과거 두 veto의 migration은 이제 validated이며519관측의 선택/지표 대사와160행 역사 입력 왕복을 확인했다. 원 frozen·현재 정책·10/6 준비 세대는 보존했다. §5/§7의 결손은 최초 실행 종료 당시 상태이며, 현재 결과와 회귀 한계는 [복구 리뷰](samsung-kernel-recovery-and-followup-assessment-2026-10-05.md)를 따른다.

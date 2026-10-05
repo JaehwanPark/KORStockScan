@@ -13,6 +13,12 @@
 
 ## 실행 항목
 
+- [x] `[SamsungHistoricalKernelRecovery1005] 과거 삼성2후보의 커널 원본 복구·후속연구 필요성 점검` (`Due: 2026-10-05`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: Research`)
+  - Source: 사용자 원본 결손 즉시 처리 지적 및 삼성 추가연구 필요성 질문, [복구 리뷰](../audits/samsung-kernel-recovery-and-followup-assessment-2026-10-05.md).
+  - Acceptance: 원 요구 SHA와 동일 bytes 복구/보존, 원 frozen 불변, 기존519관측 선택·지표 대사, 현재 consumer/이후 날짜 준비, 기존10/6 운영 정책·release·prepared 불변 검증.
+  - Result: 미참조 Git blob `38c14bd5…`에서 원 test SHA `c165a509…` 복구·보존 ref 등록. 두 후보 migration validated,519관측 대사 및160행 역사 입력 왕복 PASS, 이후 날짜 준비 waiting. 현재 회귀57 PASS·1 dated 경로 충돌은 같은 SHA의 archive로 옮긴 별도 격리 입력으로 재현 검증; 과거 fixture 전체 PASS로 표기하지 않는다.
+  - Boundary: 새 연구 후보/운영정책/원천수집/API/배포·재기동 변경 없음. 새 거래일 검증은 기존 `SamsungFrozenCandidateValidation1006` 소유. H2 연속 tick 구간 소비 연구는 제안이며 이번 작업에서 실행하지 않았다.
+
 - [x] `[MachineDesignationSamsungResearchPlanning1005] 비삼성 지정 코드·삼성 추가연구 상세계획 수립` (`Due: 2026-10-05`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: MainEntry`)
   - Source: 사용자 코드보완 상세계획 및 삼성전자 후보 추가연구계획 요청.
   - Acceptance: 실제 지정 발행 부재·dated generation 불변·적용 후 자기비교·삼성 전체 parent hash 의존성 대사.1회 지정/후속 양방향 비교·producer/consumer·회귀·장전 준비 및 삼성 원천/유한 가설/연구 목적/이후 인계 계획, 문서 리뷰·보완·링크·단일 owner·print-only parser.
@@ -118,7 +124,7 @@
   - 최신 후보 인계 보완: 기존 frozen의2개는 foreign/program veto이며 absorption 후보가 아니다. [10/5 계획 S3](../proposals/machine-admission-acceptance-remediation-and-samsung-research-plan-2026-10-05.md)에 따라 `SamsungAbsorptionOutcomeReview1005`가 준비한 최신 `absorption_p60_v10`의 별도 frozen/adapter를 이 owner에서 추가 검증한다. 기존 원 계약을 덮어쓰지 않으며 adapter 준비 여부를 먼저 확인한다. 준비되지 않았으면 `latest_candidate_adapter_not_ready`, 원천 부재는 `waiting_new_source_date`를 구분한다. 과거2후보 검증만으로 최신 후보 완료를 선언하지 않는다.
   - 최신 후보 준비 완료: `tmp/admission-remediation-execution-20261005/replay-v2/samsung-frozen.json`, `samsung-forward-readiness.json`과 새 `samsung_absorption_acceptance_research` CLI를 사용한다. after10/5 원 projection·완료 가격 및 원 raw exact receipt를 검증한다. 현재 두 자동 생산 경로 부재로 waiting이며 실제 검증/선정은 미실행. 기존 두 veto의4경로 계약과 구별한다.
   - 추가 계획 인계: `SamsungAbsorptionDifferentialResearch1005`가 실제 권고한 후보가 있을 때 별도 frozen을 추가한다. 비삼성 지정으로 전체 parent/kernel이 바뀌면 허용 diff의 삼성 component 동등성/migration receipt를 먼저 검증한다. 기존 frozen bytes는 변경하지 않으며 실제 삼성 동작 변화는 재계획한다.
-  - 실행 인계: 최신 원흡수 migration 및 `tmp/samsung-absorption-differential-research-20261005/final/frozen-candidate.json`의 H2를 구분한다. H2는 `samsung_absorption_differential_research --forward-frozen <H2> --base-frozen tmp/admission-remediation-execution-20261005/replay-v2/samsung-frozen.json --date 2026-10-06 --root /home/ubuntu/KORStockScan --output <new-output>`로 검증한다. 둘 다 현재 waiting. 과거 veto2개는 원 테스트 파일 c165a509 bytes 부재로 `blocked_historical_kernel_source_gap`; 기존 frozen을 현재 hash로 덮지 않고 원본 복구 또는 별도 재동결 검토 후 소비한다.
+  - 실행 인계: 최신 원흡수 migration 및 `tmp/samsung-absorption-differential-research-20261005/final/frozen-candidate.json`의 H2를 구분한다. H2는 `samsung_absorption_differential_research --forward-frozen <H2> --base-frozen tmp/admission-remediation-execution-20261005/replay-v2/samsung-frozen.json --date 2026-10-06 --root /home/ubuntu/KORStockScan --output <new-output>`로 검증한다. 둘 다 현재 waiting. 과거 veto2개는 `SamsungHistoricalKernelRecovery1005`에서 원 테스트 bytes c165a509를 정확 복구했다. 원 frozen을 보존한 migration validated,519관측 mask/metric 차이0·160행 역사 입력 왕복 PASS, 현재 선택 release의 준비 CLI는 `waiting_new_source_date`다. 최신 상태는 `tmp/samsung-kernel-recovery-20261005/next-date-readiness/preparation-status.json`을 따른다.
   - 이관:10/5 print-only parser에서10/4 소유 항목이 제외됨을 확인하여 현재 문서로 이동. ID·기존 수용/권한·준비 이력 보존; 실행 완료 처리 아님.
 
 - [x] `[NonSamsungFinalPolicyDecision1005] 비삼성 고정 후보의 최종 비교·구현 판단·연구 종결` (`Due: 2026-10-05`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: Research`)
