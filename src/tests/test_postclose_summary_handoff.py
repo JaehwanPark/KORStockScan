@@ -737,6 +737,27 @@ def test_machine_terminal_survives_later_final_audit_generation(stage_environmen
     assert h.stage_receipt_issues(report, day, 'main_machine_policy') == []
 
 
+@pytest.mark.parametrize('staging_status', ['operator_designation_preserved', 'designated_policy_staged'])
+def test_machine_stage_distinguishes_designation_from_automatic_carry(stage_environment, monkeypatch, staging_status):
+    h, day, report, run, produce = stage_environment
+    # Publisher/source validation is covered by designated-policy integration
+    # tests. Exercise the stage receipt's downstream semantic projection here.
+    monkeypatch.setattr(h, '_safe_stage_output_issues', lambda *args: [])
+    def designated(command, **kwargs):
+        produce(command, **kwargs)
+        path = h.stage_artifacts(report, day, 'main_machine_policy')['machine_policy_terminal']
+        terminal = json.loads(path.read_text())
+        terminal.update(selection_basis='win_rate_only', disposition='incumbent_carried',
+                        staged=dict(status=staging_status, bundle_sha256='designated-bundle'))
+        path.write_text(json.dumps(terminal))
+        return 0
+    receipt = run('main_machine_policy', runner=designated)
+    assert receipt['status'] == 'succeeded'
+    assert receipt['policy_disposition'] == 'operator_designated'
+    assert receipt['automatic_policy_disposition'] == 'incumbent_carried'
+    assert receipt['designated_bundle_sha256'] == 'designated-bundle'
+
+
 def test_machine_closed_date_recovery_accepts_exact_bound_final_audit(stage_environment, monkeypatch):
     h, day, report, run, _produce = stage_environment
     from src.engine import observation_source_quality_audit as audit_owner

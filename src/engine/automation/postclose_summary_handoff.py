@@ -1891,7 +1891,11 @@ def run_stage(stage, day, *, report_dir, project, publication=None, effective=No
                 activation = (terminal.get('activation') or {}).get('status')
                 value['policy_disposition'] = ('source_gap' if machine_gap else terminal.get('disposition')
                     if terminal.get('selection_basis') == 'win_rate_only' and staging.get('status') in {'staged', 'already_staged', 'pending_initial_preserved', 'existing_incumbent_preserved'}
+                    else 'operator_designated' if staging.get('status') in {'operator_designation_preserved', 'designated_policy_staged'}
                     else 'updated' if activation == 'activated' else 'incumbent_carry' if activation in {'already_active', 'incumbent_carry'} else 'no_valid_candidate')
+                if staging.get('status') in {'operator_designation_preserved', 'designated_policy_staged'}:
+                    value['automatic_policy_disposition'] = terminal.get('disposition')
+                    value['designated_bundle_sha256'] = staging.get('bundle_sha256')
                 value['policy_sha256'] = terminal.get('policy_sha256')
             if stage in {'widget_policy', 'episode_policy'} and not issues:
                 family_receipt = _load_json(stage_artifacts(report_dir, day, stage)[stage.replace('_policy', '_policy_refresh')])
