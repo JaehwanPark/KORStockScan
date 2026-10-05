@@ -94,6 +94,8 @@ def test_forward_capture_intake_valid_and_changed_parent(tmp_path,monkeypatch):
     monkeypatch.setattr(C,'_machine_source_contract_valid',lambda r:True)
     monkeypatch.setattr(A.H,'price_index',lambda *args:({('2026-10-06','005930','KRX','KRX_REGULAR','005930_AL'):bars},[],[]))
     monkeypatch.setattr(A.F,'evaluate',lambda *args,**kw:dict(source_valid=True,parent_action='RECHECK',proposed_action='ENTER_NOW'))
+    from src.engine.scalping import samsung_policy_compatibility as compatibility
+    monkeypatch.setattr(compatibility,'source_bundle',lambda *a,**kw:dict(bundle_sha256='b'*64))
     out=A.prepare(tmp_path,'2026-10-06',frozen)
     assert out['status']=='evaluated'
     assert out['observations'][0]['path']['status']=='timeout'

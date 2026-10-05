@@ -10028,6 +10028,9 @@ def build_winrate_policy_report(rows, *, source_receipt, target_date, data_root=
 
 
     if recipe_mode:
+        if current.get('designated_pair'):
+            from src.engine.scalping.entry_designated_policy import apply as apply_fixed_pair
+            return apply_fixed_pair(result, admission_analysis, parent, current['designated_pair'])
         from src.engine.scalping.entry_admission_acceptance import apply as apply_acceptance
         return apply_acceptance(result, admission_analysis, parent)
     return result
@@ -10864,7 +10867,7 @@ def main(argv: list[str] | None = None) -> int:
                 current = load_effective(data_root=args.data_root, target_date=datetime.now(KST).date().isoformat())
                 parent = for_cohort(current, ('KRX', 'KRX_REGULAR'))['machine_policy']
                 admission_analysis = admission_report(rows, parent=parent,
-                    target_date=args.target_date, data_root=args.data_root)
+                    target_date=args.target_date, data_root=args.data_root, designated_pair=current.get('designated_pair'))
             result = build_winrate_policy_report(rows,
                 source_receipt=source_receipt,
                 target_date=args.target_date, data_root=args.data_root,
@@ -10873,7 +10876,7 @@ def main(argv: list[str] | None = None) -> int:
             result = _with_artifact_content_sha256({**result, 'observation_source_counts': counts,
                 'cost_source': cost_source,
                 'observation_status': ('observed' if result.get('candidate_computed') else 'source_gap')
-                    if result.get('acceptance_contract') else ('source_gap' if not result['accepted_attempt_count'] else 'observed'),
+                    if (result.get('acceptance_contract') or result.get('fixed_pair_contract')) else ('source_gap' if not result['accepted_attempt_count'] else 'observed'),
                 'publication_date': args.publication_date or datetime.now(KST).date().isoformat()})
             if (result['policy_version'] == 'winrate_initial_v1' and result['target_date'] <= '2026-09-23'
                 and result['hurdle_errors']):

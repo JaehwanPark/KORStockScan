@@ -567,9 +567,13 @@ def _main_mechanistic_scope(target_date: str, effective_date: str | None = None,
             winrate = _load(REPORT_DIR / 'ai_decision_action_outcome_calibration' /
                             f'winrate_policy_{target_date}.json')
             proof = bundle['winrate_selection']
+            designated_bound = False
+            if proof.get('schema') == 'main_machine_designated_selection_v1':
+                from src.engine.scalping.entry_designated_policy import binding_valid
+                designated_bound = binding_valid(winrate, bundle, DATA_DIR)
             if (machine_source.get('report_scope') != 'main_entry_winrate'
-                or machine_source.get('artifact_content_sha256') != winrate.get('artifact_content_sha256')
-                or proof.get('report_sha256') != winrate.get('artifact_content_sha256')
+                or (not designated_bound and machine_source.get('artifact_content_sha256') != winrate.get('artifact_content_sha256'))
+                or (not designated_bound and proof.get('report_sha256') != winrate.get('artifact_content_sha256'))
                 or proof.get('machine_policy_sha256') != policy.digest(bundle['machine_policy'])
                 or proof.get('disposition') != bundle.get('machine_disposition')
                 or winrate.get('selection_basis') != 'win_rate_only'):

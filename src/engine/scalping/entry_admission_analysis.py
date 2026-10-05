@@ -191,7 +191,7 @@ def native_path_value(row, observation):
     return .1 if hit == 'net_target_first' else stop - cost, hit, None
 
 
-def build_report(rows, *, parent, target_date, data_root):
+def build_report(rows, *, parent, target_date, data_root, designated_pair=None):
     from src.engine.scalping import entry_setup_evidence as E
     from src.engine.scalping import entry_admission_recipe as A
     from src.engine.scalping import entry_observation_recipe_policy as R
@@ -201,7 +201,13 @@ def build_report(rows, *, parent, target_date, data_root):
     scoped = [r for r in rows if (r.get('effective_venue'), r.get('session_bucket')) == ('KRX', 'KRX_REGULAR')]
     kernels = kernel_manifest()
     index, sources, conflicts = price_index(data_root, [r['source_date'] for r in scoped])
-    candidate = A.candidate_policy(parent)
+    comparison_parent = parent
+    if designated_pair is not None:
+        from src.engine.scalping import entry_designated_policy as D
+        D.validate_pair(designated_pair)
+        D.arm(designated_pair, parent)
+        comparison_parent = designated_pair['baseline_policy']
+    candidate = designated_pair['candidate_policy'] if designated_pair else A.candidate_policy(parent)
     observations, exclusions, seen, duplicates = [], [], set(), set()
     for row in scoped:
         trace = row.get('decision_trace_id')
@@ -221,7 +227,8 @@ def build_report(rows, *, parent, target_date, data_root):
             continue
         try:
             capture_clock(row)
-            decision = E.mechanistic_entry_policy_decision(setup, policy=parent)
+            consumption = D.observation_policy(row, data_root=data_root, p=designated_pair) if designated_pair else {}
+            decision = E.mechanistic_entry_policy_decision(setup, policy=comparison_parent)
             group = 'samsung' if row['stock_code'] == '005930' else 'non_samsung'
             proposed = decision if group == 'samsung' else E.mechanistic_entry_policy_decision(setup, policy=candidate)
             key = (row['source_date'], row['stock_code'], row['effective_venue'], row['session_bucket'], row.get('outcome_request_code'))
@@ -234,7 +241,7 @@ def build_report(rows, *, parent, target_date, data_root):
         except (KeyError, TypeError, ValueError, OverflowError) as exc:
             exclusions.append(dict(trace=trace, reason='replay_or_path_invalid', detail=type(exc).__name__))
             continue
-        observations.append(dict(trace=trace, day=row['source_date'], symbol=row['stock_code'],
+        observations.append(dict(**consumption, trace=trace, day=row['source_date'], symbol=row['stock_code'],
             ts=row['decision_ts'], group=group, raw_sha256=setup['strategy_raw_sha256'],
             outcome_request_code=row.get('outcome_request_code'),
             source_bundle_sha256=row.get('bundle_sha256'),
@@ -269,6 +276,9 @@ def build_report(rows, *, parent, target_date, data_root):
         kernel_manifest=kernels, input_capture_sha256=S.digest(scoped),
         recipe_discovery_through_date='2026-10-02', pristine_holdout=False,
         success_retention_role='diagnostic_only', samsung_candidate_selection='separate_owner')
+    if designated_pair is not None:
+        body['designated_pair'] = deepcopy(designated_pair)
+        body['designated_kernel_sha256'] = file_sha(Path(D.__file__))
     body['artifact_content_sha256'] = S.digest(body)
     return body
 
@@ -291,6 +301,10 @@ def validate_report(report, *, parent, target_date, require_files=False):
     if any(not isinstance(t, str) or not t for t in traces) or len(set(traces)) != len(traces):
         raise ValueError('admission_analysis_trace_invalid')
     if require_files:
+        if report.get('designated_pair'):
+            from src.engine.scalping import entry_designated_policy as D
+            if report.get('designated_kernel_sha256') != file_sha(Path(D.__file__)):
+                raise ValueError('admission_designated_kernel_changed')
         if report['kernel_manifest'] != kernel_manifest():
             raise ValueError('admission_analysis_kernel_changed')
         for source in report['source_manifest']:

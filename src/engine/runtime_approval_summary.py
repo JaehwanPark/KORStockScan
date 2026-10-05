@@ -1142,6 +1142,11 @@ def build_runtime_approval_summary(
                     and machine_source.get('artifact_content_sha256')
                         == winrate_source.get('artifact_content_sha256'))
                 refreshed_carry_bound = False
+                designated_bound = False
+                if policy_contract_valid and winrate.get('schema') == 'main_machine_designated_selection_v1':
+                    from src.engine.scalping.entry_designated_policy import binding_valid
+                    designated_bound = (winrate.get('disposition') == 'operator_designated'
+                        and binding_valid(winrate_source, policy_payload, DATA_DIR))
                 if policy_contract_valid and not original_report_bound:
                     from src.engine.automation.postclose_summary_handoff import (
                         stage_artifacts, stage_receipt_issues,
@@ -1167,10 +1172,18 @@ def build_runtime_approval_summary(
                     report_sha256=winrate.get('report_sha256'),
                     latest_evaluation_report_sha256=winrate_source.get('artifact_content_sha256'),
                     evaluation_binding=('original_publication' if original_report_bound else
-                        'sealed_current_incumbent_carry' if refreshed_carry_bound else 'unverified'),
+                        'sealed_current_incumbent_carry' if refreshed_carry_bound else
+                        'operator_designation_with_automatic_report' if designated_bound else 'unverified'),
                     machine_policy_sha256=winrate.get('machine_policy_sha256'),
                     source_date=winrate_source.get('target_date'),
                     actual_pid_consumed=False)
+                if designated_bound:
+                    row['winrate_policy']['designation'] = dict(adoption_basis='operator_designation',
+                        validation_status='not_observed', evidence_qualified_selection=False,
+                        request_id=policy_payload['designated_pair']['request_id'],
+                        comparison_contract='main_machine_designated_fixed_pair_v1')
+                if winrate_source.get('fixed_pair_contract'):
+                    row['winrate_policy']['fixed_pair_comparison'] = winrate_source.get('fixed_pair_comparison')
                 if winrate_source.get('acceptance_contract') is not None:
                     row['winrate_policy']['admission_acceptance'] = {
                         key: winrate_source.get(key) for key in (
@@ -1181,7 +1194,7 @@ def build_runtime_approval_summary(
                 policy_receipt_valid = bool(policy_receipt_valid and policy_contract_valid
                     and winrate_source.get('schema') == 'main_entry_winrate_policy_report_v1'
                     and winrate_source.get('selection_basis') == 'win_rate_only'
-                    and (original_report_bound or refreshed_carry_bound)
+                    and (original_report_bound or refreshed_carry_bound or designated_bound)
                     and winrate.get('machine_policy_sha256') == machine_policy.digest(policy_payload['machine_policy'])
                     and winrate.get('disposition') == policy_payload.get('machine_disposition')
                     and winrate_source.get('target_date') == target_date)

@@ -611,6 +611,9 @@ def _validate_bundle_sources(bundle: dict, data_root: Path) -> dict:
         ):
             raise ValueError("machine_evaluation_source_artifact_hash_invalid")
     proof = bundle.get('winrate_selection')
+    if isinstance(proof, dict) and proof.get('schema') == 'main_machine_designated_selection_v1':
+        from src.engine.scalping.entry_designated_policy import validate_bundle
+        return validate_bundle(bundle, source_payload, data_root)
     if proof is not None:
         from src.engine.scalping import ai_action_outcome_calibration as calibration
         if (not isinstance(proof, dict) or proof.get('schema') != 'main_entry_winrate_selection_v1'
@@ -1633,6 +1636,9 @@ def stage_winrate_policy(source_path: Path, *, data_root: Path, now: datetime | 
     publication_day = publication_day or current.date().isoformat()
     target = next_target(publication_day)
     source = _read(source_path)
+    from src.engine.scalping import entry_designated_policy as designated
+    if source.get('fixed_pair_contract') == designated.CONTRACT:
+        return designated.stage_comparison(source_path, data_root=data_root, publication_day=publication_day, now=current)
     excluded = source.get('excluded_attempt_counts') or {}
     situations = source.get('situation_attempt_counts') or {}
     accepted = source.get('accepted_attempt_count')
@@ -1694,6 +1700,9 @@ def stage_winrate_policy(source_path: Path, *, data_root: Path, now: datetime | 
             raise ValueError('winrate_stage_parent_machine_changed')
         if recipe_mode:
             _validate_admission_source(source, parent, require_files=True)
+        preserved = designated.preserve(source, data_root=data_root, target=target)
+        if preserved is not None:
+            return preserved
         candidate = source.get('candidate_policy')
         disposition = source['disposition']
         if disposition == 'incumbent_carried':
@@ -1923,6 +1932,8 @@ def activate_dated_winrate_policy(*, data_root: Path, target_date: str, now: dat
         if (activation.get('schema') == 'main_entry_winrate_activation_v1'
             and activation.get('stage_bundle_sha256') == staged['bundle_sha256']
             and previous.get('winrate_selection') == proof):
+            from src.engine.scalping.entry_designated_policy import record_activation
+            record_activation(previous, data_root=data_root)
             return dict(status='already_active', bundle_sha256=previous['bundle_sha256'])
         if (activation.get('schema') == 'main_auxiliary_activation_v1'
             and previous.get('winrate_selection') == proof
@@ -1980,6 +1991,8 @@ def activate_dated_winrate_policy(*, data_root: Path, target_date: str, now: dat
         _atomic_write_json(policy_root / 'current.json', receipt)
         if load_effective(data_root=data_root, target_date=target_date)['bundle_sha256'] != bundle['bundle_sha256']:
             raise ValueError('winrate_activation_readback_failed')
+        from src.engine.scalping.entry_designated_policy import record_activation
+        record_activation(bundle, data_root=data_root)
         return dict(status='activated', scope='KRX|KRX_REGULAR', **receipt)
 
 
@@ -2077,6 +2090,9 @@ def activate_strategy_report(source_path: Path, *, data_root: Path, now: datetim
                 bundle['machine_policy'] = machine
             activation_scopes[scope] = dict(candidate_sha256=digest(candidate),
                 parent_machine_sha256=item['parent_machine_sha256'])
+        pair = bundle.get('designated_pair')
+        if pair and bundle['machine_policy'] not in (pair['baseline_policy'], pair['candidate_policy']):
+            bundle.pop('designated_pair', None)
         bundle.update(target_date=day, publication_date=day, source_date=source['target_date'],
             source_file_sha256=source_hash, source_artifact_sha256=source['artifact_content_sha256'],
             previous_bundle_sha256=previous['bundle_sha256'], generated_at=current.isoformat(),
@@ -2432,8 +2448,15 @@ def _load_current_uncached(data_root: Path, target_date: str) -> dict | None:
         _validate_bundle_sources(donor, data_root)
         if donor['bundle_sha256'] != rollback or donor['machine_policy'] != bundle['machine_policy'] or parent['ai_policy'] != bundle['ai_policy']:
             raise ValueError('strategy_rollback_component_binding_invalid')
+        rollback_scopes=activation.get('rollback_scopes')
+        if rollback_scopes is not None and rollback_scopes != ['KRX|KRX_REGULAR']:
+            raise ValueError('strategy_rollback_scope_binding_invalid')
+        if rollback_scopes and (not parent.get('designated_pair')
+            or donor['machine_policy'] != parent['designated_pair']['baseline_policy']):
+            raise ValueError('strategy_rollback_designation_parent_invalid')
         for scope, value in (bundle.get('scope_policies') or {}).items():
-            if value['machine_policy'] != donor['scope_policies'][scope]['machine_policy'] or value['ai_policy'] != parent['scope_policies'][scope]['ai_policy']:
+            expected=parent if rollback_scopes and scope not in rollback_scopes else donor
+            if value['machine_policy'] != expected['scope_policies'][scope]['machine_policy'] or value['ai_policy'] != parent['scope_policies'][scope]['ai_policy']:
                 raise ValueError('strategy_rollback_scope_binding_invalid')
         return bundle if target_date >= bundle['target_date'] else None
     if activation.get('schema') == 'main_auxiliary_activation_v1':
@@ -2571,27 +2594,43 @@ def rollback_machine_component(generation: str, *, data_root: Path, now: datetim
             raise ValueError('strategy_rollback_scope_coverage_changed')
         bundle = copy.deepcopy(previous)
         bundle['machine_policy'] = copy.deepcopy(donor['machine_policy'])
+        designated_rollback=bool(previous.get('designated_pair')
+            and donor['machine_policy']==previous['designated_pair']['baseline_policy'])
+        # The previous selection proof binds the machine being rolled back.
+        # Use the verified donor's proof and stop the retired pair's authority.
+        bundle.pop('winrate_selection',None)
+        bundle.pop('designated_pair',None)
+        if donor.get('winrate_selection'):
+            bundle['winrate_selection']=copy.deepcopy(donor['winrate_selection'])
+        if donor.get('designated_pair'):
+            bundle['designated_pair']=copy.deepcopy(donor['designated_pair'])
         for key in ('source_date', 'source_file_sha256', 'source_artifact_sha256', 'machine_evaluation_source'):
             if key in donor:
                 bundle[key] = copy.deepcopy(donor[key])
             else:
                 bundle.pop(key, None)
         for scope, value in (bundle.get('scope_policies') or {}).items():
-            value['machine_policy'] = copy.deepcopy(donor['scope_policies'][scope]['machine_policy'])
+            if not designated_rollback or scope=='KRX|KRX_REGULAR':
+                value['machine_policy'] = copy.deepcopy(donor['scope_policies'][scope]['machine_policy'])
         bundle.update(target_date=day, publication_date=day, generated_at=current.isoformat(),
             previous_bundle_sha256=previous['bundle_sha256'], machine_disposition='explicit_machine_component_rollback',
             strategy_activation=dict(schema='main_entry_activation_v3', effective_from=current.isoformat(),
                 lifetime='until_superseded', parent_bundle_sha256=previous['bundle_sha256'],
                 rollback_machine_generation=generation))
+        if designated_rollback:
+            bundle['strategy_activation']['rollback_scopes']=['KRX|KRX_REGULAR']
         bundle.pop('bundle_sha256', None)
         bundle['bundle_sha256'] = digest(bundle)
         validate(bundle, target_date=day)
+        _validate_bundle_sources(bundle,data_root)
         _atomic_write_json(policy_root / 'generations' / f"{previous['bundle_sha256']}.json", previous)
         _atomic_write_json(policy_root / 'generations' / f"{bundle['bundle_sha256']}.json", bundle)
         receipt = dict(schema='main_entry_current_v2', bundle_sha256=bundle['bundle_sha256'],
             previous_bundle_sha256=previous['bundle_sha256'], effective_from=current.isoformat())
         receipt['receipt_sha256'] = digest(receipt)
         _atomic_write_json(policy_root / 'current.json', receipt)
+        if load_effective(data_root=data_root,target_date=day)['bundle_sha256'] != bundle['bundle_sha256']:
+            raise ValueError('strategy_rollback_readback_failed')
         return dict(status='machine_component_rolled_back', **receipt)
 
 
@@ -2623,6 +2662,7 @@ def current_strategy_receipt(*, data_root: Path) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path)
+    parser.add_argument("--stage-designated", type=Path)
     parser.add_argument("--activate-dated-auxiliary", action="store_true")
     parser.add_argument("--activate-dated-winrate", action="store_true")
     parser.add_argument("--activate-auxiliary-now", action="store_true")
@@ -2640,6 +2680,14 @@ def main() -> int:
         help="Explicit initial adoption; later dated succession is automatic",
     )
     args = parser.parse_args()
+    if args.stage_designated:
+        if any((args.source, args.activate_dated_winrate, args.activate_dated_auxiliary,
+                args.activate_auxiliary_now, args.activate_now, args.bootstrap, args.rollback_machine_to,
+                args.replace_initial_role, args.adopt_all_continuous, args.adopt_hierarchy, args.target_date, args.source_date)):
+            parser.error('--stage-designated is a standalone reviewed request')
+        from src.engine.scalping.entry_designated_policy import stage
+        print(json.dumps(stage(args.stage_designated, data_root=args.data_root)))
+        return 0
     if args.activate_dated_winrate:
         if not args.target_date or args.source or args.activate_now or args.bootstrap or args.rollback_machine_to or args.activate_dated_auxiliary:
             parser.error('--activate-dated-winrate requires only --target-date')

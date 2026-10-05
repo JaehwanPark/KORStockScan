@@ -1502,7 +1502,7 @@ def _stage_output_issues(report_dir, day, stage):
                 or (report.get('observation_status') != 'source_gap' and terminal.get('status') != 'completed')
                 or report.get('disposition') not in {'initial_adopted', 'successor_selected', 'incumbent_carried'}
                 or terminal.get('disposition') != report.get('disposition')
-                or staged.get('status') not in {'staged', 'already_staged', 'pending_initial_preserved', 'existing_incumbent_preserved'}
+                or staged.get('status') not in {'staged', 'already_staged', 'pending_initial_preserved', 'existing_incumbent_preserved', 'operator_designation_preserved', 'designated_policy_staged'}
                 or type(report.get('input_attempt_count')) is not int
                 or type(report.get('accepted_attempt_count')) is not int
                 or type(report.get('source_contract_excluded_count')) is not int
@@ -1522,7 +1522,12 @@ def _stage_output_issues(report_dir, day, stage):
                     proof = (bundle or {}).get('winrate_selection') or {}
                     pending = staged['status'] == 'pending_initial_preserved'
                     reused_incumbent = staged['status'] == 'existing_incumbent_preserved'
-                    if reused_incumbent:
+                    designated = proof.get('schema') == 'main_machine_designated_selection_v1'
+                    if designated:
+                        from src.engine.scalping.entry_designated_policy import binding_valid
+                        binding_invalid = (not binding_valid(report, bundle, Path(report_dir).parent)
+                            or staged.get('bundle_sha256') != bundle['bundle_sha256'])
+                    elif reused_incumbent:
                         previous = runtime_policy.load_effective(
                             data_root=Path(report_dir).parent,
                             target_date=report.get('publication_date'),
@@ -1547,7 +1552,7 @@ def _stage_output_issues(report_dir, day, stage):
                             or proof.get('parent_bundle_sha256') != report.get('parent_bundle_sha256')
                             or bundle.get('previous_bundle_sha256') != report.get('parent_bundle_sha256')
                             or (bundle['machine_policy'].get('entry_situation_veto') or {}).get('threshold_bp') != 68.75))
-                        or (not pending and not reused_incumbent
+                        or (not pending and not reused_incumbent and not designated
                             and (proof.get('report_sha256') != report.get('artifact_content_sha256')
                             or proof.get('disposition') != report['disposition']))):
                         errors.append(f'{stage}:winrate_staged_binding_invalid')
@@ -1660,7 +1665,8 @@ def _stage_code(stage, commands, project, *, dispatcher_path=None):
             paths[name] = project / f'src/engine/monitoring/{name}.py'
         paths['exact_jsonl_reader'] = project / 'src/utils/jsonl_io.py'
     if stage == 'main_machine_policy':
-        for name in ('entry_strategy_policy', 'entry_setup_evidence', 'ai_decision_quality', 'entry_candle_context', 'mechanistic_entry_runtime_policy'):
+        for name in ('entry_strategy_policy', 'entry_setup_evidence', 'ai_decision_quality', 'entry_candle_context', 'mechanistic_entry_runtime_policy',
+                     'entry_admission_analysis', 'entry_admission_acceptance', 'entry_admission_recipe', 'entry_designated_policy'):
             paths[name] = project / f'src/engine/scalping/{name}.py'
     return _stage_digest(_stage_sources(paths))
 

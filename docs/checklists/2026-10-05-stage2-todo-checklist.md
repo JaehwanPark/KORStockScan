@@ -2,16 +2,34 @@
 
 ## 오늘 목적
 
-- 기계 수용 계약 보완과 삼성 고정 후보 검증을 실행하고, 검증된 저장공간을 정리한다. 배포·10/6 준비와 실제 당일 소비를 구분한다.
+- 완료된 기계 수용 계약·삼성 검증·저장공간 정리 증거를 보존하고, 승인된 비삼성1회 지정·적용 후 비교 구현 및 삼성 유한 추가연구를 실행하고10/6 준비를 다시 검증한다.
 
 ## 필수 규칙
 
 - Plan Rebase §1–§8과 사용자 최신 지시를 따른다. 입력 날짜는9/29·9/30·10/2로 고정하며10/2를 새 독립 holdout으로 취급하지 않는다.
 - 기계 후보 `pullback_p60_v0`를 고정한다. 성공100%/80% 보존 veto를 추가하지 않는다. 삼성전자와 보조 AI는 별도 정책/owner로 구분한다.
-- 두 계획의 실행 결과는 아래 완료 기록으로 보존한다. 최신 요청은 보완계획 실행과 최대한의 검증된 디스크 정리다. 관측/최초 신호/native 기회·원 비용/stop·hurdle·독립 날짜를 대사한다. 삼성 최신 absorption과 과거 수급 veto의 결과/검증 owner를 혼동하지 않는다. 수용 계약안과 실제 변경·10/6 당일 소비를 구별한다.
+- 기존 실행 결과는 아래 완료 기록으로 보존한다. 최신 사용자 `계획 실행` 지시로 두 상세계획의 구현·지정 stage·통합 배포·준비 검증을 실행한다. 실제 Main 당일 기동/PID는 기존 owner가 확인한다. 관측/최초 신호/native·비용/stop·독립 날짜와 지정 근거를 구분하고 삼성 최신 absorption과 과거 veto의 owner를 혼동하지 않는다.
 - 10/5 문서는 작업 시작 시 없었다. 완료된10/4 항목을 현재 OPEN으로 복제하지 않고 이번 지시의 소유 항목만 등록한다. 다음 영업일 준비의 기존10/6 소유 항목은 유지한다.
 
 ## 실행 항목
+
+- [x] `[MachineDesignationSamsungResearchPlanning1005] 비삼성 지정 코드·삼성 추가연구 상세계획 수립` (`Due: 2026-10-05`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: MainEntry`)
+  - Source: 사용자 코드보완 상세계획 및 삼성전자 후보 추가연구계획 요청.
+  - Acceptance: 실제 지정 발행 부재·dated generation 불변·적용 후 자기비교·삼성 전체 parent hash 의존성 대사.1회 지정/후속 양방향 비교·producer/consumer·회귀·장전 준비 및 삼성 원천/유한 가설/연구 목적/이후 인계 계획, 문서 리뷰·보완·링크·단일 owner·print-only parser.
+  - Result: [비삼성 상세계획](../proposals/non-samsung-designated-policy-and-postapply-comparison-implementation-plan-2026-10-05.md), [삼성 추가연구계획](../proposals/samsung-absorption-differential-and-path-research-plan-2026-10-05.md) 작성. 지정과 독립검증 상태 분리, B0/C0/I_t/P_t 분리, 삼성 동등성 및 최대7정책 유한 비교를 설계했다. 두 계획의 새 수용/연구 지표는 제안이며 현재 동작으로 표시하지 않는다.
+  - Boundary: 문서만 수정. 코드·지정 발행·추가 연구 재계산·기동·원천 수집·10/6 준비 변경 없음. 보호 hash·문서 검증은 `tmp/designated-machine-and-samsung-planning-20261005/validation.json`에 기록한다.
+
+- [ ] `[NonSamsungDesignatedPolicyImplementation1005] 비삼성 고정 정책1회 지정·적용 후 비교 구현` (`Due: 2026-10-05`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: MainEntry`)
+  - Source: [지정·장후 비교 상세계획](../proposals/non-samsung-designated-policy-and-postapply-comparison-implementation-plan-2026-10-05.md).
+  - Acceptance: C0~C7의 지정 schema/발행/activation·기존 dated supersession/CAS·원 세대 보관·B0/C0/I_t/P_t 구분·양방향 비교·삼성 component 동등성·summary/strict/prepared 연결, 정상/거부/재실행/부분실패 회귀·리뷰/수정/재리뷰. 구현·준비와 실제 당일 PID 각각 증빙.
+  - Boundary: 사용자 계획 실행으로 승인된 구현·지정 발행·통합 배포·정확일자 준비 owner. 대상10/6·비삼성 KRX 정규장 `pullback_p60_v0` 고정, 독립 검증 미완료 유지. 삼성/보조/타 family·계좌/주문/수량/손절/custody guard 권한 확대 없음.
+  - Stop: 구현/준비 결과 또는 날짜 종료·parent 충돌·source 결함의 구체적 사유 확정. target 날짜 자동 연장 없음. 장후 비교는 `NonSamsungMachineForwardComparison1006`, 실제 Main 소비는 `DirectFamilyPreopenPolicyHandoff`에 인계.
+
+- [ ] `[SamsungAbsorptionDifferentialResearch1005] 삼성 흡수 후보 원천 차이·가격경로 유한 추가연구` (`Due: 2026-10-05`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: Research`)
+  - Source: [삼성 추가연구계획](../proposals/samsung-absorption-differential-and-path-research-plan-2026-10-05.md).
+  - Acceptance: R0중복 가설/원천 census→R1성공·손절·완전미도달/검열 차이→R2정책 전체/공통 사건→R3최대5변형과2대조 정책→R4권고/개선 없음/식별 불가·동결 인계. raw 시점/epoch/cost/stop·source 결손·metric/날짜 지원·표적 회귀/재리뷰 검증.
+  - Boundary: 기존 원천만 소비하는 승인된 오프라인 연구. 전체519/fixed-watch206 구분, 삼성 양수 가격경로 지표는 신규 연구 제안이며 현재 운영 승률 계약 변경 아님. API·수집 확대·보조 AI 혼합·Widget 실현 수익 이식·삼성 정책 지정/발행/배포 없음.
+  - Stop: 중복/원천 부재 가설을 닫고 최대7정책에서 후보1개 권고/개선 없음/판단 불가 확정. 임계값·종료기간 무한 추가 금지. 이후 자연 검증은 기존 `SamsungFrozenCandidateValidation1006` 소유.
 
 - [x] `[MachineAcceptanceRemediationSamsungPlan1005] 수용조건 결함보완계획 및 삼성 승계·추가 연구 필요성 점검` (`Due: 2026-10-05`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: MainEntry`)
   - Source: 사용자 결함보완계획 수립·삼성 정책 유지 사유 및 추가 연구 필요성 점검 요청.
@@ -72,6 +90,7 @@
   - Acceptance: 운영 연결 여부를 먼저 확인하고10/6 ENTER/BLOCK/RECHECK 관측을 삼성 제외·venue/session 분리하여 고정 후보와 부모 비교.10분 미도달은 이후 최대60분 경로로 보조 평가하되 순서/공백/검열 분리. 원천·군집/native 분모·주승률/지원조정·coverage/결손 민감도, source10/6→effective10/7 선정/승계/발행 여부를 정확히 기록. 당일 조건을 튜닝하면 동일 자료를 독립 검증으로 쓰지 않는다.
   - Boundary: 성공100%/80% 보존 탈락 조건 없음. 관측 승률/실제 경제성 분리. 자동화 미연결이면 별도 관측 비교와 자동 발행 미실행을 표시하며, 후속 실행 권한을 이 계획에서 새로 만들지 않는다. 운영 원천 경제성은 기존 `DirectFamilySourceRepairMainMechanisticEntry` 소유.
   - Stop: 고정 후보의 날짜별 비교·선정/승계 사유를 확정하면 종료. 원천이 없으면 `not_observed`, 계약 실패면 소유자·closure test를 명시하고 동일 입력 무한 재실행 금지.
+  - 후속 보완안: [지정 상세계획 §5](../proposals/non-samsung-designated-policy-and-postapply-comparison-implementation-plan-2026-10-05.md)의 구현·지정 receipt가 존재할 때만 고정 B0/C0의 적용 후 비교 분기를 사용한다. 기준 정책과 실제 incumbent를 분리하고 자기비교를 막는다. 새 고정-pair 계약을 구현했으며 지정 receipt와 실제 activation·관측 P_t가 있는 경우에만 적용 후 비교로 분류한다. 지정이 없으면 기존 acceptance 경로를 따른다.
 
 - [ ] `[WidgetEpisodeNextSessionStartup1006] Widget/Episode 다음거래일 정책·preflight·PID 수용` (`Due: 2026-10-06`, `Slot: INTRADAY`, `TimeWindow: 07:32~20:00`, `Track: RuntimeStability`)
   - Source: [재점검리뷰§4–§5](../audits/source-repair-repeat-review-and-next-session-readiness-2026-10-04.md), 사용자다음영업일정상가동재점검지시.
@@ -96,6 +115,8 @@
   - 현재: `tmp/samsung-fixed-watch-evaluation-20261004/next-date-readiness/preparation-status.json`에서 필요한4경로 부재·`waiting_new_source_date`; 새 날짜 성능은 미검증.
   - 최신 후보 인계 보완: 기존 frozen의2개는 foreign/program veto이며 absorption 후보가 아니다. [10/5 계획 S3](../proposals/machine-admission-acceptance-remediation-and-samsung-research-plan-2026-10-05.md)에 따라 `SamsungAbsorptionOutcomeReview1005`가 준비한 최신 `absorption_p60_v10`의 별도 frozen/adapter를 이 owner에서 추가 검증한다. 기존 원 계약을 덮어쓰지 않으며 adapter 준비 여부를 먼저 확인한다. 준비되지 않았으면 `latest_candidate_adapter_not_ready`, 원천 부재는 `waiting_new_source_date`를 구분한다. 과거2후보 검증만으로 최신 후보 완료를 선언하지 않는다.
   - 최신 후보 준비 완료: `tmp/admission-remediation-execution-20261005/replay-v2/samsung-frozen.json`, `samsung-forward-readiness.json`과 새 `samsung_absorption_acceptance_research` CLI를 사용한다. after10/5 원 projection·완료 가격 및 원 raw exact receipt를 검증한다. 현재 두 자동 생산 경로 부재로 waiting이며 실제 검증/선정은 미실행. 기존 두 veto의4경로 계약과 구별한다.
+  - 추가 계획 인계: `SamsungAbsorptionDifferentialResearch1005`가 실제 권고한 후보가 있을 때 별도 frozen을 추가한다. 비삼성 지정으로 전체 parent/kernel이 바뀌면 허용 diff의 삼성 component 동등성/migration receipt를 먼저 검증한다. 기존 frozen bytes는 변경하지 않으며 실제 삼성 동작 변화는 재계획한다.
+  - 실행 인계: 최신 원흡수 migration 및 `tmp/samsung-absorption-differential-research-20261005/final/frozen-candidate.json`의 H2를 구분한다. H2는 `samsung_absorption_differential_research --forward-frozen <H2> --base-frozen tmp/admission-remediation-execution-20261005/replay-v2/samsung-frozen.json --date 2026-10-06 --root /home/ubuntu/KORStockScan --output <new-output>`로 검증한다. 둘 다 현재 waiting. 과거 veto2개는 원 테스트 파일 c165a509 bytes 부재로 `blocked_historical_kernel_source_gap`; 기존 frozen을 현재 hash로 덮지 않고 원본 복구 또는 별도 재동결 검토 후 소비한다.
   - 이관:10/5 print-only parser에서10/4 소유 항목이 제외됨을 확인하여 현재 문서로 이동. ID·기존 수용/권한·준비 이력 보존; 실행 완료 처리 아님.
 
 - [x] `[NonSamsungFinalPolicyDecision1005] 비삼성 고정 후보의 최종 비교·구현 판단·연구 종결` (`Due: 2026-10-05`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: Research`)

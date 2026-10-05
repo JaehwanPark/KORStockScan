@@ -60,14 +60,21 @@ def frozen_spec(environment, sequence):
         training_metrics=[r['train'] for r in selected])
 
 
-def validate_frozen(frozen):
+def validate_frozen(frozen, root=None):
     if (frozen.get('schema') != 'samsung_frozen_candidate_contract_v1'
             or frozen.get('later_source_after_date') != '2026-10-04'
             or frozen.get('reselection_allowed') is not False
             or R.S.digest(frozen['parent_policy']) != frozen['parent_sha256']
-            or str(Path(__file__).resolve()) not in frozen.get('replay_dependency_seals', {})):
+            or (str(Path(__file__).resolve()) not in frozen.get('replay_dependency_seals', {})
+                and (root is None or str(Path(root)/'src/engine/scalping/samsung_fixed_watch_evaluation_research.py') not in frozen.get('replay_dependency_seals', {})))):
         raise ValueError('invalid_frozen_contract_or_missing_kernel_binding')
-    Q.verify_hashes(frozen['replay_dependency_seals'])
+    try:
+        Q.verify_hashes(frozen['replay_dependency_seals'])
+    except (ValueError, OSError):
+        if root is None:
+            raise
+        from src.engine.scalping.samsung_policy_compatibility import validate,current_kernels
+        validate(root,frozen,current_kernels(frozen,root))
 
 
 def candidate_masks(rows, captures, frozen):
@@ -314,8 +321,8 @@ def parent_generation(root, frozen, day):
         P.M.validate(dated, target_date=day)
         bundles.append(dated);seals[str(dated_path)] = R.P.file_sha(dated_path)
     for bundle in bundles:
-        if R.S.digest(bundle['scope_policies']['KRX|KRX_REGULAR']['machine_policy']) != frozen['parent_sha256']:
-            raise ValueError('current_or_dated_machine_parent_changed_replan_required')
+        from src.engine.scalping.samsung_policy_compatibility import effective_policy
+        effective_policy(root,frozen,bundle=bundle)
     return {b['bundle_sha256'] for b in bundles}, seals
 
 
@@ -430,9 +437,12 @@ def validate_replay_input(root, capsule, frozen):
             continue
         if ((raw.get('stock_code'), raw.get('effective_venue'), raw.get('session_bucket'))
                 != ('005930', 'KRX', 'KRX_REGULAR') or raw.get('source_date') != day
-                or raw.get('bundle_sha256') not in bundle_hashes
                 or not raw.get('source_provenance_verified') or not raw.get('machine_observation_hash_verified')):
             raise ValueError('replay_native_projection_scope_or_provenance_conflict')
+        from src.engine.scalping.samsung_policy_compatibility import source_bundle
+        actual=source_bundle(root,frozen,raw)
+        actual_path=root/'data/runtime/mechanistic_entry_policy/generations'/(actual['bundle_sha256']+'.json')
+        sources[str(actual_path)]=R.P.file_sha(actual_path)
         prepared = P.D.fast_prepare(raw, frozen['parent_policy'])
         outcome = P.D.outcome_diagnosis(raw)
         try:
@@ -532,8 +542,12 @@ def prepare_later_input(root, day, frozen, output):
             continue
         if raw.get('source_provenance_verified') is not True or raw.get('machine_observation_hash_verified') is not True:
             continue
-        if raw.get('source_date') != day or raw.get('bundle_sha256') not in bundle_hashes:
+        if raw.get('source_date') != day:
             raise ValueError('prepare_native_provenance_or_date_conflict')
+        from src.engine.scalping.samsung_policy_compatibility import source_bundle
+        actual=source_bundle(root,frozen,raw)
+        actual_path=root/'data/runtime/mechanistic_entry_policy/generations'/(actual['bundle_sha256']+'.json')
+        seals[str(actual_path)]=R.P.file_sha(actual_path)
         prepared = P.D.fast_prepare(raw, frozen['parent_policy'])
         outcome = P.D.outcome_diagnosis(raw)
         try:
@@ -695,7 +709,7 @@ def main(argv=None):
         parser.error('--frozen requires exactly one of --replay-input or --prepare-date')
     if args.frozen:
         frozen = R.read(args.frozen)
-        validate_frozen(frozen)
+        validate_frozen(frozen,root=root)
         capsule = R.read(args.replay_input) if args.replay_input else prepare_later_input(root, args.prepare_date, frozen, output)
         if capsule is None:
             status = R.read(output / 'preparation-status.json')['status']
@@ -703,7 +717,7 @@ def main(argv=None):
             return
         rows, caps, seals = validate_replay_input(root, capsule, frozen)
         masks = candidate_masks(rows, caps, frozen)
-        Q.verify_hashes(seals); validate_frozen(frozen)
+        Q.verify_hashes(seals); validate_frozen(frozen,root=root)
         write(output / 'later-replay.json', dict(day=capsule['day'], source_seals=seals,
             frozen_sha256=R.P.file_sha(args.frozen), native_comparison=native_comparison(rows, masks),
             candidate_reselection=False, official_policy_candidate=None))

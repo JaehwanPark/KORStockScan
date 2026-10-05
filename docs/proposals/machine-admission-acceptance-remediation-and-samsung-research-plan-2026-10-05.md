@@ -1,5 +1,7 @@
 # 기계 후보 수용조건 보완 및 삼성전자 후속 검증계획 — 2026-10-05
 
+현재 상태: §1~§7은 최초 계획 시점의 진단·설계이고, 실행 완료는 §8이다. 이후 사용자 요청에 따른 **비삼성1회 지정 코드 보완계획·삼성 추가연구계획**은 §9를 따른다. 새 계획의 작성은 지정 적용이나 추가 연구 계산 완료가 아니다.
+
 ## 1. 목적·현재 판단
 
 사용자 요청은 결함보완계획 수립과 삼성전자 기존 정책 유지 사유·추가 연구 필요성 점검이다. 이번 산출물은 현재 코드와 보관 결과를 대사한 계획이다. 비삼성 수용 계약 변경, 삼성 후보 등록, 정책 발행·배포를 완료한 문서가 아니다.
@@ -131,3 +133,12 @@ D1의 학습 원천/단위 변경과 아래50% coverage 처리 등은 **정책 �
 ## 8. 사용자 실행 지시에 따른 구현 결과
 
 P0~P5·S1~S3를 실행했다. 전용 순수 수용 helper와 삼성 adapter를 `src/engine/scalping`에 두고 generator/publisher/loader/최종 보고 연결을 보완했다. 비삼성401선택 및 연구7,069관측 대사 차이0, 현재 계약의 학습 승률45.75→70.20%, 학습 적격·새 날짜 검증 대기다. 삼성 첫 신호 축소 후10/2 결과는 같고 목표 도달률0→50%, 비용 후 양수 비율50→50%다. 최신 absorption frozen과10/6 대기 adapter를 기존 이후 날짜 owner에 인계했다. 실제 세부 결과·리뷰·복원 정리 증빙은 [실행 리뷰](../audits/machine-admission-remediation-and-samsung-execution-review-2026-10-05.md)에 기록한다. 원 계획의 수치 제안은 새 계약 버전으로 구현했으며 D8의 기준 문서 잔존 문구는 이번 범위에서 임의 변경하지 않았다.
+
+## 9. 지정 적용과 추가 연구의 후속 상세계획
+
+사용자는10/6에 신규 정책을 먼저 지정하고 장후부터 유지·교체를 판단하는 방식의 코드 보완 상세계획과 삼성 후보 추가연구계획을 요청했다.
+
+1. [비삼성 지정·적용 후 장후 비교 상세계획](non-samsung-designated-policy-and-postapply-comparison-implementation-plan-2026-10-05.md): 고정 `pullback_p60_v0`1회 지정, 기존 dated generation의 명시적 supersession·CAS·복원, 기존 B0/지정 C0/실제 incumbent·capture 정책 분리, 고정 두 정책의 양방향 비교와 이후 새 후보의 자동 검증, 삼성 component 동등성, 마지막 장전 소비까지의 코드·회귀·실행 순서를 규정한다.
+2. [삼성 원천 차이·가격경로 추가연구계획](samsung-absorption-differential-and-path-research-plan-2026-10-05.md): 기존 S1~S3 결과를 보존하고 전체519/fixed-watch206 원천에서 성공·손절·미도달 차이, 같은 사건의 진입 시점 효과, 최대5개 변형을 검증한다. 삼성 연구 주지표의 별도 제안·null/검열·이후 날짜와 원천 부재 종료를 명시한다.
+
+실행 owner는 각각 `NonSamsungDesignatedPolicyImplementation1005`, `SamsungAbsorptionDifferentialResearch1005`다. 이후 날짜 비교·실제 기동은 기존 owner를 재사용한다. 계획 문서 작성 중 코드·정책·release·10/6 준비 artifact를 변경하지 않는다. 현재 정책은 §8의 승계 상태를 유지한다.

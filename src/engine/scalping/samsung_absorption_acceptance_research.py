@@ -132,10 +132,13 @@ def freeze(parent, evidence):
         owner='SamsungFrozenCandidateValidation1006', evidence=[dict(path=str(Path(p).resolve()), sha256=H.file_sha(p)) for p in evidence]))
 
 
-def validate_frozen(value):
+def validate_frozen(value, root=None):
     expected = freeze(value.get('parent_policy'), [p['path'] for p in value.get('evidence', [])])
     if S.digest(value) != S.digest(expected):
-        raise ValueError('samsung_frozen_contract_changed')
+        if root is None or {k:v for k,v in value.items() if k not in {'kernel_manifest','artifact_content_sha256'}} != {k:v for k,v in expected.items() if k not in {'kernel_manifest','artifact_content_sha256'}}:
+            raise ValueError('samsung_frozen_contract_changed')
+        from src.engine.scalping.samsung_policy_compatibility import validate
+        validate(root,value,kernels())
 
 
 def prepare(root, day, frozen):
@@ -144,7 +147,7 @@ def prepare(root, day, frozen):
     from src.engine.scalping.ai_action_outcome_calibration import _machine_source_contract_valid
     from src.engine.scalping.postclose_entry_validation import opportunity_identity
     from src.engine.scalping import mechanistic_entry_runtime_policy as M
-    validate_frozen(frozen)
+    validate_frozen(frozen,root=root)
     if date.fromisoformat(day).isoformat() != day or day <= frozen['later_source_after_date']:
         raise ValueError('samsung_forward_date_required')
     root = Path(root)
@@ -159,8 +162,9 @@ def prepare(root, day, frozen):
         return seal(dict(body, status='waiting_new_source_date', missing_source_paths=missing))
     current = M.load_effective(data_root=root/'data', target_date=day)
     parent = M.for_cohort(current, ('KRX','KRX_REGULAR'))['machine_policy']
-    if S.digest(parent) != frozen['parent_sha256']:
-        raise ValueError('samsung_forward_parent_changed')
+    from src.engine.scalping import samsung_policy_compatibility as compatibility
+    compatibility.effective_policy(root,frozen,bundle=current)
+    parent=frozen['parent_policy']
     seals = {str(p): H.file_sha(p) for p in (capture, prices)}
     index, _, _ = H.price_index(root/'data', [day])
     observations, exclusions, seen = [], [], set()
@@ -171,8 +175,7 @@ def prepare(root, day, frozen):
         if not trace or trace in seen:
             raise ValueError('samsung_forward_trace_invalid')
         seen.add(trace)
-        if (row.get('source_date') != day or row.get('bundle_sha256') != current['bundle_sha256']
-            or not _machine_source_contract_valid(row)):
+        if (row.get('source_date') != day or not _machine_source_contract_valid(row)):
             exclusions.append(dict(trace=trace, reason='original_source_invalid'))
             continue
         setup = row.get('setup_evidence') or {}
@@ -188,6 +191,11 @@ def prepare(root, day, frozen):
             H.capture_clock(row)
         except (ValueError, TypeError, KeyError):
             exclusions.append(dict(trace=trace, reason='capture_clock_invalid'))
+            continue
+        try:
+            compatibility.source_bundle(root,frozen,row)
+        except (ValueError, OSError, KeyError, TypeError) as exc:
+            exclusions.append(dict(trace=trace,reason='capture_policy_provenance_invalid',detail=str(exc)))
             continue
         decision = F.evaluate(setup, parent, admission_mode='replace')
         if not decision['source_valid']:
