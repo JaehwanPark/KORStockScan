@@ -123,3 +123,8 @@ R0에서 모두 중복/원천 부재면 가설별 근거를 기록하고 종료�
 ## 실행 기록
 
 사용자 `계획 실행`으로 구현·리뷰·실제 원천 재생을 수행했다. 최신 상태와 역사 원천 결손, 발행/배포/준비 증빙은 [실행 리뷰](../audits/designated-machine-policy-and-samsung-differential-execution-review-2026-10-05.md)를 따른다. 계획 본문의 미실행 표현은 작성 시점 상태다.
+
+
+## 다음 연구계획
+
+기존5변형 연구는 종료했다. 판정 capture 간격으로 식별되지 않은 H2를 기존 연속 체결 구간에서 평가할 수 있는지 [별도 추가연구계획](samsung-continuous-tick-window-transition-research-plan-2026-10-05.md)으로 분리했다. 원 H2와 원흡수 frozen의 의미·과거 결과를 수정하지 않는다. 추가 가설 재생은 아직 실행하지 않았다.

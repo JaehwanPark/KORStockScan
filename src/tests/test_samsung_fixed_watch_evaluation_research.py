@@ -1,6 +1,7 @@
 from copy import deepcopy
 import json
 from pathlib import Path
+import re
 import subprocess
 
 import pytest
@@ -254,6 +255,67 @@ def test_owner_receipt_rejects_partial_cost_or_foreign_custody(defect):
         F.widget_receipt(events, owners, rows)
 
 
+def historical_policy_snapshot(root, tmp_path, path, expected_sha256):
+    """Relocate an old dated policy to exact archived bytes in this fixture."""
+    policy_root = root / 'data/runtime/mechanistic_entry_policy'
+    if path.parent.resolve() != policy_root.resolve() or not re.fullmatch(r'policy_\d{4}-\d{2}-\d{2}\.json', path.name):
+        return path
+    if not isinstance(expected_sha256, str) or not re.fullmatch(r'[0-9a-f]{64}', expected_sha256):
+        raise ValueError('historical_policy_expected_sha_invalid')
+    archive = policy_root / 'sources' / (expected_sha256 + '.json')
+    original = path if path.is_file() and F.R.P.file_sha(path) == expected_sha256 else archive
+    if not original.is_file() or F.R.P.file_sha(original) != expected_sha256:
+        raise ValueError('historical_policy_original_archive_missing_or_changed')
+    snapshot = tmp_path / 'historical-policy-sources' / archive.name
+    snapshot.parent.mkdir(parents=True, exist_ok=True)
+    snapshot.write_bytes(original.read_bytes())
+    if F.R.P.file_sha(snapshot) != expected_sha256:
+        raise ValueError('historical_policy_archive_changed_during_snapshot')
+    return snapshot
+
+
+@pytest.mark.parametrize('archive_state', ['exact', 'missing', 'changed'])
+def test_historical_policy_snapshot_preserves_original_hash_and_live_pointer(tmp_path, archive_state):
+    root = tmp_path / 'root'; policy = root / 'data/runtime/mechanistic_entry_policy/policy_2026-10-06.json'
+    policy.parent.mkdir(parents=True)
+    policy.write_text('{"generation":"old"}')
+    expected = F.R.P.file_sha(policy)
+    archive = policy.parent / 'sources' / (expected + '.json')
+    archive.parent.mkdir()
+    if archive_state != 'missing':
+        archive.write_bytes(policy.read_bytes() if archive_state == 'exact' else b'changed')
+    policy.write_text('{"generation":"new"}')
+    current = policy.read_bytes()
+    if archive_state == 'exact':
+        snapshot = historical_policy_snapshot(root, tmp_path / 'fixture', policy, expected)
+        assert snapshot != archive and F.R.P.file_sha(snapshot) == expected
+        snapshot.write_bytes(b'tampered fixture')
+        with pytest.raises(ValueError, match='sealed_file_changed'):
+            F.Q.verify_hashes({str(snapshot): expected})
+    else:
+        with pytest.raises(ValueError, match='original_archive_missing_or_changed'):
+            historical_policy_snapshot(root, tmp_path / 'fixture', policy, expected)
+    assert policy.read_bytes() == current
+
+
+def test_historical_snapshot_does_not_relax_other_source_hashes(tmp_path):
+    source = tmp_path / 'arbitrary/policy_2026-10-06.json'
+    source.parent.mkdir(); source.write_text('original')
+    expected = F.R.P.file_sha(source); source.write_text('changed')
+    assert historical_policy_snapshot(tmp_path, tmp_path / 'fixture', source, expected) == source
+    with pytest.raises(ValueError, match='sealed_file_changed'):
+        F.Q.verify_hashes({str(source): expected})
+
+
+def test_historical_policy_snapshot_is_independent_of_later_pointer_changes(tmp_path):
+    policy = tmp_path / 'data/runtime/mechanistic_entry_policy/policy_2026-10-06.json'
+    policy.parent.mkdir(parents=True); policy.write_text('original bytes')
+    expected = F.R.P.file_sha(policy)
+    snapshot = historical_policy_snapshot(tmp_path, tmp_path / 'fixture', policy, expected)
+    policy.write_text('next generation')
+    F.Q.verify_hashes({str(snapshot): expected})
+
+
 def historical_intake_fixture(tmp_path):
     """Exercise raw intake on existing bytes, never label it a new holdout."""
     root = Path(__file__).resolve().parents[2]
@@ -285,6 +347,8 @@ def historical_intake_fixture(tmp_path):
             snapshot.write_bytes(data)
             assert F.R.P.file_sha(snapshot) == digest
             name = str(snapshot)
+        else:
+            name = str(historical_policy_snapshot(root, tmp_path, path, digest))
         seals[name] = digest
     census['source_seals'] = seals
     native = root / 'data/report/machine_observation_projection/machine_observation_projection_2026-10-02_0_1.json'
