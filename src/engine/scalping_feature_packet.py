@@ -431,7 +431,7 @@ def extract_scalping_feature_packet(
     diagnostic_window = [
         {key: tick.get(key) for key in (
             "item", "market_route", "market_suffix", "transport_epoch",
-            "received_at_ms", "time", "price", "volume", "volume_source",
+            "received_at_ms", "route_sequence", "time", "price", "volume", "volume_source",
             "trade_volume_source", "tick_trade_value_source",
             "trade_volume_1030_1031_vs_15_mismatch", "aggressor_side",
             "trade_aggressor_side", "dir", "side", "aggressor_source",
@@ -776,7 +776,8 @@ def extract_scalping_feature_packet(
                        default=str).encode("utf-8")
         ).hexdigest(),
         **({"_feature_tick_diagnostic_window": diagnostic_window}
-           if ws_data.get("zero_base_probe_exact_tick_source") else {}),
+           if (ws_data.get("zero_base_probe_exact_tick_source")
+               or ws_data.get("entry_machine_exact_tick_source")) else {}),
         "market_data_health": snapshot.get("market_data_health"),
         "curr_price": curr_price,
         "latest_strength": latest_strength,
@@ -917,7 +918,8 @@ def _select_recent_ticks_with_source(ws_data, recent_ticks, *, now=None):
     ws_ticks = ws_data.get("recent_trade_ticks") if isinstance(ws_data, dict) else None
     exact_route = bool(
         isinstance(ws_data, dict)
-        and ws_data.get("zero_base_probe_exact_tick_source")
+        and (ws_data.get("zero_base_probe_exact_tick_source")
+             or ws_data.get("entry_machine_exact_tick_source"))
     )
     minimum = 1 if exact_route else 5
     if not isinstance(ws_ticks, list) or len(ws_ticks) < minimum:

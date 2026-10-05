@@ -9433,6 +9433,16 @@ class GPTSniperEngine:
                         "reason": snapshot_status,
                     }
                 )
+                if (machine_exact.get("stock_code") == "005930"
+                        and str(machine_exact.get("effective_venue") or "").upper() == "KRX"
+                        and str(machine_exact.get("session_bucket") or "").upper() == "KRX_REGULAR"):
+                    from src.engine.scalping.entry_machine_observation import build_receipt
+                    machine_exact["entry_machine_observation_receipt"] = build_receipt(
+                        ws_data, {**machine_feature_packet,
+                                  "_feature_tick_diagnostic_window": machine_tick_window},
+                        machine_exact, cutoff=machine_input_fields.get(
+                            "entry_machine_input_as_of", cutoff_ms / 1000.0),
+                    )
                 machine_hot_payload = json.dumps(machine_exact, ensure_ascii=True)
                 machine_analysis = build_exact_payload_analysis_v1(
                     machine_exact, stage="entry", live_entry=True

@@ -3103,6 +3103,46 @@ def refresh_receipt_projection(
     return report
 
 
+def freeze_source_quality(report: dict, *, output_dir: Path) -> None:
+    """Bind a new candidate to immutable audit bytes before publication.
+
+    This does not repair a consumed candidate or change expected hashes. A
+    freshly calculated report must already bind the verified current audit.
+    """
+    preflight = report.get('source_quality_preflight') or {}
+    if preflight.get('tuning_input_allowed') is not True:
+        return
+    source = Path(preflight['source_path'])
+    raw = source.read_bytes()
+    sha = hashlib.sha256(raw).hexdigest()
+    if sha != preflight.get('source_sha256'):
+        raise ValueError('episode_source_quality_changed_before_freeze')
+    frozen = output_dir / 'source_quality_snapshots' / sha / source.name
+    frozen.parent.mkdir(parents=True, exist_ok=True)
+    require_final = report['target_date'] >= '2026-09-17'
+    pairs = [(source, frozen)]
+    if require_final:
+        pairs.extend([(source.with_suffix('.md'), frozen.with_suffix('.md')),
+            (Path(str(source) + '.final-contract.json'), Path(str(frozen) + '.final-contract.json'))])
+    for original, destination in pairs:
+        content = original.read_bytes()
+        if destination.exists():
+            if destination.read_bytes() != content:
+                raise ValueError('episode_source_quality_snapshot_conflict')
+        else:
+            with destination.open('xb') as stream:
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+    from src.engine.automation.source_quality_hard_gate import load_source_quality_preflight
+    gate = load_source_quality_preflight(report['target_date'], artifact_path=frozen, require_final=require_final)
+    if (gate.get('tuning_input_allowed') is not True or gate.get('validation_errors')
+        or gate.get('artifact_sha256') != sha or source.read_bytes() != raw):
+        raise ValueError('episode_source_quality_snapshot_validation_failed')
+    report['source_quality_preflight'] = {**preflight, 'source_path': str(frozen.resolve())}
+    report['artifact_hash'] = report_artifact_hash(report)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target-date", required=True)
@@ -3136,6 +3176,7 @@ def main(argv: list[str] | None = None) -> int:
             ),
         )
     )
+    freeze_source_quality(report, output_dir=args.output_dir)
     candidate = build_candidate(report, candidate_dir=args.candidate_dir)
     valid, reason = validate_candidate(candidate, source_report=report)
     if not valid:

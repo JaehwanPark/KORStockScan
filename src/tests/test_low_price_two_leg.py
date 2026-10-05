@@ -5676,3 +5676,11 @@ def test_calibration_full_gain_without_half_stability_never_freezes_candidate(tm
     assert diagnostics and all(d["comparison"]["economic_superiority_confirmed"] for d in diagnostics)
     assert all(not d["calibration_stability_passed"] for d in diagnostics)
     assert search["frozen_selection"] is None and search["selected_profile"] is None
+def test_source_quality_freeze_rejects_changed_audit_before_publication(tmp_path):
+    from src.engine.monitoring.low_price_two_leg_tuning import freeze_source_quality
+    source = tmp_path / 'audit.json'
+    source.write_text('{}')
+    report = {'source_quality_preflight': {'tuning_input_allowed': True,
+        'source_path': str(source), 'source_sha256': 'a' * 64}}
+    with pytest.raises(ValueError, match='changed_before_freeze'):
+        freeze_source_quality(report, output_dir=tmp_path / 'out')

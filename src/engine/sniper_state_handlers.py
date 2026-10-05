@@ -31619,6 +31619,33 @@ def _refresh_prepared_entry_inputs(code, ws_data, recent_ticks, candle_context):
             context_max_age_ms=int(min(limits)),
             refresh_even_if_input_fresh=True,
         )
+        # Samsung's observation may measure a locked BBO. The submit helper
+        # above keeps its strict executable-quote check for every submit caller.
+        from src.engine.scalping.entry_machine_observation import (
+            samsung_scope, select_local_observation,
+        )
+        if (samsung_scope(code, candle_context)
+                and refresh.get("pre_submit_ws_snapshot_refresh_reason") == "latest_best_levels_invalid"
+                and refresh.get("pre_submit_ws_snapshot_refresh_best_bid", 0) > 0
+                and refresh.get("pre_submit_ws_snapshot_refresh_best_bid")
+                    == refresh.get("pre_submit_ws_snapshot_refresh_best_ask")):
+            selected, observation = select_local_observation(
+                ws_data, WS_MANAGER.get_latest_data(code) or {}, candle_context,
+                now=time.time(), max_age_ms=int(min(limits)),
+                preserve_keys=_PRE_SUBMIT_WS_CONTEXT_PRESERVE_KEYS,
+            )
+            ws_data = selected
+            refresh["pre_submit_ws_snapshot_refresh_applied"] = True
+            refresh["pre_submit_ws_snapshot_refresh_reason"] = (
+                "latest_locked_observation_only" if observation["quote_state"] == "locked"
+                else "latest_exact_observation_only"
+            )
+            refresh["pre_submit_ws_snapshot_refresh_best_bid"] = selected["best_bid"]
+            refresh["pre_submit_ws_snapshot_refresh_best_ask"] = selected["best_ask"]
+            refresh["pre_submit_ws_snapshot_refresh_latest_price"] = selected["curr"]
+            refresh["pre_submit_ws_snapshot_refresh_age_ms"] = round(
+                (observation["selected_at"] - selected["last_ws_update_ts"]) * 1000, 3)
+            fields["entry_ai_final_observation_selection"] = observation
         fields.update(
             {
                 key.replace(
@@ -31651,6 +31678,13 @@ def _refresh_prepared_entry_inputs(code, ws_data, recent_ticks, candle_context):
                     for kind in ("0B", "0D")
                 ):
                     raise ValueError("prepared_entry_route_partition_epoch_invalid")
+                if samsung_scope(code, candle_context):
+                    selected_ws, observation = select_local_observation(
+                        ws_data, ws_data, candle_context, now=time.time(),
+                        max_age_ms=int(min(limits)),
+                        preserve_keys=_PRE_SUBMIT_WS_CONTEXT_PRESERVE_KEYS,
+                    )
+                    fields["entry_ai_final_observation_selection"] = observation
             ws_data = selected_ws
             # Do not resurrect old REST tape when the new WS frame lacks it.
             recent_ticks = list(ws_data.get("recent_trade_ticks") or [])

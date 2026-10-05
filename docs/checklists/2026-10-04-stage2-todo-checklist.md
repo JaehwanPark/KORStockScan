@@ -22,6 +22,48 @@
 
 ## 실행 항목
 
+- [x] `[MachineObservationGenerator1004] 관측 평가 단위·기계 후보 생성기 연결 및 격리 재생성` (`Due: 2026-10-04`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: Research`)
+  - Source: 사용자 다음액션 실행 지시, [계약·실행계획](../proposals/machine-observation-generator-contract-plan-2026-10-04.md).
+  - Acceptance: native/probe 구분·반복 군집 평가·고정 삼성/비삼성 후보의 실제 생성기 연결, 원천/parent/kernel/경로 결속, 학습 선정·10/2 비교·9/29 민감도 분해, 반복 리뷰/수정·표적회귀/compile/diff/link/owner/print-only parser.
+  - Boundary: 기존 원천 기계 전용 격리 생성. 성공100%/80% 보존 veto 없음. 관측 후보 선택·운영 승격·실현 성과 분리; 정책 발행/배포/기동·API/provider/주문/수집 확대 없음.
+  - 완료: [생성 결과 리뷰](../audits/machine-observation-generator-contract-review-2026-10-04.md). 7,069건 parent 재현·32원천 hash·실제 생성기 격리 경로, 비삼성 군집 승률 학습42.59→68.45%/10월2일55.56→71.43% 관측 후보 선택; 삼성 학습 선정·후단 기존 경계결과 미확정으로 비교 보류. 9월29일600초 민감도54종목 분해·음수 가격CF 보존,159표적회귀/compile/hash/link/owner/diff/print-only parser 검증. 운영 등록·발행/배포/PID·독립 성능은 완료 범위에 포함하지 않는다.
+
+- [x] `[MachineCandidateEvaluatorSourceExit1004] 기계 후보 실제 평가·삼성 원천 효과·고정 진입 청산 검증` (`Due: 2026-10-04`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: Research`)
+  - Source: 사용자 다음액션1→2→3 실행 지시, [실행계획](../proposals/machine-candidate-evaluator-source-exit-verification-plan-2026-10-04.md).
+  - Acceptance: 비삼성 실제 기계 제안/원 위험·native 결손 대사, 삼성 완전 입력 census와 가능한 source×rule 비교, 고정 진입 청산/비용 분해, 리뷰·수정·표적회귀/compile/hash/link/owner/diff/print-only parser.
+  - Boundary: 기존 원천·기계 전용 격리 연구. 성공100%/80% 보존 veto 없음. 원천 결손·CF·실현 수익 분리; 정책 발행/배포/기동·API/provider/주문/수집 확대 없음.
+  - 완료: [결과 리뷰](../audits/machine-candidate-evaluator-source-exit-verification-review-2026-10-04.md). 비삼성6,550 parent 일치·신규 ENTER 제안263관측·10/2 목표22/손절10/승률68.75%; pipeline308,408행 exact ID 대사·후단 native0은 probe 생산 경로로 확인. 삼성519 capture/228 pipeline 연결에서도 완전 feature 생성 입력0으로 source 수정의 과거 효과는 미입증. 고정 진입12청산 arm·공통 분모/중첩/비용 분해,223표적회귀·compile/hash/link/owner/diff/print-only parser 검증. 실제 운영 적용·독립 성능·실현경제성은 완료로 합산하지 않는다.
+
+- [x] `[SamsungFlatBuyFlowImplementation1004] 삼성전자 보합 수급 원천·report-only 평가 함수 구현 및 재생` (`Due: 2026-10-04`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: Research`)
+  - Source: 사용자 다음액션 실행 지시, [구현계획 §7](../proposals/samsung-flat-buy-flow-source-and-evaluator-implementation-plan-2026-10-04.md), [실행 리뷰](../audits/samsung-source-recipe-and-non-samsung-horizon-review-2026-10-04.md).
+  - Acceptance: exact-route/epoch/cutoff/window receipt·locked 관측/제출 분리·원 위험 fact 보존·미등록 보합 recipe·기존 ENTER 유지/교체 비교·519 parent 재현·첫 봉/native 민감도·반복 리뷰/수정·202회귀/compile/location/hash/link/owner/diff/print-only parser.
+  - Boundary: 코드 및 격리 재생. 정책 등록/발행·배포·기동·주문/API/provider/수집 확대 없음. 과거 최신 snapshot 전체 feature 재구축과 자연 운영 소비는 미입증이며 기존10/6 owner를 변경하지 않는다. 성공100%/80% 보존 veto 없음.
+  - 완료: source 유효430·조건76·신규 ENTER 제안54관측, 학습 교체형 연구 선택·10/2 비중복 목표4/손절2/시간종료2. 실제 전체 capture와 독립 archive 증명을 결속하고 완전한 최신 feature 재구축·독립 날짜·실현성과 한계는 리뷰에 남겼다.
+
+- [x] `[NonSamsungMachineHorizonUnion1004] 삼성전자외 전체 기계 행동 상승 통합 및10분 이후 가격 연구` (`Due: 2026-10-04`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: Research`)
+  - Source: 사용자 삼성전자외 ENTER/BLOCK/RECHECK 실제 상승 통합·미도달 이후 가격 보조 평가 지시, [실행 리뷰](../audits/samsung-source-recipe-and-non-samsung-horizon-review-2026-10-04.md).
+  - Acceptance: 삼성전자 사전 제외8,109행/764종목·원천/가격/비용 hash·10/20/30/60분/세션종료·첫 봉/가격간격/손절후반등 분리·원천/유형 비교·66가설 학습 선정·종목제외/반복축소/native 민감도·표적회귀/문서 검증.
+  - Boundary: 기계 전용 관측 연구. 실제 evaluator 신규 ENTER 변환·보조판정·운영정책/배포/기동·API/provider/주문 변경 없음. 성공100%/80% 보존 veto 없음; 가격CF와 실현손익을 구분한다.
+  - 완료: 엄격 목표 선도달2,752(ENTER122/RECHECK1,904/BLOCK726),10분 이후 목표1,130. 학습 후보 `pullback_p60_v0`의10/2 경계확정 승률60.61→68.75%; 전체393종목 제외 민감도 개선 유지(선택 종목39개, 후속 리뷰에서 횟수 표기 정정).600초 축소 시9/29 개선 소멸·9/30/10/2 native-only 후보0·평균 가격CF 음수를 함께 보존했다.
+
+- [x] `[SamsungFlatBuyFlowContract1004] 삼성전자 보합 수급 원천·기계 evaluator 대사와 구현계획` (`Due: 2026-10-04`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: Research`)
+  - Source: 사용자 다음액션 실행 지시, [선행 리뷰 §7](../audits/samsung-machine-horizon-pattern-research-review-2026-10-04.md), [후속 구현계획](../proposals/samsung-flat-buy-flow-source-and-evaluator-implementation-plan-2026-10-04.md).
+  - Acceptance: 고정 후보·519 parent 행동 재현·원24선택/10월2일8관측의 cutoff/receipt·보관0B/0D·전체 risk fact/기존 adapter 대사, 시점 민감도와 새 규칙/원천/shared evaluator 구현계획, 반복 리뷰·수정·14회귀/compile·47입력 seal·diff/link/owner/print-only parser.
+  - Boundary: 기계 전용 격리 연구와 계획. 기존 raw/정책/배포/기동·API/provider/주문/수집 확대·10/6 준비 계약 변경 없음. 성공100%/80% 보존 veto 없음; partial feature 민감도와 실제 정책/성과를 구분한다.
+  - 완료: [대사 결과](../audits/samsung-flat-buy-flow-source-and-evaluator-review-2026-10-04.md).10월2일 원8관측 체결값은 receipt 시점8/8·최신 cutoff4/8 일치. locked BBO4건의 이전 snapshot 소비를 확인했고 최신 체결3필드 민감도는 원시각 고정 목표3/손절2/종료2·전체 재점유 목표4/손절2/종료2.519행 원 행동 일치, 조건73행 기존 adapter 신규 ENTER0.9월29일2건 대사 미해결·독립 날짜/실행/경제성 한계를 보존하고 운영 P0–P3 구현은 후속 계획으로 남겼다.
+
+- [x] `[SamsungMachineHorizonPattern1004] 삼성전자 기계 전체 행동·관측기간별 원천 패턴 연구` (`Due: 2026-10-04`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: Research`)
+  - Source: 사용자 기계 전용 통합 상승 비교·10분 이후 보조 평가·다음액션 실행 지시, [계획](../proposals/samsung-machine-horizon-pattern-research-plan-2026-10-04.md).
+  - Acceptance: 전684관측 결과 유형 대사·원천/날짜/세션/native/반복 민감도·66고정가설 학습 선정→10/2 비교·동시 점유 배제·guard 보존·비용/첫 봉 리뷰·표적 회귀/compile/hash/link/diff/print-only parser.
+  - Boundary: 기존 원천 격리 연구. 보조 AI·정책 발행/배포/기동/API/provider/주문/수집 확대 및10/6 준비 계약 변경 없음. 성공100%/80% 보존 veto 없음; 사후 유형을 진입 입력으로 사용하지 않는다.
+  - 완료: [결과](../audits/samsung-machine-horizon-pattern-research-review-2026-10-04.md). 빠른 목표92·늦은 목표70·손절 후 반등85, `absorption_p60_v10` 학습 후보의10/2 비중복 재생 목표4/손절2/시간종료2. 비용·관측 시점·native/첫 봉 민감도와 기준선10/2 경계확정 승률 미산정을 공개했다.14표적 회귀·684행 원10분 대사·source/hash·문서 검증. 연구 후보를 보존하며 운영 선정/실현성과/독립 검증을 주장하지 않는다.
+
+- [x] `[EntryObservationTypeExitResearch1004] 삼성전자 확정 원천 패턴 비교와 유형별 진입 청산 연구 실행` (`Due: 2026-10-04`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: Research`)
+  - Source: 사용자 삼성전자 RECHECK/BLOCK 확정 관측 비교 및 계획 실행 지시, [실행계획](../proposals/entry-observation-type-utilization-and-exit-separation-research-plan-2026-10-04.md).
+  - Acceptance: 삼성전자 미확정 제외 패턴·행동별/날짜별 대조, P0 원천/가설 봉인 → P1 A1 분해 → P2 동일 진입 청산 비교 → P3 동일 청산 진입 비교 → P4 삼성전자 차단 해소 → P5 parent 행동 재생, 반복 리뷰/수정·표적 회귀·원천 hash/미래 입력/비용/route/native·문서 parser 검증과 결론 기록.
+  - Boundary: 기존 원천의 오프라인 연구. 정책 발행·선택·배포·기동·API/provider·주문·수집 확대·10/6 준비 계약 변경 없음. 성공100%/80% 보존 veto 없음; CF/실현손익 및 미도달/결손 분리.
+  - 완료: [실행 리뷰](../audits/entry-observation-type-exit-separation-research-review-2026-10-04.md). 원 삼성전자724관측 중 source 부적격81·미확정507을 분리, 목표84/손절52의 판정별 원천 비교.8,793행 parent 재현 일치, A1 고정 진입 X1 청산은10/2 양수 종료14.57→20.18%이나 평균CF 악화; 실제 parent native 진입 후보0. BBO receipt2,591행 추출 복원·엄격/보충 진단 분리·15회귀·19원본/가설/기존연구 seal·compile/diff/link/print-only parser 검증. 고정 가설군 완료, runtime/정책/배포 변경0; 실제 exit/체결·독립 날짜 성능은 미검증.
+
 - [x] `[IntegratedDeploymentDiskCleanup1004] 전체 작업본 통합 배포·다음세션 준비·검증된 사본 정리` (`Due: 2026-10-04`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: RuntimeStability`)
   - Source: 사용자 전체 작업본 통합 배포·정상기동 가능여부 재점검·디스크 정리 지시, [통합 실행 기록](../audits/integrated-deployment-and-disk-cleanup-review-2026-10-04.md), [release routing](../runtime-release-routing.md).
   - Acceptance: 모든 변경 파일 census·통합 리뷰/보완·표적 회귀·compile/location/diff/link/parser, 통합 commit·clean immutable release·selector 원자 전환·예약 owner 경로·새 release exact10/6 isolated 준비/full 검증·Main/Widget/Episode 정책/타이머/PID·격리 대사, 현재/직전/서비스/원천/증거/롤백 보호·삭제 manifest/archive ref·사후 route/hash/free-space 검증.
@@ -34,11 +76,12 @@
   - Boundary: 코드수리·격리검증과read-only운영점검. 실제commit/배포/재기동/정책발행·API/provider/주문/수집확대·10/6체크리스트세대변경없음. 격리3개/OFF권한보존.
   - 완료: C1 457/C2 36, 고유493tests PASS. actual재생5→6·원watch2/원5행SHA 및RECHECK/경제성동일, 재생/재검토계약cold/warm bytes일치. 운영선택a17bd6d2의준비current_full_contract·Main/Widget/Episode loader PASS·등록cron8개·Episode122unit/366pins·125timerenabled/active. 실제Widget3137231 cwd/startup대사PASS(10/3증거). Episode61baseline valid/58격리제외·3격리유지, 당일applied/PREOPEN/PID는미도래. 수리본미배포·미래가동/성과미검증; Main은기존10/6owner, Widget/Episode는아래owner.
 
-- [ ] `[WidgetEpisodeNextSessionStartup1006] Widget/Episode 다음거래일 정책·preflight·PID 수용` (`Due: 2026-10-06`, `Slot: INTRADAY`, `TimeWindow: 07:32~20:00`, `Track: RuntimeStability`)
+- 이관 기록: `[WidgetEpisodeNextSessionStartup1006] Widget/Episode 다음거래일 정책·preflight·PID 수용` (`Due: 2026-10-06`, `Slot: INTRADAY`, `TimeWindow: 07:32~20:00`, `Track: RuntimeStability`)
   - Source: [재점검리뷰§4–§5](../audits/source-repair-repeat-review-and-next-session-readiness-2026-10-04.md), 사용자다음영업일정상가동재점검지시.
   - Acceptance: Widget07:32정책반영/07:58기동경로와현재PID의10/6reload/행동policy hash·custody/source receipt를대조한다. 기존10/3 startup은당일reload증거로사용하지 않는다. Episode58격리제외profile의당일applied/authority·research/Main/token preflight·실제unit/PID·자연원천을profile별로대조하고3격리를별도표시한다. 기존Main `DirectFamilyPreopenPolicyHandoff`·Episode sequence owner와증거를연결하되코드/준비/기동/주문/경제성을구분한다.
   - Boundary: read-only검증과결과기록. 실제가동/기동부작용이있는preflight/정책쓰기/재기동/API/token조회/주문/격리해제는자동실행하지 않는다. source없음은not_observed,미도래는not_yet_due이며source gap의0치환없음.
   - 현재:10/4 준비PASS이며당일적용/PID/자연소비는미도래. 기존독립e6d4d3b9 release/service pin을보존한다.
+  - 현재 owner: [10/5 체크리스트](2026-10-05-stage2-todo-checklist.md)의 동일 ID로 이관. 아래 수용/이력은 보존하며 이 문서는 현재 OPEN 또는 실행 완료 소유자가 아니다.
 
 - [x] `[SamsungPremarketForwardPreparation1004] 원천 수리 release 준비·장전 독립 검증 계약 고정` (`Due: 2026-10-04`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: MainEntry`)
   - Source: [준비계획](../proposals/samsung-premarket-forward-validation-and-source-release-preparation-plan-2026-10-04.md), 사용자 다음액션 실행 지시.
@@ -46,12 +89,13 @@
   - Boundary: 커밋·배포 준비와오프라인 계약/소비 test/inventory. 실제commit/배포/재기동·정책발행/API/provider/주문/수집확대 및기존10/6owner 변경없음.
   - 완료: [실행리뷰](../audits/samsung-premarket-forward-validation-and-source-release-preparation-review-2026-10-04.md). 선택a17bd6d2 기준 최종격리C1 455/C2 33, 고유488tests PASS. default 경제성결손 제외·독립미확정 보존·warmcache 검증. 고정두가설 contract/inventory 재실행 bytes 일치,10/6 원천4경로부재.185기존seal/98policy·selector·10/3/10/6checklist보존. 실제PID consumption미입증; 미래성능은 아래별도owner 대기.
 
-- [ ] `[SamsungPremarketForwardValidation1006] 고정 삼성전자 장전 두 관측 가설의 독립 날짜 검증` (`Due: 2026-10-06`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: MainEntry`)
+- 이관 기록: `[SamsungPremarketForwardValidation1006] 고정 삼성전자 장전 두 관측 가설의 독립 날짜 검증` (`Due: 2026-10-06`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: MainEntry`)
   - Source: [계획§4–§6](../proposals/samsung-premarket-forward-validation-and-source-release-preparation-plan-2026-10-04.md), [준비리뷰§4](../audits/samsung-premarket-forward-validation-and-source-release-preparation-review-2026-10-04.md), 사용자 이후검증 준비 범위.
   - Acceptance:10/6이후 자연원천의exact parent/canonical/native/route/epoch/cost/label/원guard와kernel 검증, frozen두가설의Main 원binary/별도가격CF 소비 evaluator 구현·리뷰/회귀, 동일population parent 대비승률·비용·미확정 비교. 최초3적격날짜 한도·각binary3/독립2날짜 연구gate·parentempty 비교미식별·성공보존veto없음·조건재선정없음.
   - Boundary: 새tmp generation의오프라인 연구. source없음은waiting, canonical/route 결손은excluded/source_gap, parent/kernel변경은replan. archive CF는Main native/실현PnL을대체하지 않는다. 연구gate와정식publisher/운영경제성/runtime bridge를분리하며 실제매매/수집/배포/재기동권한없음.
   - 준비이력: `tmp/samsung-premarket-forward-preparation-20261004/final-v2-cold/source-inventory.json`의4경로부재·`waiting_new_source_date`였다. 기존정규장 `SamsungFrozenCandidateValidation1006`과별도소유다.
   - 현재: 통합배포후 `tmp/integrated-deployment-disk-cleanup-20261004/forward-release-bound/frozen-contract.json`의7a8ba145 계약을선택release 코드로소비한다. 원parent/두가설/조건/비용/기간/미래3날짜한도와kernel bytes는40f567d0 계약과동일하며차이는승인된불변release의물리코드경로뿐이다. 40f567d0/458ce71a는역사receipt로보존한다. 원천4경로는여전히waiting이고새날짜성과/정식candidate 미검증이다.
+  - 현재 owner: [10/5 체크리스트](2026-10-05-stage2-todo-checklist.md)의 동일 ID로 이관. 아래 수용/이력은 보존하며 이 문서는 현재 OPEN 또는 실행 완료 소유자가 아니다.
 
 - [x] `[EntrySetupSourceRepair1004] Entry setup family/state producer 수리·별도 역사 복구 소비 검증` (`Due: 2026-10-04`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: MainEntry`)
   - Source: [수리계획](../proposals/entry-setup-family-state-source-repair-plan-2026-10-04.md), 사용자 다음액션 실행 지시 및 선행 확인연구 리뷰§7.
@@ -71,11 +115,12 @@
   - Boundary: 보유 원천 오프라인 구현·검증. 성공100%/80% 보존 veto 및 native 합성 없음. 원수집/API/provider·주문·실정책 발행·배포/재기동·10/6 기존owner 변경 없음. 이후 날짜 실제 검증 대기와 코드 준비 완료를 구분한다.
   - 완료: [평가·owner 대조 리뷰](../audits/samsung-fixed-watch-evaluation-and-owner-comparison-review-2026-10-04.md). 전용206관측·원watch2개와 전체519를 분리; 전체학습60%/66.67% 후보는 전용에서0%/선택0으로 개선 미재현. 원watch 연결 회복/흡수9/30 각각확정1/2 양수·검열1,10/2 최초검열로 뒤 admission 보류. 실제Widget10주275,500→277,000·동일custody 확인; 설정비용 후8,629원·+0.313212% 추정. Main장전RECHECK2개 canonical 연결, 동일종료가격에서08:13 진입가격효과+0.36544%p·08:36가격효과0, 정규장 종료수식 확정paired0. frozen후보/자동원천later adapter·285개 고유tests/compile/diff·6prefix·cold/warm3파일·176source/98정책 보존. 운영후보미확보·배포/기동0; 이후 성능은 아래owner에서 대기.
 
-- [ ] `[SamsungFrozenCandidateValidation1006] 고정 삼성전자 후보의 이후 날짜 검증` (`Due: 2026-10-06`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: MainEntry`)
+- 이관 기록: `[SamsungFrozenCandidateValidation1006] 고정 삼성전자 후보의 이후 날짜 검증` (`Due: 2026-10-06`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: MainEntry`)
   - Source: [계획§6](../proposals/samsung-fixed-watch-evaluation-and-owner-comparison-plan-2026-10-04.md), [실행 리뷰§6/§8](../audits/samsung-fixed-watch-evaluation-and-owner-comparison-review-2026-10-04.md), 사용자 고정 후보 후속검증 준비 범위.
   - Acceptance: 자동 생성된10/4 이후 원천만 intake, 원parent/hash/trace/guard/native/cost/label·독립epoch 확인, 고정 두 후보의 삼성전자 전체origin/상시감시 성과·미확정 수 대조. 후보 재선정 및 source 수집 없이 연구 receipt와 처분 기록.
   - Boundary: 새tmp generation의 오프라인 검증. source없음은waiting, 식별 불량은excluded/valid-empty 구분, parent·전역 계약 변경은replan. 실제publisher/주문/API/provider·배포·기동 및10/6 기존owner 변경 없음.
   - 현재: `tmp/samsung-fixed-watch-evaluation-20261004/next-date-readiness/preparation-status.json`에서 필요한4경로 부재·`waiting_new_source_date`; 새 날짜 성능은 미검증.
+  - 현재 owner: [10/5 체크리스트](2026-10-05-stage2-todo-checklist.md)의 동일 ID로 이관. 아래 수용/이력은 보존하며 이 문서는 현재 OPEN 또는 실행 완료 소유자가 아니다.
 
 - [x] `[SamsungEnvironmentConditionedResearch1004] 삼성전자 방향·수급 조건부 가설 연구` (`Due: 2026-10-04`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: MainEntry`)
   - Source: [환경·수급 연구계획](../proposals/samsung-environment-conditioned-pattern-research-plan-2026-10-04.md), [프로그램 구간 변화 보완](../proposals/samsung-program-sequence-research-plan-2026-10-04.md), 사용자 환경별 가설 확대 및 연구계획 실행 지시.

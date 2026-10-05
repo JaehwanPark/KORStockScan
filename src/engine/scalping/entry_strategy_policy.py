@@ -346,6 +346,9 @@ def legacy_projection(policy):
     # confirmation are final. Applying it during the recursive replay would
     # lose the raw-capture and parent-action receipt.
     result.pop('entry_situation_veto', None)
+    # Initial-entry admission recipes do not govern holding/add or unscoped
+    # recursive fact reconstruction.
+    result.pop('entry_admission_recipe', None)
     if result.get('version') == POLICY_VERSION:
         from src.engine.scalping.entry_setup_evidence import MECHANISTIC_FULL_POPULATION_POLICY_VERSION
         result['version'] = MECHANISTIC_FULL_POPULATION_POLICY_VERSION

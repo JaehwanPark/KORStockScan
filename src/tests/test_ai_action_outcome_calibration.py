@@ -5958,3 +5958,17 @@ def test_winrate_pending_initial_does_not_rerun_frozen_census(monkeypatch, tmp_p
     assert report['pending_initial_bundle_sha256'] == pending['bundle_sha256']
     assert report['accepted_attempt_count'] == 1
     assert report['candidate_policy'] is None
+
+
+def test_projection_replacement_preserves_exact_research_generation(tmp_path):
+    import hashlib
+    import gzip
+    path = tmp_path / 'projection.json'
+    calibration._write_machine_projection(path, {'contract':{}, 'rows':[{'trace':'old'}]})
+    old = Path(str(path) + '.gz').read_bytes()
+    sha = hashlib.sha256(old).hexdigest()
+    calibration._write_machine_projection(path, {'contract':{}, 'rows':[{'trace':'new'}]})
+    archive = tmp_path / 'generations' / f'{sha}.json.gz'
+    assert archive.read_bytes() == old
+    assert json.loads(gzip.decompress(old))['rows'][0]['trace'] == 'old'
+    assert json.loads(gzip.decompress(Path(str(path) + '.gz').read_bytes()))['rows'][0]['trace'] == 'new'

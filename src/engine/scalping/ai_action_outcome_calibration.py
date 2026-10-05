@@ -5335,7 +5335,7 @@ def _read_machine_projection(path: Path, *, kernels: dict) -> dict:
     actual = compressed if compressed.is_file() else path
     if not actual.is_file() or actual.is_symlink():
         return {}
-    limit = 64 * 1024 * 1024 if actual.suffix == '.gz' else MACHINE_PROJECTION_MAX_BYTES
+    limit = 128 * 1024 * 1024 if actual.suffix == '.gz' else MACHINE_PROJECTION_MAX_BYTES
     if actual.stat().st_size > limit:
         return {}
     before = actual.stat()
@@ -5366,10 +5366,40 @@ def _read_machine_projection(path: Path, *, kernels: dict) -> dict:
 def _write_machine_projection(path: Path, value: dict) -> None:
     """Publish lossless compact gzip; semantic row/content hashes are unchanged."""
     path.parent.mkdir(parents=True, exist_ok=True)
+    previous = Path(str(path) + '.gz')
+    if previous.is_symlink():
+        raise ValueError('machine_projection_previous_symlink_invalid')
+    if previous.is_file():
+        # Frozen research can reference the previous physical generation.
+        # Preserve its exact compressed bytes before replacing the cache.
+        with previous.open('rb') as stream:
+            prior_sha = hashlib.file_digest(stream, 'sha256').hexdigest()
+        archive = path.parent / 'generations' / f'{prior_sha}.json.gz'
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        if not archive.exists():
+            fd, temporary = tempfile.mkstemp(prefix='.projection-archive-', dir=archive.parent)
+            try:
+                with previous.open('rb') as source, os.fdopen(fd, 'wb') as target:
+                    for chunk in iter(lambda: source.read(1024 * 1024), b''):
+                        target.write(chunk)
+                    target.flush()
+                    os.fsync(target.fileno())
+                with Path(temporary).open('rb') as source:
+                    if hashlib.file_digest(source, 'sha256').hexdigest() != prior_sha:
+                        raise ValueError('machine_projection_changed_before_archive')
+                try:
+                    os.link(temporary, archive)
+                except FileExistsError:
+                    pass
+            finally:
+                Path(temporary).unlink(missing_ok=True)
+        with archive.open('rb') as stream:
+            if hashlib.file_digest(stream, 'sha256').hexdigest() != prior_sha:
+                raise ValueError('machine_projection_archive_hash_invalid')
     descriptor, name = tempfile.mkstemp(prefix='.machine-projection-', dir=path.parent)
     try:
         with os.fdopen(descriptor, 'wb') as physical:
-            with gzip.GzipFile(fileobj=physical, mode='wb', compresslevel=1, mtime=0) as compressed:
+            with gzip.GzipFile(filename='', fileobj=physical, mode='wb', compresslevel=1, mtime=0) as compressed:
                 with io.TextIOWrapper(compressed, encoding='utf-8') as handle:
                     json.dump(value, handle, ensure_ascii=False, allow_nan=False, separators=(',', ':'))
             physical.flush()
@@ -9563,7 +9593,7 @@ def _winrate_veto_payload(threshold):
         selected_action='BLOCK', unknown_action='parent')
 
 
-def build_winrate_policy_report(rows, *, source_receipt, target_date, data_root=Path('data'), publication_day=None):
+def build_winrate_policy_report(rows, *, source_receipt, target_date, data_root=Path('data'), publication_day=None, admission_recipe_id=None, admission_analysis=None):
     """Evaluate the registered one-feature veto without replaying fact kernels per threshold."""
     from copy import deepcopy
     from src.engine.scalping import entry_strategy_policy as strategy
@@ -9579,9 +9609,22 @@ def build_winrate_policy_report(rows, *, source_receipt, target_date, data_root=
     from src.engine.scalping.postclose_entry_validation import (
         NEW_LOGIC_SOURCE_DATE, OPPORTUNITY_IDENTITY_VERSION, opportunity_identity,
     )
-    native_identity_required = target_date >= NEW_LOGIC_SOURCE_DATE and 'entry_situation_veto' in parent
+    from src.engine.scalping.entry_admission_recipe import RECIPE_ID, candidate_policy as admission_candidate
+    if admission_recipe_id not in (None, RECIPE_ID):
+        raise ValueError('winrate_admission_recipe_unregistered')
+    recipe_mode = admission_recipe_id == RECIPE_ID
+    recipe_candidate = admission_candidate(parent) if recipe_mode else None
+    analysis_rows = {}
+    if recipe_mode and admission_analysis is not None:
+        from src.engine.scalping.entry_admission_analysis import validate_report
+        validate_report(admission_analysis, parent=parent, target_date=target_date, require_files=True)
+        analysis_rows = {row['trace']: row for row in admission_analysis['observations']}
+    elif recipe_mode:
+        raise ValueError('winrate_admission_analysis_missing')
+    native_identity_required = recipe_mode or (target_date >= NEW_LOGIC_SOURCE_DATE and 'entry_situation_veto' in parent)
     base_policy = deepcopy(parent)
-    base_policy.pop('entry_situation_veto', None)
+    if not recipe_mode:
+        base_policy.pop('entry_situation_veto', None)
     scope_rows = [row for row in rows if (row.get('effective_venue'), row.get('session_bucket')) == ('KRX', 'KRX_REGULAR')]
     population, contract = _common_refinement_population([], scope_rows,
         target_date=target_date, source_receipt=source_receipt, paired_contract={},
@@ -9590,6 +9633,9 @@ def build_winrate_policy_report(rows, *, source_receipt, target_date, data_root=
     excluded = Counter()
     prepared, seen = [], set()
     for row in population:
+        if recipe_mode and row.get('stock_code') == '005930':
+            excluded['outside_recipe_symbol'] += 1
+            continue
         if row.get('source_date', '') < _refresh_floor(target_date):
             excluded['before_policy_refresh_start'] += 1
             continue
@@ -9608,11 +9654,15 @@ def build_winrate_policy_report(rows, *, source_receipt, target_date, data_root=
         except (ValueError, TypeError, KeyError, OverflowError):
             excluded['completed_bar_structure_invalid'] += 1
             continue
-        net_path_pct, reason = _machine_path_value(row)
+        if recipe_mode:
+            from src.engine.scalping.entry_admission_analysis import native_path_value
+            net_path_pct, first_hit, reason = native_path_value(row, analysis_rows.get(trace))
+        else:
+            net_path_pct, reason = _machine_path_value(row)
+            first_hit = (row.get('entry_quality_path') or {}).get('first_hit')
         if reason:
             excluded[reason] += 1
             continue
-        first_hit = (row.get('entry_quality_path') or {}).get('first_hit')
         if first_hit not in {'net_target_first', 'exact_stop_first'}:
             excluded['binary_terminal_missing'] += 1
             continue
@@ -9627,6 +9677,7 @@ def build_winrate_policy_report(rows, *, source_receipt, target_date, data_root=
             decision = mechanistic_entry_policy_decision(setup, policy=parent)
             base_decision = (decision if base_policy == parent else
                 mechanistic_entry_policy_decision(setup, policy=base_policy))
+            recipe_decision = mechanistic_entry_policy_decision(setup, policy=recipe_candidate) if recipe_mode else None
         except (ValueError, TypeError, KeyError):
             excluded['parent_replay_invalid'] += 1
             continue
@@ -9637,6 +9688,7 @@ def build_winrate_policy_report(rows, *, source_receipt, target_date, data_root=
         prepared.append(dict(source_date=row['source_date'], decision_ts=row.get('decision_ts'), decision_trace_id=trace,
             opportunity_id=opportunity_id, parent_action=decision['action'],
             base_action=base_decision['action'],
+            recipe_action=recipe_decision['action'] if recipe_mode else None,
             net_path_pct=net_path_pct,
             win=first_hit == 'net_target_first',
             gross_first_hit=(row.get('comparison') or {}).get('entry_path_first_hit'),
@@ -9644,7 +9696,7 @@ def build_winrate_policy_report(rows, *, source_receipt, target_date, data_root=
             situation='VWAP_UNKNOWN' if not (available and fresh and value is not None) else
                 'VWAP_EXTENDED' if value >= 68.75 else 'VWAP_NOT_EXTENDED'))
     dates = sorted({row['source_date'] for row in prepared})
-    initial = 'entry_situation_veto' not in parent
+    initial = not recipe_mode and 'entry_situation_veto' not in parent
     pending_initial = initial and target_date > '2026-09-23'
     pending_bundle = None
     first_day_split = False
@@ -9674,7 +9726,8 @@ def build_winrate_policy_report(rows, *, source_receipt, target_date, data_root=
                 or any(not isinstance(day, str) or day <= '2026-09-23' for day in receipt['holdout_dates'])):
                 raise ValueError('winrate_holdout_consumption_invalid')
             consumed.update(receipt.get('holdout_dates') or [])
-        fresh_dates = [day for day in dates if day >= _refresh_floor(target_date) and day not in consumed]
+        fresh_dates = [day for day in dates if day >= _refresh_floor(target_date) and day not in consumed
+                       and (not recipe_mode or day > '2026-10-02')]
         holdout_dates = fresh_dates[-1:] if fresh_dates else []
         train_dates = [day for day in dates if day not in holdout_dates]
         # On the first forward day, freeze a chronological opportunity split.
@@ -9705,11 +9758,12 @@ def build_winrate_policy_report(rows, *, source_receipt, target_date, data_root=
         thresholds = (train_values if len(train_values) <= 9 else sorted({
             train_values[min(len(train_values) - 1, int((len(train_values) - 1) * q / 10))]
             for q in range(1, 10)}))
-        thresholds = [value for value in thresholds
-            if value <= parent['entry_situation_veto']['threshold_bp']]
+        thresholds = ([RECIPE_ID] if recipe_mode else [value for value in thresholds
+            if value <= parent['entry_situation_veto']['threshold_bp']])
     def selected(source, threshold):
         return [row for row in source if
             (row['parent_action'] == 'ENTER_NOW' if threshold is None else
+             row['recipe_action'] == 'ENTER_NOW' if recipe_mode else
              row['base_action'] == 'ENTER_NOW' and (row['value_bp'] is None or row['value_bp'] < threshold))]
     train = [row for row in prepared if row['source_date'] in train_dates
              and (not first_day_split or row['opportunity_id'] in split_keys[0])]
@@ -9754,7 +9808,8 @@ def build_winrate_policy_report(rows, *, source_receipt, target_date, data_root=
                 and metrics['support_adjusted_win_rate_pct'] - baseline_train['support_adjusted_win_rate_pct'] >= 5),
         }
         eligible_train = initial or all(checks.values())
-        training_diagnostics.append(dict(threshold_bp=threshold, metrics=metrics,
+        training_diagnostics.append(dict(threshold_bp=None if recipe_mode else threshold,
+            recipe_id=RECIPE_ID if recipe_mode else None, metrics=metrics,
             retained_baseline_winning_attempt_count=len(kept_winners),
             baseline_winning_attempt_count=len(baseline_train_winners),
             successor_hurdles=checks, failed_successor_hurdles=[key for key, passed in checks.items() if not passed],
@@ -9773,13 +9828,18 @@ def build_winrate_policy_report(rows, *, source_receipt, target_date, data_root=
     holdout_opportunity_manifest_sha256 = (strategy.digest(sorted(
         [row['source_date'], row['opportunity_id'], row['decision_trace_id'], row['win']]
         for row in selected_holdout)) if chosen else None)
-    candidate_policy = deepcopy(parent)
-    if threshold is not None:
+    candidate_policy = deepcopy(recipe_candidate if recipe_mode else parent)
+    if threshold is not None and not recipe_mode:
         candidate_policy['entry_situation_veto'] = _winrate_veto_payload(threshold)
     from src.engine.scalping.entry_setup_evidence import validate_mechanistic_entry_threshold_policy
     if validate_mechanistic_entry_threshold_policy(candidate_policy):
         raise ValueError('winrate_candidate_policy_invalid')
     errors = []
+    if recipe_mode:
+        if parent == recipe_candidate:
+            errors.append('admission_recipe_already_incumbent')
+        if not holdout_dates:
+            errors.append('admission_recipe_forward_date_after_2026_10_02_required')
     if initial and not pending_initial:
         if (dates != ['2026-09-22', '2026-09-23']
             or len(prepared) != 351
@@ -9923,7 +9983,13 @@ def build_winrate_policy_report(rows, *, source_receipt, target_date, data_root=
         candidate_machine_policy_sha256=candidate_hash, candidate_policy=candidate_policy,
         policy_by_scope={'KRX|KRX_REGULAR': candidate_policy} if not errors else {},
         policy_sha256=strategy.digest({'KRX|KRX_REGULAR': candidate_policy} if not errors else {}),
-        candidate_threshold_bp=threshold, candidate_search_count=len(thresholds),
+        candidate_threshold_bp=None if recipe_mode else threshold, candidate_search_count=len(thresholds),
+        candidate_kind='admission_recipe' if recipe_mode else 'vwap_veto',
+        candidate_recipe_id=RECIPE_ID if recipe_mode else None,
+        candidate_evaluated=bool(chosen),
+        recipe_discovery_through_date='2026-10-02' if recipe_mode else None,
+        admission_analysis_sha256=(admission_analysis or {}).get('artifact_content_sha256') if recipe_mode else None,
+        admission_analysis=admission_analysis if recipe_mode else None,
         candidate_training_diagnostics=training_diagnostics,
         candidate_holdout_opportunity_manifest_sha256=holdout_opportunity_manifest_sha256,
         train_dates=train_dates, holdout_dates=holdout_dates,
@@ -9960,8 +10026,15 @@ def build_winrate_policy_report(rows, *, source_receipt, target_date, data_root=
         broker_order_forbidden=True))
 
 
-def build_machine_policy_report(rows, *, source_receipt, target_date, data_root=Path('data'), limit=96, write_checkpoints=False, training_through_date=None):
+def build_machine_policy_report(rows, *, source_receipt, target_date, data_root=Path('data'), limit=96, write_checkpoints=False, training_through_date=None, observation_recipe_request=None):
     """Generate a machine policy artifact only; no downstream or publication loop."""
+    if observation_recipe_request is not None:
+        # Explicit offline source contract. Never mix observational clusters with
+        # native opportunity identities or write the production train checkpoint.
+        if rows or source_receipt or write_checkpoints or training_through_date is not None:
+            raise ValueError('observation_recipe_request_must_be_isolated')
+        from src.engine.scalping.entry_observation_recipe_policy import build_report
+        return build_report(observation_recipe_request, target_date=target_date)
     import resource
     import time
     started_wall = time.monotonic()
@@ -10727,7 +10800,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--data-root", type=Path, default=Path("data"))
     parser.add_argument("--write", action="store_true")
     parser.add_argument('--machine-policy-only', action='store_true', help='Generate only the pre-AI machine threshold policy artifact')
-    parser.add_argument('--winrate-policy-only', action='store_true', help='Evaluate the registered win-rate veto and stage a next-day policy')
+    parser.add_argument('--winrate-policy-only', action='store_true', help='Evaluate a registered machine win-rate candidate and stage a next-day policy')
+    parser.add_argument('--admission-recipe', choices=['pullback_p60_v0'], help='Evaluate the frozen non-Samsung admission successor')
     parser.add_argument('--training-through-date', help='Explicit train cutoff; later sources only are diagnostic holdout')
     parser.add_argument('--search-limit', type=int, default=96, help='Machine policy candidate traversal budget')
     parser.add_argument(
@@ -10748,6 +10822,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--activate-now", action="store_true", help="Activate an eligible strategy generation immediately and carry until superseded")
     parser.add_argument("--print-summary", action="store_true")
     args = parser.parse_args(argv)
+    if args.admission_recipe and not args.winrate_policy_only:
+        parser.error('--admission-recipe requires --winrate-policy-only')
     if args.winrate_policy_only:
         if (args.machine_policy_only or args.machine_only or args.activate_now
             or args.require_policy_publication
@@ -10774,10 +10850,19 @@ def main(argv: list[str] | None = None) -> int:
                 if args.write:
                     source_receipt = _await_machine_ai_natural_source_receipt(
                         args.data_root, args.target_date)
+            admission_analysis = None
+            if args.admission_recipe:
+                from src.engine.scalping.entry_admission_analysis import build_report as admission_report
+                from src.engine.scalping.mechanistic_entry_runtime_policy import load_effective, for_cohort
+                current = load_effective(data_root=args.data_root, target_date=datetime.now(KST).date().isoformat())
+                parent = for_cohort(current, ('KRX', 'KRX_REGULAR'))['machine_policy']
+                admission_analysis = admission_report(rows, parent=parent,
+                    target_date=args.target_date, data_root=args.data_root)
             result = build_winrate_policy_report(rows,
                 source_receipt=source_receipt,
                 target_date=args.target_date, data_root=args.data_root,
-                publication_day=args.publication_date or datetime.now(KST).date().isoformat())
+                publication_day=args.publication_date or datetime.now(KST).date().isoformat(),
+                admission_recipe_id=args.admission_recipe, admission_analysis=admission_analysis)
             result = _with_artifact_content_sha256({**result, 'observation_source_counts': counts,
                 'cost_source': cost_source,
                 'observation_status': 'source_gap' if not result['accepted_attempt_count'] else 'observed',

@@ -1602,7 +1602,8 @@ def stage_commands(stage, day, publication, *, recovery=False):
         return []
     if stage == 'main_machine_policy':
         return [command('scalping.ai_action_outcome_calibration', *date_args,
-                        '--winrate-policy-only', '--publication-date', publication)]
+                        '--winrate-policy-only', '--admission-recipe', 'pullback_p60_v0',
+                        '--publication-date', publication)]
     if stage == 'pre_submit_delay':
         return [command('scalping.pre_submit_delay_tuning', '--date', day,
                         '--effective-date', _next_krx_trading_day(publication), '--require-family-ledger')]

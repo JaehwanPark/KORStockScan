@@ -634,6 +634,8 @@ def _validate_bundle_sources(bundle: dict, data_root: Path) -> dict:
             or (source_payload.get('candidate_policy') if proof['disposition'] != 'incumbent_carried'
                 else old['machine_policy']) != new['machine_policy']):
             raise ValueError('winrate_selection_parent_or_candidate_invalid')
+        if source_payload.get('candidate_kind') == 'admission_recipe':
+            _validate_admission_source(source_payload, old['machine_policy'], require_files=False)
     return bundle
 
 
@@ -1507,6 +1509,11 @@ def _winrate_successor_hurdles_valid(source: dict) -> bool:
     import math
 
     objective = source.get('selection_objective_version')
+    if source.get('candidate_kind') == 'admission_recipe':
+        if (source.get('candidate_recipe_id') != 'pullback_p60_v0'
+            or source.get('recipe_discovery_through_date') != '2026-10-02'
+            or any(day <= '2026-10-02' for day in source.get('holdout_dates') or [])):
+            return False
     if (objective is not None and str(source.get('target_date') or '') >= '2026-10-02'
         and (objective != 'winrate_native_improvement_without_winner_retention_v3'
              or source.get('opportunity_identity_contract') != 'native_scanner_or_fixed_watch_v2')):
@@ -1596,6 +1603,19 @@ def _winrate_successor_hurdles_valid(source: dict) -> bool:
     return True
 
 
+def _validate_admission_source(source, parent, *, require_files):
+    from src.engine.scalping.entry_admission_analysis import validate_report
+    analysis = source.get('admission_analysis')
+    if (source.get('candidate_recipe_id') != 'pullback_p60_v0'
+        or type(source.get('candidate_evaluated')) is not bool
+        or source.get('recipe_discovery_through_date') != '2026-10-02'
+        or source.get('candidate_threshold_bp') is not None
+        or not isinstance(analysis, dict)
+        or source.get('admission_analysis_sha256') != analysis.get('artifact_content_sha256')):
+        raise ValueError('winrate_admission_source_invalid')
+    validate_report(analysis, parent=parent, target_date=source['target_date'], require_files=require_files)
+
+
 def stage_winrate_policy(source_path: Path, *, data_root: Path, now: datetime | None = None,
                          publication_day: str | None = None) -> dict:
     """Freeze the reviewed next-day machine choice without moving current."""
@@ -1609,6 +1629,8 @@ def stage_winrate_policy(source_path: Path, *, data_root: Path, now: datetime | 
     accepted = source.get('accepted_attempt_count')
     source_excluded = source.get('source_contract_excluded_count')
     input_count = source.get('input_attempt_count')
+    recipe_mode = source.get('candidate_kind') == 'admission_recipe'
+    holdout_evaluated = bool(source.get('candidate_evaluated')) if recipe_mode else source.get('candidate_threshold_bp') is not None
     population_valid = (type(input_count) is int and input_count >= 0
         and type(accepted) is int and accepted >= 0
         and type(source_excluded) is int and source_excluded >= 0
@@ -1619,6 +1641,7 @@ def stage_winrate_policy(source_path: Path, *, data_root: Path, now: datetime | 
         and accepted + source_excluded + sum(excluded.values()) == input_count
         and sum(situations.values()) == accepted)
     if (source.get('schema') != 'main_entry_winrate_policy_report_v1'
+        or source.get('candidate_kind') not in (None, 'vwap_veto', 'admission_recipe')
         or not isinstance(source.get('target_date'), str)
         or source.get('target_date') > publication_day
         or publication_day > current.date().isoformat()
@@ -1639,7 +1662,7 @@ def stage_winrate_policy(source_path: Path, *, data_root: Path, now: datetime | 
         or not population_valid
         or not winrate_market_census_valid(source)
         or (source.get('policy_version') == 'winrate_successor_v1'
-            and source.get('candidate_threshold_bp') is not None
+            and holdout_evaluated
             and len(source.get('holdout_dates') or []) == 1
             and re.fullmatch(r'[0-9a-f]{64}', str(source.get('candidate_holdout_opportunity_manifest_sha256'))) is None)
         or source.get('disposition') not in {'initial_adopted', 'successor_selected', 'incumbent_carried'}):
@@ -1655,6 +1678,8 @@ def stage_winrate_policy(source_path: Path, *, data_root: Path, now: datetime | 
         if ('strategy' not in parent or digest(parent) != source.get('parent_machine_policy_sha256')
             or (source['policy_version'] == 'winrate_initial_v1') != ('entry_situation_veto' not in parent)):
             raise ValueError('winrate_stage_parent_machine_changed')
+        if recipe_mode:
+            _validate_admission_source(source, parent, require_files=True)
         candidate = source.get('candidate_policy')
         disposition = source['disposition']
         if disposition == 'incumbent_carried':
@@ -1665,20 +1690,26 @@ def stage_winrate_policy(source_path: Path, *, data_root: Path, now: datetime | 
             machine = parent
         else:
             expected_candidate = copy.deepcopy(parent)
-            expected_candidate['entry_situation_veto'] = copy.deepcopy(
-                candidate.get('entry_situation_veto') if isinstance(candidate, dict) else None)
+            if recipe_mode:
+                from src.engine.scalping.entry_admission_recipe import candidate_policy
+                expected_candidate = candidate_policy(parent)
+            else:
+                expected_candidate['entry_situation_veto'] = copy.deepcopy(
+                    candidate.get('entry_situation_veto') if isinstance(candidate, dict) else None)
             scoped_candidate = {'KRX|KRX_REGULAR': candidate}
             if (not isinstance(candidate, dict)
                 or validate_mechanistic_entry_threshold_policy(candidate)
                 or candidate != expected_candidate
                 or digest(candidate) != source.get('candidate_machine_policy_sha256')
-                or source.get('candidate_threshold_bp') != candidate['entry_situation_veto']['threshold_bp']
+                or (recipe_mode and (source.get('candidate_recipe_id') != 'pullback_p60_v0'
+                    or source.get('candidate_threshold_bp') is not None))
+                or (not recipe_mode and source.get('candidate_threshold_bp') != candidate['entry_situation_veto']['threshold_bp'])
                 or source.get('policy_by_scope') != scoped_candidate
                 or source.get('policy_sha256') != digest(scoped_candidate)
                 or candidate == parent
                 or (disposition == 'initial_adopted') != ('entry_situation_veto' not in parent)
                 or (disposition == 'initial_adopted' and candidate['entry_situation_veto']['threshold_bp'] != 68.75)
-                or (disposition == 'successor_selected' and
+                or (disposition == 'successor_selected' and not recipe_mode and
                     candidate['entry_situation_veto']['threshold_bp'] > parent['entry_situation_veto']['threshold_bp'])
                 or (source.get('source_receipt') or {}).get('machine_threshold_tuning_input_allowed') is not True
                 or (disposition == 'successor_selected' and not _winrate_successor_hurdles_valid(source))
@@ -1724,7 +1755,7 @@ def stage_winrate_policy(source_path: Path, *, data_root: Path, now: datetime | 
             raise ValueError('winrate_source_snapshot_invalid')
         holdout_path = None
         holdout_receipt = None
-        if (disposition != 'initial_adopted' and source.get('candidate_threshold_bp') is not None
+        if (disposition != 'initial_adopted' and holdout_evaluated
             and len(source.get('holdout_dates') or []) == 1):
             if re.fullmatch(r'[0-9a-f]{64}', str(source.get('candidate_holdout_opportunity_manifest_sha256'))) is None:
                 raise ValueError('winrate_holdout_opportunity_manifest_missing')
@@ -1738,6 +1769,12 @@ def stage_winrate_policy(source_path: Path, *, data_root: Path, now: datetime | 
                 candidate_threshold_bp=source['candidate_threshold_bp'],
                 selected_opportunity_count=((source.get('candidate') or {}).get('holdout') or {}).get('selected_opportunity_count'),
                 selected_opportunity_manifest_sha256=source['candidate_holdout_opportunity_manifest_sha256']))
+            if recipe_mode:
+                holdout_receipt = calibration._with_artifact_content_sha256({
+                    **{k: v for k, v in holdout_receipt.items() if k != 'artifact_content_sha256'},
+                    'candidate_recipe_id': source['candidate_recipe_id'],
+                    'candidate_recipe_sha256': digest(expected_candidate) if disposition == 'successor_selected'
+                        else source['candidate_machine_policy_sha256']})
             if holdout_path.exists() and _read(holdout_path) != holdout_receipt:
                 raise ValueError('winrate_holdout_already_consumed')
         existing = load(data_root=data_root, target_date=target)
@@ -1966,6 +2003,11 @@ def activate_strategy_report(source_path: Path, *, data_root: Path, now: datetim
                 dispositions[scope] = ['already_active']
                 continue
             errors = promotion_errors(candidate, scoped['machine_policy'], tuple(scope.split('|')))
+            if (scoped['machine_policy'].get('entry_admission_recipe')
+                and candidate.get('policy') != scoped['machine_policy']):
+                # The dated admission producer owns this complete component.
+                # A legacy full-strategy refresh cannot remove or replace it.
+                errors.append('strategy_admission_recipe_owner_conflict')
             if any(d > source['target_date'] for split in ('train', 'holdout')
                    for d in (candidate.get('evidence', {}).get(split) or {}).get('source_dates', [])):
                 errors.append('strategy_activation_future_source')

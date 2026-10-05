@@ -1942,7 +1942,7 @@ def validate_mechanistic_entry_threshold_policy(policy: Any) -> list[str]:
         "actual_order_submitted",
         "broker_order_forbidden",
     }
-    if set(value) - {"hierarchy", "strategy", "entry_situation_veto"} != expected_fields:
+    if set(value) - {"hierarchy", "strategy", "entry_situation_veto", "entry_admission_recipe"} != expected_fields:
         errors.append("mechanistic_entry_threshold_policy_fields_invalid")
     if value.get("schema") != MECHANISTIC_ENTRY_THRESHOLD_POLICY_SCHEMA:
         errors.append("mechanistic_entry_threshold_policy_schema_invalid")
@@ -2041,6 +2041,12 @@ def validate_mechanistic_entry_threshold_policy(policy: Any) -> list[str]:
             errors.append("entry_situation_veto_contract_invalid")
     if "hierarchy" in value:
         errors.extend(validate_mechanistic_hierarchy(value))
+    if "entry_admission_recipe" in value:
+        from src.engine.scalping.entry_admission_recipe import validate as validate_recipe
+        parent = {k: v for k, v in value.items() if k != "entry_admission_recipe"}
+        errors.extend(validate_recipe(value["entry_admission_recipe"], parent))
+        if _as_dict(value.get("strategy")).get("scope") != ["KRX", "KRX_REGULAR"]:
+            errors.append("entry_admission_recipe_strategy_scope_invalid")
     return list(dict.fromkeys(errors))
 
 
@@ -2525,6 +2531,25 @@ def mechanistic_entry_policy_decision(
         raise ValueError(
             f"mechanistic_entry_threshold_policy_invalid:{','.join(policy_errors)}"
         )
+    if "entry_admission_recipe" in selected_policy:
+        from copy import deepcopy
+        from src.engine.scalping.entry_admission_recipe import evaluate as evaluate_recipe
+        parent = {k: v for k, v in selected_policy.items() if k != "entry_admission_recipe"}
+        decision = mechanistic_entry_policy_decision(setup, policy=parent)
+        receipt = evaluate_recipe(setup, parent, baseline=decision,
+                                 situation_veto=_apply_entry_situation_veto)
+        decision = deepcopy(decision)
+        decision["admission_recipe"] = receipt
+        decision["action"] = receipt["proposed_action"]
+        decision["admission_recipe_trigger_pass"] = bool(
+            receipt["changed"] and receipt["proposed_action"] == "ENTER_NOW")
+        if receipt["changed"]:
+            decision["reason"] = ("MAIN_ENTRY_PULLBACK_BUY_FLOW_PASS"
+                if decision["admission_recipe_trigger_pass"] else "MAIN_ENTRY_PULLBACK_CONDITION_RECHECK")
+        decision["admission_recipe"]["policy_sha256"] = _canonical_sha256(selected_policy)
+        if isinstance(decision.get("strategy_selection"), dict):
+            decision["strategy_selection"]["policy_sha256"] = _canonical_sha256(selected_policy)
+        return decision
     if "strategy" in selected_policy:
         from src.engine.scalping.entry_strategy_policy import rebuild
         rebuilt, effective_policy, receipt = rebuild(setup, selected_policy)
@@ -3048,7 +3073,8 @@ def compose_mechanistic_primary_decision(
         screen_status = (
             "response_invalid" if advisory_errors else advisory_verdict.lower()
         )
-        if screen_status == "pass" and policy_decision.get("group_trigger_pass"):
+        if screen_status == "pass" and (policy_decision.get("group_trigger_pass")
+                                       or policy_decision.get("admission_recipe_trigger_pass")):
             # The independent machine trigger is not validated as a legacy AI
             # comparison. Keep its unchanged comparison as audit evidence only.
             result.update(
@@ -3059,8 +3085,10 @@ def compose_mechanistic_primary_decision(
                 entry_probe_intent=True,
                 entry_probe_intent_status="eligible",
                 entry_recheck_intent=False,
-                entry_composed_reason="machine_group_trigger_ai_pass",
-                reason="machine_group_trigger_ai_pass",
+                entry_composed_reason=("machine_admission_recipe_ai_pass"
+                    if policy_decision.get("admission_recipe_trigger_pass") else "machine_group_trigger_ai_pass"),
+                reason=("machine_admission_recipe_ai_pass"
+                    if policy_decision.get("admission_recipe_trigger_pass") else "machine_group_trigger_ai_pass"),
             )
         if advisory_errors or advisory_verdict != "PASS":
             veto = not advisory_errors and advisory_verdict == "VETO"
