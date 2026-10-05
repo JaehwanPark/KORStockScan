@@ -59,6 +59,28 @@ def test_designation_preserves_auto_result_and_is_idempotent(staged_request):
     assert M._read(M.root(root)/'generations'/(before['bundle_sha256']+'.json')) == before
 
 
+@pytest.mark.parametrize('broken', [False, True])
+def test_designation_follows_dated_descendants_without_skipping_lineage(staged_request, broken):
+    root, path, req, report, previous, before = staged_request
+    descendant = deepcopy(before)
+    descendant['previous_bundle_sha256'] = before['bundle_sha256'] if not broken else 'f'*64
+    descendant['bundle_sha256'] = S.digest({k:v for k,v in descendant.items() if k != 'bundle_sha256'})
+    M._atomic_write_json(M.root(root)/('policy_'+D.TARGET+'.json'), descendant)
+    req['supersedes_bundle_sha256'] = descendant['bundle_sha256']
+    M._atomic_write_json(path,D.seal(req))
+    if broken:
+        with pytest.raises(ValueError,match='lineage_generation_missing'):
+            D.stage(path,data_root=root,now=NOW)
+    else:
+        result = D.stage(path,data_root=root,now=NOW)
+        assert result['status']=='designated_policy_staged'
+        assert M.load(data_root=root,target_date=D.TARGET)['ai_policy']==descendant['ai_policy']
+        generation=M.root(root)/'generations'/(before['bundle_sha256']+'.json')
+        generation.unlink()
+        with pytest.raises(ValueError,match='lineage_generation_missing'):
+            M.load(data_root=root,target_date=D.TARGET)
+
+
 @pytest.mark.parametrize('field,value', [('target_date','2026-10-07'),('evidence_qualified_selection',True),
     ('supersedes_bundle_sha256','f'*64),('parent_bundle_sha256','f'*64),
     ('authorization',dict(user_instruction='no approval')), ('validation_status','passed')])

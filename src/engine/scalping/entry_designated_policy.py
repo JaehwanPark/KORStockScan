@@ -163,6 +163,40 @@ def _archive(root, bundle, M):
         M._atomic_write_json(path, bundle)
 
 
+def _validate_dated_lineage(existing, previous, data_root, M):
+    """Allow reviewed dated auxiliary descendants, with every ancestor bound."""
+    node = existing
+    seen = set()
+    for _ in range(64):
+        sha = node['bundle_sha256']
+        if sha == previous['bundle_sha256']:
+            if node != previous:
+                raise ValueError('designation_dated_lineage_parent_mismatch')
+            return
+        if (sha in seen or node.get('target_date') != TARGET
+            or node.get('strategy_activation') or node.get('designated_pair')
+            or node['machine_policy'] != previous['machine_policy']
+            or {s: v['machine_policy'] for s, v in (node.get('scope_policies') or {}).items()}
+               != {s: v['machine_policy'] for s, v in (previous.get('scope_policies') or {}).items()}):
+            raise ValueError('designation_dated_lineage_invalid')
+        seen.add(sha)
+        M.validate(node, target_date=TARGET)
+        M._validate_bundle_sources(node, data_root)
+        parent_sha = node.get('previous_bundle_sha256')
+        if not re.fullmatch(r'[0-9a-f]{64}', str(parent_sha)):
+            raise ValueError('designation_dated_lineage_parent_invalid')
+        if parent_sha == previous['bundle_sha256']:
+            node = previous
+        else:
+            try:
+                node = M._read(M.root(data_root) / 'generations' / (parent_sha + '.json'))
+            except (OSError, ValueError) as exc:
+                raise ValueError('designation_dated_lineage_generation_missing') from exc
+            if node.get('bundle_sha256') != parent_sha:
+                raise ValueError('designation_dated_lineage_generation_missing')
+    raise ValueError('designation_dated_lineage_limit')
+
+
 def _bundle(previous, template, source, source_hash, machine, p, *, current, target, disposition):
     result = deepcopy(template)
     result.pop('strategy_activation', None)
@@ -232,10 +266,9 @@ def stage(request_path, *, data_root, now=None):
         else:
             if (existing['bundle_sha256'] != request['supersedes_bundle_sha256']
                 or existing.get('strategy_activation') or existing.get('designated_pair')
-                or existing['machine_policy'] != previous['machine_policy']
-                or existing.get('previous_bundle_sha256') != previous['bundle_sha256']):
+                or existing['machine_policy'] != previous['machine_policy']):
                 raise ValueError('designation_dated_cas_failed')
-            M._validate_bundle_sources(existing, data_root)
+            _validate_dated_lineage(existing, previous, data_root, M)
             _archive(root, previous, M); _archive(root, existing, M)
             prior_bytes=(root / f'policy_{TARGET}.json').read_bytes()
             if json.loads(prior_bytes)!=existing:
@@ -312,6 +345,7 @@ def validate_bundle(bundle, source, data_root, *, allow_prepared=False):
         if M._read(prior_path)!=superseded:
             raise ValueError('designation_superseded_bytes_generation_mismatch')
         M.validate(superseded, target_date=TARGET)
+        _validate_dated_lineage(superseded, parent, data_root, M)
         if (superseded['bundle_sha256'] != source['supersedes_bundle_sha256']
             or superseded['machine_policy'] != p['baseline_policy']):
             raise ValueError('designation_superseded_policy_invalid')

@@ -16,6 +16,7 @@
 - 초기 지정의 새 날짜 미관측만 별도 권한으로 수용한다. 원 자동 보고서·학습 적격·추가 거부 사유 부재·고정 recipe·원천/guard를 계속 검사한다. report selected=false를 true로 고치지 않는다.
 - 이후 `main_machine_designated_fixed_pair_v1`: B0/C0 비교 기준, 실제 incumbent I_t와 원 관측 P_t를 분리한다. activation·관측 당시 generation/action 증거가 있는10/6 이후 자료만 사용한다. 최신 날짜와 누적 창 모두 challenger 경계 군집≥10·incumbent binary 존재·raw 개선·지원조정+5pp를 요구한다. 양방향 교체에 같은 조건을 쓴다. 성공 보존율과 coverage는 진단이다.
 - 같은 날짜 반복은 관측 manifest로 같은 날짜 집합을 재계산하며 독립 지원을 늘리지 않는다. 최신 날짜가 누적에도 포함된다는 점을 보고한다. 새 정식 전략이 등록된 pair 밖으로 이동하면 전용 pair metadata를 종료한다.
+- 최종 실제 발행 전 대사에서 기존10/6 예정 정책이 보조판정 이력5세대를 거친 것을 확인했다. 직접 parent 동등성 가정을 제거하고, 각 중간 세대의 hash·원천·machine/scope 보존과 현재 부모까지의 연결을 검증하도록 보완했다. 누락/변조 이력은 거부한다. stage receipt의 `operator_designated`와 자동 계산 `incumbent_carried`도 분리했다.
 - `main_machine_policy`→publisher/loader→terminal→summary→strict가 별도 지정과 원 자동 평가의 결속을 검사한다. source10/2 복구가 지정 예정 세대를 기존 정책으로 되돌리지 않는다.
 - 삼성은 허용된 exclude-005930 component 차이만 인정한다. 원519관측에서 policy identity metadata와 불활성 recipe receipt를 제외한 행동/가드 payload를 비교했고 차이0이다. 원 frozen은 수정하지 않는다. 현재 코드와 원 kernel의 이력은 별도 migration에 기록한다.
 - 관측별 정책 provenance 검증에 bounded cache를 추가했다. 같은 generation의 거대한 평가 보고서를 관측마다 재계산하는 비용을 제거하되 모든 원천 파일 signature를 확인하고 변경 시 거부한다.
