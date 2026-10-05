@@ -13,6 +13,12 @@
 
 ## 실행 항목
 
+- [x] `[SamsungTickForwardConsumer1005] 삼성1틱 전환 후보의 이후 날짜 소비자 연결` (`Due: 2026-10-05`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: Research`)
+  - Source: 사용자 다음액션 실행, [소비자 실행 리뷰](../audits/samsung-tick-transition-forward-consumer-review-2026-10-05.md).
+  - Acceptance: 원 frozen 불변·별도 소비자/code SHA 고정, 원판정/가격/기존 체결의11tick 결속·원 parent/cost/stop/native·새 날짜 guard,4정책/전체·상시감시 비교, 정상/거부·대기/empty/excluded·실제 과거 대사 및 코드리뷰·보완·회귀.
+  - Result:103회귀 PASS·519관측 receipt/조건/행동/선택/지표 차이0. v2소비자 계약 등록,10/6 실제 root의 원판정·완료가격·체결manifest3경로 부재로 `waiting_new_source_date`.9보호 SHA 불변.
+  - Boundary: 신규 성능 검증·자동 실행 편입·추가 수집/API·운영 정책/배포/기동 없음. 새 날짜 검증은 기존 `SamsungFrozenCandidateValidation1006`가 소유한다.
+
 - [x] `[SamsungTickPlanningFixtureReview1005] 삼성 연속 tick 연구계획·역사 fixture 결함 보완` (`Due: 2026-10-05`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: Research`)
   - Source: 사용자 추가연구계획 및 결함 코드리뷰·수정보완 반복 요청, [리뷰](../audits/samsung-historical-fixture-review-and-tick-research-planning-2026-10-05.md).
   - Acceptance: 가용성 census→최대2신규 가설·대조·지표·유한 종료계획, 과거 dated 경로 충돌 fixture 수정·원 SHA 보존·정상/거부 회귀·재리뷰, 기존 정책/선택 release/준비 보존.
@@ -137,8 +143,9 @@
   - 최신 후보 인계 보완: 기존 frozen의2개는 foreign/program veto이며 absorption 후보가 아니다. [10/5 계획 S3](../proposals/machine-admission-acceptance-remediation-and-samsung-research-plan-2026-10-05.md)에 따라 `SamsungAbsorptionOutcomeReview1005`가 준비한 최신 `absorption_p60_v10`의 별도 frozen/adapter를 이 owner에서 추가 검증한다. 기존 원 계약을 덮어쓰지 않으며 adapter 준비 여부를 먼저 확인한다. 준비되지 않았으면 `latest_candidate_adapter_not_ready`, 원천 부재는 `waiting_new_source_date`를 구분한다. 과거2후보 검증만으로 최신 후보 완료를 선언하지 않는다.
   - 최신 후보 준비 완료: `tmp/admission-remediation-execution-20261005/replay-v2/samsung-frozen.json`, `samsung-forward-readiness.json`과 새 `samsung_absorption_acceptance_research` CLI를 사용한다. after10/5 원 projection·완료 가격 및 원 raw exact receipt를 검증한다. 현재 두 자동 생산 경로 부재로 waiting이며 실제 검증/선정은 미실행. 기존 두 veto의4경로 계약과 구별한다.
   - 추가 계획 인계: `SamsungAbsorptionDifferentialResearch1005`가 실제 권고한 후보가 있을 때 별도 frozen을 추가한다. 비삼성 지정으로 전체 parent/kernel이 바뀌면 허용 diff의 삼성 component 동등성/migration receipt를 먼저 검증한다. 기존 frozen bytes는 변경하지 않으며 실제 삼성 동작 변화는 재계획한다.
-  - 코드 경로: frozen 후속 검증 CLI는 선택된 승인 release의 cwd에서 실행하고 `--root /home/ubuntu/KORStockScan`을 지정한다. 테스트 파일도 원 kernel 증거에 포함되므로 새 workspace 테스트를 배포 release의 증빙으로 혼용하지 않는다. 새 release 채택 시 대응 migration을 먼저 검증한다.
+  - 코드 경로: 과거 두 veto·원흡수·H2 frozen 후속 검증 CLI는 선택된 승인 release의 cwd에서 실행하고 `--root /home/ubuntu/KORStockScan`을 지정한다. 테스트 파일도 원 kernel 증거에 포함되므로 새 workspace 테스트를 배포 release의 증빙으로 혼용하지 않는다. 새 release 채택 시 대응 migration을 먼저 검증한다. 아래 신규1틱 소비자는 별도 검토된 workspace 코드·v2소비자 계약을 사용한다.
   - 연속 tick 후보 인계: [10/5 실행 리뷰](../audits/samsung-continuous-tick-transition-research-review-2026-10-05.md), `tmp/samsung-continuous-tick-transition-research-20261005/final/frozen-candidate.json`의 `absorption_p60_tick_shift1_v1`은 전체 origin 연구 권고다. 상시감시 개선·운영 적용은 미입증. 기존 H2 adapter로 읽지 않으며 `forward_adapter_status=not_implemented_for_new_tick_window_definition`이다. 이후 검증 전에 새11tick 구간/원흡수 결속 소비자 연결·코드리뷰가 필요하다. 같은6과거 관측을 새 날짜 검증으로 사용하지 않는다.
+  - 연속 tick 최신 준비: 위 미구현 상태는 원 frozen 작성 이력이다. `SamsungTickForwardConsumer1005`가 [별도 연결](../audits/samsung-tick-transition-forward-consumer-review-2026-10-05.md)을 완료했다. 현재 `tmp/samsung-tick-forward-consumer-20261005/consumer-contract-v2.json`과 `samsung_tick_transition_forward_validation --contract <v2> --date 2026-10-06 --root /home/ubuntu/KORStockScan --output <new-generation>`를 사용한다. 실제 원천3경로 부재·waiting이며 신규 성능/정책 선택은 미검증. 원 frozen을 다시 발행하지 않는다.
   - 실행 인계: 최신 원흡수 migration 및 `tmp/samsung-absorption-differential-research-20261005/final/frozen-candidate.json`의 H2를 구분한다. H2는 `samsung_absorption_differential_research --forward-frozen <H2> --base-frozen tmp/admission-remediation-execution-20261005/replay-v2/samsung-frozen.json --date 2026-10-06 --root /home/ubuntu/KORStockScan --output <new-output>`로 검증한다. 둘 다 현재 waiting. 과거 veto2개는 `SamsungHistoricalKernelRecovery1005`에서 원 테스트 bytes c165a509를 정확 복구했다. 원 frozen을 보존한 migration validated,519관측 mask/metric 차이0·160행 역사 입력 왕복 PASS, 현재 선택 release의 준비 CLI는 `waiting_new_source_date`다. 최신 상태는 `tmp/samsung-kernel-recovery-20261005/next-date-readiness/preparation-status.json`을 따른다.
   - 이관:10/5 print-only parser에서10/4 소유 항목이 제외됨을 확인하여 현재 문서로 이동. ID·기존 수용/권한·준비 이력 보존; 실행 완료 처리 아님.
 

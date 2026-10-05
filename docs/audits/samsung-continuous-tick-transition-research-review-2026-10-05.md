@@ -92,3 +92,5 @@
 - 이후 비교는 전체 origin과 상시감시를 분리하고, 원흡수·H2 대비 같은 날짜·비용·stop·완전 경로 및 확정 승률을 함께 평가한다. 오늘의6건을 이후 날짜 표본으로 재사용하지 않는다.
 - 선택 release/current/10/6정책·체크리스트·prepared receipt와 기존 frozen3개의 **8개 보호 SHA 불변**을 확인했다. 운영 정책 적용 상태는 이전 승인 상태 그대로다. 이번 작업은 배포/PID 소비 증빙을 새로 만들지 않았다.
 - 보존 대상은 최종 산출물9개와 별도 frozen, `real-source-validation.json`, 테스트/리뷰 영수증 및 `intake.json`에 결속된 기존 원천이다. 새 산출물은 약5.1MB이며 원 locked source를 복제하지 않았다.
+
+후속 갱신: 사용자 다음액션 실행으로 [별도 소비자 연결을 완료](samsung-tick-transition-forward-consumer-review-2026-10-05.md)했다. 위 `not_implemented`는 원 연구 frozen의 작성 시점 이력이며, 현재 준비 상태는 v2 소비자 계약과10/6 `waiting_new_source_date` 결과를 따른다. 원 frozen bytes는 그대로다.

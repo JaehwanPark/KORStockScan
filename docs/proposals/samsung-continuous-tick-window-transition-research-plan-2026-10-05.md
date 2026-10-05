@@ -105,4 +105,6 @@ producer→receipt→선택 mask→최초 신호→가격경로→지표→권�
 
 새 연구 실행 owner는 `SamsungContinuousTickWindowResearch`다. 이후 날짜 고정 검증은 기존 `SamsungFrozenCandidateValidation1006`를 재사용한다. 원흡수·원H2·과거 두 veto·이번 추가 후보를 서로 다른 ID로 유지한다. 데이터 도착 전은 waiting이며 동일 재생을 반복하지 않는다.
 
-최초 계획 작성 요청은 문서와 fixture 보완으로 종료했다. 이후 사용자 `계획 실행`으로 R0–R4와 두 가설의 실제 원천 재생·리뷰·회귀를 완료했다. 신규 운영 정책 발행·배포·삼성 정책 지정은 실행하지 않았다. 권고 후보의 이후 날짜 소비자는 기존 H2 adapter와 구분하여 후속 owner에서 연결한다.
+최초 계획 작성 요청은 문서와 fixture 보완으로 종료했다. 이후 사용자 `계획 실행`으로 R0–R4와 두 가설의 실제 원천 재생·리뷰·회귀를 완료했다. 신규 운영 정책 발행·배포·삼성 정책 지정은 실행하지 않았다.
+
+후속 사용자 `다음액션 실행`으로 [이후 날짜 소비자 연결](../audits/samsung-tick-transition-forward-consumer-review-2026-10-05.md)을 완료했다. 별도 v2 소비자 계약은 원 frozen을 보존하고 코드 SHA를 고정한다.103회귀와 실제519관측 대사 차이0을 확인했으며10/6 원천3경로 부재로 실제 새 날짜 검증은 `waiting_new_source_date`다. 이후 실행은 기존 H2 adapter와 구분하여 `SamsungFrozenCandidateValidation1006`가 소유한다.
