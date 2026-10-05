@@ -224,3 +224,22 @@ collector 재생은 `collector_history_known_file_missing`으로 실패했다.9/
 ### 7.5 야간 후행 감시 wrapper
 
 동일한 휴장일 대기 경로가21:40 후행 tuning-monitoring wrapper에도 남아 있어 source calendar gate를 추가했다. 보고서·lock·선행 DONE 대기 이전에 SKIP하며 기존 영업일 감시·실제 source hash/실패 수용은 유지한다. 검토한 gate의 적용 범위는 Main/controller/Widget/final-refresh/후행 감시5개다. 다음날05:00 finalization은 이미 trading **effective date**에서 source10/2를 해석하고 최종 prepared를 재작성하는 기존 계약이므로 그 경계를 유지한다.
+
+
+## 8. 다음 영업일 준비 최종 수용
+
+[최종 실행 영수증](../../tmp/next-session-semantic-widget-episode-implementation-20261005/next-session-final-preparation.json)의 시각/동일 세대 seal을 따른다. 통합 source commit `e16ac48b8d6486adaf9e179a125d2aa6b76d8723`, selected `next-session-ready-20261005-e16ac48b`에 Main·Widget/Episode 기동/preflight·07:32 apply·장후 분석 설정을 결속했다. 서비스 설정만 배포했으며 오늘 매매 start/restart·주문·실제 알림 송신은 실행하지 않았다.
+
+| 준비 gate | 직접 결과 |
+|---|---|
+| 코드 review/영향 회귀 | 최종 범위 미해결 finding0. calendar/wrapper/controller76, release/detector/notifier/native family425, collector/handoff137 PASS. 중복 suite이므로 합산하지 않음. compile/bash-n/diff PASS |
+| source10/2 장후 전체 | stale Widget publication refresh와 archive 표현을 복구한 collector만 재수용; summary/tower/checklist→whole strict PASS→controller DONE |
+|10/6 장전 준비 | selected e16ac48b의 `current_full_contract` PASS, findings0. 당일 activation/PID는 준비 영수증이 대신하지 않음 |
+| 설정/예약 | release-set124 owner PASS, Episode122 unit/366 policy pin/122 timer 검증.07:32 standing apply 권한·07:32~07:54 창 유효. Main07:35/07:55 planned route와 Widget07:58 calendar 확인 |
+| Main 정책 | declared bundle `8fb91f19722f…`, machine `6b6fb2040270…`; 비삼성 `pullback_p60_v0`, KRX/KRX_REGULAR, `exclude_005930`. 삼성은 기존 parent 정책 유지. 준비 중 Main dated 정책 bytes를 변경하지 않음 |
+| Widget | dated native loader PASS: 삼성 KRX_REGULAR/NXT_PREMARKET2 eligible, 타 종목2 blocked/observation. 기존 recipe·custody 유지 |
+| Episode | native10/6 apply **계획**61profile PASS,58 carry/3격리.58profile의 연구 preflight 원천 valid; 격리3개의 경제성/half-robustness blocker 유지. 실제 applied/authority는 예정07:32 및 profile별 당일 preflight에서 생성 |
+
+기존 Main 운영/stop/plan 경고3개, Widget exact scale-in source 결손, Episode native gap/invalid capture, 삼성 frozen 이후 날짜 원천 대기는 계속 표시한다. 준비 완료가 해당 결손의 경제성 해소나 모든61profile 주문 자격을 뜻하지 않는다. 미래 PID·토큰·시세·custody·미결 주문 및 당일 자연 행동은 기존10/6 owner에서 수용한다.05:00 기존 finalization은 같은 source10/2를 유지하고 최종 prepared를 재작성하도록 이미 구성되어 있다.
+
+원 selector·managed drop-in bytes는 실행 디렉터리의 단계별 deployment backup에 보존했다. 이번 결과 문서 갱신은 준비에 결속된10/6 checklist/정책/receipt bytes를 변경하지 않는다. 반복 raw/grid 연구·API 수집 확대·격리 해제는 실행하지 않았다.

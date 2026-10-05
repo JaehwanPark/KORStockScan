@@ -78,3 +78,12 @@ Widget20:43 succeeded 후에는 이전 projection의 report 세대 mismatch가 �
 
 
 최종 native 재생에서 표시용 sentinel archive의 물리 경로 결함을 추가로 발견했다. gzip decoded logical SHA/bytes로 정합을 확인하고 nonempty conflict/corrupt/missing 반례 및 empty display-only shadow의 명시 제외를 검증했다. payload/replay·policy/date/custody 검사를 해제하지 않았으며 collector known source 부재를 valid-empty로 바꾸지 않는다. 수정 후 영향 회귀와 원9/30 SHA 대사를 통과한 release에서 다시 봉인한다.
+
+
+## 최종 준비 수용
+
+통합 코드 `e16ac48b8d6486adaf9e179a125d2aa6b76d8723` 배포. calendar/후행 감시76·release/detector/native family425·collector/handoff137 회귀 PASS(중복 suite 합산 금지), compile/bash-n/diff PASS, 범위 내 미해결 finding0. source10/2 summary/tower/checklist·whole strict PASS·controllerDONE 후 target10/6 준비 생성 및 **current_full_contract PASS/findings0**을 확인했다. [원 영수증/세대 seal](../../tmp/next-session-semantic-widget-episode-implementation-20261005/next-session-final-preparation.json).
+
+설정124owner·Episode122unit/366policy pin/122timer 검증,58개 연구 preflight 원천 valid·3개 기존격리 사유 유지. native Episode apply **계획**58carry/3격리 및 Widget dated loader2eligible/2blocked PASS. 비삼성 지정 recipe는 `exclude_005930`; 삼성 기존 parent와 분리되며 Main dated hash는 유지했다.07:32 apply standing-authority 창과 Main/Widget 기동 route/calendar를 읽기 전용으로 확인했다.05:00 finalization의 source10/2/최종 준비 재작성 연결도 확인했다.
+
+기존 경제성/원천 경고와 삼성 future source 대기는 미해소이다. 매매 프로세스 start/restart, 미래 PID 소비 판정, 주문, API/패키지 변경, 실제 메시지 송신, 외부 sync는 수행하지 않았다.10/6 실제 apply/preflight/activation·원천·PID/기능은 기존 OPEN owner에 남긴다. 최종 결과 문서 갱신 후10/6 checklist/정책/준비 bytes 보존을 재확인한다.

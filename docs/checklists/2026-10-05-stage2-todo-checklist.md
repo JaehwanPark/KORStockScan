@@ -25,6 +25,7 @@
   - Result:10/5 사용자 실행 지시로 native designation/fixed-pair·완료 source/휴장일 due target·family projection·61profile PID/source 행렬·알림 generation 분기를 구현하고 리뷰/보완했다. 지정 오탐만 제거, 운영 원천 결손3finding 유지. 생성 중 stage는unobservable이며 회복으로 처리하지 않는다. [실행 리뷰](../audits/next-session-semantic-coverage-widget-episode-review-2026-10-05.md). 코드 gate와 물리 release/자연 소비는 분리한다.
   - Boundary: 추가 거래 권한 없음. 새 삼성 장후 replay는 기존 SamsungFrozenCandidateValidation1006 소유. OFF·격리·order/provider/threshold·custody guard를 감시로 변경하지 않는다. 감시의120초 source 신선도 판정은 매매 guard가 아니다. 설치·자연 감시/알림 및 이후 날짜 fixed-pair 수용이 남아 있으므로 OPEN 유지.
   - 최종 추가 리뷰: collector 표시용 sentinel의 gzip 표현 변경을 원천 부재로 처리하는 결함을 발견했다. decoded logical SHA·내용 충돌/손상/실제 부재 및 표시용 empty shadow 제외를 검증해 경제 원천 guard를 보존한다. [대사 원본](../../tmp/next-session-semantic-widget-episode-implementation-20261005/collector-archive-logical-diagnosis.json).
+  - 야간 수용: 통합코드e16ac48b배포·124owner pin PASS, source10/2 whole strict PASS/controllerDONE, target10/6 current_full_contract PASS/findings0. calendar/후행 감시76·release/family425·collector137회귀 PASS(합산 금지). [최종 실행 영수증](../../tmp/next-session-semantic-widget-episode-implementation-20261005/next-session-final-preparation.json). 자연 감시/알림·새 날짜 비교는 기존 OPEN에 유지.
   - 야간 준비:10/5 사용자 다음 액션 실행 승인으로 휴장일 Main/controller/Widget/final-refresh/후행 감시 wrapper 대기 결함 보완·검토 코드 통합 배포·10/2→10/6 최종 세대 재수용을 실행한다. [실행계획§7](../proposals/next-session-startup-semantic-coverage-and-widget-episode-improvement-plan-2026-10-05.md). 매매 프로세스 start/restart와 미래 PID 확인은 오늘 gate에서 제외한다.
   - Stop: P0는07:20까지 기동 전 관리 점검, P1은16:30~23:59에 같은 ID의 후속으로 유지한다. 정확한 구현/자연 소비 단계별 수용 또는 owner/artifact/closure test를 명시한 인계.07:20은 새 broker guard가 아니며 별도 중복 OPEN을 만들지 않는다.
 
@@ -144,6 +145,7 @@
 
 - [ ] `[WidgetEpisodeNextSessionStartup1006] Widget/Episode 다음거래일 정책·preflight·PID 수용` (`Due: 2026-10-06`, `Slot: INTRADAY`, `TimeWindow: 07:32~20:00`, `Track: RuntimeStability`)
   - Source: [재점검리뷰§4–§5](../audits/source-repair-repeat-review-and-next-session-readiness-2026-10-04.md), 사용자다음영업일정상가동재점검지시.
+  - 야간 준비 결과: selectede16ac48b Main/Widget/Episode 설정 배포·dated/native loader·07:32standing apply권한·122profile timer PASS. Episode10/6 native계획58carry/3격리 및58연구 preflight원천 valid, Widget2eligible/2blocked. 봇은 오늘 기동하지 않았고10/6 applied/authority/PID/source는미래수용이다.
   - 오늘 준비 경계:10/5에는 dated/native apply 계획과 설정·예약·strict/controller/prepared를 수용한다. 사용자 명시대로 실제 봇은10/6에 기동하며 PID 소비는 그때 확인한다. 기존58/3 계획을 실제 기동 수로 표기하지 않는다.
   - Acceptance: Widget07:32정책반영/07:58기동경로와현재PID의10/6reload/행동policy hash·custody/source receipt를대조한다. 기존10/3 startup은당일reload증거로사용하지 않는다. Episode의10/4 역사 기준58격리제외profile을 출발 목록으로 하여 현재전체profile의당일applied/authority·research/Main/token preflight·실제unit/PID·자연원천을profile별로대조하고3격리를별도표시한다. 기존Main `DirectFamilyPreopenPolicyHandoff`·Episode sequence owner와증거를연결하되코드/준비/기동/주문/경제성을구분한다.
   - Boundary: read-only검증과결과기록. 실제가동/기동부작용이있는preflight/정책쓰기/재기동/API/token조회/주문/격리해제는자동실행하지 않는다. source없음은not_observed,미도래는not_yet_due이며source gap의0치환없음.
