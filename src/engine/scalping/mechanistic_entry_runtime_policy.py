@@ -1506,6 +1506,12 @@ def winrate_market_census_valid(source: dict) -> bool:
 
 
 def _winrate_successor_hurdles_valid(source: dict) -> bool:
+    if source.get('acceptance_contract') is not None:
+        from src.engine.scalping.entry_admission_acceptance import validate_source
+        try:
+            return validate_source(source)['candidate_selected']
+        except (ValueError, TypeError, KeyError, OverflowError):
+            return False
     import math
 
     objective = source.get('selection_objective_version')
@@ -1614,6 +1620,9 @@ def _validate_admission_source(source, parent, *, require_files):
         or source.get('admission_analysis_sha256') != analysis.get('artifact_content_sha256')):
         raise ValueError('winrate_admission_source_invalid')
     validate_report(analysis, parent=parent, target_date=source['target_date'], require_files=require_files)
+    if source.get('acceptance_contract') is not None:
+        from src.engine.scalping.entry_admission_acceptance import validate_source
+        validate_source(source, require_files=require_files)
 
 
 def stage_winrate_policy(source_path: Path, *, data_root: Path, now: datetime | None = None,
@@ -1630,7 +1639,9 @@ def stage_winrate_policy(source_path: Path, *, data_root: Path, now: datetime | 
     source_excluded = source.get('source_contract_excluded_count')
     input_count = source.get('input_attempt_count')
     recipe_mode = source.get('candidate_kind') == 'admission_recipe'
-    holdout_evaluated = bool(source.get('candidate_evaluated')) if recipe_mode else source.get('candidate_threshold_bp') is not None
+    observation_contract = source.get('acceptance_contract') is not None
+    holdout_evaluated = (source.get('candidate_validation_evaluated') is True if observation_contract else
+                         bool(source.get('candidate_evaluated')) if recipe_mode else source.get('candidate_threshold_bp') is not None)
     population_valid = (type(input_count) is int and input_count >= 0
         and type(accepted) is int and accepted >= 0
         and type(source_excluded) is int and source_excluded >= 0
@@ -1650,7 +1661,10 @@ def stage_winrate_policy(source_path: Path, *, data_root: Path, now: datetime | 
         or not calibration._artifact_content_sha256_valid(source)
         or source.get('selection_basis') != 'win_rate_only'
         or source.get('policy_version') not in {'winrate_initial_v1', 'winrate_successor_v1'}
-        or (source.get('policy_version') == 'winrate_successor_v1'
+        or (observation_contract and (not recipe_mode
+            or source.get('selection_objective_version') != 'winrate_observation_first_signal_without_retention_v1'
+            or source.get('opportunity_identity_contract') != 'equal_symbol_date_venue_session_observation_cluster_v1'))
+        or (source.get('policy_version') == 'winrate_successor_v1' and not observation_contract
             and (source.get('selection_objective_version') != (
                 'winrate_native_improvement_without_winner_retention_v3' if str(source.get('target_date') or '') >= '2026-10-02'
                 else 'winrate_improvement_without_winner_retention_v2')
@@ -1775,6 +1789,12 @@ def stage_winrate_policy(source_path: Path, *, data_root: Path, now: datetime | 
                     'candidate_recipe_id': source['candidate_recipe_id'],
                     'candidate_recipe_sha256': digest(expected_candidate) if disposition == 'successor_selected'
                         else source['candidate_machine_policy_sha256']})
+            if observation_contract:
+                holdout_receipt = calibration._with_artifact_content_sha256({
+                    **{k: v for k, v in holdout_receipt.items() if k != 'artifact_content_sha256'},
+                    'acceptance_contract': source['acceptance_contract'],
+                    'evaluation_unit': source['opportunity_identity_contract'],
+                    'selected_boundary_cluster_count': source['candidate']['holdout']['boundary_cluster_count']})
             if holdout_path.exists() and _read(holdout_path) != holdout_receipt:
                 raise ValueError('winrate_holdout_already_consumed')
         existing = load(data_root=data_root, target_date=target)

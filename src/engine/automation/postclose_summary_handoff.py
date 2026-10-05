@@ -1514,6 +1514,9 @@ def _stage_output_issues(report_dir, day, stage):
                 errors.append(f'{stage}:winrate_semantics_invalid')
             else:
                 try:
+                    if report.get('acceptance_contract') is not None:
+                        from src.engine.scalping.entry_admission_acceptance import validate_source
+                        validate_source(report)
                     bundle = runtime_policy.load(data_root=Path(report_dir).parent,
                         target_date=staged['target_date'])
                     proof = (bundle or {}).get('winrate_selection') or {}

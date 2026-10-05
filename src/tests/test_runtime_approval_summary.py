@@ -522,6 +522,11 @@ def test_main_current_carry_keeps_original_publication_and_requires_native_stage
         'schema': 'main_entry_winrate_policy_report_v1', 'selection_basis': 'win_rate_only',
         'target_date': day, 'artifact_content_sha256': 'c' * 64,
         'disposition': 'incumbent_carried', 'candidate_policy': candidate,
+        'acceptance_contract': 'main_machine_observation_admission_acceptance_v1',
+        'candidate_computed': True, 'candidate_train_qualified': True,
+        'candidate_validation_evaluated': False, 'candidate_selected': False,
+        'fresh_validation': 'not_observed',
+        'hurdle_errors': ['admission_recipe_forward_date_after_2026_10_02_required'],
     })
     _write(handoff.stage_artifacts(data / 'report', day, 'main_machine_policy')[
         'machine_policy_terminal'], {'staged': {'status': staged_status, 'target_date': staged_day}})
@@ -536,6 +541,9 @@ def test_main_current_carry_keeps_original_publication_and_requires_native_stage
     assert result['winrate_policy']['evaluation_binding'] == (
         'sealed_current_incumbent_carry' if expected else 'unverified')
     assert result['economic_evidence']['comparison_status'] != 'validated_edge'
+    status = result['winrate_policy']['admission_acceptance']
+    assert status['candidate_train_qualified'] and status['fresh_validation'] == 'not_observed'
+    assert not status['candidate_selected']
 
 
 def test_next_effective_date_is_pending_until_preopen_verification(monkeypatch, tmp_path):

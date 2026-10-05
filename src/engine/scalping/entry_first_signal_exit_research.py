@@ -38,6 +38,10 @@ def event_key(row):
 
 
 def first_signal_events(rows):
+    return observed_action_runs(rows, key_function=event_key)
+
+
+def observed_action_runs(rows, *, key_function):
     """Union-action observed runs; no labels, artificial time bins or native IDs."""
     groups = defaultdict(list)
     seen = set()
@@ -46,13 +50,13 @@ def first_signal_events(rows):
             raise ValueError('first_signal_duplicate_trace')
         seen.add(row['trace'])
         epoch(row)
-        event_key(row)
+        key_function(row)
         groups[cluster(row)].append(row)
     events = []
     for _, series in sorted(groups.items()):
         active, previous, prior_key = None, None, None
         for row in sorted(series, key=lambda r: (r['ts'], r['trace'])):
-            key = event_key(row)
+            key = key_function(row)
             if prior_key is not None and key != prior_key:
                 if active is not None:
                     active['closed_by_trace'] = row['trace']

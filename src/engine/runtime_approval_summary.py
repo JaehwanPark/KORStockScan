@@ -1171,6 +1171,13 @@ def build_runtime_approval_summary(
                     machine_policy_sha256=winrate.get('machine_policy_sha256'),
                     source_date=winrate_source.get('target_date'),
                     actual_pid_consumed=False)
+                if winrate_source.get('acceptance_contract') is not None:
+                    row['winrate_policy']['admission_acceptance'] = {
+                        key: winrate_source.get(key) for key in (
+                            'acceptance_contract', 'opportunity_identity_contract',
+                            'candidate_computed', 'candidate_train_qualified',
+                            'candidate_validation_evaluated', 'candidate_selected',
+                            'fresh_validation', 'hurdle_errors', 'samsung_policy_status')}
                 policy_receipt_valid = bool(policy_receipt_valid and policy_contract_valid
                     and winrate_source.get('schema') == 'main_entry_winrate_policy_report_v1'
                     and winrate_source.get('selection_basis') == 'win_rate_only'

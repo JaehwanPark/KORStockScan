@@ -9794,9 +9794,10 @@ def build_winrate_policy_report(rows, *, source_receipt, target_date, data_root=
     for threshold in thresholds:
         train_selected = selected(train, threshold)
         metrics = _winrate_opportunity_metrics(train_selected)
-        kept_winners = {row['decision_trace_id'] for row in train_selected if row['win']}
+        kept_winners = {row['decision_trace_id'] for row in train_selected if row['win']} & baseline_train_winners
         checks = {
             'independent_train_source_date': len(metrics['source_dates']) >= 1,
+            'selected_train_source_dates_complete': metrics['source_dates'] == train_dates,
             'selected_opportunities_minimum_30': metrics['selected_opportunity_count'] >= 30,
             'baseline_population_present': baseline_train['selected_opportunity_count'] > 0,
             'baseline_coverage_minimum_50pct': metrics['selected_opportunity_count'] >= .5 * baseline_train['selected_opportunity_count'],
@@ -9815,7 +9816,7 @@ def build_winrate_policy_report(rows, *, source_receipt, target_date, data_root=
             successor_hurdles=checks, failed_successor_hurdles=[key for key, passed in checks.items() if not passed],
             eligible_train=bool(metrics['selected_opportunity_count'] and eligible_train),
             selection_mode='initial' if initial else 'successor',
-            holdout_used_for_candidate_selection=False, metric_role='sim_probe_ev'))
+            holdout_used_for_candidate_selection=False, metric_role='main_entry_win_rate_selection'))
         if metrics['selected_opportunity_count'] and eligible_train:
             frozen.append((metrics['support_adjusted_win_rate_pct'], metrics['win_rate_pct'],
                            metrics['selected_opportunity_count'], threshold, metrics))
@@ -9968,7 +9969,7 @@ def build_winrate_policy_report(rows, *, source_receipt, target_date, data_root=
         disposition = 'incumbent_carried'
     else:
         disposition = 'initial_adopted' if initial else 'successor_selected'
-    return _with_artifact_content_sha256(dict(schema='main_entry_winrate_policy_report_v1',
+    result = _with_artifact_content_sha256(dict(schema='main_entry_winrate_policy_report_v1',
         target_date=target_date, generated_at=datetime.now(KST).isoformat(),
         report_scope='main_entry_winrate', noncompact_sections_refreshed=True,
         policy_version='winrate_initial_v1' if initial else 'winrate_successor_v1',
@@ -10024,6 +10025,12 @@ def build_winrate_policy_report(rows, *, source_receipt, target_date, data_root=
             for row in prepared)),
         runtime_effect=False, allowed_runtime_apply=False, actual_order_submitted=False,
         broker_order_forbidden=True))
+
+
+    if recipe_mode:
+        from src.engine.scalping.entry_admission_acceptance import apply as apply_acceptance
+        return apply_acceptance(result, admission_analysis, parent)
+    return result
 
 
 def build_machine_policy_report(rows, *, source_receipt, target_date, data_root=Path('data'), limit=96, write_checkpoints=False, training_through_date=None, observation_recipe_request=None):
@@ -10865,7 +10872,8 @@ def main(argv: list[str] | None = None) -> int:
                 admission_recipe_id=args.admission_recipe, admission_analysis=admission_analysis)
             result = _with_artifact_content_sha256({**result, 'observation_source_counts': counts,
                 'cost_source': cost_source,
-                'observation_status': 'source_gap' if not result['accepted_attempt_count'] else 'observed',
+                'observation_status': ('observed' if result.get('candidate_computed') else 'source_gap')
+                    if result.get('acceptance_contract') else ('source_gap' if not result['accepted_attempt_count'] else 'observed'),
                 'publication_date': args.publication_date or datetime.now(KST).date().isoformat()})
             if (result['policy_version'] == 'winrate_initial_v1' and result['target_date'] <= '2026-09-23'
                 and result['hurdle_errors']):

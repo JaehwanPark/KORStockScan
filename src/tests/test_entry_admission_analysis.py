@@ -132,7 +132,7 @@ def test_action_union_report_keeps_unknowns_and_native_identity_separate(monkeyp
         H.validate_report(altered, parent=policy(), target_date='2026-10-02')
 
 
-def test_recipe_generator_selects_only_new_native_holdout_without_winner_retention(monkeypatch, tmp_path):
+def test_recipe_generator_selects_new_observation_holdout_without_winner_retention(monkeypatch, tmp_path):
     from src.engine.scalping import ai_action_outcome_calibration as C
     from src.engine.scalping import mechanistic_entry_runtime_policy as M
     parent = policy()
@@ -154,11 +154,20 @@ def test_recipe_generator_selects_only_new_native_holdout_without_winner_retenti
                 setup_evidence=dict(strategy_raw_input=payload, strategy_raw_sha256=H.S.digest(payload)),
                 win=i < wins or selected <= i < selected + removed_wins))
     analysis = H.build_report([], parent=parent, target_date='2026-10-06', data_root=tmp_path)
+    analysis['observations'] = [dict(trace=r['decision_trace_id'], day=r['source_date'],
+        symbol=r['stock_code'], ts=r['decision_ts'], group='non_samsung', scope=['KRX','KRX_REGULAR'],
+        raw_sha256=r['setup_evidence']['strategy_raw_sha256'], outcome_request_code='fixture',
+        source_bundle_sha256='b' * 64, source_lane='observation', native_provenance=None,
+        parent_action='ENTER_NOW', candidate_action='ENTER_NOW' if
+            r['setup_evidence']['strategy_raw_input']['features']['buy_pressure_10t'] >= 60 else 'RECHECK',
+        path=dict(status='target' if r['win'] else 'stop', net_pct=.1 if r['win'] else -1., delay_sec=60)) for r in rows]
+    analysis['artifact_content_sha256'] = H.S.digest({k:v for k,v in analysis.items() if k != 'artifact_content_sha256'})
     report = C.build_winrate_policy_report(rows, source_receipt={'target_date':'2026-10-06'},
         target_date='2026-10-06', data_root=tmp_path, publication_day='2026-10-06',
         admission_recipe_id=A.RECIPE_ID, admission_analysis=analysis)
     assert report['disposition'] == 'successor_selected', report['hurdle_errors']
     assert report['holdout_dates'] == ['2026-10-06'] and report['candidate_threshold_bp'] is None
     assert report['success_retention_diagnostics']['holdout']['excluded_wins'] == 1
+    assert report['candidate']['train']['native_selected_count'] == 0
     assert M._winrate_successor_hurdles_valid(report)
     assert not M._winrate_successor_hurdles_valid({**report, 'holdout_dates':['2026-10-02']})
