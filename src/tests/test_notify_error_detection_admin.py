@@ -19,8 +19,9 @@ def test_semantic_warning_notifies_stably_and_unobservable_is_not_recovery(tmp_p
         report.write_text(json.dumps(payload))
         return notifier.notify_from_report(report, mode="full", log_file="logs/health.log", state_file=state, now_ts=1000)
     assert notify() == "sent"
-    alert["generation"] = "b" * 64
     assert notify() == "duplicate_incident"
+    alert["generation"] = "b" * 64
+    assert notify() == "sent"
     payload["results"][0]["details"] = {"auxiliary_result_semantics": {"status": "unobservable"}}
     assert notify() == "no_alert"
     assert json.loads(state.read_text())["active_incident_count"] == 1
@@ -37,7 +38,7 @@ def test_semantic_warning_notifies_stably_and_unobservable_is_not_recovery(tmp_p
         "status": "incumbent_carry", "report_sha256": "c" * 64, "source_date": "2026-10-02"}}
     assert notify() == "no_alert"
     assert json.loads(state.read_text())["active_incident_count"] == 0
-    assert len(sent) == 1
+    assert len(sent) == 2
     assert "source=2026-10-02" in sent[0]
 
 

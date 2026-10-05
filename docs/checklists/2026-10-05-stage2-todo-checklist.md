@@ -2,16 +2,38 @@
 
 ## 오늘 목적
 
-- 완료된 기계 수용 계약·삼성 검증·저장공간 정리 증거를 보존하고, 승인된 비삼성1회 지정·적용 후 비교 구현 및 삼성 유한 추가연구를 실행하고10/6 준비를 다시 검증한다.
+- 완료된 기계 수용 계약·삼성 검증·정리 증거를 보존하고, 승인된 의미감시·Widget/Episode 개선계획을 구현·리뷰·보완·기존 원천 연구로 검증한다.10/6 실제 기동과 생성 중인 장후 세대의 최종 수용은 기존 owner에 인계한다.
 
 ## 필수 규칙
 
 - Plan Rebase §1–§8과 사용자 최신 지시를 따른다. 입력 날짜는9/29·9/30·10/2로 고정하며10/2를 새 독립 holdout으로 취급하지 않는다.
 - 기계 후보 `pullback_p60_v0`를 고정한다. 성공100%/80% 보존 veto를 추가하지 않는다. 삼성전자와 보조 AI는 별도 정책/owner로 구분한다.
-- 기존 실행 결과는 아래 완료 기록으로 보존한다. 최신 사용자 `계획 실행` 지시로 두 상세계획의 구현·지정 stage·통합 배포·준비 검증을 실행한다. 실제 Main 당일 기동/PID는 기존 owner가 확인한다. 관측/최초 신호/native·비용/stop·독립 날짜와 지정 근거를 구분하고 삼성 최신 absorption과 과거 veto의 owner를 혼동하지 않는다.
+- 종전 구현·지정·배포·준비 검증은 아래 완료 증거로 보존한다. 최신 `계획을 실행하고 코드리뷰후 수정보완 반복` 지시는 해당 코드·기존 원천의 유한 연구·검증을 승인했다. 실제 Main 당일 기동/PID는 기존 owner가 확인한다. 관측/최초 신호/native·비용/stop·독립 날짜와 지정 근거를 구분하고 삼성 최신 absorption과 과거 veto의 owner를 혼동하지 않는다.
 - 10/5 문서는 작업 시작 시 없었다. 완료된10/4 항목을 현재 OPEN으로 복제하지 않고 이번 지시의 소유 항목만 등록한다. 다음 영업일 준비의 기존10/6 소유 항목은 유지한다.
 
 ## 실행 항목
+
+- [x] `[NextSessionSemanticWidgetEpisodePlanning1005] 다음 영업일 기동 잔여·의미감시 coverage·Widget/Episode 개선계획 수립` (`Due: 2026-10-05`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: RuntimeStability`)
+  - Source: 사용자3개 계획/점검 요청, [통합 상세계획](../proposals/next-session-startup-semantic-coverage-and-widget-episode-improvement-plan-2026-10-05.md).
+  - Acceptance: selected release와 독립 consumer pin·실제 PID/dated 정책·prepared 전체 계약, 의미감시 producer→validator→알림 coverage, Main 연구에서 family별 재사용 가능한 방법과 실제 미선정 원인·간접 성공 veto를 점검. source/as-of/target·역사/미래·격리/OFF를 구분하고 실행 owner/closure/검증을 명시한다.
+  - Result:10/6 current_full_contract PASS·release-set PASS. 정상 designated binding True인데 의미감시의 winrate_candidate_bundle_or_scope_mismatch 경고 재현. 휴장일 handoff 사각·새 비교/삼성 소비자·Widget/Episode 결과/알림 coverage 보완계획, Widget180초 수익 종료 건수 비감소 veto 및 scale-in replay 결손 확인. Episode45 valid-empty/16 gap·연구admitted0/calibration0을 분리. [점검·수용 증빙](../../tmp/next-session-semantic-widget-episode-planning-20261005/inspection.json).
+  - Boundary: 코드/자동화·정책 발행·배포·서비스 제어·API·주문·경제성 재생성 없음. 미래 기동/PID/새 날짜 성능은 미수용.10/6 준비에 결속된 checklist와 정책/receipt를 보존하고 print-only parser로 계획을 검증한다.
+
+- [ ] `[SemanticPolicyCoverageRemediation1006] 지정·적용 후 비교 및 family 결과 의미감시 누락 보완` (`Due: 2026-10-06`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: RuntimeStability`)
+  - Source: [상세계획§3](../proposals/next-session-startup-semantic-coverage-and-widget-episode-improvement-plan-2026-10-05.md), 현재 selected3d0e5106의 실제 지정 오탐 재현.
+  - Acceptance: P0 S1/S2 정상 operator designation·fixed-pair native validator 연결/자기비교·activation·변조 반례, S3/S8 완료 source·다음 due target·휴장/자정·notification filter/mock 소비. P1 S5~S7 Widget/Episode 결과·profile별 기동·원천/leg/terminal 의미 projection은 기존 family validator와 정확 count/nullable 경제성으로 결속한다. 구현→review→보완→회귀→재리뷰 및 감시 비용/읽기 세대 대사를 수행한다.
+  - Result:10/5 사용자 실행 지시로 native designation/fixed-pair·완료 source/휴장일 due target·family projection·61profile PID/source 행렬·알림 generation 분기를 구현하고 리뷰/보완했다. 지정 오탐만 제거, 운영 원천 결손3finding 유지. 생성 중 stage는unobservable이며 회복으로 처리하지 않는다. [실행 리뷰](../audits/next-session-semantic-coverage-widget-episode-review-2026-10-05.md). 코드 gate와 물리 release/자연 소비는 분리한다.
+  - Boundary: 추가 거래 권한 없음. 새 삼성 장후 replay는 기존 SamsungFrozenCandidateValidation1006 소유. OFF·격리·order/provider/threshold·custody guard를 감시로 변경하지 않는다. 감시의120초 source 신선도 판정은 매매 guard가 아니다. 설치·자연 감시/알림 및 이후 날짜 fixed-pair 수용이 남아 있으므로 OPEN 유지.
+  - 야간 준비:10/5 사용자 다음 액션 실행 승인으로 휴장일 wrapper/controller 대기 결함 보완·검토 코드 통합 배포·10/2→10/6 최종 세대 재수용을 실행한다. [실행계획§7](../proposals/next-session-startup-semantic-coverage-and-widget-episode-improvement-plan-2026-10-05.md). 매매 프로세스 start/restart와 미래 PID 확인은 오늘 gate에서 제외한다.
+  - Stop: P0는07:20까지 기동 전 관리 점검, P1은16:30~23:59에 같은 ID의 후속으로 유지한다. 정확한 구현/자연 소비 단계별 수용 또는 owner/artifact/closure test를 명시한 인계.07:20은 새 broker guard가 아니며 별도 중복 OPEN을 만들지 않는다.
+
+- [ ] `[WidgetEpisodeMachineResearchContract1006] 기존 원천 기반 Widget/Episode 기계 연구·선정 계약 보완` (`Due: 2026-10-06`, `Slot: POSTCLOSE`, `TimeWindow: 20:10~23:59`, `Track: Research`)
+  - Source: [상세계획§4](../proposals/next-session-startup-semantic-coverage-and-widget-episode-improvement-plan-2026-10-05.md), Main 전체 판정/기회·후속 가격·고정 후보 개선 결과 및 현재 Widget/Episode 미선정 원인.
+  - Acceptance: W1/W2/E1/E2 기존 raw→독립 기회·정확 scale-in/2-leg 재현 가능 census, W3의180초 수익 종료 건수 비감소 veto와 family primary/진단 지표 역할 정리. 삼성/그 외·세션/profile 유형 분리, 최대Widget3/Episode3사전 가설·동결/새 날짜 검증 계약과 producer/consumer/version 회귀를 설계·보완한다. 지원 부족·source 결손·측정된 개선 없음·후보 권고를 구별한다.
+  - Boundary: 신규 수집·OFF prospective 복원·실거래 승격/주문 권한 없음. report-only 패턴 검증에 실제 체결 바닥을 요구하지 않으며, runtime promotion은 기존 실행/custody/cost 계약으로 별도 수용한다. 성공100%/80%·간접 수익 건수 보존을 새 탈락 조건으로 넣지 않는다.
+  - Stop: 가용 source census 및 계약/유한 가설의 개선·개선 없음·not_identifiable/지원 부족 처분 인계. 동일 입력의 무한 grid/기간 확장 금지. Episode 자연 sequence/운영 결손은 기존 EpisodeCaptureSequence1006/DirectFamilySourceRepairLowPriceTwoLeg 소유를 유지한다.
+  - Result:10/5 W1~W5/E1~E5의 가용 census·Widget180초 수익 종료 건수 veto 제거/legacy validation·고정6가설 연구 완료. Widget삼성 정규장 exact add 원천 결손, NXT장전 독립4기회/학습comparable2·역사비교검열로 운영 후보 미확보. Episode58계산 중29전체창 outcome0·29부분창/비교불가,3bar없음;9/29 invalid1,204·10/2 conflict106 제외 유지. [최종 연구](../../tmp/next-session-semantic-widget-episode-implementation-20261005/existing-source-research-v3/result.json)의 원 보고서 bytes 보존·SHA 검증 완료.
+  - Next: 기존 저장 Widget leg/guard 및 Episode29부분창·3bar없음의 완료 분봉을 exact identity/SHA로 재결속 가능한지 확인한다. 없는 자료의 합성/수집 확대 없이 동일6가설은 종료. 새 입력·후속 날짜 및 실제 selector/loader 소비가 남아 OPEN 유지.
 
 - [x] `[SamsungTickForwardConsumer1005] 삼성1틱 전환 후보의 이후 날짜 소비자 연결` (`Due: 2026-10-05`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: Research`)
   - Source: 사용자 다음액션 실행, [소비자 실행 리뷰](../audits/samsung-tick-transition-forward-consumer-review-2026-10-05.md).
@@ -121,11 +143,15 @@
 
 - [ ] `[WidgetEpisodeNextSessionStartup1006] Widget/Episode 다음거래일 정책·preflight·PID 수용` (`Due: 2026-10-06`, `Slot: INTRADAY`, `TimeWindow: 07:32~20:00`, `Track: RuntimeStability`)
   - Source: [재점검리뷰§4–§5](../audits/source-repair-repeat-review-and-next-session-readiness-2026-10-04.md), 사용자다음영업일정상가동재점검지시.
+  - 오늘 준비 경계:10/5에는 dated/native apply 계획과 설정·예약·strict/controller/prepared를 수용한다. 사용자 명시대로 실제 봇은10/6에 기동하며 PID 소비는 그때 확인한다. 기존58/3 계획을 실제 기동 수로 표기하지 않는다.
   - Acceptance: Widget07:32정책반영/07:58기동경로와현재PID의10/6reload/행동policy hash·custody/source receipt를대조한다. 기존10/3 startup은당일reload증거로사용하지 않는다. Episode의10/4 역사 기준58격리제외profile을 출발 목록으로 하여 현재전체profile의당일applied/authority·research/Main/token preflight·실제unit/PID·자연원천을profile별로대조하고3격리를별도표시한다. 기존Main `DirectFamilyPreopenPolicyHandoff`·Episode sequence owner와증거를연결하되코드/준비/기동/주문/경제성을구분한다.
   - Boundary: read-only검증과결과기록. 실제가동/기동부작용이있는preflight/정책쓰기/재기동/API/token조회/주문/격리해제는자동실행하지 않는다. source없음은not_observed,미도래는not_yet_due이며source gap의0치환없음.
   - 이력:10/4 준비PASS.10/5 현재 Main prepared 재검증은collector history 변경으로FAIL이며, Episode cj_cgv_morning preflight의candidate_source_quality_hash_mismatch를확인했다. 당일profile별source-blocked/경제성격리/disabled/eligible을재분류한다. 기존독립e6d4d3b9 release/service pin을보존하고10/6 실제소비는별도수용한다.
   - 이관:10/5 print-only parser에서10/4 소유 항목이 제외됨을 확인하여 현재 문서로 이동. ID·기존 수용/권한·준비 이력 보존; 실행 완료 처리 아님.
   - 후속계획: [최종 적용·기동 계획](../proposals/next-session-machine-policy-application-and-startup-final-plan-2026-10-05.md). 이전58/3 수치를현재가동PASS로사용하지 않는다.
+  - 잔여 순서 보완: [최신 점검·계획§1–§2](../proposals/next-session-startup-semantic-coverage-and-widget-episode-improvement-plan-2026-10-05.md).10/6 Episode applied는07:32 기존 owner apply 전 부재이며 future_due다. Widget의07:32 quiescent apply/restore 실제 terminal·당일 loaded-policy digest를 확인한다.3격리·관측 전용과 당일 기동 실패를 별도 집계한다.
+  - 최신 준비 주의:10/5 20:10 기존 예약이Widget source10/2·Main/controller source10/5로 진행 중이다.20:38 selected cwd의10/6 native prepared 재검증은FAIL(`strict_stage_generation_stale:widget_policy`, tower/checklist/collector 세대 불일치 등).12보호 SHA 동일은 현재 PASS가 아니다. 진행 중 코드/입력/lock을 교체하지 않고 종료 후 실제 완료 source→target10/6 세대를 동결하여 summary/intake→strict→controller→prepared 재수용한다. [현재 증거](../../tmp/next-session-semantic-widget-episode-implementation-20261005/current-readiness-and-protection.json).
+  - 후속 관측:Widget20:43 succeeded. 완료 report/native loader를 확인해 projection만 새 세대에 재결속했고 정책 파일은 그대로다.20:53 native prepared 재검증은여전히FAIL,Main/controller10/5는진행중. [최신 증거](../../tmp/next-session-semantic-widget-episode-implementation-20261005/post-widget-generation-readiness.json). 장후 전체 종료·최종 세대/strict/controller/prepared gate는 남겨둔다.
 
 - [ ] `[SamsungPremarketForwardValidation1006] 고정 삼성전자 장전 두 관측 가설의 독립 날짜 검증` (`Due: 2026-10-06`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: MainEntry`)
   - Source: [계획§4–§6](../proposals/samsung-premarket-forward-validation-and-source-release-preparation-plan-2026-10-04.md), [준비리뷰§4](../audits/samsung-premarket-forward-validation-and-source-release-preparation-review-2026-10-04.md), 사용자 이후검증 준비 범위.
@@ -146,6 +172,7 @@
   - 코드 경로: 과거 두 veto·원흡수·H2 frozen 후속 검증 CLI는 선택된 승인 release의 cwd에서 실행하고 `--root /home/ubuntu/KORStockScan`을 지정한다. 테스트 파일도 원 kernel 증거에 포함되므로 새 workspace 테스트를 배포 release의 증빙으로 혼용하지 않는다. 새 release 채택 시 대응 migration을 먼저 검증한다. 아래 신규1틱 소비자는 별도 검토된 workspace 코드·v2소비자 계약을 사용한다.
   - 연속 tick 후보 인계: [10/5 실행 리뷰](../audits/samsung-continuous-tick-transition-research-review-2026-10-05.md), `tmp/samsung-continuous-tick-transition-research-20261005/final/frozen-candidate.json`의 `absorption_p60_tick_shift1_v1`은 전체 origin 연구 권고다. 상시감시 개선·운영 적용은 미입증. 기존 H2 adapter로 읽지 않으며 `forward_adapter_status=not_implemented_for_new_tick_window_definition`이다. 이후 검증 전에 새11tick 구간/원흡수 결속 소비자 연결·코드리뷰가 필요하다. 같은6과거 관측을 새 날짜 검증으로 사용하지 않는다.
   - 연속 tick 최신 준비: 위 미구현 상태는 원 frozen 작성 이력이다. `SamsungTickForwardConsumer1005`가 [별도 연결](../audits/samsung-tick-transition-forward-consumer-review-2026-10-05.md)을 완료했다. 현재 `tmp/samsung-tick-forward-consumer-20261005/consumer-contract-v2.json`과 `samsung_tick_transition_forward_validation --contract <v2> --date 2026-10-06 --root /home/ubuntu/KORStockScan --output <new-generation>`를 사용한다. 실제 원천3경로 부재·waiting이며 신규 성능/정책 선택은 미검증. 원 frozen을 다시 발행하지 않는다.
+  - 장후 연결 구현: [최신 계획§6](../proposals/next-session-startup-semantic-coverage-and-widget-episode-improvement-plan-2026-10-05.md)의 optional source-only sidecar·terminal/index·감시 연결을10/5 구현했다. 원 v2 bytes의 stable copy와 source10/6 waiting 세대를 보존했고 lock/재사용/변조/실패/wrapper native-exit 회귀를 검증했다. 현재 설치 unit은3d0e5106 wrapper이므로 새 코드의 자연 소비는 미수용이다. 원천 대기를 정책 기동 실패로 바꾸지 않으며 원 고정 후보/code SHA를 덮어쓰지 않는다.
   - 실행 인계: 최신 원흡수 migration 및 `tmp/samsung-absorption-differential-research-20261005/final/frozen-candidate.json`의 H2를 구분한다. H2는 `samsung_absorption_differential_research --forward-frozen <H2> --base-frozen tmp/admission-remediation-execution-20261005/replay-v2/samsung-frozen.json --date 2026-10-06 --root /home/ubuntu/KORStockScan --output <new-output>`로 검증한다. 둘 다 현재 waiting. 과거 veto2개는 `SamsungHistoricalKernelRecovery1005`에서 원 테스트 bytes c165a509를 정확 복구했다. 원 frozen을 보존한 migration validated,519관측 mask/metric 차이0·160행 역사 입력 왕복 PASS, 현재 선택 release의 준비 CLI는 `waiting_new_source_date`다. 최신 상태는 `tmp/samsung-kernel-recovery-20261005/next-date-readiness/preparation-status.json`을 따른다.
   - 이관:10/5 print-only parser에서10/4 소유 항목이 제외됨을 확인하여 현재 문서로 이동. ID·기존 수용/권한·준비 이력 보존; 실행 완료 처리 아님.
 

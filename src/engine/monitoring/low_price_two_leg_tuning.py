@@ -2226,9 +2226,10 @@ def _cached_paired_contexts(profile, source_date):
     return None
 
 
-def durable_observation_manifest(target_date: str, source_quality_dir: Path) -> dict:
+def durable_observation_manifest(target_date: str, source_quality_dir: Path, *, accepted_observations=None) -> dict:
     try:
-        return _durable_observation_manifest_unchecked(target_date, source_quality_dir)
+        return _durable_observation_manifest_unchecked(target_date, source_quality_dir,
+                                                      accepted_observations=accepted_observations)
     except (OSError, EOFError, UnicodeError, ValueError) as exc:
         return {"schema": "low_price_actual_capture_manifest_v1",
                 "target_date": target_date, "status": "source_gap",
@@ -2236,7 +2237,7 @@ def durable_observation_manifest(target_date: str, source_quality_dir: Path) -> 
                 "profiles": {}, "event_count": 0, "invalid_event_count": 0}
 
 
-def _durable_observation_manifest_unchecked(target_date: str, source_quality_dir: Path) -> dict:
+def _durable_observation_manifest_unchecked(target_date: str, source_quality_dir: Path, *, accepted_observations=None) -> dict:
     """Final census first; stream only a declared native observation population."""
     import gzip
     audit = _read_json(source_quality_dir / f"observation_source_quality_audit_{target_date}.json") or {}
@@ -2395,6 +2396,8 @@ def _durable_observation_manifest_unchecked(target_date: str, source_quality_dir
                     if identity not in profile["signal_policy_bindings"]:
                         profile["signal_policy_bindings"].append(identity)
                 manifest["valid_event_count"] += 1
+                if accepted_observations is not None:
+                    accepted_observations.append(body)
             except (KeyError, TypeError, ValueError) as exc:
                 manifest["invalid_event_count"] += 1
                 reason = str(exc) if isinstance(exc, ValueError) else type(exc).__name__
@@ -3013,6 +3016,9 @@ def _write_outputs_locked(
     )
     _atomic_write(md_path, render_markdown(report, candidate))
     atomic_write_json(candidate_path, candidate)
+    from src.engine.monitoring.family_policy_semantics import publish
+    publish(report, candidate, report_path=json_path, policy_path=candidate_path,
+            family='episode', producer_path=__file__)
     return json_path, md_path, candidate_path
 
 

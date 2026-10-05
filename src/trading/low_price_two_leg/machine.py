@@ -160,7 +160,11 @@ class LowPriceTwoLegMachine(SamsungRegularTwoLegMachine):
             persisted = False
         # Capture failure blocks economic promotion, not owned inventory exits.
         self._state["economic_capture"] = {"status": "persisted" if persisted else "source_gap",
-            "observed_at_kst": now.isoformat(), "observation_sha256": hashlib.sha256(encoded.encode()).hexdigest()}
+            "observed_at_kst": now.isoformat(), "observation_sha256": hashlib.sha256(encoded.encode()).hexdigest(),
+            "profile_id": self.profile.profile_id, "source_date": body['logical_date'],
+            "runtime_pid": body['runtime_pid'], "runtime_cwd": body['runtime_cwd'],
+            "policy_hash": body['policy_hash'], "execution_mode": body['execution_mode'],
+            "capture_sequence": body['capture_sequence'], "action": action}
         self._save()
 
     def _validate_state_contract(self, now) -> bool:

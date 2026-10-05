@@ -283,6 +283,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--require-codex-completed", action="store_true", default=False)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
+    from src.utils.market_day import is_krx_trading_day
+    source_day = date.fromisoformat(args.date)
+    if source_day.isoformat() != args.date:
+        raise ValueError('postclose_source_date_not_canonical')
+    if not is_krx_trading_day(source_day):
+        print(json.dumps(dict(status='skipped_non_trading_day', date=args.date,
+                              policy_publication=False, preparation=False)))
+        return 0
     from src.engine.automation.postclose_summary_handoff import STAGE_REGISTRY, stage_path, _stage_main
     if not args.dry_run and os.environ.get('POSTCLOSE_STAGE_WORKER') != '1' and any(stage_path(DATA_DIR / 'report', args.date, s).exists() for s in STAGE_REGISTRY):
         return _stage_main(['--stage', 'summary_handoff', '--date', args.date])

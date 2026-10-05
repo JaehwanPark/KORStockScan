@@ -532,7 +532,9 @@ def _machine_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
                     for row in compact["rows"] if row.get("exclusion_reason")))
                 if compact["rows"] and sum(compact_exclusions.values()) == len(compact["rows"]):
                     findings.append("compact_operating_rows_all_excluded")
-        except (OSError, EOFError, UnicodeError, ValueError, TypeError, AttributeError):
+        except (OSError, EOFError, UnicodeError, ValueError, TypeError, AttributeError) as exc:
+            if str(exc) == 'semantic_generation_changed_during_read':
+                return dict(_semantic_failure(exc), source_date=source_date)
             findings.append("compact_projection_invalid")
     winrate_path = (root / 'data/report/ai_decision_action_outcome_calibration'
                     / f'winrate_policy_{source_date}.json')
@@ -571,10 +573,11 @@ def _machine_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
                     for item in winrate['market_census'].values()):
                     findings.append('winrate_market_source_empty')
                 disposition = winrate.get('disposition')
-                if (disposition == 'successor_selected'
+                fixed_pair_report = winrate.get('fixed_pair_contract') is not None
+                if (not fixed_pair_report and disposition == 'successor_selected'
                     and not runtime_policy._winrate_successor_hurdles_valid(winrate)):
                     findings.append('winrate_successor_hurdle_invalid')
-                if disposition in {'initial_adopted', 'successor_selected'}:
+                if not fixed_pair_report and disposition in {'initial_adopted', 'successor_selected'}:
                     for part in ('train', 'holdout'):
                         metrics = (winrate.get('candidate') or {}).get(part) or {}
                         if (not metrics.get('selected_opportunity_count')
@@ -594,7 +597,25 @@ def _machine_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
                 selection = (bundle or {}).get('winrate_selection') or {}
                 pending = (terminal.get('staged') or {}).get('status') == 'pending_initial_preserved'
                 reused = (terminal.get('staged') or {}).get('status') == 'existing_incumbent_preserved'
-                if not pending and not reused:
+                from src.engine.scalping import entry_designated_policy as designated_policy
+                designated = selection.get('schema') == designated_policy.PROOF
+                if fixed_pair_report and not designated:
+                    findings.append('winrate_candidate_bundle_or_scope_mismatch')
+                if designated:
+                    if (not designated_policy.binding_valid(winrate, bundle, root / 'data')
+                        or terminal['staged'].get('bundle_sha256') != bundle['bundle_sha256']):
+                        findings.append('winrate_candidate_bundle_or_scope_mismatch')
+                    else:
+                        # The loader validates the frozen pair, original request,
+                        # parent and actual activation receipts. Do not compare an
+                        # automatic carry disposition to operator designation.
+                        scope_details['designated_fixed_pair'] = {
+                            'status': 'bound', 'target_date': target,
+                            'disposition': selection.get('disposition'),
+                            'pair': bundle.get('designated_pair'),
+                            'comparison': winrate.get('fixed_pair_comparison'),
+                            'consumption': 'not_assessed_by_postclose_selection'}
+                if not pending and not reused and not designated:
                     from src.engine.automation.postclose_summary_handoff import _staged_winrate_generation_preserved
                     if not _staged_winrate_generation_preserved(terminal['staged'], bundle,
                             runtime_policy, root / 'data', generation_only=True):
@@ -612,14 +633,16 @@ def _machine_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
                     or selection.get('disposition') != 'initial_adopted'
                     or selection.get('parent_bundle_sha256') != winrate.get('parent_bundle_sha256')
                     or bundle.get('previous_bundle_sha256') != winrate.get('parent_bundle_sha256'))
-                    or not pending and not reused and (selection.get('report_sha256') != winrate.get('artifact_content_sha256')
+                    or not pending and not reused and not designated and (selection.get('report_sha256') != winrate.get('artifact_content_sha256')
                     or selection.get('disposition') != disposition)
                     or selection.get('machine_policy_sha256') != runtime_policy.digest(bundle['machine_policy'])
-                    or not pending and not reused and (bundle.get('scope_policies') or {}).get('KRX|KRX_REGULAR', {}).get('machine_disposition') != disposition):
+                    or not pending and not reused and not designated and (bundle.get('scope_policies') or {}).get('KRX|KRX_REGULAR', {}).get('machine_disposition') != disposition):
                     findings.append('winrate_candidate_bundle_or_scope_mismatch')
             else:
                 findings.append('winrate_report_schema_invalid')
-        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        except (OSError, EOFError, UnicodeError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            if str(exc) == 'semantic_generation_changed_during_read':
+                return dict(_semantic_failure(exc), source_date=source_date)
             findings.append('winrate_semantic_validation_failed')
     return {"status": "warning" if findings else "pass", "findings": sorted(set(findings)),
         "scopes": scope_details, "compact_exclusions": compact_exclusions,
@@ -1202,6 +1225,178 @@ def _entry_cancel_wait_result_semantics(root, source_date, now=None, *, data_roo
     return result
 
 
+def _family_policy_semantics(root, source_date, family):
+    from src.engine.monitoring import family_policy_semantics as native
+    folders = {'widget': 'widget_auto_trade_policy_calibration', 'episode': 'low_price_two_leg_tuning'}
+    path = root / 'data/report' / folders[family] / f'{family}_policy_semantics_{source_date}.json'
+    try:
+        execution = _semantic_stage_binding(root, source_date, family + '_policy')
+        if execution['status'] in {'pending', 'running'}:
+            return dict(status='unobservable', source_date=source_date, artifact=str(path),
+                        findings=[], execution=execution, reason='family_generation_in_transition')
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        return dict(_semantic_failure(exc), source_date=source_date, artifact=str(path))
+    if not path.exists() and not path.is_symlink():
+        if source_date >= '2026-10-06':
+            try:
+                stage = _semantic_stage_binding(root, source_date, family + '_policy')
+                if stage['status'] == 'succeeded':
+                    return dict(status='source_invalid', source_date=source_date, artifact=str(path),
+                                findings=[f'{family}_semantic_projection_missing_after_completed_producer'])
+            except (OSError, ValueError, TypeError, KeyError) as exc:
+                return dict(_semantic_failure(exc), source_date=source_date, artifact=str(path))
+        return {'status': 'not_assessed' if source_date < '2026-10-06' else 'waiting_producer',
+                'source_date': source_date, 'findings': [], 'artifact': str(path)}
+    try:
+        value, sha = _semantic_object(path, limit=4 * 1024 * 1024)
+        if (value != native.seal(value) or value.get('schema') != native.SCHEMA
+            or value.get('metric_contract') != native.CONTRACT or value.get('family') != family
+            or value.get('source_date') != source_date or value.get('runtime_effect') is not False
+            or value.get('actual_order_submitted') is not False):
+            raise ValueError(f'{family}_semantic_projection_invalid')
+        for receipt in [value['report'], value['policy']]:
+            _, source_sha = _semantic_object(Path(receipt['path']), hash_only=True)
+            if source_sha != receipt['sha256']:
+                raise ValueError(f'{family}_semantic_generation_mismatch')
+        if not value.get('producer_kernels'):
+            raise ValueError(f'{family}_semantic_producer_missing')
+        for source_path, source_sha in value['producer_kernels'].items():
+            if native.file_sha(source_path) != source_sha:
+                raise ValueError(f'{family}_semantic_producer_changed')
+        summary = value['summary']
+        rows = summary['rows']
+        if not isinstance(rows, list) or any(not isinstance(r, dict) for r in rows):
+            raise ValueError(f'{family}_semantic_population_invalid')
+        findings = []
+        if family == 'episode':
+            counts = summary.get('stage_counts') or {}
+            dispositions = dict(Counter(r['disposition'] for r in rows))
+            if counts.get('profiles') != len(rows) or summary.get('dispositions') != dispositions:
+                raise ValueError('episode_semantic_population_invalid')
+            if len({r['profile_id'] for r in rows}) != len(rows):
+                raise ValueError('episode_semantic_duplicate_profile')
+            if dispositions.get('source_gap'):
+                findings.append('episode_native_source_gap')
+            if (summary.get('capture_manifest') or {}).get('invalid_event_count'):
+                findings.append('episode_capture_invalid_events')
+        else:
+            counts = [summary.get(k) for k in ('ready_sessions', 'selected_sessions', 'carried_sessions')]
+            if any(type(n) is not int or n < 0 for n in counts) or max(counts[1:]) > counts[0]:
+                raise ValueError('widget_semantic_population_invalid')
+            if len({(r['symbol'], r['session']) for r in rows}) != len(rows):
+                raise ValueError('widget_semantic_duplicate_scope')
+            if any(r.get('study_status') == 'scale_in_runtime_trigger_source_missing' for r in rows):
+                findings.append('widget_scale_in_replay_source_missing')
+        # Re-read the small seal after its predecessor hashes to catch publication
+        # between reads. A moving generation is unobservable, not corruption.
+        if _semantic_object(path, limit=4 * 1024 * 1024)[1] != sha:
+            raise ValueError('semantic_generation_changed_during_read')
+        return dict(status='warning' if findings else 'pass', findings=findings,
+            source_date=source_date, target_date=value.get('target_date'),
+            artifact=str(path), report_sha256=sha, summary=summary,
+            scopes={r.get('profile_id') or f"{r['symbol']}|{r['session']}": r for r in rows},
+            actual_pid_consumed=False, decision_authority='report_only')
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        return dict(_semantic_failure(exc), source_date=source_date, artifact=str(path))
+
+
+def _samsung_forward_semantics(root, source_date):
+    path = root / 'data/report/samsung_tick_transition_forward_validation' / source_date / 'latest.json'
+    if source_date < '2026-10-06':
+        return {'status': 'not_assessed', 'findings': [], 'source_date': source_date}
+    if not path.exists() and not path.is_symlink():
+        return dict(status='waiting_producer', findings=[], source_date=source_date,
+                    artifact=str(path), consumption='not_observed')
+    try:
+        from src.engine.scalping import samsung_tick_transition_forward_validation as native
+        index, sha = _semantic_object(path, limit=1024 * 1024)
+        if (index != native.A.seal(index) or index.get('schema') != 'samsung_frozen_postclose_index_v1'
+            or index.get('source_date') != source_date or index.get('candidate_id') != native.CANDIDATE
+            or index.get('runtime_effect') is not False or index.get('policy_publication') is not False
+            or index.get('actual_order_submitted') is not False
+            or index.get('owner') != 'SamsungFrozenCandidateValidation1006'
+            or index.get('decision_authority') != 'report_only'):
+            raise ValueError('samsung_forward_index_invalid')
+        result_path = Path(index['result_path'])
+        if (result_path.resolve().parent.parent != path.parent.resolve()
+            or result_path.parent.name != index.get('generation')
+            or (index.get('status') != 'failed' and native.S.digest(index.get('identity')) != index.get('generation'))):
+            raise ValueError('samsung_forward_result_path_invalid')
+        result, result_sha = _semantic_object(result_path)
+        if (result != native.A.seal(result) or result_sha != index['result_file_sha256']
+            or result.get('schema') != 'samsung_tick_transition_forward_result_v1'
+            or result.get('candidate_id') != native.CANDIDATE
+            or any(type(result.get(k)) is not type(v) or result.get(k) != v for k, v in native.AUTHORITY.items())
+            or result.get('day') != source_date or result.get('status') != index.get('status')
+            or index.get('status') not in {'failed', 'waiting_new_source_date', 'evaluated', 'valid_empty', 'source_quality_excluded_all'}):
+            raise ValueError('samsung_forward_result_invalid')
+        return dict(status=index['status'], findings=['samsung_forward_execution_failed'] if index['status'] == 'failed' else [], source_date=source_date,
+            artifact=str(path), report_sha256=sha, comparison=result.get('comparisons'),
+            source_quality=result.get('source_quality'), missing_source_paths=result.get('missing_source_paths'),
+            decision_authority='report_only')
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        return dict(_semantic_failure(exc), source_date=source_date, artifact=str(path))
+
+
+def _semantic_due_target(now):
+    from src.engine.automation import next_preopen_readiness as readiness
+    current = now.replace(tzinfo=ZoneInfo('Asia/Seoul')) if now.tzinfo is None else now.astimezone(ZoneInfo('Asia/Seoul'))
+    if is_krx_trading_day(current.date()) and current.hour * 60 + current.minute < 455:
+        return current.date().isoformat()
+    return readiness._next_trading_day(current.date()).isoformat()
+
+
+def _completed_semantic_source(root, now):
+    """Select a receipt-owned date, never yesterday/last weekday by guesswork.
+
+    The native handoff validator checks the selected controller and prepared
+    generation below. Invalid latest receipts must remain visible, not fall back
+    to an older PASS. Limit the directory census to the newest 32 dated owners.
+    """
+    target = _semantic_due_target(now)
+    as_of = now.date().isoformat()
+    result = {'status': 'not_assessed', 'as_of_date': as_of, 'target_date': target,
+              'source_date': None, 'findings': []}
+    try:
+        folder = root / 'data/report/postclose_done_controller'
+        paths = sorted(folder.glob('postclose_done_controller_????-??-??.json'), reverse=True)[:32]
+        for path in paths:
+            day = path.stem[-10:]
+            if day > as_of:
+                continue
+            result['artifact'] = str(path)
+            value, sha = _semantic_object(path, limit=4 * 1024 * 1024)
+            if (value.get('date') != day or value.get('report_type') != 'postclose_done_controller'
+                or value.get('schema_version') != 2):
+                raise ValueError('completed_semantic_controller_date_invalid')
+            if value.get('status') not in {'done', 'failed', 'blocked'}:
+                continue
+            result.update(status='receipt_selected', source_date=day,
+                          artifact=str(path), generation=sha)
+            break
+        index = root / 'data/runtime/policy_bootstrap/prepared' / target / 'latest.json'
+        if index.exists() or index.is_symlink():
+            pointer, _ = _semantic_object(index, limit=1024 * 1024)
+            receipt_path = Path(pointer['receipt_path'])
+            if receipt_path.resolve().parent.parent != index.parent.resolve():
+                raise ValueError('completed_semantic_prepared_path_invalid')
+            receipt, sha = _semantic_object(receipt_path, limit=1024 * 1024)
+            if (pointer.get('schema') != 'next_preopen_readiness_index_v1'
+                or pointer.get('target_date') != target or pointer.get('receipt_sha256') != sha
+                or receipt.get('schema') != 'next_preopen_readiness_v1'
+                or receipt.get('target_date') != target or receipt.get('status') != 'prepared_verified'
+                or not isinstance(receipt.get('source_date'), str) or receipt['source_date'] > as_of):
+                raise ValueError('completed_semantic_prepared_identity_invalid')
+            result['prepared_source_date'] = receipt['source_date']
+            result['prepared_generation'] = sha
+            if result['source_date'] is None:
+                result.update(status='receipt_selected', source_date=receipt['source_date'],
+                              artifact=str(receipt_path), generation=sha)
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        result.update(_semantic_failure(exc))
+    return result
+
+
 def _postclose_handoff_semantics(root, source_date, now):
     """Use native read-only closure/readiness checks; never prepare or apply."""
     from src.engine.automation import next_preopen_readiness as readiness
@@ -1219,6 +1414,11 @@ def _postclose_handoff_semantics(root, source_date, now):
                                             artifact_sha=sha, artifact_path=path)
             if result["stages"][stage]["status"] in {"failed", "blocked", "source_quality_blocked"}:
                 result["findings"].append(f"{stage}:execution_failed")
+        if any(value['status'] in {'pending', 'running'} for value in result['stages'].values()):
+            result.update(status='unobservable', target_date=_semantic_due_target(now),
+                prepared=dict(status='unobservable', reason='producer_generation_in_transition'),
+                reason='producer_generation_in_transition')
+            return result
         controller_path = (root / "data/report/postclose_done_controller"
                            / f"postclose_done_controller_{source_date}.json")
         if controller_path.exists() or controller_path.is_symlink():
@@ -1236,9 +1436,8 @@ def _postclose_handoff_semantics(root, source_date, now):
                 else:
                     result["report_sha256"] = controller_sha
                     result["artifact"] = str(controller_path)
-        current = now.replace(tzinfo=ZoneInfo("Asia/Seoul")) if now.tzinfo is None else now.astimezone(ZoneInfo("Asia/Seoul"))
-        target = (current.date().isoformat() if current.hour * 60 + current.minute < 455
-                  else readiness._next_trading_day(current.date()).isoformat())
+        target = _semantic_due_target(now)
+        result['target_date'] = target
         index = root / "data/runtime/policy_bootstrap/prepared" / target / "latest.json"
         if index.exists() or index.is_symlink():
             _semantic_object(index, limit=1024 * 1024)
@@ -1246,6 +1445,9 @@ def _postclose_handoff_semantics(root, source_date, now):
             result["prepared"] = check
             if check.get("status") != "pass":
                 result["findings"].append("next_preopen_prepared_contract_invalid")
+        else:
+            result['prepared'] = {'status': 'future_due', 'target_date': target,
+                                  'consumption': 'not_observed'}
         # Actual PREOPEN/PID consumption remains in the startup detectors.
         if result["findings"]:
             result["status"] = "source_invalid"
@@ -1258,6 +1460,17 @@ def _postclose_handoff_semantics(root, source_date, now):
 
 
 def _semantic_alerts(name, semantics, source_date):
+    if name in {'widget_policy', 'episode_policy', 'samsung_frozen_validation', 'episode_startup'}:
+        if semantics.get('status') in {'not_assessed', 'unobservable', 'waiting_producer', 'future_due'}:
+            return []
+        return [dict(source_date=source_date, target_date=semantics.get('target_date'),
+            stage=name, scope='report', reason=reason, status=semantics['status'],
+            artifact=semantics.get('artifact'), generation=semantics.get('report_sha256'),
+            owner='WidgetEpisodeNextSessionStartup1006' if name == 'episode_startup'
+                  else 'SamsungFrozenCandidateValidation1006' if name == 'samsung_frozen_validation'
+                  else 'SemanticPolicyCoverageRemediation1006',
+            closure_test='exact_family_date_generation_source_policy_and_native_validator')
+            for reason in semantics.get('findings', [])]
     if name == "entry_cancel_wait_tuning":
         if semantics.get("status") != "source_invalid":
             return []
@@ -1304,7 +1517,7 @@ def _semantic_alerts(name, semantics, source_date):
         reasons = ["postclose_handoff_contract_invalid" if name == "postclose_handoff"
                    else "auxiliary_stage_report_contract_invalid" if name == "main_auxiliary_policy"
                    else "machine_report_date_or_hash_invalid"]
-    return [{"source_date": source_date, "stage": name,
+    return [{"source_date": source_date, "target_date": semantics.get('target_date'), "stage": name,
              "scope": scope, "reason": reason, "status": semantics.get("status"),
              "artifact": semantics.get("artifact"), "generation": semantics.get("report_sha256"),
              "affected": (semantics.get("outcome_label_source_gap_count")
@@ -2233,34 +2446,75 @@ class ArtifactFreshnessDetector(BaseDetector):
             if holding_semantics["findings"]:
                 warnings.append("holding_profit_exit_semantics: " + ", ".join(
                     holding_semantics["findings"]))
-            machine_semantics = _machine_result_semantics(PROJECT_ROOT, today)
+        selection = _completed_semantic_source(PROJECT_ROOT, now_dt)
+        details['completed_semantic_source'] = selection
+        semantic_days = list(dict.fromkeys(
+            ([today] if trading_day or source_day else []) +
+            [d for d in (selection.get('source_date'), selection.get('prepared_source_date')) if d]))
+        alerts = []
+        bindings = []
+        observations = []
+        for semantic_day in semantic_days:
+            machine_semantics = _machine_result_semantics(PROJECT_ROOT, semantic_day)
             details["machine_result_semantics"] = machine_semantics
             if machine_semantics["findings"]:
                 warnings.append("machine_result_semantics: " + ", ".join(machine_semantics["findings"]))
-            auxiliary_semantics = _auxiliary_result_semantics(PROJECT_ROOT, today)
+            auxiliary_semantics = _auxiliary_result_semantics(PROJECT_ROOT, semantic_day)
             details["auxiliary_result_semantics"] = auxiliary_semantics
             if auxiliary_semantics["findings"]:
                 warnings.append("auxiliary_result_semantics: " + ", ".join(
                     auxiliary_semantics["findings"]))
-            handoff = _postclose_handoff_semantics(PROJECT_ROOT, today, now_dt)
+            handoff = _postclose_handoff_semantics(PROJECT_ROOT, semantic_day, now_dt)
             details["postclose_handoff_semantics"] = handoff
             if handoff["findings"]:
                 warnings.append("postclose_handoff_semantics: " + ", ".join(handoff["findings"]))
-            details["semantic_alerts"] = [alert for name, semantics in (
+            family_results = [(name, _family_policy_semantics(PROJECT_ROOT, semantic_day, family))
+                              for name, family in (('widget_policy', 'widget'), ('episode_policy', 'episode'))]
+            family_results.append(('samsung_frozen_validation', _samsung_forward_semantics(PROJECT_ROOT, semantic_day)))
+            for name, result in family_results:
+                details[name + '_semantics'] = result
+                if result['findings']:
+                    warnings.append(name + '_semantics: ' + ', '.join(result['findings']))
+            for name, semantics in (
                 ("legacy_machine_report", machine_semantics),
                 ("main_auxiliary_policy", auxiliary_semantics),
-                ("postclose_handoff", handoff),
-                ("entry_cancel_wait_tuning", cancel_wait))
-                for alert in _semantic_alerts(name, semantics, cancel_wait_day if name == "entry_cancel_wait_tuning" else today)]
+                ("postclose_handoff", handoff), *family_results):
+                semantics.setdefault('target_date', selection['target_date'])
+                semantics['due_target_date'] = selection['target_date']
+                observations.append(dict(stage=name, semantics=semantics))
+                bindings.append({'stage': name, 'source_date': semantic_day,
+                    'target_date': semantics.get('target_date'), 'as_of_date': _today_kst_str(now_dt),
+                    'generation': semantics.get('report_sha256'), 'status': semantics.get('status')})
+                alerts.extend(_semantic_alerts(name, semantics, semantic_day))
+        if selection.get('findings'):
+            alerts.extend(_semantic_alerts('postclose_handoff', selection, selection.get('source_date') or today))
+            bindings.append(dict(stage='postclose_handoff', source_date=selection.get('source_date') or today,
+                target_date=selection['target_date'], as_of_date=_today_kst_str(now_dt),
+                generation=selection.get('report_sha256'), status=selection['status']))
+            warnings.append('completed_semantic_source: ' + ', '.join(selection['findings']))
+        details['semantic_source_bindings'] = bindings
+        details['semantic_observations'] = observations
+        if cancel_wait is not None:
+            alerts.extend(_semantic_alerts('entry_cancel_wait_tuning', cancel_wait, cancel_wait_day))
+        details['semantic_alerts'] = alerts
+        from src.engine.error_detectors.episode_health import check as episode_check
+        episode_startup = episode_check(PROJECT_ROOT, now_dt,
+            target_date=selection['target_date'] if not trading_day else today, reader=_semantic_object)
+        details['episode_startup_semantics'] = episode_startup
+        if episode_startup['findings']:
+            warnings.append('episode_startup_semantics: ' + ', '.join(episode_startup['findings']))
+        startup_alerts = _semantic_alerts('episode_startup', episode_startup, episode_startup['source_date'])
+        alerts.extend(startup_alerts)
+        bindings.append(dict(stage='episode_startup', source_date=episode_startup['source_date'],
+            target_date=episode_startup['target_date'], as_of_date=_today_kst_str(now_dt),
+            generation=episode_startup.get('report_sha256'), status=episode_startup['status']))
+        if trading_day:
             quantity_semantics = _initial_quantity_semantics(
                 PROJECT_ROOT, today, now_epoch=now_ts)
             details["initial_quantity_semantics"] = quantity_semantics
             if quantity_semantics["findings"]:
                 warnings.append("initial_quantity_semantics: " + ", ".join(
                     sorted(set(quantity_semantics["findings"]))))
-
-        if not trading_day and cancel_wait is not None:
-            details["semantic_alerts"] = _semantic_alerts("entry_cancel_wait_tuning", cancel_wait, cancel_wait_day)
 
         severity, summary = self._classify(issues, warnings)
         return DetectionResult(

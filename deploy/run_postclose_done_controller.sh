@@ -32,6 +32,13 @@ REQUIRE_CODEX_COMPLETED="${POSTCLOSE_DONE_CONTROLLER_REQUIRE_CODEX_COMPLETED:-fa
 DRY_RUN="${POSTCLOSE_DONE_CONTROLLER_DRY_RUN:-false}"
 
 cd "$PROJECT_DIR"
+source "$SCRIPT_DIR/eod_terminal_gate.sh"
+source_calendar_state="$(postclose_source_calendar_state "$PROJECT_DIR" "$VENV_PY" "$TARGET_DATE")"
+if [[ "$source_calendar_state" == "non_trading" ]]; then
+  printf '[SKIP] postclose_done_controller target_date=%s reason=non_trading_source_date no_preparation=true\n' "$TARGET_DATE"
+  exit 0
+fi
+[[ "$source_calendar_state" == "trading" ]] || exit 2
 mkdir -p "$PROJECT_DIR/logs"
 
 started_at="$(TZ=Asia/Seoul date +%FT%T%z)"

@@ -127,6 +127,12 @@ wrapper_snapshot=""
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 VENV_PY="${VENV_PY:-$PROJECT_DIR/.venv/bin/python}"
 TARGET_DATE="${1:-$(TZ=Asia/Seoul date +%F)}"
+source_calendar_state="$(postclose_source_calendar_state "$PROJECT_DIR" "$VENV_PY" "$TARGET_DATE")"
+if [[ "$source_calendar_state" == "non_trading" ]]; then
+  printf '[SKIP] threshold-cycle postclose target_date=%s reason=non_trading_source_date no_policy_publication=true\n' "$TARGET_DATE"
+  exit 0
+fi
+[[ "$source_calendar_state" == "trading" ]] || exit 2
 POLICY_PUBLICATION_DATE="${THRESHOLD_CYCLE_POLICY_PUBLICATION_DATE:-$TARGET_DATE}"
 export POSTCLOSE_POLICY_PUBLICATION_DATE="$POLICY_PUBLICATION_DATE"
 PREPARED_EFFECTIVE_DATE="$(cd "$PROJECT_DIR" && PYTHONPATH=. "$VENV_PY" -c 'import sys; from src.engine.build_next_stage2_checklist import _next_krx_trading_day; print(_next_krx_trading_day(sys.argv[1]))' "$POLICY_PUBLICATION_DATE")"

@@ -1,6 +1,20 @@
 #!/usr/bin/env bash
 
 # Shared exact-date gate for compute-heavy postclose consumers.
+postclose_source_calendar_state() {
+  local project_dir="$1" python_bin="$2" target_date="$3"
+  (cd "$project_dir" && PYTHONPATH=. "$python_bin" - "$target_date" <<'PY'
+import sys
+from datetime import date
+from src.utils.market_day import is_krx_trading_day
+day = date.fromisoformat(sys.argv[1])
+if day.isoformat() != sys.argv[1]:
+    raise ValueError('postclose_source_date_not_canonical')
+print('trading' if is_krx_trading_day(day) else 'non_trading')
+PY
+  )
+}
+
 wait_for_eod_terminal() {
   local project_dir="$1"
   local target_date="$2"

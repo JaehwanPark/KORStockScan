@@ -13,6 +13,7 @@ import json
 import math
 import os
 import tempfile
+from collections import Counter
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from statistics import fmean
@@ -46,10 +47,16 @@ CONTRACT = {
     "denominator": "common_initial_ask_times_fixed_leg_quantity_per_opportunity",
     "horizon": "1200s_common_evaluation_only_not_actual_terminal_or_live_exit",
     "exposure": "nonoverlapping_common_horizon_with_frozen_cap_and_cooldown",
-    "profit_frequency_guard": "positive_net_close_within_180s_without_profit_upper_cap",
+    "selection_objective_version": "paired_ev_without_success_count_veto_v2",
+    "profit_frequency_role": "diagnostic_only_positive_net_close_within_180s",
     "path_maturity": "paired_early_resolution_or_common_horizon_no_missing_outcome_imputation",
     "supported_recipe": "no_scale_in_without_exact_runtime_trigger_inputs",
 }
+# Only for verifying immutable already-published v1 receipts. New generation
+# uses CONTRACT; this compatibility path cannot select a new legacy candidate.
+LEGACY_CONTRACT = {k: v for k, v in CONTRACT.items()
+                   if k not in {'selection_objective_version', 'profit_frequency_role'}}
+LEGACY_CONTRACT['profit_frequency_guard'] = 'positive_net_close_within_180s_without_profit_upper_cap'
 
 
 def digest(value):
@@ -108,6 +115,9 @@ def load_inputs(
     inputs, hashes = {}, {}
     conflicts = set()
     gaps = 0
+    records = 0
+    input_occurrences = 0
+    duplicates = 0
     target_records = {}
     for path in sorted(paths):
         try:
@@ -117,7 +127,8 @@ def load_inputs(
         if not BASELINE <= day <= target_date:
             continue
         try:
-            if path.stat().st_size > 64 * 1024 * 1024:
+            before = path.stat()
+            if path.is_symlink() or before.st_size > 64 * 1024 * 1024:
                 gaps += 1
                 continue
             current = datetime.now(KST)
@@ -137,6 +148,7 @@ def load_inputs(
         )
 
         for _line_number, payload in iter_calibration_records(path):
+            records += 1
             try:
                 advisory = payload.get("advisory", {})
                 trace = advisory.get("confirmation_input_trace", {}).get("rows", [])
@@ -176,9 +188,15 @@ def load_inputs(
                     gaps += 1
                     continue
                 key = (stamp.isoformat(), item.get("session"))
+                input_occurrences += 1
+                duplicates += int(key in inputs)
                 if key in inputs and inputs[key] != item:
                     conflicts.add(key)
                 inputs[key] = item
+        after = path.stat()
+        if (before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
+                after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+            raise ValueError('widget_replay_source_generation_changed')
     rows = [
         dict(item, source_conflict=key in conflicts)
         for key, item in sorted(inputs.items())
@@ -188,6 +206,12 @@ def load_inputs(
         "invalid_source_rows": gaps,
         "conflicting_observations": len(conflicts),
         "exact_input_count": len(rows),
+        "raw_record_count": records,
+        "replay_input_occurrences": input_occurrences,
+        "duplicate_input_occurrences": duplicates,
+        "raw_state_counts": dict(Counter(r.get('raw_state', 'UNKNOWN') for r in rows)),
+        "quote_valid_count": sum(_quote(r) is not None for r in rows),
+        "scale_in_source_census": scale_in_source_census(rows),
         "target_date": target_date.isoformat(),
         "target_date_sessions": {
             session: {
@@ -201,6 +225,21 @@ def load_inputs(
             for session, observations in sorted(target_records.items())
         },
     }
+
+
+def scale_in_source_census(rows):
+    """Availability only: a BBO is never evidence for a last-trade add trigger."""
+    required = ('last_trade', 'initial_fill', 'leg_fills', 'tick_clamped_add_triggers',
+                'runtime_add_guards', 'average_fill_price', 'target_terminal')
+    counts = {key: sum(isinstance(r.get('scale_in_evidence'), dict)
+                       and r['scale_in_evidence'].get(key) is not None for r in rows)
+              for key in required}
+    complete = sum(all(isinstance(r.get('scale_in_evidence'), dict)
+                       and r['scale_in_evidence'].get(key) is not None for key in required) for r in rows)
+    return {'row_count': len(rows), 'field_present_counts': counts,
+            'complete_row_count': complete, 'decision_authority': 'report_only',
+            'status': 'source_available_requires_exact_replay_validation' if complete
+                      else 'not_identifiable', 'missing_fields': [k for k, n in counts.items() if not n]}
 
 
 def _quote(row):
@@ -228,7 +267,7 @@ def _quote(row):
     return stamp, received, bbo
 
 
-def _arm(path, *, confirmations, parameters, participation):
+def _arm(path, *, confirmations, parameters, participation, entry_quote_delay=0):
     qty = parameters["leg_quantity_each"]
     target = parameters["target_bps"]
     first = _stamp(path[0]["observed_at"])
@@ -240,6 +279,7 @@ def _arm(path, *, confirmations, parameters, participation):
     last_at = first
     used_quote = None
     target_streak = 0
+    delayed_quotes = 0
     outcome = {
         "status": "source_gap",
         "net_pnl_krw": None,
@@ -279,6 +319,11 @@ def _arm(path, *, confirmations, parameters, participation):
         used_quote = received
         if entry_at is None:
             if at <= decision_at or received <= decision_at:
+                continue
+            # Offline timing hypothesis only. Runtime selection recomputes with
+            # the default zero and cannot accept a delayed shadow result.
+            if delayed_quotes < entry_quote_delay:
+                delayed_quotes += 1
                 continue
             if math.floor(bbo["best_ask_qty"] * participation) < qty:
                 return dict(outcome, status="partial_or_insufficient_entry_depth")
@@ -359,6 +404,7 @@ def build_study(
     values,
     target_date,
     source_audit,
+    accepted_paths=None,
 ):
     """One existing axis only. Freeze quantities/adds/exit and all other values."""
     result = {
@@ -445,6 +491,8 @@ def build_study(
     # The incumbent still carries through the existing verified policy loader.
     if parameters["add_trigger_bps_from_initial_fill"]:
         result["status"] = "scale_in_runtime_trigger_source_missing"
+        result['scale_in_source_census'] = scale_in_source_census([
+            r for r in rows if r.get('symbol') == symbol and r.get('session') == session])
         result["content_hash"] = digest(result)
         return result
     scoped = [
@@ -545,6 +593,8 @@ def build_study(
         if valid_prefix:
             paths.append((valid_prefix, reason))
     result["path_count"], result["path_exclusions"] = len(paths), exclusions
+    if accepted_paths is not None:
+        accepted_paths.extend(paths)
     result["path_source_gaps"] = source_gaps
     baseline_value = (
         baseline_confirmations if axis == "confirmations" else parameters["target_bps"]
@@ -598,6 +648,11 @@ def build_study(
 
 
 def select_candidate(study, *, previous_value):
+    return _select_candidate(study, previous_value=previous_value)
+
+
+def _select_candidate(study, *, previous_value, legacy_validation=False):
+    contract = LEGACY_CONTRACT if legacy_validation else CONTRACT
     """Recompute acceptance from matched rows, not a claimed PASS boolean."""
     carry = {
         "selected_value": previous_value,
@@ -610,7 +665,7 @@ def select_candidate(study, *, previous_value):
         or study.get("schema") != SCHEMA
         or study.get("content_hash")
         != digest({k: v for k, v in study.items() if k != "content_hash"})
-        or study.get("metric_contract") != CONTRACT
+        or study.get("metric_contract") != contract
     ):
         return carry
     source = study.get("source_audit")
@@ -744,15 +799,21 @@ def select_candidate(study, *, previous_value):
                     >= base["net_profit_krw_per_source_day"]
                     and new["worst_net_return_pct"] >= base["worst_net_return_pct"]
                     and new["capital_seconds"] <= base["capital_seconds"]
-                    and new["profitable_close_within_180s_count"]
-                    >= base["profitable_close_within_180s_count"]
                 )
+                if legacy_validation:
+                    window_ready &= (new['profitable_close_within_180s_count']
+                                     >= base['profitable_close_within_180s_count'])
                 metrics[model][name] = {
                     "sample_count": len(rows),
                     "excluded_pair_count": len(all_rows) - len(rows),
                     "ready": window_ready,
                     **sides,
                 }
+                if not legacy_validation:
+                    metrics[model][name].update(
+                        all_pair_count=len(all_rows),
+                        comparable_fraction=len(rows) / len(all_rows) if all_rows else None,
+                        unknown_pair_count=len(all_rows)-len(rows), success_count_role='diagnostic_only')
                 ready &= window_ready
         diagnostics.append(
             {"value": candidate["value"], "ready": ready, "windows": metrics}
@@ -801,7 +862,7 @@ def select_candidate(study, *, previous_value):
     carry.update(
         diagnostics=diagnostics,
         source_study_hash=study["content_hash"],
-        metric_contract=CONTRACT,
+        metric_contract=contract,
     )
     return carry
 
@@ -1062,7 +1123,8 @@ def selection_valid(
             and study.get("session") == session
             and study.get("target_date") == target_date.isoformat()
             and study.get("axis") == axis
-            and selection == select_candidate(study, previous_value=baseline_value)
+            and selection == _select_candidate(study, previous_value=baseline_value,
+                legacy_validation=study.get('metric_contract') == LEGACY_CONTRACT)
             and selection.get("selected_value") == selected_value
         )
     except (KeyError, TypeError, ValueError, AttributeError, OverflowError):

@@ -3028,6 +3028,9 @@ def write_outputs(
         report["policy_verification"] = verification
         _atomic_write(report_path, report)
         raise RuntimeError("widget auto-trade policy verification failed")
+    from src.engine.monitoring.family_policy_semantics import publish
+    publish(report, policy, report_path=report_path, policy_path=policy_path,
+            family='widget', producer_path=__file__)
     return report_path, policy_path, verification
 
 

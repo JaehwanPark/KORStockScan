@@ -80,6 +80,13 @@ def _is_alert_result(item: dict) -> bool:
 def _semantic_source_matches(report, item, value):
     if value.get('source_date') == report.get('target_date'):
         return True
+    bindings = (item.get('details') or {}).get('semantic_source_bindings') or []
+    if any(isinstance(binding, dict)
+           and binding.get('as_of_date') == report.get('target_date')
+           and all(binding.get(key) == value.get(key) for key in (
+               'source_date', 'target_date', 'stage', 'generation', 'status'))
+           for binding in bindings):
+        return True
     if value.get('stage') != 'entry_cancel_wait_tuning':
         return False
     observed = (item.get('details') or {}).get('entry_cancel_wait_result_semantics') or {}
@@ -108,7 +115,8 @@ def _alert_results(report: dict) -> list[dict]:
             continue
         for value in (item.get("details") or {}).get("semantic_alerts", []):
             if (not isinstance(value, dict) or not _semantic_source_matches(report, item, value)
-                or value.get("stage") not in {"legacy_machine_report", "main_auxiliary_policy", "postclose_handoff", "entry_cancel_wait_tuning"}
+                or value.get("stage") not in {"legacy_machine_report", "main_auxiliary_policy", "postclose_handoff", "entry_cancel_wait_tuning",
+                    "widget_policy", "episode_policy", "samsung_frozen_validation", "episode_startup"}
                 or value.get("status") in {"not_assessed", "unobservable"}
                 or not value.get("reason") or not value.get("owner")):
                 continue
@@ -149,7 +157,7 @@ def _incident_fingerprint(item: dict) -> str:
     semantic = item.get("semantic_incident")
     if isinstance(semantic, dict):
         return hashlib.sha256(json.dumps([semantic.get(k) for k in (
-            "source_date", "stage", "scope", "reason")], separators=(",", ":")).encode()).hexdigest()
+            "owner", "source_date", "target_date", "stage", "scope", "reason", "generation")], separators=(",", ":")).encode()).hexdigest()
     payload = {
         "detector_id": str(item.get("detector_id") or ""),
         "severity": str(item.get("severity") or "").lower(),
@@ -239,14 +247,24 @@ def notify_from_report(
     names = {"legacy_machine_report": "machine_result_semantics",
              "main_auxiliary_policy": "auxiliary_result_semantics",
              "postclose_handoff": "postclose_handoff_semantics",
-             "entry_cancel_wait_tuning": "entry_cancel_wait_result_semantics"}
+             "entry_cancel_wait_tuning": "entry_cancel_wait_result_semantics",
+             "widget_policy": "widget_policy_semantics", "episode_policy": "episode_policy_semantics",
+             "samsung_frozen_validation": "samsung_frozen_validation_semantics",
+             "episode_startup": "episode_startup_semantics"}
     unresolved = {}
     history = list(state.get("historical_semantic_incidents") or [])
     for fingerprint, incident in semantic_state.items():
         if not isinstance(incident, dict):
             continue
-        observed = details.get(names.get(incident.get("stage"))) or {}
-        native_day = (observed.get("source_date") if incident.get("stage") == "entry_cancel_wait_tuning"
+        observed = next((r.get('semantics') or {} for r in details.get('semantic_observations', [])
+                         if r.get('stage') == incident.get('stage')
+                         and (r.get('semantics') or {}).get('source_date') == incident.get('source_date')),
+                        details.get(names.get(incident.get("stage"))) or {})
+        bound = any(b.get('as_of_date') == report.get('target_date')
+                    and b.get('stage') == incident.get('stage')
+                    and b.get('source_date') == incident.get('source_date')
+                    for b in details.get('semantic_source_bindings', []) if isinstance(b, dict))
+        native_day = incident.get('source_date') if bound else (observed.get("source_date") if incident.get("stage") == "entry_cancel_wait_tuning"
             and _semantic_source_matches(report, {"details":details}, incident)
             and (observed.get("execution") or {}).get("source_date") == observed.get("source_date")
             else report.get("target_date"))
@@ -269,7 +287,13 @@ def notify_from_report(
             unresolved[fingerprint] = incident
     for item in fail_results:
         if isinstance(item.get("semantic_incident"), dict):
-            unresolved[_incident_fingerprint(item)] = item["semantic_incident"]
+            incoming = item['semantic_incident']
+            keys = ('owner', 'source_date', 'target_date', 'stage', 'scope', 'reason')
+            for fingerprint, previous in list(unresolved.items()):
+                if all(previous.get(k) == incoming.get(k) for k in keys) and previous.get('generation') != incoming.get('generation'):
+                    history.append({**previous, 'disposition': 'superseded_generation_unrecovered'})
+                    del unresolved[fingerprint]
+            unresolved[_incident_fingerprint(item)] = incoming
     state.update(semantic_incidents=dict(list(unresolved.items())[-128:]),
                  historical_semantic_incidents=history[-128:])
     if not fail_results:

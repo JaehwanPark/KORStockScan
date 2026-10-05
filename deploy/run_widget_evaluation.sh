@@ -14,6 +14,13 @@ cd "$PROJECT_DIR"
 export PYTHONPATH="$PROJECT_DIR"
 
 if [[ "${POSTCLOSE_STAGE_WORKER:-0}" != "1" ]]; then
+  calendar_date="${1:-$(TZ=Asia/Seoul date +%F)}"
+  calendar_state="$(postclose_source_calendar_state "$PROJECT_DIR" "$PYTHON_BIN" "$calendar_date")"
+  if [[ "$calendar_state" == "non_trading" ]]; then
+    printf '[SKIP] WIDGET_EVALUATION source_date=%s reason=non_trading_source_date no_policy_publication=true\n' "$calendar_date"
+    exit 0
+  fi
+  [[ "$calendar_state" == "trading" ]] || exit 2
   target="${1:-$($PYTHON_BIN -c 'from src.engine.monitoring.widget_auto_trade_policy_calibration import resolve_completed_policy_target_date; print(resolve_completed_policy_target_date().isoformat())' | tail -n 1)}"
   if [[ ! "$target" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
     printf '[WIDGET_EVALUATION] invalid completed target date=%s\n' "$target" >&2
