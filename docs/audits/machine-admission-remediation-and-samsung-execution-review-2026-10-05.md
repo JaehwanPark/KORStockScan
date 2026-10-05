@@ -77,3 +77,18 @@ PYTHONPATH=. .venv/bin/python -m src.engine.scalping.samsung_absorption_acceptan
 - [참조 census](../../tmp/admission-remediation-execution-20261005/cleanup-census.json), [캐시/모니터 정리](../../tmp/admission-remediation-execution-20261005/storage-cleanup-result.json), [프로파일 복원 manifest](../../tmp/admission-remediation-execution-20261005/profile-cache-archive.json), [bytecode 결과](../../tmp/admission-remediation-execution-20261005/bytecode-cleanup.json)
 
 검토 범위의 코드·계산·출처 차이를 닫았다는 결과다. 미래 자연 데이터의 품질, 새 후보의 독립 우월성, 실제 기동과 비용 후 실현 수익을 확정하지 않는다. 삼성/비삼성 다음 날짜 검증과 Main/Widget/Episode 당일 수용은 기존 개별 owner에 남긴다. 새 API 프로토콜/주문 handler를 변경하지 않아 Kiwoom upstream gate와 provider 테스트를 호출하지 않았다.
+
+## 7. P6 배포·정확한 날짜 준비 완료
+
+- 코드 커밋 `c8c00c06d943b50c47c7fe17184a399a1f2814c8`, 선택 release `machine-admission-acceptance-20261005-c8c00c06`. 이전 `machine-admission-source-review-20261005-3e982ece`를 rollback으로 보존했다. Main 실제 PID 소비는 아직 없다.
+- workspace 표적360회귀와 별도 생성기235회귀를 합쳐 **595 PASS**, 선택된 물리 release에서 중복 포함 **97 PASS**. compile·로컬 링크·diff·print-only parser를 통과했다. 전체 저장소 또는 미래 시장 동작의 무결함을 주장하지 않는다.
+- inactive 장후 분석 unit2개만 새 release에 연결했다. 서비스 재기동은 없으며 Widget 거래 PID3614517의 실제 cwd는 기존 `postclose-winrate-readiness-20261003-e6d4d3b9`다. 서비스 설정을 PID 소비로 간주하지 않았다.
+- 원천 품질 최종 audit는 구현 hash 변경에 따라 정식 producer로 재생성했다. Main 보고서는 실제 격리 재생 결과를 정식 publisher로 전달했다. 첫 발행 도구에서 빠졌던 CLI `publication_date` 메타데이터를 보완한 뒤 stage를 다시 검증했으며, 현재·10/6 정책 bytes는 처음부터 끝까지 유지됐다.
+- 전체 stage15개는 활성 단계 성공·명시 OFF 상태이며 loader의 Main/Widget/Episode 조회가 통과했다. 전체 strict `whole_native_chain` PASS, controller `done`,10/6 prepared `current_full_contract` PASS·findings0으로 재봉인했다. 최초 준비 시도는 최종 controller 완료 전 실행되어 거절됐고, 최종화 지침의 `POSTCLOSE_STAGE_WORKER=1` 전체 DONE 경로를 완료한 뒤 순차 재실행했다. 요약 전용 성공을 전체 완료로 사용하지 않았다.
+- 새 비삼성 보고서는 학습 적격·새 날짜 대기를 전달한다. 이미 발행된10/6 incumbent은 불변으로 보존되어 새 보고서와 당시 발행 보고서 hash가 다르며 `existing_incumbent_preserved`로 명시된다. 새 후보 선정이나 삼성 후보 등록이 아니다.
+
+현재 bundle `6785d52e…`,10/6 bundle `3c500f6a…`, KRX 기계 정책 `d94fecaf…`를 유지한다. `day_of_activation_required=true`, `actual_pid_consumed=false`다. 다음 영업일 Main/Widget/Episode의 당일 수용, 격리 해제, 실제 주문 및 수익은 준비 PASS의 보증 범위가 아니다. 별도 승인된 Widget/Episode pin과 격리는 그대로다. Plan Rebase §7의 이전80% 문구(D8)는 기준 문서 유지보수 권한 경계에 따라 이번에 편집하지 않았으며 새 acceptance의 탈락 조건으로 사용되지 않는다.
+
+최종 저장공간은 **15.647→22.244GiB, 순증가6.596GiB**다. 추가로 optional catalog의 논리 행을 보존한 VACUUM과 종료 pytest fixture1개 정리를 수행했다. 재계산·보관본·새 release 쓰기를 포함한 실측이며 각 정리 창의 회수량을 단순 합산하지 않았다.25GiB 목표에는 미달하지만 검증된 후보를 소진했다.
+
+최종 증거: [closure](../../tmp/admission-remediation-execution-20261005/closure.json), [전체 controller](../../tmp/admission-remediation-execution-20261005/controller-final.log), [10/6 준비 검증](../../tmp/admission-remediation-execution-20261005/prepared-verify-final.json), [235 생성기 회귀](../../tmp/admission-remediation-execution-20261005/generator-regression.log), [97 물리 release 회귀](../../tmp/admission-remediation-execution-20261005/physical-tests.log), [catalog 정리](../../tmp/admission-remediation-execution-20261005/optional-catalog-vacuum.json), [pytest 정리](../../tmp/admission-remediation-execution-20261005/pytest-cleanup-result.json).

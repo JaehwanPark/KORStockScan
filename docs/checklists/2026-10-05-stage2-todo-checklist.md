@@ -48,7 +48,7 @@
   - Result: 선택9c0c0632의10/6 준비 검증 FAIL, collector `history_generation_changed`; Episode10/5 preflight source-quality hash 불일치 확인. 비삼성 pullback은 운영 연결 전이며 현행 자동 생성은 winrate VWAP veto 경로. 가용약16.95GiB·사용89%, 참조된 release/고유 연구 원천을 보호하는 정리 순서 확정. 현재 정상 기동/후보 적용 완료를 주장하지 않는다.
   - Evidence: [최종 적용·기동 계획](../proposals/next-session-machine-policy-application-and-startup-final-plan-2026-10-05.md), [디스크 정리계획](../proposals/runtime-and-research-storage-cleanup-plan-2026-10-05.md), [검증 기록](../../tmp/next-session-policy-storage-plan-20261005/validation.json). parser 누락된10/4 미래 OPEN3건을동일ID/수용/이력으로이관해현재단일owner검증. 계획 작성이며 구현/배포/기동/삭제 미실행.
 
-- [ ] `[MachinePolicyCutoverPreparation1005] 비삼성 후보 운영 연결·현재 준비 결손 복구 패키지` (`Due: 2026-10-05`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: MainEntry`)
+- [x] `[MachinePolicyCutoverPreparation1005] 비삼성 후보 운영 연결·현재 준비 결손 복구 패키지` (`Due: 2026-10-05`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: MainEntry`)
   - Source: [최종계획 P0~P4](../proposals/next-session-machine-policy-application-and-startup-final-plan-2026-10-05.md), [고정 후보 구현계획](../proposals/non-samsung-pullback-candidate-implementation-plan-2026-10-05.md).
   - Acceptance: collector history 변동 대사와 영향 단계 복구, Episode profile별 hash 결손 분류, 공용 evaluator/schema/scope/publisher/loader/장후 registry 연결·발행 owner 단일화, 현재 parent/운영 자격 대사, 리뷰/수정/표적회귀/재리뷰. 실행 권한 안에서 불변 release·정확한 날짜 정책·동일 세대 strict/controller/prepared 수용 또는 후보 보류의 구체적 사유 확정.
   - Boundary: 사용자 두 계획 실행 지시로 준비 구현·결손 복구·검증된 배포를 실행한다. 연구 권고를 운영 자격으로 바꾸거나 probe를 native로 합성하지 않는다. 기존 winner retention veto 복구 금지. 삼성/보조/다른 session·custody/격리/guard 유지.10/6 실제 PID 수용은 기존 `DirectFamilyPreopenPolicyHandoff`/`WidgetEpisodeNextSessionStartup1006` 소유이며 중복 등록하지 않는다.
@@ -56,6 +56,7 @@
   - Stop:10/6 07:20 적용/적격 incumbent 승계/준비실패를 구분하여 인계. 새로운 자료 없이 과거 연구를 재개하지 않는다.
   - Result: 공용 evaluator/생성기/dated publisher 연결 및 원천 결손 복구 완료. 통합 커밋3e982ece를 불변 release로 배포하고 영향 있는 inactive 장후 pin2개를 전환했다. 전체 표적1,033 PASS·물리 release200 PASS. native 부모32기회17승(53.125%), 후보3기회1승(33.333%)와 새 holdout 부재로 삼성/비삼성 모두 incumbent 승계.10/6 prepared 검증은 `current_full_contract` PASS, 실제 activation/PID는 미도래다. 최종 문서 고정 후 재검증 결과는 [실행 closure](../../tmp/policy-cutover-and-storage-execution-20261005/closure.json)에 봉인한다.
   - 재개: 사용자 보완계획 실행에 따른 새 acceptance 코드의 통합 배포·현재10/6 준비 재봉인을 수행한다. 종전3e982ece 완료는 이전 세대 증거이며 아래 실행 리뷰/closure의 최종 결과를 따른다.
+  - 재완료: 새 acceptance 코드 `c8c00c06` 통합 커밋·불변 release 선택, inactive 장후 unit2개 pin 갱신. workspace595 PASS·물리 release97 PASS. 새 보고서의 비삼성 학습 적격/독립 날짜 대기와 삼성 미등록 상태를 정식 summary로 전달했다. 전체 strict PASS·controller done·10/6 `current_full_contract` PASS, findings0. 현재/예정 정책 bytes 보존, Main 당일 activation/PID는 미래 owner 소유. [현재 실행 closure](../../tmp/admission-remediation-execution-20261005/closure.json).
   - Residual: 기존 projection gzip3개 종전 압축 bytes 미보관. 원 capture·기존 연구/코드는 보존했고 비삼성6,550개 identity/raw SHA/부모·후보 행동 차이0을 확인했다. 역사 frozen manifest는 변경하지 않았으며 이후 cache 교체는 이전 세대를 먼저 보관한다.
 
 - [x] `[VerifiedStorageCleanup1005] 참조·복구 검증 기반 운영 및 연구 저장공간 정리` (`Due: 2026-10-05`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: RuntimeStability`)
@@ -64,6 +65,7 @@
   - Boundary: 사용자 정리계획 실행 지시 범위에서 검증된 대상만 정리한다. 고유 원천/정책/연구63파일 및 간접 참조·source-quality·custody 보호. 서비스/주문/패키지 변경 없음.25GiB는 관리 제안이며 삭제 확대·매매 중단 임계치가 아니다.
   - Result: Git blob/archive ref 복원 검증을 통과한 checkout 중복8,032파일과 종료 pytest fixture2개 정리. 고유16파일·현재/rollback/service/PID/연구 참조 worktree·raw 보존. 중복 정리 창 가용량 증가667,475,968 bytes; 재계산·archive·release 쓰기 포함 실측은 약16.89GiB로25GiB 미달. 검증된 후보 소진으로 종료하며 보호 원천 삭제로 목표를 강제하지 않는다. [정리·복원·최종 디스크 증빙](../audits/machine-policy-cutover-and-storage-execution-review-2026-10-05.md).
   - 추가 실행: 선택적 연구 캐시342,289 entry 정리, 과거 모니터5파일 및 profile checkpoint2,796파일 무손실 보관/검증, 미사용 bytecode10,648경로 정리. 중간 가용22.43GiB. 참조 worktree·원천·Parquet·정책 보존. [새 정리 증빙](../audits/machine-admission-remediation-and-samsung-execution-review-2026-10-05.md).
+  - 최종 실측: optional catalog VACUUM·종료 pytest fixture1개 추가 정리 후, 재계산·배포 쓰기 포함 가용15.65→22.24GiB, 순증가약6.60GiB.25GiB에는 미달하나 검증된 삭제 후보를 소진했으며 보호 원천과 참조 release는 유지했다. 최종 bytes는 현재 실행 closure에 기록.
 
 - [ ] `[NonSamsungMachineForwardComparison1006] 비삼성 고정 기계 후보의10/6 이후 날짜 비교` (`Due: 2026-10-06`, `Slot: POSTCLOSE`, `TimeWindow: 20:10~23:59`, `Track: MainEntry`)
   - Source: [최종계획 §4](../proposals/next-session-machine-policy-application-and-startup-final-plan-2026-10-05.md), `NonSamsungFinalPolicyDecision1005`의 종료된 고정 후보·부모·원천 계약.
