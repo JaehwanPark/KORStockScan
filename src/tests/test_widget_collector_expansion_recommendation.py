@@ -914,3 +914,44 @@ def test_default_sources_use_trusted_data_mount_and_keep_artifact_symlink_guard(
         allowed_runtime_apply=False, actual_order_submitted=False, broker_order_forbidden=True)))
     assert rec._source_artifact_issues(target_date=date(2026, 9, 17), payload_path=payload, label_path=label) == []
     assert rec._source_artifact_issues(target_date=date(2026, 9, 17), payload_path=link, label_path=label) == ['exact_payload_artifact_invalid']
+
+
+def test_collector_display_archive_keeps_decoded_identity_and_detects_conflict(tmp_path):
+    payload, replay, sentinel, output = (tmp_path / n for n in ('payload', 'replay', 'sentinel', 'output'))
+    for p in (payload, replay, sentinel, output): p.mkdir()
+    day = date(2026, 9, 30)
+    (replay / f'widget_mechanical_entry_replay_{day}.json').write_text(json.dumps(dict(
+        schema='widget_mechanical_entry_replay_v1', target_date=str(day), rows=[],
+        runtime_effect=False, allowed_runtime_apply=False, actual_order_submitted=False, broker_order_forbidden=True)))
+    plain = sentinel / f'buy_funnel_sentinel_events_{day}.jsonl'
+    raw = b'{"stock_code":"005930","stock_name":"Samsung"}\n'
+    plain.write_bytes(raw)
+    kw = dict(through_date=day, sentinel_dir=sentinel, watch_config_path=tmp_path / 'config.json')
+    first = rec.history_input_manifest(payload, replay, **kw)
+    anchor = output / f'widget_collector_expansion_recommendation_{day}.json'
+    anchor.write_text(json.dumps(dict(source=dict(history_input_manifest=first))))
+    archived = Path(str(plain) + '.gz');archived.write_bytes(gzip.compress(raw))
+    assert rec.history_input_manifest(payload, replay, **kw) == first
+    plain.unlink()
+    second = rec.history_input_manifest(payload, replay, **kw)
+    assert second == first
+    assert rec.history_anchor_issues(output, day, second) == []
+    # Legacy physical archive anchors remain readable, but a deleted archive
+    # still cannot be treated as an observed empty source.
+    legacy = json.loads(json.dumps(first))
+    next(r for r in legacy['entries'] if r['kind'] == 'display_name')['path'] += '.gz'
+    anchor.write_text(json.dumps(dict(source=dict(history_input_manifest=legacy))))
+    assert rec.history_anchor_issues(output, day, second) == []
+    archived.unlink()
+    absent = rec.history_input_manifest(payload, replay, **kw)
+    assert rec.history_anchor_issues(output, day, absent) == ['collector_history_known_file_missing']
+    archived.write_bytes(gzip.compress(raw));plain.write_bytes(b'different source\n')
+    with pytest.raises(ValueError, match='sentinel_representations_conflict'):
+        rec.history_input_manifest(payload, replay, **kw)
+    plain.write_bytes(raw);archived.write_bytes(gzip.compress(b''))
+    shadow = rec.history_input_manifest(payload, replay, **kw)
+    entry = next(r for r in shadow['entries'] if r['kind'] == 'display_name')
+    assert entry['logical_sha256'] == next(r for r in first['entries'] if r['kind'] == 'display_name')['logical_sha256']
+    assert entry['excluded_empty_display_representations'][0]['decoded_bytes'] == 0
+    plain.unlink();archived.write_bytes(b'corrupt archive')
+    with pytest.raises(OSError): rec.history_input_manifest(payload, replay, **kw)

@@ -75,3 +75,6 @@ Widget20:43 succeeded 후에는 이전 projection의 report 세대 mismatch가 �
 휴장일/비canonical 날짜·native controller producer 미호출·4wrapper SKIP와 기존 wrapper 회귀75건 PASS. review에서 snapshot 불변성·calendar import 경로·오류 fail closed·bot stop 이전 순서·분석 worker exact identity/종료를 확인했다. 기존 원천 재결속은 KRX와SOR 경계 및 scale-in 미기록을 구별하여 결손을 유지했다. native10/6 Episode apply **계획만**61profile 검증PASS(58carry/3격리); 당일 applied/authority로 대신하지 않는다.
 
 설정·준비의 최종 결과는 [야간 실행 증거](../../tmp/next-session-semantic-widget-episode-implementation-20261005/next-session-final-preparation.json)를 따른다.10/6 실제 PID 소비는 사용자 명시에 따라 오늘 검증 대상에서 제외하며 당일 OPEN을 유지한다.
+
+
+최종 native 재생에서 표시용 sentinel archive의 물리 경로 결함을 추가로 발견했다. gzip decoded logical SHA/bytes로 정합을 확인하고 nonempty conflict/corrupt/missing 반례 및 empty display-only shadow의 명시 제외를 검증했다. payload/replay·policy/date/custody 검사를 해제하지 않았으며 collector known source 부재를 valid-empty로 바꾸지 않는다. 수정 후 영향 회귀와 원9/30 SHA 대사를 통과한 release에서 다시 봉인한다.

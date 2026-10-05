@@ -214,3 +214,8 @@ Episode의 세 고정 정의는 low-proximity 절반, profile 창 앞 절반, �
 4. Main 삼성 제외·비삼성 지정 recipe, Widget 삼성2세션/타 종목 observation, Episode native10/6 apply 계획58 carry/3 quarantine·timer·preflight 소유를 확인한다. native 계획 검증은 아직 apply 실행이 아니다. 미래 PID·실제 원천/경제성은 오늘 준비 gate에서 제외한다.
 
 최종 결과는 [기동 준비 실행 증거](../../tmp/next-session-semantic-widget-episode-implementation-20261005/next-session-final-preparation.json)에 기록한다. 이 문단은 절차이며 실제 PASS는 해당 파일의 native 검증 결과로만 수용한다.
+
+
+### 7.4 최종 검증에서 발견한 archive 표현 결함
+
+collector 재생은 `collector_history_known_file_missing`으로 실패했다.9/30 표시용 sentinel은 삭제가 아니라 gzip 보관이며 원 manifest는 압축 전/후의 물리 경로를 서로 다른 입력으로 계산했다. display-name census를 payload와 같은 **decoded logical bytes/SHA**로 대사하도록 보완했다. 실제9/30 archive는 기존387,900,466bytes/SHA와 정확히 같음을 [대사 원본](../../tmp/next-session-semantic-widget-episode-implementation-20261005/collector-archive-logical-diagnosis.json)으로 확인한다.9/29의 기존 empty gzip shadow는 nonempty 원본이 있을 때 표시용 제외 identity를 명시한다. 가격·판정·replay의 경제성 제외를 추가하지 않는다. nonempty 내용 충돌·손상·symlink·진짜 부재는 계속 차단하며 과거 경제 원천 generation 검사는 유지한다. 검토·표적 회귀 후 수정 release에서 해당 collector와 직후 소비자를 한 번 재수용한다.

@@ -203,24 +203,46 @@ def history_input_manifest(
     # Names are display-only, but changed names still change report bytes.
     replay_dates = {row["source_date"] for row in entries if row["kind"] == "replay"}
     for replay_day in sorted(replay_dates):
-        for suffix in (".jsonl", ".jsonl.gz"):
-            path = sentinel_dir / f"buy_funnel_sentinel_events_{replay_day}{suffix}"
-            if not path.exists():
-                continue
+        logical = sentinel_dir / f"buy_funnel_sentinel_events_{replay_day}.jsonl"
+        representations = [path for path in (logical, Path(str(logical) + ".gz"))
+                           if path.exists() or path.is_symlink()]
+        if not representations:
+            continue
+        generations = []
+        for path in representations:
             if path.is_symlink():
                 raise ValueError(f"collector_history_sentinel_symlink:{path}")
             before = path.stat()
-            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            digest = hashlib.sha256()
+            byte_count = 0
+            opener = gzip.open if path.suffix == ".gz" else open
+            with opener(path, "rb") as stream:
+                for block in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(block)
+                    byte_count += len(block)
             after = path.stat()
             if ((before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
                 != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)):
                 raise ValueError(f"collector_history_changed_during_read:{path}")
-            entries.append({"kind": "display_name", "source_date": replay_day,
-                            "path": str(path.resolve()), "logical_sha256": digest,
-                            "logical_bytes": before.st_size, "raw_count": None,
-                            "valid_count": None, "excluded_count": None,
-                            "quarantined_count": None, "unobserved_count": None,
-                            "source_quality_reason": "display_only_not_economic_input"})
+            generations.append((digest.hexdigest(), byte_count, str(path.resolve())))
+        # An empty archive shadow supplies no display names. Keep its identity
+        # as an explicit exclusion when a nonempty representation is present;
+        # it is never an economic raw-row or replay source exclusion.
+        useful = [g for g in generations if g[1]] or generations
+        if len({g[:2] for g in useful}) != 1:
+            raise ValueError(f"collector_history_sentinel_representations_conflict:{logical}")
+        sha, byte_count, _ = useful[0]
+        entry = {"kind": "display_name", "source_date": replay_day,
+                        "path": str(logical.resolve()), "logical_sha256": sha,
+                        "logical_bytes": byte_count, "raw_count": None,
+                        "valid_count": None, "excluded_count": None,
+                        "quarantined_count": None, "unobserved_count": None,
+                        "source_quality_reason": "display_only_not_economic_input"}
+        if len(useful) < len(generations):
+            entry['excluded_empty_display_representations'] = [
+                dict(path=g[2], decoded_sha256=g[0], decoded_bytes=g[1])
+                for g in generations if not g[1]]
+        entries.append(entry)
     config_sha = None
     config_bytes = None
     if watch_config_path.exists():
@@ -262,7 +284,11 @@ def history_anchor_issues(output_dir: Path, target_date: date, manifest: dict[st
             # Keep the anchor for sources still inside the current window.
             retained = [row for row in saved["entries"]
                         if row["source_date"] >= refresh_floor]
-            expected = {row["path"] for row in retained}
+            # Older manifests bound the physical gzip name. The current census
+            # validates decoded bytes and conflicting representations first.
+            expected = {row["path"][:-3] if row["kind"] == "display_name"
+                        and row["path"].endswith(".jsonl.gz") else row["path"]
+                        for row in retained}
             current = {row["path"]: row for row in manifest["entries"]}
             for row in retained:
                 if (row["kind"] in {"payload", "replay"}
