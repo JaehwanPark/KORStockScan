@@ -98,4 +98,4 @@
 
 ## 10/5 실행 인계
 
-최신 사용자 지시로 위 계획을 실행한다. 공용 판정/장후 생성 연결, 원천 복구 및 검증된 정리는 [실행 리뷰](../audits/machine-policy-cutover-and-storage-execution-review-2026-10-05.md)와 그 closure에 기록한다. 계획 작성 시점의 미실행 문구는 역사 상태다.10/6 실제 activation/PID와 자연 수용은 해당 당일 owner에서 확인한다. 기존 압축 캐시3개의 물리 SHA 보존 제한과6,550개 원 capture/행동 차이0을 분리해 공개했다.
+최신 사용자 지시로 S0~S5를 실행했다. 복원 검증된 checkout 중복8,032파일과 종료 pytest fixture2개를 정리하고, 고유16파일·참조 release·고유 원천을 보존했다. 중복 정리 창 가용량 증가는667,475,968 bytes이나 재계산/증빙/새 release 쓰기를 포함한11:39 총 가용량은16.892GiB로25GiB 목표에 미달한다. 검증된 후보 소진으로 정리를 종료했다. 새 선택3e982ece·rollback9c0c0632 및 독립 e6d4d3b9 pin/실제 PID를 보호한다. 자세한 증빙과 최종 재측정은 [실행 리뷰](../audits/machine-policy-cutover-and-storage-execution-review-2026-10-05.md)와 closure에 기록한다. 기존 압축 캐시3개의 종전 bytes 미보관 제한과6,550개 원 capture/행동 차이0은 별도 공개했으며 역사 frozen manifest는 변경하지 않았다.

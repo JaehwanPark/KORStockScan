@@ -76,7 +76,7 @@ P2/P3 표적 검증에는 조건 경계(60/100/0/10), NaN/누락/stale/future �
 
 ## 4.10/6 장후에는 어떻게 분석하고 생성하는가
 
-### 4.1 현재 설치된 방식
+### 4.1 계획 작성 당시 설치된 방식
 
 [등록 dispatcher](../../src/engine/automation/postclose_summary_handoff.py)의 `main_machine_policy`는 `ai_action_outcome_calibration --target-date <source_date> --write --winrate-policy-only --publication-date <publication_date>`를 호출한다. 선택 release와 작업본의 `load_machine_observation_rows`, `build_winrate_policy_report`, CLI `main` 함수 내용 SHA가 이번 점검에서 각각 동일했다. 새 관측 연구 함수가 작업본에 있는 것만으로 이 호출이 바뀌지 않는다.
 
@@ -87,7 +87,7 @@ P2/P3 표적 검증에는 조건 경계(60/100/0/10), NaN/누락/stale/future �
 5. 최신 미소비 날짜를 검증으로 분리한다. 최초 forward일만 있는 경우의 시간순 기회 분할과 그 receipt도 별도로 검사한다. 기존 자동 successor 계약은 학습 선택30기회·검증10기회 이상, 양쪽 raw 승률 개선, 지원조정 승률+5pp 이상, 부모 대비 선택 기회50% 이상 및 source/holdout 계약을 요구한다. 최초 도입의 고정 재현 경로는 별도다. **50%는 선택 기회 coverage이며 기존 성공 종목 보존율이 아니다.** 성공100%/80% 보존은 이 successor 탈락 조건이 아니다.
 6. 통과하면 dated 정책을 stage하고, 미충족이면 원인과 incumbent 승계를 남긴다. 보고서 생성·stage·다음날 activation·실제 PID 소비는 각각 별도다. 보조판정은 별도 family가 수행한다.
 
-즉 현재 설치 그대로라면10/6 장후에도 위 방식이 실행된다. 아래 개선 방식에는 P2의 자동화·schema·발행 경로 연결이 필요하다.
+이 절은 실행 전 기준이다.10/5 P2에서 아래 방식으로 dispatcher를 연결했으며, 최종 실행 상태는 문서 끝의 실행 인계와 리뷰/closure에 기록한다.
 
 ### 4.2 연결 완료 후의 목표 방식
 
@@ -123,4 +123,4 @@ print-only parser가 현재10/6·10/5 문서를 소비해10/4의 미래 OPEN3개
 
 ## 10/5 실행 인계
 
-최신 사용자 지시로 위 계획을 실행한다. 공용 판정/장후 생성 연결, 원천 복구 및 검증된 정리는 [실행 리뷰](../audits/machine-policy-cutover-and-storage-execution-review-2026-10-05.md)와 그 closure에 기록한다. 계획 작성 시점의 미실행 문구는 역사 상태다.10/6 실제 activation/PID와 자연 수용은 해당 당일 owner에서 확인한다. 기존 압축 캐시3개의 물리 SHA 보존 제한과6,550개 원 capture/행동 차이0을 분리해 공개했다.
+최신 사용자 지시로 P0~P4를 실행했다. 공용 판정/장후 생성 연결과 원천 복구 후3e982ece를 배포했다. native 후보3기회1승이 부모32기회17승보다 낮고 새 holdout도 없어 삼성/비삼성 모두 incumbent 승계다.10/6 `current_full_contract` 준비 검증 PASS를 확인했으며 최종 문서 고정 후 재검증은 [실행 리뷰](../audits/machine-policy-cutover-and-storage-execution-review-2026-10-05.md)와 그 closure에 봉인한다. 계획 작성 시점의 미실행 문구는 역사 상태다. P5의10/6 실제 activation/PID와 자연 수용은 해당 당일 owner에서 확인한다. 기존 압축 캐시3개의 물리 SHA 보존 제한과6,550개 원 capture/행동 차이0을 분리해 공개했다.
