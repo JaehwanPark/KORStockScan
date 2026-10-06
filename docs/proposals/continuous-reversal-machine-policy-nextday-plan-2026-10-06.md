@@ -1,6 +1,6 @@
 # 연속 반전 기계·보조정책 전환 및 EOD 제외 장후 전체 재생성·10/7 준비 계획
 
-작성일: 2026-10-06 KST. 원천일: `2026-10-06`. 적용 목표일: **2026-10-07(수), 다음 영업일**. 현재 상태: **운영 통합·v9 배포·EOD 제외 전체 장후 재생성·06:34 장전 준비 완료 / 07:35 PREOPEN·07:55 Main 실제 소비 확인 예정**. 구현 이력은 §10, 최신 prepared 경고 보완은 §12를 따른다.
+작성일: 2026-10-06 KST. 원천일: `2026-10-06`. 적용 목표일: **2026-10-07(수), 다음 영업일**. 현재 상태: **운영 통합·v9 배포·EOD 제외 전체 장후 재생성·07:05 장전 준비/정식 cron 인계 완료 / 07:35 PREOPEN·07:55 Main 실제 소비 확인 예정**. 구현 이력은 §10, 준비·cron 소비 경고 보완은 §12~§13을 따른다.
 
 ## 1. 결정과 이번 작업의 범위
 
@@ -245,3 +245,16 @@ P5까지 준비를 완료해도 07:55 실제 PID가 뜨기 전에는 “정상�
 
 
 최종 v9 인계는 06:34:08 완료했다. 새 prepared는 06:34:05에 발행됐고 현재 전체 계약 검증은 PASS·findings=[]다. 최종 detector 7개/fail 0, whole_native_chain strict/controller pass, 최종 generation/report hash 대조를 확인했다. 기계·보조 정책 bundle과 각 12셀·EOD·동결 원천 110개·호출/응답 로그 2개는 불변이다. 기존 episode 원천 결손과 구 삼성 동결 연구 실패는 report-only 경고로 보존한다. 07:35 PREOPEN 및 07:55 실제 Main PID 소비는 기존 owner의 OPEN으로 남으며 정상 예약 기동에서 확인한다. [보완 종결 영수증](../../data/report/continuous_reversal/2026-10-06/prepared-alert-repair-20261007.json)을 따른다.
+
+
+## 13. 07:00 최종화 cron 로그의 마지막 소비 보완
+
+06:34 수동 복구 출력은 별도 audit 로그에만 남았고 정식 `logs/postclose_finalization_cron.log`에는 05:01 이전 chain이 남았다. 07:00 탐지의 `finalization_chain_generation_changed`는 이 마지막 소비 인계 누락이다. 현재 controller/prepared는 유효하고 06:34 audit chain은 현재 세대와 일치한다. 코드·정책 변경 없이 reviewed v9의 `run_with_owned_log.sh --owner postclose_finalization_cron --log <workspace>/logs/postclose_finalization_cron.log <release>/deploy/run_postclose_finalization.sh 2026-10-06 --recover-closed-target`로 native 복구한다. scope는 정확일 finalization이며 Main 학습·EOD·주문·bot 기동을 동반하지 않는다.
+
+종결은 별도 audit DONE만으로 판단하지 않는다. 정식 cron 로그의 최신 exact source/effective-date DONE과 현재 chain/snapshot hash, child detector run/report hash, prepared 전체 계약 및 자기 ancestor가 없는 독립 cron consumer를 모두 대조한다. 늦은 복구의 `recovered_late` 경고는 보존하고 generation fail과 구분한다. 원 로그/07:00 실패 보고서를 보존하며 성공 marker를 수동 복사하거나 stale 검사를 우회하지 않는다.
+
+
+정식 owned logger 복구는 07:03:11~07:05:03 완료했다. 새 prepared는 07:05:00에 생성됐고 현재 전체 계약 PASS·findings=[]다. 자기 ancestor가 없는 독립 CronCompletionDetector의 현재 실제 판정은 `recovered_late` 경고, generation issues=[]이며 07:00의 generation fail은 해소됐다. 정식 최신 DONE과 현재 chain/snapshot·실제 child detector run/report hash를 대조했고 final detector 7개/fail 0이다. v9 source 36개·기계/보조 bundle·EOD·동결 원천 110개·호출/응답 로그 2개는 불변이다. 원 06:34 audit 복구와 07:00 실패 영수증은 역사로 보존한다. [최종 인계 보완 영수증](../../data/report/continuous_reversal/2026-10-06/finalization-log-handoff-alert-20261007.json)을 따른다. 07:35/07:55 실제 소비는 예정 owner에 남는다.
+
+
+07:07:14 현재 시각의 독립 full 읽기 전용 탐지도 7개 모두 실행해 fail 0·runtime mutation none을 확인했다. 전체 severity는 기존 경고와 recovered_late를 포함한 warning이다. [독립 full 보고서](../../data/report/continuous_reversal/2026-10-06/finalization-full-readonly-after-0700-repair-20261007.json)는 07:00 원 실패 및 native source-date child 보고서와 별도이며 예정 자연 탐지 실행으로 표시하지 않는다.
