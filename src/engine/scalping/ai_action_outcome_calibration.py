@@ -2706,8 +2706,10 @@ def _mechanistic_selection_reuse_key(threshold_policy: dict[str, Any]) -> str:
 
     Strategy rebuild replaces every outer threshold with the selected complete
     profile, including source-bound fallback profiles. Keep hierarchy, veto,
-    strategy, version and all other fields in the key. This does not cache a
-    decision receipt: its policy hash still belongs to the original candidate.
+    strategy, version and recipe semantics in the key; a validated recipe's
+    parent binding is receipt metadata for the discarded outer thresholds.
+    This does not cache a decision receipt: its policy hash still belongs to
+    the original candidate.
     Invalid or future unknown contracts use their complete policy key instead.
     """
     from src.engine.scalping.entry_strategy_policy import REGISTRY
@@ -2718,6 +2720,16 @@ def _mechanistic_selection_reuse_key(threshold_policy: dict[str, Any]) -> str:
         return _canonical_sha256(threshold_policy)
     action_policy = dict(threshold_policy)
     action_policy.pop("thresholds")
+    if "entry_admission_recipe" in action_policy:
+        # Validation above proves the frozen recipe is bound to this exact
+        # candidate. Its parent hash changes with the discarded outer grid
+        # thresholds, even though strategy rebuild replaces those thresholds.
+        # Reuse actions only; keep all recipe semantics and original candidate
+        # hashes/receipts in the subsequent independent economic evaluation.
+        action_policy["entry_admission_recipe"] = {
+            k: v for k, v in action_policy["entry_admission_recipe"].items()
+            if k != "parent_policy_sha256"
+        }
     return "strategy_actions:" + _canonical_sha256(action_policy)
 
 

@@ -5528,7 +5528,8 @@ def test_mechanistic_threshold_candidate_normalizes_strategy_parent_selection():
 
 
 @pytest.mark.parametrize("veto", [False, True])
-def test_strategy_common_grid_reuse_preserves_complete_report_and_population(monkeypatch, veto):
+@pytest.mark.parametrize("recipe", [False, True])
+def test_strategy_common_grid_reuse_preserves_complete_report_and_population(monkeypatch, veto, recipe):
     from copy import deepcopy
     from src.engine.scalping import entry_strategy_policy as strategy
     from src.tests.test_entry_strategy_policy import raw, setup
@@ -5542,6 +5543,9 @@ def test_strategy_common_grid_reuse_preserves_complete_report_and_population(mon
         overextension_ma5_bp=120, tape_supportive_score=60)
     if veto:
         parent['entry_situation_veto'] = calibration._winrate_veto_payload(68.75)
+    if recipe:
+        from src.engine.scalping.entry_admission_recipe import candidate_policy
+        parent = candidate_policy(parent)
     for i, row in enumerate(rows):
         payload = raw()
         payload['features'].update(spread_bp=20 if i % 2 else 100,
@@ -5596,6 +5600,33 @@ def test_strategy_selection_reuse_keeps_other_authorities_and_legacy_thresholds(
     changed = deepcopy(legacy)
     changed['thresholds']['maximum_spread_bp'] = 40.
     assert key(legacy) != key(changed)
+
+
+def test_strategy_recipe_selection_reuse_ignores_only_valid_parent_binding():
+    from copy import deepcopy
+    from src.engine.scalping import entry_strategy_policy as strategy
+    from src.engine.scalping.entry_admission_recipe import candidate_policy
+
+    parent = candidate_policy(strategy.seed(
+        calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1, ("KRX", "KRX_REGULAR")))
+    coords = {k: parent['thresholds'][k] for k in calibration.MECHANISTIC_COMMON_FEATURE_GRID}
+    one = calibration._mechanistic_threshold_policy(coords, parent)
+    two = calibration._mechanistic_threshold_policy({**coords, 'maximum_spread_bp': 40.}, parent)
+    key = calibration._mechanistic_selection_reuse_key
+    assert one['entry_admission_recipe']['parent_policy_sha256'] != two['entry_admission_recipe']['parent_policy_sha256']
+    assert key(one) == key(two)
+
+    changed = deepcopy(one)
+    changed.pop('entry_admission_recipe')
+    changed['strategy']['nodes']['root']['profile']['maximum_spread_bp'] = 40.
+    changed = candidate_policy(changed)
+    assert key(one) != key(changed)
+    corrupted = deepcopy(two)
+    corrupted['entry_admission_recipe']['parent_policy_sha256'] = '0' * 64
+    assert key(corrupted) == calibration._canonical_sha256(corrupted)
+    corrupted = deepcopy(two)
+    corrupted['entry_admission_recipe']['parameters']['minimum_buy_pressure_10t'] = 50
+    assert key(corrupted) == calibration._canonical_sha256(corrupted)
 
 
 def test_joint_frozen_bundle_qualifies_then_hash_date_and_subset_fail_closed(monkeypatch):
