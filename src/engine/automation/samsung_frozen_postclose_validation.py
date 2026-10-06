@@ -20,11 +20,17 @@ CONTRACT_PATH = 'data/runtime/research/samsung_tick_transition/consumer-contract
 REPORT_DIR = 'data/report/samsung_tick_transition_forward_validation'
 
 
+def _report_folder(root: Path, day: str) -> Path:
+    # Immutable releases share the workspace data directory. Resolve this
+    # mount alias only; the generation writer still rejects symlinks below it.
+    return (root / 'data').resolve() / Path(REPORT_DIR).relative_to('data') / day
+
+
 def run(root: Path, day: str, *, contract_path: Path | None = None):
     root = root.resolve()
     if date.fromisoformat(day).isoformat() != day or day < '2026-10-06':
         raise ValueError('samsung_sidecar_requires_forward_source_date')
-    folder = root / REPORT_DIR / day
+    folder = _report_folder(root, day)
     folder.mkdir(parents=True, exist_ok=True)
     with (folder / 'run.lock').open('a') as lock:
         try:
@@ -86,7 +92,7 @@ def _failure(root, day, exc):
     error = dict(source_date=day, status='failed', error=str(exc)[:200],
                  adapter_sha256=consumer.H.file_sha(__file__))
     generation = consumer.S.digest(error)
-    folder = root / REPORT_DIR / day
+    folder = _report_folder(root, day)
     output = folder / generation / 'result.json'
     failure = consumer.A.seal(dict(schema='samsung_tick_transition_forward_result_v1',
         **consumer.AUTHORITY, day=day, candidate_id=consumer.CANDIDATE, status='failed', error=error['error']))

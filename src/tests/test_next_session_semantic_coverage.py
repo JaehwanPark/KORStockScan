@@ -169,9 +169,14 @@ def test_samsung_semantic_result_binds_candidate_authority_and_generation(tmp_pa
     assert bool(value['findings']) is (defect != 'none')
 
 
-def test_samsung_sidecar_reuses_waiting_and_evaluated_generations(tmp_path, monkeypatch):
+@pytest.mark.parametrize('shared_data', [False, True])
+def test_samsung_sidecar_reuses_waiting_and_evaluated_generations(tmp_path, monkeypatch, shared_data):
     from src.engine.automation import samsung_frozen_postclose_validation as sidecar
     native = sidecar.consumer
+    if shared_data:
+        actual_data = tmp_path / 'shared-data'
+        actual_data.mkdir()
+        (tmp_path / 'data').symlink_to(actual_data, target_is_directory=True)
     contract = tmp_path / 'contract.json'
     contract.write_text(json.dumps(dict(artifact_content_sha256='a'*64)))
     source = tmp_path / 'source.json'
@@ -194,6 +199,25 @@ def test_samsung_sidecar_reuses_waiting_and_evaluated_generations(tmp_path, monk
     result = Path(second['result_path']); result.write_text('{}')
     with pytest.raises(ValueError, match='existing_generation_invalid'):
         sidecar.run(tmp_path, '2026-10-06', contract_path=contract)
+
+
+def test_samsung_sidecar_shared_data_preserves_original_source_failure(tmp_path, monkeypatch):
+    from src.engine.automation import samsung_frozen_postclose_validation as sidecar
+    actual = tmp_path / 'shared-data'
+    actual.mkdir()
+    (tmp_path / 'data').symlink_to(actual, target_is_directory=True)
+    contract = tmp_path / 'contract.json'
+    contract.write_text('{}')
+    def invalid(*_):
+        raise ValueError('tick_research_source_changed:sealed-source')
+    monkeypatch.setattr(sidecar.consumer, 'validate_registration', invalid)
+    with pytest.raises(ValueError, match='tick_research_source_changed:sealed-source'):
+        sidecar.run(tmp_path, '2026-10-06', contract_path=contract)
+    receipt = json.loads((actual / 'report/samsung_tick_transition_forward_validation/2026-10-06/latest.json').read_text())
+    assert receipt['status'] == 'failed'
+    assert receipt['error'] == 'tick_research_source_changed:sealed-source'
+    assert receipt['runtime_effect'] is receipt['policy_publication'] is False
+    assert Path(receipt['result_path']).is_file()
 
 
 def test_samsung_sidecar_busy_worker_does_not_replace_terminal(tmp_path):
