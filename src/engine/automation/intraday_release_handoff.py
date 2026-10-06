@@ -50,9 +50,9 @@ def _identity(pid):
     return {"pid": int(pid), "start_ticks": fields[19], "cwd": str((proc / "cwd").resolve(strict=True))}
 
 
-def _selection():
+def _selection(*, require_selected_cwd=True):
     root, commit = selected_release(DATA_DIR.parent)
-    if Path.cwd().resolve() not in (root, root / "src"):
+    if require_selected_cwd and Path.cwd().resolve() not in (root, root / "src"):
         raise ValueError("intraday_handoff_selected_root_required")
     return root, commit
 
@@ -145,7 +145,9 @@ def verify(day, commit, *, now=None):
     payload = {}
     try:
         current = _today(day, now)
-        root, selected = _selection()
+        # Read-only consumers may run from their own reviewed immutable
+        # report release. Prepare/consume keep the selected-root requirement.
+        root, selected = _selection(require_selected_cwd=False)
         path, consumed_path = _paths(day, commit)
         payload = _read(path)
         if (selected != commit or payload.get("schema") != "intraday_policy_preserving_release_handoff_v1"
@@ -223,7 +225,7 @@ def main(argv=None):
         elif args.consume:
             result = consume(args.target_date, pid=args.pid)
         else:
-            result = verify(args.target_date, _selection()[1])
+            result = verify(args.target_date, _selection(require_selected_cwd=False)[1])
     except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError) as exc:
         result = {"status": "fail", "findings": [str(exc)]}
     print(json.dumps(result, ensure_ascii=False))

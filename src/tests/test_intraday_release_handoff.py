@@ -12,6 +12,7 @@ NOW = datetime(2026, 10, 2, 10, 0, tzinfo=ZoneInfo("Asia/Seoul"))
 DAY = "2026-10-02"
 OLD = "a" * 40
 NEW = "b" * 40
+NATIVE_SELECTION = handoff._selection
 
 
 def _json(path, value):
@@ -28,7 +29,7 @@ def fixture(tmp_path, monkeypatch):
     selected.mkdir()
     monkeypatch.setattr(handoff, "DATA_DIR", data)
     monkeypatch.setattr(readiness, "DATA_DIR", data)
-    monkeypatch.setattr(handoff, "_selection", lambda: (selected, NEW))
+    monkeypatch.setattr(handoff, "_selection", lambda **kwargs: (selected, NEW))
     monkeypatch.setattr(handoff, "is_krx_trading_day", lambda day: day.weekday() < 5)
     monkeypatch.setattr(handoff.bootstrap, "env_path", lambda day: data / f"{day}.env")
     monkeypatch.setattr(handoff.bootstrap, "manifest_path", lambda day: data / f"{day}.manifest.json")
@@ -63,6 +64,22 @@ def test_intraday_handoff_preserves_preopen_and_policy_files_then_binds_new_pid(
     assert consumed["actual_pid_consumed"] is True
     assert handoff.verify(DAY, NEW, now=NOW + timedelta(hours=2))["status"] == "pass"
     assert handoff.verify(DAY, NEW, now=NOW + timedelta(days=1))["status"] == "fail"
+
+
+def test_read_only_selection_does_not_relax_prepare_or_consume_cwd(fixture, monkeypatch):
+    data, _, selected, prepare = fixture
+    assert prepare()['status'] == 'pass'
+    assert handoff.consume(DAY, pid=2, now=NOW)['status'] == 'pass'
+    frozen = {str(path): path.read_bytes() for path in data.rglob('*') if path.is_file()}
+    monkeypatch.setattr(handoff, '_selection', NATIVE_SELECTION)
+    monkeypatch.setattr(handoff, 'selected_release', lambda workspace: (selected, NEW))
+    monkeypatch.chdir(data.parent)
+    with pytest.raises(ValueError, match='selected_root_required'):
+        prepare()
+    with pytest.raises(ValueError, match='selected_root_required'):
+        handoff.consume(DAY, pid=2, now=NOW)
+    assert handoff.verify(DAY, NEW, now=NOW + timedelta(hours=2))['status'] == 'pass'
+    assert all(Path(path).read_bytes() == value for path, value in frozen.items())
 
 
 @pytest.mark.parametrize('damage', [

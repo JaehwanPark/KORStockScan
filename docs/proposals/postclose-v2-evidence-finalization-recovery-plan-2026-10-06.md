@@ -14,6 +14,7 @@
 4. 이후 native controller가 summary/tower/checklist/strict를 갱신하고 현재 단계 세대를 검증한다. 정리와 최종 detector, source/snapshot/attempt 해시가 확인된 뒤에만 원 날짜 finalization DONE을 발행한다.
 5. 과거 적용일의 PREOPEN 07:35가 지났다면 복구는 `preopen=not_applicable_historical_recovery`다. 과거 자료로 다음 날짜 준비를 생성하지 않는다. 정상 예약 최종화는 원천에 대응하는 정확한 적용일을 명시한다.
 6. 당일 정책 보존 재기동의 원 PREOPEN manifest와 새 PID 검증은 서로 다른 코드 release를 가리킬 수 있다. 장후 소비자는 기존 native intraday handoff의 frozen 파일, 명시 권한, 현재 날짜/selector, consumed 영수증, 현재 Main PID/start ticks/cwd와 canonical 검증을 대조한다. 모두 일치할 때만 `intraday_preserved`로 연결하며 원 manifest의 release 이름을 바꾸지 않는다. 변경된 정책·이전 PID·인계 미소비·다음 날짜는 이 경로에서 거부한다.
+7. 장후 읽기 검증은 별도 검토된 immutable report root에서도 현재 Main의 native handoff를 대조할 수 있다. `prepare`와 `consume`의 selected cwd·PID 요구는 유지한다. 요약 실패가 같은 요약을 필요로 하는 기동 guard까지 차단할 때는 현재 Main selector/PID를 유지한 상태에서 별도 report root의 native `summary_handoff`만 먼저 완료한다. 정상 요약 증명 이후 새 release의 정책 보존 handoff와 최종화를 실행한다.
 
 ## 실행 및 수용
 
@@ -29,3 +30,4 @@
 - 이전 정리 복구 및 정책 보존: [기존 감사](../audits/fixed-watch-source-delay-and-cleanup-remediation-review-2026-10-06.md).
 - 현재 실행 owner: [10/6 체크리스트](../checklists/2026-10-06-stage2-todo-checklist.md)의 `FixedWatchSourceAndCleanupRepair1006` A5.
 - 1차 수정 `72716b6c`, native Main PID `25432`, 당일 bootstrap/PID PASS. 15:40 복구는 선행 검증을 통과한 뒤 요약 소비자의 `future_preopen_generation_stale`에서 실패했다. 단순 selector 교체로 원 manifest 소유권을 증명하지 않았으며, 위 6번의 native 인계 소비 계약을 후속 보완했다. 원 실패 영수증은 보존한다.
+- 후속 `999ee899`의 기동 사전 검증은 이미 실패한 요약의 holding-vote 원천 검증에서 중단됐다. 재기동하지 않았으며 selector를 `72716b6c`로 원복했다. 원 정책 파일과 현재 PID는 유지했다. 원 prepared 세대에 봉인된 summary/controller를 canonical에 복귀시킨 시도도 `summary_handoff:code_changed`로 검증 실패했다. 원복된 과거 controller의 DONE은 현재 최종화 성공으로 사용하지 않는다. 실패 canonical은 `failed-controller-before-sealed-rollback.json`과 `failed-summary-before-sealed-rollback.json`에 보존한다. 위 7번의 독립 report owner로 정상 요약을 재생성한다.
