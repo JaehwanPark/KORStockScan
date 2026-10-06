@@ -65,6 +65,50 @@ def test_intraday_handoff_preserves_preopen_and_policy_files_then_binds_new_pid(
     assert handoff.verify(DAY, NEW, now=NOW + timedelta(days=1))["status"] == "fail"
 
 
+@pytest.mark.parametrize('damage', [
+    None, 'manifest', 'env', 'verification', 'pid', 'consumption', 'missing_consumption', 'next_day',
+])
+def test_postclose_generation_accepts_only_native_preserved_intraday_pid(fixture, monkeypatch, damage):
+    data, _, selected, prepare = fixture
+    bootstrap = handoff.bootstrap
+    monkeypatch.setattr(bootstrap, 'DATA_DIR', data)
+    manifest = {'target_date': DAY, 'selected_release_sha': OLD,
+                'manifest_sha256': 'policy-unchanged'}
+    _json(bootstrap.manifest_path(DAY), manifest)
+    assert prepare()['status'] == 'pass'
+    consumed = handoff.consume(DAY, pid=2, now=NOW)
+    assert consumed['actual_pid_consumed'] is True
+    selection = {'schema': 'runtime_release_selection_v1', 'git_commit': NEW,
+                 'release_root': str(selected)}
+    _json(data / 'runtime/runtime_release_selection.json', selection)
+    verification = {'target_date': DAY, 'status': 'pass', 'passed': True,
+                    'pid': 2, 'pid_passed': True, 'pid_env_available': True}
+    _json(bootstrap.verify_path(DAY), verification)
+    check = handoff.verify
+    clock = NOW + timedelta(days=1) if damage == 'next_day' else NOW
+    monkeypatch.setattr(handoff, 'verify', lambda day, commit: check(day, commit, now=clock))
+    if damage == 'manifest':
+        _json(bootstrap.manifest_path(DAY), {**manifest, 'changed': True})
+    elif damage == 'env':
+        bootstrap.env_path(DAY).write_text('POLICY=changed\n')
+    elif damage == 'verification':
+        _json(bootstrap.verify_path(DAY), {**verification, 'pid': 1})
+    elif damage == 'pid':
+        verification['pid'] = 1
+        _json(bootstrap.verify_path(DAY), verification)
+    elif damage == 'consumption':
+        _json(handoff._paths(DAY, NEW)[1], {**consumed, 'handoff_sha256': 'changed'})
+    elif damage == 'missing_consumption':
+        handoff._paths(DAY, NEW)[1].unlink()
+    result = bootstrap.release_selection_for_generation(data, manifest, verification)
+    if damage is None:
+        assert result['status'] == 'intraday_preserved', result
+        assert result['selection']['git_commit'] == NEW
+        assert result['original_manifest_release_commit'] == OLD
+    else:
+        assert result['status'] == 'invalid', result
+
+
 @pytest.mark.parametrize("mutation", ["env", "manifest", "preopen", "prepared", "commit", "ttl", "consumption"])
 def test_intraday_handoff_rejects_changed_generation_identity_and_expired_launch(fixture, mutation):
     data, _, _, prepare = fixture

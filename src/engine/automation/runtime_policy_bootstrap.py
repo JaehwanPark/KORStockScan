@@ -1310,6 +1310,53 @@ def release_selection_for_generation(
         return {"status": "current", "selection": current,
                 "selection_path": str(current_path),
                 "selection_sha256": _digest_bytes(current_raw), "issues": []}
+    # A policy-preserving intraday deployment retains the original PREOPEN
+    # manifest while its canonical verification belongs to the new Main PID.
+    # The old selector interval cannot authenticate that newer verification.
+    # Use the native, exact-day frozen-generation and consumed-PID contract;
+    # never infer preservation merely from equal policy values or a selector.
+    target = manifest.get("target_date")
+    try:
+        valid_target = date.fromisoformat(target).isoformat() == target
+    except (TypeError, ValueError):
+        valid_target = False
+    if (data_dir == Path(DATA_DIR).resolve() and valid_target
+            and target == verification.get("target_date")):
+        from src.engine.automation import intraday_release_handoff as handoff
+        handoff_path, consumed_path = handoff._paths(target, current["git_commit"])
+        if handoff_path.exists():
+            try:
+                check = handoff.verify(target, current["git_commit"])
+                consumed = handoff._read(consumed_path)
+                pid = verification.get("pid")
+                if (check.get("status") != "pass" or type(pid) is not int or pid <= 0
+                        or verification.get("status") != "pass"
+                        or verification.get("passed") is not True
+                        or verification.get("pid_passed") is not True
+                        or verification.get("pid_env_available") is not True
+                        or consumed.get("schema") != "intraday_policy_preserving_consumption_v1"
+                        or consumed.get("status") != "pass"
+                        or consumed.get("target_date") != target
+                        or consumed.get("selected_release_commit") != current["git_commit"]
+                        or consumed.get("actual_pid_consumed") is not True
+                        or consumed.get("handoff_sha256") != handoff._sha(handoff_path)
+                        or consumed.get("pid_identity") != handoff._identity(pid)
+                        or consumed.get("manifest_sha256") != manifest.get("manifest_sha256")
+                        or handoff._read(manifest_path(target)) != manifest
+                        or handoff._read(verify_path(target)) != verification
+                        or current_path.read_bytes() != current_raw):
+                    raise ValueError("intraday_generation_or_pid_unbound")
+                return {"status": "intraday_preserved", "selection": current,
+                        "selection_path": str(current_path),
+                        "selection_sha256": _digest_bytes(current_raw),
+                        "original_manifest_release_commit": selected,
+                        "handoff_path": str(handoff_path),
+                        "handoff_sha256": handoff._sha(handoff_path),
+                        "consumption_path": str(consumed_path),
+                        "consumption_sha256": handoff._sha(consumed_path),
+                        "issues": []}
+            except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError):
+                return {"status": "invalid", "issues": ["intraday_generation_or_pid_unbound"]}
     try:
         generated = datetime.fromisoformat(manifest["generated_at"])
         verified = datetime.fromisoformat(verification["verified_at"])

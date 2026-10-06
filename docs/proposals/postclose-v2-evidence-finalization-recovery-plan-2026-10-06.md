@@ -13,6 +13,7 @@
 3. 복구 시 summary 영수증이 현재 계약에 맞지 않으면 현재 dispatcher로 `summary_handoff`만 재계산한다. 원 v2는 attempts에 보존한다. 기계·AI·에피소드 정책 및 capacity 원천 producer는 재실행하지 않는다.
 4. 이후 native controller가 summary/tower/checklist/strict를 갱신하고 현재 단계 세대를 검증한다. 정리와 최종 detector, source/snapshot/attempt 해시가 확인된 뒤에만 원 날짜 finalization DONE을 발행한다.
 5. 과거 적용일의 PREOPEN 07:35가 지났다면 복구는 `preopen=not_applicable_historical_recovery`다. 과거 자료로 다음 날짜 준비를 생성하지 않는다. 정상 예약 최종화는 원천에 대응하는 정확한 적용일을 명시한다.
+6. 당일 정책 보존 재기동의 원 PREOPEN manifest와 새 PID 검증은 서로 다른 코드 release를 가리킬 수 있다. 장후 소비자는 기존 native intraday handoff의 frozen 파일, 명시 권한, 현재 날짜/selector, consumed 영수증, 현재 Main PID/start ticks/cwd와 canonical 검증을 대조한다. 모두 일치할 때만 `intraday_preserved`로 연결하며 원 manifest의 release 이름을 바꾸지 않는다. 변경된 정책·이전 PID·인계 미소비·다음 날짜는 이 경로에서 거부한다.
 
 ## 실행 및 수용
 
@@ -27,3 +28,4 @@
 - 실행·테스트: `tmp/postclose-finalization-contract-recovery-20261006/`.
 - 이전 정리 복구 및 정책 보존: [기존 감사](../audits/fixed-watch-source-delay-and-cleanup-remediation-review-2026-10-06.md).
 - 현재 실행 owner: [10/6 체크리스트](../checklists/2026-10-06-stage2-todo-checklist.md)의 `FixedWatchSourceAndCleanupRepair1006` A5.
+- 1차 수정 `72716b6c`, native Main PID `25432`, 당일 bootstrap/PID PASS. 15:40 복구는 선행 검증을 통과한 뒤 요약 소비자의 `future_preopen_generation_stale`에서 실패했다. 단순 selector 교체로 원 manifest 소유권을 증명하지 않았으며, 위 6번의 native 인계 소비 계약을 후속 보완했다. 원 실패 영수증은 보존한다.
