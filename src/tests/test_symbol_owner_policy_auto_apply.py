@@ -162,47 +162,23 @@ def auto_scope(monkeypatch):
     )
 
 
-def test_expected_scope_covers_all_current_widget_and_episode_symbols():
+def test_expected_scope_covers_current_episode_and_main_fixed_watch_symbols():
     scope = expected_machine_symbol_owners(TARGET_DATE)
-
-    assert len(scope) == 18
-    assert set(scope) == {
-        "002900",
-        "005930",
-        "006800",
-        "010140",
-        "015760",
-        "017670",
-        "028050",
-        "034020",
-        "028670",
-        "042660",
-        "035720",
-        "042660",
-        "079160",
-        "080220",
-        "105630",
-        "111770",
-        "137310",
-        "181710",
-        "475150",
-    }
-    assert all("main_scalping" in owners for owners in scope.values())
-    assert all("manual_operator" in owners for owners in scope.values())
-    assert set(scope) < set(LEGACY_MACHINE_OWNER_SCOPE_LABELS)
-    assert set(LEGACY_MACHINE_OWNER_SCOPE_LABELS) == set(
-        expected_machine_symbol_owners(date(2026, 9, 11))
-    )
+    assert len(scope) == 13
+    from src.engine.scalping.main_fixed_watch import SPECS
+    assert {spec.symbol for spec in SPECS}.issubset(scope)
+    assert not set(scope).intersection({"002900", "017670", "035720", "079160", "080220", "105630", "111770", "181710"})
+    assert all("main_scalping" in owners and "manual_operator" in owners for owners in scope.values())
+    assert set(LEGACY_MACHINE_OWNER_SCOPE_LABELS) == set(expected_machine_symbol_owners(date(2026,9,11)))
 
 
-def test_tracked_machine_scope_markers_cover_current_runtime_scope():
-    missing = [
-        symbol
-        for symbol in sorted(LEGACY_MACHINE_OWNER_SCOPE_LABELS)
-        if not machine_owner_scope_source(symbol)
-    ]
-
-    assert missing == []
+def test_tracked_machine_scope_markers_cover_surviving_and_explicit_main_initial_scope():
+    from src.engine.scalping.main_fixed_watch import SPECS
+    initial_main = {spec.symbol for spec in SPECS if spec.episode_entry_forbidden}
+    missing = {symbol for symbol in LEGACY_MACHINE_OWNER_SCOPE_LABELS if not machine_owner_scope_source(symbol)}
+    assert missing.issubset(initial_main)
+    # New Main-only symbols may keep ordinary Main ownership until native
+    # PREOPEN migration; explicit operator veto is never rewritten here.
 
 
 def test_auto_apply_skips_stale_registry_symbol_and_applies_safe_subset(

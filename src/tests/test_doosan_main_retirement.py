@@ -14,11 +14,11 @@ from src.tests.test_main_fixed_watch import _TestDB, epoch
 
 
 def test_two_fixed_watches_have_separate_admissions_and_two_reserved_slots(monkeypatch):
-    for spec in fixed.SPECS:
+    for spec in fixed.SPECS[:2]:
         monkeypatch.setenv(spec.enable_env, 'true')
     monkeypatch.setattr(fixed, 'broker_and_owner_clear', lambda *_: (True, 'verified_flat'))
     db, targets = _TestDB(), []
-    for spec in fixed.SPECS:
+    for spec in fixed.SPECS[:2]:
         assert fixed.reconcile(db, targets, now_epoch=epoch(10), watch_cap=2, symbol=spec.symbol)[0] == 'armed'
     assert fixed.reserved_slots() == 2
     assert len({t['id'] for t in targets}) == len({t['watch_admission_id'] for t in targets}) == 2
@@ -206,21 +206,23 @@ def test_native_owner_policy_readback_and_manual_veto_after_retirement(tmp_path,
     assert manual.evaluate_main_bot_control_exclusion('034020',target_date=day).excluded
 
 
+@pytest.mark.parametrize('grouped', [False, True])
 @pytest.mark.parametrize('failure', [None,'active_service','reload_failure'])
-def test_retirement_apply_keeps_active_exit_owner_and_prevents_rollback_before_unlink(tmp_path,monkeypatch,failure):
+def test_retirement_apply_keeps_active_exit_owner_and_prevents_rollback_before_unlink(tmp_path,monkeypatch,failure,grouped):
     from src.engine.automation import owner_retirement_transition as transition
     from src.engine.infrastructure import runtime_release_router as router
     from src.trading.order import symbol_owner_policy_apply as owner_apply
     workspace=tmp_path/'work'; units=tmp_path/'units'; units.mkdir()
     guard=workspace/'src/trading/config/owner_retirement.py'; guard.parent.mkdir(parents=True); guard.write_text('reviewed')
-    unit=units/transition.units()[0]; unit.write_text('timer')
-    manifest=transition.prepare(workspace,systemd_dir=units)
+    scope=tuple(sorted(set(retired.RETIRED_EPISODE_PROFILES)-{'034020'})) if grouped else ('034020',)
+    unit=units/transition.units(scope)[0]; unit.write_text('timer')
+    manifest=transition.prepare(workspace,systemd_dir=units,**({"symbols":scope} if grouped else {}))
     manifest['systemd_dir']='/etc/systemd/system'
     manifest['receipt_sha256']=transition.digest({k:v for k,v in manifest.items() if k!='receipt_sha256'})
     monkeypatch.setattr(transition,'prepare',lambda *a,**k:manifest)
     monkeypatch.setattr(router,'selected_release',lambda *a:(workspace,'a'*40))
     monkeypatch.setattr(owner_apply,'find_running_trading_processes',lambda:[])
-    snapshot=dict(verified_exchanges=['KRX','NXT'],inventory={'034020':0},open_orders=[],migration_receipts=[])
+    snapshot=dict(verified_exchanges=['KRX','NXT'],inventory={symbol:0 for symbol in scope},open_orders=[],migration_receipts=[])
     snapshot['snapshot_sha256']=hashlib.sha256(json.dumps(snapshot,sort_keys=True,separators=(',',':')).encode()).hexdigest()
     registry=SimpleNamespace(reconcile_symbol_quantity=lambda **k:dict(registered_owner_quantity=0,external_manual_remainder=0),
                              unresolved_intent_summary=lambda **k:dict(unresolved_intent_count=0))
@@ -240,8 +242,8 @@ def test_retirement_apply_keeps_active_exit_owner_and_prevents_rollback_before_u
     else:
         result=transition.apply(manifest,registry=registry,snapshot_fetcher=lambda:snapshot,runner=runner)
         assert result['state']=='terminal'
-        assert len(result['masked_instances']) == 6
-    receipt=workspace/'data/runtime/retirements/doosan-episode-retirement.json'
+        assert len(result['masked_instances']) == (54 if grouped else 6)
+    receipt=workspace/'data/runtime/retirements'/transition.receipt_file(manifest)
     assert all('--now' not in command for command in calls if any(word.endswith('.service') for word in command))
     if failure=='active_service':
         assert unit.exists() and not receipt.exists()
@@ -279,11 +281,11 @@ def test_daily_owner_renewal_preserves_main_holding_after_initial_flat(tmp_path,
     (['/bin/bash', 'run_bot.sh'], False),
     (['/usr/bin/python', '/tmp/bot_main.py'], True),
     (['/usr/bin/python', '-c', 'bot_main.py'], True),
-    (['/usr/bin/python', '-m', 'src.trading.low_price_two_leg.service', '--profile', 'nhn_afternoon', '--live'], False),
+    (['/usr/bin/python', '-m', 'src.trading.low_price_two_leg.service', '--profile', 'mirae_asset_morning', '--live'], False),
     (['/usr/bin/python', '-m', 'src.trading.low_price_two_leg.service', '--profile', 'doosan_enerbility_afternoon', '--live'], True),
     (['/usr/bin/python', '-m', 'src.trading.low_price_two_leg.service', '--profile', 'dynamic_unknown', '--live'], True),
-    (['/usr/bin/python', '-m', 'src.trading.low_price_two_leg.service', '--profile', 'nhn_afternoon', '--profile', 'doosan_enerbility_afternoon'], True),
-    (['/usr/bin/python', '-m', 'src.trading.low_price_two_leg.service', '--profile', 'nhn_afternoon', '--symbol', '034020'], True),
+    (['/usr/bin/python', '-m', 'src.trading.low_price_two_leg.service', '--profile', 'mirae_asset_morning', '--profile', 'doosan_enerbility_afternoon'], True),
+    (['/usr/bin/python', '-m', 'src.trading.low_price_two_leg.service', '--profile', 'mirae_asset_morning', '--symbol', '034020'], True),
 ])
 def test_retirement_process_scope_preserves_foreign_owners(tmp_path, argv, blocked):
     from src.engine.automation.owner_retirement_transition import blocking_retirement_processes

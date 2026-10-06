@@ -706,8 +706,6 @@ def producer_receipt_issues(report_dir: Path, day: str, owner: str) -> list[str]
     return issues
 
 
-
-
 def machine_input_issues(report_dir: Path, day: str) -> list[str]:
     """Cheap exact-date dependency barrier, before any costly machine stage.
 
@@ -856,6 +854,10 @@ def stage_artifacts(report_dir, day, stage):
     outputs = {name: paths.get(name, Path(report_dir) / name / f'{name}_{day}.json') for name in STAGE_REGISTRY[stage][1]}
     if stage == 'main_machine_policy' and day >= '2026-10-06':
         outputs['main_fixed_watch_policy_research'] = Path(report_dir) / 'main_fixed_watch_policy_research' / f'main_fixed_watch_policy_research_{day}.json'
+        from src.engine.scalping.main_fixed_watch import SPECS
+        for spec in SPECS:
+            if spec.episode_entry_forbidden:
+                outputs['main_fixed_watch_policy_research_' + spec.symbol] = Path(report_dir) / 'main_fixed_watch_policy_research' / f'main_fixed_watch_policy_research_{spec.symbol}_{day}.json'
     return outputs
 
 
@@ -955,8 +957,6 @@ def reseal_summary_handoff_for_final_controller(report_dir, day, controller_path
         if stage_receipt_issues(report_dir, day, 'summary_handoff'):
             raise ValueError('summary_handoff:final_controller_reseal_invalid')
     return True
-
-
 
 
 def stage_receipt_issues(report_dir, day, stage, *, code_hash=None,
@@ -1294,10 +1294,13 @@ def _stage_output_issues(report_dir, day, stage):
             errors.append(f'{stage}:invalid_output:{name}')
         elif str(value.get('status', '')).lower() in {'failed', 'error', 'running', 'waiting', 'searching_train', 'pending'}:
             errors.append(f'{stage}:incomplete_output:{name}')
-        if name == 'main_fixed_watch_policy_research':
+        if name.startswith('main_fixed_watch_policy_research'):
             from src.engine.monitoring.main_fixed_watch_policy_research import validate_report
             try:
                 validate_report(value, source_date=day)
+                expected_symbol = '034020' if name == 'main_fixed_watch_policy_research' else name.rsplit('_', 1)[-1]
+                if value['symbol'] != expected_symbol:
+                    raise ValueError('fixed_watch_research_symbol_mismatch')
             except (OSError, ValueError, KeyError, TypeError):
                 errors.append(f'{stage}:fixed_watch_research_contract_invalid')
         if name == 'machine_policy_terminal' and value.get('status') not in {'completed', 'source_gap'}:
@@ -1465,24 +1468,26 @@ def _safe_stage_output_issues(report_dir, day, stage):
         return [f'{stage}:output_validation_failed:{type(exc).__name__}']
 
 
-
-
 def stage_commands(stage, day, publication, *, recovery=False):
     import sys
     from src.engine.build_next_stage2_checklist import _next_krx_trading_day
     prefix = [sys.executable, '-m']
     def command(module, *args):
         return prefix + ['src.engine.' + module, *args]
+    def fixed_watch_commands():
+        if day < '2026-10-06':
+            return []
+        from src.engine.scalping.main_fixed_watch import SPECS
+        return [command('monitoring.main_fixed_watch_policy_research', '--source-date', day,
+                        '--publication-date', publication, '--symbol', spec.symbol)
+                for spec in SPECS if spec.initial_policy_scope == 'non_samsung']
     date_args = ['--target-date', day, '--write']
     if stage == 'main_machine_policy' and recovery:
-        return ([command('monitoring.main_fixed_watch_policy_research', '--source-date', day,
-                         '--publication-date', publication)] if day >= '2026-10-06' else [])
+        return fixed_watch_commands()
     if stage == 'main_machine_policy':
         return [command('scalping.ai_action_outcome_calibration', *date_args,
                         '--winrate-policy-only', '--admission-recipe', 'pullback_p60_v0',
-                        '--publication-date', publication)] + (
-                    [command('monitoring.main_fixed_watch_policy_research', '--source-date', day,
-                             '--publication-date', publication)] if day >= '2026-10-06' else [])
+                        '--publication-date', publication)] + fixed_watch_commands()
     if stage == 'pre_submit_delay':
         return [command('scalping.pre_submit_delay_tuning', '--date', day,
                         '--effective-date', _next_krx_trading_day(publication), '--require-family-ledger')]

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from src.trading.config.owner_retirement import new_entry_retired
 
 import gzip
 import hashlib
@@ -51,7 +52,7 @@ from src.trading.order.entry_liquidity_guard import (
 from src.trading.order.owner_custody_registry import OrderOwnerRegistry
 from src.trading.low_price_two_leg.policy_runtime import (
     BASELINE_POLICIES,
-    KAKAO_MORNING_TARGET_TRANSITION,
+
     POLICY_BOUNDS,
     PRE_RECOMMENDATION_BASELINE_POLICIES,
     PROFILE_20260819_BASELINE_POLICIES,
@@ -82,22 +83,16 @@ from src.trading.low_price_two_leg.preflight import (
 )
 from src.trading.low_price_two_leg.profiles import (
     AFTERNOON_WINDOW,
-    CJ_CGV_AFTERNOON_WINDOW,
-    CJ_CGV_LATE_MORNING_WINDOW,
-    CJ_CGV_MIDDAY_20260831_WINDOW,
-    CJ_CGV_MORNING_20260907_WINDOW,
+
+
     FAN_OCEAN_LATE_MORNING_WINDOW,
     FAN_OCEAN_MORNING_WINDOW,
     FAN_OCEAN_AFTERNOON_20260907_WINDOW,
-    HANSE_AFTERNOON_WINDOW,
-    HANSE_LATE_MORNING_REVISED_WINDOW,
-    HANSE_MIDDAY_WINDOW,
-    HANSE_MORNING_20260907_WINDOW,
+
+
     HANWHA_OCEAN_LATE_MORNING_WINDOW,
-    JEJU_SEMICONDUCTOR_MORNING_WINDOW,
-    KAKAO_LATE_MORNING_WINDOW,
-    KAKAO_MORNING_WINDOW,
-    KAKAO_MIDDAY_WINDOW,
+
+
     KEPCO_AFTERNOON_WINDOW,
     KEPCO_LATE_MORNING_WINDOW,
     KEPCO_MORNING_WINDOW,
@@ -105,8 +100,8 @@ from src.trading.low_price_two_leg.profiles import (
     MIRAE_ASSET_MIDDAY_WINDOW,
     MIRAE_ASSET_MORNING_WINDOW,
     MIRAE_ASSET_LATE_MORNING_20260828_WINDOW,
-    NHN_LATE_MORNING_20260907_WINDOW,
-    NHN_MORNING_WINDOW,
+
+
     SAMSUNG_EA_AFTERNOON_20260907_WINDOW,
     SAMSUNG_EA_LATE_MORNING_WINDOW,
     SAMSUNG_EA_MORNING_WINDOW,
@@ -130,19 +125,13 @@ from src.trading.low_price_two_leg.profiles import (
     SK_ETERNIX_MORNING_WINDOW,
     SK_ETERNIX_LATE_MORNING_WINDOW,
     SK_ETERNIX_AFTERNOON_REVISED_WINDOW,
-    SK_TELECOM_AFTERNOON_WINDOW,
-    SK_TELECOM_LATE_MORNING_REVISED_WINDOW,
-    SK_TELECOM_MORNING_WINDOW,
-    SK_TELECOM_MIDDAY_20260907_WINDOW,
+
+
     SD_BIOSENSOR_LATE_MORNING_WINDOW,
     SD_BIOSENSOR_MIDDAY_WINDOW,
     SD_BIOSENSOR_MORNING_20260828_WINDOW,
-    TYM_AFTERNOON_WINDOW,
-    TYM_MIDDAY_20260831_WINDOW,
-    NHN_AFTERNOON_WINDOW,
-    YOUNGONE_AFTERNOON_REVISED_WINDOW,
-    YOUNGONE_MORNING_WINDOW,
-    YOUNGONE_MIDDAY_20260907_WINDOW,
+
+
     MinuteBar,
 )
 from src.trading.low_price_two_leg.service import _profile_with_applied_policy
@@ -155,7 +144,7 @@ def test_durable_low_price_capture_rejects_cross_profile_symbol_and_session(tmp_
     from src.engine.monitoring.low_price_two_leg_tuning import durable_observation_manifest
 
     day = "2026-09-28"
-    profile = PROFILES["cj_cgv_afternoon"]
+    profile = PROFILES["samsung_heavy_afternoon"]
     body = {
         "schema": "low_price_actual_economic_observation_v1",
         "logical_date": day, "owner": "episode", "profile_id": profile.profile_id,
@@ -183,7 +172,7 @@ def test_durable_low_price_capture_rejects_cross_profile_symbol_and_session(tmp_
 def test_fixed_cost_low_price_estimate_never_becomes_realized_pnl():
     from src.engine.monitoring.low_price_two_leg_tuning import _aggregate
 
-    row = _tuning_row("cj_cgv_afternoon", 1, strong=True)
+    row = _tuning_row("samsung_heavy_afternoon", 1, strong=True)
     row["broker_realized_economics"] = {
         "status": "fixed_cost_fallback", "selection_effect": False,
     }
@@ -220,7 +209,7 @@ def test_low_price_native_capture_generation_accepts_real_and_isolates_duplicate
     from src.trading.low_price_two_leg.machine import economic_state_source_sha256
 
     day = "2026-09-28"
-    profile = PROFILES["cj_cgv_afternoon"]
+    profile = PROFILES["samsung_heavy_afternoon"]
     state = {"schema": f"low_price_two_leg_{profile.profile_id}_state_v1",
              "trade_date": day, "status": "NO_TRADE", "legs": [], "position_qty": 0}
     state_sha = economic_state_source_sha256(state)
@@ -274,7 +263,7 @@ def test_low_price_native_capture_generation_accepts_real_and_isolates_duplicate
         handle.write(raw.encode())
     assert durable_observation_manifest(day, audit_dir)["status"] == "pass"
 
-    other_profile = PROFILES["cj_cgv_late_morning"]
+    other_profile = PROFILES["fan_ocean_late_morning"]
     duplicate = (raw + event("real", "2026-09-28T14:01:00+09:00")
                  + event("real", "2026-09-28T14:02:00+09:00", other_profile))
     source.write_text(duplicate)
@@ -328,7 +317,7 @@ def test_low_price_valid_empty_is_distinct_from_missing_source(tmp_path):
 def test_low_price_profile_leg_census_keeps_no_fill_out_of_realized_denominator():
     from src.engine.monitoring.low_price_two_leg_tuning import _profile_leg_lineage_census
 
-    profile = PROFILES["cj_cgv_afternoon"]
+    profile = PROFILES["samsung_heavy_afternoon"]
     first, second = profile.policy.entry_leg_ids
     row = {"profile_id": profile.profile_id, "target_date": "2026-09-28",
            "attempted": True, "source_quality": "pass", "state_source_sha256": "a" * 64,
@@ -623,41 +612,31 @@ def test_profiles_exclude_retired_symbol_and_preserve_other_sessions():
         "samsung_heavy_afternoon": ("010140", "afternoon"),
         "sk_eternix_midday": ("475150", "midday"),
         "mirae_asset_morning": ("006800", "morning"),
-        "jeju_semiconductor_morning": ("080220", "morning"),
+
         "hanwha_ocean_late_morning": ("042660", "late_morning"),
-        "kakao_morning": ("035720", "morning"),
+
         "kepco_afternoon": ("015760", "afternoon"),
-        "kakao_late_morning": ("035720", "late_morning"),
+
         "sk_eternix_morning": ("475150", "morning"),
         "mirae_asset_midday": ("006800", "midday"),
         "sk_eternix_afternoon": ("475150", "afternoon"),
         "samsung_heavy_morning": ("010140", "morning"),
-        "kakao_midday": ("035720", "midday"),
-        "sk_telecom_afternoon": ("017670", "afternoon"),
+
+
         "samsung_ea_morning": ("028050", "morning"),
         "samsung_ea_late_morning": ("028050", "late_morning"),
         "samsung_ea_afternoon": ("028050", "afternoon"),
-        "sk_telecom_late_morning": ("017670", "late_morning"),
-        "sk_telecom_morning": ("017670", "morning"),
-        "hanse_morning": ("105630", "morning"),
-        "hanse_afternoon": ("105630", "afternoon"),
-        "cj_cgv_midday": ("079160", "midday"),
-        "cj_cgv_afternoon": ("079160", "afternoon"),
-        "tym_midday": ("002900", "midday"),
-        "tym_afternoon": ("002900", "afternoon"),
-        "cj_cgv_late_morning": ("079160", "late_morning"),
+
+
         "kepco_late_morning": ("015760", "late_morning"),
         "kepco_midday": ("015760", "midday"),
-        "hanse_late_morning": ("105630", "late_morning"),
-        "hanse_midday": ("105630", "midday"),
-        "nhn_afternoon": ("181710", "afternoon"),
-        "youngone_morning": ("111770", "morning"),
-        "youngone_afternoon": ("111770", "afternoon"),
+
+
         "sk_eternix_late_morning": ("475150", "late_morning"),
         "mirae_asset_late_morning": ("006800", "late_morning"),
         "kepco_morning": ("015760", "morning"),
-        "nhn_morning": ("181710", "morning"),
-        "nhn_late_morning": ("181710", "late_morning"),
+
+
         "sd_biosensor_morning": ("137310", "morning"),
         "sd_biosensor_late_morning": ("137310", "late_morning"),
         "sd_biosensor_midday": ("137310", "midday"),
@@ -665,10 +644,10 @@ def test_profiles_exclude_retired_symbol_and_preserve_other_sessions():
         "fan_ocean_morning": ("028670", "morning"),
         "fan_ocean_late_morning": ("028670", "late_morning"),
         "samsung_heavy_late_morning": ("010140", "late_morning"),
-        "cj_cgv_morning": ("079160", "morning"),
+
         "fan_ocean_afternoon": ("028670", "afternoon"),
-        "youngone_midday": ("111770", "midday"),
-        "sk_telecom_midday": ("017670", "midday"),
+
+
     }
     assert {
         (item.policy.scan_start, item.policy.scan_last_bar)
@@ -678,52 +657,44 @@ def test_profiles_exclude_retired_symbol_and_preserve_other_sessions():
         AFTERNOON_WINDOW,
         SK_ETERNIX_MIDDAY_WINDOW,
         MIRAE_ASSET_MORNING_WINDOW,
-        JEJU_SEMICONDUCTOR_MORNING_WINDOW,
+
         HANWHA_OCEAN_LATE_MORNING_WINDOW,
-        KAKAO_MORNING_WINDOW,
-        KAKAO_LATE_MORNING_WINDOW,
+
+
         SK_ETERNIX_MORNING_WINDOW,
         MIRAE_ASSET_MIDDAY_WINDOW,
         KEPCO_AFTERNOON_WINDOW,
         SAMSUNG_HEAVY_MORNING_WINDOW,
-        KAKAO_MIDDAY_WINDOW,
-        SK_TELECOM_AFTERNOON_WINDOW,
-        SK_TELECOM_LATE_MORNING_REVISED_WINDOW,
-        SK_TELECOM_MORNING_WINDOW,
+
+
         SK_ETERNIX_AFTERNOON_REVISED_WINDOW,
-        HANSE_MORNING_20260907_WINDOW,
-        HANSE_AFTERNOON_WINDOW,
+
+
         SAMSUNG_EA_MORNING_WINDOW,
         SAMSUNG_EA_MIDDAY_20260907_WINDOW,
         SAMSUNG_EA_LATE_MORNING_WINDOW,
         SAMSUNG_EA_AFTERNOON_20260907_WINDOW,
-        CJ_CGV_MIDDAY_20260831_WINDOW,
-        CJ_CGV_AFTERNOON_WINDOW,
-        TYM_MIDDAY_20260831_WINDOW,
-        TYM_AFTERNOON_WINDOW,
-        CJ_CGV_LATE_MORNING_WINDOW,
+
+
         KEPCO_LATE_MORNING_WINDOW,
         KEPCO_MIDDAY_WINDOW,
-        HANSE_LATE_MORNING_REVISED_WINDOW,
-        HANSE_MIDDAY_WINDOW,
-        NHN_AFTERNOON_WINDOW,
-        YOUNGONE_MORNING_WINDOW,
-        YOUNGONE_AFTERNOON_REVISED_WINDOW,
+
+
         SK_ETERNIX_LATE_MORNING_WINDOW,
         MIRAE_ASSET_LATE_MORNING_20260828_WINDOW,
         KEPCO_MORNING_WINDOW,
-        NHN_MORNING_WINDOW,
-        NHN_LATE_MORNING_20260907_WINDOW,
+
+
         SD_BIOSENSOR_MORNING_20260828_WINDOW,
         SD_BIOSENSOR_LATE_MORNING_WINDOW,
         SD_BIOSENSOR_MIDDAY_WINDOW,
         FAN_OCEAN_MORNING_WINDOW,
         FAN_OCEAN_LATE_MORNING_WINDOW,
         SAMSUNG_HEAVY_LATE_MORNING_20260907_WINDOW,
-        CJ_CGV_MORNING_20260907_WINDOW,
+
         FAN_OCEAN_AFTERNOON_20260907_WINDOW,
-        YOUNGONE_MIDDAY_20260907_WINDOW,
-        SK_TELECOM_MIDDAY_20260907_WINDOW,
+
+
     }
     assert PROFILES_20260908_PRIOR["samsung_heavy_midday"].policy.lookback_bars == 30
     assert (
@@ -759,17 +730,11 @@ def test_profiles_exclude_retired_symbol_and_preserve_other_sessions():
     assert PROFILES_20260908_PRIOR[
         "mirae_asset_morning"
     ].policy.entry_offsets_ticks == (0, -1)
-    assert (
-        PROFILES_20260908_PRIOR[
-            "jeju_semiconductor_morning"
-        ].policy.entry_valid_completed_bars
-        == 3
-    )
     assert all(
         PROFILES_20260908_PRIOR[profile_id].policy.target_ticks == 4
         for profile_id in {
             "mirae_asset_morning",
-            "jeju_semiconductor_morning",
+
             "hanwha_ocean_late_morning",
         }
     )
@@ -785,17 +750,17 @@ def test_profiles_exclude_retired_symbol_and_preserve_other_sessions():
         for profile_id, profile in PROFILES_20260908_PRIOR.items()
         if profile_id
         in {
-            "kakao_morning",
+
             "kepco_afternoon",
-            "kakao_late_morning",
+
             "sk_eternix_morning",
             "mirae_asset_midday",
             "sk_eternix_afternoon",
         }
     } == {
-        "kakao_morning": (15, 0.75, 0.35, (0, -1), 5, 4),
+
         "kepco_afternoon": (45, 0.75, 0.75, (0, -1), 3, 4),
-        "kakao_late_morning": (15, 0.50, 0.05, (0, -1), 5, 4),
+
         "sk_eternix_morning": (15, 2.50, 0.75, (0, -1), 5, 4),
         "mirae_asset_midday": (45, 1.00, 0.20, (0, -1), 5, 4),
         "sk_eternix_afternoon": (15, 2.00, 0.50, (0, -1), 5, 4),
@@ -892,33 +857,25 @@ def test_live_systemd_unit_requires_fresh_preflight_and_does_not_restart_on_guar
 @pytest.mark.parametrize(
     ("profile_id", "preflight_time", "service_time"),
     [
-        ("kakao_morning", "09:15:00", "09:19:00"),
-        ("kakao_late_morning", "10:00:00", "10:04:00"),
+
+
         ("sk_eternix_morning", "09:45:00", "09:49:00"),
         ("mirae_asset_midday", "13:10:00", "13:14:00"),
         ("kepco_afternoon", "13:55:00", "13:59:00"),
         ("sk_eternix_afternoon", "13:55:00", "13:59:00"),
-        ("sk_telecom_late_morning", "10:40:00", "10:44:00"),
-        ("sk_telecom_morning", "09:05:00", "09:09:00"),
-        ("hanse_morning", "09:25:00", "09:29:00"),
-        ("hanse_afternoon", "14:15:00", "14:19:00"),
-        ("cj_cgv_midday", "13:15:00", "13:19:00"),
-        ("cj_cgv_afternoon", "14:10:00", "14:14:00"),
-        ("tym_midday", "13:10:00", "13:14:00"),
-        ("tym_afternoon", "14:25:00", "14:29:00"),
-        ("youngone_morning", "09:15:00", "09:19:00"),
-        ("cj_cgv_late_morning", "09:55:00", "09:59:00"),
+
+
         ("kepco_late_morning", "09:55:00", "09:59:00"),
-        ("hanse_late_morning", "09:55:00", "09:59:00"),
-        ("hanse_midday", "13:15:00", "13:19:00"),
+
+
         ("kepco_midday", "13:25:00", "13:29:00"),
-        ("nhn_afternoon", "13:55:00", "13:59:00"),
-        ("youngone_afternoon", "14:25:00", "14:29:00"),
+
+
         ("sk_eternix_late_morning", "10:40:00", "10:44:00"),
         ("mirae_asset_late_morning", "09:55:00", "09:59:00"),
         ("kepco_morning", "09:30:00", "09:34:00"),
-        ("nhn_morning", "09:35:00", "09:39:00"),
-        ("nhn_late_morning", "10:30:00", "10:34:00"),
+
+
         ("sd_biosensor_morning", "09:25:00", "09:29:00"),
         ("sd_biosensor_late_morning", "10:35:00", "10:39:00"),
         ("sd_biosensor_midday", "13:20:00", "13:24:00"),
@@ -927,10 +884,10 @@ def test_live_systemd_unit_requires_fresh_preflight_and_does_not_restart_on_guar
         ("fan_ocean_morning", "09:30:00", "09:34:00"),
         ("fan_ocean_late_morning", "10:00:00", "10:04:00"),
         ("samsung_heavy_late_morning", "10:10:00", "10:14:00"),
-        ("cj_cgv_morning", "09:05:00", "09:09:00"),
+
         ("fan_ocean_afternoon", "14:00:00", "14:04:00"),
-        ("youngone_midday", "13:10:00", "13:14:00"),
-        ("sk_telecom_midday", "13:10:00", "13:14:00"),
+
+
     ],
 )
 def test_expanded_profile_timers_bind_exact_instance_and_start_time(
@@ -966,13 +923,12 @@ def test_current_and_install_time_profile_symbols_have_machine_owner_scope():
         "017670",
         "028050",
         "028670",
-        "035720",
         "079160",
         "105630",
         "111770",
         "181710",
     }
-    for symbol in install_time_symbols:
+    for symbol in install_time_symbols - {"002900", "017670", "079160", "105630", "111770", "181710"}:
         assert f'"{symbol}":' in install_script
     owner_scope = expected_machine_symbol_owners(date(2026, 9, 11))
     assert "011170" not in expected_machine_symbol_owners(date(2026, 9, 9))
@@ -1003,9 +959,9 @@ def test_all_fourteen_user_approved_recommendations_bind_exact_live_profiles():
         / "low_price_two_leg_expanded_profile_evidence_2026-08-18.json"
     )
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-    recommendations = {row["profile_id"]: row for row in evidence["recommendations"] if row.get("symbol") != "034020"}
+    recommendations = {row["profile_id"]: row for row in evidence["recommendations"] if not new_entry_retired(row.get("symbol"), "episode")}
 
-    assert len(RECOMMENDATION_20260818_PROFILE_MAP) == 12
+    assert len(RECOMMENDATION_20260818_PROFILE_MAP) == 8
     assert set(RECOMMENDATION_20260818_PROFILE_MAP.values()) == set(recommendations)
     for (
         live_profile_id,
@@ -1038,9 +994,9 @@ def test_all_eleven_20260819_recommendations_bind_preserved_staged_profiles():
         / "low_price_two_leg_expanded_profile_evidence_2026-08-19.json"
     )
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-    recommendations = {row["profile_id"]: row for row in evidence["recommendations"] if row.get("symbol") != "034020"}
+    recommendations = {row["profile_id"]: row for row in evidence["recommendations"] if not new_entry_retired(row.get("symbol"), "episode")}
 
-    assert len(RECOMMENDATION_20260819_PROFILE_MAP) == 10
+    assert len(RECOMMENDATION_20260819_PROFILE_MAP) == 4
     assert set(RECOMMENDATION_20260819_PROFILE_MAP.values()) == set(recommendations)
     for (
         live_profile_id,
@@ -1072,9 +1028,9 @@ def test_all_nine_20260820_recommendations_bind_exact_latest_profiles():
         / "low_price_two_leg_expanded_profile_evidence_2026-08-20.json"
     )
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-    recommendations = {row["profile_id"]: row for row in evidence["recommendations"] if row.get("symbol") != "034020"}
+    recommendations = {row["profile_id"]: row for row in evidence["recommendations"] if not new_entry_retired(row.get("symbol"), "episode")}
 
-    assert len(RECOMMENDATION_20260820_PROFILE_MAP) == 8
+    assert len(RECOMMENDATION_20260820_PROFILE_MAP) == 2
     assert set(RECOMMENDATION_20260820_PROFILE_MAP.values()) == set(recommendations)
     for (
         live_profile_id,
@@ -1106,9 +1062,9 @@ def test_all_fourteen_20260821_recommendations_bind_exact_next_profiles():
         / "low_price_two_leg_expanded_profile_evidence_2026-08-21.json"
     )
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-    recommendations = {row["profile_id"]: row for row in evidence["recommendations"] if row.get("symbol") != "034020"}
+    recommendations = {row["profile_id"]: row for row in evidence["recommendations"] if not new_entry_retired(row.get("symbol"), "episode")}
 
-    assert len(RECOMMENDATION_20260821_PROFILE_MAP) == 14
+    assert len(RECOMMENDATION_20260821_PROFILE_MAP) == 4
     assert set(RECOMMENDATION_20260821_PROFILE_MAP.values()) == set(recommendations)
     for (
         live_profile_id,
@@ -1140,9 +1096,9 @@ def test_all_twelve_20260824_recommendations_bind_exact_next_profiles():
         / "low_price_two_leg_expanded_profile_evidence_2026-08-24.json"
     )
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-    recommendations = {row["profile_id"]: row for row in evidence["recommendations"] if row.get("symbol") != "034020"}
+    recommendations = {row["profile_id"]: row for row in evidence["recommendations"] if not new_entry_retired(row.get("symbol"), "episode")}
 
-    assert len(RECOMMENDATION_20260824_PROFILE_MAP) == 12
+    assert len(RECOMMENDATION_20260824_PROFILE_MAP) == 4
     assert set(RECOMMENDATION_20260824_PROFILE_MAP.values()) == set(recommendations)
     for (
         live_profile_id,
@@ -1174,9 +1130,9 @@ def test_all_twelve_20260826_recommendations_bind_exact_next_profiles():
         / "low_price_two_leg_expanded_profile_evidence_2026-08-26.json"
     )
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-    recommendations = {row["profile_id"]: row for row in evidence["recommendations"] if row.get("symbol") != "034020"}
+    recommendations = {row["profile_id"]: row for row in evidence["recommendations"] if not new_entry_retired(row.get("symbol"), "episode")}
 
-    assert len(RECOMMENDATION_20260826_PROFILE_MAP) == 11
+    assert len(RECOMMENDATION_20260826_PROFILE_MAP) == 7
     assert set(RECOMMENDATION_20260826_PROFILE_MAP.values()) == set(recommendations)
     for (
         live_profile_id,
@@ -1208,9 +1164,9 @@ def test_all_nine_20260827_recommendations_bind_exact_next_profiles():
         / "low_price_two_leg_expanded_profile_evidence_2026-08-27.json"
     )
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-    recommendations = {row["profile_id"]: row for row in evidence["recommendations"] if row.get("symbol") != "034020"}
+    recommendations = {row["profile_id"]: row for row in evidence["recommendations"] if not new_entry_retired(row.get("symbol"), "episode")}
 
-    assert len(RECOMMENDATION_20260827_PROFILE_MAP) == 9
+    assert len(RECOMMENDATION_20260827_PROFILE_MAP) == 6
     assert set(RECOMMENDATION_20260827_PROFILE_MAP.values()) == set(recommendations)
     for (
         live_profile_id,
@@ -1277,20 +1233,14 @@ def test_profile_revision_is_exact_date_preopen_transition(tmp_path):
         "new_profile_count": 4,
         "logic_revision_count": 5,
         "approved_profile_ids": [
-            "cj_cgv_afternoon",
-            "cj_cgv_midday",
-            "hanse_afternoon",
-            "hanse_morning",
-            "kakao_late_morning",
-            "kakao_midday",
+
+
             "samsung_ea_afternoon",
             "samsung_ea_morning",
             "samsung_heavy_morning",
             "sk_eternix_afternoon",
-            "sk_telecom_afternoon",
-            "sk_telecom_late_morning",
-            "tym_afternoon",
-            "tym_midday",
+
+
         ],
         "evidence_path": (
             "data/config/low_price_two_leg_expanded_profile_evidence_2026-08-20.json"
@@ -1468,7 +1418,7 @@ def test_profile_revision_is_exact_date_preopen_transition(tmp_path):
             item["selection_status"] == "runtime_quarantined_unified_cost_nonpositive"
             for item in monday_0907_generation["profiles"].values()
         )
-        == 3
+        == 0
     )
     assert validate_applied(monday_0907_generation, target_date=date(2026, 9, 7)) == (
         True,
@@ -1482,9 +1432,9 @@ def test_all_seven_20260828_recommendations_bind_exact_next_profiles():
         / "data/config/low_price_two_leg_expanded_profile_evidence_2026-08-28.json"
     )
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-    recommendations = {row["profile_id"]: row for row in evidence["recommendations"] if row.get("symbol") != "034020"}
+    recommendations = {row["profile_id"]: row for row in evidence["recommendations"] if not new_entry_retired(row.get("symbol"), "episode")}
 
-    assert len(RECOMMENDATION_20260828_PROFILE_MAP) == 7
+    assert len(RECOMMENDATION_20260828_PROFILE_MAP) == 3
     assert set(RECOMMENDATION_20260828_PROFILE_MAP.values()) == set(recommendations)
     for (
         live_profile_id,
@@ -1515,9 +1465,9 @@ def test_all_thirteen_20260904_recommendations_bind_exact_next_profiles():
         / "data/config/low_price_two_leg_expanded_profile_evidence_2026-09-04.json"
     )
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-    recommendations = {row["profile_id"]: row for row in evidence["recommendations"] if row.get("symbol") != "034020"}
+    recommendations = {row["profile_id"]: row for row in evidence["recommendations"] if not new_entry_retired(row.get("symbol"), "episode")}
 
-    assert len(RECOMMENDATION_20260904_PROFILE_MAP) == 12
+    assert len(RECOMMENDATION_20260904_PROFILE_MAP) == 6
     assert set(RECOMMENDATION_20260904_PROFILE_MAP.values()) == set(recommendations)
     for (
         live_profile_id,
@@ -1539,7 +1489,7 @@ def test_all_thirteen_20260904_recommendations_bind_exact_next_profiles():
         evidence_result = validate_research_evidence(
             profile, target_date=date(2026, 9, 7)
         )
-        if live_profile_id in {"cj_cgv_morning", "youngone_midday"}:
+        if live_profile_id in { }:
             assert evidence_result == (
                 False,
                 "research_half_robustness_review_requires_new_profile_revision",
@@ -1551,39 +1501,6 @@ def test_all_thirteen_20260904_recommendations_bind_exact_next_profiles():
             )
         else:
             assert evidence_result == (True, "ready")
-
-
-def test_20260907_applied_policy_fail_closes_three_cost_quarantined_profiles(
-    tmp_path,
-):
-    target_date = date(2026, 9, 7)
-    applied, _ = build_applied_policy(
-        target_date=target_date, candidate_dir=tmp_path / "no_candidates"
-    )
-    applied_dir = tmp_path / "applied"
-    atomic_write_json(applied_dir / "low_price_two_leg_policy_2026-09-07.json", applied)
-
-    for profile_id in {
-        "cj_cgv_morning",
-        "youngone_midday",
-        "sk_telecom_midday",
-    }:
-        policy, digest, reason = load_applied_profile_policy(
-            profile_id, target_date=target_date, applied_dir=applied_dir
-        )
-        assert policy is None
-        assert digest == ""
-        assert reason == (
-            "runtime_profile_quarantined:"
-            "unified_round_trip_cost_revalidation_nonpositive"
-        )
-
-    policy, digest, reason = load_applied_profile_policy(
-        "sd_biosensor_midday", target_date=target_date, applied_dir=applied_dir
-    )
-    assert policy is not None
-    assert len(digest) == 64
-    assert reason == "ready"
 
 
 def test_20260907_exact_date_cost_quarantine_migration_is_bounded_and_idempotent(
@@ -2179,7 +2096,7 @@ def test_episode_cancel_ambiguity_reconciles_before_bounded_retry(
 def test_machine_blocks_entire_episode_when_either_touch_has_under_100_shares(
     tmp_path,
 ):
-    profile = PROFILES["nhn_afternoon"]
+    profile = PROFILES["fan_ocean_afternoon"]
     gateway = FakeGateway(profile.profile_id)
     gateway.best_bid_qty = 97
     gateway.best_ask_qty = 93
@@ -2209,7 +2126,7 @@ def test_machine_blocks_entire_episode_when_either_touch_has_under_100_shares(
 def test_machine_blocks_entire_episode_when_latest_ten_prints_are_too_slow(
     tmp_path,
 ):
-    profile = PROFILES["youngone_afternoon"]
+    profile = PROFILES["sk_eternix_afternoon"]
     gateway = FakeGateway(profile.profile_id)
     gateway.execution_velocity_span_ms = 35_000
     machine = LowPriceTwoLegMachine(
@@ -2243,7 +2160,7 @@ def test_episode_velocity_wait_cannot_renew_original_liquidity_clock(
 ):
     import src.trading.order.entry_liquidity_guard as guard
 
-    profile = PROFILES["youngone_afternoon"]
+    profile = PROFILES["sk_eternix_afternoon"]
     gateway = FakeGateway(profile.profile_id)
     machine = LowPriceTwoLegMachine(
         profile=profile,
@@ -2273,7 +2190,7 @@ def test_episode_velocity_wait_cannot_renew_original_liquidity_clock(
 
 
 def test_machine_rechecks_liquidity_after_restart_with_a_planned_leg(tmp_path):
-    profile = PROFILES["nhn_afternoon"]
+    profile = PROFILES["fan_ocean_afternoon"]
     gateway = FakeGateway(profile.profile_id)
     machine = LowPriceTwoLegMachine(
         profile=profile,
@@ -2503,7 +2420,7 @@ def test_machine_blocks_malformed_persisted_entry_confirmation(tmp_path, monkeyp
 
 
 def test_terminal_partial_fill_does_not_report_whole_episode_as_unfilled(tmp_path):
-    profile = PROFILES["hanse_morning"]
+    profile = PROFILES["samsung_heavy_morning"]
     gateway = FakeGateway(profile.profile_id)
     machine = LowPriceTwoLegMachine(
         profile=profile,
@@ -2563,7 +2480,7 @@ def test_terminal_partial_fill_does_not_report_whole_episode_as_unfilled(tmp_pat
 def test_prior_terminal_ledger_rolls_before_current_policy_validation(
     tmp_path, prior_status, prior_reason
 ):
-    prior_profile = PROFILES["kakao_morning"]
+    prior_profile = PROFILES["samsung_heavy_midday"]
     current_profile = replace(
         prior_profile,
         policy=replace(
@@ -2601,7 +2518,7 @@ def test_prior_terminal_ledger_rolls_before_current_policy_validation(
     state_path.write_text(
         json.dumps(
             {
-                "schema": "low_price_two_leg_kakao_morning_state_v1",
+                "schema": "low_price_two_leg_samsung_heavy_midday_state_v1",
                 "trade_date": "2026-08-13",
                 "status": prior_status,
                 "attempt_consumed": True,
@@ -2638,12 +2555,12 @@ def test_prior_terminal_ledger_rolls_before_current_policy_validation(
 
 
 def test_prior_policy_mismatch_with_open_exposure_never_rolls(tmp_path):
-    profile = PROFILES["kakao_morning"]
+    profile = PROFILES["samsung_heavy_midday"]
     state_path = tmp_path / "state.json"
     state_path.write_text(
         json.dumps(
             {
-                "schema": "low_price_two_leg_kakao_morning_state_v1",
+                "schema": "low_price_two_leg_samsung_heavy_midday_state_v1",
                 "trade_date": "2026-08-13",
                 "status": "BLOCKED",
                 "attempt_consumed": True,
@@ -2674,9 +2591,10 @@ def test_prior_policy_mismatch_with_open_exposure_never_rolls(tmp_path):
 
 @pytest.mark.parametrize("entry_retired", [False, True])
 def test_prior_held_inventory_keeps_its_original_target_policy(tmp_path, entry_retired):
-    prior_profile = PRE_RECOMMENDATION_PROFILES["kakao_late_morning"]
+    prior_profile = replace(PRE_RECOMMENDATION_PROFILES["mirae_asset_morning"],
+        policy=replace(PRE_RECOMMENDATION_PROFILES["mirae_asset_morning"].policy, target_ticks=2))
     current_profile = replace(
-        PROFILES["kakao_late_morning"], entry_runtime_eligible=not entry_retired
+        PROFILES["mirae_asset_morning"], entry_runtime_eligible=not entry_retired
     )
     signal_close = 38_850
     legs = []
@@ -2713,17 +2631,17 @@ def test_prior_held_inventory_keeps_its_original_target_policy(tmp_path, entry_r
     state_path.write_text(
         json.dumps(
             {
-                "schema": "low_price_two_leg_kakao_late_morning_state_v1",
+                "schema": "low_price_two_leg_mirae_asset_morning_state_v1",
                 "trade_date": "2026-08-18",
                 "status": "HELD",
                 "attempt_consumed": True,
                 "signal_close": signal_close,
                 "signal_features": {
-                    "scan_start": "10:05:00",
-                    "scan_last_bar": "10:34:00",
+                    "scan_start": prior_profile.policy.scan_start.isoformat(),
+                    "scan_last_bar": prior_profile.policy.scan_last_bar.isoformat(),
                     "lookback_bars": 15,
-                    "required_drawdown_pct": 0.5,
-                    "max_near_low_pct": 0.35,
+                    "required_drawdown_pct": prior_profile.policy.rolling_high_drawdown_pct,
+                    "max_near_low_pct": prior_profile.policy.rolling_low_proximity_pct,
                     "entry_valid_completed_bars": 5,
                     "target_ticks": 2,
                     "runtime_policy_source": "preopen_applied_policy",
@@ -2751,7 +2669,7 @@ def test_prior_held_inventory_keeps_its_original_target_policy(tmp_path, entry_r
 
     assert state["status"] == "HELD"
     assert state["blocked_reason"] == ""
-    assert [leg["target_price"] for leg in state["legs"]] == [38_950, 38_900]
+    assert [leg["target_price"] for leg in state["legs"]] == [38_900, 38_850]
     assert current_profile.policy.target_ticks == 4
     assert gateway.execution_calls[-2:] == [
         ("T1", "2026-08-18", 10),
@@ -3333,7 +3251,7 @@ def test_preflight_requires_token_main_bot_exclusion_evidence_and_applied_policy
     "profile_id",
     [
         "mirae_asset_morning",
-        "jeju_semiconductor_morning",
+
         "hanwha_ocean_late_morning",
     ],
 )
@@ -3372,9 +3290,9 @@ def test_new_profile_authority_binds_exact_offsets_and_frozen_evidence(profile_i
 @pytest.mark.parametrize(
     "profile_id",
     [
-        "kakao_morning",
+
         "kepco_afternoon",
-        "kakao_late_morning",
+
         "sk_eternix_morning",
         "mirae_asset_midday",
         "sk_eternix_afternoon",
@@ -3411,40 +3329,6 @@ def test_expanded_recommendation_authority_binds_v5_evidence(profile_id):
     )
 
 
-def test_kakao_morning_authority_records_target_transition(tmp_path):
-    profile = PRE_RECOMMENDATION_PROFILES["kakao_morning"]
-    target_date = date(2026, 8, 14)
-    applied, _ = build_applied_policy(
-        target_date=target_date, candidate_dir=tmp_path / "none"
-    )
-    decision = evaluate_preflight(
-        target_date=target_date,
-        profile=profile,
-        main_bot_active=True,
-        shared_token_available=True,
-        operator_exclusion_source="manual_operator",
-        research_evidence_ready=True,
-        applied_policy_ready=True,
-        applied_policy_hash=applied["policy_hash"],
-    )
-    artifact = build_authority_artifact(
-        decision,
-        profile=profile,
-        applied_policy=applied["profiles"][profile.profile_id]["policy"],
-        applied_policy_hash=applied["policy_hash"],
-        observed_at=_at(14, 8, 55),
-    )
-
-    assert artifact["policy"]["target_ticks"] == 3
-    assert artifact["policy"]["target_ticks_baseline"] == 2
-    assert artifact["policy"]["target_ticks_authority"] == (
-        "explicit_user_directed_runtime_policy_transition"
-    )
-    assert artifact["policy"]["target_ticks_transition"] == (
-        KAKAO_MORNING_TARGET_TRANSITION
-    )
-
-
 def test_expanded_recommendation_preflight_rejects_source_only_contract_tamper(
     tmp_path,
 ):
@@ -3458,7 +3342,7 @@ def test_expanded_recommendation_preflight_rejects_source_only_contract_tamper(
     recommendation = next(
         row
         for row in payload["recommendations"]
-        if row["profile_id"] == "candidate_035720_morning"
+        if row["profile_id"] == "candidate_015760_afternoon"
     )
     recommendation["implementation_status"] = "implemented_without_user_review"
     digest = hashlib.sha256(
@@ -3468,7 +3352,7 @@ def test_expanded_recommendation_preflight_rejects_source_only_contract_tamper(
     path.write_text(json.dumps(payload), encoding="utf-8")
 
     ready, reason = validate_research_evidence(
-        PRE_RECOMMENDATION_PROFILES["kakao_morning"],
+        PRE_RECOMMENDATION_PROFILES["kepco_afternoon"],
         path,
         expected_sha256=digest,
         target_date=date(2026, 8, 18),
@@ -3494,36 +3378,6 @@ def test_preopen_apply_writes_and_loads_safe_baseline_when_no_candidate(tmp_path
     assert reason == "ready"
     assert digest == applied["policy_hash"]
     assert policy == BASELINE_POLICIES["samsung_heavy_midday"]
-
-
-def test_kakao_morning_target_transition_starts_next_date_only(tmp_path):
-    today, _ = build_applied_policy(
-        target_date=date(2026, 8, 13), candidate_dir=tmp_path / "none"
-    )
-    tomorrow, _ = build_applied_policy(
-        target_date=date(2026, 8, 14), candidate_dir=tmp_path / "none"
-    )
-
-    assert today["profiles"]["kakao_morning"]["policy"]["target_ticks"] == 2
-    assert "operator_policy_transitions" not in today
-    assert validate_applied(today, target_date=date(2026, 8, 13)) == (
-        True,
-        "valid",
-    )
-    assert tomorrow["profiles"]["kakao_morning"]["policy"]["target_ticks"] == 3
-    assert tomorrow["profiles"]["kakao_late_morning"]["policy"]["target_ticks"] == 2
-    assert tomorrow["profiles"]["mirae_asset_morning"]["policy"]["target_ticks"] == 4
-    assert tomorrow["operator_policy_transitions"] == [KAKAO_MORNING_TARGET_TRANSITION]
-    assert validate_applied(tomorrow, target_date=date(2026, 8, 14)) == (
-        True,
-        "valid",
-    )
-
-    tampered = json.loads(json.dumps(tomorrow))
-    tampered.pop("operator_policy_transitions")
-    assert validate_applied(tampered, target_date=date(2026, 8, 14))[1] == (
-        "applied_operator_policy_transition_invalid"
-    )
 
 
 def test_legacy_two_share_candidate_normalizes_to_current_twenty_share_runtime(
@@ -3575,37 +3429,6 @@ def test_legacy_two_share_candidate_normalizes_to_current_twenty_share_runtime(
         True,
         "valid",
     )
-
-
-def test_kakao_morning_service_consumes_applied_three_tick_target():
-    transitioned = apply_operator_policy_transitions(
-        PRE_RECOMMENDATION_BASELINE_POLICIES, target_date=date(2026, 8, 14)
-    )
-    profile = _profile_with_applied_policy(
-        PRE_RECOMMENDATION_PROFILES["kakao_morning"],
-        transitioned["kakao_morning"],
-        "HASH",
-    )
-
-    assert profile.policy.target_ticks == 3
-    assert profile.policy.target_price(39_250) == 39_400
-    assert profile.policy.target_price(39_200) == 39_350
-    assert profile.policy.runtime_policy_source == "preopen_applied_policy"
-    assert profile.policy.runtime_policy_hash == "HASH"
-
-
-def test_three_tick_research_extension_is_scoped_to_kakao_morning():
-    kakao_targets = {
-        candidate.target_ticks
-        for candidate in candidate_grid(PROFILES["kakao_morning"])
-    }
-    kepco_targets = {
-        candidate.target_ticks
-        for candidate in candidate_grid(PROFILES["kepco_afternoon"])
-    }
-
-    assert 3 in kakao_targets
-    assert 3 not in kepco_targets
 
 
 def test_pre_expansion_applied_policy_is_scoped_to_legacy_profiles_and_date(tmp_path):
@@ -4008,106 +3831,6 @@ def test_ka10073_loader_uses_official_path_headers_fields_and_normalizes(monkeyp
     assert rows[0]["tax_krw"] == 773
 
 
-def test_tuning_accepts_exact_date_kakao_three_tick_policy_and_hash(tmp_path):
-    profile_id = "kakao_morning"
-    target_date = date(2026, 8, 14)
-    applied_dir = tmp_path / "applied"
-    applied, status = build_applied_policy(
-        target_date=target_date,
-        candidate_dir=tmp_path / "candidates",
-    )
-    assert status == "baseline_no_prior_candidate"
-    atomic_write_json(
-        applied_dir / f"low_price_two_leg_policy_{target_date.isoformat()}.json",
-        applied,
-    )
-    profile = PROFILES[profile_id]
-    signal_close = 39_250
-    policy = applied["profiles"][profile_id]["policy"]
-    plans = profile.policy.entry_legs(signal_close)
-    legs = []
-    for plan in plans:
-        fill_price = int(plan["entry_price"])
-        legs.append(
-            {
-                "leg_id": plan["leg_id"],
-                "quantity": 10,
-                "entry_price": fill_price,
-                "status": "COMPLETE",
-                "fill_price": fill_price,
-                "position_qty": 0,
-                "buy_filled_qty": 10,
-                "target_price": move_price_by_ticks(fill_price, 3),
-                "target_filled_qty": 10,
-                "target_fill_price": move_price_by_ticks(fill_price, 3),
-            }
-        )
-    state = {
-        "schema": f"low_price_two_leg_{profile_id}_state_v1",
-        "trade_date": target_date.isoformat(),
-        "status": "COMPLETE",
-        "attempt_consumed": True,
-        "signal_features": {
-            "schema": "regular_two_leg_entry_signal_features_v1",
-            "strategy": profile_id,
-            "symbol": profile.symbol,
-            "signal_close": signal_close,
-            "observed_drawdown_pct": 1.0,
-            "observed_near_low_pct": 0.1,
-            "required_drawdown_pct": policy["rolling_high_drawdown_pct"],
-            "max_near_low_pct": policy["rolling_low_proximity_pct"],
-            "lookback_bars": policy["lookback_bars"],
-            "entry_valid_completed_bars": policy["entry_valid_completed_bars"],
-            "target_ticks": policy["target_ticks"],
-            "runtime_policy_source": "preopen_applied_policy",
-            "runtime_policy_hash": applied["policy_hash"],
-        },
-        "legs": legs,
-    }
-    state_path = tmp_path / "kakao.json"
-    state_path.write_text(json.dumps(state), encoding="utf-8")
-
-    row = extract_profile_row(
-        profile_id=profile_id,
-        state_path=state_path,
-        target_date=target_date.isoformat(),
-        cost_pct=0.20,
-        applied_dir=applied_dir,
-    )
-
-    assert row["source_quality"] == "pass"
-    assert all(
-        leg["profit_price_source"] == "broker_target_fill_price" for leg in row["legs"]
-    )
-    state["signal_features"]["runtime_policy_hash"] = "f" * 64
-    state_path.write_text(json.dumps(state), encoding="utf-8")
-    mismatched = extract_profile_row(
-        profile_id=profile_id,
-        state_path=state_path,
-        target_date=target_date.isoformat(),
-        cost_pct=0.20,
-        applied_dir=applied_dir,
-    )
-    assert (
-        "signal_feature_exact_date_applied_policy_mismatch"
-        in mismatched["source_quality_reasons"]
-    )
-    state["signal_features"]["runtime_policy_hash"] = applied["policy_hash"]
-    state["legs"][0]["quantity"] = 1
-    state_path.write_text(json.dumps(state), encoding="utf-8")
-    quantity_mismatch = extract_profile_row(
-        profile_id=profile_id,
-        state_path=state_path,
-        target_date=target_date.isoformat(),
-        cost_pct=0.20,
-        applied_dir=applied_dir,
-    )
-    assert (
-        "exact_date_applied_quantity_mismatch"
-        in quantity_mismatch["source_quality_reasons"]
-    )
-
-
 def test_tuning_keeps_profiles_separate_without_subset_promotion(tmp_path):
     from src.engine.monitoring.low_price_two_leg_tuning import _aggregate
 
@@ -4178,7 +3901,7 @@ def test_tuning_keeps_profiles_separate_without_subset_promotion(tmp_path):
     assert transitioned_status == "candidate_applied"
     assert transitioned_applied["policy_mutations"] == candidate["policy_mutations"]
     assert (
-        transitioned_applied["profiles"]["kakao_morning"]["policy"]["target_ticks"] == 4
+        transitioned_applied["profiles"]["samsung_heavy_midday"]["policy"]["target_ticks"] == 2
     )
     assert validate_applied(transitioned_applied, target_date=date(2026, 8, 22)) == (
         True,
@@ -4242,7 +3965,7 @@ def test_tuning_keeps_profiles_separate_without_subset_promotion(tmp_path):
             "samsung_heavy_afternoon",
             "sk_eternix_midday",
             "mirae_asset_morning",
-            "jeju_semiconductor_morning",
+
             "hanwha_ocean_late_morning",
         }
     }
@@ -4267,8 +3990,8 @@ def test_tuning_keeps_profiles_separate_without_subset_promotion(tmp_path):
     assert expanded_status == "candidate_applied"
     assert set(expanded_applied["profiles"]) == set(PRE_RECOMMENDATION_PROFILES)
     assert (
-        expanded_applied["profiles"]["kakao_morning"]["policy"]
-        == (PRE_RECOMMENDATION_BASELINE_POLICIES["kakao_morning"])
+        expanded_applied["profiles"]["mirae_asset_morning"]["policy"]
+        == (PRE_RECOMMENDATION_BASELINE_POLICIES["mirae_asset_morning"])
     )
 
     source_gap_report = json.loads(json.dumps(report))
@@ -4632,7 +4355,7 @@ def test_candidate_carries_actual_applied_policy_not_latest_unconsumed_proposal(
         target_date=date(2026, 9, 9), candidate_dir=candidate_dir
     )
     # Carry the actual source policy except the two explicitly approved 9/9 revisions.
-    approved = {"sk_eternix_late_morning", "tym_morning"}
+    approved = {"sk_eternix_late_morning", }
     for key, item in result["profiles"].items():
         expected = (
             BASELINE_POLICIES[key]
@@ -4735,10 +4458,10 @@ def test_report_cli_to_preopen_is_automatic_custody_only_without_broker_calls(
     assert status == "candidate_validated_profile_revision_applied"
     assert applied["profile_revision_transition"]["approved_profile_ids"] == [
         "sk_eternix_late_morning",
-        "tym_morning",
+
     ]
     assert applied["policy_mutations"] == []
-    assert len(applied["runtime_profile_exclusions"]) == 3
+    assert len(applied["runtime_profile_exclusions"]) == 0
 
 
 def _write_carried_state(
@@ -5017,12 +4740,12 @@ def test_profile_expansion_dates_do_not_create_historical_source_gaps(tmp_path):
         source_quality_dir=source_quality_dir,
     )
 
-    new_profile_rows = report["windows"][CLEAN_WINDOW_NAME]["kakao_morning"]["rows"]
+    new_profile_rows = report["windows"][CLEAN_WINDOW_NAME]["mirae_asset_morning"]["rows"]
     assert [row.get("cohort") for row in new_profile_rows[:2]] == [
         "pre_operational_not_applicable",
         "pre_operational_not_applicable",
     ]
-    new_profile_summary = report["windows"][CLEAN_WINDOW_NAME]["kakao_morning"][
+    new_profile_summary = report["windows"][CLEAN_WINDOW_NAME]["mirae_asset_morning"][
         "summary"
     ]
     assert new_profile_summary["pre_operational_days"] == 2
@@ -5380,7 +5103,7 @@ def test_actual_execution_missing_durable_population_is_gap():
 def test_actual_capture_disabled_never_claims_persisted(tmp_path, monkeypatch):
     import src.utils.pipeline_event_logger as logger
     monkeypatch.setattr(logger, "emit_pipeline_event", lambda *args, **kwargs: {"structured_append_succeeded": False})
-    profile = get_profile("kakao_late_morning", target_date=date(2026, 9, 17))
+    profile = get_profile("mirae_asset_morning", target_date=date(2026, 9, 17))
     machine = LowPriceTwoLegMachine(profile=profile, gateway=object(), state_path=tmp_path / "state.json")
     machine._record(datetime.fromisoformat("2026-09-17T10:00:00+09:00"), "bar_evaluated_no_signal", bar="2026-09-17T09:59:00+09:00")
     assert machine.snapshot()["economic_capture"]["status"] == "source_gap"
@@ -5395,7 +5118,7 @@ def test_native_same_clock_transitions_require_exact_producer_chain(tmp_path, mo
         events.append({'stage': 'low_price_actual_economic_observation', 'fields': kwargs['fields']})
         return {'structured_append_succeeded': True}
     monkeypatch.setattr(logger, 'emit_pipeline_event', emit)
-    profile = PROFILES['cj_cgv_afternoon']
+    profile = PROFILES['samsung_heavy_afternoon']
     profile = replace(profile, policy=replace(profile.policy, runtime_policy_hash='a' * 64))
     machine = LowPriceTwoLegMachine(profile=profile, gateway=object(),
         state_path=tmp_path/'state.json', live_enabled=True)
@@ -5441,7 +5164,7 @@ def test_native_capture_append_failure_exposes_missing_sequence_and_day_resets(t
         captured.append(json.loads(kwargs['fields']['observation_json']))
         return {'structured_append_succeeded':len(captured)!=2}
     monkeypatch.setattr(logger,'emit_pipeline_event',emit)
-    profile=PROFILES['cj_cgv_afternoon']
+    profile=PROFILES['samsung_heavy_afternoon']
     machine=LowPriceTwoLegMachine(profile=profile,gateway=object(),state_path=tmp_path/'state.json')
     now=datetime.fromisoformat('2026-09-28T14:16:00+09:00')
     for action in ('first','failed_append','third'):machine._record(now,action)
@@ -5540,7 +5263,7 @@ def test_paired_successor_selection_consumer_requires_promotion_adapter(tmp_path
 def test_manual_journal_reconciles_historical_owner_without_mutating_custody(tmp_path, defect):
     import copy
     from src.engine.monitoring import low_price_two_leg_tuning as tuner
-    day, pid = "2026-08-21", "kakao_morning"
+    day, pid = "2026-08-21", "samsung_heavy_midday"
     raw = {"leg_id": "leg1", "quantity": 10, "status": "HELD", "entry_price": 37000,
         "fill_price": 37000, "target_price": 37300, "position_qty": 10,
         "buy_filled_qty": 10, "target_filled_qty": 0}
@@ -5552,7 +5275,7 @@ def test_manual_journal_reconciles_historical_owner_without_mutating_custody(tmp
     if defect == "source_gap":
         row.update(source_quality="gap", source_quality_reasons=["policy_hash_missing"])
     original = copy.deepcopy(row)
-    receipt = {"owner_id": pid, "symbol": "035720", "entry_trade_date": day,
+    receipt = {"owner_id": pid, "symbol": "010140", "entry_trade_date": day,
         "order_date": "2026-08-26", "order_no": "0010361", "filled_qty": 20,
         "fill_price": 36500, "source_api": "kt00007", "status": "applied",
         "applied_at_kst": "2026-08-26T11:02:46+09:00"}
@@ -5579,11 +5302,26 @@ def test_manual_journal_reconciles_historical_owner_without_mutating_custody(tmp
         assert result == original and not summary["resolved_rows"]
 
 
+def _remaining_paired_selection_fixture(monkeypatch, pid, source):
+    from src.engine.monitoring import low_price_two_leg_tuning as tuner, research_closed_loop as loop
+    from src.engine.monitoring.low_price_two_leg_entry_spot_research import baseline_candidate
+    from src.engine.monitoring.low_price_two_leg_expanded_candidate_research import ResearchProfile
+    from src.trading.low_price_two_leg.profiles import profiles_for_target_date
+    live = profiles_for_target_date(source)[pid]
+    actual = ResearchProfile(pid, live.symbol, live.name, live.session, live.policy, "actual_existing_axis")
+    fixed = {"profile_id": pid, "selected_axis": "rolling_low_proximity_pct", "candidate_revision": {
+        "lane_id": pid, "baseline_parameters": baseline_candidate(actual).public(), "holdout_dates": [str(source)]}}
+    monkeypatch.setattr(tuner, "_read_json", lambda path: fixed if path.name == "low_price_two_leg_paired_selection.json" else {})
+    monkeypatch.setattr(loop, "validate_revision", lambda revision, **kwargs: revision)
+    monkeypatch.setattr(loop, "registered_revision", lambda revision: True)
+
+
 @pytest.mark.parametrize("held,completed", [(0, 0), (0, 6), (1, 8)])
-def test_research_admission_keeps_actual_promotion_floor_and_custody(tmp_path, held, completed):
+def test_research_admission_keeps_actual_promotion_floor_and_custody(tmp_path, monkeypatch, held, completed):
     from src.engine.monitoring import low_price_two_leg_tuning as tuner
     from src.trading.low_price_two_leg import policy_runtime as runtime
-    pid, source = "youngone_morning", date(2026, 9, 17)
+    pid, source = "samsung_heavy_midday", date(2026, 9, 17)
+    _remaining_paired_selection_fixture(monkeypatch, pid, source)
     policies = runtime.baseline_policies_for_target_date(source)
     rows = [{"source_quality": "pass", "target_date": str(source), "legs": [
         {"completed": True, "contract_valid": True, "profit_price_source": "broker_target_fill_price", "net_profit_pct": .1}
@@ -5609,7 +5347,7 @@ def test_research_admission_keeps_actual_promotion_floor_and_custody(tmp_path, h
 def test_paired_handoff_binds_declared_schema_and_preserves_research_on_carry(tmp_path, schema):
     from src.engine.monitoring import low_price_two_leg_tuning as tuner
     target = "2026-09-17"
-    search = {"selected_profile": None, "selected_axis": None, "profiles": {"youngone_morning": {
+    search = {"selected_profile": None, "selected_axis": None, "profiles": {"samsung_heavy_midday": {
         "disposition": "hold_sample", "research_disposition": "research_tested", "promotion_disposition": "hold_actual_sample",
         "research_admission_passed": True, "actual_eligibility_passed": False, "actual_held_legs": 0,
         "calibration_diagnostics": [{"axis": "rolling_high_drawdown_pct", "baseline": {"notional_weighted_ev_pct": .1, "held_legs": 0},
@@ -5624,44 +5362,28 @@ def test_paired_handoff_binds_declared_schema_and_preserves_research_on_carry(tm
     atomic_write_json(cp, candidate)
     handoff = tuner.paired_search_handoff(target, output_dir=tmp_path, candidate_dir=tmp_path)
     assert handoff["status"] == "incumbent_preserved" and handoff["policy_mutations"] == []
-    assert handoff["profiles"]["youngone_morning"]["calibration_diagnostics"][0]["challenger"]["notional_weighted_ev_pct"] == .2
+    assert handoff["profiles"]["samsung_heavy_midday"]["calibration_diagnostics"][0]["challenger"]["notional_weighted_ev_pct"] == .2
     if schema.endswith("v9"): assert handoff["stage_counts"]["research_status"] == "legacy_research_not_reported"
     candidate["source_report_schema"] = "foreign_schema"
     atomic_write_json(cp, candidate)
     assert tuner.paired_search_handoff(target, output_dir=tmp_path, candidate_dir=tmp_path)["status"] == "source_gap"
 
 
-def test_calibration_full_gain_without_half_stability_never_freezes_candidate(tmp_path, monkeypatch):
-    from src.engine.monitoring import low_price_two_leg_tuning as tuner, low_price_two_leg_entry_spot_research as spot, episode_prospective_research as prospective
+def test_remaining_profile_does_not_gain_automatic_paired_research_authority(tmp_path, monkeypatch):
+    from src.engine.monitoring import low_price_two_leg_tuning as tuner
     from src.trading.low_price_two_leg import policy_runtime as runtime
-    pid, source = "youngone_morning", date(2026, 9, 17)
+    pid, source = "samsung_heavy_midday", date(2026, 9, 17)
     policies = runtime.baseline_policies_for_target_date(source)
     report = {"target_date": str(source), "source_runtime_policy_binding": {"status": "ready", "policies": policies},
         "source_quality_preflight": {"tuning_input_allowed": True}, "daily": {"profiles": {pid: {"source_quality": "pass"}}},
-        "windows": {tuner.POST_APPLY_WINDOW_NAME: {pid: {"rows": [{"source_quality": "pass", "legs": [{"completed": True,
-            "contract_valid": True, "profit_price_source": "broker_target_fill_price", "net_profit_pct": .1}]}],
-            "summary": {"broker_priced_completed_legs": 6, "source_valid_observation_days": 19, "held_or_unresolved_legs": 0}}}}}
-    calls = []
-    def evaluate(candidate, contexts, windows, **kwargs):
-        is_baseline = not calls
-        calls.append(candidate)
-        return [{"policy_identity": spot.policy_identity(candidate.public()), "source_valid_observation_days": len(days),
-            "observation_dates": [str(day) for day in days], "cost_pct": spot.COST_PCT,
-            "economic_replay_contract": spot.ECONOMIC_REPLAY_CONTRACT, "metric_contract": spot.ECONOMIC_METRIC_CONTRACT,
-            "held_legs": 0, "carry_in_held_legs": 0, "custody_resolution_required": False,
-            "completed_legs": 8 if index == 0 else 4, "signal_episodes": 6,
-            "notional_weighted_ev_pct": .1 if is_baseline else .2 if index == 0 else .05,
-            "cost_adjusted_net_profit_krw_per_source_valid_observation_day": 1. if is_baseline else 2. if index == 0 else .5}
-            for index, days in enumerate(windows)]
-    monkeypatch.setattr(spot, "_evaluate_candidate_windows", evaluate)
-    monkeypatch.setattr(prospective, "frozen_research", lambda *args, **kwargs: pytest.fail("unstable calibration must not freeze"))
-    from datetime import timedelta
-    contexts = {source-timedelta(days=n): object() for n in range(60)}
-    search = tuner._paired_economic_search(report, context_loader=lambda *args: (contexts, "a"*64), selection_dir=tmp_path)
-    diagnostics = search["profiles"][pid]["calibration_diagnostics"]
-    assert diagnostics and all(d["comparison"]["economic_superiority_confirmed"] for d in diagnostics)
-    assert all(not d["calibration_stability_passed"] for d in diagnostics)
+        "windows": {tuner.POST_APPLY_WINDOW_NAME: {pid: {"rows": [{"source_quality":"pass","legs":[{"completed":True,"contract_valid":True,"profit_price_source":"broker_target_fill_price","net_profit_pct":.1}]}], "summary": {
+            "broker_priced_completed_legs": 20, "source_valid_observation_days": 30, "held_or_unresolved_legs": 0}}}}}
+    search = tuner._paired_economic_search(report, context_loader=lambda *args: pytest.fail("unapproved paired scope"), selection_dir=tmp_path)
+    assert search["profiles"][pid]["calibration_diagnostics"] == []
+    assert search["profiles"][pid]["research_disposition"] == "outside_bounded_research_scope"
     assert search["frozen_selection"] is None and search["selected_profile"] is None
+
+
 def test_source_quality_freeze_rejects_changed_audit_before_publication(tmp_path):
     from src.engine.monitoring.low_price_two_leg_tuning import freeze_source_quality
     source = tmp_path / 'audit.json'

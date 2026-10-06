@@ -336,13 +336,19 @@ def test_fixed_watch_machine_lineage_uses_admission_not_fake_scanner_promotion()
     assert "attempt-1" in key
 
 
-@pytest.mark.parametrize("symbol", ["005930", "034020"])
-def test_fixed_watch_selects_machine_policy_without_changing_scanner_population(symbol):
+@pytest.mark.parametrize("symbol", [spec.symbol for spec in fixed.SPECS])
+def test_fixed_watch_selects_machine_policy_without_changing_scanner_population(symbol, monkeypatch):
     from datetime import datetime
     from src.engine import kiwoom_sniper_v2 as main
     from src.engine import sniper_state_handlers as handlers
 
-    today = datetime.now(fixed.session_contract.KST).date()
+    now = datetime.now(fixed.session_contract.KST).replace(hour=10, minute=5)
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None): return now
+    monkeypatch.setattr(handlers, "datetime", Clock)
+    today = now.date()
+    route = fixed.session_route(now.timestamp(), symbol)
     target = {
         "code": symbol,
         "strategy": "SCALPING",
@@ -350,7 +356,8 @@ def test_fixed_watch_selects_machine_policy_without_changing_scanner_population(
         "position_tag": "SCALP_BASE",
         "watch_origin": fixed.WATCH_ORIGIN,
         "watch_admission_id": f"FIXED-{today}-{symbol}-krx_regular-krx_nxt_integrated-a1",
-        "watch_generation_id": "a" * 64,
+        "watch_generation_id": fixed.generation_id(now.timestamp(), route),
+        "market_data_route": route["route"], "broker_route": "SOR",
     }
     assert handlers._entry_ai_policy_position_tag(target) == "SCANNER"
     assert target["position_tag"] == "SCALP_BASE"
@@ -366,7 +373,11 @@ def test_fixed_watch_selects_machine_policy_without_changing_scanner_population(
         {"code": "000660"},
         {"watch_generation_id": ""},
     ):
-        assert handlers._entry_ai_policy_position_tag({**target, **change}) == "SCALP_BASE"
+        if change.get("watch_origin") == "ZERO_BASE_DISCOVERY":
+            assert handlers._entry_ai_policy_position_tag({**target, **change}) == "SCALP_BASE"
+        else:
+            with pytest.raises(ValueError, match="fixed_watch_machine_dispatch"):
+                handlers._entry_ai_policy_position_tag({**target, **change})
 
 
 def test_fixed_watch_block_case_keeps_exact_identity_and_source_gap():

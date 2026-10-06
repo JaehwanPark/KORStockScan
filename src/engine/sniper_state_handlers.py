@@ -514,8 +514,6 @@ def _persist_scalping_position_peak(
         )
 
 
-
-
 def _mark_entry_opportunity_recheck_submission(
     stock: dict | None,
     code: str,
@@ -565,12 +563,6 @@ def _mark_entry_opportunity_recheck_submission(
     if recovered and not stock.get("entry_opportunity_recheck_fill_observed"):
         _mutate_stock_state(stock, set_fields=recovered)
     return entry_opportunity_recheck_attribution_fields(stock)
-
-
-
-
-
-
 
 
 def _defensive_avg_down_used_count(stock: dict | None) -> int:
@@ -5401,8 +5393,6 @@ def _evaluate_first_touch_avgdown_decision_gate(
         }
     )
     return {"allowed": allowed, "reason": reason, "fields": fields}
-
-
 
 
 _STOP_LINE_TOUCH_AVG_DOWN_DEFER_FIELDS = (
@@ -19205,14 +19195,18 @@ def _entry_ai_policy_position_tag(stock: dict | None) -> str:
     """
     row = stock if isinstance(stock, dict) else {}
     actual_tag = normalize_position_tag("SCALPING", row.get("position_tag"))
-    if (
-        actual_tag == "SCALP_BASE"
-        and main_fixed_watch.is_fixed_watch(row)
-        and str(row.get("watch_admission_id") or "").startswith(
-            f"FIXED-{datetime.now(_KST).date()}-{str(row.get('code') or '')[:6]}-"
-        )
-        and str(row.get("watch_generation_id") or "").strip()
-    ):
+    if row.get("watch_origin") == main_fixed_watch.WATCH_ORIGIN:
+        current_time = datetime.now(_KST)
+        now_ts = current_time.timestamp()
+        if not main_fixed_watch.is_fixed_watch(row) or actual_tag != "SCALP_BASE":
+            raise ValueError("fixed_watch_machine_dispatch_identity_invalid")
+        route = main_fixed_watch.session_route(now_ts, str(row.get("code") or "")[:6])
+        if (not route or row.get("watch_generation_id") != main_fixed_watch.generation_id(now_ts, route)
+            or not str(row.get("watch_admission_id") or "").startswith(
+                f"FIXED-{current_time.date()}-{str(row.get('code') or '')[:6]}-{route['bucket']}-{route['route']}-"
+            ) or row.get("market_data_route") != route["route"]
+            or row.get("broker_route") != ("NXT" if route["route"] == "nxt_only" else "SOR")):
+            raise ValueError("fixed_watch_machine_dispatch_generation_invalid")
         return "SCANNER"
     return actual_tag
 
@@ -21726,8 +21720,6 @@ def _mark_owner_registry_buy_reconciliation(
     )
 
 
-
-
 def _log_scale_in_counterfactual_started(
     *,
     stock: dict,
@@ -23795,8 +23787,6 @@ def _prune_rising_missed_same_day_reentry_risk(now_ts: float | None = None) -> N
     ]
     for code in expired:
         _RISING_MISSED_SAME_DAY_REENTRY_RISK.pop(code, None)
-
-
 
 
 def _record_rising_missed_same_day_reentry_risk(
@@ -36106,10 +36096,6 @@ def _rising_missed_scout_quality_guard_rest_estimator_enabled() -> bool:
         "KORSTOCKSCAN_RISING_MISSED_REST_QUOTE_ESTIMATOR_ENABLED", True
     )
     return _env_bool("KORSTOCKSCAN_MICRO_ESTIMATOR_ENABLED", legacy_default)
-
-
-
-
 
 
 def _rising_missed_micro_estimator_min_confidence() -> float:
@@ -49210,10 +49196,6 @@ def _truthy_log_value(value) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-
-
-
-
 def _normalize_pre_ai_strength_ws_timestamp(snapshot: dict | None) -> tuple[dict, str]:
     normalized = dict(snapshot or {}) if isinstance(snapshot, dict) else {}
     if not normalized:
@@ -50644,8 +50626,6 @@ def _has_retired_entry_source(stock: dict | None) -> bool:
         "scanner_source_signature"
     )
     return "LIMIT_DOWN_LIVE_UNLOCK" in _source_signature_tokens(source_signature)
-
-
 
 
 def _source_signature_strong_bundle_pass(source_signature: str | None) -> bool:
@@ -54185,19 +54165,6 @@ def _clear_holding_flow_override_candidate(
     )
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 def _scalp_holding_source_position_key(stock: dict, code: str) -> str:
     record_id = str(stock.get("id") or stock.get("record_id") or "").strip()
     if record_id and record_id != "-":
@@ -55410,16 +55377,6 @@ def observe_smoothing_source_only_paths_cycle(
             failed_operation_count + detached["failed_operation_count"]
         ),
     }
-
-
-
-
-
-
-
-
-
-
 
 
 def _evaluate_holding_flow_override(
@@ -57051,12 +57008,6 @@ def _extract_buy_recovery_probe_features(
         "minute_candle_window_fresh": features.get("minute_candle_window_fresh", False),
         "minute_candle_latest_age_ms": features.get("minute_candle_latest_age_ms", "-"),
     }
-
-
-
-
-
-
 
 
 def _buy_recovery_probe_tick_pressure_usable(probe: dict | None) -> bool:
@@ -61109,8 +61060,6 @@ def _scanner_async_rising_missed_cache_key(
         return existing_key
     seed = f"{generation.generation_id}|rising_missed_freshness_envelope"
     return "rising_missed:" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
-
-
 
 
 def _resolve_scanner_async_opening_rotation_context(
@@ -65954,8 +65903,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             ),
         )
         return False
-
-
 
 
     upper_limit_block = _upper_limit_entry_block_fields(
@@ -72751,10 +72698,6 @@ def _already_holding_entry_position(stock) -> bool:
     )
 
 
-
-
-
-
 def _rising_missed_normal_buy_bridge_enabled() -> bool:
     return bool(
         getattr(TRADING_RULES, "RISING_MISSED_NORMAL_BUY_BRIDGE_ENABLED", False)
@@ -72979,8 +72922,6 @@ def _rising_missed_nxt_observation_fields(
         ),
         "rising_missed_nxt_forbidden_uses": TRADE_QUALITY_RUNTIME_FORBIDDEN_USES,
     }
-
-
 
 
 def _rising_missed_tp1_source_gap_relief_enabled() -> bool:
@@ -75873,8 +75814,6 @@ def resolve_rising_missed_decision_input(
     return enriched_ws, fields
 
 
-
-
 def _upper_limit_entry_block_enabled() -> bool:
     return _env_bool("KORSTOCKSCAN_SCALP_UPPER_LIMIT_ENTRY_BLOCK_ENABLED", True)
 
@@ -75992,8 +75931,6 @@ def _refresh_rising_missed_scout_ai_parent_provenance(stock: dict) -> dict:
     return fields
 
 
-
-
 def _log_prev_close_gainer_entry_ai_handoff_once(
     stock: dict,
     code: str,
@@ -76039,10 +75976,6 @@ def _log_prev_close_gainer_entry_ai_handoff_once(
     # observed only after its funnel row has been emitted successfully.
     _mutate_stock_state(stock, set_fields={state_key: promotion_id})
     return True
-
-
-
-
 
 
 def _normalize_entry_dmst_stex_tp(value, *, default: str = "SOR") -> str:
@@ -83236,8 +83169,6 @@ def handle_scanner_async_opening_rotation_commit(
     if runtime["is_trigger"]:
         _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime)
     return True
-
-
 
 
 def _submit_entry_split_probe_residual_locked(

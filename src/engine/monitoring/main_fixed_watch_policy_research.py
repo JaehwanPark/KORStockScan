@@ -1,6 +1,6 @@
 """Bounded Main fixed-watch research using retained native Main observations.
 
-Initial Doosan adoption follows the operator's designated non-Samsung parent;
+Initial Main fixed-watch adoption follows the operator's designated non-Samsung parent;
 research support does not veto that initial adoption. This producer cannot
 publish/activate policies or create admissions, broker calls or orders.
 """
@@ -40,7 +40,14 @@ def file_sha(path):
     return h.hexdigest()
 
 
-def freeze(parent, files, *, source_date, publication_date, target_date):
+def _validate_symbol(symbol):
+    from src.engine.scalping.main_fixed_watch import spec_for
+    if spec_for(symbol).initial_policy_scope != "non_samsung":
+        raise ValueError("fixed_watch_research_non_samsung_scope_required")
+
+
+def freeze(parent, files, *, source_date, publication_date, target_date, symbol=SYMBOL):
+    _validate_symbol(symbol)
     if not SOURCE_START <= source_date <= publication_date < target_date:
         raise ValueError("fixed_watch_research_date_contract_invalid")
     for value in (source_date, publication_date, target_date):
@@ -54,8 +61,14 @@ def freeze(parent, files, *, source_date, publication_date, target_date):
     for family, (name, values) in FAMILIES.items():
         for value in values:
             policy = strategy._mutate_tree(base, {name: value}, None)
+            if "entry_admission_recipe" in policy:
+                from src.engine.scalping.entry_admission_recipe import candidate_policy
+                policy = candidate_policy(policy)
             if strategy.validate(policy["strategy"]):
                 raise ValueError("fixed_watch_candidate_strategy_invalid")
+            from src.engine.scalping.entry_setup_evidence import validate_mechanistic_entry_threshold_policy
+            if validate_mechanistic_entry_threshold_policy(policy):
+                raise ValueError("fixed_watch_candidate_policy_invalid")
             candidates.append({"id": f"{family}:{value}", "family": family,
                                "parameters": {name: value}, "policy": policy})
     manifest = []
@@ -67,7 +80,7 @@ def freeze(parent, files, *, source_date, publication_date, target_date):
         if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
             raise ValueError("fixed_watch_source_changed_while_freezing")
         manifest.append({"path": str(path), "bytes": after.st_size, "sha256": sha})
-    return dict(schema=SCHEMA, symbol=SYMBOL, owner_type="main_scalping",
+    return dict(schema=SCHEMA, symbol=symbol, owner_type="main_scalping",
         watch_origin="MAIN_FIXED_WATCH", source_date=source_date,
         publication_date=publication_date, target_date=target_date,
         venue="KRX", session="KRX_REGULAR", parent_policy_sha256=strategy.digest(parent),
@@ -82,12 +95,14 @@ def freeze(parent, files, *, source_date, publication_date, target_date):
 
 
 def evaluate(frozen):
-    if frozen.get("schema") != SCHEMA or frozen.get("symbol") != SYMBOL:
+    symbol = frozen.get("symbol")
+    _validate_symbol(symbol)
+    if frozen.get("schema") != SCHEMA:
         raise ValueError("fixed_watch_research_identity_invalid")
     if len(frozen["candidates"]) != 10 or frozen["source_manifest_sha256"] != strategy.digest(frozen["source_manifest"]):
         raise ValueError("fixed_watch_research_freeze_invalid")
     expected = freeze(frozen["candidates"][0]["policy"], [], source_date=frozen["source_date"],
-                      publication_date=frozen["publication_date"], target_date=frozen["target_date"])
+                      publication_date=frozen["publication_date"], target_date=frozen["target_date"], symbol=symbol)
     for field in ("owner_type", "watch_origin", "candidates", "parent_policy_sha256", "kernel_sha256",
                   "initial_policy_preproof_required", "runtime_effect", "allowed_runtime_apply"):
         if frozen.get(field) != expected[field]:
@@ -100,7 +115,7 @@ def evaluate(frozen):
         if file_sha(path) != item["sha256"] or path.stat().st_size != item["bytes"]:
             raise ValueError("fixed_watch_frozen_source_changed")
         for row in replay.stream_array(path):
-            if row.get("stock_code") != SYMBOL:
+            if row.get("stock_code") != symbol:
                 continue
             census["symbol_rows"] += 1
             try:
@@ -164,7 +179,7 @@ def evaluate(frozen):
         and strategy.machine_winrate_improves(chosen["validation"], baseline["validation"]) else None)
     status = ("source_gap" if not native else "insufficient_sample" if not training or not validation
               else "candidate_ready" if selected else "measured_no_improvement")
-    return dict(schema=SCHEMA, symbol=SYMBOL, owner_type="main_scalping", watch_origin="MAIN_FIXED_WATCH",
+    return dict(schema=SCHEMA, symbol=symbol, owner_type="main_scalping", watch_origin="MAIN_FIXED_WATCH",
         source_date=frozen["source_date"], source_target_date=frozen["source_date"],
         publication_date=frozen["publication_date"], target_date=frozen["target_date"],
         venue="KRX", session="KRX_REGULAR", parent_policy_sha256=frozen["parent_policy_sha256"],
@@ -182,7 +197,7 @@ def evaluate(frozen):
         actual_completed_net_profit_krw=None, research_profit_is_broker_pnl=False)
 
 
-def run(data_root, *, source_date, publication_date, target_date, output_dir=None):
+def run(data_root, *, source_date, publication_date, target_date, output_dir=None, symbol=SYMBOL):
     data_root = Path(data_root).resolve()
     bundle = runtime.for_cohort(runtime.load_effective(data_root=data_root, target_date=source_date), ("KRX", "KRX_REGULAR"))
     if bundle is None:
@@ -193,7 +208,7 @@ def run(data_root, *, source_date, publication_date, target_date, output_dir=Non
     files = [p for p in files if SOURCE_START <= p.name.split("_")[-3] <= source_date]
     output = Path(output_dir) if output_dir else data_root / "report/main_fixed_watch_policy_research"
     frozen = freeze(bundle["machine_policy"], files, source_date=source_date,
-                    publication_date=publication_date, target_date=target_date)
+                    publication_date=publication_date, target_date=target_date, symbol=symbol)
     frozen["parent_bundle_sha256"] = bundle["bundle_sha256"]
     contract_path = output / "frozen" / f"{strategy.digest(frozen)}.json"
     if contract_path.exists():
@@ -206,14 +221,16 @@ def run(data_root, *, source_date, publication_date, target_date, output_dir=Non
     result["frozen_contract_sha256"] = file_sha(contract_path)
     result["parent_bundle_sha256"] = bundle["bundle_sha256"]
     result["report_sha256"] = strategy.digest(result)
-    atomic_write_json(output / f"main_fixed_watch_policy_research_{source_date}.json", result)
+    suffix = "" if symbol == SYMBOL else "_" + symbol
+    atomic_write_json(output / f"main_fixed_watch_policy_research{suffix}_{source_date}.json", result)
     return result
 
 
 def validate_report(result, *, source_date):
+    _validate_symbol(result.get("symbol"))
     if (result.get("schema") != SCHEMA or result.get("source_date") != source_date
         or result.get("source_target_date") != source_date
-        or result.get("symbol") != SYMBOL or result.get("owner_type") != "main_scalping"
+        or result.get("owner_type") != "main_scalping"
         or result.get("watch_origin") != "MAIN_FIXED_WATCH"
         or result.get("runtime_effect") is not False or result.get("allowed_runtime_apply") is not False
         or result.get("actual_order_submitted") is not False
@@ -247,6 +264,7 @@ def validate_report(result, *, source_date):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-date", required=True)
+    parser.add_argument("--symbol", default=SYMBOL)
     parser.add_argument("--publication-date")
     parser.add_argument("--data-root", type=Path, default=Path("data"))
     parser.add_argument("--output-dir", type=Path)
@@ -254,7 +272,7 @@ def main():
     from src.engine.build_next_stage2_checklist import _next_krx_trading_day
     publication = args.publication_date or args.source_date
     result = run(args.data_root, source_date=args.source_date, publication_date=publication,
-                 target_date=_next_krx_trading_day(publication), output_dir=args.output_dir)
+                 target_date=_next_krx_trading_day(publication), output_dir=args.output_dir, symbol=args.symbol)
     print(json.dumps({k: result[k] for k in ("symbol", "selection_status", "native_support", "initial_policy_designation")}))
     return 0
 

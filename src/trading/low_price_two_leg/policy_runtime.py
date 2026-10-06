@@ -73,7 +73,7 @@ PRE_EXPANDED_V2_PROFILE_IDS = frozenset(
         "samsung_heavy_afternoon",
         "sk_eternix_midday",
         "mirae_asset_morning",
-        "jeju_semiconductor_morning",
+
         "hanwha_ocean_late_morning",
     }
 )
@@ -128,20 +128,14 @@ PROFILE_REVISION_20260821_TRANSITION = {
     "new_profile_count": 4,
     "logic_revision_count": 5,
     "approved_profile_ids": [
-        "cj_cgv_afternoon",
-        "cj_cgv_midday",
-        "hanse_afternoon",
-        "hanse_morning",
-        "kakao_late_morning",
-        "kakao_midday",
+
+
         "samsung_ea_afternoon",
         "samsung_ea_morning",
         "samsung_heavy_morning",
         "sk_eternix_afternoon",
-        "sk_telecom_afternoon",
-        "sk_telecom_late_morning",
-        "tym_afternoon",
-        "tym_midday",
+
+
     ],
     "evidence_path": (
         "data/config/low_price_two_leg_expanded_profile_evidence_2026-08-20.json"
@@ -174,20 +168,15 @@ PROFILE_REVISION_20260824_TRANSITION = {
     "new_profile_count": 8,
     "logic_revision_count": 6,
     "approved_profile_ids": [
-        "cj_cgv_afternoon",
-        "cj_cgv_late_morning",
-        "hanse_afternoon",
-        "hanse_late_morning",
-        "hanse_midday",
-        "hanse_morning",
+
+
         "kepco_afternoon",
         "kepco_late_morning",
         "kepco_midday",
-        "nhn_afternoon",
+
         "samsung_ea_late_morning",
-        "tym_midday",
-        "youngone_afternoon",
-        "youngone_morning",
+
+
     ],
     "evidence_path": (
         "data/config/low_price_two_leg_expanded_profile_evidence_2026-08-21.json"
@@ -207,18 +196,15 @@ PROFILE_REVISION_20260825_TRANSITION = {
     "new_profile_count": 5,
     "logic_revision_count": 7,
     "approved_profile_ids": [
-        "cj_cgv_late_morning",
-        "hanse_afternoon",
-        "hanse_late_morning",
-        "hanse_midday",
+
+
         "kepco_late_morning",
         "kepco_morning",
         "mirae_asset_late_morning",
-        "nhn_afternoon",
-        "nhn_late_morning",
-        "nhn_morning",
+
+
         "sk_eternix_late_morning",
-        "youngone_afternoon",
+
     ],
     "evidence_path": (
         "data/config/low_price_two_leg_expanded_profile_evidence_2026-08-24.json"
@@ -238,17 +224,17 @@ PROFILE_REVISION_20260827_TRANSITION = {
     "new_profile_count": 5,
     "logic_revision_count": 7,
     "approved_profile_ids": [
-        "cj_cgv_late_morning",
-        "hanse_late_morning",
+
+
         "kepco_morning",
         "mirae_asset_late_morning",
-        "nhn_late_morning",
+
         "samsung_ea_midday",
         "sd_biosensor_late_morning",
         "sd_biosensor_midday",
         "sd_biosensor_morning",
         "sk_eternix_late_morning",
-        "sk_telecom_late_morning",
+
     ],
     "evidence_path": (
         "data/config/low_price_two_leg_expanded_profile_evidence_2026-08-26.json"
@@ -268,15 +254,15 @@ PROFILE_REVISION_20260828_TRANSITION = {
     "new_profile_count": 1,
     "logic_revision_count": 8,
     "approved_profile_ids": [
-        "cj_cgv_midday",
-        "hanse_late_morning",
+
+
         "kepco_late_morning",
         "mirae_asset_late_morning",
         "samsung_ea_afternoon",
         "samsung_ea_midday",
         "sd_biosensor_late_morning",
         "sd_biosensor_morning",
-        "sk_telecom_morning",
+
     ],
     "evidence_path": (
         "data/config/low_price_two_leg_expanded_profile_evidence_2026-08-27.json"
@@ -296,13 +282,12 @@ PROFILE_REVISION_20260831_TRANSITION = {
     "new_profile_count": 2,
     "logic_revision_count": 5,
     "approved_profile_ids": [
-        "cj_cgv_midday",
+
         "fan_ocean_late_morning",
         "fan_ocean_morning",
         "mirae_asset_late_morning",
-        "nhn_morning",
-        "sk_telecom_morning",
-        "tym_midday",
+
+
     ],
     "evidence_path": (
         "data/config/low_price_two_leg_expanded_profile_evidence_2026-08-28.json"
@@ -322,85 +307,23 @@ PROFILE_REVISION_20260907_TRANSITION = {
     "new_profile_count": 5,
     "logic_revision_count": 8,
     "approved_profile_ids": [
-        "cj_cgv_morning",
+
         "fan_ocean_afternoon",
-        "hanse_morning",
+
         "hanwha_ocean_late_morning",
-        "nhn_afternoon",
-        "nhn_late_morning",
+
+
         "samsung_ea_afternoon",
         "samsung_ea_midday",
         "samsung_heavy_late_morning",
         "sd_biosensor_midday",
-        "sk_telecom_midday",
-        "youngone_midday",
+
+
     ],
     "runtime_active_profile_count": 50,
     "runtime_profile_exclusions": [
-        {
-            "profile_id": "cj_cgv_morning",
-            "reason": "unified_round_trip_cost_revalidation_nonpositive",
-            "source_cost_pct": 0.20,
-            "effective_cost_pct": 0.23,
-            "source_report": (
-                "data/report/low_price_two_leg_expanded_candidate_research/"
-                "low_price_two_leg_expanded_candidate_research_2026-09-04.json"
-            ),
-            "source_profile_id": "existing_079160_morning",
-            "revalidated_notional_weighted_ev_pct": {
-                "calibration_first_half": -0.004323,
-                "calibration_second_half": 0.065530,
-                "calibration": 0.030287,
-                "holdout": 0.116837,
-                "full": 0.054061,
-            },
-            "release_condition": (
-                "new_user_approved_profile_revision_with_positive_calibration_"
-                "halves_holdout_and_full_ev_under_current_cost_contract"
-            ),
-        },
-        {
-            "profile_id": "youngone_midday",
-            "reason": "unified_round_trip_cost_revalidation_nonpositive",
-            "source_cost_pct": 0.20,
-            "effective_cost_pct": 0.23,
-            "source_report": (
-                "data/report/low_price_two_leg_expanded_candidate_research/"
-                "low_price_two_leg_expanded_candidate_research_2026-09-04.json"
-            ),
-            "source_profile_id": "existing_111770_midday",
-            "revalidated_notional_weighted_ev_pct": {
-                "calibration_first_half": 0.020595,
-                "calibration_second_half": -0.000262,
-                "calibration": 0.009584,
-                "holdout": 0.025027,
-                "full": 0.012238,
-            },
-            "release_condition": (
-                "new_user_approved_profile_revision_with_positive_calibration_"
-                "halves_holdout_and_full_ev_under_current_cost_contract"
-            ),
-        },
-        {
-            "profile_id": "sk_telecom_midday",
-            "reason": "unified_round_trip_cost_revalidation_nonpositive",
-            "source_cost_pct": 0.20,
-            "effective_cost_pct": 0.23,
-            "source_report": (
-                "data/report/low_price_two_leg_expanded_candidate_research/"
-                "low_price_two_leg_expanded_candidate_research_2026-09-04.json"
-            ),
-            "source_profile_id": "existing_017670_midday",
-            "revalidated_notional_weighted_ev_pct": {
-                "calibration": -0.001478255,
-                "holdout": -0.017345954,
-                "full": -0.005667687,
-            },
-            "release_condition": (
-                "new_user_approved_profile_revision_with_positive_calibration_"
-                "halves_holdout_and_full_ev_under_current_cost_contract"
-            ),
-        },
+
+
     ],
     "evidence_path": (
         "data/config/low_price_two_leg_expanded_profile_evidence_2026-09-04.json"
@@ -421,16 +344,14 @@ PROFILE_REVISION_20260908_TRANSITION = {
     "new_profile_count": 3,
     "logic_revision_count": 8,
     "approved_profile_ids": [
-        "cj_cgv_late_morning",
-        "cj_cgv_midday",
+
+
         "fan_ocean_late_morning",
-        "hanse_morning",
-        "nhn_midday",
-        "nhn_morning",
+
+
         "sd_biosensor_afternoon",
-        "sk_telecom_late_morning",
-        "tym_morning",
-        "youngone_afternoon",
+
+
     ],
     "runtime_active_profile_count": 53,
     "evidence_path": "docs/audit-reports/2026-09-07-low-price-recommendation-apply-evidence.json",
@@ -449,7 +370,7 @@ PROFILE_REVISION_20260909_TRANSITION = {
     "source_recommendation_count": 4,
     "new_profile_count": 0,
     "logic_revision_count": 2,
-    "approved_profile_ids": ["sk_eternix_late_morning", "tym_morning"],
+    "approved_profile_ids": ["sk_eternix_late_morning", ],
     "runtime_active_profile_count": 53,
     "evidence_path": "docs/audit-reports/2026-09-08-low-price-recommendation-apply-evidence.json",
     "evidence_canonical_sha256": "beabcefb58b49050c16beb789a15f83fab8b35e11eb21082b2e9cc883c5b42ea",
@@ -468,11 +389,11 @@ PROFILE_REVISION_20260910_TRANSITION = {
     "new_profile_count": 3,
     "logic_revision_count": 2,
     "approved_profile_ids": [
-        "sk_telecom_morning",
+
         "kepco_late_morning",
         "lotte_chemical_morning",
         "lotte_chemical_afternoon",
-        "tym_late_morning",
+
     ],
     "runtime_active_profile_count": 56,
     "evidence_path": "docs/audit-reports/2026-09-09-low-price-recommendation-apply-evidence.json",
@@ -503,21 +424,6 @@ PROFILE_REVISION_20260911_TRANSITION = {
     "source_report_sha256": "c42fe91eb1c59bb9896775f223fade53b5998a8bd6b094c7d7aafb3bde284f73",
     "decision_authority": "explicit_user_20260911_implementation_deployment_next_startup",
     "existing_order_effect": "none_preserve_prior_policy_custody",
-}
-KAKAO_MORNING_TARGET_TRANSITION = {
-    "profile_id": "kakao_morning",
-    "axis": "target_ticks",
-    "before": 2,
-    "after": 3,
-    "approved_at_kst": "2026-08-13T10:24:00+09:00",
-    "effective_target_date": "2026-08-14",
-    "decision_authority": "explicit_user_directed_runtime_policy_transition",
-    "reason": "keep_each_sell_above_observed_round_trip_cost_after_shared_average_price",
-    "rollback": {
-        "trigger": "explicit_user_revert_after_postclose_evidence_review",
-        "action": "restore_kakao_morning_target_ticks_2_at_next_preopen",
-        "existing_order_effect": "none_do_not_cancel_or_replace_owned_target_orders",
-    },
 }
 
 
@@ -706,14 +612,18 @@ def profile_revision_transition(target_date: date) -> dict[str, Any] | None:
 
 
 def operator_policy_transitions(target_date: date) -> list[dict[str, Any]]:
-    effective_date = date.fromisoformat(
-        str(KAKAO_MORNING_TARGET_TRANSITION["effective_target_date"])
-    )
-    return (
-        [dict(KAKAO_MORNING_TARGET_TRANSITION)]
-        if (effective_date <= target_date <= PRE_RECOMMENDATION_LAST_TARGET_DATE)
-        else []
-    )
+    return []
+
+
+def _active_transition_projection(value):
+    """Project known retired identities; full hashes still bind archive bytes."""
+    if isinstance(value, dict):
+        return {k: _active_transition_projection(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_active_transition_projection(v) for v in value
+                if not (isinstance(v, str) and episode_profile_retired(v))
+                and not (isinstance(v, dict) and episode_profile_retired(v.get("profile_id")))]
+    return value
 
 
 def apply_operator_policy_transitions(
@@ -1358,14 +1268,14 @@ def validate_applied(payload: Any, *, target_date: date) -> tuple[bool, str]:
         except (OSError, KeyError, TypeError, ValueError):
             return False, "applied_paired_candidate_binding_invalid"
     expected_transitions = operator_policy_transitions(target_date)
-    if list(payload.get("operator_policy_transitions") or []) != expected_transitions:
+    if _active_transition_projection(list(payload.get("operator_policy_transitions") or [])) != expected_transitions:
         return False, "applied_operator_policy_transition_invalid"
-    if payload.get("profile_revision_transition") != profile_revision_transition(
+    if _active_transition_projection(payload.get("profile_revision_transition")) != profile_revision_transition(
         target_date
     ):
         return False, "applied_profile_revision_transition_invalid"
     expected_exclusions = runtime_profile_exclusions(target_date)
-    if list(payload.get("runtime_profile_exclusions") or []) != expected_exclusions:
+    if _active_transition_projection(list(payload.get("runtime_profile_exclusions") or [])) != expected_exclusions:
         return False, "applied_runtime_profile_exclusions_invalid"
     profiles = payload.get("profiles")
     if not isinstance(profiles, dict):

@@ -294,17 +294,10 @@ owners = {
     "108320": "lx_semicon_low_price_two_leg_owner",
     "011170": "lotte_chemical_low_price_two_leg_owner",
     "006800": "mirae_asset_low_price_two_leg_owner",
-    "035720": "kakao_low_price_two_leg_owner",
     "015760": "kepco_low_price_two_leg_owner",
-    "017670": "sk_telecom_low_price_two_leg_owner",
     "028050": "samsung_ea_low_price_two_leg_owner",
     "028670": "fan_ocean_low_price_two_leg_owner",
-    "105630": "hanse_low_price_two_leg_owner",
-    "079160": "cj_cgv_low_price_two_leg_owner",
-    "002900": "tym_low_price_two_leg_owner",
-    "111770": "youngone_low_price_two_leg_owner",
     "137310": "sd_biosensor_low_price_two_leg_owner",
-    "181710": "nhn_low_price_two_leg_owner",
     "475150": "sk_eternix_low_price_two_leg_owner",
 }
 for code, owner in owners.items():

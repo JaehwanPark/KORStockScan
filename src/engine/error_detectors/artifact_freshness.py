@@ -1288,7 +1288,9 @@ def _family_policy_semantics(root, source_date, family):
                 raise ValueError('episode_semantic_population_invalid')
             if len({r['profile_id'] for r in rows}) != len(rows):
                 raise ValueError('episode_semantic_duplicate_profile')
-            if dispositions.get('source_gap'):
+            from src.trading.config.owner_retirement import episode_profile_retired
+            active_dispositions = Counter(r['disposition'] for r in rows if not episode_profile_retired(r['profile_id']))
+            if active_dispositions.get('source_gap'):
                 findings.append('episode_native_source_gap')
             if (summary.get('capture_manifest') or {}).get('invalid_event_count'):
                 findings.append('episode_capture_invalid_events')

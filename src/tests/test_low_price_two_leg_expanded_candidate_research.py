@@ -22,7 +22,7 @@ from src.trading.low_price_two_leg.profiles import PROFILES
 
 LEGACY_TEST_RESEARCH_PROFILES = {
     **expanded.RESEARCH_PROFILES,
-    **expanded._new_symbol_profiles({"017670": "SK텔레콤", "007660": "이수페타시스"}),
+    **expanded._new_symbol_profiles({"000990": "DB하이텍", "007660": "이수페타시스"}),
 }
 
 
@@ -1307,7 +1307,7 @@ def test_dynamic_universe_uses_target_date_implemented_symbol_inventory(tmp_path
         encoding="utf-8",
     )
 
-    assert "111770" in expanded.IMPLEMENTED_SYMBOLS
+    assert "111770" not in expanded.IMPLEMENTED_SYMBOLS
     assert "111770" not in target_inventory.implemented_symbols
     source_date, symbols = expanded._dynamic_candidate_snapshot(
         target_date,
@@ -1317,7 +1317,7 @@ def test_dynamic_universe_uses_target_date_implemented_symbol_inventory(tmp_path
     )
 
     assert source_date == target_date
-    assert symbols == {"111770": "historical-dynamic-candidate"}
+    assert symbols == {}
 
 
 def test_dynamic_universe_report_pins_inventory_for_notifier_validation(monkeypatch):
@@ -1380,8 +1380,8 @@ def test_dynamic_universe_report_pins_inventory_for_notifier_validation(monkeypa
     assert report["new_symbol_profile_count"] == len(candidate_symbols) * len(
         expanded.SESSION_WINDOWS
     )
-    assert report["existing_symbol_universe_size"] == 12
-    assert report["existing_symbol_logic_improvement_profile_count"] == 25
+    assert report["existing_symbol_universe_size"] == 6
+    assert report["existing_symbol_logic_improvement_profile_count"] == 13
     assert (
         len(expanded.LIVE_PROFILES)
         > report["existing_symbol_logic_improvement_profile_count"]
@@ -1468,16 +1468,16 @@ def _profile_result(
 
 def test_recommendations_rank_profiles_and_enforce_daily_price_cap():
     profiles = {
-        "existing_080220_afternoon": _profile_result(
-            symbol="080220",
-            name="제주반도체",
+        "existing_006800_afternoon": _profile_result(
+            symbol="006800",
+            name="미래에셋증권",
             session="afternoon",
             candidate_ev=0.08,
             baseline_ev=0.01,
         ),
-        "candidate_017670_midday": _profile_result(
-            symbol="017670",
-            name="SK텔레콤",
+        "candidate_000990_midday": _profile_result(
+            symbol="000990",
+            name="DB하이텍",
             session="midday",
             candidate_ev=0.03,
             baseline_ev=0.01,
@@ -1491,8 +1491,8 @@ def test_recommendations_rank_profiles_and_enforce_daily_price_cap():
         ),
     }
     source_meta = {
-        "080220": {"latest_close_price": 24_000},
-        "017670": {"latest_close_price": 65_000},
+        "006800": {"latest_close_price": 24_000},
+        "000990": {"latest_close_price": 65_000},
         "007660": {"latest_close_price": 100_500},
     }
 
@@ -1503,8 +1503,8 @@ def test_recommendations_rank_profiles_and_enforce_daily_price_cap():
     )
 
     assert [row["profile_id"] for row in rows] == [
-        "existing_080220_afternoon",
-        "candidate_017670_midday",
+        "existing_006800_afternoon",
+        "candidate_000990_midday",
     ]
     assert rows[0]["price_band"] == "under_50000_krw"
     assert rows[1]["price_band"] == "50000_to_100000_krw"
@@ -1514,8 +1514,8 @@ def test_recommendations_rank_profiles_and_enforce_daily_price_cap():
 
 def test_recommendation_keeps_manageable_carry_diagnostic_without_economic_superiority():
     manageable = _profile_result(
-        symbol="017670",
-        name="SK텔레콤",
+        symbol="000990",
+        name="DB하이텍",
         session="midday",
         candidate_ev=0.05,
         baseline_ev=0.01,
@@ -1536,11 +1536,11 @@ def test_recommendation_keeps_manageable_carry_diagnostic_without_economic_super
 
     rows = expanded._recommendation_rows(
         {
-            "candidate_017670_midday": manageable,
+            "candidate_000990_midday": manageable,
             "candidate_007660_midday": excessive,
         },
         {
-            "017670": {"latest_close_price": 65_000},
+            "000990": {"latest_close_price": 65_000},
             "007660": {"latest_close_price": 40_000},
         },
         research_profiles=LEGACY_TEST_RESEARCH_PROFILES,
@@ -1870,9 +1870,9 @@ def test_notifier_recomputes_paired_comparison_before_accepting_recommendation()
 def test_telegram_message_separates_new_symbol_and_existing_time_extension_lanes():
     rows = expanded._recommendation_rows(
         {
-            "candidate_017670_midday": _profile_result(
-                symbol="017670",
-                name="SK텔레콤",
+            "candidate_000990_midday": _profile_result(
+                symbol="000990",
+                name="DB하이텍",
                 session="midday",
                 candidate_ev=0.08,
                 baseline_ev=0.01,
@@ -1886,7 +1886,7 @@ def test_telegram_message_separates_new_symbol_and_existing_time_extension_lanes
             ),
         },
         {
-            "017670": {"latest_close_price": 65_000},
+            "000990": {"latest_close_price": 65_000},
             "006800": {"latest_close_price": 25_000},
         },
         research_profiles=LEGACY_TEST_RESEARCH_PROFILES,
@@ -1896,7 +1896,7 @@ def test_telegram_message_separates_new_symbol_and_existing_time_extension_lanes
 
     assert "[신규 종목]" in message
     assert "[기존 종목·신규 시간대]" in message
-    assert "SK텔레콤(017670)" in message
+    assert "DB하이텍(000990)" in message
     assert "미래에셋증권(006800)" in message
 
 

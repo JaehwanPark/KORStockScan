@@ -206,12 +206,6 @@ _WS_HOT_RUNTIME_OVERRIDES = {
 _WS_HOT_RUNTIME_OVERRIDES_LOCK = threading.Lock()
 
 
-
-
-
-
-
-
 def _ws_dashboard_snapshot_interval_sec() -> float:
     raw = os.getenv(WS_DASHBOARD_SNAPSHOT_INTERVAL_SEC_ENV, "1.0")
     try:
@@ -356,6 +350,7 @@ class KiwoomWSManager:
         self._last_dashboard_snapshot_at = 0.0
         self._dashboard_snapshot_write_inflight = False
         self._episode_research_capture_lock = threading.Lock()
+        self._episode_research_capture_status = {"status": "not_observed", "written_facts": None}
         self._recent_reg_request_ts = {}
         self._micro_reversion_deferred_reg_codes = {}
         self._alternate_route_request_ts = {}
@@ -2304,12 +2299,27 @@ class KiwoomWSManager:
             return
 
         def _capture():
+            observed_at = datetime.now(KST)
+            self._episode_research_capture_status = {"status": "running", "attempted_at_kst": observed_at.isoformat(), "written_facts": None}
             try:
                 if not self._stop_event.is_set():
-                    self._capture_episode_research_facts(datetime.now(KST))
+                    receipt = self._capture_episode_research_facts(observed_at)
+                    if (not isinstance(receipt, dict) or receipt.get("status") not in {"complete", "waiting"}
+                        or type(receipt.get("written_facts")) is not int or receipt["written_facts"] < 0
+                        or not isinstance(receipt.get("source_gap_symbols"), list)):
+                        raise ValueError("episode_research_capture_receipt_invalid")
+                    self._episode_research_capture_status = {
+                        "status": "capture_completed", "attempted_at_kst": observed_at.isoformat(),
+                        "finished_at_kst": datetime.now(KST).isoformat(),
+                        "source_status": receipt["status"], "written_facts": receipt["written_facts"],
+                        "source_gap_count": len(receipt["source_gap_symbols"]),
+                    }
+                else:
+                    self._episode_research_capture_status = {"status": "stopped", "attempted_at_kst": observed_at.isoformat(), "written_facts": None}
             except BlockingIOError:
-                pass  # The native cross-process writer lock retains ownership.
+                self._episode_research_capture_status = {"status": "cross_process_owner_busy", "attempted_at_kst": observed_at.isoformat(), "written_facts": None}
             except Exception as exc:
+                self._episode_research_capture_status = {"status": "capture_failed", "attempted_at_kst": observed_at.isoformat(), "error_type": type(exc).__name__, "written_facts": None}
                 log_error(f"[WS] episode native research fact capture failed: {exc}")
             finally:
                 self._episode_research_capture_lock.release()
@@ -2317,6 +2327,7 @@ class KiwoomWSManager:
         try:
             threading.Thread(target=_capture, name="episode-native-research-facts", daemon=True).start()
         except Exception:
+            self._episode_research_capture_status = {"status": "worker_start_failed", "written_facts": None}
             self._episode_research_capture_lock.release()
             raise
 
@@ -2360,6 +2371,7 @@ class KiwoomWSManager:
                         "registration_basis": "local_sent_registry_not_broker_ack",
                         "connection_available": self.websocket is not None and self._session_ready.is_set(),
                         "capture_lock_ms": round((time.monotonic() - capture_started) * 1000, 3),
+                        "episode_research_capture": dict(self._episode_research_capture_status),
                     }
                     frame_captured_at = time.time()
                 collector = self._micro_reversion_forward_collector

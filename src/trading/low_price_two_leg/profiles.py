@@ -14,11 +14,7 @@ AFTERNOON_WINDOW = (time(14, 0), time(14, 40))
 SK_ETERNIX_MIDDAY_LEGACY_WINDOW = (time(13, 30), time(13, 54))
 SK_ETERNIX_MIDDAY_WINDOW = (time(13, 30), time(13, 39))
 MIRAE_ASSET_MORNING_WINDOW = (time(9, 35), time(9, 44))
-JEJU_SEMICONDUCTOR_MORNING_WINDOW = (time(9, 10), time(9, 49))
 HANWHA_OCEAN_LATE_MORNING_WINDOW = (time(10, 5), time(10, 24))
-KAKAO_MORNING_WINDOW = (time(9, 20), time(9, 39))
-KAKAO_LATE_MORNING_LEGACY_WINDOW = (time(10, 5), time(10, 34))
-KAKAO_LATE_MORNING_WINDOW = (time(10, 5), time(10, 24))
 SK_ETERNIX_MORNING_WINDOW = (time(9, 50), time(9, 59))
 MIRAE_ASSET_MIDDAY_WINDOW = (time(13, 15), time(13, 24))
 KEPCO_AFTERNOON_WINDOW = (time(14, 0), time(14, 29))
@@ -26,39 +22,15 @@ SAMSUNG_HEAVY_MORNING_WINDOW = (time(9, 20), time(9, 29))
 SAMSUNG_HEAVY_LATE_MORNING_20260907_WINDOW = (time(10, 15), time(10, 34))
 SAMSUNG_EA_MORNING_WINDOW = (time(9, 45), time(9, 59))
 SAMSUNG_EA_LATE_MORNING_WINDOW = (time(10, 5), time(10, 14))
-KAKAO_MIDDAY_WINDOW = (time(13, 20), time(13, 39))
 SAMSUNG_EA_AFTERNOON_WINDOW = (time(14, 5), time(14, 34))
-SK_TELECOM_AFTERNOON_WINDOW = (time(14, 25), time(14, 34))
-SK_TELECOM_MORNING_WINDOW = (time(9, 10), time(9, 29))
-SK_TELECOM_LATE_MORNING_WINDOW = (time(10, 45), time(10, 59))
-SK_TELECOM_LATE_MORNING_REVISED_WINDOW = (time(10, 45), time(10, 54))
 SK_ETERNIX_AFTERNOON_REVISED_WINDOW = (time(14, 15), time(14, 40))
-HANSE_MORNING_WINDOW = (time(9, 15), time(9, 44))
-HANSE_AFTERNOON_WINDOW = (time(14, 20), time(14, 29))
-CJ_CGV_MIDDAY_WINDOW = (time(13, 20), time(13, 49))
-CJ_CGV_MIDDAY_20260831_WINDOW = (time(13, 20), time(13, 29))
-CJ_CGV_AFTERNOON_WINDOW = (time(14, 15), time(14, 24))
-TYM_MIDDAY_WINDOW = (time(13, 15), time(13, 44))
-TYM_MIDDAY_20260831_WINDOW = (time(13, 15), time(13, 34))
-TYM_AFTERNOON_WINDOW = (time(14, 30), time(14, 39))
-CJ_CGV_LATE_MORNING_WINDOW = (time(10, 0), time(10, 9))
 KEPCO_LATE_MORNING_WINDOW = (time(10, 0), time(10, 59))
 KEPCO_MIDDAY_WINDOW = (time(13, 30), time(13, 49))
-HANSE_LATE_MORNING_WINDOW = (time(10, 0), time(10, 59))
-HANSE_LATE_MORNING_REVISED_WINDOW = (time(10, 0), time(10, 19))
-HANSE_MIDDAY_WINDOW = (time(13, 20), time(13, 49))
-NHN_AFTERNOON_WINDOW = (time(14, 0), time(14, 40))
-YOUNGONE_MORNING_WINDOW = (time(9, 20), time(9, 39))
-YOUNGONE_AFTERNOON_WINDOW = (time(14, 30), time(14, 40))
-YOUNGONE_AFTERNOON_REVISED_WINDOW = (time(14, 30), time(14, 39))
 SK_ETERNIX_LATE_MORNING_WINDOW = (time(10, 45), time(10, 54))
 MIRAE_ASSET_LATE_MORNING_WINDOW = (time(10, 0), time(10, 59))
 MIRAE_ASSET_LATE_MORNING_REVISED_WINDOW = (time(10, 0), time(10, 29))
 MIRAE_ASSET_LATE_MORNING_20260828_WINDOW = (time(10, 0), time(10, 19))
 KEPCO_MORNING_WINDOW = (time(9, 35), time(9, 59))
-NHN_MORNING_WINDOW = (time(9, 40), time(9, 49))
-NHN_LATE_MORNING_WINDOW = (time(10, 30), time(10, 49))
-NHN_LATE_MORNING_20260907_WINDOW = (time(10, 35), time(10, 49))
 SD_BIOSENSOR_MORNING_WINDOW = (time(9, 30), time(9, 49))
 SD_BIOSENSOR_MORNING_20260828_WINDOW = (time(9, 30), time(9, 39))
 SD_BIOSENSOR_LATE_MORNING_WINDOW = (time(10, 40), time(10, 59))
@@ -70,12 +42,6 @@ SAMSUNG_EA_AFTERNOON_20260907_WINDOW = (time(14, 20), time(14, 34))
 FAN_OCEAN_MORNING_WINDOW = (time(9, 35), time(9, 59))
 FAN_OCEAN_LATE_MORNING_WINDOW = (time(10, 5), time(10, 14))
 FAN_OCEAN_AFTERNOON_20260907_WINDOW = (time(14, 5), time(14, 40))
-CJ_CGV_MORNING_20260907_WINDOW = (time(9, 10), time(9, 39))
-YOUNGONE_MIDDAY_20260907_WINDOW = (time(13, 15), time(13, 44))
-SK_TELECOM_MIDDAY_20260907_WINDOW = (time(13, 15), time(13, 24))
-HANSE_MORNING_20260907_WINDOW = (time(9, 30), time(9, 44))
-NHN_MIDDAY_20260908_WINDOW = (time(13, 30), time(13, 49))
-TYM_MORNING_20260908_WINDOW = (time(9, 10), time(9, 59))
 SD_BIOSENSOR_AFTERNOON_20260908_WINDOW = (time(14, 15), time(14, 40))
 PROFILE_REVISION_20260819_EFFECTIVE_DATE = date(2026, 8, 19)
 PROFILE_REVISION_20260821_EFFECTIVE_DATE = date(2026, 8, 21)
@@ -94,22 +60,20 @@ PROFILE_REVISION_EFFECTIVE_DATE = PROFILE_REVISION_20260819_EFFECTIVE_DATE
 ALLOWED_SYMBOLS = frozenset(
     {
         "006800",
-        "002900",
+
         "010140",
         "011170",
         "108320",
         "015760",
-        "017670",
+
         "028050",
         "028670",
-        "035720",
+
         "042660",
-        "079160",
-        "080220",
-        "105630",
-        "111770",
+
+
         "137310",
-        "181710",
+
         "475150",
     }
 )
@@ -125,49 +89,34 @@ SUPPORTED_REGULAR_SCAN_WINDOWS = frozenset(
         SK_ETERNIX_MIDDAY_LEGACY_WINDOW,
         SK_ETERNIX_MIDDAY_WINDOW,
         MIRAE_ASSET_MORNING_WINDOW,
-        JEJU_SEMICONDUCTOR_MORNING_WINDOW,
+
         HANWHA_OCEAN_LATE_MORNING_WINDOW,
-        KAKAO_MORNING_WINDOW,
-        KAKAO_LATE_MORNING_LEGACY_WINDOW,
-        KAKAO_LATE_MORNING_WINDOW,
+
+
         SK_ETERNIX_MORNING_WINDOW,
         MIRAE_ASSET_MIDDAY_WINDOW,
         KEPCO_AFTERNOON_WINDOW,
         SAMSUNG_HEAVY_MORNING_WINDOW,
         SAMSUNG_EA_MORNING_WINDOW,
         SAMSUNG_EA_LATE_MORNING_WINDOW,
-        KAKAO_MIDDAY_WINDOW,
+
         SAMSUNG_EA_AFTERNOON_WINDOW,
-        SK_TELECOM_AFTERNOON_WINDOW,
-        SK_TELECOM_MORNING_WINDOW,
-        SK_TELECOM_LATE_MORNING_WINDOW,
-        SK_TELECOM_LATE_MORNING_REVISED_WINDOW,
+
+
         SK_ETERNIX_AFTERNOON_REVISED_WINDOW,
-        HANSE_MORNING_WINDOW,
-        HANSE_AFTERNOON_WINDOW,
-        CJ_CGV_MIDDAY_WINDOW,
-        CJ_CGV_MIDDAY_20260831_WINDOW,
-        CJ_CGV_AFTERNOON_WINDOW,
-        TYM_MIDDAY_WINDOW,
-        TYM_MIDDAY_20260831_WINDOW,
-        TYM_AFTERNOON_WINDOW,
-        CJ_CGV_LATE_MORNING_WINDOW,
+
+
         KEPCO_LATE_MORNING_WINDOW,
         KEPCO_MIDDAY_WINDOW,
-        HANSE_LATE_MORNING_WINDOW,
-        HANSE_LATE_MORNING_REVISED_WINDOW,
-        HANSE_MIDDAY_WINDOW,
-        NHN_AFTERNOON_WINDOW,
-        YOUNGONE_MORNING_WINDOW,
-        YOUNGONE_AFTERNOON_WINDOW,
-        YOUNGONE_AFTERNOON_REVISED_WINDOW,
+
+
         SK_ETERNIX_LATE_MORNING_WINDOW,
         MIRAE_ASSET_LATE_MORNING_WINDOW,
         MIRAE_ASSET_LATE_MORNING_REVISED_WINDOW,
         MIRAE_ASSET_LATE_MORNING_20260828_WINDOW,
         KEPCO_MORNING_WINDOW,
-        NHN_MORNING_WINDOW,
-        NHN_LATE_MORNING_WINDOW,
+
+
         SD_BIOSENSOR_MORNING_WINDOW,
         SD_BIOSENSOR_MORNING_20260828_WINDOW,
         SD_BIOSENSOR_LATE_MORNING_WINDOW,
@@ -177,19 +126,21 @@ SUPPORTED_REGULAR_SCAN_WINDOWS = frozenset(
         FAN_OCEAN_MORNING_WINDOW,
         FAN_OCEAN_LATE_MORNING_WINDOW,
         SAMSUNG_HEAVY_LATE_MORNING_20260907_WINDOW,
-        NHN_LATE_MORNING_20260907_WINDOW,
+
         SAMSUNG_EA_MIDDAY_20260907_WINDOW,
         SAMSUNG_EA_AFTERNOON_20260907_WINDOW,
         FAN_OCEAN_AFTERNOON_20260907_WINDOW,
-        CJ_CGV_MORNING_20260907_WINDOW,
-        YOUNGONE_MIDDAY_20260907_WINDOW,
-        SK_TELECOM_MIDDAY_20260907_WINDOW,
-        HANSE_MORNING_20260907_WINDOW,
-        NHN_MIDDAY_20260908_WINDOW,
-        TYM_MORNING_20260908_WINDOW,
+
+
         SD_BIOSENSOR_AFTERNOON_20260908_WINDOW,
     }
 )
+
+# Shared windows still consumed by surviving historical profile revisions.
+SUPPORTED_REGULAR_SCAN_WINDOWS = SUPPORTED_REGULAR_SCAN_WINDOWS | frozenset({
+    (time(13, 15), time(13, 34)),
+    (time(14, 25), time(14, 34)),
+})
 
 
 @dataclass(frozen=True)
@@ -441,19 +392,7 @@ _PRE_RECOMMENDATION_PROFILES = {
             target_ticks=4,
             runtime_policy_source="clean_baseline_31d_calibration_16d_holdout_penetration_selected_v1",
         ),
-        _profile(
-            "jeju_semiconductor_morning",
-            "080220",
-            "제주반도체",
-            "morning",
-            window=JEJU_SEMICONDUCTOR_MORNING_WINDOW,
-            lookback_bars=20,
-            drawdown_pct=2.50,
-            near_low_pct=0.10,
-            entry_valid_completed_bars=3,
-            target_ticks=4,
-            runtime_policy_source="clean_baseline_31d_calibration_16d_holdout_penetration_selected_v1",
-        ),
+
         _profile(
             "hanwha_ocean_late_morning",
             "042660",
@@ -466,17 +405,7 @@ _PRE_RECOMMENDATION_PROFILES = {
             target_ticks=4,
             runtime_policy_source="clean_baseline_31d_calibration_16d_holdout_penetration_selected_v1",
         ),
-        _profile(
-            "kakao_morning",
-            "035720",
-            "카카오",
-            "morning",
-            window=KAKAO_MORNING_WINDOW,
-            lookback_bars=15,
-            drawdown_pct=0.75,
-            near_low_pct=0.35,
-            runtime_policy_source="clean_baseline_32d_calibration_16d_holdout_expanded_selected_v1",
-        ),
+
         _profile(
             "kepco_afternoon",
             "015760",
@@ -488,17 +417,7 @@ _PRE_RECOMMENDATION_PROFILES = {
             near_low_pct=0.75,
             runtime_policy_source="clean_baseline_32d_calibration_16d_holdout_expanded_selected_v1",
         ),
-        _profile(
-            "kakao_late_morning",
-            "035720",
-            "카카오",
-            "late_morning",
-            window=KAKAO_LATE_MORNING_LEGACY_WINDOW,
-            lookback_bars=15,
-            drawdown_pct=0.50,
-            near_low_pct=0.35,
-            runtime_policy_source="clean_baseline_32d_calibration_16d_holdout_expanded_selected_v1",
-        ),
+
         _profile(
             "sk_eternix_morning",
             "475150",
@@ -607,21 +526,8 @@ PROFILES_20260819.update(
             entry_offsets_ticks=(0, -1),
             target_ticks=4,
         ),
-        "kakao_morning": _revise_profile(
-            "kakao_morning",
-            lookback_bars=15,
-            drawdown_pct=0.75,
-            near_low_pct=0.35,
-            target_ticks=4,
-        ),
-        "kakao_late_morning": _revise_profile(
-            "kakao_late_morning",
-            window=KAKAO_LATE_MORNING_WINDOW,
-            lookback_bars=20,
-            drawdown_pct=0.50,
-            near_low_pct=0.05,
-            target_ticks=4,
-        ),
+
+
     }
 )
 PROFILES_20260819.update(
@@ -639,28 +545,8 @@ PROFILES_20260819.update(
                 near_low_pct=0.50,
                 runtime_policy_source=_REVISION_SOURCE,
             ),
-            _profile(
-                "kakao_midday",
-                "035720",
-                "카카오",
-                "midday",
-                window=KAKAO_MIDDAY_WINDOW,
-                lookback_bars=30,
-                drawdown_pct=0.50,
-                near_low_pct=0.35,
-                runtime_policy_source=_REVISION_SOURCE,
-            ),
-            _profile(
-                "sk_telecom_afternoon",
-                "017670",
-                "SK텔레콤",
-                "afternoon",
-                window=SK_TELECOM_AFTERNOON_WINDOW,
-                lookback_bars=15,
-                drawdown_pct=0.75,
-                near_low_pct=0.20,
-                runtime_policy_source=_REVISION_SOURCE,
-            ),
+
+
             _profile(
                 "samsung_ea_late_morning",
                 "028050",
@@ -743,27 +629,8 @@ PROFILES.update(
             entry_offsets_ticks=(-1, -2),
             target_ticks=4,
         ),
-        "kakao_midday": _revise_20260821(
-            "kakao_midday",
-            lookback_bars=15,
-            drawdown_pct=0.50,
-            near_low_pct=0.20,
-            target_ticks=4,
-        ),
-        "kakao_late_morning": _revise_20260821(
-            "kakao_late_morning",
-            lookback_bars=15,
-            drawdown_pct=0.50,
-            near_low_pct=0.05,
-            target_ticks=4,
-        ),
-        "sk_telecom_afternoon": _revise_20260821(
-            "sk_telecom_afternoon",
-            lookback_bars=20,
-            drawdown_pct=0.50,
-            near_low_pct=0.75,
-            target_ticks=4,
-        ),
+
+
         "samsung_ea_morning": _revise_20260821(
             "samsung_ea_morning",
             lookback_bars=15,
@@ -803,50 +670,8 @@ _PROFILES_20260824_BUILD_BASE.update(
     {
         profile.profile_id: profile
         for profile in (
-            _profile(
-                "cj_cgv_afternoon",
-                "079160",
-                "CJ CGV",
-                "afternoon",
-                window=CJ_CGV_AFTERNOON_WINDOW,
-                lookback_bars=20,
-                drawdown_pct=0.50,
-                near_low_pct=0.35,
-                target_ticks=2,
-            ),
-            _profile(
-                "tym_midday",
-                "002900",
-                "TYM",
-                "midday",
-                window=TYM_MIDDAY_WINDOW,
-                lookback_bars=15,
-                drawdown_pct=0.50,
-                near_low_pct=0.75,
-                target_ticks=2,
-            ),
-            _profile(
-                "hanse_morning",
-                "105630",
-                "한세실업",
-                "morning",
-                window=HANSE_MORNING_WINDOW,
-                lookback_bars=15,
-                drawdown_pct=0.75,
-                near_low_pct=0.75,
-                target_ticks=2,
-            ),
-            _profile(
-                "hanse_afternoon",
-                "105630",
-                "한세실업",
-                "afternoon",
-                window=HANSE_AFTERNOON_WINDOW,
-                lookback_bars=30,
-                drawdown_pct=0.50,
-                near_low_pct=0.75,
-                target_ticks=2,
-            ),
+
+
         )
     }
 )
@@ -882,13 +707,7 @@ def _revise_20260824(
 _PROFILES_20260824_OVERLAY_BUILD = dict(_PROFILES_20260824_BUILD_BASE)
 _PROFILES_20260824_OVERLAY_BUILD.update(
     {
-        "cj_cgv_afternoon": _revise_20260824(
-            "cj_cgv_afternoon",
-            lookback_bars=30,
-            drawdown_pct=0.50,
-            near_low_pct=0.75,
-            target_ticks=4,
-        ),
+
         "kepco_afternoon": _revise_20260824(
             "kepco_afternoon",
             lookback_bars=45,
@@ -897,20 +716,8 @@ _PROFILES_20260824_OVERLAY_BUILD.update(
             entry_valid_completed_bars=3,
             target_ticks=4,
         ),
-        "tym_midday": _revise_20260824(
-            "tym_midday",
-            lookback_bars=20,
-            drawdown_pct=0.50,
-            near_low_pct=0.35,
-            target_ticks=4,
-        ),
-        "hanse_morning": _revise_20260824(
-            "hanse_morning",
-            lookback_bars=15,
-            drawdown_pct=0.75,
-            near_low_pct=0.75,
-            target_ticks=4,
-        ),
+
+
         "samsung_ea_late_morning": _revise_20260824(
             "samsung_ea_late_morning",
             lookback_bars=45,
@@ -918,50 +725,29 @@ _PROFILES_20260824_OVERLAY_BUILD.update(
             near_low_pct=0.75,
             target_ticks=4,
         ),
-        "hanse_afternoon": _revise_20260824(
-            "hanse_afternoon",
-            lookback_bars=15,
-            drawdown_pct=0.50,
-            near_low_pct=0.75,
-            entry_offsets_ticks=(-1, -2),
-            target_ticks=4,
-        ),
+
     }
 )
 _PROFILE_REVISION_20260824_IDS = frozenset(
     {
-        "cj_cgv_afternoon",
+
         "kepco_afternoon",
-        "tym_midday",
-        "hanse_morning",
+
+
         "samsung_ea_late_morning",
-        "hanse_afternoon",
-        "cj_cgv_late_morning",
+
+
         "kepco_late_morning",
         "kepco_midday",
-        "hanse_late_morning",
-        "hanse_midday",
-        "nhn_afternoon",
-        "youngone_morning",
-        "youngone_afternoon",
+
+
     }
 )
 _PROFILES_20260824_OVERLAY_BUILD.update(
     {
         profile.profile_id: profile
         for profile in (
-            _profile(
-                "cj_cgv_late_morning",
-                "079160",
-                "CJ CGV",
-                "late_morning",
-                window=CJ_CGV_LATE_MORNING_WINDOW,
-                lookback_bars=15,
-                drawdown_pct=0.50,
-                near_low_pct=0.75,
-                target_ticks=2,
-                runtime_policy_source=_REVISION_20260824_SOURCE,
-            ),
+
             _profile(
                 "kepco_late_morning",
                 "015760",
@@ -986,66 +772,8 @@ _PROFILES_20260824_OVERLAY_BUILD.update(
                 target_ticks=2,
                 runtime_policy_source=_REVISION_20260824_SOURCE,
             ),
-            _profile(
-                "hanse_late_morning",
-                "105630",
-                "한세실업",
-                "late_morning",
-                window=HANSE_LATE_MORNING_WINDOW,
-                lookback_bars=30,
-                drawdown_pct=0.75,
-                near_low_pct=0.75,
-                target_ticks=2,
-                runtime_policy_source=_REVISION_20260824_SOURCE,
-            ),
-            _profile(
-                "hanse_midday",
-                "105630",
-                "한세실업",
-                "midday",
-                window=HANSE_MIDDAY_WINDOW,
-                lookback_bars=15,
-                drawdown_pct=0.50,
-                near_low_pct=0.75,
-                target_ticks=2,
-                runtime_policy_source=_REVISION_20260824_SOURCE,
-            ),
-            _profile(
-                "nhn_afternoon",
-                "181710",
-                "NHN",
-                "afternoon",
-                window=NHN_AFTERNOON_WINDOW,
-                lookback_bars=15,
-                drawdown_pct=0.50,
-                near_low_pct=0.75,
-                target_ticks=2,
-                runtime_policy_source=_REVISION_20260824_SOURCE,
-            ),
-            _profile(
-                "youngone_morning",
-                "111770",
-                "영원무역",
-                "morning",
-                window=YOUNGONE_MORNING_WINDOW,
-                lookback_bars=20,
-                drawdown_pct=0.50,
-                near_low_pct=0.50,
-                target_ticks=2,
-                runtime_policy_source=_REVISION_20260824_SOURCE,
-            ),
-            _profile(
-                "youngone_afternoon",
-                "111770",
-                "영원무역",
-                "afternoon",
-                window=YOUNGONE_AFTERNOON_WINDOW,
-                lookback_bars=30,
-                drawdown_pct=0.50,
-                near_low_pct=0.75,
-                target_ticks=2,
-                runtime_policy_source=_REVISION_20260824_SOURCE,
-            ),
+
+
         )
     }
 )
@@ -1057,42 +785,8 @@ PROFILES.update(
     {
         profile.profile_id: profile
         for profile in (
-            _profile(
-                "sk_telecom_late_morning",
-                "017670",
-                "SK텔레콤",
-                "late_morning",
-                window=SK_TELECOM_LATE_MORNING_WINDOW,
-                lookback_bars=60,
-                drawdown_pct=1.25,
-                near_low_pct=0.50,
-                target_ticks=2,
-                runtime_policy_source=_REVISION_20260821_SOURCE,
-            ),
-            _profile(
-                "hanse_afternoon",
-                "105630",
-                "한세실업",
-                "afternoon",
-                window=HANSE_AFTERNOON_WINDOW,
-                lookback_bars=30,
-                drawdown_pct=0.50,
-                near_low_pct=0.75,
-                target_ticks=2,
-                runtime_policy_source=_REVISION_20260821_SOURCE,
-            ),
-            _profile(
-                "hanse_morning",
-                "105630",
-                "한세실업",
-                "morning",
-                window=HANSE_MORNING_WINDOW,
-                lookback_bars=15,
-                drawdown_pct=0.75,
-                near_low_pct=0.75,
-                target_ticks=2,
-                runtime_policy_source=_REVISION_20260821_SOURCE,
-            ),
+
+
         )
     }
 )
@@ -1158,75 +852,16 @@ PROFILES.update(
             near_low_pct=0.50,
             target_ticks=4,
         ),
-        "kakao_late_morning": _revise_20260821_latest(
-            "kakao_late_morning",
-            window=KAKAO_LATE_MORNING_WINDOW,
-            lookback_bars=15,
-            drawdown_pct=0.50,
-            near_low_pct=0.05,
-            target_ticks=4,
-        ),
-        "sk_telecom_afternoon": _revise_20260821_latest(
-            "sk_telecom_afternoon",
-            lookback_bars=15,
-            drawdown_pct=0.75,
-            near_low_pct=0.50,
-            target_ticks=4,
-        ),
+
+
     }
 )
 PROFILES.update(
     {
         profile.profile_id: profile
         for profile in (
-            _profile(
-                "cj_cgv_midday",
-                "079160",
-                "CJ CGV",
-                "midday",
-                window=CJ_CGV_MIDDAY_WINDOW,
-                lookback_bars=60,
-                drawdown_pct=0.75,
-                near_low_pct=0.75,
-                target_ticks=2,
-                runtime_policy_source=_REVISION_20260821_LATEST_SOURCE,
-            ),
-            _profile(
-                "cj_cgv_afternoon",
-                "079160",
-                "CJ CGV",
-                "afternoon",
-                window=CJ_CGV_AFTERNOON_WINDOW,
-                lookback_bars=20,
-                drawdown_pct=0.50,
-                near_low_pct=0.35,
-                target_ticks=2,
-                runtime_policy_source=_REVISION_20260821_LATEST_SOURCE,
-            ),
-            _profile(
-                "tym_midday",
-                "002900",
-                "TYM",
-                "midday",
-                window=TYM_MIDDAY_WINDOW,
-                lookback_bars=15,
-                drawdown_pct=0.50,
-                near_low_pct=0.75,
-                target_ticks=2,
-                runtime_policy_source=_REVISION_20260821_LATEST_SOURCE,
-            ),
-            _profile(
-                "tym_afternoon",
-                "002900",
-                "TYM",
-                "afternoon",
-                window=TYM_AFTERNOON_WINDOW,
-                lookback_bars=20,
-                drawdown_pct=0.50,
-                near_low_pct=0.50,
-                target_ticks=2,
-                runtime_policy_source=_REVISION_20260821_LATEST_SOURCE,
-            ),
+
+
         )
     }
 )
@@ -1280,13 +915,7 @@ def _revise_20260825(
 PROFILES = dict(PROFILES_20260825_PRIOR)
 PROFILES.update(
     {
-        "cj_cgv_late_morning": _revise_20260825(
-            "cj_cgv_late_morning",
-            lookback_bars=45,
-            drawdown_pct=1.00,
-            near_low_pct=0.75,
-            target_ticks=4,
-        ),
+
         "kepco_late_morning": _revise_20260825(
             "kepco_late_morning",
             lookback_bars=20,
@@ -1294,42 +923,8 @@ PROFILES.update(
             near_low_pct=0.50,
             target_ticks=4,
         ),
-        "nhn_afternoon": _revise_20260825(
-            "nhn_afternoon",
-            lookback_bars=60,
-            drawdown_pct=1.00,
-            near_low_pct=0.75,
-            target_ticks=4,
-        ),
-        "hanse_afternoon": _revise_20260825(
-            "hanse_afternoon",
-            lookback_bars=15,
-            drawdown_pct=0.50,
-            near_low_pct=0.75,
-            target_ticks=4,
-        ),
-        "youngone_afternoon": _revise_20260825(
-            "youngone_afternoon",
-            window=YOUNGONE_AFTERNOON_REVISED_WINDOW,
-            lookback_bars=45,
-            drawdown_pct=0.50,
-            near_low_pct=0.75,
-            target_ticks=4,
-        ),
-        "hanse_late_morning": _revise_20260825(
-            "hanse_late_morning",
-            lookback_bars=20,
-            drawdown_pct=0.75,
-            near_low_pct=0.35,
-            target_ticks=4,
-        ),
-        "hanse_midday": _revise_20260825(
-            "hanse_midday",
-            lookback_bars=45,
-            drawdown_pct=0.50,
-            near_low_pct=0.75,
-            target_ticks=4,
-        ),
+
+
     }
 )
 PROFILES.update(
@@ -1372,30 +967,8 @@ PROFILES.update(
                 target_ticks=2,
                 runtime_policy_source=_REVISION_20260825_SOURCE,
             ),
-            _profile(
-                "nhn_morning",
-                "181710",
-                "NHN",
-                "morning",
-                window=NHN_MORNING_WINDOW,
-                lookback_bars=20,
-                drawdown_pct=0.50,
-                near_low_pct=0.50,
-                target_ticks=2,
-                runtime_policy_source=_REVISION_20260825_SOURCE,
-            ),
-            _profile(
-                "nhn_late_morning",
-                "181710",
-                "NHN",
-                "late_morning",
-                window=NHN_LATE_MORNING_WINDOW,
-                lookback_bars=30,
-                drawdown_pct=0.50,
-                near_low_pct=0.50,
-                target_ticks=2,
-                runtime_policy_source=_REVISION_20260825_SOURCE,
-            ),
+
+
         )
     }
 )
@@ -1451,13 +1024,7 @@ PROFILES.update(
             near_low_pct=0.20,
             target_ticks=4,
         ),
-        "cj_cgv_late_morning": _revise_20260827(
-            "cj_cgv_late_morning",
-            lookback_bars=15,
-            drawdown_pct=0.50,
-            near_low_pct=0.35,
-            target_ticks=4,
-        ),
+
         "mirae_asset_late_morning": _revise_20260827(
             "mirae_asset_late_morning",
             window=MIRAE_ASSET_LATE_MORNING_REVISED_WINDOW,
@@ -1474,29 +1041,8 @@ PROFILES.update(
             near_low_pct=0.75,
             target_ticks=4,
         ),
-        "nhn_late_morning": _revise_20260827(
-            "nhn_late_morning",
-            lookback_bars=30,
-            drawdown_pct=0.50,
-            near_low_pct=0.50,
-            target_ticks=4,
-        ),
-        "sk_telecom_late_morning": _revise_20260827(
-            "sk_telecom_late_morning",
-            window=SK_TELECOM_LATE_MORNING_REVISED_WINDOW,
-            lookback_bars=30,
-            drawdown_pct=0.75,
-            near_low_pct=0.20,
-            target_ticks=4,
-        ),
-        "hanse_late_morning": _revise_20260827(
-            "hanse_late_morning",
-            window=HANSE_LATE_MORNING_REVISED_WINDOW,
-            lookback_bars=20,
-            drawdown_pct=0.75,
-            near_low_pct=0.20,
-            target_ticks=4,
-        ),
+
+
     }
 )
 PROFILES.update(
@@ -1602,13 +1148,7 @@ PROFILES.update(
             near_low_pct=0.20,
             target_ticks=4,
         ),
-        "cj_cgv_midday": _revise_20260828(
-            "cj_cgv_midday",
-            lookback_bars=20,
-            drawdown_pct=0.75,
-            near_low_pct=0.20,
-            target_ticks=4,
-        ),
+
         "mirae_asset_late_morning": _revise_20260828(
             "mirae_asset_late_morning",
             window=MIRAE_ASSET_LATE_MORNING_20260828_WINDOW,
@@ -1633,13 +1173,7 @@ PROFILES.update(
             near_low_pct=0.75,
             target_ticks=4,
         ),
-        "hanse_late_morning": _revise_20260828(
-            "hanse_late_morning",
-            lookback_bars=30,
-            drawdown_pct=0.75,
-            near_low_pct=0.75,
-            target_ticks=4,
-        ),
+
         "samsung_ea_midday": _revise_20260828(
             "samsung_ea_midday",
             lookback_bars=20,
@@ -1656,18 +1190,6 @@ PROFILES.update(
             target_ticks=4,
         ),
     }
-)
-PROFILES["sk_telecom_morning"] = _profile(
-    "sk_telecom_morning",
-    "017670",
-    "SK텔레콤",
-    "morning",
-    window=SK_TELECOM_MORNING_WINDOW,
-    lookback_bars=30,
-    drawdown_pct=1.50,
-    near_low_pct=0.50,
-    target_ticks=2,
-    runtime_policy_source=_REVISION_20260828_SOURCE,
 )
 
 
@@ -1714,14 +1236,7 @@ def _revise_20260831(
 PROFILES = dict(PROFILES_20260831_PRIOR)
 PROFILES.update(
     {
-        "cj_cgv_midday": _revise_20260831(
-            "cj_cgv_midday",
-            window=CJ_CGV_MIDDAY_20260831_WINDOW,
-            lookback_bars=20,
-            drawdown_pct=0.75,
-            near_low_pct=0.35,
-            target_ticks=4,
-        ),
+
         "mirae_asset_late_morning": _revise_20260831(
             "mirae_asset_late_morning",
             window=MIRAE_ASSET_LATE_MORNING_20260828_WINDOW,
@@ -1731,28 +1246,8 @@ PROFILES.update(
             entry_offsets_ticks=(-1, -2),
             target_ticks=4,
         ),
-        "nhn_morning": _revise_20260831(
-            "nhn_morning",
-            lookback_bars=20,
-            drawdown_pct=0.50,
-            near_low_pct=0.50,
-            target_ticks=4,
-        ),
-        "tym_midday": _revise_20260831(
-            "tym_midday",
-            window=TYM_MIDDAY_20260831_WINDOW,
-            lookback_bars=15,
-            drawdown_pct=0.50,
-            near_low_pct=0.75,
-            target_ticks=4,
-        ),
-        "sk_telecom_morning": _revise_20260831(
-            "sk_telecom_morning",
-            lookback_bars=30,
-            drawdown_pct=0.50,
-            near_low_pct=0.75,
-            target_ticks=4,
-        ),
+
+
     }
 )
 PROFILES.update(
@@ -1838,21 +1333,8 @@ PROFILES.update(
             near_low_pct=0.20,
             target_ticks=4,
         ),
-        "nhn_late_morning": _revise_20260907(
-            "nhn_late_morning",
-            window=NHN_LATE_MORNING_20260907_WINDOW,
-            lookback_bars=20,
-            drawdown_pct=1.25,
-            near_low_pct=0.75,
-            target_ticks=4,
-        ),
-        "nhn_afternoon": _revise_20260907(
-            "nhn_afternoon",
-            lookback_bars=15,
-            drawdown_pct=0.75,
-            near_low_pct=0.75,
-            target_ticks=4,
-        ),
+
+
         "samsung_ea_midday": _revise_20260907(
             "samsung_ea_midday",
             window=SAMSUNG_EA_MIDDAY_20260907_WINDOW,
@@ -1876,14 +1358,7 @@ PROFILES.update(
             near_low_pct=0.35,
             target_ticks=4,
         ),
-        "hanse_morning": _revise_20260907(
-            "hanse_morning",
-            window=HANSE_MORNING_20260907_WINDOW,
-            lookback_bars=15,
-            drawdown_pct=0.75,
-            near_low_pct=0.75,
-            target_ticks=4,
-        ),
+
     }
 )
 PROFILES.update(
@@ -1902,18 +1377,7 @@ PROFILES.update(
                 target_ticks=2,
                 runtime_policy_source=_REVISION_20260907_SOURCE,
             ),
-            _profile(
-                "cj_cgv_morning",
-                "079160",
-                "CJ CGV",
-                "morning",
-                window=CJ_CGV_MORNING_20260907_WINDOW,
-                lookback_bars=15,
-                drawdown_pct=0.50,
-                near_low_pct=0.20,
-                target_ticks=2,
-                runtime_policy_source=_REVISION_20260907_SOURCE,
-            ),
+
             _profile(
                 "fan_ocean_afternoon",
                 "028670",
@@ -1926,30 +1390,8 @@ PROFILES.update(
                 target_ticks=2,
                 runtime_policy_source=_REVISION_20260907_SOURCE,
             ),
-            _profile(
-                "youngone_midday",
-                "111770",
-                "영원무역",
-                "midday",
-                window=YOUNGONE_MIDDAY_20260907_WINDOW,
-                lookback_bars=15,
-                drawdown_pct=0.75,
-                near_low_pct=0.75,
-                target_ticks=2,
-                runtime_policy_source=_REVISION_20260907_SOURCE,
-            ),
-            _profile(
-                "sk_telecom_midday",
-                "017670",
-                "SK텔레콤",
-                "midday",
-                window=SK_TELECOM_MIDDAY_20260907_WINDOW,
-                lookback_bars=15,
-                drawdown_pct=0.50,
-                near_low_pct=0.05,
-                target_ticks=2,
-                runtime_policy_source=_REVISION_20260907_SOURCE,
-            ),
+
+
         )
     }
 )
@@ -1958,71 +1400,6 @@ PROFILES.update(
 # Explicit 2026-09-07 user-requested recommendations, effective next session.
 PROFILES_20260908_PRIOR = dict(PROFILES)
 PROFILES = dict(PROFILES_20260908_PRIOR)
-PROFILES["nhn_morning"] = replace(
-    PROFILES_20260908_PRIOR["nhn_morning"],
-    policy=_profile(
-        "nhn_morning",
-        "181710",
-        "NHN",
-        "morning",
-        window=(time(9, 40), time(9, 49)),
-        lookback_bars=15,
-        drawdown_pct=1.5,
-        near_low_pct=0.35,
-        entry_offsets_ticks=(0, -1),
-        entry_valid_completed_bars=5,
-        target_ticks=4,
-        runtime_policy_source="user_directed_profile_revision_20260908",
-    ).policy,
-)
-PROFILES["youngone_afternoon"] = replace(
-    PROFILES_20260908_PRIOR["youngone_afternoon"],
-    policy=_profile(
-        "youngone_afternoon",
-        "111770",
-        "영원무역",
-        "afternoon",
-        window=(time(14, 30), time(14, 39)),
-        lookback_bars=15,
-        drawdown_pct=0.75,
-        near_low_pct=0.5,
-        entry_offsets_ticks=(-1, -2),
-        entry_valid_completed_bars=5,
-        target_ticks=4,
-        runtime_policy_source="user_directed_profile_revision_20260908",
-    ).policy,
-)
-PROFILES["nhn_midday"] = _profile(
-    "nhn_midday",
-    "181710",
-    "NHN",
-    "midday",
-    window=(time(13, 30), time(13, 49)),
-    lookback_bars=15,
-    drawdown_pct=0.5,
-    near_low_pct=0.5,
-    entry_offsets_ticks=(0, -1),
-    entry_valid_completed_bars=5,
-    target_ticks=2,
-    runtime_policy_source="user_directed_profile_revision_20260908",
-)
-PROFILES["cj_cgv_late_morning"] = replace(
-    PROFILES_20260908_PRIOR["cj_cgv_late_morning"],
-    policy=_profile(
-        "cj_cgv_late_morning",
-        "079160",
-        "CJ CGV",
-        "late_morning",
-        window=(time(10, 0), time(10, 9)),
-        lookback_bars=15,
-        drawdown_pct=0.5,
-        near_low_pct=0.35,
-        entry_offsets_ticks=(-1, -2),
-        entry_valid_completed_bars=5,
-        target_ticks=4,
-        runtime_policy_source="user_directed_profile_revision_20260908",
-    ).policy,
-)
 PROFILES["fan_ocean_late_morning"] = replace(
     PROFILES_20260908_PRIOR["fan_ocean_late_morning"],
     policy=_profile(
@@ -2039,71 +1416,6 @@ PROFILES["fan_ocean_late_morning"] = replace(
         target_ticks=4,
         runtime_policy_source="user_directed_profile_revision_20260908",
     ).policy,
-)
-PROFILES["sk_telecom_late_morning"] = replace(
-    PROFILES_20260908_PRIOR["sk_telecom_late_morning"],
-    policy=_profile(
-        "sk_telecom_late_morning",
-        "017670",
-        "SK텔레콤",
-        "late_morning",
-        window=(time(10, 45), time(10, 54)),
-        lookback_bars=30,
-        drawdown_pct=0.5,
-        near_low_pct=0.2,
-        entry_offsets_ticks=(0, -1),
-        entry_valid_completed_bars=5,
-        target_ticks=4,
-        runtime_policy_source="user_directed_profile_revision_20260908",
-    ).policy,
-)
-PROFILES["hanse_morning"] = replace(
-    PROFILES_20260908_PRIOR["hanse_morning"],
-    policy=_profile(
-        "hanse_morning",
-        "105630",
-        "한세실업",
-        "morning",
-        window=(time(9, 30), time(9, 44)),
-        lookback_bars=15,
-        drawdown_pct=0.75,
-        near_low_pct=0.75,
-        entry_offsets_ticks=(-1, -2),
-        entry_valid_completed_bars=5,
-        target_ticks=4,
-        runtime_policy_source="user_directed_profile_revision_20260908",
-    ).policy,
-)
-PROFILES["cj_cgv_midday"] = replace(
-    PROFILES_20260908_PRIOR["cj_cgv_midday"],
-    policy=_profile(
-        "cj_cgv_midday",
-        "079160",
-        "CJ CGV",
-        "midday",
-        window=(time(13, 20), time(13, 29)),
-        lookback_bars=45,
-        drawdown_pct=0.5,
-        near_low_pct=0.75,
-        entry_offsets_ticks=(-1, -2),
-        entry_valid_completed_bars=5,
-        target_ticks=4,
-        runtime_policy_source="user_directed_profile_revision_20260908",
-    ).policy,
-)
-PROFILES["tym_morning"] = _profile(
-    "tym_morning",
-    "002900",
-    "TYM",
-    "morning",
-    window=(time(9, 10), time(9, 59)),
-    lookback_bars=15,
-    drawdown_pct=1.0,
-    near_low_pct=0.75,
-    entry_offsets_ticks=(0, -1),
-    entry_valid_completed_bars=5,
-    target_ticks=2,
-    runtime_policy_source="user_directed_profile_revision_20260908",
 )
 PROFILES["sd_biosensor_afternoon"] = _profile(
     "sd_biosensor_afternoon",
@@ -2140,22 +1452,6 @@ PROFILES["sk_eternix_late_morning"] = replace(
     ),
 )
 
-PROFILES["tym_morning"] = replace(
-    PROFILES_20260909_PRIOR["tym_morning"],
-    policy=replace(
-        PROFILES_20260909_PRIOR["tym_morning"].policy,
-        scan_start=time(9, 10),
-        scan_last_bar=time(9, 59),
-        lookback_bars=15,
-        rolling_high_drawdown_pct=1,
-        rolling_low_proximity_pct=0.5,
-        entry_offsets_ticks=(-1, -2),
-        entry_valid_completed_bars=5,
-        target_ticks=4,
-        runtime_policy_source="user_directed_profile_revision_20260909",
-    ),
-)
-
 
 # Explicit 9/9 night approval, effective 9/10; preserve every earlier profile.
 PROFILES_20260910_PRIOR = dict(PROFILES)
@@ -2172,18 +1468,7 @@ for (
     _offsets,
     _target,
 ) in (
-    (
-        "sk_telecom_morning",
-        "017670",
-        "SK텔레콤",
-        "morning",
-        (time(9, 10), time(9, 29)),
-        30,
-        0.5,
-        0.75,
-        (-1, -2),
-        4,
-    ),
+
     (
         "kepco_late_morning",
         "015760",
@@ -2220,18 +1505,7 @@ for (
         (0, -1),
         2,
     ),
-    (
-        "tym_late_morning",
-        "002900",
-        "TYM",
-        "late_morning",
-        (time(10, 0), time(10, 29)),
-        15,
-        0.5,
-        0.2,
-        (0, -1),
-        2,
-    ),
+
 ):
     PROFILES[_profile_id] = _profile(
         _profile_id,

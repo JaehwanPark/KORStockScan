@@ -38,26 +38,21 @@ _MANUAL_OPERATOR_EXCLUSION_SOURCES = frozenset({"manual_operator"})
 _MACHINE_OWNER_SCOPE_SOURCES = frozenset({"machine_owner_scope"})
 LEGACY_MACHINE_OWNER_SCOPE_LABELS = {
     "011170": "lotte_chemical_low_price_two_leg_owner",
-    "002900": "tym_low_price_two_leg_owner",
     "005930": "samsung_electronics",
     "006800": "mirae_asset_low_price_two_leg_owner",
     "010140": "samsung_heavy_low_price_two_leg_owner",
     "015760": "kepco_low_price_two_leg_owner",
-    "017670": "sk_telecom_low_price_two_leg_owner",
     "028050": "samsung_ea_low_price_two_leg_owner",
     "028670": "fan_ocean_low_price_two_leg_owner",
     "034020": "main_fixed_watch_owner",
-    "035720": "kakao_low_price_two_leg_owner",
     "042660": "hanwha_widget_and_episode_independent_owners",
-    "079160": "cj_cgv_low_price_two_leg_owner",
-    "080220": "jeju_semiconductor_low_price_two_leg_owner",
-    "105630": "hanse_low_price_two_leg_owner",
     "108320": "lx_semicon_low_price_two_leg_owner",
-    "111770": "youngone_low_price_two_leg_owner",
     "137310": "sd_biosensor_low_price_two_leg_owner",
-    "181710": "nhn_low_price_two_leg_owner",
     "475150": "sk_eternix_low_price_two_leg_owner",
 }
+from src.engine.scalping.main_fixed_watch import SPECS
+LEGACY_MACHINE_OWNER_SCOPE_LABELS.update({spec.symbol: "main_fixed_watch_owner" for spec in SPECS if spec.episode_entry_forbidden})
+
 _FILE_CACHE = {
     "path": None,
     "mtime_ns": None,
@@ -192,7 +187,7 @@ def _current_machine_owner_scope_source_from_row(code: object, comment: object) 
     """Recognize only the exact reviewed current machine-scope marker."""
 
     norm_code = normalize_manual_control_exclusion_code(code)
-    label = LEGACY_MACHINE_OWNER_SCOPE_LABELS.get(norm_code)
+    label = LEGACY_MACHINE_OWNER_SCOPE_LABELS.get(norm_code) or RETIRED_MACHINE_SCOPE_LABELS.get(norm_code)
     if not label:
         return ""
     body = str(comment or "").lstrip("#/ ").strip()
@@ -203,7 +198,7 @@ def _legacy_machine_owner_scope_source_from_row(code: object, comment: object) -
     """Recognize only the exact reviewed pre-migration machine marker."""
 
     norm_code = normalize_manual_control_exclusion_code(code)
-    label = LEGACY_MACHINE_OWNER_SCOPE_LABELS.get(norm_code)
+    label = LEGACY_MACHINE_OWNER_SCOPE_LABELS.get(norm_code) or RETIRED_MACHINE_SCOPE_LABELS.get(norm_code)
     if not label:
         return ""
     body = str(comment or "").lstrip("#/ ").strip()

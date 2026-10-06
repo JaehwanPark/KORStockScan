@@ -9,6 +9,8 @@ only native execution, daily capital and family authority can select a change.
 
 from __future__ import annotations
 
+from src.trading.config.owner_retirement import episode_profile_retired
+
 import argparse
 import copy
 import hashlib
@@ -103,60 +105,50 @@ PROFILE_FIRST_OPERATIONAL_DATES = {
     "lx_semicon_morning": date(2026, 9, 11),
     "lotte_chemical_morning": date(2026, 9, 10),
     "lotte_chemical_afternoon": date(2026, 9, 10),
-    "tym_late_morning": date(2026, 9, 10),
-    "nhn_midday": date(2026, 9, 8),
-    "tym_morning": date(2026, 9, 8),
+
+
     "sd_biosensor_afternoon": date(2026, 9, 8),
     "samsung_heavy_midday": date(2026, 8, 12),
     "samsung_heavy_afternoon": date(2026, 8, 12),
     "sk_eternix_midday": date(2026, 8, 12),
     "mirae_asset_morning": date(2026, 8, 13),
-    "jeju_semiconductor_morning": date(2026, 8, 13),
+
     "hanwha_ocean_late_morning": date(2026, 8, 13),
-    "kakao_morning": date(2026, 8, 13),
-    "kakao_late_morning": date(2026, 8, 13),
+
+
     "sk_eternix_morning": date(2026, 8, 13),
     "sk_eternix_afternoon": date(2026, 8, 13),
     "mirae_asset_midday": date(2026, 8, 13),
     "kepco_afternoon": date(2026, 8, 13),
     "samsung_heavy_morning": date(2026, 8, 19),
-    "kakao_midday": date(2026, 8, 19),
-    "sk_telecom_afternoon": date(2026, 8, 19),
+
+
     "samsung_ea_morning": date(2026, 8, 19),
     "samsung_ea_late_morning": date(2026, 8, 19),
     "samsung_ea_afternoon": date(2026, 8, 19),
-    "sk_telecom_late_morning": date(2026, 8, 21),
-    "hanse_morning": date(2026, 8, 21),
-    "hanse_afternoon": date(2026, 8, 21),
-    "cj_cgv_midday": date(2026, 8, 21),
-    "cj_cgv_afternoon": date(2026, 8, 21),
-    "tym_midday": date(2026, 8, 21),
-    "tym_afternoon": date(2026, 8, 21),
-    "cj_cgv_late_morning": date(2026, 8, 24),
+
+
     "kepco_late_morning": date(2026, 8, 24),
     "kepco_midday": date(2026, 8, 24),
-    "hanse_late_morning": date(2026, 8, 24),
-    "hanse_midday": date(2026, 8, 24),
-    "nhn_afternoon": date(2026, 8, 24),
-    "youngone_morning": date(2026, 8, 24),
-    "youngone_afternoon": date(2026, 8, 24),
+
+
     "sk_eternix_late_morning": date(2026, 8, 25),
     "mirae_asset_late_morning": date(2026, 8, 25),
     "kepco_morning": date(2026, 8, 25),
-    "nhn_morning": date(2026, 8, 25),
-    "nhn_late_morning": date(2026, 8, 25),
+
+
     "sd_biosensor_morning": date(2026, 8, 27),
     "sd_biosensor_late_morning": date(2026, 8, 27),
     "sd_biosensor_midday": date(2026, 8, 27),
     "samsung_ea_midday": date(2026, 8, 27),
-    "sk_telecom_morning": date(2026, 8, 28),
+
     "fan_ocean_morning": date(2026, 8, 31),
     "fan_ocean_late_morning": date(2026, 8, 31),
     "samsung_heavy_late_morning": date(2026, 9, 7),
-    "cj_cgv_morning": date(2026, 9, 7),
+
     "fan_ocean_afternoon": date(2026, 9, 7),
-    "youngone_midday": date(2026, 9, 7),
-    "sk_telecom_midday": date(2026, 9, 7),
+
+
 }
 TERMINAL_LEG_STATUSES = {"COMPLETE", "NO_FILL"}
 KNOWN_LEG_STATUSES = {
@@ -2479,6 +2471,9 @@ def _paired_economic_search(report, *, context_loader=None, selection_dir=CANDID
         result["status"] = "historical_observation_only"
         return result
     fixed = _read_json(selection_dir / "low_price_two_leg_paired_selection.json")
+    if fixed and episode_profile_retired(fixed.get("profile_id")):
+        result["retired_selection"] = {"profile_id": fixed["profile_id"], "runtime_effect": False}
+        fixed = None
     if fixed:
         revision = loop.validate_revision(fixed["candidate_revision"], owner="episode")
         if not loop.registered_revision(revision) or revision["lane_id"] != fixed["profile_id"] or fixed["selected_axis"] not in {"rolling_high_drawdown_pct", "rolling_low_proximity_pct"}:
@@ -2527,7 +2522,7 @@ def _paired_economic_search(report, *, context_loader=None, selection_dir=CANDID
         if actual["broker_priced_completed_legs"] < SAMPLE_FLOOR_COMPLETED_LEGS or actual["source_valid_observation_days"] < BOUNDED_MIN_OBSERVED_DAYS:
             proof["promotion_blocking_reasons"].append("actual_sample_floor")
         proof["actual_eligibility_passed"] = not proof["promotion_blocking_reasons"]
-        if pid not in {"kakao_late_morning", "youngone_morning"} and (not fixed or fixed.get("profile_id") != pid):
+        if not fixed or fixed.get("profile_id") != pid:
             proof["disposition"] = "incumbent_preserved"
             proof["research_disposition"] = "outside_bounded_research_scope"
             continue

@@ -119,8 +119,27 @@ def test_postclose_consumer_uses_source_day_not_next_application_day(tmp_path):
     report_dir=tmp_path/'report'
     target=handoff.stage_artifacts(report_dir,'2026-10-06','main_machine_policy')['main_fixed_watch_policy_research']
     target.parent.mkdir(parents=True);target.write_text(json.dumps(result))
+    for symbol in ("403870", "196170", "036930"):
+        child=research.freeze(policy(), [], source_date="2026-10-06", publication_date="2026-10-06", target_date="2026-10-07", symbol=symbol)
+        fp=tmp_path/(symbol+".json");fp.write_text(json.dumps(child))
+        outcome=research.evaluate(child);outcome.update(frozen_contract_path=str(fp),frozen_contract_sha256=research.file_sha(fp))
+        outcome["report_sha256"]=research.strategy.digest(outcome)
+        childpath=handoff.stage_artifacts(report_dir,"2026-10-06","main_machine_policy")["main_fixed_watch_policy_research_"+symbol]
+        childpath.write_text(json.dumps(outcome))
     errors=handoff._stage_output_issues(report_dir,'2026-10-06','main_machine_policy')
     assert not any('main_fixed_watch' in error or 'fixed_watch_research' in error for error in errors)
     commands=handoff.stage_commands('main_machine_policy','2026-10-06','2026-10-06',recovery=True)
-    assert len(commands)==1 and commands[0][2]=='src.engine.monitoring.main_fixed_watch_policy_research'
+    assert len(commands)==4 and commands[0][2]=='src.engine.monitoring.main_fixed_watch_policy_research'
     assert handoff.stage_commands('main_machine_policy','2026-10-02','2026-10-02',recovery=True)==[]
+
+
+def test_candidate_mutation_rebinds_non_samsung_recipe_parent(tmp_path):
+    from src.engine.scalping.entry_admission_recipe import candidate_policy
+    from src.engine.scalping.entry_setup_evidence import validate_mechanistic_entry_threshold_policy
+    parent=candidate_policy(policy())
+    frozen=research.freeze(parent, [],source_date="2026-10-06",publication_date="2026-10-06",target_date="2026-10-07",symbol="403870")
+    for definition in frozen["candidates"]:
+        assert validate_mechanistic_entry_threshold_policy(definition["policy"]) == []
+        recipe=definition["policy"]["entry_admission_recipe"]
+        assert recipe["parameters"] == parent["entry_admission_recipe"]["parameters"]
+        assert recipe["symbol_predicate"] == "exclude_005930"

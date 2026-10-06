@@ -2,6 +2,24 @@
 
 ## Scope
 
+The 2026-10-06 reviewed retirement scope also removes episode owners for
+`002900`, `079160`, `111770`, `017670`, `080220`, `105630`, `181710`, and
+`035720`. Their 27 profiles and 54 timers are removed from installers and
+runtime catalogs. Historical policies retain their full original hashes;
+current readers project only the 31 surviving profiles (10 symbols). Tables
+below describe historical approvals and do not restore retired consumers.
+The [current transition plan](proposals/jeju-episode-retirement-hpsp-alteogen-main-fixed-watch-initial-policy-plan-2026-10-06.md)
+owns the native flat/mask/release receipts and the three new Main fixed watches.
+
+Main watches are `005930`, `034020`, `403870`, `196170`, and `036930` in the
+single Main runtime. New `403870`, `196170`, and `036930` use the current
+non-Samsung parent under operator-directed initial adoption, without an
+economic qualification prerequisite. Source, date/session/route, policy/hash,
+custody, quantity and order guards remain mandatory. NXT admission of these
+new symbols requires existing exact-date listing provenance; missing listing
+evidence waits without inferring eligibility or adding REST polling.
+
+
 Doosan (`034020`) is excluded from new episode profiles, orders, research and auto-expansion in the reviewed workspace. Historical policy bundles retain their original hashes, with retired rows excluded from runtime projection. Installed timer retirement and Main cutover follow the [transition plan](proposals/doosan-episode-retirement-main-fixed-watch-initial-policy-plan-2026-10-06.md). Dated calibration tables below are historical evidence.
 
 Independent regular-session profiles implement the user-selected active

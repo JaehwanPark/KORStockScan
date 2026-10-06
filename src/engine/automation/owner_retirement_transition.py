@@ -16,7 +16,7 @@ import subprocess
 import tempfile
 from zoneinfo import ZoneInfo
 
-from src.trading.config.owner_retirement import RETIRED_EPISODE_PROFILE_IDS
+from src.trading.config.owner_retirement import RETIRED_EPISODE_PROFILES
 
 SCHEMA = "symbol_owner_retirement_transition_v1"
 KST = ZoneInfo("Asia/Seoul")
@@ -46,9 +46,69 @@ def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
 
 
-def units():
+GROUP_SCHEMA = "symbol_owner_retirement_transition_v2"
+
+
+def retirement_symbols(manifest):
+    if manifest.get("schema") == SCHEMA and manifest.get("symbol") == "034020":
+        return ("034020",)
+    symbols = manifest.get("symbols")
+    if (manifest.get("schema") != GROUP_SCHEMA or not isinstance(symbols, list)
+        or not symbols or symbols != sorted(set(symbols))
+        or not set(symbols).issubset(RETIRED_EPISODE_PROFILES)):
+        raise ValueError("retirement_symbol_scope_invalid")
+    return tuple(symbols)
+
+
+def receipt_file(manifest):
+    return ("doosan-episode-retirement.json" if manifest["schema"] == SCHEMA else
+            "episode-retirement-" + digest(list(retirement_symbols(manifest)))[:16] + ".json")
+
+
+def publish_guard_revision(workspace, release_root):
+    """Bind reviewed successor code to unchanged predecessor receipts.
+
+    This does not retire new symbols or attest their flat custody. The selected
+    release still requires each group's native terminal transition separately.
+    """
+    from src.engine.infrastructure.runtime_release_router import git
+    workspace, release_root = Path(workspace).resolve(), Path(release_root).resolve()
+    if release_root.parent != workspace.parent / (workspace.name + "-runtime-releases"):
+        raise ValueError("retirement_successor_outside_managed_directory")
+    commit = git(release_root, "rev-parse", "HEAD")
+    guard_name = "src/trading/config/owner_retirement.py"
+    guard_sha = hashlib.sha256((release_root / guard_name).read_bytes()).hexdigest()
+    import ast
+    tree = ast.parse((release_root / guard_name).read_text())
+    declared = next((ast.literal_eval(node.value) for node in tree.body
+                     if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name)
+                     and target.id == "RETIRED_EPISODE_PROFILES" for target in node.targets)), None)
+    if declared != RETIRED_EPISODE_PROFILES:
+        raise ValueError("retirement_successor_scope_mismatch")
+    if git(release_root, "status", "--porcelain", "--untracked-files=all", "--", "src", "deploy", "restart.sh"):
+        raise ValueError("retirement_successor_source_dirty")
+    receipt_dir = workspace / "data/runtime/retirements"
+    published = []
+    for receipt_path in sorted(receipt_dir.glob("*episode-retirement.json")) + sorted(receipt_dir.glob("episode-retirement-*.json")):
+        old = json.loads(receipt_path.read_text())
+        scope = retirement_symbols(old)
+        if old.get("receipt_sha256") != digest({k: v for k, v in old.items() if k != "receipt_sha256"}) or old.get("state") not in {"entry_retired", "terminal"}:
+            raise ValueError("retirement_predecessor_invalid")
+        body = dict(schema="retirement_guard_revision_v1", state="reviewed_code_only",
+                    predecessor_file=receipt_path.name, predecessor_receipt_sha256=old["receipt_sha256"],
+                    predecessor_guard_sha256=old["guard_file_sha256"], guard_file_sha256=guard_sha,
+                    reviewed_commit=commit, preserved_symbols=list(scope),
+                    at_kst=datetime.now(KST).isoformat(), runtime_effect=False)
+        body["receipt_sha256"] = digest(body)
+        output = receipt_dir / "guard_revisions" / (old["receipt_sha256"] + "-" + guard_sha + ".json")
+        atomic_write_json(output, body)
+        published.append(str(output))
+    return published
+
+
+def units(symbols=None):
     names = []
-    for profile in sorted(RETIRED_EPISODE_PROFILE_IDS):
+    for profile in sorted(profile for symbol in (symbols or ("034020",)) for profile in RETIRED_EPISODE_PROFILES[symbol]):
         stem = "korstockscan-low-price-two-leg-" + profile.replace("_", "-")
         names.extend((stem + ".timer", stem + "-preflight.timer",
                       f"korstockscan-low-price-two-leg@{profile}.service",
@@ -56,10 +116,13 @@ def units():
     return tuple(names)
 
 
-def prepare(workspace, *, systemd_dir=Path("/etc/systemd/system")):
+def prepare(workspace, *, systemd_dir=Path("/etc/systemd/system"), symbols=None):
     workspace, systemd_dir = Path(workspace).resolve(), Path(systemd_dir).resolve()
+    scope = tuple(sorted(set(symbols))) if symbols is not None else ("034020",)
+    if not scope or not set(scope).issubset(RETIRED_EPISODE_PROFILES):
+        raise ValueError("retirement_symbol_scope_invalid")
     files = []
-    for name in units():
+    for name in units(scope):
         paths = [systemd_dir / name, *(systemd_dir / (name + ".d")).glob("*.conf")]
         for path in paths:
             if path.exists() or path.is_symlink():
@@ -73,24 +136,29 @@ def prepare(workspace, *, systemd_dir=Path("/etc/systemd/system")):
     guard = workspace / "src/trading/config/owner_retirement.py"
     body = dict(schema=SCHEMA, state="prepared", symbol="034020", owner="episode",
                 prepared_at_kst=datetime.now(KST).isoformat(), workspace=str(workspace),
-                systemd_dir=str(systemd_dir), units=list(units()), installed_files=files,
+                systemd_dir=str(systemd_dir), units=list(units(scope)), installed_files=files,
                 guard_file="src/trading/config/owner_retirement.py",
                 guard_file_sha256=hashlib.sha256(guard.read_bytes()).hexdigest(),
                 new_owner="main_scalping", initial_policy="current_main_non_samsung",
                 initial_policy_preproof_required=False, runtime_effect=False)
+    if symbols is not None:
+        body.update(schema=GROUP_SCHEMA, symbols=list(scope),
+                    profile_ids=sorted(profile for symbol in scope for profile in RETIRED_EPISODE_PROFILES[symbol]),
+                    new_owner="existing_main_or_manual", initial_policy="unchanged")
+        body.pop("symbol")
     body["receipt_sha256"] = digest(body)
     return body
 
 
-def require_flat(snapshot, registry, *, observed_at):
+def require_flat(snapshot, registry, *, observed_at, symbol="034020", symbols=None):
     from src.trading.order.symbol_owner_policy_apply import validate_broker_snapshot_contract
-    validate_broker_snapshot_contract(snapshot, symbols={"034020"}, migration_receipts_allowed=False)
-    if snapshot["inventory"].get("034020", 0) != 0 or any(
-        row.get("symbol") == "034020" for row in snapshot["open_orders"]
+    validate_broker_snapshot_contract(snapshot, symbols=set(symbols or (symbol,)), migration_receipts_allowed=False)
+    if snapshot["inventory"].get(symbol, 0) != 0 or any(
+        row.get("symbol") == symbol for row in snapshot["open_orders"]
     ):
         raise ValueError("retirement_broker_residual_exposure")
-    reconciliation = registry.reconcile_symbol_quantity(symbol="034020", broker_quantity=0)
-    unresolved = registry.unresolved_intent_summary(symbol="034020", active_date=None)
+    reconciliation = registry.reconcile_symbol_quantity(symbol=symbol, broker_quantity=0)
+    unresolved = registry.unresolved_intent_summary(symbol=symbol, active_date=None)
     if int(unresolved.get("unresolved_intent_count") or 0):
         raise ValueError("retirement_unresolved_intent")
     if int(reconciliation.get("registered_owner_quantity") or 0) or int(reconciliation.get("external_manual_remainder") or 0):
@@ -99,7 +167,7 @@ def require_flat(snapshot, registry, *, observed_at):
                 observed_at_kst=observed_at.isoformat(), reconciliation=reconciliation, unresolved=unresolved)
 
 
-def blocking_retirement_processes(rows, *, workspace, proc_root=Path("/proc")):
+def blocking_retirement_processes(rows, *, workspace, proc_root=Path("/proc"), symbols=None):
     """Retire one episode owner without stopping established foreign owners.
 
     Main already has separate entry authority. Recognize its actual argv, and
@@ -138,7 +206,7 @@ def blocking_retirement_processes(rows, *, workspace, proc_root=Path("/proc")):
                 profile = PROFILES.get(argv[index + 1])
                 # A second symbol/profile override must not masquerade as a
                 # known foreign owner. The native service only accepts profiles.
-                foreign_episode = bool(profile and profile.symbol != "034020"
+                foreign_episode = bool(profile and profile.symbol not in set(symbols or ("034020",))
                                        and not any(arg.startswith(("--symbol", "--profile=")) for arg in argv))
             if main or supervisor or foreign_episode:
                 continue
@@ -155,16 +223,21 @@ def apply(manifest, *, registry, snapshot_fetcher, runner=subprocess.run):
 
 
 def _apply_locked(manifest, *, registry, snapshot_fetcher, runner):
+    scope = retirement_symbols(manifest)
     body = {k: v for k, v in manifest.items() if k != "receipt_sha256"}
-    if (manifest.get("schema") != SCHEMA or manifest.get("state") != "prepared"
-        or manifest.get("symbol") != "034020" or manifest.get("owner") != "episode"
+    if (manifest.get("schema") not in {SCHEMA, GROUP_SCHEMA} or manifest.get("state") != "prepared"
+        or manifest.get("owner") != "episode"
         or manifest.get("receipt_sha256") != digest(body)
-        or manifest.get("units") != list(units())
+        or manifest.get("units") != list(units(scope))
         or manifest.get("systemd_dir") != "/etc/systemd/system"):
         raise ValueError("retirement_reviewed_manifest_invalid")
+    if manifest["schema"] == GROUP_SCHEMA and manifest.get("profile_ids") != sorted(
+        profile for symbol in scope for profile in RETIRED_EPISODE_PROFILES[symbol]
+    ):
+        raise ValueError("retirement_profile_scope_invalid")
     workspace = Path(manifest["workspace"]).resolve(strict=True)
-    current = prepare(workspace)
-    receipt_path = workspace / "data/runtime/retirements/doosan-episode-retirement.json"
+    current = prepare(workspace, symbols=scope if manifest["schema"] == GROUP_SCHEMA else None)
+    receipt_path = workspace / "data/runtime/retirements" / receipt_file(manifest)
     previous = json.loads(receipt_path.read_text()) if receipt_path.exists() else {}
     resumable = bool(previous and previous.get("state") in {"entry_retired", "terminal"}
                      and previous.get("reviewed_manifest_sha256") == manifest["receipt_sha256"]
@@ -180,10 +253,10 @@ def _apply_locked(manifest, *, registry, snapshot_fetcher, runner):
     guard = release / manifest["guard_file"]
     if not guard.is_file() or hashlib.sha256(guard.read_bytes()).hexdigest() != manifest["guard_file_sha256"]:
         raise ValueError("retirement_reviewed_release_not_selected")
-    if blocking_retirement_processes(find_running_trading_processes(), workspace=workspace):
+    if blocking_retirement_processes(find_running_trading_processes(), workspace=workspace, symbols=scope):
         raise ValueError("retirement_episode_or_unknown_process_not_quiescent")
     installed_units = set()
-    for unit in units():
+    for unit in units(scope):
         status = runner(["systemctl", "show", unit, "--property=LoadState", "--value"],
                         check=True, capture_output=True, text=True).stdout.strip()
         if status == "loaded":
@@ -192,10 +265,10 @@ def _apply_locked(manifest, *, registry, snapshot_fetcher, runner):
             raise ValueError("retirement_unit_load_state_invalid:" + unit)
     # Prevent new timer starts before inspecting services. Never stop an active
     # residual exit owner merely because its next BUY is retired.
-    for unit in units():
+    for unit in units(scope):
         if unit.endswith(".timer") and unit in installed_units:
             runner(["systemctl", "disable", "--now", unit], check=True, capture_output=True, text=True)
-    services = [unit for unit in units() if unit.endswith(".service") and unit in installed_units]
+    services = [unit for unit in units(scope) if unit.endswith(".service") and unit in installed_units]
     for unit in services:
         state = runner(["systemctl", "show", unit, "--property=ActiveState,MainPID", "--value"],
                        check=True, capture_output=True, text=True).stdout.splitlines()
@@ -210,18 +283,20 @@ def _apply_locked(manifest, *, registry, snapshot_fetcher, runner):
     snapshot = snapshot_fetcher()
     second = snapshot_fetcher()
     from src.trading.order.symbol_owner_policy_apply import validate_broker_snapshot_contract
-    validate_broker_snapshot_contract(snapshot, symbols={"034020"}, migration_receipts_allowed=False)
+    validate_broker_snapshot_contract(snapshot, symbols=set(scope), migration_receipts_allowed=False)
     if snapshot.get("snapshot_sha256") != second.get("snapshot_sha256"):
         raise ValueError("retirement_broker_snapshot_changed")
     observed = datetime.now(KST)
-    flat = require_flat(second, registry, observed_at=observed)
+    proofs = {symbol: require_flat(second, registry, observed_at=observed, symbol=symbol, symbols=scope)
+              for symbol in scope}
+    flat = proofs["034020"] if manifest["schema"] == SCHEMA else proofs
     for row in remaining:
         path = Path(row["path"])
         if hashlib.sha256(path.read_bytes()).hexdigest() != row["sha256"]:
             raise ValueError("retirement_installed_file_changed")
     # The native snapshot is fetched after timers are disabled; no old
     # planning/prepare receipt can substitute for the apply-time snapshot.
-    if blocking_retirement_processes(find_running_trading_processes(), workspace=workspace):
+    if blocking_retirement_processes(find_running_trading_processes(), workspace=workspace, symbols=scope):
         raise ValueError("retirement_trading_process_started_during_transition")
     # Persist the rollback exclusion before deletion. If reload fails, a retry
     # can finish deletion; an old release cannot restore the retired entry path.
@@ -238,7 +313,7 @@ def _apply_locked(manifest, *, registry, snapshot_fetcher, runner):
     # Removing timers alone leaves generic templates able to restart the old
     # retired IDs. Mask only these flat/inactive instances; foreign owners and
     # the shared templates keep their current code and processes.
-    masked = [unit for unit in units() if unit.endswith(".service")]
+    masked = [unit for unit in units(scope) if unit.endswith(".service")]
     runner(["systemctl", "mask", *masked], check=True, capture_output=True, text=True)
     runner(["systemctl", "daemon-reload"], check=True, capture_output=True, text=True)
     for unit in masked:
@@ -257,6 +332,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workspace", type=Path, default=Path.cwd())
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--symbols", nargs="+")
     parser.add_argument("--apply-reviewed-manifest", type=Path)
     args = parser.parse_args()
     if args.apply_reviewed_manifest:
@@ -270,12 +346,12 @@ def main():
             raise ValueError("retirement_broker_account_binding_mismatch")
         result = apply(manifest, registry=default_order_owner_registry(),
             snapshot_fetcher=lambda: collect_broker_snapshot(
-                kiwoom_utils.get_kiwoom_token(require_issued_today=True), {"034020"}, tuple()))
+                kiwoom_utils.get_kiwoom_token(require_issued_today=True), set(retirement_symbols(manifest)), tuple()))
     else:
-        result = prepare(args.workspace)
+        result = prepare(args.workspace, symbols=args.symbols)
     if args.output:
         atomic_write_json(args.output, result)
-    print(json.dumps({k: result[k] for k in ("state", "symbol", "owner", "receipt_sha256")}))
+    print(json.dumps({k: result[k] for k in ("state", "symbol", "symbols", "owner", "receipt_sha256") if k in result}))
     return 0
 
 

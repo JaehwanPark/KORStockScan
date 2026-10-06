@@ -209,6 +209,8 @@ def _validate_runtime_scope(
     authority: dict[str, Any], *, target_date
 ) -> dict[str, list[str]]:
     expected = expected_machine_symbol_owners(target_date)
+    from src.engine.scalping.main_fixed_watch import SPECS
+    initial_main_only = {spec.symbol for spec in SPECS if spec.episode_entry_forbidden}
     configured = authority.get("symbols")
     promoted = set(_exact_date_auto_promoted_symbol_owners(target_date))
     if (
@@ -230,6 +232,7 @@ def _validate_runtime_scope(
             or not (
                 machine_owner_scope_source(symbol)
                 or legacy_machine_owner_scope_source(symbol)
+                or symbol in initial_main_only
             )
         ):
             raise SymbolOwnerPolicyAutoApplyError(

@@ -698,8 +698,6 @@ def test_dashboard_snapshot_freezes_main_and_exact_route_views(monkeypatch):
     assert manager._dashboard_snapshot_write_inflight is False
 
 
-
-
 def test_await_login_ack_handles_ping_then_success():
     manager = KiwoomWSManager("test-token")
     ping_payload = json.dumps({"trnm": "PING", "ping_id": "abc123"})
@@ -2448,8 +2446,6 @@ def test_execute_unsubscribe_returns_remove_send_completion(monkeypatch):
     completion.set_result(True)
 
 
-
-
 def test_execute_unsubscribe_retains_micro_collection_as_source_only(monkeypatch):
     manager = KiwoomWSManager("test-token")
     manager.subscribed_codes = {"111111"}
@@ -2462,8 +2458,6 @@ def test_execute_unsubscribe_retains_micro_collection_as_source_only(monkeypatch
     assert manager.subscribed_codes == {"111111"}
     assert manager.is_micro_reversion_observation_only_subscription("111111") is True
     assert manager.realtime_data["111111"]["curr"] == 1000
-
-
 
 
 def test_micro_collection_demotion_replaces_route_with_source_only_types(monkeypatch):
@@ -2936,8 +2930,6 @@ def test_failed_remove_keeps_source_only_suppression_and_blocks_promotion_reg(
 
     assert fake_ws.sent == []
     assert manager.is_micro_reversion_observation_only_subscription("111111") is True
-
-
 
 
 def test_samsung_non_pinned_route_still_consumes_trading_item_budget(monkeypatch):
@@ -4513,20 +4505,21 @@ def test_exact_probe_adoption_during_remove_serializes_restore_without_touching_
     assert all(row["item"] == ["010140_NX"] for packet in packets for row in packet["data"])
 
 
-def test_dashboard_omits_unused_histories_preserving_exported_route_window():
+@pytest.mark.parametrize("symbol", ["005930", "034020", "403870", "196170", "036930"])
+def test_dashboard_omits_unused_histories_preserving_exported_route_window(symbol):
     from src.engine.bd_fbuy_accum_pre_scanner import _ws_machine_route_payload
     manager = KiwoomWSManager('test-token')
-    target = manager._ensure_target_defaults('034020')
+    target = manager._ensure_target_defaults(symbol)
     class UnusedHistory:
         def __deepcopy__(self, memo):
             pytest.fail('dashboard must not copy unused live history')
     target['price_history'] = UnusedHistory()
     target['recent_trade_ticks_by_route'] = {'krx_nxt_integrated': deque([
-        {'received_at_ms': 1000000-i, 'transport_epoch': 1, 'item': '034020_AL',
+        {'received_at_ms': 1000000-i, 'transport_epoch': 1, 'item': symbol + "_AL",
          'price': 10000+i, 'volume': 1, 'route_sequence': 500-i}
         for i in range(500)])}
     target['recent_depth_ticks_by_route'] = {'krx_nxt_integrated': deque([
-        {'received_at_ms': 1000000-i, 'transport_epoch': 1, 'item': '034020_AL',
+        {'received_at_ms': 1000000-i, 'transport_epoch': 1, 'item': symbol + "_AL",
          'ask_levels': [{'price': 10001+i, 'quantity': 10}],
          'bid_levels': [{'price': 10000+i, 'quantity': 10}], 'route_sequence': 500-i}
         for i in range(500)])}
@@ -4542,7 +4535,8 @@ def test_research_capture_cannot_block_next_dashboard_or_start_second_writer(mon
     from threading import Event
     from pathlib import Path
     manager = KiwoomWSManager('test-token')
-    manager._ensure_target_defaults('034020')
+    codes = {"005930", "034020", "403870", "196170", "036930", "006800"}
+    for code in codes: manager._ensure_target_defaults(code)
     research_started, release_research, research_done = Event(), Event(), Event()
     first_frame, second_frame = Event(), Event()
     frames, captures = [], []
@@ -4552,7 +4546,8 @@ def test_research_capture_cannot_block_next_dashboard_or_start_second_writer(mon
             assert release_research.wait(3)
         finally:
             research_done.set()
-    def write(*args, **kwargs):
+    def write(frame, **kwargs):
+        assert set(frame) == codes
         frames.append(kwargs['now_ts'])
         (first_frame if len(frames) == 1 else second_frame).set()
         return Path('fixture')
@@ -4611,3 +4606,30 @@ def test_dashboard_uses_capture_clock_when_projection_is_delayed(monkeypatch):
     manager._maybe_write_dashboard_snapshot()
     assert captured == {'now': 1000.0, 'event': 999.0}
     assert clock[0] == 1003.0
+
+@pytest.mark.parametrize('case,expected', [('busy','cross_process_owner_busy'),('error','capture_failed'),('invalid','capture_failed'),('waiting','capture_completed')])
+def test_research_worker_status_does_not_manufacture_facts_or_block_snapshot(monkeypatch,case,expected):
+    manager=KiwoomWSManager('test-token')
+    class ImmediateThread:
+        def __init__(self,**kwargs):self.target=kwargs['target']
+        def start(self):self.target()
+    monkeypatch.setattr(kiwoom_websocket.threading,'Thread',ImmediateThread)
+    monkeypatch.setattr(kiwoom_websocket,'log_error',lambda *_:None)
+    def capture(_now):
+        if case=='busy':raise BlockingIOError('owned')
+        if case=='error':raise OSError('persistence unavailable')
+        if case=='invalid':return None
+        return dict(status='waiting',written_facts=0,source_gap_symbols=['006800'])
+    monkeypatch.setattr(manager,'_capture_episode_research_facts',capture)
+    manager._schedule_episode_research_capture()
+    assert not manager._episode_research_capture_lock.locked()
+    assert manager._episode_research_capture_status['status']==expected
+    assert manager._episode_research_capture_status['written_facts']==(0 if case=='waiting' else None)
+    frames=[]
+    monkeypatch.setattr(kiwoom_websocket,'write_ws_snapshot',lambda frame,**kw:frames.append(kw) or 'fixture')
+    manager._maybe_write_dashboard_snapshot()
+    assert not manager._dashboard_snapshot_write_inflight
+    assert frames[0]['shared_transport_producer']['episode_research_capture']['status']==expected
+    if case=='waiting':
+        assert frames[0]['shared_transport_producer']['episode_research_capture']['source_status']=='waiting'
+        assert frames[0]['shared_transport_producer']['episode_research_capture']['source_gap_count']==1

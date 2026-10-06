@@ -81,7 +81,7 @@ def _pin_auto_promotion(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("scope", rollout.AUTO_PROMOTION_SCOPES)
-@pytest.mark.parametrize("fixed_symbol", [None, "005930", "034020"])
+@pytest.mark.parametrize("fixed_symbol", [None, "005930", "034020", "403870", "196170", "036930"])
 def test_all_continuous_machine_primary_resolver(monkeypatch, tmp_path, scope, fixed_symbol):
     from src.engine.scalping import mechanistic_entry_runtime_policy as initial
     from src.tests.test_mechanistic_entry_runtime_policy import source
@@ -116,10 +116,17 @@ def test_all_continuous_machine_primary_resolver(monkeypatch, tmp_path, scope, f
             def now(cls, tz=None):
                 return datetime(2026, 8, 7, 10, tzinfo=policy.KST)
         monkeypatch.setattr(handlers, "datetime", EvaluationClock)
+        from src.engine.scalping import main_fixed_watch as fixed
+        from types import SimpleNamespace
+        monkeypatch.setattr(fixed.session_contract, "resolve_market_session", lambda _now: SimpleNamespace(
+            session_regime=fixed.session_contract.MARKET_SESSION_REGIME_KRX_REGULAR))
+        now_ts = EvaluationClock.now().timestamp()
+        route = fixed.session_route(now_ts, fixed_symbol)
         target = {"position_tag": "SCALP_BASE", "code": fixed_symbol,
                   "watch_origin": "MAIN_FIXED_WATCH",
-                  "watch_admission_id": f"FIXED-2026-08-07-{fixed_symbol}-a1",
-                  "watch_generation_id": "a" * 64}
+                  "watch_admission_id": f"FIXED-2026-08-07-{fixed_symbol}-{route['bucket']}-{route['route']}-a1",
+                  "watch_generation_id": fixed.generation_id(now_ts, route),
+                  "market_data_route": route["route"], "broker_route": "SOR"}
         position_tag = handlers._entry_ai_policy_position_tag(target)
         assert target["position_tag"] == "SCALP_BASE"
     resolved = policy.resolve_live_prompt_policy(

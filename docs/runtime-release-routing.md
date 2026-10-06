@@ -16,6 +16,24 @@ The launcher admits a different commit only through that verified same-day recei
 
 ## Single selection
 
+Episode group retirement uses the same native
+`src.engine.automation.owner_retirement_transition` tool with `--symbols`.
+Prepare a bounded manifest, review it, then apply that exact manifest only
+after per-symbol broker/registry/all-date intent flat and quiescent services.
+It disables future timers before two fresh snapshots, seals the terminal
+receipt, removes exact installed files, and masks only retired instances.
+Shared templates and surviving exit owners are preserved. Each group's
+receipt is stored separately under `data/runtime/retirements`; an older
+reviewed Doosan receipt remains immutable.
+
+A reviewed change to the common retirement guard needs
+`publish_guard_revision(workspace, release_root)` before selecting the new
+immutable release. Its receipt binds predecessor receipt/guard hashes and
+the reviewed successor guard; it proves code continuity only. It does not
+attest new symbols' flat custody or terminal masks. The router validates all
+sealed groups and rejects rollback code that restores a retired owner.
+
+
 `data/runtime/runtime_release_selection.json` selects one absolute managed release root and its full Git commit. The workspace entrypoint is `bash deploy/run_runtime_release.sh`. It checks the selected HEAD, clean `src/deploy/restart.sh` and shared `data/logs/tmp/.venv/docs/restart.flag` before invoking a target. Missing or invalid selection blocks execution; it must not fall back to mutable workspace code.
 
 The canonical workspace `restart.sh` delegates to this entrypoint. The reviewed release's original `restart.sh` preserves its policy code pin and custody-aware restart procedure, and its post-restart PID check uses `automation.runtime_policy_bootstrap --write-verify-artifact`; the retired generic apply module is not a valid verifier. Do not call old release restart scripts or workspace `src/run_bot.sh` directly to choose a deployment. Do not edit or pull inside the selected release.

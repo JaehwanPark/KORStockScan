@@ -137,8 +137,6 @@ SERVICES=(
   korstockscan-low-price-two-leg-preflight@lotte_chemical_morning.service
   korstockscan-low-price-two-leg@lotte_chemical_afternoon.service
   korstockscan-low-price-two-leg-preflight@lotte_chemical_afternoon.service
-  korstockscan-low-price-two-leg@tym_late_morning.service
-  korstockscan-low-price-two-leg-preflight@tym_late_morning.service
   korstockscan-low-price-two-leg@samsung_heavy_midday.service
   korstockscan-low-price-two-leg@samsung_heavy_afternoon.service
   korstockscan-low-price-two-leg@daewoo_ec_midday.service
@@ -150,77 +148,35 @@ SERVICES=(
   korstockscan-low-price-two-leg-preflight@daewoo_ec_afternoon.service
   korstockscan-low-price-two-leg-preflight@sk_eternix_midday.service
   korstockscan-low-price-two-leg@mirae_asset_morning.service
-  korstockscan-low-price-two-leg@jeju_semiconductor_morning.service
   korstockscan-low-price-two-leg@hanwha_ocean_late_morning.service
   korstockscan-low-price-two-leg-preflight@mirae_asset_morning.service
-  korstockscan-low-price-two-leg-preflight@jeju_semiconductor_morning.service
   korstockscan-low-price-two-leg-preflight@hanwha_ocean_late_morning.service
-  korstockscan-low-price-two-leg@kakao_morning.service
   korstockscan-low-price-two-leg@kepco_afternoon.service
-  korstockscan-low-price-two-leg@kakao_late_morning.service
   korstockscan-low-price-two-leg@sk_eternix_morning.service
   korstockscan-low-price-two-leg@mirae_asset_midday.service
   korstockscan-low-price-two-leg@sk_eternix_afternoon.service
-  korstockscan-low-price-two-leg-preflight@kakao_morning.service
   korstockscan-low-price-two-leg-preflight@kepco_afternoon.service
-  korstockscan-low-price-two-leg-preflight@kakao_late_morning.service
   korstockscan-low-price-two-leg-preflight@sk_eternix_morning.service
   korstockscan-low-price-two-leg-preflight@mirae_asset_midday.service
   korstockscan-low-price-two-leg-preflight@sk_eternix_afternoon.service
   korstockscan-low-price-two-leg@samsung_heavy_morning.service
-  korstockscan-low-price-two-leg@kakao_midday.service
-  korstockscan-low-price-two-leg@sk_telecom_afternoon.service
   korstockscan-low-price-two-leg@samsung_ea_morning.service
   korstockscan-low-price-two-leg@samsung_ea_late_morning.service
   korstockscan-low-price-two-leg@samsung_ea_afternoon.service
   korstockscan-low-price-two-leg-preflight@samsung_heavy_morning.service
-  korstockscan-low-price-two-leg-preflight@kakao_midday.service
-  korstockscan-low-price-two-leg-preflight@sk_telecom_afternoon.service
   korstockscan-low-price-two-leg-preflight@samsung_ea_morning.service
   korstockscan-low-price-two-leg-preflight@samsung_ea_late_morning.service
   korstockscan-low-price-two-leg-preflight@samsung_ea_afternoon.service
-  korstockscan-low-price-two-leg@sk_telecom_late_morning.service
-  korstockscan-low-price-two-leg-preflight@sk_telecom_late_morning.service
-  korstockscan-low-price-two-leg@sk_telecom_morning.service
-  korstockscan-low-price-two-leg-preflight@sk_telecom_morning.service
-  korstockscan-low-price-two-leg@hanse_morning.service
-  korstockscan-low-price-two-leg-preflight@hanse_morning.service
-  korstockscan-low-price-two-leg@hanse_afternoon.service
-  korstockscan-low-price-two-leg-preflight@hanse_afternoon.service
-  korstockscan-low-price-two-leg@cj_cgv_midday.service
-  korstockscan-low-price-two-leg-preflight@cj_cgv_midday.service
-  korstockscan-low-price-two-leg@cj_cgv_afternoon.service
-  korstockscan-low-price-two-leg-preflight@cj_cgv_afternoon.service
-  korstockscan-low-price-two-leg@tym_midday.service
-  korstockscan-low-price-two-leg-preflight@tym_midday.service
-  korstockscan-low-price-two-leg@tym_afternoon.service
-  korstockscan-low-price-two-leg-preflight@tym_afternoon.service
-  korstockscan-low-price-two-leg@cj_cgv_late_morning.service
-  korstockscan-low-price-two-leg-preflight@cj_cgv_late_morning.service
   korstockscan-low-price-two-leg@kepco_late_morning.service
   korstockscan-low-price-two-leg-preflight@kepco_late_morning.service
   korstockscan-low-price-two-leg@kepco_midday.service
   korstockscan-low-price-two-leg-preflight@kepco_midday.service
-  korstockscan-low-price-two-leg@hanse_late_morning.service
-  korstockscan-low-price-two-leg-preflight@hanse_late_morning.service
-  korstockscan-low-price-two-leg@hanse_midday.service
-  korstockscan-low-price-two-leg-preflight@hanse_midday.service
-  korstockscan-low-price-two-leg@nhn_afternoon.service
-  korstockscan-low-price-two-leg-preflight@nhn_afternoon.service
-  korstockscan-low-price-two-leg@youngone_morning.service
-  korstockscan-low-price-two-leg-preflight@youngone_morning.service
-  korstockscan-low-price-two-leg@youngone_afternoon.service
-  korstockscan-low-price-two-leg-preflight@youngone_afternoon.service
   korstockscan-low-price-two-leg@sk_eternix_late_morning.service
   korstockscan-low-price-two-leg-preflight@sk_eternix_late_morning.service
   korstockscan-low-price-two-leg@mirae_asset_late_morning.service
   korstockscan-low-price-two-leg-preflight@mirae_asset_late_morning.service
   korstockscan-low-price-two-leg@kepco_morning.service
   korstockscan-low-price-two-leg-preflight@kepco_morning.service
-  korstockscan-low-price-two-leg@nhn_morning.service
-  korstockscan-low-price-two-leg-preflight@nhn_morning.service
-  korstockscan-low-price-two-leg@nhn_late_morning.service
-  korstockscan-low-price-two-leg-preflight@nhn_late_morning.service
   korstockscan-low-price-two-leg@sd_biosensor_morning.service
   korstockscan-low-price-two-leg-preflight@sd_biosensor_morning.service
   korstockscan-low-price-two-leg@sd_biosensor_late_morning.service
@@ -235,20 +191,10 @@ SERVICES=(
   korstockscan-low-price-two-leg-preflight@fan_ocean_late_morning.service
   korstockscan-low-price-two-leg@samsung_heavy_late_morning.service
   korstockscan-low-price-two-leg-preflight@samsung_heavy_late_morning.service
-  korstockscan-low-price-two-leg@cj_cgv_morning.service
-  korstockscan-low-price-two-leg-preflight@cj_cgv_morning.service
   korstockscan-low-price-two-leg@fan_ocean_afternoon.service
   korstockscan-low-price-two-leg-preflight@fan_ocean_afternoon.service
-  korstockscan-low-price-two-leg@youngone_midday.service
-  korstockscan-low-price-two-leg-preflight@youngone_midday.service
-  korstockscan-low-price-two-leg@sk_telecom_midday.service
   korstockscan-low-price-two-leg@sd_biosensor_afternoon.service
-  korstockscan-low-price-two-leg@tym_morning.service
-  korstockscan-low-price-two-leg@nhn_midday.service
-  korstockscan-low-price-two-leg-preflight@sk_telecom_midday.service
   korstockscan-low-price-two-leg-preflight@sd_biosensor_afternoon.service
-  korstockscan-low-price-two-leg-preflight@tym_morning.service
-  korstockscan-low-price-two-leg-preflight@nhn_midday.service
 )
 FILES=(
   korstockscan-low-price-two-leg@.service

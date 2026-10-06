@@ -6,6 +6,7 @@ import hashlib
 import math
 import os
 import uuid
+from weakref import WeakKeyDictionary
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -16,6 +17,7 @@ WATCH_ORIGIN = "MAIN_FIXED_WATCH"
 SAMSUNG_CODE = "005930"
 ENABLE_ENV = "KORSTOCKSCAN_MAIN_FIXED_WATCH_005930_ENABLED"
 MIN_WARMUP_SEC = 10.0
+_NXT_ADMISSION_CACHE = WeakKeyDictionary()
 
 
 @dataclass(frozen=True)
@@ -24,12 +26,16 @@ class FixedWatchSpec:
     name: str
     enable_env: str
     initial_policy_scope: str
+    episode_entry_forbidden: bool = False
 
 
 SPECS = (
     FixedWatchSpec(SAMSUNG_CODE, "삼성전자", ENABLE_ENV, "samsung"),
     FixedWatchSpec("034020", "두산에너빌리티",
                    "KORSTOCKSCAN_MAIN_FIXED_WATCH_034020_ENABLED", "non_samsung"),
+    FixedWatchSpec("403870", "HPSP", "KORSTOCKSCAN_MAIN_FIXED_WATCH_403870_ENABLED", "non_samsung", True),
+    FixedWatchSpec("196170", "알테오젠", "KORSTOCKSCAN_MAIN_FIXED_WATCH_196170_ENABLED", "non_samsung", True),
+    FixedWatchSpec("036930", "주성엔지니어링", "KORSTOCKSCAN_MAIN_FIXED_WATCH_036930_ENABLED", "non_samsung", True),
 )
 
 
@@ -124,14 +130,51 @@ def broker_and_owner_clear(now_epoch: float, route: dict) -> tuple[bool, str]:
     try:
         summary = default_order_owner_registry().unresolved_intent_summary(
             symbol=symbol,
-            active_date=(None if symbol == "034020" else
-                         datetime.fromtimestamp(now_epoch, tz=session_contract.KST).date()),
+            active_date=None,
         )
     except Exception:
         return False, "owner_registry_unreadable"
     if int(summary.get("unresolved_intent_count") or 0):
         return False, "owner_registry_unresolved_intent"
     return True, "verified_flat"
+
+
+def _new_symbol_session_eligible(db, spec, route, now_epoch):
+    """Use existing exact-date listing evidence for the new Main-only symbols.
+
+    KRX regular admission keeps the existing Main contract. NXT evidence is
+    read locally, never inferred from exchange/volume or fetched by this loop.
+    """
+    if not spec.episode_entry_forbidden or route["bucket"] == "krx_regular":
+        return True, "existing_main_session_contract"
+    day = datetime.fromtimestamp(now_epoch, tz=session_contract.KST).date()
+    key = (spec.symbol, day)
+    try:
+        per_db = _NXT_ADMISSION_CACHE.setdefault(db, {})
+    except TypeError:
+        per_db = {}  # Non-weak-referenceable adapters keep the same fail-closed read.
+    cached = per_db.get(key)
+    if cached and 0 <= now_epoch - cached[0] < 30:
+        return cached[1]
+    try:
+        from src.trading.market.aftermarket_eligibility import resolve_symbol_venue_eligibility
+        snapshot = db.get_security_market_eligibility(spec.symbol, day)
+        evidence = resolve_symbol_venue_eligibility(spec.symbol, day, snapshot)
+        ready = (evidence.nxt_eligible is True and evidence.quality_state in {"VALID", "PARTIAL"}
+                 and "NXT" in evidence.eligible_venues
+                 and "aftermarket_eligibility_provenance_partial" not in evidence.blockers
+                 and evidence.observed_at_kst is not None
+                 and evidence.observed_at_kst.date() == day
+                 and evidence.observed_at_kst.timestamp() <= now_epoch)
+        result = (ready, "exact_date_nxt_eligible" if ready else "fixed_watch_nxt_eligibility_unproven")
+    except (AttributeError, OSError, ValueError, TypeError):
+        result = (False, "fixed_watch_nxt_eligibility_unproven")
+    # At most one current-day cached result per fixed symbol and DB instance.
+    for old in tuple(per_db):
+        if old[0] == spec.symbol:
+            per_db.pop(old)
+    per_db[key] = (now_epoch, result)
+    return result
 
 
 def reconcile(db, targets: list[dict], *, now_epoch: float, watch_cap: int,
@@ -165,6 +208,9 @@ def reconcile(db, targets: list[dict], *, now_epoch: float, watch_cap: int,
     route = session_route(now_epoch, symbol)
     if route is None:
         return "outside_supported_session", None
+    eligible, reason = _new_symbol_session_eligible(db, spec, route, now_epoch)
+    if not eligible:
+        return reason, None
     generation = generation_id(now_epoch, route)
     trade_date = datetime.fromtimestamp(now_epoch, tz=session_contract.KST).date()
     fixed_memory = [t for t in memory_rows if is_fixed_watch(t) and str(t.get("code") or "")[:6] == symbol and t.get("status") == "WATCHING"]

@@ -126,11 +126,11 @@ REVIEWED_SYMBOLS = {
     "006800": "미래에셋증권",
     "007660": "이수페타시스",
     "015760": "한국전력",
-    "017670": "SK텔레콤",
+
     "028050": "삼성E&A",
-    "035720": "카카오",
+
     "042660": "한화오션",
-    "080220": "제주반도체",
+
     "475560": "더본코리아",
 }
 IMPLEMENTED_SYMBOLS = {
@@ -361,9 +361,9 @@ def _dynamic_candidate_snapshot(
     from src.engine.monitoring.research_closed_loop import admission_symbols
 
     for symbol, name in admission_symbols(target_date, owner="episode").items():
-        if symbol not in excluded:
+        if symbol not in excluded and not new_entry_retired(symbol, "episode"):
             symbols.setdefault(symbol, name)
-    return source_date, symbols
+    return source_date, {symbol: name for symbol, name in symbols.items() if not new_entry_retired(symbol, "episode")}
 
 
 def _dynamic_candidate_symbols(

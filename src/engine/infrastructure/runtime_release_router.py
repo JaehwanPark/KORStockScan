@@ -192,21 +192,14 @@ def check_release_set(workspace: Path, selected_root: Path, selected_commit: str
 
     owners = []
     retired_masked = []
-    retirement_path = workspace / "data/runtime/retirements/doosan-episode-retirement.json"
     retired_instances = set()
-    if retirement_path.exists():
-        receipt = json.loads(retirement_path.read_text())
-        closed = {f"korstockscan-low-price-two-leg{prefix}@doosan_enerbility_{session}.service"
-                  for prefix in ("", "-preflight") for session in ("morning", "late_morning", "afternoon")}
+    for receipt in _episode_retirement_receipts(workspace):
+        from src.engine.automation.owner_retirement_transition import retirement_symbols, units as retirement_units
+        closed = {unit for unit in retirement_units(retirement_symbols(receipt)) if unit.endswith(".service")}
         claimed = receipt.get("masked_instances")
-        digest = hashlib.sha256(json.dumps({k:v for k,v in receipt.items() if k != "receipt_sha256"},
-            sort_keys=True,separators=(",",":"),ensure_ascii=True).encode()).hexdigest()
-        if (receipt.get("schema") == "symbol_owner_retirement_transition_v1"
-            and receipt.get("symbol") == "034020" and receipt.get("owner") == "episode"
-            and receipt.get("state") == "terminal" and isinstance(claimed,list)
-            and len(claimed) == len(closed) and set(claimed) == closed
-            and receipt.get("receipt_sha256") == digest):
-            retired_instances = closed
+        if (receipt.get("state") == "terminal" and isinstance(claimed, list)
+            and len(claimed) == len(closed) and set(claimed) == closed):
+            retired_instances.update(closed)
     deadline = time.monotonic() + 30
     for unit in units:
         remaining = deadline - time.monotonic()
@@ -320,21 +313,47 @@ def git(root: Path, *args: str) -> str:
     ).strip()
 
 
+def _episode_retirement_receipts(workspace):
+    from src.engine.automation.owner_retirement_transition import digest, retirement_symbols, units
+    directory = workspace / "data/runtime/retirements"
+    paths = sorted(directory.glob("*episode-retirement.json")) + sorted(directory.glob("episode-retirement-*.json"))
+    result = []
+    for path in paths:
+        receipt = json.loads(path.read_text())
+        scope = retirement_symbols(receipt)
+        if (receipt.get("state") not in {"entry_retired", "terminal"}
+            or receipt.get("owner") != "episode"
+            or receipt.get("receipt_sha256") != digest({k:v for k,v in receipt.items() if k != "receipt_sha256"})):
+            raise ValueError("symbol_owner_retirement_receipt_invalid")
+        if receipt["schema"] == "symbol_owner_retirement_transition_v2":
+            from src.trading.config.owner_retirement import RETIRED_EPISODE_PROFILES
+            expected = sorted(profile for symbol in scope for profile in RETIRED_EPISODE_PROFILES[symbol])
+            if receipt.get("profile_ids") != expected or receipt.get("units") != list(units(scope)):
+                raise ValueError("retirement_profile_scope_invalid")
+        result.append(receipt)
+    return result
+
+
 def _validate_retired_surfaces(workspace: Path, root: Path) -> None:
     receipt = workspace / "data/runtime/retirements/widget-retirement-2026-10-06.json"
-    owner_receipt = workspace / "data/runtime/retirements/doosan-episode-retirement.json"
-    if owner_receipt.exists():
-        owner = json.loads(owner_receipt.read_text())
-        owner_digest = hashlib.sha256(json.dumps(
-            {k: v for k, v in owner.items() if k != "receipt_sha256"},
-            sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
+    for owner in _episode_retirement_receipts(workspace):
         guard = root / "src/trading/config/owner_retirement.py"
-        if (owner.get("schema") != "symbol_owner_retirement_transition_v1" or owner.get("state") not in {"entry_retired", "terminal"}
-            or owner.get("symbol") != "034020" or owner.get("owner") != "episode"
-            or owner.get("receipt_sha256") != owner_digest):
-            raise ValueError("symbol_owner_retirement_receipt_invalid")
-        if (not guard.is_file() or hashlib.sha256(guard.read_bytes()).hexdigest() != owner.get("guard_file_sha256")):
-            raise ValueError("release_restores_permanently_retired_episode_owner")
+        guard_sha = hashlib.sha256(guard.read_bytes()).hexdigest() if guard.is_file() else ""
+        if guard_sha != owner.get("guard_file_sha256"):
+            revision_path = workspace / "data/runtime/retirements/guard_revisions" / (owner["receipt_sha256"] + "-" + guard_sha + ".json")
+            if not revision_path.is_file():
+                raise ValueError("release_restores_permanently_retired_episode_owner")
+            from src.engine.automation.owner_retirement_transition import digest, retirement_symbols
+            revision = json.loads(revision_path.read_text())
+            if (revision.get("schema") != "retirement_guard_revision_v1"
+                or revision.get("state") != "reviewed_code_only"
+                or revision.get("predecessor_receipt_sha256") != owner["receipt_sha256"]
+                or revision.get("predecessor_guard_sha256") != owner["guard_file_sha256"]
+                or revision.get("guard_file_sha256") != guard_sha
+                or revision.get("preserved_symbols") != list(retirement_symbols(owner))
+                or revision.get("runtime_effect") is not False
+                or revision.get("receipt_sha256") != digest({k:v for k,v in revision.items() if k != "receipt_sha256"})):
+                raise ValueError("retirement_guard_revision_invalid")
     if not receipt.exists():
         return
     body = json.loads(receipt.read_text())

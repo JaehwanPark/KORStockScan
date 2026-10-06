@@ -667,5 +667,51 @@ def test_release_set_accepts_only_sealed_inactive_retirement_masks(release,monke
         assert report['retired_masked_units']==[unit]
         assert report['episode_profile_inventory']['loaded_units_checked']==0
     else:
-        with pytest.raises(ValueError,match='systemd_unit_not_loaded'):
+        with pytest.raises(ValueError,match='systemd_unit_not_loaded|retirement_symbol_scope_invalid'):
             router.check_release_set(workspace,root,'a'*40)
+
+@pytest.mark.parametrize('damage', [None, 'scope', 'digest', 'guard'])
+def test_reviewed_guard_revision_preserves_original_retirement_and_blocks_old_release(release, damage):
+    from src.engine.automation import owner_retirement_transition as owner
+    workspace, root, _, _ = release
+    guard=root/'src/trading/config/owner_retirement.py'; guard.parent.mkdir(parents=True)
+    actual=Path(owner.__file__).resolve().parents[2]/'trading/config/owner_retirement.py'
+    guard.write_bytes(actual.read_bytes())
+    # Original prior receipt is immutable; a successor carries only code continuity.
+    original=dict(schema=owner.SCHEMA, symbol='034020', owner='episode', state='terminal',guard_file_sha256='b'*64)
+    original['receipt_sha256']=owner.digest(original)
+    directory=workspace/'data/runtime/retirements'; directory.mkdir(parents=True)
+    predecessor=directory/'doosan-episode-retirement.json'; predecessor.write_text(json.dumps(original))
+    original_bytes=predecessor.read_bytes()
+    [revision_path]=owner.publish_guard_revision(workspace, root)
+    assert predecessor.read_bytes()==original_bytes
+    revision=json.loads(Path(revision_path).read_text())
+    if damage=='scope': revision['preserved_symbols']=['080220']
+    if damage=='digest': revision['receipt_sha256']='c'*64
+    if damage in {'scope'}: revision['receipt_sha256']=owner.digest({k:v for k,v in revision.items() if k!='receipt_sha256'})
+    Path(revision_path).write_text(json.dumps(revision))
+    if damage=='guard': guard.write_text('old guard')
+    if damage:
+        with pytest.raises(ValueError,match='retirement|retired'):
+            router._validate_retired_surfaces(workspace,root)
+    else:
+        router._validate_retired_surfaces(workspace,root)
+        old=root.parent/'old'; old.mkdir()
+        with pytest.raises(ValueError,match='retired'):
+            router._validate_retired_surfaces(workspace,old)
+
+@pytest.mark.parametrize('damage', ['profiles','units','symbols'])
+def test_group_retirement_cannot_hide_foreign_profile_or_unit(release, damage):
+    from src.engine.automation import owner_retirement_transition as owner
+    workspace, root, _, _ = release
+    guard=workspace/'src/trading/config/owner_retirement.py'; guard.parent.mkdir(parents=True);guard.write_text('reviewed')
+    manifest=owner.prepare(workspace,systemd_dir=workspace/'units',symbols=['080220'])
+    manifest['state']='terminal'
+    if damage=='profiles':manifest['profile_ids'].append('mirae_asset_morning')
+    if damage=='units':manifest['units'].append('korstockscan-low-price-two-leg@mirae_asset_morning.service')
+    if damage=='symbols':manifest['symbols'].append('005930')
+    manifest['receipt_sha256']=owner.digest({k:v for k,v in manifest.items() if k!='receipt_sha256'})
+    directory=workspace/'data/runtime/retirements';directory.mkdir(parents=True)
+    (directory/'episode-retirement-fixture.json').write_text(json.dumps(manifest))
+    with pytest.raises(ValueError,match='retirement'):
+        router._episode_retirement_receipts(workspace)

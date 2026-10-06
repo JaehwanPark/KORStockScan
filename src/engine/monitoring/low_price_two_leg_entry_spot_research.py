@@ -89,9 +89,7 @@ def day_replay_scope(transition):
             _DAY_REPLAY.reset(token)
 
 
-PROFILE_EXECUTION_PLAN_EXTENSIONS = {
-    "kakao_morning": (((0, -1), 5, 3),),
-}
+PROFILE_EXECUTION_PLAN_EXTENSIONS = {}
 MAX_MANAGEABLE_HELD_LEG_RATE = 0.25
 MAX_MANAGEABLE_HELD_MARK_TO_MARKET_LOSS_PCT = 3.0
 OFFICIAL_REFERENCE = {

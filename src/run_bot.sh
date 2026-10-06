@@ -243,7 +243,7 @@ while true; do
     # Shared completed candles are a source-only projection of the existing
     # durable AL journal. Consumer cutover remains independently opt-in.
     export KORSTOCKSCAN_WS_COMPLETED_BARS_PUBLISH="${KORSTOCKSCAN_WS_COMPLETED_BARS_PUBLISH:-1}"
-    export KORSTOCKSCAN_WS_COMPLETED_BAR_SYMBOLS="${KORSTOCKSCAN_WS_COMPLETED_BAR_SYMBOLS:-005930,034020,042660,006800,010140,080220}"
+    export KORSTOCKSCAN_WS_COMPLETED_BAR_SYMBOLS="${KORSTOCKSCAN_WS_COMPLETED_BAR_SYMBOLS:-005930,034020,403870,196170,036930,042660,006800,010140}"
     # Persistent source-observation policy. Daily threshold env generation does
     # not own this lane; an explicit operator/daily override may still set it
     # false as the documented rollback.
@@ -335,6 +335,9 @@ while true; do
     # scoped rollback; admission still requires exact broker and owner facts.
     export KORSTOCKSCAN_MAIN_FIXED_WATCH_005930_ENABLED="${KORSTOCKSCAN_MAIN_FIXED_WATCH_005930_ENABLED:-true}"
 export KORSTOCKSCAN_MAIN_FIXED_WATCH_034020_ENABLED="${KORSTOCKSCAN_MAIN_FIXED_WATCH_034020_ENABLED:-true}"
+export KORSTOCKSCAN_MAIN_FIXED_WATCH_403870_ENABLED="${KORSTOCKSCAN_MAIN_FIXED_WATCH_403870_ENABLED:-true}"
+export KORSTOCKSCAN_MAIN_FIXED_WATCH_196170_ENABLED="${KORSTOCKSCAN_MAIN_FIXED_WATCH_196170_ENABLED:-true}"
+export KORSTOCKSCAN_MAIN_FIXED_WATCH_036930_ENABLED="${KORSTOCKSCAN_MAIN_FIXED_WATCH_036930_ENABLED:-true}"
     export_runtime_source_provenance
 
     # 봇 실행 (경로나 파일명은 환경에 맞게 수정)

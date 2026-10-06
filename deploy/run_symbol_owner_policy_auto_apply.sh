@@ -12,6 +12,9 @@ fi
 if [[ "$OWNER_APPLY_DATE" > "2026-09-10" ]]; then
   AUTHORITY_PATH="$PROJECT_DIR/data/config/symbol_owner_policy_standing_authority_2026-09-11.json"
 fi
+if [[ "$OWNER_APPLY_DATE" > "2026-10-06" ]]; then
+  AUTHORITY_PATH="$PROJECT_DIR/data/config/symbol_owner_policy_standing_authority_2026-10-06.json"
+fi
 RESTORE_UNITS=()
 
 restore_order_services() {
