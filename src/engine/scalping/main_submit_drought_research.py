@@ -165,27 +165,61 @@ def _prices(data_root, day, external_dir):
     prices, receipts = defaultdict(dict), []
     if external_dir is not None:
         external_dir = Path(external_dir)
-        manifest_path = external_dir / "manifest.json"
-        manifest = json.loads(manifest_path.read_text())
-        receipts.append(
-            dict(
-                path=str(manifest_path.resolve()),
-                sha256=hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+        manifest, seen, conflicts = [], {}, set()
+        for name in (
+            "manifest.json",
+            "additional_manifest.json",
+            "universe_manifest.json",
+        ):
+            manifest_path = external_dir / name
+            if not manifest_path.is_file():
+                if name == "manifest.json":
+                    raise ValueError("external_manifest_missing")
+                continue
+            blob = manifest_path.read_bytes()
+            entries = json.loads(blob)
+            if not isinstance(entries, list):
+                raise ValueError("external_manifest_invalid")
+            receipts.append(
+                dict(
+                    path=str(manifest_path.resolve()),
+                    sha256=hashlib.sha256(blob).hexdigest(),
+                )
             )
-        )
+            manifest.extend(entries)
         for receipt in manifest:
             code = str(receipt["code"])
             if len(code) != 6 or not code.isdigit():
                 raise ValueError("external_symbol_invalid")
+            key = (code, "KRX", "KRX_REGULAR")
+            if code in seen:
+                if seen[code] != receipt["sha256"]:
+                    conflicts.add(code)
+                    prices.pop(key, None)
+                continue
+            seen[code] = receipt["sha256"]
             path = external_dir / f"{code}.json"
             blob = path.read_bytes()
+            observed_sha = hashlib.sha256(blob).hexdigest()
             if (
-                len(blob) != receipt["bytes"]
-                or hashlib.sha256(blob).hexdigest() != receipt["sha256"]
+                receipt.get("bytes", len(blob)) != len(blob)
+                or observed_sha != receipt["sha256"]
             ):
-                raise ValueError("external_price_manifest_mismatch:" + code)
+                conflicts.add(code)
+                receipts.append(
+                    dict(
+                        path=str(path.resolve()),
+                        sha256=observed_sha,
+                        expected_sha256=receipt["sha256"],
+                        stock_code=code,
+                        status="source_gap",
+                        reason="external_price_manifest_mismatch",
+                    )
+                )
+                continue
             if not receipt.get("url") or not receipt.get("retrieved_at"):
-                raise ValueError("external_source_provenance_missing")
+                conflicts.add(code)
+                continue
             for b in json.loads(blob):
                 ts = datetime.strptime(b["localDateTime"], "%Y%m%d%H%M%S")
                 from zoneinfo import ZoneInfo
@@ -193,13 +227,30 @@ def _prices(data_root, day, external_dir):
                 ts = ts.replace(tzinfo=ZoneInfo("Asia/Seoul"))
                 if ts.date().isoformat() != day:
                     raise ValueError("external_price_date_mismatch")
-                prices[(code, "KRX", "KRX_REGULAR")][ts.timestamp()] = {
-                    "open": b["openPrice"],
-                    "high": b["highPrice"],
-                    "low": b["lowPrice"],
-                    "close": b["currentPrice"],
+                value = dict(
+                    open=b["openPrice"],
+                    high=b["highPrice"],
+                    low=b["lowPrice"],
+                    close=b["currentPrice"],
+                )
+                if (
+                    ts.timestamp() in prices[key]
+                    and prices[key][ts.timestamp()] != value
+                ):
+                    conflicts.add(code)
+                prices[key][ts.timestamp()] = value
+            receipts.append(
+                {
+                    **receipt,
+                    "bytes": len(blob),
+                    "bytes_basis": "observed_after_sha256_verification",
+                    "path": str(path.resolve()),
                 }
-            receipts.append({**receipt, "path": str(path.resolve())})
+            )
+        for code in conflicts:
+            prices.pop((code, "KRX", "KRX_REGULAR"), None)
+        if conflicts:
+            receipts[0]["excluded_price_symbols"] = sorted(conflicts)
         return prices, receipts, "external_krx_minute_price_cf"
     path = (
         Path(data_root)

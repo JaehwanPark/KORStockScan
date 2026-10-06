@@ -57,9 +57,15 @@ def test_confirmation_is_separate_and_all_consumers_agree():
     assert result["action"] == "WAIT" and result["entry_probe_intent"] is True
     assert result["entry_ai_screen_pass"] is True
     assert result["actual_order_submitted"] is False
-    from src.engine.sniper_state_handlers import _machine_primary_entry_provenance_fields
+    from src.engine.sniper_state_handlers import (
+        _machine_primary_entry_provenance_fields,
+    )
+
     carried = _machine_primary_entry_provenance_fields(result)
-    assert carried["entry_machine_confirmation_sha256"] == ledger["machine_confirmation"]["confirmation_sha256"]
+    assert (
+        carried["entry_machine_confirmation_sha256"]
+        == ledger["machine_confirmation"]["confirmation_sha256"]
+    )
     # The English recipe instruction and exact facts reach the compact payload.
     from src.engine.ai_engine_openai import _entry_provider_ledger
 
@@ -455,3 +461,43 @@ def test_watching_evaluates_above_smart_target_with_existing_cooldown(
         },
     )
     assert len(calls) == expected
+
+
+def test_external_price_reader_consumes_all_sealed_manifests(tmp_path):
+    import json
+    import hashlib
+    from src.engine.scalping import main_submit_drought_research as R
+
+    for name, code in (
+        ("manifest.json", "005930"),
+        ("additional_manifest.json", "034020"),
+        ("universe_manifest.json", "036930"),
+    ):
+        blob = json.dumps(
+            [
+                dict(
+                    localDateTime="20261006090000",
+                    openPrice=100,
+                    highPrice=101,
+                    lowPrice=99,
+                    currentPrice=100,
+                )
+            ]
+        ).encode()
+        (tmp_path / (code + ".json")).write_bytes(blob)
+        receipt = dict(
+            code=code,
+            url="https://example.test/chart",
+            retrieved_at="2026-10-06T16:45:00+09:00",
+            sha256=hashlib.sha256(blob).hexdigest(),
+        )
+        (tmp_path / name).write_text(json.dumps([receipt]))
+    prices, receipts, _ = R._prices(tmp_path, "2026-10-06", tmp_path)
+    assert len(prices) == 3 and len(receipts) == 6
+    assert all(r["bytes"] > 0 for r in receipts if r.get("code"))
+    old = json.loads((tmp_path / "additional_manifest.json").read_text())
+    old.append(dict(old[0], code="005930", sha256="f" * 64))
+    (tmp_path / "additional_manifest.json").write_text(json.dumps(old))
+    prices, receipts, _ = R._prices(tmp_path, "2026-10-06", tmp_path)
+    assert len(prices) == 2 and ("005930", "KRX", "KRX_REGULAR") not in prices
+    assert receipts[0]["excluded_price_symbols"] == ["005930"]

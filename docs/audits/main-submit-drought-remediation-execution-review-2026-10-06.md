@@ -53,3 +53,8 @@ E의 30초/최대 3회 새 원천 재평가에서 직접 후보와 다른 회수
 - 새 PID/checklist를 읽은 native summary→tower/checklist→strict/controller→cleanup→final detector **19:56:48 DONE**. chain=`159ba4fcdf2db547b062f83851c89a6319b61c4aebb185d4ae6b4cc964396131`, 원 snapshot=`de8c7a024a0ad4b385fda97148f5e1043fdc6e3161eb981ecbd12f7b081bf112` 유지. strict binding=`beae58085a4971b24f75f74bead8045452ca65e55d0d3cf5be08a3e7c9596b8a`, summary=`00b7bc3ad80ad6138c6acbcbffe7f63bdb4a073cbea9a018c2e14488081e754e`. 과거 10/2 복구이며 새 미래 PREOPEN/전장후 생산자를 재실행하지 않았다.
 - 19:57:52 당일 읽기 전용 full detector **FAIL 0**, process PASS, operational mutation 0. cron cleanup/finalization은 원 06:50 상한 이후 완료를 뜻하는 `recovered_late` 경고로 유지한다. 원 Main/compact 운영 경제성·stop/plan 결손과 episode 원천 경고는 그대로이며 이번 가격 CF로 해소 처리하지 않는다. 19:58:33 독립 검사에서 marker/controller issues 0, 현재 checklist SHA 일치, PID/cwd와 원 정책 34개 불변을 재확인했다.
 - 최종 증거: `runtime-verification.json`, `release-set-after.json`, `terminal-verification.json`, `current-date-health.json`, `exact-contract-replay.json`, 회귀 로그. 다음 적격 KRX 정규장 recipe 자연 수용은 **not_observed**이며 기존 stable owner에 남았다. 이번 코드 검토 범위의 미해결 finding은 0이다.
+
+
+## 최종 소비 대조 추가 수리: 가격 manifest 세 개
+
+20:00 최종 dirty 대조에서 별도 문서 작업이 추가한 진단을 확인했다. reader는 기본 manifest 39종목만 읽고 같은 디렉터리의 이미 수집된 22·393종목을 누락했다. 위 6/26·7/39는 당시 가격 부분집합 계산이며 454종목 전부의 소비 결과가 아니다. 세 원 manifest의 검증 합집합, bytes 미기재 자료의 SHA 검증 후 실제 byte receipt, 중복 hash 제거 및 충돌 종목 격리를 수리했다. 원 manifest/가격은 수정하지 않았으며 추가 테스트와 calibration 회귀 **245건 PASS**. 당일/비교일을 새 kernel로 재계산하고 이전 PASS를 재사용하지 않는다. 외부 차트 가격의 조정/호가단위 의미는 미입증이므로 가격 CF에만 쓰고 실제 체결 가능 가격·손익으로 표현하지 않는다. 별도 추가 문서의 C2/D2/E2 연구 제안은 이번 고정 후보에 섞지 않는다.
