@@ -81,3 +81,9 @@
 당일 두산 owner 정책은 이미 Main 권한이 있다. intraday handoff는 기존 bootstrap/PREOPEN/owner 정책을 보존하고 code retirement guard로 episode BUY를 배제한다. 다음 PREOPEN의 정상 producer부터 Main·수동 owner만 발행한다. 오늘 장후의 새 source date 10/6 → 10/7 준비는 예정된 native chain이며, 아직 생성되지 않은 미래 원천·PID를 PASS로 기록하지 않는다.
 
 Installed retirement retains six permanent service-instance masks after flat closure. Removing timers cannot restore those IDs through generic templates; other episode templates, code pins and active processes are preserved. Reload/mask readback failure retains the `entry_retired` rollback guard and reviewed retry.
+
+## 운영 readback 후속 리뷰
+
+14:23 실제 두산 broker/custody all-date intent 0을 다시 확인하고 terminal 퇴역 영수증을 발행했다. timer 6파일 삭제와 live/preflight instance 6개 mask를 확인했다. root가 발행한 control receipt가 launcher에게 읽히지 않는 결함을 0644 원자 발행과 회귀로 보완했다. 14:24 Main bootstrap/PID 검증과 삼성·두산 독립 fixed-watch admission, exact 0B/0D 새 수신을 확인했다. 감시기 release-set checker는 봉인된 두산 inactive mask만 제외하도록 보완했다. final-refresh installer가 낮은 우선순위 파일 때문에 이전 ExecStart를 유지하던 지점을 `~zzzz` pin으로 수정했다. 추가 targeted 검증 139 PASS, compile/bash/diff PASS다.
+
+owner PREOPEN의 실제 승인 파일은 wrapper가 고르는 `symbol_owner_policy_standing_authority_2026-09-11.json`이다. 해당 native 파일로 다음 10/7 scope 20종목·두산 Main/수동을 검증했다. 예전 default 9/4 authority(18종목)로 직접 검사한 scope drift는 현재 예약 경로의 결함이 아니므로 현재 blocker로 사용하지 않는다. 당일 owner policy 20종목/모든 적용 완료는 보존한다.

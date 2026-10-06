@@ -191,12 +191,33 @@ def check_release_set(workspace: Path, selected_root: Path, selected_commit: str
         raise ValueError("systemd_release_set_inventory_limit_exceeded")
 
     owners = []
+    retired_masked = []
+    retirement_path = workspace / "data/runtime/retirements/doosan-episode-retirement.json"
+    retired_instances = set()
+    if retirement_path.exists():
+        receipt = json.loads(retirement_path.read_text())
+        closed = {f"korstockscan-low-price-two-leg{prefix}@doosan_enerbility_{session}.service"
+                  for prefix in ("", "-preflight") for session in ("morning", "late_morning", "afternoon")}
+        claimed = receipt.get("masked_instances")
+        digest = hashlib.sha256(json.dumps({k:v for k,v in receipt.items() if k != "receipt_sha256"},
+            sort_keys=True,separators=(",",":"),ensure_ascii=True).encode()).hexdigest()
+        if (receipt.get("schema") == "symbol_owner_retirement_transition_v1"
+            and receipt.get("symbol") == "034020" and receipt.get("owner") == "episode"
+            and receipt.get("state") == "terminal" and isinstance(claimed,list)
+            and len(claimed) == len(closed) and set(claimed) == closed
+            and receipt.get("receipt_sha256") == digest):
+            retired_instances = closed
     deadline = time.monotonic() + 30
     for unit in units:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise ValueError("systemd_release_set_check_timeout")
         fields = _systemd_properties(unit, timeout_sec=min(3, remaining))
+        if (fields.get("LoadState") == "masked" and unit in retired_instances
+            and fields.get("ActiveState") in {"inactive", "failed"}
+            and fields.get("MainPID") == "0"):
+            retired_masked.append(unit)
+            continue
         if fields.get("LoadState") != "loaded":
             raise ValueError(f"systemd_unit_not_loaded:{unit}")
         environment = fields.get("Environment", "")
@@ -280,6 +301,7 @@ def check_release_set(workspace: Path, selected_root: Path, selected_commit: str
         "main_pid_binding": main_pid_binding,
         "systemd_owners": owners[: len(CORE_SYSTEMD_UNITS)],
         "owner_count": len(owners),
+        "retired_masked_units": sorted(retired_masked),
         "episode_profile_inventory": {
             "loaded_units_checked": len(episode_units),
             "release_commit_counts": release_counts,

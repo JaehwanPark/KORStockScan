@@ -644,3 +644,28 @@ def test_stage2_pre_submit_source_monitor_has_independent_selected_release_trigg
     assert rows[0].startswith("2-57/5 8-19 ")
     assert "run_runtime_release.sh pre-submit-source" in rows[0]
     assert "!/PRE_SUBMIT_SOURCE_/" in installer
+
+
+@pytest.mark.parametrize('case',['sealed','tampered','foreign','active'])
+def test_release_set_accepts_only_sealed_inactive_retirement_masks(release,monkeypatch,case):
+    workspace,root,_,_=release
+    closed={f'korstockscan-low-price-two-leg{prefix}@doosan_enerbility_{session}.service'
+        for prefix in ('','-preflight') for session in ('morning','late_morning','afternoon')}
+    unit=next(iter(closed)) if case!='foreign' else 'korstockscan-low-price-two-leg@nhn_afternoon.service'
+    receipt=dict(schema='symbol_owner_retirement_transition_v1',state='terminal',symbol='034020',owner='episode',masked_instances=sorted(closed))
+    receipt['receipt_sha256']=hashlib.sha256(json.dumps(receipt,sort_keys=True,separators=(',',':'),ensure_ascii=True).encode()).hexdigest()
+    if case=='tampered':receipt['symbol']='005930'
+    path=workspace/'data/runtime/retirements/doosan-episode-retirement.json';path.parent.mkdir(parents=True);path.write_text(json.dumps(receipt))
+    monkeypatch.setattr(router.subprocess,'run',lambda command,**kwargs:subprocess.CompletedProcess(command,0,f'{unit} masked inactive dead\n',''))
+    def show(name,**kwargs):
+        if name==unit:
+            return dict(LoadState='masked',ActiveState='active' if case=='active' else 'inactive',MainPID='0')
+        return dict(LoadState='loaded',ActiveState='inactive',SubState='dead',MainPID='0',WorkingDirectory=str(root),ExecStart=str(root/'deploy/run_owner.sh'),Environment='')
+    monkeypatch.setattr(router,'_systemd_properties',show)
+    if case=='sealed':
+        report=router.check_release_set(workspace,root,'a'*40)
+        assert report['retired_masked_units']==[unit]
+        assert report['episode_profile_inventory']['loaded_units_checked']==0
+    else:
+        with pytest.raises(ValueError,match='systemd_unit_not_loaded'):
+            router.check_release_set(workspace,root,'a'*40)

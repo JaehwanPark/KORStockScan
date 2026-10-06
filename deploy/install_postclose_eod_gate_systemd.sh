@@ -11,10 +11,14 @@ fi
 source "$PROJECT_DIR/deploy/runtime_release_set_lock.sh"
 runtime_release_set_lock_acquire "$PROJECT_DIR"
 
-dropin_name="$(printf '%0180d' 0 | tr '0' 'z')-postclose-eod-gate-20260929.conf"
+legacy_dropin_name="$(printf '%0180d' 0 | tr '0' 'z')-postclose-eod-gate-20260929.conf"
+# Existing reviewed retirement/source pins begin with '~zzz'. A plain 'z'
+# filename is lower priority and cannot update their effective ExecStart.
+dropin_name="~zzzz-postclose-eod-gate-20260929.conf"
 if [[ "$ACTION" == "--rollback" ]]; then
   for unit in korstockscan-machine-microstructure-final-refresh.service; do
     rm -f "/etc/systemd/system/${unit}.d/$dropin_name"
+    rm -f "/etc/systemd/system/${unit}.d/$legacy_dropin_name"
   done
   systemctl daemon-reload
   printf '[POSTCLOSE_EOD_SYSTEMD] rollback=removed_schedule_pins services_not_restarted=true\n'
@@ -81,6 +85,7 @@ for entry in "${units[@]}"; do
 [Service]
 WorkingDirectory=$RELEASE_ROOT
 Environment="PYTHONPATH=$RELEASE_ROOT"
+Environment="PROJECT_DIR=$RELEASE_ROOT"
 Environment="KORSTOCKSCAN_PROJECT_DIR=$RELEASE_ROOT"
 Environment="KORSTOCKSCAN_PYTHON_BIN=$RELEASE_ROOT/.venv/bin/python"
 Environment="KORSTOCKSCAN_RUNTIME_GIT_COMMIT=$RELEASE_COMMIT"
