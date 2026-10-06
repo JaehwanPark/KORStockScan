@@ -194,8 +194,7 @@ def check_release_set(workspace: Path, selected_root: Path, selected_commit: str
     retired_masked = []
     retired_instances = set()
     for receipt in _episode_retirement_receipts(workspace):
-        from src.engine.automation.owner_retirement_transition import retirement_symbols, units as retirement_units
-        closed = {unit for unit in retirement_units(retirement_symbols(receipt)) if unit.endswith(".service")}
+        closed = {unit for unit in _retirement_units(_retirement_symbols(receipt)) if unit.endswith(".service")}
         claimed = receipt.get("masked_instances")
         if (receipt.get("state") == "terminal" and isinstance(claimed, list)
             and len(claimed) == len(closed) and set(claimed) == closed):

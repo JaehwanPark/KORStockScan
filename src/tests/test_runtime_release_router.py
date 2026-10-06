@@ -722,14 +722,26 @@ def test_retirement_validation_runs_in_isolated_wrapper_interpreter(tmp_path):
     from src.engine.automation import owner_retirement_transition as owner
     manifest = dict(schema=owner.GROUP_SCHEMA, state='terminal', owner='episode',
                     symbols=['080220'], profile_ids=['jeju_semiconductor_morning'],
-                    units=list(owner.units(['080220'])))
+                    units=list(owner.units(['080220'])),
+                    masked_instances=[unit for unit in owner.units(['080220']) if unit.endswith('.service')])
     manifest['receipt_sha256'] = owner.digest(manifest)
     directory = tmp_path/'data/runtime/retirements'
     directory.mkdir(parents=True)
     (directory/'episode-retirement-fixture.json').write_text(json.dumps(manifest))
-    code = ("import runpy,sys; from pathlib import Path; "
-            "module=runpy.run_path(sys.argv[1],run_name='isolated_review'); "
-            "assert module['_episode_retirement_receipts'](Path(sys.argv[2]))[0]['symbols']==['080220']")
+    (tmp_path/'data/runtime/runtime_release_selection.json').write_text('{}')
+    code = """
+import runpy,sys,subprocess
+from pathlib import Path
+module=runpy.run_path(sys.argv[1],run_name='isolated_review')
+receipt=module['_episode_retirement_receipts'](Path(sys.argv[2]))[0]
+assert receipt['symbols']==['080220']
+namespace=module['check_release_set'].__globals__
+namespace['CORE_SYSTEMD_UNITS']=()
+namespace['_systemd_properties']=lambda unit,**kwargs:dict(LoadState='masked',ActiveState='inactive',MainPID='0')
+subprocess.run=lambda *args,**kwargs:subprocess.CompletedProcess([],0,'\\n'.join(receipt['masked_instances']),'')
+report=module['check_release_set'](Path(sys.argv[2]),Path(sys.argv[2]),'a'*40)
+assert report['retired_masked_units']==sorted(receipt['masked_instances'])
+"""
     result = subprocess.run([sys.executable, '-I', '-c', code, router.__file__, str(tmp_path)],
                             capture_output=True, text=True)
     assert result.returncode == 0, result.stderr

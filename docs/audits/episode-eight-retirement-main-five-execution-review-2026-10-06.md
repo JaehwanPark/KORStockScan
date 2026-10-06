@@ -38,3 +38,5 @@ Kiwoom 공식 upstream SHA `953e5dbff123f437ab4d11a78a95191a685eb51f`를 재확�
 ## 배포 진입 단계 추가 리뷰
 
 첫 배포 커밋 `04920b5b`에서 Python `-I`로 실행하는 native router가 새 퇴역 validator의 package import를 찾지 못했다. 프로세스 종료 전에 차단되어 기존 Main PID는 유지됐다. router가 인접한 검토 guard의 profile 선언을 AST로 읽고 순수 JSON 계약을 검증하도록 보완했다. 환경의 `PYTHONPATH`를 기동 권한으로 사용하지 않는다. 격리 interpreter subprocess 회귀를 포함한 router 90개 테스트와 실제 `-I --print-plan` PASS를 확인했다.
+
+설치 상태 점검 분기도 동일한 격리 계약으로 정리하고 subprocess 회귀에서 함께 실행했다. 최종 router 90개 PASS 및 실제 wrapper의 `--check-release-set`/`--check-cron` PASS: remaining service 62개, policy pin 186개, cron target 8개다. 퇴역 mask의 loaded 관측 수와 설치된 전체 mask 수는 구분한다.
