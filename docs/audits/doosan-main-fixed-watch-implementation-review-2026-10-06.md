@@ -6,7 +6,7 @@
 
 사용자가 구현·반복 리뷰를 지시했고, **초기 정책 적격성 입증은 필요 없다**고 후속 기준을 정했다. 두산 `034020` 초기 정책은 현재 Main 비삼성 정책 지정이다. 경제성/native support/새 독립 날짜 검증 부족 때문에 최초 지정을 관측 전용으로 보류하지 않는다. 실제 exact-date/hash, source freshness, broker/account/order/quantity/cooldown, custody와 수동 veto는 유지한다.
 
-이번 결과는 작업본 구현·오프라인 연구·리뷰 검증이다. 설치된 unit 삭제, release 선택 변경, owner policy 실발행, 정책 재생성의 운영 반영, Main 재기동·실주문은 실행하지 않았다. 이전 다른 수리의 배포 승인·PID 영수증을 이번 소유권 전환에 재사용하지 않았다. 이 초기 지정은 새 수익성 입증이 아니다.
+초기 코드 검토는 작업본 구현·오프라인 연구·회귀 검증으로 닫혔고, 후속 사용자 배포·재기동 승인에 따라 아래 최종 운영 전환까지 실행했다. 오늘 기존 owner/PREOPEN/bootstrap 정책은 보존했다. 초기 지정은 새 수익성 입증이 아니다. 아래 초기 gate 표의 pending은 당시 기록이며 현재 상태는 최종 운영 전환 표가 소유한다.
 
 ## 구현
 
@@ -87,3 +87,18 @@ Installed retirement retains six permanent service-instance masks after flat clo
 14:23 실제 두산 broker/custody all-date intent 0을 다시 확인하고 terminal 퇴역 영수증을 발행했다. timer 6파일 삭제와 live/preflight instance 6개 mask를 확인했다. root가 발행한 control receipt가 launcher에게 읽히지 않는 결함을 0644 원자 발행과 회귀로 보완했다. 14:24 Main bootstrap/PID 검증과 삼성·두산 독립 fixed-watch admission, exact 0B/0D 새 수신을 확인했다. 감시기 release-set checker는 봉인된 두산 inactive mask만 제외하도록 보완했다. final-refresh installer가 낮은 우선순위 파일 때문에 이전 ExecStart를 유지하던 지점을 `~zzzz` pin으로 수정했다. 추가 targeted 검증 139 PASS, compile/bash/diff PASS다.
 
 owner PREOPEN의 실제 승인 파일은 wrapper가 고르는 `symbol_owner_policy_standing_authority_2026-09-11.json`이다. 해당 native 파일로 다음 10/7 scope 20종목·두산 Main/수동을 검증했다. 예전 default 9/4 authority(18종목)로 직접 검사한 scope drift는 현재 예약 경로의 결함이 아니므로 현재 blocker로 사용하지 않는다. 당일 owner policy 20종목/모든 적용 완료는 보존한다.
+
+## 최종 운영 전환 완료
+
+- 코드 release: `d0a539ab71259c375e2b4b53129c5b6c061aa451`, `/home/ubuntu/KORStockScan-runtime-releases/doosan-main-fixed-watch-20261006-d0a539ab`.
+- `14:33:39 KST` graceful restart 후 Main singleton PID `4146183`, 실제 cwd/start ticks·native bootstrap·intraday consumption PASS. [실제 소비/원천 증거](../../tmp/doosan-main-execution-20261006/final-native-acceptance.json), [재기동](../../tmp/doosan-main-execution-20261006/restart-final.log).
+- [native 퇴역 영수증](../../data/runtime/retirements/doosan-episode-retirement.json): `terminal`, 두산 KRX/NXT 보유 0·미체결 0·등록 보유 0·all-date 미확정 intent 0. timer 6개 삭제, live/preflight instance 6개 mask. Main/manual 보유나 historical ledger 삭제·이관·청산 주문은 하지 않았다.
+- 삼성/두산 Main fixed-watch admission이 서로 분리되었다. 새 PID shared source의 exact `005930_AL`, `034020_AL` 0B/0D를 확인했고 당시 age는 삼성 0.35초, 두산 체결 1.63초/호가 0.35초였다. 현재 session 수신 증거이며 미래 장 시작 부하·실제 수익성은 별도다.
+- 기존 정책/PREOPEN/bootstrap/standing/source 9개 SHA 불변. native Main 현재 bundle `bd76748c22aaf913af104996be3073664ef355f24c3e6291c47f28e107aedabe`의 유효 선택도 read-only 검증했다. 현재 두산 owner consumer는 Main/manual 진입 허용, episode 신규 진입 불허다. wrapper의 실제 9/11 standing authority로 다음 owner scope 20종목과 두산 Main/manual 세트를 검증했다. 미래 날짜의 실제 발행/소비는 아직 미관측이다.
+- 다른 episode의 현재 active PID를 재기동하지 않았다. 새 58-profile bundle을 옛 61-profile validator가 거부하지 않도록 **다음 live/preflight template 시작**은 새 code pin으로 맞췄다. 기존 policy hash와 profile 값은 보존한다. inactive owner PREOPEN·expansion·21:15 final-refresh도 새 release를 사용하며 OFF research/expansion을 켜지 않았다.
+- [release-set](../../tmp/doosan-main-execution-20261006/release-set-final.json) PASS: 116 surviving instance routes, policy pin 348개 검증. [cron](../../tmp/doosan-main-execution-20261006/cron-after.log) 8개 route PASS. 다른 종목 active PID의 이전 release 소비와 미래 config는 별도다. 현재 기존 failed episode 3개를 정상으로 바꾸거나 복원하지 않았다.
+- review 중 발견한 전체-process 정지 범위, generic template 재기동, root receipt 권한, retirement mask 해석, final-refresh override 우선순위를 수정·재검증했다. 초기 통합 1,129 PASS 및 최종 영향 회귀 139 PASS, compile/bash/diff PASS. 검토 범위 미해결 코드 결함은 없다.
+
+### 남은 자연 수용
+
+기존 `log_rotation_cleanup`/`postclose_finalization` 실패 경보는 이번 퇴역 배포 성공과 분리하여 유지한다. 오늘 20:10 장후의 새 10/6 source→strict/controller→10/7 prepared, 다음 PREOPEN owner 실발행과 미래 PID, 비용 후 결과는 아직 예정된 자연 수용이다. 완료·수익 개선을 추정하지 않는다. 현재 `DoosanEpisodeToMainFixedWatch`의 다음 영업일 확인 owner는 OPEN으로 유지한다.
