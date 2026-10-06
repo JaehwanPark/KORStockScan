@@ -1063,3 +1063,47 @@ def test_cross_process_reservations_are_serialized_by_flock(tmp_path: Path) -> N
     )
     assert sorted(sequences) == [1, 2, 3, 4]
     assert budget.summary(now=NOW)["reservation_count"] == 4
+
+
+def test_every_reservation_and_settlement_publishes_storage_companion(tmp_path):
+    budget = _budget(tmp_path)
+    path = budget.ledger_path.with_suffix('.json')
+    ceiling = conservative_token_ceiling('request', max_output_tokens=100)
+    budget.reserve_attempt(_identity(), token_ceiling=ceiling, now=NOW)
+    reserved = json.loads(path.read_text())
+    assert reserved == budget.summary(now=NOW)
+    assert reserved['outstanding_reservation_count'] == 1
+    budget.settle_attempt(_identity(), actual_input_tokens=3, actual_output_tokens=5, now=NOW)
+    settled = json.loads(path.read_text())
+    assert settled == budget.summary(now=NOW)
+    assert settled['outstanding_reservation_count'] == 0
+    assert settled['settlement_count'] == 1
+    manifest = json.loads(budget.manifest_path.read_text())
+    assert settled['ledger_head_sha256'] == manifest['head_record_sha256']
+
+
+def test_missing_summary_rebuild_preserves_nonempty_ledger_and_manifest(tmp_path):
+    budget = _budget(tmp_path)
+    budget.reserve_attempt(_identity(), token_ceiling=conservative_token_ceiling('request', max_output_tokens=100), now=NOW)
+    summary_path = budget.ledger_path.with_suffix('.json')
+    summary_path.unlink()
+    before = {p: p.read_bytes() for p in (budget.ledger_path, budget.manifest_path)}
+    summary = budget.write_summary(summary_path, now=NOW)
+    assert summary['reservation_count'] == 1
+    assert summary['outstanding_reservation_count'] == 1
+    assert all(p.read_bytes() == raw for p, raw in before.items())
+    assert summary['network_call_performed_by_module'] is False
+
+
+def test_summary_companion_failure_prevents_provider_permit_and_preserves_debit(tmp_path):
+    budget = _budget(tmp_path)
+    summary = budget.ledger_path.with_suffix('.json')
+    external = tmp_path / 'external'; external.write_text('protected')
+    summary.symlink_to(external)
+    with pytest.raises((BudgetLedgerIntegrityError, OSError)):
+        budget.reserve_attempt(_identity(), token_ceiling=conservative_token_ceiling('request', max_output_tokens=100), now=NOW)
+    assert external.read_text() == 'protected'
+    # A durable reservation is never refunded when companion publication fails.
+    assert budget.summary(now=NOW)['reservation_count'] == 1
+    with pytest.raises(DuplicateAttemptError):
+        budget.reserve_attempt(_identity(), token_ceiling=conservative_token_ceiling('request', max_output_tokens=100), now=NOW)

@@ -168,3 +168,13 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
   - 당일 전환: 14:23 native broker/원장/미확정 intent 0 재확인 후 timer 6개 삭제·instance 6개 mask 및 terminal 퇴역 receipt 발행. 14:24 Main 새 release/PID bootstrap PASS, 삼성·두산 독립 고정 target와 exact 신규 0B/0D 확인. 후속 mask 해석·installer priority·control receipt 권한 수리를 반영한 최종 d0a539ab/PID 4146183에서 14:33 bootstrap·실제 소비 PASS. 116 route/348 policy pin과 cron 8개 확인, 최종 139 PASS. 58-profile 소비 호환성을 위해 다음 template 시작 code를 맞추되 다른 종목의 현재 active PID·정책 값은 유지했다.
   - 후속 권한/리뷰: 사용자가 배포·재기동 승인. 122 PASS 추가 리뷰로 retiring/unknown order process만 차단하며 검증된 다른 종목 에피소드·Main 소유자는 유지한다. 당일 기존 owner/PREOPEN/bootstrap을 보존하고 episode BUY guard만 영구 제외한다. 다음 PREOPEN에서 Main·수동 owner만 발행한다.
   - Next: 당일 설치·Main code handoff/PID/자연 source는 완료. 10/6 native 장후 source→strict/controller→10/7 준비·10/7 owner 활성화는 예약 chain의 후속 수용이며 미래 완료를 추정하지 않는다. 기존 log_rotation_cleanup/postclose_finalization 실패·episode failed 3개의 별도 원천 상태는 성공으로 덮지 않는다. 기존 custody 자동 이관·청산 주문·다른 에피소드 재기동 없음.
+
+## 고정감시 원천·정리 후속 보완
+
+- [ ] `[FixedWatchSourceAndCleanupRepair1006] 삼성·두산 기계정책 연결과 WS 원천 지연 보완의 자연 수용` (`Due: 2026-10-06`, `Slot: INTRADAY`, `TimeWindow: 15:10~20:00`, `Track: Runtime`)
+  - Source: [결함·수정·정리 복구 증빙](../audits/fixed-watch-source-delay-and-cleanup-remediation-review-2026-10-06.md).
+  - 사용자 권한: 확인 결함 수정/리뷰 및 기존 cleanup_failed 복구. 두산 배포·재기동의 기존 승인 범위에서 정책 보존 후속 handoff; 새로운 정책·주문·원천 age/cap/read budget 변경 없음.
+  - 코드: fixed symbol별 기계 owner 연결, dashboard 출력 window만 lock 안 동결, 단일 episode fact worker 분리, capture clock 보존, 예약/정산과 같은 lock 안 Provider summary 발행. 관련 642 고유 pytest PASS, compile/diff/parser 확인.
+  - 정리 완료: 원장 36개 기록·manifest 원본 유지, 요약 복구 Provider 0; 15:09:46 target 10/2 네이티브 cleanup DONE, storage·compression·data failures 0. 과거 FAIL을 보존했다.
+  - Acceptance: A1 reviewed immutable release/PID와 당일 원 정책 해시 동일; A2 삼성·두산 exact 0B/0D freshness/epoch와 snapshot lock/publication; A3 두산 자연 기계판정 trace와 BLOCK/RECHECK의 Provider 호출 전 종료; A4 다음 native 장후의 새 예산 원장 companion 결속. 짧은 관찰을 종일 결손 0/수익 증거로 대체하지 않는다.
+  - 별도 상태: 10/2 전체 finalization 복구는 v3 소비 계약에 대해 v2 선행 terminal인 `predecessor_terminal_failure`; cleanup PASS와 혼동하지 않는다. 퇴역 Widget 복원·과거 성공 합성·다른 episode 재기동 없이 10/6 native v3 장후 chain에서 확인한다.

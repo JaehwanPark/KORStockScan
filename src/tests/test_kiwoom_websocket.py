@@ -4511,3 +4511,103 @@ def test_exact_probe_adoption_during_remove_serializes_restore_without_touching_
     asyncio.run(scenario())
     assert [packet["trnm"] for packet in packets] == ["REMOVE", "REG"]
     assert all(row["item"] == ["010140_NX"] for packet in packets for row in packet["data"])
+
+
+def test_dashboard_omits_unused_histories_preserving_exported_route_window():
+    from src.engine.bd_fbuy_accum_pre_scanner import _ws_machine_route_payload
+    manager = KiwoomWSManager('test-token')
+    target = manager._ensure_target_defaults('034020')
+    class UnusedHistory:
+        def __deepcopy__(self, memo):
+            pytest.fail('dashboard must not copy unused live history')
+    target['price_history'] = UnusedHistory()
+    target['recent_trade_ticks_by_route'] = {'krx_nxt_integrated': deque([
+        {'received_at_ms': 1000000-i, 'transport_epoch': 1, 'item': '034020_AL',
+         'price': 10000+i, 'volume': 1, 'route_sequence': 500-i}
+        for i in range(500)])}
+    target['recent_depth_ticks_by_route'] = {'krx_nxt_integrated': deque([
+        {'received_at_ms': 1000000-i, 'transport_epoch': 1, 'item': '034020_AL',
+         'ask_levels': [{'price': 10001+i, 'quantity': 10}],
+         'bid_levels': [{'price': 10000+i, 'quantity': 10}], 'route_sequence': 500-i}
+        for i in range(500)])}
+    frozen = manager._snapshot_target(target, dashboard_only=True)
+    assert 'market_data_health' not in frozen  # writer computes health outside WS lock
+    assert len(frozen['recent_trade_ticks_by_route']['krx_nxt_integrated']) == 120
+    assert _ws_machine_route_payload(frozen, now_ts=1000) == _ws_machine_route_payload(target, now_ts=1000)
+    target['recent_trade_ticks_by_route']['krx_nxt_integrated'][0]['price'] = 1
+    assert frozen['recent_trade_ticks_by_route']['krx_nxt_integrated'][0]['price'] == 10000
+
+
+def test_research_capture_cannot_block_next_dashboard_or_start_second_writer(monkeypatch):
+    from threading import Event
+    from pathlib import Path
+    manager = KiwoomWSManager('test-token')
+    manager._ensure_target_defaults('034020')
+    research_started, release_research, research_done = Event(), Event(), Event()
+    first_frame, second_frame = Event(), Event()
+    frames, captures = [], []
+    def research(now):
+        captures.append(now); research_started.set()
+        try:
+            assert release_research.wait(3)
+        finally:
+            research_done.set()
+    def write(*args, **kwargs):
+        frames.append(kwargs['now_ts'])
+        (first_frame if len(frames) == 1 else second_frame).set()
+        return Path('fixture')
+    monkeypatch.setattr(manager, '_capture_episode_research_facts', research)
+    monkeypatch.setattr(kiwoom_websocket, 'write_ws_snapshot', write)
+    try:
+        manager._maybe_write_dashboard_snapshot()
+        assert research_started.wait(2)
+        # The first publisher must finish while the research writer stays blocked.
+        for _ in range(100):
+            if not manager._dashboard_snapshot_write_inflight:
+                break
+            __import__('time').sleep(.005)
+        assert not manager._dashboard_snapshot_write_inflight
+        manager._last_dashboard_snapshot_at = 0
+        manager._maybe_write_dashboard_snapshot()
+        assert second_frame.wait(2)
+        assert len(captures) == 1
+        assert len(frames) == 2
+    finally:
+        release_research.set()
+        research_done.wait(2)
+
+
+def test_failed_worker_start_resets_publication_and_research_guards(monkeypatch):
+    manager = KiwoomWSManager('test-token')
+    class BrokenThread:
+        def __init__(self, **kwargs): pass
+        def start(self): raise RuntimeError('thread unavailable')
+    monkeypatch.setattr(kiwoom_websocket.threading, 'Thread', BrokenThread)
+    with pytest.raises(RuntimeError): manager._maybe_write_dashboard_snapshot()
+    assert manager._dashboard_snapshot_write_inflight is False
+    with pytest.raises(RuntimeError): manager._schedule_episode_research_capture()
+    assert not manager._episode_research_capture_lock.locked()
+
+
+def test_dashboard_uses_capture_clock_when_projection_is_delayed(monkeypatch):
+    manager = KiwoomWSManager('test-token')
+    clock = [1000.0]
+    monkeypatch.setattr(kiwoom_websocket.time, 'time', lambda: clock[0])
+    row = manager._ensure_target_defaults('034020')
+    row['last_realtime_type_ts'] = {'0B': 999.0}
+    captured = {}
+    class Collector:
+        def completed_bar_integrity(self):
+            clock[0] = 1003.0
+            return {}
+    class ImmediateThread:
+        def __init__(self, *, target, **kwargs): self.target = target
+        def start(self): self.target()
+    def write(frame, **kwargs):
+        captured.update(now=kwargs['now_ts'], event=frame['034020']['last_realtime_type_ts']['0B'])
+    manager._micro_reversion_forward_collector = Collector()
+    monkeypatch.setattr(kiwoom_websocket.threading, 'Thread', ImmediateThread)
+    monkeypatch.setattr(kiwoom_websocket, 'write_ws_snapshot', write)
+    manager._maybe_write_dashboard_snapshot()
+    assert captured == {'now': 1000.0, 'event': 999.0}
+    assert clock[0] == 1003.0

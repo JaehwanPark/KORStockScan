@@ -81,7 +81,8 @@ def _pin_auto_promotion(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("scope", rollout.AUTO_PROMOTION_SCOPES)
-def test_all_continuous_machine_primary_resolver(monkeypatch, tmp_path, scope):
+@pytest.mark.parametrize("fixed_symbol", [None, "005930", "034020"])
+def test_all_continuous_machine_primary_resolver(monkeypatch, tmp_path, scope, fixed_symbol):
     from src.engine.scalping import mechanistic_entry_runtime_policy as initial
     from src.tests.test_mechanistic_entry_runtime_policy import source
 
@@ -107,11 +108,25 @@ def test_all_continuous_machine_primary_resolver(monkeypatch, tmp_path, scope):
         now=datetime(2026, 8, 6, 22, tzinfo=policy.KST),
     )
     venue, session = scope.split("|")
+    position_tag = "SCANNER"
+    if fixed_symbol:
+        from src.engine import sniper_state_handlers as handlers
+        class EvaluationClock(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return datetime(2026, 8, 7, 10, tzinfo=policy.KST)
+        monkeypatch.setattr(handlers, "datetime", EvaluationClock)
+        target = {"position_tag": "SCALP_BASE", "code": fixed_symbol,
+                  "watch_origin": "MAIN_FIXED_WATCH",
+                  "watch_admission_id": f"FIXED-2026-08-07-{fixed_symbol}-a1",
+                  "watch_generation_id": "a" * 64}
+        position_tag = handlers._entry_ai_policy_position_tag(target)
+        assert target["position_tag"] == "SCALP_BASE"
     resolved = policy.resolve_live_prompt_policy(
         configured_prompt_version=DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
         effective_venue=venue,
         session_bucket=session,
-        position_tag="SCANNER",
+        position_tag=position_tag,
         strategy="SCALPING",
         now=datetime(2026, 8, 7, 10, tzinfo=policy.KST),
     )

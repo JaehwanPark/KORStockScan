@@ -355,6 +355,7 @@ class KiwoomWSManager:
         self._pending_token_handoff = None
         self._last_dashboard_snapshot_at = 0.0
         self._dashboard_snapshot_write_inflight = False
+        self._episode_research_capture_lock = threading.Lock()
         self._recent_reg_request_ts = {}
         self._micro_reversion_deferred_reg_codes = {}
         self._alternate_route_request_ts = {}
@@ -2196,7 +2197,7 @@ class KiwoomWSManager:
 
         return self.get_latest_data(code) or latest or {}
 
-    def _snapshot_target(self, target, *, include_history=True):
+    def _snapshot_target(self, target, *, include_history=True, dashboard_only=False):
         # Raw 0B/0D observers consume the current event, not accumulated history.
         # Copying every historical row for each incoming tick starves ws.recv.
         history_keys = (
@@ -2209,6 +2210,29 @@ class KiwoomWSManager:
             "recent_trade_ticks_by_route",
             "recent_depth_ticks_by_route",
         )
+        if dashboard_only:
+            # The dashboard writer consumes these fields only. Live getters
+            # retain their full histories; publication freezes only the same
+            # 120 newest route rows that write_ws_snapshot exports.
+            target = {key: value for key, value in target.items() if key in {
+                "curr", "orderbook", "received_types", "last_ws_update_ts",
+                "foreign_broker_net_est_qty", "foreign_broker_net_est_delta_qty",
+                "last_foreign_broker_update_ts", "last_ws_item",
+                "last_ws_market_suffix", "last_ws_market_route",
+                "last_realtime_type_ts", "last_realtime_type_item",
+                "last_realtime_type_market_suffix", "last_realtime_type_market_route",
+                "last_trade_tick", "realtime_type_snapshots_by_route",
+                "recent_trade_ticks", "recent_trade_ticks_by_route",
+                "recent_depth_ticks_by_route",
+            }}
+            for key in ("recent_trade_ticks_by_route", "recent_depth_ticks_by_route"):
+                if isinstance(target.get(key), dict):
+                    target[key] = {
+                        route: list(rows or ())[:120]
+                        for route, rows in target[key].items()
+                    }
+            if "recent_trade_ticks" in target:
+                target["recent_trade_ticks"] = list(target["recent_trade_ticks"] or ())[:120]
         snapshot = copy.deepcopy(
             target
             if include_history
@@ -2221,9 +2245,10 @@ class KiwoomWSManager:
         snapshot["market_data_transport_epoch"] = getattr(
             self, "_market_data_transport_epoch", None
         )
-        snapshot["market_data_health"] = build_market_data_health(
-            snapshot, now_ts=time.time()
-        )
+        if not dashboard_only:
+            snapshot["market_data_health"] = build_market_data_health(
+                snapshot, now_ts=time.time()
+            )
         for records in snapshot.get("realtime_type_snapshots_by_route", {}).values():
             if isinstance(records, dict):
                 quiet_state = records.pop("_quiet_tape_state", None)
@@ -2262,7 +2287,7 @@ class KiwoomWSManager:
         return snapshot
 
     def _capture_episode_research_facts(self, now):
-        """Project received episode books inside the existing snapshot worker."""
+        """Project received episode books without requesting new market data."""
         from src.engine.monitoring.research_source_facts import SharedResearchFactWriter
         from src.engine.monitoring.research_closed_loop import writer_lock, DIRECTORY
 
@@ -2272,6 +2297,28 @@ class KiwoomWSManager:
                 writer = SharedResearchFactWriter(())
                 self._episode_research_fact_writer = writer
             return writer.collect_once(now)
+
+    def _schedule_episode_research_capture(self):
+        """Keep one research writer without holding up WS frame publication."""
+        if self._stop_event.is_set() or not self._episode_research_capture_lock.acquire(False):
+            return
+
+        def _capture():
+            try:
+                if not self._stop_event.is_set():
+                    self._capture_episode_research_facts(datetime.now(KST))
+            except BlockingIOError:
+                pass  # The native cross-process writer lock retains ownership.
+            except Exception as exc:
+                log_error(f"[WS] episode native research fact capture failed: {exc}")
+            finally:
+                self._episode_research_capture_lock.release()
+
+        try:
+            threading.Thread(target=_capture, name="episode-native-research-facts", daemon=True).start()
+        except Exception:
+            self._episode_research_capture_lock.release()
+            raise
 
     def _maybe_write_dashboard_snapshot(self):
         now_ts = time.time()
@@ -2295,11 +2342,11 @@ class KiwoomWSManager:
                 with self.lock:
                     capture_started = time.monotonic()
                     realtime_snapshot = {
-                        str(code): self._snapshot_target(target)
+                        str(code): self._snapshot_target(target, dashboard_only=True)
                         for code, target in self.realtime_data.items()
                     }
                     observation_route_snapshot = {
-                        str(item): self._snapshot_target(target)
+                        str(item): self._snapshot_target(target, dashboard_only=True)
                         for item, target in (
                             self._micro_reversion_observation_route_data.items()
                         )
@@ -2314,6 +2361,7 @@ class KiwoomWSManager:
                         "connection_available": self.websocket is not None and self._session_ready.is_set(),
                         "capture_lock_ms": round((time.monotonic() - capture_started) * 1000, 3),
                     }
+                    frame_captured_at = time.time()
                 collector = self._micro_reversion_forward_collector
                 if collector is not None and hasattr(collector, "completed_bar_integrity"):
                     shared_transport_producer["completed_bar_integrity"] = collector.completed_bar_integrity()
@@ -2327,28 +2375,27 @@ class KiwoomWSManager:
                     shared_transport_producer=shared_transport_producer,
                     # The worker may start after newer packets arrive. Use
                     # the frozen-frame consume clock, never its launch clock.
-                    now_ts=time.time(),
+                    now_ts=frame_captured_at,
                 )
                 if written_snapshot is None:
                     log_error(
                         "[WS] dashboard snapshot or micro-reversion registration "
                         "receipt persistence failed"
                     )
-                elif written_snapshot is not None:
-                    try:
-                        self._capture_episode_research_facts(datetime.now(KST))
-                    except BlockingIOError:
-                        pass  # A single existing writer owns this received frame.
-                    except Exception as exc:
-                        log_error(f"[WS] episode native research fact capture failed: {exc}")
+                else:
+                    self._schedule_episode_research_capture()
             except Exception as e:
                 log_error(f"[WS] dashboard snapshot write failed: {e}")
             finally:
                 self._dashboard_snapshot_write_inflight = False
 
-        threading.Thread(
-            target=_write_snapshot_async, name="bd-fbuy-ws-snapshot", daemon=True
-        ).start()
+        try:
+            threading.Thread(
+                target=_write_snapshot_async, name="bd-fbuy-ws-snapshot", daemon=True
+            ).start()
+        except Exception:
+            self._dashboard_snapshot_write_inflight = False
+            raise
 
     def _enqueue_state_event(self, event_type, payload):
         if self._stop_event.is_set():

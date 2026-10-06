@@ -933,81 +933,86 @@ class ProviderBudgetLedger:
 
         generated_at = _kst_now(now)
         with self._locked_state() as state:
-            outstanding = [
-                record
-                for identity_hash, record in state.reservations.items()
-                if identity_hash not in state.settlements
-            ]
-            actual_cost = sum(
-                (
-                    _stored_decimal(row["actual_cost_usd"], field="actual_cost_usd")
-                    for row in state.settlements.values()
-                ),
-                Decimal(0),
+            return self._summary_for_state(state, generated_at=generated_at)
+
+    def _summary_for_state(
+        self, state: _LedgerState, *, generated_at: datetime
+    ) -> dict[str, Any]:
+        outstanding = [
+            record
+            for identity_hash, record in state.reservations.items()
+            if identity_hash not in state.settlements
+        ]
+        actual_cost = sum(
+            (
+                _stored_decimal(row["actual_cost_usd"], field="actual_cost_usd")
+                for row in state.settlements.values()
+            ),
+            Decimal(0),
+        )
+        outstanding_cost = sum(
+            (
+                _stored_decimal(row["reserved_cost_usd"], field="reserved_cost_usd")
+                for row in outstanding
+            ),
+            Decimal(0),
+        )
+        committed_cost = actual_cost + outstanding_cost
+        circuit_breaker_open = self._circuit_breaker_open(state)
+        status = (
+            "circuit_breaker_open"
+            if circuit_breaker_open
+            else (
+                "daily_budget_exhausted"
+                if len(state.reservations) >= self.daily_attempt_cap
+                or committed_cost >= self.daily_usd_cap
+                else "daily_budget_available"
             )
-            outstanding_cost = sum(
-                (
-                    _stored_decimal(row["reserved_cost_usd"], field="reserved_cost_usd")
-                    for row in outstanding
-                ),
-                Decimal(0),
-            )
-            committed_cost = actual_cost + outstanding_cost
-            circuit_breaker_open = self._circuit_breaker_open(state)
-            status = (
-                "circuit_breaker_open"
-                if circuit_breaker_open
-                else (
-                    "daily_budget_exhausted"
-                    if len(state.reservations) >= self.daily_attempt_cap
-                    or committed_cost >= self.daily_usd_cap
-                    else "daily_budget_available"
-                )
-            )
-            summary_without_hash = {
-                "schema": BUDGET_SUMMARY_SCHEMA,
-                "generated_at": generated_at.isoformat(),
-                "execution_date": self.execution_date.isoformat(),
-                "status": status,
-                "daily_attempt_cap": self.daily_attempt_cap,
-                "daily_usd_cap": _decimal_text(self.daily_usd_cap),
-                "reservation_count": len(state.reservations),
-                "settlement_count": len(state.settlements),
-                "outstanding_reservation_count": len(outstanding),
-                "actual_cost_usd": _decimal_text(actual_cost),
-                "outstanding_reserved_cost_usd": _decimal_text(outstanding_cost),
-                "committed_cost_usd": _decimal_text(committed_cost),
-                "remaining_attempt_count": max(
-                    0, self.daily_attempt_cap - len(state.reservations)
-                ),
-                "remaining_usd": _decimal_text(
-                    max(Decimal(0), self.daily_usd_cap - committed_cost)
-                ),
-                "circuit_breaker_open": circuit_breaker_open,
-                "ledger_record_count": state.record_count,
-                "ledger_head_sha256": state.head_sha256,
-                "ledger_bytes_sha256": hashlib.sha256(state.ledger_bytes).hexdigest(),
-                "budget_contract_sha256": self._budget_contract_sha256,
-                "pricing_artifact_id": self.pricing.artifact_id,
-                "pricing_artifact_content_sha256": (
-                    self.pricing.artifact_content_sha256
-                ),
-                "pricing_artifact_file_sha256": self.pricing.artifact_file_sha256,
-                "pricing_basis": self.pricing.pricing_basis,
-                "raw_pricing_source_bytes_sha256": (
-                    self.pricing.raw_source_bytes_sha256
-                ),
-                "raw_pricing_source_path": str(self.pricing.raw_source_path),
-                "raw_pricing_source_size_bytes": self.pricing.raw_source_size_bytes,
-                "pricing_effective_from": self.pricing.effective_from.isoformat(),
-                "pricing_effective_to": self.pricing.effective_to.isoformat(),
-                "provider_model_attempt_counts": self._provider_model_counts(state),
-                **AUTHORITY_CONTRACT,
-            }
-            return {
-                **summary_without_hash,
-                "summary_content_sha256": _sha256_json(summary_without_hash),
-            }
+        )
+        summary_without_hash = {
+            "schema": BUDGET_SUMMARY_SCHEMA,
+            "generated_at": generated_at.isoformat(),
+            "execution_date": self.execution_date.isoformat(),
+            "status": status,
+            "daily_attempt_cap": self.daily_attempt_cap,
+            "daily_usd_cap": _decimal_text(self.daily_usd_cap),
+            "reservation_count": len(state.reservations),
+            "settlement_count": len(state.settlements),
+            "outstanding_reservation_count": len(outstanding),
+            "actual_cost_usd": _decimal_text(actual_cost),
+            "outstanding_reserved_cost_usd": _decimal_text(outstanding_cost),
+            "committed_cost_usd": _decimal_text(committed_cost),
+            "remaining_attempt_count": max(
+                0, self.daily_attempt_cap - len(state.reservations)
+            ),
+            "remaining_usd": _decimal_text(
+                max(Decimal(0), self.daily_usd_cap - committed_cost)
+            ),
+            "circuit_breaker_open": circuit_breaker_open,
+            "ledger_record_count": state.record_count,
+            "ledger_head_sha256": state.head_sha256,
+            "ledger_bytes_sha256": hashlib.sha256(state.ledger_bytes).hexdigest(),
+            "budget_contract_sha256": self._budget_contract_sha256,
+            "pricing_artifact_id": self.pricing.artifact_id,
+            "pricing_artifact_content_sha256": (
+                self.pricing.artifact_content_sha256
+            ),
+            "pricing_artifact_file_sha256": self.pricing.artifact_file_sha256,
+            "pricing_basis": self.pricing.pricing_basis,
+            "raw_pricing_source_bytes_sha256": (
+                self.pricing.raw_source_bytes_sha256
+            ),
+            "raw_pricing_source_path": str(self.pricing.raw_source_path),
+            "raw_pricing_source_size_bytes": self.pricing.raw_source_size_bytes,
+            "pricing_effective_from": self.pricing.effective_from.isoformat(),
+            "pricing_effective_to": self.pricing.effective_to.isoformat(),
+            "provider_model_attempt_counts": self._provider_model_counts(state),
+            **AUTHORITY_CONTRACT,
+        }
+        return {
+            **summary_without_hash,
+            "summary_content_sha256": _sha256_json(summary_without_hash),
+        }
 
     def validated_reservation_census_read_only(self) -> tuple[dict[str, Any], ...]:
         """Return exact reservations without creating or repairing custody files.
@@ -1160,9 +1165,13 @@ class ProviderBudgetLedger:
         target = _absolute_path_without_symlink_resolution(path)
         if target in {self.ledger_path, self.manifest_path, self.lock_path}:
             raise ValueError("provider budget summary path conflicts with ledger files")
-        summary = self.summary(now=now)
-        _atomic_write_json(target, summary)
-        return summary
+        with self._locked_state() as state:
+            summary = self._summary_for_state(state, generated_at=_kst_now(now))
+            if target.parent == self.ledger_path.parent:
+                _atomic_write_json_at(state.directory_fd, target.name, summary)
+            else:
+                _atomic_write_json(target, summary)
+            return summary
 
     def _record_common(self) -> dict[str, Any]:
         return {
@@ -1216,6 +1225,14 @@ class ProviderBudgetLedger:
         else:
             state.settlements[identity_hash] = record
         self._write_manifest(state, updated_at=timestamp)
+        # Every producer owes the canonical storage companion, including callers
+        # that crash before writing their own replay/checkpoint report. Persist
+        # it under the same ledger lock so its head cannot trail another writer.
+        _atomic_write_json_at(
+            state.directory_fd,
+            self.ledger_path.with_suffix(".json").name,
+            self._summary_for_state(state, generated_at=timestamp),
+        )
         return record
 
     def _append_ledger_bytes(self, encoded: bytes, *, state: _LedgerState) -> None:

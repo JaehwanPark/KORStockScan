@@ -19163,10 +19163,9 @@ def _entry_ai_policy_position_tag(stock: dict | None) -> str:
     actual_tag = normalize_position_tag("SCALPING", row.get("position_tag"))
     if (
         actual_tag == "SCALP_BASE"
-        and str(row.get("watch_origin") or "") == "MAIN_FIXED_WATCH"
-        and str(row.get("code") or "")[:6] == "005930"
+        and main_fixed_watch.is_fixed_watch(row)
         and str(row.get("watch_admission_id") or "").startswith(
-            f"FIXED-{datetime.now(_KST).date()}-005930-"
+            f"FIXED-{datetime.now(_KST).date()}-{str(row.get('code') or '')[:6]}-"
         )
         and str(row.get("watch_generation_id") or "").strip()
     ):
