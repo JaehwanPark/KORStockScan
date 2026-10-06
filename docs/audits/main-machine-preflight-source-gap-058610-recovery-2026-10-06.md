@@ -70,7 +70,7 @@
 - 복원 후 trace의 별도 결손 `323280` 12:25:09, attempt `machine-source-invalid-003968f3e89f4accb2ae4b2e57554e6d`는 `required_feature_provider_trade_late`다. artifact 결손과 분리하며 수신/체결시각 guard를 완화하지 않는다.
 - 12:25 보고서에는 여전히 `coverage_degraded`가 있다. 미수신·age 초과·필수값 결손 및 최근 창의 복원 전 실패가 남아 있어 전체 경보 해제나 전 종목 원천 정상화를 주장하지 않는다.
 - 058610의 새 자연 attempt는 이번 확인 범위에서 미관측이다. 기존 queue rotation의 다음 exact-route 관측으로 평가하며 과거 판정 재사용·수동 등록/강제 AI 호출을 하지 않는다.
-- 추가 계측 코드는 작업본에서 닫혔으며 운영 release/PID 반영은 대기다. 복원 파일의 실제 소비와 계측 코드 소비를 구분한다. probe 조건부 경제성 재생의 미지원 상태도 별도 계획으로 남는다.
+- 조사 당시 추가 계측 코드는 작업본에서 닫혔으며 운영 release/PID 반영은 대기였다. 아래 7~9절에 후속 승인·배포 수용을 기록한다. probe 조건부 경제성 재생의 미지원 상태는 별도 계획으로 남는다.
 
 원천/복구/자연 snapshot: [조사 증거 디렉터리](../../tmp/intraday-source-gap-058610-20261006), [복원 전후 trace 집계](../../tmp/intraday-source-gap-058610-20261006/pre-post-trace-summary.json), [자연 probe 소비](../../tmp/intraday-source-gap-058610-20261006/natural-probe-after-restoration.json), [정리 보호 참조 검증](../../tmp/intraday-source-gap-058610-20261006/restored-contract-retention-proof.json).
 
@@ -81,7 +81,7 @@
 - 실제 scanner result emitter의 exact ID/artifact 상태 전달, native blocker 보존·기존 source kind 우선·무근거 원인 미생성, trace/outcome 권한 불변, monitor example의 exact attempt를 회귀로 검증했다.
 - 수정 Python compile, Ruff `E9,F63,F7,F82`, `git diff --check` PASS. 로컬 링크 27개 존재, print-only parser 23항목 및 현재 OPEN/parsed owner 1개, 복구 artifact/current dependency SHA와 같은 Main PID/root를 확인했다. 실제 policy/PID/주문/economic acceptance는 이 코드 검증의 완료 조건으로 추가하지 않는다.
 - owner는 기존 `DirectFamilySourceRepairMainMechanisticEntry`에 원천 복구·계측 인계를 연결한다. 배포 완료 기록은 보존하며 이번 추가 계측의 미배포를 과거 배포 실패로 바꾸지 않는다.
-- 전수 계좌/주문 조회, 새 AI/provider 평가, 정책 재생성, bot/episode 재기동, broad automation 및 외부 동기화는 실행하지 않았다.
+- 본 조사 단계에서는 전수 계좌/주문 조회, 새 AI/provider 평가, 정책 재생성, bot/episode 재기동, broad automation 및 외부 동기화를 실행하지 않았다. 후속 사용자 승인에 따른 Main 배포·재기동은 아래에 기록한다.
 
 ## 7. 사용자 승인 후 계측 배포 gate
 
@@ -95,3 +95,30 @@
 - 실제 새 singleton PID/root/commit·source cleanliness·bootstrap consumption, heartbeat·WS first-data, fresh broker/custody 및 오류를 확인한 후 아래에 완료 receipt를 기록한다. 자연 원천 품질·제출/체결·경제성은 별도다.
 
 증거: [배포 gate 디렉터리](../../tmp/source-gap-instrumentation-deployment-20261006).
+
+## 8. 재기동 gate에서 발견한 보호 context marker 결손
+
+12:42의 native 기존 PID 검증은 보유 context 7개 key의 `pid_env_mismatch`로 차단됐다. 기존 bootstrap/PREOPEN bytes는 불변이었다. 같은 정리 작업이 `data/runtime/ai_multi_timeframe_context_promotion_2026-07-29.json`도 삭제해, 현재 PID가 소비한 durable context OFF overlay의 owner가 로더에서 사라진 것이 원인이다. 이 단계에서는 재기동 요청을 발행하지 않았다.
+
+- archive 원본은 **7,170 bytes**, SHA `f5e8df9127ce9ddd3a7c61a4f10e6fd3227080cd67bef95a328c87d69685abd8`이며 immutable 정리 manifest와 일치한다.
+- 별도 추출 원본을 native `authoritative_runtime_env`에 넣어 **19개 overlay key 모두 기존 PID와 동일**함을 먼저 확인했다. legacy companion manifest/env의 기존 부재 상태에서 native loader가 context OFF와 보호 baseline을 유지한다. companion 파일을 복원하거나 context를 새로 활성화하지 않았다.
+- **12:45:22.961767 KST** 원본 SHA·원래 mtime `1785282982045212330ns`를 그대로 no-clobber 원자 복원했다. 기존 PID/bootstrap 재검증 **PASS / finding 0**. 현재 계약 복원이므로 과거 가격·원천 재학습을 수행하지 않는다.
+- [복구 receipt](../../data/runtime/source_contract_recovery/ai_context_marker_restoration_2026-10-06.json)와 [current dependency](../../data/runtime/source_contract_recovery/ai_context_marker/current.json)를 발행했다. 기존 baseline과 marker 두 파일이 native 정리 참조 보호에 포함됨을 read-only 확인했다. 자동 삭제·정리 재실행은 하지 않았다.
+
+직접 증거: [원래 실패](../../tmp/source-gap-instrumentation-deployment-20261006/bootstrap-before.json), [복원 전 native/PID 일치](../../tmp/source-gap-instrumentation-deployment-20261006/context-marker-restoration-review.json), [복원 후 통과](../../tmp/source-gap-instrumentation-deployment-20261006/bootstrap-before-restored.json), [정리 참조 보호 검증](../../tmp/source-gap-instrumentation-final-20261006/protected-contract-reference-proof.json).
+
+## 9. 실제 배포·재기동과 자연 계측 최종 수용
+
+1. 코드·점검 문서 commit `5ece2998d16ec4c1b030993dc9577b115dfc0c02`의 clean immutable root를 선택하고 native intraday handoff를 준비했다. **12:46:43** 새 Main PID `4098111`의 bootstrap/PID 검증 PASS, WS first-data 35개 및 기계 assessed 자연 계측을 확인했다.
+2. 자연 probe에서 판정 전 source-unavailable 건의 빈 ID가 기존 scalar logger를 거쳐 문자열 `None`으로 저장됨을 발견했다. 추가 계측 소비자가 이를 ID로 인식하면 같은 종목·원인의 여러 실패가 부정확하게 합쳐질 수 있어 후속 보완했다. 새 scanner 3개 필드는 결손을 `-`로 표현하고 monitor는 `None/null/-/빈 문자열` 및 비문자 입력을 ID로 채택하지 않는다. exact ID가 없는 두 자연시각 event의 모수 보존도 회귀로 확인했다.
+3. 후속 scanner runtime/monitor **162 PASS**, compile·Ruff·diff PASS. 앞선 287건과 겹치는 module이 있으므로 고유 건수로 합산하지 않는다. 판정/action/retry/lease·원천 guard·API/provider/주문·수량·cap·custody·operator lock 권한을 다시 확인했으며 리뷰 범위의 미해결 코드 결함은 없다.
+4. 최종 코드 commit **`abb71f8d3a70f518b5ff6ea7fab9577d70d77f1c`**, release **`machine-preflight-lineage-20261006-abb71f8d`**. **12:51:20 KST** graceful restart 뒤 singleton Main PID **`4100807`**이 해당 root/commit을 소비한다. 기존 child 종료 후 tmux 감독자를 교체했으며 강제 kill·주문 테스트를 수행하지 않았다. rollback selector와 이전 두 release를 보존했다.
+5. 실제 PID `source_dirty=false`, native bootstrap·intraday consumption **PASS / mismatch 0**, 원 정책/PREOPEN **5개 SHA 불변**. 보호 baseline native loader는 `ready_baseline_v1`이고, 보유 context는 기존 **OFF**, 전체 19-key overlay가 원 소비와 동일하다.
+6. 재기동 전후 fresh KRX/NXT 잔고·미체결·DB 활성 custody·registry 미결속 intent **모두 0**. hash-verified registry event **1,409개**, Main child **1개**다. Main/스나이퍼/스캐너/Telegram/오류감시 heartbeat와 `ProcessHealthDetector` **PASS**.
+7. **12:53:26 확인 snapshot**에서 WS first-data **44개**, 새 PID 이후 probe **22개** 중 기계 assessed **3개**를 자연 확인했다. `413630` 12:52:25 RECHECK, `247540` 12:52:38 BLOCK, `036810` 12:52:54 RECHECK이며 각 exact attempt·capture hash를 보존했다. 계산 전 건의 ID는 `-`로 기록되고 monitor가 이를 정확 ID로 취급하지 않는 것도 live 로그로 확인했다. 자연 원천 미수신·age 초과는 별도 상태로 유지하며 058610의 새 assessed 및 비용 수익 개선을 주장하지 않는다.
+8. release-set **PASS**, Episode 설치 **122개 route / 366개 policy pin** 및 cron **8개** 경로 PASS. Episode의 기존 독립 root/pin, failed 29·inactive 93 및 격리를 유지했다. 웹·체결 통보 등 별도 서비스 재기동은 이번 Main 계측 배포에 포함하지 않았다.
+9. 시작 후 ERROR는 기존 05:03 장후 저장소 정리 실패와 그에 따른 `postclose_finalization cleanup_failed`를 다시 알린 `cron_completion`이다. 원 실패 receipt를 유지하며 전체 장후 DONE을 주장하지 않는다. 별도 원천 age/필수값 결손과 조건부 probe 경제성 미지원도 해당 기존 owner에서 계속 관리한다.
+
+최종 직접 증거: [배포](../../tmp/source-gap-instrumentation-final-20261006/deployment.json), [graceful restart](../../tmp/source-gap-instrumentation-final-20261006/restart.log), [실제 기동 수용](../../tmp/source-gap-instrumentation-final-20261006/runtime-acceptance.json), [새 PID 소비](../../data/runtime/policy_bootstrap/intraday_handoff/2026-10-06/abb71f8d3a70f518b5ff6ea7fab9577d70d77f1c.consumed.json), [broker 후 상태](../../tmp/source-gap-instrumentation-final-20261006/broker-after.json), [custody 후 상태](../../tmp/source-gap-instrumentation-final-20261006/local-custody-after.json), [자연 probe](../../tmp/source-gap-instrumentation-final-20261006/natural-probe-after.json), [read-only monitor](../../tmp/source-gap-instrumentation-final-20261006/source-gap-monitor-readonly-after.json).
+
+기계·보조 정책 재생성, 조건부 경제성 재생 구현, 새 API/FID/REG/REMOVE 계약 변경, 광범위 장후 작업 및 외부 문서 동기화는 수행하지 않았다. native read-only broker helper로 재기동 수용만 확인했다. 검증 범위는 코드·배포·기동 및 새 계측 소비다.
