@@ -83,7 +83,7 @@
 
 - [ ] `[WidgetFullRetirement1006] 위젯 런타임·장후·관측·연구·화면/API 전체 제거` (`Due: 2026-10-06`, `Slot: MANUAL`, `TimeWindow: 실행 중; 외부 제거·자연 장후/기동 후 종결`, `Track: RuntimeStability`)
   - Source: [위젯 전체 제거계획](../proposals/widget-full-runtime-postclose-retirement-plan-2026-10-06.md), [정적 의존성·설치 현황](../../tmp/widget-full-retirement-planning-20261006/inventory.json).
-  - 상태: 실행 승인 후 보완 중. 신규 BUY 차단 후 fresh broker/custody terminal 대사와 전용 unit 정지·mask, web route 차단을 완료했다. 공통 이관·stage/설치 제거 코드는 리뷰/회귀 중이며 최종 릴리스 반영·정리는 별도 receipt로 확인한다.
+  - 상태: 서버 코드·배포·정리 검증 완료. 커밋 `b53a3835`, 대상 3,382 PASS/skip 1, 전용 unit 11개 mask, API 404, 설치 Widget dispatch 0, 정책 pin 366개 검증. 전용 데이터 2,668개와 임시 릴리스 삭제 후 약 639MiB 확보. [최종 감사](../audits/widget-full-retirement-execution-review-2026-10-06.md). Main/에피소드 새 코드·episode fact producer의 실제 소비, 10/7 dated 정책 생성은 자연 장후/기동 receipt로 확인한다.
   - 외부/자연 acceptance: Windows는 운영자가 직접 제거 예정. 실제 제거 확인과 새 장후·다음 기동 receipt 전까지 G4/G5를 완료하지 않는다.
   - 범위: 자동/수동 위젯 주문, 가격 API·Windows client, collector/Telegram, 종목·보조 연구와 정책 발행, unit/timer/installer, 장후/PREOPEN/감시·배분, 전용 cache/data 정리.
   - 선행조건: 신규 widget BUY/ADD·수동 진입 차단 뒤 fresh broker/custody 대사; 잔여 노출 종결 또는 승인된 정확한 인계. 당시 로컬 수량 0은 broker flat 증거가 아니다.

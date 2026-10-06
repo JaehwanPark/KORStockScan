@@ -2,7 +2,7 @@
 
 작성: `2026-10-06 KST`
 
-상태: **사용자 실행 승인 후 구현·반복 리뷰 진행 중**. 아래 §12는 최초 계획 작성 결과이며 현재 실행 결과가 아니다. 코드·서비스 변경과 원 custody 대사는 별도 실행 receipt로 기록한다.
+상태: **서버 코드·배포·정리 검증 완료; Windows 제거 및 자연 장후/기동 acceptance 대기**. 아래 §12는 최초 계획 작성 결과이며 현재 실행 결과가 아니다. 코드·서비스 변경과 원 custody 대사는 별도 실행 receipt로 기록한다.
 
 목표: 위젯 자동·수동 매매, 가격 화면/API, 관측·알림·종목연구, 정책 생성·발행, 장후·PREOPEN·감시 연결을 운영 경로에서 완전히 제거한다. Main 및 에피소드가 소비하는 공통 기능은 해당 소유자로 분리한다. 과거 주문·보유 소유권은 원 증빙으로 추적 가능해야 한다.
 
@@ -202,6 +202,10 @@ W0~W1의 코드·설정 검토와 targeted validation이 닫힌 뒤에 허용된
 
 - 신규 widget BUY 차단 후 broker 잔고·미체결·당일 주문 완전조회가 정상 빈 결과였고, 원 registry의 과거 cancel 2건은 exact 과거 주문의 취소확인으로 terminal append했다. 새 매도·취소 주문은 실행하지 않았다.
 - 전용 service/timer 11개를 중지·설치 제거 후 mask로 재기동을 차단했다. Gunicorn의 위젯 route 등록을 제거하고 이전 endpoint 404 및 다른 화면 200을 확인했다. Main/에피소드 서비스는 이 전환 중 재기동하지 않았다.
-- 비용 계약과 에피소드 연구를 살아 있는 역할 package로 이관했다. Main 비동기 WS 저장 worker가 받은 에피소드 seed 원천을 기록하며 추가 API/구독은 없다. 기존 수량·cost·custody·hard safety를 보존해 회귀 검증 중이다.
+- 비용 계약과 에피소드 연구를 살아 있는 역할 package로 이관했다. Main 비동기 WS 저장 worker가 받은 에피소드 seed 원천을 기록하며 추가 API/구독은 없다. 기존 수량·cost·custody·hard safety를 보존해 최종 대상 회귀 3,382건과 compile/lint/bash 검증을 통과했다.
 - Windows는 **설치되어 있으며 운영자가 직접 제거 예정**이다. 실제 제거 확인 전까지 G4 외부 경계는 대기다. 자연 장후·다음 Main/에피소드 실제 기동 증거도 G5 대기다.
 - 실행 증거 위치: `tmp/widget-retirement-execution-20261006/`. 최종 리뷰·배포·정리 결과는 해당 manifest 및 후속 감사 기록에 적고 이전 PASS를 새 세대에 재사용하지 않는다.
+
+- 최종 코드 커밋 `b53a3835`를 `widget-retired-20261006-b53a3835`로 배포했다. 설치 경로 13개, 에피소드 정책 pin 366개를 검증했고 웹 실제 PID를 대조했다. Main/에피소드 매매 프로세스는 재기동하지 않았다.
+- 전용 데이터·연구 2,668파일과 임시 전환 릴리스를 archive 검증 후 정리했다. 정리 실행 전후 약 639MiB 확보. 과거 가격/주문 원천·공통 custody·에피소드 및 혼합 역사 receipt는 보존했다.
+- 오늘 실제 Main/에피소드 정책 로더는 통과했다. 내일 dated 정책은 자연 장후에서 생성되어야 하며, 새 Main WS worker의 episode fact 소비와 정상 기동은 G5 대기다. [최종 실행 감사](../audits/widget-full-retirement-execution-review-2026-10-06.md).

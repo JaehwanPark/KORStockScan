@@ -27,10 +27,10 @@
 
 ## 검증 및 제한
 
-최종 회귀·배포·정리 결과는 아래 실행 manifest로 확정한다. 초기 회귀의 실패는 수정 후 재검증했으며 이전 결과를 최종 PASS로 사용하지 않는다.
+최종 대상 회귀는 **3,382 PASS · 기존 skip 1건**이다(78개 파일). Python 124개 compile/F821, 변경 shell `bash -n`, diff 검증을 통과했다. 초기 실패를 수정하고 최종 회귀를 다시 실행했다.
 
 - [회귀](../../tmp/widget-retirement-execution-20261006/regression-closure.log), [후속 검증](../../tmp/widget-retirement-execution-20261006/final-supplemental.log), [컴파일·lint](../../tmp/widget-retirement-execution-20261006/compile-and-lint-final.json), [삭제 import census](../../tmp/widget-retirement-execution-20261006/deleted-import-census.json).
-- 프로젝트 전체 pytest collection의 기존 PYRAMID import 오류와 변경 범위 밖 F821 3건은 이번 수정과 구분한다. 변경 Python의 F821와 대상 compile/bash/diff 검증은 통과했다. 대상 회귀의 기존 skip 1건은 유지한다.
+- 프로젝트 전체 pytest collection의 기존 PYRAMID import 오류와 변경 범위 밖 F821 3건은 이번 수정과 구분한다. 변경 Python의 F821와 대상 compile/bash/diff 검증은 통과했다. 대상 회귀의 기존 skip 1건은 유지한다. 데이터 정리 후 공통 비용·장후·publication/retirement 회귀 132건도 통과했다. [정리 후 검증](../../tmp/widget-retirement-execution-20261006/post-cleanup-validation.log).
 - 전용 service/timer 11개는 중지·삭제·mask했다. Main/에피소드 매매 프로세스는 이 제거 작업에서 재기동하지 않는다. 신규 선택 릴리스와 설치 경로는 다음 자연 기동용이며 현재 PID 소비와 구분한다.
 - 위젯 전용 원천은 archive 내용·파일별 SHA/size와 open FD를 확인한 후 운영 경로에서 제거한다. Main이 사용하는 과거 가격 관측·주문 이벤트, 공통 custody, 에피소드 fact, 혼합 역사 admission/cohort/cost receipt는 보존한다.
 
@@ -39,10 +39,23 @@
 | Gate | 현황 | 종료 증거 |
 |---|---|---|
 | G0 | 통과 | fresh broker·원 custody 종결 |
-| G1 | 서버 제거 실행; 최종 route manifest 확인 | 전용 unit/dispatch 0, API 404, 새 owner 거부 |
-| G2 | 코드·대상 회귀 검증; 자연 장후 대기 | 새 날짜 v3 stage/필수 원천에 widget 없음 |
+| G1 | 서버 설치·API·신규 owner/dispatch 제거 검증 통과 | 전용 unit/dispatch 0, API 404, 새 owner 거부 |
+| G2 | 새 코드 계약·대상 회귀 통과; 자연 장후 대기 | 새 날짜 v3 stage/필수 원천에 widget 없음 |
 | G3 | 공통 기능 회귀 및 import 검증 | Main·에피소드 비용/WS/수량/custody/guard 보존 |
-| G4 | 서버 archive/정리; 외부 제거 대기 | Windows 직접 제거 후 운영자 확인 |
+| G4 | 서버 archive·삭제 완료; 외부 제거 대기 | Windows 직접 제거 후 운영자 확인 |
 | G5 | `natural_acceptance_pending` | 10/6 자연 장후 및 다음 Main/에피소드 기동·소비 receipt |
 
 G4 외부와 G5 자연 증거가 남아 있으므로 전체 제거의 최종 완료를 선언하지 않는다. 다른 family의 기존 source gap·격리는 해당 owner가 관리하며 위젯 복원 또는 임의 활성화로 해결하지 않는다.
+
+## 최종 배포·정리 receipt
+
+- 코드 커밋: `b53a3835c90ebfc31812117688b836edb4250b85`. 선택 릴리스: `widget-retired-20261006-b53a3835`. 설치 경로 13개를 반영했으며 Main·에피소드 재기동은 하지 않았다. 웹은 새 릴리스로 재기동했고 실제 PID cwd를 대조했다. source archive와 기존 작업본 patch를 보존했다.
+- 전용 unit/timer 11개 모두 mask/inactive/PID 0. 설치된 widget 실행·의존 참조 0. 옛 혼합 widget/episode drop-in 25개는 보관 후 제거했으며, 공통 설정의 effective environment·cwd·실행/조건 명령은 제거 전후 동일하다. 위젯 인증키/drop-in 3파일과 옛 timer/stamp 6개도 제거했다. mask와 영구 거부 설정은 재복원 방지용이다.
+- 에피소드 unit 122개의 새 릴리스 경로 및 정책 pin 366개 검증 통과. 상태 목록의 과거 failed 39개를 현재 기능 실패 39개로 해석하지 않는다. 이 receipt는 `functional_runtime_health=not_assessed`, Main PID `not_attested`다. 현재 Main·에피소드 PID가 새 코드를 소비했다는 증거는 아니다.
+- 공통 episode fact producer는 새 Main의 기존 WS 저장 worker에서 소비된다. 현재 Main은 재기동하지 않았으므로 이 producer 전환의 자연 소비도 G5 대기다. 기존 episode 자체 원천과 공유 raw를 유지하며 즉시 소비를 주장하지 않는다.
+- root 화면 200. 실제 과거 `/api/widget/samsung-price`, `/api/widget/samsung-order`(POST), `/api/widget/doosan-price`, `/api/widget/hanwha-ocean-price`는 모두 404. 공통 `dostk` API는 위젯 전용 API로 오인해 삭제하지 않았다.
+- 전용 운영/연구 데이터 **2,668파일 · 550,620,404바이트**와 임시 전환 릴리스의 **2,589파일 · 106,597,771바이트**를 archive 내용/해시 확인 후 삭제했다. 삭제 직전 open reference 0. 정리 실행 전후 free space 증가 **669,908,992바이트(약 639MiB)**. archive·새 릴리스 생성 전후를 포함한 전체 세션 증가와는 구분한다. 삭제 source의 bytecode 16개도 정리했다.
+- 가격 관측 4종, 과거 widget 주문 이벤트, 공통 order-owner 원장, episode fact, 혼합 역사 admission/cohort/cost receipt 31개는 살아 있는 소비/추적을 위해 유지했다. 과거 ID/schema의 위젯 문자열은 새 owner/주문/정책 권한이 아니다.
+- 위젯 데이터 제거 후 **10/6 Main dated/effective 및 에피소드 적용 정책 로더 통과**. 에피소드 61개 정책과 격리 3개를 유지한다. 10/7 Main effective incumbent는 로드되며 exact dated/에피소드 정책은 아직 미발행이다. 오늘 자연 장후/PREOPEN 생성이 필요한 상태이며 새 정책 발행·정상 기동 완료로 표시하지 않는다.
+
+[배포](../../tmp/widget-retirement-execution-20261006/deployment-final.json), [설치 검증](../../tmp/widget-retirement-execution-20261006/installed-retirement-final.json), [릴리스·policy pin](../../tmp/widget-retirement-execution-20261006/release-set-final.json), [웹](../../tmp/widget-retirement-execution-20261006/web-final.json), [공통 설정 보존](../../tmp/widget-retirement-execution-20261006/obsolete-dropin-cleanup.json), [삭제 manifest](../../tmp/widget-retirement-execution-20261006/storage-cleanup-final.json), [실제 정책 로더](../../tmp/widget-retirement-execution-20261006/surviving-policy-loaders-final.json), [장후 route](../../tmp/widget-retirement-execution-20261006/postclose-route-final.json), [cron](../../tmp/widget-retirement-execution-20261006/cron-final.json).
