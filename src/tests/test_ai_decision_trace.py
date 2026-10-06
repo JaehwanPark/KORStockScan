@@ -1681,6 +1681,7 @@ def test_no_provider_decision_still_has_trace_without_order_authority(
             "ai_market_snapshot_effective_venue": "KRX",
             "ai_input_preflight_status": "blocked",
             "ai_input_preflight_allowed": False,
+            "ai_input_runtime_preflight_artifact_status": "artifact_missing",
         },
         prompt_type="scalping_entry",
         prompt_version="entry_v1",
@@ -1691,6 +1692,7 @@ def test_no_provider_decision_still_has_trace_without_order_authority(
     row = _rows(trace._trace_path(trace._date_text()))[0]
     assert fields["ai_decision_trace_id"].startswith("aidt-")
     assert row["provider_called"] is False
+    assert row["ai_input_runtime_preflight_artifact_status"] == "artifact_missing"
     assert row["provider_actual"] is None
     assert row["request_capture_status"] == "missing"
     assert row["actual_order_authority"] is False

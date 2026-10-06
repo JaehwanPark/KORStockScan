@@ -2717,6 +2717,7 @@ def record_ai_decision_trace(
                 "machine_source_recovery_parent_attempt_id",
                 "ai_input_preflight_source_timing",
                 "ai_input_preflight_realtime_type_provenance",
+                "ai_input_runtime_preflight_artifact_status",
                 "machine_contract_error",
                 "machine_source_gap_kind",
                 "machine_feature_source_receipt",

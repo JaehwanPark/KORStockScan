@@ -223,3 +223,40 @@ def test_enabled_scanner_enters_new_owner_without_legacy_radar(monkeypatch):
     )
     scanner.run_scalper(is_test_mode=True)
     assert called == [{"token": "token", "event_bus": bus, "is_test_mode": True}]
+
+
+def test_scanner_emits_failed_probe_identity_and_artifact_cause(monkeypatch, tmp_path):
+    import pytest
+    from src.scanners import scalping_scanner as scanner
+    from src.engine.error_detectors import process_health
+
+    class StopScanner(Exception):
+        pass
+
+    result = {
+        "claim": {"code": "058610", "route": "krx_nxt_integrated"},
+        "candidate": {}, "result": "required_feature_insufficient",
+        "reason": "source_quality_blocked_before_assessment",
+        "machine_source_gap_kind": "runtime_preflight_artifact_not_ready",
+        "machine_evaluation_status": "source_quality_blocked_before_assessment",
+        "machine_preflight_artifact_status": "artifact_missing",
+        "evaluation_attempt_id": "machine-source-invalid-exact",
+        "machine_capture_status": "captured", "machine_observation_sha256": "a" * 64,
+    }
+    emitted = []
+    monkeypatch.setattr(scanner, "ZeroBaseDiscoveryRuntime", lambda **_kwargs: type(
+        "Runtime", (), {"drain_results": lambda self: [result]})())
+    monkeypatch.setattr(scanner, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(scanner, "_active_scalping_buy_window", lambda _now: None)
+    monkeypatch.setattr(process_health, "write_heartbeat", lambda _name: None)
+    monkeypatch.setattr(scanner, "_zero_base_log_event", lambda stage, **kwargs: emitted.append((stage, kwargs)))
+    monkeypatch.setattr(scanner.time, "sleep", lambda _seconds: (_ for _ in ()).throw(StopScanner()))
+    with pytest.raises(StopScanner):
+        scanner.run_zero_base_scanner(token="token", event_bus=Bus())
+    assert len(emitted) == 1
+    stage, payload = emitted[0]
+    assert stage == "zero_base_probe_result" and payload["code"] == "058610"
+    assert payload["fields"]["evaluation_attempt_id"] == result["evaluation_attempt_id"]
+    assert payload["fields"]["zero_base_machine_source_gap_kind"] == "runtime_preflight_artifact_not_ready"
+    assert payload["fields"]["zero_base_machine_preflight_artifact_status"] == "artifact_missing"
+    assert payload["fields"]["machine_observation_sha256"] == "a" * 64

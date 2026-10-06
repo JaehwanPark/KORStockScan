@@ -61,6 +61,8 @@
   - 증거: runtime_summary_sha256=`1a94a59a4b26620724e82a96872053f795f5c17cce37863ce07a761451e731f3`, source_artifact=`/home/ubuntu/KORStockScan/data/report/entry_split_order_plan/entry_split_order_plan_2026-10-02.json`.
   - 상태: family=`entry_split`, task_role=`producer_contract_repair`, comparison_status=`source_gap`, resolution_mode=`producer_repair`, prospective_resolution_mode=`-`, first_blocker=`operating_paired_source_missing`.
   - 완료 기준: closure_owner=`entry_split_order_plan`, closure_test=`same frozen submitted-order scope; independent completed-cost model calibration/holdout followed by complete paired candidate calibration/holdout`. policy_receipt_valid=`True`, source_date=`2026-10-02`의 원천·비용 EV·정책·consumer 날짜와 해시를 다시 대조한다.
+  - 후속 상세계획: [probe 체결 조건부 잔여 주문 경제성 재생 보완](../proposals/entry-probe-conditional-owner-replay-remediation-plan-2026-10-06.md). 사전 관측의 미확정 가격을 유지하고, 동결 context와 실제/CF 후속 원천을 결속해 typed 재생을 지원한다. 계획 작성 완료·구현 미실행이며 기존 완료 기준과 OPEN owner를 유지한다.
+  - 실행 순서: 전수 source census → 조건부 계획·context 계약 → 순수 native 계산 parity → 실제 실행 복원 → causal CF·운영 경제성 → consumer·리뷰·회귀. 표본/원본 결손은 해당 scope의 `not_observed`/`source_gap`으로 남기며 성공 보존율 veto나 주문·예약·API/provider 권한을 추가하지 않는다.
   - 권한 경계: null을 0/no-edge로 바꾸거나 threshold·provider·주문·수량·cap·custody·operator lock·hard safety를 우회하지 않는다.
 
 - [ ] `[DirectFamilySourceRepairLowPriceTwoLeg] low_price_two_leg 직접 family 원천·경제성 계약 수리` (`Due: 2026-10-06`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~21:40`, `Track: RuntimeStability`)
@@ -75,6 +77,8 @@
   - 증거: runtime_summary_sha256=`1a94a59a4b26620724e82a96872053f795f5c17cce37863ce07a761451e731f3`, source_artifact=`/home/ubuntu/KORStockScan/data/report/ai_decision_action_outcome_calibration/ai_decision_action_outcome_calibration_2026-10-02.json`.
   - 상태: family=`main_mechanistic_entry`, task_role=`producer_contract_repair`, comparison_status=`source_gap`, resolution_mode=`producer_repair`, prospective_resolution_mode=`-`, first_blocker=`machine_operating_population_unbound`.
   - 완료 기준: closure_owner=`ai_decision_action_outcome_calibration`, closure_test=`future_exact_changed_decision_owner_replay_and_completed_profit_rate`. policy_receipt_valid=`True`, source_date=`2026-10-02`의 원천·비용 EV·정책·consumer 날짜와 해시를 다시 대조한다.
+  - 장중 원천 복구: [058610 preflight 계약 삭제·복구 점검](../audits/main-machine-preflight-source-gap-058610-recovery-2026-10-06.md). 현재 PID pin의 7/23 보호 계약이 11:59 정리 때 삭제돼 계산 전 trace 83건을 차단했다. 12:22:57 archive 동일 bytes/SHA/원래 mtime 복원 뒤 같은 PID의 자연 assessed 13건을 확인했다. 이는 과거 가격 재학습이나 주문 실패 수가 아니다. current dependency receipt를 기존 정리 보호 참조에 연결했다.
+  - 계측 인계: 계산 전 실패의 exact attempt/capture/bundle·primary blocker·artifact 상태를 probe→scanner→trace/monitor에 보존하는 코드 gate를 닫았다. 사용자가 추가 계측 배포·재기동을 명시 승인했고 최종 287 PASS, 정책/PREOPEN·baseline 동결 및 fresh broker/custody gate를 통과했다. Main의 새 PID 소비를 확인하며 별도 source age/필수값 결손·coverage 경보와 058610 새 자연 attempt 미관측은 유지한다. 기존 장후 경제성 완료 기준을 source 복구만으로 체크하지 않는다.
   - 권한 경계: null을 0/no-edge로 바꾸거나 threshold·provider·주문·수량·cap·custody·operator lock·hard safety를 우회하지 않는다.
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->

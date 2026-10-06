@@ -834,6 +834,61 @@ def test_missing_trusted_tape_is_a_feature_gap_not_a_policy_outage(monkeypatch):
     assert result["machine_action"] == ""
 
 
+@pytest.mark.parametrize("status,existing_kind,primary,expected", [
+    ("source_quality_blocked_before_assessment", None, "runtime_preflight_artifact_not_ready", "runtime_preflight_artifact_not_ready"),
+    ("source_quality_blocked_before_assessment", "trusted_tape_source_insufficient", "runtime_preflight_artifact_not_ready", "trusted_tape_source_insufficient"),
+    ("source_quality_blocked_before_assessment", None, None, None),
+    ("required_feature_blocked_before_assessment", None, "required_feature_provider_trade_late", "required_feature_provider_trade_late"),
+])
+def test_source_blocked_probe_keeps_exact_identity_and_primary_cause(
+    monkeypatch, status, existing_kind, primary, expected,
+):
+    import src.engine.scalping.zero_base_probe as module
+
+    monkeypatch.setattr(module, "resolve_entry_candle_session", lambda: "KRX_REGULAR")
+    ws = SimpleNamespace(
+        subscribed_codes={"123456"},
+        _registered_items_by_code={"123456": ("123456_AL",)},
+        get_latest_data=lambda *_args, **_kwargs: _snapshot(
+            route="krx_nxt_integrated", item="123456_AL", epoch=11),
+    )
+    receipt = {
+        "machine_evaluation_status": status,
+        "ai_result_source": "input_preflight_blocked",
+        "entry_source_invalid_primary_blocker": primary,
+        "entry_required_feature_blockers": [primary] if primary else [],
+        "machine_source_gap_kind": existing_kind,
+        "evaluation_attempt_id": "machine-source-invalid-exact",
+        "machine_capture_status": "captured",
+        "machine_observation_sha256": "a" * 64,
+        "machine_bundle_sha256": "b" * 64,
+        "ai_input_runtime_preflight_artifact_status": "artifact_missing",
+    }
+    result = run_zero_base_probe(
+        {"claim": {"code": "123456", "route": "krx_nxt_integrated", "observed_epoch": 10},
+         "candidate": {"code": "123456", "route": "krx_nxt_integrated"}},
+        ws_manager=ws,
+        ai_engine=SimpleNamespace(analyze_target=lambda *_args, **_kwargs: receipt),
+        token="token", now=lambda: 11,
+        tick_fetcher=lambda *_args, **_kwargs: [
+            {"request_code": "123456_AL", "rest_received_ts_ms": 11000}],
+        candle_fetcher=lambda *_args, **_kwargs: (
+            [{"close": 10000}], {"request_code": "123456_AL", "rest_received_ts_ms": 11000}),
+        context_builder=lambda *_args, **_kwargs: {"ready": True},
+        ws_wait_min_exact_0b_count=0,
+    )
+    assert result["result"] == "required_feature_insufficient"
+    assert result["reason"] == status
+    assert result.get("machine_source_gap_kind") == expected
+    assert result["evaluation_attempt_id"] == receipt["evaluation_attempt_id"]
+    assert result["machine_observation_sha256"] == receipt["machine_observation_sha256"]
+    assert result["machine_bundle_sha256"] == receipt["machine_bundle_sha256"]
+    assert result["machine_preflight_artifact_status"] == "artifact_missing"
+    assert result["machine_action"] == ""
+    assert result["actual_order_submitted"] is False
+    assert result["broker_order_forbidden"] is True
+
+
 def test_late_ws_registration_releases_only_after_registration_finishes():
     pending = Future()
     released = []

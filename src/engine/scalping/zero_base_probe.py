@@ -561,6 +561,16 @@ def run_zero_base_probe(
             result["reason"] = "machine_exception:" + type(exc).__name__
             return result
         action = str(machine.get("entry_mechanistic_action") or "").upper()
+        # Preserve the producer's exact receipt even when preflight prevented
+        # assessment. These fields never admit a candidate or change retries.
+        for field in ("evaluation_attempt_id", "machine_evaluation_status",
+                      "machine_capture_status", "machine_observation_sha256",
+                      "machine_bundle_sha256"):
+            if machine.get(field) is not None:
+                result[field] = machine[field]
+        if machine.get("ai_input_runtime_preflight_artifact_status") is not None:
+            result["machine_preflight_artifact_status"] = machine[
+                "ai_input_runtime_preflight_artifact_status"]
         if machine.get("machine_evaluation_status") != "assessed":
             contract_error = machine.get("machine_contract_error")
             if contract_error:
@@ -569,6 +579,16 @@ def run_zero_base_probe(
                           "machine_source_gap_kind"):
                 if field in machine:
                     result[field] = machine[field]
+            if not result.get("machine_source_gap_kind"):
+                status = machine.get("machine_evaluation_status")
+                primary = (machine.get("entry_source_invalid_primary_blocker")
+                           if status == "source_quality_blocked_before_assessment" else None)
+                if status == "required_feature_blocked_before_assessment":
+                    blockers = machine.get("entry_required_feature_blockers")
+                    if isinstance(blockers, list) and blockers:
+                        primary = blockers[0]
+                if isinstance(primary, str) and primary.strip():
+                    result["machine_source_gap_kind"] = primary.strip()
             result["result"] = (
                 "required_feature_insufficient"
                 if machine.get("ai_result_source") == "input_preflight_blocked"
