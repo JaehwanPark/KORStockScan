@@ -121,7 +121,9 @@ def source_gap_semantics(data_root, now, *, tail_bytes=SOURCE_TAIL_BYTES):
             fields = row.get("fields")
             probe_attempt = fields.get("evaluation_attempt_id") if isinstance(fields, dict) else None
             if isinstance(probe_attempt, str):
-                attempt = probe_attempt.strip() or None
+                normalized_attempt = probe_attempt.strip()
+                if normalized_attempt.lower() not in {"", "-", "none", "null"}:
+                    attempt = normalized_attempt
         reason = str(reason)
         if (len(reason) > 80 or not reason
                 or any(char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_:-"

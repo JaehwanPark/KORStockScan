@@ -260,3 +260,13 @@ def test_scanner_emits_failed_probe_identity_and_artifact_cause(monkeypatch, tmp
     assert payload["fields"]["zero_base_machine_source_gap_kind"] == "runtime_preflight_artifact_not_ready"
     assert payload["fields"]["zero_base_machine_preflight_artifact_status"] == "artifact_missing"
     assert payload["fields"]["machine_observation_sha256"] == "a" * 64
+
+    result.update(result="source_unavailable", evaluation_attempt_id=None,
+                  machine_evaluation_status=None, machine_preflight_artifact_status=None)
+    emitted.clear()
+    with pytest.raises(StopScanner):
+        scanner.run_zero_base_scanner(token="token", event_bus=Bus())
+    fields = emitted[0][1]["fields"]
+    assert fields["evaluation_attempt_id"] == "-"
+    assert fields["zero_base_machine_evaluation_status"] == "-"
+    assert fields["zero_base_machine_preflight_artifact_status"] == "-"

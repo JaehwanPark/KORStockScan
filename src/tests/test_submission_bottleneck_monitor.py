@@ -1518,6 +1518,22 @@ def test_probe_preflight_gap_example_retains_exact_attempt(tmp_path):
     assert result["runtime_effect"] is False
 
 
+@pytest.mark.parametrize("missing", [None, "", "-", "None", "null", 0, [], {}])
+def test_probe_missing_attempt_never_becomes_identity_or_collapses_events(tmp_path, missing):
+    now = START + timedelta(minutes=10)
+    rows = []
+    for observed in (now - timedelta(seconds=1), now):
+        row = _probe_source_row(observed, "required_feature_insufficient",
+                               "source_quality_blocked_before_assessment",
+                               kind="runtime_preflight_artifact_not_ready")
+        row["fields"]["evaluation_attempt_id"] = missing
+        rows.append(row)
+    _source_gap_files(tmp_path, now, probes=rows)
+    result = monitor.source_gap_semantics(tmp_path, now)
+    assert result["diagnostics"] == {"machine_probe:runtime_preflight_artifact_not_ready": 2}
+    assert all(row["evaluation_attempt_id"] == "" for row in result["examples"])
+
+
 def test_intraday_source_incident_requires_same_stage_recovery_receipt():
     now = START + timedelta(minutes=10)
     result = {"as_of": now.isoformat(), "incidents": {}, "notification_pending": []}
