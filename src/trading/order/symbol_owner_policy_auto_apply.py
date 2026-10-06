@@ -248,10 +248,20 @@ def _machine_scope_transition_gaps(
 ) -> tuple[list[str], list[str]]:
     """Return missing current markers and legacy markers left after migration."""
 
+    from src.engine.scalping.main_fixed_watch import SPECS
+
+    initial_main_only = {
+        spec.symbol
+        for spec in SPECS
+        if spec.episode_entry_forbidden
+        and set(expected_scope.get(spec.symbol, ()))
+        == {"main_scalping", "manual_operator"}
+    }
     missing_current = [
         symbol
         for symbol in sorted(expected_scope)
         if symbol not in marker_exempt_symbols
+        and symbol not in initial_main_only
         and not machine_owner_scope_source(symbol)
     ]
     remaining_legacy = [

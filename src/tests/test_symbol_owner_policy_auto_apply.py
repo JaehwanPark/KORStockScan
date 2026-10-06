@@ -476,9 +476,16 @@ def test_auto_apply_preserves_recoverable_receipt_if_process_starts_after_apply(
     assert json.loads(result_path.read_text(encoding="utf-8")) == result
 
 
+@pytest.mark.parametrize("missing_initial_main_marker", [False, True])
 def test_auto_apply_recovers_pending_marker_migration_without_reapplying_policy(
-    tmp_path, monkeypatch, auto_scope
+    tmp_path, monkeypatch, auto_scope, missing_initial_main_marker
 ):
+    if missing_initial_main_marker:
+        monkeypatch.setitem(OWNERS, "036930", ["main_scalping", "manual_operator"])
+        monkeypatch.setattr(
+            "src.trading.order.symbol_owner_policy_auto_apply.machine_owner_scope_source",
+            lambda symbol: "" if symbol == "036930" else "machine_owner_scope",
+        )
     authority_path = tmp_path / "authority.json"
     _write_authority(authority_path)
     registry = OrderOwnerRegistry(tmp_path / "registry.jsonl")
@@ -540,6 +547,28 @@ def test_auto_apply_recovers_pending_marker_migration_without_reapplying_policy(
     assert persisted["status"] == "applied"
     assert persisted["apply_receipt"] == pending["apply_receipt"]
     assert "migration_block_reason" not in persisted
+
+
+def test_initial_main_marker_exemption_requires_exact_main_only_owners(monkeypatch):
+    from src.trading.order.symbol_owner_policy_auto_apply import (
+        _machine_scope_transition_gaps,
+    )
+
+    monkeypatch.setattr(
+        "src.trading.order.symbol_owner_policy_auto_apply.machine_owner_scope_source",
+        lambda _symbol: "",
+    )
+    monkeypatch.setattr(
+        "src.trading.order.symbol_owner_policy_auto_apply.legacy_machine_owner_scope_source",
+        lambda symbol: "legacy_machine_owner_scope" if symbol == "036930" else "",
+    )
+    missing, legacy = _machine_scope_transition_gaps({
+        "036930": ["main_scalping", "manual_operator"],
+        "196170": ["main_scalping", "manual_operator", "episode"],
+        "005930": ["main_scalping", "manual_operator"],
+    })
+    assert missing == ["005930", "196170"]
+    assert legacy == ["036930"]
 
 
 def test_auto_apply_keeps_pending_receipt_when_marker_retry_fails(
