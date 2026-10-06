@@ -295,6 +295,40 @@ if [[ "$TARGET_DATE" > "2026-09-08" ]]; then
   # Independent 20:10/21:15 producers may finish after main's original DONE.
   # Reuse the controller after exact independent terminal validation. No EV,
   # provider, workorder producer, live apply, or whole-wrapper recovery here.
+  # A closed source may have a valid v2 predecessor generation. Recompute only
+  # its summary with the current v3 owner before resealing the controller;
+  # never synthesize v3 policy/research terminals or replay those producers.
+  if [[ "$RECOVERY_MODE" == "true" ]]; then
+    migrate_summary="$(env PYTHONPATH=. "$VENV_PY" - "$PROJECT_DIR" "$TARGET_DATE" <<'PY'
+import sys
+from pathlib import Path
+from src.engine.automation.postclose_summary_handoff import _load_json, stage_path, stage_receipt_issues
+receipt = _load_json(stage_path(Path(sys.argv[1]) / 'data/report', sys.argv[2], 'summary_handoff'))
+issues = stage_receipt_issues(Path(sys.argv[1]) / 'data/report', sys.argv[2], 'summary_handoff') if receipt else []
+print('true' if receipt and issues else 'false')
+PY
+)" || {
+      echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=summary_stage_migration_check_failed"
+      run_final_detector || true
+      exit 1
+    }
+    if [[ "$migrate_summary" == "true" ]]; then
+      summary_budget="$(bounded_stage_budget "$SUMMARY_TIMEOUT_SEC")" || {
+        echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=finish_by_cutoff_elapsed_before_summary"
+        run_final_detector || true
+        exit 1
+      }
+      if ! timeout --kill-after=10s "${summary_budget}s" env PYTHONPATH=. POSTCLOSE_STAGE_WORKER=1 \
+        "$VENV_PY" -m src.engine.automation.postclose_summary_handoff \
+        --stage summary_handoff --date "$TARGET_DATE" \
+        --publication-date "$(TZ=Asia/Seoul date +%F)" --recover-closed-target \
+        --timeout-sec "$summary_budget"; then
+        echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=summary_stage_migration_failed"
+        run_final_detector || true
+        exit 1
+      fi
+    fi
+  fi
   controller_started_after_ns="$(date +%s%N)"
   summary_budget="$(bounded_stage_budget "$SUMMARY_TIMEOUT_SEC")" || {
     echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=finish_by_cutoff_elapsed_before_summary"
@@ -413,14 +447,28 @@ else
   finalization_generation_fields=""
 fi
 if [[ "$TARGET_DATE" > "2026-09-27" ]]; then
-  prepare_budget="$(bounded_stage_budget 120)" || {
-    echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=finish_by_cutoff_elapsed_before_preopen_preparation"
+  preparation_disposition="$(env PYTHONPATH=. "$VENV_PY" - "$TARGET_DATE" "$TARGET_EFFECTIVE_DATE" "$RECOVERY_MODE" <<'PY'
+import sys
+from src.engine.automation.next_preopen_readiness import finalization_preparation_disposition
+print(finalization_preparation_disposition(sys.argv[1], sys.argv[2], recovery=sys.argv[3] == 'true'))
+PY
+)" || {
+    echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=preopen_source_session_mismatch"
     exit 1
   }
-  if ! timeout --kill-after=10s "${prepare_budget}s" env PYTHONPATH=. "$VENV_PY" \
-    -m src.engine.automation.next_preopen_readiness --prepare --source-date "$TARGET_DATE"; then
-    echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=next_preopen_preparation_failed"
-    exit 1
+  if [[ "$preparation_disposition" == "historical_recovery_no_prepare" ]]; then
+    echo "[INFO] postclose_finalization target_date=${TARGET_DATE} effective_date=${TARGET_EFFECTIVE_DATE} preopen=not_applicable_historical_recovery runtime_effect=false"
+  else
+    prepare_budget="$(bounded_stage_budget 120)" || {
+      echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=finish_by_cutoff_elapsed_before_preopen_preparation"
+      exit 1
+    }
+    if ! timeout --kill-after=10s "${prepare_budget}s" env PYTHONPATH=. "$VENV_PY" \
+      -m src.engine.automation.next_preopen_readiness --prepare --source-date "$TARGET_DATE" \
+      --target-date "$TARGET_EFFECTIVE_DATE"; then
+      echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=next_preopen_preparation_failed"
+      exit 1
+    fi
   fi
 fi
 detector_finished_at="$(TZ=Asia/Seoul date +%FT%T%z)"

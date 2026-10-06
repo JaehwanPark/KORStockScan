@@ -259,6 +259,64 @@ def test_cleanup_failure_preserves_detector_handoff_but_not_success_marker(tmp_p
     assert "[DONE] postclose_finalization" not in result.stdout
 
 
+@pytest.mark.parametrize('migration_rc,expected_order', [
+    (0, ['migration', 'controller', 'cleanup', 'detector']),
+    (9, ['migration', 'detector']),
+])
+def test_closed_target_migrates_only_summary_before_controller(
+    tmp_path, monkeypatch, migration_rc, expected_order,
+):
+    monkeypatch.setattr(sys.modules[__name__], 'TARGET_DATE', '2026-09-09')
+    project = tmp_path / 'project'
+    project.mkdir()
+    _write_ready_predecessors(project)
+    cleanup, detector = project / 'bin/cleanup.sh', project / 'bin/detector.sh'
+    _write_executable(cleanup, 'printf "cleanup\\n" >> "$PROJECT_DIR/order.txt"\n')
+    _write_executable(detector, 'printf "detector\\n" >> "$PROJECT_DIR/order.txt"\n')
+    python = project / 'bin/python'
+    # Mock only native receipt/command boundaries. Hash/schema authentication
+    # is exercised by the handoff, controller and strict-verifier tests.
+    _write_executable(python, '''
+if [[ "${1:-}" == "-m" ]]; then
+  case "$2" in
+    src.engine.automation.postclose_summary_handoff)
+      [[ " $* " == *" --stage summary_handoff "* ]]
+      [[ " $* " == *" --recover-closed-target "* ]]
+      printf 'migration\\n' >> "$PROJECT_DIR/order.txt"
+      exit "$MOCK_MIGRATION_RC" ;;
+    src.engine.automation.postclose_done_controller)
+      printf 'controller\\n' >> "$PROJECT_DIR/order.txt"
+      exit 0 ;;
+    *) exit 99 ;;
+  esac
+fi
+if [[ "${1:-}" == "-" ]]; then
+  script_body="$(cat)"
+  if [[ "$script_body" == *installed_producer_terminal_states* ]]; then
+    printf 'ready|-|stage_group:machine:done,threshold_artifact:done\\n'; exit 0
+  elif [[ "$script_body" == *'issues = stage_receipt_issues'* ]]; then
+    printf 'true\\n'; exit 0
+  elif [[ "$script_body" == *done_terminal_receipt_issues* ]]; then
+    printf '{"status":"pass","issues":[]}\\n'; exit 0
+  fi
+  printf '%s' "$script_body" | "$REAL_PY" "$@"
+  exit $?
+fi
+exec "$REAL_PY" "$@"
+''')
+    result = subprocess.run(
+        ['bash', str(WRAPPER), TARGET_DATE, '--recover-closed-target'],
+        env={**_base_env(project, cleanup, detector), 'VENV_PY': str(python),
+             'REAL_PY': sys.executable, 'MOCK_MIGRATION_RC': str(migration_rc)},
+        text=True, capture_output=True,
+    )
+    assert result.returncode == (0 if migration_rc == 0 else 1), result.stdout + result.stderr
+    assert (project / 'order.txt').read_text().splitlines() == expected_order
+    if migration_rc:
+        assert 'reason=summary_stage_migration_failed' in result.stdout
+        assert '[DONE] postclose_finalization' not in result.stdout
+
+
 def test_finalization_reserves_morning_margin_before_preopen():
     script = WRAPPER.read_text(encoding="utf-8")
 

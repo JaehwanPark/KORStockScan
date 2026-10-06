@@ -49,6 +49,25 @@ def target_after_postclose(source_date: str, *, now: datetime | None = None) -> 
     return _next_trading_day(current.date()).isoformat()
 
 
+def finalization_preparation_disposition(
+    source_date: str, effective_date: str, *, recovery: bool = False,
+    now: datetime | None = None,
+) -> str:
+    """A historical finalizer closes its source, never rolls it into a new day."""
+    source = date.fromisoformat(source_date)
+    effective = date.fromisoformat(effective_date)
+    current = (now or datetime.now(KST)).astimezone(KST)
+    if (source.isoformat() != source_date or effective.isoformat() != effective_date
+            or source > current.date() or _next_trading_day(source) != effective):
+        raise ValueError("preopen_source_session_mismatch")
+    if (current.date() > effective
+            or (current.date() == effective and current.time() >= PREOPEN_START)):
+        if recovery:
+            return "historical_recovery_no_prepare"
+        raise ValueError("preopen_source_session_already_opened")
+    return "prepare_exact_effective_date"
+
+
 def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 

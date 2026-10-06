@@ -1166,7 +1166,8 @@ def build_runtime_approval_summary(
                         and winrate_source.get('disposition') == 'incumbent_carried'
                         and winrate_source.get('candidate_policy') is None
                         and not stage_receipt_issues(
-                            DATA_DIR / 'report', target_date, 'main_machine_policy'))
+                            DATA_DIR / 'report', target_date, 'main_machine_policy',
+                            allow_historical_terminal=True))
                 row['winrate_policy'] = dict(selection_basis=winrate_source.get('selection_basis'),
                     disposition=winrate.get('disposition'),
                     report_sha256=winrate.get('report_sha256'),

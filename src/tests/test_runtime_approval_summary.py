@@ -532,7 +532,7 @@ def test_main_current_carry_keeps_original_publication_and_requires_native_stage
         'machine_policy_terminal'], {'staged': {'status': staged_status, 'target_date': staged_day}})
     monkeypatch.setattr(policy, 'current_strategy_receipt', lambda **kwargs: {'status': 'valid'})
     monkeypatch.setattr(policy, 'load', lambda **kwargs: bundle)
-    monkeypatch.setattr(handoff, 'stage_receipt_issues', lambda *args: stage_issues)
+    monkeypatch.setattr(handoff, 'stage_receipt_issues', lambda *args, **kwargs: stage_issues)
 
     result = mod.build_runtime_approval_summary(day)['sources']['main_mechanistic_entry']
     assert result['policy_receipt']['valid'] is expected

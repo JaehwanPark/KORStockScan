@@ -874,6 +874,60 @@ def test_historical_summary_consumer_preserves_exact_generation_only(stage_envir
     assert path.read_bytes() == before
 
 
+@pytest.mark.parametrize('damage', [
+    None, 'output', 'prerequisite', 'digest', 'code', 'failed',
+    'new_publication', 'invalid_publication', 'source_date',
+])
+def test_historical_terminal_consumer_keeps_producer_and_hash_guards(stage_environment, damage):
+    h, day, report, run, _produce = stage_environment
+    assert run('machine_attribution')['status'] == 'succeeded'
+    assert run('machine_timing')['status'] == 'succeeded'
+    path = h.stage_path(report, day, 'machine_timing')
+    value = h._load_json(path)
+    value['schema'] = 'postclose_stage_terminal_v2'
+    h._stage_write(path, value)
+    assert h.stage_receipt_issues(report, day, 'machine_timing')
+    if damage == 'output':
+        h.stage_artifacts(report, day, 'machine_timing')['machine_entry_timing_tuning'].write_text('{}')
+    elif damage == 'prerequisite':
+        h.stage_path(report, day, 'machine_attribution').write_text('{}')
+    elif damage == 'digest':
+        value['run_id'] = 'unsealed-change'
+        path.write_text(json.dumps(value))
+    elif damage:
+        if damage == 'code': value['stage_code_sha256'] = 'unknown-code'
+        elif damage == 'failed': value.update(status='failed', exit_code=1)
+        elif damage == 'new_publication': value['publication_date'] = '2026-10-06'
+        elif damage == 'invalid_publication': value['publication_date'] = '2026-10-00'
+        elif damage == 'source_date': value['source_date'] = '2026-09-22'
+        h._stage_write(path, value)
+    before = path.read_bytes()
+    issues = h.stage_receipt_issues(report, day, 'machine_timing', allow_historical_terminal=True)
+    assert bool(issues) is (damage is not None), issues
+    assert path.read_bytes() == before
+    assert 'widget_policy' not in h.STAGE_REGISTRY
+
+
+def test_legacy_machine_code_hash_still_binds_original_dependencies(tmp_path):
+    from src.engine.automation import postclose_summary_handoff as h
+    dispatcher = tmp_path / 'src/engine/automation/postclose_summary_handoff.py'
+    fixed_watch = tmp_path / 'src/engine/scalping/main_fixed_watch.py'
+    original = tmp_path / 'src/engine/scalping/ai_action_outcome_calibration.py'
+    for path in (dispatcher, fixed_watch, original):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('# first generation\n')
+    commands = h.stage_commands('main_machine_policy', '2026-10-02', '2026-10-05')
+    def digest(legacy):
+        return h._stage_code('main_machine_policy', commands, tmp_path,
+                             dispatcher_path=dispatcher, legacy_main_machine=legacy)
+    old, current = digest(True), digest(False)
+    fixed_watch.write_text('# new fixed-watch generation\n')
+    assert digest(True) == old
+    assert digest(False) != current
+    original.write_text('# changed original producer\n')
+    assert digest(True) != old
+
+
 def test_summary_handoff_reseals_verified_final_controller(stage_environment):
     h, day, report, run, _produce = stage_environment
     assert run('summary_handoff')['status'] == 'succeeded'

@@ -11,6 +11,25 @@ from src.engine.automation import next_preopen_readiness as readiness
 KST = ZoneInfo("Asia/Seoul")
 
 
+@pytest.mark.parametrize('clock,recovery,expected', [
+    ('2026-10-06T07:34:59+09:00', True, 'prepare_exact_effective_date'),
+    ('2026-10-06T07:35:00+09:00', True, 'historical_recovery_no_prepare'),
+    ('2026-10-06T15:30:00+09:00', True, 'historical_recovery_no_prepare'),
+    ('2026-10-07T01:00:00+09:00', True, 'historical_recovery_no_prepare'),
+    ('2026-10-06T15:30:00+09:00', False, None),
+])
+def test_finalization_recovery_never_prepares_another_session(clock, recovery, expected):
+    # Oct 5 is a KRX holiday; the original Oct 2 source belongs to Oct 6.
+    kwargs = dict(recovery=recovery, now=datetime.fromisoformat(clock))
+    if expected is None:
+        with pytest.raises(ValueError, match='already_opened'):
+            readiness.finalization_preparation_disposition('2026-10-02', '2026-10-06', **kwargs)
+    else:
+        assert readiness.finalization_preparation_disposition('2026-10-02', '2026-10-06', **kwargs) == expected
+    with pytest.raises(ValueError, match='source_session_mismatch'):
+        readiness.finalization_preparation_disposition('2026-10-02', '2026-10-07', **kwargs)
+
+
 def _json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload) + "\n", encoding="utf-8")

@@ -52,7 +52,8 @@ def installed_producer_terminal_states(
     if any(stage_path(report_dir, target_date, s).exists() for s in STAGE_REGISTRY):
         result = {}
         for owner, stages in STAGE_OWNER_GROUPS.items():
-            checks = [issue for stage in stages for issue in stage_receipt_issues(report_dir, target_date, stage)]
+            checks = [issue for stage in stages for issue in stage_receipt_issues(
+                report_dir, target_date, stage, allow_historical_terminal=True)]
             running = any(_load_json(stage_path(report_dir, target_date, stage)).get('status') in {'running','pending'} for stage in stages)
             result['stage_group:' + owner] = 'waiting_running' if running else 'failed_receipt:' + ','.join(checks) if checks else 'done'
         return result
@@ -689,7 +690,8 @@ def producer_receipt_issues(report_dir: Path, day: str, owner: str) -> list[str]
     from src.engine.verify_threshold_cycle_postclose_chain import _sha
     if any(stage_path(report_dir, day, s).exists() for s in STAGE_REGISTRY):
         return [issue for stage in STAGE_OWNER_GROUPS[owner]
-                for issue in stage_receipt_issues(report_dir, day, stage)]
+                for issue in stage_receipt_issues(
+                    report_dir, day, stage, allow_historical_terminal=True)]
     value = _load_json(producer_receipt_path(report_dir, day, owner))
     if (value.get("status") != "succeeded" or value.get("target_date") != day
         or value.get("owner") != owner or type(value.get("exit_code")) is not int
@@ -958,24 +960,28 @@ def reseal_summary_handoff_for_final_controller(report_dir, day, controller_path
 
 
 def stage_receipt_issues(report_dir, day, stage, *, code_hash=None,
-                         allow_historical_summary=False):
+                         allow_historical_summary=False,
+                         allow_historical_terminal=False):
     value = _load_json(stage_path(report_dir, day, stage))
-    # Only a policy consumer may authenticate a pre-retirement summary. New
-    # producers still require v3, including recovery for an older source day.
+    # Read-only consumers may authenticate unchanged pre-retirement evidence.
+    # Dispatch/check/reuse of a producer still requires v3. This never rewrites
+    # a v2 receipt or brings the retired Widget stages back into the registry.
     historical_summary = False
-    if (allow_historical_summary and stage == 'summary_handoff'
+    historical_terminal = False
+    if ((allow_historical_terminal or (allow_historical_summary and stage == 'summary_handoff'))
             and value.get('schema') == 'postclose_stage_terminal_v2'):
         from datetime import date
         try:
             publication = value.get('publication_date', day)
-            historical_summary = (
+            historical_terminal = (
                 date.fromisoformat(day).isoformat() == day
                 and date.fromisoformat(publication).isoformat() == publication
                 and '2026-06-05' <= day <= publication < '2026-10-06'
             )
         except (TypeError, ValueError):
             pass
-    if ((value.get('schema') != STAGE_SCHEMA and not historical_summary) or value.get('stage_id') != stage
+        historical_summary = historical_terminal and stage == 'summary_handoff'
+    if ((value.get('schema') != STAGE_SCHEMA and not historical_terminal) or value.get('stage_id') != stage
         or value.get('source_date') != day or not value.get('run_id')
         or value.get('receipt_sha256') != _stage_digest({k:v for k,v in value.items() if k != 'receipt_sha256'})):
         return [f'{stage}:terminal_missing_or_invalid']
@@ -1033,6 +1039,16 @@ def stage_receipt_issues(report_dir, day, stage, *, code_hash=None,
                             dispatcher_path=release_dispatcher))
                         if value.get('stage_code_sha256') in compatible:
                             break
+                        if historical_terminal and stage == 'main_machine_policy':
+                            # Before fixed-watch publication, this stage did
+                            # not include the three newly added dependencies.
+                            # Authenticate that old contract against retained
+                            # immutable code, never against a supplied hash.
+                            compatible.add(_stage_code(stage, commands, release_root,
+                                dispatcher_path=release_dispatcher,
+                                legacy_main_machine=True))
+                            if value.get('stage_code_sha256') in compatible:
+                                break
         if value.get('stage_code_sha256') not in compatible:
             return [f'{stage}:code_changed']
     expected = stage_artifacts(report_dir, day, stage)
@@ -1494,7 +1510,8 @@ def stage_commands(stage, day, publication, *, recovery=False):
     return [command('automation.postclose_done_controller', '--date', day, '--summary-handoff-only', '--require-independent-producers')]
 
 
-def _stage_code(stage, commands, project, *, dispatcher_path=None):
+def _stage_code(stage, commands, project, *, dispatcher_path=None,
+                legacy_main_machine=False):
     paths = {'dispatcher': Path(dispatcher_path or __file__)}
     for cmd in commands:
         if '-m' in cmd:
@@ -1511,9 +1528,10 @@ def _stage_code(stage, commands, project, *, dispatcher_path=None):
     if stage == 'research_capacity':
         paths['native_capacity'] = project / 'src/engine/monitoring/research_native_capacity_source.py'
     if stage == 'main_machine_policy':
-        paths['main_fixed_watch_research'] = project / 'src/engine/monitoring/main_fixed_watch_policy_research.py'
-        paths['fixed_watch_runtime'] = project / 'src/engine/scalping/main_fixed_watch.py'
-        paths['owner_retirement'] = project / 'src/trading/config/owner_retirement.py'
+        if not legacy_main_machine:
+            paths['main_fixed_watch_research'] = project / 'src/engine/monitoring/main_fixed_watch_policy_research.py'
+            paths['fixed_watch_runtime'] = project / 'src/engine/scalping/main_fixed_watch.py'
+            paths['owner_retirement'] = project / 'src/trading/config/owner_retirement.py'
         for name in ('entry_strategy_policy', 'entry_setup_evidence', 'ai_decision_quality', 'entry_candle_context', 'mechanistic_entry_runtime_policy',
                      'entry_admission_analysis', 'entry_admission_acceptance', 'entry_admission_recipe', 'entry_designated_policy'):
             paths[name] = project / f'src/engine/scalping/{name}.py'
@@ -1734,7 +1752,8 @@ def run_stage(stage, day, *, report_dir, project, publication=None, effective=No
 
 def stage_overview(report_dir, day):
     states = {s:_load_json(stage_path(report_dir, day, s)) for s in active_stage_names(day)}
-    issues = {s:stage_receipt_issues(report_dir, day, s) for s in states if s != 'summary_handoff'}
+    issues = {s:stage_receipt_issues(report_dir, day, s, allow_historical_terminal=True)
+              for s in states if s != 'summary_handoff'}
     # Startup evidence has its own date and contract, independent of diagnostics.
     from src.engine.build_next_stage2_checklist import _next_krx_trading_day
     effective = _next_krx_trading_day(day)

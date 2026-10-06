@@ -374,7 +374,8 @@ def build_threshold_cycle_postclose_verification(
     if require_whole_native_chain:
         from src.engine.automation.postclose_summary_handoff import stage_receipt_issues
         for stage in stages:
-            if stage_receipt_issues(REPORT_DIR, target_date, stage):
+            if stage_receipt_issues(REPORT_DIR, target_date, stage,
+                                   allow_historical_terminal=True):
                 issues.append(f"postclose_stage_invalid:{stage}")
     binding = (
         {
