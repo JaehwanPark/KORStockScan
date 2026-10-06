@@ -46,4 +46,10 @@ E의 30초/최대 3회 새 원천 재평가에서 직접 후보와 다른 회수
 
 ## 최종 운영 영수증
 
-배포 및 최종 native 검사 후 아래에 실제 receipt를 기록한다.
+- 구현 커밋 `95b6a016` + WATCHING provenance 추가 수리 `b9831035e8c705088813a14e6330b44a9b8390c8`. 최종 immutable release=`/home/ubuntu/KORStockScan-runtime-releases/main-submit-drought-20261006-b9831035`. 기동 전 준비한 첫 release는 소비 전에 철회했다.
+- 재기동 직전 두 native KRX/NXT 잔고·미체결 snapshot 일치, Main 5종목 잔고/미체결/전체 날짜 미해결 intent/custody 잔량 0. 기존 native graceful restart에서 이전 PID `169115` 종료→새 PID **290462**; 19:52:28 당일 bootstrap/환경/해시 PASS. launcher PID/cwd receipt가 최종 release를 소비한다. 19:52:56 이후 WS 0D 및 0B 첫 수신도 확인했다.
+- 최종 release-set check PASS, Main PID binding=`matches_selected_release`; 남은 episode 31개 profile/62개 route의 기존 `511664f3` pin과 186개 원 정책 pin PASS. 현재 inactive인 episode를 기동하거나 퇴역 Widget/episode를 복원하지 않았다.
+- 원 정책·PREOPEN 34개 SHA 불변. 기계 정책값·기본 AI 정책/prompt hash·수량·청산·broker/provider/custody guard 변경 없음. 공통 WATCHING 평가 허용과 recipe 근거 소비는 이번에 수정한 실행 동작이다.
+- 새 PID/checklist를 읽은 native summary→tower/checklist→strict/controller→cleanup→final detector **19:56:48 DONE**. chain=`159ba4fcdf2db547b062f83851c89a6319b61c4aebb185d4ae6b4cc964396131`, 원 snapshot=`de8c7a024a0ad4b385fda97148f5e1043fdc6e3161eb981ecbd12f7b081bf112` 유지. strict binding=`beae58085a4971b24f75f74bead8045452ca65e55d0d3cf5be08a3e7c9596b8a`, summary=`00b7bc3ad80ad6138c6acbcbffe7f63bdb4a073cbea9a018c2e14488081e754e`. 과거 10/2 복구이며 새 미래 PREOPEN/전장후 생산자를 재실행하지 않았다.
+- 19:57:52 당일 읽기 전용 full detector **FAIL 0**, process PASS, operational mutation 0. cron cleanup/finalization은 원 06:50 상한 이후 완료를 뜻하는 `recovered_late` 경고로 유지한다. 원 Main/compact 운영 경제성·stop/plan 결손과 episode 원천 경고는 그대로이며 이번 가격 CF로 해소 처리하지 않는다. 19:58:33 독립 검사에서 marker/controller issues 0, 현재 checklist SHA 일치, PID/cwd와 원 정책 34개 불변을 재확인했다.
+- 최종 증거: `runtime-verification.json`, `release-set-after.json`, `terminal-verification.json`, `current-date-health.json`, `exact-contract-replay.json`, 회귀 로그. 다음 적격 KRX 정규장 recipe 자연 수용은 **not_observed**이며 기존 stable owner에 남았다. 이번 코드 검토 범위의 미해결 finding은 0이다.
