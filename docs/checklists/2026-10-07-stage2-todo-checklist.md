@@ -172,3 +172,9 @@
 - 자연 원천/model/미사용 holdout·정규 PREOPEN/PID·비용 후 성과는 기존 owner `KiwoomCommonHealthOpportunityCostAcceptance0917`의 Acceptance다. 전체 native DONE/PID 소비를 주장하지 않는다.
 
 <!-- entry_cancel_wait_handoff:end -->
+
+- [ ] `[SemanticMonitorProducerConsumerRefresh1007] 의미적 감시 현행화 통합 배포·승인 재기동·새 PID 자연 수용` (`Due: 2026-10-07`, `Slot: INTRADAY`, `TimeWindow: 08:30~20:00`, `Track: RuntimeStability`)
+  - Source: [현행화 계획](../proposals/semantic-monitor-current-producer-consumer-refresh-plan-2026-10-07.md), [실행 검토](../audits/semantic-monitor-current-producer-consumer-implementation-review-2026-10-07.md).
+  - 권한: 사용자 의미적 감시 개선 구현·반복 리뷰·전체 작업본 통합 배포·재기동 명시 승인. 기계/보조 12+12 raw 승률 정책, quota=None, broker/order/custody/수량/가격·stale/conflict/manual/retirement hard guard는 변경하지 않는다.
+  - Acceptance: SM01~SM09의 native/legacy dispatch, receipt event/cell/rule/arm/input/prompt/schema/PID 결속, 기계 stage 알림과 exact generation 복구, 현재 parsed owner, historical/OFF/현재 31profile 분리, retirement negative census, 7detector/19cron/40artifact/6heartbeat/13native-stage 기능 coverage. 리뷰·수정·재검토·targeted regression finding 0 뒤 통합 immutable release와 policy-preserving intraday handoff로 재기동한다. checklist 최종 bytes 후 summary/strict/controller/prepared를 native 재봉인한다. EOD·frozen 연구 원천·실제 연구 응답·unchanged policy pin을 보존한다.
+  - 자연 수용: 현재 PID cwd/start ticks/native bundle 및 신규 continuous_reversal_consumption_v1 → source semantic → notifier 연결을 확인한다. 원 machine_raw_input_missing incident와 historical 실패는 삭제하지 않고 복구 이력으로 보존한다. 실제 ENTER/provider/PASS/submit/fill 표본 부재는 not_observed이며 강제 호출·주문·threshold 변경으로 만들지 않는다. main/episode/fixed-watch 잔여 원천은 기존 OPEN owner에 남긴다.

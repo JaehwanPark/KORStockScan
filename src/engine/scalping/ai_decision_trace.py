@@ -1073,6 +1073,8 @@ def capture_machine_observation(
     assessment: dict,
     bundle_sha256: str,
     metadata: dict[str, Any] | None = None,
+    reversal_context: dict[str, Any] | None = None,
+    reversal_request: dict[str, Any] | None = None,
 ) -> dict:
     """Capture every machine anchor without inventing an AI request/outcome.
 
@@ -1176,6 +1178,7 @@ def capture_machine_observation(
             "exact_payload": exact_payload,
             "setup_evidence": setup_evidence,
             "assessment": assessment,
+            **({'auxiliary_request': reversal_request} if reversal_request is not None else {}),
         }
     )
     context, context_redacted = _sanitize(context)
@@ -1209,6 +1212,26 @@ def capture_machine_observation(
         "allowed_runtime_apply": False,
         "broker_order_forbidden": True,
     }
+    if reversal_context is not None:
+        body['capture_contract'] = 'continuous_reversal_consumption_v1'
+        native, native_redacted = _sanitize(reversal_context)
+        body['runtime_consumption']['continuous_reversal'] = {
+            **native,
+            'schema': 'continuous_reversal_consumption_v1',
+            'event_id': assessment.get('event_id'),
+            'cell_key': assessment.get('cell_key'),
+            'rule': assessment.get('rule'),
+            'bundle_sha256': bundle_sha256,
+            'exact_payload_sha256': hashlib.sha256(_json_bytes(source['exact_payload'])).hexdigest(),
+            'assessment_sha256': hashlib.sha256(_json_bytes(source['assessment'])).hexdigest(),
+            'pid': body['runtime_consumption']['pid'],
+            'process_start_ticks': body['runtime_consumption']['process_start_ticks'],
+            'captured_at': now.isoformat(),
+            'provider_request_observed': False,
+            'provider_state': ('eligible_not_yet_requested' if assessment.get('action') == 'ENTER_NOW'
+                               else 'not_requested_machine_nonentry'),
+        }
+        body['redacted'] = redacted or native_redacted
     digest = hashlib.sha256(_json_bytes(body)).hexdigest()
     try:
         _append_jsonl(
@@ -1225,6 +1248,8 @@ def capture_machine_observation(
         "machine_capture_status": "redacted_ineligible" if redacted else "captured",
         "machine_observation_sha256": digest,
         "machine_observation_captured_at": now.isoformat(),
+        **({'continuous_reversal_consumption': body['runtime_consumption']['continuous_reversal']}
+           if reversal_context is not None else {}),
         **{key: context[key] for key in (
             "machine_source_recovery_parent_sha256", "machine_source_recovery_parent_attempt_id",
         ) if context.get(key)},
@@ -1471,6 +1496,18 @@ def capture_ai_request(
             **STORAGE_SECURITY_CONTRACT,
             **OBSERVATION_CONTRACT,
         }
+        native = metadata_row.get('continuous_reversal_consumption')
+        if isinstance(native, dict):
+            binding = dict(machine_observation_sha256=metadata_row.get('machine_observation_sha256'),
+                continuous_reversal_consumption=native,
+                observed_input_sha256=sanitized_replay_context_sha256,
+                observed_prompt_sha256=prompt_sha256,
+                request_id=trace_id, provider_fact='request_prepared_not_execution')
+            binding['binding_status'] = ('matched' if
+                native.get('input_sha256') == sanitized_replay_context_sha256
+                and native.get('prompt_sha256') == prompt_sha256 else 'mismatch')
+            request_row['continuous_reversal_request_binding'] = binding
+            payload_row['continuous_reversal_request_binding'] = binding
         timings["ai_trace_prepare_ms"] = (time.perf_counter() - started) * 1000
         lock_started = time.perf_counter()
         with _WRITE_LOCK:
@@ -2633,6 +2670,7 @@ def record_ai_decision_trace(
                     "entry_required_feature_blockers",
                     "machine_capture_status",
                     "machine_observation_sha256",
+                    "continuous_reversal_consumption",
                     "machine_source_recovery_parent_sha256",
                     "machine_source_recovery_parent_attempt_id",
                     "ai_input_preflight_source_timing",
@@ -2717,6 +2755,7 @@ def record_ai_decision_trace(
                 "entry_required_feature_blockers",
                 "machine_capture_status",
                 "machine_observation_sha256",
+                "continuous_reversal_consumption",
                 "machine_source_recovery_parent_sha256",
                 "machine_source_recovery_parent_attempt_id",
                 "ai_input_preflight_source_timing",

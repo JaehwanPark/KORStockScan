@@ -31,6 +31,11 @@ REQUIRED_ARTIFACT_IDS: set[str] = {
     "daily_recommendations_csv",
     "daily_recommendations_diag",
     "runtime_policy_bootstrap",
+    "threshold_preopen_status",
+    "threshold_postclose_status",
+    "submission_bottleneck_monitor",
+    "holding_exit_sentinel_premarket_report",
+    "holding_exit_sentinel_aftermarket_report",
     "buy_funnel_sentinel_report",
     "bd_fbuy_accum_pre_artifact",
     "holding_exit_sentinel_report",
@@ -96,3 +101,50 @@ def validate_detector_coverage(
             REQUIRED_HEARTBEAT_COMPONENTS - heartbeat_ids
         ),
     }
+
+
+def validate_semantic_coverage(day, *, stages=None, alert_stages=None, hooks=None):
+    """Check functional bindings in existing registries without running jobs."""
+    from src.engine.automation import postclose_summary_handoff as native
+    from src.engine.error_detectors import artifact_freshness as artifacts
+    from src.engine import notify_error_detection_admin as notifier
+    from src.engine.monitoring import submission_bottleneck_monitor as submission
+    from pathlib import Path
+    stage_registry = native.STAGE_REGISTRY if stages is None else stages
+    allowed = notifier.SEMANTIC_ALERT_STAGES if alert_stages is None else alert_stages
+    functions = {
+        'main_machine_policy': artifacts._continuous_reversal_result_semantics,
+        'main_auxiliary_policy': artifacts._auxiliary_result_semantics,
+        'episode_policy': artifacts._family_policy_semantics,
+        'postclose_handoff': artifacts._postclose_handoff_semantics,
+        'submission_bottleneck_monitor': submission.machine_semantics,
+    } if hooks is None else hooks
+    findings, bindings = [], {}
+    for stage, (_, outputs) in stage_registry.items():
+        if stage not in native.STAGE_REGISTRY:
+            findings.append(stage + ':unowned_stage')
+            continue
+        prerequisites = native.stage_prerequisites(stage, day)
+        commands = native.stage_commands(stage, day, day)
+        paths = native.stage_artifacts(Path('/report'), day, stage)
+        if (not outputs or not commands or not paths
+                or any(parent not in stage_registry or parent == stage for parent in prerequisites)):
+            findings.append(stage + ':producer_artifact_prerequisite_binding_invalid')
+        bindings[stage] = dict(producer_commands=commands, artifacts={k: str(v) for k, v in paths.items()},
+            prerequisites=list(prerequisites), native_validator='stage_receipt_issues',
+            terminal_consumer='strict_controller_prepared',
+            expected_disposition='installed_stage_or_explicit_off',
+            notifier_expected=stage in {'main_machine_policy', 'main_auxiliary_policy', 'episode_policy'})
+    for stage in ('main_machine_policy', 'main_auxiliary_policy', 'episode_policy', 'postclose_handoff'):
+        if stage not in allowed:
+            findings.append(stage + ':notifier_unbound')
+    for stage in ('main_machine_policy', 'main_auxiliary_policy', 'episode_policy', 'postclose_handoff',
+                  'submission_bottleneck_monitor'):
+        if not callable(functions.get(stage)):
+            findings.append(stage + ':native_semantic_hook_unbound')
+    for stage in native.STAGE_REGISTRY.keys() - stage_registry.keys():
+        findings.append(stage + ':stage_unregistered')
+    return dict(status='pass' if not findings else 'source_invalid', findings=sorted(findings),
+                stages=bindings, native_stage_count=len(bindings), decision_authority='report_only',
+                historical_main='audit_only', retired_widget='retired_not_expected',
+                surviving_episode='installed_profile_source_and_pid_required')

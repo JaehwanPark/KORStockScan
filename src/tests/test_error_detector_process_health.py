@@ -25,6 +25,44 @@ _ORIGINAL_SAMSUNG_MORNING_RUNTIME_CONTRACT = (
 )
 
 
+@pytest.mark.parametrize('leak', ['none', 'timer', 'process', 'buy', 'main', 'exit'])
+def test_registry_retirement_negative_census_preserves_main_and_exits(tmp_path, monkeypatch, leak):
+    from src.engine.infrastructure import runtime_release_router as router
+    from src.trading.config.owner_retirement import RETIRED_EPISODE_PROFILES
+    units = router._retirement_units(RETIRED_EPISODE_PROFILES)
+    monkeypatch.setattr(router, '_episode_retirement_receipts', lambda root: [])
+    states = {unit: dict(ActiveState='inactive', UnitFileState='masked', MainPID='0') for unit in units}
+    processes, orders = [], []
+    if leak == 'timer':
+        states[next(u for u in units if u.endswith('.timer'))]['UnitFileState'] = 'enabled'
+    if leak == 'process':
+        processes = [dict(pid=1, argv=['python', '-m', 'src.trading.low_price_two_leg.runtime',
+                                      '--profile', 'renamed', '--symbol', '034020'])]
+    if leak in {'buy', 'main', 'exit'}:
+        orders = [dict(event='INTENT_RESERVED', order_date='2026-10-07', symbol='034020',
+            side='SELL' if leak == 'exit' else 'BUY', action='NEW',
+            owner_type='main_scalping' if leak == 'main' else 'episode', intent_id='i')]
+    result = process_health_module._retirement_expected_set(tmp_path,
+        datetime.fromisoformat('2026-10-07T08:00:00+09:00'),
+        states=states, processes=processes, registry_rows=orders)
+    assert result['status'] == ('retirement_leak' if leak in {'timer','process','buy'} else 'retired_not_expected')
+
+
+def test_retirement_census_missing_units_is_unverified(tmp_path, monkeypatch):
+    from src.engine.infrastructure import runtime_release_router as router
+    monkeypatch.setattr(router, '_episode_retirement_receipts', lambda root: [])
+    result = process_health_module._retirement_expected_set(tmp_path,
+        datetime.fromisoformat('2026-10-07T08:00:00+09:00'), states={}, processes=[], registry_rows=[])
+    assert result['status'] == 'retirement_unverified'
+
+
+def test_retirement_process_identity_is_executed_module_not_test_targets():
+    assert process_health_module._process_entrypoint(['python','-m','pytest',
+        'src/tests/test_widget_retirement.py','src/tests/test_episode_retirement_main_watch.py']) == 'pytest'
+    assert process_health_module._process_entrypoint(['bash','-c','python -m src.trading.widget_auto_trade']) == ''
+    assert process_health_module._process_entrypoint(['python','-m','src.trading.widget_auto_trade.engine']) == 'src.trading.widget_auto_trade.engine'
+
+
 @pytest.mark.parametrize('error,alive', [
     (PermissionError(1, 'different runtime user'), True),
     (ProcessLookupError(3, 'no process'), False),

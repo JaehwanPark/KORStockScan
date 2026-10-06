@@ -9493,6 +9493,8 @@ class GPTSniperEngine:
                     )
                 machine_hot_payload = json.dumps(machine_exact, ensure_ascii=True)
                 reversal_family = entry_setup_live_policy.get('continuous_reversal')
+                reversal_receipt = None
+                reversal_request = None
                 machine_setup = {}
                 if not reversal_family:
                     machine_analysis = build_exact_payload_analysis_v1(
@@ -9520,13 +9522,31 @@ class GPTSniperEngine:
                     item = (ws_data.get('last_realtime_type_item') or {}).get('0B')
                     snapshot = current_snapshot(symbol, _explicit_item_venue(item), machine_exact['session_bucket'],
                                                 now=machine_input_fields.get('entry_machine_input_as_of', time.time()), item=item)
+                    reversal_snapshot_as_of = time.time()
                     machine_assessment, reversal_input, reversal_prompt, reversal_schema = assess(
                         reversal_family, snapshot, symbol=symbol, session=machine_exact['session_bucket'])
                     entry_setup_live_policy.update(continuous_reversal_assessment=machine_assessment,
                         continuous_reversal_input=reversal_input,
                         continuous_reversal_arm=(reversal_family['auxiliary_cells'][machine_assessment['cell_key']]['payload']['arm']
                                                  if machine_assessment.get('cell_key') else None))
+                    from src.engine.scalping.mechanistic_entry_runtime_policy import digest
+                    reversal_receipt = dict(
+                        family_sha256=reversal_family.get('family_sha256'),
+                        source_date=reversal_family.get('source_date'),
+                        publication_date=reversal_family.get('publication_date'),
+                        effective_date=reversal_family.get('effective_date'),
+                        machine_component_sha256=digest(reversal_family['machine_cells']),
+                        auxiliary_component_sha256=digest(reversal_family['auxiliary_cells']),
+                        arm=entry_setup_live_policy['continuous_reversal_arm'],
+                        snapshot_read_at=reversal_snapshot_as_of,
+                        snapshot_cutoff=machine_input_fields.get('entry_machine_input_as_of'),
+                        input_sha256=digest(reversal_input) if reversal_input is not None else None,
+                        prompt_sha256=digest(reversal_prompt) if reversal_input is not None else None,
+                        response_schema_sha256=digest(reversal_schema) if reversal_input is not None else None,
+                    )
                     if reversal_input:
+                        reversal_request = dict(input=reversal_input, prompt=reversal_prompt,
+                                                response_schema=reversal_schema)
                         from src.engine.scalping.reversal_auxiliary_contract import PRODUCTION_VERSION
                         prompt_version=PRODUCTION_VERSION+':'+entry_setup_live_policy['continuous_reversal_arm']
                         entry_setup_live_policy.update(auxiliary_system_prompt=reversal_prompt,
@@ -9558,6 +9578,8 @@ class GPTSniperEngine:
                     setup_evidence=machine_setup,
                     assessment=machine_assessment,
                     bundle_sha256=entry_setup_live_policy["machine_bundle_sha256"],
+                    reversal_context=reversal_receipt,
+                    reversal_request=reversal_request,
                     metadata=(
                         {**(dict(metadata_extra or {}) if isinstance(metadata_extra, dict) else {}),
                          **machine_input_fields,
@@ -10345,6 +10367,7 @@ class GPTSniperEngine:
                     ai_base_candidate_sha256=entry_setup_live_policy.get(
                         "ai_base_candidate_sha256"
                     ),
+                    **machine_capture,
                 )
                 # The transport metadata is useful for request routing, but the
                 # immutable decision trace is built from input_contract_fields

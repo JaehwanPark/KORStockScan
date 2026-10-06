@@ -63,6 +63,41 @@ def test_intraday_handoff_preserves_preopen_and_policy_files_then_binds_new_pid(
     consumed = handoff.consume(DAY, pid=2, now=NOW)
     assert consumed["actual_pid_consumed"] is True
     assert handoff.verify(DAY, NEW, now=NOW + timedelta(hours=2))["status"] == "pass"
+
+
+@pytest.mark.parametrize('tamper', ['none', 'policy', 'controller', 'checklist'])
+def test_intraday_current_document_reseal_preserves_original_preopen_generation(fixture, monkeypatch, tamper):
+    data, previous, _, _ = fixture
+    source_day = '2026-10-01'
+    index_path = data/'runtime/policy_bootstrap/prepared'/DAY/'latest.json'
+    index = json.loads(index_path.read_text()); receipt = Path(index['receipt_path'])
+    policies = [dict(family='main', path='/policy.json', sha256='d'*64)]
+    _json(receipt, dict(schema='next_preopen_readiness_v1', status='prepared_verified',
+        source_date=source_day, target_date=DAY, actual_pid_consumed=False,
+        policy_receipts=policies, controller_sha256='a'*64, summary_sha256='b'*64))
+    _json(index_path, dict(receipt_path=str(receipt), receipt_sha256=handoff._sha(receipt)))
+    controller = data/'report/postclose_done_controller'/f'postclose_done_controller_{source_day}.json'
+    summary = data/'report/runtime_approval_summary'/f'runtime_approval_summary_{source_day}.json'
+    checklist = data.parent/'docs/checklists'/f'{DAY}-stage2-todo-checklist.md'
+    _json(controller, {'status':'done'});_json(summary, {'status':'verified'})
+    checklist.parent.mkdir(parents=True);checklist.write_text('current owner')
+    source = dict(controller_path=str(controller), controller_sha256=handoff._sha(controller),
+        summary_path=str(summary), summary_sha256=handoff._sha(summary),
+        policy_receipts=[dict(policies[0],sha256='e'*64)] if tamper=='policy' else policies)
+    monkeypatch.setattr(readiness, '_source_receipts', lambda *a, **k: source)
+    original = receipt.read_bytes()
+    if tamper == 'policy':
+        with pytest.raises(ValueError,match='policy_generation_changed'):
+            handoff.prepare(DAY, old_pid=1, previous_root=previous, confirm=handoff.CONFIRM,
+                            now=NOW, reseal_postclose_source=True)
+        return
+    prepared = handoff.prepare(DAY, old_pid=1, previous_root=previous, confirm=handoff.CONFIRM,
+                               now=NOW, reseal_postclose_source=True)
+    assert prepared['status'] == 'pass' and receipt.read_bytes() == original
+    if tamper != 'none':
+        (controller if tamper == 'controller' else checklist).write_text('changed')
+    result = handoff.verify(DAY, NEW, now=NOW)
+    assert result['status'] == ('pass' if tamper=='none' else 'fail')
     assert handoff.verify(DAY, NEW, now=NOW + timedelta(days=1))["status"] == "fail"
 
 

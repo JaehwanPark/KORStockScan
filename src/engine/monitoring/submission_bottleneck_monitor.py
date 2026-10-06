@@ -6,6 +6,7 @@ import fcntl
 import hashlib
 import json
 import math
+import os
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -40,13 +41,13 @@ def stamp(value):
         return None
 
 
-def _recent_source_rows(path, now, *, time_field, tail_bytes=SOURCE_TAIL_BYTES):
+def _recent_source_rows(path, now, *, time_field, tail_bytes=SOURCE_TAIL_BYTES, window_sec=SOURCE_WINDOW_SEC):
     """Read a bounded, complete JSONL suffix; never equate a partial tail to zero gaps."""
     source = {"status": "unobservable", "tail_truncated": False,
               "window_covered": False, "recent_count": 0}
     try:
         with path.open("rb") as stream:
-            before = path.stat()
+            before = os.fstat(stream.fileno())
             if not before.st_size:
                 source["reason"] = "empty_source"
                 return [], source
@@ -58,7 +59,8 @@ def _recent_source_rows(path, now, *, time_field, tail_bytes=SOURCE_TAIL_BYTES):
             source["reason"] = "source_generation_changed"
             return [], source
     except OSError as exc:
-        source["reason"] = type(exc).__name__
+        source["reason"] = ('compressed_archive_not_current_bounded_source'
+                            if path.with_suffix(path.suffix + '.gz').exists() else type(exc).__name__)
         return [], source
     if start:
         payload = payload.partition(b"\n")[2]
@@ -75,17 +77,59 @@ def _recent_source_rows(path, now, *, time_field, tail_bytes=SOURCE_TAIL_BYTES):
             if at is None or at.date() != now.date() or at > now:
                 continue
             first_at = at if first_at is None else min(first_at, at)
-            if (now - at).total_seconds() <= SOURCE_WINDOW_SEC:
+            if (now - at).total_seconds() <= window_sec:
                 rows.append(row)
         except (ValueError, UnicodeDecodeError, TypeError):
             malformed += 1
-    covered = not start or (first_at is not None and (now - first_at).total_seconds() >= SOURCE_WINDOW_SEC)
+    covered = not start or (first_at is not None and (now - first_at).total_seconds() >= window_sec)
     source.update(status="complete" if covered and not malformed and not incomplete_last_line else "partial",
                   tail_truncated=bool(start), window_covered=covered,
                   recent_count=len(rows), malformed_rows=malformed,
                   incomplete_last_line=incomplete_last_line,
                   first_read_at=first_at.isoformat() if first_at else None)
+    source.update(bytes_read=len(payload), read_count=1, source_size=before.st_size,
+                  source_identity=dict(device=before.st_dev, inode=before.st_ino))
     return rows, source
+
+
+def _reversal_provider_lineage(data_root, now, observations, *, tail_bytes):
+    """Request preparation and raw responses are facts distinct from compose."""
+    request_rows, requests = _recent_source_rows(
+        data_root/'ai_decision_requests'/f'ai_decision_requests_{now.date()}.jsonl',
+        now, time_field='captured_at', tail_bytes=tail_bytes, window_sec=WINDOW_SEC)
+    actions = {row['machine_observation_sha256']: row['source']['assessment']['action'] for row in observations}
+    if 'ENTER_NOW' in actions.values() or request_rows:
+        trace_rows, traces = _recent_source_rows(
+            data_root/'ai_decision_trace'/f'ai_decision_trace_{now.date()}.jsonl',
+            now, time_field='created_at', tail_bytes=tail_bytes, window_sec=WINDOW_SEC)
+    else:
+        trace_rows, traces = [], dict(status='not_required_machine_nonentry', bytes_read=0, read_count=0)
+    prepared, responded, noncall, issues = set(), set(), Counter(), Counter()
+    for row in request_rows:
+        binding = row.get('continuous_reversal_request_binding') or {}
+        key = binding.get('machine_observation_sha256')
+        if key not in actions:
+            continue
+        if actions[key] != 'ENTER_NOW':
+            issues['reversal_provider_request_after_nonentry'] += 1
+        if binding.get('binding_status') != 'matched':
+            issues['reversal_provider_request_hash_mismatch'] += 1
+        prepared.add(key)
+    for row in trace_rows:
+        key = row.get('machine_observation_sha256')
+        if key not in actions:
+            continue
+        if row.get('ai_decision_trace_id') and row.get('entry_ai_raw_risk_verdict'):
+            responded.add(key)
+        if actions[key] == 'ENTER_NOW' and not row.get('entry_ai_raw_risk_verdict'):
+            reason = row.get('entry_ai_screen_status') or row.get('ai_screen_status') or row.get('machine_contract_error')
+            if reason:
+                noncall[str(reason)] += 1
+    return dict(status='review_required' if issues else 'observed' if prepared or responded else 'not_observed',
+        request_prepared_count=len(prepared), raw_response_observed_count=len(responded),
+        enter_without_request_observed=sum(action == 'ENTER_NOW' and key not in prepared for key, action in actions.items()),
+        noncall_reasons=dict(noncall), issues=dict(issues), source_windows=dict(requests=requests, traces=traces),
+        provider_called_metadata_used_as_fact=False, actual_order_submitted_assessed=False)
 
 
 def _auxiliary_cost_receipt_valid(row):
@@ -1173,6 +1217,155 @@ def _small_json(path):
     return value
 
 
+def _reversal_selection_receipt(bundle, data_root):
+    """Read the issued family and its frozen reports, without legacy score gates."""
+    from src.engine.scalping.continuous_reversal_policy import validate_sources
+
+    validate_sources(bundle, data_root)
+    family = bundle['continuous_reversal']
+    if (family.get('effective_date') != bundle.get('target_date')
+            or family.get('source_date') != bundle.get('source_date')
+            or family.get('publication_date') != bundle.get('publication_date')):
+        raise ValueError('reversal_selection_date_binding_invalid')
+    selections = {}
+    for key, cell in family['machine_cells'].items():
+        metrics = cell.get('local_metrics')
+        selections[key] = dict(
+            version=family['selection_metric'], score_contract_valid=True,
+            payload=cell['payload'], payload_sha256=cell['payload_sha256'],
+            inherited_from=cell.get('inherited_from'), local_metrics=metrics,
+            win_rate_pct=(100 * metrics['wins'] / metrics['resolved']) if metrics else None,
+            realized_pnl=False, report_is_activation_receipt=False,
+        )
+    return selections
+
+
+def _reversal_observation_receipt(bundle, observation, *, verified_components=None):
+    """Validate captured reversal identity, rule and verdict against its family."""
+    from src.engine.scalping import continuous_reversal as kernel
+    from src.engine.scalping.continuous_reversal_policy import validate_family
+    from src.engine.scalping.mechanistic_entry_runtime_policy import digest
+
+    family = bundle['continuous_reversal']
+    if verified_components is None:
+        validate_family(family)
+        verified_components = dict(machine=digest(family['machine_cells']),
+                                   auxiliary=digest(family['auxiliary_cells']))
+    context, source = observation['label_context'], observation['source']
+    assessment, receipt = source['assessment'], observation['runtime_consumption']
+    raw = source.get('exact_payload')
+    if not isinstance(raw, dict) or not raw:
+        raise ValueError('reversal_exact_payload_missing')
+    symbol = str(context['stock_code'])
+    session = context['session_bucket']
+    captured = stamp(observation['captured_at'])
+    if (str(raw.get('stock_code')) != symbol
+            or kernel.market_bucket(raw.get('session_bucket')) != kernel.market_bucket(session)
+            or raw.get('evaluation_attempt_id') != context.get('evaluation_attempt_id')
+            or not context.get('evaluation_attempt_id')
+            or bundle.get('target_date') != captured.date().isoformat()):
+        raise ValueError('reversal_observation_identity_invalid')
+    observed_epoch = raw.get('entry_machine_input_as_of')
+    if (not isinstance(observed_epoch, (int, float)) or not math.isfinite(observed_epoch)
+            or observed_epoch > captured.timestamp()):
+        raise ValueError('reversal_observation_source_time_invalid')
+    if (receipt.get('bundle_sha256') != bundle['bundle_sha256']
+            or any(receipt.get(k) is not None for k in
+                   ('policy_sha256', 'selector_leaf', 'effective_thresholds'))):
+        raise ValueError('effective_policy_receipt_mismatch')
+    if (assessment.get('schema') != 'mechanistic_entry_policy_decision_v1'
+            or assessment.get('policy_version') != kernel.VERSION
+            or assessment.get('primary_decision_owner') != 'mechanistic_entry_adjudicator'
+            or assessment.get('ai_role') != 'auxiliary_risk_screen_pass_veto_no_promotion'):
+        raise ValueError('reversal_assessment_contract_invalid')
+    component = verified_components['machine']
+    native = receipt.get('continuous_reversal')
+    if observation.get('capture_contract') == 'continuous_reversal_consumption_v1' and native is None:
+        raise ValueError('reversal_native_consumption_receipt_missing')
+    if native is not None:
+        from src.engine.scalping.ai_decision_trace import _json_bytes
+        expected = dict(schema='continuous_reversal_consumption_v1',
+            family_sha256=family['family_sha256'], bundle_sha256=bundle['bundle_sha256'],
+            source_date=family['source_date'], publication_date=family['publication_date'],
+            effective_date=family['effective_date'], machine_component_sha256=component,
+            auxiliary_component_sha256=verified_components['auxiliary'],
+            event_id=assessment.get('event_id'), cell_key=assessment.get('cell_key'),
+            rule=assessment.get('rule'), pid=receipt.get('pid'),
+            process_start_ticks=receipt.get('process_start_ticks'), captured_at=observation['captured_at'],
+            exact_payload_sha256=hashlib.sha256(_json_bytes(raw)).hexdigest(),
+            assessment_sha256=hashlib.sha256(_json_bytes(assessment)).hexdigest())
+        if not isinstance(native, dict) or any(native.get(k) != v for k, v in expected.items()):
+            raise ValueError('reversal_native_consumption_receipt_mismatch')
+        clock = native.get('snapshot_read_at')
+        if (not isinstance(clock, (int, float)) or not math.isfinite(clock)
+                or not observed_epoch <= clock <= captured.timestamp()):
+            raise ValueError('reversal_snapshot_read_clock_invalid')
+        key = assessment.get('cell_key')
+        arm = family['auxiliary_cells'][key]['payload']['arm'] if key else None
+        if native.get('arm') != arm:
+            raise ValueError('reversal_auxiliary_arm_receipt_mismatch')
+        if assessment.get('action') == 'ENTER_NOW':
+            from src.engine.scalping.reversal_auxiliary_contract import production_prompt, response_schema, ARMS
+            if any(not isinstance(native.get(k), str) or len(native[k]) != 64
+                   for k in ('input_sha256', 'prompt_sha256', 'response_schema_sha256')):
+                raise ValueError('reversal_auxiliary_request_hash_missing')
+            request = source.get('auxiliary_request')
+            if not isinstance(request, dict) or any(
+                    digest(request.get(k)) != native.get(v) for k, v in (
+                        ('input', 'input_sha256'), ('prompt', 'prompt_sha256'),
+                        ('response_schema', 'response_schema_sha256'))):
+                raise ValueError('reversal_auxiliary_request_hash_mismatch')
+            inp = request['input']
+            if (request['prompt'] != production_prompt(arm)
+                    or request['response_schema'] != response_schema(inp, complete_source_only=arm == ARMS[-1])
+                    or inp.get('objective') != dict(net_target_pct=.4, net_soft_stop_pct=-3.,
+                                                    horizon_seconds=1800, cost_rate=.0023)):
+                raise ValueError('reversal_auxiliary_issued_contract_mismatch')
+            facts = inp['entry_setup_evidence_v1']['facts']
+            if any(facts.get(k) != assessment['event'].get(k) for k in (
+                    'confirmation_price', 'entry_ask', 'low_price', 'drop_pct',
+                    'drawdown_5m_pct', 'down_steps', 'spread_pct', 'volume_ratio_60s')):
+                raise ValueError('reversal_auxiliary_event_input_mismatch')
+        elif any(native.get(k) is not None for k in ('input_sha256', 'prompt_sha256', 'response_schema_sha256')):
+            raise ValueError('reversal_nonentry_provider_receipt_invalid')
+    event = assessment.get('event')
+    if event is None:
+        if (assessment.get('action') != 'BLOCK'
+                or assessment.get('reason') != 'no_current_first_uptick'
+                or assessment.get('price_reversal_confirmed') is not False
+                or any(assessment.get(k) is not None for k in ('cell_key', 'rule', 'event_id'))):
+            raise ValueError('reversal_nonturn_receipt_invalid')
+        return {}, dict(policy_sha256=component, leaf='NO_CURRENT_FIRST_UPTICK')
+    if (not isinstance(event, dict) or event.get('symbol') != symbol
+            or event.get('market') != kernel.market_bucket(session)
+            or assessment.get('event_id') != event.get('event_id')
+            or assessment.get('price_reversal_confirmed') is not True):
+        raise ValueError('reversal_event_identity_invalid')
+    if (not isinstance(event.get('epoch'), (int, float))
+            or not math.isfinite(event['epoch']) or event['epoch'] > (
+                native['snapshot_read_at'] if native else captured.timestamp())
+            or not isinstance(event.get('source_item'), str)
+            or event['source_item'].split('_', 1)[0] != symbol):
+        raise ValueError('reversal_event_source_invalid')
+    key = kernel.cell_key(symbol, session, event['confirmation_price'])
+    rule = family['machine_cells'][key]['payload']['rule']
+    if (assessment.get('cell_key') != key or assessment.get('rule') != rule
+            or assessment.get('machine_component_sha256') != component):
+        raise ValueError('reversal_selected_cell_receipt_mismatch')
+    if event['entry_ask'] is None:
+        action, reason = 'RECHECK', 'entry_quote_source_missing'
+    elif not kernel.conditions(event)[rule]:
+        missing = (('VOL' in rule and event['volume_ratio_60s'] is None)
+                   or (rule.startswith('DD5') and event['drawdown_5m_pct'] is None))
+        action, reason = ('RECHECK', 'required_reversal_feature_missing') if missing else (
+            'BLOCK', 'selected_reversal_condition_not_met')
+    else:
+        action, reason = 'ENTER_NOW', 'continuous_reversal_cell_pass'
+    if assessment.get('action') != action or assessment.get('reason') != reason:
+        raise ValueError('reversal_rule_verdict_mismatch')
+    return {'rule': rule}, dict(policy_sha256=component, leaf=key)
+
+
 def machine_semantics(data_root, now, *, tail_bytes=8 * 1024 * 1024):
     """Bounded receipt audit, not a replay, policy publisher or outcome estimator."""
     from src.engine.scalping import entry_strategy_policy as strategy
@@ -1195,43 +1388,61 @@ def machine_semantics(data_root, now, *, tail_bytes=8 * 1024 * 1024):
         if not current:
             raise ValueError("current_policy_missing")
         result["current_bundle_sha256"] = current["bundle_sha256"]
-        report = _small_json(data_root / "report/ai_decision_action_outcome_calibration" / f"machine_policy_{day}.json")
-        digest = runtime.digest({k: v for k, v in report.items() if k != "artifact_content_sha256"})
-        if digest != report.get("artifact_content_sha256") or report.get("target_date") != day:
-            raise ValueError("selection_artifact_invalid")
-        for scope, selected in report.get("selections", {}).items():
-            economy = ((selected.get("machine_evidence") or {}).get("train") or {}).get("economics") or {}
-            score = strategy.machine_support_adjusted_win_rate(economy)
-            recorded = economy.get("support_adjusted_win_rate_pct")
-            valid = selected.get("selection_basis") == strategy.MACHINE_SELECTION_VERSION
-            if selected.get("promotion_pass"):
-                valid = valid and score is not None and isinstance(recorded, (int, float)) and math.isclose(score, recorded, abs_tol=1e-8)
-            result["selection"][scope] = dict(version=selected.get("selection_basis"), score_contract_valid=valid,
-                promotion_pass=selected.get("promotion_pass"), reasons=selected.get("promotion_errors"),
-                unique_opportunities=economy.get("selected_opportunity_count"), win_rate_pct=economy.get("win_rate_pct"),
-                support_adjusted_score_pct=recorded, mean_net_path_ev_pct=economy.get("selected_path_ev_pct"),
-                realized_pnl=False, report_is_activation_receipt=False)
-            if not valid:
-                issues["selection_score_contract_invalid"] += 1
-        terminal = _small_json(data_root / "report/ai_decision_action_outcome_calibration" / f"machine_policy_terminal_{day}.json")
-        if (terminal.get("report_sha256") != report["artifact_content_sha256"]
-                or runtime.digest({k:v for k,v in terminal.items() if k != "artifact_content_sha256"}) != terminal.get("artifact_content_sha256")):
-            raise ValueError("selection_terminal_binding_invalid")
-        result["publication"] = dict(status=terminal.get("status"), activation=terminal.get("activation"),
-            actual_pid_consumption="see_per_scope_live_pid_receipts")
+        if current.get("continuous_reversal"):
+            result["selection"] = _reversal_selection_receipt(current, data_root)
+            result["selection_family"] = "continuous_reversal"
+            result["publication"] = dict(
+                source_date=current["source_date"], publication_date=current["publication_date"],
+                effective_date=current["target_date"], status="native_frozen_family_verified",
+                actual_pid_consumption="see_per_scope_live_pid_receipts")
+        else:
+            report = _small_json(data_root / "report/ai_decision_action_outcome_calibration" / f"machine_policy_{day}.json")
+            digest = runtime.digest({k: v for k, v in report.items() if k != "artifact_content_sha256"})
+            if digest != report.get("artifact_content_sha256") or report.get("target_date") != day:
+                raise ValueError("selection_artifact_invalid")
+            for scope, selected in report.get("selections", {}).items():
+                economy = ((selected.get("machine_evidence") or {}).get("train") or {}).get("economics") or {}
+                score = strategy.machine_support_adjusted_win_rate(economy)
+                recorded = economy.get("support_adjusted_win_rate_pct")
+                valid = selected.get("selection_basis") == strategy.MACHINE_SELECTION_VERSION
+                if selected.get("promotion_pass"):
+                    valid = valid and score is not None and isinstance(recorded, (int, float)) and math.isclose(score, recorded, abs_tol=1e-8)
+                result["selection"][scope] = dict(version=selected.get("selection_basis"), score_contract_valid=valid,
+                    promotion_pass=selected.get("promotion_pass"), reasons=selected.get("promotion_errors"),
+                    unique_opportunities=economy.get("selected_opportunity_count"), win_rate_pct=economy.get("win_rate_pct"),
+                    support_adjusted_score_pct=recorded, mean_net_path_ev_pct=economy.get("selected_path_ev_pct"),
+                    realized_pnl=False, report_is_activation_receipt=False)
+                if not valid:
+                    issues["selection_score_contract_invalid"] += 1
+            terminal = _small_json(data_root / "report/ai_decision_action_outcome_calibration" / f"machine_policy_terminal_{day}.json")
+            if (terminal.get("report_sha256") != report["artifact_content_sha256"]
+                    or runtime.digest({k:v for k,v in terminal.items() if k != "artifact_content_sha256"}) != terminal.get("artifact_content_sha256")):
+                raise ValueError("selection_terminal_binding_invalid")
+            result["publication"] = dict(status=terminal.get("status"), activation=terminal.get("activation"),
+                actual_pid_consumption="see_per_scope_live_pid_receipts")
     except (OSError, ValueError, TypeError, KeyError) as exc:
         result["selection_status"] = "unobservable:" + str(exc)[:160]
     path = data_root / "ai_decision_payloads" / f"ai_decision_payloads_{day}.jsonl"
     generations, seen = {}, set()
+    verified_reversal_generations = {}
+    reversal_observations = []
+    pid_identities = {}
     try:
         with path.open("rb") as stream:
-            size = path.stat().st_size
+            before = os.fstat(stream.fileno())
+            size = before.st_size
             start = max(0, size - tail_bytes)
             stream.seek(start)
             if start:
                 stream.readline()
             result.update(tail_truncated=bool(start), source_bytes=size, read_limit_bytes=tail_bytes)
-            for line in stream.read(max(0, size - stream.tell())).splitlines(keepends=True):
+            payload = stream.read(max(0, size - stream.tell()))
+            after = path.stat()
+            if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino) or after.st_size < size:
+                raise OSError('machine_source_generation_changed_during_read')
+            result.update(bytes_read=len(payload), read_count=1,
+                          window_coverage='bounded_suffix' if start else 'complete_file_prefix')
+            for line in payload.splitlines(keepends=True):
                 if not line.endswith(b"\n"):
                     break
                 try:
@@ -1273,31 +1484,51 @@ def machine_semantics(data_root, now, *, tail_bytes=8 * 1024 * 1024):
                             result["source_invalid_blockers"][blocker] = result["source_invalid_blockers"].get(blocker, 0) + 1
                         continue
                     scope = (str(context["effective_venue"]).upper(), _canonical_session(context["session_bucket"]))
-                    scoped = runtime.for_cohort(generations[bundle_hash], scope)
-                    if not scoped:
-                        raise ValueError("frozen_policy_scope_missing")
-                    setup = source["setup_evidence"]
-                    raw = setup.get("strategy_raw_input")
-                    if not isinstance(raw, dict):
-                        raise ValueError("machine_raw_input_missing")
-                    if strategy.digest(raw) != setup.get("strategy_raw_sha256"):
-                        raise ValueError("machine_raw_hash_invalid")
-                    profile, selection = strategy.select(scoped["machine_policy"], raw, setup)
-                    if (receipt.get("bundle_sha256") != bundle_hash
-                            or receipt.get("policy_sha256") != selection["policy_sha256"]
-                            or receipt.get("selector_leaf") != selection["leaf"]
-                            or receipt.get("effective_thresholds") != profile):
-                        raise ValueError("effective_policy_receipt_mismatch")
+                    frozen = generations[bundle_hash]
+                    if frozen.get("continuous_reversal"):
+                        if bundle_hash not in verified_reversal_generations:
+                            _reversal_selection_receipt(frozen, data_root)
+                            # Keep verification cache outside the signed bundle.
+                            verified_reversal_generations[bundle_hash] = dict(
+                                machine=runtime.digest(frozen['continuous_reversal']['machine_cells']),
+                                auxiliary=runtime.digest(frozen['continuous_reversal']['auxiliary_cells']))
+                        profile, selection = _reversal_observation_receipt(frozen, observation,
+                            verified_components=verified_reversal_generations[bundle_hash])
+                        reversal_observations.append(observation)
+                    else:
+                        scoped = runtime.for_cohort(generations[bundle_hash], scope)
+                        if not scoped:
+                            raise ValueError("frozen_policy_scope_missing")
+                        setup = source["setup_evidence"]
+                        raw = setup.get("strategy_raw_input")
+                        if not isinstance(raw, dict):
+                            raise ValueError("machine_raw_input_missing")
+                        if strategy.digest(raw) != setup.get("strategy_raw_sha256"):
+                            raise ValueError("machine_raw_hash_invalid")
+                        profile, selection = strategy.select(scoped["machine_policy"], raw, setup)
+                        if (receipt.get("bundle_sha256") != bundle_hash
+                                or receipt.get("policy_sha256") != selection["policy_sha256"]
+                                or receipt.get("selector_leaf") != selection["leaf"]
+                                or receipt.get("effective_thresholds") != profile):
+                            raise ValueError("effective_policy_receipt_mismatch")
                     key = "|".join((*scope, bundle_hash, selection["policy_sha256"], selection["leaf"]))
                     counts = result["scopes"].setdefault(key, dict(matched_receipts=0, live_pid_receipts=0,
                         effective_thresholds=profile, current_bundle=bundle_hash == result.get("current_bundle_sha256")))
                     counts["matched_receipts"] += 1
-                    try:
-                        proc = Path('/proc') / str(int(receipt['pid']))
-                        live = (str((proc/'cwd').resolve()) == receipt.get('cwd')
-                            and (proc/'stat').read_text().split(') ', 1)[1].split()[19] == receipt.get('process_start_ticks'))
-                    except (OSError, ValueError, KeyError, IndexError):
-                        live = False
+                    contract = ('native_reversal_receipt' if receipt.get('continuous_reversal')
+                                else 'historical_reversal_capture' if frozen.get('continuous_reversal')
+                                else 'legacy_strategy_receipt')
+                    counts[contract] = counts.get(contract, 0) + 1
+                    identity = (receipt.get('pid'), receipt.get('cwd'), receipt.get('process_start_ticks'))
+                    if identity not in pid_identities:
+                        try:
+                            proc = Path('/proc') / str(int(receipt['pid']))
+                            live = (str((proc/'cwd').resolve()) == receipt.get('cwd')
+                                and (proc/'stat').read_text().split(') ', 1)[1].split()[19] == receipt.get('process_start_ticks'))
+                        except (OSError, ValueError, KeyError, IndexError):
+                            live = False
+                        pid_identities[identity] = live
+                    live = pid_identities[identity]
                     counts["live_pid_receipts"] += int(live)
                 except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
                     reason = str(exc)[:160]
@@ -1305,7 +1536,14 @@ def machine_semantics(data_root, now, *, tail_bytes=8 * 1024 * 1024):
                     if len(result["examples"]) < 3:
                         result["examples"].append(dict(observation_sha256=observed_hash, reason=reason))
     except OSError as exc:
-        result["source_status"] = "unobservable:" + type(exc).__name__
+        result["source_status"] = 'unobservable:' + (
+            'compressed_archive_not_current_bounded_source'
+            if path.with_suffix(path.suffix + '.gz').exists() else type(exc).__name__)
+    if reversal_observations:
+        lineage = _reversal_provider_lineage(data_root, now, reversal_observations, tail_bytes=tail_bytes)
+        result['reversal_provider_lineage'] = lineage
+        issues.update(lineage['issues'])
+    result['pid_identity_read_count'] = len(pid_identities)
     result["issues"] = dict(issues)
     if issues:
         result["status"] = "review_required"

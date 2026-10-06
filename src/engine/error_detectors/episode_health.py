@@ -42,8 +42,22 @@ def check(root, now, *, target_date, reader, states=None, timer_dir=Path('/etc/s
     if target_date < '2026-10-06':
         result['status'] = 'not_required_before_introduction'
         return result
-    future = now.date() < day or now.time() < time(7, 32)
+    # Applied episode policy is produced by Main PREOPEN at 07:35, not the
+    # independent symbol-owner job at 07:32. Keep a bounded publication grace.
+    future = now.date() < day or (now.date() == day and now.time() < time(7, 36))
     if not applied_path.exists() and not applied_path.is_symlink():
+        preopen = root / 'data/report/threshold_cycle_preopen_status' / f'threshold_cycle_preopen_{target_date}.status.json'
+        if now.date() == day and now.time() >= time(7, 35) and preopen.exists():
+            try:
+                producer, _ = reader(preopen)
+                if producer.get('target_date') == target_date and producer.get('status') == 'failed':
+                    result.update(status='source_invalid', findings=['episode_apply_preopen_producer_failed'])
+                    return result
+                if future and producer.get('target_date') == target_date and producer.get('status') in {'running', 'started'}:
+                    result['status'] = 'waiting_producer'
+            except (OSError, ValueError, TypeError) as exc:
+                result.update(status='source_invalid', findings=['episode_apply_preopen_receipt_invalid'], error=str(exc)[:160])
+                return result
         result['rows'] = [dict(profile_id=pid, status='future_due' if future else 'applied_missing') for pid in profiles]
         if not future:
             result.update(status='source_invalid', findings=['episode_applied_missing_after_due'])

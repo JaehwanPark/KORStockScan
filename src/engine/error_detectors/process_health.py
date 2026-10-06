@@ -163,6 +163,12 @@ class ProcessHealthDetector(BaseDetector):
             samsung_morning=samsung_morning,
         )
         result.details["samsung_morning_runtime"] = samsung_morning
+        retirement = _retirement_expected_set(PROJECT_ROOT, now)
+        result.details['retired_owner_runtime'] = retirement
+        if retirement['severity'] == 'fail':
+            result.severity = 'fail'
+            result.summary += ' Retired entry owner census: ' + retirement['status'] + '.'
+            result.recommended_action += ' Inspect the named retired unit/process/intent; preserve custody exits.'
         samsung_severity = samsung_morning.get("severity")
         if samsung_severity == "fail":
             retired = str(samsung_morning.get("status") or "").startswith("retirement_")
@@ -778,6 +784,129 @@ def _load_postclose_bot_isolation(now_ts: float, max_age_sec: int) -> dict | Non
         "reason": payload.get("reason"),
         "started_at": payload.get("started_at"),
     }
+
+
+def _process_entrypoint(argv):
+    # Inspect the executed module/script, never test targets or arguments to a
+    # shell/python -c command that merely mention a retired implementation.
+    if '-c' in argv:
+        return ''
+    if '-m' in argv:
+        index = argv.index('-m') + 1
+        return argv[index] if index < len(argv) else ''
+    return next((arg for arg in argv if arg.endswith('.py')), '')
+
+
+def _retirement_expected_set(root, now, *, states=None, processes=None, registry_rows=None):
+    """Negative census from the existing retirement registry and receipts.
+
+    One batched unit query and bounded process/order reads; no service or order
+    mutation. Main observations and historical SELL/CANCEL custody are allowed.
+    """
+    from src.engine.infrastructure import runtime_release_router as router
+    from src.trading.config.owner_retirement import (
+        RETIRED_EPISODE_PROFILES, episode_profile_retired, new_entry_retired,
+    )
+    result = dict(status='retired_not_expected', severity='pass', leaks=[],
+                  runtime_mutation='none', decision_authority='report_only',
+                  target_date=now.date().isoformat(), order_window='bounded_tail',
+                  order_tail_bytes=1024 * 1024)
+    if now.date() < date(2026, 10, 7):
+        return {**result, 'status': 'not_required_before_introduction'}
+    try:
+        receipts = router._episode_retirement_receipts(root)
+        expected = set(router._retirement_units(RETIRED_EPISODE_PROFILES))
+        result['transition_receipts'] = [r['receipt_sha256'] for r in receipts]
+        if states is None:
+            # Include renamed/remaining Widget units rather than enumerating a
+            # second copy of the permanently removed producer catalog.
+            listed = subprocess.run(['/bin/systemctl', 'list-unit-files', '--no-legend',
+                '--no-pager', 'korstockscan-*widget*'], capture_output=True, text=True,
+                timeout=5, check=False)
+            if listed.returncode or len(listed.stdout) > 128 * 1024:
+                raise ValueError('retirement_installed_unit_census_unobservable')
+            expected.update(line.split()[0] for line in listed.stdout.splitlines() if line.split())
+            loaded = subprocess.run(['/bin/systemctl', 'list-units', '--all', '--plain',
+                '--no-legend', '--no-pager', 'korstockscan-*widget*'],
+                capture_output=True, text=True, timeout=5, check=False)
+            if loaded.returncode or len(loaded.stdout) > 128 * 1024:
+                raise ValueError('retirement_loaded_unit_census_unobservable')
+            expected.update(line.split()[0] for line in loaded.stdout.splitlines() if line.split())
+            queried = subprocess.run(['/bin/systemctl', 'show', *sorted(expected), '--no-pager',
+                '--property=Id,LoadState,ActiveState,UnitFileState,MainPID'],
+                capture_output=True, text=True, timeout=5, check=False)
+            if queried.returncode or len(queried.stdout) > 256 * 1024:
+                raise ValueError('retirement_unit_census_unobservable')
+            states = {}
+            for block in queried.stdout.split('\n\n'):
+                row = dict(line.split('=', 1) for line in block.splitlines() if '=' in line)
+                if row.get('Id'):
+                    states[row['Id']] = row
+        for name, row in states.items():
+            if name not in expected and 'widget' not in name:
+                continue
+            if (row.get('ActiveState') in {'active', 'activating', 'reloading'}
+                    or int(row.get('MainPID') or 0) > 0
+                    or (name.endswith('.timer') and row.get('UnitFileState') in {'enabled', 'enabled-runtime', 'linked'})):
+                result['leaks'].append(dict(kind='unit', unit=name))
+        if expected - states.keys():
+            raise ValueError('retirement_unit_census_incomplete')
+        if processes is None:
+            processes = []
+            paths = list(Path('/proc').glob('[0-9]*/cmdline'))
+            if len(paths) > 4096:
+                raise ValueError('retirement_process_census_truncated')
+            for path in paths:
+                try:
+                    with path.open('rb') as handle:
+                        argv = handle.read(8192).decode(errors='replace').split('\0')
+                    entrypoint = _process_entrypoint(argv)
+                    if entrypoint.startswith(('src.trading.', 'src.engine.')) or '/src/trading/' in entrypoint or '/src/engine/' in entrypoint:
+                        processes.append(dict(pid=int(path.parent.name), argv=argv))
+                except (OSError, ValueError):
+                    continue  # /proc process exit race
+        for row in processes:
+            argv = row['argv']
+            entrypoint = _process_entrypoint(argv)
+            episode = 'low_price_two_leg' in entrypoint
+            widget = (entrypoint.startswith(('src.trading.widget_auto_trade', 'src.engine.widget',
+                      'src.engine.samsung_widget', 'src.engine.doosan_widget'))
+                      or '/src/trading/widget_auto_trade/' in entrypoint)
+            retired_profile = any(episode_profile_retired(arg) for arg in argv)
+            symbol = next((argv[i + 1] for i, arg in enumerate(argv[:-1]) if arg in {'--symbol', '--stock-code'}), None)
+            if widget or (episode and (retired_profile or new_entry_retired(symbol, 'episode'))):
+                result['leaks'].append(dict(kind='process', pid=row['pid'], owner='widget' if widget else 'episode', symbol=symbol))
+        if registry_rows is None:
+            path = root / 'data/runtime/order_owner_registry.jsonl'
+            registry_rows = []
+            if path.exists():
+                with path.open('rb') as handle:
+                    size = os.fstat(handle.fileno()).st_size
+                    start = max(0, size - result['order_tail_bytes'])
+                    handle.seek(start)
+                    if start:
+                        handle.readline()
+                    content = handle.read(result['order_tail_bytes'])
+                    result['order_tail_truncated'] = bool(start)
+                    lines = content.splitlines()
+                    if content and not content.endswith(b'\n'):
+                        lines = lines[:-1]  # atomic append in progress
+                    registry_rows = [json.loads(line) for line in lines if line.strip()]
+        for row in registry_rows:
+            if (row.get('order_date') == now.date().isoformat()
+                    and row.get('event') == 'INTENT_RESERVED' and row.get('side') == 'BUY'
+                    and row.get('action') == 'NEW'
+                    and (new_entry_retired(row.get('symbol'), row.get('owner_type'))
+                         or row.get('owner_type') == 'widget_auto_trade')):
+                result['leaks'].append(dict(kind='new_buy_intent', symbol=row.get('symbol'),
+                    owner=row.get('owner_type'), intent_id=row.get('intent_id')))
+        result['units_checked'] = len(states)
+        result['processes_checked'] = len(processes)
+        if result['leaks']:
+            result.update(status='retirement_leak', severity='fail')
+    except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as exc:
+        result.update(status='retirement_unverified', severity='fail', error=str(exc)[:160])
+    return result
 
 
 def _retired_samsung_one_share_expected_set(now: datetime) -> dict:

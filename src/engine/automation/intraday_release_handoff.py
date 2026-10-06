@@ -85,7 +85,7 @@ def _checked_bootstrap(day, pid):
     return check
 
 
-def prepare(day, *, old_pid, previous_root, confirm, now=None):
+def prepare(day, *, old_pid, previous_root, confirm, now=None, reseal_postclose_source=False):
     current = _today(day, now)
     if confirm != CONFIRM:
         raise ValueError("intraday_handoff_explicit_authority_required")
@@ -116,8 +116,31 @@ def prepare(day, *, old_pid, previous_root, confirm, now=None):
             or _sha(receipt_path) != prepared.get("receipt_sha256")):
         raise ValueError("intraday_original_prepared_invalid")
     frozen = [bootstrap.env_path(day), bootstrap.manifest_path(day), _preopen_path(day), prepared_index, receipt_path]
+    reseal = None
+    if reseal_postclose_source:
+        from src.engine.automation.next_preopen_readiness import _source_receipts
+        original_prepared = _read(receipt_path)
+        source_day = original_prepared.get('source_date')
+        if (original_prepared.get('schema') != 'next_preopen_readiness_v1'
+                or original_prepared.get('status') != 'prepared_verified'
+                or original_prepared.get('target_date') != day
+                or original_prepared.get('actual_pid_consumed') is not False):
+            raise ValueError('intraday_original_prepared_contract_invalid')
+        # The current native DONE/strict contract must verify before recording
+        # a document-only reseal. This cannot change any dated policy bytes.
+        source = _source_receipts(source_day, day)
+        if not source.get('policy_receipts') or source['policy_receipts'] != original_prepared.get('policy_receipts'):
+            raise ValueError('intraday_reseal_policy_generation_changed')
+        checklist = DATA_DIR.parent / 'docs/checklists' / (day + '-stage2-todo-checklist.md')
+        frozen.extend([Path(source['controller_path']), Path(source['summary_path']), checklist])
+        reseal = dict(source_date=source_day, target_date=day, current_source_receipts=source,
+                      checklist_path=str(checklist), original_controller_sha256=original_prepared.get('controller_sha256'),
+                      original_summary_sha256=original_prepared.get('summary_sha256'), policy_effect='unchanged')
     # All native source receipts remain independently validated by the launcher.
     hashes = {str(path): _sha(path) for path in frozen}
+    if reseal is not None and any(hashes[source[key + '_path']] != source[key + '_sha256']
+                                  for key in ('controller', 'summary')):
+        raise ValueError('intraday_postclose_generation_changed_during_prepare')
     if _identity(old_pid) != old_identity:
         raise ValueError("intraday_old_pid_changed_during_prepare")
     payload = {"schema": "intraday_policy_preserving_release_handoff_v1", "status": "prepared_verified",
@@ -129,6 +152,8 @@ def prepare(day, *, old_pid, previous_root, confirm, now=None):
                "prepared_receipt_path": str(receipt_path), "prepared_receipt_sha256": _sha(receipt_path),
                "manifest_sha256": check.get("manifest_sha256"), "actual_pid_consumed": False,
                "policy_effect": "unchanged", "authority": confirm}
+    if reseal is not None:
+        payload['postclose_source_reseal'] = reseal
     path, _ = _paths(day, commit)
     path.parent.mkdir(parents=True, exist_ok=True)
     # A receipt is immutable. Repeating preparation cannot silently replace it.
@@ -160,6 +185,21 @@ def verify(day, commit, *, now=None):
         required = {str(bootstrap.env_path(day)), str(bootstrap.manifest_path(day)), str(_preopen_path(day)),
                     str(DATA_DIR / "runtime/policy_bootstrap/prepared" / day / "latest.json"),
                     payload["prepared_receipt_path"]}
+        reseal = payload.get('postclose_source_reseal')
+        if reseal is not None:
+            prepared_receipt = _read(payload['prepared_receipt_path'])
+            source = reseal['current_source_receipts']
+            if (reseal.get('target_date') != day or reseal.get('source_date') != prepared_receipt.get('source_date')
+                    or reseal.get('policy_effect') != 'unchanged'
+                    or source.get('policy_receipts') != prepared_receipt.get('policy_receipts')
+                    or reseal.get('checklist_path') != str(DATA_DIR.parent / 'docs/checklists' / (day + '-stage2-todo-checklist.md'))
+                    or source.get('controller_path') != str(DATA_DIR / 'report/postclose_done_controller' / ('postclose_done_controller_' + reseal['source_date'] + '.json'))
+                    or source.get('summary_path') != str(DATA_DIR / 'report/runtime_approval_summary' / ('runtime_approval_summary_' + reseal['source_date'] + '.json'))):
+                raise ValueError('intraday_postclose_reseal_identity_invalid')
+            if any(frozen.get(source[key + '_path']) != source.get(key + '_sha256')
+                   for key in ('controller', 'summary')):
+                raise ValueError('intraday_postclose_reseal_hash_invalid')
+            required.update([source['controller_path'], source['summary_path'], reseal['checklist_path']])
         if set(frozen) != required or any(_sha(name) != sha for name, sha in frozen.items()):
             raise ValueError("intraday_preserved_generation_changed")
         start = datetime.fromisoformat(payload["prepared_at"])
@@ -218,10 +258,12 @@ def main(argv=None):
     parser.add_argument("--pid", type=int)
     parser.add_argument("--previous-root")
     parser.add_argument("--confirm")
+    parser.add_argument('--reseal-postclose-source', action='store_true')
     args = parser.parse_args(argv)
     try:
         if args.prepare:
-            result = prepare(args.target_date, old_pid=args.old_pid, previous_root=args.previous_root, confirm=args.confirm)
+            result = prepare(args.target_date, old_pid=args.old_pid, previous_root=args.previous_root,
+                             confirm=args.confirm, reseal_postclose_source=args.reseal_postclose_source)
         elif args.consume:
             result = consume(args.target_date, pid=args.pid)
         else:

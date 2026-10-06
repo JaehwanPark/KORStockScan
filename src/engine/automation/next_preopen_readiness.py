@@ -198,6 +198,7 @@ def verify_prepared(target_date: str, *, require_today: bool = False,
                                   **({"generation_only": True} if generation_only else {}))
         release_changed = (receipt["selected_release_commit"] != commit
                            or receipt["selection_sha256"] != _sha(selection_path))
+        expected_source = receipt
         if release_changed:
             from src.engine.automation.intraday_release_handoff import verify as verify_intraday
             handoff = verify_intraday(target_date, commit, now=now)
@@ -206,7 +207,11 @@ def verify_prepared(target_date: str, *, require_today: bool = False,
                     or preserved.get("prepared_receipt_sha256") != _sha(receipt_path)):
                 raise ValueError("prepared_source_or_release_changed")
             handoff_basis = "intraday_preserved_preopen_generation"
-        if any(receipt.get(key) != value for key, value in source.items()):
+            reseal = preserved.get('postclose_source_reseal')
+            if reseal is not None:
+                expected_source = reseal['current_source_receipts']
+                handoff_basis = 'intraday_preserved_preopen_generation_current_postclose_resealed'
+        if any(expected_source.get(key) != value for key, value in source.items()):
             raise ValueError("prepared_source_or_release_changed")
         output_dir = receipt_path.parent
         for key, path in (

@@ -3,6 +3,43 @@ import json
 from src.engine import notify_error_detection_admin as notifier
 
 
+def test_native_machine_alert_and_exact_bound_recovery(tmp_path, monkeypatch):
+    report, state = tmp_path/'report.json', tmp_path/'state.json'
+    sent = []
+    monkeypatch.setattr(notifier, '_load_telegram_config', lambda: ('token', 'admin'))
+    monkeypatch.setattr(notifier, '_send_telegram', lambda *args: sent.append(args[-1]))
+    incident = dict(source_date='2026-10-06', target_date='2026-10-07',
+        stage='main_machine_policy', scope='report', reason='continuous_reversal_report_hash_or_date_invalid',
+        status='source_invalid', generation='a'*64, owner='DirectFamilySourceRepairMainMechanisticEntry')
+    details = dict(semantic_alerts=[incident], semantic_source_bindings=[
+        dict(incident, as_of_date='2026-10-07')])
+    payload = dict(target_date='2026-10-07', results=[dict(detector_id='artifact_freshness',
+        severity='warning', details=details)])
+    def call():
+        report.write_text(json.dumps(payload))
+        return notifier.notify_from_report(report, mode='full', log_file='log', state_file=state)
+    assert call() == 'sent'
+    assert len(sent) == 1
+    details['semantic_alerts'] = []
+    observed = dict(source_date='2026-10-06', target_date='2026-10-08',
+        report_sha256='b'*64, status='cumulative_winrate_selected', findings=[])
+    details['machine_result_semantics'] = observed
+    assert call() == 'no_alert'
+    assert json.loads(state.read_text())['active_incident_count'] == 1
+    observed['target_date'] = '2026-10-07'
+    observed['findings'] = ['continuous_reversal_dated_policy_invalid']
+    assert call() == 'no_alert'
+    assert json.loads(state.read_text())['active_incident_count'] == 1
+    observed['findings'] = []
+    details['semantic_source_bindings'] = [dict(stage='main_machine_policy',
+        as_of_date='2026-10-07', source_date='2026-10-06', target_date='2026-10-07',
+        generation=observed['report_sha256'], status=observed['status'])]
+    assert call() == 'no_alert'
+    value = json.loads(state.read_text())
+    assert value['active_incident_count'] == 0
+    assert value['historical_semantic_incidents'][-1]['disposition'] == 'native_recovered'
+
+
 def test_semantic_warning_notifies_stably_and_unobservable_is_not_recovery(tmp_path, monkeypatch):
     report, state = tmp_path / "report.json", tmp_path / "state.json"
     sent = []

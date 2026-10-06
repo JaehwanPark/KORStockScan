@@ -12,6 +12,29 @@ from src.engine.monitoring import episode_source_research as research
 from src.tests.test_entry_designated_policy import staged_request, NOW
 
 
+def test_current_owner_projection_retains_counts_and_marks_missing_owner():
+    semantics = dict(status='source_invalid', findings=['cancel_wait_execution_failed'],
+        target_date='2026-10-07', report_sha256='a'*64,
+        unclassified_submission_count=4, daily_submitted_parent_count=10)
+    alerts = detector._semantic_alerts('entry_cancel_wait_tuning', semantics, '2026-10-06',
+        current_owners={'DirectFamilySourceRepairEntryCancelWait'}, as_of_date='2026-10-07')
+    assert alerts[0]['owner'] == 'DirectFamilySourceRepairEntryCancelWait'
+    assert alerts[0]['producer_owner'] == 'EntryCancelWaitSourceReconciliation1002'
+    assert alerts[0]['affected'] == 4 and alerts[0]['eligible'] == 10
+    assert alerts[0]['observation_date'] == '2026-10-07'
+    alerts = detector._semantic_alerts('entry_cancel_wait_tuning', semantics, '2026-10-06', current_owners=set())
+    assert alerts[0]['owner_status'] == 'unresolved'
+
+
+@pytest.mark.parametrize('clock,status', [('07:32:00','future_due'), ('07:35:03','future_due'),
+                                        ('07:36:00','source_invalid')])
+def test_episode_applied_deadline_matches_preopen_producer(tmp_path, clock, status):
+    from src.engine.error_detectors.episode_health import check
+    result = check(tmp_path, datetime.fromisoformat('2026-10-07T'+clock+'+09:00'),
+        target_date='2026-10-07', reader=detector._semantic_object)
+    assert result['status'] == status
+
+
 @pytest.mark.parametrize('tamper', [False, True])
 def test_native_designation_semantics_preserves_binding_and_rejects_changed_source(staged_request, tamper):
     from src.engine.scalping import entry_designated_policy as native
@@ -80,7 +103,10 @@ def test_family_seal_predecessors_and_population(tmp_path, tamper):
         v = json.loads(projection_path.read_text()); v['summary']['stage_counts']['profiles'] = 2
         projection_path.write_text(json.dumps(family.seal(v)))
     result = detector._family_policy_semantics(tmp_path, '2026-10-02', 'episode')
-    assert result['status'] == ('pass' if tamper == 'none' else 'source_invalid')
+    # Current producer edits do not corrupt retained original kernel bytes.
+    assert result['status'] == ('pass' if tamper in {'none', 'kernel'} else 'source_invalid')
+    if tamper == 'kernel':
+        assert set(result['kernel_custody'].values()) >= {'retained_original_bytes'}
     if tamper == 'none':
         assert result['summary']['dispositions'] == {'valid_empty_no_fill': 1}
         assert result['summary']['realized_profit'] is None

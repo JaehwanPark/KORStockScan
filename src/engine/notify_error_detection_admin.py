@@ -15,6 +15,12 @@ from src.utils.constants import CONFIG_PATH, DEV_PATH, PROJECT_ROOT
 
 DEFAULT_STATE_FILE = PROJECT_ROOT / "tmp" / "error_detection_telegram_notify_state.json"
 
+SEMANTIC_ALERT_STAGES = frozenset({
+    "legacy_machine_report", "main_machine_policy", "main_auxiliary_policy",
+    "postclose_handoff", "entry_cancel_wait_tuning", "episode_policy",
+    "samsung_frozen_validation", "episode_startup",
+})
+
 
 def _load_telegram_config() -> tuple[str, str]:
     config_path = CONFIG_PATH if CONFIG_PATH.exists() else DEV_PATH
@@ -115,9 +121,8 @@ def _alert_results(report: dict) -> list[dict]:
             continue
         for value in (item.get("details") or {}).get("semantic_alerts", []):
             if (not isinstance(value, dict) or not _semantic_source_matches(report, item, value)
-                or value.get("stage") not in {"legacy_machine_report", "main_auxiliary_policy", "postclose_handoff", "entry_cancel_wait_tuning",
-                    "episode_policy", "samsung_frozen_validation", "episode_startup"}
-                or value.get("status") in {"not_assessed", "unobservable"}
+                or value.get("stage") not in SEMANTIC_ALERT_STAGES
+                or value.get("status") in {"not_assessed", "unobservable", "historical_diagnostic", "off", "future_due"}
                 or not value.get("reason") or not value.get("owner")):
                 continue
             alerts.append({"detector_id": "artifact_freshness", "severity": "warning",
@@ -245,6 +250,7 @@ def notify_from_report(
     details = next((r.get("details") or {} for r in report.get("results", [])
                     if isinstance(r, dict) and r.get("detector_id") == "artifact_freshness"), {})
     names = {"legacy_machine_report": "machine_result_semantics",
+             "main_machine_policy": "machine_result_semantics",
              "main_auxiliary_policy": "auxiliary_result_semantics",
              "postclose_handoff": "postclose_handoff_semantics",
              "entry_cancel_wait_tuning": "entry_cancel_wait_result_semantics",
@@ -270,10 +276,32 @@ def notify_from_report(
             else report.get("target_date"))
         if incident.get("source_date") != native_day:
             history.append({**incident, "disposition": "historical_unrecovered"})
+        elif (observed.get('status') in {'off', 'historical_diagnostic'}
+              and observed.get('source_date') == incident.get('source_date')
+              and observed.get('report_sha256')
+              and any(isinstance(b, dict) and b.get('as_of_date') == report.get('target_date')
+                      and b.get('stage') == incident.get('stage')
+                      and b.get('source_date') == observed.get('source_date')
+                      and b.get('target_date') == observed.get('target_date')
+                      and b.get('generation') == observed.get('report_sha256')
+                      and b.get('status') == observed.get('status')
+                      for b in details.get('semantic_source_bindings', []))):
+            history.append({**incident, 'disposition': observed['status'] + '_unrecovered',
+                            'classification_generation': observed['report_sha256']})
         elif (observed.get("source_date") != incident.get("source_date")
               or observed.get("status") not in {
                   "pass", "warning", "source_gap", "review_required",
-                  "incumbent_carry", "candidate_selected", "done"}
+                  "incumbent_carry", "candidate_selected", "cumulative_winrate_selected", "done"}
+              or (incident.get("target_date") is not None
+                  and observed.get("target_date") != incident.get("target_date"))
+              or (observed.get('status') == 'cumulative_winrate_selected'
+                  and not any(isinstance(b, dict) and b.get('as_of_date') == report.get('target_date')
+                      and b.get('stage') == incident.get('stage')
+                      and b.get('source_date') == observed.get('source_date')
+                      and b.get('target_date') == observed.get('target_date')
+                      and b.get('generation') == observed.get('report_sha256')
+                      and b.get('status') == observed.get('status')
+                      for b in details.get('semantic_source_bindings', [])))
               or not observed.get("report_sha256")
               or (incident.get("scope") not in {None, "report"}
                   and incident.get("scope") not in (observed.get("scopes") or {}))
@@ -285,6 +313,13 @@ def notify_from_report(
                   and (observed.get("execution") or {}).get("command_status") != "succeeded")
               or incident.get("reason") in (observed.get("findings") or [])):
             unresolved[fingerprint] = incident
+        elif incident.get('stage') in {'main_machine_policy', 'main_auxiliary_policy'}:
+            scope = (observed.get('scopes') or {}).get(incident.get('scope'), observed)
+            if scope.get('findings') or observed.get('findings'):
+                unresolved[fingerprint] = incident
+            else:
+                history.append({**incident, 'disposition': 'native_recovered',
+                                'recovery_generation': observed.get('report_sha256')})
     for item in fail_results:
         if isinstance(item.get("semantic_incident"), dict):
             incoming = item['semantic_incident']

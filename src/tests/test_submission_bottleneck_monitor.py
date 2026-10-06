@@ -1347,6 +1347,106 @@ def semantic_fixture(tmp_path, monkeypatch):
     return observation, write
 
 
+def reversal_semantic_fixture(tmp_path, monkeypatch, *, turned=True):
+    from src.tests.test_mechanistic_entry_runtime_policy import initial
+    from src.tests.test_continuous_reversal import family_reports, rows
+    from src.engine.scalping import continuous_reversal as kernel, continuous_reversal_policy as policy
+    from src.engine.scalping import ai_decision_trace as trace, entry_strategy_policy as legacy
+    from src.engine.scalping.mechanistic_entry_runtime_policy import digest
+    now = datetime.fromisoformat('2026-10-07T10:00:00+09:00')
+    initial(tmp_path)
+    policy.publish(tmp_path, '2026-10-06', '2026-10-06', *family_reports())
+    from src.engine.scalping.mechanistic_entry_runtime_policy import load_effective
+    bundle = load_effective(data_root=tmp_path, target_date='2026-10-07')
+    family = bundle['continuous_reversal']
+    state = kernel.ReversalState()
+    for i, row in enumerate(rows([100, 99, 100])):
+        row[0] = now.timestamp() - .3 + i*.1
+        state.observe(row, symbol='005930', venue='KRX', session='KRX_REGULAR')
+    assessment, inp, prompt, schema = policy.assess(family, state.snapshot() if turned else None,
+        symbol='005930', session='KRX_REGULAR')
+    raw = dict(stock_code='005930', session_bucket='KRX_REGULAR', effective_venue='KRX',
+        evaluation_attempt_id='attempt-1', entry_machine_input_as_of=now.timestamp()-.15)
+    native = dict(family_sha256=family['family_sha256'], source_date=family['source_date'],
+        publication_date=family['publication_date'], effective_date=family['effective_date'],
+        machine_component_sha256=digest(family['machine_cells']), auxiliary_component_sha256=digest(family['auxiliary_cells']),
+        arm=family['auxiliary_cells'][assessment['cell_key']]['payload']['arm'] if turned else None,
+        snapshot_read_at=now.timestamp()-.01, snapshot_cutoff=raw['entry_machine_input_as_of'],
+        input_sha256=digest(inp) if inp is not None else None,
+        prompt_sha256=digest(prompt) if inp is not None else None,
+        response_schema_sha256=digest(schema) if inp is not None else None)
+    monkeypatch.setenv('KORSTOCKSCAN_AI_DECISION_TRACE_ENABLED', '1')
+    monkeypatch.setattr(trace, 'DATA_DIR', tmp_path)
+    monkeypatch.setattr(trace, '_now', lambda: now)
+    trace.capture_machine_observation(exact_payload=raw, setup_evidence={}, assessment=assessment,
+        bundle_sha256=bundle['bundle_sha256'], reversal_context=native,
+        reversal_request=dict(input=inp, prompt=prompt, response_schema=schema) if inp else None)
+    path = tmp_path/'ai_decision_payloads/ai_decision_payloads_2026-10-07.jsonl'
+    observation = json.loads(path.read_text().splitlines()[-1])
+    def write(value):
+        value = {k: v for k, v in value.items() if k != 'machine_observation_sha256'}
+        value['machine_observation_sha256'] = __import__('hashlib').sha256(trace._json_bytes(value)).hexdigest()
+        path.write_text(json.dumps(value)+'\n')
+    monkeypatch.setattr(legacy, 'select', lambda *a, **k: pytest.fail('native reversal called legacy selector'))
+    monkeypatch.setattr(legacy, 'machine_support_adjusted_win_rate', lambda *a: pytest.fail('native reversal called score gate'))
+    return observation, write, now
+
+
+@pytest.mark.parametrize('turned', [True, False])
+def test_reversal_native_source_date_and_receipt_without_legacy_raw(tmp_path, monkeypatch, turned):
+    observation, write, now = reversal_semantic_fixture(tmp_path, monkeypatch, turned=turned)
+    result = monitor.machine_semantics(tmp_path, now)
+    assert result['status'] == 'observed_receipts_match', result
+    assert len(result['selection']) == 12
+    assert result['selection_family'] == 'continuous_reversal'
+    assert next(iter(result['scopes'].values()))['native_reversal_receipt'] == 1
+    # Old natural captures stay auditable, without fabricated new receipts.
+    del observation['runtime_consumption']['continuous_reversal']
+    write(observation)
+    assert monitor.machine_semantics(tmp_path, now)['status'] == 'review_required'
+    del observation['capture_contract']
+    write(observation)
+    result = monitor.machine_semantics(tmp_path, now)
+    assert result['status'] == 'observed_receipts_match'
+    assert next(iter(result['scopes'].values()))['historical_reversal_capture'] == 1
+
+
+@pytest.mark.parametrize('field,value', [('arm','bad'), ('family_sha256','a'*64),
+    ('input_sha256',None), ('input_sha256','a'*64), ('prompt_sha256','b'*64),
+    ('process_start_ticks','0'), ('snapshot_read_at',1791342001.)])
+def test_reversal_native_receipt_mutation_is_not_silently_accepted(tmp_path, monkeypatch, field, value):
+    observation, write, now = reversal_semantic_fixture(tmp_path, monkeypatch)
+    observation['runtime_consumption']['continuous_reversal'][field] = value
+    write(observation)
+    result = monitor.machine_semantics(tmp_path, now)
+    assert result['status'] == 'review_required'
+    assert result['issues'] and 'machine_raw_input_missing' not in result['issues']
+
+
+def test_reversal_request_preparation_is_not_provider_execution(tmp_path, monkeypatch):
+    observation, _, now = reversal_semantic_fixture(tmp_path, monkeypatch)
+    key = observation['machine_observation_sha256']
+    path = tmp_path/'ai_decision_requests'/f'ai_decision_requests_{now.date()}.jsonl'
+    path.parent.mkdir()
+    path.write_text(json.dumps(dict(captured_at=now.isoformat(), request_id='request-1',
+        continuous_reversal_request_binding=dict(machine_observation_sha256=key,binding_status='matched')))+'\n')
+    result = monitor._reversal_provider_lineage(tmp_path, now, [observation], tail_bytes=8192)
+    assert result['request_prepared_count'] == 1 and result['raw_response_observed_count'] == 0
+    assert result['provider_called_metadata_used_as_fact'] is False
+    observation['source']['assessment']['action'] = 'BLOCK'
+    result = monitor._reversal_provider_lineage(tmp_path, now, [observation], tail_bytes=8192)
+    assert result['issues'] == {'reversal_provider_request_after_nonentry': 1}
+
+
+def test_compressed_source_never_becomes_zero_complete_window(tmp_path):
+    path = tmp_path/'archived.jsonl'
+    path.with_suffix('.jsonl.gz').write_bytes(b'archive')
+    rows, source = monitor._recent_source_rows(path, START, time_field='captured_at')
+    assert rows == [] and source['status'] == 'unobservable'
+    assert source['reason'] == 'compressed_archive_not_current_bounded_source'
+    assert source['window_covered'] is False
+
+
 def test_semantic_receipt_and_negative_ev_selection(tmp_path, monkeypatch):
     observation, write = semantic_fixture(tmp_path, monkeypatch)
     result = monitor.machine_semantics(tmp_path, START)

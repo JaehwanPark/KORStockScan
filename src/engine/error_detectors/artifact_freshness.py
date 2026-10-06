@@ -386,7 +386,9 @@ def _semantic_stage_binding(root, day, stage, *, artifact=None, artifact_sha=Non
                 raise ValueError(f"{stage}:completed_report_generation_mismatch")
             if artifact_path is not None and source.get("path") != str(artifact_path.resolve()):
                 raise ValueError(f"{stage}:terminal_source_path_invalid")
-    return {"status": value.get("status"), "receipt_sha256": digest}
+    if value.get('status') == 'off' and value.get('off_reason') != 'explicit_schedule_disabled':
+        raise ValueError(f'{stage}:terminal_off_reason_invalid')
+    return {"status": value.get("status"), "receipt_sha256": digest, 'off_reason': value.get('off_reason')}
 
 
 def _continuous_reversal_result_semantics(root, source_date, component):
@@ -1364,7 +1366,9 @@ def _family_policy_semantics(root, source_date, family):
         # between reads. A moving generation is unobservable, not corruption.
         if _semantic_object(path, limit=4 * 1024 * 1024)[1] != sha:
             raise ValueError('semantic_generation_changed_during_read')
-        return dict(status='warning' if findings else 'pass', findings=findings,
+        historical = execution.get('status') == 'off'
+        return dict(status='off' if historical else 'warning' if findings else 'pass',
+            findings=[] if historical else findings, historical_findings=findings if historical else [],
             source_date=source_date, target_date=value.get('target_date'),
             artifact=str(path), report_sha256=sha, summary=summary, kernel_custody=kernel_custody,
             scopes={r.get('profile_id') or f"{r['symbol']}|{r['session']}": r for r in rows},
@@ -1373,7 +1377,7 @@ def _family_policy_semantics(root, source_date, family):
         return dict(_semantic_failure(exc), source_date=source_date, artifact=str(path))
 
 
-def _samsung_forward_semantics(root, source_date):
+def _samsung_forward_semantics(root, source_date, *, current_main=False):
     path = root / 'data/report/samsung_tick_transition_forward_validation' / source_date / 'latest.json'
     if source_date < '2026-10-06':
         return {'status': 'not_assessed', 'findings': [], 'source_date': source_date}
@@ -1403,7 +1407,9 @@ def _samsung_forward_semantics(root, source_date):
             or result.get('day') != source_date or result.get('status') != index.get('status')
             or index.get('status') not in {'failed', 'waiting_new_source_date', 'evaluated', 'valid_empty', 'source_quality_excluded_all'}):
             raise ValueError('samsung_forward_result_invalid')
-        return dict(status=index['status'], findings=['samsung_forward_execution_failed'] if index['status'] == 'failed' else [], source_date=source_date,
+        findings = ['samsung_forward_execution_failed'] if index['status'] == 'failed' else []
+        return dict(status='historical_diagnostic' if current_main else index['status'],
+            findings=[] if current_main else findings, historical_findings=findings if current_main else [], source_date=source_date,
             artifact=str(path), report_sha256=sha, comparison=result.get('comparisons'),
             source_quality=result.get('source_quality'), missing_source_paths=result.get('missing_source_paths'),
             decision_authority='report_only')
@@ -1532,7 +1538,50 @@ def _postclose_handoff_semantics(root, source_date, now):
     return result
 
 
-def _semantic_alerts(name, semantics, source_date):
+def _current_semantic_owners(root, day):
+    """Project only today's parsed OPEN stable IDs; no historical fallback."""
+    from src.engine.sync_docs_backlog_to_project import parse_checklist_tasks
+    owners = Counter()
+    path = root / 'docs/checklists' / (day + '-stage2-todo-checklist.md')
+    for task in parse_checklist_tasks():
+        if Path(task.source).resolve() != path.resolve():
+            continue
+        match = re.match(r'^\[([^\]]+)\]', task.title)
+        if match:
+            owners[match[1]] += 1
+    return {key for key, count in owners.items() if count == 1}
+
+
+def _semantic_alerts(name, semantics, source_date, *, current_owners=None, as_of_date=None):
+    alerts = _semantic_alert_candidates(name, semantics, source_date)
+    if current_owners is None:
+        return alerts
+    for alert in alerts:
+        _project_semantic_owner(alert, current_owners, as_of_date)
+    return alerts
+
+
+def _project_semantic_owner(alert, current_owners, as_of_date):
+    mapping = {
+        'main_machine_policy': 'DirectFamilySourceRepairMainMechanisticEntry',
+        'main_auxiliary_policy': 'DirectFamilySourceRepairMainMechanisticEntry',
+        'postclose_handoff': 'DirectFamilyPreopenPolicyHandoff',
+        'entry_cancel_wait_tuning': 'DirectFamilySourceRepairEntryCancelWait',
+        'episode_policy': 'DirectFamilySourceRepairLowPriceTwoLeg',
+        'episode_startup': 'EpisodeCaptureSequence1006',
+        'samsung_frozen_validation': 'SemanticMonitorProducerConsumerRefresh1007',
+        'legacy_machine_report': 'SemanticMonitorProducerConsumerRefresh1007',
+    }
+    owner = mapping.get(alert['stage'])
+    alert.update(producer_owner=alert['owner'], historical_owner=alert['owner'],
+                     owner=owner if owner in current_owners else 'UNRESOLVED_CURRENT_OWNER:' + str(owner),
+                     owner_status='current_open' if owner in current_owners else 'unresolved',
+                     observation_date=as_of_date, effective_date=alert.get('target_date'))
+
+
+def _semantic_alert_candidates(name, semantics, source_date):
+    if semantics.get('status') in {'off', 'historical_diagnostic'}:
+        return []
     if name in {'episode_policy', 'samsung_frozen_validation', 'episode_startup'}:
         if semantics.get('status') in {'not_assessed', 'unobservable', 'waiting_producer', 'future_due'}:
             return []
@@ -2548,7 +2597,8 @@ class ArtifactFreshnessDetector(BaseDetector):
                 warnings.append("postclose_handoff_semantics: " + ", ".join(handoff["findings"]))
             family_results = [(name, _family_policy_semantics(PROJECT_ROOT, semantic_day, family))
                               for name, family in (('episode_policy', 'episode'),)]
-            family_results.append(('samsung_frozen_validation', _samsung_forward_semantics(PROJECT_ROOT, semantic_day)))
+            family_results.append(('samsung_frozen_validation', _samsung_forward_semantics(
+                PROJECT_ROOT, semantic_day, current_main=machine_semantics.get('selection_metric') == 'cumulative_raw_win_fraction')))
             for name, result in family_results:
                 details[name + '_semantics'] = result
                 if result['findings']:
@@ -2586,6 +2636,16 @@ class ArtifactFreshnessDetector(BaseDetector):
         bindings.append(dict(stage='episode_startup', source_date=episode_startup['source_date'],
             target_date=episode_startup['target_date'], as_of_date=_today_kst_str(now_dt),
             generation=episode_startup.get('report_sha256'), status=episode_startup['status']))
+        current_owners = _current_semantic_owners(PROJECT_ROOT, today)
+        # Apply one exact-date owner projection to every semantic hook,
+        # including startup and cancel-wait hooks outside the stage loop.
+        for alert in alerts:
+            _project_semantic_owner(alert, current_owners, today)
+        details['semantic_owner_projection'] = dict(as_of_date=today, open_ids=sorted(current_owners))
+        from src.engine.monitoring.error_detector_coverage import validate_semantic_coverage
+        coverage = validate_semantic_coverage(today)
+        details['functional_semantic_coverage'] = coverage
+        issues.extend('semantic_coverage: ' + finding for finding in coverage['findings'])
         if trading_day:
             quantity_semantics = _initial_quantity_semantics(
                 PROJECT_ROOT, today, now_epoch=now_ts)

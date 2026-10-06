@@ -56,6 +56,25 @@ def test_request_capture_preparation_reuses_indexes_and_rolls_date(monkeypatch, 
     assert len(calls) == 6
 
 
+@pytest.mark.parametrize('mismatch', [False, True])
+def test_native_reversal_request_capture_binds_actual_bytes_without_claiming_execution(monkeypatch, tmp_path, mismatch):
+    import hashlib
+    _enable(monkeypatch, tmp_path)
+    inp = dict(context='observed first uptick', stock_code='005930')
+    prompt = 'Assess the confirmed uptick.'
+    native = dict(input_sha256=hashlib.sha256(trace._json_bytes(inp)).hexdigest(),
+                  prompt_sha256=hashlib.sha256(trace._json_bytes(prompt)).hexdigest())
+    result = trace.capture_ai_request(prompt=prompt+'changed' if mismatch else prompt, user_input=json.dumps(inp),
+        replay_context=inp, endpoint_name='analyze_target', symbol='005930', request_id='native-1',
+        model='fixture', schema_name='entry_v1', require_json=True,
+        metadata=dict(machine_observation_sha256='a'*64, continuous_reversal_consumption=native))
+    assert result['ai_decision_trace_id'] == 'native-1'
+    row = _rows(trace._request_path(trace._date_text()))[0]
+    binding = row['continuous_reversal_request_binding']
+    assert binding['binding_status'] == ('mismatch' if mismatch else 'matched')
+    assert binding['provider_fact'] == 'request_prepared_not_execution'
+
+
 def test_machine_observation_keeps_exact_input_without_provider_request(
     monkeypatch, tmp_path
 ):
