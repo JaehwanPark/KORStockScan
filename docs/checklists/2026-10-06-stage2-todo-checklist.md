@@ -81,11 +81,13 @@
 
 ## Main 원천·판정 계약 보완 배포
 
-- [ ] `[MainMachineSourceRepairDeploy1006] Main 기계 원천 갱신·증거 해시·probe 관측 시각 수정 배포 및 재기동` (`Due: 2026-10-06`, `Slot: INTRADAY`, `TimeWindow: 사용자 승인 후 당일`, `Track: RuntimeStability`)
+- [x] `[MainMachineSourceRepairDeploy1006] Main 기계 원천 갱신·증거 해시·probe 관측 시각 수정 배포 및 재기동` (`Due: 2026-10-06`, `Slot: INTRADAY`, `TimeWindow: 사용자 승인 후 당일`, `Track: RuntimeStability`)
   - Source: [원천 갱신·증거 해시 보완](../audits/main-machine-source-refresh-and-admission-hash-remediation-2026-10-06.md), [018880 관측 시각·제출 경로 점검](../audits/main-entry-pre-ai-probe-clock-and-018880-lineage-audit-2026-10-06.md), [배포·기동 수용 기록](../audits/main-machine-source-remediation-deployment-review-2026-10-06.md).
   - 권한: 사용자가 반복 코드리뷰·보완 및 배포·재기동을 명시 승인했다. 기존 기계/보조 정책, hard safety, 원천 freshness/conflict, broker·수량·cap·custody·operator lock을 보존한다.
   - 코드 gate: 관련 12개 module 1,143 PASS, 실제 WATCHING handler source wait 3 PASS. 재기동 fresh gate에서 과거 holding vote v2 summary의 소비 호환성 결함을 발견해 보완, 추가 181 PASS 및 실제 기존 PID/bootstrap 재검증 통과. compile·Ruff·shell·diff 확인. 미확정 probe 체결가격의 경제성 재생은 미지원으로 유지한다.
   - Acceptance: fresh KRX/NXT broker inventory·미체결 및 로컬 custody, immutable release·rollback, 당일 정책 보존 handoff, singleton 새 Main PID/root·policy/bootstrap receipt, WS first-data·heartbeat와 시작 후 오류/중복 주문 확인. 자연 source·submit·fill·비용 수익은 별도 증거다.
+  - 완료: 통합 코드 `c5297da9`와 보유 정책 소비 호환성 보완 `1667abb9`를 배포했다. 11:47:53 graceful restart 뒤 Main singleton PID `4071430`, 새 root·bootstrap·intraday consumption PASS, 정책/PREOPEN 5개 hash 불변. KRX/NXT 잔고·미체결 및 로컬 활성 custody 0. WS first-data·heartbeat·process health PASS. 설치 Episode 122개 route·366개 policy pin과 cron 8개 경로 검증, 웹·체결 통보 active PID 새 root 확인. 격리/비활성 Episode 상태는 유지했다.
+  - 별도 상태: 자연 원천 복구 retry·실제 제출/체결·비용 수익은 이 기동 확인으로 입증하지 않는다. 시작 중 `cron_completion`은 05:03 저장소 정리의 `micro_reversion_storage_status=partial_failure` 및 그에 따른 `postclose_finalization cleanup_failed`를 그대로 보고했다. Main process health PASS와 전체 장후 DONE을 구분하며 원 실패 receipt를 보존했다.
 
 ## 위젯 전체 제거 인계
 

@@ -29,7 +29,7 @@
 
 완료 후 실제 PID/root/commit·정책 hash·bootstrap·intraday consumption·WS first-data·heartbeat, fresh broker inventory/미체결 및 중복 Main 프로세스/주문을 재확인한다. 자연 새 기계 attempt·원천 복구·제출/체결·비용 수익 증거는 별도 상태다.
 
-배포 및 실제 기동 수용 결과는 완료 receipt와 함께 이 문서에 추가한다.
+배포 및 실제 기동 수용 결과는 아래 완료 receipt에 기록한다.
 
 ## 재기동 gate에서 발견한 추가 결함과 보완
 
@@ -41,3 +41,23 @@
 - 새 보완의 변조·결손·발행일·코드·실패 terminal 회귀와 policy/bootstrap/Widget 퇴역 검증 **181 PASS**. 원래 1,146건과 중복 module이 있으므로 고유 건수로 합산하지 않는다. compile·Ruff·diff 통과.
 - 실제 보유 정책 consumer는 `estimated_provisional_loaded`, 기존 PID의 fresh bootstrap은 `pass`로 정상화됐다. 보유 bundle `43fcaac44792cb55fced0883b12216f2423468703bea2aee2765d01f01daa926` 및 당일 정책/PREOPEN 5개 frozen hash는 그대로다.
 - [실패 검증](../../tmp/machine-source-deployment-20261006/bootstrap-before-fresh.json), [보완 후 검증](../../tmp/machine-source-deployment-20261006/bootstrap-before-repaired.json).
+
+## 배포 및 실제 기동 수용 결과
+
+- 통합 코드 commit `c5297da9788ffd74c97769396227edcbf57c4422`, 추가 보유 소비자 보완 commit `1667abb930b610edd9e1b023d010b0633e39f018`을 포함한 깨끗한 immutable release `machine-source-recovery-20261006-1667abb9`를 선택했다. 이전 selector와 설치 drop-in, 실제 이전 root를 보존했다.
+- 설치 drop-in **13개**는 기존 effective env·정책·custody 경계를 검증하고 release root/commit만 교체했다. Episode **122개** 설치 경로의 **366개** 정책 pin, cron **8개** 경로 검증 PASS. 당시 Episode는 inactive 93·failed 29이며 기동하거나 격리를 해제하지 않았다. 설치 경로 PASS를 Episode 실제 기능 PASS로 해석하지 않는다.
+- native intraday handoff 준비 후 `deploy/run_runtime_release.sh restart`를 사용했다. 기존 PID `3956345`의 정상 종료를 확인하고 drained tmux 감독자를 교체했다. **2026-10-06 11:47:53 KST**, 새 Main singleton PID **4071430**, 실제 cwd `.../machine-source-recovery-20261006-1667abb9/src`를 확인했다. 강제 kill·실제 주문 테스트는 없었다.
+- bootstrap 및 actual PID consumption **PASS**, mismatch/finding **0**. 당일 env·manifest·원 PREOPEN status·prepared index·readiness의 **5개 SHA-256 전부 불변**. 새 코드 소비와 기존 정책 적용을 모두 직접 확인했다.
+- 재기동 후 새 read-only 완전조회에서 KRX/NXT 잔고 **0**, 미체결 **0**, 정상 조회·정규화 계약을 확인했다. 로컬 활성 custody **0**, Main child **1개**다. 이 상태와 자연 체결 성과를 구분한다.
+- Main control loop·스나이퍼·스캐너·Telegram·오류감시 heartbeat 정상, `ProcessHealthDetector` **PASS**. 새 연결/login 뒤 실시간 first-data를 확인했고, 11:51:05 수용 snapshot에는 **58개 first-data 로그**와 삼성전자 11:48:18의 0D first-data가 있었다. 접속/first-data가 모든 종목의 모든 순간 freshness를 보장하는 것은 아니다.
+- 이미 active였던 웹 서비스와 체결 통보 서비스도 재기동했다. 새 PID는 각각 **4073161**, **4073127**이며 실제 cwd가 새 release root다. 웹 root **200**, 삼성전자·두산·한화오션의 과거 위젯 가격 API **404**를 재확인했다. 퇴역 위젯·비활성 매매 서비스를 새로 기동하지 않았다.
+
+직접 증거: [배포](../../tmp/machine-source-deployment-20261006/deployment.json), [graceful restart](../../tmp/machine-source-deployment-20261006/restart.log), [실제 기동](../../tmp/machine-source-deployment-20261006/runtime-acceptance.json), [process health](../../tmp/machine-source-deployment-20261006/process-health-after.json), [broker 후 상태](../../tmp/machine-source-deployment-20261006/broker-after.json), [로컬 custody 후 상태](../../tmp/machine-source-deployment-20261006/local-custody-after.json), [설치 경로](../../tmp/machine-source-deployment-20261006/release-set-after.json), [cron](../../tmp/machine-source-deployment-20261006/cron-after.json), [웹](../../tmp/machine-source-deployment-20261006/web-after.json), [PID 정책 소비](../../data/runtime/policy_bootstrap/intraday_handoff/2026-10-06/1667abb930b610edd9e1b023d010b0633e39f018.consumed.json).
+
+## 남은 증거와 범위
+
+검토 범위의 코드·배포·기동 수용은 완료했다. 정상 기동을 실제 수익 개선이나 모든 원천 결손 해소로 간주하지 않는다. 자연 실패→fresh 원천→새 기계 retry의 정확 부모/자식 chain, 새 ENTER 판정의 screen 통과, 실제 제출/체결·비용 수익은 별도 자연 증거이며 이번 기동 수용에서 평가하지 않았다. 미지원 probe의 fill-anchor 경제성은 미지원 상태를 유지한다.
+
+시작 중 유일하게 확인한 ERROR는 `cron_completion`의 기존 장후 실패 보고다. 원 소유자와 근거는 [저장소 정리 로그](../../logs/log_rotation_cleanup_cron.log)의 **2026-10-06 05:03:39 / source 2026-10-02** `micro_reversion_storage_status=partial_failure`, 그리고 [장후 finalization](../../logs/postclose_finalization_cron.log)의 `reason=cleanup_failed`다. 다음 조치는 저장소 유지보수 producer의 failed 후보/receipt를 대사한 뒤 해당 장후 owner에서 복구 가능성을 판단하는 것이다. closure는 같은 source date의 유효 cleanup receipt와 native finalization terminal이며, 현재 전체 장후 DONE은 주장하지 않는다. 이 매매 코드 배포에서는 삭제 권한 확대·장후 재생성·오류 receipt 덮어쓰기를 수행하지 않았다.
+
+문서 갱신은 print-only backlog parser·링크·stable ID·authority·diff 검사로 검증한다. 외부 동기화와 추가 provider/order 테스트, 정책 재생성은 실행하지 않는다.
