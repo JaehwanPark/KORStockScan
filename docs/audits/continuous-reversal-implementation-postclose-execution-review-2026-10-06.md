@@ -142,3 +142,14 @@ v9 native 복구는 06:34:08 DONE이다. 06:34:05 prepared 생성 뒤 최종 det
 
 
 07:07:14 동일 selected v9에서 현재 시각의 독립 [full 읽기 전용 재검증](../../data/report/continuous_reversal/2026-10-06/finalization-full-readonly-after-0700-repair-20261007.json)을 실행했다. initialized/expected/completed 7개, fail 0·runtime mutation none·operational mutation 0이다. cron의 최종화는 recovered_late/세대 결함 없음이며 전체 severity는 warning이다. 이 실행은 dry_run으로 filesystem maintenance나 notifier를 호출하지 않고 별도 review 보고서에만 저장했다. 원 07:00 canonical report는 그 시각의 실패 이력으로 보존하고 다음 예약 full detector가 새로 발행하도록 둔다.
+## 07:35 경고와 owner PREOPEN의 실제 실패 수리
+
+`episode_applied_missing_after_due`는 07:35:03 파일 생성 경계에서 관측됐으며 현재 applied 31profile/07:35:10 Main PREOPEN/bootstrap은 정상이다. 그러나 별도 07:32 owner 서비스는 `owner_registry_retirement_not_flat`로 실패했다. hash 검증 원장상 두산의 과거 bound CANCEL ACK 3개를 신규 미체결 노출로 센 결함이었다. CANCEL만 제외하고 NEW·AMEND·불명확 action, 현재 broker 수량·미체결, 미확정 intent·manual veto는 유지한다. 과거 주문 원장은 재작성하지 않는다.
+
+07:45 native 재시도는 15종목 정책을 적용한 뒤 신규 Main 전용 3종목에 불필요한 episode 범위 표식을 요구해 pending으로 종료했다. 앞단에서 허용한 승인 fixed-watch의 정확한 Main/manual-only 소유권 집합을 후속 검사에도 적용하고, 기존 legacy 표식 잔존 검사는 유지했다. pending의 native 정책 영수증은 그대로 검증·승계한다. 작업 소스 `fffae8d0`·`d3e19363`, 독립 owner 배포본 `208a9069d91bdbdb50c850ff709a24bdb6eb12bf`, workspace/immutable 각각 165 PASS·compile/diff/parser PASS다. Main selected v9 및 186개 episode policy pin은 불변이다.
+
+07:49:54 native service exit 0, exact-date applied 15종목/범위 전환 완료, PREOPEN/bootstrap 재검증 PASS를 확인했다. 별도 배포본의 최초 실행 exit 127은 공유 alias 준비 누락이며, checkout assets를 보존하고 4개 alias를 확인한 뒤 immutable 회귀와 native 실행을 완료했다. 원 07:32·07:45 실패는 [수리 영수증](../../data/report/continuous_reversal/2026-10-06/startup-owner-cancel-ack-repair-20261007.json)에 별도 보존했다. Main 재시작·주문·AI 연구 재호출·EOD 및 장후 전체 재생성은 실행하지 않았다.
+
+현재 [v9 full 읽기 전용 점검](../../data/report/continuous_reversal/2026-10-06/owner-startup-full-readonly-20261007.json)은 7개/fail 0/운영 mutation 0이며 episode 기동 누락 경고는 없다. 별도 구 삼성 frozen 연구의 source hash 변경 실패, 구 episode 원천 경고, cutoff 뒤 복구 경고는 유지된다. 삼성 frozen은 새 Main 기계/보조 12셀 정책과 분리된 report-only 연구이며 봉인된 원천을 재작성하지 않는다. 07:55 정상 Main PID의 정책 소비와 개별 episode 자연 기동은 별도 확인 대상이다.
+
+07:55:02 예정 정상 Main PID `665299`/v9/clean source를 확인했고, native 07:55:03 PID 소비와 별도 현재 재검증 모두 PASS·정책 실패/환경 mismatch 0이다. WS 로그인 07:55:18·초기 감시 루프 진행을 확인했다. 현재 native 기계/보조 bundle `bf15fc24...`와 12+12셀·누적 원승률·30분/+0.4%/soft −3% 계약이 일치한다. 운영 budget 생성자 기본 total/group cap=None도 유지된다. 실제 singleton과 selected release 결속·186 episode pin 검사는 PASS이며 기능적 운영 건강 전수는 not_assessed다. 개별 episode는 future_due, 자연 반전 판정/제출/체결/손익은 이 점검의 수용 대상에서 분리한다. 이번 수리 범위는 finding 0으로 닫으며 새 prepared 이후 체크리스트 bytes는 변경하지 않았다.

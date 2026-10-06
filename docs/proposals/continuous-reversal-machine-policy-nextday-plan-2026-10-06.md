@@ -1,6 +1,6 @@
 # 연속 반전 기계·보조정책 전환 및 EOD 제외 장후 전체 재생성·10/7 준비 계획
 
-작성일: 2026-10-06 KST. 원천일: `2026-10-06`. 적용 목표일: **2026-10-07(수), 다음 영업일**. 현재 상태: **운영 통합·v9 배포·EOD 제외 전체 장후 재생성·07:05 장전 준비/정식 cron 인계 완료 / 07:35 PREOPEN·07:55 Main 실제 소비 확인 예정**. 구현 이력은 §10, 준비·cron 소비 경고 보완은 §12~§13을 따른다.
+작성일: 2026-10-06 KST. 원천일: `2026-10-06`. 적용 목표일: **2026-10-07(수), 다음 영업일**. 현재 상태: **운영 통합·v9 배포·EOD 제외 전체 장후 재생성·07:35 PREOPEN 완료 / owner 서비스 수리 후 07:49 native 적용 완료 / 07:55 정상 Main PID 및 정책 환경 소비 검증 완료**. 구현 이력은 §10, 준비·cron 소비 경고 보완은 §12~§13, owner 수리는 §14를 따른다.
 
 ## 1. 결정과 이번 작업의 범위
 
@@ -258,3 +258,21 @@ P5까지 준비를 완료해도 07:55 실제 PID가 뜨기 전에는 “정상�
 
 
 07:07:14 현재 시각의 독립 full 읽기 전용 탐지도 7개 모두 실행해 fail 0·runtime mutation none을 확인했다. 전체 severity는 기존 경고와 recovered_late를 포함한 warning이다. [독립 full 보고서](../../data/report/continuous_reversal/2026-10-06/finalization-full-readonly-after-0700-repair-20261007.json)는 07:00 원 실패 및 native source-date child 보고서와 별도이며 예정 자연 탐지 실행으로 표시하지 않는다.
+
+
+## 14. 07:32 owner 적용 실패의 취소 ACK 분류 수리
+
+07:35 episode applied_missing 경고 이후 적용파일 31profile 및 Main PREOPEN 07:35:10 succeeded를 확인했다. 그러나 별도 07:32 owner auto-apply는 owner_registry_retirement_not_flat로 실패했다. 검증된 원장에는 두산 9/7·9/9의 ORDER_BOUND/CANCEL 3개만 남고 episode NEW 미체결·잔여 수량·unbound는 각각 0이었다. 열린 노출 집계가 CANCEL을 NEW처럼 센 결함을 수리한다. CANCEL만 제외하고 NEW·AMEND·불명확 action·현재 broker 수량/미체결·미확정 intent·custody guard는 보존한다. 역사 원장 행을 terminal로 재작성하지 않는다.
+
+리뷰/회귀 163 PASS를 기본 작업본 및 별도 owner immutable 470ddc06dfb072e1b0b0994da06f0b498714129d에서 확인했다. 기존 owner 511664f3를 부모로 해당 검사/테스트만 변경한다. Main selector/PREOPEN v9와 기계·보조 bundle, 기존 episode 186 policy pin은 유지하고 auto-apply 서비스의 code pin만 배포한다. 기존 standing authority 07:32~07:54 안에서 quiescent/fresh broker/동일 request·scope·원 activation 검증을 거친 native apply로 재개한다. 이 실행의 외부 API는 기존 read-only broker inventory/open-order 확인이며 주문이나 수동 custody 재분류를 하지 않는다.
+
+소유권은 기존 DoosanEpisodeToMainFixedWatch와 Main 통합 owner의 PREOPEN 자연 수용에 이어진다. 현재 checklist의 완료/OPEN 및 봉인 bytes를 바꾸지 않고 [복구 영수증](../../data/report/continuous_reversal/2026-10-06/startup-owner-cancel-ack-repair-20261007.json)에 code pin·fresh snapshot·native result와 실제 소비를 각각 남긴다. 구 삼성 동결 후보 실패는 source hash 변경의 report-only 이력으로 유지하며 새 Main 반전 정책의 실패로 표시하지 않는다.
+### 07:45 후속 marker 검사 보완
+
+07:45 native 재시도는 15개 종목의 소유권을 적용했지만 `policy_applied_marker_migration_pending`으로 종료했다. 승인된 Main 전용 초기 종목 036930·196170·403870은 앞단에서 범위 표식 없이 허용하면서, 후속 단계는 episode 범위 표식을 필수로 요구한 불일치였다. 기존 manual veto는 추가·삭제하지 않는다. 승인된 fixed-watch 종목이며 소유권 집합이 정확히 `main_scalping`·`manual_operator`인 경우에만 신규 범위 표식을 요구하지 않으며, 남아 있는 legacy 표식 검사는 유지한다.
+
+작업 소스 `d3e19363`을 전용 owner 배포본 `208a9069d91bdbdb50c850ff709a24bdb6eb12bf`에 반영했다. 기존 취소 ACK 수리와 함께 작업본·독립 배포본 모두 165개 회귀가 통과했다. 현재 Main bootstrap은 변경 없이 PASS다. 기존 정책 적용 영수증을 검증하는 native idempotent 경로로 marker 완료만 재시도하며 정책을 다시 적용하거나 주문을 생성하지 않는다. 성공 판정은 서비스 exit 0, 현재 날짜의 native `applied` 영수증, Main bootstrap의 재검증을 모두 요구한다.
+
+07:49:54 service exit 0으로 완료했다. 현재 native `applied`·15종목·범위 전환 완료, marker 재시도의 기존 정책 영수증 불변, Main exact-date PREOPEN/bootstrap PASS를 확인했다. episode applied 31profile은 현재 정상이고 개별 기동은 아직 future_due다. 독립 v9 full 읽기 전용 검사는 7개 실행/fail 0/운영 mutation 0이다. 구 삼성 동결 연구의 원천 hash 변경 실패와 구 episode 원천 결손·늦은 최종화 복구 경고는 보존한다. 수리 배포본의 최초 실행은 공유 `.venv` alias 준비 누락으로 exit 127을 반환했으며, checkout assets를 보존하고 data/logs/tmp/.venv 결속을 확인한 뒤 immutable 회귀를 다시 통과하고 성공했다. Main v9·정책·실제 예정 기동은 그대로이며, 07:55 PID 소비는 별도 수용이다.
+
+07:55:02 예약 정상 기동은 Main PID `665299`/selected v9/clean source다. native 07:55:03 PID 소비 및 독립 재검증은 PASS, mismatch·정책 실패 0이며 WS 로그인은 07:55:18에 확인했다. 현재 native bundle `bf15fc240560605b7fe08796941288d9ef28a5f7c8d2cbf47692787b894f4a98`, 기계·보조 12+12셀, 누적 원승률·30분/+0.4%/soft −3% 계약이 유지된다. selected v9의 실제 운영 생성자 기본 total/group cap은 None이며 기존 횟수 env를 다시 읽지 않는다. release-set은 PID 결속 및 episode 186pin PASS이고 개별 episode 기동은 future_due다. 아직 자연 반전 판정·제출·체결·손익 또는 기능적 운영 건강 전수를 검증한 것은 아니다.
