@@ -4849,7 +4849,17 @@ def _load_machine_observation_rows_uncached(
             ):
                 counts["invalid_capture"] += 1
                 continue
-            if validate_entry_setup_evidence(evidence):
+            evidence_errors = validate_entry_setup_evidence(evidence)
+            if evidence_errors == ['entry_setup_evidence_sha256_invalid']:
+                from src.engine.scalping.entry_setup_source_repair import restore_original_recipe_metadata
+                try:
+                    trace = capture['machine_observation_sha256']
+                    repaired_setups[trace], repair_proofs[trace] = restore_original_recipe_metadata(capture)
+                    evidence_errors = []
+                    counts['original_recipe_metadata_restored'] += 1
+                except (ValueError, TypeError, KeyError):
+                    counts['original_recipe_metadata_not_reconstructable'] += 1
+            if evidence_errors:
                 trace = capture["machine_observation_sha256"]
                 receipt = (source_setup_repairs or {}).get(trace)
                 if receipt is not None:
@@ -5314,7 +5324,10 @@ def _load_machine_observation_rows_uncached(
                 counts["evaluable" if result[-1]["entry_quality_contract_valid"] else "retained_without_economic_outcome"] += 1
                 proof = repair_proofs.get(capture["machine_observation_sha256"])
                 if proof is not None:
-                    result[-1]["source_setup_repair"] = proof
+                    proof_key = ('original_recipe_metadata_restoration'
+                        if proof.get('schema') == 'entry_recipe_original_metadata_restoration_v1'
+                        else 'source_setup_repair')
+                    result[-1][proof_key] = proof
     population = {
         key: sum(part[key] for part in capture_populations)
         for key in ("verified_capture_count", "unique_verified_capture_count", "duplicate_capture_collapsed_count")
@@ -5434,7 +5447,8 @@ def load_machine_observation_rows(data_root: Path, *, target_date: str,
                for name in ('ai_action_outcome_calibration.py', 'ai_decision_quality.py',
                             'entry_strategy_policy.py', 'entry_setup_evidence.py',
                             'entry_candle_context.py', 'ai_decision_trace.py',
-                            'microstructure_reaction_context.py', 'postclose_entry_validation.py')}
+                            'microstructure_reaction_context.py', 'postclose_entry_validation.py',
+                            'entry_setup_source_repair.py', 'entry_admission_recipe.py')}
     for day in sorted(paths):
         def dependencies():
             result = {}
@@ -10308,6 +10322,8 @@ def build_main_mechanistic_report(
         "hierarchical_entry_quality": hierarchical,
         **OFFLINE_CONTRACT,
     }
+    from src.engine.scalping.main_submit_drought_research import refresh_daily_projection
+    report['submission_drought_price_comparison'] = refresh_daily_projection(data_root, target_date, incumbent)
     return _with_artifact_content_sha256(report)
 
 
@@ -10812,6 +10828,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--machine-policy-only', action='store_true', help='Generate only the pre-AI machine threshold policy artifact')
     parser.add_argument('--winrate-policy-only', action='store_true', help='Evaluate a registered machine win-rate candidate and stage a next-day policy')
     parser.add_argument('--admission-recipe', choices=['pullback_p60_v0'], help='Evaluate the frozen non-Samsung admission successor')
+    parser.add_argument('--submit-drought-research-only', action='store_true',
+                        help='One-day source-bound price comparison; never publishes policies')
+    parser.add_argument('--research-external-dir', type=Path,
+                        help='Already collected exact-date price files with source manifest')
+    parser.add_argument('--research-source-bytes', type=int,
+                        help='Freeze a complete decompressed capture prefix')
+    parser.add_argument('--research-source-sha256', help='Expected frozen source prefix hash')
+    parser.add_argument('--research-cutoff-kst', help='Last included aware decision timestamp')
+    parser.add_argument('--research-incumbent-date', help='Explicit current policy date for historical comparison')
     parser.add_argument('--training-through-date', help='Explicit train cutoff; later sources only are diagnostic holdout')
     parser.add_argument('--search-limit', type=int, default=96, help='Machine policy candidate traversal budget')
     parser.add_argument(
@@ -10832,6 +10857,32 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--activate-now", action="store_true", help="Activate an eligible strategy generation immediately and carry until superseded")
     parser.add_argument("--print-summary", action="store_true")
     args = parser.parse_args(argv)
+    if args.submit_drought_research_only:
+        if (args.machine_policy_only or args.machine_only or args.winrate_policy_only
+            or args.admission_recipe or args.activate_now or args.require_policy_publication
+            or args.ensure_economic_reference_only or args.training_through_date or args.publication_date):
+            parser.error('--submit-drought-research-only is a non-publishing standalone comparison')
+        from src.engine.scalping.main_submit_drought_research import build_daily, cumulative_projection, seal
+        from src.engine.scalping.mechanistic_entry_runtime_policy import load_effective
+        bundle = load_effective(data_root=args.data_root,
+            target_date=args.research_incumbent_date or args.target_date)
+        if bundle is None:
+            raise ValueError('submit_drought_incumbent_missing')
+        result = build_daily(data_root=args.data_root, target_date=args.target_date, bundle=bundle,
+            external_dir=args.research_external_dir, source_bytes=args.research_source_bytes,
+            source_sha256=args.research_source_sha256, cutoff=args.research_cutoff_kst)
+        result = seal({k: v for k, v in {**result,
+            'compatible_cumulative_comparison': cumulative_projection(args.data_root, result)}.items()
+            if k != 'artifact_content_sha256'})
+        if args.write:
+            output = args.data_root/'report/ai_decision_action_outcome_calibration'/f'main_submit_drought_research_{args.target_date}.json'
+            _atomic_write_json(output, result)
+        print(json.dumps({k: v for k, v in result.items()
+                          if k not in {'observations', 'price_source_receipts'}}, ensure_ascii=True, sort_keys=True))
+        return 0
+    if (args.research_external_dir or args.research_source_bytes is not None
+        or args.research_source_sha256 or args.research_incumbent_date or args.research_cutoff_kst):
+        parser.error('research source options require --submit-drought-research-only')
     if args.admission_recipe and not args.winrate_policy_only:
         parser.error('--admission-recipe requires --winrate-policy-only')
     if args.winrate_policy_only:

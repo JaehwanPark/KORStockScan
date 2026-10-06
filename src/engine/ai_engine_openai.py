@@ -452,6 +452,9 @@ def _entry_provider_ledger(setup):
     """Keep raw replay custody out of the compact provider token budget."""
     ledger = {k: v for k, v in setup.items() if k not in {
         "strategy_raw_input", "strategy_raw_sha256", "strategy_selection", "evidence_sha256"}}
+    from src.engine.scalping.entry_admission_recipe import confirmation_facts
+    ledger["positive_facts"] = list(dict.fromkeys(
+        [*(ledger.get("positive_facts") or []), *confirmation_facts(setup)]))
     ledger["evidence_sha256"] = hashlib.sha256(json.dumps(
         ledger, ensure_ascii=True, sort_keys=True, separators=(",", ":"), default=str
     ).encode()).hexdigest()
@@ -9493,6 +9496,9 @@ class GPTSniperEngine:
                 )
                 # Pin the selected profile and its rebuilt facts to this attempt.
                 machine_setup = machine_assessment.pop("effective_setup_evidence", machine_setup)
+                from src.engine.scalping.entry_admission_recipe import bind_confirmation
+                machine_setup = bind_confirmation(
+                    machine_setup, entry_setup_live_policy["mechanistic_threshold_policy"])
                 from src.engine.scalping.ai_decision_trace import (
                     capture_machine_observation,
                 )

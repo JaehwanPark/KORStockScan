@@ -1749,9 +1749,11 @@ def entry_risk_adjudication_openai_schema(
     invalidation_facts = list(setup.get("invalidation_facts") or [])
     contradicting_facts = list(setup.get("contradicting_facts") or [])
     setup_state = str(setup.get("setup_state") or "").strip().upper()
+    from src.engine.scalping.entry_admission_recipe import confirmation_facts
+    machine_facts = confirmation_facts(setup)
     bindings = _risk_fact_bindings(setup)
     allowed_risk_codes = list(bindings)
-    if setup_state == "READY":
+    if setup_state == "READY" or machine_facts:
         allowed_risk_codes.insert(0, "NO_BLOCKING_RISK")
     schema["properties"]["risk_codes"]["items"]["enum"] = list(
         dict.fromkeys(allowed_risk_codes or ["SOURCE_QUALITY_GAP"])
@@ -1771,7 +1773,7 @@ def entry_risk_adjudication_openai_schema(
             verdicts -= {"VETO"}
         schema["properties"]["risk_verdict"]["enum"] = sorted(verdicts)
     fact_fields = {
-        "supporting_fact_ids": list(setup.get("positive_facts") or []),
+        "supporting_fact_ids": [*list(setup.get("positive_facts") or []), *machine_facts],
         "contradicting_fact_ids": (
             invalidation_facts
             if setup_state == "INVALID" and invalidation_facts
@@ -2729,6 +2731,8 @@ def validate_mechanistic_risk_screen(
     validity still apply. The screen must also acknowledge positive evidence.
     """
     errors = validate_entry_risk_adjudication(response, setup_evidence=setup_evidence)
+    if validate_entry_setup_evidence(setup_evidence):
+        return errors
     risk = _as_dict(response)
     codes = (
         set(map(str, risk["risk_codes"]))
@@ -2741,6 +2745,18 @@ def validate_mechanistic_risk_screen(
         and risk.get("supporting_fact_ids")
     ):
         errors = [e for e in errors if e != "entry_risk_veto_requires_blocking_risk"]
+    recipe_policy = _as_dict(policy).get("entry_admission_recipe")
+    if recipe_policy and risk.get("risk_verdict") == "PASS":
+        from src.engine.scalping.entry_admission_recipe import bind_confirmation, CONFIRMATION_FACTS
+        decision = mechanistic_entry_policy_decision(setup_evidence, policy=policy)
+        expected = bind_confirmation(setup_evidence, policy).get("machine_confirmation")
+        if (decision.get("action") == "ENTER_NOW"
+            and decision.get("admission_recipe_trigger_pass") is True
+            and expected and expected == _as_dict(setup_evidence).get("machine_confirmation")
+            and set(CONFIRMATION_FACTS) <= set(risk.get("supporting_fact_ids") or [])):
+            errors = [e for e in errors if e not in {
+                "entry_risk_wait_confirmation_pass", "entry_risk_unconfirmed_pass",
+                "entry_risk_pass_setup_and_trigger_support_required"}]
     if _as_dict(policy).get("hierarchy") and risk.get("risk_verdict") == "PASS":
         decision = mechanistic_entry_policy_decision(setup_evidence, policy=policy)
         if decision["action"] == "ENTER_NOW" and decision.get("group_trigger_pass"):
@@ -3144,6 +3160,10 @@ def compose_mechanistic_primary_decision(
             "entry_mechanistic_policy_sha256": _canonical_sha256(
                 selected_mechanistic_policy
             ),
+            "entry_machine_confirmation_sha256": _as_dict(setup.get('machine_confirmation')).get('confirmation_sha256'),
+            "entry_machine_confirmation_recipe_id": _as_dict(setup.get('machine_confirmation')).get('recipe_id'),
+            "entry_machine_confirmation_source_sha256": _as_dict(setup.get('machine_confirmation')).get('source_sha256'),
+            "entry_machine_confirmation_policy_sha256": _as_dict(setup.get('machine_confirmation')).get('policy_sha256'),
             "entry_ai_advisory_verdict": raw_advisory_verdict,
             "entry_ai_raw_risk_verdict": assessment["raw_verdict"],
             "entry_ai_effective_assessment": assessment,
@@ -3334,6 +3354,8 @@ def validate_entry_setup_evidence(evidence: Any) -> list[str]:
 
     setup = _as_dict(evidence)
     errors: list[str] = []
+    from src.engine.scalping.entry_admission_recipe import validate_confirmation
+    errors.extend(validate_confirmation(setup))
     if setup.get("schema") != ENTRY_SETUP_EVIDENCE_SCHEMA:
         errors.append("entry_setup_evidence_schema_invalid")
     evidence_version = setup.get("version")
@@ -3658,7 +3680,8 @@ def validate_entry_risk_adjudication(
         or not 0 <= confidence <= 100
     ):
         errors.append("entry_risk_confidence_invalid")
-    positive_facts = set(map(str, setup.get("positive_facts") or []))
+    from src.engine.scalping.entry_admission_recipe import confirmation_facts
+    positive_facts = set(map(str, [*(setup.get("positive_facts") or []), *confirmation_facts(setup)]))
     adverse_facts = {
         *map(str, setup.get("contradicting_facts") or []),
         *map(str, setup.get("invalidation_facts") or []),

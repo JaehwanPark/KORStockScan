@@ -62888,7 +62888,9 @@ def _handle_watching_strategy_branch(
             }
             wait6579_probe_entry_unlocked = False
 
-            if is_vip_target and last_ai_time == 0:
+            # Smart target is an execution price reference. It cannot suppress
+            # machine observation or consumption of a completed async decision.
+            if last_ai_time == 0:
                 log_info(
                     f"⏳ [{stock['name']}] 첫 AI 분석을 시작합니다... (기계적 매수 일시 보류)"
                 )
@@ -62906,7 +62908,6 @@ def _handle_watching_strategy_branch(
 
             if (
                 ai_engine
-                and is_vip_target
                 and (
                     time_elapsed > config["AI_WATCHING_COOLDOWN"]
                     or last_ai_time == 0
@@ -64235,7 +64236,6 @@ def _handle_watching_strategy_branch(
 
             if (
                 ai_engine
-                and is_vip_target
                 and last_ai_time > 0
                 and time_elapsed <= config["AI_WATCHING_COOLDOWN"]
                 and not early_accel_recheck.get("allowed")

@@ -3709,6 +3709,14 @@ def run(
         if stage_logic_current(projection):
             report['auxiliary_prompt_source_gaps'] = prompt_source_gaps
             report['auxiliary_train_selection'] = read(frozen_selection_path)
+        from src.engine.scalping.main_submit_drought_research import load_projection
+        drought = load_projection(root, day)
+        report['submission_drought_auxiliary_comparison'] = {
+            'status': drought['status'], 'artifact_content_sha256': drought.get('artifact_content_sha256'),
+            'groups': {scope: value.get('auxiliary_comparison')
+                       for scope, value in (drought.get('groups') or {}).items()},
+            'runtime_effect': False, 'result_is_realized_profit': False,
+        }
         report = sealed(report)
         write(path, report)
         return report

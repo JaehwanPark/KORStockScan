@@ -1014,7 +1014,14 @@ def snapshot(events, as_of):
     economic_by_revision = {}
     chain_status = {r["evaluation_key"]: r["revision_chain_status"] for r in funnel["evaluation_ledger"]}
     economic_history = defaultdict(list)
+    confirmations = {}
     for e in sorted(recent, key=lambda event: stamp(event.emitted_at)):
+        if e.fields.get('entry_machine_confirmation_sha256'):
+            confirmation_key = (_machine_primary_evaluation_key(e), e.fields.get('machine_observation_sha256'))
+            if all(confirmation_key):
+                confirmations[confirmation_key] = {key: e.fields.get(key) for key in (
+                    'entry_machine_confirmation_sha256', 'entry_machine_confirmation_recipe_id',
+                    'entry_machine_confirmation_source_sha256', 'entry_machine_confirmation_policy_sha256')}
         if e.stage not in ECONOMIC_STAGES:
             continue
         if str(e.fields.get("watch_origin") or "").strip() == "MAIN_FIXED_WATCH":
@@ -1043,6 +1050,10 @@ def snapshot(events, as_of):
             economic_by_revision[revision_key] = value
             economic[key] = value
     for row in funnel["evaluation_ledger"]:
+        confirmation_hash = ((row.get('decision_history') or [{}])[-1].get('machine_observation_sha256')
+                             if row['revision_chain_status'] in {'valid', 'single_revision'} else None)
+        row['recipe_confirmation_evidence'] = confirmations.get(
+            (row['evaluation_key'], confirmation_hash))
         row["economic_history"] = economic_history.get(row["evaluation_key"], [])
         feature_guard = (row["mechanistic_action"] == "RECHECK"
                          and row["ai_screen_status"] == "not_requested_required_feature_insufficient"
@@ -1097,6 +1108,7 @@ def snapshot(events, as_of):
             "final_guard_blocked", "final_guard_evidence", "final_state", "conflict_reasons", "source_invalid_decomposition", "economic_source",
             "decision_history", "initial_observed_action", "latest_observed_action",
             "enter_now_observed", "economic_history", "revision_chain_status",
+            "recipe_confirmation_evidence",
         )} for r in funnel["evaluation_ledger"]],
         "missing_identity_evidence": sorted({r["evidence_id"] for r in retained_missing}),
         "missing_identity_examples": retained_missing[:3],

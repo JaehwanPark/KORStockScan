@@ -46,6 +46,49 @@ def file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def restore_original_recipe_metadata(capture: dict) -> tuple[dict, dict]:
+    """Recover one originally hashed metadata value, without inventing a hash.
+
+    The canonical capture seals both the original evidence digest and its
+    recipe's parent digest. Restoration must match that already recorded
+    evidence digest exactly. No feature, legacy fact, action or outcome changes.
+    """
+    from src.engine.scalping.entry_admission_recipe import DECISION_SCHEMA
+    if (capture.get('schema') != 'mechanistic_entry_observation_v1'
+        or capture.get('machine_observation_sha256') != S.digest({
+            k: v for k, v in capture.items() if k != 'machine_observation_sha256'})
+        or capture.get('redacted') is not False
+        or any(capture.get(k) is not v for k, v in (
+            ('provider_called', False), ('runtime_effect', False),
+            ('allowed_runtime_apply', False), ('actual_order_submitted', False),
+            ('broker_order_forbidden', True)))):
+        raise ValueError('recipe_metadata_capture_invalid')
+    source = capture.get('source') or {}
+    original = source.get('setup_evidence') or {}
+    recipe = (source.get('assessment') or {}).get('admission_recipe') or {}
+    raw = original.get('strategy_raw_input')
+    if (E.validate_entry_setup_evidence(original) != ['entry_setup_evidence_sha256_invalid']
+        or recipe.get('schema') != DECISION_SCHEMA or not isinstance(raw, dict)
+        or raw != source.get('exact_payload') or original.get('strategy_raw_sha256') != S.digest(raw)
+        or recipe.get('original_raw_sha256') != original.get('strategy_raw_sha256')
+        or re.fullmatch('[0-9a-f]{64}', str(recipe.get('parent_sha256'))) is None
+        or not isinstance(original.get('strategy_selection'), dict)):
+        raise ValueError('recipe_metadata_defect_not_exact')
+    restored = deepcopy(original)
+    restored['strategy_selection']['policy_sha256'] = recipe['parent_sha256']
+    if E.validate_entry_setup_evidence(restored):
+        raise ValueError('recipe_metadata_original_digest_not_restored')
+    return restored, dict(schema='entry_recipe_original_metadata_restoration_v1',
+        original_capture_sha256=capture['machine_observation_sha256'],
+        original_evidence_sha256=original['evidence_sha256'],
+        restored_evidence_sha256=restored['evidence_sha256'],
+        recorded_policy_metadata_sha256=original['strategy_selection'].get('policy_sha256'),
+        restored_parent_policy_sha256=recipe['parent_sha256'],
+        changed_fields=['strategy_selection.policy_sha256'],
+        runtime_effect=False, allowed_runtime_apply=False, actual_order_submitted=False,
+        costs_or_outcomes_imputed=False)
+
+
 def kernel_seals() -> dict:
     """Bind the repair and consumer, without importing a cyclic consumer."""
     package = Path(__file__).resolve().parent

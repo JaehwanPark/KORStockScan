@@ -42,3 +42,15 @@
 - 오전 06:50을 넘긴 복구이므로 `recovered_late` 경고를 지우지 않는다.
 - Main/auxiliary 운영 paired 경제성, exact plan/label 원천 및 Episode semantic producer 변경 warning은 본 연결 복구로 대체하지 않는다.
 - 자연 고정감시 판정 A3와 10/6 장후·10/7 기동은 [현재 체크리스트](../checklists/2026-10-06-stage2-todo-checklist.md)의 `FixedWatchSourceAndCleanupRepair1006` 및 `FixedWatchBudgetSummaryPostcloseAcceptance1006`에서 별도 수용한다. 과거 정리 복구를 내일 기동 확정으로 표시하지 않는다.
+
+## 18:35 세대 불일치의 후속 복구
+
+- 새 경보의 원인은 완료 이후 변경된 공유 체크리스트다. 16:06 strict가 검증한 SHA `fe556921b48e5220c6f656a22e94130e602c452221e2339d051864eccb828f80`와 에피소드 퇴역 작업 후 SHA `bb500b328ebe08033040e49942927e9bb0e446a71bcc433285add09ff4d9f9db`가 달라졌다. 기존 DONE을 현재 유효 완료로 재사용하지 않았다.
+- 후속 정책 보존 재기동의 release/PID도 기존 summary와 달랐다. 현재 `511664f3`의 native intraday 소비를 검증한 summary부터 tower/checklist/strict/controller를 갱신했다. 원 source=`2026-10-02`, effective=`2026-10-06`을 유지하고 정책 생산자·전체 장후 wrapper를 재실행하지 않았다.
+- 원천일의 선행 12개와 summary를 canonical data 경로에서 읽기 검증했고, 관련 finalization/controller 회귀 33개 및 shell syntax가 통과했다. 기존 정책·원천·선행 영수증·PREOPEN·holding-vote·main terminal·snapshot manifest 등 보호 파일 38개의 SHA가 모두 동일하며 Main PID `169115`의 start ticks/cwd도 유지됐다.
+- 18:42:37 첫 native 재시도는 strict PASS/controller DONE/18:45:02 cleanup DONE 이후 정기 full detector와 잠금이 겹쳐 `final_detector_failed`로 종료했다. 해당 FAIL을 보존했고 활성 잠금을 제거하지 않았다. 정기 탐지 종료와 잠금 해제 후 18:45:58 한 번 재시도했다.
+- 18:48:26 native finalization 및 final detector DONE. Chain=`ec5cad3eb7fa7014513e14a77a72a42de6777be49bbb8e47a9a4ae1a23ea0fcf`; snapshot=`de8c7a024a0ad4b385fda97148f5e1043fdc6e3161eb981ecbd12f7b081bf112`로 원 snapshot 세대는 유지됐다. Detector=`cron-20261006T184821-265246`/report SHA=`76640974fceeff2c99d9b0377418467ca8630fe6588d23b273144cd3ccfa70ee`, 7개 detector의 FAIL은 0이다.
+- 18:49:16 독립 읽기 검증에서 controller/marker issues 0, 현재 checklist SHA와 strict binding `83bd11c6882417abcdd6c776c5776561fd422b50575e9adc0d87fdfd6d04b76c` 일치, cleanup/finalization 모두 `recovered_late`를 확인했다. Native 자동 checklist 갱신은 기존 OPEN stable ID와 권한을 보존했고 print-only parser 27개 항목 및 diff check를 통과했다.
+- 18:50:50 당일 full health artifact에서도 FAIL 0, Main process health PASS, cleanup/finalization `recovered_late`를 확인했다. `strict_checklist_generation_stale` 및 후속 실패 marker 경보가 해소됐으며 해당 health 사본은 같은 증거 디렉터리의 `current-date-health.json`에 보존한다.
+- 실행 전후 사본·보호 해시·실패/완료 기록·독립 재검증은 `tmp/postclose-strict-generation-reseal-20261006/before.json`, `after.json`, `recovery-attempts.log`, `checklist-parser.txt`에 보존한다. 추가 Python/shell 코드 변경·배포·봇 재기동은 없었다. 완료 이후 체크리스트나 소비 세대가 다시 바뀌면 같은 native 연결을 재검증해야 한다.
+- 이 복구는 원 10/2 완료 연결을 복구한 결과다. 기한 초과 경고와 기존 운영 경제성/plan/label 원천 결손은 유지하며, 10/6 자연 장후 및 10/7 기동 성공을 대신하지 않는다.
