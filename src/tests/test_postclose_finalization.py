@@ -333,6 +333,72 @@ def test_finalization_reserves_morning_margin_before_preopen():
     assert "--resolve-effective-today" in script
 
 
+@pytest.mark.parametrize("prepare_rc,detector_rc,expected_rc", [(0, 0, 0), (9, 0, 1), (0, 9, 1)])
+def test_final_detector_reads_refreshed_prepared_generation(
+    tmp_path, monkeypatch, prepare_rc, detector_rc, expected_rc
+):
+    monkeypatch.setattr(sys.modules[__name__], "TARGET_DATE", "2026-09-28")
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "src").symlink_to(REPO_ROOT / "src", target_is_directory=True)
+    _write_ready_predecessors(project)
+    (project / "prepared-generation.txt").write_text("previous-controller\n")
+    cleanup, detector = project / "bin/cleanup.sh", project / "bin/detector.sh"
+    _write_executable(cleanup, 'printf "cleanup\\n" >> "$PROJECT_DIR/order.txt"\n')
+    _write_executable(detector, '''
+printf 'detector\\n' >> "$PROJECT_DIR/order.txt"
+cmp -s "$PROJECT_DIR/current-generation.txt" "$PROJECT_DIR/prepared-generation.txt"
+exit "$MOCK_DETECTOR_RC"
+''')
+    python = project / "bin/python"
+    _write_executable(python, '''
+if [[ "${1:-}" == "-m" ]]; then
+  case "$2" in
+    src.engine.automation.postclose_done_controller)
+      printf 'controller\\n' >> "$PROJECT_DIR/order.txt"
+      printf 'current-controller\\n' > "$PROJECT_DIR/current-generation.txt"
+      exit 0 ;;
+    src.engine.automation.next_preopen_readiness)
+      [[ " $* " == *" --prepare --source-date 2026-09-28 --target-date 2026-09-29 "* ]]
+      printf 'prepare\\n' >> "$PROJECT_DIR/order.txt"
+      if [[ "$MOCK_PREPARE_RC" != 0 ]]; then exit "$MOCK_PREPARE_RC"; fi
+      cp "$PROJECT_DIR/current-generation.txt" "$PROJECT_DIR/prepared-generation.txt"
+      exit 0 ;;
+    *) exit 99 ;;
+  esac
+fi
+if [[ "${1:-}" == "-" ]]; then
+  script_body="$(cat)"
+  if [[ "$script_body" == *installed_producer_terminal_states* ]]; then
+    printf 'ready|-|stage_group:machine:done,threshold_artifact:done\\n'; exit 0
+  elif [[ "$script_body" == *done_terminal_receipt_issues* ]]; then
+    printf '{"status":"pass","issues":[]}\\n'; exit 0
+  elif [[ "$script_body" == *finalization_preparation_disposition* ]]; then
+    printf 'prepare_exact_target\\n'; exit 0
+  fi
+  printf '%s' "$script_body" | "$REAL_PY" "$@"
+  exit $?
+fi
+exec "$REAL_PY" "$@"
+''')
+    result = subprocess.run(
+        ["bash", str(WRAPPER), TARGET_DATE],
+        env={**_base_env(project, cleanup, detector), "VENV_PY": str(python),
+             "REAL_PY": sys.executable, "MOCK_PREPARE_RC": str(prepare_rc),
+             "MOCK_DETECTOR_RC": str(detector_rc)},
+        text=True, capture_output=True, timeout=30,
+    )
+    assert result.returncode == expected_rc, result.stdout + result.stderr
+    assert (project / "order.txt").read_text().splitlines() == [
+        "controller", "cleanup", "prepare", "detector",
+    ]
+    if expected_rc:
+        assert "[DONE] postclose_finalization" not in result.stdout
+        assert "[DONE] postclose_final_detector" not in result.stdout
+    else:
+        assert "[DONE] postclose_finalization" in result.stdout
+
+
 @pytest.mark.parametrize(
     ("refresh_rc", "receipt_status", "expected_rc"),
     [(0, "done", 0), (0, "summary_verified", 1), (9, "done", 1)],

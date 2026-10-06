@@ -398,6 +398,37 @@ if ! timeout --foreground "${cleanup_budget}s" bash "$OWNED_LOG_RUNNER" \
 fi
 echo "[INFO] postclose_finalization cleanup_done target_date=${TARGET_DATE}"
 
+# Refresh the prepared controller binding before its detector reads it.
+# Preparation grants no runtime activation or finalization DONE authority.
+if [[ "$TARGET_DATE" > "2026-09-27" ]]; then
+  preparation_disposition="$(env PYTHONPATH=. "$VENV_PY" - "$TARGET_DATE" "$TARGET_EFFECTIVE_DATE" "$RECOVERY_MODE" <<'PY'
+import sys
+from src.engine.automation.next_preopen_readiness import finalization_preparation_disposition
+print(finalization_preparation_disposition(sys.argv[1], sys.argv[2], recovery=sys.argv[3] == 'true'))
+PY
+)" || {
+    echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=preopen_source_session_mismatch"
+    run_final_detector || true
+    exit 1
+  }
+  if [[ "$preparation_disposition" == "historical_recovery_no_prepare" ]]; then
+    echo "[INFO] postclose_finalization target_date=${TARGET_DATE} effective_date=${TARGET_EFFECTIVE_DATE} preopen=not_applicable_historical_recovery runtime_effect=false"
+  else
+    prepare_budget="$(bounded_stage_budget 120)" || {
+      echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=finish_by_cutoff_elapsed_before_preopen_preparation"
+      run_final_detector || true
+      exit 1
+    }
+    if ! timeout --kill-after=10s "${prepare_budget}s" env PYTHONPATH=. "$VENV_PY" \
+      -m src.engine.automation.next_preopen_readiness --prepare --source-date "$TARGET_DATE" \
+      --target-date "$TARGET_EFFECTIVE_DATE"; then
+      echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=next_preopen_preparation_failed"
+      run_final_detector || true
+      exit 1
+    fi
+  fi
+fi
+
 # The child detector reports its live ancestor as pending, never as PASS.
 echo "[INFO] postclose_finalization target_date=${TARGET_DATE} cleanup=done detector_handoff=started"
 detector_started_after_ns="$(date +%s%N)"
@@ -445,31 +476,6 @@ PY
   finalization_generation_fields=" chain_sha256=${chain_sha256} snapshot_generation_sha256=${snapshot_generation_sha256}"
 else
   finalization_generation_fields=""
-fi
-if [[ "$TARGET_DATE" > "2026-09-27" ]]; then
-  preparation_disposition="$(env PYTHONPATH=. "$VENV_PY" - "$TARGET_DATE" "$TARGET_EFFECTIVE_DATE" "$RECOVERY_MODE" <<'PY'
-import sys
-from src.engine.automation.next_preopen_readiness import finalization_preparation_disposition
-print(finalization_preparation_disposition(sys.argv[1], sys.argv[2], recovery=sys.argv[3] == 'true'))
-PY
-)" || {
-    echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=preopen_source_session_mismatch"
-    exit 1
-  }
-  if [[ "$preparation_disposition" == "historical_recovery_no_prepare" ]]; then
-    echo "[INFO] postclose_finalization target_date=${TARGET_DATE} effective_date=${TARGET_EFFECTIVE_DATE} preopen=not_applicable_historical_recovery runtime_effect=false"
-  else
-    prepare_budget="$(bounded_stage_budget 120)" || {
-      echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=finish_by_cutoff_elapsed_before_preopen_preparation"
-      exit 1
-    }
-    if ! timeout --kill-after=10s "${prepare_budget}s" env PYTHONPATH=. "$VENV_PY" \
-      -m src.engine.automation.next_preopen_readiness --prepare --source-date "$TARGET_DATE" \
-      --target-date "$TARGET_EFFECTIVE_DATE"; then
-      echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=next_preopen_preparation_failed"
-      exit 1
-    fi
-  fi
 fi
 detector_finished_at="$(TZ=Asia/Seoul date +%FT%T%z)"
 echo "[DONE] postclose_finalization target_date=${TARGET_DATE} cleanup=done detector=done${finalization_generation_fields}${detector_generation_fields} finished_at=${detector_finished_at}"
