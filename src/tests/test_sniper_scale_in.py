@@ -5610,6 +5610,10 @@ def test_rising_missed_forced_async_retry_reevaluates_micro_state_change(
 def test_rising_missed_async_retry_defers_when_symbol_entry_budget_is_full(
     monkeypatch,
 ):
+    # Explicit historical replay fixture; the live default is now uncapped.
+    from src.engine.ai.hot_path_ai_symbol_budget import HotPathAISymbolBudget
+    monkeypatch.setattr(state_handlers, "DEFAULT_HOT_PATH_AI_SYMBOL_BUDGET",
+                        HotPathAISymbolBudget(window_sec=60, total_cap=4, group_cap=2))
     class AsyncCoordinator:
         pass
 

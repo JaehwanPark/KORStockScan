@@ -2643,6 +2643,11 @@ def _mechanistic_threshold_policy(policy, parent_policy=None, *, publication=Fal
     threshold_policy = json.loads(json.dumps(
         parent_policy or MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1
     ))
+    recipe = threshold_policy.pop("entry_admission_recipe", None)
+    if recipe is not None:
+        from src.engine.scalping.entry_admission_recipe import validate as validate_recipe
+        if validate_recipe(recipe, threshold_policy):
+            raise ValueError("mechanistic_refinement_parent_recipe_invalid")
     if any(threshold_policy["thresholds"].get(k) != v for k, v in policy.items()):
         threshold_policy.pop("hierarchy", None)
     threshold_policy["version"] = (
@@ -2669,6 +2674,11 @@ def _mechanistic_threshold_policy(policy, parent_policy=None, *, publication=Fal
         threshold_policy.pop("hierarchy", None)
         threshold_policy["version"] = MECHANISTIC_FULL_POPULATION_POLICY_VERSION
         threshold_policy["postclose_selection"]["minimum_cost_adjusted_ev_pct"] = MECHANISTIC_REFINEMENT_GATE["minimum_cost_adjusted_ev_pct"]
+    if recipe is not None:
+        # The diagnostic candidate has changed the copied parent coordinates.
+        # Retain the frozen recipe semantics while binding its new parent hash.
+        from src.engine.scalping.entry_admission_recipe import candidate_policy
+        threshold_policy = candidate_policy(threshold_policy)
     return threshold_policy
 
 
@@ -10150,6 +10160,16 @@ def build_machine_policy_report(rows, *, source_receipt, target_date, data_root=
         forbidden_uses=['realized_pnl', 'portfolio_pnl', 'auxiliary_ai_pass']))
 
 
+def _legacy_diagnostic_for_cohort(incumbent, cohort):
+    from src.engine.scalping.mechanistic_entry_runtime_policy import for_cohort
+    if incumbent and incumbent.get('continuous_reversal'):
+        # The new live resolver deliberately ignores these old scope rules.
+        # Historical diagnostics use only their retained compatibility copy.
+        scoped = incumbent.get('scope_policies', {}).get('|'.join(cohort))
+        return {**incumbent, **scoped, 'selected_scope': list(cohort)} if scoped else None
+    return for_cohort(incumbent, cohort) if incumbent else None
+
+
 def build_main_mechanistic_report(
     *, target_date: str, data_root: Path = Path("data"), incumbent_date: str | None = None
 ) -> dict[str, Any]:
@@ -10187,7 +10207,6 @@ def build_main_mechanistic_report(
     operating_projection = _machine_operating_projection(
         data_root, [r["source_date"] for r in machine_rows] + [target_date])
     from src.engine.scalping.entry_setup_scalping_rollout import AUTO_PROMOTION_SCOPES
-    from src.engine.scalping.mechanistic_entry_runtime_policy import for_cohort
     previous_selections, previous_hierarchy, previous_joint = {}, {}, {}
     previous_strategy = {}
     joint_population, joint_parents = [], {}
@@ -10222,7 +10241,7 @@ def build_main_mechanistic_report(
     strategy_evaluations = {}
     for scope in AUTO_PROMOTION_SCOPES:
         cohort = tuple(scope.split("|"))
-        scoped_incumbent = for_cohort(incumbent, cohort) if incumbent else None
+        scoped_incumbent = _legacy_diagnostic_for_cohort(incumbent, cohort)
         scope_parent = (scoped_incumbent or {}).get("machine_policy") or parent
         scoped_paired = [r for r in paired_rows if tuple(
             _as_dict(_as_dict(r.get("entry_group_observation")).get("key_parts")).get(k)
@@ -10844,6 +10863,8 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Refresh only the active main mechanistic evaluator and publisher source",
     )
+    parser.add_argument('--report-only', action='store_true',
+                        help='Write historical machine diagnostics without policy publication or activation')
     parser.add_argument(
         "--publication-date",
         help="KST publication day; effective date is its next KRX trading day",
@@ -10857,6 +10878,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--activate-now", action="store_true", help="Activate an eligible strategy generation immediately and carry until superseded")
     parser.add_argument("--print-summary", action="store_true")
     args = parser.parse_args(argv)
+    if args.report_only and (not args.machine_only or args.activate_now or args.require_policy_publication
+                            or args.machine_policy_only or args.winrate_policy_only
+                            or args.ensure_economic_reference_only or args.submit_drought_research_only):
+        parser.error('--report-only requires --machine-only and forbids policy-generation or activation actions')
     if args.submit_drought_research_only:
         if (args.machine_policy_only or args.machine_only or args.winrate_policy_only
             or args.admission_recipe or args.activate_now or args.require_policy_publication
@@ -11012,12 +11037,14 @@ def main(argv: list[str] | None = None) -> int:
         reused = bool(
             args.machine_only
             and args.write
+            and os.environ.get('POSTCLOSE_REGENERATION_SCOPE') != 'all_except_eod'
             and _artifact_content_sha256_valid(existing)
             and existing.get("report_scope") == "main_mechanistic_entry"
             and existing.get("noncompact_sections_refreshed") is True
             and existing.get("evaluation_contract_version")
             == MAIN_MECHANISTIC_EVALUATION_CONTRACT_VERSION
             and existing.get("evaluation_fingerprint") == current_fingerprint
+            and existing.get('policy_publication_requested', True) == (not args.report_only)
         )
         if reused:
             return existing, True
@@ -11031,6 +11058,7 @@ def main(argv: list[str] | None = None) -> int:
         prepared["machine_economic_reference_prerequisite"] = (
             economic_reference_prerequisite
         )
+        prepared['policy_publication_requested'] = not args.report_only
         prepared = _with_artifact_content_sha256(prepared)
         if args.write:
             _atomic_write_json(path, prepared)
@@ -11052,11 +11080,12 @@ def main(argv: list[str] | None = None) -> int:
             refresh_machine_evaluation_link(path, report_root=args.data_root / "report")
         from src.engine.scalping.mechanistic_entry_runtime_policy import publish
 
-        published_policy = publish(
-            path,
-            data_root=args.data_root,
-            publication_day=args.publication_date,
-        )
+        if not args.report_only:
+            published_policy = publish(
+                path,
+                data_root=args.data_root,
+                publication_day=args.publication_date,
+            )
     if args.activate_now:
         from src.engine.scalping.mechanistic_entry_runtime_policy import activate_strategy_report
         activation_receipt = activate_strategy_report(path, data_root=args.data_root)

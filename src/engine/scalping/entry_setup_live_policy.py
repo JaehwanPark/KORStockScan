@@ -2317,6 +2317,14 @@ def resolve_live_prompt_policy(
                         "compact_prompt_disposition"
                     ),
                 )
+                if initial.get('continuous_reversal'):
+                    result.update(continuous_reversal=initial['continuous_reversal'],
+                                  machine_policy_all_continuous=True,
+                                  auxiliary_soft_policy=None,
+                                  ai_policy_disposition='continuous_reversal_selected',
+                                  auxiliary_policy_sha256=hashlib.sha256(json.dumps(
+                                      initial['continuous_reversal']['auxiliary_cells'],
+                                      sort_keys=True,separators=(',',':'),ensure_ascii=True).encode()).hexdigest())
                 return result
         # The legacy rollout remains a durable V2.14 owner. Only the new,
         # separately pinned auto-promotion authority may consult an activation

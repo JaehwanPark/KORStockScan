@@ -766,6 +766,11 @@ BALANCED_ENTRY_PROMPT_VERSIONS = frozenset(
         DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION,
     }
 )
+CONTINUOUS_REVERSAL_AUXILIARY_PROMPT_VERSIONS = frozenset(
+    'continuous_reversal_auxiliary_production_v1:'+arm for arm in (
+        'existing_wording','reversal_fact_roles_v2','reversal_entry_geometry_v5',
+        'reversal_citation_v6','reversal_complete_source_v7')
+)
 MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS = frozenset(
     {
         ENTRY_MACHINE_AUXILIARY_COMPACT_V1_PROMPT_VERSION,
@@ -775,7 +780,7 @@ MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS = frozenset(
         ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION,
         ENTRY_MACHINE_AUXILIARY_COMPACT_CONTRACT_PROMPT_VERSION,
     }
-)
+) | CONTINUOUS_REVERSAL_AUXILIARY_PROMPT_VERSIONS
 AUXILIARY_ENTRY_RISK_PROMPT_VERSIONS = (
     BALANCED_ENTRY_PROMPT_VERSIONS | MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS
 )
@@ -2308,6 +2313,10 @@ def machine_auxiliary_compact_entry_system_prompt(
     stage: str, *, prompt_version: str = ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION
 ) -> str:
     """Return a versioned machine-first auxiliary risk-screen prompt."""
+    if prompt_version in CONTINUOUS_REVERSAL_AUXILIARY_PROMPT_VERSIONS:
+        if stage!='entry':raise ValueError('continuous_reversal_is_entry_only')
+        from src.engine.scalping.reversal_auxiliary_contract import production_prompt
+        return production_prompt(prompt_version.split(':',1)[1])
 
     if str(stage or "").strip().lower() != "entry":
         raise ValueError("machine auxiliary compact prompt supports entry only")

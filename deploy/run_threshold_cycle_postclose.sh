@@ -260,6 +260,16 @@ FORCE_LIFECYCLE_BUCKET_WINDOWS="${THRESHOLD_CYCLE_FORCE_LIFECYCLE_BUCKET_WINDOWS
 FORCE_DEEP_AUDITS="${THRESHOLD_CYCLE_FORCE_DEEP_AUDITS:-false}"
 FORCE_WORKORDER_BRANCH="${THRESHOLD_CYCLE_FORCE_WORKORDER_BRANCH:-false}"
 REUSE_COMPLETED_REPORT_STEPS="${THRESHOLD_CYCLE_REUSE_COMPLETED_REPORT_STEPS:-true}"
+REGENERATION_SCOPE="${THRESHOLD_CYCLE_REGENERATION_SCOPE:-normal}"
+case "$REGENERATION_SCOPE" in
+  normal) ;;
+  all_except_eod)
+    REUSE_COMPLETED_REPORT_STEPS=false
+    export POSTCLOSE_REGENERATION_SCOPE=all_except_eod
+    export POSTCLOSE_REGENERATION_ID="${POSTCLOSE_REGENERATION_ID:-reversal-${TARGET_DATE}-$(date +%s)}"
+    ;;
+  *) echo "Unsupported postclose regeneration scope" >&2; exit 2 ;;
+esac
 POSTCLOSE_RECOVERY_REUSE_MODE=false
 ARTIFACT_WAIT_SEC="${THRESHOLD_CYCLE_ARTIFACT_WAIT_SEC:-600}"
 ARTIFACT_WAIT_INTERVAL_SEC="${THRESHOLD_CYCLE_ARTIFACT_WAIT_INTERVAL_SEC:-5}"
@@ -377,6 +387,8 @@ payload.update(
         "run_id": os.environ["POSTCLOSE_RUN_ID"],
         "code_commit": os.environ["POSTCLOSE_CODE_COMMIT"],
         "report_type": "threshold_cycle_postclose_status",
+        "regeneration_scope": os.environ.get('POSTCLOSE_REGENERATION_SCOPE', 'normal'),
+        "regeneration_id": os.environ.get('POSTCLOSE_REGENERATION_ID'),
         "target_date": target_date,
         "status": status,
         "reason": reason or None,

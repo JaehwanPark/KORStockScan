@@ -5972,3 +5972,69 @@ def test_projection_replacement_preserves_exact_research_generation(tmp_path):
     assert archive.read_bytes() == old
     assert json.loads(gzip.decompress(old))['rows'][0]['trace'] == 'old'
     assert json.loads(gzip.decompress(Path(str(path) + '.gz').read_bytes()))['rows'][0]['trace'] == 'new'
+
+
+@pytest.mark.parametrize('publication', [False, True])
+def test_diagnostic_refinement_rebinds_recipe_to_changed_parent(publication):
+    from copy import deepcopy
+    from src.engine.scalping import entry_admission_recipe as recipe
+    from src.engine.scalping import entry_strategy_policy as strategy
+    from src.engine.scalping.entry_setup_evidence import validate_mechanistic_entry_threshold_policy
+    parent = recipe.candidate_policy(strategy.seed(deepcopy(calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1), ('KRX', 'KRX_REGULAR')))
+    original = deepcopy(parent)
+    coords = dict(parent['thresholds'], maximum_spread_bp=30)
+    candidate = calibration._mechanistic_threshold_policy(coords, parent, publication=publication)
+    assert parent == original
+    assert candidate['entry_admission_recipe']['parent_policy_sha256'] != parent['entry_admission_recipe']['parent_policy_sha256']
+    assert candidate['entry_admission_recipe']['parameters'] == parent['entry_admission_recipe']['parameters']
+    assert validate_mechanistic_entry_threshold_policy(candidate) == []
+
+
+def test_diagnostic_refinement_rejects_corrupt_original_recipe():
+    from copy import deepcopy
+    from src.engine.scalping import entry_admission_recipe as recipe
+    parent = recipe.candidate_policy(deepcopy(calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1))
+    parent['entry_admission_recipe']['parent_policy_sha256'] = '0' * 64
+    with pytest.raises(ValueError, match='mechanistic_refinement_parent_recipe_invalid'):
+        calibration._mechanistic_threshold_policy(parent['thresholds'], parent)
+
+
+def test_legacy_report_only_never_publishes_and_full_regeneration_recomputes(monkeypatch, tmp_path):
+    from src.engine.scalping import mechanistic_entry_runtime_policy as policy
+    day = '2026-10-06'
+    calls = []
+    monkeypatch.setattr(calibration, 'ensure_machine_economic_reference', lambda **kw: {'status':'existing_verified_sources_preserved'})
+    monkeypatch.setattr(calibration, '_main_mechanistic_input_fingerprint', lambda *a, **kw: 'f'*64)
+    def build(**kwargs):
+        calls.append(kwargs)
+        return calibration._with_artifact_content_sha256(dict(schema=calibration.SCHEMA,
+            target_date=day, report_scope='main_mechanistic_entry', noncompact_sections_refreshed=True,
+            evaluation_contract_version=calibration.MAIN_MECHANISTIC_EVALUATION_CONTRACT_VERSION,
+            evaluation_fingerprint='f'*64, hierarchical_entry_quality={},
+            status='main_mechanistic_entry_full_evaluation_complete'))
+    monkeypatch.setattr(calibration, 'build_main_mechanistic_report', build)
+    monkeypatch.setattr(policy, 'publish', lambda *a, **kw: pytest.fail('diagnostics cannot publish'))
+    args=['--target-date',day,'--data-root',str(tmp_path),'--machine-only','--report-only','--write']
+    monkeypatch.delenv('POSTCLOSE_REGENERATION_SCOPE', raising=False)
+    assert calibration.main(args)==0 and len(calls)==1
+    assert calibration.main(args)==0 and len(calls)==1
+    monkeypatch.setenv('POSTCLOSE_REGENERATION_SCOPE','all_except_eod')
+    assert calibration.main(args)==0 and len(calls)==2
+    assert json.loads(calibration.report_path(day,tmp_path/'report').read_text())['policy_publication_requested'] is False
+
+
+@pytest.mark.parametrize('action', ['--activate-now','--require-policy-publication'])
+def test_legacy_report_only_rejects_runtime_authority(action):
+    with pytest.raises(SystemExit) as error:
+        calibration.main(['--target-date','2026-10-06','--machine-only','--report-only',action])
+    assert error.value.code==2
+
+
+def test_next_day_legacy_diagnostic_uses_retained_exact_scope_not_live_reversal(monkeypatch):
+    from src.engine.scalping import mechanistic_entry_runtime_policy as policy
+    monkeypatch.setattr(policy,'for_cohort',lambda *a: pytest.fail('live reversal projection is not legacy diagnostics'))
+    incumbent={'continuous_reversal':{'schema':'present'},'machine_policy':{'rule':'top-carrier'},
+               'scope_policies':{'NXT|NXT_PREMARKET':{'machine_policy':{'rule':'retained-pre'}}}}
+    result=calibration._legacy_diagnostic_for_cohort(incumbent,('NXT','NXT_PREMARKET'))
+    assert result['machine_policy']=={'rule':'retained-pre'}
+    assert calibration._legacy_diagnostic_for_cohort(incumbent,('NXT','NXT_AFTERMARKET')) is None

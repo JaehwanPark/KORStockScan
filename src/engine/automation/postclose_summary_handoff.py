@@ -833,6 +833,20 @@ STAGE_OWNER_GROUPS = {
 }
 
 
+def stage_prerequisites(stage,day):
+    if stage=='main_auxiliary_policy' and day>='2026-10-06':
+        return ('main_machine_policy',)
+    return STAGE_REGISTRY[stage][0]
+
+
+def machine_group_children(day):
+    # Main owns its single producer run. Recomputing it in the independent
+    # group would invalidate the auxiliary bundle already bound to its hash.
+    return tuple(s for s in STAGE_OWNER_GROUPS['machine'][:6]
+                 if s != 'machine_attribution'
+                 and not (day >= '2026-10-06' and s == 'main_machine_policy'))
+
+
 def stage_path(report_dir, day, stage):
     if stage not in STAGE_REGISTRY:
         raise ValueError('unknown_postclose_stage')
@@ -852,7 +866,14 @@ def stage_artifacts(report_dir, day, stage):
     paths['pre_submit_delay_policy'] = Path(report_dir).parent / 'threshold_cycle' / 'pre_submit_delay_policy' / f'pre_submit_delay_policy_{day}.json'
     paths['episode_policy_refresh'] = Path(report_dir) / 'machine_research_closed_loop' / f'episode_policy_refresh_{day}.json'
     outputs = {name: paths.get(name, Path(report_dir) / name / f'{name}_{day}.json') for name in STAGE_REGISTRY[stage][1]}
-    if stage == 'main_machine_policy' and day >= '2026-10-06':
+    if day >= '2026-10-06' and stage in {'main_machine_policy','main_auxiliary_policy'}:
+        owned=Path(report_dir)/'continuous_reversal'/day
+        if stage=='main_machine_policy':outputs['reversal_source_manifest']=owned/'source.json'
+        else:
+            outputs.update(reversal_auxiliary=owned/'auxiliary.json',reversal_call_freeze=owned/'call-freeze.json',
+                           reversal_actual_responses=owned/'provider-results.jsonl')
+    if stage == 'main_machine_policy' and day >= '2026-10-06' and not (
+        Path(report_dir)/'continuous_reversal'/day/'source.json').is_file():
         outputs['main_fixed_watch_policy_research'] = Path(report_dir) / 'main_fixed_watch_policy_research' / f'main_fixed_watch_policy_research_{day}.json'
         from src.engine.scalping.main_fixed_watch import SPECS
         for spec in SPECS:
@@ -1056,7 +1077,7 @@ def stage_receipt_issues(report_dir, day, stage, *, code_hash=None,
         return [f'{stage}:source_set_invalid']
     if value['sources'] != _stage_sources(expected) or any(not r['sha256'] for r in value['sources'].values()):
         return [f'{stage}:output_generation_changed']
-    prerequisites = {s:str(stage_path(report_dir, day, s)) for s in STAGE_REGISTRY[stage][0]}
+    prerequisites = {s:str(stage_path(report_dir, day, s)) for s in stage_prerequisites(stage,day)}
     if value.get('prerequisite_receipts') != _stage_sources(prerequisites):
         return [f'{stage}:prerequisite_generation_changed']
     input_paths = stage_input_paths(report_dir, day, stage)
@@ -1081,7 +1102,7 @@ def _joint_research_peer_off(report_dir, day):
 
 
 def stage_input_paths(report_dir, day, stage):
-    paths = {s:stage_path(report_dir, day, s) for s in STAGE_REGISTRY[stage][0]}
+    paths = {s:stage_path(report_dir, day, s) for s in stage_prerequisites(stage,day)}
     if stage == 'research_capacity':
         root = Path(report_dir).parent / 'runtime' / 'machine_research_closed_loop' / 'native_capacity' / day
         paths['native_cash'] = root / 'native_cash.json'
@@ -1281,6 +1302,26 @@ def _staged_winrate_generation_preserved(staged, bundle, runtime_policy, data_ro
 def _stage_output_issues(report_dir, day, stage):
     from src.engine.automation.postclose_recommendation_intake import _report_date
     errors = []
+    reversal_source=Path(report_dir)/'continuous_reversal'/day/'source.json'
+    if reversal_source.is_file() and stage in {'main_machine_policy','main_auxiliary_policy'}:
+        from src.engine.scalping.continuous_reversal_postclose import SCHEMA, digest, expected_cells
+        name='machine' if stage=='main_machine_policy' else 'auxiliary'
+        path=Path(report_dir)/'continuous_reversal'/day/(name+'.json')
+        value=_load_json(path)
+        if (value.get('schema')!=SCHEMA or value.get('source_date')!=day or value.get('status')!='completed'
+            or value.get('artifact_content_sha256')!=digest({k:v for k,v in value.items() if k!='artifact_content_sha256'})
+            or {c.get('key') for c in value.get('cells',[])}!=set(expected_cells())):
+            return [f'{stage}:continuous_reversal_output_invalid']
+        for label,output in stage_artifacts(report_dir,day,stage).items():
+            if label=='reversal_actual_responses':continue
+            current=_load_json(output)
+            if current.get('schema')!=SCHEMA or current.get('source_date')!=day or current.get('artifact_content_sha256')!=digest(
+                {k:v for k,v in current.items() if k!='artifact_content_sha256'}):
+                errors.append(f'{stage}:continuous_reversal_compatibility_output_invalid')
+        if stage=='main_auxiliary_policy':
+            from src.engine.scalping.continuous_reversal_policy import scoped_verification
+            errors.extend(scoped_verification(Path(report_dir).parent,day)['issues'])
+        return errors
     for name, path in stage_artifacts(report_dir, day, stage).items():
         if (name == 'ai_decision_outcome_labels'
             and path.with_suffix(path.suffix + '.gz').exists()):
@@ -1482,6 +1523,10 @@ def stage_commands(stage, day, publication, *, recovery=False):
                         '--publication-date', publication, '--symbol', spec.symbol)
                 for spec in SPECS if spec.initial_policy_scope == 'non_samsung']
     date_args = ['--target-date', day, '--write']
+    reversal_enabled=day >= '2026-10-06'
+    if reversal_enabled and stage in {'main_machine_policy','main_auxiliary_policy'}:
+        return [command('scalping.continuous_reversal_postclose','--date',day,'--publication-date',publication,
+                        '--mode','machine' if stage=='main_machine_policy' else 'auxiliary')]
     if stage == 'main_machine_policy' and recovery:
         return fixed_watch_commands()
     if stage == 'main_machine_policy':
@@ -1492,7 +1537,8 @@ def stage_commands(stage, day, publication, *, recovery=False):
         return [command('scalping.pre_submit_delay_tuning', '--date', day,
                         '--effective-date', _next_krx_trading_day(publication), '--require-family-ledger')]
     if stage == 'legacy_machine_report':
-        return [command('scalping.ai_action_outcome_calibration', *date_args, '--machine-only', '--publication-date', publication, '--activate-now')]
+        return [command('scalping.ai_action_outcome_calibration', *date_args, '--machine-only', '--publication-date', publication,
+                        *(['--report-only'] if reversal_enabled else ['--activate-now']))]
     if stage == 'main_auxiliary_policy':
         common = ['--date', day, '--compact-only', '--write']
         return [command('scalping.entry_setup_paired_replay_batch', *common, '--execute-compact-candidate'),
@@ -1540,6 +1586,9 @@ def _stage_code(stage, commands, project, *, dispatcher_path=None,
         for name in ('entry_strategy_policy', 'entry_setup_evidence', 'ai_decision_quality', 'entry_candle_context', 'mechanistic_entry_runtime_policy',
                      'entry_admission_analysis', 'entry_admission_acceptance', 'entry_admission_recipe', 'entry_designated_policy'):
             paths[name] = project / f'src/engine/scalping/{name}.py'
+    if stage in {'main_machine_policy','main_auxiliary_policy'}:
+        for name in ('continuous_reversal','continuous_reversal_source','continuous_reversal_policy','continuous_reversal_postclose','reversal_auxiliary_contract'):
+            paths[name]=project/f'src/engine/scalping/{name}.py'
     return _stage_digest(_stage_sources(paths))
 
 
@@ -1568,7 +1617,8 @@ def run_stage(stage, day, *, report_dir, project, publication=None, effective=No
                 return dict(stage_id=stage, status='running', exit_code=75, reason='existing_child_running')
         except (OSError, KeyError, IndexError):
             pass
-        if (resource_blocked is not None and old.get('status') == 'succeeded'
+        if (resource_blocked is not None and os.environ.get('POSTCLOSE_REGENERATION_SCOPE')!='all_except_eod'
+            and old.get('status') == 'succeeded'
             and not stage_receipt_issues(report_dir, day, stage, code_hash=code)
             and old.get('publication_date') == publication
             and old.get('effective_date') == effective):
@@ -1583,6 +1633,8 @@ def run_stage(stage, day, *, report_dir, project, publication=None, effective=No
             heartbeat_at=now(), prerequisite_receipts={}, sources={}, retryable=True,
             policy_disposition='incumbent_carry', computation_executed=execute,
             checkpoint=str(report_dir / 'ai_decision_action_outcome_calibration') if stage == 'main_machine_policy' else None)
+        value.update(regeneration_scope=os.environ.get('POSTCLOSE_REGENERATION_SCOPE','normal'),
+                     regeneration_id=os.environ.get('POSTCLOSE_REGENERATION_ID'))
         if stage == 'summary_handoff':
             # Summary/PREOPEN reconciliation belongs to the original source
             # day even if policy publication and recovery occur later.
@@ -1597,7 +1649,7 @@ def run_stage(stage, day, *, report_dir, project, publication=None, effective=No
             return _stage_write(path, {**value, 'status':'deferred', 'exit_code':75,
                 'issues':['resource_guard_timeout'], 'policy_disposition':'source_gap',
                 'resource_guard':resource_blocked, 'finished_at':now()})
-        prerequisites = {s:stage_path(report_dir, day, s) for s in STAGE_REGISTRY[stage][0]}
+        prerequisites = {s:stage_path(report_dir, day, s) for s in stage_prerequisites(stage,day)}
         wait_deadline = time.monotonic() + prerequisite_wait
         while True:
             if stop_event is not None and stop_event.is_set():
@@ -1739,6 +1791,10 @@ def run_stage(stage, day, *, report_dir, project, publication=None, effective=No
                     value['automatic_policy_disposition'] = terminal.get('disposition')
                     value['designated_bundle_sha256'] = staging.get('bundle_sha256')
                 value['policy_sha256'] = terminal.get('policy_sha256')
+                if terminal.get('schema')=='continuous_reversal_research_v1':
+                    value['policy_disposition']='continuous_reversal_selected'
+                    value['selection_metric']='cumulative_raw_win_fraction'
+                    value['machine_report_sha256']=terminal.get('report_sha256')
             if stage in {'episode_policy'} and not issues:
                 family_receipt = _load_json(stage_artifacts(report_dir, day, stage)[stage.replace('_policy', '_policy_refresh')])
                 value['policy_sha256'] = family_receipt.get('policy_sha256')
@@ -1906,8 +1962,7 @@ def _stage_main(argv):
         with ThreadPoolExecutor(max_workers=6) as pool:
             parents = ('machine_attribution',)
             results += list(pool.map(run, parents))
-            children = tuple(stage for stage in STAGE_OWNER_GROUPS['machine'][:6]
-                             if stage not in parents)
+            children = machine_group_children(day)
             results += list(pool.map(run, children))
         results.append(run('summary_handoff'))
     else: results=[run(args.stage)]

@@ -5984,3 +5984,18 @@ def test_submit_scope_reclaims_plan_on_exception_but_preserves_broker_ambiguity(
             raise RuntimeError('injected')
     state = json.loads((tmp_path / 'probe.json').read_text())['bundles'][bundle_id]
     assert state['phase'] == ('probe_submitting' if inflight else 'aborted')
+
+
+def test_execution_projection_bounds_decoded_aggregate_separately_from_shards(monkeypatch, tmp_path):
+    monkeypatch.setattr(split_plan, 'DATA_DIR', tmp_path)
+    day='2026-10-06';folder=tmp_path/'threshold_cycle'/f'date={day}'/'family=dynamic_entry_price_resolver'
+    folder.mkdir(parents=True)
+    event=dict(stage='entry_execution_sizing_plan',emitted_date=day,fields=dict(stock_code='005930'))
+    line=json.dumps(event)+'\n'
+    for n in range(2):(folder/f'part-{n:06}.jsonl').write_text(line)
+    monkeypatch.setattr(split_plan, 'EXECUTION_PROJECTION_MAX_DECODED_BYTES', len(line.encode()))
+    with pytest.raises(ValueError,match='decoded_byte_budget'):split_plan._bounded_execution_projection(day)
+    monkeypatch.setattr(split_plan, 'EXECUTION_PROJECTION_MAX_DECODED_BYTES', 2*len(line.encode()))
+    rows,source=split_plan._bounded_execution_projection(day)
+    assert rows==[event] and source['status']=='source_gap'
+    assert source['full_population_coverage_verified'] is False

@@ -30,6 +30,7 @@ from src.engine.ai_prompt_contracts import (
     ENTRY_MACHINE_AUXILIARY_COMPACT_V1_PROMPT_VERSION,
     ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
     FROZEN_COMPACT_V2_VARIANTS,
+    CONTINUOUS_REVERSAL_AUXILIARY_PROMPT_VERSIONS,
     machine_auxiliary_compact_entry_system_prompt,
 )
 from src.engine.scalping.entry_setup_evidence import (
@@ -52,6 +53,8 @@ LEGACY_AI_VARIANT = "machine_first_pass_veto_v2"
 LEGACY_COMPACT_AI_VARIANT = "machine_first_compact_pass_veto_v1"
 AI_VARIANT = "machine_first_compact_pass_veto_v3"
 COMPACT_AI_VARIANTS = {
+    **{version:'continuous_reversal:'+version.split(':',1)[1]
+       for version in CONTINUOUS_REVERSAL_AUXILIARY_PROMPT_VERSIONS},
     **FROZEN_COMPACT_V2_VARIANTS,
     AI_VERSION: AI_VARIANT,
     ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION: (
@@ -177,6 +180,12 @@ def validate(bundle: dict, *, target_date: str) -> None:
         or bundle.get("hard_guards_unchanged") is not True
     ):
         raise ValueError("machine_bundle_contract_invalid")
+    if bundle.get('continuous_reversal') is not None:
+        from src.engine.scalping.continuous_reversal_policy import validate_family
+        validate_family(bundle['continuous_reversal'])
+        if (bundle['continuous_reversal']['source_date'] != bundle['source_date']
+            or bundle['continuous_reversal']['effective_date'] != target_date):
+            raise ValueError('reversal_bundle_date_binding_invalid')
     source = str(bundle.get("source_date") or "")
     publication = str(bundle.get("publication_date") or source)
     if any(
@@ -289,6 +298,9 @@ def for_cohort(bundle: dict | None, cohort: tuple[str, str]) -> dict | None:
     """Project a validated bundle without borrowing another market's child."""
     if bundle is None:
         return None
+    if bundle.get('continuous_reversal'):
+        from src.engine.scalping.entry_setup_scalping_rollout import AUTO_PROMOTION_SCOPES
+        return {**bundle, 'selected_scope': list(cohort)} if '|'.join(cohort) in AUTO_PROMOTION_SCOPES else None
     if bundle.get("all_continuous_adopted") is True:
         scoped = bundle["scope_policies"].get("|".join(cohort))
         return {**bundle, **scoped, "selected_scope": list(cohort)} if scoped else None
@@ -592,6 +604,11 @@ def _validate_bundle_sources(bundle: dict, data_root: Path) -> dict:
         "source_artifact_sha256"
     ):
         raise ValueError("machine_bundle_source_artifact_hash_invalid")
+    if bundle.get('continuous_reversal'):
+        if source_payload.get('continuous_reversal') != bundle['continuous_reversal']:
+            raise ValueError('reversal_bundle_source_binding_invalid')
+        from src.engine.scalping.continuous_reversal_policy import validate_sources
+        return validate_sources(bundle,data_root)
     machine_source = bundle.get("machine_evaluation_source") or {}
     if machine_source:
         machine_path = (
@@ -648,6 +665,30 @@ def load_effective(*, data_root: Path, target_date: str) -> dict | None:
     Do not relabel the original policy date or hide a corrupt dated policy.
     Market/source freshness is still checked independently at every decision.
     """
+    exact_path = root(data_root) / f'policy_{target_date}.json'
+    cache_key=('continuous_reversal_dated',str(data_root.resolve()),target_date)
+    with _CURRENT_CACHE_LOCK:
+        cached=_CURRENT_CACHE.get(cache_key)
+    if cached is not None:
+        dependencies,bundle=cached
+        try:
+            if all(_signature(Path(path))==sig for path,sig in dependencies.items()):
+                return copy.deepcopy(bundle)
+        except OSError:
+            pass
+    if exact_path.is_file() and _read(exact_path).get('continuous_reversal'):
+        dependencies={}
+        token=_READ_DEPENDENCIES.set(dependencies)
+        try:
+            bundle=load(data_root=data_root,target_date=target_date)
+            if not all(_signature(Path(path))==sig for path,sig in dependencies.items()):
+                raise ValueError('continuous_reversal_dependency_changed_during_load')
+            with _CURRENT_CACHE_LOCK:
+                if len(_CURRENT_CACHE)>=16:_CURRENT_CACHE.pop(next(iter(_CURRENT_CACHE)),None)
+                _CURRENT_CACHE[cache_key]=(dependencies,copy.deepcopy(bundle))
+            return bundle
+        finally:
+            _READ_DEPENDENCIES.reset(token)
     current = _load_current(data_root, target_date)
     if current is not None:
         return current
@@ -1075,7 +1116,7 @@ def publish(
                 {k: v for k, v in reviewed.items() if k != "bundle_sha256"}
             )
             validate(reviewed, target_date=target)
-        if existing is not None and existing.get('winrate_selection'):
+        if existing is not None and (existing.get('winrate_selection') or existing.get('continuous_reversal')):
             # The legacy EV evaluator remains a diagnostic producer. It must
             # never overwrite a separately selected win-rate machine bundle.
             return existing
@@ -1917,6 +1958,10 @@ def activate_dated_winrate_policy(*, data_root: Path, target_date: str, now: dat
     current = (now or datetime.now(KST)).astimezone(KST)
     if current.date().isoformat() != target_date:
         raise ValueError('winrate_activation_target_not_today')
+    dated=load(data_root=data_root,target_date=target_date)
+    if dated and dated.get('continuous_reversal'):
+        from src.engine.scalping.continuous_reversal_policy import activate
+        return activate(data_root,target_date,now=current)
     policy_root = root(data_root)
     with (policy_root / 'publisher.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
@@ -2134,6 +2179,10 @@ def activate_dated_auxiliary_policy(
     current = (now or datetime.now(KST)).astimezone(KST)
     if target_date != current.date().isoformat():
         raise ValueError('auxiliary_activation_target_not_today')
+    native_dated=load(data_root=data_root,target_date=target_date)
+    if native_dated and native_dated.get('continuous_reversal'):
+        from src.engine.scalping.continuous_reversal_policy import activate
+        return activate(data_root,target_date,now=current)
     policy_root = root(data_root)
     with (policy_root / 'publisher.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
@@ -2418,6 +2467,27 @@ def _load_current_uncached(data_root: Path, target_date: str) -> dict | None:
     if not path.exists():
         return None
     receipt = _read(path)
+    if receipt.get('schema')=='continuous_reversal_current_v1':
+        if receipt.get('receipt_sha256')!=digest({k:v for k,v in receipt.items() if k!='receipt_sha256'}):
+            raise ValueError('continuous_reversal_current_hash_invalid')
+        effective=datetime.fromisoformat(receipt['effective_from'])
+        if effective.tzinfo is None or effective.astimezone(KST).date().isoformat()!=receipt.get('effective_date'):
+            raise ValueError('continuous_reversal_current_clock_invalid')
+        if receipt['effective_date']>target_date or effective>datetime.now(KST):
+            return None
+        bundle=_read(root(data_root)/'generations'/f"{receipt['bundle_sha256']}.json")
+        validate(bundle,target_date=bundle['target_date'])
+        family=bundle.get('continuous_reversal') or {}
+        if (bundle['bundle_sha256']!=receipt['bundle_sha256'] or family.get('family_sha256')!=receipt.get('family_sha256')
+            or family.get('parent_bundle_sha256')!=receipt.get('previous_bundle_sha256')):
+            raise ValueError('continuous_reversal_current_generation_invalid')
+        parent=_read(root(data_root)/'generations'/f"{receipt['previous_bundle_sha256']}.json")
+        if not isinstance(parent,dict) or not parent.get('target_date'):
+            raise ValueError('continuous_reversal_current_parent_invalid')
+        validate(parent,target_date=parent['target_date'])
+        if parent['bundle_sha256']!=receipt['previous_bundle_sha256']:
+            raise ValueError('continuous_reversal_current_parent_invalid')
+        return _validate_bundle_sources(bundle,data_root)
     if (receipt.get('schema') != 'main_entry_current_v2'
         or receipt.get('receipt_sha256') != digest({k:v for k,v in receipt.items() if k != 'receipt_sha256'})
         or re.fullmatch(r'[0-9a-f]{64}', str(receipt.get('bundle_sha256'))) is None):

@@ -1652,3 +1652,32 @@ def test_main_generation_wait_preserves_existing_timeout(monkeypatch):
     monkeypatch.setattr(time, 'sleep', lambda *a: pytest.fail('deadline already elapsed'))
     monkeypatch.setattr(h, '_load_json', lambda p: {'status': 'running' if p.stem == 'research_capacity' else 'succeeded'})
     assert h._stage_main(['--stage', 'wait', '--date', '2026-09-21', '--timeout-sec', '1']) == 75
+
+
+def test_continuous_machine_group_preserves_single_main_policy_writer():
+    from src.engine.automation import postclose_summary_handoff as h
+    assert 'main_machine_policy' in h.machine_group_children('2026-10-02')
+    assert 'main_machine_policy' not in h.machine_group_children('2026-10-06')
+    assert set(h.machine_group_children('2026-10-06'))=={'machine_timing','market_weakness','research_allocation','legacy_policy_approval'}
+    paths=h.stage_artifacts(Path('/tmp/data/report'),'2026-10-06','main_auxiliary_policy')
+    assert 'reversal_actual_responses' in paths and 'reversal_auxiliary' in paths
+    command=h.stage_commands('legacy_machine_report','2026-10-06','2026-10-06')[0]
+    assert '--report-only' in command and '--activate-now' not in command
+
+
+def test_continuous_machine_group_cli_uses_parsed_date_and_single_writer(monkeypatch):
+    import signal
+    from src.engine.automation import postclose_summary_handoff as h
+    seen = []
+    monkeypatch.setattr(signal, 'signal', lambda *a: None)
+    monkeypatch.setattr(h, '_joint_research_peer_off', lambda *a: True)
+    def run(stage, day, **kwargs):
+        assert day == '2026-10-06'
+        seen.append(stage)
+        return dict(stage_id=stage, status='succeeded', exit_code=0)
+    monkeypatch.setattr(h, 'run_stage', run)
+    assert h._stage_main(['--stage', 'machine_group', '--date', '2026-10-06']) == 0
+    assert set(seen) == {'research_capacity', 'machine_attribution', 'machine_timing',
+                         'market_weakness', 'research_allocation', 'legacy_policy_approval',
+                         'summary_handoff'}
+    assert seen[-1] == 'summary_handoff'

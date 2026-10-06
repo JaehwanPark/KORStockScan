@@ -1194,6 +1194,10 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
         },
         **SOURCE_ONLY_CONTRACT,
     }
+    reversal_path=quality.DATA_DIR/'report'/'continuous_reversal'/target_date/'auxiliary.json'
+    if reversal_path.is_file():
+        from src.engine.scalping.continuous_reversal_policy import direct_handoff
+        body['compact_auxiliary']=direct_handoff(quality.DATA_DIR,target_date)
     report = {**body, "artifact_content_sha256": optimizer._canonical_sha256(body)}
     if write:
         json_path, markdown_path = report_paths(target_date)
@@ -1254,6 +1258,10 @@ def frozen_compact_policy_source(data_root: Path, bundle: dict, paired: dict, so
 
 def verify_compact_handoff(data_root: Path, source_day: str, *, effective_date: str | None = None, publication_date: str | None = None) -> dict:
     """Verify paired evidence, dated policy, consumer and checklist directly."""
+    if (data_root/'report'/'continuous_reversal'/source_day/'auxiliary.json').is_file():
+        from src.engine.scalping.continuous_reversal_policy import scoped_verification
+        return scoped_verification(data_root,source_day,effective_date=effective_date,
+                                   publication_date=publication_date,require_consumer=True)
     from src.engine.scalping import compact_auxiliary_paired_replay as compact
     from src.engine.scalping import mechanistic_entry_runtime_policy as policy
 

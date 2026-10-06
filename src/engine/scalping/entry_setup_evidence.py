@@ -1703,6 +1703,10 @@ def entry_risk_adjudication_openai_schema(
 ) -> dict[str, Any]:
     """Return the V2.14 schema, optionally constrained to one setup ledger."""
 
+    if isinstance(setup_evidence, dict) and setup_evidence.get('continuous_reversal_response_schema'):
+        from copy import deepcopy
+        return deepcopy(setup_evidence['continuous_reversal_response_schema'])
+
     schema = {
         "type": "object",
         "additionalProperties": False,

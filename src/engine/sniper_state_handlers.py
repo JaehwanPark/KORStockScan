@@ -33804,6 +33804,10 @@ def _machine_primary_entry_provenance_fields(source: dict | None) -> dict:
         "entry_ai_followup_authority",
         "entry_ai_screen_required",
         "entry_ai_screen_pass",
+        "continuous_reversal_event_id",
+        "continuous_reversal_cell_key",
+        "continuous_reversal_arm",
+        "continuous_reversal_applied",
         "evaluation_attempt_id",
         "evaluation_attempt_identity_source",
         "machine_capture_status",
@@ -50087,6 +50091,25 @@ def _resolve_watching_state_change_refresh(
                     reason="machine_source_wait_completed_decision_cooldown",
                 )
             return source_refresh
+    if isinstance(ws_data, dict) and isinstance(stock, dict):
+        from src.engine.scalping.continuous_reversal import current_snapshot
+        from src.engine.scalping.micro_reversion.forward_collector import _explicit_item_venue
+        item=(ws_data.get('last_realtime_type_item') or {}).get('0B')
+        session=stock.get('market_session_bucket') or ws_data.get('market_session_bucket') or ws_data.get('session_bucket')
+        try:
+            snapshot=current_snapshot(str(stock.get('code') or '')[:6],_explicit_item_venue(item),session,now=now_ts,item=item)
+            if snapshot and stock.get('_continuous_reversal_last_requested_id')!=snapshot[0]['event_id']:
+                from src.engine.scalping.mechanistic_entry_runtime_policy import load_effective
+                from src.utils.constants import DATA_DIR
+                selected=load_effective(data_root=DATA_DIR,target_date=datetime.fromtimestamp(now_ts,_KST).date().isoformat())
+                if selected and selected.get('continuous_reversal'):
+                    stock['_continuous_reversal_last_requested_id']=snapshot[0]['event_id']
+                    return dict(allowed=True,reason='continuous_reversal_first_uptick',
+                                signature=_build_watching_refresh_signature(ws_data),
+                                event_id=snapshot[0]['event_id'],decision_authority='machine_evaluation_only',
+                                actual_order_submitted=False,broker_order_forbidden=True)
+        except (ValueError,TypeError,KeyError,OSError):
+            pass
     if not bool(_rule("AI_WATCHING_STATE_CHANGE_REFRESH_ENABLED", False)):
         return {"allowed": False, "reason": "disabled", "signature": {}}
     if last_ai_time <= 0:

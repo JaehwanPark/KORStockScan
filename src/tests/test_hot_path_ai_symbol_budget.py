@@ -1,6 +1,25 @@
 from src.engine.ai.hot_path_ai_symbol_budget import HotPathAISymbolBudget
 
 
+def test_live_default_has_no_call_quota_even_with_old_environment(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_HOT_PATH_AI_SYMBOL_BUDGET_TOTAL_CALLS", "1")
+    monkeypatch.setenv("KORSTOCKSCAN_HOT_PATH_AI_SYMBOL_BUDGET_GROUP_CALLS", "1")
+    budget = HotPathAISymbolBudget()
+    for index in range(500):
+        decision = budget.reserve(
+            code="005930", endpoint="scanner_entry", now_ts=100 + index / 100
+        )
+        assert decision.allowed
+    assert decision.total_count == 500
+    assert decision.log_fields()["hot_path_ai_symbol_budget_total_cap"] is None
+    assert decision.group_cap is None
+    # Removing quotas does not erase duplicate/retry spacing or identity checks.
+    assert not budget.reserve(
+        code="005930", endpoint="scanner_entry", now_ts=106, min_interval_sec=10
+    ).allowed
+    assert not budget.reserve(code="", endpoint="scanner_entry", now_ts=120).allowed
+
+
 def test_symbol_budget_enforces_shared_total_and_endpoint_group_caps():
     budget = HotPathAISymbolBudget(window_sec=60, total_cap=4, group_cap=2)
 

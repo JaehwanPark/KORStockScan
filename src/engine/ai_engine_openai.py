@@ -278,8 +278,8 @@ def _response_schema_sha256(request, *, registry_used, entry_setup_evidence):
 
     if not registry_used or not request.schema_name:
         return None
-    schema_override = None
-    if request.schema_name == ENTRY_RISK_ADJUDICATION_SCHEMA:
+    schema_override = request.response_schema_override
+    if schema_override is None and request.schema_name == ENTRY_RISK_ADJUDICATION_SCHEMA:
         schema_override = entry_risk_adjudication_openai_schema(
             entry_setup_evidence or None
         )
@@ -450,6 +450,11 @@ def _entry_price_v1_response_contract_errors(value):
 
 def _entry_provider_ledger(setup):
     """Keep raw replay custody out of the compact provider token budget."""
+    if 'continuous_reversal_response_schema' in setup:
+        # This family carries typed fact records and its own exact projection.
+        # Never pass them through the legacy string-fact confirmation binder.
+        return {k: v for k, v in setup.items()
+                if k != 'continuous_reversal_response_schema'}
     ledger = {k: v for k, v in setup.items() if k not in {
         "strategy_raw_input", "strategy_raw_sha256", "strategy_selection", "evidence_sha256"}}
     from src.engine.scalping.entry_admission_recipe import confirmation_facts
@@ -684,6 +689,7 @@ class OpenAIResponseRequest:
     max_output_tokens: int | None = None
     reasoning_effort: str | None = None
     metadata: dict[str, str] = field(default_factory=dict)
+    response_schema_override: dict[str, Any] | None = None
 
     @property
     def deadline_perf(self) -> float:
@@ -728,8 +734,8 @@ class OpenAIResponseRequest:
             payload["reasoning"] = {"effort": str(self.reasoning_effort)}
         if self.require_json:
             if use_schema_registry and self.schema_name:
-                schema_override = None
-                if self.schema_name == ENTRY_RISK_ADJUDICATION_SCHEMA:
+                schema_override = self.response_schema_override
+                if schema_override is None and self.schema_name == ENTRY_RISK_ADJUDICATION_SCHEMA:
                     setup_evidence = self.entry_setup_evidence()
                     schema_override = entry_risk_adjudication_openai_schema(
                         setup_evidence or None
@@ -2865,6 +2871,9 @@ class GPTSniperEngine:
         entry_setup_evidence=None,
         live_policy=None,
     ):
+        if isinstance(live_policy, dict) and live_policy.get('continuous_reversal_assessment'):
+            from src.engine.scalping.continuous_reversal_policy import compose
+            return compose(result, live_policy)
         payload = dict(result or {}) if isinstance(result, dict) else {}
         normalized_prompt_version = (
             str(prompt_version or DECISION_QUALITY_DETAILED_PROMPT_VERSION).strip()
@@ -4125,6 +4134,9 @@ class GPTSniperEngine:
     def _apply_remote_entry_guard(
         self, result, *, prompt_type, ws_data, recent_ticks, recent_candles
     ):
+        if result.get('continuous_reversal_applied'):
+            # Superseded strategy AND conditions; submit/source guards remain downstream.
+            return result
         if prompt_type not in {"scalping_entry", "scalping_shared"}:
             return result
         if str(result.get("action", "WAIT")).upper() != "BUY":
@@ -5039,6 +5051,7 @@ class GPTSniperEngine:
         transport_mode_override=None,
         timeout_ms_override=None,
         replay_context=None,
+        response_schema_override=None,
     ):
         """Responses API HTTP/WS transport와 예외 처리를 전담하는 중앙 호출기."""
         metadata = dict(metadata_extra or {})
@@ -5067,6 +5080,11 @@ class GPTSniperEngine:
         reasoning_effort = self._resolve_openai_reasoning_effort(
             model_name=target_model
         )
+        from src.engine.ai_prompt_contracts import CONTINUOUS_REVERSAL_AUXILIARY_PROMPT_VERSIONS
+        if selected_prompt_version in CONTINUOUS_REVERSAL_AUXILIARY_PROMPT_VERSIONS:
+            # These are the exact issued parameters of the actual five-arm study.
+            max_output_tokens = 512
+            reasoning_effort = 'none'
         request = self._build_openai_response_request(
             prompt=prompt,
             user_input=user_input,
@@ -5090,6 +5108,7 @@ class GPTSniperEngine:
         requested_transport_mode = self._resolve_openai_transport_mode(
             transport_mode_override
         )
+        request.response_schema_override = response_schema_override
         response_schema_registry_used = self._should_use_openai_schema_registry(
             require_json=request.require_json,
             schema_name=request.schema_name,
@@ -5250,6 +5269,7 @@ class GPTSniperEngine:
                     submitted_at_perf=time.perf_counter(),
                     timeout_ms=fallback_timeout_ms,
                     metadata=dict(request.metadata or {}),
+                    response_schema_override=request.response_schema_override,
                 )
                 http_lock_wait_started = time.perf_counter()
                 with self.api_call_lock:
@@ -9034,7 +9054,7 @@ class GPTSniperEngine:
         if is_scalping_entry_call and callable(entry_input_refresher):
             # File-backed optional context can also be slow. Read it BEFORE
             # the final WS freeze, not between that freeze and adjudication.
-            if machine_policy_trace_fields:
+            if machine_policy_trace_fields and not entry_setup_live_policy.get('continuous_reversal'):
                 micro_started = time.perf_counter()
                 try:
                     from src.trading.market.micro_confirmation import load_live_dynamic_confirmation_source
@@ -9472,33 +9492,61 @@ class GPTSniperEngine:
                             "entry_machine_input_as_of", cutoff_ms / 1000.0),
                     )
                 machine_hot_payload = json.dumps(machine_exact, ensure_ascii=True)
-                machine_analysis = build_exact_payload_analysis_v1(
-                    machine_exact, stage="entry", live_entry=True
-                )
-                machine_setup = build_entry_setup_evidence(
-                    balanced_policy=prompt_version
-                    in AUXILIARY_ENTRY_RISK_PROMPT_VERSIONS,
-                    timing_aware_policy=prompt_version
-                    not in {
-                        DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
-                        DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
-                    },
-                    exact_payload=machine_exact,
-                    exact_analysis=machine_analysis,
-                    recovery_analysis=build_v2_13_recovery_confirmation_analysis_v1(
-                        machine_exact, stage="entry"
-                    ),
-                    entry_timing_context=machine_exact.get("entry_timing_context"),
-                )
-                machine_assessment = mechanistic_entry_policy_decision(
-                    machine_setup,
-                    policy=entry_setup_live_policy["mechanistic_threshold_policy"],
-                )
+                reversal_family = entry_setup_live_policy.get('continuous_reversal')
+                machine_setup = {}
+                if not reversal_family:
+                    machine_analysis = build_exact_payload_analysis_v1(
+                        machine_exact, stage="entry", live_entry=True
+                    )
+                    machine_setup = build_entry_setup_evidence(
+                        balanced_policy=prompt_version
+                        in AUXILIARY_ENTRY_RISK_PROMPT_VERSIONS,
+                        timing_aware_policy=prompt_version
+                        not in {
+                            DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+                            DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
+                        },
+                        exact_payload=machine_exact,
+                        exact_analysis=machine_analysis,
+                        recovery_analysis=build_v2_13_recovery_confirmation_analysis_v1(
+                            machine_exact, stage="entry"
+                        ),
+                        entry_timing_context=machine_exact.get("entry_timing_context"),
+                    )
+                if reversal_family:
+                    from src.engine.scalping.continuous_reversal import current_snapshot
+                    from src.engine.scalping.continuous_reversal_policy import assess
+                    from src.engine.scalping.micro_reversion.forward_collector import _explicit_item_venue
+                    item = (ws_data.get('last_realtime_type_item') or {}).get('0B')
+                    snapshot = current_snapshot(symbol, _explicit_item_venue(item), machine_exact['session_bucket'],
+                                                now=machine_input_fields.get('entry_machine_input_as_of', time.time()), item=item)
+                    machine_assessment, reversal_input, reversal_prompt, reversal_schema = assess(
+                        reversal_family, snapshot, symbol=symbol, session=machine_exact['session_bucket'])
+                    entry_setup_live_policy.update(continuous_reversal_assessment=machine_assessment,
+                        continuous_reversal_input=reversal_input,
+                        continuous_reversal_arm=(reversal_family['auxiliary_cells'][machine_assessment['cell_key']]['payload']['arm']
+                                                 if machine_assessment.get('cell_key') else None))
+                    if reversal_input:
+                        from src.engine.scalping.reversal_auxiliary_contract import PRODUCTION_VERSION
+                        prompt_version=PRODUCTION_VERSION+':'+entry_setup_live_policy['continuous_reversal_arm']
+                        entry_setup_live_policy.update(auxiliary_system_prompt=reversal_prompt,
+                            selected_prompt_version=prompt_version,
+                            auxiliary_system_prompt_sha256=__import__('hashlib').sha256(json.dumps(reversal_prompt,ensure_ascii=True,sort_keys=True,separators=(',',':')).encode()).hexdigest(),
+                            auxiliary_prompt_variant=entry_setup_live_policy['continuous_reversal_arm'])
+                        machine_setup = {**reversal_input['entry_setup_evidence_v1'],
+                                         'continuous_reversal_response_schema': reversal_schema}
+                        machine_exact['continuous_reversal_event'] = machine_assessment['event']
+                else:
+                    machine_assessment = mechanistic_entry_policy_decision(
+                        machine_setup,
+                        policy=entry_setup_live_policy["mechanistic_threshold_policy"],
+                    )
                 # Pin the selected profile and its rebuilt facts to this attempt.
                 machine_setup = machine_assessment.pop("effective_setup_evidence", machine_setup)
                 from src.engine.scalping.entry_admission_recipe import bind_confirmation
-                machine_setup = bind_confirmation(
-                    machine_setup, entry_setup_live_policy["mechanistic_threshold_policy"])
+                if not reversal_family:
+                    machine_setup = bind_confirmation(
+                        machine_setup, entry_setup_live_policy["mechanistic_threshold_policy"])
                 from src.engine.scalping.ai_decision_trace import (
                     capture_machine_observation,
                 )
@@ -9546,7 +9594,7 @@ class GPTSniperEngine:
                             "entry_economic_source_blocker": "observer_failed:" + type(exc).__name__}
                 machine_first_context = {
                     "assessment": machine_assessment,
-                    "flow_observation": build_mechanistic_entry_flow_observation(
+                    "flow_observation": {} if reversal_family else build_mechanistic_entry_flow_observation(
                         machine_analysis
                     ),
                     "setup": machine_setup,
@@ -10314,6 +10362,14 @@ class GPTSniperEngine:
                         if trace_metadata_extra.get(key) not in (None, "")
                     }
                 )
+            if entry_setup_live_policy.get('continuous_reversal_input'):
+                # Send the same allowlisted as-of input used by actual postclose replay.
+                replay_context = entry_setup_live_policy['continuous_reversal_input']
+                formatted_data = json.dumps(replay_context, ensure_ascii=True, sort_keys=True, separators=(',',':'))
+                entry_setup_evidence = {**replay_context['entry_setup_evidence_v1'],
+                                       'continuous_reversal_response_schema': reversal_schema}
+                trace_metadata_extra['entry_setup_live_policy_selected_prompt_version']=prompt_version
+                input_contract_fields['entry_setup_live_policy_selected_prompt_version']=prompt_version
             provider_attempted = True
             result = self._call_openai_safe(
                 prompt,
@@ -10357,6 +10413,8 @@ class GPTSniperEngine:
                     else None
                 ),
                 replay_context=replay_context,
+                **({'response_schema_override': reversal_schema}
+                   if entry_setup_live_policy.get('continuous_reversal_input') else {}),
             )
             # V2.14 validates a deliberately narrow model-response schema.
             # Transport/timing metadata is generated locally and must not be
@@ -10414,6 +10472,7 @@ class GPTSniperEngine:
                     prompt_type != "scalping_holding"
                     and isinstance(candle_context, dict)
                     and candle_context
+                    and not result.get('continuous_reversal_applied')
                 ):
                     result = apply_entry_candle_hybrid_guard(
                         result,

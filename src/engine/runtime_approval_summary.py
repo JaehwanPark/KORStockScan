@@ -1210,6 +1210,20 @@ def build_runtime_approval_summary(
                     and machine_source.get("terminal_state")
                     == (source_payload.get("machine_full_evaluation") or {}).get("state")
                 )
+        if owner in {'main_mechanistic_entry','compact_auxiliary'} and policy.get('exists') and policy.get('target_date_matches'):
+            policy_payload = _load_json(Path(str(policy.get('path') or '')))
+            if policy_payload.get('continuous_reversal'):
+                from src.engine.scalping.continuous_reversal_policy import direct_handoff
+                try:
+                    handoff=direct_handoff(DATA_DIR,target_date,effective_date=policy_payload['target_date'],
+                                          publication_date=policy_payload['publication_date'])
+                    policy_receipt_valid=handoff['policy_bundle_sha256']==policy_payload['bundle_sha256']
+                    row['continuous_reversal_handoff']=handoff
+                    row['economic_evidence'].update(comparison_status='cumulative_winrate_selected',
+                        policy_handoff_state='verified',first_blocker=None,
+                        realized_profit_assessed=False,selection_metric='cumulative_raw_win_fraction')
+                except (OSError,ValueError,KeyError,TypeError):
+                    policy_receipt_valid=False
         row["policy_receipt"] = {
             "owner": policy_owner,
             "path": policy.get("path"),

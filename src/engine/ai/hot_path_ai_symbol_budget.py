@@ -1,4 +1,4 @@
-"""Process-local per-symbol cadence budget for live hot-path AI calls.
+"""Process-local call accounting and duplicate-cadence control.
 
 This module owns call cadence only.  It does not choose an AI action, mutate
 trading state, or grant broker/order authority.
@@ -11,10 +11,8 @@ import threading
 from collections import deque
 from dataclasses import dataclass
 
-POLICY_VERSION = "hot_path_ai_symbol_budget_v1"
+POLICY_VERSION = "hot_path_ai_symbol_budget_uncapped_v2"
 DEFAULT_WINDOW_SEC = 60.0
-DEFAULT_TOTAL_CALLS_PER_WINDOW = 4
-DEFAULT_GROUP_CALLS_PER_WINDOW = 2
 
 
 def _env_float(name: str, default: float) -> float:
@@ -22,13 +20,6 @@ def _env_float(name: str, default: float) -> float:
         return max(0.0, float(os.getenv(name, str(default))))
     except (TypeError, ValueError):
         return float(default)
-
-
-def _env_int(name: str, default: int) -> int:
-    try:
-        return max(1, int(os.getenv(name, str(default))))
-    except (TypeError, ValueError):
-        return int(default)
 
 
 def endpoint_group(endpoint: str) -> str:
@@ -50,9 +41,9 @@ class HotPathAISymbolBudgetDecision:
     endpoint_group: str
     window_sec: float
     total_count: int
-    total_cap: int
+    total_cap: int | None
     group_count: int
-    group_cap: int
+    group_cap: int | None
     endpoint_age_sec: float | None
     min_interval_sec: float
 
@@ -66,9 +57,9 @@ class HotPathAISymbolBudgetDecision:
             f"{prefix}_endpoint_group": self.endpoint_group,
             f"{prefix}_window_sec": f"{self.window_sec:.3f}",
             f"{prefix}_total_count": int(self.total_count),
-            f"{prefix}_total_cap": int(self.total_cap),
+            f"{prefix}_total_cap": self.total_cap,
             f"{prefix}_group_count": int(self.group_count),
-            f"{prefix}_group_cap": int(self.group_cap),
+            f"{prefix}_group_cap": self.group_cap,
             f"{prefix}_endpoint_age_sec": (
                 "-" if self.endpoint_age_sec is None else f"{self.endpoint_age_sec:.3f}"
             ),
@@ -98,7 +89,7 @@ class HotPathAISymbolBudgetDecision:
 
 
 class HotPathAISymbolBudget:
-    """Atomic rolling budget shared by entry, holding and scale-in call sites."""
+    """Atomic accounting; live quotas are absent, finite replay is explicit."""
 
     def __init__(
         self,
@@ -115,22 +106,11 @@ class HotPathAISymbolBudget:
                 DEFAULT_WINDOW_SEC,
             )
         )
-        self.total_cap = int(
-            total_cap
-            if total_cap is not None
-            else _env_int(
-                "KORSTOCKSCAN_HOT_PATH_AI_SYMBOL_BUDGET_TOTAL_CALLS",
-                DEFAULT_TOTAL_CALLS_PER_WINDOW,
-            )
-        )
-        self.group_cap = int(
-            group_cap
-            if group_cap is not None
-            else _env_int(
-                "KORSTOCKSCAN_HOT_PATH_AI_SYMBOL_BUDGET_GROUP_CALLS",
-                DEFAULT_GROUP_CALLS_PER_WINDOW,
-            )
-        )
+        # Operator instruction 2026-10-06: permanently remove live AI call
+        # quotas. Old environment values must not silently reinstate them.
+        # Explicit finite arguments are retained for historical offline replay.
+        self.total_cap = int(total_cap) if total_cap is not None else None
+        self.group_cap = int(group_cap) if group_cap is not None else None
         self._events: dict[str, deque[tuple[float, str]]] = {}
         self._lock = threading.Lock()
 
@@ -168,9 +148,9 @@ class HotPathAISymbolBudget:
             allowed = True
             if not canonical_code:
                 allowed, reason = False, "missing_code"
-            elif len(events) >= self.total_cap:
+            elif self.total_cap is not None and len(events) >= self.total_cap:
                 allowed, reason = False, "symbol_window_cap"
-            elif len(group_events) >= self.group_cap:
+            elif self.group_cap is not None and len(group_events) >= self.group_cap:
                 allowed, reason = False, "endpoint_group_window_cap"
             elif endpoint_age_sec is not None and endpoint_age_sec < max(
                 0.0, float(min_interval_sec)
@@ -184,7 +164,10 @@ class HotPathAISymbolBudget:
             return HotPathAISymbolBudgetDecision(
                 allowed=allowed,
                 reason=reason,
-                policy_version=POLICY_VERSION,
+                policy_version=(
+                    POLICY_VERSION if self.total_cap is None and self.group_cap is None
+                    else "hot_path_ai_symbol_budget_v1"
+                ),
                 code=canonical_code,
                 endpoint=canonical_endpoint,
                 endpoint_group=group,

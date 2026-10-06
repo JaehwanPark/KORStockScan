@@ -2157,7 +2157,7 @@ def _merge_count_maps(
 
 
 def _latest_prior_cumulative_state(target_date: str) -> tuple[dict[str, Any], str]:
-    policy = clean_baseline_policy()
+    clean_baseline_policy()
     baseline_date = policy_refresh_start_date(target_date)
     for path in sorted(
         REPORT_DIR.glob(f"{REPORT_TYPE}_*.json"),
@@ -5922,6 +5922,10 @@ def _refresh_operating_economics(report,validation,replay,actual_outcomes,*,targ
 
 EXECUTION_MODEL_CONTRACT = "entry_split_execution_model_validation_v1"
 EXECUTION_PRODUCER_CENSUS_MAX_BYTES = 256 * 1024 * 1024
+# A day's sealed projection spans many small native shards. The old 64 MiB
+# aggregate ceiling rejected otherwise valid days before their census check.
+# Keep per-file admission at 64 MiB and bound decoded aggregate IO explicitly.
+EXECUTION_PROJECTION_MAX_DECODED_BYTES = 256 * 1024 * 1024
 EXECUTION_SOURCE_STAGES = frozenset({
     "entry_execution_sizing_plan", "entry_execution_sizing_plan_block",
     "entry_ai_economic_plan_observed", "entry_ai_economic_source_gap",
@@ -6008,7 +6012,7 @@ def _bounded_execution_projection(target_date: str, *, stages=None, families=Non
         with open_text_auto(path) as handle:
             for line in handle:
                 total_bytes += len(line.encode())
-                if total_bytes > 64 * 1024 * 1024:
+                if total_bytes > EXECUTION_PROJECTION_MAX_DECODED_BYTES:
                     raise ValueError("execution_partition_decoded_byte_budget_exceeded")
                 hasher.update(line.encode())
                 if not line.endswith("\n"):

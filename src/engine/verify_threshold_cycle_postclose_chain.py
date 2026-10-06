@@ -489,6 +489,9 @@ def _selected_strategy_requires_runtime_activation(selected_strategy: tuple | No
 
 
 def _main_mechanistic_scope(target_date: str, effective_date: str | None = None, publication_date: str | None = None) -> dict[str, Any]:
+    if (DATA_DIR/'report'/'continuous_reversal'/target_date/'machine.json').is_file():
+        from src.engine.scalping.continuous_reversal_policy import scoped_verification
+        return scoped_verification(DATA_DIR,target_date,effective_date=effective_date,publication_date=publication_date)
     from src.engine.scalping import ai_action_outcome_calibration as calibration
     from src.engine.scalping import mechanistic_entry_runtime_policy as policy
 

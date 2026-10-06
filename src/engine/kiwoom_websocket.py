@@ -4653,6 +4653,14 @@ class KiwoomWSManager:
                                                 )
                                             )
                                     route_snapshot[real_type] = realtime_snapshot
+                                    if real_type == '0B':
+                                        # Consumer of the existing normalized envelope only.
+                                        # No broker parsing, provider calls, disk replay or orders.
+                                        from src.engine.scalping.continuous_reversal import observe_normalized
+                                        from src.engine.scalping.micro_reversion.forward_collector import _session_bucket, _explicit_item_venue
+                                        observed_clock = datetime.fromtimestamp(now_update_ts, KST).timetz()
+                                        reversal_session = _session_bucket(_explicit_item_venue(realtime_snapshot['item']), observed_clock)
+                                        observe_normalized(item_code[:6], reversal_session, realtime_snapshot)
                                     quiet_state = route_snapshot["_quiet_tape_state"]
                                     if real_type in {"0B", "0D"}:
                                         if real_type == "0D":
