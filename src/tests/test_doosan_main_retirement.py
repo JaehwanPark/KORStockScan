@@ -228,7 +228,9 @@ def test_retirement_apply_keeps_active_exit_owner_and_prevents_rollback_before_u
     def runner(command,**kwargs):
         calls.append(command)
         if command[1]=='show':
-            if '--property=LoadState' in command:return SimpleNamespace(stdout='loaded\n')
+            if '--property=LoadState' in command:
+                masked=any(call[1]=='mask' for call in calls) and command[2].endswith('.service')
+                return SimpleNamespace(stdout='masked\n' if masked else 'loaded\n')
             return SimpleNamespace(stdout='active\n123\n' if failure=='active_service' else 'inactive\n0\n')
         if command[1]=='daemon-reload' and failure=='reload_failure':raise RuntimeError('reload failed')
         return SimpleNamespace(stdout='')
@@ -238,10 +240,12 @@ def test_retirement_apply_keeps_active_exit_owner_and_prevents_rollback_before_u
     else:
         result=transition.apply(manifest,registry=registry,snapshot_fetcher=lambda:snapshot,runner=runner)
         assert result['state']=='terminal'
+        assert len(result['masked_instances']) == 6
     receipt=workspace/'data/runtime/retirements/doosan-episode-retirement.json'
     assert all('--now' not in command for command in calls if any(word.endswith('.service') for word in command))
     if failure=='active_service':
         assert unit.exists() and not receipt.exists()
+        assert not any(command[1]=='mask' for command in calls)
     else:
         assert not unit.exists() and receipt.exists()
         assert json.loads(receipt.read_text())['state']==('entry_retired' if failure else 'terminal')
@@ -292,3 +296,13 @@ def test_retirement_process_scope_preserves_foreign_owners(tmp_path, argv, block
     assert bool(blocking_retirement_processes(census,workspace=workspace,proc_root=proc)) == blocked
     (row/'cmdline').unlink()
     assert blocking_retirement_processes(census,workspace=workspace,proc_root=proc) == census
+
+
+def test_retirement_prepare_preserves_instance_masks(tmp_path):
+    from src.engine.automation import owner_retirement_transition as transition
+    workspace=tmp_path/'work'; units=tmp_path/'units'; units.mkdir()
+    guard=workspace/'src/trading/config/owner_retirement.py'; guard.parent.mkdir(parents=True); guard.write_text('reviewed')
+    service=next(name for name in transition.units() if name.endswith('.service'))
+    (units/service).symlink_to('/dev/null')
+    assert transition.prepare(workspace,systemd_dir=units)['installed_files'] == []
+    assert (units/service).is_symlink()

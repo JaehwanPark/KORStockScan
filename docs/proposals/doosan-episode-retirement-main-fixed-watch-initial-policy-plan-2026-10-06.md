@@ -229,3 +229,5 @@ G0~G4는 삭제·상시감시 기술 전환의 완료 기준이다. G5는 연구
 ## 승인된 당일 전환 보완
 
 반복 코드리뷰·보완 후 배포 및 재기동을 사용자가 승인했다. 퇴역은 두산 episode와 식별되지 않는 주문 프로세스의 quiescence를 요구하며, 확인된 Main/다른 종목 에피소드는 각자의 권한을 유지한다. 모든 날짜의 두산 intent·전체 venue broker/원장 flat·두산 exit service inactive를 전환 시점에 다시 확인한다. 두산 timer 6개의 미래 trigger를 먼저 막고, 검토된 immutable release에서 native installed retirement를 완료한다. 당일 Main owner 권한이 이미 있으므로 현재 owner policy/PREOPEN/bootstrap을 변조하지 않고 intraday code handoff를 실행한다. 다음 정상 PREOPEN producer부터 Main·수동 owner만 발행한다. 미래 장후/PREOPEN과 비용 후 성과는 실제 산출 후 별도 수용한다.
+
+Installed retirement retains six permanent service-instance masks after flat closure. Removing timers cannot restore those IDs through generic templates; other episode templates, code pins and active processes are preserved. Reload/mask readback failure retains the `entry_retired` rollback guard and reviewed retry.

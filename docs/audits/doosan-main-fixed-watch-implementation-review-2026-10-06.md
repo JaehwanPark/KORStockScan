@@ -79,3 +79,5 @@
 사용자가 반복 리뷰·보완 및 배포·재기동을 명시 승인했다. 추가 리뷰에서 전 종목 주문 프로세스 정지를 요구하던 retirement gate를 두산 episode/미식별 프로세스 차단으로 좁혔다. Main과 확인된 다른 종목 episode의 argv·실행 파일·cwd를 실제 procfs에서 확인하며, 읽기 실패·unknown/dynamic profile·중복 override는 차단한다. native flat/미확정 intent·active exit service·두 번의 정확한 broker snapshot 검사도 유지한다. CLI의 explicit account 결손은 검증된 standing authority로 결속했고, 불일치 계좌는 차단한다. 후속 회귀 122 PASS, compile/bash/diff 검사 PASS다.
 
 당일 두산 owner 정책은 이미 Main 권한이 있다. intraday handoff는 기존 bootstrap/PREOPEN/owner 정책을 보존하고 code retirement guard로 episode BUY를 배제한다. 다음 PREOPEN의 정상 producer부터 Main·수동 owner만 발행한다. 오늘 장후의 새 source date 10/6 → 10/7 준비는 예정된 native chain이며, 아직 생성되지 않은 미래 원천·PID를 PASS로 기록하지 않는다.
+
+Installed retirement retains six permanent service-instance masks after flat closure. Removing timers cannot restore those IDs through generic templates; other episode templates, code pins and active processes are preserved. Reload/mask readback failure retains the `entry_retired` rollback guard and reviewed retry.

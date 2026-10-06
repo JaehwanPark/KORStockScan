@@ -60,6 +60,10 @@ def prepare(workspace, *, systemd_dir=Path("/etc/systemd/system")):
         paths = [systemd_dir / name, *(systemd_dir / (name + ".d")).glob("*.conf")]
         for path in paths:
             if path.exists() or path.is_symlink():
+                # A permanent instance mask is the surviving retirement guard,
+                # not a dedicated strategy file to remove on reviewed retry.
+                if name.endswith(".service") and path.is_symlink() and path.resolve() == Path("/dev/null"):
+                    continue
                 if path.is_dir():
                     raise ValueError("retirement_unit_path_is_directory")
                 files.append({"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
@@ -181,7 +185,7 @@ def _apply_locked(manifest, *, registry, snapshot_fetcher, runner):
                         check=True, capture_output=True, text=True).stdout.strip()
         if status == "loaded":
             installed_units.add(unit)
-        elif status != "not-found":
+        elif status != "not-found" and not (status == "masked" and unit.endswith(".service")):
             raise ValueError("retirement_unit_load_state_invalid:" + unit)
     # Prevent new timer starts before inspecting services. Never stop an active
     # residual exit owner merely because its next BUY is retired.
@@ -228,8 +232,19 @@ def _apply_locked(manifest, *, registry, snapshot_fetcher, runner):
         path.unlink()
         if path.parent.name.endswith(".d") and not any(path.parent.iterdir()):
             path.parent.rmdir()
+    # Removing timers alone leaves generic templates able to restart the old
+    # retired IDs. Mask only these flat/inactive instances; foreign owners and
+    # the shared templates keep their current code and processes.
+    masked = [unit for unit in units() if unit.endswith(".service")]
+    runner(["systemctl", "mask", *masked], check=True, capture_output=True, text=True)
     runner(["systemctl", "daemon-reload"], check=True, capture_output=True, text=True)
+    for unit in masked:
+        state = runner(["systemctl", "show", unit, "--property=LoadState", "--value"],
+                       check=True, capture_output=True, text=True).stdout.strip()
+        if state != "masked":
+            raise ValueError("retirement_instance_mask_not_observed:" + unit)
     terminal["state"] = "terminal"
+    terminal["masked_instances"] = masked
     terminal["receipt_sha256"] = digest({k: v for k, v in terminal.items() if k != "receipt_sha256"})
     atomic_write_json(receipt_path, terminal)
     return terminal
