@@ -42,6 +42,8 @@ E의 30초/최대 3회 새 원천 재평가에서 직접 후보와 다른 회수
 
 배포·PID 소비·WS 수신과 실제 평가→보조→guard→주문→체결→비용 성과는 구분한다. 다음 적격 session의 recipe/provider 자연 증거가 없으면 `not_observed`다. 기존 운영 경제성·stop/plan/capital 결손은 가격 연구로 닫지 않으며 기존 Main/compact/entry-split OPEN owner가 유지한다. [당일 체크리스트](../checklists/2026-10-06-stage2-todo-checklist.md)의 `MainSubmitDroughtPathAcceptance1006` 한 owner가 P0 다음 기동 수용을 소유한다. 현재 정책 값/원 PREOPEN을 유지한 승인 배포 뒤 strict/controller/native finalization을 마지막 checklist/PID 세대로 다시 봉인한다.
 
+- 마지막 생산→상태 처리기→감시 소비 대조에서 새 확인 필드 4개가 WATCHING provenance whitelist에서 빠진 것을 추가 수리했다. 상태 처리기·async bridge·감시기·위치 회귀 **222건 PASS**. 첫 준비 릴리스는 기동 전에 철회하고 수정된 릴리스를 다시 봉인한다. 총 회귀 실행 1,632건(중복 포함).
+
 ## 최종 운영 영수증
 
 배포 및 최종 native 검사 후 아래에 실제 receipt를 기록한다.

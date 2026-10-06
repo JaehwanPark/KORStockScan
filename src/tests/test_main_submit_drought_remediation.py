@@ -57,6 +57,9 @@ def test_confirmation_is_separate_and_all_consumers_agree():
     assert result["action"] == "WAIT" and result["entry_probe_intent"] is True
     assert result["entry_ai_screen_pass"] is True
     assert result["actual_order_submitted"] is False
+    from src.engine.sniper_state_handlers import _machine_primary_entry_provenance_fields
+    carried = _machine_primary_entry_provenance_fields(result)
+    assert carried["entry_machine_confirmation_sha256"] == ledger["machine_confirmation"]["confirmation_sha256"]
     # The English recipe instruction and exact facts reach the compact payload.
     from src.engine.ai_engine_openai import _entry_provider_ledger
 
