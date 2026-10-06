@@ -51,38 +51,6 @@ def projection_path(report_path, family, day):
     return Path(report_path).parent / f'{family}_policy_semantics_{day}.json'
 
 
-def widget_summary(report):
-    rows = []
-    for symbol, source in sorted((report.get('symbols') or {}).items()):
-        for session, value in sorted((source.get('sessions') or {}).items()):
-            paired = value.get('paired_economics') or {}
-            study, selection = paired.get('study') or {}, paired.get('selection') or {}
-            execution = (source.get('execution_quality_by_session') or {}).get(session) or {}
-            events = execution.get('event_counts') or {}
-            rows.append(dict(symbol=symbol, session=session,
-                cohort='samsung' if symbol == '005930' else 'non_samsung',
-                disposition=value.get('decision'), evidence_state=selection.get('evidence_state'),
-                source_rows=source.get('source_row_count'), replay_source={k: (study.get('source_audit') or {}).get(k)
-                    for k in ('exact_input_count', 'raw_record_count', 'replay_input_occurrences',
-                        'duplicate_input_occurrences', 'invalid_source_rows', 'conflicting_observations',
-                        'target_date', 'target_date_sessions', 'raw_state_counts', 'quote_valid_count')},
-                study_status=study.get('status'), pair_count=study.get('paired_opportunity_count'),
-                candidates=len(study.get('candidates') or []),
-                candidate_ready=selection.get('candidate_ready') is True,
-                gate_reasons=selection.get('path_exclusion_reasons') or [],
-                comparable_windows=selection.get('diagnostics') or [],
-                scale_in_source_census=study.get('scale_in_source_census'),
-                # Counts remain in the native symbol/session window, never Main
-                # counts or a unique-order count masquerading as fill quantity.
-                execution=dict(scope=execution.get('execution_event_scope'), events=events,
-                    submit_failed=execution.get('order_submit_failed_count'),
-                    ambiguous=execution.get('order_submit_ambiguous_count'),
-                    terminal_failed=execution.get('terminal_execution_failure_count'))))
-    return dict(ready_sessions=report.get('ready_session_policy_count'),
-        carried_sessions=report.get('carried_forward_session_policy_count'),
-        selected_sessions=report.get('statistically_ready_session_policy_count'),
-        source_census_reconciliation=report.get('source_census_reconciliation'),
-        rows=rows, actual_pid_consumed=False, realized_profit=None)
 
 
 def episode_summary(report):
@@ -116,7 +84,7 @@ def episode_summary(report):
 
 
 def publish(report, policy, *, report_path, policy_path, family, producer_path):
-    if family not in {'widget', 'episode'}:
+    if family not in {'episode'}:
         raise ValueError('family_semantic_owner_invalid')
     day = report['target_date']
     # Summarize exactly the generation on disk. A competing publisher cannot
@@ -124,7 +92,7 @@ def publish(report, policy, *, report_path, policy_path, family, producer_path):
     report_sha, policy_sha = file_sha(report_path), file_sha(policy_path)
     if json.loads(Path(report_path).read_text()) != report or json.loads(Path(policy_path).read_text()) != policy:
         raise ValueError('semantic_generation_changed_during_read')
-    summary = widget_summary(report) if family == 'widget' else episode_summary(report)
+    summary = episode_summary(report)
     value = seal(dict(schema=SCHEMA, family=family, source_date=day,
         target_date=policy.get('effective_date') or policy.get('target_date'),
         metric_contract=CONTRACT, runtime_effect=False, actual_order_submitted=False,

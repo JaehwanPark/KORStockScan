@@ -34,7 +34,7 @@ from src.utils.jsonl_io import (
 
 KST = ZoneInfo("Asia/Seoul")
 SUPPORTED_LISTING_MARKETS = frozenset({"KOSPI", "KOSDAQ"})
-SUPPORTED_OWNERS = frozenset({"widget", "episode"})
+SUPPORTED_OWNERS = frozenset({"episode"})
 
 DEFAULT_STATE_PATH = TMP_DIR / "market_weakness_observer_state.json"
 DEFAULT_SYMBOL_MASTER_DIR = (
@@ -44,7 +44,7 @@ DEFAULT_BLOCKED_ENTRY_OBSERVATION_DIR = (
     DATA_DIR / "report/machine_market_weakness_blocked_entries"
 )
 BLOCKED_ENTRY_OBSERVATION_SCHEMA = "machine_market_weakness_blocked_entry_v1"
-ENABLE_ENV = "KORSTOCKSCAN_WIDGET_EPISODE_MARKET_WEAKNESS_ENTRY_GUARD_ENABLED"
+ENABLE_ENV = "KORSTOCKSCAN_MACHINE_MARKET_WEAKNESS_ENTRY_GUARD_ENABLED"
 POLICY_ID = "WIDGET_EPISODE_MARKET_WEAKNESS_ENTRY_FREEZE_OPEN_BUY_CANCEL_V2"
 OPERATOR_APPROVAL_DATE = "2026-08-31"
 OBSERVER_HEALTH_SCHEMA = "market_weakness_observer_health_v1"

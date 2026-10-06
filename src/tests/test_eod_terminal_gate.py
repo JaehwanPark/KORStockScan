@@ -3,11 +3,14 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
 GATE = ROOT / "deploy/eod_terminal_gate.sh"
+
+
 
 
 def _run_gate(tmp_path: Path, payload: dict) -> subprocess.CompletedProcess[str]:
@@ -74,12 +77,11 @@ def test_eod_gate_rejects_failed_terminal_without_waiting(tmp_path):
     assert "EOD failed target_date=2026-09-28" in result.stderr
 
 
-def test_eod_gates_precede_widget_compute_and_machine_dispatch():
-    widget = (ROOT / "deploy/run_widget_evaluation.sh").read_text(encoding="utf-8")
+def test_eod_gates_precede_surviving_machine_dispatch():
+    assert not (ROOT / "deploy/run_widget_evaluation.sh").exists()
     machine = (ROOT / "deploy/run_machine_microstructure_final_refresh.sh").read_text(encoding="utf-8")
     threshold = (ROOT / "deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
 
-    assert widget.index("wait_for_eod_terminal") < widget.index("run_stage advisory")
     assert machine.index("wait_for_eod_terminal") < machine.index("postclose_summary_handoff")
     start_marker = threshold.index('emit_postclose_marker "[START] threshold-cycle')
     assert threshold.index('wait_for_eod_terminal "$PROJECT_DIR"', start_marker) < threshold.index("stop_postclose_bot_if_requested", start_marker)

@@ -17,3 +17,5 @@
 | 과거 결정/변경 확인을 요청받은 경우 | [Execution delta](./plan-korStockScanPerformanceOptimization.execution-delta.md), [archive](./archive/)의 해당 기록 |
 
 현재 owner는 당일 checklist에서 찾는다. 과거 완료 ID·PID·선택값을 현재 상태로 복제하지 않는다. 문서 열람·정비는 그 안의 monitoring/repair/restart 실행 요청이 아니다. 변경 검증과 사용자 수동 sync 규칙은 AGENTS.md §3/§5를 따른다.
+
+위젯 실행·수집·연구·장후 정책 발행은 퇴역 대상이다. 새 실행 명령과 정책 복원 경로를 만들지 않는다. 공통 비용/WS/에피소드 원천과 과거 custody는 별도 보존하며 현재 제거·자연 acceptance는 당일 `WidgetFullRetirement1006` owner가 소유한다.

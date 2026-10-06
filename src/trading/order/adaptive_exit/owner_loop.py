@@ -12,7 +12,6 @@ from typing import Callable
 from .models import Clock, ClockSourceGap, Snapshot
 from .runtime import OwnerSession, RegisteredOwnerExitPort
 from .terminal import terminal_receipt
-from .arbitration import SCHEMA as FINAL_EXIT_SCHEMA
 from .group_owner_loop import GroupLoopServices
 from .episode_pending_buy import EpisodePendingBuyServices
 from .enrollment import InitialPolicyAdmission, PolicyAdmissionCatalog
@@ -29,9 +28,6 @@ class OwnerLoopServices:
     owner_guard: Callable
     snapshot_loader: Callable[[OwnerSession, Clock], Snapshot | None]
     clock_loader: Callable[[OwnerSession, int], Clock]
-    # Independent validation of the original owner's frozen source-EXIT
-    # policy, not another user approval or authority from a raw signal/hash.
-    authorize_final_exit: Callable[[dict], bool] | None = None
     # Shares THIS original owner's lock. No default group enrollment/services.
     group: GroupLoopServices | None = None
     pending_buy: EpisodePendingBuyServices | None = None
@@ -73,31 +69,12 @@ def step_session(
     persist_record,
     clock,
     persist_terminal=None,
-    final_exit_requested=False,
-    final_exit_request=None,
     enrollment_receipt=None,
 ):
     if not isinstance(services, OwnerLoopServices):
         return "owner_loop_services_missing"
-    if type(final_exit_requested) is not bool:
-        return "final_exit_authority_invalid"
     if services.lock_held() is not True:
         return "original_owner_lock_required"
-    if final_exit_requested and (
-        not isinstance(final_exit_request, dict)
-        or not callable(services.authorize_final_exit)
-    ):
-        return "adaptive_final_exit_policy_authority_missing"
-    if final_exit_requested and (
-        final_exit_request.get("schema") != FINAL_EXIT_SCHEMA
-        or final_exit_request.get("scope_key") != session.policy.scope_key
-        or final_exit_request.get("position_id") != session.context.position_id
-        or not isinstance(final_exit_request.get("session_bindings"), list)
-        or session.binding_hash not in final_exit_request["session_bindings"]
-        or final_exit_request.get("canonical_sha256")
-        != canonical_sha256(final_exit_request)
-    ):
-        return "adaptive_final_exit_receipt_binding_invalid"
 
     def authorized(binding):
         return (
@@ -107,10 +84,6 @@ def step_session(
                 session,
                 enrollment_receipt,
                 now=datetime.fromtimestamp(clock.now_ms / 1000, timezone.utc),
-            )
-            and (
-                not final_exit_requested
-                or services.authorize_final_exit(final_exit_request) is True
             )
         )
 
@@ -152,7 +125,6 @@ def step_session(
     updated = port.step(
         snapshot=snapshot,
         clock=verified_clock,
-        final_exit_requested=final_exit_requested,
     )
     if not updated.manager_required and persist_terminal is not None:
         if services.lock_held() is not True:

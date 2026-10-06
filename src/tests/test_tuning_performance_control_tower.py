@@ -77,13 +77,19 @@ def test_control_tower_binds_direct_generation_without_verifier_cycle(
     assert report["selected_runtime"]["selected_families"] == ["entry_cancel_wait"]
     assert report["selected_runtime"]["target_date"] == apply_day
     sources = report["source_generation_contract"]["sources"]
-    assert set(sources) == {
-        "runtime_approval_summary",
+    assert set(sources) == {"runtime_approval_summary"}
+    assert set(report["observed_runtime_source_contract"]["sources"]) == {
         "runtime_policy_bootstrap",
         "runtime_policy_bootstrap_verify",
     }
     assert "postclose_verifier" not in sources
     assert "threshold_cycle_ev" not in sources
+    from src.engine.automation.postclose_summary_handoff import verify_summary_handoff
+    result = verify_summary_handoff(
+        day, report_dir=report_root, checklist_path=tmp_path / "checklist.md",
+        require_checklist=False,
+    )
+    assert result["status"] == "pass", result["issues"]
 
 
 def test_actual_tower_publishes_cancel_wait_reconciliation(monkeypatch, tmp_path):

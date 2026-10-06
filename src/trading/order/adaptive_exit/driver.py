@@ -1,6 +1,6 @@
 """Owner-locked exit execution driver with durable-before-effect transitions.
 
-Ports must be implemented by the original widget/episode custody owner. This
+Ports must be implemented by the original episode custody owner. This
 module owns no account, thread, filesystem lock, policy activation or broker
 API. Persist failures propagate BEFORE writes; ambiguous submissions are never
 blindly retried. The port's guard must include account/manual/global vetoes.

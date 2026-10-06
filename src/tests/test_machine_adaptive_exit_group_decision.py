@@ -654,7 +654,7 @@ def test_frozen_book_fill_conservation_never_becomes_lot_broker_pnl(setup, fill)
     )
 
 
-@pytest.mark.parametrize("owner", ["widget", "episode"])
+@pytest.mark.parametrize("owner", ["episode"])
 def test_scope_generic_producer_keeps_owner_separate(setup, owner):
     make, _, _, _ = setup
     c = make().coordinator

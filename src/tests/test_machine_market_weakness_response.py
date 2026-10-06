@@ -213,7 +213,6 @@ def test_threshold_review_flags_structurally_unattainable_collection_yield(tmp_p
         "market:KOSDAQ",
         "market:KOSPI",
         "owner:episode",
-        "owner:widget",
     ]
     assert result["source_census"]["counterfactual_30m_eligible_count"] == 0
     assert result["source_census"]["counterfactual_30m_eligible_yield_pct"] == 0.0
@@ -389,7 +388,7 @@ def _write_master(root: Path) -> None:
 def _anchor(symbol: str, *, actual: bool = True) -> dict:
     return {
         "anchor_id": f"anchor-{symbol}",
-        "owner": "episode" if symbol == "005930" else "widget",
+        "owner": "episode",
         "scope_id": f"scope-{symbol}",
         "symbol": symbol,
         "anchor_at": f"{TARGET_DATE}T09:05:00+09:00",
@@ -414,7 +413,7 @@ def _threshold_counterfactual_row(day: str, index: int) -> dict:
         "anchor_id": f"{day}-counterfactual-{index}",
         "threshold_candidate_state_contract": STATE_REPLAY_CONTRACT,
         "historical_state_replay_contract": STATE_REPLAY_CONTRACT,
-        "owner": "episode" if index % 2 == 0 else "widget",
+        "owner": "episode",
         "listing_market": "KOSPI" if index % 2 == 0 else "KOSDAQ",
         "effective_hysteresis": {
             "activation_unique_observations": 2,
@@ -989,12 +988,12 @@ def test_cumulative_readiness_never_pools_owner_market_cohorts(tmp_path):
     for day in ("2026-08-24", "2026-08-25", "2026-08-26", "2026-08-27"):
         rows = []
         for index in range(5):
-            owner = "episode" if index % 2 == 0 else "widget"
+            owner = "episode"
             rows.append(
                 {
                     "anchor_id": f"{day}-{index}",
                     "owner": owner,
-                    "listing_market": "KOSPI" if owner == "episode" else "KOSDAQ",
+                    "listing_market": "KOSPI" if index % 2 == 0 else "KOSDAQ",
                     "actual_order_submitted": True,
                     "source_quality_status": "eligible",
                     "control": {

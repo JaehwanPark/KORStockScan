@@ -30,11 +30,6 @@ SECTION_START = "<!-- POSTCLOSE_RECOMMENDATION_INTAKE_START -->"
 SECTION_END = "<!-- POSTCLOSE_RECOMMENDATION_INTAKE_END -->"
 SOURCE_LABELS = (
     "code_improvement_workorder",
-    "widget_collector_expansion_recommendation",
-    "widget_advisory_calibration",
-    "widget_auto_trade_policy_calibration",
-    "widget_symbol_signal_policy_research",
-    "widget_symbol_runtime_policy_apply",
     "samsung_machine_entry_tuning",
     "low_price_two_leg_tuning",
     "low_price_two_leg_expanded_candidate_research",

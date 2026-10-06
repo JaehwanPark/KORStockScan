@@ -26,7 +26,8 @@ from src.trading.order.adaptive_exit.broker import RegisteredSellAdapter
 from src.trading.order.profit_stagnation_exit import KEY
 from src.trading.order.owner_custody_registry import OrderOwnerRegistry
 from src.trading.market.profit_stagnation_quote import executable_quote
-from src.trading.widget_auto_trade.engine import KST
+from zoneinfo import ZoneInfo
+KST = ZoneInfo("Asia/Seoul")
 from types import SimpleNamespace
 
 pytest_plugins = ["src.tests.test_machine_adaptive_exit_owner_loop"]
@@ -39,7 +40,7 @@ def policy():
         enabled=True,
         valid_from=DATE + "T00:00:00+09:00",
         valid_until="2026-09-11T00:00:00+09:00",
-        owners=["episode", "widget_auto_trade"],
+        owners=["episode"],
         round_trip_cost_pct=0.23,
         slippage_bps=5,
         cost_source_sha256="c" * 64,
@@ -92,63 +93,14 @@ def running(loop, tmp_path, monkeypatch):
         )
 
     m.gateway.adaptive_exit_adapter = adapter
-    if loop.owner == "episode":
-        m._state["legs"][0].pop("adaptive_exit_session")
-        m._state["signal_features"]["signal_decision_at"] = DATE + "T12:59:00+09:00"
-        monkeypatch.setattr(m, "_submit_planned_buys", lambda *a: None)
+    m._state["legs"][0].pop("adaptive_exit_session")
+    m._state["signal_features"]["signal_decision_at"] = DATE + "T12:59:00+09:00"
+    monkeypatch.setattr(m, "_submit_planned_buys", lambda *a: None)
 
-        def record():
-            return m._state["legs"][0][KEY]
+    def record():
+        return m._state["legs"][0][KEY]
 
-        m.run_once(datetime.fromtimestamp(loop.clock[0] / 1000, KST))
-    else:
-        state = m._state["symbols"]["005930"]
-        state.pop("adaptive_exit_sessions")
-        buy, target = state["orders"]
-        buy.update(
-            requested_qty=10,
-            fill_price=10000,
-            signal_id="signal",
-            intent_created_at=DATE + "T12:59:00+09:00",
-        )
-        target.update(status="SUBMITTED", remaining_qty=10)
-        m.specs = (
-            SimpleNamespace(
-                code="005930", snapshot_path="unused", execution_policy_id=""
-            ),
-        )
-        m.snapshot_loader = lambda _: None
-        monkeypatch.setattr(m, "_refresh_same_day_policy_catalog", lambda *a: None)
-        loop.flags["baseline_calls"] = 0
-
-        def baseline(*args):
-            assert KEY not in state
-            loop.flags["baseline_calls"] += 1
-
-        monkeypatch.setattr(m, "_reconcile", baseline)
-        for method in (
-            "_cancel_market_weakness_pending_buys",
-            "_recover_definitive_rejected_entry_episode",
-            "_close_completed_take_profit_episode",
-            "_maybe_submit_take_profit",
-            "_notify_pending_buy_actions",
-        ):
-            monkeypatch.setattr(m, method, lambda *a, **k: None)
-        bridge.widget_symbol(
-            m, state, datetime.fromtimestamp(loop.clock[0] / 1000, KST)
-        )
-
-        def record():
-            current_state = m._state["symbols"]["005930"]
-            return next(
-                iter(
-                    (
-                        current_state.get(KEY)
-                        or current_state.get(bridge.OBSERVATION_KEY)
-                        or current_state["profit_stagnation_history"][-1]
-                    ).values()
-                )
-            )
+    m.run_once(datetime.fromtimestamp(loop.clock[0] / 1000, KST))
 
     loop.record = record
     return loop
@@ -336,167 +288,22 @@ def test_registry_projection_retains_fill_time_after_terminal_transition():
     )
 
 
-def test_widget_observation_does_not_claim_existing_entry_path(running):
-    if running.owner != "widget":
-        return
-    state = running.machine._state["symbols"]["005930"]
-    assert KEY not in state
-    assert (
-        bridge.widget_symbol(
-            running.machine, state, datetime.fromtimestamp(running.clock[0] / 1000, KST)
-        )
-        is False
-    )
-    assert not running.wire.writes
 
 
-def test_widget_original_scale_in_reached_while_only_observing(running, monkeypatch):
-    if running.owner != "widget":
-        return
-    m = running.machine
-    spec = m.specs[0]
-    spec.contract = SimpleNamespace(
-        session_context=lambda _: SimpleNamespace(name="KRX_REGULAR")
-    )
-    monkeypatch.setattr(m, "_try_adaptive_enrollment", lambda *a: False)
-    monkeypatch.setattr(m, "_maybe_request_policy_force_exit", lambda *a: None)
-    monkeypatch.setattr(m, "_exit_signal", lambda *a: None)
-    monkeypatch.setattr(m, "_entry_signal", lambda *a: None)
-    monkeypatch.setattr(m, "_execution_policy", lambda *a, **k: None)
-    monkeypatch.setattr(m, "_maybe_submit_exit", lambda *a: None)
-    calls = []
-    monkeypatch.setattr(
-        m, "_maybe_submit_scale_in", lambda *a: calls.append("scale_in")
-    )
-    m.process_payload(
-        spec,
-        {"current_price": 10040},
-        datetime.fromtimestamp(running.clock[0] / 1000, KST),
-    )
-    assert calls == ["scale_in"]
-    assert running.flags["baseline_calls"] == 1
-    assert KEY not in m._state["symbols"]["005930"]
-    assert not running.wire.writes
 
 
-def test_widget_pending_buy_clears_observation_without_cancel(running):
-    if running.owner != "widget":
-        return
-    state = running.machine._state["symbols"]["005930"]
-    pending = deepcopy(state["orders"][0])
-    pending.update(status="SUBMITTED", filled_qty=0, order_no="0000006")
-    state["orders"].append(pending)
-    tick(running, 6)
-    assert KEY not in state and bridge.OBSERVATION_KEY not in state
-    assert not running.wire.writes
 
 
-def unsent_widget_buy(buy):
-    """Durable EntryNotSent receipt after registry reservation release."""
-    row = deepcopy(buy)
-    row.update(
-        status="NOT_SENT",
-        order_no="",
-        broker_accepted=False,
-        actual_order_submitted=False,
-        filled_qty=0,
-        fill_price=None,
-        return_code="ENTRY_ADVERSE_NOT_SENT",
-        owner_registry_bind_confirmed=False,
-    )
-    return row
 
 
-def test_widget_unsent_attempt_preserves_observation_and_exit(running):
-    if running.owner != "widget":
-        return
-    state = running.machine._state["symbols"]["005930"]
-    unsent = unsent_widget_buy(state["orders"][0])
-    # An unexecuted older attempt must not determine enrollment time/basis.
-    unsent["intent_created_at"] = "2026-09-09T12:00:00+09:00"
-    before = deepcopy(unsent)
-    state["orders"].insert(0, unsent)
-    submitted(running)
-    assert state["orders"][0] == before
-    assert running.record()["entry_price"] == 10000
-    assert running.record()["quantity"] == 10
 
 
-@pytest.mark.parametrize(
-    "change",
-    [
-        {"status": "AMBIGUOUS"},
-        {"status": "SUBMITTED"},
-        {"status": "FAILED"},
-        {"broker_accepted": True},
-        {"actual_order_submitted": True},
-        {"actual_order_submitted": None},
-        {"filled_qty": 1},
-        {"filled_qty": False},
-        {"filled_qty": "0"},
-        {"fill_price": 10000},
-        {"order_no": "0000006"},
-        {"return_code": "0"},
-        {"owner_registry_bind_confirmed": True},
-        {"owner_registry_reconciliation_required": True},
-        {"ambiguous": True},
-        {"fill_amount": 10000},
-        {"fill_amount_krw": 10000},
-        {"owner_registry_error": "failed_release"},
-    ],
-)
-def test_widget_unproven_unsent_remains_blocked(running, change):
-    if running.owner != "widget":
-        return
-    state = running.machine._state["symbols"]["005930"]
-    unsent = unsent_widget_buy(state["orders"][0])
-    unsent.update(change)
-    state["orders"].append(unsent)
-    tick(running, 6)
-    tick(running, 6)
-    assert KEY not in state and bridge.OBSERVATION_KEY not in state
-    assert not running.wire.writes
 
 
-def test_unsent_receipt_requires_explicit_fill_fields():
-    order = unsent_widget_buy({"side": "BUY"})
-    assert bridge.widget_buy_proven_not_sent(order)
-    for field in (
-        "fill_price",
-        "filled_qty",
-        "broker_accepted",
-        "actual_order_submitted",
-        "order_no",
-        "return_code",
-    ):
-        missing = deepcopy(order)
-        missing.pop(field)
-        assert not bridge.widget_buy_proven_not_sent(missing), field
 
 
-def test_widget_custody_buy_selection_preserves_identity_and_audit():
-    filled = dict(side="BUY", status="FILLED", signal_id="entry")
-    child = dict(side="BUY", status="SUBMITTED", parent_entry_signal_id="entry")
-    other = dict(side="BUY", status="FILLED", signal_id="other")
-    unsent = unsent_widget_buy(filled)
-    state = dict(entry_signal_id="entry", orders=[unsent, filled, child, other])
-    before = deepcopy(state)
-    assert bridge.widget_position_buys(state) == [filled, child]
-    assert state == before
-    state.pop("entry_signal_id")
-    assert bridge.widget_position_buys(state) == []
 
 
-def test_widget_basis_change_restarts_only_observation(running):
-    if running.owner != "widget":
-        return
-    tick(running, 6)
-    state = running.machine._state["symbols"]["005930"]
-    old_start = running.record()["decision"]["started"]
-    state["orders"][0]["fill_price"] = 10001
-    tick(running, 6)
-    assert running.record()["decision"]["started"] > old_start
-    assert KEY not in state and not running.wire.writes
 
 
 def test_policy_unpinned_clears_selected_diagnostic(monkeypatch):
@@ -507,25 +314,6 @@ def test_policy_unpinned_clears_selected_diagnostic(monkeypatch):
     assert diagnostic["profit_exit_policy_status"] == "off_no_policy_pin"
 
 
-def test_widget_without_owned_position_does_not_parse_empty_entry_time(monkeypatch):
-    from src.trading.order import target_ratchet
-
-    monkeypatch.setattr(target_ratchet, "widget", lambda *args, **kwargs: False)
-    monkeypatch.setenv(PATH_ENV, "/missing/policy.json")
-    monkeypatch.setenv(HASH_ENV, "a" * 64)
-    trader = SimpleNamespace(
-        _state={},
-        _profit_exit_reload_required=False,
-        profit_exit_lock_held=lambda: True,
-        _save=lambda: None,
-    )
-
-    assert not bridge.widget_symbol(
-        trader,
-        {"orders": [], "entry_signal_id": None},
-        datetime.fromisoformat(DATE + "T13:00:00+09:00"),
-    )
-    assert trader._state["profit_exit_policy_status"] == "inactive_no_owned_position"
 
 
 @pytest.mark.parametrize("filled", [0, 3])
@@ -679,41 +467,6 @@ def test_initial_journal_failure_requires_reload_before_any_order(running, monke
     assert not running.wire.writes
 
 
-def test_widget_original_exit_handoff_does_not_submit_redundant_target(running):
-    if running.owner != "widget":
-        return
-    submitted(running)
-    state = running.machine._state["symbols"]["005930"]
-    state["exit_requested"] = True
-    tick(running)
-    assert running.record()["phase"] == "EXIT_CANCEL"
-    running.wire.write_body = dict(
-        return_code=0,
-        ord_no="0000005",
-        base_orig_ord_no="0000004",
-        cncl_qty="10",
-        dmst_stex_tp="SOR",
-    )
-    tick(running)
-    running.wire.detailed[-1]["ord_remnq"] = "0"
-    running.wire.detailed.append(
-        detail(
-            ord_no="0000005",
-            ori_ord="0000004",
-            ord_qty="10",
-            cntr_qty="0",
-            ord_remnq="0",
-            cnfm_qty="10",
-            cnfm_tm="13:00:20",
-        )
-    )
-    running.wire.current = []
-    tick(running)
-    assert KEY not in state
-    assert (
-        len(running.wire.writes) == 3
-    )  # Original EXIT, not this helper, owns the next SELL.
-    assert running.machine._open_qty(state) == 10
 
 
 @pytest.mark.parametrize(
@@ -727,7 +480,7 @@ def test_widget_original_exit_handoff_does_not_submit_redundant_target(running):
     ],
 )
 def test_real_guard_keeps_manual_veto_above_machine_scope(monkeypatch, kinds, expected):
-    m = SimpleNamespace(enabled=True, profit_exit_lock_held=lambda: True)
+    m = SimpleNamespace(live_enabled=True, profit_exit_lock_held=lambda: True)
     monkeypatch.setattr(bridge, "_file_exclusion_snapshot", lambda _: (kinds, ""))
     monkeypatch.setattr(bridge, "_env_codes", lambda: set())
     monkeypatch.setattr(
@@ -739,7 +492,7 @@ def test_real_guard_keeps_manual_veto_above_machine_scope(monkeypatch, kinds, ex
         bridge.guard(
             m,
             symbol="005930",
-            owner_type="widget_auto_trade",
+            owner_type="episode",
             now=datetime.fromtimestamp(NOW / 1000, KST),
         )
         is expected

@@ -249,7 +249,7 @@ def run_study(
                 isinstance(census, Mapping)
                 and census.get("execution_scope") is False
                 or census is None
-                and scope.owner == "widget"
+                and scope.owner not in {"episode"}
                 and not scope.profile.startswith("actual:")
             ):
                 row.update(

@@ -36,23 +36,20 @@ from src.trading.order.regular_two_leg_machine import (
     _fresh_state,
     _new_leg,
 )
-from src.trading.widget_auto_trade import engine as widget
+from zoneinfo import ZoneInfo
+KST = ZoneInfo("Asia/Seoul")
 
 
-@pytest.fixture(params=["episode", "widget"])
+@pytest.fixture(params=["episode"])
 def loop(request, tmp_path, monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_BROKER_ACCOUNT_KEY", "loop-test-account")
     owner = request.param
     wire, clock = Transport(), [NOW]
     wire.write_body["cncl_qty"] = "10"
     registry = OrderOwnerRegistry(tmp_path / "registry.jsonl")
-    position_id = (
-        f"episode:test-profile:005930:{DATE}"
-        if owner == "episode"
-        else f"widget_auto_trade:005930:{DATE}:signal"
-    )
+    position_id = f"episode:test-profile:005930:{DATE}"
     context = OwnerOrderContext(
-        "episode" if owner == "episode" else "widget_auto_trade",
+        "episode",
         position_id,
         position_id,
         "target",
@@ -155,137 +152,71 @@ def loop(request, tmp_path, monkeypatch):
             )
 
     path = tmp_path / "owner.json"
-    if owner == "episode":
-        machine = SamsungRegularTwoLegMachine(
-            gateway=Gateway(),
-            state_path=path,
-            policy=SimpleNamespace(symbol="005930"),
-            strategy_name="test-profile",
-            schema="test-v1",
-            legacy_schema="old",
-            live_enabled=True,
-            owner_registry=registry,
-            adaptive_exit_services=services,
-        )
-        machine._state = _fresh_state(
-            datetime.fromtimestamp(NOW / 1000, widget.KST), "test-v1"
-        )
-        leg = _new_leg(lot, "signal_close", 10000)
-        leg.update(
-            status="TARGET_OPEN",
-            buy_order_no="0000001",
-            buy_order_date=DATE,
-            buy_filled_qty=10,
-            fill_price=10000,
-            position_qty=10,
-            target_order_no=TARGET.order_no,
-            target_order_date=DATE,
-            target_owner_registry_intent_id=target,
-            target_quantity=10,
-            target_price=10100,
-        )
-        leg[SESSION_KEY] = session.to_payload()
-        other = _new_leg("signal_close_minus_1tick", "signal_close_minus_1tick", 9995)
-        other["status"] = "NO_FILL"
-        machine._state.update(
-            legs=[leg, other],
-            position_qty=10,
-            status="TARGET_OPEN",
-            attempt_consumed=True,
-            owned_order_nos=["0000001", TARGET.order_no],
-        )
+    machine = SamsungRegularTwoLegMachine(
+        gateway=Gateway(),
+        state_path=path,
+        policy=SimpleNamespace(symbol="005930"),
+        strategy_name="test-profile",
+        schema="test-v1",
+        legacy_schema="old",
+        live_enabled=True,
+        owner_registry=registry,
+        adaptive_exit_services=services,
+    )
+    machine._state = _fresh_state(
+        datetime.fromtimestamp(NOW / 1000, KST), "test-v1"
+    )
+    leg = _new_leg(lot, "signal_close", 10000)
+    leg.update(
+        status="TARGET_OPEN",
+        buy_order_no="0000001",
+        buy_order_date=DATE,
+        buy_filled_qty=10,
+        fill_price=10000,
+        position_qty=10,
+        target_order_no=TARGET.order_no,
+        target_order_date=DATE,
+        target_owner_registry_intent_id=target,
+        target_quantity=10,
+        target_price=10100,
+    )
+    leg[SESSION_KEY] = session.to_payload()
+    other = _new_leg("signal_close_minus_1tick", "signal_close_minus_1tick", 9995)
+    other["status"] = "NO_FILL"
+    machine._state.update(
+        legs=[leg, other],
+        position_qty=10,
+        status="TARGET_OPEN",
+        attempt_consumed=True,
+        owned_order_nos=["0000001", TARGET.order_no],
+    )
 
-        def record():
-            return machine._state["legs"][0][SESSION_KEY]
+    def record():
+        return machine._state["legs"][0][SESSION_KEY]
 
-        def replace_record(value):
-            machine._state["legs"][0][SESSION_KEY] = value
+    def replace_record(value):
+        machine._state["legs"][0][SESSION_KEY] = value
 
-        def status():
-            return machine._state.get("adaptive_exit_loop_status") or machine._state[
-                "legs"
-            ][0].get("adaptive_exit_loop_status")
+    def status():
+        return machine._state.get("adaptive_exit_loop_status") or machine._state[
+            "legs"
+        ][0].get("adaptive_exit_loop_status")
 
-        monkeypatch.setattr(
-            machine,
-            "_reconcile_target",
-            lambda *a: pytest.fail("legacy target reentered"),
-        )
-        monkeypatch.setattr(
-            machine,
-            "_submit_planned_buys",
-            lambda *a: pytest.fail("legacy BUY reentered"),
-        )
-    else:
-        machine = widget.WidgetSignalAutoTrader(
-            gateway=Gateway(),
-            specs=(),
-            dynamic_spec_catalog=(),
-            state_path=path,
-            policy_loader=SimpleNamespace(resolve_all=lambda **k: {}),
-            enabled=True,
-            owner_registry=registry,
-            adaptive_exit_services=services,
-        )
-        orders = [
-            dict(
-                side="BUY",
-                filled_qty=10,
-                broker_accepted=True,
-                status="FILLED",
-                order_no="0000001",
-                order_date=DATE,
-            ),
-            dict(
-                side="SELL",
-                order_role=widget.ORDER_ROLE_TAKE_PROFIT,
-                requested_qty=10,
-                filled_qty=0,
-                limit_price=10100,
-                broker_accepted=True,
-                status="ACCEPTED",
-                order_no=TARGET.order_no,
-                order_date=DATE,
-                owner_id=context.owner_id,
-                owner_position_id=context.position_id,
-                owner_client_intent_id=context.client_intent_id,
-                owner_registry_intent_id=target,
-                parent_entry_signal_id="signal",
-            ),
-        ]
-        machine._state = dict(
-            active_date=DATE,
-            symbols={
-                "005930": dict(
-                    code="005930",
-                    orders=orders,
-                    entry_episode_open=True,
-                    entry_signal_id="signal",
-                    adaptive_exit_sessions={lot: session.to_payload()},
-                )
-            },
-        )
-
-        def record():
-            state = machine._state["symbols"]["005930"]
-            if "adaptive_exit_sessions" in state:
-                return state["adaptive_exit_sessions"][lot]
-            return state["adaptive_exit_history"][-1]["sessions"][lot]
-
-        def replace_record(value):
-            machine._state["symbols"]["005930"]["adaptive_exit_sessions"][lot] = value
-
-        def status():
-            return machine._state["symbols"]["005930"].get("adaptive_exit_loop_status")
-
-        monkeypatch.setattr(
-            machine, "_reconcile", lambda *a: pytest.fail("legacy target reentered")
-        )
+    monkeypatch.setattr(
+        machine,
+        "_reconcile_target",
+        lambda *a: pytest.fail("legacy target reentered"),
+    )
+    monkeypatch.setattr(
+        machine,
+        "_submit_planned_buys",
+        lambda *a: pytest.fail("legacy BUY reentered"),
+    )
     machine._save()
 
     def tick():
         clock[0] += 1
-        return machine.run_once(datetime.fromtimestamp(clock[0] / 1000, widget.KST))
+        return machine.run_once(datetime.fromtimestamp(clock[0] / 1000, KST))
 
     return SimpleNamespace(
         machine=machine,
@@ -366,13 +297,8 @@ def test_exact_partial_target_updates_remaining_without_cross_lot_sale(loop):
 
 
 def test_pending_buy_is_explicit_recovery_not_adaptive_cancel_or_new_buy(loop):
-    if loop.owner == "episode":
-        loop.machine._state["legs"][1]["status"] = "PLANNED"
-        loop.machine._sync_aggregate()
-    else:
-        loop.machine._state["symbols"]["005930"]["orders"].append(
-            dict(side="BUY", status="SUBMITTING", order_no="", order_date=DATE)
-        )
+    loop.machine._state["legs"][1]["status"] = "PLANNED"
+    loop.machine._sync_aggregate()
     loop.tick()
     assert not loop.wire.calls
     assert "requires_owner_recovery" in loop.status()
@@ -391,18 +317,13 @@ def test_terminal_replacement_updates_quantity_not_profit_or_new_entry(loop):
     loop.tick()
     assert loop.record()["driver"]["orders"]["phase"] == "FLAT"
     assert [r["api_id"] for r in loop.wire.writes] == ["kt10003", "kt10001"]
-    if loop.owner == "episode":
-        state = loop.machine._state
-        assert state["position_qty"] == 0 and state["status"] == "ADAPTIVE_EXIT_FLAT"
-        assert state["legs"][0]["target_filled_qty"] == 0
-        assert state["legs"][0]["adaptive_exit_filled_qty"] == 10
-        assert loop.machine._validate_state_contract(
-            datetime.fromtimestamp(loop.clock[0] / 1000, widget.KST)
-        )
-    else:
-        state = loop.machine._state["symbols"]["005930"]
-        assert state["adaptive_exit_remaining_qty"] == 0
-        assert not state.get("completed_episode_count")
+    state = loop.machine._state
+    assert state["position_qty"] == 0 and state["status"] == "ADAPTIVE_EXIT_FLAT"
+    assert state["legs"][0]["target_filled_qty"] == 0
+    assert state["legs"][0]["adaptive_exit_filled_qty"] == 10
+    assert loop.machine._validate_state_contract(
+        datetime.fromtimestamp(loop.clock[0] / 1000, KST)
+    )
     before = deepcopy(loop.record())
     loop.tick()
     assert loop.record() == before and len(loop.wire.writes) == 2
@@ -422,12 +343,6 @@ def test_empty_or_malformed_claim_cannot_reset_or_enable_legacy(loop):
     assert loop.record() is None and not loop.wire.calls
 
 
-def test_widget_missing_snapshot_and_removed_catalog_still_resumes(loop):
-    if loop.owner != "widget":
-        pytest.skip("widget-specific catalog contract")
-    assert not loop.machine.specs
-    loop.tick()
-    assert len(loop.wire.writes) == 1
 
 
 def test_corrupt_custody_file_never_becomes_empty_portfolio(loop):
@@ -471,10 +386,7 @@ def test_missing_verified_clock_never_calls_broker(loop):
 
 
 def test_existing_owner_recovery_cannot_be_bypassed(loop):
-    if loop.owner == "episode":
-        loop.machine._state["owner_registry_reconciliation_required"] = True
-    else:
-        loop.machine._state["symbols"]["005930"]["exit_requested"] = True
+    loop.machine._state["owner_registry_reconciliation_required"] = True
     loop.tick()
     assert not loop.wire.calls
     assert "required" in loop.status()

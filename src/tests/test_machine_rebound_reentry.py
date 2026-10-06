@@ -19,7 +19,7 @@ from src.engine.monitoring.machine_rebound_reentry_source import (
     load_anchors,
     project_outcome,
 )
-from src.engine.monitoring.widget_comparison_cost import comparison_cost_contract
+from src.trading.market.comparison_cost import comparison_cost_contract
 from src.engine.risk.market_weakness_entry_guard import MarketWeaknessEntryDecision
 from src.trading.config.machine_rebound_reentry_policy import (
     digest,
@@ -282,6 +282,14 @@ def test_empty_source_has_explicit_census():
 
 
 def staged(tmp_path, monkeypatch):
+    from functools import partial
+
+    # Isolate PREOPEN staging from installed production timing-policy receipts.
+    monkeypatch.setattr(
+        tuning,
+        "apply_rebound_preopen",
+        partial(tuning.apply_rebound_preopen, timing_policy_dir=tmp_path / "timing-policy"),
+    )
     section = build_evaluation(
         target_date=NOW.date(), sources=sources(), same_stage_clear=True
     )

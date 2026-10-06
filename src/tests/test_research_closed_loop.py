@@ -120,7 +120,7 @@ def test_symlink_source_and_output_fail_closed(tmp_path):
 
 def test_actual_consumer_receipt_contains_current_process(tmp_path):
     path = loop.consumer_receipt(
-        owner="widget",
+        owner="episode",
         effective_date=DAY,
         accepted={"000001": {"policy_hash": "a" * 64}},
         directory=tmp_path,
@@ -246,11 +246,11 @@ def test_admission_uses_native_source_not_forward_label(tmp_path):
     catalog = loop.admission_catalog(census)
     assert catalog["native_count"] == 1
     loop.write_admissions(census, directory=tmp_path)
-    assert loop.admission_symbols(DAY, owner="widget", directory=tmp_path) == {
+    assert loop.admission_symbols(DAY, owner="episode", directory=tmp_path) == {
         "000001": "000001"
     }
     assert (
-        loop.admission_symbols(date(2026, 9, 16), owner="widget", directory=tmp_path)
+        loop.admission_symbols(date(2026, 9, 16), owner="episode", directory=tmp_path)
         == {}
     )
 
@@ -359,37 +359,6 @@ def time_minute(hour, minute):
     return time(hour, minute)
 
 
-def test_full_grid_setup_jump_matches_reference_and_warm_append_replays_only_new_day(
-    tmp_path,
-):
-    from src.engine.monitoring import widget_symbol_signal_policy_research as research
-
-    grouped = market_days()
-    days = list(grouped)
-    cold = research.ReplayContext(
-        {day: grouped[day] for day in days[:2]}, tmp_path / "cache" / "000001"
-    )
-    episode_count = 0
-    for policy in research.policy_grid():
-        actual = research.evaluate_policy(
-            cold.grouped, days[:2], policy, include_episodes=True, replay_context=cold
-        )
-        reference = research.evaluate_policy(
-            cold.grouped, days[:2], policy, include_episodes=True
-        )
-        assert actual == reference
-        episode_count += len(actual["episodes"])
-    assert episode_count > 0
-    cold.flush()
-    warm = research.ReplayContext(grouped, tmp_path / "cache" / "000001")
-    for policy in research.policy_grid():
-        research.evaluate_policy(
-            grouped, days, policy, include_episodes=True, replay_context=warm
-        )
-    assert warm.cache_hits == 2 * 1536
-    assert warm.cache_misses == 1536
-    warm.flush()
-    assert warm.cache_write_skips == 0
 
 
 def test_native_capacity_source_is_once_per_account_and_never_uses_operator_floor(
@@ -534,116 +503,6 @@ def test_late_publication_receipt_retains_served_version_and_marks_unconsumed(tm
     assert receipt["actual_order_submitted"] is False
 
 
-@pytest.mark.parametrize("publication", [None, "2026-09-20"])
-@pytest.mark.parametrize("freeze_failure", [False, True])
-def test_completed_study_fixed_point_publishes_valid_empty_and_blocks_changed_dependency(
-    tmp_path, monkeypatch, publication, freeze_failure
-):
-    from src.engine.automation import machine_research_closed_loop_refresh as phase
-    from src.tests.test_widget_symbol_runtime_policy import _research
-    from src.engine.monitoring import widget_symbol_signal_policy_research as widget
-    from src.engine.monitoring import (
-        low_price_two_leg_expanded_candidate_research as episode,
-    )
-
-    class PublicationClock(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            value = datetime.fromisoformat((publication or str(DAY)) + "T20:10:00+09:00")
-            return value.astimezone(tz) if tz else value
-
-    # This test exercises a future publication successor, not a past-date rewrite.
-    monkeypatch.setattr(loop, "datetime", PublicationClock)
-    if publication:
-        monkeypatch.setenv("POSTCLOSE_POLICY_PUBLICATION_DATE", publication)
-        monkeypatch.setenv("POSTCLOSE_PREPARED_EFFECTIVE_DATE", "2026-09-21")
-    monkeypatch.setattr(phase, "DATA_DIR", tmp_path / "data")
-    root = tmp_path / "report"
-    directory = tmp_path / "runtime" / "machine_research_closed_loop"
-    report = _research()
-    report.update(end_date=str(DAY), closed_loop_contract=loop.SCHEMA)
-    for result in report["symbols"].values():
-        result.pop("selected_policy", None)
-        result.update(name="fixture", decision="hold_sample_insufficient_signal")
-    peer = dict(
-        schema=episode.REPORT_SCHEMA,
-        target_date=str(DAY),
-        end_date=str(DAY),
-        start_date="2026-06-05",
-        status="no_qualified_candidate",
-        profiles={},
-        recommendations=[],
-        postclose_logic_recommendations=[],
-        recommendation_count=0,
-        trading_date_count=72,
-        calibration_trading_day_count=56,
-        holdout_trading_day_count=16,
-        closed_loop_contract=loop.SCHEMA,
-        **loop.AUTHORITY,
-    )
-    with loop.research_scope(directory):
-        widget.write_report(
-            report, output_dir=root / "widget_symbol_signal_policy_research"
-        )
-        episode.write_report(
-            peer, output_dir=root / "low_price_two_leg_expanded_candidate_research"
-        )
-    if freeze_failure:
-        def reject_freeze(*a, **kw):
-            raise ValueError("joint_cohort_member_pruned_without_supersession")
-        monkeypatch.setattr(loop, "freeze_joint_bundle", reject_freeze)
-        monkeypatch.setattr(loop, "frozen_joint_bundle", reject_freeze)
-    first = phase.refresh(DAY, directory=directory, report_root=root)
-    if freeze_failure:
-        saved = loop.read_object(root / "widget_symbol_signal_policy_research" / f"widget_symbol_signal_policy_research_{DAY}.json")
-        assert saved["joint_allocation_gate"]["status"] == "allocation_blocked"
-        assert saved["joint_allocation_gate"]["feasible_combined_net_profit_krw"] is None
-    assert first["status"] == "complete" and phase.validate_current_receipt(first, DAY)
-    assert first["publications"]["widget"]["profile_count"] == 0
-    assert {p["effective_date"] for p in first["publications"].values()} == {"2026-09-21" if publication else "2026-09-18"}
-    from src.engine.monitoring import research_version_outcomes as outcomes
-
-    original_collect = outcomes.collect_widget_outcomes
-    monkeypatch.setattr(
-        outcomes,
-        "collect_widget_outcomes",
-        lambda *a, **k: (_ for _ in ()).throw(
-            AssertionError("completed retry must not query costs")
-        ),
-    )
-    second = phase.refresh(DAY, directory=directory, report_root=root)
-    assert second == first
-    with monkeypatch.context() as changed:
-        changed.setenv("POSTCLOSE_POLICY_PUBLICATION_DATE", "2026-09-19" if publication else "2026-09-20")
-        changed.setenv("POSTCLOSE_PREPARED_EFFECTIVE_DATE", "2026-09-21")
-        assert not phase.validate_current_receipt(
-            first, DAY, publication_contract=phase._publication_contract(DAY)
-        )
-        with pytest.raises(AssertionError, match="completed retry must not query costs"):
-            phase.refresh(DAY, directory=directory, report_root=root)
-        changed.setenv("POSTCLOSE_PREPARED_EFFECTIVE_DATE", "2026-09-18")
-        with pytest.raises(ValueError, match="effective_date_mismatch"):
-            phase._publication_contract(DAY)
-    # A new diagnostic-only dependency leaves economics unchanged, but must
-    # invalidate both reuse paths and receive a current source hash.
-    late = directory / f"capacity_source_{DAY}.json"
-    loop.atomic_write(late, {"diagnostic_only": True})
-    assert not phase.validate_current_receipt(first, DAY)
-    with monkeypatch.context() as changed:
-        changed.setattr(outcomes, "collect_widget_outcomes", original_collect)
-        refreshed = phase.refresh(DAY, directory=directory, report_root=root)
-    assert refreshed["dependency_sha256"] == first["dependency_sha256"]
-    assert phase.validate_current_receipt(refreshed, DAY)
-    assert refreshed["dependency_sources"][str(late.resolve())] is not None
-    source = (
-        root
-        / "widget_symbol_signal_policy_research"
-        / f"widget_symbol_signal_policy_research_{DAY}.json"
-    )
-    corrected = loop.read_object(source)
-    corrected["source_correction"] = True
-    loop.atomic_write(source, corrected)
-    assert not phase.validate_current_receipt(first, DAY)
 
 
 def test_sealed_fact_archive_preserves_original_bytes_and_point_read_boundaries(
@@ -765,368 +624,8 @@ def test_joint_cohort_cannot_drop_an_unreplaced_member_after_holdout(
         )
 
 
-def test_new_unfilled_symbol_bootstraps_cf_validation_and_next_date_publication(
-    tmp_path, monkeypatch
-):
-    """Advance an isolated source-only fixture through the prospective calendar."""
-    from datetime import timedelta
-    from src.engine.automation import machine_research_closed_loop_refresh as phase
-    from src.engine.monitoring import research_allocation_snapshot as funding
-    from src.engine.monitoring import policy_research_economics as economics
-    from src.engine.monitoring import widget_symbol_runtime_policy as publisher
-    from src.engine.monitoring import widget_symbol_signal_policy_research as widget
-    from src.engine.monitoring import (
-        low_price_two_leg_expanded_candidate_research as episode,
-    )
-    from src.engine.monitoring.widget_execution_quality import load_execution_incidents
-    from src.engine.monitoring.widget_comparison_cost import comparison_cost_contract
-    from src.trading.config.symbol_owner_policy import build_symbol_owner_policy_payload
-    from src.tests.test_widget_symbol_runtime_policy import _research
-
-    code = "000009"
-    clock = [datetime.fromisoformat("2026-09-17T20:10:00+09:00")]
-
-    class NativeClock(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            return clock[0].astimezone(tz) if tz else clock[0]
-
-    monkeypatch.setattr(loop, "datetime", NativeClock)
-    monkeypatch.setattr(economics, "datetime", NativeClock)
-    monkeypatch.setattr(phase, "datetime", NativeClock)
-    monkeypatch.setattr(publisher, "datetime", NativeClock)
-    from src.engine.automation import low_price_two_leg_auto_expansion_policy as episode_publisher
-    monkeypatch.setattr(episode_publisher, "datetime", NativeClock)
-    monkeypatch.setattr(phase, "DATA_DIR", tmp_path / "data")
-    directory, root = (
-        tmp_path / "runtime" / "machine_research_closed_loop",
-        tmp_path / "report",
-    )
-    report = _research()
-    parameters = report["symbols"]["006800"]["selected_policy"]
-    revision = loop.candidate_revision(
-        symbol=code,
-        parameters=parameters,
-        source_date=DAY,
-        frozen_at=clock[0],
-        source_sha256="a" * 64,
-        cost_sha256=comparison_cost_contract(DAY)["contract_sha256"],
-    )
-    loop.freeze_candidate(revision, directory=directory)
-    loop.freeze_joint_bundle(
-        [dict(candidate_revisions={code: revision})], directory=directory
-    )
-    cal, hold = revision["calibration_dates"], revision["holdout_dates"]
-    completed_day = date.fromisoformat(hold[-1])
-    clock[0] = datetime.fromisoformat(str(completed_day) + "T20:10:00+09:00")
-    selected_rows = []
-    for native_day in cal + hold[:4]:
-        signal = datetime.fromisoformat(native_day + "T12:00:00+09:00")
-        entry, exit_ = signal + timedelta(minutes=1), signal + timedelta(minutes=2)
-        cost = comparison_cost_contract(signal.date())
-        row = dict(
-            trade_date=native_day,
-            signal_at=signal.isoformat(),
-            entry_at=entry.isoformat(),
-            exit_at=exit_.isoformat(),
-            entry_price=10000,
-            exit_price=10050,
-            target_price=10050,
-            exit_reason="target",
-            entry_state="ENTRY_READY",
-            peak_return_pct=0.5,
-            net_return_pct=round(0.5 - cost["round_trip_cost_pct"], 6),
-            daily_entry_ordinal=1,
-            cost_contract_sha256=cost["contract_sha256"],
-        )
-        selected_rows.append(row)
-        facts_path = (
-            directory / "facts" / f"prospective_facts_{code}_{signal:%Y%m%d}.jsonl"
-        )
-        facts_path.parent.mkdir(parents=True, exist_ok=True)
-        for index, at in enumerate((entry, exit_)):
-            bid, ask = (9990, 10000) if index == 0 else (10050, 10060)
-            fact = dict(
-                schema="prospective_registered_seed_market_facts_v1",
-                symbol=code,
-                observed_at_kst=at.isoformat(),
-                market_venue="KRX",
-                market_session="KRX_REGULAR",
-                source_quality_status="PASS",
-                advisory_generated=False,
-                observation_role="prospective_registered_seed_market_fact",
-                seed_memberships=[
-                    {
-                        key: revision[key]
-                        for key in ("revision_sha256", "parameters_sha256", "frozen_at")
-                    }
-                ],
-                bbo=dict(
-                    best_bid=bid,
-                    best_ask=ask,
-                    best_bid_qty=100,
-                    best_ask_qty=100,
-                    received_at=at.isoformat(),
-                    source_epoch=1,
-                    source_sequence=index + 1,
-                ),
-                **loop.AUTHORITY,
-            )
-            with facts_path.open("a") as handle:
-                handle.write(json.dumps(fact) + "\n")
-    result = dict(
-        name="New causal symbol",
-        selected_policy=parameters,
-        candidate_revision=revision,
-        decision="holdout_pass_widget_signal_policy_candidate",
-        runtime_effect=False,
-        allowed_runtime_apply=False,
-        prospective_window=loop.prospective_window(
-            revision, source_date=completed_day, qualified_dates=cal + hold
-        ),
-    )
-    for name, days in dict(
-        calibration=cal,
-        calibration_first_half=cal[:5],
-        calibration_second_half=cal[5:],
-        holdout=hold,
-    ).items():
-        rows = [row for row in selected_rows if row["trade_date"] in days]
-        result[name] = {
-            **widget._summarize_episodes(rows),
-            **economics.modeled_summary(rows, [date.fromisoformat(d) for d in days]),
-            "episodes": rows,
-        }
-    report.update(
-        end_date=str(completed_day),
-        symbol_universe={**widget.SYMBOLS, code: "New causal symbol"},
-        symbol_origins={
-            **{symbol: "established_widget_symbol" for symbol in widget.SYMBOLS},
-            code: "causal_scanner_research_admission",
-        },
-        symbols={
-            **{
-                symbol: dict(
-                    name=name,
-                    decision="hold_sample_insufficient_signal",
-                    runtime_effect=False,
-                    allowed_runtime_apply=False,
-                )
-                for symbol, name in widget.SYMBOLS.items()
-            },
-            code: result,
-        },
-        closed_loop_contract=loop.SCHEMA,
-        source_meta={
-            **report["source_meta"],
-            code: dict(
-                symbol=code,
-                request_code=code,
-                market="KRX_regular",
-                source_quality_status="PASS",
-                daily_source_coverage={"qualified_dates": cal + hold},
-            ),
-        },
-        execution_quality_by_symbol={
-            code: load_execution_incidents(
-                code,
-                target_date=completed_day,
-                session="KRX_REGULAR",
-                event_dir=tmp_path / "events",
-            )
-        },
-    )
-    peer = dict(
-        schema=episode.REPORT_SCHEMA,
-        target_date=str(completed_day),
-        end_date=str(completed_day),
-        start_date="2026-06-05",
-        status="no_qualified_candidate",
-        profiles={},
-        recommendations=[],
-        postclose_logic_recommendations=[],
-        recommendation_count=0,
-        trading_date_count=72,
-        calibration_trading_day_count=56,
-        holdout_trading_day_count=16,
-        closed_loop_contract=loop.SCHEMA,
-        **loop.AUTHORITY,
-    )
-    owner_path = tmp_path / "owner.json"
-    owner = build_symbol_owner_policy_payload(
-        active_date=completed_day,
-        policy_id="fixture_owner",
-        generated_at_kst=clock[0].isoformat(),
-        symbol_entries={
-            "999999": dict(mode="EXCLUSIVE_MANUAL", allowed_owners=["manual_operator"])
-        },
-    )
-    loop.atomic_write(owner_path, owner)
-    monkeypatch.setattr(funding, "policy_path", lambda day: owner_path)
-    source_dir = directory / "native_capacity" / str(completed_day)
-    funding.publish_inventory_context(
-        dict(
-            captured_at=(clock[0] - timedelta(seconds=1)).timestamp(),
-            successful_exchanges={"KRX", "NXT"},
-            inventory_by_code={},
-            open_qty_by_code={},
-            open_orders_request_succeeded=True,
-        ),
-        directory=source_dir,
-    )
-    funding.publish_cash_context(
-        dict(
-            kt00011_cash_orderable_contract_status="valid",
-            kt00011_capacity_observed_at=clock[0].isoformat(),
-            kt00011_capacity_source_sha256="b" * 64,
-            account_deposit=2000000,
-            cash_orderable_amount=2000000,
-            cash_orderable_qty_cap=100,
-            kt00011_requested_stock_code="005930",
-            kt00011_capacity_contract_version=1,
-        ),
-        directory=source_dir,
-    )
-    acq = dict(
-        status="complete",
-        source_date=str(completed_day),
-        native_cash_sha256=loop.read_object(source_dir / "native_cash.json")[
-            "native_sha256"
-        ],
-        native_inventory_sha256=loop.read_object(source_dir / "native_inventory.json")[
-            "native_sha256"
-        ],
-        **loop.AUTHORITY,
-    )
-    loop.atomic_write(
-        directory / f"capacity_source_{completed_day}.json",
-        {**acq, "receipt_sha256": loop.digest(acq)},
-    )
-    loop.atomic_write(
-        root
-        / "machine_entry_timing_tuning"
-        / f"machine_entry_timing_tuning_{completed_day}.json",
-        dict(
-            target_date=str(completed_day),
-            runtime_effect=False,
-            same_stage_owner_guard={"mutation_present": False, "status": "clear"},
-        ),
-    )
-    with loop.research_scope(directory):
-        result["execution_feasibility"] = economics.signal_execution_feasibility(
-            result,
-            symbol=code,
-            source_date=completed_day,
-            signal_policy=publisher._normalized_selected_parameters(parameters)[
-                "signal_policy"
-            ],
-            observation_dir=tmp_path / "absent_legacy",
-        )
-        assert result["execution_feasibility"]["status"] == "pass", result[
-            "execution_feasibility"
-        ]
-        widget.write_report(
-            report, output_dir=root / "widget_symbol_signal_policy_research"
-        )
-        episode.write_report(
-            peer, output_dir=root / "low_price_two_leg_expanded_candidate_research"
-        )
-    for day_string in cal + hold:
-        day = date.fromisoformat(day_string)
-        opening_root = directory / "opening_capacity"
-        native_dir = opening_root / "native_capacity" / day_string
-        frozen_owner = build_symbol_owner_policy_payload(active_date=day, policy_id="fixture_owner_" + day_string,
-            generated_at_kst=day_string + "T08:00:00+09:00",
-            symbol_entries={"999999": dict(mode="EXCLUSIVE_MANUAL", allowed_owners=["manual_operator"])})
-        loop.atomic_write(native_dir / "owner_policy.json", frozen_owner)
-        for name in ("cash", "inventory"):
-            value = loop.read_object(source_dir / f"native_{name}.json")
-            value.update(source_date=day_string, captured_at=day_string + "T08:50:00+09:00")
-            value["native_sha256"] = loop.digest({k:v for k,v in value.items() if k != "native_sha256"})
-            loop.atomic_write(native_dir / f"native_{name}.json", value)
-        acquisition = dict(status="complete", source_date=day_string, capacity_role="opening_fixed_budget",
-            account_scope_sha256="a"*64, owner_contract_sha256=loop.digest(frozen_owner),
-            native_cash_sha256=loop.read_object(native_dir / "native_cash.json")["native_sha256"],
-            native_inventory_sha256=loop.read_object(native_dir / "native_inventory.json")["native_sha256"], **loop.AUTHORITY)
-        loop.atomic_write(opening_root / f"capacity_source_{day}.json", {**acquisition, "receipt_sha256":loop.digest(acquisition)})
-        loop.atomic_write(root / "machine_entry_timing_tuning" / f"machine_entry_timing_tuning_{day}.json",
-            dict(target_date=day_string, runtime_effect=False, same_stage_owner_guard=dict(mutation_present=False,status="clear")))
-        assert funding.write_snapshot(day, directory=directory, report_root=root)["source_quality_status"] == "PASS"
-    receipt = phase.refresh(completed_day, directory=directory, report_root=root)
-    assert receipt["publications"]["widget"]["profile_count"] == 1
-    assert receipt["joint_allocation_gate"]["status"] == "pass"
-    assert receipt["economic_acceptance"] == "waiting_mature_exact_cost_outcomes"
-    assert receipt["actual_order_submitted"] is False
-    policy_dir = directory.parent / "widget_symbol_runtime_policy"
-    consumer = publisher.WidgetSymbolRuntimePolicyLoader(
-        policy_dir, research_dir=root / "widget_symbol_signal_policy_research"
-    )
-    with loop.research_scope(directory):
-        assert code in consumer.resolve_all(
-            observed_date=date.fromisoformat(
-                receipt["publications"]["widget"]["effective_date"]
-            )
-        )
-    assert phase.validate_current_receipt(receipt, completed_day)
-    historical = directory / f"allocator_{cal[0]}.json"
-    assert str(historical.resolve()) in receipt["dependency_sources"]
-    historical_cash = directory / "opening_capacity" / "native_capacity" / cal[0] / "native_cash.json"
-    assert str(historical_cash.resolve()) in receipt["dependency_sources"]
-    value = loop.read_object(historical)
-    value["available_cash_krw"] = 1
-    loop.atomic_write(historical, value)
-    assert not phase.validate_current_receipt(receipt, completed_day)
-    result["holdout"]["notional_weighted_ev_pct"] = 999
-    assert not loop.widget_prospective_summary_valid(result, revision)
 
 
-def test_exact_widget_cost_survives_retry_but_changed_native_fill_cannot_reuse_it(
-    tmp_path,
-):
-    from src.engine.monitoring.research_version_outcomes import collect_widget_outcomes
-
-    version = "a" * 64
-    base = dict(
-        signal_id="native-signal",
-        execution_policy_content_sha256=version,
-        order_date=str(DAY),
-        filled_qty=10,
-        requested_qty=10,
-        remaining_qty=0,
-        status="FILLED",
-        last_reconciled_at=f"{DAY}T12:02:00+09:00",
-    )
-    buy = dict(base, order_no="B1", side="BUY", fill_price=10000)
-    sell = dict(
-        base,
-        order_no="S1",
-        side="SELL",
-        fill_price=10050,
-        parent_entry_signal_id="native-signal",
-    )
-    state = dict(active_date=str(DAY), symbols={"000001": {"orders": [buy, sell]}})
-    path = tmp_path / "state.json"
-    loop.atomic_write(path, state)
-    broker = lambda day, symbol: [
-        dict(
-            filled_qty=10,
-            buy_average_price=10000,
-            sell_average_price=10050,
-            realized_net_profit_krw=270,
-            commission_krw=30,
-            tax_krw=200,
-        )
-    ]
-    first = collect_widget_outcomes(
-        DAY, state_path=path, directory=tmp_path, loader=broker
-    )
-    assert first["rows"][0]["realized_net_profit_krw"] == 270
-    resumed = collect_widget_outcomes(DAY, state_path=path, directory=tmp_path)
-    assert resumed["rows"][0]["realized_net_profit_krw"] == 270
-    sell["fill_price"] = 10060
-    loop.atomic_write(path, state)
-    changed = collect_widget_outcomes(DAY, state_path=path, directory=tmp_path)
-    assert changed["rows"][0]["realized_net_profit_krw"] is None
 
 
 def test_episode_cf_requires_both_original_legs_and_sufficient_shared_depth(tmp_path):
@@ -1219,31 +718,6 @@ def test_episode_cf_requires_both_original_legs_and_sufficient_shared_depth(tmp_
     )
 
 
-def test_native_decision_checkpoint_resume_deduplicates_and_preserves_asof(tmp_path):
-    from datetime import timedelta
-    from src.trading.widget_auto_trade.engine import WidgetTradeEventRecorder
-
-    now = datetime.fromisoformat(f"{DAY}T12:00:00+09:00")
-    event = dict(
-        symbol="000001",
-        signal_id=f"000001:{DAY}:ENTRY:1",
-        execution_policy_content_sha256="a" * 64,
-        event_type="entry_guard_blocked",
-        actual_order_submitted=False,
-    )
-    recorder = WidgetTradeEventRecorder(tmp_path)
-    recorder.record(event, now)
-    destination = tmp_path / f"research_decisions_{DAY}.json"
-    first = loop.read_object(destination)
-    recorder.record(event, now + timedelta(seconds=1))
-    recovered = WidgetTradeEventRecorder(tmp_path)
-    recovered.record(event, now + timedelta(seconds=31))
-    summary = loop.read_object(destination)
-    assert len(summary["native_decisions"]) == 1
-    event_path = tmp_path / f"widget_signal_auto_trade_events_{DAY:%Y%m%d}.jsonl"
-    recovered._record_research_decision({}, now + timedelta(seconds=62), event_path)
-    assert loop.read_object(destination) == summary
-    assert first["status"] == "complete" and summary["actual_order_submitted"] is False
 
 
 def test_seed_readers_share_bounded_immutable_point_decode(tmp_path):
@@ -1530,62 +1004,14 @@ def test_episode_native_cf_publication_and_reader_recheck_summary(
         publisher.load_policy(effective, policy_dir=forged_dir)
 
 
-def test_scale_cli_honors_phase_and_compute_budget(tmp_path, monkeypatch):
-    from src.engine.monitoring import research_scale_benchmark as benchmark
-
-    def bounded_run(symbol_count, day_count, cache, output, **options):
-        assert symbol_count == 100 and day_count == 120
-        assert options["modes"] == ("cold",)
-        assert options["compute_budget_sec"] == 17
-        return dict(status="deferred")
-
-    monkeypatch.setattr(benchmark, "run", bounded_run)
-    assert (
-        benchmark.main(
-            [
-                "--symbols",
-                "100",
-                "--days",
-                "120",
-                "--modes",
-                "cold",
-                "--compute-budget-sec",
-                "17",
-                "--output",
-                str(tmp_path / "receipt.json"),
-            ]
-        )
-        == 75
-    )
 
 
-def test_scale_cli_defaults_are_bounded_not_full_expansion(tmp_path, monkeypatch):
-    from src.engine.monitoring import research_scale_benchmark as benchmark
-
-    def bounded_run(symbol_count, day_count, cache, output, **options):
-        assert (symbol_count, day_count) == (3, 46)
-        assert options["modes"] == ("cold", "warm", "append")
-        assert options["compute_budget_sec"] == 300
-        return dict(status="complete")
-
-    monkeypatch.setattr(benchmark, "run", bounded_run)
-    assert benchmark.main(["--output", str(tmp_path / "receipt.json")]) == 0
 
 
-@pytest.mark.parametrize("budget", ["0", "-1"])
-def test_scale_cli_rejects_nonpositive_budget_before_compute(tmp_path, monkeypatch, budget):
-    from src.engine.monitoring import research_scale_benchmark as benchmark
-
-    def forbidden(*args, **kwargs):
-        raise AssertionError("invalid fixture budget must not start replay")
-
-    monkeypatch.setattr(benchmark, "run", forbidden)
-    with pytest.raises(ValueError, match="benchmark_fixture_shape_invalid"):
-        benchmark.main(["--output", str(tmp_path / "receipt.json"), "--compute-budget-sec", budget])
 
 
 def test_episode_scale_cli_defaults_are_bounded(tmp_path, monkeypatch):
-    from analysis.benchmarks import widget_episode_incremental_scale as benchmark
+    from analysis.benchmarks import episode_incremental_scale as benchmark
 
     def bounded_run(symbols, days, output, cache, budget):
         assert (symbols, days, budget) == (3, 46, 300)
@@ -1747,7 +1173,7 @@ def test_registered_actual_episode_seed_consumes_native_books_without_discovery_
     loop.atomic_write(snapshot, native_snapshot)
     assert not loop.admission_symbols(now.date(), owner="episode", directory=tmp_path)
     writer = facts.SharedResearchFactWriter(
-        [], directory=tmp_path, snapshot_path=snapshot, widget_symbol_scope=scope,
+        [], directory=tmp_path, snapshot_path=snapshot,
     )
     receipt = writer.collect_once(now)
     assert receipt["remote_requests"] == 0
@@ -1821,18 +1247,6 @@ def test_opening_producer_to_allocator_and_postclose_rejection(tmp_path, monkeyp
     assert funding.write_snapshot(DAY, directory=tmp_path, report_root=root)["source_quality_status"] == "PASS"
 
 
-def test_actual_gateways_share_opening_source_without_orders(monkeypatch):
-    from src.engine.monitoring import research_native_capacity_source as source
-    from src.trading.widget_auto_trade.gateway import KiwoomSharedTokenOrderGateway
-    from src.trading.low_price_two_leg.gateway import KiwoomLowPriceTwoLegGateway
-    seen = []
-    monkeypatch.setattr(source, "ensure_opening_capacity", lambda day, **kw: seen.append(day) or {"status":"complete"})
-    # __new__ excludes networking constructors; the production hook is exercised.
-    for cls in (KiwoomSharedTokenOrderGateway, KiwoomLowPriceTwoLegGateway):
-        gateway = cls.__new__(cls)
-        gateway.token_loader = lambda: "fixture"
-        assert gateway.capture_opening_research_capacity(DAY)["status"] == "complete"
-    assert seen == [DAY, DAY]
 
 
 def test_frozen_calendar_reuse_returns_independent_lists(monkeypatch):
@@ -1850,39 +1264,3 @@ def test_frozen_calendar_reuse_returns_independent_lists(monkeypatch):
     assert len(calls) == count
     monkeypatch.setattr(loop, "is_krx_trading_day", lambda day: True)
     assert loop.trading_dates_after(DAY, 4) != expected
-
-
-@pytest.mark.parametrize("scope", [None, set(), {"006800"}, {"005930"}])
-@pytest.mark.parametrize("episode_admitted", [False, True])
-def test_priority_scope_cannot_reenter_via_widget_admission_or_episode_union(
-    tmp_path, monkeypatch, scope, episode_admitted,
-):
-    from src.tests.test_dynamic_micro_confirmation import _live_snapshot
-    common = dict(symbol="005930", parameters={}, source_date=DAY,
-                  source_sha256="a" * 64, cost_sha256="b" * 64,
-                  frozen_at=datetime.fromisoformat(f"{DAY}T20:10:00+09:00"))
-    widget = loop.candidate_revision(owner="widget", lane_id="widget", calibration_days=10, **common)
-    episode = loop.candidate_revision(owner="episode", lane_id="non_native_test", calibration_days=30, **common)
-    for revision in [widget, episode]:
-        loop.freeze_candidate(revision, directory=tmp_path)
-    now = datetime.fromisoformat(widget["calibration_dates"][0] + "T09:05:00+09:00")
-    source = tmp_path / "ws.json"
-    loop.atomic_write(source, _live_snapshot(now, item="005930"))
-    monkeypatch.setattr(
-        loop, "admission_symbols",
-        lambda *args, **kw: {"005930"} if kw["owner"] == "widget" or episode_admitted else set(),
-    )
-    writer = facts.SharedResearchFactWriter(
-        ["006800"], directory=tmp_path, snapshot_path=source,
-        widget_symbol_scope=scope,
-    )
-    receipt = writer.collect_once(now)
-    widget_allowed = scope is None or "005930" in scope
-    expected = ([widget] if widget_allowed else []) + ([episode] if widget_allowed or episode_admitted else [])
-    assert {row["revision_sha256"] for row in writer.revisions.get("005930", [])} == {row["revision_sha256"] for row in expected}
-    assert receipt["written_facts"] == (2 if expected else 0)
-    assert receipt["widget_symbol_scope"] == (None if scope is None else sorted(scope))
-    assert receipt["remote_requests"] == 0
-    from datetime import timedelta
-    writer.collect_once(now + timedelta(seconds=31))
-    assert {row["revision_sha256"] for row in writer.revisions.get("005930", [])} == {row["revision_sha256"] for row in expected}

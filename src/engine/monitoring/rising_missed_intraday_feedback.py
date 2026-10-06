@@ -18,7 +18,7 @@ from src.engine.monitoring.entry_turn_point_replay import (
     build_entry_turn_point_replay,
     load_verified_symbol_master as load_entry_turn_verified_symbol_master,
 )
-from src.engine.monitoring.widget_comparison_cost import comparison_cost_contract
+from src.trading.market.comparison_cost import comparison_cost_contract
 from src.engine.scalping.risky_micro_episode import (
     POLICY_VERSION as RISKY_MICRO_POLICY_VERSION,
     PRIMARY_ENTRY_PROFILE as RISKY_MICRO_PRIMARY_ENTRY_PROFILE,

@@ -138,7 +138,7 @@ def build_postclose_done_controller(
     independent_issues = []
     if require_independent_producers:
         from src.engine.automation.postclose_summary_handoff import producer_receipt_issues
-        for owner in ("widget", "machine"):
+        for owner in ("machine",):
             independent_issues.extend(producer_receipt_issues(DATA_DIR / "report", target_date, owner))
     if dry_run:
         status = "dry_run_planned"

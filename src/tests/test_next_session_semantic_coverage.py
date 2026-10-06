@@ -8,10 +8,8 @@ import pytest
 
 from src.engine.error_detectors import artifact_freshness as detector
 from src.engine.monitoring import family_policy_semantics as family
-from src.engine.monitoring import widget_episode_source_research as research
-from src.engine.monitoring import widget_paired_policy_replay as widget
+from src.engine.monitoring import episode_source_research as research
 from src.tests.test_entry_designated_policy import staged_request, NOW
-from src.tests.test_widget_paired_policy_replay import path, parameters, study, DAY
 
 
 @pytest.mark.parametrize('tamper', [False, True])
@@ -88,46 +86,21 @@ def test_family_seal_predecessors_and_population(tmp_path, tamper):
         assert result['summary']['realized_profit'] is None
 
 
-def test_indirect_win_count_is_diagnostic_and_legacy_is_validation_only(monkeypatch):
-    report = study()
-    original = widget._profitable_close_within_180s
-    # All candidate closes are profitable and faster, but have lower diagnostic
-    # frequency under this injected counter. EV/net/tail/capital remain superior.
-    monkeypatch.setattr(widget, '_profitable_close_within_180s', lambda r: not original(r))
-    selected = widget.select_candidate(report, previous_value=100)
-    assert selected['candidate_ready'] is True
-    legacy = copy.deepcopy(report); legacy['metric_contract'] = widget.LEGACY_CONTRACT
-    legacy['content_hash'] = widget.digest({k:v for k,v in legacy.items() if k != 'content_hash'})
-    assert widget.select_candidate(legacy, previous_value=100)['candidate_ready'] is False
-    old = widget._select_candidate(legacy, previous_value=100, legacy_validation=True)
-    assert old['candidate_ready'] is False
 
 
-def test_timing_hypothesis_delays_quote_without_changing_native_arm():
-    rows = path()
-    control = widget._arm(rows, confirmations=2, parameters=parameters(), participation=.5)
-    candidate = widget._arm(rows, confirmations=2, parameters=parameters(), participation=.5, entry_quote_delay=1)
-    assert datetime.fromisoformat(candidate['entry_at']) - datetime.fromisoformat(control['entry_at']) == __import__('datetime').timedelta(seconds=10)
-    summary = research.widget_pair_summary([dict(source_date=DAY.isoformat(), models=dict(base=dict(baseline=control, candidate=candidate), stress=dict(baseline=control, candidate=candidate)))])
-    assert summary['future_validation'] == 'not_observed'
 
 
-def test_censor_is_not_loss_or_zero_economics():
-    pair = dict(source_date=DAY.isoformat(), models={model: dict(baseline=dict(status='right_censored'),
-        candidate=dict(status='completed_cf')) for model in ('base', 'stress')})
-    windows = research.widget_pair_summary([pair])['windows']['base']
-    assert 'historical_comparison' not in windows
-    summary = windows['calibration']
-    assert summary['unknown'] == 1 and summary['comparable'] == 0
-    assert summary['baseline']['ev_pct'] is None
 
 
-def test_future_episode_apply_does_not_count_historical_failed_units(tmp_path):
+def test_future_episode_apply_does_not_count_historical_failed_units(tmp_path, monkeypatch):
     from src.engine.error_detectors import episode_health
+    from src.trading.low_price_two_leg import profiles
+    monkeypatch.setattr(profiles, "profiles_for_target_date", lambda day: {"p1": object(), "p2": object()})
+    monkeypatch.setattr(episode_health, "unit_census", lambda *_: pytest.fail("future missing apply must not query historical units"))
     result = episode_health.check(tmp_path, datetime.fromisoformat('2026-10-05T20:00:00+09:00'),
         target_date='2026-10-06', reader=detector._semantic_object)
     assert result['status'] == 'future_due' and not result['findings']
-    assert len(result['rows']) == 61
+    assert result['rows'] == [dict(profile_id='p1', status='future_due'), dict(profile_id='p2', status='future_due')]
 
 
 @pytest.mark.parametrize('day, expected', [('2026-10-05', 'non_trading'), ('2026-10-02', 'trading'), ('20261005', None)])
@@ -151,7 +124,7 @@ def test_native_controller_skips_holiday_before_predecessor_or_producer(monkeypa
 
 
 @pytest.mark.parametrize('name', ['run_threshold_cycle_postclose.sh', 'run_postclose_done_controller.sh',
-                                'run_widget_evaluation.sh', 'run_machine_microstructure_final_refresh.sh',
+                                'run_machine_microstructure_final_refresh.sh',
                                 'run_tuning_monitoring_postclose.sh'])
 def test_holiday_wrappers_skip_before_native_stage_publication(name):
     import os
@@ -166,30 +139,8 @@ def test_holiday_wrappers_skip_before_native_stage_publication(name):
     assert '[SKIP]' in result.stdout and 'non_trading_source_date' in result.stdout
 
 
-def test_running_family_is_unobservable_not_corrupt_or_ready(tmp_path, monkeypatch):
-    monkeypatch.setattr(detector, '_semantic_stage_binding', lambda *args, **kwargs: dict(
-        status='running' if args[2]=='widget_policy' else 'succeeded'))
-    family_result = detector._family_policy_semantics(tmp_path, '2026-10-02', 'widget')
-    assert family_result['status']=='unobservable' and not family_result['findings']
-    # Avoid legacy Episode artifact enumeration: this fixture isolates a
-    # pending family, which prevents prepared/controller assessment entirely.
-    monkeypatch.setattr(detector, '_semantic_stage_binding', lambda *args, **kwargs: dict(status='running'))
-    result = detector._postclose_handoff_semantics(tmp_path, '2026-10-02', datetime.fromisoformat('2026-10-05T20:10:00+09:00'))
-    assert result['status']=='unobservable' and result['prepared']['status']=='unobservable'
-    assert not result['findings'] and detector._semantic_alerts('postclose_handoff',result,'2026-10-02')==[]
 
 
-def test_notifier_accepts_only_bound_prior_generation_and_new_family():
-    from src.engine import notify_error_detection_admin as notifier
-    value = dict(stage='widget_policy', source_date='2026-10-02', target_date='2026-10-06',
-        generation='a'*64, status='warning', reason='widget_scale_in_replay_source_missing', owner='owner')
-    binding = dict(value, as_of_date='2026-10-05')
-    item = dict(detector_id='artifact_freshness', severity='pass', details=dict(
-        semantic_source_bindings=[binding], semantic_alerts=[value]))
-    report = dict(target_date='2026-10-05', results=[item])
-    assert len(notifier._alert_results(report)) == 1
-    binding['generation'] = 'b'*64
-    assert notifier._alert_results(report) == []
 
 
 @pytest.mark.parametrize('defect', ['none', 'authority', 'candidate', 'generation', 'index_order'])
@@ -337,15 +288,13 @@ def test_partial_saved_bar_prefix_does_not_prove_empty_signal_window():
 def test_research_preserves_exact_report_bytes_when_native_publisher_moves(tmp_path, monkeypatch):
     day = '2026-10-02'
     reports = {}
-    for family_dir, name in [('widget_auto_trade_policy_calibration', 'widget_auto_trade_policy_calibration'),
-                         ('low_price_two_leg_tuning', 'low_price_two_leg_tuning')]:
+    for family_dir, name in [('low_price_two_leg_tuning', 'low_price_two_leg_tuning')]:
         folder = tmp_path / 'data/report' / family_dir
         folder.mkdir(parents=True)
         path = folder / f'{name}_{day}.json'
         raw = json.dumps(dict(target_date=day, clean_baseline_window=dict(available_actual_observation_dates=[])), indent=2).encode()+b'\n'
         path.write_bytes(raw)
         reports[str(path)] = raw
-    monkeypatch.setattr(research, 'widget_research', lambda *_: dict(rows=[]))
     monkeypatch.setattr(research, 'episode_research', lambda *_: dict(rows=[]))
     result = research.run(tmp_path, day, tmp_path/'output')
     for source, receipt in result['report_snapshots'].items():

@@ -44,7 +44,6 @@ def _write_source(
                 "current_policy_misclassification_count": 3,
             }
             for stratum in (
-                "owner:widget",
                 "owner:episode",
                 "market:KOSPI",
                 "market:KOSDAQ",
@@ -108,9 +107,9 @@ def _write_source(
         "review_method": THRESHOLD_REVIEW_METHOD,
         "counterfactual_entry_signal_count": 50 if candidate_ready else 0,
         "owner_signal_counts": (
-            {"widget": 25, "episode": 25}
+            {"episode": 50}
             if candidate_ready
-            else {"widget": 0, "episode": 0}
+            else {"episode": 0}
         ),
         "listing_market_signal_counts": (
             {"KOSPI": 25, "KOSDAQ": 25}

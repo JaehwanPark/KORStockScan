@@ -91,14 +91,13 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
         "runtime_policy_bootstrap_verify": runtime_root
         / f"runtime_policy_bootstrap_verify_{runtime_apply_date}.json",
     }
-    handoff_paths.update(
-        {
-            label: path
-            for label, path in observed_runtime_paths.items()
-            if path.exists()
-        }
-    )
+    # Future PREOPEN outputs are observations, not immutable postclose inputs.
+    # Keep the handoff receipt identical to the shared consumer contract.
+    observed_runtime_paths = {
+        label: path for label, path in observed_runtime_paths.items() if path.exists()
+    }
     handoff_receipt = source_receipt(handoff_paths, target_date)
+    observed_runtime_receipt = source_receipt(observed_runtime_paths, target_date)
     report = {
         "schema_version": 2,
         "report_type": REPORT_TYPE,
@@ -124,6 +123,7 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
         },
         "sources": sources,
         "source_generation_contract": handoff_receipt,
+        "observed_runtime_source_contract": observed_runtime_receipt,
         "runtime_effect": False,
         "allowed_runtime_apply": False,
         "actual_order_submitted": False,
@@ -146,6 +146,7 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
             raise ValueError("cancel_wait_summary_projection_generation_invalid")
     json_path, md_path = report_paths(target_date)
     assert_sources_unchanged(handoff_receipt, handoff_paths)
+    assert_sources_unchanged(observed_runtime_receipt, observed_runtime_paths)
     json_path.parent.mkdir(parents=True, exist_ok=True)
     json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     md_path.write_text(

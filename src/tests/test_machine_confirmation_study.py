@@ -605,7 +605,8 @@ def test_native_producer_to_holdouts_selection_dated_reader_and_scope_fallback(
         _seal,
     )
 
-    days = _trading_dates(date(2026, 8, 27), 28)
+    # Preserve the 28-day model/calibration/holdout scenario after the source floor.
+    days = _trading_dates(date(2026, 9, 10), 28)
     source_dir = tmp_path / "source"
     source_dir.mkdir()
     for i, day in enumerate(days):
@@ -621,6 +622,19 @@ def test_native_producer_to_holdouts_selection_dated_reader_and_scope_fallback(
                 actual_order_submitted=False,
                 broker_order_forbidden=True,
             ),
+            decision_ownership=dict(
+                schema="machine_microstructure_decision_ownership_v1",
+                entry_confirmation_source=dict(
+                    consumer="machine_entry_timing_tuning",
+                    policy_selection_authority=False,
+                    runtime_effect=False,
+                ),
+                entry_timing_policy=dict(
+                    owner="machine_entry_timing_tuning",
+                    source_section="micro_entry_confirmation",
+                    single_public_policy_owner=True,
+                ),
+            ),
             micro_entry_confirmation={"entry_anchors": [row]},
         )
         (source_dir / f"machine_microstructure_attribution_{day}.json").write_text(
@@ -631,7 +645,6 @@ def test_native_producer_to_holdouts_selection_dated_reader_and_scope_fallback(
         source_dir=source_dir,
         low_price_candidate_dir=tmp_path / "lp",
         samsung_candidate_dir=tmp_path / "samsung",
-        widget_policy_dir=tmp_path / "widget",
     )
     assert report["runtime_winner"] is not None, report["cohorts"]
     selected = report["runtime_winner"]["selected"]
@@ -876,44 +889,8 @@ def _widget_native_case(*, with_adds=False):
     )
 
 
-def test_widget_original_three_leg_plan_no_add_and_adds_native_pooled_target():
-    from src.engine.monitoring.machine_entry_confirmation_study import (
-        replay_operating_plan,
-        model_witness,
-    )
-
-    for adds in (False, True):
-        source, model, decision = _widget_native_case(with_adds=adds)
-        result = replay_operating_plan(source, decision, model)
-        assert result["status"] == "completed", result
-        assert source["contract"]["total_quantity"] == 30
-        assert result["modeled_filled_qty"] == (30 if adds else 10)
-        assert result["net_pnl_krw"] == source["actual"]["net_pnl_krw"]
-        witness = model_witness(source, result)
-        assert (
-            witness is not None
-            and witness["quantity_error"] == 0
-            and witness["net_error_budget_pct"] == 0
-        )
 
 
-def test_widget_missing_add_guard_cancel_or_tick_coverage_is_not_zero_profit():
-    from src.engine.monitoring.machine_entry_confirmation_study import (
-        replay_operating_plan,
-        _seal,
-    )
-
-    source, model, decision = _widget_native_case(with_adds=True)
-    missing = _seal(model | {"target_cancel_latency_ms": None})
-    assert (
-        replay_operating_plan(source, decision, missing)["blocker"]
-        == "independent_widget_target_cancel_model_missing"
-    )
-    source["guard_path"]["scale_ticks"][1]["permitted"] = None
-    source["guard_path"] = _seal(source["guard_path"])
-    source = _seal(source)
-    result = replay_operating_plan(source, decision, model)
-    assert result["status"] == "unsupported_scope" and result["net_pnl_krw"] is None
 
 
 def test_partial_native_buy_is_not_per_lot_target_or_synthetic_sell():
@@ -1259,38 +1236,8 @@ def test_carry_actual_refresh_is_original_root_and_asof_bound_only(tmp_path):
     assert mismatch[0][0]["actual"] is None
 
 
-def test_widget_add_guard_cannot_cross_native_stage():
-    from src.engine.monitoring.machine_entry_confirmation_study import (
-        replay_operating_plan,
-        _seal,
-    )
-
-    source, model, decision = _widget_native_case(with_adds=True)
-    source["guard_path"]["scale_ticks"][1]["stage_index"] = 2
-    source["guard_path"] = _seal(source["guard_path"])
-    result = replay_operating_plan(_seal(source), decision, model)
-    assert (
-        result["blocker"] == "changed_widget_add_requires_its_own_native_guard_receipt"
-    )
-    assert result["net_pnl_krw"] is None
 
 
-def test_widget_observation_venue_never_substitutes_sor_execution_book():
-    from src.engine.monitoring.machine_entry_confirmation_study import (
-        project_native_operating_path,
-    )
-
-    source, _, _ = _widget_native_case()
-    c = source["contract"]
-    assert c["market_data_venue"] == "KRX"
-    assert c["execution_data_venue"] == "SOR"
-    assert all(p["venue"] == "SOR" for p in source["points"])
-    krx = [
-        dict(r, venue="KRX", session_bucket="KRX_REGULAR")
-        for r in source["programme_rows"]
-    ]
-    missing = project_native_operating_path(c, krx, {})
-    assert missing["points"] == []
 
 
 def test_native_recheck_admission_replaces_earlier_block_only_at_real_buy():
@@ -1317,44 +1264,6 @@ def test_native_recheck_admission_replaces_earlier_block_only_at_real_buy():
     assert native["entry_admission"]["at"] == (at + timedelta(seconds=2)).isoformat()
 
 
-def test_widget_registry_terminal_is_bound_to_own_identity(monkeypatch):
-    from types import SimpleNamespace
-    from src.engine.monitoring.machine_entry_confirmation_study import (
-        project_widget_registry_terminal,
-    )
-
-    order = dict(
-        order_no="sell",
-        order_date="2026-09-21",
-        filled_qty=10,
-        owner_id="own",
-        owner_position_id="root",
-        side="SELL",
-        owner_registry_intent_id="intent",
-    )
-    row = dict(
-        owner_type="widget_auto_trade",
-        owner_id="own",
-        position_id="root",
-        symbol="005930",
-        side="SELL",
-        intent_id="intent",
-        filled_qty=10,
-        fill_amount=805000,
-        fill_observed_at_kst="2026-09-21T13:20:00+09:00",
-    )
-    monkeypatch.setattr(
-        "src.engine.monitoring.machine_entry_confirmation_study.bounded_custody_terminal_lookup",
-        lambda *a, **k: row,
-    )
-    copy = dict(order)
-    project_widget_registry_terminal(SimpleNamespace(), copy)
-    assert copy["fill_price"] == 80500
-    assert "fill_price" not in order
-    row["position_id"] = "another-root"
-    wrong = dict(order)
-    project_widget_registry_terminal(SimpleNamespace(), wrong)
-    assert "fill_price" not in wrong
 
 
 def test_original_native_date_roll_preserves_exact_terminal_for_actual_refresh(
@@ -1395,6 +1304,41 @@ def test_original_native_date_roll_preserves_exact_terminal_for_actual_refresh(
         and not errors
     )
     assert after[0][0]["points"] == absent["points"]
+
+
+def test_native_actual_history_does_not_read_before_owner_floor(tmp_path, monkeypatch):
+    from src.engine.monitoring.machine_entry_confirmation_study import (
+        read_native_actual_history,
+    )
+    from src.engine.monitoring import research_closed_loop
+
+    old_path = tmp_path / "machine_entry_timing_tuning_2026-07-31.json"
+    future_path = tmp_path / "machine_entry_timing_tuning_2026-08-03.json"
+    old_path.write_text("invalid")
+    future_path.write_text("invalid")
+    original_read = research_closed_loop.read_object
+    read_paths = []
+
+    def record_read(path, **kwargs):
+        read_paths.append(path.name)
+        return original_read(path, **kwargs)
+
+    monkeypatch.setattr(research_closed_loop, "read_object", record_read)
+    assert read_native_actual_history(
+        tmp_path, target_date="2026-08-02", minimum_source_date="2026-08-01",
+    ) == ({}, [])
+    assert read_paths == []
+    boundary_path = tmp_path / "machine_entry_timing_tuning_2026-08-01.json"
+    boundary_path.write_text(json.dumps({"target_date": "2026-08-01"}))
+    assert read_native_actual_history(
+        tmp_path, target_date="2026-08-02", minimum_source_date="2026-08-01",
+    ) == ({}, [])
+    assert read_paths == [boundary_path.name]
+    boundary_path.write_text("invalid")
+    history, errors = read_native_actual_history(
+        tmp_path, target_date="2026-08-02", minimum_source_date="2026-08-01",
+    )
+    assert history == {} and errors
 
 
 def test_existing_report_actual_history_survives_checkpoint_eviction_asof_and_conflict(

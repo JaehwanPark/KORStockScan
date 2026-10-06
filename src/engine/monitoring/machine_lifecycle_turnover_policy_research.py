@@ -29,14 +29,11 @@ TIMEOUT_AXIS_VALUES_SEC = (60, 120, 180)
 ROLLING_PAIRED_LIFECYCLE_FLOORS = {"5d": 5, "10d": 10, "20d": 20}
 DECISION_ROLES = {
     "counterfactual_calibration_entry",
-    "actual_widget_entry_signal",
     "episode_signal_bar",
-    "prospective_widget_research_entry",
     "prospective_episode_research_signal",
 }
 COST_PROVENANCE_ALLOWLIST = {
-    "widget_auto_trade_policy_calibration.round_trip_cost_pct",
-    "widget_comparison_cost.effective_dated_contract",
+    "comparison_cost.effective_dated_contract",
     "low_price_two_leg_tuning.cost_pct",
     "low_price_two_leg_expanded_candidate_research.cost_pct",
 }
@@ -137,7 +134,6 @@ def _direct_anchor_results(report: Mapping[str, Any]) -> list[dict[str, Any]]:
         return []
     results: list[dict[str, Any]] = []
     for consumer_name, collection_name in (
-        ("widget_postclose_tuning", "symbols"),
         ("episode_machine_postclose_tuning", "profiles"),
     ):
         consumer = consumers.get(consumer_name)
@@ -290,7 +286,7 @@ def _counterfactual_leg(
     cost_provenance = str(anchor.get("owner_round_trip_cost_provenance") or "").strip()
     notional = _finite(outcome.get("entry_notional_krw"))
     if notional is None:
-        notional = reference if anchor.get("owner") == "widget" else None
+        notional = None
     if (
         reference is None
         or reference <= 0
@@ -486,13 +482,6 @@ def _lifecycle_units(report: Mapping[str, Any]) -> list[dict[str, Any]]:
                     "episode_buy_fill_confirmed",
                     "prospective_episode_research_buy_fill",
                 }
-            ]
-        elif decision_anchor.get("anchor_role") == "actual_widget_entry_signal":
-            execution_anchors = [
-                anchor
-                for anchor in anchors
-                if anchor.get("anchor_role") == "actual_widget_entry_fill_reconciled"
-                and anchor.get("execution_order_role") == "ENTRY_BUY"
             ]
         else:
             execution_anchors = [decision_anchor]
@@ -1587,10 +1576,9 @@ def build_rolling_paired_policy_research(
     combined_report = {
         "target_date": target_day.isoformat(),
         "consumers": {
-            "widget_postclose_tuning": {
-                "symbols": {"rolling_history": {"anchor_results": combined_anchors}}
+            "episode_machine_postclose_tuning": {
+                "profiles": {"rolling_history": {"anchor_results": combined_anchors}}
             },
-            "episode_machine_postclose_tuning": {"profiles": {}},
         },
     }
     for unit in _lifecycle_units(combined_report):

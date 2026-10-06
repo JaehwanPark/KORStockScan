@@ -45,7 +45,6 @@ trap on_exit EXIT
 
 while read -r unit _rest; do
   case "$unit" in
-    korstockscan-widget-signal-auto-trader.service|\
     korstockscan-samsung-morning-one-share.service|\
     korstockscan-samsung-midday-one-share.service|\
     korstockscan-samsung-afternoon-one-share.service|\

@@ -36,20 +36,20 @@ def _anchor(
     current_realized: bool = True,
     scope_id: str = "005930:KRX_REGULAR",
 ) -> dict:
-    lifecycle_id = f"widget:{scope_id}:{source_date}:{lifecycle_number}"
+    lifecycle_id = f"episode:{scope_id}:{source_date}:{lifecycle_number}"
     return {
         "anchor_id": f"{lifecycle_id}:entry",
         "lifecycle_id": lifecycle_id,
-        "owner": "widget",
+        "owner": "episode",
         "scope_id": scope_id,
         "symbol": "005930",
         "session": "KRX_REGULAR",
         "lifecycle_stage": "entry",
-        "anchor_role": "counterfactual_calibration_entry",
+        "anchor_role": "episode_signal_bar",
         "anchor_price": 10_000.0,
         "owner_round_trip_cost_pct": 0.2,
         "owner_round_trip_cost_provenance": (
-            "widget_auto_trade_policy_calibration.round_trip_cost_pct"
+            "low_price_two_leg_tuning.cost_pct"
         ),
         "owner_lifecycle_contract_valid": True,
         "micro_context_status": "matched",
@@ -107,6 +107,16 @@ def _anchor(
 
 
 def _report(source_date: str, anchors: list[dict]) -> dict:
+    # Episode comparison needs both a causal signal and its exact fill anchor.
+    fills = []
+    for anchor in anchors:
+        if anchor.get("anchor_role") == "episode_signal_bar" and anchor.get("micro_context_status") == "matched" and not any(
+            row.get("lifecycle_id") == anchor["lifecycle_id"]
+            and row.get("anchor_role") == "episode_buy_fill_confirmed" for row in anchors
+        ):
+            fills.append(dict(anchor, anchor_id=anchor["anchor_id"] + ":fill",
+                              anchor_role="episode_buy_fill_confirmed"))
+    anchors = [*anchors, *fills]
     return {
         "schema": "machine_microstructure_attribution_v1",
         "target_date": source_date,
@@ -114,23 +124,22 @@ def _report(source_date: str, anchors: list[dict]) -> dict:
         "authority": dict(AUTHORITY),
         "rolling_policy_source_contract": {"ready": True, "gap": None},
         "consumers": {
-            "widget_postclose_tuning": {
-                "symbols": {
+            "episode_machine_postclose_tuning": {
+                "profiles": {
                     "005930": {
                         "anchor_results": anchors,
                     }
                 }
             },
-            "episode_machine_postclose_tuning": {"profiles": {}},
         },
     }
 
 
-def test_counterfactual_accepts_effective_dated_widget_cost_contract() -> None:
+def test_counterfactual_accepts_effective_dated_shared_cost_contract() -> None:
     anchor = _anchor(source_date="2026-08-27", lifecycle_number=1)
     anchor["owner_round_trip_cost_pct"] = 0.23
     anchor["owner_round_trip_cost_provenance"] = (
-        "widget_comparison_cost.effective_dated_contract"
+        "comparison_cost.effective_dated_contract"
     )
 
     leg = _counterfactual_leg(anchor, timeout_sec=60)
@@ -138,7 +147,7 @@ def test_counterfactual_accepts_effective_dated_widget_cost_contract() -> None:
     assert leg["eligible"] is True
     assert leg["candidate_net_return_pct"] == 0.17
     assert leg["round_trip_cost_provenance"] == (
-        "widget_comparison_cost.effective_dated_contract"
+        "comparison_cost.effective_dated_contract"
     )
 
 
@@ -787,7 +796,7 @@ def test_anchor_result_records_past_only_fillable_bid_timeout_snapshots():
     anchor = {
         "anchor_id": "widget:005930:entry",
         "lifecycle_id": "widget:005930",
-        "owner": "widget",
+        "owner": "episode",
         "scope_id": "005930:KRX_REGULAR",
         "symbol": "005930",
         "session": "KRX_REGULAR",

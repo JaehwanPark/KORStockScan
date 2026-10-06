@@ -111,7 +111,7 @@ class GroupCoordinator:
             or adapter.symbol != group.scope.symbol
             or group.scope.route not in adapter.routes
             or adapter.context.owner_type
-            != ("widget_auto_trade" if group.scope.owner == "widget" else "episode")
+            != "episode"
             or not positive_int(max_snapshot_age_ms)
             or any(
                 not callable(x)

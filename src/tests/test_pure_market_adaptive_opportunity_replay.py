@@ -3115,91 +3115,12 @@ def test_fixed_tp_split_policy_uses_only_complete_prior_arm_history():
     )
 
 
-def test_equal_share_carry_can_complete_next_day_without_next_day_add():
-    bars = [
-        _execution_bar(0, open_=100, high=100, low=100, close=100),
-        _execution_bar(1, open_=100, high=100, low=100, close=100),
-        _execution_bar(0, open_=99, high=101, low=99, close=100, day=11),
-    ]
-
-    trade = adaptive._simulate_equal_share_carry_trade(
-        _fixed_entry(),
-        bars,
-        arm="two_equal_add0p5_tp0p4",
-        cost_pct=0.2,
-    )
-
-    assert trade["completed"] is True
-    assert trade["exit_at"] == "2026-08-11T09:00:00"
-    assert trade["filled_leg_count"] == 1
-    assert trade["calendar_days_to_target"] == 1
-    assert trade["net_return_pct"] > 0
 
 
-def test_equal_share_carry_reprices_after_same_day_add_and_blocks_same_bar_target():
-    bars = [
-        _execution_bar(0, open_=100, high=101, low=99, close=100),
-        _execution_bar(1, open_=100, high=101, low=100, close=100),
-    ]
-
-    trade = adaptive._simulate_equal_share_carry_trade(
-        _fixed_entry(),
-        bars,
-        arm="two_equal_add0p5_tp0p4",
-        cost_pct=0.2,
-    )
-
-    assert trade["filled_leg_count"] == 2
-    assert trade["weighted_average_price"] == pytest.approx(99.5)
-    assert trade["exit_at"] == "2026-08-10T09:01:00"
-    assert trade["same_bar_target_after_fill_allowed"] is False
 
 
-def test_equal_share_carry_right_censor_is_not_completed_profit():
-    trade = adaptive._simulate_equal_share_carry_trade(
-        _fixed_entry(),
-        [_execution_bar(0, open_=100, high=100, low=98, close=98)],
-        arm="two_equal_add0p5_tp0p4",
-        cost_pct=0.2,
-    )
-    summary = adaptive._equal_share_carry_path_diagnostics([trade])
-
-    assert trade["completed"] is False
-    assert trade["net_return_pct"] is None
-    assert summary["completed_trade_count"] == 0
-    assert summary["right_censored_count"] == 1
-    assert summary["ending_open_share_units"] == 2
-    assert "right_censored_position_as_zero_return_or_completed_profit" in (
-        adaptive.FIXED_TP_EQUAL_SHARE_CARRY_CONTRACT["forbidden_uses"]
-    )
 
 
-def test_equal_share_daily_reset_capacity_skips_overlap_and_reopens_next_date():
-    bars = [
-        _execution_bar(0, open_=100, high=100, low=99, close=99),
-        _execution_bar(1, open_=99, high=99, low=99, close=99),
-        _execution_bar(0, open_=100, high=101, low=100, close=101, day=11),
-        _execution_bar(1, open_=101, high=101, low=101, close=101, day=11),
-    ]
-    entries = [
-        _fixed_entry(),
-        {**_fixed_entry(), "entry_at": "2026-08-10T09:01:00"},
-        _fixed_entry(day=11),
-    ]
-
-    selected, skipped = adaptive._simulate_daily_reset_single_bundle_arm(
-        entries,
-        bars,
-        arm="single_1_tp0p4",
-        cost_pct=0.2,
-    )
-
-    assert len(selected) == 2
-    assert len(skipped) == 1
-    assert selected[0]["completed"] is False
-    assert selected[1]["completed"] is True
-    assert selected[1]["calendar_days_to_target"] == 0
-    assert skipped[0]["reason"] == "single_active_bundle_capacity"
 
 
 def _entry_quality_trade(

@@ -80,7 +80,7 @@ def test_active_latch_blocks_only_matching_listing_market(tmp_path):
     )
     kosdaq = evaluate_market_weakness_entry_guard(
         symbol="080220",
-        owner="widget",
+        owner="episode",
         now=_now(),
         state_path=state_path,
         listing_market="KOSDAQ",
@@ -116,7 +116,7 @@ def test_released_or_prior_session_state_does_not_block(tmp_path):
     _write_state(state_path, phase="released", active_markets=[])
     released = evaluate_market_weakness_entry_guard(
         symbol="005930",
-        owner="widget",
+        owner="episode",
         now=_now(),
         state_path=state_path,
         listing_market="KOSPI",
@@ -124,7 +124,7 @@ def test_released_or_prior_session_state_does_not_block(tmp_path):
     _write_state(state_path, session="2026-08-28")
     stale = evaluate_market_weakness_entry_guard(
         symbol="005930",
-        owner="widget",
+        owner="episode",
         now=_now(),
         state_path=state_path,
         listing_market="KOSPI",
@@ -196,7 +196,7 @@ def test_active_latch_with_invalid_market_scope_fails_closed(tmp_path):
 def test_missing_or_invalid_state_is_observable_but_does_not_freeze(tmp_path):
     missing = evaluate_market_weakness_entry_guard(
         symbol="005930",
-        owner="widget",
+        owner="episode",
         now=_now(),
         state_path=tmp_path / "missing.json",
         listing_market="KOSPI",
@@ -205,7 +205,7 @@ def test_missing_or_invalid_state_is_observable_but_does_not_freeze(tmp_path):
     invalid_path.write_text("{not-json", encoding="utf-8")
     invalid = evaluate_market_weakness_entry_guard(
         symbol="005930",
-        owner="widget",
+        owner="episode",
         now=_now(),
         state_path=invalid_path,
         listing_market="KOSPI",
@@ -221,7 +221,7 @@ def test_operator_rollback_env_disables_guard(tmp_path, monkeypatch):
     state_path = tmp_path / "state.json"
     _write_state(state_path)
     monkeypatch.setenv(
-        "KORSTOCKSCAN_WIDGET_EPISODE_MARKET_WEAKNESS_ENTRY_GUARD_ENABLED", "0"
+        "KORSTOCKSCAN_MACHINE_MARKET_WEAKNESS_ENTRY_GUARD_ENABLED", "0"
     )
 
     decision = evaluate_market_weakness_entry_guard(

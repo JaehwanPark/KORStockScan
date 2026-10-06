@@ -47,7 +47,6 @@ def _request(
                         "mode": "COEXIST_ENTRY_ENABLED",
                         "allowed_owners": [
                             "main_scalping",
-                            "widget_auto_trade",
                             "episode",
                         ],
                         "expected_broker_quantity": broker_quantity,
@@ -825,7 +824,6 @@ def test_all_order_process_launchers_load_shared_owner_account_identity():
         "symbol_owner_policy/owner_custody.env"
     )
     unit_paths = [
-        "deploy/systemd/korstockscan-widget-signal-auto-trader.service",
         "deploy/systemd/korstockscan-samsung-morning-one-share.service",
         "deploy/systemd/korstockscan-samsung-one-share-preflight.service",
         "deploy/systemd/korstockscan-samsung-midday-one-share.service",

@@ -1,4 +1,4 @@
-"""Source-only weak-market response attribution for widget/episode entries.
+"""Source-only weak-market response attribution for episode entries.
 
 The evaluator reconstructs market-scoped weakness hysteresis from immutable
 observations and joins only past state to each owner entry anchor.  It never
@@ -70,7 +70,6 @@ METRIC_CONTRACT = {
         "exact_date_schema_v2_market_scoped_observations_and_verified_symbol_master"
     ),
     "forbidden_uses": [
-        "widget_entry_block",
         "episode_entry_block",
         "open_buy_cancel",
         "target_order_cancel",
@@ -93,7 +92,6 @@ LEGACY_REALIZED_METRIC_CONTRACT = {
         "affected_actual_realized_entries": 20,
     },
     "forbidden_uses": [
-        "widget_entry_block",
         "episode_entry_block",
         "open_buy_cancel",
         "target_order_cancel",
@@ -457,7 +455,7 @@ def _actual_skip_comparison(
 ) -> tuple[float | None, str | None]:
     if row.get("source_quality_status") != "eligible":
         return None, "source_quality_not_eligible"
-    if row.get("owner") not in {"widget", "episode"}:
+    if row.get("owner") != "episode":
         return None, "owner_invalid"
     if row.get("listing_market") not in SUPPORTED_MARKETS:
         return None, "listing_market_invalid"
@@ -977,7 +975,7 @@ def _cumulative_counterfactual_evidence(
         "per_owner_signals_met": all(
             owner_counts[owner]
             >= int(METRIC_CONTRACT["sample_floor"]["per_owner_signals"])
-            for owner in ("widget", "episode")
+            for owner in ("episode",)
         ),
     }
     current_key = f"a{current_activation_observations}_r{current_release_observations}"
@@ -1018,7 +1016,7 @@ def _cumulative_counterfactual_evidence(
         [
             *(
                 f"owner:{owner}"
-                for owner in ("widget", "episode")
+                for owner in ("episode",)
                 if owner_counts[owner] == 0
             ),
             *(
@@ -1074,7 +1072,6 @@ def _cumulative_counterfactual_evidence(
         current_policy_returns: list[float] = []
         false_positive = false_negative = 0
         stratum_rows: dict[str, list[dict[str, Any]]] = {
-            "owner:widget": [],
             "owner:episode": [],
             "market:KOSPI": [],
             "market:KOSDAQ": [],
@@ -1467,7 +1464,7 @@ def build_machine_market_weakness_response(
         gaps: list[str] = []
         if not anchor_id:
             gaps.append("entry_anchor_id_missing")
-        if owner not in {"widget", "episode"}:
+        if owner != "episode":
             gaps.append("entry_anchor_owner_invalid")
         if listing_market is None:
             gaps.append("verified_listing_market_missing")

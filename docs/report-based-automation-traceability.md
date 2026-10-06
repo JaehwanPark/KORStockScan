@@ -1,3 +1,7 @@
+## Current active contract: Widget retired
+
+Widget runtime/UI/collection/research/publication stages, required producer terminals, PREOPEN succession and allocation arms are removed. The older dated widget receipts below remain historical evidence. Shared costs now live in `src/trading/market/comparison_cost.py`; native episode research remains in `episode_source_research`, and existing Main WS snapshot workers capture already received episode seed books without additional subscriptions or API calls. Current execution and natural acceptance belong to `WidgetFullRetirement1006`.
+
 # Report-Based Automation Traceability
 
 현행 장후 실행 구성은 [장후작업 현행 활성 목록](./audit-reports/2026-09-05-postclose-work-inventory.md)이 소유한다. 10/2 설치 대사 기준 삼성 독립 튜닝·PYRAMID·AVG_DOWN legacy calibration·정규 sim과 공통 Daily/EV는 퇴역/OFF다. 기존 AVG_DOWN shared-rebound·actual scale-in과 real post-sell 원천은 별도 owner다. 아래 날짜별 과거 schema/consumer 설명은 현행 예약이나 정책 활성화 권한을 복원하지 않는다.
@@ -45,13 +49,13 @@ On summary-only recovery, refresh the pre-summary verifier before the tower so t
 
 `build_code_improvement_workorder` producer v8 publishes `inventory_contract` for **orders + non_selected_orders**. Schema2 validation checks native ID uniqueness, partition/decision conservation, strict authority classification and source/generation hashes. Lineage compares all native IDs and distinguishes semantic changes from selected-list movement. The per-build source read snapshot rejects concurrent source changes; unreadable input cannot become a zero-byte fingerprint.
 
-`automation/postclose_recommendation_intake.py` is a source-only helper inside the existing tower/checklist/strict owners, not a new strategy family or scheduled producer. It inventories main workorders and the existing eleven widget/episode producer surfaces, including nested native recommendations/workorders and attribution→approval mirrors. It preserves native decision, owner, exact source bytes/row hash and disposition separately. Missing IDs/authority/consumer/evidence do not grant implementation authority. The tower JSON contains the full ledger; the checklist contains a deterministic count/owner/row-digest projection. Strict verification recomputes both semantic projections as well as source receipts, including the current PREOPEN plan, manifest and stored PID-verification artifact. Plan counts are not manifest selection or current PID/EV evidence.
+`automation/postclose_recommendation_intake.py` is a source-only helper inside the existing tower/checklist/strict owners, not a new strategy family or scheduled producer. It inventories main workorders and the surviving Main/episode producer surfaces, including nested native recommendations/workorders and attribution→approval mirrors. It preserves native decision, owner, exact source bytes/row hash and disposition separately. Missing IDs/authority/consumer/evidence do not grant implementation authority. The tower JSON contains the full ledger; the checklist contains a deterministic count/owner/row-digest projection. Strict verification recomputes both semantic projections as well as source receipts, including the current PREOPEN plan, manifest and stored PID-verification artifact. Plan counts are not manifest selection or current PID/EV evidence.
 
 An authorized implementation/review workflow may issue the optional exact-date companion `data/report/postclose_recommendation_dispositions/postclose_recommendation_dispositions_YYYY-MM-DD.json` (`postclose_recommendation_dispositions_v1`). Each row uses the producer's owner/native ID and current source/row SHA, a reason, acceptance owner, and hashed evidence. A completed disposition needs code-review, targeted-validation and direct-consumer evidence; evidence cannot refer back to the tower, checklist, verifier/controller or disposition artifact. Changed/stale evidence invalidates completion. Existing frozen historical ledgers and separately approved successors are not silently converted, overwritten or counted again. Receipt creation is part of the already-authorized review workflow, not an additional manual policy-approval gate or automatic Codex execution permission. See [schema and review scope](audit-reports/2026-09-09-workorder-summary-preopen-handoff-review.md#7-사용자-승인-후속-구현과-최종-검증).
 
 Operational `DONE`, recommendation fixed-point, all implementations completed, deployment, natural consumption and economics remain separate. Blocked rows are not completed; missing optional sources are visible for due/OFF classification. No positive-EV, live-fill, holding-horizon or additional policy sample floor is introduced by this diagnostic contract.
 
-At 21:55, the existing finalizer requires the exact-date main terminal and installed widget/machine producer receipts, then invokes the existing controller with `--require-independent-producers --max-attempts 2 --predecessor-timeout-sec 0`. Retired or uninstalled controller/tuning/archive jobs are not mandatory predecessors. The controller refreshes direct summary/checklist and strict verification with a 600-second timeout and 10-second kill grace. Before cleanup, the finalizer re-reads the controller's exact-date report and attempt receipt and requires a fresh `done`, `whole_native_chain_done_claimed=true`, independent-producer requirement, strict verifier `pass`, and byte-identical attempt/canonical artifacts. A zero exit code or `summary_verified` alone cannot authorize cleanup. Only this verified handoff permits cleanup and the final detector; DONE is emitted after detector success. While the detector audits its live finalizer ancestor it records `pending_self_audit`, not success. This verifies late source handoff and does not establish economic improvement.
+At 21:55, the existing finalizer requires the exact-date main terminal and installed machine producer receipts, then invokes the existing controller with `--require-independent-producers --max-attempts 2 --predecessor-timeout-sec 0`. Retired or uninstalled controller/tuning/archive jobs are not mandatory predecessors. The controller refreshes direct summary/checklist and strict verification with a 600-second timeout and 10-second kill grace. Before cleanup, the finalizer re-reads the controller's exact-date report and attempt receipt and requires a fresh `done`, `whole_native_chain_done_claimed=true`, independent-producer requirement, strict verifier `pass`, and byte-identical attempt/canonical artifacts. A zero exit code or `summary_verified` alone cannot authorize cleanup. Only this verified handoff permits cleanup and the final detector; DONE is emitted after detector success. While the detector audits its live finalizer ancestor it records `pending_self_audit`, not success. This verifies late source handoff and does not establish economic improvement.
 
 ## Drought canonical handoff supplement (source date 2026-09-08 onward)
 
@@ -439,6 +443,8 @@ S15 stop-exit cancel은 common SELL generation과 별개인 취소 세대를 만
 이 축은 `runtime_effect=false`, `selection_authority=false`, `allowed_runtime_apply=false`다. Entry AI prompt/context, 위젯 진입·청산 신호, 실매매 주문·수량·가격·provider·bot 및 R3 후보 승격을 직접 변경하지 않는다. 고정 horizon 누적 결과는 후속 연구 gate가 별도 정책·rollback·PREOPEN 적용 계약을 만들 때만 입력 근거로 사용할 수 있다.
 
 ### Widget/episode micro-entry confirmation and exact-date timing contract
+
+기계진입 타이밍의 현재 원천 보고서 허용 하한은 **`2026-08-01`**이다. `machine_entry_timing_tuning.MIN_SOURCE_REPORT_DATE`가 attribution 보고서를 JSON 읽기 전에 날짜로 제외하며, 장후 계산과 PREOPEN rebound 재검증이 같은 로더를 사용한다. 완료 결과 복원용 timing 보고서 이력 로더도 동일 하한을 전달받는다. 신규 보고서는 `minimum_source_report_date`와 해당 누적 window를 명시한다. `clean_tuning_baseline_date=2026-06-05`는 기존 생산자 품질 계약·정책 provenance 검증 값이며 이 소비자의 실제 허용 하한이 아니다. 8월 원천은 계속 입력으로 허용하고, Main 기계/보조 정책·타 family의 학습 경계와 기존 custody/rollback 정책은 각자의 owner를 따른다. [경계 점검 및 리뷰](./audits/machine-entry-timing-source-floor-review-2026-10-05.md).
 
 `machine_microstructure_attribution.micro_entry_confirmation`은 owner·scope·symbol·session·entry-state를 섞지 않고 진입 기준 1·3·5초 executable BBO와 동일 sequence epoch의 0B/0D ask depletion·refill·trade-backed pressure를 비교한다. 위젯 actual execution은 exact advisory episode event와 결속하여 source-owned support-break 청산을 보존하고, `2026-08-18` 이후에는 1.5bps 매수 수수료·1.5bps 매도 수수료·20bps 매도세금의 effective-dated 비교비용 계약을 실제 체결 notional에 적용한다. 에피소드는 완성된 분봉 timestamp가 아니라 실제 평가 루프의 `signal_decision_at`을 별도 영속화하여 confirmation anchor로 사용한다. 이 값이 없는 legacy 원장은 owner 손익·custody 진단에는 남지만 timing policy 표본에서는 `source_quality_blocked`다. 결측 BBO·호가·체결 값은 0으로 보간하지 않는다.
 
@@ -1078,3 +1084,36 @@ Verifier의 micro diagnostic warning은 required workorder ID와 issues0·runtim
 Recovery `machine_group`은 `machine_attribution` terminal receipt 생성 후에만 해당 receipt를 소비하는 `machine_timing`, `market_weakness`, `legacy_policy_approval`을 실행한다. Producer 재생성과 consumer snapshot 검증은 겹치지 않도록 하고, `stage_source_changed_during_read`는 producer가 settle된 뒤 consumer를 재시도한다.
 
 과거 복구 artifact freshness는 명시 prepared effective date의 bootstrap 시간창을 사용하고 미래 PREOPEN은 future_due로 남긴다. recovery log scanner는 현재 날짜 이전부터 수정되지 않은 error log를 현재 burst로 세지 않고 historical warning으로 보존한다. 현재 오류/일반 모드 guard는 유지한다.
+
+
+## Widget bounded offline research and advisory diagnostics
+
+Reviewed workspace implementation: `src.engine.monitoring.widget_research_plan_execution`
+produces only isolated reports under the workspace `tmp` tree. `symbols` consumes
+seed4 plus the explicitly enrolled watch13, frozen kernels and validated local
+completed-minute snapshots; it never invokes API backfill, new admission or the
+nightly full grid. `advisory` reconciles raw/daily/cumulative evidence for005930,
+034020 and042660. Same universe/source/parent/cost/window/code hashes permit exact
+report reuse. Kernel/day caches are invalidated by source, kernel, cost or code
+changes; failed/corrupt input is never a successful carry. Model returns are not
+broker PnL, and missing capital/execution evidence stays null.
+
+New paired widget-axis studies use the9/29 forward source boundary; pre-boundary
+cumulative10-minute proxy statistics remain historical audit evidence. Old sealed
+policies retain read-only verification, but cannot become successor selection
+input. Cumulative daily loaders bind filename and payload target dates before
+counting outcomes. Diagnostic incumbent copies use an explicit isolated snapshot
+directory. Display confirmation still affects downstream signal eligibility.
+
+`deploy/run_widget_evaluation.sh` passes source and publication dates separately
+to the independent stage dispatcher. The widget stage code fingerprint includes
+its indirectly invoked calibration/evaluation/paired/loader modules. The existing
+mandatory nightly outputs and collector scope remain required. These workspace
+changes are not selected-release or next-session PID consumption receipts.
+
+Owners and closure: [10/5 checklist](checklists/2026-10-05-stage2-todo-checklist.md)
+`WidgetSymbolProfitabilityResearchRedesign1006` and
+`WidgetAdvisoryCumulativeDiagnostic1006`; [execution review](audits/widget-bounded-research-and-advisory-execution-review-2026-10-05.md).
+Future leg/source, semantic projection and natural startup consumption remain
+with the existing research/semantic/startup owners; this finite diagnostic does
+not create trading authority.

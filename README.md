@@ -1,6 +1,6 @@
 # KORStockScan
 
-KORStockScan은 키움증권 REST/WebSocket과 연동하는 개인용 스캘핑 매매 엔진입니다. 넓은 시장을 탐색하는 메인 봇, 종목별 신호를 집행하는 위젯 매매기계, 정해진 종목·시간대의 반복 패턴을 거래하는 에피소드 매매기계를 서로 독립된 주문 owner로 운영합니다.
+KORStockScan은 키움증권 REST/WebSocket과 연동하는 개인용 스캘핑 매매 엔진입니다. 넓은 시장을 탐색하는 메인 봇, 정해진 종목·시간대의 반복 패턴을 거래하는 에피소드 매매기계를 서로 독립된 주문 owner로 운영합니다. 위젯 자동·수동 매매와 화면·수집·연구·장후 정책 발행은 퇴역했습니다.
 
 목표는 위험을 모두 피하는 것이 아닙니다. 감당 가능한 위험 안에서 더 많은 유효 기회를 탐색하고, probe·분할 진입·동적 수량·부분익절·trailing·hard/protect/emergency guard 같은 후단 보호장치로 기대값과 누적 순이익을 높이는 것입니다.
 
@@ -36,15 +36,9 @@ scanner/WATCHING
 
 점수는 baseline prior이자 feature일 뿐 단독 BUY 명령이 아닙니다. 가격·호가·체결·분봉 freshness, venue provenance, 계좌·주문·수량·cooldown과 broker submit guard를 모두 통과해야 실제 주문으로 이어집니다.
 
-### 위젯 매매기계
+### 위젯 퇴역
 
-위젯 매매기계는 종목별 위젯이 만든 고맥락 신호를 독립된 소규모 실주문 episode로 집행합니다. 현재 core widget과 날짜별 calibration으로 선택된 동적 widget 사양을 사용하며, 정확한 대상은 runtime policy가 소유합니다.
-
-- **매매 목적:** 사람이 위젯에서 확인하던 종목별 신호를 일관된 규칙으로 실행해 짧고 반복 가능한 수익 기회를 놓치지 않습니다.
-- **매매 목표:** 체결가 또는 episode 평균가를 기준으로 정책에 정의된 가까운 목표가를 추구하며, 한 episode의 위험과 주문 수량을 제한합니다.
-- **강점:** 신호 source-quality 검증, 중복 episode 차단, 체결 확인 후 목표가 생성, 정확한 주문번호 기반 취소·정정·청산, 일일 상태 초기화와 main bot owner 격리가 명확합니다.
-
-위젯 매매는 일반 스캐너의 점수 완화 수단이 아닙니다. 위젯이 소유한 신호와 policy가 일치할 때만 동작하고, 전일·수동·다른 전략의 보유수량은 청산하지 않습니다. 자세한 운영 계약은 [Widget Signal Auto Trading Runbook](docs/widget-signal-auto-trading-runbook.md)을 참고합니다.
+위젯 기능의 실행·설치·정책 발행 경로를 제거합니다. Main 삼성전자 고정 감시와 에피소드의 원천·주문 owner는 유지합니다. 과거 위젯 custody 기록은 감사 입력이며 새 주문 권한이 없습니다. [제거계획 및 실행 gate](docs/proposals/widget-full-runtime-postclose-retirement-plan-2026-10-06.md)를 따릅니다.
 
 ### 에피소드 매매기계
 
@@ -81,14 +75,9 @@ AI 호출 성공 여부만 보지 않고 호출, 입력, 판단 결과를 각각
 
 Main AI R0–R3는 변경 요청이 있을 때만 실행하는 작업이 아니라 성숙한 exact 근거로 더 나은 prompt/input을 계속 찾는 offline 연구입니다. #76→#82 v5→#78 optimizer의 환류와 21:05 terminal 후속 갱신을 사용하되, #81 legacy live family는 DISABLED입니다. 지원 KRX V2.14/V2.15의 별도 `entry_setup_live_policy` 승격·PREOPEN·PID receipt 없이는 자동 실적용을 주장하지 않습니다.
 
-### 위젯
+### 퇴역 연구
 
-위젯 튜닝은 종목별 신호가 실제로 체결 가능한 가격에서 반복 이익을 만드는지 검증합니다.
-
-- signal source와 체결·목표 주문의 lineage를 같은 episode로 연결합니다.
-- 진입 가격, target tick, cooldown, episode 종료 조건을 종목·venue별 rolling 결과로 비교합니다.
-- main bot 또는 episode 기계와 같은 종목을 동시에 소유하지 않는지 검증합니다.
-- 적용은 exact-date policy와 rollback 값이 있는 bounded 변경으로 제한합니다.
+위젯 종목·신호·보조판정 연구는 실행하지 않습니다. 과거 결과와 공통 원천은 감사 및 살아 있는 소비자의 재현에 필요한 범위로 보존합니다.
 
 ### 에피소드
 
@@ -113,14 +102,14 @@ Smoothing은 순간적인 tick·호가·OFI/QI 흔들림 때문에 진입·보�
 
 장후 작업은 당일 원천을 검증하고 전용 owner별 평가·승계·정책 발행과 다음 기동 준비를 수행하는 자동화 체인입니다. 핵심 경로는 다음과 같습니다.
 
-설치 예약·stage 의존관계·내부 producer·정책 소비·OFF/퇴역 구성은 [장후작업 현행 활성 목록](docs/audit-reports/2026-09-05-postclose-work-inventory.md), 당일 실행·Acceptance는 checklist가 소유합니다. 실행·복구는 명시적으로 호출된 [장후 지시문](docs/postclose-tuning-result-review-task-instructions.md)을 따릅니다. 문서 현행화는 실행 요청이 아닙니다. ADM/LDM·bucket·greenfield·전용 institutional aggregate와 정규 scalp-sim chain은 퇴역, Swing과 Episode 신규 후보 연구는 OFF입니다. 기존 Widget/Episode 실매매·승인 정책과 real post-sell 관찰은 각 owner에서 유지합니다.
+설치 예약·stage 의존관계·내부 producer·정책 소비·OFF/퇴역 구성은 [장후작업 현행 활성 목록](docs/audit-reports/2026-09-05-postclose-work-inventory.md), 당일 실행·Acceptance는 checklist가 소유합니다. 실행·복구는 명시적으로 호출된 [장후 지시문](docs/postclose-tuning-result-review-task-instructions.md)을 따릅니다. 문서 현행화는 실행 요청이 아닙니다. ADM/LDM·bucket·greenfield·전용 institutional aggregate와 정규 scalp-sim chain은 퇴역, Swing과 Episode 신규 후보 연구는 OFF입니다. 기존 Episode 실매매·승인 정책과 real post-sell 관찰은 각 owner에서 유지합니다.
 
 ```text
 장중 raw event와 broker receipt 종료
   -> source-quality audit
   -> entry / submit / holding / scale-in / exit lifecycle 재구성
   -> Main 승률·full 전략 / compact AI / 전용 family 평가
-  -> 독립 Widget / machine-group stage terminal과 OFF receipt
+  -> 독립 machine-group stage terminal과 OFF receipt
   -> owner별 비용·검증·후보 또는 정상 carry·정책 소비
   -> summary / tower / checklist / strict verifier
   -> 전체 controller DONE
@@ -132,7 +121,7 @@ Smoothing은 순간적인 tick·호가·OFI/QI 흔들림 때문에 진입·보�
 1. **Source-quality preflight:** clean baseline, 필수 필드, venue, 시각, executable price와 provenance를 검증합니다. 결손 row/window를 안정적으로 격리해 정상 입력을 보존하고, 전역 계약 결손·격리 실패는 전체 차단합니다. 예약 stage 전 미생성은 실패가 아닙니다.
 2. **Lifecycle 복기:** 실제 주문, 미진입, probe/residual, scale-in, 부분익절·trailing·최종 청산을 같은 흐름으로 재구성하되 real·sim·source-only를 분리합니다.
 3. **평가:** 기계 v7은 미진입 회복 우선·성공 보존, 보조 v4는 PASS/VETO/CAUTION의 full-cost 비교와 동결 후보 검증을 적용합니다. 새 계약은 10/2 원천의 장후 계산부터이며 갱신 원천은 9/29 이후 적격 자료입니다. 전용 family의 진단·경제성 분모와 source gap을 구분합니다.
-4. **정책 선택:** dated PREOPEN 정책, Main full 전략의 검증된 current/parent CAS, 독립 Widget/Episode 정책은 각 owner의 적용 경계를 따릅니다. 후보 부족·결손은 기존 유효 정책 승계와 원천 수리로 구분하고 정책 선택을 PID 소비로 대신하지 않습니다.
+4. **정책 선택:** dated PREOPEN 정책, Main full 전략의 검증된 current/parent CAS, 독립 Episode 정책은 각 owner의 적용 경계를 따릅니다. 후보 부족·결손은 기존 유효 정책 승계와 원천 수리로 구분하고 정책 선택을 PID 소비로 대신하지 않습니다.
 5. **검증과 종료:** producer/consumer 순서, AI provider, artifact freshness, runtime env와 apply plan을 검증합니다. tower와 마지막 checklist의 exact source hash 및 strict verifier 명령이 성공한 뒤에만 controller가 `DONE`을 표시합니다. 이전 PASS artifact로 새 명령 실패를 숨기지 않습니다.
 
 6. **최종화와 다음 기동:** main wrapper DONE 뒤 독립 작업·전체 controller/strict·cleanup·최종 detector를 확인합니다. 장전 준비 PASS와 전체 장후 완료는 별도이며 실제 PREOPEN/PID·적용 버전의 비용 후 outcome을 자연 receipt로 확인합니다.
@@ -142,7 +131,7 @@ Smoothing은 순간적인 tick·호가·OFI/QI 흔들림 때문에 진입·보�
 ## 안전과 권한 경계
 
 - stale/conflict, price freshness, hard/protect/emergency stop, broker/account/order/quantity/cooldown은 hard safety이며 튜닝이 우회하지 않습니다.
-- `position_sizing_dynamic_formula`가 메인 봇의 신규·추가매수 수량을 소유합니다. 위젯·에피소드 수량은 각 독립 owner의 계약을 따릅니다.
+- `position_sizing_dynamic_formula`가 메인 봇의 신규·추가매수 수량을 소유합니다. 에피소드 수량은 각 독립 owner의 계약을 따릅니다.
 - KRX, `PREMARKET_KRX_LIKE`, NXT 데이터와 성과를 분리합니다.
 - full fill과 partial fill, 실현손익과 매도 후 반사실 기회, real과 sim/source-only 결과를 합산하지 않습니다.
 - AI provider, bot 상태, cap, hard safety 또는 실주문 권한 변경은 리포트 단독으로 실행하지 않습니다.
@@ -155,7 +144,7 @@ KORStockScan/
 ├── src/
 │   ├── bot_main.py                 # 메인 봇 진입점
 │   ├── engine/                     # lifecycle, AI, monitoring, automation
-│   └── trading/                    # 위젯·에피소드 등 독립 주문 owner
+│   └── trading/                    # 에피소드 등 독립 주문 owner
 ├── data/
 │   ├── pipeline_events/            # 장중 raw event
 │   ├── threshold_cycle/            # compact event, apply plan, runtime env
@@ -200,7 +189,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.error_detector --mode full --dry-run
 | [Time-Based Operations Runbook](docs/time-based-operations-runbook.md) | 시간대별 운영 절차와 확인 기준 |
 | [Report Automation Traceability](docs/report-based-automation-traceability.md) | 장후 산출물, consumer와 apply 계약 |
 | [Threshold Cycle README](data/threshold_cycle/README.md) | PREOPEN apply plan과 runtime env |
-| [Widget Runbook](docs/widget-signal-auto-trading-runbook.md) | 위젯 매매 owner와 운영 계약 |
+| [Widget Retirement](docs/widget-signal-auto-trading-runbook.md) | 퇴역 경계와 과거 증거 보존 |
 | [Episode Machines](docs/low-price-two-leg-machines.md) | 종목별 two-leg 에피소드 계약 |
 | [Stage2 Checklist](docs/checklists/README.md) | 날짜별 실행 항목 |
 

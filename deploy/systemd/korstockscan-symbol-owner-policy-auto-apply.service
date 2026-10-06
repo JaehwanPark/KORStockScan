@@ -2,7 +2,7 @@
 Description=KORStockScan Unattended Exact-Date Symbol Owner Policy Apply
 After=network-online.target
 Wants=network-online.target
-Before=korstockscan-widget-signal-auto-trader.service korstockscan-samsung-morning-one-share.service korstockscan-samsung-midday-one-share.service korstockscan-samsung-afternoon-one-share.service
+Before=korstockscan-samsung-morning-one-share.service korstockscan-samsung-midday-one-share.service korstockscan-samsung-afternoon-one-share.service
 
 [Service]
 Type=oneshot

@@ -202,7 +202,6 @@ from src.engine import kiwoom_orders
 from src.engine.kiwoom_websocket import (
     COMMAND_MICRO_REVERSION_OBSERVATION_SET,
     KiwoomWSManager,
-    pinned_ws_observation_items,
 )
 from src.engine.signal_radar import SniperRadar
 from src.engine.ai_engine_openai import GPTSniperEngine, OpenAIDualPersonaShadowEngine
@@ -12795,16 +12794,13 @@ def run_sniper(is_test_mode=False):
     priority_codes, scanner_boot_codes = _initial_ws_registration_groups(
         targets, now_ts=time.time()
     )
-    widget_observation_items = list(pinned_ws_observation_items())
-    boot_priority_items = widget_observation_items + [
-        item for item in priority_codes if item not in widget_observation_items
-    ]
+    boot_priority_items = list(priority_codes)
     if boot_priority_items:
         event_bus.publish(
             "COMMAND_WS_REG",
             {
                 "codes": boot_priority_items,
-                "source": "sniper_boot_priority_and_widget_observation_ws_budget",
+                "source": "sniper_boot_priority_ws_budget",
             },
         )
     if scanner_boot_codes:

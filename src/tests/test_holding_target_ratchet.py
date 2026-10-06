@@ -15,7 +15,8 @@ from src.tests.test_machine_adaptive_exit_broker import DATE, TARGET, detail, cu
 from src.trading.config.machine_target_ratchet_policy import FAMILY, PATH_ENV, HASH_ENV
 from src.trading.order import target_ratchet as ratchet
 from src.trading.market.target_pressure import CONTRACT
-from src.trading.widget_auto_trade.engine import KST
+from zoneinfo import ZoneInfo
+KST = ZoneInfo("Asia/Seoul")
 
 
 @pytest.fixture
@@ -26,7 +27,7 @@ def enabled(running, tmp_path, monkeypatch):  # noqa: F811 -- imported pytest fi
         enabled=True,
         valid_from=DATE + "T00:00:00+09:00",
         valid_until="2026-09-11T00:00:00+09:00",
-        owners=["episode", "widget_auto_trade"],
+        owners=["episode"],
         round_trip_cost_pct=0.23,
         slippage_bps=5,
         cost_source_sha256="c" * 64,
@@ -57,19 +58,7 @@ def enabled(running, tmp_path, monkeypatch):  # noqa: F811 -- imported pytest fi
         if r.owner == "episode"
         else r.machine._state["symbols"]["005930"]
     )
-    if r.owner == "widget":
-        # Exercise run_once's payload branch; source EXIT has been resolved by
-        # its original consumer before the shared exit hook is eligible.
-        from src.trading.order.profit_stagnation_owners import widget_symbol
-
-        r.machine.snapshot_loader = lambda _: {"test_source": True}
-        monkeypatch.setattr(
-            r.machine,
-            "process_payload",
-            lambda spec, payload, now: widget_symbol(
-                r.machine, r.record_ratchet(), now, allow_new_target_ratchet=True
-            ),
-        )
+    pass
     return r
 
 
@@ -118,12 +107,8 @@ def test_original_owner_amends_one_tick_and_recovers_ack(enabled):
     tick(r)
     row = r.record_ratchet()
     assert ratchet.KEY not in row
-    if r.owner == "episode":
-        assert row["target_order_no"] == "0000003"
-        assert row["target_price"] == 10110
-    else:
-        assert row["orders"][-1]["order_no"] == "0000003"
-        assert row["orders"][-1]["limit_price"] == 10110
+    assert row["target_order_no"] == "0000003"
+    assert row["target_price"] == 10110
     # Hash chain can be reread and registry still owns exactly 10 shares.
     claim = row["holding_target_history"][-1]
     assert (
@@ -137,49 +122,8 @@ def test_original_owner_amends_one_tick_and_recovers_ack(enabled):
     assert "ai" not in claim
 
 
-def test_widget_released_unsent_attempt_does_not_block_target_amendment(enabled):
-    if enabled.owner != "widget":
-        return
-    from copy import deepcopy
-    from src.tests.test_profit_stagnation_exit import unsent_widget_buy
-
-    state = enabled.record_ratchet()
-    unsent = unsent_widget_buy(state["orders"][0])
-    unsent["intent_created_at"] = "2026-09-09T12:00:00+09:00"
-    before = deepcopy(unsent)
-    state["orders"].insert(0, unsent)
-    tick(enabled)
-    assert len(amendments(enabled)) == 1
-    assert amendments(enabled)[0]["payload"]["mdfy_qty"] == "10"
-    claim = state[ratchet.KEY]
-    assert claim["binding"]["entry_price"] == 10000
-    assert claim["binding"]["entered_at"] == DATE + "T12:59:00+09:00"
-    assert state["orders"][0] == before
-    tick(enabled)
-    assert len(amendments(enabled)) == 1
 
 
-@pytest.mark.parametrize("change", [
-    {"status": "AMBIGUOUS"}, {"status": "SUBMITTED"},
-    {"broker_accepted": True}, {"actual_order_submitted": None},
-    {"filled_qty": 1}, {"order_no": "0000006"},
-    {"owner_registry_reconciliation_required": True},
-])
-@pytest.mark.parametrize("same_signal", [True, False])
-def test_widget_unproven_unsent_blocks_target_amendment(enabled, change, same_signal):
-    if enabled.owner != "widget":
-        return
-    from src.tests.test_profit_stagnation_exit import unsent_widget_buy
-
-    state = enabled.record_ratchet()
-    unsent = unsent_widget_buy(state["orders"][0])
-    unsent.update(change)
-    if not same_signal:
-        unsent["signal_id"] = "other"
-    state["orders"].insert(0, unsent)
-    tick(enabled)
-    assert not amendments(enabled)
-    assert ratchet.KEY not in state
 
 
 def test_ws_trigger_never_calls_holding_ai(enabled, monkeypatch):
@@ -355,7 +299,6 @@ def test_off_policy_preserves_original_sleep_without_probe(enabled, monkeypatch)
 
 def test_production_owner_loop_uses_pressure_wait(enabled, monkeypatch):
     from src.trading.order import regular_two_leg_machine
-    from src.trading.widget_auto_trade import engine
 
     class StopLoop(Exception):
         pass
@@ -367,7 +310,7 @@ def test_production_owner_loop_uses_pressure_wait(enabled, monkeypatch):
         raise StopLoop
 
     monkeypatch.setattr(enabled.machine, "run_once", lambda: {"status": "RUNNING"})
-    module = regular_two_leg_machine if enabled.owner == "episode" else engine
+    module = regular_two_leg_machine
     monkeypatch.setattr(module, "wait_for_pressure", waited)
     with pytest.raises(StopLoop):
         if enabled.owner == "episode":
@@ -416,13 +359,8 @@ def test_rejection_stops_ratchets_without_inventing_fill(enabled):
     for _ in range(3):
         tick(r)
     assert len(amendments(r)) == 1
-    if r.owner == "episode":
-        assert row["target_filled_qty"] == 0
-        assert row["position_qty"] == 10
-    else:
-        target = next(o for o in row["orders"] if o["order_no"] == TARGET.order_no)
-        assert target["filled_qty"] == 0
-        assert target["status"] == "SUBMITTED"
+    assert row["target_filled_qty"] == 0
+    assert row["position_qty"] == 10
 
 
 @pytest.mark.parametrize(
@@ -569,14 +507,8 @@ def test_partial_fill_race_is_preserved_without_second_amendment(enabled):
     tick(r)
     assert len(amendments(r)) == 1
     state = r.record_ratchet()
-    if r.owner == "episode":
-        assert ratchet.KEY in state
-        assert "exact_episode_recovery" in state["holding_target_status"]
-    else:
-        assert ratchet.KEY not in state
-        assert state["orders"][-2]["filled_qty"] == 1
-        assert state["orders"][-1]["requested_qty"] == 9
-        assert state["orders"][-2]["fill_price"] is None
+    assert ratchet.KEY in state
+    assert "exact_episode_recovery" in state["holding_target_status"]
 
 
 def test_original_exit_and_lock_dominate(enabled):
@@ -585,21 +517,11 @@ def test_original_exit_and_lock_dominate(enabled):
     tick(r)
     assert amendments(r) == []
     r.flags["lock"] = True
-    if r.owner == "widget":
-        r.record_ratchet()["exit_requested"] = True
-    else:
-        r.flags["guard"] = False
+    r.flags["guard"] = False
     tick(r)
     assert amendments(r) == []
 
 
-def test_missing_widget_source_does_not_start_amendment(enabled):
-    r = enabled
-    if r.owner != "widget":
-        return
-    r.machine.snapshot_loader = lambda _: None
-    tick(r)
-    assert amendments(r) == []
 
 
 def test_restart_reads_durable_claim_and_never_resubmits(enabled):

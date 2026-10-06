@@ -26,7 +26,7 @@ class OwnerScope:
 
     def __post_init__(self):
         if (
-            self.owner not in ("widget", "episode")
+            self.owner != "episode"
             or not self.profile
             or not self.session
             or not self.symbol.isascii()
@@ -98,67 +98,30 @@ def normalize_observation(
     return clock, snapshot
 
 
-def catalog_from_owner_inventories(
-    widget_symbols: Mapping,
-    episode_profiles: Mapping,
-    *,
-    errors: list[str] | None = None,
-) -> tuple[OwnerScope, ...]:
-    """Use the existing producer's complete catalog, including zero-anchor rows.
-
-    Research-only symbols and quarantined profiles remain visible in the
-    denominator. Catalog inclusion grants neither entry nor exit authority.
-    """
-    scopes: set[OwnerScope] = set()
-    for owner, inventory in (("widget", widget_symbols), ("episode", episode_profiles)):
-        if not isinstance(inventory, Mapping):
-            if errors is None:
-                raise ValueError("owner_inventory_missing")
-            errors.append(owner + ":owner_inventory_missing")
-            continue
-        for identity, row in inventory.items():
-            if errors is not None:
-                try:
-                    singleton = {identity: row}
-                    scopes.update(
-                        catalog_from_owner_inventories(
-                            singleton if owner == "widget" else {},
-                            singleton if owner == "episode" else {},
-                        )
-                    )
-                except (ValueError, TypeError, AttributeError) as exc:
-                    errors.append(f"{owner}:{identity}:{exc}")
-                continue
+def catalog_from_owner_inventories(episode_profiles: Mapping, *, errors: list[str] | None = None) -> tuple[OwnerScope, ...]:
+    """Keep the full surviving episode denominator, including zero-anchor profiles."""
+    if not isinstance(episode_profiles, Mapping):
+        if errors is None:
+            raise ValueError("owner_inventory_missing")
+        errors.append("episode:owner_inventory_missing")
+        return ()
+    scopes = set()
+    for identity, row in episode_profiles.items():
+        try:
             if not isinstance(row, Mapping):
                 raise ValueError("owner_inventory_row_invalid")
-            symbol = row.get("symbol", identity if owner == "widget" else None)
-            bindings = set()
-            contexts = row.get("session_contexts")
-            if owner == "widget" and isinstance(contexts, Mapping):
-                for scope_id, context in contexts.items():
-                    if (
-                        not isinstance(context, Mapping)
-                        or not isinstance(scope_id, str)
-                        or ":" not in scope_id
-                    ):
-                        raise ValueError("widget_session_inventory_invalid")
-                    session = scope_id.rsplit(":", 1)[-1]
-                    for venue in context.get("expected_venues") or []:
-                        bindings.add((scope_id, session, venue))
-            else:
-                session = row.get("session")
-                for venue in row.get("expected_venues") or []:
-                    bindings.add((str(identity), session, venue))
-            if not bindings:
+            symbol, session = row.get("symbol"), row.get("session")
+            routes = row.get("expected_venues") or []
+            if not routes or not isinstance(session, str) or not session:
                 raise ValueError("owner_route_session_inventory_missing")
-            for profile, session, route in bindings:
-                if not isinstance(session, str) or not session:
-                    raise ValueError("owner_session_missing")
-                scopes.add(
-                    OwnerScope(
-                        owner, str(profile), str(symbol), str(route), str(session)
-                    )
-                )
+            for route in routes:
+                scope = OwnerScope("episode", str(identity), symbol, route, session)
+                # Preserve the original scope schema and validation gate.
+                scopes.add(scope)
+        except (ValueError, TypeError, AttributeError) as exc:
+            if errors is None:
+                raise
+            errors.append(f"episode:{identity}:{exc}")
     return tuple(sorted(scopes))
 
 

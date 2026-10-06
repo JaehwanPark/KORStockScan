@@ -3,7 +3,7 @@
 The offline evaluator consumes already-normalized checkpoint evidence and has
 no runtime authority.  A separately applied exact-date policy may reuse the
 same state transition against the read-only WS snapshot to choose only the
-timing of an existing widget or episode signal.  Neither path owns market-data
+timing of an existing Main or episode signal.  Neither path owns market-data
 subscriptions, prices, quantities, targets, exits, custody, or broker safety.
 Future observations never leak into an earlier checkpoint.
 """
@@ -147,7 +147,7 @@ def dynamic_policy_for_scope(
 
         return replace(SAMSUNG_RISE_REBOUND_POLICY, feature_arm=feature_arm)
     if feature_arm != "combined":
-        if owner != "widget" or symbol != "005930":
+        if owner != "main_scalping" or symbol != "005930":
             raise ValueError("feature ablation outside Samsung scope")
         from dataclasses import replace
 
@@ -171,7 +171,7 @@ def modeled_dynamic_target_price(
     baseline_fill_price: Any,
     owner_target_price: Any,
     checkpoint_ask: Any,
-    widget_take_profit: bool,
+    target_from_fill: bool,
 ) -> float | None:
     """Preserve the existing owner's target ratio/ticks at a replay entry price."""
 
@@ -179,8 +179,8 @@ def modeled_dynamic_target_price(
     target = _finite(owner_target_price)
     entry = _finite(checkpoint_ask)
     if (
-        owner not in {"widget", "episode"}
-        or not isinstance(widget_take_profit, bool)
+        owner not in {"main_scalping", "episode"}
+        or not isinstance(target_from_fill, bool)
         or baseline is None
         or baseline <= 0
         or target is None
@@ -208,7 +208,7 @@ def modeled_dynamic_target_price(
         if target_ticks is None:
             return None
         return float(move_price_by_ticks(int(entry), target_ticks))
-    if widget_take_profit:
+    if target_from_fill:
         if not entry.is_integer():
             return None
         raw_target = entry * (target / baseline)
@@ -233,7 +233,7 @@ def build_dynamic_micro_confirmation_checkpoints(
     owner_entry_limit_price: Any,
     owner_target_price: Any,
     round_trip_cost_pct: Any,
-    widget_take_profit: bool,
+    target_from_fill: bool,
 ) -> dict[int, dict[str, Any]]:
     """Build causal replay inputs from persisted BBO and 0B/0D parents.
 
@@ -468,7 +468,7 @@ def build_dynamic_micro_confirmation_checkpoints(
             baseline_fill_price=baseline_fill_price,
             owner_target_price=owner_target_price,
             checkpoint_ask=checkpoint_ask,
-            widget_take_profit=widget_take_profit,
+            target_from_fill=target_from_fill,
         )
         net_edge_after_cost_bps = (
             round(
@@ -862,7 +862,7 @@ def build_live_dynamic_confirmation_checkpoint(
     owner_entry_limit_price: Any,
     owner_target_price: Any,
     round_trip_cost_pct: Any,
-    widget_take_profit: bool,
+    target_from_fill: bool,
     anchor_best_bid: Any = None,
     prior_checkpoint_bids: Any = (),
     policy: DynamicConfirmationPolicy = DEFAULT_DYNAMIC_CONFIRMATION_POLICY,
@@ -1051,7 +1051,7 @@ def build_live_dynamic_confirmation_checkpoint(
             baseline_fill_price=baseline_fill_price,
             owner_target_price=owner_target_price,
             checkpoint_ask=current_ask,
-            widget_take_profit=widget_take_profit,
+            target_from_fill=target_from_fill,
         )
         cost_pct = _finite(round_trip_cost_pct)
         net_edge = (
@@ -1238,7 +1238,7 @@ def advance_live_dynamic_confirmation(
     owner_entry_limit_price: Any,
     owner_target_price: Any,
     round_trip_cost_pct: Any,
-    widget_take_profit: bool,
+    target_from_fill: bool,
     scope_id: str = "",
     snapshot_path: Path | str | None = None,
     feature_arm: str = "combined",
@@ -1269,7 +1269,7 @@ def advance_live_dynamic_confirmation(
         owner_entry_limit_price=owner_entry_limit_price,
         owner_target_price=owner_target_price,
         round_trip_cost_pct=round_trip_cost_pct,
-        widget_take_profit=widget_take_profit,
+        target_from_fill=target_from_fill,
         anchor_best_bid=(prior_anchor or {}).get("best_bid"),
         prior_checkpoint_bids=[
             value.get("best_bid")

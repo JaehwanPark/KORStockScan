@@ -60,21 +60,14 @@ def installed_producer_terminal_states(
     runner = runner or subprocess.run
     result = {}
     owner_sources = {
-        "korstockscan-samsung-widget-evaluation.service": (
-            "widget_advisory_calibration",
-            "widget_auto_trade_policy_calibration",
-            "widget_symbol_signal_policy_research",
-            "widget_symbol_runtime_policy_apply",
-        ),
         "korstockscan-machine-microstructure-final-refresh.service": (
-            "widget_collector_expansion_recommendation",
             "machine_microstructure_attribution",
             "machine_entry_timing_tuning",
             "machine_microstructure_policy_approval",
         ),
     }
     for unit, labels in owner_sources.items():
-        owner = "widget" if "widget-evaluation" in unit else "machine"
+        owner = "machine"
         receipt_path = producer_receipt_path(report_dir, target_date, owner)
         if receipt_path.exists():
             receipt = _load_json(receipt_path)
@@ -199,7 +192,7 @@ def source_paths(report_dir: Path, target_date: str, consumer: str) -> dict[str,
             paths.update({f'stage_{stage}':stage_path(report_dir, target_date, stage)
                 for stage in active_stage_names(target_date) if stage != 'summary_handoff'})
             return paths
-        for owner in ("widget", "machine"):
+        for owner in ("machine",):
             path = producer_receipt_path(report_dir, target_date, owner)
             if path.exists():
                 paths[f"independent_{owner}_terminal"] = path
@@ -680,11 +673,9 @@ def verify_summary_handoff(
 # Independent producer receipts survive manual historical recovery and do not
 # depend on systemd's most recent (possibly different-date) invocation.
 INDEPENDENT_SOURCES = {
-    "widget": ("widget_advisory_calibration", "widget_auto_trade_policy_calibration",
-               "widget_symbol_signal_policy_research", "widget_symbol_runtime_policy_apply"),
-    "machine": ("widget_collector_expansion_recommendation", "machine_microstructure_attribution",
-                "machine_entry_timing_tuning", "machine_microstructure_policy_approval",
-                "market_weakness_hysteresis_tuning", "machine_research_closed_loop"),
+    "machine": ("machine_microstructure_attribution", "machine_entry_timing_tuning",
+                "machine_microstructure_policy_approval", "market_weakness_hysteresis_tuning",
+                "machine_research_closed_loop"),
 }
 
 
@@ -693,85 +684,26 @@ def producer_receipt_path(report_dir: Path, day: str, owner: str) -> Path:
 
 
 def producer_receipt_issues(report_dir: Path, day: str, owner: str) -> list[str]:
+    if owner not in INDEPENDENT_SOURCES:
+        raise ValueError("retired_or_unknown_postclose_owner")
     from src.engine.verify_threshold_cycle_postclose_chain import _sha
     if any(stage_path(report_dir, day, s).exists() for s in STAGE_REGISTRY):
-        return [issue for stage in STAGE_OWNER_GROUPS[owner] for issue in stage_receipt_issues(report_dir, day, stage)]
+        return [issue for stage in STAGE_OWNER_GROUPS[owner]
+                for issue in stage_receipt_issues(report_dir, day, stage)]
     value = _load_json(producer_receipt_path(report_dir, day, owner))
     if (value.get("status") != "succeeded" or value.get("target_date") != day
         or value.get("owner") != owner or type(value.get("exit_code")) is not int
         or value.get("exit_code") != 0 or not value.get("run_id")
         or not re.fullmatch(r"[0-9a-f]{40}", str(value.get("code_commit") or ""))):
         return [f"{owner}:terminal_missing_or_invalid"]
-    sources = value.get("sources") or {}
     issues = []
-    refreshed = {}
-    if owner == "widget":
-        machine = _load_json(producer_receipt_path(report_dir, day, "machine"))
-        upstream = machine.get("upstream_widget") or {}
-        if upstream.get("sha256") == _sha(producer_receipt_path(report_dir, day, "widget")) and not producer_receipt_issues(report_dir, day, "machine"):
-            refreshed = machine.get("refreshed_widget_sources") or {}
-    elif value.get("upstream_widget"):
-        from src.engine.automation.machine_research_closed_loop_refresh import validate_current_receipt
-        closure = sources.get("machine_research_closed_loop") or {}
-        if not validate_current_receipt(_load_json(Path(closure.get("path") or "")), day):
-            issues.append("machine:study_refresh_receipt_invalid")
     for label in INDEPENDENT_SOURCES[owner]:
-        row = sources.get(label) or {}
-        current = _sha(Path(row.get("path") or ""))
-        if not row.get("sha256") or current != row["sha256"]:
-            adopted = refreshed.get(label) or {}
-            if (label in {"widget_symbol_signal_policy_research", "widget_symbol_runtime_policy_apply"}
-                and adopted.get("origin_sha256") == row.get("sha256")
-                and adopted.get("sha256") == current and current):
-                continue
+        row = (value.get("sources") or {}).get(label) or {}
+        if not row.get("sha256") or _sha(Path(row.get("path") or "")) != row["sha256"]:
             issues.append(f"{owner}:source_hash_invalid:{label}")
     return issues
 
 
-def _verified_machine_refresh_retry(report_dir: Path, day: str, previous: dict, issues: list[str]) -> bool:
-    """Permit rebuilding a completed attempt, never infer terminal success."""
-    from src.engine.verify_threshold_cycle_postclose_chain import _sha
-    from src.engine.automation.machine_research_closed_loop_refresh import validate_current_receipt
-    allowed = {f"widget:source_hash_invalid:{label}" for label in (
-        "widget_symbol_signal_policy_research", "widget_symbol_runtime_policy_apply")}
-    widget_path = producer_receipt_path(report_dir, day, "widget")
-    upstream = previous.get("upstream_widget") or {}
-    if (not issues or not set(issues) <= allowed or previous.get("status") not in {"failed", "succeeded"}
-        or previous.get("owner") != "machine" or previous.get("target_date") != day
-        or not previous.get("run_id") or type(previous.get("exit_code")) is not int
-        or (previous.get("exit_code") == 0) != (previous.get("status") == "succeeded")
-        or not re.fullmatch(r"[0-9a-f]{40}", str(previous.get("code_commit") or ""))
-        or upstream.get("sha256") != _sha(widget_path)
-        or upstream.get("sources") != _load_json(widget_path).get("sources")):
-        return False
-    closure_path = report_dir / "machine_research_closed_loop" / f"machine_research_closed_loop_{day}.json"
-    closure = _load_json(closure_path)
-    if validate_current_receipt(closure, day):
-        return True
-    # A main retry or a code repair can invalidate other closure dependencies.
-    # Authenticate only the completed widget handoff to permit reconstruction;
-    # finished/succeeded still requires a fully current closure receipt.
-    from src.engine.automation.machine_research_closed_loop_refresh import validate_receipt
-    from src.engine.monitoring import research_closed_loop as loop
-    if not validate_receipt(closure, day):
-        return False
-    try:
-        row = upstream["sources"]["widget_symbol_signal_policy_research"]
-        source = Path(row["path"])
-        if loop.digest(loop.read_object(source, limit=64 * 1024 * 1024)) != closure["dependency_sources"].get(str(source.resolve())):
-            return False
-        publication = closure["publications"]["widget"]
-        directory = Path(publication["directory"])
-        effective = date.fromisoformat(publication["effective_date"])
-        manifest = loop.read_object(directory / f"research_publication_{effective}.json")
-        if manifest["generation_sha256"] != publication["generation_sha256"]:
-            return False
-        for name in manifest["files"]:
-            loop.verify_publication(directory, effective_date=effective, name=name,
-                                    value=loop.read_object(directory / name, limit=32 * 1024 * 1024))
-        return True
-    except (OSError, ValueError, TypeError, KeyError):
-        return False
 
 
 def machine_input_issues(report_dir: Path, day: str) -> list[str]:
@@ -781,11 +713,7 @@ def machine_input_issues(report_dir: Path, day: str) -> list[str]:
     success: final main verification may itself consume machine evidence.
     """
     from src.engine.automation.postclose_recommendation_intake import _report_date
-    issues = producer_receipt_issues(report_dir, day, "widget")
-    if issues and _verified_machine_refresh_retry(
-        report_dir, day, _load_json(producer_receipt_path(report_dir, day, "machine")), issues
-    ):
-        issues = []
+    issues = []
     main = _load_json(report_dir / "threshold_cycle_postclose_status" /
                       f"threshold_cycle_postclose_{day}.status.json")
     if main.get("status") == "running":
@@ -820,83 +748,41 @@ def wait_for_machine_inputs(report_dir: Path, day: str, *, timeout: float, poll:
 
 
 def _producer_main(argv=None) -> int:
-    import argparse
-    import os
-    import uuid
-    from datetime import date, datetime
+    import argparse, os, uuid
+    from datetime import datetime
     from zoneinfo import ZoneInfo
     from src.utils.constants import DATA_DIR, PROJECT_ROOT
     from src.engine.verify_threshold_cycle_postclose_chain import _atomic_write, _sha
     from src.engine.automation.postclose_recommendation_intake import source_paths, _report_date
-    parser = argparse.ArgumentParser(description="Record existing independent postclose owner execution")
+    parser = argparse.ArgumentParser(description="Record surviving independent postclose execution")
     parser.add_argument("--owner", choices=sorted(INDEPENDENT_SOURCES), required=True)
     parser.add_argument("--date", required=True, type=date.fromisoformat)
     parser.add_argument("--phase", choices=("started", "finished", "wait-inputs"), required=True)
     parser.add_argument("--source-wait-sec", type=float, default=43200)
     parser.add_argument("--exit-code", type=int, default=0)
-    parser.add_argument("--reuse-widget-prefix", action="store_true")
     args = parser.parse_args(argv)
-    day = args.date.isoformat()
+    day = str(args.date)
     if args.date > datetime.now(ZoneInfo("Asia/Seoul")).date():
         parser.error("future source date is not supported")
     report_dir = DATA_DIR / "report"
     if args.phase == "wait-inputs":
-        if args.owner != "machine":
-            parser.error("wait-inputs is only supported for machine")
         return wait_for_machine_inputs(report_dir, day, timeout=args.source_wait_sec)
     path = producer_receipt_path(report_dir, day, args.owner)
-    value = _load_json(path)
     now = datetime.now(ZoneInfo("Asia/Seoul")).isoformat()
     if args.phase == "started":
-        upstream_widget = None
-        if args.owner == "machine":
-            widget_path = producer_receipt_path(report_dir, day, "widget")
-            if widget_path.exists():
-                widget_issues = producer_receipt_issues(report_dir, day, "widget")
-                if widget_issues and not _verified_machine_refresh_retry(report_dir, day, value, widget_issues):
-                    raise RuntimeError("machine_upstream_widget_terminal_invalid")
-                upstream_widget = dict(path=str(widget_path), sha256=_sha(widget_path),
-                                       sources=_load_json(widget_path)["sources"])
-        reuse = None
-        if args.reuse_widget_prefix:
-            if args.owner != "widget" or value.get("target_date") != day or not value.get("run_id"):
-                raise RuntimeError("widget_prefix_predecessor_missing")
-            old_commit = str(value.get("code_commit") or "")
-            if not re.fullmatch(r"[0-9a-f]{40}", old_commit):
-                raise RuntimeError("widget_prefix_code_identity_invalid")
-            changed = subprocess.check_output(["git", "-C", str(PROJECT_ROOT), "diff", "--name-only", old_commit, "HEAD", "--", "src"], text=True).splitlines()
-            allowed = {"src/engine/monitoring/widget_symbol_signal_policy_research.py",
-                       "src/engine/automation/postclose_summary_handoff.py",
-                       # The advisory/auto-policy prefix does not consume the
-                       # joint research allocator; signal research revalidates it.
-                       "src/engine/monitoring/research_closed_loop.py",
-                       "src/engine/monitoring/machine_candidate_lifecycle.py",
-                       "src/engine/automation/machine_research_closed_loop_refresh.py",
-                       "src/engine/monitoring/low_price_two_leg_expanded_candidate_research.py"}
-            changed = [name for name in changed if not name.startswith("src/tests/")]
-            if set(changed) - allowed:
-                raise RuntimeError("widget_prefix_dependency_revision_requires_revalidation")
-            retained = {}
-            for label in INDEPENDENT_SOURCES["widget"][:2]:
-                row = ((value.get("sources") or {}).get(label)
-                       or ((value.get("reused_prefix") or {}).get("sources") or {}).get(label) or {})
-                path_ = Path(row.get("path") or "")
-                if not row.get("sha256") or _sha(path_) != row["sha256"] or _report_date(_load_json(path_)) != day:
-                    raise RuntimeError("widget_prefix_source_generation_mismatch")
-                retained[label] = row
-            reuse = dict(run_id=value["run_id"], code_commit=old_commit, sources=retained,
-                         reason="unchanged_completed_prefix_and_dependencies")
-        if value:
+        previous = _load_json(path)
+        if previous:
             old = path.parent / "attempts" / f"{args.owner}_{day}_{uuid.uuid4().hex}.json"
-            _atomic_write(old, json.dumps(value, indent=2) + "\n")
-        value = dict(schema="postclose_producer_terminal_v1", owner=args.owner,
-                     target_date=day, status="running", run_id=uuid.uuid4().hex,
-                     started_at=now, code_root=str(PROJECT_ROOT),
-                     code_commit=subprocess.check_output(["git", "-C", str(PROJECT_ROOT), "rev-parse", "HEAD"], text=True).strip(),
-                     wrapper_pid=os.getppid(), runtime_effect=False, reused_prefix=reuse, upstream_widget=upstream_widget)
+            _atomic_write(old, json.dumps(previous, indent=2) + "\n")
+        value = dict(schema="postclose_producer_terminal_v2", target_date=day, owner=args.owner,
+            status="running", run_id=uuid.uuid4().hex, started_at=now, wrapper_pid=os.getppid(),
+            code_commit=subprocess.check_output(["git", "-C", str(PROJECT_ROOT), "rev-parse", "HEAD"], text=True).strip(),
+            runtime_effect=False)
     else:
-        if value.get("status") != "running" or value.get("wrapper_pid") != os.getppid():
-            raise RuntimeError("producer_run_identity_mismatch")
+        value = _load_json(path)
+        if (value.get("owner") != args.owner or value.get("target_date") != day
+            or value.get("status") != "running" or value.get("wrapper_pid") != os.getppid()):
+            raise RuntimeError("producer_started_receipt_missing")
         paths = source_paths(report_dir, day)
         sources, issues = {}, []
         for label in INDEPENDENT_SOURCES[args.owner]:
@@ -905,33 +791,17 @@ def _producer_main(argv=None) -> int:
             sources[label] = dict(path=str(source.resolve()), sha256=_sha(source))
             if not sources[label]["sha256"] or _report_date(payload) != day:
                 issues.append(f"source_missing_or_date_invalid:{label}")
-        if args.owner == "machine" and value.get("upstream_widget") and args.exit_code == 0:
-            from src.engine.automation.machine_research_closed_loop_refresh import validate_current_receipt
-            upstream = value["upstream_widget"]
-            if _sha(Path(upstream["path"])) != upstream["sha256"] or not validate_current_receipt(
-                _load_json(Path(sources["machine_research_closed_loop"]["path"])), day
-            ):
-                issues.append("machine_widget_refresh_provenance_invalid")
-            refreshed = {}
-            for label, row in upstream["sources"].items():
-                current = _sha(Path(row["path"]))
-                if current != row["sha256"]:
-                    if label not in {"widget_symbol_signal_policy_research", "widget_symbol_runtime_policy_apply"} or not current:
-                        issues.append(f"unexpected_widget_source_change:{label}")
-                    else:
-                        refreshed[label] = dict(origin_sha256=row["sha256"], sha256=current)
-            value["refreshed_widget_sources"] = refreshed
         value.update(status="succeeded" if args.exit_code == 0 and not issues else "failed",
-                     exit_code=args.exit_code if args.exit_code else (1 if issues else 0),
-                     sources=sources, issues=issues, finished_at=now)
-    _atomic_write(path, json.dumps(value, indent=2) + "\n")
+            exit_code=args.exit_code if args.exit_code else (1 if issues else 0),
+            sources=sources, issues=issues, finished_at=now)
+    _atomic_write(path, json.dumps(value, indent=2)+"\n")
     return 0 if value["status"] != "failed" else 1
 
 
 # Stage registry is shared by dispatch, summary, verifier and controller. Legacy
 # v1 terminals remain readable, but never synthesize a successful v2 stage.
-STAGE_SCHEMA = 'postclose_stage_terminal_v2'
-# Episode/widget research reports can legitimately exceed the legacy 32 MiB
+STAGE_SCHEMA = 'postclose_stage_terminal_v3'
+# Episode research reports can legitimately exceed the legacy 32 MiB
 # validation bound. Keep the read bounded while matching the producer's
 # existing artifact-size contract.
 FAMILY_ARTIFACT_MAX_BYTES = 64 * 1024 * 1024
@@ -941,14 +811,12 @@ STAGE_REGISTRY = {
     'legacy_machine_report': ((), ('ai_decision_action_outcome_calibration',)),
     'main_auxiliary_policy': (('outcome_labels', 'legacy_machine_report'), ('compact_auxiliary_paired_economic',)),
     'outcome_labels': ((), ('ai_decision_outcome_labels',)),
-    'widget_policy': ((), ('widget_advisory_calibration', 'widget_auto_trade_policy_calibration', 'widget_symbol_signal_policy_research', 'widget_symbol_runtime_policy_apply', 'widget_policy_refresh')),
     'episode_policy': ((), ('low_price_two_leg_expanded_candidate_research', 'episode_policy_refresh')),
-    'collector_recommendation': (('outcome_labels',), ('widget_collector_expansion_recommendation',)),
     'machine_attribution': ((), ('machine_microstructure_attribution',)),
     'machine_timing': (('machine_attribution',), ('machine_entry_timing_tuning',)),
     'market_weakness': (('machine_attribution',), ('market_weakness_hysteresis_tuning',)),
     'research_capacity': ((), ('research_native_capacity',)),
-    'research_allocation': (('widget_policy', 'episode_policy', 'research_capacity'), ('machine_research_closed_loop',)),
+    'research_allocation': (('episode_policy', 'research_capacity'), ('machine_research_closed_loop',)),
     'legacy_policy_approval': (('machine_attribution',), ('machine_microstructure_policy_approval',)),
     'summary_handoff': ((), ('postclose_done_controller',)),
 }
@@ -959,8 +827,7 @@ def active_stage_names(day):
     return tuple(stage for stage in STAGE_REGISTRY
                  if stage != 'pre_submit_delay' or day >= '2026-09-23')
 STAGE_OWNER_GROUPS = {
-    'widget': ('widget_policy',),
-    'machine': ('collector_recommendation', 'machine_attribution', 'machine_timing',
+    'machine': ('machine_attribution', 'machine_timing',
                 'market_weakness', 'research_allocation', 'legacy_policy_approval',
                 'main_machine_policy', 'main_auxiliary_policy', 'legacy_machine_report', 'outcome_labels', 'episode_policy', 'research_capacity'),
 }
@@ -983,7 +850,6 @@ def stage_artifacts(report_dir, day, stage):
     paths['research_native_capacity'] = Path(report_dir).parent / 'runtime' / 'machine_research_closed_loop' / f'capacity_source_{day}.json'
     paths['pre_submit_delay_tuning'] = Path(report_dir) / 'pre_submit_delay_tuning' / f'pre_submit_delay_tuning_{day}.json'
     paths['pre_submit_delay_policy'] = Path(report_dir).parent / 'threshold_cycle' / 'pre_submit_delay_policy' / f'pre_submit_delay_policy_{day}.json'
-    paths['widget_policy_refresh'] = Path(report_dir) / 'machine_research_closed_loop' / f'widget_policy_refresh_{day}.json'
     paths['episode_policy_refresh'] = Path(report_dir) / 'machine_research_closed_loop' / f'episode_policy_refresh_{day}.json'
     return {name: paths.get(name, Path(report_dir) / name / f'{name}_{day}.json') for name in STAGE_REGISTRY[stage][1]}
 
@@ -1086,30 +952,6 @@ def reseal_summary_handoff_for_final_controller(report_dir, day, controller_path
     return True
 
 
-def _collector_history_issues(report_dir, day):
-    from src.engine.monitoring.widget_collector_expansion_recommendation import history_input_manifest
-    report = _load_json(stage_artifacts(report_dir, day, 'collector_recommendation')[
-        'widget_collector_expansion_recommendation'])
-    source = report.get('source') if isinstance(report.get('source'), dict) else {}
-    saved = source.get('history_input_manifest')
-    if not isinstance(saved, dict) or saved.get('schema') != 'collector_history_input_manifest_v1':
-        return ['collector_recommendation:history_manifest_missing']
-    entries = saved.get('entries')
-    if not isinstance(entries, list) or not all(isinstance(row, dict) for row in entries):
-        return ['collector_recommendation:history_manifest_invalid']
-    for kind, field in (('payload', 'feature_paths'), ('replay', 'replay_paths')):
-        if source.get(field) != [row.get('path') for row in entries if row.get('kind') == kind]:
-            return ['collector_recommendation:history_reader_paths_unbound']
-    try:
-        current = history_input_manifest(
-            Path(report_dir).parent / 'ai_decision_payloads',
-            Path(report_dir) / 'widget_mechanical_entry_replay',
-            through_date=date.fromisoformat(day),
-            sentinel_dir=Path(report_dir).parent / 'runtime' / 'sentinel_event_cache',
-            watch_config_path=Path(report_dir).parent / 'config' / 'widget_research_watch_symbols.json')
-    except (OSError, EOFError, ValueError, TypeError, KeyError) as exc:
-        return [f'collector_recommendation:history_source_invalid:{exc}']
-    return ([] if saved == current else ['collector_recommendation:history_generation_changed'])
 
 
 def stage_receipt_issues(report_dir, day, stage, *, code_hash=None):
@@ -1184,13 +1026,6 @@ def stage_receipt_issues(report_dir, day, stage, *, code_hash=None):
         return [f'{stage}:prerequisite_generation_changed']
     if value.get('input_sources') != _stage_sources(stage_input_paths(report_dir, day, stage)):
         return [f'{stage}:input_generation_changed']
-    if stage == 'collector_recommendation':
-        issues = _collector_history_issues(report_dir, day)
-        if issues:
-            return issues
-        report = _load_json(stage_artifacts(report_dir, day, stage)['widget_collector_expansion_recommendation'])
-        if value.get('history_input_generation_sha256') != report['source']['history_input_manifest']['manifest_sha256']:
-            return [f'{stage}:history_receipt_generation_changed']
     return _safe_stage_output_issues(report_dir, day, stage)
 
 
@@ -1213,9 +1048,7 @@ def stage_input_paths(report_dir, day, stage):
                       if s != 'summary_handoff'})
     if stage == 'pre_submit_delay':
         paths['pre_submit_delay_source_ledger'] = Path(report_dir).parent / 'pipeline_event_summaries' / f'pre_submit_delay_source_ledger_{day}.json'
-    if stage == 'widget_policy':
-        paths['eod_status'] = Path(report_dir).parent / 'runtime' / 'update_kospi_status' / f'update_kospi_{day}.json'
-    if stage in {'collector_recommendation', 'outcome_labels'}:
+    if stage in {'outcome_labels'}:
         paths['labels'] = Path(report_dir) / 'ai_decision_outcome_labels' / f'ai_decision_outcome_labels_{day}.json'
         paths['payloads'] = Path(report_dir).parent / 'ai_decision_payloads' / f'ai_decision_payloads_{day}.jsonl'
     if stage == 'outcome_labels': paths.pop('labels', None)
@@ -1437,7 +1270,7 @@ def _stage_output_issues(report_dir, day, stage):
             native = validate_existing(date.fromisoformat(day), directory=Path(report_dir).parent / 'runtime' / 'machine_research_closed_loop')
             if native.get('status') != 'complete':
                 errors.append(f'{stage}:native_source_invalid:{native.get("reason")}')
-        if name in {'episode_policy_refresh', 'widget_policy_refresh'}:
+        if name in {'episode_policy_refresh'}:
             from src.engine.monitoring.research_closed_loop import digest, read_object
             if (value.get('receipt_sha256') != digest({k:v for k,v in value.items() if k != 'receipt_sha256'})
                 or value.get('source_sha256') != digest(read_object(Path(value.get('source_path') or ''), limit=FAMILY_ARTIFACT_MAX_BYTES))
@@ -1583,20 +1416,6 @@ def _safe_stage_output_issues(report_dir, day, stage):
         return [f'{stage}:output_validation_failed:{type(exc).__name__}']
 
 
-def _widget_eod_state(report_dir, day):
-    """Mirror the widget worker's exact-date EOD gate before taking a compute slot."""
-    status = _load_json(Path(report_dir).parent / 'runtime' / 'update_kospi_status' / f'update_kospi_{day}.json')
-    state = str(status.get('status') or 'missing')
-    if state in {'failed', 'fail', 'error'}:
-        return 'failed'
-    if state in {'completed', 'completed_with_warnings'}:
-        db = status.get('db_state') or {}
-        rows = db.get('rows_on_latest_date')
-        if (status.get('target_date') == day and db.get('latest_quote_date') == day
-            and type(rows) is int and rows > 0):
-            return 'ready'
-        return 'invalid'
-    return 'waiting'
 
 
 def stage_commands(stage, day, publication, *, recovery=False):
@@ -1623,18 +1442,14 @@ def stage_commands(stage, day, publication, *, recovery=False):
                 command('scalping.entry_setup_paired_replay_batch', *common, '--finalize-compact', '--publication-date', publication)]
     if stage == 'outcome_labels':
         return [command('scalping.ai_decision_quality', '--date', day, '--mode', 'postclose', '--write')]
-    if stage == 'widget_policy' and recovery:
-        return [command('automation.machine_research_closed_loop_refresh', '--source-date', day, '--family', 'widget', '--write', '--source-wait-sec', '0')]
-    if stage == 'widget_policy':
-        return [['/bin/bash', 'deploy/run_widget_evaluation.sh', day, '--recover-closed-target'] if recovery else ['/bin/bash', 'deploy/run_widget_evaluation.sh']]
     if stage == 'episode_policy':
         study = [] if recovery else [command('monitoring.low_price_two_leg_expanded_candidate_research', *date_args)]
         return study + [command('automation.machine_research_closed_loop_refresh', '--source-date', day, '--family', 'episode', '--write', '--source-wait-sec', '0')]
-    modules = dict(collector_recommendation='monitoring.widget_collector_expansion_recommendation',
+    modules = dict(
         machine_attribution='monitoring.machine_microstructure_attribution', machine_timing='automation.machine_entry_timing_tuning',
         market_weakness='automation.market_weakness_hysteresis_tuning', legacy_policy_approval='automation.machine_microstructure_policy_approval')
     if stage in modules:
-        extra = ['--phase', 'postclose'] if stage == 'legacy_policy_approval' else ['--source-wait-sec', '0'] if stage == 'collector_recommendation' else []
+        extra = ['--phase', 'postclose'] if stage == 'legacy_policy_approval' else []
         return [command(modules[stage], *date_args, *extra)]
     if stage == 'research_capacity':
         return [] if recovery else [command('monitoring.research_native_capacity_source', '--source-date', day, '--write')]
@@ -1651,7 +1466,7 @@ def _stage_code(stage, commands, project, *, dispatcher_path=None):
             paths[module] = project / (module.replace('.', '/') + '.py')
         elif cmd[0] == '/bin/bash':
             paths[cmd[1]] = project / cmd[1]
-    if stage in {'widget_policy', 'episode_policy', 'research_allocation'}:
+    if stage in {'episode_policy', 'research_allocation'}:
         from src.engine.automation.machine_research_closed_loop_refresh import code_contract
         return _stage_digest([_stage_sources(paths), code_contract()])
     if stage == 'summary_handoff':
@@ -1659,11 +1474,6 @@ def _stage_code(stage, commands, project, *, dispatcher_path=None):
         paths['direct_tower'] = project / 'src/engine/automation/tuning_performance_control_tower.py'
     if stage == 'research_capacity':
         paths['native_capacity'] = project / 'src/engine/monitoring/research_native_capacity_source.py'
-    if stage == 'collector_recommendation':
-        for name in ('widget_mechanical_entry_replay', 'widget_comparison_cost',
-                     'machine_recommendation_identity', 'widget_research_watch_collector'):
-            paths[name] = project / f'src/engine/monitoring/{name}.py'
-        paths['exact_jsonl_reader'] = project / 'src/utils/jsonl_io.py'
     if stage == 'main_machine_policy':
         for name in ('entry_strategy_policy', 'entry_setup_evidence', 'ai_decision_quality', 'entry_candle_context', 'mechanistic_entry_runtime_policy',
                      'entry_admission_analysis', 'entry_admission_acceptance', 'entry_admission_recipe', 'entry_designated_policy'):
@@ -1779,27 +1589,6 @@ def run_stage(stage, day, *, report_dir, project, publication=None, effective=No
             return _stage_write(path, {**value, 'sources':_stage_sources(stage_artifacts(report_dir, day, stage)),
                 'status':'failed' if issues else 'succeeded', 'exit_code':1 if issues else 0,
                 'issues':issues, 'execution_mode':'existing_output_validation', 'finished_at':now()})
-        if stage == 'widget_policy' and not recovery and str(os.getenv('KORSTOCKSCAN_WIDGET_EVALUATION_WAIT_FOR_EOD', 'true')).lower() in {'1', 'true'}:
-            raw_wait = str(os.getenv('KORSTOCKSCAN_WIDGET_EVALUATION_EOD_WAIT_SEC', '5400'))
-            raw_interval = str(os.getenv('KORSTOCKSCAN_WIDGET_EVALUATION_EOD_WAIT_INTERVAL_SEC', '30'))
-            wait_sec = int(raw_wait) if raw_wait.isdigit() else 5400
-            interval_sec = int(raw_interval) if raw_interval.isdigit() and int(raw_interval) > 0 else 30
-            source_wait_started = time.monotonic()
-            wait_until = source_wait_started + max(0, wait_sec)
-            while True:
-                eod_state = _widget_eod_state(report_dir, day)
-                if eod_state == 'ready':
-                    break
-                if eod_state in {'failed', 'invalid'} or time.monotonic() >= wait_until or (stop_event is not None and stop_event.is_set()):
-                    return _stage_write(path, {**value, 'status':'deferred', 'exit_code':75,
-                        'source_wait_sec':round(time.monotonic() - source_wait_started, 3),
-                        'reason':'waiting_for_source' if eod_state == 'waiting' else 'eod_source_'+eod_state,
-                        'issues':['widget_eod_'+eod_state], 'policy_disposition':'incumbent_carry',
-                        'finished_at':now()})
-                _stage_write(path, {**value, 'heartbeat_at':now(), 'reason':'waiting_for_source',
-                    'issues':['widget_eod_waiting']})
-                time.sleep(min(interval_sec, max(0, wait_until - time.monotonic())))
-            value['source_wait_sec'] = round(time.monotonic() - source_wait_started, 3)
         value['input_sources'] = _stage_sources(stage_input_paths(report_dir, day, stage))
         # Host-wide admission shared across independent scheduled wrappers.
         slots = Path(report_dir).parent / 'runtime' / 'postclose_stage_slots'; slots.mkdir(parents=True, exist_ok=True)
@@ -1853,15 +1642,6 @@ def run_stage(stage, day, *, report_dir, project, publication=None, effective=No
                 # source date; bind their final generation to the stage.
                 value['input_sources'] = _stage_sources(stage_input_paths(report_dir, day, stage))
             issues = _safe_stage_output_issues(report_dir, day, stage) if not rc else [f'command_exit:{rc}']
-            if stage == 'collector_recommendation' and rc == 42:
-                value['policy_disposition'] = 'source_gap'
-            if stage == 'collector_recommendation' and not rc:
-                issues.extend(_collector_history_issues(report_dir, day))
-                if not issues:
-                    report = _load_json(stage_artifacts(report_dir, day, stage)['widget_collector_expansion_recommendation'])
-                    value['history_input_generation_sha256'] = report['source']['history_input_manifest']['manifest_sha256']
-                else:
-                    value['policy_disposition'] = 'source_gap'
             if value['prerequisite_receipts'] != _stage_sources(prerequisites): issues.append('prerequisite_changed_during_consumption')
             if value['input_sources'] != _stage_sources(stage_input_paths(report_dir, day, stage)): issues.append('input_changed_during_consumption')
             if stage == 'main_machine_policy':
@@ -1897,7 +1677,7 @@ def run_stage(stage, day, *, report_dir, project, publication=None, effective=No
                     value['automatic_policy_disposition'] = terminal.get('disposition')
                     value['designated_bundle_sha256'] = staging.get('bundle_sha256')
                 value['policy_sha256'] = terminal.get('policy_sha256')
-            if stage in {'widget_policy', 'episode_policy'} and not issues:
+            if stage in {'episode_policy'} and not issues:
                 family_receipt = _load_json(stage_artifacts(report_dir, day, stage)[stage.replace('_policy', '_policy_refresh')])
                 value['policy_sha256'] = family_receipt.get('policy_sha256')
                 value['policy_disposition'] = 'updated' if old.get('policy_sha256') != value['policy_sha256'] else 'incumbent_carry'
@@ -1945,7 +1725,6 @@ def stage_overview(report_dir, day):
     policy_checks = {}
     from src.engine.scalping.mechanistic_entry_runtime_policy import load_effective
     from src.engine.automation.low_price_two_leg_auto_expansion_policy import load_policy
-    from src.engine.monitoring.widget_symbol_runtime_policy import WidgetSymbolRuntimePolicyLoader
     data_root = Path(report_dir).parent
     try: policy_checks['main'] = bool(load_effective(data_root=data_root, target_date=effective))
     except (OSError, ValueError, TypeError, KeyError): policy_checks['main'] = False
@@ -1958,17 +1737,6 @@ def stage_overview(report_dir, day):
         and not issues.get('episode_policy')):
         policy_checks['episode'] = True
         episode_authority = 'explicit_schedule_disabled'
-    widget_authority = 'missing'
-    try:
-        widget_loader = WidgetSymbolRuntimePolicyLoader(data_root / 'runtime' / 'widget_symbol_runtime_policy')
-        widget_date = date.fromisoformat(effective)
-        if widget_loader.resolve_all(observed_date=widget_date):
-            widget_authority = 'live'
-        elif widget_loader.resolve_observation_all(observed_date=widget_date):
-            widget_authority = 'observation_only'
-    except (OSError, ValueError, TypeError, KeyError):
-        pass
-    policy_checks['widget'] = widget_authority != 'missing'
     ready = ready and all(policy_checks.values())
     future_handoff = {"status": "not_applicable", "actual_pid_consumed": False}
     if day >= "2026-09-23":
@@ -1984,7 +1752,7 @@ def stage_overview(report_dir, day):
         postclose_all_active_stages_complete=not any(issues.values()) and states['summary_handoff'].get('status') == 'succeeded',
         next_session_policy_ready=ready, policy_loader_checks=policy_checks,
         future_handoff=future_handoff,
-        widget_policy_authority=widget_authority, episode_policy_authority=episode_authority,
+        episode_policy_authority=episode_authority,
         startup_basis=startup_basis, day_of_activation_required=startup_basis == 'isolated_prepared_next_preopen',
         actual_pid_consumed=False,
         startup_contract='prepared_verified' if startup_basis == 'isolated_prepared_next_preopen' else bootstrap.get('status', 'not_verified'))
@@ -2073,7 +1841,7 @@ def _stage_main(argv):
         # The existing host-wide two-child compute limit remains unchanged.
         results=[run('research_capacity')]
         with ThreadPoolExecutor(max_workers=6) as pool:
-            parents = ('collector_recommendation', 'machine_attribution')
+            parents = ('machine_attribution',)
             results += list(pool.map(run, parents))
             children = tuple(stage for stage in STAGE_OWNER_GROUPS['machine'][:6]
                              if stage not in parents)

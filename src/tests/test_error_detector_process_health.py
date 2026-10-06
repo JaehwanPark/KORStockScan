@@ -19,13 +19,9 @@ from src.engine.error_detectors.process_health import (
     POSTCLOSE_BOT_ISOLATION_PATH,
 )
 
-_ORIGINAL_WIDGET_COLLECTOR_RUNTIME_CONTRACT = process_health_module._widget_collector_runtime_contract
 
 _ORIGINAL_SAMSUNG_MORNING_RUNTIME_CONTRACT = (
     process_health_module._samsung_morning_runtime_contract
-)
-_ORIGINAL_WIDGET_RUNTIME_RELEASE_CONTRACT = (
-    process_health_module._widget_runtime_release_contract
 )
 
 
@@ -115,10 +111,6 @@ def _force_trading_day(monkeypatch, tmp_path):
     monkeypatch.setattr(
         process_health_module, "is_krx_trading_day", lambda target: True
     )
-    monkeypatch.setattr(
-        process_health_module, "_widget_collector_runtime_contract",
-        lambda now: {"severity": "pass", "unhealthy_units": []},
-    )
     heartbeat_path = tmp_path / "error_detector_heartbeat.json"
     isolation_path = tmp_path / "postclose_bot_isolation.json"
     pipeline_events_dir = tmp_path / "pipeline_events"
@@ -137,15 +129,6 @@ def _force_trading_day(monkeypatch, tmp_path):
         lambda now: {
             "severity": "pass",
             "status": "not_applicable_test_default",
-            "target_date": now.date().isoformat(),
-        },
-    )
-    monkeypatch.setattr(
-        process_health_module,
-        "_widget_runtime_release_contract",
-        lambda now: {
-            "severity": "pass",
-            "status": "release_binding_verified_test_default",
             "target_date": now.date().isoformat(),
         },
     )
@@ -208,24 +191,6 @@ class TestProcessHealthDetector:
         result = detector.check()
         assert result.severity == "pass"
 
-    def test_detector_fails_for_widget_release_binding_drift(self, monkeypatch):
-        monkeypatch.setattr(
-            process_health_module,
-            "_widget_runtime_release_contract",
-            lambda now: {
-                "severity": "fail",
-                "status": "release_binding_unverified",
-                "reason": "unit_process_release_mismatch",
-            },
-        )
-        write_heartbeat("main_loop")
-        write_heartbeat("telegram")
-
-        result = ProcessHealthDetector().check()
-
-        assert result.severity == "fail"
-        assert "unit_process_release_mismatch" in result.summary
-        assert "do not treat unit configuration" in result.recommended_action
 
     def test_detector_fails_for_recent_unowned_manual_control_holding_block(
         self, monkeypatch
@@ -1052,114 +1017,10 @@ def _mock_samsung_systemd_states(
     )
 
 
-@pytest.mark.parametrize(
-    "at,release_binding_passed,expected_severity,expected_status",
-    [
-        ("2026-09-02T07:57:59+09:00", False, "pass", "not_yet_due"),
-        ("2026-09-02T08:00:00+09:00", False, "warning", "bounded_wait"),
-        (
-            "2026-09-02T08:05:00+09:00",
-            False,
-            "fail",
-            "release_binding_unverified",
-        ),
-        (
-            "2026-09-02T08:05:00+09:00",
-            True,
-            "pass",
-            "release_binding_verified",
-        ),
-    ],
-)
-def test_widget_runtime_release_contract_has_bounded_startup_gate(
-    monkeypatch,
-    at,
-    release_binding_passed,
-    expected_severity,
-    expected_status,
-):
-    receipt_path = (
-        Path("/installed/widget")
-        / "data/runtime/widget_signal_auto_trade_state.runtime-receipt.json"
-    )
-    monkeypatch.setattr(
-        process_health_module, "widget_active_receipt_path", lambda: receipt_path
-    )
-    seen_paths = []
-
-    def verify_receipt(path, *, target_date):
-        seen_paths.append(path)
-        return {
-            "release_binding_passed": release_binding_passed,
-            "status": (
-                "observed_not_compared" if release_binding_passed else "blocked"
-            ),
-            "findings": (
-                ["expected_configuration_not_supplied"]
-                if release_binding_passed
-                else ["unit_process_release_mismatch"]
-            ),
-        }
-
-    monkeypatch.setattr(
-        process_health_module,
-        "verify_widget_startup_receipt",
-        verify_receipt,
-    )
-
-    result = _ORIGINAL_WIDGET_RUNTIME_RELEASE_CONTRACT(datetime.fromisoformat(at))
-
-    assert result["severity"] == expected_severity
-    assert result["status"] == expected_status
-    assert seen_paths == ([] if at.endswith("07:57:59+09:00") else [receipt_path])
-    if seen_paths:
-        assert result["receipt_path"] == str(receipt_path)
 
 
-def test_widget_runtime_release_contract_fails_closed_when_unit_path_unavailable(
-    monkeypatch,
-):
-    def unavailable():
-        raise OSError("unit unavailable")
-
-    monkeypatch.setattr(process_health_module, "widget_active_receipt_path", unavailable)
-    monkeypatch.setattr(
-        process_health_module,
-        "verify_widget_startup_receipt",
-        lambda *_args, **_kwargs: pytest.fail("must not verify an unrelated receipt"),
-    )
-
-    result = _ORIGINAL_WIDGET_RUNTIME_RELEASE_CONTRACT(
-        datetime.fromisoformat("2026-09-02T08:05:00+09:00")
-    )
-
-    assert result["severity"] == "fail"
-    assert result["reason"] == "widget_unit_identity_unavailable"
-    assert result["receipt_path"] is None
 
 
-def test_widget_runtime_release_contract_rejects_untrusted_receipt(monkeypatch):
-    monkeypatch.setattr(
-        process_health_module,
-        "widget_active_receipt_path",
-        lambda: Path("/installed/widget/data/runtime/widget.runtime-receipt.json"),
-    )
-    monkeypatch.setattr(
-        process_health_module,
-        "verify_widget_startup_receipt",
-        lambda *_args, **_kwargs: {
-            "release_binding_passed": True,
-            "status": "blocked",
-            "findings": ["receipt_owner_or_permissions_invalid"],
-        },
-    )
-
-    result = _ORIGINAL_WIDGET_RUNTIME_RELEASE_CONTRACT(
-        datetime.fromisoformat("2026-09-23T17:45:00+09:00")
-    )
-
-    assert result["severity"] == "fail"
-    assert result["reason"] == "receipt_owner_or_permissions_invalid"
 
 
 def _write_samsung_authority(path, *, target_date: str, ready: bool):
@@ -1547,126 +1408,6 @@ def test_samsung_runtime_reports_latest_journal_failure_before_stale_bound_pid(
     assert result["reason"] == "morning_live_service_failed"
 
 
-def test_samsung_authority_accepts_contiguous_same_date_pid_handoff():
-    target_date = "2026-09-02"
-    now = datetime.fromisoformat(f"{target_date}T10:00:00+09:00")
-    authority = {
-        "schema": process_health_module._SAMSUNG_MORNING_AUTHORITY_SCHEMA,
-        "target_date": target_date,
-        "status": "ready",
-        "observed_at_kst": f"{target_date}T07:57:00+09:00",
-        "valid_until_kst": f"{target_date}T23:59:59+09:00",
-        "decision_authority": "explicit_user_directed_morning_two_episode_live_start",
-        "source_quality_gate": "PASS",
-        "runtime_effect": True,
-        "actual_order_submitted": False,
-        "broker_order_forbidden": False,
-        "policy": {
-            "symbol": "005930",
-            "quantity": 20,
-            "allocation": "ten_shares_base_limit_and_ten_shares_base_plus_1tick",
-            "maximum_episodes_per_day": 2,
-            "unfilled_target": "hold_position_without_forced_exit",
-        },
-        "rollback": {
-            "action": "fail_closed_and_disable_only_morning_two_leg_timer_and_services",
-            "widget_service_effect": "none",
-        },
-        "decision": {
-            "ready": True,
-            "target_date": target_date,
-            "main_bot_active": True,
-            "main_bot_runtime_env_verified": True,
-            "main_bot_pid": 300,
-            "shared_token_available": True,
-            "operator_exclusion_source": "manual_operator",
-            "prior_reentry_state_clear": True,
-            "parallel_widget_trading_allowed": True,
-            "independent_order_ledger_required": True,
-            "blockers": [],
-        },
-        "preopen_main_bot_pid": 100,
-        "main_bot_pid_handoffs": [
-            {
-                "schema": process_health_module._SAMSUNG_MORNING_HANDOFF_SCHEMA,
-                "status": "committed",
-                "sequence": 1,
-                "target_date": target_date,
-                "previous_main_bot_pid": 100,
-                "replacement_main_bot_pid": 200,
-                "new_order_authority_created": False,
-                "authority_deadline_bypassed": False,
-                "policy_changed": False,
-                "quantity_changed": False,
-                "custody_changed_by_handoff": False,
-                "new_buy_order_nos_during_handoff": [],
-            },
-            {
-                "schema": process_health_module._SAMSUNG_MORNING_HANDOFF_SCHEMA,
-                "status": "committed",
-                "sequence": 2,
-                "target_date": target_date,
-                "previous_main_bot_pid": 200,
-                "replacement_main_bot_pid": 300,
-                "new_order_authority_created": False,
-                "authority_deadline_bypassed": False,
-                "policy_changed": False,
-                "quantity_changed": False,
-                "custody_changed_by_handoff": False,
-                "new_buy_order_nos_during_handoff": [],
-            },
-        ],
-    }
-    policy_sha256 = process_health_module._canonical_json_sha256(authority["policy"])
-    for handoff in authority["main_bot_pid_handoffs"]:
-        handoff.update(
-            {
-                "handoff_mode": "prepared_graceful_restart",
-                "rebound_at_kst": f"{target_date}T09:40:00+09:00",
-                "live_service_pid": 400,
-                "authority_sha256_before": "a" * 64,
-                "policy_sha256_before": policy_sha256,
-                "policy_sha256_after": policy_sha256,
-                "runtime_verification_after": {
-                    "status": "pass",
-                    "pid": handoff["replacement_main_bot_pid"],
-                    "target_date": target_date,
-                    "artifact_sha256": "b" * 64,
-                    "runtime_policy_fail_count": 0,
-                    "dated_runtime_override_fail_count": 0,
-                    "unverified_selected_family_count": 0,
-                },
-                "state_snapshot_before": {"target_date": target_date},
-                "state_snapshot_after": {"target_date": target_date},
-            }
-        )
-        handoff["handoff_id"] = process_health_module._canonical_json_sha256(
-            {
-                "sequence": handoff["sequence"],
-                "target_date": target_date,
-                "previous_main_bot_pid": handoff["previous_main_bot_pid"],
-                "replacement_main_bot_pid": handoff["replacement_main_bot_pid"],
-                "rebound_at_kst": handoff["rebound_at_kst"],
-                "authority_sha256_before": handoff["authority_sha256_before"],
-            }
-        )
-
-    assert process_health_module._samsung_authority_contract_ready(
-        authority,
-        authority_error=None,
-        target_date=target_date,
-        now=now,
-        require_bound_main_bot_active=False,
-    ) == (True, "ready")
-
-    authority["main_bot_pid_handoffs"][1]["previous_main_bot_pid"] = 999
-    assert process_health_module._samsung_authority_contract_ready(
-        authority,
-        authority_error=None,
-        target_date=target_date,
-        now=now,
-        require_bound_main_bot_active=False,
-    ) == (False, "exact_date_authority_handoff_history_invalid")
 
 
 def test_samsung_runtime_rejects_corrupt_authority_schema(monkeypatch, tmp_path):
@@ -1944,55 +1685,3 @@ def test_samsung_runtime_rejects_timer_install_contract_drift(
 
     assert result["severity"] == "fail"
     assert result["reason"] == expected_reason
-
-
-@pytest.mark.parametrize("state", [
-    {"ActiveState": "failed", "SubState": "failed", "Result": "timeout", "MainPID": 0},
-    {"ActiveState": "activating", "SubState": "condition", "Result": "success", "MainPID": 0},
-    {"ActiveState": "inactive", "SubState": "dead", "Result": "exec-condition", "MainPID": 0},
-    {"query_error": "TimeoutExpired"},
-])
-def test_widget_collector_failure_is_not_hidden_by_healthy_main(monkeypatch, state):
-    healthy = {"LoadState": "loaded", "ActiveState": "active", "SubState": "running", "MainPID": 123}
-    unit = "korstockscan-widget-symbol-runtime-collector.service"
-    monkeypatch.setattr(process_health_module, "_systemd_unit_state",
-                        lambda name: {**healthy, **(state if name == unit else {})})
-    monkeypatch.setattr(process_health_module, "_widget_collector_runtime_contract",
-                        _ORIGINAL_WIDGET_COLLECTOR_RUNTIME_CONTRACT)
-    now = datetime.fromisoformat("2026-09-21T09:01:30+09:00")
-    monkeypatch.setattr(process_health_module.time, "time", now.timestamp)
-    write_heartbeat("main_loop")
-    write_heartbeat("telegram")
-    result = ProcessHealthDetector().check()
-    assert result.severity == "fail"
-    assert unit in result.summary
-    assert result.details["widget_collectors"]["unhealthy_units"] == [unit]
-
-
-@pytest.mark.parametrize("clock, expected, calls", [
-    ("08:56:59", "pass", 0), ("08:57:10", "warning", 4),
-    ("09:01:00", "fail", 5), ("20:01:00", "pass", 0),
-])
-def test_widget_collector_schedule_and_bounded_startup(monkeypatch, clock, expected, calls):
-    queries = []
-    def missing(unit):
-        queries.append(unit)
-        return {"LoadState": "not-found"}
-    monkeypatch.setattr(process_health_module, "_systemd_unit_state", missing)
-    result = _ORIGINAL_WIDGET_COLLECTOR_RUNTIME_CONTRACT(
-        datetime.fromisoformat(f"2026-09-21T{clock}+09:00"))
-    assert result["severity"] == expected
-    assert len(queries) == calls
-
-
-def test_widget_collector_healthy_and_nontrading_day(monkeypatch):
-    monkeypatch.setattr(process_health_module, "_systemd_unit_state", lambda unit: {
-        "LoadState": "loaded", "ActiveState": "active", "SubState": "running", "MainPID": 123})
-    now = datetime.fromisoformat("2026-09-21T09:10:00+09:00")
-    result = _ORIGINAL_WIDGET_COLLECTOR_RUNTIME_CONTRACT(now)
-    assert result["status"] == "healthy_active"
-    assert result["severity"] == "pass"
-    monkeypatch.setattr(process_health_module, "is_krx_trading_day", lambda target: False)
-    result = _ORIGINAL_WIDGET_COLLECTOR_RUNTIME_CONTRACT(now)
-    assert result["status"] == "outside_collection_window"
-    assert result["units"] == {}

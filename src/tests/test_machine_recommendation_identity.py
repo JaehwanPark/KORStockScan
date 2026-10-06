@@ -8,8 +8,6 @@ from src.engine.monitoring.machine_recommendation_identity import (
 )
 from src.engine.monitoring import (
     low_price_two_leg_expanded_candidate_research as episode,
-    widget_collector_expansion_recommendation as expansion,
-    widget_symbol_signal_policy_research as widget,
 )
 
 
@@ -116,52 +114,3 @@ def test_conflicting_identity_and_nonfinite_proposal_fail_closed():
         bind(row, proposal={"delay": 3})
     with pytest.raises(ValueError):
         bind({}, proposal={"delay": float("nan")})
-
-
-def test_producer_contracts_preserve_original_decisions_and_mirrored_ids():
-    report = {
-        "recommendations": [
-            {
-                "stock_code": "138080",
-                "suggested_session": "KRX_REGULAR",
-                "recommendation_tier": "research_watch",
-            }
-        ]
-    }
-    expansion.attach_recommendation_contract(report)
-    assert report["recommendations"][0]["recommendation_tier"] == "research_watch"
-    research = {
-        "symbols": {
-            "080220": {
-                "decision": "holdout_pass_widget_signal_policy_candidate",
-                "selected_policy": {"segment": "morning"},
-            }
-        }
-    }
-    widget.attach_recommendation_contract(research)
-    assert (
-        research["symbols"]["080220"]["recommendation_consumer"]
-        == "widget_symbol_runtime_policy"
-    )
-    candidate = {
-        "symbol": "137310",
-        "session": "afternoon",
-        "profile_id": "existing_137310_afternoon",
-        "discovery_lane": "existing_symbol_time_extension",
-        "recommended_spot": {"target_ticks": 2},
-        "runtime_effect": False,
-    }
-    report = {
-        "recommendations": [candidate],
-        "postclose_logic_recommendations": [],
-        "operator_observation_candidate_inventory": {
-            "candidate_475560_morning": {"runtime_effect": False}
-        },
-    }
-    episode.attach_recommendation_contract(report)
-    assert (
-        report["existing_symbol_time_extension_recommendations"][0]["recommendation_id"]
-        == candidate["recommendation_id"]
-    )
-    assert candidate["runtime_effect"] is False
-    assert candidate["recommended_spot"] == {"target_ticks": 2}

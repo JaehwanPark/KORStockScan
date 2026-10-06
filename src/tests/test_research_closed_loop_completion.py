@@ -32,35 +32,16 @@ def test_version_feedback_shared_alias_preserves_native_identity(tmp_path):
     alias = tmp_path / "release_data_alias"
     alias.symlink_to(native, target_is_directory=True)
     day = date(2026, 9, 17)
-    body = dict(source_date=str(day), rows=[], **loop.AUTHORITY)
-    loop.atomic_write(
-        native / f"widget_outcomes_{day}.json",
-        dict(body, outcomes_sha256=loop.digest(body)),
-    )
-    assert outcomes.outcome_feedback(
-        day, directory=native
-    ) == outcomes.outcome_feedback(day, directory=alias)
+    body = dict(target_date=str(day), policy_version_economics=dict(
+        economic_basis="actual_exact_cost_completed_only_CF_separate", exact_completed_count=0),
+        **loop.AUTHORITY)
+    path = native / "low_price_two_leg_tuning" / f"low_price_two_leg_tuning_{day}.json"
+    loop.atomic_write(path, body)
+    assert outcomes.episode_feedback(day, report_root=native) == outcomes.episode_feedback(
+        day, report_root=alias)
 
 
-@pytest.mark.parametrize(
-    "full,tail,expected",
-    [
-        (_bucket(6), _bucket(4), True),
-        (_bucket(5), _bucket(4), False),
-        (_bucket(6), _bucket(3), False),
-        (_bucket(6, 0.2), _bucket(4), False),
-        (_bucket(6), _bucket(4, float("nan")), False),
-        (_bucket(6), _bucket(4, None), False),
-    ],
-)
-def test_widget_retirement_uses_mature_exact_original_revision(full, tail, expected):
-    feedback = dict(
-        cumulative=dict(strategy_revisions={"a" * 64: full}),
-        holdout_last_16=dict(strategy_revisions={"a" * 64: tail}),
-    )
-    assert outcomes.mature_widget_retired_revisions(feedback) == (
-        {"a" * 64} if expected else set()
-    )
+
 
 
 def _reference(candidate_net=0.3, baseline_net=0.2):
@@ -323,86 +304,6 @@ def test_optional_catalog_transaction_error_does_not_abort_reader(tmp_path, monk
     assert original.read_bytes() == b"preserve"
 
 
-def test_native_widget_realized_feedback_retires_incumbent_carry_only(
-    tmp_path, monkeypatch
-):
-    from src.engine.monitoring import widget_symbol_runtime_policy as publisher
-    from src.tests.test_widget_symbol_runtime_policy import _research
-
-    today = date(2026, 9, 17)
-    revision, version = "a" * 64, "b" * 64
-    days = loop.trading_dates_after(date(2026, 9, 8), 7)
-    history = []
-    for index, day in enumerate(days):
-        common = dict(
-            signal_id="signal-" + day,
-            execution_policy_content_sha256=version,
-            candidate_revision_sha256=revision,
-            order_date=day,
-            filled_qty=10,
-            requested_qty=10,
-            remaining_qty=0,
-            status="FILLED",
-            last_reconciled_at=day + "T12:02:00+09:00",
-        )
-        buy = dict(common, order_no="B" + str(index), side="BUY", fill_price=10000)
-        sell = dict(
-            common,
-            order_no="S" + str(index),
-            side="SELL",
-            fill_price=9950,
-            parent_entry_signal_id=common["signal_id"],
-        )
-        history.append(
-            dict(trade_date=day, symbols={"006800": dict(orders=[buy, sell])})
-        )
-    state = tmp_path / "state.json"
-    loop.atomic_write(state, dict(active_date=str(today), symbols={}, history=history))
-    broker = lambda day, symbol: [
-        dict(
-            filled_qty=10,
-            buy_average_price=10000,
-            sell_average_price=9950,
-            realized_net_profit_krw=-730,
-            commission_krw=30,
-            tax_krw=200,
-        )
-    ]
-    for native_day in days:
-        outcomes.collect_widget_outcomes(
-            date.fromisoformat(native_day),
-            state_path=state,
-            directory=tmp_path,
-            loader=broker,
-        )
-    native = outcomes.outcome_feedback(today, directory=tmp_path)
-    assert (
-        native["cumulative"]["strategy_revisions"][revision]["exact_completed_count"]
-        == 7
-    )
-    assert outcomes.mature_widget_retired_revisions(native) == {revision}
-    report = _research()
-    report["end_date"] = str(today)
-    report["closed_loop_contract"] = loop.SCHEMA
-    report["policy_version_feedback"] = native
-    gate = dict(status="allocation_blocked", reason="no_new_candidate")
-    report["joint_allocation_gate"] = gate
-    monkeypatch.setattr(loop, "report_joint_gate", lambda *args, **kwargs: gate)
-    monkeypatch.setattr(outcomes, "outcome_feedback", lambda day: native)
-    monkeypatch.setattr(
-        publisher.WidgetSymbolRuntimePolicyLoader,
-        "resolve_all",
-        lambda *args, **kwargs: {"006800": dict(candidate_revision_sha256=revision)},
-    )
-    policy = publisher.build_policy(report)
-    assert "006800" not in policy["symbols"]
-    assert policy["retired_candidate_revision_sha256"] == [revision]
-    forged = deepcopy(report)
-    forged["policy_version_feedback"]["cumulative"]["strategy_revisions"][revision][
-        "realized_net_return_pct"
-    ] = 1
-    with pytest.raises(ValueError, match="native_version_feedback"):
-        publisher.build_policy(forged)
 
 
 def test_cheap_episode_cache_uses_measured_fast_reference_without_reducing_grid(
@@ -550,7 +451,6 @@ def test_refresh_reads_large_studies_and_preserves_contract_rejection(tmp_path):
 
     day = date(2026, 9, 17)
     families = {
-        "widget": "widget_symbol_signal_policy_research",
         "episode": "low_price_two_leg_expanded_candidate_research",
     }
     payload = dict(
@@ -577,25 +477,9 @@ def test_refresh_reads_large_studies_and_preserves_contract_rejection(tmp_path):
     payload["actual_order_submitted"] = True
     paths["episode"].write_text(json.dumps(payload))
     studies, _, missing = read_studies(day, report_root=tmp_path)
-    assert set(studies) == {"widget"} and missing == ["episode"]
+    assert set(studies) == set() and missing == ["episode"]
 
 
-@pytest.mark.parametrize('status', ['waiting', 'building', 'complete'])
-def test_refresh_does_not_consume_previous_study_while_native_successor_is_pending(tmp_path, status):
-    from src.engine.automation.machine_research_closed_loop_refresh import read_studies
-    day = date(2026,9,17)
-    widget_dir = tmp_path/'widget_symbol_signal_policy_research'
-    episode_dir = tmp_path/'low_price_two_leg_expanded_candidate_research'
-    widget_dir.mkdir(); episode_dir.mkdir()
-    payload = dict(target_date=str(day), closed_loop_contract=loop.SCHEMA, **loop.AUTHORITY)
-    loop.atomic_write(widget_dir/f'widget_symbol_signal_policy_research_{day}.json', payload)
-    loop.atomic_write(episode_dir/f'low_price_two_leg_expanded_candidate_research_{day}.json', payload)
-    loop.atomic_write(widget_dir/f'source_waiting_{day}.json', dict(
-        schema='widget_signal_research_source_waiting_v1', end_date=str(day), status=status,
-        source_waiting={} if status == 'complete' else {'000001': 'source_not_attempted'}, **loop.AUTHORITY))
-    studies, paths, missing = read_studies(day, report_root=tmp_path)
-    assert ('widget' in studies) is (status == 'complete')
-    assert missing == ([] if status == 'complete' else ['widget'])
 
 
 def test_episode_feedback_accepts_native_population_report_above_32_mib(tmp_path):

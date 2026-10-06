@@ -44,21 +44,21 @@ systemctl enable "$NEW_TIMER"
 systemctl stop "$OLD_TIMER" 2>/dev/null || true
 if ! systemctl start "$NEW_TIMER"; then
   systemctl disable --now "$NEW_TIMER" 2>/dev/null || true
-  systemctl start "$OLD_TIMER" 2>/dev/null || true
-  printf 'failed to activate %s; restored %s\n' "$NEW_TIMER" "$OLD_TIMER" >&2
+  systemctl mask "$OLD_TIMER" 2>/dev/null || true
+  printf 'failed to activate %s; retired timer stays disabled: %s\n' "$NEW_TIMER" "$OLD_TIMER" >&2
   exit 1
 fi
 if ! systemctl is-enabled --quiet "$NEW_TIMER" || ! systemctl is-active --quiet "$NEW_TIMER"; then
   systemctl disable --now "$NEW_TIMER" 2>/dev/null || true
-  systemctl start "$OLD_TIMER" 2>/dev/null || true
-  printf 'verification failed for %s; restored %s\n' "$NEW_TIMER" "$OLD_TIMER" >&2
+  systemctl mask "$OLD_TIMER" 2>/dev/null || true
+  printf 'verification failed for %s; retired timer stays disabled: %s\n' "$NEW_TIMER" "$OLD_TIMER" >&2
   exit 1
 fi
 next_elapse="$(systemctl show "$NEW_TIMER" --property=NextElapseUSecRealtime --value)"
 if [[ -z "$next_elapse" || "$next_elapse" == "n/a" ]]; then
   systemctl disable --now "$NEW_TIMER" 2>/dev/null || true
-  systemctl start "$OLD_TIMER" 2>/dev/null || true
-  printf 'next schedule verification failed for %s; restored %s\n' "$NEW_TIMER" "$OLD_TIMER" >&2
+  systemctl mask "$OLD_TIMER" 2>/dev/null || true
+  printf 'next schedule verification failed for %s; retired timer stays disabled: %s\n' "$NEW_TIMER" "$OLD_TIMER" >&2
   exit 1
 fi
 cmp -s "$UNIT_SOURCE_DIR/$NEW_BASE.service" "$UNIT_INSTALL_DIR/$NEW_BASE.service"

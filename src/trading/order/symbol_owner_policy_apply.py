@@ -57,13 +57,12 @@ VALID_APPLY_MODES = frozenset({COEXIST_ENTRY_ENABLED, COEXIST_EXIT_ONLY})
 PREOPEN_APPLY_START = time(8, 35)
 PREOPEN_APPLY_END = time(8, 50)
 VALID_OWNERS = frozenset(
-    {"main_scalping", "widget_auto_trade", "episode", "manual_operator"}
+    {"main_scalping", "episode", "manual_operator"}
 )
 TRADING_PROCESS_MARKERS = (
     "src/run_bot.sh",
     "run_bot.sh",
     "bot_main.py",
-    "src.trading.widget_auto_trade.service",
     "src.trading.samsung_morning_one_share",
     "src.trading.samsung_midday_one_share",
     "src.trading.samsung_afternoon_one_share",
@@ -229,7 +228,7 @@ def _validate_request(
         if (
             mode not in VALID_APPLY_MODES
             or "main_scalping" not in owners
-            or not {"widget_auto_trade", "episode"}.intersection(owners)
+            or not {"episode"}.intersection(owners)
             or any(owner not in VALID_OWNERS for owner in owners)
         ):
             raise SymbolOwnerPolicyApplyError(

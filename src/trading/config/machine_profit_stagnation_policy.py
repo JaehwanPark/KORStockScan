@@ -1,6 +1,6 @@
 """Read an operator-pinned exit supplement; never publish or enable a policy.
 
-The existing widget/episode services load this through their owner loops. An
+The existing episode services load this through their owner loops. An
 absent pin is OFF. Initial deployment/configuration remains an operator action;
 there is no research-floor, daily approval renewal or automatic risk expansion.
 """
@@ -81,6 +81,8 @@ def validate_policy(policy: dict) -> dict:
 def load_policy(
     *, now: datetime, owner: str, entered_at: datetime
 ) -> tuple[dict, str] | None:
+    if owner != "episode":
+        return None
     path, pin = os.getenv(PATH_ENV, ""), os.getenv(HASH_ENV, "")
     if not path and not pin:
         return None

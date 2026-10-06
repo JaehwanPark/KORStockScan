@@ -49,17 +49,16 @@ def report(anchors):
         "rolling_policy_source_contract": {"ready": True},
         "sources": {"source": "raw_hash"},
         "consumers": {
-            "widget_postclose_tuning": {
-                "symbols": {"005930": {"anchor_results": anchors}}
+            "episode_machine_postclose_tuning": {
+                "profiles": {"005930": {"anchor_results": anchors}}
             },
-            "episode_machine_postclose_tuning": {"profiles": {}},
         },
     }
 
 
 def anchor(**kwargs):
     return {
-        "owner": "widget",
+        "owner": "episode",
         "scope_id": "p1",
         "symbol": "005930",
         "session": "KRX",
@@ -75,7 +74,7 @@ def test_census_deduplicates_leg_stage_anchors_without_merging_owner_or_session(
             [
                 anchor(),
                 anchor(lifecycle_stage="exit"),
-                anchor(owner="episode"),
+                anchor(scope_id="p2"),
                 anchor(session="NXT"),
             ]
         )
@@ -102,7 +101,7 @@ def test_parent_hash_is_not_recursively_embedded_and_source_mutation_invalidates
 
 
 @pytest.mark.parametrize(
-    "anchors", [[None], [{"owner": "widget"}], [anchor(symbol=[])], [1]]
+    "anchors", [[None], [{"owner": "episode"}], [anchor(symbol=[])], [1]]
 )
 def test_malformed_anchor_is_not_an_empty_healthy_population(anchors):
     result = build_adaptive_exit_source_census(report(anchors))

@@ -95,7 +95,6 @@ def collect(tmp_path, legs, *, day=DAY):
         target_date=day,
         catalog=(SCOPE,),
         runtime_root=tmp_path,
-        widget_state_path=tmp_path / "widget.json",
     )
 
 
@@ -331,54 +330,6 @@ def test_consecutive_history_includes_zero_day_but_not_missing_day(tmp_path):
     assert not cfg["authority"]["allowed_runtime_apply"]
 
 
-def test_widget_source_survives_no_legacy_anchor_and_uses_broker_route(tmp_path):
-    eid = "005930:2026-09-09:ENTRY:KRX_REGULAR:2026-09-09T09:00:00+09:00"
-    original = leg_source()
-    payload = next(iter(original[FIELD].values()))
-    order = {
-        "side": "BUY",
-        "broker_accepted": True,
-        "order_date": DAY,
-        "order_no": "1111111",
-        "filled_qty": 10,
-        "fill_price": 10000,
-        "requested_qty": 10,
-        "signal_id": eid,
-        "parent_entry_signal_id": None,
-        "market_venue": "KRX",
-        "broker_route": "SOR",
-    }
-    sell = {"side": "SELL"}
-    record_target_observation(
-        sell,
-        target=payload["target"],
-        entries=[payload["entries"][0] | {"episode_id": eid, "lot_id": "entry"}],
-        owner="widget",
-        profile="actual:005930:KRX_REGULAR",
-        symbol="005930",
-        session="KRX_REGULAR",
-        entry_policy={"take_profit_bps": 100},
-        observed_at=DAY + "T09:00:01+09:00",
-    )
-    write(
-        tmp_path / "widget.json",
-        {
-            "schema_version": 1,
-            "execution_authority": "operator_directed_widget_auto_trade_v1",
-            "active_date": DAY,
-            "symbols": {"005930": {"orders": [order, sell]}},
-        },
-    )
-    source, anchors = module.collect_owner_census(
-        target_date=DAY,
-        catalog=(),
-        runtime_root=tmp_path,
-        widget_state_path=tmp_path / "widget.json",
-    )
-    key = "widget|actual:005930:KRX_REGULAR|005930|SOR|KRX_REGULAR"
-    assert source["scopes"][key]["complete"]
-    assert source["scopes"][key]["lots"][0]["disposition"] == "pending_ordered_path"
-    assert anchors[0]["expected_venues"] == ["SOR"]
 
 
 def test_legacy_contract_reader_does_not_override_natural_source():
@@ -460,21 +411,6 @@ def test_hashed_but_malformed_daily_history_is_isolated(tmp_path, damage):
     ]
 
 
-def test_malformed_widget_state_cannot_disappear_as_complete_owner(tmp_path):
-    write(
-        tmp_path / "widget.json",
-        {
-            "schema_version": 1,
-            "execution_authority": "operator_directed_widget_auto_trade_v1",
-            "active_date": DAY,
-            "symbols": {"005930": "invalid"},
-        },
-    )
-    source, _ = collect(tmp_path, [])
-    source = module.bind_ordered_paths(source, {})
-    assert source["unscoped_errors"] and not source["owner_envelope_valid"]["widget"]
-    result = run_study(target_date=DAY, catalog=(SCOPE,), source=source, contract=None)
-    assert not result["all_owner_episode_census_complete"]
 
 
 def test_malformed_optional_owner_envelope_blocks_without_crashing(tmp_path):

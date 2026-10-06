@@ -134,7 +134,7 @@ def native_allocator_contract(
         != EPISODE_LEG_QUANTITY
     ):
         raise ValueError("native_stage_or_quantity_contract_not_clear")
-    from src.engine.monitoring.widget_comparison_cost import comparison_cost_contract
+    from src.trading.market.comparison_cost import comparison_cost_contract
 
     cost = comparison_cost_contract(source_date)
     if cost.get("buy_fee_bps") is None:
@@ -176,7 +176,6 @@ def native_allocator_contract(
                 for name in (
                     "trading/order/episode_quantity.py",
                     "trading/low_price_two_leg/profiles.py",
-                    "trading/widget_auto_trade/engine.py",
                 )
             }
         ),

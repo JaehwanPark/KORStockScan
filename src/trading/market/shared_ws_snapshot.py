@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo
 from src.utils.constants import DATA_DIR
 
 SNAPSHOT_PATH = DATA_DIR / "runtime" / "kiwoom_ws_snapshot" / "latest.json"
-CONTRACT = "widget_shared_ws_transport_comparison_v2"
+CONTRACT = "shared_ws_transport_comparison_v2"
 KST = ZoneInfo("Asia/Seoul")
 METRIC_CONTRACT = {
     "metric_role": "market_data_transport_quality",
@@ -86,346 +86,24 @@ def _read_shared_frame(path):
         return frame, digest
 
 
-def read_shared_widget_quote(context, *, now_ts, path=None):
-    """Read one atomic checkpoint, preserving each original field clock.
-
-    P1 returns evidence only. Missing producer/epoch/route or partial/stale
-    fields cannot silently select REST-looking WS data or start recovery I/O.
-    """
-    started = time.monotonic()
-    result = {"schema": CONTRACT, "status": "source_gap", "mode": "compare_only",
-              "selected_input": "existing_rest", "runtime_effect": False,
-              "request_code": context.request_code, "session": context.name,
-              "metric_contract": METRIC_CONTRACT, "comparison_status": "rest_not_observed"}
-    try:
-        path = Path(path or SNAPSHOT_PATH)
-        live_clock = now_ts is None
-        if live_clock:
-            now_ts = time.time()
-        result["evaluated_at_epoch"] = now_ts
-        now = datetime.fromtimestamp(now_ts, KST)
-        if not context.active or not context.start <= now.time().replace(tzinfo=None) < context.end:
-            raise ValueError("consumer_session_inactive")
-        item = context.request_code
-        if not re.fullmatch(r"[0-9]{6}(?:_AL|_NX)?", item):
-            raise ValueError("request_item_invalid")
-        snapshot, snapshot_digest = _read_shared_frame(path)
-        if live_clock:
-            # A live multi-symbol cycle may start long before this atomic read.
-            # Observe after I/O; never rewrite the producer or field clocks.
-            now_ts = time.time()
-            now = datetime.fromtimestamp(now_ts, KST)
-            if not context.start <= now.time().replace(tzinfo=None) < context.end:
-                raise ValueError("consumer_session_inactive")
-        result["evaluated_at_epoch"] = now_ts
-        authority = snapshot["machine_confirmation_input_contract"]
-        if (snapshot.get("schema_version") != "kiwoom_ws_dashboard_snapshot_v1"
-                or snapshot.get("decision_authority") != "source_quality_only"
-                or snapshot.get("runtime_effect") is not False
-                or authority.get("schema") != "machine_entry_confirmation_ws_snapshot_v1"
-                or authority.get("decision_authority") != "market_data_input_only_no_order_authority"
-                or authority.get("runtime_effect") is not False
-                or authority.get("actual_order_submitted") is not False
-                or authority.get("exact_route_required") is not True
-                or authority.get("causal_past_only") is not True
-                or authority.get("broker_order_forbidden") is not True):
-            raise ValueError("snapshot_authority_invalid")
-        generated = float(snapshot["generated_at_epoch"])
-        if not math.isfinite(generated) or not 0 <= now_ts - generated <= 20:
-            raise ValueError("snapshot_stale_or_future")
-        producer = snapshot["shared_transport_producer"]
-        if (producer.get("schema") != "shared_ws_transport_producer_v1"
-                or producer.get("connection_available") is not True
-                or not re.fullmatch(r"[0-9a-f]{40}", producer.get("source_commit", ""))
-                or producer.get("process") != process_generation(producer["process"]["pid"])):
-            raise ValueError("producer_generation_invalid")
-        result["producer"] = copy.deepcopy(producer)
-        registered = producer.get("registered_items")
-        if (not isinstance(registered, list)
-                or any(not isinstance(code, str) for code in registered)):
-            raise ValueError("registration_items_invalid")
-        # Widget transport validation accepts the same symbol's integrated
-        # source. Preserve its actual route; never relabel it as KRX/NXT.
-        # This reader is comparison-only, not an execution quote resolver.
-        integrated_item = item[:6] + "_AL"
-        if integrated_item in registered:
-            item = integrated_item
-        route = "krx_nxt_integrated" if item.endswith("_AL") else "nxt_only" if item.endswith("_NX") else "krx_only"
-        venue = "" if item.endswith("_AL") else "NXT" if item.endswith("_NX") else "KRX"
-        result.update(ws_request_code=item, market_data_route=route,
-                      source_selection="integrated_symbol" if item.endswith("_AL") else "exact_request")
-        if item not in registered:
-            raise ValueError("item_not_registered")
-        stock = snapshot["stocks"][item[:6]]
-        matches = [r["realtime_types"] for r in stock["machine_confirmation_routes"].values()
-                   if all(r.get("realtime_types", {}).get(t, {}).get("item") == item for t in ("0B", "0D"))]
-        if len(matches) != 1:
-            raise ValueError("exact_route_missing_or_duplicate")
-        types = matches[0]
-        epoch = producer["transport_epoch"]
-        if (type(epoch) is not int or epoch <= 0
-                or type(stock.get("market_data_transport_epoch")) is not int
-                or stock["market_data_transport_epoch"] != epoch):
-            raise ValueError("connection_epoch_conflict")
-        for kind, row in types.items():
-            if kind not in ("0B", "0D"):
-                continue
-            stamp = row["observed_epoch"]
-            facts = result.setdefault("field_validation", {})
-            numeric = type(stamp) in (int, float) and math.isfinite(stamp)
-            facts[kind] = {
-                "observed_epoch": stamp, "age_sec": now_ts - stamp if numeric else None,
-                "source_epoch": row.get("transport_epoch"), "producer_epoch": epoch,
-                "source_item": row.get("item"),
-                "age_exceeded": numeric and now_ts - stamp > 20,
-                "prior_or_conflicting_epoch": row.get("transport_epoch") != epoch,
-                "field_after_publication": numeric and stamp > generated,
-                "recovery_authority": "none_field_age_is_not_connection_failure",
-            }
-        for kind in ("0B", "0D"):
-            row = types[kind]
-            stamp = row["observed_epoch"]
-            observed = datetime.fromtimestamp(stamp, KST)
-            if (type(stamp) not in (int, float) or not math.isfinite(stamp)
-                    or not 0 <= now_ts - stamp <= 20 or stamp > generated
-                    or observed.date() != now.date()
-                    or not context.start <= observed.time().replace(tzinfo=None) < context.end
-                    or row.get("realtime_type") != kind or row.get("market_route") != route
-                    or row.get("market_suffix") != item[6:]
-                    or row.get("effective_venue") != venue
-                    or type(row.get("transport_epoch")) is not int or row["transport_epoch"] != epoch
-                    or type(row.get("route_sequence")) is not int or row["route_sequence"] <= 0):
-                raise ValueError("field_clock_route_or_epoch_invalid:" + kind)
-        book = types["0D"]["orderbook"]
-        values = {"current_price": types["0B"]["trade_price"],
-                  "best_bid": book["bids"][0]["price"], "best_ask": book["asks"][0]["price"],
-                  "best_bid_qty": book["bids"][0]["volume"], "best_ask_qty": book["asks"][0]["volume"]}
-        if any(type(v) is not int or v <= 0 for v in values.values()) or values["best_bid"] > values["best_ask"]:
-            raise ValueError("partial_or_crossed_quote")
-        result.update(status="valid_ws_comparison_input", values=values,
-                      trade_date=now.date().isoformat(), market_data_route=route,
-                      source_clocks={t: types[t]["observed_epoch"] for t in ("0B", "0D")},
-                      source_sequences={t: types[t]["route_sequence"] for t in ("0B", "0D")},
-                      provider_trade_clock={k: types["0B"].get(k) for k in
-                          ("provider_trade_epoch", "provider_trade_time_precision_ms", "provider_trade_date_basis")},
-                      source_sha256=hashlib.sha256(json.dumps(types, sort_keys=True).encode()).hexdigest(),
-                      snapshot_sha256=snapshot_digest, snapshot_generated_at=generated)
-        result["widget_quote_fields"] = copy.deepcopy(types["0B"].get("widget_quote_fields", {}))
-        selected = next(r for r in stock["machine_confirmation_routes"].values()
-                        if r.get("realtime_types", {}).get("0B", {}).get("item") == item)
-        result["recent_trades"] = copy.deepcopy(list(selected.get("recent_trades") or ())[:3])
-    except (OSError, ValueError, KeyError, TypeError, IndexError, OverflowError, AttributeError, RecursionError) as exc:
-        result["reason"] = str(exc) if isinstance(exc, ValueError) else type(exc).__name__ + ":" + str(exc)
-    result["reader_elapsed_ms"] = round((time.monotonic() - started) * 1000, 3)
-    return result
 
 
-def validate_widget_ws_receipt(receipt, *, context, now_ts):
-    """Recheck original field clocks after slow auxiliary/REST work."""
-    if receipt.get("status") != "valid_ws_comparison_input":
-        reason = str(receipt.get("reason") or "source_gap")
-        if not re.fullmatch(r"[A-Za-z0-9_:-]+", reason):
-            reason = "source_gap"
-        raise ValueError("widget_ws_source_unavailable:" + reason)
-    if (receipt.get("request_code") != context.request_code
-            or receipt.get("session") != context.name
-            or receipt["producer"]["process"] != process_generation(receipt["producer"]["process"]["pid"])):
-        raise ValueError("widget_ws_receipt_binding_invalid")
-    clocks = receipt["source_clocks"]
-    if not isinstance(clocks, dict) or set(clocks) != {"0B", "0D"}:
-        raise ValueError("widget_ws_source_clocks_incomplete")
-    for stamp in clocks.values():
-        if type(stamp) not in (int, float) or not math.isfinite(stamp) or not 0 <= now_ts - stamp <= 20:
-            raise ValueError("widget_ws_source_stale_or_future")
 
 
-def widget_market_data_source(context):
-    """Explicit rollout membership; no automatic registration-based promotion."""
-    mode = os.getenv("KORSTOCKSCAN_WIDGET_MARKET_DATA_SOURCE", "rest").strip().lower()
-    if mode not in {"rest", "ws"}:
-        raise RuntimeError("widget_market_data_source_invalid")
-    members = os.getenv("KORSTOCKSCAN_WIDGET_WS_SYMBOLS")
-    if mode == "ws" and members is not None:
-        codes = [code.strip() for code in members.split(",")]
-        if not codes or any(not re.fullmatch(r"[0-9]{6}", code) for code in codes) or len(set(codes)) != len(codes):
-            raise RuntimeError("widget_ws_rollout_scope_invalid")
-        if context.request_code[:6] not in codes:
-            return "rest"
-    return mode
 
 
-def select_widget_ws_inputs(context, transport, *, now_ts, require_trade_veto=False,
-                            require_day_low=True):
-    """Existing collector input selector. No request, recovery or order authority."""
-    mode = widget_market_data_source(context)
-    if mode == "rest":
-        return None
-    if mode != "ws":
-        raise RuntimeError("widget_market_data_source_invalid")
-    try:
-        validate_widget_ws_receipt(transport, context=context, now_ts=now_ts)
-        values = transport["values"]
-        quote = {"cur_prc": values["current_price"],
-                 "source": "kiwoom_ws_0B", "source_item": transport["ws_request_code"]}
-        fields = transport.get("widget_quote_fields") or {}
-        if require_day_low:
-            low_raw = fields["low_price"]
-            if not isinstance(low_raw, str) or not re.fullmatch(r"[+-]?[0-9]+", low_raw.strip()):
-                raise ValueError("widget_ws_low_price_missing_or_invalid")
-            low = abs(int(low_raw))
-            if not 0 < low <= values["current_price"]:
-                raise ValueError("widget_ws_low_price_conflict")
-            quote["low_pric"] = low
-        trade_payload = {}
-        if require_trade_veto:
-            change_raw = fields["change_pct"]
-            if not isinstance(change_raw, str) or not re.fullmatch(r"[+-]?[0-9]+(?:\.[0-9]+)?", change_raw.strip()):
-                raise ValueError("widget_ws_change_pct_missing_or_invalid")
-            change = float(change_raw)
-            if not math.isfinite(change):
-                raise ValueError("widget_ws_change_pct_invalid")
-            quote["flu_rt"] = change
-            trades = transport["recent_trades"]
-            if len(trades) != 3:
-                raise ValueError("widget_ws_trade_veto_history_missing")
-            seq = transport["source_sequences"]["0B"]
-            for i, row in enumerate(trades):
-                if (row.get("item") != transport["ws_request_code"]
-                        or row.get("transport_epoch") != transport["producer"]["transport_epoch"]
-                        or row.get("route_sequence") != seq - i
-                        or type(row.get("price")) is not int or row["price"] <= 0
-                        or type(row.get("received_at_ms")) is not int
-                        or row["received_at_ms"] > transport["source_clocks"]["0B"] * 1000 + 1
-                        or not 0 <= now_ts - row["received_at_ms"] / 1000 <= 20):
-                    raise ValueError("widget_ws_trade_veto_history_invalid")
-            if (abs(trades[0]["received_at_ms"] - transport["source_clocks"]["0B"] * 1000) > 1
-                    or any(a["received_at_ms"] < b["received_at_ms"] for a, b in zip(trades, trades[1:]))):
-                raise ValueError("widget_ws_trade_veto_endpoint_invalid")
-            trade_payload = {"cntr_infr": [{"cur_prc": r["price"]} for r in trades],
-                             "source": "kiwoom_ws_0B", "source_item": transport["ws_request_code"]}
-        qt = datetime.fromtimestamp(transport["source_clocks"]["0B"], KST)
-        bt = datetime.fromtimestamp(transport["source_clocks"]["0D"], KST)
-        receipt = {k: v for k, v in transport.items() if k not in {"census", "recent_trades"}}
-        receipt.update(mode="ws_input", selected_input="shared_ws_snapshot", input_adopted=True,
-                       comparison_status="ws_selected")
-        bbo = {k: values[k] for k in ("best_bid", "best_ask", "best_bid_qty", "best_ask_qty")}
-        bbo.update(source="kiwoom_ws_0D", received_at=bt.isoformat(),
-                   age_sec=now_ts - bt.timestamp(), ws_source_receipt=receipt)
-        transport.update(mode="ws_input", selected_input="shared_ws_snapshot", input_adopted=True,
-                         comparison_status="ws_selected", same_observation_proven=False)
-        return quote, qt, bbo, bt, trade_payload
-    except (ValueError, KeyError, TypeError, OSError, IndexError, OverflowError, AttributeError) as exc:
-        reason = str(exc) if isinstance(exc, ValueError) else type(exc).__name__
-        transport.update(selection_reason=reason, selected_input="none", input_adopted=False)
-        raise RuntimeError("widget_ws_input_unavailable:" + reason) from exc
 
 
-def compare_widget_rest(transport, *, current_price, bbo, quote_received_at, bbo_received_at):
-    """Same-field diagnostics, with no freshening or automatic source promotion."""
-    if transport.get("status") != "valid_ws_comparison_input":
-        return
-    clocks = {"0B": quote_received_at.timestamp(), "0D": bbo_received_at.timestamp()}
-    deltas = {t: clocks[t] - transport["source_clocks"][t] for t in clocks}
-    transport["rest_source_clocks"] = clocks
-    transport["clock_deltas_sec"] = deltas
-    rest = {"current_price": current_price, **{k: bbo.get(k) for k in
-            ("best_bid", "best_ask", "best_bid_qty", "best_ask_qty")}}
-    transport["rest_values"] = rest
-    transport["different_fields"] = [k for k, v in transport["values"].items() if rest.get(k) != v]
-    transport["same_observation_proven"] = False
-    transport["same_market_data_scope"] = transport["ws_request_code"] == transport["request_code"]
-    if any(not 0 <= delta <= 20 for delta in deltas.values()):
-        transport["comparison_status"] = "not_comparable_clock_gap"
-        return
-    if not transport["same_market_data_scope"]:
-        # KRX/NXT REST and integrated WS are valid but distinct observations.
-        # Neither matching nor differing values establish route equivalence.
-        transport["comparison_status"] = "different_market_data_scope"
-        return
-    transport["comparison_status"] = "different_observations" if transport["different_fields"] else "matched_fields"
-    transport["same_observation_proven"] = False  # REST supplies no common exchange sequence.
 
 
-def attach_transport_census(owner, payload):
-    """Bounded per-process comparison denominator, including failed REST cycles."""
-    transport = getattr(owner, "_transport_comparison", None)
-    if not transport:
-        return
-    # collect_once and its failure publisher can both attach this same read
-    # after a recorder/write error. Count the evaluation once, even if failure
-    # reporting crosses a window/date boundary. A fork remains a new consumer.
-    if (getattr(owner, "_transport_census_last_sample", None) is transport
-            and getattr(owner, "_transport_census_last_pid", None) == os.getpid()):
-        payload["market_data_transport"] = transport
-        return
-    # Count a reader evaluation in its own window. Failed slow cycles may
-    # publish with an older cycle timestamp; later republishes are not reads.
-    evaluated = transport.get("evaluated_at_epoch")
-    now = (datetime.fromtimestamp(evaluated, KST) if evaluated is not None
-           else datetime.fromisoformat(payload["observed_at_kst"]))
-    # A fork inherits the owner object, not the parent's comparison receipt.
-    # Use PID even when /proc provenance is temporarily unavailable, so a
-    # provenance read failure cannot erase this process's failed denominator.
-    key = (now.date().isoformat(), transport["request_code"], transport["session"], os.getpid())
-    if getattr(owner, "_transport_census_key", None) != key:
-        owner._transport_census_key, owner._transport_census = key, {}
-    window = int(now.timestamp()) // 900 * 900
-    producer = transport.get("producer") or {}
-    # Keep failures in the denominator, but never attest a mixed/unknown
-    # producer window using only the latest snapshot's provenance.
-    generation = {
-        "process": dict(producer.get("process") or {}),
-        "source_commit": producer.get("source_commit"),
-        "transport_epoch": producer.get("transport_epoch"),
-    } if producer else None
-    bucket = owner._transport_census.setdefault(window, {
-        "expected_comparisons": 0, "valid_ws": 0, "ws_source_gap": 0,
-        "rest_not_observed": 0, "matched_fields": 0, "different_observations": 0,
-        "ws_selected": 0,
-        "ws_selection_gap": 0,
-        "not_comparable_clock_gap": 0,
-        "different_market_data_scope": 0, "ws_source_items": {},
-        "producer_generation": generation, "producer_generation_mixed": False,
-        "producer_generation_missing": generation is None,
-        "first_observed_at": now.isoformat(),
-    })
-    if bucket["producer_generation"] != generation:
-        bucket["producer_generation_mixed"] = True
-    if generation is None:
-        bucket["producer_generation_missing"] = True
-    bucket["last_observed_at"] = now.isoformat()
-    bucket["expected_comparisons"] += 1
-    bucket["valid_ws" if transport["status"] == "valid_ws_comparison_input" else "ws_source_gap"] += 1
-    bucket[transport["comparison_status"]] += 1
-    if transport.get("selection_reason"):
-        bucket["ws_selection_gap"] += 1
-    source_item = transport.get("ws_request_code", "unresolved")
-    source_counts = bucket["ws_source_items"].setdefault(source_item, {"valid_ws": 0, "ws_source_gap": 0})
-    source_counts["valid_ws" if transport["status"] == "valid_ws_comparison_input" else "ws_source_gap"] += 1
-    while len(owner._transport_census) > 4:
-        owner._transport_census.pop(min(owner._transport_census))
-    try:
-        consumer_process = process_generation(os.getpid())
-    except (OSError, ValueError, IndexError):
-        consumer_process = {"status": "process_provenance_unavailable"}
-    transport["census"] = {"scope": ("process_local_ws_input" if transport.get("input_adopted") else "process_local_comparison_not_adopted_input"),
-        "schema": "widget_transport_census_source_bound_v3",
-        "evaluation_count_basis": "once_per_reader_result",
-        "consumer_process": consumer_process,
-        "windows": {str(k): {**v, "ws_source_items": {item: dict(counts)
-                    for item, counts in v["ws_source_items"].items()}}
-                    for k, v in owner._transport_census.items()}}
-    payload["market_data_transport"] = transport
-    owner._transport_census_last_sample = transport
-    owner._transport_census_last_pid = os.getpid()
 
 
 COMPLETED_BARS_ROOT = DATA_DIR / "runtime" / "shared_ws_completed_bars"
 
 
-def completed_bar_mode(request_code, *, consumer="widget"):
+def completed_bar_mode(request_code, *, consumer="episode"):
     """Separate explicit bar rollout; quote selection never promotes bars."""
-    if consumer not in {"widget", "episode"}:
+    if consumer not in {"episode"}:
         raise ValueError("completed_bar_consumer_invalid")
     mode = os.getenv(f"KORSTOCKSCAN_{consumer.upper()}_BAR_SOURCE", "rest").strip().lower()
     if mode not in {"rest", "ws", "ws_when_ready"}:
@@ -620,7 +298,7 @@ def read_shared_completed_bars(request_code, *, now, root=None, snapshot_path=No
     return {"stk_min_pole_chart_qry": rows, "_completed_bar_source": receipt}
 
 
-def selected_completed_bar_payload(request_code, *, now, consumer="widget", seed_fetch=None, minimum_bars=1, history_scope="rolling", selection_receipt=None):
+def selected_completed_bar_payload(request_code, *, now, consumer="episode", seed_fetch=None, minimum_bars=1, history_scope="rolling", selection_receipt=None):
     mode = completed_bar_mode(request_code, consumer=consumer)
     selection = selection_receipt if selection_receipt is not None else {}
     selection.update(mode=mode, minimum_bars=minimum_bars, history_scope=history_scope)

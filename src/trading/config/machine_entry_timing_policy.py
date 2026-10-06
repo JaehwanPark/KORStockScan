@@ -188,7 +188,7 @@ def validate_applied_policy(payload: Any, *, target_date: date) -> tuple[bool, s
         confirmation_mode = str(row.get("entry_confirmation_mode") or FIXED_DELAY_MODE)
         executable_confirmation = row.get("executable_confirmation")
         if (
-            owner not in {"widget", "episode"}
+            owner != "episode"
             or not scope_id
             or len(symbol) != 6
             or not symbol.isdigit()
@@ -245,8 +245,7 @@ def validate_applied_policy(payload: Any, *, target_date: date) -> tuple[bool, s
             except ValueError:
                 return False, "entry_timing_policy_feature_arm_scope_invalid"
             if symbol == "005930" and (
-                owner == "widget"
-                or scope_id in {"morning", "morning_sor_reentry", "midday", "afternoon"}
+                scope_id in {"morning", "morning_sor_reentry", "midday", "afternoon"}
             ):
                 from src.engine.monitoring.machine_entry_confirmation_study import (
                     validate_operating_selection,

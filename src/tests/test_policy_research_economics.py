@@ -87,7 +87,7 @@ def test_admission_union_conserves_native_projections_without_outcome_selection(
         },
     }
     ledger = economics.research_admission_ledger(
-        census, source_date=DAY, universe={"000001": "fixed"}, owner="widget"
+        census, source_date=DAY, universe={"000001": "fixed"}, owner="low_price_two_leg"
     )
     assert ledger["input_count"] == 3
     assert ledger["native_id_count"] == 2
@@ -104,7 +104,7 @@ def test_admission_union_conserves_native_projections_without_outcome_selection(
         "ex_post_profit"
     ]
     second = economics.research_admission_ledger(
-        census, source_date=DAY, universe={"000001": "fixed"}, owner="widget"
+        census, source_date=DAY, universe={"000001": "fixed"}, owner="low_price_two_leg"
     )
     assert second["disposition_counts"] == ledger["disposition_counts"]
 
@@ -134,7 +134,7 @@ def test_admission_never_invents_causal_candidate_or_common_stock(mutation, reas
         "opportunity_details": [dict(admission_row(), **mutation)],
     }
     result = economics.research_admission_ledger(
-        census, source_date=DAY, universe={"000001": "fixed"}, owner="widget"
+        census, source_date=DAY, universe={"000001": "fixed"}, owner="low_price_two_leg"
     )
     assert result["dispositions"][0]["reason"] == reason
     assert result["disposition_counts"] == {"source_gap": 1}
@@ -150,7 +150,7 @@ def test_admission_conflicting_native_binding_is_not_first_projection_winner():
             {"target_date": str(DAY), "opportunity_details": source},
             source_date=DAY,
             universe={"000001": "fixed"},
-            owner="widget",
+            owner="low_price_two_leg",
         )
         assert result["disposition_counts"] == {"source_gap": 2}
         assert {row["reason"] for row in result["dispositions"]} == {
@@ -170,7 +170,7 @@ def test_admission_gap_scope_and_valid_lane_are_isolated():
         },
     }
     result = economics.research_admission_ledger(
-        census, source_date=DAY, universe={"000001": "fixed"}, owner="widget"
+        census, source_date=DAY, universe={"000001": "fixed"}, owner="low_price_two_leg"
     )
     assert result["status"] == "source_gap"
     assert result["disposition_counts"] == {"excluded_by_contract": 1, "admitted": 1}
@@ -193,19 +193,6 @@ def test_bounded_census_reader_rejects_alias_nonfinite_oversize_and_non_object(
         assert economics.load_research_census(path) is None
 
 
-def test_handoff_malformed_primary_preserves_valid_expanded_scope():
-    census = {
-        "target_date": str(DAY),
-        "opportunity_details": {
-            "liquid_common": [],
-            "all": {"top_50": {"forward_exact": [admission_row()]}},
-        },
-    }
-    result = economics.research_universe_handoff(
-        census, source_date=DAY, universe={"000001": "fixed"}, results={}
-    )
-    assert result["status"] == "source_gap"
-    assert result["admission_ledger"]["disposition_counts"] == {"admitted": 1}
 
 
 def test_future_ai_progress_does_not_change_native_admission_deduplication():
@@ -219,7 +206,7 @@ def test_future_ai_progress_does_not_change_native_admission_deduplication():
         {"target_date": str(DAY), "opportunity_details": [row, projection]},
         source_date=DAY,
         universe={"000001": "fixed"},
-        owner="widget",
+        owner="low_price_two_leg",
     )
     assert result["disposition_counts"] == {"admitted": 1, "duplicate_projection": 1}
 
@@ -235,7 +222,7 @@ def test_malformed_master_field_is_a_scoped_gap_not_global_crash():
         },
         source_date=DAY,
         universe={"000001": "fixed"},
-        owner="widget",
+        owner="low_price_two_leg",
     )
     assert result["disposition_counts"] == {"source_gap": 1, "admitted": 1}
 
@@ -251,11 +238,12 @@ def test_admission_registered_scope_is_owner_specific_and_future_clock_is_blocke
     episode = economics.research_admission_ledger(
         census, source_date=DAY, universe={"000001": "fixed"}, owner="low_price_two_leg"
     )
-    widget = economics.research_admission_ledger(
+    retired = economics.research_admission_ledger(
         census, source_date=DAY, universe={"000001": "fixed"}, owner="widget"
     )
     assert episode["disposition_counts"] == {"admitted": 1}
-    assert widget["disposition_counts"] == {"excluded_by_contract": 1}
+    assert retired["status"] == "source_gap"
+    assert retired["input_count"] is None
     census["generated_at"] = f"{DAY}T09:00:00+09:00"
     episode = economics.research_admission_ledger(
         census, source_date=DAY, universe={"000001": "fixed"}, owner="low_price_two_leg"
@@ -269,7 +257,7 @@ def test_admission_before_baseline_is_never_tuning_ready():
         {"target_date": str(old), "opportunity_details": []},
         source_date=old,
         universe={},
-        owner="widget",
+        owner="low_price_two_leg",
     )
     assert ledger["status"] == "source_gap"
     assert ledger["input_count"] is None
@@ -326,10 +314,10 @@ def test_compact_census_publication_consumes_large_parent_without_rescan(
         == __import__("hashlib").sha256(json_path.read_bytes()).hexdigest()
     )
     oracle = economics.research_admission_ledger(
-        report, source_date=DAY, universe={"000001": "fixed"}, owner="widget"
+        report, source_date=DAY, universe={"000001": "fixed"}, owner="low_price_two_leg"
     )
     result = economics.research_admission_ledger(
-        compact, source_date=DAY, universe={"000001": "fixed"}, owner="widget"
+        compact, source_date=DAY, universe={"000001": "fixed"}, owner="low_price_two_leg"
     )
     assert result["disposition_counts"] == oracle["disposition_counts"]
     assert result["input_count"] == 2
@@ -547,30 +535,6 @@ def test_joint_capital_releases_before_same_timestamp_entry():
     assert result["feasible_combined_net_profit_krw"] == 20
 
 
-def test_universe_census_does_not_enroll_a_missed_symbol_or_duplicate_panels():
-    census = {
-        "target_date": DAY.isoformat(),
-        "opportunity_details": {
-            "liquid_common": {
-                "top_20": {
-                    "forward_exact": [
-                        {"stock_code": "000001", "opportunity_id": "a"},
-                        {"stock_code": "000002", "opportunity_id": "b"},
-                    ]
-                }
-            },
-            "another_overlapping_panel": {
-                "top_20": {"forward_exact": [{"stock_code": "000001"}]}
-            },
-        },
-    }
-    result = economics.research_universe_handoff(
-        census, source_date=DAY, universe={"000001": "registered"}, results={}
-    )
-    assert result["input_count"] == 2
-    assert result["unaccounted_count"] == 0
-    assert result["disposition_counts"]["not_enrolled_research_universe"] == 1
-    assert result["runtime_effect"] is False
 
 
 def write_quotes(tmp_path, *, raw_only=False, depth=40):
@@ -615,48 +579,8 @@ def write_quotes(tmp_path, *, raw_only=False, depth=40):
     return result, signal, path
 
 
-@pytest.mark.parametrize(
-    "raw_only,depth,expected",
-    [(False, 40, "pass"), (True, 40, "source_gap"), (False, 39, "source_gap")],
-)
-def test_proxy_needs_exact_seed_full_quantity_entry_and_exit(
-    tmp_path, raw_only, depth, expected
-):
-    result, signal, _ = write_quotes(tmp_path, raw_only=raw_only, depth=depth)
-    receipt = economics.signal_execution_feasibility(
-        result,
-        symbol="000001",
-        source_date=DAY,
-        signal_policy=signal,
-        observation_dir=tmp_path,
-    )
-    assert receipt["status"] == expected
-    assert receipt["allowed_runtime_apply"] is False
 
 
-def test_proxy_cannot_reuse_other_candidate_seed_or_symlink_source(tmp_path):
-    result, signal, path = write_quotes(tmp_path)
-    receipt = economics.signal_execution_feasibility(
-        result,
-        symbol="000001",
-        source_date=DAY,
-        signal_policy={"segment": "midday"},
-        observation_dir=tmp_path,
-    )
-    assert receipt["status"] == "source_gap"
-    original = tmp_path / "original"
-    path.rename(original)
-    path.symlink_to(original)
-    assert (
-        economics.signal_execution_feasibility(
-            result,
-            symbol="000001",
-            source_date=DAY,
-            signal_policy=signal,
-            observation_dir=tmp_path,
-        )["status"]
-        == "source_gap"
-    )
 
 
 def test_pending_episode_keeps_original_quantity_and_unknown_order_status():
@@ -704,82 +628,3 @@ def test_common_replay_never_pools_legacy_actual_terminal_with_new_cf_horizon():
     assert result["source_only_economic_pair_count"] == 1
     assert result["right_censored_count"] == 1
     assert result["population_disposition"]["unaccounted_count"] == 0
-
-
-def test_optional_corrupt_census_is_a_diagnostic_gap_not_a_global_research_crash():
-    census = {
-        "target_date": DAY.isoformat(),
-        "opportunity_details": [],
-        "bad": float("nan"),
-    }
-    result = economics.research_universe_handoff(
-        census, source_date=DAY, universe={}, results={}
-    )
-    assert result["status"] == "source_gap"
-    assert result["allowed_runtime_apply"] is False
-
-
-def test_duplicate_proxy_episode_cannot_reuse_one_quote_pair_twice(tmp_path):
-    result, signal, _ = write_quotes(tmp_path)
-    result["holdout"]["episodes"] = list(result["calibration"]["episodes"])
-    assert (
-        economics.signal_execution_feasibility(
-            result,
-            symbol="000001",
-            source_date=DAY,
-            signal_policy=signal,
-            observation_dir=tmp_path,
-        )["status"]
-        == "source_gap"
-    )
-
-
-def test_combined_report_reconciles_execution_blocks_and_all_selected_lineage():
-    from src.engine.monitoring.widget_symbol_signal_policy_research import (
-        _attach_population_evidence,
-    )
-
-    report = {
-        "end_date": DAY.isoformat(),
-        "symbol_universe": {"005930": "Samsung", "000660": "SK"},
-        "passed_symbols": ["005930", "000660"],
-        "symbols": {
-            "005930": {
-                "decision": "execution_feasibility_missing_no_widget_runtime_promotion",
-                "selected_episodes": {"calibration": [episode()]},
-            },
-            "000660": {
-                "decision": "holdout_pass_widget_signal_policy_candidate",
-                "holdout": {"episodes": [episode(minute=1)]},
-            },
-        },
-    }
-    result = _attach_population_evidence(report, market_census={})
-    assert result["passed_symbols"] == ["000660"]
-    assert result["joint_capital_demand"]["independent_modeled_net_profit_krw"] == 20
-
-
-def test_checkpoint_fingerprint_tracks_raw_generation_without_reading_raw(
-    tmp_path,
-    monkeypatch,
-):
-    from src.engine.monitoring import widget_symbol_signal_policy_research as research
-    from src.engine.monitoring import widget_symbol_runtime_contract as contract
-
-    monkeypatch.setattr(contract, "DEFAULT_OBSERVATION_DIR", tmp_path)
-    monkeypatch.setattr(research, "DATA_DIR", tmp_path)
-    kwargs = dict(
-        sources={},
-        end_date=date(2026, 9, 17),
-        applied_baselines={},
-        symbol_universe={"005930": "Samsung"},
-        symbol_origins={},
-    )
-    missing = research.research_input_fingerprint(**kwargs)
-    raw = tmp_path / "widget_symbol_advisory_005930_20260916.jsonl"
-    raw.write_text("not parsed by fingerprint\n")
-    present = research.research_input_fingerprint(**kwargs)
-    assert present != missing
-    assert present == research.research_input_fingerprint(**kwargs)
-    raw.write_text("new generation with changed size\n")
-    assert research.research_input_fingerprint(**kwargs) != present

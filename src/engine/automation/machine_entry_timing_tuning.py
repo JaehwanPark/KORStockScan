@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from src.engine.monitoring.widget_comparison_cost import comparison_cost_contract
+from src.trading.market.comparison_cost import comparison_cost_contract
 from src.engine.monitoring.machine_entry_confirmation_study import (
     build_study,
     _decisions,
@@ -93,14 +93,16 @@ SOURCE_DECISION_OWNERSHIP_REQUIRED_FROM_DATE = date(2026, 9, 4)
 SOURCE_DIR = DATA_DIR / "report" / "machine_microstructure_attribution"
 OUTPUT_DIR = DATA_DIR / "report" / "machine_entry_timing_tuning"
 SOURCE_PREFIX = "machine_microstructure_attribution"
+# This owner's source window is narrower than the shared clean-data contract.
+# Keep CLEAN_BASELINE_DATE for validating existing producer/policy provenance.
+MIN_SOURCE_REPORT_DATE = date(2026, 8, 1)
 LOW_PRICE_CANDIDATE_DIR = (
     DATA_DIR / "threshold_cycle" / "low_price_two_leg" / "candidates"
 )
 SAMSUNG_CANDIDATE_DIR = (
     DATA_DIR / "threshold_cycle" / "samsung_machine_entry_policy" / "candidates"
 )
-WIDGET_POLICY_DIR = DATA_DIR / "runtime" / "widget_auto_trade_policy"
-ENTRY_ROLES = frozenset({"actual_widget_entry_signal", "episode_signal_decision_leg"})
+ENTRY_ROLES = frozenset({"episode_signal_decision_leg"})
 ACTUAL_ENTRY_SOURCE_ROLES = ENTRY_ROLES
 DELAYS_SEC = tuple(sorted(ALLOWED_DELAYS_SEC - {0}))
 ROLLING_WINDOWS_DAYS = REQUIRED_ROLLING_WINDOWS_DAYS
@@ -110,7 +112,8 @@ METRIC_CONTRACT = {
     "metric_role": "bounded_widget_episode_entry_timing_policy_selection",
     "decision_authority": AUTHORITY,
     "window_policy": (
-        "clean_baseline_exact_owner_scope_symbol_session_state_cumulative_and_"
+        f"source_reports_from_{MIN_SOURCE_REPORT_DATE:%Y_%m_%d}_"
+        "exact_owner_scope_symbol_session_state_cumulative_and_"
         "fixed_complete_5d_10d_20d_or_dynamic_complete_5_source_day_"
         "observed_trading_date_windows"
     ),
@@ -244,7 +247,10 @@ def _source_reports(
             source_date = date.fromisoformat(raw_date)
         except ValueError:
             continue
-        if not CLEAN_BASELINE_DATE <= source_date <= target_date:
+        if not (
+            max(CLEAN_BASELINE_DATE, MIN_SOURCE_REPORT_DATE)
+            <= source_date <= target_date
+        ):
             continue
         payload = _read_json(path)
         authority = (payload or {}).get("authority") or {}
@@ -301,7 +307,6 @@ def _same_stage_owner_guard(
     target_date: date,
     low_price_candidate_dir: Path,
     samsung_candidate_dir: Path,
-    widget_policy_dir: Path = WIDGET_POLICY_DIR,
     effective_date: date | None = None,
 ) -> dict[str, Any]:
     paths = [low_price_candidate_dir
@@ -328,110 +333,6 @@ def _same_stage_owner_guard(
                     "policy_mutation_count": len(mutations),
                 }
             )
-    current_widget_path = (
-        widget_policy_dir / f"widget_auto_trade_policy_{target_date.isoformat()}.json"
-    )
-    effective_date = effective_date or _next_trading_date(target_date)
-    next_widget_path = (
-        widget_policy_dir
-        / f"widget_auto_trade_policy_{effective_date.isoformat()}.json"
-    )
-    current_widget = _read_json(current_widget_path)
-    next_widget = _read_json(next_widget_path)
-    if (
-        isinstance(next_widget, dict)
-        and next_widget.get("effective_date") == effective_date.isoformat()
-    ):
-        confirmation_changes = [
-            f"{symbol}|{session}"
-            for symbol, symbol_row in (next_widget.get("symbols") or {}).items()
-            if isinstance(symbol_row, dict)
-            for session, row in (symbol_row.get("sessions") or {}).items()
-            if isinstance(row, dict)
-            and row.get("advisory_confirmation_changed") is True
-        ]
-        if confirmation_changes:
-            owners.append(
-                {
-                    "path": str(next_widget_path),
-                    "schema": next_widget.get("schema"),
-                    "policy_mutation_count": len(confirmation_changes),
-                    "reason": "existing_widget_advisory_confirmation_axis_selected",
-                    "scopes": confirmation_changes,
-                }
-            )
-    entry_fields = (
-        "enabled",
-        "new_entry_runtime_eligible",
-        "new_entry_runtime_block_reason",
-        "allowed_entry_states",
-        "allowed_entry_sessions",
-        "allowed_entry_venues",
-        "max_completed_entries_per_day",
-        "reentry_cooldown_minutes",
-        "new_entry_cutoff_time",
-        "leg_quantity_each",
-    )
-
-    def widget_entry_contract(
-        payload: Any, *, expected_date: date
-    ) -> tuple[dict[str, Any], bool]:
-        if (
-            not isinstance(payload, dict)
-            or payload.get("schema") != "widget_auto_trade_policy_v1"
-            or payload.get("effective_date") != expected_date.isoformat()
-            or payload.get("runtime_effect") is not True
-        ):
-            return {}, False
-        result: dict[str, Any] = {}
-        for symbol, symbol_row in (payload.get("symbols") or {}).items():
-            if not isinstance(symbol_row, dict):
-                continue
-            for session, session_row in (symbol_row.get("sessions") or {}).items():
-                if not isinstance(session_row, dict):
-                    continue
-                key = f"{symbol}|{session}"
-                result[key] = {field: session_row.get(field) for field in entry_fields}
-        return result, True
-
-    current_widget_entry, current_widget_valid = widget_entry_contract(
-        current_widget, expected_date=target_date
-    )
-    next_widget_entry, next_widget_valid = widget_entry_contract(
-        next_widget, expected_date=effective_date
-    )
-    if next_widget_path.exists() and not next_widget_valid:
-        owners.append(
-            {
-                "path": str(next_widget_path),
-                "schema": next_widget.get("schema") if next_widget else None,
-                "policy_mutation_count": 0,
-                "reason": "next_exact_date_widget_entry_contract_invalid",
-            }
-        )
-    elif next_widget_valid and not current_widget_valid:
-        owners.append(
-            {
-                "path": str(next_widget_path),
-                "schema": next_widget.get("schema") if next_widget else None,
-                "policy_mutation_count": len(next_widget_entry),
-                "reason": "current_exact_date_widget_entry_baseline_unavailable",
-            }
-        )
-    elif next_widget_valid and next_widget_entry != current_widget_entry:
-        changed_scopes = sorted(
-            key
-            for key in set(current_widget_entry) | set(next_widget_entry)
-            if current_widget_entry.get(key) != next_widget_entry.get(key)
-        )
-        owners.append(
-            {
-                "path": str(next_widget_path),
-                "schema": next_widget.get("schema") if next_widget else None,
-                "policy_mutation_count": len(changed_scopes),
-                "changed_scopes": changed_scopes,
-            }
-        )
     return {
         "status": "blocked" if owners else "clear",
         "mutation_present": bool(owners),
@@ -502,6 +403,8 @@ def _ceil_krx_price(raw_price: float) -> float | None:
 def _candidate_observation(
     *, source_date: date, row: dict[str, Any], delay_sec: int
 ) -> dict[str, Any] | None:
+    if row.get("owner") != "episode":
+        return None
     horizon = (row.get("entry_confirmation_bbo_horizons") or {}).get(str(delay_sec))
     outcome = row.get("owner_outcome")
     if not isinstance(horizon, dict) or not isinstance(outcome, dict):
@@ -1070,7 +973,7 @@ def _dynamic_modeled_target_price_for_row(
         baseline_fill_price=row.get("anchor_price"),
         owner_target_price=row.get("owner_target_price"),
         checkpoint_ask=checkpoint_ask,
-        widget_take_profit=bool(
+        target_from_fill=bool(
             isinstance(outcome, dict)
             and outcome.get("exit_reason") == "take_profit_fill"
         ),
@@ -1182,7 +1085,7 @@ def _dynamic_replay_contract_valid(
             owner_entry_limit_price=owner_entry_limit_price,
             owner_target_price=owner_target_price,
             round_trip_cost_pct=owner_round_trip_cost_pct,
-            widget_take_profit=bool(
+            target_from_fill=bool(
                 isinstance(outcome, dict)
                 and outcome.get("exit_reason") == "take_profit_fill"
             ),
@@ -2261,7 +2164,7 @@ def _report_sample_floor_assessment(
         for row in confirmation.get("entry_anchors") or []:
             if (
                 isinstance(row, dict)
-                and row.get("owner") in {"widget", "episode"}
+                and row.get("owner") == "episode"
                 and row.get("anchor_role") in ACTUAL_ENTRY_SOURCE_ROLES
             ):
                 target_actual_rows.append(row)
@@ -2448,7 +2351,6 @@ def build_report(
     source_dir: Path = SOURCE_DIR,
     low_price_candidate_dir: Path = LOW_PRICE_CANDIDATE_DIR,
     samsung_candidate_dir: Path = SAMSUNG_CANDIDATE_DIR,
-    widget_policy_dir: Path = WIDGET_POLICY_DIR,
     effective_date: date | None = None,
     publication_date: date | None = None,
 ) -> dict[str, Any]:
@@ -2482,7 +2384,7 @@ def build_report(
             if (
                 not isinstance(row, dict)
                 or row.get("anchor_role") not in ENTRY_ROLES
-                or row.get("owner") not in {"widget", "episode"}
+                or row.get("owner") != "episode"
                 or not row.get("entry_timing_scope_id")
             ):
                 continue
@@ -2521,7 +2423,9 @@ def build_report(
     )
 
     actual_history, actual_history_errors = read_native_actual_history(
-        OUTPUT_DIR, target_date=target_date
+        OUTPUT_DIR,
+        target_date=target_date,
+        minimum_source_date=max(CLEAN_BASELINE_DATE, MIN_SOURCE_REPORT_DATE),
     )
     completed_actuals = dict(actual_history)
     for key, rows in sorted(grouped.items()):
@@ -2651,7 +2555,6 @@ def build_report(
         target_date=target_date,
         low_price_candidate_dir=low_price_candidate_dir,
         samsung_candidate_dir=samsung_candidate_dir,
-        widget_policy_dir=widget_policy_dir,
         effective_date=effective_date,
     )
     winner = (
@@ -2789,6 +2692,7 @@ def build_report(
         "effective_date": effective_date.isoformat(),
         "generated_at_kst": datetime.now(tz=KST).isoformat(timespec="seconds"),
         "clean_tuning_baseline_date": CLEAN_BASELINE_DATE.isoformat(),
+        "minimum_source_report_date": MIN_SOURCE_REPORT_DATE.isoformat(),
         "source_artifacts": source_artifacts,
         "decision_ownership": {
             "schema": SOURCE_DECISION_OWNERSHIP_SCHEMA,
@@ -3012,6 +2916,7 @@ def render_markdown(report: dict[str, Any], applied: dict[str, Any]) -> str:
         "",
         f"- Source date: `{report['target_date']}`",
         f"- Effective date: `{report['effective_date']}`",
+        f"- Minimum source report date: `{report.get('minimum_source_report_date', 'not_recorded')}`",
         f"- Decision: `{report['decision']}`",
         "- Axis: one owner scope, fixed delay or per-signal dynamic `0/1/3/5s` confirmation.",
         "- Quantity, order price, target, stop, holding, and exit are unchanged.",
@@ -3114,7 +3019,6 @@ def apply_rebound_preopen(
     policy_dir: Path | None = None,
     low_price_candidate_dir: Path = LOW_PRICE_CANDIDATE_DIR,
     samsung_candidate_dir: Path = SAMSUNG_CANDIDATE_DIR,
-    widget_policy_dir: Path = WIDGET_POLICY_DIR,
     timing_policy_dir: Path = DEFAULT_POLICY_DIR,
 ) -> dict[str, Any]:
     """Revalidate the fixed experiment before issuing an exact-date receipt.
@@ -3213,7 +3117,6 @@ def apply_rebound_preopen(
             target_date=source_date,
             low_price_candidate_dir=low_price_candidate_dir,
             samsung_candidate_dir=samsung_candidate_dir,
-            widget_policy_dir=widget_policy_dir,
             effective_date=target_date,
         )
         sources, rejected = _source_reports(

@@ -261,7 +261,7 @@ def test_bad_group_cannot_select_early_winners(damage):
 
 def study_fixture():
     scope = OwnerScope(
-        "widget", "actual:005930:KRX_REGULAR", "005930", "KRX", "KRX_REGULAR"
+        "episode", "actual:005930:KRX_REGULAR", "005930", "KRX", "KRX_REGULAR"
     )
     raw, policy, base = group_fixture()
     policy = replace(policy, scope_key=scope.key)
@@ -275,7 +275,7 @@ def study_fixture():
             offset = start - path.position.first_fill_at_ms
             p = replace(
                 path.position,
-                owner_id="widget",
+                owner_id="episode",
                 scope_key=scope.key,
                 episode_id=eid,
                 first_fill_at_ms=start,

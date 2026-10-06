@@ -25,7 +25,7 @@ from src.trading.order.adaptive_exit.market_source import (
 )
 from src.trading.order.adaptive_exit.target_group import group_from_observation
 from src.trading.order.tick_utils import get_tick_size
-from .widget_comparison_cost import comparison_cost_contract
+from src.trading.market.comparison_cost import comparison_cost_contract
 
 KST = ZoneInfo("Asia/Seoul")
 HORIZON_SEC = 1200  # Fixed source-only comparison horizon, not a live timeout.
@@ -364,7 +364,7 @@ def _finalize_shared_targets(census):
             record["status"] = "source_bound_runtime_unavailable"
 
 
-def collect_owner_census(*, target_date, catalog, runtime_root, widget_state_path):
+def collect_owner_census(*, target_date, catalog, runtime_root):
     """Read each owner file once; missing state is never healthy no-sample.
 
     Expected lots are based on filled BUY records, not completed SELL winners.
@@ -423,133 +423,9 @@ def collect_owner_census(*, target_date, catalog, runtime_root, widget_state_pat
             },
         },
     }
-    # One widget daily envelope contains all episodes for all configured symbols.
-    widget, binding = _read(Path(widget_state_path))
-    source["state_sources"].append(binding)
-    symbol_rows = None
-    if widget is not None:
-        history = widget.get("history", [])
-        matches = (
-            ([widget] if widget.get("active_date") == target_date else [])
-            + [
-                h
-                for h in history
-                if isinstance(h, dict) and h.get("trade_date") == target_date
-            ]
-            if isinstance(history, list)
-            else []
-        )
-        if (
-            widget.get("schema_version") == 1
-            and widget.get("execution_authority")
-            == "operator_directed_widget_auto_trade_v1"
-            and len(matches) == 1
-            and isinstance(matches[0].get("symbols"), dict)
-        ):
-            symbol_rows = matches[0]["symbols"]
-    if symbol_rows is not None:
-        for symbol, state in symbol_rows.items():
-            try:
-                if not isinstance(state, dict):
-                    raise ValueError("widget_symbol_state_invalid")
-                orders = state["orders"]
-                if not isinstance(orders, list) or any(
-                    not isinstance(o, dict) for o in orders
-                ):
-                    raise ValueError("widget_orders_invalid")
-                receipt_error = None
-                try:
-                    receipts = _target_receipts(orders)
-                except (KeyError, TypeError, ValueError) as exc:
-                    receipts, receipt_error = [], str(exc)
-                for order in orders:
-                    if (
-                        order.get("side") != "BUY"
-                        or order.get("broker_accepted") is not True
-                    ):
-                        continue
-                    eid = order.get("parent_entry_signal_id") or order.get("signal_id")
-                    parts = str(eid).split(":", 4)
-                    if len(parts) != 5 or parts[0] != symbol or parts[2] != "ENTRY":
-                        raise ValueError("widget_entry_identity_invalid")
-                    entry_day = validate_source_day(parts[1])
-                    if entry_day.isoformat() > target_date:
-                        raise ValueError("widget_future_entry_identity")
-                    if entry_day.isoformat() < target_date:
-                        source.setdefault("outside_source_date_custody", []).append(
-                            {
-                                "owner": "widget",
-                                "symbol": symbol,
-                                "episode_id": eid,
-                                "entry_date": parts[1],
-                                "order_no": order.get("order_no"),
-                                "disposition": "outside_scope",
-                                "reason": "prior_entry_clock_not_recreated",
-                            }
-                        )
-                        continue
-                    route = order.get("broker_route") or order.get("route")
-                    scope = OwnerScope(
-                        "widget", f"actual:{symbol}:{parts[3]}", symbol, route, parts[3]
-                    )
-                    census = scopes.setdefault(scope.key, _empty(scope, target_date))
-                    if receipt_error and receipt_error not in census["errors"]:
-                        census["errors"].append(receipt_error)
-                    quantity = order.get("filled_qty")
-                    if type(quantity) is not int or quantity < 0:
-                        raise ValueError("widget_fill_quantity_invalid")
-                    if quantity == 0:
-                        census["unfilled_buy_count"] += 1
-                        continue
-                    lid = (
-                        "entry"
-                        if order.get("signal_id") == eid
-                        else f"scale_in:{order.get('scale_in_leg_index')}"
-                    )
-                    _add_lot(
-                        census,
-                        scope=scope,
-                        eid=eid,
-                        lid=lid,
-                        entry={
-                            "order_date": order.get("order_date"),
-                            "order_no": order.get("order_no"),
-                            "quantity": quantity,
-                            "price": order.get("fill_price"),
-                        },
-                        receipts=receipts,
-                        state_hash=binding["sha256"],
-                        target_date=target_date,
-                    )
-            except (KeyError, TypeError, ValueError, OverflowError) as exc:
-                for key, census in scopes.items():
-                    if (
-                        census["scope"]["owner"] == "widget"
-                        and census["scope"]["symbol"] == symbol
-                    ):
-                        census["errors"].append(str(exc))
-                source.setdefault("unscoped_errors", []).append(
-                    f"widget:{symbol}:{exc}"
-                )
-    source["owner_envelope_valid"] = {
-        "widget": symbol_rows is not None and not source.get("unscoped_errors"),
-        "episode_inventory": True,
-    }
-    for census in scopes.values():
-        scope = OwnerScope(**census["scope"])
-        if scope.owner != "widget":
-            continue
-        census["complete"] = bool(
-            symbol_rows is not None
-            and scope.symbol in symbol_rows
-            and scope.profile.startswith("actual:")
-            and not census["errors"]
-        )
-        if not scope.profile.startswith("actual:"):
-            census["execution_scope"] = False
-            census["errors"].append("not_applicable_nonexecution_scope")
-        elif symbol_rows is None:
-            census["errors"].append("widget_exact_date_state_missing_or_invalid")
+    source["owner_envelope_valid"] = {"episode_inventory": True}
+    if any(scope.owner != "episode" for scope in catalog):
+        raise ValueError("retired_or_unknown_adaptive_owner")
     # Catalog paths are trusted profile registry identities, never artifact-supplied paths.
     cache = {}
     for census in list(scopes.values()):

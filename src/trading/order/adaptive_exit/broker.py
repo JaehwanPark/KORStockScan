@@ -126,7 +126,7 @@ class RegisteredSellAdapter:
         if (
             authority_policy_id not in {FAMILY, PROFIT_STAGNATION_FAMILY, TARGET_RATCHET_FAMILY}
             or
-            context.owner_type not in {"widget_auto_trade", "episode"}
+            context.owner_type != "episode"
             or not re.fullmatch(r"[0-9]{6}", symbol)
             or not routes
             or any(r not in {"KRX", "SOR", "NXT"} for r in routes)

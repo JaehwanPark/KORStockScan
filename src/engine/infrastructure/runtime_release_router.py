@@ -49,7 +49,6 @@ OPERATIONS = ("start", "restart", *OWNED, "paired-replay", "eod", "archive", "bu
 RELEASE_SET_LOCK = "runtime_release_set.lock"
 MAX_RELEASE_SET_UNITS = 256
 CORE_SYSTEMD_UNITS = (
-    "korstockscan-widget-signal-auto-trader.service",
     "korstockscan-low-price-two-leg-auto-expansion.service",
 )
 
@@ -299,6 +298,22 @@ def git(root: Path, *args: str) -> str:
     ).strip()
 
 
+def _validate_retired_surfaces(workspace: Path, root: Path) -> None:
+    receipt = workspace / "data/runtime/retirements/widget-retirement-2026-10-06.json"
+    if not receipt.exists():
+        return
+    body = json.loads(receipt.read_text())
+    if (body.get("schema") != "widget_retirement_transition_v1"
+        or body.get("state") != "terminal" or body.get("owner") != "widget_auto_trade"):
+        raise ValueError("widget_retirement_receipt_invalid")
+    surfaces = (
+        "src/trading/widget_auto_trade/engine.py", "src/web/samsung_price_widget_routes.py",
+        "deploy/run_widget_evaluation.sh", "deploy/systemd/korstockscan-widget-signal-auto-trader.service",
+    )
+    if any((root / name).exists() for name in surfaces):
+        raise ValueError("release_restores_permanently_retired_widget")
+
+
 def selected_release(workspace: Path) -> tuple[Path, str]:
     workspace = workspace.resolve(strict=True)
     selection = json.loads(
@@ -340,6 +355,7 @@ def selected_release(workspace: Path) -> tuple[Path, str]:
             raise ValueError(f"release_shared_path_mismatch:{name}")
         if name != "restart.flag" and not shared.is_dir():
             raise ValueError(f"release_shared_path_missing:{name}")
+    _validate_retired_surfaces(workspace, root)
     return root, commit
 
 

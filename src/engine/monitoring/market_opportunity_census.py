@@ -27,7 +27,7 @@ from src.engine.monitoring.entry_turn_point_replay import (
 from src.engine.monitoring.pruned_candidate_bbo_collector import (
     OBSERVATION_SCHEMA_VERSION as PRUNE_BBO_OBSERVATION_SCHEMA_VERSION,
 )
-from src.engine.monitoring.widget_comparison_cost import comparison_cost_contract
+from src.trading.market.comparison_cost import comparison_cost_contract
 from src.engine.monitoring.market_opportunity_review import (
     decision_disposition,
     diagnostic_followups,

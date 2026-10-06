@@ -1381,7 +1381,7 @@ def _build_tasks(
         tasks.append(
             GeneratedTask(
                 task_id=f"MachineLifecycleTurnoverObjectiveFollowup{mmdd}",
-                title="위젯·episode 빠른 회전 목적의 미완료 후속 구현 확인",
+                title="episode 빠른 회전 목적의 미완료 후속 구현 확인",
                 slot="POSTCLOSE",
                 time_window="21:30~21:40",
                 track="ScalpingLogic",

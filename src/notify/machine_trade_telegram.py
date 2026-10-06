@@ -21,7 +21,7 @@ FILL_EVENTS = {
     "PARTIAL_CANCEL_TARGET_FILL_REFRESHED", "SELL_PARTIAL_CANCEL_RECONCILED",
     "BUY_TERMINAL_CANCEL_RECONCILED", "SELL_TERMINAL_CANCEL_RECONCILED",
 }
-OWNERS = {"widget_auto_trade", "episode"}
+OWNERS = {"episode"}
 
 
 class RejectedDelivery(Exception):
@@ -180,7 +180,7 @@ def collect(state: dict, events: list[dict]) -> None:
                 if new == old:
                     continue  # amount-only refresh and replay are not fills
                 side = "매수" if row["side"] == "BUY" else "매도"
-                owner = "위젯" if row["owner_type"] == "widget_auto_trade" else "에피소드"
+                owner = "에피소드"
                 status = "전량체결" if new == total else "부분체결"
                 # Quantity is authoritative even when broker amounts arrive later.
                 # Do not print a stale average or a fabricated zero fill price/PnL.

@@ -9,73 +9,26 @@ from src.engine.monitoring.policy_research_economics import joint_capital_demand
 
 def reference_inputs(report, family):
     """Keep the registered calendar and original incumbent on each causal lane."""
+    if family != "episode":
+        raise ValueError("research_portfolio_family_retired")
     lanes, failures = {}, []
     for key, result in report.get(
-        "symbols" if family == "widget" else "profiles", {}
+        "profiles", {}
     ).items():
-        expected = (
-            "holdout_pass_widget_signal_policy_candidate"
-            if family == "widget"
-            else "holdout_pass_source_only_early_candidate"
-        )
+        expected = "holdout_pass_source_only_early_candidate"
         if result.get("decision") != expected:
             continue
         revision = result.get("candidate_revision")
         if revision is None:
-            baseline_arm = (
-                (result.get("component_comparison") or {}).get("arms") or {}
-            ).get("applied_baseline")
-            parameters = result.get("selected_policy") or {}
-            if (
-                family != "widget"
-                or not isinstance(baseline_arm, dict)
-                or baseline_arm.get("parameters") != parameters
-            ):
-                failures.append(key)
-                continue
-            split = result.get("date_split") or {}
-            qualified = (
-                ((report.get("source_meta") or {}).get(key) or {}).get(
-                    "daily_source_coverage"
-                )
-                or {}
-            ).get("qualified_dates", [])
-            revision = {
-                name + "_dates": [
-                    day
-                    for day in qualified
-                    if split.get(name + "_start", "~")
-                    <= day
-                    <= split.get(name + "_end", "")
-                ]
-                for name in ("calibration", "holdout")
-            }
-            revision["baseline_parameters"] = baseline_arm["parameters"]
-            if not all(
-                revision[name + "_dates"] for name in ("calibration", "holdout")
-            ):
-                failures.append(key)
-                continue
-        else:
-            loop.validate_revision(revision, owner=family)
-        if family == "widget":
-            candidate = result
-            baseline = (
-                (result.get("component_comparison") or {}).get("arms") or {}
-            ).get("applied_baseline")
-            if revision.get("baseline_parameters") is None:
-                baseline = {
-                    name: {"episodes": []} for name in ("calibration", "holdout")
-                }
-        else:
-            candidate, baseline = result.get("selected"), result.get("baseline")
+            failures.append(key)
+            continue
+        loop.validate_revision(revision, owner=family)
+        candidate, baseline = result.get("selected"), result.get("baseline")
         if not isinstance(baseline, dict) or not isinstance(candidate, dict):
             failures.append(key)
             continue
 
         def rows(summary):
-            if family == "widget":
-                return summary.get("episodes", [])
             converted = []
             for episode in summary.get("episodes", []):
                 legs = episode.get("legs")

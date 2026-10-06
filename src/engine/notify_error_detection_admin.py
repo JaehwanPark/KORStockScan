@@ -116,7 +116,7 @@ def _alert_results(report: dict) -> list[dict]:
         for value in (item.get("details") or {}).get("semantic_alerts", []):
             if (not isinstance(value, dict) or not _semantic_source_matches(report, item, value)
                 or value.get("stage") not in {"legacy_machine_report", "main_auxiliary_policy", "postclose_handoff", "entry_cancel_wait_tuning",
-                    "widget_policy", "episode_policy", "samsung_frozen_validation", "episode_startup"}
+                    "episode_policy", "samsung_frozen_validation", "episode_startup"}
                 or value.get("status") in {"not_assessed", "unobservable"}
                 or not value.get("reason") or not value.get("owner")):
                 continue
@@ -248,7 +248,7 @@ def notify_from_report(
              "main_auxiliary_policy": "auxiliary_result_semantics",
              "postclose_handoff": "postclose_handoff_semantics",
              "entry_cancel_wait_tuning": "entry_cancel_wait_result_semantics",
-             "widget_policy": "widget_policy_semantics", "episode_policy": "episode_policy_semantics",
+             "episode_policy": "episode_policy_semantics",
              "samsung_frozen_validation": "samsung_frozen_validation_semantics",
              "episode_startup": "episode_startup_semantics"}
     unresolved = {}

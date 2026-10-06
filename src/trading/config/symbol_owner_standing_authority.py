@@ -137,7 +137,8 @@ def build_standing_authority(
             or not owners
             or "main_scalping" not in owners
             or "manual_operator" not in owners
-            or not {"widget_auto_trade", "episode"}.intersection(owners)
+            or "episode" not in owners
+            or (reviewed.date() >= date(2026, 10, 6) and "widget_auto_trade" in owners)
             or any(owner not in VALID_OWNERS for owner in owners)
         ):
             raise SymbolOwnerStandingAuthorityError(

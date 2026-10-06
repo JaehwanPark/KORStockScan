@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from src.engine.monitoring.widget_comparison_cost import comparison_cost_contract
+from src.trading.market.comparison_cost import comparison_cost_contract
 from src.engine.scalping.score_recovery_observation import (
     eligible_observation,
     score_recovery_cohort_member,

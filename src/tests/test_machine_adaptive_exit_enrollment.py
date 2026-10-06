@@ -33,13 +33,14 @@ from src.trading.order.regular_two_leg_machine import (
     _fresh_state,
     _new_leg,
 )
-from src.trading.widget_auto_trade import engine as widget
+from zoneinfo import ZoneInfo
+KST = ZoneInfo("Asia/Seoul")
 
 DAY = OPEN.date().isoformat()
 SIGNAL = f"005930:{DAY}:ENTRY_READY:KRX_REGULAR:0900"
 
 
-@pytest.fixture(params=["episode", "widget"])
+@pytest.fixture(params=["episode"])
 def enrolled_owner(request, tmp_path, monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_BROKER_ACCOUNT_KEY", "isolated-enrollment-test")
     owner = request.param
@@ -68,7 +69,7 @@ def enrolled_owner(request, tmp_path, monkeypatch):
         else f"widget_auto_trade:005930:{DAY}:{SIGNAL}"
     )
     context = OwnerOrderContext(
-        "episode" if owner == "episode" else "widget_auto_trade",
+        "episode",
         position,
         position,
         "target",
@@ -174,121 +175,60 @@ def enrolled_owner(request, tmp_path, monkeypatch):
             )
 
     path = tmp_path / "owner.json"
-    if owner == "episode":
-        machine = SamsungRegularTwoLegMachine(
-            gateway=Gateway(),
-            state_path=path,
-            policy=SimpleNamespace(symbol="005930", route="SOR"),
-            strategy_name="test-profile",
-            schema="test-v1",
-            legacy_schema="old",
-            live_enabled=True,
-            owner_registry=registry,
-            adaptive_exit_services=services,
-        )
-        leg = _new_leg(lot, lot, 10000)
-        leg.update(
-            quantity=10,
-            status="TARGET_OPEN",
-            buy_order_no="0000001",
-            buy_order_date=DAY,
-            buy_filled_qty=10,
-            fill_price=10000,
-            position_qty=10,
-            target_order_no="0000002",
-            target_order_date=DAY,
-            target_quantity=10,
-            target_price=10100,
-            target_owner_registry_intent_id=target_id,
-            adaptive_exit_first_fill_observation=deepcopy(first),
-            **source_store,
-        )
-        other = _new_leg("signal_close_minus_1tick", "signal_close_minus_1tick", 9995)
-        other["status"] = "NO_FILL"
-        machine._state = _fresh_state(OPEN, "test-v1")
-        machine._state.update(
-            owned_order_nos=["0000001", "0000002"],
-            legs=[leg, other],
-            position_qty=10,
-            status="TARGET_OPEN",
-            attempt_consumed=True,
-        )
-        state = leg
+    machine = SamsungRegularTwoLegMachine(
+        gateway=Gateway(),
+        state_path=path,
+        policy=SimpleNamespace(symbol="005930", route="SOR"),
+        strategy_name="test-profile",
+        schema="test-v1",
+        legacy_schema="old",
+        live_enabled=True,
+        owner_registry=registry,
+        adaptive_exit_services=services,
+    )
+    leg = _new_leg(lot, lot, 10000)
+    leg.update(
+        quantity=10,
+        status="TARGET_OPEN",
+        buy_order_no="0000001",
+        buy_order_date=DAY,
+        buy_filled_qty=10,
+        fill_price=10000,
+        position_qty=10,
+        target_order_no="0000002",
+        target_order_date=DAY,
+        target_quantity=10,
+        target_price=10100,
+        target_owner_registry_intent_id=target_id,
+        adaptive_exit_first_fill_observation=deepcopy(first),
+        **source_store,
+    )
+    other = _new_leg("signal_close_minus_1tick", "signal_close_minus_1tick", 9995)
+    other["status"] = "NO_FILL"
+    machine._state = _fresh_state(OPEN, "test-v1")
+    machine._state.update(
+        owned_order_nos=["0000001", "0000002"],
+        legs=[leg, other],
+        position_qty=10,
+        status="TARGET_OPEN",
+        attempt_consumed=True,
+    )
+    state = leg
 
-        def propose(now=OPEN):
-            return machine._try_adaptive_enrollment(now)
+    def propose(now=OPEN):
+        return machine._try_adaptive_enrollment(now)
 
-        def raw():
-            return machine._state["legs"][0][SESSION_KEY]
+    def raw():
+        return machine._state["legs"][0][SESSION_KEY]
 
-        def receipt():
-            return machine._state["legs"][0][ENROLLMENT_KEY]
+    def receipt():
+        return machine._state["legs"][0][ENROLLMENT_KEY]
 
-        monkeypatch.setattr(
-            machine,
-            "_reconcile_target",
-            lambda *a: pytest.fail("legacy target entered"),
-        )
-    else:
-        machine = widget.WidgetSignalAutoTrader(
-            gateway=Gateway(),
-            specs=(),
-            dynamic_spec_catalog=(),
-            state_path=path,
-            policy_loader=SimpleNamespace(resolve_all=lambda **k: {}),
-            enabled=True,
-            owner_registry=registry,
-            adaptive_exit_services=services,
-        )
-        buy = dict(
-            side="BUY",
-            status="FILLED",
-            broker_accepted=True,
-            filled_qty=10,
-            requested_qty=10,
-            fill_price=10000,
-            order_no="0000001",
-            order_date=DAY,
-            signal_id=SIGNAL,
-            adaptive_exit_first_fill_observation=deepcopy(first),
-        )
-        target = dict(
-            side="SELL",
-            status="SUBMITTED",
-            order_role=widget.ORDER_ROLE_TAKE_PROFIT,
-            broker_accepted=True,
-            filled_qty=0,
-            requested_qty=10,
-            limit_price=10100,
-            order_no="0000002",
-            order_date=DAY,
-            owner_id=position,
-            owner_position_id=position,
-            owner_client_intent_id=context.client_intent_id,
-            owner_registry_intent_id=target_id,
-            parent_entry_signal_id=SIGNAL,
-            **source_store,
-        )
-        state = dict(
-            code="005930",
-            orders=[buy, target],
-            entry_signal_id=SIGNAL,
-            entry_episode_open=True,
-        )
-        machine._state = dict(active_date=DAY, symbols={"005930": state})
-
-        def propose(now=OPEN):
-            return machine._try_adaptive_enrollment("005930", state, now)
-
-        def raw():
-            return machine._state["symbols"]["005930"]["adaptive_exit_sessions"][lot]
-
-        def receipt():
-            return machine._state["symbols"]["005930"][ENROLLMENT_KEY][lot]
-
-        monkeypatch.setattr(
-            machine, "_reconcile", lambda *a: pytest.fail("legacy target entered")
-        )
+    monkeypatch.setattr(
+        machine,
+        "_reconcile_target",
+        lambda *a: pytest.fail("legacy target entered"),
+    )
     machine._save()
     return SimpleNamespace(
         machine=machine,

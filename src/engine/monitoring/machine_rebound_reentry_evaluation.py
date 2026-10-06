@@ -12,7 +12,7 @@ from datetime import date, datetime
 from statistics import mean
 from typing import Any
 
-from src.engine.monitoring.widget_comparison_cost import comparison_cost_contract
+from src.trading.market.comparison_cost import comparison_cost_contract
 from src.trading.config.machine_rebound_reentry_policy import (
     AUTO_ARM,
     MAX_P10_DETERIORATION_PCT,

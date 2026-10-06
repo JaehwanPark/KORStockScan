@@ -104,7 +104,7 @@ def threshold_recommendation_review_hash(
 
 
 def validate_threshold_recommendation(
-    recommendation: Any,
+    recommendation: Any, *, allow_retired_history: bool = False,
 ) -> tuple[bool, str]:
     if not isinstance(recommendation, Mapping):
         return False, "market_weakness_policy_recommendation_missing"
@@ -208,7 +208,7 @@ def validate_threshold_recommendation(
                 isinstance(owner_counts.get(owner), bool)
                 or not isinstance(owner_counts.get(owner), int)
                 or int(owner_counts[owner]) < 10
-                for owner in ("widget", "episode")
+                for owner in ("episode",)
             )
             or isinstance(recommendation.get("counterfactual_entry_signal_count"), bool)
             or not isinstance(
@@ -241,11 +241,15 @@ def validate_threshold_recommendation(
         selected_misclassification = selected.get("misclassification_count")
         stratum_guards = selected.get("stratum_guards")
         required_strata = {
-            "owner:widget",
             "owner:episode",
             "market:KOSPI",
             "market:KOSDAQ",
         }
+        # Preserve previously approved, hash-bound reviews. New generations
+        # never require or admit the retired owner stratum.
+        if (allow_retired_history and str(recommendation.get("window_end") or "") < "2026-10-06"
+            and isinstance(stratum_guards, Mapping) and "owner:widget" in stratum_guards):
+            required_strata.add("owner:widget")
         stratum_guards_valid = (
             isinstance(stratum_guards, Mapping)
             and set(stratum_guards) == required_strata
@@ -588,7 +592,7 @@ def load_applied_policy(
         return None, "market_weakness_policy_source_report_contract_invalid"
     recommendation = response.get("threshold_recommendation")
     recommendation_valid, recommendation_reason = validate_threshold_recommendation(
-        recommendation
+        recommendation, allow_retired_history=source_date < date(2026, 10, 6)
     )
     if not recommendation_valid:
         return None, recommendation_reason

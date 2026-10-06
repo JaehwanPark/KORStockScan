@@ -8,6 +8,8 @@ import pytest
 from src.engine.automation import postclose_summary_handoff as mod
 
 
+
+
 def test_machine_barrier_waits_for_exact_inputs_and_allows_scoped_recovery(tmp_path, monkeypatch):
     day = "2026-09-21"
     monkeypatch.setattr(mod, "producer_receipt_issues", lambda *a: [])
@@ -451,98 +453,24 @@ def test_independent_producer_roundtrip_and_post_terminal_source_drift(monkeypat
     monkeypatch.setattr(handoff.subprocess, "check_output", lambda *a, **k: "a" * 40)
     day = "2026-09-17"
     paths = source_paths(data / "report", day)
-    for label in handoff.INDEPENDENT_SOURCES["widget"]:
-        path = paths[label]
+    for label in handoff.INDEPENDENT_SOURCES["machine"]:
+        path = paths.get(label, data / "report" / label / f"{label}_{day}.json")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({"target_date": day}))
-    assert handoff._producer_main(["--owner", "widget", "--date", day, "--phase", "started"]) == 0
-    assert handoff.producer_receipt_issues(data / "report", day, "widget")
-    assert handoff._producer_main(["--owner", "widget", "--date", day, "--phase", "finished"]) == 0
-    assert handoff.producer_receipt_issues(data / "report", day, "widget") == []
-    paths[handoff.INDEPENDENT_SOURCES["widget"][0]].write_text("{}")
-    assert handoff.producer_receipt_issues(data / "report", day, "widget")
-    old = handoff.producer_receipt_path(data / "report", day, "widget").read_bytes()
-    assert handoff._producer_main(["--owner", "widget", "--date", day, "--phase", "started"]) == 0
+    assert handoff._producer_main(["--owner", "machine", "--date", day, "--phase", "started"]) == 0
+    assert handoff.producer_receipt_issues(data / "report", day, "machine")
+    assert handoff._producer_main(["--owner", "machine", "--date", day, "--phase", "finished"]) == 0
+    assert handoff.producer_receipt_issues(data / "report", day, "machine") == []
+    paths[handoff.INDEPENDENT_SOURCES["machine"][0]].write_text("{}")
+    assert handoff.producer_receipt_issues(data / "report", day, "machine")
+    old = handoff.producer_receipt_path(data / "report", day, "machine").read_bytes()
+    assert handoff._producer_main(["--owner", "machine", "--date", day, "--phase", "started"]) == 0
     assert any(p.read_bytes() == old for p in (data / "report/postclose_producer_terminal/attempts").glob("*.json"))
-    assert handoff._producer_main(["--owner", "widget", "--date", day, "--phase", "finished", "--exit-code", "17"]) == 1
+    assert handoff._producer_main(["--owner", "machine", "--date", day, "--phase", "finished", "--exit-code", "17"]) == 1
 
 
-def test_widget_prefix_reuse_rejects_drift_and_preserves_origin(monkeypatch, tmp_path):
-    from src.engine.automation.postclose_recommendation_intake import source_paths
-    from src.utils import constants
-    monkeypatch.setattr(constants, "DATA_DIR", tmp_path / "data")
-    monkeypatch.setattr(constants, "PROJECT_ROOT", tmp_path)
-    monkeypatch.setattr(mod.subprocess, "check_output", lambda args, **kw: "src/engine/monitoring/machine_candidate_lifecycle.py\nsrc/engine/automation/machine_research_closed_loop_refresh.py" if "diff" in args else "a" * 40)
-    day="2026-09-17"
-    paths=source_paths(tmp_path / "data/report", day)
-    for label in mod.INDEPENDENT_SOURCES["widget"][:2]:
-        path=paths[label]; path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"target_date":day}))
-    cli=["--owner","widget","--date",day]
-    mod._producer_main(cli+["--phase","started"])
-    assert mod._producer_main(cli+["--phase","finished","--exit-code","1"]) == 1
-    old=mod._load_json(mod.producer_receipt_path(tmp_path / "data/report",day,"widget"))
-    mod._producer_main(cli+["--phase","started","--reuse-widget-prefix"])
-    new=mod._load_json(mod.producer_receipt_path(tmp_path / "data/report",day,"widget"))
-    assert new["reused_prefix"]["run_id"]==old["run_id"] and new["run_id"]!=old["run_id"]
-    # A stopped wrapper may retain only its started receipt and inherited prefix.
-    mod._producer_main(cli+["--phase","started","--reuse-widget-prefix"])
-    mod._producer_main(cli+["--phase","finished","--exit-code","1"])
-    paths[mod.INDEPENDENT_SOURCES["widget"][0]].write_text("{}")
-    with pytest.raises(RuntimeError, match="source_generation_mismatch"):
-        mod._producer_main(cli+["--phase","started","--reuse-widget-prefix"])
 
 
-@pytest.mark.parametrize("interrupted", [False, True])
-def test_machine_refresh_binds_widget_generation_without_rewriting_original_run(monkeypatch, tmp_path, interrupted):
-    def _write(path, payload):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload))
-    from src.utils import constants
-    from src.engine.automation import machine_research_closed_loop_refresh as phase
-    from src.engine.automation.postclose_recommendation_intake import source_paths
-    data = tmp_path / 'data'
-    monkeypatch.setattr(constants, 'DATA_DIR', data)
-    monkeypatch.setattr(constants, 'PROJECT_ROOT', tmp_path)
-    monkeypatch.setattr(mod.subprocess, 'check_output', lambda *a, **k: 'a' * 40)
-    # Native economic/publication reconstruction has its separate closed-loop E2E.
-    monkeypatch.setattr(phase, 'validate_current_receipt', lambda v, day: v.get('native_current') is True)
-    day = '2026-09-17'
-    reports = data / 'report'
-    paths = source_paths(reports, day)
-    for label in set(mod.INDEPENDENT_SOURCES['widget'] + mod.INDEPENDENT_SOURCES['machine']):
-        path = paths.get(label, reports / label / f'{label}_{day}.json')
-        _write(path, dict(target_date=day, native_current=True))
-    def run(owner, stage):
-        return mod._producer_main(['--owner', owner, '--date', day, '--phase', stage])
-    assert run('widget', 'started') == 0 and run('widget', 'finished') == 0
-    original = mod.producer_receipt_path(reports, day, 'widget').read_bytes()
-    assert run('machine', 'started') == 0
-    path = paths['widget_symbol_signal_policy_research']
-    _write(path, dict(target_date=day, enriched=True))
-    _write(paths['widget_symbol_runtime_policy_apply'], dict(target_date=day, enriched=True))
-    assert mod.producer_receipt_issues(reports, day, 'widget')
-    if interrupted:
-        assert mod._producer_main(['--owner', 'machine', '--date', day, '--phase', 'finished', '--exit-code', '1']) == 1
-        assert mod.producer_receipt_issues(reports, day, 'machine')
-        closure = reports / 'machine_research_closed_loop' / f'machine_research_closed_loop_{day}.json'
-        _write(closure, dict(target_date=day, native_current=False))
-        with pytest.raises(RuntimeError, match='upstream_widget_terminal_invalid'):
-            run('machine', 'started')
-        _write(closure, dict(target_date=day, native_current=True))
-        advisory = paths['widget_advisory_calibration']
-        original_advisory = advisory.read_bytes()
-        _write(advisory, dict(target_date=day, illegal_change=True))
-        with pytest.raises(RuntimeError, match='upstream_widget_terminal_invalid'):
-            run('machine', 'started')
-        advisory.write_bytes(original_advisory)
-        assert run('machine', 'started') == 0
-        assert mod.producer_receipt_issues(reports, day, 'widget')
-    assert run('machine', 'finished') == 0
-    assert mod.producer_receipt_issues(reports, day, 'widget') == []
-    assert mod.producer_receipt_path(reports, day, 'widget').read_bytes() == original
-    _write(path, dict(target_date=day, unexpected_later_generation=True))
-    assert mod.producer_receipt_issues(reports, day, 'widget')
 
 
 @pytest.mark.parametrize('clock,publication,prepared,allowed', [
@@ -582,73 +510,8 @@ def test_overnight_publication_recovery_stops_before_preopen(tmp_path, monkeypat
             loop.publication_transaction(folder, effective_date=effective, files={'policy.json': {'revision': 2}}, expected_generation=initial['generation_sha256'])
 
 
-@pytest.mark.parametrize("terminal,exit_code", [("failed", 1), ("succeeded", 0)])
-def test_failed_refresh_can_rebuild_after_unrelated_dependency_changed(tmp_path, monkeypatch, terminal, exit_code):
-    from src.engine.monitoring import research_closed_loop as loop
-    from src.engine.automation import machine_research_closed_loop_refresh as refresh
-    from src.engine.verify_threshold_cycle_postclose_chain import _sha
-    from datetime import date
-    day = '2026-09-21'
-    widget = mod.producer_receipt_path(tmp_path, day, 'widget')
-    widget.parent.mkdir(parents=True)
-    study = tmp_path / 'study.json'
-    study.write_text('{"target_date":"2026-09-21"}')
-    sources = {'widget_symbol_signal_policy_research': {'path': str(study)}}
-    widget.write_text(json.dumps({'sources': sources}))
-    effective = date(2026, 9, 22)
-    publication = tmp_path / 'policies'
-    manifest = loop.publication_transaction(publication, effective_date=effective, files={'policy.json': {}})
-    closure = {'schema': loop.SCHEMA, 'target_date': day, 'status': 'complete',
-        'publications': {'widget': {'directory': str(publication), 'effective_date': str(effective), 'generation_sha256': manifest['generation_sha256']}},
-        'dependency_sources': {str(study): loop.digest(json.loads(study.read_text()))}}
-    closure['receipt_sha256'] = loop.digest(closure)
-    path = tmp_path / 'machine_research_closed_loop' / f'machine_research_closed_loop_{day}.json'
-    path.parent.mkdir()
-    path.write_text(json.dumps(closure))
-    previous = {'status': terminal, 'owner': 'machine', 'target_date': day, 'run_id': 'run', 'exit_code': exit_code, 'code_commit': 'a' * 40,
-        'upstream_widget': {'sha256': _sha(widget), 'sources': sources}}
-    monkeypatch.setattr(refresh, 'validate_current_receipt', lambda *args: False)
-    issues = ['widget:source_hash_invalid:widget_symbol_signal_policy_research']
-    assert mod._verified_machine_refresh_retry(tmp_path, day, previous, issues)
-    (publication / 'policy.json').write_text('{"tampered": true}')
-    assert not mod._verified_machine_refresh_retry(tmp_path, day, previous, issues)
-    (publication / 'policy.json').write_text('{}')
-    bad = dict(closure, receipt_sha256='f' * 64)
-    path.write_text(json.dumps(bad))
-    assert not mod._verified_machine_refresh_retry(tmp_path, day, previous, issues)
-    path.write_text(json.dumps(closure))
-    study.write_text('{"target_date":"2026-09-20"}')
-    assert not mod._verified_machine_refresh_retry(tmp_path, day, previous, issues)
-    assert not mod._verified_machine_refresh_retry(tmp_path, day, previous, ['widget:source_hash_invalid:widget_advisory_calibration'])
 
 
-def test_widget_state_dependency_ignores_heartbeat_but_binds_order_facts(tmp_path):
-    from copy import deepcopy
-    from datetime import date
-    from src.engine.automation import machine_research_closed_loop_refresh as refresh
-    from src.engine.monitoring.research_version_outcomes import native_widget_rows
-    day = date(2026, 9, 21)
-    path = tmp_path / 'widget_signal_auto_trade_state.json'
-    order = dict(order_no='order-1', order_date=str(day), side='BUY', filled_qty=0,
-                 requested_qty=1, remaining_qty=1, status='OPEN', signal_id='signal',
-                 execution_policy_content_sha256='a' * 64)
-    state = dict(active_date=str(day), symbols={'005930': {'orders': [order]}},
-                 history=[], last_cycle_at='first', enabled_symbols=['005930'])
-    path.write_text(json.dumps(state))
-    first = refresh._read_report_dependency(path, source_date=day)
-    original_rows = native_widget_rows(state, source_date=day)
-    rollover = dict(active_date='2026-09-22', symbols={'000001': {'orders': []}},
-                    history=[dict(trade_date=str(day), symbols=state['symbols'])],
-                    last_cycle_at='later', enabled_symbols=['000001'])
-    path.write_text(json.dumps(rollover))
-    assert refresh._read_report_dependency(path, source_date=day) == first
-    assert native_widget_rows(rollover, source_date=day) == original_rows
-    changed = deepcopy(rollover)
-    changed['history'][0]['symbols']['005930']['orders'][0]['filled_qty'] = 1
-    path.write_text(json.dumps(changed))
-    assert refresh._read_report_dependency(path, source_date=day) != first
-    with pytest.raises(ValueError, match='dependency_date_required'):
-        refresh._read_report_dependency(path)
 
 
 @pytest.fixture
@@ -806,26 +669,9 @@ def test_machine_resource_timeout_writes_deferred_terminal(stage_environment):
     assert blocked['resource_guard']['mem_available_mb'] == 3020.0
 
 
-def test_widget_eod_wait_does_not_acquire_compute_slot(stage_environment, monkeypatch):
-    h, day, report, run, produce = stage_environment
-    monkeypatch.setenv('KORSTOCKSCAN_WIDGET_EVALUATION_WAIT_FOR_EOD', 'true')
-    monkeypatch.setenv('KORSTOCKSCAN_WIDGET_EVALUATION_EOD_WAIT_SEC', '0')
-    deferred = run('widget_policy', runner=lambda *a, **kw: pytest.fail('source is not ready'))
-    assert deferred['status'] == 'deferred'
-    assert deferred['reason'] == 'waiting_for_source'
-    assert not (report.parent / 'runtime' / 'postclose_stage_slots').exists()
-
-    status = report.parent / 'runtime' / 'update_kospi_status' / f'update_kospi_{day}.json'
-    status.parent.mkdir(parents=True)
-    status.write_text(json.dumps({'status':'completed', 'target_date':day,
-        'db_state':{'latest_quote_date':day, 'rows_on_latest_date':2}}))
-    assert h._widget_eod_state(report, day) == 'ready'
-    status.write_text(json.dumps({'status':'completed', 'target_date':day,
-        'db_state':{'latest_quote_date':'2026-09-20', 'rows_on_latest_date':2}}))
-    assert h._widget_eod_state(report, day) == 'invalid'
 
 
-@pytest.mark.parametrize("failed_stage", ["market_weakness", "main_auxiliary_policy", "widget_policy", "episode_policy", "summary_handoff"])
+@pytest.mark.parametrize("failed_stage", ["market_weakness", "main_auxiliary_policy", "episode_policy", "summary_handoff"])
 def test_stage_failure_does_not_cancel_independent_machine(stage_environment, failed_stage):
     h, day, report, run, produce = stage_environment
     if failed_stage == 'main_auxiliary_policy':
@@ -1027,152 +873,12 @@ def test_final_controller_reseal_preserves_receipt_when_summary_inputs_changed(s
     assert receipt_path.read_bytes() == original
 
 
-def test_committed_label_intake_binds_payload_and_rejects_partial_file(stage_environment):
-    h, day, report, run, produce = stage_environment
-    payload = report.parent / 'ai_decision_payloads' / f'ai_decision_payloads_{day}.jsonl'
-    payload.parent.mkdir(parents=True); payload.write_text('{}\n')
-    produce(['fixture', 'outcome_labels'])
-    first = run('outcome_labels', execute=False)
-    assert first['execution_mode'] == 'existing_output_validation'
-    assert run('outcome_labels', execute=False)['cache_reused']
-    assert run('collector_recommendation')['status'] == 'succeeded'
-    payload.write_text('{"changed":true}\n')
-    assert h.stage_receipt_issues(report, day, 'outcome_labels') == ['outcome_labels:input_generation_changed']
-    label = h.stage_artifacts(report, day, 'outcome_labels')['ai_decision_outcome_labels']
-    label.write_text('{')
-    assert run('outcome_labels', execute=False)['status'] == 'failed'
-    assert run('collector_recommendation')['status'] == 'deferred'
 
 
-def test_exact_ai_storage_compression_preserves_stage_generation(stage_environment):
-    from datetime import date
-    from src.engine.scalping.micro_reversion.storage_maintenance import maintain_report_artifact_storage
-
-    h, day, report, run, produce = stage_environment
-    payload = report.parent / 'ai_decision_payloads' / f'ai_decision_payloads_{day}.jsonl'
-    payload.parent.mkdir(parents=True)
-    payload.write_text(json.dumps({
-        'schema': 'ai_decision_payload_v1', 'captured_at': day + 'T20:00:00+09:00',
-    }) + '\n')
-    produce(['fixture', 'outcome_labels'])
-    assert run('outcome_labels', execute=False)['status'] == 'succeeded'
-    assert run('collector_recommendation')['status'] == 'succeeded'
-    label = h.stage_artifacts(report, day, 'outcome_labels')['ai_decision_outcome_labels']
-    before = {path: (path.stat().st_size, h._stage_sources({'source': path})['source']['sha256'])
-              for path in (payload, label)}
-
-    result = maintain_report_artifact_storage(
-        [], as_of_date=date.fromisoformat('2026-09-22'), apply=True,
-        exact_ai_artifact_roots=[payload.parent, label.parent],
-        low_disk_watermark_bytes=0, critical_disk_watermark_bytes=0,
-    )
-    assert result['status'] == 'pass'
-    receipts = {row['logical_path']: row for row in
-                result['exact_ai_artifact_maintenance']['artifact_receipts']}
-    for path, (size, sha) in before.items():
-        assert not path.exists()
-        assert path.with_suffix(path.suffix + '.gz').exists()
-        assert receipts[str(path)]['trade_date'] == day
-        assert receipts[str(path)]['decoded_content_sha256'] == sha
-        assert receipts[str(path)]['decoded_content_bytes'] == size
-        assert h._stage_sources({'source': path})['source'] == {
-            'path': str(path.resolve()), 'sha256': sha,
-        }
-    assert h.stage_receipt_issues(report, day, 'outcome_labels') == []
-    assert h.stage_receipt_issues(report, day, 'collector_recommendation') == []
 
 
-@pytest.mark.parametrize('source_kind', ['payload', 'label'])
-@pytest.mark.parametrize('damage', ['corrupt', 'wrong_date', 'changed', 'missing'])
-def test_compressed_exact_ai_stage_rejects_source_drift(stage_environment, source_kind, damage):
-    from datetime import date
-    from src.engine.scalping.micro_reversion.storage_maintenance import (
-        maintain_report_artifact_storage, validate_exact_ai_artifact_source,
-    )
-
-    h, day, report, run, produce = stage_environment
-    payload = report.parent / 'ai_decision_payloads' / f'ai_decision_payloads_{day}.jsonl'
-    payload.parent.mkdir(parents=True)
-    payload.write_text(json.dumps({
-        'schema': 'ai_decision_payload_v1', 'captured_at': day + 'T20:00:00+09:00',
-    }) + '\n')
-    produce(['fixture', 'outcome_labels'])
-    assert run('outcome_labels', execute=False)['status'] == 'succeeded'
-    assert run('collector_recommendation')['status'] == 'succeeded'
-    label = h.stage_artifacts(report, day, 'outcome_labels')['ai_decision_outcome_labels']
-    source = payload if source_kind == 'payload' else label
-    original = source.read_bytes()
-    result = maintain_report_artifact_storage(
-        [], as_of_date=date.fromisoformat('2026-09-22'), apply=True,
-        exact_ai_artifact_roots=[payload.parent, label.parent],
-        low_disk_watermark_bytes=0, critical_disk_watermark_bytes=0,
-    )
-    assert result['status'] == 'pass'
-    compressed = source.with_suffix(source.suffix + '.gz')
-    assert h.stage_receipt_issues(report, day, 'outcome_labels') == []
-    assert h.stage_receipt_issues(report, day, 'collector_recommendation') == []
-
-    if damage == 'missing':
-        compressed.unlink()
-    elif damage == 'corrupt':
-        compressed.write_bytes(b'not a gzip stream')
-    else:
-        changed = json.loads(original)
-        if damage == 'wrong_date':
-            changed['captured_at' if source_kind == 'payload' else 'target_date'] = (
-                '2026-09-20T20:00:00+09:00' if source_kind == 'payload' else '2026-09-20'
-            )
-        else:
-            changed['revision'] = 2
-        compressed.write_bytes(gzip.compress((json.dumps(changed) + '\n').encode()))
-
-    expected = ('input_generation_changed' if source_kind == 'payload'
-                else 'output_generation_changed')
-    assert h.stage_receipt_issues(report, day, 'outcome_labels') == [f'outcome_labels:{expected}']
-    assert h.stage_receipt_issues(report, day, 'collector_recommendation') == [
-        'collector_recommendation:input_generation_changed'
-    ]
-    if damage == 'changed':
-        assert (validate_exact_ai_artifact_source(source, expected_date=date.fromisoformat(day))
-                ['decoded_content_sha256'] != hashlib.sha256(original).hexdigest())
-    else:
-        with pytest.raises((OSError, ValueError, FileNotFoundError)):
-            validate_exact_ai_artifact_source(source, expected_date=date.fromisoformat(day))
-    compressed.write_bytes(gzip.compress(original))
-    assert h.stage_receipt_issues(report, day, 'outcome_labels') == []
-    assert h.stage_receipt_issues(report, day, 'collector_recommendation') == []
 
 
-@pytest.mark.parametrize('source_kind', ['payload', 'label'])
-def test_compressed_exact_ai_stage_requires_matching_plain_copy(stage_environment, source_kind):
-    from datetime import date
-    from src.engine.scalping.micro_reversion.storage_maintenance import maintain_report_artifact_storage
-
-    h, day, report, run, produce = stage_environment
-    payload = report.parent / 'ai_decision_payloads' / f'ai_decision_payloads_{day}.jsonl'
-    payload.parent.mkdir(parents=True)
-    payload.write_text(json.dumps({
-        'schema': 'ai_decision_payload_v1', 'captured_at': day + 'T20:00:00+09:00',
-    }) + '\n')
-    produce(['fixture', 'outcome_labels'])
-    assert run('outcome_labels', execute=False)['status'] == 'succeeded'
-    assert run('collector_recommendation')['status'] == 'succeeded'
-    label = h.stage_artifacts(report, day, 'outcome_labels')['ai_decision_outcome_labels']
-    source = payload if source_kind == 'payload' else label
-    original = source.read_bytes()
-    assert maintain_report_artifact_storage(
-        [], as_of_date=date.fromisoformat('2026-09-22'), apply=True,
-        exact_ai_artifact_roots=[source.parent],
-        low_disk_watermark_bytes=0, critical_disk_watermark_bytes=0,
-    )['status'] == 'pass'
-    source.write_bytes(original)
-    assert h.stage_receipt_issues(report, day, 'outcome_labels') == []
-    source.write_bytes(original + b'{}\n')
-    expected = ('input_generation_changed' if source_kind == 'payload'
-                else 'output_generation_changed')
-    assert h.stage_receipt_issues(report, day, 'outcome_labels') == [
-        f'outcome_labels:{expected}'
-    ]
 
 
 def test_exact_ai_stage_keeps_off_and_failed_terminal_semantics(stage_environment):
@@ -1186,148 +892,14 @@ def test_exact_ai_stage_keeps_off_and_failed_terminal_semantics(stage_environmen
     assert h.stage_receipt_issues(report, day, 'outcome_labels') == ['outcome_labels:failed']
 
 
-def test_stage_detects_input_change_during_collector(stage_environment):
-    h, day, report, run, produce = stage_environment
-    assert run('outcome_labels')['status'] == 'succeeded'
-    def mutate(command, **kwargs):
-        result = produce(command, **kwargs)
-        p = h.stage_artifacts(report, day, 'outcome_labels')['ai_decision_outcome_labels']
-        p.write_text(p.read_text()+'\n')
-        return result
-    result = run('collector_recommendation', runner=mutate)
-    assert result['status'] == 'failed'
-    assert 'input_changed_during_consumption' in result['issues']
 
 
-def test_collector_receipt_rejects_removed_historical_payload(stage_environment):
-    from datetime import date
-    from src.engine.monitoring.widget_collector_expansion_recommendation import history_input_manifest
-
-    h, day, report, run, produce = stage_environment
-    payload_dir = report.parent / 'ai_decision_payloads'
-    payload_dir.mkdir(parents=True)
-    old = payload_dir / 'ai_decision_payloads_2026-08-18.jsonl'
-    old.write_text('{}\n')
-    def with_manifest(command, **kwargs):
-        result = produce(command, **kwargs)
-        if command[1] == 'collector_recommendation':
-            output = h.stage_artifacts(report, day, 'collector_recommendation')[
-                'widget_collector_expansion_recommendation']
-            value = json.loads(output.read_text())
-            history = history_input_manifest(
-                payload_dir, report / 'widget_mechanical_entry_replay',
-                through_date=date.fromisoformat(day),
-                sentinel_dir=report.parent / 'runtime' / 'sentinel_event_cache',
-                watch_config_path=report.parent / 'config' / 'widget_research_watch_symbols.json')
-            value['source'] = {'history_input_manifest': history,
-                'feature_paths': [row['path'] for row in history['entries'] if row['kind'] == 'payload'],
-                'replay_paths': [row['path'] for row in history['entries'] if row['kind'] == 'replay']}
-            output.write_text(json.dumps(value))
-        return result
-    assert run('outcome_labels')['status'] == 'succeeded'
-    assert run('collector_recommendation', runner=with_manifest)['status'] == 'succeeded'
-    assert h.stage_receipt_issues(report, day, 'collector_recommendation') == []
-    old.unlink()
-    assert 'collector_recommendation:history_generation_changed' in h.stage_receipt_issues(
-        report, day, 'collector_recommendation')
 
 
-def test_collector_stage_fails_when_child_omits_history_manifest(stage_environment):
-    h, day, report, run, produce = stage_environment
-    assert run('outcome_labels')['status'] == 'succeeded'
-    def omit_manifest(command, **kwargs):
-        result = produce(command, **kwargs)
-        if command[1] == 'collector_recommendation':
-            output = h.stage_artifacts(report, day, 'collector_recommendation')[
-                'widget_collector_expansion_recommendation']
-            value = json.loads(output.read_text())
-            value['source'].pop('history_input_manifest')
-            output.write_text(json.dumps(value))
-        return result
-    result = run('collector_recommendation', runner=omit_manifest)
-    assert result['status'] == 'failed'
-    assert result['issues'] == ['collector_recommendation:history_manifest_missing']
 
 
-def test_collector_history_receipt_rejects_late_and_changed_sources(stage_environment):
-    h, day, report, run, _produce = stage_environment
-    payload_dir = report.parent / 'ai_decision_payloads'
-    payload_dir.mkdir(parents=True)
-    old = payload_dir / 'ai_decision_payloads_2026-08-18.jsonl'
-    old.write_text('{}\n')
-    assert run('outcome_labels')['status'] == 'succeeded'
-    assert run('collector_recommendation')['status'] == 'succeeded'
-    assert h.stage_receipt_issues(report, day, 'collector_recommendation') == []
-    old.write_text('{"changed":true}\n')
-    assert h.stage_receipt_issues(report, day, 'collector_recommendation') == [
-        'collector_recommendation:history_generation_changed']
-    old.write_text('{}\n')
-    late = payload_dir / 'ai_decision_payloads_2026-08-19.jsonl'
-    late.write_text('{}\n')
-    assert h.stage_receipt_issues(report, day, 'collector_recommendation') == [
-        'collector_recommendation:history_generation_changed']
 
 
-@pytest.mark.parametrize('candidate_count', [0, 7])
-def test_collector_real_reader_same_generation_and_valid_empty(stage_environment, candidate_count):
-    from datetime import date
-    from src.engine.monitoring import widget_collector_expansion_recommendation as rec
-
-    h, day, report_dir, run, produce = stage_environment
-    payload_dir = report_dir.parent / 'ai_decision_payloads'
-    replay_dir = report_dir / 'widget_mechanical_entry_replay'
-    payload_dir.mkdir(parents=True)
-    replay_dir.mkdir(parents=True)
-    codes = [f'{100000 + index:06d}' for index in range(candidate_count)]
-    rows = []
-    for code in codes:
-        rows.extend({
-            'stock_code': code, 'effective_venue': 'KRX', 'session_bucket': 'krx_regular',
-            'entry_path_first_hit': 'target_first', 'end_return_pct': 0.8,
-            'mechanical_signal': True, 'mechanical_candidate_before_spread_gate': False,
-            'mechanical_source_issue': None, 'runtime_effect': False,
-            'actual_order_submitted': False, 'broker_order_forbidden': True,
-        } for _ in range(2))
-    (replay_dir / f'widget_mechanical_entry_replay_{day}.json').write_text(json.dumps({
-        'schema': 'widget_mechanical_entry_replay_v1', 'target_date': day,
-        'runtime_effect': False, 'allowed_runtime_apply': False,
-        'actual_order_submitted': False, 'broker_order_forbidden': True, 'rows': rows,
-    }))
-    payloads = [{
-        'schema': 'ai_decision_payload_v1', 'endpoint': 'analyze_target',
-        'replay_exact': True, 'runtime_effect': False, 'actual_order_submitted': False,
-        'broker_order_forbidden': True, 'symbol': code, 'effective_venue': 'KRX',
-        'session_bucket': 'krx_regular', 'sanitized_user_input': {'exact_payload': {
-            'features': {'entry_liquidity_score': 85, 'intraday_range_pct': 3.0,
-                         'spread_bp': 8.0}, 'quote': {'quote_stale': False},
-            'entry_candle_context': {'source_quality': {'status': 'fresh_consistent'}}}},
-    } for code in codes]
-    (payload_dir / f'ai_decision_payloads_{day}.jsonl').write_text(
-        ''.join(json.dumps(row) + '\n' for row in payloads))
-    def actual_reader(command, **kwargs):
-        if command[1] != 'collector_recommendation':
-            return produce(command, **kwargs)
-        manifest = rec.history_input_manifest(
-            payload_dir, replay_dir, through_date=date.fromisoformat(day),
-            sentinel_dir=report_dir.parent / 'runtime' / 'sentinel_event_cache',
-            watch_config_path=report_dir.parent / 'config' / 'widget_research_watch_symbols.json')
-        result = rec.build_recommendation_report(
-            target_date=date.fromisoformat(day), replay_dir=replay_dir,
-            payload_dir=payload_dir, history_manifest=manifest)
-        path = h.stage_artifacts(report_dir, day, 'collector_recommendation')[
-            'widget_collector_expansion_recommendation']
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(result))
-        return 0
-    assert run('outcome_labels')['status'] == 'succeeded'
-    result = run('collector_recommendation', runner=actual_reader)
-    assert result['status'] == 'succeeded'
-    assert h.stage_receipt_issues(report_dir, day, 'collector_recommendation') == []
-    assert result['history_input_generation_sha256']
-    output = json.loads(h.stage_artifacts(report_dir, day, 'collector_recommendation')[
-        'widget_collector_expansion_recommendation'].read_text())
-    assert len(output['recommendations']) == candidate_count
-    assert output['status'] == ('recommendations_ready' if candidate_count else 'no_qualified_candidate')
 
 
 def test_stage_lock_and_live_orphan_identity_prevent_duplicate(stage_environment):
@@ -1385,15 +957,6 @@ def test_late_summary_recovery_uses_source_day_prepared_session(stage_environmen
         run('summary_handoff', publication='2026-09-23', effective=_next_krx_trading_day(day))
 
 
-def test_stage_group_attempts_every_independent_owner_after_failure(monkeypatch):
-    from src.engine.automation import postclose_summary_handoff as h
-    seen = []
-    def run(stage, *a, **kw):
-        seen.append(stage)
-        return dict(stage_id=stage, status='failed' if stage=='collector_recommendation' else 'succeeded', exit_code=1 if stage=='collector_recommendation' else 0)
-    monkeypatch.setattr(h, 'run_stage', run)
-    assert h._stage_main(['--stage','machine_group','--date','2026-09-21']) == 1
-    assert set(seen) == set(h.STAGE_OWNER_GROUPS['machine'][:6]) | {'summary_handoff','research_capacity'}
 
 
 def test_closed_capacity_failure_blocks_allocation_and_controller_then_binds_native_generation(stage_environment, monkeypatch):
@@ -1455,7 +1018,7 @@ def test_closed_capacity_failure_blocks_allocation_and_controller_then_binds_nat
 
     # Limit this fixture to capacity→allocation: widget/episode receipts are
     # separate owners, represented by stable exact-date terminal files.
-    for stage in ('widget_policy', 'episode_policy'):
+    for stage in ('episode_policy',):
         path = h.stage_path(report, day, stage)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({'source_date': day, 'stage_id': stage}))
@@ -1467,7 +1030,7 @@ def test_closed_capacity_failure_blocks_allocation_and_controller_then_binds_nat
     allocation = run('research_allocation')
     assert allocation['status'] == 'succeeded'
     assert set(allocation['prerequisite_receipts']) == {
-        'widget_policy', 'episode_policy', 'research_capacity'
+        'episode_policy', 'research_capacity'
     }
     assert allocation['prerequisite_receipts']['research_capacity']['sha256'] == (
         h._stage_sources({'capacity': h.stage_path(report, day, 'research_capacity')})['capacity']['sha256']
@@ -1590,44 +1153,12 @@ def test_family_source_read_does_not_require_peer(tmp_path, monkeypatch):
     assert not missing and set(studies) == {'episode'} and len(seen) == 1
 
 
-def test_allocation_stage_does_not_rewrite_family_studies_or_policies(tmp_path, monkeypatch):
-    from datetime import date
-    from src.engine.automation import machine_research_closed_loop_refresh as phase
-    from src.engine.monitoring import research_closed_loop as loop
-    from src.engine.monitoring import widget_symbol_signal_policy_research as widget
-    from src.engine.monitoring import low_price_two_leg_expanded_candidate_research as episode
-    from src.tests.test_widget_symbol_runtime_policy import _research
-    day=date(2026,9,17); root=tmp_path/'report'; directory=tmp_path/'runtime'/'machine_research_closed_loop'
-    monkeypatch.setattr(phase, 'DATA_DIR', tmp_path/'data')
-    monkeypatch.delenv('POSTCLOSE_POLICY_PUBLICATION_DATE', raising=False)
-    monkeypatch.delenv('POSTCLOSE_PREPARED_EFFECTIVE_DATE', raising=False)
-    report=_research(); report.update(end_date=str(day), closed_loop_contract=loop.SCHEMA)
-    for r in report['symbols'].values():
-        r.pop('selected_policy', None); r.update(name='fixture', decision='hold_sample_insufficient_signal')
-    peer=dict(schema=episode.REPORT_SCHEMA, target_date=str(day), end_date=str(day), start_date='2026-06-05',
-        status='no_qualified_candidate', profiles={}, recommendations=[], postclose_logic_recommendations=[],
-        recommendation_count=0, trading_date_count=72, calibration_trading_day_count=56, holdout_trading_day_count=16,
-        closed_loop_contract=loop.SCHEMA, **loop.AUTHORITY)
-    with loop.research_scope(directory):
-        widget.write_report(report, output_dir=root/'widget_symbol_signal_policy_research')
-        episode.write_report(peer, root/'low_price_two_leg_expanded_candidate_research')
-    _, paths, missing=phase.read_studies(day, report_root=root)
-    assert not missing
-    before={k:p.read_bytes() for k,p in paths.items()}
-    result=phase.refresh(day, directory=directory, report_root=root, publish=False, allocation_only=True)
-    assert result['status']=='complete' and result['allocation_only']
-    assert phase.validate_current_receipt(result, day)
-    assert result['publications']=={}
-    assert {k:p.read_bytes() for k,p in paths.items()}==before
-    assert not (directory.parent/'widget_symbol_runtime_policy').exists()
-    assert not (directory.parent/'low_price_two_leg_auto_expansion').exists()
 
 
 def test_policy_readiness_is_separate_from_failed_diagnostic(stage_environment, monkeypatch):
     h, day, report, run, produce = stage_environment
     from src.engine.scalping import mechanistic_entry_runtime_policy as main
     from src.engine.automation import low_price_two_leg_auto_expansion_policy as episode
-    from src.engine.monitoring.widget_symbol_runtime_policy import WidgetSymbolRuntimePolicyLoader
     bootstrap=report.parent/'runtime'/'policy_bootstrap'/'runtime_policy_bootstrap_verify_2026-09-22.json'
     bootstrap.parent.mkdir(parents=True); bootstrap.write_text(json.dumps(dict(passed=True, target_date='2026-09-22', status='pass')))
     from src.engine.automation import runtime_policy_bootstrap as bootstrap_owner
@@ -1635,17 +1166,12 @@ def test_policy_readiness_is_separate_from_failed_diagnostic(stage_environment, 
     monkeypatch.setattr(bootstrap_owner, 'verify_bootstrap', lambda *a, **kw: {'passed':True})
     monkeypatch.setattr(main, 'load_effective', lambda **kw: {'valid':True})
     monkeypatch.setattr(episode, 'load_policy', lambda *a, **kw: {'valid':True})
-    monkeypatch.setattr(WidgetSymbolRuntimePolicyLoader, 'resolve_all', lambda *a, **kw: {'operating':{}})
     run('market_weakness', runner=lambda *a, **kw: 1)
     view=h.stage_overview(report, day)
     assert not view['postclose_all_active_stages_complete']
     assert view['next_session_policy_ready']
-    assert view['widget_policy_authority'] == 'live'
-    monkeypatch.setattr(WidgetSymbolRuntimePolicyLoader, 'resolve_all', lambda *a, **kw: {})
-    monkeypatch.setattr(WidgetSymbolRuntimePolicyLoader, 'resolve_observation_all', lambda *a, **kw: {'observed': {}})
     view=h.stage_overview(report, day)
     assert view['next_session_policy_ready']
-    assert view['widget_policy_authority'] == 'observation_only'
     monkeypatch.setattr(bootstrap_owner, 'verify_bootstrap', lambda *a, **kw: {'passed':False})
     assert not h.stage_overview(report, day)['next_session_policy_ready']
     monkeypatch.setattr(bootstrap_owner, 'verify_bootstrap', lambda *a, **kw: {'passed':True})
@@ -1658,11 +1184,9 @@ def test_verified_off_episode_and_isolated_preparation_are_startup_ready(stage_e
     from src.engine.automation import next_preopen_readiness as readiness
     from src.engine.automation import low_price_two_leg_auto_expansion_policy as episode
     from src.engine.scalping import mechanistic_entry_runtime_policy as main
-    from src.engine.monitoring.widget_symbol_runtime_policy import WidgetSymbolRuntimePolicyLoader
     run('episode_policy', off=True)
     monkeypatch.setattr(episode, 'load_policy', lambda *a, **kw: None)
     monkeypatch.setattr(main, 'load_effective', lambda **kw: {'valid': True})
-    monkeypatch.setattr(WidgetSymbolRuntimePolicyLoader, 'resolve_all', lambda *a, **kw: {'operating': {}})
     root = report.parent/'runtime'/'policy_bootstrap'/'prepared'/'2026-09-22'
     root.mkdir(parents=True)
     receipt = root/'generation'/'readiness.json';receipt.parent.mkdir()
@@ -1998,48 +1522,9 @@ def test_compact_wait_does_not_hide_terminal_failed_peer(stage_environment, monk
     assert 'outcome_labels:blocked' in result['issues']
 
 
-@pytest.mark.parametrize("recovery", [False, True])
-def test_machine_group_refreshes_parents_before_consumers(monkeypatch, recovery):
-    import threading
-    from src.engine.automation import postclose_summary_handoff as h
-    completed = set()
-    lock = threading.Lock()
-    def run(stage, *args, **kwargs):
-        if stage in {'machine_timing', 'market_weakness', 'legacy_policy_approval'}:
-            with lock:
-                assert 'machine_attribution' in completed
-        if stage == 'summary_handoff':
-            with lock:
-                assert set(h.STAGE_OWNER_GROUPS['machine'][:6]) <= completed
-        with lock:
-            completed.add(stage)
-        return dict(stage_id=stage, status='succeeded', exit_code=0)
-    # Force the schedule that exposed the stale-parent race: if a single
-    # submission mixes parents and children, consumers run first.
-    import concurrent.futures
-    class ConsumerFirstPool:
-        def __init__(self, *, max_workers):
-            assert max_workers == 6
-        def __enter__(self):
-            return self
-        def __exit__(self, *args):
-            return False
-        def map(self, fn, items):
-            items = list(items)
-            parents = {'collector_recommendation', 'machine_attribution'}
-            if parents <= set(items) and len(items) > len(parents):
-                items.sort(key=lambda item: item in parents)
-            return [fn(item) for item in items]
-    monkeypatch.setattr(concurrent.futures, 'ThreadPoolExecutor', ConsumerFirstPool)
-    monkeypatch.setattr(h, 'run_stage', run)
-    args = ['--stage', 'machine_group', '--date', '2026-09-21']
-    if recovery:
-        args.append('--recover-closed-target')
-    assert h._stage_main(args) == 0
-    assert completed == set(h.STAGE_OWNER_GROUPS['machine'][:6]) | {'research_capacity', 'summary_handoff'}
 
 
-@pytest.mark.parametrize("independent", ['widget_policy', 'research_capacity', 'collector_recommendation'])
+@pytest.mark.parametrize("independent", ['research_capacity'])
 def test_main_generation_wait_includes_independent_producers(monkeypatch, independent):
     import time
     from src.engine.automation import postclose_summary_handoff as h
@@ -2067,5 +1552,5 @@ def test_main_generation_wait_preserves_existing_timeout(monkeypatch):
     ticks = iter([0.0, 2.0])
     monkeypatch.setattr(time, 'monotonic', lambda: next(ticks))
     monkeypatch.setattr(time, 'sleep', lambda *a: pytest.fail('deadline already elapsed'))
-    monkeypatch.setattr(h, '_load_json', lambda p: {'status': 'running' if p.stem == 'widget_policy' else 'succeeded'})
+    monkeypatch.setattr(h, '_load_json', lambda p: {'status': 'running' if p.stem == 'research_capacity' else 'succeeded'})
     assert h._stage_main(['--stage', 'wait', '--date', '2026-09-21', '--timeout-sec', '1']) == 75

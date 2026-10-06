@@ -151,6 +151,8 @@ class SymbolOwnerDecision:
 
     def owner_allowed(self, owner: str, *, new_entry: bool = True) -> bool:
         normalized_owner = str(owner or "").strip().lower()
+        if normalized_owner == "widget_auto_trade":
+            return False
         if not self.policy_present:
             return False
         if normalized_owner not in self.allowed_owners:
@@ -536,6 +538,8 @@ def build_symbol_owner_policy_payload(
             raise SymbolOwnerPolicyError(
                 "symbol_owner_policy_builder_symbol_collision_or_invalid"
             )
+        if "widget_auto_trade" in (raw.get("allowed_owners") or []):
+            raise SymbolOwnerPolicyError("widget_owner_permanently_retired")
         _validate_symbol_entry(
             raw,
             normalized_symbol=clean_symbol,

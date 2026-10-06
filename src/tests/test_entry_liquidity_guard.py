@@ -27,7 +27,6 @@ from src.trading.samsung_afternoon_one_share.gateway import (
 )
 from src.trading.samsung_midday_one_share.gateway import KiwoomMiddayOneShareGateway
 from src.trading.samsung_morning_one_share.gateway import KiwoomOneShareGateway
-from src.trading.widget_auto_trade.gateway import KiwoomSharedTokenOrderGateway
 from src.utils import kiwoom_utils
 
 
@@ -462,20 +461,6 @@ def test_execution_velocity_rejects_duplicate_accumulated_volume_rows():
             "111770_AL",
         ),
         (
-            KiwoomSharedTokenOrderGateway(token_loader=lambda: "shared-token"),
-            lambda value: value.entry_execution_velocity_snapshot(
-                code="111770", route="KRX"
-            ),
-            "111770_AL",
-        ),
-        (
-            KiwoomSharedTokenOrderGateway(token_loader=lambda: "shared-token"),
-            lambda value: value.entry_execution_velocity_snapshot(
-                code="111770", route="NXT"
-            ),
-            "111770_NX",
-        ),
-        (
             KiwoomOneShareGateway(token_loader=lambda: "shared-token"),
             lambda value: value.entry_execution_velocity_snapshot(route="SOR"),
             "005930_AL",
@@ -631,11 +616,6 @@ def test_invalid_injected_age_fails_closed_without_raising(age):
 @pytest.mark.parametrize(
     "gateway_class,kwargs,invoke",
     [
-        (
-            KiwoomSharedTokenOrderGateway,
-            {},
-            lambda g: g.entry_liquidity_snapshot(code="005930", route="KRX"),
-        ),
         (KiwoomOneShareGateway, {}, lambda g: g.entry_liquidity_snapshot()),
         (KiwoomMiddayOneShareGateway, {}, lambda g: g.entry_liquidity_snapshot()),
         (KiwoomAfternoonOneShareGateway, {}, lambda g: g.entry_liquidity_snapshot()),
@@ -646,7 +626,7 @@ def test_invalid_injected_age_fails_closed_without_raising(age):
         ),
     ],
 )
-def test_all_five_gateways_preserve_common_rest_quote_health(
+def test_all_surviving_gateways_preserve_common_rest_quote_health(
     monkeypatch, gateway_class, kwargs, invoke
 ):
     monkeypatch.setattr(
@@ -809,20 +789,6 @@ def test_ws_preserves_existing_krx_sor_alias_and_nxt_separation(entry_ws_source)
     assert not ws.read_entry_snapshot(symbol='005930',route='NXT',kind='0D').source_ok
 
 
-@pytest.mark.parametrize('gateway_class',[KiwoomLowPriceTwoLegGateway,KiwoomOneShareGateway,KiwoomMiddayOneShareGateway,KiwoomAfternoonOneShareGateway,KiwoomSharedTokenOrderGateway])
-def test_ws_gateway_no_rest_even_for_source_gap(entry_ws_source,monkeypatch,gateway_class):
-    ws,data,route,path,now,write=entry_ws_source
-    def forbidden(*a,**kw):raise AssertionError('REST must not be called')
-    monkeypatch.setattr(kiwoom_utils,'get_stock_orderbook_ka10004',forbidden)
-    monkeypatch.setattr(kiwoom_utils,'get_tick_history_ka10003',forbidden)
-    g=object.__new__(gateway_class);g.symbol='005930'
-    kwargs={'code':'005930','route':'SOR'} if gateway_class is KiwoomSharedTokenOrderGateway else {'route':'SOR'}
-    assert g.entry_liquidity_snapshot(**kwargs).source_ok
-    assert g.entry_execution_velocity_snapshot(**kwargs).source_ok
-    route['recent_trades']=[];write()
-    assert not g.entry_execution_velocity_snapshot(**kwargs).source_ok
-    path.unlink()
-    assert not g.entry_liquidity_snapshot(**kwargs).source_ok
 
 
 def test_ws_source_receipt_survives_delayed_anchor_roundtrip(entry_ws_source):

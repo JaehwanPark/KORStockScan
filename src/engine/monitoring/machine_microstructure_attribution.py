@@ -1,4 +1,4 @@
-"""Join source-only micro-reversion observations to widget/episode machines.
+"""Join source-only micro-reversion observations to episode machines.
 
 The report is deliberately diagnostic.  It discovers the current machine
 universe from target-date postclose artifacts, so a newly added symbol is
@@ -74,7 +74,7 @@ from src.engine.monitoring.machine_market_weakness_response import (
     build_machine_market_weakness_response,
     COUNTERFACTUAL_MAX_QUOTE_AGE_SEC,
 )
-from src.engine.monitoring.widget_comparison_cost import (
+from src.trading.market.comparison_cost import (
     comparison_cost_contract,
     modeled_execution_economics,
 )
@@ -118,19 +118,6 @@ OBSERVATION_ROOT = DATA_DIR / "observations" / "scalp_micro_reversion_forward"
 DEFAULT_CANARY_SNAPSHOT_PATH = (
     DATA_DIR / "runtime" / "scalp_micro_reversion_forward_collector" / "latest.json"
 )
-DEFAULT_WIDGET_AUTO_TRADE_STATE_PATH = (
-    DATA_DIR / "runtime" / "widget_signal_auto_trade_state.json"
-)
-WIDGET_AUTO_TRADE_EVENT_SCHEMA = "widget_signal_auto_trade_event_v1"
-WIDGET_AUTO_TRADE_EXECUTION_AUTHORITY = "operator_directed_widget_auto_trade_v1"
-WIDGET_BROKER_EXECUTION_VENUES = {"KRX", "NXT", "SOR"}
-WIDGET_MANUAL_PARTIAL_EXIT_ROLE = "MANUAL_OPERATOR_PARTIAL_EXIT"
-WIDGET_MANUAL_PARTIAL_EXIT_AUTHORITY = "explicit_user_manual_partial_exit"
-WIDGET_SESSION_VENUES = {
-    "NXT_PREMARKET": "NXT",
-    "KRX_REGULAR": "KRX",
-    "NXT_AFTERMARKET": "NXT",
-}
 CANARY_DAILY_SNAPSHOT_DIR = (
     DATA_DIR / "source_quality" / "scalp_micro_reversion_canary_daily"
 )
@@ -189,7 +176,7 @@ METRIC_CONTRACT = {
     ],
 }
 MICRO_ENTRY_CONFIRMATION_CONTRACT = {
-    "metric_role": "widget_episode_entry_microstructure_source_only_comparison",
+    "metric_role": "episode_entry_microstructure_source_only_comparison",
     "decision_authority": (
         "postclose_source_only_input_to_exact_date_entry_timing_tuning"
     ),
@@ -445,7 +432,7 @@ def _market_weakness_blocked_entry_inventory(
                     else None
                 ),
                 "owner_round_trip_cost_provenance": (
-                    "effective_dated_widget_episode_comparison_cost_contract"
+                    "effective_dated_machine_comparison_cost_contract"
                 ),
                 "lifecycle_stage": "entry",
                 "anchor_role": "actual_market_weakness_blocked_entry_signal",
@@ -611,7 +598,6 @@ def load_prior_owner_diagnostic(
     """Load one exact source-date diagnostic without policy authority."""
 
     consumer_key = {
-        "widget": "widget_postclose_tuning",
         "episode": "episode_machine_postclose_tuning",
     }.get(owner)
     if consumer_key is None:
@@ -710,7 +696,7 @@ def _dynamic_modeled_target_price(
         baseline_fill_price=anchor.get("anchor_price"),
         owner_target_price=anchor.get("owner_target_price"),
         checkpoint_ask=checkpoint_ask,
-        widget_take_profit=bool(
+        target_from_fill=bool(
             isinstance(outcome, Mapping)
             and outcome.get("exit_reason") == "take_profit_fill"
         ),
@@ -808,2367 +794,16 @@ def _source(
     }
 
 
-def _widget_entry_signal_contract(
-    value: Any, *, symbol: str, target_date: str
-) -> tuple[str, datetime] | None:
-    if not isinstance(value, str):
-        return None
-    parts = value.strip().split(":", 4)
-    if (
-        len(parts) != 5
-        or parts[0] != symbol
-        or parts[1] != target_date
-        or parts[2] != "ENTRY"
-    ):
-        return None
-    session = parts[3]
-    observed_at = _owner_ts_on_target_date(parts[4], target_date)
-    if session not in WIDGET_SESSION_VENUES or observed_at is None:
-        return None
-    return session, observed_at
 
 
-def _widget_numeric(value: Any) -> float | None:
-    return None if isinstance(value, bool) else _finite_float(value)
 
 
-def _widget_state_order_index(
-    *, target_date: str, state_path: Path
-) -> tuple[dict[tuple[str, str], dict[str, Any]], dict[str, Any]]:
-    try:
-        state_bytes = state_path.read_bytes()
-        decoded = json.loads(state_bytes.decode("utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        state_bytes = None
-        decoded = None
-    payload = decoded if isinstance(decoded, dict) else None
-    source = {
-        "path": str(state_path),
-        "status": "missing",
-        "target_date": target_date,
-        "sha256": None,
-        "order_count": 0,
-        "contract_errors": [],
-    }
-    if payload is None:
-        return {}, source
-    if (
-        payload.get("schema_version") != 1
-        or payload.get("execution_authority") != WIDGET_AUTO_TRADE_EXECUTION_AUTHORITY
-    ):
-        source["status"] = "contract_invalid"
-        source["contract_errors"] = ["state_envelope_invalid"]
-        return {}, source
-    raw_history = payload.get("history")
-    if raw_history is not None and not isinstance(raw_history, list):
-        source["status"] = "contract_invalid"
-        source["contract_errors"] = ["state_history_invalid"]
-        return {}, source
-    symbol_rows: Any = None
-    history_matches = [
-        row
-        for row in raw_history or []
-        if isinstance(row, dict) and row.get("trade_date") == target_date
-    ]
-    if payload.get("active_date") == target_date:
-        if history_matches:
-            source["status"] = "contract_invalid"
-            source["contract_errors"] = ["duplicate_target_date_state_sources"]
-            return {}, source
-        symbol_rows = payload.get("symbols")
-    else:
-        if len(history_matches) == 1:
-            symbol_rows = history_matches[0].get("symbols")
-        elif len(history_matches) > 1:
-            source["status"] = "contract_invalid"
-            source["contract_errors"] = ["duplicate_target_date_history"]
-            return {}, source
-    if not isinstance(symbol_rows, dict):
-        source["status"] = "target_date_not_present"
-        return {}, source
-    index: dict[tuple[str, str], dict[str, Any]] = {}
-    errors: list[str] = []
-    for symbol, symbol_payload in symbol_rows.items():
-        if not isinstance(symbol_payload, dict):
-            errors.append(f"symbol_payload_invalid:{symbol}")
-            continue
-        raw_orders = symbol_payload.get("orders")
-        if raw_orders is not None and not isinstance(raw_orders, list):
-            errors.append(f"symbol_orders_invalid:{symbol}")
-            continue
-        for order in raw_orders or []:
-            if not isinstance(order, dict) or order.get("broker_accepted") is not True:
-                continue
-            order_no = str(order.get("order_no") or "").strip()
-            requested_qty = _widget_numeric(order.get("requested_qty"))
-            filled_qty = _widget_numeric(order.get("filled_qty"))
-            broker_execution_venue = (
-                str(order.get("broker_execution_venue") or "").strip().upper()
-            )
-            if (
-                not str(symbol).isdigit()
-                or len(str(symbol)) != 6
-                or not order_no
-                or order.get("order_date") != target_date
-                or requested_qty is None
-                or not requested_qty.is_integer()
-                or requested_qty <= 0
-                or filled_qty is None
-                or not filled_qty.is_integer()
-                or filled_qty < 0
-                or filled_qty > requested_qty
-                or (
-                    broker_execution_venue
-                    and broker_execution_venue not in WIDGET_BROKER_EXECUTION_VENUES
-                )
-            ):
-                errors.append(f"accepted_order_contract_invalid:{symbol}:{order_no}")
-                continue
-            key = (str(symbol), order_no)
-            if key in index:
-                errors.append(f"duplicate_accepted_order:{symbol}:{order_no}")
-                continue
-            index[key] = {
-                **order,
-                "symbol": str(symbol),
-                "_state_entry_signal_id": str(
-                    symbol_payload.get("entry_signal_id")
-                    or symbol_payload.get("last_completed_entry_signal_id")
-                    or ""
-                ).strip(),
-            }
-    source.update(
-        {
-            "status": "contract_invalid" if errors else "loaded",
-            "sha256": hashlib.sha256(state_bytes).hexdigest() if state_bytes else None,
-            "order_count": len(index),
-            "contract_errors": errors,
-        }
-    )
-    return index, source
 
 
-def _widget_advisory_event_index(*, target_date: str, report_root: Path) -> tuple[
-    dict[str, dict[str, Any]],
-    dict[str, dict[str, Any]],
-    dict[tuple[str, str, int], dict[str, Any]],
-    dict[str, Any],
-]:
-    observation_dir = report_root / "widget_symbol_advisory_observation"
-    paths = sorted(
-        observation_dir.glob(
-            f"widget_symbol_advisory_*_{target_date.replace('-', '')}.jsonl"
-        )
-    )
-    entries: dict[str, dict[str, Any]] = {}
-    exits: dict[str, dict[str, Any]] = {}
-    episodes: dict[tuple[str, str, int], dict[str, Any]] = {}
-    errors: list[str] = []
-    row_count = 0
-    source_hash = hashlib.sha256()
-    for path in paths:
-        try:
-            raw_bytes = path.read_bytes()
-            raw_lines = raw_bytes.decode("utf-8").splitlines()
-        except (OSError, UnicodeDecodeError):
-            errors.append(f"advisory_unreadable:{path}")
-            continue
-        source_hash.update(path.name.encode("utf-8"))
-        source_hash.update(b"\0")
-        source_hash.update(raw_bytes)
-        for line_number, line in enumerate(raw_lines, start=1):
-            if not line.strip():
-                continue
-            row_count += 1
-            try:
-                payload = json.loads(line)
-            except json.JSONDecodeError:
-                errors.append(f"advisory_json_invalid:{path.name}:{line_number}")
-                continue
-            if not isinstance(payload, dict):
-                errors.append(f"advisory_row_invalid:{path.name}:{line_number}")
-                continue
-            entry_event = payload.get("entry_event")
-            exit_event = payload.get("exit_event")
-            if entry_event is None and exit_event is None:
-                continue
-            observed_at = _owner_ts_on_target_date(
-                payload.get("observed_at_kst"), target_date
-            )
-            symbol = str(payload.get("symbol") or "")
-            advisory = payload.get("advisory")
-            episode = payload.get("episode")
-            session = (
-                str(advisory.get("session") or "") if isinstance(advisory, dict) else ""
-            )
-            sequence = (
-                int(episode.get("sequence"))
-                if isinstance(episode, dict)
-                and not isinstance(episode.get("sequence"), bool)
-                and isinstance(episode.get("sequence"), int)
-                else None
-            )
-            base_valid = bool(
-                observed_at is not None
-                and len(symbol) == 6
-                and symbol.isdigit()
-                and session in WIDGET_SESSION_VENUES
-                and payload.get("actual_order_submitted") is False
-                and payload.get("broker_order_forbidden") is True
-                and isinstance(episode, dict)
-                and sequence is not None
-                and sequence > 0
-                and episode.get("actual_order_submitted") is False
-                and episode.get("broker_order_forbidden") is True
-                and episode.get("runtime_effect") is False
-            )
-            if not base_valid:
-                errors.append(
-                    f"advisory_event_envelope_invalid:{path.name}:{line_number}"
-                )
-                continue
-            episode_key = (symbol, session, sequence)
-            episode_fact = episodes.setdefault(
-                episode_key,
-                {
-                    "symbol": symbol,
-                    "sequence": sequence,
-                    "session": session,
-                    "entry_event": None,
-                    "exit_event": None,
-                },
-            )
-            if episode_fact["session"] != session:
-                errors.append(f"advisory_episode_session_conflict:{symbol}:{sequence}")
-                continue
-            for event_name, raw_event, index in (
-                ("entry_event", entry_event, entries),
-                ("exit_event", exit_event, exits),
-            ):
-                if raw_event is None:
-                    continue
-                event_at = _owner_ts_on_target_date(
-                    (
-                        raw_event.get("observed_at")
-                        if isinstance(raw_event, dict)
-                        else None
-                    ),
-                    target_date,
-                )
-                event_id = (
-                    str(raw_event.get("event_id") or "").strip()
-                    if isinstance(raw_event, dict)
-                    else ""
-                )
-                expected_type = "ENTRY" if event_name == "entry_event" else "EXIT"
-                event_id_parts = event_id.split(":")
-                event_timestamp = event_id_parts[4] if len(event_id_parts) == 5 else ""
-                event_timestamp_valid = bool(
-                    event_timestamp.isdigit()
-                    and (
-                        len(event_timestamp) == 6
-                        or (
-                            len(event_timestamp) == 14
-                            and event_timestamp.startswith(target_date.replace("-", ""))
-                        )
-                    )
-                )
-                event_id_valid = bool(
-                    len(event_id_parts) == 5
-                    and event_id_parts[0] == symbol
-                    and event_id_parts[1] == target_date
-                    and event_id_parts[2] == expected_type
-                    and event_id_parts[3].isdigit()
-                    and int(event_id_parts[3]) == sequence
-                    and event_timestamp_valid
-                )
-                raw_episode_sequence = (
-                    raw_event.get("episode_sequence")
-                    if isinstance(raw_event, dict)
-                    else None
-                )
-                event_valid = bool(
-                    isinstance(raw_event, dict)
-                    and event_id_valid
-                    and (
-                        raw_episode_sequence is None or raw_episode_sequence == sequence
-                    )
-                    and event_at is not None
-                    and raw_event.get("event_type") == expected_type
-                    and raw_event.get("source_quality_status") == "PASS"
-                    and raw_event.get("actual_order_submitted") is False
-                    and raw_event.get("broker_order_forbidden") is True
-                    and raw_event.get("runtime_effect") is False
-                    and (
-                        expected_type != "ENTRY"
-                        or (
-                            raw_event.get("state") in ("ENTRY_CAUTION", "ENTRY_READY")
-                            and all(
-                                (_widget_numeric(raw_event.get(field)) or 0) > 0
-                                for field in (
-                                    "entry_price_high",
-                                    "target_price",
-                                    "structural_support",
-                                )
-                            )
-                        )
-                    )
-                    and (
-                        expected_type != "EXIT"
-                        or (
-                            str(raw_event.get("reason") or "").strip()
-                            and (
-                                _widget_numeric(raw_event.get("reference_exit_price"))
-                                or 0
-                            )
-                            > 0
-                        )
-                    )
-                )
-                if not event_valid:
-                    errors.append(
-                        f"advisory_{event_name}_invalid:{path.name}:{line_number}"
-                    )
-                    continue
-                normalized = {
-                    **raw_event,
-                    "symbol": symbol,
-                    "session": session,
-                    "episode_sequence": sequence,
-                    "event_at": event_at,
-                    "source_path": str(path),
-                    "source_line_number": line_number,
-                }
-                prior = index.get(event_id)
-                if prior is not None and any(
-                    prior.get(key) != normalized.get(key)
-                    for key in (
-                        "symbol",
-                        "session",
-                        "episode_sequence",
-                        "event_at",
-                        "state",
-                        "reason",
-                        "reference_exit_price",
-                    )
-                ):
-                    errors.append(f"advisory_event_identity_conflict:{event_id}")
-                    continue
-                episode_prior = episode_fact.get(event_name)
-                if (
-                    isinstance(episode_prior, dict)
-                    and episode_prior.get("event_id") != event_id
-                ):
-                    errors.append(
-                        "advisory_episode_event_conflict:"
-                        f"{symbol}:{session}:{sequence}:{event_name}"
-                    )
-                    continue
-                index[event_id] = normalized
-                episode_fact[event_name] = normalized
-    for (symbol, session, sequence), episode_fact in episodes.items():
-        entry = episode_fact.get("entry_event")
-        exit_event = episode_fact.get("exit_event")
-        if (
-            isinstance(entry, dict)
-            and isinstance(exit_event, dict)
-            and exit_event.get("event_at") < entry.get("event_at")
-        ):
-            errors.append(
-                f"advisory_episode_event_time_regression:{symbol}:{session}:{sequence}"
-            )
-    source = {
-        "paths": [str(path) for path in paths],
-        "status": (
-            "contract_invalid" if errors else "loaded" if paths else "not_observed"
-        ),
-        "optional_when_absent": True,
-        "target_date": target_date,
-        "sha256": source_hash.hexdigest() if paths else None,
-        "row_count": row_count,
-        "entry_event_count": len(entries),
-        "exit_event_count": len(exits),
-        "episode_count": len(episodes),
-        "contract_errors": sorted(set(errors)),
-        "runtime_effect": False,
-        "actual_order_submitted": False,
-        "broker_order_forbidden": True,
-    }
-    return entries, exits, episodes, source
 
 
-def _widget_actual_execution_inventory(
-    *,
-    target_date: str,
-    report_root: Path,
-    state_path: Path,
-    symbols: dict[str, dict[str, Any]],
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    comparison_cost = (
-        comparison_cost_contract(target_date)
-        if date.fromisoformat(target_date) >= CLEAN_BASELINE_DATE
-        else None
-    )
-    round_trip_cost_pct = (
-        float(comparison_cost["round_trip_cost_pct"])
-        if comparison_cost is not None
-        else None
-    )
-    event_path = (
-        report_root
-        / "widget_signal_auto_trade_events"
-        / f"widget_signal_auto_trade_events_{target_date.replace('-', '')}.jsonl"
-    )
-    state_orders, state_source = _widget_state_order_index(
-        target_date=target_date, state_path=state_path
-    )
-    advisory_entries, advisory_exits, advisory_episodes, advisory_source = (
-        _widget_advisory_event_index(
-            target_date=target_date,
-            report_root=report_root,
-        )
-    )
-    source: dict[str, Any] = {
-        "path": str(event_path),
-        "status": "not_observed",
-        "target_date": target_date,
-        "optional_when_absent": True,
-        "event_schema": WIDGET_AUTO_TRADE_EVENT_SCHEMA,
-        "sha256": None,
-        "row_count": 0,
-        "actual_event_count": 0,
-        "actual_lifecycle_count": 0,
-        "contract_errors": [],
-        "state_source": state_source,
-        "advisory_source": advisory_source,
-        "blocked_daily_entry_limit_opportunities": [],
-        "timestamp_provenance": (
-            "execution_loop_submit_record_and_broker_reconciliation_confirmation_time"
-        ),
-        "comparison_cost_contract": comparison_cost,
-    }
-    if not event_path.exists():
-        if state_source.get("status") == "contract_invalid":
-            source.update(
-                {
-                    "status": "state_contract_invalid",
-                    "optional_when_absent": False,
-                    "contract_errors": list(state_source.get("contract_errors") or []),
-                }
-            )
-        elif int(state_source.get("order_count") or 0) > 0:
-            source.update(
-                {
-                    "status": "event_journal_missing_with_accepted_state_orders",
-                    "optional_when_absent": False,
-                    "contract_errors": [
-                        "accepted_state_orders_without_exact_date_event_journal"
-                    ],
-                }
-            )
-        return [], source
-    try:
-        event_bytes = event_path.read_bytes()
-        raw_lines = event_bytes.decode("utf-8").splitlines()
-    except (OSError, UnicodeDecodeError):
-        source["status"] = "unreadable"
-        source["optional_when_absent"] = False
-        return [], source
-    source["sha256"] = hashlib.sha256(event_bytes).hexdigest()
-    source["row_count"] = len([line for line in raw_lines if line.strip()])
-    submit_rows: dict[tuple[str, str], dict[str, Any]] = {}
-    reconcile_rows: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
-    contract_errors: list[str] = list(state_source.get("contract_errors") or [])
-    actual_event_count = 0
-    blocked_daily_entry_limit_opportunities: list[dict[str, Any]] = []
-    relevant_types = (
-        "order_submitted",
-        "order_execution_reconciled",
-        "take_profit_episode_completed",
-    )
-    for line_number, line in enumerate(raw_lines, start=1):
-        if not line.strip():
-            continue
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            contract_errors.append(f"event_json_invalid:{line_number}")
-            continue
-        if not isinstance(event, dict):
-            contract_errors.append(f"event_row_invalid:{line_number}")
-            continue
-        if event.get("event_type") == "entry_blocked_daily_entry_limit":
-            observed_at = _owner_ts_on_target_date(
-                event.get("observed_at"), target_date
-            )
-            symbol = str(event.get("symbol") or "")
-            signal_id = str(event.get("signal_id") or "").strip()
-            advisory_entry = advisory_entries.get(signal_id)
-            episode_fact = (
-                advisory_episodes.get(
-                    (
-                        symbol,
-                        str(advisory_entry["session"]),
-                        int(advisory_entry["episode_sequence"]),
-                    )
-                )
-                if advisory_entry is not None
-                else None
-            )
-            blocked_valid = bool(
-                event.get("schema") in (None, WIDGET_AUTO_TRADE_EVENT_SCHEMA)
-                and event.get("trade_date") == target_date
-                and observed_at is not None
-                and len(symbol) == 6
-                and symbol.isdigit()
-                and signal_id
-                and event.get("execution_authority")
-                == WIDGET_AUTO_TRADE_EXECUTION_AUTHORITY
-                and event.get("decision_authority")
-                == WIDGET_AUTO_TRADE_EXECUTION_AUTHORITY
-                and event.get("runtime_effect") is True
-                and event.get("actual_order_submitted") is False
-                and event.get("broker_order_forbidden") is False
-                and advisory_entry is not None
-                and advisory_entry.get("symbol") == symbol
-            )
-            if not blocked_valid:
-                contract_errors.append(
-                    f"blocked_daily_entry_limit_contract_invalid:{line_number}"
-                )
-                continue
-            advisory_exit = (
-                episode_fact.get("exit_event")
-                if isinstance(episode_fact, dict)
-                else None
-            )
-            blocked_daily_entry_limit_opportunities.append(
-                {
-                    "symbol": symbol,
-                    "signal_id": signal_id,
-                    "observed_at": observed_at.isoformat(),
-                    "session": advisory_entry["session"],
-                    "entry_state": advisory_entry.get("state"),
-                    "entry_price": _widget_numeric(
-                        advisory_entry.get("entry_price_high")
-                    ),
-                    "target_price": _widget_numeric(advisory_entry.get("target_price")),
-                    "structural_support": _widget_numeric(
-                        advisory_entry.get("structural_support")
-                    ),
-                    "episode_sequence": advisory_entry["episode_sequence"],
-                    "source_only_exit_event_id": (
-                        advisory_exit.get("event_id")
-                        if isinstance(advisory_exit, dict)
-                        else None
-                    ),
-                    "source_only_exit_reason": (
-                        advisory_exit.get("reason")
-                        if isinstance(advisory_exit, dict)
-                        else None
-                    ),
-                    "source_only_exit_price": (
-                        _widget_numeric(advisory_exit.get("reference_exit_price"))
-                        if isinstance(advisory_exit, dict)
-                        else None
-                    ),
-                    "source_only_exit_at": (
-                        advisory_exit["event_at"].isoformat()
-                        if isinstance(advisory_exit, dict)
-                        else None
-                    ),
-                    "actual_order_submitted": False,
-                    "broker_fill_observed": False,
-                    "counterfactual_only": True,
-                }
-            )
-            continue
-        if event.get("event_type") not in relevant_types:
-            continue
-        actual_event_count += 1
-        observed_at = _owner_ts_on_target_date(event.get("observed_at"), target_date)
-        symbol = str(event.get("symbol") or "")
-        schema = event.get("schema")
-        base_valid = bool(
-            schema in (None, WIDGET_AUTO_TRADE_EVENT_SCHEMA)
-            and event.get("trade_date") == target_date
-            and observed_at is not None
-            and len(symbol) == 6
-            and symbol.isdigit()
-            and event.get("execution_authority")
-            == WIDGET_AUTO_TRADE_EXECUTION_AUTHORITY
-            and event.get("decision_authority") == WIDGET_AUTO_TRADE_EXECUTION_AUTHORITY
-            and event.get("runtime_effect") is True
-            and event.get("actual_order_submitted") is True
-            and event.get("broker_order_forbidden") is False
-        )
-        if not base_valid:
-            contract_errors.append(f"event_envelope_invalid:{line_number}")
-            continue
-        if event["event_type"] == "take_profit_episode_completed":
-            continue
-        order_no = str(event.get("order_no") or "").strip()
-        role = str(event.get("order_role") or "").strip()
-        side = str(event.get("side") or "").strip().upper()
-        if (
-            not order_no
-            or role
-            not in {
-                "ENTRY_BUY",
-                "SCALE_IN_BUY",
-                "TAKE_PROFIT_SELL",
-                "FINAL_EXIT_SELL",
-                WIDGET_MANUAL_PARTIAL_EXIT_ROLE,
-            }
-            or side != ("BUY" if role in {"ENTRY_BUY", "SCALE_IN_BUY"} else "SELL")
-        ):
-            contract_errors.append(f"event_order_identity_invalid:{line_number}")
-            continue
-        key = (symbol, order_no)
-        normalized_event = {**event, "_observed_at": observed_at}
-        if event["event_type"] == "order_submitted":
-            requested_qty = _widget_numeric(event.get("requested_qty"))
-            if (
-                requested_qty is None
-                or not requested_qty.is_integer()
-                or requested_qty <= 0
-                or key in submit_rows
-            ):
-                contract_errors.append(f"submit_contract_invalid:{line_number}")
-                continue
-            submit_rows[key] = normalized_event
-        else:
-            requested_qty = _widget_numeric(event.get("requested_qty"))
-            filled_qty = _widget_numeric(event.get("filled_qty"))
-            remaining_qty = _widget_numeric(event.get("remaining_qty"))
-            broker_execution_venue = (
-                str(event.get("broker_execution_venue") or "").strip().upper()
-            )
-            if (
-                requested_qty is None
-                or not requested_qty.is_integer()
-                or requested_qty <= 0
-                or filled_qty is None
-                or not filled_qty.is_integer()
-                or filled_qty < 0
-                or filled_qty > requested_qty
-                or remaining_qty is None
-                or not remaining_qty.is_integer()
-                or remaining_qty < 0
-                or remaining_qty > requested_qty
-                or filled_qty + remaining_qty > requested_qty
-                or (
-                    broker_execution_venue
-                    and broker_execution_venue not in WIDGET_BROKER_EXECUTION_VENUES
-                )
-            ):
-                contract_errors.append(f"reconcile_contract_invalid:{line_number}")
-                continue
-            reconcile_rows[key].append(normalized_event)
-    for symbol, order_no in sorted(set(reconcile_rows) - set(submit_rows)):
-        contract_errors.append(f"reconcile_without_submit:{symbol}:{order_no}")
-    for symbol, order_no in sorted(set(state_orders) - set(submit_rows)):
-        contract_errors.append(
-            f"accepted_state_order_without_submit:{symbol}:{order_no}"
-        )
-    for symbol, order_no in sorted(set(submit_rows) - set(state_orders)):
-        contract_errors.append(
-            f"accepted_submit_without_exact_date_state:{symbol}:{order_no}"
-        )
-    for key, rows in reconcile_rows.items():
-        submit = submit_rows.get(key)
-        if submit is None:
-            continue
-        submit_requested = int(_widget_numeric(submit.get("requested_qty")) or 0)
-        prior_filled = -1
-        prior_remaining = submit_requested
-        prior_execution_venue = ""
-        for row in sorted(rows, key=lambda value: value["_observed_at"]):
-            filled = int(_widget_numeric(row.get("filled_qty")) or 0)
-            remaining = int(_widget_numeric(row.get("remaining_qty")) or 0)
-            row_requested = int(_widget_numeric(row.get("requested_qty")) or 0)
-            execution_venue = (
-                str(row.get("broker_execution_venue") or "").strip().upper()
-            )
-            if (
-                row_requested != submit_requested
-                or row.get("order_role") != submit.get("order_role")
-                or row.get("side") != submit.get("side")
-                or filled < prior_filled
-                or remaining > prior_remaining
-                or (
-                    execution_venue
-                    and prior_execution_venue
-                    and execution_venue != prior_execution_venue
-                )
-            ):
-                contract_errors.append(
-                    f"reconciliation_sequence_invalid:{key[0]}:{key[1]}"
-                )
-                break
-            prior_filled = filled
-            prior_remaining = remaining
-            prior_execution_venue = execution_venue or prior_execution_venue
-    for key in sorted(set(state_orders) & set(submit_rows)):
-        state_order = state_orders[key]
-        submit = submit_rows[key]
-        state_requested = int(_widget_numeric(state_order.get("requested_qty")) or 0)
-        submit_requested = int(_widget_numeric(submit.get("requested_qty")) or 0)
-        if (
-            state_requested != submit_requested
-            or state_order.get("order_role") != submit.get("order_role")
-            or state_order.get("side") != submit.get("side")
-            or (
-                state_order.get("signal_id")
-                and state_order.get("signal_id") != submit.get("signal_id")
-            )
-            or (
-                state_order.get("market_venue")
-                and state_order.get("market_venue") != submit.get("market_venue")
-            )
-        ):
-            contract_errors.append(f"state_event_order_mismatch:{key[0]}:{key[1]}")
-            continue
-        if submit.get("order_role") == WIDGET_MANUAL_PARTIAL_EXIT_ROLE:
-            receipt = state_order.get("manual_exit_receipt")
-            if (
-                state_order.get("operator_authority")
-                != WIDGET_MANUAL_PARTIAL_EXIT_AUTHORITY
-                or state_order.get("exit_execution_class") != "manual_operator_exit"
-                or state_order.get("manual_exit_realized") is not True
-                or not isinstance(receipt, dict)
-                or str(receipt.get("order_no") or "").strip() != key[1]
-                or str(receipt.get("symbol") or "").strip() != key[0]
-                or str(receipt.get("owner_id") or "").strip() != "widget_auto_trade"
-                or str(receipt.get("order_date") or "").strip() != target_date
-                or str(receipt.get("source_api") or "").strip() != "kt00007"
-                or receipt.get("allocation_authority")
-                != WIDGET_MANUAL_PARTIAL_EXIT_AUTHORITY
-                or int(_widget_numeric(receipt.get("filled_qty")) or 0)
-                != int(_widget_numeric(state_order.get("filled_qty")) or 0)
-                or _widget_numeric(receipt.get("fill_price"))
-                != _widget_numeric(state_order.get("fill_price"))
-                or int(
-                    _widget_numeric(
-                        state_order.get("manual_partial_exit_requested_qty")
-                    )
-                    or 0
-                )
-                != int(_widget_numeric(state_order.get("requested_qty")) or 0)
-            ):
-                contract_errors.append(
-                    f"manual_partial_exit_state_contract_invalid:{key[0]}:{key[1]}"
-                )
-                continue
-        state_execution_venue = (
-            str(state_order.get("broker_execution_venue") or "").strip().upper()
-        )
-        event_execution_venues = {
-            str(row.get("broker_execution_venue") or "").strip().upper()
-            for row in reconcile_rows.get(key) or []
-            if str(row.get("broker_execution_venue") or "").strip()
-        }
-        if len(event_execution_venues) > 1 or (
-            state_execution_venue
-            and event_execution_venues
-            and event_execution_venues != {state_execution_venue}
-        ):
-            contract_errors.append(
-                f"state_event_execution_venue_mismatch:{key[0]}:{key[1]}"
-            )
-    source["actual_event_count"] = actual_event_count
-    if contract_errors:
-        source.update(
-            {
-                "status": "contract_invalid",
-                "optional_when_absent": False,
-                "contract_errors": sorted(set(contract_errors)),
-            }
-        )
-        return [], source
-
-    lifecycle_orders: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
-    instrumentation_gaps: list[str] = []
-    for key, submit in submit_rows.items():
-        state_order = state_orders.get(key) or {}
-        rows = sorted(
-            reconcile_rows.get(key) or [], key=lambda row: row["_observed_at"]
-        )
-        execution_venues = {
-            str(value).strip().upper()
-            for value in (
-                state_order.get("broker_execution_venue"),
-                *(row.get("broker_execution_venue") for row in rows),
-            )
-            if str(value or "").strip()
-        }
-        broker_execution_venue = (
-            next(iter(execution_venues)) if len(execution_venues) == 1 else None
-        )
-        positive_rows = [
-            row for row in rows if (_widget_numeric(row.get("filled_qty")) or 0.0) > 0
-        ]
-        requested_qty = int(_widget_numeric(submit.get("requested_qty")) or 0)
-        event_filled_qty = max(
-            (int(_widget_numeric(row.get("filled_qty")) or 0) for row in rows),
-            default=0,
-        )
-        state_filled_qty = int(_widget_numeric(state_order.get("filled_qty")) or 0)
-        filled_qty = max(event_filled_qty, state_filled_qty)
-        fill_price = next(
-            (
-                value
-                for row in reversed(positive_rows)
-                if (value := _widget_numeric(row.get("fill_price"))) is not None
-                and value > 0
-                and int(_widget_numeric(row.get("filled_qty")) or 0) == filled_qty
-            ),
-            None,
-        )
-        if fill_price is None and state_filled_qty == filled_qty:
-            fill_price = _widget_numeric(state_order.get("fill_price"))
-        first_fill_price = (
-            _widget_numeric(positive_rows[0].get("fill_price"))
-            if positive_rows
-            else None
-        )
-        first_fill_at = positive_rows[0]["_observed_at"] if positive_rows else None
-        latest_fill_at = next(
-            (
-                row["_observed_at"]
-                for row in reversed(positive_rows)
-                if int(_widget_numeric(row.get("filled_qty")) or 0) == filled_qty
-            ),
-            None,
-        )
-        full_fill_at = next(
-            (
-                row["_observed_at"]
-                for row in positive_rows
-                if int(_widget_numeric(row.get("filled_qty")) or 0) == requested_qty
-                and int(_widget_numeric(row.get("remaining_qty")) or 0) == 0
-            ),
-            None,
-        )
-        if first_fill_at is None and filled_qty > 0:
-            first_fill_at = _owner_ts_on_target_date(
-                state_order.get("last_reconciled_at"), target_date
-            )
-        state_reconciled_at = _owner_ts_on_target_date(
-            state_order.get("last_reconciled_at"), target_date
-        )
-        if state_filled_qty == filled_qty and state_reconciled_at is not None:
-            latest_fill_at = max(
-                (value for value in (latest_fill_at, state_reconciled_at) if value),
-                default=None,
-            )
-        if (
-            full_fill_at is None
-            and filled_qty == requested_qty
-            and state_order.get("status") == "FILLED"
-        ):
-            full_fill_at = _owner_ts_on_target_date(
-                state_order.get("last_reconciled_at"), target_date
-            )
-        fill_at = full_fill_at or latest_fill_at or first_fill_at
-        parent_signal_id = str(
-            submit.get("parent_entry_signal_id")
-            or state_order.get("parent_entry_signal_id")
-            or ""
-        ).strip()
-        signal_id = str(submit.get("signal_id") or state_order.get("signal_id") or "")
-        role = str(submit.get("order_role") or "")
-        if role == "ENTRY_BUY":
-            lifecycle_signal_id = signal_id
-        elif role == "SCALE_IN_BUY":
-            lifecycle_signal_id = parent_signal_id or str(
-                state_order.get("_state_entry_signal_id") or ""
-            )
-        elif role == "TAKE_PROFIT_SELL":
-            lifecycle_signal_id = (
-                parent_signal_id
-                or (signal_id.rsplit(":TP:", 1)[0] if ":TP:" in signal_id else "")
-                or str(state_order.get("_state_entry_signal_id") or "")
-            )
-        else:
-            lifecycle_signal_id = parent_signal_id or str(
-                state_order.get("_state_entry_signal_id") or ""
-            )
-        venue = str(
-            submit.get("market_venue") or state_order.get("market_venue") or ""
-        ).upper()
-        if (
-            not lifecycle_signal_id
-            or venue not in {"KRX", "NXT"}
-            or filled_qty > requested_qty
-            or (
-                filled_qty > 0
-                and (fill_price is None or fill_price <= 0 or fill_at is None)
-            )
-        ):
-            instrumentation_gaps.append(f"order_lifecycle_incomplete:{key[0]}:{key[1]}")
-            continue
-        fact = {
-            **state_order,
-            **submit,
-            "filled_qty": filled_qty,
-            "fill_price": fill_price,
-            "first_fill_price": first_fill_price,
-            "fill_at": fill_at,
-            "first_fill_at": first_fill_at,
-            "full_fill_at": full_fill_at,
-            "lifecycle_signal_id": lifecycle_signal_id,
-            "market_venue": venue,
-            "broker_execution_venue": broker_execution_venue,
-        }
-        lifecycle_orders[(key[0], lifecycle_signal_id)].append(fact)
-
-    anchors: list[dict[str, Any]] = []
-    for (symbol, signal_id), orders in sorted(lifecycle_orders.items()):
-        signal_contract = _widget_entry_signal_contract(
-            signal_id, symbol=symbol, target_date=target_date
-        )
-        advisory_entry = advisory_entries.get(signal_id)
-        if (
-            signal_contract is None
-            and advisory_entry is not None
-            and advisory_entry.get("symbol") == symbol
-        ):
-            signal_contract = (
-                str(advisory_entry["session"]),
-                advisory_entry["event_at"],
-            )
-        initial_orders = [
-            order for order in orders if order.get("order_role") == "ENTRY_BUY"
-        ]
-        if signal_contract is None or len(initial_orders) != 1:
-            instrumentation_gaps.append(
-                f"entry_signal_contract_invalid:{symbol}:{signal_id}"
-            )
-            continue
-        session, signal_at = signal_contract
-        buy_submit_orders = [
-            order
-            for order in orders
-            if order.get("order_role") in {"ENTRY_BUY", "SCALE_IN_BUY"}
-        ]
-        buy_fill_orders = [
-            order
-            for order in buy_submit_orders
-            if order.get("order_role") in {"ENTRY_BUY", "SCALE_IN_BUY"}
-            and int(order.get("filled_qty") or 0) > 0
-        ]
-        sell_orders = [
-            order
-            for order in orders
-            if order.get("order_role")
-            in {
-                "TAKE_PROFIT_SELL",
-                "FINAL_EXIT_SELL",
-                WIDGET_MANUAL_PARTIAL_EXIT_ROLE,
-            }
-            and int(order.get("filled_qty") or 0) > 0
-        ]
-        sell_submit_orders = [
-            order
-            for order in orders
-            if order.get("order_role")
-            in {
-                "TAKE_PROFIT_SELL",
-                "FINAL_EXIT_SELL",
-                WIDGET_MANUAL_PARTIAL_EXIT_ROLE,
-            }
-        ]
-        manual_sell_orders = [
-            order
-            for order in sell_orders
-            if order.get("order_role") == WIDGET_MANUAL_PARTIAL_EXIT_ROLE
-        ]
-        venue = str(initial_orders[0].get("market_venue") or "")
-        scope_id = f"actual:{symbol}:{session}"
-        row = symbols.setdefault(
-            symbol,
-            {
-                "symbol": symbol,
-                "name": initial_orders[0].get("name"),
-                "scopes": [],
-                "owner_scope_ids": [],
-                "owner_scope_kinds": {},
-                "owner_scope_expected_venues": {},
-                "owner_anchor_contract_gaps": [],
-                "expected_venues": [],
-                "owner_inventory_source": "exact_date_widget_execution_event_journal",
-            },
-        )
-        for key, default in (
-            ("scopes", []),
-            ("owner_scope_ids", []),
-            ("owner_scope_kinds", {}),
-            ("owner_scope_expected_venues", {}),
-            ("owner_anchor_contract_gaps", []),
-            ("expected_venues", []),
-        ):
-            row.setdefault(key, default.copy())
-        if "active_widget_actual_execution" not in row["scopes"]:
-            row["scopes"].append("active_widget_actual_execution")
-        if scope_id not in row["owner_scope_ids"]:
-            row["owner_scope_ids"].append(scope_id)
-        row["owner_scope_kinds"][scope_id] = "active_widget_actual_execution"
-        row["owner_scope_expected_venues"][scope_id] = [venue]
-        if venue not in row["expected_venues"]:
-            row["expected_venues"].append(venue)
-        buy_qty = sum(int(order["filled_qty"]) for order in buy_fill_orders)
-        sell_qty = sum(int(order["filled_qty"]) for order in sell_orders)
-        buy_notional = sum(
-            int(order["filled_qty"]) * float(order["fill_price"])
-            for order in buy_fill_orders
-        )
-        sell_notional = sum(
-            int(order["filled_qty"]) * float(order["fill_price"])
-            for order in sell_orders
-        )
-        first_fill_at = min(
-            (order["first_fill_at"] for order in buy_fill_orders), default=None
-        )
-        exit_at = max((order["fill_at"] for order in sell_orders), default=None)
-        first_entry_submit_at = min(
-            order["_observed_at"] for order in buy_submit_orders
-        )
-        first_exit_submit_at = min(
-            (order["_observed_at"] for order in sell_submit_orders), default=None
-        )
-        order_venues = {str(order.get("market_venue") or "") for order in orders}
-        initial_submit_price = _widget_numeric(initial_orders[0].get("limit_price"))
-        initial_fill_price = _widget_numeric(initial_orders[0].get("fill_price"))
-        anchor_entry_price = initial_fill_price or initial_submit_price
-        buy_submit_prices = {
-            str(order["order_no"]): _widget_numeric(order.get("fill_price"))
-            or _widget_numeric(order.get("limit_price"))
-            for order in buy_submit_orders
-        }
-        sell_submit_prices = {
-            str(order["order_no"]): _widget_numeric(order.get("limit_price"))
-            or _widget_numeric(order.get("fill_price"))
-            for order in sell_submit_orders
-        }
-        entry_execution_venues = sorted(
-            {
-                str(order.get("broker_execution_venue") or "")
-                for order in buy_fill_orders
-                if order.get("broker_execution_venue")
-            }
-        )
-        exit_execution_venues = sorted(
-            {
-                str(order.get("broker_execution_venue") or "")
-                for order in sell_orders
-                if order.get("broker_execution_venue")
-            }
-        )
-        all_execution_venues = set(entry_execution_venues) | set(exit_execution_venues)
-        execution_venue_alignment_state = (
-            "unknown"
-            if not all_execution_venues
-            else "aligned" if all_execution_venues == {venue} else "cross_venue"
-        )
-        timestamp_order_valid = bool(
-            signal_at <= first_entry_submit_at
-            and all(
-                order["_observed_at"] <= order["first_fill_at"]
-                for order in buy_fill_orders
-            )
-            and all(order["_observed_at"] <= order["fill_at"] for order in sell_orders)
-            and (first_fill_at is None or first_entry_submit_at <= first_fill_at)
-            and (
-                first_exit_submit_at is None
-                or (first_fill_at is not None and first_exit_submit_at >= first_fill_at)
-            )
-            and (
-                exit_at is None
-                or (first_fill_at is not None and exit_at >= first_fill_at)
-            )
-        )
-        buy_market_venues = {
-            str(order.get("market_venue") or "") for order in buy_submit_orders
-        }
-        if (
-            sell_qty > buy_qty
-            or not timestamp_order_valid
-            or buy_market_venues != {venue}
-            or not order_venues.issubset({"KRX", "NXT"})
-            or WIDGET_SESSION_VENUES.get(session) != venue
-            or anchor_entry_price is None
-            or anchor_entry_price <= 0
-            or any(price is None or price <= 0 for price in buy_submit_prices.values())
-            or any(price is None or price <= 0 for price in sell_submit_prices.values())
-        ):
-            row["owner_anchor_contract_gaps"].append(
-                {"scope_id": scope_id, "reason": "actual_widget_fill_order_invalid"}
-            )
-            continue
-        manual_sell_qty = sum(int(order["filled_qty"]) for order in manual_sell_orders)
-        partial_manual_realization = bool(
-            0 < manual_sell_qty <= sell_qty < buy_qty and exit_at is not None
-        )
-        realized = bool(
-            (sell_qty == buy_qty and buy_qty > 0 and exit_at is not None)
-            or partial_manual_realization
-        )
-        realized_qty = sell_qty if partial_manual_realization else buy_qty
-        average_entry_price = buy_notional / buy_qty if buy_qty > 0 else None
-        realized_entry_notional = (
-            average_entry_price * realized_qty
-            if realized and average_entry_price is not None
-            else buy_notional
-        )
-        gross_return_pct = (
-            (sell_notional / realized_entry_notional - 1.0) * 100.0
-            if realized and realized_entry_notional > 0
-            else None
-        )
-        execution_economics = (
-            modeled_execution_economics(
-                buy_notional_krw=realized_entry_notional,
-                sell_notional_krw=sell_notional,
-                trade_date=target_date,
-            )
-            if realized and comparison_cost is not None
-            else None
-        )
-        target_prices = [
-            value
-            for order in sell_submit_orders
-            if order.get("order_role") == "TAKE_PROFIT_SELL"
-            and (value := _widget_numeric(order.get("limit_price"))) is not None
-            and value > 0
-        ]
-        final_exit_events = [
-            event
-            for order in sell_orders
-            if order.get("order_role") == "FINAL_EXIT_SELL"
-            and (event := advisory_exits.get(str(order.get("signal_id") or "")))
-            is not None
-            and event.get("symbol") == symbol
-        ]
-        resolved_final_exit_reasons = {
-            str(event.get("reason") or "")
-            for event in final_exit_events
-            if isinstance(event, dict) and event.get("reason")
-        }
-        source_final_exit_reason = (
-            next(iter(resolved_final_exit_reasons))
-            if len(resolved_final_exit_reasons) == 1
-            else None
-        )
-        if not realized:
-            exit_execution_class = "not_realized"
-        elif manual_sell_qty == sell_qty:
-            exit_execution_class = "manual_operator_exit"
-        elif manual_sell_qty > 0:
-            exit_execution_class = "mixed_manual_and_machine_exit"
-        elif all(
-            order.get("order_role") == "TAKE_PROFIT_SELL" for order in sell_orders
-        ):
-            exit_execution_class = "machine_target_fill"
-        elif all(order.get("order_role") == "FINAL_EXIT_SELL" for order in sell_orders):
-            exit_execution_class = "machine_final_exit"
-        else:
-            exit_execution_class = "realized_exit_source_unknown"
-        owner_outcome = {
-            "exit_at": exit_at.isoformat() if exit_at else None,
-            "exit_price": sell_notional / sell_qty if sell_qty else None,
-            "exit_reason": (
-                "manual_operator_partial_exit"
-                if partial_manual_realization
-                else (
-                    "take_profit_fill"
-                    if realized and exit_execution_class == "machine_target_fill"
-                    else (
-                        source_final_exit_reason
-                        if realized and source_final_exit_reason
-                        else "final_exit_fill" if realized else "right_censored"
-                    )
-                )
-            ),
-            "source_final_exit_event_ids": [
-                event["event_id"]
-                for event in final_exit_events
-                if isinstance(event, dict)
-            ],
-            "holding_duration_ms": (
-                round((exit_at - first_fill_at).total_seconds() * 1000.0)
-                if realized and exit_at is not None and first_fill_at is not None
-                else None
-            ),
-            "signal_to_entry_submit_record_ms": round(
-                (first_entry_submit_at - signal_at).total_seconds() * 1000.0
-            ),
-            "entry_submit_record_to_first_fill_confirmation_ms": (
-                round((first_fill_at - first_entry_submit_at).total_seconds() * 1000.0)
-                if first_fill_at is not None
-                else None
-            ),
-            "first_fill_confirmation_to_first_exit_submit_record_ms": (
-                round((first_exit_submit_at - first_fill_at).total_seconds() * 1000.0)
-                if first_exit_submit_at is not None and first_fill_at is not None
-                else None
-            ),
-            "first_exit_submit_record_to_final_exit_fill_confirmation_ms": (
-                round((exit_at - first_exit_submit_at).total_seconds() * 1000.0)
-                if exit_at is not None and first_exit_submit_at is not None
-                else None
-            ),
-            "gross_no_slippage_return_pct": (
-                round(gross_return_pct, 8) if gross_return_pct is not None else None
-            ),
-            "cost_aware_net_return_pct": (
-                execution_economics["modeled_net_return_pct"]
-                if execution_economics is not None
-                else None
-            ),
-            "modeled_total_cost_krw": (
-                execution_economics["modeled_total_cost_krw"]
-                if execution_economics is not None
-                else None
-            ),
-            "modeled_net_profit_krw": (
-                execution_economics["modeled_net_profit_krw"]
-                if execution_economics is not None
-                else None
-            ),
-            "modeled_costs_broker_receipt_exact": False,
-            "cost_contract_sha256": (
-                comparison_cost["contract_sha256"]
-                if comparison_cost is not None
-                else None
-            ),
-            "entry_notional_krw": round(realized_entry_notional, 3),
-            "quantity": realized_qty,
-            "purchased_quantity": buy_qty,
-            "manual_exit_filled_quantity": manual_sell_qty,
-            "right_censored_residual_quantity": max(0, buy_qty - sell_qty),
-            "realization_scope": (
-                "partial_manual_exit_cashflow"
-                if partial_manual_realization
-                else "full_widget_episode" if realized else "right_censored"
-            ),
-            "buy_leg_count": len(buy_submit_orders),
-            "scale_in_buy_leg_count": sum(
-                order.get("order_role") == "SCALE_IN_BUY" for order in buy_submit_orders
-            ),
-            "quantity_basis": "actual_widget_filled_quantity",
-            "entry_fill_status": "filled" if buy_qty > 0 else "unfilled",
-            "entry_execution_venues": entry_execution_venues,
-            "exit_execution_venues": exit_execution_venues,
-            "execution_venue_alignment_state": execution_venue_alignment_state,
-            "realized": realized,
-            "leg_id": (
-                "widget_partial_manual_exit_cashflow"
-                if partial_manual_realization
-                else "widget_episode"
-            ),
-            "exit_execution_class": exit_execution_class,
-            "manual_exit_realized": bool(realized and manual_sell_qty > 0),
-            "autonomous_target_filled": bool(
-                realized and exit_execution_class == "machine_target_fill"
-            ),
-            "realized_loss": bool(
-                realized
-                and execution_economics is not None
-                and execution_economics["modeled_net_profit_krw"] < 0
-            ),
-            "timestamp_provenance": (
-                "execution_loop_submit_record_and_broker_reconciliation_confirmation_time"
-            ),
-        }
-        policy_tuning_eligible = bool(
-            buy_qty > 0
-            and buy_notional > 0
-            and len(buy_submit_orders) == 1
-            and initial_orders[0].get("full_fill_at") is not None
-            and round_trip_cost_pct is not None
-            and round_trip_cost_pct >= 0
-            and advisory_source.get("status") != "contract_invalid"
-            and execution_venue_alignment_state != "cross_venue"
-        )
-        owner_cost_contract = {
-            "owner_round_trip_cost_pct": round_trip_cost_pct,
-            "owner_round_trip_cost_provenance": (
-                "widget_comparison_cost.effective_dated_contract"
-            ),
-            "owner_round_trip_cost_contract_sha256": (
-                comparison_cost["contract_sha256"]
-                if comparison_cost is not None
-                else None
-            ),
-        }
-        lifecycle_id = f"widget_actual:{symbol}:{signal_id}"
-        anchors.append(
-            {
-                "anchor_id": f"{lifecycle_id}:signal",
-                "lifecycle_id": lifecycle_id,
-                "owner": "widget",
-                "scope_id": scope_id,
-                "symbol": symbol,
-                "session": session,
-                "expected_venues": [venue],
-                "expected_session_buckets": [session],
-                "anchor_at": signal_at.isoformat(),
-                "anchor_price": anchor_entry_price,
-                "anchor_price_provenance": (
-                    "actual_initial_entry_fill_price"
-                    if initial_fill_price is not None
-                    else "accepted_entry_limit_price_unfilled"
-                ),
-                "owner_entry_limit_price": initial_submit_price,
-                "owner_requested_quantity": int(
-                    _widget_numeric(initial_orders[0].get("requested_qty")) or 0
-                ),
-                "owner_target_price": target_prices[-1] if target_prices else None,
-                "lifecycle_stage": "entry",
-                "anchor_role": "actual_widget_entry_signal",
-                "entry_state": (
-                    advisory_entry.get("state") if advisory_entry else None
-                ),
-                "structural_support": (
-                    _widget_numeric(advisory_entry.get("structural_support"))
-                    if advisory_entry
-                    else None
-                ),
-                "source_entry_event_id": (
-                    advisory_entry.get("event_id")
-                    if advisory_entry
-                    else (
-                        signal_id
-                        if _widget_entry_signal_contract(
-                            signal_id, symbol=symbol, target_date=target_date
-                        )
-                        is not None
-                        else None
-                    )
-                ),
-                "source_entry_event_id_provenance": (
-                    "advisory_entry_event"
-                    if advisory_entry
-                    else "native_execution_signal_id"
-                ),
-                **owner_cost_contract,
-                "owner_outcome": owner_outcome,
-                "owner_lifecycle_contract_valid": True,
-                "owner_policy_tuning_eligible": policy_tuning_eligible,
-                "actual_order_submitted": True,
-            }
-        )
-        for order in buy_submit_orders:
-            submit_anchor_price = buy_submit_prices[str(order["order_no"])]
-            assert submit_anchor_price is not None
-            anchors.append(
-                {
-                    "anchor_id": f"{lifecycle_id}:buy_submit:{order['order_no']}",
-                    "lifecycle_id": lifecycle_id,
-                    "owner": "widget",
-                    "scope_id": scope_id,
-                    "symbol": symbol,
-                    "session": session,
-                    "expected_venues": [venue],
-                    "expected_session_buckets": [session],
-                    "anchor_at": order["_observed_at"].isoformat(),
-                    "anchor_price": submit_anchor_price,
-                    "anchor_price_provenance": (
-                        "eventual_actual_fill_price"
-                        if order.get("fill_price") is not None
-                        else "accepted_entry_limit_price_unfilled"
-                    ),
-                    "owner_requested_quantity": int(
-                        _widget_numeric(order.get("requested_qty")) or 0
-                    ),
-                    "owner_target_price": target_prices[-1] if target_prices else None,
-                    "lifecycle_stage": "entry_submit",
-                    "anchor_role": (
-                        "actual_widget_scale_in_signal"
-                        if order.get("order_role") == "SCALE_IN_BUY"
-                        else "actual_widget_entry_submit_accept_recorded"
-                    ),
-                    "execution_order_role": order.get("order_role"),
-                    "actual_realized_response_eligible": (
-                        order.get("order_role") != "SCALE_IN_BUY"
-                    ),
-                    "execution_order_no": order.get("order_no"),
-                    "eventual_broker_execution_venue": order.get(
-                        "broker_execution_venue"
-                    ),
-                    **owner_cost_contract,
-                    "owner_outcome": owner_outcome,
-                    "owner_lifecycle_contract_valid": True,
-                    "owner_policy_tuning_eligible": policy_tuning_eligible,
-                    "actual_order_submitted": True,
-                }
-            )
-        for order in buy_fill_orders:
-            full_fill = order.get("full_fill_at") is not None
-            if (
-                full_fill
-                and order.get("first_fill_price") is not None
-                and order["first_fill_at"] < order["full_fill_at"]
-            ):
-                anchors.append(
-                    {
-                        "anchor_id": (
-                            f"{lifecycle_id}:buy_partial_fill:{order['order_no']}"
-                        ),
-                        "lifecycle_id": lifecycle_id,
-                        "owner": "widget",
-                        "scope_id": scope_id,
-                        "symbol": symbol,
-                        "session": session,
-                        "expected_venues": [
-                            str(order.get("broker_execution_venue") or venue)
-                        ],
-                        "expected_session_buckets": [session],
-                        "anchor_at": order["first_fill_at"].isoformat(),
-                        "anchor_price": float(order["first_fill_price"]),
-                        "anchor_price_provenance": ("first_reconciliation_fill_price"),
-                        "owner_target_price": (
-                            target_prices[-1] if target_prices else None
-                        ),
-                        "lifecycle_stage": "entry_partial_fill",
-                        "anchor_role": "actual_widget_entry_partial_fill_reconciled",
-                        "execution_order_role": order.get("order_role"),
-                        "execution_order_no": order.get("order_no"),
-                        "broker_execution_venue": order.get("broker_execution_venue"),
-                        **owner_cost_contract,
-                        "owner_outcome": owner_outcome,
-                        "owner_lifecycle_contract_valid": True,
-                        "owner_policy_tuning_eligible": policy_tuning_eligible,
-                        "actual_order_submitted": True,
-                    }
-                )
-            anchors.append(
-                {
-                    "anchor_id": f"{lifecycle_id}:buy_fill:{order['order_no']}",
-                    "lifecycle_id": lifecycle_id,
-                    "owner": "widget",
-                    "scope_id": scope_id,
-                    "symbol": symbol,
-                    "session": session,
-                    "expected_venues": [
-                        str(order.get("broker_execution_venue") or venue)
-                    ],
-                    "expected_session_buckets": [session],
-                    "anchor_at": order["fill_at"].isoformat(),
-                    "anchor_price": float(order["fill_price"]),
-                    "anchor_price_provenance": "latest_cumulative_fill_price",
-                    "owner_target_price": target_prices[-1] if target_prices else None,
-                    "lifecycle_stage": "entry" if full_fill else "entry_partial_fill",
-                    "anchor_role": (
-                        "actual_widget_entry_fill_reconciled"
-                        if full_fill
-                        else "actual_widget_entry_partial_fill_reconciled"
-                    ),
-                    "execution_order_role": order.get("order_role"),
-                    "execution_order_no": order.get("order_no"),
-                    "broker_execution_venue": order.get("broker_execution_venue"),
-                    **owner_cost_contract,
-                    "owner_outcome": owner_outcome,
-                    "owner_lifecycle_contract_valid": True,
-                    "owner_policy_tuning_eligible": policy_tuning_eligible,
-                    "actual_order_submitted": True,
-                }
-            )
-        for order in sell_submit_orders:
-            submit_price = sell_submit_prices[str(order["order_no"])]
-            assert submit_price is not None
-            anchors.append(
-                {
-                    "anchor_id": f"{lifecycle_id}:sell_submit:{order['order_no']}",
-                    "lifecycle_id": lifecycle_id,
-                    "owner": "widget",
-                    "scope_id": scope_id,
-                    "symbol": symbol,
-                    "session": session,
-                    "expected_venues": [venue],
-                    "expected_session_buckets": [session],
-                    "anchor_at": order["_observed_at"].isoformat(),
-                    "anchor_price": submit_price,
-                    "anchor_price_provenance": (
-                        "accepted_limit_price_or_eventual_actual_fill_price"
-                    ),
-                    "owner_target_price": None,
-                    "lifecycle_stage": "exit_submit",
-                    "anchor_role": "actual_widget_exit_submit_accept_recorded",
-                    "execution_order_role": order.get("order_role"),
-                    "execution_order_no": order.get("order_no"),
-                    "eventual_broker_execution_venue": order.get(
-                        "broker_execution_venue"
-                    ),
-                    **owner_cost_contract,
-                    "owner_outcome": owner_outcome,
-                    "owner_lifecycle_contract_valid": True,
-                    "owner_policy_tuning_eligible": policy_tuning_eligible,
-                    "actual_order_submitted": True,
-                }
-            )
-        if realized:
-            for order in sell_orders:
-                partial_fill_at = order.get("first_fill_at")
-                partial_fill_price = order.get("first_fill_price")
-                full_fill_at = order.get("full_fill_at")
-                if (
-                    partial_fill_at is None
-                    or partial_fill_price is None
-                    or (full_fill_at is not None and partial_fill_at >= full_fill_at)
-                ):
-                    continue
-                anchors.append(
-                    {
-                        "anchor_id": (
-                            f"{lifecycle_id}:sell_partial_fill:{order['order_no']}"
-                        ),
-                        "lifecycle_id": lifecycle_id,
-                        "owner": "widget",
-                        "scope_id": scope_id,
-                        "symbol": symbol,
-                        "session": session,
-                        "expected_venues": [
-                            str(order.get("broker_execution_venue") or venue)
-                        ],
-                        "expected_session_buckets": [session],
-                        "anchor_at": partial_fill_at.isoformat(),
-                        "anchor_price": float(order["first_fill_price"]),
-                        "anchor_price_provenance": ("first_reconciliation_fill_price"),
-                        "owner_target_price": None,
-                        "lifecycle_stage": "exit_partial_fill",
-                        "anchor_role": ("actual_widget_exit_partial_fill_reconciled"),
-                        "execution_order_role": order.get("order_role"),
-                        "execution_order_no": order.get("order_no"),
-                        "broker_execution_venue": order.get("broker_execution_venue"),
-                        **owner_cost_contract,
-                        "owner_outcome": owner_outcome,
-                        "owner_lifecycle_contract_valid": True,
-                        "owner_policy_tuning_eligible": policy_tuning_eligible,
-                        "actual_order_submitted": True,
-                    }
-                )
-        if sell_qty > 0 and exit_at is not None:
-            manual_exit_only = bool(manual_sell_qty == sell_qty and manual_sell_qty > 0)
-            anchors.append(
-                {
-                    "anchor_id": f"{lifecycle_id}:exit",
-                    "lifecycle_id": lifecycle_id,
-                    "owner": "widget",
-                    "scope_id": scope_id,
-                    "symbol": symbol,
-                    "session": session,
-                    "expected_venues": (
-                        exit_execution_venues if exit_execution_venues else [venue]
-                    ),
-                    "expected_session_buckets": [session],
-                    "anchor_at": exit_at.isoformat(),
-                    "anchor_price": sell_notional / sell_qty,
-                    "owner_target_price": None,
-                    "lifecycle_stage": "exit" if realized else "exit_partial_fill",
-                    "anchor_role": (
-                        "actual_widget_manual_partial_exit_reconciled"
-                        if manual_exit_only and buy_qty > sell_qty
-                        else (
-                            "actual_widget_manual_exit_reconciled"
-                            if manual_exit_only
-                            else (
-                                "actual_widget_exit_fill_reconciled"
-                                if realized
-                                else "actual_widget_exit_partial_fill_reconciled"
-                            )
-                        )
-                    ),
-                    "broker_execution_venues": exit_execution_venues,
-                    **owner_cost_contract,
-                    "owner_outcome": owner_outcome,
-                    "owner_lifecycle_contract_valid": True,
-                    "owner_policy_tuning_eligible": policy_tuning_eligible,
-                    "actual_order_submitted": True,
-                }
-            )
-    for opportunity in blocked_daily_entry_limit_opportunities:
-        symbol = str(opportunity["symbol"])
-        session = str(opportunity["session"])
-        venue = WIDGET_SESSION_VENUES[session]
-        signal_id = str(opportunity["signal_id"])
-        scope_id = f"actual_blocked:{symbol}:{session}"
-        row = symbols.setdefault(
-            symbol,
-            {
-                "symbol": symbol,
-                "name": None,
-                "scopes": [],
-                "owner_scope_ids": [],
-                "owner_scope_kinds": {},
-                "owner_scope_expected_venues": {},
-                "owner_anchor_contract_gaps": [],
-                "expected_venues": [],
-                "owner_inventory_source": ("exact_date_widget_execution_event_journal"),
-            },
-        )
-        for key, default in (
-            ("scopes", []),
-            ("owner_scope_ids", []),
-            ("owner_scope_kinds", {}),
-            ("owner_scope_expected_venues", {}),
-            ("owner_anchor_contract_gaps", []),
-            ("expected_venues", []),
-        ):
-            row.setdefault(key, default.copy())
-        if "active_widget_actual_execution" not in row["scopes"]:
-            row["scopes"].append("active_widget_actual_execution")
-        if scope_id not in row["owner_scope_ids"]:
-            row["owner_scope_ids"].append(scope_id)
-        row["owner_scope_kinds"][scope_id] = "active_widget_actual_execution"
-        row["owner_scope_expected_venues"][scope_id] = [venue]
-        if venue not in row["expected_venues"]:
-            row["expected_venues"].append(venue)
-        source_only_outcome = {
-            "exit_at": opportunity.get("source_only_exit_at"),
-            "exit_price": opportunity.get("source_only_exit_price"),
-            "exit_reason": opportunity.get("source_only_exit_reason"),
-            "realized": False,
-            "actual_order_submitted": False,
-            "broker_fill_observed": False,
-            "counterfactual_only": True,
-        }
-        lifecycle_id = f"widget_daily_cap_blocked:{symbol}:{signal_id}"
-        anchors.append(
-            {
-                "anchor_id": f"{lifecycle_id}:signal",
-                "lifecycle_id": lifecycle_id,
-                "owner": "widget",
-                "scope_id": scope_id,
-                "symbol": symbol,
-                "session": session,
-                "expected_venues": [venue],
-                "expected_session_buckets": [session],
-                "anchor_at": opportunity["observed_at"],
-                "anchor_price": opportunity.get("entry_price"),
-                "anchor_price_provenance": (
-                    "source_qualified_advisory_entry_price_no_broker_order"
-                ),
-                "owner_target_price": opportunity.get("target_price"),
-                "lifecycle_stage": "entry",
-                "anchor_role": ("actual_widget_daily_cap_blocked_entry_signal"),
-                "entry_state": opportunity.get("entry_state"),
-                "structural_support": opportunity.get("structural_support"),
-                "source_entry_event_id": signal_id,
-                "owner_round_trip_cost_pct": round_trip_cost_pct,
-                "owner_round_trip_cost_provenance": (
-                    "widget_comparison_cost.effective_dated_contract"
-                ),
-                "owner_round_trip_cost_contract_sha256": (
-                    comparison_cost["contract_sha256"]
-                    if comparison_cost is not None
-                    else None
-                ),
-                "owner_outcome": source_only_outcome,
-                "owner_lifecycle_contract_valid": True,
-                "owner_policy_tuning_eligible": False,
-                "actual_order_submitted": False,
-                "daily_entry_limit_blocked": True,
-            }
-        )
-    for gap in instrumentation_gaps:
-        parts = gap.split(":", 2)
-        if len(parts) >= 2 and parts[1] in symbols:
-            symbols[parts[1]].setdefault("owner_anchor_contract_gaps", []).append(
-                {"scope_id": f"actual:{parts[1]}:unknown", "reason": gap}
-            )
-    advisory_contract_gaps = (
-        [f"advisory:{value}" for value in advisory_source.get("contract_errors") or []]
-        if advisory_source.get("status") == "contract_invalid"
-        else []
-    )
-    source.update(
-        {
-            "status": (
-                "loaded_with_instrumentation_gaps"
-                if instrumentation_gaps or advisory_contract_gaps
-                else "loaded"
-            ),
-            "optional_when_absent": False,
-            "grouped_lifecycle_count": len(lifecycle_orders),
-            "actual_lifecycle_count": len(
-                {
-                    str(anchor.get("lifecycle_id"))
-                    for anchor in anchors
-                    if anchor.get("lifecycle_id")
-                    and anchor.get("actual_order_submitted") is True
-                }
-            ),
-            "source_only_blocked_entry_anchor_count": sum(
-                anchor.get("daily_entry_limit_blocked") is True for anchor in anchors
-            ),
-            "anchor_count": len(anchors),
-            "contract_errors": instrumentation_gaps + advisory_contract_gaps,
-            "blocked_daily_entry_limit_opportunities": (
-                blocked_daily_entry_limit_opportunities
-            ),
-        }
-    )
-    return anchors, source
 
 
-def _widget_inventory(
-    target_date: str,
-    report_root: Path,
-    *,
-    widget_state_path: Path,
-) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
-    calibration_path = (
-        report_root
-        / "widget_auto_trade_policy_calibration"
-        / f"widget_auto_trade_policy_calibration_{target_date}.json"
-    )
-    research_path = (
-        report_root
-        / "widget_symbol_signal_policy_research"
-        / f"widget_symbol_signal_policy_research_{target_date}.json"
-    )
-    expansion_path = (
-        report_root
-        / "widget_collector_expansion_recommendation"
-        / f"widget_collector_expansion_recommendation_{target_date}.json"
-    )
-    calibration_schemas = ("widget_auto_trade_policy_calibration_report_v1",)
-    research_schemas = (
-        "widget_symbol_signal_policy_research_v2",
-        "widget_symbol_signal_policy_research_v3",
-        "widget_symbol_signal_policy_research_v4",
-    )
-    expansion_schemas = ("widget_collector_expansion_recommendation_v1",)
-    calibration = _read_target_json(
-        calibration_path, target_date, expected_schemas=calibration_schemas
-    )
-    research = _read_target_json(
-        research_path,
-        target_date,
-        date_fields=("target_date", "end_date"),
-        expected_schemas=research_schemas,
-    )
-    expansion = _read_target_json(
-        expansion_path, target_date, expected_schemas=expansion_schemas
-    )
-    declared_widget_round_trip_cost_pct = _finite_float(
-        (calibration or {}).get("round_trip_cost_pct")
-    )
-    widget_cost_contract = (
-        comparison_cost_contract(target_date)
-        if date.fromisoformat(target_date) >= CLEAN_BASELINE_DATE
-        else None
-    )
-    widget_round_trip_cost_pct = (
-        float(widget_cost_contract["round_trip_cost_pct"])
-        if widget_cost_contract is not None
-        else None
-    )
-    declared_widget_cost_contract = (
-        calibration.get("comparison_cost_contract")
-        if isinstance(calibration, dict)
-        else None
-    )
-    widget_cost_contract_matches = bool(
-        widget_cost_contract is None
-        or declared_widget_round_trip_cost_pct is None
-        or math.isclose(
-            declared_widget_round_trip_cost_pct,
-            float(widget_round_trip_cost_pct),
-            abs_tol=1e-12,
-        )
-    )
-    widget_cost_contract_ready = bool(
-        widget_cost_contract is not None
-        and isinstance(declared_widget_cost_contract, dict)
-        and declared_widget_cost_contract.get("contract_sha256")
-        == widget_cost_contract.get("contract_sha256")
-        and declared_widget_round_trip_cost_pct is not None
-        and widget_cost_contract_matches
-    )
-    declared_research_cost_contract = (
-        research.get("comparison_cost_contract") if isinstance(research, dict) else None
-    )
-    research_cost_contract_ready = bool(
-        widget_cost_contract is not None
-        and isinstance(declared_research_cost_contract, dict)
-        and declared_research_cost_contract.get("contract_sha256")
-        == widget_cost_contract.get("contract_sha256")
-    )
-    symbols: dict[str, dict[str, Any]] = {}
-    anchors: list[dict[str, Any]] = []
-
-    # Collection/replay admission is not enrollment in a live widget owner.
-    collection_origins = (calibration or {}).get("market_collection_origins") or {}
-    research_origins = {
-        "causal_scanner_research_admission",
-        "operator_enrolled_research_watch",
-        "completed_daily_recommendation_auto_discovery",
-    }
-    report_symbols = (calibration or {}).get("symbols") or {}
-    if isinstance(report_symbols, dict):
-        for symbol, payload in report_symbols.items():
-            if not isinstance(payload, dict):
-                continue
-            row = symbols.setdefault(
-                str(symbol),
-                {
-                    "symbol": str(symbol),
-                    "name": payload.get("name"),
-                    "scopes": [],
-                    "owner_scope_ids": [],
-                    "owner_scope_kinds": {},
-                    "owner_scope_expected_venues": {},
-                    "owner_anchor_contract_gaps": [],
-                    "expected_venues": [],
-                    "owner_inventory_source": "target_date_postclose_report",
-                },
-            )
-            row["owner_inventory_source"] = "target_date_postclose_report"
-            row.setdefault("owner_scope_ids", [])
-            row.setdefault("owner_scope_kinds", {})
-            row.setdefault("owner_scope_expected_venues", {})
-            row.setdefault("owner_anchor_contract_gaps", [])
-            collection_origin = (
-                collection_origins.get(str(symbol))
-                if isinstance(collection_origins, dict)
-                else None
-            )
-            scope_kind = (
-                "prospective_widget_research"
-                if isinstance(collection_origin, str)
-                and collection_origin in research_origins
-                else "active_widget_owner"
-            )
-            if scope_kind not in row["scopes"]:
-                row["scopes"].append(scope_kind)
-            sessions = payload.get("sessions") or {}
-            if not isinstance(sessions, dict):
-                continue
-            for session, session_payload in sessions.items():
-                if not isinstance(session_payload, dict):
-                    continue
-                venue = str(session).split("_", 1)[0].upper()
-                if str(session).startswith(DUAL_AFTERMARKET_SESSION_PREFIX):
-                    # Integrated market-data scope is the SOR registration item,
-                    # not proof of a KRX execution venue from a string prefix.
-                    if (
-                        session_payload.get("market_data_route") != "krx_nxt_integrated"
-                        or session_payload.get("market_venue") != "KRX_NXT"
-                    ):
-                        row["owner_anchor_contract_gaps"].append(
-                            {
-                                "scope_id": f"{symbol}:{session}",
-                                "reason": "integrated_aftermarket_market_data_identity_missing",
-                            }
-                        )
-                        continue
-                    venue = "SOR"
-                scope_id = f"{symbol}:{session}"
-                if scope_id not in row["owner_scope_ids"]:
-                    row["owner_scope_ids"].append(scope_id)
-                row["owner_scope_kinds"][scope_id] = scope_kind
-                row["owner_scope_expected_venues"][scope_id] = [venue]
-                if (
-                    venue in {"KRX", "NXT", "SOR"}
-                    and venue not in row["expected_venues"]
-                ):
-                    row["expected_venues"].append(venue)
-                trades = session_payload.get("selected_trades") or []
-                if not isinstance(trades, list):
-                    continue
-                selected_policy = session_payload.get("selected_policy") or {}
-                target_bps = (
-                    _finite_float(selected_policy.get("target_bps"))
-                    if isinstance(selected_policy, dict)
-                    else None
-                )
-                for index, trade in enumerate(trades, start=1):
-                    if (
-                        not isinstance(trade, dict)
-                        or trade.get("trade_date") != target_date
-                    ):
-                        continue
-                    raw_entry_at = _parse_owner_ts(trade.get("entry_at"))
-                    entry_at = _owner_ts_on_target_date(
-                        trade.get("entry_at"), target_date
-                    )
-                    if entry_at is None:
-                        row["owner_anchor_contract_gaps"].append(
-                            {
-                                "scope_id": scope_id,
-                                "reason": (
-                                    "entry_at_outside_target_date"
-                                    if raw_entry_at is not None
-                                    else "entry_at_missing_or_invalid"
-                                ),
-                            }
-                        )
-                        continue
-                    entry_price = _finite_float(
-                        trade.get("average_price") or trade.get("entry_price")
-                    )
-                    if entry_price is None or entry_price <= 0:
-                        row["owner_anchor_contract_gaps"].append(
-                            {
-                                "scope_id": scope_id,
-                                "reason": "entry_price_missing_or_invalid",
-                            }
-                        )
-                        continue
-                    exit_reason = str(trade.get("exit_reason") or "").strip() or None
-                    raw_exit_at = _parse_owner_ts(trade.get("exit_at"))
-                    exit_at = _owner_ts_on_target_date(
-                        trade.get("exit_at"), target_date
-                    )
-                    exit_price = _finite_float(trade.get("exit_price"))
-                    resolved_exit_requested = exit_reason not in {
-                        None,
-                        "right_censored",
-                    }
-                    resolved_exit_valid = bool(
-                        resolved_exit_requested
-                        and exit_at is not None
-                        and exit_at >= entry_at
-                        and exit_price is not None
-                        and exit_price > 0
-                    )
-                    if resolved_exit_requested and not resolved_exit_valid:
-                        reason = "resolved_exit_timestamp_or_price_invalid"
-                        if raw_exit_at is not None and exit_at is None:
-                            reason = "resolved_exit_outside_target_date"
-                        elif exit_at is not None and exit_at < entry_at:
-                            reason = "resolved_exit_before_entry"
-                        row["owner_anchor_contract_gaps"].append(
-                            {
-                                "scope_id": scope_id,
-                                "reason": reason,
-                            }
-                        )
-                    holding_duration_ms = (
-                        round((exit_at - entry_at).total_seconds() * 1000.0)
-                        if resolved_exit_valid
-                        else None
-                    )
-                    owner_target_price = (
-                        entry_price * (1.0 + target_bps / 10000.0)
-                        if entry_price is not None
-                        and entry_price > 0
-                        and target_bps is not None
-                        and target_bps > 0
-                        else (
-                            exit_price
-                            if exit_reason == "fixed_average_take_profit"
-                            else None
-                        )
-                    )
-                    lifecycle_id = (
-                        f"widget:{symbol}:{session}:{index}:{entry_at.isoformat()}"
-                    )
-                    anchors.append(
-                        {
-                            "anchor_id": f"{lifecycle_id}:entry",
-                            "lifecycle_id": lifecycle_id,
-                            "owner": "widget",
-                            "scope_id": f"{symbol}:{session}",
-                            "symbol": str(symbol),
-                            "session": str(session),
-                            "expected_venues": [venue],
-                            "expected_session_buckets": [str(session)],
-                            "anchor_at": entry_at.isoformat(),
-                            "anchor_price": entry_price,
-                            "owner_target_price": owner_target_price,
-                            "lifecycle_stage": "entry",
-                            "anchor_role": "counterfactual_calibration_entry",
-                            "owner_round_trip_cost_pct": widget_round_trip_cost_pct,
-                            "owner_round_trip_cost_provenance": (
-                                "widget_auto_trade_policy_calibration.round_trip_cost_pct"
-                            ),
-                            "owner_outcome": {
-                                "exit_at": exit_at.isoformat() if exit_at else None,
-                                "exit_price": exit_price,
-                                "exit_reason": exit_reason,
-                                "holding_duration_ms": holding_duration_ms,
-                                "gross_no_slippage_return_pct": _finite_float(
-                                    trade.get("gross_return_pct")
-                                ),
-                                "cost_aware_net_return_pct": _finite_float(
-                                    trade.get("net_return_pct")
-                                ),
-                                "entry_notional_krw": entry_price,
-                                "quantity_basis": "one_share_normalized",
-                                "realized": resolved_exit_valid,
-                            },
-                            "owner_lifecycle_contract_valid": (
-                                not resolved_exit_requested or resolved_exit_valid
-                            ),
-                            "owner_policy_tuning_eligible": (
-                                widget_cost_contract_ready
-                            ),
-                            "actual_order_submitted": False,
-                        }
-                    )
-                    if resolved_exit_valid:
-                        anchors.append(
-                            {
-                                "anchor_id": f"{lifecycle_id}:exit",
-                                "lifecycle_id": lifecycle_id,
-                                "owner": "widget",
-                                "scope_id": f"{symbol}:{session}",
-                                "symbol": str(symbol),
-                                "session": str(session),
-                                "expected_venues": [venue],
-                                "expected_session_buckets": [str(session)],
-                                "anchor_at": exit_at.isoformat(),
-                                "anchor_price": exit_price,
-                                "owner_target_price": None,
-                                "lifecycle_stage": "exit",
-                                "anchor_role": "counterfactual_calibration_exit",
-                                "owner_round_trip_cost_pct": (
-                                    widget_round_trip_cost_pct
-                                ),
-                                "owner_round_trip_cost_provenance": (
-                                    "widget_auto_trade_policy_calibration.round_trip_cost_pct"
-                                ),
-                                "owner_outcome": {
-                                    "entry_at": entry_at.isoformat(),
-                                    "holding_duration_ms": holding_duration_ms,
-                                    "exit_reason": exit_reason,
-                                    "gross_no_slippage_return_pct": _finite_float(
-                                        trade.get("gross_return_pct")
-                                    ),
-                                    "cost_aware_net_return_pct": _finite_float(
-                                        trade.get("net_return_pct")
-                                    ),
-                                    "entry_notional_krw": entry_price,
-                                    "quantity_basis": "one_share_normalized",
-                                    "realized": True,
-                                },
-                                "owner_lifecycle_contract_valid": True,
-                                "owner_policy_tuning_eligible": (
-                                    widget_cost_contract_ready
-                                ),
-                                "actual_order_submitted": False,
-                            }
-                        )
-
-    research_symbols = (research or {}).get("symbols") or {}
-    if isinstance(research_symbols, dict):
-        for symbol, payload in research_symbols.items():
-            symbol = str(symbol)
-            row = symbols.setdefault(
-                symbol,
-                {
-                    "symbol": symbol,
-                    "name": (
-                        (payload or {}).get("name")
-                        if isinstance(payload, dict)
-                        else None
-                    ),
-                    "scopes": [],
-                    "owner_scope_ids": [],
-                    "owner_scope_kinds": {},
-                    "owner_scope_expected_venues": {},
-                    "owner_anchor_contract_gaps": [],
-                    "expected_venues": ["KRX"],
-                    "owner_inventory_source": "target_date_postclose_report",
-                },
-            )
-            row["owner_inventory_source"] = "target_date_postclose_report"
-            row.setdefault("owner_scope_ids", [])
-            row.setdefault("owner_scope_kinds", {})
-            row.setdefault("owner_scope_expected_venues", {})
-            row.setdefault("owner_anchor_contract_gaps", [])
-            if "prospective_widget_research" not in row["scopes"]:
-                row["scopes"].append("prospective_widget_research")
-            scope_id = f"research:{symbol}:KRX_REGULAR"
-            if scope_id not in row["owner_scope_ids"]:
-                row["owner_scope_ids"].append(scope_id)
-            row["owner_scope_kinds"][scope_id] = "prospective_widget_research"
-            row["owner_scope_expected_venues"][scope_id] = ["KRX"]
-            if "KRX" not in row["expected_venues"]:
-                row["expected_venues"].append("KRX")
-            holdout = (
-                (payload or {}).get("holdout") if isinstance(payload, dict) else {}
-            )
-            episodes = (
-                (holdout or {}).get("episodes") if isinstance(holdout, dict) else []
-            )
-            if not isinstance(episodes, list):
-                row["owner_anchor_contract_gaps"].append(
-                    {"scope_id": scope_id, "reason": "holdout_episodes_invalid"}
-                )
-                continue
-            for index, episode in enumerate(episodes, start=1):
-                if (
-                    not isinstance(episode, dict)
-                    or episode.get("trade_date") != target_date
-                ):
-                    continue
-                raw_entry_at = _parse_owner_ts(episode.get("entry_at"))
-                entry_at = _owner_ts_on_target_date(
-                    episode.get("entry_at"), target_date
-                )
-                entry_price = _finite_float(episode.get("entry_price"))
-                if entry_at is None or entry_price is None or entry_price <= 0:
-                    reason = "research_entry_timestamp_or_price_invalid"
-                    if raw_entry_at is not None and entry_at is None:
-                        reason = "research_entry_outside_target_date"
-                    row["owner_anchor_contract_gaps"].append(
-                        {
-                            "scope_id": scope_id,
-                            "reason": reason,
-                        }
-                    )
-                    continue
-                exit_reason = str(episode.get("exit_reason") or "").strip() or None
-                raw_exit_at = _parse_owner_ts(episode.get("exit_at"))
-                exit_at = _owner_ts_on_target_date(episode.get("exit_at"), target_date)
-                exit_price = _finite_float(episode.get("exit_price"))
-                resolved_exit_requested = exit_reason not in {
-                    None,
-                    "right_censored",
-                }
-                resolved_exit_valid = bool(
-                    resolved_exit_requested
-                    and exit_at is not None
-                    and exit_at >= entry_at
-                    and exit_price is not None
-                    and exit_price > 0
-                )
-                if resolved_exit_requested and not resolved_exit_valid:
-                    reason = "research_exit_timestamp_or_price_invalid"
-                    if raw_exit_at is not None and exit_at is None:
-                        reason = "research_exit_outside_target_date"
-                    elif exit_at is not None and exit_at < entry_at:
-                        reason = "research_exit_before_entry"
-                    row["owner_anchor_contract_gaps"].append(
-                        {
-                            "scope_id": scope_id,
-                            "reason": reason,
-                        }
-                    )
-                holding_duration_ms = (
-                    round((exit_at - entry_at).total_seconds() * 1000.0)
-                    if resolved_exit_valid
-                    else None
-                )
-                lifecycle_id = (
-                    f"widget_research:{symbol}:{index}:{entry_at.isoformat()}"
-                )
-                owner_outcome = {
-                    "exit_at": exit_at.isoformat() if exit_at else None,
-                    "exit_price": exit_price,
-                    "exit_reason": exit_reason,
-                    "holding_duration_ms": holding_duration_ms,
-                    "gross_no_slippage_return_pct": (
-                        round((exit_price / entry_price - 1.0) * 100.0, 6)
-                        if resolved_exit_valid
-                        else None
-                    ),
-                    "cost_aware_net_return_pct": _finite_float(
-                        episode.get("net_return_pct")
-                    ),
-                    "entry_notional_krw": entry_price,
-                    "quantity_basis": "one_share_normalized",
-                    "realized": resolved_exit_valid,
-                }
-                common_anchor = {
-                    "lifecycle_id": lifecycle_id,
-                    "owner": "widget",
-                    "scope_id": scope_id,
-                    "symbol": symbol,
-                    "session": "KRX_REGULAR",
-                    "expected_venues": ["KRX"],
-                    "expected_session_buckets": ["KRX_REGULAR"],
-                    "actual_order_submitted": False,
-                    "owner_lifecycle_contract_valid": (
-                        not resolved_exit_requested or resolved_exit_valid
-                    ),
-                    "owner_policy_tuning_eligible": research_cost_contract_ready,
-                    "owner_round_trip_cost_pct": widget_round_trip_cost_pct,
-                    "owner_round_trip_cost_provenance": (
-                        "widget_auto_trade_policy_calibration.round_trip_cost_pct"
-                    ),
-                }
-                anchors.append(
-                    {
-                        **common_anchor,
-                        "anchor_id": f"{lifecycle_id}:entry",
-                        "anchor_at": entry_at.isoformat(),
-                        "anchor_price": entry_price,
-                        "owner_target_price": _finite_float(
-                            episode.get("target_price")
-                        ),
-                        "lifecycle_stage": "entry",
-                        "anchor_role": "prospective_widget_research_entry",
-                        "owner_outcome": owner_outcome,
-                    }
-                )
-                if resolved_exit_valid:
-                    anchors.append(
-                        {
-                            **common_anchor,
-                            "anchor_id": f"{lifecycle_id}:exit",
-                            "anchor_at": exit_at.isoformat(),
-                            "anchor_price": exit_price,
-                            "owner_target_price": None,
-                            "lifecycle_stage": "exit",
-                            "anchor_role": "prospective_widget_research_exit",
-                            "owner_outcome": owner_outcome,
-                        }
-                    )
-
-    recommendations = (expansion or {}).get("recommendations") or []
-    if isinstance(recommendations, list):
-        for recommendation in recommendations:
-            if not isinstance(recommendation, dict):
-                continue
-            symbol = str(
-                recommendation.get("stock_code") or recommendation.get("symbol") or ""
-            )
-            if not symbol:
-                continue
-            row = symbols.setdefault(
-                symbol,
-                {
-                    "symbol": symbol,
-                    "name": recommendation.get("stock_name"),
-                    "scopes": [],
-                    "owner_scope_ids": [],
-                    "owner_scope_kinds": {},
-                    "owner_scope_expected_venues": {},
-                    "owner_anchor_contract_gaps": [],
-                    "expected_venues": ["SOR"],
-                    "owner_inventory_source": "target_date_postclose_report",
-                },
-            )
-            row["owner_inventory_source"] = "target_date_postclose_report"
-            row.setdefault("owner_scope_ids", [])
-            row.setdefault("owner_scope_kinds", {})
-            row.setdefault("owner_scope_expected_venues", {})
-            row.setdefault("owner_anchor_contract_gaps", [])
-            if "prospective_widget_collector_expansion" not in row["scopes"]:
-                row["scopes"].append("prospective_widget_collector_expansion")
-            scope_id = f"expansion:{symbol}:SOR_REGULAR"
-            if scope_id not in row["owner_scope_ids"]:
-                row["owner_scope_ids"].append(scope_id)
-            row["owner_scope_kinds"][
-                scope_id
-            ] = "prospective_widget_collector_expansion"
-            row["owner_scope_expected_venues"][scope_id] = ["SOR"]
-
-    actual_anchors, actual_source = _widget_actual_execution_inventory(
-        target_date=target_date,
-        report_root=report_root,
-        state_path=widget_state_path,
-        symbols=symbols,
-    )
-    anchors.extend(actual_anchors)
-    from src.engine.monitoring.research_closed_loop import read_object
-    from src.engine.monitoring.machine_entry_confirmation_study import (
-        native_parent_anchor,
-    )
-
-    try:
-        native_widget = read_object(widget_state_path, limit=16 * 1024 * 1024)
-    except (OSError, ValueError, TypeError):
-        native_widget = {}
-    if native_widget.get("trade_date") == target_date:
-        opportunities = ((native_widget.get("symbols") or {}).get("005930") or {}).get(
-            "timing_operating_opportunities"
-        ) or {}
-        if opportunities:
-            anchors = [
-                a
-                for a in anchors
-                if a.get("symbol") != "005930"
-                or a.get("anchor_role") != "actual_widget_entry_signal"
-            ]
-            for opportunity in opportunities.values():
-                parent = native_parent_anchor(opportunity)
-                if parent and _owner_ts_on_target_date(
-                    parent["anchor_at"], target_date
-                ):
-                    anchors.append(parent)
-
-    for row in symbols.values():
-        if not row.get("expected_venues"):
-            row["expected_venues"] = ["SOR"]
-        else:
-            row["expected_venues"] = sorted(set(row["expected_venues"]))
-
-    return (
-        symbols,
-        anchors,
-        {
-            "comparison_cost": {
-                "status": (
-                    "pre_clean_baseline_archive_only"
-                    if widget_cost_contract is None
-                    else (
-                        "not_observed"
-                        if calibration is None
-                        else (
-                            "calibration_declared_cost_missing"
-                            if declared_widget_round_trip_cost_pct is None
-                            else (
-                                "calibration_declared_cost_contract_missing_or_invalid"
-                                if not isinstance(declared_widget_cost_contract, dict)
-                                else (
-                                    "loaded"
-                                    if widget_cost_contract_ready
-                                    else "calibration_declared_cost_mismatch"
-                                )
-                            )
-                        )
-                    )
-                ),
-                "optional_when_absent": calibration is None,
-                "declared_round_trip_cost_pct": (declared_widget_round_trip_cost_pct),
-                "resolved_contract": widget_cost_contract,
-            },
-            "symbol_research_comparison_cost": {
-                "status": (
-                    "pre_clean_baseline_archive_only"
-                    if widget_cost_contract is None
-                    else (
-                        "not_observed"
-                        if research is None
-                        else (
-                            "loaded"
-                            if research_cost_contract_ready
-                            else "research_declared_cost_contract_missing_or_invalid"
-                        )
-                    )
-                ),
-                "optional_when_absent": research is None,
-                "resolved_contract": widget_cost_contract,
-            },
-            "calibration": _source(
-                calibration_path,
-                calibration,
-                target_date=target_date,
-                expected_schemas=calibration_schemas,
-            ),
-            "symbol_research": _source(
-                research_path,
-                research,
-                target_date=target_date,
-                expected_schemas=research_schemas,
-                date_fields=("target_date", "end_date"),
-            ),
-            "collector_expansion_recommendation": _source(
-                expansion_path,
-                expansion,
-                target_date=target_date,
-                expected_schemas=expansion_schemas,
-            ),
-            "actual_execution_events": actual_source,
-        },
-    )
 
 
 def _signal_anchor(row: dict[str, Any]) -> tuple[datetime | None, float | None]:
@@ -5844,19 +3479,15 @@ def _invalid_contract_count_for_scope(
 
 _ENTRY_CONFIRMATION_ANCHOR_ROLES = frozenset(
     {
-        "actual_widget_entry_signal",
-        "actual_widget_scale_in_signal",
-        "actual_widget_daily_cap_blocked_entry_signal",
         "actual_market_weakness_blocked_entry_signal",
         "counterfactual_calibration_entry",
-        "prospective_widget_research_entry",
         "episode_signal_decision_leg",
         "episode_signal_bar",
         "prospective_episode_research_signal",
     }
 )
 _TUNING_ENTRY_DECISION_ANCHOR_ROLES = frozenset(
-    {"actual_widget_entry_signal", "episode_signal_decision_leg"}
+    {"episode_signal_decision_leg"}
 )
 
 
@@ -7404,7 +5035,7 @@ def _dynamic_confirmation_replay(result: dict[str, Any]) -> dict[str, Any]:
         owner_entry_limit_price=owner_entry_limit_price,
         owner_target_price=owner_target_price,
         round_trip_cost_pct=round_trip_cost_pct,
-        widget_take_profit=bool(
+        target_from_fill=bool(
             isinstance(outcome, Mapping)
             and outcome.get("exit_reason") == "take_profit_fill"
         ),
@@ -7523,11 +5154,7 @@ def _entry_confirmation_label(result: dict[str, Any]) -> dict[str, Any] | None:
         "lifecycle_id": result.get("lifecycle_id"),
         "owner": result.get("owner"),
         "scope_id": result.get("scope_id"),
-        "entry_timing_scope_id": (
-            f"{result.get('symbol')}:{result.get('session')}"
-            if result.get("owner") == "widget"
-            else result.get("scope_id")
-        ),
+        "entry_timing_scope_id": result.get("scope_id"),
         "symbol": result.get("symbol"),
         "session": result.get("session"),
         "expected_venues": result.get("expected_venues"),
@@ -7593,7 +5220,6 @@ def _entry_confirmation_label(result: dict[str, Any]) -> dict[str, Any] | None:
 def _micro_entry_confirmation_summary(
     results: list[dict[str, Any]],
     *,
-    widget_sources: dict[str, Any],
     target_date: str,
 ) -> dict[str, Any]:
     rows = [
@@ -7693,134 +5319,6 @@ def _micro_entry_confirmation_summary(
             }
         )
 
-    actual_entry_rows = [
-        row
-        for row in rows
-        if row["anchor_role"] == "actual_widget_entry_signal"
-        and row["actual_order_submitted"] is True
-    ]
-    blocked_entry_rows = [
-        row
-        for row in rows
-        if row["anchor_role"] == "actual_widget_daily_cap_blocked_entry_signal"
-    ]
-    actual_source = widget_sources.get("actual_execution_events") or {}
-    blocked_opportunities = (
-        actual_source.get("blocked_daily_entry_limit_opportunities") or []
-    )
-    cap_reallocation: list[dict[str, Any]] = []
-    cost_contract = (
-        comparison_cost_contract(target_date)
-        if date.fromisoformat(target_date) >= CLEAN_BASELINE_DATE
-        else None
-    )
-    for opportunity in blocked_opportunities:
-        if not isinstance(opportunity, dict):
-            continue
-        opportunity_at = _parse_owner_ts(opportunity.get("observed_at"))
-        prior_candidates = sorted(
-            [
-                row
-                for row in actual_entry_rows
-                if row["symbol"] == opportunity.get("symbol")
-                and row["session"] == opportunity.get("session")
-                and opportunity_at is not None
-                and (prior_at := _parse_owner_ts(row.get("anchor_at"))) is not None
-                and prior_at < opportunity_at
-            ],
-            key=lambda row: str(row.get("anchor_at") or ""),
-        )
-        blocked_confirmation = next(
-            (
-                row
-                for row in blocked_entry_rows
-                if row.get("source_entry_event_id") == opportunity.get("signal_id")
-            ),
-            None,
-        )
-        prior = prior_candidates[-1] if prior_candidates else None
-        prior_outcome = prior.get("owner_outcome") if isinstance(prior, dict) else None
-        prior_outcome_ready = bool(
-            isinstance(prior_outcome, dict)
-            and prior_outcome.get("realized") is True
-            and _finite_float(prior_outcome.get("cost_aware_net_return_pct"))
-            is not None
-            and prior_outcome.get("cost_contract_sha256")
-            == (cost_contract or {}).get("contract_sha256")
-        )
-        entry_price = _finite_float(opportunity.get("entry_price"))
-        exit_price = _finite_float(opportunity.get("source_only_exit_price"))
-        gross_return = (
-            (exit_price / entry_price - 1.0) * 100.0
-            if entry_price is not None
-            and entry_price > 0
-            and exit_price is not None
-            and exit_price > 0
-            else None
-        )
-        source_quality_ready = bool(
-            prior is not None
-            and prior["classification"] != "source_quality_blocked"
-            and prior_outcome_ready
-            and blocked_confirmation is not None
-            and blocked_confirmation["classification"] != "source_quality_blocked"
-            and opportunity.get("source_only_exit_reason")
-            and gross_return is not None
-        )
-        cap_reallocation.append(
-            {
-                **opportunity,
-                "prior_actual_anchor_id": prior.get("anchor_id") if prior else None,
-                "prior_actual_confirmation_classification": (
-                    prior.get("classification") if prior else None
-                ),
-                "prior_actual_realized": (
-                    prior_outcome.get("realized")
-                    if isinstance(prior_outcome, dict)
-                    else None
-                ),
-                "prior_actual_cost_aware_net_return_pct": (
-                    prior_outcome.get("cost_aware_net_return_pct")
-                    if isinstance(prior_outcome, dict)
-                    else None
-                ),
-                "blocked_opportunity_anchor_id": (
-                    blocked_confirmation.get("anchor_id")
-                    if blocked_confirmation
-                    else None
-                ),
-                "blocked_opportunity_confirmation_classification": (
-                    blocked_confirmation.get("classification")
-                    if blocked_confirmation
-                    else None
-                ),
-                "comparison_status": (
-                    "source_only_reallocation_evidence_ready"
-                    if source_quality_ready
-                    else "source_quality_blocked"
-                ),
-                "source_only_mark_gross_return_pct": (
-                    round(gross_return, 8) if gross_return is not None else None
-                ),
-                "source_only_mark_cost_aware_return_pct": (
-                    round(
-                        gross_return - float(cost_contract["round_trip_cost_pct"]),
-                        8,
-                    )
-                    if gross_return is not None and cost_contract is not None
-                    else None
-                ),
-                "cost_contract_sha256": (
-                    cost_contract["contract_sha256"]
-                    if cost_contract is not None
-                    else None
-                ),
-                "actual_order_submitted": False,
-                "broker_fill_observed": False,
-                "counterfactual_only": True,
-                "daily_cap_mutation_allowed": False,
-            }
-        )
     return {
         "schema": "machine_micro_entry_confirmation_v1",
         "status": (
@@ -7852,7 +5350,6 @@ def _micro_entry_confirmation_summary(
                 row["classification"] == "source_quality_blocked" for row in rows
             ),
             "owner_state_cohort_count": len(cohorts),
-            "daily_cap_reallocation_observation_count": len(cap_reallocation),
             "dynamic_confirmation_source_only_replay_count": sum(
                 isinstance(row.get("dynamic_confirmation_source_only_replay"), dict)
                 for row in rows
@@ -7868,7 +5365,6 @@ def _micro_entry_confirmation_summary(
         },
         "owner_state_cohorts": cohorts,
         "entry_anchors": rows,
-        "daily_cap_reallocation_observations": cap_reallocation,
     }
 
 
@@ -7943,9 +5439,7 @@ def _scope_micro_gap_class(
 def _lifecycle_objective_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
     decision_roles = {
         "counterfactual_calibration_entry",
-        "actual_widget_entry_signal",
         "episode_signal_bar",
-        "prospective_widget_research_entry",
         "prospective_episode_research_signal",
     }
     context_matched_results = [
@@ -7968,19 +5462,11 @@ def _lifecycle_objective_summary(results: list[dict[str, Any]]) -> dict[str, Any
     }
     matched_entry_fill_count = sum(
         row.get("anchor_role")
-        in {"episode_buy_fill_confirmed", "actual_widget_entry_fill_reconciled"}
+        == "episode_buy_fill_confirmed"
         for row in context_matched_results
     )
     matched_partial_entry_fill_count = sum(
         row.get("lifecycle_stage") == "entry_partial_fill"
-        for row in context_matched_results
-    )
-    matched_entry_submit_count = sum(
-        row.get("anchor_role") == "actual_widget_entry_submit_accept_recorded"
-        for row in context_matched_results
-    )
-    matched_exit_submit_count = sum(
-        row.get("anchor_role") == "actual_widget_exit_submit_accept_recorded"
         for row in context_matched_results
     )
     matched_exit_count = sum(
@@ -7991,8 +5477,6 @@ def _lifecycle_objective_summary(results: list[dict[str, Any]]) -> dict[str, Any
         in {
             "episode_manual_exit_confirmed",
             "episode_manual_exit_reconciled",
-            "actual_widget_manual_partial_exit_reconciled",
-            "actual_widget_manual_exit_reconciled",
         }
         for row in context_matched_results
     )
@@ -8023,14 +5507,9 @@ def _lifecycle_objective_summary(results: list[dict[str, Any]]) -> dict[str, Any
             outcome_units[(lifecycle_id, leg_id)] = {
                 "outcome": outcome,
                 "cohort": (
-                    "actual_widget_execution"
+                    "actual_episode_execution"
                     if row.get("actual_order_submitted") is True
-                    and row.get("owner") == "widget"
-                    else (
-                        "actual_episode_execution"
-                        if row.get("actual_order_submitted") is True
-                        else "source_only_counterfactual"
-                    )
+                    else "source_only_counterfactual"
                 ),
             }
     realized_units = [
@@ -8068,16 +5547,6 @@ def _lifecycle_objective_summary(results: list[dict[str, Any]]) -> dict[str, Any
         for unit in manual_exit_loss_units
         if unit["cohort"] == "actual_episode_execution"
     ]
-    widget_manual_exit_units = [
-        unit
-        for unit in manual_exit_units
-        if unit["cohort"] == "actual_widget_execution"
-    ]
-    widget_manual_exit_loss_units = [
-        unit
-        for unit in manual_exit_loss_units
-        if unit["cohort"] == "actual_widget_execution"
-    ]
     realized_holding_durations_ms = [
         value
         for unit in realized_units
@@ -8103,7 +5572,6 @@ def _lifecycle_objective_summary(results: list[dict[str, Any]]) -> dict[str, Any
 
     cohort_diagnostics: dict[str, dict[str, Any]] = {}
     for cohort in (
-        "actual_widget_execution",
         "actual_episode_execution",
         "source_only_counterfactual",
     ):
@@ -8208,8 +5676,6 @@ def _lifecycle_objective_summary(results: list[dict[str, Any]]) -> dict[str, Any
             "matched_partial_entry_fill_anchor_count": (
                 matched_partial_entry_fill_count
             ),
-            "matched_entry_submit_anchor_count": matched_entry_submit_count,
-            "matched_exit_submit_anchor_count": matched_exit_submit_count,
             "matched_exit_anchor_count": matched_exit_count,
             "matched_manual_exit_anchor_count": matched_manual_exit_count,
             "matched_partial_exit_fill_anchor_count": (matched_partial_exit_fill_count),
@@ -8225,12 +5691,6 @@ def _lifecycle_objective_summary(results: list[dict[str, Any]]) -> dict[str, Any
             ),
             "episode_manual_operator_exit_loss_owner_outcome_count": len(
                 episode_manual_exit_loss_units
-            ),
-            "widget_manual_operator_exit_owner_outcome_count": len(
-                widget_manual_exit_units
-            ),
-            "widget_manual_operator_exit_loss_owner_outcome_count": len(
-                widget_manual_exit_loss_units
             ),
             "all_owner_machine_target_fill_outcome_count": len(machine_target_units),
             "all_owner_manual_operator_exit_outcome_count": len(manual_exit_units),
@@ -8845,7 +6305,6 @@ def build_report(
     source_exclusion_manifest_path: Path = DEFAULT_SOURCE_EXCLUSION_MANIFEST,
     canary_snapshot_path: Path | None = DEFAULT_CANARY_SNAPSHOT_PATH,
     canary_snapshot_dir: Path = CANARY_DAILY_SNAPSHOT_DIR,
-    widget_state_path: Path | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     target_day = date.fromisoformat(target_date)
@@ -8883,14 +6342,6 @@ def build_report(
         daily_root=canary_snapshot_dir,
     )
     clean_baseline_allowed = target_day >= CLEAN_BASELINE_DATE
-    resolved_widget_state_path = widget_state_path or (
-        DEFAULT_WIDGET_AUTO_TRADE_STATE_PATH
-        if report_root == DATA_DIR / "report"
-        else report_root.parent / "runtime" / "widget_signal_auto_trade_state.json"
-    )
-    widget_symbols, widget_anchors, widget_sources = _widget_inventory(
-        target_date, report_root, widget_state_path=resolved_widget_state_path
-    )
     episode_profiles, episode_anchors, episode_sources = _episode_inventory(
         target_date, report_root
     )
@@ -8911,7 +6362,6 @@ def build_report(
     )
     rebound_source["runtime_adapter_scope"] = "regular_two_leg_episode_flat_new_entry"
     rebound_source["unsupported_owner_reason"] = {
-        "widget": "sequential_average_target_exit_requires_separate_owner_replay",
         "morning_legacy": "different_owner_execution_recipe",
     }
     if weakness_blocked_anchors and not rebound_anchors:
@@ -8923,9 +6373,9 @@ def build_report(
             )
         ] = len(weakness_blocked_anchors)
     anchors = (
-        widget_anchors + episode_anchors + weakness_blocked_anchors + rebound_anchors
+        episode_anchors + weakness_blocked_anchors + rebound_anchors
     )
-    symbols = set(widget_symbols)
+    symbols = set()
     symbols.update(
         str(row.get("symbol")) for row in episode_profiles.values() if row.get("symbol")
     )
@@ -8933,14 +6383,13 @@ def build_report(
     symbols.update(str(row["symbol"]) for row in rebound_anchors)
     from src.trading.order.adaptive_exit.source import catalog_from_owner_inventories
 
-    # At this point widget session_contexts have not been enriched yet. Include
+    # At this point episode session_contexts have not been enriched yet. Include
     # its actual scopes from raw owner state; episode inventory is already known.
     adaptive_census, adaptive_anchors = (
         collect_owner_census(
             target_date=target_date,
-            catalog=catalog_from_owner_inventories({}, episode_profiles, errors=[]),
+            catalog=catalog_from_owner_inventories(episode_profiles, errors=[]),
             runtime_root=runtime_root,
-            widget_state_path=resolved_widget_state_path,
         )
         if clean_baseline_allowed
         else (None, [])
@@ -9031,7 +6480,6 @@ def build_report(
         ]
     micro_entry_confirmation = _micro_entry_confirmation_summary(
         results,
-        widget_sources=widget_sources,
         target_date=target_date,
     )
     market_weakness_response = build_machine_market_weakness_response(
@@ -9060,18 +6508,9 @@ def build_report(
         scope_kinds = row.get("scopes") or [row.get("scope")]
         normalized_scope_kinds = [str(value) for value in scope_kinds if value]
         resolved_scope_kind = scope_kind or (
-            "active_widget_owner"
-            if owner == "widget" and "active_widget_owner" in normalized_scope_kinds
-            else (
-                "active_episode_owner"
-                if owner == "episode"
-                and "active_episode_owner" in normalized_scope_kinds
-                else (
-                    normalized_scope_kinds[0]
-                    if normalized_scope_kinds
-                    else "unknown_owner_scope"
-                )
-            )
+            "active_episode_owner"
+            if owner == "episode" and "active_episode_owner" in normalized_scope_kinds
+            else (normalized_scope_kinds[0] if normalized_scope_kinds else "unknown_owner_scope")
         )
         gaps.append(
             {
@@ -9087,7 +6526,7 @@ def build_report(
             }
         )
 
-    for owner, rows in (("widget", widget_symbols), ("episode", episode_profiles)):
+    for owner, rows in (("episode", episode_profiles),):
         for scope_id, row in rows.items():
             symbol = str(
                 row.get("symbol")
@@ -9109,123 +6548,30 @@ def build_report(
                 "venues": [],
                 "sessions": [],
             }
-            if owner == "widget":
-                widget_scope_ids = list(row.get("owner_scope_ids") or [])
-                session_contexts: dict[str, dict[str, Any]] = {}
-                for widget_scope_id in widget_scope_ids:
-                    exact_results = results_by_scope.get(
-                        ("widget", str(widget_scope_id)), []
-                    )
-                    session_name = widget_scope_id.rsplit(":", 1)[-1]
-                    exact_venues = sorted(
-                        {
-                            str(venue)
-                            for result in exact_results
-                            for venue in result.get("expected_venues") or []
-                        }
-                    )
-                    if not exact_venues:
-                        inferred_venue = session_name.split("_", 1)[0].upper()
-                        exact_venues = list(
-                            (row.get("owner_scope_expected_venues") or {}).get(
-                                widget_scope_id
-                            )
-                            or ()
-                        ) or (
-                            [inferred_venue]
-                            if inferred_venue in {"KRX", "NXT", "SOR"}
-                            else list(row.get("expected_venues") or ["SOR"])
-                        )
-                    exact_sessions = sorted(
-                        {
-                            str(session)
-                            for result in exact_results
-                            for session in result.get("expected_session_buckets") or []
-                        }
-                    ) or [session_name]
-                    owner_contract_invalid = any(
-                        gap.get("scope_id") == widget_scope_id
-                        for gap in row.get("owner_anchor_contract_gaps") or []
-                        if isinstance(gap, dict)
-                    )
-                    exact_gap = _scope_micro_gap_class(
-                        clean_baseline_allowed=clean_baseline_allowed,
-                        micro_source=micro_source,
-                        inventory=inventory,
-                        scope_results=exact_results,
-                        owner_anchor_contract_invalid=owner_contract_invalid,
-                        expected_venues=exact_venues,
-                        expected_sessions=exact_sessions,
-                    )
-                    session_contexts[widget_scope_id] = {
-                        "micro_context_status": exact_gap
-                        or (
-                            "matched" if exact_results else "observed_no_owner_episode"
-                        ),
-                        "micro_tuning_input_allowed": bool(exact_results)
-                        and all(
-                            item["micro_tuning_input_allowed"] is True
-                            for item in exact_results
-                        ),
-                        "anchor_results": exact_results,
-                        "expected_venues": exact_venues,
-                        "base_owner_tuning_effect": False,
-                    }
-                    if exact_gap:
-                        append_gap(
-                            owner=owner,
-                            scope_id=widget_scope_id,
-                            row=row,
-                            symbol=symbol,
-                            gap_class=exact_gap,
-                            expected_venues=exact_venues,
-                            scope_kind=(row.get("owner_scope_kinds") or {}).get(
-                                widget_scope_id
-                            ),
-                        )
-                row["session_contexts"] = session_contexts
-                scope_results = [
-                    result
-                    for result in results
-                    if result["owner"] == "widget" and result["symbol"] == symbol
-                ]
-                session_gaps = [
-                    context["micro_context_status"]
-                    for context in session_contexts.values()
-                    if context["micro_context_status"]
-                    not in {"matched", "observed_no_owner_episode"}
-                ]
-                gap_class = session_gaps[0] if session_gaps else None
-                row["micro_tuning_input_allowed"] = bool(scope_results) and all(
-                    context["micro_tuning_input_allowed"]
-                    for context in session_contexts.values()
-                    if context["anchor_results"]
+            scope_results = results_by_scope.get((owner, str(scope_id)), [])
+            owner_contract_invalid = (
+                row.get("owner_anchor_contract_status") == "invalid"
+            )
+            gap_class = _scope_micro_gap_class(
+                clean_baseline_allowed=clean_baseline_allowed,
+                micro_source=micro_source,
+                inventory=inventory,
+                scope_results=scope_results,
+                owner_anchor_contract_invalid=owner_contract_invalid,
+                expected_venues=row.get("expected_venues") or ["SOR"],
+                expected_sessions=["SOR_REGULAR"],
+            )
+            row["micro_tuning_input_allowed"] = bool(scope_results) and all(
+                item["micro_tuning_input_allowed"] is True for item in scope_results
+            )
+            if gap_class:
+                append_gap(
+                    owner=owner,
+                    scope_id=str(scope_id),
+                    row=row,
+                    symbol=symbol,
+                    gap_class=gap_class,
                 )
-            else:
-                scope_results = results_by_scope.get((owner, str(scope_id)), [])
-                owner_contract_invalid = (
-                    row.get("owner_anchor_contract_status") == "invalid"
-                )
-                gap_class = _scope_micro_gap_class(
-                    clean_baseline_allowed=clean_baseline_allowed,
-                    micro_source=micro_source,
-                    inventory=inventory,
-                    scope_results=scope_results,
-                    owner_anchor_contract_invalid=owner_contract_invalid,
-                    expected_venues=row.get("expected_venues") or ["SOR"],
-                    expected_sessions=["SOR_REGULAR"],
-                )
-                row["micro_tuning_input_allowed"] = bool(scope_results) and all(
-                    item["micro_tuning_input_allowed"] is True for item in scope_results
-                )
-                if gap_class:
-                    append_gap(
-                        owner=owner,
-                        scope_id=str(scope_id),
-                        row=row,
-                        symbol=symbol,
-                        gap_class=gap_class,
-                    )
             row["micro_source_inventory"] = inventory
             row["micro_context_status"] = gap_class or (
                 "matched" if scope_results else "observed_no_owner_episode"
@@ -9234,18 +6580,6 @@ def build_report(
             row["anchor_results"] = scope_results
 
     source_gaps = [
-        {
-            "owner": "widget",
-            "source": key,
-            "gap_class": f"owner_source_{value['status']}",
-        }
-        for key, value in widget_sources.items()
-        if value["status"] != "loaded"
-        and not (
-            value.get("optional_when_absent") is True
-            and value["status"] == "not_observed"
-        )
-    ] + [
         {
             "owner": "episode",
             "source": key,
@@ -9307,7 +6641,6 @@ def build_report(
         },
         "rolling_policy_source_contract": rolling_policy_source_contract,
         "consumers": {
-            "widget_postclose_tuning": {"symbols": widget_symbols},
             "episode_machine_postclose_tuning": {"profiles": episode_profiles},
         },
     }
@@ -9448,7 +6781,6 @@ def build_report(
             "base_owner_tuning_continues_when_micro_missing": True,
         },
         "sources": {
-            "widget": widget_sources,
             "episode": episode_sources,
             "micro_reversion": micro_source,
             "runtime_registration_receipt": registration_receipt,
@@ -9457,7 +6789,6 @@ def build_report(
         },
         "summary": {
             "dynamic_symbol_count": len(symbols),
-            "widget_symbol_count": len(widget_symbols),
             "episode_profile_count": len(episode_profiles),
             "anchor_count": len(results),
             "matched_anchor_count": matched,
@@ -9485,11 +6816,6 @@ def build_report(
             "micro_entry_confirmation_blocked_count": (
                 micro_entry_confirmation["summary"]["source_quality_blocked_count"]
             ),
-            "daily_cap_reallocation_observation_count": (
-                micro_entry_confirmation["summary"][
-                    "daily_cap_reallocation_observation_count"
-                ]
-            ),
             "confirmed_market_weakness_entry_count": (
                 market_weakness_response["summary"]["confirmed_weakness_entry_count"]
             ),
@@ -9498,13 +6824,6 @@ def build_report(
             ),
         },
         "consumers": {
-            "widget_postclose_tuning": {
-                "mode": "next_trading_day_supplemental_diagnostic_handoff",
-                "next_trading_day_owner_report_ingestion": True,
-                "selection_effect": False,
-                "base_policy_unchanged_on_missing": True,
-                "symbols": widget_symbols,
-            },
             "episode_machine_postclose_tuning": {
                 "mode": "next_trading_day_supplemental_diagnostic_handoff",
                 "next_trading_day_owner_report_ingestion": True,
@@ -9632,11 +6951,11 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- Target date: `{report['target_date']}`",
         f"- Status: `{report['status']}`",
         f"- Decision: `{report['decision']}`",
-        "- Authority: diagnostic only; existing widget/episode policy is unchanged.",
+        "- Authority: diagnostic only; existing episode policy is unchanged.",
         (
             "- Collection feedback: next-session source-only targets "
             f"`{report.get('collection_feedback', {}).get('selected_symbol_count', 0)}`; "
-            "all active widget/episode owner symbols precede bounded prospective "
+            "all active episode owner symbols precede bounded prospective "
             "policy-sample rotation; "
             "manual-control exclusions are not applied."
         ),
@@ -9646,7 +6965,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         "| Dynamic symbols | Widget symbols | Episode profiles | Anchors | Matched | Gaps |",
         "| ---: | ---: | ---: | ---: | ---: | ---: |",
         (
-            f"| {summary['dynamic_symbol_count']} | {summary['widget_symbol_count']} | "
+            f"| {summary['dynamic_symbol_count']} | "
             f"{summary['episode_profile_count']} | {summary['anchor_count']} | "
             f"{summary['matched_anchor_count']} | {summary['producer_consumer_gap_count']} |"
         ),
@@ -9801,14 +7120,13 @@ def render_markdown(report: dict[str, Any]) -> str:
                 ),
                 (
                     "- Owner/state cohorts: "
-                    f"`{entry_summary.get('owner_state_cohort_count', 0)}`; daily-cap "
-                    "reallocation observations: "
-                    f"`{entry_summary.get('daily_cap_reallocation_observation_count', 0)}`."
+                    f"`{entry_summary.get('owner_state_cohort_count', 0)}`. "
+                    "Episode daily-cap source attribution is independent."
                 ),
                 (
                     "- The 1/3/5-second BBO and fixed-anchor ask-depletion axis is "
                     "source-only. Missing 0B/0D is an explicit source-quality block, "
-                    "and widget/episode owners and entry states are not pooled."
+                    "and episode owners and entry states are not pooled."
                 ),
                 "- No BUY, exit, quantity, target, cooldown, or daily-cap mutation is authorized.",
                 "",
@@ -10084,11 +7402,6 @@ def main() -> int:
         type=Path,
         default=CANARY_DAILY_SNAPSHOT_DIR,
     )
-    parser.add_argument(
-        "--widget-state",
-        type=Path,
-        default=None,
-    )
     parser.add_argument("--output-dir", type=Path, default=OUTPUT_DIR)
     parser.add_argument(
         "--collection-target-root",
@@ -10143,7 +7456,6 @@ def main() -> int:
         source_exclusion_manifest_path=args.source_exclusion_manifest,
         canary_snapshot_path=canary_snapshot,
         canary_snapshot_dir=args.canary_snapshot_dir,
-        widget_state_path=args.widget_state,
     )
     report["execution_mode"] = "full_recompute"
     history_paths = tuple(
@@ -10163,14 +7475,6 @@ def main() -> int:
             args.report_root.parent / "runtime"
             / "scalp_micro_reversion_collection_targets"
             / f"scalp_micro_reversion_collection_targets_{target_date.isoformat()}.json",
-            args.widget_state
-            or (
-                DEFAULT_WIDGET_AUTO_TRADE_STATE_PATH
-                if args.report_root == DATA_DIR / "report"
-                else args.report_root.parent
-                / "runtime"
-                / "widget_signal_auto_trade_state.json"
-            ),
             *history_paths,
         ),
     )

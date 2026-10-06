@@ -220,7 +220,7 @@ def test_samsung_selected_confirmation_cannot_fallback_to_unconfirmed_entry(
         owner_entry_limit_price=10_010,
         owner_target_price=10_050,
         round_trip_cost_pct=0.23,
-        widget_take_profit=False,
+        target_from_fill=False,
         snapshot_path=tmp_path / "missing.json",
     )
     assert decision["action"] == "REJECT"
@@ -234,7 +234,7 @@ def test_samsung_selected_confirmation_cannot_fallback_to_unconfirmed_entry(
         == DEFAULT_DYNAMIC_CONFIRMATION_POLICY
     )
     assert (
-        dynamic_policy_for_scope(owner="widget", scope_id="midday", symbol="005930")
+        dynamic_policy_for_scope(owner="main_scalping", scope_id="midday", symbol="005930")
         == DEFAULT_DYNAMIC_CONFIRMATION_POLICY
     )
 
@@ -254,7 +254,7 @@ def test_live_checkpoint_uses_exact_route_causal_0b_0d_and_enters() -> None:
         owner_entry_limit_price=10_010,
         owner_target_price=10_050,
         round_trip_cost_pct=0.23,
-        widget_take_profit=False,
+        target_from_fill=False,
     )
     decision = evaluate_live_dynamic_confirmation_progress({0: checkpoint})
 
@@ -300,7 +300,7 @@ def test_common_recent_trade_does_not_impute_micro_trade_backing() -> None:
         owner_entry_limit_price=10010,
         owner_target_price=10050,
         round_trip_cost_pct=0.23,
-        widget_take_profit=False,
+        target_from_fill=False,
     )
     assert checkpoint["market_data_health"] == build_market_data_health(
         row, now_ts=now.timestamp()
@@ -362,7 +362,7 @@ def test_missing_global_snapshot_falls_back_without_waiting_five_seconds(
         owner_entry_limit_price=10_010,
         owner_target_price=10_050,
         round_trip_cost_pct=0.23,
-        widget_take_profit=False,
+        target_from_fill=False,
         snapshot_path=tmp_path / "missing.json",
     )
 
@@ -598,7 +598,7 @@ def test_checkpoint_builder_rejects_cross_epoch_confirmation() -> None:
         owner_entry_limit_price=10_020,
         owner_target_price=10_010,
         round_trip_cost_pct=0.23,
-        widget_take_profit=False,
+        target_from_fill=False,
     )
 
     replay = evaluate_dynamic_micro_confirmation(checkpoints)
@@ -643,17 +643,17 @@ def test_dynamic_target_preserves_episode_ticks_and_widget_ratio() -> None:
             baseline_fill_price=100,
             owner_target_price=101,
             checkpoint_ask=99,
-            widget_take_profit=False,
+            target_from_fill=False,
         )
         == 100.0
     )
     assert (
         modeled_dynamic_target_price(
-            owner="widget",
+            owner="main_scalping",
             baseline_fill_price=100,
             owner_target_price=101,
             checkpoint_ask=99,
-            widget_take_profit=True,
+            target_from_fill=True,
         )
         == 100.0
     )
@@ -663,7 +663,7 @@ def test_dynamic_target_preserves_episode_ticks_and_widget_ratio() -> None:
             baseline_fill_price=100,
             owner_target_price=101,
             checkpoint_ask=99,
-            widget_take_profit=False,
+            target_from_fill=False,
         )
         is None
     )

@@ -408,6 +408,8 @@ class OrderOwnerRegistry:
         authority_policy_id: str = "",
         authority_policy_hash: str = "",
     ) -> str:
+        if context.owner_type == "widget_auto_trade":
+            raise OwnerRegistryError("widget_owner_permanently_retired")
         context.validate()
         clean_symbol = _registry_symbol(symbol)
         clean_side = str(side or "").strip().upper()
@@ -2011,7 +2013,8 @@ class OrderOwnerRegistry:
             or any(ch in clean_policy_id for ch in "\r\n\t")
             or clean_mode not in {"COEXIST_ENTRY_ENABLED", "COEXIST_EXIT_ONLY"}
             or "main_scalping" not in clean_owners
-            or not {"widget_auto_trade", "episode"}.intersection(clean_owners)
+            or "episode" not in clean_owners
+            or "widget_auto_trade" in clean_owners
         ):
             raise OwnerRegistryError("owner_registry_policy_activation_input_invalid")
         if len(clean_entry_hash) != 64 or any(

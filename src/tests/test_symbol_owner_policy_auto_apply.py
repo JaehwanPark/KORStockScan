@@ -45,10 +45,11 @@ OWNERS = {
     SYMBOL_B: [
         "main_scalping",
         "manual_operator",
-        "widget_auto_trade",
+        "episode",
     ],
 }
 
+OWNERS = {symbol: sorted(owners) for symbol, owners in OWNERS.items()}
 
 def _write_authority(path: Path, *, owners=None) -> dict:
     payload = build_standing_authority(
@@ -972,7 +973,6 @@ def test_auto_apply_retry_validates_and_reuses_exact_completed_generation(
 def test_deployment_orders_auto_apply_before_all_order_services():
     after = "korstockscan-symbol-owner-policy-auto-apply.service"
     unit_paths = [
-        "deploy/systemd/korstockscan-widget-signal-auto-trader.service",
         "deploy/systemd/korstockscan-samsung-morning-one-share.service",
         "deploy/systemd/korstockscan-samsung-one-share-preflight.service",
         "deploy/systemd/korstockscan-samsung-midday-one-share.service",

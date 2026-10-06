@@ -39,7 +39,7 @@ def _decisions(row: dict[str, Any]) -> dict[str, dict[str, Any]]:
         owner_entry_limit_price=row.get("owner_entry_limit_price"),
         owner_target_price=row.get("owner_target_price"),
         round_trip_cost_pct=row.get("owner_round_trip_cost_pct"),
-        widget_take_profit=(
+        target_from_fill=(
             row.get("owner_outcome")
             if isinstance(row.get("owner_outcome"), dict)
             else {}
@@ -309,7 +309,7 @@ def build_study(
 # They never promote the 300s diagnostic terminal into a live exit.
 OPERATING_SCHEMA = "machine_confirmation_operating_v1"
 OPERATING_ADAPTER_VERSION = (
-    "native_full_fill_market_depth_weighted_target_widget_three_leg_v3"
+    "native_full_fill_market_depth_weighted_target_episode_v4"
 )
 OPERATING_OWNER = "machine_entry_timing_tuning"
 OPERATING_CONTRACT = {
@@ -596,7 +596,7 @@ def replay_operating_plan(source, decision, model):
         if c.get("exit_contract") != "native_target_until_guard_no_synthetic_terminal":
             result["status"] = "unsupported_scope"
             raise ValueError("operating_exit_adapter_not_supported")
-        if c.get("symbol") != "005930" or c.get("owner") not in {"episode", "widget"}:
+        if c.get("symbol") != "005930" or c.get("owner") != "episode":
             result["status"] = "unsupported_scope"
             raise ValueError("owner_scope_not_supported")
         guard = source.get("guard_path")
@@ -758,12 +758,6 @@ def replay_operating_plan(source, decision, model):
                     reason="shared_native_hard_entry_guard_block",
                 )
             due = max(due, admitted_at + timedelta(milliseconds=latency))
-        if c["owner"] == "widget":
-            if len(c["plan"]) > 1 and not guard.get("scale_ticks"):
-                raise ValueError("widget_scale_opportunity_timeline_missing")
-            return _replay_widget_plan(
-                result, c, points, guard, due, model, source=source
-            )
         legs = [dict(l, left=l["quantity"], lots=[]) for l in c["plan"]]
         if sum(l["quantity"] for l in legs) != c["total_quantity"] or len(
             {l["leg_id"] for l in legs}
@@ -968,8 +962,7 @@ def native_guard_projection(contract, points, *, native_state):
     from src.trading.order.adaptive_exit.owner_loop import SESSION_KEY
 
     legs = native_state.get("legs", [])
-    widget_state = native_state.get("widget_state") or {}
-    interventions = [k for k in ("adaptive_exit_session",) if widget_state.get(k)]
+    interventions = []
     if native_state.get("post_admission_veto"):
         interventions.append(native_state["post_admission_veto"])
 
@@ -1934,11 +1927,7 @@ def project_native_operating_path(
     guard = native_guard_projection(
         contract, source["points"], native_state=native_state or {}
     )
-    actual = (
-        widget_actual_projection
-        if contract.get("owner") == "widget"
-        else native_actual_projection
-    )(contract, native_state or {}, source["points"])
+    actual = native_actual_projection(contract, native_state or {}, source["points"])
     disposition = "completed" if actual is not None else "source_gap"
     if (
         actual is None
@@ -1947,8 +1936,6 @@ def project_native_operating_path(
     ):
         disposition = "valid_no_order"
     statuses = [l.get("status") for l in (native_state or {}).get("legs", [])]
-    if contract.get("owner") == "widget":
-        statuses = [o.get("status") for o in (native_state or {}).get("orders", [])]
     if not statuses or any(
         status not in {"COMPLETE", "NO_FILL", "FILLED", "CANCELED"}
         for status in statuses
@@ -1976,7 +1963,7 @@ def selected_exit_programs(*, now, owner, adaptive_required=False):
         try:
             selected = module.load_policy(
                 now=now,
-                owner="widget_auto_trade" if owner == "widget" else owner,
+                owner=owner,
                 entered_at=now.isoformat() if name == "target_ratchet" else now,
             )
             programs[name] = {
@@ -2005,9 +1992,9 @@ def selected_exit_programs(*, now, owner, adaptive_required=False):
 
 def _native_target_price(contract, price):
     if contract.get("target_bps") is not None:
-        from src.trading.widget_auto_trade.engine import _take_profit_price
+        from src.trading.order.tick_utils import move_price_up_by_bps
 
-        return _take_profit_price(price, profit_bps=contract["target_bps"])
+        return move_price_up_by_bps(price, contract["target_bps"])
     from src.trading.order.tick_utils import move_price_by_ticks
 
     return move_price_by_ticks(price, contract["target_ticks"])
@@ -2160,8 +2147,6 @@ def native_parent_anchor(opportunity):
             ],
             anchor_role=(
                 "episode_signal_decision_leg"
-                if c.get("owner") == "episode"
-                else "actual_widget_entry_signal"
             ),
             entry_state="UNSPECIFIED",
             owner_policy_tuning_eligible=False,
@@ -2229,260 +2214,8 @@ def native_parent_anchor(opportunity):
     )
 
 
-def capture_widget_opportunity(
-    symbol_state,
-    *,
-    symbol,
-    scope_id,
-    session,
-    route,
-    source_state,
-    signal_id,
-    reference_price,
-    quantity,
-    execution_policy,
-    now,
-    target_bps,
-    adaptive_required=False,
-):
-    """Capture the existing widget market entry before confirmation/transport.
-
-    Scale-in and forced/source exits are separate owner programs. They remain
-    explicitly unsupported rather than borrowing the old 1200s close label.
-    """
-    from src.engine.trade_profit import get_trade_cost_rate
-    from src.engine.monitoring.policy_research_economics import digest
-    from copy import deepcopy
-
-    if symbol != "005930":
-        return
-    store = symbol_state.setdefault("timing_operating_opportunities", {})
-    if signal_id in store:
-        return
-    if len(store) >= 128:
-        symbol_state["timing_operating_source_gap"] = (
-            "native_opportunity_capacity_exceeded"
-        )
-        return
-    policy = deepcopy(execution_policy) or {}
-    programs = selected_exit_programs(
-        now=now, owner="widget", adaptive_required=adaptive_required
-    )
-    if (
-        policy.get("force_flat_at_session_end")
-        or policy.get("source_final_exit_action") != "observe_only_no_forced_sell"
-    ):
-        programs = dict(
-            programs,
-            status="unsupported_scope",
-            blocker="widget_scale_in_or_source_exit_operating_adapter_required",
-        )
-    if (
-        type(quantity) is not int
-        or quantity <= 0
-        or type(reference_price) is not int
-        or reference_price <= 0
-    ):
-        c = _seal(
-            dict(
-                schema=OPERATING_SCHEMA,
-                status="source_gap",
-                source_date=now.date().isoformat(),
-                decision_at=now.isoformat(),
-                owner="widget",
-                scope_id=scope_id,
-                route=route,
-                plan=[],
-                blocker="native_widget_quantity_or_price_invalid",
-                repair_owner=OPERATING_OWNER,
-            )
-        )
-    else:
-        c = _seal(
-            dict(
-                schema=OPERATING_SCHEMA,
-                owner="widget",
-                scope_id=scope_id,
-                symbol=symbol,
-                operating_adapter_version=OPERATING_ADAPTER_VERSION,
-                native_policy_type="widget_native_execution_policy",
-                source_date=now.date().isoformat(),
-                decision_at=now.isoformat(),
-                signal_bar=signal_id,
-                plan=[
-                    dict(
-                        leg_id="entry" if i == 0 else "add" + str(i),
-                        route="NXT" if route == "NXT" else "SOR",
-                        quantity=quantity,
-                        limit_price=reference_price,
-                    )
-                    for i in range(
-                        1 + len(policy.get("add_trigger_bps_from_initial_fill") or [])
-                    )
-                ],
-                total_quantity=quantity
-                * (1 + len(policy.get("add_trigger_bps_from_initial_fill") or [])),
-                native_policy=policy,
-                native_policy_sha256=digest(policy),
-                native_owner_code_sha256=frozen_native_owner_code(),
-                target_ticks=None,
-                target_bps=target_bps,
-                entry_kind="market",
-                cancel_at=None,
-                cancel_basis="market_order_terminal_no_synthetic_ttl",
-                selected_programs=programs,
-                owner_session=session,
-                market_data_venue=route,
-                execution_data_venue="NXT" if route == "NXT" else "SOR",
-                execution_depth_session=(
-                    "NXT_PREMARKET"
-                    if session == "NXT_PREMARKET"
-                    else (
-                        "SOR_REGULAR" if session == "KRX_REGULAR" else "SOR_AFTERMARKET"
-                    )
-                ),
-                depth_session=(
-                    "NXT_PREMARKET"
-                    if session == "NXT_PREMARKET"
-                    else (
-                        route + "_REGULAR"
-                        if session == "KRX_REGULAR"
-                        else route + "_AFTERMARKET"
-                    )
-                ),
-                cost_rate=get_trade_cost_rate(),
-                cost_contract=frozen_operating_cost_contract(),
-                cost_provenance="frozen_loaded_trade_profit_configuration_not_broker_settlement",
-                exit_contract="native_target_until_guard_no_synthetic_terminal",
-                incumbent_arm="baseline",
-                allocation_budget_krw=None,
-                allocation_role="native_quantity_order_envelope_only",
-                order_envelope_krw=quantity
-                * (1 + len(policy.get("add_trigger_bps_from_initial_fill") or []))
-                * reference_price,
-                quantity_authority=dict(
-                    owner="widget",
-                    quantity=quantity,
-                    source="existing_widget_resolved_quantity",
-                ),
-                entry_state=source_state,
-                runtime_effect=False,
-                broker_order_forbidden=True,
-                requires_native_guard_admission=True,
-            )
-        )
-    from src.trading.config.machine_entry_timing_policy import (
-        resolve_entry_confirmation_policy,
-    )
-
-    timing = resolve_entry_confirmation_policy(
-        target_date=now.date(),
-        owner="widget",
-        scope_id=scope_id,
-        symbol=symbol,
-        session=session,
-        entry_state=source_state,
-        native_policy=policy,
-        approved_leg_quantity=quantity,
-    )
-    c = _seal(
-        c
-        | {
-            "incumbent_arm": (
-                timing["provenance"].get("confirmation_feature_arm", "combined")
-                if timing["mode"] == "per_signal_dynamic_0_1_3_5"
-                else "baseline"
-            )
-        }
-    )
-    store[signal_id] = dict(
-        contract=c,
-        native_state={
-            "legs": [],
-            "order_clocks": {},
-            "observed_at": now.isoformat(),
-            "scale_ticks": [],
-        },
-        actual_order_submitted=False,
-        terminal_action="pending",
-    )
 
 
-def record_widget_native(symbol_state, *, event, now):
-    """Fold the original widget orders, without recovering another episode."""
-    from copy import deepcopy
-
-    signal = event.get("parent_entry_signal_id") or event.get("signal_id")
-    store = symbol_state.get("timing_operating_opportunities") or {}
-    opportunity = store.get(signal)
-    if not opportunity and isinstance(signal, str):
-        roots = [root for root in store if signal.startswith(root + ":")]
-        if len(roots) == 1:
-            signal = roots[0]
-            opportunity = store[signal]
-    if not opportunity and signal is None:
-        signal = symbol_state.get("entry_signal_id")
-        opportunity = store.get(signal)
-    if not opportunity:
-        return None
-    orders = [
-        deepcopy(o)
-        for o in symbol_state.get("orders", [])
-        if o.get("signal_id") == signal or o.get("parent_entry_signal_id") == signal
-    ]
-    native = opportunity["native_state"]
-    if (
-        event.get("event_type") == "order_submitted"
-        and event.get("actual_order_submitted") is True
-        and any(o.get("side") == "BUY" and o.get("order_no") for o in orders)
-    ):
-        if (native.get("entry_admission") or {}).get("permitted") is not True:
-            native["entry_admission"] = dict(
-                at=now.isoformat(),
-                permitted=True,
-                basis="original_widget_buy_owner_after_all_common_entry_guards",
-            )
-    if event.get("actual_order_submitted") is False and (
-        "blocked" in str(event.get("event_type"))
-        or event.get("market_weakness_blocked") is True
-    ):
-        if not native.get("entry_admission", {}).get("permitted") and not any(
-            o.get("side") == "BUY" and o.get("order_no") for o in orders
-        ):
-            native["entry_admission"] = dict(
-                at=now.isoformat(), permitted=False, basis=event.get("event_type")
-            )
-        elif not str(event.get("signal_id", "")).startswith(str(signal) + ":ADD"):
-            native["post_admission_veto"] = event.get("event_type")
-    native.update(
-        orders=orders,
-        observed_at=now.isoformat(),
-        widget_state=deepcopy(
-            {
-                k: symbol_state.get(k)
-                for k in (
-                    "entry_route",
-                    "entry_session",
-                    "entry_signal_id",
-                    "take_profit_target_price",
-                    "take_profit_basis_fill_price",
-                    "scale_in_requested",
-                    "adaptive_exit_session",
-                    "profit_stagnation_exit",
-                    "holding_target_amendment",
-                )
-            }
-        ),
-    )
-    native["confirmation_policy_provenance"] = deepcopy(
-        symbol_state.get("entry_timing_policy_provenance") or {}
-    )
-    native["confirmed_delay_sec"] = int(
-        symbol_state.get("entry_confirmation_delay_sec") or 0
-    )
-    opportunity["actual_order_submitted"] |= event.get("actual_order_submitted") is True
-    opportunity["terminal_action"] = event.get("event_type")
-    return deepcopy(opportunity)
 
 
 def validate_operating_selection(receipt, *, arm):
@@ -2598,7 +2331,7 @@ def operating_policy_evidence(
 ):
     """Translate computed economics into the EXISTING timing promotion floors."""
     from src.trading.config.machine_entry_timing_policy import dynamic_observation_lag
-    from src.engine.monitoring.widget_comparison_cost import comparison_cost_contract
+    from src.trading.market.comparison_cost import comparison_cost_contract
 
     if receipt.get("candidate") not in {
         "bid_rebound",
@@ -2756,220 +2489,6 @@ def applied_operating_performance(cases, *, model_validation=None):
     )
 
 
-def widget_actual_projection(contract, native_state, points):
-    """Native initial/add/target orders, exact parent and terminal quantities."""
-    from datetime import datetime
-
-    try:
-        orders = native_state["orders"]
-        signal = contract["signal_bar"]
-        buys = [
-            o
-            for o in orders
-            if o.get("side") == "BUY"
-            and (
-                o.get("signal_id") == signal
-                or o.get("parent_entry_signal_id") == signal
-            )
-        ]
-        targets = [
-            o
-            for o in orders
-            if o.get("side") == "SELL"
-            and o.get("parent_entry_signal_id") == signal
-            and o.get("order_role") == "TAKE_PROFIT_SELL"
-        ]
-        if not buys or not targets or len(buys) + len(targets) != len(orders):
-            return None
-        if len({o.get("order_no") for o in orders}) != len(orders):
-            return None
-        if any(
-            not o.get("owner_registry_bind_confirmed")
-            or not o.get("owner_registry_intent_id")
-            or not o.get("order_no")
-            or o.get("owner_registry_reconciliation_required")
-            or o.get("owner_registry_error")
-            for o in orders
-        ):
-            return None
-        if any(
-            o.get("status") != "FILLED"
-            or o.get("filled_qty") != contract["quantity_authority"]["quantity"]
-            for o in buys
-        ):
-            return None
-        if any(o.get("status") not in {"FILLED", "CANCELED"} for o in targets):
-            return None
-        filled = sum(o["filled_qty"] for o in buys)
-        if (
-            filled != sum(o.get("filled_qty", 0) for o in targets)
-            or filled > contract["total_quantity"]
-        ):
-            return None
-        if any(
-            o.get("filled_qty", 0)
-            and (
-                type(o.get("fill_price")) not in (int, float)
-                or not math.isfinite(o["fill_price"])
-                or o["fill_price"] <= 0
-            )
-            for o in orders
-        ):
-            return None
-        start = datetime.fromisoformat(contract["decision_at"])
-        ends = [
-            datetime.fromisoformat(o["timing_terminal_fill_observed_at"])
-            for o in targets
-            if o.get("filled_qty")
-        ]
-        if not ends:
-            return None
-        end = max(ends)
-        ack = datetime.fromisoformat(buys[0]["submitted_at"])
-        first = datetime.fromisoformat(buys[0]["timing_first_fill_observed_at"])
-        first_target = min(datetime.fromisoformat(o["submitted_at"]) for o in targets)
-        if not start <= ack <= first <= first_target <= end:
-            return None
-        buy = sum(o["filled_qty"] * o["fill_price"] for o in buys)
-        sell = sum(
-            o["filled_qty"] * o["fill_price"] for o in targets if o.get("filled_qty")
-        )
-        flows = []
-        reserve = 0
-        for o in buys:
-            at = datetime.fromisoformat(o["timing_first_fill_observed_at"])
-            sent = datetime.fromisoformat(o["submitted_at"])
-            if not start <= sent <= at <= end:
-                return None
-            flows.append((at, o["filled_qty"], o["filled_qty"] * o["fill_price"]))
-            reserve += (
-                o["filled_qty"]
-                * contract["plan"][0]["limit_price"]
-                * (at - sent).total_seconds()
-                / 60
-            )
-        for o in targets:
-            if o.get("filled_qty"):
-                flows.append(
-                    (
-                        datetime.fromisoformat(o["timing_terminal_fill_observed_at"]),
-                        -o["filled_qty"],
-                        0,
-                    )
-                )
-        capital = 0
-        previous = start
-        open_qty = 0
-        basis = 0
-        total_qty = 0
-        for at, q, notional in sorted(flows):
-            capital += (
-                basis
-                * open_qty
-                / max(total_qty, 1)
-                * (at - previous).total_seconds()
-                / 60
-            )
-            if q > 0:
-                basis += notional
-                total_qty += q
-            open_qty += q
-            if open_qty < 0:
-                return None
-            previous = at
-        gaps = [
-            int(
-                (
-                    datetime.fromisoformat(b["at"]) - datetime.fromisoformat(a["at"])
-                ).total_seconds()
-                * 1000
-            )
-            for a, b in zip(points, points[1:])
-        ]
-        ticks = native_state.get("scale_ticks", [])
-        tick_gaps = [
-            int(
-                (
-                    datetime.fromisoformat(b["at"]) - datetime.fromisoformat(a["at"])
-                ).total_seconds()
-                * 1000
-            )
-            for a, b in zip(ticks, ticks[1:])
-        ]
-        if not gaps or min(gaps) <= 0 or open_qty:
-            return None
-        cancels = [o for o in targets if o.get("status") == "CANCELED"]
-        cancel_ms = [
-            int(
-                (
-                    datetime.fromisoformat(o["timing_cancel_terminal_observed_at"])
-                    - datetime.fromisoformat(o["cancel_attempted_at"])
-                ).total_seconds()
-                * 1000
-            )
-            for o in cancels
-        ]
-        latency = native_submit_model_latency(contract, native_state, ack)
-        if latency < 0 or any(v < 0 for v in cancel_ms):
-            return None
-        return _seal(
-            dict(
-                status="COMPLETED",
-                origin="real",
-                contract_sha256=contract["sha256"],
-                quantity=contract["total_quantity"],
-                filled_quantity=filled,
-                exact_lineage=True,
-                lineage=[
-                    {
-                        k: o[k]
-                        for k in (
-                            "order_no",
-                            "owner_registry_intent_id",
-                            "signal_id",
-                            "order_role",
-                        )
-                    }
-                    for o in orders
-                ],
-                net_pnl_krw=sell * (1 - contract["cost_rate"]) - buy,
-                capital_krw_minutes=capital,
-                reserve_krw_minutes=reserve,
-                closed_at_ms=int(end.timestamp() * 1000),
-                knowledge_date=datetime.fromisoformat(native_state["observed_at"])
-                .date()
-                .isoformat(),
-                submit_latency_ms=latency,
-                target_ack_latency_ms=int(
-                    (first_target - first).total_seconds() * 1000
-                ),
-                maximum_depth_gap_ms=max(gaps),
-                **programme_clock_parameters(native_state),
-                target_touch_latency_ms=native_target_touch_latency(
-                    contract, native_state, points
-                ),
-                target_cancel_latency_ms=max(cancel_ms) if cancel_ms else None,
-                scale_check_latency_ms=(
-                    max(
-                        0,
-                        int(
-                            (
-                                datetime.fromisoformat(ticks[0]["at"]) - first
-                            ).total_seconds()
-                            * 1000
-                        ),
-                    )
-                    if ticks
-                    else None
-                ),
-                maximum_scale_tick_gap_ms=max(tick_gaps) if tick_gaps else None,
-                cost_provenance=contract["cost_provenance"],
-                profit_basis="broker_prices_with_frozen_cost_model_not_account_settlement",
-                clock_basis="native_owner_local_reconciliation_observation_not_exchange_or_wire_latency",
-            )
-        )
-    except (KeyError, TypeError, ValueError):
-        return None
 
 
 def semantic_native_policy(policy):
@@ -3048,268 +2567,8 @@ def adaptive_new_enrollment_selected(services):
     return getattr(admission, "current", admission) is not None
 
 
-def record_widget_scale_source(
-    symbol_state, *, now, current_price, source_status, permitted=None, stage_index=None
-):
-    """Retain original as-of scale inputs and original guard verdicts only."""
-    store = symbol_state.get("timing_operating_opportunities") or {}
-    opportunity = store.get(symbol_state.get("entry_signal_id"))
-    if not opportunity:
-        return
-    ticks = opportunity.setdefault("native_state", {}).setdefault("scale_ticks", [])
-    at = now.isoformat()
-    if ticks and ticks[-1]["at"] == at:
-        row = ticks[-1]
-    else:
-        if len(ticks) >= 30000:
-            symbol_state["timing_operating_source_gap"] = (
-                "native_scale_tick_capacity_exceeded"
-            )
-            opportunity["native_state"]["scale_source_overflow"] = True
-            return
-        row = dict(
-            at=at,
-            current_price=current_price,
-            source_status=source_status,
-            stage_index=stage_index,
-            permitted=None,
-            quantity=(opportunity.get("contract") or {})
-            .get("quantity_authority", {})
-            .get("quantity"),
-        )
-        ticks.append(row)
-    row.update(current_price=current_price, source_status=source_status)
-    if stage_index is not None:
-        row["stage_index"] = stage_index
-    if permitted is not None:
-        row["permitted"] = permitted
 
 
-def _replay_widget_plan(result, c, points, guard, due, model, *, source):
-    """Original market legs and pooled-average target; never a forced close.
-
-    A changed scale trigger requires its own as-of native guard receipt. Missing
-    verdicts are unsupported, rather than permission inferred from a later BUY.
-    """
-    from datetime import datetime, timedelta
-    from src.trading.order.tick_utils import clamp_price_to_tick
-
-    ticks = guard.get("scale_ticks", [])
-    stages = c["plan"]
-    triggers = c["native_policy"].get("add_trigger_bps_from_initial_fill") or []
-    if len(stages) != 1 + len(triggers):
-        raise ValueError("widget_frozen_leg_contract_invalid")
-    if ticks and any(
-        datetime.fromisoformat(a["at"]) >= datetime.fromisoformat(b["at"])
-        for a, b in zip(ticks, ticks[1:])
-    ):
-        raise ValueError("widget_native_scale_clock_invalid")
-    remaining = quantity = buy = sell = capital = reserve = 0
-    filled_stages = 0
-    initial = None
-    target = None
-    target_ack = None
-    previous = datetime.fromisoformat(c["decision_at"])
-    first = None
-    sold_any = False
-    consumed_tick = None
-    pending_scale = None
-    programs = _OperatingPrograms(source, model)
-    programs.events = result["transitions"]
-    for point in points:
-        at = datetime.fromisoformat(point["at"])
-        capital += (
-            buy * remaining / max(quantity, 1) * (at - previous).total_seconds() / 60
-        )
-        if filled_stages == 0:
-            reserve += (
-                stages[0]["quantity"]
-                * stages[0]["limit_price"]
-                * max(0, (at - max(previous, due)).total_seconds())
-                / 60
-            )
-        bids = [
-            [p, math.floor(q * model["depth_participation"])]
-            for p, q in point["bid_levels"]
-        ]
-        asks = [
-            [p, math.floor(q * model["depth_participation"])]
-            for p, q in point["ask_levels"]
-        ]
-        if pending_scale and at >= pending_scale:
-            target_ack = None
-        programs.update(at)
-        if remaining and target_ack and at >= target_ack:
-            if pending_scale is None:
-                target = programs.target(
-                    "widget",
-                    at=at,
-                    quantity=remaining,
-                    entry=buy / quantity,
-                    target=target,
-                    route=stages[0]["route"],
-                )
-            executable = programs.fill_ready(
-                "widget", at=at, target=target, bids=bids, quantity=remaining
-            )
-            for price, depth in bids if executable else []:
-                if price < target:
-                    break
-                take = min(remaining, depth)
-                remaining -= take
-                sell += take * target
-                if take:
-                    if pending_scale and take < remaining + take:
-                        return dict(
-                            result,
-                            status="unsupported_scope",
-                            blocker="partial_target_during_scale_cancel_requires_owner_remainder_adapter",
-                        )
-                    sold_any = True
-                    result["transitions"].append(
-                        dict(
-                            at=at.isoformat(),
-                            action="pooled_target",
-                            quantity=take,
-                            price=target,
-                        )
-                    )
-            if not remaining:
-                pnl = sell * (1 - c["cost_rate"]) - buy
-                return dict(
-                    result,
-                    status="completed",
-                    blocker=None,
-                    net_pnl_krw=pnl,
-                    net_ev_pct=pnl / c["order_envelope_krw"] * 100,
-                    capital_krw_minutes=capital,
-                    reserve_krw_minutes=reserve,
-                    fill_participation=quantity / c["total_quantity"],
-                    exposure_start=c["decision_at"],
-                    exposure_end=at.isoformat(),
-                    modeled_filled_qty=quantity,
-                    remaining_qty=0,
-                    buy_notional_krw=buy,
-                    sell_notional_krw=sell,
-                    cost_krw=sell * c["cost_rate"],
-                    cost_provenance=c["cost_provenance"],
-                    contract_sha256=c["sha256"],
-                    model_sha256=model["sha256"],
-                )
-        request = filled_stages == 0 and at >= due
-        if (
-            filled_stages
-            and filled_stages < len(stages)
-            and not sold_any
-            and pending_scale is None
-        ):
-            if guard.get("scale_source_overflow"):
-                raise ValueError("widget_scale_source_overflow")
-            check_latency = model.get("scale_check_latency_ms")
-            tick_gap = model.get("maximum_scale_tick_gap_ms")
-            if (
-                type(check_latency) is not int
-                or type(tick_gap) is not int
-                or tick_gap <= 0
-            ):
-                raise ValueError("native_widget_scale_clock_model_missing")
-            observations = [r for r in ticks if datetime.fromisoformat(r["at"]) <= at]
-            if not observations and (at - first).total_seconds() * 1000 > check_latency:
-                raise ValueError("widget_scale_timeline_coverage_missing")
-            if observations:
-                tick = observations[-1]
-                stamp = datetime.fromisoformat(tick["at"])
-                if (at - stamp).total_seconds() * 1000 > tick_gap:
-                    raise ValueError("widget_scale_timeline_coverage_missing")
-                if (
-                    consumed_tick != tick["at"]
-                    and (at - stamp).total_seconds() * 1000 <= tick_gap
-                ):
-                    consumed_tick = tick["at"]
-                    trigger = clamp_price_to_tick(
-                        initial * (1 + triggers[filled_stages - 1] / 10000)
-                    )
-                    if (
-                        tick["source_status"] == "PASS"
-                        and tick["current_price"] <= trigger
-                    ):
-                        if (
-                            tick.get("permitted") is not True
-                            or tick.get("stage_index") != filled_stages
-                            or tick["quantity"] != stages[filled_stages]["quantity"]
-                        ):
-                            return dict(
-                                result,
-                                status="unsupported_scope",
-                                blocker="changed_widget_add_requires_its_own_native_guard_receipt",
-                            )
-                        cancel_ms = model.get("target_cancel_latency_ms")
-                        if type(cancel_ms) is not int or cancel_ms < 0:
-                            return dict(
-                                result,
-                                status="source_gap",
-                                blocker="independent_widget_target_cancel_model_missing",
-                            )
-                        pending_scale = stamp + timedelta(
-                            milliseconds=cancel_ms + model["submit_latency_ms"]
-                        )
-        if pending_scale and at >= pending_scale:
-            request = True
-        if request:
-            q = stages[filled_stages]["quantity"]
-            if sum(depth for _, depth in asks) < q:
-                return dict(
-                    result,
-                    status="unsupported_scope",
-                    blocker="partial_market_buy_requires_native_remainder_adapter",
-                )
-            left = q
-            notional = 0
-            for price, depth in asks:
-                take = min(left, depth)
-                left -= take
-                notional += take * price
-                if not left:
-                    break
-            if filled_stages == 0:
-                initial = notional / q
-            # Independent owner quantities do not create a cash allocation.
-            # The same frozen demand envelope is used on both arms.
-            if buy + notional > c["order_envelope_krw"]:
-                return dict(
-                    result,
-                    status="unsupported_scope",
-                    blocker="market_entry_exceeds_frozen_comparison_envelope",
-                )
-            buy += notional
-            quantity += q
-            remaining += q
-            filled_stages += 1
-            first = first or at
-            pending_scale = None
-            target = _native_target_price(c, buy / quantity)
-            target_ack = at + timedelta(milliseconds=model["target_ack_latency_ms"])
-            result["transitions"].append(
-                dict(
-                    at=at.isoformat(),
-                    action="market_buy",
-                    leg_id=stages[filled_stages - 1]["leg_id"],
-                    quantity=q,
-                    price=notional / q,
-                )
-            )
-        previous = at
-    return dict(
-        result,
-        status="source_gap" if source.get("source_truncated") else "pending",
-        blocker=(
-            "bounded_source_prefix_exhausted"
-            if source.get("source_truncated")
-            else "widget_pooled_target_terminal_pending"
-        ),
-        modeled_filled_qty=quantity,
-        remaining_qty=remaining,
-    )
 
 
 def record_operating_owner_tick(owner, now):
@@ -3322,12 +2581,10 @@ def record_operating_owner_tick(owner, now):
     from src.trading.order.profit_stagnation_owners import guard
     from datetime import datetime
 
-    owner_type = "episode" if hasattr(owner, "policy") else "widget_auto_trade"
-    states = (
-        [owner._state]
-        if owner_type == "episode"
-        else [(owner._state.get("symbols") or {}).get("005930", {})]
-    )
+    if not hasattr(owner, "policy"):
+        return
+    owner_type = "episode"
+    states = [owner._state]
     permitted = guard(owner, symbol="005930", owner_type=owner_type, now=now)
     for state in states:
         for opp in (state.get("timing_operating_opportunities") or {}).values():
@@ -3453,34 +2710,7 @@ def record_operating_owner_tick(owner, now):
                     if rows:
                         fills[leg["leg_id"]] = rows
                 native["programme_fills"] = fills
-            elif owner_type == "widget_auto_trade":
-                from copy import deepcopy
 
-                native["orders"] = [
-                    deepcopy(o)
-                    for o in state.get("orders", [])
-                    if o.get("signal_id") == c["signal_bar"]
-                    or o.get("parent_entry_signal_id") == c["signal_bar"]
-                ]
-                for order in native["orders"]:
-                    project_widget_registry_terminal(owner, order)
-                for h in state.get("holding_target_history", []):
-                    if h.get("ack_observed_at"):
-                        elapsed = int(
-                            (
-                                datetime.fromisoformat(h["ack_observed_at"])
-                                - datetime.fromisoformat(h["trigger_observed_at"])
-                            ).total_seconds()
-                            * 1000
-                        )
-                        if elapsed >= 0:
-                            native.setdefault("programme_action_clocks", {})[
-                                "target_amend_latency_ms"
-                            ] = elapsed
-                for payload in (state.get("profit_stagnation_exit") or {}).values():
-                    native.setdefault("programme_action_clocks", {}).update(
-                        payload.get("operating_action_clocks") or {}
-                    )
 
 
 class _OperatingPrograms:
@@ -3904,7 +3134,7 @@ def refresh_completed_operating_actuals(cases, *, target_date, state_dir):
 
     fresh = {}
     errors = []
-    for name in (*MACHINE_FILES.values(), "widget_signal_auto_trade_state.json"):
+    for name in MACHINE_FILES.values():
         try:
             path = Path(state_dir) / name
             if not path.exists():
@@ -3946,11 +3176,7 @@ def refresh_completed_operating_actuals(cases, *, target_date, state_dir):
                 )
             )
         if native and _sealed(source) and c.get("source_date", "") <= str(target_date):
-            actual = (
-                widget_actual_projection
-                if c.get("owner") == "widget"
-                else native_actual_projection
-            )(c, native, source["points"])
+            actual = native_actual_projection(c, native, source["points"])
             if actual:
                 source = _seal(
                     source
@@ -3981,7 +3207,6 @@ def _native_owner_code_signature():
     paths = (
         "src/trading/order/regular_two_leg_machine.py",
         "src/trading/samsung_morning_one_share/machine.py",
-        "src/trading/widget_auto_trade/engine.py",
         "src/trading/market/micro_confirmation.py",
         "src/trading/order/target_ratchet.py",
         "src/trading/order/profit_stagnation_owners.py",
@@ -4008,41 +3233,6 @@ def matching_native_legs(contract, legs):
     return matched
 
 
-def project_widget_registry_terminal(owner, order):
-    """Add exact local custody-registry facts to a COPY of the native row."""
-    if not order.get("order_no") or not order.get("filled_qty"):
-        return
-    row = bounded_custody_terminal_lookup(
-        owner,
-        order_date=order.get("order_date"),
-        broker_order_no=order["order_no"],
-        filled_qty=order["filled_qty"],
-    )
-    if not row or any(
-        row.get(k) != v
-        for k, v in {
-            "owner_type": "widget_auto_trade",
-            "owner_id": order.get("owner_id"),
-            "position_id": order.get("owner_position_id"),
-            "symbol": "005930",
-            "side": order.get("side"),
-            "intent_id": order.get("owner_registry_intent_id"),
-            "filled_qty": order.get("filled_qty"),
-        }.items()
-    ):
-        return
-    q = row["filled_qty"]
-    amount = row.get("fill_amount")
-    at = row.get("fill_observed_at_kst")
-    if type(amount) is int and amount > 0 and at:
-        order.update(
-            fill_price=amount / q,
-            fill_amount_krw=amount,
-            timing_first_fill_observed_at=order.get("timing_first_fill_observed_at")
-            or at,
-        )
-        if q == order.get("requested_qty"):
-            order["timing_terminal_fill_observed_at"] = at
 
 
 def bounded_custody_terminal_lookup(owner, *, order_date, broker_order_no, filled_qty):
@@ -4105,7 +3295,7 @@ def retain_native_terminal_history(state):
     )
 
 
-def read_native_actual_history(report_dir, *, target_date):
+def read_native_actual_history(report_dir, *, target_date, minimum_source_date=None):
     """Read one bounded existing report generation, never raw or another SELL."""
     from pathlib import Path
     from src.engine.monitoring.research_closed_loop import read_object
@@ -4115,7 +3305,11 @@ def read_native_actual_history(report_dir, *, target_date):
         reverse=True,
     )
     for path in names:
-        if path.stem[-10:] > str(target_date):
+        source_date = path.stem[-10:]
+        if source_date > str(target_date) or (
+            minimum_source_date is not None
+            and source_date < str(minimum_source_date)
+        ):
             continue
         try:
             report = read_object(path, limit=64 * 1024 * 1024)

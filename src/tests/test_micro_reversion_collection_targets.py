@@ -57,8 +57,8 @@ def test_exact_probe_conflict_augments_only_next_session_observation_route(tmp_p
     owner_report = {"schema": "machine_microstructure_attribution_v1",
                     "target_date": "2026-09-29",
                     "producer_consumer_gaps": [{
-                        "owner": "widget", "scope_id": "010140",
-                        "scope_kind": "active_widget_owner", "symbol": "010140",
+                        "owner": "episode", "scope_id": "010140",
+                        "scope_kind": "active_episode_owner", "symbol": "010140",
                         "expected_venues": ["SOR"],
                         "gap_class": "micro_symbol_not_observed",
                     }]}
@@ -76,8 +76,8 @@ def test_exact_probe_conflict_augments_only_next_session_observation_route(tmp_p
     report = {"schema": "machine_microstructure_attribution_v1",
               "target_date": source_date,
               "producer_consumer_gaps": [{
-                  "owner": "widget", "scope_id": "010140",
-                  "scope_kind": "active_widget_owner", "symbol": "010140",
+                  "owner": "episode", "scope_id": "010140",
+                  "scope_kind": "active_episode_owner", "symbol": "010140",
                   "expected_venues": ["SOR"],
                   "gap_class": "micro_symbol_not_observed",
               }]}
@@ -94,7 +94,7 @@ def test_exact_probe_conflict_augments_only_next_session_observation_route(tmp_p
     prospective = dict(report)
     prospective["producer_consumer_gaps"] = [{
         **report["producer_consumer_gaps"][0],
-        "scope_kind": "prospective_widget_research",
+        "scope_kind": "prospective_episode_research",
     }]
     bounded = build_collection_targets(
         prospective, zero_base_gap_scopes=source["scopes"], max_symbols=1,
@@ -117,17 +117,17 @@ def test_unobserved_symbols_become_bounded_next_trading_day_targets():
                     "gap_class": "micro_symbol_not_observed",
                 },
                 {
-                    "owner": "widget",
+                    "owner": "episode",
                     "scope_id": "222222",
-                    "scope_kind": "prospective_widget_research",
+                    "scope_kind": "prospective_episode_research",
                     "symbol": "222222",
                     "expected_venues": ["NXT"],
                     "gap_class": "micro_symbol_not_observed",
                 },
                 {
-                    "owner": "widget",
+                    "owner": "episode",
                     "scope_id": "333333",
-                    "scope_kind": "prospective_widget_research",
+                    "scope_kind": "prospective_episode_research",
                     "symbol": "333333",
                     "expected_venues": ["KRX"],
                     "gap_class": "micro_symbol_not_observed",
@@ -185,26 +185,11 @@ def test_duplicate_profile_gaps_merge_to_one_symbol_target():
 
 def test_dynamic_machine_universe_continues_bounded_policy_sample_collection():
     report = _report([])
-    report["consumers"] = {
-        "widget_postclose_tuning": {
-            "symbols": {
-                "005930": {
-                    "symbol": "005930",
-                    "scopes": ["active_widget_owner"],
-                    "expected_venues": ["KRX"],
-                }
-            }
-        },
-        "episode_machine_postclose_tuning": {
-            "profiles": {
-                "episode_a": {
-                    "symbol": "000660",
-                    "scope": "prospective_episode_research",
-                    "expected_venues": ["SOR"],
-                }
-            }
-        },
-    }
+    report["consumers"] = {"episode_machine_postclose_tuning": {"profiles": {
+        "samsung": dict(symbol="005930", scope="active_episode_owner", expected_venues=["KRX"]),
+        "episode_a": dict(symbol="000660", scope="prospective_episode_research", expected_venues=["SOR"]),
+    }}}
+
 
     payload = build_collection_targets(report, max_symbols=2)
 
@@ -215,26 +200,13 @@ def test_dynamic_machine_universe_continues_bounded_policy_sample_collection():
     }
 
 
-def test_widget_policy_sample_uses_exact_scope_venues_not_aggregate_fallback():
+def test_episode_policy_sample_uses_exact_scope_venues_not_aggregate_fallback():
     report = _report([])
-    report["consumers"] = {
-        "widget_postclose_tuning": {
-            "symbols": {
-                "111111": {
-                    "symbol": "111111",
-                    "scopes": ["prospective_widget_research"],
-                    "expected_venues": ["KRX", "SOR"],
-                    "owner_scope_ids": ["research:111111:KRX_REGULAR"],
-                    "owner_scope_kinds": {
-                        "research:111111:KRX_REGULAR": ("prospective_widget_research")
-                    },
-                    "owner_scope_expected_venues": {
-                        "research:111111:KRX_REGULAR": ["KRX"]
-                    },
-                }
-            }
-        }
-    }
+    report["consumers"] = {"episode_machine_postclose_tuning": {"profiles": {
+        "research:111111:KRX_REGULAR": dict(symbol="111111", scope="prospective_episode_research",
+                                               expected_venues=["KRX"]),
+    }}}
+
 
     payload = build_collection_targets(report, max_symbols=1)
 
@@ -247,14 +219,14 @@ def test_widget_policy_sample_uses_exact_scope_venues_not_aggregate_fallback():
     assert all(not row["gap_classes"] for row in payload["selected_targets"])
 
 
-def test_actual_widget_execution_gap_keeps_active_owner_collection_priority():
+def test_actual_episode_execution_gap_keeps_active_owner_collection_priority():
     payload = build_collection_targets(
         _report(
             [
                 {
-                    "owner": "widget",
+                    "owner": "episode",
                     "scope_id": "actual:005930:KRX_REGULAR",
-                    "scope_kind": "active_widget_actual_execution",
+                    "scope_kind": "active_episode_owner",
                     "symbol": "005930",
                     "expected_venues": ["KRX"],
                     "gap_class": "micro_symbol_not_observed",
@@ -267,7 +239,7 @@ def test_actual_widget_execution_gap_keeps_active_owner_collection_priority():
     target = payload["selected_targets"][0]
     assert target["symbol"] == "005930"
     assert target["active_owner"] is True
-    assert target["actual_execution_observed"] is True
+    assert target["actual_execution_observed"] is False
     assert target["priority_class"] == "active_owner_collection"
     assert target["expected_venue"] == "KRX"
 
@@ -277,9 +249,9 @@ def test_exact_date_loader_rejects_stale_or_authority_mutation(tmp_path):
         _report(
             [
                 {
-                    "owner": "widget",
+                    "owner": "episode",
                     "scope_id": "555555",
-                    "scope_kind": "active_widget_owner",
+                    "scope_kind": "active_episode_owner",
                     "symbol": "555555",
                     "expected_venues": ["KRX"],
                     "gap_class": "micro_symbol_not_observed",
@@ -310,9 +282,9 @@ def test_exact_date_loader_rejects_top_level_runtime_authority_mutation(tmp_path
         _report(
             [
                 {
-                    "owner": "widget",
+                    "owner": "episode",
                     "scope_id": "555555",
-                    "scope_kind": "active_widget_owner",
+                    "scope_kind": "active_episode_owner",
                     "symbol": "555555",
                     "expected_venues": ["KRX"],
                     "gap_class": "micro_symbol_not_observed",
@@ -336,9 +308,9 @@ def test_exact_date_loader_rejects_non_adjacent_source_date(tmp_path):
         _report(
             [
                 {
-                    "owner": "widget",
+                    "owner": "episode",
                     "scope_id": "555555",
-                    "scope_kind": "active_widget_owner",
+                    "scope_kind": "active_episode_owner",
                     "symbol": "555555",
                     "expected_venues": ["KRX"],
                     "gap_class": "micro_symbol_not_observed",
@@ -360,9 +332,9 @@ def test_malformed_symbol_is_not_silently_truncated_into_a_target():
         _report(
             [
                 {
-                    "owner": "widget",
+                    "owner": "episode",
                     "scope_id": "malformed",
-                    "scope_kind": "active_widget_owner",
+                    "scope_kind": "active_episode_owner",
                     "symbol": "A123456junk",
                     "expected_venues": ["KRX"],
                     "gap_class": "micro_symbol_not_observed",
@@ -392,9 +364,9 @@ def test_loader_rejects_non_trading_source_date_even_for_next_trading_day(
         _report(
             [
                 {
-                    "owner": "widget",
+                    "owner": "episode",
                     "scope_id": "555555",
-                    "scope_kind": "active_widget_owner",
+                    "scope_kind": "active_episode_owner",
                     "symbol": "555555",
                     "expected_venues": ["KRX"],
                     "gap_class": "micro_symbol_not_observed",
@@ -444,9 +416,9 @@ def test_active_owner_symbols_are_not_delayed_by_research_rotation_budget():
 
 def test_active_multi_venue_symbol_collects_all_exact_routes_each_day():
     gap = {
-        "owner": "widget",
+        "owner": "episode",
         "scope_id": "multi_venue",
-        "scope_kind": "active_widget_owner",
+        "scope_kind": "active_episode_owner",
         "symbol": "111111",
         "expected_venues": ["KRX", "NXT", "SOR"],
         "gap_class": "micro_symbol_not_observed",
@@ -508,9 +480,9 @@ def test_single_symbol_budget_keeps_active_owner_ahead_of_prospective_owner():
                     "gap_class": "micro_symbol_not_observed",
                 },
                 {
-                    "owner": "widget",
+                    "owner": "episode",
                     "scope_id": "prospective",
-                    "scope_kind": "prospective_widget_research",
+                    "scope_kind": "prospective_episode_research",
                     "symbol": "222222",
                     "expected_venues": ["SOR"],
                     "gap_class": "micro_symbol_not_observed",
@@ -537,9 +509,9 @@ def test_active_owner_full_coverage_precedes_prospective_rotation_budget():
     ]
     gaps.append(
         {
-            "owner": "widget",
+            "owner": "episode",
             "scope_id": "prospective",
-            "scope_kind": "prospective_widget_research",
+            "scope_kind": "prospective_episode_research",
             "symbol": "444444",
             "expected_venues": ["SOR"],
             "gap_class": "micro_symbol_not_observed",
@@ -564,7 +536,7 @@ def test_active_owner_full_coverage_precedes_prospective_rotation_budget():
     assert payload["overflow_targets"] == []
 
 
-def test_actual_widget_execution_priority_does_not_drop_other_active_owner():
+def test_actual_episode_execution_priority_does_not_drop_other_active_owner():
     payload = build_collection_targets(
         _report(
             [
@@ -577,9 +549,9 @@ def test_actual_widget_execution_priority_does_not_drop_other_active_owner():
                     "gap_class": "micro_symbol_not_observed",
                 },
                 {
-                    "owner": "widget",
+                    "owner": "episode",
                     "scope_id": "actual_widget",
-                    "scope_kind": "active_widget_actual_execution",
+                    "scope_kind": "active_episode_owner",
                     "symbol": "222222",
                     "expected_venues": ["KRX"],
                     "gap_class": "micro_symbol_not_observed",
@@ -590,10 +562,10 @@ def test_actual_widget_execution_priority_does_not_drop_other_active_owner():
     )
 
     assert [row["symbol"] for row in payload["selected_targets"]] == [
-        "222222",
         "111111",
+        "222222",
     ]
-    assert payload["selected_targets"][0]["actual_execution_observed"] is True
+    assert payload["selected_targets"][0]["actual_execution_observed"] is False
 
 
 def test_loader_rejects_false_active_owner_full_coverage_claim(tmp_path):
@@ -633,12 +605,12 @@ def test_loader_rejects_active_owner_hidden_in_prospective_overflow(tmp_path):
                     "gap_class": "micro_symbol_not_observed",
                 },
                 {
-                    "owner": "widget", "scope_id": "extra_research", "scope_kind": "prospective_widget_research", "symbol": "333333", "expected_venues": ["KRX"], "gap_class": "micro_symbol_not_observed",
+                    "owner": "episode", "scope_id": "extra_research", "scope_kind": "prospective_episode_research", "symbol": "333333", "expected_venues": ["KRX"], "gap_class": "micro_symbol_not_observed",
                 },
                 {
-                    "owner": "widget",
+                    "owner": "episode",
                     "scope_id": "prospective_widget",
-                    "scope_kind": "prospective_widget_research",
+                    "scope_kind": "prospective_episode_research",
                     "symbol": "222222",
                     "expected_venues": ["KRX"],
                     "gap_class": "micro_symbol_not_observed",
@@ -686,9 +658,9 @@ def test_loader_rejects_overflow_count_mismatch(tmp_path):
         _report(
             [
                 {
-                    "owner": "widget",
+                    "owner": "episode",
                     "scope_id": "prospective_widget",
-                    "scope_kind": "prospective_widget_research",
+                    "scope_kind": "prospective_episode_research",
                     "symbol": "222222",
                     "expected_venues": ["KRX"],
                     "gap_class": "micro_symbol_not_observed",
@@ -711,9 +683,9 @@ def test_loader_rejects_selected_prospective_count_above_research_budget(tmp_pat
         _report(
             [
                 {
-                    "owner": "widget",
+                    "owner": "episode",
                     "scope_id": "prospective_widget",
-                    "scope_kind": "prospective_widget_research",
+                    "scope_kind": "prospective_episode_research",
                     "symbol": "222222",
                     "expected_venues": ["KRX"],
                     "gap_class": "micro_symbol_not_observed",
@@ -761,9 +733,9 @@ def test_loader_remains_compatible_with_exact_date_v1_artifact(tmp_path):
         _report(
             [
                 {
-                    "owner": "widget",
+                    "owner": "episode",
                     "scope_id": "legacy_widget",
-                    "scope_kind": "active_widget_owner",
+                    "scope_kind": "active_episode_owner",
                     "symbol": "555555",
                     "expected_venues": ["KRX"],
                     "gap_class": "micro_symbol_not_observed",
@@ -783,7 +755,7 @@ def test_loader_remains_compatible_with_exact_date_v1_artifact(tmp_path):
 def test_independent_prospective_budget_round_trip_and_legacy_contract(tmp_path):
     report = _report([
         {"owner": "episode", "scope_id": "active", "scope_kind": "active_episode_owner", "symbol": "111111", "expected_venues": ["SOR"], "gap_class": "micro_symbol_not_observed"},
-        {"owner": "widget", "scope_id": "research", "scope_kind": "prospective_widget_research", "symbol": "222222", "expected_venues": ["KRX"], "gap_class": "micro_symbol_not_observed"},
+        {"owner": "episode", "scope_id": "research", "scope_kind": "prospective_episode_research", "symbol": "222222", "expected_venues": ["KRX"], "gap_class": "micro_symbol_not_observed"},
     ])
     payload = build_collection_targets(report, max_symbols=1)
     write_collection_targets(payload, root=tmp_path)
@@ -808,8 +780,8 @@ def test_prospective_budget_respects_remaining_registration_capacity(tmp_path):
          "gap_class": "micro_symbol_not_observed"}
         for index in range(1, 134)
     ] + [
-        {"owner": "widget", "scope_id": f"research_{index}",
-         "scope_kind": "prospective_widget_research", "symbol": f"{index:06d}",
+        {"owner": "episode", "scope_id": f"research_{index}",
+         "scope_kind": "prospective_episode_research", "symbol": f"{index:06d}",
          "expected_venues": ["KRX"], "gap_class": "micro_symbol_not_observed"}
         for index in (222222, 333333)
     ]

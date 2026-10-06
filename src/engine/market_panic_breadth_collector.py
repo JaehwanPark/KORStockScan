@@ -162,7 +162,6 @@ def market_weakness_observation_contract_errors(
     required_forbidden_uses = set(
         REPORT_ONLY_FORBIDDEN_USES
         + [
-            "widget_entry_block",
             "episode_entry_block",
             "open_buy_cancel",
             "target_order_cancel",
@@ -1183,7 +1182,6 @@ def build_market_weakness_observation(
         "source_quality_gate": "same-session fresh KOSPI/KOSDAQ and industry breadth snapshot",
         "forbidden_uses": REPORT_ONLY_FORBIDDEN_USES
         + [
-            "widget_entry_block",
             "episode_entry_block",
             "open_buy_cancel",
             "target_order_cancel",
@@ -1201,7 +1199,7 @@ def build_market_weakness_observation(
             "status": "source_only_counterfactual_collection",
             "runtime_effect": False,
             "allowed_runtime_apply": False,
-            "owner_isolation_required": ["main", "widget", "episode"],
+            "owner_isolation_required": ["main", "episode"],
             "control": "current_owner_behavior_unchanged",
             "candidate_arms": [
                 "delay_new_entry_until_recovery_confirmed",

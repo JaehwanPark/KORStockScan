@@ -401,7 +401,6 @@ def capacity_receipt(directory, source_date, report_root):
     )
     reports = 0
     for family in (
-        "widget_symbol_signal_policy_research",
         "low_price_two_leg_expanded_candidate_research",
         "machine_research_closed_loop",
     ):

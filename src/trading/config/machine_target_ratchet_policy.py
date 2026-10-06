@@ -15,6 +15,8 @@ HASH_ENV = "KORSTOCKSCAN_MACHINE_TARGET_RATCHET_POLICY_SHA256"
 
 
 def load_policy(*, now, owner, entered_at):
+    if owner != "episode":
+        return None
     path, pin = os.getenv(PATH_ENV, ""), os.getenv(HASH_ENV, "")
     if not path and not pin:
         return None

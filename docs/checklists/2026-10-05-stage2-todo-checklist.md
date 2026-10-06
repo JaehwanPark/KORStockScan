@@ -6,12 +6,40 @@
 
 ## 필수 규칙
 
-- Plan Rebase §1–§8과 사용자 최신 지시를 따른다. 입력 날짜는9/29·9/30·10/2로 고정하며10/2를 새 독립 holdout으로 취급하지 않는다.
+- Plan Rebase §1–§8과 사용자 최신 지시를 따른다. 기존 Main/삼성 기계 연구 입력은9/29·9/30·10/2로 고정한다. 승인된 Widget17종목 기간 대사는9/29~10/2의 기존 완료 원천을 사용하며, 실행 점검에서 확인된10/1 분봉도 포함한다.10/2를 새 독립 holdout으로 취급하지 않는다.
 - 기계 후보 `pullback_p60_v0`를 고정한다. 성공100%/80% 보존 veto를 추가하지 않는다. 삼성전자와 보조 AI는 별도 정책/owner로 구분한다.
 - 종전 구현·지정·배포·준비 검증은 아래 완료 증거로 보존한다. 최신 `계획을 실행하고 코드리뷰후 수정보완 반복` 지시는 해당 코드·기존 원천의 유한 연구·검증을 승인했다. 실제 Main 당일 기동/PID는 기존 owner가 확인한다. 관측/최초 신호/native·비용/stop·독립 날짜와 지정 근거를 구분하고 삼성 최신 absorption과 과거 veto의 owner를 혼동하지 않는다.
 - 10/5 문서는 작업 시작 시 없었다. 완료된10/4 항목을 현재 OPEN으로 복제하지 않고 이번 지시의 소유 항목만 등록한다. 다음 영업일 준비의 기존10/6 소유 항목은 유지한다.
 
 ## 실행 항목
+
+- [x] `[WidgetResearchAdvisoryPlanning1005] 위젯 종목 수익성 선별·기간 및 자문 누적평가 진단계획 수립` (`Due: 2026-10-05`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: Research`)
+  - Source: 사용자 두 계획 수립 요청, [종목 신호연구 재설계](../proposals/widget-symbol-profitability-research-redesign-plan-2026-10-05.md), [자문 누적평가 진단](../proposals/widget-advisory-cumulative-evaluation-diagnostic-plan-2026-10-05.md).
+  - Acceptance: 현재 selected 코드·보고서·실행 receipt 기반의 대상/원천/기간/수익성·집계/선정/소비 연결 진단, 실행 owner·유한 산출물/종료·권한·기존 연구와의 중복 경계를 설계한다. 문서 리뷰/보완/재리뷰·link/owner/diff/print-only parser.
+  - Result: selectede16ac48b와 작업공간의 영향 코드 bytes 일치. source10/2 연구100/636·prospective대기97/격리2/robust미확보1·passed0, 자문80/8/24누적 및 전session carry를 대사했다. 기존 등록 범위의 최대17종목/운영수 확대 없는 subset 선별,20/40일 상한과9/29 forward 경계, 자문 실행→행수→역사집계/paired20일→dated consumer 진단계획을 작성했다. [읽기 증빙](../../tmp/widget-research-and-advisory-planning-20261005/inspection.json).
+  - Boundary: 계획/기존 파일 읽기만. 계산·정책 발행·원천 수집/삭제·collector/스케줄·배포/기동/PID 수용 미실행. 새 선별/기간 계약은 제안이며 아래 OPEN은 후속 실행계획이다. 준비에 결속된10/6 checklist/dated 정책/receipt를 변경하지 않는다.
+
+- [x] `[WidgetSymbolProfitabilityResearchRedesign1006] 등록 범위의 위젯 종목 수익성 선별·자료 기간 재설계` (`Due: 2026-10-06`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: Research`)
+  - Source: [종목 신호연구 재설계§3–§6](../proposals/widget-symbol-profitability-research-redesign-plan-2026-10-05.md).
+  - Acceptance: R0seed4/등록watch13·catalog/주문집합과 exact source/parent/cost manifest→R1독립 사건·모형/실제 손익 대사→R2최대2subset 선별 방식·동일 자본/기회 비교→R3forward20/40일 지원/공통 검증·기간 처분→R4consumer/정확 재사용/비용·보관 인계. 기존16일/25일 gate와 한 달 지원 부족을 명시하고 source gap/null·역사/미래 holdout을 구분한다.
+  - Boundary: 사용자 두 계획 실행 지시로 격리 코드/연구만 실행. 기존 등록17·고정kernel·종목수4상한·2subset 축. collector/운영/dated 정책/10/6 checklist·배포/기동/PID·API·삭제 없음.6~8월 새후보 학습/순위/승인 복원 없음. 기존6가설/leg결손은 `WidgetEpisodeMachineResearchContract1006` 소유다.
+  - Result: R0~R4 완료.17 중 공통4일 가격 비교7·원천 불완전8·frozen kernel 결손2. seed 축소010140 및 등록 subset010140/047810은 학습 양수지만1틱 stress 음수·10/2 손실.16일 holdout/25일 gate 미충족, 기간 효과 미식별/지원 부족으로 유한 종료. 완성 분봉의10/1 추가 보유를 확인해 계획의3일을4일로 정정. exact/full 재사용과 hash별 kernel/day incremental 구현,6~8월5869파일133.03MiB 삭제 적격0 보존 manifest 인계.
+  - Evidence: [실행 리뷰](../audits/widget-bounded-research-and-advisory-execution-review-2026-10-05.md), `tmp/widget-symbol-profitability-redesign-20261006/final/{report,reuse,storage-dry-run}.json`.
+  - Stop: 선별 권고1개/개선 없음/지원 부족·기간 효과 미식별 및 owner/artifact/closure 인계. 같은 입력의100종목/grid·기간 조합 확대 금지. raw 삭제는 storage dry-run manifest 검증으로 별도 인계한다.
+
+- [x] `[WidgetAdvisoryCumulativeDiagnostic1006] 위젯3종목 자문 누적평가 실행·원천·집계·선택 진단` (`Due: 2026-10-06`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: RuntimeStability`)
+  - Source: [자문 누적평가 진단§3–§4](../proposals/widget-advisory-cumulative-evaluation-diagnostic-plan-2026-10-05.md).
+  - Acceptance: D0attempt/code/source/publication/effective 세대→D1producer/마지막consumer 연결→D2독립 행수/성숙·중복·검열→D3누적112/8월79 및6/5·9/9·9/29 경계/paired20일→D4confirmation2/3·scale-in/장전/의도된baseline부재→D5결함/정상carry·개선 순서 대사. proxy와 실제Pnl·기회와반복·실행완료와후보지원 구분, 필요한 표적반례/리뷰계획.
+  - Boundary: 격리 진단/결함 코드만 실행. done/exit0와 후보 지원/정책 개선 분리. 원천 합성/실거래baseline복원·정책쓰기/기동/격리해제/새수집 없음. existing leg원천·의미감시·당일PID는 기존 `WidgetEpisodeMachineResearchContract1006`/`SemanticPolicyCoverageRemediation1006`/`WidgetEpisodeNextSessionStartup1006` 소유다.
+  - Result: D0~D5 완료. 누적80/8/24·8월79 및12개 일별 재생 차이0.10/1은1460개DATA_WAIT/가격 결손/WS stale·future로 valid zero-signal day 아님. 새paired에9/29하한 적용, 삼성 장전4역사경로→forward1경로(검열), 정규장5219행 원leg/guard 완전0·두산/한화baseline부재 관측전용. 전session confirmation3 승계. dated loader10/6 정상 read-only 수용. filename/date 결속·격리 incumbent·역사/신규선택 분리·wrapper publication 날짜·간접producer stage코드 지문 보완, 원receipt 보존.
+  - Evidence: [실행 리뷰](../audits/widget-bounded-research-and-advisory-execution-review-2026-10-05.md), `tmp/widget-advisory-cumulative-diagnostic-20261006/final/{report,reuse,execution-context,connection-table}.json`, 공통검증 `tmp/widget-research-plan-execution-20261006/validation.json`.
+  - Stop: session별 정상실행/계산/지원/소비·경제성 처분과 결함owner/artifact/수정/closure test 또는 원천불가의유한처분 인계. positiveEV/실제기동은 진단 완료 바닥으로 추가하지 않는다. 동일원천 무한재생 금지.
+
+- [x] `[MachineEntryTimingSourceFloor1005] 기계진입 타이밍 6~7월 미소비 확인 및 원천 허용 하한 보완` (`Due: 2026-10-05`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: RuntimeStability`)
+  - Source: 사용자 조건부 하한 변경 지시, [원천 경계 리뷰](../audits/machine-entry-timing-source-floor-review-2026-10-05.md).
+  - Acceptance: 현재 로더·10/2 발행 보고서의33개 원천 경로/SHA·앵커 시각·별도 완료 이력 대사.6~7월 미소비를 확인한 후8/1을 JSON 읽기 전 하한으로 고정하고8월 입력·기존 provenance/경제성/주문 guard 보존. 코드리뷰→보완→회귀→재리뷰·실제 입력 차등 검증.
+  - Result:8월11·9월20·10월2보고서,6~7월0·SHA 차이0.8월 앵커28/적격26 보존.130회귀 PASS, 기존/수정 하한의 입력33·37cohort 계산/선정 동일. [차등 증빙](../../tmp/machine-entry-timing-source-floor-20261005/inspection-and-differential.json).
+  - Boundary: 작업본 코드·운영 계약만 변경. 공식10/2보고서·runtime 정책·10/6체크리스트 bytes 보존. 운영 릴리스 배포·기동·전체 장후 재생성·원천 삭제·외부 sync 없음.
 
 - [x] `[NextSessionSemanticWidgetEpisodePlanning1005] 다음 영업일 기동 잔여·의미감시 coverage·Widget/Episode 개선계획 수립` (`Due: 2026-10-05`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: RuntimeStability`)
   - Source: 사용자3개 계획/점검 요청, [통합 상세계획](../proposals/next-session-startup-semantic-coverage-and-widget-episode-improvement-plan-2026-10-05.md).

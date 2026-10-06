@@ -12,12 +12,14 @@ from src.engine.automation.machine_entry_timing_tuning import (
     _evaluate_dynamic_cohort,
     _report_sample_floor_assessment,
     _same_stage_owner_guard,
+    _source_reports,
+    MIN_SOURCE_REPORT_DATE,
     build_applied_policy,
     build_report,
     policy_publication_gate,
     write_outputs,
 )
-from src.engine.monitoring.widget_comparison_cost import comparison_cost_contract
+from src.trading.market.comparison_cost import comparison_cost_contract
 from src.trading.market.confirmation_window import FEATURE_VERSION
 from src.trading.market.micro_confirmation import (
     SAMSUNG_RISE_REBOUND_POLICY,
@@ -386,7 +388,7 @@ def _samsung_rising_entry_row(source_date: date, index: int) -> dict:
         owner_entry_limit_price=row["owner_entry_limit_price"],
         owner_target_price=row["owner_target_price"],
         round_trip_cost_pct=row["owner_round_trip_cost_pct"],
-        widget_take_profit=False,
+        target_from_fill=False,
     )
     binding = {
         **row["dynamic_confirmation_source_only_replay"]["signal_binding"],
@@ -431,7 +433,6 @@ def test_samsung_legacy_horizon_candidate_requires_native_operating_proof(
         source_dir=source_dir,
         low_price_candidate_dir=tmp_path / "low-price",
         samsung_candidate_dir=tmp_path / "samsung",
-        widget_policy_dir=tmp_path / "widget",
     )
     assert report["winner"] is None
     assert report["runtime_winner"] is None
@@ -481,7 +482,8 @@ def test_cumulative_tuning_selects_one_exact_scope_and_runtime_loads_it(
 ) -> None:
     source_dir = tmp_path / "source"
     policy_dir = tmp_path / "policy"
-    target_date = date(2026, 8, 27)
+    # Keep all twenty source days inside this owner's August source window.
+    target_date = date(2026, 8, 31)
     for index, source_date in enumerate(_trading_dates(target_date, 20), start=1):
         payload = {
             "schema": "machine_microstructure_attribution_v1",
@@ -507,7 +509,6 @@ def test_cumulative_tuning_selects_one_exact_scope_and_runtime_loads_it(
         source_dir=source_dir,
         low_price_candidate_dir=tmp_path / "low-price-candidates",
         samsung_candidate_dir=tmp_path / "samsung-candidates",
-        widget_policy_dir=tmp_path / "widget-policies",
     )
     source_report_path = (
         tmp_path / f"machine_entry_timing_tuning_{target_date.isoformat()}.json"
@@ -861,7 +862,6 @@ def test_dynamic_confirmation_cross_scope_duplicate_is_globally_blocked(
         source_dir=source_path.parent,
         low_price_candidate_dir=tmp_path / "low-price-candidates",
         samsung_candidate_dir=tmp_path / "samsung-candidates",
-        widget_policy_dir=tmp_path / "widget-policies",
     )
     dynamic = report["per_signal_dynamic_confirmation_source_only"]
 
@@ -907,7 +907,6 @@ def test_dynamic_ready_emits_one_exact_date_scope_without_fixed_delay_winner(
         source_dir=source_dir,
         low_price_candidate_dir=tmp_path / "low-price-candidates",
         samsung_candidate_dir=tmp_path / "samsung-candidates",
-        widget_policy_dir=tmp_path / "widget-policies",
     )
     applied = build_applied_policy(report)
 
@@ -976,7 +975,6 @@ def test_dynamic_policy_accepts_one_source_day_without_a_natural_signal(
         source_dir=source_dir,
         low_price_candidate_dir=tmp_path / "low-price-candidates",
         samsung_candidate_dir=tmp_path / "samsung-candidates",
-        widget_policy_dir=tmp_path / "widget-policies",
     )
     applied = build_applied_policy(report)
 
@@ -1080,14 +1078,14 @@ def test_policy_rejects_multiple_same_stage_selected_scopes() -> None:
     scopes = {}
     for symbol in ("005930", "034020"):
         key = scope_key(
-            owner="widget",
+            owner="episode",
             scope_id=f"{symbol}:KRX_REGULAR",
             symbol=symbol,
             session="KRX_REGULAR",
             entry_state="ENTRY_READY",
         )
         scopes[key] = {
-            "owner": "widget",
+            "owner": "episode",
             "scope_id": f"{symbol}:KRX_REGULAR",
             "symbol": symbol,
             "session": "KRX_REGULAR",
@@ -1135,7 +1133,7 @@ def test_policy_rejects_legacy_schema_before_selected_scope_consumption() -> Non
 def test_policy_rejects_malformed_integer_evidence_without_raising() -> None:
     target_date = date(2026, 8, 28)
     key = scope_key(
-        owner="widget",
+        owner="episode",
         scope_id="005930:KRX_REGULAR",
         symbol="005930",
         session="KRX_REGULAR",
@@ -1167,7 +1165,7 @@ def test_policy_rejects_malformed_integer_evidence_without_raising() -> None:
     )
     scopes = {
         key: {
-            "owner": "widget",
+            "owner": "episode",
             "scope_id": "005930:KRX_REGULAR",
             "symbol": "005930",
             "session": "KRX_REGULAR",
@@ -1238,7 +1236,7 @@ def test_policy_rejects_malformed_integer_evidence_without_raising() -> None:
 def test_policy_rejects_out_of_range_percentage_evidence() -> None:
     target_date = date(2026, 8, 28)
     key = scope_key(
-        owner="widget",
+        owner="episode",
         scope_id="005930:KRX_REGULAR",
         symbol="005930",
         session="KRX_REGULAR",
@@ -1270,7 +1268,7 @@ def test_policy_rejects_out_of_range_percentage_evidence() -> None:
     )
     scopes = {
         key: {
-            "owner": "widget",
+            "owner": "episode",
             "scope_id": "005930:KRX_REGULAR",
             "symbol": "005930",
             "session": "KRX_REGULAR",
@@ -1308,6 +1306,79 @@ def test_policy_rejects_out_of_range_percentage_evidence() -> None:
     )
 
 
+def test_source_report_floor_skips_old_and_future_files_before_reading(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.engine.automation import machine_entry_timing_tuning as timing
+
+    target_date = date(2026, 8, 2)
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    for day in ("2026-06-05", "2026-07-31", "2026-08-03"):
+        (source_dir / f"{timing.SOURCE_PREFIX}_{day}.json").write_text("invalid")
+    accepted_dates = (MIN_SOURCE_REPORT_DATE, target_date)
+    for day in accepted_dates:
+        payload = {
+            "schema": timing.SOURCE_REPORT_SCHEMA,
+            "target_date": day.isoformat(),
+            "clean_tuning_baseline_date": "2026-06-05",
+            "clean_baseline_allowed": True,
+            "authority": {
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            },
+        }
+        (source_dir / f"{timing.SOURCE_PREFIX}_{day}.json").write_text(json.dumps(payload))
+    read_paths = []
+    original_read = timing._read_json
+
+    def record_read(path: Path):
+        read_paths.append(path.name)
+        return original_read(path)
+
+    monkeypatch.setattr(timing, "_read_json", record_read)
+    reports, rejected = _source_reports(target_date=target_date, source_dir=source_dir)
+    assert [day for day, _, _ in reports] == list(accepted_dates)
+    assert rejected == []
+    assert read_paths == [f"{timing.SOURCE_PREFIX}_{day}.json" for day in accepted_dates]
+    reports, rejected = _source_reports(
+        target_date=date(2026, 7, 31), source_dir=source_dir,
+    )
+    assert reports == [] and rejected == []
+    assert len(read_paths) == 2
+
+
+def test_report_exposes_owner_floor_without_changing_clean_source_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.engine.automation import machine_entry_timing_tuning as timing
+    from src.engine.monitoring import machine_entry_confirmation_study as study
+
+    history_bounds = []
+    original_history = study.read_native_actual_history
+
+    def record_history(report_dir, *, target_date, minimum_source_date):
+        history_bounds.append(minimum_source_date)
+        return original_history(
+            report_dir, target_date=target_date, minimum_source_date=minimum_source_date,
+        )
+
+    monkeypatch.setattr(timing, "OUTPUT_DIR", tmp_path / "history")
+    monkeypatch.setattr(study, "read_native_actual_history", record_history)
+    report = build_report(
+        target_date=date(2026, 8, 3), source_dir=tmp_path / "source",
+        low_price_candidate_dir=tmp_path / "low-price",
+        samsung_candidate_dir=tmp_path / "samsung",
+    )
+    assert report["minimum_source_report_date"] == "2026-08-01"
+    assert report["clean_tuning_baseline_date"] == "2026-06-05"
+    assert history_bounds == [MIN_SOURCE_REPORT_DATE]
+    assert report["target_source_ready"] is False
+    assert report["runtime_winner"] is None
+
+
 def test_source_report_requires_explicit_clean_baseline_contract(
     tmp_path: Path,
 ) -> None:
@@ -1335,7 +1406,6 @@ def test_source_report_requires_explicit_clean_baseline_contract(
         source_dir=source_dir,
         low_price_candidate_dir=tmp_path / "low-price-candidates",
         samsung_candidate_dir=tmp_path / "samsung-candidates",
-        widget_policy_dir=tmp_path / "widget-policies",
     )
 
     assert report["target_source_ready"] is False
@@ -1375,7 +1445,6 @@ def test_source_report_requires_single_entry_timing_owner_after_activation(
         source_dir=source_dir,
         low_price_candidate_dir=tmp_path / "low-price-candidates",
         samsung_candidate_dir=tmp_path / "samsung-candidates",
-        widget_policy_dir=tmp_path / "widget-policies",
     )
 
     assert report["target_source_ready"] is False
@@ -1425,7 +1494,6 @@ def test_report_classifies_blocked_actual_anchors_as_join_gap(
         source_dir=source_dir,
         low_price_candidate_dir=tmp_path / "low-price-candidates",
         samsung_candidate_dir=tmp_path / "samsung-candidates",
-        widget_policy_dir=tmp_path / "widget-policies",
     )
 
     assert report["winner"] is None
@@ -1709,7 +1777,6 @@ def test_cohort_sample_projection_uses_all_source_days_since_first_seen(
         source_dir=source_dir,
         low_price_candidate_dir=tmp_path / "low-price-candidates",
         samsung_candidate_dir=tmp_path / "samsung-candidates",
-        widget_policy_dir=tmp_path / "widget-policies",
     )
 
     assessment = report["cohorts"][0]["sample_floor_assessment"]
@@ -1724,29 +1791,6 @@ def test_cohort_sample_projection_uses_all_source_days_since_first_seen(
     assert fixed["projected_additional_trading_days_at_observed_yield"] == 45
 
 
-def test_worse_delayed_ask_is_included_as_negative_paired_uplift() -> None:
-    source_date = date(2026, 8, 27)
-    row = _entry_row(source_date, 1)
-    row.update(
-        {
-            "owner": "widget",
-            "scope_id": "005930:KRX_REGULAR",
-            "entry_timing_scope_id": "005930:KRX_REGULAR",
-            "entry_state": "ENTRY_READY",
-            "anchor_role": "actual_widget_entry_signal",
-        }
-    )
-    row["owner_outcome"]["exit_reason"] = "final_exit_fill"
-    row["entry_confirmation_bbo_horizons"]["1"]["best_ask"] = 101.0
-
-    observation = _candidate_observation(
-        source_date=source_date,
-        row=row,
-        delay_sec=1,
-    )
-
-    assert observation is not None
-    assert observation["candidate_net_pct"] < observation["baseline_net_pct"]
 
 
 def test_episode_worse_delayed_fill_is_excluded_even_within_original_limit() -> None:
@@ -1847,40 +1891,6 @@ def test_manual_stop_loss_uses_same_exit_price_and_remains_negative_tuning_input
     assert cohort["ready"] is False
 
 
-def test_widget_take_profit_ratio_is_rounded_up_to_executable_krx_tick() -> None:
-    source_date = date(2026, 8, 27)
-    row = _entry_row(source_date, 1)
-    row.update(
-        {
-            "owner": "widget",
-            "scope_id": "005930:KRX_REGULAR",
-            "entry_timing_scope_id": "005930:KRX_REGULAR",
-            "entry_state": "ENTRY_READY",
-            "anchor_role": "actual_widget_entry_signal",
-            "anchor_price": 50_000.0,
-            "owner_target_price": 50_100.0,
-        }
-    )
-    row["owner_outcome"].update(
-        {
-            "exit_reason": "take_profit_fill",
-            "exit_price": 50_100.0,
-            "gross_no_slippage_return_pct": (50_100.0 / 50_000.0 - 1.0) * 100.0,
-        }
-    )
-    row["entry_confirmation_bbo_horizons"]["1"]["best_ask"] = 49_950.0
-
-    observation = _candidate_observation(
-        source_date=source_date,
-        row=row,
-        delay_sec=1,
-    )
-
-    assert observation is not None
-    # The raw ratio target is 50,049.9, which is not executable. The widget
-    # contract submits the first valid tick at or above that target: 50,100.
-    expected_gross_pct = (50_100.0 / 49_950.0 - 1.0) * 100.0
-    assert observation["candidate_net_pct"] == expected_gross_pct - 0.23
 
 
 def test_malformed_ask_horizon_is_not_treated_as_ready() -> None:
@@ -1975,7 +1985,6 @@ def test_existing_regular_entry_mutation_blocks_timing_winner(tmp_path: Path) ->
         source_dir=source_dir,
         low_price_candidate_dir=low_price_dir,
         samsung_candidate_dir=tmp_path / "samsung",
-        widget_policy_dir=tmp_path / "widget-policies",
     )
 
     assert report["winner"] is None
@@ -1983,78 +1992,8 @@ def test_existing_regular_entry_mutation_blocks_timing_winner(tmp_path: Path) ->
     assert report["decision"] == "baseline_immediate_entry_carry_forward"
 
 
-def test_widget_entry_policy_change_is_a_same_stage_conflict(tmp_path: Path) -> None:
-    policy_dir = tmp_path / "widget-policy"
-    target_date = date(2026, 8, 27)
-    effective_date = date(2026, 8, 28)
-
-    def policy(day: date, *, cap: int) -> dict:
-        return {
-            "schema": "widget_auto_trade_policy_v1",
-            "effective_date": day.isoformat(),
-            "runtime_effect": True,
-            "symbols": {
-                "005930": {
-                    "sessions": {
-                        "KRX_REGULAR": {
-                            "enabled": True,
-                            "allowed_entry_states": ["ENTRY_READY"],
-                            "allowed_entry_sessions": ["KRX_REGULAR"],
-                            "allowed_entry_venues": ["KRX"],
-                            "max_completed_entries_per_day": cap,
-                            "reentry_cooldown_minutes": 5,
-                            "new_entry_cutoff_time": "14:30:00",
-                            "leg_quantity_each": 10,
-                        }
-                    }
-                }
-            },
-        }
-
-    policy_dir.mkdir(parents=True)
-    (policy_dir / f"widget_auto_trade_policy_{target_date}.json").write_text(
-        json.dumps(policy(target_date, cap=1)), encoding="utf-8"
-    )
-    (policy_dir / f"widget_auto_trade_policy_{effective_date}.json").write_text(
-        json.dumps(policy(effective_date, cap=2)), encoding="utf-8"
-    )
-
-    guard = _same_stage_owner_guard(
-        target_date=target_date,
-        low_price_candidate_dir=tmp_path / "low-price",
-        samsung_candidate_dir=tmp_path / "samsung",
-        widget_policy_dir=policy_dir,
-    )
-
-    assert guard["mutation_present"] is True
-    assert guard["owners"][0]["changed_scopes"] == ["005930|KRX_REGULAR"]
 
 
-def test_malformed_next_widget_policy_fails_closed(tmp_path: Path) -> None:
-    policy_dir = tmp_path / "widget-policy"
-    target_date = date(2026, 8, 27)
-    effective_date = date(2026, 8, 28)
-    policy_dir.mkdir(parents=True)
-    (policy_dir / f"widget_auto_trade_policy_{effective_date}.json").write_text(
-        "{malformed", encoding="utf-8"
-    )
-
-    guard = _same_stage_owner_guard(
-        target_date=target_date,
-        low_price_candidate_dir=tmp_path / "low-price",
-        samsung_candidate_dir=tmp_path / "samsung",
-        widget_policy_dir=policy_dir,
-    )
-
-    assert guard["mutation_present"] is True
-    assert guard["owners"] == [
-        {
-            "path": str(policy_dir / f"widget_auto_trade_policy_{effective_date}.json"),
-            "schema": None,
-            "policy_mutation_count": 0,
-            "reason": "next_exact_date_widget_entry_contract_invalid",
-        }
-    ]
 
 
 def test_policy_publication_gate_allows_staging_and_preopen_only() -> None:
@@ -2171,9 +2110,8 @@ def test_historical_timing_recovery_publishes_bound_baseline_and_consumer(tmp_pa
                      entry_timing_policy=dict(owner='machine_entry_timing_tuning', source_section='micro_entry_confirmation', single_public_policy_owner=True)),
                    micro_entry_confirmation=dict(entry_anchors=[]))
     (source_dir/f'machine_microstructure_attribution_{source}.json').write_text(json.dumps(payload))
-    report = build_report(target_date=source, source_dir=source_dir,
-                         low_price_candidate_dir=tmp_path/'low', samsung_candidate_dir=tmp_path/'samsung',
-                         widget_policy_dir=tmp_path/'widget', publication_date=date(2026, 9, 20))
+    report = build_report(target_date=source, source_dir=source_dir, publication_date=date(2026, 9, 18),
+                         low_price_candidate_dir=tmp_path/'low', samsung_candidate_dir=tmp_path/'samsung')
     assert report['effective_date'] == '2026-09-21'
     assert report['runtime_winner'] is None
     applied = build_applied_policy(report, source_report_path=tmp_path/'report'/f'machine_entry_timing_tuning_{source}.json')

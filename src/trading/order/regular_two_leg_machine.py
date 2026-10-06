@@ -2655,7 +2655,7 @@ class SamsungRegularTwoLegMachine:
                         int(self.policy.target_ticks),
                     ),
                     round_trip_cost_pct=runtime_cost,
-                    widget_take_profit=False,
+                    target_from_fill=False,
                 )
                 if dynamic_step["action"] == "WAIT":
                     next_checkpoint = int(dynamic_step["next_checkpoint_sec"])
@@ -2737,7 +2737,7 @@ class SamsungRegularTwoLegMachine:
                         int(self.policy.target_ticks),
                     ),
                     round_trip_cost_pct=runtime_cost,
-                    widget_take_profit=False,
+                    target_from_fill=False,
                 )
                 if dynamic_step["action"] == "WAIT":
                     next_checkpoint = int(dynamic_step["next_checkpoint_sec"])

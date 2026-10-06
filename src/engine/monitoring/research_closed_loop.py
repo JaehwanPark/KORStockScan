@@ -152,8 +152,8 @@ def candidate_revision(
     parameters,
     source_date,
     source_sha256,
-    owner="widget",
-    calibration_days=10,
+    owner="episode",
+    calibration_days=30,
     holdout_days=16,
     cost_sha256,
     frozen_at=None,
@@ -209,7 +209,7 @@ def validate_revision(value, *, symbol=None, owner=None):
         raise ValueError("research_candidate_revision_identity_invalid")
     if (
         re.fullmatch(r"[0-9]{6}", str(value.get("symbol") or "")) is None
-        or value.get("owner") not in {"widget", "episode"}
+        or value.get("owner") not in {"episode"}
         or re.fullmatch(r"[A-Za-z0-9_]{1,100}", str(value.get("lane_id") or "")) is None
     ):
         raise ValueError("research_candidate_identity_invalid")
@@ -225,7 +225,7 @@ def validate_revision(value, *, symbol=None, owner=None):
         if re.fullmatch(r"[0-9a-f]{64}", str(value.get(key) or "")) is None:
             raise ValueError("research_candidate_provenance_hash_invalid")
     calibration, holdout = value["calibration_dates"], value["holdout_dates"]
-    floor = 10 if value["owner"] == "widget" else 30
+    floor = 30
     if len(calibration) != floor or len(holdout) != 16:
         raise ValueError("research_candidate_window_floor_invalid")
     if (
@@ -238,11 +238,10 @@ def validate_revision(value, *, symbol=None, owner=None):
     return value
 
 
-def load_candidate(symbol, *, owner="widget", lane_id=None, directory=DIRECTORY):
+def load_candidate(symbol, *, owner="episode", lane_id=None, directory=DIRECTORY):
     directory = _directory(directory)
     lane_id = symbol if lane_id is None else lane_id
     if re.fullmatch(r"[A-Za-z0-9_]{1,100}", str(lane_id)) is None or owner not in {
-        "widget",
         "episode",
     }:
         raise ValueError("research_candidate_identity_invalid")
@@ -313,48 +312,6 @@ def verified_execution_receipt(value):
         return False
 
 
-def widget_prospective_summary_valid(result, revision):
-    """Recompute supplied economics and calendar partitions from native CF rows."""
-    from src.engine.monitoring.widget_symbol_signal_policy_research import (
-        _summarize_episodes,
-    )
-
-    try:
-        cal, hold = revision["calibration_dates"], revision["holdout_dates"]
-        rows = {
-            name: (result.get(name) or {}).get(
-                "episodes", (result.get("selected_episodes") or {}).get(name, [])
-            )
-            for name in ("calibration", "holdout")
-        }
-        all_rows = rows["calibration"] + rows["holdout"]
-        dates = dict(
-            calibration=cal,
-            holdout=hold,
-            calibration_first_half=cal[: len(cal) // 2],
-            calibration_second_half=cal[len(cal) // 2 :],
-        )
-        identities = [(r["entry_at"], r["exit_at"]) for r in all_rows]
-        if len(set(identities)) != len(identities):
-            return False
-        for name, window in dates.items():
-            selected = [row for row in all_rows if row["trade_date"] in window]
-            if name in rows and rows[name] != selected:
-                return False
-            expected = _summarize_episodes(selected)
-            supplied = result[name]
-            if any(supplied.get(key) != value for key, value in expected.items()):
-                return False
-            if any(
-                not 1
-                <= row["daily_entry_ordinal"]
-                <= revision["parameters"]["max_completed_entries_per_day"]
-                for row in selected
-            ):
-                return False
-        return True
-    except (KeyError, TypeError, ValueError, OverflowError):
-        return False
 
 
 def registered_revision(value, *, directory=DIRECTORY):
@@ -764,11 +721,6 @@ def load_allocator(source_date, *, directory=DIRECTORY):
         return None
 
 
-def report_joint_gate(report, *, source_date, directory=DIRECTORY):
-    directory = _directory(directory)
-    return combined_joint_gate(
-        report, family="widget", source_date=source_date, directory=directory
-    )
 
 
 def admission_catalog(census):
@@ -836,7 +788,7 @@ def admission_catalog(census):
                     disposition="raw_only"
                     if venue == "KRX" and common
                     else "research_blocked_unknown_venue_or_common_master",
-                    research_lanes=["widget", "episode"]
+                    research_lanes=["episode"]
                     if venue == "KRX" and common
                     else [],
                 )
@@ -898,9 +850,9 @@ def write_admissions(census, *, directory=DIRECTORY):
                 if isinstance(row, dict):
                     names.setdefault(symbol, row["name"])
                     record["symbols"][symbol] = sum(
-                        1 if lane == "widget" else 2
+                        2
                         for lane in row["lanes"]
-                        if lane in {"widget", "episode"}
+                        if lane in {"episode"}
                     )
         for row in catalog["rows"]:
             if row["disposition"] == "raw_only":
@@ -910,9 +862,9 @@ def write_admissions(census, *, directory=DIRECTORY):
             coverage_status=catalog["coverage_status"],
             symbols={
                 row["stock_code"]: sum(
-                    1 if lane == "widget" else 2
+                    2
                     for lane in row["research_lanes"]
-                    if lane in {"widget", "episode"}
+                    if lane in {"episode"}
                 )
                 for row in catalog["rows"]
                 if row["disposition"] == "raw_only"
@@ -933,6 +885,8 @@ def write_admissions(census, *, directory=DIRECTORY):
 
 
 def admission_symbols(observed_date, *, owner, directory=DIRECTORY):
+    if owner != "episode":
+        return {}
     directory = _directory(directory)
     try:
         index = read_object(Path(directory) / "admissions" / "symbol_index.json")
@@ -953,7 +907,7 @@ def admission_symbols(observed_date, *, owner, directory=DIRECTORY):
             if isinstance(row, dict):
                 admitted, name = owner in row["lanes"], row["name"]
             else:
-                admitted = bool(row & ({"widget": 1, "episode": 2}.get(owner, 0)))
+                admitted = bool(row & ({"episode": 2}.get(owner, 0)))
                 name = index["symbol_names"][symbol]
             if admitted:
                 symbols.setdefault(symbol, name)
@@ -963,20 +917,7 @@ def admission_symbols(observed_date, *, owner, directory=DIRECTORY):
 def joint_inputs(report, *, family):
     source_date = str(report.get("end_date") or report.get("target_date"))
     selected, deferred = {}, []
-    if family == "widget":
-        for symbol, result in report.get("symbols", {}).items():
-            if result.get("decision") != "holdout_pass_widget_signal_policy_candidate":
-                if result.get("candidate_revision"):
-                    deferred.append(result["candidate_revision"]["revision_sha256"])
-                continue
-            selected[f"widget:{symbol}"] = [
-                row
-                for window in ("calibration", "holdout")
-                for row in (result.get(window) or {}).get(
-                    "episodes", (result.get("selected_episodes") or {}).get(window, [])
-                )
-            ]
-    elif family == "episode":
+    if family == "episode":
         for profile_id, result in report.get("profiles", {}).items():
             if result.get("decision") != "holdout_pass_source_only_early_candidate":
                 if result.get("candidate_revision"):
@@ -1021,7 +962,6 @@ def joint_inputs(report, *, family):
             for value in report.get("symbols", report.get("profiles", {})).values()
             if value.get("decision")
             in {
-                "holdout_pass_widget_signal_policy_candidate",
                 "holdout_pass_source_only_early_candidate",
             }
             for row in (value.get("execution_feasibility") or {}).get(
@@ -1209,32 +1149,10 @@ def freeze_joint_bundle(inputs, *, directory=DIRECTORY):
 def combined_joint_gate(report, *, family, source_date, directory=DIRECTORY):
     directory = _directory(directory)
     own = joint_inputs(report, family=family)
-    other_family = "episode" if family == "widget" else "widget"
+    if family != "episode":
+        raise ValueError("research_joint_family_retired")
     try:
-        other = read_object(
-            Path(directory)
-            / f"joint_inputs_{other_family}_{source_date.isoformat()}.json"
-        )
-        body = {k: v for k, v in other.items() if k != "inputs_sha256"}
-        if (
-            other.get("schema") != SCHEMA
-            or other.get("family") != other_family
-            or other.get("source_date") != source_date.isoformat()
-            or other.get("inputs_sha256") != digest(body)
-            or any(other.get(k) is not v for k, v in AUTHORITY.items())
-        ):
-            raise ValueError("joint_peer_contract_invalid")
-    except (OSError, ValueError, TypeError):
-        return dict(
-            schema=SCHEMA,
-            status="allocation_blocked",
-            reason="exact_date_joint_peer_missing_or_invalid",
-            feasible_combined_net_profit_krw=None,
-            parent_sha256=own["inputs_sha256"],
-            **AUTHORITY,
-        )
-    try:
-        bundle = frozen_joint_bundle([own, other], directory=directory)
+        bundle = frozen_joint_bundle([own], directory=directory)
     except ValueError as exc:
         # Preserve the frozen membership guard as an allocation rejection.
         # Incomplete peer coverage must not erase the independent study or
@@ -1242,11 +1160,11 @@ def combined_joint_gate(report, *, family, source_date, directory=DIRECTORY):
         return dict(
             schema=SCHEMA, status="allocation_blocked", reason=str(exc),
             feasible_combined_net_profit_krw=None,
-            parent_sha256=digest([own["inputs_sha256"], other["inputs_sha256"]]),
+            parent_sha256=digest([own["inputs_sha256"]]),
             **AUTHORITY,
         )
     if (
-        own.get("candidate_revisions") or other.get("candidate_revisions")
+        own.get("candidate_revisions")
     ) and bundle is None:
         return dict(
             schema=SCHEMA,
@@ -1255,9 +1173,9 @@ def combined_joint_gate(report, *, family, source_date, directory=DIRECTORY):
             feasible_combined_net_profit_krw=None,
             **AUTHORITY,
         )
-    episodes = {**own["selected_episodes"], **other["selected_episodes"]}
+    episodes = dict(own["selected_episodes"])
     quote_demand = {}
-    for row in own.get("depth_demands", []) + other.get("depth_demands", []):
+    for row in own.get("depth_demands", []):
         prior, available = quote_demand.get(
             row["quote_id"], (0, row["available_quantity"])
         )
@@ -1274,10 +1192,10 @@ def combined_joint_gate(report, *, family, source_date, directory=DIRECTORY):
             )
         quote_demand[row["quote_id"]] = prior + row["stress_quantity"], available
     parent = digest(
-        {family: own["inputs_sha256"], other_family: other["inputs_sha256"]}
+        {family: own["inputs_sha256"]}
     )
     dates = {str(row.get("entry_at", ""))[:10] for rows in episodes.values() for row in rows}
-    for value in (own, other):
+    for value in (own,):
         for lane in (value.get("portfolio_reference") or {}).get("lanes", {}).values():
             dates.update(day for name in ("calibration", "holdout") for day in lane[name + "_dates"])
     snapshots = {day: load_allocator(date.fromisoformat(day), directory=directory) for day in sorted(dates)}
@@ -1298,9 +1216,9 @@ def combined_joint_gate(report, *, family, source_date, directory=DIRECTORY):
             dependencies.add(str(Path(stage).resolve()))
     result = dated_joint_allocation(episodes, snapshots=snapshots, parent_sha256=parent)
     result["capital_source_dependencies"] = sorted(dependencies)
-    if result["status"] == "pass" and (own.get("candidate_revisions") or other.get("candidate_revisions")):
+    if result["status"] == "pass" and (own.get("candidate_revisions")):
         from src.engine.monitoring.research_portfolio_economics import paired_joint_economics
-        economics = paired_joint_economics([own, other], load_allocator(source_date, directory=directory), dated_snapshots=snapshots)
+        economics = paired_joint_economics([own], load_allocator(source_date, directory=directory), dated_snapshots=snapshots)
         result["paired_joint_economics"] = economics
         if economics["status"] != "pass":
             result.update(status="allocation_blocked", reason=economics["reason"], feasible_combined_net_profit_krw=None)
@@ -1308,7 +1226,6 @@ def combined_joint_gate(report, *, family, source_date, directory=DIRECTORY):
         **result,
         "family_inputs": {
             family: own["inputs_sha256"],
-            other_family: other["inputs_sha256"],
         },
         "joint_bundle_sha256": (bundle or {}).get("bundle_sha256"),
         "bundle_selection": "all_individually_qualified_prespecified_seeds_fixed_allocator_no_hindsight_pruning",

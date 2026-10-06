@@ -21,10 +21,7 @@ from src.engine.risk.manual_control_exclusion import (
     manual_control_auto_exclusion_source,
     manual_control_operator_exclusion_source,
 )
-from src.trading.widget_auto_trade.runtime_verification import (
-    active_receipt_path as widget_active_receipt_path,
-    verify_startup_receipt as verify_widget_startup_receipt,
-)
+
 
 HEARTBEAT_PATH = PROJECT_ROOT / "tmp" / "error_detector_heartbeat.json"
 POSTCLOSE_BOT_ISOLATION_PATH = PROJECT_ROOT / "tmp" / "postclose_bot_isolation.json"
@@ -36,8 +33,6 @@ _HEARTBEAT_LOCK = threading.Lock()
 _SNIPER_NORMAL_MARKET_CLOSE_MINUTE = 20 * 60
 _SAMSUNG_MORNING_START_MINUTE = 7 * 60 + 57
 _SAMSUNG_MORNING_ACCEPTANCE_DEADLINE_MINUTE = 8 * 60 + 5
-_WIDGET_START_MINUTE = 7 * 60 + 58
-_WIDGET_ACCEPTANCE_DEADLINE_MINUTE = 8 * 60 + 5
 _SAMSUNG_MORNING_LIVE_UNIT = "korstockscan-samsung-morning-one-share.service"
 _SAMSUNG_MORNING_PREFLIGHT_UNIT = "korstockscan-samsung-one-share-preflight.service"
 _SAMSUNG_MORNING_TIMER_UNIT = "korstockscan-samsung-morning-one-share.timer"
@@ -163,27 +158,11 @@ class ProcessHealthDetector(BaseDetector):
         now_ts = time.time()
         now = datetime.fromtimestamp(now_ts).astimezone()
         samsung_morning = _samsung_morning_runtime_contract(now)
-        widget_runtime = _widget_runtime_release_contract(now)
         result = self._check_main_runtime(
             now_ts=now_ts,
             samsung_morning=samsung_morning,
         )
         result.details["samsung_morning_runtime"] = samsung_morning
-        result.details["widget_runtime_release"] = widget_runtime
-        collectors = _widget_collector_runtime_contract(now)
-        result.details["widget_collectors"] = collectors
-        if collectors["severity"] != "pass":
-            if result.severity != "fail":
-                result.severity = collectors["severity"]
-            result.summary += (
-                " Widget collector runtime is not healthy: "
-                + ", ".join(collectors["unhealthy_units"])
-                + "."
-            )
-            result.recommended_action = (
-                f"{result.recommended_action} Inspect collector condition/start failures "
-                "and exact-date observation receipts; retain order prohibition."
-            ).strip()
         samsung_severity = samsung_morning.get("severity")
         if samsung_severity == "fail":
             retired = str(samsung_morning.get("status") or "").startswith("retirement_")
@@ -217,29 +196,6 @@ class ProcessHealthDetector(BaseDetector):
                 f"{result.recommended_action} Recheck the same systemd transaction "
                 "at the 08:05 KST acceptance deadline; do not start a duplicate owner."
             ).strip()
-        widget_severity = widget_runtime.get("severity")
-        if widget_severity == "fail":
-            widget_summary = (
-                "Widget runtime release does not match the installed systemd route: "
-                f"{widget_runtime.get('reason') or 'unknown'}."
-            )
-            result.summary = (
-                f"{result.summary} {widget_summary}"
-                if result.summary
-                else widget_summary
-            )
-            result.severity = "fail"
-            result.recommended_action = (
-                f"{result.recommended_action} Verify the reviewed widget release, "
-                "custody, open orders, and startup receipt before an authorized "
-                "restart; do not treat unit configuration as current PID consumption."
-            ).strip()
-        elif widget_severity == "warning" and result.severity != "fail":
-            result.severity = "warning"
-            result.summary = (
-                f"{result.summary} Widget runtime release evidence is within its "
-                "bounded startup acceptance window."
-            )
         manual_control_holding = _recent_unowned_manual_control_holding_blocks(
             now_ts=now_ts
         )
@@ -1039,109 +995,8 @@ def _samsung_morning_runtime_contract(now: datetime) -> dict:
     }
 
 
-def _widget_runtime_release_contract(now: datetime) -> dict:
-    """Verify that the active widget PID consumed the installed release root."""
-
-    target_date = now.date().isoformat()
-    current_minute = now.hour * 60 + now.minute
-    details = {
-        "target_date": target_date,
-        "expected_start": "07:58",
-        "acceptance_deadline": "08:05",
-        "receipt_path": None,
-        "runtime_effect": False,
-        "runtime_mutation": "none",
-    }
-    if not is_krx_trading_day(now.date()):
-        return {**details, "severity": "pass", "status": "not_applicable"}
-    if current_minute < _WIDGET_START_MINUTE:
-        return {**details, "severity": "pass", "status": "not_yet_due"}
-    try:
-        receipt_path = widget_active_receipt_path()
-    except Exception:
-        result = {
-            "release_binding_passed": False,
-            "findings": ["widget_unit_identity_unavailable"],
-        }
-    else:
-        details["receipt_path"] = str(receipt_path)
-        result = verify_widget_startup_receipt(
-            receipt_path,
-            target_date=now.date(),
-        )
-    details["verification"] = result
-    if result.get("release_binding_passed") is True and result.get("status") in {
-        "observed_not_compared",
-        "verified_requested_startup_fields",
-    }:
-        return {
-            **details,
-            "severity": "pass",
-            "status": "release_binding_verified",
-            "reason": "startup_receipt_pid_and_systemd_working_directory_match",
-        }
-    reason = str((result.get("findings") or ["release_binding_unverified"])[0])
-    if current_minute < _WIDGET_ACCEPTANCE_DEADLINE_MINUTE:
-        return {
-            **details,
-            "severity": "warning",
-            "status": "bounded_wait",
-            "reason": reason,
-        }
-    return {
-        **details,
-        "severity": "fail",
-        "status": "release_binding_unverified",
-        "reason": reason,
-    }
 
 
-def _widget_collector_runtime_contract(now: datetime) -> dict:
-    """Bounded process coverage; unit liveness does not prove source quality."""
-    from zoneinfo import ZoneInfo
-
-    now = now.astimezone(ZoneInfo("Asia/Seoul"))
-    details = {
-        "severity": "pass",
-        "status": "outside_collection_window",
-        "target_date": now.date().isoformat(),
-        "coverage": "widget_collector_unit_liveness_only",
-        "unhealthy_units": [],
-        "units": {},
-    }
-    minute = now.hour * 60 + now.minute
-    if not is_krx_trading_day(now.date()) or not 8 * 60 + 57 <= minute < 20 * 60 + 1:
-        return details
-    units = {
-        "korstockscan-widget-symbol-runtime-collector.service": 8 * 60 + 57,
-        "korstockscan-widget-research-watch-collector.service": 8 * 60 + 58,
-        "korstockscan-samsung-widget-collector.service": 8 * 60 + 57,
-        "korstockscan-doosan-widget-collector.service": 8 * 60 + 57,
-        "korstockscan-hanwha-ocean-widget-collector.service": 8 * 60 + 57,
-    }
-    for unit, start_minute in units.items():
-        if minute < start_minute:
-            continue
-        state = _systemd_unit_state(unit)
-        healthy = (
-            not state.get("query_error")
-            and state.get("LoadState") == "loaded"
-            and state.get("ActiveState") == "active"
-            and state.get("SubState") == "running"
-            and int(state.get("MainPID") or 0) > 0
-        )
-        severity = "pass" if healthy else (
-            "warning" if minute < start_minute + 3 else "fail"
-        )
-        details["units"][unit] = {**state, "severity": severity}
-        if not healthy:
-            details["unhealthy_units"].append(unit)
-            if details["severity"] != "fail":
-                details["severity"] = severity
-    details["status"] = (
-        "healthy_active" if not details["unhealthy_units"] else "collector_unavailable"
-    )
-    return details
 
 
 def _systemd_unit_state(unit: str) -> dict[str, str | int | None]:

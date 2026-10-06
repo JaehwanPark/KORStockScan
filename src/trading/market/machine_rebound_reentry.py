@@ -11,7 +11,7 @@ from datetime import datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
-from src.engine.monitoring.widget_comparison_cost import comparison_cost_contract
+from src.trading.market.comparison_cost import comparison_cost_contract
 from src.trading.config.machine_rebound_reentry_policy import (
     DEFAULT_POLICY_DIR,
     SOURCE_AUTHORITY,
@@ -176,7 +176,7 @@ def observe_owner_decision(
         owner_entry_limit_price=min(int(leg["entry_price"]) for leg in legs),
         owner_target_price=target,
         round_trip_cost_pct=cost["round_trip_cost_pct"],
-        widget_take_profit=False,
+        target_from_fill=False,
         scope_id=scope_id,
     )
     checkpoint = (confirmation.get("checkpoints") or {}).get("0") or {}

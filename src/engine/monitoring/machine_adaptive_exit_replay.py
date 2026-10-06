@@ -116,7 +116,6 @@ def build_adaptive_exit_source_census(
         consumers = {}
         contract_gaps.append("consumers_not_mapping")
     for consumer_name, collection_name in (
-        ("widget_postclose_tuning", "symbols"),
         ("episode_machine_postclose_tuning", "profiles"),
     ):
         consumer = consumers.get(consumer_name) or {}
@@ -226,7 +225,6 @@ def build_adaptive_exit_source_census(
     try:
         catalog_errors = []
         catalog = catalog_from_owner_inventories(
-            (consumers.get("widget_postclose_tuning") or {}).get("symbols"),
             (consumers.get("episode_machine_postclose_tuning") or {}).get("profiles"),
             errors=catalog_errors,
         )

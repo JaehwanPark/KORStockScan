@@ -1,12 +1,12 @@
+from zoneinfo import ZoneInfo
 """Real owner loops, fake wire; every writer is isolated in tmp_path."""
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 import hashlib
 import json
 
 import pytest
 
-from src.tests import test_widget_signal_auto_trade as widget
 from src.tests import test_samsung_midday_one_share as episode
 from src.tests.test_entry_adverse_flow import tape
 from src.trading.config.machine_entry_adverse_policy import PATH_ENV, HASH_ENV
@@ -28,7 +28,7 @@ def setup(tmp_path, monkeypatch, request):
     monkeypatch.setenv("KORSTOCKSCAN_BROKER_ACCOUNT_KEY", "test-entry-adverse")
     monkeypatch.setenv(owners.EVENT_ROOT_ENV, str(tmp_path / "events"))
     monkeypatch.setattr(owners, "is_buy_side_paused", lambda: False)
-    flags = {"time": widget._at(20), "adverse": True, "scope": None}
+    flags = {"time": datetime(2026, 8, 20, 10, tzinfo=ZoneInfo("Asia/Seoul")), "adverse": True, "scope": None}
     monkeypatch.setattr(owners, "now", lambda: flags["time"])
     monkeypatch.setattr(
         owners,
@@ -76,92 +76,14 @@ def setup(tmp_path, monkeypatch, request):
     return flags
 
 
-def widget_machine(tmp_path, monkeypatch, flags):
-    box = {"payload": widget._payload(flags["time"], entry_id="ENTRY-A")}
-    machine, gateway, _ = widget._trader(tmp_path, monkeypatch, box)
-    gateway.entry_adverse_transport_supported = True
-    submit = gateway.submit_buy
-
-    def guarded(**kwargs):
-        guard.before_transport("kt10000")
-        return submit(**kwargs)
-
-    gateway.submit_buy = guarded
-    flags["enable"](
-        dict(
-            owner="widget",
-            scope_id="999999:KRX_REGULAR",
-            symbol="999999",
-            route="KRX",
-            session="KRX_REGULAR",
-        )
-    )
-    return machine, gateway, box
 
 
-def test_widget_wait_then_recovery_submits_once(tmp_path, monkeypatch, setup):
-    m, g, _ = widget_machine(tmp_path, monkeypatch, setup)
-    m.run_once(setup["time"])
-    assert not g.buy_calls
-    s = m._state["symbols"]["999999"]
-    assert s[guard.KEY]["action"] == "WAIT"
-    setup["time"] += timedelta(seconds=1)
-    setup["adverse"] = False
-    m.run_once(setup["time"])
-    assert len(g.buy_calls) == 1
-    assert s[guard.KEY]["action"] == "TRANSPORT_STARTED"
-    m.run_once(setup["time"])
-    assert len(g.buy_calls) == 1
 
 
-def test_widget_restart_keeps_original_deadline(tmp_path, monkeypatch, setup):
-    m, g, _ = widget_machine(tmp_path, monkeypatch, setup)
-    m.run_once(setup["time"])
-    original = m._state["symbols"]["999999"][guard.KEY]["t0_ms"]
-    setup["time"] += timedelta(seconds=7)
-    setup["adverse"] = False
-    restored, gateway, _ = widget_machine(tmp_path, monkeypatch, setup)
-    restored.run_once(setup["time"])
-    state = restored._state["symbols"]["999999"][guard.KEY]
-    assert state["t0_ms"] == original and state["action"] == "SKIP_DEADLINE"
-    assert not gateway.buy_calls
 
 
-def test_widget_late_gateway_veto_releases_only_unsent(tmp_path, monkeypatch, setup):
-    m, g, _ = widget_machine(tmp_path, monkeypatch, setup)
-    setup["adverse"] = False
-    submit = g.submit_buy
-
-    def delayed(**kwargs):
-        setup["adverse"] = True
-        return submit(**kwargs)
-
-    g.submit_buy = delayed
-    m.run_once(setup["time"])
-    s = m._state["symbols"]["999999"]
-    assert not g.buy_calls
-    assert s["orders"][-1]["status"] == "NOT_SENT"
-    assert not s["entry_episode_open"]
-    setup["adverse"] = False
-    setup["time"] += timedelta(seconds=1)
-    g.submit_buy = submit
-    m.run_once(setup["time"])
-    assert len(g.buy_calls) == 1
 
 
-def test_widget_expiry_and_signal_loss_are_sticky(tmp_path, monkeypatch, setup):
-    m, g, box = widget_machine(tmp_path, monkeypatch, setup)
-    m.run_once(setup["time"])
-    box["payload"] = widget._payload(setup["time"])
-    m.run_once(setup["time"])
-    box["payload"] = widget._payload(setup["time"], entry_id="ENTRY-A")
-    setup["adverse"] = False
-    setup["time"] += timedelta(seconds=1)
-    m.run_once(setup["time"])
-    assert not g.buy_calls
-    assert (
-        m._state["symbols"]["999999"][guard.KEY]["action"] == "SKIP_SIGNAL_INVALIDATED"
-    )
 
 
 def test_episode_wait_then_two_original_legs(tmp_path, monkeypatch, setup):

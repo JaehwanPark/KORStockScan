@@ -1022,7 +1022,6 @@ def test_transport_valueerror_does_not_expose_credentials(setup):
         ("samsung_morning_one_share", "KiwoomOneShareGateway"),
         ("samsung_midday_one_share", "KiwoomMiddayOneShareGateway"),
         ("samsung_afternoon_one_share", "KiwoomAfternoonOneShareGateway"),
-        ("widget_auto_trade", "KiwoomSharedTokenOrderGateway"),
     ],
 )
 def test_every_real_gateway_builds_correctly_scoped_disabled_adapter(
@@ -1039,18 +1038,18 @@ def test_every_real_gateway_builds_correctly_scoped_disabled_adapter(
     gateway._post = tr
     gateway._require_write_authority = lambda: None
     kw = dict(registry=registry, context=adapter.context, policy_hash="a" * 64)
-    if module_name == "widget_auto_trade":
+    if module_name == "episode":
         kw.update(
-            context=replace(adapter.context, owner_type="widget_auto_trade"),
+            context=replace(adapter.context, owner_type="episode"),
             code="005930",
         )
     bound = gateway.adaptive_exit_adapter(**kw)
     assert bound.write_guard is None
     assert bound.symbol == "005930"
     assert bound.maximum_quantity == (
-        None if module_name == "widget_auto_trade" else 10
+        None if module_name == "episode" else 10
     )
-    if module_name != "widget_auto_trade":
+    if module_name != "episode":
         bound.now_ms = lambda: NOW
         assert bound.snapshot(TARGET).source_ok
         assert all(r["fresh"] is True for r in tr.calls)
@@ -1124,36 +1123,6 @@ def test_all_registered_low_price_profiles_have_inert_adapter(setup, profile_id)
     assert tr.calls == []
 
 
-def test_widget_current_unfilled_uses_shared_execution_read_budget(setup, monkeypatch):
-    from src.trading.widget_auto_trade.gateway import KiwoomSharedTokenOrderGateway
-    from src.utils import kiwoom_utils
-
-    calls = []
-
-    def acquire(**kwargs):
-        calls.append(kwargs)
-        return SimpleNamespace(admitted=False, reason="test-budget-full")
-
-    monkeypatch.setattr(
-        kiwoom_utils, "resolve_kiwoom_request_token", lambda value: value
-    )
-    monkeypatch.setattr(
-        kiwoom_utils, "get_api_url", lambda path: "https://api.kiwoom.com" + path
-    )
-    monkeypatch.setattr(kiwoom_utils, "acquire_kiwoom_read_capacity", acquire)
-    gateway = KiwoomSharedTokenOrderGateway(
-        request_session=SimpleNamespace(),
-        token_loader=lambda: "test-only",
-        shared_read_control_enabled=True,
-    )
-    with pytest.raises(RuntimeError, match="rate_deferred"):
-        gateway._post(
-            endpoint="/api/dostk/acnt", api_id="ka10075", payload={"stk_cd": "005930"}
-        )
-    assert (
-        calls[0]["api_id"] == "ka10075"
-        and calls[0]["request_class"] == "execution_critical"
-    )
 
 
 @pytest.mark.parametrize("headers", [{}, {"cont-yn": ""}, {"cont-yn": "N"}])

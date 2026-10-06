@@ -6,7 +6,7 @@
 
 공통 원칙과 active/observe/OFF·rollback은 [Plan Rebase §1–§8](./plan-korStockScanPerformanceOptimization.rebase.md), 실행할 OPEN ID·시각·Acceptance는 현재 KST의 `docs/checklists/YYYY-MM-DD-stage2-todo-checklist.md`, 실행·복구 권한은 [runbook](./time-based-operations-runbook.md), producer/consumer 연결은 [traceability](./report-based-automation-traceability.md)를 따른다. 서로 충돌하면 `contract_drift`로 fail-closed하며 과거 receipt나 mtime으로 현행 상태를 추정하지 않는다.
 
-명시적으로 이 지시문에 따른 모니터링을 요청받으면 도래한 체크리스트 항목을 §4.1에 따라 점검하고, 확인된 source-quality·parser/schema·계측·report 결함은 §4.3과 §7의 허용 범위에서 최소 수리한다. 그 요청만으로 실주문, bot/widget/episode process 재기동, live env·정책·threshold·provider·수량·cap·broker/order/safety 변경 권한은 생기지 않는다.
+명시적으로 이 지시문에 따른 모니터링을 요청받으면 도래한 체크리스트 항목을 §4.1에 따라 점검하고, 확인된 source-quality·parser/schema·계측·report 결함은 §4.3과 §7의 허용 범위에서 최소 수리한다. 그 요청만으로 실주문, bot/episode process 재기동, live env·정책·threshold·provider·수량·cap·broker/order/safety 변경 권한은 생기지 않는다.
 
 ## 1. 목표와 완료 기준
 
@@ -22,7 +22,7 @@
 | 2 | 기계판정기가 실행 가능한 타점을 적시에 선별했는가 | exact attempt별 배타적 action과 당시 source/BBO/micro, 후행 action-neutral outcome | scanner 또는 machine input/decision |
 | 3 | AI가 기계 ENTER_NOW만 보조하고 과도하게 막거나 근거 없이 통과시키지 않았는가 | request/response/fact binding·semantic terminal과 같은 attempt의 후행 outcome | compact AI input/transport/semantic owner |
 | 4 | PASS가 기존 guard와 제출 경로로 정확히 전달됐는가 | authority·가격·latency·유동성·broker terminal의 단일 최초 사유 | final authority/entry-price/submit/broker |
-| 5 | 위젯·에피소드와 시장약세 차단이 각 owner 계약대로 작동하는가 | 시장별 입력 freshness·차단 receipt와 signal/order/custody lineage | market regime/widget/episode owner |
+| 5 | 에피소드와 시장약세 차단이 각 owner 계약대로 작동하는가 | 시장별 입력 freshness·차단 receipt와 signal/order/custody lineage | market regime/episode owner |
 | 6 | 장후가 결손 없는 자료로 다음 정책을 만들 수 있는가 | decision→outcome→cost→calibration의 exact identity와 source hash | collector/writer/join/postclose consumer |
 
 완료 상태는 다음을 분리한다.
@@ -125,9 +125,9 @@ submit drought는 `UPSTREAM_GATE|LATENCY_PRE_SUBMIT|ENTRY_AI_AUTHORITY_REVALIDAT
 
 장후 owner는 기존 `ai_action_outcome_calibration`과 연결된 기계 threshold·compact prompt optimizer/consumer, dated policy publisher, PREOPEN resolver다. 장중에는 입력의 생성·결속과 예정 handoff를 점검하고 무거운 장후 producer를 조기 실행하지 않는다. 새 후보가 없더라도 유효 incumbent 유지 경로를 차단하지 않으며, 초기 정책 사용에 challenger의 표본 floor를 다시 요구하지 않는다.
 
-### 2.2 시장약세·위젯·에피소드 매매기계
+### 2.2 시장약세·에피소드 매매기계
 
-시장약세 판정기는 KOSPI/KOSDAQ별 widget/episode 신규 매매를 실제 차단하는 runtime guard다. 단순 참고지표로 취급하지 않는다. 다음을 확인한다.
+시장약세 판정기는 KOSPI/KOSDAQ별 episode 신규 매매를 실제 차단하는 runtime guard다. 단순 참고지표로 취급하지 않는다. 다음을 확인한다.
 
 - 시장별 source timestamp/hash·freshness, 계산 window와 canonical state
 - symbol의 시장 매핑, venue/session과 적용 policy hash
@@ -136,9 +136,7 @@ submit drought는 `UPSTREAM_GATE|LATENCY_PRE_SUBMIT|ENTRY_AI_AUTHORITY_REVALIDAT
 - stale/UNKNOWN/source gap이 계약대로 fail-closed됐으며 임의의 다른 시장 값으로 대체되지 않았는지
 - 동일 signal에서 market guard와 다른 guard의 최초 차단 owner가 중복 집계되지 않았는지
 
-위젯 흐름은 다음과 같다.
-
-`signal → source-quality/policy → market weakness/global safety → episode lock → entry order/fill → target → terminal/custody`
+위젯은 퇴역했다. 위젯 policy·collector·startup receipt 부재는 active 장애가 아니다. 과거 위젯 custody는 감사 입력이며 Main/에피소드 원천·주문과 재귀속하지 않는다.
 
 에피소드 흐름은 다음과 같다.
 
@@ -146,15 +144,15 @@ submit drought는 `UPSTREAM_GATE|LATENCY_PRE_SUBMIT|ENTRY_AI_AUTHORITY_REVALIDAT
 
 공통 확인 항목:
 
-- service/timer·WorkingDirectory/ExecStart와 실제 PID/code generation, policy/profile hash. 위젯 auto-trader는 startup receipt의 `release_root`와 같은 PID의 systemd `WorkingDirectory`가 일치해야 하며, 08:05 이후 `unit_process_release_mismatch`는 runtime incident로 판정한다.
+- service/timer·WorkingDirectory/ExecStart와 실제 PID/code generation, policy/profile hash.
 - signal·episode·leg·order ID와 symbol/venue/session의 exact lineage
 - 중복 episode, partial fill, 취소·재제출, target과 잔여 수량의 owner 정합성
-- main/widget/episode/manual 보유와 주문을 합치거나 대신 매도하지 않았는지
+- main/episode/manual 보유와 주문을 합치거나 대신 매도하지 않았는지
 - `HELD`, right-censored, 미체결, source gap을 완료/손익 0으로 바꾸지 않았는지
 - 비용 차감 EV, 목표 완료시간, adverse/sideways, tail, 자본점유와 반복 가능성
 - 승인된 보조청산이 있으면 신규 entry 범위·policy pin·원 target 취소확정→보호 주문→TTL/부분체결 잔량 원복과 terminal 정산
 
-widget/episode의 signal, micro confirmation, entry price/target, holding/exit를 한 변경 효과로 합치지 않는다. 매도잔량 감소속도는 실제 매수체결 설명·refill·bid 지지·가격반응과 함께 평가하며 단독 BUY 근거로 쓰지 않는다. source-only 연구·recommendation·catalog refresh·timer start는 live 적용이나 경제성 성공이 아니다.
+episode의 signal, micro confirmation, entry price/target, holding/exit를 한 변경 효과로 합치지 않는다. 매도잔량 감소속도는 실제 매수체결 설명·refill·bid 지지·가격반응과 함께 평가하며 단독 BUY 근거로 쓰지 않는다. source-only 연구·recommendation·catalog refresh·timer start는 live 적용이나 경제성 성공이 아니다.
 
 ### 2.3 원천·운영 건전성
 
@@ -163,7 +161,7 @@ widget/episode의 signal, micro confirmation, entry price/target, holding/exit�
 - Kiwoom REST/WS LOGIN·REG, required realtime type, route/epoch, first data, freshness, reconnect/resubscribe, queue/drop/writer/disk
 - 분봉은 완성봉만 사용하고 BBO·0B/0D·체결은 동일 symbol/venue/session/epoch로 결속
 - broker 잔고·미체결·주문가능금액과 owner별 ledger/custody reconciliation
-- main/widget/episode process의 PID·heartbeat·중복·restart-loop와 실제 consumer
+- main/episode process의 PID·heartbeat·중복·restart-loop와 실제 consumer
 - clean baseline 이전 자료, real/sim/probe, full/partial fill, completed/HELD/censored의 혼입 여부
 - source-quality preflight와 `raw_row_exclusion`; 식별 가능한 결손은 행/창만 제외하고 전체 날짜 차단은 전역 계약 결손 또는 격리 실패에 한정
 - OFF/retired producer의 runtime 권한 누출·자원 간섭. 누출이 없으면 세부 성과 연구를 다시 열지 않음
@@ -176,7 +174,7 @@ widget/episode의 signal, micro confirmation, entry price/target, holding/exit�
 
 | 경계 | 집중 점검 | 아직 완료로 만들지 않을 상태 |
 | --- | --- | --- |
-| PREOPEN/기동 직후 | release→policy/env→resolver→PID, 시장약세·widget/episode policy/preflight | policy 파일이나 PID만 존재 |
+| PREOPEN/기동 직후 | release→policy/env→resolver→PID, 시장약세·episode policy/preflight | policy 파일이나 PID만 존재 |
 | 연속매매 재개 후 첫 15분 | 첫 자연 machine action, ENTER_NOW의 AI terminal, final guard와 supported scope | 자연 대상 없음 또는 expected market quiet |
 | 장중 중간 점검 | 성숙한 1/3/5/10/20/30/60분 사례표, 최초 감시·판정·submit 지연, source chain | 최근 attempt의 미성숙 horizon |
 | KRX 마감 전후 | 정규장 false-negative/false-positive, 주문·custody·시장약세 block/해제 | 미종결 주문·HELD를 완료 처리 |
@@ -202,7 +200,7 @@ widget/episode의 signal, micro confirmation, entry price/target, holding/exit�
 1. release selector, PREOPEN apply/verify와 현재 PID root/commit/env/policy 소비
 2. broker inventory·미체결·custody와 hard safety
 3. supported scope별 promotion→machine→AI→final guard/submit의 exact 보존식
-4. 시장약세·widget/episode의 실제 service/policy/signal/block/order terminal
+4. 시장약세·episode의 실제 service/policy/signal/block/order terminal
 5. WS/source-quality/writer/disk와 장후 calibration identity 준비
 6. mature outcome 사례표와 threshold/prompt 반사실 후보
 
@@ -284,7 +282,7 @@ gate의 과도함은 action count가 아니라 성숙 outcome으로 판정한다
 
 - 실주문·취소, 수량·가격·target·cap·cooldown과 broker/account/order guard 변경
 - live threshold/prompt/provider/model/route/env/operator lock 수동 변경
-- bot/widget/episode process 기동·종료·재기동
+- bot/episode process 기동·종료·재기동
 - stale/conflict·price freshness·hard/protect/emergency safety 완화
 - source-only/sim 결과를 실주문 권한으로 전환
 
@@ -306,7 +304,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project --print
 4. scope별 machine `ENTER_NOW|RECHECK|BLOCK|source_invalid` 및 AI terminal 보존식
 5. scanner→machine→AI→final guard→submit/broker의 최초 결손과 지연
 6. 성숙 사례의 좋은 타점·늦은 타점·놓친 타점·과제출·적정 차단·미성숙 표
-7. 시장약세, widget/episode signal·block·order·terminal·custody 상태
+7. 시장약세, episode signal·block·order·terminal·custody 상태
 8. source/identity/outcome/cost→장후 calibration handoff와 다음 확인 시각
 9. 수정·review finding·targeted validation·배포/PID 반영을 각각 분리
 10. 남은 source warning, external dependency, user authority와 경제성 acceptance

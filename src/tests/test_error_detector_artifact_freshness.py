@@ -36,7 +36,7 @@ def test_semantic_generation_race_is_unobservable_not_corruption(tmp_path, monke
     paths = {
         "machine": "data/report/postclose_stage_terminal/2026-10-02/legacy_machine_report.json",
         "auxiliary": "data/report/postclose_stage_terminal/2026-10-02/main_auxiliary_policy.json",
-        "handoff": "data/report/postclose_stage_terminal/2026-10-02/widget_policy.json",
+        "handoff": "data/report/postclose_stage_terminal/2026-10-02/episode_policy.json",
     }
     path = tmp_path / paths[owner]
     path.parent.mkdir(parents=True)
@@ -150,7 +150,7 @@ def test_semantic_stage_rejects_terminal_generation_mismatch(tmp_path):
     day, stage = "2026-10-02", "legacy_machine_report"
     path = tmp_path / "data/report/postclose_stage_terminal" / day / f"{stage}.json"
     path.parent.mkdir(parents=True)
-    terminal = {"schema": "postclose_stage_terminal_v2", "source_date": day, "stage_id": stage,
+    terminal = {"schema": "postclose_stage_terminal_v3", "source_date": day, "stage_id": stage,
                 "status": "succeeded", "exit_code": 0, "sources": {"report": {"sha256": "a" * 64}}}
     terminal["receipt_sha256"] = hashlib.sha256(json.dumps(terminal, ensure_ascii=True,
         sort_keys=True, separators=(",", ":")).encode()).hexdigest()
@@ -665,7 +665,7 @@ def test_auxiliary_completed_terminal_requires_exact_report_generation(tmp_path)
     terminal_path = (tmp_path / "data/report/postclose_stage_terminal" / day
                      / "main_auxiliary_policy.json")
     terminal_path.parent.mkdir(parents=True)
-    terminal = {"schema": "postclose_stage_terminal_v2",
+    terminal = {"schema": "postclose_stage_terminal_v3",
                 "stage_id": "main_auxiliary_policy", "source_date": day,
                 "status": "succeeded", "exit_code": 0,
                 "sources": {"compact_auxiliary_paired_economic": {
@@ -1013,6 +1013,13 @@ class TestArtifactFreshnessDetector:
         monkeypatch.setattr("src.engine.error_detectors.artifact_freshness.PROJECT_ROOT", tmp_path)
         monkeypatch.setattr("src.engine.error_detectors.artifact_freshness._initial_quantity_semantics",
                             lambda *a, **k: {"status": "not_assessed", "findings": []})
+
+        # These tests own individual artifact registry contracts. Independent
+        # startup semantics have dedicated exact-receipt tests below.
+        monkeypatch.setattr("src.engine.error_detectors.episode_health.check",
+            lambda *a, **k: dict(findings=[], alerts=[], status="not_assessed", source_date="2026-10-06", target_date="2026-10-06"))
+        monkeypatch.setattr("src.engine.error_detectors.artifact_freshness._completed_semantic_source",
+            lambda *a, **k: dict(findings=[], source_date=None, prepared_source_date=None, target_date="2026-10-06"))
 
     def test_preopen_artifacts_allow_one_detector_interval_for_producer_race(self):
         preopen_artifacts = {

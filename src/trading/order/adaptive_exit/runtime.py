@@ -109,7 +109,7 @@ class OwnerSession:
         ExecutionBounds(**asdict(self.bounds))
         if (
             self.context.owner_type
-            != {"widget": "widget_auto_trade", "episode": "episode"}[scope.owner]
+            != "episode"
             or not isinstance(self.target_intent_id, str)
             or not self.target_intent_id
             or not _digest(self.approval_receipt_hash)

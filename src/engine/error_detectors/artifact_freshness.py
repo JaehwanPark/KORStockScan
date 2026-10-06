@@ -373,7 +373,7 @@ def _semantic_stage_binding(root, day, stage, *, artifact=None, artifact_sha=Non
     body = {k: v for k, v in value.items() if k != "receipt_sha256"}
     digest = hashlib.sha256(json.dumps(body, ensure_ascii=True, sort_keys=True,
                                       separators=(",", ":")).encode()).hexdigest()
-    if (value.get("schema") != "postclose_stage_terminal_v2"
+    if (value.get("schema") not in ({"postclose_stage_terminal_v3", "postclose_stage_terminal_v2"} if day < "2026-10-06" else {"postclose_stage_terminal_v3"})
         or value.get("source_date") != day or value.get("stage_id") != stage
         or value.get("receipt_sha256") != digest):
         raise ValueError(f"{stage}:terminal_identity_or_hash_invalid")
@@ -756,7 +756,7 @@ def _auxiliary_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
             body = {k: v for k, v in terminal.items() if k != "receipt_sha256"}
             digest = hashlib.sha256(json.dumps(body, ensure_ascii=True,
                 sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-            if (terminal.get("schema") != "postclose_stage_terminal_v2"
+            if (terminal.get("schema") not in ({"postclose_stage_terminal_v3", "postclose_stage_terminal_v2"} if source_date < "2026-10-06" else {"postclose_stage_terminal_v3"})
                 or terminal.get("stage_id") != "main_auxiliary_policy"
                 or terminal.get("source_date") != source_date or receipt != digest):
                 raise ValueError("auxiliary_terminal_identity_or_hash_invalid")
@@ -1227,7 +1227,7 @@ def _entry_cancel_wait_result_semantics(root, source_date, now=None, *, data_roo
 
 def _family_policy_semantics(root, source_date, family):
     from src.engine.monitoring import family_policy_semantics as native
-    folders = {'widget': 'widget_auto_trade_policy_calibration', 'episode': 'low_price_two_leg_tuning'}
+    folders = {'episode': 'low_price_two_leg_tuning'}
     path = root / 'data/report' / folders[family] / f'{family}_policy_semantics_{source_date}.json'
     try:
         execution = _semantic_stage_binding(root, source_date, family + '_policy')
@@ -1279,14 +1279,6 @@ def _family_policy_semantics(root, source_date, family):
                 findings.append('episode_native_source_gap')
             if (summary.get('capture_manifest') or {}).get('invalid_event_count'):
                 findings.append('episode_capture_invalid_events')
-        else:
-            counts = [summary.get(k) for k in ('ready_sessions', 'selected_sessions', 'carried_sessions')]
-            if any(type(n) is not int or n < 0 for n in counts) or max(counts[1:]) > counts[0]:
-                raise ValueError('widget_semantic_population_invalid')
-            if len({(r['symbol'], r['session']) for r in rows}) != len(rows):
-                raise ValueError('widget_semantic_duplicate_scope')
-            if any(r.get('study_status') == 'scale_in_runtime_trigger_source_missing' for r in rows):
-                findings.append('widget_scale_in_replay_source_missing')
         # Re-read the small seal after its predecessor hashes to catch publication
         # between reads. A moving generation is unobservable, not corruption.
         if _semantic_object(path, limit=4 * 1024 * 1024)[1] != sha:
@@ -1404,7 +1396,7 @@ def _postclose_handoff_semantics(root, source_date, now):
     result = {"status": "not_assessed", "source_date": source_date,
               "findings": [], "stages": {}, "consumption": "not_observed"}
     try:
-        for stage in ("widget_policy", "episode_policy"):
+        for stage in ("episode_policy",):
             result["stages"][stage] = _semantic_stage_binding(root, source_date, stage)
             if result["stages"][stage]["status"] == "succeeded":
                 from src.engine.automation.postclose_summary_handoff import stage_artifacts
@@ -1460,7 +1452,7 @@ def _postclose_handoff_semantics(root, source_date, now):
 
 
 def _semantic_alerts(name, semantics, source_date):
-    if name in {'widget_policy', 'episode_policy', 'samsung_frozen_validation', 'episode_startup'}:
+    if name in {'episode_policy', 'samsung_frozen_validation', 'episode_startup'}:
         if semantics.get('status') in {'not_assessed', 'unobservable', 'waiting_producer', 'future_due'}:
             return []
         return [dict(source_date=source_date, target_date=semantics.get('target_date'),
@@ -1508,7 +1500,7 @@ def _semantic_alerts(name, semantics, source_date):
         winrate_selected_zero_or_undefined winrate_semantic_validation_failed winrate_terminal_binding_invalid
         winrate_execution_failed next_preopen_prepared_contract_invalid postclose_handoff_contract_invalid
         postclose_handoff_generation_invalid postclose_handoff_execution_failed
-        widget_policy:execution_failed episode_policy:execution_failed
+        episode_policy:execution_failed
     """.split())
     if semantics.get("status") in {"not_assessed", "unobservable"}:
         return []
@@ -2469,7 +2461,7 @@ class ArtifactFreshnessDetector(BaseDetector):
             if handoff["findings"]:
                 warnings.append("postclose_handoff_semantics: " + ", ".join(handoff["findings"]))
             family_results = [(name, _family_policy_semantics(PROJECT_ROOT, semantic_day, family))
-                              for name, family in (('widget_policy', 'widget'), ('episode_policy', 'episode'))]
+                              for name, family in (('episode_policy', 'episode'),)]
             family_results.append(('samsung_frozen_validation', _samsung_forward_semantics(PROJECT_ROOT, semantic_day)))
             for name, result in family_results:
                 details[name + '_semantics'] = result

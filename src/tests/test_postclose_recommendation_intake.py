@@ -106,7 +106,7 @@ def sources(tmp_path, selected=(), nonselected=()):
     return reports, paths
 
 
-def recommendation(owner="widget", axis="signal", decision="observe"):
+def recommendation(owner="episode", axis="signal", decision="observe"):
     row = {
         "decision": decision,
         "runtime_effect": False,
@@ -204,7 +204,7 @@ def test_all_owners_mirrors_nested_workorders_and_invalid_siblings(tmp_path):
         "allowed_runtime_apply": False,
     }
     write(
-        paths["widget_advisory_calibration"],
+        paths["machine_entry_timing_tuning"],
         {
             "target_date": DATE,
             "recommendations": [a, invalid],
@@ -239,7 +239,7 @@ def test_conflicting_mirror_cannot_reuse_identity(tmp_path):
     reports, paths = sources(tmp_path)
     a = recommendation()
     write(
-        paths["widget_advisory_calibration"],
+        paths["machine_entry_timing_tuning"],
         {
             "target_date": DATE,
             "recommendations": [a],
@@ -249,16 +249,6 @@ def test_conflicting_mirror_cannot_reuse_identity(tmp_path):
     result = mod.build_intake(reports, DATE)
     assert any("conflicting_native_id" in issue for issue in result["issues"])
 
-
-def test_widget_source_date_not_next_effective_date(tmp_path):
-    reports, paths = sources(tmp_path)
-    write(
-        paths["widget_symbol_runtime_policy_apply"],
-        {"source_target_date": DATE, "effective_date": "2026-09-10"},
-    )
-    result = mod.build_intake(reports, DATE)
-    assert result["status"] == "accounted"
-    assert result["all_implementations_completed"]
 
 
 def receipt(reports, paths):
@@ -380,7 +370,7 @@ def publish_summaries(reports, checklist):
 def test_isolated_native_gap_is_visible_warning_not_global_completion_failure(tmp_path):
     reports, paths = sources(tmp_path)
     write(
-        paths["widget_advisory_calibration"],
+        paths["machine_entry_timing_tuning"],
         {
             "target_date": DATE,
             "recommendations": [
@@ -533,7 +523,7 @@ def test_successful_unit_cannot_hide_missing_or_previous_date_source(
     tmp_path, bad_source
 ):
     reports, paths = sources(tmp_path)
-    path = paths["widget_advisory_calibration"]
+    path = paths["machine_entry_timing_tuning"]
     if bad_source is None:
         path.unlink()
     else:
@@ -547,10 +537,9 @@ def test_successful_unit_cannot_hide_missing_or_previous_date_source(
     result = handoff.installed_producer_terminal_states(
         DATE, runner=runner, report_dir=reports
     )
-    assert result["korstockscan-samsung-widget-evaluation.service"] == (
-        "failed_exact_source_artifact:widget_advisory_calibration"
+    assert result["korstockscan-machine-microstructure-final-refresh.service"] == (
+        "failed_exact_source_artifact:machine_entry_timing_tuning"
     )
-    assert result["korstockscan-machine-microstructure-final-refresh.service"] == "done"
 
 
 def test_workorder_source_race_never_binds_new_hash_to_old_input(tmp_path):

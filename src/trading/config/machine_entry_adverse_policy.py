@@ -15,6 +15,8 @@ SCOPE_FIELDS = ("owner", "scope_id", "symbol", "route", "session")
 
 
 def load_policy(*, scope, now, signal_at):
+    if not isinstance(scope, dict) or scope.get("owner") != "episode":
+        return None
     path, pin = os.getenv(PATH_ENV, ""), os.getenv(HASH_ENV, "")
     if not path and not pin:
         return None
@@ -45,7 +47,7 @@ def load_policy(*, scope, now, signal_at):
     ):
         raise ValueError("entry_adverse_approval_missing")
     scopes = p["scopes"]
-    all_existing = scopes == "all_existing_widget_episode"
+    all_existing = scopes in ("all_existing_episode", "all_existing_widget_episode")
     if not all_existing and (not isinstance(scopes, list) or not scopes):
         raise ValueError("entry_adverse_scopes_required")
     rows = [scope] if all_existing else scopes

@@ -30,14 +30,14 @@ from src.trading.order.owner_custody_registry import (
 )
 
 
-@pytest.fixture(params=["episode", "widget"])
+@pytest.fixture(params=["episode"])
 def runtime(request, tmp_path):
     adapter, wire, registry = request.getfixturevalue("broker_setup")
     owner = request.param
     if owner == "widget":
         registry = OrderOwnerRegistry(tmp_path / "widget-registry.jsonl")
         adapter.context = replace(
-            adapter.context, owner_type="widget_auto_trade", owner_id="widget:test"
+            adapter.context, owner_type="episode", owner_id="widget:test"
         )
         registry.register_migrated_position(
             context=adapter.context,

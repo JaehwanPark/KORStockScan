@@ -37,7 +37,7 @@ def sign(raw):
 def fixture(
     tmp_path,
     *,
-    owner="widget",
+    owner="episode",
     route="KRX",
     profile="actual:test",
     entry_policy_hash=ENTRY,
@@ -226,7 +226,7 @@ def test_research_comparison_cost_is_not_execution_authority(tmp_path):
 
 @pytest.mark.parametrize(
     "owner,route",
-    [("widget", "KRX"), ("widget", "NXT"), ("episode", "SOR"), ("episode", "KRX")],
+    [("episode", "KRX"), ("episode", "NXT"), ("episode", "SOR")],
 )
 def test_native_candidate_to_atomic_policy_to_read_only_loader(tmp_path, owner, route):
     data = fixture(tmp_path, owner=owner, route=route)

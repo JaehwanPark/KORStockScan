@@ -100,7 +100,7 @@ class GroupOwnerSession:
             or not positive_int(d["max_snapshot_age_ms"])
             or not _digest(d["execution_approval_receipt_hash"])
             or context.owner_type
-            != ("widget_auto_trade" if group.scope.owner == "widget" else "episode")
+            != "episode"
             or group.episode_id != context.position_id
         ):
             raise ValueError("group_owner_definition_binding_invalid")

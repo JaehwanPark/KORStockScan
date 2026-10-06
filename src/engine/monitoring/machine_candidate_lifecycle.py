@@ -19,7 +19,6 @@ DAILY_RECOMMENDATIONS = DATA_DIR / "daily_recommendations_v2.csv"
 DAILY_RECOMMENDATION_DIAGNOSTICS = (
     DATA_DIR / "daily_recommendations_v2_diagnostics.json"
 )
-WIDGET_REPORT_DIR = DATA_DIR / "report" / "widget_symbol_signal_policy_research"
 EPISODE_REPORT_DIR = (
     DATA_DIR / "report" / "low_price_two_leg_expanded_candidate_research"
 )
@@ -135,43 +134,6 @@ def _latest_prior_report(directory: Path, observed_date: date) -> dict[str, Any]
     return payload if isinstance(payload, dict) else None
 
 
-def widget_long_term_pruned_symbols(
-    observed_date: date, *, report_dir: Path = WIDGET_REPORT_DIR
-) -> dict[str, str]:
-    """Prune only mature non-established candidates with non-positive edge."""
-
-    report = _latest_prior_report(report_dir, observed_date)
-    if (
-        not report
-        or report.get("status") != "complete"
-        or int(report.get("trading_date_count") or 0) < MIN_LONG_HORIZON_TRADING_DAYS
-    ):
-        return {}
-    origins = report.get("symbol_origins") or {}
-    results = report.get("symbols") or {}
-    pruned: dict[str, str] = {}
-    for symbol, result in results.items():
-        if origins.get(symbol) == "established_widget_symbol" or not isinstance(
-            result, dict
-        ):
-            continue
-        calibration = result.get("calibration") or {}
-        holdout = result.get("holdout") or {}
-        try:
-            calibration_count = int(calibration.get("episode_count") or 0)
-            holdout_count = int(holdout.get("episode_count") or 0)
-            calibration_ev = float(calibration.get("notional_weighted_ev_pct"))
-            holdout_ev = float(holdout.get("notional_weighted_ev_pct"))
-        except (TypeError, ValueError):
-            continue
-        if (
-            calibration_count >= 10
-            and holdout_count >= 4
-            and calibration_ev <= 0.0
-            and holdout_ev <= 0.0
-        ):
-            pruned[str(symbol)] = "mature_calibration_and_holdout_ev_nonpositive"
-    return pruned
 
 
 def episode_long_term_pruned_symbols(

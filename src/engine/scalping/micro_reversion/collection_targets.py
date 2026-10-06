@@ -271,8 +271,6 @@ def _priority_round_robin(
 def _is_active_gap(gap: dict[str, Any]) -> bool:
     scope_kind = str(gap.get("scope_kind") or "")
     return scope_kind in {
-        "active_widget_owner",
-        "active_widget_actual_execution",
         "active_episode_owner",
     }
 
@@ -294,6 +292,8 @@ def build_collection_targets(
     merged: dict[str, dict[str, Any]] = {}
 
     def merge_scope(scope: dict[str, Any], *, collection_reason: str) -> None:
+        if str(scope.get("owner") or "").startswith("widget"):
+            return
         symbol = _normalize_symbol(scope.get("symbol"))
         if not symbol:
             return
@@ -326,7 +326,7 @@ def build_collection_targets(
         row["active_owner"] = row["active_owner"] or _is_active_gap(scope)
         row["actual_execution_observed"] = bool(
             row["actual_execution_observed"]
-            or scope.get("scope_kind") == "active_widget_actual_execution"
+            or False
         )
 
     for gap in attribution_report.get("producer_consumer_gaps") or ():
@@ -335,41 +335,6 @@ def build_collection_targets(
         merge_scope(gap, collection_reason=str(gap["gap_class"]))
 
     consumers = attribution_report.get("consumers") or {}
-    widget_symbols = (consumers.get("widget_postclose_tuning") or {}).get("symbols")
-    if isinstance(widget_symbols, dict):
-        for scope_id, payload in widget_symbols.items():
-            if not isinstance(payload, dict):
-                continue
-            scope_kinds = [str(value) for value in payload.get("scopes") or ()]
-            owner_scope_ids = [
-                str(value) for value in payload.get("owner_scope_ids") or ()
-            ]
-            owner_scope_kinds = payload.get("owner_scope_kinds") or {}
-            owner_scope_venues = payload.get("owner_scope_expected_venues") or {}
-            if not owner_scope_ids:
-                owner_scope_ids = [str(scope_id)]
-            for owner_scope_id in owner_scope_ids:
-                merge_scope(
-                    {
-                        "owner": "widget",
-                        "scope_id": owner_scope_id,
-                        "scope_kind": owner_scope_kinds.get(owner_scope_id)
-                        or (
-                            "active_widget_owner"
-                            if "active_widget_owner" in scope_kinds
-                            else (
-                                scope_kinds[0]
-                                if scope_kinds
-                                else "prospective_widget_research"
-                            )
-                        ),
-                        "symbol": payload.get("symbol") or scope_id,
-                        "expected_venues": owner_scope_venues.get(owner_scope_id)
-                        or payload.get("expected_venues")
-                        or ("SOR",),
-                    },
-                    collection_reason=POLICY_SAMPLE_ACCUMULATION,
-                )
     episode_profiles = (consumers.get("episode_machine_postclose_tuning") or {}).get(
         "profiles"
     )
@@ -888,11 +853,17 @@ def load_exact_date_collection_targets(
             "path": str(path),
             "registration_items": [],
         }
+    retired_items = {
+        item for row in selected_targets
+        if row.get("owners") and all(str(owner).startswith("widget") for owner in row["owners"])
+        for item in (row.get("registration_items") or [row.get("registration_item")])
+    }
     return {
         "status": "loaded",
         "path": str(path),
         "source_date": payload.get("source_date"),
         "effective_date": effective_date,
-        "registration_items": items,
+        "registration_items": [item for item in items if item not in retired_items],
+        "retired_owner_items_excluded": sorted(retired_items),
         "payload": payload,
     }

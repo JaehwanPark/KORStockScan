@@ -12,7 +12,7 @@ from src.engine.monitoring.machine_rebound_reentry_evaluation import (
     SOURCE_SCHEMA,
     aware,
 )
-from src.engine.monitoring.widget_comparison_cost import comparison_cost_contract
+from src.trading.market.comparison_cost import comparison_cost_contract
 from src.trading.config.machine_rebound_reentry_policy import (
     digest,
     numeric,

@@ -30,7 +30,7 @@ def setup(tmp_path, monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_BROKER_ACCOUNT_KEY", "buy-cancel-test-account")
     registry = OrderOwnerRegistry(tmp_path / "registry.jsonl")
     context = OwnerOrderContext(
-        "widget_auto_trade", "widget:test", "position:test", "buy"
+        "episode", "widget:test", "position:test", "buy"
     )
     intent = registry.reserve(
         context=context,

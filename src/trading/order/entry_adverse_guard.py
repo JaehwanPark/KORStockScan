@@ -1,4 +1,4 @@
-"""Bounded pre-submit state owned by the existing widget/episode loop.
+"""Bounded pre-submit state owned by the existing episode loop.
 
 No orders, no policy publication, no extra broker reads. Local snapshot reads
 are revalidated after I/O; broker transport stays outside this module.

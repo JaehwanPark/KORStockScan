@@ -141,7 +141,7 @@ def _construct(
     context.validate()
     _require(
         context.owner_type
-        == {"widget": "widget_auto_trade", "episode": "episode"}[scope.owner],
+        == "episode",
         "enrollment_owner_type_mismatch",
     )
     cost = approved["execution_cost_guard"]

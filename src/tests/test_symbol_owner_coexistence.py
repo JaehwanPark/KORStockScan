@@ -75,7 +75,6 @@ def _write_policy(
             "mode": mode,
             "allowed_owners": [
                 "main_scalping",
-                "widget_auto_trade",
                 "episode",
             ],
             "migration_completed": True,
@@ -603,7 +602,7 @@ def test_exclusive_manual_policy_allows_only_manual_owner(tmp_path, monkeypatch)
 def test_registry_serializes_unbound_lane_and_forbids_cross_owner_cancel(tmp_path):
     registry = OrderOwnerRegistry(tmp_path / "registry.jsonl")
     main = _context("main_scalping", "101")
-    widget = _context("widget_auto_trade", "005930")
+    widget = _context("episode", "005930")
     main_intent = registry.reserve(
         context=main,
         symbol=SYMBOL,
@@ -1337,7 +1336,7 @@ def test_main_order_transport_rechecks_veto_for_every_action(
     assert (tmp_path / "registry.jsonl").read_bytes() == before_registry
 
 
-@pytest.mark.parametrize("owner", ["widget_auto_trade", "episode"])
+@pytest.mark.parametrize("owner", ["episode"])
 def test_manual_main_veto_preserves_machine_order_authority(
     tmp_path, monkeypatch, owner
 ):

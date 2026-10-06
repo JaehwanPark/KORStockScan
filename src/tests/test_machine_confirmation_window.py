@@ -88,7 +88,7 @@ def _live(depths, trades, *, now=NOW):
         owner_entry_limit_price=10010,
         owner_target_price=10050,
         round_trip_cost_pct=0.23,
-        widget_take_profit=False,
+        target_from_fill=False,
     )[0]
 
 
@@ -173,7 +173,7 @@ def test_offline_and_live_use_identical_intermediate_path(
         owner_entry_limit_price=10010,
         owner_target_price=10050,
         round_trip_cost_pct=0.23,
-        widget_take_profit=False,
+        target_from_fill=False,
     )
     for key in (
         "best_bid",
@@ -333,7 +333,7 @@ def test_live_progress_rejects_reconnect_against_original_signal_epoch(monkeypat
         owner_entry_limit_price=10010,
         owner_target_price=10050,
         round_trip_cost_pct=0.23,
-        widget_take_profit=False,
+        target_from_fill=False,
     )
     assert result["action"] != "ENTER"
     assert (

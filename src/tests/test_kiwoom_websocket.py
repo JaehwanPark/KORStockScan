@@ -630,7 +630,7 @@ def test_observation_only_event_never_enters_latest_state_dispatch(monkeypatch):
     assert not manager._pending_tick_events
 
 
-def test_widget_dashboard_snapshot_interval_defaults_to_one_second(monkeypatch):
+def test_shared_dashboard_snapshot_interval_defaults_to_one_second(monkeypatch):
     monkeypatch.delenv(
         kiwoom_websocket.WS_DASHBOARD_SNAPSHOT_INTERVAL_SEC_ENV, raising=False
     )
@@ -698,14 +698,6 @@ def test_dashboard_snapshot_freezes_main_and_exact_route_views(monkeypatch):
     assert manager._dashboard_snapshot_write_inflight is False
 
 
-def test_pinned_widget_observation_is_limited_to_one_samsung_item(monkeypatch):
-    monkeypatch.setenv(
-        kiwoom_websocket.WS_PINNED_OBSERVATION_ITEMS_ENV,
-        "000001_AL,005930_NX,005930_AL",
-    )
-
-    assert kiwoom_websocket.pinned_ws_observation_items() == ("005930_NX",)
-    assert kiwoom_websocket.pinned_ws_observation_codes() == frozenset({"005930"})
 
 
 def test_await_login_ack_handles_ping_then_success():
@@ -903,7 +895,6 @@ def test_realtime_0b_stores_signed_trade_volume_primary_with_touch_provenance(
     )
 
     latest = manager.get_latest_data("005930")
-    assert latest["realtime_type_snapshots_by_route"]["KRX|krx_only"]["0B"]["widget_quote_fields"] == {"change_pct": "-1.25", "low_price": "-9900"}
     tick = latest["recent_trade_ticks"][0]
     assert tick["dir"] == "BUY"
     assert tick["aggressor_source"] == "kiwoom_0b_signed_trade_volume"
@@ -2457,18 +2448,6 @@ def test_execute_unsubscribe_returns_remove_send_completion(monkeypatch):
     completion.set_result(True)
 
 
-def test_execute_unsubscribe_retains_widget_comparison_observation(monkeypatch):
-    monkeypatch.delenv(kiwoom_websocket.WS_PINNED_OBSERVATION_ITEMS_ENV, raising=False)
-    manager = KiwoomWSManager("test-token")
-    manager.subscribed_codes = {"005930"}
-    manager._registered_items_by_code = {"005930": ("005930_AL",)}
-    manager.realtime_data = {"005930": {"curr": 242_000}}
-
-    manager.execute_unsubscribe(["005930"])
-
-    assert manager.subscribed_codes == {"005930"}
-    assert manager._registered_items_by_code == {"005930": ("005930_AL",)}
-    assert manager.realtime_data["005930"]["curr"] == 242_000
 
 
 def test_execute_unsubscribe_retains_micro_collection_as_source_only(monkeypatch):
@@ -2485,19 +2464,6 @@ def test_execute_unsubscribe_retains_micro_collection_as_source_only(monkeypatch
     assert manager.realtime_data["111111"]["curr"] == 1000
 
 
-def test_widget_observation_registration_is_not_reclassified_as_micro_only(
-    monkeypatch,
-):
-    monkeypatch.delenv(kiwoom_websocket.WS_PINNED_OBSERVATION_ITEMS_ENV, raising=False)
-    manager = KiwoomWSManager("test-token")
-    manager.subscribed_codes = {"005930"}
-    manager._registered_items_by_code = {"005930": ("005930_AL",)}
-    manager._micro_reversion_observation_items_by_code = {"005930": "005930_AL"}
-
-    manager.execute_unsubscribe(["005930"])
-
-    assert manager.subscribed_codes == {"005930"}
-    assert manager.is_micro_reversion_observation_only_subscription("005930") is False
 
 
 def test_micro_collection_demotion_replaces_route_with_source_only_types(monkeypatch):
@@ -2683,7 +2649,7 @@ def test_execute_subscribe_preserves_source_only_route_item(monkeypatch):
     assert captured[0][1]["realtime_types"] == ("0B", "0D")
 
 
-def test_main_fixed_watch_registers_missing_exact_route_beside_widget_pin(monkeypatch):
+def test_main_fixed_watch_registers_missing_exact_route_beside_existing_integrated_route(monkeypatch):
     manager = KiwoomWSManager("test-token")
     manager._started = True
     manager.loop = SimpleNamespace(is_running=lambda: True)
@@ -2972,29 +2938,9 @@ def test_failed_remove_keeps_source_only_suppression_and_blocks_promotion_reg(
     assert manager.is_micro_reversion_observation_only_subscription("111111") is True
 
 
-def test_widget_observation_item_does_not_consume_trading_item_budget(monkeypatch):
-    monkeypatch.delenv(kiwoom_websocket.WS_PINNED_OBSERVATION_ITEMS_ENV, raising=False)
-    monkeypatch.setenv("KORSTOCKSCAN_WS_MAX_REG_ITEMS", "1")
-    monkeypatch.setattr(
-        "src.utils.kiwoom_utils.get_effective_kiwoom_code", lambda code: code
-    )
-    manager = KiwoomWSManager("test-token")
-    fake_ws = _FakeWS([])
-    manager.websocket = fake_ws
-    manager._session_ready.set()
-
-    asyncio.run(manager._send_reg(["005930_AL"], enforce_item_budget=True))
-    asyncio.run(manager._send_reg(["000001"], enforce_item_budget=True))
-
-    assert manager.subscribed_codes == {"005930", "000001"}
-    assert manager._registered_items_by_code == {
-        "005930": ("005930_AL",),
-        "000001": ("000001",),
-    }
 
 
 def test_samsung_non_pinned_route_still_consumes_trading_item_budget(monkeypatch):
-    monkeypatch.delenv(kiwoom_websocket.WS_PINNED_OBSERVATION_ITEMS_ENV, raising=False)
     monkeypatch.setenv("KORSTOCKSCAN_WS_MAX_REG_ITEMS", "1")
     monkeypatch.setattr(
         "src.utils.kiwoom_utils.get_effective_kiwoom_code", lambda code: code
@@ -3012,7 +2958,6 @@ def test_samsung_non_pinned_route_still_consumes_trading_item_budget(monkeypatch
 
 
 def test_execute_unsubscribe_removes_samsung_non_pinned_route(monkeypatch):
-    monkeypatch.delenv(kiwoom_websocket.WS_PINNED_OBSERVATION_ITEMS_ENV, raising=False)
     manager = KiwoomWSManager("test-token")
     manager.subscribed_codes = {"005930"}
     manager._registered_items_by_code = {"005930": ("005930",)}

@@ -81,8 +81,6 @@ def drive(
         write_guard=lambda _: False,
         authority_policy_id=FAMILY,
     )
-    if binding["owner"] == "widget_auto_trade":
-        args["code"] = binding["symbol"]
     adapter = owner.gateway.adaptive_exit_adapter(**args)
     target = OrderKey(binding["date"], binding["order_no"])
 
@@ -373,153 +371,6 @@ def episode(machine, leg, now, *, probe_only=False):
     )
 
 
-def widget(trader, state, now, *, allow_new=False, probe_only=False):
-    if KEY not in state and not (os.getenv(PATH_ENV) or os.getenv(HASH_ENV)):
-        return False
-    from src.trading.order import profit_stagnation_owners as original
-
-    if original.KEY in state:
-        return False
-    pending = state.get(KEY)
-    if not pending and not allow_new:
-        return False  # Missing source cannot prove original final EXIT absent.
-    targets = [
-        o
-        for o in state.get("orders", [])
-        if o.get("side") == "SELL"
-        and o.get("order_role") == "TAKE_PROFIT_SELL"
-        and o.get("broker_accepted") is True
-        and o.get("status") == "SUBMITTED"
-        and o.get("filled_qty") == 0
-        and o.get("parent_entry_signal_id") == state.get("entry_signal_id")
-        and state.get("holding_target_disabled_order") != o.get("order_no")
-    ]
-    if pending:
-        targets = [
-            o
-            for o in state["orders"]
-            if o.get("order_no") == pending["binding"]["order_no"]
-            and o.get("order_date") == pending["binding"]["date"]
-        ]
-    buys = original.widget_position_buys(state)
-    if not targets or not buys:
-        return bool(pending)
-    if not pending and (
-        state.get("exit_requested")
-        or any(
-            o.get("status") not in {"FILLED", "PARTIAL_CANCELED"}
-            or not o.get("filled_qty")
-            or not o.get("fill_price")
-            for o in buys
-        )
-    ):
-        return False
-    for order in targets:
-        context = trader._owner_context_from_order(order)
-        binding = (
-            pending["binding"]
-            if pending
-            else dict(
-                owner="widget_auto_trade",
-                symbol=state["code"],
-                position_id=context.position_id,
-                date=order["order_date"],
-                order_no=order["order_no"],
-                price=order["limit_price"],
-                quantity=order["requested_qty"],
-                route=trader.owner_registry.assert_owner(
-                    context=context,
-                    order_date=order["order_date"],
-                    broker_order_no=order["order_no"],
-                )["route"],
-                entry_price=sum(o["fill_price"] * o["filled_qty"] for o in buys)
-                / sum(o["filled_qty"] for o in buys),
-                entered_at=min(o.get("intent_created_at", "") for o in buys),
-            )
-        )
-
-        def allowed():
-            return (
-                not state.get("exit_requested")
-                and not state.get("owner_registry_reconciliation_required")
-                and not any(
-                    v
-                    for o in state.get("orders", [])
-                    for k, v in o.items()
-                    if k.endswith("owner_registry_reconciliation_required")
-                )
-                and not any(
-                    o.get("side") == "BUY"
-                    and not original.widget_buy_proven_not_sent(o)
-                    and o.get("status")
-                    not in {
-                        "FILLED",
-                        "CANCELED",
-                        "PARTIAL_CANCELED",
-                        "TERMINAL_UNFILLED",
-                        "REJECTED",
-                    }
-                    for o in state.get("orders", [])
-                )
-                and original.guard(
-                    trader,
-                    symbol=state["code"],
-                    owner_type="widget_auto_trade",
-                    now=now,
-                )
-            )
-
-        def project(child, claim):
-            successor = deepcopy(order)
-            for field in list(successor):
-                if "cancel" in field:
-                    successor.pop(field)
-            successor.update(
-                order_no=child["broker_order_no"],
-                requested_qty=child["quantity"],
-                owner_registry_intent_id=child["intent_id"],
-                owner_client_intent_id=child["client_intent_id"],
-                limit_price=claim["price"],
-                filled_qty=child["filled_qty"],
-                remaining_qty=child["quantity"] - child["filled_qty"],
-                fill_price=None,
-                fill_amount_krw=None,
-                commission_krw=None,
-                tax_krw=None,
-                status=(
-                    "FILLED"
-                    if child["quantity"] == child["filled_qty"]
-                    else "SUBMITTED"
-                ),
-            )
-            order.update(
-                filled_qty=child["amendment_parent_filled_qty"],
-                remaining_qty=0,
-                status=(
-                    "PARTIAL_CANCELED"
-                    if child["amendment_parent_filled_qty"]
-                    else "CANCELED"
-                ),
-                fill_price=None,
-                fill_amount_krw=None,
-                commission_krw=None,
-                tax_krw=None,
-            )
-            state["orders"].append(successor)
-            state.pop(original.OBSERVATION_KEY, None)
-
-        if drive(
-            trader,
-            state,
-            binding,
-            context,
-            now,
-            allowed=allowed,
-            project=project,
-            probe_only=probe_only,
-        ):
-            return True
-    return False
 
 
 def wait_for_pressure(owner, delay, *, owner_type, now_fn):
@@ -530,6 +381,8 @@ def wait_for_pressure(owner, delay, *, owner_type, now_fn):
     still reloads source EXIT, ownership and all write guards. Publisher
     batching and broker preflight latency remain; this is not a raw callback.
     """
+    if owner_type != "episode":
+        raise ValueError("retired_or_unknown_ratchet_owner")
     if not (os.getenv(PATH_ENV) and os.getenv(HASH_ENV)):
         time.sleep(delay)
         return
@@ -556,12 +409,6 @@ def wait_for_pressure(owner, delay, *, owner_type, now_fn):
                 ready = any(
                     episode(owner, leg, now, probe_only=True)
                     for leg in owner._state.get("legs", [])
-                )
-            else:
-                # This is a wake hint, not proof that final EXIT is absent.
-                ready = any(
-                    widget(owner, state, now, allow_new=True, probe_only=True)
-                    for state in owner._state.get("symbols", {}).values()
                 )
             if ready:
                 return

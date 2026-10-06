@@ -11,7 +11,8 @@ from src.tests.test_machine_adaptive_exit_broker import detail, current, DATE
 from src.tests.test_machine_adaptive_exit_runtime import working_exit, cancel_detail
 from src.trading.order.adaptive_exit.runtime import OwnerSession
 from src.trading.order.adaptive_exit.terminal import TERMINAL_KEY, validate_terminal
-from src.trading.widget_auto_trade import engine as widget
+from zoneinfo import ZoneInfo
+KST = ZoneInfo("Asia/Seoul")
 
 loop = owner_fixtures.loop
 
@@ -43,8 +44,7 @@ def close(loop, target_fill=0):
 
 
 def receipt(loop):
-    if loop.owner == "episode":
-        return loop.machine._state["legs"][0][TERMINAL_KEY]
+    return loop.machine._state["legs"][0][TERMINAL_KEY]
     return next(
         iter(
             loop.machine._state["symbols"]["005930"]["adaptive_exit_history"][-1][
@@ -67,85 +67,49 @@ def test_exact_quantity_terminal_does_not_invent_cost_or_profit(loop, target_fil
         row["commission_krw"] is None and row["fill_amount_krw"] is None
         for row in r["orders"]
     )
-    if loop.owner == "widget":
-        state = loop.machine._state["symbols"]["005930"]
-        assert (
-            state["completed_entry_count"] == 1 and state["entry_episode_open"] is False
-        )
-        assert not state.get("take_profit_completed_at")
-        assert loop.machine._open_qty(state) == 0
-        assert len(state["orders"]) == 3
-        assert state["orders"][-1]["order_role"] == "ADAPTIVE_EXIT_SELL"
-        assert state["orders"][-1]["fill_price"] is None
-    else:
-        assert loop.machine._state["attempt_consumed"] is True
-        assert loop.machine._state["status"] == "ADAPTIVE_EXIT_FLAT"
+    assert loop.machine._state["attempt_consumed"] is True
+    assert loop.machine._state["status"] == "ADAPTIVE_EXIT_FLAT"
     loop.machine._state = loop.machine._load_state()
     before = deepcopy(loop.machine._state)
     calls = len(loop.wire.calls)
     loop.tick()
     assert receipt(loop) == r
     assert len(loop.wire.calls) == calls
-    if loop.owner == "widget":
-        assert loop.machine._state == before
+    pass
 
 
 def test_next_entry_reaches_original_owner_only_after_terminal(loop, monkeypatch):
     close(loop)
     calls = len(loop.wire.calls)
-    if loop.owner == "episode":
-        prior = deepcopy(loop.machine._state)
-        loop.clock[0] += 86400000
-        loop.tick()
-        assert loop.machine._state["trade_date"] != DATE
-        assert loop.machine._state["status"] == "READY"
-        assert loop.machine._state["adaptive_exit_history"] == [prior]
-        assert loop.machine._state["attempt_consumed"] is False
-        invoked = []
-        monkeypatch.setattr(
-            loop.machine,
-            "_consider_entry",
-            lambda now: invoked.append(now) or loop.machine.snapshot(),
-        )
-        loop.tick()
-        assert len(invoked) == 1
-        # Another ordinary rollover must not discard delayed-cost evidence.
-        loop.clock[0] += 86400000
-        loop.tick()
-        assert loop.machine._state["adaptive_exit_history"] == [prior]
-    else:
-
-        class OriginalEntryPath(Exception):
-            pass
-
-        def original(*args):
-            raise OriginalEntryPath
-
-        monkeypatch.setattr(loop.machine, "_reconcile", original)
-        with pytest.raises(OriginalEntryPath):
-            loop.machine.process_payload(
-                SimpleNamespace(code="005930"),
-                {},
-                datetime.fromtimestamp(loop.clock[0] / 1000, widget.KST),
-            )
-        assert loop.machine._state["symbols"]["005930"]["completed_entry_count"] == 1
+    prior = deepcopy(loop.machine._state)
+    loop.clock[0] += 86400000
+    loop.tick()
+    assert loop.machine._state["trade_date"] != DATE
+    assert loop.machine._state["status"] == "READY"
+    assert loop.machine._state["adaptive_exit_history"] == [prior]
+    assert loop.machine._state["attempt_consumed"] is False
+    invoked = []
+    monkeypatch.setattr(
+        loop.machine,
+        "_consider_entry",
+        lambda now: invoked.append(now) or loop.machine.snapshot(),
+    )
+    loop.tick()
+    assert len(invoked) == 1
+    # Another ordinary rollover must not discard delayed-cost evidence.
+    loop.clock[0] += 86400000
+    loop.tick()
+    assert loop.machine._state["adaptive_exit_history"] == [prior]
     assert len(loop.wire.calls) == calls
 
 
 def test_terminal_persistence_failure_keeps_claim_for_idempotent_recovery(
     loop, monkeypatch
 ):
-    if loop.owner == "widget":
-        original = loop.machine._finish_adaptive_episode
-        monkeypatch.setattr(loop.machine, "_finish_adaptive_episode", lambda *a: None)
-        close(loop)
-        before = deepcopy(loop.machine._state)
-        monkeypatch.setattr(loop.machine, "_finish_adaptive_episode", original)
-    else:
-        close(loop)
-        del loop.machine._state["legs"][0][TERMINAL_KEY]
-        loop.machine._save()
-        before = deepcopy(loop.machine._state)
+    close(loop)
+    del loop.machine._state["legs"][0][TERMINAL_KEY]
+    loop.machine._save()
+    before = deepcopy(loop.machine._state)
     original_save = loop.machine._save
     monkeypatch.setattr(
         loop.machine, "_save", lambda: (_ for _ in ()).throw(OSError("disk"))
@@ -161,14 +125,8 @@ def test_terminal_persistence_failure_keeps_claim_for_idempotent_recovery(
 
 @pytest.mark.parametrize("missing", ["lock", "authority", "services"])
 def test_terminal_cannot_release_without_owner_authority(loop, monkeypatch, missing):
-    if loop.owner == "widget":
-        original = loop.machine._finish_adaptive_episode
-        monkeypatch.setattr(loop.machine, "_finish_adaptive_episode", lambda *a: None)
-        close(loop)
-        monkeypatch.setattr(loop.machine, "_finish_adaptive_episode", original)
-    else:
-        close(loop)
-        loop.clock[0] += 86400000
+    close(loop)
+    loop.clock[0] += 86400000
     if missing == "services":
         loop.machine.adaptive_exit_services = None
     else:
@@ -185,15 +143,8 @@ def test_terminal_cannot_release_without_owner_authority(loop, monkeypatch, miss
 def test_rehashed_terminal_row_conflict_cannot_be_accepted(loop, monkeypatch):
     from src.trading.config.machine_adaptive_exit_policy import canonical_sha256
 
-    if loop.owner == "widget":
-        original = loop.machine._finish_adaptive_episode
-        monkeypatch.setattr(loop.machine, "_finish_adaptive_episode", lambda *a: None)
-        close(loop)
-        monkeypatch.setattr(loop.machine, "_finish_adaptive_episode", original)
-        r = next(iter(loop.machine._state["symbols"]["005930"][TERMINAL_KEY].values()))
-    else:
-        close(loop)
-        r = receipt(loop)
+    close(loop)
+    r = receipt(loop)
     r["orders"][-1]["filled_qty"] = 9
     r["canonical_sha256"] = canonical_sha256(
         {k: v for k, v in r.items() if k != "canonical_sha256"}
@@ -433,32 +384,20 @@ def test_two_independent_lots_close_one_owner_episode(loop):
             ),
         ),
     )
-    if loop.owner == "episode":
-        from src.trading.order.adaptive_exit.owner_loop import SESSION_KEY
+    from src.trading.order.adaptive_exit.owner_loop import SESSION_KEY
 
-        leg = deepcopy(loop.machine._state["legs"][0])
-        leg.update(
-            leg_id=lot_id,
-            order_type=lot_id,
-            buy_order_no="0000006",
-            target_order_no="0000005",
-            target_owner_registry_intent_id=target_id,
-        )
-        leg[SESSION_KEY] = second.to_payload()
-        loop.machine._state["legs"][1] = leg
-        loop.machine._state["owned_order_nos"].extend(["0000005", "0000006"])
-        loop.machine._sync_aggregate()
-    else:
-        state = loop.machine._state["symbols"]["005930"]
-        entry, target = deepcopy(state["orders"])
-        entry["order_no"] = "0000006"
-        target.update(
-            order_no="0000005",
-            owner_registry_intent_id=target_id,
-            owner_client_intent_id="second-target",
-        )
-        state["orders"].extend([entry, target])
-        state["adaptive_exit_sessions"][lot_id] = second.to_payload()
+    leg = deepcopy(loop.machine._state["legs"][0])
+    leg.update(
+        leg_id=lot_id,
+        order_type=lot_id,
+        buy_order_no="0000006",
+        target_order_no="0000005",
+        target_owner_registry_intent_id=target_id,
+    )
+    leg[SESSION_KEY] = second.to_payload()
+    loop.machine._state["legs"][1] = leg
+    loop.machine._state["owned_order_nos"].extend(["0000005", "0000006"])
+    loop.machine._sync_aggregate()
     loop.wire.detailed = [
         detail(cntr_qty="10", ord_remnq="0"),
         detail(ord_no="0000005", cntr_qty="10", ord_remnq="0"),
@@ -466,11 +405,5 @@ def test_two_independent_lots_close_one_owner_episode(loop):
     loop.wire.current = []
     loop.tick()
     assert not loop.wire.writes
-    if loop.owner == "episode":
-        assert loop.machine._state["position_qty"] == 0
-        assert all(leg.get(TERMINAL_KEY) for leg in loop.machine._state["legs"])
-    else:
-        state = loop.machine._state["symbols"]["005930"]
-        assert loop.machine._open_qty(state) == 0
-        assert state["completed_entry_count"] == 1
-        assert len(state["adaptive_exit_history"][-1]["terminals"]) == 2
+    assert loop.machine._state["position_qty"] == 0
+    assert all(leg.get(TERMINAL_KEY) for leg in loop.machine._state["legs"])

@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from src.engine.monitoring.market_halt_windows import session_events_path
-from src.engine.monitoring.widget_comparison_cost import comparison_cost_contract
+from src.trading.market.comparison_cost import comparison_cost_contract
 from src.engine.monitoring.ws_receive_expectation import classify_receive_gap
 from src.engine.monitoring.ws_freshness_acceptance import (
     BOUNDED_REJECTIONS,

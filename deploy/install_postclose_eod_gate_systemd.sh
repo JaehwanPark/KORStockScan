@@ -13,7 +13,7 @@ runtime_release_set_lock_acquire "$PROJECT_DIR"
 
 dropin_name="$(printf '%0180d' 0 | tr '0' 'z')-postclose-eod-gate-20260929.conf"
 if [[ "$ACTION" == "--rollback" ]]; then
-  for unit in korstockscan-samsung-widget-evaluation.service korstockscan-machine-microstructure-final-refresh.service; do
+  for unit in korstockscan-machine-microstructure-final-refresh.service; do
     rm -f "/etc/systemd/system/${unit}.d/$dropin_name"
   done
   systemctl daemon-reload
@@ -45,7 +45,6 @@ dirty = subprocess.check_output(
 if dirty:
     raise SystemExit("selected_release_source_dirty")
 for relative in (
-    "deploy/run_widget_evaluation.sh",
     "deploy/run_machine_microstructure_final_refresh.sh",
     "deploy/eod_terminal_gate.sh",
 ):
@@ -63,7 +62,6 @@ if [[ -z "$RELEASE_ROOT" || ! "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
 fi
 
 units=(
-  "korstockscan-samsung-widget-evaluation:run_widget_evaluation.sh"
   "korstockscan-machine-microstructure-final-refresh:run_machine_microstructure_final_refresh.sh"
 )
 for entry in "${units[@]}"; do
@@ -106,5 +104,5 @@ for entry in "${units[@]}"; do
   systemctl is-active --quiet "$timer"
 done
 
-printf '[POSTCLOSE_EOD_SYSTEMD] release_root=%s commit=%s units=2 timers=active services_not_restarted=true\n' \
+printf '[POSTCLOSE_EOD_SYSTEMD] release_root=%s commit=%s units=1 timers=active services_not_restarted=true\n' \
   "$RELEASE_ROOT" "$RELEASE_COMMIT"

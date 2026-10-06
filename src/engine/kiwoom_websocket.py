@@ -127,11 +127,9 @@ _ORDER_EXECUTION_RAW_FIDS = (
     "2136",
 )
 COMMAND_MICRO_REVERSION_OBSERVATION_SET = "COMMAND_MICRO_REVERSION_OBSERVATION_SET"
-WS_PINNED_OBSERVATION_ITEMS_ENV = "KORSTOCKSCAN_WS_PINNED_OBSERVATION_ITEMS"
 WS_DASHBOARD_SNAPSHOT_INTERVAL_SEC_ENV = (
     "KORSTOCKSCAN_WS_DASHBOARD_SNAPSHOT_INTERVAL_SEC"
 )
-DEFAULT_WS_PINNED_OBSERVATION_ITEMS = ("005930_AL",)
 SCALP_CONDITION_PREWARM_MAX_CODES = 16
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SCALP_CONDITION_KEYWORDS = (
@@ -208,52 +206,10 @@ _WS_HOT_RUNTIME_OVERRIDES = {
 _WS_HOT_RUNTIME_OVERRIDES_LOCK = threading.Lock()
 
 
-def pinned_ws_observation_items() -> tuple[str, ...]:
-    """Return read-only market-data items that survive target pruning.
-
-    The default Samsung SOR item feeds only the Windows widget comparison.
-    It grants no recommendation, order, sizing, or lifecycle authority.
-    Setting the environment variable to an empty string disables the pin.
-    """
-
-    raw = os.getenv(WS_PINNED_OBSERVATION_ITEMS_ENV)
-    values = (
-        DEFAULT_WS_PINNED_OBSERVATION_ITEMS
-        if raw is None
-        else tuple(part.strip().upper() for part in raw.split(",") if part.strip())
-    )
-    result = []
-    seen = set()
-    for value in values:
-        base = value
-        suffix = ""
-        if value.endswith(("_AL", "_NX")):
-            base, suffix = value[:-3], value[-3:]
-        if base != "005930":
-            continue
-        item = f"{base}{suffix}"
-        if item not in seen:
-            result.append(item)
-            seen.add(item)
-    return tuple(result[:1])
 
 
-def pinned_ws_observation_codes() -> frozenset[str]:
-    return frozenset(item[:6] for item in pinned_ws_observation_items())
 
 
-def is_pinned_ws_observation_registration(
-    code: str, items: tuple[str, ...] | list[str]
-) -> bool:
-    pinned_items = set(pinned_ws_observation_items())
-    registered_items = {
-        str(item or "").strip().upper() for item in items if str(item or "").strip()
-    }
-    return bool(
-        str(code or "").strip()[:6] in pinned_ws_observation_codes()
-        and registered_items
-        and registered_items.issubset(pinned_items)
-    )
 
 
 def _ws_dashboard_snapshot_interval_sec() -> float:
@@ -418,7 +374,6 @@ class KiwoomWSManager:
         self._last_runtime_route_reconcile_ts = float("-inf")
         self._runtime_integrated_route_active = False
         self._runtime_route_reconcile_task = None
-        self._pinned_unreg_notice_codes = set()
         self._micro_reversion_observation_items_by_code = {}
         self._micro_reversion_observation_only_items = set()
         self._micro_reversion_observation_route_data = {}
@@ -1270,9 +1225,7 @@ class KiwoomWSManager:
                 normalized in self.subscribed_codes
                 and normalized in self._micro_reversion_observation_items_by_code
             )
-        return micro_observation or is_pinned_ws_observation_registration(
-            normalized, registered_items
-        )
+        return micro_observation
 
     def is_micro_reversion_observation_only_subscription(self, code):
         normalized = self._normalize_code(code)
@@ -1291,8 +1244,6 @@ class KiwoomWSManager:
             registered_items = tuple(
                 self._registered_items_by_code.get(normalized) or ()
             )
-            if is_pinned_ws_observation_registration(normalized, registered_items):
-                return False
             desired_item = self._micro_reversion_observation_items_by_code.get(
                 normalized
             )
@@ -1386,7 +1337,6 @@ class KiwoomWSManager:
             planned_item_count = sum(
                 len(tuple(items or ()))
                 for code, items in self._registered_items_by_code.items()
-                if not is_pinned_ws_observation_registration(code, tuple(items or ()))
             )
             # Unconfirmed probe sends still occupy bounded broker item custody.
             registered = {item for items in self._registered_items_by_code.values() for item in items or ()}
@@ -1406,18 +1356,13 @@ class KiwoomWSManager:
                     required_delta = len(candidate_items)
                 else:
                     required_delta = len(delta_items)
-                pinned_registration = is_pinned_ws_observation_registration(
-                    code, candidate_items
-                )
                 if (
-                    not pinned_registration
-                    and required_delta > 0
+                    required_delta > 0
                     and planned_item_count + required_delta > max_items
                 ):
                     skipped_codes.append(code)
                     continue
-                if not pinned_registration:
-                    planned_item_count += max(0, required_delta)
+                planned_item_count += max(0, required_delta)
                 allowed_codes.append(code)
                 allowed_items.extend(candidate_items)
 
@@ -2316,6 +2261,18 @@ class KiwoomWSManager:
             }
         return snapshot
 
+    def _capture_episode_research_facts(self, now):
+        """Project received episode books inside the existing snapshot worker."""
+        from src.engine.monitoring.research_source_facts import SharedResearchFactWriter
+        from src.engine.monitoring.research_closed_loop import writer_lock, DIRECTORY
+
+        with writer_lock(DIRECTORY / "episode_native_fact_capture", blocking=False):
+            writer = getattr(self, "_episode_research_fact_writer", None)
+            if writer is None:
+                writer = SharedResearchFactWriter(())
+                self._episode_research_fact_writer = writer
+            return writer.collect_once(now)
+
     def _maybe_write_dashboard_snapshot(self):
         now_ts = time.time()
         if (
@@ -2377,6 +2334,13 @@ class KiwoomWSManager:
                         "[WS] dashboard snapshot or micro-reversion registration "
                         "receipt persistence failed"
                     )
+                elif written_snapshot is not None:
+                    try:
+                        self._capture_episode_research_facts(datetime.now(KST))
+                    except BlockingIOError:
+                        pass  # A single existing writer owns this received frame.
+                    except Exception as exc:
+                        log_error(f"[WS] episode native research fact capture failed: {exc}")
             except Exception as e:
                 log_error(f"[WS] dashboard snapshot write failed: {e}")
             finally:
@@ -4549,12 +4513,6 @@ class KiwoomWSManager:
                                         "route_sequence": route_sequence,
                                     }
                                     if real_type == "0B":
-                                        # Keep official FID12 (%) and FID18 (signed KRW)
-                                        # with this exact item/epoch/receive clock.
-                                        realtime_snapshot["widget_quote_fields"] = {
-                                            "change_pct": values.get("12"),
-                                            "low_price": values.get("18"),
-                                        }
                                         last_trade = target.get("last_trade_tick")
                                         last_trade = (
                                             last_trade
@@ -5549,7 +5507,7 @@ class KiwoomWSManager:
                     self._required_realtime_types_by_code[code] = (
                         required_realtime_types
                     )
-        # A fixed Main watch can share a code with the read-only widget pin.
+        # Main fixed watch and episode custody can share the same exact item.
         # Subscribed-by-code is insufficient when the watch needs a different
         # exact Kiwoom item (_NX versus _AL). Register only that missing item.
         fixed_route_missing_codes = set()
@@ -5716,31 +5674,11 @@ class KiwoomWSManager:
 
         normalized_codes = set(self._normalize_subscribe_codes(codes))
         with self.lock:
-            widget_retained_codes = {
-                code
-                for code in normalized_codes
-                if is_pinned_ws_observation_registration(
-                    code, tuple(self._registered_items_by_code.get(code) or ())
-                )
-            }
             micro_retained_codes = normalized_codes.intersection(
                 self._micro_reversion_observation_items_by_code
             )
-            micro_retained_codes.difference_update(widget_retained_codes)
-            retained_codes = widget_retained_codes | micro_retained_codes
+            retained_codes = micro_retained_codes
         normalized_codes.difference_update(retained_codes)
-        if widget_retained_codes:
-            with self.lock:
-                first_notice_codes = widget_retained_codes.difference(
-                    self._pinned_unreg_notice_codes
-                )
-                self._pinned_unreg_notice_codes.update(widget_retained_codes)
-            if first_notice_codes:
-                print(
-                    "📌 [WS] 비교전용 관측 구독 REMOVE 생략: "
-                    f"codes={sorted(first_notice_codes)} "
-                    "authority=widget_ws_price_comparison_only"
-                )
         if micro_retained_codes:
             for code in sorted(micro_retained_codes):
                 self.retain_micro_reversion_as_observation_only(code)

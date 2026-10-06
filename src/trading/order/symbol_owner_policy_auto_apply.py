@@ -1,7 +1,7 @@
 """Unattended, fail-closed PREOPEN same-symbol owner policy producer.
 
 The runner consumes one reviewed standing-authority artifact, discovers the
-current widget/episode symbol universe, and applies only symbols whose broker
+current episode symbol universe, and applies only symbols whose broker
 quantity and open orders are already fully represented by the immutable owner
 registry.  Unmigrated custody is never inferred; affected symbols retain the
 non-veto machine-owner scope marker but receive no same-date coexistence entry
@@ -56,7 +56,6 @@ from src.trading.order.symbol_owner_policy_apply import (
     find_running_trading_processes,
     validate_broker_snapshot_contract,
 )
-from src.trading.widget_auto_trade.policy import STATIC_WIDGET_AUTO_TRADE_SYMBOLS
 from src.utils.constants import DATA_DIR
 from src.utils.market_day import get_krx_trading_day_status
 
@@ -176,17 +175,6 @@ def _exact_date_auto_promoted_symbol_owners(target_date) -> dict[str, set[str]]:
             promoted.setdefault(str(row["symbol"]), set()).add("episode")
     except (OSError, ValueError, TypeError, KeyError):
         pass
-    try:
-        from src.engine.monitoring.widget_symbol_runtime_policy import (
-            WidgetSymbolRuntimePolicyLoader,
-        )
-
-        for symbol in WidgetSymbolRuntimePolicyLoader().resolve_all(
-            observed_date=target_date
-        ):
-            promoted.setdefault(str(symbol), set()).add("widget_auto_trade")
-    except (OSError, ValueError, TypeError, KeyError):
-        pass
     return promoted
 
 
@@ -198,21 +186,15 @@ def expected_machine_symbol_owners(target_date) -> dict[str, list[str]]:
     # The three Samsung time-window machines are episode owners even though
     # they do not live in the lower-price profile catalog.
     episode_symbols.add("005930")
-    widget_symbols = set(STATIC_WIDGET_AUTO_TRADE_SYMBOLS)
     promoted = _exact_date_auto_promoted_symbol_owners(target_date)
     episode_symbols.update(
         symbol for symbol, owners in promoted.items() if "episode" in owners
     )
-    widget_symbols.update(
-        symbol for symbol, owners in promoted.items() if "widget_auto_trade" in owners
-    )
     owners: dict[str, list[str]] = {}
-    for symbol in sorted(episode_symbols | widget_symbols):
+    for symbol in sorted(episode_symbols):
         values = {"main_scalping", "manual_operator"}
         if symbol in episode_symbols:
             values.add("episode")
-        if symbol in widget_symbols:
-            values.add("widget_auto_trade")
         owners[symbol] = sorted(values)
     return owners
 
@@ -237,7 +219,8 @@ def _validate_runtime_scope(
             continue
         if (
             not isinstance(entry, dict)
-            or sorted(entry.get("allowed_owners") or []) != owners
+            or sorted(owner for owner in (entry.get("allowed_owners") or [])
+                      if owner != "widget_auto_trade") != owners
             or not (
                 machine_owner_scope_source(symbol)
                 or legacy_machine_owner_scope_source(symbol)

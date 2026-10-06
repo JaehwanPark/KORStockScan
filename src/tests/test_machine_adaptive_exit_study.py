@@ -56,7 +56,7 @@ def signed(payload):
 def pair(day, eid, lot="leg1", model="base", pnl=10):
     start = int(datetime.fromisoformat(day + "T09:00:00+09:00").timestamp() * 1000)
     shared = dict(
-        owner_id="widget",
+        owner_id="episode",
         policy_hash="policy",
         scope_key="scope",
         episode_id=eid,
@@ -216,42 +216,11 @@ def test_incomplete_or_invalid_lot_census_is_never_healthy_empty():
             )
 
 
-def test_all_widget_sessions_included_even_with_anchor_in_only_one():
-    widget = {
-        "005930": {
-            "symbol": "005930",
-            "anchor_results": [
-                {
-                    "scope_id": "actual",
-                    "session": "KRX_REGULAR",
-                    "expected_venues": ["KRX"],
-                }
-            ],
-            "session_contexts": {
-                "005930:KRX_REGULAR": {"expected_venues": ["KRX"]},
-                "005930:NXT_AFTERMARKET": {"expected_venues": ["NXT"]},
-            },
-        }
-    }
-    scopes = catalog_from_owner_inventories(widget, {})
-    assert len(scopes) == 2
-    assert {s.session for s in scopes} == {"KRX_REGULAR", "NXT_AFTERMARKET"}
 
 
 def test_invalid_inventory_row_is_isolated_without_hiding_healthy_scopes():
     errors = []
-    scopes = catalog_from_owner_inventories(
-        {},
-        {
-            "valid": {
-                "symbol": "005930",
-                "session": "morning",
-                "expected_venues": ["SOR"],
-            },
-            "bad": {"symbol": None, "session": None, "expected_venues": []},
-        },
-        errors=errors,
-    )
+    scopes = catalog_from_owner_inventories({'valid': {'symbol': '005930', 'session': 'morning', 'expected_venues': ['SOR']}, 'bad': {'symbol': None, 'session': None, 'expected_venues': []}}, errors=errors)
     assert len(scopes) == 1 and len(errors) == 1 and "bad" in errors[0]
 
 
@@ -260,13 +229,7 @@ def test_all_registered_low_price_profiles_have_scope_even_without_samples():
     from datetime import date
 
     profiles = profiles_for_target_date(date(2026, 9, 9))
-    scopes = catalog_from_owner_inventories(
-        {},
-        {
-            k: {"symbol": v.symbol, "session": v.session, "expected_venues": ["SOR"]}
-            for k, v in profiles.items()
-        },
-    )
+    scopes = catalog_from_owner_inventories({k: {'symbol': v.symbol, 'session': v.session, 'expected_venues': ['SOR']} for k, v in profiles.items()})
     r = run_study(target_date="2026-09-09", catalog=scopes, source=None, contract=None)
     assert len(r["scopes"]) == len(profiles)
     assert all(
@@ -276,7 +239,7 @@ def test_all_registered_low_price_profiles_have_scope_even_without_samples():
 
 
 def test_malformed_global_source_is_gap_not_parent_crash_or_fake_empty():
-    s = OwnerScope("widget", "widget", "005930", "KRX", "KRX_REGULAR")
+    s = OwnerScope("episode", "widget", "005930", "KRX", "KRX_REGULAR")
     r = run_study(
         target_date="2026-09-09",
         catalog=(s,),
@@ -306,7 +269,7 @@ def test_complete_empty_census_is_not_structural_exhaustion_or_live_ready():
 
 
 def test_full_study_computes_native_candidates_without_publishing_policy():
-    scope = OwnerScope("widget", "p", "005930", "KRX", "KRX_REGULAR")
+    scope = OwnerScope("episode", "p", "005930", "KRX", "KRX_REGULAR")
     path, policy, base = fixture((10080, 10080, 10080, 10080, 10080, 10080, 10080))
     policy = replace(policy, scope_key=scope.key, hard_wall_sec=3)
     base = replace(base, horizon_close_lead_ms=2000)
@@ -317,7 +280,7 @@ def test_full_study_computes_native_candidates_without_publishing_policy():
         offset = start - path.position.first_fill_at_ms
         p = replace(
             path.position,
-            owner_id="widget",
+            owner_id="episode",
             scope_key=scope.key,
             episode_id=eid,
             first_fill_at_ms=start,

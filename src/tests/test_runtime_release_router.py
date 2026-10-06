@@ -250,7 +250,7 @@ def test_release_set_check_keeps_separate_owner_pins(release, monkeypatch):
     report = router.check_release_set(workspace, root, "a" * 40)
 
     assert report["status"] == "passed"
-    assert report["owner_count"] == 3
+    assert report["owner_count"] == 2
     assert {item["release_root"] for item in report["systemd_owners"]} == {str(root)}
     assert report["episode_profile_inventory"]["loaded_units_checked"] == 1
 

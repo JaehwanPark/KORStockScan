@@ -16,7 +16,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-from src.engine.monitoring.widget_comparison_cost import comparison_cost_contract
+from src.trading.market.comparison_cost import comparison_cost_contract
 from src.engine.automation.source_quality_clean_baseline import policy_refresh_start_date
 from src.utils.constants import DATA_DIR
 from src.utils.market_day import is_krx_trading_day

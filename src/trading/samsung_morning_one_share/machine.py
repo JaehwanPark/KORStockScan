@@ -741,7 +741,7 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
             round_trip_cost_pct=(
                 timing["provenance"].get("executable_confirmation") or {}
             ).get("round_trip_cost_pct"),
-            widget_take_profit=False,
+            target_from_fill=False,
         )
         if step["action"] == "WAIT":
             self._state["planned_route_confirmation"] = {
@@ -1201,7 +1201,7 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                     ),
                     owner_target_price=self.policy.target_price(open_price),
                     round_trip_cost_pct=runtime_cost,
-                    widget_take_profit=False,
+                    target_from_fill=False,
                 )
                 if dynamic_step["action"] == "WAIT":
                     next_checkpoint = int(dynamic_step["next_checkpoint_sec"])
@@ -1288,7 +1288,7 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                     ),
                     owner_target_price=self.policy.target_price(open_price),
                     round_trip_cost_pct=runtime_cost,
-                    widget_take_profit=False,
+                    target_from_fill=False,
                 )
                 if dynamic_step["action"] == "WAIT":
                     next_checkpoint = int(dynamic_step["next_checkpoint_sec"])

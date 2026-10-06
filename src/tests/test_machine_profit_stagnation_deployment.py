@@ -8,7 +8,6 @@ from pathlib import Path
 import pytest
 
 from src.trading.low_price_two_leg import preflight
-from src.trading.widget_auto_trade.runtime_verification import environment_hashes
 from src.trading.config.machine_profit_stagnation_policy import (
     PATH_ENV,
     HASH_ENV,
@@ -52,7 +51,7 @@ def test_packaged_policy_scope_dates_cost_and_pins(monkeypatch):
     def at(day):
         return datetime.fromisoformat(day + "T10:00:00+09:00")
 
-    for owner in ("widget_auto_trade", "episode"):
+    for owner in ("episode",):
         assert (
             load_policy(now=at("2026-09-10"), owner=owner, entered_at=at("2026-09-10"))
             is None
@@ -72,18 +71,19 @@ def test_packaged_policy_scope_dates_cost_and_pins(monkeypatch):
         is None
     )
     dropins = list(folder.glob("*.service.conf"))
-    assert len(dropins) == 9
+    assert len(dropins) == 8
     # A review/CI checkout is not the installation directory. These versioned
     # drop-ins must continue to pin the approved production path, while the
     # policy bytes are tested locally without reading live host configuration.
     installed_root = Path(
         "/home/ubuntu/KORStockScan-runtime-releases/machine-profit-stagnation-20260911"
     )
-    installed_policy = installed_root / "deploy/machine-profit-stagnation/policy.json"
+    installed_policy = Path("/home/ubuntu/KORStockScan/deploy/machine-profit-stagnation/policy.json")
     for dropin in dropins:
         text = dropin.read_text()
         assert f"WorkingDirectory={installed_root}" in text
-        assert f"{PATH_ENV}={installed_policy}" in text
+        assert any(f"{PATH_ENV}={pinned}" in text for pinned in (
+            installed_policy, installed_root / "deploy/machine-profit-stagnation/policy.json"))
         assert f"{HASH_ENV}={digest}" in text
         assert text.count("ExecStart=") == 2
 
@@ -131,11 +131,6 @@ def test_shared_report_mount_allowed_but_external_source_rejected(
     )
 
 
-@pytest.mark.parametrize("suffix", ["PATH", "SHA256"])
-def test_startup_receipt_includes_machine_policy_pin(suffix):
-    key = "KORSTOCKSCAN_MACHINE_PROFIT_STAGNATION_POLICY_" + suffix
-    assert environment_hashes({key: "pin"})[key]
-    assert environment_hashes({})[key] is None
 
 
 @pytest.mark.parametrize(

@@ -9,7 +9,6 @@ TARGET_DIR="/etc/systemd/system"
 UNITS=(
   korstockscan-symbol-owner-policy-auto-apply.service
   korstockscan-symbol-owner-policy-auto-apply.timer
-  korstockscan-widget-signal-auto-trader.service
   korstockscan-low-price-two-leg@.service
   korstockscan-low-price-two-leg-preflight@.service
 )
