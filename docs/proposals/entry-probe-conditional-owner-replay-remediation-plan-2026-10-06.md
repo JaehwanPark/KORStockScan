@@ -4,7 +4,7 @@
 
 probe 체결 전에는 확정할 수 없는 잔여 주문가격을 억지로 채우지 않고, **관측 당시 조건부 계획을 동결한 뒤 체결·후속 원천의 시간 순서에 따라 가격과 실행 상태를 계산**하도록 장후 재생기를 보완한다.
 
-- 현재 단계는 상세계획 수립이다. 아래 구현·재생·운영 반영은 이번 문서 작성으로 실행되지 않는다.
+- 2026-10-06 사용자가 결함 보완·반복 리뷰·배포·재기동을 승인했다. 원 계획·stop·capital 보존, typed 조건부 계획, native 체결/잔여 결정 관측과 장후 소비 계약을 구현한다. 실제 체결 모델과 CF 경제성 수용은 원본 원천이 충족되는 범위로 제한한다.
 - 실행 owner는 [현재 체크리스트](../checklists/2026-10-06-stage2-todo-checklist.md)의 `DirectFamilySourceRepairEntrySplit`을 재사용한다. 기존 원천·경제성 완료 기준과 미완료 상태를 유지한다.
 - 주문 제출, live bundle 예약, 계좌/API 추가 조회, AI provider 호출, 수량·probe timeout·가격·threshold·hard safety 변경을 연구 재생기에 부여하지 않는다.
 - Widget은 제거 상태를 유지한다. 이 계획은 Main SCALPING의 probe continuation에 한정한다. Episode와 별도 sequential continuation은 해당 owner의 범위로 남긴다.
@@ -232,4 +232,14 @@ Python compile/import, `git diff --check`, 문서 링크/owner/authority와 prin
 - self-review 후 보완: 계획상 probe 1주와 실제 committed 수량 분리, 사전/실제 제출 seed 분리, 실제 COMPLETED 생산자의 static validator 결손 추가, CF의 계좌·AI 결과 복사 금지, defer timeout 경계 및 기존 capacity 조회 범위 명시.
 - 재리뷰: 위 생산자→조건부 계약→재생→실제/CF 경제성→consumer 흐름에 계획 단계의 미해결 지적 없음. 실제 표본 지원 범위와 구현 결함 여부는 P0–P6에서 검증한다.
 - 로컬 링크 32개 존재, 현재 `DirectFamilySourceRepairEntrySplit` OPEN owner 및 parsed owner 각각 1개, print-only backlog parser 23항목 및 해당 owner의 source/due 일치, `git diff --check` 통과.
+
+### 2026-10-06 구현 상태와 지원 경계
+
+- 관측 전용 allocator가 1주 계획과 미확정 잔여 가격을 반환한다. 관측 계획의 실제 committed 수량은 0이며 native 주문 예약은 실행하지 않는다. 사전 writer의 총수량은 즉시 1주가 아닌 원 requested quantity다.
+- 원자 계획·continuation·원 operating context·가격 규칙·원 커널 SHA를 `entry_probe_conditional_plan_v1`에 동결한다. 자금/가드 중단 전에도 원 손절 owner 결과를 별도 receipt로 남긴다. 잔여 TTL은 native leg-count owner의 결과이며 clock origin을 구분한다.
+- 기존 matched probe fill과 native `residual_planned`, defer/abort 경로에서 관측 receipt를 append한다. compact family registry·producer census·날짜별 loader가 새 receipt를 보존한다. 사전/실제 계획은 동일하다고 추정하지 않는다.
+- 순수 재생기는 원본 fill·호가·epoch·가드·자금·수량·available-at·sequence를 검증하고 동결 가격 규칙으로 native post-probe 초기 가격을 대조한다. **개별 leg 재호가 이후의 최종 제출가격과 실제 체결 모델 전체 수용을 이 가격 대조로 주장하지 않는다.**
+- 실제 COMPLETED 비용 receipt는 실제 제출 시점의 typed seed만 허용한다. 사전 `observation_only` seed, 비용/수량/decision lineage 결손은 실제 경제성 성공으로 승격하지 않는다.
+- changed CF에 필요한 반사실 자금/AI/queue/terminal 증빙이 없으면 source-gap/미지원 상태다. paired EV 적격수는 0이며 null PnL을 보존한다. 이는 소스/계약 구현과 구분되는 자연 원천·모델 수용 잔여 작업이다.
+- 현재 OPEN owner를 새 항목으로 복제하거나 과거 raw/정책을 현재 값으로 보완하지 않는다. 상세 검증·배포 증거는 [구현 리뷰](../audits/probe-original-source-and-historical-episode-kernel-remediation-review-2026-10-06.md)에 기록한다.
 - 문서-only 변경이므로 trading pytest·실제 API/provider 호출·보고서 재생성·외부 동기화는 검증에 사용하지 않았다. 관련 없는 기존 삭제 작업본은 보존했다.

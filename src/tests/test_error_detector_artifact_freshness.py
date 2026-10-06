@@ -1,5 +1,53 @@
 from __future__ import annotations
 
+
+def test_historical_family_kernel_uses_exact_original_bytes_after_code_change(tmp_path):
+    from src.engine.monitoring import family_policy_semantics as native
+    import hashlib
+    producer=tmp_path/'producer.py'; original=b'original producer\n'
+    producer.write_bytes(original); sha=hashlib.sha256(original).hexdigest()
+    archived=native.preserve_kernel(tmp_path/'data', original, sha)
+    producer.write_bytes(b'retired sibling changed\n')
+    assert native.verify_kernel(tmp_path/'data',producer,sha)=='retained_original_bytes'
+    assert archived.read_bytes()==original
+    archived.chmod(0o644);archived.write_bytes(b'corrupt\n')
+    import pytest
+    with pytest.raises(ValueError,match='archived_kernel_invalid'):
+        native.verify_kernel(tmp_path/'data',producer,sha)
+
+
+def test_family_kernel_never_manufactures_missing_original(tmp_path):
+    from src.engine.monitoring import family_policy_semantics as native
+    import pytest
+    with pytest.raises(ValueError,match='original_kernel_missing'):
+        native.verify_kernel(tmp_path/'data',tmp_path/'missing.py','a'*64)
+    with pytest.raises(ValueError,match='kernel_content_invalid'):
+        native.preserve_kernel(tmp_path/'data',b'current code','a'*64)
+
+
+def test_episode_original_kernel_custody_preserves_native_gaps_and_rejects_tampering(tmp_path, monkeypatch):
+    from src.engine.monitoring import family_policy_semantics as native
+    from src.engine.error_detectors import artifact_freshness as detector
+    import json
+    day='2026-10-02'
+    folder=tmp_path/'data/report/low_price_two_leg_tuning'; folder.mkdir(parents=True)
+    report={'target_date':day, 'paired_economic_search':{
+        'stage_counts':{'profiles':1},'profiles':{'p1':{'disposition':'source_gap'}}},
+        'daily':{'profiles':{'p1':{'symbol':'005930','session':'KRX_REGULAR'}}}}
+    policy={'effective_date':'2026-10-06'}
+    rp=folder/f'low_price_two_leg_tuning_{day}.json'; rp.write_text(json.dumps(report))
+    pp=folder/'policy.json'; pp.write_text(json.dumps(policy))
+    producer=tmp_path/'producer.py'; producer.write_text('original producer')
+    path=native.publish(report,policy,report_path=rp,policy_path=pp,family='episode',producer_path=producer)
+    producer.write_text('retired producer')
+    monkeypatch.setattr(detector,'_semantic_stage_binding',lambda *args:{'status':'not_assessed'})
+    result=detector._family_policy_semantics(tmp_path,day,'episode')
+    assert result['status']=='warning' and result['findings']==['episode_native_source_gap']
+    assert result['kernel_custody'][str(producer)]=='retained_original_bytes'
+    sealed=json.loads(path.read_text()); sealed['summary']['rows'][0]['disposition']='valid_empty_no_fill'
+    path.write_text(json.dumps(native.seal(sealed)))
+    assert 'summary_generation_mismatch' in str(detector._family_policy_semantics(tmp_path,day,'episode'))
+
 import hashlib
 import pytest
 

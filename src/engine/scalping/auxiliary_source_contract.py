@@ -124,6 +124,18 @@ def plan_state(row):
     """Diagnostic contract only: a conditional probe cannot become a fill plan."""
     probe = unpack(row.get("entry_economic_observation_probe_contract"))
     errors = []
+    conditional = unpack(row.get('entry_economic_conditional_seed'))
+    if conditional:
+        from src.engine.scalping.entry_probe_conditional_replay import valid_seed
+        if (not valid_seed(conditional)
+                or conditional.get('plan_sha256') != row.get('entry_economic_plan_sha256')
+                or conditional.get('plan_sha256') != row.get('entry_economic_writer_plan_sha256')
+                or any(not identity_equal(k, conditional.get(k), row.get(k))
+                       for k in ('stock_code','evaluation_attempt_id','scanner_promotion_id','effective_venue','session_bucket'))):
+            return dict(state='source_gap', executable=False, stop_status='unproven',
+                        errors=['conditional_exact_plan_identity_invalid'])
+        return dict(state='conditional_plan_preserved', executable=False,
+                    stop_status='frozen_native_exit_inputs_not_realized_exit', errors=[])
     if probe:
         body = {k: v for k, v in probe.items() if k != "sha256"}
         if (probe.get("schema") != "entry_pre_ai_conditional_probe_observation_v1"

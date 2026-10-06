@@ -7,6 +7,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import re
+import tempfile
 from collections import Counter
 from pathlib import Path
 
@@ -49,6 +52,54 @@ def file_sha(path):
 
 def projection_path(report_path, family, day):
     return Path(report_path).parent / f'{family}_policy_semantics_{day}.json'
+
+
+def preserve_kernel(data_root, content, expected_sha):
+    """Retain original bytes for verification only; never execute archived code."""
+    if (not isinstance(content, bytes) or len(content) > 128 * 1024 * 1024
+            or not re.fullmatch(r'[0-9a-f]{64}', str(expected_sha))
+            or hashlib.sha256(content).hexdigest() != expected_sha):
+        raise ValueError('family_semantic_kernel_content_invalid')
+    directory = Path(data_root) / 'runtime/family_policy_semantic_kernels'
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / (expected_sha + '.source')
+    if path.exists() or path.is_symlink():
+        if file_sha(path) != expected_sha:
+            raise ValueError('family_semantic_archived_kernel_invalid')
+        return path
+    fd, temporary = tempfile.mkstemp(prefix='.kernel-', dir=directory)
+    try:
+        with os.fdopen(fd, 'wb') as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, 0o444)
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            if file_sha(path) != expected_sha:
+                raise ValueError('family_semantic_archived_kernel_invalid')
+    finally:
+        os.unlink(temporary)
+    return path
+
+
+def verify_kernel(data_root, source_path, expected_sha):
+    if not re.fullmatch(r'[0-9a-f]{64}', str(expected_sha)):
+        raise ValueError('family_semantic_kernel_hash_invalid')
+    # Whole-file hashes identify the original producer, including a retired
+    # sibling implementation. Current code equality is not historical custody.
+    try:
+        if file_sha(source_path) == expected_sha:
+            return 'original_path'
+    except (OSError, ValueError):
+        pass
+    path = Path(data_root) / 'runtime/family_policy_semantic_kernels' / (expected_sha + '.source')
+    if path.exists() or path.is_symlink():
+        if file_sha(path) != expected_sha:
+            raise ValueError('family_semantic_archived_kernel_invalid')
+        return 'retained_original_bytes'
+    raise ValueError('family_semantic_original_kernel_missing')
 
 
 
@@ -100,6 +151,10 @@ def publish(report, policy, *, report_path, policy_path, family, producer_path):
         policy=dict(path=str(Path(policy_path).resolve()), sha256=policy_sha),
         producer_kernels={str(Path(p).resolve()): file_sha(p) for p in (producer_path, __file__)},
         summary=summary))
+    # Archive only after the captured file hash is checked against the bytes.
+    data_root = Path(report_path).resolve().parents[2]
+    for source_path, source_sha in value['producer_kernels'].items():
+        preserve_kernel(data_root, Path(source_path).read_bytes(), source_sha)
     if file_sha(report_path) != report_sha or file_sha(policy_path) != policy_sha:
         raise ValueError('semantic_generation_changed_during_read')
     path = projection_path(report_path, family, day)

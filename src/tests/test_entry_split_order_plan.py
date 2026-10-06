@@ -3384,15 +3384,17 @@ def test_pre_ai_probe_observation_with_optional_clock_never_reserves(
         stock=stock, latency_gate={"latency_state": "SAFE", "best_ask_at_submit": 3985},
         observation_only=True, **optional_clock,
     )
-    assert orders == []
-    assert fields["entry_split_order_skip_reason"] == "unsupported_pre_ai_probe_reservation_scope"
+    assert len(orders) == 1 and orders[0]['qty'] == 1
+    assert orders[0]['entry_split_order_observation_only'] is True
+    assert orders[0]['actual_order_submitted'] is False
+    assert fields["entry_split_order_skip_reason"] == ""
     contract = fields["entry_split_order_observation_probe_contract"]
     assert contract["observed_at"] == frozen.isoformat()
     assert contract["requested_qty"] == 10
     assert contract["probe_qty"] == 1
     assert contract["residual_conditional_qty"] == 9
     assert sum(contract["continuation"]["residual_quantities"]) == 9
-    assert contract["owner_replay_status"] == "unsupported_unknown_fill_anchored_prices"
+    assert contract["owner_replay_status"] == "conditional_prices_require_future_receipts"
     assert contract["reservation_performed"] is False
     assert contract["runtime_effect"] is False
     assert contract["order_authority_forbidden"] is True
@@ -3439,7 +3441,9 @@ def test_allocator_probe_first_reserves_one_share_and_builds_fill_anchored_resid
         now=datetime(2026, 7, 20, 10, 0, tzinfo=timezone(timedelta(hours=9))),
         observation_only=True,
     )
-    assert observed == []  # Unknown residual fill prices cannot become orders.
+    assert len(observed) == 1 and observed[0]['qty'] == 1
+    assert observed[0]['actual_order_submitted'] is False
+    assert observed[0]['entry_split_order_probe_committed_qty'] == 0
     assert not split_plan.PROBE_RUNTIME_STATE_PATH.exists()
     observed_contract = observation_fields['entry_split_order_observation_probe_contract']
     assert observed_contract['reservation_performed'] is False

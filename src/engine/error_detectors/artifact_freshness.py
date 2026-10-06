@@ -867,6 +867,7 @@ def _auxiliary_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
     label_hash = report.get("source_label_report_sha256")
     if type(economic_screened) is int and economic_screened > 0 and not label_hash:
         findings.append("auxiliary_outcome_label_binding_missing")
+    independent_path_counts = None
     if label_hash:
         label_path = existing_or_gzip_path(
             root / "data/report/ai_decision_outcome_labels"
@@ -920,6 +921,12 @@ def _auxiliary_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
                 if (len(keys) != economic_screened or len(entry_rows) != len(keys)
                     or {row.get("decision_trace_id") for row in entry_rows} != keys):
                     raise ValueError("auxiliary_label_population_binding_invalid")
+                label_index = {row['decision_trace_id']: row for row in entry_rows}
+                joined = [row for row in projection['rows']
+                          if paired.stage_path_label_matches(row, label_index[row['evaluation_key']])]
+                independent_path_counts = dict(total=len(keys), exact_price_label_joined=len(joined),
+                    net_path_evaluable=sum(paired.auxiliary_stage_net(row) is not None for row in joined),
+                    authority='fixed_10m_counterfactual_path_not_operating_or_realized_economics')
             label_gap_count = sum((row.get("evaluation_label_contract") or {}).get(
                 "diagnostic_price_path", {}).get("status") == "source_gap" for row in entry_rows)
         except (OSError, EOFError, UnicodeError, ValueError, TypeError, KeyError, AttributeError) as exc:
@@ -1005,6 +1012,7 @@ def _auxiliary_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
             "economic_screened_total": economic_screened,
             "paired_comparable_count": economic_compared,
             "outcome_label_source_gap_count": label_gap_count,
+            "independent_price_path_counts": independent_path_counts,
             "first_source_gap": first_gap,
             "source_lineage_counts": lineage,
             "source_date": source_date, "report_sha256": report["artifact_content_sha256"],
@@ -1260,9 +1268,14 @@ def _family_policy_semantics(root, source_date, family):
                 raise ValueError(f'{family}_semantic_generation_mismatch')
         if not value.get('producer_kernels'):
             raise ValueError(f'{family}_semantic_producer_missing')
+        kernel_custody = {}
         for source_path, source_sha in value['producer_kernels'].items():
-            if native.file_sha(source_path) != source_sha:
-                raise ValueError(f'{family}_semantic_producer_changed')
+            kernel_custody[source_path] = native.verify_kernel(root / 'data', source_path, source_sha)
+        # The summary itself must still agree with its bound original report.
+        # Retaining an old kernel is no authority to attach a different summary.
+        original_report, _ = _semantic_object(Path(value['report']['path']))
+        if value['summary'] != native.episode_summary(original_report):
+            raise ValueError(f'{family}_semantic_summary_generation_mismatch')
         summary = value['summary']
         rows = summary['rows']
         if not isinstance(rows, list) or any(not isinstance(r, dict) for r in rows):
@@ -1285,7 +1298,7 @@ def _family_policy_semantics(root, source_date, family):
             raise ValueError('semantic_generation_changed_during_read')
         return dict(status='warning' if findings else 'pass', findings=findings,
             source_date=source_date, target_date=value.get('target_date'),
-            artifact=str(path), report_sha256=sha, summary=summary,
+            artifact=str(path), report_sha256=sha, summary=summary, kernel_custody=kernel_custody,
             scopes={r.get('profile_id') or f"{r['symbol']}|{r['session']}": r for r in rows},
             actual_pid_consumed=False, decision_authority='report_only')
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:

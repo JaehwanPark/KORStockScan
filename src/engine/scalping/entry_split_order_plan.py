@@ -1896,7 +1896,7 @@ def _iter_input_events(target_date: str) -> tuple[list[dict[str, Any]], dict[str
         else:
             source_rows = _iter_entry_split_input_rows(path, hard_blocking_stages=hard_blocking_stages)
         for event in source_rows:
-            if event.get("stage") == "entry_execution_sizing_plan":
+            if event.get("stage") in {"entry_execution_sizing_plan", "entry_probe_conditional_receipt_observed"}:
                 native_plan_events.extend(_load_entry_events(target_date, rows=[event]))
             fields = _event_fields(event)
             event_date = _event_date(fields) or target_date
@@ -1949,6 +1949,7 @@ def _iter_entry_split_input_rows(path: Path, *, hard_blocking_stages: set[str]):
         return
     stage_tokens = {
         "entry_execution_sizing_plan",
+        "entry_probe_conditional_receipt_observed",
         "entry_execution_sizing_plan_block",
         "entry_quantity_leg_four_arm_evaluation",
         "order_bundle_submitted",
@@ -5437,6 +5438,8 @@ def _entry_operating_scope(seed):
     from src.engine.lifecycle.avg_down_replay import replay_policy_cohort_digest
     from src.engine.scalping.strategy_owner_replay import entry_decision_version_identity
     context=seed.get("operating_contract") or {}
+    conditional = seed.get('schema') == 'entry_probe_conditional_plan_v1'
+    legs = seed.get('legs') or (seed.get('atomic_plan') or {}).get('legs') or []
     snapshot=dict(context.get("policy_snapshot") or {})
     snapshot["environment"]={k:v for k,v in snapshot.get("environment",{}).items()
         if not k.startswith(("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_","KORSTOCKSCAN_ENTRY_EXECUTION_SIZING_POLICY_"))}
@@ -5445,7 +5448,10 @@ def _entry_operating_scope(seed):
         "exit_cohort":context.get("exit_cohort_digest") or replay_policy_cohort_digest(snapshot),
         "cost_version":context.get("cost_policy_version"),"model":"native_full_depth_no_passive_queue_v1",
         "venue":seed.get("effective_venue"),"session":seed.get("session_bucket"),
-        "order_types":sorted({x.get("order_type_code") for x in seed.get("legs",[])}),
+        "order_types":sorted({str(x.get("order_type_code")) for x in legs}) if conditional
+            else sorted({x.get('order_type_code') for x in legs}),
+        **({'conditional_price_kernel_identity':seed['price_kernel_identity'],
+            'model':'conditional_actual_receipt_only'} if conditional else {}),
         "price_policy":seed.get("entry_price_policy_sha256"),
         "model_implementation":context.get("model_implementation_sha256")})
 
@@ -5920,6 +5926,7 @@ EXECUTION_SOURCE_STAGES = frozenset({
     "entry_execution_sizing_plan", "entry_execution_sizing_plan_block",
     "entry_ai_economic_plan_observed", "entry_ai_economic_source_gap",
     "entry_ai_economic_decision_available",
+    "entry_probe_conditional_receipt_observed",
     "entry_quantity_leg_four_arm_evaluation", "order_leg_sent", "order_leg_fail",
     "order_leg_no_response", "order_bundle_submitted", "order_bundle_failed",
 })
@@ -8207,11 +8214,30 @@ def apply_entry_split_order_policy(
                 'operating_context_sha256': _canonical_sha256(operating_context) if operating_context else None,
                 'reservation_performed': False, 'runtime_effect': False,
                 'order_authority_forbidden': True,
-                'owner_replay_status': 'unsupported_unknown_fill_anchored_prices',
+                'owner_replay_status': 'conditional_prices_require_future_receipts',
             }
             observed_probe['sha256'] = _canonical_sha256(observed_probe)
-            return [], {**fields, "entry_split_order_skip_reason":
-                        "unsupported_pre_ai_probe_reservation_scope",
+            # A typed plan can preserve the known one-share leg and unknown
+            # continuation without reserving a broker bundle. The caller is
+            # the observation-only owner and must freeze its full context.
+            probe_order = {**base_order, **common_fields, "qty": 1,
+                "price": market_first_reference_price or base_price,
+                "order_type_code": "3", "tag": "entry_split_probe_0",
+                "entry_split_order_probe_first_applied": True,
+                "entry_split_order_probe_qty": 1,
+                "entry_split_order_probe_continuation": continuation,
+                "entry_split_order_target_qty": total_qty,
+                "entry_split_order_probe_committed_qty": 0,
+                "entry_split_order_probe_planned_qty": 1,
+                "entry_split_order_residual_conditional_qty": total_qty - 1,
+                "entry_split_order_execution_mode": "probe_first_market",
+                "entry_split_order_observation_only": True,
+                "entry_split_order_probe_timeout_sec": probe_config['timeout_sec'],
+                "entry_split_order_probe_max_slippage_bps": probe_config['max_slippage_bps'],
+                "entry_split_order_probe_anchor_mode": probe_config['anchor_mode'],
+                "actual_order_submitted": False, "broker_order_forbidden": True}
+            return [probe_order], {**fields, "entry_split_order_policy_version": policy.get("policy_version"),
+                        "entry_split_order_skip_reason": "",
                         'entry_split_order_observation_probe_contract': observed_probe}
         bundle_id, reservation_reason = _reserve_probe_runtime_bundle(
             stock=stock,

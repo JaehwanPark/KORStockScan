@@ -670,7 +670,13 @@ def compose_entry_execution_sizing_plan(
     replay_seed_diagnostic = {"status": "not_requested", "blocker": "replay_context_absent"}
     if isinstance(replay_context, dict) and replay_context and not blockers:
         from src.engine.scalping.strategy_owner_replay import freeze_entry_opportunity
-        replay_seed = freeze_entry_opportunity(
+        freeze = freeze_entry_opportunity
+        if (plan_core.get('deferred_probe_residual_qty', 0) > 0
+                and all(leg.get('execution_phase') in {'immediate', 'after_verified_probe_fill'}
+                        for leg in plan_core['legs'])):
+            from src.engine.scalping.entry_probe_conditional_replay import freeze_conditional_plan
+            freeze = freeze_conditional_plan
+        replay_seed = freeze(
             plan_core, stock_code=str(replay_context.get("stock_code") or ""),
             observed_at=replay_context.get("observed_at", datetime.now(KST).timestamp()),
             profile=replay_context.get("profile"),
@@ -679,6 +685,8 @@ def compose_entry_execution_sizing_plan(
             candidate_leg_plan=replay_context.get('candidate_leg_plan'),
             operating_context=replay_context.get('operating_context'),
             anchor_price=(orders[0].get("entry_price_current_price") if orders else None),
+            **({'probe_order': orders[0], 'source_identity': receipt}
+               if freeze is not freeze_entry_opportunity else {}),
             diagnostic=replay_seed_diagnostic,
         )
     return decorated_orders, {

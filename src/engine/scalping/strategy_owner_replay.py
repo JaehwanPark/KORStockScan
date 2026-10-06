@@ -1411,6 +1411,22 @@ def build_entry_opportunity_replays(day, events, *, evaluated_at=None, micro_loa
     from src.engine.scalping.entry_split_order_plan import QUANTITY_LEG_FOUR_ARM_IDS
     output = dict(schema=ENTRY_REPLAY_SCHEMA, source_date=day, rows=[],
                   counts={}, quantity_leg_events=[], **AUTHORITY)
+    from src.engine.scalping import entry_probe_conditional_replay as conditional
+    conditional_rows, conditional_seen = [], {}
+    conditional_counts, conditional_conflicts, receipt_index = Counter(), set(), {}
+    receipt_unbound_count = 0
+    for followup in events:
+        if followup.stage == 'entry_probe_conditional_receipt_observed':
+            try:
+                receipt = _decode(followup.fields.get('entry_probe_conditional_receipt'))
+                if not isinstance(receipt, dict):
+                    raise ValueError('conditional_receipt_object_missing')
+                key = (receipt.get('evaluation_attempt_id'), receipt.get('plan_sha256'))
+                if not all(isinstance(v, str) and v for v in key):
+                    raise ValueError('conditional_receipt_key_invalid')
+                receipt_index.setdefault(key, []).append(receipt)
+            except (ValueError, TypeError):
+                receipt_unbound_count += 1
     candidates, rejected, conflicts, valid_counts = {}, Counter(), set(), Counter()
     first_blockers = Counter()
     availability, availability_conflicts = {}, set()
@@ -1426,13 +1442,26 @@ def build_entry_opportunity_replays(day, events, *, evaluated_at=None, micro_loa
     for event in events:
         if event.stage != source_stage:
             continue
-        plan, seed = _price_ready_plan(event), event.fields.get('entry_opportunity_replay_seed')
+        seed = event.fields.get('entry_opportunity_replay_seed')
         try:
             if isinstance(seed, str) and len(seed) <= 2 * 1024 * 1024:
                 try:
                     seed = json.loads(seed)
                 except ValueError:
                     seed = ast.literal_eval(seed)
+            if isinstance(seed, dict) and seed.get('schema') == conditional.SCHEMA:
+                if (not conditional.valid_seed(seed) or seed['source_date'] != day
+                    or seed['stock_code'] != event.code
+                    or seed['plan_sha256'] != event.fields.get('entry_execution_sizing_plan_sha256')):
+                    raise ValueError('conditional_original_plan_or_seed_invalid')
+                key = (seed['evaluation_attempt_id'], seed['plan_sha256'])
+                conditional_counts[key] += 1
+                if key in conditional_seen and conditional_seen[key] != seed:
+                    conditional_conflicts.add(key)
+                if key not in conditional_seen:
+                    conditional_seen[key] = seed
+                continue
+            plan = _price_ready_plan(event)
             if (not plan or not _entry_seed_valid(seed) or seed.get('source_date') != day
                 or seed.get('plan_sha256') != digest(plan)
                 or seed.get('plan_sha256') != event.fields.get('entry_execution_sizing_plan_sha256')
@@ -1477,10 +1506,28 @@ def build_entry_opportunity_replays(day, events, *, evaluated_at=None, micro_loa
                 first_blockers[str(exc)] += 1
             rejected['original_plan_or_frozen_seed_missing_or_invalid'] += 1
     rejected['conflicting_exact_plan'] += len(conflicts)
+    conditional_raw_count = sum(conditional_counts.values())
+    conditional_duplicates = sum(n-1 for k,n in conditional_counts.items() if k not in conditional_conflicts)
+    for key, seed in conditional_seen.items():
+        if key in conditional_conflicts:
+            conditional_rows.append(conditional.seal(dict(schema=conditional.REPLAY_SCHEMA,
+                seed=seed, status='source_gap', blocker='conditional_original_seed_conflict',
+                paired_economic_eligible=False, net_pnl_krw=None, **AUTHORITY), 'sha256'))
+        else:
+            conditional_rows.append(conditional.reconstruct_prices(seed, receipt_index.get(key, [])))
+    output['conditional_probe_replays'] = conditional_rows
+    output['conditional_probe_source_census'] = dict(raw_plan_rows=conditional_raw_count,
+        unique_plan_count=len(conditional_seen), duplicate_plan_rows=conditional_duplicates,
+        conflicting_plan_rows=sum(conditional_counts[k] for k in conditional_conflicts),
+        unbound_receipt_rows=receipt_unbound_count,
+        orphan_exact_receipt_rows=sum(len(v) for k,v in receipt_index.items() if k not in conditional_seen),
+        status_counts=dict(Counter(r['status'] for r in conditional_rows)),
+        first_blocker_counts=dict(Counter(r['blocker'] for r in conditional_rows if r.get('blocker'))),
+        paired_economic_eligible_count=0)
     # Raw-row and unique-attempt dispositions are separate conserved populations.
-    row_disposition = dict(retained_anchor_rows=len(candidates) - len(conflicts),
-        duplicate_rows=sum(n - 1 for k, n in valid_counts.items() if k not in conflicts),
-        conflicting_rows=sum(valid_counts[k] for k in conflicts),
+    row_disposition = dict(retained_anchor_rows=len(candidates) - len(conflicts)+len(conditional_seen)-len(conditional_conflicts),
+        duplicate_rows=sum(n - 1 for k, n in valid_counts.items() if k not in conflicts)+conditional_duplicates,
+        conflicting_rows=sum(valid_counts[k] for k in conflicts)+sum(conditional_counts[k] for k in conditional_conflicts),
         rejected_rows=rejected['original_plan_or_frozen_seed_missing_or_invalid'])
     seeds = {k: v for k, v in candidates.items() if k not in conflicts}
     plan_only = {k: v for k, v in seeds.items() if source_stage == 'entry_ai_economic_plan_observed'
@@ -2469,7 +2516,10 @@ def entry_split_actual_economic_receipt(stock, *, buy_price, buy_qty, profit_rat
     from src.engine.scalping import entry_split_order_plan as split
     from src.engine.trade_profit import get_trade_cost_rate
     seed=stock.get('entry_split_initial_entry_seed') or {}
-    if not _entry_seed_valid(seed) or not seed.get('operating_contract'):
+    from src.engine.scalping.entry_probe_conditional_replay import valid_seed as conditional_seed_valid
+    conditional_actual = (conditional_seed_valid(seed)
+        and seed['atomic_plan'].get('observation_only') is False)
+    if not (_entry_seed_valid(seed) or conditional_actual) or not seed.get('operating_contract'):
         return None
     context=seed['operating_contract']
     completion_at=completion_at.replace(tzinfo=KST) if completion_at.tzinfo is None else completion_at.astimezone(KST)

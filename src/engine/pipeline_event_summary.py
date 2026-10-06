@@ -119,6 +119,7 @@ EXECUTION_SUMMARY_STAGES = frozenset({
     "entry_execution_sizing_plan", "entry_execution_sizing_plan_block",
     "entry_ai_economic_plan_observed", "entry_ai_economic_source_gap",
     "entry_ai_economic_decision_available", "entry_machine_watch_terminal",
+    "entry_probe_conditional_receipt_observed",
     "entry_quantity_leg_four_arm_evaluation", "order_leg_sent", "order_leg_fail",
     "order_leg_no_response", "order_bundle_submitted", "order_bundle_failed",
 })

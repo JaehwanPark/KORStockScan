@@ -12401,6 +12401,13 @@ def _observe_entry_economics_before_ai(stock, code, ws_data, *, exact_payload,
         current = _safe_int((exact_payload.get("current") or {}).get("price"), 0)
         if current <= 0:
             raise ValueError("exact_reference_price_missing")
+        # Stop ownership is independent of a later account/guard gap.
+        from src.engine.sniper_execution_receipts import initial_main_entry_exit_fields
+        original_stop = dict(owner='sniper_execution_receipts.initial_main_entry_exit_fields',
+            observed_at=datetime.fromtimestamp(now_ts, _KST).isoformat(),
+            evaluation_attempt_id=identity['evaluation_attempt_id'], stock_code=str(code)[:6],
+            state=initial_main_entry_exit_fields(snapshot, rules=TRADING_RULES))
+        source['entry_economic_original_stop_receipt'] = {**original_stop, 'sha256': digest(original_stop)}
         # Preserve every machine anchor; non-entry economics may use an exact
         # existing receipt but cannot issue another synchronous account read.
         budget = _resolve_scalp_cash_budget_context(code, current, 0, source_only=True,
@@ -12467,6 +12474,7 @@ def _observe_entry_economics_before_ai(stock, code, ws_data, *, exact_payload,
             now_ts=time.time(), capacity_receipt=budget, strict=True)
         if not operating:
             raise ValueError("frozen_operating_contract_missing")
+        source['entry_economic_operating_context'] = copy.deepcopy(operating)
         orders, split = apply_entry_split_order_policy(orders, stock=snapshot,
             latency_gate=gate, operating_context=operating, observation_only=True)
         if isinstance(split.get('entry_split_order_observation_probe_contract'), dict):
@@ -12480,11 +12488,23 @@ def _observe_entry_economics_before_ai(stock, code, ws_data, *, exact_payload,
         operating.update(broker_route=broker_route,order_leg_ttl_sec=[o.get("split_leg_ttl_sec") or timeout for o in orders],
             order_bundle_hard_ttl_sec=max(o.get("split_bundle_hard_ttl_sec") or timeout for o in orders),
             order_timeout_owner="sniper_state_handlers._resolve_buy_order_timeout_sec/_decorate_entry_split_leg_ttls")
+        if isinstance(split.get('entry_split_order_observation_probe_contract'), dict):
+            continuation = orders[0]['entry_split_order_probe_continuation']
+            # Native TTL decoration depends on leg count, not future prices.
+            residual_ttls = _decorate_entry_split_leg_ttls(
+                [{'qty': q} for q in continuation['residual_quantities']], snapshot, 'SCALPING')
+            operating['conditional_residual_ttl_contract'] = dict(
+                order_leg_ttl_sec=[o.get('split_leg_ttl_sec') or timeout for o in residual_ttls],
+                bundle_hard_ttl_sec=max(o.get('split_bundle_hard_ttl_sec') or timeout for o in residual_ttls),
+                clock_origin='native_residual_sent_at', probe_wait_clock_origin='native_fill_receipt_received_at')
         from src.engine.scalping.entry_split_order_plan import _context_bucket
         operating["context_bucket"] = _context_bucket({**snapshot, **gate})
         operating["sha256"] = digest({k:v for k,v in operating.items() if k != "sha256"})
+        source['entry_economic_operating_context'] = copy.deepcopy(operating)
         _, fields = compose_entry_execution_sizing_plan(orders,
-            expected_total_qty=_entry_planned_total_qty(orders), action_receipt=identity,
+            expected_total_qty=(split['entry_split_order_observation_probe_contract']['requested_qty']
+                if isinstance(split.get('entry_split_order_observation_probe_contract'), dict)
+                else _entry_planned_total_qty(orders)), action_receipt=identity,
             quantity_policy_version=sizing.policy_version,
             split_policy_version=split.get("entry_split_order_policy_version"), observation_only=True,
             replay_context={"stock_code": code, "observed_at": time.time(),
@@ -12494,6 +12514,9 @@ def _observe_entry_economics_before_ai(stock, code, ws_data, *, exact_payload,
         source.update(entry_economic_source_status="recorded_source_only",
                       entry_economic_writer_plan_sha256=fields["entry_execution_sizing_plan_sha256"],
                       entry_economic_plan_sha256=fields["entry_execution_sizing_plan_sha256"])
+        if fields['entry_opportunity_replay_seed'].get('schema') == 'entry_probe_conditional_plan_v1':
+            source['entry_economic_plan_kind'] = 'conditional_probe'
+            source['entry_economic_conditional_seed'] = fields['entry_opportunity_replay_seed']
         stage = "entry_ai_economic_plan_observed"
     except (ValueError, TypeError, KeyError, AttributeError) as exc:
         fields = {}
@@ -12515,6 +12538,25 @@ def _observe_entry_economics_before_ai(stock, code, ws_data, *, exact_payload,
 
 
 def _log_entry_pipeline(stock, code, stage, **fields):
+    if stage in {'residual_blocked', 'probe_continuation_deferred'} and isinstance(stock, dict):
+        try:
+            from src.engine.scalping.entry_probe_conditional_replay import SCHEMA, native_receipt
+            seed = stock.get('entry_split_initial_entry_seed') or {}
+            if (seed.get('schema') == SCHEMA and _safe_int(stock.get('entry_filled_qty'), 0) == 1
+                    and stock.get('entry_split_initial_entry_lineage_conflict') is not True):
+                stamp = time.time()
+                action = 'BLOCK' if stage == 'residual_blocked' else 'DEFER'
+                original = dict(native_owner=stage, reason=fields.get('reason'),
+                    continuation_action=action, native_residual_orders=[])
+                receipt = native_receipt(seed, kind='residual_decision', sequence=time.monotonic_ns(),
+                    event_at=stamp, available_at=stamp, source=original, runtime_pid=os.getpid(),
+                    continuation_action=action, native_residual_orders=[], capital_allowed=False,
+                    quantity_allowed=False)
+                _log_entry_pipeline(stock, code, 'entry_probe_conditional_receipt_observed',
+                    entry_probe_conditional_receipt=json.dumps(receipt, sort_keys=True),
+                    actual_order_submitted=False, broker_order_forbidden=True, runtime_effect=False)
+        except Exception as exc:
+            log_error(f'[CONDITIONAL_PROBE_SOURCE] {code} terminal observation: {type(exc).__name__}:{exc}')
     if stage == "residual_blocked" and isinstance(stock, dict):
         # Residuals can outlive the latest AI decision. Use only bundle custody.
         receipt = stock.get("entry_split_probe_machine_primary_receipt") or {}
@@ -12539,7 +12581,9 @@ def _log_entry_pipeline(stock, code, stage, **fields):
         for key in ("market_data_health", "input_quote_source_receipt",
                     "entry_execution_sizing_plan", "entry_price_plan",
                     "entry_opportunity_replay_seed", "entry_economic_capacity_receipt",
-                    "entry_pre_ai_source_capsule",
+                    "entry_pre_ai_source_capsule", "entry_economic_operating_context",
+                    "entry_economic_conditional_seed",
+                    "entry_economic_original_stop_receipt",
                     "initial_quantity_cap_research_context"):
             if isinstance(fields.get(key), dict):
                 fields[key] = json.dumps(fields[key], sort_keys=True, separators=(",", ":"))
@@ -33791,6 +33835,10 @@ def _machine_primary_entry_provenance_fields(source: dict | None) -> dict:
         "market_session_bucket",
     )
     fields = {key: source[key] for key in keys if key in source}
+    for key in ('entry_economic_plan_sha256', 'entry_economic_plan_kind',
+                'entry_economic_writer_plan_sha256'):
+        if key in source:
+            fields[key] = source[key]
     bundle_hash = source.get("policy_bundle_hash") or source.get(
         "machine_bundle_sha256"
     )
@@ -83898,6 +83946,35 @@ def _submit_entry_split_probe_residual_locked(
     )
 
     residual_orders = _decorate_entry_split_leg_ttls(residual_orders, stock, "SCALPING")
+    # Append exact native inputs/results before later individual-leg repricing.
+    # This receipt observes existing guards; it grants no order authority.
+    try:
+        from src.engine.scalping.entry_probe_conditional_replay import SCHEMA, native_receipt
+        seed = stock.get('entry_split_initial_entry_seed') or {}
+        if seed.get('schema') == SCHEMA and stock.get('entry_split_initial_entry_lineage_conflict') is not True:
+            from src.trading.market.quote_consistency import ws_quote_source_receipt
+            observed_at = time.time()
+            quote = ws_quote_source_receipt(ws_data, now_ts=now_ts)
+            original = dict(native_owner='sniper_state_handlers.residual_planned',
+                quote=quote, quote_fields=quote_fields, account_guard=account_guard_fields,
+                direction=direction_fields, quantity=plan_fields,
+                continuation_action=continuation_action, guard_allowed=True, fresh_mark_price=curr_price,
+                native_residual_orders=[{'qty': o['qty'], 'price': o['price']} for o in residual_orders])
+            receipt = native_receipt(seed, kind='residual_decision', sequence=time.monotonic_ns(),
+                event_at=observed_at, available_at=observed_at, source=original, runtime_pid=os.getpid(),
+                continuation_action=continuation_action, guard_allowed=True,
+                capital_allowed=account_guard_fields.get('account_guard_allowed') is True,
+                quantity_allowed=plan_fields.get('allowed') is True,
+                quote_route=quote.get('market_route'), transport_epoch=ws_data.get('market_data_transport_epoch'),
+                quote_transport_epoch=quote.get('transport_epoch'), quote_received_at=quote.get('observed_epoch'),
+                quote_freshness_limit_sec=_rule_float('SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION', 700) / 1000,
+                best_bid=best_bid, best_ask=best_ask, fresh_mark_price=curr_price,
+                native_residual_orders=[{'qty': o['qty'], 'price': o['price']} for o in residual_orders])
+            _log_entry_pipeline(stock, code, 'entry_probe_conditional_receipt_observed',
+                entry_probe_conditional_receipt=json.dumps(receipt, sort_keys=True),
+                actual_order_submitted=False, broker_order_forbidden=True, runtime_effect=False)
+    except Exception as exc:
+        log_error(f'[CONDITIONAL_PROBE_SOURCE] {code} native decision observation: {type(exc).__name__}:{exc}')
     probe_order = next(
         (
             order

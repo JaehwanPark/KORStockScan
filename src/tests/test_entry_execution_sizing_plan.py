@@ -818,7 +818,7 @@ def test_main_initial_fill_projection_preserves_scanner_exit_and_rejects_other_o
     (True,'SOR','KRX','KRX_REGULAR'),(True,'SOR','NXT','NXT_PREMARKET'),
     (True,'SOR','KRX_NXT_INTEGRATED','KRX_NXT_AFTERMARKET'),
     (True,'SOR','NXT','NXT_REGULAR_OVERLAP'),(True,'SOR','NXT','NXT_AFTERMARKET')])
-def test_runtime_pre_ai_producer_freezes_owner_inputs_without_submit(monkeypatch, tmp_path, guard_allowed,broker_route,venue,session,machine_action,position_tag):
+def test_runtime_pre_ai_producer_freezes_owner_inputs_without_submit(monkeypatch, tmp_path, guard_allowed,broker_route,venue,session,machine_action,position_tag,probe_first=False):
     from copy import deepcopy
     from src.engine import kiwoom_sniper_v2 as runtime
     from types import SimpleNamespace
@@ -893,6 +893,14 @@ def test_runtime_pre_ai_producer_freezes_owner_inputs_without_submit(monkeypatch
             'observed_epoch':frozen_clock.timestamp()}}
 
     before=deepcopy(stock)
+    if probe_first:
+        monkeypatch.setattr(split, '_load_policy_from_env', lambda *a,**k: ({
+            'policy_version':'probe-observation-fixture', 'source_date':day,
+            'buckets':{'passive_wide_or_weak':split._runtime_default_bucket_policy('passive_wide_or_weak')}}, 'loaded'))
+        monkeypatch.setenv('KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED','true')
+        monkeypatch.setenv('KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ACTIVE_DATE',day)
+        monkeypatch.setenv('KORSTOCKSCAN_ENTRY_SPLIT_MARKET_FIRST_LEG_ENABLED','false')
+        monkeypatch.setattr(split,'_reserve_probe_runtime_bundle',lambda **kwargs: (_ for _ in ()).throw(AssertionError('No reservation')))
     ws={'curr':10020,'effective_route':replay.entry_native_market_venue(venue),'source_epoch':'epoch-1'}
     exact={'current':{'price':10020},'session_bucket':session,'broker_route':broker_route,
            'orderbook_top1':{'bid':{'price':10000},'ask':{'price':10010}}}
@@ -928,6 +936,18 @@ def test_runtime_pre_ai_producer_freezes_owner_inputs_without_submit(monkeypatch
     assert cached['fields']['machine_revision_schema'] == 'exact_machine_revision_v1'
     assert cached['fields']['machine_revision_parent_sha256'] == ''
     diagnostic = json.loads(cached['fields']['economic_source_monitor_projection'])
+    if probe_first:
+        from src.engine.scalping import entry_probe_conditional_replay as conditional
+        assert result['entry_economic_source_status']=='recorded_source_only',result
+        seed=result['entry_economic_conditional_seed']
+        assert conditional.valid_seed(seed)
+        assert seed['total_qty']>1 and seed['atomic_plan']['immediate_qty']==1
+        assert sum(leg['qty'] for leg in seed['atomic_plan']['legs'])==seed['total_qty']
+        assert seed['atomic_plan']['observation_only'] is True
+        assert seed['operating_contract']['conditional_residual_ttl_contract']['order_leg_ttl_sec']
+        assert diagnostic['status']=='recorded_conditional_source_only'
+        assert result['entry_economic_original_stop_receipt']['state']
+        return
     assert diagnostic['status'] == ('recorded_source_only' if guard_allowed else 'guard_excluded'), diagnostic
     assert diagnostic['observation_guard']['stage'] == 'pre_ai_observation_only'
     assert diagnostic['observation_guard']['allowed'] == guard_allowed

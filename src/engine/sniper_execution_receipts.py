@@ -1475,7 +1475,7 @@ def _log_holding_pipeline_impl(
         )
         if observe_candidate_lifecycle:
             observe_candidate_transition_safe(candidate_stock, code, stage, fields)
-    return emit_pipeline_event(
+    emitted = emit_pipeline_event(
         "HOLDING_PIPELINE",
         name,
         code,
@@ -1483,6 +1483,33 @@ def _log_holding_pipeline_impl(
         record_id=target_id,
         fields=fields,
     )
+    if stage == 'probe_filled' and isinstance(candidate_stock, dict):
+        # The native matched one-share receipt is the sole fill authority.
+        # An observation failure must not alter already received broker state.
+        try:
+            from src.engine.scalping.entry_probe_conditional_replay import SCHEMA, native_receipt
+            seed = candidate_stock.get('entry_split_initial_entry_seed') or {}
+            if (seed.get('schema') == SCHEMA and fields.get('actual_order_submitted') is True
+                    and fields.get('broker_order_forbidden') is False
+                    and candidate_stock.get('entry_split_initial_entry_lineage_conflict') is not True
+                    and candidate_stock.get('entry_lifecycle_conflict') is not True):
+                at = candidate_stock['entry_split_probe_filled_at']
+                original = {key: fields.get(key) for key in (
+                    'order_no', 'fill_qty', 'fill_price', 'probe_bundle_id')}
+                original.update(native_owner='sniper_execution_receipts.probe_filled',
+                                receipt_received_at=at)
+                receipt = native_receipt(seed, kind='probe_fill', sequence=time.monotonic_ns(),
+                    event_at=at, available_at=at, source=original, runtime_pid=os.getpid(),
+                    broker_receipt_verified=True, broker_order_no=fields.get('order_no'),
+                    cumulative_qty=fields.get('fill_qty'), fill_price=fields.get('fill_price'))
+                emit_pipeline_event('ENTRY_PIPELINE', name, code,
+                    'entry_probe_conditional_receipt_observed', record_id=target_id,
+                    fields={'entry_probe_conditional_receipt': json.dumps(receipt, sort_keys=True),
+                            'actual_order_submitted': False, 'broker_order_forbidden': True,
+                            'runtime_effect': False})
+        except Exception as exc:
+            log_error(f'[CONDITIONAL_PROBE_SOURCE] {code} native fill observation: {type(exc).__name__}:{exc}')
+    return emitted
 
 
 def _log_holding_pipeline(*args, **kwargs):

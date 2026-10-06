@@ -165,6 +165,13 @@ def prospective_source_contract(projection):
         and row.get("entry_economic_writer_plan_sha256") == row.get("entry_economic_plan_sha256")
         and owner_replay_valid(row.get("owner_replay") or {}, row)
     ]
+    conditional_rows = [row for row in rows
+                        if source_contract.plan_state(row).get('state') == 'conditional_plan_preserved']
+    stop_rows = [row for row in rows if isinstance(row.get('entry_economic_original_stop_receipt'), dict)
+        and row['entry_economic_original_stop_receipt'].get('sha256') == digest({
+            k:v for k,v in row['entry_economic_original_stop_receipt'].items() if k != 'sha256'})
+        and row['entry_economic_original_stop_receipt'].get('evaluation_attempt_id') == row.get('evaluation_attempt_id')
+        and row['entry_economic_original_stop_receipt'].get('stock_code') == row.get('stock_code')]
     first_gap = (
         "writer_plan_hash_missing" if not writer_rows else
         "writer_event_not_recorded" if not writer_recorded_rows else
@@ -204,6 +211,9 @@ def prospective_source_contract(projection):
                 for row in rows),
             "owner_seed_present": len(owner_seed_rows),
             "owner_exact_joined": len(exact_rows),
+            "conditional_original_plan_preserved": len(conditional_rows),
+            "original_stop_receipt_preserved": len(stop_rows),
+            "independent_price_path_net_evaluable": sum(auxiliary_stage_net(row) is not None for row in rows),
             "prompt_exact_input_present": len(prompt_input_rows),
             "economic_source_status_counts": dict(Counter(
                 str(row.get("entry_economic_source_status") or "unknown") for row in rows)),
@@ -691,6 +701,10 @@ def prepare(data_root, day):
             "source_date": day,
             "evaluation_attempt_id": trace.get("evaluation_attempt_id"),
             "entry_economic_plan_sha256": trace.get("entry_economic_plan_sha256"),
+            "entry_economic_conditional_seed": trace.get("entry_economic_conditional_seed"),
+            "entry_economic_plan_kind": trace.get("entry_economic_plan_kind"),
+            "entry_economic_operating_context": trace.get("entry_economic_operating_context"),
+            "entry_economic_original_stop_receipt": trace.get("entry_economic_original_stop_receipt"),
             "entry_economic_writer_plan_sha256": trace.get("entry_economic_writer_plan_sha256"),
             "entry_economic_source_status": trace.get("entry_economic_source_status"),
             "entry_economic_source_blocker": trace.get("entry_economic_source_blocker"),
@@ -746,7 +760,10 @@ def prepare(data_root, day):
         elif label_identity_reasons:
             reason = "source_label_identity_contract_invalid:" + label_identity_reasons[0]
         elif sha256_hex(trace.get("entry_economic_plan_sha256")) and not owner_valid:
-            reason = "exact_owner_replay_missing_or_invalid"
+            conditional_plan = source_contract.plan_state(row_identity)
+            reason = ('conditional_probe_operating_economics_not_supported'
+                      if conditional_plan.get('state') == 'conditional_plan_preserved'
+                      else 'exact_owner_replay_missing_or_invalid')
         elif not owner_valid and path.get("status") != "evaluable":
             reason = path.get("label_reason") or "terminal_path_not_evaluable"
         elif not owner_valid and (

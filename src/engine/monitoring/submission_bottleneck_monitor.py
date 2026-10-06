@@ -883,6 +883,23 @@ def economic_evidence(fields, stock_code=None):
     try:
         seed = fields.get("entry_opportunity_replay_seed")
         seed = json.loads(seed) if isinstance(seed, str) else seed
+        if isinstance(seed, dict) and seed.get('schema') == 'entry_probe_conditional_plan_v1':
+            from src.engine.scalping.entry_probe_conditional_replay import valid_seed, operating_source_gaps
+            if (not valid_seed(seed)
+                or seed['plan_sha256'] != fields.get('entry_execution_sizing_plan_sha256')
+                or seed['plan_sha256'] != fields.get('entry_economic_plan_sha256')
+                or seed['plan_sha256'] != fields.get('entry_economic_writer_plan_sha256')
+                or seed['evaluation_attempt_id'] != fields.get('evaluation_attempt_id')
+                or seed['scanner_promotion_id'] != fields.get('scanner_promotion_id')
+                or (stock_code and stock_code != seed['stock_code'])
+                or seed['effective_venue'] != fields.get('effective_venue')
+                or seed['session_bucket'] != (fields.get('session_bucket') or fields.get('market_session_bucket'))):
+                raise ValueError('economic_conditional_seed_binding_invalid')
+            result.update(status='recorded_conditional_source_only',
+                blocker='conditional_execution_outcome_not_observed', seed_sha256=seed['seed_sha256'],
+                evaluation_role='frozen_conditional_plan_not_paired_economics')
+            result['operating_source_gaps'] = operating_source_gaps(seed)
+            return result
         if not _entry_seed_valid(seed) or seed.get("plan_sha256") != fields.get("entry_execution_sizing_plan_sha256"):
             raise ValueError("economic_seed_or_plan_binding_invalid")
         for key, field in (("scanner_promotion_id", "scanner_promotion_id"),
