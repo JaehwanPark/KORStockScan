@@ -44,7 +44,7 @@ E의 30초/최대 3회 새 원천 재평가에서 직접 후보와 다른 회수
 
 - 마지막 생산→상태 처리기→감시 소비 대조에서 새 확인 필드 4개가 WATCHING provenance whitelist에서 빠진 것을 추가 수리했다. 상태 처리기·async bridge·감시기·위치 회귀 **222건 PASS**. 첫 준비 릴리스는 기동 전에 철회하고 수정된 릴리스를 다시 봉인한다. 총 회귀 실행 1,632건(중복 포함).
 
-## 최종 운영 영수증
+## 첫 배포·운영 영수증 — 가격 manifest 보완 전
 
 - 구현 커밋 `95b6a016` + WATCHING provenance 추가 수리 `b9831035e8c705088813a14e6330b44a9b8390c8`. 최종 immutable release=`/home/ubuntu/KORStockScan-runtime-releases/main-submit-drought-20261006-b9831035`. 기동 전 준비한 첫 release는 소비 전에 철회했다.
 - 재기동 직전 두 native KRX/NXT 잔고·미체결 snapshot 일치, Main 5종목 잔고/미체결/전체 날짜 미해결 intent/custody 잔량 0. 기존 native graceful restart에서 이전 PID `169115` 종료→새 PID **290462**; 19:52:28 당일 bootstrap/환경/해시 PASS. launcher PID/cwd receipt가 최종 release를 소비한다. 19:52:56 이후 WS 0D 및 0B 첫 수신도 확인했다.
@@ -58,3 +58,13 @@ E의 30초/최대 3회 새 원천 재평가에서 직접 후보와 다른 회수
 ## 최종 소비 대조 추가 수리: 가격 manifest 세 개
 
 20:00 최종 dirty 대조에서 별도 문서 작업이 추가한 진단을 확인했다. reader는 기본 manifest 39종목만 읽고 같은 디렉터리의 이미 수집된 22·393종목을 누락했다. 위 6/26·7/39는 당시 가격 부분집합 계산이며 454종목 전부의 소비 결과가 아니다. 세 원 manifest의 검증 합집합, bytes 미기재 자료의 SHA 검증 후 실제 byte receipt, 중복 hash 제거 및 충돌 종목 격리를 수리했다. 원 manifest/가격은 수정하지 않았으며 추가 테스트와 calibration 회귀 **245건 PASS**. 당일/비교일을 새 kernel로 재계산하고 이전 PASS를 재사용하지 않는다. 외부 차트 가격의 조정/호가단위 의미는 미입증이므로 가격 CF에만 쓰고 실제 체결 가능 가격·손익으로 표현하지 않는다. 별도 추가 문서의 C2/D2/E2 연구 제안은 이번 고정 후보에 섞지 않는다.
+
+
+## 가격 소비 수리 이후 최종 상태
+
+- `fbfc9dd6432e337b61ab63744216f32b80875bc6`를 immutable `main-submit-drought-20261006-fbfc9dd6`에 배포하고 native graceful restart로 **Main PID 338586 / 20:03:45 bootstrap PASS**를 확인했다. 두 fresh broker/custody snapshot은 5종목 flat으로 일치했다. 원 정책 값은 유지하며 가격 helper만 추가 보완했다.
+- 새 kernel로 10/6와 10/2를 재계산하고 두 native projection의 원천·내용·kernel SHA를 검증했다. 10/6 외부 **454종목** receipt를 소비했다. 비삼성 현재 규칙 **7/36승 19.44%(미확정 3)**, D **16/102승 15.69%(미확정 7)**. 삼성 C는 0/2, A는 1/6, B는 미확정 1, E는 직접 후보와 동일이다. A/B/C/D/E 추가 완화 미선정. 10/2 결과와 가격 basis를 섞지 않는다. 앞의 6/26·7/39는 가격 부분집합의 이전 결과로 보존한다.
+- 회귀 실행 **1,877건 PASS(중복 포함)**, 가격 충돌 종목 격리·다중 manifest 검증·byte receipt 테스트, compile/Ruff/diff/parser PASS. 최종 generation 및 당일 full health는 마지막 native 재봉인 영수증에 기록한다.
+
+- 최종 native 재봉인 **20:07:09 DONE**, chain=`984c687309ace40be891c0520295fdda3654b4f6132ef9b695198bf4fb7bf2b7`, snapshot=`de8c7a024a0ad4b385fda97148f5e1043fdc6e3161eb981ecbd12f7b081bf112` 불변. 현재 checklist strict binding=`797d61f63277d82b3eb27377e8d092ccd5efd94970268d84c6070432be347bd0`, summary=`36668269ccbb3ab8a7c61b106cee3754ee867dc4e03123d89a32a7d9c384eb92`. 20:07:52 당일 non-mutating full health **FAIL 0 / process PASS / cron PASS / operational mutation 0**, log scanner의 warning은 변경 없는 과거 로그 감사 기록이며 현재 error burst는 없다.
+- **20:08:31 독립 terminal 검증 PASS**: marker/controller issues 0, 최신 checklist SHA와 source-date generation 일치, Main PID 338586/cwd 및 원 정책·PREOPEN 34개 hash 확인. 최종 코드 review 범위의 미해결 finding 0. 기존 Main/compact/episode 원천·운영 경제성 결손과 다음 적격 정규장 자연 recipe 수용은 별도 OPEN/`not_observed`로 유지한다. 다른 작업이 추가한 계획 §11과 그 연구/삭제 dirty는 본 커밋에서 보존·제외한다.
