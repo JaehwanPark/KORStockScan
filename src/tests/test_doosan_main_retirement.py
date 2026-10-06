@@ -74,6 +74,33 @@ def test_native_main_manual_activation_has_no_economic_proof_gate(tmp_path, monk
     assert not retired.main_manual_after_episode_retirement('005930', ['main_scalping','manual_operator'])
 
 
+@pytest.mark.parametrize('action', ['NEW', 'CANCEL'])
+def test_retirement_open_exposure_distinguishes_new_order_from_cancel_ack(tmp_path, monkeypatch, action):
+    from src.trading.order.owner_custody_registry import OwnerOrderContext, OwnerRegistryConflict
+    registry = _registry(tmp_path, monkeypatch)
+    original = None
+    if action == 'CANCEL':
+        original = registry.reserve(context=OwnerOrderContext(owner_type='episode', owner_id='episode:old',
+            position_id='episode:old:leg', client_intent_id='episode:old:original'), symbol='034020',
+            side='BUY', quantity=10, route='KRX', order_date='2026-09-09')
+        registry.transition(original, state='ORDER_BOUND', broker_order_no='0000010')
+    intent = registry.reserve(context=OwnerOrderContext(owner_type='episode', owner_id='episode:old',
+        position_id='episode:old:leg', client_intent_id='episode:old:intent'), symbol='034020',
+        side='BUY', quantity=10, route='KRX', order_date='2026-09-09', action=action,
+        original_order_no='0000010' if action == 'CANCEL' else '')
+    registry.transition(intent, state='ORDER_BOUND', broker_order_no='0000011')
+    if original is not None:
+        registry.transition(original, state='ORDER_TERMINAL', broker_order_no='0000010')
+    if action == 'NEW':
+        with pytest.raises(OwnerRegistryConflict, match='retirement_not_flat'):
+            _activation(registry)
+    else:
+        assert _activation(registry)['activation_event_hash']
+        historical = registry.verified_events_snapshot()
+        cancel = registry._state(historical)[intent]
+        assert cancel['action'] == 'CANCEL' and cancel['state'] == 'ORDER_BOUND'
+
+
 def test_all_date_intent_blocks_doosan_admission_and_activation(tmp_path, monkeypatch):
     registry = _registry(tmp_path, monkeypatch)
     from src.trading.order.owner_custody_registry import OwnerOrderContext, OwnerRegistryConflict

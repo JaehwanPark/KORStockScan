@@ -2128,7 +2128,8 @@ class OrderOwnerRegistry:
                     for row in relevant if row.get("owner_type") == "episode" and row.get("action") == "NEW"
                 )
                 episode_open = any(
-                    row.get("owner_type") == "episode" and row.get("state") == "ORDER_BOUND"
+                    row.get("owner_type") == "episode" and row.get("action") != "CANCEL"
+                    and row.get("state") == "ORDER_BOUND"
                     and int(row.get("filled_qty") or 0) < int(row.get("quantity") or 0)
                     for row in relevant
                 )
