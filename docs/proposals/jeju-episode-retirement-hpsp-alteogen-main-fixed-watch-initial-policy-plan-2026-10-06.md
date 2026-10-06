@@ -314,4 +314,4 @@ G0~G4는 기술 전환, G5는 연구 작업의 수행/처분, G6는 실제 기�
 
 ## 11. 실행 상태 인계
 
-[실행 검토](../audits/episode-eight-retirement-main-five-execution-review-2026-10-06.md)에서 구현·리뷰 수정·1,304건 통합 검증과 종목별 제한 연구 결과를 기록했다. 초기 정책의 경제성 사전 입증은 요구하지 않는다. 설치된 54개 timer와 54개 service instance의 native 퇴역·검토 release 배포·Main 재기동을 사용자 승인 범위에서 진행하며, 완료 receipt와 자연 관측 대기는 같은 검토 기록 및 현재 checklist owner로 인계한다. 과거 소비 정책/PREOPEN 원본과 남은 정책 값은 보존한다.
+[실행 검토](../audits/episode-eight-retirement-main-five-execution-review-2026-10-06.md)에서 구현·리뷰 수정·1,304건 통합 검증 및 추가 router 90건 회귀와 종목별 제한 연구 결과를 기록했다. 초기 정책의 경제성 사전 입증은 요구하지 않는다. 설치된 54개 timer 제거·54개 service instance mask, 최종 코드 `511664f3` 배포·Main PID `169115` 정상 재기동과 원 정책/bootstrap 소비 검증을 완료했다. 남은 profile 31개·policy pin 186개와 원 자료 34개 SHA가 유지된다. 신규 3종목 NXT eligibility 원천은 현재 WAIT이며 다음 정규장 자연 source/기계 trace와 10/7 PREOPEN은 `not_observed`로 같은 checklist owner에 인계한다. 과거 소비 정책/PREOPEN 원본과 남은 정책 값은 보존한다.

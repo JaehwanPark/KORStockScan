@@ -42,12 +42,14 @@
 
 ## 실행 항목
 
-- [ ] `[JejuEpisodeRetirementHpspAlteogenMainFixedWatch] 에피소드 8종목 퇴역·Main 고정감시 5종목 통합 전환` (`Due: 2026-10-06`, `Slot: MANUAL`, `TimeWindow: 승인된 구현·배포·재기동; 다음 PREOPEN 자연 확인`, `Track: RuntimeStability`)
+- [ ] `[JejuEpisodeRetirementHpspAlteogenMainFixedWatch] 에피소드 8종목 퇴역·Main 고정감시 5종목 다음 기동 자연 확인` (`Due: 2026-10-07`, `Slot: PREOPEN`, `TimeWindow: 07:32~08:05 및 적격 정규장 자연 판정`, `Track: RuntimeStability`)
   - Source: [실행 계획](../proposals/jeju-episode-retirement-hpsp-alteogen-main-fixed-watch-initial-policy-plan-2026-10-06.md).
   - 범위: 제주·TYM·CJ CGV·영원무역·SK텔레콤·한세실업·NHN·카카오 27개 profile와 timer 54개 및 service instance 54개 퇴역; HPSP·알테오젠·주성엔지니어링을 기존 삼성·두산 Main spec/정책/주문 경로에 추가한다.
   - 권한: 사용자 계획 실행·반복 리뷰·배포·재기동 승인. 신규 3종목 초기 정책은 기존 비삼성 Main 부모로 지정하며 성과/표본 적격성 증명을 선행 조건으로 요구하지 않는다. 원천·세션·주문·수량·custody·operator veto·hard safety는 보존한다.
   - Acceptance: 종목별 fresh broker/custody/전체 날짜 intent flat, 27개 전용 profile·54개 timer 제거 및 54개 instance mask, 재등록/auto expansion 차단, 남은 31개 profile 원 정책 값 보존, 5종목 실제 metadata→기계 resolver 및 compact AI 역할, WS publication/연구 저장 독립 검증, 신규 3종목별 10개 후보 연구, reviewed release/정상 Main singleton 및 policy/hash 소비. 자연 source/판정/제출/체결/수익은 각각 별도 receipt; 해당 session 미관측은 `not_observed`로 인계한다.
   - 기존 `DoosanEpisodeToMainFixedWatch`, `FixedWatchSourceAndCleanupRepair1006`, `FixedWatchBudgetSummaryPostcloseAcceptance1006`의 별도 자연 수용과 원 장후 실패/원천 결손은 보존한다.
+  - 10/6 실행 완료: 코드 `511664f3`/Main PID `169115` bootstrap·프로세스 건강 PASS, native 퇴역 timer 54개 제거·instance 54개 mask, 현재 31개 profile·186개 policy pin·cron 8개 PASS, 원 자료 34개 SHA 보존. 1,304개 통합·추가 router 90개 회귀 PASS; 신규 3종목별 10개 후보 연구는 source_gap 처분. [최종 실행 검토](../audits/episode-eight-retirement-main-five-execution-review-2026-10-06.md).
+  - 잔여 자연 확인: 현재 신규 3종목은 `fixed_watch_nxt_eligibility_unproven` WAIT이며 기존 listing/eligibility 원천으로 확인한다. 10/7 owner PREOPEN의 현재 15종목 scope, 31개 episode 실 기동, 5종목 정확 admission→기계 hash/compact 역할·WS/원천을 확인한다. KRX 정규장은 NXT 대기를 적용하지 않는다. 해당 session 미관측은 `not_observed`이며 성과 사전 입증 또는 주문/threshold/guard 우회 조건을 새로 만들지 않는다.
 
 - [ ] `[DirectFamilySourceRepairCompactAuxiliary] compact_auxiliary 직접 family 원천·경제성 계약 수리` (`Due: 2026-10-06`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~21:40`, `Track: RuntimeStability`)
   - Source: [runtime_approval_summary_2026-10-02.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-10-02.json)
