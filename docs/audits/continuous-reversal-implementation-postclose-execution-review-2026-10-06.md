@@ -39,7 +39,7 @@
 
 ## 현재 상태
 
-최종 selected release는 `0e067426e55228269c31a7ea664eee457083d905`이다. 관련 immutable 회귀 683 PASS·삼성 source-custody 34 PASS, source/deploy 34개 hash/clean·cron 8개·기존 episode 186개 pin PASS다. source/publication 10/6·effective 10/7 generation `continuous-reversal-20261006-0e067426-20261007T035415`의 Main native는 03:54:16~04:14:46 성공했다. 기계·보조 scoped, 실제 최종 prompt consumer와 Main seal issues=[]를 확인했다. 누적 승률 선택의 12+12셀 연구 승계 및 격리 07:35 PREOPEN 활성화/재실행·native parent CAS·actual pointer 불변 PASS다. 독립 최종 갱신(기계 부모 bundle 불변)·archive·3 Parquet/압축 검증/대조 완료, whole 13 stage strict/controller issues=[]다. cleanup·최종 detector가 완료했고 04:18:53 최초 exact-date prepared_verified를 확인했다. 최종 체크리스트 bytes의 whole strict/controller/finalization/cleanup/detector를 다시 봉인했고 04:22:07 현재 세대 prepared_verified, 04:22:42 verify_prepared(require_today=True) 및 whole 재검증 PASS를 확인했다. 실제 PREOPEN/PID는 아직 future-due이며 주문을 생성하지 않았다. 과거 실패·중단과 원천·실제 요청/응답·부모 snapshot은 보존한다.
+현재 selected release는 prepared 순서 보완을 포함한 v9 `0d4e5d2a4004e89a20ea14eb05c720d812e5bb27`이다. 이 보완의 immutable 회귀 240 PASS, 기존 34개 source/deploy 불변 및 소유 파일 총 36개 hash/clean·cron 8개·기존 episode 186개 pin PASS다. 기계·보조 정책을 생성한 v8 `0e067426`의 관련 immutable 회귀 683 PASS·삼성 source-custody 34 PASS와 전체 재생성 기록은 이력으로 보존한다. source/publication 10/6·effective 10/7 generation `continuous-reversal-20261006-0e067426-20261007T035415`의 Main native는 03:54:16~04:14:46 성공했다. 기계·보조 scoped, 실제 최종 prompt consumer와 Main seal issues=[]를 확인했고 누적 승률 선택의 12+12셀·정책 bundle은 v9에서도 불변이다. 격리 PREOPEN 활성화/재실행·native parent CAS·actual pointer 불변 PASS, 독립 최종 갱신·archive·3 Parquet/압축 검증/대조 완료도 보존한다. v9의 정확일 closed-target finalization은 06:32:17~06:34:08 완료했고 whole_native_chain strict/controller issues=[]·cleanup/DONE·최종 detector 7개 실행/fail 0을 확인했다. 새 prepared는 06:34:05 생성됐고 current_full_contract/require_today 검증 PASS·findings=[]다. 최종 detector에서 prepared 경고는 사라졌으며 기존 report-only 원천 경고는 남는다. 실제 07:35 PREOPEN/07:55 Main PID 소비는 아직 future-due이며 주문을 생성하지 않았다. 과거 실패·중단과 원천·실제 요청/응답·부모 snapshot은 보존한다.
 
 ## 최초 전체 실행에서 발견한 장후 결함
 
@@ -112,8 +112,18 @@ v7는 모든 producer와 스냅샷을 새로 완료하고 기계 scoped 검증 i
 | 정리 후 원천/코드 | EOD 불변·재실행 없음; 110 동결 원천+호출/응답 로그 2개 불변; 34 source/deploy hash 일치 |
 | 남은 자연 소비 | 07:32 owner / 07:35 Main PREOPEN / 07:55 정상 Main PID, future_due |
 
-최종 bundle SHA는 `bf15fc240560605b7fe08796941288d9ef28a5f7c8d2cbf47692787b894f4a98`, 체크리스트 SHA는 `ee7d1ba223448108b11c3fa438cc31b58ded7bae817895d240852358ce2df731`이다. 보조 통합 owner는 완료해 Main owner로 인계했고 Main owner는 예약 소비 확인을 위해 PREOPEN OPEN으로 유지한다. 문서-only 마감 이후 체크리스트 bytes는 변경하지 않는다. 실제 정책 current pointer·Main PID 활성화·주문·체결은 만들지 않았다.
+04:22 종결 당시 bundle SHA는 `bf15fc240560605b7fe08796941288d9ef28a5f7c8d2cbf47692787b894f4a98`, 체크리스트 SHA는 `ee7d1ba223448108b11c3fa438cc31b58ded7bae817895d240852358ce2df731`이다. 이후 05:00 예약 최종화와 아래 경고 보완의 owner 기록을 반영한 새 체크리스트로 다시 봉인했다. 보조 통합 owner는 완료해 Main owner로 인계했고 Main owner는 예약 소비 확인을 위해 PREOPEN OPEN으로 유지한다. 새 prepared 이후 체크리스트 bytes는 수동 변경하지 않는다. 실제 정책 current pointer·Main PID 활성화·주문·체결은 만들지 않았다.
 
 실행 근거: [최종 종결](../../data/report/continuous_reversal/2026-10-06/final-completion.json), [전체 재생성](../../data/report/continuous_reversal/2026-10-06/full-regeneration-execution.json), [연구/운영 12셀 일치](../../data/report/continuous_reversal/2026-10-06/research-native-parity.json), [PREOPEN 격리 검증](../../data/report/continuous_reversal/2026-10-06/isolated-preopen-rehearsal.json), [정리 후 원천 보존](../../data/report/continuous_reversal/2026-10-06/final-integrity.json), [최종 native log](../../data/report/continuous_reversal/2026-10-06/finalization-v8-20261007.log).
 
 검증 범위는 변경된 producer/consumer·wrapper·policy/loader·quota·source-custody 계약이다. 전체 프로젝트 회귀 통과나 향후 자연 판정/제출/실현 손익 개선을 주장하지 않는다. 기존 episode assertion 불일치와 원천 경고의 경계는 위에 보존했다.
+
+## 05:01 경고 intake와 prepared 순서 결함 보완
+
+예약 최종화는 05:00:01 시작해 새 controller `19d55b8515db312c32630a5296b5efd45b6922d300d73010718560973061a732`를 발행했다. 05:01:46 최종 detector가 읽은 prepared는 04:22 이전 controller에 결속돼 `prepared_source_or_release_changed`였다. 05:01:50 같은 예약 run의 prepared_verified/DONE이 이어졌으며, 06:24 직접 `next_preopen_readiness --verify --target-date 2026-10-07 --require-today`는 current_full_contract PASS·findings=[]다. 원 경고·원 terminal은 보존한다.
+
+원인은 consumer 실행 순서다. 새 prepared 검증을 cleanup 뒤 detector 앞에 두고 prepare/session/cutoff 실패에서도 진단 detector를 실행하되 DONE을 금지했다. happy path에서 detector가 실제 현재 controller와 일치하는 prepared를 읽는 실행 회귀, 준비 실패와 탐지 실패의 DONE 금지, 기존 source/hash/schema/날짜 안전 회귀 240 PASS를 새 immutable `0d4e5d2a4004e89a20ea14eb05c720d812e5bb27`에서 확인했다. 변경은 기존 finalization wrapper와 그 테스트뿐이다. 계보·policies·주문·provider·원천 guard 완화나 AI 호출은 없다.
+
+에피소드 두 경고는 실제 report-only 결손이다. 31개 source_gap: durable_profile_observation_missing_or_invalid 27개·durable_state_generation_mismatch 4개. capture 1,203개(유효 648·계보 invalid 555)를 기록하고 부적격 연구 입력을 제외한다. 다른 종목군 Main 전수 반전의 연구 승계·정책 준비 실패로 전역 확장하지 않는다. 현역 episode의 기존 186개 policy pin은 그대로이며, 과거 관측을 소급 생성하지 않는다. 새 관측의 계보 수용은 기존 EpisodeCaptureSequence1006 owner에 인계한다.
+
+v9 native 복구는 06:34:08 DONE이다. 06:34:05 prepared 생성 뒤 최종 detector가 같은 controller/selection 결속을 검증했고 `next_preopen_prepared_contract_invalid`는 없다. whole_native_chain strict pass·issues=[]와 현재 세대/최종 detector report hash를 다시 대조했다. 기계·보조 각 12셀 및 bundle·EOD 원본·동결 원천 110개·실제 호출/응답 로그 2개는 불변이다. 기존 episode 두 경고와 별도 구 삼성 동결 연구의 source 변경 실패는 보존하며 이를 Main 신규 정책의 준비 실패로 바꾸지 않는다. 원 Main 학습·EOD는 재실행하지 않았다. 최종 근거는 [경고 보완 종결 영수증](../../data/report/continuous_reversal/2026-10-06/prepared-alert-repair-20261007.json)과 [v9 native 로그](../../data/report/continuous_reversal/2026-10-06/prepared-alert-recovery-20261007.log)다. 07:35/07:55 자연 소비의 수용은 기존 Main PREOPEN OPEN에서 확인한다.
