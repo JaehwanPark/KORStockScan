@@ -1581,10 +1581,10 @@ def test_invalid_actual_episode_signal_contract_is_explicit_gap(tmp_path):
             "target_date": target_date,
             "daily": {
                 "profiles": {
-                    "doosan_enerbility_morning": {
-                        "profile_id": "doosan_enerbility_morning",
+                    "sk_eternix_morning": {
+                        "profile_id": "sk_eternix_morning",
                         "target_date": target_date,
-                        "symbol": "034020",
+                        "symbol": "475150",
                         "session": "morning",
                         "source_quality": "pass",
                         "eligible_for_tuning": True,
@@ -1609,7 +1609,7 @@ def test_invalid_actual_episode_signal_contract_is_explicit_gap(tmp_path):
     )
     _write_jsonl(
         stream_path,
-        [_micro_row("034020", "2026-08-14T09:30:00+09:00", 20000)],
+        [_micro_row("475150", "2026-08-14T09:30:00+09:00", 20000)],
     )
 
     report = build_report(
@@ -1619,7 +1619,7 @@ def test_invalid_actual_episode_signal_contract_is_explicit_gap(tmp_path):
     )
 
     row = report["consumers"]["episode_machine_postclose_tuning"]["profiles"][
-        "doosan_enerbility_morning"
+        "sk_eternix_morning"
     ]
     assert row["anchor_results"] == []
     assert row["micro_context_status"] == "owner_anchor_contract_invalid"
@@ -1635,7 +1635,7 @@ def test_invalid_actual_episode_signal_contract_is_explicit_gap(tmp_path):
         / f"low_price_two_leg_tuning_{target_date}.json"
     )
     mismatched = json.loads(tuning_path.read_text(encoding="utf-8"))
-    nested = mismatched["daily"]["profiles"]["doosan_enerbility_morning"]
+    nested = mismatched["daily"]["profiles"]["sk_eternix_morning"]
     nested["target_date"] = "2026-08-13"
     nested["signal_features"]["signal_bar"] = "2026-08-14T09:30:00+09:00"
     _write_json(tuning_path, mismatched)
@@ -1646,7 +1646,7 @@ def test_invalid_actual_episode_signal_contract_is_explicit_gap(tmp_path):
     )
     mismatch_row = mismatch_report["consumers"]["episode_machine_postclose_tuning"][
         "profiles"
-    ]["doosan_enerbility_morning"]
+    ]["sk_eternix_morning"]
     assert mismatch_row["anchor_results"] == []
     assert (
         "owner_nested_target_date_contract_invalid"
@@ -1666,8 +1666,8 @@ def test_episode_owner_identity_cannot_forge_collection_symbol(tmp_path):
             "target_date": target_date,
             "daily": {
                 "profiles": {
-                    "doosan_enerbility_morning": {
-                        "profile_id": "doosan_enerbility_morning",
+                    "sk_eternix_morning": {
+                        "profile_id": "sk_eternix_morning",
                         "target_date": target_date,
                         "symbol": "999998",
                         "session": "morning",
@@ -1696,8 +1696,8 @@ def test_episode_owner_identity_cannot_forge_collection_symbol(tmp_path):
     )
 
     profiles = report["consumers"]["episode_machine_postclose_tuning"]["profiles"]
-    known = profiles["doosan_enerbility_morning"]
-    assert known["symbol"] == "034020"
+    known = profiles["sk_eternix_morning"]
+    assert known["symbol"] == "475150"
     assert known["owner_anchor_contract_status"] == "invalid"
     assert known["owner_policy_tuning_eligible"] is False
     assert (

@@ -492,6 +492,7 @@ class SharedResearchFactWriter:
 
     def collect_once(self, now):
         from src.engine.monitoring import research_closed_loop as loop
+        from src.trading.config.owner_retirement import new_entry_retired
         from src.trading.market.micro_confirmation import _live_snapshot_path
 
         if self.capture_day != now.date():
@@ -504,6 +505,7 @@ class SharedResearchFactWriter:
             }
             self.native_books.clear()
         if self.refresh_at is None or (now - self.refresh_at).total_seconds() >= 30:
+            self.symbols = {symbol for symbol in self.symbols if not new_entry_retired(symbol, "episode")}
             self.symbols.update(
                 loop.admission_symbols(
                     now.date(), owner="episode", directory=self.directory
@@ -511,7 +513,12 @@ class SharedResearchFactWriter:
             )
             revisions = {}
             for path in (self.directory / "candidates").glob("episode_*.json"):
-                value = loop.validate_revision(loop.read_object(path))
+                raw = loop.read_object(path)
+                # Retained retired revisions remain audit evidence. They are
+                # not current collection owners and cannot stop other lanes.
+                if new_entry_retired(raw.get("symbol"), raw.get("owner")):
+                    continue
+                value = loop.validate_revision(raw)
                 # Existing actual profiles already have an episode owner. A
                 # registered paired seed consumes their received native books;
                 # this adds no subscription, polling or order permission.

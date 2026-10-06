@@ -1218,6 +1218,9 @@ def _episode_inventory(
         for profile_id, payload in daily_profiles.items():
             if not isinstance(payload, dict):
                 continue
+            from src.trading.config.owner_retirement import new_entry_retired
+            if new_entry_retired(payload.get("symbol"), "episode"):
+                continue
             profile_id = str(profile_id)
             row = profiles.setdefault(profile_id, {})
             registered_profile = PROFILES.get(profile_id)
@@ -2201,6 +2204,9 @@ def _episode_inventory(
         for profile_id, payload in expanded_profiles.items():
             if not isinstance(payload, dict):
                 continue
+            from src.trading.config.owner_retirement import new_entry_retired
+            if new_entry_retired(payload.get("symbol"), "episode"):
+                continue
             profile_id = str(payload.get("profile_id") or profile_id)
             if profile_id in profiles:
                 continue
@@ -2420,6 +2426,9 @@ def _episode_inventory(
         known = {str(row.get("symbol")) for row in profiles.values()}
         for symbol, name in candidate_symbols.items():
             symbol = str(symbol)
+            from src.trading.config.owner_retirement import new_entry_retired
+            if new_entry_retired(symbol, "episode"):
+                continue
             if symbol in known:
                 continue
             profile_id = f"prospective_symbol:{symbol}"

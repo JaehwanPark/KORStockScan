@@ -31,8 +31,6 @@ TIMERS=(
   korstockscan-low-price-two-leg-mirae-asset-morning.timer
   korstockscan-low-price-two-leg-jeju-semiconductor-morning-preflight.timer
   korstockscan-low-price-two-leg-jeju-semiconductor-morning.timer
-  korstockscan-low-price-two-leg-doosan-enerbility-morning-preflight.timer
-  korstockscan-low-price-two-leg-doosan-enerbility-morning.timer
   korstockscan-low-price-two-leg-hanwha-ocean-late-morning-preflight.timer
   korstockscan-low-price-two-leg-hanwha-ocean-late-morning.timer
   korstockscan-low-price-two-leg-kakao-morning-preflight.timer
@@ -49,8 +47,6 @@ TIMERS=(
   korstockscan-low-price-two-leg-sk-eternix-afternoon.timer
   korstockscan-low-price-two-leg-samsung-heavy-morning-preflight.timer
   korstockscan-low-price-two-leg-samsung-heavy-morning.timer
-  korstockscan-low-price-two-leg-doosan-enerbility-late-morning-preflight.timer
-  korstockscan-low-price-two-leg-doosan-enerbility-late-morning.timer
   korstockscan-low-price-two-leg-kakao-midday-preflight.timer
   korstockscan-low-price-two-leg-kakao-midday.timer
   korstockscan-low-price-two-leg-sk-telecom-afternoon-preflight.timer
@@ -109,8 +105,6 @@ TIMERS=(
   korstockscan-low-price-two-leg-sd-biosensor-late-morning.timer
   korstockscan-low-price-two-leg-sd-biosensor-midday-preflight.timer
   korstockscan-low-price-two-leg-sd-biosensor-midday.timer
-  korstockscan-low-price-two-leg-doosan-enerbility-afternoon-preflight.timer
-  korstockscan-low-price-two-leg-doosan-enerbility-afternoon.timer
   korstockscan-low-price-two-leg-samsung-ea-midday-preflight.timer
   korstockscan-low-price-two-leg-samsung-ea-midday.timer
   korstockscan-low-price-two-leg-fan-ocean-morning-preflight.timer
@@ -157,11 +151,9 @@ SERVICES=(
   korstockscan-low-price-two-leg-preflight@sk_eternix_midday.service
   korstockscan-low-price-two-leg@mirae_asset_morning.service
   korstockscan-low-price-two-leg@jeju_semiconductor_morning.service
-  korstockscan-low-price-two-leg@doosan_enerbility_morning.service
   korstockscan-low-price-two-leg@hanwha_ocean_late_morning.service
   korstockscan-low-price-two-leg-preflight@mirae_asset_morning.service
   korstockscan-low-price-two-leg-preflight@jeju_semiconductor_morning.service
-  korstockscan-low-price-two-leg-preflight@doosan_enerbility_morning.service
   korstockscan-low-price-two-leg-preflight@hanwha_ocean_late_morning.service
   korstockscan-low-price-two-leg@kakao_morning.service
   korstockscan-low-price-two-leg@kepco_afternoon.service
@@ -176,14 +168,12 @@ SERVICES=(
   korstockscan-low-price-two-leg-preflight@mirae_asset_midday.service
   korstockscan-low-price-two-leg-preflight@sk_eternix_afternoon.service
   korstockscan-low-price-two-leg@samsung_heavy_morning.service
-  korstockscan-low-price-two-leg@doosan_enerbility_late_morning.service
   korstockscan-low-price-two-leg@kakao_midday.service
   korstockscan-low-price-two-leg@sk_telecom_afternoon.service
   korstockscan-low-price-two-leg@samsung_ea_morning.service
   korstockscan-low-price-two-leg@samsung_ea_late_morning.service
   korstockscan-low-price-two-leg@samsung_ea_afternoon.service
   korstockscan-low-price-two-leg-preflight@samsung_heavy_morning.service
-  korstockscan-low-price-two-leg-preflight@doosan_enerbility_late_morning.service
   korstockscan-low-price-two-leg-preflight@kakao_midday.service
   korstockscan-low-price-two-leg-preflight@sk_telecom_afternoon.service
   korstockscan-low-price-two-leg-preflight@samsung_ea_morning.service
@@ -237,8 +227,6 @@ SERVICES=(
   korstockscan-low-price-two-leg-preflight@sd_biosensor_late_morning.service
   korstockscan-low-price-two-leg@sd_biosensor_midday.service
   korstockscan-low-price-two-leg-preflight@sd_biosensor_midday.service
-  korstockscan-low-price-two-leg@doosan_enerbility_afternoon.service
-  korstockscan-low-price-two-leg-preflight@doosan_enerbility_afternoon.service
   korstockscan-low-price-two-leg@samsung_ea_midday.service
   korstockscan-low-price-two-leg-preflight@samsung_ea_midday.service
   korstockscan-low-price-two-leg@fan_ocean_morning.service

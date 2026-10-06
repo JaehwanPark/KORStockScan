@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from src.trading.config.owner_retirement import new_entry_retired
+
 import argparse
 import fcntl
 import json
@@ -34,6 +36,8 @@ def _enabled() -> bool:
 
 
 def _profile(row: dict, *, authority_hash: str) -> MachineProfile:
+    from src.trading.config.owner_retirement import require_new_entry_owner
+    require_new_entry_owner(row["symbol"], "episode")
     policy = row["policy"]
     return MachineProfile(
         profile_id=row["profile_id"],
@@ -69,6 +73,7 @@ def _load_profiles(now: datetime) -> tuple[str, list[MachineProfile]]:
     profiles = [
         _profile(row, authority_hash=authority_hash)
         for row in payload["profiles"].values()
+        if not new_entry_retired(row.get("symbol"), "episode")
     ]
     for profile in profiles:
         if not independent_machine_ownership_source(

@@ -192,7 +192,10 @@ def candidate_revision(
     return {**body, "revision_sha256": digest(body)}
 
 
-def validate_revision(value, *, symbol=None, owner=None):
+def validate_revision(value, *, symbol=None, owner=None, audit_retired=False):
+    from src.trading.config.owner_retirement import require_new_entry_owner
+    if isinstance(value, dict) and not audit_retired:
+        require_new_entry_owner(value.get("symbol"), value.get("owner"))
     if (
         not isinstance(value, dict)
         or value.get("schema") != SCHEMA
@@ -909,12 +912,17 @@ def admission_symbols(observed_date, *, owner, directory=DIRECTORY):
             else:
                 admitted = bool(row & ({"episode": 2}.get(owner, 0)))
                 name = index["symbol_names"][symbol]
-            if admitted:
+            from src.trading.config.owner_retirement import new_entry_retired
+            if admitted and not new_entry_retired(symbol, owner):
                 symbols.setdefault(symbol, name)
     return symbols
 
 
 def joint_inputs(report, *, family):
+    from src.trading.config.owner_retirement import new_entry_retired
+    if family == "episode":
+        report = {**report, "profiles": {key: value for key, value in report.get("profiles", {}).items()
+                  if not new_entry_retired(value.get("symbol"), "episode")}}
     source_date = str(report.get("end_date") or report.get("target_date"))
     selected, deferred = {}, []
     if family == "episode":
@@ -1003,9 +1011,12 @@ def write_joint_inputs(report, *, family, directory=DIRECTORY):
 
 
 def _joint_cohorts(inputs):
+    from src.trading.config.owner_retirement import new_entry_retired
     cohorts = {}
     for item in inputs:
         for value in item.get("candidate_revisions", {}).values():
+            if new_entry_retired(value.get("symbol"), value.get("owner")):
+                continue
             value = validate_revision(value)
             key = digest(
                 {
@@ -1060,9 +1071,12 @@ def frozen_joint_bundle(inputs, *, directory=DIRECTORY):
             original = read_object(
                 Path(directory) / "candidates" / ".history" / f"{removed}.json"
             )
-            validate_revision(original)
+            validate_revision(original, audit_retired=True)
             if original["revision_sha256"] != removed:
                 raise ValueError("joint_cohort_original_revision_missing")
+            from src.trading.config.owner_retirement import new_entry_retired
+            if new_entry_retired(original.get("symbol"), original.get("owner")):
+                continue
             current = load_candidate(
                 original["symbol"],
                 owner=original["owner"],

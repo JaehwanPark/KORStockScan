@@ -5745,8 +5745,8 @@ def _scalping_watch_budget_overflow_candidates(targets, now_ts):
         if str((target or {}).get("status") or "").upper() == "WATCHING"
         and _is_scalping_fifo_target(target)
     ]
-    total = max(0, _scalping_fifo_max_active() - int(main_fixed_watch.enabled()))
-    if main_fixed_watch.enabled():
+    total = max(0, _scalping_fifo_max_active() - main_fixed_watch.reserved_slots())
+    if main_fixed_watch.enabled_symbols():
         overflow = max(0, len(candidates) - total)
         return _scalping_fifo_overflow_candidates(candidates, now_ts)[:overflow]
     if any(_is_zero_base_watch_target(target) for target in candidates):
@@ -5800,7 +5800,7 @@ def _scalping_attach_capacity_decision(new_target, now_ts, watching_targets=None
             and _is_scalping_fifo_target(target)
         ]
     if _is_zero_base_watch_target(new_target):
-        total = max(0, _scalping_fifo_max_active() - int(main_fixed_watch.enabled()))
+        total = max(0, _scalping_fifo_max_active() - main_fixed_watch.reserved_slots())
         ordinary_count = sum(_is_scalping_fifo_target(t) for t in watching_targets)
         return (
             ordinary_count < total,
@@ -6174,7 +6174,7 @@ def _initial_ws_registration_groups(targets, now_ts=None):
             continue
         priority_item = code
         if main_fixed_watch.is_fixed_watch(target):
-            route = main_fixed_watch.session_route(now_ts)
+            route = main_fixed_watch.session_route(now_ts, str(target.get("code") or "")[:6])
             priority_item = route["item"] if route else ""
         if priority_item and priority_item not in seen_priority:
             priority_codes.append(priority_item)
@@ -6198,42 +6198,46 @@ def _initial_ws_registration_groups(targets, now_ts=None):
 
 
 def _reconcile_main_fixed_watch(targets, *, now_ts, publish_reg):
-    if main_fixed_watch.enabled():
-        exclusion = evaluate_main_bot_control_exclusion(
-            main_fixed_watch.SAMSUNG_CODE
-        )
-        if exclusion.excluded:
-            return "manual_control_excluded"
-    try:
-        with ENTRY_LOCK:
-            outcome, target = main_fixed_watch.reconcile(
-                DB, targets, now_epoch=now_ts,
-                watch_cap=_scalping_fifo_max_active(),
-            )
-    except Exception as exc:
-        log_error(f"[MAIN_FIXED_WATCH] reconcile failed: {type(exc).__name__}: {exc}")
-        return "reconcile_error"
-    if outcome == "armed" and target is not None:
-        route = main_fixed_watch.session_route(now_ts)
-        if publish_reg and route is not None:
-            event_bus.publish("COMMAND_WS_REG", {
-                "codes": [route["item"]],
-                "source": "main_fixed_watch_admission",
-                "required_realtime_types": ("0B", "0D"),
-            })
-        log_info(
-            "[MAIN_FIXED_WATCH] armed "
-            f"id={target.get('id')} admission={target.get('watch_admission_id')} "
-            f"generation={target.get('watch_generation_id')} item={route['item'] if route else '-'}"
-        )
-    elif outcome not in {"already_watching", "disabled", "outside_supported_session"}:
-        last_reason = getattr(_reconcile_main_fixed_watch, "last_wait_reason", "")
-        last_log = getattr(_reconcile_main_fixed_watch, "last_wait_log_epoch", 0.0)
-        if outcome != last_reason or now_ts - last_log >= 60:
-            log_info(f"[MAIN_FIXED_WATCH] admission waiting reason={outcome}")
-            _reconcile_main_fixed_watch.last_wait_reason = outcome
-            _reconcile_main_fixed_watch.last_wait_log_epoch = now_ts
-    return outcome
+    outcomes = {}
+    for spec in main_fixed_watch.SPECS:
+        code = spec.symbol
+        if main_fixed_watch.symbol_enabled(code):
+            exclusion = evaluate_main_bot_control_exclusion(code)
+            if exclusion.excluded:
+                outcomes[code] = "manual_control_excluded"
+                continue
+        try:
+            with ENTRY_LOCK:
+                outcome, target = main_fixed_watch.reconcile(
+                    DB, targets, now_epoch=now_ts,
+                    watch_cap=_scalping_fifo_max_active(), symbol=code,
+                )
+        except Exception as exc:
+            log_error(f"[MAIN_FIXED_WATCH] {code} reconcile failed: {type(exc).__name__}: {exc}")
+            outcomes[code] = "reconcile_error"
+            continue
+        outcomes[code] = outcome
+        adopt = getattr(WS_MANAGER, "adopt_main_fixed_watch_target", None)
+        adopted = bool(target is not None and callable(adopt)
+                       and adopt(target, now_ts=now_ts))
+        if outcome == "armed" and target is not None:
+            route = main_fixed_watch.session_route(now_ts, code)
+            if publish_reg and route is not None and not adopted:
+                event_bus.publish("COMMAND_WS_REG", {
+                    "codes": [route["item"]], "source": "main_fixed_watch_admission",
+                    "required_realtime_types": ("0B", "0D"),
+                })
+            log_info(f"[MAIN_FIXED_WATCH] armed code={code} id={target.get('id')} "
+                     f"admission={target.get('watch_admission_id')} "
+                     f"generation={target.get('watch_generation_id')} item={route['item'] if route else '-'}")
+        elif outcome not in {"already_watching", "disabled", "outside_supported_session"}:
+            waits = getattr(_reconcile_main_fixed_watch, "waits", {})
+            reason, last_log = waits.get(code, ("", 0.0))
+            if outcome != reason or now_ts - last_log >= 60:
+                log_info(f"[MAIN_FIXED_WATCH] code={code} admission waiting reason={outcome}")
+                waits[code] = (outcome, now_ts)
+                _reconcile_main_fixed_watch.waits = waits
+    return outcomes.get(main_fixed_watch.SAMSUNG_CODE, "disabled")
 
 
 def _runtime_iteration_targets(targets, now_ts):
@@ -11835,7 +11839,7 @@ def attach_db_poll_target_if_missing(db_target, targets, now_ts):
         ):
             targets[:] = [target for target in targets if target is not dt]
             return False
-    fixed_route = main_fixed_watch.session_route(now_ts) if main_fixed_watch.is_fixed_watch(dt) else None
+    fixed_route = main_fixed_watch.session_route(now_ts, str(dt.get("code") or "")[:6]) if main_fixed_watch.is_fixed_watch(dt) else None
     reg_payload = {"codes": [fixed_route["item"] if fixed_route else code]}
     if main_fixed_watch.is_fixed_watch(dt):
         reg_payload["source"] = "main_fixed_watch_db_restore"
@@ -13002,7 +13006,7 @@ def run_sniper(is_test_mode=False):
                     attach_db_poll_target_if_missing(dt, targets, now_ts)
                 last_db_poll_time = now_ts
             _db_elapsed_ms = (time.perf_counter() - _t0_db) * 1000
-            if (main_fixed_watch.enabled() or any(
+            if (main_fixed_watch.enabled_symbols() or any(
                 main_fixed_watch.is_fixed_watch(target) for target in targets
             )) and now_ts - getattr(
                 run_sniper, "last_fixed_watch_reconcile_time", 0.0
@@ -14671,7 +14675,7 @@ def run_sniper(is_test_mode=False):
                 ):
                     ws_data = scanner_ws_snapshot_cache.get(code) or {}
                 elif status == "WATCHING" and main_fixed_watch.is_fixed_watch(stock):
-                    route = main_fixed_watch.session_route(now_ts)
+                    route = main_fixed_watch.session_route(now_ts, code)
                     ws_data = (
                         WS_MANAGER.get_exact_item_data(code, route["item"])
                         if WS_MANAGER is not None and route is not None
@@ -14680,7 +14684,7 @@ def run_sniper(is_test_mode=False):
                 else:
                     ws_data = WS_MANAGER.get_latest_data(code) if WS_MANAGER else {}
                 if status == "WATCHING" and main_fixed_watch.is_fixed_watch(stock):
-                    if not main_fixed_watch.enabled():
+                    if not main_fixed_watch.symbol_enabled(code):
                         continue
                     ready, wait_reason = main_fixed_watch.observation_ready(
                         stock, ws_data, now_epoch=now_ts,

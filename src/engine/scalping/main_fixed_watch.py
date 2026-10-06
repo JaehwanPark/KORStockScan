@@ -6,6 +6,7 @@ import hashlib
 import math
 import os
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 
 from src.trading.market import session_contract
@@ -17,6 +18,43 @@ ENABLE_ENV = "KORSTOCKSCAN_MAIN_FIXED_WATCH_005930_ENABLED"
 MIN_WARMUP_SEC = 10.0
 
 
+@dataclass(frozen=True)
+class FixedWatchSpec:
+    symbol: str
+    name: str
+    enable_env: str
+    initial_policy_scope: str
+
+
+SPECS = (
+    FixedWatchSpec(SAMSUNG_CODE, "삼성전자", ENABLE_ENV, "samsung"),
+    FixedWatchSpec("034020", "두산에너빌리티",
+                   "KORSTOCKSCAN_MAIN_FIXED_WATCH_034020_ENABLED", "non_samsung"),
+)
+
+
+def spec_for(symbol: str) -> FixedWatchSpec:
+    for spec in SPECS:
+        if spec.symbol == symbol:
+            return spec
+    raise ValueError("unsupported_main_fixed_watch_symbol")
+
+
+def symbol_enabled(symbol: str) -> bool:
+    spec = spec_for(symbol)
+    if symbol == SAMSUNG_CODE:
+        return enabled()
+    return str(os.getenv(spec.enable_env, "false")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def enabled_symbols() -> tuple[str, ...]:
+    return tuple(spec.symbol for spec in SPECS if symbol_enabled(spec.symbol))
+
+
+def reserved_slots() -> int:
+    return len(enabled_symbols())
+
+
 def enabled() -> bool:
     return str(os.getenv(ENABLE_ENV, "false")).strip().lower() in {"1", "true", "yes", "on"}
 
@@ -24,7 +62,7 @@ def enabled() -> bool:
 def is_fixed_watch(target) -> bool:
     return (
         str((target or {}).get("watch_origin") or "") == WATCH_ORIGIN
-        and str((target or {}).get("code") or "")[:6] == SAMSUNG_CODE
+        and str((target or {}).get("code") or "")[:6] in {spec.symbol for spec in SPECS}
     )
 
 
@@ -37,19 +75,20 @@ def _normalize_numeric_scanner_nulls(target: dict) -> None:
             target[key] = None
 
 
-def session_route(now_epoch: float) -> dict | None:
+def session_route(now_epoch: float, symbol: str = SAMSUNG_CODE) -> dict | None:
+    spec_for(symbol)
     context = session_contract.resolve_market_session(
         datetime.fromtimestamp(now_epoch, tz=session_contract.KST)
     )
     regime = context.session_regime
     if regime == session_contract.MARKET_SESSION_REGIME_LEGACY_PREMARKET:
-        return {"route": "nxt_only", "item": SAMSUNG_CODE + "_NX",
+        return {"route": "nxt_only", "symbol": symbol, "item": symbol + "_NX",
                 "venue": "PREMARKET_KRX_LIKE", "bucket": "krx_like_premarket"}
     if regime in {
         session_contract.MARKET_SESSION_REGIME_KRX_REGULAR,
         session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET,
     }:
-        return {"route": "krx_nxt_integrated", "item": SAMSUNG_CODE + "_AL",
+        return {"route": "krx_nxt_integrated", "symbol": symbol, "item": symbol + "_AL",
                 "venue": "KRX" if regime == session_contract.MARKET_SESSION_REGIME_KRX_REGULAR
                 else "KRX_NXT_INTEGRATED",
                 "bucket": "krx_regular" if regime == session_contract.MARKET_SESSION_REGIME_KRX_REGULAR
@@ -59,13 +98,17 @@ def session_route(now_epoch: float) -> dict | None:
 
 def generation_id(now_epoch: float, route: dict) -> str:
     trade_date = datetime.fromtimestamp(now_epoch, tz=session_contract.KST).date().isoformat()
-    raw = f"{trade_date}|{SAMSUNG_CODE}|{route['bucket']}|{route['route']}"
+    symbol = str(route.get("symbol") or route.get("item") or SAMSUNG_CODE)[:6]
+    spec_for(symbol)
+    raw = f"{trade_date}|{symbol}|{route['bucket']}|{route['route']}"
     return hashlib.sha256(raw.encode("ascii")).hexdigest()
 
 
 def new_admission_id(now_epoch: float, route: dict) -> str:
     trade_date = datetime.fromtimestamp(now_epoch, tz=session_contract.KST).date()
-    return f"FIXED-{trade_date}-{SAMSUNG_CODE}-{route['bucket']}-{route['route']}-{uuid.uuid4().hex[:12]}"
+    symbol = str(route.get("symbol") or route.get("item") or SAMSUNG_CODE)[:6]
+    spec_for(symbol)
+    return f"FIXED-{trade_date}-{symbol}-{route['bucket']}-{route['route']}-{uuid.uuid4().hex[:12]}"
 
 
 def broker_and_owner_clear(now_epoch: float, route: dict) -> tuple[bool, str]:
@@ -73,13 +116,16 @@ def broker_and_owner_clear(now_epoch: float, route: dict) -> tuple[bool, str]:
     from src.engine.scalping.ai_market_snapshot import broker_symbol_verified_flat
     from src.trading.order.owner_custody_registry import default_order_owner_registry
 
-    clear, reason = broker_symbol_verified_flat(SAMSUNG_CODE, now_ts=now_epoch)
+    symbol = str(route.get("symbol") or route.get("item") or SAMSUNG_CODE)[:6]
+    spec_for(symbol)
+    clear, reason = broker_symbol_verified_flat(symbol, now_ts=now_epoch)
     if not clear:
         return False, reason
     try:
         summary = default_order_owner_registry().unresolved_intent_summary(
-            symbol=SAMSUNG_CODE,
-            active_date=datetime.fromtimestamp(now_epoch, tz=session_contract.KST).date(),
+            symbol=symbol,
+            active_date=(None if symbol == "034020" else
+                         datetime.fromtimestamp(now_epoch, tz=session_contract.KST).date()),
         )
     except Exception:
         return False, "owner_registry_unreadable"
@@ -88,38 +134,40 @@ def broker_and_owner_clear(now_epoch: float, route: dict) -> tuple[bool, str]:
     return True, "verified_flat"
 
 
-def reconcile(db, targets: list[dict], *, now_epoch: float, watch_cap: int) -> tuple[str, dict | None]:
+def reconcile(db, targets: list[dict], *, now_epoch: float, watch_cap: int,
+              symbol: str = SAMSUNG_CODE) -> tuple[str, dict | None]:
     """Atomically own one zero-fill WATCHING row; do not submit an order."""
     from sqlalchemy import and_, or_
     from src.database.models import RecommendationHistory
 
+    spec = spec_for(symbol)
     active_statuses = ("WATCHING", "BUY_ORDERED", "HOLDING", "SELL_ORDERED")
-    memory_rows = [t for t in targets if str(t.get("code") or "")[:6] == SAMSUNG_CODE
+    memory_rows = [t for t in targets if str(t.get("code") or "")[:6] == symbol
                    and str(t.get("status") or "").upper() in active_statuses]
-    if not enabled():
+    if not symbol_enabled(symbol):
         with db.get_session() as session:
             fixed_rows = session.query(RecommendationHistory).filter(
-                RecommendationHistory.stock_code == SAMSUNG_CODE,
+                RecommendationHistory.stock_code == symbol,
                 RecommendationHistory.watch_origin == WATCH_ORIGIN,
                 RecommendationHistory.status == "WATCHING",
                 RecommendationHistory.buy_time.is_(None),
                 RecommendationHistory.buy_qty == 0,
             ).all()
             if fixed_rows:
-                clear, reason = broker_and_owner_clear(now_epoch, {})
+                clear, reason = broker_and_owner_clear(now_epoch, {"symbol": symbol})
                 if not clear:
                     return f"disabled_custody_wait:{reason}", None
             for row in fixed_rows:
                 row.status = "EXPIRED"
-        targets[:] = [t for t in targets if not (is_fixed_watch(t) and t.get("status") == "WATCHING")]
+        targets[:] = [t for t in targets if not (is_fixed_watch(t) and str(t.get("code") or "")[:6] == symbol and t.get("status") == "WATCHING")]
         return "disabled", None
 
-    route = session_route(now_epoch)
+    route = session_route(now_epoch, symbol)
     if route is None:
         return "outside_supported_session", None
     generation = generation_id(now_epoch, route)
     trade_date = datetime.fromtimestamp(now_epoch, tz=session_contract.KST).date()
-    fixed_memory = [t for t in memory_rows if is_fixed_watch(t) and t.get("status") == "WATCHING"]
+    fixed_memory = [t for t in memory_rows if is_fixed_watch(t) and str(t.get("code") or "")[:6] == symbol and t.get("status") == "WATCHING"]
     if len(memory_rows) > 1 or (memory_rows and len(fixed_memory) != 1):
         return "same_symbol_runtime_conflict", None
     if fixed_memory:
@@ -136,6 +184,7 @@ def reconcile(db, targets: list[dict], *, now_epoch: float, watch_cap: int) -> t
             "effective_venue": route["venue"],
             "venue_resolution": "main_fixed_watch_session_route",
             "market_data_route": route["route"],
+            "initial_policy_scope": spec.initial_policy_scope,
             "broker_route": "NXT" if route["route"] == "nxt_only" else "SOR",
         })
         return "already_watching", target
@@ -145,7 +194,7 @@ def reconcile(db, targets: list[dict], *, now_epoch: float, watch_cap: int) -> t
         return reason, None
     with db.get_session() as session:
         rows = session.query(RecommendationHistory).filter(
-            RecommendationHistory.stock_code == SAMSUNG_CODE,
+            RecommendationHistory.stock_code == symbol,
             or_(
                 RecommendationHistory.status.in_(
                     ("BUY_ORDERED", "HOLDING", "SELL_ORDERED")
@@ -175,7 +224,7 @@ def reconcile(db, targets: list[dict], *, now_epoch: float, watch_cap: int) -> t
             row = None
             targets[:] = [
                 target for target in targets
-                if not (is_fixed_watch(target) and target.get("status") == "WATCHING")
+                if not (is_fixed_watch(target) and str(target.get("code") or "")[:6] == symbol and target.get("status") == "WATCHING")
             ]
             fixed_memory = []
         if row is None:
@@ -188,7 +237,7 @@ def reconcile(db, targets: list[dict], *, now_epoch: float, watch_cap: int) -> t
                 return "fixed_watch_slot_wait", None
             row = RecommendationHistory(
                 rec_date=datetime.fromtimestamp(now_epoch, tz=session_contract.KST).date(),
-                stock_code=SAMSUNG_CODE, stock_name="삼성전자", trade_type="SCALP",
+                stock_code=symbol, stock_name=spec.name, trade_type="SCALP",
                 status="WATCHING", strategy="SCALPING", position_tag="SCALP_BASE",
                 prob=0.5, buy_price=0, buy_qty=0, watch_origin=WATCH_ORIGIN,
             )
@@ -219,6 +268,7 @@ def reconcile(db, targets: list[dict], *, now_epoch: float, watch_cap: int) -> t
         "market_session_bucket": route["bucket"], "effective_venue": route["venue"],
         "venue_resolution": "main_fixed_watch_session_route",
         "market_data_route": route["route"],
+        "initial_policy_scope": spec.initial_policy_scope,
         "broker_route": "NXT" if route["route"] == "nxt_only" else "SOR",
         "_fixed_first_exact_receipt_epoch": 0.0,
     })
@@ -226,7 +276,7 @@ def reconcile(db, targets: list[dict], *, now_epoch: float, watch_cap: int) -> t
 
 
 def observation_ready(target: dict, snapshot: dict, *, now_epoch: float) -> tuple[bool, str]:
-    route = session_route(now_epoch)
+    route = session_route(now_epoch, str(target.get("code") or SAMSUNG_CODE)[:6])
     if route is None or target.get("watch_generation_id") != generation_id(now_epoch, route):
         return False, "session_generation_mismatch"
     armed = float(target.get("entry_armed_at_epoch") or 0)

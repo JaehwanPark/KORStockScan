@@ -86,9 +86,6 @@ from src.trading.low_price_two_leg.profiles import (
     CJ_CGV_LATE_MORNING_WINDOW,
     CJ_CGV_MIDDAY_20260831_WINDOW,
     CJ_CGV_MORNING_20260907_WINDOW,
-    DOOSAN_ENERBILITY_AFTERNOON_20260907_WINDOW,
-    DOOSAN_ENERBILITY_MORNING_WINDOW,
-    DOOSAN_ENERBILITY_LATE_MORNING_REVISED_WINDOW,
     FAN_OCEAN_LATE_MORNING_WINDOW,
     FAN_OCEAN_MORNING_WINDOW,
     FAN_OCEAN_AFTERNOON_20260907_WINDOW,
@@ -617,7 +614,7 @@ class FakeSession:
         return self.responses.pop(0)
 
 
-def test_profiles_are_exact_seventeen_symbols_and_fifty_three_independent_sessions():
+def test_profiles_exclude_retired_symbol_and_preserve_other_sessions():
     assert {
         key: (item.symbol, item.session)
         for key, item in PROFILES_20260908_PRIOR.items()
@@ -627,7 +624,6 @@ def test_profiles_are_exact_seventeen_symbols_and_fifty_three_independent_sessio
         "sk_eternix_midday": ("475150", "midday"),
         "mirae_asset_morning": ("006800", "morning"),
         "jeju_semiconductor_morning": ("080220", "morning"),
-        "doosan_enerbility_morning": ("034020", "morning"),
         "hanwha_ocean_late_morning": ("042660", "late_morning"),
         "kakao_morning": ("035720", "morning"),
         "kepco_afternoon": ("015760", "afternoon"),
@@ -636,7 +632,6 @@ def test_profiles_are_exact_seventeen_symbols_and_fifty_three_independent_sessio
         "mirae_asset_midday": ("006800", "midday"),
         "sk_eternix_afternoon": ("475150", "afternoon"),
         "samsung_heavy_morning": ("010140", "morning"),
-        "doosan_enerbility_late_morning": ("034020", "late_morning"),
         "kakao_midday": ("035720", "midday"),
         "sk_telecom_afternoon": ("017670", "afternoon"),
         "samsung_ea_morning": ("028050", "morning"),
@@ -666,7 +661,6 @@ def test_profiles_are_exact_seventeen_symbols_and_fifty_three_independent_sessio
         "sd_biosensor_morning": ("137310", "morning"),
         "sd_biosensor_late_morning": ("137310", "late_morning"),
         "sd_biosensor_midday": ("137310", "midday"),
-        "doosan_enerbility_afternoon": ("034020", "afternoon"),
         "samsung_ea_midday": ("028050", "midday"),
         "fan_ocean_morning": ("028670", "morning"),
         "fan_ocean_late_morning": ("028670", "late_morning"),
@@ -685,7 +679,6 @@ def test_profiles_are_exact_seventeen_symbols_and_fifty_three_independent_sessio
         SK_ETERNIX_MIDDAY_WINDOW,
         MIRAE_ASSET_MORNING_WINDOW,
         JEJU_SEMICONDUCTOR_MORNING_WINDOW,
-        DOOSAN_ENERBILITY_MORNING_WINDOW,
         HANWHA_OCEAN_LATE_MORNING_WINDOW,
         KAKAO_MORNING_WINDOW,
         KAKAO_LATE_MORNING_WINDOW,
@@ -693,7 +686,6 @@ def test_profiles_are_exact_seventeen_symbols_and_fifty_three_independent_sessio
         MIRAE_ASSET_MIDDAY_WINDOW,
         KEPCO_AFTERNOON_WINDOW,
         SAMSUNG_HEAVY_MORNING_WINDOW,
-        DOOSAN_ENERBILITY_LATE_MORNING_REVISED_WINDOW,
         KAKAO_MIDDAY_WINDOW,
         SK_TELECOM_AFTERNOON_WINDOW,
         SK_TELECOM_LATE_MORNING_REVISED_WINDOW,
@@ -725,7 +717,6 @@ def test_profiles_are_exact_seventeen_symbols_and_fifty_three_independent_sessio
         SD_BIOSENSOR_MORNING_20260828_WINDOW,
         SD_BIOSENSOR_LATE_MORNING_WINDOW,
         SD_BIOSENSOR_MIDDAY_WINDOW,
-        DOOSAN_ENERBILITY_AFTERNOON_20260907_WINDOW,
         FAN_OCEAN_MORNING_WINDOW,
         FAN_OCEAN_LATE_MORNING_WINDOW,
         SAMSUNG_HEAVY_LATE_MORNING_20260907_WINDOW,
@@ -779,7 +770,6 @@ def test_profiles_are_exact_seventeen_symbols_and_fifty_three_independent_sessio
         for profile_id in {
             "mirae_asset_morning",
             "jeju_semiconductor_morning",
-            "doosan_enerbility_morning",
             "hanwha_ocean_late_morning",
         }
     )
@@ -932,7 +922,6 @@ def test_live_systemd_unit_requires_fresh_preflight_and_does_not_restart_on_guar
         ("sd_biosensor_morning", "09:25:00", "09:29:00"),
         ("sd_biosensor_late_morning", "10:35:00", "10:39:00"),
         ("sd_biosensor_midday", "13:20:00", "13:24:00"),
-        ("doosan_enerbility_afternoon", "14:15:00", "14:19:00"),
         ("samsung_ea_midday", "13:20:00", "13:24:00"),
         ("samsung_ea_afternoon", "14:15:00", "14:19:00"),
         ("fan_ocean_morning", "09:30:00", "09:34:00"),
@@ -1014,9 +1003,9 @@ def test_all_fourteen_user_approved_recommendations_bind_exact_live_profiles():
         / "low_price_two_leg_expanded_profile_evidence_2026-08-18.json"
     )
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-    recommendations = {row["profile_id"]: row for row in evidence["recommendations"]}
+    recommendations = {row["profile_id"]: row for row in evidence["recommendations"] if row.get("symbol") != "034020"}
 
-    assert len(RECOMMENDATION_20260818_PROFILE_MAP) == 14
+    assert len(RECOMMENDATION_20260818_PROFILE_MAP) == 12
     assert set(RECOMMENDATION_20260818_PROFILE_MAP.values()) == set(recommendations)
     for (
         live_profile_id,
@@ -1049,9 +1038,9 @@ def test_all_eleven_20260819_recommendations_bind_preserved_staged_profiles():
         / "low_price_two_leg_expanded_profile_evidence_2026-08-19.json"
     )
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-    recommendations = {row["profile_id"]: row for row in evidence["recommendations"]}
+    recommendations = {row["profile_id"]: row for row in evidence["recommendations"] if row.get("symbol") != "034020"}
 
-    assert len(RECOMMENDATION_20260819_PROFILE_MAP) == 11
+    assert len(RECOMMENDATION_20260819_PROFILE_MAP) == 10
     assert set(RECOMMENDATION_20260819_PROFILE_MAP.values()) == set(recommendations)
     for (
         live_profile_id,
@@ -1083,9 +1072,9 @@ def test_all_nine_20260820_recommendations_bind_exact_latest_profiles():
         / "low_price_two_leg_expanded_profile_evidence_2026-08-20.json"
     )
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-    recommendations = {row["profile_id"]: row for row in evidence["recommendations"]}
+    recommendations = {row["profile_id"]: row for row in evidence["recommendations"] if row.get("symbol") != "034020"}
 
-    assert len(RECOMMENDATION_20260820_PROFILE_MAP) == 9
+    assert len(RECOMMENDATION_20260820_PROFILE_MAP) == 8
     assert set(RECOMMENDATION_20260820_PROFILE_MAP.values()) == set(recommendations)
     for (
         live_profile_id,
@@ -1117,7 +1106,7 @@ def test_all_fourteen_20260821_recommendations_bind_exact_next_profiles():
         / "low_price_two_leg_expanded_profile_evidence_2026-08-21.json"
     )
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-    recommendations = {row["profile_id"]: row for row in evidence["recommendations"]}
+    recommendations = {row["profile_id"]: row for row in evidence["recommendations"] if row.get("symbol") != "034020"}
 
     assert len(RECOMMENDATION_20260821_PROFILE_MAP) == 14
     assert set(RECOMMENDATION_20260821_PROFILE_MAP.values()) == set(recommendations)
@@ -1151,7 +1140,7 @@ def test_all_twelve_20260824_recommendations_bind_exact_next_profiles():
         / "low_price_two_leg_expanded_profile_evidence_2026-08-24.json"
     )
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-    recommendations = {row["profile_id"]: row for row in evidence["recommendations"]}
+    recommendations = {row["profile_id"]: row for row in evidence["recommendations"] if row.get("symbol") != "034020"}
 
     assert len(RECOMMENDATION_20260824_PROFILE_MAP) == 12
     assert set(RECOMMENDATION_20260824_PROFILE_MAP.values()) == set(recommendations)
@@ -1185,9 +1174,9 @@ def test_all_twelve_20260826_recommendations_bind_exact_next_profiles():
         / "low_price_two_leg_expanded_profile_evidence_2026-08-26.json"
     )
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-    recommendations = {row["profile_id"]: row for row in evidence["recommendations"]}
+    recommendations = {row["profile_id"]: row for row in evidence["recommendations"] if row.get("symbol") != "034020"}
 
-    assert len(RECOMMENDATION_20260826_PROFILE_MAP) == 12
+    assert len(RECOMMENDATION_20260826_PROFILE_MAP) == 11
     assert set(RECOMMENDATION_20260826_PROFILE_MAP.values()) == set(recommendations)
     for (
         live_profile_id,
@@ -1219,7 +1208,7 @@ def test_all_nine_20260827_recommendations_bind_exact_next_profiles():
         / "low_price_two_leg_expanded_profile_evidence_2026-08-27.json"
     )
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-    recommendations = {row["profile_id"]: row for row in evidence["recommendations"]}
+    recommendations = {row["profile_id"]: row for row in evidence["recommendations"] if row.get("symbol") != "034020"}
 
     assert len(RECOMMENDATION_20260827_PROFILE_MAP) == 9
     assert set(RECOMMENDATION_20260827_PROFILE_MAP.values()) == set(recommendations)
@@ -1290,7 +1279,6 @@ def test_profile_revision_is_exact_date_preopen_transition(tmp_path):
         "approved_profile_ids": [
             "cj_cgv_afternoon",
             "cj_cgv_midday",
-            "doosan_enerbility_late_morning",
             "hanse_afternoon",
             "hanse_morning",
             "kakao_late_morning",
@@ -1494,7 +1482,7 @@ def test_all_seven_20260828_recommendations_bind_exact_next_profiles():
         / "data/config/low_price_two_leg_expanded_profile_evidence_2026-08-28.json"
     )
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-    recommendations = {row["profile_id"]: row for row in evidence["recommendations"]}
+    recommendations = {row["profile_id"]: row for row in evidence["recommendations"] if row.get("symbol") != "034020"}
 
     assert len(RECOMMENDATION_20260828_PROFILE_MAP) == 7
     assert set(RECOMMENDATION_20260828_PROFILE_MAP.values()) == set(recommendations)
@@ -1527,9 +1515,9 @@ def test_all_thirteen_20260904_recommendations_bind_exact_next_profiles():
         / "data/config/low_price_two_leg_expanded_profile_evidence_2026-09-04.json"
     )
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-    recommendations = {row["profile_id"]: row for row in evidence["recommendations"]}
+    recommendations = {row["profile_id"]: row for row in evidence["recommendations"] if row.get("symbol") != "034020"}
 
-    assert len(RECOMMENDATION_20260904_PROFILE_MAP) == 13
+    assert len(RECOMMENDATION_20260904_PROFILE_MAP) == 12
     assert set(RECOMMENDATION_20260904_PROFILE_MAP.values()) == set(recommendations)
     for (
         live_profile_id,
@@ -3346,7 +3334,6 @@ def test_preflight_requires_token_main_bot_exclusion_evidence_and_applied_policy
     [
         "mirae_asset_morning",
         "jeju_semiconductor_morning",
-        "doosan_enerbility_morning",
         "hanwha_ocean_late_morning",
     ],
 )
@@ -4256,7 +4243,6 @@ def test_tuning_keeps_profiles_separate_without_subset_promotion(tmp_path):
             "sk_eternix_midday",
             "mirae_asset_morning",
             "jeju_semiconductor_morning",
-            "doosan_enerbility_morning",
             "hanwha_ocean_late_morning",
         }
     }

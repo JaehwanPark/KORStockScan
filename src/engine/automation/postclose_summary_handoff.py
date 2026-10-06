@@ -851,7 +851,10 @@ def stage_artifacts(report_dir, day, stage):
     paths['pre_submit_delay_tuning'] = Path(report_dir) / 'pre_submit_delay_tuning' / f'pre_submit_delay_tuning_{day}.json'
     paths['pre_submit_delay_policy'] = Path(report_dir).parent / 'threshold_cycle' / 'pre_submit_delay_policy' / f'pre_submit_delay_policy_{day}.json'
     paths['episode_policy_refresh'] = Path(report_dir) / 'machine_research_closed_loop' / f'episode_policy_refresh_{day}.json'
-    return {name: paths.get(name, Path(report_dir) / name / f'{name}_{day}.json') for name in STAGE_REGISTRY[stage][1]}
+    outputs = {name: paths.get(name, Path(report_dir) / name / f'{name}_{day}.json') for name in STAGE_REGISTRY[stage][1]}
+    if stage == 'main_machine_policy' and day >= '2026-10-06':
+        outputs['main_fixed_watch_policy_research'] = Path(report_dir) / 'main_fixed_watch_policy_research' / f'main_fixed_watch_policy_research_{day}.json'
+    return outputs
 
 
 def _stage_digest(value):
@@ -1275,6 +1278,12 @@ def _stage_output_issues(report_dir, day, stage):
             errors.append(f'{stage}:invalid_output:{name}')
         elif str(value.get('status', '')).lower() in {'failed', 'error', 'running', 'waiting', 'searching_train', 'pending'}:
             errors.append(f'{stage}:incomplete_output:{name}')
+        if name == 'main_fixed_watch_policy_research':
+            from src.engine.monitoring.main_fixed_watch_policy_research import validate_report
+            try:
+                validate_report(value, source_date=day)
+            except (OSError, ValueError, KeyError, TypeError):
+                errors.append(f'{stage}:fixed_watch_research_contract_invalid')
         if name == 'machine_policy_terminal' and value.get('status') not in {'completed', 'source_gap'}:
             errors.append(f'{stage}:search_incomplete')
         if name in {'machine_policy', 'machine_policy_terminal'}:
@@ -1450,11 +1459,14 @@ def stage_commands(stage, day, publication, *, recovery=False):
         return prefix + ['src.engine.' + module, *args]
     date_args = ['--target-date', day, '--write']
     if stage == 'main_machine_policy' and recovery:
-        return []
+        return ([command('monitoring.main_fixed_watch_policy_research', '--source-date', day,
+                         '--publication-date', publication)] if day >= '2026-10-06' else [])
     if stage == 'main_machine_policy':
         return [command('scalping.ai_action_outcome_calibration', *date_args,
                         '--winrate-policy-only', '--admission-recipe', 'pullback_p60_v0',
-                        '--publication-date', publication)]
+                        '--publication-date', publication)] + (
+                    [command('monitoring.main_fixed_watch_policy_research', '--source-date', day,
+                             '--publication-date', publication)] if day >= '2026-10-06' else [])
     if stage == 'pre_submit_delay':
         return [command('scalping.pre_submit_delay_tuning', '--date', day,
                         '--effective-date', _next_krx_trading_day(publication), '--require-family-ledger')]
@@ -1499,6 +1511,9 @@ def _stage_code(stage, commands, project, *, dispatcher_path=None):
     if stage == 'research_capacity':
         paths['native_capacity'] = project / 'src/engine/monitoring/research_native_capacity_source.py'
     if stage == 'main_machine_policy':
+        paths['main_fixed_watch_research'] = project / 'src/engine/monitoring/main_fixed_watch_policy_research.py'
+        paths['fixed_watch_runtime'] = project / 'src/engine/scalping/main_fixed_watch.py'
+        paths['owner_retirement'] = project / 'src/trading/config/owner_retirement.py'
         for name in ('entry_strategy_policy', 'entry_setup_evidence', 'ai_decision_quality', 'entry_candle_context', 'mechanistic_entry_runtime_policy',
                      'entry_admission_analysis', 'entry_admission_acceptance', 'entry_admission_recipe', 'entry_designated_policy'):
             paths[name] = project / f'src/engine/scalping/{name}.py'

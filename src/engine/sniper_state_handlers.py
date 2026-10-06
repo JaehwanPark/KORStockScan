@@ -19178,7 +19178,7 @@ def _fixed_watch_entry_source_route(stock: dict | None, now_ts: float) -> dict |
     """Bind fixed-watch REST/candle inputs to its current exact WS/order route."""
     if not main_fixed_watch.is_fixed_watch(stock):
         return None
-    route = main_fixed_watch.session_route(now_ts)
+    route = main_fixed_watch.session_route(now_ts, str((stock or {}).get("code") or "")[:6])
     if (
         route is None
         or (stock or {}).get("watch_generation_id")

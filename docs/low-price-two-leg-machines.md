@@ -2,8 +2,10 @@
 
 ## Scope
 
-Fifty-three independent regular-session profiles implement the user-selected active
-scope. Every profile owns its process, lock, durable state,
+Doosan (`034020`) is excluded from new episode profiles, orders, research and auto-expansion in the reviewed workspace. Historical policy bundles retain their original hashes, with retired rows excluded from runtime projection. Installed timer retirement and Main cutover follow the [transition plan](proposals/doosan-episode-retirement-main-fixed-watch-initial-policy-plan-2026-10-06.md). Dated calibration tables below are historical evidence.
+
+Independent regular-session profiles implement the user-selected active
+scope. The exact-date native catalog owns the profile count. Every profile owns its process, lock, durable state,
 authority artifact, and exact broker-order ledger.
 
 | Profile | Symbol | Session | Scan bars |
@@ -13,7 +15,6 @@ authority artifact, and exact broker-order ledger.
 | `sk_eternix_midday` | SK이터닉스 `475150` | SOR regular | 13:30 through 13:39 |
 | `mirae_asset_morning` | 미래에셋증권 `006800` | SOR regular | 09:35 through 09:44 |
 | `jeju_semiconductor_morning` | 제주반도체 `080220` | SOR regular | 09:10 through 09:49 |
-| `doosan_enerbility_morning` | 두산에너빌리티 `034020` | SOR regular | 09:20 through 09:49 |
 | `hanwha_ocean_late_morning` | 한화오션 `042660` | SOR regular | 10:05 through 10:24 |
 | `kakao_morning` | 카카오 `035720` | SOR regular | 09:20 through 09:39 |
 | `kakao_late_morning` | 카카오 `035720` | SOR regular | 10:05 through 10:24 |
@@ -22,7 +23,6 @@ authority artifact, and exact broker-order ledger.
 | `kepco_afternoon` | 한국전력 `015760` | SOR regular | 14:00 through 14:29 |
 | `sk_eternix_afternoon` | SK이터닉스 `475150` | SOR regular | 14:15 through 14:40 |
 | `samsung_heavy_morning` | 삼성중공업 `010140` | SOR regular | 09:20 through 09:29 |
-| `doosan_enerbility_late_morning` | 두산에너빌리티 `034020` | SOR regular | 10:15 through 10:34 |
 | `kakao_midday` | 카카오 `035720` | SOR regular | 13:20 through 13:39 |
 | `sk_telecom_afternoon` | SK텔레콤 `017670` | SOR regular | 14:25 through 14:34 |
 | `samsung_ea_late_morning` | 삼성E&A `028050` | SOR regular | 10:05 through 10:14 |
@@ -51,7 +51,6 @@ authority artifact, and exact broker-order ledger.
 | `sd_biosensor_morning` | 에스디바이오센서 `137310` | SOR regular | 09:30 through 09:39 |
 | `sd_biosensor_late_morning` | 에스디바이오센서 `137310` | SOR regular | 10:40 through 10:59 |
 | `sd_biosensor_midday` | 에스디바이오센서 `137310` | SOR regular | 13:25 through 13:54 |
-| `doosan_enerbility_afternoon` | 두산에너빌리티 `034020` | SOR regular | 14:20 through 14:29 |
 | `samsung_ea_midday` | 삼성E&A `028050` | SOR regular | 13:25 through 13:44 |
 | `sk_telecom_morning` | SK텔레콤 `017670` | SOR regular | 09:10 through 09:29 |
 | `fan_ocean_morning` | 팬오션 `028670` | SOR regular | 09:35 through 09:59 |

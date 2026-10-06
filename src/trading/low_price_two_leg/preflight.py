@@ -77,7 +77,6 @@ EPISODE_RESEARCH_PROFILE_IDS = frozenset(
     {
         "mirae_asset_morning",
         "jeju_semiconductor_morning",
-        "doosan_enerbility_morning",
         "hanwha_ocean_late_morning",
     }
 )
@@ -111,12 +110,10 @@ RECOMMENDATION_20260818_PROFILE_MAP = {
     "mirae_asset_midday": "logic_mirae_asset_midday",
     "sk_eternix_morning": "logic_sk_eternix_morning",
     "sk_eternix_midday": "logic_sk_eternix_midday",
-    "doosan_enerbility_morning": "logic_doosan_enerbility_morning",
     "mirae_asset_morning": "logic_mirae_asset_morning",
     "kakao_morning": "logic_kakao_morning",
     "samsung_heavy_morning": "existing_010140_morning",
     "kakao_late_morning": "logic_kakao_late_morning",
-    "doosan_enerbility_late_morning": "existing_034020_late_morning",
     "kakao_midday": "existing_035720_midday",
     "sk_telecom_afternoon": "candidate_017670_afternoon",
     "samsung_ea_late_morning": "candidate_028050_late_morning",
@@ -133,7 +130,6 @@ RECOMMENDATION_20260819_SOURCE_SHA256 = (
     "cd578fd9c8f4b9cf3f648dd7fbc99f03061e69f1b9de32f78406096aecbfab49"
 )
 RECOMMENDATION_20260819_PROFILE_MAP = {
-    "doosan_enerbility_late_morning": "logic_doosan_enerbility_late_morning",
     "samsung_heavy_morning": "logic_samsung_heavy_morning",
     "kakao_midday": "logic_kakao_midday",
     "kakao_late_morning": "logic_kakao_late_morning",
@@ -155,7 +151,6 @@ RECOMMENDATION_20260820_SOURCE_SHA256 = (
     "e7bc66d5a2c71bb314f3e6340ddde0ba2ab6902ce9dfc6e01d03f83460f30c53"
 )
 RECOMMENDATION_20260820_PROFILE_MAP = {
-    "doosan_enerbility_late_morning": "logic_doosan_enerbility_late_morning",
     "samsung_heavy_morning": "logic_samsung_heavy_morning",
     "samsung_ea_morning": "logic_samsung_ea_morning",
     "kakao_late_morning": "logic_kakao_late_morning",
@@ -234,7 +229,6 @@ RECOMMENDATION_20260826_PROFILE_MAP = {
     "sd_biosensor_morning": "candidate_137310_morning",
     "sd_biosensor_late_morning": "candidate_137310_late_morning",
     "sd_biosensor_midday": "candidate_137310_midday",
-    "doosan_enerbility_afternoon": "existing_034020_afternoon",
     "samsung_ea_midday": "existing_028050_midday",
 }
 RECOMMENDATION_20260827_EVIDENCE_PATH = (
@@ -292,7 +286,6 @@ RECOMMENDATION_20260904_PROFILE_MAP = {
     "hanwha_ocean_late_morning": "logic_hanwha_ocean_late_morning",
     "samsung_heavy_late_morning": "existing_010140_late_morning",
     "samsung_ea_afternoon": "logic_samsung_ea_afternoon",
-    "doosan_enerbility_afternoon": "logic_doosan_enerbility_afternoon",
     "hanse_morning": "logic_hanse_morning",
     "cj_cgv_morning": "existing_079160_morning",
     "fan_ocean_afternoon": "existing_028670_afternoon",
@@ -304,7 +297,6 @@ RECOMMENDATION_20260904_PROFILE_MAP = {
 RECOMMENDATION_20260907_PROFILE_MAP = {
     "cj_cgv_late_morning": "logic_cj_cgv_late_morning",
     "cj_cgv_midday": "logic_cj_cgv_midday",
-    "doosan_enerbility_late_morning": "logic_doosan_enerbility_late_morning",
     "fan_ocean_late_morning": "logic_fan_ocean_late_morning",
     "hanse_morning": "logic_hanse_morning",
     "nhn_midday": "existing_181710_midday",

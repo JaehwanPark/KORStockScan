@@ -39,7 +39,7 @@ KST = ZoneInfo("Asia/Seoul")
 TARGET_DATE = date(2026, 9, 7)
 NOW = datetime(2026, 9, 7, 7, 40, tzinfo=KST)
 SYMBOL_A = "005930"
-SYMBOL_B = "034020"
+SYMBOL_B = "042660"
 OWNERS = {
     SYMBOL_A: ["episode", "main_scalping", "manual_operator"],
     SYMBOL_B: [
@@ -174,8 +174,9 @@ def test_expected_scope_covers_all_current_widget_and_episode_symbols():
         "015760",
         "017670",
         "028050",
-        "028670",
         "034020",
+        "028670",
+        "042660",
         "035720",
         "042660",
         "079160",

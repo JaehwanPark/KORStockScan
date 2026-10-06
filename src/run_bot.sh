@@ -334,6 +334,7 @@ while true; do
     # Explicit Main fixed-watch cutover. An operator false value remains the
     # scoped rollback; admission still requires exact broker and owner facts.
     export KORSTOCKSCAN_MAIN_FIXED_WATCH_005930_ENABLED="${KORSTOCKSCAN_MAIN_FIXED_WATCH_005930_ENABLED:-true}"
+export KORSTOCKSCAN_MAIN_FIXED_WATCH_034020_ENABLED="${KORSTOCKSCAN_MAIN_FIXED_WATCH_034020_ENABLED:-true}"
     export_runtime_source_provenance
 
     # 봇 실행 (경로나 파일명은 환경에 맞게 수정)

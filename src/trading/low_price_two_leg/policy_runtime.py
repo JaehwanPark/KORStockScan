@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from src.trading.config.owner_retirement import episode_profile_retired
+
 import hashlib
 import json
 import math
@@ -72,7 +74,6 @@ PRE_EXPANDED_V2_PROFILE_IDS = frozenset(
         "sk_eternix_midday",
         "mirae_asset_morning",
         "jeju_semiconductor_morning",
-        "doosan_enerbility_morning",
         "hanwha_ocean_late_morning",
     }
 )
@@ -129,7 +130,6 @@ PROFILE_REVISION_20260821_TRANSITION = {
     "approved_profile_ids": [
         "cj_cgv_afternoon",
         "cj_cgv_midday",
-        "doosan_enerbility_late_morning",
         "hanse_afternoon",
         "hanse_morning",
         "kakao_late_morning",
@@ -239,7 +239,6 @@ PROFILE_REVISION_20260827_TRANSITION = {
     "logic_revision_count": 7,
     "approved_profile_ids": [
         "cj_cgv_late_morning",
-        "doosan_enerbility_afternoon",
         "hanse_late_morning",
         "kepco_morning",
         "mirae_asset_late_morning",
@@ -324,7 +323,6 @@ PROFILE_REVISION_20260907_TRANSITION = {
     "logic_revision_count": 8,
     "approved_profile_ids": [
         "cj_cgv_morning",
-        "doosan_enerbility_afternoon",
         "fan_ocean_afternoon",
         "hanse_morning",
         "hanwha_ocean_late_morning",
@@ -425,7 +423,6 @@ PROFILE_REVISION_20260908_TRANSITION = {
     "approved_profile_ids": [
         "cj_cgv_late_morning",
         "cj_cgv_midday",
-        "doosan_enerbility_late_morning",
         "fan_ocean_late_morning",
         "hanse_morning",
         "nhn_midday",
@@ -780,6 +777,7 @@ def runtime_policy_binding(
         "artifact_hash": _canonical_hash(payload),
         "policies": {
             key: dict(value["policy"]) for key, value in payload["profiles"].items()
+            if not episode_profile_retired(key)
         },
     }
 
@@ -974,7 +972,7 @@ def validate_candidate(
         allowed_profile_sets.add(PRE_EXPANDED_V2_PROFILE_IDS)
     if (
         not isinstance(profiles, dict)
-        or frozenset(profiles) not in allowed_profile_sets
+        or frozenset(key for key in profiles if not episode_profile_retired(key)) not in allowed_profile_sets
     ):
         return False, "candidate_profile_set_invalid"
     if any(
@@ -985,6 +983,11 @@ def validate_candidate(
         return False, "candidate_mutation_profile_not_in_candidate"
     policies: dict[str, Any] = {}
     for profile_id, item in profiles.items():
+        if episode_profile_retired(profile_id):
+            if not isinstance(item, dict) or not isinstance(item.get("policy"), dict):
+                return False, "retired_profile_audit_contract_invalid"
+            policies[profile_id] = item["policy"]
+            continue
         if not isinstance(item, dict):
             return False, f"candidate_{profile_id}_invalid"
         valid, reason = validate_profile_policy(
@@ -1047,8 +1050,10 @@ def validate_candidate(
             if (
                 not valid
                 or _canonical_hash(applied) != binding.get("artifact_hash")
-                or {key: item["policy"] for key, item in applied["profiles"].items()}
-                != binding.get("policies")
+                or {key: item["policy"] for key, item in applied["profiles"].items()
+                    if not episode_profile_retired(key)}
+                != {key: item for key, item in binding.get("policies", {}).items()
+                    if not episode_profile_retired(key)}
             ):
                 return False, "candidate_actual_runtime_source_mismatch"
         else:
@@ -1365,7 +1370,7 @@ def validate_applied(payload: Any, *, target_date: date) -> tuple[bool, str]:
     profiles = payload.get("profiles")
     if not isinstance(profiles, dict):
         return False, "applied_profile_set_invalid"
-    profile_ids = frozenset(profiles)
+    profile_ids = frozenset(key for key in profiles if not episode_profile_retired(key))
     allowed_profile_ids = {frozenset(baseline_policies_for_target_date(target_date))}
     if target_date <= LEGACY_APPLIED_LAST_TARGET_DATE:
         allowed_profile_ids.add(LEGACY_V1_PROFILE_IDS)
@@ -1379,6 +1384,11 @@ def validate_applied(payload: Any, *, target_date: date) -> tuple[bool, str]:
         return False, "applied_mutation_profile_not_in_applied"
     policies: dict[str, Any] = {}
     for profile_id, item in profiles.items():
+        if episode_profile_retired(profile_id):
+            if not isinstance(item, dict) or not isinstance(item.get("policy"), dict):
+                return False, "retired_profile_audit_contract_invalid"
+            policies[profile_id] = item["policy"]
+            continue
         if not isinstance(item, dict):
             return False, f"applied_{profile_id}_invalid"
         valid, reason = validate_profile_policy(
@@ -1409,6 +1419,8 @@ def load_applied_profile_policy(
     target_date: date,
     applied_dir: Path = APPLIED_DIR,
 ) -> tuple[dict[str, Any] | None, str, str]:
+    if episode_profile_retired(profile_id):
+        return None, "", "symbol_owner_permanently_retired"
     path = applied_path(target_date, applied_dir=applied_dir)
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))

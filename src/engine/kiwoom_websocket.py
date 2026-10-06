@@ -5199,6 +5199,14 @@ class KiwoomWSManager:
                                     )
                                 )
                             self._registered_items_by_code[code] = registered_items
+                            if str(source).startswith("main_fixed_watch_") and not observation_only:
+                                for item in incoming_items:
+                                    self._micro_reversion_observation_only_items.discard(item)
+                                self._micro_reversion_observation_only_codes.discard(code)
+                                self._runtime_primary_items_by_code[code] = incoming_items[0]
+                                self._implicit_runtime_route_codes.discard(code)
+                                if incoming_items[0].endswith("_AL"):
+                                    self._runtime_integrated_route_active = True
                             if not hasattr(self, "_registered_item_epochs"):
                                 self._registered_item_epochs = {}
                             if not hasattr(self, "_registered_item_types"):
@@ -5608,6 +5616,10 @@ class KiwoomWSManager:
                     )
                     new_targets = rebuild_targets
                     replace_existing = True
+            fixed_watch_transition = source_key.startswith("main_fixed_watch_")
+            if fixed_watch_transition:
+                remove_before_reg = False
+                replace_existing = False
             enforce_item_budget = True
             include_alternate_route = persistent_repair or explicit_alternate_route
             alternate_route_codes = None
@@ -5639,7 +5651,7 @@ class KiwoomWSManager:
                     repair_cycle=repair_cycle,
                     realtime_types=realtime_types,
                     replacement_codes=(
-                        transitioned_source_only | source_only_replacement
+                        set() if fixed_watch_transition else transitioned_source_only | source_only_replacement
                     ),
                     trading_promotion_codes=transitioned_source_only,
                 ),
@@ -6130,6 +6142,37 @@ class KiwoomWSManager:
             )
             target = store.get(item if observation_only else code)
             return self._snapshot_target(target) if target else {}
+
+    def adopt_main_fixed_watch_target(self, target, *, now_ts):
+        """Transfer an already registered exact item to Main without wire churn.
+
+        Quote/tape are populated by subsequent REAL packets. An observation
+        snapshot is never copied into executable fields during the transfer.
+        """
+        from src.engine.scalping import main_fixed_watch as fixed
+        if not fixed.is_fixed_watch(target) or target.get("status") != "WATCHING":
+            return False
+        code = str(target.get("code") or "")[:6]
+        route = fixed.session_route(now_ts, code)
+        if (not route or target.get("watch_generation_id") != fixed.generation_id(now_ts, route)
+            or not target.get("watch_admission_id")
+            or not 0 < float(target.get("entry_armed_at_epoch") or 0) <= now_ts):
+            return False
+        item = route["item"]
+        with self.lock:
+            if (self.websocket is None or not self._session_ready.is_set()
+                or code not in self.subscribed_codes
+                or item not in self._registered_items_by_code.get(code, ())
+                or self._registered_item_epochs.get(item) != self._market_data_transport_epoch
+                or not {"0B", "0D"}.issubset(self._registered_item_types.get(item, ()))):
+                return False
+            self._micro_reversion_observation_only_items.discard(item)
+            self._micro_reversion_observation_only_codes.discard(code)
+            self._runtime_primary_items_by_code[code] = item
+            self._implicit_runtime_route_codes.discard(code)
+            if item.endswith("_AL"):
+                self._runtime_integrated_route_active = True
+        return True
 
     def get_all_data(self, codes):
         """Return dict of latest data for multiple codes, acquiring lock once."""

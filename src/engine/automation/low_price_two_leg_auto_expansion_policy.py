@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from src.trading.config.owner_retirement import new_entry_retired
+
 import argparse
 import hashlib
 import json
@@ -132,10 +134,14 @@ def _previous_profiles(
     if not candidates:
         return {}
     payload = load_policy(max(candidates)[0], policy_dir=policy_dir)
-    return {key: dict(value) for key, value in payload["profiles"].items()}
+    return {key: dict(value) for key, value in payload["profiles"].items()
+            if not new_entry_retired(value.get("symbol"), "episode")}
 
 
 def _valid_recommendation(row: dict[str, Any], *, frozen_legacy: bool = False) -> bool:
+    from src.trading.config.owner_retirement import new_entry_retired
+    if new_entry_retired(row.get("symbol"), "episode"):
+        return False
     spot = row.get("recommended_spot")
     paired = row.get("paired_economics")
     try:
@@ -476,7 +482,8 @@ def validate_policy(payload: Any, *, effective_date: date) -> None:
             raise ValueError("episode_retired_entry_contract_invalid")
         from src.trading.low_price_two_leg.auto_expansion_service import _profile
 
-        _profile(row, authority_hash=payload["policy_hash"])
+        if not new_entry_retired(row.get("symbol"), "episode"):
+            _profile(row, authority_hash=payload["policy_hash"])
 
 
 def preserve_source_snapshot(payload: dict[str, Any], *, policy_dir: Path) -> Path:
@@ -548,6 +555,8 @@ def load_policy(day: date, *, policy_dir: Path = POLICY_DIR) -> dict[str, Any]:
         # The immutable source report and native publisher manifest bind the
         # gate; historical candidates are checked against their registry archive.
         for profile_id, row in payload["profiles"].items():
+            if new_entry_retired(row.get("symbol"), "episode"):
+                continue
             recommendations = [
                 item
                 for item in report.get("recommendations", [])

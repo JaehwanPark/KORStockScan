@@ -8,6 +8,8 @@ data boundary.
 
 from __future__ import annotations
 
+from src.trading.config.owner_retirement import new_entry_retired
+
 import hashlib
 import json
 import math
@@ -272,6 +274,7 @@ def _is_active_gap(gap: dict[str, Any]) -> bool:
     scope_kind = str(gap.get("scope_kind") or "")
     return scope_kind in {
         "active_episode_owner",
+        "active_main_fixed_watch",
     }
 
 
@@ -296,6 +299,9 @@ def build_collection_targets(
             return
         symbol = _normalize_symbol(scope.get("symbol"))
         if not symbol:
+            return
+        from src.trading.config.owner_retirement import new_entry_retired
+        if new_entry_retired(symbol, scope.get("owner")):
             return
         row = merged.setdefault(
             symbol,
@@ -328,6 +334,14 @@ def build_collection_targets(
             row["actual_execution_observed"]
             or False
         )
+
+    from src.engine.scalping.main_fixed_watch import SPECS
+    for spec in SPECS if effective_date >= date(2026, 10, 7) else ():
+        merge_scope({
+            "symbol": spec.symbol, "owner": "main_scalping",
+            "scope_id": f"main_fixed_watch_{spec.symbol}",
+            "scope_kind": "active_main_fixed_watch", "expected_venues": ["SOR", "NXT"],
+        }, collection_reason="MAIN_FIXED_WATCH_SOURCE")
 
     for gap in attribution_report.get("producer_consumer_gaps") or ():
         if not isinstance(gap, dict) or gap.get("gap_class") not in REPAIRABLE_GAPS:
@@ -855,7 +869,10 @@ def load_exact_date_collection_targets(
         }
     retired_items = {
         item for row in selected_targets
-        if row.get("owners") and all(str(owner).startswith("widget") for owner in row["owners"])
+        if row.get("owners") and all(
+            str(owner).startswith("widget") or new_entry_retired(row.get("symbol"), owner)
+            for owner in row["owners"]
+        )
         for item in (row.get("registration_items") or [row.get("registration_item")])
     }
     return {

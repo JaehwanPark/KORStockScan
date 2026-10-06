@@ -1380,8 +1380,8 @@ def test_dynamic_universe_report_pins_inventory_for_notifier_validation(monkeypa
     assert report["new_symbol_profile_count"] == len(candidate_symbols) * len(
         expanded.SESSION_WINDOWS
     )
-    assert report["existing_symbol_universe_size"] == 13
-    assert report["existing_symbol_logic_improvement_profile_count"] == 27
+    assert report["existing_symbol_universe_size"] == 12
+    assert report["existing_symbol_logic_improvement_profile_count"] == 25
     assert (
         len(expanded.LIVE_PROFILES)
         > report["existing_symbol_logic_improvement_profile_count"]

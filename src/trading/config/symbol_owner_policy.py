@@ -20,6 +20,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from src.utils.constants import DATA_DIR
+from src.trading.config.owner_retirement import main_manual_after_episode_retirement
 
 KST = ZoneInfo("Asia/Seoul")
 POLICY_SCHEMA = "symbol_owner_policy_v2"
@@ -151,6 +152,9 @@ class SymbolOwnerDecision:
 
     def owner_allowed(self, owner: str, *, new_entry: bool = True) -> bool:
         normalized_owner = str(owner or "").strip().lower()
+        from src.trading.config.owner_retirement import new_entry_retired
+        if new_entry and new_entry_retired(self.symbol, normalized_owner):
+            return False
         if normalized_owner == "widget_auto_trade":
             return False
         if not self.policy_present:
@@ -176,7 +180,8 @@ class SymbolOwnerDecision:
             and self.migration_completed
             and self.mode in {COEXIST_ENTRY_ENABLED, COEXIST_EXIT_ONLY}
             and "main_scalping" in self.allowed_owners
-            and bool({"widget_auto_trade", "episode"}.intersection(self.allowed_owners))
+            and (bool({"widget_auto_trade", "episode"}.intersection(self.allowed_owners))
+                 or main_manual_after_episode_retirement(self.symbol, self.allowed_owners))
         )
 
     @property
@@ -253,10 +258,10 @@ def _validate_symbol_entry(
             raise SymbolOwnerPolicyError(
                 "symbol_owner_policy_coexist_migration_incomplete"
             )
-        if "main_scalping" not in owners or not {
-            "widget_auto_trade",
-            "episode",
-        }.intersection(owners):
+        if "main_scalping" not in owners or not (
+            {"widget_auto_trade", "episode"}.intersection(owners)
+            or main_manual_after_episode_retirement(normalized_symbol, owners)
+        ):
             raise SymbolOwnerPolicyError(
                 "symbol_owner_policy_coexist_owner_set_invalid"
             )
@@ -540,6 +545,11 @@ def build_symbol_owner_policy_payload(
             )
         if "widget_auto_trade" in (raw.get("allowed_owners") or []):
             raise SymbolOwnerPolicyError("widget_owner_permanently_retired")
+        from src.trading.config.owner_retirement import new_entry_retired
+        if raw.get("mode") == COEXIST_ENTRY_ENABLED and any(
+            new_entry_retired(clean_symbol, owner) for owner in raw.get("allowed_owners") or []
+        ):
+            raise SymbolOwnerPolicyError("symbol_owner_permanently_retired")
         _validate_symbol_entry(
             raw,
             normalized_symbol=clean_symbol,

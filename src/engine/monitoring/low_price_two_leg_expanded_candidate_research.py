@@ -8,6 +8,8 @@ machine, or mutate runtime policy.
 
 from __future__ import annotations
 
+from src.trading.config.owner_retirement import new_entry_retired
+
 import argparse
 from contextlib import nullcontext
 from copy import deepcopy
@@ -126,7 +128,6 @@ REVIEWED_SYMBOLS = {
     "015760": "한국전력",
     "017670": "SK텔레콤",
     "028050": "삼성E&A",
-    "034020": "두산에너빌리티",
     "035720": "카카오",
     "042660": "한화오션",
     "080220": "제주반도체",
@@ -309,6 +310,8 @@ def _new_symbol_profiles(
         CANDIDATE_SYMBOLS if candidate_symbols is None else candidate_symbols
     )
     for symbol, name in selected_symbols.items():
+        if new_entry_retired(symbol, "episode"):
+            continue
         for session, window in SESSION_WINDOWS.items():
             profile_id = f"candidate_{symbol}_{session}"
             observation_spec = OPERATOR_OBSERVATION_PROFILE_SPECS.get(profile_id)
@@ -425,6 +428,8 @@ def _existing_symbol_time_extension_profiles(
     )
     result: dict[str, ResearchProfile] = {}
     for symbol, name in selected_implemented_symbols.items():
+        if new_entry_retired(symbol, "episode"):
+            continue
         for session, window in SESSION_WINDOWS.items():
             if (symbol, session) in selected_active_symbol_sessions:
                 continue
@@ -528,6 +533,7 @@ def _target_date_research_inventory(
                     row, authority_hash=expansion["policy_hash"]
                 )
                 for profile_id, row in expansion["profiles"].items()
+                if not new_entry_retired(row.get("symbol"), "episode")
             }
         )
     except (OSError, ValueError, TypeError, KeyError):
@@ -543,6 +549,10 @@ def _target_date_research_inventory(
     selected_candidate_symbols = (
         base_candidate_symbols if candidate_symbols is None else dict(candidate_symbols)
     )
+    selected_candidate_symbols = {
+        symbol: name for symbol, name in selected_candidate_symbols.items()
+        if not new_entry_retired(symbol, "episode")
+    }
     active_symbol_sessions = frozenset(
         (profile.symbol, profile.session) for profile in live_profiles.values()
     )

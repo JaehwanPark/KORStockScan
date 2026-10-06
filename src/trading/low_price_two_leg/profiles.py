@@ -15,7 +15,6 @@ SK_ETERNIX_MIDDAY_LEGACY_WINDOW = (time(13, 30), time(13, 54))
 SK_ETERNIX_MIDDAY_WINDOW = (time(13, 30), time(13, 39))
 MIRAE_ASSET_MORNING_WINDOW = (time(9, 35), time(9, 44))
 JEJU_SEMICONDUCTOR_MORNING_WINDOW = (time(9, 10), time(9, 49))
-DOOSAN_ENERBILITY_MORNING_WINDOW = (time(9, 20), time(9, 49))
 HANWHA_OCEAN_LATE_MORNING_WINDOW = (time(10, 5), time(10, 24))
 KAKAO_MORNING_WINDOW = (time(9, 20), time(9, 39))
 KAKAO_LATE_MORNING_LEGACY_WINDOW = (time(10, 5), time(10, 34))
@@ -27,8 +26,6 @@ SAMSUNG_HEAVY_MORNING_WINDOW = (time(9, 20), time(9, 29))
 SAMSUNG_HEAVY_LATE_MORNING_20260907_WINDOW = (time(10, 15), time(10, 34))
 SAMSUNG_EA_MORNING_WINDOW = (time(9, 45), time(9, 59))
 SAMSUNG_EA_LATE_MORNING_WINDOW = (time(10, 5), time(10, 14))
-DOOSAN_ENERBILITY_LATE_MORNING_WINDOW = (time(10, 15), time(10, 59))
-DOOSAN_ENERBILITY_LATE_MORNING_REVISED_WINDOW = (time(10, 15), time(10, 34))
 KAKAO_MIDDAY_WINDOW = (time(13, 20), time(13, 39))
 SAMSUNG_EA_AFTERNOON_WINDOW = (time(14, 5), time(14, 34))
 SK_TELECOM_AFTERNOON_WINDOW = (time(14, 25), time(14, 34))
@@ -66,8 +63,6 @@ SD_BIOSENSOR_MORNING_WINDOW = (time(9, 30), time(9, 49))
 SD_BIOSENSOR_MORNING_20260828_WINDOW = (time(9, 30), time(9, 39))
 SD_BIOSENSOR_LATE_MORNING_WINDOW = (time(10, 40), time(10, 59))
 SD_BIOSENSOR_MIDDAY_WINDOW = (time(13, 25), time(13, 54))
-DOOSAN_ENERBILITY_AFTERNOON_WINDOW = (time(14, 10), time(14, 29))
-DOOSAN_ENERBILITY_AFTERNOON_20260907_WINDOW = (time(14, 20), time(14, 29))
 SAMSUNG_EA_MIDDAY_WINDOW = (time(13, 20), time(13, 49))
 SAMSUNG_EA_MIDDAY_20260907_WINDOW = (time(13, 25), time(13, 44))
 SAMSUNG_EA_AFTERNOON_20260828_WINDOW = (time(14, 15), time(14, 34))
@@ -107,7 +102,6 @@ ALLOWED_SYMBOLS = frozenset(
         "017670",
         "028050",
         "028670",
-        "034020",
         "035720",
         "042660",
         "079160",
@@ -132,7 +126,6 @@ SUPPORTED_REGULAR_SCAN_WINDOWS = frozenset(
         SK_ETERNIX_MIDDAY_WINDOW,
         MIRAE_ASSET_MORNING_WINDOW,
         JEJU_SEMICONDUCTOR_MORNING_WINDOW,
-        DOOSAN_ENERBILITY_MORNING_WINDOW,
         HANWHA_OCEAN_LATE_MORNING_WINDOW,
         KAKAO_MORNING_WINDOW,
         KAKAO_LATE_MORNING_LEGACY_WINDOW,
@@ -143,8 +136,6 @@ SUPPORTED_REGULAR_SCAN_WINDOWS = frozenset(
         SAMSUNG_HEAVY_MORNING_WINDOW,
         SAMSUNG_EA_MORNING_WINDOW,
         SAMSUNG_EA_LATE_MORNING_WINDOW,
-        DOOSAN_ENERBILITY_LATE_MORNING_WINDOW,
-        DOOSAN_ENERBILITY_LATE_MORNING_REVISED_WINDOW,
         KAKAO_MIDDAY_WINDOW,
         SAMSUNG_EA_AFTERNOON_WINDOW,
         SK_TELECOM_AFTERNOON_WINDOW,
@@ -181,14 +172,12 @@ SUPPORTED_REGULAR_SCAN_WINDOWS = frozenset(
         SD_BIOSENSOR_MORNING_20260828_WINDOW,
         SD_BIOSENSOR_LATE_MORNING_WINDOW,
         SD_BIOSENSOR_MIDDAY_WINDOW,
-        DOOSAN_ENERBILITY_AFTERNOON_WINDOW,
         SAMSUNG_EA_MIDDAY_WINDOW,
         SAMSUNG_EA_AFTERNOON_20260828_WINDOW,
         FAN_OCEAN_MORNING_WINDOW,
         FAN_OCEAN_LATE_MORNING_WINDOW,
         SAMSUNG_HEAVY_LATE_MORNING_20260907_WINDOW,
         NHN_LATE_MORNING_20260907_WINDOW,
-        DOOSAN_ENERBILITY_AFTERNOON_20260907_WINDOW,
         SAMSUNG_EA_MIDDAY_20260907_WINDOW,
         SAMSUNG_EA_AFTERNOON_20260907_WINDOW,
         FAN_OCEAN_AFTERNOON_20260907_WINDOW,
@@ -243,6 +232,8 @@ class RegularTwoLegPolicy:
     dynamic_authority_hash: str = ""
 
     def __post_init__(self) -> None:
+        from src.trading.config.owner_retirement import require_new_entry_owner
+        require_new_entry_owner(self.symbol, "episode")
         dynamic_authorized = bool(
             self.runtime_policy_source == "exact_date_auto_expansion_policy"
             and len(self.dynamic_authority_hash) == 64
@@ -359,6 +350,12 @@ class MachineProfile:
     live_confirmation: str
     entry_runtime_eligible: bool = True
 
+    def __post_init__(self) -> None:
+        from src.trading.config.owner_retirement import require_new_entry_owner
+        require_new_entry_owner(self.symbol, "episode")
+        if self.symbol != self.policy.symbol:
+            raise ValueError("episode_profile_policy_symbol_mismatch")
+
 
 def _profile(
     profile_id: str,
@@ -454,18 +451,6 @@ _PRE_RECOMMENDATION_PROFILES = {
             drawdown_pct=2.50,
             near_low_pct=0.10,
             entry_valid_completed_bars=3,
-            target_ticks=4,
-            runtime_policy_source="clean_baseline_31d_calibration_16d_holdout_penetration_selected_v1",
-        ),
-        _profile(
-            "doosan_enerbility_morning",
-            "034020",
-            "두산에너빌리티",
-            "morning",
-            window=DOOSAN_ENERBILITY_MORNING_WINDOW,
-            lookback_bars=15,
-            drawdown_pct=2.00,
-            near_low_pct=0.50,
             target_ticks=4,
             runtime_policy_source="clean_baseline_31d_calibration_16d_holdout_penetration_selected_v1",
         ),
@@ -614,13 +599,6 @@ PROFILES_20260819.update(
             near_low_pct=0.35,
             target_ticks=4,
         ),
-        "doosan_enerbility_morning": _revise_profile(
-            "doosan_enerbility_morning",
-            lookback_bars=15,
-            drawdown_pct=1.75,
-            near_low_pct=0.20,
-            target_ticks=4,
-        ),
         "mirae_asset_morning": _revise_profile(
             "mirae_asset_morning",
             lookback_bars=30,
@@ -659,17 +637,6 @@ PROFILES_20260819.update(
                 lookback_bars=20,
                 drawdown_pct=0.50,
                 near_low_pct=0.50,
-                runtime_policy_source=_REVISION_SOURCE,
-            ),
-            _profile(
-                "doosan_enerbility_late_morning",
-                "034020",
-                "두산에너빌리티",
-                "late_morning",
-                window=DOOSAN_ENERBILITY_LATE_MORNING_WINDOW,
-                lookback_bars=30,
-                drawdown_pct=1.75,
-                near_low_pct=0.05,
                 runtime_policy_source=_REVISION_SOURCE,
             ),
             _profile(
@@ -768,14 +735,6 @@ def _revise_20260821(
 PROFILES = dict(PROFILES_20260819)
 PROFILES.update(
     {
-        "doosan_enerbility_late_morning": _revise_20260821(
-            "doosan_enerbility_late_morning",
-            window=DOOSAN_ENERBILITY_LATE_MORNING_REVISED_WINDOW,
-            lookback_bars=45,
-            drawdown_pct=1.50,
-            near_low_pct=0.05,
-            target_ticks=4,
-        ),
         "samsung_heavy_morning": _revise_20260821(
             "samsung_heavy_morning",
             lookback_bars=20,
@@ -1184,14 +1143,6 @@ def _revise_20260821_latest(
 PROFILES = dict(PROFILES_20260821_0819)
 PROFILES.update(
     {
-        "doosan_enerbility_late_morning": _revise_20260821_latest(
-            "doosan_enerbility_late_morning",
-            window=DOOSAN_ENERBILITY_LATE_MORNING_REVISED_WINDOW,
-            lookback_bars=45,
-            drawdown_pct=1.50,
-            near_low_pct=0.05,
-            target_ticks=4,
-        ),
         "samsung_heavy_morning": _revise_20260821_latest(
             "samsung_heavy_morning",
             lookback_bars=20,
@@ -1586,17 +1537,6 @@ PROFILES.update(
                 runtime_policy_source=_REVISION_20260827_SOURCE,
             ),
             _profile(
-                "doosan_enerbility_afternoon",
-                "034020",
-                "두산에너빌리티",
-                "afternoon",
-                window=DOOSAN_ENERBILITY_AFTERNOON_WINDOW,
-                lookback_bars=15,
-                drawdown_pct=0.75,
-                near_low_pct=0.05,
-                runtime_policy_source=_REVISION_20260827_SOURCE,
-            ),
-            _profile(
                 "samsung_ea_midday",
                 "028050",
                 "삼성E&A",
@@ -1936,15 +1876,6 @@ PROFILES.update(
             near_low_pct=0.35,
             target_ticks=4,
         ),
-        "doosan_enerbility_afternoon": _revise_20260907(
-            "doosan_enerbility_afternoon",
-            window=DOOSAN_ENERBILITY_AFTERNOON_20260907_WINDOW,
-            lookback_bars=15,
-            drawdown_pct=0.75,
-            near_low_pct=0.75,
-            entry_offsets_ticks=(-1, -2),
-            target_ticks=4,
-        ),
         "hanse_morning": _revise_20260907(
             "hanse_morning",
             window=HANSE_MORNING_20260907_WINDOW,
@@ -2055,23 +1986,6 @@ PROFILES["youngone_afternoon"] = replace(
         lookback_bars=15,
         drawdown_pct=0.75,
         near_low_pct=0.5,
-        entry_offsets_ticks=(-1, -2),
-        entry_valid_completed_bars=5,
-        target_ticks=4,
-        runtime_policy_source="user_directed_profile_revision_20260908",
-    ).policy,
-)
-PROFILES["doosan_enerbility_late_morning"] = replace(
-    PROFILES_20260908_PRIOR["doosan_enerbility_late_morning"],
-    policy=_profile(
-        "doosan_enerbility_late_morning",
-        "034020",
-        "두산에너빌리티",
-        "late_morning",
-        window=(time(10, 15), time(10, 34)),
-        lookback_bars=30,
-        drawdown_pct=1.0,
-        near_low_pct=0.2,
         entry_offsets_ticks=(-1, -2),
         entry_valid_completed_bars=5,
         target_ticks=4,

@@ -11,6 +11,7 @@
 | 실행/복구 권한·배포 경로 확인 | [Time-based runbook](./time-based-operations-runbook.md), [Runtime release routing](./runtime-release-routing.md)의 해당 절 |
 | producer/consumer·R0–R6·Metric Decision Contract | [Traceability](./report-based-automation-traceability.md)의 해당 계약 |
 | collector/report/apply/env 운영 | [Threshold README](../data/threshold_cycle/README.md)의 해당 절 |
+| Main 고정감시·종목/owner 퇴역 전환 | [두산 전환 owner](./proposals/doosan-episode-retirement-main-fixed-watch-initial-policy-plan-2026-10-06.md), [release 전환 절차](./runtime-release-routing.md#main-fixed-watch-owner-retirement-transition) |
 | clean tuning 기준 | [Policy artifact](../data/source_quality/clean_baseline_policy.json) |
 | 현재 장후작업 구성·예약·stage·OFF/퇴역·정책 소비 확인 | [장후작업 현행 활성 목록](./audit-reports/2026-09-05-postclose-work-inventory.md)의 해당 owner와 직접 코드/설치 근거 |
 | 완료된 검토의 근거가 필요한 경우 | 해당 checklist의 완료 기록과 연결된 audit/원 artifact; 현행 목록을 과거 실행 결과로 사용하지 않음 |

@@ -529,6 +529,9 @@ class KiwoomLowPriceTwoLegGateway:
         )
 
     def submit_limit_buy(self, *, price: int, quantity: int) -> SubmitResult:
+        from src.trading.config.owner_retirement import new_entry_retired
+        if new_entry_retired(self.symbol, "episode"):
+            return SubmitResult(False, return_code="SYMBOL_OWNER_RETIRED")
         self._require_write_authority()
         price = self._validate_price(price)
         quantity = validate_owned_leg_quantity(quantity)

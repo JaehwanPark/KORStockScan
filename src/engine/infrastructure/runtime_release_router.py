@@ -300,6 +300,19 @@ def git(root: Path, *args: str) -> str:
 
 def _validate_retired_surfaces(workspace: Path, root: Path) -> None:
     receipt = workspace / "data/runtime/retirements/widget-retirement-2026-10-06.json"
+    owner_receipt = workspace / "data/runtime/retirements/doosan-episode-retirement.json"
+    if owner_receipt.exists():
+        owner = json.loads(owner_receipt.read_text())
+        owner_digest = hashlib.sha256(json.dumps(
+            {k: v for k, v in owner.items() if k != "receipt_sha256"},
+            sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
+        guard = root / "src/trading/config/owner_retirement.py"
+        if (owner.get("schema") != "symbol_owner_retirement_transition_v1" or owner.get("state") not in {"entry_retired", "terminal"}
+            or owner.get("symbol") != "034020" or owner.get("owner") != "episode"
+            or owner.get("receipt_sha256") != owner_digest):
+            raise ValueError("symbol_owner_retirement_receipt_invalid")
+        if (not guard.is_file() or hashlib.sha256(guard.read_bytes()).hexdigest() != owner.get("guard_file_sha256")):
+            raise ValueError("release_restores_permanently_retired_episode_owner")
     if not receipt.exists():
         return
     body = json.loads(receipt.read_text())

@@ -1117,3 +1117,11 @@ Owners and closure: [10/5 checklist](checklists/2026-10-05-stage2-todo-checklist
 Future leg/source, semantic projection and natural startup consumption remain
 with the existing research/semantic/startup owners; this finite diagnostic does
 not create trading authority.
+
+
+## Main fixed watch research and owner retirement
+
+- Main fixed-watch observation/admission is owned by `src/engine/scalping/main_fixed_watch.py`; Main remains the only runtime entry/holding/exit/order owner. Each symbol/session has its native admission/generation and exact item receipts.
+- `src/engine/monitoring/main_fixed_watch_policy_research.py` consumes retained Main observation projections and the current Main non-Samsung parent; freezes source/parent/kernel/candidates and reports chronological native replay. Scanner diagnostics and old episode custody cannot become Main fixed-watch opportunities. Its report has no apply/order authority, missing economics stays null, and initial operator designation is independent of research support.
+- The existing Main postclose stage consumes the report's exact source date and frozen hashes; recovery can regenerate this bounded diagnostic without rerunning historical policy generation. No independent Doosan stage or cron is installed.
+- `src/engine/automation/owner_retirement_transition.py` owns the reviewed installed-unit manifest and native flat transition receipt. Default prepare is read-only. [Operating contract](runtime-release-routing.md#main-fixed-watch-owner-retirement-transition) and [current plan](proposals/doosan-episode-retirement-main-fixed-watch-initial-policy-plan-2026-10-06.md) separate code, installed deletion, policy/PREOPEN and natural consumption.

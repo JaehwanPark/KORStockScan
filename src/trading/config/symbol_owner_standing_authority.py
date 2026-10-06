@@ -130,6 +130,9 @@ def build_standing_authority(
     for raw_symbol, raw_owners in symbols.items():
         symbol = normalize_symbol(raw_symbol)
         owners = sorted({str(owner or "").strip().lower() for owner in raw_owners})
+        from src.trading.config.owner_retirement import new_entry_retired, main_manual_after_episode_retirement
+        if reviewed.date() >= date(2026, 10, 6) and any(new_entry_retired(symbol, owner) for owner in owners):
+            raise SymbolOwnerStandingAuthorityError("symbol_owner_permanently_retired")
         if (
             symbol != str(raw_symbol)
             or not (symbol.isdigit() and len(symbol) == 6)
@@ -137,7 +140,7 @@ def build_standing_authority(
             or not owners
             or "main_scalping" not in owners
             or "manual_operator" not in owners
-            or "episode" not in owners
+            or ("episode" not in owners and not main_manual_after_episode_retirement(symbol, owners))
             or (reviewed.date() >= date(2026, 10, 6) and "widget_auto_trade" in owners)
             or any(owner not in VALID_OWNERS for owner in owners)
         ):

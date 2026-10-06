@@ -12,7 +12,7 @@ KORStockScan은 키움증권 REST/WebSocket과 연동하는 개인용 스캘핑 
 
 ## 매매 기능
 
-세 매매기계는 신호와 주문 상태를 공유하지 않습니다. 같은 종목을 다룰 때에도 owner, episode ID, 주문번호, 보유수량과 청산 귀속을 분리해 다른 기계의 수량을 매도하거나 중복 진입하지 않도록 합니다.
+메인과 에피소드 매매기계는 신호와 주문 상태를 공유하지 않습니다. 같은 종목을 다룰 때에도 owner, episode ID, 주문번호, 보유수량과 청산 귀속을 분리해 다른 기계의 수량을 매도하거나 중복 진입하지 않도록 합니다.
 
 ### 메인 봇 매매기계
 
@@ -35,6 +35,10 @@ scanner/WATCHING
 ```
 
 점수는 baseline prior이자 feature일 뿐 단독 BUY 명령이 아닙니다. 가격·호가·체결·분봉 freshness, venue provenance, 계좌·주문·수량·cooldown과 broker submit guard를 모두 통과해야 실제 주문으로 이어집니다.
+
+### Main 고정감시 전환
+
+삼성전자와 두산의 고정감시는 Main의 기존 진입·보유·청산·주문 owner를 사용한다. 두산 초기 정책은 현재 Main 비삼성 정책으로 지정하며 별도의 초기 경제성 입증을 요구하지 않는다. 두산 에피소드 신규 진입·발행·자동 확장을 제거한 작업본과 실제 설치/배포 상태는 구분한다. [전환 계획과 검증](docs/proposals/doosan-episode-retirement-main-fixed-watch-initial-policy-plan-2026-10-06.md)을 따른다.
 
 ### 위젯 퇴역
 

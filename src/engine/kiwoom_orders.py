@@ -2047,6 +2047,10 @@ def send_buy_order_market(
     """
     if qty <= 0:
         return None
+    from src.trading.config.owner_retirement import new_entry_retired
+    context = _owner_registry_context(owner_context)
+    if context is not None and new_entry_retired(code, context.owner_type):
+        return _owner_registry_block_response("symbol_owner_permanently_retired")
     time_block_override_reason = str(time_block_override_reason or "").strip()
     allow_time_block_override = (
         bool(allow_time_block_override)

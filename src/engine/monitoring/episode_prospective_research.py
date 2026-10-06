@@ -206,6 +206,8 @@ def prospective_summary_valid(result, revision):
 
 
 def frozen_research(result, *, profile, contexts, source_date):
+    from src.trading.config.owner_retirement import require_new_entry_owner
+    require_new_entry_owner(profile.symbol, "episode")
     if (
         profile.discovery_lane not in {"new_symbol", "existing_symbol_time_extension", "actual_existing_axis"}
         or profile.fixed_observation

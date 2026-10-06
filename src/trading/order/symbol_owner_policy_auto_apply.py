@@ -10,6 +10,8 @@ authority.
 
 from __future__ import annotations
 
+from src.trading.config.owner_retirement import active_entry_owners
+
 import argparse
 import hashlib
 import json
@@ -172,6 +174,9 @@ def _exact_date_auto_promoted_symbol_owners(target_date) -> dict[str, set[str]]:
         )
 
         for row in load_episode_expansion_policy(target_date)["profiles"].values():
+            from src.trading.config.owner_retirement import new_entry_retired
+            if new_entry_retired(row.get("symbol"), "episode"):
+                continue
             promoted.setdefault(str(row["symbol"]), set()).add("episode")
     except (OSError, ValueError, TypeError, KeyError):
         pass
@@ -191,7 +196,8 @@ def expected_machine_symbol_owners(target_date) -> dict[str, list[str]]:
         symbol for symbol, owners in promoted.items() if "episode" in owners
     )
     owners: dict[str, list[str]] = {}
-    for symbol in sorted(episode_symbols):
+    from src.engine.scalping.main_fixed_watch import SPECS
+    for symbol in sorted(episode_symbols | {spec.symbol for spec in SPECS}):
         values = {"main_scalping", "manual_operator"}
         if symbol in episode_symbols:
             values.add("episode")
@@ -219,8 +225,8 @@ def _validate_runtime_scope(
             continue
         if (
             not isinstance(entry, dict)
-            or sorted(owner for owner in (entry.get("allowed_owners") or [])
-                      if owner != "widget_auto_trade") != owners
+            or active_entry_owners(symbol, (owner for owner in (entry.get("allowed_owners") or [])
+                      if owner != "widget_auto_trade")) != owners
             or not (
                 machine_owner_scope_source(symbol)
                 or legacy_machine_owner_scope_source(symbol)

@@ -20,6 +20,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from src.trading.config.symbol_owner_policy import ACTIVATION_SCHEMA, normalize_symbol
+from src.trading.config.owner_retirement import main_manual_after_episode_retirement, new_entry_retired
 from src.utils.constants import DATA_DIR
 
 KST = ZoneInfo("Asia/Seoul")
@@ -1866,12 +1867,12 @@ class OrderOwnerRegistry:
         self,
         *,
         symbol: object,
-        active_date: date | str,
+        active_date: date | str | None,
     ) -> dict[str, Any]:
-        """Describe same-date unbound intents without changing their state."""
+        """Describe unbound intents; None includes all dates for retirement."""
 
         clean_symbol = _registry_symbol(symbol)
-        clean_date = _registry_order_date(active_date)
+        clean_date = _registry_order_date(active_date) if active_date is not None else None
         lock = self._locked()
         try:
             state = self._state(self._read_locked())
@@ -1880,7 +1881,7 @@ class OrderOwnerRegistry:
                 row
                 for row in state.values()
                 if row.get("account_key") == account_key
-                and row.get("order_date") == clean_date
+                and (clean_date is None or row.get("order_date") == clean_date)
                 and row.get("symbol") == clean_symbol
                 and row.get("state") in _ACTIVE_UNBOUND_STATES
             ]
@@ -2013,8 +2014,9 @@ class OrderOwnerRegistry:
             or any(ch in clean_policy_id for ch in "\r\n\t")
             or clean_mode not in {"COEXIST_ENTRY_ENABLED", "COEXIST_EXIT_ONLY"}
             or "main_scalping" not in clean_owners
-            or "episode" not in clean_owners
+            or ("episode" not in clean_owners and not main_manual_after_episode_retirement(clean_symbol, clean_owners))
             or "widget_auto_trade" in clean_owners
+            or (clean_mode == "COEXIST_ENTRY_ENABLED" and any(new_entry_retired(clean_symbol, owner) for owner in clean_owners))
         ):
             raise OwnerRegistryError("owner_registry_policy_activation_input_invalid")
         if len(clean_entry_hash) != 64 or any(
@@ -2110,6 +2112,32 @@ class OrderOwnerRegistry:
                 }
             if existing:
                 raise OwnerRegistryConflict("owner_registry_policy_activation_conflict")
+
+            if main_manual_after_episode_retirement(clean_symbol, clean_owners):
+                prior = any(
+                    row.get("event") == "POLICY_ACTIVATED"
+                    and row.get("account_key") == account_key
+                    and row.get("symbol") == clean_symbol
+                    and main_manual_after_episode_retirement(clean_symbol, row.get("allowed_owners") or ())
+                    for row in events
+                )
+                relevant = [row for row in state.values()
+                            if row.get("account_key") == account_key and row.get("symbol") == clean_symbol]
+                episode_remaining = sum(
+                    int(row.get("filled_qty") or 0) * (1 if row.get("side") == "BUY" else -1)
+                    for row in relevant if row.get("owner_type") == "episode" and row.get("action") == "NEW"
+                )
+                episode_open = any(
+                    row.get("owner_type") == "episode" and row.get("state") == "ORDER_BOUND"
+                    and int(row.get("filled_qty") or 0) < int(row.get("quantity") or 0)
+                    for row in relevant
+                )
+                # Initial transition is flat. Later exact-date renewals retain
+                # native Main custody; they cannot revive an episode position.
+                if (not prior and (int(migration_receipt.get("broker_quantity", -1)) != 0 or broker_orders)
+                    or episode_remaining != 0 or episode_open
+                    or any(row.get("state") in _ACTIVE_UNBOUND_STATES for row in relevant)):
+                    raise OwnerRegistryConflict("owner_registry_retirement_not_flat")
 
             current_tail = str(events[-1].get("event_hash")) if events else "0" * 64
             if current_tail != migration_tail:

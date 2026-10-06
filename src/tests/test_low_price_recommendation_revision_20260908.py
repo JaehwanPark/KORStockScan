@@ -33,8 +33,8 @@ def test_revision_preserves_prior_date_and_quarantine(tmp_path):
         target_date=date(2026, 9, 7), candidate_dir=tmp_path
     )
     current, _ = build_applied_policy(target_date=DAY, candidate_dir=tmp_path)
-    assert len(prior["profiles"]) == 53
-    assert len(current["profiles"]) == 56
+    assert len(prior["profiles"]) == 50
+    assert len(current["profiles"]) == 53
     assert set(PROFILES) - set(PROFILES_20260908_PRIOR) == {
         "nhn_midday",
         "tym_morning",
@@ -52,9 +52,9 @@ def test_revision_preserves_prior_date_and_quarantine(tmp_path):
 
 def test_eleven_policies_exactly_match_approved_recommendations_and_cost_gate():
     evidence = json.loads(EVIDENCE.read_text())
-    rows = {row["profile_id"]: row for row in evidence["recommendations"]}
-    assert len(rows) == len(RECOMMENDATION_20260907_PROFILE_MAP) == 11
-    assert len({r["recommendation_id"] for r in rows.values()}) == 11
+    rows = {row["profile_id"]: row for row in evidence["recommendations"] if row.get("symbol") != "034020"}
+    assert len(rows) == len(RECOMMENDATION_20260907_PROFILE_MAP) == 10
+    assert len({r["recommendation_id"] for r in rows.values()}) == 10
     for live_id, source_id in RECOMMENDATION_20260907_PROFILE_MAP.items():
         p = get_profile(live_id, target_date=DAY).policy
         assert rows[source_id]["recommended_spot"] == {

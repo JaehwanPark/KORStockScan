@@ -1072,3 +1072,8 @@ ADM/LDM·bucket·greenfield는 2026-09-06 retired다. archived 보고서/lock의
 ## Claude Scalping Pattern Lab 폐기 경계
 
 2026-09-18 이후 Main/보조 tuning 장후 실행은 Claude Lab·scalping automation을 호출하지 않는다. 옛 true env·보고서 존재·stale/material 경고는 복구 권한이 아니다. 공유 currentness/AI review/propagation은 명시적 기존 Swing scope만 유지하며 Swing OFF를 바꾸지 않는다. `install_pattern_lab_cron.sh`는 옛 weekly marker를 제거하는 cleanup-only shim으로 새 job을 설치하지 않는다. 활성 주문/원천/정책·operator guard는 보존한다. [폐기 검증](audit-reports/2026-09-18-claude-scalping-pattern-lab-retirement-review.md)의 선택 배포와 PID/경제성 경계를 따른다.
+
+
+### Main fixed watch owner handoff
+
+두산 에피소드 제거와 Main 고정감시 전환은 [전환 운영 절차](runtime-release-routing.md#main-fixed-watch-owner-retirement-transition)와 [전환 계획](proposals/doosan-episode-retirement-main-fixed-watch-initial-policy-plan-2026-10-06.md)을 따른다. 작업본에서 제거한 timer를 설치된 서비스 제거로 간주하지 않는다. PREOPEN 전환은 검토된 release, quiescent trading process, fresh broker/custody flat와 모든 날짜의 미확정 intent 0을 확인한 뒤 기존 owner policy·strict/controller·Main 기동 경로에 결속한다. 신규 collector·cron·독립 주문 owner를 추가하지 않는다. 최초 정책은 Main 비삼성 부모로 지정하며 연구 native 표본 부족을 적용 보류 조건으로 쓰지 않는다. 후속 Main 장후 stage의 `main_fixed_watch_policy_research`는 원 ID·parent/source/kernel/cost에 결속한 최대 10개 후보 진단이며 보고서 자체는 runtime apply를 하지 않는다.

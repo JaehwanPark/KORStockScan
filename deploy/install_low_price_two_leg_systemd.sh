@@ -30,8 +30,6 @@ UNITS=(
   korstockscan-low-price-two-leg-mirae-asset-morning.timer
   korstockscan-low-price-two-leg-jeju-semiconductor-morning-preflight.timer
   korstockscan-low-price-two-leg-jeju-semiconductor-morning.timer
-  korstockscan-low-price-two-leg-doosan-enerbility-morning-preflight.timer
-  korstockscan-low-price-two-leg-doosan-enerbility-morning.timer
   korstockscan-low-price-two-leg-hanwha-ocean-late-morning-preflight.timer
   korstockscan-low-price-two-leg-hanwha-ocean-late-morning.timer
   korstockscan-low-price-two-leg-kakao-morning-preflight.timer
@@ -48,8 +46,6 @@ UNITS=(
   korstockscan-low-price-two-leg-sk-eternix-afternoon.timer
   korstockscan-low-price-two-leg-samsung-heavy-morning-preflight.timer
   korstockscan-low-price-two-leg-samsung-heavy-morning.timer
-  korstockscan-low-price-two-leg-doosan-enerbility-late-morning-preflight.timer
-  korstockscan-low-price-two-leg-doosan-enerbility-late-morning.timer
   korstockscan-low-price-two-leg-kakao-midday-preflight.timer
   korstockscan-low-price-two-leg-kakao-midday.timer
   korstockscan-low-price-two-leg-sk-telecom-afternoon-preflight.timer
@@ -108,8 +104,6 @@ UNITS=(
   korstockscan-low-price-two-leg-sd-biosensor-late-morning.timer
   korstockscan-low-price-two-leg-sd-biosensor-midday-preflight.timer
   korstockscan-low-price-two-leg-sd-biosensor-midday.timer
-  korstockscan-low-price-two-leg-doosan-enerbility-afternoon-preflight.timer
-  korstockscan-low-price-two-leg-doosan-enerbility-afternoon.timer
   korstockscan-low-price-two-leg-samsung-ea-midday-preflight.timer
   korstockscan-low-price-two-leg-samsung-ea-midday.timer
   korstockscan-low-price-two-leg-fan-ocean-morning-preflight.timer
@@ -154,8 +148,6 @@ TIMERS=(
   korstockscan-low-price-two-leg-mirae-asset-morning.timer
   korstockscan-low-price-two-leg-jeju-semiconductor-morning-preflight.timer
   korstockscan-low-price-two-leg-jeju-semiconductor-morning.timer
-  korstockscan-low-price-two-leg-doosan-enerbility-morning-preflight.timer
-  korstockscan-low-price-two-leg-doosan-enerbility-morning.timer
   korstockscan-low-price-two-leg-hanwha-ocean-late-morning-preflight.timer
   korstockscan-low-price-two-leg-hanwha-ocean-late-morning.timer
   korstockscan-low-price-two-leg-kakao-morning-preflight.timer
@@ -172,8 +164,6 @@ TIMERS=(
   korstockscan-low-price-two-leg-sk-eternix-afternoon.timer
   korstockscan-low-price-two-leg-samsung-heavy-morning-preflight.timer
   korstockscan-low-price-two-leg-samsung-heavy-morning.timer
-  korstockscan-low-price-two-leg-doosan-enerbility-late-morning-preflight.timer
-  korstockscan-low-price-two-leg-doosan-enerbility-late-morning.timer
   korstockscan-low-price-two-leg-kakao-midday-preflight.timer
   korstockscan-low-price-two-leg-kakao-midday.timer
   korstockscan-low-price-two-leg-sk-telecom-afternoon-preflight.timer
@@ -232,8 +222,6 @@ TIMERS=(
   korstockscan-low-price-two-leg-sd-biosensor-late-morning.timer
   korstockscan-low-price-two-leg-sd-biosensor-midday-preflight.timer
   korstockscan-low-price-two-leg-sd-biosensor-midday.timer
-  korstockscan-low-price-two-leg-doosan-enerbility-afternoon-preflight.timer
-  korstockscan-low-price-two-leg-doosan-enerbility-afternoon.timer
   korstockscan-low-price-two-leg-samsung-ea-midday-preflight.timer
   korstockscan-low-price-two-leg-samsung-ea-midday.timer
   korstockscan-low-price-two-leg-fan-ocean-morning-preflight.timer
@@ -327,4 +315,4 @@ PY
 /bin/systemctl enable --now "${TIMERS[@]}"
 /bin/systemctl list-timers --all --no-pager "${TIMERS[@]}"
 
-echo "installed sixty-one lower-price profile timers; retired Daewoo units were removed"
+echo "installed surviving lower-price profile timers; retired Daewoo and Doosan entries are excluded"

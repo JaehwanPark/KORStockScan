@@ -8,6 +8,10 @@ reconciliation, and an immutable per-symbol registry activation event.
 
 from __future__ import annotations
 
+from src.trading.config.owner_retirement import (
+    active_entry_owners, main_manual_after_episode_retirement, new_entry_retired,
+)
+
 import argparse
 import fcntl
 import hashlib
@@ -228,8 +232,9 @@ def _validate_request(
         if (
             mode not in VALID_APPLY_MODES
             or "main_scalping" not in owners
-            or not {"episode"}.intersection(owners)
+            or ("episode" not in owners and not main_manual_after_episode_retirement(symbol, owners))
             or any(owner not in VALID_OWNERS for owner in owners)
+            or (mode == COEXIST_ENTRY_ENABLED and any(new_entry_retired(symbol, owner) for owner in owners))
         ):
             raise SymbolOwnerPolicyApplyError(
                 "symbol_owner_apply_mode_or_owner_set_invalid"
@@ -776,7 +781,7 @@ def apply_symbol_owner_policy(
             expected = authority_symbols.get(symbol)
             if not isinstance(expected, dict) or (
                 expected.get("mode") != entry["mode"]
-                or sorted(expected.get("allowed_owners") or [])
+                or active_entry_owners(symbol, expected.get("allowed_owners") or [])
                 != entry["allowed_owners"]
             ):
                 raise SymbolOwnerPolicyApplyError(

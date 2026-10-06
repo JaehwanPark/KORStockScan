@@ -6,6 +6,8 @@ can manage them manually.
 
 from __future__ import annotations
 
+from src.trading.config.owner_retirement import RETIRED_MACHINE_SCOPE_LABELS, new_entry_retired
+
 import hashlib
 import os
 import re
@@ -44,7 +46,7 @@ LEGACY_MACHINE_OWNER_SCOPE_LABELS = {
     "017670": "sk_telecom_low_price_two_leg_owner",
     "028050": "samsung_ea_low_price_two_leg_owner",
     "028670": "fan_ocean_low_price_two_leg_owner",
-    "034020": "doosan_widget_and_episode_independent_owners",
+    "034020": "main_fixed_watch_owner",
     "035720": "kakao_low_price_two_leg_owner",
     "042660": "hanwha_widget_and_episode_independent_owners",
     "079160": "cj_cgv_low_price_two_leg_owner",
@@ -194,7 +196,7 @@ def _current_machine_owner_scope_source_from_row(code: object, comment: object) 
     if not label:
         return ""
     body = str(comment or "").lstrip("#/ ").strip()
-    return "machine_owner_scope" if body == f"machine_owner_scope {label}" else ""
+    return "machine_owner_scope" if body in {f"machine_owner_scope {label}", f"machine_owner_scope {RETIRED_MACHINE_SCOPE_LABELS.get(norm_code, label)}"} else ""
 
 
 def _legacy_machine_owner_scope_source_from_row(code: object, comment: object) -> str:
@@ -205,7 +207,7 @@ def _legacy_machine_owner_scope_source_from_row(code: object, comment: object) -
     if not label:
         return ""
     body = str(comment or "").lstrip("#/ ").strip()
-    return "legacy_machine_owner_scope" if body == f"manual_operator {label}" else ""
+    return "legacy_machine_owner_scope" if body in {f"manual_operator {label}", f"manual_operator {RETIRED_MACHINE_SCOPE_LABELS.get(norm_code, label)}"} else ""
 
 
 def _load_file_codes(path: Path) -> frozenset[str]:
@@ -440,7 +442,12 @@ def migrate_legacy_machine_owner_scope_markers(
             code = codes[0]
             label = expected[code]
             body = str(comment or "").lstrip("#/ ").strip()
-            if body == f"manual_operator {label}" and code not in current_markers:
+            retired_label = RETIRED_MACHINE_SCOPE_LABELS.get(code)
+            retired_marker = bool(retired_label and (
+                body == f"machine_owner_scope {retired_label}"
+                or body == f"manual_operator {retired_label}" and code not in current_markers
+            ))
+            if retired_marker or (body == f"manual_operator {label}" and code not in current_markers):
                 output_lines.append(f"{code} # machine_owner_scope {label}")
                 migrated.append(code)
                 continue
@@ -634,6 +641,8 @@ def independent_machine_ownership_source(
     the runtime entry gate still rejects every new BUY.
     """
 
+    if new_entry and new_entry_retired(code, owner):
+        return ""
     legacy = machine_owner_scope_source(code) or legacy_machine_owner_scope_source(code)
     try:
         from src.trading.config.symbol_owner_policy import (
