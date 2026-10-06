@@ -315,7 +315,13 @@ def verify_source_handoff(data_root: Path, bundle: dict[str, Any]) -> None:
             or receipt.get("cell_count") != len(bundle["cells"])):
         raise ValueError("holding_vote_summary_binding_invalid")
     from src.engine.automation.postclose_summary_handoff import stage_receipt_issues
-    if stage_receipt_issues(root / "report", source_date, "summary_handoff"):
+    issues = stage_receipt_issues(root / "report", source_date, "summary_handoff")
+    if issues == ["summary_handoff:terminal_missing_or_invalid"]:
+        issues = stage_receipt_issues(
+            root / "report", source_date, "summary_handoff",
+            allow_historical_summary=True,
+        )
+    if issues:
         raise ValueError("holding_vote_strict_handoff_not_complete")
 
 

@@ -30,3 +30,14 @@
 완료 후 실제 PID/root/commit·정책 hash·bootstrap·intraday consumption·WS first-data·heartbeat, fresh broker inventory/미체결 및 중복 Main 프로세스/주문을 재확인한다. 자연 새 기계 attempt·원천 복구·제출/체결·비용 수익 증거는 별도 상태다.
 
 배포 및 실제 기동 수용 결과는 완료 receipt와 함께 이 문서에 추가한다.
+
+## 재기동 gate에서 발견한 추가 결함과 보완
+
+새 릴리스의 fresh bootstrap 검증이 `holding_path_vote_policy_receipt_mismatch`와 `holding_path_vote_policy_stale_env`를 반환했다. 기존 Main PID의 원 릴리스에서 같은 입력은 통과했다. 정책 값이 바뀐 문제가 아니라 위젯 퇴역 시 장후 terminal schema를 v3으로 변경하여, 퇴역 전 발행된 v2 summary의 보유 정책 소비까지 거부한 호환성 결함이다.
+
+- 실패한 전환은 selector·설치 drop-in을 원 상태로 rollback했으며 Main 재기동은 요청하지 않았다.
+- `stage_receipt_issues`에 보유 정책 소비자만 사용하는 historical summary 검증을 추가했다. source/publication이 `2026-10-06` 이전인 v2 summary만 읽고, 기존 receipt digest·원 코드 hash·정확 input/output/prerequisite 세대·적용 세션 검증을 유지한다. 과거 widget/collector terminal은 증빙으로만 읽는다.
+- 새 생산자의 기본 검증은 v3을 요구한다. 오늘 발행 또는 새 복구에서 v2 PASS를 재사용하지 않는다. 퇴역 producer·매매 권한은 복원하지 않는다.
+- 새 보완의 변조·결손·발행일·코드·실패 terminal 회귀와 policy/bootstrap/Widget 퇴역 검증 **181 PASS**. 원래 1,146건과 중복 module이 있으므로 고유 건수로 합산하지 않는다. compile·Ruff·diff 통과.
+- 실제 보유 정책 consumer는 `estimated_provisional_loaded`, 기존 PID의 fresh bootstrap은 `pass`로 정상화됐다. 보유 bundle `43fcaac44792cb55fced0883b12216f2423468703bea2aee2765d01f01daa926` 및 당일 정책/PREOPEN 5개 frozen hash는 그대로다.
+- [실패 검증](../../tmp/machine-source-deployment-20261006/bootstrap-before-fresh.json), [보완 후 검증](../../tmp/machine-source-deployment-20261006/bootstrap-before-repaired.json).

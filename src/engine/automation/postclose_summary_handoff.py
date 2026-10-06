@@ -954,9 +954,25 @@ def reseal_summary_handoff_for_final_controller(report_dir, day, controller_path
 
 
 
-def stage_receipt_issues(report_dir, day, stage, *, code_hash=None):
+def stage_receipt_issues(report_dir, day, stage, *, code_hash=None,
+                         allow_historical_summary=False):
     value = _load_json(stage_path(report_dir, day, stage))
-    if (value.get('schema') != STAGE_SCHEMA or value.get('stage_id') != stage
+    # Only a policy consumer may authenticate a pre-retirement summary. New
+    # producers still require v3, including recovery for an older source day.
+    historical_summary = False
+    if (allow_historical_summary and stage == 'summary_handoff'
+            and value.get('schema') == 'postclose_stage_terminal_v2'):
+        from datetime import date
+        try:
+            publication = value.get('publication_date', day)
+            historical_summary = (
+                date.fromisoformat(day).isoformat() == day
+                and date.fromisoformat(publication).isoformat() == publication
+                and '2026-06-05' <= day <= publication < '2026-10-06'
+            )
+        except (TypeError, ValueError):
+            pass
+    if ((value.get('schema') != STAGE_SCHEMA and not historical_summary) or value.get('stage_id') != stage
         or value.get('source_date') != day or not value.get('run_id')
         or value.get('receipt_sha256') != _stage_digest({k:v for k,v in value.items() if k != 'receipt_sha256'})):
         return [f'{stage}:terminal_missing_or_invalid']
@@ -1024,7 +1040,15 @@ def stage_receipt_issues(report_dir, day, stage, *, code_hash=None):
     prerequisites = {s:str(stage_path(report_dir, day, s)) for s in STAGE_REGISTRY[stage][0]}
     if value.get('prerequisite_receipts') != _stage_sources(prerequisites):
         return [f'{stage}:prerequisite_generation_changed']
-    if value.get('input_sources') != _stage_sources(stage_input_paths(report_dir, day, stage)):
+    input_paths = stage_input_paths(report_dir, day, stage)
+    if historical_summary:
+        # Retired terminals remain immutable evidence; reading them does not
+        # restore their producers or grant current Widget trading authority.
+        for retired_stage in ('widget_policy', 'collector_recommendation'):
+            input_paths[retired_stage] = (
+                Path(report_dir) / 'postclose_stage_terminal' / day / f'{retired_stage}.json'
+            )
+    if value.get('input_sources') != _stage_sources(input_paths):
         return [f'{stage}:input_generation_changed']
     return _safe_stage_output_issues(report_dir, day, stage)
 

@@ -830,6 +830,50 @@ def test_summary_handoff_tracks_later_active_stage_generation(stage_environment)
     ]
 
 
+@pytest.mark.parametrize("damage", [
+    None, "digest", "retired_input_changed", "retired_input_missing",
+    "input_set", "output", "code", "failed", "new_publication", "invalid_publication",
+])
+def test_historical_summary_consumer_preserves_exact_generation_only(stage_environment, damage):
+    h, day, report, run, _produce = stage_environment
+    assert run('summary_handoff')['status'] == 'succeeded'
+    path = h.stage_path(report, day, 'summary_handoff')
+    value = h._load_json(path)
+    value['schema'] = 'postclose_stage_terminal_v2'
+    legacy_paths = {}
+    for stage in ('widget_policy', 'collector_recommendation'):
+        terminal = report / 'postclose_stage_terminal' / day / f'{stage}.json'
+        terminal.write_text(json.dumps({'stage_id': stage, 'historical_only': True}))
+        legacy_paths[stage] = terminal
+    value['input_sources'].update(h._stage_sources(legacy_paths))
+    h._stage_write(path, value)
+    assert h.stage_receipt_issues(report, day, 'summary_handoff') == [
+        'summary_handoff:terminal_missing_or_invalid'
+    ]  # A producer cannot reuse a v2 PASS.
+    if damage == 'digest':
+        value['run_id'] = 'changed-without-rehash'
+        path.write_text(json.dumps(value))
+    elif damage == 'retired_input_changed':
+        legacy_paths['widget_policy'].write_text('{}')
+    elif damage == 'retired_input_missing':
+        legacy_paths['collector_recommendation'].unlink()
+    elif damage == 'output':
+        h.stage_artifacts(report, day, 'summary_handoff')['postclose_done_controller'].write_text('{}')
+    elif damage:
+        if damage == 'input_set': value['input_sources'].pop('widget_policy')
+        elif damage == 'code': value['stage_code_sha256'] = 'unknown-code'
+        elif damage == 'failed': value.update(status='failed', exit_code=1)
+        elif damage == 'new_publication': value['publication_date'] = '2026-10-06'
+        elif damage == 'invalid_publication': value['publication_date'] = '2026-10-00'
+        h._stage_write(path, value)
+    before = path.read_bytes()
+    issues = h.stage_receipt_issues(
+        report, day, 'summary_handoff', allow_historical_summary=True,
+    )
+    assert bool(issues) is (damage is not None), issues
+    assert path.read_bytes() == before
+
+
 def test_summary_handoff_reseals_verified_final_controller(stage_environment):
     h, day, report, run, _produce = stage_environment
     assert run('summary_handoff')['status'] == 'succeeded'

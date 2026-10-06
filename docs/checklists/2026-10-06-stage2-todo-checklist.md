@@ -84,7 +84,7 @@
 - [ ] `[MainMachineSourceRepairDeploy1006] Main 기계 원천 갱신·증거 해시·probe 관측 시각 수정 배포 및 재기동` (`Due: 2026-10-06`, `Slot: INTRADAY`, `TimeWindow: 사용자 승인 후 당일`, `Track: RuntimeStability`)
   - Source: [원천 갱신·증거 해시 보완](../audits/main-machine-source-refresh-and-admission-hash-remediation-2026-10-06.md), [018880 관측 시각·제출 경로 점검](../audits/main-entry-pre-ai-probe-clock-and-018880-lineage-audit-2026-10-06.md), [배포·기동 수용 기록](../audits/main-machine-source-remediation-deployment-review-2026-10-06.md).
   - 권한: 사용자가 반복 코드리뷰·보완 및 배포·재기동을 명시 승인했다. 기존 기계/보조 정책, hard safety, 원천 freshness/conflict, broker·수량·cap·custody·operator lock을 보존한다.
-  - 코드 gate: 관련 12개 module 1,143 PASS, 실제 WATCHING handler source wait 3 PASS. compile·Ruff·shell·diff 확인. 미확정 probe 체결가격의 경제성 재생은 미지원으로 유지한다.
+  - 코드 gate: 관련 12개 module 1,143 PASS, 실제 WATCHING handler source wait 3 PASS. 재기동 fresh gate에서 과거 holding vote v2 summary의 소비 호환성 결함을 발견해 보완, 추가 181 PASS 및 실제 기존 PID/bootstrap 재검증 통과. compile·Ruff·shell·diff 확인. 미확정 probe 체결가격의 경제성 재생은 미지원으로 유지한다.
   - Acceptance: fresh KRX/NXT broker inventory·미체결 및 로컬 custody, immutable release·rollback, 당일 정책 보존 handoff, singleton 새 Main PID/root·policy/bootstrap receipt, WS first-data·heartbeat와 시작 후 오류/중복 주문 확인. 자연 source·submit·fill·비용 수익은 별도 증거다.
 
 ## 위젯 전체 제거 인계
