@@ -2158,6 +2158,26 @@ if [[ "$RUN_DEEPSEEK_SWING_LAB" != "true" && "$RUN_DEEPSEEK_SWING_LAB" != "1" ]]
 fi
 wait_for_postclose_resources "automation_trigger_decision_final_refresh"
 refresh_automation_trigger_decision_snapshot "final_consumer"
+DIRECT_TOWER_REQUIRED="$(env PYTHONPATH=. "$VENV_PY" - "$TARGET_DATE" <<'PY'
+import json
+import sys
+from src.engine.automation.postclose_summary_handoff import direct_tower_required
+from src.utils.constants import DATA_DIR
+day = sys.argv[1]
+summary = json.loads((DATA_DIR / 'report/runtime_approval_summary' /
+                      f'runtime_approval_summary_{day}.json').read_text())
+print('true' if direct_tower_required(day, summary) else 'false')
+PY
+)"
+if [[ "$DIRECT_TOWER_REQUIRED" == "true" ]]; then
+  wait_for_postclose_resources "tuning_performance_control_tower_final_refresh"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.tuning_performance_control_tower \
+    --date "$TARGET_DATE"
+  wait_for_report_artifact \
+    "$PROJECT_DIR/data/report/tuning_performance_control_tower/tuning_performance_control_tower_${TARGET_DATE}.json" \
+    "$PROJECT_DIR/data/report/tuning_performance_control_tower/tuning_performance_control_tower_${TARGET_DATE}.md" \
+    "tuning_performance_control_tower_final_refresh"
+fi
 wait_for_postclose_resources "build_next_stage2_checklist_final_refresh"
 run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.build_next_stage2_checklist --source-date "$TARGET_DATE"
 wait_for_file_artifact "$(next_stage2_checklist_path)" "next_stage2_checklist_final_refresh"

@@ -114,6 +114,7 @@ def _paths(target_date: str) -> dict[str, Path]:
     threshold = DATA_DIR / "threshold_cycle"
     compact_policies = []
     machine_policies = []
+    reversal_policies = []
     for candidate in sorted(
         (DATA_DIR / "runtime/mechanistic_entry_policy").glob("policy_????-??-??.json")
     ):
@@ -122,6 +123,14 @@ def _paths(target_date: str) -> dict[str, Path]:
         except (OSError, ValueError):
             continue
         if policy_effective and payload.get("target_date") != policy_effective:
+            continue
+        family = payload.get('continuous_reversal')
+        if (isinstance(family, dict) and family.get('source_date') == target_date
+                and payload.get('source_date') == target_date
+                and (not publication or payload.get('publication_date') == publication)):
+            reversal_policies.append(candidate)
+            compact_policies.append(candidate)
+            machine_policies.append(candidate)
             continue
         if payload.get("compact_evaluation_source_date") == target_date:
             compact_policies.append(candidate)
@@ -159,9 +168,11 @@ def _paths(target_date: str) -> dict[str, Path]:
         "low_price_expansion": report / "low_price_two_leg_expanded_candidate_research" / f"low_price_two_leg_expanded_candidate_research_{target_date}.json",
         "low_price_expansion_policy": expansion_policies[-1] if expansion_policies else DATA_DIR / "runtime/low_price_two_leg_auto_expansion" / "policy_missing.json",
         "ws_freshness": report / "intraday_ws_freshness_monitor" / f"intraday_ws_freshness_monitor_{target_date}.json",
-        "main_mechanistic_entry": report / "ai_decision_action_outcome_calibration" / f"ai_decision_action_outcome_calibration_{target_date}.json",
+        "main_mechanistic_entry": (report / 'continuous_reversal' / target_date / 'machine.json'
+                                   if reversal_policies else report / "ai_decision_action_outcome_calibration" / f"ai_decision_action_outcome_calibration_{target_date}.json"),
         "main_mechanistic_policy": machine_policy,
-        "compact_auxiliary": report / "ai_entry_setup_paired_replay_batch" / f"compact_auxiliary_paired_economic_{target_date}.json",
+        "compact_auxiliary": (report / 'continuous_reversal' / target_date / 'auxiliary.json'
+                              if reversal_policies else report / "ai_entry_setup_paired_replay_batch" / f"compact_auxiliary_paired_economic_{target_date}.json"),
         "compact_policy": compact_policy,
         "rising_missed": report / "rising_missed_classifier_prior" / f"rising_missed_classifier_prior_{target_date}.json",
         "rising_missed_policy": report / "rising_missed_classifier_prior" / f"rising_missed_tp1_policy_source_{target_date}.json",
@@ -987,6 +998,10 @@ def build_runtime_approval_summary(
                 (payload.get("machine_evaluation_source") or {}).get("source_date")
                 == target_date
             )
+        if owner in {'main_mechanistic_policy', 'compact_policy'} and payload.get('continuous_reversal'):
+            target_date_matches = (
+                payload.get('source_date') == target_date
+                and payload['continuous_reversal'].get('source_date') == target_date)
         required = required_by_owner.get(owner, False)
         applicability = (
             "retired_not_applicable"
@@ -1220,10 +1235,21 @@ def build_runtime_approval_summary(
                     policy_receipt_valid=handoff['policy_bundle_sha256']==policy_payload['bundle_sha256']
                     row['continuous_reversal_handoff']=handoff
                     row['economic_evidence'].update(comparison_status='cumulative_winrate_selected',
-                        policy_handoff_state='verified',first_blocker=None,
-                        realized_profit_assessed=False,selection_metric='cumulative_raw_win_fraction')
+                        policy_handoff_state='verified',policy_apply_allowed=False,first_blocker=None,
+                        realized_profit_assessed=False,selection_metric='cumulative_raw_win_fraction',
+                        metric_role='cumulative_winrate_research',candidate_count=1,
+                        paired_sample_count=None,source_day_count=None,
+                        resolution_mode='research_selected_pending_consumption',
+                        future_contract_state='exact_date_research_policy_verified',
+                        closure_owner='continuous_reversal_postclose',
+                        closure_test='exact_date_native_policy_and_normal_consumer_receipts',
+                        model_holdout_status='not_required_winrate',
+                        candidate_holdout_status='not_required_winrate')
                 except (OSError,ValueError,KeyError,TypeError):
                     policy_receipt_valid=False
+                    row['economic_evidence'].update(comparison_status='source_gap',
+                        policy_handoff_state='blocked',resolution_mode='producer_repair',
+                        first_blocker='continuous_reversal_handoff_invalid')
         row["policy_receipt"] = {
             "owner": policy_owner,
             "path": policy.get("path"),

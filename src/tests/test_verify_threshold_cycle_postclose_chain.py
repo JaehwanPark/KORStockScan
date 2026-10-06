@@ -182,6 +182,28 @@ def test_required_summary_handoff_rejects_task_projection_drift(
     assert "direct_checklist_task_projection_mismatch" in report["issues"]
 
 
+def test_validated_reversal_preserves_one_manual_workflow_owner(monkeypatch, tmp_path):
+    target = '2026-09-19'
+    _seed(monkeypatch, tmp_path, target)
+    checklist = _build_direct_checklist(monkeypatch, tmp_path, target)
+    original = checklist.read_text()
+    manual = '\n- [ ] `[DirectFamilySourceRepairMainMechanisticEntry] operator implementation and next-session workflow`\n'
+    checklist.write_text(original + manual)
+    from src.engine.scalping import mechanistic_entry_runtime_policy as native
+    monkeypatch.setattr(native, 'load', lambda **kwargs: {
+        'source_date': target, 'target_date': '2026-09-21', 'continuous_reversal': {'validated': True}})
+    result = mod.build_threshold_cycle_postclose_verification(target, require_summary_handoff=True)
+    assert result['status'] == 'pass'
+    assert result['checklist_handoff']['retained_manual_workflow_ids'] == ['DirectFamilySourceRepairMainMechanisticEntry']
+    checklist.write_text(original + manual + manual)
+    result = mod.build_threshold_cycle_postclose_verification(target, require_summary_handoff=True)
+    assert 'direct_checklist_task_projection_mismatch' in result['issues']
+    checklist.write_text(original + manual)
+    monkeypatch.setattr(native, 'load', lambda **kwargs: None)
+    result = mod.build_threshold_cycle_postclose_verification(target, require_summary_handoff=True)
+    assert 'direct_checklist_task_projection_mismatch' in result['issues']
+
+
 def test_new_cancel_contract_requires_actual_tower_in_direct_strict(monkeypatch, tmp_path):
     from src.engine.automation.entry_cancel_wait_tuning import RECONCILIATION_VERSION
     target = '2026-10-02'

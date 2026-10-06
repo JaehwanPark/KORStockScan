@@ -105,6 +105,7 @@ DIRECT_TERMINAL_STATES = {
     "valid_empty",
 }
 DIRECT_COMPARISON_STATES = DIRECT_TERMINAL_STATES | {
+    "cumulative_winrate_selected",
     "insufficient_sample",
     "mixed",
     "pending_maturity",
@@ -676,6 +677,7 @@ def _validate_direct_summary(
             "candidate_published",
             "incumbent_preserved",
             "not_applicable",
+            "verified",
         }:
             raise RuntimeError(
                 f"direct runtime summary policy handoff state invalid: {owner}"
@@ -696,7 +698,20 @@ def _validate_direct_summary(
                         "direct runtime summary policy receipt "
                         f"{receipt_bool} invalid: {owner}"
                     )
-        if evidence.get("comparison_status") == "validated_edge":
+        if evidence.get("comparison_status") == "cumulative_winrate_selected":
+            if (
+                owner not in {"main_mechanistic_entry", "compact_auxiliary"}
+                or handoff_state != "verified"
+                or evidence.get("policy_apply_allowed") is not False
+                or evidence.get("selection_metric") != "cumulative_raw_win_fraction"
+                or not isinstance(receipt, dict)
+                or receipt.get("valid") is not True
+                or receipt.get("target_date_matches") is not True
+            ):
+                raise RuntimeError(
+                    f"direct runtime summary winrate handoff contract invalid: {owner}"
+                )
+        elif evidence.get("comparison_status") == "validated_edge":
             if (
                 handoff_state != "candidate_published"
                 or evidence.get("policy_apply_allowed") is not True
@@ -705,7 +720,7 @@ def _validate_direct_summary(
                 raise RuntimeError(
                     f"direct runtime summary validated edge contract invalid: {owner}"
                 )
-        elif handoff_state == "candidate_published" or evidence.get(
+        elif handoff_state in {"candidate_published", "verified"} or evidence.get(
             "policy_apply_allowed"
         ) is True:
             raise RuntimeError(
@@ -2192,7 +2207,7 @@ def _project_direct_tasks(
                 )
                 else "SourceRepair"
             )
-        elif status == "validated_edge":
+        elif status in {"validated_edge", "cumulative_winrate_selected"}:
             receipt = source.get("policy_receipt")
             if not isinstance(receipt, dict) or receipt.get("valid") is not True:
                 role = "PolicyHandoff"

@@ -99,6 +99,8 @@ def _direct_checklist_checks(
 ) -> tuple[dict[str, Any], list[str]]:
     from src.engine.automation.postclose_summary_handoff import direct_tower_required, verify_summary_handoff
     from src.engine.build_next_stage2_checklist import (
+        AUTO_START,
+        AUTO_END,
         _next_krx_trading_day,
         _project_direct_tasks,
         _render_task,
@@ -134,14 +136,43 @@ def _direct_checklist_checks(
         checklist_text = checklist_path.read_text(encoding="utf-8")
     except OSError:
         checklist_text = ""
-    actual_ids = sorted(
-        match.group(1)
-        for match in re.finditer(
+    task_matches = list(re.finditer(
             r"^- \[[ xX]\] `\[(DirectFamily[A-Za-z0-9_:-]+)\]",
             checklist_text,
             re.MULTILINE,
-        )
-    )
+        ))
+    # The operator expanded these existing owners to the complete reversal
+    # implementation and next-session workflow. A resolved source does not
+    # retire their remaining PREOPEN/PID work. Keep only one manual occurrence,
+    # outside the generated projection, under a validated exact-date family.
+    retained_workflow_ids = set()
+    try:
+        from src.engine.scalping import mechanistic_entry_runtime_policy as native
+        bundle = native.load(data_root=DATA_DIR, target_date=apply_date)
+        if (bundle and bundle.get('continuous_reversal')
+                and bundle.get('source_date') == target_date
+                and bundle.get('target_date') == apply_date):
+            retained_workflow_ids = {
+                'DirectFamilySourceRepairMainMechanisticEntry',
+                'DirectFamilySourceRepairCompactAuxiliary',
+            }
+    except (OSError, ValueError, TypeError, KeyError):
+        pass
+    counts = {name: sum(m.group(1) == name for m in task_matches)
+              for name in retained_workflow_ids}
+    auto_start = checklist_text.find(AUTO_START)
+    auto_end = checklist_text.find(AUTO_END, max(0, auto_start))
+    retained = []
+    actual_ids = []
+    for match in task_matches:
+        name = match.group(1)
+        generated = auto_start >= 0 and auto_end >= auto_start and auto_start <= match.start() <= auto_end
+        if (name in retained_workflow_ids and name not in expected_ids
+                and counts[name] == 1 and not generated):
+            retained.append(name)
+        else:
+            actual_ids.append(name)
+    actual_ids.sort()
     if actual_ids != expected_ids:
         issues.append("direct_checklist_task_projection_mismatch")
     normalized = checklist_text.replace("- [x]", "- [ ]").replace("- [X]", "- [ ]")
@@ -156,6 +187,7 @@ def _direct_checklist_checks(
         "apply_date": apply_date,
         "expected_task_ids": expected_ids,
         "actual_task_ids": actual_ids,
+        "retained_manual_workflow_ids": sorted(retained),
         "handoff": handoff,
     }, issues
 

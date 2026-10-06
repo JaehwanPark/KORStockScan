@@ -140,6 +140,49 @@ def test_dated_publish_loader_nonentry_and_schema_failure(tmp_path):
     with pytest.raises(ValueError):native.load_effective(data_root=tmp_path,target_date='2026-10-07')
 
 
+def test_reversal_reports_reach_runtime_summary_and_nextday_projection(tmp_path, monkeypatch):
+    from src.tests.test_mechanistic_entry_runtime_policy import initial
+    from src.engine import runtime_approval_summary as summary
+    from src.engine import build_next_stage2_checklist as checklist
+    from src.engine.scalping import continuous_reversal_policy as policy
+    initial(tmp_path)
+    machine, auxiliary = family_reports()
+    machine = P.seal({**machine, 'target_date': '2026-10-06'})
+    auxiliary = P.seal({**auxiliary, 'target_date': '2026-10-06'})
+    out = P.directory(tmp_path, '2026-10-06')
+    P.write(out / 'machine.json', machine)
+    P.write(out / 'auxiliary.json', auxiliary)
+    policy.publish(tmp_path, '2026-10-06', '2026-10-06', machine, auxiliary)
+    # A conflicting retired diagnostic must not select the current source.
+    P.write(tmp_path / 'report/ai_decision_action_outcome_calibration/ai_decision_action_outcome_calibration_2026-10-06.json',
+            {'target_date': '2026-10-06', 'status': 'unsupported_portfolio_scope'})
+    monkeypatch.setattr(summary, 'DATA_DIR', tmp_path)
+    monkeypatch.setattr(summary, 'REPORT_DIR', tmp_path / 'report/runtime_approval_summary')
+    monkeypatch.setenv('POSTCLOSE_POLICY_PUBLICATION_DATE', '2026-10-06')
+    monkeypatch.setenv('POSTCLOSE_PREPARED_EFFECTIVE_DATE', '2026-10-07')
+    result = summary.build_runtime_approval_summary('2026-10-06', include_swing=False, include_producer_gap=False)
+    assert checklist._validate_direct_summary(result, '2026-10-06') == result
+    for owner, name in [('main_mechanistic_entry', 'machine'), ('compact_auxiliary', 'auxiliary')]:
+        source = result['sources'][owner]
+        assert source['path'] == str(out / (name + '.json'))
+        assert source['policy_receipt']['valid'] is True
+        assert source['policy_receipt']['target_date_matches'] is True
+        assert source['economic_evidence']['comparison_status'] == 'cumulative_winrate_selected'
+        assert source['economic_evidence']['first_blocker'] is None
+        assert source['economic_evidence']['metric_role'] == 'cumulative_winrate_research'
+        assert source['economic_evidence']['policy_apply_allowed'] is False
+    tasks, actions = checklist._project_direct_tasks(summary=result, source_date='2026-10-06',
+        target_date='2026-10-07', summary_path=summary.summary_paths('2026-10-06')[0], summary_sha256='a'*64)
+    assert actions['main_mechanistic_entry'] == actions['compact_auxiliary'] == 'preopen_policy_handoff'
+    assert not any(t.task_id.endswith(('MainMechanisticEntry', 'CompactAuxiliary')) for t in tasks)
+    from src.engine.scalping import mechanistic_entry_runtime_policy as native
+    snapshot = native.root(tmp_path) / 'sources' / f"reversal-{machine['artifact_content_sha256']}.json"
+    snapshot.write_text('{}')
+    corrupt = summary.build_runtime_approval_summary('2026-10-06', include_swing=False, include_producer_gap=False)
+    assert corrupt['sources']['main_mechanistic_entry']['policy_receipt']['valid'] is False
+    assert corrupt['sources']['main_mechanistic_entry']['economic_evidence']['comparison_status'] == 'source_gap'
+
+
 def synthetic_family():
     from src.engine.scalping import continuous_reversal_policy as policy
     from src.engine.scalping.reversal_auxiliary_contract import PRODUCTION_VERSION

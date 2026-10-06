@@ -1813,6 +1813,29 @@ def test_direct_summary_accepts_pre_submit_delay_as_independent_owner():
     assert mod.DIRECT_OWNER_TASK_LABEL["pre_submit_delay"] == "PreSubmitDelay"
 
 
+@pytest.mark.parametrize("defect", [None, "receipt", "authority", "metric", "owner", "status"])
+def test_winrate_handoff_is_verified_without_economic_or_runtime_authority(defect):
+    owner = "entry_split" if defect == "owner" else "compact_auxiliary"
+    row = _direct_source(owner, comparison_status="cumulative_winrate_selected",
+                         policy_handoff_state="verified", policy_valid=True)
+    row["economic_evidence"]["selection_metric"] = "cumulative_raw_win_fraction"
+    if defect == "receipt":
+        row["policy_receipt"]["valid"] = False
+    elif defect == "authority":
+        row["economic_evidence"]["policy_apply_allowed"] = True
+    elif defect == "metric":
+        row["economic_evidence"]["selection_metric"] = "expected_value"
+    elif defect == "status":
+        row["economic_evidence"]["comparison_status"] = "measured_no_edge"
+    payload = _direct_summary("2026-10-06", sources={owner: row})
+    if defect:
+        with pytest.raises(RuntimeError):
+            mod._validate_direct_summary(payload, "2026-10-06")
+    else:
+        result = mod._validate_direct_summary(payload, "2026-10-06")
+        assert result["validated_edge_count"] == result["policy_candidate_count"] == 0
+
+
 def test_direct_family_refresh_drops_stale_generated_task_but_keeps_manual_auto_task():
     existing = "\n".join((mod.AUTO_START,
         "- [ ] `[DirectFamilySourceRepairLowPriceExpansion] stale generated task`",
