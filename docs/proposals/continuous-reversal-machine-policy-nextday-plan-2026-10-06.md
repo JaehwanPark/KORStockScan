@@ -124,7 +124,7 @@ H(V7)는 완전 원천 요청의 SOURCE_QUALITY_GAP/INSUFFICIENT enum을 제거�
 ### 6.3 연구 코드에서 정기 장후 producer로 이관
 
 1. 공통 반전 kernel의 **전수 반전 목록**을 누적 원천으로 삼는다. 기존 기계 ENTER_NOW + `provider_called=true` trace만 읽던 `compact_auxiliary_paired_replay.prepare`를 새 family에서 대체한다. 현재 8개 원천일을 포함하고 이후 적격 날짜를 누적한다. 미래 라벨은 입력과 별도 저장한다.
-2. `reversal_auxiliary_contract.py`를 as-of 입력 adapter·프롬프트 registry·검증기의 공통 owner로 사용한다. 현재 파일은 offline 연구 전용이다. 실시간에서는 실제 기계 반전 receipt와 같은 facts/hash를 받아야 하며 READY/ENTER_NOW를 무조건 합성하지 않는다. 연구 안내의 offline 문구를 운영용으로 바꾸는 경우 새 prompt hash로 실제 호출 비교를 다시 수행한다. 바뀐 프롬프트에 이번 연구 hash/점수를 그대로 복사하지 않는다.
+2. `reversal_auxiliary_contract.py`를 as-of 입력 adapter·프롬프트 registry·검증기의 공통 owner로 사용한다. 구현된 파일은 실제 연구와 실시간이 공유하는 운영 입력·영문 프롬프트·schema 계약이다. 실시간에서는 실제 기계 반전 receipt와 같은 facts/hash를 받으며 READY/ENTER_NOW를 무조건 합성하지 않는다. 연구 안내의 offline 문구를 운영용으로 바꾸는 경우 새 prompt hash로 실제 호출 비교를 다시 수행한다. 바뀐 프롬프트에 이번 연구 hash/점수를 그대로 복사하지 않는다.
 3. A/C 등 선택된 이전 연구안도 잘못된 시점 설명/legacy READY 중복 요구가 남지 않게 운영 계약으로 이관한다. 문구/역할/schema가 달라지면 각 셀의 **같은 고정 지점**에 새 실제 호출을 하고 누적 원 PASS 승률로 표를 다시 확정한다. 이는 기존 제출 보존이나 독립 holdout 성과 문턱이 아니라 실제 배포할 바이트에 대한 측정이다. 바뀌지 않은 정확한 요청/응답만 cache로 재사용한다.
 4. 최종 선택은 `compact_auxiliary_paired_replay.py`와 `entry_setup_paired_replay_batch.py`의 새 continuous-reversal 분기에 넣는다. 기존 20/20 표본·holdout 일수·EV/stress EV·구 prompt 방향 선정 조건을 이 family 뒤에 다시 AND하지 않는다. 그 외 family의 계약은 건드리지 않는다.
 5. 셀별 `machine_parent_sha`, reversal ID/feature/source/label/cost hash, input/prompt/schema/model/response ID, raw/validated verdict, WIN/FAIL/exclusion, 비교 분모를 보존한다. 정책 writer는 12셀을 단일 dated bundle로 발행하고 reader는 시장/가격대별 선택과 승계 부모를 검증한다. source/모델/문구/hash가 바뀐 결과를 동일 누적으로 조용히 합산하지 않는다.
@@ -180,7 +180,7 @@ Kiwoom 요청·FID·응답 parser를 바꾸는 계획이 아니다. 추가 보�
 
 현 wrapper는 EOD를 시작하는 것이 아니라 `wait_for_eod_terminal`로 기다린다. **EOD 제외는 이 검증 gate를 끄는 것이 아니다.** 10/6 EOD 성공 terminal·DB 날짜/원천 snapshot을 읽어 고정하고 KOSPI EOD updater는 호출하지 않는다. 원 receipt/hash는 재생성 완료 때까지 비교하며 바뀌면 세대 충돌로 기록한다. EOD를 성공했다고 가짜 terminal을 만들지 않는다.
 
-현재 자동 recovery가 이전 terminal/checkpoint를 재사용할 수 있으므로, 구현 때 `all_except_eod`라는 **명시적 전체 재생성 모드와 generation manifest를 추가**한다. 이는 현재 CLI에 이미 있는 flag가 아니다. P1에서 정확한 인자·날짜·일회 실행 잠금 계약을 확정하고 테스트한 실행 manifest를 P3 release에 포함한다. 공유 날짜 status를 무작정 삭제해 cache miss를 만들지 않는다. 원 실패/중단/이전 성공은 immutable attempt history로 남긴다. 정확하게 일치하는 raw snapshot·완성봉·실제 AI 응답은 계산 재현의 입력으로 읽을 수 있지만, 구 report/terminal을 새 실행 성공으로 표지만 바꾸지 않는다.
+현재 자동 recovery가 이전 terminal/checkpoint를 재사용할 수 있으므로, 구현 때 `all_except_eod`라는 **명시적 전체 재생성 모드와 generation manifest를 추가**한다. 구현한 환경 계약은 `THRESHOLD_CYCLE_REGENERATION_SCOPE=all_except_eod`, `POSTCLOSE_REGENERATION_SCOPE=all_except_eod`, `POSTCLOSE_REGENERATION_ID`이며, source/publication 10/6·effective 10/7을 별도로 전달한다. 기존 성공 cache를 우회하고 새 run/terminal을 기록하는 계약과 실행 manifest를 최종 release에서 검증했다. 공유 날짜 status를 무작정 삭제해 cache miss를 만들지 않는다. 원 실패/중단/이전 성공은 immutable attempt history로 남긴다. 정확하게 일치하는 raw snapshot·완성봉·실제 AI 응답은 계산 재현의 입력으로 읽을 수 있지만, 구 report/terminal을 새 실행 성공으로 표지만 바꾸지 않는다.
 
 | 재생성 대상 | 기존 실행 owner | 새 세대 완료 기준 |
 | --- | --- | --- |
@@ -219,7 +219,7 @@ P5까지 준비를 완료해도 07:55 실제 PID가 뜨기 전에는 “정상�
 
 통합 실행 owner는 현재 체크리스트의 **`DirectFamilySourceRepairMainMechanisticEntry`**를 재사용한다. 기존 **`DirectFamilySourceRepairCompactAuxiliary`**는 §6의 보조 producer/consumer 통합을 소유하고 결과를 통합 owner에 인계한다. 두 owner가 전체 wrapper를 중복 실행하지 않으며 기존 보조 OPEN에 남은 EV/holdout 종결 조건은 새 반전 family에서 제거한다. 기존 10/2 원천 결손 기록은 이력으로 보존하고 현재 종결 기준은 이 문서 P1~P7(기계·보조 전환/최종 배포/EOD 제외 전체 장후 재생성/준비/실제 소비)로 갱신한다. `MainSubmitDroughtPathAcceptance1006`는 기존 평가·증거 전달 수리의 자연 수용을 계속 소유하며 새 정책 발행 owner로 복제하지 않는다.
 
-10/7 구현 진행: 새 기계/보조 장후·실시간 통합과 최종 운영 바이트의 실제 2,232회 호출 비교, 12셀 확정·반복 리뷰·release `879d324f` 배포를 완료했다. 00:40:27부터 EOD 제외 활성 장후 전체를 source/publication 10/6/effective 10/7 새 generation으로 재생성 중이다. 최초 실행에서 발견한 분할주문 합계 byte-budget 결함과 독립 group의 기계 부모 중복 writer를 보완했다. 최종 terminal·prepared·예약 PREOPEN·실제 PID는 각각 별도 확인한다. 원 중단/실패는 보존하며 실행 증거와 운영 상세는 [구현·실행 검토](../audits/continuous-reversal-implementation-postclose-execution-review-2026-10-06.md)에 기록한다. 기존 기준 문서 Rebase/README/AGENTS는 이 구현 기록으로 덮어쓰지 않는다.
+10/7 구현 결과: 기계·보조 장후/실시간 공통 kernel과 운영용 입력·프롬프트·schema, 영구 무제한 AI 횟수 정책을 최종 release `0e067426`에 배포했다. 관련 immutable 회귀 683 PASS·삼성 source-custody 34 PASS이며, 실제 AI 2,232회 시도의 원 응답과 누적 승률 재계산 결과에 기계 12셀·보조 12셀 모두 일치한다. 무표본 셀의 동일 유형 정규장 payload/hash 승계와 격리 PREOPEN 활성화·parent CAS·중복 활성화 검증도 통과했다. 03:54:15 시작한 source/publication 10/6·effective 10/7 EOD 제외 전체 generation의 Main native는 04:14:46 성공했고 최종 prompt consumer·기계/보조 scoped·Main seal issues=[]다. 독립 단계 최종 갱신·archive·3 Parquet/압축 검증/대조를 완료했으며 whole 13 stage strict/controller issues=[]다. cleanup·최종 detector 완료 및 10/7 exact-date prepared_verified를 확인했다. 최종 checklist bytes에서 strict/controller/finalization/cleanup/detector를 다시 봉인했고 04:22:07 prepared_verified, 04:22:42 현재 세대 재검증 PASS를 확인했다. EOD 원본과 연구 원천 110개·실제 호출/응답 로그 2개는 정리 후에도 SHA 불변이다. 07:35 PREOPEN과 07:55 실제 PID 소비는 예약 기동 이후의 별도 acceptance다. 원 실패·중단·보완과 최종 실행 근거는 [구현·실행 검토](../audits/continuous-reversal-implementation-postclose-execution-review-2026-10-06.md)에 기록한다. 기존 기준 문서 Rebase/README/AGENTS는 이 구현 기록으로 덮어쓰지 않는다.
 
 최초 기계 전용 계획 검증은 [이전 계획 검증 영수증](../../tmp/continuous-reversal-nextday-plan-20261006/plan-validation.json)에 기록한다. 계획용 matrix는 [비활성 정책 초안](../../tmp/continuous-reversal-nextday-plan-20261006/policy-plan.json)에 보존한다. 둘 다 운영 policy 디렉터리의 발행물이 아니다.
 
@@ -236,3 +236,5 @@ P5까지 준비를 완료해도 07:55 실제 PID가 뜨기 전에는 “정상�
 
 
 운영용 실제 재비교와 최종 12셀은 [구현·실행 검토](../audits/continuous-reversal-implementation-postclose-execution-review-2026-10-06.md)를 따른다. §6의 초기 offline 선택표는 원 연구 이력이며 운영용 다른 문구에 그 성과/hash를 붙이지 않는다. 실시간/장후 동일 kernel의 접두 재생 372점·701,638개 반전은 일치했다. 현재 실행 owner는 [10/7 체크리스트](../checklists/2026-10-07-stage2-todo-checklist.md)이다.
+
+새 family의 최종 summary는 실제 `continuous_reversal/<source>/machine.json`·`auxiliary.json` 및 정확한 native 12셀 bundle을 소비한다. `cumulative_winrate_selected` 상태의 유효한 영수증은 PREOPEN 인계로 투영하며 구 EV/holdout 통과와 혼동하지 않는다. Main wrapper가 필요한 tower를 최종 checklist 전에 생성하고, 검증기는 기존 수동 통합 owner 두 개의 예약 소비 업무를 보존한다.
