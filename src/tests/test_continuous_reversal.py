@@ -194,6 +194,56 @@ def synthetic_family():
     return family
 
 
+@pytest.mark.parametrize('component', ['machine', 'auxiliary'])
+@pytest.mark.parametrize('defect', [None, 'running', 'failed', 'terminal', 'missing', 'snapshot', 'bundle'])
+def test_final_detector_consumes_reversal_native_reports_without_legacy_gates(tmp_path, component, defect):
+    from src.tests.test_mechanistic_entry_runtime_policy import initial
+    from src.engine.scalping import continuous_reversal_policy as policy
+    from src.engine.scalping import mechanistic_entry_runtime_policy as native
+    from src.engine.automation import postclose_summary_handoff as stage
+    from src.engine.error_detectors import artifact_freshness as detector
+    import hashlib
+    data = tmp_path / 'data'
+    initial(data)
+    machine, auxiliary = family_reports()
+    out = P.directory(data, '2026-10-06')
+    P.write(out / 'machine.json', machine)
+    P.write(out / 'auxiliary.json', auxiliary)
+    policy.publish(data, '2026-10-06', '2026-10-06', machine, auxiliary)
+    for name, report, label, folder, filename in [
+        ('main_machine_policy', machine, 'machine_policy', 'ai_decision_action_outcome_calibration', 'winrate_policy'),
+        ('main_auxiliary_policy', P.seal({**auxiliary, 'staged': {'status': 'fixture'}}),
+         'compact_auxiliary_paired_economic', 'ai_entry_setup_paired_replay_batch', 'compact_auxiliary_paired_economic')]:
+        path = data / 'report' / folder / (filename + '_2026-10-06.json')
+        P.write(path, report)
+        value = dict(schema=stage.STAGE_SCHEMA, stage_id=name, source_date='2026-10-06',
+                     status='succeeded', exit_code=0, sources={label: dict(path=str(path.resolve()),
+                     sha256=hashlib.sha256(path.read_bytes()).hexdigest())})
+        if name == ('main_machine_policy' if component == 'machine' else 'main_auxiliary_policy'):
+            if defect in {'running', 'failed'}:
+                value['status'] = defect
+                value['exit_code'] = None if defect == 'running' else 1
+            if defect == 'terminal':
+                value['sources'][label]['sha256'] = 'f' * 64
+        stage._stage_write(stage.stage_path(data / 'report', '2026-10-06', name), value)
+    if defect == 'missing':
+        (out / (component + '.json')).unlink()
+    elif defect == 'snapshot':
+        sha = machine['artifact_content_sha256'] if component == 'machine' else auxiliary['artifact_content_sha256']
+        (native.root(data) / 'sources' / ('reversal-' + sha + '.json')).write_text('{}')
+    elif defect == 'bundle':
+        (native.root(data) / 'policy_2026-10-07.json').write_text('{}')
+    fn = detector._machine_result_semantics if component == 'machine' else detector._auxiliary_result_semantics
+    result = fn(tmp_path, '2026-10-06')
+    expected = 'unobservable' if defect == 'running' else 'source_invalid' if defect else 'cumulative_winrate_selected'
+    assert result['status'] == expected
+    if not defect:
+        assert result['findings'] == [] and len(result['cells']) == 12
+        assert result['realized_profit_assessed'] is result['runtime_effect'] is False
+    elif defect != 'running':
+        assert detector._semantic_alerts(result.get('stage_id', 'main_machine_policy'), result, '2026-10-06')
+
+
 @pytest.mark.parametrize('key',P.expected_cells())
 def test_twelve_cell_runtime_routes(key):
     from src.engine.scalping import continuous_reversal_policy as policy

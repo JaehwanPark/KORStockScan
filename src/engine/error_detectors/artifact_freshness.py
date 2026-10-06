@@ -389,8 +389,71 @@ def _semantic_stage_binding(root, day, stage, *, artifact=None, artifact_sha=Non
     return {"status": value.get("status"), "receipt_sha256": digest}
 
 
+def _continuous_reversal_result_semantics(root, source_date, component):
+    """Consume the native reversal contract, without legacy economics gates."""
+    report_path = root / 'data/report/continuous_reversal' / source_date / (component + '.json')
+    if not report_path.exists() and not report_path.is_symlink():
+        from src.engine.scalping import mechanistic_entry_runtime_policy as native
+        dated = native.root(root / 'data') / ('policy_' + native.next_target(source_date) + '.json')
+        if not dated.exists() and not dated.is_symlink():
+            return None
+        try:
+            candidate, _ = _semantic_object(dated)
+            if not candidate.get('continuous_reversal'):
+                return None
+        except (OSError, ValueError, TypeError, KeyError):
+            return dict(status='source_invalid', findings=['continuous_reversal_dated_policy_invalid'],
+                        source_date=source_date, artifact=str(dated))
+    try:
+        from src.engine.scalping import continuous_reversal_postclose as reports
+        from src.engine.scalping import continuous_reversal_policy as policy
+        from src.engine.scalping import mechanistic_entry_runtime_policy as native
+        report, report_sha = _semantic_object(report_path)
+        if report.get('schema') != reports.SCHEMA:
+            raise ValueError('continuous_reversal_report_schema_invalid')
+        if (report != reports.seal(report) or report.get('source_date') != source_date
+                or report.get('status') != 'completed'):
+            raise ValueError('continuous_reversal_report_hash_or_date_invalid')
+        stage_id = 'main_machine_policy' if component == 'machine' else 'main_auxiliary_policy'
+        for required in ('main_machine_policy', 'main_auxiliary_policy'):
+            stage = _semantic_stage_binding(root, source_date, required)
+            if stage['status'] in {'pending', 'running'}:
+                return dict(status='unobservable', findings=[], stage_id=stage_id, execution=stage)
+            if stage['status'] != 'succeeded':
+                raise ValueError('continuous_reversal_execution_not_completed:' + required)
+        if component == 'machine':
+            bound_path = root / 'data/report/ai_decision_action_outcome_calibration' / f'winrate_policy_{source_date}.json'
+            artifact = 'machine_policy'
+        else:
+            bound_path = root / 'data/report/ai_entry_setup_paired_replay_batch' / f'compact_auxiliary_paired_economic_{source_date}.json'
+            artifact = 'compact_auxiliary_paired_economic'
+        bound, bound_sha = _semantic_object(bound_path)
+        _semantic_stage_binding(root, source_date, stage_id, artifact=artifact,
+                                artifact_sha=bound_sha, artifact_path=bound_path)
+        if component == 'auxiliary':
+            bound = reports.seal({k: v for k, v in bound.items() if k not in {'staged', 'artifact_content_sha256'}})
+        if bound != report:
+            raise ValueError('continuous_reversal_stage_report_mismatch')
+        handoff = policy.direct_handoff(root / 'data', source_date)
+        bundle = native.load(data_root=root / 'data', target_date=handoff['effective_date'])
+        return dict(status='cumulative_winrate_selected', findings=[], stage_id=stage_id,
+                    source_date=source_date, target_date=handoff['effective_date'],
+                    artifact=str(report_path), report_sha256=report_sha,
+                    selection_metric=handoff['selection_metric'],
+                    cells=bundle['continuous_reversal'][component + '_cells'],
+                    native_handoff=handoff, realized_profit_assessed=False,
+                    runtime_effect=False, actual_pid_consumed=False)
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        return dict(_semantic_failure(exc), source_date=source_date,
+                    stage_id='main_machine_policy' if component == 'machine' else 'main_auxiliary_policy',
+                    artifact=str(report_path))
+
+
 def _machine_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
     """Check exact-date machine economics separately from stage completion."""
+    reversal = _continuous_reversal_result_semantics(root, source_date, 'machine')
+    if reversal is not None:
+        return reversal
     report_path = (root / "data/report/ai_decision_action_outcome_calibration"
                    / f"ai_decision_action_outcome_calibration_{source_date}.json")
     try:
@@ -742,6 +805,9 @@ def _auxiliary_scope_contract(value, report, source_date, scope):
 
 def _auxiliary_result_semantics(root: Path, source_date: str) -> dict[str, Any]:
     """Audit the bounded AI-stage receipt; selection is not live consumption."""
+    reversal = _continuous_reversal_result_semantics(root, source_date, 'auxiliary')
+    if reversal is not None:
+        return reversal
     from src.engine.scalping import compact_auxiliary_paired_replay as paired
 
     terminal_path = (root / "data/report/postclose_stage_terminal" / source_date
@@ -1514,6 +1580,8 @@ def _semantic_alerts(name, semantics, source_date):
         winrate_report_hash_or_scope_invalid winrate_report_schema_invalid winrate_successor_hurdle_invalid
         winrate_selected_zero_or_undefined winrate_semantic_validation_failed winrate_terminal_binding_invalid
         winrate_execution_failed next_preopen_prepared_contract_invalid postclose_handoff_contract_invalid
+        continuous_reversal_report_schema_invalid continuous_reversal_report_hash_or_date_invalid
+        continuous_reversal_stage_report_mismatch continuous_reversal_dated_policy_invalid
         postclose_handoff_generation_invalid postclose_handoff_execution_failed
         episode_policy:execution_failed
     """.split())
@@ -1542,7 +1610,10 @@ def _semantic_alerts(name, semantics, source_date):
                  "auxiliary_primary_economics_source_blocked", "auxiliary_exact_plan_lineage_missing",
                  "auxiliary_outcome_label_source_gap", "auxiliary_outcome_label_binding_missing"}
                  else semantics.get("scopes", {}).get(scope, {}).get("full", semantics.get("screened_total"))),
-             "owner": ("compact_auxiliary_paired_replay" if name == "main_auxiliary_policy"
+             "owner": ("continuous_reversal_postclose" if semantics.get('stage_id') in {'main_machine_policy', 'main_auxiliary_policy'}
+                       and (semantics.get('selection_metric') == 'cumulative_raw_win_fraction'
+                            or str(semantics.get('artifact') or '').find('/continuous_reversal/') >= 0)
+                       else "compact_auxiliary_paired_replay" if name == "main_auxiliary_policy"
                        else "next_preopen_readiness" if name == "postclose_handoff"
                        else "ai_action_outcome_calibration"),
              "closure_test": "same_date_scope_source_selection_and_terminal_hashes"}
@@ -2483,7 +2554,7 @@ class ArtifactFreshnessDetector(BaseDetector):
                 if result['findings']:
                     warnings.append(name + '_semantics: ' + ', '.join(result['findings']))
             for name, semantics in (
-                ("legacy_machine_report", machine_semantics),
+                (machine_semantics.get('stage_id', "legacy_machine_report"), machine_semantics),
                 ("main_auxiliary_policy", auxiliary_semantics),
                 ("postclose_handoff", handoff), *family_results):
                 semantics.setdefault('target_date', selection['target_date'])
