@@ -306,3 +306,11 @@ def test_retirement_prepare_preserves_instance_masks(tmp_path):
     (units/service).symlink_to('/dev/null')
     assert transition.prepare(workspace,systemd_dir=units)['installed_files'] == []
     assert (units/service).is_symlink()
+
+
+def test_retirement_control_receipt_is_readable_by_runtime_user(tmp_path):
+    from src.engine.automation.owner_retirement_transition import atomic_write_json
+    path=tmp_path/'retirement.json'
+    atomic_write_json(path,dict(state='terminal'))
+    assert path.stat().st_mode & 0o777 == 0o644
+    assert json.loads(path.read_text()) == dict(state='terminal')

@@ -32,6 +32,9 @@ def atomic_write_json(path, payload):
             temporary = Path(stream.name)
             json.dump(payload, stream, sort_keys=True, indent=2)
             stream.flush()
+            # systemd retirement applies as root; the unprivileged router and
+            # Main launcher must still read this non-secret control receipt.
+            os.fchmod(stream.fileno(), 0o644)
             os.fsync(stream.fileno())
         os.replace(temporary, path)
     finally:
