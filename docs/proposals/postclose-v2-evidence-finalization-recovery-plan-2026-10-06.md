@@ -31,3 +31,13 @@
 - 현재 실행 owner: [10/6 체크리스트](../checklists/2026-10-06-stage2-todo-checklist.md)의 `FixedWatchSourceAndCleanupRepair1006` A5.
 - 1차 수정 `72716b6c`, native Main PID `25432`, 당일 bootstrap/PID PASS. 15:40 복구는 선행 검증을 통과한 뒤 요약 소비자의 `future_preopen_generation_stale`에서 실패했다. 단순 selector 교체로 원 manifest 소유권을 증명하지 않았으며, 위 6번의 native 인계 소비 계약을 후속 보완했다. 원 실패 영수증은 보존한다.
 - 후속 `999ee899`의 기동 사전 검증은 이미 실패한 요약의 holding-vote 원천 검증에서 중단됐다. 재기동하지 않았으며 selector를 `72716b6c`로 원복했다. 원 정책 파일과 현재 PID는 유지했다. 원 prepared 세대에 봉인된 summary/controller를 canonical에 복귀시킨 시도도 `summary_handoff:code_changed`로 검증 실패했다. 원복된 과거 controller의 DONE은 현재 최종화 성공으로 사용하지 않는다. 실패 canonical은 `failed-controller-before-sealed-rollback.json`과 `failed-summary-before-sealed-rollback.json`에 보존한다. 위 7번의 독립 report owner로 정상 요약을 재생성한다.
+- 독립 report 실행 `eeccb1f4`의 첫 시도는 `main_machine_policy:code_changed`에서 차단됐다. 10/5 16:05 원 기계 단계는 삭제된 `designated-machine-policy-20261005-3d0e5106` 경로의 코드에 결속되어 있었다. Git 원 커밋 `3d0e5106`을 그 경로로 복원하여 원 해시 `90e05fddf53cb08ba9a2aa19d4255da483154312f75a78b3e4c38d4be2c537ca`와 대조했다. 정책 재생성이나 과거 영수증 수정 없이 12개 선행 단계가 모두 검증됐다. 이 root는 원 정책 코드 증명 의존성이므로 보존 대상이다.
+- 16:04:34 독립 native summary `6f8f01b92a12412a907476006566ce09` succeeded; 현재 holding-vote/bootstrap 읽기 검증 PASS. 첫 수정의 400 PASS, 인계 소비자 보완 444 PASS, 독립 읽기 경로 최종 94 PASS, compile/bash/diff/print-only parser PASS를 확인했다. 정상 최종화 결과는 아래 별도 완료 증거로 판정한다.
+
+## 최종 복구 결과
+
+- `eeccb1f4127a39d7454c8bb464f1018cb4365812` 반영 후 16:05:35 Main PID `60572`의 singleton/root/bootstrap 및 native intraday 소비 PASS. 원 정책·입력·선행 영수증·PREOPEN 등 보호 파일 30개와 holding-vote 원 파일의 SHA는 모두 동일하다.
+- 16:08:30 native cleanup DONE, 16:08:38 native `postclose_finalization` 및 `postclose_final_detector` DONE. 대상 source=`2026-10-02`, 원 적용일=`2026-10-06`을 유지했으며 10/7 PREOPEN을 생성하지 않았다.
+- controller DONE/whole chain strict PASS, 현재 선행 12개+summary 검증 결손 0. chain=`2ffd804360a6c73ec5b0b861245aebbe934a7b5012b5f5d9214620d26a22d6f7`; snapshot=`de8c7a024a0ad4b385fda97148f5e1043fdc6e3161eb981ecbd12f7b081bf112`; final detector run=`cron-20261006T160830-105951`/SHA=`326e7abfb046fbdc1033ffc2f5f7a513469ecace742c96234445c5859d427c55`.
+- 완료 뒤 16:09:24 native full 탐지 및 16:10:07 재관측에서 FAIL 0, Main process health PASS, 두 job 모두 `recovered_late`. 오전 06:50 기한 초과 경고는 유지한다. Machine/auxiliary 운영 경제성·plan/label 원천 및 Episode producer 변경의 기존 warning도 보존하며 이번 완료로 해결된 것으로 표시하지 않는다.
+- 상세 증거와 검증 범위: [완료 리뷰](../audits/postclose-finalization-contract-recovery-review-2026-10-06.md), `tmp/postclose-finalization-contract-recovery-20261006/after.json`. A3 자연 판정 및 10/6 자연 장후·10/7 기동 수용은 현재 OPEN owner에서 별도로 확인한다.
