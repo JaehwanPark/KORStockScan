@@ -42,5 +42,9 @@ Kiwoom 요청·응답 parser·FID·REG/REMOVE·auth·continuation은 변경하�
 - 통합 회귀 613 통과, 소비자/감시기 회귀 275 통과, 실제 제출 seed/비용 추가 회귀 324 통과. 마지막 action/guard/mark 원 receipt binding 및 정상 timeout abort 보완 후 producer/contract 회귀 127 통과. 서로 겹치는 실행 회차이며 고유 테스트 수로 합산하지 않는다.
 - 변경 Python 19개 compile, `git diff --check`, print-only parser 통과. 현재 실행 owner를 변경하지 않고 동결된 과거 checklist와 summary를 보존했다. 검토 범위의 미해결 코드 결함 0; 자연 실행/운영 모델 수용은 아래 경계로 남는다.
 - 원본 archive 생성 후 실제 과거 report/policy/checklist/PREOPEN 등 34개 파일 SHA 불변 확인. 에피소드 findings는 `episode_native_source_gap`, `episode_capture_invalid_events`만 남고 producer-changed 오탐이 사라졌다. 보조 15건 모두 exact price-label join/native fixed 10m net-path 평가 가능; 운영 계획/stop/paired 결손 warnings는 그대로다.
-- 배포·실제 PID 소비 결과는 종료 시 같은 문서에 갱신한다.
+- 코드 커밋 `fd222e315577c10853b23db583f260ef76259b39`, 릴리스 `/home/ubuntu/KORStockScan-runtime-releases/probe-original-source-20261006-fd222e31` 배포. 승인된 native intraday prepare→graceful restart→bootstrap PID/env 검증을 완료했다. 현재 PID `126945`, 시작 KST `17:11:30.430`, 구 PID `60572` 종료, Main 단일 PID와 cwd/source commit 일치 확인.
+- 재기동 전후 KRX·NXT 보유 0, 미체결 0, DB 활성 보유/주문 0, 미해결 owner intent 0. 이 작업의 주문 제출 0. 동결된 34개 원 정책·보고서·PREOPEN·checklist 파일 SHA 불변.
+- 프로세스/스레드 건강 `pass`; cron 8개 경로 검증; release-set `passed`, 116개 episode 인스턴스의 정책 핀 348개 일치. 기존 격리/실패 3개는 별도 유지하며 모든 episode의 자연 정상 실행을 입증한 것으로 해석하지 않는다. 독립 episode release/custody는 변경하지 않았다.
+- 배포된 감시기 직접 실행 KST `17:13:17`: producer-changed 오탐 없음. 과거 machine 운영 경제성/paired와 auxiliary 계획·label·경제성 결손, episode 실제 16개 source-gap/106개 invalid capture 경고는 유지.
+- 새 PID 시작 이후 bounded 최근 2,000줄 관측에서 두산 RECHECK `aims-005a0fac6621a151a6b3`의 원 stop receipt SHA를 검증했다. 계획 생성은 기존 nonentry cache의 `exact_broker_capacity_missing`으로 중단됐으나 원 stop receipt는 보존됐다. 새 조회를 추가하거나 현재 자금으로 과거 결손을 대체하지 않았다. 자연 probe-fill→residual→terminal/cost 체인은 해당 관측창에서 미관측이며 full changed-CF 운영 guard/model은 미지원 상태다.
 - 증거 폴더: `tmp/probe-original-source-remediation-20261006/`. 정책 값 변경 및 연구 정책 재생성은 이 배포에 포함하지 않는다.
