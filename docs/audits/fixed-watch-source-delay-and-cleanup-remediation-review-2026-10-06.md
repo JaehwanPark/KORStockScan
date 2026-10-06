@@ -34,3 +34,15 @@
 ## 운영 후속 수용
 
 코드 리뷰는 닫혔다. 앞서 승인된 정책 보존 handoff로 새 immutable release를 반영한 뒤 Main PID·삼성/두산 exact source·두산 machine trace·publication 지연을 확인한다. 등록 cap, stale floor, API read reserve, Provider 정책, threshold, 수량, custody, 수동 veto 및 다른 에피소드의 현재 PID는 변경하지 않는다. 짧은 자연 관찰로 종일 원천 지연 0이나 실제 수익 개선을 선언하지 않는다.
+
+
+### 배포·자연 관찰 완료 기록
+
+- 코드 commit `af780d9b5a58b3f7e263ec43e27dc1b9e239786d`, immutable root `/home/ubuntu/KORStockScan-runtime-releases/fixed-watch-source-cleanup-20261006-af780d9b`, 현재 Main PID `13210` / start ticks `88806571`. 15:13:54 당일 bootstrap/PID handoff PASS. 새 release의 공유 mount/selector를 네이티브 검증 후 재기동했다. 준비 중 selector workspace/flag 경로 오류는 재기동 전에 수정하고 다시 검증했다.
+- 15:13:23 새 broker readback: 두산 잔고/미체결/미정산 intent 0, blocking retired process 없음. native release-set PASS. 다른 에피소드 PID와 policy pin은 변경하지 않았다.
+- bootstrap·PREOPEN·prepared 원 파일 5개의 해시는 handoff 전후 동일하다. bundle `bd76748c…aedabe` 그대로다. 실제 DB target와 현재 PID의 공개 정책 설정으로 두 종목 모두 `SCANNER` machine-selection tag / `active_bounded_krx_canary` / `mechanistic_entry_adjudicator`를 읽기 전용 확인했다. 잘못 축약한 진단 env의 fallback을 실제 PID 결함으로 사용하지 않았다.
+- 15:15:04~15:17:04 수동 조회·API 없는 121개 passive sample: PID/commit 121/121 일치, 연결 121/121, epoch 1 유지. snapshot age 중앙값 0.662초 / p95 1.156초 / 최대 1.471초. 기존 관찰의 최대 5.389초와 구분해 기록한다. 서로 다른 시간창이며 통제된 성능 개선율이 아니다.
+- 삼성 quote/trade 최대 2.082/2.124초, 두산 2.223/2.667초. 두 종목 모두 3초 초과 0/121. 자연 대기·체결 희소가 사라졌다는 뜻이 아니다.
+- capture lock 중앙값 201.732ms / p95 421.130ms / 최대 535.411ms, CPU 약 100.53%/한 core는 남는다. 시작 직후 23ms 한 frame이나 모의 33ms를 운영 대표값으로 사용하지 않는다. 이번 창에서 publication 3초 초과는 관측되지 않았으며 CPU의 종일 원인/수익 효과는 입증하지 않는다.
+- 새 자연 fixed-watch machine trace는 이 bounded window에 미관측이다. 기동의 실제 소비·source와 읽기 전용 resolver PASS를 자연 ENTER_NOW/RECHECK/BLOCK 소비로 바꾸지 않는다. 체크리스트 A3/A4는 다음 자연 판정/장후 수용으로 OPEN이다. 과거 전체 finalization v2/v3 predecessor blocker도 보존한다.
+- 마지막 소비 증거: `tmp/fixed-watch-source-cleanup-remediation-20261006/native-acceptance.json`, native intraday consumed receipt, 실제 `data/runtime/runtime_release_selection.json`, `data/runtime/kiwoom_ws_snapshot/latest.json`, 원 `logs/log_rotation_cleanup_cron.log` DONE.
