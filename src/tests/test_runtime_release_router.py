@@ -2,6 +2,7 @@ import hashlib
 import os
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -715,3 +716,20 @@ def test_group_retirement_cannot_hide_foreign_profile_or_unit(release, damage):
     (directory/'episode-retirement-fixture.json').write_text(json.dumps(manifest))
     with pytest.raises(ValueError,match='retirement'):
         router._episode_retirement_receipts(workspace)
+
+
+def test_retirement_validation_runs_in_isolated_wrapper_interpreter(tmp_path):
+    from src.engine.automation import owner_retirement_transition as owner
+    manifest = dict(schema=owner.GROUP_SCHEMA, state='terminal', owner='episode',
+                    symbols=['080220'], profile_ids=['jeju_semiconductor_morning'],
+                    units=list(owner.units(['080220'])))
+    manifest['receipt_sha256'] = owner.digest(manifest)
+    directory = tmp_path/'data/runtime/retirements'
+    directory.mkdir(parents=True)
+    (directory/'episode-retirement-fixture.json').write_text(json.dumps(manifest))
+    code = ("import runpy,sys; from pathlib import Path; "
+            "module=runpy.run_path(sys.argv[1],run_name='isolated_review'); "
+            "assert module['_episode_retirement_receipts'](Path(sys.argv[2]))[0]['symbols']==['080220']")
+    result = subprocess.run([sys.executable, '-I', '-c', code, router.__file__, str(tmp_path)],
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr

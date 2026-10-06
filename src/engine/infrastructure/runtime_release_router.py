@@ -313,22 +313,62 @@ def git(root: Path, *args: str) -> str:
     ).strip()
 
 
+def _retirement_digest(body):
+    return hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
+
+
+def _retirement_profiles():
+    # The router runs with Python -I. Read the adjacent reviewed guard's data
+    # without importing a mutable application package or honoring PYTHONPATH.
+    import ast
+    path = Path(__file__).resolve().parents[3] / "src/trading/config/owner_retirement.py"
+    tree = ast.parse(path.read_text())
+    profiles = next((ast.literal_eval(node.value) for node in tree.body
+                     if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name)
+                     and target.id == "RETIRED_EPISODE_PROFILES" for target in node.targets)), None)
+    if not isinstance(profiles, dict) or not profiles:
+        raise ValueError("retirement_guard_profile_registry_invalid")
+    return profiles
+
+
+def _retirement_symbols(receipt):
+    if receipt.get("schema") == "symbol_owner_retirement_transition_v1":
+        if receipt.get("symbol") != "034020":
+            raise ValueError("retirement_symbol_scope_invalid")
+        return ("034020",)
+    symbols = receipt.get("symbols")
+    if (receipt.get("schema") != "symbol_owner_retirement_transition_v2"
+        or not isinstance(symbols, list) or not symbols
+        or symbols != sorted(set(symbols)) or not set(symbols).issubset(_retirement_profiles())):
+        raise ValueError("retirement_symbol_scope_invalid")
+    return tuple(symbols)
+
+
+def _retirement_units(scope):
+    profiles = _retirement_profiles()
+    result = []
+    for profile in sorted(profile for symbol in scope for profile in profiles[symbol]):
+        stem = "korstockscan-low-price-two-leg-" + profile.replace("_", "-")
+        result.extend((stem + ".timer", stem + "-preflight.timer",
+                       f"korstockscan-low-price-two-leg@{profile}.service",
+                       f"korstockscan-low-price-two-leg-preflight@{profile}.service"))
+    return result
+
+
 def _episode_retirement_receipts(workspace):
-    from src.engine.automation.owner_retirement_transition import digest, retirement_symbols, units
     directory = workspace / "data/runtime/retirements"
     paths = sorted(directory.glob("*episode-retirement.json")) + sorted(directory.glob("episode-retirement-*.json"))
     result = []
     for path in paths:
         receipt = json.loads(path.read_text())
-        scope = retirement_symbols(receipt)
+        scope = _retirement_symbols(receipt)
         if (receipt.get("state") not in {"entry_retired", "terminal"}
             or receipt.get("owner") != "episode"
-            or receipt.get("receipt_sha256") != digest({k:v for k,v in receipt.items() if k != "receipt_sha256"})):
+            or receipt.get("receipt_sha256") != _retirement_digest({k:v for k,v in receipt.items() if k != "receipt_sha256"})):
             raise ValueError("symbol_owner_retirement_receipt_invalid")
         if receipt["schema"] == "symbol_owner_retirement_transition_v2":
-            from src.trading.config.owner_retirement import RETIRED_EPISODE_PROFILES
-            expected = sorted(profile for symbol in scope for profile in RETIRED_EPISODE_PROFILES[symbol])
-            if receipt.get("profile_ids") != expected or receipt.get("units") != list(units(scope)):
+            expected = sorted(profile for symbol in scope for profile in _retirement_profiles()[symbol])
+            if receipt.get("profile_ids") != expected or receipt.get("units") != _retirement_units(scope):
                 raise ValueError("retirement_profile_scope_invalid")
         result.append(receipt)
     return result
@@ -343,16 +383,15 @@ def _validate_retired_surfaces(workspace: Path, root: Path) -> None:
             revision_path = workspace / "data/runtime/retirements/guard_revisions" / (owner["receipt_sha256"] + "-" + guard_sha + ".json")
             if not revision_path.is_file():
                 raise ValueError("release_restores_permanently_retired_episode_owner")
-            from src.engine.automation.owner_retirement_transition import digest, retirement_symbols
             revision = json.loads(revision_path.read_text())
             if (revision.get("schema") != "retirement_guard_revision_v1"
                 or revision.get("state") != "reviewed_code_only"
                 or revision.get("predecessor_receipt_sha256") != owner["receipt_sha256"]
                 or revision.get("predecessor_guard_sha256") != owner["guard_file_sha256"]
                 or revision.get("guard_file_sha256") != guard_sha
-                or revision.get("preserved_symbols") != list(retirement_symbols(owner))
+                or revision.get("preserved_symbols") != list(_retirement_symbols(owner))
                 or revision.get("runtime_effect") is not False
-                or revision.get("receipt_sha256") != digest({k:v for k,v in revision.items() if k != "receipt_sha256"})):
+                or revision.get("receipt_sha256") != _retirement_digest({k:v for k,v in revision.items() if k != "receipt_sha256"})):
                 raise ValueError("retirement_guard_revision_invalid")
     if not receipt.exists():
         return

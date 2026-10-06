@@ -34,3 +34,7 @@ Kiwoom 공식 upstream SHA `953e5dbff123f437ab4d11a78a95191a685eb51f`를 재확�
 - 기존 두산 보고서도 같은 단계 계약으로 생성했고 10개 후보·native 기회 0개·`source_gap`을 기록했다.
 - 다음 10/7 native baseline builder는 격리 출력에서 31개 policy 생성 및 검증 PASS, 10/6 remaining policy 값 변경 0개다. 실 적용 bundle/PREOPEN은 오늘 장후·내일 정규 producer의 exact-date 산출물을 기다리며 이 임시 파일로 정상 소비를 대신하지 않는다.
 - 원 정책/PREOPEN/bootstrap 및 기존 장후 원본 34개 SHA는 그대로다. 원 보고서의 결손과 invalid capture는 원 증거로 유지한다.
+
+## 배포 진입 단계 추가 리뷰
+
+첫 배포 커밋 `04920b5b`에서 Python `-I`로 실행하는 native router가 새 퇴역 validator의 package import를 찾지 못했다. 프로세스 종료 전에 차단되어 기존 Main PID는 유지됐다. router가 인접한 검토 guard의 profile 선언을 AST로 읽고 순수 JSON 계약을 검증하도록 보완했다. 환경의 `PYTHONPATH`를 기동 권한으로 사용하지 않는다. 격리 interpreter subprocess 회귀를 포함한 router 90개 테스트와 실제 `-I --print-plan` PASS를 확인했다.

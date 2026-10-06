@@ -147,4 +147,6 @@ Established Main and verified non-Doosan episode processes keep their own author
 
 Installed retirement retains six permanent service-instance masks after flat closure. Removing timers cannot restore those IDs through generic templates; other episode templates, code pins and active processes are preserved. Reload/mask readback failure retains the `entry_retired` rollback guard and reviewed retry.
 
+The absolute-file router remains compatible with Python `-I`: retirement validation reads the adjacent reviewed guard's profile declaration through AST and checks sealed JSON without importing application packages or trusting ambient `PYTHONPATH`. A subprocess regression exercises the isolated interpreter used by the installed wrapper.
+
 The native release-set checker records only sealed, inactive Doosan masks as `retired_masked_units`; unsealed/foreign/active masks remain failures. Final-refresh installation uses a `~zzzz` pin above existing `~zzz` source pins and validates effective code coordinates. The inactive symbol-owner PREOPEN service and expansion service must also consume the reviewed retirement release, while existing foreign episode PIDs retain custody. Future live/preflight template starts use the new loader required by the 58-profile publication; policy hashes and profile values remain unchanged.
