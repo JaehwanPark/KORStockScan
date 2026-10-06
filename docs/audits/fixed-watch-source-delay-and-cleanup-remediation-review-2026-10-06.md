@@ -44,5 +44,5 @@
 - 15:15:04~15:17:04 수동 조회·API 없는 121개 passive sample: PID/commit 121/121 일치, 연결 121/121, epoch 1 유지. snapshot age 중앙값 0.662초 / p95 1.156초 / 최대 1.471초. 기존 관찰의 최대 5.389초와 구분해 기록한다. 서로 다른 시간창이며 통제된 성능 개선율이 아니다.
 - 삼성 quote/trade 최대 2.082/2.124초, 두산 2.223/2.667초. 두 종목 모두 3초 초과 0/121. 자연 대기·체결 희소가 사라졌다는 뜻이 아니다.
 - capture lock 중앙값 201.732ms / p95 421.130ms / 최대 535.411ms, CPU 약 100.53%/한 core는 남는다. 시작 직후 23ms 한 frame이나 모의 33ms를 운영 대표값으로 사용하지 않는다. 이번 창에서 publication 3초 초과는 관측되지 않았으며 CPU의 종일 원인/수익 효과는 입증하지 않는다.
-- 새 자연 fixed-watch machine trace는 이 bounded window에 미관측이다. 기동의 실제 소비·source와 읽기 전용 resolver PASS를 자연 ENTER_NOW/RECHECK/BLOCK 소비로 바꾸지 않는다. 체크리스트 A3/A4는 다음 자연 판정/장후 수용으로 OPEN이다. 과거 전체 finalization v2/v3 predecessor blocker도 보존한다.
+- 새 자연 fixed-watch machine trace는 이 bounded window에 미관측이다. 기동의 실제 소비·source와 읽기 전용 resolver PASS를 자연 ENTER_NOW/RECHECK/BLOCK 소비로 바꾸지 않는다. A3 자연 판정은 기존 수용 owner, A4 장후 companion은 `FixedWatchBudgetSummaryPostcloseAcceptance1006` owner로 이관해 OPEN이다. 미호출/OFF는 not_applicable이며 추가 Provider 호출을 요구하지 않는다. 과거 전체 finalization v2/v3 predecessor blocker도 보존한다.
 - 마지막 소비 증거: `tmp/fixed-watch-source-cleanup-remediation-20261006/native-acceptance.json`, native intraday consumed receipt, 실제 `data/runtime/runtime_release_selection.json`, `data/runtime/kiwoom_ws_snapshot/latest.json`, 원 `logs/log_rotation_cleanup_cron.log` DONE.
