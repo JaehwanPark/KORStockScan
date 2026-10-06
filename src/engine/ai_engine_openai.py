@@ -2579,6 +2579,30 @@ class GPTSniperEngine:
                 ai_policy_disposition=policy.get("ai_policy_disposition"),
             )
         if contract_errors:
+            # Semantic rejection belongs to the screen/adapter. Retain the
+            # deterministic assessment so it cannot appear as a missing or
+            # contradictory machine decision in the submit lineage consumer.
+            machine_rejection_fields = {}
+            if mechanistic_primary and not setup_contract_errors:
+                machine_rejection_fields = {
+                    key: value for key, value in composed_for_live.items()
+                    if key.startswith("entry_mechanistic_") or key in {
+                        "primary_schema", "entry_primary_decision_owner",
+                        "entry_ai_role", "entry_decision_role_contract",
+                    }
+                }
+                screen_required = composed.get("entry_ai_screen_required") is True
+                machine_rejection_fields.update(
+                    entry_ai_screen_required=screen_required,
+                    entry_ai_screen_pass=False,
+                    entry_ai_screen_status=("response_invalid" if screen_required
+                                            else "not_requested_machine_nonentry"),
+                    entry_ai_followup_disposition=(
+                        "ai_screen_invalid_fail_closed_wait" if screen_required
+                        else composed.get("entry_ai_followup_disposition")
+                    ),
+                    entry_ai_followup_authority="no_entry_authority",
+                )
             setup_state = (
                 str(composed.get("entry_setup_state") or "INSUFFICIENT").upper()
                 if not setup_contract_errors
@@ -2597,6 +2621,7 @@ class GPTSniperEngine:
             }.get(setup_state, "INSUFFICIENT_DATA")
             return {
                 **setup_provenance_fields,
+                **machine_rejection_fields,
                 **raw_risk_fields,
                 **policy_fields,
                 **observation_cost_fields,

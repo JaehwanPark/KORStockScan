@@ -20080,8 +20080,9 @@ def test_watching_state_blocks_quote_fresh_composite_negative_orderbook_micro(
     )
 
 
+@pytest.mark.parametrize("source_wait", [False, "WAIT", "BUY"])
 def test_watching_state_reuses_cached_ai_action_during_cooldown_without_local_action(
-    monkeypatch,
+    monkeypatch, source_wait,
 ):
     from src.utils.constants import TRADING_RULES as CONFIG
 
@@ -20150,6 +20151,23 @@ def test_watching_state_reuses_cached_ai_action_during_cooldown_without_local_ac
         "last_watching_ai_score": 74.0,
         "last_watching_ai_reason": "cached_wait",
     }
+    if source_wait:
+        from src.engine.scalping import entry_machine_source_recovery as recovery
+        from src.tests.test_entry_machine_source_recovery import source_failure
+        from src.tests.test_entry_machine_observation import fixture, KEY
+        source_ws, _ = fixture()
+        for row in source_ws["realtime_type_snapshots_by_route"][KEY].values():
+            row["item"] = "123456_AL"
+        stamp = FixedDateTime.now().timestamp()
+        stock.update(last_watching_ai_action=source_wait, rt_ai_prob=.99,
+                     last_watching_ai_score=99.0)
+        stock[recovery.STATE_KEY] = recovery.pending_after_failure(
+            stock, source_failure(source_ws), now=stamp, cooldown_sec=90, stock_code="123456")
+        state_handlers.LAST_AI_CALL_TIMES = {}
+        monkeypatch.setattr(state_handlers.time, "time", lambda: stamp)
+        monkeypatch.setattr(state_handlers, "WS_MANAGER", None)
+        monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003",
+                            lambda *a, **kw: pytest.fail("source wait must not prepare REST/AI"))
 
     state_handlers.handle_watching_state(
         stock=stock,
@@ -20172,9 +20190,16 @@ def test_watching_state_reuses_cached_ai_action_during_cooldown_without_local_ac
     )
 
     by_stage = {stage: fields for stage, fields in logs}
-    assert "blocked_ai_score" in by_stage
-    assert by_stage["blocked_ai_score"]["threshold"] == 75
-    assert stock["last_watching_ai_action"] == "WAIT"
+    if source_wait:
+        assert "entry_machine_source_wait" in by_stage
+        assert by_stage["entry_machine_source_wait"]["broker_order_forbidden"] is True
+        assert stock["last_watching_ai_action"] == source_wait
+        assert "123456" not in state_handlers.LAST_AI_CALL_TIMES
+        assert stock[recovery.STATE_KEY]
+    else:
+        assert "blocked_ai_score" in by_stage
+        assert by_stage["blocked_ai_score"]["threshold"] == 75
+        assert stock["last_watching_ai_action"] == "WAIT"
 
 
 @pytest.mark.parametrize(

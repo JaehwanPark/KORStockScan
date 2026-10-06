@@ -483,7 +483,9 @@ def rebuild(setup, policy):
             balanced_policy=True, timing_aware_policy=True)
     rebuilt['strategy_raw_input'] = deepcopy(setup['strategy_raw_input'])
     rebuilt['strategy_raw_sha256'] = setup['strategy_raw_sha256']
-    rebuilt['strategy_selection'] = receipt
+    # The caller enriches the assessment receipt (micro confirmation and the
+    # admission policy hash). It must not mutate already hashed setup inputs.
+    rebuilt['strategy_selection'] = deepcopy(receipt)
     rebuilt['evidence_sha256'] = digest({k: v for k, v in rebuilt.items() if k != 'evidence_sha256'})
     effective = legacy_projection(policy)
     effective['thresholds'].update({k: profile[k] for k in effective['thresholds']})

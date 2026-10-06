@@ -7840,6 +7840,10 @@ def apply_entry_split_order_policy(
     operating_context: dict | None = None,
     observation_only: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    # The pre-AI producer omits now. Freeze one KST clock for its policy/date
+    # checks and conditional receipt, without changing live reservation clocks.
+    if observation_only and now is None:
+        now = datetime.now(timezone(timedelta(hours=9)))
     orders = [dict(item) for item in (planned_orders or []) if isinstance(item, dict)]
     latency_gate = latency_gate if isinstance(latency_gate, dict) else {}
     stock = stock if isinstance(stock, dict) else {}

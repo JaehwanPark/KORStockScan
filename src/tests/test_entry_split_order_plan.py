@@ -3347,6 +3347,61 @@ def test_allocator_market_first_uses_policy_weight_and_keeps_residual_at_resolve
     assert orders[2]["price"] < orders[1]["price"]
 
 
+@pytest.mark.parametrize("explicit_clock", [False, True])
+def test_pre_ai_probe_observation_with_optional_clock_never_reserves(
+    monkeypatch, tmp_path, explicit_clock
+):
+    frozen = datetime(2026, 7, 20, 10, 47, tzinfo=timezone(timedelta(hours=9)))
+
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return frozen.astimezone(tz) if tz else frozen.replace(tzinfo=None)
+
+    monkeypatch.setattr(split_plan, "datetime", FixedDatetime)
+    policy_file = tmp_path / "entry-policy.json"
+    policy_file.write_text(json.dumps({
+        "schema_version": "entry_split_order_policy_v1",
+        "policy_version": "probe-observation-test", "source_date": "2026-07-16",
+        "buckets": {},
+    }), encoding="utf-8")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ACTIVE_DATE", "2026-07-20")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE", str(policy_file))
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ACTIVE_DATE", "2026-07-20")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_MARKET_FIRST_LEG_ENABLED", "false")
+
+    def forbidden_reservation(**kwargs):
+        raise AssertionError("Observation cannot reserve a live probe bundle")
+
+    monkeypatch.setattr(split_plan, "_reserve_probe_runtime_bundle", forbidden_reservation)
+    stock = {"id": 7, "code": "018880", "strategy": "SCALPING"}
+    before = dict(stock)
+    optional_clock = {"now": frozen} if explicit_clock else {}
+    orders, fields = split_plan.apply_entry_split_order_policy(
+        [{"qty": 10, "price": 3985, "order_type_code": "00"}],
+        stock=stock, latency_gate={"latency_state": "SAFE", "best_ask_at_submit": 3985},
+        observation_only=True, **optional_clock,
+    )
+    assert orders == []
+    assert fields["entry_split_order_skip_reason"] == "unsupported_pre_ai_probe_reservation_scope"
+    contract = fields["entry_split_order_observation_probe_contract"]
+    assert contract["observed_at"] == frozen.isoformat()
+    assert contract["requested_qty"] == 10
+    assert contract["probe_qty"] == 1
+    assert contract["residual_conditional_qty"] == 9
+    assert sum(contract["continuation"]["residual_quantities"]) == 9
+    assert contract["owner_replay_status"] == "unsupported_unknown_fill_anchored_prices"
+    assert contract["reservation_performed"] is False
+    assert contract["runtime_effect"] is False
+    assert contract["order_authority_forbidden"] is True
+    assert contract["sha256"] == split_plan._canonical_sha256({
+        key: value for key, value in contract.items() if key != "sha256"
+    })
+    assert stock == before
+
+
 def test_allocator_probe_first_reserves_one_share_and_builds_fill_anchored_residuals(
     monkeypatch, tmp_path
 ):

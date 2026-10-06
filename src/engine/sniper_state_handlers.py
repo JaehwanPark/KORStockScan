@@ -35,6 +35,12 @@ from sqlalchemy import or_
 from src.database.models import HoldingAddHistory, RecommendationHistory
 from src.engine import kiwoom_orders, sniper_trade_utils
 from src.engine.scalping import main_fixed_watch
+from src.engine.scalping.entry_machine_source_recovery import (
+    STATE_KEY as MACHINE_SOURCE_RECOVERY_KEY,
+    pending_after_failure as pending_machine_source_recovery,
+    recovery_refresh as machine_source_recovery_refresh,
+    trace_fields as machine_source_recovery_trace_fields,
+)
 from src.trading.market import session_contract
 from src.engine.automation.source_quality_clean_baseline import (
     embedded_source_date_gate,
@@ -31449,6 +31455,17 @@ def _get_best_levels_from_ws(ws_data):
     return best_ask, best_bid
 
 
+def _read_prepared_entry_ws_snapshot(manager, code, context):
+    """Read the registered item's local store, including observation-only data."""
+    latest = manager.get_latest_data(code) or {}
+    item = context.get("request_code")
+    if item and str(item).split("_", 1)[0] == str(code) and hasattr(manager, "get_exact_item_data"):
+        exact = manager.get_exact_item_data(code, item)
+        if isinstance(exact, dict) and exact:
+            latest = exact
+    return latest
+
+
 def _pre_submit_refresh_real_ws_snapshot(
     code: str,
     ws_data: dict | None,
@@ -31456,6 +31473,7 @@ def _pre_submit_refresh_real_ws_snapshot(
     *,
     context_max_age_ms: int | None = None,
     refresh_even_if_input_fresh: bool = False,
+    prepared_route_context: dict | None = None,
 ) -> tuple[dict, dict]:
     """Acquire a local snapshot; submit callers retain the submit-age limit.
 
@@ -31530,7 +31548,10 @@ def _pre_submit_refresh_real_ws_snapshot(
         fields["pre_submit_ws_snapshot_refresh_reason"] = "ws_manager_missing"
         return base, fields
     try:
-        latest = manager.get_latest_data(code) or {}
+        latest = (
+            _read_prepared_entry_ws_snapshot(manager, code, prepared_route_context)
+            if prepared_route_context is not None else manager.get_latest_data(code) or {}
+        )
     except Exception as exc:
         fields["pre_submit_ws_snapshot_refresh_reason"] = "ws_manager_error"
         fields["pre_submit_ws_snapshot_refresh_error"] = str(exc)[:120]
@@ -31538,6 +31559,16 @@ def _pre_submit_refresh_real_ws_snapshot(
     if not isinstance(latest, dict) or not latest:
         fields["pre_submit_ws_snapshot_refresh_reason"] = "latest_snapshot_missing"
         return base, fields
+    if prepared_route_context is not None:
+        # The prepared candle owns the route. Aggregate curr/BBO may be empty
+        # or belong to a concurrent subscription even with valid route rows.
+        from src.engine.scalping.entry_machine_source_recovery import (
+            select_prepared_route,
+        )
+        latest = select_prepared_route(code, latest, prepared_route_context)
+        from src.engine.scalping.ai_market_snapshot import route_partitioned_ws_view
+        base_for_clock, _ = route_partitioned_ws_view(base, prepared_route_context)
+        base_ts = _safe_float(base_for_clock.get("last_ws_update_ts"), 0.0)
     best_ask, best_bid = _get_best_levels_from_ws(latest)
     latest_price = _safe_int(latest.get("curr"), 0)
     latest_ts = _safe_float(latest.get("last_ws_update_ts"), 0.0)
@@ -31618,6 +31649,7 @@ def _refresh_prepared_entry_inputs(code, ws_data, recent_ticks, candle_context):
             "SCALPING",
             context_max_age_ms=int(min(limits)),
             refresh_even_if_input_fresh=True,
+            prepared_route_context=candle_context,
         )
         # Samsung's observation may measure a locked BBO. The submit helper
         # above keeps its strict executable-quote check for every submit caller.
@@ -31630,7 +31662,7 @@ def _refresh_prepared_entry_inputs(code, ws_data, recent_ticks, candle_context):
                 and refresh.get("pre_submit_ws_snapshot_refresh_best_bid")
                     == refresh.get("pre_submit_ws_snapshot_refresh_best_ask")):
             selected, observation = select_local_observation(
-                ws_data, WS_MANAGER.get_latest_data(code) or {}, candle_context,
+                ws_data, _read_prepared_entry_ws_snapshot(WS_MANAGER, code, candle_context), candle_context,
                 now=time.time(), max_age_ms=int(min(limits)),
                 preserve_keys=_PRE_SUBMIT_WS_CONTEXT_PRESERVE_KEYS,
             )
@@ -49938,6 +49970,26 @@ def _build_watching_refresh_signature(ws_data, feature_packet=None) -> dict:
     return signature
 
 
+def _commit_watching_entry_evaluation(
+    stock, code, decision, *, completed_at, cooldown_sec, strategy,
+):
+    pending = (
+        pending_machine_source_recovery(
+            stock, decision, now=completed_at, cooldown_sec=cooldown_sec,
+            stock_code=code,
+        ) if str(strategy or "").upper() == "SCALPING" else None
+    )
+    with ENTRY_LOCK:
+        if pending is None:
+            stock.pop(MACHINE_SOURCE_RECOVERY_KEY, None)
+            LAST_AI_CALL_TIMES[code] = completed_at
+        else:
+            # Source rejection precedes evaluation. Preserve the clock of any
+            # completed decision; a source lease cannot erase a prior veto.
+            stock[MACHINE_SOURCE_RECOVERY_KEY] = pending
+    return pending
+
+
 def _resolve_watching_state_change_refresh(
     stock, ws_data, *, now_ts, last_ai_time, cooldown_sec
 ) -> dict:
@@ -49972,6 +50024,36 @@ def _resolve_watching_state_change_refresh(
                 "reason": "transport_timeout_retry_backoff",
                 "signature": {},
             }
+    source_ws = ws_data
+    pending_source = (stock or {}).get(MACHINE_SOURCE_RECOVERY_KEY)
+    source_now = now_ts
+    source_refresh = None
+    if isinstance(pending_source, dict):
+        source_now = time.time()
+        source_refresh = machine_source_recovery_refresh(stock, source_ws, now=source_now)
+        if (not source_refresh.get("clear") and WS_MANAGER is not None
+                and hasattr(WS_MANAGER, "get_exact_item_data")):
+            try:
+                item = pending_source.get("item")
+                exact_source = WS_MANAGER.get_exact_item_data(str(item).split("_", 1)[0], item)
+                if isinstance(exact_source, dict) and exact_source:
+                    source_ws = exact_source
+            except Exception:
+                # No new-source receipt means no accelerated calculation.
+                return {"allowed": False, "reason": "machine_source_local_read_failed",
+                        "suppress_normal_refresh": True, "signature": {}}
+    if source_refresh is None or not source_refresh.get("clear"):
+        source_refresh = machine_source_recovery_refresh(stock or {}, source_ws, now=source_now)
+    if source_refresh is not None:
+        if source_refresh.get("clear"):
+            _mutate_stock_state(stock, pop_fields=[MACHINE_SOURCE_RECOVERY_KEY])
+        else:
+            if last_ai_time > 0 and source_now - last_ai_time <= cooldown_sec:
+                source_refresh.update(
+                    allowed=False, suppress_normal_refresh=True,
+                    reason="machine_source_wait_completed_decision_cooldown",
+                )
+            return source_refresh
     if not bool(_rule("AI_WATCHING_STATE_CHANGE_REFRESH_ENABLED", False)):
         return {"allowed": False, "reason": "disabled", "signature": {}}
     if last_ai_time <= 0:
@@ -52264,6 +52346,9 @@ def _ensure_ai_source_quality_fields(
 
 
 def _copy_ai_preflight_log_fields(payload: dict, out: dict) -> None:
+    for name in ("ai_input_preflight_source_timing", "ai_input_preflight_realtime_type_provenance"):
+        if isinstance(payload.get(name), dict):
+            out[name] = copy.deepcopy(payload[name])
     activity = payload.get("ai_input_preflight_trade_activity")
     if isinstance(activity, dict):
         out["ai_input_preflight_trade_activity"] = dict(activity)
@@ -57123,16 +57208,6 @@ def _score65_74_scanner_rising_micro_vwap_relief_allowed(
     return True, fields
 
 
-def _score65_74_recovery_probe_wait_negative_reason(ai_decision) -> str:
-    reason = str((ai_decision or {}).get("reason") or "").strip().lower()
-    if not reason:
-        return ""
-    for token in _SCORE65_74_RECOVERY_PROBE_WAIT_NEGATIVE_REASON_TOKENS:
-        if token in reason:
-            return token.replace(" ", "_")
-    return ""
-
-
 def _score65_74_recovery_probe_micro_guard(probe: dict | None) -> dict:
     probe = probe if isinstance(probe, dict) else {}
     buy_pressure = _safe_float(probe.get("buy_pressure"), 0.0)
@@ -60932,6 +61007,9 @@ def _scanner_async_entry_cache_key(
         f"{generation.generation_id}|{str(trigger_reason or 'unknown')}|"
         f"{float(last_ai_time):.6f}"
     )
+    pending_source = stock.get(MACHINE_SOURCE_RECOVERY_KEY)
+    if isinstance(pending_source, dict):
+        seed += "|source_parent:" + str(pending_source.get("parent_observation_sha256") or "")
     return "watching:" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
 
 
@@ -61661,6 +61739,7 @@ def _resolve_scanner_async_entry_ai(
                 prompt_profile="watching",
                 metadata_extra={
                     **_scanner_promotion_correlation_fields(stock_snapshot),
+                    **machine_source_recovery_trace_fields(stock_snapshot),
                     "record_id": stock_snapshot.get("id"),
                     "position_tag": _entry_ai_policy_position_tag(stock_snapshot),
                     "sim_record_id": stock_snapshot.get("sim_record_id"),
@@ -62734,6 +62813,19 @@ def _handle_watching_strategy_branch(
                 last_ai_time=last_ai_time,
                 cooldown_sec=config["AI_WATCHING_COOLDOWN"],
             )
+            if watching_state_refresh.get("suppress_normal_refresh"):
+                # An unresolved input is not permission to reuse an earlier
+                # BUY. Stop before both REST/AI preparation and submit logic.
+                _log_entry_pipeline(
+                    stock, code, "entry_machine_source_wait",
+                    reason=watching_state_refresh.get("reason"),
+                    **machine_source_recovery_trace_fields(stock),
+                    provider_called=False,
+                    ai_decision_evaluation_status="not_evaluated_source_recovery_wait",
+                    decision_authority="input_recovery_wait_only",
+                    actual_order_submitted=False, broker_order_forbidden=True,
+                )
+                return False
             early_accel_recheck = _resolve_early_accel_recheck(
                 stock,
                 ws_data,
@@ -62789,6 +62881,8 @@ def _handle_watching_strategy_branch(
                     )
                 )
             )
+            if watching_state_refresh.get("reason") == "machine_source_fresh_retry":
+                ai_call_trigger_reason = "machine_source_fresh_retry"
             ai_call_executed = False
             ai_call_completed_at = now_ts
             wait6579_probe_entry_unlock = {
@@ -62962,6 +63056,7 @@ def _handle_watching_strategy_branch(
                                 prompt_profile="watching",
                                 metadata_extra={
                                     **_scanner_promotion_correlation_fields(stock),
+                                    **machine_source_recovery_trace_fields(stock),
                                     "record_id": stock.get("id"),
                                     "position_tag": _entry_ai_policy_position_tag(stock),
                                     "sim_record_id": stock.get("sim_record_id"),
@@ -63963,8 +64058,19 @@ def _handle_watching_strategy_branch(
                     current_ai_score = 50
 
                 if ai_call_executed:
-                    with ENTRY_LOCK:
-                        LAST_AI_CALL_TIMES[code] = ai_call_completed_at
+                    source_pending = _commit_watching_entry_evaluation(
+                        stock, code, ai_decision or {}, completed_at=ai_call_completed_at,
+                        cooldown_sec=config["AI_WATCHING_COOLDOWN"], strategy=strategy,
+                    )
+                    if source_pending is not None:
+                        _log_entry_pipeline(
+                            stock, code, "machine_source_recovery_pending",
+                            machine_source_recovery_parent_attempt_id=source_pending["parent_attempt_id"],
+                            machine_source_recovery_parent_sha256=source_pending["parent_observation_sha256"],
+                            machine_source_recovery_expires_at=source_pending["expires_at"],
+                            decision_authority="fresh_machine_calculation_only",
+                            actual_order_submitted=False, broker_order_forbidden=True,
+                        )
 
                 wait6579_probe_entry_unlock, wait6579_probe_entry_unlocked = (
                     _validate_wait6579_probe_entry_unlock(
@@ -87013,10 +87119,6 @@ def handle_holding_state(
         # A confirmed final loss exit cannot be intercepted by AVG_DOWN.
 
         rejected_actions = []
-        if fallback_gate and not fallback_candidate:
-            rejected_actions.append(
-                f"avg_down_wait:{fallback_gate.get('reason') or fallback_reason or 'not_candidate'}"
-            )
 
         if (
             strategy == "SCALPING"

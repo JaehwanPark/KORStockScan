@@ -72,6 +72,27 @@ def test_parent_recheck_promotion_preserves_original_facts_and_ai_veto():
     assert old['action'] == 'RECHECK' and new['action'] == 'ENTER_NOW'
     assert new['core_comparison'] == old['core_comparison'] and original == before
     assert new['strategy_selection']['policy_sha256'] == H.S.digest(candidate)
+    assert not E.validate_entry_setup_evidence(new['effective_setup_evidence'])
+    frozen = deepcopy(new['effective_setup_evidence'])
+    new['strategy_selection']['diagnostic_after_capture'] = True
+    assert new['effective_setup_evidence'] == frozen
+    # The live compact screen consumes the already selected effective setup,
+    # unlike the offline comparison that started from the unselected parent.
+    from src.tests.test_ai_engine_openai_transport import _build_engine
+    from src.engine.scalping import mechanistic_entry_runtime_policy as M
+    from src.tests.test_entry_setup_evidence import _risk
+    normalized = _build_engine()._normalize_entry_setup_v2_14_result(
+        _risk('PASS', ['NO_BLOCKING_RISK'],
+              support=['clean_continuation_probe_eligible'], contradict=['trigger_confirmation_missing']),
+        exact_payload=payload, setup_evidence=frozen,
+        live_policy=dict(enabled=True, status='active_bounded_krx_canary',
+            selected_prompt_version=M.AI_VERSION,
+            primary_decision_owner='mechanistic_entry_adjudicator',
+            ai_role='auxiliary_risk_screen_pass_veto_no_promotion',
+            mechanistic_threshold_policy=candidate), prompt_version=M.AI_VERSION)
+    assert normalized['decision_quality_contract_status'] != 'semantic_rejected'
+    assert normalized['entry_mechanistic_action'] == 'ENTER_NOW'
+    assert normalized['entry_ai_screen_status'] == 'pass'
     composed = E.compose_mechanistic_primary_decision(setup_evidence=original,
         ai_risk_adjudication=None, policy=candidate)
     assert composed['entry_mechanistic_action'] == 'ENTER_NOW'

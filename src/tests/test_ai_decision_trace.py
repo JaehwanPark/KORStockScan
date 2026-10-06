@@ -73,16 +73,20 @@ def test_machine_observation_keeps_exact_input_without_provider_request(
         setup_evidence={"setup_state": "WAIT_CONFIRMATION"},
         assessment={"action": "RECHECK"},
         bundle_sha256="b" * 64,
-        metadata={"record_id": 123},
+        metadata={"record_id": 123,
+                  "machine_source_recovery_parent_sha256": "c" * 64,
+                  "machine_source_recovery_parent_attempt_id": "aims-parent"},
     )
     assert result["machine_capture_status"] == "captured"
     assert result["entry_decision_large_sell_print_detected"] is True
+    assert result["machine_source_recovery_parent_sha256"] == "c" * 64
     row = _rows(trace._payload_path(trace._date_text()))[0]
     assert row["schema"] == "mechanistic_entry_observation_v1"
     assert row["provider_called"] is False
     assert row["source"]["exact_payload"]["name"] == "삼성전자"
     assert row["source"]["exact_payload"]["entry_machine_input_trace"] == timing
     assert row["label_context"]["record_id"] == 123
+    assert row["label_context"]["machine_source_recovery_parent_attempt_id"] == "aims-parent"
     assert row["label_context"]["evaluation_attempt_id"] is None
     assert result["evaluation_attempt_id"] is None
     assert result["evaluation_attempt_identity_source"] == "missing"
@@ -2156,6 +2160,10 @@ def test_machine_screen_retained_in_trace_and_pending_outcome(
         "machine_source_invalid_receipt": False,
         "machine_capture_status": "captured",
         "machine_observation_sha256": "c" * 64,
+        "machine_source_recovery_parent_sha256": "a" * 64,
+        "machine_source_recovery_parent_attempt_id": "aims-parent",
+        "ai_input_preflight_source_timing": {"tape": {"freshness_limit_ms": 3000, "age_ms": 200}},
+        "ai_input_preflight_realtime_type_provenance": {"0B": {"item": "005930_AL", "observed_epoch": 1791248400}},
         "evaluation_attempt_id": "attempt-1",
         "evaluation_attempt_identity_source": "caller_evaluation_attempt_id",
         "entry_primary_decision_owner": "mechanistic_entry_adjudicator",

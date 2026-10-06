@@ -3847,6 +3847,27 @@ def test_mechanistic_primary_runtime_adapter_rejects_invalid_screen():
     assert result["entry_primary_decision_owner"] == "mechanistic_entry_adjudicator"
 
 
+def test_machine_adapter_contract_rejection_keeps_assessment_and_denies_screen_pass():
+    from src.engine.scalping import mechanistic_entry_runtime_policy as M
+    from src.engine.scalping.entry_setup_evidence import MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1
+    from src.tests.test_entry_setup_evidence import _machine_screen_case
+    setup, risk = _machine_screen_case("PASS")
+    policy = dict(enabled=False, status="active_bounded_krx_canary",
+        selected_prompt_version=M.AI_VERSION,
+        primary_decision_owner="mechanistic_entry_adjudicator",
+        ai_role="auxiliary_risk_screen_pass_veto_no_promotion",
+        mechanistic_threshold_policy=MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1)
+    result = _build_engine()._normalize_entry_setup_v2_14_result(
+        risk, exact_payload={}, setup_evidence=setup, live_policy=policy,
+        prompt_version=M.AI_VERSION)
+    assert result["decision_quality_contract_status"] == "semantic_rejected"
+    assert result["entry_mechanistic_action"] == "ENTER_NOW"
+    assert result["entry_mechanistic_policy_sha256"]
+    assert result["entry_ai_screen_status"] == "response_invalid"
+    assert result["entry_ai_screen_pass"] is False
+    assert result["action"] == "WAIT" and not result["entry_probe_intent"]
+
+
 def test_mechanistic_primary_repairs_omitted_pass_citation_without_changing_verdict():
     from src.engine.scalping import mechanistic_entry_runtime_policy as initial
     from src.engine.scalping.entry_setup_evidence import (

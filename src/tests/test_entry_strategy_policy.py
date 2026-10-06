@@ -62,6 +62,10 @@ def test_raw_strategic_block_recomputed_and_context_does_not_leak():
     assert evidence.mechanistic_entry_policy_decision(original) == baseline
     assert strategy.knob('overextension_runup_pct', 15) == 15
     assert not evidence.validate_entry_setup_evidence(decision['effective_setup_evidence'])
+    frozen = deepcopy(decision['effective_setup_evidence'])
+    decision['strategy_selection']['micro_confirmation_pass'] = True
+    assert decision['effective_setup_evidence'] == frozen
+    assert not evidence.validate_entry_setup_evidence(decision['effective_setup_evidence'])
 
 
 def test_winrate_entry_situation_veto_is_exact_scope_and_enter_only():

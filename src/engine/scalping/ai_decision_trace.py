@@ -749,6 +749,9 @@ def _request_context(
         "target_pct": _safe_number(_first_value(parsed, ("target_pct",))),
         "adverse_pct": _safe_number(_first_value(parsed, ("adverse_pct", "stop_pct"))),
     }
+    for key in ("machine_source_recovery_parent_sha256", "machine_source_recovery_parent_attempt_id"):
+        if metadata.get(key) not in (None, ""):
+            context[key] = metadata[key]
     return context
 
 
@@ -1222,6 +1225,9 @@ def capture_machine_observation(
         "machine_capture_status": "redacted_ineligible" if redacted else "captured",
         "machine_observation_sha256": digest,
         "machine_observation_captured_at": now.isoformat(),
+        **{key: context[key] for key in (
+            "machine_source_recovery_parent_sha256", "machine_source_recovery_parent_attempt_id",
+        ) if context.get(key)},
         # This is the frozen decision input, not the earlier feature probe.
         "entry_decision_large_sell_print_detected": (
             exact_payload.get("features", {}).get("large_sell_print_detected")
@@ -2623,6 +2629,10 @@ def record_ai_decision_trace(
                     "entry_required_feature_blockers",
                     "machine_capture_status",
                     "machine_observation_sha256",
+                    "machine_source_recovery_parent_sha256",
+                    "machine_source_recovery_parent_attempt_id",
+                    "ai_input_preflight_source_timing",
+                    "ai_input_preflight_realtime_type_provenance",
                     "machine_revision_schema",
                     "machine_revision_parent_sha256",
                     "entry_decision_large_sell_print_detected",
@@ -2703,6 +2713,10 @@ def record_ai_decision_trace(
                 "entry_required_feature_blockers",
                 "machine_capture_status",
                 "machine_observation_sha256",
+                "machine_source_recovery_parent_sha256",
+                "machine_source_recovery_parent_attempt_id",
+                "ai_input_preflight_source_timing",
+                "ai_input_preflight_realtime_type_provenance",
                 "machine_contract_error",
                 "machine_source_gap_kind",
                 "machine_feature_source_receipt",
