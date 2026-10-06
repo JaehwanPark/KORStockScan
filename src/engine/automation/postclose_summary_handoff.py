@@ -451,6 +451,27 @@ def inspect_future_handoff(
               "env_sha256": contract["env_sha256"],
               "selected_release_commit": contract["selected_release_commit"],
               "release_selection_status": selection_binding["status"]}
+    if selection_binding["status"] == "intraday_preserved":
+        # The original summary stays immutable during a code-only handoff.
+        # Its native reseal and consumed-PID receipts authenticate the newer
+        # verification without rewriting PREOPEN or synthesizing a transition.
+        try:
+            preserved_raw = Path(selection_binding["handoff_path"]).read_bytes()
+            if hashlib.sha256(preserved_raw).hexdigest() != selection_binding["handoff_sha256"]:
+                raise ValueError("handoff_generation_changed")
+            preserved = json.loads(preserved_raw)
+        except (OSError, ValueError, TypeError):
+            return {**result, "status": "stale", "issues": ["intraday_handoff_generation_changed"]}
+        reseal = preserved.get("postclose_source_reseal") or {}
+        source = reseal.get("current_source_receipts") or {}
+        if (reseal.get("source_date") == source_date
+                and reseal.get("target_date") == apply_date
+                and reseal.get("policy_effect") == "unchanged"
+                and source.get("summary_path") == contract["source_summary_path"]
+                and source.get("summary_sha256") == contract["source_summary_sha256"]):
+            return {**result, "status": "intraday_preserved_generation_pid_receipt_unconfirmed",
+                    "handoff_sha256": selection_binding["handoff_sha256"],
+                    "consumption_sha256": selection_binding["consumption_sha256"]}
     same = (
         preopen.get("manifest_sha256") == manifest_sha
         and preopen.get("verification_sha256") == verification_sha
@@ -1865,6 +1886,7 @@ def stage_overview(report_dir, day):
         ready = ready and (startup_basis == 'isolated_prepared_next_preopen' or future_handoff["status"] in {
             "same_generation_no_pid", "transitioned_no_pid",
             "same_generation_pid_receipt_unconfirmed",
+            "intraday_preserved_generation_pid_receipt_unconfirmed",
         })
     return dict(schema='postclose_stage_overview_v2', source_date=day, effective_date=effective,
         stages={s:dict(status=v.get('status', 'pending'), issues=issues.get(s, []), policy_disposition=v.get('policy_disposition')) for s,v in states.items()},

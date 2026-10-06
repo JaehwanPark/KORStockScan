@@ -227,3 +227,5 @@ SM01은 읽기 전용 pure 함수 fixture로 전달 누락을 확인했다. SM02
 - 완료 근거는 [실행 검토](../audits/semantic-monitor-current-producer-consumer-implementation-review-2026-10-07.md)와 `data/report/semantic_monitor_refresh/2026-10-07/`에 남긴다. code gate, 배포, 실제 PID/영수증, 자연 provider/submit/체결/경제성은 별도 상태다.
 
 장중 인계 보완: 이미 열린 10/7의 PREOPEN을 소급 재생성하지 않는다. `intraday_release_handoff --prepare --reseal-postclose-source`는 원 PREOPEN/env/manifest/prepared index와 정책 bytes를 그대로 보존하고, native DONE/strict가 검증한 새 controller/summary/오늘 checklist의 hash를 별도 immutable receipt에 결속한다. dated policy hash 차이·moving generation·checklist 변경은 fail closed다. readiness는 이 승인된 결속만 인정하며 prepared의 실제 PID 소비 여부는 별도로 남긴다.
+
+새 PID 기록 이후에도 원 summary/controller를 재작성하지 않는다. 현행 future-handoff consumer는 검증된 intraday reseal의 원 summary hash와 native consumed-PID receipt만 연결한다. selector의 정상 PID attestation 갱신은 허용하되 policy/env/PREOPEN/summary·consumption 변조는 거부한다. summary 회복의 publication은 원천일 10/6, prepared session은 10/7을 유지한다.

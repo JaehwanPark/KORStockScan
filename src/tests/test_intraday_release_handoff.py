@@ -29,6 +29,7 @@ def fixture(tmp_path, monkeypatch):
     selected.mkdir()
     monkeypatch.setattr(handoff, "DATA_DIR", data)
     monkeypatch.setattr(readiness, "DATA_DIR", data)
+    monkeypatch.setattr(handoff.bootstrap, "BOOTSTRAP_DIR", data / "runtime/policy_bootstrap")
     monkeypatch.setattr(handoff, "_selection", lambda **kwargs: (selected, NEW))
     monkeypatch.setattr(handoff, "is_krx_trading_day", lambda day: day.weekday() < 5)
     monkeypatch.setattr(handoff.bootstrap, "env_path", lambda day: data / f"{day}.env")
@@ -115,6 +116,88 @@ def test_read_only_selection_does_not_relax_prepare_or_consume_cwd(fixture, monk
         handoff.consume(DAY, pid=2, now=NOW)
     assert handoff.verify(DAY, NEW, now=NOW + timedelta(hours=2))['status'] == 'pass'
     assert all(Path(path).read_bytes() == value for path, value in frozen.items())
+
+
+@pytest.mark.parametrize('damage', [None, 'summary', 'consumption', 'policy'])
+def test_resealed_postclose_accepts_actual_new_pid_without_rewriting_original_summary(fixture, monkeypatch, damage):
+    from src.engine.automation import postclose_summary_handoff as postclose
+
+    data, previous, selected, _ = fixture
+    bootstrap = handoff.bootstrap
+    monkeypatch.setattr(bootstrap, 'DATA_DIR', data)
+    source_day = '2026-10-01'
+    original_env = bootstrap.env_path(DAY).read_bytes()
+    root = data/'runtime/policy_bootstrap'
+    root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(bootstrap, 'env_path', lambda day: root/f'runtime_policy_bootstrap_{day}.env')
+    monkeypatch.setattr(bootstrap, 'manifest_path', lambda day: root/f'runtime_policy_bootstrap_{day}.json')
+    bootstrap.env_path(DAY).write_bytes(original_env)
+    manifest_file, env_file = bootstrap.manifest_path(DAY), bootstrap.env_path(DAY)
+    # Keep real dated manifest/env validation and the native consumed-PID
+    # binding; only process identity and the preexisting DONE source fixture
+    # are substituted by the surrounding startup fixture.
+    manifest = dict(target_date=DAY, selected_release_sha=OLD,
+        source_incumbent_target_date=source_day, selected_families=[],
+        direct_family_receipts=[], env_file=str(env_file), env_sha256=handoff._sha(env_file))
+    manifest['manifest_sha256'] = bootstrap._digest_json(manifest)
+    _json(manifest_file, manifest)
+    monkeypatch.setattr(bootstrap, 'verify_bootstrap', lambda *a, **k:
+        dict(status='pass', passed=True, findings=[], manifest_sha256=manifest['manifest_sha256']))
+    selection_file = data/'runtime/runtime_release_selection.json'
+    _json(selection_file, dict(schema='runtime_release_selection_v1', git_commit=NEW, release_root=str(selected)))
+    verification_file = bootstrap.verify_path(DAY)
+    verification = dict(target_date=DAY, status='pass', passed=True, pid=1,
+        pid_passed=True, pid_env_available=True, manifest_sha256=manifest['manifest_sha256'])
+    _json(verification_file, verification)
+    controller = data/'report/postclose_done_controller'/f'postclose_done_controller_{source_day}.json'
+    summary_file = data/'report/runtime_approval_summary'/f'runtime_approval_summary_{source_day}.json'
+    _json(controller, dict(status='done'))
+    summary = dict(date=source_day, preopen_consumption_state='verified',
+        preopen_consumption_receipt=dict(source_date=source_day, apply_date=DAY,
+            manifest_path=str(manifest_file), manifest_sha256=handoff._sha(manifest_file),
+            verification_path=str(verification_file), verification_sha256=handoff._sha(verification_file),
+            release_selection_sha256='old', selected_release_commit=OLD))
+    _json(summary_file, summary)
+    checklist = data.parent/'docs/checklists'/f'{DAY}-stage2-todo-checklist.md'
+    checklist.parent.mkdir(parents=True); checklist.write_text('current owner')
+    policies = [dict(family='main', path=str(manifest_file), sha256=handoff._sha(manifest_file))]
+    source = dict(controller_path=str(controller), controller_sha256=handoff._sha(controller),
+        summary_path=str(summary_file), summary_sha256=handoff._sha(summary_file), policy_receipts=policies)
+    monkeypatch.setattr(readiness, '_source_receipts', lambda *a, **k: source)
+    index_file = data/'runtime/policy_bootstrap/prepared'/DAY/'latest.json'
+    receipt = Path(json.loads(index_file.read_text())['receipt_path'])
+    _json(receipt, dict(schema='next_preopen_readiness_v1', status='prepared_verified',
+        source_date=source_day, target_date=DAY, actual_pid_consumed=False, policy_receipts=policies))
+    _json(index_file, dict(receipt_path=str(receipt), receipt_sha256=handoff._sha(receipt)))
+    before = {str(p): p.read_bytes() for p in (summary_file, controller, manifest_file, env_file, receipt)}
+    handoff.prepare(DAY, old_pid=1, previous_root=previous, confirm=handoff.CONFIRM,
+                    now=NOW, reseal_postclose_source=True)
+    _json(verification_file, {**verification, 'pid': 2})
+    consumed = handoff.consume(DAY, pid=2, now=NOW)
+    check = handoff.verify
+    monkeypatch.setattr(handoff, 'verify', lambda day, commit: check(day, commit, now=NOW))
+    # Launcher attestation legitimately changes selector bytes after consume.
+    _json(selection_file, dict(schema='runtime_release_selection_v1', git_commit=NEW,
+        release_root=str(selected), actual_pid_consumed=True))
+    if damage == 'summary':
+        summary_file.write_text(summary_file.read_text() + ' ')
+    elif damage == 'consumption':
+        _json(handoff._paths(DAY, NEW)[1], {**consumed, 'handoff_sha256': 'changed'})
+    elif damage == 'policy':
+        env_file.write_text('changed')
+    result = postclose.inspect_future_handoff(summary, source_day, report_dir=data/'report')
+    if damage is None:
+        assert result['status'] == 'intraday_preserved_generation_pid_receipt_unconfirmed', result
+        assert result['pid_receipt_present'] is True and result['actual_pid_consumed'] is False
+        assert all(Path(p).read_bytes() == value for p, value in before.items())
+        assert not (data/'runtime/policy_bootstrap/future_handoff_transitions').exists()
+        from src.engine.scalping import mechanistic_entry_runtime_policy as machine
+        from src.engine.automation import low_price_two_leg_auto_expansion_policy as episode
+        monkeypatch.setattr(machine, 'load_effective', lambda **kw: {'valid': True})
+        monkeypatch.setattr(episode, 'load_policy', lambda *a, **kw: {'valid': True})
+        assert postclose.stage_overview(data/'report', source_day)['next_session_policy_ready'] is True
+    else:
+        assert result['status'] == 'stale', result
 
 
 @pytest.mark.parametrize('damage', [
