@@ -162,6 +162,16 @@ def test_reversal_reports_reach_runtime_summary_and_nextday_projection(tmp_path,
     monkeypatch.setenv('POSTCLOSE_PREPARED_EFFECTIVE_DATE', '2026-10-07')
     result = summary.build_runtime_approval_summary('2026-10-06', include_swing=False, include_producer_gap=False)
     assert checklist._validate_direct_summary(result, '2026-10-06') == result
+    from src.engine.scalping import main_ai_prompt_consumer as consumer
+    monkeypatch.setattr(consumer.quality, 'DATA_DIR', tmp_path)
+    monkeypatch.setattr(consumer, 'REPORT_DIR', tmp_path / 'report/main_ai_prompt_consumer')
+    consumer_report = consumer.build_report('2026-10-06', write=True)
+    assert consumer_report['status'] == 'ready_continuous_reversal_handoff'
+    assert consumer_report['primary_decision_metric'] == 'actual_raw_PASS_win_fraction'
+    assert consumer_report['sample_floor'] is None
+    assert consumer_report['provider_call_performed'] is consumer_report['actual_pid_consumed'] is False
+    assert consumer.main(['--target-date', '2026-10-06', '--write', '--print-summary']) == 0
+    assert policy.scoped_verification(tmp_path, '2026-10-06', require_consumer=True)['status'] == 'pass'
     for owner, name in [('main_mechanistic_entry', 'machine'), ('compact_auxiliary', 'auxiliary')]:
         source = result['sources'][owner]
         assert source['path'] == str(out / (name + '.json'))

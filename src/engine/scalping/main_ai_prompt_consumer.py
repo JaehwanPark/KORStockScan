@@ -19,6 +19,7 @@ from collections import Counter
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterable, Mapping
+from zoneinfo import ZoneInfo
 
 from src.engine.scalping import ai_decision_quality as quality
 from src.engine.scalping import entry_setup_paired_replay_batch as entry_batch
@@ -893,6 +894,40 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
     parsed_date = date.fromisoformat(target_date)
     if parsed_date < optimizer.CLEAN_BASELINE_DATE:
         raise ValueError("target_date_before_clean_tuning_baseline")
+
+    reversal_path = quality.DATA_DIR / 'report/continuous_reversal' / target_date / 'auxiliary.json'
+    if reversal_path.exists() or reversal_path.is_symlink():
+        from src.engine.scalping.continuous_reversal_policy import direct_handoff
+        from src.engine.scalping import mechanistic_entry_runtime_policy as native
+        handoff = direct_handoff(quality.DATA_DIR, target_date)
+        bundle = native.load(data_root=quality.DATA_DIR, target_date=handoff['effective_date'])
+        body = dict(schema=SCHEMA, target_date=target_date,
+                    generated_at=datetime.now(ZoneInfo('Asia/Seoul')).isoformat(),
+                    status='ready_continuous_reversal_handoff', compact_auxiliary=handoff,
+                    policy_cells=bundle['continuous_reversal']['auxiliary_cells'],
+                    unclassified_request_path_count=None, entry_followup_terminal_ready=False,
+                    entry_followup_applicability='not_applicable_prior_submitted_cohort',
+                    actual_pid_consumed=False,
+                    performance_evidence=dict(profit_improvement_demonstrated=False,
+                        future_profit_improving_output_likelihood='not_assessed_cumulative_winrate_research_only'),
+                    **SOURCE_ONLY_CONTRACT)
+        body.update(metric_role='cumulative_winrate_research_consumer', sample_floor=None,
+                    primary_decision_metric='actual_raw_PASS_win_fraction')
+        report = {**body, 'artifact_content_sha256': optimizer._canonical_sha256(body)}
+        if write:
+            json_path, markdown_path = report_paths(target_date)
+            _atomic_write_json(json_path, report)
+            markdown_path.parent.mkdir(parents=True, exist_ok=True)
+            markdown_path.write_text(
+                '# Main AI continuous reversal consumer\n\n'
+                f'- Source date: `{target_date}`\n'
+                f'- Effective date: `{handoff["effective_date"]}`\n'
+                f'- Policy bundle: `{handoff["policy_bundle_sha256"]}`\n'
+                '- Machine cells: `12`; auxiliary cells: `12`\n'
+                '- Selection: cumulative raw PASS win fraction\n'
+                '- Provider call, runtime activation, orders and PID consumption: `false`\n',
+                encoding='utf-8')
+        return report
 
     optimizer_path, _ = optimizer.report_paths(target_date)
     optimizer_report = _read_json(optimizer_path)

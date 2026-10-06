@@ -2181,6 +2181,17 @@ fi
 wait_for_postclose_resources "build_next_stage2_checklist_final_refresh"
 run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.build_next_stage2_checklist --source-date "$TARGET_DATE"
 wait_for_file_artifact "$(next_stage2_checklist_path)" "next_stage2_checklist_final_refresh"
+# The compact verifier consumes this exact-source native handoff. Generate it
+# before verification; the later DONE controller cannot be its producer.
+if [[ -f "$PROJECT_DIR/data/report/continuous_reversal/$TARGET_DATE/auxiliary.json" ]]; then
+  wait_for_postclose_resources "main_ai_prompt_consumer_final_refresh"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.main_ai_prompt_consumer \
+    --target-date "$TARGET_DATE" --write
+  wait_for_report_artifact \
+    "$PROJECT_DIR/data/report/main_ai_prompt_consumer/main_ai_prompt_consumer_${TARGET_DATE}.json" \
+    "$PROJECT_DIR/data/report/main_ai_prompt_consumer/main_ai_prompt_consumer_${TARGET_DATE}.md" \
+    "main_ai_prompt_consumer_final_refresh"
+fi
 # Independent failures remain in their own receipts; finalization checks the
 # whole stage registry after each asynchronous owner has reached terminal.
 if [[ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" == "true" || "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" == "1" ]]; then

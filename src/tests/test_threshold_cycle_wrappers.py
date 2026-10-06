@@ -19,6 +19,15 @@ def test_postclose_wrapper_retires_common_daily_ev_and_generic_workorder():
     assert script.count("--require-summary-handoff") >= 2
 
 
+def test_reversal_prompt_consumer_is_generated_before_compact_verification():
+    script = _text("deploy/run_threshold_cycle_postclose.sh")
+    consumer = script.index('src.engine.scalping.main_ai_prompt_consumer')
+    assert script.rindex('src.engine.runtime_approval_summary') < consumer
+    assert consumer < script.index('scope_flag=--main-mechanistic-summary-only')
+    assert '--target-date "$TARGET_DATE" --write' in script[consumer:consumer + 160]
+    assert 'main_ai_prompt_consumer_${TARGET_DATE}.json' in script[consumer:consumer + 600]
+
+
 def test_postclose_prepares_isolated_preopen_and_start_requires_day_of_completion():
     controller = _text("deploy/run_postclose_done_controller.sh")
     finalizer = _text("deploy/run_postclose_finalization.sh")
