@@ -294,3 +294,22 @@ def test_real_machine_capture_is_consumed_by_union_monitor(replay,monkeypatch):
     assert receipt['new_scope_consumption'] is True
     records[0]['source']['auxiliary_request']['input']['signals'].pop()
     with pytest.raises(ValueError,match='request_hash_mismatch'):V.audit_observation(bundle,records[0])
+
+
+def test_historical_envelope_validation_preserves_native_parent_commit(replay,monkeypatch):
+    from src.engine.infrastructure import runtime_release_router as router
+    root,b,m=replay
+    PC.prepare_inputs(root,'2026-10-07',m,b)
+    aux=PC.auxiliary_report(root,'2026-10-07','2026-10-07',b,publish_policy=False)
+    issued=json.loads((PC.directory(root,'2026-10-07')/'machine.json').read_text())
+    bundle=V.stage(root,'2026-10-07','2026-10-07',issued,aux,target_date='2026-10-08',release_commit='b'*40)
+    calls=[]
+    def attest(workspace,cwd,unit,commit):
+        calls.append(commit)
+        return dict(source_integrity='git_commit_and_clean_runtime_source')
+    monkeypatch.setattr(router,'_release_identity',attest)
+    # Real separate-process reader; only immutable Git origin attestation is
+    # fixture supplied. The nested parent remains its original a*40 commit.
+    assert V.validate_sources(bundle,root,code_root=Path(V.__file__).parents[3])==bundle
+    assert calls==['b'*40]
+    assert bundle['continuous_reversal']['native_parent_bundle']['continuous_reversal']['release_commit']=='a'*40

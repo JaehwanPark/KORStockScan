@@ -6,6 +6,7 @@ carry the exact native pair; pending membership is not runtime authority.
 from __future__ import annotations
 import copy
 import fcntl
+import json
 import re
 from datetime import datetime
 from pathlib import Path
@@ -135,8 +136,27 @@ def validate_family(f):
 def validate_sources(bundle, data_root, *, code_root=None):
     from src.engine.scalping import mechanistic_entry_runtime_policy as N
     f = bundle['continuous_reversal']; validate_family(f)
+    if code_root is not None:
+        # The v5 envelope and its native v4 parent have different origin
+        # commits. Attest the envelope checkout, then run its complete native
+        # validator there; never relabel the nested parent's commit.
+        import os
+        import subprocess
+        from src.engine.infrastructure.runtime_release_router import _release_identity
+        origin=Path(code_root).resolve(strict=True)
+        identity=_release_identity(Path(data_root).resolve().parent,str(origin/'src'),
+                                   'operating_transition_parent',f['release_commit'])
+        if identity['source_integrity']!='git_commit_and_clean_runtime_source':
+            raise ValueError('v5_transition_parent_code_unattested')
+        script=('import json,sys; from pathlib import Path; '
+                'from src.engine.scalping.continuous_reversal_policy_v5 import validate_sources; '
+                'validate_sources(json.load(sys.stdin),Path(sys.argv[1]))')
+        subprocess.run([str(origin/'.venv/bin/python'),'-c',script,str(Path(data_root).resolve())],
+            input=json.dumps(bundle),text=True,check=True,capture_output=True,timeout=120,cwd=origin,
+            env={**os.environ,'PYTHONPATH':str(origin)})
+        return bundle
     N.validate(f['native_parent_bundle'],target_date=f['native_parent_bundle']['target_date'])
-    V4.validate_sources(f['native_parent_bundle'], data_root, code_root=code_root)
+    V4.validate_sources(f['native_parent_bundle'], data_root)
     for module in contract_modules():
         p = Path(code_root)/'src/engine/scalping'/Path(module.__file__).name if code_root else Path(module.__file__)
         if N._source_hash(str(p), N._signature(p)) != f['contract_file_sha256'].get(p.name):

@@ -31,3 +31,5 @@
 근거 디렉터리: `data/report/operating-policy-implementation/2026-10-07/`. N0 부모 bundle `69caaf00f2a0475e0290de0b239f28975333782429a62f4e238c8d0ae96f5d78`, family `ed50d100aef3d66361c83bea53441ae0b4461b8ac98fdbcb87346cc9790a324d`. 23:51 재조회에서 이전 Main PID 1074119는 이미 종료 상태였으며 이 작업이 종료시키지 않았다. 장후 배포와 다음 예약기동 준비를 별도로 검증한다.
 
 실제 `capture_machine_observation` 생산자가 만든 union 판정 증빙을 감시 소비자가 검증하는 회귀도 PASS이며, 원 요청을 변조하면 거부한다(독립 운용 suite 16 PASS). 설치는 기존 `deploy/install_postclose_eod_gate_systemd.sh`를 사용하고 final-refresh 실행은 `deploy/run_runtime_release.sh machine-final-refresh`가 선택된 release와 완료 원천일을 해석한다.
+
+8. 과거 v5 envelope와 내장 v4 부모의 원 commit이 다를 때 historical 검증을 새 envelope origin checkout의 실제 별도 Python reader로 수행하도록 수정했다. origin attestation만 fixture로 제공하고 실제 source reader를 실행한 회귀 포함 109 PASS다. 최초 immutable 검증 455 PASS 뒤 이 보완을 재검증한다.
