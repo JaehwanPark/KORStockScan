@@ -2,7 +2,7 @@
 
 소유는 `DirectFamilySourceRepairMainMechanisticEntry`다. 사용자 P1~P7 구현·반복 리뷰·배포·재기동 승인을 적용한다. [실행 계획](../proposals/main-all-scope-registered-multi-policy-implementation-plan-2026-10-07.md)의 기계 raw 승률과 보조 실제 raw PASS 승률 계약을 유지한다.
 
-현재 상태는 구현 검증 중이다. 배포 및 실제 정책/PID 소비를 이 문서의 코드 검증으로 대체하지 않는다.
+현재 상태는 구현·반복 리뷰·통합 배포·재기동 및 실제 v3 정책 소비 확인 완료다. 미래 장후 자연 생성과 실주문/체결/손익 수용은 별도로 남긴다.
 
 - 위치 gate: registry/rolling runtime/v3 policy/route replay·provider checkpoint는 기존 `src/engine/scalping`이 소유하고 새 테스트는 `src/tests`가 소유한다. engine root 신규 Python 파일은 없다.
 - v1/v2 해시 고정 kernel·branch·보조 contract/phases bytes를 보존한다. native loader/AI/Main state/normalized callback/진단/장후 dispatcher/semantic/strict 소유만 v3를 분기한다. Kiwoom wire/FID/parser/REG/auth/account/order의 변경은 없다.
@@ -38,3 +38,7 @@ P4 전수 census: **116,007 입력점 / 580,035 비교 요청**, exact reuse로 
 P7 최초 배포 a882ce05 / main-registered-portfolios-20261007-v4 / PID 1013099는 bootstrap PASS·5 WATCHING·WS 연결·v3 family 5f17474a/bundle 6d350053 실제 소비를 확인했다. 자연 full 17:44:18은 stale finalization 오류가 없었으나, 연구 publish_policy=False가 정기 auxiliary 경로에도 쓰는 추가 출력 소유 결함을 발견했다. 연구 출력 3개는 hash를 기록하고 registered 연구 경로로 보존 이동했고, 정기 canonical 발행은 publish_policy=True에 한정하도록 수정했다. 이 수리는 주문/기계/보조 조건을 바꾸지 않는다. 같은 선택 cell/보조 binding·기존 비교 근거를 그대로 승계하는 코드 결속 재발행으로 후속 릴리스에 인계하며 새로운 비교 승자나 재생 결과를 만들지 않는다. 이 수정도 15개 suite **790 PASS** (`publication-final-tests.log`)다.
 
 보고서 코드 갱신 시 v3가 이전 family의 코드 hash를 새 checkout으로 검증하여 정상적인 부모 인계도 거부하는 결함을 추가로 확인했다. 변경 코드 전환에 한해 current receipt·generation·부모·원천을 원 불변 릴리스의 정확 commit 및 clean source로 검증하는 native 인계를 추가했다. runtime 일반 loader는 현재 코드 일치를 계속 강제하고 역사 검증 결과를 runtime cache에 넣지 않는다. 코드만 갱신하는 발행은 실제 적용 family의 모든 machine/auxiliary cell이 동일한지 확인하고 이전 불변 보고서를 원천으로 보존한다. 원본/dirty origin·원천 변조·일반 loader의 fail-closed 회귀를 포함해 최종 **793 PASS** (`transition-final-tests.log`), compile·shell·diff·print-only parser PASS다. 새 승자 선정·provider 호출·주문 조건 변경은 없다.
+
+최종 운영 인계는 [확정 영수증](../../tmp/main-registered-v3-publication-20261007/final-receipt.json)에 봉인했다. 릴리스 **main-registered-portfolios-20261007-v5 / c1343c2584d75e33de4ab6c68432810e34abbff6**, Main PID **1021822**다. 불변 릴리스 회귀 **793 PASS**(44.18초), bootstrap·현재 체크리스트 handoff·release set·186 별도 owner pin PASS다. 실제 Main 소비 receipt는 bundle **99c795dd19fc6ce30fb46956119bcc70b2a8b7fc8a1a19cb138bef9f95d67b6e**, family **aa4c55d2d0de71ddca0b548100c7b435ab254548dc0963ffc373bbb9c91fb721**와 PID/start/cwd/commit이 일치한다. 최초 승인 선택과 마지막 코드 수리 인계의 machine/auxiliary 128 route cell은 동일하며, 이전 DONE/summary/PREOPEN/원래 dated policy 등 보호 원천 13개 해시는 변하지 않았다.
+
+자연 full 감시 **2026-10-07T18:00:09+09:00**는 현재 릴리스가 실행했고 fail 0, 요청한 strict_checklist_generation_stale 없음이다. 연구 canonical 출력 혼용 경고는 사라졌다. log_rotation_cleanup/postclose_finalization의 과거 cutoff 이후 완료 경고는 recovered_late로 보존하며 완료 시각을 성공으로 위조하지 않는다. 별도 episode_current_pid_source_not_observed 경고는 기존 독립 episode owner의 미관측으로 남긴다. 5 WATCHING loop와 Main WS producer 연결을 확인했고, 정규장 신규 후보의 실시간 ENTER/보조 호출·제출/체결과 미래 정기 장후의 새 발행은 아직 관측된 수용 증거가 아니다. 새 전수 AI 비교의 미완료 20 route scope는 기존 검증된 기계·보조 쌍을 함께 유지하고 reserved 불확실 4개는 재호출하지 않는다. 추가 8개 패턴 후행 계획 및 다른 세션의 문서 변경은 본 구현에 합치지 않았다.
