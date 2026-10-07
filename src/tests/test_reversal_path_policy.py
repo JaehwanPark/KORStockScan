@@ -3,6 +3,7 @@ import copy
 import json
 from collections import Counter
 from datetime import datetime
+from pathlib import Path
 import pytest
 from src.engine.scalping import reversal_path_catalog as C
 from src.engine.scalping import reversal_path_runtime as R
@@ -372,3 +373,16 @@ def test_interleaved_partition_grouping_preserves_all_values_and_owner_set(tmp_p
     assert sorted(grouped,key=lambda p:p['canonical_id'])==points
     assert PC.input_owner_census(grouped)==PC.input_owner_census(points)
     assert not list(tmp_path.glob('.input-group-*'))
+
+
+def test_issued_receipt_custody_survives_mutable_census_progress(tmp_path):
+    from src.engine.scalping import continuous_reversal_path_postclose as PC
+    origin=tmp_path/'input-census.json';P.write(origin,dict(planned=5,completed=0))
+    receipt=PC.freeze_receipt(tmp_path,origin);frozen=Path(receipt['path'])
+    P.write(origin,dict(planned=0,completed=5))
+    assert P.file_hash(frozen)==receipt['sha256'] and json.loads(frozen.read_text())['planned']==5
+    later=PC.freeze_receipt(tmp_path,origin)
+    assert later['path']!=receipt['path'] and P.file_hash(later['path'])==later['sha256']
+    frozen.write_text('{}')
+    P.write(origin,dict(planned=5,completed=0))
+    with pytest.raises(ValueError,match='snapshot_changed'):PC.freeze_receipt(tmp_path,origin)

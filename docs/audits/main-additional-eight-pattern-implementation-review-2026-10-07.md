@@ -23,7 +23,7 @@
 
 ## 검증 상태
 
-신규 phase/전송기/claim/감시/compose/입력 누락 회귀 36개 PASS. 최종 기계·보조/native/장후/감시·handoff/router/cron/location 대상 17개 suite에서 864개 PASS, 기존 pandas 경고 1개다. compileall, restart/router bash 문법, diff 공백 검사 PASS. 테스트 전송기의 가짜 응답은 실제 AI 응답으로 집계하지 않는다.
+신규 phase/전송기/claim/감시/compose/입력 누락 회귀 37개 PASS. 최종 기계·보조/native/장후/감시·handoff/router/cron/location 대상 17개 suite에서 865개 PASS, 기존 pandas 경고 1개다. compileall, restart/router bash 문법, diff 공백 검사 PASS. 테스트 전송기의 가짜 응답은 실제 AI 응답으로 집계하지 않는다.
 
 누적 native 재생·연구 parity는 완료했다. 실제 AI 비교 원장 준비와 immutable 배포/PID/자연 수신은 아래 인계 기록으로 별도 종결한다. 근거 작업 디렉터리는 [R0~R8 자료](../../tmp/main-additional-eight-implementation-20261007/)다.
 
@@ -36,6 +36,8 @@
 10. 입력 생성 코드를 별도 snapshot/hash로 묶고 cache generation에 포함했다. 코드가 바뀐 이전 입력을 파일 존재만으로 재사용하지 않는다. 실제 provider 동시 in-flight는 최대 4로 검증하고 호출 수 상한은 None이다.
 
 11. 합쳐진 과거 partition의 canonical 정렬은 종목 순서가 아니므로, 특징 cache가 매 점 전체 원천을 재계산하는 지연을 발견했다. 입력 재구성을 임시 SQLite로 종목/item별 disk grouping하고 예상 owner digest는 정렬된 내용으로 대사한다. 혼합 순서 fixture에서 원 point/값/owner 집합 보존과 임시 파일 정리를 검증했다. 표본이나 caller 목록을 줄이지 않았다.
+
+12. 재개 시 갱신되는 input census/expected manifest를 발행 family가 직접 참조하는 위험을 보완했다. 발행 직전에 내용 hash별 immutable snapshot으로 옮겨 참조한다. producer의 완료 개수가 바뀌어도 발행된 과거 family의 source 검증은 유지된다. snapshot tamper 거부를 회귀했다.
 
 ## 원 연구와 native 대조
 
@@ -58,6 +60,8 @@
 
 ## 성능 및 운영 인계 경계
 
-같은 frozen 첫 25,000틱씩 고정 5종목, 합계 125,000틱에서 callback 처리 p99는 기존 31~169us, v4 현행 목록 37~242us, 신규 root 병행 목록 131~276us다. 관측 max는 1.089ms 이하였고 기존 신호 census는 5종목 모두 같았다. 이는 같은 서버의 offline CPU 실측이며 실제 WS 전달 지연이나 5초 claim 통과를 보장하지 않는다. natural snapshot의 backlog/source latency는 배포 후 별도 확인한다. 독립 episode PID 785938 및 pinned service release는 재기동 대상에서 제외한다.
+같은 frozen 최대 첫 25,000틱씩 고정 5종목, 합계 113,306틱에서 callback 처리 p99는 기존 31~169us, v4 현행 목록 37~242us, 신규 root 병행 목록 131~276us다. 관측 max는 1.089ms 이하였고 기존 신호 census는 5종목 모두 같았다. 이는 같은 서버의 offline CPU 실측이며 실제 WS 전달 지연이나 5초 claim 통과를 보장하지 않는다. natural snapshot의 backlog/source latency는 배포 후 별도 확인한다. 독립 episode PID 785938 및 pinned service release는 재기동 대상에서 제외한다.
 
 기존 finalization은 read-only 확인에서 `recovered_late`, generation basis `consumed_intraday_preserved_historical_generation`였다. 경고를 억제하지 않고 10/6 원 완료/다음 PREOPEN bytes를 유지하며 현재 checklist/release를 새 장중 handoff로 봉인한 뒤 기동한다. 배포 전 13개 보호 파일 hash와 기존 PID bootstrap/parent CAS를 다시 확인한다.
+
+추가 구버전 parity: 같은 113,306틱에서 기존 5,876개 확인점의 branch_signals와 보조 input이 모두 같았다. 삼성 이 접두의 현행 신호는 0개였으므로 삼성 자연 신호 입증으로 확대하지 않는다. 근거는 작업 디렉터리 `legacy-parity.json`이다.

@@ -109,6 +109,24 @@ def active(data_root, day):
     return bundle if (bundle or {}).get('continuous_reversal',{}).get('schema') == V3.SCHEMA else None
 
 
+def freeze_receipt(out, origin):
+    """Publish content-addressed custody, never a mutable producer pointer."""
+    origin=Path(origin);h=P.file_hash(origin);target=Path(out)/'frozen'/('receipt-'+h+'-'+origin.name)
+    target.parent.mkdir(parents=True,exist_ok=True)
+    if not target.exists():
+        fd,name=tempfile.mkstemp(prefix='.receipt-',dir=target.parent);tmp=Path(name)
+        try:
+            with origin.open('rb') as src,os.fdopen(fd,'wb') as dst:
+                import shutil
+                shutil.copyfileobj(src,dst);dst.flush();os.fsync(dst.fileno())
+            if P.file_hash(tmp)!=h:raise ValueError('path_receipt_changed_during_freeze')
+            os.replace(tmp,target)
+        finally:
+            if tmp.exists():tmp.unlink()
+    if P.file_hash(target)!=h:raise ValueError('path_receipt_snapshot_changed')
+    return dict(path=str(target.resolve()),sha256=h)
+
+
 def freeze_registration(data_root, day, research):
     """Copy minimal research custody into immutable, content-addressed sources."""
     out = directory(data_root,day)/'registered-sources'; out.mkdir(parents=True,exist_ok=True)
@@ -119,7 +137,9 @@ def freeze_registration(data_root, day, research):
             raise ValueError('registered_research_source_missing:'+name)
         h = P.file_hash(src); dst = out/(h+'-'+name)
         if not dst.exists():
-            dst.write_bytes(src.read_bytes())
+            with src.open('rb') as reader,dst.open('xb') as writer:
+                import shutil
+                shutil.copyfileobj(reader,writer);writer.flush();os.fsync(writer.fileno())
         if P.file_hash(dst) != h:
             raise ValueError('registered_research_snapshot_changed')
         records.append(dict(name=name,path=str(dst.resolve()),sha256=h))
@@ -951,12 +971,13 @@ def auxiliary_report(data_root,day,publication,parent_bundle,*,publish_policy=Tr
     # machine winners from the deployable machine+auxiliary pairs.
     comparison_path=out/'frozen'/('machine-comparison-'+gen+'.json')
     P.write(comparison_path,machine)
+    input_receipts=[freeze_receipt(out,origin) for origin in (
+        out/'input-census.json',out/'frozen'/('universe-'+gen+'.json'),
+        out/'frozen'/('expected-'+gen+'.json'))]
     issued=P.seal(dict(machine,cells=published,comparison_report_sha256=gen,
                        source_receipts=machine['source_receipts']+input_census['source_receipts']+[
                            dict(path=str(comparison_path.resolve()),sha256=P.file_hash(comparison_path)),
-                           dict(path=str(quality_path.resolve()),sha256=P.file_hash(quality_path)),
-                           dict(path=str((out/'input-census.json').resolve()),sha256=P.file_hash(out/'input-census.json')),
-                           dict(path=str((out/'frozen'/('universe-'+gen+'.json')).resolve()),sha256=P.file_hash(out/'frozen'/('universe-'+gen+'.json')))],
+                           dict(path=str(quality_path.resolve()),sha256=P.file_hash(quality_path))]+input_receipts,
                        source_row_exclusions=quality['totals'],
                        status='completed_with_scope_carry' if pending else 'completed',scope_pending=pending))
     auxiliary=P.seal(dict(schema=SCHEMA,source_date=day,target_date=day,publication_date=publication,

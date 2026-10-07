@@ -358,6 +358,6 @@ R5는 §5.1의 실제 primary eligible 대상에 exact AI 비교 checkpoint를 �
 
 ## 12. 승인된 구현 결과
 
-후속 구현 승인을 실행한 결과는 [구현·반복 리뷰 기록](../audits/main-additional-eight-pattern-implementation-review-2026-10-07.md)이 소유한다. v3 고정 모듈 bytes를 유지하고 v4 catalog/root/typed AI/native/장후를 기존 dispatcher에 연결했다. 원 연구의 8개 정의 SHA와 확인점·가격·특징·라벨 parity는 8/8 통과했고 대상 17개 suite 864개가 통과했다. 입력 생성 누락은 population 기반 expected 집합으로 ledger 준비 전에 검사한다.
+후속 구현 승인을 실행한 결과는 [구현·반복 리뷰 기록](../audits/main-additional-eight-pattern-implementation-review-2026-10-07.md)이 소유한다. v3 고정 모듈 bytes를 유지하고 v4 catalog/root/typed AI/native/장후를 기존 dispatcher에 연결했다. 원 연구의 8개 정의 SHA와 확인점·가격·특징·라벨 parity는 8/8 통과했고 대상 17개 suite 865개가 통과했다. 입력 생성 누락은 population 기반 expected 집합으로 ledger 준비 전에 검사한다.
 
 누적 raw 승률 비교에서 새 8개는 자동 선택되지 않았다. 정의 등록·실행 지원·비교 완료와 실제 선택을 구분하며 동률 규칙을 변경하지 않는다. 실제 primary AI 비교는 전체 eligible 원장에 남기고 미완료 scope는 검증된 기계·보조 쌍을 carry한다. immutable 배포/기동/PID 및 자연 감시 결과는 위 기록의 운영 인계로 확인한다. 후속 독립 탐지 계획은 이번 구현에 추가 적용하지 않았다.
