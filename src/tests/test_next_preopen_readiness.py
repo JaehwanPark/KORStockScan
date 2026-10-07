@@ -105,20 +105,30 @@ def test_selected_release_requires_router_validated_root_and_commit(monkeypatch,
     assert readiness._selected_release() == (
         json.loads(selection.read_text()), selection, commit)
     assert calls == [data.parent]
+    # Main and independent report consumers can verify without changing cwd.
+    # The same paths must remain forbidden for preparing a new generation.
+    for cwd in (release / 'src', tmp_path / 'report-release'):
+        cwd.mkdir()
+        monkeypatch.chdir(cwd)
+        assert readiness._selected_release(require_selected_cwd=False)[2] == commit
+        assert Path.cwd() == cwd
+        with pytest.raises(ValueError, match='selected_release_identity_mismatch'):
+            readiness._selected_release()
     _json(selection, {"schema": "runtime_release_selection_v1",
                       "release_root": str(release), "git_commit": "b" * 40})
     with pytest.raises(ValueError, match="selected_release_identity_mismatch"):
-        readiness._selected_release()
+        readiness._selected_release(require_selected_cwd=False)
 
 
 def test_prepare_isolated_then_detects_source_and_release_drift(monkeypatch, tmp_path):
+    native_selection = readiness._selected_release
     source, target = "2026-09-30", "2026-10-02"
     monkeypatch.setattr(readiness, "PREPARED_DIR", tmp_path / "prepared")
     monkeypatch.setattr(readiness, "is_krx_trading_day", lambda day: day.weekday() < 5)
     selection = tmp_path / "selection.json"
     _json(selection, {"git_commit": "a" * 40})
     selected = ["a" * 40]
-    monkeypatch.setattr(readiness, "_selected_release", lambda: ({}, selection, selected[0]))
+    monkeypatch.setattr(readiness, "_selected_release", lambda **kwargs: ({}, selection, selected[0]))
     controller = tmp_path / "controller.json"
     summary = tmp_path / "summary.json"
     policy = tmp_path / "policy.json"
@@ -154,6 +164,25 @@ def test_prepare_isolated_then_detects_source_and_release_drift(monkeypatch, tmp
     now = datetime(2026, 10, 1, 17, 0, tzinfo=KST)
     assert readiness.prepare(source, target_date=target, now=now)["status"] == "prepared_verified"
     assert readiness.verify_prepared(target, now=now)["status"] == "pass"
+    # Exercise the real selection gate through verify_prepared, rather than
+    # accepting a mocked selector from an unsafe daemon cwd.
+    with monkeypatch.context() as consumer:
+        release = tmp_path / 'release'
+        release.mkdir()
+        native_selector = tmp_path / 'runtime/runtime_release_selection.json'
+        _json(native_selector, {'git_commit': selected[0]})
+        consumer.setattr(readiness, 'DATA_DIR', tmp_path)
+        consumer.setattr(readiness, '_selected_release', native_selection)
+        consumer.setattr(readiness, 'selected_release', lambda workspace: (release, selected[0]))
+        frozen = {str(p): p.read_bytes() for p in (tmp_path / 'prepared').rglob('*') if p.is_file()}
+        for cwd in (release / 'src', tmp_path / 'independent-report'):
+            cwd.mkdir()
+            consumer.chdir(cwd)
+            assert readiness.verify_prepared(target, now=now)['status'] == 'pass'
+            with pytest.raises(ValueError, match='selected_release_identity_mismatch'):
+                readiness.prepare(source, target_date=target, now=now)
+            assert Path.cwd() == cwd
+        assert all(Path(p).read_bytes() == content for p, content in frozen.items())
     midnight = datetime(2026, 10, 2, 0, 36, tzinfo=KST)
     assert readiness.prepare(source, target_date=target, now=midnight)["status"] == "prepared_verified"
     assert readiness.verify_prepared(target, require_today=True, now=midnight)["status"] == "pass"

@@ -79,11 +79,12 @@ def _read(path: Path) -> dict[str, Any]:
     return value
 
 
-def _selected_release() -> tuple[dict[str, Any], Path, str]:
+def _selected_release(*, require_selected_cwd: bool = True) -> tuple[dict[str, Any], Path, str]:
     path = DATA_DIR / "runtime" / "runtime_release_selection.json"
     selection = _read(path)
     release, commit = selected_release(DATA_DIR.parent)
-    if release != Path.cwd().resolve() or selection.get("git_commit") != commit:
+    if (selection.get("git_commit") != commit
+            or (require_selected_cwd and release != Path.cwd().resolve())):
         raise ValueError("selected_release_identity_mismatch")
     return selection, path, commit
 
@@ -193,7 +194,10 @@ def verify_prepared(target_date: str, *, require_today: bool = False,
                 or receipt.get("actual_pid_consumed") is not False
                 or receipt.get("runtime_effect") is not False):
             raise ValueError("prepared_receipt_contract_invalid")
-        _, selection_path, commit = _selected_release()
+        # Read-only monitor consumers run from Main src/ or a report release.
+        # Router identity/shared mounts and exact source hashes remain required;
+        # only prepare() admits mutation from the selected release root.
+        _, selection_path, commit = _selected_release(require_selected_cwd=False)
         source = _source_receipts(receipt["source_date"], target_date,
                                   **({"generation_only": True} if generation_only else {}))
         release_changed = (receipt["selected_release_commit"] != commit

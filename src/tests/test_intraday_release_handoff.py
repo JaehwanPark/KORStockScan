@@ -382,7 +382,7 @@ def test_prepared_verifier_preserves_original_receipt_and_checks_sources(fixture
     monkeypatch.setattr(readiness, "_source_receipts", lambda *args, **kwargs: source)
     selection = data / "runtime/runtime_release_selection.json"
     _json(selection, {"git_commit": NEW, "release_root": str(selected)})
-    monkeypatch.setattr(readiness, "_selected_release", lambda: ({}, selection, NEW))
+    monkeypatch.setattr(readiness, "_selected_release", lambda **kwargs: ({}, selection, NEW))
     live_env = handoff.bootstrap.env_path(DAY)
     live_manifest = handoff.bootstrap.manifest_path(DAY)
     monkeypatch.setattr(handoff.bootstrap, "env_path", lambda day, output_dir=None:
