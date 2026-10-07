@@ -28,3 +28,9 @@
 실규모 P4 원장 검증에서 per-call 전체 request BLOB 정렬과 재개 시 비커버 조회가 I/O 병목을 만들었다. 아직 신규 provider reservation이 0인 상태에서 중단·원장 보존 후 재개했다. 준비된 동일 generation/opportunity의 5 arm ID를 대조해 재사용하고, covering owner index·64MiB SQLite cache·한 번의 indexed identity iterator로 변경했다. read-only 구 query는 245초 이후에도 미완료였고 새 identity 정렬은 약 15.70초, covering index 생성은 1.84초였다. 전체 요청 배열을 Python 메모리에 만들거나 표본/횟수 제한을 추가하지 않았다. 최종 수정 검사 **786 PASS** (`ledger-final-tests.log`).
 
 P4 전수 census: **116,007 입력점 / 580,035 비교 요청**, exact reuse로 generation의 unique transport request는 578,510개다. 과거 실제 응답 exact hit 1,624개, needs-call 576,886개다. offline 실행은 4 in-flight와 durable checkpoint를 사용하고 resource 시간 종료를 전수 완료로 표시하지 않는다. 신규 registered primary 우선 처리 후 잔여 비교를 이어간다. 현재 실제 provider 실행 및 발행 scope 검증 중이다.
+
+추가 실규모 리뷰에서 outcome covering index를 provider 실행과 동시에 만들면서 SQLite 30초 write timeout을 유발한 작업 결함이 있었다. 신규 primary 4개 정의의 1,405개 arm 요청은 모두 완료된 뒤였으며, 과거 legacy 후속 호출 4건은 reserved/응답 저장 불확실 상태로 남겨 중복 호출하지 않는다. 전역 worker/schema/입력준비 잠금과 provider 응답 선행 fsync journal·정확 요청 재조정·부분 append tail 보존을 추가했다. 실제 추가 29개 응답 ID를 journal과 원장에 모두 보존했고 reserved 증가는 0이다. 누적 generation 상태는 completed 3,699 / planned 574,807 / reserved 4이며 이를 전수 비교 완료로 표시하지 않는다. 응답 유효성 오류는 순위에서 승률 보정하지 않고 진단으로 기록한다.
+
+최종 재리뷰는 입력 census 대비 owner 전체 지점 누락도 비교 결손으로 식별하고, 일관된 SQLite read snapshot·내용 hash 기반의 atomic 실제 응답 사본을 사용하도록 보완했다. request BLOB를 읽던 종료 census는 covering index EXISTS 조회로 교체했다. 신규 주정책 D1/G1/G2/G4는 각각 205/35/29/12 입력점에서 5 arm 공통 비교를 완료했다. 선택 보조 reversal_complete_source_v7의 PASS는 각각 141/141, 24/24, 25/25, 8/8 WIN이다. 이 모집단은 기계 후보가 모두 WIN인 표본이므로 실패 분류력·실거래 수익 증거가 아니다. 미완료 scope는 검증된 기존 기계·보조 쌍을 함께 유지한다.
+
+최종 코드 gate는 15개 영향 suite **790 PASS** (`journal-final-tests.log`), compile·shell syntax·diff 검사 PASS다. 원장 owner 전체 누락·crash journal 복원/부분 tail·동시 schema/입력준비 잠금 회귀를 포함한다. 기존 query가 로딩된 오프라인 검증 프로세스는 실제 응답 29개 모두 committed 및 이전 reserved 4개 불변을 확인한 뒤 종료했다. bot/episode 프로세스는 이 조치 대상이 아니다.

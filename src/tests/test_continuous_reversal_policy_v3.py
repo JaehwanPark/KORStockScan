@@ -163,6 +163,7 @@ def test_durable_ledger_same_request_multiple_owners_and_reservation(tmp_path):
     assert db.execute('SELECT count(*) FROM requests').fetchone()[0]==1
     assert db.execute('SELECT count(*) FROM owners').fetchone()[0]==2
     assert db.execute('SELECT state FROM requests').fetchone()[0]=='reserved'
+    assert PC.ledger_states(db,'generation')=={'reserved':1}
     db.close()
 
 
@@ -198,6 +199,13 @@ def test_streaming_daily_producer_calls_carry_and_native_handoff(native,monkeypa
     monkeypatch.setattr(provider,'execute_openai_prompt_v2_candidate',actual)
     assert PC.calls(root,'2026-10-07')['status']=='completed';count=len(calls)
     PC.calls(root,'2026-10-07');assert len(calls)==count
+    db=PC.connect_ledger(root)
+    owner=db.execute('SELECT generation,comparison,opportunity FROM owners LIMIT 1').fetchone()
+    missing=db.execute('SELECT * FROM owners WHERE generation=? AND comparison=? AND opportunity=?',owner).fetchall()
+    db.execute('DELETE FROM owners WHERE generation=? AND comparison=? AND opportunity=?',owner);db.commit();db.close()
+    missing_report=PC.auxiliary_report(root,'2026-10-07','2026-10-07',parent,publish_policy=False)
+    assert missing_report['comparison_complete'] is False and missing_report['incomplete_comparisons'][owner[1]]==1
+    db=PC.connect_ledger(root);db.executemany('INSERT INTO owners VALUES (?,?,?,?,?,?)',missing);db.commit();db.close()
     import subprocess
     monkeypatch.setattr(subprocess,'check_output',lambda *args,**kwargs:'a'*40+'\n')
     auxiliary=PC.auxiliary_report(root,'2026-10-07','2026-10-07',parent)
@@ -261,6 +269,41 @@ def test_registered_custody_persists_on_next_source_date(tmp_path):
     source.write_text('{"changed":true}')
     with pytest.raises(ValueError,match='registration_source_changed'):
         PC.registration_receipts(tmp_path,'2026-10-08')
+
+
+def test_response_journal_restores_reserved_without_repeat(tmp_path):
+    db=PC.connect_ledger(tmp_path);req=dict(paired_replay_id='one',input='same')
+    db.execute("INSERT INTO requests(identity,request,state) VALUES (?,?,'reserved')",('one',json.dumps(req)));db.commit()
+    result=dict(result=dict(provider_provenance=dict(response_id='actual-response')),validation_errors=[])
+    path=tmp_path/'journal.jsonl';P.append(path,dict(request_identity='one',request=req,record=result))
+    assert PC.reconcile_journal(db,path)==1 and PC.reconcile_journal(db,path)==0
+    assert db.execute('SELECT state FROM requests').fetchone()[0]=='completed';db.close()
+
+
+def test_schema_migration_rejects_active_provider_worker(tmp_path):
+    import fcntl
+    db=PC.connect_ledger(tmp_path);db.execute('DROP INDEX requests_outcome_cover');db.commit();db.close()
+    with PC.provider_lock_path(tmp_path).open('a') as lock:
+        fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        with pytest.raises(ValueError,match='migration_provider_worker_active'):PC.connect_ledger(tmp_path)
+
+
+def test_response_journal_partial_tail_preserved_before_append(tmp_path):
+    db=PC.connect_ledger(tmp_path);req=dict(paired_replay_id='one',input='same')
+    db.execute("INSERT INTO requests(identity,request,state) VALUES (?,?,'reserved')",('one',json.dumps(req)));db.commit()
+    path=tmp_path/'journal.jsonl';path.write_bytes(b'{"unfinished"')
+    assert PC.reconcile_journal(db,path)==0 and path.read_bytes()==b''
+    assert next(tmp_path.glob('journal.jsonl.partial-*')).read_bytes()==b'{"unfinished"'
+    P.append(path,dict(request_identity='one',request=req,record=dict(result=dict(provider_provenance=dict(response_id='actual-response')),validation_errors=[])))
+    assert PC.reconcile_journal(db,path)==1;db.close()
+
+
+def test_prepare_inputs_rejects_concurrent_provider_worker(tmp_path):
+    import fcntl
+    PC.provider_lock_path(tmp_path).parent.mkdir(parents=True)
+    with PC.provider_lock_path(tmp_path).open('a') as lock:
+        fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        with pytest.raises(BlockingIOError):PC.prepare_inputs(tmp_path,'2026-10-07',{})
 
 
 def test_missing_item_rows_are_source_gap_not_valid_empty(native,monkeypatch):

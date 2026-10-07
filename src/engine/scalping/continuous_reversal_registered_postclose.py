@@ -17,6 +17,7 @@ import time
 import hashlib
 import inspect
 import tempfile
+import threading
 from collections import Counter, defaultdict
 from datetime import datetime
 from fractions import Fraction
@@ -406,23 +407,80 @@ def import_exact_cache(data_root,day,db):
     db.commit();return count
 
 
-def connect_ledger(data_root):
+def provider_lock_path(data_root):
+    return Path(data_root)/'report/continuous_reversal_registered/provider-worker.lock'
+
+
+def connect_ledger(data_root, *, provider_lock_held=False):
     path=Path(data_root)/'report/continuous_reversal_registered/request-ledger.sqlite3';path.parent.mkdir(parents=True,exist_ok=True)
     db=sqlite3.connect(path,timeout=30)
     db.execute('PRAGMA journal_mode=WAL');db.execute('PRAGMA synchronous=FULL')
     db.execute('PRAGMA cache_size=-65536')
-    db.execute('CREATE TABLE IF NOT EXISTS requests(identity TEXT PRIMARY KEY, request TEXT NOT NULL, state TEXT NOT NULL, result TEXT, reserved_at TEXT)')
-    if 'priority' not in {r[1] for r in db.execute('PRAGMA table_info(requests)')}:
-        db.execute('ALTER TABLE requests ADD COLUMN priority INTEGER NOT NULL DEFAULT 0')
-    db.execute('CREATE TABLE IF NOT EXISTS owners(generation TEXT, comparison TEXT, opportunity TEXT, arm TEXT, identity TEXT, outcome TEXT, PRIMARY KEY(generation,comparison,opportunity,arm))')
-    db.execute('CREATE INDEX IF NOT EXISTS owners_generation_identity ON owners(generation,identity)')
-    db.execute('CREATE INDEX IF NOT EXISTS owners_point_cover ON owners(generation,comparison,opportunity,arm,identity)')
-    db.execute('CREATE INDEX IF NOT EXISTS requests_state_identity ON requests(state,identity)')
-    db.execute('CREATE INDEX IF NOT EXISTS requests_priority ON requests(state,priority DESC,identity)')
-    db.commit();return db
+    wanted={'owners_generation_identity','owners_point_cover','requests_state_identity','requests_priority','requests_outcome_cover'}
+    existing={r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+    migration=not wanted.issubset(existing)
+    schema_lock=None
+    if migration and not provider_lock_held:
+        schema_lock=provider_lock_path(data_root).open('a')
+        try:fcntl.flock(schema_lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except BlockingIOError:
+            schema_lock.close();db.close();raise ValueError('registered_ledger_migration_provider_worker_active')
+    try:
+        db.execute('CREATE TABLE IF NOT EXISTS requests(identity TEXT PRIMARY KEY, request TEXT NOT NULL, state TEXT NOT NULL, result TEXT, reserved_at TEXT)')
+        if 'priority' not in {r[1] for r in db.execute('PRAGMA table_info(requests)')}:
+            db.execute('ALTER TABLE requests ADD COLUMN priority INTEGER NOT NULL DEFAULT 0')
+        db.execute('CREATE TABLE IF NOT EXISTS owners(generation TEXT, comparison TEXT, opportunity TEXT, arm TEXT, identity TEXT, outcome TEXT, PRIMARY KEY(generation,comparison,opportunity,arm))')
+        db.execute('CREATE INDEX IF NOT EXISTS owners_generation_identity ON owners(generation,identity)')
+        db.execute('CREATE INDEX IF NOT EXISTS owners_point_cover ON owners(generation,comparison,opportunity,arm,identity)')
+        db.execute('CREATE INDEX IF NOT EXISTS requests_state_identity ON requests(state,identity)')
+        db.execute('CREATE INDEX IF NOT EXISTS requests_priority ON requests(state,priority DESC,identity)')
+        db.execute('CREATE INDEX IF NOT EXISTS requests_outcome_cover ON requests(identity,state,result)')
+        db.commit()
+    except Exception:
+        db.close();raise
+    finally:
+        if schema_lock:schema_lock.close()
+    return db
+
+
+def reconcile_journal(db, path):
+    """Restore exact durable responses without making another provider call."""
+    if not path.exists():return 0
+    restored=0
+    with path.open('rb+') as handle:
+        safe_offset=0
+        for line in handle:
+            if not line.endswith(b'\n'):
+                # Keep crash evidence before removing the unusable append tail.
+                tail=path.with_name(path.name+'.partial-'+hashlib.sha256(line).hexdigest())
+                with tail.open('wb') as saved:
+                    saved.write(line);saved.flush();os.fsync(saved.fileno())
+                handle.truncate(safe_offset);handle.flush();os.fsync(handle.fileno());break
+            safe_offset=handle.tell()
+            row=json.loads(line);identity=row['request_identity'];req=row['request'];record=row['record']
+            old=db.execute('SELECT request,state,result FROM requests WHERE identity=?',(identity,)).fetchone()
+            if not old or req.get('paired_replay_id')!=identity or json.loads(old[0])!=req:
+                raise ValueError('registered_response_journal_request_conflict')
+            if old[2] and json.loads(old[2]).get('result')!=record.get('result'):
+                raise ValueError('registered_response_journal_result_conflict')
+            if old[1] in {'completed','failed'}:continue
+            state='completed' if (record.get('result') or {}).get('provider_provenance',{}).get('response_id') else 'failed'
+            db.execute('UPDATE requests SET state=?,result=? WHERE identity=?',(state,json.dumps(record,ensure_ascii=True),identity));restored+=1
+    db.commit();return restored
+
+
+def ledger_states(db, generation):
+    return dict(db.execute("SELECT r.state,count(*) FROM requests r INDEXED BY requests_state_identity WHERE EXISTS(SELECT 1 FROM owners o INDEXED BY owners_generation_identity WHERE o.generation=? AND o.identity=r.identity) GROUP BY r.state",(generation,)))
 
 
 def prepare_inputs(data_root,day,machine):
+    root=provider_lock_path(data_root);root.parent.mkdir(parents=True,exist_ok=True)
+    with root.open('a') as lock:
+        fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        return _prepare_inputs(data_root,day,machine)
+
+
+def _prepare_inputs(data_root,day,machine):
     """No point/date cap. Reconstruct only selected and actual baseline paths."""
     value=json.loads(Path(machine['population_path']).read_text());winner={c['key']:c for c in machine['cells']};baseline={c['key']:c for c in machine['baseline_cells']}
     out=directory(data_root,day); path=out/'frozen'/('inputs-'+machine['artifact_content_sha256']+'.jsonl.gz')
@@ -466,7 +524,7 @@ def prepare_inputs(data_root,day,machine):
                             handle.write(json.dumps(point,ensure_ascii=True,allow_nan=False,separators=(',',':'))+'\n')
                 print('registered inputs',rec['day'],rec['venue'],rec['session'],flush=True)
         os.replace(tmp,path)
-    db=connect_ledger(data_root);census=Counter();gen=machine['artifact_content_sha256']
+    db=connect_ledger(data_root,provider_lock_held=True);census=Counter();gen=machine['artifact_content_sha256']
     census['imported_exact_responses']=import_exact_cache(data_root,day,db)
     with gzip.open(path,'rt') as handle:
         for line in handle:
@@ -488,7 +546,7 @@ def prepare_inputs(data_root,day,machine):
                 census['eligible_requests']+=1
             if census['eligible_points']%100==0:db.commit()
     db.commit()
-    for state,count in db.execute('SELECT r.state,count(DISTINCT r.identity) FROM requests r JOIN owners o ON o.identity=r.identity WHERE o.generation=? GROUP BY r.state',(gen,)):
+    for state,count in ledger_states(db,gen).items():
         census[state]=count
     db.close()
     report=P.seal(dict(schema=SCHEMA,source_date=day,machine_report_sha256=gen,input_path=str(path.resolve()),input_sha256=P.file_hash(path),
@@ -501,15 +559,21 @@ def calls(data_root,day,*,stop_epoch=None,workers=4):
     """Bounded in-flight, unlimited count, durable replay across interrupted runs."""
     from src.engine.scalping.ai_decision_quality import execute_openai_prompt_v2_candidate
     out=directory(data_root,day);census=json.loads((out/'input-census.json').read_text());gen=census['machine_report_sha256']
-    with (out/'provider-worker.lock').open('a') as lock:
-        fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB);db=connect_ledger(data_root)
+    with provider_lock_path(data_root).open('a') as lock:
+        fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB);db=connect_ledger(data_root,provider_lock_held=True)
+        journal=Path(data_root)/'report/continuous_reversal_registered/provider-response-journal.jsonl'
+        reconcile_journal(db,journal);journal_lock=threading.Lock()
         def call(req):
             try:
                 result=execute_openai_prompt_v2_candidate(req,timeout_sec=30)
                 phase=req['candidate_input'].get('observation_phase',{}).get('stage',B.FIRST)
                 arm=req['micro_reversion_replay_arm']
-                return dict(result=result,validation_errors=A.validate_response(result['candidate_response'],req['candidate_input'],arm=arm,phase=phase))
-            except Exception as exc:return dict(error_type=type(exc).__name__,validation_errors=['provider_attempt_failed'])
+                try:errors=A.validate_response(result['candidate_response'],req['candidate_input'],arm=arm,phase=phase)
+                except (ValueError,KeyError,TypeError):errors=['response_validation_failed']
+                record=dict(result=result,validation_errors=errors)
+            except Exception as exc:record=dict(error_type=type(exc).__name__,validation_errors=['provider_attempt_failed'])
+            with journal_lock:P.append(journal,dict(request_identity=req['paired_replay_id'],request=req,record=record))
+            return record
         count=0
         # Sort only small identity metadata once, never all request BLOBs for
         # every call. The SQLite cursor streams IDs; only in-flight payloads
@@ -534,7 +598,7 @@ def calls(data_root,day,*,stop_epoch=None,workers=4):
                     db.execute('UPDATE requests SET state=?,result=? WHERE identity=?',(state,json.dumps(result,ensure_ascii=True),identity));db.commit();count+=1
                     if count%25==0:print('registered actual responses',count,flush=True)
         queue.close()
-        states={s:n for s,n in db.execute('SELECT r.state,count(DISTINCT r.identity) FROM requests r JOIN owners o ON o.identity=r.identity WHERE o.generation=? GROUP BY r.state',(gen,))};db.close()
+        states=ledger_states(db,gen);db.close()
     report=P.seal(dict(schema=SCHEMA,source_date=day,status='evaluation_incomplete' if any(states.get(k) for k in ('planned','reserved','failed')) else 'completed',
                        new_calls=count,census=states,call_limit=None,uncertain_attempts_require_reconciliation=states.get('reserved',0),**P.AUTH))
     P.write(out/'call-completion.json',report);return report
@@ -545,8 +609,18 @@ def auxiliary_report(data_root,day,publication,parent_bundle,*,publish_policy=Tr
     out=directory(data_root,day);machine=json.loads((out/'machine-comparison.json').read_text());gen=machine['artifact_content_sha256']
     baseline={c['key']:c for c in machine['baseline_cells']}; oldaux={c['key']:c for c in machine['baseline_auxiliary_cells']}
     quality,quality_path=source_quality(data_root,day,json.loads(Path(machine['population_path']).read_text()))
-    db=connect_ledger(data_root);groups=defaultdict(lambda:defaultdict(dict));metrics=defaultdict(lambda:{a:Counter() for a in V1.ARMS});gaps=Counter();expected=Counter()
-    cursor=db.execute('SELECT o.comparison,o.opportunity,o.arm,o.outcome,r.state,r.result FROM owners o JOIN requests r ON r.identity=o.identity WHERE o.generation=? ORDER BY o.comparison,o.opportunity',(gen,))
+    input_census=json.loads((out/'input-census.json').read_text())
+    if (input_census['machine_report_sha256']!=gen
+            or P.file_hash(input_census['input_path'])!=input_census['input_sha256']):
+        raise ValueError('registered_input_census_source_changed')
+    declared=Counter()
+    with gzip.open(input_census['input_path'],'rt') as handle:
+        for line in handle:declared[json.loads(line)['comparison']]+=1
+    if sum(declared.values())!=input_census['census']['eligible_points']:
+        raise ValueError('registered_input_census_point_count_changed')
+    db=connect_ledger(data_root);db.execute('BEGIN')
+    metrics=defaultdict(lambda:{a:Counter() for a in V1.ARMS});gaps=Counter();expected=Counter()
+    cursor=db.execute('SELECT o.comparison,o.opportunity,o.arm,o.outcome,r.state,r.result FROM owners o JOIN requests r INDEXED BY requests_outcome_cover ON r.identity=o.identity WHERE o.generation=? ORDER BY o.comparison,o.opportunity',(gen,))
     import itertools
     for (comparison,opp),records in itertools.groupby(cursor,key=lambda r:r[:2]):
         expected[comparison]+=1;rs={r[2]:r for r in records}
@@ -554,12 +628,22 @@ def auxiliary_report(data_root,day,publication,parent_bundle,*,publish_policy=Tr
         for arm,r in rs.items():
             result=json.loads(r[5]);m=metrics[comparison][arm];m['points']+=1;m['invalid_responses']+=bool(result['validation_errors'])
             if result['result']['candidate_response'].get('risk_verdict')=='PASS':m['pass_count']+=1;m['pass_wins']+=r[3]=='WIN'
+    if any(expected[c]>declared[c] for c in expected):raise ValueError('registered_ledger_unexpected_point')
+    for comparison,count in declared.items():gaps[comparison]+=count-expected[comparison]
+    gaps=+gaps
+    expected=declared
     # Immutable actual-response evidence, not a live WAL or mutable ledger.
-    evidence=out/'frozen'/('actual-'+gen+'-'+str(db.execute("SELECT count(*) FROM requests WHERE state='completed'").fetchone()[0])+'.jsonl.gz')
-    if not evidence.exists():
-        with gzip.open(evidence,'wt') as handle:
-            for identity,req,result in db.execute("SELECT identity,request,result FROM requests WHERE state='completed' AND EXISTS(SELECT 1 FROM owners o WHERE o.identity=requests.identity AND o.generation=?)",(gen,)):
-                handle.write(json.dumps(dict(request_identity=identity,request=json.loads(req),**json.loads(result)),ensure_ascii=True)+'\n')
+    fd,name=tempfile.mkstemp(prefix='.actual-',suffix='.jsonl.gz',dir=out/'frozen');os.close(fd);tmp=Path(name)
+    try:
+        with tmp.open('wb') as raw,gzip.GzipFile(filename='',mode='wb',fileobj=raw,mtime=0) as handle:
+            for identity,req,result in db.execute("SELECT identity,request,result FROM requests INDEXED BY requests_state_identity WHERE state='completed' AND EXISTS(SELECT 1 FROM owners o INDEXED BY owners_generation_identity WHERE o.identity=requests.identity AND o.generation=?) ORDER BY identity",(gen,)):
+                handle.write((json.dumps(dict(request_identity=identity,request=json.loads(req),**json.loads(result)),ensure_ascii=True)+'\n').encode())
+        with tmp.open('rb') as durable:os.fsync(durable.fileno())
+        evidence=out/'frozen'/('actual-'+gen+'-'+P.file_hash(tmp)+'.jsonl.gz')
+        if evidence.exists():tmp.unlink()
+        else:os.replace(tmp,evidence)
+    finally:
+        if tmp.exists():tmp.unlink()
     db.close();proof=dict(path=str(evidence.resolve()),sha256=P.file_hash(evidence));published=[];acs=[];pending=[];regular_aux={};regular_machine={}
     for mc in machine['cells']:
         key=mc['key'];published_cell=dict(key=key,routes={});aux_cell=dict(key=key,routes={})
@@ -618,7 +702,6 @@ def auxiliary_report(data_root,day,publication,parent_bundle,*,publish_policy=Tr
     # Machine-stage bytes remain frozen once its terminal receipt commits.
     # Issued runtime pairs are a separate compiled source bound to that report.
     P.write(P.directory(data_root,day)/'auxiliary.json',auxiliary)
-    input_census=json.loads((out/'input-census.json').read_text())
     freeze=P.seal(dict(schema=SCHEMA,source_date=day,status='frozen',machine_report_sha256=gen,
                        call_limit=None,census=input_census['census'],input_sha256=input_census['input_sha256'],**P.AUTH))
     P.write(P.directory(data_root,day)/'call-freeze.json',freeze)
