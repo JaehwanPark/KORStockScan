@@ -55,20 +55,20 @@
 - rollback 상태 유실: 현재 공통 원장에서 최신 응답/예약을 구 native 형식으로 export하고 reader로 확인했다. 과거 DB를 되살려 재호출하지 않는다.
 - 검증 결과와 호출 완료 혼동: validator version별 별도 validation 객체와 comparison revision을 보존한다. owner/고유 request/실제 attempt 계수를 분리한다.
 
-작업본 관련 회귀 148건, 후속 저장/adapter 대상 21건, 최종 immutable 배포본의 전체 관련 회귀 **150건**이 통과했다(중복 포함, 합산하지 않음). compile 및 diff 검사를 통과했다. 실제 v4 publication fixture를 native loader로 검증하고 이후 mutable census 변화에도 frozen publication이 유지됨을 확인했다. 검토한 범위의 미해결 코드 결함은 없다. immutable 배포본 검증과 실제 구 본문 회수 결과는 아래와 같다.
+작업본 관련 회귀 148건, 후속 저장/adapter 대상 21건, 최종 immutable 배포본의 전체 관련 회귀 **253건**이 통과했다(중복 포함, 합산하지 않음). compile 및 diff 검사를 통과했다. 실제 v4 publication fixture를 native loader로 검증하고 이후 mutable census 변화에도 frozen publication이 유지됨을 확인했다. 검토한 범위의 미해결 코드 결함은 없다. immutable 배포본 검증과 실제 구 본문 회수 결과는 아래와 같다.
 
 ## 배포·공간 회수 인계
 
-L0~L6를 완료했다. 배포 릴리스는 `/home/ubuntu/KORStockScan-runtime-releases/shared-ai-ledger-20261007-v1`, 코드 commit은 `1cfb0fa41be840b033f8c82706472556a86aa18b`이다. 최종 immutable 회귀 150 PASS 후 selector를 전환했고 router의 10/7 postclose print-plan도 이 릴리스를 가리킨다. common pointer의 writer 전환과 두 legacy DB 경로의 tombstone 차단을 확인했다. 실제 provider 호출은 0이다.
+L0~L6를 완료했다. 배포 릴리스는 `/home/ubuntu/KORStockScan-runtime-releases/shared-ai-ledger-20261007-v2`, 코드 commit은 `4629298496f117bc1ef1708b94193ea4b8f4c1bc`이다. 최종 immutable 회귀 253 PASS 후 selector를 전환했고 router의 10/7 postclose print-plan도 이 릴리스를 가리킨다. common pointer의 writer 전환과 두 legacy DB 경로의 tombstone 차단을 확인했다. 실제 provider 호출은 0이다.
 
 삭제 직전 전체 DB 해시·inode와 root FD census를 재검증했다. 대상 참조/관측불가는 0이었고, 구 DB 2개와 WAL/SHM 4개에서 11,755,053,056 bytes를 회수했다. 기존 frozen actual-response export·원 tick/분봉·정책 자료는 보존했다. 새 store의 실제 할당은 1,418,067,968 bytes(1.32GiB)로, 구 DB 10.95GiB 대비 **87.936% 감소**했다.
 
-이번 실행에서 완료된 pytest 격리 환경 3개도 참조 확인 후 제거했다(2,657파일, 421,920,768 bytes). 과거 pytest 환경은 건드리지 않았다. 최종 `df`는 **72% 사용, 가용 44,699,258,880 bytes(41.6GiB)**이며, 조사 시작 시 79%·가용 33,614,016,512 bytes 대비 실측 순증은 약 10.3GiB다. 이 값은 공통 store·릴리스 신규 생성과 동시 writer의 증가까지 반영한 filesystem 수치다.
+이번 실행에서 완료된 pytest 격리 환경 3개도 참조 확인 후 제거했다(2,657파일, 421,920,768 bytes). 과거 pytest 환경은 건드리지 않았다. 최종 `df`는 **72% 사용, 가용 44,620,222,464 bytes(41.6GiB)**이며, 조사 시작 시 79%·가용 33,614,016,512 bytes 대비 실측 순증은 약 10.3GiB다. 이 값은 공통 store·릴리스 신규 생성과 동시 writer의 증가까지 반영한 filesystem 수치다.
 
 Main PID `1074119`와 기존 적용 bundle/family hash는 동일하다. 새 릴리스는 장후용으로 선택했으며 현재 Main PID가 새 코드를 소비했다고 표시하지 않았다. 보류한 cron 5개 hash와 disabled/inactive 최종 갱신 timer를 재확인했다. **L7 장후 재개는 실행하지 않았고 사용자 별도 지시를 기다린다.** 장후 전체 완료나 내일 정책 준비 완료로 표시하지 않는다.
 
 - [최종 인계 영수증](../../data/report/ai_comparison_store_migration/2026-10-07/completion-receipt.json)
-- [immutable 검증 로그](../../data/report/ai_comparison_store_migration/2026-10-07/immutable-tests.log)
+- [immutable 검증 로그](../../data/report/ai_comparison_store_migration/2026-10-07/final-immutable-tests.log)
 - [구 DB 삭제 전 census](../../data/ai_comparison_store/v1/legacy-retirement-dry-run.json), [회수 영수증](../../data/ai_comparison_store/v1/legacy-retirement-removal.json)
 - [완료 검증 임시환경 삭제](../../data/report/ai_comparison_store_migration/2026-10-07/validation-temp-cleanup-removal.json)
 
@@ -77,4 +77,4 @@ Main PID `1074119`와 기존 적용 bundle/family hash는 동일하다. 새 릴�
 
 ## 마지막 호출 경로 재리뷰
 
-추가 점검에서 공통 `auxiliary_report()` Python API가 frozen legacy backend로 직접 전달되는 경로와, 장후 단계 코드 fingerprint에 새 adapter/store 파일이 빠진 부분을 발견했다. CLI와 직접 API가 모두 공통 원장을 사용하도록 연결하고 `main_auxiliary_policy`의 변경 감지에 두 파일을 추가했다. 관련 adapter/장후 handoff 회귀 112건과 compile/diff를 통과했다. 기존 이관 원장은 재생성하지 않으며 후속 최종 릴리스로 인계한다.
+추가 점검에서 공통 `auxiliary_report()` Python API가 frozen legacy backend로 직접 전달되는 경로와, 장후 단계 코드 fingerprint에 새 adapter/store 파일이 빠진 부분을 발견했다. CLI와 직접 API가 모두 공통 원장을 사용하도록 연결하고 `main_auxiliary_policy`의 변경 감지에 두 파일을 추가했다. 관련 adapter/장후 handoff 회귀 112건과 compile/diff를 통과했다. 최종 `shared-ai-ledger-20261007-v2`에서 전체 관련 253 PASS를 확인하고 선택했다. 객체 921,407개와 요청/응답/예약 계수가 그대로이며 원장을 다시 이관하거나 생성하지 않았다. 후속 완료 검증의 임시환경 2개(3,243파일, 400,764,928 bytes)도 FD 확인 뒤 정리했다. [추가 정리 영수증](../../data/report/ai_comparison_store_migration/2026-10-07/final-test-cleanup-removal.json). 이 2개를 포함한 작업 종료 시 disk 수치는 위 최종 값이다.
