@@ -323,6 +323,8 @@ while true; do
     fi
     apply_retired_runtime_policy_env || exit 1
     verify_threshold_runtime_env_handoff "$RUNTIME_TARGET_DATE" || exit 1
+    PYTHONPATH=.. ../.venv/bin/python -m src.engine.scalping.mechanistic_entry_runtime_policy \
+        --validate-current --target-date "$RUNTIME_TARGET_DATE" --data-root ../data || exit 1
     # Reassert removed one-off namespaces after verification. bot_main also
     # normalizes every retired prefix before importing trading modules.
     unset KORSTOCKSCAN_UPPER_LIMIT_WATCH_ENABLED

@@ -133,6 +133,12 @@ def publish(data_root,day,publication,machine,auxiliary):
 
 
 def validate_sources(bundle,data_root):
+    from src.engine.scalping import mechanistic_entry_runtime_policy as native
+    with native.source_anchor(data_root):
+        return _validate_sources(bundle,Path(data_root).absolute())
+
+
+def _validate_sources(bundle,data_root):
     if (bundle.get('continuous_reversal') or {}).get('schema')=='continuous_reversal_policy_v5':
         from src.engine.scalping.continuous_reversal_policy_v5 import validate_sources as v5
         return v5(bundle,data_root)
@@ -362,6 +368,12 @@ def scoped_verification(data_root,day,*,effective_date=None,publication_date=Non
 
 
 def activate(data_root,target_date,*,now=None):
+    from src.engine.scalping import mechanistic_entry_runtime_policy as native
+    with native.source_anchor(data_root):
+        return _activate(Path(data_root).absolute(),target_date,now=now)
+
+
+def _activate(data_root,target_date,*,now=None):
     candidate=Path(data_root)/'runtime/mechanistic_entry_policy/candidates'/f'policy_{target_date}.json'
     if candidate.is_file():
         from src.engine.scalping.continuous_reversal_policy_v2 import activate as activate_v2

@@ -131,7 +131,8 @@ def _checked_bootstrap(day, pid):
     return check
 
 
-def prepare(day, *, old_pid, previous_root, confirm, now=None, reseal_postclose_source=False):
+def prepare(day, *, old_pid, previous_root, confirm, now=None, reseal_postclose_source=False,
+            previous_stopped=False):
     current = _today(day, now)
     if confirm != CONFIRM:
         raise ValueError("intraday_handoff_explicit_authority_required")
@@ -143,7 +144,20 @@ def prepare(day, *, old_pid, previous_root, confirm, now=None, reseal_postclose_
     old_commit = subprocess.check_output(["git", "-C", str(previous), "rev-parse", "HEAD"], text=True).strip()
     dirty = subprocess.check_output(["git", "-C", str(previous), "status", "--porcelain", "--", "src", "deploy", "restart.sh"], text=True).strip()
     original = _preopen(day)
-    old_identity = _identity(old_pid)
+    if previous_stopped:
+        # Explicit recovery of an attested but terminated predecessor. Never
+        # fabricate live PID consumption from a historical bootstrap receipt.
+        if Path('/proc', str(int(old_pid))).exists():
+            raise ValueError('intraday_previous_pid_still_exists')
+        previous_consumed_path = _paths(day, old_commit)[1]
+        previous_consumed_sha = _sha(previous_consumed_path)
+        old_identity = _read(previous_consumed_path).get('pid_identity') or {}
+        if old_identity.get('pid') != int(old_pid) or not old_identity.get('start_ticks'):
+            raise ValueError('intraday_stopped_identity_unattested')
+        if original.get('selected_release_commit') == old_commit:
+            raise ValueError('intraday_stopped_consumed_handoff_required')
+    else:
+        old_identity = _identity(old_pid)
     # A subsequent same-day handoff may use the preceding verified consumption.
     if original.get("selected_release_commit") != old_commit:
         prior_path, prior_consumed = _paths(day, old_commit)
@@ -165,7 +179,7 @@ def prepare(day, *, old_pid, previous_root, confirm, now=None, reseal_postclose_
             raise ValueError("intraday_previous_consumption_invalid")
     if dirty or old_identity["cwd"] != str(previous / "src"):
         raise ValueError("intraday_previous_pid_or_release_invalid")
-    check = _checked_bootstrap(day, old_pid)
+    check = _checked_bootstrap(day, None if previous_stopped else old_pid)
     prepared_index = DATA_DIR / "runtime/policy_bootstrap/prepared" / day / "latest.json"
     prepared = _read(prepared_index)
     receipt_path = Path(prepared["receipt_path"])
@@ -246,7 +260,11 @@ def prepare(day, *, old_pid, previous_root, confirm, now=None, reseal_postclose_
     if reseal is not None and any(hashes[source[key + '_path']] != source[key + '_sha256']
                                   for key in ('controller', 'summary')):
         raise ValueError('intraday_postclose_generation_changed_during_prepare')
-    if _identity(old_pid) != old_identity:
+    if previous_stopped:
+        if (Path('/proc', str(int(old_pid))).exists()
+                or _sha(previous_consumed_path) != previous_consumed_sha):
+            raise ValueError('intraday_stopped_predecessor_changed')
+    elif _identity(old_pid) != old_identity:
         raise ValueError("intraday_old_pid_changed_during_prepare")
     payload = {"schema": "intraday_policy_preserving_release_handoff_v1", "status": "prepared_verified",
                "target_date": day, "selected_release_commit": commit, "release_root": str(root),
@@ -259,6 +277,9 @@ def prepare(day, *, old_pid, previous_root, confirm, now=None, reseal_postclose_
                "policy_effect": "unchanged", "authority": confirm}
     if reseal is not None:
         payload['postclose_source_reseal'] = reseal
+    if previous_stopped:
+        payload['previous_process_state'] = 'stopped_historical_consumption_verified'
+        payload['previous_consumption_sha256'] = previous_consumed_sha
     path, _ = _paths(day, commit)
     path.parent.mkdir(parents=True, exist_ok=True)
     # A receipt is immutable. Repeating preparation cannot silently replace it.
@@ -291,6 +312,12 @@ def _verify_handoff(day, commit, *, now=None, historical_observer=False):
                 or payload.get("release_root") != str(root) or payload.get("actual_pid_consumed") is not False):
             raise ValueError("intraday_handoff_identity_invalid")
         _preopen(day)
+        if payload.get('previous_process_state'):
+            predecessor = _paths(day, payload['previous_release_commit'])[1]
+            if (payload['previous_process_state'] != 'stopped_historical_consumption_verified'
+                    or _sha(predecessor) != payload.get('previous_consumption_sha256')
+                    or _read(predecessor).get('pid_identity') != payload.get('old_pid_identity')):
+                raise ValueError('intraday_stopped_predecessor_changed')
         frozen = payload["frozen_files"]
         required = {str(bootstrap.env_path(day)), str(bootstrap.manifest_path(day)), str(_preopen_path(day)),
                     str(DATA_DIR / "runtime/policy_bootstrap/prepared" / day / "latest.json"),
@@ -486,11 +513,13 @@ def main(argv=None):
     parser.add_argument("--previous-root")
     parser.add_argument("--confirm")
     parser.add_argument('--reseal-postclose-source', action='store_true')
+    parser.add_argument('--previous-stopped', action='store_true')
     args = parser.parse_args(argv)
     try:
         if args.prepare:
             result = prepare(args.target_date, old_pid=args.old_pid, previous_root=args.previous_root,
-                             confirm=args.confirm, reseal_postclose_source=args.reseal_postclose_source)
+                             confirm=args.confirm, reseal_postclose_source=args.reseal_postclose_source,
+                             previous_stopped=args.previous_stopped)
         elif args.activate_main_v2:
             result=activate_main_v2(args.target_date,pid=args.pid,confirm=args.confirm)
         elif args.consume:

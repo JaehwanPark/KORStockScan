@@ -66,6 +66,36 @@ def test_intraday_handoff_preserves_preopen_and_policy_files_then_binds_new_pid(
     assert handoff.verify(DAY, NEW, now=NOW + timedelta(hours=2))["status"] == "pass"
 
 
+@pytest.mark.parametrize('damage', [None, 'alive', 'wrong_pid', 'changed_consumption'])
+def test_stopped_handoff_requires_prior_exact_consumption(fixture, monkeypatch, damage):
+    data, _, selected, prepare = fixture
+    assert prepare()['status'] == 'pass'
+    consumed = handoff.consume(DAY, pid=2, now=NOW)
+    successor = selected.parent / 'successor'; successor.mkdir()
+    commit = 'c' * 40
+    monkeypatch.setattr(handoff, '_selection', lambda **kw: (successor, commit))
+    monkeypatch.setattr(handoff.subprocess, 'check_output', lambda command, **kw:
+                        NEW + '\n' if 'rev-parse' in command else '')
+    exists = Path.exists
+    monkeypatch.setattr(Path, 'exists', lambda p: damage == 'alive' if str(p) == '/proc/2' else exists(p))
+    if damage == 'wrong_pid':
+        consumed['pid_identity']['pid'] = 99
+        _json(handoff._paths(DAY, NEW)[1], consumed)
+    if damage in {'alive', 'wrong_pid'}:
+        with pytest.raises(ValueError, match='intraday_'):
+            handoff.prepare(DAY, old_pid=2, previous_root=selected, confirm=handoff.CONFIRM,
+                            now=NOW, previous_stopped=True)
+        return
+    result = handoff.prepare(DAY, old_pid=2, previous_root=selected, confirm=handoff.CONFIRM,
+                             now=NOW, previous_stopped=True)
+    assert result['status'] == 'pass', result
+    assert result['actual_pid_consumed'] is False
+    assert result['handoff']['previous_process_state'] == 'stopped_historical_consumption_verified'
+    if damage == 'changed_consumption':
+        _json(handoff._paths(DAY, NEW)[1], dict(consumed, status='changed'))
+        assert handoff.verify(DAY, commit, now=NOW)['status'] == 'fail'
+
+
 @pytest.mark.parametrize('tamper', ['none', 'policy', 'controller', 'checklist'])
 def test_intraday_current_document_reseal_preserves_original_preopen_generation(fixture, monkeypatch, tamper):
     data, previous, _, _ = fixture

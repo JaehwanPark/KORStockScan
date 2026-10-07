@@ -281,7 +281,7 @@ def record_pid_consumption(data_root,bundle):
             if (handoff.get('status')!='pass' or consumed.get('actual_pid_consumed') is not True
                     or consumed.get('pid_identity')!=identity or consumed.get('handoff_sha256')!=H._sha(path)):
                 raise ValueError('auxiliary_base_code_handoff_missing')
-            V.validate_sources(bundle,data_root)  # Historical machine pins are unchanged.
+            N._validate_bundle_sources(bundle,Path(data_root))  # Use the trusted data anchor.
             _BASE_CONSUMED.add(cache_key)
         f=bundle['continuous_reversal'];count=sum(f['machine_cells'][k]['routes'][r]['backend']=='union_v5' for k,r in V.scopes())
         receipt=dict(schema='continuous_reversal_pid_consumption_v5',bundle_sha256=bundle['bundle_sha256'],

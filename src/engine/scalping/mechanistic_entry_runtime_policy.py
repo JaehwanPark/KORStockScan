@@ -17,6 +17,7 @@ import tempfile
 from datetime import date, datetime, timedelta
 from functools import lru_cache
 from contextvars import ContextVar
+from contextlib import contextmanager
 from threading import RLock
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -112,9 +113,38 @@ def next_target(source_date: str) -> str:
 _CURRENT_CACHE = {}
 _CURRENT_CACHE_LOCK = RLock()
 _READ_DEPENDENCIES = ContextVar('machine_policy_read_dependencies', default=None)
+_SOURCE_ANCHOR = ContextVar('machine_policy_source_anchor', default=None)
+
+
+@contextmanager
+def source_anchor(data_root):
+    """Bind legacy receipts to the caller's data mount, never process cwd."""
+    anchor = Path(data_root).absolute()
+    anchor.resolve(strict=True)
+    token = _SOURCE_ANCHOR.set(anchor)
+    try:
+        yield
+    finally:
+        _SOURCE_ANCHOR.reset(token)
+
+
+def source_path(path):
+    path = Path(path)
+    anchor = _SOURCE_ANCHOR.get()
+    if path.is_absolute():
+        return path
+    if anchor is None:
+        return path.absolute()
+    if not path.parts or path.parts[0] != 'data' or '..' in path.parts:
+        raise ValueError('machine_policy_source_path_prefix_invalid:' + str(path))
+    result = anchor.joinpath(*path.parts[1:])
+    if not result.resolve(strict=True).is_relative_to(anchor.resolve(strict=True)):
+        raise ValueError('machine_policy_source_path_escape:' + str(path))
+    return result
 
 
 def _read(path: Path) -> dict:
+    path = source_path(path)
     signature = _signature(path)
     value = json.loads(path.read_text(encoding="utf-8"))
     if _signature(path) != signature:
@@ -146,8 +176,12 @@ def _atomic_write_json(path: Path, payload: dict) -> None:
         Path(temporary_name).unlink(missing_ok=True)
 
 
-@lru_cache(maxsize=32)
 def _source_hash(path: str, signature: tuple) -> str:
+    return _cached_source_hash(str(source_path(path)), signature)
+
+
+@lru_cache(maxsize=32)
+def _cached_source_hash(path: str, signature: tuple) -> str:
     source = Path(path)
     observed = hashlib.sha256(source.read_bytes()).hexdigest()
     if _signature(source) != signature:
@@ -156,8 +190,9 @@ def _source_hash(path: str, signature: tuple) -> str:
 
 
 def _signature(path: Path) -> tuple:
+    path = source_path(path)
     stat = path.stat()
-    signature = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+    signature = (str(path.resolve(strict=True)), stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
     dependencies = _READ_DEPENDENCIES.get()
     if dependencies is not None:
         previous = dependencies.setdefault(str(path), signature)
@@ -603,6 +638,11 @@ def load(*, data_root: Path, target_date: str) -> dict | None:
 
 
 def _validate_bundle_sources(bundle: dict, data_root: Path, *, historical_code_root=None) -> dict:
+    with source_anchor(data_root):
+        return _validate_anchored_bundle_sources(bundle, Path(data_root).absolute(), historical_code_root=historical_code_root)
+
+
+def _validate_anchored_bundle_sources(bundle: dict, data_root: Path, *, historical_code_root=None) -> dict:
     source_path = root(data_root) / "sources" / f"{bundle['source_file_sha256']}.json"
     if (
         _source_hash(str(source_path), _signature(source_path))
@@ -2765,6 +2805,7 @@ def current_strategy_receipt(*, data_root: Path) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--validate-current', action='store_true', help='Read-only launch-cwd policy preflight')
     parser.add_argument("--source", type=Path)
     parser.add_argument("--stage-designated", type=Path)
     parser.add_argument("--activate-dated-auxiliary", action="store_true")
@@ -2784,6 +2825,23 @@ def main() -> int:
         help="Explicit initial adoption; later dated succession is automatic",
     )
     args = parser.parse_args()
+    if args.validate_current:
+        if not args.target_date or any((args.source,args.stage_designated,args.bootstrap,args.activate_now,
+                args.activate_dated_auxiliary,args.activate_dated_winrate,args.activate_auxiliary_now,
+                args.rollback_machine_to,args.replace_initial_role,args.adopt_all_continuous,args.adopt_hierarchy)):
+            parser.error('--validate-current requires only --target-date and --data-root')
+        try:
+            bundle = load_effective(data_root=args.data_root.absolute(), target_date=args.target_date)
+            if not bundle:
+                raise ValueError('launch_machine_policy_missing')
+            print(json.dumps(dict(status='pass', validation_stage='launch_loader', cwd=str(Path.cwd()),
+                bundle_sha256=bundle['bundle_sha256'], target_date=args.target_date,
+                actual_pid_consumed=False, provider_called=False, actual_order_submitted=False)))
+            return 0
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            print(json.dumps(dict(status='fail', validation_stage='launch_loader', reason=str(exc),
+                                  cwd=str(Path.cwd()), actual_pid_consumed=False)))
+            return 1
     if args.stage_designated:
         if any((args.source, args.activate_dated_winrate, args.activate_dated_auxiliary,
                 args.activate_auxiliary_now, args.activate_now, args.bootstrap, args.rollback_machine_to,

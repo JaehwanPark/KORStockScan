@@ -10,6 +10,52 @@ from src.engine.scalping import ai_action_outcome_calibration as calibration
 from src.engine.scalping import mechanistic_entry_runtime_policy as policy
 
 
+def test_source_anchor_is_cwd_independent_and_cache_tracks_mount(tmp_path, monkeypatch):
+    from pathlib import Path
+    mount = tmp_path / 'data'
+    first = tmp_path / 'first'
+    second = tmp_path / 'second'
+    first.mkdir(); second.mkdir()
+    for target in (first, second):
+        (target / 'receipt.json').write_text('{"value": 1}')
+    mount.symlink_to(first, target_is_directory=True)
+    relative = Path('data/receipt.json')
+    deps = {}
+    token = policy._READ_DEPENDENCIES.set(deps)
+    try:
+        with policy.source_anchor(mount):
+            signature = policy._signature(relative)
+            expected = policy._source_hash(str(relative), signature)
+            monkeypatch.chdir(second)
+            assert policy._read(relative) == {'value': 1}
+            assert policy._source_hash(str(relative), policy._signature(relative)) == expected
+        assert set(deps) == {str(mount / 'receipt.json')}
+    finally:
+        policy._READ_DEPENDENCIES.reset(token)
+    mount.unlink(); mount.symlink_to(second, target_is_directory=True)
+    assert policy._signature(mount / 'receipt.json') != signature
+    with policy.source_anchor(mount):
+        (second / 'receipt.json').write_text('{"value": 2}')
+        assert policy._source_hash(str(relative), policy._signature(relative)) != expected
+
+
+@pytest.mark.parametrize('name', ['../receipt.json', 'data/../receipt.json', 'other/receipt.json'])
+def test_source_anchor_rejects_ambiguous_or_escaping_paths(tmp_path, name):
+    with policy.source_anchor(tmp_path), pytest.raises(ValueError, match='source_path_prefix_invalid'):
+        policy._read(__import__('pathlib').Path(name))
+
+
+def test_source_anchor_rejects_external_link_and_missing_source(tmp_path):
+    mount = tmp_path / 'data'; mount.mkdir()
+    outside = tmp_path / 'outside.json'; outside.write_text('{}')
+    (mount / 'escape.json').symlink_to(outside)
+    with policy.source_anchor(mount):
+        with pytest.raises(ValueError, match='source_path_escape'):
+            policy._signature(__import__('pathlib').Path('data/escape.json'))
+        with pytest.raises(FileNotFoundError):
+            policy._signature(__import__('pathlib').Path('data/missing.json'))
+
+
 def source(tmp_path, source_date="2026-09-11"):
     report = calibration._with_artifact_content_sha256(
         {

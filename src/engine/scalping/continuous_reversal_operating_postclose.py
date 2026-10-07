@@ -213,7 +213,9 @@ def machine_report(data_root,day,publication,parent,*,source=None,publish_output
                 p['truth'],status,selected,baseline)
         input_counts['all_confirmations']+=1
         input_counts['outcome_unresolved_no_comparison_request' if status=='UNRESOLVED' else 'resolved_confirmations']+=1
-    source_receipts += [dict(path=r['path'],sha256=r['sha256']) for r in source['normalized_sources']['partitions']]
+    with N.source_anchor(data_root):
+        source_receipts += [dict(path=str(N.source_path(r['path']).absolute()),sha256=r['sha256'])
+                            for r in source['normalized_sources']['partitions']]
     report=P.seal(dict(schema=SCHEMA,source_date=day,target_date=day,publication_date=publication,status='completed',
         parent_bundle_sha256=parent['bundle_sha256'],operating_manifest=manifest,execution_code_sha256=execution_code,
         cells=list(copy.deepcopy(parent['continuous_reversal']['machine_cells']).values()),
