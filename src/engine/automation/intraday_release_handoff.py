@@ -34,6 +34,27 @@ def _read(path):
     return value
 
 
+def _historical_predecessor(day, commit, expected):
+    """Reuse only a snapshot sealed and actually consumed by the predecessor."""
+    path, consumed_path = _paths(day, commit)
+    prior, consumed = _read(path), _read(consumed_path)
+    historical = (prior.get('postclose_source_reseal') or {}).get('historical_checklist') or {}
+    snapshot = path.parent / (commit + '.historical-checklist.md')
+    if (prior.get('schema') != 'intraday_policy_preserving_release_handoff_v1'
+            or prior.get('status') != 'prepared_verified' or prior.get('authority') != CONFIRM
+            or prior.get('target_date') != day or prior.get('selected_release_commit') != commit
+            or consumed.get('schema') != 'intraday_policy_preserving_consumption_v1'
+            or consumed.get('status') != 'pass' or consumed.get('actual_pid_consumed') is not True
+            or consumed.get('target_date') != day or consumed.get('selected_release_commit') != commit
+            or consumed.get('handoff_sha256') != _sha(path)
+            or historical.get('path') != str(snapshot) or historical.get('sha256') != expected
+            or historical.get('git_path') != 'docs/checklists/' + day + '-stage2-todo-checklist.md'
+            or prior.get('frozen_files', {}).get(str(snapshot)) != expected or _sha(snapshot) != expected):
+        raise ValueError('intraday_historical_predecessor_invalid')
+    return historical, {'handoff_path': str(path), 'handoff_sha256': _sha(path),
+                        'consumed_path': str(consumed_path), 'consumed_sha256': _sha(consumed_path)}
+
+
 def _paths(day, commit):
     root = DATA_DIR / "runtime/policy_bootstrap/intraday_handoff" / day
     return root / f"{commit}.json", root / f"{commit}.consumed.json"
@@ -156,7 +177,13 @@ def prepare(day, *, old_pid, previous_root, confirm, now=None, reseal_postclose_
         historical = None
         if old_checklist and _sha(old_checklist) != expected:
             relative = 'docs/checklists/' + day + '-stage2-todo-checklist.md'
-            original_bytes = subprocess.check_output(['git', '-C', str(previous), 'show', old_commit + ':' + relative])
+            origin_commit, predecessor = old_commit, None
+            if original.get('selected_release_commit') != old_commit:
+                inherited = (prior.get('postclose_source_reseal') or {}).get('historical_checklist')
+                if inherited:
+                    historical_prior, predecessor = _historical_predecessor(day, old_commit, expected)
+                    origin_commit = historical_prior['git_commit']
+            original_bytes = subprocess.check_output(['git', '-C', str(previous), 'show', origin_commit + ':' + relative])
             if hashlib.sha256(original_bytes).hexdigest() != expected:
                 raise ValueError('intraday_original_checklist_git_generation_missing')
             snapshot = _paths(day, commit)[0].parent / (commit + '.historical-checklist.md')
@@ -167,8 +194,10 @@ def prepare(day, *, old_pid, previous_root, confirm, now=None, reseal_postclose_
             else:
                 with snapshot.open('xb') as out:
                     out.write(original_bytes); out.flush(); os.fsync(out.fileno())
-            historical = dict(path=str(snapshot), sha256=expected, git_commit=old_commit,
+            historical = dict(path=str(snapshot), sha256=expected, git_commit=origin_commit,
                               git_path=relative, basis='original_whole_chain_checklist_generation')
+            if predecessor:
+                historical['predecessor'] = predecessor
             frozen.append(snapshot)
         source = _source_receipts(source_day, day, generation_only=True,
                                  **({'checklist_snapshot': Path(historical['path'])} if historical else {}))
@@ -247,10 +276,16 @@ def verify(day, commit, *, now=None):
             if snapshot:
                 expected_path = _paths(day, commit)[0].parent / (commit + '.historical-checklist.md')
                 strict = _read(_read(source['controller_path'])['verification_attempt_path'])
+                origin_commit = payload['previous_release_commit']
+                if snapshot.get('predecessor'):
+                    inherited, predecessor = _historical_predecessor(day, origin_commit, snapshot['sha256'])
+                    if predecessor != snapshot['predecessor']:
+                        raise ValueError('intraday_historical_predecessor_changed')
+                    origin_commit = inherited['git_commit']
                 if (snapshot.get('path') != str(expected_path)
                         or snapshot.get('sha256') != strict['generation_binding']['checklist_sha256']
                         or frozen.get(str(expected_path)) != snapshot['sha256']
-                        or snapshot.get('git_commit') != payload['previous_release_commit']
+                        or snapshot.get('git_commit') != origin_commit
                         or snapshot.get('git_path') != 'docs/checklists/' + day + '-stage2-todo-checklist.md'):
                     raise ValueError('intraday_historical_checklist_binding_invalid')
                 required.add(str(expected_path))

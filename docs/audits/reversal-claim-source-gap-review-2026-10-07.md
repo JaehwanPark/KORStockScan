@@ -20,7 +20,11 @@ legacy 가격 state를 tail에서 재현하면 가격 하락/새 반전 및 5초
 - 단순 예외 문자열 allowlist 또는 alert 억제로 과거 18건을 정상화하지 않는다. API 요청/FID/parser/REG·REMOVE 변경과 외부 재호출은 없다.
 - self review → telemetry가 native 예외를 덮는 결함 수정 → exact binding/segment 검증 보완 → re-review를 수행했다. 수정 범위 미해결 finding 0.
 
-검증: 관련 8개 suite 559 PASS, compile 및 git diff --check PASS. 자연 source receipt 및 새 PID 소비는 별도 검증한다. 문서 변경은 print-only parser만 실행하고 외부 sync는 실행하지 않는다.
+검증: 관련 8개 suite 564 PASS, compile 및 git diff --check PASS. 자연 source receipt 및 새 PID 소비는 별도 검증한다. 문서 변경은 print-only parser만 실행하고 외부 sync는 실행하지 않는다.
+
+## 추가 인계 결함과 수리
+
+반복 장중 배포의 prepare는 직전 코드 commit 안의 현재 체크리스트가 원래 장후 세대와 같아야 한다고 가정했다. 앞선 배포가 이미 이전 Git object의 원래 snapshot을 봉인한 경우 이 가정은 깨진다. actual previous PID와 consumed handoff를 검증한 후, 원본 SHA에 묶인 predecessor snapshot/consumed receipt를 승계하고 원래 Git object bytes까지 재확인하도록 보완했다. 새 봉인에서도 predecessor 경로와 handoff/consumed SHA를 직접 검증하며, snapshot·consumption·Git bytes·custody 변조는 모두 fail closed다. PREOPEN·현재 checklist·정책 bytes는 수정하지 않는다. 반복 배포 정상 1건과 변조 4건의 regression을 추가했다.
 
 ## 정확 ID 목록
 

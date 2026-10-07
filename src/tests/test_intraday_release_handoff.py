@@ -466,3 +466,66 @@ def test_authorized_intraday_historical_checklist_is_exact_git_bound_snapshot(fi
         snap.write_text('changed')
         assert handoff.verify(DAY,NEW,now=NOW)['status']=='fail'
     assert checklist.read_text()=='current work added\n'
+
+
+@pytest.mark.parametrize('damage', [None, 'snapshot', 'consumed', 'git_bytes', 'predecessor_binding'])
+def test_second_handoff_carries_original_git_snapshot_with_consumed_custody(fixture, monkeypatch, damage):
+    data, previous, selected, _ = fixture
+    original = b'original sealed generation\n'
+    checklist = data.parent/'docs/checklists'/f'{DAY}-stage2-todo-checklist.md'
+    checklist.parent.mkdir(parents=True); checklist.write_text('new current owners\n')
+    strict = data/'strict.json'
+    expected = __import__('hashlib').sha256(original).hexdigest()
+    _json(strict, {'checklist_handoff': {'path': str(checklist)},
+                  'generation_binding': {'checklist_sha256': expected}})
+    controller = data/'report/postclose_done_controller/postclose_done_controller_2026-10-01.json'
+    summary = data/'report/runtime_approval_summary/runtime_approval_summary_2026-10-01.json'
+    _json(controller, {'verification_attempt_path': str(strict)}); _json(summary, {})
+    index = data/'runtime/policy_bootstrap/prepared'/DAY/'latest.json'
+    receipt = Path(handoff._read(index)['receipt_path']); policies = [{'family': 'main'}]
+    _json(receipt, dict(schema='next_preopen_readiness_v1', status='prepared_verified', target_date=DAY,
+        source_date='2026-10-01', actual_pid_consumed=False, policy_receipts=policies))
+    _json(index, dict(receipt_path=str(receipt), receipt_sha256=handoff._sha(receipt)))
+    def source(*args, **kwargs):
+        assert Path(kwargs['checklist_snapshot']).read_bytes() == original
+        return dict(controller_path=str(controller), controller_sha256=handoff._sha(controller),
+                    summary_path=str(summary), summary_sha256=handoff._sha(summary), policy_receipts=policies)
+    monkeypatch.setattr(readiness, '_source_receipts', source)
+    monkeypatch.setattr(handoff.subprocess, 'check_output', lambda command, **kwargs:
+        original if 'show' in command else OLD+'\n' if 'rev-parse' in command else '')
+    handoff.prepare(DAY, old_pid=1, previous_root=previous, confirm=handoff.CONFIRM,
+                    now=NOW, reseal_postclose_source=True)
+    handoff.consume(DAY, pid=2, now=NOW)
+    prior_path, consumed_path = handoff._paths(DAY, NEW)
+    snapshot = prior_path.parent/(NEW+'.historical-checklist.md')
+    if damage == 'snapshot': snapshot.write_text('changed')
+    if damage == 'consumed':
+        _json(consumed_path, {**handoff._read(consumed_path), 'actual_pid_consumed': False})
+    second = selected.parent/'second'; second.mkdir(); commit = 'c'*40
+    monkeypatch.setattr(handoff, '_selection', lambda **kwargs: (second, commit))
+    monkeypatch.setattr(handoff, '_identity', lambda pid:
+        dict(pid=pid, start_ticks='42', cwd=str((selected if pid == 2 else second)/'src')))
+    def git_output(command, **kwargs):
+        if 'show' in command:
+            # NEW contains the edited checklist, so only the original OLD
+            # Git object is valid evidence for a repeated handoff.
+            assert command[-1].startswith(OLD+':')
+            return b'wrong bytes' if damage == 'git_bytes' else original
+        return NEW+'\n' if 'rev-parse' in command else ''
+    monkeypatch.setattr(handoff.subprocess, 'check_output', git_output)
+    if damage in {'snapshot', 'consumed', 'git_bytes'}:
+        with pytest.raises(ValueError, match='intraday_'):
+            handoff.prepare(DAY, old_pid=2, previous_root=selected, confirm=handoff.CONFIRM,
+                            now=NOW+timedelta(minutes=2), reseal_postclose_source=True)
+        assert not handoff._paths(DAY, commit)[0].exists()
+        return
+    result = handoff.prepare(DAY, old_pid=2, previous_root=selected, confirm=handoff.CONFIRM,
+                            now=NOW+timedelta(minutes=2), reseal_postclose_source=True)
+    historical = result['handoff']['postclose_source_reseal']['historical_checklist']
+    assert historical['git_commit'] == OLD
+    assert Path(historical['path']).read_bytes() == original
+    if damage == 'predecessor_binding':
+        _json(consumed_path, {**handoff._read(consumed_path), 'handoff_sha256': 'wrong'})
+        assert handoff.verify(DAY, commit, now=NOW+timedelta(minutes=2))['status'] == 'fail'
+    else:
+        assert handoff.consume(DAY, pid=3, now=NOW+timedelta(minutes=2))['status'] == 'pass'
