@@ -50158,7 +50158,7 @@ def _resolve_watching_state_change_refresh(
                 if family['schema']=='continuous_reversal_policy_v4':
                     from src.engine.scalping.continuous_reversal_policy_v4 import record_pid_consumption
                 if family['schema']=='continuous_reversal_policy_v5':
-                    from src.engine.scalping.continuous_reversal_policy_v5 import record_pid_consumption
+                    from src.engine.scalping.reversal_auxiliary_intraday import record_pid_consumption
                 record_pid_consumption(DATA_DIR,selected)
                 configure_bundle(selected,data_root=DATA_DIR,day=datetime.fromtimestamp(now_ts,_KST).date().isoformat())
                 claim=stock.get('_continuous_reversal_pending_claim')
@@ -69982,6 +69982,13 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         bound_receipt = submit_attempt_machine_lineage(stock, code)
         confirmed_epoch = _safe_float(stock.get("last_watching_ai_confirmed_at"), 0.0)
         final_ai_age = time.time() - confirmed_epoch if confirmed_epoch > 0 else None
+        try:
+            from src.engine.scalping.reversal_auxiliary_intraday import validate_submit
+            validate_submit(DATA_DIR, stock.get("last_watching_ai_machine_primary_fields") or {}, now=time.time())
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            _log_entry_pipeline(stock, code, "auxiliary_binding_submit_recheck", reason=str(exc),
+                actual_order_submitted=False, broker_order_forbidden=True)
+            return False
         if (bound_receipt and not _machine_submit_revision_is_current(stock, bound_receipt)):
             _log_entry_pipeline(stock, code, "machine_observation_revision_recheck",
                 actual_order_submitted=False, broker_order_forbidden=True)

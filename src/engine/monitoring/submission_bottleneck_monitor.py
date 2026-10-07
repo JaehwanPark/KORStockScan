@@ -1330,7 +1330,7 @@ def _reversal_observation_receipt(bundle, observation, *, verified_components=No
 
     family = bundle['continuous_reversal']
     if family.get('schema')=='continuous_reversal_policy_v5':
-        from src.engine.scalping.continuous_reversal_policy_v5 import audit_observation
+        from src.engine.scalping.reversal_auxiliary_intraday import audit_observation
         return audit_observation(bundle,observation)
     is_v4=family.get('schema')=='continuous_reversal_policy_v4'
     is_v3=family.get('schema') in {'continuous_reversal_policy_v3','continuous_reversal_policy_v4'}

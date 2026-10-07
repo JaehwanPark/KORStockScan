@@ -437,7 +437,7 @@ def test_v5_next_session_candidate_cannot_fall_through_to_intraday_v2(fixture,mo
  with pytest.raises(ValueError,match='requires_next_session_activation'):
   handoff.activate_main_v2(DAY,pid=2,confirm='APPROVED_INTRADAY_MAIN_POLICY_ACTIVATION',now=NOW)
 
-@pytest.mark.parametrize('damage', [None, 'git_bytes', 'snapshot'])
+@pytest.mark.parametrize('damage', [None, 'git_bytes', 'snapshot', 'postclose_generated', 'generated_corrupt'])
 def test_authorized_intraday_historical_checklist_is_exact_git_bound_snapshot(fixture, monkeypatch, damage):
     data, previous, _, _ = fixture
     source_day='2026-10-01'
@@ -456,8 +456,13 @@ def test_authorized_intraday_historical_checklist_is_exact_git_bound_snapshot(fi
     _json(receipt, {'schema':'next_preopen_readiness_v1','status':'prepared_verified','target_date':DAY,
                    'source_date':source_day,'actual_pid_consumed':False,'policy_receipts':policies})
     _json(index_file, {'receipt_path':str(receipt),'receipt_sha256':handoff._sha(receipt)})
+    if damage in {'postclose_generated','generated_corrupt'}:
+        checklist.write_bytes(original)
+        preserved=handoff.preserve_checklist(DAY)
+        checklist.write_text('current work added\n')
+        if damage=='generated_corrupt':Path(preserved['path']).write_text('corrupt')
     def output(command, **kwargs):
-        if 'show' in command:return b'wrong' if damage=='git_bytes' else original
+        if 'show' in command:return b'wrong' if damage in {'git_bytes','postclose_generated','generated_corrupt'} else original
         return OLD+'\n' if 'rev-parse' in command else ''
     monkeypatch.setattr(handoff.subprocess,'check_output',output)
     def source(*args, **kwargs):
@@ -466,7 +471,7 @@ def test_authorized_intraday_historical_checklist_is_exact_git_bound_snapshot(fi
         return {'controller_path':str(controller),'controller_sha256':handoff._sha(controller),
                 'summary_path':str(summary),'summary_sha256':handoff._sha(summary),'policy_receipts':policies}
     monkeypatch.setattr(readiness,'_source_receipts',source)
-    if damage=='git_bytes':
+    if damage in {'git_bytes','generated_corrupt'}:
         with pytest.raises(ValueError,match='git_generation_missing'):
             handoff.prepare(DAY,old_pid=1,previous_root=previous,confirm=handoff.CONFIRM,now=NOW,reseal_postclose_source=True)
         return

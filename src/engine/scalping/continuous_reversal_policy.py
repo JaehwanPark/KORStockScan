@@ -248,6 +248,8 @@ def compose(response,policy):
             active=load_effective(data_root=DATA_DIR,target_date=datetime.now(KST).date().isoformat())
             if assessment.get('policy_version')=='continuous_reversal_policy_v5':
                 from src.engine.scalping.continuous_reversal_policy_v5 import validate_active_claim
+                from src.engine.scalping.reversal_auxiliary_intraday import validate_decision
+                validate_decision(DATA_DIR, policy, active, now=__import__('time').time())
                 assessment['still_valid_policy_refs']=validate_active_claim(policy,active,now=__import__('time').time())
             else:
                 if not active or active['bundle_sha256']!=policy['machine_bundle_sha256']:

@@ -34,6 +34,31 @@ def _read(path):
     return value
 
 
+def preserve_checklist(day):
+    """Save the exact already-sealed document before authorized owner edits."""
+    index=DATA_DIR/'runtime/policy_bootstrap/prepared'/day/'latest.json'
+    ref=_read(index);prepared_path=Path(ref['receipt_path'])
+    if _sha(prepared_path)!=ref['receipt_sha256']:
+        raise ValueError('intraday_original_prepared_invalid')
+    prepared=_read(prepared_path)
+    if prepared.get('status')!='prepared_verified' or prepared.get('target_date')!=day:
+        raise ValueError('intraday_original_prepared_invalid')
+    controller=_read(DATA_DIR/'report/postclose_done_controller'/('postclose_done_controller_'+prepared['source_date']+'.json'))
+    strict=_read(controller['verification_attempt_path'])
+    expected=strict['generation_binding']['checklist_sha256']
+    source=DATA_DIR.parent/'docs/checklists'/(day+'-stage2-todo-checklist.md')
+    content=source.read_bytes()
+    if hashlib.sha256(content).hexdigest()!=expected:
+        raise ValueError('intraday_checklist_not_current_sealed_generation')
+    dest=DATA_DIR/'runtime/policy_bootstrap/historical_checklists'/(expected+'.md')
+    dest.parent.mkdir(parents=True,exist_ok=True)
+    if dest.exists():
+        if dest.read_bytes()!=content:raise ValueError('intraday_historical_checklist_snapshot_changed')
+    else:
+        with dest.open('xb') as out:out.write(content);out.flush();os.fsync(out.fileno())
+    return dict(path=str(dest),sha256=expected,source_date=prepared['source_date'],target_date=day)
+
+
 def _historical_predecessor(day, commit, expected):
     """Reuse only a snapshot sealed and actually consumed by the predecessor."""
     path, consumed_path = _paths(day, commit)
@@ -184,8 +209,15 @@ def prepare(day, *, old_pid, previous_root, confirm, now=None, reseal_postclose_
                     historical_prior, predecessor = _historical_predecessor(day, old_commit, expected)
                     origin_commit = historical_prior['git_commit']
             original_bytes = subprocess.check_output(['git', '-C', str(previous), 'show', origin_commit + ':' + relative])
+            original_basis='original_whole_chain_checklist_generation'
             if hashlib.sha256(original_bytes).hexdigest() != expected:
-                raise ValueError('intraday_original_checklist_git_generation_missing')
+                # Native postclose writes the checklist after the release was
+                # committed. Its strict-bound bytes need not be a Git blob.
+                preserved=DATA_DIR/'runtime/policy_bootstrap/historical_checklists'/(expected+'.md')
+                if not preserved.exists() or _sha(preserved)!=expected:
+                    raise ValueError('intraday_original_checklist_git_generation_missing')
+                original_bytes=preserved.read_bytes()
+                original_basis='strict_bound_postclose_generated_checklist'
             snapshot = _paths(day, commit)[0].parent / (commit + '.historical-checklist.md')
             snapshot.parent.mkdir(parents=True, exist_ok=True)
             if snapshot.exists():
@@ -195,7 +227,7 @@ def prepare(day, *, old_pid, previous_root, confirm, now=None, reseal_postclose_
                 with snapshot.open('xb') as out:
                     out.write(original_bytes); out.flush(); os.fsync(out.fileno())
             historical = dict(path=str(snapshot), sha256=expected, git_commit=origin_commit,
-                              git_path=relative, basis='original_whole_chain_checklist_generation')
+                              git_path=relative, basis=original_basis)
             if predecessor:
                 historical['predecessor'] = predecessor
             frozen.append(snapshot)

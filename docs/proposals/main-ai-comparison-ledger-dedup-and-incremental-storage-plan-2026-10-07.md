@@ -2,11 +2,11 @@
 
 ## 1. 목표와 실행 경계
 
-최초 요청은 원장 개선계획 수립과 세 정책 계획의 원장 요건 보완이었다. 이후 사용자가 완료된 검증연구의 미사용 복제본 삭제, 이 계획의 구현·반복 리뷰·보완 및 장후작업용 배포를 승인했다. 현재 실행 범위는 L0~L6이며, 실제 provider 비교 호출과 L7 장후 재개는 별도 지시 전까지 보류한다.
+최초 요청은 원장 개선계획 수립과 세 정책 계획의 원장 요건 보완이었다. 이후 사용자가 완료된 검증연구의 미사용 복제본 삭제, 이 계획의 구현·반복 리뷰·보완 및 장후작업용 배포를 승인했다. L0~L6 구현 뒤 별도 사용자 지시로 L7 장후 재개도 승인됐다. 10/8 07:26 장후 최종화·정확 일자 준비가 완료됐으며, 이하 과거 중단/무제한 문구는 당시의 이력이다. 이번 후속 보완은 호출 한도에 맞춘 sampled 비교 원장 요구이며 기존 기동 준비를 변경하지 않는다.
 
-목표는 **같은 입력·요청·실제 응답을 한 번 저장하고, 각 정책·버전·평가일은 그 자료를 참조하는 것**이다. 최초 누적 이관 이후 정기 장후는 신규·변경 자료만 준비한다. 누적 승률과 eligible 전수 비교는 유지한다. 운영·오프라인 호출 quota `None`도 유지하며 저장 효율을 위해 표본이나 정책을 임의로 자르지 않는다.
+목표는 **같은 입력·요청·실제 응답을 한 번 저장하고, 각 정책·버전·평가일은 그 자료를 참조하는 것**이다. 최초 누적 이관 이후 정기 장후는 신규·변경 자료만 준비한다. 누적 승률과 eligible 전수 census는 유지한다. 후속 지시로 **장후 보조비교는 원천일당 누적 100 attempt**이며, 운영 호출 계약은 별개다. 전체 기회 census와 사전 선정한 비교 표본을 분리하고, 표본 선택을 누락이나 전수 완료로 위장하지 않는다. [독립 탐지 계획 §5.3](main-operating-policy-independent-detection-and-contribution-evaluation-implementation-plan-2026-10-07.md)이 튜닝 목적·표본·성과 판단을 소유한다.
 
-현재 [사용자 중단](../audits/postclose-operator-stop-2026-10-07.md)은 계속 유효하다. EOD 제외 장후 3개 프로세스 그룹, cron 5개와 기계 최종 갱신 timer가 보류돼 있다. 구현이 끝나더라도 사용자의 별도 장후 재개 지시 전에는 이 보류를 해제하지 않는다. 실행 owner는 [오늘 체크리스트](../checklists/2026-10-07-stage2-todo-checklist.md)의 `DirectFamilySourceRepairMainMechanisticEntry` 하나다.
+[10/7 사용자 중단 기록](../audits/postclose-operator-stop-2026-10-07.md)은 역사적 증빙이며 이후 재개 승인·10/8 완료 상태를 대체하지 않는다. 실행 owner는 [10/8 체크리스트](../checklists/2026-10-08-stage2-todo-checklist.md)의 `DirectFamilySourceRepairMainMechanisticEntry` 하나다. 후속 설계만으로 새로운 provider 실행·배포·정책 교체를 완료했다고 표시하지 않는다.
 
 ## 2. 실측 결함과 개선 범위
 
@@ -33,7 +33,7 @@
 - 일별/run별 source·입력·응답 export는 별도 보존되며 일부는 hardlink다. 파일 크기 합산을 실제 점유량·회수 가능량으로 사용하면 안 된다.
 - **같은 4개 요청이 v3에서는 reserved, v4에서는 planned**다. 현재 자료만으로 전송 여부는 확정할 수 없다. 신규 저장소에서는 대사 전 이를 미호출로 되돌리지 않는다.
 
-호출한도 해제는 실제 호출 가능한 수에 영향을 준다. 위 미호출 본문의 선행 저장·버전별 복제는 별도의 구현 문제다. 호출한도를 다시 설정하는 것을 해결책으로 사용하지 않는다.
+호출한도 해제는 실제 호출 가능한 수에 영향을 준다. 위 미호출 본문의 선행 저장·버전별 복제는 별도의 구현 문제다. 호출 제한만으로 저장 복제 문제를 해결했다고 보지 않는다. 후속 100 attempt 한도와 중복 제거·증분 저장은 함께 충족한다.
 
 ## 3. 저장 소유와 식별자
 
@@ -66,7 +66,7 @@ legacy canonical ID에는 stream namespace가 digest 밖의 source receipt에 �
 
 phase, 복합 `signals[]`, input 의미, prompt/schema/모델 설정이 달라지면 새 요청이다. validator 변경은 기존 각 정책 계획의 엄격한 호환/재검증 규약을 따른다. 저장 공간을 줄이기 위해 구 PASS를 새 계약의 PASS로 재해석하지 않는다. 내용이 같은 객체의 물리적 공유와 응답 재사용 허용은 별개다.
 
-실시간 provider/주문 원장의 영속 중복 방지는 별도 소유다. offline 비교의 5 arm 예약을 live 1회 AI/1 intent 예약으로 사용하지 않는다. `confirmation_replay`와 `delivered_live`는 관측 종류와 원천 계보를 보존하고, 정확한 실제 요청 대응이 입증된 응답만 기존 정책의 허용 범위에서 참조한다. offline 캐시가 live 주문 권한을 만들지 않는다.
+실시간 provider/주문 원장의 영속 중복 방지는 별도 소유다. offline 비교의 arm/pair 예약을 live 1회 AI/1 intent 예약으로 사용하지 않는다. `confirmation_replay`와 `delivered_live`는 관측 종류와 원천 계보를 보존하고, 정확한 실제 요청 대응이 입증된 응답만 기존 정책의 허용 범위에서 참조한다. offline 캐시가 live 주문 권한을 만들지 않는다.
 
 ### 3.3 본문 저장과 조회 비용
 
@@ -89,9 +89,9 @@ v3/v4 source DB와 응답 export·journal을 읽어 공통 저장소를 구성�
 ### 4.2 매일 처리할 차집합
 
 1. source manifest와 기존 partition fingerprint를 대조한다. 새 날짜·새 native 접두, 뒤늦은 분봉/원천 정정, 실제 영향을 받는 feature/정의 변경의 partition만 계산한다.
-2. 유효 확인점 전수와 W/F/U·입력 결손 census를 먼저 생성한다. 예상 비교 집합은 큰 요청 본문 없이 opportunity/membership partition×고정 arm 참조로 표현한다.
+2. 유효 확인점 전수와 W/F/U·입력 결손 census를 먼저 생성한다. 후속 sampled 비교는 전체 opportunity partition과 선정 표본×현행/후보 pair membership을 분리하며 큰 요청 본문을 전수 생성하지 않는다. 과거 고정 arm 원장은 원 계약으로 보존한다.
 3. 신규·변경 요청 참조만 upsert하고 공통 완료 응답·불확실 예약을 조회한다. 같은 입력·같은 계약이면 기존 요청/응답을 재사용한다.
-4. 미호출 차집합만 작은 batch로 읽어 요청을 조립하고 실제 provider에 전달한다. batch 크기는 메모리·전송 동시성 관리값이며 eligible 표본 상한이 아니다.
+4. 이번 사전 표본의 미호출 차집합만 작은 batch로 읽어 요청을 조립하고 100 attempt 예산 내에서 provider에 전달한다. batch 크기는 메모리·전송 동시성 관리값이며 전체 eligible census를 줄이는 값이 아니다.
 5. 새 결과·라벨 수정분을 누적 집계에 반영한다. 기존 partition 집계 + 신규/대체 partition 집계로 누적 승률을 만들며, 라벨 정정은 이전 기여를 제거한 뒤 새 기여를 한 번 반영한다.
 
 전수 평가란 논리적 대상 전수가 census와 결과에 포함된다는 뜻이다. 매일 누적 전체 tick·입력·prompt를 새 파일로 복제하거나 재호출해야 한다는 뜻이 아니다. 정의/입력 의미가 바뀌어 과거 전체가 영향을 받는 경우에는 해당 범위의 재생이 필요할 수 있으며 이를 단순 날짜 증분이라고 축소하지 않는다.
@@ -104,11 +104,32 @@ partition은 파일 경계와 같다고 가정하지 않는다. manifest에는 �
 
 원장 생성 전 expected membership을 봉인하고 실제 queue/응답과 대사한다. 모든 point×arm의 full JSON이 있어야 expected로 인정하는 규칙은 제거한다. manifest에 없는 행, 사라진 참조, hash 충돌은 별도 결손으로 검출한다.
 
-각 owner/arm의 보존 회계는 `expected = planned + reserved_uncertain + responded + failed + missing`으로 둔다. `missing`은 완료 상태가 아닌 결함이다. `responded` 내부에 유효/무효 응답을 구분하며, 비교 가능한 수는 각 정책의 원 응답·validator·W/F/U 계약으로 계산한다. `completed`라는 구 필드만으로 비교 완료를 추정하지 않는다. 모든 arm의 필요한 실제 응답이 채워지지 않으면 해당 scope의 전수 winner를 발행하지 않는다.
+각 owner/arm의 보존 회계는 `expected = planned + reserved_uncertain + responded + failed + missing`으로 둔다. `missing`은 완료 상태가 아닌 결함이다. `responded` 내부에 유효/무효 응답을 구분하며, 비교 가능한 수는 각 정책의 원 응답·validator·W/F/U 계약으로 계산한다. `completed`라는 구 필드만으로 비교 완료를 추정하지 않는다. 과거 전수 비교는 그 기대 arm 계약을 보존한다. 후속 sampled 비교는 사전 봉인한 현행-후보 쌍만 대사하며, 무관한 제3 arm이나 미선정 전체 기회의 미호출이 해당 비교를 무효화하지 않는다. sampled 결과를 전수 winner로 발행하지 않는다.
 
 이 식은 **봉인 시각의 owner별 비교 상태**이며 attempt 원장의 행 수 합이 아니다. 하나의 request에 응답과 별도 불확실 attempt가 함께 있어도 owner는 한 상태로 세고 미해결 attempt 수는 별도 보존한다. 미전송/실패/재시도 가능 여부는 전송 증거와 원 retry 계약으로 구분한다. provider 응답 ID 부재나 오류 문자열만으로 미전송을 입증하지 않는다. 응답 원본·연결은 있으나 schema 부적격이면 responded의 invalid이며 원천/라벨 결손과 섞지 않는다.
 
 고유 request 수, 비교 owner/arm 수, 실제 attempt 수, 고유 provider response 수는 각각 보고한다. 같은 응답을 참조하는 여러 owner를 여러 AI 호출로 집계하지 않는다. 원장의 동일 요청 통합으로 owner/arm W/F/PASS 분모가 달라지지 않아야 한다.
+
+### 4.3.1 호출 한도와 비교 표본 저장 — 후속 구현 요건
+
+- `eligible_universe`는 기계 기회 전체의 작은 partition/census로 유지하고, `sample_manifest`는 source/기계 목록/관측/현행·후보 binding·추출 seed/규칙/확률·선정 사유·순번을 봉인한다. label은 평가용 별도 binding이며 추출 순서나 provider 입력에 넣지 않는다. 오판 개발 사례와 대표 평가 표본은 용도를 분리한다.
+- 전수 eligible×기계 추가 조합×5 arm 요청을 매일 생성하지 않는다. 새 `expected_pairs`의 현행/후보 exact request만 준비한다. 비선정은 `not_sampled_budget`이다. 기존의 전수 미완료/uncertain 원장을 삭제하거나 상태를 바꾸지 않는다. 동일 request는 옛 membership과 새 sampled membership에서 같은 객체를 참조한다.
+- 필요한 입력 접두/설정은 봉인해 두고, selected pair가 원 bytes로 조립되는지 검증한다. 전체 원천이 있어야 캐시를 재사용할 수 있다는 가정을 추가하지 않되, exact materialization/provenance는 반드시 검증한다. 이미 완료한 적격 응답은 추가 호출 0회다.
+- scheduler는 지정된 표본 순서에서 두 응답의 미호출 차집합을 예약한다. 100 provider attempt 누적, failed/uncertain 차감, crash 후 fence와 불확실 전송 대사는 그대로다. 한쪽 응답만 있는 쌍은 미완료이며 재실행은 남은 합법적 차집합만 처리한다. 한도가 한 번 남았다고 2회가 필요한 새 쌍을 완료할 수 있는 것처럼 표시하지 않는다.
+- 같은 표본에서 유효하게 완료된 공통 쌍의 metric partition을 누적하고 뒤늦은 응답은 새 revision으로 봉인한다. 요청 전체 완료와 공통 쌍 평가 가능을 구분하고 식별 가능한 결손 쌍만 양쪽 분모에서 제외한다. candidate/현행/label/관측 계약별로 분리하며, source/label 정정은 해당 partition의 기여를 교체한다. 결과가 마음에 드는 응답만 고르거나 미완료 배치의 완성 부분을 전수 우월성처럼 표시하지 않는다. 완료율·제외 사유와 비응답 편향 한계를 공개하며 미완료 backlog를 일괄적인 튜닝 중단 조건으로 사용하지 않는다.
+- 같은 semantic input 의존성의 준비 단계는 새 오판 보고 코드/발행시각만으로 23만 입력을 재투영하지 않는다. source/feature/definition/prompt/serializer 변경 영향과 무관한 집계 코드 변경을 구분하는 cache 계약을 검증한다. 전체 재검증이 불가피하면 소요시간/읽기 bytes/신규 객체 bytes를 보고한다.
+
+### 4.3.2 후보 등록·장중 보조 적용 기록과의 연결 — 10/8 설계
+
+[독립 탐지 계획 §5.5~§5.7](main-operating-policy-independent-detection-and-contribution-evaluation-implementation-plan-2026-10-07.md)은 새 prompt 연구·등록, 예산 내 평가, 당일 보조 binding 교체를 소유한다. 이 절은 그 **미구현 후속 요건**이며 현재 원장에 장중 적용 권한이 있다는 뜻이 아니다.
+
+- 후보 원문/설정/입력·validator 정의를 내용 hash로 한 번 저장하고, registry ID/version·부모·scope·가설/개발 사례는 작은 참조로 연결한다. 장후 evaluator가 자유 문구를 생성해 활성 registry를 덮어쓰는 경로는 없다.
+- 개발 사례와 사전 평가 표본의 membership을 분리한다. prompt가 달라지면 새 exact request지만 원천과 원장 DB는 공유한다. 결과/label이 바뀌어도 원 prompt·응답 bytes는 그대로다. 비교에 사용한 실제 response를 고정하고 유리한 반복 응답으로 교체하지 않는다.
+- 실행 시 필요한 불변 prompt/schema/binding 객체는 검증된 작은 runtime artifact로 발행한다. live loader가 대형 연구 DB를 조회하거나 offline 예약/worker 상태에 매달리게 하지 않는다. runtime cache invalidation에는 새 보조 pointer와 정확한 객체 의존성을 포함한다.
+- 장중 발행 receipt는 기존 기계 기본 bundle·현재 보조 부모·신규 registry·평가 snapshot·scope·유효 세션일을 참조한다. 평가 완료를 PID 소비로 표시하지 않으며, live outbox의 canonical 기회 예약은 보조 버전이 달라도 유지한다. offline 완료가 live 요청/주문 권한을 대신하지 않는다.
+- 활성·전환 중 claim·rollback·다음 장후가 참조하는 prompt/응답/평가 객체는 GC에서 보호한다. 다음 날 기본 bundle에 반영되어도 역사적 비교 원본을 재작성하지 않는다. 기존 원장 전체 복사나 날짜별 동일 prompt 복제로 증거를 보존하지 않는다.
+- 같은 원천일의 수동 보조 연구·정기 장후·기계 추가안 AI 비교는 공통 100 attempt를 공유한다. 기존 날짜/연구를 새 이름으로 복제해 예산을 리셋하지 않는다. 해당 원천일의 기존 초과 사용량도 차감 상태로 유지한다. 운영 실제 판정 호출의 별도 계약을 연구 호출 우회 경로로 사용하지 않는다.
+- 검증: 고유 request/owner/pair/attempt/response 분리, 100회 상한과 resume, 같은 입력 0신규 객체/호출, selected pair materialization, 비선정과 결손 구분, 결과 변경에도 추출 key 불변, 현행 응답 cache 재사용, 일반 보고 변경에 전체 재준비 없음, 과거 원장 불변을 확인한다.
 
 ### 4.4 비교 결과 봉인과 실제 응답 선택
 
@@ -136,7 +157,7 @@ writer는 실제 전송 직전과 응답 commit 때 store generation/fencing tok
 
 응답은 원 bytes/provenance가 durable하게 저장된 뒤 해당 attempt의 수신을 commit한다. 저장 직전 crash, journal fsync 후 DB commit 전 crash, 응답 후 owner 연결 전 crash를 구분해 복구한다. 동일 요청 재개에 새 provider 호출이 필요한지 여부를 자료로 판단한다.
 
-운영·오프라인 호출 횟수 quota는 계속 `None`이다. 기존 외부 rate limit·bounded in-flight·timeout·stage deadline과 사용자 중단은 유지한다. 정상 중단에서는 새 예약을 먼저 막고 전송 중 시도를 drain한다. 강제 중단의 불확실 시도를 보존한다. 저장 부족은 checkpoint와 `resource_deferred` 실행 사유로 기록하며, planned 대상을 없애거나 source_gap/유효 무표본/비교 완료로 바꾸지 않는다.
+후속 지시에 따라 **장후 보조비교는 원천일당 누적 100 provider attempt**로 제한한다. 이 튜닝의 수동 재실행/연구도 같은 예산을 공유하고 failed/uncertain을 차감한다. 운영 실제 판정 호출은 별도 기존 계약이며 이 저장 개선으로 새 한도를 설정하지 않는다. 기존 외부 rate limit·bounded in-flight·timeout·stage deadline과 사용자 중단은 유지한다. 정상 중단에서는 새 예약을 먼저 막고 전송 중 시도를 drain한다. 강제 중단의 불확실 시도를 보존한다. 저장 부족은 checkpoint와 `resource_deferred` 실행 사유로 기록하며, planned 대상을 없애거나 source_gap/유효 무표본/비교 완료로 바꾸지 않는다.
 
 ## 6. 기존 원장 이관·cutover·회수
 
@@ -219,7 +240,8 @@ storage 개선과 독립 탐지의 설계/소규모 구현은 역할 경계를 �
 | 경계 source 정정·lookback/label 변경 | 의존하는 인접 partition만 무효화, 전체 재생 기준의 신호/라벨/누적 분모와 동일 |
 | 봉인 후 늦은 응답·다중 응답·validator 재검증 | 기존 비교/정책 hash 불변, 새 revision만 생성, outcome을 본 뒤 유리한 응답 선택 0 |
 | 자정 이후 장후 재개·timer 슬롯 경과·old worker 늦은 응답 | 원천일 보존, 수동/예약 중 한 owner, 전송 상태 역행·중복 실행 0 |
-| quota=None·stage deadline·사용자 중단 | 전체 대상 보존, 필요한 실제 호출만 실행; 중단을 완료로 표시하지 않음 |
+| 원천일당 누적 100 attempt·stage deadline·사용자 중단 | 전체 census/표본 구분, failed/uncertain 차감·재실행 reset 0; 중단을 완료로 표시하지 않음 |
+| 새 prompt registry·당일 보조 교체·다음 날 기본 정책 반영 | 동일 원장/불변 객체 참조, live dedup 유지, active/rollback 증거 GC 보호, offline 완료를 PID/주문 권한으로 전용하지 않음 |
 
 용량 보고는 metadata DB/index, 고유 input/prompt/schema, 실제 응답/journal, membership, compatibility export, old-store 보존, WAL/temp를 나눠 **고유 inode 할당량과 peak/steady-state**를 제시한다. 첫 이관의 설계 목표는 기존 두 원장 합계 약 10.95GiB 대비 최종 활성 원장 계층 80% 이상 절감이다. 이는 실측 전 보장이나 경제성 gate가 아니다. 미달하면 payload/index/export 중복 원인을 보완하며 표본·응답·증빙을 버려 목표를 맞추지 않는다.
 
@@ -270,4 +292,4 @@ storage 개선과 독립 탐지의 설계/소규모 구현은 역할 경계를 �
 
 마지막 호출 경로 보완: 공통 CLI와 직접 `auxiliary_report()` API를 모두 storage adapter로 전달하고, `main_auxiliary_policy`의 코드 fingerprint에 adapter/store 파일을 포함한다. 저장 코드 변경을 구 장후 단계 완료로 재사용하지 않도록 한다.
 
-후속 복수정책/8개 연결 재점검은 [통합 감사](../audits/main-multi-policy-shared-ledger-integration-review-2026-10-07.md)가 소유한다. 공통 CLI의 `--mode prepare-inputs`는 예약/호출 없이 참조만 준비한다. compact 입력 참조 v2에 arm별 request ID를 보존하고 호출/집계 전에 owner·기회·arm·request·label 전부를 원장과 대사한다. v1 참조는 덮어쓰지 않고 재준비하며 같은 고유 요청/실제 응답/예약을 재사용한다. 비교 snapshot과 census receipt는 같은 writer lock에서 봉인한다. 미완료 scope는 과거 보조 문구 존재 여부와 무관하게 기계·보조 쌍 전체를 carry한다. `--evaluate-only`는 보조 집계 전용이고 다른 mode 조합은 명시 거부한다. 장후 보류/무제한 quota/불확실 예약 보호는 유지한다.
+후속 복수정책/8개 연결 재점검은 [통합 감사](../audits/main-multi-policy-shared-ledger-integration-review-2026-10-07.md)가 소유한다. 공통 CLI의 `--mode prepare-inputs`는 예약/호출 없이 참조만 준비한다. compact 입력 참조 v2에 arm별 request ID를 보존하고 호출/집계 전에 owner·기회·arm·request·label 전부를 원장과 대사한다. v1 참조는 덮어쓰지 않고 재준비하며 같은 고유 요청/실제 응답/예약을 재사용한다. 비교 snapshot과 census receipt는 같은 writer lock에서 봉인한다. 당시 전수 비교는 미완료 scope의 기계·보조 쌍을 carry했다. 최초 지정 목록은 후속 초기 등록 계약을, 이후 sampled 보조 개선은 §4.3.1을 따른다. `--evaluate-only`는 보조 집계 전용이고 다른 mode 조합은 명시 거부한다. 당시 장후 보류/무제한 quota는 역사적 상태이며 현행 보조비교는 §5의 100 attempt 계약이다. 불확실 예약 보호는 계속 유지한다.

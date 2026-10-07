@@ -241,6 +241,11 @@ def machine_report(data_root,day,publication,parent,*,source=None,publish_output
 
 def prepare_inputs(data_root,day,machine,parent=None):
     from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    from src.engine.scalping import reversal_auxiliary_tuning as T
+    if T.config(data_root) is not None:
+        parent=parent or N.load_effective(data_root=Path(data_root),target_date=machine['publication_date'])
+        if parent['continuous_reversal']['schema']==V5.SCHEMA:
+            return T.prepare(data_root,day,machine,parent)
     if machine['artifact_content_sha256']!=P.seal(machine)['artifact_content_sha256']:
         raise ValueError('operating_machine_changed')
     parent=parent or N._read(N.root(Path(data_root))/'generations'/(machine['parent_bundle_sha256']+'.json'))
@@ -309,6 +314,9 @@ def prepare_inputs(data_root,day,machine,parent=None):
 
 
 def calls(data_root,day,*,stop_epoch=None,workers=4,transport=None):
+    from src.engine.scalping import reversal_auxiliary_tuning as T
+    if T.config(data_root) is not None:
+        return T.calls(data_root,day,stop_epoch=stop_epoch,transport=transport)
     return L.calls(sys.modules[__name__],data_root,day,stop_epoch=stop_epoch,workers=workers,transport=transport)
 
 
@@ -438,6 +446,9 @@ def initial_protocol_evidence(store, snapshot, required):
 
 def auxiliary_report(data_root,day,publication,parent,*,publish_policy=True):
     from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    from src.engine.scalping import reversal_auxiliary_tuning as T
+    if T.config(data_root) is not None and parent['continuous_reversal']['schema']==V5.SCHEMA:
+        return T.auxiliary_report(data_root,day,publication,parent,publish_policy=publish_policy)
     out=directory(data_root,day);ledger=out/'shared-ledger'
     machine=json.loads((out/'machine-comparison.json').read_text());gen=machine['artifact_content_sha256']
     initial=initial_registration(data_root,day,publication,parent,machine)

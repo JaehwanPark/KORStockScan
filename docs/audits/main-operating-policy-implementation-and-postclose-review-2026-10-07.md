@@ -114,3 +114,34 @@ v9(`2121583e`) 배포본 68 PASS 및 63 owner 검증 후 보조 consumer를 인�
 - 실제 초기 manifest 128 scope 중 3개 정책 4 scope, 2개 10 scope, 단독 114 scope다. 삼성 REGULAR/SOR는 기존+SA+SB, HPSP REGULAR/SOR 각 가격대는 기존+HA+HB다. 등록 가능 개수 제한은 없으나 추가 8개 정의의 종목/시장/route 범위는 유지한다. 모든 시장에 8개를 무차별 적용했다는 의미가 아니다.
 - 실제 필터를 대체하지 않은 회귀에서 HPSP HA/HB 동시 등록, 하락/반전 없는 상승 시계열의 HB 단독 성립을 확인했다. 등록 순서를 뒤집어도 동일하다. 기존 FIRST 무효화 후 HB 유지, 공통 TTL, union 근거와 outbox 중복방지도 검증한다.
 - 초기 적용/공유 원장/PREOPEN/summary 178 PASS, typed path 39 PASS(합계 217). 초기 적용은 승률과 전체 보조비교 완료에 의존하지 않으며, 기존 REGULAR arm의 복합 입력 형식 호환성과 정확 승인/부모/정의를 검증한다. 배포 후 실제 발행/최종화/PREOPEN을 확인하기 전까지 봇 기동 hold를 유지한다.
+
+### 10/8 보조 관문 목적·100회 예산에 맞춘 후속 튜닝 설계 리뷰
+
+사용자는 보조판정의 목적이 기계 오판을 줄이는 관문이며 호환성 확인만으로 튜닝을 마칠 수 없다고 지적했다. 현 배포 코드 `comparison_metrics`는 한 확인점의 5개 arm이 모두 유효해야 집계하고, 후속 arm 선택은 scope 전체 gap이 없어야 진행한다. 100 attempt 제한과 이 전수 gate를 함께 두면 지속적인 튜닝 미완료가 생긴다. 요청 큐는 추가 scope 우선+request ID 순이며 대표 표본 추출 계약도 아니다.
+
+오늘 준비된 binding을 기존 5-arm 완료 공통 표본에 대조했다. 삼성 REGULAR/SOR 27건은 W27 중 PASS2·비PASS25, HPSP REGULAR/SOR 2만~10만원 263건은 W263 중 PASS68·비PASS195다. 두 표본에는 F가 없어 실패 차단 능력을 입증할 수 없다. 주성 REGULAR/SOR 10만원 이상은 W87/F25 중 PASS W9/F5, 비PASS W78/F20으로 기계 87/112(77.7%) 대비 보조 PASS 9/14(64.3%)다. 이는 확인점 재생 표본의 진단이며 실제 주문·전체 모집단 승률·정책 우월성 확정이 아니다. 원 응답의 VETO/CAUTION은 해당 시점 차단/대기로 해석하며 기술 오류/결손을 정상 실패 차단으로 세지 않는다.
+
+독립 탐지 계획 §5.3과 공통 원장 계획 §4.3.1을 보완했다. 기존 응답으로 오판을 분석하고 현행 기계 목록을 고정한 현행-후보 한 쌍에 예산을 집중한다. 전체 census/사전 표본/호출 큐를 분리하고 실제 완료 공통 쌍의 PASS 승률·승리 손실·실패 차단과 추출/완료 편향을 함께 공개한다. 고정 5-arm 및 전체 backlog 완료는 새 sampled 비교의 일괄 gate로 사용하지 않는다. 새 최소 표본/일수/손익비/고정 승리 보존율을 추가하지 않는다.
+
+상태: **설계 보완이며 sampled scheduler/reducer/consumer 코드 구현은 아직 아님**. 이번 검토에서 provider 호출·보고서 대규모 재생성·정책 발행·배포·재기동은 하지 않았다. 이미 봉인한 10/8 기동 준비와 checklist bytes를 유지한다. 상세 수치: `data/report/operating-policy-implementation/2026-10-07/auxiliary-gate-budget-design-review-20261008.json`.
+
+### 10/8 보조튜닝 계획 재리뷰·장중 적용 절차 설계
+
+사용자는 이번 범위를 **계획 리뷰·보완과 장중 적용 절차 설계**로 확인했다. 검토 기준은 작업본 HEAD `e6ec7950c663fa1d4a1d431510274e48dc4b7da3`의 코드다. 실제 연구 호출·코드 구현·정책 교체는 이번 범위에 포함하지 않았다.
+
+| 발견 사항 | 직접 근거 | 계획 보완 |
+| --- | --- | --- |
+| 장후가 새 prompt를 생성하는지 불명확 | `continuous_reversal_postclose.main` → operating prepare/calls/report, `reversal_auxiliary_contract.ARMS`, `reversal_auxiliary_phases.ARM_SUFFIXES`, `reversal_operating_auxiliary.production_request` | 고정 5개 문구의 실제 판정·비교임을 명시. 별도 오류 연구 → 불변 후보 등록 → 제한 비교 → 적용으로 소유 분리 |
+| 현재 v5를 오늘 날짜로 고치면 장중 적용할 수 있다는 오해 위험 | `continuous_reversal_policy_v5.validate_family/stage`의 next_session/date 조건, `intraday_release_handoff.activate_main_v2`의 명시적 v5 거부 | 지원 reader 선행 구현, 검증된 기본 기계 bundle에 보조 전용 적용 기록을 결속하는 당일 경로 설계 |
+| 보조만 바뀌어도 기계 관측 상태 소실 | v5 scope hash의 auxiliary 결속과 `reversal_operating_runtime.configure`의 상태 제거 | detector/decision identity 분리, 변하지 않은 rolling/root 유지, 구 ready/claim의 원 binding·TTL 전환 계약 |
+| pointer 교체만으로 실제 소비 완료 처리 가능 | `mechanistic_entry_runtime_policy.load_effective`와 의존성 cache, 실제 AI/제출 validator는 현재 bundle을 소비 | loader부터 제출까지 동일 실행 view, exact PID 소비 receipt와 최초 자연 판정 증거를 분리 |
+| 최초 지원 코드 배포 뒤 옛 기본 정책의 code pin 실패 | v5 `validate_sources`의 `contract_file_sha256` 대조와 원 release validator 경로 | 원 bundle 원본 검증 + 정확 구 bundle→새 reader 대응 receipt·기계 동등성·bootstrap/PID 인계; pin 덮어쓰기 금지 |
+| 다음 장후가 장중 새 보조를 덮거나 과거 checklist seal을 무효화할 수 있음 | next-session 발행과 기존 strict/checklist 결속 | 현재 보조 부모 CAS, 시간대별 실제 버전 census, 다음 날짜 bundle에 흡수; 별도 보조 기록·감시와 기본 봉인 분리 |
+| 원장 §5/검증표/이관 이력에 무제한 quota 문구 잔존 | 원장 계획과 현재 100 attempt 계약 불일치 | 현행 한도·실패/uncertain·재실행 누적 차감 명시, 역사적 무제한 상태와 구분 |
+| 새 paired 튜닝보다 옛 전체 추가안 큐가 계속 우선할 가능성 | 기존 계획 §5.4의 ADD 우선 문구 | 후속 paired 표본 우선, 과거 expected/uncertain 보존, 공유 예산 우회 금지 |
+
+독립 탐지 계획 §5.5~§5.7에 registry·장중 교체·A0~A5 실행/종료 기준과 반례를 추가했다. 원장 계획 §4.3.2에는 내용 hash 중복제거, 작은 runtime artifact, 활성/전환/rollback 증거 GC 보호를 연결했다. 초기 지정 기계 목록은 그대로이며 승률 이외 손익비·최소 표본/일수 등의 새 채택 gate를 추가하지 않았다. 보조 교체의 성능 평가는 실제 공통 쌍, 실행 준비는 계약/리뷰 검증으로 각각 판정한다.
+
+이 설계의 장중 적용은 **아직 미구현**이다. 현재 코드의 next-session 제한을 완화했다거나 새 보조가 PID에 적용됐다고 보고하지 않는다. 10/7 원천 호출 잔여량은 0이므로 기존 응답의 분석/재사용과 신규 실제 응답 필요를 구분한다. 이번 리뷰는 원천일/연구 ID를 바꿔 예산을 리셋하거나 기존 기동 준비를 다시 생성하지 않는다.
+
+문서 재리뷰 검증: 두 계획의 로컬 링크 19개 존재, print-only parser 21개 작업 중 현행 owner 1개, `git diff --check` 통과. 체크리스트 SHA256 `48e77497685fc5f132cc435bf85d79dfad2814b4923943b0cc89d8e2e84ef828`는 이번 검토 전후 동일하다. 범위 내 계획의 확인된 모순은 수정했으며 소스·런타임 테스트/실호출/배포는 문서 전용 범위에 따라 실행하지 않았다. 후속 구현의 실제 정확성·장중 소비는 A2~A5에서 별도 검증해야 한다.

@@ -9554,6 +9554,12 @@ class GPTSniperEngine:
                     reversal_snapshot_as_of = time.time()
                     machine_assessment, reversal_input, reversal_prompt, reversal_schema = assess(
                         reversal_family, snapshot, symbol=symbol, session=machine_exact['session_bucket'])
+                    if reversal_family.get('schema') == 'continuous_reversal_policy_v5':
+                        from src.engine.scalping.reversal_auxiliary_intraday import apply_request
+                        from src.utils.constants import DATA_DIR
+                        machine_assessment, reversal_input, reversal_prompt, reversal_schema = apply_request(
+                            DATA_DIR, entry_setup_live_policy, snapshot,
+                            (machine_assessment, reversal_input, reversal_prompt, reversal_schema))
                     # Source telemetry must not change the pinned research
                     # kernel, selected rule, feature values or auxiliary input.
                     from src.engine.scalping.reversal_source_diagnostics import project
@@ -10457,6 +10463,13 @@ class GPTSniperEngine:
                 active=load_effective(data_root=DATA_DIR,target_date=datetime.now(__import__('zoneinfo').ZoneInfo('Asia/Seoul')).date().isoformat())
                 if assessment.get('policy_version')=='continuous_reversal_policy_v5':
                     from src.engine.scalping.continuous_reversal_policy_v5 import validate_active_claim
+                    from src.engine.scalping.reversal_auxiliary_intraday import validate_decision
+                    validate_decision(DATA_DIR, entry_setup_live_policy, active, now=time.time())
+                    if assessment.get('auxiliary_registry_sha256'):
+                        from src.engine.scalping.reversal_auxiliary_registry import load as load_auxiliary_registry
+                        registered=load_auxiliary_registry(DATA_DIR,assessment['auxiliary_registry_sha256'])
+                        if target_model != registered['model']:
+                            raise ValueError('auxiliary_registered_model_mismatch')
                     remaining=validate_active_claim(entry_setup_live_policy,active,now=time.time())
                     if set(remaining)!=set(assessment['matched_policy_refs']):
                         raise ValueError('reversal_request_signal_set_changed_before_send')
