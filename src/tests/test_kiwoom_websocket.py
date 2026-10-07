@@ -515,7 +515,7 @@ def test_raw_tick_snapshot_does_not_traverse_accumulated_history():
 
 @pytest.mark.parametrize("realtime_type", ["0B", "0D"])
 @pytest.mark.parametrize("trusted", [True, False])
-def test_micro_observer_receives_packet_clock_without_replacing_tick_clock(
+def test_micro_observer_preserves_trusted_trade_ingress_clock(
     monkeypatch, realtime_type, trusted
 ):
     now = _epoch_at_090010()
@@ -567,11 +567,16 @@ def test_micro_observer_receives_packet_clock_without_replacing_tick_clock(
         int((now - 2) * 1000) if trusted else None
     )
     tick = snapshot["last_trade_tick" if realtime_type == "0B" else "last_depth_tick"]
-    assert tick["received_at_ms"] == int(now * 1000)
+    assert tick["received_at_ms"] == int((now - 2 if trusted and realtime_type == "0B" else now) * 1000)
     if realtime_type == "0B":
         assert tick["provider_trade_epoch"] == now
         assert tick["provider_trade_time_precision_ms"] == 1000
         assert tick["provider_trade_date_basis"] == "local_receive_calendar_date_not_provider_date"
+        route = snapshot['realtime_type_snapshots_by_route']['KRX|krx_only']['0B']
+        latency = route['market_source_latency']
+        assert latency['packet_to_normalization_ms'] == (2000 if trusted else None)
+        assert latency['provider_to_packet_ms'] == (-2000 if trusted else None)
+        assert route['observed_epoch'] == (now - 2 if trusted else now)
     assert "micro_observer_packet_received_at_ms" not in manager.realtime_data["005930"]
 
 

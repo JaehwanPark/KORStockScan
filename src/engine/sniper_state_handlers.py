@@ -33833,6 +33833,9 @@ def _machine_primary_entry_provenance_fields(source: dict | None) -> dict:
         "market_session_bucket",
     )
     fields = {key: source[key] for key in keys if key in source}
+    for key in ("watch_origin", "watch_admission_id", "watch_generation_id"):
+        if key in source:
+            fields[key] = source[key]
     for key in ('entry_economic_plan_sha256', 'entry_economic_plan_kind',
                 'entry_economic_writer_plan_sha256'):
         if key in source:
@@ -33864,7 +33867,17 @@ def _machine_submit_revision_is_current(stock: dict, receipt: dict) -> bool:
     revision = stock.get("_machine_observation_revision") or {}
     key = revision.get("key") or []
     return (revision.get("digest") == digest and len(key) >= 2
-            and key[1] == receipt.get("evaluation_attempt_id"))
+            and key[1] == receipt.get("evaluation_attempt_id")
+            and (receipt.get("watch_origin") != "MAIN_FIXED_WATCH"
+                 or (len(key) == 7
+                     and key[0] == receipt.get("watch_admission_id")
+                     and key[2] == str(stock.get("code") or "")[:6]
+                     and key[3] == receipt.get("effective_venue")
+                     and key[4] == receipt.get("market_session_bucket")
+                     and key[5] == receipt.get("policy_bundle_hash")
+                     and key[6] == os.getpid()
+                     and stock.get("watch_admission_id") == receipt.get("watch_admission_id")
+                     and stock.get("watch_generation_id") == receipt.get("watch_generation_id"))))
 
 
 REAL_ENTRY_PANIC_GAP_WEIGHT_FAMILY = "real_entry_panic_gap_weight"
@@ -40844,6 +40857,19 @@ def _entry_ai_submit_authority_fields(
             _rule_float("AI_WATCHING_COOLDOWN", 300.0),
         ),
     )
+    # Reuse the downstream probe continuation TTL at the authority owner.
+    # Otherwise the 300-second WATCHING cache repeatedly feeds a three-second
+    # split contract, which never asks for a fresh machine/AI evaluation.
+    from src.engine.scalping.entry_split_order_plan import _probe_runtime_config
+    probe_config = _probe_runtime_config()
+    probe_authority_required = bool(
+        normalize_strategy(strategy) == "SCALPING"
+        and not _is_any_simulated_position(stock, strategy)
+        and probe_config["enabled"]
+        and (stock.get("last_watching_ai_machine_primary_fields") or {}).get("continuous_reversal_applied")
+    )
+    if probe_authority_required:
+        max_prior_age_sec = min(max_prior_age_sec, float(probe_config["timeout_sec"]))
     age_sec = max(0.0, time.time() - confirmed_at) if confirmed_at > 0 else None
     action_guard_active = _rising_missed_ai_action_guard_active()
     rising_missed_scout_contract = bool(
@@ -40911,7 +40937,8 @@ def _entry_ai_submit_authority_fields(
     )
     recognized_action = normalized_action in {"buy", "wait", "drop"}
     action_authority_unavailable = bool(
-        action_contract_enforced and (not fresh_prior or not recognized_action)
+        (action_contract_enforced or probe_authority_required)
+        and (not fresh_prior or not recognized_action)
     )
     fresh_drop_veto = bool(
         normalized_action == "drop"
@@ -41932,6 +41959,8 @@ def _retry_entry_ai_submit_authority_before_block(
         return fields
 
     fields["pre_submit_entry_ai_authority_retry_attempted"] = True
+    # Once a real retry starts, no failure/timeout can borrow the old PASS.
+    bind_submit_attempt_machine_lineage(stock, code, {}, replace_existing=True)
     retry_started_at = time.monotonic()
     _mutate_stock_state(
         stock,
@@ -42100,6 +42129,15 @@ def _retry_entry_ai_submit_authority_before_block(
             if handoff is not None
             else "fresh_pre_submit_rebuild"
         )
+        retry_attempt_id = "submit-retry-" + uuid4().hex
+        retry_ws_data["evaluation_attempt_id"] = retry_attempt_id
+        retry_ws_data.pop("entry_evaluation_attempt_id", None)
+        candle_context = copy.deepcopy(candle_context)
+        prepared_snapshot = candle_context.get("ai_market_snapshot_v1")
+        if isinstance(prepared_snapshot, dict):
+            prepared_snapshot["evaluation_attempt_id"] = retry_attempt_id
+            prepared_snapshot.pop("entry_evaluation_attempt_id", None)
+        fields["pre_submit_entry_ai_authority_retry_evaluation_attempt_id"] = retry_attempt_id
         ai_decision = ai_engine.analyze_target(
             (stock or {}).get("name"),
             retry_ws_data,
@@ -42111,6 +42149,7 @@ def _retry_entry_ai_submit_authority_before_block(
             prompt_profile="watching",
             metadata_extra={
                 **_scanner_promotion_correlation_fields(stock or {}),
+                "evaluation_attempt_id": retry_attempt_id,
                 "record_id": (stock or {}).get("id"),
                 "position_tag": _entry_ai_policy_position_tag(stock),
                 "sim_record_id": (stock or {}).get("sim_record_id"),
@@ -69895,6 +69934,30 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
     entry_execution_sizing_fields = {}
     if strategy == "SCALPING" and not opening_rotation_active:
         from src.engine.scalping.strategy_owner_replay import freeze_entry_operating_context
+        # Funds/quantity preparation can consume the remaining AI lifetime.
+        # Recheck the actual current clock instead of handing the split owner
+        # the age frozen before those reads. A later loop performs the bounded
+        # existing machine/AI retry; no old PASS or quantity is revived here.
+        from src.engine.scalping.entry_split_order_plan import _probe_runtime_config
+        split_probe_config = _probe_runtime_config()
+        bound_receipt = submit_attempt_machine_lineage(stock, code)
+        confirmed_epoch = _safe_float(stock.get("last_watching_ai_confirmed_at"), 0.0)
+        final_ai_age = time.time() - confirmed_epoch if confirmed_epoch > 0 else None
+        if (bound_receipt and not _machine_submit_revision_is_current(stock, bound_receipt)):
+            _log_entry_pipeline(stock, code, "machine_observation_revision_recheck",
+                actual_order_submitted=False, broker_order_forbidden=True)
+            return False
+        if (split_probe_config["enabled"] and requested_qty > 1
+                and (stock.get("last_watching_ai_machine_primary_fields") or {}).get("continuous_reversal_applied")):
+            entry_ai_submit_authority["entry_ai_submit_authority_confirmed_age_sec"] = (
+                f"{final_ai_age:.3f}" if final_ai_age is not None else "-")
+            if final_ai_age is None or not -0.5 <= final_ai_age <= split_probe_config["timeout_sec"]:
+                _log_entry_pipeline(stock, code, "entry_ai_authority_expired_during_submit",
+                    entry_ai_submit_authority_confirmed_age_sec=final_ai_age,
+                    entry_ai_submit_authority_ttl_sec=split_probe_config["timeout_sec"],
+                    next_action="fresh_machine_auxiliary_retry_existing_submit_path",
+                    actual_order_submitted=False, broker_order_forbidden=True)
+                return False
         operating_context = freeze_entry_operating_context(sys.modules[__name__], stock, sizing_context,
             now_ts=time.time(), capacity_receipt=budget_context)
         planned_orders, entry_split_fields = apply_entry_split_order_policy(

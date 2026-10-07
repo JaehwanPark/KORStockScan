@@ -42,12 +42,12 @@
 
 ## 실행 항목
 
-- [ ] `[DirectFamilySourceRepairCompactAuxiliary] compact_auxiliary 직접 family 원천·경제성 계약 수리` (`Due: 2026-10-06`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~21:40`, `Track: RuntimeStability`)
-  - Source: [runtime_approval_summary_2026-10-02.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-10-02.json)
-  - 증거: runtime_summary_sha256=`36668269ccbb3ab8a7c61b106cee3754ee867dc4e03123d89a32a7d9c384eb92`, source_artifact=`/home/ubuntu/KORStockScan/data/report/ai_entry_setup_paired_replay_batch/compact_auxiliary_paired_economic_2026-10-02.json`.
-  - 상태: family=`compact_auxiliary`, task_role=`producer_contract_repair`, comparison_status=`source_gap`, resolution_mode=`producer_repair`, prospective_resolution_mode=`-`, first_blocker=`exact_stop_distance_missing_or_invalid`.
-  - 완료 기준: closure_owner=`compact_auxiliary_paired_replay`, closure_test=`full_cost_stop_owner_plan_portfolio_and_forward_holdout_receipts`. policy_receipt_valid=`True`, source_date=`2026-10-02`의 원천·비용 EV·정책·consumer 날짜와 해시를 다시 대조한다.
-  - 권한 경계: null을 0/no-edge로 바꾸거나 threshold·provider·주문·수량·cap·custody·operator lock·hard safety를 우회하지 않는다.
+- [ ] `[DirectFamilySourceRepairCompactAuxiliary] 연속 반전 보조 입력·실제 AI 누적 승률·정규장 승계의 장후 통합` (`Due: 2026-10-07`, `Slot: POSTCLOSE`, `TimeWindow: 10/6 보완 연구 후~10/7 01:30 정책 확정 및 06:50 최종 인계`, `Track: RuntimeStability`)
+  - Source: [통합 계획 §6](../proposals/continuous-reversal-machine-policy-nextday-plan-2026-10-06.md#6-보조판정-정책-확정과-장후-학습-전환), [보조 보완 연구·코드 검토](../audits/auxiliary-reversal-phase-repair-and-call-quota-review-2026-10-06.md).
+  - 현재 완료: 372개 반전·추가 1,742회 실제 AI, as-of phase/진입가격/인용/schema 보완 및 대상 검증. 미완료: 정기 compact producer/최종 운영 prompt/12셀 dated publisher와 runtime 직접 연결. 기계 ENTER+provider_called trace 모집단은 새 family에서 사용하지 않는다.
+  - 완료 기준: 전수 반전 원천·분리 라벨→같은 기계 부모의 실제 AI raw PASS 누적 승률→12셀 선택·무표본 동일 유형 정규장 payload/hash 승계→단일 writer/loader·새 machine/label dependency·summary 직접 소비. EV·손익비·최소 표본/일수·구 독립 holdout/기존 제출 보존을 새 채택 문턱으로 요구하지 않는다. 문구가 바뀌면 실제 해당 prompt/input/schema hash로 재비교한다.
+  - 역할 경계: 이 ID는 보조 producer/consumer 통합을 소유한다. 최종 release·EOD 제외 장후 전체 재생성·strict/controller/PREOPEN/PID의 통합 종결은 `DirectFamilySourceRepairMainMechanisticEntry`에 결과를 인계하며 별도 전체 실행을 중복 시작하지 않는다. 무제한 호출 승인은 계수/영속 예약/실제 응답 보존을 없애지 않는다. 주문·수량·자본 cap·custody·operator veto·hard safety는 유지한다.
+  - 이전 원천 기록 보존: source 10/2의 `exact_stop_distance_missing_or_invalid`, runtime_summary_sha256=`36668269ccbb3ab8a7c61b106cee3754ee867dc4e03123d89a32a7d9c384eb92`, [원 summary](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-10-02.json), 원 `compact_auxiliary_paired_economic_2026-10-02.json`은 source_gap 감사 이력으로 보존한다. 옛 `full_cost_stop_owner_plan_portfolio_and_forward_holdout_receipts`를 새 반전 family의 채택/인계 조건으로 되살리지 않는다.
 
 - [ ] `[DirectFamilySourceRepairEntryCancelWait] entry_cancel_wait 직접 family 원천·경제성 계약 수리` (`Due: 2026-10-06`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~21:40`, `Track: RuntimeStability`)
   - Source: [runtime_approval_summary_2026-10-02.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-10-02.json)
@@ -70,12 +70,14 @@
   - 완료 기준: closure_owner=`low_price_two_leg_tuning`, closure_test=`profile_leg_durable_denominator_custody_cost_and_dated_consumer`. policy_receipt_valid=`True`, source_date=`2026-10-02`의 원천·비용 EV·정책·consumer 날짜와 해시를 다시 대조한다.
   - 권한 경계: null을 0/no-edge로 바꾸거나 threshold·provider·주문·수량·cap·custody·operator lock·hard safety를 우회하지 않는다.
 
-- [ ] `[DirectFamilySourceRepairMainMechanisticEntry] main_mechanistic_entry 직접 family 원천·경제성 계약 수리` (`Due: 2026-10-06`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~21:40`, `Track: RuntimeStability`)
-  - Source: [runtime_approval_summary_2026-10-02.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-10-02.json)
-  - 증거: runtime_summary_sha256=`36668269ccbb3ab8a7c61b106cee3754ee867dc4e03123d89a32a7d9c384eb92`, source_artifact=`/home/ubuntu/KORStockScan/data/report/ai_decision_action_outcome_calibration/ai_decision_action_outcome_calibration_2026-10-02.json`.
-  - 상태: family=`main_mechanistic_entry`, task_role=`producer_contract_repair`, comparison_status=`source_gap`, resolution_mode=`producer_repair`, prospective_resolution_mode=`-`, first_blocker=`machine_operating_population_unbound`.
-  - 완료 기준: closure_owner=`ai_decision_action_outcome_calibration`, closure_test=`future_exact_changed_decision_owner_replay_and_completed_profit_rate`. policy_receipt_valid=`True`, source_date=`2026-10-02`의 원천·비용 EV·정책·consumer 날짜와 해시를 다시 대조한다.
-  - 권한 경계: null을 0/no-edge로 바꾸거나 threshold·provider·주문·수량·cap·custody·operator lock·hard safety를 우회하지 않는다.
+- [ ] `[DirectFamilySourceRepairMainMechanisticEntry] 연속 반전 기계·보조 12셀 전환·최종 배포·EOD 제외 장후 전체 재생성·10/7 정상기동 준비` (`Due: 2026-10-07`, `Slot: POSTCLOSE`, `TimeWindow: 10/6 22:03~10/7 06:50 및 07:32~08:05 소비 확인`, `Track: RuntimeStability`)
+  - Source: [통합 전환·전체 재생성 계획](../proposals/continuous-reversal-machine-policy-nextday-plan-2026-10-06.md), [보조 보완 실제 호출·운영 quota 코드 검토](../audits/auxiliary-reversal-phase-repair-and-call-quota-review-2026-10-06.md), [전수 가격 반전 연구](../audits/continuous-price-reversal-zero-base-research-2026-10-06.md), [장후 중단 영수증](../../data/report/postclose_operator_stop/2026-10-06/operator-stop-receipt.json).
+  - 현재 완료: 10/6 22:03:45 KST 장후 controller/tuning 그룹 중단·잔여 0 당시 확인. 원 wrapper 20:59:55 실패 및 기계 21:29:59 구 carry 보존. 보조 입력·프롬프트/schema 보완 후 372점에 추가 1,742회 실제 호출, 운영 AI 횟수 quota 영구 제거 코드와 대상 회귀 64 PASS. 현재 배포·새 정책 발행·전체 장후 재생성·10/7 prepared/PID 소비는 미완료다.
+  - 권한/범위: 사용자가 보조 보완을 먼저 실행하고 계획 수정을 이어가도록 지시했으며 오프라인 연구 무제한 호출과 운영 AI 호출한도 영구 해제를 명시 승인했다. 운영 total/group cap=None, 예전 횟수 env의 자동 복원 금지. 계수·중복/오류 재시도/외부 provider rate limit과 broker/order/custody/manual/retirement guard는 유지한다. 최종 통합 배포·장후 전체 실행·기동 준비는 이번 보완 계획의 후속 실행이며 완료로 표시하지 않는다.
+  - Acceptance: 기존 판정 행을 모집단으로 쓰지 않는 연속 반전 kernel→30분/+0.4%/soft -3% 라벨→삼성 시장 3셀·비삼성 시장×가격대 9셀의 기계 누적 승률 및 보조 실제 원 PASS 누적 승률→동일 runtime consumer. 보조 문구/input/schema가 달라지면 실제 해당 hash로 재비교하며 EV·보정 승률·최소 표본/일수·기존 제출 통과 보존 문턱은 추가하지 않는다. 프리/애프터 무표본은 같은 종목군·가격대의 정규장 payload/hash를 그대로 승계하고 로컬 승률은 null로 남긴다.
+  - 배포/재생성 Acceptance: 계획 P1~P7. 전환 machine+aux code 최종 immutable release→source/publication 기준 10/6/effective 10/7 단일 generation으로 **EOD 제외 활성 장후 전체** 재생성. main embedded/등록 stage·machine refresh·tuning·archive·summary/tower/checklist·strict/controller/finalization·cleanup/final detector·bootstrap 포함. EOD updater는 재실행하지 않고 원 terminal/hash를 검증한다. OFF/퇴역 family 복원·구 성공 표지만 변경하는 재사용 금지.
+  - 종료/소비: 06:30 목표·06:50 상한까지 전체 장후 complete와 exact-date prepared를 각각 확인, 07:32 owner/07:35 Main PREOPEN 및 07:55 정상 PID에서 code·기계/보조 hash·quota=None 소비 확인. 문서 최종 hash 고정 뒤 strict→controller→prepared. 미완료는 원 실패/미준비를 유지하고 검증된 정규장/기존 정책 carry 가능 여부만 따로 기록한다. 실제 주문·체결·손익은 별도 관측이다.
+  - 이전 원천 기록 보존: source 10/2 `machine_operating_population_unbound`, runtime_summary_sha256=`36668269ccbb3ab8a7c61b106cee3754ee867dc4e03123d89a32a7d9c384eb92`, [원 summary](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-10-02.json). 기존 completed-profit/EV 완료 문구는 새 기계정책 채택 기준으로 재사용하지 않는다. stable ID는 유지하며 `MainSubmitDroughtPathAcceptance1006`의 기존 경로 수리 자연 수용은 별도 보존한다.
 
 - [ ] `[JejuEpisodeRetirementHpspAlteogenMainFixedWatch] 에피소드 8종목 퇴역·Main 고정감시 5종목 다음 기동 자연 확인` (`Due: 2026-10-07`, `Slot: PREOPEN`, `TimeWindow: 07:32~08:05 및 적격 정규장 자연 판정`, `Track: RuntimeStability`)
   - Source: [실행 계획](../proposals/jeju-episode-retirement-hpsp-alteogen-main-fixed-watch-initial-policy-plan-2026-10-06.md).

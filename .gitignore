@@ -10,7 +10,6 @@ docker-compose.yml
 *.key
 *.sql
 .env
-.clinerules
 
 # ==========================================
 # 🐍 파이썬 환경 및 캐시
@@ -22,7 +21,6 @@ venv/
 temp/
 tmp/
 .venv/
-.kilo/
 env/
 build/
 dist/
@@ -38,6 +36,7 @@ dist/
 !deploy/machine-profit-stagnation/operator-cost.json
 # Local execution locks and custody-recovery backups are not delivery assets.
 /data/pipeline_event_summaries/*.lock
+/data/source_quality/file_source_retirement.apply.lock
 /data/report/strategy_owner_first_use_replay/*.lock
 /data/report/market_opportunity_census/*.publish.lock
 /data/runtime/manual_close_reconciliation/

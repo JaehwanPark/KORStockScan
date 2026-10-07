@@ -1,7 +1,7 @@
 # System Error Detector - 구현 코드리뷰
 
 작성일: `2026-05-09T20:06:17+09:00`
-구현 기준: `.kilo/plans/1778317352269-happy-moon.md`
+구현 기준: 당시 구현 설계서(원본은 사용자 요청으로 삭제됨). 구현 및 검증 기록은 이 문서에 유지한다.
 
 ## 1. 구현 범위
 
@@ -33,7 +33,7 @@ detector 원칙: 4개 observe-only / report-only. `stale_lock`과 `resource_usag
 | 16 | `src/tests/test_error_detector_artifact_freshness.py` | 7 tests: window not_yet_due, trading_day skip, pass_after_window |
 | 17 | `src/tests/test_error_detector_resource_usage.py` | 12 tests: classify, high_cpu/low_mem, sampler age, disk-low rotate cooldown |
 | 18 | `src/tests/test_error_detector_stale_lock.py` | 5 tests: dry-run preserves, active lock protected, clean stale (Phase 3) |
-| 19 | `.kilo/plans/1778317352269-happy-moon.md` | 구현 설계서 |
+| 19 | 삭제된 구현 설계서 | 당시 구현 설계서(원본 삭제) |
 | 20 | `docs/code-reviews/system-error-detector-2026-05-09-implementation-review.md` | 이 코드리뷰 문서 |
 
 ### 수정 파일 (8개)
@@ -231,4 +231,3 @@ mode=resource_only:     1 detector  (resource_usage)
 - [ ] runtime 대기: 다음 장중 cron 실행 후 Sentinel 분류와 중복되지 않는지 확인
 
 ---
-Source: `.kilo/plans/1778317352269-happy-moon.md`

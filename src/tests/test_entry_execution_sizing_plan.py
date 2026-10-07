@@ -1069,7 +1069,7 @@ def test_runtime_pre_ai_producer_freezes_owner_inputs_without_submit(monkeypatch
         if position_tag == 'SCANNER':
             # This default-preset fixture has no SCANNER REST quote receipt.
             # Valid source binding must not manufacture a terminal cash result.
-            assert operating['status'] == 'unsupported_scope'
+            assert operating['status'] == 'unsupported_scope', operating
             assert 'bounded_rest_quote_request_or_cutoff_gap' in operating['blocker']
             assert operating['net_pnl_krw'] is None
             return

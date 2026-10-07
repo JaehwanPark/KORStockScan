@@ -3275,6 +3275,7 @@ class KiwoomWSManager:
         self._session_ready.clear()
 
     async def _handle_message(self, message, *, received_at=None):
+        dispatch_started_epoch = time.time()
         try:
             received_at_has_utc_offset = bool(
                 isinstance(received_at, datetime)
@@ -3959,7 +3960,14 @@ class KiwoomWSManager:
                                     values.get("20")
                                     or datetime.now().strftime("%H%M%S")
                                 )
-                                received_ts = time.time()
+                                # Preserve ingress time across lock contention
+                                # and parsing. Processing must not renew a 0B
+                                # source clock (0D already preserves ingress).
+                                received_ts = (
+                                    packet_received_at.timestamp()
+                                    if packet_receive_time_source == _ORDER_EXECUTION_RECEIVE_TIME_SOURCE
+                                    else time.time()
+                                )
                                 quote_resolution = self._resolve_0b_touch_quote(
                                     normalized_raw_item,
                                     inline_best_ask=inline_best_ask,
@@ -4465,6 +4473,8 @@ class KiwoomWSManager:
                                 current_depth_observation["received_at_ms"] / 1000.0
                                 if real_type == "0D"
                                 and isinstance(current_depth_observation, dict)
+                                else packet_received_at.timestamp()
+                                if packet_receive_time_source == _ORDER_EXECUTION_RECEIVE_TIME_SOURCE
                                 else time.time()
                             )
                             target["last_ws_update_ts"] = now_update_ts
@@ -4610,6 +4620,27 @@ class KiwoomWSManager:
                                                 ),
                                             }
                                         )
+                                        normalized_epoch = time.time()
+                                        packet_epoch = (packet_received_at.timestamp()
+                                            if packet_receive_time_source == _ORDER_EXECUTION_RECEIVE_TIME_SOURCE
+                                            else None)
+                                        provider_epoch = realtime_snapshot.get("provider_trade_epoch")
+                                        realtime_snapshot["market_source_latency"] = {
+                                            "schema": "market_source_latency_v1",
+                                            "item": str(raw_item_code or ""),
+                                            "transport_epoch": int(self._market_data_transport_epoch),
+                                            "route_sequence": route_sequence,
+                                            "receive_time_source": packet_receive_time_source,
+                                            "packet_received_epoch": packet_epoch,
+                                            "dispatch_started_epoch": dispatch_started_epoch,
+                                            "normalized_epoch": normalized_epoch,
+                                            "provider_to_packet_ms": (
+                                                round((packet_epoch - provider_epoch) * 1000, 3)
+                                                if packet_epoch is not None and provider_epoch is not None else None),
+                                            "packet_to_normalization_ms": (
+                                                round((normalized_epoch - packet_epoch) * 1000, 3)
+                                                if packet_epoch is not None else None),
+                                        }
                                     elif real_type == "0D":
                                         current_orderbook = target.get("orderbook")
                                         current_orderbook = (

@@ -571,6 +571,10 @@ def compose_entry_execution_sizing_plan(
         "action_receipt_id": action_receipt_id,
         "action_owner": action_owner,
         "scanner_promotion_id": str(receipt.get("scanner_promotion_id") or ""),
+        **({key: receipt.get(key) for key in (
+            "watch_origin", "watch_admission_id", "watch_generation_id",
+            "machine_observation_sha256")}
+           if receipt.get("watch_origin") == "MAIN_FIXED_WATCH" else {}),
         "policy_bundle_hash": str(
             receipt.get("policy_bundle_hash")
             or receipt.get("machine_bundle_sha256")

@@ -15742,7 +15742,7 @@ def test_execute_scale_in_order_partial_split_submit_keeps_pending(monkeypatch, 
     monkeypatch.setattr(
         state_handlers,
         "_resolve_scalp_cash_budget_context",
-        lambda code, unit_price, fallback_orderable_amount: {
+        lambda code, unit_price, fallback_orderable_amount, *, purpose: {
             "budget_base": fallback_orderable_amount,
             "budget_source": "test",
             "account_deposit": fallback_orderable_amount,

@@ -1,5 +1,5 @@
 005930 # machine_owner_scope samsung_electronics
-034020 # machine_owner_scope doosan_widget_and_episode_independent_owners
+034020 # machine_owner_scope main_fixed_watch_owner
 042660 # machine_owner_scope hanwha_widget_and_episode_independent_owners
 010140 # machine_owner_scope samsung_heavy_low_price_two_leg_owner
 475150 # machine_owner_scope sk_eternix_low_price_two_leg_owner

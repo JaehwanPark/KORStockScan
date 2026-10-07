@@ -7,6 +7,7 @@ cross threads implicitly, or grant execution authority.
 from contextvars import ContextVar
 from functools import wraps
 import logging
+import re
 from uuid import uuid4
 
 _ATTEMPT = ContextVar("entry_submit_observation_attempt", default=None)
@@ -16,6 +17,12 @@ _MACHINE_LINEAGE_FIELDS = frozenset(
         "entry_primary_decision_owner",
         "evaluation_attempt_id",
         "scanner_promotion_id",
+        "watch_origin",
+        "watch_admission_id",
+        "watch_generation_id",
+        "machine_observation_sha256",
+        "machine_capture_status",
+        "machine_revision_schema",
         "effective_venue",
         "market_session_bucket",
         "policy_bundle_hash",
@@ -39,6 +46,7 @@ def observe_submit_attempt(function=None, *, on_finish=None):
                 "code": str(code),
                 "attempt_id": uuid4().hex,
                 "promotion_id": _promotion_id(stock),
+                "watch_identity": _watch_identity(stock),
                 "machine_lineage": {},
                 "broker_submit_accepted": False,
                 "return_outcome": "not_returned",
@@ -97,6 +105,11 @@ def _promotion_id(stock):
     return "" if value.lower() in {"none", "null", "unknown", "-", "0"} else value
 
 
+def _watch_identity(stock):
+    return tuple(str(stock.get(key) or "").strip() for key in
+                 ("watch_origin", "watch_admission_id", "watch_generation_id"))
+
+
 def bind_submit_attempt_machine_lineage(stock, code, source, *, replace_existing=False):
     """Bind trusted diagnostic lineage to the current submit invocation only.
 
@@ -126,7 +139,6 @@ def bind_submit_attempt_machine_lineage(stock, code, source, *, replace_existing
     required = {
         "entry_primary_decision_owner",
         "evaluation_attempt_id",
-        "scanner_promotion_id",
         "effective_venue",
         "market_session_bucket",
         "policy_bundle_hash",
@@ -135,6 +147,27 @@ def bind_submit_attempt_machine_lineage(stock, code, source, *, replace_existing
         "entry_ai_screen_pass",
     }
     if not required <= lineage.keys():
+        return False
+    fixed = value.get("watch_identity", ("",))[0] == "MAIN_FIXED_WATCH"
+    if fixed:
+        parent = value["watch_identity"]
+        if (_watch_identity(source) != parent or _watch_identity(stock) != parent
+                or not re.fullmatch(r"[0-9a-f]{64}", parent[2])
+                or not re.match(r"FIXED-\d{4}-\d{2}-\d{2}-" + re.escape(str(code)[:6]) + "-", parent[1])
+                or str(stock.get("code") or "")[:6] != str(code)[:6]
+                or str(source.get("effective_venue")).upper() != str(stock.get("effective_venue")).upper()
+                or source.get("market_session_bucket") != stock.get("market_session_bucket")):
+            return False
+        if (lineage.get("machine_capture_status") != "captured"
+                or not re.fullmatch(r"[0-9a-f]{64}", str(lineage.get("machine_observation_sha256") or ""))):
+            return False
+        # A fixed watch is admitted by its native watch ID, never a fabricated
+        # scanner promotion. Reject ambiguous simultaneous origin claims.
+        if _promotion_id(source) or _promotion_id(stock):
+            return False
+        lineage.pop("scanner_promotion_id", None)
+    elif (_watch_identity(source)[0] == "MAIN_FIXED_WATCH"
+          or not _promotion_id(source)):
         return False
     if (
         str(lineage["entry_primary_decision_owner"]) != "mechanistic_entry_adjudicator"
@@ -150,10 +183,10 @@ def bind_submit_attempt_machine_lineage(stock, code, source, *, replace_existing
     ):
         return False
     expected_parent = _promotion_id(stock) if replace_existing else value.get("promotion_id")
-    if expected_parent and str(lineage["scanner_promotion_id"]) != str(expected_parent):
+    if not fixed and expected_parent and str(lineage["scanner_promotion_id"]) != str(expected_parent):
         return False
     updated = {**value, "machine_lineage": lineage}
-    if not updated.get("promotion_id"):
+    if not fixed and not updated.get("promotion_id"):
         updated["promotion_id"] = str(lineage["scanner_promotion_id"])
     _ATTEMPT.set(updated)
     return True
@@ -198,7 +231,7 @@ def submit_attempt_fields(stock, code):
     # The scanner may refresh the stock's promotion while this call waits.
     # Preserve that live metadata, but bind submit telemetry to one parent.
     # Late hydration may supply the first known parent before the first event.
-    if not value.get("promotion_id"):
+    if not value.get("promotion_id") and value.get("watch_identity", ("",))[0] != "MAIN_FIXED_WATCH":
         parent = _promotion_id(stock)
         if parent:
             value = {**value, "promotion_id": parent}
@@ -217,4 +250,7 @@ def submit_attempt_fields(stock, code):
     }
     if value.get("promotion_id"):
         fields["entry_submit_attempt_parent_promotion_id"] = value["promotion_id"]
+    if value.get("watch_identity", ("",))[0] == "MAIN_FIXED_WATCH":
+        fields["entry_submit_attempt_parent_watch_admission_id"] = value["watch_identity"][1]
+        fields["entry_submit_attempt_parent_watch_generation_id"] = value["watch_identity"][2]
     return fields

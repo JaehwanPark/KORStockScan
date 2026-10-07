@@ -9525,6 +9525,21 @@ class GPTSniperEngine:
                     reversal_snapshot_as_of = time.time()
                     machine_assessment, reversal_input, reversal_prompt, reversal_schema = assess(
                         reversal_family, snapshot, symbol=symbol, session=machine_exact['session_bucket'])
+                    # Source telemetry must not change the pinned research
+                    # kernel, selected rule, feature values or auxiliary input.
+                    from src.engine.scalping.reversal_source_diagnostics import project
+                    try:
+                        source_envelopes = (ws_data.get('realtime_type_snapshots_by_route') or {}).values()
+                        exact_trade = next((rows.get('0B') for rows in source_envelopes
+                            if isinstance(rows, dict) and isinstance(rows.get('0B'), dict)
+                            and rows['0B'].get('item') == item), None)
+                        diagnostics = project(snapshot, symbol=symbol, venue=_explicit_item_venue(item),
+                            session=machine_exact['session_bucket'], item=item, envelope=exact_trade,
+                            now=machine_input_fields.get('entry_machine_input_as_of', time.time()))
+                    except Exception as exc:
+                        diagnostics = dict(status='unobservable', reason='diagnostic_projection_failed',
+                                           error_type=type(exc).__name__, runtime_effect=False)
+                    machine_assessment['source_diagnostics'] = diagnostics
                     entry_setup_live_policy.update(continuous_reversal_assessment=machine_assessment,
                         continuous_reversal_input=reversal_input,
                         continuous_reversal_arm=(reversal_family['auxiliary_cells'][machine_assessment['cell_key']]['payload']['arm']
