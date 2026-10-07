@@ -468,7 +468,10 @@ def test_authorized_intraday_historical_checklist_is_exact_git_bound_snapshot(fi
     assert checklist.read_text()=='current work added\n'
 
 
-@pytest.mark.parametrize('damage', [None, 'snapshot', 'consumed', 'git_bytes', 'predecessor_binding'])
+@pytest.mark.parametrize('damage', [None, 'snapshot', 'consumed', 'git_bytes', 'predecessor_binding',
+                                  'env_after_consumption', 'controller_after_consumption',
+                                  'summary_after_consumption', 'snapshot_after_consumption',
+                                  'consumption_missing_after_edit'])
 def test_second_handoff_carries_original_git_snapshot_with_consumed_custody(fixture, monkeypatch, damage):
     data, previous, selected, _ = fixture
     original = b'original sealed generation\n'
@@ -529,6 +532,28 @@ def test_second_handoff_carries_original_git_snapshot_with_consumed_custody(fixt
         assert handoff.verify(DAY, commit, now=NOW+timedelta(minutes=2))['status'] == 'fail'
     else:
         assert handoff.consume(DAY, pid=3, now=NOW+timedelta(minutes=2))['status'] == 'pass'
+        # Current work can change after launch. It cannot invalidate the sealed
+        # historical DONE, or grant permission to launch/apply a fresh policy.
+        checklist.write_text('additional current intraday work\n')
+        assert handoff.verify(DAY, commit, now=NOW+timedelta(minutes=3))['status'] == 'fail'
+        assert handoff.consume(DAY, pid=3, now=NOW+timedelta(minutes=3))['status'] == 'fail'
+        with pytest.raises(ValueError, match='intraday_main_policy_code_consumption_missing'):
+            handoff.activate_main_v2(DAY, pid=3, confirm='APPROVED_INTRADAY_MAIN_POLICY_ACTIVATION',
+                                    now=NOW+timedelta(minutes=3))
+        damaged_path = {
+            'env_after_consumption': handoff.bootstrap.env_path(DAY),
+            'controller_after_consumption': controller,
+            'summary_after_consumption': summary,
+            'snapshot_after_consumption': Path(historical['path']),
+            'consumption_missing_after_edit': handoff._paths(DAY, commit)[1],
+        }.get(damage)
+        if damaged_path:
+            if damage == 'consumption_missing_after_edit': damaged_path.unlink()
+            else: damaged_path.write_text('changed')
+            with pytest.raises(ValueError, match='intraday_observer_'):
+                handoff.historical_checklist_for_observer(
+                    data.parent, '2026-10-01', now=NOW+timedelta(minutes=3))
+            return
         observer = handoff.historical_checklist_for_observer(
             data.parent, '2026-10-01', now=NOW+timedelta(minutes=3))
         assert observer['path'] == historical['path']

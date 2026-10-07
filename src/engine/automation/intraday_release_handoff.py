@@ -239,6 +239,11 @@ def prepare(day, *, old_pid, previous_root, confirm, now=None, reseal_postclose_
 
 
 def verify(day, commit, *, now=None):
+    return _verify_handoff(day, commit, now=now)
+
+
+def _verify_handoff(day, commit, *, now=None, historical_observer=False):
+    """Keep launch verification strict; historical observation uses sealed sources."""
     findings = []
     payload = {}
     try:
@@ -290,7 +295,17 @@ def verify(day, commit, *, now=None):
                     raise ValueError('intraday_historical_checklist_binding_invalid')
                 required.add(str(expected_path))
             required.update([source['controller_path'], source['summary_path'], reseal['checklist_path']])
-        if set(frozen) != required or any(_sha(name) != sha for name, sha in frozen.items()):
+        historical_document = None
+        if historical_observer:
+            # Only an already-consumed historical handoff may disregard edits
+            # to the operational checklist. Its sealed snapshot and all other
+            # sources remain required. Public verify/consume/activation never
+            # take this branch, and the observer binds the live PID separately.
+            if not reseal or not reseal.get('historical_checklist') or not consumed_path.exists():
+                raise ValueError('intraday_observer_consumed_historical_handoff_required')
+            historical_document = reseal['checklist_path']
+        if set(frozen) != required or any(_sha(name) != sha for name, sha in frozen.items()
+                                         if name != historical_document):
             raise ValueError("intraday_preserved_generation_changed")
         start = datetime.fromisoformat(payload["prepared_at"])
         deadline = datetime.fromisoformat(payload["first_launch_before"])
@@ -357,7 +372,7 @@ def _historical_checklist_for_observer(project, source_date, *, now=None):
     root, commit = _selection(require_selected_cwd=False)
     handoff_path, consumed_path = _paths(day, commit)
     handoff_sha = _sha(handoff_path)
-    check = verify(day, commit, now=current)
+    check = _verify_handoff(day, commit, now=current, historical_observer=True)
     if check['status'] != 'pass':
         raise ValueError('intraday_observer_handoff_invalid:' + ','.join(check['findings']))
     preserved = check['handoff']

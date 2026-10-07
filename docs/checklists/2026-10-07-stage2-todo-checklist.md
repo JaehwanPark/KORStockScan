@@ -177,6 +177,7 @@
 <!-- entry_cancel_wait_handoff:end -->
 
 - [ ] `[SemanticMonitorProducerConsumerRefresh1007] 의미적 감시 현행화 통합 배포·승인 재기동·새 PID 자연 수용` (`Due: 2026-10-07`, `Slot: INTRADAY`, `TimeWindow: 08:30~20:00`, `Track: RuntimeStability`)
+  - 15:08 과거 finalization 경고 재발: 기동 이후 오늘 checklist 계획 추가가 historical observer의 startup hash 검사에 걸렸다. 이미 소비된 과거 observer에만 live checklist 비교를 분리하고 historical snapshot·나머지 봉인 원천·실제 PID 결속을 유지한다. 새 기동/정책 activation/fresh finalization guard는 그대로 실패해야 한다. 기존 완료 기록을 재작성하지 않고 반복 리뷰·회귀·승인 배포 뒤 자연 cron에서 원 DONE hash 및 recovered_late 소비를 확인한다. [보완 근거](../audits/finalization-historical-checklist-observer-review-2026-10-07.md).
   - Source: [현행화 계획](../proposals/semantic-monitor-current-producer-consumer-refresh-plan-2026-10-07.md), [실행 검토](../audits/semantic-monitor-current-producer-consumer-implementation-review-2026-10-07.md).
   - 권한: 사용자 의미적 감시 개선 구현·반복 리뷰·전체 작업본 통합 배포·재기동 명시 승인. 기계/보조 12+12 raw 승률 정책, quota=None, broker/order/custody/수량/가격·stale/conflict/manual/retirement hard guard는 변경하지 않는다.
   - Acceptance: SM01~SM09의 native/legacy dispatch, receipt event/cell/rule/arm/input/prompt/schema/PID 결속, 기계 stage 알림과 exact generation 복구, 현재 parsed owner, historical/OFF/현재 31profile 분리, retirement negative census, 7detector/19cron/40artifact/6heartbeat/13native-stage 기능 coverage. 리뷰·수정·재검토·targeted regression finding 0 뒤 통합 immutable release와 policy-preserving intraday handoff로 재기동한다. checklist 최종 bytes 후 summary/strict/controller/prepared를 native 재봉인한다. EOD·frozen 연구 원천·실제 연구 응답·unchanged policy pin을 보존한다.

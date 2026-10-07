@@ -252,6 +252,8 @@ Main과 episode 서비스의 실행 group이 달라 `/proc/PID/cwd` 읽기가 EA
 
 `strict_checklist_generation_stale` 후속 결함은 finalization DONE observer와 semantic postclose observer가 위 장중 인계를 소비하지 않은 데서 발생했다. 현재 날짜·선택 release·실제 살아 있는 PID/start ticks/cwd·bootstrap·native consumed receipt·봉인된 원천이 모두 일치할 때만 승인된 historical checklist snapshot으로 원 DONE의 세대를 다시 검증한다. 다른 원천·snapshot·DONE 해시 변경은 계속 실패한다. 새로운 finalization을 생성하는 경로는 현재 checklist 검증을 유지하며 원 DONE/summary/controller/PREOPEN을 재작성하지 않는다. 06:50 이후 완료된 이력은 `recovered_late`로 유지한다. 기존 `SemanticMonitorProducerConsumerRefresh1007` owner와 동결 checklist를 보존하며 [검토·배포 근거](../audits/finalization-historical-checklist-observer-review-2026-10-07.md)에 기록한다.
 
+기동 뒤 오늘 checklist에 운영 계획을 추가해도 이미 소비된 과거 DONE의 원천 세대는 바뀌지 않는다. historical observer만 native consumed receipt와 현재 PID를 확인한 뒤 live checklist hash 비교를 제외하며, 정확히 봉인된 historical checklist와 그 외 PREOPEN/env/manifest/prepared/summary/controller hash를 계속 검증한다. 새 prepare/verify/consume/activation 및 fresh finalization은 오늘 checklist의 고정 hash 요구를 유지한다. 기존 handoff·consumed·DONE를 재작성해 경고를 지우지 않는다.
+
 ### 반전 등록 원천의 판정 전달 보완
 
 `reversal_signal_generation_changed`는 정책 세대 불일치뿐 아니라 등록 claim 부재에서도 발생한다. 등록 직후 기존 잠금 안에서 exact token/generation/scope/snapshot과 시각을 source receipt로 복사하여 WATCHING→판정→trace까지 전달한다. native 신호·5초 guard·연구 hash와 판단은 보존한다. v3 소비자는 등록 원천·현재 active generation·정확 route/path·age를 모두 확인한 만료만 diagnostic으로 분리하고, 등록 유실·tamper·새 세대·필수 원천 결손은 계속 source issue로 남긴다. 구 v1/v2 및 원 등록이 없는 과거 행을 소급 복구하지 않는다. 기존 두 owner와 checklist를 유지하며 [알테오젠 원천 점검·보완 근거](../audits/alteogen-registered-reversal-source-review-2026-10-07.md)에 기록한다.
