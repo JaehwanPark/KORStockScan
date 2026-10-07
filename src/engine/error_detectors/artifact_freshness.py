@@ -1543,7 +1543,7 @@ def _current_semantic_owners(root, day):
     from src.engine.sync_docs_backlog_to_project import parse_checklist_tasks
     owners = Counter()
     path = root / 'docs/checklists' / (day + '-stage2-todo-checklist.md')
-    for task in parse_checklist_tasks():
+    for task in parse_checklist_tasks(current_path=path):
         if Path(task.source).resolve() != path.resolve():
             continue
         match = re.match(r'^\[([^\]]+)\]', task.title)

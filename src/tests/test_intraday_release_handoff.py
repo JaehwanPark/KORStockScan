@@ -118,6 +118,76 @@ def test_read_only_selection_does_not_relax_prepare_or_consume_cwd(fixture, monk
     assert all(Path(path).read_bytes() == value for path, value in frozen.items())
 
 
+@pytest.mark.parametrize('damage', [None, 'status', 'schema', 'pid', 'start_ticks',
+                                  'root', 'date', 'commit', 'not_consumed', 'handoff',
+                                  'manifest_binding', 'env', 'prepared'])
+def test_second_same_day_handoff_requires_exact_live_predecessor_and_sealed_generation(fixture, monkeypatch, damage):
+    data, previous, selected, prepare = fixture
+    index_file = data / 'runtime/policy_bootstrap/prepared' / DAY / 'latest.json'
+    index = handoff._read(index_file)
+    receipt = Path(index['receipt_path'])
+    policies = [dict(family='main', path=str(handoff.bootstrap.env_path(DAY)),
+                     sha256=handoff._sha(handoff.bootstrap.env_path(DAY)))]
+    _json(receipt, dict(schema='next_preopen_readiness_v1', status='prepared_verified',
+                       source_date='2026-10-01', target_date=DAY,
+                       actual_pid_consumed=False, policy_receipts=policies))
+    _json(index_file, dict(index, receipt_sha256=handoff._sha(receipt)))
+    assert prepare()['status'] == 'pass'
+    consumed = handoff.consume(DAY, pid=2, now=NOW)
+    prior_consumed = handoff._paths(DAY, NEW)[1]
+    if damage in ('status', 'schema', 'root', 'date', 'commit', 'not_consumed', 'handoff', 'manifest_binding'):
+        field, value = {
+            'status': ('status', 'fail'), 'schema': ('schema', 'wrong'),
+            'root': ('release_root', '/wrong'), 'date': ('target_date', '2026-10-01'),
+            'commit': ('selected_release_commit', OLD), 'not_consumed': ('actual_pid_consumed', False),
+            'handoff': ('handoff_sha256', 'wrong'), 'manifest_binding': ('manifest_sha256', 'wrong'),
+        }[damage]
+        _json(prior_consumed, dict(consumed, **{field: value}))
+    elif damage in ('pid', 'start_ticks'):
+        identity = dict(consumed['pid_identity'])
+        identity['pid' if damage == 'pid' else 'start_ticks'] = 99 if damage == 'pid' else '99'
+        _json(prior_consumed, dict(consumed, pid_identity=identity))
+    elif damage == 'env':
+        handoff.bootstrap.env_path(DAY).write_text('changed')
+    elif damage == 'prepared':
+        receipt.write_text(receipt.read_text() + ' ')
+    new_root = selected.parent / 'second'
+    new_root.mkdir()
+    second_commit = 'c' * 40
+    monkeypatch.setattr(handoff, '_selection', lambda **kwargs: (new_root, second_commit))
+    monkeypatch.setattr(handoff.subprocess, 'check_output', lambda command, **kwargs:
+                        NEW + '\n' if 'rev-parse' in command else '')
+    monkeypatch.setattr(handoff, '_identity', lambda pid:
+                        dict(pid=pid, start_ticks='42', cwd=str((selected if pid == 2 else new_root) / 'src')))
+    controller = data / 'report/postclose_done_controller/postclose_done_controller_2026-10-01.json'
+    summary = data / 'report/runtime_approval_summary/runtime_approval_summary_2026-10-01.json'
+    _json(controller, dict(status='done')); _json(summary, dict(status='verified'))
+    checklist = data.parent / 'docs/checklists' / f'{DAY}-stage2-todo-checklist.md'
+    checklist.parent.mkdir(parents=True); checklist.write_text('same current owner')
+    calls = []
+    def sealed_source(source_day, target, *, generation_only=False):
+        # The full dynamic selector cannot consume the second PID before it
+        # launches. Reuse its unchanged native whole-chain generation instead.
+        assert generation_only is True
+        calls.append((source_day, target))
+        return dict(controller_path=str(controller), controller_sha256=handoff._sha(controller),
+                    summary_path=str(summary), summary_sha256=handoff._sha(summary), policy_receipts=policies)
+    monkeypatch.setattr(readiness, '_source_receipts', sealed_source)
+    before = {str(path): path.read_bytes() for path in (receipt, index_file,
+              handoff.bootstrap.env_path(DAY), handoff.bootstrap.manifest_path(DAY), handoff._preopen_path(DAY))}
+    if damage is not None:
+        with pytest.raises(ValueError, match='intraday_'):
+            handoff.prepare(DAY, old_pid=2, previous_root=selected, confirm=handoff.CONFIRM,
+                            now=NOW + timedelta(minutes=2), reseal_postclose_source=True)
+        assert not handoff._paths(DAY, second_commit)[0].exists()
+        return
+    result = handoff.prepare(DAY, old_pid=2, previous_root=selected, confirm=handoff.CONFIRM,
+                            now=NOW + timedelta(minutes=2), reseal_postclose_source=True)
+    assert result['status'] == 'pass' and calls == [('2026-10-01', DAY)]
+    assert handoff.consume(DAY, pid=3, now=NOW + timedelta(minutes=3))['actual_pid_consumed'] is True
+    assert all(Path(path).read_bytes() == content for path, content in before.items())
+
+
 @pytest.mark.parametrize('damage', [None, 'summary', 'consumption', 'policy'])
 def test_resealed_postclose_accepts_actual_new_pid_without_rewriting_original_summary(fixture, monkeypatch, damage):
     from src.engine.automation import postclose_summary_handoff as postclose

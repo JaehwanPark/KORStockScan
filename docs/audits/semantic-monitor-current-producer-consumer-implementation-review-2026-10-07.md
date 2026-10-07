@@ -29,3 +29,13 @@ Rebase §7의 구 2종목/선정 계약과 현행 명시 override·5종목/12셀
 최종 code gate: 관련 25개 test module **1,266 PASS**(38.22초), 수정 Python compile·기존 실행 wrapper bash -n·git diff --check·print-only backlog parser PASS. 반복 검토 범위의 미해결 코드 결함 0. 검사 batch/원 실패/재검토 로그는 tmp/semantic-monitor-*-tests-20261007.log에 보존했다. 배포·실제 PID·자연 관측은 이어서 별도 영수증에 남긴다.
 
 배포 직전 추가 검토: 새 PID bootstrap verification과 selector attestation 갱신을 원 summary에 결속하지 못하는 결함을 수정했다. 원 summary/controller/정책/env를 변경하지 않고 검증된 intraday reseal·consumed PID의 정확한 source/date/hash만 인정한다. summary·consumption·env 변조는 거부하고 actual PID 증명과 report의 PID 미확정 표현을 분리한다. 관련 startup/summary/readiness/finalization/strict/bootstrap 회귀 **234 PASS**(5.43초). 기존 startup test fixture의 BOOTSTRAP_DIR도 tmp_path로 격리했다. 장후 summary 회복은 원 10/6 publication과 10/7 prepared session을 지정하여 10/8 정책 선택으로 넘어가지 않게 한다.
+
+## 09시 이후 추가 결함·후속 배포 검토
+
+실제 PID cwd인 릴리스 `src/` 조건을 놓친 이전 검증을 수정한다. `sync_docs_backlog_to_project`의 상대경로 glob/read와 4/13 고정 checklist fallback으로 현행 OPEN 조회가 0건이 됐고, `artifact_freshness`의 상대 Source `.resolve()` 비교에도 같은 결함이 있었다. 문서 읽기·검색을 코드 릴리스 루트에 고정하고 일반 backlog의 현재/미래 작업과 명시 override를 보존한다. semantic owner는 root/date의 단일 문서만 파싱하고 중복 stable ID는 owner로 인정하지 않는다. 경로 별칭 override의 이중 파싱도 제거한다.
+
+루트·`src/`·다른 디렉터리 및 동명 decoy 문서, current missing/archived-only, 자정 날짜 전환, 명시 상대/절대 override, closed/duplicate owner, plan·runbook·Calendar 소비자를 검사한다. 같은 날 두 번째 native handoff는 새 PID 실행 이전의 selector 검증 순환을 방지하되 원 전체 PASS의 정확한 hash와 정책을 보존하고 live predecessor의 schema/status/day/commit/root/PID/start ticks/manifest/env/prepared 결속을 강화한다. 변조 시 새 handoff를 쓰기 전에 거부한다. 새 PID 실행 후 full-contract/readiness/cron/owner와 보호 hash를 다시 확인한다.
+
+기존 checklist owner `SemanticMonitorProducerConsumerRefresh1007`에 후속 결함을 귀속하고, 이미 native 재생성·봉인된 10/7 자동 블록을 함께 기록한다. 현재 checklist bytes를 다시 바꾸지 않아 장후 원천 generation과 원 PREOPEN을 보존한다. 검증·배포·정상 재기동 결과는 `data/report/doc_backlog_root_repair/2026-10-07/`에 별도로 남긴다. 외부 Project/Calendar sync·provider/주문 호출은 실행하지 않는다.
+
+후속 code gate: 관련 13개 test module **559 PASS**(12.44초), 수정 Python compile·diff-check·print-only parser PASS. 루트/source 단일 문서 OPEN와 유효한 stable owner는 각각 12건이다. 실제 선택 릴리스에서 기존 Main PID bootstrap·native handoff·원 prepared의 전체 계약 및 현재 source/controller/strict generation을 검증했다. 두 번째 handoff 음성 회귀는 실패/schema/날짜/commit/root/PID/start ticks/consumed flag/manifest/env/prepared 변조를 거부한다. 검토 범위의 미해결 결함 0; 배포와 새 PID 확인은 별도 실행 영수증으로 마감한다.

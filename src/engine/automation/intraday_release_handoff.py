@@ -97,14 +97,26 @@ def prepare(day, *, old_pid, previous_root, confirm, now=None, reseal_postclose_
     old_commit = subprocess.check_output(["git", "-C", str(previous), "rev-parse", "HEAD"], text=True).strip()
     dirty = subprocess.check_output(["git", "-C", str(previous), "status", "--porcelain", "--", "src", "deploy", "restart.sh"], text=True).strip()
     original = _preopen(day)
+    old_identity = _identity(old_pid)
     # A subsequent same-day handoff may use the preceding verified consumption.
     if original.get("selected_release_commit") != old_commit:
         prior_path, prior_consumed = _paths(day, old_commit)
         prior = _read(prior_path)
-        if (_sha(_preopen_path(day)) != prior["preopen_sha256"]
-                or _read(prior_consumed).get("handoff_sha256") != _sha(prior_path)):
+        consumed = _read(prior_consumed)
+        if (prior.get('schema') != 'intraday_policy_preserving_release_handoff_v1'
+                or prior.get('status') != 'prepared_verified'
+                or prior.get('authority') != CONFIRM or prior.get('target_date') != day
+                or prior.get('selected_release_commit') != old_commit
+                or prior.get('release_root') != str(previous)
+                or _sha(_preopen_path(day)) != prior.get("preopen_sha256")
+                or consumed.get('schema') != 'intraday_policy_preserving_consumption_v1'
+                or consumed.get('status') != 'pass' or consumed.get('target_date') != day
+                or consumed.get('selected_release_commit') != old_commit
+                or consumed.get('release_root') != str(previous)
+                or consumed.get('actual_pid_consumed') is not True
+                or consumed.get('pid_identity') != old_identity
+                or consumed.get("handoff_sha256") != _sha(prior_path)):
             raise ValueError("intraday_previous_consumption_invalid")
-    old_identity = _identity(old_pid)
     if dirty or old_identity["cwd"] != str(previous / "src"):
         raise ValueError("intraday_previous_pid_or_release_invalid")
     check = _checked_bootstrap(day, old_pid)
@@ -116,6 +128,12 @@ def prepare(day, *, old_pid, previous_root, confirm, now=None, reseal_postclose_
             or _sha(receipt_path) != prepared.get("receipt_sha256")):
         raise ValueError("intraday_original_prepared_invalid")
     frozen = [bootstrap.env_path(day), bootstrap.manifest_path(day), _preopen_path(day), prepared_index, receipt_path]
+    if original.get('selected_release_commit') != old_commit:
+        if (consumed.get('manifest_sha256') != check.get('manifest_sha256')
+                or prior.get('prepared_receipt_path') != str(receipt_path)
+                or prior.get('prepared_receipt_sha256') != _sha(receipt_path)
+                or any(prior.get('frozen_files', {}).get(str(path)) != _sha(path) for path in frozen)):
+            raise ValueError('intraday_previous_generation_changed')
     reseal = None
     if reseal_postclose_source:
         from src.engine.automation.next_preopen_readiness import _source_receipts
@@ -126,9 +144,12 @@ def prepare(day, *, old_pid, previous_root, confirm, now=None, reseal_postclose_
                 or original_prepared.get('target_date') != day
                 or original_prepared.get('actual_pid_consumed') is not False):
             raise ValueError('intraday_original_prepared_contract_invalid')
-        # The current native DONE/strict contract must verify before recording
-        # a document-only reseal. This cannot change any dated policy bytes.
-        source = _source_receipts(source_day, day)
+        # Reuse the exact sealed whole-chain PASS and independently checked
+        # live old PID. Re-evaluating the new selector here would require its
+        # own consumed receipt before prepare/launch, a circular second-handoff
+        # gate. Every source hash and dated policy byte must still match; the
+        # launcher/consumers recheck the full contract after the new PID binds.
+        source = _source_receipts(source_day, day, generation_only=True)
         if not source.get('policy_receipts') or source['policy_receipts'] != original_prepared.get('policy_receipts'):
             raise ValueError('intraday_reseal_policy_generation_changed')
         checklist = DATA_DIR.parent / 'docs/checklists' / (day + '-stage2-todo-checklist.md')

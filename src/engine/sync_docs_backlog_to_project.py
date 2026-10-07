@@ -19,11 +19,12 @@ from urllib.error import HTTPError, URLError
 from zoneinfo import ZoneInfo
 
 from src.utils.market_day import get_krx_trading_day_status
+from src.utils.constants import PROJECT_ROOT
 
 GITHUB_GRAPHQL_URL = "https://api.github.com/graphql"
 
 DOC_PLAN = Path("docs/plan-korStockScanPerformanceOptimization.prompt.md")
-DOC_CHECKLIST = Path("docs/checklists/2026-04-13-stage2-todo-checklist.md")
+DOC_CHECKLIST_DIR = Path("docs/checklists")
 DOC_SCALPING = Path("docs/reference/2026-04-10-scalping-ai-coding-instructions.md")
 DOC_PROMPT = Path("docs/reference/2026-04-11-scalping-ai-prompt-coding-instructions.md")
 
@@ -137,12 +138,25 @@ def _local_today_iso() -> str:
     return datetime.now(tz).date().isoformat()
 
 
+def _document_path(path: Path) -> Path:
+    """Anchor relative document paths to this code release, never daemon cwd."""
+    return path if path.is_absolute() else PROJECT_ROOT / path
+
+
+def _document_glob(directory: Path, pattern: str) -> list[Path]:
+    # Preserve the relative Source labels consumed by backlog/calendar tools.
+    return sorted(
+        (path.relative_to(PROJECT_ROOT) for path in _document_path(directory).glob(pattern)),
+        reverse=True,
+    )
+
+
 def _read(path: Path) -> str:
-    return path.read_text(encoding="utf-8")
+    return _document_path(path).read_text(encoding="utf-8")
 
 
 def _read_optional(path: Path) -> str | None:
-    if not path.exists():
+    if not _document_path(path).is_file():
         return None
     return _read(path)
 
@@ -177,13 +191,13 @@ def _scalping_doc_candidates() -> list[Path]:
         candidates.append(Path(env_path))
     candidates.append(DOC_SCALPING)
     candidates.extend(
-        sorted(Path("docs").glob("*-scalping-ai-coding-instructions.md"), reverse=True)
+        _document_glob(Path("docs"), "*-scalping-ai-coding-instructions.md")
     )
 
     deduped: list[Path] = []
     seen: set[str] = set()
     for p in candidates:
-        key = str(p)
+        key = str(_document_path(p).resolve())
         if key in seen:
             continue
         seen.add(key)
@@ -198,16 +212,13 @@ def _prompt_doc_candidates() -> list[Path]:
         candidates.append(Path(env_path))
     candidates.append(DOC_PROMPT)
     candidates.extend(
-        sorted(
-            Path("docs").glob("*-scalping-ai-prompt-coding-instructions.md"),
-            reverse=True,
-        )
+        _document_glob(Path("docs"), "*-scalping-ai-prompt-coding-instructions.md")
     )
 
     deduped: list[Path] = []
     seen: set[str] = set()
     for p in candidates:
-        key = str(p)
+        key = str(_document_path(p).resolve())
         if key in seen:
             continue
         seen.add(key)
@@ -220,18 +231,20 @@ def _checklist_doc_candidates() -> list[Path]:
     env_path = os.getenv("DOC_CHECKLIST_PATH", "").strip()
     if env_path:
         candidates.append(Path(env_path))
-    candidates.extend(
-        sorted(Path("docs/checklists").glob("*-stage2-todo-checklist.md"), reverse=True)
-    )
-    candidates.extend(
-        sorted(Path("docs").glob("*-stage2-todo-checklist.md"), reverse=True)
-    )
-    candidates.append(DOC_CHECKLIST)
+    today = _local_today_iso()
+    candidates.append(DOC_CHECKLIST_DIR / f"{today}-stage2-todo-checklist.md")
+    # Backlog may include future work, but automatic discovery must not load
+    # archived checklists as a substitute for the current executable owner.
+    for directory in (DOC_CHECKLIST_DIR, Path("docs")):
+        candidates.extend(
+            path for path in _document_glob(directory, "*-stage2-todo-checklist.md")
+            if _due_date_from_checklist_path(path) >= today
+        )
 
     deduped: list[Path] = []
     seen: set[str] = set()
     for p in candidates:
-        key = str(p)
+        key = str(_document_path(p).resolve())
         if key in seen:
             continue
         seen.add(key)
@@ -305,23 +318,29 @@ def parse_plan_tasks() -> list[BacklogTask]:
     return tasks
 
 
-def parse_checklist_tasks() -> list[BacklogTask]:
-    candidates = _checklist_doc_candidates()
+def parse_checklist_tasks(*, current_path: Path | None = None) -> list[BacklogTask]:
+    # Native semantic consumers specify their exact root/date. Explicit mode
+    # cannot be redirected by an offline DOC_CHECKLIST_PATH or another day.
+    candidates = [current_path] if current_path is not None else _checklist_doc_candidates()
     tasks: list[BacklogTask] = []
     checked: list[str] = []
     loaded_any = False
-    today_iso = _local_today_iso()
+    today_iso = (
+        _due_date_from_checklist_path(current_path)
+        if current_path is not None else _local_today_iso()
+    )
     forced_path_raw = os.getenv("DOC_CHECKLIST_PATH", "").strip()
     forced_path = Path(forced_path_raw) if forced_path_raw else None
     for source_path in candidates:
         checked.append(str(source_path))
+        due_date = _due_date_from_checklist_path(source_path)
+        if (due_date and due_date < today_iso
+                and (forced_path is None or _document_path(source_path) != _document_path(forced_path))):
+            continue
         text = _read_optional(source_path)
         if text is None:
             continue
         loaded_any = True
-        due_date = _due_date_from_checklist_path(source_path)
-        if due_date and due_date < today_iso and source_path != forced_path:
-            continue
         current_section = ""
         for line in text.splitlines():
             heading = re.match(r"^\s*##\s+(.+?)\s*$", line)
@@ -370,7 +389,7 @@ def _active_runbook_due_date() -> str:
     past_due_dates: list[str] = []
     for source_path in _checklist_doc_candidates():
         due_date = _due_date_from_checklist_path(source_path)
-        if not due_date or not source_path.exists():
+        if not due_date or not _document_path(source_path).is_file():
             continue
         if due_date >= today_iso:
             future_due_dates.append(due_date)
@@ -396,7 +415,7 @@ def _completed_runbook_slots(due_date: str) -> set[str]:
     for source_path in _checklist_doc_candidates():
         if (
             _due_date_from_checklist_path(source_path) != due_date
-            or not source_path.exists()
+            or not _document_path(source_path).is_file()
         ):
             continue
         text = _read_optional(source_path) or ""

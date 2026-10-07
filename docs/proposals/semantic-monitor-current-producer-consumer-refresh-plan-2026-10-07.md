@@ -217,6 +217,12 @@ SM01은 읽기 전용 pure 함수 fixture로 전달 누락을 확인했다. SM02
 
 사용자가 10/7 의미적 감시 개선의 구현, 결함 해소까지 반복 검토, 전체 작업본 통합 배포와 재기동을 명시 승인했다. 현재 실행 owner는 `SemanticMonitorProducerConsumerRefresh1007`이며, 기존 기계정책·PREOPEN·fixed-watch·episode 자연 수용 owner는 유지한다.
 
+### 실행 디렉터리 결함 후속 보완
+
+10/7 실제 Main의 `src/` 실행에서 체크리스트 파서가 4/13 고정 fallback만 찾고 현재 OPEN owner를 0건으로 반환하는 추가 결함을 확인했다. 사용자 후속 승인에 따라 문서 읽기와 glob을 해당 코드 릴리스 루트에 결속하고 4/13 checklist fallback을 제거한다. 오늘 날짜는 호출마다 KST로 계산하며 일반 backlog의 미래 작업과 명시적 오프라인 경로 지정은 유지한다. 의미적 감시기는 정확한 root/date 체크리스트를 직접 지정하여 오프라인 env나 과거/미래 문서가 현행 owner를 대신하지 않게 한다. 읽기 위해 process cwd를 변경하지 않는다.
+
+동일 날짜 두 번째 코드 배포는 새 PID가 실행되기 전에 새 selector의 소비 영수증을 요구하는 순환 검증을 피해야 한다. 기존 native whole-chain PASS의 정확한 generation hash를 재검증하고 기존 살아 있는 PID의 bootstrap·cwd/start ticks·직전 native consumed receipt·원 PREOPEN/env/prepared를 결속한다. 이는 새 장후 PASS나 정책 채택이 아니라 같은 정책의 코드 인계이다. 새 PID 소비 뒤 기존 전체 계약을 다시 검사한다. current checklist의 기존 stable ID와 Acceptance를 재사용하며 이미 봉인된 자동 블록을 이번 작업본에 함께 기록한다. EOD·연구·정책·PREOPEN·checklist bytes가 그대로인 경우 관련 장후 stage를 재생성하지 않는다.
+
 - SM01~SM04: notifier에 현행 기계 stage와 exact-date/native-generation 복구를 연결한다. submission monitor는 frozen family에 따라 native reversal/legacy로 dispatch한다. 새 `continuous_reversal_consumption_v1`은 event/cell/rule/arm, source/publication/effective date, 두 component, 원 입력·판정·실제 보조 input/prompt/schema hash, snapshot 읽기 시각과 PID/start ticks를 결속한다. 새 계약에서 receipt 누락은 결손이며, 이전 capture는 `historical_reversal_capture`로 별도 계수한다. quote as-of와 WS 반전 snapshot 읽기 시각을 구분한다.
 - 실제 요청 provenance에는 `continuous_reversal_request_binding`을 저장한다. request 준비와 원 응답 관측은 별도로 계수하고 compose의 provider_called를 실제 호출 근거로 쓰지 않는다. BLOCK/RECHECK의 미호출은 정상이며 ENTER_NOW의 미관측/원인과 partial source window를 남긴다.
 - SM05~SM07: 현재 날짜 checklist의 parsed OPEN stable ID만 owner로 사용한다. producer/historical owner와 denominator를 보존하고 매핑 부재는 `UNRESOLVED_CURRENT_OWNER`다. native OFF 영수증은 explicit_schedule_disabled만 인정한다. 구 Samsung 실패 및 OFF episode 장후 결손은 historical_findings로 보존하며, 오늘 surviving 31profile 검사는 그대로 유지한다. episode applied의 생산자는 07:35 Main PREOPEN이고 publication grace는 60초다. failed producer는 grace 중에도 실패로 분류한다. 퇴역 registry/transition receipt를 이용한 batched unit·bounded process/new BUY census는 Main 관측과 기존 SELL/CANCEL custody를 제외한다.
