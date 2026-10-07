@@ -327,6 +327,26 @@ def _large_companion(
     artifact_sha256: str | None,
     paths: dict[str, Path],
 ) -> tuple[dict[str, Any], dict[str, Any], str | None]:
+    if owner == "entry_split":
+        from src.engine.scalping import entry_split_order_plan as native
+        companion_path = paths["entry_split_policy"]
+        proof = {"path": str(companion_path), "sha256": _sha(companion_path),
+                 "contract": "entry_split_native_report_policy_generation", "verified": False}
+        try:
+            report, observed_sha = native._read_entry_report(path)
+            policy, error, _, _ = _read(companion_path)
+            valid, reason = native.validate_report_policy_generation(report, policy)
+            proof.update(artifact_sha_matches=observed_sha == artifact_sha256,
+                         generation_reason=reason)
+            proof["verified"] = bool(valid and error is None
+                and observed_sha == artifact_sha256 and report.get("date") == target_date
+                and policy.get("source_date") == target_date
+                and proof["sha256"] == _sha(companion_path))
+            if proof["verified"]:
+                return report, proof, None
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            proof["generation_reason"] = type(exc).__name__
+        return {}, proof, "semantic_unverified_large_source"
     if owner == "low_price_two_leg":
         companion_path = paths["low_price_candidate"]
         payload, error, read_mode, _ = _read(companion_path)

@@ -90,3 +90,6 @@ v9(`2121583e`) 배포본 68 PASS 및 63 owner 검증 후 보조 consumer를 인�
 사용자가 과도한 보조비교 축소 후 재실행과 장후 완료까지 봇 기동 중지를 지시했다. 06:27 exact supervisor SIGTERM으로 원 응답/예약을 보존하고 AI stage를 중단했다. 07:35 PREOPEN·07:55 start cron 두 행을 원문 CAS로 보류하고 persistent startup hold를 생성했다. 당시 Main은 이미 비가동이었다.
 
 원천일당 누적 100회 신규 호출 budget을 공통 원장의 attempt에 연결했다. 이미 초과한 10/7은 추가 0회이며, retry/generation 변경에도 예산을 되돌리지 않는다. failed/uncertain 포함, 전송 전 예약 차감, 기존 응답 재사용, 전수 census/미완료 공개와 native pair carry를 유지한다. router·shell·Python 직접 기동 모두 marker를 확인한다. 관련 회귀 149 PASS와 operating/terminal/PREOPEN 통합 138 PASS, compile·bash 문법·diff 및 print-only parser PASS. 재리뷰에서 stale call-completion을 새 report에 그대로 붙일 수 있는 경로를 제거하고 호출 영수증에 실제 machine generation을 결속했다. 배포·재집계·장후 완료 결과는 후속 receipt에 기록한다.
+
+
+후속 실제 strict에서 `entry_split:semantic_unverified_large_source`가 발견됐다. 64 MiB 공통 reader가 221 MiB native 보고서를 hash-only로 읽으면서 분할수량의 native report/policy generation 검증을 연결하지 못한 결함이다. 해당 owner만 기존 512 MiB bounded reader와 native generation validator로 검증하도록 연결했다. 원 report bytes·날짜·policy generation 불일치/변조/상한초과는 거부하며 공통 reader 상한은 유지한다. summary/strict 회귀 62 PASS. 장후 재개에는 원 실패 run과 새로운 tail 명령 영수증을 보존하고, 각 stage 및 strict 사전 검증을 통과한 경우에만 native `--seal-main-run`으로 Main 완료를 봉인한다.

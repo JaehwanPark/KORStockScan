@@ -1095,3 +1095,22 @@ def test_cancel_wait_summary_valid_empty_is_insufficient_sample(monkeypatch, tmp
     assert evidence['comparison_status'] == 'insufficient_sample'
     assert evidence['cancel_wait_reconciliation']['historical_state'] == 'verified_empty'
     assert evidence['candidate_cost_adjusted_ev_pct'] is None
+
+
+def test_large_entry_split_uses_native_pair_and_rejects_tampering(tmp_path,monkeypatch):
+    from src.engine.scalping import entry_split_order_plan as native
+    day='2026-09-04'; path=tmp_path/'entry.json'; policy_path=tmp_path/'policy.json'
+    policy=dict(schema_version=native.POLICY_SCHEMA_VERSION,source_date=day,source_report=str(path),policy_version='test',buckets={})
+    report=dict(schema_version=native.SCHEMA_VERSION,date=day,recommended_policy=dict(policy_version='test'),economic_acceptance=dict(status='insufficient_sample'))
+    report,policy=native.bind_report_policy_generation(report,policy)
+    path.write_text(json.dumps(report));policy_path.write_text(json.dumps(policy))
+    paths={'entry_split_policy':policy_path}
+    actual,proof,error=mod._large_companion('entry_split',path,day,mod._sha(path),paths)
+    assert error is None and proof['verified'] and actual==report
+    assert mod._economic_projection('entry_split',actual)==mod._economic_projection('entry_split',report)
+    assert mod._large_companion('entry_split',path,'2026-09-07',mod._sha(path),paths)[2]
+    assert mod._large_companion('entry_split',path,day,'0'*64,paths)[2]
+    report['economic_acceptance']['status']='validated_edge';path.write_text(json.dumps(report))
+    assert mod._large_companion('entry_split',path,day,mod._sha(path),paths)[2]
+    monkeypatch.setattr(native,'ENTRY_REPORT_MAX_BYTES',1)
+    assert mod._large_companion('entry_split',path,day,mod._sha(path),paths)[2]
