@@ -313,12 +313,34 @@ def direct_handoff(data_root,day,*,effective_date=None,publication_date=None):
         if report['artifact_content_sha256']!=family[name+'_report_sha256'] or digest(
             {k:v for k,v in report.items() if k!='artifact_content_sha256'})!=report['artifact_content_sha256']:
             raise ValueError('continuous_reversal_latest_source_mismatch')
-    return dict(schema='continuous_reversal_consumer_v1',source_date=day,publication_date=publication,
+    handoff=dict(schema='continuous_reversal_consumer_v1',source_date=day,publication_date=publication,
         effective_date=effective,policy_bundle_sha256=bundle['bundle_sha256'],family_sha256=family['family_sha256'],
         machine_report_sha256=family['machine_report_sha256'],auxiliary_report_sha256=family['auxiliary_report_sha256'],
         machine_cells_sha256=digest(family['machine_cells']),auxiliary_cells_sha256=digest(family['auxiliary_cells']),
         machine_cell_count=len(family['machine_cells']),auxiliary_cell_count=len(family['auxiliary_cells']),selection_metric=family['selection_metric'],
         current_pid_consumption_claimed=False,runtime_effect=False,allowed_runtime_apply=False,actual_order_submitted=False)
+    if family.get('schema')=='continuous_reversal_policy_v5':
+        scopes={key+'|'+route:dict(backend=cell['backend'],status=cell['status'],
+                    scope_execution_hash=cell['scope_execution_hash'])
+                for key,parent_cell in family['machine_cells'].items()
+                for route,cell in parent_cell['routes'].items()}
+        ready=sum(cell['backend']=='union_v5' for cell in scopes.values())
+        census=dict(planned=len(scopes),new_ready=ready,new_actual_pid_consumed=0,
+                    native_carried=len(scopes)-ready,contract_gaps=0)
+        # `report` is the sealed auxiliary component read above. Never label
+        # a native carry as successful application of the new operating list.
+        if report.get('scope_census')!=census:
+            raise ValueError('operating_handoff_scope_census_mismatch')
+        pending=report.get('scope_pending',[])
+        carried={sid for sid,cell in scopes.items() if cell['backend']=='registered_v4'}
+        if len(pending)!=len(carried) or {p['scope'] for p in pending}!=carried:
+            raise ValueError('operating_handoff_scope_pending_mismatch')
+        handoff.update(scope_census=census,scope_dispositions=scopes,scope_pending=pending,
+                       comparison_complete=report.get('comparison_complete') is True,
+                       operating_disposition=report['status'],
+                       machine_list_policy='explicit_operating_registration',
+                       new_policy_application_claimed=False)
+    return handoff
 
 
 def scoped_verification(data_root,day,*,effective_date=None,publication_date=None,require_consumer=False):

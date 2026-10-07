@@ -135,7 +135,7 @@ def test_contribution_unknown_and_zero_percent_tie():
     assert E.recommendation(dict(wins=8,resolved=10),dict(wins=16,resolved=20))=='equal_fraction_additional_resolved_success'
 
 
-def test_shared_store_complete_carry_and_loader(replay):
+def test_shared_store_complete_carry_and_loader(replay,monkeypatch):
     root,b,m=replay
     census=PC.prepare_inputs(root,'2026-10-07',m,b)
     assert census['census']['expected_owner_requests']>0
@@ -153,6 +153,43 @@ def test_shared_store_complete_carry_and_loader(replay):
     f=bundle['continuous_reversal'];key='samsung|REGULAR|ALL'
     assert f['machine_cells'][key]['routes']['SOR']['backend']=='union_v5'
     assert f['machine_cells'][key]['routes']['KRX']['backend']=='registered_v4'
+    from src.engine.scalping import continuous_reversal_policy as dispatch
+    handoff=dispatch.direct_handoff(root,'2026-10-07')
+    assert handoff['scope_census']==aux['scope_census']
+    assert len(handoff['scope_dispositions'])==128
+    assert handoff['new_policy_application_claimed'] is False
+    assert handoff['machine_list_policy']=='explicit_operating_registration'
+    # Exercise the actual final detector with the v5 schema and exact native
+    # producer/output bindings. No old portfolio/EV gate may reject this report.
+    from src.engine.automation import postclose_summary_handoff as stage
+    from src.engine.error_detectors import artifact_freshness as detector
+    P.write(P.directory(root,'2026-10-07')/'auxiliary.json',aux)
+    for name,report,label,folder,filename in [
+        ('main_machine_policy',m,'machine_policy','ai_decision_action_outcome_calibration','winrate_policy'),
+        ('main_auxiliary_policy',P.seal(dict(aux,staged=dict(status='fixture'))),
+         'compact_auxiliary_paired_economic','ai_entry_setup_paired_replay_batch','compact_auxiliary_paired_economic')]:
+        path=root/'report'/folder/(filename+'_2026-10-07.json');P.write(path,report)
+        stage._stage_write(stage.stage_path(root/'report','2026-10-07',name),
+            dict(schema=stage.STAGE_SCHEMA,stage_id=name,source_date='2026-10-07',status='succeeded',exit_code=0,
+                 sources={label:dict(path=str(path.resolve()),sha256=P.file_hash(path))}))
+    host=root/'detector-host';host.mkdir();(host/'data').symlink_to(root,target_is_directory=True)
+    for fn in (detector._machine_result_semantics,detector._auxiliary_result_semantics):
+        observed=fn(host,'2026-10-07')
+        assert observed['findings']==[]
+        assert observed['scope_census']==aux['scope_census']
+        assert observed['scope_pending']==handoff['scope_pending']
+        assert observed['comparison_complete']==handoff['comparison_complete']
+    from src.engine import runtime_approval_summary as summary
+    monkeypatch.setattr(summary,'DATA_DIR',root)
+    monkeypatch.setattr(summary,'REPORT_DIR',root/'report/runtime_approval_summary')
+    monkeypatch.setenv('POSTCLOSE_POLICY_PUBLICATION_DATE','2026-10-07')
+    monkeypatch.setenv('POSTCLOSE_PREPARED_EFFECTIVE_DATE','2026-10-08')
+    result=summary.build_runtime_approval_summary('2026-10-07',include_swing=False,include_producer_gap=False)
+    for owner in ('main_mechanistic_entry','compact_auxiliary'):
+        row=result['sources'][owner]
+        assert row['policy_receipt']['valid'] is True
+        assert row['economic_evidence']['scope_census']==aux['scope_census']
+        assert row['economic_evidence']['new_policy_application_claimed'] is False
     # Mutable comparison state cannot invalidate the frozen publication.
     P.write(PC.directory(root,'2026-10-07')/'shared-ledger/input-census.json',dict(changed=True))
     V.validate_sources(bundle,root)

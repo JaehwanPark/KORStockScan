@@ -1246,6 +1246,14 @@ def build_runtime_approval_summary(
                         closure_test='exact_date_native_policy_and_normal_consumer_receipts',
                         model_holdout_status='not_required_winrate',
                         candidate_holdout_status='not_required_winrate')
+                    if 'scope_census' in handoff:
+                        row['economic_evidence'].update(
+                            operating_disposition=handoff['operating_disposition'],
+                            machine_list_policy=handoff['machine_list_policy'],
+                            scope_census=handoff['scope_census'],
+                            scope_pending=handoff['scope_pending'],
+                            comparison_complete=handoff['comparison_complete'],
+                            new_policy_application_claimed=False)
                 except (OSError,ValueError,KeyError,TypeError):
                     policy_receipt_valid=False
                     row['economic_evidence'].update(comparison_status='source_gap',

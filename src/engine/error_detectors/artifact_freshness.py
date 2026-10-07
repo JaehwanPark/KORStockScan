@@ -413,7 +413,8 @@ def _continuous_reversal_result_semantics(root, source_date, component):
         report, report_sha = _semantic_object(report_path)
         from src.engine.scalping.continuous_reversal_registered_postclose import SCHEMA as registered_schema
         from src.engine.scalping.continuous_reversal_path_postclose import SCHEMA as path_schema
-        if report.get('schema') not in {reports.SCHEMA,registered_schema,path_schema}:
+        from src.engine.scalping.continuous_reversal_operating_postclose import SCHEMA as operating_schema
+        if report.get('schema') not in {reports.SCHEMA,registered_schema,path_schema,operating_schema}:
             raise ValueError('continuous_reversal_report_schema_invalid')
         if (report != reports.seal(report) or report.get('source_date') != source_date
                 or report.get('status') not in {'completed','completed_with_scope_carry'}):
@@ -445,8 +446,9 @@ def _continuous_reversal_result_semantics(root, source_date, component):
                     artifact=str(report_path), report_sha256=report_sha,
                     selection_metric=handoff['selection_metric'],
                     cells=bundle['continuous_reversal'][component + '_cells'],
-                    comparison_complete=report.get('comparison_complete',not bool(report.get('scope_pending'))),
-                    scope_pending=report.get('scope_pending',[]),
+                    comparison_complete=handoff.get('comparison_complete',report.get('comparison_complete',not bool(report.get('scope_pending')))),
+                    scope_pending=handoff.get('scope_pending',report.get('scope_pending',[])),
+                    scope_census=handoff.get('scope_census'),
                     native_handoff=handoff, realized_profit_assessed=False,
                     runtime_effect=False, actual_pid_consumed=False)
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
