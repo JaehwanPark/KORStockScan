@@ -126,3 +126,6 @@ probe는 요청 대상일을 읽고, gate backtest는 명시 start/end를 지원
 삭제 완료한 C/D 날짜만 native retired-snapshot ledger에 기록한다. 요청 당시 canonical 원천이 있다면 정상 소비하고, 폐기된 fallback만 필요한 옛 요청은 명시적 retired_source로 남긴다. 이를 정상 빈 표본이나 자동 복원으로 숨기지 않는다.
 
 검토·실제 삭제/보존·공간 기록: [실행 감사](../audits/main-multi-policy-and-unused-raw-execution-review-2026-10-07.md).
+
+
+10/7 실제 완료: 95개 파일 삭제(94개 계획 후보+nonraw 분리 혼합 archive), 보호 5,415개·현재 활성 정책 hash 일치, 삭제 후 원천 선택/10개 지표 동일. 실제 df available +22.813187GiB, 사용률 80%→64%. 최종 nonraw 할당은 525,750,272 bytes로 계획 시점 측정과 구분하며 순 할당 회수는 22.354748GiB다. 다음 예약 작업의 자연 완료는 별도 수용이다. 자세한 actual journal은 위 실행 감사에 연결한다.

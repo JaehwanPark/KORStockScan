@@ -336,3 +336,6 @@ P5 동결 비교는 과거 8일 356,455개 기존 라벨 차이 0, 신규 후보
 정기 장후는 현재 v2 활성 여부로 producer를 dispatch하며 cumulative 정상 native 전체에서 FIRST/CONFIRMED를 재생한다. bar 내용·SHA·입력·kernel/branch code·label contract를 cache에 결속한다. 무표본은 지원 scope에서 applicable한 정규장 전체 부모를 승계한다. 다음 날 candidate 생성은 오늘 current pointer를 변경하지 않으며 다음 영업일 native activation owner가 소비한다. 다음 자연 장후 완료·실제 진입/체결은 code/PID 검증과 별도 수용 항목이다.
 
 검토·실행 기록: [다중 정책 및 미사용 파일 실행 감사](../audits/main-multi-policy-and-unused-raw-execution-review-2026-10-07.md).
+
+
+10/7 실제 완료: 실행 code `039af7c1`의 불변 회귀 1,047 PASS 후 12:33:52 새 Main PID 854451 기동, 12:34:04.693 오늘 v2 활성화, 12:34:48.915955 실제 policy 소비. 5종목 수신·capture를 확인했다. 신규 CONFIRMED 조건의 자연 ENTER/AI/제출·체결 및 오늘 장후/다음 날 소비는 별도 관측이며 앞의 코드/인계 PASS로 대체하지 않는다.
