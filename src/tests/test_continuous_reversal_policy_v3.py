@@ -248,6 +248,18 @@ def test_registered_duplicate_conflict_isolated(monkeypatch):
     assert census==dict(duplicate_rows=2,quarantined_identities=['b'])
 
 
+def test_registered_custody_persists_on_next_source_date(tmp_path):
+    out=PC.directory(tmp_path,'2026-10-07')/'registered-sources';out.mkdir(parents=True)
+    source=out/'research.json';source.write_text('{}')
+    record=dict(path=str(source),sha256=P.file_hash(source))
+    value=P.seal(dict(registry_sha256=C.SHA256,source_receipts=[record]))
+    P.write(out/('registration-'+value['artifact_content_sha256']+'.json'),value)
+    assert PC.registration_receipts(tmp_path,'2026-10-08')[0]==record
+    source.write_text('{"changed":true}')
+    with pytest.raises(ValueError,match='registration_source_changed'):
+        PC.registration_receipts(tmp_path,'2026-10-08')
+
+
 def test_mixed_tick_offline_primary_keeps_own_first_decline(native,monkeypatch):
     import gzip
     root,parent,_,_=native

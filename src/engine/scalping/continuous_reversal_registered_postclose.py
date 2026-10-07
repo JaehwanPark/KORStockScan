@@ -228,8 +228,9 @@ def unique_points(population, census):
 
 def registration_receipts(data_root, day):
     """Bind the exact registered evidence to issued policies, outside live tmp."""
-    out=directory(data_root,day)/'registered-sources';matches=[]
-    for path in out.glob('registration-*.json'):
+    out=directory(data_root,day).parent;matches=[]
+    for path in out.glob('????-??-??/registered-sources/registration-*.json'):
+        if not '2026-06-05'<=path.parent.parent.name<=day:continue
         value=json.loads(path.read_text())
         if value.get('registry_sha256')!=C.SHA256:continue
         if value.get('artifact_content_sha256')!=P.seal(value)['artifact_content_sha256']:
