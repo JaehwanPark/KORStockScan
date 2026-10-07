@@ -65,3 +65,7 @@
 v4 배포(`8f015957`)의 immutable 188 PASS 후 재개했으나 코드 의존성이 바뀐 preflight는 기존 기계 reader와 교체할 수 없어 wrapper가 안전하게 보류됐다. 분석 snapshot profiler에서 20개 확인점 3.816초 중 3.758초가 snapshot, 3.082초가 과거 특징 전체 재계산이었다. 단순 콜백 수집 benchmark와 실제 확인점 투영 비용은 별개다.
 
 successor runtime/장후 공통 projector에서 native와 같은 접두·누적 배열·연산 순서로 마지막 특징만 계산하고 같은 tick의 정책들이 공유하도록 보완했다. native v4 코드/정의는 불변이다. 실제 9/22·10/7의 삼성·두산·주성·052690 총 120개 확인점 snapshot bytes가 완전히 같았고, 측정 합계 native 8.888초→successor 0.733초였다. provider/주문 호출 0회. 결손 수량/side/경계/epoch 회귀 포함 24 PASS, 계약·원장·native parity 확장 135 PASS다. 변경 코드 세대의 원천 재계산은 필요하지만 같은 내용 객체와 기존 실제 응답을 삭제/복제하지 않는다. 원 reader를 정상 중단한 후 새 preflight/선택 코드로 재개한다.
+
+01:19에 immutable 53 PASS와 native parent/63 owner 검증 후 `5846d0c7ece047a894656452ea1fffaa89ba5314` / `operating-union-20261008-v5`를 선택했다. exact PID/start-ticks로 원 supervisor 1114905만 SIGTERM하여 committed checkpoint를 보존했다. 01:21 새 preflight와 machine child 1129893 기동을 확인했다. 완료된 자체 pytest 임시 복제본 추가 2.49 GiB를 삭제했으며 실제 원천/AI 원장/응답/로그는 보존했다. 최종 chain·기동 준비는 아직 진행 중이다.
+
+01:22 후행 entry-split 재개 실패의 직접 원인은 정상 생성된 221 MiB JSON 보고서에 raw shard와 같은 64 MiB 상한을 적용한 reader였다(`bounded_entry_split_predecessor_required`). native 보고서 IO 경계를 512 MiB로 분리하고 읽는 중 inode/크기/mtime 변경 및 쓰기 전 전체 hash CAS를 검증한다. 중첩 refresh 전 이전 파싱 객체를 해제하고 원본 bytes의 중복 보존을 제거했다. 원천 행·경제성·수량·정책 선택/승격 조건은 변경하지 않았다. 64 MiB 초과 정상 JSON 회귀와 제한 초과 명시 실패 포함 관련 244 PASS, compile/diff PASS다.

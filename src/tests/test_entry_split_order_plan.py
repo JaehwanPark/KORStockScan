@@ -5384,6 +5384,24 @@ def test_bounded_refresh_reuses_revision_and_rejects_stale_policy(monkeypatch, t
         split_plan.refresh_execution_model_only(target, prepared_effective_date="2026-09-21")
 
 
+def test_native_report_above_raw_shard_bound_uses_bounded_refresh(monkeypatch,tmp_path):
+    _patch_dirs(monkeypatch,tmp_path)
+    day='2026-10-07';path,_=split_plan.report_paths(day)
+    path.parent.mkdir(parents=True,exist_ok=True)
+    # Whitespace is valid JSON and reproduces the former size-only rejection
+    # without retaining a large decoded fixture in memory.
+    with path.open('wb') as f:
+        f.write(b' '* (64*1024*1024+1))
+        f.write(json.dumps(dict(date=day,cumulative_state={'retained':True})).encode())
+    seen=[]
+    monkeypatch.setattr(split_plan,'refresh_execution_model_only',lambda *a,**kw:seen.append(a) or {'refreshed':True})
+    assert split_plan.build_report(day)=={'refreshed':True}
+    assert seen==[(day,)]
+    monkeypatch.setattr(split_plan,'ENTRY_REPORT_MAX_BYTES',path.stat().st_size-1)
+    with pytest.raises(ValueError,match='bounded_entry_split_predecessor_required'):
+        split_plan.build_report(day)
+
+
 
 
 def test_repaired_atomic_source_generation_requires_daily_rebuild(monkeypatch):

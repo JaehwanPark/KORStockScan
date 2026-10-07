@@ -63,6 +63,9 @@ QUANTITY_LEG_FOUR_ARM_SHARED_CONTRACT_FIELDS = (
 REPORT_TYPE = "entry_split_order_plan"
 RUNTIME_FAMILY = "entry_split_order_plan"
 REPORT_DIR = DATA_DIR / "report" / REPORT_TYPE
+# A native report includes frozen replay evidence and can legitimately exceed
+# the raw JSONL/shard bound. This is a report IO limit, never a source-row cap.
+ENTRY_REPORT_MAX_BYTES = 512 * 1024 * 1024
 POLICY_DIR = DATA_DIR / "threshold_cycle" / "entry_split_order_policy"
 SAMPLE_FLOOR_REAL = 20
 SAMPLE_FLOOR_SIM = 10
@@ -1428,6 +1431,27 @@ def _load_json(path: Path) -> dict[str, Any]:
     except Exception:
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+def _read_entry_report(path: Path) -> tuple[dict[str, Any], str]:
+    before=path.stat()
+    if before.st_size>ENTRY_REPORT_MAX_BYTES:
+        raise ValueError('bounded_entry_split_predecessor_required')
+    with path.open('rb') as handle:
+        encoded=handle.read(ENTRY_REPORT_MAX_BYTES+1)
+    after=path.stat()
+    if (before.st_ino,before.st_size,before.st_mtime_ns)!=(after.st_ino,after.st_size,after.st_mtime_ns):
+        raise ValueError('entry_split_predecessor_changed_during_read')
+    if len(encoded)>ENTRY_REPORT_MAX_BYTES:
+        raise ValueError('bounded_entry_split_predecessor_required')
+    report=json.loads(encoded)
+    if not isinstance(report,dict):raise ValueError('entry_split_predecessor_object_required')
+    return report,hashlib.sha256(encoded).hexdigest()
+
+
+def _entry_report_file_hash(path: Path) -> str:
+    with path.open('rb') as handle:
+        return hashlib.file_digest(handle,'sha256').hexdigest()
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -6330,10 +6354,9 @@ def refresh_execution_model_only(target_date, *, prepared_effective_date=None, w
 def _refresh_execution_model_only(target_date, *, prepared_effective_date=None, write=True):
     """Bounded subsection successor; preserve original as-of and cumulative inputs."""
     json_path, md_path = report_paths(target_date)
-    if not json_path.is_file() or json_path.stat().st_size > 64 * 1024 * 1024:
+    if not json_path.is_file():
         raise ValueError("bounded_entry_split_predecessor_missing")
-    predecessor_bytes = json_path.read_bytes()
-    report = json.loads(predecessor_bytes)
+    report,predecessor_sha256 = _read_entry_report(json_path)
     if report.get("date") != target_date:
         raise ValueError("entry_split_predecessor_date_invalid")
     atomic_lineage = ((report.get("input_summary") or {}).get("atomic_execution_sizing")
@@ -6437,7 +6460,7 @@ def _refresh_execution_model_only(target_date, *, prepared_effective_date=None, 
     if not valid:
         raise ValueError(reason)
     if write:
-        if json_path.read_bytes() != predecessor_bytes:
+        if _entry_report_file_hash(json_path) != predecessor_sha256:
             raise ValueError("entry_split_predecessor_changed_during_refresh")
         generation = report["artifact_generation_binding"]["generation_id"]
         _write_immutable_json(generation_report_path(target_date, generation), report)
@@ -6468,9 +6491,7 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
     target_date = str(target_date).strip()
     predecessor = report_paths(target_date)[0]
     if target_date >= "2026-09-17" and predecessor.is_file():
-        if predecessor.stat().st_size > 64 * 1024 * 1024:
-            raise ValueError("bounded_entry_split_predecessor_required")
-        prior_report = _load_json(predecessor)
+        prior_report, _ = _read_entry_report(predecessor)
         if prior_report.get("date") == target_date and prior_report.get("cumulative_state"):
             # The research-only kernel cannot establish primary operating EV.
             # Refresh exact execution revisions without re-running its grid.
@@ -6479,6 +6500,7 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
             # the date from current sources; cumulative inputs still come from the
             # latest strictly earlier, contract-valid report.
             if not _same_date_atomic_source_requires_rebuild(target_date, prior_report):
+                del prior_report
                 return refresh_execution_model_only(target_date, write=write)
     source_quality = _source_quality_summary(target_date)
     daily_events, daily_load_summary = _iter_input_events(target_date)
