@@ -37,8 +37,16 @@
 
 비삼성의 3개 ENTER는 HPSP 09:08·09:14, 주성 13:00이다. HPSP는 실제 보조 PASS 2건 이후 제출 경로에서 fixed-watch lineage·3초 AI TTL·micro/CAUTION guard로 종료했으며, lineage 수리는 [기존 보완 검토](./main-fixed-watch-submit-and-volume-source-repair-review-2026-10-07.md)에 기록했다. 주성은 Provider 전에 `reversal_signal_expired_or_changed`로 종료했다. 해당 과거 receipt는 expiry와 change를 정확히 나눌 원천이 없어 둘 중 하나로 추정하지 않는다.
 
+[거절 상세](../../tmp/reversal-clock-repair-20261007/contract-rejections.json)에서 삼성 contract invalid 8건은 모두 FIRST 신호 교체다. 비삼성 58건은 FIRST 신호 교체 24·expiry 또는 snapshot change 32·generation change 2건이다. 이 거절들은 정책 조건을 계산하기 전에 끝났으므로 조건 통과 ENTER를 놓쳤다는 숫자로 합산하지 않는다. 짧은 신호의 claim→평가 전달 지연 점검 대상이며 원래 5초 guard를 유지한다.
+
 현재 삼성 ENTER 희소의 확인된 주원인은 기존 DD5 1.2% 부적합과 신규 분기의 DD5·60초 상승률·저점 상승 교집합 희소다. claim expiry/신호 교체와 필수 입력 부족은 별도 전달·원천 원인이며 기계 조건을 통과했다는 뜻이 아니다. 추가 개선은 작은 낙폭 및 느린 상승의 조건 가설을 기존 원천으로 비교하고, 적격 신호의 claim→평가 지연을 측정하는 방향이다. 이번 계측 수리만으로 threshold/provider/TTL/주문 조건을 변경하지 않는다.
 
 ## 배포 수용 기록
 
-검토한 코드의 immutable release, 정책 payload 동일성, PREOPEN/bootstrap·custody·episode pin 보존과 native graceful restart를 확인한 뒤 아래 기록에 실제 결과를 추가한다. [작업 증빙](../../tmp/reversal-clock-repair-20261007/)에는 frozen source fingerprint·preflight·restart·policy activation·PID·자연 감시 원본을 보존한다.
+- 코드 커밋 `25bcd8f00df513be3cf1b32972fc1b489c3c66a3`, immutable release `/home/ubuntu/KORStockScan-runtime-releases/reversal-clock-20261007-v1`. 해당 checkout의 관련 **369 pytest PASS** 후 선택·native 장중 인계를 검증했다.
+- **13:55:25 graceful 재기동 완료**, 새 Main PID `896349`/start_ticks `96975678`. 실제 cwd·commit·`source_dirty=false`·당일 bootstrap PASS다. **13:55:44 native 계좌/DB 대사 완료**, WS 계좌 통보 및 5종목 수신·기계 캡처를 확인했다.
+- machine/auxiliary 12셀 전체와 연구 kernel/branch/input 계약 해시를 유지하며 release metadata만 native candidate→parent CAS로 다시 결속했다. bundle=`de73d2f60c14377efc0c1eae3e2b8846f741d678f0233c788bc9744e88ced2d5`, family=`eb10bbcce0a53a40186f682b028c75883edc140636f71bd6a879065c9d9729ca`. **13:56:25.038557 실제 PID 정책 소비 영수증**과 receipt SHA를 확인했다.
+- PREOPEN/bootstrap·dated 원 정책·summary/controller·현재 체크리스트·custody 정책 등 보호 11개 SHA 동일, 에피소드 186개 pin 검증 PASS, cron 8개 표준 route PASS다. 기존 다른 owner process는 이 Main 재기동에 포함하지 않았다.
+- **13:58:15 자연 확인:** HPSP의 13:57:20·13:58:04 두 rejection이 새 v2 상태 관측 시각과 원 trace에 결속되었고 감시 소비자가 `reversal_signal_expired`로 분류했다. 해당 시각 역전 race 자체의 자연 재발은 미관측이다. 기존 v1 결손 4건은 과거 원 증거대로 유지하며 새 receipt로 소급 성공 처리하지 않는다.
+
+[작업 증빙](../../tmp/reversal-clock-repair-20261007/)의 [배포 검증](../../tmp/reversal-clock-repair-20261007/deployment-verify.json), [실제 정책 소비](../../tmp/reversal-clock-repair-20261007/policy-consumption.json), [자연 계측 소비](../../tmp/reversal-clock-repair-20261007/natural-source-semantics.json)에 원본을 보존한다. 새 정책의 적격 신호·실제 Provider/제출/체결·비용 후 수익 및 다음 자연 장후는 현재 체크리스트의 기존 owner에서 계속 확인한다.
