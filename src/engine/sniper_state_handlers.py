@@ -50146,7 +50146,8 @@ def _resolve_watching_state_change_refresh(
             family=(selected or {}).get('continuous_reversal')
             claim=None
             if family and family.get('schema')=='continuous_reversal_policy_v2':
-                from src.engine.scalping.continuous_reversal_branches import claim_snapshot,restore_session_anchors,configure
+                from src.engine.scalping.continuous_reversal_branches import restore_session_anchors,configure
+                from src.engine.scalping.reversal_source_diagnostics import claim_snapshot_with_receipt as claim_snapshot
                 from src.engine.scalping.continuous_reversal_policy_v2 import record_pid_consumption
                 record_pid_consumption(DATA_DIR,selected)
                 restore_session_anchors(DATA_DIR,datetime.fromtimestamp(now_ts,_KST).date().isoformat())

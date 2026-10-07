@@ -328,3 +328,93 @@ def test_claim_telemetry_never_changes_success_or_native_generation_rejection(mo
     with pytest.raises(ValueError, match='reversal_signal_generation_changed') as error:
         validate_claim_with_receipt(claim, 'f'*64, now=now)
     assert error.value.reversal_source_receipt['status'] == 'unobservable'
+
+
+@pytest.mark.parametrize('damage', [None, 'missing_registration', 'registration_hash',
+    'active_generation', 'snapshot', 'scope', 'scope_session', 'scope_date',
+    'registration_clock', 'unexpired', 'source_invalid'])
+def test_registered_claim_expiry_retains_native_rejection_and_exact_source(monkeypatch, tmp_path, damage):
+    from src.engine.scalping import reversal_source_diagnostics as D
+    from src.engine.monitoring.submission_bottleneck_monitor import (
+        _reversal_lifecycle_diagnostic, source_gap_semantics)
+    B, state, values, baseline = _native_reversal_claim(monkeypatch)
+    native_claims = deepcopy(B._CLAIMS)
+    def state_values():
+        return deepcopy((state.legacy.rows, state.legacy.turn, state.legacy.segment_start, state.ready, state.counts))
+    native_state_values = state_values()
+    B._CLAIMS.clear()
+    at = values[-1][0]
+    monkeypatch.setattr(D.time, 'time', lambda: at)
+    claim = D.claim_snapshot_with_receipt('403870', 'SOR', 'SOR_REGULAR', now=at,
+        item='403870_AL', family_sha256='f'*64)
+    assert {k:v for k,v in claim.items() if k!='source_registration_receipt'} == baseline
+    assert B._CLAIMS == native_claims and state_values() == native_state_values
+    assert B.validate_claim(claim, 'f'*64, now=at) == B.validate_claim(baseline, 'f'*64, now=at)
+    now = at + (4 if damage == 'unexpired' else 6)
+    # Exercise native cleanup, which removes expired registered claims even
+    # when an unrelated scope is checked. Unexpired disappearance is unexplained.
+    if damage == 'unexpired':
+        B._CLAIMS.pop(claim['token'])
+    else:
+        assert B.claim_snapshot('005930', 'SOR', 'SOR_REGULAR', now=now,
+            item='005930_AL', family_sha256='f'*64) is None
+    assert claim['token'] not in B._CLAIMS
+    if damage == 'missing_registration':
+        claim.pop('source_registration_receipt')
+    elif damage == 'registration_hash':
+        claim['source_registration_receipt']['sha256'] = 'corrupt'
+    elif damage == 'active_generation':
+        B._GENERATION = 'changed'
+    elif damage == 'snapshot':
+        claim['snapshot'][0]['low_price'] += 1
+    elif damage in {'scope', 'scope_session', 'scope_date', 'registration_clock'}:
+        proof = claim['source_registration_receipt']
+        if damage == 'scope': proof['scope'][0] = '005930'
+        elif damage == 'scope_session': proof['scope'][3] = 'AFTER'
+        elif damage == 'scope_date': proof['scope'][4] = '2026-10-06'
+        else: proof['observed_epoch'] = now+1
+        proof['sha256'] = B.digest({k:v for k,v in proof.items() if k!='sha256'})
+    latest = values[-1][:]
+    latest[0] = now; latest[2] += 1
+    if damage == 'source_invalid': latest[8] = 0
+    state.observe(latest, symbol='403870', venue='SOR', session='SOR_REGULAR')
+    monkeypatch.setattr(D.time, 'time', lambda: now)
+    with pytest.raises(ValueError, match='reversal_signal_generation_changed') as original:
+        B.validate_claim(claim, 'f'*64, now=now)
+    with pytest.raises(ValueError, match='reversal_signal_generation_changed') as measured:
+        D.validate_claim_with_receipt(claim, 'f'*64, now=now,
+            evaluation_attempt_id='registered-expiry', machine_bundle_sha256='b'*64)
+    assert str(measured.value) == str(original.value)
+    receipt = measured.value.reversal_source_receipt
+    assert receipt['registered_claim_present'] is False and receipt['snapshot'] is None
+    assert receipt['supplied_snapshot'] == claim['snapshot']
+    row = dict(stock_code='403870', decision_ts=B.K.iso(now+.01),
+        decision_stage='entry_screen', machine_evaluation_status='assessment_contract_invalid',
+        evaluation_attempt_id='registered-expiry', machine_bundle_sha256='b'*64,
+        market_data_route='krx_nxt_integrated', provider_called=False,
+        machine_contract_error=str(measured.value), continuous_reversal_rejected_claim_receipt=receipt)
+    expected = 'reversal_signal_expired' if damage is None else None
+    assert _reversal_lifecycle_diagnostic(row) == expected
+    from src.tests.test_submission_bottleneck_monitor import _source_gap_files
+    clock = datetime.fromtimestamp(now+.1, B.K.KST)
+    _source_gap_files(tmp_path, clock, traces=[row])
+    result = source_gap_semantics(tmp_path, clock)
+    if damage is None:
+        assert result['issues'] == {} and result['diagnostics'] == {'machine_trace:reversal_signal_expired': 1}
+    else:
+        assert result['issues'] == {'machine_trace:reversal_signal_generation_changed': 1}
+
+
+def test_registration_telemetry_failure_preserves_native_admission(monkeypatch):
+    from src.engine.scalping import reversal_source_diagnostics as D
+    B, _, values, original = _native_reversal_claim(monkeypatch)
+    registered = deepcopy(B._CLAIMS)
+    B._CLAIMS.clear()
+    monkeypatch.setattr(D.time, 'time', lambda: float('nan'))
+    claim = D.claim_snapshot_with_receipt('403870', 'SOR', 'SOR_REGULAR', now=values[-1][0],
+        item='403870_AL', family_sha256='f'*64)
+    assert {k:v for k,v in claim.items() if k!='source_registration_receipt'} == original
+    assert B._CLAIMS == registered
+    assert claim['source_registration_receipt']['status'] == 'unobservable'
+    assert D.verified_registration(claim, claim['source_registration_receipt']) is None
+    assert B.validate_claim(claim, 'f'*64, now=values[-1][0]) == B.validate_claim(original, 'f'*64, now=values[-1][0])

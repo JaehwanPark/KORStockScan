@@ -9536,8 +9536,8 @@ class GPTSniperEngine:
                     item = (ws_data.get('last_realtime_type_item') or {}).get('0B')
                     snapshot_now=time.time()
                     if reversal_family.get('schema')=='continuous_reversal_policy_v2':
-                        from src.engine.scalping.continuous_reversal_branches import claim_snapshot
-                        from src.engine.scalping.reversal_source_diagnostics import validate_claim_with_receipt
+                        from src.engine.scalping.reversal_source_diagnostics import (
+                            claim_snapshot_with_receipt as claim_snapshot, validate_claim_with_receipt)
                         claim=reversal_signal_claim or claim_snapshot(symbol,_explicit_item_venue(item),machine_exact['session_bucket'],
                             now=snapshot_now,item=item,family_sha256=reversal_family['family_sha256'])
                         snapshot=validate_claim_with_receipt(claim,reversal_family['family_sha256'],now=snapshot_now,

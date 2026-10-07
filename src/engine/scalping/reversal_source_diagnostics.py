@@ -11,6 +11,55 @@ import time
 from src.engine.scalping import continuous_reversal as K
 
 
+def claim_snapshot_with_receipt(*args, **kwargs):
+    """Observe native registration before its bounded in-memory expiry.
+
+    Extra source metadata does not change the native token, snapshot or guard.
+    Registration and its copy share the ingestion lock; no disk or API I/O.
+    """
+    from src.engine.scalping import continuous_reversal_branches as B
+    with B._LOCK:
+        claim = B.claim_snapshot(*args, **kwargs)
+        if claim:
+            try:
+                original = B._CLAIMS.get(claim['token'])
+                if original:
+                    proof = dict(schema='continuous_reversal_claim_registration_v1',
+                        claim_token=claim['token'], generation=original['generation'],
+                        scope=list(original['scope']), snapshot=deepcopy(original['snapshot']),
+                        claim_epoch=kwargs['now'], observed_epoch=time.time(), runtime_effect=False)
+                    proof['sha256'] = B.digest(proof)
+                    claim['source_registration_receipt'] = proof
+            except (ValueError, TypeError, KeyError, OverflowError):
+                # A source-copy failure must not alter native claim admission.
+                claim['source_registration_receipt'] = dict(
+                    schema='continuous_reversal_claim_registration_v1', status='unobservable', runtime_effect=False)
+        return claim
+
+
+def verified_registration(claim, proof):
+    """Validate exact source metadata, without granting native claim validity."""
+    from src.engine.scalping import continuous_reversal_branches as B
+    try:
+        event = proof['snapshot'][0]
+        if (proof.get('schema') != 'continuous_reversal_claim_registration_v1'
+                or proof.get('status') == 'unobservable'
+                or proof.get('runtime_effect') is not False
+                or proof['sha256'] != B.digest({k: v for k, v in proof.items() if k != 'sha256'})
+                or proof['claim_token'] != claim['token']
+                or proof['generation'] != claim['generation']
+                or proof['snapshot'] != claim['snapshot']
+                or proof['scope'] != [event['symbol'], event['venue'], event['source_item'],
+                                      event['market'], datetime.fromtimestamp(event['epoch'], K.KST).date().isoformat()]
+                or proof['claim_token'] != B.digest([proof['generation'], event['signal_id'], proof['snapshot']])
+                or not 0 <= proof['claim_epoch'] - event['epoch'] <= 5
+                or not 0 <= proof['observed_epoch'] - proof['claim_epoch'] <= 5):
+            return None
+        return proof
+    except (ValueError, TypeError, KeyError, IndexError, OverflowError):
+        return None
+
+
 def validate_claim_with_receipt(claim, family_sha256, *, now,
                                 evaluation_attempt_id=None, machine_bundle_sha256=None):
     """Run the unchanged guard and retain its exact source on rejection.
@@ -42,18 +91,23 @@ def _claim_failure_receipt(B, claim, family_sha256, now, reason):
     original = B._CLAIMS.get(claim.get('token')) if isinstance(claim, dict) else None
     snapshot = deepcopy(original['snapshot']) if original else None
     supplied = claim.get('snapshot') if isinstance(claim, dict) else None
-    event = snapshot[0] if snapshot else {}
-    state = B._STATES.get(original['scope']) if original else None
+    registration = deepcopy(claim.get('source_registration_receipt')) if isinstance(claim, dict) else None
+    verified = verified_registration(claim, registration) if registration else None
+    event = snapshot[0] if snapshot else verified['snapshot'][0] if verified else {}
+    scope = original['scope'] if original else tuple(verified['scope']) if verified else None
+    state = B._STATES.get(scope) if scope else None
     last = list(state.legacy.last) if state and state.legacy.last else None
     current_turn_id = (state.legacy.turn or {}).get('event_id') if state else None
     state_observed_epoch = time.time()
-    receipt = dict(schema='continuous_reversal_claim_source_receipt_v2', status='observed',
+    receipt = dict(schema='continuous_reversal_claim_source_receipt_v3', status='observed',
         validation_epoch=now, requested_family_sha256=family_sha256,
         state_observed_epoch=state_observed_epoch,
         claim_token=claim.get('token') if isinstance(claim, dict) else None,
         claim_generation=claim.get('generation') if isinstance(claim, dict) else None,
         stored_generation=original.get('generation') if original else None,
-        scope=list(original['scope']) if original else None,
+        active_generation=B._GENERATION, registered_claim_present=original is not None,
+        source_registration_receipt=registration, supplied_snapshot=deepcopy(supplied),
+        scope=list(scope) if scope else None,
         snapshot=snapshot, snapshot_sha256=B.digest(snapshot) if snapshot else None,
         supplied_snapshot_sha256=B.digest(supplied) if supplied else None,
         signal_id=event.get('signal_id') or event.get('event_id'),
@@ -63,6 +117,10 @@ def _claim_failure_receipt(B, claim, family_sha256, now, reason):
         price_path_segment_start=state.legacy.segment_start if state else None,
         validation_error=reason, failure_cause=reason,
         runtime_effect=False, actual_order_submitted=False)
+    if (reason == 'reversal_signal_generation_changed' and not original and verified
+            and B._GENERATION == family_sha256 == verified['generation']
+            and receipt['signal_age_seconds'] > 5):
+        receipt['failure_cause'] = 'reversal_signal_expired'
     if reason == 'reversal_signal_expired_or_changed':
         receipt['failure_cause'] = (
             'reversal_signal_snapshot_changed'

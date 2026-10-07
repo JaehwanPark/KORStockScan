@@ -151,7 +151,8 @@ def _reversal_lifecycle_diagnostic(row):
     if (row.get("provider_called") is not False or row.get("actual_order_submitted") is True
             or not isinstance(receipt, dict) or receipt.get("status") != "observed"
             or receipt.get("schema") not in {"continuous_reversal_claim_source_receipt_v1",
-                                             "continuous_reversal_claim_source_receipt_v2"}
+                                             "continuous_reversal_claim_source_receipt_v2",
+                                             "continuous_reversal_claim_source_receipt_v3"}
             or not row.get("evaluation_attempt_id")
             or receipt.get("evaluation_attempt_id") != row.get("evaluation_attempt_id")
             or not row.get("machine_bundle_sha256")
@@ -160,12 +161,29 @@ def _reversal_lifecycle_diagnostic(row):
         return None
     try:
         snapshot = receipt["snapshot"]
+        generation = receipt["stored_generation"]
+        expired_registration = False
+        if (receipt['schema'] == 'continuous_reversal_claim_source_receipt_v3'
+                and receipt.get('registered_claim_present') is False):
+            from src.engine.scalping.reversal_source_diagnostics import verified_registration
+            proof = verified_registration(dict(token=receipt['claim_token'],
+                generation=receipt['claim_generation'], snapshot=receipt['supplied_snapshot']),
+                receipt.get('source_registration_receipt'))
+            if (not proof or snapshot is not None or generation is not None
+                    or receipt['scope'] != proof['scope']
+                    or receipt['active_generation'] != receipt['requested_family_sha256']
+                    or receipt['validation_epoch'] < proof['observed_epoch']
+                    or row['machine_contract_error'] != 'reversal_signal_generation_changed'
+                    or receipt.get('failure_cause') != 'reversal_signal_expired'):
+                return None
+            snapshot, generation = proof['snapshot'], proof['generation']
+            expired_registration = True
         event = snapshot[0]
         scope = receipt["scope"]
         latest = receipt["latest_native_observation"]
         at = receipt["validation_epoch"]
         observed_at = (receipt["state_observed_epoch"]
-                       if receipt["schema"] == "continuous_reversal_claim_source_receipt_v2"
+                       if receipt["schema"] != "continuous_reversal_claim_source_receipt_v1"
                        else at)
         age = at - event["epoch"]
         family = receipt["requested_family_sha256"]
@@ -175,8 +193,8 @@ def _reversal_lifecycle_diagnostic(row):
         token = hashlib.sha256(json.dumps([family, event["signal_id"], snapshot],
             sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode()).hexdigest()
         trace_at = stamp(row["decision_ts"]).timestamp()
-        if (family != receipt["stored_generation"] or family != receipt["claim_generation"]
-                or snapshot_sha != receipt["snapshot_sha256"]
+        if (family != generation or family != receipt["claim_generation"]
+                or (not expired_registration and snapshot_sha != receipt["snapshot_sha256"])
                 or snapshot_sha != receipt["supplied_snapshot_sha256"]
                 or token != receipt["claim_token"] or age != receipt["signal_age_seconds"]
                 or scope[0] != row.get("stock_code") or scope[2] != event["source_item"]
@@ -192,7 +210,8 @@ def _reversal_lifecycle_diagnostic(row):
             return None
         cause = receipt.get("failure_cause")
         if (cause == "reversal_signal_expired" and age > 5
-                and row["machine_contract_error"] == "reversal_signal_expired_or_changed"):
+                and (row["machine_contract_error"] == "reversal_signal_expired_or_changed"
+                     or expired_registration)):
             return cause
         if (cause == "reversal_first_signal_invalidated" and 0 <= age <= 5
                 and event.get("decision_phase") == "FIRST_UPTICK"
