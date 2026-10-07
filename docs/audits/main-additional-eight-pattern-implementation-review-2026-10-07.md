@@ -67,3 +67,18 @@
 추가 구버전 parity: 같은 113,306틱에서 기존 5,876개 확인점의 branch_signals와 보조 input이 모두 같았다. 삼성 이 접두의 현행 신호는 0개였으므로 삼성 자연 신호 입증으로 확대하지 않는다. 근거는 작업 디렉터리 `legacy-parity.json`이다.
 
 R5 실제 owner/arm checkpoint: expected 580,040 = completed 4,809 + planned 575,231, missing 0. 동일 실제 요청의 여러 비교 owner 연결은 provider 호출 건수와 다르다. 새 8개는 미선택이므로 신규 phase provider 요청 0개이며 기존 실제 응답의 exact reuse를 사용했다. 20개 미준비 scope는 검증된 이전 기계·보조 쌍을 carry한다. 원장 580,040개 생성 후 상태 집계가 대형 request 본문을 읽는 인덱스 결함을 발견해 metadata covering index로 수정했다. 기존 durable owner를 비교별 예상 개수와 대사하고 입력을 재생성하지 않고 checkpoint를 마무리했다. 최종 대상 865개 및 수정 producer/consumer 162개 회귀 PASS.
+
+
+## R8 배포·재기동 및 운영 인계
+
+최종 code commit `15f1ccd40e71c4bfeed2aa7979562fd3ab0f51f0`을 immutable release `main-eight-typed-paths-20261007-v3`로 선택했다. 최종 작업본 865개 회귀와 마지막 변경을 포함한 release 실행 디렉터리의 producer/consumer 162개 회귀가 통과했다. 앞선 v2 release 전체 865개 회귀도 통과했다. 최종 code/source/registry를 `review-gate.json`으로 결속하며 검토 범위 내 미해결 finding은 0개다.
+
+20:15 재기동된 Main PID 1074119에서 code handoff·bootstrap·custody 검증 PASS. v4 bundle `69caaf00f2a0475e0290de0b239f28975333782429a62f4e238c8d0ae96f5d78`, family `ed50d100aef3d66361c83bea53441ae0b4461b8ac98fdbcb87346cc9790a324d`를 20:15:54에 parent CAS로 활성화했다. 기존 v3 hash 계약 파일 8개와 day6 DONE/summary·기존 PREOPEN 등 보호 파일 13개는 그대로다. 독립 episode PID 785938과 186개 pinned 서비스의 release 계약은 유지했다.
+
+20:10 cron이 이전 릴리스로 시작했으므로 새 정책 활성화 전에 exact-date EOD 대기 중인 wrapper/controller/tuning 세 job group의 PID/start/cwd를 검증해 SIGTERM 인계했다. Main 정책 producer는 시작하지 않았고 EOD·Main·독립 episode는 종료 대상에서 제외했다. 현재 선택 release에서 같은 날짜·설치 override로 세 작업을 재개했다. 원 EOD는 계속 수집 중이며 다시 실행하지 않았다. 종료와 재개 사이의 `threshold_cycle_postclose` 이전 failed status는 새 producer가 running으로 갱신했고 이후 자연 full 검사에서는 fail이 없었다. 로그/PID 근거는 `postclose-handoff-stop.json`, `postclose-resumed.json`이다.
+
+20:20:26 자연 full 검사에서 fail 0, `strict_checklist_generation_stale` 없음. 이전 10/6 finalization은 `recovered_late`와 `consumed_intraday_preserved_historical_generation`으로 검증되며 새 날짜의 장후 완료로 바꾸지 않는다. 남은 warning은 이전 cleanup/finalization 지연 회복 이력과 진행 중인 EOD/장후 upstream, 별도 code-improvement-workorder 문서 부재다.
+
+장마감 이후 새 시세/기계 판정이 없어 **v4 정책 자체의 native PID 소비는 아직 미관측**이다. 코드 PID 소비와 v4 pointer 활성화를 정책 소비로 합치지 않는다. 원천 snapshot은 20:00 이전 PID의 마지막 시장 자료라 현재 시세 성공으로 표시하지 않는다. 신규 8개는 registered/compared 상태이고 selected 0개다. 실제 주문·체결·실현 승률 개선도 이 작업으로 입증하지 않는다. 오늘 장후와 다음 PREOPEN/native 정책 PID 소비는 같은 current OPEN owner가 이어받으며, 이번 코드 gate를 미래 신호나 575,231개 응답 완료까지 무기한 대기시키지 않는다.
+
+[최종 운영 인계 영수증](../../tmp/main-additional-eight-implementation-20261007/final-receipt.json), [전체 expected 대사](../../tmp/main-additional-eight-implementation-20261007/input-census.json), [후보별 등록/선택](../../tmp/main-additional-eight-implementation-20261007/registration-selection-summary.json), [자연 full 결과](../../tmp/main-additional-eight-implementation-20261007/natural-health.json).
