@@ -19,6 +19,24 @@ def test_postclose_wrapper_retires_common_daily_ev_and_generic_workorder():
     assert script.count("--require-summary-handoff") >= 2
 
 
+@pytest.mark.parametrize('reusable,reader,rc,writes', [(0,0,0,False),(1,0,75,False),(1,1,0,True)])
+def test_recovery_preserves_preflight_used_by_live_reader(tmp_path,reusable,reader,rc,writes):
+    import os,subprocess
+    script=_text('deploy/run_threshold_cycle_postclose.sh')
+    start=script.index('if [ "$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT" = "true" ]')
+    end=script.index('if [[ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION"',start)
+    python=tmp_path/'python'; marker=tmp_path/'written'
+    python.write_text('#!/bin/bash\nif [[ "$*" == *--check-reusable* ]]; then exit "$REUSABLE"; fi\nif [[ "$1" == "-" ]]; then cat >/dev/null; exit "$READER"; fi\nif [[ "$*" == *--write* ]]; then touch "$MARKER"; fi\n')
+    python.chmod(0o755)
+    prefix='set -e\nwait_for_postclose_resources() { :; }\nrun_postclose_cmd() { "$@"; }\nwait_for_report_artifact() { :; }\n'
+    env={**os.environ,'RUN_OBSERVATION_SOURCE_QUALITY_AUDIT':'true','POSTCLOSE_RECOVERY_REUSE_MODE':'true',
+        'TARGET_DATE':'2026-10-07','PROJECT_DIR':str(tmp_path),'VENV_PY':str(python),
+        'REUSABLE':str(reusable),'READER':str(reader),'MARKER':str(marker)}
+    result=subprocess.run(['bash','-c',prefix+script[start:end]],env=env,capture_output=True,text=True)
+    assert result.returncode==rc,result.stderr
+    assert marker.exists() is writes
+
+
 def test_reversal_prompt_consumer_is_generated_before_compact_verification():
     script = _text("deploy/run_threshold_cycle_postclose.sh")
     consumer = script.index('src.engine.scalping.main_ai_prompt_consumer')
@@ -39,8 +57,12 @@ def test_postclose_prepares_isolated_preopen_and_start_requires_day_of_completio
     assert controller.index('POSTCLOSE_STAGE_WORKER=1') < controller.index(
         'src.engine.automation.next_preopen_readiness')
     assert "--prepare --source-date \"$TARGET_DATE\"" in controller
-    assert finalizer.index("capture_final_detector_receipt") < finalizer.index(
-        "next_preopen_readiness")
+    # The detector consumes the prepared controller binding. The reviewed
+    # finalizer prepares first, captures the actual detector, then rechecks
+    # its final generation; the old reversed-order assertion was stale.
+    assert finalizer.index('--prepare --source-date') < finalizer.rindex('if ! run_final_detector; then')
+    assert finalizer.rindex('if ! run_final_detector; then') < finalizer.index('capture_final_detector_receipt')
+    assert finalizer.index('capture_final_detector_receipt') < finalizer.rindex('capture_finalization_generation')
     assert preopen.index("next_preopen_readiness") < preopen.index(
         "low_price_two_leg_policy_apply")
     assert "--verify --target-date \"$TARGET_DATE\" --require-today" in preopen

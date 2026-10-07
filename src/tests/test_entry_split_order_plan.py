@@ -5994,8 +5994,27 @@ def test_execution_projection_bounds_decoded_aggregate_separately_from_shards(mo
     line=json.dumps(event)+'\n'
     for n in range(2):(folder/f'part-{n:06}.jsonl').write_text(line)
     monkeypatch.setattr(split_plan, 'EXECUTION_PROJECTION_MAX_DECODED_BYTES', len(line.encode()))
+    rows,source=split_plan._bounded_execution_projection(day)
+    assert list(rows)==[event] and list(rows)==[event]
+    assert source['streamed_native_rows'] is True
+    monkeypatch.setattr(split_plan, 'EXECUTION_PROJECTION_MAX_IO_BYTES', len(line.encode()))
     with pytest.raises(ValueError,match='decoded_byte_budget'):split_plan._bounded_execution_projection(day)
+    monkeypatch.setattr(split_plan, 'EXECUTION_PROJECTION_MAX_IO_BYTES', 2*len(line.encode()))
     monkeypatch.setattr(split_plan, 'EXECUTION_PROJECTION_MAX_DECODED_BYTES', 2*len(line.encode()))
     rows,source=split_plan._bounded_execution_projection(day)
     assert rows==[event] and source['status']=='source_gap'
     assert source['full_population_coverage_verified'] is False
+
+
+def test_streamed_execution_projection_rejects_source_change(monkeypatch,tmp_path):
+    monkeypatch.setattr(split_plan,'DATA_DIR',tmp_path)
+    monkeypatch.setattr(split_plan,'EXECUTION_PROJECTION_MAX_DECODED_BYTES',1)
+    day='2026-10-07';folder=tmp_path/'threshold_cycle'/f'date={day}'/'family=dynamic_entry_price_resolver'
+    folder.mkdir(parents=True)
+    path=folder/'part-1.jsonl'
+    event=dict(stage='entry_execution_sizing_plan',emitted_date=day,fields=dict(stock_code='005930'))
+    path.write_text(json.dumps(event)+'\n')
+    rows,source=split_plan._bounded_execution_projection(day)
+    assert source['streamed_native_rows'] and list(rows)==[event]
+    path.write_text(json.dumps({**event,'fields':dict(stock_code='000660')})+'\n')
+    with pytest.raises(ValueError,match='changed_during_read'):list(rows)

@@ -1496,7 +1496,31 @@ fi
 # Rising Missed scout entry and dedicated studies retired 2026-09-18.
 if [ "$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT" = "true" ] || [ "$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT" = "1" ]; then
   wait_for_postclose_resources "observation_source_quality_preflight"
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.observation_source_quality_audit --target-date "$TARGET_DATE" --audit-phase preflight --write
+  # A resumed wrapper can overlap its independently running machine worker.
+  # Preserve a verified preflight generation instead of invalidating that
+  # worker merely by rewriting generated_at and the publication hashes.
+  if [ "$POSTCLOSE_RECOVERY_REUSE_MODE" = "true" ] && \
+      env PYTHONPATH=. "$VENV_PY" -m src.engine.observation_source_quality_audit \
+        --target-date "$TARGET_DATE" --audit-phase preflight --check-reusable; then
+    echo "[threshold-cycle] verified preflight generation reused target_date=$TARGET_DATE"
+  else
+    if "$VENV_PY" - "$PROJECT_DIR" "$TARGET_DATE" <<'PY_PREFLIGHT_READER'
+import json, sys
+from pathlib import Path
+try:
+    receipt = json.loads((Path(sys.argv[1]) / 'data/report/postclose_stage_terminal' / sys.argv[2] / 'main_machine_policy.json').read_text())
+    live = (receipt.get('status') == 'running' and receipt.get('child_start_ticks')
+            and Path(f"/proc/{int(receipt['child_pid'])}/stat").read_text().split()[21] == receipt['child_start_ticks'])
+except (OSError, ValueError, KeyError, TypeError):
+    live = False
+raise SystemExit(0 if live else 1)
+PY_PREFLIGHT_READER
+    then
+      echo "[threshold-cycle] preflight refresh deferred while exact machine reader is active target_date=$TARGET_DATE"
+      exit 75
+    fi
+    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.observation_source_quality_audit --target-date "$TARGET_DATE" --audit-phase preflight --write
+  fi
   wait_for_report_artifact \
     "$PROJECT_DIR/data/report/observation_source_quality_audit/observation_source_quality_audit_${TARGET_DATE}.json" \
     "$PROJECT_DIR/data/report/observation_source_quality_audit/observation_source_quality_audit_${TARGET_DATE}.md" \

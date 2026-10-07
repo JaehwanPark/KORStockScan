@@ -851,6 +851,10 @@ def main() -> int:
             KORSTOCKSCAN_PYTHON_BIN=str(root / '.venv/bin/python'),
             KORSTOCKSCAN_RUNTIME_GIT_COMMIT=commit,
         )
+        if args.operation == 'archive':
+            # The archive wrapper's positional argument is retention days;
+            # its source-date interface is TARGET_DATE, including recovery.
+            env['TARGET_DATE'] = target_date
         os.chdir(plan["cwd"])
         if args.operation in {"start", "restart"}:
             # Hold the shared deployment lock through the transition, never for

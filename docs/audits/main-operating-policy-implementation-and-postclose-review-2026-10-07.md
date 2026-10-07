@@ -33,3 +33,23 @@
 실제 `capture_machine_observation` 생산자가 만든 union 판정 증빙을 감시 소비자가 검증하는 회귀도 PASS이며, 원 요청을 변조하면 거부한다(독립 운용 suite 16 PASS). 설치는 기존 `deploy/install_postclose_eod_gate_systemd.sh`를 사용하고 final-refresh 실행은 `deploy/run_runtime_release.sh machine-final-refresh`가 선택된 release와 완료 원천일을 해석한다.
 
 8. 과거 v5 envelope와 내장 v4 부모의 원 commit이 다를 때 historical 검증을 새 envelope origin checkout의 실제 별도 Python reader로 수행하도록 수정했다. origin attestation만 fixture로 제공하고 실제 source reader를 실행한 회귀 포함 109 PASS다. 최초 immutable 검증 455 PASS 뒤 이 보완을 재검증한다.
+
+
+## 배포와 재개
+
+- 코드 `64ed75ef52c9b8ddfbe048fc67c00a3afc282fff`, 불변 release `operating-union-20261008-v2`를 선택했다. 기존 native v4 source 검증 PASS, 독립 서비스 inventory 63개와 기존 policy pin 보존을 확인했다. 실제 Main은 비가동이며 다음 예약 시작 전이다.
+- 00:25 KST에 원 보류 cron 5개만 원문 CAS로 복원하고 final-refresh timer를 복원했다. router는 10/7 완료 원천일과 새 release를 읽는다. postclose/controller/tuning을 각각 10/7로 재개했다. EOD 완료 receipt hash `747c766b5cba01a597dbe9d3249a433083523bd26ecf8e63c061cfaa356af7d3`는 보존한다.
+- archive의 첫 수동 호출은 날짜 환경변수가 없어 10/8 EOD 대기에 들어갔다. 실제 압축 실행 전 이 작업의 해당 process group만 중단하고 기존 `TARGET_DATE=2026-10-07` 인터페이스로 다시 실행하여 00:26:11 DONE을 확인했다.
+- 최초 research capacity는 자정 후 과거 계좌 원천을 새로 수집할 수 없어 invalid였다. exact-date episode OFF receipt와 공동 allocation OFF 소비 경계를 확인하고 기존 stage `--off`로 미사용 capacity를 종결했다. 과거 현금/재고를 합성하거나 계좌 API를 추가 호출하지 않았다. 근거 `capacity-disposition.json`.
+- 이번 작업의 완료된 pytest 임시 복제본 12개에서 4.79 GiB를 회수했다. `/proc` 열린 참조가 없음을 확인했고 테스트 로그는 보존했다. 디스크 사용률 75%→72%, 가용 약 41 GiB. 운영 원장/원천은 삭제하지 않았다.
+- 최초 summary_handoff 실패는 진행 중인 선행 단계에 의한 것이다. 최신 generation의 최종 strict/controller/finalization/PREOPEN은 아직 검증 중이며 이 기록으로 완료를 주장하지 않는다.
+
+
+## 재개 중 발견한 후속 결함 수리
+
+- 초기 분할수량 분석이 `execution_partition_decoded_byte_budget_exceeded`로 중단됐다. 449개 shard, 579,780,400 decoded bytes의 당일 원천 1,221건을 원본 행 참조로 순차 재읽도록 보완한다. 메모리 materialization 경계 256 MiB, shard decoded 64 MiB, 전체 IO 4 GiB를 분리하고 census/hash·파일 변경 검증을 유지한다. 원장 복제·seed 절단·승패 재라벨링은 없다. 실제 당일 검증은 producer expected/observed 단계 건수와 식별 hash 모두 일치했다(`entry-stream-source-validation.json`).
+- 현재 유효 episode OFF receipt가 있으면 공동 배분뿐 아니라 그 전용 capacity도 자동 OFF 승계하도록 dispatcher를 보완한다. missing/tampered receipt는 OFF 권한이 아니다.
+- archive router가 명시 원천일을 기존 wrapper의 `TARGET_DATE` 인터페이스에 전달한다. 재개 wrapper는 원천·코드·dependency 검증이 통과한 preflight를 재사용한다. 검증 실패인데 해당 세대를 읽는 machine child가 살아 있으면 재생성을 보류한다. 실행 중 원천 교체로 불필요한 전체 재계산이 발생하지 않도록 한다.
+- 테스트에서 기존 finalizer의 PREOPEN/최종 detector 순서를 반대로 기대하던 오래된 문자열 assertion 1건을 발견했다. 실제 현행 계약인 prepared→실제 detector→final generation 재검증 순서로 갱신했다. 신규 재개 셸 회귀는 reusable/live-reader/missing 3경로를 실행한다.
+
+후속 보완 재리뷰와 wrapper/수량/인계/router/finalization 회귀 **455 PASS**, compile·bash 문법·diff 검증 PASS. 현재 실행 중인 누적 기계 분석은 원 불변 v2 코드·원 preflight를 계속 소비한다. 보완 배포는 이를 교체하지 않고 이후 재개 경로만 새 release로 선택한다.

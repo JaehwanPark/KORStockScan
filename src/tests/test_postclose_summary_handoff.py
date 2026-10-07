@@ -1673,6 +1673,7 @@ def test_continuous_machine_group_cli_uses_parsed_date_and_single_writer(monkeyp
     monkeypatch.setattr(h, '_joint_research_peer_off', lambda *a: True)
     def run(stage, day, **kwargs):
         assert day == '2026-10-06'
+        assert kwargs['off'] is (stage in {'research_capacity','research_allocation'})
         seen.append(stage)
         return dict(stage_id=stage, status='succeeded', exit_code=0)
     monkeypatch.setattr(h, 'run_stage', run)

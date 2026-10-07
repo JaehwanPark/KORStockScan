@@ -458,6 +458,19 @@ def test_print_plan_never_starts_or_restarts(release, monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out)["release_root"] == str(root)
 
 
+def test_archive_recovery_preserves_explicit_source_date(release,monkeypatch):
+    workspace,root,_,_=release
+    monkeypatch.setattr(router,'__file__',str(workspace/'src/engine/infrastructure/runtime_release_router.py'))
+    monkeypatch.setattr(router.sys,'argv',['router','archive','2026-10-07'])
+    monkeypatch.setattr(router.os,'chdir',lambda *a:None)
+    captured=[]
+    monkeypatch.setattr(router.os,'execvpe',lambda executable,command,env:captured.append((command,env)))
+    router.main()
+    command,env=captured[0]
+    assert command[-1]=='0' and env['TARGET_DATE']=='2026-10-07'
+    assert env['PROJECT_DIR']==str(root)
+
+
 def test_scheduled_finalizer_argument_resolves_through_runtime_router(
     release, monkeypatch, capsys
 ):

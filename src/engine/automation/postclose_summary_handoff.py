@@ -1989,7 +1989,7 @@ def _stage_main(argv):
         return run_stage(s, day, report_dir=DATA_DIR / 'report', project=PROJECT_ROOT,
             publication=args.publication_date, recovery=args.recover_closed_target,
             execute=not args.validate_existing, timeout=args.timeout_sec,
-            off=args.off or (s == 'research_allocation' and
+            off=args.off or (s in {'research_capacity', 'research_allocation'} and
                              _joint_research_peer_off(DATA_DIR / 'report', day)),
             # Native recovery launches Main and compact together. Compact must
             # wait for that live predecessor outside the compute slot; zero

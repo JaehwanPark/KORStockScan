@@ -5926,6 +5926,10 @@ EXECUTION_PRODUCER_CENSUS_MAX_BYTES = 256 * 1024 * 1024
 # aggregate ceiling rejected otherwise valid days before their census check.
 # Keep per-file admission at 64 MiB and bound decoded aggregate IO explicitly.
 EXECUTION_PROJECTION_MAX_DECODED_BYTES = 256 * 1024 * 1024
+# Above the in-memory threshold retain native line references, not copies of
+# large replay seeds. IO admission remains bounded independently of memory.
+EXECUTION_PROJECTION_MAX_IO_BYTES = 4 * 1024 * 1024 * 1024
+EXECUTION_PROJECTION_MAX_SHARD_DECODED_BYTES = 64 * 1024 * 1024
 EXECUTION_SOURCE_STAGES = frozenset({
     "entry_execution_sizing_plan", "entry_execution_sizing_plan_block",
     "entry_ai_economic_plan_observed", "entry_ai_economic_source_gap",
@@ -5986,6 +5990,31 @@ def _execution_projection_census(target_date, events, *, stages=None):
         "coverage_scope": "declared_execution_stage_producer_census"}
 
 
+class _ExecutionProjectionRows:
+    """Re-iterable sealed native rows, with no duplicate spool or large list."""
+    def __init__(self, descriptors):
+        self.descriptors = descriptors
+
+    def __len__(self):
+        return sum(len(item[3]) for item in self.descriptors)
+
+    def __iter__(self):
+        for path, signature, expected_hash, selected in self.descriptors:
+            before = path.stat()
+            if path.is_symlink() or (before.st_ino, before.st_size, before.st_mtime_ns) != signature:
+                raise ValueError("execution_partition_changed_during_read")
+            hasher = hashlib.sha256()
+            with open_text_auto(path) as handle:
+                for number, line in enumerate(handle):
+                    hasher.update(line.encode())
+                    if number in selected:
+                        yield json.loads(line)
+            after = path.stat()
+            if ((after.st_ino, after.st_size, after.st_mtime_ns) != signature
+                    or hasher.hexdigest() != expected_hash):
+                raise ValueError("execution_partition_changed_during_read")
+
+
 def _bounded_execution_projection(target_date: str, *, stages=None, families=None):
     """Use the existing compact family; never silently scan a multi-GB day."""
     if stages is None:
@@ -6000,7 +6029,7 @@ def _bounded_execution_projection(target_date: str, *, stages=None, families=Non
     flat_path = existing_or_gzip_path(_threshold_events_path(target_date))
     flat_available = flat_path.is_file() and flat_path.stat().st_size <= 64 * 1024 * 1024
     paths = ([flat_path] if flat_available else []) + partition_paths
-    rows, identities, sources = [], {}, []
+    identities, sources, descriptors = set(), [], []
     total_bytes = 0
     for path in paths:
         before = path.stat()
@@ -6009,11 +6038,15 @@ def _bounded_execution_projection(target_date: str, *, stages=None, families=Non
         if before.st_size > 64 * 1024 * 1024:
             return [], {"status": "source_gap", "reason": "bounded_execution_partition_required"}
         hasher = hashlib.sha256()
+        shard_bytes, selected = 0, set()
         with open_text_auto(path) as handle:
-            for line in handle:
+            for number, line in enumerate(handle):
                 total_bytes += len(line.encode())
-                if total_bytes > EXECUTION_PROJECTION_MAX_DECODED_BYTES:
+                shard_bytes += len(line.encode())
+                if total_bytes > EXECUTION_PROJECTION_MAX_IO_BYTES:
                     raise ValueError("execution_partition_decoded_byte_budget_exceeded")
+                if shard_bytes > EXECUTION_PROJECTION_MAX_SHARD_DECODED_BYTES:
+                    raise ValueError("execution_partition_shard_decoded_byte_budget_exceeded")
                 hasher.update(line.encode())
                 if not line.endswith("\n"):
                     raise ValueError("execution_partition_incomplete_line")
@@ -6025,14 +6058,19 @@ def _bounded_execution_projection(target_date: str, *, stages=None, families=Non
                 identity = _canonical_sha256({key: event.get(key) for key in
                     ("stage", "pipeline", "stock_code", "record_id", "emitted_at", "fields")})
                 if identity not in identities:
-                    identities[identity] = event
-                    rows.append(event)
+                    identities.add(identity)
+                    selected.add(number)
         after = path.stat()
         if (before.st_ino, before.st_size, before.st_mtime_ns) != (after.st_ino, after.st_size, after.st_mtime_ns):
             raise ValueError("execution_partition_changed_during_read")
         sources.append({"path": str(path.resolve()), "sha256": hasher.hexdigest()})
+        descriptors.append((path, (after.st_ino, after.st_size, after.st_mtime_ns), hasher.hexdigest(), selected))
     if sorted(p for d in directories for p in d.glob("part-*.jsonl*")) != partition_paths:
         raise ValueError("execution_partition_inventory_changed_during_read")
+    rows = _ExecutionProjectionRows(descriptors)
+    streamed = total_bytes > EXECUTION_PROJECTION_MAX_DECODED_BYTES
+    if not streamed:
+        rows = list(rows)
     census = _execution_projection_census(target_date, rows, stages=stages)
     ready = census["status"] == "ready"
     # Pre-contract partitions never imply an empty raw opportunity population.
@@ -6042,6 +6080,7 @@ def _bounded_execution_projection(target_date: str, *, stages=None, families=Non
         "coverage_scope": "declared_execution_stage_producer_census",
         "producer_census": census,
         "sources": sources, "retained_event_count": len(rows),
+        "decoded_source_bytes": total_bytes, "streamed_native_rows": streamed,
         "raw_not_read": True, "flat_compact_included": flat_available,
         "projection_contract": EXECUTION_MODEL_CONTRACT}
 
