@@ -52,3 +52,14 @@ legacy 가격 state를 tail에서 재현하면 가격 하락/새 반전 및 5초
 ## 증거와 배포 인계
 
 읽기 전용 동결/수신 대조/가격 재현: `tmp/reversal-source-alert-20261007/monitor-frozen.json`, `exact-traces.json`, `exact-receive-joins.json`, `exact-price-replay.json`, `before.json`. 최초 18건과 이후 추가 자연 trace를 구분한다. 현재 체크리스트/PREOPEN/boot env 및 원래 dated policy는 기존 봉인을 유지하며 수정하지 않는다. 배포 후 동일 cell payload/research hashes, native parent CAS, 실제 PID/5종목 WS, 새 rejected receipt 저장과 monitor projection을 확인한다.
+
+## 최종 배포·자연 증거 (2026-10-07T13:07:15.457550+09:00)
+
+- 실행 commit `9ab26285047091387465000e6d15c4cbfafe1fa7`, 릴리스 `/home/ubuntu/KORStockScan-runtime-releases/reversal-claim-source-20261007-v1`, PID 870498 (13:03:33 KST 기동). old PID 854451은 graceful 종료했다. 추가 재기동·force kill·실주문은 실행하지 않았다.
+- native bootstrap/봉인 handoff/원본 prepared 재검증 PASS. 원래 env/PREOPEN/dated policy/checklist 등 frozen 9개 hash 동일. 독립 episode pin 186개 동일.
+- 메타데이터만 native publisher→현재 부모 CAS로 재발급했다. 현재 bundle `6bbf13a83d5c7c1873be4781d2d12c2c6817d327c04d6330c78bd3c810fcd2f4`, family `ec2ea546fff5892a74f7b28cef361ed1f6f42037a05e0de6a5b8d5e2a0592ddb`를 실제 PID가 13:04:35에 소비했다. 기계/보조 12셀 payload와 K/B/A/V1 연구 hash는 이전과 같다.
+- 새 PID의 WS 연결과 5개 fixed watch 기계 capture 확인. 13:06:10 snapshot에서 BLOCK 3/RECHECK 2이며 ENTER/실제 주문·수익성 성공을 주장하지 않는다.
+- 자연 거절 receipt 3개: 두산 만료 age 7.725424초(`aims-87566efb6c9c5c70af38`), 두산 무효화 age 4.281601초(`aims-56cf167975df9e28d61e`), HPSP 무효화 age 3.059662초(`aims-ababaec015c75446356c`). 정확 수신 row/동일 epoch/연결 segment 및 snapshot/token/attempt 검증 후 모두 diagnostics로 소비했다. 모두 provider_called=false/actual_order_submitted=false.
+- 운영 감시기 자연 산출 13:05:20에서 신규 만료 1건이 diagnostics로 반영됐다. 13:06:10 read-only projection에서는 신규 무효화 2건도 확인됐다. 이전 PID의 증빙 없는 만료·무효화 4건은 현 10분 창 issues에 남는다. 과거 source가 수리됐다고 주장하거나 경보를 강제 해제하지 않는다. 장래 fresh source를 동일 native monitor 경로로 계속 관찰한다.
+- 검증: 작업본 564 PASS, immutable 실행본 564 PASS; Python compile/bash syntax/diff/print-only parser PASS. 미해결 review finding 0은 이 최소 수리와 배포 인계 범위에 한한다. 신호 준비 지연의 전략적 개선/정책 TTL 변경은 이 source-only 수리 범위 밖이다.
+- 최종 증거: `tmp/reversal-source-alert-20261007/final-closure.json`, `deployment-verify.json`, `activation.json`, `natural-rejected-traces.json`, `natural-monitor.json`, `source-semantics-live.json`, `targeted-tests.log`, `immutable-tests.log`.
