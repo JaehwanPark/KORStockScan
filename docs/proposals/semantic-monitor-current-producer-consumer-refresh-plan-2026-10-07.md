@@ -247,3 +247,7 @@ Main과 episode 서비스의 실행 group이 달라 `/proc/PID/cwd` 읽기가 EA
 장중 인계 보완: 이미 열린 10/7의 PREOPEN을 소급 재생성하지 않는다. `intraday_release_handoff --prepare --reseal-postclose-source`는 원 PREOPEN/env/manifest/prepared index와 정책 bytes를 그대로 보존하고, native DONE/strict가 검증한 새 controller/summary/오늘 checklist의 hash를 별도 immutable receipt에 결속한다. dated policy hash 차이·moving generation·checklist 변경은 fail closed다. readiness는 이 승인된 결속만 인정하며 prepared의 실제 PID 소비 여부는 별도로 남긴다.
 
 새 PID 기록 이후에도 원 summary/controller를 재작성하지 않는다. 현행 future-handoff consumer는 검증된 intraday reseal의 원 summary hash와 native consumed-PID receipt만 연결한다. selector의 정상 PID attestation 갱신은 허용하되 policy/env/PREOPEN/summary·consumption 변조는 거부한다. summary 회복의 publication은 원천일 10/6, prepared session은 10/7을 유지한다.
+
+### Finalization의 과거 체크리스트 소비 보완
+
+`strict_checklist_generation_stale` 후속 결함은 finalization DONE observer와 semantic postclose observer가 위 장중 인계를 소비하지 않은 데서 발생했다. 현재 날짜·선택 release·실제 살아 있는 PID/start ticks/cwd·bootstrap·native consumed receipt·봉인된 원천이 모두 일치할 때만 승인된 historical checklist snapshot으로 원 DONE의 세대를 다시 검증한다. 다른 원천·snapshot·DONE 해시 변경은 계속 실패한다. 새로운 finalization을 생성하는 경로는 현재 checklist 검증을 유지하며 원 DONE/summary/controller/PREOPEN을 재작성하지 않는다. 06:50 이후 완료된 이력은 `recovered_late`로 유지한다. 기존 `SemanticMonitorProducerConsumerRefresh1007` owner와 동결 checklist를 보존하며 [검토·배포 근거](../audits/finalization-historical-checklist-observer-review-2026-10-07.md)에 기록한다.

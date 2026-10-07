@@ -337,6 +337,62 @@ def consume(day, *, pid, now=None):
     return payload
 
 
+def historical_checklist_for_observer(project, source_date, *, now=None):
+    """Resolve a consumed, same-day handoff for historical generation observers.
+
+    This receipt cannot publish a new finalization or whole-chain completion.
+    The caller must still check every other source and the original DONE hashes.
+    """
+    try:
+        return _historical_checklist_for_observer(project, source_date, now=now)
+    except (OSError, KeyError, TypeError, subprocess.CalledProcessError) as exc:
+        raise ValueError('intraday_observer_receipt_unavailable:' + type(exc).__name__) from exc
+
+
+def _historical_checklist_for_observer(project, source_date, *, now=None):
+    current = now or datetime.now(KST)
+    day = current.astimezone(KST).date().isoformat()
+    if (Path(project) / 'data').resolve() != DATA_DIR.resolve():
+        raise ValueError('intraday_observer_data_root_mismatch')
+    root, commit = _selection(require_selected_cwd=False)
+    handoff_path, consumed_path = _paths(day, commit)
+    handoff_sha = _sha(handoff_path)
+    check = verify(day, commit, now=current)
+    if check['status'] != 'pass':
+        raise ValueError('intraday_observer_handoff_invalid:' + ','.join(check['findings']))
+    preserved = check['handoff']
+    reseal = preserved.get('postclose_source_reseal') or {}
+    historical = reseal.get('historical_checklist') or {}
+    if (reseal.get('source_date') != source_date or reseal.get('target_date') != day
+            or not historical or reseal.get('policy_effect') != 'unchanged'):
+        raise ValueError('intraday_observer_source_scope_mismatch')
+    consumed_sha = _sha(consumed_path)
+    consumed = _read(consumed_path)
+    identity = consumed.get('pid_identity') or {}
+    if (consumed.get('schema') != 'intraday_policy_preserving_consumption_v1'
+            or consumed.get('status') != 'pass' or consumed.get('actual_pid_consumed') is not True
+            or consumed.get('handoff_sha256') != handoff_sha
+            or consumed.get('target_date') != day or consumed.get('selected_release_commit') != commit
+            or consumed.get('release_root') != str(root)
+            or identity.get('cwd') != str(root / 'src')
+            or _identity(identity['pid']) != identity):
+        raise ValueError('intraday_observer_current_pid_not_bound')
+    bootstrap_check = _checked_bootstrap(day, identity['pid'])
+    if (consumed.get('manifest_sha256') != bootstrap_check.get('manifest_sha256')
+            or _identity(identity['pid']) != identity
+            or _sha(handoff_path) != handoff_sha
+            or _sha(consumed_path) != consumed_sha
+            or _selection(require_selected_cwd=False) != (root, commit)):
+        raise ValueError('intraday_observer_pid_generation_changed')
+    return dict(schema='intraday_historical_checklist_observer_v1',
+        basis='consumed_intraday_preserved_historical_generation',
+        source_date=source_date, target_date=day, release_commit=commit,
+        path=historical['path'], sha256=historical['sha256'],
+        handoff_path=str(handoff_path), handoff_sha256=handoff_sha,
+        consumed_path=str(consumed_path), consumed_sha256=consumed_sha,
+        pid_identity=identity, runtime_effect=False, new_finalization_claimed=False)
+
+
 def activate_main_v2(day,*,pid,confirm,now=None):
     """Apply an approved Main policy only after the reviewed code PID binds."""
     current=_today(day,now)

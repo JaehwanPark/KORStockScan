@@ -532,11 +532,15 @@ class CronCompletionDetector(BaseDetector):
                 )
                 detector_run = re.search(r"\bdetector_run_id=(cron-[A-Za-z0-9-]+)\b", marker)
                 detector_sha = re.search(r"\bdetector_report_sha256=([0-9a-f]{64})\b", marker)
+                generation_validation = {}
                 generation_issues = finalization_marker_issues(
                     PROJECT_ROOT, today_str,
                     chain.group(1) if chain else "",
                     snapshot.group(1) if snapshot else "",
+                    validation_details=generation_validation,
                 )
+                if generation_validation:
+                    details[f"{jid}_generation_validation"] = generation_validation
                 if not detector_run or not detector_sha:
                     generation_issues.append("final_detector_attempt_unbound")
                 if generation_issues:

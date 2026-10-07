@@ -202,6 +202,42 @@ def test_finalization_rejects_summary_change_without_new_strict_attempt(tmp_path
     )
 
 
+@pytest.mark.parametrize('damage', [None, 'handoff', 'snapshot', 'summary', 'stage', 'chain_marker', 'snapshot_marker'])
+def test_observer_handoff_preserves_done_hashes_without_new_finalization_authority(tmp_path, monkeypatch, damage):
+    from src.engine.automation import intraday_release_handoff as handoff
+    strict_path, _ = _fixture(tmp_path)
+    captured = capture_finalization_generation(tmp_path, DAY)
+    checklist = Path(json.loads(strict_path.read_text())['checklist_handoff']['path'])
+    historical = tmp_path/'consumed-historical-checklist.md'
+    historical.write_bytes(checklist.read_bytes()); checklist.write_text('current intraday work\n')
+    def source(project, day):
+        assert project == tmp_path and day == DAY
+        if damage == 'handoff': raise ValueError('intraday_observer_current_pid_not_bound')
+        return dict(path=str(historical), basis='consumed_intraday_preserved_historical_generation',
+                    new_finalization_claimed=False, runtime_effect=False)
+    monkeypatch.setattr(handoff, 'historical_checklist_for_observer', source)
+    # A finalizer producer still requires the current checklist generation.
+    with pytest.raises(FinalizationGenerationError, match='strict_checklist_generation_stale'):
+        capture_finalization_generation(tmp_path, DAY)
+    if damage == 'snapshot': historical.write_text('tampered')
+    if damage == 'summary':
+        (tmp_path/f'data/report/runtime_approval_summary/runtime_approval_summary_{DAY}.json').write_text('{}')
+    if damage == 'stage':
+        (tmp_path/f'data/report/postclose_stage_terminal/{DAY}/research_capacity.json').write_text('{}')
+    details = {}
+    issues = finalization_marker_issues(tmp_path, DAY,
+        'f'*64 if damage == 'chain_marker' else captured['chain_sha256'],
+        'f'*64 if damage == 'snapshot_marker' else captured['snapshot_sha256'], validation_details=details)
+    if damage is None:
+        assert issues == []
+        assert details['basis'] == 'consumed_intraday_preserved_historical_generation'
+        assert details['new_finalization_claimed'] is False
+    else:
+        assert issues
+        if damage == 'chain_marker': assert issues == ['finalization_chain_generation_changed']
+        if damage == 'snapshot_marker': assert issues == ['finalization_snapshot_generation_changed']
+
+
 def test_final_detector_receipt_requires_same_date_fresh_self_audit(tmp_path):
     report = tmp_path / "data/report/error_detection" / f"error_detection_{DAY}.json"
     _write_json(report, {

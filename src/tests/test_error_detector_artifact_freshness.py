@@ -276,6 +276,40 @@ def test_prepared_semantics_does_not_claim_future_pid_or_ignore_stale_release(tm
     assert result["consumption"] == "not_observed"
 
 
+@pytest.mark.parametrize('damage', [None, 'handoff', 'other_generation'])
+def test_postclose_observer_uses_consumed_snapshot_and_rechecks_other_sources(tmp_path, monkeypatch, damage):
+    from src.engine.automation import intraday_release_handoff as handoff
+    from src.engine.automation import postclose_done_controller as controller
+    import src.engine.error_detectors.artifact_freshness as detector
+    day = '2026-10-06'
+    path = tmp_path/f'data/report/postclose_done_controller/postclose_done_controller_{day}.json'
+    path.parent.mkdir(parents=True); path.write_text(json.dumps(dict(date=day, status='done')))
+    snapshot = tmp_path/'historical-checklist.md'; snapshot.write_text('original generation')
+    monkeypatch.setattr(detector, '_semantic_stage_binding', lambda *a, **kw: {'status': 'off'})
+    calls = []
+    def verify(path, source_date, **kwargs):
+        assert source_date == day and kwargs['generation_only'] is True
+        calls.append(kwargs)
+        if not kwargs.get('checklist_snapshot'):
+            return ['strict_checklist_generation_stale', 'strict_generation_changed_during_recheck']
+        assert kwargs['checklist_snapshot'] == snapshot
+        return ['strict_stage_generation_stale:main'] if damage == 'other_generation' else []
+    monkeypatch.setattr(controller, 'done_terminal_receipt_issues', verify)
+    def historical(project, source_date, **kwargs):
+        assert project == tmp_path and source_date == day
+        if damage == 'handoff': raise ValueError('intraday_observer_current_pid_not_bound')
+        return dict(path=str(snapshot), basis='consumed_intraday_preserved_historical_generation', runtime_effect=False)
+    monkeypatch.setattr(handoff, 'historical_checklist_for_observer', historical)
+    result = _postclose_handoff_semantics(tmp_path, day, datetime(2026, 10, 7, 13, tzinfo=ZoneInfo('Asia/Seoul')))
+    if damage is None:
+        assert result['status'] == 'done' and result['findings'] == []
+        assert len(calls) == 2 and result['historical_generation_validation']['runtime_effect'] is False
+    else:
+        assert result['findings'] == ['postclose_handoff_generation_invalid']
+        if damage == 'other_generation':
+            assert result['closure_errors'] == ['strict_stage_generation_stale:main']
+
+
 def _quantity_semantic_fixture(tmp_path, monkeypatch, *, shape="two_leg_0_1tick",
                                complete_stage=False):
     from src.engine.scalping import initial_quantity_activation as activation

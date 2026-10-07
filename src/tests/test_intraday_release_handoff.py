@@ -529,3 +529,34 @@ def test_second_handoff_carries_original_git_snapshot_with_consumed_custody(fixt
         assert handoff.verify(DAY, commit, now=NOW+timedelta(minutes=2))['status'] == 'fail'
     else:
         assert handoff.consume(DAY, pid=3, now=NOW+timedelta(minutes=2))['status'] == 'pass'
+        observer = handoff.historical_checklist_for_observer(
+            data.parent, '2026-10-01', now=NOW+timedelta(minutes=3))
+        assert observer['path'] == historical['path']
+        assert observer['pid_identity']['pid'] == 3
+        assert observer['runtime_effect'] is False and observer['new_finalization_claimed'] is False
+        for project, source in [(data.parent.parent, '2026-10-01'), (data.parent, DAY)]:
+            with pytest.raises(ValueError, match='intraday_observer_'):
+                handoff.historical_checklist_for_observer(project, source, now=NOW+timedelta(minutes=3))
+        consumed_path = handoff._paths(DAY, commit)[1]
+        consumed = handoff._read(consumed_path)
+        for field, value in [('status', 'fail'), ('schema', 'wrong'), ('manifest_sha256', 'changed')]:
+            _json(consumed_path, {**consumed, field: value})
+            with pytest.raises(ValueError, match='intraday_observer_'):
+                handoff.historical_checklist_for_observer(data.parent, '2026-10-01', now=NOW+timedelta(minutes=3))
+        _json(consumed_path, consumed)
+        handoff_path = handoff._paths(DAY, commit)[0]
+        original_handoff = handoff_path.read_bytes()
+        original_bootstrap = handoff._checked_bootstrap
+        def changing_bootstrap(*args):
+            checked = original_bootstrap(*args)
+            handoff_path.write_bytes(original_handoff + b' ')
+            return checked
+        monkeypatch.setattr(handoff, '_checked_bootstrap', changing_bootstrap)
+        with pytest.raises(ValueError, match='intraday_observer_pid_generation_changed'):
+            handoff.historical_checklist_for_observer(data.parent, '2026-10-01', now=NOW+timedelta(minutes=3))
+        handoff_path.write_bytes(original_handoff)
+        monkeypatch.setattr(handoff, '_checked_bootstrap', original_bootstrap)
+        monkeypatch.setattr(handoff, '_identity', lambda pid:
+            dict(pid=pid, start_ticks='reused-pid', cwd=str(second/'src')))
+        with pytest.raises(ValueError, match='intraday_observer_current_pid_not_bound'):
+            handoff.historical_checklist_for_observer(data.parent, '2026-10-01', now=NOW+timedelta(minutes=3))

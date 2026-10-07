@@ -76,6 +76,11 @@ def _snapshot_date(path: Path, *, compressed: bool) -> str | None:
 
 def capture_finalization_generation(project: Path, target_date: str) -> dict:
     """Bind the current controller generation and postclose exit source bytes."""
+    return _capture_finalization_generation(project, target_date)
+
+
+def _capture_finalization_generation(project: Path, target_date: str, *,
+                                     checklist_snapshot: Path | None = None) -> dict:
     project = Path(project).resolve()
     report = project / "data/report"
     controller_dir = report / "postclose_done_controller"
@@ -131,7 +136,7 @@ def capture_finalization_generation(project: Path, target_date: str) -> dict:
             binding.get("main_terminal_sha256"),
         ),
         "strict_checklist_generation_stale": (
-            Path(str((strict.get("checklist_handoff") or {}).get("path") or "")),
+            checklist_snapshot or Path(str((strict.get("checklist_handoff") or {}).get("path") or "")),
             binding.get("checklist_sha256"),
         ),
     }
@@ -222,14 +227,27 @@ def capture_finalization_generation(project: Path, target_date: str) -> dict:
 
 
 def finalization_marker_issues(
-    project: Path, target_date: str, chain_sha256: str, snapshot_sha256: str
+    project: Path, target_date: str, chain_sha256: str, snapshot_sha256: str,
+    *, validation_details: dict | None = None,
 ) -> list[str]:
     if not chain_sha256 or not snapshot_sha256:
         return ["finalization_generation_unbound"]
     try:
         current = capture_finalization_generation(project, target_date)
     except FinalizationGenerationError as exc:
-        return [str(exc)]
+        if str(exc) != 'strict_checklist_generation_stale':
+            return [str(exc)]
+        try:
+            from src.engine.automation.intraday_release_handoff import historical_checklist_for_observer
+            preserved = historical_checklist_for_observer(project, target_date)
+            current = _capture_finalization_generation(
+                project, target_date, checklist_snapshot=Path(preserved['path']))
+            if validation_details is not None:
+                validation_details.update(preserved)
+        except (OSError, ValueError, TypeError, KeyError) as fallback:
+            if validation_details is not None:
+                validation_details.update(historical_handoff_status='invalid', reason=str(fallback))
+            return [str(fallback)] if isinstance(fallback, FinalizationGenerationError) else [str(exc)]
     issues = []
     if current["chain_sha256"] != chain_sha256:
         issues.append("finalization_chain_generation_changed")

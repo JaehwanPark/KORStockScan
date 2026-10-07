@@ -60,7 +60,11 @@ def test_morning_finalization_checks_previous_source_date_and_completion_time(
     monkeypatch.setattr(
         cc, "load_installed_crontab", lambda: "0 5 * * * # POSTCLOSE_FINALIZATION_0500"
     )
-    monkeypatch.setattr(generation, "finalization_marker_issues", lambda *_: [])
+    def marker_check(*args, validation_details):
+        validation_details.update(basis='consumed_intraday_preserved_historical_generation',
+                                  runtime_effect=False, new_finalization_claimed=False)
+        return []
+    monkeypatch.setattr(generation, "finalization_marker_issues", marker_check)
 
     result = CronCompletionDetector(dry_run=True).check()
 
@@ -70,6 +74,9 @@ def test_morning_finalization_checks_previous_source_date_and_completion_time(
     assert result.details["log_rotation_cleanup_status"] == expected_status
     assert result.severity == expected_severity
     assert "no today marker" not in result.summary
+    evidence = result.details['postclose_finalization_generation_validation']
+    assert evidence['basis'] == 'consumed_intraday_preserved_historical_generation'
+    assert evidence['new_finalization_claimed'] is False
 
 
 def test_morning_finalization_for_current_source_date_is_due_next_trading_day(
@@ -250,7 +257,7 @@ def test_only_preselection_0928_unbound_generation_is_historical(
     monkeypatch.setattr(
         generation,
         "finalization_marker_issues",
-        lambda *_: ["finalization_generation_unbound"],
+        lambda *_, **kw: ["finalization_generation_unbound"],
     )
 
     result = CronCompletionDetector(dry_run=True).check()
