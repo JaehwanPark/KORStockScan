@@ -55,8 +55,21 @@
 - rollback 상태 유실: 현재 공통 원장에서 최신 응답/예약을 구 native 형식으로 export하고 reader로 확인했다. 과거 DB를 되살려 재호출하지 않는다.
 - 검증 결과와 호출 완료 혼동: validator version별 별도 validation 객체와 comparison revision을 보존한다. owner/고유 request/실제 attempt 계수를 분리한다.
 
-관련 회귀 148건과 최종 저장/adapter 대상 21건이 통과했다(중복 포함, 합산하지 않음). compile 및 diff 검사를 통과했다. 실제 v4 publication fixture를 native loader로 검증하고 이후 mutable census 변화에도 frozen publication이 유지됨을 확인했다. 검토한 범위의 미해결 코드 결함은 없다. immutable 배포본 검증과 실제 구 본문 회수 결과는 아래 인계에 기록한다.
+작업본 관련 회귀 148건, 후속 저장/adapter 대상 21건, 최종 immutable 배포본의 전체 관련 회귀 **150건**이 통과했다(중복 포함, 합산하지 않음). compile 및 diff 검사를 통과했다. 실제 v4 publication fixture를 native loader로 검증하고 이후 mutable census 변화에도 frozen publication이 유지됨을 확인했다. 검토한 범위의 미해결 코드 결함은 없다. immutable 배포본 검증과 실제 구 본문 회수 결과는 아래와 같다.
 
 ## 배포·공간 회수 인계
 
-코드 검토와 이관은 완료했다. immutable 배포본 검증, selector/cutover 전환과 구 원장 본문 회수의 실제 결과를 실행 영수증으로 추가한다. 저장 경로 배포가 보류된 장후 체인의 완료나 내일 정책 준비 완료를 뜻하지 않는다. 사용자 별도 재개 지시가 필요하다.
+L0~L6를 완료했다. 배포 릴리스는 `/home/ubuntu/KORStockScan-runtime-releases/shared-ai-ledger-20261007-v1`, 코드 commit은 `1cfb0fa41be840b033f8c82706472556a86aa18b`이다. 최종 immutable 회귀 150 PASS 후 selector를 전환했고 router의 10/7 postclose print-plan도 이 릴리스를 가리킨다. common pointer의 writer 전환과 두 legacy DB 경로의 tombstone 차단을 확인했다. 실제 provider 호출은 0이다.
+
+삭제 직전 전체 DB 해시·inode와 root FD census를 재검증했다. 대상 참조/관측불가는 0이었고, 구 DB 2개와 WAL/SHM 4개에서 11,755,053,056 bytes를 회수했다. 기존 frozen actual-response export·원 tick/분봉·정책 자료는 보존했다. 새 store의 실제 할당은 1,418,067,968 bytes(1.32GiB)로, 구 DB 10.95GiB 대비 **87.936% 감소**했다.
+
+이번 실행에서 완료된 pytest 격리 환경 3개도 참조 확인 후 제거했다(2,657파일, 421,920,768 bytes). 과거 pytest 환경은 건드리지 않았다. 최종 `df`는 **72% 사용, 가용 44,699,258,880 bytes(41.6GiB)**이며, 조사 시작 시 79%·가용 33,614,016,512 bytes 대비 실측 순증은 약 10.3GiB다. 이 값은 공통 store·릴리스 신규 생성과 동시 writer의 증가까지 반영한 filesystem 수치다.
+
+Main PID `1074119`와 기존 적용 bundle/family hash는 동일하다. 새 릴리스는 장후용으로 선택했으며 현재 Main PID가 새 코드를 소비했다고 표시하지 않았다. 보류한 cron 5개 hash와 disabled/inactive 최종 갱신 timer를 재확인했다. **L7 장후 재개는 실행하지 않았고 사용자 별도 지시를 기다린다.** 장후 전체 완료나 내일 정책 준비 완료로 표시하지 않는다.
+
+- [최종 인계 영수증](../../data/report/ai_comparison_store_migration/2026-10-07/completion-receipt.json)
+- [immutable 검증 로그](../../data/report/ai_comparison_store_migration/2026-10-07/immutable-tests.log)
+- [구 DB 삭제 전 census](../../data/ai_comparison_store/v1/legacy-retirement-dry-run.json), [회수 영수증](../../data/ai_comparison_store/v1/legacy-retirement-removal.json)
+- [완료 검증 임시환경 삭제](../../data/report/ai_comparison_store_migration/2026-10-07/validation-temp-cleanup-removal.json)
+
+문서의 기존 실행 owner는 한 개이며 print-only parser를 통과했다. 외부 Project/Calendar sync, 장후 replay, 실제 provider 비교, 봇 재기동은 이 검증에 포함하지 않았다. 새 adapter의 자연 장후 소비와 실제 신규 응답 축적은 별도 재개 후 확인할 사항이다.
