@@ -28,13 +28,17 @@ def _enable(monkeypatch, tmp_path):
     trace._SEEN_CONTEXT_CANDIDATE_HASHES.clear()
 
 
-def test_rejected_reversal_keeps_source_receipt_without_provider_or_outcome(monkeypatch, tmp_path):
+@pytest.mark.parametrize('schema', ['continuous_reversal_claim_source_receipt_v1',
+                                   'continuous_reversal_claim_source_receipt_v2'])
+def test_rejected_reversal_keeps_source_receipt_without_provider_or_outcome(monkeypatch, tmp_path, schema):
     _enable(monkeypatch, tmp_path)
-    receipt = dict(schema='continuous_reversal_claim_source_receipt_v1',
+    receipt = dict(schema=schema,
         evaluation_attempt_id='exact-rejected-attempt', machine_bundle_sha256='b'*64,
         signal_id='native-first-turn', signal_age_seconds=5.2,
         validation_error='reversal_signal_expired_or_changed',
         failure_cause='reversal_signal_expired', runtime_effect=False)
+    if schema.endswith('_v2'):
+        receipt['state_observed_epoch'] = 1791347251.3
     trace.record_ai_decision_trace(dict(ai_decision_trace_id='exact-rejected-trace',
         action='DROP', score=0, evaluation_attempt_id='exact-rejected-attempt',
         machine_bundle_sha256='b'*64, machine_evaluation_status='assessment_contract_invalid',

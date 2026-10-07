@@ -6,6 +6,7 @@ and auxiliary input contracts. No price, feature, policy or decision mutation.
 from datetime import datetime
 from copy import deepcopy
 import math
+import time
 
 from src.engine.scalping import continuous_reversal as K
 
@@ -14,8 +15,9 @@ def validate_claim_with_receipt(claim, family_sha256, *, now,
                                 evaluation_attempt_id=None, machine_bundle_sha256=None):
     """Run the unchanged guard and retain its exact source on rejection.
 
-    Inspection and validation share the ingestion lock, so a later trade cannot
-    be mistaken for the observation that actually rejected this claim.
+    Inspection and validation share the ingestion lock. Keep the caller's
+    decision clock for the unchanged guard and separately timestamp the state
+    read: ingestion can advance while the caller waits to acquire this lock.
     """
     from src.engine.scalping import continuous_reversal_branches as B
 
@@ -44,8 +46,10 @@ def _claim_failure_receipt(B, claim, family_sha256, now, reason):
     state = B._STATES.get(original['scope']) if original else None
     last = list(state.legacy.last) if state and state.legacy.last else None
     current_turn_id = (state.legacy.turn or {}).get('event_id') if state else None
-    receipt = dict(schema='continuous_reversal_claim_source_receipt_v1', status='observed',
+    state_observed_epoch = time.time()
+    receipt = dict(schema='continuous_reversal_claim_source_receipt_v2', status='observed',
         validation_epoch=now, requested_family_sha256=family_sha256,
+        state_observed_epoch=state_observed_epoch,
         claim_token=claim.get('token') if isinstance(claim, dict) else None,
         claim_generation=claim.get('generation') if isinstance(claim, dict) else None,
         stored_generation=original.get('generation') if original else None,

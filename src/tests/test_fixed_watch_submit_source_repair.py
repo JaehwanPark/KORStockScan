@@ -223,6 +223,7 @@ def test_rejected_claim_preserves_guard_and_exact_source(monkeypatch, tmp_path, 
     from src.engine.monitoring.submission_bottleneck_monitor import _reversal_lifecycle_diagnostic
     B, state, values, claim = _native_reversal_claim(monkeypatch)
     now = values[-1][0] + (6 if case == 'expire' else -1 if case == 'future' else 1)
+    monkeypatch.setattr('src.engine.scalping.reversal_source_diagnostics.time.time', lambda: now)
     row = values[-1][:]
     row[0] = now
     row[2] += 1
@@ -244,6 +245,7 @@ def test_rejected_claim_preserves_guard_and_exact_source(monkeypatch, tmp_path, 
                                    evaluation_attempt_id='attempt-exact', machine_bundle_sha256='b'*64)
     assert str(instrumented.value) == str(baseline.value)
     receipt = instrumented.value.reversal_source_receipt
+    assert receipt['state_observed_epoch'] == now
     assert receipt['failure_cause'] == cause
     assert receipt['snapshot'] == before[1][claim['token']]['snapshot']
     assert B._CLAIMS == before[1] and claim == before[2]
@@ -255,6 +257,10 @@ def test_rejected_claim_preserves_guard_and_exact_source(monkeypatch, tmp_path, 
         machine_contract_error=str(instrumented.value), provider_called=False,
         continuous_reversal_rejected_claim_receipt=receipt)
     assert _reversal_lifecycle_diagnostic(trace_row) == (cause if lifecycle else None)
+    legacy = dict(receipt, schema='continuous_reversal_claim_source_receipt_v1')
+    legacy.pop('state_observed_epoch')
+    assert _reversal_lifecycle_diagnostic(dict(trace_row,
+        continuous_reversal_rejected_claim_receipt=legacy)) == (cause if lifecycle else None)
     from src.tests.test_submission_bottleneck_monitor import _source_gap_files
     from src.engine.monitoring.submission_bottleneck_monitor import source_gap_semantics
     clock = datetime.fromtimestamp(now+.1, B.K.KST)
@@ -271,6 +277,45 @@ def test_rejected_claim_preserves_guard_and_exact_source(monkeypatch, tmp_path, 
         assert _reversal_lifecycle_diagnostic(foreign) is None
     assert _reversal_lifecycle_diagnostic({**trace_row,
         'continuous_reversal_rejected_claim_receipt': None}) is None
+
+
+def test_claim_clock_records_state_after_lock_without_changing_guard(monkeypatch):
+    from src.engine.scalping.reversal_source_diagnostics import validate_claim_with_receipt
+    from src.engine.monitoring.submission_bottleneck_monitor import _reversal_lifecycle_diagnostic
+    B, state, values, claim = _native_reversal_claim(monkeypatch)
+    decision_at = values[-1][0] + .112
+    row = values[-1][:]
+    row[0] = decision_at + .015724
+    row[2] += 1
+    row[3] = 98.
+    state.observe(row, symbol='403870', venue='SOR', session='SOR_REGULAR')
+    observed_at = decision_at + .02
+    monkeypatch.setattr('src.engine.scalping.reversal_source_diagnostics.time.time', lambda: observed_at)
+    with pytest.raises(ValueError) as baseline:
+        B.validate_claim(claim, 'f'*64, now=decision_at)
+    with pytest.raises(ValueError) as measured:
+        validate_claim_with_receipt(claim, 'f'*64, now=decision_at,
+            evaluation_attempt_id='clock-race', machine_bundle_sha256='b'*64)
+    assert str(baseline.value) == str(measured.value) == 'reversal_first_signal_invalidated'
+    receipt = measured.value.reversal_source_receipt
+    assert receipt['validation_epoch'] == decision_at
+    assert receipt['state_observed_epoch'] == observed_at
+    assert receipt['signal_age_seconds'] == decision_at-claim['snapshot'][0]['epoch']
+    trace = dict(stock_code='403870', decision_ts=B.K.iso(observed_at+.01),
+        evaluation_attempt_id='clock-race', machine_bundle_sha256='b'*64,
+        market_data_route='krx_nxt_integrated', provider_called=False,
+        machine_contract_error=str(measured.value), continuous_reversal_rejected_claim_receipt=receipt)
+    assert _reversal_lifecycle_diagnostic(trace) == 'reversal_first_signal_invalidated'
+    # Old receipts without an independently measured state clock stay unresolved.
+    legacy = dict(receipt, schema='continuous_reversal_claim_source_receipt_v1')
+    legacy.pop('state_observed_epoch')
+    assert _reversal_lifecycle_diagnostic(dict(trace, continuous_reversal_rejected_claim_receipt=legacy)) is None
+    for invalid in [decision_at-.01, row[0]-.001, observed_at+.1, float('nan'), None]:
+        corrupt = dict(receipt, state_observed_epoch=invalid)
+        assert _reversal_lifecycle_diagnostic(dict(trace, continuous_reversal_rejected_claim_receipt=corrupt)) is None
+    missing = dict(receipt)
+    missing.pop('state_observed_epoch')
+    assert _reversal_lifecycle_diagnostic(dict(trace, continuous_reversal_rejected_claim_receipt=missing)) is None
 
 
 def test_claim_telemetry_never_changes_success_or_native_generation_rejection(monkeypatch):

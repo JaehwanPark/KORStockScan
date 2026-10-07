@@ -150,7 +150,8 @@ def _reversal_lifecycle_diagnostic(row):
     receipt = row.get("continuous_reversal_rejected_claim_receipt")
     if (row.get("provider_called") is not False or row.get("actual_order_submitted") is True
             or not isinstance(receipt, dict) or receipt.get("status") != "observed"
-            or receipt.get("schema") != "continuous_reversal_claim_source_receipt_v1"
+            or receipt.get("schema") not in {"continuous_reversal_claim_source_receipt_v1",
+                                             "continuous_reversal_claim_source_receipt_v2"}
             or not row.get("evaluation_attempt_id")
             or receipt.get("evaluation_attempt_id") != row.get("evaluation_attempt_id")
             or not row.get("machine_bundle_sha256")
@@ -163,6 +164,9 @@ def _reversal_lifecycle_diagnostic(row):
         scope = receipt["scope"]
         latest = receipt["latest_native_observation"]
         at = receipt["validation_epoch"]
+        observed_at = (receipt["state_observed_epoch"]
+                       if receipt["schema"] == "continuous_reversal_claim_source_receipt_v2"
+                       else at)
         age = at - event["epoch"]
         family = receipt["requested_family_sha256"]
         encoded = json.dumps(snapshot, sort_keys=True, separators=(",", ":"),
@@ -182,7 +186,9 @@ def _reversal_lifecycle_diagnostic(row):
                 or str(latest[1]) != event["event_id"].rsplit(":", 2)[-2]
                 or latest[2] < int(event["event_id"].rsplit(":", 1)[-1])
                 or not receipt["price_path_segment_start"] < event["epoch"]
-                or not 0 <= at-latest[0] <= 5 or not 0 <= trace_at-at <= 5):
+                or not 0 <= observed_at-at <= 5
+                or not 0 <= observed_at-latest[0] <= 5
+                or not 0 <= trace_at-observed_at <= 5 or not 0 <= trace_at-at <= 5):
             return None
         cause = receipt.get("failure_cause")
         if (cause == "reversal_signal_expired" and age > 5
