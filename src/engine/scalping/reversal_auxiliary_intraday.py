@@ -150,6 +150,9 @@ def selected_definition(data_root,bundle,assessment):
     epoch=assessment['event']['epoch'];sid=V.scope_id(assessment['cell_key'],assessment['route'])
     v=at_confirmation(data_root,bundle,epoch)
     ident=(v or {}).get('bindings',{}).get(sid) or inherited(data_root,bundle).get(sid)
+    base_arm=bundle['continuous_reversal']['auxiliary_cells'][assessment['cell_key']]['routes'][assessment['route']]['payload']['arm']
+    if ident==G.definition(base_arm)['registry_sha256']:
+        return None,v  # Unchanged scopes retain their original runtime path.
     return (G.load(data_root,ident),v) if ident else (None,v)
 
 

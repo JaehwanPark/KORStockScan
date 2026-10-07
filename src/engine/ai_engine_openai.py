@@ -576,6 +576,7 @@ OPENAI_METADATA_PRIORITY_KEYS = (
     # The invalid-prompt retry must preserve the exact setup-risk contract.
     # Otherwise a V2.15 request can silently retry with the V2.14 prompt.
     "entry_setup_live_policy_selected_prompt_version",
+    "auxiliary_registry_sha256",
     "entry_ai_role",
     "invalid_prompt_retry",
     "original_endpoint_name",
@@ -713,11 +714,17 @@ class OpenAIResponseRequest:
         return dict(setup) if isinstance(setup, dict) else {}
 
     def build_provider_payload(self, *, use_schema_registry: bool) -> dict[str, Any]:
+        registered_auxiliary=bool((self.metadata or {}).get('auxiliary_registry_sha256'))
+        if registered_auxiliary:
+            if not self.response_schema_override:
+                raise ValueError('registered_auxiliary_response_schema_missing')
+            use_schema_registry=True
         payload: dict[str, Any] = {
             "model": self.model_name,
             "input": (
                 f"{self.user_input}\n\nReturn JSON only."
                 if self.require_json
+                and not registered_auxiliary
                 and "json" not in str(self.user_input or "").lower()
                 else self.user_input
             ),
@@ -4675,6 +4682,8 @@ class GPTSniperEngine:
     def _build_invalid_prompt_retry_request(
         self, request: OpenAIResponseRequest
     ) -> OpenAIResponseRequest:
+        if (request.metadata or {}).get('auxiliary_registry_sha256'):
+            raise ValueError('registered_auxiliary_prompt_rewrite_forbidden')
         if request.require_json:
             if request.schema_name == "holding_score_v2":
                 safe_prompt = (
@@ -4912,6 +4921,8 @@ class GPTSniperEngine:
                     getattr(e, "future_cancelled", False)
                 )
                 if self._is_invalid_prompt_error(e) and not invalid_prompt_retried:
+                    if (request.metadata or {}).get('auxiliary_registry_sha256'):
+                        raise ValueError('registered_auxiliary_prompt_rewrite_forbidden') from e
                     log_error(
                         f"⚠️ [OpenAI invalid_prompt retry] {request.context_name} | "
                         "retrying with minimal numeric JSON prompt"
@@ -5067,6 +5078,7 @@ class GPTSniperEngine:
         timeout_ms_override=None,
         replay_context=None,
         response_schema_override=None,
+        auxiliary_registry_sha256=None,
     ):
         """Responses API HTTP/WS transport와 예외 처리를 전담하는 중앙 호출기."""
         metadata = dict(metadata_extra or {})
@@ -5100,6 +5112,24 @@ class GPTSniperEngine:
             # These are the exact issued parameters of the actual five-arm study.
             max_output_tokens = 512
             reasoning_effort = 'none'
+        registered_auxiliary = None
+        if auxiliary_registry_sha256:
+            from src.engine.scalping import reversal_auxiliary_registry as registry
+            from src.utils.constants import DATA_DIR
+            registered_auxiliary=registry.load(DATA_DIR,auxiliary_registry_sha256)
+            projected=json.loads(user_input)
+            if (prompt!=registered_auxiliary['prompt']
+                    or selected_prompt_version!=registry.binding(registered_auxiliary)['prompt_version']
+                    or target_model!=registered_auxiliary['model']
+                    or projected.get('schema')!=registered_auxiliary['input_version']
+                    or response_schema_override!=registry.A.response_schema(projected)
+                    or user_input!=json.dumps(projected,ensure_ascii=True,sort_keys=True,separators=(',',':'))):
+                raise ValueError('registered_auxiliary_transport_contract_changed')
+            compact_auxiliary_call=True  # Registered OpenAI transport; no provider substitution.
+            max_output_tokens=registered_auxiliary['max_output_tokens']
+            reasoning_effort=registered_auxiliary['reasoning_effort']
+            target_temp=None
+            metadata_extra=dict(metadata_extra or {},auxiliary_registry_sha256=auxiliary_registry_sha256)
         request = self._build_openai_response_request(
             prompt=prompt,
             user_input=user_input,
@@ -5124,10 +5154,16 @@ class GPTSniperEngine:
             transport_mode_override
         )
         request.response_schema_override = response_schema_override
+        if registered_auxiliary:
+            # Offline execution sends these exact bytes without the generic
+            # runtime glossary. Preserve that registered contract end to end.
+            request.prompt=registered_auxiliary['prompt']
+            request.schema_name=registered_auxiliary['response_schema_version']
         response_schema_registry_used = self._should_use_openai_schema_registry(
             require_json=request.require_json,
             schema_name=request.schema_name,
         )
+        if registered_auxiliary:response_schema_registry_used=True
         entry_setup_schema_evidence = request.entry_setup_evidence()
         response_schema_sha256 = _response_schema_sha256(
             request,
@@ -10530,7 +10566,8 @@ class GPTSniperEngine:
                     else None
                 ),
                 replay_context=replay_context,
-                **({'response_schema_override': reversal_schema}
+                **({'response_schema_override': reversal_schema,
+                    'auxiliary_registry_sha256': entry_setup_live_policy.get('continuous_reversal_assessment',{}).get('auxiliary_registry_sha256')}
                    if entry_setup_live_policy.get('continuous_reversal_input') else {}),
             )
             # V2.14 validates a deliberately narrow model-response schema.

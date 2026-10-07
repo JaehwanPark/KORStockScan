@@ -25,3 +25,7 @@ Owner: `DirectFamilySourceRepairMainMechanisticEntry`. 사용자 승인 범위�
 - 기존 등록 `reversal_fact_roles_v2`의 적격 응답도 별도 재사용했다. 추가 호출 0, 공통 유효 8쌍(두산 3·일반 비삼성 2·알테오젠 2·HPSP 1), 개선 scope 0이다. 다른 미완료/무표본 scope를 이 결과로 일반화하지 않는다. 새 문구 후보는 다음 실제 원천 예산 내 평가 대상으로 유지한다.
 - 08:26 1차 불변 배포본의 정상 재기동과 PID/원 bootstrap 소비를 확인했다. 최종 cron 검증에서 strict generation 오류는 없으며 07:26 장후 완료의 recovered_late 경고만 남았다. 기계·보조의 실제 신호 소비 receipt는 별도 자연 관측 대상이다.
 - 후속 재리뷰에서 전일 원천 호출이 자정 이후 수행됐을 때 다음 원천일 예산에 중복 귀속될 수 있는 경계를 보완했다. 이미 귀속된 과거 cache는 새 날짜 호출로 차감하지 않으며 옛 요청의 원 예산은 그대로 적용한다. 관련 회귀 **25 PASS** 후 최종 보완 배포한다.
+
+- 전송 최종 대조에서 새 registry의 연구 요청(문구 원문·canonical 입력·1,024 tokens·none reasoning·typed strict schema)과 공통 장중 호출 설정이 달라질 수 있음을 발견했다. 등록된 변경 scope만 정확 연구 전송 계약을 사용하고, 공통 안내문/JSON 지시문 덧붙이기·미니멀 프롬프트 재시도·provider 대체를 금지했다. 미변경 scope는 기존 경로를 유지한다. fake SDK가 실제 전송 직전 body를 포착하는 회귀로 문구/입력/모델/토큰/schema 이름·내용을 대조한다. 이 회귀는 외부 AI 실호출로 집계하지 않는다.
+
+- 새 전송 body 대조와 기존 HTTP/WS/재시도/메타데이터를 포함한 튜닝·transport 전체 회귀 **199 PASS**. 실제 전송 입력에 자동 JSON 지시문이 붙거나 unknown schema가 JSON object로 떨어지는 경로까지 등록된 정확 schema로 교정했다. 기존 비등록 호출에는 종전 처리를 유지한다.

@@ -134,6 +134,10 @@ def test_overlay_uses_signal_clock_preserves_machine_and_old_requests(setup):
     epoch=snap[0]['epoch'];at=datetime.fromtimestamp(epoch-1,I.K.KST)
     baseline=V.assess(b['continuous_reversal'],snap,symbol=snap[0]['symbol'],session=snap[0]['market'])
     family_before=copy.deepcopy(b['continuous_reversal']);states_before=dict(R._STATES)
+    ordinary=G.definition(b['continuous_reversal']['auxiliary_cells'][baseline[0]['cell_key']]['routes'][baseline[0]['route']]['payload']['arm'])
+    G.register(root,ordinary)
+    overlay(root,b,{sid:ordinary['registry_sha256']},at)
+    assert I.apply_request(root,b,snap,baseline)==baseline
     first=overlay(root,b,{sid:v['registry_sha256']},at)
     updated=I.apply_request(root,dict(continuous_reversal=b['continuous_reversal'],machine_bundle_sha256=b['bundle_sha256']),snap,baseline)
     assert updated[2]==v['prompt'] and updated[0]['scope_execution_hash']==baseline[0]['scope_execution_hash']
@@ -208,3 +212,42 @@ def test_configured_calls_never_fall_back_to_legacy_full_queue(setup,monkeypatch
     root,b,m,sid,v=setup
     monkeypatch.setattr(PC.L,'calls',lambda *a,**kw:pytest.fail('legacy full queue'))
     with pytest.raises(FileNotFoundError):PC.calls(root,'2026-10-07',transport=transport)
+
+
+def test_registered_live_provider_payload_matches_offline_contract(setup,monkeypatch):
+    from types import SimpleNamespace
+    from src.tests.test_ai_engine_openai_transport import _build_engine
+    from src.engine import ai_engine_openai as E
+    from src.utils import constants
+    root,b,m,sid,v=setup
+    monkeypatch.setattr(constants,'DATA_DIR',root)
+    with S.Store(root) as store:
+        point=store.get(m['partitions'][0]['records_object'])[0]
+        snapshot=store.get(point['snapshot_obj'])
+    offline=G.request(snapshot,v);candidate=offline['candidate'];calls=[]
+    engine=_build_engine()
+    def create(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(output_text=json.dumps(transport(offline,30)['candidate_response']))
+    engine.client=SimpleNamespace(responses=SimpleNamespace(create=create))
+    metadata={'entry_setup_live_policy_selected_prompt_version':G.binding(v)['prompt_version'],
+              'entry_ai_role':'auxiliary_risk_screen_pass_veto_no_promotion'}
+    engine._call_openai_safe(candidate['system_prompt'],json.dumps(offline['candidate_input'],ensure_ascii=True,sort_keys=True,separators=(',',':')),
+        model_override=candidate['model'],schema_name=E.ENTRY_RISK_ADJUDICATION_SCHEMA,
+        endpoint_name='analyze_target',metadata_extra=metadata,transport_mode_override='http',
+        response_schema_override=candidate['response_schema'],auxiliary_registry_sha256=v['registry_sha256'])
+    assert len(calls)==1
+    sent=calls[0]
+    assert sent['instructions']==candidate['system_prompt']
+    assert sent['input']==json.dumps(offline['candidate_input'],ensure_ascii=True,sort_keys=True,separators=(',',':'))
+    assert sent['model']==candidate['model'] and sent['max_output_tokens']==candidate['max_output_tokens']
+    assert sent['reasoning']=={'effort':candidate['reasoning_effort']}
+    assert sent['text']['format']['schema']==candidate['response_schema']
+    assert sent['text']['format']['name']==candidate['schema_name']
+    assert 'temperature' not in sent
+    request=E.OpenAIResponseRequest(prompt=v['prompt'],user_input='{}',require_json=True,context_name='test',
+        model_name=candidate['model'],temperature=None,max_output_tokens=1024,reasoning_effort='none',
+        schema_name=E.ENTRY_RISK_ADJUDICATION_SCHEMA,endpoint_name='analyze_target',request_id='test',
+        symbol='005930',cache_key='-',submitted_at_perf=0,timeout_ms=5000,
+        metadata={'auxiliary_registry_sha256':v['registry_sha256']})
+    with pytest.raises(ValueError,match='rewrite_forbidden'):engine._build_invalid_prompt_retry_request(request)
