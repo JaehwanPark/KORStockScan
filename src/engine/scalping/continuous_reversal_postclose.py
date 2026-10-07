@@ -486,6 +486,8 @@ def main():
         from src.engine.scalping import continuous_reversal_registered_postclose as registered
         from src.engine.scalping import continuous_reversal_path_postclose as paths
         if paths.active(args.data_root,args.publication_date or args.date):registered=paths
+        from src.engine.scalping.continuous_reversal_shared_ledger import adapt
+        registered=adapt(registered,args.data_root)
         if registered.active(args.data_root,args.publication_date or args.date):registered.calls(args.data_root,args.date)
         else:execute_calls(args.data_root,args.date,args.actual_inputs)
     elif args.mode=='machine':print(json.dumps(machine_report(args.data_root,args.date,args.publication_date or args.date)))
@@ -495,6 +497,8 @@ def main():
         if paths.active(args.data_root,args.publication_date or args.date):registered=paths
         current=registered.active(args.data_root,args.publication_date or args.date)
         if current:
+            from src.engine.scalping.continuous_reversal_shared_ledger import adapt
+            registered=adapt(registered,args.data_root)
             machine=json.loads((registered.directory(args.data_root,args.date)/'machine-comparison.json').read_text())
             if not args.evaluate_only:
                 registered.prepare_inputs(args.data_root,args.date,machine)

@@ -142,5 +142,6 @@ Thumbs.db
 # Managed releases mount these directories from the workspace.
 /data/report/
 /data/cache/
+/data/ai_comparison_store/
 /data/runtime/
 /data/daily_recommendations*.csv
