@@ -57,3 +57,13 @@
 1차 확장 회귀는 681 PASS/3 FAIL이었다. 세 실패는 F6의 설치된 cron fixture 결손이며, 운영 중단 설정을 고치지 않고 테스트를 격리한 뒤 해당 60개 회귀를 통과했다. 재리뷰 후 최종 16개 suite **684 PASS**. 신규 공통 원장 연결 suite는 29 PASS이며 이 수는 684에 포함된다. 원 요청 bytes의 8개 유형별 5 arm 대조, v3/v4 고유 요청 5개/실제 fixture 호출 5회 공유, timeout 미재호출, 누락/동일 개수 치환의 예약 0회, 전 VETO·partial carry·snapshot 변경/label revision·native reader를 검증했다.
 
 compileall·`git diff --check` PASS, 문서 53개 로컬 링크 유효, print-only parser에서 current owner 1개를 확인했다. [최종 workspace 테스트](../../data/report/multi-policy-ledger-integration-review/2026-10-07/final-workspace-tests.log)와 [cron 재검증](../../data/report/multi-policy-ledger-integration-review/2026-10-07/cron-regression.log)을 보존한다. 검토 범위 내 미해결 finding은 없다. 실제 AI/장후 재생 및 자연 신호·수익 검증을 실행하지 않은 한계는 유지한다.
+
+## 배포 완료
+
+코드 `1cb82b0278223ebce3e7cd88dc1a28880dd0b6f8`를 `multi-policy-ledger-review-20261007-v1` 불변 release로 배포했다. 해당 release에서 동일 16개 suite **684 PASS**, 기존 활성 bundle `69caaf00f2a0475e0290de0b239f28975333782429a62f4e238c8d0ae96f5d78`의 native source 검증 PASS. 별도 서비스 정책 pin 186개도 유효하다. selected router의 postclose 10/7 계획이 새 release를 가리키는 것을 read-only `--print-plan`으로 확인했다.
+
+Main PID 1074119/cwd와 활성 family `ed50d100aef3d66361c83bea53441ae0b4461b8ac98fdbcb87346cc9790a324d`는 그대로다. 새 release의 Main PID 소비는 false로 표시했다. 공통 requests/members/attempts/objects/generations와 writer epoch는 기준 영수증과 같으며 실제 추가 호출은 0회다. cron 5개 보류 및 timer disabled/inactive를 유지했고 장후를 재개하지 않았다.
+
+이번 완료된 테스트 디렉터리 3개에서 8,476파일·할당 **1,105,022,976 bytes(1.03GiB)**를 정리했다. root 권한의 읽기 전용 `/proc` 참조 검사에서 사용 중/관측 불가 0, 삭제 전 파일 hash를 대사했다. 원천·연구·실제 응답과 오래된 별도 테스트 디렉터리는 보존했다. 최종 디스크 사용률은 약 72%, 여유 약 41.5GiB다.
+
+[배포 선택](../../data/report/multi-policy-ledger-integration-review/2026-10-07/deployment-selection.json), [immutable 테스트](../../data/report/multi-policy-ledger-integration-review/2026-10-07/immutable-tests.log), [장후 경로](../../data/report/multi-policy-ledger-integration-review/2026-10-07/postclose-route.json), [최종 검증·중단 유지 영수증](../../data/report/multi-policy-ledger-integration-review/2026-10-07/completion.json)이 현재 증거다. 재개 후 새 생성물/선정/strict-controller-PREOPEN 검증은 남아 있으며 배포 성공과 구분한다.
