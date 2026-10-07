@@ -50160,7 +50160,7 @@ def _resolve_watching_state_change_refresh(
                 if family['schema']=='continuous_reversal_policy_v5':
                     from src.engine.scalping.continuous_reversal_policy_v5 import record_pid_consumption
                 record_pid_consumption(DATA_DIR,selected)
-                configure_bundle(selected,DATA_DIR,datetime.fromtimestamp(now_ts,_KST).date().isoformat())
+                configure_bundle(selected,data_root=DATA_DIR,day=datetime.fromtimestamp(now_ts,_KST).date().isoformat())
                 claim=stock.get('_continuous_reversal_pending_claim')
                 if claim:
                     from src.engine.scalping.reversal_operating_backend import validate_any_claim as validate_claim

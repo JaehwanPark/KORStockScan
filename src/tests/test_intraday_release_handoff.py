@@ -426,6 +426,17 @@ def test_main_policy_activation_requires_actual_code_pid_and_new_authority(fixtu
  assert result['status']=='pass' and result['actual_policy_pid_consumption'] is False
  assert calls[0]['intraday_evidence']['pid_identity']['pid']==2
 
+
+def test_v5_next_session_candidate_cannot_fall_through_to_intraday_v2(fixture,monkeypatch):
+ data,_,_,prepare=fixture
+ prepare();handoff.consume(DAY,pid=2,now=NOW)
+ from src.engine.scalping import continuous_reversal_policy_v2 as policy
+ monkeypatch.setattr(policy,'activate',lambda *a,**kw:pytest.fail('v5 reached v2 activation'))
+ _json(data/'runtime/mechanistic_entry_policy/candidates'/f'policy_{DAY}.json',
+       {'continuous_reversal':{'schema':'continuous_reversal_policy_v5'}})
+ with pytest.raises(ValueError,match='requires_next_session_activation'):
+  handoff.activate_main_v2(DAY,pid=2,confirm='APPROVED_INTRADAY_MAIN_POLICY_ACTIVATION',now=NOW)
+
 @pytest.mark.parametrize('damage', [None, 'git_bytes', 'snapshot'])
 def test_authorized_intraday_historical_checklist_is_exact_git_bound_snapshot(fixture, monkeypatch, damage):
     data, previous, _, _ = fixture

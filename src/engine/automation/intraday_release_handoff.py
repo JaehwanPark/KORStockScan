@@ -429,6 +429,10 @@ def activate_main_v2(day,*,pid,confirm,now=None):
     if _identity(pid)!=identity:raise ValueError('intraday_main_policy_pid_changed')
     from src.engine.scalping.continuous_reversal_policy_v2 import activate
     candidate = DATA_DIR/'runtime/mechanistic_entry_policy/candidates'/f'policy_{day}.json'
+    if candidate.is_file() and json.loads(candidate.read_text())['continuous_reversal']['schema']=='continuous_reversal_policy_v5':
+        # v5 is issued as next_session and consumed by the PREOPEN path. Do not
+        # reinterpret it with the older intraday activation contract.
+        raise ValueError('operating_v5_requires_next_session_activation')
     if candidate.is_file() and json.loads(candidate.read_text())['continuous_reversal']['schema']=='continuous_reversal_policy_v3':
         from src.engine.scalping.continuous_reversal_policy_v3 import activate
     if candidate.is_file() and json.loads(candidate.read_text())['continuous_reversal']['schema']=='continuous_reversal_policy_v4':

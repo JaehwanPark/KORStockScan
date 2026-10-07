@@ -911,7 +911,8 @@ def _worker_replay(observation: dict, frames: list[dict]) -> dict:
 
         handlers._get_holding_minute_candles_with_meta = candles
         handlers.DUAL_PERSONA_ENGINE = services.proxy("ai_engine")
-        ai_engine = ReplayAI(["offline_credential_not_valid"], announce_startup=False)
+        ai_engine = ReplayAI(["offline_credential_not_valid"], announce_startup=False,
+                             initialize_entry_policy=False)
         ai_engine.services = services
         ai_state = context.get("ai_engine_state")
         ai_engine.recorded_state_ready = isinstance(ai_state, dict) and set(
@@ -1303,7 +1304,7 @@ def _provider_worker(payload: dict) -> dict:
         replay_input_cutoff=request["input_cutoff"],
     )
     kwargs["metadata_extra"] = metadata
-    engine = GPTSniperEngine(keys, announce_startup=False)
+    engine = GPTSniperEngine(keys, announce_startup=False, initialize_entry_policy=False)
     try:
         result = engine._call_openai_safe(*args, **kwargs)
         if not isinstance(result, dict) or result.get("ai_fallback_score_50"):

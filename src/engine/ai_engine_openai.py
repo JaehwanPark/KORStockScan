@@ -1021,15 +1021,18 @@ class GPTSniperEngine:
     내부적으로 OpenAI REST API를 호출한다.
     """
 
-    def __init__(self, api_keys, announce_startup=True):
+    def __init__(self, api_keys, announce_startup=True, *, initialize_entry_policy=True):
         from src.engine.scalping.reversal_operating_backend import configure_bundle
         from src.engine.scalping.mechanistic_entry_runtime_policy import load_effective
         from src.utils.constants import DATA_DIR
         try:
             day=datetime.now(__import__('zoneinfo').ZoneInfo('Asia/Seoul')).date().isoformat()
-            incumbent=load_effective(data_root=DATA_DIR,target_date=day)
+            # Holding-only offline replay has no entry detector and must not
+            # consult today's policy namespace while replaying frozen inputs.
+            incumbent=(load_effective(data_root=DATA_DIR,target_date=day)
+                       if initialize_entry_policy else None)
             if (incumbent or {}).get('continuous_reversal'):
-                configure_bundle(incumbent,DATA_DIR,day)
+                configure_bundle(incumbent,data_root=DATA_DIR,day=day)
         except (ValueError,KeyError,TypeError,OSError):
             # An unknown first session observation remains unknown. Never
             # substitute the first post-restart price for historical context.

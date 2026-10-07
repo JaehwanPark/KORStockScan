@@ -68,6 +68,27 @@ def test_initial_manifest_is_incumbent_plus_exact_eight(parent):
     assert changed['detector_manifest_hash']==m['detector_manifest_hash']
 
 
+def test_dispatch_configuration_accepts_existing_runtime_call_signature(monkeypatch,tmp_path):
+    from src.engine.scalping import reversal_operating_backend as D
+    seen=[]
+    monkeypatch.setattr(D,'_ACTIVE',D.OLD)
+    monkeypatch.setattr(D.OLD,'configure_bundle',lambda b,data_root,day:seen.append((b,data_root,day)))
+    D.configure_bundle({},data_root=tmp_path,day='2026-10-08')
+    assert seen==[({},tmp_path,'2026-10-08')]
+    # Both production callers must bind successfully; their defensive catch
+    # must not silently turn a signature mismatch into an idle detector.
+    import ast
+    import inspect
+    root=Path(__file__).resolve().parents[1]
+    for relative in ('engine/ai_engine_openai.py','engine/sniper_state_handlers.py'):
+        calls=[n for n in ast.walk(ast.parse((root/relative).read_text()))
+               if isinstance(n,ast.Call) and isinstance(n.func,ast.Name) and n.func.id=='configure_bundle']
+        assert calls
+        for call in calls:
+            inspect.signature(D.configure_bundle).bind(*[None for _ in call.args],
+                **{k.arg:None for k in call.keywords})
+
+
 def test_contribution_unknown_and_zero_percent_tie():
     points=[dict(opportunity_key='1',outcome='WIN',truth={'a':'TRUE','b':'UNKNOWN'}),
             dict(opportunity_key='2',outcome='FAIL_TIMEOUT',truth={'a':'FALSE','b':'TRUE'})]

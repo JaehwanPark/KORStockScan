@@ -53,3 +53,9 @@
 - 테스트에서 기존 finalizer의 PREOPEN/최종 detector 순서를 반대로 기대하던 오래된 문자열 assertion 1건을 발견했다. 실제 현행 계약인 prepared→실제 detector→final generation 재검증 순서로 갱신했다. 신규 재개 셸 회귀는 reusable/live-reader/missing 3경로를 실행한다.
 
 후속 보완 재리뷰와 wrapper/수량/인계/router/finalization 회귀 **455 PASS**, compile·bash 문법·diff 검증 PASS. 현재 실행 중인 누적 기계 분석은 원 불변 v2 코드·원 preflight를 계속 소비한다. 보완 배포는 이를 교체하지 않고 이후 재개 경로만 새 release로 선택한다.
+
+- 재개 후 `entry_cancel_wait_tuning`이 원본 참조 iterable을 list와 더하는 간접 소비자 결함을 발견했다. `itertools.chain`으로 선행/현재 원천을 합치며 기존 dedup·미분류 이력 보존을 검증했다. 첫 간접 소비자 회귀 413건 중 12건에서 별도 오프라인 초기화 결함도 드러났다.
+- 보유/청산 전용 재현 interpreter가 AI 객체 초기화 중 현행 진입 정책 파일을 읽던 문제는 `initialize_entry_policy=False`를 해당 두 오프라인 경로에 명시하여 보완했다. 실시간 기본값은 그대로 True이며 보유/청산 의사결정을 대체하지 않는다. 실제 full-policy fixture 42 PASS다.
+- 새 dispatcher의 keyword-only 인자를 기존 AI 초기화/상시감시 호출자가 위치 인자로 전달해 TypeError가 무시될 수 있던 연결을 수정했다. 실제 두 caller AST를 함수 signature에 bind하는 회귀를 추가했다. 동결 v4 및 실행 중 누적 분석의 계약 모듈 bytes는 보존한다.
+- v5의 next_session 후보를 구 intraday v2 활성화로 넘기지 않도록 명시 거부를 추가했다. 정규 PREOPEN 활성화 경로는 그대로 유지한다. 관련 장중 인계 회귀 62 PASS, 후속 consumer/runtime/holding/분할/자동화 통합 395 PASS, compile/diff PASS다.
+- 격리된 5종목 normalized callback 10,000회 부하검증에서 union p99 92.087µs, native p99 26.877µs였다. 실제 provider·주문 호출은 없으며 자연 운영 성능이나 수익 결과를 주장하지 않는다(`callback-benchmark.json`).

@@ -11,6 +11,7 @@ import os
 import tempfile
 import math
 from collections import defaultdict
+from itertools import chain
 from datetime import datetime, date, timedelta
 from pathlib import Path
 from typing import Any, Iterable
@@ -1066,7 +1067,7 @@ def build_report(target_date: str) -> dict[str, Any]:
             excluded_from_economic_history=True,structural_gap_eta=None)
     _hydrate_missing_history(target_date, predecessor, registry, source)
     outcomes=list({_digest(r):r for r in predecessor.get('actual_outcomes',[])+outcomes}.values())
-    events=list({_digest(r):r for r in predecessor.get('source_events',[])+events}.values())
+    events=list({_digest(r):r for r in chain(predecessor.get('source_events',[]),events)}.values())
     counts=dict(predecessor.get('source_counts') or {})
     parents=[p for p in predecessor.get('parents',[]) if p['source_date']!=target_date]
     state='source_gap';blocker=source['projection'].get('reason');unclassified=0

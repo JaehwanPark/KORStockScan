@@ -16,7 +16,7 @@ def _unclassified_history(day='2026-09-30'):
     return state
 
 
-def _empty_reconciliation_report(tmp_path, monkeypatch, predecessor=None):
+def _empty_reconciliation_report(tmp_path, monkeypatch, predecessor=None, *, streamed=False):
     from src.engine.scalping import entry_split_order_plan as entry
     monkeypatch.setattr(entry, '_bounded_execution_projection', lambda *_a, **_k: ([], {'status':'ready'}))
     monkeypatch.setattr(mod, 'REPORT_DIR', tmp_path)
@@ -24,10 +24,17 @@ def _empty_reconciliation_report(tmp_path, monkeypatch, predecessor=None):
         dict(mod.DEFAULT_THRESHOLDS), {'previous_scope_overrides': []}))
     monkeypatch.setattr(mod, '_previous_state', lambda _day: predecessor or {})
     monkeypatch.setattr(mod, '_current_sources', lambda _day: (
-        [], [], [], dict(projection={'status': 'ready'}, registry={'status': 'verified'},
+        entry._ExecutionProjectionRows([]) if streamed else [], [], [], dict(projection={'status': 'ready'}, registry={'status': 'verified'},
                         actual_outcomes={'status': 'missing'},
                         source_quality={'tuning_input_allowed': True})))
     return mod.build_report('2026-10-02')
+
+
+def test_streamed_projection_preserves_cancel_history(tmp_path,monkeypatch):
+    report=_empty_reconciliation_report(tmp_path,monkeypatch,_unclassified_history(),streamed=True)
+    assert report['submission_census']['zero_is_verified'] is True
+    assert report['historical_reconciliation']['unclassified_submission_count']==2
+    assert report['economic_tuning_input_allowed'] is False
 
 
 def test_current_empty_does_not_erase_historical_unclassified_submissions(tmp_path, monkeypatch):
