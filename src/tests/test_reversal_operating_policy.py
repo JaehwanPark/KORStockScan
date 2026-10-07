@@ -204,6 +204,33 @@ def test_union_schema_exact_coverage_and_no_future_fields(replay):
     with pytest.raises(ValueError,match='same_tick_source_conflict'):PC.request(changed,PC.V1.ARMS[-1])
 
 
+def test_union_context_risk_must_cite_contradicting_field():
+    # Actual nano responses cited below-VWAP as support for CAUTION. The
+    # contract means support for ENTRY, so clarify transmission, never move
+    # or accept a model's wrongly attributed citations in the validator.
+    inp=dict(schema=A.VERSION,signals=[dict(ref='policy:definition')],
+        entry_setup_evidence_v1=dict(
+            positive_facts=[dict(id='observed_machine_signal')],
+            context_facts=[dict(id='policy/below_recent_vwap')],contradicting_facts=[],
+            risk_fact_bindings=dict(EARLY_REVERSAL_FRAGILE=['policy/below_recent_vwap'])))
+    response=dict(schema=A.VERSION,decision_scope='COMMON_OPPORTUNITY',
+        assessed_signal_refs=['policy:definition'],risk_verdict='CAUTION',
+        risk_codes=['EARLY_REVERSAL_FRAGILE'],confidence=62,
+        supporting_fact_ids=['policy/below_recent_vwap'],contradicting_fact_ids=[])
+    assert A.validate_response(response,inp,arm=PC.V1.ARMS[0])==['union_nonpass_risk_unbound']
+    response['contradicting_fact_ids']=response.pop('supporting_fact_ids')
+    response['supporting_fact_ids']=[]
+    assert not A.validate_response(response,inp,arm=PC.V1.ARMS[0])
+    schema=A.response_schema(inp)['properties']
+    assert schema['risk_codes']['minItems']==1
+    assert 'ENTRY' in schema['supporting_fact_ids']['description']
+    assert 'risk_fact_bindings' in schema['contradicting_fact_ids']['description']
+    assert 'IN contradicting_fact_ids, not supporting_fact_ids' in A.PROMPT
+    assert A.VERSION=='continuous_reversal_union_auxiliary_v2'
+    response['schema']='continuous_reversal_union_auxiliary_v1'
+    assert A.validate_response(response,inp,arm=PC.V1.ARMS[0])
+
+
 def test_outbox_uncertainty_blocks_restart_and_new_generation(tmp_path):
     a=dict(opportunity_key='a'*64,scope_execution_hash='b'*64,signal_set_hash='c'*64,
            matched_policy_refs=['x'],signal_id='source:1')

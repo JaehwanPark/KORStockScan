@@ -10,7 +10,7 @@ from src.engine.scalping import reversal_auxiliary_contract as V1
 from src.engine.scalping.reversal_auxiliary_phases import ARM_SUFFIXES
 from src.engine.scalping.continuous_reversal_postclose import digest
 
-VERSION = 'continuous_reversal_union_auxiliary_v1'
+VERSION = 'continuous_reversal_union_auxiliary_v2'
 NAMESPACE = 'main_normalized_native_v1'
 PROMPT = """Assess the COMMON ENTRY OPPORTUNITY represented by ALL supplied signals.
 The machine has independently confirmed every listed typed signal. Do not pick
@@ -25,7 +25,14 @@ PASS is common-opportunity risk clearance, not conditional permission for one
 branch. Signal validity is rechecked by the machine. Cite only supplied fact IDs.
 For PASS use NO_BLOCKING_RISK and cite observed_machine_signal. For VETO/CAUTION
 cite the exact supplied risk binding and at least one matching adverse/context
-fact. Do not invent a compulsory extra confirmation or fixed feature threshold.
+fact IN contradicting_fact_ids, not supporting_fact_ids. supporting_fact_ids
+means evidence supporting ENTRY, not evidence supporting your verdict. For each
+non-PASS risk code, contradicting_fact_ids must contain at least one ID listed
+under that code in risk_fact_bindings. A context fact used as a risk belongs in
+contradicting_fact_ids even when the input labels it context. Never emit an empty
+risk_codes array; NO_BLOCKING_RISK is exclusive to PASS. Every array must contain
+unique values only. Do not invent an adverse fact, a compulsory extra
+confirmation or a fixed feature threshold to justify CAUTION/VETO.
 Confidence is diagnostic. Output only the required JSON. No order authority.
 """
 
@@ -115,8 +122,10 @@ def response_schema(inp):
     props = dict(schema=dict(type='string', enum=[VERSION]),
         decision_scope=dict(type='string', enum=['COMMON_OPPORTUNITY']),
         assessed_signal_refs=array(refs), risk_verdict=dict(type='string', enum=['PASS','VETO','CAUTION']),
-        risk_codes=array(['NO_BLOCKING_RISK'] + sorted(setup['risk_fact_bindings'])),
-        supporting_fact_ids=array(fact_ids), contradicting_fact_ids=array(fact_ids),
+        risk_codes=dict(array(['NO_BLOCKING_RISK'] + sorted(setup['risk_fact_bindings'])),
+                        minItems=1, description='Nonempty unique risk codes. NO_BLOCKING_RISK is for PASS only.'),
+        supporting_fact_ids=dict(array(fact_ids), description='Unique supplied facts supporting ENTRY. PASS must include observed_machine_signal.'),
+        contradicting_fact_ids=dict(array(fact_ids), description='Unique supplied adverse or context fact IDs supporting risks against ENTRY. For every VETO/CAUTION risk code include at least one ID from its risk_fact_bindings. Do not place these only in supporting_fact_ids.'),
         confidence=dict(type='integer', minimum=0, maximum=100))
     schema = dict(type='object', additionalProperties=False, required=list(props), properties=props)
     return schema
