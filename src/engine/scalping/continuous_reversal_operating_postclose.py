@@ -377,15 +377,78 @@ def auxiliary_contribution(machine,census,verdicts,gaps):
     return result
 
 
+def initial_registration(data_root, day, publication, parent, machine):
+    """Apply the designated first list; comparison is subsequent diagnostics."""
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    path=Path(data_root)/'runtime/mechanistic_entry_policy/operating-transition.json'
+    if not path.exists():return None
+    authorization=json.loads(path.read_text())
+    if (authorization.get('schema')!='main_operating_transition_authorization_v1'
+            or authorization.get('artifact_content_sha256')!=P.seal(authorization)['artifact_content_sha256']):
+        raise ValueError('initial_registration_authorization_invalid')
+    if authorization.get('enabled') is not True or authorization.get('source_date')!=day:return None
+    if (authorization.get('target_date')!=N.next_target(publication)
+            or authorization.get('parent_bundle_sha256')!=parent['bundle_sha256']
+            or authorization.get('approved_by')!='user_operating_policy_implementation_resume_postclose_prepare_next_start'
+            or machine['operating_manifest']['scopes']!=V5.wanted(parent)):
+        raise ValueError('initial_registration_scope_or_parent_invalid')
+    bindings={}
+    family=parent['continuous_reversal']
+    for key,route in V5.scopes():
+        source_key=key.replace('|PRE|','|REGULAR|').replace('|AFTER|','|REGULAR|')
+        cell=family['machine_cells'][source_key]['routes'][route]
+        auxiliary=family['auxiliary_cells'][source_key]['routes'][route]['payload']
+        if cell.get('backend')=='union_v5':arm=auxiliary['arm']
+        else:
+            bid=V4.primary(cell,[b['branch_id'] for b in cell['payload']['branches']])
+            arm=auxiliary['branch_policies'][bid]['arm']
+        UNION.binding(arm)
+        bindings[V5.scope_id(key,route)]=dict(arm=arm,source_scope=V5.scope_id(source_key,route))
+    frozen=L.freeze_receipt(directory(data_root,day)/'shared-ledger',path)
+    if json.loads(Path(frozen['path']).read_text())!=authorization:
+        raise ValueError('initial_registration_authorization_changed')
+    return dict(authorization_source=frozen,
+        parent_bundle_sha256=parent['bundle_sha256'],bindings=bindings,
+        adoption_basis='operator_designated_initial_registration',comparison_result_required=False)
+
+
+def initial_protocol_evidence(store, snapshot, required):
+    """Check each binding's real response independently of labels/other arms."""
+    evidence={};seen=set()
+    for _,obj in sorted(snapshot['partitions'].items()):
+        for mid,state,result_obj in store.get(obj):
+            if state!='completed' or not result_obj:continue
+            rid=store.db.execute('SELECT request_id FROM members WHERE id=?',(mid,)).fetchone()[0]
+            if rid in seen:continue
+            seen.add(rid);req=store.request(rid);arm=req['micro_reversion_replay_arm']
+            if arm not in required or arm in evidence:continue
+            if req['candidate_input'].get('schema')!=UNION.VERSION:continue
+            if req['candidate'].get('prompt_version')!=UNION.binding(arm)['prompt_version']:continue
+            result=store.get(result_obj).get('result',{})
+            response_id=result.get('provider_provenance',{}).get('response_id')
+            try:errors=A.validate_response(result.get('candidate_response'),req['candidate_input'],arm=arm)
+            except (ValueError,KeyError,TypeError):continue
+            if errors or not response_id:continue
+            evidence[arm]=dict(request_identity=req['paired_replay_id'],response_id=response_id,
+                request_id=rid,response_object=result_obj,
+                validation_role='protocol_only_not_performance',binding=UNION.binding(arm))
+            if set(evidence)==required:return evidence
+    raise ValueError('initial_union_protocol_response_evidence_missing')
+
+
 def auxiliary_report(data_root,day,publication,parent,*,publish_policy=True):
     from src.engine.scalping import mechanistic_entry_runtime_policy as N
     out=directory(data_root,day);ledger=out/'shared-ledger'
     machine=json.loads((out/'machine-comparison.json').read_text());gen=machine['artifact_content_sha256']
+    initial=initial_registration(data_root,day,publication,parent,machine)
     with S.Store(data_root) as store:
         census,declared,_=L.validate_census(ledger);L.validate_membership(store,census)
         if census['machine_report_sha256']!=gen:raise ValueError('operating_comparison_generation_changed')
         store.activation();store.reconcile();snap=store.snapshot(gen)
         metrics,gaps,expected,states,validations,verdicts=comparison_metrics(store,snap)
+        if initial:
+            initial['binding_contract_evidence']=initial_protocol_evidence(
+                store,snap,{b['arm'] for b in initial['bindings'].values()})
         contribution=auxiliary_contribution(machine,census,verdicts,gaps)
         evidence=L.response_evidence(store,ledger,snap)
         revision=P.seal(dict(snapshot=snap,validation_objects=validations,metrics=metrics,gaps=gaps,expected=expected,states=states,
@@ -402,7 +465,10 @@ def auxiliary_report(data_root,day,publication,parent,*,publish_policy=True):
         old_aux=old_family['auxiliary_cells'][key]['routes'][route]
         eligible=[a for a in V1.TIE_ORDER if metrics[comp][a]['pass_count']]
         arm=None;inherit=None
-        if count and not gaps[comp] and not invalid[comp] and eligible:
+        if initial:
+            binding=initial['bindings'][sid];arm=binding['arm']
+            inherit=binding['source_scope'].rsplit('|',1)[0] if binding['source_scope']!=sid else None
+        elif count and not gaps[comp] and not invalid[comp] and eligible:
             prior_arm=old_aux['payload'].get('arm')
             arm=max(eligible,key=lambda a:(Fraction(metrics[comp][a]['pass_wins'],metrics[comp][a]['pass_count']),
                 metrics[comp][a]['pass_count'] if metrics[comp][a]['pass_wins'] else 0,a==prior_arm,-V1.TIE_ORDER.index(a)))
@@ -414,10 +480,14 @@ def auxiliary_report(data_root,day,publication,parent,*,publish_policy=True):
             if entry:arm=entry['arm'];inherit=regular_key
         if arm:
             ids=machine['operating_manifest']['scopes'][sid];payload=B.payload([C.branch(b) for b in ids])
-            mc=dict(payload=payload,payload_sha256=P.digest(payload),backend='union_v5',status='operating_registered')
+            mc=dict(payload=payload,payload_sha256=P.digest(payload),backend='union_v5',
+                    status='operator_initial_registered' if initial else 'operating_registered')
             ap=dict(arm=arm,binding=UNION.binding(arm))
             ac=dict(payload=ap,payload_sha256=P.digest(ap),actual_response_evidence=[proof],
-                    comparison_key=comp,local_metrics=dict(metrics[comp][arm]) if not inherit else None,inherited_from=inherit)
+                    comparison_key=comp,local_metrics=dict(metrics[comp][arm]) if not inherit and not initial else None,inherited_from=inherit)
+            if initial:ac['initial_binding']=dict(initial['bindings'][sid],
+                adoption_basis=initial['adoption_basis'],comparison_result_required=False,
+                response_evidence_role='shared_union_protocol_validation_not_scope_performance')
             new+=1
             if '|REGULAR|' in key:regular[key,route]=dict(ids=ids,arm=arm)
         elif old_family['schema']==V5.SCHEMA and old_cell['backend']=='union_v5':
@@ -433,7 +503,9 @@ def auxiliary_report(data_root,day,publication,parent,*,publish_policy=True):
         machine_cells[key]['routes'][route]=mc;aux_cells[key]['routes'][route]=ac
     comparison_path=out/'frozen'/('machine-'+gen+'.json');P.write(comparison_path,machine)
     issued=P.seal(dict(machine,cells=list(machine_cells.values()),comparison_report_sha256=gen,
-        source_receipts=machine['source_receipts']+receipts+[dict(path=str(comparison_path.resolve()),sha256=P.file_hash(comparison_path))],
+        source_receipts=machine['source_receipts']+receipts+[dict(path=str(comparison_path.resolve()),sha256=P.file_hash(comparison_path))]
+            +([initial['authorization_source']] if initial else []),
+        initial_registration=initial,
         status='completed_with_scope_carry' if pending else 'completed',scope_pending=pending))
     statuses={}
     for sid,configs in machine['fixed_proposals'].items():
@@ -450,6 +522,7 @@ def auxiliary_report(data_root,day,publication,parent,*,publish_policy=True):
         results_sources=[proof],source_receipts=receipts,comparison_complete=not gaps and not invalid,
         scope_pending=pending,scope_census=dict(planned=len(V5.scopes()),new_ready=new,new_actual_pid_consumed=0,native_carried=len(pending),contract_gaps=0),
         comparison_metrics=metrics,comparison_statuses=statuses,
+        initial_registration=initial,
         auxiliary_contribution=contribution,
         owner_request_census=dict(expected=declared['expected_requests'],missing=declared['expected_requests']-sum(states.values()),**states),
         incomplete_comparisons=dict(gaps),observation_mode='confirmation_replay',

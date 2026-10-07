@@ -73,6 +73,27 @@ def test_breakout_excludes_current_and_requires_known_false(monkeypatch):
     A.validate_signal(ready[0]['event']['branch_signals'][bid])
     assert not feed(s,row(62,102)) # still true, no new edge
 
+
+@pytest.mark.parametrize('reverse_order', [False, True])
+def test_real_filters_detect_breakout_without_reversal_in_same_symbol(reverse_order):
+    ids=[C.ALIASES['HA'],C.ALIASES['HB']]
+    if reverse_order:ids.reverse()
+    anchor=row(0);anchor[9]='403870_AL'
+    detector=R.State(branch_ids=ids,session_anchor=anchor)
+    for i in range(62):
+        price=100+i*.001 if i<60 else 100.059 if i==60 else 100.4
+        observed=row(i,price);observed[9]='403870_AL'
+        ready=detector.observe(observed,symbol='403870',venue='SOR',session='SOR_REGULAR')
+    assert detector.legacy.turn is None
+    assert len(ready)==1
+    event,source=detector.snapshot(ready[0])
+    assert set(event['branch_signals'])=={C.ALIASES['HB']}
+    signal=event['branch_signals'][C.ALIASES['HB']]
+    assert C.matches(C.ALIASES['HB'],signal,signal['branch_features']) is True
+    from src.engine.scalping import reversal_operating_auxiliary as union
+    inp,_,_=union.production_request(source,AUX.ARMS[-1],event=event)
+    assert [s['policy_id'] for s in inp['signals']]==[C.ALIASES['HB']]
+
 def test_retest_exact_120_seconds_and_breach(monkeypatch):
     bid,s=state('SB',monkeypatch)
     for r in (row(0,102),row(1,100),row(2,101),row(3,100)):feed(s,r)

@@ -93,3 +93,24 @@ v9(`2121583e`) 배포본 68 PASS 및 63 owner 검증 후 보조 consumer를 인�
 
 
 후속 실제 strict에서 `entry_split:semantic_unverified_large_source`가 발견됐다. 64 MiB 공통 reader가 221 MiB native 보고서를 hash-only로 읽으면서 분할수량의 native report/policy generation 검증을 연결하지 못한 결함이다. 해당 owner만 기존 512 MiB bounded reader와 native generation validator로 검증하도록 연결했다. 원 report bytes·날짜·policy generation 불일치/변조/상한초과는 거부하며 공통 reader 상한은 유지한다. summary/strict 회귀 62 PASS. 장후 재개에는 원 실패 run과 새로운 tail 명령 영수증을 보존하고, 각 stage 및 strict 사전 검증을 통과한 경우에만 native `--seal-main-run`으로 Main 완료를 봉인한다.
+
+
+06:41 `444f487b`/v11에 durable 원천일 100회 한도와 기동 hold를 배포했다(작업본/immutable 각각 287 PASS). 대형 보고서 summary 연결 보완 `1a179ef3`/v12는 immutable 174 PASS와 실제 native pair 검증 후 선택했다. 63개 release owner와 기존 186 policy pin 검증 PASS. 실제 start/restart/preopen print-plan은 모두 hold 사유로 거부했다.
+
+06:52 호출 종료 영수증은 `new_calls=0`, limit100, 해당 원천일 누적15,228회, unique request 완료18,593/계획759,289/uncertain8이다. 전체 owner-arm 참조는1,171,945건(완료36,517/계획1,135,416/uncertain12/누락0)이며 이 참조 수를 호출 수로 집계하지 않는다. 06:53 native auxiliary stage succeeded, 128경로 전부 native pair carry, 신규 union 준비0/실제 소비0, comparison_complete=false다. 일부 미완료 응답으로 새8개 패턴의 적용 성공을 주장하지 않는다.
+
+06:54 모든 owner stage와 strict preterminal을 재검증하고 원 실패 terminal bytes를 보존한 후, 검증된 tail 실행으로 producers_completed를 기록하고 native `--seal-main-run`을 통과했다. 새 recovery run184d9857585a4a37ae15738393019edd는 Main succeeded이며 원 run/코드/명령/세대 증거를 `capped-tail-recovery.json`에 결속했다. native 성공 확인 뒤에만 owned 로그에 실제 recovery DONE을 기록했다. 최종 controller/finalization/PREOPEN·기동 hold 해제는 아직 이 기록 시점에 진행 중이다.
+
+
+## 07:00 초기정책 적용 gate 정정
+
+사용자는 복합정책이 초기정책인데 무엇을 기준으로 비교하는지 지적했다. §3.2의 승인된 최초 목록과 §5.3의 미완료 비교 carry가 충돌했고, 구현은 후자를 초기 등록에도 적용했다. 128 native carry로 준비한 앞선 결과는 초기 지정 목록의 적용 완료가 아니다. 잘못된 준비로 기동하지 않도록 exact finalizer PID1202463만 중지했으며 cleanup child는 안전하게 완료했다. startup hold는 유지하고 당일 bootstrap 생성 전임을 확인했다.
+
+초기 승인 receipt의 정확 source/target/parent/목록을 확인한 경우 기존 REGULAR arm을 복합 계약으로 이관한다. PRE/AFTER는 동일 유형·route REGULAR 문구를 승계한다. 실제 응답은 각 arm의 protocol 검증에만 사용하며 다른 arm 완료·PASS 여부·W/F/승률은 보지 않는다. 초기 성과 local_metrics는 null, comparison_complete는 실제 미완료 상태를 유지한다. 미래 후속 binding 개선은 기존 비교 경로에 남긴다. 이 정정은 현재 실행 계획의 초기 적용 요구를 복구하며 broker/시간/원천/응답/주문 guard를 변경하지 않는다.
+
+### 10/8 독립 패턴 의미 재확인과 초기 적용 보완
+
+- 한 종목의 등록 패턴을 각각 평가하며 ANY_MATCH_ONE_INTENT로 결합한다. 반전 미성립은 지속/돌파 탐지를 차단하지 않는다. 같은 확인점의 성립 근거는 전부 보존하고 공통 AI 위험판정과 intent는 한 번 생성한다. 패턴별 별도 주문이나 서로 다른 시점의 근거 혼합은 하지 않는다.
+- 실제 초기 manifest 128 scope 중 3개 정책 4 scope, 2개 10 scope, 단독 114 scope다. 삼성 REGULAR/SOR는 기존+SA+SB, HPSP REGULAR/SOR 각 가격대는 기존+HA+HB다. 등록 가능 개수 제한은 없으나 추가 8개 정의의 종목/시장/route 범위는 유지한다. 모든 시장에 8개를 무차별 적용했다는 의미가 아니다.
+- 실제 필터를 대체하지 않은 회귀에서 HPSP HA/HB 동시 등록, 하락/반전 없는 상승 시계열의 HB 단독 성립을 확인했다. 등록 순서를 뒤집어도 동일하다. 기존 FIRST 무효화 후 HB 유지, 공통 TTL, union 근거와 outbox 중복방지도 검증한다.
+- 초기 적용/공유 원장/PREOPEN/summary 178 PASS, typed path 39 PASS(합계 217). 초기 적용은 승률과 전체 보조비교 완료에 의존하지 않으며, 기존 REGULAR arm의 복합 입력 형식 호환성과 정확 승인/부모/정의를 검증한다. 배포 후 실제 발행/최종화/PREOPEN을 확인하기 전까지 봇 기동 hold를 유지한다.

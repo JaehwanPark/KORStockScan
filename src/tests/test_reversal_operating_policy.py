@@ -446,3 +446,60 @@ def test_historical_envelope_validation_preserves_native_parent_commit(replay,mo
     assert V.validate_sources(bundle,root,code_root=Path(V.__file__).parents[3])==bundle
     assert calls==['b'*40]
     assert bundle['continuous_reversal']['native_parent_bundle']['continuous_reversal']['release_commit']=='a'*40
+
+
+def authorize_initial(root,parent):
+    path=root/'runtime/mechanistic_entry_policy/operating-transition.json'
+    P.write(path,P.seal(dict(schema='main_operating_transition_authorization_v1',enabled=True,
+        source_date='2026-10-07',target_date='2026-10-08',parent_bundle_sha256=parent['bundle_sha256'],
+        approved_by='user_operating_policy_implementation_resume_postclose_prepare_next_start')))
+    return path
+
+
+def test_authorized_initial_registration_ignores_incomplete_comparison_and_win_rank(replay,monkeypatch):
+    root,parent,machine=replay
+    PC.prepare_inputs(root,'2026-10-07',machine,parent)
+    # A protocol smoke for the shared five bindings; the full census is pending.
+    PC.L.calls(PC,root,'2026-10-07',transport=transport,call_limit=5)
+    original=PC.comparison_metrics
+    def no_winning_pass(*args):
+        result=original(*args)
+        for arms in result[0].values():
+            for value in arms.values():value['pass_count']=0;value['pass_wins']=0
+        return result
+    monkeypatch.setattr(PC,'comparison_metrics',no_winning_pass)
+    path=authorize_initial(root,parent)
+    result=PC.auxiliary_report(root,'2026-10-07','2026-10-07',parent,publish_policy=False)
+    assert result['comparison_complete'] is False
+    assert result['scope_census']==dict(planned=128,new_ready=128,new_actual_pid_consumed=0,native_carried=0,contract_gaps=0)
+    issued=json.loads((PC.directory(root,'2026-10-07')/'machine.json').read_text())
+    for key,route in V.scopes():
+        cell=next(c for c in issued['cells'] if c['key']==key)['routes'][route]
+        assert [b['branch_id'] for b in cell['payload']['branches']]==machine['operating_manifest']['scopes'][V.scope_id(key,route)]
+        aux=next(c for c in result['cells'] if c['key']==key)['routes'][route]
+        assert aux['local_metrics'] is None
+        assert aux['initial_binding']['comparison_result_required'] is False
+        if '|REGULAR|' not in key:assert '|REGULAR|' in aux['initial_binding']['source_scope']
+    bundle=V.stage(root,'2026-10-07','2026-10-07',issued,result,target_date='2026-10-08',release_commit='a'*40)
+    V.validate_sources(bundle,root)
+    path.write_text('{}')
+    V.validate_sources(bundle,root)  # immutable authority source retained
+
+
+def test_initial_registration_requires_exact_authority_not_a_loose_enabled_flag(replay):
+    root,parent,machine=replay
+    path=authorize_initial(root,parent)
+    value=json.loads(path.read_text());value['parent_bundle_sha256']='0'*64;P.write(path,P.seal(value))
+    with pytest.raises(ValueError,match='scope_or_parent_invalid'):
+        PC.initial_registration(root,'2026-10-07','2026-10-07',parent,machine)
+    authorize_initial(root,parent)
+    changed=copy.deepcopy(machine);changed['operating_manifest']['scopes'][V.scopes()[0][0]+'|'+V.scopes()[0][1]]=[]
+    with pytest.raises(ValueError,match='scope_or_parent_invalid'):
+        PC.initial_registration(root,'2026-10-07','2026-10-07',parent,changed)
+
+
+def test_initial_registration_does_not_invent_protocol_response_evidence(replay):
+    root,parent,machine=replay
+    PC.prepare_inputs(root,'2026-10-07',machine,parent);authorize_initial(root,parent)
+    with pytest.raises(ValueError,match='protocol_response_evidence_missing'):
+        PC.auxiliary_report(root,'2026-10-07','2026-10-07',parent,publish_policy=False)
