@@ -187,3 +187,99 @@ def test_diagnostics_never_change_kernel_event_or_auxiliary_input(monkeypatch, g
     assert snap==original
     wrong=project(snap,symbol='005930',venue='SOR',session='SOR_REGULAR',now=now,item='036930_AL')
     assert wrong['reason']=='reversal_revision_changed'
+
+
+def _native_reversal_claim(monkeypatch):
+    from src.engine.scalping import continuous_reversal_branches as B
+    from src.tests.test_continuous_reversal import rows
+    monkeypatch.setattr(B, '_STATES', {})
+    monkeypatch.setattr(B, '_CLAIMS', {})
+    monkeypatch.setattr(B, '_GENERATION', 'f'*64)
+    monkeypatch.setattr(B, '_V2', True)
+    values = rows([100, 99, 100])
+    for row in values:
+        row[0] += 1791344100.
+        row[9] = '403870_AL'
+    state = B.BranchState(session_anchor=values[0])
+    for row in values:
+        state.observe(row, symbol='403870', venue='SOR', session='SOR_REGULAR')
+    day = datetime.fromtimestamp(values[-1][0], B.K.KST).date().isoformat()
+    B._STATES[('403870', 'SOR', '403870_AL', 'REGULAR', day)] = state
+    claim = B.claim_snapshot('403870', 'SOR', 'SOR_REGULAR', now=values[-1][0],
+                             item='403870_AL', family_sha256='f'*64)
+    return B, state, values, claim
+
+
+@pytest.mark.parametrize('case,cause,lifecycle', [
+    ('expire', 'reversal_signal_expired', True),
+    ('down', 'reversal_first_signal_invalidated', True),
+    ('tamper', 'reversal_signal_snapshot_changed', False),
+    ('future', 'reversal_signal_clock_invalid', False),
+    ('epoch', 'reversal_first_signal_invalidated', False),
+    ('invalid_source', 'reversal_first_signal_invalidated', False),
+])
+def test_rejected_claim_preserves_guard_and_exact_source(monkeypatch, tmp_path, case, cause, lifecycle):
+    from src.engine.scalping.reversal_source_diagnostics import validate_claim_with_receipt
+    from src.engine.monitoring.submission_bottleneck_monitor import _reversal_lifecycle_diagnostic
+    B, state, values, claim = _native_reversal_claim(monkeypatch)
+    now = values[-1][0] + (6 if case == 'expire' else -1 if case == 'future' else 1)
+    row = values[-1][:]
+    row[0] = now
+    row[2] += 1
+    if case in {'down', 'epoch', 'invalid_source'}:
+        row[3] = 98.
+    if case == 'epoch':
+        row[1] += 1
+    if case == 'invalid_source':
+        row[8] = 0
+    if case != 'future':
+        state.observe(row, symbol='403870', venue='SOR', session='SOR_REGULAR')
+    if case == 'tamper':
+        claim['snapshot'][0]['low_price'] += 1
+    before = deepcopy((B._STATES, B._CLAIMS, claim))
+    with pytest.raises(ValueError) as baseline:
+        B.validate_claim(claim, 'f'*64, now=now)
+    with pytest.raises(ValueError) as instrumented:
+        validate_claim_with_receipt(claim, 'f'*64, now=now,
+                                   evaluation_attempt_id='attempt-exact', machine_bundle_sha256='b'*64)
+    assert str(instrumented.value) == str(baseline.value)
+    receipt = instrumented.value.reversal_source_receipt
+    assert receipt['failure_cause'] == cause
+    assert receipt['snapshot'] == before[1][claim['token']]['snapshot']
+    assert B._CLAIMS == before[1] and claim == before[2]
+    assert receipt['latest_native_observation'] == state.legacy.last
+    trace_row = dict(stock_code='403870', decision_ts=B.K.iso(now+.01),
+        decision_stage='entry_screen', machine_evaluation_status='assessment_contract_invalid',
+        market_data_route='krx_nxt_integrated',
+        evaluation_attempt_id='attempt-exact', machine_bundle_sha256='b'*64,
+        machine_contract_error=str(instrumented.value), provider_called=False,
+        continuous_reversal_rejected_claim_receipt=receipt)
+    assert _reversal_lifecycle_diagnostic(trace_row) == (cause if lifecycle else None)
+    from src.tests.test_submission_bottleneck_monitor import _source_gap_files
+    from src.engine.monitoring.submission_bottleneck_monitor import source_gap_semantics
+    clock = datetime.fromtimestamp(now+.1, B.K.KST)
+    _source_gap_files(tmp_path, clock, traces=[trace_row])
+    result = source_gap_semantics(tmp_path, clock)
+    if lifecycle:
+        assert result['issues'] == {}
+        assert result['diagnostics'] == {'machine_trace:'+cause: 1}
+    else:
+        assert result['issues'] == {'machine_trace:'+str(baseline.value): 1}
+    for key, value in [('evaluation_attempt_id', 'foreign'), ('provider_called', True),
+                       ('machine_bundle_sha256', 'other'), ('stock_code', '005930')]:
+        foreign = dict(trace_row, **{key: value})
+        assert _reversal_lifecycle_diagnostic(foreign) is None
+    assert _reversal_lifecycle_diagnostic({**trace_row,
+        'continuous_reversal_rejected_claim_receipt': None}) is None
+
+
+def test_claim_telemetry_never_changes_success_or_native_generation_rejection(monkeypatch):
+    from src.engine.scalping.reversal_source_diagnostics import validate_claim_with_receipt
+    B, state, values, claim = _native_reversal_claim(monkeypatch)
+    now = values[-1][0]
+    assert validate_claim_with_receipt(claim, 'f'*64, now=now) == B.validate_claim(claim, 'f'*64, now=now)
+    claim['generation'] = 'foreign'
+    claim['snapshot'][0]['epoch'] = float('nan')
+    with pytest.raises(ValueError, match='reversal_signal_generation_changed') as error:
+        validate_claim_with_receipt(claim, 'f'*64, now=now)
+    assert error.value.reversal_source_receipt['status'] == 'unobservable'

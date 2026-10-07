@@ -9536,10 +9536,13 @@ class GPTSniperEngine:
                     item = (ws_data.get('last_realtime_type_item') or {}).get('0B')
                     snapshot_now=time.time()
                     if reversal_family.get('schema')=='continuous_reversal_policy_v2':
-                        from src.engine.scalping.continuous_reversal_branches import claim_snapshot, validate_claim
+                        from src.engine.scalping.continuous_reversal_branches import claim_snapshot
+                        from src.engine.scalping.reversal_source_diagnostics import validate_claim_with_receipt
                         claim=reversal_signal_claim or claim_snapshot(symbol,_explicit_item_venue(item),machine_exact['session_bucket'],
                             now=snapshot_now,item=item,family_sha256=reversal_family['family_sha256'])
-                        snapshot=validate_claim(claim,reversal_family['family_sha256'],now=snapshot_now) if claim else None
+                        snapshot=validate_claim_with_receipt(claim,reversal_family['family_sha256'],now=snapshot_now,
+                            evaluation_attempt_id=machine_exact['evaluation_attempt_id'],
+                            machine_bundle_sha256=entry_setup_live_policy['machine_bundle_sha256']) if claim else None
                         entry_setup_live_policy['continuous_reversal_claim']=claim
                     else:
                         # A wake-selected v1 signal is passed as a frozen tuple.
@@ -9782,6 +9785,8 @@ class GPTSniperEngine:
                             "machine_source_gap_kind": source_gap_kind,
                             "machine_feature_source_receipt": feature_receipt,
                             "machine_feature_tick_window": machine_tick_window,
+                            "continuous_reversal_rejected_claim_receipt": getattr(
+                                exc, "reversal_source_receipt", None),
                         }
                     ),
                     prompt_type=prompt_type,

@@ -2756,6 +2756,7 @@ def record_ai_decision_trace(
                 "machine_capture_status",
                 "machine_observation_sha256",
                 "continuous_reversal_consumption",
+                "continuous_reversal_rejected_claim_receipt",
                 "machine_source_recovery_parent_sha256",
                 "machine_source_recovery_parent_attempt_id",
                 "ai_input_preflight_source_timing",

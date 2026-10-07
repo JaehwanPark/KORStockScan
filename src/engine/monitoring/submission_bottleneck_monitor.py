@@ -145,6 +145,59 @@ def _auxiliary_cost_receipt_valid(row):
                     for name in ("entry_cost_contract_sha256", "entry_cost_replay_context_sha256")))
 
 
+def _reversal_lifecycle_diagnostic(row):
+    """Only exact, intact rejection evidence can classify a normal lifecycle miss."""
+    receipt = row.get("continuous_reversal_rejected_claim_receipt")
+    if (row.get("provider_called") is not False or row.get("actual_order_submitted") is True
+            or not isinstance(receipt, dict) or receipt.get("status") != "observed"
+            or receipt.get("schema") != "continuous_reversal_claim_source_receipt_v1"
+            or not row.get("evaluation_attempt_id")
+            or receipt.get("evaluation_attempt_id") != row.get("evaluation_attempt_id")
+            or not row.get("machine_bundle_sha256")
+            or receipt.get("machine_bundle_sha256") != row.get("machine_bundle_sha256")
+            or receipt.get("validation_error") != row.get("machine_contract_error")):
+        return None
+    try:
+        snapshot = receipt["snapshot"]
+        event = snapshot[0]
+        scope = receipt["scope"]
+        latest = receipt["latest_native_observation"]
+        at = receipt["validation_epoch"]
+        age = at - event["epoch"]
+        family = receipt["requested_family_sha256"]
+        encoded = json.dumps(snapshot, sort_keys=True, separators=(",", ":"),
+                             ensure_ascii=True, allow_nan=False).encode()
+        snapshot_sha = hashlib.sha256(encoded).hexdigest()
+        token = hashlib.sha256(json.dumps([family, event["signal_id"], snapshot],
+            sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode()).hexdigest()
+        trace_at = stamp(row["decision_ts"]).timestamp()
+        if (family != receipt["stored_generation"] or family != receipt["claim_generation"]
+                or snapshot_sha != receipt["snapshot_sha256"]
+                or snapshot_sha != receipt["supplied_snapshot_sha256"]
+                or token != receipt["claim_token"] or age != receipt["signal_age_seconds"]
+                or scope[0] != row.get("stock_code") or scope[2] != event["source_item"]
+                or scope[1] != "SOR" or not scope[2].endswith("_AL")
+                or row.get("market_data_route") != "krx_nxt_integrated"
+                or latest[9] != scope[2] or not latest[8]
+                or str(latest[1]) != event["event_id"].rsplit(":", 2)[-2]
+                or latest[2] < int(event["event_id"].rsplit(":", 1)[-1])
+                or not receipt["price_path_segment_start"] < event["epoch"]
+                or not 0 <= at-latest[0] <= 5 or not 0 <= trace_at-at <= 5):
+            return None
+        cause = receipt.get("failure_cause")
+        if (cause == "reversal_signal_expired" and age > 5
+                and row["machine_contract_error"] == "reversal_signal_expired_or_changed"):
+            return cause
+        if (cause == "reversal_first_signal_invalidated" and 0 <= age <= 5
+                and event.get("decision_phase") == "FIRST_UPTICK"
+                and receipt.get("current_turn_id") != event["event_id"]
+                and row["machine_contract_error"] == cause):
+            return cause
+    except (KeyError, TypeError, ValueError, IndexError, AttributeError, OverflowError):
+        pass
+    return None
+
+
 def source_gap_semantics(data_root, now, *, tail_bytes=SOURCE_TAIL_BYTES):
     """Observe source causes before and after machine assessment without trading authority."""
     now = stamp(now)
@@ -294,10 +347,13 @@ def source_gap_semantics(data_root, now, *, tail_bytes=SOURCE_TAIL_BYTES):
         elif status == "assessment_contract_invalid":
             kind = str(row.get("machine_source_gap_kind") or row.get("machine_contract_error")
                        or "contract_error_receipt_missing")
+            lifecycle = _reversal_lifecycle_diagnostic(row)
+            if lifecycle:
+                kind = lifecycle
             if kind.startswith("Out of range float values are not JSON compliant:"):
                 kind = "machine_source_nonfinite"
             record("machine_trace", kind, row,
-                   diagnostic=kind == "trusted_tape_source_insufficient")
+                   diagnostic=bool(lifecycle) or kind == "trusted_tape_source_insufficient")
         elif row.get("machine_contract_error"):
             kind = str(row.get("machine_source_gap_kind") or row["machine_contract_error"])
             record("machine_trace", kind, row,

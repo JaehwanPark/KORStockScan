@@ -28,6 +28,27 @@ def _enable(monkeypatch, tmp_path):
     trace._SEEN_CONTEXT_CANDIDATE_HASHES.clear()
 
 
+def test_rejected_reversal_keeps_source_receipt_without_provider_or_outcome(monkeypatch, tmp_path):
+    _enable(monkeypatch, tmp_path)
+    receipt = dict(schema='continuous_reversal_claim_source_receipt_v1',
+        evaluation_attempt_id='exact-rejected-attempt', machine_bundle_sha256='b'*64,
+        signal_id='native-first-turn', signal_age_seconds=5.2,
+        validation_error='reversal_signal_expired_or_changed',
+        failure_cause='reversal_signal_expired', runtime_effect=False)
+    trace.record_ai_decision_trace(dict(ai_decision_trace_id='exact-rejected-trace',
+        action='DROP', score=0, evaluation_attempt_id='exact-rejected-attempt',
+        machine_bundle_sha256='b'*64, machine_evaluation_status='assessment_contract_invalid',
+        machine_contract_error='reversal_signal_expired_or_changed',
+        continuous_reversal_rejected_claim_receipt=receipt),
+        prompt_type='scalping_entry', prompt_version='continuous_reversal_auxiliary_production_v2',
+        result_source='mechanistic_pre_adjudication_rejected', provider_called=False)
+    row = _rows(trace._trace_path(trace._date_text()))[0]
+    assert row['continuous_reversal_rejected_claim_receipt'] == receipt
+    assert row['evaluation_attempt_id'] == receipt['evaluation_attempt_id']
+    assert row['provider_called'] is False and row['actual_order_submitted'] is False
+    assert row['outcome_label_eligible'] is False
+
+
 def test_request_capture_preparation_reuses_indexes_and_rolls_date(monkeypatch, tmp_path):
     _enable(monkeypatch, tmp_path)
     calls = []
