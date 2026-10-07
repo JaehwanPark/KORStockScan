@@ -701,14 +701,14 @@ def auxiliary_report(data_root,day,publication,parent_bundle,*,publish_policy=Tr
     P.write(out/'machine.json',issued);P.write(out/'auxiliary.json',auxiliary)
     # Machine-stage bytes remain frozen once its terminal receipt commits.
     # Issued runtime pairs are a separate compiled source bound to that report.
-    P.write(P.directory(data_root,day)/'auxiliary.json',auxiliary)
     freeze=P.seal(dict(schema=SCHEMA,source_date=day,status='frozen',machine_report_sha256=gen,
                        call_limit=None,census=input_census['census'],input_sha256=input_census['input_sha256'],**P.AUTH))
-    P.write(P.directory(data_root,day)/'call-freeze.json',freeze)
-    canonical=P.directory(data_root,day)/'provider-results.jsonl';canonical.parent.mkdir(parents=True,exist_ok=True)
-    with gzip.open(evidence,'rt') as src,canonical.open('w') as dst:
-        for line in src:dst.write(line)
     if publish_policy:
+        P.write(P.directory(data_root,day)/'auxiliary.json',auxiliary)
+        P.write(P.directory(data_root,day)/'call-freeze.json',freeze)
+        canonical=P.directory(data_root,day)/'provider-results.jsonl';canonical.parent.mkdir(parents=True,exist_ok=True)
+        with gzip.open(evidence,'rt') as src,canonical.open('w') as dst:
+            for line in src:dst.write(line)
         import subprocess
         commit=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
         bundle=V3.stage(data_root,day,publication,issued,auxiliary,target_date=N.next_target(publication),release_commit=commit)

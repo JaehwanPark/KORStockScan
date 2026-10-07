@@ -189,6 +189,9 @@ def test_streaming_daily_producer_calls_carry_and_native_handoff(native,monkeypa
     # Uncalled new branches cannot be married to an unrelated baseline screen.
     pending=PC.auxiliary_report(root,'2026-10-07','2026-10-07',parent,publish_policy=False)
     assert pending['comparison_complete'] is False
+    assert not (P.directory(root,'2026-10-07')/'auxiliary.json').exists()
+    assert not (P.directory(root,'2026-10-07')/'call-freeze.json').exists()
+    assert not (P.directory(root,'2026-10-07')/'provider-results.jsonl').exists()
     calls=[]
     def actual(req,**kwargs):
         calls.append(req['paired_replay_id']);phase=req['candidate_input']['observation_phase']['stage']
@@ -210,6 +213,7 @@ def test_streaming_daily_producer_calls_carry_and_native_handoff(native,monkeypa
     monkeypatch.setattr(subprocess,'check_output',lambda *args,**kwargs:'a'*40+'\n')
     auxiliary=PC.auxiliary_report(root,'2026-10-07','2026-10-07',parent)
     assert auxiliary['comparison_complete'] is True
+    assert (P.directory(root,'2026-10-07')/'auxiliary.json').exists()
     issued=json.loads((PC.directory(root,'2026-10-07')/'machine.json').read_text())
     for cell in issued['cells']:
         for route,value in cell['routes'].items():
