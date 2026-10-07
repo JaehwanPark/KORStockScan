@@ -2633,7 +2633,8 @@ class ArtifactFreshnessDetector(BaseDetector):
         details['semantic_alerts'] = alerts
         from src.engine.error_detectors.episode_health import check as episode_check
         episode_startup = episode_check(PROJECT_ROOT, now_dt,
-            target_date=selection['target_date'] if not trading_day else today, reader=_semantic_object)
+            target_date=selection['target_date'] if not trading_day else today, reader=_semantic_object,
+            read_clock=lambda: datetime.now(ZoneInfo('Asia/Seoul')))
         details['episode_startup_semantics'] = episode_startup
         if episode_startup['findings']:
             warnings.append('episode_startup_semantics: ' + ', '.join(episode_startup['findings']))

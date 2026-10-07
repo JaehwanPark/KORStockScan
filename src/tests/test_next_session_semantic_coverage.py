@@ -353,7 +353,7 @@ def test_research_preserves_exact_report_bytes_when_native_publisher_moves(tmp_p
         assert family.file_sha(receipt['path']) == result['report_seals'][source]
 
 
-@pytest.mark.parametrize('defect', ['none', 'prior_date', 'prior_pid', 'prior_policy', 'changed_cwd', 'missing_sequence', 'stale', 'future_clock'])
+@pytest.mark.parametrize('defect', ['none', 'prior_date', 'prior_pid', 'prior_policy', 'changed_cwd', 'missing_sequence', 'stale', 'future_clock', 'published_during_read', 'future_at_read', 'stale_at_read'])
 @pytest.mark.parametrize('inspection', ['readable', 'permission_denied', 'process_exited', 'state_publish_race'])
 def test_episode_current_pid_consumption_is_not_inferred_from_unit_configuration(tmp_path, monkeypatch, defect, inspection):
     from src.engine.error_detectors import episode_health
@@ -380,6 +380,11 @@ def test_episode_current_pid_consumption_is_not_inferred_from_unit_configuration
         stale=('observed_at_kst','2026-10-06T09:55:00+09:00'), future_clock=('observed_at_kst','2026-10-06T10:01:00+09:00'))
     if defect in changes:
         key,value = changes[defect]; captures[key]=value
+    if defect in {'published_during_read', 'future_at_read'}:
+        captures['observed_at_kst'] = '2026-10-06T10:00:00.350000+09:00'
+    if defect == 'stale_at_read': captures['observed_at_kst'] = '2026-10-06T09:58:00+09:00'
+    read_clock = (lambda: datetime.fromisoformat('2026-10-06T10:00:00.200000+09:00')) if defect == 'future_at_read' else (
+        (lambda: datetime.fromisoformat('2026-10-06T10:00:01.200000+09:00')) if defect in {'published_during_read', 'stale_at_read'} else None)
     sf = tmp_path/'data/runtime/low_price_two_leg'; sf.mkdir(parents=True)
     (sf/f'{pid}_state.json').write_text(json.dumps(dict(trade_date='2026-10-06', economic_capture=captures)))
     timers = tmp_path/'timers'; timers.mkdir()
@@ -391,21 +396,25 @@ def test_episode_current_pid_consumption_is_not_inferred_from_unit_configuration
         return detector._semantic_object(path)
     result = episode_health.check(tmp_path, datetime.fromisoformat('2026-10-06T10:00:00+09:00'),
         target_date='2026-10-06', reader=reader, timer_dir=timers,
+        read_clock=read_clock,
         states={f'korstockscan-low-price-two-leg@{pid}.service':dict(MainPID='123', ActiveState='active', WorkingDirectory='/reviewed-release')})
     if inspection == 'state_publish_race':
         assert result['status']=='unobservable' and result['findings']==[]
         assert result['actual_pid_consumed'] is False
         return
-    assert result['actual_pid_consumed'] is (defect=='none' and inspection=='readable')
-    assert result['status']==('warning' if defect!='none' else
+    valid = defect in {'none', 'published_during_read'}
+    assert result['actual_pid_consumed'] is (valid and inspection=='readable')
+    assert result['status']==('warning' if not valid else
                               'pass' if inspection=='readable' else 'unobservable')
-    if defect == 'none' and inspection != 'readable':
+    if defect == 'published_during_read':
+        assert result['rows'][0]['source_age_sec'] == pytest.approx(0.85)
+    if valid and inspection != 'readable':
         assert result['unobservable_profile_count'] == 1
         assert result['findings'] == []
         assert result['rows'][0]['pid_cwd'] is None
         assert result['rows'][0]['capture_contract_valid'] is True
         assert detector._semantic_alerts('episode_startup',result,'2026-10-06') == []
-    elif defect != 'none':
+    elif not valid:
         alert = detector._semantic_alerts('episode_startup',result,'2026-10-06')[0]
         assert (alert['affected'],alert['eligible'],alert['total']) == (1,1,1)
 
@@ -447,6 +456,7 @@ def test_episode_preflight_publication_wait_is_exact_date_bounded_and_never_hide
 @pytest.mark.parametrize('inspection', ['readable', 'permission_denied'])
 @pytest.mark.parametrize('case', [
     'initializing', 'prior_terminal_initializing', 'repeated_initializing', 'failed_unit',
+    'published_initialization_during_read', 'deadline_during_read',
     'deadline', 'after_deadline', 'evaluated', 'pending', 'non_flat',
     'orders', 'attempted', 'prior_pid', 'wrong_policy', 'missing_prior',
     'invalid_prior', 'wrong_prior_profile', 'stale', 'prior_start', 'prior_publish_race'])
@@ -500,17 +510,25 @@ def test_episode_prior_custody_initialization_waits_only_for_first_completed_bar
     if case == 'prior_start': unit['ExecMainStartTimestamp'] = 'Mon 2026-10-05 09:19:14 KST'
     if case == 'failed_unit': unit['Result'] = 'exit-code'
     clock = '09:21:00' if case == 'deadline' else '09:21:01' if case == 'after_deadline' else '09:20:03'
+    read_clock = None
+    if case == 'published_initialization_during_read':
+        clock = '09:19:19.650000'
+        read_clock = lambda: datetime.fromisoformat('2026-10-06T09:19:20.200000+09:00')
+    if case == 'deadline_during_read':
+        clock = '09:20:59.999999'
+        read_clock = lambda: datetime.fromisoformat('2026-10-06T09:21:00+09:00')
     def reader(path):
         if case == 'prior_publish_race' and path.name == 'low_price_two_leg_policy_2026-10-05.json':
             raise ValueError('semantic_generation_changed_during_read')
         return detector._semantic_object(path)
     result = episode_health.check(tmp_path, datetime.fromisoformat('2026-10-06T'+clock+'+09:00'),
         target_date='2026-10-06', reader=reader, timer_dir=timers,
+        read_clock=read_clock,
         states={f'korstockscan-low-price-two-leg@{pid}.service': unit})
     assert result['actual_pid_consumed'] is False
     if case == 'prior_publish_race':
         assert result['status'] == 'unobservable' and result['findings'] == []
-    elif case in {'initializing', 'prior_terminal_initializing'}:
+    elif case in {'initializing', 'prior_terminal_initializing', 'published_initialization_during_read'}:
         row = result['rows'][0]
         assert result['status'] == 'waiting_producer' and result['findings'] == []
         assert row['status'] == 'waiting_runtime_policy_binding' and row['capture_contract_valid'] is False

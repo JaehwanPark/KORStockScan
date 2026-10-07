@@ -39,7 +39,7 @@ def unit_census(units):
     return rows
 
 
-def check(root, now, *, target_date, reader, states=None, timer_dir=Path('/etc/systemd/system')):
+def check(root, now, *, target_date, reader, states=None, timer_dir=Path('/etc/systemd/system'), read_clock=None):
     from src.trading.low_price_two_leg import policy_runtime as policy
     from src.trading.low_price_two_leg.preflight import validate_authority
     from src.trading.low_price_two_leg.profiles import profiles_for_target_date
@@ -122,6 +122,13 @@ def check(root, now, *, target_date, reader, states=None, timer_dir=Path('/etc/s
                     raise
                 row.update(status='source_invalid', error=str(exc), findings=['episode_profile_state_invalid'])
                 continue
+            # The native capture can be published after this census started.
+            # Measure freshness at the completed read, without permitting a
+            # future timestamp or extending the existing freshness bound.
+            source_as_of = read_clock() if read_clock is not None else now
+            if not isinstance(source_as_of, datetime) or source_as_of.tzinfo is None or source_as_of < now:
+                raise ValueError('episode_source_read_clock_invalid')
+            row['source_freshness_as_of'] = source_as_of.isoformat()
             current_state = state.get('trade_date') == target_date
             capture = state.get('economic_capture') or {}
             capture = capture if isinstance(capture, dict) else {}
@@ -137,7 +144,7 @@ def check(root, now, *, target_date, reader, states=None, timer_dir=Path('/etc/s
                 and re.fullmatch(r'[0-9a-f]{64}', str(capture.get('observation_sha256'))) is not None)
             try:
                 stamp = datetime.fromisoformat(capture.get('observed_at_kst') or '')
-                age = (now-stamp).total_seconds() if stamp.tzinfo is not None else None
+                age = (source_as_of-stamp).total_seconds() if stamp.tzinfo is not None else None
             except (TypeError, ValueError):
                 age = None
             row['source_age_sec'] = age
@@ -190,7 +197,7 @@ def check(root, now, *, target_date, reader, states=None, timer_dir=Path('/etc/s
                     and state.get('legs') == [] and state.get('owned_order_nos') == []
                     and not state.get('last_evaluated_bar') and not state.get('pending_entry_confirmation')
                     and started is not None and started.astimezone(now.tzinfo).date() == day
-                    and started <= stamp <= now < first_bar_close)
+                    and started <= stamp <= source_as_of < first_bar_close)
                 if initial_binding:
                     if prior_applied is None:
                         prior_applied = {}
