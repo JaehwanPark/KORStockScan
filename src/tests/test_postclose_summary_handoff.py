@@ -1682,3 +1682,23 @@ def test_continuous_machine_group_cli_uses_parsed_date_and_single_writer(monkeyp
                          'market_weakness', 'research_allocation', 'legacy_policy_approval',
                          'summary_handoff'}
     assert seen[-1] == 'summary_handoff'
+
+
+def test_one_stage_barrier_waits_without_waiting_for_later_consumers(monkeypatch,tmp_path):
+    import signal,time
+    from src.utils import constants
+    from src.engine.automation import postclose_summary_handoff as h
+    monkeypatch.setattr(signal,'signal',lambda *a:None)
+    monkeypatch.setattr(constants,'DATA_DIR',tmp_path)
+    day='2026-10-07';path=h.stage_path(tmp_path/'report',day,'main_machine_policy')
+    path.parent.mkdir(parents=True);path.write_text(json.dumps({'status':'running'}))
+    waited=[]
+    def advance(seconds):
+        waited.append(seconds);path.write_text(json.dumps({'status':'succeeded'}))
+    monkeypatch.setattr(time,'sleep',advance)
+    assert h._stage_main(['--stage','wait','--wait-stage','main_machine_policy','--date',day])==0
+    assert waited==[1]
+    # A terminal failure ends waiting but cannot pass the publication check.
+    path.write_text(json.dumps({'status':'failed'}))
+    assert h._stage_main(['--stage','wait','--wait-stage','main_machine_policy','--date',day])==0
+    assert h._stage_main(['--stage','main_machine_policy','--check','--date',day])==1

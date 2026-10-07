@@ -1864,6 +1864,14 @@ if [ "$RUN_PIPELINE_EVENT_VERBOSITY_REPORT" = "true" ] || [ "$RUN_PIPELINE_EVENT
 fi
 if [ "$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT" = "true" ] || [ "$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT" = "1" ]; then
   automation_trigger_decision "observation_source_quality_audit"
+  # The final audit replaces the preflight pathname. Its async machine reader
+  # must finish and validate that exact preflight before publication changes.
+  if [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "true" ] || [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "1" ]; then
+    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.postclose_summary_handoff \
+      --stage wait --wait-stage main_machine_policy --date "$TARGET_DATE" --timeout-sec 14400
+    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.postclose_summary_handoff \
+      --stage main_machine_policy --date "$TARGET_DATE" --check
+  fi
   # The wrapper snapshot can precede late terminal/provider publications.
   # Recheck this owner at consumption time; a reuse miss is not CLI failure.
   if [ "$AUTOMATION_TRIGGER_DECISION_RESULT" = "skip" ] && ! env PYTHONPATH=. "$VENV_PY" -m src.engine.observation_source_quality_audit --target-date "$TARGET_DATE" --audit-phase final --check-reusable >/dev/null; then

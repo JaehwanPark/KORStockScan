@@ -1936,6 +1936,7 @@ def _stage_main(argv):
     parser.add_argument('--check', action='store_true')
     parser.add_argument('--resource-guard-status')
     parser.add_argument('--timeout-sec', type=int, default=14400)
+    parser.add_argument('--wait-stage', choices=list(STAGE_REGISTRY))
     args = parser.parse_args(argv); day = args.date.isoformat()
     from datetime import datetime
     from zoneinfo import ZoneInfo
@@ -1948,6 +1949,8 @@ def _stage_main(argv):
         parser.error('only_committed_labels_support_validation_intake')
     if args.launch and (args.off or args.check or args.validate_existing):
         parser.error('launch_requires_execution')
+    if args.wait_stage and args.stage!='wait':
+        parser.error('wait_stage_requires_wait_operation')
     import signal, threading
     stop_event = threading.Event()
     def interrupted(signum, frame):
@@ -1960,8 +1963,8 @@ def _stage_main(argv):
         # stages. Rendering while any producer still updates its heartbeat
         # would invalidate the generation immediately after publication.
         # Summary/controller is the later consumer, never its own predecessor.
-        required = tuple(stage for stage in active_stage_names(day)
-                         if stage != 'summary_handoff')
+        required = ((args.wait_stage,) if args.wait_stage else tuple(
+            stage for stage in active_stage_names(day) if stage != 'summary_handoff'))
         while any(_load_json(stage_path(DATA_DIR / 'report', day, s)).get('status', 'pending') in {'pending','running'} for s in required):
             if time.monotonic() >= deadline: return 75
             if stop_event.is_set(): return 75

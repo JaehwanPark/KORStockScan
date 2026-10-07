@@ -100,6 +100,16 @@ def test_async_policy_stages_finish_before_summary_and_checklist_hashing():
     assert "--stage wait --date \"$TARGET_DATE\" --timeout-sec 14400 || true" not in script
 
 
+def test_final_audit_cannot_replace_active_machine_preflight():
+    script=_text('deploy/run_threshold_cycle_postclose.sh')
+    launch=script.index('--stage main_machine_policy --date "$TARGET_DATE" --publication-date')
+    wait=script.index('--stage wait --wait-stage main_machine_policy')
+    checked=script.index('--stage main_machine_policy --date "$TARGET_DATE" --check',wait)
+    final=script.index('--audit-phase final --write')
+    assert launch<wait<checked<final
+    assert '|| true' not in script[wait:checked]
+
+
 def test_postclose_status_records_direct_owner_producer_flags():
     script = _text("deploy/run_threshold_cycle_postclose.sh")
     for flag in (
