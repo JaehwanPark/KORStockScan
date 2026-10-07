@@ -809,7 +809,7 @@ def _prepare_inputs(data_root,day,machine):
                 census['eligible_requests']+=1
             if census['eligible_points']%100==0:db.commit()
     db.commit()
-    owner_states=dict(db.execute('SELECT r.state,count(*) FROM owners o JOIN requests r ON r.identity=o.identity WHERE o.generation=? GROUP BY r.state',(gen,)))
+    owner_states=dict(db.execute('SELECT r.state,count(*) FROM owners o JOIN requests r INDEXED BY requests_outcome_cover ON r.identity=o.identity WHERE o.generation=? GROUP BY r.state',(gen,)))
     if sum(owner_states.values())!=expected['expected_requests']:
         raise ValueError('path_expected_owner_ledger_missing')
     census['expected_owner_requests']=expected['expected_requests']
@@ -899,7 +899,7 @@ def auxiliary_report(data_root,day,publication,parent_bundle,*,publish_policy=Tr
         raise ValueError('registered_input_census_point_count_changed')
     db=connect_ledger(data_root);db.execute('BEGIN')
     metrics=defaultdict(lambda:{a:Counter() for a in V1.ARMS});gaps=Counter();expected=Counter()
-    owner_states=dict(db.execute('SELECT r.state,count(*) FROM owners o JOIN requests r ON r.identity=o.identity WHERE o.generation=? GROUP BY r.state',(gen,)))
+    owner_states=dict(db.execute('SELECT r.state,count(*) FROM owners o JOIN requests r INDEXED BY requests_outcome_cover ON r.identity=o.identity WHERE o.generation=? GROUP BY r.state',(gen,)))
     missing_owner_requests=expected_manifest['expected_requests']-sum(owner_states.values())
     if missing_owner_requests<0:raise ValueError('path_ledger_unexpected_owner_requests')
     cursor=db.execute('SELECT o.comparison,o.opportunity,o.arm,o.outcome,r.state,r.result FROM owners o JOIN requests r INDEXED BY requests_outcome_cover ON r.identity=o.identity WHERE o.generation=? ORDER BY o.comparison,o.opportunity',(gen,))

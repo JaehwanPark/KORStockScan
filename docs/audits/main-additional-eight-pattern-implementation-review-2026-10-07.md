@@ -65,3 +65,5 @@
 기존 finalization은 read-only 확인에서 `recovered_late`, generation basis `consumed_intraday_preserved_historical_generation`였다. 경고를 억제하지 않고 10/6 원 완료/다음 PREOPEN bytes를 유지하며 현재 checklist/release를 새 장중 handoff로 봉인한 뒤 기동한다. 배포 전 13개 보호 파일 hash와 기존 PID bootstrap/parent CAS를 다시 확인한다.
 
 추가 구버전 parity: 같은 113,306틱에서 기존 5,876개 확인점의 branch_signals와 보조 input이 모두 같았다. 삼성 이 접두의 현행 신호는 0개였으므로 삼성 자연 신호 입증으로 확대하지 않는다. 근거는 작업 디렉터리 `legacy-parity.json`이다.
+
+R5 실제 owner/arm checkpoint: expected 580,040 = completed 4,809 + planned 575,231, missing 0. 동일 실제 요청의 여러 비교 owner 연결은 provider 호출 건수와 다르다. 새 8개는 미선택이므로 신규 phase provider 요청 0개이며 기존 실제 응답의 exact reuse를 사용했다. 20개 미준비 scope는 검증된 이전 기계·보조 쌍을 carry한다. 원장 580,040개 생성 후 상태 집계가 대형 request 본문을 읽는 인덱스 결함을 발견해 metadata covering index로 수정했다. 기존 durable owner를 비교별 예상 개수와 대사하고 입력을 재생성하지 않고 checkpoint를 마무리했다. 최종 대상 865개 및 수정 producer/consumer 162개 회귀 PASS.
