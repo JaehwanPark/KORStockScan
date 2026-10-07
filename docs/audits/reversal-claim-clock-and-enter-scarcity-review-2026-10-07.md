@@ -50,3 +50,14 @@
 - **13:58:15 자연 확인:** HPSP의 13:57:20·13:58:04 두 rejection이 새 v2 상태 관측 시각과 원 trace에 결속되었고 감시 소비자가 `reversal_signal_expired`로 분류했다. 해당 시각 역전 race 자체의 자연 재발은 미관측이다. 기존 v1 결손 4건은 과거 원 증거대로 유지하며 새 receipt로 소급 성공 처리하지 않는다.
 
 [작업 증빙](../../tmp/reversal-clock-repair-20261007/)의 [배포 검증](../../tmp/reversal-clock-repair-20261007/deployment-verify.json), [실제 정책 소비](../../tmp/reversal-clock-repair-20261007/policy-consumption.json), [자연 계측 소비](../../tmp/reversal-clock-repair-20261007/natural-source-semantics.json)에 원본을 보존한다. 새 정책의 적격 신호·실제 Provider/제출/체결·비용 후 수익 및 다음 자연 장후는 현재 체크리스트의 기존 owner에서 계속 확인한다.
+
+## 알림 후속 대조 — 14:01 KST
+
+사용자가 전달한 old release 경로의 1건·generation 2건·4건 알림을 정확한 trace와 대조했다. old release의 `data`는 현재와 같은 공유 디렉터리이므로 알림 경로명만으로 현재 실행 코드가 old release라고 판단하지 않는다. 현재 Main은 `25bcd8f0`/PID `896349`와 새 bundle을 소비하고 있다.
+
+- 최초 삼성 1건은 13:30:22 동결 monitor에서 확인된 13:27:31 `aims-d5fd1048f9bd3132d459`이다. 수정 전 v1의 상태 시각 계측 불일치와 일치한다.
+- 주성 generation 2건은 13:36:32 `aims-5b0948008a0f8dc89046`, 13:37:05 `aims-15b91d79c4cedfe45cc3`이다. 요청 generation과 claim generation은 같고 `stored_generation/snapshot/scope`가 없다. native guard의 `reversal_signal_generation_changed`는 등록 claim 부재에도 발생하므로 이 문자열만으로 정책 변경을 입증하지 않는다. 만료 정리와 다른 폐기를 분리할 원 등록 원천이 없어 과거 두 건은 결손으로 유지한다. 두 건 모두 Provider/주문 호출은 false다.
+- 수정 전 4건은 기존 v1 증거의 10분 창 집계다. 14:00:24 정기 monitor에서 남은 결손은 13:51:49 삼성, 13:53:37 삼성, 13:54:54 두산의 **과거 v1 3건**이며, generation 2건은 현재 창에 없다. [정기 monitor 동결](../../tmp/reversal-clock-repair-20261007/alert-followup-monitor-1400.json), [정확한 판정 대조](../../tmp/reversal-clock-repair-20261007/alert-followup-exact.json), [주성 원 receipt](../../tmp/reversal-clock-repair-20261007/alert-generation-originals.json).
+- 새 코드의 삼성 **13:58:21 `aims-7aacd0c125ee621ffc93`**, **14:00:04 `aims-40bd5d6ec10c269a8190`**에서 최신 native 상태가 판정 시각보다 각각 119.268ms·420.015ms 뒤인 상황이 자연 재발했다. v2 `state_observed_epoch`와 exact hash/identity를 소비한 감시기는 두 건 모두 `reversal_first_signal_invalidated` **diagnostic**으로 분류했고 source issue로 집계하지 않았다. 이것으로 시각 역전 보완의 자연 생산자→소비자 수용을 확인했다. FIRST 신호가 최신 가격에서 교체·소멸된 실제 거절은 그대로다.
+
+후속 점검에서는 추가 코드 변경·수신 복구·Provider 호출·재기동을 실행하지 않았다. 기존 원 source 결손을 새 정책·현재 가격으로 소급 채우지 않았다. 문서 링크·owner/authority·diff·print-only parser만 재검증하며 trading pytest는 코드 변경이 없어 다시 실행하지 않는다.
