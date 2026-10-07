@@ -74,6 +74,8 @@ data/source_quality/market_halt_windows/session_events/
 data/source_quality/raw_quarantine/
 data/source_quality/report_quarantine/
 data/source_quality/analytics_quarantine/
+# Native retention evidence; keep bytes on disk, outside source releases.
+/data/source_quality/nonraw_preservation/
 *.jsonl
 *.csv
 *.bak
