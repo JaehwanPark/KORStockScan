@@ -96,6 +96,37 @@ def test_stage_is_preparation_not_activation_and_source_tamper(native):
     with pytest.raises(ValueError):V3.validate_sources(candidate,root)
 
 
+@pytest.mark.parametrize('failure',[None,'dirty_origin','source_tamper'])
+def test_code_refresh_checks_origin_and_keeps_runtime_strict(native,monkeypatch,failure):
+    from src.engine.infrastructure import runtime_release_router as router
+    root,parent,_,_=native;m,a=migrated_reports(native)
+    old=V3.stage(root,'2026-10-07','2026-10-07',m,a,target_date='2026-10-07',release_commit='a'*40,effective_mode='intraday')
+    receipt=dict(schema='continuous_reversal_current_v3',bundle_sha256=old['bundle_sha256'],
+                 family_sha256=old['continuous_reversal']['family_sha256'],previous_bundle_sha256=parent['bundle_sha256'],
+                 effective_date='2026-10-07',effective_from='2026-10-07T00:00:00+09:00')
+    receipt['receipt_sha256']=P.digest(receipt);P.write(N.root(root)/'current.json',receipt)
+    origin=root/'origin';code=origin/'src/engine/scalping';code.mkdir(parents=True)
+    for name in old['continuous_reversal']['contract_file_sha256']:
+        (code/name).write_bytes((Path(V3.__file__).parent/name).read_bytes())
+    P.write(root/'runtime/runtime_release_selection.json',dict(release_root=str(origin),git_commit='a'*40))
+    def identity(workspace,directory,unit,commit):
+        assert Path(directory)==origin/'src' and commit=='a'*40
+        return dict(source_integrity='dirty' if failure=='dirty_origin' else 'git_commit_and_clean_runtime_source')
+    monkeypatch.setattr(router,'_release_identity',identity)
+    changed=root/Path(PC.__file__).name;changed.write_bytes(Path(PC.__file__).read_bytes()+b'\n# reviewed report fix\n')
+    monkeypatch.setattr(PC,'__file__',str(changed));N._CURRENT_CACHE.clear()
+    if failure=='source_tamper':(N.root(root)/'sources'/('reversal-'+m['artifact_content_sha256']+'.json')).write_text('{}')
+    if failure:
+        with pytest.raises(ValueError):V3.stage_code_refresh(root,'2026-10-07',release_commit='b'*40,reason='report_publication_fix')
+    else:
+        new=V3.stage_code_refresh(root,'2026-10-07',release_commit='b'*40,reason='report_publication_fix')
+        assert new['previous_bundle_sha256']==old['bundle_sha256']
+        for name in ('machine_cells','auxiliary_cells'):assert new['continuous_reversal'][name]==old['continuous_reversal'][name]
+        V3.validate_sources(new,root)
+    assert N._read(N.root(root)/'current.json')==receipt
+    with pytest.raises(ValueError):N._load_current_uncached(root,'2026-10-07')
+
+
 def test_features_boundaries_missing_and_future_prefix():
     base=1791331200.;rs=[[base+t,1,i+1,p,p-.01,p+.01,10,1,1,'000001_AL',0]
         for i,(t,p) in enumerate([(0,100),(29,99),(30,101),(59,102),(60,103),(61,104)])]

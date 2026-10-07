@@ -104,12 +104,18 @@ def validate_family(f):
                             raise ValueError('v3_confirmed_actual_evidence_missing')
 
 
-def validate_sources(bundle, data_root):
+def validate_sources(bundle, data_root, *, code_root=None):
     from src.engine.scalping import mechanistic_entry_runtime_policy as N
     f = bundle['continuous_reversal']; validate_family(f)
     from src.engine.scalping import continuous_reversal_registered_postclose as PC
+    if code_root is not None:
+        from src.engine.infrastructure.runtime_release_router import _release_identity
+        identity=_release_identity(Path(data_root).resolve().parent,str(Path(code_root)/'src'),
+                                   'reversal_transition_parent',f['release_commit'])
+        if identity['source_integrity']!='git_commit_and_clean_runtime_source':
+            raise ValueError('v3_transition_parent_code_unattested')
     for m in (K,B,A,V1,C,R,PC,__import__(__name__,fromlist=['*'])):
-        path = Path(m.__file__)
+        path = Path(code_root)/'src/engine/scalping'/Path(m.__file__).name if code_root else Path(m.__file__)
         if N._source_hash(str(path),N._signature(path)) != f['contract_file_sha256'].get(path.name):
             raise ValueError('v3_contract_code_changed:'+path.name)
     for name in ('machine','auxiliary'):
@@ -135,6 +141,48 @@ def validate_sources(bundle, data_root):
                     if N._source_hash(str(path),N._signature(path)) != record['sha256']:
                         raise ValueError('v3_actual_response_source_changed')
     return bundle
+
+
+def transition_parent(data_root,target_date):
+    """Validate a changed-code predecessor in its immutable origin checkout.
+
+    Runtime loads stay strict; historical validation never enters their cache.
+    """
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    try:return N.load_effective(data_root=Path(data_root),target_date=target_date)
+    except ValueError as exc:
+        if not str(exc).startswith('v3_contract_code_changed:'):raise
+    receipt=N._read(N.root(Path(data_root))/'current.json')
+    bundle=N._read(N.root(Path(data_root))/'generations'/(receipt['bundle_sha256']+'.json'))
+    commit=bundle['continuous_reversal']['release_commit']
+    selection=N._read(Path(data_root)/'runtime/runtime_release_selection.json')
+    for root_key,commit_key in (('release_root','git_commit'),('previous_release_root','previous_git_commit')):
+        if selection.get(commit_key)!=commit:continue
+        parent=N._load_current_uncached(Path(data_root),target_date,historical_code_root=selection[root_key])
+        if not parent or N._read(N.root(Path(data_root))/'current.json')!=receipt:
+            raise ValueError('v3_transition_parent_changed')
+        return parent
+    raise ValueError('v3_transition_parent_origin_release_missing')
+
+
+def stage_code_refresh(data_root,day,*,release_commit,reason):
+    """Rebind identical issued policies to reviewed code, without reselection."""
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    parent=transition_parent(data_root,day);f=parent['continuous_reversal'];refs=[];reports={}
+    for name in ('machine','auxiliary'):
+        path=N.root(Path(data_root))/'sources'/('reversal-'+f[name+'_report_sha256']+'.json')
+        reports[name]=copy.deepcopy(N._read(path));refs.append(dict(path=str(path.resolve()),sha256=file_hash(path)))
+    m,a=reports['machine'],reports['auxiliary']
+    for name,report in reports.items():
+        if {c['key']:c for c in report['cells']}!=f[name+'_cells']:raise ValueError('v3_code_refresh_policy_changed')
+        report['source_receipts']=report.get('source_receipts',[])+refs
+        report['code_refresh']=dict(parent_bundle_sha256=parent['bundle_sha256'],reason=reason,
+                                    policy_cells_unchanged=True,comparison_reexecuted=False)
+    m['parent_bundle_sha256']=parent['bundle_sha256'];m['publication_date']=day
+    m['artifact_content_sha256']=digest({k:v for k,v in m.items() if k!='artifact_content_sha256'})
+    a['machine_report_sha256']=m['artifact_content_sha256'];a['publication_date']=day
+    a['artifact_content_sha256']=digest({k:v for k,v in a.items() if k!='artifact_content_sha256'})
+    return stage(data_root,m['source_date'],day,m,a,target_date=day,release_commit=release_commit,effective_mode='intraday')
 
 
 def primary(cell, matched):
@@ -214,7 +262,7 @@ def stage(data_root,day,publication,machine,auxiliary,*,target_date,release_comm
         raise ValueError('reversal_v3_effective_date_invalid')
     with (root/"publisher.lock").open("a") as lock:
         fcntl.flock(lock,fcntl.LOCK_EX)
-        parent=N.load_effective(data_root=Path(data_root),target_date=publication)
+        parent=transition_parent(data_root,publication)
         if not parent:raise ValueError("reversal_v3_parent_missing")
         if machine.get('parent_bundle_sha256')!=parent['bundle_sha256']:
             raise ValueError('reversal_v3_report_incumbent_parent_changed')
@@ -286,7 +334,7 @@ def activate(data_root,target_date,*,now=None,intraday_evidence=None):
                     or e['pid_identity']['cwd']!=str(selected_root/'src')
                     or file_hash(e['consumed_path'])!=e.get('consumed_sha256')):
                 raise ValueError('reversal_v3_intraday_code_pid_not_verified')
-        parent=N._load_current(Path(data_root),target_date)
+        parent=transition_parent(data_root,target_date)
         if parent and parent["bundle_sha256"]==bundle["bundle_sha256"]:
             return dict(status="already_active",bundle_sha256=bundle["bundle_sha256"])
         if not parent or parent["bundle_sha256"]!=family["parent_bundle_sha256"]:

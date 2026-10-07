@@ -602,7 +602,7 @@ def load(*, data_root: Path, target_date: str) -> dict | None:
     return _validate_bundle_sources(bundle, data_root)
 
 
-def _validate_bundle_sources(bundle: dict, data_root: Path) -> dict:
+def _validate_bundle_sources(bundle: dict, data_root: Path, *, historical_code_root=None) -> dict:
     source_path = root(data_root) / "sources" / f"{bundle['source_file_sha256']}.json"
     if (
         _source_hash(str(source_path), _signature(source_path))
@@ -617,6 +617,11 @@ def _validate_bundle_sources(bundle: dict, data_root: Path) -> dict:
     if bundle.get('continuous_reversal'):
         if source_payload.get('continuous_reversal') != bundle['continuous_reversal']:
             raise ValueError('reversal_bundle_source_binding_invalid')
+        if historical_code_root is not None:
+            if bundle['continuous_reversal'].get('schema')!='continuous_reversal_policy_v3':
+                raise ValueError('historical_transition_schema_invalid')
+            from src.engine.scalping.continuous_reversal_policy_v3 import validate_sources
+            return validate_sources(bundle,data_root,code_root=historical_code_root)
         from src.engine.scalping.continuous_reversal_policy import validate_sources
         return validate_sources(bundle,data_root)
     machine_source = bundle.get("machine_evaluation_source") or {}
@@ -2487,7 +2492,7 @@ def _load_current(data_root: Path, target_date: str) -> dict | None:
         _READ_DEPENDENCIES.reset(token)
 
 
-def _load_current_uncached(data_root: Path, target_date: str) -> dict | None:
+def _load_current_uncached(data_root: Path, target_date: str, *, historical_code_root=None) -> dict | None:
     path = root(data_root) / 'current.json'
     if not path.exists():
         return None
@@ -2512,7 +2517,7 @@ def _load_current_uncached(data_root: Path, target_date: str) -> dict | None:
         validate(parent,target_date=parent['target_date'])
         if parent['bundle_sha256']!=receipt['previous_bundle_sha256']:
             raise ValueError('continuous_reversal_current_parent_invalid')
-        return _validate_bundle_sources(bundle,data_root)
+        return _validate_bundle_sources(bundle,data_root,historical_code_root=historical_code_root)
     if (receipt.get('schema') != 'main_entry_current_v2'
         or receipt.get('receipt_sha256') != digest({k:v for k,v in receipt.items() if k != 'receipt_sha256'})
         or re.fullmatch(r'[0-9a-f]{64}', str(receipt.get('bundle_sha256'))) is None):
