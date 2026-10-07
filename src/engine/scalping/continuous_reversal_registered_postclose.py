@@ -250,6 +250,37 @@ def metric(counter):
                 excluded=counter['UNRESOLVED'],counts=dict(counter))
 
 
+def source_quality(data_root, day, population):
+    """Count identifiable row exclusions; missing native items are not empty."""
+    key=P.digest([population['artifact_content_sha256'],inspect.getsource(source_quality)])
+    path=directory(data_root,day)/'frozen'/('row-quality-'+key+'.json')
+    if path.exists():
+        value=json.loads(path.read_text())
+        if value['artifact_content_sha256']!=P.seal(value)['artifact_content_sha256']:
+            raise ValueError('registered_row_quality_changed')
+        return value,path
+    from src.engine.scalping.micro_reversion.forward_collector import _explicit_item_venue
+    scopes=defaultdict(Counter);partitions=[];total=Counter()
+    for part in population['partitions']:
+        rec=part['normalized_source'];raw=json.loads(gzip.decompress(Path(rec['path']).read_bytes()))['symbols'];counts=Counter()
+        for symbol,rows in raw.items():
+            for row in rows:
+                local=Counter(total_rows=1)
+                valid_price=type(row[3]) in (int,float) and math.isfinite(row[3]) and row[3]>0
+                item=row[9];native_item=isinstance(item,str) and item.split('_',1)[0]==symbol and _explicit_item_venue(item)==rec['venue']
+                if not native_item:local['source_item_excluded_rows']+=1
+                if not row[8] or not valid_price:local['path_ineligible_rows']+=1
+                if row[8] and valid_price and native_item:
+                    local['native_eligible_rows']+=1
+                    if not K.good_quote(row):local['entry_quote_unavailable_rows']+=1
+                counts.update(local)
+                if valid_price:scopes[C.cell_key(symbol,rec['session'],row[3])+'|'+rec['venue']].update(local)
+        partitions.append(dict(day=rec['day'],venue=rec['venue'],session=rec['session'],counts=dict(counts)));total.update(counts)
+    value=P.seal(dict(schema=SCHEMA,source_date=day,status='completed',population_sha256=population['artifact_content_sha256'],
+        row_exclusion=True,totals=dict(total),partitions=partitions,scope_counts={k:dict(v) for k,v in scopes.items()},**P.AUTH))
+    P.write(path,value);return value,path
+
+
 def select(candidates, incumbent):
     eligible=[c for c in candidates if c['metrics']['resolved']]
     if not eligible:return None
@@ -258,6 +289,7 @@ def select(candidates, incumbent):
 
 def machine_report(data_root,day,publication,parent_bundle,*,source=None,publish_outputs=True):
     old,aux=V3.migrate(parent_bundle['continuous_reversal']); value,path=population(data_root,day,source=source)
+    quality,quality_path=source_quality(data_root,day,value)
     history=applied_census(data_root,day); catalogs={}; counts={}; branch_counts={}; duplicate_census={}
     for key in C.cells():
         for route in old[key]['routes']:
@@ -307,6 +339,12 @@ def machine_report(data_root,day,publication,parent_bundle,*,source=None,publish
                 selected['branch_metrics']={b['branch_id']:None for b in selected['payload']['branches']}
                 selected['carry_source']=dict(family_sha256=parent_bundle['continuous_reversal']['family_sha256'],
                     cell_key=regular if compatible[0] is not parent else key,parent_payload_sha256=selected['payload_sha256'],reason='no_local_resolved_sample_compatible_regular_then_verified_previous')
+            qc=quality['scope_counts'].get(key+'|'+route,{})
+            selected['scope_source_status']='source_gap_no_eligible_native_item_rows' if qc.get('total_rows') and not qc.get('native_eligible_rows') else 'eligible_native_rows' if qc.get('native_eligible_rows') else 'no_observations'
+            if selected['scope_source_status'].startswith('source_gap') and selected['local_metrics'] is None:
+                selected['status']='carry_source_gap'
+                for candidate in selected['candidates']:
+                    if candidate['status']=='valid_empty':candidate['status']='source_gap_not_comparable'
             cell['routes'][route]=selected
             selected_scopes[key,route]=selected
         cells.append(cell)
@@ -315,7 +353,8 @@ def machine_report(data_root,day,publication,parent_bundle,*,source=None,publish
     report=P.seal(dict(schema=SCHEMA,source_date=day,target_date=day,publication_date=publication,status='completed',
         report_scope='main_mechanistic_entry',cells=cells,baseline_cells=list(old.values()),baseline_auxiliary_cells=list(aux.values()),
         parent_bundle_sha256=parent_bundle['bundle_sha256'],source_manifest_sha256=value['source_manifest_sha256'],
-        population_path=str(path.resolve()),source_receipts=value['source_receipts']+[dict(path=str(path.resolve()),sha256=P.file_hash(path))]+registration_receipts(data_root,day)+history_receipts,
+        population_path=str(path.resolve()),source_receipts=value['source_receipts']+[dict(path=str(path.resolve()),sha256=P.file_hash(path)),dict(path=str(quality_path.resolve()),sha256=P.file_hash(quality_path))]+registration_receipts(data_root,day)+history_receipts,
+        source_row_exclusions=quality['totals'],
         label_contract=C.LABEL,selection_basis='cumulative_raw_win_fraction',registry_sha256=C.SHA256,
         applied_history=history,duplicate_census=duplicate_census,**P.AUTH))
     P.write(directory(data_root,day)/'machine-comparison.json',report)
@@ -371,11 +410,13 @@ def connect_ledger(data_root):
     path=Path(data_root)/'report/continuous_reversal_registered/request-ledger.sqlite3';path.parent.mkdir(parents=True,exist_ok=True)
     db=sqlite3.connect(path,timeout=30)
     db.execute('PRAGMA journal_mode=WAL');db.execute('PRAGMA synchronous=FULL')
+    db.execute('PRAGMA cache_size=-65536')
     db.execute('CREATE TABLE IF NOT EXISTS requests(identity TEXT PRIMARY KEY, request TEXT NOT NULL, state TEXT NOT NULL, result TEXT, reserved_at TEXT)')
     if 'priority' not in {r[1] for r in db.execute('PRAGMA table_info(requests)')}:
         db.execute('ALTER TABLE requests ADD COLUMN priority INTEGER NOT NULL DEFAULT 0')
     db.execute('CREATE TABLE IF NOT EXISTS owners(generation TEXT, comparison TEXT, opportunity TEXT, arm TEXT, identity TEXT, outcome TEXT, PRIMARY KEY(generation,comparison,opportunity,arm))')
     db.execute('CREATE INDEX IF NOT EXISTS owners_generation_identity ON owners(generation,identity)')
+    db.execute('CREATE INDEX IF NOT EXISTS owners_point_cover ON owners(generation,comparison,opportunity,arm,identity)')
     db.execute('CREATE INDEX IF NOT EXISTS requests_state_identity ON requests(state,identity)')
     db.execute('CREATE INDEX IF NOT EXISTS requests_priority ON requests(state,priority DESC,identity)')
     db.commit();return db
@@ -430,8 +471,14 @@ def prepare_inputs(data_root,day,machine):
     with gzip.open(path,'rt') as handle:
         for line in handle:
             point=json.loads(line);census['eligible_points']+=1
+            requests={arm:request(point,arm) for arm in V1.ARMS}
+            owners=dict(db.execute('SELECT arm,identity FROM owners WHERE generation=? AND comparison=? AND opportunity=?',
+                (gen,point['comparison'],point['canonical_id'])))
+            if owners=={arm:req['paired_replay_id'] for arm,req in requests.items()}:
+                census['eligible_requests']+=len(requests);census['resumed_prepared_points']+=1
+                continue
             for arm in V1.ARMS:
-                req=request(point,arm);identity=req['paired_replay_id'];encoded=json.dumps(req,sort_keys=True,separators=(',',':'),ensure_ascii=True)
+                req=requests[arm];identity=req['paired_replay_id'];encoded=json.dumps(req,sort_keys=True,separators=(',',':'),ensure_ascii=True)
                 existing=db.execute('SELECT request,state FROM requests WHERE identity=?',(identity,)).fetchone()
                 if existing and json.loads(existing[0])['candidate_input']!=req['candidate_input']:raise ValueError('registered_request_digest_conflict')
                 db.execute('INSERT OR IGNORE INTO requests(identity,request,state) VALUES (?,?,?)',(identity,encoded,'planned'))
@@ -464,11 +511,17 @@ def calls(data_root,day,*,stop_epoch=None,workers=4):
                 return dict(result=result,validation_errors=A.validate_response(result['candidate_response'],req['candidate_input'],arm=arm,phase=phase))
             except Exception as exc:return dict(error_type=type(exc).__name__,validation_errors=['provider_attempt_failed'])
         count=0
+        # Sort only small identity metadata once, never all request BLOBs for
+        # every call. The SQLite cursor streams IDs; only in-flight payloads
+        # enter Python memory. Recheck state before each durable reservation.
+        queue=db.execute("SELECT r.identity FROM requests r INDEXED BY requests_priority CROSS JOIN owners o INDEXED BY owners_generation_identity WHERE r.state='planned' AND o.generation=? AND o.identity=r.identity GROUP BY r.identity ORDER BY max(r.priority) DESC,min(o.comparison),min(o.opportunity),min(o.arm),r.identity",(gen,))
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
             running={}
             while True:
                 while len(running)<workers and (stop_epoch is None or time.time()<stop_epoch):
-                    row=db.execute("SELECT r.identity,r.request FROM requests r JOIN owners o ON o.identity=r.identity WHERE r.state='planned' AND o.generation=? ORDER BY r.priority DESC,o.comparison,o.opportunity,o.arm,r.identity LIMIT 1",(gen,)).fetchone()
+                    queued=queue.fetchone()
+                    row=db.execute("SELECT identity,request FROM requests WHERE identity=? AND state='planned'",(queued[0],)).fetchone() if queued else None
+                    if queued and not row:continue
                     if not row:break
                     identity,raw=row;req=json.loads(raw)
                     db.execute("UPDATE requests SET state='reserved',reserved_at=? WHERE identity=? AND state='planned'",(datetime.now(K.KST).isoformat(),identity));db.commit()
@@ -480,6 +533,7 @@ def calls(data_root,day,*,stop_epoch=None,workers=4):
                     state='completed' if (result.get('result') or {}).get('provider_provenance',{}).get('response_id') else 'failed'
                     db.execute('UPDATE requests SET state=?,result=? WHERE identity=?',(state,json.dumps(result,ensure_ascii=True),identity));db.commit();count+=1
                     if count%25==0:print('registered actual responses',count,flush=True)
+        queue.close()
         states={s:n for s,n in db.execute('SELECT r.state,count(DISTINCT r.identity) FROM requests r JOIN owners o ON o.identity=r.identity WHERE o.generation=? GROUP BY r.state',(gen,))};db.close()
     report=P.seal(dict(schema=SCHEMA,source_date=day,status='evaluation_incomplete' if any(states.get(k) for k in ('planned','reserved','failed')) else 'completed',
                        new_calls=count,census=states,call_limit=None,uncertain_attempts_require_reconciliation=states.get('reserved',0),**P.AUTH))
@@ -490,6 +544,7 @@ def auxiliary_report(data_root,day,publication,parent_bundle,*,publish_policy=Tr
     from src.engine.scalping import mechanistic_entry_runtime_policy as N
     out=directory(data_root,day);machine=json.loads((out/'machine-comparison.json').read_text());gen=machine['artifact_content_sha256']
     baseline={c['key']:c for c in machine['baseline_cells']}; oldaux={c['key']:c for c in machine['baseline_auxiliary_cells']}
+    quality,quality_path=source_quality(data_root,day,json.loads(Path(machine['population_path']).read_text()))
     db=connect_ledger(data_root);groups=defaultdict(lambda:defaultdict(dict));metrics=defaultdict(lambda:{a:Counter() for a in V1.ARMS});gaps=Counter();expected=Counter()
     cursor=db.execute('SELECT o.comparison,o.opportunity,o.arm,o.outcome,r.state,r.result FROM owners o JOIN requests r ON r.identity=o.identity WHERE o.generation=? ORDER BY o.comparison,o.opportunity',(gen,))
     import itertools
@@ -551,7 +606,8 @@ def auxiliary_report(data_root,day,publication,parent_bundle,*,publish_policy=Tr
     comparison_path=out/'frozen'/('machine-comparison-'+gen+'.json')
     P.write(comparison_path,machine)
     issued=P.seal(dict(machine,cells=published,comparison_report_sha256=gen,
-                       source_receipts=machine['source_receipts']+[dict(path=str(comparison_path.resolve()),sha256=P.file_hash(comparison_path))],
+                       source_receipts=machine['source_receipts']+[dict(path=str(comparison_path.resolve()),sha256=P.file_hash(comparison_path)),dict(path=str(quality_path.resolve()),sha256=P.file_hash(quality_path))],
+                       source_row_exclusions=quality['totals'],
                        status='completed_with_scope_carry' if pending else 'completed',scope_pending=pending))
     auxiliary=P.seal(dict(schema=SCHEMA,source_date=day,target_date=day,publication_date=publication,
         status='completed_with_scope_carry' if pending else 'completed',cells=acs,machine_report_sha256=issued['artifact_content_sha256'],

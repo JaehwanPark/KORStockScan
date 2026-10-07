@@ -24,3 +24,7 @@
 부하 재생: 삼성 185,031행에서 v2 1.156초, v3 2.855초(약 64,806행/초), ready peak 3, pending/ready overload 0. 이 측정은 고정 파일의 코드 처리량이며 실시간 WS lock 지연·주문·경제성 검증을 대신하지 않는다.
 
 최종 인계 리뷰에서 등록일 이후에도 같은 registry의 최소 연구 증빙을 native 보존 원천에서 찾도록 수정했다. 날짜가 바뀌었다는 이유로 registration custody를 누락하지 않으며 hash 변조를 거부한다. 추가 검증 **785 PASS** (`custody-final-tests.log`). 재생 모집단은 1,530,748 opportunity이며 실제 소비 정의가 있는 6개 version을 비교했다. 최종 비교 digest는 `d9379669052cbf82e6aaf9039661226625fc55fd0fab0f8c5ba032247e8cb3af`; canonical 충돌 격리 대상 0. 연구 고정 지점·라벨 대조는 최종 재생에서도 11개 정의 모두 불일치 0이다.
+
+실규모 P4 원장 검증에서 per-call 전체 request BLOB 정렬과 재개 시 비커버 조회가 I/O 병목을 만들었다. 아직 신규 provider reservation이 0인 상태에서 중단·원장 보존 후 재개했다. 준비된 동일 generation/opportunity의 5 arm ID를 대조해 재사용하고, covering owner index·64MiB SQLite cache·한 번의 indexed identity iterator로 변경했다. read-only 구 query는 245초 이후에도 미완료였고 새 identity 정렬은 약 15.70초, covering index 생성은 1.84초였다. 전체 요청 배열을 Python 메모리에 만들거나 표본/횟수 제한을 추가하지 않았다. 최종 수정 검사 **786 PASS** (`ledger-final-tests.log`).
+
+P4 전수 census: **116,007 입력점 / 580,035 비교 요청**, exact reuse로 generation의 unique transport request는 578,510개다. 과거 실제 응답 exact hit 1,624개, needs-call 576,886개다. offline 실행은 4 in-flight와 durable checkpoint를 사용하고 resource 시간 종료를 전수 완료로 표시하지 않는다. 신규 registered primary 우선 처리 후 잔여 비교를 이어간다. 현재 실제 provider 실행 및 발행 scope 검증 중이다.

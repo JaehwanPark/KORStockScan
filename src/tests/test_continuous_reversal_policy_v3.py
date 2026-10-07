@@ -182,6 +182,9 @@ def test_streaming_daily_producer_calls_carry_and_native_handoff(native,monkeypa
     from src.engine.automation.postclose_summary_handoff import _stage_output_issues
     assert _stage_output_issues(root/'report','2026-10-07','main_machine_policy')==[]
     census=PC.prepare_inputs(root,'2026-10-07',machine);assert census['census']['eligible_points']>0
+    resumed=PC.prepare_inputs(root,'2026-10-07',machine)
+    assert resumed['census']['resumed_prepared_points']==census['census']['eligible_points']
+    assert resumed['census']['eligible_requests']==census['census']['eligible_requests']
     # Uncalled new branches cannot be married to an unrelated baseline screen.
     pending=PC.auxiliary_report(root,'2026-10-07','2026-10-07',parent,publish_policy=False)
     assert pending['comparison_complete'] is False
@@ -258,6 +261,20 @@ def test_registered_custody_persists_on_next_source_date(tmp_path):
     source.write_text('{"changed":true}')
     with pytest.raises(ValueError,match='registration_source_changed'):
         PC.registration_receipts(tmp_path,'2026-10-08')
+
+
+def test_missing_item_rows_are_source_gap_not_valid_empty(native,monkeypatch):
+    import gzip
+    root,parent,_,_=native;rs=rows()
+    for r in rs:r[9]=None
+    path=root/'bad-normalized.json.gz';path.write_bytes(gzip.compress(json.dumps(dict(symbols={'005930':rs})).encode()))
+    source=P.seal(dict(schema=P.SCHEMA,source_date='2026-10-07',normalized_sources=dict(partitions=[dict(day='2026-10-07',venue='SOR',session='SOR_REGULAR',path=str(path),sha256=P.file_hash(path))])))
+    monkeypatch.setattr(P,'completed_bars',lambda *args,**kwargs:({},[]))
+    report=PC.machine_report(root,'2026-10-07','2026-10-07',parent,source=source,publish_outputs=False)
+    scope=next(c for c in report['cells'] if c['key']=='samsung|REGULAR|ALL')['routes']['SOR']
+    assert scope['status']=='carry_source_gap'
+    assert report['source_row_exclusions']['source_item_excluded_rows']==len(rs)
+    assert all(c['status']=='source_gap_not_comparable' for c in scope['candidates'])
 
 
 def test_mixed_tick_offline_primary_keeps_own_first_decline(native,monkeypatch):
