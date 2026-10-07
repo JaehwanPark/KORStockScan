@@ -225,6 +225,12 @@ SM01은 읽기 전용 pure 함수 fixture로 전달 누락을 확인했다. SM02
 
 후속 실경로 검사에서 준비 문서 조회도 Main `src/` cwd를 잘못 거부하는 것을 확인했다. `verify_prepared`는 native router 및 exact-generation 검사로 읽기 전용 조회를 검증하고 process cwd를 요구하지 않는다. 새 준비를 만드는 `prepare`는 선택 release root에서만 실행할 수 있다. 경로 제한을 조회와 생성에 동일하게 적용하여 의미적 감시 경고를 잘못 만드는 결함까지 후속 배포 범위에 포함한다.
 
+### Episode 준비·프로세스 관측 분리
+
+09:15:03의 `episode_current_preflight_not_observed`는 당일 준비 producer가 완료되기 전 검사였으며 삼성중공업·롯데케미칼은 09:15:15~16에 준비를 마쳤다. 같은 날 시작한 실제 preflight unit이 active/activating인 경우에만 예약 시각부터 최대 60초를 `waiting_producer`로 기록한다. 명시 실패·지난 날짜·producer 부재·상한 초과는 그대로 경고한다. 거래용 authority validator와 scan 시작 조건은 변경하지 않는다.
+
+Main과 episode 서비스의 실행 group이 달라 `/proc/PID/cwd` 읽기가 EACCES인 경우와 검사 중 PID가 종료한 경우는 `unobservable`로 기록한다. current state/date/profile/PID/policy/capture sequence/120초 freshness 및 producer의 선언 cwd와 unit 설정을 계속 대조한다. 선언 cwd를 실제 관측 cwd로 대입하거나 PID 소비 PASS를 만들지 않는다. 다른 원천 결함이 있으면 permission 관측 불가와 관계없이 경고하며 affected/eligible/total은 해당 profile 수로 제시한다. 원 상태·관측 불가 이유는 full report에 보존한다. current checklist의 기존 `SemanticMonitorProducerConsumerRefresh1007`과 `EpisodeCaptureSequence1006` owner를 재사용하고 이미 봉인된 checklist/정책·원 PREOPEN·186개 episode pin 및 episode PID/group은 변경하지 않는다. 후속 Main 감시 코드 배포·정상 재기동은 기존 사용자 승인 범위로 실행한다.
+
 - SM01~SM04: notifier에 현행 기계 stage와 exact-date/native-generation 복구를 연결한다. submission monitor는 frozen family에 따라 native reversal/legacy로 dispatch한다. 새 `continuous_reversal_consumption_v1`은 event/cell/rule/arm, source/publication/effective date, 두 component, 원 입력·판정·실제 보조 input/prompt/schema hash, snapshot 읽기 시각과 PID/start ticks를 결속한다. 새 계약에서 receipt 누락은 결손이며, 이전 capture는 `historical_reversal_capture`로 별도 계수한다. quote as-of와 WS 반전 snapshot 읽기 시각을 구분한다.
 - 실제 요청 provenance에는 `continuous_reversal_request_binding`을 저장한다. request 준비와 원 응답 관측은 별도로 계수하고 compose의 provider_called를 실제 호출 근거로 쓰지 않는다. BLOCK/RECHECK의 미호출은 정상이며 ENTER_NOW의 미관측/원인과 partial source window를 남긴다.
 - SM05~SM07: 현재 날짜 checklist의 parsed OPEN stable ID만 owner로 사용한다. producer/historical owner와 denominator를 보존하고 매핑 부재는 `UNRESOLVED_CURRENT_OWNER`다. native OFF 영수증은 explicit_schedule_disabled만 인정한다. 구 Samsung 실패 및 OFF episode 장후 결손은 historical_findings로 보존하며, 오늘 surviving 31profile 검사는 그대로 유지한다. episode applied의 생산자는 07:35 Main PREOPEN이고 publication grace는 60초다. failed producer는 grace 중에도 실패로 분류한다. 퇴역 registry/transition receipt를 이용한 batched unit·bounded process/new BUY census는 Main 관측과 기존 SELL/CANCEL custody를 제외한다.

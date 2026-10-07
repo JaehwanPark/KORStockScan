@@ -354,14 +354,21 @@ def test_research_preserves_exact_report_bytes_when_native_publisher_moves(tmp_p
 
 
 @pytest.mark.parametrize('defect', ['none', 'prior_date', 'prior_pid', 'prior_policy', 'changed_cwd', 'missing_sequence', 'stale', 'future_clock'])
-def test_episode_current_pid_consumption_is_not_inferred_from_unit_configuration(tmp_path, monkeypatch, defect):
+@pytest.mark.parametrize('inspection', ['readable', 'permission_denied', 'process_exited'])
+def test_episode_current_pid_consumption_is_not_inferred_from_unit_configuration(tmp_path, monkeypatch, defect, inspection):
     from src.engine.error_detectors import episode_health
     from src.trading.low_price_two_leg import profiles, policy_runtime, preflight
     pid, profile = next(iter(profiles.PROFILES.items()))
     monkeypatch.setattr(profiles, 'profiles_for_target_date', lambda *_: {pid:profile})
     monkeypatch.setattr(policy_runtime, 'validate_applied', lambda *_, **__: (True,'valid'))
     monkeypatch.setattr(preflight, 'validate_authority', lambda *_, **__: (True,'ready'))
-    monkeypatch.setattr(episode_health.os, 'readlink', lambda *_: '/reviewed-release')
+    def inspect(*_):
+        if inspection == 'permission_denied':
+            raise PermissionError(13, 'Permission denied')
+        if inspection == 'process_exited':
+            raise FileNotFoundError(2, 'Process exited')
+        return '/reviewed-release'
+    monkeypatch.setattr(episode_health.os, 'readlink', inspect)
     folder = tmp_path/'data/threshold_cycle/low_price_two_leg/applied'; folder.mkdir(parents=True)
     (folder/'low_price_two_leg_policy_2026-10-06.json').write_text(json.dumps(dict(policy_hash='a'*64)))
     captures = dict(source_date='2026-10-06', profile_id=pid, runtime_pid=123,
@@ -381,5 +388,49 @@ def test_episode_current_pid_consumption_is_not_inferred_from_unit_configuration
     result = episode_health.check(tmp_path, datetime.fromisoformat('2026-10-06T10:00:00+09:00'),
         target_date='2026-10-06', reader=detector._semantic_object, timer_dir=timers,
         states={f'korstockscan-low-price-two-leg@{pid}.service':dict(MainPID='123', ActiveState='active', WorkingDirectory='/reviewed-release')})
-    assert result['actual_pid_consumed'] is (defect=='none')
-    assert result['status']==('pass' if defect=='none' else 'warning')
+    assert result['actual_pid_consumed'] is (defect=='none' and inspection=='readable')
+    assert result['status']==('warning' if defect!='none' else
+                              'pass' if inspection=='readable' else 'unobservable')
+    if defect == 'none' and inspection != 'readable':
+        assert result['unobservable_profile_count'] == 1
+        assert result['findings'] == []
+        assert result['rows'][0]['pid_cwd'] is None
+        assert result['rows'][0]['capture_contract_valid'] is True
+        assert detector._semantic_alerts('episode_startup',result,'2026-10-06') == []
+    elif defect != 'none':
+        alert = detector._semantic_alerts('episode_startup',result,'2026-10-06')[0]
+        assert (alert['affected'],alert['eligible'],alert['total']) == (1,1,1)
+
+
+@pytest.mark.parametrize('case,expected', [
+    ('running', 'waiting_producer'), ('failed', 'warning'),
+    ('past_start', 'warning'), ('no_receipt', 'warning'), ('after_grace', 'warning')])
+def test_episode_preflight_publication_wait_is_exact_date_bounded_and_never_hides_failure(tmp_path, monkeypatch, case, expected):
+    from src.engine.error_detectors import episode_health
+    from src.trading.low_price_two_leg import profiles, policy_runtime, preflight
+    pid = 'samsung_heavy_morning'
+    profile = profiles.PROFILES[pid]
+    monkeypatch.setattr(profiles, 'profiles_for_target_date', lambda *_: {pid: profile})
+    monkeypatch.setattr(policy_runtime, 'validate_applied', lambda *_, **__: (True, 'valid'))
+    monkeypatch.setattr(preflight, 'validate_authority', lambda *_, **__: (False, 'not_ready'))
+    folder=tmp_path/'data/threshold_cycle/low_price_two_leg/applied';folder.mkdir(parents=True)
+    (folder/'low_price_two_leg_policy_2026-10-06.json').write_text(json.dumps(dict(policy_hash='a'*64)))
+    timers=tmp_path/'timers';timers.mkdir()
+    (timers/'korstockscan-low-price-two-leg-test-preflight.timer').write_text(
+        f'OnCalendar=Mon..Fri *-*-* 09:15:00 Asia/Seoul\nUnit=korstockscan-low-price-two-leg-preflight@{pid}.service\n')
+    unit=dict(MainPID='123', ActiveState='activating', Result='success',
+              ExecMainStartTimestamp='Tue 2026-10-06 09:15:00 KST')
+    if case=='failed': unit.update(ActiveState='failed', Result='exit-code')
+    if case=='past_start': unit['ExecMainStartTimestamp']='Mon 2026-10-05 09:15:00 KST'
+    if case=='no_receipt': unit={}
+    clock='09:16:01' if case=='after_grace' else '09:15:03'
+    result=episode_health.check(tmp_path, datetime.fromisoformat('2026-10-06T'+clock+'+09:00'),
+        target_date='2026-10-06', reader=detector._semantic_object, timer_dir=timers,
+        states={f'korstockscan-low-price-two-leg-preflight@{pid}.service':unit})
+    assert result['status']==expected and result['actual_pid_consumed'] is False
+    if case=='running':
+        assert result['findings']==[] and result['rows'][0]['status']=='waiting_preflight_producer'
+        assert result['rows'][0]['authority']['valid'] is False
+        assert detector._semantic_alerts('episode_startup',result,'2026-10-06') == []
+    elif case=='failed':assert result['findings']==['episode_current_preflight_failed']
+    else:assert result['findings']==['episode_current_preflight_not_observed']

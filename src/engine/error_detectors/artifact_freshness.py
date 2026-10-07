@@ -1588,6 +1588,12 @@ def _semantic_alert_candidates(name, semantics, source_date):
         return [dict(source_date=source_date, target_date=semantics.get('target_date'),
             stage=name, scope='report', reason=reason, status=semantics['status'],
             artifact=semantics.get('artifact'), generation=semantics.get('report_sha256'),
+            **(dict(affected=sum(reason in row.get('findings', []) for row in semantics.get('rows', [])),
+                    eligible=sum(row.get('status') not in {'future_due', 'quarantined'}
+                                 for row in semantics.get('rows', [])),
+                    total=len(semantics.get('rows', [])), count_unit='profile')
+               if name == 'episode_startup' and any(reason in row.get('findings', [])
+                                                   for row in semantics.get('rows', [])) else {}),
             owner='WidgetEpisodeNextSessionStartup1006' if name == 'episode_startup'
                   else 'SamsungFrozenCandidateValidation1006' if name == 'samsung_frozen_validation'
                   else 'SemanticPolicyCoverageRemediation1006',

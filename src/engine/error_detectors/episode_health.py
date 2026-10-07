@@ -13,6 +13,17 @@ from datetime import date, datetime, time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+PREFLIGHT_PUBLICATION_GRACE_SEC = 60
+
+
+def _unit_started_at(unit):
+    raw = str(unit.get('ExecMainStartTimestamp') or '')
+    match = re.fullmatch(r'\w+ (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) (KST|UTC)', raw)
+    if not match:
+        return None
+    return datetime.fromisoformat(match[1]).replace(
+        tzinfo=ZoneInfo('Asia/Seoul' if match[2] == 'KST' else 'UTC'))
+
 
 def unit_census(units):
     result = subprocess.run(['/bin/systemctl', 'show', *units,
@@ -78,13 +89,17 @@ def check(root, now, *, target_date, reader, states=None, timer_dir=Path('/etc/s
                 if unit[1] in timer_clocks:
                     raise ValueError('episode_duplicate_preflight_timer_owner')
                 timer_clocks[unit[1]] = time.fromisoformat(clock[1])
-        units = [f'korstockscan-low-price-two-leg@{pid}.service' for pid in profiles]
+        units = [name for pid in profiles for name in (
+            f'korstockscan-low-price-two-leg@{pid}.service',
+            f'korstockscan-low-price-two-leg-preflight@{pid}.service')]
         if states is None:
             states = unit_census(units)
         for pid, profile in sorted(profiles.items()):
             unit = states.get(f'korstockscan-low-price-two-leg@{pid}.service') or {}
+            preflight_unit = states.get(f'korstockscan-low-price-two-leg-preflight@{pid}.service') or {}
             row = dict(profile_id=pid, symbol=profile.symbol, session=profile.session,
-                policy_hash=applied['policy_hash'], unit=unit, status='future_due', findings=[])
+                policy_hash=applied['policy_hash'], unit=unit, preflight_unit=preflight_unit,
+                status='future_due', findings=[])
             result['rows'].append(row)
             if pid in excluded:
                 row['status'] = 'quarantined'
@@ -125,8 +140,18 @@ def check(root, now, *, target_date, reader, states=None, timer_dir=Path('/etc/s
             row['source_age_sec'] = age
             active_pid = int(unit.get('MainPID') or 0)
             if active_pid and unit.get('ActiveState') == 'active':
+                cwd_unobservable = False
                 try:
                     cwd = os.readlink(f'/proc/{active_pid}/cwd')
+                except (PermissionError, FileNotFoundError, ProcessLookupError) as exc:
+                    # An inaccessible or changing process is not missing raw
+                    # capture. Retain unknown PID consumption; never substitute
+                    # the configured WorkingDirectory as an observed cwd.
+                    cwd_unobservable = True
+                    row['process_observability'] = dict(status='unobservable',
+                        reason='cwd_permission_denied' if isinstance(exc, PermissionError)
+                        else 'process_exited_during_census', errno=exc.errno)
+                    cwd = None
                 except OSError:
                     row['findings'].append('episode_pid_cwd_unobservable')
                     cwd = None
@@ -135,17 +160,39 @@ def check(root, now, *, target_date, reader, states=None, timer_dir=Path('/etc/s
                     row['findings'].append('episode_unit_process_release_mismatch')
                 if not authority_valid:
                     row['findings'].append('episode_current_authority_invalid')
-                if (capture.get('source_date') != target_date or capture.get('runtime_pid') != active_pid
-                    or capture.get('profile_id') != pid or capture.get('runtime_cwd') != cwd
+                source_valid = not (not current_state
+                    or capture.get('source_date') != target_date or capture.get('runtime_pid') != active_pid
+                    or capture.get('profile_id') != pid
+                    or not isinstance(capture.get('runtime_cwd'), str)
+                    or not Path(capture.get('runtime_cwd') or '').is_absolute()
+                    or capture.get('runtime_cwd') != unit.get('WorkingDirectory')
+                    or (cwd is not None and capture.get('runtime_cwd') != cwd)
                     or capture.get('policy_hash') != applied['policy_hash']
                     or capture.get('execution_mode') != 'real' or capture.get('status') != 'persisted'
-                    or not chain_valid or age is None or not 0 <= age <= 120):
+                    or not chain_valid or age is None or not 0 <= age <= 120)
+                row['capture_contract_valid'] = source_valid
+                if not source_valid:
                     row['findings'].append('episode_current_pid_source_not_observed')
-                row['status'] = 'running_observed' if not row['findings'] else 'source_unverified'
+                row['status'] = ('source_unverified' if row['findings'] else
+                                 'process_unobservable' if cwd_unobservable else 'running_observed')
             elif now.time() < profile.policy.scan_start:
                 row['status'] = 'preflight_ready_waiting_start' if authority_valid else 'preflight_not_observed'
                 if not authority_valid:
-                    row['findings'].append('episode_current_preflight_not_observed')
+                    started = _unit_started_at(preflight_unit)
+                    due_at = datetime.combine(day, due, tzinfo=now.tzinfo) if due else None
+                    current_start = (started is not None and due_at is not None
+                        and due_at <= started <= now and started.astimezone(now.tzinfo).date() == day)
+                    current_failed = (current_start and (preflight_unit.get('ActiveState') == 'failed'
+                        or preflight_unit.get('Result') not in (None, '', 'success')))
+                    waiting = (current_start and not current_failed
+                        and preflight_unit.get('ActiveState') in {'activating', 'active'}
+                        and 0 <= (now-due_at).total_seconds() <= PREFLIGHT_PUBLICATION_GRACE_SEC)
+                    if waiting:
+                        row['status'] = 'waiting_preflight_producer'
+                        row['preflight_grace_sec'] = PREFLIGHT_PUBLICATION_GRACE_SEC
+                    else:
+                        row['findings'].append('episode_current_preflight_failed' if current_failed
+                                               else 'episode_current_preflight_not_observed')
             elif (current_state and state.get('status') in {'COMPLETE', 'NO_TRADE'}
                   and capture.get('source_date') == target_date and capture.get('profile_id') == pid
                   and capture.get('policy_hash') == applied['policy_hash'] and capture.get('execution_mode') == 'real'
@@ -156,7 +203,10 @@ def check(root, now, *, target_date, reader, states=None, timer_dir=Path('/etc/s
                 row['findings'].append('episode_current_startup_not_observed')
         result['counts'] = dict(Counter(r['status'] for r in result['rows']))
         result['findings'] = sorted({f for row in result['rows'] for f in row['findings']})
-        result['status'] = 'warning' if result['findings'] else 'pass'
+        result['unobservable_profile_count'] = result['counts'].get('process_unobservable', 0)
+        result['status'] = ('warning' if result['findings'] else
+                           'unobservable' if result['unobservable_profile_count'] else
+                           'waiting_producer' if result['counts'].get('waiting_preflight_producer') else 'pass')
         result['actual_pid_consumed'] = any(r['status'] == 'running_observed' for r in result['rows'])
     except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as exc:
         moving = str(exc) in {'semantic_generation_changed_during_read', 'episode_unit_census_unobservable'} or isinstance(exc, subprocess.SubprocessError)
