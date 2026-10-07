@@ -315,10 +315,25 @@ class Store:
           (SELECT m.request_id FROM generation_parts gp JOIN partition_members pm ON pm.partition_id=gp.partition_id
           JOIN members m ON m.id=pm.member_id WHERE gp.generation=?) GROUP BY state''', (generation,)))
 
-    def pending(self, generation):
+    def pending(self, generation, *, preferred_comparisons=()):
+        # Scheduling only: membership, identities, responses and eligibility
+        # remain unchanged. A newly approved scope must not sit behind a large
+        # historical population until the publication window expires.
+        preferred = tuple(sorted(set(preferred_comparisons)))
+        if preferred:
+            slots=','.join('?' for _ in preferred)
+            preference='''CASE WHEN id IN (
+              SELECT m.request_id FROM generation_parts gp
+              JOIN partition_members pm ON pm.partition_id=gp.partition_id
+              JOIN members m ON m.id=pm.member_id JOIN strings c ON c.id=m.comparison
+              WHERE gp.generation=? AND c.value IN ('''+slots+''')) THEN 1 ELSE 0 END DESC,'''
+            args=(generation,generation,*preferred)
+        else:
+            preference='';args=(generation,)
         return self.db.execute('''SELECT id FROM requests WHERE state='planned' AND id IN
           (SELECT m.request_id FROM generation_parts gp JOIN partition_members pm ON pm.partition_id=gp.partition_id
-          JOIN members m ON m.id=pm.member_id WHERE gp.generation=?) ORDER BY priority DESC,id''', (generation,))
+          JOIN members m ON m.id=pm.member_id WHERE gp.generation=?) ORDER BY '''+
+          preference+'priority DESC,id', args)
 
     def activation(self):
         path = self.root / 'current.json'

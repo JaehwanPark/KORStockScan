@@ -331,6 +331,18 @@ def prepare_inputs(backend, data_root, day, machine):
         return result
 
 
+def preferred_operating_comparisons(backend, data_root, day, generation):
+    """Schedule explicit new operating scopes first; never filter the census."""
+    if backend.SCHEMA!='continuous_reversal_operating_comparison_v1':
+        return []
+    machine=json.loads((backend.directory(data_root,day)/'machine-comparison.json').read_text())
+    if machine.get('artifact_content_sha256')!=generation or P.seal(machine)['artifact_content_sha256']!=generation:
+        raise ValueError('operating_scheduling_generation_changed')
+    return sorted(sid+'::'+name for sid,proposals in machine['fixed_proposals'].items()
+                  if set(proposals['add_all'])-set(proposals['successor_same'])
+                  for name in proposals)
+
+
 def calls(backend, data_root, day, *, stop_epoch=None, workers=4, transport=None):
     if type(workers) is not int or not 1 <= workers <= 4:
         raise ValueError('shared_provider_concurrency_invalid')
@@ -345,7 +357,8 @@ def calls(backend, data_root, day, *, stop_epoch=None, workers=4, transport=None
         validate_membership(store, census)
         store.reconcile()
         fence = store.activation()['writer_epoch']
-        queue = store.pending(gen)
+        preferred=preferred_operating_comparisons(backend,data_root,day,gen)
+        queue = store.pending(gen,preferred_comparisons=preferred)
         def send(req, attempt):
             if store.activation()['writer_epoch'] != fence:
                 record = dict(error_type='writer_fenced_before_send', validation_errors=['provider_not_sent'], transport_invoked=False)
@@ -390,6 +403,7 @@ def calls(backend, data_root, day, *, stop_epoch=None, workers=4, transport=None
         result = P.seal(dict(schema=backend.SCHEMA, source_date=day,
                             status='evaluation_incomplete' if any(states.get(k) for k in ('planned', 'reserved', 'failed')) else 'completed',
                             new_calls=count, census=states, call_limit=None,
+                            preferred_comparisons=preferred,
                             census_unit='unique_requests', uncertain_attempts_require_reconciliation=uncertain, **P.AUTH))
         P.write(out / 'call-completion.json', result)
         return result

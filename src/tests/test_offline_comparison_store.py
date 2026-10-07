@@ -89,6 +89,20 @@ def test_response_landing_recovery_fence_and_no_error_chosen(tmp_path):
         with pytest.raises(ValueError, match='not_available'): store.reserve(rid2, 'test')
 
 
+def test_preferred_scope_queue_preserves_all_members_and_uncertainty(tmp_path):
+    with S.Store(tmp_path) as store:
+        activate(store)
+        ids=[store.add_request(request(i),priority=100 if i==0 else 0)[0] for i in range(5)]
+        members=[store.add_member('new' if i in (1,2) else 'old',str(i),'a',rid,'WIN')
+                 for i,rid in enumerate(ids)]
+        store.bind_generation('g',{'p':members[:4]},{'generation':'g'},4)
+        # ID 4 is outside this generation; ID 2 has an uncertain attempt.
+        store.reserve(ids[2],'test')
+        assert [r[0] for r in store.pending('g')]==[ids[0],ids[1],ids[3]]
+        assert [r[0] for r in store.pending('g',preferred_comparisons=['new','new'])]==[ids[1],ids[0],ids[3]]
+        assert [r[0] for r in store.pending('g',preferred_comparisons=['absent'])]==[ids[0],ids[1],ids[3]]
+
+
 def test_response_journal_commit_crash(tmp_path, monkeypatch):
     with S.Store(tmp_path) as store:
         activate(store); rid, _ = store.add_request(request()); attempt = store.reserve(rid, 'test')

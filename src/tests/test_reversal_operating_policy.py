@@ -188,6 +188,20 @@ def test_repeated_prepare_has_no_new_requests(replay):
     with S.Store(root) as store:assert store.db.execute('SELECT count(*) FROM requests').fetchone()[0]==count
 
 
+def test_operating_scheduler_prefers_explicit_additions_not_win_rates(replay):
+    root,_,m=replay
+    preferred=PC.L.preferred_operating_comparisons(PC,root,'2026-10-07',m['artifact_content_sha256'])
+    assert preferred
+    for comp in preferred:
+        sid,name=comp.rsplit('::',1);p=m['fixed_proposals'][sid]
+        assert set(p['add_all'])-set(p['successor_same'])
+        assert name in p
+    assert any(v.endswith('::incumbent_native') for v in preferred)
+    with pytest.raises(ValueError,match='scheduling_generation_changed'):
+        PC.L.preferred_operating_comparisons(PC,root,'2026-10-07','different')
+    assert PC.L.preferred_operating_comparisons(PC.PC,root,'2026-10-07','different')==[]
+
+
 def test_union_schema_exact_coverage_and_no_future_fields(replay):
     root,b,m=replay
     with S.Store(root) as store:
