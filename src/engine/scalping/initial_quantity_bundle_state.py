@@ -38,6 +38,37 @@ _TRANSITIONS = {
 }
 
 
+def reserve_reversal_signal(base_dir: Path, *, signal_id: str, stage: str,
+                            identity: str, binding: dict) -> dict:
+    """Durable one-request/one-parent CAS, independent of policy generation.
+
+    A reserved request is ambiguous after a crash, not permission to call it
+    again. Existing broker registry and sequential leg intents still own orders.
+    """
+    if (not isinstance(signal_id,str) or not signal_id or not signal_id.isascii()
+            or stage not in {"provider_request","parent_entry"}
+            or not isinstance(identity,str) or not identity or not isinstance(binding,dict)):
+        raise ValueError("reversal_signal_reservation_invalid")
+    key=hashlib.sha256(signal_id.encode()).hexdigest()
+    base=Path(base_dir);base.mkdir(parents=True,exist_ok=True)
+    path=base/(key+".json")
+    with (base/(key+".lock")).open("a") as lock:
+        fcntl.flock(lock,fcntl.LOCK_EX)
+        state=json.loads(path.read_text()) if path.exists() else dict(schema="main_reversal_signal_intent_v1",signal_id=signal_id,stages={})
+        if path.exists() and (state.get("content_sha256")!=_digest({k:v for k,v in state.items() if k!="content_sha256"})
+                              or state.get("signal_id")!=signal_id or state.get("schema")!="main_reversal_signal_intent_v1"):
+            raise ValueError("reversal_signal_journal_invalid")
+        existing=state["stages"].get(stage)
+        if existing:
+            if stage=="parent_entry" and existing==dict(identity=identity,binding=binding):return state
+            raise ValueError("reversal_signal_already_reserved:"+stage)
+        state["stages"][stage]=dict(identity=identity,binding=binding)
+        state.pop("content_sha256",None);state["content_sha256"]=_digest(state)
+        # Existing atomic journal writer fsyncs both bytes and parent directory.
+        _write_target_index_atomic(path,state)
+        return state
+
+
 def _digest(body: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(
         body, ensure_ascii=True, sort_keys=True, separators=(",", ":"),

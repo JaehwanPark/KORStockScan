@@ -10,6 +10,16 @@ from src.engine import scalp_entry_action_decision_matrix as observations
 
 
 def load_entry_observations(target_date: str) -> dict[str, Any]:
+    import json
+    from src.utils.constants import DATA_DIR
+    from src.engine.automation.source_data_retirement import digest
+    retirement=DATA_DIR/'report/additional_unused_raw_retirement/2026-10-07/retired-snapshots.json'
+    retired=[]
+    if retirement.is_file():
+        receipt=json.loads(retirement.read_text())
+        if receipt.get('content_sha256')!=digest({k:v for k,v in receipt.items() if k!='content_sha256'}):
+            raise ValueError('entry_observation_retirement_receipt_invalid')
+        retired=[r for r in receipt.get('deleted_files',[]) if r['source_date']==target_date]
     source = [
         observations._base_row(event)
         for event in observations._iter_relevant_events(target_date)
@@ -30,7 +40,8 @@ def load_entry_observations(target_date: str) -> dict[str, Any]:
     observations._attach_entry_price_skip_followups(rows, followups)
     return {
         "date": target_date,
-        "status": "pass" if rows else "no_observations",
+        "status": "pass" if rows else "retired_source" if retired else "no_observations",
+        "retired_snapshot_fallbacks": retired,
         "report_type": "entry_observation_source",
         "rows": rows,
         "runtime_effect": False,

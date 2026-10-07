@@ -89,11 +89,14 @@ def _selected_release(*, require_selected_cwd: bool = True) -> tuple[dict[str, A
     return selection, path, commit
 
 
-def _source_receipts(source_date: str, target_date: str, *, generation_only: bool = False) -> dict[str, Any]:
+def _source_receipts(source_date: str, target_date: str, *, generation_only: bool = False, checklist_snapshot: Path | None = None) -> dict[str, Any]:
     controller_path = (DATA_DIR / "report" / "postclose_done_controller"
                        / f"postclose_done_controller_{source_date}.json")
+    if checklist_snapshot is not None and not generation_only:
+        raise ValueError("historical_checklist_requires_sealed_generation")
     issues = done_terminal_receipt_issues(controller_path, source_date, started_after_ns=0,
-                                        **({"generation_only": True} if generation_only else {}))
+                                        **({"generation_only": True} if generation_only else {}),
+                                        **({"checklist_snapshot": checklist_snapshot} if checklist_snapshot is not None else {}))
     if issues:
         raise ValueError("postclose_controller_not_closed:" + ",".join(issues))
     summary_path = (DATA_DIR / "report" / "runtime_approval_summary"
@@ -106,9 +109,10 @@ def _source_receipts(source_date: str, target_date: str, *, generation_only: boo
         row = (summary.get("sources") or {}).get(family) or {}
         receipt = row.get("policy_receipt") or {}
         path = Path(str(receipt.get("path") or ""))
+        from src.engine.scalping.mechanistic_entry_runtime_policy import preparation_path
         if (receipt.get("valid") is not True
                 or receipt.get("target_date_matches") is not True
-                or path != DATA_DIR / "runtime" / "mechanistic_entry_policy" / f"policy_{target_date}.json"
+                or path != preparation_path(DATA_DIR,target_date)
                 or not path.is_file() or _sha(path) != receipt.get("sha256")):
             raise ValueError(f"{family}_target_policy_receipt_invalid")
         policy_receipts.append({"family": family, "path": str(path), "sha256": receipt["sha256"]})
@@ -198,8 +202,6 @@ def verify_prepared(target_date: str, *, require_today: bool = False,
         # Router identity/shared mounts and exact source hashes remain required;
         # only prepare() admits mutation from the selected release root.
         _, selection_path, commit = _selected_release(require_selected_cwd=False)
-        source = _source_receipts(receipt["source_date"], target_date,
-                                  **({"generation_only": True} if generation_only else {}))
         release_changed = (receipt["selected_release_commit"] != commit
                            or receipt["selection_sha256"] != _sha(selection_path))
         expected_source = receipt
@@ -215,6 +217,11 @@ def verify_prepared(target_date: str, *, require_today: bool = False,
             if reseal is not None:
                 expected_source = reseal['current_source_receipts']
                 handoff_basis = 'intraday_preserved_preopen_generation_current_postclose_resealed'
+        snapshot = ((preserved.get('postclose_source_reseal') or {}).get('historical_checklist')
+                    if release_changed else None)
+        source = _source_receipts(receipt["source_date"], target_date,
+            **({"generation_only": True} if generation_only or snapshot else {}),
+            **({"checklist_snapshot": Path(snapshot['path'])} if snapshot else {}))
         if any(expected_source.get(key) != value for key, value in source.items()):
             raise ValueError("prepared_source_or_release_changed")
         output_dir = receipt_path.parent
@@ -267,7 +274,8 @@ def verify_prepared(target_date: str, *, require_today: bool = False,
         "handoff_basis": handoff_basis,
         "actual_pid_consumed": False,
         "runtime_effect": False,
-        "validation_scope": "sealed_generation" if generation_only else "current_full_contract",
+        "validation_scope": ("intraday_preserved_historical_generation" if handoff_basis and not findings
+                             else "sealed_generation" if generation_only else "current_full_contract"),
     }
 
 

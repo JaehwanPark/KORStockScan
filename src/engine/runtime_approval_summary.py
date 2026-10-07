@@ -115,9 +115,10 @@ def _paths(target_date: str) -> dict[str, Path]:
     compact_policies = []
     machine_policies = []
     reversal_policies = []
-    for candidate in sorted(
-        (DATA_DIR / "runtime/mechanistic_entry_policy").glob("policy_????-??-??.json")
-    ):
+    from src.engine.scalping.mechanistic_entry_runtime_policy import preparation_path
+    policy_root=DATA_DIR / "runtime/mechanistic_entry_policy"
+    prepared_dates={p.stem[7:] for folder in (policy_root,policy_root/'candidates') for p in folder.glob('policy_????-??-??.json')}
+    for candidate in sorted(preparation_path(DATA_DIR,d) for d in prepared_dates):
         try:
             payload = json.loads(candidate.read_text(encoding="utf-8"))
         except (OSError, ValueError):

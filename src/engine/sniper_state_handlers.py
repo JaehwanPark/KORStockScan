@@ -33808,6 +33808,10 @@ def _machine_primary_entry_provenance_fields(source: dict | None) -> dict:
         "continuous_reversal_cell_key",
         "continuous_reversal_arm",
         "continuous_reversal_applied",
+        "continuous_reversal_signal_id",
+        "continuous_reversal_primary_branch",
+        "continuous_reversal_matched_branches",
+        "continuous_reversal_phase",
         "evaluation_attempt_id",
         "evaluation_attempt_identity_source",
         "machine_capture_status",
@@ -50136,13 +50140,32 @@ def _resolve_watching_state_change_refresh(
         item=(ws_data.get('last_realtime_type_item') or {}).get('0B')
         session=stock.get('market_session_bucket') or ws_data.get('market_session_bucket') or ws_data.get('session_bucket')
         try:
-            snapshot=current_snapshot(str(stock.get('code') or '')[:6],_explicit_item_venue(item),session,now=now_ts,item=item)
+            from src.engine.scalping.mechanistic_entry_runtime_policy import load_effective
+            from src.utils.constants import DATA_DIR
+            selected=load_effective(data_root=DATA_DIR,target_date=datetime.fromtimestamp(now_ts,_KST).date().isoformat())
+            family=(selected or {}).get('continuous_reversal')
+            claim=None
+            if family and family.get('schema')=='continuous_reversal_policy_v2':
+                from src.engine.scalping.continuous_reversal_branches import claim_snapshot,restore_session_anchors,configure
+                from src.engine.scalping.continuous_reversal_policy_v2 import record_pid_consumption
+                record_pid_consumption(DATA_DIR,selected)
+                restore_session_anchors(DATA_DIR,datetime.fromtimestamp(now_ts,_KST).date().isoformat())
+                configure(family['family_sha256'],v2=True)
+                claim=stock.get('_continuous_reversal_pending_claim')
+                if claim:
+                    from src.engine.scalping.continuous_reversal_branches import validate_claim
+                    try:validate_claim(claim,family['family_sha256'],now=now_ts)
+                    except ValueError:
+                        stock.pop('_continuous_reversal_pending_claim',None);claim=None
+                claim=claim or claim_snapshot(str(stock.get('code') or '')[:6],_explicit_item_venue(item),session,
+                    now=now_ts,item=item,family_sha256=family['family_sha256'])
+                snapshot=claim['snapshot'] if claim else None
+            else:
+                snapshot=current_snapshot(str(stock.get('code') or '')[:6],_explicit_item_venue(item),session,now=now_ts,item=item)
+                if snapshot:claim=dict(snapshot=snapshot)
             if snapshot and stock.get('_continuous_reversal_last_requested_id')!=snapshot[0]['event_id']:
-                from src.engine.scalping.mechanistic_entry_runtime_policy import load_effective
-                from src.utils.constants import DATA_DIR
-                selected=load_effective(data_root=DATA_DIR,target_date=datetime.fromtimestamp(now_ts,_KST).date().isoformat())
-                if selected and selected.get('continuous_reversal'):
-                    stock['_continuous_reversal_last_requested_id']=snapshot[0]['event_id']
+                if family:
+                    stock['_continuous_reversal_pending_claim']=claim
                     return dict(allowed=True,reason='continuous_reversal_first_uptick',
                                 signature=_build_watching_refresh_signature(ws_data),
                                 event_id=snapshot[0]['event_id'],decision_authority='machine_evaluation_only',
@@ -63113,6 +63136,7 @@ def _handle_watching_strategy_branch(
                                 entry_ai_ws_data,
                                 recent_ticks,
                                 recent_candles,
+                                reversal_signal_claim=stock.get('_continuous_reversal_pending_claim'),
                                 entry_economics_observer=lambda **facts: _observe_entry_economics_before_ai(
                                     stock, code, facts.pop('observation_ws_data', entry_ai_ws_data), **facts),
                                 entry_input_refresher=lambda ws, ticks, context: _refresh_prepared_entry_inputs(code, ws, ticks, context),
@@ -63136,6 +63160,11 @@ def _handle_watching_strategy_branch(
                                 candle_context=candle_context,
                             )
                             ai_call_completed_at = time.time()
+                            pending_claim=stock.pop('_continuous_reversal_pending_claim',None)
+                            if pending_claim and ai_decision.get('entry_mechanistic_policy_decision'):
+                                stock['_continuous_reversal_last_requested_id']=pending_claim['snapshot'][0]['event_id']
+                                from src.engine.scalping.continuous_reversal_branches import acknowledge
+                                acknowledge(pending_claim,status='evaluated')
                         ai_decision.update(pre_ai_ws_refresh_fields)
                         ai_call_executed = True
                         _mutate_stock_state(
@@ -77406,6 +77435,13 @@ def _initial_quantity_prepare_first_submit(
         attempt_id=attempt_id, code=code, target_id=target_id,
         schedule=schedule, requested_qty=continuation["requested_qty"],
         planned_legs=legs, schema=SCHEMA_DYNAMIC_PRICE)
+    reversal=stock.get('last_watching_ai_machine_primary_fields') or {}
+    if reversal.get('continuous_reversal_signal_id'):
+        from src.engine.scalping.initial_quantity_bundle_state import reserve_reversal_signal
+        reserve_reversal_signal(DATA_DIR/'runtime/initial_quantity/reversal_signals',
+            signal_id=reversal['continuous_reversal_signal_id'],stage='parent_entry',identity=attempt_id,
+            binding=dict(target_id=target_id,code=code,primary_branch=reversal.get('continuous_reversal_primary_branch'),
+                         phase=reversal.get('continuous_reversal_phase')))
     base_dir = DATA_DIR / "runtime" / "initial_quantity" / "bundles"
     create_indexed_bundle(base_dir, bundle)
     _mutate_stock_state(stock, set_fields={

@@ -149,7 +149,29 @@ def prepare(day, *, old_pid, previous_root, confirm, now=None, reseal_postclose_
         # own consumed receipt before prepare/launch, a circular second-handoff
         # gate. Every source hash and dated policy byte must still match; the
         # launcher/consumers recheck the full contract after the new PID binds.
-        source = _source_receipts(source_day, day, generation_only=True)
+        controller = _read(DATA_DIR/'report/postclose_done_controller'/f'postclose_done_controller_{source_day}.json')
+        strict = _read(controller['verification_attempt_path']) if controller.get('verification_attempt_path') else {}
+        old_checklist = (strict.get('checklist_handoff') or {}).get('path')
+        expected = (strict.get('generation_binding') or {}).get('checklist_sha256')
+        historical = None
+        if old_checklist and _sha(old_checklist) != expected:
+            relative = 'docs/checklists/' + day + '-stage2-todo-checklist.md'
+            original_bytes = subprocess.check_output(['git', '-C', str(previous), 'show', old_commit + ':' + relative])
+            if hashlib.sha256(original_bytes).hexdigest() != expected:
+                raise ValueError('intraday_original_checklist_git_generation_missing')
+            snapshot = _paths(day, commit)[0].parent / (commit + '.historical-checklist.md')
+            snapshot.parent.mkdir(parents=True, exist_ok=True)
+            if snapshot.exists():
+                if snapshot.read_bytes() != original_bytes:
+                    raise ValueError('intraday_historical_checklist_snapshot_changed')
+            else:
+                with snapshot.open('xb') as out:
+                    out.write(original_bytes); out.flush(); os.fsync(out.fileno())
+            historical = dict(path=str(snapshot), sha256=expected, git_commit=old_commit,
+                              git_path=relative, basis='original_whole_chain_checklist_generation')
+            frozen.append(snapshot)
+        source = _source_receipts(source_day, day, generation_only=True,
+                                 **({'checklist_snapshot': Path(historical['path'])} if historical else {}))
         if not source.get('policy_receipts') or source['policy_receipts'] != original_prepared.get('policy_receipts'):
             raise ValueError('intraday_reseal_policy_generation_changed')
         checklist = DATA_DIR.parent / 'docs/checklists' / (day + '-stage2-todo-checklist.md')
@@ -157,6 +179,7 @@ def prepare(day, *, old_pid, previous_root, confirm, now=None, reseal_postclose_
         reseal = dict(source_date=source_day, target_date=day, current_source_receipts=source,
                       checklist_path=str(checklist), original_controller_sha256=original_prepared.get('controller_sha256'),
                       original_summary_sha256=original_prepared.get('summary_sha256'), policy_effect='unchanged')
+        if historical: reseal['historical_checklist'] = historical
     # All native source receipts remain independently validated by the launcher.
     hashes = {str(path): _sha(path) for path in frozen}
     if reseal is not None and any(hashes[source[key + '_path']] != source[key + '_sha256']
@@ -220,6 +243,17 @@ def verify(day, commit, *, now=None):
             if any(frozen.get(source[key + '_path']) != source.get(key + '_sha256')
                    for key in ('controller', 'summary')):
                 raise ValueError('intraday_postclose_reseal_hash_invalid')
+            snapshot = reseal.get('historical_checklist')
+            if snapshot:
+                expected_path = _paths(day, commit)[0].parent / (commit + '.historical-checklist.md')
+                strict = _read(_read(source['controller_path'])['verification_attempt_path'])
+                if (snapshot.get('path') != str(expected_path)
+                        or snapshot.get('sha256') != strict['generation_binding']['checklist_sha256']
+                        or frozen.get(str(expected_path)) != snapshot['sha256']
+                        or snapshot.get('git_commit') != payload['previous_release_commit']
+                        or snapshot.get('git_path') != 'docs/checklists/' + day + '-stage2-todo-checklist.md'):
+                    raise ValueError('intraday_historical_checklist_binding_invalid')
+                required.add(str(expected_path))
             required.update([source['controller_path'], source['summary_path'], reseal['checklist_path']])
         if set(frozen) != required or any(_sha(name) != sha for name, sha in frozen.items()):
             raise ValueError("intraday_preserved_generation_changed")
@@ -268,12 +302,37 @@ def consume(day, *, pid, now=None):
     return payload
 
 
+def activate_main_v2(day,*,pid,confirm,now=None):
+    """Apply an approved Main policy only after the reviewed code PID binds."""
+    current=_today(day,now)
+    if confirm!='APPROVED_INTRADAY_MAIN_POLICY_ACTIVATION':
+        raise ValueError('intraday_main_policy_explicit_authority_required')
+    root,commit=_selection();identity=_identity(pid)
+    if identity['cwd']!=str(root/'src'):raise ValueError('intraday_main_policy_pid_release_mismatch')
+    check=verify(day,commit,now=current)
+    _,consumed_path=_paths(day,commit);consumed=_read(consumed_path)
+    if (check['status']!='pass' or consumed.get('status')!='pass'
+            or consumed.get('pid_identity')!=identity or consumed.get('actual_pid_consumed') is not True
+            or consumed.get('selected_release_commit')!=commit):
+        raise ValueError('intraday_main_policy_code_consumption_missing')
+    verified=_checked_bootstrap(day,pid)
+    evidence={'schema':'intraday_main_policy_code_pid_v1','target_date':day,'release_commit':commit,
+              'pid_identity':identity,'consumed_path':str(consumed_path),'consumed_sha256':_sha(consumed_path),
+              'manifest_sha256':verified['manifest_sha256'],'verified_at':current.isoformat(),
+              'custody_and_order_paths':'existing_native_main_guards_unchanged'}
+    if _identity(pid)!=identity:raise ValueError('intraday_main_policy_pid_changed')
+    from src.engine.scalping.continuous_reversal_policy_v2 import activate
+    receipt=activate(DATA_DIR,day,now=current,intraday_evidence=evidence)
+    return dict(status='pass',activation=receipt,actual_policy_pid_consumption=False)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--prepare", action="store_true")
     group.add_argument("--verify", action="store_true")
     group.add_argument("--consume", action="store_true")
+    group.add_argument('--activate-main-v2',action='store_true')
     parser.add_argument("--target-date", required=True)
     parser.add_argument("--old-pid", type=int)
     parser.add_argument("--pid", type=int)
@@ -285,6 +344,8 @@ def main(argv=None):
         if args.prepare:
             result = prepare(args.target_date, old_pid=args.old_pid, previous_root=args.previous_root,
                              confirm=args.confirm, reseal_postclose_source=args.reseal_postclose_source)
+        elif args.activate_main_v2:
+            result=activate_main_v2(args.target_date,pid=args.pid,confirm=args.confirm)
         elif args.consume:
             result = consume(args.target_date, pid=args.pid)
         else:

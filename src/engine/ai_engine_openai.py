@@ -1022,6 +1022,19 @@ class GPTSniperEngine:
     """
 
     def __init__(self, api_keys, announce_startup=True):
+        from src.engine.scalping.continuous_reversal_branches import restore_session_anchors, configure
+        from src.engine.scalping.mechanistic_entry_runtime_policy import load_effective
+        from src.utils.constants import DATA_DIR
+        try:
+            day=datetime.now(__import__('zoneinfo').ZoneInfo('Asia/Seoul')).date().isoformat()
+            restore_session_anchors(DATA_DIR,day)
+            incumbent=load_effective(data_root=DATA_DIR,target_date=day)
+            if (incumbent or {}).get('continuous_reversal'):
+                configure(incumbent['continuous_reversal']['family_sha256'],v2=incumbent['continuous_reversal'].get('schema')=='continuous_reversal_policy_v2')
+        except (ValueError,KeyError,TypeError,OSError):
+            # An unknown first session observation remains unknown. Never
+            # substitute the first post-restart price for historical context.
+            pass
         if isinstance(api_keys, str):
             api_keys = [api_keys]
 
@@ -8587,6 +8600,7 @@ class GPTSniperEngine:
         entry_input_refresher=None,
         entry_input_deadline_epoch=None,
         machine_only=False,
+        reversal_signal_claim=None,
     ):
         from src.engine.scalping.entry_setup_scalping_rollout import PATH_ENV, SHA_ENV
 
@@ -9520,8 +9534,18 @@ class GPTSniperEngine:
                     from src.engine.scalping.continuous_reversal_policy import assess
                     from src.engine.scalping.micro_reversion.forward_collector import _explicit_item_venue
                     item = (ws_data.get('last_realtime_type_item') or {}).get('0B')
-                    snapshot = current_snapshot(symbol, _explicit_item_venue(item), machine_exact['session_bucket'],
-                                                now=machine_input_fields.get('entry_machine_input_as_of', time.time()), item=item)
+                    snapshot_now=time.time()
+                    if reversal_family.get('schema')=='continuous_reversal_policy_v2':
+                        from src.engine.scalping.continuous_reversal_branches import claim_snapshot, validate_claim
+                        claim=reversal_signal_claim or claim_snapshot(symbol,_explicit_item_venue(item),machine_exact['session_bucket'],
+                            now=snapshot_now,item=item,family_sha256=reversal_family['family_sha256'])
+                        snapshot=validate_claim(claim,reversal_family['family_sha256'],now=snapshot_now) if claim else None
+                        entry_setup_live_policy['continuous_reversal_claim']=claim
+                    else:
+                        # A wake-selected v1 signal is passed as a frozen tuple.
+                        snapshot=(reversal_signal_claim or {}).get('snapshot') if reversal_signal_claim else current_snapshot(
+                            symbol,_explicit_item_venue(item),machine_exact['session_bucket'],now=snapshot_now,item=item)
+                        if reversal_signal_claim and snapshot and not 0<=snapshot_now-snapshot[0]['epoch']<=5:snapshot=None
                     reversal_snapshot_as_of = time.time()
                     machine_assessment, reversal_input, reversal_prompt, reversal_schema = assess(
                         reversal_family, snapshot, symbol=symbol, session=machine_exact['session_bucket'])
@@ -9542,8 +9566,8 @@ class GPTSniperEngine:
                     machine_assessment['source_diagnostics'] = diagnostics
                     entry_setup_live_policy.update(continuous_reversal_assessment=machine_assessment,
                         continuous_reversal_input=reversal_input,
-                        continuous_reversal_arm=(reversal_family['auxiliary_cells'][machine_assessment['cell_key']]['payload']['arm']
-                                                 if machine_assessment.get('cell_key') else None))
+                        continuous_reversal_arm=(machine_assessment.get('auxiliary_arm') if reversal_family.get('schema')=='continuous_reversal_policy_v2'
+                            else reversal_family['auxiliary_cells'][machine_assessment['cell_key']]['payload']['arm'] if machine_assessment.get('cell_key') else None))
                     from src.engine.scalping.mechanistic_entry_runtime_policy import digest
                     reversal_receipt = dict(
                         family_sha256=reversal_family.get('family_sha256'),
@@ -9553,6 +9577,12 @@ class GPTSniperEngine:
                         machine_component_sha256=digest(reversal_family['machine_cells']),
                         auxiliary_component_sha256=digest(reversal_family['auxiliary_cells']),
                         arm=entry_setup_live_policy['continuous_reversal_arm'],
+                        phase=machine_assessment.get('decision_phase','FIRST_UPTICK'),
+                        primary_branch=machine_assessment.get('primary_branch'),
+                        matched_branches=machine_assessment.get('matched_branches'),
+                        signal_id=machine_assessment.get('signal_id',machine_assessment.get('event_id')),
+                        branch_definition_sha256=machine_assessment.get('branch_definition_sha256'),
+                        signal_token=(entry_setup_live_policy.get('continuous_reversal_claim') or {}).get('token'),
                         snapshot_read_at=reversal_snapshot_as_of,
                         snapshot_cutoff=machine_input_fields.get('entry_machine_input_as_of'),
                         input_sha256=digest(reversal_input) if reversal_input is not None else None,
@@ -9563,7 +9593,8 @@ class GPTSniperEngine:
                         reversal_request = dict(input=reversal_input, prompt=reversal_prompt,
                                                 response_schema=reversal_schema)
                         from src.engine.scalping.reversal_auxiliary_contract import PRODUCTION_VERSION
-                        prompt_version=PRODUCTION_VERSION+':'+entry_setup_live_policy['continuous_reversal_arm']
+                        from src.engine.scalping.reversal_auxiliary_phases import version as phase_version
+                        prompt_version=phase_version(machine_assessment.get('decision_phase','FIRST_UPTICK'),entry_setup_live_policy['continuous_reversal_arm'])
                         entry_setup_live_policy.update(auxiliary_system_prompt=reversal_prompt,
                             selected_prompt_version=prompt_version,
                             auxiliary_system_prompt_sha256=__import__('hashlib').sha256(json.dumps(reversal_prompt,ensure_ascii=True,sort_keys=True,separators=(',',':')).encode()).hexdigest(),
@@ -10408,6 +10439,22 @@ class GPTSniperEngine:
                                        'continuous_reversal_response_schema': reversal_schema}
                 trace_metadata_extra['entry_setup_live_policy_selected_prompt_version']=prompt_version
                 input_contract_fields['entry_setup_live_policy_selected_prompt_version']=prompt_version
+            if entry_setup_live_policy.get('continuous_reversal_assessment',{}).get('policy_version')=='continuous_reversal_policy_v2':
+                from src.engine.scalping.continuous_reversal_branches import validate_claim
+                from src.engine.scalping.initial_quantity_bundle_state import reserve_reversal_signal
+                from src.utils.constants import DATA_DIR
+                assessment=entry_setup_live_policy['continuous_reversal_assessment']
+                from src.engine.scalping.mechanistic_entry_runtime_policy import load_effective
+                active=load_effective(data_root=DATA_DIR,target_date=datetime.now(__import__('zoneinfo').ZoneInfo('Asia/Seoul')).date().isoformat())
+                if not active or active['bundle_sha256']!=entry_setup_live_policy['machine_bundle_sha256']:
+                    raise ValueError('reversal_policy_changed_before_provider')
+                validate_claim(entry_setup_live_policy.get('continuous_reversal_claim'),assessment['family_sha256'],now=time.time())
+                request_identity=digest([assessment['signal_id'],prompt_version,replay_context,prompt,reversal_schema])
+                reserve_reversal_signal(DATA_DIR/'runtime/initial_quantity/reversal_signals',
+                    signal_id=assessment['signal_id'],stage='provider_request',identity=request_identity,
+                    binding=dict(family_sha256=assessment['family_sha256'],primary_branch=assessment['primary_branch'],
+                                 phase=assessment['decision_phase'],request_sha256=request_identity))
+                trace_metadata_extra['continuous_reversal_request_identity']=request_identity
             provider_attempted = True
             result = self._call_openai_safe(
                 prompt,

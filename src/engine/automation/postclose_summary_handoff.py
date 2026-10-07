@@ -1608,7 +1608,8 @@ def _stage_code(stage, commands, project, *, dispatcher_path=None,
                      'entry_admission_analysis', 'entry_admission_acceptance', 'entry_admission_recipe', 'entry_designated_policy'):
             paths[name] = project / f'src/engine/scalping/{name}.py'
     if stage in {'main_machine_policy','main_auxiliary_policy'}:
-        for name in ('continuous_reversal','continuous_reversal_source','continuous_reversal_policy','continuous_reversal_postclose','reversal_auxiliary_contract'):
+        for name in ('continuous_reversal','continuous_reversal_source','continuous_reversal_policy','continuous_reversal_postclose','reversal_auxiliary_contract',
+                     'continuous_reversal_branches','continuous_reversal_branch_postclose','continuous_reversal_policy_v2','reversal_auxiliary_phases'):
             paths[name]=project/f'src/engine/scalping/{name}.py'
     return _stage_digest(_stage_sources(paths))
 

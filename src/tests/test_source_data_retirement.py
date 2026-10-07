@@ -241,3 +241,31 @@ def test_summary_hash_identifies_the_manifest_bytes_actually_consumed(prepared, 
     result = retirement.run(manifest, journal)
     assert result['manifest_sha256'] == consumed_hash
     assert raw.exists()
+
+
+def test_additional_manifest_is_typed_and_reader_sealed(prepared):
+ raw,protected,value,manifest,journal,save=prepared
+ new=raw.parent.with_name('date=2026-09-28');new.mkdir();target=new/raw.name;raw.rename(target)
+ reader=target.parents[3]/'reader.py';reader.write_text('bounded reader')
+ entry=value['candidates'][0]
+ entry.update(path=str(target),identity=retirement.identity(target.stat()),kind='out_of_window_parquet',
+              consumer_evidence=dict(readers=[dict(path=str(reader),sha256=retirement.file_hash(reader))],receipts=[dict(path=str(reader),sha256=retirement.file_hash(reader))]),
+              period_evidence=dict(mode='unused_file_consumer_census',reader_scope_verified=True,earliest_required_date='2026-10-04',selected_consumer_readers=[dict(path=str(reader),sha256=retirement.file_hash(reader))]))
+ value.pop('cutoff_exclusive');value.update(schema=retirement.ADDITIONAL_SCHEMA,selection='explicit_unused_file_inventory_no_global_cutoff');save()
+ assert retirement.run(manifest,journal)['skipped']==[]
+ reader.write_text('unbounded new reader')
+ with pytest.raises(ValueError,match='reader_changed'):retirement.run(manifest,journal.with_name('apply.jsonl'),apply=True)
+ assert target.exists() and protected.exists()
+
+
+def test_additional_snapshot_cannot_disguise_current_filename_as_old_date(prepared):
+ raw,_,value,manifest,journal,save=prepared
+ target=raw.parents[4]/'threshold_cycle/snapshots/pipeline_events_2026-10-07_20261007_201000.jsonl.gz'
+ target.parent.mkdir(parents=True);raw.rename(target)
+ proof=target.parent/'proof.json';proof.write_text('{}')
+ entry=value['candidates'][0];entry.update(path=str(target),identity=retirement.identity(target.stat()),kind='retired_threshold_snapshot',
+  consumer_evidence=dict(readers=[dict(path=str(proof),sha256=retirement.file_hash(proof))],receipts=[dict(path=str(proof),sha256=retirement.file_hash(proof))]),
+  period_evidence=dict(mode='unused_file_consumer_census',reader_scope_verified=True,source_date='2026-09-15',required_dates=['2026-10-06']))
+ value.pop('cutoff_exclusive');value.update(schema=retirement.ADDITIONAL_SCHEMA,selection='explicit_unused_file_inventory_no_global_cutoff');save()
+ with pytest.raises(ValueError,match='filename_date_conflict'):retirement.run(manifest,journal,apply=True)
+ assert target.exists()

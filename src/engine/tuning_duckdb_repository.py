@@ -7,6 +7,7 @@ Parquet 파일을 직접 쿼리하거나 DuckDB 내부 테이블로 로드하여
 from __future__ import annotations
 
 import logging
+import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
@@ -54,10 +55,44 @@ class TuningDuckDBRepository:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
 
-    def register_parquet_dataset(self, dataset: str, partition_pattern: str = "date=*"):
+    def register_parquet_dataset(self, dataset: str, partition_pattern: str = "date=*",
+                                 *, start_date=None, end_date=None):
         """Parquet 데이터셋을 DuckDB에 외부 테이블로 등록."""
         # 파티션 디렉토리: analytics/parquet/<dataset>/date=*
+        if not re.fullmatch(r"[a-z][a-z0-9_]*", dataset):
+            raise ValueError("invalid_parquet_dataset")
+        if (start_date is None) != (end_date is None):
+            raise ValueError("incomplete_parquet_window")
         dataset_dir = PARQUET_ROOT / dataset
+        if start_date is not None:
+            start, end = date.fromisoformat(str(start_date)), date.fromisoformat(str(end_date))
+            if start > end:
+                raise ValueError("invalid_parquet_window")
+            # Bind only actual partitions in the approved window. SQL WHERE
+            # cannot protect obsolete files from read_parquet schema discovery.
+            paths = sorted(p for p in dataset_dir.glob("date=*/*.parquet")
+                           if start.isoformat() <= p.parent.name[5:] <= end.isoformat()
+                           and re.fullmatch(r"date=\d{4}-\d{2}-\d{2}", p.parent.name))
+            from src.utils.market_day import is_krx_trading_day
+            day=start
+            verified_empty=0
+            present_dates={p.parent.name[5:] for p in paths}
+            while day<=end:
+                if is_krx_trading_day(day) and day.isoformat() not in present_dates:
+                    if dataset!='post_sell':raise ValueError('parquet_window_source_missing:'+dataset+':'+day.isoformat())
+                    self._verify_empty_partition(dataset,day)
+                    verified_empty+=1
+                day+=timedelta(days=1)
+            if not paths:
+                if dataset!='post_sell' or not verified_empty:raise ValueError('parquet_window_source_missing:'+dataset)
+                self.conn.execute("CREATE OR REPLACE TEMP VIEW v_post_sell AS SELECT "
+                                  "CAST(NULL AS VARCHAR) AS emitted_date, CAST(NULL AS VARCHAR) AS outcome, "
+                                  "CAST(NULL AS VARCHAR) AS profit_rate WHERE FALSE")
+                return True
+            quoted = ",".join("'" + str(p).replace("'", "''") + "'" for p in paths)
+            self.conn.execute(f"CREATE OR REPLACE TEMP VIEW v_{dataset} AS "
+                              f"SELECT * FROM read_parquet([{quoted}], union_by_name=true)")
+            return True
         if not dataset_dir.exists():
             logger.warning("데이터셋 디렉토리 없음: %s", dataset_dir)
             return False
@@ -76,6 +111,21 @@ class TuningDuckDBRepository:
         except Exception as e:
             logger.error("뷰 생성 실패: %s", e)
             return False
+
+    @staticmethod
+    def _verify_empty_partition(dataset,day):
+        import json
+        from src.engine.scalping.continuous_reversal_postclose import seal,file_hash
+        from src.engine.build_tuning_monitoring_parquet import list_jsonl_files
+        path=PARQUET_ROOT/dataset/('date='+day.isoformat())/'source_receipt.json'
+        if not path.is_file():raise ValueError('parquet_empty_receipt_missing:'+day.isoformat())
+        receipt=json.loads(path.read_text())
+        files=[dict(path=str(p.resolve()),sha256=file_hash(p)) for p in list_jsonl_files(dataset,day)]
+        if (receipt!=seal(receipt) or receipt.get('schema')!='tuning_parquet_empty_source_v1'
+                or receipt.get('status')!='valid_empty' or receipt.get('dataset')!=dataset
+                or receipt.get('target_date')!=day.isoformat() or receipt.get('written_rows')!=0
+                or receipt.get('source_files')!=files):
+            raise ValueError('parquet_empty_receipt_invalid:'+day.isoformat())
 
     def query(self, sql: str, params: Optional[list] = None) -> pd.DataFrame:
         """SQL 쿼리 실행 후 DataFrame 반환."""

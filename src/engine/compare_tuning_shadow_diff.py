@@ -147,9 +147,10 @@ def _count_jsonl_metrics(start_date: date, end_date: date) -> Dict[str, int]:
 
 
 def _count_duckdb_metrics(start_date: date, end_date: date) -> Dict[str, int]:
-    with TuningDuckDBRepository(read_only=False) as repo:
-        repo.register_parquet_dataset("pipeline_events")
-        repo.register_parquet_dataset("post_sell")
+    # Shadow comparison needs external files, not a writable operational DB.
+    with TuningDuckDBRepository(duckdb_path=Path(":memory:"), read_only=False) as repo:
+        repo.register_parquet_dataset("pipeline_events", start_date=start_date, end_date=end_date)
+        repo.register_parquet_dataset("post_sell", start_date=start_date, end_date=end_date)
 
         pipeline_df = repo.query(
             """

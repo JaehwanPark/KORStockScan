@@ -2,6 +2,8 @@
 
 ## 1. 목표·현재 상태·실행 경계
 
+10/7 실행 지시: 사용자가 구현·반복 리뷰·배포·재기동을 승인했고, 이어 **오늘 적용해서 테스트**하도록 지시했다. 아래 다음 거래일 절차 대신 오늘 exact-date intraday candidate/activation 및 새 bootstrap·PID handoff를 사용한다. 기존 PREOPEN을 소급 재작성하지 않는다. 원 연구 50점 중 9/21의 exact item 결손 18점은 제외하며 유효 32점에서 공통 engine과 새 보조 바이트를 실측한다. 연구 32승과 자연 운용 결과는 구분한다.
+
 사용자 요청은 **여러 정책을 병행 운용할 수 있게 구현하고 새 삼성 연구 정책을 적용하는 데까지 계획을 수립**하는 것이다. 이 문서는 구현·검증·정식 발행·적용·운영 확인의 상세 계획이다. 이번 문서 작성은 코드 구현, 장후 실행, 정책 발행, 배포 또는 거래 프로세스 재기동을 실행하지 않는다.
 
 목표는 하나의 Main 진입 판정 안에서 등록된 복수 분기를 평가하고, 하나 이상의 유효 분기가 통과하면 **하나의 ENTER_NOW와 하나의 실행 후보**를 만드는 것이다. 분기별 주문·자본 계정이나 별도 삼성 봇을 만들지 않는다. 실제 제출은 기존 보조 위험판정과 주문·가격·수량·자본·보유 소유권·운영자 veto·hard safety 경로를 따른다.
@@ -45,7 +47,7 @@
 
 5분은 최대 lookback이다. 기존 연구/kernel처럼 완전한 5분 대기를 새로 요구하지 않는다. 세션 기준은 공식 시가가 아니다. SOR는 관측 경로이며 실제 체결 거래소를 SOR로 입증하지 않는다. KRX/NXT 단독 관측·프리·애프터에 신규 분기를 자동 확대하지 않는다. 해당 경로의 기존 분기는 계속 평가한다.
 
-[고정 후보](../../tmp/samsung-shallow-regime-confirmation-20261007/preferred-research-candidate.json)는 과거 31/31·미확정 19, 오늘 09:55:48.565 동결 접두 3/3이다. 확인 시점 중복 제거 후 누적 32/32·미확정 18, 목표 접촉 시각 6개다. 오늘 3건은 같은 한 번의 목표 도달이다. 이 수치는 후보 근거이며 실주문·실현 수익이 아니다. DD5 <0.4%의 별도 연구 후보는 이번 초기 지정에 포함하지 않는다.
+[고정 후보](../../tmp/samsung-shallow-regime-confirmation-20261007/preferred-research-candidate.json)는 과거 31/31·미확정 19, 오늘 09:55:48.565 동결 접두 3/3이다. 확인 시점 중복 제거 후 계획 당시 누적 32/32·미확정 18이었다. 실행 재점검에서는 exact item 결손 18개를 분석 모집단에서 제외했으며 유효 확인점 32/32, 목표 접촉 시각 6개다. 오늘 3건은 같은 한 번의 목표 도달이다. 이 수치는 후보 근거이며 실주문·실현 수익이 아니다. DD5 <0.4%의 별도 연구 후보는 이번 초기 지정에 포함하지 않는다.
 
 ### 2.3 선택 기준과 초기 지정
 
@@ -321,3 +323,16 @@ P5 동결 비교는 과거 8일 356,455개 기존 라벨 차이 0, 신규 후보
 | R8 | 매일 비교할 복수 조합 목록·분모가 추상적이면 단독 winner로 회귀하거나 무제한 조합 탐색 가능 | §8: 삼성 27개 명시 조합+현행·같은 원천/라벨·unique signal raw 분수·동률 현행. 성공 보존율 gate 0 |
 
 재리뷰에서 부모 진입과 분할 leg의 차이, null의 순위 처리, 조합 변경 후 보조 primary 모집단, 준비 consumer와 runtime effective loader의 분리까지 보완했다. 문서 범위의 미해결 지적은 없다. 상대 링크 30개·JSON 예시 1개·현재 OPEN owner 두 ID의 각 1건·print-only backlog parser·신규 파일 공백/충돌 표식·`git diff --check` 검증 PASS다. parser 출력은 `/tmp/korstockscan-multi-policy-plan-review-20261007-backlog.txt`이며 외부 sync는 실행하지 않았다. 구현·최종 보조 요청 실측·정책 발행·배포·PID 소비는 아직 실행하지 않았다. Python/매매 회귀는 문서 변경에 해당하지 않아 실행하지 않았고 위 표의 코드 종료 검사는 구현 단계에 남아 있다.
+
+
+## 11. 10/7 구현·장중 적용 실행 계약
+
+오늘 장중 적용을 사용자 요청대로 진행한다. 최초 native v2는 기존 12셀을 이관하고 삼성 REGULAR/SOR/005930_AL에만 지정 CONFIRMED 분기를 합집합으로 추가한다. 실제 요청 문구를 보완한 160회 재호출(5 arm×32점)을 원 응답과 대조했다. 선택한 complete_source_v7은 25/32 PASS이며 PASS 승리 25/25, invalid 비PASS 1건은 별도 진단이다. 기존 FIRST 요청 bytes와 arm은 유지한다. 총 연구 호출은 이전 문구 160회까지 320회이며 중복 호출 캐시를 구분한다.
+
+새 코드 release 선택→기존 정책을 소비하는 실제 새 Main PID 검증→native intraday v2 parent CAS activation→실제 PID의 v2 branch/phase 소비 순서로 전환한다. 기존 dated PREOPEN·정책 파일을 바꾸지 않는다. 오늘 체크리스트가 장후 당시 bytes와 달라지면 원 커밋의 bytes가 당시 whole-chain checklist SHA와 일치하는지 확인하여 별도 historical snapshot을 봉인한다. 이는 오늘 장후 완료를 새로 주장하는 것이 아니며 source/controller/summary/terminal/stage/policy hash는 그대로 검증한다. 현재 체크리스트는 별도 현행 owner로 동결한다.
+
+같은 확인 틱의 legacy first turn이 원 신규 anchor와 다른 low를 가지면 primary FIRST에 해당 first turn의 독립 fact/input ledger를 사용한다. 재기동 세션 첫 가격은 정상 당일 접두에서 복원하고 새 수신가격으로 대체하지 않는다. 요청/부모 진입 intent는 generation을 넘어 native signal ID에 영속 CAS를 적용한다. 기존 순차 분할 leg 및 broker/custody/수량/가격/신선도 guard는 유지한다.
+
+정기 장후는 현재 v2 활성 여부로 producer를 dispatch하며 cumulative 정상 native 전체에서 FIRST/CONFIRMED를 재생한다. bar 내용·SHA·입력·kernel/branch code·label contract를 cache에 결속한다. 무표본은 지원 scope에서 applicable한 정규장 전체 부모를 승계한다. 다음 날 candidate 생성은 오늘 current pointer를 변경하지 않으며 다음 영업일 native activation owner가 소비한다. 다음 자연 장후 완료·실제 진입/체결은 code/PID 검증과 별도 수용 항목이다.
+
+검토·실행 기록: [다중 정책 및 미사용 파일 실행 감사](../audits/main-multi-policy-and-unused-raw-execution-review-2026-10-07.md).

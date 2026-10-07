@@ -72,12 +72,13 @@ def completed_bars(data_root,day):
     paths+=sorted((Path(data_root)/'runtime'/'shared_ws_completed_bars').glob('*/*/*.json'))
     for path in paths:
         if not path.is_file():continue
-        value=json.loads(path.read_text())
+        raw_bytes=path.read_bytes()
+        value=json.loads(raw_bytes)
         if value.get('source_date',value.get('trade_date'))!=day:continue
         broker=path.name.startswith('machine_completed_price_source_')
         if broker and value.get('artifact_content_sha256')!=digest({k:v for k,v in value.items() if k!='artifact_content_sha256'}):
             continue
-        receipts.append(dict(path=str(path.resolve()),sha256=file_hash(path)))
+        receipts.append(dict(path=str(path.resolve()),sha256=hashlib.sha256(raw_bytes).hexdigest()))
         for bar in value.get('prices',[]) if broker else value.get('bars',[]):
             if broker:
                 if bar.get('completed_bar_only') is not True or bar.get('source_quality')!='pass_completed_ka10080_bar':continue
@@ -214,6 +215,9 @@ def prepare_research(data_root, day, seed):
 
 
 def machine_report(data_root, day, publication):
+    from src.engine.scalping import continuous_reversal_branch_postclose as branch
+    parent=branch.active_v2(data_root,publication)
+    if parent:return branch.machine_report(data_root,day,publication,parent)
     out = directory(data_root, day)
     source = ensure_population(data_root,day)
     if source['artifact_content_sha256'] != digest({k:v for k,v in source.items() if k != 'artifact_content_sha256'}):
@@ -314,6 +318,9 @@ def inherit(cells, previous=None):
 
 
 def auxiliary_report(data_root,day,publication,*,publish_policy=True):
+    from src.engine.scalping import continuous_reversal_branch_postclose as branch
+    parent=branch.active_v2(data_root,publication)
+    if parent:return branch.auxiliary_report(data_root,day,publication,parent,publish_policy=publish_policy)
     out=directory(data_root,day)
     machine=json.loads((out/'machine.json').read_text())
     inputs=json.loads((out/'provider-inputs.json').read_text())
@@ -467,6 +474,15 @@ def main():
     if args.mode=='calls':execute_calls(args.data_root,args.date,args.actual_inputs)
     elif args.mode=='machine':print(json.dumps(machine_report(args.data_root,args.date,args.publication_date or args.date)))
     else:
+        from src.engine.scalping import continuous_reversal_branch_postclose as branch
+        parent=branch.active_v2(args.data_root,args.publication_date or args.date)
+        if parent:
+            machine=json.loads((directory(args.data_root,args.date)/'machine.json').read_text())
+            if not args.evaluate_only:
+                branch.prepare_daily_inputs(args.data_root,args.date,machine)
+                branch.calls(args.data_root,args.date,inputs_path=branch.directory(args.data_root,args.date)/'daily-provider-inputs.json')
+            print(json.dumps(branch.auxiliary_report(args.data_root,args.date,args.publication_date or args.date,parent,publish_policy=not args.evaluate_only)))
+            return 0
         if not args.evaluate_only:
             prepare_auxiliary_points(args.data_root,args.date)
             execute_calls(args.data_root,args.date,directory(args.data_root,args.date)/'provider-inputs.json')

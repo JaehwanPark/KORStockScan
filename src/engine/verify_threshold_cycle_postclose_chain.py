@@ -220,7 +220,7 @@ def _stage_generation(target_date: str) -> dict[str, dict[str, Any]]:
 
 def current_strict_receipt_issues(
     attempt_path: Path, target_date: str, *, require_whole_native_chain: bool = False,
-    generation_only: bool = False,
+    generation_only: bool = False, checklist_snapshot: Path | None = None,
 ) -> list[str]:
     """Check a stored strict attempt against the current generation, read only.
 
@@ -256,6 +256,12 @@ def current_strict_receipt_issues(
             or report.get("run_id") != terminal.get("run_id")):
         issues.append("strict_main_terminal_generation_stale")
     checklist = (report.get("checklist_handoff") or {}).get("path")
+    if checklist_snapshot is not None:
+        # An authorized intraday code handoff preserves a historical whole-chain
+        # generation; a snapshot must match its original checklist bytes exactly.
+        if not generation_only or not require_whole_native_chain:
+            return ["strict_historical_checklist_scope_invalid"]
+        checklist = str(checklist_snapshot)
     if binding.get("checklist_sha256") != _sha(Path(checklist or "")):
         issues.append("strict_checklist_generation_stale")
     expected_stages = binding.get("stages")

@@ -20,6 +20,10 @@
 
 ## 전일 OPEN 인계
 
+- [ ] `[AdditionalUnusedRawFileDeletion1007] 미사용 파일형 raw 추가 삭제·소비자 보완·통합 배포` (`Due: 2026-10-07`, `Slot: INTRADAY`, `TimeWindow: 현재 소비 재검증 및 반복 리뷰 후 실행`, `Track: SourceQuality`)
+  - Source: [추가 삭제 계획](../proposals/additional-unused-raw-file-deletion-plan-2026-10-07.md).
+  - 권한/Acceptance: 사용자 구현·반복 리뷰·파일 삭제·배포·재기동 승인. 94개 계획 후보만 typed manifest v2로 판정하며 DB 본체/행/index/WAL/volume/dump·정책/모델/잠금/custody·초기수량 부모/347행·현재 누적/연구 원천을 보존한다. A 완료 manifest 및 실제 미사용, B bounded partition+검증한 valid-empty+운영 DB 미접속 결과 대조, C/D 현재 요청 범위와 후보 open 0, 전체 FD/identity/SHA/protected hash/durable intent→삭제 terminal/실제 df 차이를 닫는다. 혼합 widget archive는 nonraw 정확 bytes 보존 후에만 삭제하며 소량 real/sim은 실제 누적 소비를 분리한다. 새 raw 백업·일괄 날짜 purge·옛 파일 자동 복원을 추가하지 않는다. 자연 다음 장후 정상 소비는 단발 삭제와 별도 확인한다.
+
 - [x] `[DirectFamilySourceRepairCompactAuxiliary] 연속 반전 보조 입력·실제 AI 누적 승률·정규장 승계의 장후 통합` (`Due: 2026-10-07`, `Slot: POSTCLOSE`, `TimeWindow: 10/7 04:14 보조 통합 완료; 06:50 최종 인계`, `Track: RuntimeStability`)
   - Source: [통합 계획 §6](../proposals/continuous-reversal-machine-policy-nextday-plan-2026-10-06.md#6-보조판정-정책-확정과-장후-학습-전환), [보조 보완 연구·코드 검토](../audits/auxiliary-reversal-phase-repair-and-call-quota-review-2026-10-06.md).
   - 현재 완료: 최종 운영 문구/input/schema를 그대로 사용한 2,232회 실제 호출 시도·2,231개 응답 ID, 최종 요청 1,860개 중 1,859개 응답·timeout 1개. 비교는 공통 기계 적격 334점이며 구 C 문구 372개는 보존·제외. 정기 compact producer/12셀 publisher/runtime 직접 연결을 구현·리뷰하고 최종 release `0e067426`에 배포했다. 새 장후 native 발행·12셀 loader·direct consumer 검증 PASS. 04:14:46 Main native 완료와 실제 최종 prompt consumer/compact scoped PASS를 확인해 이 통합 owner를 종결했다. 전체 finalization/prepared 및 07:35/07:55 자연 소비는 Main 통합 owner에 인계한다. 기계 ENTER+provider_called trace 모집단은 새 family에서 사용하지 않는다.
@@ -52,7 +56,8 @@
   - 권한 경계: null을 0/no-edge로 바꾸거나 threshold·provider·주문·수량·cap·custody·operator lock·hard safety를 우회하지 않는다.
   - 날짜 인계: 10/6 원 Acceptance와 미관측 기록을 보존하며, 현재 실행 owner는 이 10/7 체크리스트이다.
 
-- [ ] `[DirectFamilySourceRepairMainMechanisticEntry] 연속 반전 기계·보조 12셀 전환·최종 배포·EOD 제외 장후 전체 재생성·10/7 정상기동 준비` (`Due: 2026-10-07`, `Slot: PREOPEN`, `TimeWindow: 07:32~08:05 예약 소비 확인`, `Track: RuntimeStability`)
+- [ ] `[DirectFamilySourceRepairMainMechanisticEntry] 연속 반전 기계·보조 12셀·다중 정책 전환·승인 장중 적용·PID 확인` (`Due: 2026-10-07`, `Slot: INTRADAY`, `TimeWindow: 반복 리뷰 후 오늘 적용 및 자연 확인`, `Track: RuntimeStability`)
+  - 10/7 추가 실행 승인: [다중 정책·삼성 눌림 계획](../proposals/main-multi-policy-parallel-entry-and-samsung-shallow-pullback-implementation-plan-2026-10-07.md) 구현·반복 리뷰·통합 배포·재기동과 **오늘 장중 적용**을 사용자가 승인했다. 기존 PREOPEN/완료 원천 기록은 재작성하지 않는다. 초기 삼성 REGULAR은 기존 DD5_GE_1_2와 신규 CONFIRMED 분기의 ANY_MATCH_ONE_INTENT 합집합이다. 새 요청 bytes의 실제 AI 비교·별도 candidate·parent CAS activation·장중 code/policy/bootstrap handoff·현재 PID의 branch/phase 목록 소비를 검증한다. 기존 50점 중 exact item 결손 18점은 제외하고 유효 32개 확인점에서 공통 engine/라벨/실제 5 arm 요청을 대조한다. 운영·오프라인 quota None 및 기존 주문·수량·custody·manual veto·hard safety를 유지한다. 미래 자연 장후의 분기/조합/phase 누적 선택과 실제 제출/체결은 코드 gate와 구분한다.
   - Source: [통합 전환·전체 재생성 계획](../proposals/continuous-reversal-machine-policy-nextday-plan-2026-10-06.md), [보조 보완 실제 호출·운영 quota 코드 검토](../audits/auxiliary-reversal-phase-repair-and-call-quota-review-2026-10-06.md), [전수 가격 반전 연구](../audits/continuous-price-reversal-zero-base-research-2026-10-06.md), [장후 중단 영수증](../../data/report/postclose_operator_stop/2026-10-06/operator-stop-receipt.json).
   - 현재 완료: 구현·반복 리뷰·최종 immutable release `0e067426` 배포와 P1~P5 장후/준비 완료. 관련 회귀 683 PASS·삼성 source-custody 34 PASS, 코드 34개 hash/clean·cron 8개·기존 episode 186개 pin PASS. 연구 raw 승률/실제 응답 근거의 기계·보조 12+12셀 및 372점 입력·701,638개 반전 접두 parity PASS, 운영 quota total/group=None. source/publication 10/6·effective 10/7 새 generation Main은 04:14:46 성공, 독립 단계·archive·3 Parquet·압축 검증·대조도 새로 완료했다. 기계/compact scoped·최종 prompt consumer·Main seal·whole 13 stage strict/controller issues=[]다. cleanup·최종 detector가 완료했고 04:18:53 최초 prepared_verified를 받았다. 최종 문서 bytes 기준 strict/controller/finalization/prepared를 봉인한다. EOD 및 연구 원천 110개·실제 호출/응답 로그 2개는 보존하며 과거 실패·원천 경고는 별도 이력이다. 잔여 owner는 07:32/07:35/07:55 예약 정책·quota·실제 PID 소비이며 아직 future-due다. [실행 검토](../audits/continuous-reversal-implementation-postclose-execution-review-2026-10-06.md).
   - 권한/범위: 사용자가 통합 구현·반복 리뷰·최종 배포·장후 전체 재실행·정상기동 준비를 승인했다. 오프라인 연구 무제한 호출과 운영 AI 호출한도 영구 해제를 명시 승인했다. 운영 total/group cap=None, 예전 횟수 env의 자동 복원 금지. 계수·중복/오류 재시도/외부 provider rate limit과 broker/order/custody/manual/retirement guard는 유지한다. code/release/새 terminal/prepared/실제 예약 PID를 구분한다.
@@ -76,13 +81,15 @@
   - 잔여 자연 확인: 현재 신규 3종목은 `fixed_watch_nxt_eligibility_unproven` WAIT이며 기존 listing/eligibility 원천으로 확인한다. 10/7 owner PREOPEN의 현재 15종목 scope, 31개 episode 실 기동, 5종목 정확 admission→기계 hash/compact 역할·WS/원천을 확인한다. KRX 정규장은 NXT 대기를 적용하지 않는다. 해당 session 미관측은 `not_observed`이며 성과 사전 입증 또는 주문/threshold/guard 우회 조건을 새로 만들지 않는다.
   - 날짜 인계: 10/6 원 Acceptance와 미관측 기록을 보존하며, 현재 실행 owner는 이 10/7 체크리스트이다.
 
-- [ ] `[WidgetFullRetirement1006] 위젯 런타임·장후·관측·연구·화면/API 전체 제거` (`Due: 2026-10-07`, `Slot: MANUAL`, `TimeWindow: 실행 중; 외부 제거·자연 장후/기동 후 종결`, `Track: RuntimeStability`)
+- [ ] `[WidgetFullRetirement1006] 위젯 런타임·장후·관측·연구·화면/API 전체 제거` (`Due: 2026-10-07`, `Slot: MANUAL`, `TimeWindow: 서버 설치 잔존 정리 계획·자연 장후/기동 후 종결`, `Track: RuntimeStability`)
   - Source: [위젯 전체 제거계획](../proposals/widget-full-runtime-postclose-retirement-plan-2026-10-06.md), [정적 의존성·설치 현황](../../tmp/widget-full-retirement-planning-20261006/inventory.json).
   - 상태: 서버 코드·배포·정리 검증 완료. 커밋 `b53a3835`, 대상 3,382 PASS/skip 1, 전용 unit 11개 mask, API 404, 설치 Widget dispatch 0, 정책 pin 366개 검증. 전용 데이터 2,668개와 임시 릴리스 삭제 후 약 639MiB 확보. [최종 감사](../audits/widget-full-retirement-execution-review-2026-10-06.md). Main/에피소드 새 코드·episode fact producer의 실제 소비, 10/7 dated 정책 생성은 자연 장후/기동 receipt로 확인한다.
-  - 외부/자연 acceptance: Windows는 운영자가 직접 제거 예정. 실제 제거 확인과 새 장후·다음 기동 receipt 전까지 G4/G5를 완료하지 않는다.
+  - 10/7 사용자 확인: 위젯 삭제 완료. 외부 Windows 제거 확인을 다시 요구하지 않는다. 후속 요청은 서버 설치본까지 제거하는 계획이며, [Main-only 위젯·에피소드 전체 제거 계획](../proposals/main-only-widget-episode-full-retirement-plan-2026-10-07.md) §7.3에 unit/mask·구 릴리스·worktree/checkout·설치 복사본/압축본·서버 배포 패키지 정리를 반영했다. 이번 계획으로 서버 잔존물 삭제·에피소드 종료가 실행된 것은 아니다.
+  - 10/7 계획 재리뷰: 새 계획 §12 PR1~PR9 보완. Main 주문·체결·동기화·후행 소유권 consumer와 census writer 이관, 선택 진단 비차단 유지, 신규 BUY fence와 잔여 cancel/SELL 분리, 전환/최종 제거 릴리스 및 G1 선행, 보호 컨테이너·append-only ledger·동시 삭제 보호, 격리 샘플 회귀를 명시했다. 계획 리뷰 완료는 구현·서비스 제어·삭제 완료가 아니다.
+  - 잔여 acceptance: 서버 설치 잔존 정리와 새 장후·다음 기동 receipt를 확인한다. 기존 terminal 원본의 Windows pending은 사용자 확인 전 역사로 남기며, 새 확인 기록과 구분한다.
   - 범위: 자동/수동 위젯 주문, 가격 API·Windows client, collector/Telegram, 종목·보조 연구와 정책 발행, unit/timer/installer, 장후/PREOPEN/감시·배분, 전용 cache/data 정리.
   - 선행조건: 신규 widget BUY/ADD·수동 진입 차단 뒤 fresh broker/custody 대사; 잔여 노출 종결 또는 승인된 정확한 인계. 당시 로컬 수량 0은 broker flat 증거가 아니다.
-  - 완료 기준: 계획 G0~G5. active 위젯 실행·필수 의존성 0, 공통 계산 이관과 Main/에피소드 회귀 통과, archive/삭제 manifest, 외부 Windows 확인, 자연 장후·다음 기동 증거를 구분한다.
+  - 완료 기준: 기존 계획 G0~G5의 과거 수용 기록을 유지한다. Windows는 사용자 삭제 완료 확인으로 반영하고 서버 잔존 설치는 새 계획 G5/삭제 manifest로 확인한다. active 위젯 실행·필수 의존성 0, 공통 계산 이관 및 살아 있는 소비자 회귀, 자연 장후·다음 기동 증거를 구분한다.
   - 권한 경계: 이번 제거 실행은 승인되었다. 청산 주문·소유권 재분류를 추정 승인하지 않으며 Main 삼성 고정 감시·에피소드·공통 토큰/WS·order registry와 hard safety를 보존한다.
   - 날짜 인계: 10/6 원 Acceptance와 미관측 기록을 보존하며, 현재 실행 owner는 이 10/7 체크리스트이다.
 

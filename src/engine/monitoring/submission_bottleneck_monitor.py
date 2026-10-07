@@ -1247,6 +1247,7 @@ def _reversal_observation_receipt(bundle, observation, *, verified_components=No
     from src.engine.scalping.mechanistic_entry_runtime_policy import digest
 
     family = bundle['continuous_reversal']
+    is_v2=family.get('schema')=='continuous_reversal_policy_v2'
     if verified_components is None:
         validate_family(family)
         verified_components = dict(machine=digest(family['machine_cells']),
@@ -1274,7 +1275,7 @@ def _reversal_observation_receipt(bundle, observation, *, verified_components=No
                    ('policy_sha256', 'selector_leaf', 'effective_thresholds'))):
         raise ValueError('effective_policy_receipt_mismatch')
     if (assessment.get('schema') != 'mechanistic_entry_policy_decision_v1'
-            or assessment.get('policy_version') != kernel.VERSION
+            or assessment.get('policy_version') != ('continuous_reversal_policy_v2' if is_v2 else kernel.VERSION)
             or assessment.get('primary_decision_owner') != 'mechanistic_entry_adjudicator'
             or assessment.get('ai_role') != 'auxiliary_risk_screen_pass_veto_no_promotion'):
         raise ValueError('reversal_assessment_contract_invalid')
@@ -1301,7 +1302,14 @@ def _reversal_observation_receipt(bundle, observation, *, verified_components=No
                 or not observed_epoch <= clock <= captured.timestamp()):
             raise ValueError('reversal_snapshot_read_clock_invalid')
         key = assessment.get('cell_key')
-        arm = family['auxiliary_cells'][key]['payload']['arm'] if key else None
+        if is_v2:
+            phase=assessment.get('decision_phase')
+            arm=family['auxiliary_cells'][key]['payload']['phase_policies'][phase]['arm'] if key and phase else None
+            for field in ('primary_branch','matched_branches','signal_id','branch_definition_sha256'):
+                if native.get(field)!=assessment.get(field):raise ValueError('reversal_branch_receipt_mismatch:'+field)
+            if native.get('phase')!=assessment.get('decision_phase','FIRST_UPTICK'):
+                raise ValueError('reversal_phase_receipt_mismatch')
+        else:arm = family['auxiliary_cells'][key]['payload']['arm'] if key else None
         if native.get('arm') != arm:
             raise ValueError('reversal_auxiliary_arm_receipt_mismatch')
         if assessment.get('action') == 'ENTER_NOW':
@@ -1316,13 +1324,26 @@ def _reversal_observation_receipt(bundle, observation, *, verified_components=No
                         ('response_schema', 'response_schema_sha256'))):
                 raise ValueError('reversal_auxiliary_request_hash_mismatch')
             inp = request['input']
-            if (request['prompt'] != production_prompt(arm)
-                    or request['response_schema'] != response_schema(inp, complete_source_only=arm == ARMS[-1])
+            expected_prompt=production_prompt(arm)
+            expected_schema=response_schema(inp,complete_source_only=arm==ARMS[-1])
+            if is_v2:
+                from src.engine.scalping import reversal_auxiliary_phases as phases
+                expected_prompt=phases.prompt(phase,arm)
+                if phase=='CONFIRMED_UPTICK':
+                    expected_schema['properties']['risk_codes']['minItems']=1
+                    e=assessment['event'];timeline=inp.get('observation_phase',{})
+                    if (timeline.get('stage')!=phase or timeline.get('rolling_windows_end')!='AT_CONFIRMATION'
+                            or timeline.get('original_first_uptick')!=dict(id=e['anchor_event_id'],as_of=e['anchor_epoch'],price=e['anchor_price'])
+                            or timeline.get('additional_higher_trade')!=dict(id=e['event_id'],as_of=e['epoch'],price=e['confirmation_price'])):
+                        raise ValueError('reversal_confirmation_timeline_mismatch')
+            if (request['prompt'] != expected_prompt
+                    or request['response_schema'] != expected_schema
                     or inp.get('objective') != dict(net_target_pct=.4, net_soft_stop_pct=-3.,
                                                     horizon_seconds=1800, cost_rate=.0023)):
                 raise ValueError('reversal_auxiliary_issued_contract_mismatch')
             facts = inp['entry_setup_evidence_v1']['facts']
-            if any(facts.get(k) != assessment['event'].get(k) for k in (
+            auxiliary_event=(assessment.get('auxiliary_event') or assessment['event']) if is_v2 else assessment['event']
+            if any(facts.get(k) != auxiliary_event.get(k) for k in (
                     'confirmation_price', 'entry_ask', 'low_price', 'drop_pct',
                     'drawdown_5m_pct', 'down_steps', 'spread_pct', 'volume_ratio_60s')):
                 raise ValueError('reversal_auxiliary_event_input_mismatch')
@@ -1331,7 +1352,7 @@ def _reversal_observation_receipt(bundle, observation, *, verified_components=No
     event = assessment.get('event')
     if event is None:
         if (assessment.get('action') != 'BLOCK'
-                or assessment.get('reason') != 'no_current_first_uptick'
+                or assessment.get('reason') != ('no_current_reversal_signal' if is_v2 else 'no_current_first_uptick')
                 or assessment.get('price_reversal_confirmed') is not False
                 or any(assessment.get(k) is not None for k in ('cell_key', 'rule', 'event_id'))):
             raise ValueError('reversal_nonturn_receipt_invalid')
@@ -1348,6 +1369,13 @@ def _reversal_observation_receipt(bundle, observation, *, verified_components=No
             or event['source_item'].split('_', 1)[0] != symbol):
         raise ValueError('reversal_event_source_invalid')
     key = kernel.cell_key(symbol, session, event['confirmation_price'])
+    if is_v2:
+        from src.engine.scalping.continuous_reversal_policy_v2 import assess
+        replay,_,_,_=assess(family,(event,None),symbol=symbol,session=session,build_request=False)
+        for field in ('action','reason','cell_key','event_id','signal_id','matched_branches','branch_states',
+                      'primary_branch','decision_phase','auxiliary_arm','auxiliary_event','machine_component_sha256','family_sha256'):
+            if assessment.get(field)!=replay.get(field):raise ValueError('reversal_v2_branch_verdict_mismatch:'+field)
+        return family['machine_cells'][key]['payload'],dict(policy_sha256=component,leaf=key)
     rule = family['machine_cells'][key]['payload']['rule']
     if (assessment.get('cell_key') != key or assessment.get('rule') != rule
             or assessment.get('machine_component_sha256') != component):

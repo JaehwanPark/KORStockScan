@@ -2,7 +2,9 @@
 
 ## 1. 목적·기준·권한
 
-사용자 요청: **기존 계획의 삭제 완료 후 남은 미사용 원본 raw의 추가 삭제 범위를 찾아 계획을 수립한다.** 이번 산출물은 조사와 계획이며 추가 삭제·reader 구현·배포를 실행하지 않았다.
+10/7 실행 지시: 사용자가 이 계획의 구현·반복 리뷰·통합 배포·재기동 및 미사용 파일 삭제를 승인했다. 실행은 typed v2 manifest와 최신 소비/보존/FD 증빙으로 진행한다. B의 날짜 제한 소비는 운영 DB 대신 in-memory view를 사용하며, post-sell 무거래일은 생산자가 봉인한 valid-empty 영수증으로만 처리한다. 실행 owner는 현재 체크리스트의 `AdditionalUnusedRawFileDeletion1007`이다.
+
+사용자 요청: **기존 계획의 삭제 완료 후 남은 미사용 원본 raw의 추가 삭제 범위를 찾아 계획을 수립한다.** 계획 작성 당시 산출물은 조사와 계획이었다. 이후 사용자가 구현·배포·삭제를 승인했으며 아래 7절의 현재 실행 계약을 적용한다.
 
 - [선행 삭제 기록](../audits/pre-september-source-data-retirement-execution-2026-10-07.md): 3,102개 파일 삭제, 실제 여유 공간 17.787GiB 증가. 이번 후보에 이미 삭제한 파일을 다시 더하지 않는다.
 - **실제 사용 여부로 판정한다.** 원본을 여는 reader와 보고서의 날짜·path·hash 문자열 참조를 구분한다. 미사용 raw는 복구 가능 여부와 무관하게 삭제 대상으로 분류하며 새 raw 백업을 만들지 않는다.
@@ -111,3 +113,16 @@ probe는 요청 대상일을 읽고, gate backtest는 명시 start/end를 지원
 - **파일 경계:** 적용 시 내용 hash·정체성·보호/DB/open-FD 경계를 다시 확인한다. payload 표본을 전수 기간 검증이라고 부르지 않는다. 무관한 dirty 코드·문서·생성물을 변경하지 않는다.
 - **회수량:** 22.792GiB 상한, class별 실제 삭제 할당량, 다른 writer와 nonraw 보존을 반영한 `df` 순증가를 각각 기록한다.
 - 이번에는 파일 metadata 조사, Parquet footer 전수 확인, gzip 표본, archive member 목록, 현재 코드/선택 릴리스/예약 경로 및 이전 삭제 영수증을 읽고 문서를 작성했다. 문서 리뷰·보완·링크 검사·print-only backlog parser·`git diff --check`로 마감했다. 실제 삭제, 코드 구현, DB query/변경, broker/provider 호출, 보고서 재생성, 배포·재기동 및 자연 장후 검증은 실행하지 않았다.
+
+
+## 7. 승인된 구현·보존·실행 계약
+
+현재 typed manifest v2는 완료된 exclusion backup 16개, 날짜 범위 밖 Parquet 39개, 퇴역 threshold snapshot 5개, sentinel raw 사본 34개를 개별 경로/identity/SHA/consumer receipt로 검증한다. 최초 후보 94개 할당량은 24,472,715,264 bytes다. 과거 real/sim 원천 144개는 현재 누적 reader가 실제 사용하므로 보존한다.
+
+혼합 widget archive는 raw 256개를 새 백업 없이 폐기하고 정책/보고서/잠금 등 nonraw 1,949개를 원 bytes로 별도 보존한다. 보존 할당량 525,729,792 bytes가 archive 56,262,656 bytes보다 커 이 class 단독 공간 효과는 -469,467,136 bytes다. 94개 삭제 회수량과 이 보존 비용, 실제 df 증감은 각각 기록한다. DB는 조회/변경/삭제 대상이 아니다.
+
+현행 shadow reader는 in-memory TEMP VIEW에 필요한 실제 partition 목록만 등록하며 모든 필수 거래일을 검사한다. post-sell 무거래일만 producer의 exact source SHA valid-empty receipt로 허용한다. 현재 10/4~6 실제 JSONL/Parquet 비교는 원 결과와 모두 같다. 현행 canonical/threshold/flow 선택을 후보 파일 open 금지 조건으로 확인했다. 새 selected release의 reader SHA를 manifest에 결속한 뒤 dry-run과 별도 apply journal을 실행한다. root FD census 미관측 PID가 있으면 삭제하지 않는다.
+
+삭제 완료한 C/D 날짜만 native retired-snapshot ledger에 기록한다. 요청 당시 canonical 원천이 있다면 정상 소비하고, 폐기된 fallback만 필요한 옛 요청은 명시적 retired_source로 남긴다. 이를 정상 빈 표본이나 자동 복원으로 숨기지 않는다.
+
+검토·실제 삭제/보존·공간 기록: [실행 감사](../audits/main-multi-policy-and-unused-raw-execution-review-2026-10-07.md).

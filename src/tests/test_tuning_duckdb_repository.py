@@ -56,6 +56,23 @@ def test_query(temp_duckdb_file):
     repo.close()
 
 
+def test_bounded_partition_binding_never_opens_obsolete_corrupt_file(tmp_path, monkeypatch):
+    import src.engine.tuning_duckdb_repository as module
+    monkeypatch.setattr(module,"PARQUET_ROOT",tmp_path)
+    for day in ("2026-10-06","2026-10-07"):
+        p=tmp_path/"pipeline_events"/("date="+day);p.mkdir(parents=True)
+        pd.DataFrame({"emitted_date":[day],"stage":["entry"]}).to_parquet(p/"part.parquet")
+    old=tmp_path/"pipeline_events/date=2026-09-28";old.mkdir()
+    (old/"broken.parquet").write_bytes(b"not parquet")
+    with TuningDuckDBRepository(Path(":memory:"),read_only=False) as repo:
+        assert repo.register_parquet_dataset("pipeline_events",start_date="2026-10-06",end_date="2026-10-07")
+        assert len(repo.query("SELECT * FROM v_pipeline_events"))==2
+        with pytest.raises(ValueError,match="source_missing"):
+            repo.register_parquet_dataset("pipeline_events",start_date="2026-10-08",end_date="2026-10-08")
+        with pytest.raises(ValueError,match="incomplete"):
+            repo.register_parquet_dataset("pipeline_events",start_date="2026-10-06")
+
+
 def test_get_trade_funnel(temp_duckdb_file):
     """거래 퍼널 쿼리 테스트 (모의 데이터)."""
     repo = TuningDuckDBRepository(temp_duckdb_file, read_only=False)
@@ -121,3 +138,31 @@ def test_health_check(temp_duckdb_file):
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+def test_partial_window_does_not_hide_missing_required_date(tmp_path,monkeypatch):
+ import src.engine.tuning_duckdb_repository as module
+ monkeypatch.setattr(module,'PARQUET_ROOT',tmp_path)
+ p=tmp_path/'pipeline_events/date=2026-10-06';p.mkdir(parents=True)
+ pd.DataFrame({'emitted_date':['2026-10-06']}).to_parquet(p/'part.parquet')
+ with TuningDuckDBRepository(Path(':memory:'),read_only=False) as repo:
+  with pytest.raises(ValueError,match='source_missing.*2026-10-07'):
+   repo.register_parquet_dataset('pipeline_events',start_date='2026-10-06',end_date='2026-10-07')
+
+
+def test_verified_event_empty_is_not_missing_or_stale(tmp_path,monkeypatch):
+ from datetime import date
+ import src.engine.tuning_duckdb_repository as module
+ import src.engine.build_tuning_monitoring_parquet as builder
+ monkeypatch.setattr(module,'PARQUET_ROOT',tmp_path/'parquet')
+ monkeypatch.setattr(builder,'ANALYTICS_ROOT',tmp_path/'parquet')
+ source=tmp_path/'post_sell';source.mkdir()
+ monkeypatch.setitem(builder.DATASET_PATHS,'post_sell',source)
+ day=date(2026,10,6)
+ with TuningDuckDBRepository(Path(':memory:'),read_only=False) as repo:
+  with pytest.raises(ValueError,match='receipt_missing'):repo.register_parquet_dataset('post_sell',start_date=day,end_date=day)
+  assert builder.process_single_date('post_sell',day)==(0,0)
+  assert repo.register_parquet_dataset('post_sell',start_date=day,end_date=day)
+  assert repo.query('select * from v_post_sell').empty
+  (source/'post_sell_evaluations_2026-10-06.jsonl').write_text('{}\n')
+  with pytest.raises(ValueError,match='receipt_invalid'):repo.register_parquet_dataset('post_sell',start_date=day,end_date=day)

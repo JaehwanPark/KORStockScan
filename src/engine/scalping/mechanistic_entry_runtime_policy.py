@@ -198,7 +198,10 @@ def validate(bundle: dict, *, target_date: str) -> None:
         source < "2026-06-05"
         or publication < source
         or publication > target_date
-        or (not bundle.get("strategy_activation") and next_target(publication) != target_date)
+        or (not bundle.get("strategy_activation") and next_target(publication) != target_date
+            and not ((bundle.get('continuous_reversal') or {}).get('schema')=='continuous_reversal_policy_v2'
+                     and bundle['continuous_reversal'].get('effective_mode')=='intraday'
+                     and publication==target_date))
     ):
         raise ValueError("machine_bundle_date_invalid")
     if "strategy_activation" in bundle:
@@ -583,8 +586,15 @@ def _selected_compact_prompt_version(source: dict, previous: dict | None, *, eff
     return selected if selected in COMPACT_AI_VARIANTS else previous_version
 
 
+def preparation_path(data_root: Path,target_date: str) -> Path:
+    candidate=root(data_root)/'candidates'/f'policy_{target_date}.json'
+    if candidate.is_file() and (_read(candidate).get('continuous_reversal') or {}).get('effective_mode')=='next_session':
+        return candidate
+    return root(data_root)/f'policy_{target_date}.json'
+
+
 def load(*, data_root: Path, target_date: str) -> dict | None:
-    path = root(data_root) / f"policy_{target_date}.json"
+    path = preparation_path(data_root,target_date)
     if not path.is_file():
         return None
     bundle = _read(path)
@@ -665,7 +675,17 @@ def load_effective(*, data_root: Path, target_date: str) -> dict | None:
     Do not relabel the original policy date or hide a corrupt dated policy.
     Market/source freshness is still checked independently at every decision.
     """
+    pointer=root(data_root)/'current.json'
+    if pointer.is_file() and _read(pointer).get('schema')=='continuous_reversal_current_v2':
+        active=_load_current(data_root,target_date)
+        if active is not None:return active
     exact_path = root(data_root) / f'policy_{target_date}.json'
+    if exact_path.is_file() and (_read(exact_path).get('continuous_reversal') or {}).get('schema')=='continuous_reversal_policy_v2':
+        # Dated v2 publication is preparation, never activation. The sealed
+        # current receipt owns the atomic policy switch, including carry.
+        current=_load_current(data_root,target_date)
+        if current is None:raise ValueError('continuous_reversal_v2_activation_not_observed')
+        return current
     cache_key=('continuous_reversal_dated',str(data_root.resolve()),target_date)
     with _CURRENT_CACHE_LOCK:
         cached=_CURRENT_CACHE.get(cache_key)
@@ -680,7 +700,9 @@ def load_effective(*, data_root: Path, target_date: str) -> dict | None:
         dependencies={}
         token=_READ_DEPENDENCIES.set(dependencies)
         try:
-            bundle=load(data_root=data_root,target_date=target_date)
+            bundle=_read(exact_path)
+            validate(bundle,target_date=target_date)
+            _validate_bundle_sources(bundle,data_root)
             if not all(_signature(Path(path))==sig for path,sig in dependencies.items()):
                 raise ValueError('continuous_reversal_dependency_changed_during_load')
             with _CURRENT_CACHE_LOCK:
@@ -693,7 +715,8 @@ def load_effective(*, data_root: Path, target_date: str) -> dict | None:
     if current is not None:
         return current
     exact = load(data_root=data_root, target_date=target_date)
-    if exact is not None and not (exact.get('winrate_selection') and not exact.get('strategy_activation')):
+    if (exact is not None and (exact.get('continuous_reversal') or {}).get('schema')!='continuous_reversal_policy_v2'
+            and not (exact.get('winrate_selection') and not exact.get('strategy_activation'))):
         return exact
     paths = sorted(
         p
@@ -702,6 +725,8 @@ def load_effective(*, data_root: Path, target_date: str) -> dict | None:
     )
     for path in reversed(paths):
         prior = load(data_root=data_root, target_date=path.stem[7:])
+        if (prior or {}).get('continuous_reversal',{}).get('schema')=='continuous_reversal_policy_v2':
+            continue
         if prior is not None and not (prior.get('winrate_selection') and not prior.get('strategy_activation')):
             return prior
     return None
@@ -2467,7 +2492,7 @@ def _load_current_uncached(data_root: Path, target_date: str) -> dict | None:
     if not path.exists():
         return None
     receipt = _read(path)
-    if receipt.get('schema')=='continuous_reversal_current_v1':
+    if receipt.get('schema') in {'continuous_reversal_current_v1','continuous_reversal_current_v2'}:
         if receipt.get('receipt_sha256')!=digest({k:v for k,v in receipt.items() if k!='receipt_sha256'}):
             raise ValueError('continuous_reversal_current_hash_invalid')
         effective=datetime.fromisoformat(receipt['effective_from'])

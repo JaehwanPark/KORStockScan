@@ -408,3 +408,61 @@ def test_prepared_verifier_preserves_original_receipt_and_checks_sources(fixture
     assert result["actual_pid_consumed"] is False
     monkeypatch.setattr(readiness, "_source_receipts", lambda *args, **kwargs: {"source_proof": "changed"})
     assert readiness.verify_prepared(DAY, now=NOW)["status"] == "fail"
+
+
+def test_main_policy_activation_requires_actual_code_pid_and_new_authority(fixture,monkeypatch):
+ _,_,_,prepare=fixture
+ prepare();handoff.consume(DAY,pid=2,now=NOW)
+ from src.engine.scalping import continuous_reversal_policy_v2 as policy
+ calls=[]
+ monkeypatch.setattr(policy,'activate',lambda *args,**kwargs:calls.append(kwargs) or dict(status='activated'))
+ with pytest.raises(ValueError,match='explicit_authority'):
+  handoff.activate_main_v2(DAY,pid=2,confirm=handoff.CONFIRM,now=NOW)
+ assert not calls
+ with pytest.raises(ValueError,match='pid_release'):
+  handoff.activate_main_v2(DAY,pid=1,confirm='APPROVED_INTRADAY_MAIN_POLICY_ACTIVATION',now=NOW)
+ assert not calls
+ result=handoff.activate_main_v2(DAY,pid=2,confirm='APPROVED_INTRADAY_MAIN_POLICY_ACTIVATION',now=NOW)
+ assert result['status']=='pass' and result['actual_policy_pid_consumption'] is False
+ assert calls[0]['intraday_evidence']['pid_identity']['pid']==2
+
+@pytest.mark.parametrize('damage', [None, 'git_bytes', 'snapshot'])
+def test_authorized_intraday_historical_checklist_is_exact_git_bound_snapshot(fixture, monkeypatch, damage):
+    data, previous, _, _ = fixture
+    source_day='2026-10-01'
+    original=b'original verified checklist\n'
+    checklist=data.parent/'docs/checklists'/f'{DAY}-stage2-todo-checklist.md'
+    checklist.parent.mkdir(parents=True); checklist.write_text('current work added\n')
+    strict=data/'strict.json'
+    _json(strict, {'checklist_handoff':{'path':str(checklist)},
+                  'generation_binding':{'checklist_sha256':__import__('hashlib').sha256(original).hexdigest()}})
+    controller=data/'report/postclose_done_controller'/f'postclose_done_controller_{source_day}.json'
+    summary=data/'report/runtime_approval_summary'/f'runtime_approval_summary_{source_day}.json'
+    _json(controller, {'verification_attempt_path':str(strict)});_json(summary, {'date':source_day})
+    index_file=data/'runtime/policy_bootstrap/prepared'/DAY/'latest.json'
+    index=handoff._read(index_file);receipt=Path(index['receipt_path'])
+    policies=[{'family':'main','path':'/unchanged.json','sha256':'d'*64}]
+    _json(receipt, {'schema':'next_preopen_readiness_v1','status':'prepared_verified','target_date':DAY,
+                   'source_date':source_day,'actual_pid_consumed':False,'policy_receipts':policies})
+    _json(index_file, {'receipt_path':str(receipt),'receipt_sha256':handoff._sha(receipt)})
+    def output(command, **kwargs):
+        if 'show' in command:return b'wrong' if damage=='git_bytes' else original
+        return OLD+'\n' if 'rev-parse' in command else ''
+    monkeypatch.setattr(handoff.subprocess,'check_output',output)
+    def source(*args, **kwargs):
+        assert kwargs['generation_only'] is True
+        assert Path(kwargs['checklist_snapshot']).read_bytes()==original
+        return {'controller_path':str(controller),'controller_sha256':handoff._sha(controller),
+                'summary_path':str(summary),'summary_sha256':handoff._sha(summary),'policy_receipts':policies}
+    monkeypatch.setattr(readiness,'_source_receipts',source)
+    if damage=='git_bytes':
+        with pytest.raises(ValueError,match='git_generation_missing'):
+            handoff.prepare(DAY,old_pid=1,previous_root=previous,confirm=handoff.CONFIRM,now=NOW,reseal_postclose_source=True)
+        return
+    result=handoff.prepare(DAY,old_pid=1,previous_root=previous,confirm=handoff.CONFIRM,now=NOW,reseal_postclose_source=True)
+    assert result['status']=='pass'
+    snap=Path(result['handoff']['postclose_source_reseal']['historical_checklist']['path'])
+    if damage=='snapshot':
+        snap.write_text('changed')
+        assert handoff.verify(DAY,NEW,now=NOW)['status']=='fail'
+    assert checklist.read_text()=='current work added\n'

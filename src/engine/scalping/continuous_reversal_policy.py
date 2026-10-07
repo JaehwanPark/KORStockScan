@@ -15,6 +15,9 @@ KST=ZoneInfo('Asia/Seoul')
 
 
 def validate_family(family):
+    if isinstance(family,dict) and family.get('schema')=='continuous_reversal_policy_v2':
+        from src.engine.scalping.continuous_reversal_policy_v2 import validate_family as validate_v2
+        return validate_v2(family)
     if (not isinstance(family,dict) or family.get('schema')!=SCHEMA
         or family.get('kernel_version')!=kernel.VERSION
         or family.get('auxiliary_version')!=PRODUCTION_VERSION
@@ -121,6 +124,9 @@ def publish(data_root,day,publication,machine,auxiliary):
 
 
 def validate_sources(bundle,data_root):
+    if bundle.get('continuous_reversal',{}).get('schema')=='continuous_reversal_policy_v2':
+        from src.engine.scalping.continuous_reversal_policy_v2 import validate_sources as validate_v2
+        return validate_v2(bundle,data_root)
     from src.engine.scalping import mechanistic_entry_runtime_policy as native
     family=bundle['continuous_reversal'];validate_family(family)
     native._signature(Path(kernel.__file__))
@@ -167,6 +173,9 @@ def validate_sources(bundle,data_root):
 
 
 def assess(family,snapshot,*,symbol,session):
+    if family.get('schema')=='continuous_reversal_policy_v2':
+        from src.engine.scalping.continuous_reversal_policy_v2 import assess as assess_v2
+        return assess_v2(family,snapshot,symbol=symbol,session=session)
     validate_family(family)
     result=dict(schema='mechanistic_entry_policy_decision_v1',action='BLOCK',reason='no_current_first_uptick',
         policy_version=kernel.VERSION,primary_decision_owner='mechanistic_entry_adjudicator',
@@ -197,14 +206,29 @@ def compose(response,policy):
     assessment=policy['continuous_reversal_assessment']
     action=assessment['action'];inp=policy.get('continuous_reversal_input')
     arm=policy.get('continuous_reversal_arm')
-    errors=validate_response(response,inp,complete_source_only=arm==ARMS[-1]) if action=='ENTER_NOW' else []
+    phase=assessment.get('decision_phase','FIRST_UPTICK')
+    if assessment.get('policy_version')=='continuous_reversal_policy_v2' and action=='ENTER_NOW':
+        from src.engine.scalping.reversal_auxiliary_phases import validate_response as validate_phase
+        errors=validate_phase(response,inp,arm=arm,phase=phase)
+        from src.engine.scalping.continuous_reversal_branches import validate_claim
+        try:
+            from src.engine.scalping.mechanistic_entry_runtime_policy import load_effective
+            from src.utils.constants import DATA_DIR
+            active=load_effective(data_root=DATA_DIR,target_date=datetime.now(KST).date().isoformat())
+            if not active or active['bundle_sha256']!=policy['machine_bundle_sha256']:
+                raise ValueError('reversal_policy_changed_after_provider')
+            validate_claim(policy.get('continuous_reversal_claim'),assessment['family_sha256'],now=__import__('time').time())
+        except (ValueError,OSError,KeyError,TypeError) as exc:
+            errors.append(str(exc))
+    else:
+        errors=validate_response(response,inp,complete_source_only=arm==ARMS[-1]) if action=='ENTER_NOW' else []
     verdict=response.get('risk_verdict') if isinstance(response,dict) else None
     passed=action=='ENTER_NOW' and not errors and verdict=='PASS'
     final='BUY' if passed else 'DROP' if action=='BLOCK' or (not errors and verdict=='VETO') else 'WAIT'
     return dict(action=final,action_v2=final,score=0,reason=assessment['reason'] if action!='ENTER_NOW' else 'continuous_reversal_ai_'+str(verdict or 'invalid').lower(),
         entry_primary_decision_owner='mechanistic_entry_adjudicator',entry_ai_role='auxiliary_risk_screen_pass_veto_no_promotion',
         entry_decision_role_contract=dict(MECHANISTIC_PRIMARY_ROLE_CONTRACT),entry_mechanistic_action=action,
-        entry_mechanistic_policy_decision=assessment,entry_mechanistic_policy_version=kernel.VERSION,
+        entry_mechanistic_policy_decision=assessment,entry_mechanistic_policy_version=assessment.get('policy_version',kernel.VERSION),
         entry_mechanistic_policy_sha256=assessment.get('machine_component_sha256'),
         entry_ai_raw_risk_verdict=verdict,entry_ai_risk_verdict=verdict,entry_ai_advisory_verdict=verdict,
         entry_ai_risk_codes=response.get('risk_codes',[]) if isinstance(response,dict) else [],
@@ -217,6 +241,10 @@ def compose(response,policy):
         entry_machine_pass_submit_candidate=passed,entry_probe_intent=False,entry_recheck_intent=final=='WAIT',
         machine_bundle_sha256=policy['machine_bundle_sha256'],continuous_reversal_event_id=assessment.get('event_id'),
         continuous_reversal_cell_key=assessment.get('cell_key'),continuous_reversal_arm=arm,
+        continuous_reversal_signal_id=assessment.get('signal_id'),
+        continuous_reversal_primary_branch=assessment.get('primary_branch'),
+        continuous_reversal_matched_branches=assessment.get('matched_branches'),
+        continuous_reversal_phase=phase,
         entry_setup_source_quality='price_and_entry_quote_valid' if inp else 'not_evaluated',
         provider_called=action=='ENTER_NOW',entry_composed_action=final,continuous_reversal_applied=True,
         decision_quality_contract_status='pass' if not errors else 'rejected',
@@ -236,8 +264,13 @@ def direct_handoff(data_root,day,*,effective_date=None,publication_date=None):
     if family['source_date']!=day or family['publication_date']!=publication:
         raise ValueError('continuous_reversal_source_date_mismatch')
     out=directory(data_root,day)
+    if family.get('schema')=='continuous_reversal_policy_v2':
+        # Initial intraday research and daily reports have independent owners.
+        # Handoff reads the issued native immutable component snapshots.
+        out=native.root(Path(data_root))/'sources'
     for name in ['machine','auxiliary']:
-        report=json.loads((out/(name+'.json')).read_text())
+        path=out/(f"reversal-{family[name+'_report_sha256']}.json" if family.get('schema')=='continuous_reversal_policy_v2' else name+'.json')
+        report=json.loads(path.read_text())
         if report['artifact_content_sha256']!=family[name+'_report_sha256'] or digest(
             {k:v for k,v in report.items() if k!='artifact_content_sha256'})!=report['artifact_content_sha256']:
             raise ValueError('continuous_reversal_latest_source_mismatch')
@@ -266,6 +299,10 @@ def scoped_verification(data_root,day,*,effective_date=None,publication_date=Non
 
 
 def activate(data_root,target_date,*,now=None):
+    candidate=Path(data_root)/'runtime/mechanistic_entry_policy/candidates'/f'policy_{target_date}.json'
+    if candidate.is_file():
+        from src.engine.scalping.continuous_reversal_policy_v2 import activate as activate_v2
+        return activate_v2(data_root,target_date,now=now)
     from src.engine.scalping import mechanistic_entry_runtime_policy as native
     current=(now or datetime.now(KST)).astimezone(KST)
     if current.date().isoformat()!=target_date:

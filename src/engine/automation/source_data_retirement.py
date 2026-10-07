@@ -11,12 +11,14 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import stat
 from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 SCHEMA = "file_source_retirement_manifest_v1"
+ADDITIONAL_SCHEMA = "file_source_retirement_manifest_v2"
 CUTOFF = "2026-09-01"
 WORKSPACE = Path("/home/ubuntu/KORStockScan")
 RAW_FAMILIES = {
@@ -78,7 +80,70 @@ def _raw_family(path):
     raise ValueError("not_allowlisted_raw_family")
 
 
-def _validate_entry(entry, protected):
+def _validate_additional(entry, path):
+    """Typed exceptions for reviewed unused copies; never a global date purge."""
+    relative=path.relative_to(WORKSPACE).as_posix()
+    proof=entry["period_evidence"]
+    kind=entry.get("kind")
+    if proof.get("mode")!="unused_file_consumer_census" or not proof.get("reader_scope_verified"):
+        raise ValueError("additional_consumer_census_missing")
+    evidence=entry.get('consumer_evidence')
+    if not isinstance(evidence,dict) or not evidence.get('readers') or not evidence.get('receipts'):
+        raise ValueError('additional_reader_receipts_missing')
+    if kind=="unused_raw_exclusion_backup":
+        if not relative.startswith("data/source_quality/raw_row_exclusion/") or not path.name.endswith(".jsonl.gz"):
+            raise ValueError("additional_backup_family_invalid")
+        manifest=Path(proof["applied_manifest_path"])
+        if file_hash(manifest)!=proof["applied_manifest_sha256"]:
+            raise ValueError("additional_applied_manifest_changed")
+        value=json.loads(manifest.read_text())
+        if value.get("backup_path")!=str(path) or not (value.get("raw_mutation_applied") is True or value.get("application_state")=="applied"):
+            raise ValueError("additional_backup_not_completed")
+    elif kind=="out_of_window_parquet":
+        if not relative.startswith("data/analytics/parquet/") or path.suffix!=".parquet":
+            raise ValueError("additional_parquet_family_invalid")
+        partition=path.parent.name.removeprefix("date=")
+        if path.parents[1].name not in {'pipeline_events','post_sell','system_metric_samples'}:
+            raise ValueError('additional_parquet_dataset_invalid')
+        if path.parent.name!="date="+partition or not "2026-09-01"<=partition<"2026-09-29":
+            raise ValueError("additional_parquet_partition_invalid")
+        if date.fromisoformat(partition)>=date.fromisoformat(proof["earliest_required_date"]):
+            raise ValueError("additional_parquet_required_window_overlap")
+        for reader in proof["selected_consumer_readers"]:
+            if file_hash(reader["path"])!=reader["sha256"]:
+                raise ValueError("additional_selected_reader_changed")
+    elif kind in {"retired_threshold_snapshot","retired_sentinel_copy"}:
+        family="data/threshold_cycle/snapshots/" if kind=="retired_threshold_snapshot" else "data/runtime/sentinel_event_cache/"
+        if not relative.startswith(family) or not path.name.endswith((".jsonl",".jsonl.gz")):
+            raise ValueError("additional_copy_family_invalid")
+        retired=date.fromisoformat(proof["source_date"])
+        dates=re.findall(r'\d{4}-\d{2}-\d{2}',path.name)
+        if dates!=[retired.isoformat()]:raise ValueError('additional_copy_filename_date_conflict')
+        if not date(2026,9,1)<=retired<date(2026,9,29) or not proof["required_dates"]:
+            raise ValueError("additional_copy_date_invalid")
+        if any(retired==date.fromisoformat(d) for d in proof["required_dates"]):
+            raise ValueError("additional_copy_required_date_overlap")
+    elif kind=='retired_mixed_widget_archive':
+        if relative!='tmp/widget-retirement-execution-20261006/widget-dedicated-data-before.tar.gz':
+            raise ValueError('additional_mixed_archive_path_invalid')
+        receipt=Path(proof['preserved_nonraw_receipt'])
+        if file_hash(receipt)!=proof['preserved_nonraw_receipt_sha256']:raise ValueError('additional_nonraw_receipt_changed')
+        value=json.loads(receipt.read_text())
+        if (value.get('schema')!='file_source_archive_nonraw_preservation_v1' or value.get('source_archive_sha256')!=entry['sha256']
+                or value.get('content_sha256')!=digest({k:v for k,v in value.items() if k!='content_sha256'})
+                or value.get('complete') is not True or value.get('raw_backup_created') is not False
+                or value.get('unclassified_members') or value.get('member_byte_identity_verified')!=len(value.get('preserved_files',[]))+len(value.get('retired_raw_members',[]))
+                or not value.get('preserved_files') or not value.get('retired_raw_members')):
+            raise ValueError('additional_nonraw_preservation_incomplete')
+        if any(not r['member'].startswith('data/runtime/widget_market_response_cache/') for r in value['retired_raw_members']):
+            raise ValueError('additional_archive_raw_family_invalid')
+        for record in value['preserved_files']:
+            if file_hash(record['path'])!=record['sha256']:raise ValueError('additional_preserved_nonraw_changed')
+    else:
+        raise ValueError("additional_typed_class_invalid")
+
+
+def _validate_entry(entry, protected, *, schema=SCHEMA):
     path = Path(entry["path"])
     if str(path) != entry["path"] or path.resolve() != path:
         raise ValueError("noncanonical_or_symlink_path")
@@ -86,6 +151,9 @@ def _validate_entry(entry, protected):
         raise ValueError("protected_or_unreleased_reader")
     if not entry.get("consumer_evidence"):
         raise ValueError("consumer_evidence_missing")
+    if schema==ADDITIONAL_SCHEMA:
+        _validate_additional(entry,path)
+        return path
     proof = entry["period_evidence"]
     if entry.get("kind") == "retired_archive":
         archive_root = WORKSPACE.parent / "KORStockScan-storage-archives"
@@ -171,20 +239,24 @@ def _run(manifest_path, journal_path, *, apply=False):
     manifest_bytes = manifest_path.read_bytes()
     value = json.loads(manifest_bytes)
     seal = value.pop("content_sha256", None)
-    if (value.get("schema") != SCHEMA or value.get("cutoff_exclusive") != CUTOFF
+    schema=value.get("schema")
+    if (schema not in {SCHEMA,ADDITIONAL_SCHEMA}
+            or (schema==SCHEMA and value.get("cutoff_exclusive") != CUTOFF)
+            or (schema==ADDITIONAL_SCHEMA and value.get("selection")!="explicit_unused_file_inventory_no_global_cutoff")
             or seal != digest(value)):
         raise ValueError("manifest_contract_invalid")
     protected = value["protected_files"]
     verify_protected(protected)
     entries = value["candidates"]
-    paths = [_validate_entry(entry, protected) for entry in entries]
+    paths = [_validate_entry(entry,protected) if schema==SCHEMA else
+             _validate_entry(entry,protected,schema=schema) for entry in entries]
     if len(set(paths)) != len(paths):
         raise ValueError("duplicate_candidate_path")
     reader_hashes = {}
     for entry in entries:
         evidence = entry["consumer_evidence"]
         if isinstance(evidence, dict):
-            for reader in evidence.get("readers", []):
+            for reader in evidence.get("readers", [])+evidence.get("receipts",[]):
                 path, sha = reader["path"], reader["sha256"]
                 if path in reader_hashes and reader_hashes[path] != sha:
                     raise ValueError("conflicting_consumer_receipts")

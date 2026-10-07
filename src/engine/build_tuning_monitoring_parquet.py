@@ -456,6 +456,7 @@ def process_single_date(
     files = list_jsonl_files(dataset, target_date)
     if not files:
         clear_parquet_partition(dataset, target_date)
+        _write_empty_partition_receipt(dataset,target_date,files,0)
         logger.info("%s %s: 처리할 파일 없음", dataset, target_date)
         return 0, 0
     logger.info("%s %s: %d개 파일 처리 시작", dataset, target_date, len(files))
@@ -480,6 +481,7 @@ def process_single_date(
     logger.info("읽은 총 행: %d", total_lines)
     if not all_events:
         clear_parquet_partition(dataset, target_date)
+        _write_empty_partition_receipt(dataset,target_date,files,total_lines)
         return total_lines, 0
     else:
         df = convert_to_dataframe(all_events, dataset)
@@ -487,9 +489,21 @@ def process_single_date(
         df = deduplicate_by_event_id(df)
     if df.empty:
         clear_parquet_partition(dataset, target_date)
+        _write_empty_partition_receipt(dataset,target_date,files,total_lines)
         return total_lines, 0
     written = write_parquet_partition(df, dataset, target_date)
     return total_lines, written
+
+
+def _write_empty_partition_receipt(dataset,target_date,files,read_rows):
+    """post_sell is emitted on outcomes, unlike mandatory pipeline telemetry."""
+    if dataset!='post_sell':return
+    from src.engine.scalping.continuous_reversal_postclose import seal,file_hash,write
+    path=ANALYTICS_ROOT/dataset/f'date={target_date.isoformat()}'/'source_receipt.json'
+    write(path,seal(dict(schema='tuning_parquet_empty_source_v1',dataset=dataset,
+                         target_date=target_date.isoformat(),status='valid_empty',written_rows=0,read_rows=read_rows,
+                         reason='no_post_sell_emissions' if not files else 'no_target_date_rows',
+                         source_files=[dict(path=str(p.resolve()),sha256=file_hash(p)) for p in files])))
 
 
 def backfill_date_range(

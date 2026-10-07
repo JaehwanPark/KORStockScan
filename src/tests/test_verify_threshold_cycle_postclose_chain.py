@@ -290,6 +290,22 @@ def test_whole_chain_off_receipts_recover_with_new_checklist_and_strict(monkeypa
         old_attempt, target, require_whole_native_chain=True, generation_only=True
     ) == []
 
+    checklist_path=Path(first['checklist_handoff']['path'])
+    original_bytes=checklist_path.read_bytes()
+    snapshot=tmp_path/'historical-checklist.md';snapshot.write_bytes(original_bytes)
+    checklist_path.write_bytes(original_bytes+b'\ncurrent authorized intraday work\n')
+    assert 'strict_checklist_generation_stale' in mod.current_strict_receipt_issues(
+        old_attempt,target,require_whole_native_chain=True,generation_only=True)
+    assert mod.current_strict_receipt_issues(old_attempt,target,require_whole_native_chain=True,
+        generation_only=True,checklist_snapshot=snapshot)==[]
+    assert mod.current_strict_receipt_issues(old_attempt,target,require_whole_native_chain=True,
+        checklist_snapshot=snapshot)==['strict_historical_checklist_scope_invalid']
+    snapshot.write_text('wrong generation')
+    assert 'strict_checklist_generation_stale' in mod.current_strict_receipt_issues(
+        old_attempt,target,require_whole_native_chain=True,generation_only=True,checklist_snapshot=snapshot)
+    snapshot.write_bytes(original_bytes)
+    checklist_path.write_bytes(original_bytes)
+
     capacity = handoff.stage_path(mod.REPORT_DIR, target, "research_capacity")
     handoff._stage_write(capacity, {
         "schema": handoff.STAGE_SCHEMA, "stage_id": "research_capacity",
