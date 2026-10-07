@@ -27,3 +27,15 @@
 기계/보조 12셀·연구 kernel/보조 계약·AI TTL/CAUTION·운영자 veto·주문/수량/자본/custody guard를 변경하지 않는다. current checklist·EOD·기존 정책/PREOPEN을 다시 발행하지 않는다. 단발 삭제 CLI는 cron·봇·장후 호출과 연결되지 않아 예약 자동화/정책 문서의 실행 규칙을 변경하지 않는다.
 
 최종 불변 릴리스 검증을 통과한 동일 작업본을 커밋·통합 배포하고, 기존 native intraday handoff와 정상 재기동으로 현재 PID 소비를 검증한다. 새 전략 적용·주문·체결·승률 개선은 이 코드 통합의 완료 조건 또는 결과로 주장하지 않는다. 배포·PID·자연 수신·남은 경고는 아래 실제 완료 증거에 기록한다.
+
+## 통합 배포·재기동 완료
+
+- 전체 검토 대상 46개 경로를 `940101c82006ac44a05f3a5fdd2a374afccf65c0`에 커밋하고 `integrated-workspace-20261007-v1` 불변 릴리스로 배포했다. 실제 불변 릴리스에서 관련 **213개 PASS**, compile·wrapper 문법·source clean·실제 dated loader·기계/보조 12셀 검증 PASS다.
+- `2026-10-07T11:23:42+09:00` 정상 재기동 완료, 새 Main PID **823272**. native bootstrap findings=[], intraday handoff/consumed PASS, selected root와 PID cwd가 일치한다. 기존 186개 episode pin 검증 PASS이며 별도 episode service는 재기동하지 않았다.
+- 새 PID의 상시감시 005930·034020·403870·196170·036930 5종목 WS 실수신과 자연 machine capture·동일 bundle 소비를 확인했다. 관측 기준 시각은 `2026-10-07T11:25:46.142022+09:00`다. 새 진입·주문·체결·후행 성과는 이 통합의 완료 근거로 요구하거나 합성하지 않는다. 재기동 직후 반전 거래량의 120초 warmup 의미도 유지한다.
+- 보호 목록은 승인된 selector/PID attestation 1개만 변경됐고 3,100개 원 SHA는 유지됐다. 기존 current checklist·EOD·정책·봉인된 준비 입력은 유지했다. 추가 raw 삭제 및 새 다중 정책 활성화는 실행하지 않았다.
+- 전체 감시기의 기존 `episode_current_pid_source_not_observed` 및 전일 장후 `recovered_late` 경고는 별도 잔여 상태다. 본 통합의 검토 범위 내 미해결 결함 0과 전 시스템 경고 0을 혼동하지 않는다.
+
+[실제 배포·PID·보존 검증](../../tmp/integrated-uncommitted-review-20261007/deployment-verify.json), [새 PID 자연 관측](../../tmp/integrated-uncommitted-review-20261007/natural-monitor.json), [기존 경고 관측](../../tmp/integrated-uncommitted-review-20261007/monitor-warnings.json), [최종 검토 파일](../../tmp/integrated-uncommitted-review-20261007/reviewed-files.json).
+
+이 완료 기록은 별도의 문서 커밋으로 남긴다. 실행 코드·선택 릴리스·정책은 위 배포 commit을 사용한다.
