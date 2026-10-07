@@ -17,7 +17,8 @@ def claim_snapshot_with_receipt(*args, **kwargs):
     Extra source metadata does not change the native token, snapshot or guard.
     Registration and its copy share the ingestion lock; no disk or API I/O.
     """
-    from src.engine.scalping import continuous_reversal_branches as B
+    from src.engine.scalping.reversal_registered_runtime import backend
+    B = backend()
     with B._LOCK:
         claim = B.claim_snapshot(*args, **kwargs)
         if claim:
@@ -68,7 +69,8 @@ def validate_claim_with_receipt(claim, family_sha256, *, now,
     decision clock for the unchanged guard and separately timestamp the state
     read: ingestion can advance while the caller waits to acquire this lock.
     """
-    from src.engine.scalping import continuous_reversal_branches as B
+    from src.engine.scalping.reversal_registered_runtime import backend
+    B = backend(claim)
 
     with B._LOCK:
         try:
@@ -136,15 +138,23 @@ def project(snapshot, *, symbol, venue, session, now, item, envelope=None):
     event, _ = snapshot
     market = K.market_bucket(session)
     key = (symbol, venue, item, market, datetime.fromtimestamp(now, K.KST).date())
-    with K._LOCK:
-        state = K._STATES.get(key)
-        if (state is None or state.turn is None
-                or state.turn['event_id'] != event['event_id']):
+    from src.engine.scalping import reversal_registered_runtime as registered
+    native=registered if registered._FAMILY is not None else K
+    if native is registered:
+        key=key[:4]+(key[4].isoformat(),)
+    with native._LOCK:
+        state = native._STATES.get(key)
+        if native is registered:
+            state=state.legacy if state else None
+            exact=state and any(r[1]==event.get('native_epoch') and r[2]==event.get('native_sequence') for r in state.rows)
+        else:
+            exact=state and state.turn and state.turn['event_id']==event['event_id']
+        if not exact:
             return {'status': 'not_observed', 'reason': 'reversal_revision_changed'}
         start = state.segment_start
         # Native rows are append-only values; retain references briefly, then
         # compute diagnostics outside the ingestion lock.
-        rows = list(state.rows)
+        rows = [r for r in state.rows if r[0] <= event['epoch']]
     t = event['epoch']
     elapsed = max(0., t-start)
     reset = 'initial_observation_or_process_restart'

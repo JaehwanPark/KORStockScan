@@ -1329,14 +1329,23 @@ def _stage_output_issues(report_dir, day, stage):
         name='machine' if stage=='main_machine_policy' else 'auxiliary'
         path=Path(report_dir)/'continuous_reversal'/day/(name+'.json')
         value=_load_json(path)
-        if (value.get('schema')!=SCHEMA or value.get('source_date')!=day or value.get('status')!='completed'
+        from src.engine.scalping.continuous_reversal_registered_postclose import SCHEMA as registered_schema
+        from src.engine.scalping.reversal_registered_catalog import cells as registered_cells
+        schema=value.get('schema')
+        expected=registered_cells() if schema==registered_schema else expected_cells()
+        if (schema not in {SCHEMA,registered_schema} or value.get('source_date')!=day or value.get('status') not in {'completed','completed_with_scope_carry'}
             or value.get('artifact_content_sha256')!=digest({k:v for k,v in value.items() if k!='artifact_content_sha256'})
-            or {c.get('key') for c in value.get('cells',[])}!=set(expected_cells())):
+            or {c.get('key') for c in value.get('cells',[])}!=set(expected)):
             return [f'{stage}:continuous_reversal_output_invalid']
+        if schema==registered_schema:
+            from src.engine.scalping.reversal_registered_catalog import ROUTES
+            if len(value['cells'])!=48 or any(set(c.get('routes',{}))!=set(ROUTES[c['key'].split('|')[1]]) for c in value['cells']):
+                return [f'{stage}:continuous_reversal_route_output_invalid']
         for label,output in stage_artifacts(report_dir,day,stage).items():
             if label=='reversal_actual_responses':continue
             current=_load_json(output)
-            if current.get('schema')!=SCHEMA or current.get('source_date')!=day or current.get('artifact_content_sha256')!=digest(
+            expected_schema=SCHEMA if label=='reversal_source_manifest' else schema
+            if current.get('schema')!=expected_schema or current.get('source_date')!=day or current.get('artifact_content_sha256')!=digest(
                 {k:v for k,v in current.items() if k!='artifact_content_sha256'}):
                 errors.append(f'{stage}:continuous_reversal_compatibility_output_invalid')
         if stage=='main_auxiliary_policy':
@@ -1609,7 +1618,8 @@ def _stage_code(stage, commands, project, *, dispatcher_path=None,
             paths[name] = project / f'src/engine/scalping/{name}.py'
     if stage in {'main_machine_policy','main_auxiliary_policy'}:
         for name in ('continuous_reversal','continuous_reversal_source','continuous_reversal_policy','continuous_reversal_postclose','reversal_auxiliary_contract',
-                     'continuous_reversal_branches','continuous_reversal_branch_postclose','continuous_reversal_policy_v2','reversal_auxiliary_phases'):
+                     'continuous_reversal_branches','continuous_reversal_branch_postclose','continuous_reversal_policy_v2','reversal_auxiliary_phases','reversal_registered_catalog','reversal_registered_runtime',
+                     'continuous_reversal_policy_v3','continuous_reversal_registered_postclose'):
             paths[name]=project/f'src/engine/scalping/{name}.py'
     return _stage_digest(_stage_sources(paths))
 
@@ -1746,6 +1756,7 @@ def run_stage(stage, day, *, report_dir, project, publication=None, effective=No
             value.update(status='running', heartbeat_at=now()); _stage_write(path, value)
             env = {**os.environ, 'PYTHONPATH':str(project), 'POSTCLOSE_STAGE_WORKER':'1', 'POSTCLOSE_SOURCE_DATE':day,
                 'POSTCLOSE_POLICY_PUBLICATION_DATE':publication,
+                'POSTCLOSE_STAGE_DEADLINE_EPOCH':str(time.time()+max(0,deadline-time.monotonic())),
                 'POSTCLOSE_PREPARED_EFFECTIVE_DATE':value.get('prepared_effective_date', effective)}
             rc = 0
             child = None
@@ -1813,7 +1824,7 @@ def run_stage(stage, day, *, report_dir, project, publication=None, effective=No
                     value['automatic_policy_disposition'] = terminal.get('disposition')
                     value['designated_bundle_sha256'] = staging.get('bundle_sha256')
                 value['policy_sha256'] = terminal.get('policy_sha256')
-                if terminal.get('schema')=='continuous_reversal_research_v1':
+                if terminal.get('schema') in {'continuous_reversal_research_v1','continuous_reversal_registered_postclose_v1'}:
                     value['policy_disposition']='continuous_reversal_selected'
                     value['selection_metric']='cumulative_raw_win_fraction'
                     value['machine_report_sha256']=terminal.get('report_sha256')

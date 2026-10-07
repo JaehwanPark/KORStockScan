@@ -50145,16 +50145,17 @@ def _resolve_watching_state_change_refresh(
             selected=load_effective(data_root=DATA_DIR,target_date=datetime.fromtimestamp(now_ts,_KST).date().isoformat())
             family=(selected or {}).get('continuous_reversal')
             claim=None
-            if family and family.get('schema')=='continuous_reversal_policy_v2':
-                from src.engine.scalping.continuous_reversal_branches import restore_session_anchors,configure
+            if family and family.get('schema') in {'continuous_reversal_policy_v2','continuous_reversal_policy_v3'}:
+                from src.engine.scalping.reversal_registered_runtime import configure_bundle
                 from src.engine.scalping.reversal_source_diagnostics import claim_snapshot_with_receipt as claim_snapshot
                 from src.engine.scalping.continuous_reversal_policy_v2 import record_pid_consumption
+                if family['schema']=='continuous_reversal_policy_v3':
+                    from src.engine.scalping.continuous_reversal_policy_v3 import record_pid_consumption
                 record_pid_consumption(DATA_DIR,selected)
-                restore_session_anchors(DATA_DIR,datetime.fromtimestamp(now_ts,_KST).date().isoformat())
-                configure(family['family_sha256'],v2=True)
+                configure_bundle(selected,DATA_DIR,datetime.fromtimestamp(now_ts,_KST).date().isoformat())
                 claim=stock.get('_continuous_reversal_pending_claim')
                 if claim:
-                    from src.engine.scalping.continuous_reversal_branches import validate_claim
+                    from src.engine.scalping.reversal_registered_runtime import validate_any_claim as validate_claim
                     try:validate_claim(claim,family['family_sha256'],now=now_ts)
                     except ValueError:
                         stock.pop('_continuous_reversal_pending_claim',None);claim=None
@@ -63164,7 +63165,7 @@ def _handle_watching_strategy_branch(
                             pending_claim=stock.pop('_continuous_reversal_pending_claim',None)
                             if pending_claim and ai_decision.get('entry_mechanistic_policy_decision'):
                                 stock['_continuous_reversal_last_requested_id']=pending_claim['snapshot'][0]['event_id']
-                                from src.engine.scalping.continuous_reversal_branches import acknowledge
+                                from src.engine.scalping.reversal_registered_runtime import acknowledge_any as acknowledge
                                 acknowledge(pending_claim,status='evaluated')
                         ai_decision.update(pre_ai_ws_refresh_fields)
                         ai_call_executed = True

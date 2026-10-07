@@ -428,6 +428,9 @@ def activate_main_v2(day,*,pid,confirm,now=None):
               'custody_and_order_paths':'existing_native_main_guards_unchanged'}
     if _identity(pid)!=identity:raise ValueError('intraday_main_policy_pid_changed')
     from src.engine.scalping.continuous_reversal_policy_v2 import activate
+    candidate = DATA_DIR/'runtime/mechanistic_entry_policy/candidates'/f'policy_{day}.json'
+    if candidate.is_file() and json.loads(candidate.read_text())['continuous_reversal']['schema']=='continuous_reversal_policy_v3':
+        from src.engine.scalping.continuous_reversal_policy_v3 import activate
     receipt=activate(DATA_DIR,day,now=current,intraday_evidence=evidence)
     return dict(status='pass',activation=receipt,actual_policy_pid_consumption=False)
 

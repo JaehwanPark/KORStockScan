@@ -1309,7 +1309,8 @@ def _reversal_selection_receipt(bundle, data_root):
             or family.get('publication_date') != bundle.get('publication_date')):
         raise ValueError('reversal_selection_date_binding_invalid')
     selections = {}
-    for key, cell in family['machine_cells'].items():
+    expanded = [(key+'|'+route,value) for key,cell in family['machine_cells'].items() for route,value in cell.get('routes',{}).items()] if family['schema']=='continuous_reversal_policy_v3' else list(family['machine_cells'].items())
+    for key, cell in expanded:
         metrics = cell.get('local_metrics')
         selections[key] = dict(
             version=family['selection_metric'], score_contract_valid=True,
@@ -1328,7 +1329,8 @@ def _reversal_observation_receipt(bundle, observation, *, verified_components=No
     from src.engine.scalping.mechanistic_entry_runtime_policy import digest
 
     family = bundle['continuous_reversal']
-    is_v2=family.get('schema')=='continuous_reversal_policy_v2'
+    is_v3=family.get('schema')=='continuous_reversal_policy_v3'
+    is_v2=family.get('schema') in {'continuous_reversal_policy_v2','continuous_reversal_policy_v3'}
     if verified_components is None:
         validate_family(family)
         verified_components = dict(machine=digest(family['machine_cells']),
@@ -1356,7 +1358,7 @@ def _reversal_observation_receipt(bundle, observation, *, verified_components=No
                    ('policy_sha256', 'selector_leaf', 'effective_thresholds'))):
         raise ValueError('effective_policy_receipt_mismatch')
     if (assessment.get('schema') != 'mechanistic_entry_policy_decision_v1'
-            or assessment.get('policy_version') != ('continuous_reversal_policy_v2' if is_v2 else kernel.VERSION)
+            or assessment.get('policy_version') != (family['schema'] if is_v2 else kernel.VERSION)
             or assessment.get('primary_decision_owner') != 'mechanistic_entry_adjudicator'
             or assessment.get('ai_role') != 'auxiliary_risk_screen_pass_veto_no_promotion'):
         raise ValueError('reversal_assessment_contract_invalid')
@@ -1385,7 +1387,7 @@ def _reversal_observation_receipt(bundle, observation, *, verified_components=No
         key = assessment.get('cell_key')
         if is_v2:
             phase=assessment.get('decision_phase')
-            arm=family['auxiliary_cells'][key]['payload']['phase_policies'][phase]['arm'] if key and phase else None
+            arm=(family['auxiliary_cells'][key]['routes'][assessment['route']]['payload']['branch_policies'][assessment['primary_branch']]['arm'] if is_v3 and key and assessment.get('primary_branch') else family['auxiliary_cells'][key]['payload']['phase_policies'][phase]['arm'] if not is_v3 and key and phase else None)
             for field in ('primary_branch','matched_branches','signal_id','branch_definition_sha256'):
                 if native.get(field)!=assessment.get(field):raise ValueError('reversal_branch_receipt_mismatch:'+field)
             if native.get('phase')!=assessment.get('decision_phase','FIRST_UPTICK'):
@@ -1450,13 +1452,18 @@ def _reversal_observation_receipt(bundle, observation, *, verified_components=No
             or event['source_item'].split('_', 1)[0] != symbol):
         raise ValueError('reversal_event_source_invalid')
     key = kernel.cell_key(symbol, session, event['confirmation_price'])
+    if is_v3:
+        from src.engine.scalping.reversal_registered_catalog import cell_key
+        key=cell_key(symbol,session,event['confirmation_price'])
     if is_v2:
         from src.engine.scalping.continuous_reversal_policy_v2 import assess
+        if is_v3:
+            from src.engine.scalping.continuous_reversal_policy_v3 import assess
         replay,_,_,_=assess(family,(event,None),symbol=symbol,session=session,build_request=False)
         for field in ('action','reason','cell_key','event_id','signal_id','matched_branches','branch_states',
                       'primary_branch','decision_phase','auxiliary_arm','auxiliary_event','machine_component_sha256','family_sha256'):
             if assessment.get(field)!=replay.get(field):raise ValueError('reversal_v2_branch_verdict_mismatch:'+field)
-        return family['machine_cells'][key]['payload'],dict(policy_sha256=component,leaf=key)
+        return (family['machine_cells'][key]['routes'][assessment['route']]['payload'] if is_v3 else family['machine_cells'][key]['payload']),dict(policy_sha256=component,leaf=key)
     rule = family['machine_cells'][key]['payload']['rule']
     if (assessment.get('cell_key') != key or assessment.get('rule') != rule
             or assessment.get('machine_component_sha256') != component):

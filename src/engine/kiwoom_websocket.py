@@ -4687,7 +4687,7 @@ class KiwoomWSManager:
                                     if real_type == '0B':
                                         # Consumer of the existing normalized envelope only.
                                         # No broker parsing, provider calls, disk replay or orders.
-                                        from src.engine.scalping.continuous_reversal_branches import observe_normalized
+                                        from src.engine.scalping.reversal_registered_runtime import observe_normalized
                                         from src.engine.scalping.micro_reversion.forward_collector import _session_bucket, _explicit_item_venue
                                         observed_clock = datetime.fromtimestamp(now_update_ts, KST).timetz()
                                         reversal_session = _session_bucket(_explicit_item_venue(realtime_snapshot['item']), observed_clock)

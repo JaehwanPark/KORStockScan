@@ -411,10 +411,11 @@ def _continuous_reversal_result_semantics(root, source_date, component):
         from src.engine.scalping import continuous_reversal_policy as policy
         from src.engine.scalping import mechanistic_entry_runtime_policy as native
         report, report_sha = _semantic_object(report_path)
-        if report.get('schema') != reports.SCHEMA:
+        from src.engine.scalping.continuous_reversal_registered_postclose import SCHEMA as registered_schema
+        if report.get('schema') not in {reports.SCHEMA,registered_schema}:
             raise ValueError('continuous_reversal_report_schema_invalid')
         if (report != reports.seal(report) or report.get('source_date') != source_date
-                or report.get('status') != 'completed'):
+                or report.get('status') not in {'completed','completed_with_scope_carry'}):
             raise ValueError('continuous_reversal_report_hash_or_date_invalid')
         stage_id = 'main_machine_policy' if component == 'machine' else 'main_auxiliary_policy'
         for required in ('main_machine_policy', 'main_auxiliary_policy'):
@@ -443,6 +444,8 @@ def _continuous_reversal_result_semantics(root, source_date, component):
                     artifact=str(report_path), report_sha256=report_sha,
                     selection_metric=handoff['selection_metric'],
                     cells=bundle['continuous_reversal'][component + '_cells'],
+                    comparison_complete=report.get('comparison_complete',not bool(report.get('scope_pending'))),
+                    scope_pending=report.get('scope_pending',[]),
                     native_handoff=handoff, realized_profit_assessed=False,
                     runtime_effect=False, actual_pid_consumed=False)
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:

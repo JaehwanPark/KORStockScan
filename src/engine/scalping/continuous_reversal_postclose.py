@@ -65,7 +65,7 @@ def result_paths(data_root,day,name='provider-results.jsonl'):
     return [p for p in sorted(root.glob('????-??-??/'+name)) if '2026-06-05'<=p.parent.name<=day]
 
 
-def completed_bars(data_root,day):
+def completed_bars(data_root,day,*,snapshot_sink=None):
     """Same-item cached completed bars only; unresolved rows stay excluded."""
     sources=defaultdict(dict);native=set();receipts=[]
     paths=[Path(data_root)/'report'/'machine_completed_price_source'/f'machine_completed_price_source_{day}.json']
@@ -78,7 +78,8 @@ def completed_bars(data_root,day):
         broker=path.name.startswith('machine_completed_price_source_')
         if broker and value.get('artifact_content_sha256')!=digest({k:v for k,v in value.items() if k!='artifact_content_sha256'}):
             continue
-        receipts.append(dict(path=str(path.resolve()),sha256=hashlib.sha256(raw_bytes).hexdigest()))
+        receipt_path=snapshot_sink(path,raw_bytes) if snapshot_sink else path
+        receipts.append(dict(path=str(Path(receipt_path).resolve()),sha256=hashlib.sha256(raw_bytes).hexdigest()))
         for bar in value.get('prices',[]) if broker else value.get('bars',[]):
             if broker:
                 if bar.get('completed_bar_only') is not True or bar.get('source_quality')!='pass_completed_ka10080_bar':continue
@@ -215,6 +216,9 @@ def prepare_research(data_root, day, seed):
 
 
 def machine_report(data_root, day, publication):
+    from src.engine.scalping import continuous_reversal_registered_postclose as registered
+    current=registered.active(data_root,publication)
+    if current:return registered.machine_report(data_root,day,publication,current)
     from src.engine.scalping import continuous_reversal_branch_postclose as branch
     parent=branch.active_v2(data_root,publication)
     if parent:return branch.machine_report(data_root,day,publication,parent)
@@ -318,6 +322,9 @@ def inherit(cells, previous=None):
 
 
 def auxiliary_report(data_root,day,publication,*,publish_policy=True):
+    from src.engine.scalping import continuous_reversal_registered_postclose as registered
+    current=registered.active(data_root,publication)
+    if current:return registered.auxiliary_report(data_root,day,publication,current,publish_policy=publish_policy)
     from src.engine.scalping import continuous_reversal_branch_postclose as branch
     parent=branch.active_v2(data_root,publication)
     if parent:return branch.auxiliary_report(data_root,day,publication,parent,publish_policy=publish_policy)
@@ -471,9 +478,22 @@ def main():
     parser.add_argument('--mode',choices=['machine','auxiliary','calls'],default='machine')
     args=parser.parse_args()
     if args.seed_research:prepare_research(args.data_root,args.date,args.seed_research)
-    if args.mode=='calls':execute_calls(args.data_root,args.date,args.actual_inputs)
+    if args.mode=='calls':
+        from src.engine.scalping import continuous_reversal_registered_postclose as registered
+        if registered.active(args.data_root,args.publication_date or args.date):registered.calls(args.data_root,args.date)
+        else:execute_calls(args.data_root,args.date,args.actual_inputs)
     elif args.mode=='machine':print(json.dumps(machine_report(args.data_root,args.date,args.publication_date or args.date)))
     else:
+        from src.engine.scalping import continuous_reversal_registered_postclose as registered
+        current=registered.active(args.data_root,args.publication_date or args.date)
+        if current:
+            machine=json.loads((registered.directory(args.data_root,args.date)/'machine-comparison.json').read_text())
+            if not args.evaluate_only:
+                registered.prepare_inputs(args.data_root,args.date,machine)
+                deadline=__import__('os').environ.get('POSTCLOSE_STAGE_DEADLINE_EPOCH')
+                registered.calls(args.data_root,args.date,stop_epoch=float(deadline)-120 if deadline else None)
+            print(json.dumps(registered.auxiliary_report(args.data_root,args.date,args.publication_date or args.date,current,publish_policy=not args.evaluate_only)))
+            return 0
         from src.engine.scalping import continuous_reversal_branch_postclose as branch
         parent=branch.active_v2(args.data_root,args.publication_date or args.date)
         if parent:
