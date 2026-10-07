@@ -23,6 +23,7 @@ from src.engine.scalping import reversal_path_runtime as R
 from src.engine.scalping import reversal_auxiliary_contract as V1
 from src.engine.scalping import reversal_operating_auxiliary as UNION
 from src.engine.scalping import reversal_operating_evaluation as A
+from src.engine.scalping import reversal_operating_runtime as LIVE
 from src.engine.scalping import continuous_reversal_policy_v5 as V5
 from src.engine.scalping import continuous_reversal_policy_v4 as V4
 from src.engine.scalping import continuous_reversal_path_postclose as PC
@@ -169,7 +170,7 @@ def machine_report(data_root,day,publication,parent,*,source=None,publish_output
                             else:
                                 run=dict(symbol=symbol,item=item,scope=sid,start=index,end=index,unknown=list(mask[1]));masks.append(run)
                             if ready:
-                                snapshot=state.snapshot(ready[0]);snapshot=subset(snapshot,applicable)
+                                snapshot=LIVE.snapshot(state,ready[0]);snapshot=subset(snapshot,applicable)
                                 if snapshot[0]['branch_signals']:
                                     points.append(dict(index=index,snapshot=snapshot,truth=truth,scope=sid))
                             state.ready.clear();previous=row

@@ -19,6 +19,69 @@ _LOCK = threading.RLock()
 _STATES = {}; _CLAIMS = {}; _FAMILY = None; _GENERATION = None
 
 
+def _latest_features(rows, segment_start):
+    """Exact final element of the native prefix projector, without old outputs.
+
+    Use the same cumulative arrays and subtraction order as build_features;
+    replacing them with rolling sums changes floating-point request bytes.
+    """
+    np=K.np
+    times=np.array([r[0] for r in rows]);starts,_,valid=K.segments(rows)
+    prices=np.array([r[3] if r[3] is not None else np.nan for r in rows])
+    qty=np.array([r[6] if r[6] is not None and r[6]>0 and r[8] else 0 for r in rows])
+    sides=np.array([r[7] for r in rows])
+    cumulative=lambda x:np.concatenate(([0.],np.cumsum(x)))
+    q=cumulative(qty);buy=cumulative(np.where(sides==1,qty,0))
+    bad_qty=cumulative(qty<=0);bad_side=cumulative((qty<=0)|(sides==0))
+    pv=cumulative(np.where(qty>0,qty*np.nan_to_num(prices),0))
+    out={k:None for k in K.FEATURES[:4]};i=len(rows)-1
+    if not valid[i]:return out
+    a=i-9
+    if a>=starts[i]:
+        if bad_side[i+1]==bad_side[a] and q[i+1]>q[a]:out['buy_pressure_10t']=float(100*(buy[i+1]-buy[a])/(q[i+1]-q[a]))
+        out['return_10t_pct']=float(100*(prices[i]/prices[a]-1))
+    epoch=segment_start if starts[i]==0 and segment_start is not None else times[starts[i]]
+    a=int(np.searchsorted(times,times[i]-30))
+    if times[i]-epoch>=30 and a>=starts[i] and bad_side[i+1]==bad_side[a] and q[i+1]>q[a]:
+        out['buy_pressure_30s']=float(100*(buy[i+1]-buy[a])/(q[i+1]-q[a]))
+    a=int(np.searchsorted(times,times[i]-60))
+    if times[i]-epoch>=60 and a>=starts[i] and bad_qty[i+1]==bad_qty[a] and q[i+1]>q[a]:
+        average=(pv[i+1]-pv[a])/(q[i+1]-q[a])
+        out['vs_vwap_60s_pct']=float(100*(prices[i]/average-1))
+    return {k:v if v is not None and math.isfinite(v) else None for k,v in out.items()}
+
+
+def snapshot(state,ready):
+    """Byte-equivalent native snapshot with one common prefix projection.
+
+    Native carried scopes keep their original reader. New operating scopes
+    share final features across the already confirmed, same-tick signals.
+    """
+    event=copy.deepcopy(ready['event']);inputs=copy.deepcopy(ready.get('path_inputs',{}))
+    missing=[bid for bid in event['branch_signals'] if bid not in inputs]
+    if missing:
+        rows=sorted([r[:] for r in state.legacy.rows if r[1]==event['native_epoch']
+            and r[2]<=event['native_sequence'] and r[0]<=event['epoch']],key=lambda r:(r[0],r[1],r[2]))
+        if not rows or rows[-1][0]!=event['epoch']:raise ValueError('operating_snapshot_prefix_missing')
+        features=None;volume=None;t=event['epoch']
+        if t-state.legacy.segment_start>=120:
+            window=[r for r in rows if r[0]>=t-120]
+            if all(r[6] is not None and r[6]>0 for r in window):
+                previous=sum(r[6] for r in window if r[0]<t-60)
+                if previous>0:volume=sum(r[6] for r in window if r[0]>=t-60)/previous
+        for bid in missing:
+            signal=event['branch_signals'][bid];signal.pop('_recent_rows',None)
+            if (signal['epoch']!=t or signal['event_id'].rsplit(':',1)[1]!=str(event['native_sequence'])):
+                raise ValueError('operating_snapshot_signal_tick_conflict')
+            if signal['entry_ask'] is None:inputs[bid]=None;continue
+            if volume is not None:signal['volume_ratio_60s']=volume
+            if features is None:features=_latest_features(rows,state.legacy.segment_start)
+            values=dict(features,**{k:signal[k] for k in K.INPUT_FEATURES[4:]})
+            signal['entry_index']=len(rows)-1
+            inputs[bid]=K.make_input(signal,rows,values)
+    return event,dict(branch_inputs=inputs)
+
+
 def configure(family, data_root, day):
     global _FAMILY, _GENERATION
     from src.engine.scalping.continuous_reversal_policy_v5 import validate_family
@@ -129,7 +192,7 @@ def claim_snapshot(symbol, venue, session, *, now, item, family_sha256):
                     ready_list.append((e['epoch'],e['native_sequence'],key,state,ready))
         for _,_,key,state,ready in sorted(ready_list,key=lambda x:x[:2]):
             ready['claimed'] = True
-            event,source = state.snapshot(ready)
+            event,source = snapshot(state,ready)
             confirmed = sorted(event['branch_signals'])
             _filter_first(event,source,state)
             if not event['branch_signals']:

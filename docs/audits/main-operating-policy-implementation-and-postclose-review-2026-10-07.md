@@ -59,3 +59,9 @@
 - 새 dispatcher의 keyword-only 인자를 기존 AI 초기화/상시감시 호출자가 위치 인자로 전달해 TypeError가 무시될 수 있던 연결을 수정했다. 실제 두 caller AST를 함수 signature에 bind하는 회귀를 추가했다. 동결 v4 및 실행 중 누적 분석의 계약 모듈 bytes는 보존한다.
 - v5의 next_session 후보를 구 intraday v2 활성화로 넘기지 않도록 명시 거부를 추가했다. 정규 PREOPEN 활성화 경로는 그대로 유지한다. 관련 장중 인계 회귀 62 PASS, 후속 consumer/runtime/holding/분할/자동화 통합 395 PASS, compile/diff PASS다.
 - 격리된 5종목 normalized callback 10,000회 부하검증에서 union p99 92.087µs, native p99 26.877µs였다. 실제 provider·주문 호출은 없으며 자연 운영 성능이나 수익 결과를 주장하지 않는다(`callback-benchmark.json`).
+
+## 확인점 투영 성능 보완
+
+v4 배포(`8f015957`)의 immutable 188 PASS 후 재개했으나 코드 의존성이 바뀐 preflight는 기존 기계 reader와 교체할 수 없어 wrapper가 안전하게 보류됐다. 분석 snapshot profiler에서 20개 확인점 3.816초 중 3.758초가 snapshot, 3.082초가 과거 특징 전체 재계산이었다. 단순 콜백 수집 benchmark와 실제 확인점 투영 비용은 별개다.
+
+successor runtime/장후 공통 projector에서 native와 같은 접두·누적 배열·연산 순서로 마지막 특징만 계산하고 같은 tick의 정책들이 공유하도록 보완했다. native v4 코드/정의는 불변이다. 실제 9/22·10/7의 삼성·두산·주성·052690 총 120개 확인점 snapshot bytes가 완전히 같았고, 측정 합계 native 8.888초→successor 0.733초였다. provider/주문 호출 0회. 결손 수량/side/경계/epoch 회귀 포함 24 PASS, 계약·원장·native parity 확장 135 PASS다. 변경 코드 세대의 원천 재계산은 필요하지만 같은 내용 객체와 기존 실제 응답을 삭제/복제하지 않는다. 원 reader를 정상 중단한 후 새 preflight/선택 코드로 재개한다.

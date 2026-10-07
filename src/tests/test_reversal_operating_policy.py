@@ -89,6 +89,40 @@ def test_dispatch_configuration_accepts_existing_runtime_call_signature(monkeypa
                 **{k.arg:None for k in call.keywords})
 
 
+@pytest.mark.parametrize('damage',['none','quantity','side','gap','epoch'])
+def test_final_feature_projection_is_exact_native_prefix(damage):
+    import math
+    values=[row(i,100+math.sin(i/11)) for i in range(420)]
+    if damage=='quantity':values[411][6]=None
+    if damage=='side':values[411][7]=0
+    if damage=='gap':values[400][8]=0
+    if damage=='epoch':
+        for r in values[400:]:r[1]+=1
+    for n in (1,9,10,31,61,121,420):
+        prefix=values[max(0,n-305):n]
+        arrays=PC.K.build_features(prefix,earliest_segment_epoch=values[0][0])
+        expected={k:float(v[-1]) if math.isfinite(v[-1]) else None for k,v in arrays.items()}
+        assert R._latest_features(prefix,values[0][0])==expected
+
+
+def test_shared_operating_snapshot_matches_native_bytes(parent):
+    import math
+    from src.engine.scalping import reversal_path_runtime as native_runtime
+    _,bundle=parent
+    ids=V.wanted(bundle)['samsung|REGULAR|ALL|SOR']
+    values=[row(i,100+math.sin(i/8)) for i in range(650)]
+    state=native_runtime.State(branch_ids=ids,session_anchor=values[0],offline=True)
+    compared=0
+    for r in values:
+        for ready in state.observe(r,symbol='005930',venue='SOR',session='SOR_REGULAR'):
+            expected=state.snapshot(ready)
+            actual=R.snapshot(state,ready)
+            assert S.encode(actual)==S.encode(expected)
+            compared+=1
+        state.ready.clear()
+    assert compared>10
+
+
 def test_contribution_unknown_and_zero_percent_tie():
     points=[dict(opportunity_key='1',outcome='WIN',truth={'a':'TRUE','b':'UNKNOWN'}),
             dict(opportunity_key='2',outcome='FAIL_TIMEOUT',truth={'a':'FALSE','b':'TRUE'})]
