@@ -77,7 +77,11 @@ def test_zero_budget_has_no_transport_and_no_false_winrate(setup):
     # A later evaluation date does not replenish the old observations' budget.
     next_machine=P.seal(dict(m,source_date='2026-10-08',publication_date='2026-10-08'))
     T.prepare(root,'2026-10-08',next_machine,b)
-    assert T.calls(root,'2026-10-08',transport=lambda *a,**kw:pytest.fail('old source reset'))['new_calls']==0
+    later=T.calls(root,'2026-10-08',transport=lambda *a,**kw:pytest.fail('old source reset'))
+    assert later['new_calls']==0
+    # A cached old-date attempt is not a new-date call just because it ran
+    # after midnight. Its original cap still prevents retrying old requests.
+    assert later['call_budget']['used_after']==0
 
 
 def test_sampling_ignores_label_and_excludes_development(setup):

@@ -344,15 +344,19 @@ class Store:
             raise ValueError('comparison_store_activation_invalid')
         return value
 
-    def seed_call_budget(self, generation, budget_key, *, since_epoch):
+    def seed_call_budget(self, generation, budget_key, *, since_epoch, exclude_assigned_prefix=None):
         """Charge retained completed/uncertain attempts once, across restarts."""
         self.db.execute('''INSERT OR IGNORE INTO attempt_budgets
             SELECT DISTINCT a.attempt,? FROM attempts a
             JOIN members m ON m.request_id=a.request_id
             JOIN partition_members pm ON pm.member_id=m.id
             JOIN generation_parts gp ON gp.partition_id=pm.partition_id
-            WHERE gp.generation=? AND a.source='provider' AND a.created>=?''',
-            (budget_key,generation,since_epoch))
+            WHERE gp.generation=? AND a.source='provider' AND a.created>=?
+            AND (? IS NULL OR NOT EXISTS (
+                SELECT 1 FROM attempt_budgets ab WHERE ab.attempt=a.attempt
+                AND substr(ab.budget_key,1,length(?))=? AND ab.budget_key<>?))''',
+            (budget_key,generation,since_epoch,exclude_assigned_prefix,
+             exclude_assigned_prefix,exclude_assigned_prefix,budget_key))
         self.commit()
 
     def budget_used(self, budget_key):

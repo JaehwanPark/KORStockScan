@@ -186,7 +186,8 @@ def calls(data_root, day, *, stop_epoch=None, transport=None):
         validate_campaign(store,c); store.reconcile()
         fence = store.activation()['writer_epoch']; key='postclose_auxiliary:'+day
         store.seed_call_budget(c['artifact_content_sha256'],key,
-            since_epoch=datetime.fromisoformat(day).replace(tzinfo=K.KST).timestamp())
+            since_epoch=datetime.fromisoformat(day).replace(tzinfo=K.KST).timestamp(),
+            exclude_assigned_prefix='postclose_auxiliary:')
         before = store.budget_used(key); origin_keys=set()
         for pair in c['pairs']:
             if pair['outcome']['status'] not in {'WIN','FAIL_STOP','FAIL_TIMEOUT'}:
