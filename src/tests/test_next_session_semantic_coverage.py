@@ -354,7 +354,7 @@ def test_research_preserves_exact_report_bytes_when_native_publisher_moves(tmp_p
 
 
 @pytest.mark.parametrize('defect', ['none', 'prior_date', 'prior_pid', 'prior_policy', 'changed_cwd', 'missing_sequence', 'stale', 'future_clock'])
-@pytest.mark.parametrize('inspection', ['readable', 'permission_denied', 'process_exited'])
+@pytest.mark.parametrize('inspection', ['readable', 'permission_denied', 'process_exited', 'state_publish_race'])
 def test_episode_current_pid_consumption_is_not_inferred_from_unit_configuration(tmp_path, monkeypatch, defect, inspection):
     from src.engine.error_detectors import episode_health
     from src.trading.low_price_two_leg import profiles, policy_runtime, preflight
@@ -385,9 +385,17 @@ def test_episode_current_pid_consumption_is_not_inferred_from_unit_configuration
     timers = tmp_path/'timers'; timers.mkdir()
     (timers/'korstockscan-low-price-two-leg-test-preflight.timer').write_text(
         f'OnCalendar=Mon..Fri *-*-* 09:00:00 Asia/Seoul\nUnit=korstockscan-low-price-two-leg-preflight@{pid}.service\n')
+    def reader(path):
+        if inspection == 'state_publish_race' and path.name.endswith('_state.json'):
+            raise ValueError('semantic_generation_changed_during_read')
+        return detector._semantic_object(path)
     result = episode_health.check(tmp_path, datetime.fromisoformat('2026-10-06T10:00:00+09:00'),
-        target_date='2026-10-06', reader=detector._semantic_object, timer_dir=timers,
+        target_date='2026-10-06', reader=reader, timer_dir=timers,
         states={f'korstockscan-low-price-two-leg@{pid}.service':dict(MainPID='123', ActiveState='active', WorkingDirectory='/reviewed-release')})
+    if inspection == 'state_publish_race':
+        assert result['status']=='unobservable' and result['findings']==[]
+        assert result['actual_pid_consumed'] is False
+        return
     assert result['actual_pid_consumed'] is (defect=='none' and inspection=='readable')
     assert result['status']==('warning' if defect!='none' else
                               'pass' if inspection=='readable' else 'unobservable')

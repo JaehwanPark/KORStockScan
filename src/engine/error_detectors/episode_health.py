@@ -117,6 +117,8 @@ def check(root, now, *, target_date, reader, states=None, timer_dir=Path('/etc/s
             try:
                 state = reader(state_path)[0] if state_path.exists() or state_path.is_symlink() else {}
             except (OSError, ValueError, TypeError, KeyError) as exc:
+                if str(exc) == 'semantic_generation_changed_during_read':
+                    raise
                 row.update(status='source_invalid', error=str(exc), findings=['episode_profile_state_invalid'])
                 continue
             current_state = state.get('trade_date') == target_date
