@@ -76,7 +76,7 @@ def test_native_requests_shared_projection_reuse_and_no_repeat_calls(comparison,
     with S.Store(root) as store:
         assert store.db.execute('SELECT count(*) FROM objects').fetchone()[0] == before
     result=L.calls(PC,root,'2026-10-07',transport=transport)
-    assert result['new_calls']==5 and result['call_limit'] is None
+    assert result['new_calls']==5 and result['call_limit'] == 100
     assert L.calls(PC,root,'2026-10-07',transport=transport)['new_calls']==0
 
 
@@ -330,3 +330,41 @@ def test_publication_freezes_census_before_preparer_can_advance(comparison,monke
     issued=json.loads((L.directory(PC,root,'2026-10-07')/'machine.json').read_text())
     V.validate_sources(V.stage(root,'2026-10-07','2026-10-07',issued,result,
                               target_date='2026-10-08',release_commit='a'*40),root)
+
+
+@pytest.mark.parametrize('uncertain', [False, True])
+def test_daily_budget_persists_retries_generation_and_uncertain(comparison, uncertain):
+    root,_,machine,_=comparison
+    L.prepare_inputs(PC,root,'2026-10-07',machine)
+    sent=[]
+    def send(req, timeout_sec):
+        sent.append(req['paired_replay_id'])
+        if uncertain: raise TimeoutError()
+        return transport(req, timeout_sec)
+    first=L.calls(PC,root,'2026-10-07',transport=send,call_limit=2)
+    assert first['new_calls']==2 and len(sent)==2
+    assert first['call_budget']['used_after']==2
+    assert first['call_budget']['exhausted']
+    assert first['census']['planned']==3
+    assert first['status']=='evaluation_incomplete'
+    changed=P.seal(dict(machine,label_revision=98))
+    L.prepare_inputs(PC,root,'2026-10-07',changed)
+    second=L.calls(PC,root,'2026-10-07',transport=send,call_limit=2)
+    assert second['new_calls']==0 and len(sent)==2
+    assert second['call_budget']['used_before']==2
+    assert second['machine_report_sha256']==changed['artifact_content_sha256']
+
+
+def test_zero_budget_preserves_full_census_without_calls(comparison):
+    root,_,machine,_=comparison
+    L.prepare_inputs(PC,root,'2026-10-07',machine)
+    result=L.calls(PC,root,'2026-10-07',call_limit=0,
+        transport=lambda *a,**k:pytest.fail('zero budget must not call'))
+    assert result['new_calls']==0 and result['census']=={'planned':5}
+
+
+@pytest.mark.parametrize('limit',[None,True,-1,1.5,'100'])
+def test_invalid_daily_budget_rejected_before_transport(comparison,limit):
+    with pytest.raises(ValueError,match='call_limit_invalid'):
+        L.calls(PC,comparison[0],'2026-10-07',call_limit=limit,
+            transport=lambda *a,**k:pytest.fail('invalid budget must not call'))

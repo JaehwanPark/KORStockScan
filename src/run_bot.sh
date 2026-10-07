@@ -215,6 +215,10 @@ reset_runtime_policy_env_before_handoff() {
 
 # 무한 루프 시작
 while true; do
+    if [ -e "$PROJECT_DIR/data/runtime/operator_startup_hold.json" ] || [ -L "$PROJECT_DIR/data/runtime/operator_startup_hold.json" ]; then
+        echo "[BLOCK] operator_postclose_startup_hold_active"
+        exit 75
+    fi
     echo "🚀 KORStockScan 스나이퍼 엔진을 시작합니다..."
 
     # Parser-compatibility bounds only. Runtime sizing authority is the central

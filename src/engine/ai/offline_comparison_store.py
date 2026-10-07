@@ -112,6 +112,8 @@ CREATE TABLE IF NOT EXISTS aliases(source TEXT NOT NULL,request_id INTEGER NOT N
 CREATE TABLE IF NOT EXISTS checkpoints(name TEXT PRIMARY KEY,value_obj INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS snapshots(hash TEXT PRIMARY KEY,manifest_obj INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS validations(identity TEXT PRIMARY KEY,result_obj INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS attempt_budgets(attempt TEXT PRIMARY KEY,budget_key TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS attempt_budget_key ON attempt_budgets(budget_key);
 """
 
 
@@ -342,18 +344,40 @@ class Store:
             raise ValueError('comparison_store_activation_invalid')
         return value
 
-    def reserve(self, ident, fence):
+    def seed_call_budget(self, generation, budget_key, *, since_epoch):
+        """Charge retained completed/uncertain attempts once, across restarts."""
+        self.db.execute('''INSERT OR IGNORE INTO attempt_budgets
+            SELECT DISTINCT a.attempt,? FROM attempts a
+            JOIN members m ON m.request_id=a.request_id
+            JOIN partition_members pm ON pm.member_id=m.id
+            JOIN generation_parts gp ON gp.partition_id=pm.partition_id
+            WHERE gp.generation=? AND a.source='provider' AND a.created>=?''',
+            (budget_key,generation,since_epoch))
+        self.commit()
+
+    def budget_used(self, budget_key):
+        return self.db.execute('SELECT count(*) FROM attempt_budgets WHERE budget_key=?',
+                               (budget_key,)).fetchone()[0]
+
+    def reserve(self, ident, fence, *, budget_key=None, call_limit=None):
         activation = self.activation()
         if activation.get('writer_enabled') is not True:
             raise ValueError('comparison_cutover_fence_incomplete')
         if activation['writer_epoch'] != fence:
             raise ValueError('comparison_writer_fenced')
+        if budget_key is not None:
+            if type(call_limit) is not int or call_limit < 0:
+                raise ValueError('comparison_call_limit_invalid')
+            if self.budget_used(budget_key) >= call_limit:
+                raise ValueError('comparison_daily_call_budget_exhausted')
         attempt = uuid.uuid4().hex
         updated = self.db.execute("UPDATE requests SET state='reserved' WHERE id=? AND state='planned'", (ident,))
         if updated.rowcount != 1:
             raise ValueError('comparison_request_not_available')
         self.db.execute('INSERT INTO attempts VALUES(?,?,?,?,?,?,?)',
                         (attempt, ident, 'reserved', None, fence, time.time(), 'provider'))
+        if budget_key is not None:
+            self.db.execute('INSERT INTO attempt_budgets VALUES(?,?)',(attempt,budget_key))
         self.commit()
         return attempt
 

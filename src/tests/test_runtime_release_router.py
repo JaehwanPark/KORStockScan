@@ -766,3 +766,33 @@ assert report['retired_masked_units']==sorted(receipt['masked_instances'])
     result = subprocess.run([sys.executable, '-I', '-c', code, router.__file__, str(tmp_path)],
                             capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize('kind',['valid','malformed','dangling'])
+def test_operator_startup_hold_blocks_only_startup_and_persists(release,kind):
+    workspace,root,_,_=release
+    hold=workspace/'data/runtime/operator_startup_hold.json'
+    if kind=='dangling': hold.symlink_to(workspace/'missing')
+    else: hold.write_text('{}' if kind=='valid' else 'broken')
+    for op in ('start','restart','preopen'):
+        with pytest.raises(ValueError,match='operator_postclose_startup_hold_active'):
+            router.make_plan(workspace,root,'a'*40,op,'2026-10-08')
+    for op in ('postclose','finalize','error-detection'):
+        assert router.make_plan(workspace,root,'a'*40,op,'2026-10-07')
+    hold.unlink()
+    assert router.make_plan(workspace,root,'a'*40,'start','2026-10-08')
+
+
+@pytest.mark.parametrize('entry',['run_bot.sh','bot_main.py'])
+def test_direct_startup_entry_honors_operator_hold_before_any_bot_import(tmp_path,entry):
+    import shutil
+    repo=Path(__file__).resolve().parents[2]
+    (tmp_path/'src').mkdir();(tmp_path/'deploy').mkdir();(tmp_path/'data/runtime').mkdir(parents=True)
+    (tmp_path/'data/runtime/operator_startup_hold.json').write_text('{}')
+    shutil.copy2(repo/'src'/entry,tmp_path/'src'/entry)
+    shutil.copy2(repo/'deploy/cpu_affinity_profile.sh',tmp_path/'deploy/cpu_affinity_profile.sh')
+    command=['bash',str(tmp_path/'src'/entry)] if entry.endswith('.sh') else [sys.executable,str(tmp_path/'src'/entry)]
+    result=subprocess.run(command,cwd=tmp_path/'src',capture_output=True,text=True,timeout=10)
+    assert result.returncode!=0
+    assert 'operator_postclose_startup_hold_active' in result.stdout+result.stderr
+    assert 'ModuleNotFoundError' not in result.stderr

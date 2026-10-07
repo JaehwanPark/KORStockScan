@@ -211,3 +211,25 @@ def test_import_interruption_resumes_without_duplicate_requests(tmp_path,monkeyp
     receipt=M.migrate(tmp_path)
     assert receipt['requests']==12 and receipt['states']=={'planned':12}
     assert receipt['generations']==[('g',12)]
+
+
+def test_daily_budget_legacy_seed_is_idempotent_and_exhaustion_does_not_reserve(tmp_path):
+    with S.Store(tmp_path) as store:
+        activate(store)
+        ids=[store.add_request(request(i))[0] for i in range(3)]
+        members=[store.add_member('c',str(i),'a',rid,'WIN') for i,rid in enumerate(ids)]
+        store.bind_generation('g',{'p':members},{'generation':'g'},3)
+        store.reserve(ids[0],'test')
+        store.seed_call_budget('g','day1',since_epoch=0)
+        store.seed_call_budget('g','day1',since_epoch=0)
+        assert store.budget_used('day1')==1
+        with pytest.raises(ValueError,match='budget_exhausted'):
+            store.reserve(ids[1],'test',budget_key='day1',call_limit=1)
+        assert store.db.execute('SELECT state FROM requests WHERE id=?',(ids[1],)).fetchone()[0]=='planned'
+        store.reserve(ids[1],'test',budget_key='day2',call_limit=1)
+        store.seed_call_budget('g','day2',since_epoch=0)
+        assert store.budget_used('day2')==1
+        assert store.budget_used('day1')==1
+    with S.Store(tmp_path) as store:
+        with pytest.raises(ValueError,match='budget_exhausted'):
+            store.reserve(ids[2],'test',budget_key='day1',call_limit=1)

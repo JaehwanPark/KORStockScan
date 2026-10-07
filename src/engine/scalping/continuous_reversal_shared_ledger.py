@@ -325,7 +325,7 @@ def prepare_inputs(backend, data_root, day, machine):
                             input_path=str(input_file.resolve()), input_sha256=P.file_hash(input_file),
                             input_generation_sha256=input_contract, source_receipts=receipts,
                             expected_manifest_sha256=manifest['artifact_content_sha256'], census=census,
-                            call_limit=None, status='prepared', storage_schema=S.FORMAT,
+                            call_limit=POSTCLOSE_DAILY_CALL_LIMIT, status='prepared', storage_schema=S.FORMAT,
                             input_refs_version=2, **P.AUTH))
         P.write(out / 'input-census.json', result)
         return result
@@ -343,7 +343,13 @@ def preferred_operating_comparisons(backend, data_root, day, generation):
                   for name in proposals)
 
 
-def calls(backend, data_root, day, *, stop_epoch=None, workers=4, transport=None):
+POSTCLOSE_DAILY_CALL_LIMIT = 100
+
+
+def calls(backend, data_root, day, *, stop_epoch=None, workers=4, transport=None,
+          call_limit=POSTCLOSE_DAILY_CALL_LIMIT):
+    if type(call_limit) is not int or call_limit < 0:
+        raise ValueError('shared_daily_call_limit_invalid')
     if type(workers) is not int or not 1 <= workers <= 4:
         raise ValueError('shared_provider_concurrency_invalid')
     if transport is None:
@@ -357,6 +363,12 @@ def calls(backend, data_root, day, *, stop_epoch=None, workers=4, transport=None
         validate_membership(store, census)
         store.reconcile()
         fence = store.activation()['writer_epoch']
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        budget_key='postclose_auxiliary:'+day
+        since=datetime.fromisoformat(day).replace(tzinfo=ZoneInfo('Asia/Seoul')).timestamp()
+        store.seed_call_budget(gen,budget_key,since_epoch=since)
+        used_before=store.budget_used(budget_key)
         preferred=preferred_operating_comparisons(backend,data_root,day,gen)
         queue = store.pending(gen,preferred_comparisons=preferred)
         def send(req, attempt):
@@ -381,12 +393,15 @@ def calls(backend, data_root, day, *, stop_epoch=None, workers=4, transport=None
             exhausted = False
             while True:
                 while not exhausted and len(running) < workers and (stop_epoch is None or time.time() < stop_epoch):
+                    if store.budget_used(budget_key) >= call_limit:
+                        exhausted=True
+                        break
                     row = queue.fetchone()
                     if row is None:
                         exhausted = True
                         break
                     req = store.request(row[0])  # validate materialization before reservation
-                    attempt = store.reserve(row[0], fence)
+                    attempt = store.reserve(row[0], fence,budget_key=budget_key,call_limit=call_limit)
                     running[pool.submit(send, req, attempt)] = attempt
                 if not running:
                     break
@@ -401,8 +416,12 @@ def calls(backend, data_root, day, *, stop_epoch=None, workers=4, transport=None
           (SELECT m.request_id FROM generation_parts gp JOIN partition_members pm ON pm.partition_id=gp.partition_id
           JOIN members m ON m.id=pm.member_id WHERE gp.generation=?)''', (gen,)).fetchone()[0]
         result = P.seal(dict(schema=backend.SCHEMA, source_date=day,
+                            machine_report_sha256=gen,
                             status='evaluation_incomplete' if any(states.get(k) for k in ('planned', 'reserved', 'failed')) else 'completed',
-                            new_calls=count, census=states, call_limit=None,
+                            new_calls=count, census=states, call_limit=call_limit,
+                            call_budget=dict(key=budget_key,limit=call_limit,used_before=used_before,
+                                used_after=store.budget_used(budget_key),
+                                exhausted=store.budget_used(budget_key)>=call_limit),
                             preferred_comparisons=preferred,
                             census_unit='unique_requests', uncertain_attempts_require_reconciliation=uncertain, **P.AUTH))
         P.write(out / 'call-completion.json', result)
@@ -694,12 +713,12 @@ def auxiliary_report(backend, data_root, day, publication, parent_bundle, *, pub
         eligible_comparisons=dict(expected),incomplete_comparisons=dict(gaps),
         branch_comparison_census=branch_comparison_census(backend,machine,expected,gaps,metrics),
         primary_metric='actual_raw_PASS_wins_over_all_actual_raw_PASS',
-        call_limit=None,validity_adjustment_in_rank=False,**P.AUTH))
+        call_limit=POSTCLOSE_DAILY_CALL_LIMIT,validity_adjustment_in_rank=False,**P.AUTH))
     P.write(out/'machine.json',issued);P.write(out/'auxiliary.json',auxiliary)
     # Machine-stage bytes remain frozen once its terminal receipt commits.
     # Issued runtime pairs are a separate compiled source bound to that report.
     freeze=P.seal(dict(schema=SCHEMA,source_date=day,status='frozen',machine_report_sha256=gen,
-                       call_limit=None,census=input_census['census'],input_sha256=input_census['input_sha256'],**P.AUTH))
+                       call_limit=POSTCLOSE_DAILY_CALL_LIMIT,census=input_census['census'],input_sha256=input_census['input_sha256'],**P.AUTH))
     if publish_policy:
         P.write(P.directory(data_root,day)/'auxiliary.json',auxiliary)
         P.write(P.directory(data_root,day)/'call-freeze.json',freeze)

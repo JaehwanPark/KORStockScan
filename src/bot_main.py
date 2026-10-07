@@ -12,6 +12,9 @@ from pathlib import Path
 # 🚀 [핵심 1] 단독 실행을 위한 루트 경로 탐지
 # ==========================================
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_STARTUP_HOLD = PROJECT_ROOT / 'data/runtime/operator_startup_hold.json'
+if __name__ == '__main__' and (_STARTUP_HOLD.exists() or _STARTUP_HOLD.is_symlink()):
+    raise SystemExit('operator_postclose_startup_hold_active')
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 

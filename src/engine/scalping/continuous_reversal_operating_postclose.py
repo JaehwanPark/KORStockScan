@@ -452,12 +452,14 @@ def auxiliary_report(data_root,day,publication,parent,*,publish_policy=True):
         comparison_metrics=metrics,comparison_statuses=statuses,
         auxiliary_contribution=contribution,
         owner_request_census=dict(expected=declared['expected_requests'],missing=declared['expected_requests']-sum(states.values()),**states),
-        incomplete_comparisons=dict(gaps),observation_mode='confirmation_replay',call_limit=None,**P.AUTH))
+        incomplete_comparisons=dict(gaps),observation_mode='confirmation_replay',
+        call_limit=L.POSTCLOSE_DAILY_CALL_LIMIT,
+        **P.AUTH))
     P.write(out/'machine.json',issued);P.write(out/'auxiliary.json',auxiliary)
     if publish_policy:
         P.write(P.directory(data_root,day)/'auxiliary.json',auxiliary)
         P.write(P.directory(data_root,day)/'call-freeze.json',P.seal(dict(schema=SCHEMA,source_date=day,status='frozen',
-            machine_report_sha256=gen,call_limit=None,census=census['census'],input_sha256=census['input_sha256'],**P.AUTH)))
+            machine_report_sha256=gen,call_limit=L.POSTCLOSE_DAILY_CALL_LIMIT,census=census['census'],input_sha256=census['input_sha256'],**P.AUTH)))
         # Compatibility consumer gets only actual chosen responses; no request DB copy.
         with gzip.open(evidence,'rt') as src,(P.directory(data_root,day)/'provider-results.jsonl').open('w') as dst:
             for line in src:dst.write(line)

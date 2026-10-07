@@ -539,6 +539,9 @@ def make_plan(
 ) -> dict:
     if date.fromisoformat(target_date).isoformat() != target_date:
         raise ValueError("target_date_invalid")
+    hold = workspace / 'data/runtime/operator_startup_hold.json'
+    if operation in {'start', 'restart', 'preopen'} and (hold.exists() or hold.is_symlink()):
+        raise ValueError('operator_postclose_startup_hold_active')
     cwd = root
     if operation in OWNED:
         script, owner = OWNED[operation]

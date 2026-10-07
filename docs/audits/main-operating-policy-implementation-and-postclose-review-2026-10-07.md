@@ -83,3 +83,10 @@ v6 전체 wrapper는 rising-missed classifier의 메모리 보호 대기 300초 
 02:16 `971b9f3d` / `operating-union-20261008-v8` 배포(immutable 98 PASS, release-set 63 owner PASS) 후 02:18 새 기계 계산을 시작했다. 추가 점검에서 신규 8개가 포함된 scope의 확정 확인점 합계 849건이 대규모 기존 scope 뒤에 예약될 수 있음을 확인했다. 공통 원장의 `pending`은 정확한 generation 안에서 명시 ADD scope 전체 비교를 우선하고 나머지 eligible을 전부 유지하도록 보완했다. 전수 census·요청/응답 identity·원천/승패·기계 탐지/정책 계약은 불변이며, 불확실 예약/다른 generation을 끼우지 않는 회귀 포함 68 PASS다. 이 수정은 offline 스케줄러에 한정하므로 실행 중인 불변 v8 기계 계산을 다시 시작하지 않고 완료된 원천 계산을 새 보조 consumer가 이어받는다.
 
 v9(`2121583e`) 배포본 68 PASS 및 63 owner 검증 후 보조 consumer를 인계했다. 기계/재생 20개 모듈의 v8/v9 내용 동일을 확인했고, 원 v8 기계는 02:39 정상 완료했다. 최종 소비자 재점검에서 semantic detector의 operating 비교 schema 허용 누락과 v5 scope carry 계수 인계 누락을 추가 발견했다. `direct_handoff`가 봉인된 보조 보고서의 128 route census/pending을 실제 backend와 대사하고 운영 요약·기계/보조 감시가 같은 승계 상태를 전달하도록 보완했다. 일반 native 호환 분류와 별도로 explicit operating 등록·신규 준비·기존 쌍 carry·PID 미소비·전체 비교 완료 여부를 명시한다. 기계 보고서만 보고 보조 미완료를 전수 완료로 표시하지 않는다. 초기 소비자 70·semantic 170·인계/PREOPEN 175 PASS 후 최종 통합 검증한다. 새 producer 소비는 기존 보조 deadline(06:39:18 KST)을 계승하고, 재시도로 4시간을 다시 부여하지 않는다.
+
+
+## 10/8 06:26 사용자 호출 축소·기동 보류
+
+사용자가 과도한 보조비교 축소 후 재실행과 장후 완료까지 봇 기동 중지를 지시했다. 06:27 exact supervisor SIGTERM으로 원 응답/예약을 보존하고 AI stage를 중단했다. 07:35 PREOPEN·07:55 start cron 두 행을 원문 CAS로 보류하고 persistent startup hold를 생성했다. 당시 Main은 이미 비가동이었다.
+
+원천일당 누적 100회 신규 호출 budget을 공통 원장의 attempt에 연결했다. 이미 초과한 10/7은 추가 0회이며, retry/generation 변경에도 예산을 되돌리지 않는다. failed/uncertain 포함, 전송 전 예약 차감, 기존 응답 재사용, 전수 census/미완료 공개와 native pair carry를 유지한다. router·shell·Python 직접 기동 모두 marker를 확인한다. 관련 회귀 149 PASS와 operating/terminal/PREOPEN 통합 138 PASS, compile·bash 문법·diff 및 print-only parser PASS. 재리뷰에서 stale call-completion을 새 report에 그대로 붙일 수 있는 경로를 제거하고 호출 영수증에 실제 machine generation을 결속했다. 배포·재집계·장후 완료 결과는 후속 receipt에 기록한다.
