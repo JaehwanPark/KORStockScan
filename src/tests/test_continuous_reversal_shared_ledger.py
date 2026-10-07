@@ -168,3 +168,22 @@ def test_duplicate_native_point_does_not_expand_expected_requests(comparison):
     machine=P.seal(dict(machine,duplicate_fixture=True))
     census=L.prepare_inputs(PC,root,'2026-10-07',machine)
     assert census['census']['eligible_requests']==5
+
+
+def test_public_auxiliary_api_uses_shared_adapter(comparison,monkeypatch):
+    root,parent,machine,_=comparison
+    monkeypatch.setattr(PC,'active',lambda *a:parent)
+    monkeypatch.setattr(L,'auxiliary_report',lambda backend,*a,**k:{'backend':backend.__name__,'storage':'shared'})
+    result=P.auxiliary_report(root,'2026-10-07','2026-10-07',publish_policy=False)
+    assert result=={'backend':PC.__name__,'storage':'shared'}
+
+
+def test_stage_fingerprint_tracks_shared_storage_code(tmp_path,monkeypatch):
+    from src.engine.automation import postclose_summary_handoff as H
+    def paths_digest(paths):return {k:str(v) for k,v in paths.items()}
+    monkeypatch.setattr(H,'_stage_sources',paths_digest)
+    monkeypatch.setattr(H,'_stage_digest',lambda v:v)
+    result=H._stage_code('main_auxiliary_policy',[],tmp_path)
+    assert result['shared_comparison_adapter'].endswith('scalping/continuous_reversal_shared_ledger.py')
+    assert result['offline_comparison_store'].endswith('ai/offline_comparison_store.py')
+    assert 'offline_comparison_store' not in H._stage_code('main_machine_policy',[],tmp_path)

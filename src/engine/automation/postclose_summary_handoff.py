@@ -1624,6 +1624,9 @@ def _stage_code(stage, commands, project, *, dispatcher_path=None,
                      'reversal_path_catalog','reversal_path_runtime','reversal_path_auxiliary','reversal_policy_backend',
                      'continuous_reversal_policy_v4','continuous_reversal_path_postclose'):
             paths[name]=project/f'src/engine/scalping/{name}.py'
+    if stage == 'main_auxiliary_policy':
+        paths['shared_comparison_adapter'] = project/'src/engine/scalping/continuous_reversal_shared_ledger.py'
+        paths['offline_comparison_store'] = project/'src/engine/ai/offline_comparison_store.py'
     return _stage_digest(_stage_sources(paths))
 
 

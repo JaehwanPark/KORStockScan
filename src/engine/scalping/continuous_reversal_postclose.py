@@ -328,7 +328,9 @@ def auxiliary_report(data_root,day,publication,*,publish_policy=True):
     from src.engine.scalping import continuous_reversal_path_postclose as paths
     if paths.active(data_root,publication):registered=paths
     current=registered.active(data_root,publication)
-    if current:return registered.auxiliary_report(data_root,day,publication,current,publish_policy=publish_policy)
+    if current:
+        from src.engine.scalping.continuous_reversal_shared_ledger import adapt
+        return adapt(registered,data_root).auxiliary_report(data_root,day,publication,current,publish_policy=publish_policy)
     from src.engine.scalping import continuous_reversal_branch_postclose as branch
     parent=branch.active_v2(data_root,publication)
     if parent:return branch.auxiliary_report(data_root,day,publication,parent,publish_policy=publish_policy)

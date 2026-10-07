@@ -73,3 +73,8 @@ Main PID `1074119`와 기존 적용 bundle/family hash는 동일하다. 새 릴�
 - [완료 검증 임시환경 삭제](../../data/report/ai_comparison_store_migration/2026-10-07/validation-temp-cleanup-removal.json)
 
 문서의 기존 실행 owner는 한 개이며 print-only parser를 통과했다. 외부 Project/Calendar sync, 장후 replay, 실제 provider 비교, 봇 재기동은 이 검증에 포함하지 않았다. 새 adapter의 자연 장후 소비와 실제 신규 응답 축적은 별도 재개 후 확인할 사항이다.
+
+
+## 마지막 호출 경로 재리뷰
+
+추가 점검에서 공통 `auxiliary_report()` Python API가 frozen legacy backend로 직접 전달되는 경로와, 장후 단계 코드 fingerprint에 새 adapter/store 파일이 빠진 부분을 발견했다. CLI와 직접 API가 모두 공통 원장을 사용하도록 연결하고 `main_auxiliary_policy`의 변경 감지에 두 파일을 추가했다. 관련 adapter/장후 handoff 회귀 112건과 compile/diff를 통과했다. 기존 이관 원장은 재생성하지 않으며 후속 최종 릴리스로 인계한다.
