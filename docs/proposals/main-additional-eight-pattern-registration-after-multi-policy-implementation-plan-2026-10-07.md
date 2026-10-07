@@ -1,6 +1,6 @@
 # Main 복수정책 구현 완료 후 추가 8개 패턴 등록 상세 구현계획
 
-후속 방향: [운용 등록 정책 전체 독립 탐지·장후 기여도 평가 계획](main-operating-policy-independent-detection-and-contribution-evaluation-implementation-plan-2026-10-07.md)은 이 문서의 구현 종결 후 별도 사용자 구현 지시에 따라 진행한다. 운용 manifest의 모든 정책을 동등 탐지하고 복합 보조 입력·합집합/기여도 평가로 전환하는 후속 변경이며, 현재 진행 중인 본 계획의 정의·구현 수용 조건을 중간에 변경하지 않는다.
+후속 방향: [운용 등록 정책 전체 독립 탐지·장후 기여도 평가 계획](main-operating-policy-independent-detection-and-contribution-evaluation-implementation-plan-2026-10-07.md)은 별도 사용자 구현 지시에 따라 진행한다. 운용 manifest의 모든 정책을 동등 탐지하고 복합 보조 입력·합집합/기여도 평가로 전환하는 후속 변경이며, §12에 기록한 본 계획의 정의·완료 수용 증거를 소급 변경하지 않는다.
 
 ## 1. 목표·선행 작업·권한
 
@@ -13,6 +13,10 @@
 초안 검토 HEAD는 `558359c1`, 이번 재리뷰 HEAD는 `caa234167179c7433343bbfaa1e27d2607a02a94`다. 후자는 선행 장후의 row 원천 결손 분리와 영속 보조 원장 스트리밍 보완을 포함한다. 실행 감사는 여전히 구현 검증 중이므로 이를 완료 commit으로 단정하지 않는다. 선행 세션의 최종 commit/registry/발행 상태를 R0에서 새로 고정한다. 선행 작업의 배포·재기동 승인과 이 문서의 계획 상태를 구분하고 기존 승인을 취소하거나 중복 승인 절차를 만들지 않는다.
 
 후속 사용자 지시로 이 계획의 구현·반복 리뷰·수정보완 및 완료 후 배포·재기동이 승인되었다. 아래 계획 단계는 [구현 검토 기록](../audits/main-additional-eight-pattern-implementation-review-2026-10-07.md)과 동일 current owner에서 실행한다. 이전 문서 작성 시점의 planning-only 상태를 이번 실행 승인으로 대체한다. 새 정의 등록과 실제 선택·PID 소비·자연 주문을 각각 기록한다.
+
+위 문단은 계획 작성→실행 승인 이력이다. 10/7 구현 종결은 §12가 소유하며, 이후 요청된 [공통 원장 개선계획](main-ai-comparison-ledger-dedup-and-incremental-storage-plan-2026-10-07.md)의 L0~L6 구현·이관·배포도 완료했다. v4 전용 대형 원장 재생성 대신 공통 요청/응답과 별도 비교 참조를 사용하고 과거 v3/v4 발행 증빙을 보존한다. 최신 사용자 지시의 구현 재점검·보완·장후용 배포는 §14에서 이어받는다. EOD 제외 장후 중단은 계속 유지한다.
+
+v4의 현행 계약은 선택된 branch만 탐지하고 primary의 정확한 입력으로 보조판정을 받는 것이다. 후속 독립 탐지 계획은 별도 successor 계약이며, 공통 원장 전환만으로 8개를 모두 운용 등록하거나 primary를 복합 입력으로 바꾸지 않는다. §3의 당시 소비자 결함과 R0~R8은 구현 전 설계/실행 이력으로 읽으며, 현재 미해결 코드 결함이라고 단정하지 않는다. 새 저장 요건은 §13이 소유한다.
 
 ## 2. 최초 등록 목록과 근거
 
@@ -176,8 +180,10 @@ offline replay는 매 틱의 확인점을 즉시 별도 iterator로 배출한다
 새 문구는 수동으로 정의한 고정 arm 목록을 version/hash로 등록한다. 기존 비교 arm 체계를 재사용하되 새 phase 의미에 맞춘 요청을 고정하며, 장후가 문구를 생성/최적화하지 않는다. 입력/문구/schema/validator가 달라졌으면 과거 유사 문구의 PASS를 재사용하지 않고 정확한 새 bytes의 실제 응답을 비교한다.
 
 - offline 비교 키는 scope/branch/definition/phase/기회/arm이다. provider 요청 키는 **canonical 기회 ID + phase + provider/model 생성 설정·prompt·input·schema의 정확한 bytes hash**로 고정하며 선행 exact ledger와 같은 경계를 사용한다. 여러 비교 소유자가 같은 기회·phase의 완전히 같은 요청을 공유할 수 있지만 다른 native 기회를 비슷한 입력이라는 이유로 합치지 않는다. 라벨/성과/비교 owner는 요청 키와 AI 입력에서 제외하며, source 정정 후 입력이 그대로면 실제 응답을 재사용하되 새 run의 라벨 연결만 검증한다.
+- 기회 ID는 원 stream namespace에 결속한 날짜/종목/시장/route/item/epoch/sequence이며 정책/phase를 포함하지 않는다. phase는 request key와 lineage에서 구분한다. 구 digest 밖에 있던 namespace를 legacy source receipt로 입증하고, 다른 stream의 같은 숫자 ID를 자동 병합하지 않는다. 기존 family의 원 ID/hash는 변경하지 않는다.
 - 라벨 연결은 동일 native 확인점·확인 ask·source/hash에 결속한다. branch별 입력을 FIRST/CONFIRMED 배열에서 임의 fallback하지 않고 typed `branch_inputs`에서 직접 찾는다.
 - 실제 원 응답·요청/응답 hash·유효성·중복/오류·예약 상태를 ledger/checkpoint에 보존한다. 비교는 전체 eligible 입력을 대상으로 하며 기존 사용자 승인 `quota=None`과 외부 rate limit을 유지한다. 호출 수를 숨기거나 날짜별 임의 표본 상한을 재도입하지 않는다.
+- 후속 원장은 위 exact key를 공통 저장소에 결속한다. 입력·prompt/schema·원 응답은 내용별 한 번 저장하고, 미호출 요청은 작은 참조/상태만 먼저 만든다. 비교 owner와 실제 요청/attempt를 구분하고 label은 별도 snapshot으로 연결한다. 버전별 provider lock을 각각 잡는 기존 구조는 공통 예약·writer/lease로 수렴시키되, 이관 중에는 기존 writer도 함께 차단한다. 정책/phase가 달라도 동일 bytes라는 이유만으로 다른 기회·다른 입력 의미의 응답을 혼용하지 않는다.
 - 실행 전 exact cache hit/miss·예상 요청 수·분할 처리량을 출력한다. 메모리는 partition iterator/bounded in-flight로 제한하고 중단 후 영속 checkpoint에서 재개한다. 결과 불명 호출을 성공으로 바꾸거나 무한 재시도하지 않는다.
 - 보조 선택은 기존 owner의 **실제 raw PASS 중 WIN/PASS 수** 비교 계약을 유지한다. 같은 성공 100%/80% 보존, 양의 EV, 새 날짜 검증을 탈락 기준으로 추가하지 않는다. 기계 W/(W+F)와 보조 PASS 분모를 혼용하지 않는다.
 - 기계 최선 후보가 나와도 해당 보조 비교가 미완료면 `machine_winner`와 `publishable_pair`를 따로 남기고 그 scope의 검증된 기존 기계·보조 쌍을 함께 carry한다. 가격 WIN만으로 PASS를 생성하지 않는다. 이 상태가 등록 실패나 기계 열위로 집계되지 않게 한다.
@@ -188,7 +194,9 @@ offline replay는 매 틱의 확인점을 즉시 별도 iterator로 배출한다
 
 비교 입력의 eligible 집합은 동일 누적 원천에서 라벨이 W/F로 확정되고 실제 확인 입력을 재구성할 수 있는 점이다. 현재 `prepare_inputs`의 U 제외와 일치시키며 `UNRESOLVED`, 필수 입력 결손, quote 결손의 수/ID/사유를 따로 보존한다. 이는 전수 eligible 비교이며 날짜별 샘플 제한이 아니다. 실제 자연 응답이 있더라도 U를 F로 바꿔 PASS 분모에 넣지 않는다. raw PASS 승률의 '전체'는 이 명시한 eligible 집합 안의 실제 raw PASS이며 응답 유효성을 가중치로 조정하지 않는다. 계약 위반 응답 수는 별도 보고하고 운영에서는 validator가 해당 PASS를 계속 거부한다.
 
-예상 비교 소유 집합과 고정 arm 집합을 원장 준비 **전에** manifest로 봉인한다. 원장에 들어온 행의 수만으로 완료를 판단하지 않는다. 각 비교에서 `expected = completed + planned + reserved_uncertain + failed`를 중복 없는 owner/arm ID로 대사하고, 입력 생성 누락·잘못 연결된 응답도 발견할 수 있어야 한다. 같은 eligible 점에 모든 등록 arm의 실제 응답이 있어야 그 점의 비교가 완결된다. 일부 성공 응답만 순위에 반영하여 전체 winner로 발표하지 않는다.
+예상 비교 소유 집합과 고정 arm 집합을 원장 준비 **전에** manifest로 봉인한다. 원장에 들어온 행의 수만으로 완료를 판단하지 않는다. 후속 공통 원장의 각 비교는 `expected = responded + planned + reserved_uncertain + failed + missing`을 중복 없는 owner/arm ID로 대사한다. `missing`은 준비 누락 결함이며 responded는 원 응답 보존 상태다. 원래 정책의 validator·raw PASS 집계 계약에 따라 유효/무효·비교 가능 수를 별도로 산출하고, 기존 completed와의 변환표를 남긴다. 같은 요청을 여러 owner가 참조해도 expected owner 수를 줄이지 않는다. 같은 eligible 점에 모든 등록 arm의 실제 응답이 있어야 그 점의 비교가 완결된다. 일부 성공 응답만 순위에 반영하여 전체 winner로 발표하지 않는다.
+
+위 회계는 봉인한 비교 owner의 상태이며 모든 attempt를 더한 값이 아니다. 완료 응답과 다른 불확실 attempt가 공존하면 원 owner의 응답 결속은 보존하면서 미해결 attempt를 별도 계수한다. response ID 부재/timeout만으로 미전송을 판정하지 않는다. 각 비교의 응답 cutoff·선택 attempt/response·validator 결과·label snapshot을 함께 봉인하고, 새 응답/정정은 새 revision에서만 평가한다. 동일 요청 통합이 기존 raw PASS 분모나 원 비교가 선택한 응답을 바꾸지 않아야 한다.
 
 모든 arm이 정상 완료됐지만 PASS가 0인 `completed_no_pass`는 호출 미완료와 다르다. 같은 branch/phase/input 의미의 검증된 이전 binding이 있으면 그 근거를 carry하고, 없으면 `no_comparable_auxiliary_arm`으로 해당 기계·보조 쌍을 carry한다. 등록 자체는 유지한다. `no_primary_points`도 가상의 PASS나 다른 branch의 성과를 복사하여 채우지 않는다. 향후 해당 branch가 primary로 선택될 때 필요한 비교를 생성한다.
 
@@ -200,9 +208,13 @@ offline replay는 매 틱의 확인점을 즉시 별도 iterator로 배출한다
 
 등록 식별자는 정의 내용으로 고정하고 최초 registration/source date를 보존한다. 후속 날짜 비교가 같은 정의를 재사용할 수 있어야 한다. 원 registration의 날짜를 새 source date로 덮어쓰거나 서로 다른 정의를 같은 ID로 갱신하지 않는다. catalog hash뿐 아니라 개별 definition/root/feature/phase/portfolio hash와 변환 code hash를 연결한다. retention은 active/rollback/비교 consumer가 사용하는 원본을 보호한다.
 
-새 자료의 쓰기 소유는 `data/report/continuous_reversal_registered/v4/<source_date>/<run_sha256>/`와 v4 전용 영속 request ledger로 분리한다. 구 v3의 dated 비교 파일·`actual-*.jsonl.gz`·활성 WAL을 수정/이관하지 않는다. 기존 응답은 hash를 검증한 불변 export에서 exact import하고 동일 요청·응답 충돌은 감추지 않는다. 공통 native 장후 출력과 current pointer를 갱신하는 writer는 기존 owner lock 아래 하나만 실행한다. 비활성 비교 run이 canonical terminal이나 발행 원본을 덮어쓰지 못하도록 `evaluate_only` 출력과 publish 경로를 분리한다.
+비교·발행 증빙의 쓰기 소유는 `data/report/continuous_reversal_registered/v4/<source_date>/<run_sha256>/`에 보존한다. 후속 저장 개선에서는 **요청·응답 본문을 v4 전용 영속 DB로 다시 복제하지 않는다.** 공통 저장소의 불변 객체/예약 상태를 v3/v4의 논리적 비교 owner가 참조한다. 이미 발행된 dated 비교 파일·`actual-*.jsonl.gz`·hash는 덮어쓰지 않는다. 기존 DB/WAL은 모든 관련 writer를 멈춘 일관 읽기 상태에서 별도 저장소로 이관하고, 전수 대사·현재/rollback reader 검증 전 삭제하지 않는다. 기존 응답은 exact import하며 동일 ID의 bytes/응답/예약 상태 충돌을 감추지 않는다. 공통 native 장후 출력과 current pointer를 갱신하는 writer는 기존 owner lock 아래 하나만 실행한다. 비활성 비교 run이 canonical terminal이나 발행 원본을 덮어쓰지 못하도록 `evaluate_only` 출력과 publish 경로를 분리한다.
 
 `run_sha256`는 source/publication/effective 날짜·cutoff, 실제 parent, registry/portfolio/적용 버전 census, 원천·완성 분봉 bytes, feature/root/label/입력 생산 코드와 label 계약을 묶는다. 입력 cache는 준비 함수·typed phase/input version까지, provider reuse는 정확한 요청 생성 설정/bytes까지 결속한다. 뒤늦은 분봉·source 정정은 해당 partition에 새 fingerprint를 만들며 옛 비교·response의 outcome 연결을 덮어쓰지 않는다. 파일 존재나 완료 응답 '개수'가 같다는 이유로 이전 불변 snapshot을 재사용하지 않고 정렬된 내용 digest로 선택한다. write→fsync→atomic publish 후 같은 bytes hash를 확인한다.
+
+run 전체의 날짜·registry 변경은 공통 객체를 복제하는 저장 키가 아니다. 실제 입력 read-set/phase/정확한 요청과 별도 label partition을 고정하고 새 run은 필요한 참조만 추가한다. 변경 없는 과거 partition은 재스캔·본문 재직렬화를 생략하고, 변경된 부분의 누적 집계 기여분만 교체한다. 고유 요청/owner/attempt/응답 수와 DB·블록·index·export·임시 파일의 실제 할당량을 함께 보고한다.
+
+원천 정정은 rolling/root/session anchor와 이후 label 구간을 읽은 모든 인접 partition에 전파한다. 지연 조립에 필요한 고정 입력·arm·serializer와 미완료 expected 참조도 retention root다. snapshot의 참조 closure가 재조립/검증되기 전 raw·prompt·pack을 삭제하지 않는다. 전체 body를 복제하지 않는다는 이유로 원 입력을 잃어 나중에 현재 값으로 다시 만드는 경로는 허용하지 않는다.
 
 후보 상태는 `proposed → registered → compared → selected`로 구분한다. `selected`는 배포/PID 소비/실제 주문 성공을 의미하지 않는다. 등록 후보라도 실시간은 **발행된 해당 scope의 선택 목록만** 실행한다.
 
@@ -261,14 +273,16 @@ dispatcher/AI/monitor에서 `v1/v2/v3`, `FIRST/CONFIRMED`, `first_signal/confirm
 | R2 | 구버전 호환 reader·새 catalog/family skeleton | migration fixture·schema/source verifier | 새 코드에서 구 family/native loader 정상, tamper 거부, 미선택 행동 parity |
 | R3 | 공유 특징·4종 확인 계열 구현 | momentum/breakout/hold/retest state·typed claim | 원 확인 index·ask·feature·native 경계·라벨과 parity, HA 구 FIRST 유지 |
 | R4 | 신규 5개 phase 및 원 FIRST 연결 | English ASCII fixed arm·schema·validator·exact key | 거짓 decline/5초 anchor 요구 없음, 다른 요청 응답 혼용 0 |
-| R5 | 격리 누적 재생·실제 보조 비교 | 기계 단독/조합/현재 비교·AI ledger·publishable pair | 전체 eligible 회계, W/F/U/겹침/집중도 공개, 미완료 scope 정확 carry |
-| R6 | dispatcher/실시간/의미 감시/장후 소비 통합 | 소비자 연결표·stage candidate·rollback 자료 | 48셀/지원 route 보존, 한 intent, strict/native/PREOPEN 계약 일치 |
+| R5 | 격리 누적 재생·실제 보조 비교 | 기계 단독/조합/현재 비교·공통 원장 참조·publishable pair | 전체 eligible 회계, W/F/U/겹침/집중도 공개, 미완료 scope 정확 carry; 후속 저장 전환은 L0~L5 대사·증분 검증 후 |
+| R6 | dispatcher/실시간/의미 감시/장후 소비 통합 | 소비자 연결표·stage candidate·rollback 자료·공통 원장 adapter | 48셀/지원 route 보존, 한 intent, strict/native/PREOPEN 계약 일치; 과거 증빙 및 최신 예약/응답을 보존한 rollback |
 | R7 | 독립적인 관점의 자기 리뷰→수정→재리뷰·대상 회귀 | review findings·수정/재검증 receipt | 검토 범위 내 미해결 구현 finding 0, 대상 pytest/compile/diff PASS |
 | R8 | 기존 owner의 후속 발행·운영 인계 | 선택/미선택/쌍 carry 표·code/정책/배포 소비 receipt | 등록·비교 완료와 실제 선택/배포/자연 소비 각각 확인 |
 
 R1은 정식 registry를 즉시 바꾸는 단계가 아니라 불변 등록 자료 준비다. 실제 등록은 R2~R4 지원과 review가 끝난 뒤 R5의 native 등록 경로에서 수행한다. R3/R4뿐 아니라 R5 producer의 partition/누락 회계/원장/재개/부분 비교·쌍 carry를 소규모 frozen fixture와 가짜 transport로 먼저 검증한다. 미해결 결함이 없고 대상 검증을 통과한 뒤 비싼 전수 재생과 실제 호출을 시작한다. 이미 검증된 과거 연구 source bytes는 읽기 재사용한다.
 
 R5는 §5.1의 실제 primary eligible 대상에 exact AI 비교 checkpoint를 남기며, 외부 서비스 지연으로 미완료여도 해당 결과를 완결로 속이지 않는다. 미선택 branch의 provider 미실행은 미완료 호출에 합산하지 않는다. R7의 code closure와 남은 실제 응답/자연 소비 증거를 분리한다. 완료 조건은 신호가 자연 발생할 때까지 무기한 기다리거나 수익을 보장하는 조건이 아니다.
+
+R5/R6에 추가한 공통 저장 요건은 원장 개선계획 L0~L6이 소유하는 후속 변경이다. 이미 끝난 8개 정의 연구·코드 검증을 전부 다시 실행하거나 v4 원장을 새로 생성하는 지시가 아니다. 영향을 받는 저장/소비 계약을 fixture와 이관 대사로 검증한 뒤, 별도 실행 지시 범위에서만 미완료 차집합을 처리한다.
 
 운영 실행 때는 리뷰된 불변 release에 reader를 먼저 준비하고 검증된 현행 family로 기동 가능한지 확인한 뒤 새 candidate를 parent CAS로 전환한다. 부모가 달라졌으면 해당 parent/비교를 재확인하고 pointer를 강제 덮어쓰지 않는다. 실패 시 보존한 코드·family·registry·보조 쌍으로 돌아갈 수 있어야 한다. 구현 실행 전 기존 owner에 기록된 배포·재기동 지시와 적용 시점을 그대로 확인한다. 이번 문서 작성은 그 절차를 시작하지 않는다.
 
@@ -300,6 +314,8 @@ R5는 §5.1의 실제 primary eligible 대상에 exact AI 비교 checkpoint를 �
 | source/입력 의미 | 하락 없는 HB, 과거 peak가 buffer 밖, 신규 signal receipt native 재생 | 합성 low/drop/reversal 사실 0, typed 원천 결속·감시 정상 해석 |
 | 전수 비교 회계 | 입력 하나가 원장 준비 전에 누락, 5 arm 중 하나 미예약, 전 arm VETO, U만 존재 | expected manifest로 누락 탐지, completed_no_pass/U/미완료 분리, 허위 winner 없음 |
 | cache/불변성 | 같은 응답 수·다른 내용, late bar, v3/v4 동일 날짜 run, 중단 후 재개 | content hash별 새 snapshot, 구 family/read-set/원장 불변, 새 run만 발행 |
+| 공통 원장 후속 회귀 | 동일 요청 버전 간 공유, label만 정정, 구 reserved 4건/신 planned 충돌, 중단·rollback | 본문 중복 0·비교 owner 누락 0, 입력 불변이면 재호출 불필요, 불확실 전송 자동 재시도 0, 최신 attempt 보존 |
+| 비교 봉인·namespace·지연 조립 | 서로 다른 stream의 숫자 ID 충돌, 원 prompt 교체/입력 삭제, 늦은 응답, 인접 구간 정정 | source 증거 없는 합침 0, 원 bytes 복원 또는 명시 결손, 과거 응답 선택/분모 불변, 영향 partition 대사 |
 
 ### 9.2 재생과 성능
 
@@ -361,3 +377,21 @@ R5는 §5.1의 실제 primary eligible 대상에 exact AI 비교 checkpoint를 �
 후속 구현 승인을 실행한 결과는 [구현·반복 리뷰 기록](../audits/main-additional-eight-pattern-implementation-review-2026-10-07.md)이 소유한다. v3 고정 모듈 bytes를 유지하고 v4 catalog/root/typed AI/native/장후를 기존 dispatcher에 연결했다. 원 연구의 8개 정의 SHA와 확인점·가격·특징·라벨 parity는 8/8 통과했고 대상 17개 suite 865개가 통과했다. 입력 생성 누락은 population 기반 expected 집합으로 ledger 준비 전에 검사한다.
 
 누적 raw 승률 비교에서 새 8개는 자동 선택되지 않았다. 정의 등록·실행 지원·비교 완료와 실제 선택을 구분하며 동률 규칙을 변경하지 않는다. 실제 primary AI 비교는 전체 eligible 원장에 남기고 미완료 scope는 검증된 기계·보조 쌍을 carry한다. immutable 배포/기동/PID 및 자연 감시 결과는 위 기록의 운영 인계로 확인한다. 후속 독립 탐지 계획은 이번 구현에 추가 적용하지 않았다.
+
+## 13. 원장 저장요건 후속 보완 — 10/7
+
+§11 PR10의 v4 전용 namespace는 과거 구현 시 덮어쓰기 방지 요건이었다. 후속 개선에서는 **비교/발행 증빙의 불변 namespace는 유지하되 대형 요청 원장의 물리적 분리는 계속 요구하지 않는다.** §5/§6의 공통 저장·expected 대사·참조 분리가 이를 대체한다. 요청 579,437건이 양 DB에서 같은 ID이며 구 reserved 4건이 신 planned로 표시된 상태를 이관 대상으로 포함한다. 이는 전송 여부의 결론이 아니므로 원 attempt/journal 대사 전 호출하지 않는다.
+
+구현 코드 `15f1ccd40e71c4bfeed2aa7979562fd3ab0f51f0`의 패턴 완료 증거와 후속 공통 저장 완료 증거를 구분한다. 이 절의 최초 보완은 문서 작업이었고, 이후 공통 원장 L0~L6을 구현·배포했다. 사용자 중단 override와 L7 재개 경계는 계속 공통 원장 개선계획이 소유한다.
+
+네 계획 통합 재리뷰에서는 namespace 없는 legacy ID 이관, immutable 응답 선택, owner/attempt 회계, 지연 조립 입력 보존과 경계 partition 무효화를 추가했다. 저장 전환의 acceptance는 v4 선택·primary·raw PASS 비교의 동등성이다. 미래 successor의 운용 목록·동률 권고 규칙을 이 저장 전환에 섞지 않는다.
+
+## 14. 실제 구현·공통 원장 연결 재점검
+
+[통합 재점검 감사](../audits/main-multi-policy-shared-ledger-integration-review-2026-10-07.md)에 R1~R7과 공통 저장의 연결 검증을 기록한다. 정확 8개 definition SHA, 기존 registry 조합 포함, 48셀/128경로, selected branch의 단일 primary/intent, typed phase와 구 FIRST/CONFIRMED 호환을 재점검한다. R5의 과거 전수 기계 재생과 연구 parity는 고정 증거를 재사용하며 장후 중단 중 새 전수 연구/provider 실행을 하지 않는다.
+
+신규 8개 각각의 확인점→native 요청 5 arm→공통 저장→응답 재사용→보조 집계→v4 stage/source 검증을 작은 격리 fixture로 연결한다. HA FIRST를 포함한 6가지 phase를 같은 저장 구조로 처리하며 원 정의/문구 bytes를 바꾸지 않는다. 실험 transport는 실제 AI 결과로 표시하지 않는다.
+
+미완료 보조 비교에 과거 문구만 붙여 새 기계 조합을 발행할 수 있던 결함을 수정한다. 기존 쌍 전체 carry와 사유를 남기고, `not_requested_machine_unselected`/`no_primary_points`/`evaluation_incomplete`/`completed_no_pass`/`completed`를 구분한다. 공통 원장의 요청 ID 연결 누락·동일 개수 치환은 예약 전에 차단한다. 본문 재복제 없이 작은 참조 v2를 준비하며, 불확실 reserved 4건은 계속 자동 재호출하지 않는다.
+
+등록과 운영 선택은 계속 다르다. 재점검 시 활성 family에서 신규 8개 selected 경로는 0개다. 이번 수정은 이를 강제 선택하거나 후속 독립 탐지 정책으로 전환하지 않는다. 새 장후 생성/선정/자연 소비는 사용자 재개 지시 후 R8에서 별도 확인한다.

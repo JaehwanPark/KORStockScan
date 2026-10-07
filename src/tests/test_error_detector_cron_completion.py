@@ -569,6 +569,7 @@ class TestCronCompletionDetector:
         self, monkeypatch, tmp_path
     ):
         import src.engine.error_detectors.cron_completion as cc
+        monkeypatch.setattr(cc, "load_installed_crontab", lambda: "10 20 * * 1-5 run_threshold_cycle_postclose.sh # THRESHOLD_CYCLE_POSTCLOSE")
 
         logs_dir = tmp_path / "logs"
         logs_dir.mkdir(parents=True)
@@ -614,6 +615,7 @@ class TestCronCompletionDetector:
         self, monkeypatch, tmp_path
     ):
         import src.engine.error_detectors.cron_completion as cc
+        monkeypatch.setattr(cc, "load_installed_crontab", lambda: "10 20 * * 1-5 run_threshold_cycle_postclose.sh # THRESHOLD_CYCLE_POSTCLOSE")
 
         logs_dir = tmp_path / "logs"
         logs_dir.mkdir(parents=True)
@@ -653,6 +655,7 @@ class TestCronCompletionDetector:
     ):
         import json
         import src.engine.error_detectors.cron_completion as cc
+        monkeypatch.setattr(cc, "load_installed_crontab", lambda: "10 20 * * 1-5 run_threshold_cycle_postclose.sh # THRESHOLD_CYCLE_POSTCLOSE")
 
         logs_dir = tmp_path / "logs"
         status_dir = tmp_path / "data" / "report" / "threshold_cycle_postclose_status"

@@ -16,7 +16,11 @@
 
 장후 생성기는 새 특징·임계값·확인 방식·유형을 만들거나 연구 코드의 900/450개 가설 조합을 자동 탐색하지 않는다. 등록 이후 수치나 조건을 바꾸려면 새로운 수동연구 정의/version을 등록한다. 장후가 바꾸는 것은 고정 후보 중 **어느 단독 정책/등록 조합을 다음 적용 주기에 선택하는가**이다.
 
-10/7 후속 사용자 지시로 P1~P7 구현·반복 리뷰·배포·재기동이 승인되었다. 현재 작업은 구현·검증 중이며 완료 여부와 실제 활성 family/PID는 실행 감사의 영수증으로 판단한다. 신규 후보의 기계 승률과 실제 보조 비교 완료를 분리하고, 미준비 scope는 검증된 기존 기계·보조 쌍을 함께 유지한다. 기존 삼성 최초 적용 기록은 원 정의의 이력으로 보존한다.
+10/7 후속 사용자 지시로 P1~P7 구현·반복 리뷰·배포·재기동을 진행한 이력은 §13의 실행 감사가 소유한다. 이후 추가 8개 구현까지 이어졌으며, 완료 여부와 실제 활성 family/PID는 각 시점 영수증으로 판단한다. 신규 후보의 기계 승률과 실제 보조 비교 완료를 분리하고, 미준비 scope는 검증된 기존 기계·보조 쌍을 함께 유지한다. 기존 삼성 최초 적용 기록은 원 정의의 이력으로 보존한다.
+
+10/7 원장 보완 요청은 [공통 저장·증분 처리 계획](main-ai-comparison-ledger-dedup-and-incremental-storage-plan-2026-10-07.md)을 연결한다. P4/P6의 공통 저장은 L0~L6 구현·이관·배포를 완료했으며, 후속 사용자 지시에 따른 두 정책 계획 대비 연결 재점검은 §14가 소유한다. 정책 정의·승률 선택 계약과 과거 완료 증거를 유지한다. EOD 제외 장후 중단은 사용자 재개 지시 전까지 유지하며, 코드 배포를 실제 호출·새 정책 발행·장후 재개로 표시하지 않는다.
+
+문서 간 우선순위는 적용 backend로 구분한다. v3 및 이를 승계한 v4는 이 문서의 **선택 portfolio·primary 1개·동률 현행 유지**를 계속 따른다. 후속 독립 탐지 계획의 전체 운용 목록/복합 근거/동률 기회 확대 권고는 successor로 전환한 scope에만 적용한다. 저장 adapter 전환은 그 전략 전환이 아니며, 원장 개선을 이유로 미선택 후보를 운영에 추가하지 않는다.
 
 실행 owner는 [현재 체크리스트](../checklists/2026-10-07-stage2-todo-checklist.md)의 `DirectFamilySourceRepairMainMechanisticEntry` 하나를 사용한다. 별도 중복 OPEN을 만들지 않는다. 기반 계약은 [기존 복수 정책 계획](main-multi-policy-parallel-entry-and-samsung-shallow-pullback-implementation-plan-2026-10-07.md)이며, 아래 확장 규격이 기존 문서의 삼성 전용 catalog/12셀 구현 범위를 보완한다.
 
@@ -162,7 +166,7 @@ local 성과 없는 승계는 `local_metrics=null`, parent payload/definition/so
 
 `WIN`, `FAIL_STOP`, `FAIL_TIMEOUT`, `UNRESOLVED`를 보존한다. 30분 경로·완성 분봉 coverage가 없는 미도달은 임의 TIMEOUT 실패가 되지 않는다. 양방향 barrier가 같은 분봉에 있어 순서를 알 수 없는 경우도 미확정으로 유지한다. 후보 확인 실패/만료는 미진입 상태이며 승률의 패배로 세지 않는다.
 
-조합의 승률은 **중복 제거한 WIN / (WIN + FAIL_STOP + FAIL_TIMEOUT)**이다. canonical opportunity ID는 `{date,symbol,market,route,item,transport_epoch,confirmation_sequence}`이며 정책 ID/phase를 포함해 같은 틱을 중복 세지 않는다. 분기별 anchor는 lineage로 남긴다. 같은 ID의 ask/라벨 충돌은 source contract 오류로 격리한다. 다른 확인 틱은 별도 가격 기회이며 실제 독립 거래 수로 표시하지 않는다.
+조합의 승률은 **중복 제거한 WIN / (WIN + FAIL_STOP + FAIL_TIMEOUT)**이다. canonical opportunity ID는 `{date,symbol,market,route,item,transport_epoch,confirmation_sequence}`이며 **정책 ID/phase를 포함하지 않아 같은 틱을 한 번만 센다.** 원 source stream namespace에 결속하고, 기존 digest 밖에 있는 namespace는 source receipt/legacy alias로 검증한다. 분기별 phase·anchor는 lineage로 남긴다. 같은 ID의 ask/라벨 충돌은 source contract 오류로 격리한다. 다른 확인 틱은 별도 가격 기회이며 실제 독립 거래 수로 표시하지 않는다.
 
 canonical ID는 같은 원천 stream의 namespace 안에서만 합친다. 연구 collector와 운영 WS의 epoch/sequence가 서로 다르면 원 생산자의 명시 mapping receipt가 있어야 자연 판정/실행과 연결한다. 가까운 시각·같은 가격만으로 연구 기회를 실제 미진입/주문으로 변환하지 않는다. mapping 미관측은 비교·적용 성과의 관측 한계로 기록하고 source를 새로 수집해야 한다는 결론으로 자동 확장하지 않는다.
 
@@ -185,6 +189,10 @@ canonical ID는 같은 원천 stream의 namespace 안에서만 합친다. 연구
 현재 producer가 같은 종목·날짜·시장에 대해 정상 행이 가장 많은 route 하나를 선택하는 경로는 v3의 route별 모집단에 사용하지 않는다. 보유한 각 지원 route/item을 독립 재생하고 실시간에서 사용하는 route와 같은 범위끼리 비교한다. SOR/KRX/NXT의 같은 상승을 시장 전체의 독립 거래 수로 더하지 않는다. 여러 route가 같은 종목의 실행 후보를 만들 때는 기존 symbol 단위 미체결/중복 주문 보호를 함께 사용한다.
 
 캐시 키는 registry/portfolio 목록·과거 적용 정의, normalized source/완성 분봉 bytes, source cutoff, feature/confirmation/label code, 비용·horizon, scope/route 선택, parent family, source/publication/effective date를 포함한다. 새 원천일은 증분 추가하고 같은 날짜의 뒤늦은 완성 분봉·정정은 해당 partition 결과만 새 generation으로 재계산한다. 과거 발행 결과를 덮어쓰거나 `UNRESOLVED`가 해소되기 전의 옛 성공률을 재사용하지 않는다.
+
+위 전체 fingerprint는 비교 run의 증빙이다. 공통 원장 개선에서는 하위 partition/입력/요청 캐시를 **실제 읽은 의존성**으로 별도 고정한다. registry 추가·다른 날짜 발행·부모 보고서 변경만으로 같은 과거 요청 본문을 복제하지 않는다. label snapshot은 입력/응답과 분리해 정정된 partition의 기여분을 교체하며, 누적 집계는 모든 유효 partition을 계속 포함한다. 요청에 소비된 접두·phase·prompt·schema·모델 설정이 달라지면 해당 요청은 새 ID로 처리한다.
+
+영향 partition은 파일 하나로 한정하지 않는다. session anchor·rolling/root의 앞 구간과 최대 30분 label/분봉의 뒤 구간 의존성을 manifest에 기록해, 경계 정정의 영향을 받는 인접 결과도 다시 계산한다. native continuity를 임의 연결하지 않으며 같은 입력/라벨임을 producer의 봉인된 내용 digest로 검증한다. mtime/크기만으로 캐시 적격을 인정하지 않는다.
 
 등록된 모든 후보/조합에는 비교 수와 terminal 상태가 있어야 한다. `valid_empty`, `no_resolved_sample`, `source_gap`, `evaluation_incomplete`, `evaluated_not_selected`, `selected`, `carry`를 구분한다. 일부 후보 재생이 중단됐는데 나머지 중 최고를 전수 비교 winner로 발표하지 않는다. 기계 비교 미완료 scope는 이전 유효 구성을 유지하며 미완료 후보 ID·원인·재개 checkpoint를 기록한다.
 
@@ -220,6 +228,10 @@ primary가 결정된 뒤 보조 위험판정을 한 번 수행한다. 보조 vet
 
 24점 제한 제거 뒤에는 기존 전체 `points × arms` 요청 배열을 메모리에 한꺼번에 만들지 않는다. partition별 입력 iterator와 durable 요청 원장, bounded in-flight 실행으로 처리한다. 기계 replay는 출력 feature가 필요한 지점만 재사용하고 보조 호출은 exact-cache 차집합만 실행한다. 호출 수·예상 소요·디스크 임시 사용량을 P4 보고서에 남기며 resource 종료를 임의 표본 상한이나 성과 탈락 기준으로 바꾸지 않는다.
 
+후속 저장 구현은 버전별 독립 DB 대신 공통 요청·응답 저장소와 불변 비교 membership 참조를 사용한다. 준비 전에 전체 expected owner/arm 집합을 봉인하되, 미호출 요청에는 작은 ID/참조/상태만 저장하고 본문은 검증된 내용 객체에서 호출 직전에 조립한다. 같은 입력·arm·응답과 같은 membership partition을 새 비교 날짜마다 복제하지 않는다. unique 요청 수, 비교 owner 수, 실제 호출 attempt 수, 실제 응답 수를 따로 대사한다. 기존 v3의 불확실 예약 4건이 v4에서 planned인 충돌은 전송/응답 증빙 대사 전 재호출하지 않으며, 공통 예약·재시작·롤백 요건은 원장 계획 §5~§6을 따른다.
+
+지연 조립은 원 입력/prompt/schema/serializer의 불변 참조가 모두 보존된 요청에만 적용한다. 현재 raw나 수정된 prompt로 본문을 다시 만들지 않는다. 준비 대상의 결손은 expected에 남겨 미완료로 보고한다. provider 응답 ID 부재만으로 미전송이라 판단하지 않는다. 비교는 원장 계획 §4.4의 응답·validation·label 선택 snapshot으로 봉인하고, 늦은 응답으로 이미 발행한 비교/정책을 바꾸지 않는다. validator만 변경된 경우 원 응답의 물리적 보존과 계약별 재검증을 분리하며, 아래 기존 raw PASS 순위 규칙을 저장 계층이 바꾸지 않는다.
+
 보조 순위는 기존 계약대로 `실제 raw PASS 중 WIN / 실제 raw PASS 전체`이며 validity 보정 점수를 순위에 넣지 않는다. 응답 schema·인용 결함은 따로 기록하고 runtime에서 잘못된 응답을 PASS 주문 허가로 사용하지 않는다. phase/input 계약이 같은 기존 유효 부모는 정확한 binding/hash로 승계할 수 있다. 새 phase/input에 적용 가능한 부모나 실제 응답 근거가 없으면 해당 보조 구성은 미준비다. 기계 연구 성과와 보조 준비 실패를 각각 기록한다.
 
 기계 winner에 필요한 보조 구성이 준비되지 않았으면 `machine_selected_auxiliary_pending`으로 기록한다. winner를 기계 실패로 바꾸지 않고, 해당 scope는 기존의 유효한 기계+보조 쌍을 함께 유지한다. 새 기계에 다른 branch/phase의 보조 응답을 임의 결합하지 않는다. 새 선택을 발행하는 scope에는 해당 candidate 비교 종료와 필요한 보조 binding 준비를 요구한다. 미완료 scope의 검증된 carry를 포함한 family는 발행할 수 있지만 보고서에 전체 비교 완료라고 쓰지 않는다.
@@ -235,7 +247,7 @@ v1/v2 발행 코드 hash를 고정한 kernel/branch/auxiliary 파일은 새 의�
 | registry·공통 kernel/branch | 10개 후보 정의, 명시적 portfolio, scope/특징/확인 상태, 기존 정의 호환 | 정의 manifest·source prefix parity |
 | branch postclose·postclose dispatcher | 모든 scope 누적 재생, 등록 후보·당일 적용 버전, 단독/조합 집계, 고정 선택 | candidate/portfolio 비교표·미선정 사유·carry |
 | v3 family·native runtime policy | 48셀/route coverage, v1/v2 이관, candidate/activation CAS, 날짜·hash 검증 | migration·stage/activate·rollback 결과 |
-| auxiliary contract/phases·producer | branch별 실제 입력·arm 비교·24점 잘림 제거·checkpoint | 요청/응답/기계 부모 binding·비교 수 |
+| auxiliary contract/phases·producer·공통 원장 adapter | branch별 실제 입력·arm 비교·24점 잘림 제거·공통 저장 참조·증분 checkpoint | 요청/응답/기계 부모 binding·expected 대사·고유 저장량·재개 상태 |
 | AI engine·Main state handlers | schema dispatch, 다중 claim 판정, primary·보조·intent 중복 제거 | Main trace·signal→request→intent receipt |
 | source diagnostics·decision trace·병목 monitor | group/branch/phase 표시, branch 원천 결손과 lifecycle 소멸 구분 | 정상 다중 분기를 source_gap으로 오인하지 않는 회귀 |
 | `monitoring/family_policy_semantics.py`와 기존 family 소비자 | 새 schema·definition/route·과거 생산 코드 증빙·발행 준비 구분 | 의미 검증 및 변조/누락 음성 검사 |
@@ -254,9 +266,9 @@ normalized source 소비 변경만으로 완료 가능한지 우선 확인한다
 | P1 | 연구 후보·명시 조합·scope·현재/당일 적용 정의 동결 | native current 기준 신규 10개와 기존/적용 policy census, PRE/AFTER 8개 기존 셀·보조 binding 누락 0 |
 | P2 | 공통 feature·복수 상태·v3 resolver 및 이관 | 후보 추가 전 구 family 행동 동등성, 같은 고정 접두의 branch 판단/확인 틱/ask/label parity, 48셀 지원 경로 coverage |
 | P3 | 정기 기계 producer 교체 | 등록 전수+실제 적용 버전의 단독/조합 비교, 승률/동률/null/미확정·carry 재현 |
-| P4 | 보조 producer·소비자 연결 | scope/branch/phase의 요청 bytes 일치, 실제 arm 비교·재사용·deferred 명세 |
+| P4 | 보조 producer·소비자 연결 및 후속 공통 원장 adapter | scope/branch/phase의 요청 bytes 일치, 실제 arm 비교·재사용·deferred 명세; 공통 저장·지연 본문 생성·expected membership 연결 |
 | P5 | Main·native writer·semantic/strict/PREOPEN 통합 | 중복 intent/provider 0, 구 schema 읽기·원자 활성화·rollback 회귀 |
-| P6 | 격리 생성 및 리뷰→보완→재리뷰 | in-scope 미해결 코드/계약 결함 0, 아래 targeted 검증 PASS, 실행 성능 보고 |
+| P6 | 격리 생성 및 리뷰→보완→재리뷰 | in-scope 미해결 코드/계약 결함 0, 아래 targeted 검증 PASS, 원장 계획 L0~L5의 이관·증분·불확실 예약·롤백 검증과 저장 성능 보고; 실제 cutover L6은 검증 이후 당시 승인 범위에서 수행 |
 | P7 | 허용된 적용 시점의 배포·정책 발행·기동·관측 | selected release / prepared / 활성 policy / PID 소비 / 자연 판정을 각각 증명 |
 
 P1에서는 registry 확정에 필요한 source receipt·소규모 비교 결과를 native immutable 저장소로 옮기고 hash를 대조한다. 실제 입력으로 필요한 원천은 현 retention 소유 아래 보호한다. 대용량 결과 전체를 운영 hot path에서 읽거나 임시 연구 파일을 유일한 정의 저장소로 두지 않는다.
@@ -282,6 +294,8 @@ P7 시점에는 최신 workspace/release/부모 bundle을 다시 확인한다. �
 | 목적 | 기존 성공 일부를 제거해 raw 승률이 오르는 후보 선택 가능; 단독 각각 우수해도 OR 승률 낮으면 OR 탈락; 같은 승률의 추가 H1은 자동 채택 아님 |
 | 평가 전수성 | 장중 가족 A→B→C 적용 후 세 버전 모두 비교; registry에서 제거된 과거 버전도 감사 행 보존; 실제 적용 구간과 누적 CF를 별도 출력 |
 | 보조 | 새 group/branch 희소 입력이 24점 잘림으로 사라지지 않음; 실제 5 arm 요청·응답 exact binding; phase 다르면 캐시 오용 0; 미완료 보고·동일 요청 재시도 |
+| 공통 원장 후속 요건 | 같은 원천/요청 재준비 시 본문·owner 복제 0; 새 날짜/label 정정은 해당 partition만 처리; 고유 요청과 비교 owner 회계 분리; 불확실 예약 4건 자동 재호출 0; 이관 전수 대사·최신 attempt를 보존한 rollback |
+| 네 계획 간 회귀 | 동일 확인 틱의 다른 branch/phase를 한 기회로 집계하되 phase별 요청은 구분; 경계 정정은 의존 partition 재계산; v3/v4 저장 전환 전후 기계 선택·primary·보조 입력·raw PASS 분모 동일; 새 응답 후에도 구 비교 snapshot 불변 |
 | 발행 | v1/v2 동일 bytes 읽기, v3 전체 직접 소비, report/definition/parent/date tamper, stale CAS, 동시 writer, rollback 및 partial-scope carry |
 
 재리뷰에서 추가한 필수 사례는 dated v1/current v2 불일치 시 활성 부모 선택, 삼성 기존 CONFIRMED 이관, PRE/통합 AFTER의 기존 8셀과 보조 binding 보존, 새 scope의 session anchor 복원 실패 격리, 복수 anchor의 동일 틱 대표 선택, 다른 틱의 input 혼합 금지, 비교 키가 달라도 동일 요청 1회 호출, 대규모 iterator 재개 후 누락·중복 0이다. 이관 단계는 새 ranking으로 기존 행동을 바꾸지 않는지 검사하고, 이후 누적 선택 변화는 별도 기대값으로 검증한다.
@@ -329,9 +343,23 @@ Python 변경에는 `.venv` targeted pytest·compile·diff 검증, wrapper 변�
 
 ## 13. 승인된 구현과 운영 인계
 
+- 후행 후보 등록: [추가 8개 패턴 등록 상세 계획](main-additional-eight-pattern-registration-after-multi-policy-implementation-plan-2026-10-07.md). 본 P1~P6의 완료 commit·registry·실제 부모와 P7 운영 상태를 인계한 뒤 삼성 2개·두산 1개·HPSP 2개·알테오젠 1개·주성 1개·일반 비삼성 1개를 정확한 정의로 등록한 후속 이력은 해당 문서 §12가 소유한다. all-valid-tick 상승지속/hold/120초 retest와 새 보조 phase·구 family 호환·native 비교가 그 범위다. P7의 미래 자연 신호 미관측을 등록 준비의 대기 조건으로 추가하지 않았다. 이번 원장 계획 보완은 완료한 정의 등록을 반복 실행하거나 운영 registry를 변경하지 않는다.
+- 후행 계획 재리뷰: 위 계획 §11 PR1~PR12에 새 schema의 요청 전/응답 후 claim·backend 분기, 반전 사실을 합성하지 않는 신규 입력/감시, 확인점 가격대 이동, 완전 offline 모집단과 live 용량 구분, 실제 primary 대상 AI 비교·원장 누락 대사, v4 전용 불변 출력 및 scope별 비교 완전성을 추가했다. v3의 현재 FIRST/CONFIRMED 정의·선택 규칙은 유지하고 `caa23416`의 원천 격리·스트리밍 수리를 후행 코드로 인계한다.
 - 실행 소유: `DirectFamilySourceRepairMainMechanisticEntry`; [구현·리뷰 감사](../audits/main-registered-multi-policy-v3-implementation-review-2026-10-07.md).
 - 코드 소유: 기존 `src/engine/scalping` 안의 v3 registry/runtime/policy/postclose. 기존 해시 고정 v1/v2 kernel·branch·보조 모듈의 bytes를 유지한다. 새 engine-root 모듈은 만들지 않는다.
 - 운영 장후: 기존 `continuous_reversal_postclose` dispatcher와 native stage/writer/loader/semantic/strict/PREOPEN을 통해 v3를 소비한다. 기계 단계의 비교 원본을 보조 단계에서 덮어쓰지 않으며 발행 가능한 기계·보조 쌍은 그 비교에 결속한 별도 immutable source다.
-- 보조 실행: 요청 횟수 제한 없이 exact request ledger와 bounded in-flight를 사용한다. 기존 stage의 종료 시각 전에 예약된 호출을 drain하고, 미완료·불확실·실패 수와 체크포인트를 기록한다. 부분 비교를 전수 완료로 표시하지 않는다.
+- 보조 실행: 요청 횟수 제한 없이 exact request ledger와 bounded in-flight를 사용한 기존 구현 이력을 보존한다. 후속 저장 개선은 §7의 공통 원장으로 연결하며 별도 버전 전체 원장을 다시 만드는 방식은 요구하지 않는다. 기존 stage의 종료 시각 전에 예약된 호출을 drain하고, 미완료·불확실·실패 수와 체크포인트를 기록한다. 부분 비교를 전수 완료로 표시하지 않는다. 현재 중단된 장후는 사용자 재개 지시 전 실행하지 않는다.
 - 무표본: 동일 group/band의 적용 가능한 REGULAR 부모, 검증된 이전 scope 순서로 승계한다. 정규장 전용 연구 후보를 PRE/AFTER/KRX/NXT로 복사하지 않는다.
 - 재기동: 새 code PID 확인 후 현재 parent에 CAS하여 v3를 적용한다. 원 PREOPEN·EOD·과거 DONE은 보존한다. 소비된 historical checklist의 관측 검증과 신규 기동의 current checklist 검증을 분리해 문서 갱신으로 `strict_checklist_generation_stale`가 재발하지 않는지 확인한다.
+
+## 14. 공통 원장 전환 후 구현 재점검
+
+사용자가 두 정책 계획 대비 실제 구현의 점검·보완·반복 리뷰와 장후용 배포를 지시했다. [통합 재점검 감사](../audits/main-multi-policy-shared-ledger-integration-review-2026-10-07.md)가 요구사항별 구현 위치, 발견 결함, 검증 및 배포 영수증을 소유한다. P1~P3/P5의 등록·scope·누적 원분수 선택·native 소비 계약은 유지하고 P4/P6의 실제 호출/발행 경계를 보완한다.
+
+- 비교가 미완료이면 과거 branch 문구가 존재해도 새 기계 조합을 발행하지 않는다. 그 scope의 이전 기계 payload·primary 순위·보조 binding을 함께 carry하고 machine winner와 publishable pair의 hash 및 사유를 각각 기록한다. 완료된 scope는 독립적으로 발행 가능하다.
+- 전수 입력의 작은 참조 파일 v2에 arm별 공통 request ID를 결속한다. 독립 population expected 검증에 이어 호출/집계 전 실제 owner·기회·arm·request·label 연결을 대사한다. 같은 개수의 다른 요청으로 치환된 경우도 예약 전에 거부한다. 과거 입력은 덮어쓰지 않고 필요 시 참조만 재준비한다.
+- 등록 미선택, 실제 primary 표본 없음, 비교 미완료, 전 arm 완료·PASS 없음, 완료를 branch/scope별로 출력한다. 미선택 후보를 provider 대상에 자동 추가하지 않는다.
+- 지원 CLI는 `continuous_reversal_postclose`다. `--mode prepare-inputs`는 공통 원장 준비만 하고 호출하지 않는다. `--evaluate-only`는 보조 집계에서만 지원하며 calls/machine/prepare-inputs와 조합하면 명시 오류다. 격리 기계 연구는 별도 data root를 사용한다. 폐기된 native DB 경로를 복원하지 않는다.
+- 보조 비교 snapshot·입력 census의 불변 복사는 같은 writer lock 안에서 봉인한다. 뒤의 재준비가 진행돼도 과거 발행 source hash는 바뀌지 않는다.
+
+이번 배포는 48셀/128경로 및 기존 활성 정책을 그대로 읽을 수 있는 장후 코드 배포다. P7의 실제 새 장후 생성·정책 선정·PREOPEN/PID 소비는 사용자 장후 재개 후 별도 확인한다. 후속 독립 탐지/복합 입력 successor는 이번 변경에 포함하지 않는다.

@@ -229,7 +229,7 @@ def prepare_inputs(backend, data_root, day, machine):
     groups = defaultdict(list)
     count = 0
     seen = set()
-    input_file = out / 'frozen' / ('inputs-' + gen + '.jsonl.gz')
+    input_file = out / 'frozen' / ('inputs-v2-' + gen + '.jsonl.gz')
     tmp = input_file.with_suffix('.partial')
     input_contract = P.digest([(r['sha256']) for r in receipts])
     request_contract = P.digest([P.file_hash(backend.A.__file__), P.file_hash(backend.__file__)])
@@ -270,7 +270,6 @@ def prepare_inputs(backend, data_root, day, machine):
                     # exports. Only the adapter materializes the immutable body.
                     small = {k: point[k] for k in ('comparison', 'canonical_id', 'branch_id', 'owners', 'outcome')}
                     small['objects'] = {k: record[k] for k in ('input', 'event', 'meta')}
-                    gz.write(S.encode(small) + b'\n')
                     count += 1
                     for arm in V1.ARMS:
                         if arm in request_refs:
@@ -290,6 +289,8 @@ def prepare_inputs(backend, data_root, day, machine):
                         event = point['event']
                         group = json.dumps([point['comparison'], str(point['event_id']).split(':')[0], event['symbol']], separators=(',', ':'))
                         groups[group].append(mid)
+                    small['requests'] = dict(request_refs)
+                    gz.write(S.encode(small) + b'\n')
                     if store.checkpoint(request_cache) is None:
                         store.checkpoint(request_cache, request_refs)
                     if count % 1000 == 0:
@@ -324,7 +325,8 @@ def prepare_inputs(backend, data_root, day, machine):
                             input_path=str(input_file.resolve()), input_sha256=P.file_hash(input_file),
                             input_generation_sha256=input_contract, source_receipts=receipts,
                             expected_manifest_sha256=manifest['artifact_content_sha256'], census=census,
-                            call_limit=None, status='prepared', storage_schema=S.FORMAT, **P.AUTH))
+                            call_limit=None, status='prepared', storage_schema=S.FORMAT,
+                            input_refs_version=2, **P.AUTH))
         P.write(out / 'input-census.json', result)
         return result
 
@@ -336,10 +338,11 @@ def calls(backend, data_root, day, *, stop_epoch=None, workers=4, transport=None
         from src.engine.scalping.ai_decision_quality import execute_openai_prompt_v2_candidate
         transport = execute_openai_prompt_v2_candidate
     out = directory(backend, data_root, day)
-    census, _, _ = validate_census(out)
-    gen = census['machine_report_sha256']
     count = 0
     with S.Store(data_root) as store:
+        census, _, _ = validate_census(out)
+        gen = census['machine_report_sha256']
+        validate_membership(store, census)
         store.reconcile()
         fence = store.activation()['writer_epoch']
         queue = store.pending(gen)
@@ -409,6 +412,45 @@ def validate_census(out):
     if any(actual[k] != manifest[k] or actual[k] != universe[k] for k in actual):
         raise ValueError('shared_expected_population_incomplete')
     return census, manifest, universe
+
+
+def validate_membership(store, census):
+    """Check exact owner/arm/request/label links before reservation or ranking.
+
+    Counts alone miss a same-size substitution or a damaged partition. The
+    compact input refs are independently checked against the population census
+    before preparation, then joined here without reading large request bodies.
+    """
+    if census.get('input_refs_version') != 2:
+        raise ValueError('shared_input_refs_require_preparation')
+    generation = census['machine_report_sha256']
+    expected = census['census']['expected_owner_requests']
+    row = store.db.execute('SELECT expected FROM generations WHERE generation=?', (generation,)).fetchone()
+    if row != (expected,):
+        raise ValueError('shared_generation_expected_mismatch')
+    store.db.execute('DROP TABLE IF EXISTS temp.expected_links')
+    store.db.execute('''CREATE TEMP TABLE expected_links(comparison TEXT, opportunity TEXT,
+        arm TEXT, request_id INTEGER, outcome TEXT, PRIMARY KEY(comparison,opportunity,arm)) WITHOUT ROWID''')
+    with gzip.open(census['input_path'], 'rt') as handle:
+        for line in handle:
+            point = json.loads(line)
+            if set(point.get('requests', {})) != set(V1.ARMS):
+                raise ValueError('shared_expected_arm_links_missing')
+            store.db.executemany('INSERT INTO expected_links VALUES(?,?,?,?,?)',
+                ((point['comparison'], point['canonical_id'], arm, rid, point['outcome']['status'])
+                 for arm, rid in point['requests'].items()))
+    actual = '''SELECT c.value,o.value,a.value,r.id,m.outcome
+        FROM generation_parts gp JOIN partition_members pm ON pm.partition_id=gp.partition_id
+        JOIN members m ON m.id=pm.member_id JOIN requests r ON r.id=m.request_id
+        JOIN strings c ON c.id=m.comparison JOIN strings o ON o.id=m.opportunity
+        JOIN strings a ON a.id=m.arm WHERE gp.generation=?'''
+    count = store.db.execute('SELECT count(*) FROM (' + actual + ')', (generation,)).fetchone()[0]
+    declared_count = store.db.execute('SELECT count(*) FROM expected_links').fetchone()[0]
+    missing = store.db.execute('SELECT * FROM expected_links EXCEPT ' + actual + ' LIMIT 1', (generation,)).fetchone()
+    extra = store.db.execute(actual + ' EXCEPT SELECT * FROM expected_links LIMIT 1', (generation,)).fetchone()
+    store.db.execute('DROP TABLE expected_links')
+    if count != expected or declared_count != expected or missing or extra:
+        raise ValueError('shared_expected_membership_changed')
 
 
 def comparison_metrics(store, backend, snapshot):
@@ -502,6 +544,36 @@ def response_evidence(store, out, snapshot):
         tmp.unlink(missing_ok=True)
 
 
+def branch_comparison_census(backend, machine, expected, gaps, metrics):
+    """Report unselected/no-primary branches without inventing provider work."""
+    C = backend.C
+    baseline = {c['key']: c for c in machine['baseline_cells']}
+    consumed = [(r['family_sha256'], r['machine_cells'])
+                for r in machine.get('applied_history', {}).get('consumed_versions', [])
+                if r.get('machine_cells') and hasattr(backend, 'eligible_population_points')]
+    rows = []
+    for cell in machine['cells']:
+        key = cell['key']
+        for route, selected in cell['routes'].items():
+            owners = defaultdict(list)
+            for label, value in [('selected', selected), ('applied_baseline', baseline[key]['routes'][route]),
+                                 *[('consumed:' + family, cells[key]['routes'][route]) for family, cells in consumed]]:
+                for b in value['payload']['branches']:
+                    owners[b['branch_id']].append(label)
+            registered = {bid for p in C.PORTFOLIOS[key][route] for bid in p['branch_ids']}
+            for bid in sorted(registered | set(owners)):
+                branch = C.branch(bid)
+                comparison = '|'.join((key, route, bid, branch.get('definition_sha256', P.digest(C.definition(bid))), branch['decision_phase']))
+                points = expected.get(comparison, 0)
+                status = ('evaluation_incomplete' if gaps.get(comparison) else
+                          'completed' if any(metrics.get(comparison, {}).get(a, {}).get('pass_count', 0) for a in V1.ARMS) else
+                          'completed_no_pass') if points else ('no_primary_points' if owners[bid] else 'not_requested_machine_unselected')
+                rows.append(dict(cell_key=key, route=route, branch_id=bid, decision_phase=branch['decision_phase'],
+                                 comparison_key=comparison, owners=owners[bid], eligible_points=points,
+                                 expected_owner_requests=points * len(V1.ARMS), status=status))
+    return rows
+
+
 def auxiliary_report(backend, data_root, day, publication, parent_bundle, *, publish_policy=True):
     from src.engine.scalping import mechanistic_entry_runtime_policy as N
     C, A, V3, SCHEMA = backend.C, backend.A, backend.V3, backend.SCHEMA
@@ -513,11 +585,12 @@ def auxiliary_report(backend, data_root, day, publication, parent_bundle, *, pub
     baseline = {c['key']: c for c in machine['baseline_cells']}
     oldaux = {c['key']: c for c in machine['baseline_auxiliary_cells']}
     quality, quality_path = backend.source_quality(data_root, day, json.loads(Path(machine['population_path']).read_text()))
-    input_census, expected_manifest, universe = validate_census(out)
-    if input_census['machine_report_sha256'] != gen:
-        raise ValueError('shared_machine_input_generation_changed')
-    declared = Counter(expected_manifest['comparisons'])
     with S.Store(data_root) as store:
+        input_census, expected_manifest, universe = validate_census(out)
+        if input_census['machine_report_sha256'] != gen:
+            raise ValueError('shared_machine_input_generation_changed')
+        declared = Counter(expected_manifest['comparisons'])
+        validate_membership(store, input_census)
         store.activation(); store.reconcile()
         snapshot = store.snapshot(gen)
         metrics, gaps, expected, owner_states = comparison_metrics(store, backend, snapshot)
@@ -537,11 +610,14 @@ def auxiliary_report(backend, data_root, day, publication, parent_bundle, *, pub
         S.atomic_json(snapshot_path, revision)
         input_census = dict(input_census, source_receipts=input_census['source_receipts'] + [
             dict(path=str(snapshot_path.resolve()), sha256=P.file_hash(snapshot_path))])
+        input_receipts=[freeze_receipt(out,origin) for origin in (
+            out/'input-census.json',out/'frozen'/('universe-'+gen+'.json'),
+            out/'frozen'/('expected-'+gen+'.json'))]
     proof=dict(path=str(evidence.resolve()),sha256=P.file_hash(evidence));published=[];acs=[];pending=[];regular_aux={};regular_machine={}
     for mc in machine['cells']:
         key=mc['key'];published_cell=dict(key=key,routes={});aux_cell=dict(key=key,routes={})
         for route,cell in mc['routes'].items():
-            policies={};not_ready=[]
+            policies={};not_ready=[];pending_reasons={}
             regular=key.replace('|PRE|','|REGULAR|').replace('|AFTER|','|REGULAR|')
             inherited=(cell.get('local_metrics') is None and regular!=key
                        and cell.get('carry_source',{}).get('cell_key')==regular
@@ -557,15 +633,23 @@ def auxiliary_report(backend, data_root, day, publication, parent_bundle, *, pub
                                                 branch_id=bid,binding_sha256=P.digest(old['binding']),reason='no_sample_compatible_regular_selected')
                 eligible=[a for a in V1.TIE_ORDER if metrics[comparison][a]['pass_count']]
                 # No partial comparison is allowed to masquerade as a winner.
-                if expected[comparison] and not gaps[comparison] and eligible:
+                if gaps[comparison]:
+                    not_ready.append(bid)
+                    pending_reasons[bid]='evaluation_incomplete'
+                elif expected[comparison] and eligible:
                     arm=max(eligible,key=lambda a:(Fraction(metrics[comparison][a]['pass_wins'],metrics[comparison][a]['pass_count']),bool(old and old['arm']==a)))
                     policies[bid]=dict(arm=arm,binding=A.binding(b['decision_phase'],arm),local_metrics=dict(metrics[comparison][arm]),
                                        actual_response_evidence=[proof],comparison_key=comparison,candidates={a:dict(m) for a,m in metrics[comparison].items()})
                 elif old:
                     policies[bid]=copy.deepcopy(old)
-                else:not_ready.append(bid)
+                else:
+                    not_ready.append(bid)
+                    pending_reasons[bid]='no_comparable_auxiliary_arm' if expected[comparison] else 'no_primary_points'
             if not_ready:
-                pending.append(dict(cell_key=key,route=route,status='machine_selected_auxiliary_pending',branches=not_ready,comparison_gaps={b:gaps.get('|'.join((key,route,b,C.branch(b).get('definition_sha256',P.digest(C.definition(b))),C.branch(b)['decision_phase'])),0) for b in not_ready}))
+                pending.append(dict(cell_key=key,route=route,status='machine_selected_auxiliary_pending',branches=not_ready,
+                                    reasons=pending_reasons,machine_winner_payload_sha256=cell['payload_sha256'],
+                                    publishable_pair_payload_sha256=baseline[key]['routes'][route]['payload_sha256'],
+                                    comparison_gaps={b:gaps.get('|'.join((key,route,b,C.branch(b).get('definition_sha256',P.digest(C.definition(b))),C.branch(b)['decision_phase'])),0) for b in not_ready}))
                 selected=copy.deepcopy(baseline[key]['routes'][route]);ap=copy.deepcopy(oldaux[key]['routes'][route]['payload'])
                 selected['status']='carry_machine_selected_auxiliary_pending'
             else:
@@ -582,9 +666,6 @@ def auxiliary_report(backend, data_root, day, publication, parent_bundle, *, pub
     # machine winners from the deployable machine+auxiliary pairs.
     comparison_path=out/'frozen'/('machine-comparison-'+gen+'.json')
     P.write(comparison_path,machine)
-    input_receipts=[freeze_receipt(out,origin) for origin in (
-        out/'input-census.json',out/'frozen'/('universe-'+gen+'.json'),
-        out/'frozen'/('expected-'+gen+'.json'))]
     issued=P.seal(dict(machine,cells=published,comparison_report_sha256=gen,
                        source_receipts=machine['source_receipts']+input_census['source_receipts']+[
                            dict(path=str(comparison_path.resolve()),sha256=P.file_hash(comparison_path)),
@@ -596,7 +677,9 @@ def auxiliary_report(backend, data_root, day, publication, parent_bundle, *, pub
         results_sources=[proof],source_receipts=[],scope_pending=pending,comparison_complete=not bool(gaps),
         owner_request_census=dict(expected=expected_manifest['expected_requests'],missing=missing_owner_requests,reconciled=not missing_owner_requests,**owner_states),
         comparison_statuses={c:'evaluation_incomplete' if gaps[c] else 'completed' if any(metrics[c][a]['pass_count'] for a in V1.ARMS) else 'completed_no_pass' for c in declared},
-        eligible_comparisons=dict(expected),incomplete_comparisons=dict(gaps),primary_metric='actual_raw_PASS_wins_over_all_actual_raw_PASS',
+        eligible_comparisons=dict(expected),incomplete_comparisons=dict(gaps),
+        branch_comparison_census=branch_comparison_census(backend,machine,expected,gaps,metrics),
+        primary_metric='actual_raw_PASS_wins_over_all_actual_raw_PASS',
         call_limit=None,validity_adjustment_in_rank=False,**P.AUTH))
     P.write(out/'machine.json',issued);P.write(out/'auxiliary.json',auxiliary)
     # Machine-stage bytes remain frozen once its terminal receipt commits.

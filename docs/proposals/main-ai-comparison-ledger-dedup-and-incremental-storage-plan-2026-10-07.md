@@ -269,3 +269,5 @@ storage 개선과 독립 탐지의 설계/소규모 구현은 역할 경계를 �
 실행 결과: L0~L6 구현·전수 이관·최종 253 PASS·배포·구 원장 회수 완료. 579,442개 공통 요청과 reserved 4건을 보존했고, 원장 할당은 10.95→1.32GiB로 감소했다. 자세한 수치와 범위는 위 구현 검토/최종 영수증을 따른다. L7은 계속 보류다.
 
 마지막 호출 경로 보완: 공통 CLI와 직접 `auxiliary_report()` API를 모두 storage adapter로 전달하고, `main_auxiliary_policy`의 코드 fingerprint에 adapter/store 파일을 포함한다. 저장 코드 변경을 구 장후 단계 완료로 재사용하지 않도록 한다.
+
+후속 복수정책/8개 연결 재점검은 [통합 감사](../audits/main-multi-policy-shared-ledger-integration-review-2026-10-07.md)가 소유한다. 공통 CLI의 `--mode prepare-inputs`는 예약/호출 없이 참조만 준비한다. compact 입력 참조 v2에 arm별 request ID를 보존하고 호출/집계 전에 owner·기회·arm·request·label 전부를 원장과 대사한다. v1 참조는 덮어쓰지 않고 재준비하며 같은 고유 요청/실제 응답/예약을 재사용한다. 비교 snapshot과 census receipt는 같은 writer lock에서 봉인한다. 미완료 scope는 과거 보조 문구 존재 여부와 무관하게 기계·보조 쌍 전체를 carry한다. `--evaluate-only`는 보조 집계 전용이고 다른 mode 조합은 명시 거부한다. 장후 보류/무제한 quota/불확실 예약 보호는 유지한다.

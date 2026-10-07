@@ -473,7 +473,7 @@ def execute_calls(data_root, day, inputs):
               freeze_sha256=freeze['artifact_content_sha256'],results_sources=[dict(path=str(p.resolve()),sha256=file_hash(p)) for p in result_paths(data_root,day)],**AUTH)))
 
 
-def main():
+def main(argv=None):
     parser=argparse.ArgumentParser()
     parser.add_argument('--date',required=True)
     parser.add_argument('--publication-date')
@@ -481,16 +481,24 @@ def main():
     parser.add_argument('--seed-research',type=Path)
     parser.add_argument('--actual-inputs',type=Path)
     parser.add_argument('--evaluate-only',action='store_true')
-    parser.add_argument('--mode',choices=['machine','auxiliary','calls'],default='machine')
-    args=parser.parse_args()
+    parser.add_argument('--mode',choices=['machine','prepare-inputs','auxiliary','calls'],default='machine')
+    args=parser.parse_args(argv)
+    if args.evaluate_only and args.mode != 'auxiliary':
+        parser.error('--evaluate-only is supported only for auxiliary; use an isolated data root for machine research')
     if args.seed_research:prepare_research(args.data_root,args.date,args.seed_research)
-    if args.mode=='calls':
+    if args.mode in {'prepare-inputs','calls'}:
         from src.engine.scalping import continuous_reversal_registered_postclose as registered
         from src.engine.scalping import continuous_reversal_path_postclose as paths
         if paths.active(args.data_root,args.publication_date or args.date):registered=paths
         from src.engine.scalping.continuous_reversal_shared_ledger import adapt
         registered=adapt(registered,args.data_root)
-        if registered.active(args.data_root,args.publication_date or args.date):registered.calls(args.data_root,args.date)
+        if registered.active(args.data_root,args.publication_date or args.date):
+            if args.mode=='prepare-inputs':
+                machine=json.loads((registered.directory(args.data_root,args.date)/'machine-comparison.json').read_text())
+                print(json.dumps(registered.prepare_inputs(args.data_root,args.date,machine)))
+            else:registered.calls(args.data_root,args.date)
+        elif args.mode=='prepare-inputs':
+            parser.error('--mode prepare-inputs requires an active v3/v4 family')
         else:execute_calls(args.data_root,args.date,args.actual_inputs)
     elif args.mode=='machine':print(json.dumps(machine_report(args.data_root,args.date,args.publication_date or args.date)))
     else:
