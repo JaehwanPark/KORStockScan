@@ -9,7 +9,7 @@ import os
 import re
 import subprocess
 from collections import Counter
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -94,6 +94,7 @@ def check(root, now, *, target_date, reader, states=None, timer_dir=Path('/etc/s
             f'korstockscan-low-price-two-leg-preflight@{pid}.service')]
         if states is None:
             states = unit_census(units)
+        prior_applied = None
         for pid, profile in sorted(profiles.items()):
             unit = states.get(f'korstockscan-low-price-two-leg@{pid}.service') or {}
             preflight_unit = states.get(f'korstockscan-low-price-two-leg-preflight@{pid}.service') or {}
@@ -162,20 +163,58 @@ def check(root, now, *, target_date, reader, states=None, timer_dir=Path('/etc/s
                     row['findings'].append('episode_unit_process_release_mismatch')
                 if not authority_valid:
                     row['findings'].append('episode_current_authority_invalid')
-                source_valid = not (not current_state
+                source_identity_valid = not (not current_state
                     or capture.get('source_date') != target_date or capture.get('runtime_pid') != active_pid
                     or capture.get('profile_id') != pid
                     or not isinstance(capture.get('runtime_cwd'), str)
                     or not Path(capture.get('runtime_cwd') or '').is_absolute()
                     or capture.get('runtime_cwd') != unit.get('WorkingDirectory')
                     or (cwd is not None and capture.get('runtime_cwd') != cwd)
-                    or capture.get('policy_hash') != applied['policy_hash']
                     or capture.get('execution_mode') != 'real' or capture.get('status') != 'persisted'
                     or not chain_valid or age is None or not 0 <= age <= 120)
+                source_valid = source_identity_valid and capture.get('policy_hash') == applied['policy_hash']
                 row['capture_contract_valid'] = source_valid
-                if not source_valid:
+                # Date rollover records the prior custody policy before the
+                # first completed eligible minute binds today's entry policy.
+                # This is a bounded initialization phase, never PID consumption
+                # or an exemption for an evaluated bar or non-flat ledger.
+                started = _unit_started_at(unit)
+                first_bar_close = datetime.combine(day, profile.policy.scan_start, tzinfo=now.tzinfo) + timedelta(minutes=1)
+                initial_binding = (source_identity_valid and not source_valid and authority_valid
+                    and not row['findings']
+                    and unit.get('Result') in (None, '', 'success')
+                    and sequence == {'daily_state_initialized': 1,
+                        'daily_state_initialized_from_prior_terminal_policy': 2}.get(capture.get('action'))
+                    and state.get('status') == 'READY' and state.get('attempt_consumed') is False
+                    and type(state.get('position_qty')) is int and state['position_qty'] == 0
+                    and state.get('legs') == [] and state.get('owned_order_nos') == []
+                    and not state.get('last_evaluated_bar') and not state.get('pending_entry_confirmation')
+                    and started is not None and started.astimezone(now.tzinfo).date() == day
+                    and started <= stamp <= now < first_bar_close)
+                if initial_binding:
+                    if prior_applied is None:
+                        prior_applied = {}
+                        try:
+                            prior_day = date.fromisoformat(applied.get('source_date') or '')
+                            if prior_day < day:
+                                prior_path = applied_path.with_name(f'low_price_two_leg_policy_{prior_day.isoformat()}.json')
+                                prior, prior_sha = reader(prior_path)
+                                if policy.validate_applied(prior, target_date=prior_day)[0]:
+                                    prior_applied = dict(payload=prior, artifact=str(prior_path), report_sha256=prior_sha)
+                        except (OSError, ValueError, TypeError, KeyError) as exc:
+                            if str(exc) == 'semantic_generation_changed_during_read':
+                                raise
+                    prior_payload = prior_applied.get('payload') or {}
+                    initial_binding = (pid in (prior_payload.get('profiles') or {})
+                        and prior_payload.get('policy_hash') == capture.get('policy_hash'))
+                    if initial_binding:
+                        row['initial_policy_binding'] = dict(status='waiting_first_completed_bar',
+                            deadline=first_bar_close.isoformat(), prior_artifact=prior_applied['artifact'],
+                            prior_report_sha256=prior_applied['report_sha256'], prior_policy_hash=capture['policy_hash'])
+                if not source_valid and not initial_binding:
                     row['findings'].append('episode_current_pid_source_not_observed')
                 row['status'] = ('source_unverified' if row['findings'] else
+                                 'waiting_runtime_policy_binding' if initial_binding else
                                  'process_unobservable' if cwd_unobservable else 'running_observed')
             elif now.time() < profile.policy.scan_start:
                 row['status'] = 'preflight_ready_waiting_start' if authority_valid else 'preflight_not_observed'
@@ -208,7 +247,8 @@ def check(root, now, *, target_date, reader, states=None, timer_dir=Path('/etc/s
         result['unobservable_profile_count'] = result['counts'].get('process_unobservable', 0)
         result['status'] = ('warning' if result['findings'] else
                            'unobservable' if result['unobservable_profile_count'] else
-                           'waiting_producer' if result['counts'].get('waiting_preflight_producer') else 'pass')
+                           'waiting_producer' if (result['counts'].get('waiting_preflight_producer')
+                                                  or result['counts'].get('waiting_runtime_policy_binding')) else 'pass')
         result['actual_pid_consumed'] = any(r['status'] == 'running_observed' for r in result['rows'])
     except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as exc:
         moving = str(exc) in {'semantic_generation_changed_during_read', 'episode_unit_census_unobservable'} or isinstance(exc, subprocess.SubprocessError)

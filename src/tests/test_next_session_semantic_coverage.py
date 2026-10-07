@@ -442,3 +442,81 @@ def test_episode_preflight_publication_wait_is_exact_date_bounded_and_never_hide
         assert detector._semantic_alerts('episode_startup',result,'2026-10-06') == []
     elif case=='failed':assert result['findings']==['episode_current_preflight_failed']
     else:assert result['findings']==['episode_current_preflight_not_observed']
+
+
+@pytest.mark.parametrize('inspection', ['readable', 'permission_denied'])
+@pytest.mark.parametrize('case', [
+    'initializing', 'prior_terminal_initializing', 'repeated_initializing', 'failed_unit',
+    'deadline', 'after_deadline', 'evaluated', 'pending', 'non_flat',
+    'orders', 'attempted', 'prior_pid', 'wrong_policy', 'missing_prior',
+    'invalid_prior', 'wrong_prior_profile', 'stale', 'prior_start', 'prior_publish_race'])
+def test_episode_prior_custody_initialization_waits_only_for_first_completed_bar(tmp_path, monkeypatch, case, inspection):
+    from src.engine.error_detectors import episode_health
+    from src.trading.low_price_two_leg import profiles, policy_runtime, preflight
+    pid = 'samsung_heavy_morning'
+    profile = profiles.PROFILES[pid]
+    monkeypatch.setattr(profiles, 'profiles_for_target_date', lambda *_: {pid: profile})
+    monkeypatch.setattr(policy_runtime, 'validate_applied',
+        lambda _, target_date: (not (case == 'invalid_prior' and target_date.isoformat() == '2026-10-05'), 'valid'))
+    monkeypatch.setattr(preflight, 'validate_authority', lambda *_, **__: (True, 'ready'))
+    def inspect(*_):
+        if inspection == 'permission_denied':
+            raise PermissionError(13, 'Permission denied')
+        return '/reviewed-release'
+    monkeypatch.setattr(episode_health.os, 'readlink', inspect)
+    folder = tmp_path/'data/threshold_cycle/low_price_two_leg/applied'; folder.mkdir(parents=True)
+    (folder/'low_price_two_leg_policy_2026-10-06.json').write_text(
+        json.dumps(dict(policy_hash='a'*64, source_date='2026-10-05')))
+    if case != 'missing_prior':
+        (folder/'low_price_two_leg_policy_2026-10-05.json').write_text(
+            json.dumps(dict(policy_hash='c'*64, profiles={} if case == 'wrong_prior_profile' else {pid: {}})))
+    capture = dict(source_date='2026-10-06', profile_id=pid, runtime_pid=123,
+        runtime_cwd='/reviewed-release', policy_hash='c'*64, execution_mode='real', status='persisted',
+        observed_at_kst='2026-10-06T09:19:20+09:00', observation_sha256='d'*64,
+        action='daily_state_initialized', capture_sequence=dict(schema='low_price_capture_sequence_v1',
+            sequence=1, generation_id='b'*32, previous_observation_sha256=None))
+    state = dict(trade_date='2026-10-06', status='READY', attempt_consumed=False, position_qty=0,
+        legs=[], owned_order_nos=[], last_evaluated_bar='', pending_entry_confirmation=None, economic_capture=capture)
+    if case in {'prior_terminal_initializing', 'repeated_initializing'}:
+        capture['capture_sequence'].update(sequence=2, previous_observation_sha256='f'*64)
+    if case == 'prior_terminal_initializing': capture['action'] = 'daily_state_initialized_from_prior_terminal_policy'
+    if case == 'evaluated':
+        capture['action'] = 'bar_evaluated_no_signal'
+        state['last_evaluated_bar'] = '2026-10-06T09:20:00+09:00'
+    if case == 'pending': state['pending_entry_confirmation'] = {'due_at': '2026-10-06T09:20:04+09:00'}
+    if case == 'non_flat': state.update(position_qty=10, legs=[{'position_qty': 10}])
+    if case == 'orders': state['owned_order_nos'] = ['native-order']
+    if case == 'attempted': state['attempt_consumed'] = True
+    if case == 'prior_pid': capture['runtime_pid'] = 122
+    if case == 'wrong_policy': capture['policy_hash'] = 'e'*64
+    if case == 'stale': capture['observed_at_kst'] = '2026-10-06T09:15:00+09:00'
+    sf = tmp_path/'data/runtime/low_price_two_leg'; sf.mkdir(parents=True)
+    (sf/f'{pid}_state.json').write_text(json.dumps(state))
+    timers = tmp_path/'timers'; timers.mkdir()
+    (timers/'korstockscan-low-price-two-leg-test-preflight.timer').write_text(
+        f'OnCalendar=Mon..Fri *-*-* 09:15:00 Asia/Seoul\nUnit=korstockscan-low-price-two-leg-preflight@{pid}.service\n')
+    unit = dict(MainPID='123', ActiveState='active', WorkingDirectory='/reviewed-release',
+        ExecMainStartTimestamp='Tue 2026-10-06 09:19:14 KST')
+    if case == 'prior_start': unit['ExecMainStartTimestamp'] = 'Mon 2026-10-05 09:19:14 KST'
+    if case == 'failed_unit': unit['Result'] = 'exit-code'
+    clock = '09:21:00' if case == 'deadline' else '09:21:01' if case == 'after_deadline' else '09:20:03'
+    def reader(path):
+        if case == 'prior_publish_race' and path.name == 'low_price_two_leg_policy_2026-10-05.json':
+            raise ValueError('semantic_generation_changed_during_read')
+        return detector._semantic_object(path)
+    result = episode_health.check(tmp_path, datetime.fromisoformat('2026-10-06T'+clock+'+09:00'),
+        target_date='2026-10-06', reader=reader, timer_dir=timers,
+        states={f'korstockscan-low-price-two-leg@{pid}.service': unit})
+    assert result['actual_pid_consumed'] is False
+    if case == 'prior_publish_race':
+        assert result['status'] == 'unobservable' and result['findings'] == []
+    elif case in {'initializing', 'prior_terminal_initializing'}:
+        row = result['rows'][0]
+        assert result['status'] == 'waiting_producer' and result['findings'] == []
+        assert row['status'] == 'waiting_runtime_policy_binding' and row['capture_contract_valid'] is False
+        assert row['initial_policy_binding']['deadline'] == '2026-10-06T09:21:00+09:00'
+        assert detector._semantic_alerts('episode_startup', result, '2026-10-06') == []
+    else:
+        assert result['findings'] == ['episode_current_pid_source_not_observed']
+        alert = detector._semantic_alerts('episode_startup', result, '2026-10-06')[0]
+        assert (alert['affected'], alert['eligible'], alert['total']) == (1, 1, 1)
