@@ -17,7 +17,7 @@ def claim_snapshot_with_receipt(*args, **kwargs):
     Extra source metadata does not change the native token, snapshot or guard.
     Registration and its copy share the ingestion lock; no disk or API I/O.
     """
-    from src.engine.scalping.reversal_registered_runtime import backend
+    from src.engine.scalping.reversal_policy_backend import backend
     B = backend()
     with B._LOCK:
         claim = B.claim_snapshot(*args, **kwargs)
@@ -69,7 +69,7 @@ def validate_claim_with_receipt(claim, family_sha256, *, now,
     decision clock for the unchanged guard and separately timestamp the state
     read: ingestion can advance while the caller waits to acquire this lock.
     """
-    from src.engine.scalping.reversal_registered_runtime import backend
+    from src.engine.scalping.reversal_policy_backend import backend
     B = backend(claim)
 
     with B._LOCK:
@@ -138,8 +138,9 @@ def project(snapshot, *, symbol, venue, session, now, item, envelope=None):
     event, _ = snapshot
     market = K.market_bucket(session)
     key = (symbol, venue, item, market, datetime.fromtimestamp(now, K.KST).date())
-    from src.engine.scalping import reversal_registered_runtime as registered
-    native=registered if registered._FAMILY is not None else K
+    from src.engine.scalping.reversal_policy_backend import backend
+    registered=backend()
+    native=registered if getattr(registered, "_FAMILY", None) is not None else K
     if native is registered:
         key=key[:4]+(key[4].isoformat(),)
     with native._LOCK:

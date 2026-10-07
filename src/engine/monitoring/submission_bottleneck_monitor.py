@@ -1309,7 +1309,7 @@ def _reversal_selection_receipt(bundle, data_root):
             or family.get('publication_date') != bundle.get('publication_date')):
         raise ValueError('reversal_selection_date_binding_invalid')
     selections = {}
-    expanded = [(key+'|'+route,value) for key,cell in family['machine_cells'].items() for route,value in cell.get('routes',{}).items()] if family['schema']=='continuous_reversal_policy_v3' else list(family['machine_cells'].items())
+    expanded = [(key+'|'+route,value) for key,cell in family['machine_cells'].items() for route,value in cell.get('routes',{}).items()] if family['schema'] in {'continuous_reversal_policy_v3','continuous_reversal_policy_v4'} else list(family['machine_cells'].items())
     for key, cell in expanded:
         metrics = cell.get('local_metrics')
         selections[key] = dict(
@@ -1329,8 +1329,9 @@ def _reversal_observation_receipt(bundle, observation, *, verified_components=No
     from src.engine.scalping.mechanistic_entry_runtime_policy import digest
 
     family = bundle['continuous_reversal']
-    is_v3=family.get('schema')=='continuous_reversal_policy_v3'
-    is_v2=family.get('schema') in {'continuous_reversal_policy_v2','continuous_reversal_policy_v3'}
+    is_v4=family.get('schema')=='continuous_reversal_policy_v4'
+    is_v3=family.get('schema') in {'continuous_reversal_policy_v3','continuous_reversal_policy_v4'}
+    is_v2=family.get('schema') in {'continuous_reversal_policy_v2','continuous_reversal_policy_v3','continuous_reversal_policy_v4'}
     if verified_components is None:
         validate_family(family)
         verified_components = dict(machine=digest(family['machine_cells']),
@@ -1411,7 +1412,15 @@ def _reversal_observation_receipt(bundle, observation, *, verified_components=No
             expected_schema=response_schema(inp,complete_source_only=arm==ARMS[-1])
             if is_v2:
                 from src.engine.scalping import reversal_auxiliary_phases as phases
+                if is_v4:
+                    from src.engine.scalping import reversal_path_auxiliary as phases
                 expected_prompt=phases.prompt(phase,arm)
+                if is_v4 and phase in phases.PHASES:
+                    phases.validate_input_signal(inp,assessment['auxiliary_event'])
+                    expected_schema['properties']['risk_codes']['minItems']=1
+                    if (inp.get('signal_kind')!=phase or inp.get('mechanistic_entry_assessment',{}).get('machine_signal_confirmed') is not True
+                            or 'price_reversal_confirmed' in inp.get('mechanistic_entry_assessment',{})):
+                        raise ValueError('path_auxiliary_signal_contract_mismatch')
                 if phase=='CONFIRMED_UPTICK':
                     expected_schema['properties']['risk_codes']['minItems']=1
                     e=assessment['event'];timeline=inp.get('observation_phase',{})
@@ -1443,7 +1452,7 @@ def _reversal_observation_receipt(bundle, observation, *, verified_components=No
     if (not isinstance(event, dict) or event.get('symbol') != symbol
             or event.get('market') != kernel.market_bucket(session)
             or assessment.get('event_id') != event.get('event_id')
-            or assessment.get('price_reversal_confirmed') is not True):
+            or (assessment.get('machine_signal_confirmed') is not True if is_v4 else assessment.get('price_reversal_confirmed') is not True)):
         raise ValueError('reversal_event_identity_invalid')
     if (not isinstance(event.get('epoch'), (int, float))
             or not math.isfinite(event['epoch']) or event['epoch'] > (
@@ -1459,9 +1468,12 @@ def _reversal_observation_receipt(bundle, observation, *, verified_components=No
         from src.engine.scalping.continuous_reversal_policy_v2 import assess
         if is_v3:
             from src.engine.scalping.continuous_reversal_policy_v3 import assess
+        if is_v4:
+            from src.engine.scalping.continuous_reversal_policy_v4 import assess
         replay,_,_,_=assess(family,(event,None),symbol=symbol,session=session,build_request=False)
         for field in ('action','reason','cell_key','event_id','signal_id','matched_branches','branch_states',
-                      'primary_branch','decision_phase','auxiliary_arm','auxiliary_event','machine_component_sha256','family_sha256'):
+                      'primary_branch','decision_phase','auxiliary_arm','auxiliary_event','machine_component_sha256','family_sha256','price_reversal_confirmed',
+                      *(['machine_signal_confirmed','signal_kind'] if is_v4 else [])):
             if assessment.get(field)!=replay.get(field):raise ValueError('reversal_v2_branch_verdict_mismatch:'+field)
         return (family['machine_cells'][key]['routes'][assessment['route']]['payload'] if is_v3 else family['machine_cells'][key]['payload']),dict(policy_sha256=component,leaf=key)
     rule = family['machine_cells'][key]['payload']['rule']

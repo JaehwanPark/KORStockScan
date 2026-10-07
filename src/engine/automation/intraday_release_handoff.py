@@ -431,6 +431,8 @@ def activate_main_v2(day,*,pid,confirm,now=None):
     candidate = DATA_DIR/'runtime/mechanistic_entry_policy/candidates'/f'policy_{day}.json'
     if candidate.is_file() and json.loads(candidate.read_text())['continuous_reversal']['schema']=='continuous_reversal_policy_v3':
         from src.engine.scalping.continuous_reversal_policy_v3 import activate
+    if candidate.is_file() and json.loads(candidate.read_text())['continuous_reversal']['schema']=='continuous_reversal_policy_v4':
+        from src.engine.scalping.continuous_reversal_policy_v4 import activate
     receipt=activate(DATA_DIR,day,now=current,intraday_evidence=evidence)
     return dict(status='pass',activation=receipt,actual_policy_pid_consumption=False)
 

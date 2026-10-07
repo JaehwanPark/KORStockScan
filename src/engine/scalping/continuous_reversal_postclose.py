@@ -217,6 +217,8 @@ def prepare_research(data_root, day, seed):
 
 def machine_report(data_root, day, publication):
     from src.engine.scalping import continuous_reversal_registered_postclose as registered
+    from src.engine.scalping import continuous_reversal_path_postclose as paths
+    if paths.active(data_root,publication):registered=paths
     current=registered.active(data_root,publication)
     if current:return registered.machine_report(data_root,day,publication,current)
     from src.engine.scalping import continuous_reversal_branch_postclose as branch
@@ -323,6 +325,8 @@ def inherit(cells, previous=None):
 
 def auxiliary_report(data_root,day,publication,*,publish_policy=True):
     from src.engine.scalping import continuous_reversal_registered_postclose as registered
+    from src.engine.scalping import continuous_reversal_path_postclose as paths
+    if paths.active(data_root,publication):registered=paths
     current=registered.active(data_root,publication)
     if current:return registered.auxiliary_report(data_root,day,publication,current,publish_policy=publish_policy)
     from src.engine.scalping import continuous_reversal_branch_postclose as branch
@@ -480,11 +484,15 @@ def main():
     if args.seed_research:prepare_research(args.data_root,args.date,args.seed_research)
     if args.mode=='calls':
         from src.engine.scalping import continuous_reversal_registered_postclose as registered
+        from src.engine.scalping import continuous_reversal_path_postclose as paths
+        if paths.active(args.data_root,args.publication_date or args.date):registered=paths
         if registered.active(args.data_root,args.publication_date or args.date):registered.calls(args.data_root,args.date)
         else:execute_calls(args.data_root,args.date,args.actual_inputs)
     elif args.mode=='machine':print(json.dumps(machine_report(args.data_root,args.date,args.publication_date or args.date)))
     else:
         from src.engine.scalping import continuous_reversal_registered_postclose as registered
+        from src.engine.scalping import continuous_reversal_path_postclose as paths
+        if paths.active(args.data_root,args.publication_date or args.date):registered=paths
         current=registered.active(args.data_root,args.publication_date or args.date)
         if current:
             machine=json.loads((registered.directory(args.data_root,args.date)/'machine-comparison.json').read_text())

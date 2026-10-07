@@ -1331,13 +1331,14 @@ def _stage_output_issues(report_dir, day, stage):
         value=_load_json(path)
         from src.engine.scalping.continuous_reversal_registered_postclose import SCHEMA as registered_schema
         from src.engine.scalping.reversal_registered_catalog import cells as registered_cells
+        from src.engine.scalping.continuous_reversal_path_postclose import SCHEMA as path_schema
         schema=value.get('schema')
-        expected=registered_cells() if schema==registered_schema else expected_cells()
-        if (schema not in {SCHEMA,registered_schema} or value.get('source_date')!=day or value.get('status') not in {'completed','completed_with_scope_carry'}
+        expected=registered_cells() if schema in {registered_schema,path_schema} else expected_cells()
+        if (schema not in {SCHEMA,registered_schema,path_schema} or value.get('source_date')!=day or value.get('status') not in {'completed','completed_with_scope_carry'}
             or value.get('artifact_content_sha256')!=digest({k:v for k,v in value.items() if k!='artifact_content_sha256'})
             or {c.get('key') for c in value.get('cells',[])}!=set(expected)):
             return [f'{stage}:continuous_reversal_output_invalid']
-        if schema==registered_schema:
+        if schema in {registered_schema,path_schema}:
             from src.engine.scalping.reversal_registered_catalog import ROUTES
             if len(value['cells'])!=48 or any(set(c.get('routes',{}))!=set(ROUTES[c['key'].split('|')[1]]) for c in value['cells']):
                 return [f'{stage}:continuous_reversal_route_output_invalid']
@@ -1619,7 +1620,9 @@ def _stage_code(stage, commands, project, *, dispatcher_path=None,
     if stage in {'main_machine_policy','main_auxiliary_policy'}:
         for name in ('continuous_reversal','continuous_reversal_source','continuous_reversal_policy','continuous_reversal_postclose','reversal_auxiliary_contract',
                      'continuous_reversal_branches','continuous_reversal_branch_postclose','continuous_reversal_policy_v2','reversal_auxiliary_phases','reversal_registered_catalog','reversal_registered_runtime',
-                     'continuous_reversal_policy_v3','continuous_reversal_registered_postclose'):
+                     'continuous_reversal_policy_v3','continuous_reversal_registered_postclose',
+                     'reversal_path_catalog','reversal_path_runtime','reversal_path_auxiliary','reversal_policy_backend',
+                     'continuous_reversal_policy_v4','continuous_reversal_path_postclose'):
             paths[name]=project/f'src/engine/scalping/{name}.py'
     return _stage_digest(_stage_sources(paths))
 
@@ -1824,7 +1827,7 @@ def run_stage(stage, day, *, report_dir, project, publication=None, effective=No
                     value['automatic_policy_disposition'] = terminal.get('disposition')
                     value['designated_bundle_sha256'] = staging.get('bundle_sha256')
                 value['policy_sha256'] = terminal.get('policy_sha256')
-                if terminal.get('schema') in {'continuous_reversal_research_v1','continuous_reversal_registered_postclose_v1'}:
+                if terminal.get('schema') in {'continuous_reversal_research_v1','continuous_reversal_registered_postclose_v1','continuous_reversal_path_postclose_v1'}:
                     value['policy_disposition']='continuous_reversal_selected'
                     value['selection_metric']='cumulative_raw_win_fraction'
                     value['machine_report_sha256']=terminal.get('report_sha256')

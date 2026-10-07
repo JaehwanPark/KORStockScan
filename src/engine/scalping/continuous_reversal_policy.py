@@ -15,6 +15,9 @@ KST=ZoneInfo('Asia/Seoul')
 
 
 def validate_family(family):
+    if family.get('schema')=='continuous_reversal_policy_v4':
+        from src.engine.scalping.continuous_reversal_policy_v4 import validate_family as v4
+        return v4(family)
     if isinstance(family,dict) and family.get('schema')=='continuous_reversal_policy_v3':
         from src.engine.scalping.continuous_reversal_policy_v3 import validate_family as v3
         return v3(family)
@@ -127,6 +130,9 @@ def publish(data_root,day,publication,machine,auxiliary):
 
 
 def validate_sources(bundle,data_root):
+    if (bundle.get('continuous_reversal') or {}).get('schema')=='continuous_reversal_policy_v4':
+        from src.engine.scalping.continuous_reversal_policy_v4 import validate_sources as v4
+        return v4(bundle,data_root)
     if (bundle.get('continuous_reversal') or {}).get('schema')=='continuous_reversal_policy_v3':
         from src.engine.scalping.continuous_reversal_policy_v3 import validate_sources as v3
         return v3(bundle,data_root)
@@ -179,6 +185,9 @@ def validate_sources(bundle,data_root):
 
 
 def assess(family,snapshot,*,symbol,session):
+    if family.get('schema')=='continuous_reversal_policy_v4':
+        from src.engine.scalping.continuous_reversal_policy_v4 import assess as v4
+        return v4(family,snapshot,symbol=symbol,session=session)
     if family.get('schema')=='continuous_reversal_policy_v3':
         from src.engine.scalping.continuous_reversal_policy_v3 import assess as v3
         return v3(family,snapshot,symbol=symbol,session=session)
@@ -216,10 +225,12 @@ def compose(response,policy):
     action=assessment['action'];inp=policy.get('continuous_reversal_input')
     arm=policy.get('continuous_reversal_arm')
     phase=assessment.get('decision_phase','FIRST_UPTICK')
-    if assessment.get('policy_version') in {'continuous_reversal_policy_v2','continuous_reversal_policy_v3'} and action=='ENTER_NOW':
+    if assessment.get('policy_version') in {'continuous_reversal_policy_v2','continuous_reversal_policy_v3','continuous_reversal_policy_v4'} and action=='ENTER_NOW':
         from src.engine.scalping.reversal_auxiliary_phases import validate_response as validate_phase
+        if assessment.get('policy_version')=='continuous_reversal_policy_v4':
+            from src.engine.scalping.reversal_path_auxiliary import validate_response as validate_phase
         errors=validate_phase(response,inp,arm=arm,phase=phase)
-        from src.engine.scalping.reversal_registered_runtime import validate_any_claim as validate_claim
+        from src.engine.scalping.reversal_policy_backend import validate_any_claim as validate_claim
         try:
             from src.engine.scalping.mechanistic_entry_runtime_policy import load_effective
             from src.utils.constants import DATA_DIR
@@ -273,12 +284,12 @@ def direct_handoff(data_root,day,*,effective_date=None,publication_date=None):
     if family['source_date']!=day or family['publication_date']!=publication:
         raise ValueError('continuous_reversal_source_date_mismatch')
     out=directory(data_root,day)
-    if family.get('schema') in {'continuous_reversal_policy_v2','continuous_reversal_policy_v3'}:
+    if family.get('schema') in {'continuous_reversal_policy_v2','continuous_reversal_policy_v3','continuous_reversal_policy_v4'}:
         # Initial intraday research and daily reports have independent owners.
         # Handoff reads the issued native immutable component snapshots.
         out=native.root(Path(data_root))/'sources'
     for name in ['machine','auxiliary']:
-        path=out/(f"reversal-{family[name+'_report_sha256']}.json" if family.get('schema') in {'continuous_reversal_policy_v2','continuous_reversal_policy_v3'} else name+'.json')
+        path=out/(f"reversal-{family[name+'_report_sha256']}.json" if family.get('schema') in {'continuous_reversal_policy_v2','continuous_reversal_policy_v3','continuous_reversal_policy_v4'} else name+'.json')
         report=json.loads(path.read_text())
         if report['artifact_content_sha256']!=family[name+'_report_sha256'] or digest(
             {k:v for k,v in report.items() if k!='artifact_content_sha256'})!=report['artifact_content_sha256']:
@@ -313,6 +324,8 @@ def activate(data_root,target_date,*,now=None):
         from src.engine.scalping.continuous_reversal_policy_v2 import activate as activate_v2
         if json.loads(candidate.read_text())['continuous_reversal']['schema']=='continuous_reversal_policy_v3':
             from src.engine.scalping.continuous_reversal_policy_v3 import activate as activate_v2
+        if json.loads(candidate.read_text())['continuous_reversal']['schema']=='continuous_reversal_policy_v4':
+            from src.engine.scalping.continuous_reversal_policy_v4 import activate as activate_v2
         return activate_v2(data_root,target_date,now=now)
     from src.engine.scalping import mechanistic_entry_runtime_policy as native
     current=(now or datetime.now(KST)).astimezone(KST)

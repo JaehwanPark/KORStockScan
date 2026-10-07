@@ -412,7 +412,8 @@ def _continuous_reversal_result_semantics(root, source_date, component):
         from src.engine.scalping import mechanistic_entry_runtime_policy as native
         report, report_sha = _semantic_object(report_path)
         from src.engine.scalping.continuous_reversal_registered_postclose import SCHEMA as registered_schema
-        if report.get('schema') not in {reports.SCHEMA,registered_schema}:
+        from src.engine.scalping.continuous_reversal_path_postclose import SCHEMA as path_schema
+        if report.get('schema') not in {reports.SCHEMA,registered_schema,path_schema}:
             raise ValueError('continuous_reversal_report_schema_invalid')
         if (report != reports.seal(report) or report.get('source_date') != source_date
                 or report.get('status') not in {'completed','completed_with_scope_carry'}):

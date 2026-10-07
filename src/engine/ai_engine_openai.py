@@ -1022,7 +1022,7 @@ class GPTSniperEngine:
     """
 
     def __init__(self, api_keys, announce_startup=True):
-        from src.engine.scalping.reversal_registered_runtime import configure_bundle
+        from src.engine.scalping.reversal_policy_backend import configure_bundle
         from src.engine.scalping.mechanistic_entry_runtime_policy import load_effective
         from src.utils.constants import DATA_DIR
         try:
@@ -9534,7 +9534,7 @@ class GPTSniperEngine:
                     from src.engine.scalping.micro_reversion.forward_collector import _explicit_item_venue
                     item = (ws_data.get('last_realtime_type_item') or {}).get('0B')
                     snapshot_now=time.time()
-                    if reversal_family.get('schema') in {'continuous_reversal_policy_v2','continuous_reversal_policy_v3'}:
+                    if reversal_family.get('schema') in {'continuous_reversal_policy_v2','continuous_reversal_policy_v3','continuous_reversal_policy_v4'}:
                         from src.engine.scalping.reversal_source_diagnostics import (
                             claim_snapshot_with_receipt as claim_snapshot, validate_claim_with_receipt)
                         claim=reversal_signal_claim or claim_snapshot(symbol,_explicit_item_venue(item),machine_exact['session_bucket'],
@@ -9568,7 +9568,7 @@ class GPTSniperEngine:
                     machine_assessment['source_diagnostics'] = diagnostics
                     entry_setup_live_policy.update(continuous_reversal_assessment=machine_assessment,
                         continuous_reversal_input=reversal_input,
-                        continuous_reversal_arm=(machine_assessment.get('auxiliary_arm') if reversal_family.get('schema') in {'continuous_reversal_policy_v2','continuous_reversal_policy_v3'}
+                        continuous_reversal_arm=(machine_assessment.get('auxiliary_arm') if reversal_family.get('schema') in {'continuous_reversal_policy_v2','continuous_reversal_policy_v3','continuous_reversal_policy_v4'}
                             else reversal_family['auxiliary_cells'][machine_assessment['cell_key']]['payload']['arm'] if machine_assessment.get('cell_key') else None))
                     from src.engine.scalping.mechanistic_entry_runtime_policy import digest
                     reversal_receipt = dict(
@@ -10443,8 +10443,8 @@ class GPTSniperEngine:
                                        'continuous_reversal_response_schema': reversal_schema}
                 trace_metadata_extra['entry_setup_live_policy_selected_prompt_version']=prompt_version
                 input_contract_fields['entry_setup_live_policy_selected_prompt_version']=prompt_version
-            if entry_setup_live_policy.get('continuous_reversal_assessment',{}).get('policy_version') in {'continuous_reversal_policy_v2','continuous_reversal_policy_v3'}:
-                from src.engine.scalping.reversal_registered_runtime import validate_any_claim as validate_claim
+            if entry_setup_live_policy.get('continuous_reversal_assessment',{}).get('policy_version') in {'continuous_reversal_policy_v2','continuous_reversal_policy_v3','continuous_reversal_policy_v4'}:
+                from src.engine.scalping.reversal_policy_backend import validate_any_claim as validate_claim
                 from src.engine.scalping.initial_quantity_bundle_state import reserve_reversal_signal
                 from src.utils.constants import DATA_DIR
                 assessment=entry_setup_live_policy['continuous_reversal_assessment']
