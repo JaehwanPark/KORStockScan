@@ -1,0 +1,33 @@
+# 운용 정책 독립 탐지·기여도 평가 구현과 장후 인계
+
+사용자가 10/7 계획의 구현·반복 리뷰·배포 후 중단한 EOD 제외 장후 재개와 10/8 정상 기동 준비를 승인했다. source date는 자정 이후에도 `2026-10-07`, 준비 대상은 `2026-10-08`이다. 현재 owner는 10/8 체크리스트의 `DirectFamilySourceRepairMainMechanisticEntry`다. 10/8 자동 builder는 10/7 runtime summary 미생성으로 아직 실행 불가하여 승인 범위/Acceptance를 같은 stable ID로 명시 이관했다.
+
+## 구현 경계
+
+- 기존 v4의 정의/phase/코드 pin을 보존하고 `scalping` 패키지에 v5 실행 계약·dispatcher·runtime·복합 auxiliary·outbox·평가·장후 producer를 추가했다. 엔진 root 모듈을 늘리지 않았다.
+- 최초 manifest는 실제 부모 목록+SA/SB/DA/HA/HB/AA/JA/GA이며 원 scope를 유지한다. 일일 평가 결과로 운용 목록을 자동 제외하지 않는다. explicit ADD/REPLACE/RETIRE는 부모와 변경 receipt를 요구한다.
+- 실행 hash와 보고 세대를 분리한다. 같은 scope의 실행 의미가 같으면 FSM/claim을 보존하고, 다른 scope 변경만으로 무효화하지 않는다. 공통 5초·source/epoch 경계는 유지한다.
+- 동일 tick의 모든 신호를 typed union으로 봉인한다. FIRST가 무효화되어도 같은 5초 안의 독립 돌파가 남으면 이를 재검증한다. 새 신호를 응답 뒤 추가하지 않는다. AI는 전체 signal ref와 실제 fact ID를 명시하고 공통 기회 PASS/VETO/CAUTION만 판정한다.
+- live outbox는 공통 offline 원장과 별개다. 외부 전송 전에 canonical 확인점을 예약하고 기존 provider/parent intent registry를 연결한다. 불확실 전송은 새 세대/재기동으로 재전송하지 않는다. 정확히 한 번 전송을 보장한다고 주장하지 않는다.
+- 누적 원천의 실제 ask·1,800초·비용률 .0023·순목표 +.4%·soft -3% native label을 재사용한다. 탐지 UNKNOWN과 결과 U, 독점 입증/미입증, 비교 공통 범위와 제외 baseline을 구분하고 coverage mask를 압축 객체로 보존한다.
+- 비교안은 실제 native 현행, 같은 목록 union, 각 8개 추가, 일괄 추가로 고정한다. 공통 Store에 누락 exact request와 membership만 추가한다. quota=None이며 동시 4개·native stage deadline을 유지한다. arm 하나라도 응답/계약이 부족하면 해당 확인점은 모든 arm 순위에서 제외하고 incomplete를 공개한다.
+- 미완료 scope는 원 v4 pair를 native backend로 승계한다. 새 union 준비/구 pair 승계/실제 PID 소비를 구분한다. 무표본 PRE/AFTER는 호환되는 동일 유형 REGULAR union binding을 승계하며 정책 ID를 정규장 목록으로 바꾸지 않는다.
+
+## 리뷰·보완
+
+1. legacy 기본 정책의 `definition_sha256` 부재: 원 정의 내용 hash로 안정적인 signal ref를 구성했다.
+2. 삼성 native callback의 non-Samsung 가격대 조회: 별도 successor dispatcher에서 `samsung|시장|ALL` 주소를 사용한다. 동결 v4 파일은 바꾸지 않고 실제 normalized callback regression으로 확인한다.
+3. 감시/장후 stage/native loader의 새 schema 누락: v5 envelope·48셀/128route·mixed backend·실제 요청 hash 검증을 연결했다.
+4. code hash와 실행 세대 분리의 무결성: execution code digest를 실제 pin 목록에 결속하고, 현재 envelope는 매번 검증하면서 동일 scope만 보존한다.
+5. 비교 원장: 5-arm exact membership 검증, invalid arm 전체 분모 격리, uncertain 재예약 거부, 재준비 중복0과 불변 source snapshot 소비를 검증한다.
+
+6. final-refresh systemd의 v8 고정 pin: selected-release router 경로를 추가하고 기존 EOD gate installer가 서비스 비기동 상태에서 timer 보류를 보존하며 router drop-in을 설치하도록 보완했다. 재개 시 old code로 돌아가는 경로를 제거하고 자정 뒤 완료 원천일을 해석한다.
+7. 동일 canonical 원천 충돌은 식별한 확인점만 격리하고 나머지 분석을 계속한다. 각 고정 추가안의 공통 비교 범위와 실제 native arm 대비 추가/제외 PASS, 기계·보조 tradeoff를 별도 집계한다.
+
+## 검증·운영 상태
+
+초기 관련 회귀 692 PASS, 후속 독립 콜백/혼합 신호 보완 포함 695 PASS, 확장 최종 회귀 699 PASS. consumer 인계 208 PASS와 router/실행 계약 107 PASS를 추가 검증했다. 최종 계약 검증·immutable release 검증과 실제 배포/재개/terminal/PREOPEN 결과는 아래에 이어 기록한다. 이 단계의 테스트 성공은 실제 정책 적용이나 자연 주문·경제성 개선이 아니다.
+
+근거 디렉터리: `data/report/operating-policy-implementation/2026-10-07/`. N0 부모 bundle `69caaf00f2a0475e0290de0b239f28975333782429a62f4e238c8d0ae96f5d78`, family `ed50d100aef3d66361c83bea53441ae0b4461b8ac98fdbcb87346cc9790a324d`. 23:51 재조회에서 이전 Main PID 1074119는 이미 종료 상태였으며 이 작업이 종료시키지 않았다. 장후 배포와 다음 예약기동 준비를 별도로 검증한다.
+
+실제 `capture_machine_observation` 생산자가 만든 union 판정 증빙을 감시 소비자가 검증하는 회귀도 PASS이며, 원 요청을 변조하면 거부한다(독립 운용 suite 16 PASS). 설치는 기존 `deploy/install_postclose_eod_gate_systemd.sh`를 사용하고 final-refresh 실행은 `deploy/run_runtime_release.sh machine-final-refresh`가 선택된 release와 완료 원천일을 해석한다.

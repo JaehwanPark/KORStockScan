@@ -43,6 +43,14 @@ def test_error_detector_route_consumes_selected_release_and_keeps_log_owner(rele
     assert plan["cwd"] == str(root)
 
 
+def test_machine_final_refresh_routes_reviewed_release_exact_source(release):
+    workspace,root,_,_=release
+    plan=router.make_plan(workspace,root,'a'*40,'machine-final-refresh','2026-10-07')
+    assert plan['command']==['/bin/bash',str(root/'deploy/run_machine_microstructure_final_refresh.sh'),'2026-10-07']
+    unit=(Path(__file__).resolve().parents[2]/'deploy/systemd/korstockscan-machine-microstructure-final-refresh.service').read_text()
+    assert 'run_runtime_release.sh machine-final-refresh' in unit
+
+
 def test_error_cron_installer_preserves_unrelated_auth_and_finalizer(tmp_path):
     workspace = tmp_path / "workspace"
     (workspace / "data/runtime").mkdir(parents=True)

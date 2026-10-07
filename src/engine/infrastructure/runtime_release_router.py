@@ -45,7 +45,7 @@ LEGACY_TAGS = {
 CRON_TARGETS = frozenset({"start", *TAGS.values()})
 REQUIRED_CRON_TARGETS = CRON_TARGETS
 OPERATIONS = ("start", "restart", *OWNED, "paired-replay", "eod", "archive", "buy-funnel",
-              "pre-submit-source", "holding-exit-sentinel", "error-detection")
+              "pre-submit-source", "holding-exit-sentinel", "error-detection", "machine-final-refresh")
 RELEASE_SET_LOCK = "runtime_release_set.lock"
 MAX_RELEASE_SET_UNITS = 256
 CORE_SYSTEMD_UNITS = (
@@ -567,6 +567,8 @@ def make_plan(
                    "--delay-source-only", "--date", target_date, "--notify"]
     elif operation == "holding-exit-sentinel":
         command = ["/bin/bash", str(root / "deploy/run_holding_exit_sentinel_intraday.sh"), target_date]
+    elif operation == "machine-final-refresh":
+        command = ["/bin/bash", str(root / "deploy/run_machine_microstructure_final_refresh.sh"), target_date]
     elif operation == "paired-replay":
         command = [
             "/bin/bash",
@@ -770,7 +772,7 @@ def main() -> int:
     parser.add_argument(
         "target_date",
         nargs="?",
-        default=datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat(),
+        default=None,
     )
     parser.add_argument("--print-plan", action="store_true")
     parser.add_argument("--resolve-effective-today", action="store_true")
@@ -825,7 +827,15 @@ def main() -> int:
             return 0
         if not args.operation:
             raise ValueError("operation_required")
-        plan = make_plan(workspace, root, commit, args.operation, args.target_date)
+        target_date=args.target_date or datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat()
+        if args.operation=='machine-final-refresh' and args.target_date is None:
+            # Persistent timers may catch up after midnight. Bind the completed
+            # source, not the router's wall-clock date or a historical code pin.
+            target_date=subprocess.check_output([str(root/'.venv/bin/python'),'-c',
+                'from src.engine.monitoring.machine_microstructure_attribution import resolve_completed_machine_target_date; print(resolve_completed_machine_target_date().isoformat())'],
+                cwd=root,env={**os.environ,'PYTHONPATH':str(root),'PROJECT_DIR':str(root),
+                    'KORSTOCKSCAN_PROJECT_DIR':str(root),'KORSTOCKSCAN_PYTHON_BIN':str(root/'.venv/bin/python')},text=True,timeout=30).strip()
+        plan = make_plan(workspace, root, commit, args.operation, target_date)
         if args.print_plan:
             print(json.dumps(plan), flush=True)
             return 0
@@ -837,6 +847,9 @@ def main() -> int:
             PROJECT_DIR=str(root),
             PYTHONPATH=str(root),
             VENV_PY=str(root / ".venv/bin/python"),
+            KORSTOCKSCAN_PROJECT_DIR=str(root),
+            KORSTOCKSCAN_PYTHON_BIN=str(root / '.venv/bin/python'),
+            KORSTOCKSCAN_RUNTIME_GIT_COMMIT=commit,
         )
         os.chdir(plan["cwd"])
         if args.operation in {"start", "restart"}:
@@ -845,13 +858,16 @@ def main() -> int:
             with runtime_release_set_lock(workspace):
                 root, commit = selected_release(workspace)
                 plan = make_plan(
-                    workspace, root, commit, args.operation, args.target_date
+                    workspace, root, commit, args.operation, target_date
                 )
                 print(json.dumps(plan), flush=True)
                 env.update(
                     PROJECT_DIR=str(root),
                     PYTHONPATH=str(root),
                     VENV_PY=str(root / ".venv/bin/python"),
+                    KORSTOCKSCAN_PROJECT_DIR=str(root),
+                    KORSTOCKSCAN_PYTHON_BIN=str(root / '.venv/bin/python'),
+                    KORSTOCKSCAN_RUNTIME_GIT_COMMIT=commit,
                 )
                 os.chdir(plan["cwd"])
                 if args.operation == "start":

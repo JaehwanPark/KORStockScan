@@ -74,23 +74,21 @@ for entry in "${units[@]}"; do
   timer="${unit%.service}.timer"
   main_pid="$(systemctl show "$unit" --property=MainPID --value)"
   [[ "$main_pid" == "0" ]] || { echo "${unit}_active_pid_blocks_schedule_pin:${main_pid}" >&2; exit 1; }
-  systemctl is-active --quiet "$timer" || { echo "${timer}_not_active" >&2; exit 1; }
+  [[ "$(systemctl show "$timer" --property=LoadState --value)" == "loaded" ]] || { echo "${timer}_not_loaded" >&2; exit 1; }
   dropin_dir="/etc/systemd/system/${unit}.d"
   install -d -m 0755 "$dropin_dir"
   dropin="$dropin_dir/$dropin_name"
   temporary="$(mktemp "$dropin_dir/.postclose-eod-gate.XXXXXX")"
   cat > "$temporary" <<EOF
 # Exact-date EOD completion gates are required before postclose compute.
-# Immutable release pin: $RELEASE_COMMIT
+# Reviewed selected-release router; installation preserves timer hold state.
 [Service]
-WorkingDirectory=$RELEASE_ROOT
-Environment="PYTHONPATH=$RELEASE_ROOT"
-Environment="PROJECT_DIR=$RELEASE_ROOT"
-Environment="KORSTOCKSCAN_PROJECT_DIR=$RELEASE_ROOT"
-Environment="KORSTOCKSCAN_PYTHON_BIN=$RELEASE_ROOT/.venv/bin/python"
-Environment="KORSTOCKSCAN_RUNTIME_GIT_COMMIT=$RELEASE_COMMIT"
+WorkingDirectory=$PROJECT_DIR
+Environment="PYTHONPATH=$PROJECT_DIR"
+Environment="PROJECT_DIR=$PROJECT_DIR"
+UnsetEnvironment=KORSTOCKSCAN_PROJECT_DIR KORSTOCKSCAN_PYTHON_BIN KORSTOCKSCAN_RUNTIME_GIT_COMMIT
 ExecStart=
-ExecStart=$RELEASE_ROOT/deploy/$wrapper
+ExecStart=/bin/bash $PROJECT_DIR/deploy/run_runtime_release.sh machine-final-refresh
 EOF
   chmod 0644 "$temporary"
   mv -f "$temporary" "$dropin"
@@ -102,12 +100,10 @@ for entry in "${units[@]}"; do
   wrapper="${entry#*:}"
   timer="${unit%.service}.timer"
   properties="$(systemctl show "$unit" --property=WorkingDirectory,ExecStart,Environment --no-pager)"
-  grep -Fq "WorkingDirectory=$RELEASE_ROOT" <<< "$properties"
-  grep -Fq "$RELEASE_ROOT/deploy/$wrapper" <<< "$properties"
-  grep -Fq "KORSTOCKSCAN_RUNTIME_GIT_COMMIT=$RELEASE_COMMIT" <<< "$properties"
+  grep -Fq "WorkingDirectory=$PROJECT_DIR" <<< "$properties"
+  grep -Fq "$PROJECT_DIR/deploy/run_runtime_release.sh machine-final-refresh" <<< "$properties"
   [[ "$(systemctl show "$unit" --property=MainPID --value)" == "0" ]]
-  systemctl is-active --quiet "$timer"
 done
 
-printf '[POSTCLOSE_EOD_SYSTEMD] release_root=%s commit=%s units=1 timers=active services_not_restarted=true\n' \
+printf '[POSTCLOSE_EOD_SYSTEMD] release_root=%s commit=%s units=1 timers=preserved services_not_restarted=true\n' \
   "$RELEASE_ROOT" "$RELEASE_COMMIT"

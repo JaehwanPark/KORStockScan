@@ -17,13 +17,14 @@ def claim_snapshot_with_receipt(*args, **kwargs):
     Extra source metadata does not change the native token, snapshot or guard.
     Registration and its copy share the ingestion lock; no disk or API I/O.
     """
-    from src.engine.scalping.reversal_policy_backend import backend
+    from src.engine.scalping.reversal_operating_backend import backend
     B = backend()
     with B._LOCK:
         claim = B.claim_snapshot(*args, **kwargs)
         if claim:
             try:
-                original = B._CLAIMS.get(claim['token'])
+                receipt_backend = B.R if getattr(B,'R',None) and claim.get('backend')=='registered_v4' else B
+                original = receipt_backend._CLAIMS.get(claim['token'])
                 if original:
                     proof = dict(schema='continuous_reversal_claim_registration_v1',
                         claim_token=claim['token'], generation=original['generation'],
@@ -50,8 +51,10 @@ def verified_registration(claim, proof):
                 or proof['claim_token'] != claim['token']
                 or proof['generation'] != claim['generation']
                 or proof['snapshot'] != claim['snapshot']
-                or proof['scope'] != [event['symbol'], event['venue'], event['source_item'],
+                or proof['scope'] != ([event['symbol'], event['venue'], event['source_item'],
                                       event['market'], datetime.fromtimestamp(event['epoch'], K.KST).date().isoformat()]
+                    + ([__import__('src.engine.scalping.reversal_path_catalog',fromlist=['cell_key']).cell_key(
+                        event['symbol'],event['market'],event['confirmation_price'])] if claim.get('backend')=='operating_v5' else []))
                 or proof['claim_token'] != B.digest([proof['generation'], event['signal_id'], proof['snapshot']])
                 or not 0 <= proof['claim_epoch'] - event['epoch'] <= 5
                 or not 0 <= proof['observed_epoch'] - proof['claim_epoch'] <= 5):
@@ -69,7 +72,7 @@ def validate_claim_with_receipt(claim, family_sha256, *, now,
     decision clock for the unchanged guard and separately timestamp the state
     read: ingestion can advance while the caller waits to acquire this lock.
     """
-    from src.engine.scalping.reversal_policy_backend import backend
+    from src.engine.scalping.reversal_operating_backend import backend
     B = backend(claim)
 
     with B._LOCK:
@@ -138,12 +141,19 @@ def project(snapshot, *, symbol, venue, session, now, item, envelope=None):
     event, _ = snapshot
     market = K.market_bucket(session)
     key = (symbol, venue, item, market, datetime.fromtimestamp(now, K.KST).date())
-    from src.engine.scalping.reversal_policy_backend import backend
+    from src.engine.scalping.reversal_operating_backend import backend
     registered=backend()
     native=registered if getattr(registered, "_FAMILY", None) is not None else K
     if native is registered:
         key=key[:4]+(key[4].isoformat(),)
     with native._LOCK:
+        if getattr(native,'_FAMILY',{}).get('schema')=='continuous_reversal_policy_v5':
+            from src.engine.scalping.reversal_path_catalog import cell_key
+            scope=cell_key(symbol,market,event['confirmation_price'])
+            if native._FAMILY['machine_cells'][scope]['routes'][venue]['backend']=='registered_v4':
+                native=native.R
+            else:
+                key=key+(scope,)
         state = native._STATES.get(key)
         if native is registered:
             state=state.legacy if state else None

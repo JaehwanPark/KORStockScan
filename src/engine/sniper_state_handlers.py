@@ -33811,6 +33811,10 @@ def _machine_primary_entry_provenance_fields(source: dict | None) -> dict:
         "continuous_reversal_signal_id",
         "continuous_reversal_primary_branch",
         "continuous_reversal_matched_branches",
+        "continuous_reversal_matched_policy_refs",
+        "continuous_reversal_still_valid_policy_refs",
+        "continuous_reversal_signal_set_hash",
+        "continuous_reversal_opportunity_key",
         "continuous_reversal_phase",
         "evaluation_attempt_id",
         "evaluation_attempt_identity_source",
@@ -50145,19 +50149,21 @@ def _resolve_watching_state_change_refresh(
             selected=load_effective(data_root=DATA_DIR,target_date=datetime.fromtimestamp(now_ts,_KST).date().isoformat())
             family=(selected or {}).get('continuous_reversal')
             claim=None
-            if family and family.get('schema') in {'continuous_reversal_policy_v2','continuous_reversal_policy_v3','continuous_reversal_policy_v4'}:
-                from src.engine.scalping.reversal_policy_backend import configure_bundle
+            if family and family.get('schema') in {'continuous_reversal_policy_v2','continuous_reversal_policy_v3','continuous_reversal_policy_v4','continuous_reversal_policy_v5'}:
+                from src.engine.scalping.reversal_operating_backend import configure_bundle
                 from src.engine.scalping.reversal_source_diagnostics import claim_snapshot_with_receipt as claim_snapshot
                 from src.engine.scalping.continuous_reversal_policy_v2 import record_pid_consumption
                 if family['schema']=='continuous_reversal_policy_v3':
                     from src.engine.scalping.continuous_reversal_policy_v3 import record_pid_consumption
                 if family['schema']=='continuous_reversal_policy_v4':
                     from src.engine.scalping.continuous_reversal_policy_v4 import record_pid_consumption
+                if family['schema']=='continuous_reversal_policy_v5':
+                    from src.engine.scalping.continuous_reversal_policy_v5 import record_pid_consumption
                 record_pid_consumption(DATA_DIR,selected)
                 configure_bundle(selected,DATA_DIR,datetime.fromtimestamp(now_ts,_KST).date().isoformat())
                 claim=stock.get('_continuous_reversal_pending_claim')
                 if claim:
-                    from src.engine.scalping.reversal_policy_backend import validate_any_claim as validate_claim
+                    from src.engine.scalping.reversal_operating_backend import validate_any_claim as validate_claim
                     try:validate_claim(claim,family['family_sha256'],now=now_ts)
                     except ValueError:
                         stock.pop('_continuous_reversal_pending_claim',None);claim=None
@@ -63167,7 +63173,7 @@ def _handle_watching_strategy_branch(
                             pending_claim=stock.pop('_continuous_reversal_pending_claim',None)
                             if pending_claim and ai_decision.get('entry_mechanistic_policy_decision'):
                                 stock['_continuous_reversal_last_requested_id']=pending_claim['snapshot'][0]['event_id']
-                                from src.engine.scalping.reversal_policy_backend import acknowledge_any as acknowledge
+                                from src.engine.scalping.reversal_operating_backend import acknowledge_any as acknowledge
                                 acknowledge(pending_claim,status='evaluated')
                         ai_decision.update(pre_ai_ws_refresh_fields)
                         ai_call_executed = True
@@ -77448,6 +77454,13 @@ def _initial_quantity_prepare_first_submit(
                          phase=reversal.get('continuous_reversal_phase')))
     base_dir = DATA_DIR / "runtime" / "initial_quantity" / "bundles"
     create_indexed_bundle(base_dir, bundle)
+    if reversal.get('continuous_reversal_opportunity_key'):
+        from src.engine.scalping.reversal_operating_outbox import advance
+        advance(DATA_DIR,reversal['continuous_reversal_opportunity_key'],'intent_assigned',binding=dict(
+            attempt_id=attempt_id,client_intent_id=owner_context.client_intent_id,
+            matched_policy_refs=reversal.get('continuous_reversal_matched_policy_refs'),
+            still_valid_policy_refs=reversal.get('continuous_reversal_still_valid_policy_refs'),
+            signal_set_hash=reversal.get('continuous_reversal_signal_set_hash')))
     _mutate_stock_state(stock, set_fields={
         "initial_quantity_bundle": bundle,
         "initial_quantity_bundle_indexed": True,
@@ -77457,6 +77470,9 @@ def _initial_quantity_prepare_first_submit(
         submit_price=submit_price,
         owner_client_intent_id=owner_context.client_intent_id,
         now_epoch=now_ts)
+    if reversal.get('continuous_reversal_opportunity_key'):
+        advance(DATA_DIR,reversal['continuous_reversal_opportunity_key'],'submission_reconciliation',
+                binding=dict(attempt_id=attempt_id,native_bundle_path=str(base_dir)))
     _mutate_stock_state(stock, set_fields={
         "initial_quantity_bundle": intent,
         "status": "BUY_ORDERED",

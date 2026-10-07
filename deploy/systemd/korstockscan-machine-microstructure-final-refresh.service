@@ -10,7 +10,7 @@ User=ubuntu
 Group=www-data
 WorkingDirectory=/home/ubuntu/KORStockScan
 Environment="PYTHONPATH=/home/ubuntu/KORStockScan"
-ExecStart=/home/ubuntu/KORStockScan/deploy/run_machine_microstructure_final_refresh.sh
+ExecStart=/bin/bash /home/ubuntu/KORStockScan/deploy/run_runtime_release.sh machine-final-refresh
 TimeoutStartSec=57600
 Restart=no
 RestartSec=300

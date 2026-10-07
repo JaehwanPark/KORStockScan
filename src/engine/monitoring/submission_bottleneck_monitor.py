@@ -1309,7 +1309,7 @@ def _reversal_selection_receipt(bundle, data_root):
             or family.get('publication_date') != bundle.get('publication_date')):
         raise ValueError('reversal_selection_date_binding_invalid')
     selections = {}
-    expanded = [(key+'|'+route,value) for key,cell in family['machine_cells'].items() for route,value in cell.get('routes',{}).items()] if family['schema'] in {'continuous_reversal_policy_v3','continuous_reversal_policy_v4'} else list(family['machine_cells'].items())
+    expanded = [(key+'|'+route,value) for key,cell in family['machine_cells'].items() for route,value in cell.get('routes',{}).items()] if family['schema'] in {'continuous_reversal_policy_v3','continuous_reversal_policy_v4','continuous_reversal_policy_v5'} else list(family['machine_cells'].items())
     for key, cell in expanded:
         metrics = cell.get('local_metrics')
         selections[key] = dict(
@@ -1329,6 +1329,9 @@ def _reversal_observation_receipt(bundle, observation, *, verified_components=No
     from src.engine.scalping.mechanistic_entry_runtime_policy import digest
 
     family = bundle['continuous_reversal']
+    if family.get('schema')=='continuous_reversal_policy_v5':
+        from src.engine.scalping.continuous_reversal_policy_v5 import audit_observation
+        return audit_observation(bundle,observation)
     is_v4=family.get('schema')=='continuous_reversal_policy_v4'
     is_v3=family.get('schema') in {'continuous_reversal_policy_v3','continuous_reversal_policy_v4'}
     is_v2=family.get('schema') in {'continuous_reversal_policy_v2','continuous_reversal_policy_v3','continuous_reversal_policy_v4'}

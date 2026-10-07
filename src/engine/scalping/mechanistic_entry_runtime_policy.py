@@ -199,7 +199,7 @@ def validate(bundle: dict, *, target_date: str) -> None:
         or publication < source
         or publication > target_date
         or (not bundle.get("strategy_activation") and next_target(publication) != target_date
-            and not ((bundle.get('continuous_reversal') or {}).get('schema') in {'continuous_reversal_policy_v2','continuous_reversal_policy_v3','continuous_reversal_policy_v4'}
+            and not ((bundle.get('continuous_reversal') or {}).get('schema') in {'continuous_reversal_policy_v2','continuous_reversal_policy_v3','continuous_reversal_policy_v4','continuous_reversal_policy_v5'}
                      and bundle['continuous_reversal'].get('effective_mode')=='intraday'
                      and publication==target_date))
     ):
@@ -618,11 +618,13 @@ def _validate_bundle_sources(bundle: dict, data_root: Path, *, historical_code_r
         if source_payload.get('continuous_reversal') != bundle['continuous_reversal']:
             raise ValueError('reversal_bundle_source_binding_invalid')
         if historical_code_root is not None:
-            if bundle['continuous_reversal'].get('schema') not in {'continuous_reversal_policy_v3','continuous_reversal_policy_v4'}:
+            if bundle['continuous_reversal'].get('schema') not in {'continuous_reversal_policy_v3','continuous_reversal_policy_v4','continuous_reversal_policy_v5'}:
                 raise ValueError('historical_transition_schema_invalid')
             from src.engine.scalping.continuous_reversal_policy_v3 import validate_sources
             if bundle['continuous_reversal']['schema']=='continuous_reversal_policy_v4':
                 from src.engine.scalping.continuous_reversal_policy_v4 import validate_sources
+            if bundle['continuous_reversal']['schema']=='continuous_reversal_policy_v5':
+                from src.engine.scalping.continuous_reversal_policy_v5 import validate_sources
             return validate_sources(bundle,data_root,code_root=historical_code_root)
         from src.engine.scalping.continuous_reversal_policy import validate_sources
         return validate_sources(bundle,data_root)
@@ -683,11 +685,11 @@ def load_effective(*, data_root: Path, target_date: str) -> dict | None:
     Market/source freshness is still checked independently at every decision.
     """
     pointer=root(data_root)/'current.json'
-    if pointer.is_file() and _read(pointer).get('schema') in {'continuous_reversal_current_v2','continuous_reversal_current_v3','continuous_reversal_current_v4'}:
+    if pointer.is_file() and _read(pointer).get('schema') in {'continuous_reversal_current_v2','continuous_reversal_current_v3','continuous_reversal_current_v4','continuous_reversal_current_v5'}:
         active=_load_current(data_root,target_date)
         if active is not None:return active
     exact_path = root(data_root) / f'policy_{target_date}.json'
-    if exact_path.is_file() and (_read(exact_path).get('continuous_reversal') or {}).get('schema') in {'continuous_reversal_policy_v2','continuous_reversal_policy_v3','continuous_reversal_policy_v4'}:
+    if exact_path.is_file() and (_read(exact_path).get('continuous_reversal') or {}).get('schema') in {'continuous_reversal_policy_v2','continuous_reversal_policy_v3','continuous_reversal_policy_v4','continuous_reversal_policy_v5'}:
         # Dated v2 publication is preparation, never activation. The sealed
         # current receipt owns the atomic policy switch, including carry.
         current=_load_current(data_root,target_date)
@@ -722,7 +724,7 @@ def load_effective(*, data_root: Path, target_date: str) -> dict | None:
     if current is not None:
         return current
     exact = load(data_root=data_root, target_date=target_date)
-    if (exact is not None and (exact.get('continuous_reversal') or {}).get('schema') not in {'continuous_reversal_policy_v2','continuous_reversal_policy_v3','continuous_reversal_policy_v4'}
+    if (exact is not None and (exact.get('continuous_reversal') or {}).get('schema') not in {'continuous_reversal_policy_v2','continuous_reversal_policy_v3','continuous_reversal_policy_v4','continuous_reversal_policy_v5'}
             and not (exact.get('winrate_selection') and not exact.get('strategy_activation'))):
         return exact
     paths = sorted(
@@ -732,7 +734,7 @@ def load_effective(*, data_root: Path, target_date: str) -> dict | None:
     )
     for path in reversed(paths):
         prior = load(data_root=data_root, target_date=path.stem[7:])
-        if (prior or {}).get('continuous_reversal',{}).get('schema') in {'continuous_reversal_policy_v2','continuous_reversal_policy_v3','continuous_reversal_policy_v4'}:
+        if (prior or {}).get('continuous_reversal',{}).get('schema') in {'continuous_reversal_policy_v2','continuous_reversal_policy_v3','continuous_reversal_policy_v4','continuous_reversal_policy_v5'}:
             continue
         if prior is not None and not (prior.get('winrate_selection') and not prior.get('strategy_activation')):
             return prior
@@ -2499,7 +2501,7 @@ def _load_current_uncached(data_root: Path, target_date: str, *, historical_code
     if not path.exists():
         return None
     receipt = _read(path)
-    if receipt.get('schema') in {'continuous_reversal_current_v1','continuous_reversal_current_v2','continuous_reversal_current_v3','continuous_reversal_current_v4'}:
+    if receipt.get('schema') in {'continuous_reversal_current_v1','continuous_reversal_current_v2','continuous_reversal_current_v3','continuous_reversal_current_v4','continuous_reversal_current_v5'}:
         if receipt.get('receipt_sha256')!=digest({k:v for k,v in receipt.items() if k!='receipt_sha256'}):
             raise ValueError('continuous_reversal_current_hash_invalid')
         effective=datetime.fromisoformat(receipt['effective_from'])

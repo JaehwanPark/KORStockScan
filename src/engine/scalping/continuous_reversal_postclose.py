@@ -216,6 +216,10 @@ def prepare_research(data_root, day, seed):
 
 
 def machine_report(data_root, day, publication):
+    from src.engine.scalping import continuous_reversal_operating_postclose as operating
+    current=operating.active(data_root,publication)
+    if current:
+        return operating.machine_report(data_root,day,publication,current)
     from src.engine.scalping import continuous_reversal_registered_postclose as registered
     from src.engine.scalping import continuous_reversal_path_postclose as paths
     if paths.active(data_root,publication):registered=paths
@@ -324,6 +328,10 @@ def inherit(cells, previous=None):
 
 
 def auxiliary_report(data_root,day,publication,*,publish_policy=True):
+    from src.engine.scalping import continuous_reversal_operating_postclose as operating
+    current=operating.active(data_root,publication)
+    if current:
+        return operating.auxiliary_report(data_root,day,publication,current,publish_policy=publish_policy)
     from src.engine.scalping import continuous_reversal_registered_postclose as registered
     from src.engine.scalping import continuous_reversal_path_postclose as paths
     if paths.active(data_root,publication):registered=paths
@@ -486,6 +494,22 @@ def main(argv=None):
     if args.evaluate_only and args.mode != 'auxiliary':
         parser.error('--evaluate-only is supported only for auxiliary; use an isolated data root for machine research')
     if args.seed_research:prepare_research(args.data_root,args.date,args.seed_research)
+    from src.engine.scalping import continuous_reversal_operating_postclose as operating
+    publication=args.publication_date or args.date
+    current=operating.active(args.data_root,publication)
+    if current:
+        if args.mode=='machine':
+            result=operating.machine_report(args.data_root,args.date,publication,current)
+        else:
+            machine=json.loads((operating.directory(args.data_root,args.date)/'machine-comparison.json').read_text())
+            if args.mode in {'prepare-inputs','auxiliary'} and not args.evaluate_only:
+                result=operating.prepare_inputs(args.data_root,args.date,machine,current)
+            if args.mode in {'calls','auxiliary'} and not args.evaluate_only:
+                deadline=os.environ.get('POSTCLOSE_STAGE_DEADLINE_EPOCH')
+                result=operating.calls(args.data_root,args.date,stop_epoch=float(deadline)-120 if deadline else None)
+            if args.mode=='auxiliary':
+                result=operating.auxiliary_report(args.data_root,args.date,publication,current,publish_policy=not args.evaluate_only)
+        print(json.dumps(result));return 0
     if args.mode in {'prepare-inputs','calls'}:
         from src.engine.scalping import continuous_reversal_registered_postclose as registered
         from src.engine.scalping import continuous_reversal_path_postclose as paths
