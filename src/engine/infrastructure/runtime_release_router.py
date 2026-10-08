@@ -795,6 +795,45 @@ def manage_cron(workspace: Path, install: bool) -> None:
         )
 
 
+def native_custody_environment(workspace: Path) -> dict[str, str]:
+    """Give every routed consumer the same approved account/journal identity.
+
+    Parse data assignments without shell execution. The file is transferred
+    from the attested pre-cutover Main PID; it is not a policy publication.
+    """
+    path = workspace / 'data/config/native_owner_custody.env'
+    required = (workspace / 'data/runtime/retirements/main-only-retirement.json').is_file()
+    if not path.exists() and not required:
+        return {}
+    before = path.stat()
+    if path.is_symlink() or not path.is_file() or before.st_size > 8192:
+        raise ValueError('native_custody_environment_file_invalid')
+    values = {}
+    allowed = {'KORSTOCKSCAN_BROKER_ACCOUNT_KEY', 'KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH'}
+    for line in path.read_text().splitlines():
+        if not line.strip() or line.lstrip().startswith('#'):
+            continue
+        key, separator, raw = line.partition('=')
+        if not separator or key not in allowed or key in values:
+            raise ValueError('native_custody_environment_keys_invalid')
+        tokens = shlex.split(raw)
+        if len(tokens) != 1:
+            raise ValueError('native_custody_environment_value_invalid')
+        values[key] = tokens[0]
+    after = path.stat()
+    if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
+            after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
+        raise ValueError('native_custody_environment_changed')
+    if set(values) != allowed:
+        raise ValueError('native_custody_environment_incomplete')
+    account = values['KORSTOCKSCAN_BROKER_ACCOUNT_KEY']
+    if not account.strip() or account.lower() == 'default' or len(account) > 80 or any(c in account for c in '\r\n\t'):
+        raise ValueError('native_custody_account_invalid')
+    if not Path(values['KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH']).is_absolute():
+        raise ValueError('native_custody_registry_path_invalid')
+    return values
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("operation", nargs="?", choices=OPERATIONS)
@@ -865,6 +904,7 @@ def main() -> int:
             print(json.dumps(plan), flush=True)
         env = dict(os.environ)
         env.pop("PYTHONHOME", None)
+        env.update(native_custody_environment(workspace))
         env.update(
             PROJECT_DIR=str(root),
             PYTHONPATH=str(root),

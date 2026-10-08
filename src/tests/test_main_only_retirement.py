@@ -278,3 +278,19 @@ def test_deleted_unit_census_accepts_empty_listing_but_not_permission_failure(tm
     monkeypatch.setattr(H.subprocess,'run',run)
     result=H._retirement_expected_set(tmp_path,datetime.fromisoformat('2026-10-08T13:00:00+09:00'),processes=[],registry_rows=[])
     assert result['status']==('retirement_unverified' if stderr else 'retired_not_expected')
+
+
+@pytest.mark.parametrize('defect',[None,'missing','unknown_key','relative_registry','duplicate_key','shell_expression'])
+def test_routed_postclose_and_runtime_share_native_identity_without_shell_execution(tmp_path,defect):
+    from src.engine.infrastructure.runtime_release_router import native_custody_environment
+    retirement=tmp_path/'data/runtime/retirements/main-only-retirement.json';retirement.parent.mkdir(parents=True);retirement.write_text('{}')
+    identity=tmp_path/'data/config/native_owner_custody.env';identity.parent.mkdir(parents=True)
+    text="KORSTOCKSCAN_BROKER_ACCOUNT_KEY='approved-account'\nKORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH='/absolute/common-journal.jsonl'\n"
+    if defect=='unknown_key':text+='UNAPPROVED_AUTHORITY=true\n'
+    if defect=='relative_registry':text=text.replace('/absolute/','relative/')
+    if defect=='duplicate_key':text+="KORSTOCKSCAN_BROKER_ACCOUNT_KEY='other-account'\n"
+    if defect=='shell_expression':text=text.replace("'approved-account'",'$(touch /tmp/should_never_be_executed)')
+    if defect!='missing':identity.write_text(text)
+    if defect:
+        with pytest.raises((ValueError,OSError)):native_custody_environment(tmp_path)
+    else:assert native_custody_environment(tmp_path)==dict(KORSTOCKSCAN_BROKER_ACCOUNT_KEY='approved-account',KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH='/absolute/common-journal.jsonl')
