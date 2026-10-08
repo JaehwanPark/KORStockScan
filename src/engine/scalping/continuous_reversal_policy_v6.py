@@ -26,7 +26,8 @@ def contract_modules():
     from src.engine.scalping import reversal_extended_runtime as E
     from src.engine.scalping import reversal_extended_registration as ER
     from src.engine.scalping import reversal_current_backend as D
-    return (*V5.contract_modules(),C,A,R,T,E,ER,D,__import__(__name__,fromlist=['*']))
+    from src.engine.scalping import reversal_extended_intraday as INTRA
+    return (*V5.contract_modules(),C,A,R,T,E,ER,D,INTRA,__import__(__name__,fromlist=['*']))
 
 
 def scopes():
@@ -86,10 +87,15 @@ def validate_family(f):
             or f.get('registry_sha256') != C.SHA256 or f.get('label_contract') != C.LABEL
             or f.get('branch_definition_sha256') != C.SHA256 or f.get('auxiliary_version') != A.VERSION
             or f.get('execution_code_sha256') != digest(f.get('contract_file_sha256'))
-            or f.get('effective_mode') != 'next_session'
-            or not f.get('source_date','') <= f.get('publication_date','') < f.get('effective_date','')
+            or f.get('effective_mode') not in {'next_session','intraday'}
+            or not f.get('source_date','') <= f.get('publication_date','') <= f.get('effective_date','')
             or not re.fullmatch('[0-9a-f]{40}', str(f.get('release_commit')))):
         raise ValueError('v6_family_contract_invalid')
+    if f['effective_mode']=='next_session':
+        if f['publication_date']>=f['effective_date']:raise ValueError('v6_next_session_date_invalid')
+    else:
+        from src.engine.scalping.reversal_extended_intraday import validate_activation
+        validate_activation(f)
     m = f['operating_manifest']
     if m.get('schema')!='main_operating_detector_manifest_v1' or m.get('registry_sha256')!=C.SHA256:
         raise ValueError('v6_detector_registry_invalid')
@@ -185,6 +191,8 @@ def _validate_sources(bundle, data_root, *, code_root=None):
         if (report['artifact_content_sha256'] != digest({k:v for k,v in report.items() if k!='artifact_content_sha256'})
                 or {c['key']:c for c in report['cells']} != f[name+'_cells']):
             raise ValueError('v6_report_binding_invalid')
+        if name=='machine' and f['effective_mode']=='intraday' and report.get('registration_activation')!=f['registration_activation']:
+            raise ValueError('v6_intraday_report_authority_changed')
         for record in report.get('source_receipts',[]) + report.get('results_sources',[]):
             p = Path(record['path'])
             if N._source_hash(str(p), N._signature(p)) != record['sha256']:
@@ -235,9 +243,10 @@ def assess(family, snapshot, *, symbol, session):
     return base, inp, prompt, schema
 
 
-def stage(data_root, day, publication, machine, auxiliary, *, target_date, release_commit):
+def stage(data_root, day, publication, machine, auxiliary, *, target_date, release_commit,effective_mode='next_session',registration_activation=None):
     from src.engine.scalping import mechanistic_entry_runtime_policy as N
-    if target_date != N.next_target(publication) or day > publication:
+    if (effective_mode not in {'next_session','intraday'} or day > publication
+            or target_date!=(publication if effective_mode=='intraday' else N.next_target(publication))):
         raise ValueError('v6_target_date_invalid')
     root = N.root(Path(data_root)); root.mkdir(parents=True,exist_ok=True)
     with (root/'publisher.lock').open('a') as lock:
@@ -259,7 +268,7 @@ def stage(data_root, day, publication, machine, auxiliary, *, target_date, relea
         native = parent['continuous_reversal'].get('native_parent_bundle', parent)
         f = dict(schema=SCHEMA, kernel_version=K.VERSION, registry_sha256=C.SHA256,
             branch_definition_sha256=C.SHA256, auxiliary_version=A.VERSION, label_contract=C.LABEL,
-            source_date=day, publication_date=publication, effective_date=target_date, effective_mode='next_session',
+            source_date=day, publication_date=publication, effective_date=target_date, effective_mode=effective_mode,
             selection_metric='cumulative_raw_win_fraction', release_commit=release_commit,
             parent_bundle_sha256=parent['bundle_sha256'], native_parent_bundle=native,
             operating_manifest=machine['operating_manifest'], execution_code_sha256=machine['execution_code_sha256'],
@@ -268,6 +277,7 @@ def stage(data_root, day, publication, machine, auxiliary, *, target_date, relea
             machine_report_sha256=machine['artifact_content_sha256'], auxiliary_report_sha256=auxiliary['artifact_content_sha256'],
             report_file_sha256=hashes, source_manifest_sha256=machine['source_manifest_sha256'],
             hard_guards_unchanged=True, actual_order_submitted=False)
+        if effective_mode=='intraday':f['registration_activation']=registration_activation
         f['execution_manifest_hash'] = digest({scope_id(k,r):f['machine_cells'][k]['routes'][r]['scope_execution_hash'] for k,r in scopes()})
         f['family_sha256'] = digest(f); validate_family(f)
         bundle = copy.deepcopy(parent)
@@ -284,11 +294,11 @@ def stage(data_root, day, publication, machine, auxiliary, *, target_date, relea
         bundle.pop('bundle_sha256',None); bundle['bundle_sha256'] = digest(bundle)
         N.validate(bundle,target_date=target_date); N._validate_bundle_sources(bundle,Path(data_root))
         N._atomic_write_json(root/'generations'/(bundle['bundle_sha256']+'.json'),bundle)
-        N._atomic_write_json(root/'candidates'/('policy_'+target_date+'.json'),bundle)
+        N._atomic_write_json(root/('intraday_candidates' if effective_mode=='intraday' else 'candidates')/('policy_'+target_date+'.json'),bundle)
         return bundle
 
 
-def activate(data_root,target_date,*,now=None):
+def activate(data_root,target_date,*,now=None,intraday_evidence=None):
     from src.engine.scalping import mechanistic_entry_runtime_policy as N
     from src.engine.infrastructure.runtime_release_router import selected_release
     clock = now or datetime.now(K.KST)
@@ -297,12 +307,20 @@ def activate(data_root,target_date,*,now=None):
     root = N.root(Path(data_root))
     with (root/'publisher.lock').open('a') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX)
-        bundle = N._read(root/'candidates'/('policy_'+target_date+'.json'))
+        bundle = N._read(root/('intraday_candidates' if intraday_evidence is not None else 'candidates')/('policy_'+target_date+'.json'))
         N.validate(bundle,target_date=target_date); validate_sources(bundle,data_root)
-        _,commit = selected_release(Path(data_root).resolve().parent)
+        selected,commit = selected_release(Path(data_root).resolve().parent)
         f = bundle['continuous_reversal']
         if commit != f['release_commit']:
             raise ValueError('v6_activation_release_mismatch')
+        if f['effective_mode']=='intraday':
+            from src.engine.automation.intraday_release_handoff import _identity
+            e=intraday_evidence or {}
+            if (e.get('schema')!='intraday_main_policy_code_pid_v1' or e.get('target_date')!=target_date
+                    or e.get('release_commit')!=commit or not e.get('pid_identity')
+                    or _identity(e['pid_identity']['pid'])!=e['pid_identity'] or e['pid_identity']['cwd']!=str(selected/'src')
+                    or file_hash(e['consumed_path'])!=e.get('consumed_sha256')):
+                raise ValueError('v6_intraday_code_pid_not_verified')
         parent = N.load_effective(data_root=Path(data_root),target_date=target_date)
         if parent and parent['bundle_sha256'] == bundle['bundle_sha256']:
             return dict(status='already_active',bundle_sha256=bundle['bundle_sha256'])
@@ -311,6 +329,7 @@ def activate(data_root,target_date,*,now=None):
         receipt = dict(schema='continuous_reversal_current_v6',bundle_sha256=bundle['bundle_sha256'],
             previous_bundle_sha256=parent['bundle_sha256'],effective_from=clock.isoformat(),
             effective_date=target_date,family_sha256=f['family_sha256'],release_commit=commit)
+        if intraday_evidence is not None:receipt['intraday_code_pid_evidence']=intraday_evidence
         receipt['receipt_sha256'] = digest(receipt)
         N._atomic_write_json(root/'activations'/target_date/(receipt['receipt_sha256']+'.json'),receipt)
         N._atomic_write_json(root/'current.json',receipt)

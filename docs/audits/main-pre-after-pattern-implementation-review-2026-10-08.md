@@ -36,3 +36,12 @@
 - [등록 intake 영수증](../../data/report/pre-after-remediation/2026-10-08/registration-intake.json): 기존 active bundle 유지, 신규 13개는 `pending_next_session_publication`, 대상 **2026-10-12**. 코드 배포/재기동이 신규 13개 정책의 당일 활성화를 뜻하지 않는다. 장후 발행·10/12 기동 시 정확 bundle/PID 소비는 현행 owner의 후속 확인이다.
 
 통합 배포·기동의 최종 영수증은 `data/report/pre-after-remediation/2026-10-08/deployment-final.json`에 기록한다. 일일 owner는 유지하며 이번 문서의 최종 수정 후 immutable 인계를 준비한다.
+
+
+## 당일 적용 추가 승인과 보완
+
+사용자의 후속 “당일발행 활성화해줘” 지시로 위 10/12 대기 인계를 **10/8 당일 적용**으로 변경한다. 첫 통합 코드 `b464f6c8`은 09:30:38 PID 24520 bootstrap PASS로 기동했고 감시 5개를 확인했다. 이때 current 정책은 아직 기존 v5였다.
+
+새 intraday 등록 producer는 원천일 10/7을 보존하고 실제 발행·적용일 10/8, 별도 승인·정확 부모·13개 scope·registry/연구 hash·release commit을 봉인한다. 기존 PREOPEN candidate/장후 보고서 파일을 변경하지 않는 별도 candidate로 발행한다. 반복 stage/activate는 멱등이며, 승인 누락·다른 날짜·다른 부모·추가 목록 변조·검토 코드 PID 미확인은 차단한다. v6 next_session 기본 발행 경로와 별도인 명시 intraday 모드이고, 이후 장후는 활성 목록을 그대로 승계한다.
+
+당일 발행은 기존 연구와 등록 계약의 작은 보고서 조립이며 원장을 다시 만들거나 실제 AI 비교를 호출하지 않는다. 실시간 callback/claim, 원 source/publication 날짜, 기존 candidate 보존, stage/activation 멱등 및 권한 거부 검증을 신규 회귀에 추가했다. 검토 코드의 실제 PID를 먼저 확인한 뒤 활성화하며, 기계·보조 소비 및 cron 최종 검사 결과는 `deployment-final.json`에 기록한다.

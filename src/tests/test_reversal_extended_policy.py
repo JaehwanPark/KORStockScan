@@ -167,6 +167,39 @@ def test_v6_stage_keeps_old_versions_and_adds_exact_thirteen(replay,monkeypatch)
     assert DIAG.verified_registration(claim,claim['source_registration_receipt'])
     assert D.validate_any_claim(claim,new['continuous_reversal']['family_sha256'],now=T+122)==claim['snapshot']
     assert DIAG.claim_snapshot_with_receipt('005930','NXT','NXT_PREMARKET',now=T+122,item='005930_NX',family_sha256=new['continuous_reversal']['family_sha256']) is None
+    from src.engine.scalping import reversal_extended_intraday as INTRA
+    from datetime import datetime,timedelta
+    now=datetime(2026,10,8,10,tzinfo=P.KST)
+    original=(N.root(root)/'candidates/policy_2026-10-08.json').read_bytes()
+    adopted=INTRA.stage(root,'2026-10-08',confirm=INTRA.AUTHORITY,release_commit='a'*40,now=now)
+    assert adopted['source_date']=='2026-10-07' and adopted['publication_date']==adopted['target_date']=='2026-10-08'
+    assert adopted['continuous_reversal']['effective_mode']=='intraday'
+    N.validate(adopted,target_date='2026-10-08');V.validate_sources(adopted,root)
+    assert INTRA.stage(root,'2026-10-08',confirm=INTRA.AUTHORITY,release_commit='a'*40,now=now+timedelta(seconds=1))==adopted
+    assert (N.root(root)/'candidates/policy_2026-10-08.json').read_bytes()==original
+    with pytest.raises(ValueError,match='authority'):
+        INTRA.stage(root,'2026-10-08',confirm='next-session-only',release_commit='a'*40,now=now)
+    tampered=copy.deepcopy(adopted['continuous_reversal']);tampered['registration_activation']['approved_additions']={}
+    tampered['registration_activation']=P.seal(tampered['registration_activation'])
+    tampered['family_sha256']=P.digest({k:v for k,v in tampered.items() if k!='family_sha256'})
+    with pytest.raises(ValueError,match='additions'):V.validate_family(tampered)
+    from src.engine.infrastructure import runtime_release_router as ROUTER
+    from src.engine.automation import intraday_release_handoff as H
+    identity=dict(pid=42,start_ticks=3,cwd=str(root/'release/src'))
+    monkeypatch.setattr(ROUTER,'selected_release',lambda *a:(root/'release','a'*40))
+    monkeypatch.setattr(H,'_identity',lambda pid:identity)
+    with pytest.raises(ValueError,match='code_pid'):V.activate(root,'2026-10-08',now=now,intraday_evidence={})
+    P.write(root/'code-consumed.json',dict(status='pass'))
+    evidence=dict(schema='intraday_main_policy_code_pid_v1',target_date='2026-10-08',release_commit='a'*40,
+        pid_identity=identity,consumed_path=str(root/'code-consumed.json'),consumed_sha256=P.file_hash(root/'code-consumed.json'))
+    def effective(**kw):
+        pointer=N.root(root)/'current.json'
+        return adopted if pointer.exists() and N._read(pointer).get('bundle_sha256')==adopted['bundle_sha256'] else old
+    monkeypatch.setattr(N,'load_effective',effective)
+    activation=V.activate(root,'2026-10-08',now=now,intraday_evidence=evidence)
+    assert activation['status']=='activated'
+    assert V.activate(root,'2026-10-08',now=now,intraday_evidence=evidence)['status']=='already_active'
+    assert (N.root(root)/'candidates/policy_2026-10-08.json').read_bytes()==original
     # The subsequent publication must use the v6 bounded tuning consumer,
     # carrying membership even when the registered v2 challenger is incompatible.
     monkeypatch.setattr(N,'load_effective',lambda **kw:new)

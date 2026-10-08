@@ -239,3 +239,13 @@ PID는 숫자 하나 대신 기존 attested identity의 시작 시각·실행 �
 이후 사용자가 이 계획의 구현·반복 리뷰·배포·재기동을 명시 승인했다. PA0은 기존 정책을 보존한 source-anchor 릴리스로 먼저 복구했다. PA1~PA14의 versioned v6 탐지·typed 보조·명시 ADD·장후 승계·기여도/현재 상태 projection 구현 및 리뷰 근거는 [구현 검토](../audits/main-pre-after-pattern-implementation-review-2026-10-08.md)에 기록한다. 동결 v4/v5 파일은 변경하지 않는다.
 
 13개 정의 등록은 다음 영업일(2026-10-12) 발행을 위한 intake이며, 장중 코드 재기동으로 신규 정책을 당일 활성화하지 않는다. 현재 bundle, 코드 배포, 신규 등록, 장후 발행, 다음 PID 소비는 각각 별도의 상태다. 초기 등록과 미완료 보조 비교는 독립이며 장후 호출 한도는 원천일당 100회다. EOD/전체 장후를 이번 구현 검증 때문에 재실행하지 않는다.
+
+
+## 11. 사용자 후속 지시: 당일 발행·활성화
+
+사용자가 구현 중 **“당일발행 활성화해줘”**라고 명시했다. 이에 신규 13개의 10/12 적용 대기 방침을 해제하고, 10/8 당일 등록 정책 발행·활성화로 범위를 변경한다. 기존 §2.1의 당일 코드 복구 한정은 이번 별도 승인 ADD에는 적용하지 않는다.
+
+- 원 연구 source_date=10/7, 실제 publication/effective_date=10/8을 기록한다. `effective_mode=intraday`와 `main_extended_intraday_registration_v1`의 명시 승인·정확 부모·13개 추가 scope·연구 batch·코드 commit을 결속한다. 원 계획 target=10/12는 이력으로 남긴다.
+- `scalping/reversal_extended_intraday.py`가 승인 batch로 작은 등록 보고서만 생성한다. 기존 source-day 장후 보고서·PREOPEN candidate·체크리스트 봉인·비교 원장을 덮지 않는다. 후보는 별도 `intraday_candidates`에 저장한다. 보조 실제 호출/추가 튜닝/미완료 비교를 초기 채택 조건으로 요구하지 않는다.
+- 검토 코드 배포·재기동 → 코드 PID와 bootstrap/handoff 검증 → 부모 CAS 아래 native current pointer 원자 전환 → 실제 PID의 v6 기계/보조 소비 확인 순서다. 코드 준비와 정책 소비를 구분한다. 기존 주문·보유·custody·outbox·원천일 100회 계약은 유지한다.
+- 이후 장후작업은 현재 v6 manifest를 승계한다. 이미 추가된 13개를 재등록하거나 다음 발행에서 제거하지 않는다. PRE는 이미 지난 시장이므로 실제 새 패턴의 PRE 탐지·주문 실적을 당일 활성화 증거로 요구하지 않는다. AFTER의 자연 발생은 별도 관측이다.

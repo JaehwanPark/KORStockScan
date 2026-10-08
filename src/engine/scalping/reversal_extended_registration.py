@@ -102,7 +102,7 @@ def pending(data_root,parent,target_date):
     return r
 
 
-def initial_reports(data_root,day,publication,parent,machine,*,publish_policy=True):
+def initial_reports(data_root,day,publication,parent,machine,*,publish_policy=True,output_directory=None,effective_date=None):
     """Registration is explicit; incomplete auxiliary comparison is diagnostic."""
     from src.engine.scalping import continuous_reversal_operating_postclose as O
     from src.engine.scalping import continuous_reversal_policy_v6 as V
@@ -117,8 +117,9 @@ def initial_reports(data_root,day,publication,parent,machine,*,publish_policy=Tr
     change=pending(data_root,parent,N.next_target(publication))
     if not change or machine.get('registration_change')!=change:
         raise ValueError('extended_registration_machine_binding_invalid')
-    expected=V.detector_manifest(parent,effective_date=change['target_date'],changes=change)
+    expected=V.detector_manifest(parent,effective_date=effective_date or change['target_date'],changes=change)
     if machine['operating_manifest']!=expected:raise ValueError('extended_registration_manifest_changed')
+    if output_directory is not None and publish_policy:raise ValueError('extended_registration_isolated_output_required')
     mc=copy.deepcopy(parent['continuous_reversal']['machine_cells']);ac=copy.deepcopy(parent['continuous_reversal']['auxiliary_cells']);bindings={}
     current_bindings=I.effective_bindings(data_root,parent,day=publication)
     for key,route in V.scopes():
@@ -139,7 +140,7 @@ def initial_reports(data_root,day,publication,parent,machine,*,publish_policy=Tr
         bindings[sid]=G.register(data_root,G.definition(previous['base_arm'],input_version=A.VERSION,
             prompt=previous['prompt'] if custom else None,hypothesis=previous['hypothesis'],development_keys=previous['development_keys']))
     comparison_receipts=[];proofs=[];campaign=None;evaluation=None;ownerstates={}
-    if T.config(data_root) is not None:
+    if output_directory is None and T.config(data_root) is not None:
         campaign=T.read(T.directory(data_root,day)/'latest-campaign.json')
         if campaign['machine_report_sha256']!=machine['artifact_content_sha256'] or campaign['parent_bundle_sha256']!=parent['bundle_sha256']:
             raise ValueError('extended_registration_comparison_generation_changed')
@@ -171,7 +172,8 @@ def initial_reports(data_root,day,publication,parent,machine,*,publish_policy=Tr
         comparison_evaluation=evaluation,owner_request_census=dict(expected=(campaign or {}).get('expected_owner_requests',0),missing=0,**ownerstates),
         observation_mode='confirmation_replay',call_limit=T.LIMIT,**P.AUTH))
     auxiliary=P.seal(dict(auxiliary,auxiliary_reader_code_hashes=I.code_hashes()))
-    P.write(O.directory(data_root,day)/'machine.json',issued);P.write(O.directory(data_root,day)/'auxiliary.json',auxiliary)
+    out=Path(output_directory) if output_directory is not None else O.directory(data_root,day)
+    P.write(out/'machine.json',issued);P.write(out/'auxiliary.json',auxiliary)
     if publish_policy:
         P.write(P.directory(data_root,day)/'auxiliary.json',auxiliary)
         P.write(P.directory(data_root,day)/'call-freeze.json',P.seal(dict(schema=O.SCHEMA,source_date=day,status='frozen',
