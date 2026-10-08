@@ -153,6 +153,7 @@ def _force_trading_day(monkeypatch, tmp_path):
     isolation_path = tmp_path / "postclose_bot_isolation.json"
     pipeline_events_dir = tmp_path / "pipeline_events"
     monkeypatch.setattr(process_health_module, "HEARTBEAT_PATH", heartbeat_path)
+    monkeypatch.setattr(process_health_module, "PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(
         process_health_module, "POSTCLOSE_BOT_ISOLATION_PATH", isolation_path
     )

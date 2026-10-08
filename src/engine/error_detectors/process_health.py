@@ -168,7 +168,7 @@ class ProcessHealthDetector(BaseDetector):
         if retirement['severity'] == 'fail':
             result.severity = 'fail'
             result.summary += ' Retired entry owner census: ' + retirement['status'] + '.'
-            result.recommended_action += ' Inspect the named retired unit/process/intent; preserve custody exits.'
+            result.recommended_action += ' Inspect the named retired unit/process/intent; preserve Main and manual custody.'
         samsung_severity = samsung_morning.get("severity")
         if samsung_severity == "fail":
             retired = str(samsung_morning.get("status") or "").startswith("retirement_")
@@ -823,7 +823,8 @@ def _retirement_expected_set(root, now, *, states=None, processes=None, registry
             listed = subprocess.run(['/bin/systemctl', 'list-unit-files', '--no-legend',
                 '--no-pager', 'korstockscan-*widget*'], capture_output=True, text=True,
                 timeout=5, check=False)
-            if listed.returncode or len(listed.stdout) > 128 * 1024:
+            valid_empty = listed.returncode == 1 and not listed.stdout.strip() and not listed.stderr.strip()
+            if (listed.returncode and not valid_empty) or len(listed.stdout) > 128 * 1024:
                 raise ValueError('retirement_installed_unit_census_unobservable')
             expected.update(line.split()[0] for line in listed.stdout.splitlines() if line.split())
             loaded = subprocess.run(['/bin/systemctl', 'list-units', '--all', '--plain',
@@ -892,13 +893,31 @@ def _retirement_expected_set(root, now, *, states=None, processes=None, registry
                     if content and not content.endswith(b'\n'):
                         lines = lines[:-1]  # atomic append in progress
                     registry_rows = [json.loads(line) for line in lines if line.strip()]
+        cutover = None
+        permanent_path = root / 'data/runtime/retirements/main-only-retirement.json'
+        if permanent_path.exists():
+            permanent = json.loads(permanent_path.read_text())
+            if (permanent.get('schema') != 'main_only_automatic_owner_retirement_v1'
+                    or permanent.get('management') != 'operator_manual'
+                    or permanent.get('receipt_sha256') != router._retirement_digest({
+                        k: v for k, v in permanent.items() if k != 'receipt_sha256'})):
+                raise ValueError('retirement_cutover_receipt_invalid')
+            cutover = datetime.fromisoformat(permanent['management_observed_at_kst'])
+            if cutover.tzinfo is None:
+                raise ValueError('retirement_cutover_clock_invalid')
         for row in registry_rows:
+            if cutover and row.get('event') == 'INTENT_RESERVED':
+                observed = datetime.fromisoformat(row['observed_at_kst'])
+                if observed.tzinfo is None:
+                    raise ValueError('retirement_order_clock_invalid')
+                if observed <= cutover:
+                    continue  # Historical intent belongs to manual management.
             if (row.get('order_date') == now.date().isoformat()
-                    and row.get('event') == 'INTENT_RESERVED' and row.get('side') == 'BUY'
-                    and row.get('action') == 'NEW'
+                    and row.get('event') == 'INTENT_RESERVED'
+                    and (cutover is not None or (row.get('side') == 'BUY' and row.get('action') == 'NEW'))
                     and (new_entry_retired(row.get('symbol'), row.get('owner_type'))
                          or row.get('owner_type') == 'widget_auto_trade')):
-                result['leaks'].append(dict(kind='new_buy_intent', symbol=row.get('symbol'),
+                result['leaks'].append(dict(kind='retired_automatic_intent' if cutover else 'new_buy_intent', symbol=row.get('symbol'),
                     owner=row.get('owner_type'), intent_id=row.get('intent_id')))
         result['units_checked'] = len(states)
         result['processes_checked'] = len(processes)

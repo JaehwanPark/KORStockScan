@@ -237,3 +237,44 @@ def test_manual_holdings_do_not_become_main_watch_inventory(registry):
         assert market.broker_symbol_verified_flat('005930',now_ts=1100,allow_manual_remainder=True)[1]=='broker_snapshot_missing_or_stale'
     finally:
         market._BROKER_ACCOUNT_SNAPSHOT.clear();market._BROKER_ACCOUNT_SNAPSHOT.update(old)
+
+
+@pytest.mark.parametrize('side,action',[('BUY','NEW'),('SELL','NEW'),('BUY','CANCEL')])
+def test_retirement_monitor_distinguishes_manual_history_from_new_automatic_intents(tmp_path, monkeypatch, side, action):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from src.engine.error_detectors.process_health import _retirement_expected_set
+    from src.engine.infrastructure import runtime_release_router as R
+    monkeypatch.setattr(R,'_episode_retirement_receipts',lambda root: [])
+    monkeypatch.setattr(R,'_retirement_units',lambda profiles: [])
+    path=tmp_path/'data/runtime/retirements/main-only-retirement.json';path.parent.mkdir(parents=True)
+    body=dict(schema='main_only_automatic_owner_retirement_v1',management='operator_manual',
+              management_observed_at_kst='2026-10-08T12:00:00+09:00')
+    body['receipt_sha256']=R._retirement_digest(body);path.write_text(json.dumps(body))
+    old=dict(event='INTENT_RESERVED',order_date='2026-10-08',observed_at_kst='2026-10-08T09:00:00+09:00',
+             owner_type='episode',symbol='475150',side=side,action=action)
+    now=datetime(2026,10,8,13,tzinfo=ZoneInfo('Asia/Seoul'))
+    check=lambda rows:_retirement_expected_set(tmp_path,now,states={},processes=[],registry_rows=rows)
+    assert check([old])['status']=='retired_not_expected'
+    new=dict(old,observed_at_kst='2026-10-08T12:01:00+09:00')
+    assert check([old,new])['status']=='retirement_leak'
+    bad=dict(new,observed_at_kst='invalid')
+    assert check([bad])['status']=='retirement_unverified'
+
+
+@pytest.mark.parametrize('stderr',['','Access denied'])
+def test_deleted_unit_census_accepts_empty_listing_but_not_permission_failure(tmp_path,monkeypatch,stderr):
+    from datetime import datetime
+    import subprocess
+    from src.engine.error_detectors import process_health as H
+    from src.engine.infrastructure import runtime_release_router as R
+    unit='korstockscan-low-price-two-leg-test.service'
+    monkeypatch.setattr(R,'_episode_retirement_receipts',lambda root: [])
+    monkeypatch.setattr(R,'_retirement_units',lambda profiles: [unit])
+    def run(cmd,**kwargs):
+        if 'list-unit-files' in cmd:return subprocess.CompletedProcess(cmd,1,'',stderr)
+        if 'list-units' in cmd:return subprocess.CompletedProcess(cmd,0,'','')
+        return subprocess.CompletedProcess(cmd,0,f'Id={unit}\nLoadState=not-found\nActiveState=inactive\nMainPID=0\n','')
+    monkeypatch.setattr(H.subprocess,'run',run)
+    result=H._retirement_expected_set(tmp_path,datetime.fromisoformat('2026-10-08T13:00:00+09:00'),processes=[],registry_rows=[])
+    assert result['status']==('retirement_unverified' if stderr else 'retired_not_expected')
