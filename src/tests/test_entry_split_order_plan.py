@@ -267,6 +267,16 @@ def test_acknowledged_entry_leg_merges_duplicate_policy_receipts():
     assert event['owner_registry_intent_id'] == 'intent-1'
 
 
+@pytest.fixture(autouse=True)
+def isolate_native_replay_generation(monkeypatch, tmp_path):
+    """Fixture replays must not fingerprint a growing production collector."""
+    from src.engine.scalping import native_packet_validation as micro
+    monkeypatch.setattr(micro, "OBSERVATION_ROOT", tmp_path / "native_observations")
+    monkeypatch.setattr(micro, "DEFAULT_SOURCE_EXCLUSION_MANIFEST", tmp_path / "exclusions.json")
+    monkeypatch.setattr(micro, "DEFAULT_CANARY_SNAPSHOT_PATH", tmp_path / "canary.json")
+    monkeypatch.setattr(micro, "CANARY_DAILY_SNAPSHOT_DIR", tmp_path / "canary_daily")
+
+
 def _quantity_leg_four_arm_events():
     events = []
     for index in range(30):
@@ -5144,7 +5154,7 @@ def test_four_arm_empty_native_census_preserves_existing_signed_actual_populatio
 def test_split_native_replay_persists_census_across_prior_state(monkeypatch, tmp_path):
     from src.tests.test_strategy_owner_replay import entry_owner_event, native_entry_loader
     from src.engine.scalping.strategy_owner_replay import build_entry_opportunity_replays
-    from src.engine.monitoring import machine_microstructure_attribution as micro
+    from src.engine.scalping import native_packet_validation as micro
     _patch_dirs(monkeypatch, tmp_path)
     from src.engine.scalping import strategy_owner_replay as native_replay
     original_replay = native_replay.build_entry_opportunity_replays
@@ -5176,7 +5186,7 @@ def test_split_native_replay_persists_census_across_prior_state(monkeypatch, tmp
 def test_split_reader_reuses_owner_plan_without_second_pipeline_scan(monkeypatch, tmp_path):
     from src.tests.test_strategy_owner_replay import entry_owner_event, native_entry_loader
     from src.engine import sniper_missed_entry_counterfactual as missed
-    from src.engine.monitoring import machine_microstructure_attribution as micro
+    from src.engine.scalping import native_packet_validation as micro
     data_dir = _patch_dirs(monkeypatch, tmp_path)
     from src.engine.scalping import strategy_owner_replay as native_replay
     original_replay = native_replay.build_entry_opportunity_replays
