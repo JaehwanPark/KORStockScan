@@ -51,6 +51,17 @@ def measured_http_call(call, url, *, telemetry_owner, telemetry_class='runtime_r
     code = str(telemetry_code)
     if not (len(code) in {6,9} and code[:6].isdigit()):
         code = 'not_applicable'
+    # A plain stock code on an account/capacity request does not identify a
+    # market. Order/account APIs use an explicit venue when supplied.
+    route = 'unknown'
+    if api.startswith('kt'):
+        body = kwargs.get('json')
+        explicit = body.get('dmst_stex_tp') if isinstance(body, dict) else None
+        if isinstance(explicit, str) and explicit in {'KRX', 'NXT', 'SOR'}:
+            route = explicit
+    elif api.startswith('ka'):
+        route = ('SOR' if code.endswith('_AL') else 'NXT' if code.endswith('_NX')
+                 else 'KRX' if code.isdigit() else 'unknown')
     key = (kind, api, str(telemetry_owner)[:80], str(telemetry_class)[:32], code, scope)
     started = time.time()
     started_kst = datetime.fromtimestamp(started, _KST)
@@ -70,7 +81,7 @@ def measured_http_call(call, url, *, telemetry_owner, telemetry_class='runtime_r
         record = dict(attempt_id=attempt, logical_id=telemetry_logical_id,
             started_epoch=started, started_kst_date=started_kst.date().isoformat(),
             process_start_ticks=_PROCESS_START_TICKS, release_root=_RELEASE_ROOT,
-            request_code=code, route=('SOR' if code.endswith('_AL') else 'NXT' if code.endswith('_NX') else 'KRX' if code.isdigit() else 'unknown'),
+            request_code=code, route=route,
             session='unknown_at_transport', kind=kind, api_id=api, owner=key[2], outcome='inflight_unknown')
         _RECENT.append(record)
     outcome = 'exception'

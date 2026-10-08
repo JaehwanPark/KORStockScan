@@ -1145,7 +1145,7 @@ def test_get_deposit_enters_short_cooldown_after_request_limit(monkeypatch):
                 "return_msg": "허용된 요청 개수를 초과하였습니다[1700:허용된 요청 개수를 초과하였습니다. API ID=kt00001]",
             }
 
-    times = iter([1_000.0, 1_000.0, 1_000.0, 1_000.0, 1_001.0, 1_001.0, 1_001.0])
+    clock = [1_000.0]
     post_count = {"value": 0}
 
     def _post(*args, **kwargs):
@@ -1166,7 +1166,7 @@ def test_get_deposit_enters_short_cooldown_after_request_limit(monkeypatch):
     monkeypatch.setattr(kiwoom_orders, "log_info", lambda *args, **kwargs: None)
     monkeypatch.setattr(kiwoom_orders, "log_error", lambda *args, **kwargs: None)
     monkeypatch.setattr(kiwoom_orders.time, "sleep", lambda _: None)
-    monkeypatch.setattr(kiwoom_orders.time, "time", lambda: next(times))
+    monkeypatch.setattr(kiwoom_orders.time, "time", lambda: clock[0])
     monkeypatch.setattr(
         kiwoom_orders,
         "TRADING_RULES",
@@ -1179,6 +1179,7 @@ def test_get_deposit_enters_short_cooldown_after_request_limit(monkeypatch):
     )
 
     assert kiwoom_orders.get_deposit("TOKEN") == 9_876_543
+    clock[0] = 1_001.0
     assert kiwoom_orders.get_deposit("TOKEN") == 9_876_543
     assert post_count["value"] == 1
     assert (
@@ -1247,9 +1248,7 @@ def test_get_deposit_transport_failure_enters_short_cooldown(monkeypatch):
                 "return_msg": "(-994:fail to sendReceive:WINGSj)",
             }
 
-    times = iter(
-        [1_000.0, 1_000.0, 1_000.0, 1_000.0, 1_001.0, 1_001.0, 1_001.0, 1_001.0]
-    )
+    clock = [1_000.0]
     post_count = {"value": 0}
 
     def _post(*args, **kwargs):
@@ -1270,7 +1269,7 @@ def test_get_deposit_transport_failure_enters_short_cooldown(monkeypatch):
     monkeypatch.setattr(kiwoom_orders, "log_info", lambda *args, **kwargs: None)
     monkeypatch.setattr(kiwoom_orders, "log_error", lambda *args, **kwargs: None)
     monkeypatch.setattr(kiwoom_orders.time, "sleep", lambda _: None)
-    monkeypatch.setattr(kiwoom_orders.time, "time", lambda: next(times))
+    monkeypatch.setattr(kiwoom_orders.time, "time", lambda: clock[0])
     monkeypatch.setattr(
         kiwoom_orders,
         "TRADING_RULES",
@@ -1290,6 +1289,7 @@ def test_get_deposit_transport_failure_enters_short_cooldown(monkeypatch):
     )
     assert kiwoom_orders.get_last_deposit_meta()["source"] == "stale_cache_fallback"
 
+    clock[0] = 1_001.0
     assert kiwoom_orders.get_deposit("TOKEN") == 9_876_543
     assert post_count["value"] == 1
     assert (

@@ -310,6 +310,18 @@ def selected_completed_bar_payload(request_code, *, now, consumer="main", seed_f
             raise ValueError("completed_bar_history_scope_invalid")
         if type(minimum_bars) is not int or minimum_bars < 1:
             raise ValueError("completed_bar_history_floor_invalid")
+        if now.tzinfo is None:
+            raise ValueError("completed_bar_identity_invalid")
+        # This projection owns one same-day session only. Reject an unsupported
+        # consumer window before consulting a potentially retired writer. This
+        # is source selection, not permission to reuse invalid WS evidence.
+        session_capacity = {"SOR_PREMARKET": 50, "SOR_REGULAR": 390,
+                            "SOR_AFTERMARKET": 240}[_bar_session(now)]
+        if mode == "ws_when_ready" and minimum_bars > session_capacity:
+            selection.update(status="rest_retained",
+                             reason="requested_history_exceeds_projection_scope",
+                             maximum_session_bars=session_capacity)
+            return None
         partial = False if consumer == "main" else observed_completed_bar_history_enabled()
         result = read_shared_completed_bars(item, now=now, **({"allow_partial_history": True} if partial else {}))
         selection.update(available_bars=len(result["stk_min_pole_chart_qry"]),

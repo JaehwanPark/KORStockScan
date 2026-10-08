@@ -32,3 +32,13 @@
 공식 upstream: [Kiwoom commit 953e5db](https://github.com/Kiwoom-Securities/Kiwoom-REST-API/tree/953e5dbff123f437ab4d11a78a95191a685eb51f), retrieval **13:07:06 KST**, inspected specs/_data/core client/ws_client/realtime packets/decoders SHA는 [공식 영수증](../../data/report/main_rest_ws_implementation/2026-10-08/official_reference.json)에 있다. 조회 tree에 `kiwoom_docs`가 없으며 로컬 gate·이전 조사 Postman/공식 안내의 wire 차이를 임의로 해소하지 않는다. OpenAI timeout은 [공식 Python API](https://developers.openai.com/api/reference/python)와 installed SDK를 대조하고 기존 SDK retries0·provider/outbox 보호를 보존했다.
 
 증거: [baseline](../../data/report/main_rest_ws_implementation/2026-10-08/baseline.json), [현 호출 분류](../../data/report/main_rest_ws_implementation/2026-10-08/callsite_scope.json), [모의 baseline](../../data/report/main_rest_ws_implementation/2026-10-08/benchmark_baseline.json), [모의 treatment](../../data/report/main_rest_ws_implementation/2026-10-08/benchmark_treatment.json), [재현 스크립트](../../data/report/main_rest_ws_implementation/2026-10-08/benchmark_reproduce.py).
+
+## 첫 배포 자연 검증과 추가 보완
+
+`06335dd9397b15ce9a26310ad08b5bbdd0ea9530` / `main-rest-ws-latency-20261008-v1`은 immutable source에서 1,094 passed/18 deselected 후 14:03:16 Main PID195573으로 기동했다. native handoff/bootstrap PASS, 웹 HTTP200, 감시5개, coordinator 활성화를 확인했다. 14:10:41 현재 정책은 `consumed_exact`, loaded128/operating48이며 pointer SHA는 `6ab9aed09de80a0a6d25886a061132853c70ff586c3cad11c3f90a1cc726a11f`로 유지됐다.
+
+자연 실행에서 두 결함을 추가 확인하여 v1을 최종 완료로 삼지 않았다. ① Main의 430봉 요구를 충족할 수 없는 당일 session projection을 먼저 읽으면서 이전 writer PID 검증이 `completed_bar_live_binding_invalid`로 실패했다. `ws_when_ready`는 projection 최대 범위(프리50/정규390/애프터240분)를 먼저 검사해 초과 요구의 기존 REST를 유지한다. 지원 가능한 window와 명시 `ws` mode의 잘못된 writer/원천은 계속 실패 처리한다. ② 계좌/capacity의 숫자 종목코드만으로 KRX route를 합성하던 계측을 수정했다. `kt*`는 명시된 `dmst_stex_tp`만 기록하고 없으면 unknown이다. 실제 요청 body/주문 경로는 바꾸지 않는다.
+
+재리뷰에서는 timezone 없는 입력이 범위 검사로 통과하지 않게 보완했다. 새 source/route 회귀와 account/order·admission·handoff·finalization/router를 함께 검사한다. 기존 예수금 cooldown 테스트 두 개의 시계 호출 횟수 의존 fixture는 명시적 1초 경과 clock으로 바꿔, 계측 시계 호출 추가에도 동일 cooldown/HTTP1회 보호를 검증한다.
+
+14:03:09 `strict_checklist_generation_stale`는 selector 전환 후 기존 PID의 종료 전 구간에서 발생했다. 14:08:46 자연 detector에서 cron은 `recovered after effective-date 06:50 cutoff`, artifact freshness/process는 PASS였으며 이후 실패는 위 분봉 오류의 log burst다. 경고를 숨기거나 과거 strict/PREOPEN을 재생하지 않는다. 수정 배포에서는 native prepare 직후 Main 재기동을 먼저 완료하고 web 교체를 이어가며 새 PID의 최종화·오류 상태를 재확인한다.

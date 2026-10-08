@@ -289,6 +289,65 @@ def test_transport_decoded_metadata_keeps_only_counts_and_exact_attempt(monkeypa
     assert T.snapshot()['recent_attempts'][-1]['body_return_code']=='0'
 
 
+@pytest.mark.parametrize('api,body,route', [
+    ('kt00011', {}, 'unknown'), ('kt10000', {'dmst_stex_tp':'SOR'}, 'SOR'),
+    ('kt10001', {'dmst_stex_tp':'NXT'}, 'NXT'),
+    ('kt10000', {'dmst_stex_tp':{}}, 'unknown'), ('ka10080', {}, 'KRX'),
+])
+def test_account_symbol_does_not_invent_a_transport_venue(api, body, route):
+    calls=[]
+    def transport(url, **kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(status_code=200)
+    T.measured_http_call(transport, 'https://api.kiwoom.com/api/dostk/acnt',
+        telemetry_owner='route-test', telemetry_code='196170',
+        headers={'api-id':api}, json=body)
+    assert T.snapshot()['recent_attempts'][-1]['route']==route
+    assert calls[0]['json'] is body
+
+
+@pytest.mark.parametrize('hour,capacity', [(8,50),(14,390),(17,240)])
+def test_main_full_history_retains_rest_before_dead_projection_binding(monkeypatch, hour, capacity):
+    from zoneinfo import ZoneInfo
+    from src.trading.market import shared_ws_snapshot as S
+    from src.engine.scalping.entry_candle_context import fetch_entry_candles_with_meta
+    monkeypatch.setenv('KORSTOCKSCAN_MAIN_BAR_SOURCE','ws_when_ready')
+    monkeypatch.setenv('KORSTOCKSCAN_MAIN_BAR_WS_SYMBOLS','005930')
+    monkeypatch.setattr(S,'read_shared_completed_bars',lambda *a,**kw:pytest.fail('unsupported history must not consult a retired writer'))
+    calls=[]
+    def rest(token, code, **kwargs):
+        calls.append((code,kwargs))
+        return [], {'api_id':'ka10080'}
+    monkeypatch.setattr('src.utils.kiwoom_utils.get_minute_candles_ka10080_with_meta',rest)
+    now=datetime(2026,10,8,hour,10,tzinfo=ZoneInfo('Asia/Seoul'))
+    receipt={}
+    assert S.selected_completed_bar_payload('005930_AL',now=now,minimum_bars=430,
+        history_scope='session',selection_receipt=receipt) is None
+    assert receipt['maximum_session_bars']==capacity
+    if hour==14:
+        ws={'last_realtime_type_ts':{'0B':now.timestamp()-.1},
+            'last_realtime_type_market_suffix':{'0B':'_AL'},
+            'last_realtime_type_market_route':{'0B':'krx_nxt_integrated'}}
+        _, meta=fetch_entry_candles_with_meta('token','005930_AL',ws,
+            venue='KRX_NXT_INTEGRATED',session='krx_regular',limit=40,now_ts=now,
+            broker_route='SOR',allow_integrated_sor_execution_view=True)
+        assert calls==[('005930_AL',{'limit':430,'explicit_request_code':True})]
+        assert meta['completed_bar_selection']['reason']=='requested_history_exceeds_projection_scope'
+
+
+@pytest.mark.parametrize('mode,floor',[('ws_when_ready',10),('ws',430)])
+def test_supported_or_strict_ws_history_keeps_invalid_writer_fail_closed(monkeypatch,mode,floor):
+    from zoneinfo import ZoneInfo
+    from src.trading.market import shared_ws_snapshot as S
+    monkeypatch.setenv('KORSTOCKSCAN_MAIN_BAR_SOURCE',mode)
+    monkeypatch.setenv('KORSTOCKSCAN_MAIN_BAR_WS_SYMBOLS','005930')
+    def invalid(*a,**kw):raise ValueError('completed_bar_live_binding_invalid')
+    monkeypatch.setattr(S,'read_shared_completed_bars',invalid)
+    with pytest.raises(RuntimeError,match='completed_bar_live_binding_invalid'):
+        S.selected_completed_bar_payload('005930_AL',
+            now=datetime(2026,10,8,14,10,tzinfo=ZoneInfo('Asia/Seoul')),minimum_bars=floor)
+
+
 def test_carried_registered_scope_diagnostics_use_native_cell_and_original_rows(monkeypatch):
     from copy import deepcopy
     from src.engine.scalping import continuous_reversal as K, reversal_current_backend as D
