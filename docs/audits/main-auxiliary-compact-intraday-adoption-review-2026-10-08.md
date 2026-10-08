@@ -38,9 +38,9 @@
 
 ## 검증
 
-- 관련 통합 회귀: **578 passed, 7 deselected**. 제외한 7건은 이미 삭제된 `entry_adverse_flow`를 import하는 구형 shared-rebound 검사이며, 이번 변경으로 복원하지 않는다.
-- 추가 전체 진입/부정 응답·전환 계약 검사: **25 passed**. 마지막 reader 증빙 보강 후 불변 릴리스에서 재검증한다.
-- Python compile 및 공백 검사 통과. 문서 parser와 불변 릴리스 결과는 아래 배포 기록에서 확정한다.
+- 최종 불변 릴리스 관련 통합 회귀: **664 passed, 7 deselected** (`final-v3-immutable-tests.txt`). 제외한 7건은 이미 삭제된 `entry_adverse_flow`를 import하는 구형 shared-rebound 검사이며, 이번 변경으로 복원하지 않는다.
+- 별도 Main 호출 계약 **11 passed**. 추가 native/async **130 passed**와 전체 진입·부정 응답 검사는 최종 664건에 포함되므로 합산하지 않는다.
+- Python compile·공백 검사 통과. print-only 문서 parser 21건, 현재 Main owner 1개. 외부 Project/Calendar 동기화 미실행.
 - codec 250회 로컬 검사: p50 **0.439ms**, p95 **0.457ms**, 최대 **0.561ms**. codec 비용 측정이며 전체 장중 루프나 실제 provider 속도 개선을 뜻하지 않는다.
 - 원 기계 bundle `40fb3ec7d5f44e2e34044f2a14e2d0d06dd6ea264f69b5f1481be899f2a4a689` 유지.
 - 전환 manifest `8bd235a2e78d19f863cc77d44c03bfb24653858ebedbc792e3c84ebd9ee91e3c`.
@@ -55,3 +55,14 @@
 15:31:05 두 번째 릴리스 `main-aux-compact-20261008-v2`의 bootstrap도 통과했으나, 15:31:14 다른 작업의 checklist 변경 후 `intraday_preserved_generation_changed`가 발생했고 15:31:32 기동 reader는 이를 정확히 거절했다. 당시 보조 overlay는 발행하지 않았다. 원 체크리스트 수정·기존 봉인/소비 영수증은 보존하며 마지막 릴리스는 최신 문서 바이트로 새 정식 인계를 생성한다.
 
 후속 async 검증 **130 passed**. 더 넓게 실행한 scanner 종목 부착 검사 2건은 `SymbolOwnerPolicyError`로 실패했고, 수정 전 불변 v1 릴리스의 동일 두 검사에서도 같은 실패를 재현했다(`preexisting-scanner-test-baseline.txt`). 현재 변경의 회귀로 처리하거나 owner 보호를 해제하지 않는다. 전체 저장소 모든 검사 무결함을 주장하지 않는다.
+
+### 최종 배포·발행 결과
+
+- 최종 릴리스 `main-aux-compact-20261008-v3`, 코드 commit `dc769a09c052df06b265c7d9ce196428caae20ec`. 15:42 KST 재기동, Main **PID 241227**. 사용자 지정 15시 이후 조건 준수.
+- **15:42:26 bootstrap PASS**, 15:43:05 실제 PID의 기존 128경로 reader 소비 확인. 기계 `consumed_exact`, 128 contract/48 operating scopes, 상시감시 5종목 유지.
+- **15:43:19.344688 KST** 네 scope 단일 발행. overlay `b8e97475121038c21d1608f99530f1c740f696f4ba084d0cfd2f9b48c4961626`. 4개 변경/124개 기존 binding 보존을 원 PID baseline과 대조했다.
+- 15:44:19 최종 handoff **PASS / findings 0**, selector와 Main cwd/commit 일치. Gunicorn PID 241341, 같은 최종 release, HTTP **200**. 최신 checklist SHA `ca53931ef8e47bfab9d387460a17b1993a00355f24e91b9b6a4f3ccc3afadaf2`를 봉인했다. 기존 영수증을 덮거나 문서 변경을 무시하도록 검증기를 완화하지 않았다.
+- 15:44 기준 신규 overlay의 **실제 PID 평가 소비 및 첫 자연 AI 요청은 미관측**이다. 기동 시 읽은 기존 binding과 발행 후 새 binding 소비를 구분한다. 현재 15:10~16:00 진입 cutoff를 유지하며, 다음 실제 평가에서 hot reader가 소비한다. 강제 신호·주문·추가 재기동으로 관측을 만들지 않는다.
+- 다음 장후/다음 영업일(10/12) 승계는 코드·회귀로 확인했고 실제 장후/다음 PID 소비는 아직 시점 미도래다. EOD/완료 장후를 재실행하지 않았다.
+- 실행 증거: `data/report/auxiliary_compact_adoption/2026-10-08/deployment-observation.json`, `final-pid-baseline-consumed.json`, `publication.json`, `compact-v3-handoff_prepare.txt`, `compact-v3-restart.txt`. 연구 추가 호출 0·대형 원장 복제 0.
+- 15:45:00 heartbeat에서 감시 **5** 확인. 15:45:07 자동 full detector는 최종 release를 소비했고 artifact/process/log 검사는 PASS, Telegram `no_alert`였다. `strict_checklist_generation_stale` 없음. cron에는 기존 `log_rotation_cleanup`/`postclose_finalization`의 06:50 이후 복구 이력 warning만 남아 있어 전체 severity를 무조건 green으로 표시하지 않는다(`final-natural-health.json`).
