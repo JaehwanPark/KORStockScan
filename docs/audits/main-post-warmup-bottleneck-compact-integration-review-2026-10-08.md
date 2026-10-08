@@ -49,7 +49,9 @@
 
 ## 5. 배포 및 실제 소비
 
-중간 immutable v2 `f1cd48730419eababc9b9bd994ef093ad78404fb`는 확대 회귀 **1,107 passed / 18 deselected** 후 17:01 KST에 배포했다. Main PID 271405와 web release를 정렬했고 native handoff·base/auxiliary 실제 소비·HTTP 200을 확인했다. 기존 bundle/overlay/128 bindings 및 네 scope v2를 그대로 승계했다. 위 추가 발견을 수리한 최종 v3는 다시 immutable 검증과 인계를 수행하며 결과를 이 절에 이어 기록한다.
+중간 immutable v2 `f1cd48730419eababc9b9bd994ef093ad78404fb`는 확대 회귀 **1,107 passed / 18 deselected** 후 17:01 KST에 배포했다. Main PID 271405와 web release를 정렬했고 native handoff·base/auxiliary 실제 소비·HTTP 200을 확인했다. 기존 bundle/overlay/128 bindings 및 네 scope v2를 그대로 승계했다. 위 추가 발견을 수리한 후보는 다시 immutable 검증과 인계를 수행하며 최종 결과를 이 절에 이어 기록한다.
+
+후보 v3의 추가 확대 검사에서는 생존 경로 1,231개가 통과했으나 주문 분할 테스트의 autouse fixture가 삭제된 `machine_microstructure_attribution`을 불러와 200개 setup error가 났다. 후보는 배포하지 않았다. 이미 퇴역한 collector 격리 fixture를 제거했고 생존 주문 분할 회귀 **198 passed / 2 deselected**를 확인했다. 제외된 2건은 삭제된 collector 기반 옛 replay 검사다. 실제 주문 분할·broker 불확실성·submit 예외 보호를 건너뛰지 않았다. 최종 immutable에 이 테스트 수리까지 포함한다.
 
 v2의 read-only cron 검사에서 finalization generation issue는 `{}`이며 `strict_checklist_generation_stale`은 재현되지 않았다. cleanup/finalization의 과거 06:50 cutoff 이후 복구 warning은 계속 보고한다. 전체 health PASS 또는 실제 체결 성공으로 표현하지 않는다.
 
