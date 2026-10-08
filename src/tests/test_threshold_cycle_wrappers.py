@@ -64,7 +64,7 @@ def test_postclose_prepares_isolated_preopen_and_start_requires_day_of_completio
     assert finalizer.rindex('if ! run_final_detector; then') < finalizer.index('capture_final_detector_receipt')
     assert finalizer.index('capture_final_detector_receipt') < finalizer.rindex('capture_finalization_generation')
     assert preopen.index("next_preopen_readiness") < preopen.index(
-        "low_price_two_leg_policy_apply")
+        "scanner_lookup_attention_policy")
     assert "--verify --target-date \"$TARGET_DATE\" --require-today" in preopen
     assert launcher.index("verify_exact_preopen_completion") < launcher.index(
         "record_threshold_runtime_env_pid_handoff")
@@ -117,20 +117,88 @@ def test_postclose_status_records_direct_owner_producer_flags():
         "entry_split_order_plan",
         "scale_in_split_order_plan",
         "samsung_machine_entry_tuning",
-        "low_price_two_leg_tuning",
-        "low_price_two_leg_candidate_recommendation",
         "intraday_ws_freshness_finalize",
         "ai_decision_action_outcome_calibration",
     ):
         assert f'"{flag}"' in script
 
 
+@pytest.mark.parametrize("status", ["running", "succeeded", "failed"])
+def test_postclose_status_preserves_active_flags_without_retired_fields(tmp_path, status):
+    import json
+    import os
+    import subprocess
+    import sys
+
+    script = _text("deploy/run_threshold_cycle_postclose.sh")
+    body = "write_postclose_status() {" + script.split(
+        "write_postclose_status() {", 1)[1].split("\nPY\n}", 1)[0] + "\nPY\n}\n"
+    path = tmp_path / "status.json"
+    path.write_text(json.dumps({"producer_flags": {"low_price_two_leg_tuning": "true"}}))
+    env = {key: value for key, value in os.environ.items()
+           if not key.startswith("POSTCLOSE_REUSE")}
+    env.update(VENV_PY=sys.executable, STATUS_FILE=str(path), TARGET_DATE="2026-10-08",
+               POSTCLOSE_RUN_ID="current", POSTCLOSE_CODE_COMMIT="a" * 40,
+               RUN_OBSERVATION_SOURCE_QUALITY_AUDIT="source",
+               RUN_ENTRY_SPLIT_ORDER_PLAN="entry", RUN_SCALE_IN_SPLIT_ORDER_PLAN="scale",
+               RUN_SAMSUNG_MACHINE_ENTRY_TUNING="false",
+               RUN_INTRADAY_WS_FRESHNESS_FINALIZE="ws",
+               RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION="ai",
+               RUN_RISING_MISSED_CLASSIFIER_PRIOR="rising",
+               THRESHOLD_CYCLE_RUN_LOW_PRICE_TWO_LEG_TUNING="true",
+               THRESHOLD_CYCLE_RUN_LOW_PRICE_TWO_LEG_CANDIDATE_RECOMMENDATION="true")
+    result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + body +
+                             f'write_postclose_status {status} test 0 1'],
+                            env=env, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(path.read_text())
+    assert payload["target_date"] == "2026-10-08" and payload["status"] == status
+    flags = payload["producer_flags"]
+    assert flags["observation_source_quality_audit"] == "source"
+    assert flags["entry_split_order_plan"] == "entry"
+    assert flags["scale_in_split_order_plan"] == "scale"
+    assert flags["samsung_machine_entry_tuning"] == "false"
+    assert flags["intraday_ws_freshness_finalize"] == "ws"
+    assert flags["ai_decision_action_outcome_calibration"] == "ai"
+    assert flags["rising_missed_classifier_prior"] == "rising"
+    assert not any("low_price_two_leg" in key for key in flags)
+    assert "LOW_PRICE_TWO_LEG" not in script
+    done = script[script.index('emit_postclose_marker "[DONE] threshold-cycle postclose'):]
+    assert "low_price_two_leg" not in done
+
+
+def test_cron_reinstallation_removes_retired_override_and_preserves_unrelated_jobs(tmp_path):
+    import os
+    import subprocess
+
+    state = tmp_path / "cron.txt"
+    state.write_text("5 20 * * 1-5 eod # UPDATE_KOSPI_EOD_2005\n"
+                     "10 20 * * 1-5 THRESHOLD_CYCLE_RUN_LOW_PRICE_TWO_LEG_"
+                     "CANDIDATE_RECOMMENDATION=false old # THRESHOLD_CYCLE_POSTCLOSE\n"
+                     "0 5 * * * finalize # POSTCLOSE_FINALIZATION_0500\n")
+    command = tmp_path / "crontab"
+    command.write_text('#!/bin/bash\nset -eu\nif [[ "$1" == "-l" ]]; then '
+                       'cat "$CRON_STATE"; else cp "$1" "$CRON_STATE"; fi\n')
+    command.chmod(0o755)
+    env = {**os.environ, "PATH": str(tmp_path) + ":" + os.environ["PATH"],
+           "CRON_STATE": str(state), "PROJECT_DIR": str(ROOT)}
+    for _ in range(2):
+        result = subprocess.run(["bash", str(ROOT / "deploy/install_threshold_cycle_cron.sh")],
+                                env=env, capture_output=True, text=True, timeout=10)
+        assert result.returncode == 0, result.stderr
+    text = state.read_text()
+    assert "LOW_PRICE_TWO_LEG" not in text
+    assert text.count("# THRESHOLD_CYCLE_POSTCLOSE") == 1
+    assert text.count("# THRESHOLD_CYCLE_PREOPEN") == 1
+    assert "10 20 * * 1-5 THRESHOLD_CYCLE_AI_CORRECTION_PROVIDER=openai" in text
+    assert "THRESHOLD_CYCLE_POSTCLOSE_BOT_ACTION=stop" in text
+    assert "5 20 * * 1-5 eod # UPDATE_KOSPI_EOD_2005\n" in text
+    assert "0 5 * * * finalize # POSTCLOSE_FINALIZATION_0500\n" in text
+
+
 def test_preopen_orders_direct_publishers_before_bootstrap_and_consumers():
     script = _text("deploy/run_threshold_cycle_preopen.sh")
     publishers = [
-        "low_price_two_leg_policy_apply",
-        "machine_microstructure_policy_approval",
-        "machine_entry_timing_tuning",
         "scanner_lookup_attention_policy",
         "mechanistic_entry_runtime_policy",
     ]
@@ -200,11 +268,11 @@ def test_main_machine_evaluation_precedes_compact_and_final_consumers():
     script = _text("deploy/run_threshold_cycle_postclose.sh")
     preflight = script.index('--audit-phase preflight --write')
     machine = script.index('--stage main_machine_policy')
-    episode = script.index('--stage episode_policy')
     auxiliary = script.index('for stage in legacy_machine_report main_auxiliary_policy')
-    assert preflight < machine < episode < auxiliary
+    assert preflight < machine < auxiliary
     assert 'wait_for_postclose_resources "main_machine_policy"' in script[preflight:machine]
-    assert '--launch' in script[machine:episode]
+    assert '--launch' in script[machine:auxiliary]
+    assert '--stage episode_policy' not in script
 
 
 def test_failed_cycle_recovery_reuses_main_terminal_without_replaying_machine():
@@ -228,22 +296,6 @@ def test_final_done_follows_bound_seal_and_no_retired_finalizer_dependencies():
     assert "days <= 1" not in finalizer
 
 
-def test_historical_machine_recovery_disables_current_account_cost_and_notifications():
-    from pathlib import Path
-    root = Path(__file__).resolve().parents[2]
-    script = (root / "deploy/run_machine_microstructure_final_refresh.sh").read_text()
-    from src.engine.automation.postclose_summary_handoff import stage_commands
-    assert '--stage machine_group' in script
-    assert '--recover-closed-target' in script
-    assert '--phase wait-inputs' not in script
-    for stage in ('collector_recommendation', 'research_allocation', 'legacy_policy_approval'):
-        commands = stage_commands(stage, '2026-09-21', '2026-09-21', recovery=True)
-        assert not any('--notify' in c or '--collect-costs' in c for c in commands)
-    service = _text("deploy/systemd/korstockscan-machine-microstructure-final-refresh.service")
-    assert "Restart=no" in service
-    assert "TimeoutStartSec=57600" in service
-
-
 def test_main_retry_adoption_preserves_origin_and_rejects_changed_bytes(tmp_path):
     import hashlib, json, os, subprocess, sys
     body=_text("deploy/run_threshold_cycle_postclose.sh").split('write_postclose_status() {',1)[1].split("<<'PY'\n",1)[1].split("\nPY\n}",1)[0]
@@ -259,7 +311,7 @@ def test_main_retry_adoption_preserves_origin_and_rejects_changed_bytes(tmp_path
         source_generations=[dict(path=str(source),generation=[stat.st_dev,stat.st_ino,stat.st_size,stat.st_mtime_ns])])
     proof=tmp_path/"reuse.json";proof.write_text(json.dumps(receipt))
     env=dict(os.environ,POSTCLOSE_REUSE_RECEIPT=str(proof),POSTCLOSE_RUN_ID="retry",POSTCLOSE_CODE_COMMIT="b"*40)
-    args=[sys.executable,"-",str(path),day,"running","started","0","0",""]+["true"]*9
+    args=[sys.executable,"-",str(path),day,"running","started","0","0",""]+["true"]*7
     path.write_text(json.dumps(origin))
     result=subprocess.run(args,input=body,text=True,capture_output=True,env=env)
     assert result.returncode==0,result.stderr
@@ -267,21 +319,29 @@ def test_main_retry_adoption_preserves_origin_and_rejects_changed_bytes(tmp_path
     retry = json.loads(path.read_text())
     retry['status'] = 'failed'
     path.write_text(json.dumps(retry))
-    low = 'src.engine.monitoring.low_price_two_leg_expanded_candidate_research'
+    reused = modules[0]
     inherited = dict(receipt, origin_run_id='retry', origin_code_commit='b'*40,
                      inherited_receipt_sha256=hashlib.sha256(proof.read_bytes()).hexdigest(),
-                     reused_modules=modules+[low], command_receipts=receipt['command_receipts']+[
-                         dict(producer_module=low,run_id='retry',exit_code=0,target_date=day,code_commit='b'*40,measurement_complete=True)])
+                     reused_modules=modules, command_receipts=receipt['command_receipts'])
     next_proof = tmp_path/'reuse-next.json'; next_proof.write_text(json.dumps(inherited))
     next_env = dict(env, POSTCLOSE_REUSE_RECEIPT=str(next_proof),POSTCLOSE_RUN_ID='third')
     result=subprocess.run(args,input=body,text=True,capture_output=True,env=next_env)
     assert result.returncode == 0, result.stderr
     function = 'verified_reused_module() {' + _text('deploy/run_threshold_cycle_postclose.sh').split('verified_reused_module() {',1)[1].split('reusable_completed_artifact() {',1)[0]
     check_env=dict(os.environ, VENV_PY=sys.executable, STATUS_FILE=str(path))
-    command=function+'\nverified_reused_module '+low
+    command=function+'\nverified_reused_module '+reused
     assert subprocess.run(['bash','-c',command],env=check_env,capture_output=True).returncode == 0
     next_proof.write_text('{}')
     assert subprocess.run(['bash','-c',command],env=check_env,capture_output=True).returncode == 2
+    retired = 'src.engine.monitoring.low_price_two_leg_expanded_candidate_research'
+    rejected = dict(inherited, reused_modules=modules + [retired],
+                    command_receipts=receipt['command_receipts'] + [
+                        dict(producer_module=retired, run_id='retry', exit_code=0,
+                             target_date=day, code_commit='b'*40, measurement_complete=True)])
+    next_proof.write_text(json.dumps(rejected))
+    before = path.read_bytes()
+    result = subprocess.run(args, input=body, text=True, capture_output=True, env=next_env)
+    assert result.returncode != 0 and path.read_bytes() == before
     path.write_text(json.dumps(origin));source.write_text('{"value":2}')
     result=subprocess.run(args,input=body,text=True,capture_output=True,env=env)
     assert result.returncode!=0 and json.loads(path.read_text())==origin
@@ -344,21 +404,6 @@ def test_source_producer_wrapper_routes_canonical_to_selected_release(tmp_path, 
     result = subprocess.run(["bash", str(workspace / "deploy" / name), "2026-09-17"], env=env, capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stderr
     assert result.stdout == "2026-09-17"
-
-
-def test_machine_refresh_updates_direct_summary_before_checklist():
-    script = (Path(__file__).resolve().parents[2] / "deploy/run_machine_microstructure_final_refresh.sh").read_text()
-    from src.engine.automation.postclose_summary_handoff import stage_commands
-    commands = stage_commands('summary_handoff', '2026-09-21', '2026-09-21')
-    assert commands[0][2] == 'src.engine.automation.postclose_done_controller'
-    assert '--require-independent-producers' in commands[0]
-
-
-def test_machine_refresh_binds_publication_before_waiting():
-    script = (Path(__file__).resolve().parents[2] / "deploy/run_machine_microstructure_final_refresh.sh").read_text()
-    assert 'POSTCLOSE_POLICY_PUBLICATION_DATE:-$completed_target_date' in script
-    assert 'export POSTCLOSE_PREPARED_EFFECTIVE_DATE=' in script
-    assert script.index('export POSTCLOSE_POLICY_PUBLICATION_DATE=') < script.index('--stage machine_group')
 
 
 def test_scoped_final_verification_respects_disabled_machine_schedule():

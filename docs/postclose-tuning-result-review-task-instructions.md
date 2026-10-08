@@ -59,17 +59,16 @@ OFF·퇴역 producer, 유효 frozen policy/checkpoint, 별도 custody/override·
 | 20:10 | DONE controller | predecessor/follower 대기·실패 reason·JSON `done`; 최신 verifier와 같은 generation |
 | 20:10 | tuning monitoring | predecessor 계약·단계 exit/status `success`·Parquet/DuckDB source hash/coverage |
 | 20:50 예약, EOD 완료 후 압축 | dashboard DB archive | EOD terminal 뒤 최신 대상일 DONE·검증된 archive/source generation·보존 계약 |
-| 21:15 예약, EOD 완료 후 계산 | machine final refresh systemd | EOD terminal 뒤 capacity·attribution·timing·weakness·allocation·legacy approval의 독립 stage 및 summary/controller 인계 |
 | 다음 KRX 영업일 05:00, bounded | postclose finalization | 직전 KRX source date의 predecessor 확인→최신 summary/tower/checklist/strict closure→cleanup→source-date final detector receipt; 06:00 predecessor deadline, 06:50 종료 상한. 07:20 PREOPEN scanner 전 30분 확보 |
 | 장후 정기 5분, 21:50까지 및 finalization 후 | System Error Detector | 해당 run/stage/target의 unresolved critical·최신 terminal; 단순 이전 PASS 재사용 금지 |
 
 ### 3.1 공통 배포 경로와 독립 서비스 경계
 
-정확일자 `episode_policy`가 유효한 `explicit_schedule_disabled` 영수증으로 OFF이면, episode가 필요한 `research_allocation`도 OFF로 닫는다. 퇴역 episode 연구 파일을 합성하거나 퇴역 family 결과를 공동 배분 성공으로 기록하지 않는다.
+`episode_policy`·`research_allocation`과 전용 21:15 final-refresh 서비스·wrapper·설치 스크립트는 영구 제거됐다. 해당 terminal이나 OFF 영수증을 새로 요구하거나 합성하지 않는다. 현행 Main 장후 예약과 수동 복구 진입점은 `bash deploy/run_runtime_release.sh postclose SOURCE_DATE`이며, 수동 실행은 별도 승인과 실행 중인 같은 날짜 worker 부재를 확인한다. 설치된 `THRESHOLD_CYCLE_POSTCLOSE_BOT_ACTION=stop` 부작용도 유지한다.
 
 장후 모니터 스냅샷의 대용량 거래 리뷰는 원본 파일 identity·자체 해시·완료 census 계약이 맞는 축약본으로 보유·청산 보고서에 전달한다. 복구 실행의 재사용은 정확일자 네 산출물 해시, 프로필, 완료 축약본 및 원천 pipeline의 시각 경계가 모두 일치할 때만 허용한다. 하나라도 바뀌면 정상 생산 경로를 다시 실행한다.
 
-기계 BLOCK/RECHECK 정책은 날짜가 같은 원천 감사 preflight의 해시·허용 receipt와 자원 가드를 통과한 뒤 `main_machine_policy`로 dispatch한다. main 계산은 AI/에피소드 연구 성공을 기다리지 않으며, preflight 뒤 독립적인 긴 연구보다 먼저 실행한다. 같은 wrapper의 `outcome_labels`, `episode_policy`, `legacy_machine_report`, `main_auxiliary_policy`는 독립 worker이며 후행 AI follower는 receipt만 검증한다. `run_machine_microstructure_final_refresh.sh`는 `machine_group` 호환 진입점이며 독립 원천의 실패가 다른 stage의 terminal 기록을 생략하지 않는다. Episode는 자기 완료 연구만 발행하며 공동 allocation은 별도 계산한다. allocation stage는 family 보고서·정책을 덮어쓰지 않는다.
+기계 BLOCK/RECHECK 정책은 날짜가 같은 원천 감사 preflight의 해시·허용 receipt와 자원 가드를 통과한 뒤 `main_machine_policy`로 dispatch한다. Main 계산은 보조 AI 성공을 기다리지 않으며 preflight 뒤 먼저 실행한다. 같은 wrapper의 `outcome_labels`, `legacy_machine_report`, `main_auxiliary_policy`는 생존하는 Main worker다. 정확한 stage 의존과 terminal은 현행 registry로 검증하며, 퇴역 wrapper를 복원하거나 독립 final-refresh 예약을 추가하지 않는다.
 
 Wrapper는 비동기 `pre_submit_delay` 및 atomic sizing consumer를 시작하기 전에 대상일 producer summary를 동일 대상일 raw pipeline 원천과 대사해 source ledger로 봉인한다. raw가 날짜·프로파일 검증을 통과하고 중복·격리 결손이 없는데 요약 count/hash만 어긋나면 해당 거래일 raw에서 summary를 재구성하고 stage별 count/hash를 다시 확인한 뒤 봉인한다. raw 검증 또는 재구성 대사가 실패하면 하류 계산을 진행하지 않는다.
 

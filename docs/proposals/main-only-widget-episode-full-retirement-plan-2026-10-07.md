@@ -345,3 +345,11 @@ Main-only 최종 릴리스 `main-only-retired-20261008-v5` / `2e056fc144ec08bdf0
 전용 코드/배포/테스트 325파일, 전용 unit/timer 217개와 설치 파일 562개, 참조 종료 worktree 107개 및 이번 최종화의 구 Main-only 릴리스 4개, 불필요 전용 데이터 5,182파일과 검증된 복제본을 제거했다. 공통 DB/journal, Main 정책·부모/원천 hash 참조 6,223파일과 고유 미검증 자료는 보존한다. 사용률은 정리 전 76%에서 68%, 가용 약 47 GiB다.
 
 핵심 615개 및 후속 결함별 회귀가 통과했고 최종 handoff/identity 관련 286개 검사에서 미해결 범위 내 코드 결함은 없었다. 전체 test collection의 기존 PYRAMID import 결함은 별도다. 퇴역 전용 worker/API/writer 제거와 현재 정상 기동은 확인했지만 통제된 전후 성능 개선율·자연 매매 손익이나 다음 자연 장후 성공으로 확대하지 않는다. `strict_checklist_generation_stale`는 재현되지 않았으며 과거 06:50 이후 완료의 `recovered_late` 경고는 사실대로 유지한다. 상세 검증과 보존·삭제 명세는 [구현 검토](../audits/main-only-widget-episode-full-retirement-implementation-review-2026-10-08.md)와 [최종 영수증](../../data/report/main_only_retirement/2026-10-08/deployment_final_v5.json)에 기록했다.
+
+## 16. 장후 설치·설정 잔재 보완
+
+16:48 점검 후 사용자 지시로 남은 설치·장후 표시 잔재를 정리하고 배포·재기동한다. 단독 퇴역 서비스만 설치하던 `deploy/install_postclose_eod_gate_systemd.sh`는 삭제한다. 생존 Main의 EOD 선행 검증은 `eod_terminal_gate.sh`와 20:10 wrapper에서 계속 수행하며 설치는 `install_threshold_cycle_cron.sh`를 사용한다.
+
+저가 2단계 튜닝·후보 추천 env를 wrapper 설정, status 인자·producer flags, 완료 로그와 설치된 장후 cron에서 제거한다. 기존 상태를 읽어 갱신해도 퇴역 producer flags가 남지 않아야 한다. 과거 봉인된 보고서·custody journal은 수정하지 않는다. 설치 cron의 나머지 예약·provider·bot stop·Swing OFF와 Main 기계/보조 정책 hash를 보존한다.
+
+구 wrapper를 요구하는 회귀는 생존 Main stage·EOD barrier 검증으로 이관한다. 실제 status writer 실행과 격리된 cron 재설치·멱등성 검증을 포함한다. 실행 중인 장후 worker가 없는 상태에서 리뷰·회귀·immutable release 검증을 마치고 정책 보존 handoff로 배포한다. 실제 새 PID/bootstrap·기계/보조 정책 소비·strict 세대를 확인하며 20:10 자연 완료와 다음 예약기동은 별도 관측으로 남긴다. [후속 검토 기록](../audits/main-retired-postclose-cleanup-review-2026-10-08.md).

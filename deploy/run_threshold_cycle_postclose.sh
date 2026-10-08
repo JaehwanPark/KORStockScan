@@ -237,12 +237,6 @@ RUN_SCALPING_PYRAMID_QUALITY_CALIBRATION=false # permanently retired by operator
 RUN_SCALPING_AVG_DOWN_RECOVERY_CALIBRATION=false # permanently retired by operator 2026-09-18
 RUN_RISING_MISSED_CLASSIFIER_PRIOR="${THRESHOLD_CYCLE_RUN_RISING_MISSED_CLASSIFIER_PRIOR:-true}"
 RUN_SAMSUNG_MACHINE_ENTRY_TUNING=false # retired: 005930 new entry belongs to Main fixed watch
-RUN_LOW_PRICE_TWO_LEG_TUNING="${THRESHOLD_CYCLE_RUN_LOW_PRICE_TWO_LEG_TUNING:-true}"
-RUN_LOW_PRICE_TWO_LEG_CANDIDATE_RECOMMENDATION="${THRESHOLD_CYCLE_RUN_LOW_PRICE_TWO_LEG_CANDIDATE_RECOMMENDATION:-true}"
-if [[ "$TARGET_DATE" > "2026-09-28" ]]; then
-  # This historical multi-month research producer has no forward-only window yet.
-  RUN_LOW_PRICE_TWO_LEG_CANDIDATE_RECOMMENDATION=false
-fi
 RUN_INSTITUTIONAL_FLOW_CONTEXT=false # permanently retired with its sole ADM/LDM consumer: scalping_adm_ldm_retirement_20260906
 RUN_LIFECYCLE_DECISION_MATRIX=false # permanently retired: scalping_adm_ldm_retirement_20260906
 RUN_LIFECYCLE_AI_CONTEXT=false # permanently retired: scalping_adm_ldm_retirement_20260906
@@ -309,7 +303,6 @@ write_postclose_status() {
   "$VENV_PY" - "$STATUS_FILE" "$TARGET_DATE" "$status" "$reason" "$exit_code" "$finished" "$failure_artifact" \
     "$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT" "$RUN_ENTRY_SPLIT_ORDER_PLAN" \
     "$RUN_SCALE_IN_SPLIT_ORDER_PLAN" "$RUN_SAMSUNG_MACHINE_ENTRY_TUNING" \
-    "$RUN_LOW_PRICE_TWO_LEG_TUNING" "$RUN_LOW_PRICE_TWO_LEG_CANDIDATE_RECOMMENDATION" \
     "$RUN_INTRADAY_WS_FRESHNESS_FINALIZE" "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" \
     "$RUN_RISING_MISSED_CLASSIFIER_PRIOR" <<'PY'
 import json
@@ -330,12 +323,10 @@ path = Path(sys.argv[1])
     entry_split,
     scale_in_split,
     machine_entry,
-    low_price,
-    low_price_expansion,
     ws_freshness,
     ai_outcome,
     rising_missed,
-) = sys.argv[2:18]
+) = sys.argv[2:]
 payload = {}
 if path.exists():
     try:
@@ -399,8 +390,6 @@ payload.update(
             "pre_submit_delay_tuning": os.environ.get("RUN_PRE_SUBMIT_DELAY_TUNING"),
             "scale_in_split_order_plan": scale_in_split,
             "samsung_machine_entry_tuning": machine_entry,
-            "low_price_two_leg_tuning": low_price,
-            "low_price_two_leg_candidate_recommendation": low_price_expansion,
             "intraday_ws_freshness_finalize": ws_freshness,
             "ai_decision_action_outcome_calibration": ai_outcome,
             "rising_missed_classifier_prior": rising_missed,
@@ -2277,7 +2266,7 @@ selected_initial_quantity_env(Path(sys.argv[1]), sys.argv[2])
 PY
   fi
 fi
-emit_postclose_marker "[DONE] threshold-cycle postclose target_date=$TARGET_DATE market_panic_breadth=$RUN_MARKET_PANIC_BREADTH_REPORT pipeline_event_verbosity=$RUN_PIPELINE_EVENT_VERBOSITY_REPORT observation_source_quality_audit=$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT intraday_ws_freshness_finalize=$RUN_INTRADAY_WS_FRESHNESS_FINALIZE opening_rotation_profile_tuning=$RUN_OPENING_ROTATION_PROFILE_TUNING ai_decision_quality_daily_materialization=$RUN_AI_DECISION_QUALITY_DAILY_MATERIALIZATION ai_decision_action_outcome_calibration=$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION codebase_performance_workorder=$RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT pattern_lab_currentness_audit=$RUN_PATTERN_LAB_CURRENTNESS_AUDIT pattern_lab_ai_review=$RUN_PATTERN_LAB_AI_REVIEW time_window_regime_counterfactual=$RUN_TIME_WINDOW_REGIME_COUNTERFACTUAL producer_gap_discovery=$RUN_PRODUCER_GAP_DISCOVERY stage_hook_workorder_discovery=$RUN_STAGE_HOOK_WORKORDER_DISCOVERY stage_hook_runtime_scaffold=$RUN_STAGE_HOOK_RUNTIME_SCAFFOLD pattern_lab_propagation_audit=$RUN_PATTERN_LAB_PROPAGATION_AUDIT scalp_entry_adm=$RUN_SCALP_ENTRY_ADM entry_split_order_plan=$RUN_ENTRY_SPLIT_ORDER_PLAN scale_in_split_order_plan=$RUN_SCALE_IN_SPLIT_ORDER_PLAN entry_ai_gate_backtest=$RUN_ENTRY_AI_GATE_BACKTEST entry_ai_gate_backtest_schedule=$ENTRY_AI_GATE_BACKTEST_SCHEDULE rising_missed_intraday_feedback_postclose=$RUN_RISING_MISSED_INTRADAY_FEEDBACK_POSTCLOSE scalping_pyramid_intraday_feedback_postclose=$RUN_SCALPING_PYRAMID_INTRADAY_FEEDBACK_POSTCLOSE scalping_pyramid_quality_calibration=$RUN_SCALPING_PYRAMID_QUALITY_CALIBRATION scalping_avg_down_recovery_calibration=$RUN_SCALPING_AVG_DOWN_RECOVERY_CALIBRATION rising_missed_classifier_prior=$RUN_RISING_MISSED_CLASSIFIER_PRIOR samsung_machine_entry_tuning=$RUN_SAMSUNG_MACHINE_ENTRY_TUNING low_price_two_leg_tuning=$RUN_LOW_PRICE_TWO_LEG_TUNING low_price_two_leg_candidate_recommendation=$RUN_LOW_PRICE_TWO_LEG_CANDIDATE_RECOMMENDATION institutional_flow_context=$RUN_INSTITUTIONAL_FLOW_CONTEXT microstructure_reaction_context=false microstructure_machine_evaluation=$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION lifecycle_decision_matrix=$RUN_LIFECYCLE_DECISION_MATRIX lifecycle_ai_context=$RUN_LIFECYCLE_AI_CONTEXT ldm_hypothesis_parent_refinement=$RUN_LDM_HYPOTHESIS_PARENT_REFINEMENT lifecycle_bucket_discovery=$RUN_LIFECYCLE_BUCKET_DISCOVERY lifecycle_bucket_windows=$RUN_LIFECYCLE_BUCKET_WINDOWS lifecycle_bucket_window_list=$LIFECYCLE_BUCKET_WINDOWS lifecycle_bucket_promotion_window=$LIFECYCLE_BUCKET_PROMOTION_WINDOW force_lifecycle_bucket_windows=$FORCE_LIFECYCLE_BUCKET_WINDOWS force_deep_audits=$FORCE_DEEP_AUDITS force_workorder_branch=$FORCE_WORKORDER_BRANCH runtime_apply_bridge=$RUN_RUNTIME_APPLY_BRIDGE latency_classifier_recommendation=$RUN_LATENCY_CLASSIFIER_RECOMMENDATION swing_lifecycle=$RUN_SWING_LIFECYCLE_AUDIT swing_strategy_discovery=$RUN_SWING_STRATEGY_DISCOVERY swing_lifecycle_matrix=$RUN_SWING_LIFECYCLE_MATRIX swing_lifecycle_bucket_discovery=$RUN_SWING_LIFECYCLE_BUCKET_DISCOVERY swing_ai_review_provider=$SWING_THRESHOLD_AI_REVIEW_PROVIDER swing_lifecycle_bucket_discovery_ai_provider=$SWING_LIFECYCLE_BUCKET_DISCOVERY_AI_PROVIDER pattern_lab_ai_review_provider=$PATTERN_LAB_AI_REVIEW_PROVIDER producer_gap_discovery_ai_provider=$PRODUCER_GAP_DISCOVERY_AI_PROVIDER stage_hook_workorder_discovery_ai_provider=$STAGE_HOOK_WORKORDER_DISCOVERY_AI_PROVIDER deepseek_swing_lab=$RUN_DEEPSEEK_SWING_LAB runtime_approval_summary=true next_stage2_checklist=true finished_at=$finished_at"
+emit_postclose_marker "[DONE] threshold-cycle postclose target_date=$TARGET_DATE market_panic_breadth=$RUN_MARKET_PANIC_BREADTH_REPORT pipeline_event_verbosity=$RUN_PIPELINE_EVENT_VERBOSITY_REPORT observation_source_quality_audit=$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT intraday_ws_freshness_finalize=$RUN_INTRADAY_WS_FRESHNESS_FINALIZE opening_rotation_profile_tuning=$RUN_OPENING_ROTATION_PROFILE_TUNING ai_decision_quality_daily_materialization=$RUN_AI_DECISION_QUALITY_DAILY_MATERIALIZATION ai_decision_action_outcome_calibration=$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION codebase_performance_workorder=$RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT pattern_lab_currentness_audit=$RUN_PATTERN_LAB_CURRENTNESS_AUDIT pattern_lab_ai_review=$RUN_PATTERN_LAB_AI_REVIEW time_window_regime_counterfactual=$RUN_TIME_WINDOW_REGIME_COUNTERFACTUAL producer_gap_discovery=$RUN_PRODUCER_GAP_DISCOVERY stage_hook_workorder_discovery=$RUN_STAGE_HOOK_WORKORDER_DISCOVERY stage_hook_runtime_scaffold=$RUN_STAGE_HOOK_RUNTIME_SCAFFOLD pattern_lab_propagation_audit=$RUN_PATTERN_LAB_PROPAGATION_AUDIT scalp_entry_adm=$RUN_SCALP_ENTRY_ADM entry_split_order_plan=$RUN_ENTRY_SPLIT_ORDER_PLAN scale_in_split_order_plan=$RUN_SCALE_IN_SPLIT_ORDER_PLAN entry_ai_gate_backtest=$RUN_ENTRY_AI_GATE_BACKTEST entry_ai_gate_backtest_schedule=$ENTRY_AI_GATE_BACKTEST_SCHEDULE rising_missed_intraday_feedback_postclose=$RUN_RISING_MISSED_INTRADAY_FEEDBACK_POSTCLOSE scalping_pyramid_intraday_feedback_postclose=$RUN_SCALPING_PYRAMID_INTRADAY_FEEDBACK_POSTCLOSE scalping_pyramid_quality_calibration=$RUN_SCALPING_PYRAMID_QUALITY_CALIBRATION scalping_avg_down_recovery_calibration=$RUN_SCALPING_AVG_DOWN_RECOVERY_CALIBRATION rising_missed_classifier_prior=$RUN_RISING_MISSED_CLASSIFIER_PRIOR samsung_machine_entry_tuning=$RUN_SAMSUNG_MACHINE_ENTRY_TUNING institutional_flow_context=$RUN_INSTITUTIONAL_FLOW_CONTEXT microstructure_reaction_context=false microstructure_machine_evaluation=$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION lifecycle_decision_matrix=$RUN_LIFECYCLE_DECISION_MATRIX lifecycle_ai_context=$RUN_LIFECYCLE_AI_CONTEXT ldm_hypothesis_parent_refinement=$RUN_LDM_HYPOTHESIS_PARENT_REFINEMENT lifecycle_bucket_discovery=$RUN_LIFECYCLE_BUCKET_DISCOVERY lifecycle_bucket_windows=$RUN_LIFECYCLE_BUCKET_WINDOWS lifecycle_bucket_window_list=$LIFECYCLE_BUCKET_WINDOWS lifecycle_bucket_promotion_window=$LIFECYCLE_BUCKET_PROMOTION_WINDOW force_lifecycle_bucket_windows=$FORCE_LIFECYCLE_BUCKET_WINDOWS force_deep_audits=$FORCE_DEEP_AUDITS force_workorder_branch=$FORCE_WORKORDER_BRANCH runtime_apply_bridge=$RUN_RUNTIME_APPLY_BRIDGE latency_classifier_recommendation=$RUN_LATENCY_CLASSIFIER_RECOMMENDATION swing_lifecycle=$RUN_SWING_LIFECYCLE_AUDIT swing_strategy_discovery=$RUN_SWING_STRATEGY_DISCOVERY swing_lifecycle_matrix=$RUN_SWING_LIFECYCLE_MATRIX swing_lifecycle_bucket_discovery=$RUN_SWING_LIFECYCLE_BUCKET_DISCOVERY swing_ai_review_provider=$SWING_THRESHOLD_AI_REVIEW_PROVIDER swing_lifecycle_bucket_discovery_ai_provider=$SWING_LIFECYCLE_BUCKET_DISCOVERY_AI_PROVIDER pattern_lab_ai_review_provider=$PATTERN_LAB_AI_REVIEW_PROVIDER producer_gap_discovery_ai_provider=$PRODUCER_GAP_DISCOVERY_AI_PROVIDER stage_hook_workorder_discovery_ai_provider=$STAGE_HOOK_WORKORDER_DISCOVERY_AI_PROVIDER deepseek_swing_lab=$RUN_DEEPSEEK_SWING_LAB runtime_approval_summary=true next_stage2_checklist=true finished_at=$finished_at"
 # Late widget/machine sources are not terminal here.  Finalization owns the
 # single tower -> checklist -> strict summary-handoff generation after all
 # predecessors complete.
