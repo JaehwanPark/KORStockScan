@@ -48,12 +48,35 @@ def test_new_nxt_admission_requires_native_exact_date_listing(symbol, damage):
     if damage == "false": source.update(nxt_eligible=False, eligible_venues_json=[])
     if damage == "conflict": source["quality_state"] = "CONFLICT"
     if damage == "provenance": source["payload_sha256"] = ""
-    if damage == "future": source["observed_at_kst"] = "2026-09-30T17:00:00+09:00"
+    if damage == "future": source["observed_at_kst"] = "2026-09-30T09:00:00+09:00"
     if damage == "missing": source = None
     db.get_security_market_eligibility = lambda *_: source
-    ok, _ = fixed._new_symbol_session_eligible(db, fixed.spec_for(symbol), fixed.session_route(epoch(16), symbol), epoch(16))
+    ok, _ = fixed._new_symbol_session_eligible(db, fixed.spec_for(symbol), fixed.session_route(epoch(8), symbol), epoch(8))
     assert ok is (damage is None)
     assert fixed._new_symbol_session_eligible(db, fixed.spec_for(symbol), fixed.session_route(epoch(10), symbol), epoch(10))[0]
+
+
+@pytest.mark.parametrize('symbol',[spec.symbol for spec in fixed.SPECS])
+def test_integrated_after_sor_watch_keeps_quote_and_custody_guards(monkeypatch,symbol):
+    from src.engine import sniper_state_handlers as handlers
+    db,targets=_TestDB(),[]
+    monkeypatch.setenv(fixed.spec_for(symbol).enable_env,'true')
+    db.get_security_market_eligibility=lambda *_:pytest.fail('SOR observation used NXT-only listing gate')
+    now=epoch(16)
+    monkeypatch.setattr(fixed,'broker_and_owner_clear',lambda *_:(False,'owner_registry_unresolved_intent'))
+    assert fixed.reconcile(db,targets,now_epoch=now,watch_cap=5,symbol=symbol)[0]=='owner_registry_unresolved_intent'
+    assert targets==[]
+    monkeypatch.setattr(fixed,'broker_and_owner_clear',lambda *_:(True,'verified_flat'))
+    status,target=fixed.reconcile(db,targets,now_epoch=now,watch_cap=5,symbol=symbol)
+    assert status=='armed' and target['broker_route']=='SOR'
+    route=handlers._fixed_watch_entry_source_route(target,now)
+    assert route['item']==symbol+'_AL'
+    assert route['market_session_bucket']=='KRX_NXT_AFTERMARKET'
+    wrong_item=symbol+'_NX'
+    snapshot=dict(curr=100,last_ws_item=wrong_item,
+        last_realtime_type_item={'0B':wrong_item,'0D':wrong_item},
+        last_realtime_type_ts={'0B':now+11,'0D':now+11})
+    assert fixed.observation_ready(target,snapshot,now_epoch=now+11)==(False,'exact_route_item_missing')
 
 
 

@@ -282,4 +282,6 @@ B5b는 `adjusted_1` REST 역사와 `raw_same_day` WS tail의 동등성 미입증
 
 추가 운영 검증에서 native 신호가 없는 활성 fixed-watch가 `not_enabled`로 기존 Main inline REST 준비에 들어가는 결함을 발견해 B1에 포함했다. 검증된 당일 exact scope/route의 native 정책은 신호가 생길 때까지 `waiting_native_signal`을 반환하며, 실제 유효 claim의 비동기 dispatch/commit과 비지원 backend의 기존 동작은 유지한다. 원 5초 claim이나 quote/주문 guard는 늘리지 않는다. 중간 배포의 72.847초 warm loop를 실패 관측으로 보존하고 보완 배포의 별도 자연 창을 수집한다.
 
+사용자 확인대로 통합 애프터장은 `_AL`·SOR다. 세 Main 이관 종목에만 남아 있던 NXT listing 추가 관찰 승격 조건은 NXT 전용 PRE에 한정하고, 통합 REGULAR/AFTER에서는 다섯 fixed-watch가 같은 기존 Main SOR 관찰 계약을 따른다. 감시 개수와 현재 session admission·유효 quote·실제 주문 가능성을 분리한다. 실제 주문 preflight와 소유권/계좌/수량 보호는 그대로 유지한다.
+
 최종 회귀·수리 내용, 통제된 microbenchmark, 실제 새 PID의 소비 및 자연 성능/원천/호출 관측은 위 통합 리뷰와 [실행 증거 디렉터리](../../data/report/main_bottleneck_compact/2026-10-08/)가 소유한다. 단일 현재 checklist owner와 원 strict checklist 바이트는 유지한다. 배포 완료나 실제 주문·비용후 승률은 코드 검증으로 대신하지 않는다.

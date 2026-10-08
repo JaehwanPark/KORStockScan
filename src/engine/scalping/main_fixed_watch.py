@@ -140,12 +140,16 @@ def broker_and_owner_clear(now_epoch: float, route: dict) -> tuple[bool, str]:
 
 
 def _new_symbol_session_eligible(db, spec, route, now_epoch):
-    """Use existing exact-date listing evidence for the new Main-only symbols.
+    """Apply the existing Main SOR observation contract in integrated sessions.
 
-    KRX regular admission keeps the existing Main contract. NXT evidence is
-    read locally, never inferred from exchange/volume or fetched by this loop.
+    The extra exact-date NXT listing check belongs only to NXT-only PRE.
+    Observation admission never substitutes for quote or order preflight.
+    Listing evidence is local; this loop does not fetch or infer eligibility.
     """
-    if not spec.episode_entry_forbidden or route["bucket"] == "krx_regular":
+    integrated = (route.get("route") == "krx_nxt_integrated" and route.get("bucket") in {
+        "krx_regular", session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET,
+    })
+    if not spec.episode_entry_forbidden or integrated:
         return True, "existing_main_session_contract"
     day = datetime.fromtimestamp(now_epoch, tz=session_contract.KST).date()
     key = (spec.symbol, day)

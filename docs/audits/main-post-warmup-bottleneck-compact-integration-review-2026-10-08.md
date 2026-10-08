@@ -58,3 +58,11 @@
 v2의 read-only cron 검사에서 finalization generation issue는 `{}`이며 `strict_checklist_generation_stale`은 재현되지 않았다. cleanup/finalization의 과거 06:50 cutoff 이후 복구 warning은 계속 보고한다. 전체 health PASS 또는 실제 체결 성공으로 표현하지 않는다.
 
 최종 준비 직전 별도 문서 작업이 약세 관찰 계획 owner를 추가했다. 현재 checklist SHA `503685557588993927f13d39db72218cce9deeeafe877f6630c1afff26c9ed93`, parser 22개·이번 Main owner 1개이며 원 AUTO 봉인 블록은 동일하다. 이 변경을 덮어쓰거나 해당 계획을 구현하지 않는다. 최신 checklist 인계는 기존 native handoff에서 검증한다.
+
+## 6. 통합 애프터 SOR 관찰 승격 조건 수리
+
+사용자가 통합 애프터장은 NXT 전용이 아니라 SOR라고 지적했다. 실제 `session_route`는 이미 `_AL`·SOR였지만 `main_fixed_watch._new_symbol_session_eligible`이 HPSP·알테오젠·주성 세 종목에만 NXT listing 증빙을 추가 요구했다. v6의 heartbeat는 감시 5개였으나 이 세 종목은 당일 AFTER admission 갱신이 대기했다. 감시 개수와 현재 session 진입 준비를 같은 성공으로 취급하지 않는다.
+
+통합 REGULAR/AFTER 관찰 admission은 기존 Main SOR 계약을 다섯 종목에 동일 적용한다. 이 특별 NXT 증빙 검사는 실제 `nxt_only` PRE에서만 유지한다. 원천/quote/현재 generation·warmup·manual veto·broker/account/수량/capital/custody와 실제 주문 preflight를 대체하거나 완화하지 않는다. 잘못된 `_NX` 자료가 AFTER `_AL`을 채우지 못하며 unresolved Main intent는 계속 admission을 막는다. 정책·overlay·reader hash와 초기 등록 목록은 바꾸지 않는다.
+
+공식 upstream HEAD `953e5dbff123f437ab4d11a78a95191a685eb51f`를 17:44 KST에 재확인했다. 이번 변경은 기존 route별 관찰 admission이며 새 API 요청/파서/FID/REG·주문 envelope는 쓰지 않는다. source 원천 동등성을 추정하거나 generic SOR 주문의 venue eligibility 규칙을 수정하지 않는다.
