@@ -14,6 +14,37 @@ from src.trading.market.index_regime import index_regime
 from src.utils import kiwoom_transport_telemetry as T
 
 
+@pytest.mark.parametrize('compressed', [False, True])
+def test_pipeline_stage_reader_preserves_boundary_rows_order_and_partial_tail(tmp_path, compressed):
+    """Cooldown history cannot lose rows at block/append or gzip boundaries."""
+    import gzip
+    import json
+    from src.engine import sniper_state_handlers as H
+    first = {'stage': 'sell_completed', 'padding': 'x' * (4 * 1024 * 1024),
+             'other': 'same_symbol_loss_reentry_cooldown'}
+    second = {'stage': 'same_symbol_loss_reentry_cooldown', 'stock_code': '005930'}
+    third = {'stage': 'sell_completed', 'stock_code': '036930'}
+    irrelevant = {'stage': 'unrelated', 'padding': 'z' * 100}
+    prefix = json.dumps(irrelevant).encode() + b'\n'
+    completed = json.dumps(first).encode() + b'\n' + b'not-json sell_completed\n' + json.dumps(second).encode() + b'\n'
+    tail = json.dumps(third).encode()
+    raw = prefix + completed + tail
+    path = tmp_path / ('history.jsonl.gz' if compressed else 'history.jsonl')
+    path.write_bytes(gzip.compress(raw) if compressed else raw)
+    rows, offset = H._read_pipeline_events_for_stages(path,
+        {'sell_completed', 'same_symbol_loss_reentry_cooldown'},
+        start_offset=0 if compressed else len(prefix))
+    assert rows == [first, second]  # Two matching tokens in one row are one receipt.
+    assert offset == len(prefix + completed)
+    if not compressed:
+        with path.open('ab') as handle:
+            handle.write(b'\n')
+        incremental, final_offset = H._read_pipeline_events_for_stages(
+            path, {'sell_completed', 'same_symbol_loss_reentry_cooldown'}, start_offset=offset)
+        assert incremental == [third]
+        assert final_offset == path.stat().st_size
+
+
 @pytest.mark.parametrize('code',['005930','034020','036930','196170','403870'])
 def test_actual_main_watching_statement_forwards_created_coordinator(monkeypatch,code):
     """Run the real Main call expression and wrapper, without a broker loop."""
@@ -45,6 +76,32 @@ def test_actual_main_watching_statement_forwards_created_coordinator(monkeypatch
         assert seen[0]['scanner_async_generation'] is None
         assert result['status']=='not_enabled'
     finally:coordinator.shutdown()
+
+
+@pytest.mark.parametrize('role,enabled', [('main', True), ('main', False), ('other', True)])
+def test_actual_main_restores_entry_guard_history_after_exit_monitor_before_loop(monkeypatch, role, enabled):
+    from src.engine import kiwoom_sniper_v2 as M, sniper_state_handlers as H
+    tree = ast.parse(inspect.getsource(M.run_sniper))
+    parent = next(n for n in ast.walk(tree) if isinstance(n, ast.Try)
+                  and any(isinstance(s, ast.While) for s in n.body)
+                  and 'ENTRY_GUARD_SOURCE_PREPARED' in ast.unparse(n))
+    while_index = next(i for i, n in enumerate(parent.body) if isinstance(n, ast.While))
+    preparation = parent.body[:while_index]
+    assert len(preparation) == 1
+    calls = []
+    monkeypatch.setattr(H, '_rule_bool', lambda *a: enabled)
+    monkeypatch.setattr(H, '_load_scalp_loss_reentry_cooldown_events', calls.append)
+    logs = []
+    exec(compile(ast.Module(body=preparation, type_ignores=[]), '<actual-guard-bootstrap>', 'exec'),
+         dict(runtime_role=role, sniper_state_handlers=H, datetime=datetime, time=time, log_info=logs.append))
+    assert len(calls) == int(role == 'main' and enabled)
+    assert len(logs) == len(calls)
+    # The guard replay does not hold ENTRY_LOCK or delay starting the fast exit owner.
+    body = tree.body[0].body
+    parent_index = body.index(parent)
+    assert any(isinstance(n, ast.Expr) and isinstance(n.value, ast.Call)
+               and ast.unparse(n.value) == 'fast_exit_monitor.start()' for n in body[:parent_index])
+    assert not any(isinstance(n, ast.With) for n in ast.walk(preparation[0]))
 
 
 @pytest.mark.parametrize('role,failed',[('main',False),('main',True),('non_main',False)])

@@ -12869,6 +12869,21 @@ def run_sniper(is_test_mode=False):
     smoothing_source_only_observer.start()
 
     try:
+        # Restore the unchanged daily entry safety history before capturing
+        # fresh entry signals. A multi-GB cold replay must not run inside the
+        # first ready WATCHING evaluation. The exit monitor is already active;
+        # later appends retain the reader's ordinary incremental refresh.
+        if runtime_role == "main" and sniper_state_handlers._rule_bool(
+            "SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_ENABLED", True
+        ):
+            source_prepare_started = time.perf_counter()
+            source_prepare_day = datetime.now().date().isoformat()
+            sniper_state_handlers._load_scalp_loss_reentry_cooldown_events(source_prepare_day)
+            log_info(
+                "[ENTRY_GUARD_SOURCE_PREPARED] "
+                f"day={source_prepare_day} seconds={time.perf_counter() - source_prepare_started:.3f} "
+                "main_entry_evaluation_started=false exit_monitor_started=true"
+            )
         while True:
             loop_work_started = time.perf_counter()
             # Daily trace indexes are maintenance, before fresh input capture

@@ -285,3 +285,6 @@ B5b는 `adjusted_1` REST 역사와 `raw_same_day` WS tail의 동등성 미입증
 사용자 확인대로 통합 애프터장은 `_AL`·SOR다. 세 Main 이관 종목에만 남아 있던 NXT listing 추가 관찰 승격 조건은 NXT 전용 PRE에 한정하고, 통합 REGULAR/AFTER에서는 다섯 fixed-watch가 같은 기존 Main SOR 관찰 계약을 따른다. 감시 개수와 현재 session admission·유효 quote·실제 주문 가능성을 분리한다. 실제 주문 preflight와 소유권/계좌/수량 보호는 그대로 유지한다.
 
 최종 회귀·수리 내용, 통제된 microbenchmark, 실제 새 PID의 소비 및 자연 성능/원천/호출 관측은 위 통합 리뷰와 [실행 증거 디렉터리](../../data/report/main_bottleneck_compact/2026-10-08/)가 소유한다. 단일 현재 checklist owner와 원 strict checklist 바이트는 유지한다. 배포 완료나 실제 주문·비용후 승률은 코드 검증으로 대신하지 않는다.
+
+
+SOR 보완 후 관측한 59.550초 warm loop는 추가 실패 증거로 보존한다. 재현된 당일 3.1GB pipeline cold 조회를 byte block 검색으로 수리하고, 원 쿨다운 history의 cold 준비는 fast exit owner 시작 이후·Main entry evaluation 이전에 완료한다. 준비시간 자체는 별도 계측하며 행/순서/offset/gzip/partial-tail 및 기존 보호조건을 유지한다. 이후 tail은 원 incremental 경로를 사용한다. 이 변경으로 새 비교 원장이나 연구 호출을 생성하지 않는다.

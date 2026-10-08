@@ -18,7 +18,7 @@ _NAMES = ('loop_work', 'loop_work_warm', 'loop_first', 'policy_prepare', 'ws_loc
           'provider_response', 'machine_to_provider_response', 'provider_response_to_pre_submit',
           'preparation_queue', 'preparation_service', 'source_prepare', 'capacity_prepare',
           'provider_key_wait', 'provider_transport', 'response_validate', 'main_commit', 'submit_guard',
-          'capture_append', 'provider_reserve', 'order_acknowledgement')
+          'capture_append', 'provider_reserve', 'order_acknowledgement', 'pipeline_source_replay')
 _SAMPLES = {name: deque(maxlen=_LIMIT) for name in _NAMES}
 _TOTAL = {name: 0 for name in _NAMES}
 _BOUNDS = (.01, .05, .1, .25, .5, 1., 1.5, 2., 3., 5., 10., float('inf'))

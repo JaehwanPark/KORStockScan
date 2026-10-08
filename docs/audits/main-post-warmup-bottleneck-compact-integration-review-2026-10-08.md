@@ -66,3 +66,11 @@ v2의 read-only cron 검사에서 finalization generation issue는 `{}`이며 `s
 통합 REGULAR/AFTER 관찰 admission은 기존 Main SOR 계약을 다섯 종목에 동일 적용한다. 이 특별 NXT 증빙 검사는 실제 `nxt_only` PRE에서만 유지한다. 원천/quote/현재 generation·warmup·manual veto·broker/account/수량/capital/custody와 실제 주문 preflight를 대체하거나 완화하지 않는다. 잘못된 `_NX` 자료가 AFTER `_AL`을 채우지 못하며 unresolved Main intent는 계속 admission을 막는다. 정책·overlay·reader hash와 초기 등록 목록은 바꾸지 않는다.
 
 공식 upstream HEAD `953e5dbff123f437ab4d11a78a95191a685eb51f`를 17:44 KST에 재확인했다. 이번 변경은 기존 route별 관찰 admission이며 새 API 요청/파서/FID/REG·주문 envelope는 쓰지 않는다. source 원천 동등성을 추정하거나 generic SOR 주문의 venue eligibility 규칙을 수정하지 않는다.
+
+## 7. SOR 보완 뒤 추가 cold source 병목 수리
+
+v7 `58a142ca8cf35e460ba768676382e203e2864754`, Main PID 302958에서 HPSP·알테오젠·주성의 AFTER admission이 17:50:32에 `_AL`·SOR로 갱신됐다. immutable 회귀는 **1,463 passed / 7 deselected**, native handoff PASS·base/auxiliary 실제 PID 소비·web HTTP 200을 확인했다. 이후 [첫 관측](../../data/report/main_bottleneck_compact/2026-10-08/performance-v7-initial.json)에 **59.550초 warm loop 1회**가 남아 성능 완전 통과로 처리하지 않았다. 개별 HTTP 이력만으로 그 전체 시간을 제공자 지연으로 확정하지 않는다.
+
+당일 약 3.1GB pipeline 이벤트의 기존 쿨다운 stage reader를 별도 원천 read-only 호출하여 **39.841초·1,007행**을 재현했다. 이는 live 지연에 기여할 수 있는 cold source 병목이다. 행별 `tell/readline` 대신 4MiB byte block에서 원 stage token을 찾고 후보 행만 decode한다. 원 행 순서·중복 방지·전체 내용·일반/gzip·offset·미완성 마지막 행 보류와 이후 tail 재시도를 보존한다. 이 reader는 promotion/cooldown/reentry-risk 소비자가 공유하므로 해당 회귀도 확인한다. 안전 쿨다운이나 과거 terminal 증거를 삭제하거나 무시하지 않는다.
+
+쿨다운 history 복원은 fast exit owner를 시작한 뒤 Main fresh entry evaluation 전에 수행한다. 큰 당일 원천의 cold 준비를 이후 유효 진입 claim에 전가하지 않으며, 기존 incremental append 갱신은 그대로 유지한다. cold 준비 시간은 `pipeline_source_replay`와 시작 로그에 별도 보존한다. 재기동 비용 자체가 없어진 것으로 표현하지 않고, v7의 실제 59.550초 결과도 유지한다. 추가 원장 복사·연구 호출·실 주문·guard/threshold/claim 기간 변경은 없다.

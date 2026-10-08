@@ -23226,12 +23226,10 @@ def _read_pipeline_events_for_stages(
 ) -> tuple[list[dict], int]:
     """Decode only pipeline rows that can belong to the requested stages.
 
-    The live pipeline file can grow to hundreds of megabytes.  ``iter_jsonl``
-    decodes every row before its caller filters by stage, so an mtime-based
-    cache refresh can hold the scanner main thread for tens of seconds.  A byte
-    prefilter plus a byte offset lets the live cache decode only matching rows
-    from the newly appended tail.  An incomplete final line is deliberately
-    left for the next refresh.
+    Search byte blocks before decoding candidate lines. A line-by-line search
+    with two tell() calls per row still stalls a cold Main reader on multi-GB
+    daily logs. Keep the original stage-token prefilter, row order and exact
+    incremental offset; an incomplete final line remains for the next refresh.
     """
 
     stage_tokens = tuple(
@@ -23245,29 +23243,46 @@ def _read_pipeline_events_for_stages(
     opener = gzip.open if is_gzip else open
     rows: list[dict] = []
     next_offset = 0 if is_gzip else max(0, int(start_offset or 0))
+    started = time.perf_counter()
     try:
         with opener(path, "rb") as handle:
             if next_offset:
                 handle.seek(next_offset)
+            pending = b""
             while True:
-                line_offset = int(handle.tell())
-                raw_line = handle.readline()
-                if not raw_line:
+                block = handle.read(4 * 1024 * 1024)
+                if not block:
                     break
-                if not raw_line.endswith(b"\n"):
-                    next_offset = line_offset
-                    break
-                next_offset = int(handle.tell())
-                if not any(token in raw_line for token in stage_tokens):
+                block = pending + block
+                complete_end = block.rfind(b"\n") + 1
+                if not complete_end:
+                    pending = block
                     continue
-                try:
-                    payload = json.loads(raw_line)
-                except (json.JSONDecodeError, TypeError, UnicodeDecodeError):
-                    continue
-                if isinstance(payload, dict):
-                    rows.append(payload)
+                candidates = set()
+                for token in stage_tokens:
+                    cursor = 0
+                    while True:
+                        match = block.find(token, cursor, complete_end)
+                        if match < 0:
+                            break
+                        line_start = block.rfind(b"\n", 0, match) + 1
+                        line_end = block.find(b"\n", match, complete_end) + 1
+                        candidates.add((line_start, line_end))
+                        cursor = line_end
+                for line_start, line_end in sorted(candidates):
+                    try:
+                        payload = json.loads(block[line_start:line_end])
+                    except (json.JSONDecodeError, TypeError, UnicodeDecodeError):
+                        continue
+                    if isinstance(payload, dict):
+                        rows.append(payload)
+                next_offset += complete_end
+                pending = block[complete_end:]
     except (OSError, EOFError):
         return [], max(0, int(start_offset or 0))
+    finally:
+        from src.engine.monitoring.runtime_performance import observe
+        observe("pipeline_source_replay", time.perf_counter() - started)
     return rows, next_offset
 
 
