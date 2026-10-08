@@ -120,6 +120,13 @@ _VERIFIED_EVALUATION = ContextVar('machine_policy_verified_evaluation', default=
 _CURRENT_FLIGHTS = {}
 
 
+def _current_cache_key(data_root, target_date):
+    # A canonical target alone conflates launch ``src/data`` and the trusted
+    # absolute mount. Their lexical/symlink dependency receipts are different.
+    path = Path(data_root).absolute()
+    return (str(path), str(path.resolve()), target_date)
+
+
 class _FrozenDict(dict):
     def _deny(self, *a, **kw):
         raise TypeError('verified_policy_is_immutable')
@@ -235,12 +242,12 @@ def verified_evaluation(*, data_root, target_date):
         path = root(data_root) / 'current.json'
         pointer = _signature(path) if path.exists() else None
         with _CURRENT_CACHE_LOCK:
-            cached = _CURRENT_CACHE.get((str(data_root.resolve()), target_date))
+            cached = _CURRENT_CACHE.get(_current_cache_key(data_root, target_date))
         if cached is not None and cached[1] is bundle:
             expected = cached[0].get(str(path))
             if expected != pointer:
                 raise ValueError('machine_policy_generation_changed_during_evaluation')
-        view = (str(data_root.resolve()), target_date, bundle, pointer)
+        view = (str(data_root.absolute()), target_date, bundle, pointer)
         token = _VERIFIED_EVALUATION.set(view)
         try:
             yield bundle
@@ -865,7 +872,7 @@ def load_effective(*, data_root: Path, target_date: str, _immutable=False) -> di
     Market/source freshness is still checked independently at every decision.
     """
     view = _VERIFIED_EVALUATION.get()
-    if view is not None and view[:2] == (str(data_root.resolve()), target_date):
+    if view is not None and view[:2] == (str(data_root.absolute()), target_date):
         pointer_path = root(data_root) / 'current.json'
         current = _signature(pointer_path) if pointer_path.exists() else None
         if current != view[3]:
@@ -2653,7 +2660,7 @@ def activate_operator_auxiliary_prompt(
 
 def _load_current(data_root: Path, target_date: str, *, _immutable=False) -> dict | None:
     """Single-flight validation; no I/O under the short cache metadata lock."""
-    key = (str(data_root.resolve()), target_date)
+    key = _current_cache_key(data_root, target_date)
     with _CURRENT_CACHE_LOCK:
         cached = _CURRENT_CACHE.get(key)
     if cached is not None:

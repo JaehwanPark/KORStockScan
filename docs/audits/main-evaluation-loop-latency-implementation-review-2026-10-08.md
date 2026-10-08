@@ -35,3 +35,7 @@ v2 구형 postclose 보고 회귀 한 건의 `KeyError: routes`는 현재 수정
 ## 배포·자연 실행 인계
 
 승인된 immutable 배포/재기동 후 정확 release/PID/start ticks/cwd, v6 및 보조 소비, 원 PREOPEN 보존, strict/finalization 봉인을 확인한다. 새 release의 자연 loop/lock/claim 결과는 이 절에 후속 기록한다. 실제 주문·체결·수익 개선은 성능 시험의 종료 조건이나 이 문서의 주장 범위가 아니다. 기존 보조 연구의 미커밋 변경은 보존하고 이번 배포에서 제외한다.
+
+### 자연 실행 중 재리뷰
+
+첫 배포의 자연 검증에서 policy refresh의 `machine_policy_generation_changed_during_evaluation`을 확인했다. 기존 handler가 이 예외를 조용히 넘겨 원인이 가려져 있었으므로 최대 16종/종별 60초 간격의 원인 기록을 보완했다. canonical data root가 같은 release data 링크/절대 anchor의 cache 충돌을 발견하여, cache/검증 view 식별자에 lexical anchor와 실제 target을 함께 결속했다. 경로 혼용 회귀를 추가했고 관련 184 PASS를 확인했다. 첫 배포의 빠른 일부 loop는 정책 준비가 끝나지 않은 상태여서 최종 자연 성능 개선 근거에서 제외한다. 개선된 release의 실제 기계·보조 소비를 다시 확인한다.

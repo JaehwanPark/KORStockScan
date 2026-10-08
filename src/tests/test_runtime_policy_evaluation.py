@@ -151,7 +151,7 @@ def test_changed_during_validation_is_not_cached(loader,monkeypatch):
 
 def test_validation_wait_is_bounded_and_never_returns_stale(loader):
     root,path,calls=loader
-    N._CURRENT_FLIGHTS[(str(root.resolve()),'2026-10-08')]=threading.Event()
+    N._CURRENT_FLIGHTS[N._current_cache_key(root,'2026-10-08')]=threading.Event()
     try:
         with pytest.raises(ValueError,match='validation_in_progress'):
             N.load_effective(data_root=root,target_date='2026-10-08')
@@ -194,3 +194,20 @@ def test_absolute_symlink_dotdot_signature_matches_os_open(tmp_path):
     signature=N._signature(source)
     assert signature[0]==str(source.resolve())
     assert N._source_hash(str(source),signature)==__import__('hashlib').sha256(b'actual').hexdigest()
+
+
+def test_launch_relative_mount_and_absolute_anchor_do_not_conflate(loader,monkeypatch):
+    root,path,calls=loader;launch=root.parent/'src';launch.mkdir()
+    (launch/'data').symlink_to(root,target_is_directory=True)
+    def load(data_root,day):
+        calls.append(1)
+        receipt=N._read(N.root(data_root)/'current.json')
+        return {'bundle_sha256':str(receipt['generation'])}
+    monkeypatch.setattr(N,'_load_current_uncached',load)
+    monkeypatch.chdir(launch)
+    N.load_effective(data_root=Path('data'),target_date='2026-10-08')
+    with N.verified_evaluation(data_root=root,target_date='2026-10-08') as value:
+        assert value['bundle_sha256']=='1'
+    with N.verified_evaluation(data_root=Path('data'),target_date='2026-10-08') as value:
+        assert value['bundle_sha256']=='1'
+    assert len(calls)==2
