@@ -13,6 +13,9 @@
 | 다중 평가 발행·재실행·복구 충돌 | 보조→기계 publisher lock, 단일 CAS, manifest 재실행 동일성, scope별 복구/철회 | CAS 충돌·변조·포인터 기록 직후 중단·다음 날짜 상속 후 복구 |
 | 자정 후 원 거래일 overlay 누락과 준비 후 변경 | 거래일/부모별 최종 세대, 명시 원천일 binding, 다음 준비의 overlay dependency 검사 | 과거 거래일 조회·cold inheritance·준비 뒤 세대 변경 거절 |
 | 구형/신형 요청의 이중 변환 | registry별 요청·해독 dispatch; 연구 원본 codec 고정 | 기존 연구와 혼합 reader 회귀 |
+| 실제 일반 WATCHING caller의 coordinator 누락 | Main이 생성한 기존 coordinator를 wrapper/handler로 전달 | 실제 Main call 식과 wrapper 실행, 5개 고정감시 인자 전달·no-claim 미전송, 기존 native async commit/경로 변경 회귀 |
+| 전송 직전 native claim 종료의 provider 실패 오분류 | `validate_active_claim`의 명시된 종료만 WAIT로 반환, provider 실패 횟수 증가/성공 reset 모두 금지 | 동일 native 종료 5회에도 원 실패 수 유지; 알 수 없는 예외·실제 provider 실패 5회 차단 유지 |
+| 진입 금지 시간에는 PID policy 소비 기록도 지연됨 | Main 기동 시 기존 `prepare`를 호출해 실제 PID에서 정책 검증·소비 | 실제 기동 분기 실행 회귀; 신호 claim/provider/주문 생성 없음 |
 
 새 codec/호환/전환 모듈은 `src/engine/scalping`에 둔다. 원 기계 kernel, v5/v6 policy와 native outbox의 고정 파일을 변경하지 않았다. 가격·수량·5초 confirmation TTL·provider 중복/불확실 예약·broker/custody·Main-only 퇴역 보호조건을 유지한다. 코드 변경은 새 prompt 생성이나 호출한도 해제가 아니다.
 
@@ -43,4 +46,6 @@
 
 ## 배포·자연 소비
 
-현재 기록 시점에는 구현·로컬 회귀 및 발행 준비까지 완료했다. 불변 릴리스 검증 후 15시 이후 기존 정책을 보존하여 재기동하고, 새 PID의 v1 소비를 확인한 다음 네 scope를 단일 발행한다. 선택 릴리스·PID·overlay 로드·첫 자연 요청과 이후 장후/다음 기동은 각각 별도 기록한다. PRE 자연 요청과 다음 장후/기동은 시점이 도래하기 전에는 완료로 표시하지 않는다.
+15:15:23 KST에 첫 검증 릴리스 `main-aux-compact-20261008-v1`로 재기동했다(PID 232463). 15:15:25 bootstrap PASS, 15:20 자연 오류 감시 `no_alert`, 상시감시 5종목을 확인했다. 기존 15:10 정규장 신규 진입 cutoff 때문에 평가 시 기록되는 auxiliary 소비는 미관측이었다. 이를 정책 실패나 소비 성공으로 대체하지 않고, 기동 시 기존 reader 검증을 추가했다.
+
+발행 전 재리뷰에서 [기존 PID 진단](main-pid-206123-post-warmup-latency-rest-ws-monitoring-2026-10-08.md)의 두 직접 결함도 확인하여 위 caller 연결과 native 종료 분리만 함께 수정했다. 별도 B3~B6 성능계획 전체를 구현한 것은 아니다. 83개 직접 회귀와 11개 기존 Main 호출 계약이 통과했으며 최종 통합/불변 릴리스 재검증 후 정책을 발행한다. PRE 자연 요청과 이후 장후/다음 기동은 시점이 도래하기 전에는 완료로 표시하지 않는다.

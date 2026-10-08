@@ -71,7 +71,8 @@ def test_live_sdk_exact_contract(tmp_path,monkeypatch):
     with pytest.raises(ValueError):G.validate(tampered)
 
 
-@pytest.mark.parametrize('response_kind',['completed','incomplete','truncated','unknown_alias','refusal'])
+@pytest.mark.parametrize('response_kind',['completed','incomplete','truncated','unknown_alias','refusal',
+    'native_path','native_expired','native_generation','native_all_invalid','unknown_native','provider_error'])
 def test_full_analyze_target_records_raw_then_decodes(tmp_path,monkeypatch,response_kind):
     """Controlled native machine source; exercise the real entry/provider consumer."""
     import time
@@ -117,8 +118,33 @@ def test_full_analyze_target_records_raw_then_decodes(tmp_path,monkeypatch,respo
         if response_kind=='unknown_alias':output=json.dumps(dict(raw,screen=dict(verdict='PASS',risk='NO_BLOCKING_RISK',fact='unknown')))
         return SimpleNamespace(output_text=output,id='integration-response',status='incomplete' if response_kind=='incomplete' else 'completed')
     engine.client=SimpleNamespace(responses=SimpleNamespace(create=create))
-    result=engine.analyze_target('test',_sample_ws_data(),_sample_ticks(),_sample_candles(),strategy='SCALPING',prompt_profile='watching',
-        candle_context=_allowed_entry_candle_context(),reversal_signal_claim={'snapshot':snap,'token':'native-test'})
+    native_errors={'native_path':'reversal_signal_path_changed',
+        'native_expired':'reversal_signal_expired_or_changed',
+        'native_generation':'reversal_signal_generation_changed',
+        'native_all_invalid':'reversal_all_requested_signals_invalidated',
+        'unknown_native':'reversal_unrecognized_parser_fault'}
+    if response_kind in native_errors:
+        def reject(*args,**kw):raise ValueError(native_errors[response_kind])
+        monkeypatch.setattr(V,'validate_active_claim',reject)
+        engine.consecutive_failures=1
+    elif response_kind=='provider_error':
+        def reject(*args,**kw):raise RuntimeError('provider_transport_failure')
+        monkeypatch.setattr(engine,'_call_openai_safe',reject)
+    count=4 if response_kind=='unknown_native' else 5 if response_kind in native_errors or response_kind=='provider_error' else 1
+    for _ in range(count):
+        snap[0]['epoch']=time.time()
+        result=engine.analyze_target('test',_sample_ws_data(),_sample_ticks(),_sample_candles(),strategy='SCALPING',prompt_profile='watching',
+            candle_context=_allowed_entry_candle_context(),reversal_signal_claim={'snapshot':snap,'token':'native-test'})
+    if response_kind in native_errors or response_kind=='provider_error':
+        assert not calls and result['action']!='BUY'
+        if response_kind in native_errors and response_kind!='unknown_native':
+            assert engine.consecutive_failures==1 and not engine.ai_disabled
+            assert result['provider_called'] is False
+            assert result['reason']==native_errors[response_kind]
+            assert result['evaluation_attempt_id']
+        else:
+            assert engine.consecutive_failures==5 and engine.ai_disabled
+        return
     assert len(calls)==1,result
     request_rows=[json.loads(line) for path in (tmp_path/'ai_decision_requests').glob('*.jsonl') for line in path.read_text().splitlines()]
     assert len(request_rows)==1

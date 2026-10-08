@@ -12711,6 +12711,17 @@ def run_sniper(is_test_mode=False):
     )
 
     bind_analysis_dependencies(ai_engine=AI_ENGINE)
+    # Read and attest the existing policy even when a session entry cutoff
+    # prevents WATCHING evaluation. This does not claim or submit a signal.
+    if runtime_role == "main":
+        try:
+            from src.engine.scalping.reversal_evaluation_context import prepare
+            from src.utils.constants import DATA_DIR
+            policy_day = datetime.fromtimestamp(time.time(), __import__('zoneinfo').ZoneInfo('Asia/Seoul')).date().isoformat()
+            prepare(data_root=DATA_DIR, day=policy_day)
+            log_info("[MAIN_POLICY_STARTUP] current policy reader verified")
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            log_error(f"[MAIN_POLICY_STARTUP] policy reader not ready: {exc}")
     bind_state_dependencies(dual_persona_engine=DUAL_PERSONA_ENGINE)
     bind_s15_dependencies(
         kiwoom_token=KIWOOM_TOKEN,
@@ -16121,6 +16132,7 @@ def run_sniper(is_test_mode=False):
                         now_dt=now,
                         radar=radar,
                         ai_engine=ai_engine,
+                        scanner_async_eval_coordinator=run_sniper.scanner_async_eval_coordinator,
                     )
                     if _is_scanner_watching_target(stock):
                         stock["_scanner_last_full_eval_epoch"] = time.time()

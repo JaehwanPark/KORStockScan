@@ -5,11 +5,65 @@ from concurrent.futures import ThreadPoolExecutor
 import threading
 import time
 import pytest
+import ast
+import inspect
 
 from src.engine.scalping.entry_deadline import EntryDeadline, claim_deadline_epoch
 from src.trading.market.entry_ws_source import select_trade_history
 from src.trading.market.index_regime import index_regime
 from src.utils import kiwoom_transport_telemetry as T
+
+
+@pytest.mark.parametrize('code',['005930','034020','036930','196170','403870'])
+def test_actual_main_watching_statement_forwards_created_coordinator(monkeypatch,code):
+    """Run the real Main call expression and wrapper, without a broker loop."""
+    from src.engine import kiwoom_sniper_v2 as M, sniper_state_handlers as H
+    from src.engine.scalping.scanner_async_eval import ScannerAsyncEvalCoordinator
+    from src.engine.ai.hot_path_ai_dispatcher import HotPathAIDispatcher
+    tree=ast.parse(inspect.getsource(M.run_sniper))
+    calls=[n for n in ast.walk(tree) if isinstance(n,ast.Call)
+        and isinstance(n.func,ast.Name) and n.func.id=='handle_watching_state'
+        and not any(k.arg=='scanner_async_generation' for k in n.keywords)]
+    assert len(calls)==1
+    coordinator=ScannerAsyncEvalCoordinator(ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1))
+    monkeypatch.setattr(M.run_sniper,'scanner_async_eval_coordinator',coordinator,raising=False)
+    seen=[]
+    def handler(stock,code,ws,admin,**kw):
+        seen.append(kw)
+        # No native claim must keep the current safe no-dispatch behavior.
+        return H._resolve_scanner_async_entry_ai(stock,code,ws,None,kw,
+            trigger_reason='test',last_ai_time=0,current_ai_score=0)
+    monkeypatch.setattr(H,'handle_watching_state',handler)
+    monkeypatch.setattr(H,'_request_entry_capacity_preparation',lambda *a,**kw:None)
+    monkeypatch.setattr(H,'_fixed_watch_entry_source_route',lambda *a:None)
+    try:
+        result=eval(compile(ast.Expression(calls[0]),'<actual-main-call>','eval'),{
+            'handle_watching_state':M.handle_watching_state,'run_sniper':M.run_sniper,
+            'stock':{'code':code,'status':'WATCHING'},'code':code,'ws_data':{},'admin_id':None,
+            'now_ts':time.time(),'now':datetime.now(),'radar':None,'ai_engine':None})
+        assert seen[0]['scanner_async_eval_coordinator'] is coordinator
+        assert seen[0]['scanner_async_generation'] is None
+        assert result['status']=='not_enabled'
+    finally:coordinator.shutdown()
+
+
+@pytest.mark.parametrize('role,failed',[('main',False),('main',True),('non_main',False)])
+def test_actual_startup_policy_read_is_independent_of_entry_cutoff(monkeypatch,role,failed):
+    from src.engine import kiwoom_sniper_v2 as M
+    from src.engine.scalping import reversal_evaluation_context as C
+    tree=ast.parse(inspect.getsource(M.run_sniper))
+    node=next(n for n in ast.walk(tree) if isinstance(n,ast.If)
+        and ast.unparse(n.test)=="runtime_role == 'main'"
+        and 'MAIN_POLICY_STARTUP' in ast.unparse(n))
+    calls=[];errors=[]
+    def prepare(**kw):
+        calls.append(kw)
+        if failed:raise ValueError('invalid_policy')
+    monkeypatch.setattr(C,'prepare',prepare)
+    exec(compile(ast.Module(body=[node],type_ignores=[]),'<actual-startup-reader>','exec'),
+        dict(runtime_role=role,datetime=datetime,time=time,log_info=lambda *a:None,log_error=errors.append))
+    assert len(calls)==(role=='main')
+    assert bool(errors)==failed
 
 
 def test_original_claim_budget_survives_wall_clock_backwards(monkeypatch):

@@ -10569,7 +10569,36 @@ class GPTSniperEngine:
                         registered=load_auxiliary_registry(DATA_DIR,assessment['auxiliary_registry_sha256'])
                         if target_model != registered['model']:
                             raise ValueError('auxiliary_registered_model_mismatch')
-                    remaining=validate_active_claim(entry_setup_live_policy,active,now=time.time())
+                    try:
+                        remaining=validate_active_claim(entry_setup_live_policy,active,now=time.time())
+                    except ValueError as exc:
+                        # Only native eligibility endings from this validator
+                        # are neutral to the provider circuit. Unknown errors,
+                        # source parsing, registry and transport remain failures.
+                        if str(exc) not in {
+                            'reversal_signal_generation_changed',
+                            'reversal_signal_expired_or_changed',
+                            'reversal_signal_path_changed',
+                            'reversal_first_signal_invalidated',
+                            'reversal_all_signals_invalidated',
+                            'reversal_all_requested_signals_invalidated',
+                            'reversal_scope_execution_changed',
+                        }:
+                            raise
+                        return self._annotate_analysis_result(
+                            _merge_runtime_fields({
+                                **machine_capture,
+                                'action': 'WAIT', 'score': 50, 'reason': str(exc),
+                                'provider_called': False,
+                                'entry_ai_screen_status': 'not_evaluated_source',
+                                'entry_ai_screen_pass': False,
+                                'openai_local_failure_reason': str(exc),
+                                'actual_order_submitted': False, 'broker_order_forbidden': True,
+                            }), prompt_type=prompt_type, prompt_version=prompt_version,
+                            response_ms=int((time.perf_counter()-analysis_started)*1000),
+                            parse_ok=False, parse_fail=False, fallback_score_50=False,
+                            cache_hit=False, cache_mode='miss', result_source='native_signal_invalidated',
+                            input_contract_fields=input_contract_fields)
                     if set(remaining)!=set(assessment['matched_policy_refs']):
                         raise ValueError('reversal_request_signal_set_changed_before_send')
                 else:
