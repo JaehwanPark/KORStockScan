@@ -50181,8 +50181,9 @@ def _resolve_watching_state_change_refresh(
                                 signature=_build_watching_refresh_signature(ws_data),
                                 event_id=snapshot[0]['event_id'],decision_authority='machine_evaluation_only',
                                 actual_order_submitted=False,broker_order_forbidden=True)
-        except (ValueError,TypeError,KeyError,OSError):
-            pass
+        except (ValueError,TypeError,KeyError,OSError) as exc:
+            from src.engine.monitoring.runtime_performance import failure
+            failure('policy_refresh', type(exc).__name__ + ':' + str(exc))
     if not bool(_rule("AI_WATCHING_STATE_CHANGE_REFRESH_ENABLED", False)):
         return {"allowed": False, "reason": "disabled", "signature": {}}
     if last_ai_time <= 0:

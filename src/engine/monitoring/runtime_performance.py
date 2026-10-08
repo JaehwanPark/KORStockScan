@@ -21,6 +21,22 @@ _TOTAL = {name: 0 for name in _NAMES}
 _GENERATION = None
 _STARTED = time.time()
 _SIGNALS = OrderedDict()
+_FAILURES = OrderedDict()
+
+
+def failure(stage, reason):
+    """Bounded failure evidence; never convert source-invalid into success."""
+    key = (str(stage)[:48], str(reason)[:160])
+    with _LOCK:
+        count, last = _FAILURES.get(key, (0, 0.0))
+        now = time.monotonic()
+        emit = now - last >= 60
+        if key not in _FAILURES and len(_FAILURES) >= 16:
+            _FAILURES.popitem(last=False)
+        _FAILURES[key] = (count + 1, now if emit else last)
+    if emit:
+        from src.utils.logger import log_info
+        log_info('[RUNTIME_PREPARATION_FAILURE] ' + json.dumps(dict(stage=key[0], reason=key[1], pid=os.getpid(), decision_authority='none')))
 
 
 def mark_signal(signal_id, stage):
@@ -75,6 +91,7 @@ def snapshot():
         samples = {k: list(v) for k, v in _SAMPLES.items()}
         totals = dict(_TOTAL)
         generation, started = _GENERATION, _STARTED
+        failures = [dict(stage=k[0], reason=k[1], count=v[0]) for k, v in _FAILURES.items()]
     metrics = {}
     for name, values in samples.items():
         values.sort()
@@ -96,7 +113,7 @@ def snapshot():
         source_quality_gate='exact_identity_monotonic_duration_and_sample_coverage',
         forbidden_uses='policy_promotion_order_authority_or_economic_claim',
         signal_denominator='actually_claimed_only_expired_and_unobserved_not_inferred',
-        metrics=metrics)
+        metrics=metrics, preparation_failures=failures)
 
 
 def log_snapshot():
