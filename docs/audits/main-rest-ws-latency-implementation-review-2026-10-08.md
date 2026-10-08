@@ -46,3 +46,18 @@
 v2(`6256e13ac951ef6a9d21dcb6e80cbab507c8ad60`)는 484개 회귀/immutable 644개 검증 후 14:14:07 PID201361로 기동했다. 기존 분봉 오류는 재발하지 않았고 native policy128 소비를 확인했다. 추가 자연 검증에서 HPSP의 source-invalid 응답을 읽는 새 재확인 분기가 `entry_mechanistic_policy_decision`을 항상 dict로 가정하는 결함을 확인했다. 실제 preflight는 문자열 `source_invalid`/`RECHECK`도 반환한다. 재확인 claim을 결정 필드에서 추정하는 분기를 없애고 원 sync request 또는 완료된 async native context에서 별도로 전달한다. request별 초기화로 이전 평가의 claim도 승계하지 않는다. 같은 형식을 읽는 진단 signal join도 타입을 구분하며 결손은 미관측으로 유지한다.
 
 기존 테스트가 이 필드에 dict만 넣던 맹점을 수정했다. 문자열 결손 결과를 실제 WATCHING 처리 함수에 넣어 평가 commit까지 예외 없이 도달하는 8개 cooldown/refresh 조합과 async 원 claim 복사·route/watch 교체 거부, 진단 7개 타입을 회귀했다. 수정 대상 통합 203개가 통과했다. v2 초기화 loop97.382초 및 warm tail은 별도로 기록하며, 적은 표본이나 결과 예외로 평가가 생략된 창을 성능 향상 근거로 사용하지 않는다.
+
+## 최종 배포와 14:29 KST 확인
+
+- 선택 release: `main-rest-ws-latency-20261008-v3`, commit `6f3ee1c02955fa6c50913e8f598ac33904b2bede`. Main PID206123, bootstrap/handoff PASS. web도 동일 release/HTTP200, release-set 검사 PASS다. 알려진 Main-only rollback은 `main-only-retired-20261008-v5`이며 발견된 오류가 있는 v1/v2를 정상 rollback으로 지정하지 않는다.
+- immutable release에서 **681 passed/19 deselected/2 warnings**. 이번 테스트 선택은 삭제된 episode/gateway/옛 policy-observed 경로와 `episode` 이름을 포함하는 일부 퇴역 회귀를 제외한다. 퇴역 전체 경계는 최초 1,094개 통합 검증의 별도 증거이며 이번 681개를 전체 suite라고 표시하지 않는다. pandas/fork 경고를 오류나 성공 표본으로 계산하지 않는다. compile/diff/print-only parser PASS.
+- 14:29:17 정책 view는 `consumed_exact`, loaded128/operating48, validation valid이며 policy pointer SHA는 위 원본과 같다. 감시5종목 모두 14:25:41~14:26:16 새 평가를 마쳤다. 자연 결과의 `no_current_operating_signal`은 기계의 비진입 결정이며 실제 provider 호출/주문 성공을 뜻하지 않는다.
+- 14:23:40~14:29:17 Main/handler/AI/WS 오류 로그 신규0. 분봉 live-binding 오류, HPSP 문자열 결과 오류, `strict_checklist_generation_stale` 재발0. 14:29:06 artifact/process/resource/log scanner PASS. cron에는 과거 cutoff 후 복구된 두 작업의 warning이 남아 있으며 현재 finalization-generation failure는 없다. 경고/원천 기록을 삭제하거나 억제하지 않았다.
+
+최종 자연 성능 receipt의 시각은 14:28:47이다. warm **79회 p95=4.878초, p99=10.853초, 5초 초과3회**, 초기화84.111초, 최근 WS lock hold p99=24.291ms다. **warm p95≤2초/p99<5초와 WS lock p99≤10ms 목표는 미달이며 LP12/RW6 자연 수용을 완료 처리하지 않는다.** 배포 전 창은 표본1,489회와 다른 입력률/기동 상태이므로 같은 부하의 개선율로 계산하지 않는다. Radar 모의 callback 개선만 별도 성립한다.
+
+HTTP 시작190=종료190+inflight0, timeout/exception0으로 계수 대사를 확인했다. `kt00011` route는 명시값이 없어 unknown으로 관측됐다. 430봉 REST 유지 경로와 새 분당 계측을 실제로 소비한다. 과거 전체 물리 전송 분모가 없으므로 REST 절감률은 null이다. native ingress ready41/claim0은 native claim 필터 이전 membership 계수다. 모두 적격 미진입 또는 API 결함으로 단정하지 않으며 신호→AI→제출 성능은 이번 창에서 입증되지 않았다.
+
+후속 자연 수용은 동일 `DirectFamilySourceRepairMainMechanisticEntry`의 LP12/RW6에 남긴다. 원 5초/매매 정책을 유지한 채 startup·policy preparation·기존 REST 비용을 분리하고, 실제 claim이 생기는 창에서 queue/전송/commit을 비교해야 한다. 전체 WS ACK/type별 wire 귀속·부하 상한은 여전히 unknown이며 새 구독 허용 근거가 아니다. 별도 보조 compact 연구 dirty 변경은 보존했고 이번 배포에 혼입하지 않았다. EOD/장후 재생·연구 AI 호출·시험 주문은 실행하지 않았다.
+
+최종 근거: [배포/PID/정책/자연 성능 영수증](../../data/report/main_rest_ws_implementation/2026-10-08/v3-deployment-observation.json), [최종 immutable 검증](../../data/report/main_rest_ws_implementation/2026-10-08/v3-immutable-release-tests.txt), [기동 검증](../../data/report/main_rest_ws_implementation/2026-10-08/v3-restart.txt).
