@@ -19,9 +19,17 @@ def claim_snapshot_with_receipt(*args, **kwargs):
     """
     from src.engine.scalping.reversal_current_backend import backend
     B = backend()
+    live_clock = kwargs.pop('live_clock', False)
     with B._LOCK:
+        if live_clock:
+            kwargs['now'] = time.time()
         claim = B.claim_snapshot(*args, **kwargs)
         if claim:
+            if live_clock:
+                from src.engine.monitoring.runtime_performance import observe, mark_signal
+                observe('confirmed_to_claim', kwargs['now'] - claim['snapshot'][0]['epoch'])
+                event = claim['snapshot'][0]
+                mark_signal(event.get('signal_id') or event.get('event_id'), 'claim')
             try:
                 receipt_backend = B.R if getattr(B,'R',None) and claim.get('backend')=='registered_v4' else B
                 original = receipt_backend._CLAIMS.get(claim['token'])
@@ -65,17 +73,19 @@ def verified_registration(claim, proof):
 
 
 def validate_claim_with_receipt(claim, family_sha256, *, now,
-                                evaluation_attempt_id=None, machine_bundle_sha256=None):
+                                evaluation_attempt_id=None, machine_bundle_sha256=None,
+                                live_clock=False):
     """Run the unchanged guard and retain its exact source on rejection.
 
-    Inspection and validation share the ingestion lock. Keep the caller's
-    decision clock for the unchanged guard and separately timestamp the state
-    read: ingestion can advance while the caller waits to acquire this lock.
+    Inspection and validation share the ingestion lock. Live callers acquire
+    their clock after waiting; replay callers retain their explicit oracle.
     """
     from src.engine.scalping.reversal_current_backend import backend
     B = backend(claim)
 
     with B._LOCK:
+        if live_clock:
+            now = time.time()
         try:
             return B.validate_claim(claim, family_sha256, now=now)
         except ValueError as exc:

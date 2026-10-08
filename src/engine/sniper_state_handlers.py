@@ -50144,33 +50144,32 @@ def _resolve_watching_state_change_refresh(
         item=(ws_data.get('last_realtime_type_item') or {}).get('0B')
         session=stock.get('market_session_bucket') or ws_data.get('market_session_bucket') or ws_data.get('session_bucket')
         try:
-            from src.engine.scalping.mechanistic_entry_runtime_policy import load_effective
+            from src.engine.scalping.reversal_evaluation_context import prepare
             from src.utils.constants import DATA_DIR
-            selected=load_effective(data_root=DATA_DIR,target_date=datetime.fromtimestamp(now_ts,_KST).date().isoformat())
+            evaluation_day = datetime.fromtimestamp(time.time(), _KST).date().isoformat()
+            selected=prepare(data_root=DATA_DIR, day=evaluation_day)
             family=(selected or {}).get('continuous_reversal')
             claim=None
             if family and family.get('schema') in {'continuous_reversal_policy_v2','continuous_reversal_policy_v3','continuous_reversal_policy_v4','continuous_reversal_policy_v5','continuous_reversal_policy_v6'}:
-                from src.engine.scalping.reversal_current_backend import configure_bundle
                 from src.engine.scalping.reversal_source_diagnostics import claim_snapshot_with_receipt as claim_snapshot
-                from src.engine.scalping.continuous_reversal_policy_v2 import record_pid_consumption
-                if family['schema']=='continuous_reversal_policy_v3':
-                    from src.engine.scalping.continuous_reversal_policy_v3 import record_pid_consumption
-                if family['schema']=='continuous_reversal_policy_v4':
-                    from src.engine.scalping.continuous_reversal_policy_v4 import record_pid_consumption
-                if family['schema']=='continuous_reversal_policy_v5':
-                    from src.engine.scalping.reversal_auxiliary_intraday import record_pid_consumption
-                if family['schema']=='continuous_reversal_policy_v6':
-                    from src.engine.scalping.reversal_auxiliary_intraday import record_pid_consumption
-                record_pid_consumption(DATA_DIR,selected)
-                configure_bundle(selected,data_root=DATA_DIR,day=datetime.fromtimestamp(now_ts,_KST).date().isoformat())
+                if family['schema'] not in {'continuous_reversal_policy_v5', 'continuous_reversal_policy_v6'}:
+                    from src.engine.scalping.reversal_current_backend import configure_bundle
+                    from src.engine.scalping.continuous_reversal_policy_v2 import record_pid_consumption
+                    if family['schema']=='continuous_reversal_policy_v3':
+                        from src.engine.scalping.continuous_reversal_policy_v3 import record_pid_consumption
+                    if family['schema']=='continuous_reversal_policy_v4':
+                        from src.engine.scalping.continuous_reversal_policy_v4 import record_pid_consumption
+                    record_pid_consumption(DATA_DIR,selected)
+                    configure_bundle(selected,data_root=DATA_DIR,day=evaluation_day)
+                claim_now = time.time()
                 claim=stock.get('_continuous_reversal_pending_claim')
                 if claim:
-                    from src.engine.scalping.reversal_current_backend import validate_any_claim as validate_claim
-                    try:validate_claim(claim,family['family_sha256'],now=now_ts)
+                    from src.engine.scalping.reversal_source_diagnostics import validate_claim_with_receipt as validate_claim
+                    try:validate_claim(claim,family['family_sha256'],now=claim_now,live_clock=True)
                     except ValueError:
                         stock.pop('_continuous_reversal_pending_claim',None);claim=None
                 claim=claim or claim_snapshot(str(stock.get('code') or '')[:6],_explicit_item_venue(item),session,
-                    now=now_ts,item=item,family_sha256=family['family_sha256'])
+                    now=claim_now,item=item,family_sha256=family['family_sha256'],live_clock=True)
                 snapshot=claim['snapshot'] if claim else None
             else:
                 snapshot=current_snapshot(str(stock.get('code') or '')[:6],_explicit_item_venue(item),session,now=now_ts,item=item)
@@ -69986,6 +69985,9 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         final_ai_age = time.time() - confirmed_epoch if confirmed_epoch > 0 else None
         try:
             from src.engine.scalping.reversal_auxiliary_intraday import validate_submit
+            from src.engine.monitoring.runtime_performance import mark_signal
+            perf_assessment = (stock.get('last_watching_ai_machine_primary_fields') or {}).get('entry_mechanistic_policy_decision') or {}
+            mark_signal(perf_assessment.get('signal_id') or perf_assessment.get('event_id'), 'submit')
             validate_submit(DATA_DIR, stock.get("last_watching_ai_machine_primary_fields") or {}, now=time.time())
         except (OSError, ValueError, KeyError, TypeError) as exc:
             _log_entry_pipeline(stock, code, "auxiliary_binding_submit_recheck", reason=str(exc),

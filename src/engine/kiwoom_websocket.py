@@ -9,6 +9,7 @@ import os
 import re
 import shlex
 from collections import OrderedDict, deque
+from contextlib import contextmanager
 from queue import Queue, Empty
 from datetime import datetime
 from pathlib import Path
@@ -2192,7 +2193,21 @@ class KiwoomWSManager:
 
         return self.get_latest_data(code) or latest or {}
 
-    def _snapshot_target(self, target, *, include_history=True, dashboard_only=False):
+    @contextmanager
+    def _snapshot_lock(self):
+        from src.engine.monitoring.runtime_performance import observe
+        start = time.perf_counter()
+        self.lock.acquire()
+        acquired = time.perf_counter()
+        try:
+            yield
+        finally:
+            held = time.perf_counter() - acquired
+            self.lock.release()
+            observe('ws_lock_wait', acquired - start)
+            observe('ws_lock_hold', held)
+
+    def _snapshot_target(self, target, *, include_history=True, dashboard_only=False, _defer_finish=False):
         # Raw 0B/0D observers consume the current event, not accumulated history.
         # Copying every historical row for each incoming tick starves ws.recv.
         history_keys = (
@@ -2228,18 +2243,28 @@ class KiwoomWSManager:
                     }
             if "recent_trade_ticks" in target:
                 target["recent_trade_ticks"] = list(target["recent_trade_ticks"] or ())[:120]
-        snapshot = copy.deepcopy(
+        snapshot_started = time.perf_counter()
+        from src.engine.infrastructure.snapshot_copy import snapshot_copy
+        snapshot = snapshot_copy(
             target
             if include_history
             else {
                 key: value for key, value in target.items() if key not in history_keys
             }
         )
+        from src.engine.monitoring.runtime_performance import observe
+        observe('ws_snapshot', time.perf_counter() - snapshot_started)
         snapshot["market_session_state"] = self.market_session_state
         snapshot["market_session_remaining"] = self.market_session_remaining
         snapshot["market_data_transport_epoch"] = getattr(
             self, "_market_data_transport_epoch", None
         )
+        if _defer_finish:
+            return snapshot
+        return self._finish_snapshot(snapshot, dashboard_only=dashboard_only)
+
+    @staticmethod
+    def _finish_snapshot(snapshot, *, dashboard_only=False):
         if not dashboard_only:
             snapshot["market_data_health"] = build_market_data_health(
                 snapshot, now_ts=time.time()
@@ -2864,7 +2889,7 @@ class KiwoomWSManager:
             # and consume one coherent batch, so a newer update cannot be
             # published once here and again from the next pending batch.
             ready_items = []
-            with self.lock:
+            with self._snapshot_lock():
                 with self._tick_lock:
                     pending_items = list(self._pending_tick_events.values())
                     self._pending_tick_events.clear()
@@ -2873,7 +2898,7 @@ class KiwoomWSManager:
                     try:
                         target = payload.pop("_snapshot_target", None)
                         if target is not None:
-                            payload["data"] = self._snapshot_target(target)
+                            payload["data"] = self._snapshot_target(target, _defer_finish=True)
                         ready_items.append(payload)
                     except Exception as e:
                         log_error(
@@ -2882,6 +2907,8 @@ class KiwoomWSManager:
 
             for payload in ready_items:
                 try:
+                    if payload.get("data") is not None:
+                        payload["data"] = self._finish_snapshot(payload["data"])
                     self.event_bus.publish("REALTIME_TICK_ARRIVED", payload)
                 except Exception as e:
                     log_error(
@@ -6213,9 +6240,10 @@ class KiwoomWSManager:
 
     def get_latest_data(self, code):
         code = self._normalize_code(code)
-        with self.lock:
+        with self._snapshot_lock():
             target = self.realtime_data.get(code, {})
-            return self._snapshot_target(target) if target else {}
+            snapshot = self._snapshot_target(target, _defer_finish=True) if target else {}
+        return self._finish_snapshot(snapshot) if snapshot else {}
 
     def get_exact_item_data(self, code, item):
         """Read the registered item's owning view without mixing route stores."""
@@ -6226,7 +6254,7 @@ class KiwoomWSManager:
         )
         if not code or not item:
             return {}
-        with self.lock:
+        with self._snapshot_lock():
             if (
                 item not in self._registered_items_by_code.get(code, ())
                 or self._registered_item_epochs.get(item)
@@ -6239,7 +6267,8 @@ class KiwoomWSManager:
                 if observation_only else self.realtime_data
             )
             target = store.get(item if observation_only else code)
-            return self._snapshot_target(target) if target else {}
+            snapshot = self._snapshot_target(target, _defer_finish=True) if target else {}
+        return self._finish_snapshot(snapshot) if snapshot else {}
 
     def adopt_main_fixed_watch_target(self, target, *, now_ts):
         """Transfer an already registered exact item to Main without wire churn.
@@ -6276,14 +6305,18 @@ class KiwoomWSManager:
         """Return dict of latest data for multiple codes, acquiring lock once."""
         if isinstance(codes, str):
             codes = [codes]
-        with self.lock:
-            return {
+        with self._snapshot_lock():
+            snapshots = {
                 self._normalize_code(code): (
                     self._snapshot_target(
-                        self.realtime_data.get(self._normalize_code(code), {})
+                        self.realtime_data.get(self._normalize_code(code), {}),
+                        _defer_finish=True
                     )
                     if self.realtime_data.get(self._normalize_code(code), {})
                     else {}
                 )
                 for code in codes
             }
+
+        return {code: self._finish_snapshot(value) if value else {}
+                for code, value in snapshots.items()}

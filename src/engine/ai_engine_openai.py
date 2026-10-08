@@ -9577,10 +9577,10 @@ class GPTSniperEngine:
                         from src.engine.scalping.reversal_source_diagnostics import (
                             claim_snapshot_with_receipt as claim_snapshot, validate_claim_with_receipt)
                         claim=reversal_signal_claim or claim_snapshot(symbol,_explicit_item_venue(item),machine_exact['session_bucket'],
-                            now=snapshot_now,item=item,family_sha256=reversal_family['family_sha256'])
+                            now=snapshot_now,item=item,family_sha256=reversal_family['family_sha256'],live_clock=True)
                         snapshot=validate_claim_with_receipt(claim,reversal_family['family_sha256'],now=snapshot_now,
                             evaluation_attempt_id=machine_exact['evaluation_attempt_id'],
-                            machine_bundle_sha256=entry_setup_live_policy['machine_bundle_sha256']) if claim else None
+                            machine_bundle_sha256=entry_setup_live_policy['machine_bundle_sha256'],live_clock=True) if claim else None
                         entry_setup_live_policy['continuous_reversal_claim']=claim
                     else:
                         # A wake-selected v1 signal is passed as a frozen tuple.
@@ -9590,6 +9590,8 @@ class GPTSniperEngine:
                     reversal_snapshot_as_of = time.time()
                     machine_assessment, reversal_input, reversal_prompt, reversal_schema = assess(
                         reversal_family, snapshot, symbol=symbol, session=machine_exact['session_bucket'])
+                    from src.engine.monitoring.runtime_performance import mark_signal
+                    mark_signal(machine_assessment.get('signal_id') or machine_assessment.get('event_id'), 'machine')
                     if reversal_family.get('schema') in {'continuous_reversal_policy_v5','continuous_reversal_policy_v6'}:
                         from src.engine.scalping.reversal_auxiliary_intraday import apply_request
                         from src.utils.constants import DATA_DIR
@@ -10526,6 +10528,7 @@ class GPTSniperEngine:
                                      phase=assessment['decision_phase'],request_sha256=request_identity))
                 trace_metadata_extra['continuous_reversal_request_identity']=request_identity
             provider_attempted = True
+            provider_started_monotonic = time.perf_counter()
             result = self._call_openai_safe(
                 prompt,
                 formatted_data,
@@ -10572,6 +10575,12 @@ class GPTSniperEngine:
                     'auxiliary_registry_sha256': entry_setup_live_policy.get('continuous_reversal_assessment',{}).get('auxiliary_registry_sha256')}
                    if entry_setup_live_policy.get('continuous_reversal_input') else {}),
             )
+            from src.engine.monitoring.runtime_performance import observe as observe_performance
+            observe_performance('provider_response', time.perf_counter() - provider_started_monotonic)
+            if entry_setup_live_policy.get('continuous_reversal_input'):
+                from src.engine.monitoring.runtime_performance import mark_signal
+                assessment = entry_setup_live_policy.get('continuous_reversal_assessment', {})
+                mark_signal(assessment.get('signal_id') or assessment.get('event_id'), 'provider')
             # V2.14 validates a deliberately narrow model-response schema.
             if entry_setup_live_policy.get('continuous_reversal_assessment',{}).get('policy_version') in {'continuous_reversal_policy_v5','continuous_reversal_policy_v6'}:
                 from src.engine.scalping.reversal_operating_outbox import advance

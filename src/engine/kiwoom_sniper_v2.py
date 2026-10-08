@@ -12860,6 +12860,7 @@ def run_sniper(is_test_mode=False):
 
     try:
         while True:
+            loop_work_started = time.perf_counter()
             # Daily trace indexes are maintenance, before fresh input capture
             # and the AI request deadline. Warm once per date, also on rollover.
             if ai_engine is not None:
@@ -16215,6 +16216,8 @@ def run_sniper(is_test_mode=False):
                     now_ts=now_ts,
                     buy_time_allowed=is_scalping_buy_time_allowed(now),
                 )
+            from src.engine.monitoring.runtime_performance import observe, log_snapshot
+            observe('loop_work', time.perf_counter() - loop_work_started)
             global _LOOP_METRICS_LAST_LOG_TS
             if now_ts - _LOOP_METRICS_LAST_LOG_TS >= 60:
                 log_info(
@@ -16227,6 +16230,7 @@ def run_sniper(is_test_mode=False):
                     f"watching={_watching_count} "
                     f"holding={_holding_count}"
                 )
+                log_snapshot()
                 _LOOP_METRICS_LAST_LOG_TS = now_ts
 
             time.sleep(_sleep_ms / 1000.0)

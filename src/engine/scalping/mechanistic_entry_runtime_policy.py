@@ -13,12 +13,13 @@ import hashlib
 import json
 import os
 import re
+import stat as stat_module
 import tempfile
 from datetime import date, datetime, timedelta
 from functools import lru_cache
 from contextvars import ContextVar
 from contextlib import contextmanager
-from threading import RLock
+from threading import RLock, Event
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -114,6 +115,140 @@ _CURRENT_CACHE = {}
 _CURRENT_CACHE_LOCK = RLock()
 _READ_DEPENDENCIES = ContextVar('machine_policy_read_dependencies', default=None)
 _SOURCE_ANCHOR = ContextVar('machine_policy_source_anchor', default=None)
+_SIGNATURE_PASS = ContextVar('machine_policy_signature_pass', default=None)
+_VERIFIED_EVALUATION = ContextVar('machine_policy_verified_evaluation', default=None)
+_CURRENT_FLIGHTS = {}
+
+
+class _FrozenDict(dict):
+    def _deny(self, *a, **kw):
+        raise TypeError('verified_policy_is_immutable')
+    __setitem__ = __delitem__ = clear = pop = popitem = setdefault = update = __ior__ = _deny
+
+    def __deepcopy__(self, memo):
+        # Compatibility callers explicitly requesting a copy receive ownership.
+        return {copy.deepcopy(k, memo): copy.deepcopy(v, memo) for k, v in self.items()}
+
+
+class _FrozenList(list):
+    def _deny(self, *a, **kw):
+        raise TypeError('verified_policy_is_immutable')
+    __setitem__ = __delitem__ = append = extend = insert = pop = remove = clear = sort = reverse = __iadd__ = __imul__ = _deny
+
+    def __deepcopy__(self, memo):
+        return [copy.deepcopy(v, memo) for v in self]
+
+
+def _freeze(value):
+    if type(value) is dict:
+        return _FrozenDict((k, _freeze(v)) for k, v in value.items())
+    if type(value) is list:
+        return _FrozenList(_freeze(v) for v in value)
+    return value
+
+
+class _IdentityPass:
+    """Resolve shared ancestors once per pass, then check their identity again.
+
+    No time cache: every file is stat'ed on every validation boundary. Symlink
+    inode/ctime and target are included even when replacement resolves equally.
+    """
+    def __init__(self):
+        self.parents = {}
+        self.nodes = {}
+
+    def resolve(self, path, depth=0):
+        path = os.fspath(path)
+        if not os.path.isabs(path):
+            path = os.path.join(os.getcwd(), path)
+        path = path.rstrip('/') or '/'
+        if depth > 40:
+            raise ValueError('machine_policy_source_symlink_cycle')
+        parent, name = os.path.split(path)
+        if parent == path:
+            return path, ()
+        if parent not in self.parents:
+            self.parents[parent] = self.resolve(parent, depth + 1)
+        base, links = self.parents[parent]
+        if name in ('', '.'):
+            return base, links
+        if name == '..':
+            return os.path.dirname(base), links
+        candidate = os.path.join(base, name)
+        s = os.lstat(candidate)
+        if stat_module.S_ISLNK(s.st_mode):
+            target = os.readlink(candidate)
+            node = (s.st_dev, s.st_ino, s.st_mode, s.st_mtime_ns, s.st_ctime_ns, target)
+            self.nodes[candidate] = node
+            resolved, tail = self.resolve(os.path.join(base, target), depth + 1)
+            return resolved, links + ((candidate, node),) + tail
+        if stat_module.S_ISDIR(s.st_mode):
+            self.nodes[candidate] = (s.st_dev, s.st_ino, s.st_mode)
+        return candidate, links
+
+    def verify(self):
+        for path, expected in self.nodes.items():
+            s = os.lstat(path)
+            actual = (s.st_dev, s.st_ino, s.st_mode)
+            if len(expected) > 3:
+                actual += (s.st_mtime_ns, s.st_ctime_ns, os.readlink(path))
+            if actual != expected:
+                raise ValueError('machine_policy_source_path_changed_during_validation')
+
+
+@contextmanager
+def signature_pass():
+    previous = _SIGNATURE_PASS.get()
+    if previous is not None:
+        yield
+        return
+    value = _IdentityPass()
+    token = _SIGNATURE_PASS.set(value)
+    try:
+        yield
+        value.verify()
+    finally:
+        _SIGNATURE_PASS.reset(token)
+
+
+def dependencies_unchanged(dependencies):
+    try:
+        with signature_pass():
+            return all(_signature(Path(path)) == sig for path, sig in dependencies.items())
+    except (OSError, ValueError):
+        return False
+
+
+@contextmanager
+def verified_evaluation(*, data_root, target_date):
+    """Short synchronous evaluation only; never spans AI/provider or order I/O.
+
+    The loader issues the immutable view. Nested receipt readers share it, but
+    a current-pointer change is still rejected and all dependencies are checked
+    again by the next evaluation/AI/submission boundary.
+    """
+    data_root = Path(data_root).absolute()
+    with source_anchor(data_root):
+        bundle = load_effective(data_root=data_root, target_date=target_date, _immutable=True)
+        if bundle is not None and not isinstance(bundle, _FrozenDict):
+            bundle = _freeze(bundle)
+        path = root(data_root) / 'current.json'
+        pointer = _signature(path) if path.exists() else None
+        with _CURRENT_CACHE_LOCK:
+            cached = _CURRENT_CACHE.get((str(data_root.resolve()), target_date))
+        if cached is not None and cached[1] is bundle:
+            expected = cached[0].get(str(path))
+            if expected != pointer:
+                raise ValueError('machine_policy_generation_changed_during_evaluation')
+        view = (str(data_root.resolve()), target_date, bundle, pointer)
+        token = _VERIFIED_EVALUATION.set(view)
+        try:
+            yield bundle
+            current = _signature(path) if path.exists() else None
+            if current != pointer:
+                raise ValueError('machine_policy_generation_changed_during_evaluation')
+        finally:
+            _VERIFIED_EVALUATION.reset(token)
 
 
 @contextmanager
@@ -183,7 +318,8 @@ def _source_hash(path: str, signature: tuple) -> str:
 @lru_cache(maxsize=32)
 def _cached_source_hash(path: str, signature: tuple) -> str:
     source = Path(path)
-    observed = hashlib.sha256(source.read_bytes()).hexdigest()
+    with source.open('rb') as handle:
+        observed = hashlib.file_digest(handle, 'sha256').hexdigest()
     if _signature(source) != signature:
         raise ValueError("machine_policy_source_changed_during_read")
     return observed
@@ -191,8 +327,10 @@ def _cached_source_hash(path: str, signature: tuple) -> str:
 
 def _signature(path: Path) -> tuple:
     path = source_path(path)
+    resolver = _SIGNATURE_PASS.get() or _IdentityPass()
+    resolved, links = resolver.resolve(path)
     stat = path.stat()
-    signature = (str(path.resolve(strict=True)), stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+    signature = (resolved, stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, links)
     dependencies = _READ_DEPENDENCIES.get()
     if dependencies is not None:
         previous = dependencies.setdefault(str(path), signature)
@@ -720,21 +858,28 @@ def _validate_anchored_bundle_sources(bundle: dict, data_root: Path, *, historic
     return bundle
 
 
-def load_effective(*, data_root: Path, target_date: str) -> dict | None:
+def load_effective(*, data_root: Path, target_date: str, _immutable=False) -> dict | None:
     """A missing new generation retains the explicitly adopted incumbent.
 
     Do not relabel the original policy date or hide a corrupt dated policy.
     Market/source freshness is still checked independently at every decision.
     """
+    view = _VERIFIED_EVALUATION.get()
+    if view is not None and view[:2] == (str(data_root.resolve()), target_date):
+        pointer_path = root(data_root) / 'current.json'
+        current = _signature(pointer_path) if pointer_path.exists() else None
+        if current != view[3]:
+            raise ValueError('machine_policy_generation_changed_during_evaluation')
+        return view[2]
     pointer=root(data_root)/'current.json'
     if pointer.is_file() and _read(pointer).get('schema') in {'continuous_reversal_current_v2','continuous_reversal_current_v3','continuous_reversal_current_v4','continuous_reversal_current_v5','continuous_reversal_current_v6'}:
-        active=_load_current(data_root,target_date)
+        active=_load_current(data_root,target_date, _immutable=_immutable)
         if active is not None:return active
     exact_path = root(data_root) / f'policy_{target_date}.json'
     if exact_path.is_file() and (_read(exact_path).get('continuous_reversal') or {}).get('schema') in {'continuous_reversal_policy_v2','continuous_reversal_policy_v3','continuous_reversal_policy_v4','continuous_reversal_policy_v5','continuous_reversal_policy_v6'}:
         # Dated v2 publication is preparation, never activation. The sealed
         # current receipt owns the atomic policy switch, including carry.
-        current=_load_current(data_root,target_date)
+        current=_load_current(data_root,target_date, _immutable=_immutable)
         if current is None:raise ValueError('continuous_reversal_v2_activation_not_observed')
         return current
     cache_key=('continuous_reversal_dated',str(data_root.resolve()),target_date)
@@ -762,7 +907,7 @@ def load_effective(*, data_root: Path, target_date: str) -> dict | None:
             return bundle
         finally:
             _READ_DEPENDENCIES.reset(token)
-    current = _load_current(data_root, target_date)
+    current = _load_current(data_root, target_date, _immutable=_immutable)
     if current is not None:
         return current
     exact = load(data_root=data_root, target_date=target_date)
@@ -2506,36 +2651,64 @@ def activate_operator_auxiliary_prompt(
                 'rollback_bundle_sha256': parent['bundle_sha256'], **receipt}
 
 
-def _load_current(data_root: Path, target_date: str) -> dict | None:
-    """Reuse a validated generation only while every read dependency is intact."""
+def _load_current(data_root: Path, target_date: str, *, _immutable=False) -> dict | None:
+    """Single-flight validation; no I/O under the short cache metadata lock."""
     key = (str(data_root.resolve()), target_date)
     with _CURRENT_CACHE_LOCK:
         cached = _CURRENT_CACHE.get(key)
     if cached is not None:
         dependencies, bundle = cached
-        try:
-            unchanged = all(_signature(Path(path)) == sig for path, sig in dependencies.items())
-        except OSError:
-            unchanged = False
         effective = (bundle.get('strategy_activation') or {}).get('effective_from')
-        if unchanged and (not effective or datetime.fromisoformat(effective) <= datetime.now(KST)):
-            return copy.deepcopy(bundle)
+        # Continuous policies carry activation time on the pointer, not on the
+        # bundle. A backwards wall clock must not reuse a not-yet-effective hit.
+        pointer = root(data_root) / 'current.json'
+        if pointer.exists():
+            effective = _read(pointer).get('effective_from') or effective
+        if dependencies_unchanged(dependencies) and (not effective or datetime.fromisoformat(effective) <= datetime.now(KST)):
+            return bundle if _immutable else copy.deepcopy(bundle)
+    with _CURRENT_CACHE_LOCK:
+        pending = _CURRENT_FLIGHTS.get(key)
+        if pending is None:
+            pending = Event()
+            _CURRENT_FLIGHTS[key] = pending
+            leader = True
+        else:
+            leader = False
+    if not leader:
+        if not pending.wait(timeout=2.0):
+            raise ValueError('machine_policy_validation_in_progress')
+        # A failed leader must never return the previous, potentially stale view.
+        with _CURRENT_CACHE_LOCK:
+            cached = _CURRENT_CACHE.get(key)
+        if cached is None or not dependencies_unchanged(cached[0]):
+            raise ValueError('machine_policy_validation_failed_or_changed')
+        bundle = cached[1]
+        return bundle if _immutable else copy.deepcopy(bundle)
     dependencies = {}
     token = _READ_DEPENDENCIES.set(dependencies)
     try:
         bundle = _load_current_uncached(data_root, target_date)
         if bundle is not None:
-            # Include current receipt, generation, parent and all source/rollback
-            # reads, not merely the current policy hash. No snapshot I/O on hit.
-            if not all(_signature(Path(path)) == sig for path, sig in dependencies.items()):
+            if not dependencies_unchanged(dependencies):
                 raise ValueError('machine_policy_dependency_changed_during_validation')
+            bundle = _freeze(bundle)
             with _CURRENT_CACHE_LOCK:
                 if len(_CURRENT_CACHE) >= 16:
                     _CURRENT_CACHE.pop(next(iter(_CURRENT_CACHE)), None)
-                _CURRENT_CACHE[key] = (dependencies, copy.deepcopy(bundle))
-        return bundle
+                _CURRENT_CACHE[key] = (dependencies, bundle)
+        else:
+            with _CURRENT_CACHE_LOCK:
+                _CURRENT_CACHE.pop(key, None)
+        return bundle if _immutable else copy.deepcopy(bundle)
+    except BaseException:
+        with _CURRENT_CACHE_LOCK:
+            _CURRENT_CACHE.pop(key, None)
+        raise
     finally:
         _READ_DEPENDENCIES.reset(token)
+        with _CURRENT_CACHE_LOCK:
+            _CURRENT_FLIGHTS.pop(key, None)
+            pending.set()
 
 
 def _load_current_uncached(data_root: Path, target_date: str, *, historical_code_root=None) -> dict | None:
