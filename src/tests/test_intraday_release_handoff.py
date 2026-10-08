@@ -515,7 +515,8 @@ def test_authorized_intraday_historical_checklist_is_exact_git_bound_snapshot(fi
 @pytest.mark.parametrize('damage', [None, 'snapshot', 'consumed', 'git_bytes', 'predecessor_binding',
                                   'env_after_consumption', 'controller_after_consumption',
                                   'summary_after_consumption', 'snapshot_after_consumption',
-                                  'consumption_missing_after_edit'])
+                                  'consumption_missing_after_edit', 'removed_original_release',
+                                  'removed_original_release_corrupt_snapshot'])
 def test_second_handoff_carries_original_git_snapshot_with_consumed_custody(fixture, monkeypatch, damage):
     data, previous, selected, _ = fixture
     original = b'original sealed generation\n'
@@ -523,7 +524,12 @@ def test_second_handoff_carries_original_git_snapshot_with_consumed_custody(fixt
     checklist.parent.mkdir(parents=True); checklist.write_text('new current owners\n')
     strict = data/'strict.json'
     expected = __import__('hashlib').sha256(original).hexdigest()
-    _json(strict, {'checklist_handoff': {'path': str(checklist)},
+    original_path = checklist
+    if damage in {'removed_original_release', 'removed_original_release_corrupt_snapshot'}:
+        original_path = previous/'docs/checklists'/checklist.name
+        original_path.parent.mkdir(parents=True)
+        original_path.write_bytes(checklist.read_bytes())
+    _json(strict, {'checklist_handoff': {'path': str(original_path)},
                   'generation_binding': {'checklist_sha256': expected}})
     controller = data/'report/postclose_done_controller/postclose_done_controller_2026-10-01.json'
     summary = data/'report/runtime_approval_summary/runtime_approval_summary_2026-10-01.json'
@@ -545,6 +551,9 @@ def test_second_handoff_carries_original_git_snapshot_with_consumed_custody(fixt
     handoff.consume(DAY, pid=2, now=NOW)
     prior_path, consumed_path = handoff._paths(DAY, NEW)
     snapshot = prior_path.parent/(NEW+'.historical-checklist.md')
+    if damage in {'removed_original_release', 'removed_original_release_corrupt_snapshot'}:
+        original_path.unlink()
+    if damage == 'removed_original_release_corrupt_snapshot': snapshot.write_text('changed')
     if damage == 'snapshot': snapshot.write_text('changed')
     if damage == 'consumed':
         _json(consumed_path, {**handoff._read(consumed_path), 'actual_pid_consumed': False})
@@ -560,7 +569,7 @@ def test_second_handoff_carries_original_git_snapshot_with_consumed_custody(fixt
             return b'wrong bytes' if damage == 'git_bytes' else original
         return NEW+'\n' if 'rev-parse' in command else ''
     monkeypatch.setattr(handoff.subprocess, 'check_output', git_output)
-    if damage in {'snapshot', 'consumed', 'git_bytes'}:
+    if damage in {'snapshot', 'consumed', 'git_bytes', 'removed_original_release_corrupt_snapshot'}:
         with pytest.raises(ValueError, match='intraday_'):
             handoff.prepare(DAY, old_pid=2, previous_root=selected, confirm=handoff.CONFIRM,
                             now=NOW+timedelta(minutes=2), reseal_postclose_source=True)

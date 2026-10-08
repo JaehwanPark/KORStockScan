@@ -17,3 +17,5 @@ Kiwoom official reference HEAD `953e5dbff123f437ab4d11a78a95191a685eb51f`은 실
 최종 소비 경로 리뷰에서 Main launcher 외의 웹·예약 작업에 공통 native 계좌/원장 식별자 전달이 누락됨을 확인했다. router는 제한된 두 키를 shell 실행 없이 읽고 retired receipt가 있는 상태의 결손/변조·중복·상대경로를 차단한다. 웹 unit은 같은 파일을 EnvironmentFile로 읽는다. router/퇴역/summary/custody 관련 216개 검사가 통과했다. 운영 문서의 옛 flat 전제·전용 서비스 복구/설치 명령도 현행 Main-only 계약으로 대체했다.
 
 검증은 핵심 폐쇄 회귀 615개, Main/manual/watch/order 155개, frozen full replay 98개와 후속 archive 168개·monitor 255개·identity 216개 등 변경별 범위로 실행했다. 중복 검사를 전체 고유 테스트 수로 합산하지 않는다. 전체 src/tests 수집에는 기존 PYRAMID 테스트가 이미 없는 `_pyramid_quality_decision`을 import하는 별도 오류가 있어 전체 suite 성공을 주장하지 않는다. 운영 성능의 통제된 전후 비교나 신규 손익 검증은 이번 삭제 결과와 구분한다.
+
+구 실행 릴리스 삭제 뒤 두 번째 장중 handoff 준비에서, 원 strict가 기록한 옛 docs symlink를 무조건 읽어 FileNotFoundError가 발생했다. 없는 원 경로는 정확히 봉인된 Git/보존 snapshot·직전 실제 PID consumption으로만 복구하도록 수정했다. 원 snapshot 변조는 계속 차단하며 새 문서로 원 세대를 대체하지 않는다. 삭제된 원 경로 성공·snapshot 손상 실패를 포함한 handoff/router/퇴역/summary/custody 286개 회귀가 통과했다. 실패한 준비 중에는 기존 Main PID를 중지하지 않았다.

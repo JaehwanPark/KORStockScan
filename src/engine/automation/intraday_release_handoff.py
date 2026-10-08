@@ -214,7 +214,14 @@ def prepare(day, *, old_pid, previous_root, confirm, now=None, reseal_postclose_
         old_checklist = (strict.get('checklist_handoff') or {}).get('path')
         expected = (strict.get('generation_binding') or {}).get('checklist_sha256')
         historical = None
-        if old_checklist and _sha(old_checklist) != expected:
+        try:
+            old_checklist_sha = _sha(old_checklist) if old_checklist else None
+        except FileNotFoundError:
+            # A removed executable release can have owned the original docs
+            # symlink. Absence permits only the same exact-hash Git/preserved
+            # snapshot path below, never a fresh document or relaxed binding.
+            old_checklist_sha = None
+        if old_checklist and old_checklist_sha != expected:
             relative = 'docs/checklists/' + day + '-stage2-todo-checklist.md'
             origin_commit, predecessor = old_commit, None
             if original.get('selected_release_commit') != old_commit:
