@@ -61534,6 +61534,29 @@ def _scanner_entry_realtime_latency_fields(
     return fields
 
 
+def _discard_orphaned_fixed_watch_result(coordinator, result, targets):
+    """Drain the exact completed native request without touching a successor."""
+    owned = [s for s in targets if isinstance(s, dict)
+             and s.get('_scanner_async_generation_id') == result.generation_id
+             and s.get('_scanner_async_cache_key') == result.cache_key]
+    if any(str(s.get('status') or '').upper() == 'WATCHING'
+           and not _manual_control_exclusion_blocked(s, result.code, pipeline='entry',
+               stage='async_completed_manual_veto', now_ts=time.time()) for s in owned):
+        return False
+    coordinator.discard_completed(generation_id=result.generation_id, cache_key=result.cache_key)
+    claim = thaw_scanner_async_value(result.native_claim)
+    if claim:
+        from src.engine.scalping.reversal_current_backend import acknowledge_any
+        acknowledge_any(claim, status='async_target_removed_or_state_changed')
+    for s in owned:
+        for key in ('_scanner_async_generation_id', '_scanner_async_cache_key',
+                    '_scanner_async_state_version', '_scanner_async_submitted_at', '_fixed_watch_async_claim'):
+            s.pop(key, None)
+        if (s.get('_continuous_reversal_pending_claim') or {}).get('token') == claim.get('token'):
+            s.pop('_continuous_reversal_pending_claim', None)
+    return True
+
+
 def _resolve_scanner_async_entry_ai(
     stock: dict,
     code: str,
@@ -61566,6 +61589,13 @@ def _resolve_scanner_async_entry_ai(
                 old_result = coordinator.take_completed(generation_id=stock['_scanner_async_generation_id'], cache_key=stock['_scanner_async_cache_key'])
                 if old_result is None and coordinator.is_pending(generation_id=stock['_scanner_async_generation_id'], cache_key=stock['_scanner_async_cache_key']):
                     return {"status":"pending", "reason":"invalid_claim_physical_work_draining"}
+            from src.engine.scalping.reversal_current_backend import acknowledge_any
+            acknowledge_any(claim, status='async_commit_rejected')
+            for key in ('_scanner_async_generation_id', '_scanner_async_cache_key',
+                        '_scanner_async_state_version', '_scanner_async_submitted_at'):
+                stock.pop(key, None)
+            if (stock.get('_continuous_reversal_pending_claim') or {}).get('token') == claim.get('token'):
+                stock.pop('_continuous_reversal_pending_claim', None)
             stock.pop('_fixed_watch_async_claim', None)
             return {"status":"commit_rejected", "reason":str(exc)}
     if not isinstance(coordinator, ScannerAsyncEvalCoordinator) or not isinstance(generation, (ScannerGeneration, FixedWatchGeneration)):
@@ -61705,6 +61735,11 @@ def _resolve_scanner_async_entry_ai(
         )
         stock.pop("_fixed_watch_async_claim", None)
         if not decision.allowed:
+            if fixed_watch and claim:
+                from src.engine.scalping.reversal_current_backend import acknowledge_any
+                acknowledge_any(claim, status='async_commit_rejected')
+                if (stock.get('_continuous_reversal_pending_claim') or {}).get('token') == claim.get('token'):
+                    stock.pop('_continuous_reversal_pending_claim', None)
             return {"status": "commit_rejected", "reason": decision.reason}
         if claim and result.ai_payload.get('entry_mechanistic_policy_decision'):
             from src.engine.scalping.reversal_current_backend import acknowledge_any
@@ -61745,9 +61780,13 @@ def _resolve_scanner_async_entry_ai(
         state_version=state_version,
     )
 
-    def prepare(
+    def prepare_sources(
         async_context: ScannerAsyncEvalContext,
     ) -> dict:
+        from src.engine.scalping.entry_deadline import EntryDeadline
+        budget = EntryDeadline.create(caller_epoch=async_context.deadline_epoch,
+                                      caller_perf=async_context.deadline_perf)
+        budget.require()
         stock_snapshot = thaw_scanner_async_value(async_context.stock_snapshot)
         prepared_ws = thaw_scanner_async_value(async_context.ws_snapshot)
         for key, value in _scanner_promotion_correlation_fields(stock_snapshot).items():
@@ -61782,9 +61821,11 @@ def _resolve_scanner_async_entry_ai(
         source_started = time.perf_counter()
         recent_ticks = select_trade_history(prepared_ws, entry_request_code, now=time.time(), limit=10)
         if recent_ticks is None:
+            budget.require()
             recent_ticks = kiwoom_utils.get_tick_history_ka10003(
                 KIWOOM_TOKEN, entry_request_code, limit=10, explicit_request_code=True,
                 request_owner='main_entry_async_prepare', request_class='source_only')
+        budget.require()
         recent_candles, candle_source_meta = fetch_entry_candles_with_meta(
             KIWOOM_TOKEN,
             code,
@@ -61794,6 +61835,7 @@ def _resolve_scanner_async_entry_ai(
             now_ts=time.time(),
             allow_integrated_sor_execution_view=True,
         )
+        budget.require()
         from src.engine.monitoring.runtime_performance import observe
         observe('source_prepare',time.perf_counter()-source_started)
         if not prepared_ws.get("orderbook") or not recent_ticks:
@@ -61831,7 +61873,9 @@ def _resolve_scanner_async_entry_ai(
             recent_candles=recent_candles,
             source_meta=candle_source_meta,
             include_investor_source=True,
+            entry_budget=budget,
         )
+        budget.require()
         return {
             "source_quality_ok": True,
             "recent_ticks": recent_ticks,
@@ -61842,10 +61886,21 @@ def _resolve_scanner_async_entry_ai(
             "candle_context": candle_context,
         }
 
-    def refresh_before_evaluate(
+    def prepare(async_context):
+        from src.engine.scalping.entry_deadline import EntryDeadline
+        budget = EntryDeadline.create(caller_epoch=async_context.deadline_epoch,
+                                      caller_perf=async_context.deadline_perf)
+        with kiwoom_utils.entry_source_budget(budget):
+            return prepare_sources(async_context)
+
+    def refresh_sources_before_evaluate(
         async_context: ScannerAsyncEvalContext,
         prepared: dict,
     ) -> dict:
+        from src.engine.scalping.entry_deadline import EntryDeadline
+        budget = EntryDeadline.create(caller_epoch=async_context.deadline_epoch,
+                                      caller_perf=async_context.deadline_perf)
+        budget.require()
         refreshed = thaw_scanner_async_value(prepared)
         if refreshed.get("source_quality_ok"):
             (
@@ -61859,6 +61914,7 @@ def _resolve_scanner_async_entry_ai(
                 refreshed.get("recent_ticks") or [],
                 refreshed.get("candle_context") or {},
             )
+            budget.require()
             # Prepare once for the final quote, not the earlier preparation price.
             # This remains the existing worker and the same source-only budget.
             refreshed["entry_capacity_prefetch"] = {
@@ -61867,15 +61923,24 @@ def _resolve_scanner_async_entry_ai(
             if (_safe_int(stock_snapshot.get("buy_qty"), 0) <= 0
                     and not _is_any_simulated_position(stock_snapshot, stock_snapshot.get("strategy"))):
                 capacity_started = time.perf_counter()
+                budget.require()
                 refreshed["entry_capacity_prefetch"] = _prefetch_entry_capacity_for_async_evaluation(
                     code, refreshed.get("ws_data") or {}, async_context.deadline_epoch,
                     correlation_id=async_context.request_id,
                     diagnostic_context={name: (refreshed.get("ws_data") or {}).get(name)
                         or stock_snapshot.get(name) for name in (
                             "broker_route", "effective_venue", "session_bucket")})
+                budget.require()
                 from src.engine.monitoring.runtime_performance import observe
                 observe("capacity_prepare",time.perf_counter()-capacity_started)
         return refreshed
+
+    def refresh_before_evaluate(async_context, prepared):
+        from src.engine.scalping.entry_deadline import EntryDeadline
+        budget = EntryDeadline.create(caller_epoch=async_context.deadline_epoch,
+                                      caller_perf=async_context.deadline_perf)
+        with kiwoom_utils.entry_source_budget(budget):
+            return refresh_sources_before_evaluate(async_context, prepared)
 
     def evaluate(
         async_context: ScannerAsyncEvalContext,

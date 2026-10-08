@@ -5,13 +5,11 @@ from zoneinfo import ZoneInfo
 
 import numpy as np
 
-try:
-    import fear_and_greed
-except ImportError:  # optional dependency
-    fear_and_greed = None
-
 from src.utils.constants import DATA_DIR, TRADING_RULES
-from .data_provider import YahooMarketDataProvider
+from .data_provider import YahooMarketDataProvider, CNNFearGreedProvider
+
+# The local API-compatible adapter never imports the globally patching package.
+fear_and_greed = CNNFearGreedProvider()
 from .rules import (
     apply_continuous_market_regime_score,
     apply_legacy_recovery_gate_metadata,
@@ -299,7 +297,7 @@ class MarketRegimeService:
                 "previous_value": prev_value,
                 "description": desc,
                 "last_update": last_update,
-                "source": "fear_and_greed_package",
+                "source": "cnn_isolated_session",
             }
 
         except Exception:

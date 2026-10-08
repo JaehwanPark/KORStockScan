@@ -13218,6 +13218,8 @@ def run_sniper(is_test_mode=False):
                     if async_result.generation_kind == "fixed_watch":
                         # The native WATCHING handler owns take/commit. A
                         # scanner-only target lookup must not discard it.
+                        sniper_state_handlers._discard_orphaned_fixed_watch_result(
+                            async_coordinator, async_result, targets)
                         continue
                     async_target = next(
                         (

@@ -67,26 +67,44 @@ ADMIN_ID = str(CONF.get("ADMIN_ID", ""))
 def _configure_telebot_http():
     """telebot 내부 요청 세션을 재시도 가능하도록 설정"""
     try:
-        import requests
-        from requests.adapters import HTTPAdapter
-        from urllib3.util.retry import Retry
+        import threading
+        import time
+        from requests_cache.session import OriginalSession
+        from requests.exceptions import HTTPError, ConnectionError, Timeout
         import telebot.apihelper as apihelper
 
-        retry = Retry(
-            total=5,
-            connect=5,
-            read=5,
-            status=5,
-            backoff_factor=0.5,
-            status_forcelist=(429, 500, 502, 503, 504),
-            allowed_methods=frozenset(["GET", "POST"]),
-        )
-        session = requests.Session()
-        adapter = HTTPAdapter(max_retries=retry, pool_connections=10, pool_maxsize=10)
-        session.mount("https://", adapter)
-        session.mount("http://", adapter)
+        local = threading.local()
 
-        apihelper.SESSION = session
+        def plain_request(method, url, **kwargs):
+            # Supported final-consumer injection. Each polling/send thread
+            # owns a plain session even if another import patches requests.
+            ttl = apihelper.SESSION_TIME_TO_LIVE
+            current = getattr(local, 'session', None)
+            created = getattr(local, 'created', 0.0)
+            if current is None or ttl == 0 or (ttl and time.monotonic()-created > ttl):
+                if current is not None:
+                    current.close()
+                current = local.session = OriginalSession()
+                local.created = time.monotonic()
+            # Preserve the installed helper's active retry engine. The old
+            # uppercase SESSION/adapter was unused; do not activate its retries.
+            if apihelper.RETRY_ON_ERROR and apihelper.RETRY_ENGINE == 1:
+                for _ in range(max(0, apihelper.MAX_RETRIES - 1)):
+                    try:
+                        return current.request(method, url, **kwargs)
+                    except (HTTPError, ConnectionError, Timeout):
+                        time.sleep(apihelper.RETRY_TIMEOUT)
+            elif apihelper.RETRY_ON_ERROR and apihelper.RETRY_ENGINE == 2:
+                from requests.adapters import HTTPAdapter
+                from urllib3.util.retry import Retry
+                adapter = HTTPAdapter(max_retries=Retry(total=apihelper.MAX_RETRIES,
+                    allowed_methods=None, backoff_factor=apihelper.RETRY_TIMEOUT,
+                    backoff_max=apihelper.RETRY_TIMEOUT))
+                for prefix in ('http://', 'https://'):
+                    current.mount(prefix, adapter)
+            return current.request(method, url, **kwargs)
+
+        apihelper.CUSTOM_REQUEST_SENDER = plain_request
         apihelper.RETRY_ON_ERROR = True
         apihelper.CONNECT_TIMEOUT = 10
         apihelper.READ_TIMEOUT = 60

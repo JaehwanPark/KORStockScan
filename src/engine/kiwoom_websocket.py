@@ -1963,8 +1963,9 @@ class KiwoomWSManager:
             tick_direction_source = "trusted_aggressor"
 
         now_ts = time.time()
+        from src.engine.infrastructure.snapshot_copy import freeze_history
         history.append(
-            {
+            freeze_history({
                 "ts": now_ts,
                 "v_pw": float(current_vpw or 0.0),
                 "price": int(current_price or 0),
@@ -1979,7 +1980,7 @@ class KiwoomWSManager:
                 "buy_tick_value": int(buy_tick_value or 0),
                 "sell_tick_value": int(sell_tick_value or 0),
                 "buy_ratio": float(buy_ratio or 0.0),
-            }
+            })
         )
 
         keep_seconds = max(
@@ -2242,14 +2243,13 @@ class KiwoomWSManager:
             if "recent_trade_ticks" in target:
                 target["recent_trade_ticks"] = list(target["recent_trade_ticks"] or ())[:120]
         snapshot_started = time.perf_counter()
-        from src.engine.infrastructure.snapshot_copy import snapshot_copy
+        from src.engine.infrastructure.snapshot_copy import snapshot_copy, freeze_history
+        frozen_history = {key: freeze_history(target[key]) for key in history_keys
+                          if include_history and key in target}
         snapshot = snapshot_copy(
-            target
-            if include_history
-            else {
-                key: value for key, value in target.items() if key not in history_keys
-            }
+            {key: value for key, value in target.items() if key not in history_keys}
         )
+        snapshot.update(frozen_history)
         from src.engine.monitoring.runtime_performance import observe
         observe('ws_snapshot', time.perf_counter() - snapshot_started)
         snapshot["market_session_state"] = self.market_session_state
@@ -2263,6 +2263,12 @@ class KiwoomWSManager:
 
     @staticmethod
     def _finish_snapshot(snapshot, *, dashboard_only=False):
+        from src.engine.infrastructure.snapshot_copy import materialize_history
+        for key in ('price_history', 'v_pw_history', 'signed_volume_history', 'program_history',
+                    'strength_momentum_history', 'recent_trade_ticks',
+                    'recent_trade_ticks_by_route', 'recent_depth_ticks_by_route'):
+            if key in snapshot:
+                snapshot[key] = materialize_history(snapshot[key])
         if not dashboard_only:
             snapshot["market_data_health"] = build_market_data_health(
                 snapshot, now_ts=time.time()
@@ -4149,6 +4155,8 @@ class KiwoomWSManager:
                                     **normalized_tick,
                                 }
                                 if isinstance(target.get("recent_trade_ticks"), deque):
+                                    from src.engine.infrastructure.snapshot_copy import freeze_history
+                                    normalized_tick = freeze_history(normalized_tick)
                                     target["recent_trade_ticks"].appendleft(
                                         normalized_tick
                                     )
@@ -4336,7 +4344,8 @@ class KiwoomWSManager:
                                         route_depth_buffers[depth_route_key] = (
                                             depth_buffer
                                         )
-                                    depth_buffer.appendleft(current_depth_observation)
+                                    from src.engine.infrastructure.snapshot_copy import freeze_history
+                                    depth_buffer.appendleft(freeze_history(current_depth_observation))
 
                             # '0w' 프로그램 매매 데이터 파싱
                             if real_type == "0w":

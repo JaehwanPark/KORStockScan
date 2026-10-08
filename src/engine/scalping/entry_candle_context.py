@@ -1563,9 +1563,12 @@ def build_entry_candle_context(
     source_meta: dict[str, Any] | None = None,
     broker_route: str | None = None,
     include_investor_source: bool = False,
+    entry_budget=None,
 ) -> dict[str, Any]:
     """Build the entry-owned view over the neutral candle source."""
 
+    if entry_budget is not None:
+        entry_budget.require()
     now_kst = _now_kst(now_ts)
     planned_broker_route = str(
         broker_route or resolve_order_dmst_stex_tp(now=now_kst)
@@ -1598,13 +1601,18 @@ def build_entry_candle_context(
     )
     snapshot_ws_data = dict(ws_data or {})
     if include_investor_source:
+        if entry_budget is not None:
+            entry_budget.require()
         snapshot_ws_data = enrich_investor_source(
             token=token,
             stock_code=code,
             request_code=str(context.get("request_code") or code),
             ws_data=snapshot_ws_data,
             observed_at=now_kst.timestamp(),
+            **({"entry_budget": entry_budget} if entry_budget is not None else {}),
         )
+    if entry_budget is not None:
+        entry_budget.require()
     context["ai_market_snapshot_v1"] = build_ai_market_snapshot(
         stock_code=code,
         decision_stage="entry_context",

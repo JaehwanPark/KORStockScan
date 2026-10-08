@@ -51,6 +51,32 @@ def test_atomic_multiple_scopes_idempotent_and_cas(prepared):
     assert I.current(root,b,day='2026-10-08')==r
 
 
+def test_original_confirmation_selects_wire_and_scope_revoke_is_local(prepared):
+    root,b,m,scopes,old,new=prepared
+    clock=datetime(2026,10,8,15,1,tzinfo=I.K.KST)
+    r=X.publish(root,m,confirm=I.AUTHORITY,now=clock)
+    def assessment(scope,epoch):
+        key,route=scope.rsplit('|',1)
+        return dict(policy_version=V.SCHEMA,action='ENTER_NOW',cell_key=key,route=route,event={'epoch':epoch})
+    before=assessment(scopes[0],clock.timestamp()-.1)
+    assert I.selected_definition(root,b,before)==(None,None)
+    I.validate_decision(root,{'continuous_reversal_assessment':before},b,now=clock.timestamp()+.1)
+    pending=[]
+    for scope in scopes:
+        a=assessment(scope,clock.timestamp()+.1)
+        definition,overlay=I.selected_definition(root,b,a)
+        assert definition['registry_sha256']==new and definition['schema']==G.SCHEMA_V2
+        a.update(auxiliary_registry_sha256=new,auxiliary_binding=G.binding(definition),
+                 auxiliary_base_bundle_sha256=b['bundle_sha256'],auxiliary_overlay_sha256=overlay['artifact_content_sha256'])
+        pending.append({'continuous_reversal_assessment':a})
+        I.validate_decision(root,pending[-1],b,now=clock.timestamp()+.2)
+    I.rollback(root,expected_parent=r['artifact_content_sha256'],reason='scoped test',confirm=I.AUTHORITY,
+               now=datetime.fromtimestamp(clock.timestamp()+1,I.K.KST),scopes=[scopes[0]])
+    with pytest.raises(ValueError,match='generation_revoked'):
+        I.validate_decision(root,pending[0],b,now=clock.timestamp()+1.1)
+    I.validate_decision(root,pending[1],b,now=clock.timestamp()+1.1)
+
+
 def test_scope_rollback_preserves_other_scope_and_newer_generation(prepared):
     root,b,m,scopes,old,new=prepared;clock=datetime(2026,10,8,15,1,tzinfo=I.K.KST)
     r=X.publish(root,m,confirm=I.AUTHORITY,now=clock)

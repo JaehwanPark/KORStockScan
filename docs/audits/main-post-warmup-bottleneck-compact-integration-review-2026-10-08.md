@@ -1,0 +1,47 @@
+# Main 워밍업 이후 병목·compact 통합 구현 리뷰 — 2026-10-08
+
+사용자가 [병목 계획](../proposals/main-post-warmup-latency-rest-ws-bottleneck-remediation-implementation-plan-2026-10-08.md)과 [compact 계획](../proposals/main-auxiliary-compact-contract-intraday-adoption-implementation-plan-2026-10-08.md)의 구현·반복 리뷰·수정·배포·재기동을 승인했다. B0/B1/B2/B3/B4/B5a/B6의 코드 수리를 완료했다. B5b source composition은 동등성 미입증으로 REST를 유지한다. 배포/PID/자연 결과는 아래 별도 기록을 따른다.
+
+## 1. 원천과 권한 기준선
+
+- 실제 이전 Main PID 241227, start ticks 2483072, selected/cwd `main-aux-compact-20261008-v3`, 코드 commit `dc769a09c052df06b265c7d9ce196428caae20ec`를 확인했다. [baseline](../../data/report/main_bottleneck_compact/2026-10-08/baseline.json)은 해당 시점의 기록이다.
+- bundle `40fb3ec7d5f44e2e34044f2a14e2d0d06dd6ea264f69b5f1481be899f2a4a689`, overlay `b8e97475121038c21d1608f99530f1c740f696f4ba084d0cfd2f9b48c4961626`를 보존한다. registry 128경로는 v2 네 scope·v1 124경로다. 기존 Main PID의 overlay 소비 receipt를 확인했으며, 새 PID 소비와는 구분한다.
+- 원 5초 claim, scanner/fixed-watch native identity, canonical quote, 수동 veto, Main/manual custody, account/quantity/capital/cooldown, hard exit, provider 동시성/간격/5회 circuit 및 uncertain outbox를 보존한다. episode/widget 자동 실행은 계속 영구 퇴역이다.
+- `DirectFamilySourceRepairMainMechanisticEntry` 현재 owner 한 개를 유지한다. checklist SHA는 `ca53931ef8e47bfab9d387460a17b1993a00355f24e91b9b6a4f3ccc3afadaf2`이며, 기존 dirty 문서/연구 자료는 덮어쓰지 않았다. 실제 release source와 공유 docs/checklist byte를 별도로 검증한다.
+- 보조 I/G/W/C/X reader 파일 hash는 기존 overlay와 일치한다. 157쌍 연구·호환 증명을 재사용하며 새 연구 AI 호출은 0회다. 대용량 원장 복사·EOD/전수 장후 재실행·외부 sync·시험 주문은 수행하지 않는다.
+
+## 2. 구현 및 리뷰 수리
+
+| 단계 | 구현과 마지막 소비자 | 결함 보완 및 종료 증거 |
+|---|---|---|
+| B0 | runtime performance + client-attempt telemetry | strict `<5초`, `≤2초` 누적 CDF, circuit/reset 신원, 512 minute eviction 이후 late terminal, 256 coarse key/128 recent overflow를 보존. 상세 소실은 lower bound로 명시 |
+| B1 | 실제 Main WATCHING/outer drain → native coordinator → state handler commit | 제거/holding/수동 차단된 exact request만 discard/ack; successor pending 보존. 원 monotonic/epoch 잔여 budget을 tick/candle/investor/refresh/continuation/admission/HTTP timeout에 전달. 만료한 첫 source가 다음 물리 조회를 시작하지 못함 |
+| B2 | native validator → 예약 → adapter → SDK → response → outbox/commit | native 종료는 circuit을 증가·reset하지 않음. queue에서 취소된 미전송 wall deadline을 HTTP error로 포장하던 결함을 수리. SDK 시작은 전달 미확정, 응답만 response-confirmed. 실제 제공자 5실패 차단 유지 |
+| B3 | 검증 저널 generation → symbol/account/manual projection → native policy | 같은 generation에 반복 deepcopy/reducer 제거. account 변경·동시 generation 변경·동일 길이 변조는 fail closed. 반환 dict 변조가 캐시를 오염시키지 않으며 수동 disposition은 해당 검증 generation에 고정 |
+| B4 | WS ingress immutable row → owner lock freeze → 밖에서 materialize → 기존 full/dashboard 소비자 | 원 route/epoch/full history 유지, 120행은 dashboard에만 적용. mutable nested/비표준 object 복사와 deque capacity 및 기존 최종 list normalization을 검증. 기존 pending batch/lock 순서 유지 |
+| B5a | exact ka10080 demand/cache/singleflight → native source selector | 완료분 cutoff가 identity에 포함됨. empty/truncated/missing continuation/rate/deferred는 cache 대상에서 제외. 원 수신시각/TTL 유지, 430봉 하한 유지 |
+| B5b | 현재 430봉 source selector | 수정주가 REST/당일 원주가 WS의 동등성 미입증. 새 composition reader 선택을 활성화하지 않고 기존 REST 유지; 다른 수리 배포는 계속 |
+| B6 | 국면 CNN 전용 memory session + 실제 Telebot CUSTOM_REQUEST_SENDER | `fear_and_greed` 전역 SQLite patch import 제거. poll/send thread·TTL 재생성에서도 plain session을 쓰며 설치본의 실제 retry engine을 보존. 미사용 uppercase SESSION adapter의 중첩 retry는 활성화하지 않음 |
+| B7 | unchanged reader/128 bindings → native handoff → selected immutable release → actual PID | 기존 정책 ID/원 binding/strict checklist를 유지하여 새 코드로 인계. 재연구·경제성 gate 추가 없음 |
+
+원 확인점 전후 v1/v2 선택과 같은 scope 철회만 reject하는 실제 `selected_definition`/`validate_decision` 검사를 통과했다. Main harness는 **실제 호출 statement/wrapper 및 outer drain**을 두 iteration에 연결하고 실제 coordinator/consumer를 실행한다. broker는 fake이며 실제 매수 체결 증거로 사용하지 않는다. 유효 commit 및 submit guard는 기존 별도 회귀로 검증한다.
+
+## 3. 공식 참조 및 검증
+
+[공식 Kiwoom 저장소](https://github.com/Kiwoom-Securities/Kiwoom-REST-API)의 HEAD `953e5dbff123f437ab4d11a78a95191a685eb51f`를 재확인했다. `kiwoom/specs.py`, `kiwoom/core/client.py`, `kiwoom/core/auth.py`, `kiwoom/_data/kiwoom_api_spec.json`, Postman의 ka10003/ka10080/ka10059 PRD/MOCK·continuation·fields와 auth 경계를 검사했다. 조회시각 및 파일 hash는 [official-reference](../../data/report/main_bottleneck_compact/2026-10-08/official-reference.json)에 있다. path/api-id/header/body/FID/REG/REMOVE/real-demo 의미는 바꾸지 않았다. upstream 현재 tree의 `kiwoom_docs` 부재와 REST/WS adjustment 미입증을 source gap으로 남겼다.
+
+- 통합 대상 회귀 **1,074 passed / 18 deselected**. 제외된 18건은 영구 삭제된 shared-rebound/PYRAMID 및 episode gateway/policy를 import하는 퇴역 기능 검사다. 삭제 기능을 복원하여 통과시키지 않았다.
+- 최종 WS 컨테이너·원천·Main/AI 재리뷰 회귀 **727 passed / 7 deselected**. 제외된 7건은 같은 퇴역 shared-rebound 검사다. 이 수치는 중복 검사를 합산한 고유 검증 수가 아니다.
+- 마지막 실제 Main 호출/outer drain/commit와 보조 wire·철회·submit 원천 검사 **212 passed**. WAIT 및 ENTER_NOW+PASS/BUY fixture 각각의 worker 호출 1회와 단일 commit 소비, route/generation 교체 시 거절을 검증했다. 실제 broker 주문은 실행하지 않았다.
+- 기존 auth retry 테스트의 전체 dict 동등성은 원천 metadata 추가 계약에 맞춰 metadata 별도 검사로 보완했다. token replacement·첫 8005 이후 같은 stale token 재사용 방지·실제 요청 순서를 계속 검증한다.
+- Python compile, `git diff --check`, print-only backlog parser를 검증했다. parser 21개·현재 실행 owner 1개, 경고 0건이다. package 설치/제거, 실 provider/broker 테스트, 퇴역 테스트 복원, Project/Calendar sync는 생략했다.
+
+## 4. 성능 증거와 한계
+
+[microbench](../../data/report/main_bottleneck_compact/2026-10-08/microbench.json)는 2,000행 WS view와 3,000 event 저널에서 동일 입력을 50회 반복했다. WS 잠금 내 median은 약 2.78ms → 0.42ms, 저널 반복 query는 11.83ms → 0.006ms였다. 새 WS materialize는 잠금 밖에서 약 3.85ms이므로 전체 복사시간 감소나 실제 loop p99 개선으로 바꾸어 보고하지 않는다. 원 내용·route·전체 행 수·mutation isolation을 검사했다.
+
+[이전 성능 snapshot](../../data/report/main_bottleneck_compact/2026-10-08/previous-performance.json)의 PID 241227 warm loop 2,863회는 p95 0.894초/p99 1.948초, >5초 2회였다. 이전 schema에는 circuit 관측이 없고 새 배포와 장세·부하 window가 다르므로 인과적 전후 개선율을 계산하지 않는다. 새 release의 circuit/신호/source/HTTP demand 및 warmup 이후 분모를 별도로 수집한다. 자연 요청이 없으면 async/provider/submit 성능은 미관측이다.
+
+## 5. 배포 및 실제 소비
+
+최종 immutable release 검증 및 native handoff 완료 후 이 절에 실제 selection/PID/정책/strict 기동 결과를 기록한다. 현재 이 문단은 배포 대기 상태이며 기동/체결 성공을 의미하지 않는다.

@@ -895,7 +895,9 @@ def test_market_join_timeout_returns_defer_without_transport(monkeypatch):
 
 
 def test_normalized_market_cache_is_token_origin_and_day_scoped(monkeypatch):
+    import time
     _clear_market_data_cache()
+
     monkeypatch.setattr(kiwoom_utils, "get_effective_kiwoom_code", lambda code: code)
     origin = ["https://api.test"]
     monkeypatch.setattr(kiwoom_utils, "get_kiwoom_base_url", lambda: origin[0])
@@ -903,7 +905,9 @@ def test_normalized_market_cache_is_token_origin_and_day_scoped(monkeypatch):
 
     def fetch(**kwargs):
         calls.append(kwargs)
-        return [], {"rest_received_ts_ms": 100, "api_id": kwargs["api_id"]}
+        return [{'return_code':0,'stk_min_pole_chart_qry':[
+            dict(cntr_tm=f'2026091710{i:02d}00',open_pric='100',high_pric='100',low_pric='100',cur_prc='100',trde_qty='10')
+            for i in range(10)]}], {"rest_received_ts_ms": int(time.time()*1000), "api_id": kwargs["api_id"]}
 
     monkeypatch.setattr(kiwoom_utils, "fetch_kiwoom_api_continuous", fetch)
     for token in ("first", "first", "second"):
@@ -919,6 +923,48 @@ def test_normalized_market_cache_is_token_origin_and_day_scoped(monkeypatch):
     assert "first" not in repr(kiwoom_utils._MARKET_DATA_CACHE)
     _clear_market_data_cache()
 
+
+def test_entry_read_uses_remaining_budget_and_stops_next_page(monkeypatch):
+    from types import SimpleNamespace
+    import pytest
+    from src.engine.scalping.entry_deadline import EntryDeadline
+    remaining=[.8];calls=[]
+    monkeypatch.setattr(EntryDeadline,'remaining',lambda self:remaining[0])
+    monkeypatch.setattr(kiwoom_utils,'resolve_kiwoom_request_token',lambda token:token)
+    class Admission:
+        admitted=True;reason='test';waited_sec=0
+        scope_digest='offline'
+        def as_dict(self):return {}
+    class Rate:
+        def acquire(self,**kw):
+            assert kw['max_wait_sec']<=.8
+            return Admission()
+    def post(*args,**kw):
+        calls.append(kw)
+        assert sum(kw['timeout'])<=.8
+        remaining[0]=0
+        return SimpleNamespace(status_code=200,headers={'cont-yn':'Y','next-key':'next'},
+            json=lambda:{'return_code':0,'items':[]})
+    monkeypatch.setattr(kiwoom_utils.requests,'post',post)
+    with pytest.raises(ValueError,match='entry_machine_input_deadline_expired'):
+        with kiwoom_utils.entry_source_budget(EntryDeadline(1,1)):
+            kiwoom_utils.fetch_kiwoom_api_continuous('https://api.test','offline','ka10080',
+                {'stk_cd':'005930'},use_continuous=True,max_pages=2,read_rate_coordinator=Rate())
+    assert len(calls)==1
+    assert kiwoom_utils._ENTRY_SOURCE_BUDGET.get() is None
+
+
+def test_empty_minute_results_are_not_cached(monkeypatch):
+    _clear_market_data_cache()
+    monkeypatch.setattr(kiwoom_utils,'get_effective_kiwoom_code',lambda code:code)
+    monkeypatch.setattr(kiwoom_utils,'get_kiwoom_base_url',lambda:'https://api.test')
+    calls=[]
+    def empty(**kw):
+        calls.append(kw)
+        return [],{'rest_received_ts_ms':1,'api_id':'ka10080'}
+    monkeypatch.setattr(kiwoom_utils,'fetch_kiwoom_api_continuous',empty)
+    for _ in range(2):kiwoom_utils.get_minute_candles_ka10080_with_meta('offline','005930')
+    assert len(calls)==2 and not kiwoom_utils._MARKET_DATA_CACHE
 
 def test_deferred_market_read_never_replaces_a_valid_cache_entry():
     _clear_market_data_cache()

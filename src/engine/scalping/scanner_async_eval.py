@@ -178,6 +178,7 @@ class ScannerAsyncEvalResult:
     error_message: str = ""
     deadline_perf: float = 0.0
     generation_kind: str = "scanner"
+    native_claim: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -568,6 +569,8 @@ class ScannerAsyncEvalCoordinator:
             error_message=error_message,
             deadline_perf=context.deadline_perf,
             generation_kind="fixed_watch" if isinstance(context.generation, FixedWatchGeneration) else "scanner",
+            native_claim=_immutable_mapping(context.stock_snapshot.get('_continuous_reversal_pending_claim'))
+                if isinstance(context.generation, FixedWatchGeneration) else _immutable_mapping({}),
         )
         with self._lock:
             if self._requests.get(context.request_id) is not request:

@@ -121,7 +121,9 @@ def test_queued_transport_expiry_never_sends_or_restarts_deadline():
 
 
 def valid_ws():
-    now=time.time()
+    # Use protocol millisecond precision. A multiply/divide float round trip
+    # can otherwise fabricate a future receipt in the valid fixture.
+    now=int(time.time()*1000)/1000.
     rows=[dict(item='005930_AL', transport_epoch=2, received_at_ms=(now-i*.1)*1000,
         provider_trade_epoch=now-i*.1-.2, route_sequence=20-i, market_suffix='_AL',
         market_route='krx_nxt_integrated',price=1000+i,volume=10,volume_source='15_abs') for i in range(10)]
@@ -217,7 +219,8 @@ def test_diagnostic_signal_join_handles_native_decision_variants(decision,expect
 
 @pytest.mark.parametrize('outer_drain',[False,True])
 @pytest.mark.parametrize('commit_change',[None,'route','watch_generation'])
-def test_fixed_watch_dispatch_keeps_claim_and_worker_state_private(monkeypatch,commit_change,outer_drain):
+@pytest.mark.parametrize('ai_action',['WAIT','BUY'])
+def test_fixed_watch_dispatch_keeps_claim_and_worker_state_private(monkeypatch,commit_change,outer_drain,ai_action):
     from src.engine import sniper_state_handlers as H
     from src.engine.scalping import reversal_current_backend as B, reversal_source_diagnostics as D
     from src.engine.scalping.scanner_async_eval import ScannerAsyncEvalCoordinator
@@ -238,6 +241,7 @@ def test_fixed_watch_dispatch_keeps_claim_and_worker_state_private(monkeypatch,c
     monkeypatch.setattr(H,'_prefetch_entry_capacity_for_async_evaluation',lambda *a,**kw:{'status':'test_cached'})
     monkeypatch.setattr(H,'_scanner_async_quote_is_fresh',lambda *a,**kw:True)
     monkeypatch.setattr(H,'_log_entry_pipeline',lambda *a,**kw:None)
+    monkeypatch.setattr(H,'_manual_control_exclusion_blocked',lambda *a,**kw:False)
     monkeypatch.setattr(B,'backend',lambda *a:SimpleNamespace(_GENERATION='family'))
     monkeypatch.setattr(B,'acknowledge_any',lambda *a,**kw:None)
     monkeypatch.setattr(D,'validate_claim_with_receipt',lambda *a,**kw:claim['snapshot'])
@@ -245,19 +249,34 @@ def test_fixed_watch_dispatch_keeps_claim_and_worker_state_private(monkeypatch,c
         private['_machine_observation_revision']={'test_receipt':'captured'}
         return {}
     monkeypatch.setattr(H,'_observe_entry_economics_before_ai',observe)
-    invoked=threading.Event()
+    invoked=threading.Event();provider_calls=[]
     def analyze(*args,**kw):
+        provider_calls.append(kw)
         assert kw['reversal_signal_claim']['token']=='native-test'
         assert kw['entry_input_deadline_epoch']==now+5
         kw['entry_economics_observer'](exact_payload={},assessment={},capture={},bundle_sha256='b')
         assert '_machine_observation_revision' not in stock
         invoked.set()
-        return dict(action='WAIT',entry_mechanistic_policy_decision='source_invalid')
+        return dict(action=ai_action,entry_ai_risk_verdict='PASS' if ai_action=='BUY' else 'not_evaluated',
+            entry_mechanistic_policy_decision={'action':'ENTER_NOW'} if ai_action=='BUY' else 'source_invalid')
     coordinator=ScannerAsyncEvalCoordinator(ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1))
     runtime={'scanner_async_eval_coordinator':coordinator}
+    from src.engine import kiwoom_sniper_v2 as M
+    tree=ast.parse(inspect.getsource(M.run_sniper))
+    main_call=next(n for n in ast.walk(tree) if isinstance(n,ast.Call)
+        and isinstance(n.func,ast.Name) and n.func.id=='handle_watching_state'
+        and not any(k.arg=='scanner_async_generation' for k in n.keywords))
+    monkeypatch.setattr(M.run_sniper,'scanner_async_eval_coordinator',coordinator,raising=False)
+    def watching(s,c,w,admin,**kw):
+        # The real Main statement supplies the coordinator, not this fixture.
+        return H._resolve_scanner_async_entry_ai(s,c,w,kw['ai_engine'],kw,
+            trigger_reason='continuous_reversal_first_uptick',last_ai_time=now,current_ai_score=50)
+    monkeypatch.setattr(H,'handle_watching_state',watching)
+    frame=dict(handle_watching_state=M.handle_watching_state,run_sniper=M.run_sniper,
+        stock=stock,code='005930',ws_data=ws,admin_id=None,now_ts=now,now=datetime.now(),radar=None,
+        ai_engine=SimpleNamespace(analyze_target=analyze))
     try:
-        result=H._resolve_scanner_async_entry_ai(stock,'005930',ws,SimpleNamespace(analyze_target=analyze),
-            runtime,trigger_reason='continuous_reversal_first_uptick',last_ai_time=0,current_ai_score=50)
+        result=eval(compile(ast.Expression(main_call),'<main-first-iteration>','eval'),frame)
         assert result['status']=='dispatched'
         assert invoked.wait(1)
         refresh=H._resolve_watching_state_change_refresh(stock,ws,now_ts=now,
@@ -272,7 +291,7 @@ def test_fixed_watch_dispatch_keeps_claim_and_worker_state_private(monkeypatch,c
             deadline=time.time()+1
             while not coordinator.has_undrained_result() and time.time()<deadline:time.sleep(.005)
             exec(compile(ast.Module(body=[node],type_ignores=[]),'<actual-main-outer-drain>','exec'),
-                {'async_coordinator':coordinator})
+                {'async_coordinator':coordinator,'sniper_state_handlers':H,'targets':[stock]})
             assert coordinator.has_completed_result()
         if commit_change=='route':
             monkeypatch.setattr(H,'_fixed_watch_entry_source_route',lambda *a:{'item':'005930_NX','broker_route':'NXT'})
@@ -280,8 +299,7 @@ def test_fixed_watch_dispatch_keeps_claim_and_worker_state_private(monkeypatch,c
             stock['watch_generation_id']='replacement'
         deadline=time.time()+1
         while time.time()<deadline:
-            result=H._resolve_scanner_async_entry_ai(stock,'005930',ws,SimpleNamespace(analyze_target=analyze),
-                runtime,trigger_reason='continuous_reversal_confirmed_uptick',last_ai_time=now,current_ai_score=90)
+            result=eval(compile(ast.Expression(main_call),'<main-second-iteration>','eval'),frame)
             if result['status']!='pending':break
             time.sleep(.005)
         if commit_change:
@@ -289,11 +307,13 @@ def test_fixed_watch_dispatch_keeps_claim_and_worker_state_private(monkeypatch,c
             assert '_machine_observation_revision' not in stock
         else:
             assert result['status']=='completed'
+            assert result['ai_decision']['action']==ai_action
             assert result['reversal_signal_claim']==claim
             assert result['reversal_signal_claim'] is not claim
             assert stock['_machine_observation_revision']=={'test_receipt':'captured'}
         assert '_fixed_watch_async_claim' not in stock
         assert not coordinator.has_completed_result()
+        assert len(provider_calls)==1
         assert len(coordinator.drain_completed())==(0 if outer_drain else 1)
         assert coordinator.drain_completed()==[]
     finally:coordinator.shutdown()
@@ -480,3 +500,101 @@ def test_async_original_monotonic_budget_cannot_be_renewed_after_wall_clock_jump
     assert ctx.expired()
     with pytest.raises(ValueError,match='deadline_expired'):
         EntryDeadline.create({'snapshot':[{'epoch':100.}]},105,ctx.deadline_perf).require()
+
+
+def test_strict_cdf_boundary_survives_retention(monkeypatch):
+    from src.engine.monitoring import runtime_performance as P
+    P.observe('loop_work', 5.0, generation='strict-boundary-test')
+    for _ in range(4100): P.observe('loop_work', 4.999)
+    P.observe('loop_work', 5.001)
+    v=P.snapshot()['metrics']['loop_work']
+    assert v['total_observed']==4102 and v['n']==4096
+    assert v['cumulative_under_five_seconds']==4100
+    assert v['cumulative_over_five_seconds']==1
+
+
+def test_http_late_terminal_remains_accounted_after_minute_eviction(monkeypatch):
+    import importlib
+    T0=importlib.reload(T)
+    clock=[1000.0]
+    monkeypatch.setattr(T0.time,'time',lambda:clock[0])
+    def late(*args,**kw):
+        for i in range(600):
+            clock[0]=1060.+i*60
+            T0.measured_http_call(lambda *a,**k:SimpleNamespace(status_code=200),
+                'https://api.kiwoom.com/api/dostk/chart',telemetry_owner='bounded',
+                headers={'api-id':'ka10080'})
+        return SimpleNamespace(status_code=200)
+    T0.measured_http_call(late,'https://api.kiwoom.com/api/dostk/chart',
+        telemetry_owner='late',headers={'api-id':'ka10080'})
+    s=T0.snapshot()
+    assert s['cumulative_totals']['started']==s['cumulative_totals']['terminal']==601
+    assert s['cumulative_totals']['inflight_unknown']==0
+    assert s['detail_loss']['late_terminal_after_minute_eviction']==1
+    assert sum(b.get('terminal',0) for b in s['minute_buckets'])+s['evicted_minute_totals']['terminal']==601
+    assert s['minute_coverage']=='lower_bound_with_evictions'
+
+
+def test_transport_counter_overflow_retains_totals_and_bounded_keys(monkeypatch):
+    import importlib
+    t=importlib.reload(T)
+    for i in range(700):
+        t.demand(str(i),'logical')
+        t.measured_http_call(lambda *a,**k:SimpleNamespace(status_code=200),
+            'https://api.test/chart',telemetry_owner=str(i),headers={'api-id':str(i)})
+    value=t.snapshot()
+    assert len(value['buckets'])<=256 and len(value['demands'])<=256
+    assert value['cumulative_totals']['started']==value['cumulative_totals']['terminal']==700
+    assert sum(b['started'] for b in value['buckets'])==700
+    assert value['detail_loss']['coarse_key_overflow_attempts']>0
+
+
+@pytest.mark.parametrize('change',['removed','holding','replacement','manual'])
+def test_orphaned_native_result_drains_only_its_request(monkeypatch,change):
+    from src.engine import sniper_state_handlers as H
+    from src.engine.scalping import reversal_current_backend as B
+    ack=[];discard=[]
+    monkeypatch.setattr(B,'acknowledge_any',lambda c,**kw:ack.append((c,kw)))
+    monkeypatch.setattr(H,'_manual_control_exclusion_blocked',lambda *a,**kw:change=='manual')
+    result=SimpleNamespace(generation_id='fixed-watch:old',cache_key='old',code='005930',native_claim={'token':'old'})
+    target={'code':'005930','status':'HOLDING' if change=='holding' else 'WATCHING',
+        '_scanner_async_generation_id':'fixed-watch:new' if change=='replacement' else 'fixed-watch:old',
+        '_scanner_async_cache_key':'new' if change=='replacement' else 'old',
+        '_fixed_watch_async_claim':{'token':'new' if change=='replacement' else 'old'}}
+    assert H._discard_orphaned_fixed_watch_result(SimpleNamespace(discard_completed=lambda **kw:discard.append(kw)),
+        result,[] if change=='removed' else [target])
+    assert len(ack)==len(discard)==1
+    if change=='replacement':assert target['_fixed_watch_async_claim']['token']=='new'
+    if change=='holding':assert '_scanner_async_generation_id' not in target
+
+
+def test_expired_first_source_cannot_launch_candles_or_provider(monkeypatch):
+    from src.engine import sniper_state_handlers as H
+    from src.engine.scalping.scanner_async_eval import ScannerAsyncEvalCoordinator
+    from src.engine.ai.hot_path_ai_dispatcher import HotPathAIDispatcher
+    now=time.time();claim={'token':'expired-source','snapshot':[{'epoch':now,'symbol':'005930',
+        'venue':'SOR','source_item':'005930_AL','event_id':'first'}],'source_registration_receipt':{'sha256':'proof'}}
+    stock={'code':'005930','status':'WATCHING','effective_venue':'SOR','_continuous_reversal_pending_claim':claim}
+    monkeypatch.setattr(H,'_fixed_watch_entry_source_route',lambda *a:{'item':'005930_AL','broker_route':'SOR'})
+    monkeypatch.setattr(H,'_log_entry_pipeline',lambda *a,**kw:None)
+    first=threading.Event();finish=threading.Event()
+    expired=[False];remaining=EntryDeadline.remaining
+    monkeypatch.setattr(EntryDeadline,'remaining',lambda self:0. if expired[0] else remaining(self))
+    def tick(*a,**kw):
+        first.set();finish.wait(1)
+        expired[0]=True
+        return [{'price':1000}]
+    monkeypatch.setattr(H.kiwoom_utils,'get_tick_history_ka10003',tick)
+    monkeypatch.setattr(H,'fetch_entry_candles_with_meta',lambda *a,**k:pytest.fail('late second source'))
+    coordinator=ScannerAsyncEvalCoordinator(ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1))
+    try:
+        r=H._resolve_scanner_async_entry_ai(stock,'005930',{'curr':1000},SimpleNamespace(
+            analyze_target=lambda *a,**kw:pytest.fail('late provider')),{'scanner_async_eval_coordinator':coordinator},
+            trigger_reason='first',last_ai_time=0,current_ai_score=50)
+        assert r['status']=='dispatched' and first.wait(1)
+        assert coordinator.pending_count()==1 # Blocking source remains owned.
+        finish.set()
+        until=time.time()+1
+        while coordinator.pending_count() and time.time()<until:time.sleep(.005)
+        assert coordinator.drain_completed()[0].status=='preparation_error'
+    finally:finish.set();coordinator.shutdown()

@@ -13,6 +13,7 @@ import copy
 import hashlib
 import json
 import os
+import threading
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -192,6 +193,11 @@ class OrderOwnerRegistry:
         self._activation_rows = {}
         self._journal_signature = None
         self._journal_events = None
+        self._native_projection_lock = threading.RLock()
+        self._native_projection_signature = None
+        self._native_projection_accounts = {}
+        self._native_projection_disposition = {}
+        self._native_projection_manual_events = ()
 
     def _journal_identity(self):
         try:
@@ -1929,16 +1935,38 @@ class OrderOwnerRegistry:
         # Read-only authority lookup must also work inside frozen replay. The
         # journal reader verifies the hash chain and unchanged file generation;
         # a concurrent append fails closed. Actual reservations still hold flock.
-        events = self._read_locked()
-        account = broker_account_key()
-        rows = [r for r in self._state(events).values() if r.get("symbol") == clean]
-        if rows and not any(r.get("account_key") == account for r in rows):
-            raise OwnerRegistryConflict("owner_registry_account_identity_missing_or_mismatched")
-        disposition = self._manual_disposition(events, account)
-        return {"registered": bool(rows), "account_key": account,
-                "disposition_hash": disposition["event_hash"] if disposition else "",
-                "effective_at": disposition["observed_at_kst"] if disposition else "",
-                "registry_path": str(self.path)}
+        with self._native_projection_lock:
+            identity = (str(self.path.absolute()), self._journal_identity())
+            if identity != self._native_projection_signature:
+                self._native_projection_signature = None
+                events = self._read_locked()
+                accounts = {}
+                for row in self._state(events).values():
+                    accounts.setdefault(row.get('symbol'), set()).add(row.get('account_key'))
+                if identity != (str(self.path.absolute()), self._journal_identity()):
+                    raise OwnerRegistryConflict('owner_registry_changed_during_read')
+                self._native_projection_accounts = {s: frozenset(v) for s, v in accounts.items()}
+                self._native_projection_manual_events = tuple(copy.deepcopy(row) for row in events
+                    if row.get('event') == 'RETIRED_OWNERS_MANUAL_MANAGEMENT')
+                self._native_projection_disposition = {}
+                self._native_projection_signature = identity
+            account = broker_account_key()
+            rows = self._native_projection_accounts.get(clean, frozenset())
+            if rows and account not in rows:
+                raise OwnerRegistryConflict("owner_registry_account_identity_missing_or_mismatched")
+            if account not in self._native_projection_disposition:
+                disposition = self._manual_disposition(self._native_projection_manual_events, account)
+                # Bound account churn without retaining mutable journal rows.
+                if len(self._native_projection_disposition) >= 16:
+                    self._native_projection_disposition.clear()
+                self._native_projection_disposition[account] = (
+                    disposition['event_hash'], disposition['observed_at_kst']) if disposition else ('', '')
+            disposition_hash, effective_at = self._native_projection_disposition[account]
+            if identity != (str(self.path.absolute()), self._journal_identity()):
+                raise OwnerRegistryConflict('owner_registry_changed_during_read')
+            return {"registered": bool(rows), "account_key": account,
+                    "disposition_hash": disposition_hash, "effective_at": effective_at,
+                    "registry_path": str(self.path)}
 
     def unresolved_intent_summary(
         self,

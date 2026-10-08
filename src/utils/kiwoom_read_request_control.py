@@ -205,6 +205,7 @@ class SharedCandleRead:
                 and str(meta.get("last_http_status_code")) == "200"
                 and meta.get("read_rate_control_status") == "admitted"
                 and not meta.get("continuous_next_key_missing")
+                and not meta.get("continuous_page_limit_reached")
                 and not meta.get("rate_limit_detected")
                 and not meta.get("read_shared_cache_scope_changed")
                 and 0 <= now - started < 3 and started <= stamp <= now

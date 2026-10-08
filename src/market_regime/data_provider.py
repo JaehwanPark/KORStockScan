@@ -2,6 +2,35 @@ import pandas as pd
 import yfinance as yf
 
 
+class CNNFearGreedProvider:
+    """Package-compatible CNN projection with a consumer-owned memory cache.
+
+    Importing fear_and_greed installs a global SQLite requests patch. The
+    isolated adapter uses the same endpoint and score/rating/timestamp fields
+    without importing that package or modifying any global session factory.
+    """
+    URL = 'https://production.dataviz.cnn.io/index/fearandgreed/graphdata'
+
+    def __init__(self):
+        import threading
+        self._lock = threading.Lock()
+        self._session = None
+
+    def get(self):
+        from datetime import datetime
+        from types import SimpleNamespace
+        from requests_cache import CachedSession
+        with self._lock:
+            if self._session is None:
+                self._session = CachedSession(backend='memory', expire_after=60)
+            response = self._session.get(self.URL, headers={
+                'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/101.0.4951.67 Safari/537.36'})
+            response.raise_for_status()
+            values = response.json()['fear_and_greed']
+            return SimpleNamespace(value=values['score'], description=values['rating'],
+                                   last_update=datetime.fromisoformat(values['timestamp']))
+
+
 class YahooMarketDataProvider:
     VIX_TICKER = "^VIX"
     WTI_TICKER = "CL=F"

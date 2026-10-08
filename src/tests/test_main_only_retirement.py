@@ -294,3 +294,21 @@ def test_routed_postclose_and_runtime_share_native_identity_without_shell_execut
     if defect:
         with pytest.raises((ValueError,OSError)):native_custody_environment(tmp_path)
     else:assert native_custody_environment(tmp_path)==dict(KORSTOCKSCAN_BROKER_ACCOUNT_KEY='approved-account',KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH='/absolute/common-journal.jsonl')
+
+
+def test_native_custody_projection_reuses_only_verified_generation(registry, monkeypatch):
+    historical(registry)
+    state=registry._state;calls=[]
+    monkeypatch.setattr(registry,'_state',lambda events:calls.append(len(events)) or state(events))
+    first=registry.native_owner_contract('042660')
+    first['registered']=False
+    for _ in range(20): assert registry.native_owner_contract('042660')['registered'] is True
+    assert len(calls)==1
+    registry.retire_automatic_owners_to_manual()
+    value=registry.native_owner_contract('042660')
+    assert len(calls)==2 and value['disposition_hash']
+    monkeypatch.setenv('KORSTOCKSCAN_BROKER_ACCOUNT_KEY','other-account')
+    with pytest.raises(OwnerRegistryConflict):registry.native_owner_contract('042660')
+    monkeypatch.setenv('KORSTOCKSCAN_BROKER_ACCOUNT_KEY','retirement-test-account')
+    text=registry.path.read_text();registry.path.write_text(text.replace('042660','042661'))
+    with pytest.raises(OwnerRegistryConflict,match='hash_invalid'):registry.native_owner_contract('042660')

@@ -375,6 +375,7 @@ def enrich_investor_source(
     request_code: str | None,
     ws_data: dict[str, Any] | None,
     observed_at: float,
+    entry_budget=None,
 ) -> dict[str, Any]:
     """Attach one null-aware ka10059 observation without changing AI authority."""
 
@@ -387,7 +388,11 @@ def enrich_investor_source(
 
     api_code = str(request_code or stock_code or "").strip()
     try:
+        if entry_budget is not None:
+            entry_budget.require()
         investor_df = kiwoom_utils.get_investor_daily_ka10059_df(token, api_code)
+        if entry_budget is not None:
+            entry_budget.require()
         if investor_df is None or investor_df.empty:
             enriched["investor_missing_reason"] = "ka10059_empty_response"
             return enriched
@@ -395,6 +400,8 @@ def enrich_investor_source(
             token,
             api_code,
         )
+        if entry_budget is not None:
+            entry_budget.require()
         latest_index = investor_df.index[-1]
         enriched["investor_context"] = {
             **investor_context,
@@ -430,6 +437,8 @@ def enrich_investor_source(
             * 1000.0
         )
     except Exception as exc:
+        if isinstance(exc, ValueError) and str(exc).startswith('entry_machine_input_deadline_'):
+            raise
         enriched["investor_missing_reason"] = f"ka10059_error:{type(exc).__name__}"
     return enriched
 

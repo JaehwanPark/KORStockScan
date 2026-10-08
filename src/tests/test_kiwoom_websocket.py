@@ -4610,3 +4610,25 @@ def test_dashboard_preserves_main_projection_without_retired_research(monkeypatc
     manager._maybe_write_dashboard_snapshot()
     assert not manager._dashboard_snapshot_write_inflight
     assert 'episode_research_capture' not in frames[0]['shared_transport_producer']
+
+
+def test_frozen_history_keeps_full_tape_and_copies_mutable_children():
+    from src.engine.infrastructure.snapshot_copy import freeze_history,materialize_history
+    from collections import deque
+    from types import SimpleNamespace
+    manager=KiwoomWSManager('offline-token')
+    target=manager._ensure_target_defaults('005930')
+    target['recent_trade_ticks']=deque((freeze_history(dict(price=i,volume=1,
+        nested=[{'value':i}],extra=SimpleNamespace(value=i))) for i in range(500)),maxlen=500)
+    frozen=manager._snapshot_target(target,_defer_finish=True)
+    raw=materialize_history(frozen['recent_trade_ticks'])
+    assert isinstance(raw,deque) and raw.maxlen==500
+    target['recent_trade_ticks'].appendleft(freeze_history({'price':999}))
+    first=manager._finish_snapshot(frozen)
+    second=manager._finish_snapshot(dict(frozen))
+    assert isinstance(first['recent_trade_ticks'],list) # Existing final consumer normalization.
+    assert len(first['recent_trade_ticks'])==500 and first['recent_trade_ticks'][0]['price']==0
+    first['recent_trade_ticks'][0]['nested'][0]['value']=999
+    first['recent_trade_ticks'][0]['extra'].value=999
+    assert second['recent_trade_ticks'][0]['nested'][0]['value']==0
+    assert second['recent_trade_ticks'][0]['extra'].value==0

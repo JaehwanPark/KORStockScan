@@ -673,6 +673,28 @@ class OpenAIWSRequestIdMismatchError(RuntimeError):
 
 
 @dataclass
+class OpenAITransportObservation:
+    """Local stage facts, never reservation release or proof of network delivery."""
+    stages: dict = field(default_factory=dict)
+    mutex: Any = field(default_factory=threading.Lock, repr=False)
+
+    def mark(self, stage):
+        with self.mutex:
+            self.stages.setdefault(stage, time.time())
+
+    def fields(self):
+        with self.mutex:
+            stages = dict(self.stages)
+        sdk = 'sdk_started' in stages
+        response = 'response_received' in stages
+        return dict(provider_stage_epochs=stages,
+                    provider_adapter_entered='adapter_entered' in stages,
+                    provider_sdk_started=sdk, provider_response_received=response,
+                    provider_physical_transmission='response_confirmed' if response else 'unknown' if sdk else 'not_observed',
+                    provider_called=True if sdk else False if 'adapter_entered' in stages else None)
+
+
+@dataclass
 class OpenAIResponseRequest:
     prompt: str | None
     user_input: str
@@ -692,6 +714,7 @@ class OpenAIResponseRequest:
     metadata: dict[str, str] = field(default_factory=dict)
     response_schema_override: dict[str, Any] | None = None
     caller_deadline_perf: float | None = None
+    transport_observation: OpenAITransportObservation | None = None
 
     @property
     def deadline_perf(self) -> float:
@@ -1079,6 +1102,8 @@ class GPTSniperEngine:
         self.min_interval = getattr(TRADING_RULES, "GPT_ENGINE_MIN_INTERVAL", 0.5)
         self.consecutive_failures = 0
         self.ai_disabled = False
+        from src.engine.monitoring.runtime_performance import observe_ai_circuit
+        observe_ai_circuit(failures=self.consecutive_failures, disabled=self.ai_disabled)
         self.max_consecutive_failures = getattr(
             TRADING_RULES, "AI_MAX_CONSECUTIVE_FAILURES", 5
         )
@@ -2197,6 +2222,8 @@ class GPTSniperEngine:
 
     def _mark_successful_ai_call(self, *, update_last_call_time=True):
         self.consecutive_failures = 0
+        from src.engine.monitoring.runtime_performance import observe_ai_circuit
+        observe_ai_circuit(failures=self.consecutive_failures, disabled=self.ai_disabled)
         if update_last_call_time:
             self.last_call_time = time.time()
 
@@ -2209,6 +2236,8 @@ class GPTSniperEngine:
                 f"🚨 OpenAI 엔진 비활성화 (연속 실패 {failure_count}회 초과, "
                 f"API키 인덱스 {self.current_api_key_index}, context={context_name})"
             )
+        from src.engine.monitoring.runtime_performance import observe_ai_circuit
+        observe_ai_circuit(failures=self.consecutive_failures, disabled=self.ai_disabled)
         return failure_count
 
     def _resolve_scalping_prompt(self, prompt_profile, *, prompt_version_override=None):
@@ -4805,7 +4834,12 @@ class GPTSniperEngine:
             started = time.perf_counter()
             observe('provider_key_wait', max(0., started-request.submitted_at_perf))
             try:
-                return client.responses.create(**provider_payload, timeout=physical_remaining)
+                if request.transport_observation is not None:
+                    request.transport_observation.mark('sdk_started')
+                response = client.responses.create(**provider_payload, timeout=physical_remaining)
+                if request.transport_observation is not None:
+                    request.transport_observation.mark('response_received')
+                return response
             finally:
                 observe('provider_transport', time.perf_counter()-started)
         future = self._get_http_deadline_executor().submit(transmit)
@@ -4942,6 +4976,13 @@ class GPTSniperEngine:
                 last_provider_future_cancelled = bool(
                     getattr(e, "future_cancelled", False)
                 )
+                if (isinstance(e, OpenAIHTTPWallClockDeadlineError)
+                        and e.future_cancelled
+                        and request.transport_observation is not None
+                        and not request.transport_observation.fields()['provider_sdk_started']):
+                    # A cancelled, unsent entry cannot benefit from key retries.
+                    # Preserve the typed cause across the adapter boundary.
+                    raise
                 if self._is_invalid_prompt_error(e) and not invalid_prompt_retried:
                     if (request.metadata or {}).get('auxiliary_registry_sha256'):
                         raise ValueError('registered_auxiliary_prompt_rewrite_forbidden') from e
@@ -5102,8 +5143,11 @@ class GPTSniperEngine:
         response_schema_override=None,
         auxiliary_registry_sha256=None,
         caller_deadline_perf=None,
+        transport_observation=None,
     ):
         """Responses API HTTP/WS transport와 예외 처리를 전담하는 중앙 호출기."""
+        if transport_observation is not None:
+            transport_observation.mark('adapter_entered')
         metadata = dict(metadata_extra or {})
         selected_prompt_version = str(
             metadata.get("entry_setup_live_policy_selected_prompt_version")
@@ -5178,6 +5222,7 @@ class GPTSniperEngine:
             timeout_ms_override=timeout_ms_override,
         )
         request.caller_deadline_perf = caller_deadline_perf
+        request.transport_observation = transport_observation
         if request.remaining_timeout_sec() <= 0:
             raise OpenAIHTTPWallClockDeadlineError("OpenAI deadline exhausted before capture", future_cancelled=True)
         if not compact_auxiliary_call and self._uses_openai_primary_bedrock_fallback(
@@ -8708,6 +8753,7 @@ class GPTSniperEngine:
             prompt_profile = "watching"
         economic_source_fields = {}
         analysis_started = time.perf_counter()
+        transport_observation = None
         from src.engine.scalping.entry_deadline import EntryDeadline
         entry_budget = EntryDeadline.create(reversal_signal_claim, entry_input_deadline_epoch, entry_input_deadline_perf)
         if entry_budget is not None:
@@ -9205,6 +9251,8 @@ class GPTSniperEngine:
             merged.update(machine_input_fields)
             for key, value in machine_policy_trace_fields.items():
                 merged.setdefault(key, value)
+            if transport_observation is not None:
+                merged.update(transport_observation.fields())
             return merged
 
         candle_preflight = ai_input_preflight(candle_context)
@@ -10563,7 +10611,6 @@ class GPTSniperEngine:
                     if assessment.get('policy_version')=='continuous_reversal_policy_v6':
                         from src.engine.scalping.continuous_reversal_policy_v6 import validate_active_claim
                     from src.engine.scalping.reversal_auxiliary_intraday import validate_decision
-                    validate_decision(DATA_DIR, entry_setup_live_policy, active, now=time.time())
                     if assessment.get('auxiliary_registry_sha256'):
                         from src.engine.scalping.reversal_auxiliary_registry import load as load_auxiliary_registry
                         registered=load_auxiliary_registry(DATA_DIR,assessment['auxiliary_registry_sha256'])
@@ -10571,6 +10618,9 @@ class GPTSniperEngine:
                             raise ValueError('auxiliary_registered_model_mismatch')
                     try:
                         remaining=validate_active_claim(entry_setup_live_policy,active,now=time.time())
+                        if set(remaining)!=set(assessment['matched_policy_refs']):
+                            raise ValueError('reversal_request_signal_set_changed_before_send')
+                        validate_decision(DATA_DIR, entry_setup_live_policy, active, now=time.time())
                     except ValueError as exc:
                         # Only native eligibility endings from this validator
                         # are neutral to the provider circuit. Unknown errors,
@@ -10583,6 +10633,8 @@ class GPTSniperEngine:
                             'reversal_all_signals_invalidated',
                             'reversal_all_requested_signals_invalidated',
                             'reversal_scope_execution_changed',
+                            'reversal_request_signal_set_changed_before_send',
+                            'auxiliary_decision_generation_revoked',
                         }:
                             raise
                         return self._annotate_analysis_result(
@@ -10599,8 +10651,6 @@ class GPTSniperEngine:
                             parse_ok=False, parse_fail=False, fallback_score_50=False,
                             cache_hit=False, cache_mode='miss', result_source='native_signal_invalidated',
                             input_contract_fields=input_contract_fields)
-                    if set(remaining)!=set(assessment['matched_policy_refs']):
-                        raise ValueError('reversal_request_signal_set_changed_before_send')
                 else:
                     if not active or active['bundle_sha256']!=entry_setup_live_policy['machine_bundle_sha256']:
                         raise ValueError('reversal_policy_changed_before_provider')
@@ -10609,9 +10659,11 @@ class GPTSniperEngine:
                     entry_budget.require()
                 request_identity=digest([assessment['signal_id'],prompt_version,replay_context,prompt,reversal_schema,assessment.get('auxiliary_wire_contract'),assessment.get('auxiliary_wire_hashes')]) if assessment.get('auxiliary_wire_contract') else digest([assessment['signal_id'],prompt_version,replay_context,prompt,reversal_schema])
                 if assessment.get('policy_version') in {'continuous_reversal_policy_v5','continuous_reversal_policy_v6'}:
+                    transport_observation = OpenAITransportObservation()
                     from src.engine.scalping.reversal_operating_outbox import reserve
                     reserve_started_perf = time.perf_counter()
                     reserve(DATA_DIR,assessment,request_identity)
+                    transport_observation.mark('reserved')
                     from src.engine.monitoring.runtime_performance import observe
                     observe('provider_reserve', time.perf_counter()-reserve_started_perf)
                     from src.engine.monitoring.runtime_performance import mark_signal
@@ -10664,6 +10716,7 @@ class GPTSniperEngine:
                     if entry_budget is not None and is_scalping_entry_call
                     else getattr(TRADING_RULES,"OPENAI_SCALPING_ENTRY_TIMEOUT_MS",5000) if is_scalping_entry_call else None),
                 caller_deadline_perf=entry_budget.perf if entry_budget is not None else None,
+                **({'transport_observation': transport_observation} if transport_observation is not None else {}),
                 replay_context=replay_context,
                 **({'response_schema_override': reversal_schema,
                     'auxiliary_registry_sha256': entry_setup_live_policy.get('continuous_reversal_assessment',{}).get('auxiliary_registry_sha256')}
@@ -10683,6 +10736,7 @@ class GPTSniperEngine:
                 self._set_last_transport_meta(received_meta)
                 advance(DATA_DIR,entry_setup_live_policy['continuous_reversal_assessment']['opportunity_key'],
                     'response_received',binding=dict(response=result,request_sha256=request_identity,
+                        **(transport_observation.fields() if transport_observation is not None else {}),
                         **({'provider_receipt':{k:v for k,v in received_meta.items() if k in
                             ('openai_response_id','openai_response_sha256','auxiliary_raw_output_bytes_b64','auxiliary_response_status','auxiliary_provider_request')}}
                            if entry_setup_live_policy['continuous_reversal_assessment'].get('auxiliary_wire_contract') else {})))
@@ -10820,6 +10874,8 @@ class GPTSniperEngine:
                 result_source="live",
                 input_contract_fields=input_contract_fields,
             )
+            if transport_observation is not None:
+                result.update(transport_observation.fields())
             if entry_setup_live_policy.get('continuous_reversal_input') and provider_attempted:
                 from src.engine.monitoring.runtime_performance import observe
                 observe('response_validate', time.perf_counter()-validation_started_perf)
@@ -10833,12 +10889,17 @@ class GPTSniperEngine:
             return result
 
         except Exception as e:
-            if isinstance(e, ValueError) and str(e).startswith('entry_machine_input_deadline_'):
+            stage_fields = transport_observation.fields() if transport_observation is not None else {}
+            unsent_entry_timeout = (transport_observation is not None
+                and stage_fields['provider_adapter_entered'] and not stage_fields['provider_sdk_started']
+                and isinstance(e, OpenAIHTTPWallClockDeadlineError)
+                and e.future_cancelled)
+            if unsent_entry_timeout or (isinstance(e, ValueError) and str(e).startswith('entry_machine_input_deadline_')):
                 return {"action":"WAIT", "score":50, "reason":str(e),
                         "provider_called":bool(provider_attempted),
                         "ai_result_source":"entry_deadline_expired",
                         "actual_order_submitted":False, "broker_order_forbidden":True,
-                        **machine_capture}
+                        **machine_capture, **stage_fields}
             failure_count = self._record_failure_and_maybe_disable(
                 context_name=f"{target_name}({strategy}:{prompt_type})"
             )
@@ -10974,6 +11035,7 @@ class GPTSniperEngine:
             else:
                 fallback_payload["openai_local_failure_reason"] = str(e)[:240]
             fallback_payload = _merge_runtime_fields(fallback_payload)
+            fallback_payload.update(stage_fields)
             try:
                 fallback_score_50 = float(fallback_payload.get("score")) == 50.0
             except Exception:

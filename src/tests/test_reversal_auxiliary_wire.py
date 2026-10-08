@@ -72,7 +72,8 @@ def test_live_sdk_exact_contract(tmp_path,monkeypatch):
 
 
 @pytest.mark.parametrize('response_kind',['completed','incomplete','truncated','unknown_alias','refusal',
-    'native_path','native_expired','native_generation','native_all_invalid','unknown_native','provider_error'])
+    'native_path','native_expired','native_generation','native_all_invalid','unknown_native','provider_error',
+    'unsent_budget','timeout_native_mix','revoked'])
 def test_full_analyze_target_records_raw_then_decodes(tmp_path,monkeypatch,response_kind):
     """Controlled native machine source; exercise the real entry/provider consumer."""
     import time
@@ -112,6 +113,8 @@ def test_full_analyze_target_records_raw_then_decodes(tmp_path,monkeypatch,respo
     raw=dict(assessed={env['citation_map'][s['ref']]:True for s in inp['signals']},screen=dict(verdict='PASS',risk='NO_BLOCKING_RISK',fact=env['citation_map']['observed_machine_signal']),confidence=55)
     def create(**kwargs):
         calls.append(kwargs)
+        if response_kind=='provider_error': raise RuntimeError('provider_transport_failure')
+        if response_kind=='timeout_native_mix': raise TimeoutError('offline provider timeout')
         output=json.dumps(raw)
         if response_kind=='truncated':output='{"assessed":'
         if response_kind=='refusal':output=''
@@ -127,16 +130,43 @@ def test_full_analyze_target_records_raw_then_decodes(tmp_path,monkeypatch,respo
         def reject(*args,**kw):raise ValueError(native_errors[response_kind])
         monkeypatch.setattr(V,'validate_active_claim',reject)
         engine.consecutive_failures=1
-    elif response_kind=='provider_error':
-        def reject(*args,**kw):raise RuntimeError('provider_transport_failure')
-        monkeypatch.setattr(engine,'_call_openai_safe',reject)
-    count=4 if response_kind=='unknown_native' else 5 if response_kind in native_errors or response_kind=='provider_error' else 1
-    for _ in range(count):
+    elif response_kind=='unsent_budget':
+        engine.consecutive_failures=1
+        def reject(*args,**kw):raise E.OpenAIHTTPWallClockDeadlineError('unsent queue budget',future_cancelled=True)
+        monkeypatch.setattr(engine,'_create_openai_response_with_deadline',reject)
+    elif response_kind=='revoked':
+        engine.consecutive_failures=1
+        def reject(*args,**kw):raise ValueError('auxiliary_decision_generation_revoked')
+        monkeypatch.setattr(I,'validate_decision',reject)
+    sequence=['timeout','native','native','timeout','native'];step=[0]
+    if response_kind=='timeout_native_mix':
+        def mixed(*args,**kw):
+            if sequence[step[0]]=='native':raise ValueError('reversal_signal_path_changed')
+            return a['matched_policy_refs']
+        monkeypatch.setattr(V,'validate_active_claim',mixed)
+    count=4 if response_kind=='unknown_native' else 5 if response_kind in native_errors or response_kind in {'provider_error','unsent_budget','timeout_native_mix','revoked'} else 1
+    for index in range(count):
+        step[0]=index
         snap[0]['epoch']=time.time()
+        if response_kind in {'provider_error','unsent_budget','timeout_native_mix'}:
+            a['opportunity_key']=P.digest(['independent_test_point',index])
+            a['signal_id']=P.digest(['independent_test_signal',index])
         result=engine.analyze_target('test',_sample_ws_data(),_sample_ticks(),_sample_candles(),strategy='SCALPING',prompt_profile='watching',
             candle_context=_allowed_entry_candle_context(),reversal_signal_claim={'snapshot':snap,'token':'native-test'})
+    if response_kind in {'unsent_budget','timeout_native_mix','revoked'}:
+        assert result['action']!='BUY' and not engine.ai_disabled
+        assert engine.consecutive_failures==(2 if response_kind=='timeout_native_mix' else 1)
+        # Two provider failures retain the existing two-key retry allowance;
+        # the three intervening native rejects neither increment nor reset it.
+        assert len(calls)==(4 if response_kind=='timeout_native_mix' else 0)
+        if response_kind=='unsent_budget':
+            assert result['provider_adapter_entered'] and not result['provider_sdk_started']
+            assert result['provider_called'] is False
+            records=list((tmp_path/'runtime/initial_quantity/operating_opportunities').glob('*.json'))
+            assert len(records)==5 and all(json.loads(p.read_text())['state']=='transmission_uncertain' for p in records)
+        return
     if response_kind in native_errors or response_kind=='provider_error':
-        assert not calls and result['action']!='BUY'
+        assert len(calls)==(5 if response_kind=='provider_error' else 0) and result['action']!='BUY'
         if response_kind in native_errors and response_kind!='unknown_native':
             assert engine.consecutive_failures==1 and not engine.ai_disabled
             assert result['provider_called'] is False
@@ -146,6 +176,8 @@ def test_full_analyze_target_records_raw_then_decodes(tmp_path,monkeypatch,respo
             assert engine.consecutive_failures==5 and engine.ai_disabled
         return
     assert len(calls)==1,result
+    assert result['provider_sdk_started'] and result['provider_response_received']
+    assert result['provider_physical_transmission']=='response_confirmed'
     request_rows=[json.loads(line) for path in (tmp_path/'ai_decision_requests').glob('*.jsonl') for line in path.read_text().splitlines()]
     assert len(request_rows)==1
     assert request_rows[0]['continuous_reversal_request_binding']['binding_status']=='matched'

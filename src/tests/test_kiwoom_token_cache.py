@@ -351,8 +351,10 @@ def test_auth_retry_handoff_prevents_repeated_first_attempt_8005(monkeypatch, tm
         payload={},
     )
 
-    assert first == [{"return_code": "0", "rows": [{"request": 1}]}]
-    assert second == [{"return_code": "0", "rows": [{"request": 2}]}]
+    for result,api_id,request in ((first,'ka10004',1),(second,'ka10084',2)):
+        row=dict(result[0]);meta=row.pop('_kiwoom_source_meta')
+        assert row=={'return_code':'0','rows':[{'request':request}]}
+        assert meta['api_id']==api_id and meta['rest_received_ts_ms']>0
     assert [headers["authorization"] for headers in posts] == [
         "Bearer STARTUP_TOKEN",
         "Bearer FRESH_TOKEN",

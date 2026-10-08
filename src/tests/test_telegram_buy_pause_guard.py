@@ -2,6 +2,48 @@ import sys
 import types
 
 
+def test_actual_telegram_sender_uses_plain_thread_sessions_and_existing_retries(monkeypatch):
+    import ast, json, logging, threading
+    from pathlib import Path
+    from requests.exceptions import Timeout
+    import telebot.apihelper as api
+    import requests_cache.session as cache
+    created=[];calls=[];fail=[True]
+    class Plain:
+        def __init__(self):created.append(self)
+        def close(self):pass
+        def request(self,method,url,**kwargs):
+            calls.append((threading.get_ident(),self,kwargs['params'].copy()))
+            if fail[0]:
+                fail[0]=False
+                raise Timeout('offline first attempt')
+            body={'ok':True,'result':[{'update_id':kwargs['params'].get('offset',0)}]}
+            return types.SimpleNamespace(status_code=200,text=json.dumps(body),json=lambda:body)
+    monkeypatch.setattr(cache,'OriginalSession',Plain)
+    monkeypatch.setattr(api,'RETRY_TIMEOUT',0)
+    monkeypatch.setattr(api,'SESSION_TIME_TO_LIVE',0)
+    monkeypatch.setattr(api,'RETRY_ENGINE',1)
+    monkeypatch.setattr(api,'MAX_RETRIES',15)
+    monkeypatch.setattr(api,'CUSTOM_REQUEST_SENDER',None)
+    monkeypatch.setattr(api,'RETRY_ON_ERROR',True)
+    monkeypatch.setattr(api,'CONNECT_TIMEOUT',api.CONNECT_TIMEOUT)
+    monkeypatch.setattr(api,'READ_TIMEOUT',api.READ_TIMEOUT)
+    tree=ast.parse(Path('src/notify/telegram_manager.py').read_text())
+    node=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='_configure_telebot_http')
+    namespace={'logging':logging,'log_info':lambda *a:None}
+    exec(compile(ast.Module(body=[node],type_ignores=[]),'<actual-telegram-setup>','exec'),namespace)
+    namespace['_configure_telebot_http']()
+    def poll():
+        for offset in (1,2):
+            r=api._make_request('0:offline','getUpdates',params={'offset':offset,'long_polling_timeout':20})
+            assert r[0]['update_id']==offset
+    thread=threading.Thread(target=poll);thread.start();thread.join()
+    api._make_request('0:offline','sendMessage',params={'offset':3})
+    assert len(calls)==4 and len(created)==3 # One existing retry; no adapter retry multiplication.
+    assert len({id(c[1]) for c in calls[:3]})==2
+    assert calls[-1][1] not in [c[1] for c in calls[:3]]
+
+
 def _install_telebot_stub(monkeypatch):
     telebot_module = types.ModuleType("telebot")
 

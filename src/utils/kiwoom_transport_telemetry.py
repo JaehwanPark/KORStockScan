@@ -24,6 +24,9 @@ _MINUTES = OrderedDict()
 _MINUTE_LIMIT = 512
 _KST = ZoneInfo('Asia/Seoul')
 _LOCAL = local()
+_TOTAL = Counter()
+_EVICTED_MINUTES = Counter()
+_DETAIL_LOSS = Counter()
 _RELEASE_ROOT = str(Path(__file__).resolve().parents[2])
 try:
     _PROCESS_START_TICKS = Path('/proc/self/stat').read_text().rsplit(')', 1)[1].split()[19]
@@ -34,7 +37,7 @@ except (OSError, IndexError):
 def demand(api_id, source):
     with _LOCK:
         key = (str(api_id)[:16], str(source)[:40])
-        if key not in _DEMAND and len(_DEMAND) >= _LIMIT:
+        if key not in _DEMAND and len(_DEMAND) >= _LIMIT - 1:
             key = ('overflow', 'unknown')
         _DEMAND[key] += 1
 
@@ -67,22 +70,29 @@ def measured_http_call(call, url, *, telemetry_owner, telemetry_class='runtime_r
     started_kst = datetime.fromtimestamp(started, _KST)
     perf = time.perf_counter()
     with _LOCK:
-        if key not in _COUNTS and len(_COUNTS) >= _LIMIT:
-            key = (kind, 'overflow', 'unknown', 'unknown', 'not_applicable', 'unknown')
+        if key not in _COUNTS and len(_COUNTS) >= _LIMIT - 1:
+            _DETAIL_LOSS['coarse_key_overflow_attempts'] += 1
+            key = ('unknown', 'overflow', 'unknown', 'unknown', 'not_applicable', 'unknown')
         counts = _COUNTS.setdefault(key, Counter())
         minute_key = (started_kst.strftime('%Y-%m-%dT%H:%M'), key)
         minute = _MINUTES.setdefault(minute_key, Counter())
         if len(_MINUTES) > _MINUTE_LIMIT:
-            _MINUTES.popitem(last=False)
+            _, evicted = _MINUTES.popitem(last=False)
+            _EVICTED_MINUTES.update(evicted)
+            _DETAIL_LOSS['minute_key_evictions'] += 1
         _SERIAL += 1
         attempt = f'{os.getpid()}:{_START:.6f}:{_SERIAL}'
         counts['started'] += 1
+        _TOTAL['started'] += 1
         minute['started'] += 1
         record = dict(attempt_id=attempt, logical_id=telemetry_logical_id,
             started_epoch=started, started_kst_date=started_kst.date().isoformat(),
             process_start_ticks=_PROCESS_START_TICKS, release_root=_RELEASE_ROOT,
             request_code=code, route=route,
             session='unknown_at_transport', kind=kind, api_id=api, owner=key[2], outcome='inflight_unknown')
+        if len(_RECENT) == _RECENT.maxlen:
+            _DETAIL_LOSS['recent_attempt_evictions'] += 1
+            _DETAIL_LOSS['recent_inflight_evictions'] += _RECENT[0]['outcome'] == 'inflight_unknown'
         _RECENT.append(record)
     outcome = 'exception'
     status = None
@@ -99,8 +109,15 @@ def measured_http_call(call, url, *, telemetry_owner, telemetry_class='runtime_r
         with _LOCK:
             counts['terminal'] += 1
             counts[outcome] += 1
-            minute['terminal'] += 1
-            minute[outcome] += 1
+            _TOTAL['terminal'] += 1
+            _TOTAL[outcome] += 1
+            if _MINUTES.get(minute_key) is minute:
+                minute['terminal'] += 1
+                minute[outcome] += 1
+            else:
+                _EVICTED_MINUTES['terminal'] += 1
+                _EVICTED_MINUTES[outcome] += 1
+                _DETAIL_LOSS['late_terminal_after_minute_eviction'] += 1
             record.update(completed_epoch=time.time(),outcome=outcome,http_status=status,
                           elapsed_sec=round(time.perf_counter()-perf,6),
                           body_return_code='unknown_at_transport', response_bytes='unknown_at_transport')
@@ -135,6 +152,10 @@ def snapshot():
             recent_attempts=[dict(r) for r in _RECENT], decision_authority='none',
             counting_basis='physical_client_start_not_server_receipt',
             terminal_equation='started=terminal+inflight_unknown',
+            cumulative_totals=dict(_TOTAL, inflight_unknown=_TOTAL['started']-_TOTAL['terminal']),
+            evicted_minute_totals=dict(_EVICTED_MINUTES), detail_loss=dict(_DETAIL_LOSS),
+            minute_coverage='lower_bound_with_evictions' if _DETAIL_LOSS['minute_key_evictions'] else 'complete',
+            reset_identity=f'{os.getpid()}:{_PROCESS_START_TICKS}:{_START:.6f}',
             retained_attempt_limit=128, bucket_limit=_LIMIT, minute_bucket_limit=_MINUTE_LIMIT,
             unobserved_dimensions=['server_receipt','session_at_transport','undecoded_response_body'],
             admission_source='existing_kiwoom_read_request_control_receipts')

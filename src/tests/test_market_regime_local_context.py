@@ -5,6 +5,28 @@ from src.market_regime.schemas import MarketRegimeSnapshot
 from src.market_regime import service as service_mod
 
 
+def test_cnn_adapter_preserves_fields_without_global_cache(monkeypatch):
+    import requests
+    import importlib
+    from types import SimpleNamespace
+    from src.market_regime.data_provider import CNNFearGreedProvider
+    original=(requests.Session,requests.sessions.Session)
+    importlib.reload(service_mod)
+    assert (requests.Session,requests.sessions.Session)==original
+    adapter=CNNFearGreedProvider()
+    adapter._session=SimpleNamespace(get=lambda *a,**k:SimpleNamespace(
+        raise_for_status=lambda:None,json=lambda:{'fear_and_greed':dict(score=64.5,rating='greed',timestamp='2026-10-08T00:00:00+00:00')}))
+    v=adapter.get()
+    assert (v.value,v.description,v.last_update.isoformat())==(64.5,'greed','2026-10-08T00:00:00+00:00')
+    monkeypatch.setattr(service_mod,'fear_and_greed',adapter)
+    service=object.__new__(service_mod.MarketRegimeService)
+    service._snapshot=_snapshot()
+    assert service._fetch_fear_and_greed_data()['previous_value']==40.
+    adapter._session=SimpleNamespace(get=lambda *a,**k: (_ for _ in ()).throw(TimeoutError('offline')))
+    fallback=service._fetch_fear_and_greed_data()
+    assert fallback['source']=='cached_fallback' and fallback['value']==40.
+
+
 def _snapshot(score: int = 35) -> MarketRegimeSnapshot:
     return MarketRegimeSnapshot(
         timestamp=datetime(2026, 5, 12, 8, 30),

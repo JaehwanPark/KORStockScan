@@ -24,6 +24,8 @@ _TOTAL = {name: 0 for name in _NAMES}
 _BOUNDS = (.01, .05, .1, .25, .5, 1., 1.5, 2., 3., 5., 10., float('inf'))
 _HIST = {name: [0]*len(_BOUNDS) for name in _NAMES}
 _OVER5 = {name: 0 for name in _NAMES}
+_UNDER5 = {name: 0 for name in _NAMES}
+_AT_MOST2 = {name: 0 for name in _NAMES}
 _READY = OrderedDict()
 _COVERAGE = {kind: {'ready':0,'claimed':0} for kind in ('fixed_watch','other')}
 _TIMELINES = deque(maxlen=128)
@@ -31,6 +33,13 @@ _GENERATION = None
 _STARTED = time.time()
 _SIGNALS = OrderedDict()
 _FAILURES = OrderedDict()
+_CIRCUIT = {'state':'not_observed'}
+
+
+def observe_ai_circuit(*, failures, disabled):
+    with _LOCK:
+        _CIRCUIT.update(state='disabled' if disabled else 'enabled',
+                        consecutive_failures=int(failures), observed_epoch=time.time())
 
 
 def failure(stage, reason):
@@ -113,17 +122,23 @@ def observe(name, seconds, *, generation=None):
                 _TOTAL[key] = 0
                 _HIST[key] = [0]*len(_BOUNDS)
                 _OVER5[key] = 0
+                _UNDER5[key] = 0
+                _AT_MOST2[key] = 0
             _GENERATION = generation
             _STARTED = time.time()
         _SAMPLES[name].append(seconds)
         _TOTAL[name] += 1
         _OVER5[name] += seconds > 5
+        _UNDER5[name] += seconds < 5
+        _AT_MOST2[name] += seconds <= 2
         _HIST[name][next(i for i,b in enumerate(_BOUNDS) if seconds <= b)] += 1
         if name == 'loop_work':
             stage = 'loop_first' if _TOTAL[name] == 1 else 'loop_work_warm'
             _SAMPLES[stage].append(seconds)
             _TOTAL[stage] += 1
             _OVER5[stage] += seconds > 5
+            _UNDER5[stage] += seconds < 5
+            _AT_MOST2[stage] += seconds <= 2
             _HIST[stage][next(i for i,b in enumerate(_BOUNDS) if seconds <= b)] += 1
 
 
@@ -133,10 +148,12 @@ def snapshot():
         totals = dict(_TOTAL)
         hist = {k:list(v) for k,v in _HIST.items()}
         over5 = dict(_OVER5)
+        under5, at_most2 = dict(_UNDER5), dict(_AT_MOST2)
         coverage = {k:dict(v) for k,v in _COVERAGE.items()}
         timelines = list(_TIMELINES)
         inflight = {k:dict(v) for k,v in _SIGNALS.items()}
         generation, started = _GENERATION, _STARTED
+        circuit = dict(_CIRCUIT)
         failures = [dict(stage=k[0], reason=k[1], count=v[0]) for k, v in _FAILURES.items()]
     metrics = {}
     for name, values in samples.items():
@@ -148,12 +165,16 @@ def snapshot():
             max_seconds=max(values) if n else None,
             over_five_seconds=sum(v > 5 for v in values),
             cumulative_over_five_seconds=over5[name],
+            cumulative_under_five_seconds=under5[name],
+            cumulative_at_most_two_seconds=at_most2[name],
+            quantile_definition='nearest_rank_ceil_n_times_p',
             cumulative_histogram=dict(zip(('0.01','0.05','0.1','0.25','0.5','1','1.5','2','3','5','10','inf'),hist[name])),
             state='observed' if n else 'unobservable_or_not_invoked')
     return dict(schema='main_runtime_performance_v1', pid=os.getpid(),
         process_start_ticks=Path('/proc/self/stat').read_text().rsplit(')',1)[1].split()[19],
         cwd=os.getcwd(), code_root=str(Path(__file__).resolve().parents[3]),
         bundle_sha256=generation, started_epoch=started, observed_epoch=time.time(),
+        metric_reset_identity=f'{os.getpid()}:{started:.6f}:{generation}',
         metric_role='runtime_performance_diagnostic', decision_authority='none',
         window_policy='exact_pid_release_policy_scope_and_load_window',
         sample_floor='none_counts_and_unobservable_explicit',
@@ -162,6 +183,7 @@ def snapshot():
         forbidden_uses='policy_promotion_order_authority_or_economic_claim',
         signal_denominator='native_ready_seen_at_ingress_and_claimed_missing_joins_not_inferred',
         metrics=metrics, preparation_failures=failures,
+        ai_circuit=circuit,
         ready_coverage=coverage, ready_coverage_basis='native_ready_seen_at_ingress_not_all_market_opportunities',
         ready_coverage_window='process_lifetime_metrics_reset_on_policy_generation',
         recent_terminal_timelines=timelines, retained_signal_timelines=inflight)

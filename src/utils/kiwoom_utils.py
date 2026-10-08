@@ -12,10 +12,32 @@ import pandas as pd
 import numpy as np
 import holidays
 from contextlib import contextmanager
+from contextvars import ContextVar
 from copy import deepcopy
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
+
+_ENTRY_SOURCE_BUDGET = ContextVar('kiwoom_entry_source_budget', default=None)
+
+
+@contextmanager
+def entry_source_budget(budget):
+    """Bound only the existing entry worker's read work; never order/exit work."""
+    token = _ENTRY_SOURCE_BUDGET.set(budget)
+    try:
+        budget.require()
+        yield
+    finally:
+        _ENTRY_SOURCE_BUDGET.reset(token)
+
+
+def _source_budget_wait(seconds, budget):
+    if budget is not None:
+        budget.require()
+        if budget.remaining() <= seconds:
+            raise ValueError('entry_machine_input_deadline_expired')
+    time.sleep(seconds)
 
 try:
     import fcntl
@@ -5033,7 +5055,9 @@ def get_minute_candles_ka10080_with_meta(
     request_base_dt = str(base_dt or datetime.now().strftime("%Y%m%d")).strip()
     if len(request_base_dt) != 8 or not request_base_dt.isdigit():
         raise ValueError("base_dt must use YYYYMMDD")
-    cache_key = (str(req_code), int(limit), request_base_dt)
+    # The latest completed-minute cutoff is part of the source contract. A
+    # five-second cache must not cross a new completed bar or a clock rollback.
+    cache_key = (str(req_code), int(limit), request_base_dt, int(time.time() // 60))
     cache_key = (_market_data_cache_scope(token), cache_key)
     cached = _cache_get("ka10080_minutes_with_meta", cache_key)
     if cached is not None:
@@ -5114,6 +5138,10 @@ def get_minute_candles_ka10080_with_meta(
                 }
             )
 
+    if (not refined_candles or source_meta.get('truncated_window')
+            or source_meta.get('continuous_next_key_missing') or source_meta.get('rate_limit_detected')
+            or source_meta.get('read_rate_control_status') == 'deferred'):
+        return refined_candles, source_meta
     return _cache_set(
         "ka10080_minutes_with_meta",
         cache_key,
@@ -5188,6 +5216,9 @@ def fetch_kiwoom_api_continuous(
     Fresh execution-critical, account, quote, authentication and broker writes
     always retain their existing independent request path.
     """
+    budget = _ENTRY_SOURCE_BUDGET.get() if api_id.startswith('ka') else None
+    if budget is not None:
+        budget.require()
     kwargs = dict(
         url=url,
         token=token,
@@ -5226,6 +5257,7 @@ def fetch_kiwoom_api_continuous(
         "api_id": api_id,
         "payload": frozen_payload,
         "date": datetime.now(_KST).date().isoformat(),
+        **({"completed_minute_cutoff": int(time.time() // 60)} if api_id == 'ka10080' else {}),
         "request_class": request_class,
         "request_code": request_code,
         "max_retries": max_retries,
@@ -5248,6 +5280,8 @@ def fetch_kiwoom_api_continuous(
         if read_rate_max_wait_sec is None
         else float(read_rate_max_wait_sec)
     )
+    if budget is not None:
+        wait_sec = min(wait_sec, budget.remaining())
     try:
         def fetch_market_read():
             # The wire key excludes caller-side slicing (10 vs 120 bars) but
@@ -5267,6 +5301,7 @@ def fetch_kiwoom_api_continuous(
                     and 0 < meta["rest_received_ts_ms"] <= int(time.time() * 1000)
                     and meta.get("read_rate_control_status") == "admitted"
                     and not meta.get("continuous_next_key_missing")
+                    and not meta.get("continuous_page_limit_reached")
                     and not meta.get("rate_limit_detected")
                     and int(started // 60) == int(time.time() // 60)):
                 ttl = min(3.0, float(getattr(TRADING_RULES, "KIWOOM_MINUTE_CACHE_TTL_SEC", 3.0)))
@@ -5328,6 +5363,8 @@ def fetch_kiwoom_api_continuous(
             "request_owner": str(request_owner or f"kiwoom_utils.{api_id}"),
         }
     )
+    if budget is not None:
+        budget.require()
     if joined:
         transport_demand(api_id, "singleflight_follower_http0")
     return (results, meta) if return_meta else results
@@ -5382,6 +5419,7 @@ def _fetch_kiwoom_api_continuous_transport(
     pending_failed_token = ""
     body_rate_limit_retry_count = 0
     coordinator = read_rate_coordinator or _DEFAULT_KIWOOM_READ_COORDINATOR
+    budget = _ENTRY_SOURCE_BUDGET.get() if api_id.startswith('ka') else None
 
     while True:
         retry_count = 0
@@ -5393,6 +5431,8 @@ def _fetch_kiwoom_api_continuous_transport(
 
         # 💡 [핵심 방어] 429 에러 발생 시 백오프(Back-off) 후 재시도
         while retry_count < max_attempts:
+            if budget is not None:
+                budget.require()
             current_failure_logged = False
             current_failure_kind = ""
             current_failure_detail = ""
@@ -5405,7 +5445,10 @@ def _fetch_kiwoom_api_continuous_transport(
                 request_class=request_class,
                 api_id=api_id,
                 request_code=normalized_request_code,
-                max_wait_sec=read_rate_max_wait_sec,
+                max_wait_sec=(min(float(read_rate_max_wait_sec) if read_rate_max_wait_sec is not None
+                                  else DEFAULT_SOURCE_ONLY_MAX_WAIT_SEC if request_class == REQUEST_CLASS_SOURCE_ONLY
+                                  else DEFAULT_REQUIRED_MAX_WAIT_SEC, budget.remaining())
+                              if budget is not None else read_rate_max_wait_sec),
             )
             admission_meta = admission.as_dict()
             meta.update(
@@ -5457,6 +5500,12 @@ def _fetch_kiwoom_api_continuous_transport(
                 "next-key": next_key,
                 "api-id": api_id,
             }
+            effective_timeout = (KIWOOM_CONNECT_TIMEOUT_SEC, KIWOOM_READ_TIMEOUT_SEC) if request_timeout is None else request_timeout
+            if budget is not None:
+                budget.require()
+                remaining = budget.remaining()
+                effective_timeout = (tuple(min(float(v), remaining/2) for v in effective_timeout)
+                                     if isinstance(effective_timeout, tuple) else min(float(effective_timeout), remaining))
             try:
                 if api_id == "kt00011":
                     started_epoch = time.time()
@@ -5471,11 +5520,7 @@ def _fetch_kiwoom_api_continuous_transport(
                     telemetry_logical_id=meta["logical_request_id"],
                     headers=headers,
                     json=payload,
-                    timeout=(
-                        (KIWOOM_CONNECT_TIMEOUT_SEC, KIWOOM_READ_TIMEOUT_SEC)
-                        if request_timeout is None
-                        else request_timeout
-                    ),
+                    timeout=effective_timeout,
                 )
                 response_received_ts_ms = int(time.time() * 1000)
                 if api_id == "kt00011":
@@ -5512,7 +5557,7 @@ def _fetch_kiwoom_api_continuous_transport(
                     current_failure_logged = True
                     retry_count += 1
                     if retry_count < max_attempts:
-                        time.sleep(wait_sec)
+                        _source_budget_wait(wait_sec, budget)
                     else:
                         meta["rate_limit_retry_exhausted"] = True
                 elif 500 <= response.status_code < 600:
@@ -5525,7 +5570,7 @@ def _fetch_kiwoom_api_continuous_transport(
                     )
                     retry_count += 1
                     if retry_count < max_attempts:
-                        time.sleep(wait_sec)
+                        _source_budget_wait(wait_sec, budget)
                 else:
                     log_error(
                         "[KIWOOM_READ_TR_HTTP_FAILED] "
@@ -5547,7 +5592,7 @@ def _fetch_kiwoom_api_continuous_transport(
                 )
                 retry_count += 1
                 if retry_count < max_attempts:
-                    time.sleep(wait_sec)
+                    _source_budget_wait(wait_sec, budget)
             except requests.exceptions.ConnectTimeout:
                 wait_sec = min(2 * (retry_count + 1), 6)
                 current_failure_kind = "connect_timeout"
@@ -5558,7 +5603,7 @@ def _fetch_kiwoom_api_continuous_transport(
                 )
                 retry_count += 1
                 if retry_count < max_attempts:
-                    time.sleep(wait_sec)
+                    _source_budget_wait(wait_sec, budget)
             except requests.exceptions.ConnectionError:
                 wait_sec = min(2 * (retry_count + 1), 6)
                 current_failure_kind = "connection"
@@ -5567,7 +5612,7 @@ def _fetch_kiwoom_api_continuous_transport(
                 )
                 retry_count += 1
                 if retry_count < max_attempts:
-                    time.sleep(wait_sec)
+                    _source_budget_wait(wait_sec, budget)
             except Exception as e:
                 log_error(
                     "[KIWOOM_READ_TR_EXCEPTION] "
@@ -5641,7 +5686,7 @@ def _fetch_kiwoom_api_continuous_transport(
                 f"({body_rate_limit_retry_count}/{max_attempts})"
             )
             if body_rate_limit_retry_count < max_attempts:
-                time.sleep(wait_sec)
+                _source_budget_wait(wait_sec, budget)
                 response = None
                 continue
             meta["rate_limit_retry_exhausted"] = True
@@ -5659,6 +5704,8 @@ def _fetch_kiwoom_api_continuous_transport(
                     all_results.append(res_json)
                     break
                 auth_retry_used = True
+                if budget is not None:
+                    budget.require()
                 refreshed_token = get_kiwoom_token_after_auth_failure(
                     api_id=api_id,
                     failed_token=active_token,
@@ -5712,7 +5759,7 @@ def _fetch_kiwoom_api_continuous_transport(
             meta["continuous_page_limit_reached"] = True
             break
 
-        time.sleep(0.5)  # 연속조회 시 서버 배려를 위한 딜레이(실전서버)
+        _source_budget_wait(0.5, budget)  # 연속조회 시 서버 배려를 위한 딜레이(실전서버)
         # time.sleep(1.2)  # 연속조회 시 서버 배려를 위한 딜레이(모의투자서버)
 
     return (all_results, meta) if return_meta else all_results
