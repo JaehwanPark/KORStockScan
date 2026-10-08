@@ -288,3 +288,6 @@ B5b는 `adjusted_1` REST 역사와 `raw_same_day` WS tail의 동등성 미입증
 
 
 SOR 보완 후 관측한 59.550초 warm loop는 추가 실패 증거로 보존한다. 재현된 당일 3.1GB pipeline cold 조회를 byte block 검색으로 수리하고, 원 쿨다운 history의 cold 준비는 fast exit owner 시작 이후·Main entry evaluation 이전에 완료한다. 준비시간 자체는 별도 계측하며 행/순서/offset/gzip/partial-tail 및 기존 보호조건을 유지한다. 이후 tail은 원 incremental 경로를 사용한다. 이 변경으로 새 비교 원장이나 연구 호출을 생성하지 않는다.
+
+
+최종 구현·배포는 `main-bottleneck-compact-20261008-v9` / code `7edeffe34cdca018b87fe981d24e4d61f91911a3` / Main PID 346886으로 완료했다. 활성 회귀 1,834건과 base/auxiliary 실제 소비를 확인했다. 최종 JSON stage 선택은 큰 AI 증빙 본문의 동일 문구를 사건으로 세지 않는다. 당일 5종목의 AFTER `_AL`·SOR admission/generation도 확인했다. 준비 이후 제한된 자연 창 144회는 모두 5초 미만이었으며, PID warm 누적 p99 2.693초·초기 원천 복원 9.102초와 미관측 provider/submit 단계는 위 통합 리뷰에 별도 남긴다. B5b 미지원과 과거 cron 지연 복구 warning을 전체 성공으로 바꾸지 않는다.
