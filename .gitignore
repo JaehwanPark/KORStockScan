@@ -10,6 +10,7 @@ docker-compose.yml
 *.key
 *.sql
 .env
+data/config/native_owner_custody.env
 
 # ==========================================
 # 🐍 파이썬 환경 및 캐시

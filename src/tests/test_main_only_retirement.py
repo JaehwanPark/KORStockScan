@@ -190,6 +190,39 @@ def test_retired_unresolved_intents_do_not_hold_main_watch_admission(registry):
     assert registry.unresolved_intent_summary(symbol='042660', active_date=None)['unresolved_intent_count']==0
 
 
+@pytest.mark.parametrize('defect', [None, 'source', 'terminal', 'strict', 'archive', 'retirement', 'current_date'])
+def test_historical_summary_preserves_exact_sources_without_old_executors(tmp_path, defect):
+    from src.engine.automation import postclose_summary_handoff as S
+    root=tmp_path/'data'; reports=root/'report'; day='2026-10-07'
+    source=reports/'source.json'; source.parent.mkdir(parents=True); source.write_text('{}')
+    strict=reports/'attempt.json'
+    strict.write_text(json.dumps(dict(date=day,status='pass',verification_scope='whole_native_chain',whole_native_chain_done_claimed=True)))
+    value=dict(schema=S.STAGE_SCHEMA,stage_id='summary_handoff',source_date=day,
+        run_id='sealed',status='succeeded',exit_code=0,sources=S._stage_sources({'source':source}),
+        prerequisite_receipts={},input_sources={})
+    terminal=S.stage_path(reports,day,'summary_handoff'); terminal.parent.mkdir(parents=True)
+    S._stage_write(terminal,value); value=json.loads(terminal.read_text())
+    retirement_path=root/'runtime/retirements/main-only-retirement.json';retirement_path.parent.mkdir(parents=True)
+    archive=retirement_path.with_name('historical-summary-archive.json')
+    archive.write_text(json.dumps(dict(schema='retirement_historical_summary_archive_v1',
+        authority='operator_main_only_complete_retirement_20261008',cutover_date='2026-10-08',runtime_effect=False,
+        summaries={day:dict(validated_original_contract=True,original_code_commit='a'*40,
+            terminal_sha256=hashlib.sha256(terminal.read_bytes()).hexdigest(),strict_attempt_path=str(strict),
+            strict_attempt_sha256=hashlib.sha256(strict.read_bytes()).hexdigest())})))
+    retirement=dict(schema='main_only_automatic_owner_retirement_v1',management='operator_manual',
+        historical_summary_archive_sha256=hashlib.sha256(archive.read_bytes()).hexdigest())
+    retirement['receipt_sha256']=S._stage_digest(retirement); retirement_path.write_text(json.dumps(retirement))
+    if defect=='source':source.write_text('changed')
+    if defect=='terminal':terminal.write_text('{}')
+    if defect=='strict':strict.write_text('{}')
+    if defect=='archive':archive.write_text('{}')
+    if defect=='retirement':retirement_path.write_text('{}')
+    result=S._retired_summary_archive_issues(reports,'2026-10-08' if defect=='current_date' else day,value)
+    if defect in {'current_date','retirement'}: assert result is None
+    elif defect: assert result
+    else: assert result==[]
+
+
 def test_manual_holdings_do_not_become_main_watch_inventory(registry):
     from src.engine.scalping import ai_market_snapshot as market
     historical(registry, symbol='005930')

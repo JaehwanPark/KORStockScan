@@ -963,6 +963,60 @@ def reseal_summary_handoff_for_final_controller(report_dir, day, controller_path
     return True
 
 
+def _retired_summary_archive_issues(report_dir, day, value):
+    """Authenticate a cutover-verified old summary without installed executors.
+
+    This is a read-only historical receipt, never producer reuse/dispatch. The
+    permanent retirement receipt binds the archive; every captured source must
+    still match. Current/future dates always use the active stage contract.
+    """
+    root = Path(report_dir).parent
+    retirement = _load_json(root / 'runtime/retirements/main-only-retirement.json')
+    archive_sha = retirement.get('historical_summary_archive_sha256')
+    if not archive_sha or day >= '2026-10-08':
+        return None
+    archive_path = root / 'runtime/retirements/historical-summary-archive.json'
+    archive = _load_json(archive_path)
+    if (retirement.get('schema') != 'main_only_automatic_owner_retirement_v1'
+            or retirement.get('management') != 'operator_manual'
+            or retirement.get('receipt_sha256') != _stage_digest({
+                k: v for k, v in retirement.items() if k != 'receipt_sha256'})
+            or _stage_sources({'archive': archive_path})['archive']['sha256'] != archive_sha
+            or archive.get('schema') != 'retirement_historical_summary_archive_v1'
+            or archive.get('authority') != 'operator_main_only_complete_retirement_20261008'
+            or archive.get('cutover_date') != '2026-10-08'
+            or archive.get('runtime_effect') is not False):
+        return ['summary_handoff:retirement_archive_invalid']
+    entry = archive.get('summaries', {}).get(day)
+    if entry is None:
+        return None
+    if (entry.get('validated_original_contract') is not True
+            or not re.fullmatch('[0-9a-f]{40}', str(entry.get('original_code_commit', '')))
+            or entry.get('terminal_sha256') != _stage_sources({'terminal': stage_path(report_dir, day, 'summary_handoff')})['terminal']['sha256']):
+        return ['summary_handoff:retirement_archive_terminal_changed']
+    strict_path = Path(entry.get('strict_attempt_path', ''))
+    strict = _load_json(strict_path)
+    if (entry.get('strict_attempt_sha256') != _stage_sources({'strict': strict_path})['strict']['sha256']
+            or strict.get('date') != day or strict.get('status') != 'pass'
+            or strict.get('verification_scope') != 'whole_native_chain'
+            or strict.get('whole_native_chain_done_claimed') is not True):
+        return ['summary_handoff:retirement_archive_strict_changed']
+    for key in ('sources', 'prerequisite_receipts', 'input_sources'):
+        captured = value.get(key)
+        if not isinstance(captured, dict):
+            return ['summary_handoff:retirement_archive_sources_invalid']
+        paths = {name: item.get('path', '') for name, item in captured.items()
+                 if isinstance(item, dict)}
+        if (len(paths) != len(captured) or any(not item.get('sha256') for item in captured.values())
+                or captured != _stage_sources(paths)):
+            return ['summary_handoff:retirement_archive_generation_changed']
+    if (_load_json(root / 'runtime/retirements/main-only-retirement.json') != retirement
+            or _stage_sources({'archive': archive_path})['archive']['sha256'] != archive_sha
+            or _stage_sources({'terminal': stage_path(report_dir, day, 'summary_handoff')})['terminal']['sha256'] != entry['terminal_sha256']):
+        return ['summary_handoff:retirement_archive_changed_during_read']
+    return []
+
+
 def stage_receipt_issues(report_dir, day, stage, *, code_hash=None,
                          allow_historical_summary=False,
                          allow_historical_terminal=False):
@@ -993,6 +1047,10 @@ def stage_receipt_issues(report_dir, day, stage, *, code_hash=None,
         return []
     if value.get('status') != 'succeeded' or value.get('exit_code') != 0:
         return [f'{stage}:{value.get("status")}']
+    if stage == 'summary_handoff' and code_hash is None:
+        archived = _retired_summary_archive_issues(report_dir, day, value)
+        if archived is not None:
+            return archived
     if stage == 'summary_handoff' and (
         value.get('prepared_effective_date') is not None
         or value.get('publication_date', day) > day
