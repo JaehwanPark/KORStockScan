@@ -45,6 +45,37 @@ def test_pipeline_stage_reader_preserves_boundary_rows_order_and_partial_tail(tm
         assert final_offset == path.stat().st_size
 
 
+@pytest.mark.parametrize('raw,expected', [
+    (b'{"st\\u0061ge":"sell\\u005fcompleted","stock_code":"005930"}', True),
+    (b'{"stage":"other","stage":"sell_completed","stock_code":"005930"}', True),
+    (b'{"stage":"sell_completed","stage":"other"}', False),
+    (b'{"stage":"other","nested":{"stage":"sell_completed"}}', False),
+    (b'{"stage":["sell_completed"]}', False),
+    (b'{"stage":\n"sell_completed"}', False),
+])
+def test_pipeline_stage_selection_uses_top_level_json_semantics(tmp_path, raw, expected):
+    import json
+    from src.engine import sniper_state_handlers as H
+    path = tmp_path / 'history.jsonl'
+    path.write_bytes(raw + b'\n')
+    rows, offset = H._read_pipeline_events_for_stages(path, {'sell_completed'})
+    assert rows == ([json.loads(raw)] if expected else [])
+    assert offset == path.stat().st_size
+
+
+def test_pipeline_body_stage_mentions_do_not_decode_large_unrelated_evidence(tmp_path, monkeypatch):
+    import json
+    from src.engine import sniper_state_handlers as H
+    path = tmp_path / 'history.jsonl'
+    path.write_bytes(json.dumps({'stage': 'entry_ai_economic_plan_observed',
+        'evidence': 'sell_completed / same_symbol_loss_reentry_cooldown ' * 50000}).encode() + b'\n')
+    def no_full_decode(*args, **kwargs):
+        pytest.fail('Unrelated AI evidence must not be decoded into the guard cache')
+    monkeypatch.setattr(H.json, 'loads', no_full_decode)
+    rows, offset = H._read_pipeline_events_for_stages(path, {'sell_completed', 'same_symbol_loss_reentry_cooldown'})
+    assert rows == [] and offset == path.stat().st_size
+
+
 @pytest.mark.parametrize('code',['005930','034020','036930','196170','403870'])
 def test_actual_main_watching_statement_forwards_created_coordinator(monkeypatch,code):
     """Run the real Main call expression and wrapper, without a broker loop."""

@@ -74,3 +74,8 @@ v7 `58a142ca8cf35e460ba768676382e203e2864754`, Main PID 302958에서 HPSP·알�
 당일 약 3.1GB pipeline 이벤트의 기존 쿨다운 stage reader를 별도 원천 read-only 호출하여 **39.841초·1,007행**을 재현했다. 이는 live 지연에 기여할 수 있는 cold source 병목이다. 행별 `tell/readline` 대신 4MiB byte block에서 원 stage token을 찾고 후보 행만 decode한다. 원 행 순서·중복 방지·전체 내용·일반/gzip·offset·미완성 마지막 행 보류와 이후 tail 재시도를 보존한다. 이 reader는 promotion/cooldown/reentry-risk 소비자가 공유하므로 해당 회귀도 확인한다. 안전 쿨다운이나 과거 terminal 증거를 삭제하거나 무시하지 않는다.
 
 쿨다운 history 복원은 fast exit owner를 시작한 뒤 Main fresh entry evaluation 전에 수행한다. 큰 당일 원천의 cold 준비를 이후 유효 진입 claim에 전가하지 않으며, 기존 incremental append 갱신은 그대로 유지한다. cold 준비 시간은 `pipeline_source_replay`와 시작 로그에 별도 보존한다. 재기동 비용 자체가 없어진 것으로 표현하지 않고, v7의 실제 59.550초 결과도 유지한다. 추가 원장 복사·연구 호출·실 주문·guard/threshold/claim 기간 변경은 없다.
+
+
+추가 재리뷰에서 당일 broad token 후보 1,007행은 실제 `sell_completed`/쿨다운 stage가 아니라 수 MB AI 증빙 본문에 그 이름이 들어간 다른 stage였다. 결과를 전부 materialize하는 오프라인 parity 실험은 메모리 압력이 커져 해당 실험 프로세스만 종료했고, 그 실험을 통과로 표시하지 않는다. Main은 중지하지 않았으며 전수 원장 복사도 없다. 마지막 수리에서는 JSON `stage` member scalar를 먼저 선택하고 최종 top-level stage를 다시 검사한다. Unicode-escaped key/value·중복 key의 마지막 값·nested false candidate·미완성/비정상 행·일반/gzip offset을 검증한다. 원 promotion/cooldown/reentry-risk 소비자는 이미 같은 top-level stage로 걸렀으므로 불필요한 payload를 materialize하지 않아도 소비 결과는 같다.
+
+v8 후보 확대 검사에서는 **1,819 passed / 19 failed / 7 deselected**를 확인해 배포하지 않았다. 11개 실패는 영구 삭제된 episode gateway/policy를 직접 import하는 퇴역 검사이며 복원하지 않는다. 나머지 8개는 생존 scanner attach 검사가 현행 Main/manual 공통 저널 disposition을 격리하지 않은 fixture 결함이었다. 이 8개를 제외하지 않고 임시 검증 저널의 실제 disposition을 생성하는 fixture로 수리했다. 생산 custody guard를 우회하거나 운영 저널을 수정하지 않았다. 원천·실제 bootstrap·scanner fixture 보완 회귀 **188 passed**를 확인했다. 이후 최종 immutable gate와 실제 소비 결과는 별도 기록한다.

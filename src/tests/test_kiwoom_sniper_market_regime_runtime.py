@@ -428,6 +428,14 @@ def _isolate_manual_control_exclusion(monkeypatch, tmp_path):
         "KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES_FILE", str(empty_path)
     )
     monkeypatch.delenv("KORSTOCKSCAN_WATCH_EXCLUDED_CODES_FILE", raising=False)
+    # Registered Main symbols now resolve custody from the verified common
+    # journal. Isolate that current contract as well as manual exclusions.
+    from src.trading.order import owner_custody_registry as owner
+    monkeypatch.setenv("KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH", str(tmp_path / "owner.jsonl"))
+    monkeypatch.setenv("KORSTOCKSCAN_BROKER_ACCOUNT_KEY", "scanner-runtime-test-account")
+    registry = owner.OrderOwnerRegistry()
+    registry.retire_automatic_owners_to_manual()
+    monkeypatch.setattr(owner, "default_order_owner_registry", lambda: registry)
 
 
 def _enable_scanner_rising_ws_gap_test_mode(monkeypatch):

@@ -23228,17 +23228,28 @@ def _read_pipeline_events_for_stages(
 
     Search byte blocks before decoding candidate lines. A line-by-line search
     with two tell() calls per row still stalls a cold Main reader on multi-GB
-    daily logs. Keep the original stage-token prefilter, row order and exact
+    daily logs. Match JSON stage members rather than stage names embedded in
+    large AI evidence strings. Keep the consumer's stage set, row order and exact
     incremental offset; an incomplete final line remains for the next refresh.
     """
 
-    stage_tokens = tuple(
-        str(stage or "").strip().encode("utf-8")
+    stage_values = {
+        str(stage or "").strip()
         for stage in stages
         if str(stage or "").strip()
-    )
-    if not stage_tokens:
+    }
+    if not stage_values:
         return [], max(0, int(start_offset or 0))
+    import re
+    # JSON permits escaped member names and values. The bounded scalar pattern
+    # includes every possible encoding of a requested stage; nested matches
+    # are harmless candidates and the final top-level stage remains authority.
+    stage_member = re.compile(
+        rb'"(?:s|\\u0073)(?:t|\\u0074)(?:a|\\u0061)(?:g|\\u0067)(?:e|\\u0065)"[ \t\r]*:[ \t\r]*'
+        + rb'("(?:[^"\\\r\n]|\\.){0,'
+        + str(12 * max(map(len, stage_values))).encode() + rb'}")'
+    )
+    scalar_decoder = json.JSONDecoder()
     is_gzip = path.suffix.lower() == ".gz"
     opener = gzip.open if is_gzip else open
     rows: list[dict] = []
@@ -23259,22 +23270,23 @@ def _read_pipeline_events_for_stages(
                     pending = block
                     continue
                 candidates = set()
-                for token in stage_tokens:
-                    cursor = 0
-                    while True:
-                        match = block.find(token, cursor, complete_end)
-                        if match < 0:
-                            break
-                        line_start = block.rfind(b"\n", 0, match) + 1
-                        line_end = block.find(b"\n", match, complete_end) + 1
-                        candidates.add((line_start, line_end))
-                        cursor = line_end
+                for match in stage_member.finditer(block, 0, complete_end):
+                    try:
+                        stage = scalar_decoder.decode(match.group(1).decode("utf-8"))
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        continue
+                    if stage not in stage_values:
+                        continue
+                    line_start = block.rfind(b"\n", 0, match.start()) + 1
+                    line_end = block.find(b"\n", match.end(), complete_end) + 1
+                    candidates.add((line_start, line_end))
                 for line_start, line_end in sorted(candidates):
                     try:
                         payload = json.loads(block[line_start:line_end])
                     except (json.JSONDecodeError, TypeError, UnicodeDecodeError):
                         continue
-                    if isinstance(payload, dict):
+                    if (isinstance(payload, dict) and isinstance(payload.get("stage"), str)
+                            and payload["stage"] in stage_values):
                         rows.append(payload)
                 next_offset += complete_end
                 pending = block[complete_end:]
