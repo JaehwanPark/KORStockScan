@@ -22,9 +22,9 @@
 | 구간 | 변경 전 중앙값 | 변경 후 중앙값 | 범위 |
 | --- | ---: | ---: | --- |
 | 같은 정책의 warm load/receipt 재조회/configure | 222.5ms | 9.5ms | 각 50회, receipt I/O 모의, 실제 기계/정책 로직 |
-| WS snapshot 120행 | .891ms | .363ms | 각 50회, nested 수정 격리 |
-| WS snapshot 2,000행 | 7.513ms | 1.998ms | 전체 history |
-| WS snapshot 10,000행 | 36.092ms | 9.069ms | 전체 history, p99 87.5→56.0ms |
+| WS snapshot 120행 | .891ms | .369ms | 각 50회, nested 수정 격리 |
+| WS snapshot 2,000행 | 7.513ms | 2.015ms | 전체 history |
+| WS snapshot 10,000행 | 36.092ms | 9.128ms | 전체 history, p99 87.5→55.6ms |
 
 정책 전체 내용 digest가 일치했다. 이는 오프라인 부분 경로 개선이며 전체 Main loop p95≤2초/p99<5초, 실제 WS lock p99≤10ms의 달성을 뜻하지 않는다. 특히 10,000행 재현의 긴 꼬리는 남는다. 실제 확정 신호가 없으면 confirmed→claim 및 후속 stage 목표는 관측 불가로 유지한다. 두 프로세스가 같은 서버에서 진행한 초기 비교에는 live 부하와 다른 benchmark의 경합이 포함되어 있고, 자연 실행 전후 수치로 최종 확인한다.
 
@@ -43,3 +43,9 @@ v2 구형 postclose 보고 회귀 한 건의 `KeyError: routes`는 현재 수정
 v3 PID 57809의 기계·보조 소비 및 실제 ENTER_NOW 판정 관측으로 경로 혼용 수정의 소비를 확인했다. 이 상태의 Main warm loop 123회는 p95 8.250초/p99 9.526초/max 12.168초, 5초 초과 19회로 초기 목표 미달이다. 신호 claim 6회는 최대 4.919초이며 실제 claim된 분모만 포함한다. 주문·체결 개선으로 해석하지 않는다.
 
 보고용 원천 반복 검증을 추가 측정했다. `hash-working-set.json`의 기존 2회 검증은 1.564/1.552초, 각각 1,063 miss였다. `hash-working-set-after.json`의 bounded cache 적용 후 첫 검증 1.310초/766 miss, 이후 0.285/0.286초와 0 miss다. metadata 457,302 bytes, 766 entries이며 signature/원천 hash 일치는 그대로 검사했다. 해당 변경 관련 208 PASS, 최종 추가 반례 포함 18 PASS(서로 중복)를 확인했다. 읽기 실패·읽는 중 내용 변경은 cache에 기록하지 않고, hardlink alias의 digest 재사용과 링크 교체 차단, entry/byte eviction, 동시 single-flight를 검증했다. 보고 프로세스 분리는 이번 재사용 개선 이후 남은 자연 경합 측정에 따라 후속 판단한다.
+
+v4 PID 70105의 50초 추가 스택 표본에서 Main 96회 중 31회는 `manual_control_exclusion → decision_activation_matches → policy_activation_matches`의 원장 잠금 대기였다. 반면 detector 93회 중 86회는 주기 대기였고 file_digest 표본은 없었다. 표본 read 오류 129개와 비원자 관측 한계는 그대로 공개한다. v4 warm loop 105회는 p95 5.505초/p99 7.472초/max 9.125초, 5초 초과 12회였다. 다른 시각·입력 부하의 자연 표본이므로 개선율의 통제 실험으로 쓰지 않는다.
+
+남은 원장 조회 병목은 기존 소유자 `trading/order/owner_custody_registry.py`에서 보완했다. 원래의 EX flock을 그대로 획득하고 원장 전체 hash chain 검증으로 얻은 증빙 행만 재사용한다. 경로/실제 대상/파일 및 링크 inode·size·mtime·ctime 변경과 append는 즉시 폐기한다. 읽기 전후 identity가 달라도 실패한다. 계좌·일자·종목·policy·mode·allowed owners·migration·broker snapshot·entry authority 비교는 매 호출 수행하므로 판정/수동 통제 결과를 cache하지 않는다. 최대 64행×ASCII JSON 4,096 bytes이고 큰 행은 기존 검증 읽기로 돌아간다. mutation·주문 예약/append·보유/청산·권한 정의는 변경하지 않았다.
+
+정확한 현재 원장 1,476 event/1,891,615 bytes를 한 번만 격리 임시 복사한 뒤 양쪽 30회 비교하여 25.201ms→0.053ms 중앙값을 확인했다(`activation-lookup-benchmark.json`; 측정 후 임시 사본 자동 삭제). 신규 호출·주문·실원장 변경은 없었다. 계좌 및 모든 authority 필드, ctime/동일 mtime 변경, 삭제/원자 교체/링크 교체/append, 읽는 중 변경, 동시 조회, 반환 row 격리 및 큰 row fallback 관련 기존·추가 회귀 251 PASS다. review에서 이 보완을 LP4의 실측 병목 범위에 포함했으며 다른 소유권 규칙은 확장하지 않았다.

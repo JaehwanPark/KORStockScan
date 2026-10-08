@@ -301,3 +301,106 @@ def test_digest_failure_or_concurrent_write_never_populates_cache(tmp_path,monke
     monkeypatch.setattr(N.hashlib,'file_digest',original)
     assert N._source_hash(str(p),N._signature(p))==N.hashlib.sha256(b'modified').hexdigest()
     N._cached_source_hash.cache_clear()
+
+
+@pytest.fixture
+def activation(tmp_path,monkeypatch):
+    import fcntl
+    from src.trading.order import owner_custody_registry as O
+    monkeypatch.setenv(O.ACCOUNT_KEY_ENV,'test-account')
+    registry=O.OrderOwnerRegistry(tmp_path/'registry.jsonl')
+    args=dict(active_date='2026-10-08',policy_id='policy',symbol='005930',mode='COEXIST_ENTRY_ENABLED',
+              allowed_owners=('main_scalping','manual_operator'),migration_registry_tail_hash='1'*64,
+              broker_snapshot_sha256='2'*64,entry_authority_hash='3'*64)
+    event=dict(event='POLICY_ACTIVATED',state='POLICY_ACTIVE',account_key='test-account',
+               order_date=args['active_date'],**{k:v for k,v in args.items() if k!='active_date'})
+    lock=registry._locked()
+    try:row=registry._append_locked([],event)
+    finally:fcntl.flock(lock.fileno(),fcntl.LOCK_UN);lock.close()
+    args['activation_event_hash']=row['event_hash']
+    return registry,args,O
+
+
+def test_activation_row_reuse_still_checks_each_authority_field_and_account(activation,monkeypatch):
+    registry,args,O=activation;read=registry._read_locked;calls=[]
+    def counted():calls.append(1);return read()
+    monkeypatch.setattr(registry,'_read_locked',counted)
+    assert registry.policy_activation_matches(**args)
+    for key,value in [('active_date','2026-10-07'),('policy_id','other'),('symbol','000660'),('mode','COEXIST_EXIT_ONLY'),
+                      ('allowed_owners',('manual_operator',)),('migration_registry_tail_hash','4'*64),
+                      ('broker_snapshot_sha256','5'*64),('entry_authority_hash','6'*64)]:
+        assert not registry.policy_activation_matches(**dict(args,**{key:value}))
+    monkeypatch.setenv(O.ACCOUNT_KEY_ENV,'different-account')
+    assert not registry.policy_activation_matches(**args)
+    assert len(calls)==1
+
+
+@pytest.mark.parametrize('mutation',['same_size_mtime','replace','symlink','missing','append'])
+def test_activation_row_cache_observes_journal_mutation(activation,mutation):
+    import fcntl
+    registry,args,O=activation;p=registry.path
+    assert registry.policy_activation_matches(**args)
+    old=p.stat()
+    if mutation=='same_size_mtime':
+        p.write_text(p.read_text().replace('test-account','evil-account'))
+        os.utime(p,ns=(old.st_atime_ns,old.st_mtime_ns))
+    elif mutation in {'replace','symlink'}:
+        other=p.with_name('other');other.write_text('{}\n')
+        if mutation=='replace':other.replace(p)
+        else:p.unlink();p.symlink_to(other)
+    elif mutation=='missing':
+        p.unlink();assert not registry.policy_activation_matches(**args);return
+    else:
+        lock=registry._locked()
+        try:registry._append_locked(registry._read_locked(),{'event':'TEST_APPEND'})
+        finally:fcntl.flock(lock.fileno(),fcntl.LOCK_UN);lock.close()
+        old_signature=registry._activation_signature
+        assert registry.policy_activation_matches(**args)
+        assert registry._activation_signature!=old_signature;return
+    with pytest.raises(O.OwnerRegistryConflict):registry.policy_activation_matches(**args)
+    assert not registry._activation_rows
+
+
+def test_activation_row_cache_bounds_and_concurrent_reads(activation,monkeypatch):
+    registry,args,O=activation;read=registry._read_locked;calls=[]
+    def counted():calls.append(1);return read()
+    monkeypatch.setattr(registry,'_read_locked',counted)
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        assert all(pool.map(lambda _:registry.policy_activation_matches(**args),range(20)))
+    assert len(calls)==1
+    for i in range(70):assert not registry.policy_activation_matches(**dict(args,activation_event_hash=f'{i:064x}'))
+    assert len(registry._activation_rows)<=64
+    assert all(v is None or len(v)<=4096 for v in registry._activation_rows.values())
+
+
+def test_activation_row_during_read_change_fails_and_cache_rows_are_isolated(activation,monkeypatch):
+    import fcntl
+    registry,args,O=activation;read=registry._read_locked
+    def changed():
+        rows=read();registry.path.write_text(registry.path.read_text()+'\n');return rows
+    monkeypatch.setattr(registry,'_read_locked',changed)
+    with pytest.raises(O.OwnerRegistryConflict,match='changed_during_activation_read'):
+        registry.policy_activation_matches(**args)
+    assert not registry._activation_rows
+    monkeypatch.setattr(registry,'_read_locked',read)
+    assert registry.policy_activation_matches(**args)
+    lock=registry._locked()
+    try:
+        row=registry._activation_row_locked(args['activation_event_hash']);row['allowed_owners'].clear()
+    finally:fcntl.flock(lock.fileno(),fcntl.LOCK_UN);lock.close()
+    assert registry.policy_activation_matches(**args)
+
+
+def test_activation_oversize_row_uses_verified_uncached_read(activation,monkeypatch):
+    import fcntl
+    registry,args,O=activation;lock=registry._locked()
+    try:
+        events=registry._read_locked();event=dict(events[0]);event.pop('event_hash');event.pop('previous_hash')
+        event['padding']='x'*5000;row=registry._append_locked(events,event)
+    finally:fcntl.flock(lock.fileno(),fcntl.LOCK_UN);lock.close()
+    args['activation_event_hash']=row['event_hash'];read=registry._read_locked;calls=[]
+    def counted():calls.append(1);return read()
+    monkeypatch.setattr(registry,'_read_locked',counted)
+    assert registry.policy_activation_matches(**args)
+    assert registry.policy_activation_matches(**args)
+    assert len(calls)==2 and args['activation_event_hash'] not in registry._activation_rows

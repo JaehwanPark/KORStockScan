@@ -187,6 +187,8 @@ class OrderOwnerRegistry:
     def __init__(self, path: Path | None = None) -> None:
         self.path = Path(path) if path is not None else registry_path()
         self.lock_path = self.path.with_suffix(self.path.suffix + ".lock")
+        self._activation_signature = None
+        self._activation_rows = {}
 
     @staticmethod
     def _canonical(event: dict[str, Any]) -> bytes:
@@ -2259,6 +2261,54 @@ class OrderOwnerRegistry:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
             lock.close()
 
+    def _activation_file_identity(self):
+        """Identity checked under the journal lock, with no time based reuse."""
+        try:
+            resolved = str(self.path.resolve(strict=True))
+            link, source = self.path.lstat(), self.path.stat()
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            raise OwnerRegistryError(
+                f"owner_registry_read_failed:{type(exc).__name__}"
+            ) from exc
+        return (str(self.path.absolute()), resolved, *(
+            (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+            for s in (link, source)))
+
+    def _activation_row_locked(self, expected_hash):
+        """Reuse only a hash-chain verified row; callers still check authority.
+
+        The existing exclusive journal lock is required for this whole read.
+        Any journal append, replacement, content or link change invalidates it.
+        At most 64 ASCII JSON rows of 4096 bytes; never cache a decision or
+        expose a mutable cached row to a consumer.
+        """
+        before = self._activation_file_identity()
+        if before != self._activation_signature:
+            self._activation_rows.clear()
+            self._activation_signature = before
+        try:
+            if expected_hash in self._activation_rows:
+                encoded = self._activation_rows[expected_hash]
+                row = json.loads(encoded) if encoded is not None else None
+            else:
+                matches = [row for row in self._read_locked()
+                           if str(row.get('event_hash') or '').strip().lower() == expected_hash]
+                row = matches[0] if len(matches) == 1 else None
+                encoded = json.dumps(row, ensure_ascii=True, separators=(',', ':')) if row is not None else None
+            if self._activation_file_identity() != before:
+                raise OwnerRegistryConflict('owner_registry_changed_during_activation_read')
+            if encoded is None or len(encoded) <= 4096:
+                if expected_hash not in self._activation_rows and len(self._activation_rows) >= 64:
+                    self._activation_rows.pop(next(iter(self._activation_rows)))
+                self._activation_rows[expected_hash] = encoded
+            return row
+        except BaseException:
+            self._activation_rows.clear()
+            self._activation_signature = None
+            raise
+
     def policy_activation_matches(
         self,
         *,
@@ -2284,14 +2334,9 @@ class OrderOwnerRegistry:
             return False
         lock = self._locked()
         try:
-            matches = [
-                row
-                for row in self._read_locked()
-                if str(row.get("event_hash") or "").strip().lower() == expected_hash
-            ]
-            if len(matches) != 1:
+            row = self._activation_row_locked(expected_hash)
+            if row is None:
                 return False
-            row = matches[0]
             return bool(
                 row.get("event") == "POLICY_ACTIVATED"
                 and row.get("state") == "POLICY_ACTIVE"
