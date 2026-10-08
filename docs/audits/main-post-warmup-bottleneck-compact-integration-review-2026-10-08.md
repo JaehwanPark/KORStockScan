@@ -33,6 +33,7 @@
 - 통합 대상 회귀 **1,074 passed / 18 deselected**. 제외된 18건은 영구 삭제된 shared-rebound/PYRAMID 및 episode gateway/policy를 import하는 퇴역 기능 검사다. 삭제 기능을 복원하여 통과시키지 않았다.
 - 최종 WS 컨테이너·원천·Main/AI 재리뷰 회귀 **727 passed / 7 deselected**. 제외된 7건은 같은 퇴역 shared-rebound 검사다. 이 수치는 중복 검사를 합산한 고유 검증 수가 아니다.
 - 마지막 실제 Main 호출/outer drain/commit와 보조 wire·철회·submit 원천 검사 **212 passed**. WAIT 및 ENTER_NOW+PASS/BUY fixture 각각의 worker 호출 1회와 단일 commit 소비, route/generation 교체 시 거절을 검증했다. 실제 broker 주문은 실행하지 않았다.
+- 첫 immutable v1의 확대 검사에서 fixture 두 건이 실패하여 배포하지 않았다. 30ms worker 시작 가정은 선행 worker 준비·bounded event 대기로 고쳤고, configure fixture는 자기 backend generation을 격리했다. 보완 후 관련 **135 passed**. runtime code의 deadline을 늘리거나 guard를 완화하지 않았다. 최종 immutable 결과는 아래 배포 증거에 별도 기록한다.
 - 기존 auth retry 테스트의 전체 dict 동등성은 원천 metadata 추가 계약에 맞춰 metadata 별도 검사로 보완했다. token replacement·첫 8005 이후 같은 stale token 재사용 방지·실제 요청 순서를 계속 검증한다.
 - Python compile, `git diff --check`, print-only backlog parser를 검증했다. parser 21개·현재 실행 owner 1개, 경고 0건이다. package 설치/제거, 실 provider/broker 테스트, 퇴역 테스트 복원, Project/Calendar sync는 생략했다.
 

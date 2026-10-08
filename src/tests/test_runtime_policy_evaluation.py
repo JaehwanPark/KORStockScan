@@ -95,6 +95,9 @@ def test_prepare_reuses_configuration_and_receipt_but_observes_overlay(loader,mo
     monkeypatch.setattr(router,'selected_release',lambda w:(root.parent,'commit'))
     monkeypatch.setattr(H,'_identity',lambda p:dict(pid=p,start_ticks='1',cwd=str(root.parent/'src')))
     monkeypatch.setattr(H,'_paths',lambda day,commit:(root/'handoff',root/'consumed'))
+    # The fixture configure callback owns this backend generation too; a
+    # previous test's real backend must not force three reconfigurations.
+    monkeypatch.setattr(D,'backend',lambda:SimpleNamespace(_GENERATION=None))
     monkeypatch.setattr(D,'configure_bundle',lambda bundle,**kw:configured.append(bundle))
     def receipt(data_root,bundle):
         assert N.load_effective(data_root=data_root,target_date='2026-10-08') is bundle

@@ -7838,17 +7838,21 @@ def test_openai_http_enforces_wall_clock_deadline_when_sdk_call_runs_late():
 
 
 def test_openai_http_wall_deadline_cancels_queued_duplicate_provider_call():
+    from concurrent.futures import ThreadPoolExecutor
     engine = _build_engine()
     provider_calls = []
+    release = threading.Event()
+    engine._http_deadline_executor = ThreadPoolExecutor(max_workers=1)
+    engine._http_deadline_executor.submit(lambda:None).result(timeout=1)
 
     def _create(**kwargs):
         provider_calls.append(kwargs)
-        openai_module.time.sleep(0.15)
+        release.wait(3)
         return SimpleNamespace(output_text='{"action":"WAIT"}', usage=None)
 
     engine.client = SimpleNamespace(responses=SimpleNamespace(create=_create))
 
-    def _request(request_id: str) -> OpenAIResponseRequest:
+    def _request(request_id: str, timeout_ms=30) -> OpenAIResponseRequest:
         return OpenAIResponseRequest(
             prompt="PROMPT",
             user_input="payload",
@@ -7862,22 +7866,19 @@ def test_openai_http_wall_deadline_cancels_queued_duplicate_provider_call():
             symbol="005930",
             cache_key="-",
             submitted_at_perf=openai_module.time.perf_counter(),
-            timeout_ms=30,
+            timeout_ms=timeout_ms,
         )
 
-    with pytest.raises(OpenAIResponsesHTTPError) as first_error:
-        engine._call_openai_responses_http(_request("req-wall-deadline-running"))
-    assert (
-        first_error.value.timing_meta["openai_http_provider_future_cancelled"] is False
-    )
-
-    with pytest.raises(OpenAIResponsesHTTPError) as queued_error:
-        engine._call_openai_responses_http(_request("req-wall-deadline-queued"))
-    assert (
-        queued_error.value.timing_meta["openai_http_provider_future_cancelled"] is True
-    )
-
-    engine._http_deadline_executor.shutdown(wait=True)
+    try:
+        with pytest.raises(OpenAIResponsesHTTPError) as first_error:
+            engine._call_openai_responses_http(_request("req-wall-deadline-running",500))
+        assert first_error.value.timing_meta["openai_http_provider_future_cancelled"] is False
+        with pytest.raises(OpenAIResponsesHTTPError) as queued_error:
+            engine._call_openai_responses_http(_request("req-wall-deadline-queued"))
+        assert queued_error.value.timing_meta["openai_http_provider_future_cancelled"] is True
+    finally:
+        release.set()
+        engine._http_deadline_executor.shutdown(wait=True)
     assert len(provider_calls) == 1
 
 
