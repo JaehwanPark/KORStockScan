@@ -45,3 +45,12 @@
 새 intraday 등록 producer는 원천일 10/7을 보존하고 실제 발행·적용일 10/8, 별도 승인·정확 부모·13개 scope·registry/연구 hash·release commit을 봉인한다. 기존 PREOPEN candidate/장후 보고서 파일을 변경하지 않는 별도 candidate로 발행한다. 반복 stage/activate는 멱등이며, 승인 누락·다른 날짜·다른 부모·추가 목록 변조·검토 코드 PID 미확인은 차단한다. v6 next_session 기본 발행 경로와 별도인 명시 intraday 모드이고, 이후 장후는 활성 목록을 그대로 승계한다.
 
 당일 발행은 기존 연구와 등록 계약의 작은 보고서 조립이며 원장을 다시 만들거나 실제 AI 비교를 호출하지 않는다. 실시간 callback/claim, 원 source/publication 날짜, 기존 candidate 보존, stage/activation 멱등 및 권한 거부 검증을 신규 회귀에 추가했다. 검토 코드의 실제 PID를 먼저 확인한 뒤 활성화하며, 기계·보조 소비 및 cron 최종 검사 결과는 `deployment-final.json`에 기록한다.
+
+
+## 최종 실행 결과
+
+2026-10-08 **09:38:51 KST 당일 활성화 완료**. 코드 `f08405fb063470b17bf3348f84feecb6d3d19e96`, 릴리스 `pre-after-intraday-20261008-v1`, 실제 PID **34821**(start_ticks 299797)의 기계·보조 소비 영수증이 모두 활성 bundle `40fb3ec7d5f44e2e34044f2a14e2d0d06dd6ea264f69b5f1481be899f2a4a689`와 일치한다. 13개 신규 정의를 포함한 128 계약 scope 로드를 확인했다. 기존 정책 삭제 0, 기존 보조 arm 및 PREOPEN 후보 해시 유지, 준비 검증 PASS다.
+
+[최종 배포·활성화 영수증](../../data/report/pre-after-remediation/2026-10-08/deployment-final.json)에 정확 source/publication/effective 날짜와 PID identity, 코드·기계·보조 hash를 결속했다. 이후 장후의 등록 중복 방지·현행 manifest 승계를 검증했다. 당일 추가 회귀 283 PASS, 새 immutable 릴리스의 확장·당일 활성화 회귀 22 PASS. 수동 주문과 연구 AI 호출은 0이다. PRE는 종료됐고 AFTER는 아직 시작 전이므로 신규 패턴의 자연 발생/주문·성과는 별도 관측이다.
+
+cron의 `strict_checklist_generation_stale` 및 finalization generation 실패는 없다. 이전 06:50 마감 이후 복구됐다는 log rotation/finalization 지연 경고 2개는 이력으로 남아 있으며 숨기지 않았다. 오늘 장후 전체를 재실행하지 않았다.
