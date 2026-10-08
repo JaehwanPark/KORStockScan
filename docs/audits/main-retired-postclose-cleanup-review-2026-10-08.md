@@ -19,3 +19,13 @@
 첫 보완 회귀 78개 후 최종 wrapper/EOD/퇴역·정책 보존 handoff/최종화 세대/cron 감시 회귀 224개가 통과했다. Shell syntax·compile·diff·실제 링크·print-only parser도 통과했다(22개 task, 기존 Main owner 1개). 기존 YYYY-MM-DD 경로 템플릿은 실파일 검사에서 구분했다. 재리뷰의 범위 내 미해결 결함은 0개다. 실행 중 장후 worker가 없는 상태에서 새 immutable release를 생성하고 원 정책을 보존한 native handoff로 배포·재기동한다. 실제 PID와 bootstrap·기계/보조 소비·strict binding은 배포 후 검증한다.
 
 배포 상태는 최종 영수증으로 보완한다. 20:10 자연 장후 완료와 다음 예약기동은 예정 시각의 별도 수용이며 이번 구현·기동 검증으로 대체하지 않는다. 과거 `recovered_late` 경고는 실제 지연 이력으로 보존하고 `strict_checklist_generation_stale` 재발 여부는 별도 검사한다.
+
+## 최종 배포·실제 소비 확인
+
+18:48 KST에 `main-retired-postclose-cleanup-20261008-v1` / `0c1f68968906395f12c121862876704afadc1e83`로 배포하고 구 PID 346886의 graceful 종료 후 새 Main PID **381039**, ubuntu 실행·실제 cwd·selector 소비를 확인했다. 웹도 동일 release로 재기동하여 HTTP 200을 확인했다. Immutable release 회귀 224개가 통과했고 선행 compact/latency의 핵심 source/test 32개는 원 hash와 일치한다. 다른 작업의 미커밋 변경은 이번 commit에 포함하지 않았다.
+
+Bootstrap·정책 보존 handoff PASS, 기계/보조의 실제 PID 소비를 확인했다. 기계 bundle `40fb3ec7d5f44e2e34044f2a14e2d0d06dd6ea264f69b5f1481be899f2a4a689`, 보조 overlay `b8e97475121038c21d1608f99530f1c740f696f4ba084d0cfd2f9b48c4961626`와 포인터 원 바이트가 유지됐다. 전체 128경로와 compact wire 4경로는 그대로다. 퇴역 final-refresh service/timer는 not-found/inactive이며 설치 cron은 검토한 퇴역 변수 한 개만 제거했다.
+
+Read-only cron 검증에서 `strict_checklist_generation_stale`·`finalization_chain_generation_changed`는 없었다. 과거 cleanup/finalization의 06:50 이후 복구 완료 경고는 남겨 실제 지연 이력을 숨기지 않았다. 전환 시각 18:48:00에 구 프로세스의 HPSP·삼성 판정 2건이 `auxiliary_pid_release_mismatch`로 fail closed된 로그가 있다. selector 변경 후 구 PID 종료 전의 기록이며, 새 PID의 후속 기계/보조 소비는 각각 검증했다. 이를 전체 오류 0으로 표시하지 않는다.
+
+현재 정리·배포·재기동은 완료다. 20:10 자연 장후와 다음 예약기동은 아직 미관측이며 해당 예정 시각에 별도 확인한다. [최종 영수증](../../data/report/retired_postclose_cleanup/2026-10-08/deployment-final.json)에 실제 PID·정책 해시·검증·경고를 기록했다. 이 작업에서는 provider/broker 호출, EOD·장후 수동 재실행, 외부 동기화를 수행하지 않았다.
