@@ -1626,7 +1626,10 @@ def _stage_code(stage, commands, project, *, dispatcher_path=None,
                      'continuous_reversal_policy_v4','continuous_reversal_path_postclose',
                      'continuous_reversal_policy_v5','reversal_operating_backend','reversal_operating_runtime',
                      'reversal_operating_auxiliary','reversal_operating_outbox','reversal_operating_evaluation',
-                     'continuous_reversal_operating_postclose'):
+                     'continuous_reversal_operating_postclose','continuous_reversal_policy_v6',
+                     'reversal_extended_catalog','reversal_extended_state','reversal_extended_runtime',
+                     'reversal_extended_auxiliary','reversal_extended_union','reversal_extended_registration',
+                     'reversal_current_backend','reversal_policy_status'):
             paths[name]=project/f'src/engine/scalping/{name}.py'
     if stage == 'main_auxiliary_policy':
         paths['shared_comparison_adapter'] = project/'src/engine/scalping/continuous_reversal_shared_ledger.py'

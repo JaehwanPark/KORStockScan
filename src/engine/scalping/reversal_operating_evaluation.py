@@ -8,6 +8,9 @@ from src.engine.scalping import reversal_operating_auxiliary as UNION
 
 
 def validate_response(response, inp, *, arm, phase=None):
+    from src.engine.scalping import reversal_extended_union as EXTENDED
+    if inp.get('schema') == EXTENDED.VERSION:
+        return EXTENDED.validate_response(response,inp,arm=arm,phase=phase)
     if inp.get('schema') == UNION.VERSION:
         return UNION.validate_response(response,inp,arm=arm,phase=phase)
     return OLD.validate_response(response,inp,arm=arm,phase=phase)
@@ -15,6 +18,8 @@ def validate_response(response, inp, *, arm, phase=None):
 
 def coverage(state, row, ids, hits, *, previous):
     """Conservative UNKNOWN masks. Absence of a signal alone is not FALSE."""
+    if getattr(state,'coverage_identity',None)==tuple(row[:3]):
+        return {bid:state.coverage_snapshot.get(bid,'UNKNOWN') for bid in ids}
     result = {}
     features = state.features(row) if row[8] else {}
     for bid in ids:
@@ -24,6 +29,14 @@ def coverage(state, row, ids, hits, *, previous):
             result[bid] = 'TRUE'; continue
         if not row[8] or previous is None or not K.connected(previous,row) or not state.legacy.last or not state.legacy.last[8]:
             result[bid] = 'UNKNOWN'; continue
+        phase=C.branch(bid)['decision_phase']
+        if phase=='FIRST_UPTICK':
+            turn=state.legacy.turn
+            if not turn or turn.get('epoch')!=row[0]:
+                result[bid]='FALSE';continue
+            matched=C.matches(bid,turn,features)
+            result[bid]='UNKNOWN' if matched is None else 'FALSE'
+            continue
         definition = C.definition(bid)
         required = set()
         for f in definition.get('filters',{}):

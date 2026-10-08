@@ -1029,7 +1029,7 @@ class GPTSniperEngine:
     """
 
     def __init__(self, api_keys, announce_startup=True, *, initialize_entry_policy=True):
-        from src.engine.scalping.reversal_operating_backend import configure_bundle
+        from src.engine.scalping.reversal_current_backend import configure_bundle
         from src.engine.scalping.mechanistic_entry_runtime_policy import load_effective
         from src.utils.constants import DATA_DIR
         try:
@@ -5122,7 +5122,7 @@ class GPTSniperEngine:
                     or selected_prompt_version!=registry.binding(registered_auxiliary)['prompt_version']
                     or target_model!=registered_auxiliary['model']
                     or projected.get('schema')!=registered_auxiliary['input_version']
-                    or response_schema_override!=registry.A.response_schema(projected)
+                    or response_schema_override!=registry.projector(registered_auxiliary['input_version']).response_schema(projected)
                     or user_input!=json.dumps(projected,ensure_ascii=True,sort_keys=True,separators=(',',':'))):
                 raise ValueError('registered_auxiliary_transport_contract_changed')
             compact_auxiliary_call=True  # Registered OpenAI transport; no provider substitution.
@@ -9573,7 +9573,7 @@ class GPTSniperEngine:
                     from src.engine.scalping.micro_reversion.forward_collector import _explicit_item_venue
                     item = (ws_data.get('last_realtime_type_item') or {}).get('0B')
                     snapshot_now=time.time()
-                    if reversal_family.get('schema') in {'continuous_reversal_policy_v2','continuous_reversal_policy_v3','continuous_reversal_policy_v4','continuous_reversal_policy_v5'}:
+                    if reversal_family.get('schema') in {'continuous_reversal_policy_v2','continuous_reversal_policy_v3','continuous_reversal_policy_v4','continuous_reversal_policy_v5','continuous_reversal_policy_v6'}:
                         from src.engine.scalping.reversal_source_diagnostics import (
                             claim_snapshot_with_receipt as claim_snapshot, validate_claim_with_receipt)
                         claim=reversal_signal_claim or claim_snapshot(symbol,_explicit_item_venue(item),machine_exact['session_bucket'],
@@ -9590,7 +9590,7 @@ class GPTSniperEngine:
                     reversal_snapshot_as_of = time.time()
                     machine_assessment, reversal_input, reversal_prompt, reversal_schema = assess(
                         reversal_family, snapshot, symbol=symbol, session=machine_exact['session_bucket'])
-                    if reversal_family.get('schema') == 'continuous_reversal_policy_v5':
+                    if reversal_family.get('schema') in {'continuous_reversal_policy_v5','continuous_reversal_policy_v6'}:
                         from src.engine.scalping.reversal_auxiliary_intraday import apply_request
                         from src.utils.constants import DATA_DIR
                         machine_assessment, reversal_input, reversal_prompt, reversal_schema = apply_request(
@@ -9613,7 +9613,7 @@ class GPTSniperEngine:
                     machine_assessment['source_diagnostics'] = diagnostics
                     entry_setup_live_policy.update(continuous_reversal_assessment=machine_assessment,
                         continuous_reversal_input=reversal_input,
-                        continuous_reversal_arm=(machine_assessment.get('auxiliary_arm') if reversal_family.get('schema') in {'continuous_reversal_policy_v2','continuous_reversal_policy_v3','continuous_reversal_policy_v4','continuous_reversal_policy_v5'}
+                        continuous_reversal_arm=(machine_assessment.get('auxiliary_arm') if reversal_family.get('schema') in {'continuous_reversal_policy_v2','continuous_reversal_policy_v3','continuous_reversal_policy_v4','continuous_reversal_policy_v5','continuous_reversal_policy_v6'}
                             else reversal_family['auxiliary_cells'][machine_assessment['cell_key']]['payload']['arm'] if machine_assessment.get('cell_key') else None))
                     from src.engine.scalping.mechanistic_entry_runtime_policy import digest
                     reversal_receipt = dict(
@@ -9642,7 +9642,7 @@ class GPTSniperEngine:
                         from src.engine.scalping.reversal_auxiliary_contract import PRODUCTION_VERSION
                         from src.engine.scalping.reversal_auxiliary_phases import version as phase_version
                         prompt_version=(machine_assessment['auxiliary_binding']['prompt_version']
-                            if machine_assessment.get('policy_version')=='continuous_reversal_policy_v5'
+                            if machine_assessment.get('policy_version') in {'continuous_reversal_policy_v5','continuous_reversal_policy_v6'}
                             else phase_version(machine_assessment.get('decision_phase','FIRST_UPTICK'),entry_setup_live_policy['continuous_reversal_arm']))
                         entry_setup_live_policy.update(auxiliary_system_prompt=reversal_prompt,
                             selected_prompt_version=prompt_version,
@@ -10490,15 +10490,17 @@ class GPTSniperEngine:
                                        'continuous_reversal_response_schema': reversal_schema}
                 trace_metadata_extra['entry_setup_live_policy_selected_prompt_version']=prompt_version
                 input_contract_fields['entry_setup_live_policy_selected_prompt_version']=prompt_version
-            if entry_setup_live_policy.get('continuous_reversal_assessment',{}).get('policy_version') in {'continuous_reversal_policy_v2','continuous_reversal_policy_v3','continuous_reversal_policy_v4','continuous_reversal_policy_v5'}:
-                from src.engine.scalping.reversal_operating_backend import validate_any_claim as validate_claim
+            if entry_setup_live_policy.get('continuous_reversal_assessment',{}).get('policy_version') in {'continuous_reversal_policy_v2','continuous_reversal_policy_v3','continuous_reversal_policy_v4','continuous_reversal_policy_v5','continuous_reversal_policy_v6'}:
+                from src.engine.scalping.reversal_current_backend import validate_any_claim as validate_claim
                 from src.engine.scalping.initial_quantity_bundle_state import reserve_reversal_signal
                 from src.utils.constants import DATA_DIR
                 assessment=entry_setup_live_policy['continuous_reversal_assessment']
                 from src.engine.scalping.mechanistic_entry_runtime_policy import load_effective
                 active=load_effective(data_root=DATA_DIR,target_date=datetime.now(__import__('zoneinfo').ZoneInfo('Asia/Seoul')).date().isoformat())
-                if assessment.get('policy_version')=='continuous_reversal_policy_v5':
+                if assessment.get('policy_version') in {'continuous_reversal_policy_v5','continuous_reversal_policy_v6'}:
                     from src.engine.scalping.continuous_reversal_policy_v5 import validate_active_claim
+                    if assessment.get('policy_version')=='continuous_reversal_policy_v6':
+                        from src.engine.scalping.continuous_reversal_policy_v6 import validate_active_claim
                     from src.engine.scalping.reversal_auxiliary_intraday import validate_decision
                     validate_decision(DATA_DIR, entry_setup_live_policy, active, now=time.time())
                     if assessment.get('auxiliary_registry_sha256'):
@@ -10514,7 +10516,7 @@ class GPTSniperEngine:
                         raise ValueError('reversal_policy_changed_before_provider')
                     validate_claim(entry_setup_live_policy.get('continuous_reversal_claim'),assessment['family_sha256'],now=time.time())
                 request_identity=digest([assessment['signal_id'],prompt_version,replay_context,prompt,reversal_schema])
-                if assessment.get('policy_version')=='continuous_reversal_policy_v5':
+                if assessment.get('policy_version') in {'continuous_reversal_policy_v5','continuous_reversal_policy_v6'}:
                     from src.engine.scalping.reversal_operating_outbox import reserve
                     reserve(DATA_DIR,assessment,request_identity)
                 else:
@@ -10571,7 +10573,7 @@ class GPTSniperEngine:
                    if entry_setup_live_policy.get('continuous_reversal_input') else {}),
             )
             # V2.14 validates a deliberately narrow model-response schema.
-            if entry_setup_live_policy.get('continuous_reversal_assessment',{}).get('policy_version')=='continuous_reversal_policy_v5':
+            if entry_setup_live_policy.get('continuous_reversal_assessment',{}).get('policy_version') in {'continuous_reversal_policy_v5','continuous_reversal_policy_v6'}:
                 from src.engine.scalping.reversal_operating_outbox import advance
                 advance(DATA_DIR,entry_setup_live_policy['continuous_reversal_assessment']['opportunity_key'],
                     'response_received',binding=dict(response=result,request_sha256=request_identity))

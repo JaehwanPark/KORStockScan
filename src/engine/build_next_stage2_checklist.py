@@ -2350,6 +2350,7 @@ def _build_direct_family_checklist(
         "## Family 직접 증거 상태",
         "",
         f"- source date: `{source_date}`; next apply date: `{target_date}`.",
+        f"- 아래 상태는 summary `{summary_sha256}` 생성 당시 snapshot이다. 현재 준비·활성·PID 상태는 같은 날짜·세대의 별도 소비 영수증으로 확인한다.",
         f"- direct source: `{summary['available_required_source_count']}/{summary['required_source_count']}`; direct state: `{summary['direct_evidence_state']}`.",
         f"- economic state: `{summary.get('economic_state')}`; validated edge: `{summary.get('validated_edge_count') or 0}`; policy candidate: `{summary.get('policy_candidate_count') or 0}`.",
         f"- PREOPEN: `{summary.get('preopen_consumption_state')}`; natural acceptance: `{summary.get('natural_acceptance_state')}`.",

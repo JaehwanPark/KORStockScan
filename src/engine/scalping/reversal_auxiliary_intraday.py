@@ -59,7 +59,10 @@ def inherited(data_root, bundle):
     valid={V.scope_id(k,r) for k,r in V.scopes()}
     if not isinstance(refs,dict) or not set(refs)<=valid:
         raise ValueError('auxiliary_inheritance_scope_invalid')
-    for value in refs.values():G.load(data_root,value)
+    for sid,value in refs.items():
+        key,route=sid.rsplit('|',1)
+        if G.load(data_root,value)['input_version']!=f['auxiliary_cells'][key]['routes'][route]['payload']['binding']['input_version']:
+            raise ValueError('auxiliary_inherited_input_version_mismatch')
     if _signature(path)!=signature:raise ValueError('auxiliary_inherited_report_changed')
     _INHERITED[str(path)]=(signature,copy.deepcopy(refs))
     return refs
@@ -104,11 +107,12 @@ def validate_record(data_root,v,bundle,*,check_definitions=True):
     if not set(v['bindings'])<=valid:raise ValueError('auxiliary_overlay_scope_invalid')
     for sid,ident in v['bindings'].items():
         key,route=sid.rsplit('|',1)
-        if f['machine_cells'][key]['routes'][route]['backend']!='union_v5':
+        if f['machine_cells'][key]['routes'][route]['backend'] not in {'union_v5','union_v6'}:
             raise ValueError('auxiliary_overlay_native_scope_unsupported')
         if not isinstance(ident,str) or not re.fullmatch('[a-f0-9]{64}',ident):
             raise ValueError('auxiliary_overlay_registry_identity_invalid')
-        if check_definitions:G.load(data_root,ident)
+        if check_definitions and G.load(data_root,ident)['input_version']!=f['auxiliary_cells'][key]['routes'][route]['payload']['binding']['input_version']:
+            raise ValueError('auxiliary_overlay_input_version_mismatch')
     if v.get('evaluation_sha256'):
         evidence=read(v['evaluation_path'])
         if (evidence['artifact_content_sha256']!=v['evaluation_sha256']
@@ -120,8 +124,9 @@ def validate_record(data_root,v,bundle,*,check_definitions=True):
 def effective_bindings(data_root,bundle,*,day=None):
     f=bundle['continuous_reversal'];result={}
     for key,route in V.scopes():
-        if f['machine_cells'][key]['routes'][route]['backend']!='union_v5':continue
-        value=G.definition(f['auxiliary_cells'][key]['routes'][route]['payload']['arm'])
+        if f['machine_cells'][key]['routes'][route]['backend'] not in {'union_v5','union_v6'}:continue
+        payload=f['auxiliary_cells'][key]['routes'][route]['payload']
+        value=G.definition(payload['arm'],input_version=payload['binding']['input_version'])
         result[V.scope_id(key,route)]=G.register(data_root,value)
     result.update(inherited(data_root,bundle))
     v=current(data_root,bundle,day=day)
@@ -151,14 +156,15 @@ def selected_definition(data_root,bundle,assessment):
     v=at_confirmation(data_root,bundle,epoch)
     ident=(v or {}).get('bindings',{}).get(sid) or inherited(data_root,bundle).get(sid)
     base_arm=bundle['continuous_reversal']['auxiliary_cells'][assessment['cell_key']]['routes'][assessment['route']]['payload']['arm']
-    if ident==G.definition(base_arm)['registry_sha256']:
+    input_version=bundle['continuous_reversal']['auxiliary_cells'][assessment['cell_key']]['routes'][assessment['route']]['payload']['binding']['input_version']
+    if ident==G.definition(base_arm,input_version=input_version)['registry_sha256']:
         return None,v  # Unchanged scopes retain their original runtime path.
     return (G.load(data_root,ident),v) if ident else (None,v)
 
 
 def apply_request(data_root,bundle,snapshot,result):
     a,inp,prompt,schema=result
-    if a.get('policy_version')!=V.SCHEMA or a.get('action')!='ENTER_NOW':return result
+    if a.get('policy_version') not in {V.SCHEMA,'continuous_reversal_policy_v6'} or a.get('action')!='ENTER_NOW':return result
     if 'bundle_sha256' not in bundle:
         bundle=dict(bundle,bundle_sha256=bundle['machine_bundle_sha256'])
     value,overlay=selected_definition(data_root,bundle,a)
@@ -176,7 +182,7 @@ def apply_request(data_root,bundle,snapshot,result):
 
 def validate_decision(data_root,policy,active,*,now):
     a=policy['continuous_reversal_assessment']
-    if a.get('policy_version')!=V.SCHEMA or a.get('action')!='ENTER_NOW':return
+    if a.get('policy_version') not in {V.SCHEMA,'continuous_reversal_policy_v6'} or a.get('action')!='ENTER_NOW':return
     if active is None:raise ValueError('auxiliary_active_bundle_missing')
     value,overlay=selected_definition(data_root,active,a)
     actual=a.get('auxiliary_registry_sha256')
@@ -260,6 +266,9 @@ def publish(data_root,evaluation,*,expected_parent,confirm,now=None):
 
 
 def record_pid_consumption(data_root,bundle):
+    from src.engine.scalping import continuous_reversal_policy_v5 as V
+    if bundle['continuous_reversal']['schema']=='continuous_reversal_policy_v6':
+        from src.engine.scalping import continuous_reversal_policy_v6 as V
     """Unchanged v5 code pins permit a reviewed code-only release handoff."""
     from src.engine.automation import intraday_release_handoff as H
     from src.engine.infrastructure.runtime_release_router import selected_release
@@ -283,8 +292,8 @@ def record_pid_consumption(data_root,bundle):
                 raise ValueError('auxiliary_base_code_handoff_missing')
             N._validate_bundle_sources(bundle,Path(data_root))  # Use the trusted data anchor.
             _BASE_CONSUMED.add(cache_key)
-        f=bundle['continuous_reversal'];count=sum(f['machine_cells'][k]['routes'][r]['backend']=='union_v5' for k,r in V.scopes())
-        receipt=dict(schema='continuous_reversal_pid_consumption_v5',bundle_sha256=bundle['bundle_sha256'],
+        f=bundle['continuous_reversal'];count=sum(f['machine_cells'][k]['routes'][r]['backend'] in {'union_v5','union_v6'} for k,r in V.scopes())
+        receipt=dict(schema='continuous_reversal_pid_consumption_v6' if f['schema']=='continuous_reversal_policy_v6' else 'continuous_reversal_pid_consumption_v5',bundle_sha256=bundle['bundle_sha256'],
             family_sha256=f['family_sha256'],execution_manifest_hash=f['execution_manifest_hash'],
             release_commit=commit,policy_origin_release_commit=f['release_commit'],pid_identity=identity,
             observed_at=datetime.now(K.KST).isoformat(),planned_scopes=len(V.scopes()),new_consumed_scopes=count,
@@ -325,8 +334,8 @@ def rollback(data_root,*,expected_parent,reason,confirm,now=None):
             bindings={}
             for key,route in V.scopes():
                 cell=bundle['continuous_reversal']['auxiliary_cells'][key]['routes'][route]
-                if bundle['continuous_reversal']['machine_cells'][key]['routes'][route]['backend']=='union_v5':
-                    value=G.definition(cell['payload']['arm']);bindings[V.scope_id(key,route)]=G.register(data_root,value)
+                if bundle['continuous_reversal']['machine_cells'][key]['routes'][route]['backend'] in {'union_v5','union_v6'}:
+                    value=G.definition(cell['payload']['arm'],input_version=cell['payload']['binding']['input_version']);bindings[V.scope_id(key,route)]=G.register(data_root,value)
             bindings.update(inherited(data_root,bundle))
         record=P.seal(dict(before,effective_from=clock.isoformat(),bindings=bindings,changes=bindings,
             previous_overlay_sha256=expected_parent,rollback_reason=reason,evaluation_sha256=None,
@@ -339,6 +348,9 @@ def rollback(data_root,*,expected_parent,reason,confirm,now=None):
 
 
 def audit_observation(bundle,observation):
+    from src.engine.scalping import continuous_reversal_policy_v5 as V
+    if bundle['continuous_reversal']['schema']=='continuous_reversal_policy_v6':
+        from src.engine.scalping import continuous_reversal_policy_v6 as V
     """Verify original overlay bytes, then delegate unchanged machine checks."""
     a=observation['source']['assessment']
     if not a.get('auxiliary_registry_sha256'):return V.audit_observation(bundle,observation)
@@ -367,7 +379,7 @@ def audit_observation(bundle,observation):
     # rewritten and original hashes were checked above.
     adapted=copy.deepcopy(observation)
     arm=bundle['continuous_reversal']['auxiliary_cells'][a['cell_key']]['routes'][a['route']]['payload']['arm']
-    adapted['source']['auxiliary_request']['prompt']=G.A.PROMPT+G.A.ARM_SUFFIXES[arm]
+    adapted['source']['auxiliary_request']['prompt']=G.projector(value['input_version']).PROMPT+G.projector(value['input_version']).ARM_SUFFIXES[arm]
     adapted['runtime_consumption']['continuous_reversal']['arm']=arm
     adapted['runtime_consumption']['continuous_reversal']['prompt_sha256']=P.digest(adapted['source']['auxiliary_request']['prompt'])
     return V.audit_observation(bundle,adapted)

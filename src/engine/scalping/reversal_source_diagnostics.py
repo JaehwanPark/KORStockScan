@@ -17,7 +17,7 @@ def claim_snapshot_with_receipt(*args, **kwargs):
     Extra source metadata does not change the native token, snapshot or guard.
     Registration and its copy share the ingestion lock; no disk or API I/O.
     """
-    from src.engine.scalping.reversal_operating_backend import backend
+    from src.engine.scalping.reversal_current_backend import backend
     B = backend()
     with B._LOCK:
         claim = B.claim_snapshot(*args, **kwargs)
@@ -54,7 +54,7 @@ def verified_registration(claim, proof):
                 or proof['scope'] != ([event['symbol'], event['venue'], event['source_item'],
                                       event['market'], datetime.fromtimestamp(event['epoch'], K.KST).date().isoformat()]
                     + ([__import__('src.engine.scalping.reversal_path_catalog',fromlist=['cell_key']).cell_key(
-                        event['symbol'],event['market'],event['confirmation_price'])] if claim.get('backend')=='operating_v5' else []))
+                        event['symbol'],event['market'],event['confirmation_price'])] if claim.get('backend') in {'operating_v5','operating_v6'} else []))
                 or proof['claim_token'] != B.digest([proof['generation'], event['signal_id'], proof['snapshot']])
                 or not 0 <= proof['claim_epoch'] - event['epoch'] <= 5
                 or not 0 <= proof['observed_epoch'] - proof['claim_epoch'] <= 5):
@@ -72,7 +72,7 @@ def validate_claim_with_receipt(claim, family_sha256, *, now,
     decision clock for the unchanged guard and separately timestamp the state
     read: ingestion can advance while the caller waits to acquire this lock.
     """
-    from src.engine.scalping.reversal_operating_backend import backend
+    from src.engine.scalping.reversal_current_backend import backend
     B = backend(claim)
 
     with B._LOCK:
@@ -141,13 +141,13 @@ def project(snapshot, *, symbol, venue, session, now, item, envelope=None):
     event, _ = snapshot
     market = K.market_bucket(session)
     key = (symbol, venue, item, market, datetime.fromtimestamp(now, K.KST).date())
-    from src.engine.scalping.reversal_operating_backend import backend
+    from src.engine.scalping.reversal_current_backend import backend
     registered=backend()
     native=registered if getattr(registered, "_FAMILY", None) is not None else K
     if native is registered:
         key=key[:4]+(key[4].isoformat(),)
     with native._LOCK:
-        if getattr(native,'_FAMILY',{}).get('schema')=='continuous_reversal_policy_v5':
+        if (getattr(native,'_FAMILY',None) or {}).get('schema') in {'continuous_reversal_policy_v5','continuous_reversal_policy_v6'}:
             from src.engine.scalping.reversal_path_catalog import cell_key
             scope=cell_key(symbol,market,event['confirmation_price'])
             if native._FAMILY['machine_cells'][scope]['routes'][venue]['backend']=='registered_v4':

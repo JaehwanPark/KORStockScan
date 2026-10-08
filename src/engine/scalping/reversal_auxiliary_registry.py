@@ -14,9 +14,16 @@ from src.engine.scalping import continuous_reversal_postclose as P
 SCHEMA = 'main_auxiliary_prompt_registry_v1'
 
 
-def projector_hash():
+def projector(version=None):
+    if version is None or version==A.VERSION:return A
+    from src.engine.scalping import reversal_extended_union as E
+    if version==E.VERSION:return E
+    raise ValueError('auxiliary_registry_input_version_unsupported')
+
+
+def projector_hash(version=None):
     from src.engine.scalping.mechanistic_entry_runtime_policy import _source_hash, _signature
-    path=Path(A.__file__)
+    path=Path(projector(version).__file__)
     return _source_hash(str(path),_signature(path))
 
 
@@ -24,26 +31,28 @@ def directory(data_root):
     return Path(data_root) / 'runtime/mechanistic_entry_policy/auxiliary/registry'
 
 
-def definition(arm, *, prompt=None, hypothesis='Historical registered wording', development_keys=()):
+def definition(arm, *, prompt=None, hypothesis='Historical registered wording', development_keys=(), input_version=None):
+    A=projector(input_version)
     binding = A.binding(arm)
     body = dict(schema=SCHEMA, base_arm=arm, prompt=prompt if prompt is not None else A.PROMPT + A.ARM_SUFFIXES[arm],
                 hypothesis=hypothesis, development_keys=sorted(set(development_keys)),
                 input_version=A.VERSION, validator_version=A.VERSION,
                 response_schema_version=A.VERSION, provider='openai', model='gpt-5.4-nano',
                 max_output_tokens=1024, reasoning_effort='none',
-                projector_sha256=projector_hash())
+                projector_sha256=projector_hash(A.VERSION))
     body['registry_sha256'] = P.digest(body)
     validate(body)
     return body
 
 
 def validate(value):
+    A=projector(value.get("input_version")) if isinstance(value,dict) else globals()["A"]
     if (not isinstance(value, dict) or value.get('schema') != SCHEMA
             or value.get('registry_sha256') != P.digest({k:v for k,v in value.items() if k != 'registry_sha256'})
             or value.get('base_arm') not in A.V1.ARMS
             or value.get('input_version') != A.VERSION or value.get('validator_version') != A.VERSION
             or value.get('response_schema_version') != A.VERSION
-            or value.get('projector_sha256') != projector_hash()
+            or value.get('projector_sha256') != projector_hash(A.VERSION)
             or value.get('provider') != 'openai' or value.get('model') != 'gpt-5.4-nano'
             or value.get('max_output_tokens') != 1024 or value.get('reasoning_effort') != 'none'
             or not isinstance(value.get('prompt'), str) or not value['prompt'].strip()
@@ -79,6 +88,7 @@ def load(data_root, ident):
 
 def binding(value):
     validate(value)
+    A=projector(value['input_version'])
     arm = value['base_arm']
     if value['prompt'] == A.PROMPT + A.ARM_SUFFIXES[arm]:
         return A.binding(arm)
@@ -88,6 +98,7 @@ def binding(value):
 
 def production_request(snapshot, value):
     validate(value)
+    A=projector(value['input_version'])
     event, source = snapshot
     inp, _, schema = A.production_request(source, value['base_arm'], event=event)
     return inp, value['prompt'], schema
@@ -98,6 +109,8 @@ def request(snapshot, value):
     from src.engine.scalping.continuous_reversal_operating_postclose import request as old_request
     validate(value)
     req = copy.deepcopy(old_request(snapshot, value['base_arm']))
+    if req['candidate_input']['schema']!=value['input_version']:
+        raise ValueError('auxiliary_registry_snapshot_version_mismatch')
     req['candidate'].update(system_prompt=value['prompt'], prompt_version=binding(value)['prompt_version'])
     req['paired_replay_id'] = P.digest([A.opportunity(snapshot[0]), 'UNION',
                                       {k:req[k] for k in ('candidate_input','candidate','control','stage')}])
@@ -111,11 +124,12 @@ def main(argv=None):
     parser.add_argument('--data-root',type=Path,required=True)
     parser.add_argument('--arm',choices=A.V1.ARMS,required=True)
     parser.add_argument('--prompt-file',type=Path)
+    parser.add_argument('--input-version',default=A.VERSION)
     parser.add_argument('--hypothesis',required=True)
     parser.add_argument('--development-key',action='append',default=[])
     args=parser.parse_args(argv)
     value=definition(args.arm,prompt=args.prompt_file.read_text() if args.prompt_file else None,
-                     hypothesis=args.hypothesis,development_keys=args.development_key)
+                     hypothesis=args.hypothesis,development_keys=args.development_key,input_version=args.input_version)
     print(json.dumps(dict(registry_sha256=register(args.data_root,value),runtime_applied=False)))
 
 

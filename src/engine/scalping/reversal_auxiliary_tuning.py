@@ -72,7 +72,7 @@ def prepare(data_root, day, machine, parent):
         raise ValueError('auxiliary_tuning_not_configured')
     if machine.get('artifact_content_sha256') != P.seal(machine)['artifact_content_sha256'] or machine.get('source_date')!=day:
         raise ValueError('auxiliary_machine_report_changed')
-    if machine['operating_manifest']['scopes'] != parent['continuous_reversal']['operating_manifest']['scopes']:
+    if machine['operating_manifest']['scopes'] != parent['continuous_reversal']['operating_manifest']['scopes'] and not machine.get('registration_change'):
         raise ValueError('auxiliary_tuning_machine_membership_changed')
     # Current identities are frozen before looking at outcomes or responses.
     current = I.effective_bindings(data_root, parent)
@@ -105,6 +105,11 @@ def prepare(data_root, day, machine, parent):
                 census['development_or_source_excluded'] += 1
                 continue
             if p['scope'] in cfg['scopes'] and p['scope'] in current:
+                version=G.load(data_root,current[p['scope']])['input_version']
+                if machine.get('policy_schema')=='continuous_reversal_policy_v6':
+                    from src.engine.scalping import reversal_extended_union as EA
+                    if version!=EA.VERSION or candidate['input_version']!=EA.VERSION:
+                        census['typed_candidate_incompatible']+=1;continue
                 choices[p['scope']].append((P.digest([cfg['seed'], ident]), p))
         for values in choices.values():
             values.sort(key=lambda v:v[0])
@@ -215,7 +220,7 @@ def calls(data_root, day, *, stop_epoch=None, transport=None):
                 attempt=store.reserve(rid,fence,budget_key=key,call_limit=LIMIT,additional_budget_keys=[origin])
                 try:
                     result=transport(req,timeout_sec=30)
-                    errors=G.A.validate_response(result.get('candidate_response'),req['candidate_input'],arm=registry['base_arm'])
+                    errors=G.projector(registry['input_version']).validate_response(result.get('candidate_response'),req['candidate_input'],arm=registry['base_arm'])
                     record=dict(result=result,validation_errors=errors,transport_invoked=True)
                 except Exception as exc:
                     record=dict(error_type=type(exc).__name__,validation_errors=['provider_attempt_uncertain'],transport_invoked=True)
@@ -264,7 +269,7 @@ def evaluate(data_root, day):
                     raise ValueError('auxiliary_pair_request_changed')
                 if r[4]!='completed' or not r[5]:reasons.append(role+':'+r[4]);continue
                 record=store.get(r[5]); result=record.get('result',{}); response=result.get('candidate_response')
-                errors=G.A.validate_response(response,req['candidate_input'],arm=registry['base_arm'])
+                errors=G.projector(registry['input_version']).validate_response(response,req['candidate_input'],arm=registry['base_arm'])
                 if errors or not (result.get('provider_provenance') or {}).get('response_id'):
                     reasons.append(role+':invalid_response');continue
                 verdicts[role]=response['risk_verdict']
@@ -287,7 +292,7 @@ def evaluate(data_root, day):
                         machine_win_rate=sum(o=='WIN' for o,_ in v['current'])/len(v['current']) if v['current'] else None)
     result=P.seal(dict(schema=SCHEMA,source_date=day,campaign_sha256=c['artifact_content_sha256'],
         parent_bundle_sha256=c['parent_bundle_sha256'],detector_manifest_hash=c['detector_manifest_hash'],
-        scopes=scopes,pairs=pairs,request_completion=not any(states.get(k) for k in ('planned','reserved','failed')),
+        scopes=scopes,pairs=pairs,request_completion=not c['eligible_census'].get('typed_candidate_incompatible') and not any(states.get(k) for k in ('planned','reserved','failed')),
         paired_metrics_ready=any(v['paired_points'] for v in scopes.values()),
         observation_mode='confirmation_replay',population_claim='completed_common_pairs_only',
         eligible_census=c['eligible_census'],not_sampled_budget=c['not_sampled_budget'],
@@ -307,6 +312,8 @@ def auxiliary_report(data_root,day,publication,parent,*,publish_policy=True):
     from src.engine.scalping import continuous_reversal_operating_postclose as O
     from src.engine.scalping import continuous_reversal_shared_ledger as L
     from src.engine.scalping import continuous_reversal_policy_v5 as V
+    if parent['continuous_reversal']['schema']=='continuous_reversal_policy_v6':
+        from src.engine.scalping import continuous_reversal_policy_v6 as V
     from src.engine.scalping import mechanistic_entry_runtime_policy as N
     machine=read(O.directory(data_root,day)/'machine-comparison.json')
     campaign=read(directory(data_root,day)/'latest-campaign.json')
@@ -349,8 +356,9 @@ def auxiliary_report(data_root,day,publication,parent,*,publish_policy=True):
             cell=mc[key]['routes'][route]
             ids=[b['branch_id'] for b in cell['payload']['branches']]
             cell['scope_execution_hash']=V.scope_hash(ids,ac[key]['routes'][route]['payload'],cell['backend'],machine['execution_code_sha256'])
-            if cell['backend']!='union_v5':pending.append(dict(scope=V.scope_id(key,route),reason='native_pair_carried'))
+            if cell['backend'] not in {'union_v5','union_v6'}:pending.append(dict(scope=V.scope_id(key,route),reason='native_pair_carried'))
         issued=P.seal(dict(machine,cells=list(mc.values()),status='completed_with_scope_carry' if pending else 'completed',
+            membership_status='registered',registration_state='registered',adoption_basis='carried',
             source_receipts=machine['source_receipts']+receipts,scope_pending=pending))
         auxiliary=P.seal(dict(schema=O.SCHEMA,source_date=day,target_date=day,publication_date=publication,
             status=issued['status'],cells=list(ac.values()),machine_report_sha256=issued['artifact_content_sha256'],

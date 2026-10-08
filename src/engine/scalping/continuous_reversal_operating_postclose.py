@@ -49,12 +49,13 @@ def enabled(data_root):
 def active(data_root,day):
     from src.engine.scalping import mechanistic_entry_runtime_policy as N
     current=N.load_effective(data_root=Path(data_root),target_date=day)
-    if (current or {}).get('continuous_reversal',{}).get('schema')==V5.SCHEMA or (enabled(data_root) and (current or {}).get('continuous_reversal',{}).get('schema')==V4.SCHEMA):
+    if (current or {}).get('continuous_reversal',{}).get('schema') in {V5.SCHEMA,'continuous_reversal_policy_v6'} or (enabled(data_root) and (current or {}).get('continuous_reversal',{}).get('schema')==V4.SCHEMA):
         return current
     return None
 
 
-def proposals(parent, manifest):
+def proposals(parent, manifest, *, catalog=C):
+    C=catalog
     f=parent['continuous_reversal']; result={}
     for key,route in V5.scopes():
         sid=V5.scope_id(key,route)
@@ -68,6 +69,9 @@ def proposals(parent, manifest):
 
 def request(snapshot, arm, *, incumbent=None):
     event,source=snapshot
+    from src.engine.scalping import reversal_extended_catalog as EC
+    from src.engine.scalping import reversal_extended_union as EA
+    UNION = EA if event.get("registry_sha256")==EC.SHA256 else globals()["UNION"]
     if incumbent is not None:
         key=C.cell_key(event['symbol'],event['market'],event['confirmation_price']); route=event['venue']
         cell=incumbent['machine_cells'][key]['routes'][route]
@@ -113,8 +117,16 @@ def machine_report(data_root,day,publication,parent,*,source=None,publish_output
     source=source or P.ensure_population(data_root,day)
     if source['artifact_content_sha256']!=P.seal(source)['artifact_content_sha256']:
         raise ValueError('operating_source_manifest_invalid')
-    manifest=V5.detector_manifest(parent,effective_date=N.next_target(publication))
-    configs=proposals(parent,manifest)
+    from src.engine.scalping import reversal_extended_registration as ER
+    from src.engine.scalping import reversal_extended_state as R
+    change=ER.pending(data_root,parent,N.next_target(publication))
+    if change or parent['continuous_reversal']['schema']=='continuous_reversal_policy_v6':
+        from src.engine.scalping import reversal_extended_catalog as C
+        from src.engine.scalping import continuous_reversal_policy_v6 as V5
+    else:
+        C=globals()['C'];V5=globals()['V5']
+    manifest=V5.detector_manifest(parent,effective_date=N.next_target(publication),changes=change)
+    configs=proposals(parent,manifest,catalog=C)
     code={Path(m.__file__).name:P.file_hash(m.__file__) for m in V5.contract_modules()}
     # Bind only detection/input execution code, not performance report bytes.
     execution_code=P.digest(code)
@@ -139,7 +151,7 @@ def machine_report(data_root,day,publication,parent,*,source=None,publish_output
                 bars[rec['day']]=P.completed_bars(data_root,rec['day'],snapshot_sink=sink)
                 source_receipts+=bars[rec['day']][1]
             fingerprint=P.digest([rec,manifest['detector_manifest_hash'],code,bars[rec['day']][1],C.LABEL,
-                                  P.file_hash(__file__),P.file_hash(A.__file__)])
+                                  P.file_hash(__file__),P.file_hash(A.__file__),P.file_hash(R.__file__)])
             cache=store.checkpoint('operating-replay:'+fingerprint)
             if cache:
                 records=cache['records'];masks=cache['masks'];local_coverage=cache['coverage']
@@ -154,7 +166,7 @@ def machine_report(data_root,day,publication,parent,*,source=None,publish_output
                             if row[9]!=item:row[8]=0
                         keys=[C.cell_key(symbol,market,1)] if C.group(symbol)=='samsung' else [f'{C.group(symbol)}|{market}|{b}' for b in C.BANDS]
                         ids=sorted({b for key in keys for b in manifest['scopes'][V5.scope_id(key,route)]})
-                        state=R.State(branch_ids=ids,session_anchor=next((r for r in rows if r[8]),None),offline=True)
+                        state=R.State(branch_ids=ids,registry_sha256=C.SHA256,session_anchor=next((r for r in rows if r[8]),None),offline=True)
                         points=[];previous=None;run=None
                         for index,row in enumerate(rows):
                             ready=state.observe(row,symbol=symbol,venue=route,session=rec['session'])
@@ -221,6 +233,7 @@ def machine_report(data_root,day,publication,parent,*,source=None,publish_output
         cells=list(copy.deepcopy(parent['continuous_reversal']['machine_cells']).values()),
         membership_status='pending_exact_union_auxiliary_pair',
         source_manifest_sha256=source['artifact_content_sha256'],source_receipts=source_receipts,label_contract=C.LABEL,
+        registration_change=change,policy_schema=V5.SCHEMA,
         population='all_retained_native_ticks',observation_mode='confirmation_replay',actual_trades_claimed=False,
         input_census=dict(input_counts),quarantined_conflicts=sorted(conflicts),partitions=partitions,compressed_coverage_masks=all_masks,
         detection_coverage={k:dict(v) for k,v in coverage_counts.items()},fixed_proposals=configs,
@@ -246,7 +259,7 @@ def prepare_inputs(data_root,day,machine,parent=None):
     from src.engine.scalping import reversal_auxiliary_tuning as T
     if T.config(data_root) is not None:
         parent=parent or N.load_effective(data_root=Path(data_root),target_date=machine['publication_date'])
-        if parent['continuous_reversal']['schema']==V5.SCHEMA:
+        if parent['continuous_reversal']['schema'] in {V5.SCHEMA,'continuous_reversal_policy_v6'}:
             return T.prepare(data_root,day,machine,parent)
     if machine['artifact_content_sha256']!=P.seal(machine)['artifact_content_sha256']:
         raise ValueError('operating_machine_changed')
@@ -447,9 +460,13 @@ def initial_protocol_evidence(store, snapshot, required):
 
 
 def auxiliary_report(data_root,day,publication,parent,*,publish_policy=True):
+    machine=json.loads((directory(data_root,day)/'machine-comparison.json').read_text())
+    if machine.get('registration_change'):
+        from src.engine.scalping.reversal_extended_registration import initial_reports
+        return initial_reports(data_root,day,publication,parent,machine,publish_policy=publish_policy)
     from src.engine.scalping import mechanistic_entry_runtime_policy as N
     from src.engine.scalping import reversal_auxiliary_tuning as T
-    if T.config(data_root) is not None and parent['continuous_reversal']['schema']==V5.SCHEMA:
+    if parent['continuous_reversal']['schema']=='continuous_reversal_policy_v6' or (T.config(data_root) is not None and parent['continuous_reversal']['schema']==V5.SCHEMA):
         return T.auxiliary_report(data_root,day,publication,parent,publish_policy=publish_policy)
     out=directory(data_root,day);ledger=out/'shared-ledger'
     machine=json.loads((out/'machine-comparison.json').read_text());gen=machine['artifact_content_sha256']
@@ -516,6 +533,8 @@ def auxiliary_report(data_root,day,publication,parent,*,publish_policy=True):
         machine_cells[key]['routes'][route]=mc;aux_cells[key]['routes'][route]=ac
     comparison_path=out/'frozen'/('machine-'+gen+'.json');P.write(comparison_path,machine)
     issued=P.seal(dict(machine,cells=list(machine_cells.values()),comparison_report_sha256=gen,
+        membership_status='registered',registration_state='registered',
+        adoption_basis='operator_designated' if initial else 'carried' if pending else 'comparison_selected',
         source_receipts=machine['source_receipts']+receipts+[dict(path=str(comparison_path.resolve()),sha256=P.file_hash(comparison_path))]
             +([initial['authorization_source']] if initial else []),
         initial_registration=initial,

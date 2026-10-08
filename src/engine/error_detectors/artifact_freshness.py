@@ -441,7 +441,13 @@ def _continuous_reversal_result_semantics(root, source_date, component):
             raise ValueError('continuous_reversal_stage_report_mismatch')
         handoff = policy.direct_handoff(root / 'data', source_date)
         bundle = native.load(data_root=root / 'data', target_date=handoff['effective_date'])
-        return dict(status='cumulative_winrate_selected', findings=[], stage_id=stage_id,
+        from src.engine.scalping.reversal_policy_status import report_state, current_view
+        states=report_state(report)
+        semantic={'operator_designated':'operator_initial_registered','carried':'verified_carried','comparison_selected':'cumulative_winrate_selected'}.get(states['adoption_basis'],'published_policy')
+        if states['comparison_state']=='source_gap':semantic='source_gap'
+        try:runtime=current_view(root/'data')
+        except (OSError,ValueError,KeyError,TypeError):runtime={'status':'not_observed'}
+        return dict(status=semantic, policy_states=states, current_policy_status=runtime, findings=[], stage_id=stage_id,
                     source_date=source_date, target_date=handoff['effective_date'],
                     artifact=str(report_path), report_sha256=report_sha,
                     selection_metric=handoff['selection_metric'],

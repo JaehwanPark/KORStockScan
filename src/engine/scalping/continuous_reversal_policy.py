@@ -15,6 +15,9 @@ KST=ZoneInfo('Asia/Seoul')
 
 
 def validate_family(family):
+    if family.get("schema")=="continuous_reversal_policy_v6":
+        from src.engine.scalping.continuous_reversal_policy_v6 import validate_family as v6
+        return v6(family)
     if family.get('schema')=='continuous_reversal_policy_v5':
         from src.engine.scalping.continuous_reversal_policy_v5 import validate_family as v5
         return v5(family)
@@ -139,6 +142,9 @@ def validate_sources(bundle,data_root):
 
 
 def _validate_sources(bundle,data_root):
+    if (bundle.get("continuous_reversal") or {}).get("schema")=="continuous_reversal_policy_v6":
+        from src.engine.scalping.continuous_reversal_policy_v6 import validate_sources as v6
+        return v6(bundle,data_root)
     if (bundle.get('continuous_reversal') or {}).get('schema')=='continuous_reversal_policy_v5':
         from src.engine.scalping.continuous_reversal_policy_v5 import validate_sources as v5
         return v5(bundle,data_root)
@@ -197,6 +203,20 @@ def _validate_sources(bundle,data_root):
 
 
 def assess(family,snapshot,*,symbol,session):
+    result=_assess(family,snapshot,symbol=symbol,session=session)
+    # Observability cannot turn a valid decision into runtime permission or denial.
+    try:
+        from src.engine.scalping.reversal_policy_status import record_decision
+        record_decision(family,result)
+    except (OSError,ValueError,KeyError,TypeError):
+        pass
+    return result
+
+
+def _assess(family,snapshot,*,symbol,session):
+    if family.get("schema")=="continuous_reversal_policy_v6":
+        from src.engine.scalping.continuous_reversal_policy_v6 import assess as v6
+        return v6(family,snapshot,symbol=symbol,session=session)
     if family.get('schema')=='continuous_reversal_policy_v5':
         from src.engine.scalping.continuous_reversal_policy_v5 import assess as v5
         return v5(family,snapshot,symbol=symbol,session=session)
@@ -240,19 +260,26 @@ def compose(response,policy):
     action=assessment['action'];inp=policy.get('continuous_reversal_input')
     arm=policy.get('continuous_reversal_arm')
     phase=assessment.get('decision_phase','FIRST_UPTICK')
-    if assessment.get('policy_version') in {'continuous_reversal_policy_v2','continuous_reversal_policy_v3','continuous_reversal_policy_v4','continuous_reversal_policy_v5'} and action=='ENTER_NOW':
+    if assessment.get('policy_version') in {'continuous_reversal_policy_v2','continuous_reversal_policy_v3','continuous_reversal_policy_v4','continuous_reversal_policy_v5','continuous_reversal_policy_v6'} and action=='ENTER_NOW':
         from src.engine.scalping.reversal_auxiliary_phases import validate_response as validate_phase
         if assessment.get('policy_version')=='continuous_reversal_policy_v4':
             from src.engine.scalping.reversal_path_auxiliary import validate_response as validate_phase
         if assessment.get('policy_version')=='continuous_reversal_policy_v5':
             from src.engine.scalping.reversal_operating_auxiliary import validate_response as validate_phase
+        if assessment.get('policy_version')=='continuous_reversal_policy_v6':
+            from src.engine.scalping.reversal_extended_union import validate_response as validate_phase
         errors=validate_phase(response,inp,arm=arm,phase=phase)
-        from src.engine.scalping.reversal_operating_backend import validate_any_claim as validate_claim
+        from src.engine.scalping.reversal_current_backend import validate_any_claim as validate_claim
         try:
             from src.engine.scalping.mechanistic_entry_runtime_policy import load_effective
             from src.utils.constants import DATA_DIR
             active=load_effective(data_root=DATA_DIR,target_date=datetime.now(KST).date().isoformat())
-            if assessment.get('policy_version')=='continuous_reversal_policy_v5':
+            if assessment.get('policy_version')=='continuous_reversal_policy_v6':
+                from src.engine.scalping.continuous_reversal_policy_v6 import validate_active_claim
+                from src.engine.scalping.reversal_auxiliary_intraday import validate_decision
+                validate_decision(DATA_DIR,policy,active,now=__import__('time').time())
+                assessment['still_valid_policy_refs']=validate_active_claim(policy,active,now=__import__('time').time())
+            elif assessment.get('policy_version')=='continuous_reversal_policy_v5':
                 from src.engine.scalping.continuous_reversal_policy_v5 import validate_active_claim
                 from src.engine.scalping.reversal_auxiliary_intraday import validate_decision
                 validate_decision(DATA_DIR, policy, active, now=__import__('time').time())
@@ -311,12 +338,12 @@ def direct_handoff(data_root,day,*,effective_date=None,publication_date=None):
     if family['source_date']!=day or family['publication_date']!=publication:
         raise ValueError('continuous_reversal_source_date_mismatch')
     out=directory(data_root,day)
-    if family.get('schema') in {'continuous_reversal_policy_v2','continuous_reversal_policy_v3','continuous_reversal_policy_v4','continuous_reversal_policy_v5'}:
+    if family.get('schema') in {'continuous_reversal_policy_v2','continuous_reversal_policy_v3','continuous_reversal_policy_v4','continuous_reversal_policy_v5','continuous_reversal_policy_v6'}:
         # Initial intraday research and daily reports have independent owners.
         # Handoff reads the issued native immutable component snapshots.
         out=native.root(Path(data_root))/'sources'
     for name in ['machine','auxiliary']:
-        path=out/(f"reversal-{family[name+'_report_sha256']}.json" if family.get('schema') in {'continuous_reversal_policy_v2','continuous_reversal_policy_v3','continuous_reversal_policy_v4','continuous_reversal_policy_v5'} else name+'.json')
+        path=out/(f"reversal-{family[name+'_report_sha256']}.json" if family.get('schema') in {'continuous_reversal_policy_v2','continuous_reversal_policy_v3','continuous_reversal_policy_v4','continuous_reversal_policy_v5','continuous_reversal_policy_v6'} else name+'.json')
         report=json.loads(path.read_text())
         if report['artifact_content_sha256']!=family[name+'_report_sha256'] or digest(
             {k:v for k,v in report.items() if k!='artifact_content_sha256'})!=report['artifact_content_sha256']:
@@ -327,12 +354,12 @@ def direct_handoff(data_root,day,*,effective_date=None,publication_date=None):
         machine_cells_sha256=digest(family['machine_cells']),auxiliary_cells_sha256=digest(family['auxiliary_cells']),
         machine_cell_count=len(family['machine_cells']),auxiliary_cell_count=len(family['auxiliary_cells']),selection_metric=family['selection_metric'],
         current_pid_consumption_claimed=False,runtime_effect=False,allowed_runtime_apply=False,actual_order_submitted=False)
-    if family.get('schema')=='continuous_reversal_policy_v5':
+    if family.get('schema') in {'continuous_reversal_policy_v5','continuous_reversal_policy_v6'}:
         scopes={key+'|'+route:dict(backend=cell['backend'],status=cell['status'],
                     scope_execution_hash=cell['scope_execution_hash'])
                 for key,parent_cell in family['machine_cells'].items()
                 for route,cell in parent_cell['routes'].items()}
-        ready=sum(cell['backend']=='union_v5' for cell in scopes.values())
+        ready=sum(cell['backend'] in {'union_v5','union_v6'} for cell in scopes.values())
         census=dict(planned=len(scopes),new_ready=ready,new_actual_pid_consumed=0,
                     native_carried=len(scopes)-ready,contract_gaps=0)
         # `report` is the sealed auxiliary component read above. Never label
@@ -348,6 +375,9 @@ def direct_handoff(data_root,day,*,effective_date=None,publication_date=None):
                        operating_disposition=report['status'],
                        machine_list_policy='explicit_operating_registration',
                        new_policy_application_claimed=False)
+    from src.engine.scalping.reversal_policy_status import report_state, operating_scope
+    handoff.update(policy_states=report_state(report),contract_scope_count=sum(len(c['routes']) for c in family['machine_cells'].values()),
+        operating_scope_count=sum(operating_scope(k+'|'+r) for k,c in family['machine_cells'].items() for r in c['routes']))
     return handoff
 
 
@@ -383,6 +413,8 @@ def _activate(data_root,target_date,*,now=None):
             from src.engine.scalping.continuous_reversal_policy_v4 import activate as activate_v2
         if json.loads(candidate.read_text())['continuous_reversal']['schema']=='continuous_reversal_policy_v5':
             from src.engine.scalping.continuous_reversal_policy_v5 import activate as activate_v2
+        if json.loads(candidate.read_text())['continuous_reversal']['schema']=='continuous_reversal_policy_v6':
+            from src.engine.scalping.continuous_reversal_policy_v6 import activate as activate_v2
         return activate_v2(data_root,target_date,now=now)
     from src.engine.scalping import mechanistic_entry_runtime_policy as native
     current=(now or datetime.now(KST)).astimezone(KST)
