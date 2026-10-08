@@ -4,7 +4,7 @@
 
 최종 계획 리뷰: 2026-10-08 KST — 에피소드 체결분 수동관리 지시 반영.
 
-상태: **수동관리 전제의 완전 퇴역/삭제 계획 보완. 구 episode 서비스 강제 종료·영구 OFF는 10/8 실행 완료. 코드·데이터 완전 제거는 미실행.**
+상태: **수동관리 경계를 보존한 구현·반복 리뷰/보완·배포/재기동·불필요 파일 삭제 완료(2026-10-08). 최종 Main-only 릴리스 v5의 PID 소비를 확인했다. Main 참조/공통 원장/고유 미검증 자료는 보존하며 다음 자연 장후는 예정 전 미관측이다.**
 
 2026-10-08 운영자 추가 지시: **에피소드로 체결된 주문은 사용자가 수동관리한다. 잔여 보유·미체결·intent의 0건 대사나 청산 완료를 위젯·에피소드 코드/서비스/전용 데이터 삭제의 선행 조건으로 두지 않는다.** 한화오션·SK이터닉스를 포함한 에피소드 자동 진입·청산·취소·보호 관리는 영구 종료한다. 수동관리 승인은 이번 사용자 지시로 충족하며 별도 보유 인수 확인을 다시 요구하지 않는다. 실제 flat·주문 terminal은 확인하지 않은 상태로 보존하고 Main의 보유로 치환하지 않는다. [강제 종료·영구 OFF 실행 기록](../audits/episode-permanent-off-lock-release-2026-10-08.md).
 
@@ -337,3 +337,11 @@ G1은 **자동 실행 종료와 수동관리분의 Main 격리**이며 금융 �
 ## 14. 구현·배포 검토
 
 사용자가 실행·반복 리뷰/보완·배포/재기동·불필요 데이터 삭제를 승인했다. 구현 결과와 남은 자연 장후 확인은 [구현 검토](../audits/main-only-widget-episode-full-retirement-implementation-review-2026-10-08.md)에 기록한다. 구 자동 owner 잔여의 청산이나 계좌 조회는 수행하지 않는다.
+
+## 15. 승인 실행 결과 — 2026-10-08
+
+Main-only 최종 릴리스 `main-only-retired-20261008-v5` / `2e056fc144ec08bdf0e0d3fc3d3063575ace4ca9`에 배포하고 Main PID 161317·웹 PID 161479를 확인했다. 양쪽과 예약 router는 같은 공통 native 계좌/원장을 사용한다. 5개 고정감시 heartbeat, Main 128경로·48운영 scope의 `consumed_exact`, 당일 bootstrap 및 장중 handoff PASS를 확인했다. 기계/보조 전략 pointer의 원 바이트와 공통 journal의 원 prefix hash는 그대로다. 자동 retired owner는 모든 주문 action에서 차단되며 잔여는 사용자 수동관리다.
+
+전용 코드/배포/테스트 325파일, 전용 unit/timer 217개와 설치 파일 562개, 참조 종료 worktree 107개 및 이번 최종화의 구 Main-only 릴리스 4개, 불필요 전용 데이터 5,182파일과 검증된 복제본을 제거했다. 공통 DB/journal, Main 정책·부모/원천 hash 참조 6,223파일과 고유 미검증 자료는 보존한다. 사용률은 정리 전 76%에서 68%, 가용 약 47 GiB다.
+
+핵심 615개 및 후속 결함별 회귀가 통과했고 최종 handoff/identity 관련 286개 검사에서 미해결 범위 내 코드 결함은 없었다. 전체 test collection의 기존 PYRAMID import 결함은 별도다. 퇴역 전용 worker/API/writer 제거와 현재 정상 기동은 확인했지만 통제된 전후 성능 개선율·자연 매매 손익이나 다음 자연 장후 성공으로 확대하지 않는다. `strict_checklist_generation_stale`는 재현되지 않았으며 과거 06:50 이후 완료의 `recovered_late` 경고는 사실대로 유지한다. 상세 검증과 보존·삭제 명세는 [구현 검토](../audits/main-only-widget-episode-full-retirement-implementation-review-2026-10-08.md)와 [최종 영수증](../../data/report/main_only_retirement/2026-10-08/deployment_final_v5.json)에 기록했다.
