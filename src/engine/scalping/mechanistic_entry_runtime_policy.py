@@ -885,7 +885,10 @@ def _validate_anchored_bundle_sources(bundle: dict, data_root: Path, *, historic
                 from src.engine.scalping.continuous_reversal_policy_v6 import validate_sources
             return validate_sources(bundle,data_root,code_root=historical_code_root)
         from src.engine.scalping.continuous_reversal_policy import validate_sources
-        return validate_sources(bundle,data_root)
+        validated=validate_sources(bundle,data_root)
+        from src.engine.scalping.reversal_auxiliary_intraday import validate_inheritance_cutoff
+        validate_inheritance_cutoff(data_root,bundle)
+        return validated
     machine_source = bundle.get("machine_evaluation_source") or {}
     if machine_source:
         machine_path = (

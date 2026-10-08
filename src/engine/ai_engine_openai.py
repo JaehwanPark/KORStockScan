@@ -939,7 +939,10 @@ class OpenAIResponsesWSWorker:
                             f"OpenAI Responses WS late discard ({request.context_name})"
                         )
                     raw_text = str(getattr(response, "output_text", "") or "").strip()
-                    if request.require_json:
+                    if request.schema_name=='auxiliary_compact_citations_v1':
+                        from src.engine.scalping.reversal_auxiliary_wire import parse_response_text
+                        payload=parse_response_text(raw_text)
+                    elif request.require_json:
                         try:
                             payload = json.loads(raw_text)
                             if not isinstance(payload, dict):
@@ -962,6 +965,9 @@ class OpenAIResponsesWSWorker:
                     usage_meta["openai_response_sha256"] = hashlib.sha256(
                         raw_text.encode("utf-8")
                     ).hexdigest()
+                    if request.schema_name=='auxiliary_compact_citations_v1':
+                        usage_meta['auxiliary_raw_output_bytes_b64']=__import__('base64').b64encode(raw_text.encode('utf-8')).decode('ascii')
+                        usage_meta['auxiliary_response_status']=_get_usage_value(response,'status')
                     return OpenAITransportResult(
                         payload=payload,
                         transport_mode="responses_ws",
@@ -4860,9 +4866,13 @@ class GPTSniperEngine:
                 provider_total_ms += provider_ms
                 self._rotate_client()
                 raw_text = self._extract_openai_response_text(response)
-                payload = self._parse_openai_transport_payload(
-                    raw_text, require_json=request.require_json
-                )
+                if request.schema_name=='auxiliary_compact_citations_v1':
+                    from src.engine.scalping.reversal_auxiliary_wire import parse_response_text
+                    payload=parse_response_text(raw_text)
+                else:
+                    payload = self._parse_openai_transport_payload(
+                        raw_text, require_json=request.require_json
+                    )
                 roundtrip_ms = max(
                     0, int((time.perf_counter() - request.submitted_at_perf) * 1000)
                 )
@@ -4873,6 +4883,9 @@ class GPTSniperEngine:
                 usage_meta["openai_response_sha256"] = hashlib.sha256(
                     raw_text.encode("utf-8")
                 ).hexdigest()
+                if request.schema_name=='auxiliary_compact_citations_v1':
+                    usage_meta['auxiliary_raw_output_bytes_b64']=__import__('base64').b64encode(raw_text.encode('utf-8')).decode('ascii')
+                    usage_meta['auxiliary_response_status']=_get_usage_value(response,'status')
                 return OpenAITransportResult(
                     payload=payload,
                     transport_mode="http",
@@ -5123,6 +5136,7 @@ class GPTSniperEngine:
             max_output_tokens = 512
             reasoning_effort = 'none'
         registered_auxiliary = None
+        auxiliary_envelope = None
         if auxiliary_registry_sha256:
             from src.engine.scalping import reversal_auxiliary_registry as registry
             from src.utils.constants import DATA_DIR
@@ -5135,11 +5149,18 @@ class GPTSniperEngine:
                     or response_schema_override!=registry.projector(registered_auxiliary['input_version']).response_schema(projected)
                     or user_input!=json.dumps(projected,ensure_ascii=True,sort_keys=True,separators=(',',':'))):
                 raise ValueError('registered_auxiliary_transport_contract_changed')
+            if registered_auxiliary['schema']==registry.SCHEMA_V2:
+                auxiliary_envelope=registry.envelope(projected,registered_auxiliary)
+                prompt=auxiliary_envelope['final_prompt']
+                user_input=json.dumps(auxiliary_envelope['wire_input'],ensure_ascii=True,sort_keys=True,separators=(',',':'))
+                response_schema_override=auxiliary_envelope['wire_schema']
             compact_auxiliary_call=True  # Registered OpenAI transport; no provider substitution.
             max_output_tokens=registered_auxiliary['max_output_tokens']
             reasoning_effort=registered_auxiliary['reasoning_effort']
             target_temp=None
             metadata_extra=dict(metadata_extra or {},auxiliary_registry_sha256=auxiliary_registry_sha256)
+            if auxiliary_envelope:
+                metadata_extra['auxiliary_wire_envelope']=dict(contract=auxiliary_envelope['contract'],hashes=auxiliary_envelope['hashes'])
         request = self._build_openai_response_request(
             prompt=prompt,
             user_input=user_input,
@@ -5170,7 +5191,7 @@ class GPTSniperEngine:
         if registered_auxiliary:
             # Offline execution sends these exact bytes without the generic
             # runtime glossary. Preserve that registered contract end to end.
-            request.prompt=registered_auxiliary['prompt']
+            request.prompt=auxiliary_envelope['final_prompt'] if auxiliary_envelope else registered_auxiliary['prompt']
             request.schema_name=registered_auxiliary['response_schema_version']
         response_schema_registry_used = self._should_use_openai_schema_registry(
             require_json=request.require_json,
@@ -5222,6 +5243,15 @@ class GPTSniperEngine:
             ),
         }
 
+        if auxiliary_envelope:
+            payload=request.build_provider_payload(use_schema_registry=True)
+            transport_meta['auxiliary_provider_request']=dict(
+                model=payload['model'],instructions_sha256=hashlib.sha256(payload['instructions'].encode()).hexdigest(),
+                input_sha256=hashlib.sha256(payload['input'].encode()).hexdigest(),
+                schema_name=request.schema_name,schema_sha256=auxiliary_envelope['hashes']['wire_schema'],
+                max_output_tokens=payload['max_output_tokens'],reasoning=payload.get('reasoning'),
+                temperature_application='omitted',store=payload['store'],text_verbosity=payload['text']['verbosity'],strict=True,
+                wire_contract=auxiliary_envelope['contract'],registry_sha256=auxiliary_registry_sha256)
         def capture_request(selected_request):
             return capture_ai_request(
                 prompt=selected_request.prompt,
@@ -5235,7 +5265,7 @@ class GPTSniperEngine:
                 temperature=selected_request.temperature,
                 max_output_tokens=selected_request.max_output_tokens,
                 reasoning_effort=selected_request.reasoning_effort,
-                metadata=selected_request.metadata,
+                metadata=dict(selected_request.metadata,**{k:v for k,v in (metadata_extra or {}).items() if k in ('machine_observation_sha256','continuous_reversal_consumption')},auxiliary_wire_envelope=dict(contract=auxiliary_envelope['contract'],hashes=auxiliary_envelope['hashes'])) if auxiliary_envelope else selected_request.metadata,
                 replay_context=replay_context,
             )
 
@@ -10548,7 +10578,7 @@ class GPTSniperEngine:
                     validate_claim(entry_setup_live_policy.get('continuous_reversal_claim'),assessment['family_sha256'],now=time.time())
                 if entry_budget is not None:
                     entry_budget.require()
-                request_identity=digest([assessment['signal_id'],prompt_version,replay_context,prompt,reversal_schema])
+                request_identity=digest([assessment['signal_id'],prompt_version,replay_context,prompt,reversal_schema,assessment.get('auxiliary_wire_contract'),assessment.get('auxiliary_wire_hashes')]) if assessment.get('auxiliary_wire_contract') else digest([assessment['signal_id'],prompt_version,replay_context,prompt,reversal_schema])
                 if assessment.get('policy_version') in {'continuous_reversal_policy_v5','continuous_reversal_policy_v6'}:
                     from src.engine.scalping.reversal_operating_outbox import reserve
                     reserve_started_perf = time.perf_counter()
@@ -10620,8 +10650,26 @@ class GPTSniperEngine:
             # V2.14 validates a deliberately narrow model-response schema.
             if entry_setup_live_policy.get('continuous_reversal_assessment',{}).get('policy_version') in {'continuous_reversal_policy_v5','continuous_reversal_policy_v6'}:
                 from src.engine.scalping.reversal_operating_outbox import advance
+                received_meta=self._consume_last_transport_meta()
+                self._set_last_transport_meta(received_meta)
                 advance(DATA_DIR,entry_setup_live_policy['continuous_reversal_assessment']['opportunity_key'],
-                    'response_received',binding=dict(response=result,request_sha256=request_identity))
+                    'response_received',binding=dict(response=result,request_sha256=request_identity,
+                        **({'provider_receipt':{k:v for k,v in received_meta.items() if k in
+                            ('openai_response_id','openai_response_sha256','auxiliary_raw_output_bytes_b64','auxiliary_response_status','auxiliary_provider_request')}}
+                           if entry_setup_live_policy['continuous_reversal_assessment'].get('auxiliary_wire_contract') else {})))
+            # Raw response is durable above; decoding is a separate projection.
+            auxiliary_assessment=entry_setup_live_policy.get('continuous_reversal_assessment',{})
+            if auxiliary_assessment.get('auxiliary_wire_contract'):
+                from src.engine.scalping import reversal_auxiliary_registry as auxiliary_registry
+                registered=auxiliary_registry.load(DATA_DIR,auxiliary_assessment['auxiliary_registry_sha256'])
+                raw_result=result
+                if received_meta.get('auxiliary_response_status')!='completed':
+                    raise ValueError('auxiliary_provider_response_incomplete')
+                result=auxiliary_registry.decode_response(raw_result,entry_setup_live_policy['continuous_reversal_input'],registered)
+                from src.engine.scalping.reversal_auxiliary_intraday import record_decoded_response
+                decoded_receipt=record_decoded_response(DATA_DIR,auxiliary_assessment,request_identity,raw_result,result,registered)
+                received_meta['auxiliary_decoded_receipt_sha256']=decoded_receipt['artifact_content_sha256']
+                self._set_last_transport_meta(received_meta)
             # Transport/timing metadata is generated locally and must not be
             # mistaken for model output by the strict semantic validator.
             v2_14_transport_meta = {}

@@ -12,6 +12,7 @@ from src.engine.scalping import reversal_operating_auxiliary as A
 from src.engine.scalping import continuous_reversal_postclose as P
 
 SCHEMA = 'main_auxiliary_prompt_registry_v1'
+SCHEMA_V2 = 'main_auxiliary_prompt_registry_v2'
 
 
 def projector(version=None):
@@ -47,11 +48,11 @@ def definition(arm, *, prompt=None, hypothesis='Historical registered wording', 
 
 def validate(value):
     A=projector(value.get("input_version")) if isinstance(value,dict) else globals()["A"]
-    if (not isinstance(value, dict) or value.get('schema') != SCHEMA
+    if (not isinstance(value, dict) or value.get('schema') not in {SCHEMA,SCHEMA_V2}
             or value.get('registry_sha256') != P.digest({k:v for k,v in value.items() if k != 'registry_sha256'})
             or value.get('base_arm') not in A.V1.ARMS
             or value.get('input_version') != A.VERSION or value.get('validator_version') != A.VERSION
-            or value.get('response_schema_version') != A.VERSION
+            or value.get('response_schema_version') != (A.VERSION if value.get('schema')==SCHEMA else 'auxiliary_compact_citations_v1')
             or value.get('projector_sha256') != projector_hash(A.VERSION)
             or value.get('provider') != 'openai' or value.get('model') != 'gpt-5.4-nano'
             or value.get('max_output_tokens') != 1024 or value.get('reasoning_effort') != 'none'
@@ -61,7 +62,29 @@ def validate(value):
             or not isinstance(value.get('development_keys'), list)
             or any(not isinstance(k,str) for k in value['development_keys'])):
         raise ValueError('auxiliary_registry_contract_invalid')
+    if value['schema']==SCHEMA_V2:
+        from src.engine.scalping import reversal_auxiliary_wire as W
+        if (value.get('wire_contract')!=W.contract() or value['input_version']!='continuous_reversal_union_auxiliary_v3'
+                or value.get('temperature_policy')!='omit' or value.get('logical_response_schema_version')!=A.VERSION
+                or not re.fullmatch('[a-f0-9]{64}',value.get('research_registry_sha256',''))
+                or not isinstance(value.get('research_wire_contract'),dict)):
+            raise ValueError('auxiliary_registry_wire_contract_invalid')
     return value
+
+
+def compact_definition(research_value, *, research_wire_contract):
+    validate(research_value)
+    if research_value['schema']!=SCHEMA:
+        raise ValueError('auxiliary_research_registry_version_invalid')
+    from src.engine.scalping import reversal_auxiliary_wire as W
+    body=copy.deepcopy(research_value)
+    body.update(schema=SCHEMA_V2, response_schema_version=W.VERSION,
+                logical_response_schema_version=research_value['input_version'],wire_contract=W.contract(),
+                temperature_policy='omit',research_registry_sha256=research_value['registry_sha256'],
+                research_wire_contract=copy.deepcopy(research_wire_contract))
+    body.pop('registry_sha256')
+    body['registry_sha256']=P.digest(body)
+    return validate(body)
 
 
 def register(data_root, value):
@@ -83,6 +106,12 @@ def load(data_root, ident):
     value = validate(_read(directory(data_root)/(ident+'.json')))
     if value['registry_sha256'] != ident:
         raise ValueError('auxiliary_registry_identity_changed')
+    if value['schema']==SCHEMA_V2:
+        original=validate(_read(directory(data_root)/(value['research_registry_sha256']+'.json')))
+        if original['schema']!=SCHEMA or original['registry_sha256']!=value['research_registry_sha256']:
+            raise ValueError('auxiliary_registry_research_identity_changed')
+        if compact_definition(original,research_wire_contract=value['research_wire_contract'])!=value:
+            raise ValueError('auxiliary_registry_research_binding_changed')
     return value
 
 
@@ -90,9 +119,9 @@ def binding(value):
     validate(value)
     A=projector(value['input_version'])
     arm = value['base_arm']
-    if value['prompt'] == A.PROMPT + A.ARM_SUFFIXES[arm]:
+    if value['schema']==SCHEMA and value['prompt'] == A.PROMPT + A.ARM_SUFFIXES[arm]:
         return A.binding(arm)
-    return dict(A.binding(arm), prompt_version=SCHEMA+':'+value['registry_sha256'],
+    return dict(A.binding(arm), prompt_version=value['schema']+':'+value['registry_sha256'],
                 prompt_sha256=P.digest(value['prompt']), registry_sha256=value['registry_sha256'])
 
 
@@ -114,7 +143,28 @@ def request(snapshot, value):
     req['candidate'].update(system_prompt=value['prompt'], prompt_version=binding(value)['prompt_version'])
     req['paired_replay_id'] = P.digest([A.opportunity(snapshot[0]), 'UNION',
                                       {k:req[k] for k in ('candidate_input','candidate','control','stage')}])
+    if value['schema']==SCHEMA_V2:
+        from src.engine.scalping import reversal_auxiliary_wire as W
+        req=W.request(req,production_request(snapshot,value)[0],value['wire_contract'])
     return req
+
+
+def envelope(logical_input, value):
+    validate(value)
+    schema=projector(value['input_version']).response_schema(logical_input)
+    if value['schema']==SCHEMA_V2:
+        from src.engine.scalping import reversal_auxiliary_wire as W
+        return W.envelope(logical_input,value['prompt'],schema)
+    return dict(logical_input=logical_input,logical_prompt=value['prompt'],logical_schema=schema,
+                wire_input=logical_input,wire_schema=schema,final_prompt=value['prompt'],hashes={})
+
+
+def decode_response(raw, logical_input, value):
+    validate(value)
+    if value['schema']==SCHEMA_V2:
+        from src.engine.scalping import reversal_auxiliary_wire as W
+        return W.decode(raw,logical_input,value['base_arm'])
+    return raw
 
 
 def main(argv=None):

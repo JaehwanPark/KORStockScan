@@ -65,9 +65,17 @@ def configure(data_root, *, candidate, scopes, seed, max_pairs=50):
     return body
 
 
-def prepare(data_root, day, machine, parent):
+def prepare(data_root, day, machine, parent, *, research=None):
     from src.engine.scalping import reversal_auxiliary_intraday as I
-    cfg = config(data_root)
+    context = None
+    out = directory(data_root, day)
+    if research is not None:
+        from src.engine.scalping import reversal_auxiliary_research as R
+        context = R.context(data_root, research)
+        cfg = context['config']
+        out = R.directory(data_root, research)
+    else:
+        cfg = config(data_root)
     if cfg is None:
         raise ValueError('auxiliary_tuning_not_configured')
     if machine.get('artifact_content_sha256') != P.seal(machine)['artifact_content_sha256'] or machine.get('source_date')!=day:
@@ -75,17 +83,17 @@ def prepare(data_root, day, machine, parent):
     if machine['operating_manifest']['scopes'] != parent['continuous_reversal']['operating_manifest']['scopes'] and not machine.get('registration_change'):
         raise ValueError('auxiliary_tuning_machine_membership_changed')
     # Current identities are frozen before looking at outcomes or responses.
-    current = I.effective_bindings(data_root, parent)
+    current = R.current_bindings(data_root,parent) if context else I.effective_bindings(data_root,parent,day=day)
     candidate = G.load(data_root, cfg['candidate_registry'])
     excluded = set(candidate['development_keys']) | set(machine.get('quarantined_conflicts', []))
     choices = defaultdict(list); census = Counter(); seen = {}; conflicting = set()
     with S.Store(data_root) as store:
         store.activation()
-        prep_key='auxiliary-prepare:'+P.digest([day,machine['artifact_content_sha256'],parent['bundle_sha256'],current,cfg,P.file_hash(__file__)])
+        prep_key='auxiliary-prepare:'+P.digest([day,machine['artifact_content_sha256'],parent['bundle_sha256'],current,cfg,context,P.file_hash(__file__)])
         cached=store.checkpoint(prep_key)
         if cached:
             validate_campaign(store,cached)
-            P.write(directory(data_root,day)/'latest-campaign.json',cached)
+            P.write(out/'latest-campaign.json',cached)
             return cached
         for part in machine['partitions']:
             points = store.get(part['records_object'])
@@ -103,6 +111,11 @@ def prepare(data_root, day, machine, parent):
             census['outcome_'+p['outcome']['status']] += 1
             if ident in excluded or ident in conflicting:
                 census['development_or_source_excluded'] += 1
+                continue
+            if context and cfg.get('resolved_only') and p['outcome']['status'] not in {'WIN','FAIL_STOP','FAIL_TIMEOUT'}:
+                census['outcome_not_evaluable'] += 1
+                continue
+            if context and context['include_keys'] and ident not in context['include_keys']:
                 continue
             if p['scope'] in cfg['scopes'] and p['scope'] in current:
                 version=G.load(data_root,current[p['scope']])['input_version']
@@ -127,11 +140,12 @@ def prepare(data_root, day, machine, parent):
         selector = dict(seed=cfg['seed'], scope_order=scopes, method='scope_round_robin_sha256',
                         scope_population={s:len(v) for s,v in choices.items()},
                         selected_keys=[p['opportunity_key'] for p in selected])
-        cumulative_keys={sid:'auxiliary-membership:'+P.digest([sid,cfg['candidate_registry'],current[sid],cfg['seed'],'confirmation_replay']) for sid in scopes}
+        cumulative_keys={sid:'auxiliary-membership:'+P.digest([sid,cfg['candidate_registry'],current[sid],cfg['seed'],'confirmation_replay']+([context] if context else [])) for sid in scopes}
         previous=[ident for key in cumulative_keys.values() for ident in (store.checkpoint(key) or [])]
         retained={p['opportunity_key']:p for p in selected}
+        eligible_keys={p['opportunity_key'] for values in choices.values() for _,p in values}
         for ident in previous:
-            if ident in seen and ident not in excluded and ident not in conflicting and seen[ident]['scope'] in choices:
+            if ident in eligible_keys:
                 retained[ident]=seen[ident]
             elif ident not in seen:census['previous_source_unavailable']+=1
         selected_all=sorted(retained.values(),key=lambda p:(p['day'],p['scope'],p['opportunity_key']))
@@ -145,7 +159,13 @@ def prepare(data_root, day, machine, parent):
                         current_registry=old, candidate_registry=cfg['candidate_registry'], requests={})
             comp = 'aux-pair:'+P.digest([sid,old,cfg['candidate_registry'],'confirmation_replay'])
             for role, registry in [('current',old),('candidate',cfg['candidate_registry'])]:
-                req = G.request(snap, G.load(data_root, registry))
+                definition = G.load(data_root, registry)
+                req = (R.request(snap, definition, cfg.get('native_current_contract'),
+                                 output_tokens_override=cfg.get('native_output_tokens_override'))
+                       if context and role == 'current' and definition['schema']!=G.SCHEMA_V2 else G.request(snap, definition))
+                if context and definition['schema']!=G.SCHEMA_V2 and cfg.get('compact_wire_contract') and (role == 'candidate' or not cfg.get('compact_candidate_only')):
+                    from src.engine.scalping import reversal_auxiliary_research_wire as W
+                    req=W.request(req,G.production_request(snap,definition)[0],cfg['compact_wire_contract'])
                 rid,_ = store.add_request(req)
                 mid = store.add_member(comp,p['opportunity_key'],role,rid,p['outcome']['status'])
                 pair['requests'][role] = rid
@@ -158,12 +178,15 @@ def prepare(data_root, day, machine, parent):
                     eligible_census=dict(census), not_sampled_budget=sum(map(len,choices.values()))-len(selected_all),
                     pairs=pairs, expected_pairs=len(pairs), expected_owner_requests=2*len(pairs),
                     observation_mode='confirmation_replay', call_limit=LIMIT, **P.AUTH)
+        if context:
+            body['research'] = {k:context[k] for k in ('research_id','experiment','purpose','allowance_sha256')}
+            body['call_limit'] = R.budget(data_root)['call_limit']
+            R.validate_campaign(data_root, body)
         campaign = P.seal(body); gen = campaign['artifact_content_sha256']
         store.bind_generation(gen,groups,body,2*len(pairs)); store.commit()
         for sid,key in cumulative_keys.items():
             store.checkpoint(key,[p['opportunity_key'] for p in selected_all if p['scope']==sid])
         store.checkpoint(prep_key,campaign);store.commit()
-    out = directory(data_root,day)
     P.write(out/'campaigns'/(gen+'.json'), campaign)
     P.write(out/'latest-campaign.json', campaign)
     return campaign
@@ -180,56 +203,131 @@ def validate_campaign(store, campaign):
     return rows
 
 
-def calls(data_root, day, *, stop_epoch=None, transport=None):
+def load_campaign(data_root, day, campaign_path=None):
+    c = read(campaign_path or directory(data_root,day)/'latest-campaign.json')
+    if c.get('source_date') != day:
+        raise ValueError('auxiliary_campaign_source_date_changed')
+    out = directory(data_root,day)
+    if c.get('research'):
+        from src.engine.scalping import reversal_auxiliary_research as R
+        R.validate_campaign(data_root,c)
+        out = R.directory(data_root,c['research']['experiment'])
+    canonical = out/'campaigns'/(c['artifact_content_sha256']+'.json')
+    if read(canonical) != c:
+        raise ValueError('auxiliary_campaign_canonical_changed')
+    return c, out, canonical
+
+
+def expected_request(data_root, campaign, pair, role, snapshot, registry):
+    req = G.request(snapshot,registry)
+    if campaign.get('research') and registry['schema']!=G.SCHEMA_V2:
+        from src.engine.scalping import reversal_auxiliary_research as R
+        cfg = R.context(data_root,campaign['research']['experiment'])['config']
+        if role == 'current':
+            req = R.request(snapshot,registry,cfg.get('native_current_contract'),
+                             output_tokens_override=cfg.get('native_output_tokens_override'))
+        if cfg.get('compact_wire_contract') and (role == 'candidate' or not cfg.get('compact_candidate_only')):
+            from src.engine.scalping import reversal_auxiliary_research_wire as W
+            req = W.request(req,G.production_request(snapshot,registry)[0],cfg['compact_wire_contract'])
+    return req
+
+
+def response_projection(result, req, logical_input, registry):
+    from src.engine.scalping import reversal_auxiliary_research_wire as W
+    try:
+        if registry['schema']==G.SCHEMA_V2:
+            from src.engine.scalping import reversal_auxiliary_wire as W
+        response=W.response(result,req,logical_input,registry['base_arm'])
+    except ValueError as exc:
+        return None,[str(exc)]
+    errors=G.projector(registry['input_version']).validate_response(response,logical_input,arm=registry['base_arm'])
+    return response,errors
+
+
+def calls(data_root, day, *, stop_epoch=None, transport=None, campaign_path=None, max_new_calls=None):
     from src.engine.scalping import continuous_reversal as K
-    c = read(directory(data_root,day)/'latest-campaign.json'); sent=0
-    if c.get('source_date')!=day:raise ValueError('auxiliary_campaign_source_date_changed')
+    c, out, _ = load_campaign(data_root,day,campaign_path); sent=0
+    if max_new_calls is not None and (type(max_new_calls) is not int or max_new_calls < 0):
+        raise ValueError('auxiliary_batch_limit_invalid')
+    research_grant = None
+    if c.get('research'):
+        from src.engine.scalping import reversal_auxiliary_research as R
+        research_grant = R.validate_campaign(data_root,c)
+    limit = research_grant['call_limit'] if research_grant else LIMIT
     if transport is None:
         from src.engine.scalping.ai_decision_quality import execute_openai_prompt_v2_candidate
         transport = execute_openai_prompt_v2_candidate
     with S.Store(data_root) as store:
         validate_campaign(store,c); store.reconcile()
         fence = store.activation()['writer_epoch']; key='postclose_auxiliary:'+day
-        store.seed_call_budget(c['artifact_content_sha256'],key,
-            since_epoch=datetime.fromisoformat(day).replace(tzinfo=K.KST).timestamp(),
-            exclude_assigned_prefix='postclose_auxiliary:')
+        if research_grant:
+            key = research_grant['budget_key']
+        else:
+            store.seed_call_budget(c['artifact_content_sha256'],key,
+                since_epoch=datetime.fromisoformat(day).replace(tzinfo=K.KST).timestamp(),
+                exclude_assigned_prefix='postclose_auxiliary:')
         before = store.budget_used(key); origin_keys=set()
-        for pair in c['pairs']:
+        pairs=c['pairs']
+        if research_grant:
+            # Preserve the pre-outcome scope rotation when the budget ends
+            # early. Canonical storage order is chronological, not call order.
+            order={ident:index for index,ident in enumerate(c['selector']['selected_keys'])}
+            pairs=sorted(pairs,key=lambda p:(order.get(p['opportunity_key'],len(order)),p['opportunity_key']))
+        for pair in pairs:
             if pair['outcome']['status'] not in {'WIN','FAIL_STOP','FAIL_TIMEOUT'}:
                 continue
             origin='postclose_auxiliary:'+pair['day']
             origin_keys.add(origin)
-            store.db.execute('''INSERT OR IGNORE INTO attempt_budgets
-                SELECT attempt,? FROM attempts WHERE request_id IN (?,?) AND source='provider' ''',
-                (origin,pair['requests']['current'],pair['requests']['candidate']))
-            store.commit()
+            if not research_grant:
+                store.db.execute('''INSERT OR IGNORE INTO attempt_budgets
+                    SELECT attempt,? FROM attempts WHERE request_id IN (?,?) AND source='provider' ''',
+                    (origin,pair['requests']['current'],pair['requests']['candidate']))
+                store.commit()
             for role in ('current','candidate'):
                 rid=pair['requests'][role]
                 state=store.db.execute('SELECT state FROM requests WHERE id=?',(rid,)).fetchone()[0]
                 if state != 'planned':
                     continue
-                if store.budget_used(key)>=LIMIT or store.budget_used(origin)>=LIMIT or (stop_epoch is not None and time.time()>=stop_epoch):
+                if (store.budget_used(key)>=limit
+                        or (not research_grant and store.budget_used(origin)>=LIMIT)
+                        or (max_new_calls is not None and sent>=max_new_calls)
+                        or (stop_epoch is not None and time.time()>=stop_epoch)):
                     break
                 req=store.request(rid)
                 registry=G.load(data_root,pair[role+'_registry'])
-                if req != G.request(store.get(pair['snapshot_obj']),registry):
-                    # The shared envelope may originate in another exact owner.
-                    wanted=G.request(store.get(pair['snapshot_obj']),registry)
-                    if any(req.get(k)!=wanted.get(k) for k in ('paired_replay_id','candidate_input','candidate','control','stage')):
-                        raise ValueError('auxiliary_pair_request_changed')
-                attempt=store.reserve(rid,fence,budget_key=key,call_limit=LIMIT,additional_budget_keys=[origin])
+                snapshot=store.get(pair['snapshot_obj'])
+                wanted=expected_request(data_root,c,pair,role,snapshot,registry)
+                if any(req.get(k)!=wanted.get(k) for k in ('paired_replay_id','candidate_input','candidate','control','stage')):
+                    raise ValueError('auxiliary_pair_request_changed')
+                logical_input=G.production_request(snapshot,registry)[0]
+                attempt=store.reserve(rid,fence,budget_key=key,call_limit=limit,additional_budget_keys=[] if research_grant else [origin])
+                result=None
                 try:
                     result=transport(req,timeout_sec=30)
-                    errors=G.projector(registry['input_version']).validate_response(result.get('candidate_response'),req['candidate_input'],arm=registry['base_arm'])
+                    decoded,errors=response_projection(result,req,logical_input,registry)
                     record=dict(result=result,validation_errors=errors,transport_invoked=True)
                 except Exception as exc:
-                    record=dict(error_type=type(exc).__name__,validation_errors=['provider_attempt_uncertain'],transport_invoked=True)
+                    import traceback
+                    record=dict(error_type=type(exc).__name__,
+                                error_frames=[dict(file=Path(f.filename).name,line=f.lineno,function=f.name)
+                                              for f in traceback.extract_tb(exc.__traceback__)],
+                                validation_errors=['provider_attempt_uncertain' if result is None else 'response_validation_exception'],
+                                transport_invoked=True)
+                    if result is not None:
+                        record['result']=result
                 store.land_response(attempt,record); store.finish(attempt,record); sent+=1
-        result=P.seal(dict(schema=SCHEMA,source_date=day,new_calls=sent,call_limit=LIMIT,
+                if record.get('error_type'):
+                    # Keep the reservation, and stop this batch rather than
+                    # charging every remaining request for the same failure.
+                    stop_epoch=0
+        result=P.seal(dict(schema=SCHEMA,source_date=day,new_calls=sent,call_limit=limit,
+                           campaign_sha256=c['artifact_content_sha256'],research=c.get('research'),
+                           research_funding_sha256=(research_grant.get('funding_sha256',research_grant['artifact_content_sha256']) if research_grant else None),
                            call_budget=dict(key=key,used_before=before,used_after=store.budget_used(key)),
                            observation_date_budgets={k:store.budget_used(k) for k in sorted(origin_keys)},
                            census=store.states(c['artifact_content_sha256']),**P.AUTH))
-    P.write(directory(data_root,day)/'call-completion.json',result)
+    P.write(out/'calls'/(result['artifact_content_sha256']+'.json'),result)
+    P.write(out/'call-completion.json',result)
     return result
 
 
@@ -250,9 +348,8 @@ def improves(current, candidate):
     return b>a or (b==a and candidate['TP']>current['TP'])
 
 
-def evaluate(data_root, day):
-    c=read(directory(data_root,day)/'latest-campaign.json')
-    if c.get('source_date')!=day:raise ValueError('auxiliary_campaign_source_date_changed')
+def evaluate(data_root, day, *, campaign_path=None):
+    c, out, canonical = load_campaign(data_root,day,campaign_path)
     per=defaultdict(lambda:dict(current=[],candidate=[],excluded=Counter(),changes=Counter()))
     pairs=[]
     with S.Store(data_root) as store:
@@ -264,12 +361,13 @@ def evaluate(data_root, day):
             if outcome not in {'WIN','FAIL_STOP','FAIL_TIMEOUT'}:reasons.append('label_unresolved')
             for role in ('current','candidate'):
                 r=owner[pair['opportunity_key'],role]; registry=G.load(data_root,pair[role+'_registry'])
-                req=store.request(r[6]); expected=G.request(store.get(pair['snapshot_obj']),registry)
+                req=store.request(r[6]); snapshot=store.get(pair['snapshot_obj'])
+                expected=expected_request(data_root,c,pair,role,snapshot,registry)
                 if any(req.get(k)!=expected.get(k) for k in ('paired_replay_id','candidate_input','candidate','control','stage')):
                     raise ValueError('auxiliary_pair_request_changed')
                 if r[4]!='completed' or not r[5]:reasons.append(role+':'+r[4]);continue
-                record=store.get(r[5]); result=record.get('result',{}); response=result.get('candidate_response')
-                errors=G.projector(registry['input_version']).validate_response(response,req['candidate_input'],arm=registry['base_arm'])
+                record=store.get(r[5]); result=record.get('result',{})
+                response,errors=response_projection(result,req,G.production_request(snapshot,registry)[0],registry)
                 if errors or not (result.get('provider_provenance') or {}).get('response_id'):
                     reasons.append(role+':invalid_response');continue
                 verdicts[role]=response['risk_verdict']
@@ -296,8 +394,8 @@ def evaluate(data_root, day):
         paired_metrics_ready=any(v['paired_points'] for v in scopes.values()),
         observation_mode='confirmation_replay',population_claim='completed_common_pairs_only',
         eligible_census=c['eligible_census'],not_sampled_budget=c['not_sampled_budget'],
-        state='evaluated',call_limit=LIMIT,**P.AUTH))
-    out=directory(data_root,day)
+        state='evaluated',call_limit=c['call_limit'],
+        **(dict(research=c['research'],campaign_path=str(canonical.resolve())) if c.get('research') else {}),**P.AUTH))
     P.write(out/'evaluations'/(result['artifact_content_sha256']+'.json'),result)
     P.write(out/'evaluation.json',result)
     return result
@@ -324,8 +422,8 @@ def auxiliary_report(data_root,day,publication,parent,*,publish_policy=True):
     folder=I.root(data_root);folder.mkdir(parents=True,exist_ok=True)
     with (folder/'publisher.lock').open('a') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX)
-        bindings=I.effective_bindings(data_root,parent,day=publication)
-        overlay=I.current(data_root,parent,day=publication)
+        bindings=I.effective_bindings(data_root,parent,day=day)
+        overlay=I.current(data_root,parent,day=day)
         measured=I.independent_scopes(data_root,parent,overlay)
         measured.update(s for s,v in evaluated['scopes'].items() if v['paired_points']>0)
         for sid,metrics in evaluated['scopes'].items():
@@ -338,7 +436,7 @@ def auxiliary_report(data_root,day,publication,parent,*,publish_policy=True):
             key,route=sid.rsplit('|',1)
             if sid!=regular and sid not in measured and f['auxiliary_cells'][key]['routes'][route].get('inherited_from'):
                 bindings[sid]=bindings[regular]
-        receipts=[dict(path=str(evalpath.resolve()),sha256=P.file_hash(evalpath))]
+        receipts=[dict(path=str(evalpath.resolve()),sha256=P.file_hash(evalpath))]+I.lineage_sources(data_root,parent,overlay)
         for ident in sorted(set(bindings.values())):
             path=G.directory(data_root)/(ident+'.json')
             receipts.append(dict(path=str(path.resolve()),sha256=P.file_hash(path)))
@@ -365,8 +463,9 @@ def auxiliary_report(data_root,day,publication,parent,*,publish_policy=True):
             results_sources=[dict(path=str(evidence.resolve()),sha256=P.file_hash(evidence))],source_receipts=receipts,
             comparison_complete=evaluated['request_completion'],paired_metrics_ready=evaluated['paired_metrics_ready'],
             comparison_contract=SCHEMA,comparison_metrics=evaluated['scopes'],auxiliary_registry_bindings=bindings,
-            auxiliary_independent_scopes=sorted(measured),auxiliary_reader_code_hashes=I.code_hashes(),
-            evaluated_overlay_parent=(overlay or {}).get('artifact_content_sha256'),scope_pending=pending,
+            auxiliary_independent_scopes=sorted(measured),auxiliary_reader_code_hashes=I.code_hashes(),operating_day=day,generated_at=datetime.now(I.K.KST).isoformat(),
+            evaluated_overlay_parent=(overlay or {}).get('artifact_content_sha256'),evaluated_base_bundle=parent['bundle_sha256'],
+            auxiliary_rollback_bindings=I.rollback_bindings(data_root,parent,overlay),scope_pending=pending,
             scope_census=dict(planned=len(V.scopes()),new_ready=len(V.scopes())-len(pending),new_actual_pid_consumed=0,native_carried=len(pending),contract_gaps=0),
             owner_request_census=dict(expected=campaign['expected_owner_requests'],missing=0,**ownerstates),
             observation_mode='confirmation_replay',call_limit=LIMIT,**P.AUTH))

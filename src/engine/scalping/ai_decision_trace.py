@@ -1503,7 +1503,16 @@ def capture_ai_request(
                 observed_input_sha256=sanitized_replay_context_sha256,
                 observed_prompt_sha256=prompt_sha256,
                 request_id=trace_id, provider_fact='request_prepared_not_execution')
-            binding['binding_status'] = ('matched' if
+            wire=(metadata or {}).get('auxiliary_wire_envelope')
+            if isinstance(wire,dict):
+                binding['auxiliary_wire_envelope']=wire
+                binding['binding_status']=('matched' if native.get('input_sha256')==sanitized_replay_context_sha256
+                    and native.get('input_sha256')==wire.get('hashes',{}).get('logical_input')
+                    and sanitized_user_input_sha256==wire.get('hashes',{}).get('wire_input')
+                    and native.get('prompt_sha256')==wire.get('hashes',{}).get('logical_prompt')
+                    and prompt_sha256==wire.get('hashes',{}).get('final_prompt_bytes') else 'mismatch')
+            else:
+                binding['binding_status'] = ('matched' if
                 native.get('input_sha256') == sanitized_replay_context_sha256
                 and native.get('prompt_sha256') == prompt_sha256 else 'mismatch')
             request_row['continuous_reversal_request_binding'] = binding
