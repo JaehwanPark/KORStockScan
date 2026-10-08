@@ -1339,20 +1339,18 @@ def test_runtime_call_sites_use_context_and_s15_no_longer_sends_empty_candles():
     state_source = (root / "engine" / "sniper_state_handlers.py").read_text()
     s15_source = (root / "engine" / "sniper_s15_fast_track.py").read_text()
     analysis_source = (root / "engine" / "sniper_analysis.py").read_text()
-    ipo_source = (root / "engine" / "ipo_listing_day_runner.py").read_text()
+    assert not (root / "engine" / "ipo_listing_day_runner.py").exists()  # Permanently retired.
 
     assert "candle_context=candle_context" in state_source
     assert "candle_context=gatekeeper_candle_context" not in state_source
     assert "recent_candles=[]" not in s15_source
     assert "def execute_fast_track_scalp_v2" not in s15_source
     assert "candle_context=candle_context" in analysis_source
-    assert "entry_candle_context" in ipo_source
     assert "fetch_entry_candles_with_meta" not in s15_source
-    for source in (state_source, analysis_source, ipo_source):
+    for source in (state_source, analysis_source):
         assert "fetch_entry_candles_with_meta" in source
     assert "get_minute_candles_ka10080_with_meta" not in s15_source
     assert "get_minute_candles_ka10080_with_meta" not in analysis_source
-    assert "get_minute_candles_ka10080_with_meta" not in ipo_source
     assert (
         "candle_context" in inspect.signature(GPTSniperEngine.analyze_target).parameters
     )

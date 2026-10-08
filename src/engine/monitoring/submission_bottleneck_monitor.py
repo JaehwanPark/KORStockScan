@@ -168,7 +168,8 @@ def _reversal_lifecycle_diagnostic(row):
                 and receipt.get('registered_claim_present') is False):
             from src.engine.scalping.reversal_source_diagnostics import verified_registration
             proof = verified_registration(dict(token=receipt['claim_token'],
-                generation=receipt['claim_generation'], snapshot=receipt['supplied_snapshot']),
+                generation=receipt['claim_generation'], snapshot=receipt['supplied_snapshot'],
+                backend=receipt.get('claim_backend')),
                 receipt.get('source_registration_receipt'))
             if (not proof or snapshot is not None or generation is not None
                     or receipt['scope'] != proof['scope']

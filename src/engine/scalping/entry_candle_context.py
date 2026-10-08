@@ -359,13 +359,27 @@ def fetch_entry_candles_with_meta(
         request_purpose["request_owner"] = request_owner
     if request_class is not None:
         request_purpose["request_class"] = request_class
-    candles, source_meta = kiwoom_utils.get_minute_candles_ka10080_with_meta(
-        token,
-        request_code,
-        limit=max(max(1, int(limit)), SOURCE_BAR_LIMIT),
-        explicit_request_code=True,
-        **request_purpose,
-    )
+    from src.trading.market.shared_ws_snapshot import selected_completed_bar_payload
+    from src.utils.kiwoom_transport_telemetry import demand
+    required_bars = max(max(1,int(limit)), SOURCE_BAR_LIMIT)
+    selection = {}
+    demand('ka10080','entry_logical_demand')
+    selected = selected_completed_bar_payload(request_code,now=now,consumer='main',
+        minimum_bars=required_bars,history_scope='session',selection_receipt=selection)
+    if selected is None:
+        candles, source_meta = kiwoom_utils.get_minute_candles_ka10080_with_meta(
+            token, request_code, limit=required_bars, explicit_request_code=True, **request_purpose)
+        source_meta = dict(source_meta or {}, completed_bar_selection=selection)
+        demand('ka10080','rest_retained')
+    else:
+        candles = [{'체결시간':r['cntr_tm'],'source_timestamp':r['cntr_tm'],
+            'source_time_basis':'provider_trade_time','시가':int(r['open_pric']),
+            '고가':int(r['high_pric']),'저가':int(r['low_pric']),
+            '현재가':int(r['cur_prc']),'거래량':int(r['trde_qty'])}
+            for r in selected['stk_min_pole_chart_qry'][-required_bars:]]
+        source_meta = dict(api_id='WS_0B_completed_1m', source_quality='valid',
+            completed_bar_source=selected['_completed_bar_source'], request_code=request_code)
+        demand('ka10080','ws_selected_http0')
     metadata = dict(source_meta or {})
     metadata.update(
         {

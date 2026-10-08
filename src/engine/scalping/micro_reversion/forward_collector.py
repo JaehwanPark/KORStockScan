@@ -1958,7 +1958,7 @@ class ForwardObservationCollector:
             projection = None
             import os
             if (envelope.venue == "SOR" and
-                    os.getenv("KORSTOCKSCAN_WS_COMPLETED_BARS_PUBLISH", "0") == "1"):
+                    os.getenv("KORSTOCKSCAN_WS_COMPLETED_BARS_PUBLISH", "1") == "1"):
                 from src.utils.constants import DATA_DIR
                 from .completed_bars import CompletedBarProjection
                 try:
@@ -1966,7 +1966,8 @@ class ForwardObservationCollector:
                         (DATA_DIR / "runtime" / "shared_ws_completed_bars"
                          if self.config.output_root.resolve() == DEFAULT_OUTPUT_ROOT.resolve()
                          else self.config.output_root / "shared_ws_completed_bars"),
-                        symbols=os.getenv("KORSTOCKSCAN_WS_COMPLETED_BAR_SYMBOLS", "").split(","),
+                        symbols=os.getenv("KORSTOCKSCAN_WS_COMPLETED_BAR_SYMBOLS", "005930,034020,036930,196170,403870").split(","),
+                        max_bars=430,
                     )
                 except Exception as exc:
                     self._completed_bar_config_error = type(exc).__name__

@@ -7,6 +7,14 @@ from datetime import datetime
 from copy import deepcopy
 import math
 import time
+import os
+from pathlib import Path
+from contextlib import ExitStack
+
+try:
+    _PROCESS_START_TICKS = Path('/proc/self/stat').read_text().rsplit(')', 1)[1].split()[19]
+except (OSError, IndexError):
+    _PROCESS_START_TICKS = None
 
 from src.engine.scalping import continuous_reversal as K
 
@@ -62,7 +70,7 @@ def verified_registration(claim, proof):
                 or proof['scope'] != ([event['symbol'], event['venue'], event['source_item'],
                                       event['market'], datetime.fromtimestamp(event['epoch'], K.KST).date().isoformat()]
                     + ([__import__('src.engine.scalping.reversal_path_catalog',fromlist=['cell_key']).cell_key(
-                        event['symbol'],event['market'],event['confirmation_price'])] if claim.get('backend') in {'operating_v5','operating_v6'} else []))
+                        event['symbol'],event['market'],event['confirmation_price'])] if claim.get('backend') in {'registered_v4','operating_v5','operating_v6'} else []))
                 or proof['claim_token'] != B.digest([proof['generation'], event['signal_id'], proof['snapshot']])
                 or not 0 <= proof['claim_epoch'] - event['epoch'] <= 5
                 or not 0 <= proof['observed_epoch'] - proof['claim_epoch'] <= 5):
@@ -103,6 +111,13 @@ def validate_claim_with_receipt(claim, family_sha256, *, now,
 
 
 def _claim_failure_receipt(B, claim, family_sha256, now, reason):
+    if isinstance(claim,dict) and claim.get('backend') == 'registered_v4' and getattr(B,'R',None):
+        # v6 delegates carried scopes to the original native owner. The outer
+        # lock does not make that owner's registry/state observable atomically.
+        with B.R._LOCK:
+            receipt = _claim_failure_receipt(B.R,claim,B.R._GENERATION,now,reason)
+        receipt['requested_envelope_family_sha256'] = family_sha256
+        return receipt
     original = B._CLAIMS.get(claim.get('token')) if isinstance(claim, dict) else None
     snapshot = deepcopy(original['snapshot']) if original else None
     supplied = claim.get('snapshot') if isinstance(claim, dict) else None
@@ -118,6 +133,7 @@ def _claim_failure_receipt(B, claim, family_sha256, now, reason):
         validation_epoch=now, requested_family_sha256=family_sha256,
         state_observed_epoch=state_observed_epoch,
         claim_token=claim.get('token') if isinstance(claim, dict) else None,
+        claim_backend=claim.get('backend') if isinstance(claim, dict) else None,
         claim_generation=claim.get('generation') if isinstance(claim, dict) else None,
         stored_generation=original.get('generation') if original else None,
         active_generation=B._GENERATION, registered_claim_present=original is not None,
@@ -145,6 +161,21 @@ def _claim_failure_receipt(B, claim, family_sha256, now, reason):
             active_scope_execution_hash=cell.get('scope_execution_hash'),
             registered_signal_ready=(any(r['event']['signal_id'] == event.get('signal_id')
                                          for r in state.ready) if state else None))
+    if reason == 'reversal_signal_path_changed':
+        predicates = {
+            'native_state_present': state is not None,
+            'legacy_last_present': bool(last),
+            'latest_source_valid': bool(last[8]) if last else None,
+            'native_epoch_matches': last[1] == event.get('native_epoch') if last else None,
+            'first_signal_turn_matches': current_turn_id == event.get('event_id') if state and event.get('decision_phase') == 'FIRST_UPTICK' else None,
+            'scope_generation_matches': getattr(state,'generation',None) == (original or {}).get('generation') if state else None,
+            'ready_membership_present': any(r['event'].get('signal_id') == event.get('signal_id') for r in state.ready) if state else None,
+        }
+        receipt['native_predicates'] = predicates
+        receipt['failed_native_predicates'] = [key for key,value in predicates.items() if value is False]
+        # Keep the consumer's native lifecycle label; predicates supplement it.
+        receipt['process_pid'] = os.getpid()
+        receipt['process_start_ticks'] = _PROCESS_START_TICKS
     if (reason == 'reversal_signal_generation_changed' and not original and verified
             and B._GENERATION == family_sha256 == verified['generation']
             and receipt['signal_age_seconds'] > 5):
@@ -167,18 +198,20 @@ def project(snapshot, *, symbol, venue, session, now, item, envelope=None):
     from src.engine.scalping.reversal_current_backend import backend
     registered=backend()
     native=registered if getattr(registered, "_FAMILY", None) is not None else K
-    if native is registered:
+    if native is registered and native is not K:
         key=key[:4]+(key[4].isoformat(),)
-    with native._LOCK:
-        if (getattr(native,'_FAMILY',None) or {}).get('schema') in {'continuous_reversal_policy_v5','continuous_reversal_policy_v6'}:
+    with ExitStack() as locks:
+        locks.enter_context(native._LOCK)
+        if (getattr(native,'_FAMILY',None) or {}).get('schema') in {'continuous_reversal_policy_v4','continuous_reversal_policy_v5','continuous_reversal_policy_v6'}:
             from src.engine.scalping.reversal_path_catalog import cell_key
             scope=cell_key(symbol,market,event['confirmation_price'])
-            if native._FAMILY['machine_cells'][scope]['routes'][venue]['backend']=='registered_v4':
+            key=key+(scope,)
+            if (native._FAMILY['schema'] in {'continuous_reversal_policy_v5','continuous_reversal_policy_v6'}
+                    and native._FAMILY['machine_cells'][scope]['routes'][venue]['backend']=='registered_v4'):
                 native=native.R
-            else:
-                key=key+(scope,)
+                locks.enter_context(native._LOCK)
         state = native._STATES.get(key)
-        if native is registered:
+        if state is not None and hasattr(state, 'legacy'):
             state=state.legacy if state else None
             exact=state and any(r[1]==event.get('native_epoch') and r[2]==event.get('native_sequence') for r in state.rows)
         else:

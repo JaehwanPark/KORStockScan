@@ -117,10 +117,10 @@ def test_ws_rollout_explicit_and_shared_across_consumers(monkeypatch,tmp_path):
     monkeypatch.setattr(reader,"COMPLETED_BARS_ROOT",tmp_path)
     monkeypatch.setattr(reader,"SNAPSHOT_PATH",bind(tmp_path,p,now))
     assert reader.selected_completed_bar_payload("005930",now=now) is None
-    for consumer in ("episode",):
+    for consumer in ("main",):
         monkeypatch.setenv(f"KORSTOCKSCAN_{consumer.upper()}_BAR_SOURCE","ws")
         monkeypatch.setenv(f"KORSTOCKSCAN_{consumer.upper()}_BAR_WS_SYMBOLS","005930")
-        result=reader.selected_completed_bar_payload("005930",now=now,consumer=consumer)
+        result=reader.selected_completed_bar_payload("005930_AL",now=now,consumer=consumer)
         assert result["_completed_bar_source"]["request_code"]=="005930_AL"
     assert reader.selected_completed_bar_payload("006800",now=now) is None
 
@@ -200,8 +200,8 @@ def test_bootstrap_corrupt_seed_is_controlled_without_rest(tmp_path, monkeypatch
     now = BASE + timedelta(hours=1)
     monkeypatch.setattr(reader.time, "time", lambda: now.timestamp())
     monkeypatch.setattr(reader, "COMPLETED_BARS_ROOT", tmp_path)
-    monkeypatch.setenv("KORSTOCKSCAN_EPISODE_BAR_SOURCE", "ws")
-    monkeypatch.setenv("KORSTOCKSCAN_EPISODE_BAR_WS_SYMBOLS", "005930")
+    monkeypatch.setenv("KORSTOCKSCAN_MAIN_BAR_SOURCE", "ws")
+    monkeypatch.setenv("KORSTOCKSCAN_MAIN_BAR_WS_SYMBOLS", "005930")
     def missing(*args, **kwargs):
         raise FileNotFoundError("projection not present")
     monkeypatch.setattr(reader, "read_shared_completed_bars", missing)
@@ -220,25 +220,25 @@ def test_bootstrap_corrupt_seed_is_controlled_without_rest(tmp_path, monkeypatch
         doc = corruption
     atomic_json(path, doc)
     with pytest.raises((RuntimeError, ValueError), match="completed_bar_seed_receipt_invalid"):
-        reader.selected_completed_bar_payload("005930", now=now,
+        reader.selected_completed_bar_payload("005930_AL", now=now,
             seed_fetch=lambda _: pytest.fail("corruption must not trigger REST"))
 
 
 def test_no_seed_cannot_bypass_history_floor(monkeypatch):
-    monkeypatch.setenv("KORSTOCKSCAN_EPISODE_BAR_SOURCE", "ws")
-    monkeypatch.setenv("KORSTOCKSCAN_EPISODE_BAR_WS_SYMBOLS", "005930")
+    monkeypatch.setenv("KORSTOCKSCAN_MAIN_BAR_SOURCE", "ws")
+    monkeypatch.setenv("KORSTOCKSCAN_MAIN_BAR_WS_SYMBOLS", "005930")
     monkeypatch.setattr(reader, "read_shared_completed_bars", lambda *a, **kw:
                         {"stk_min_pole_chart_qry": [{}], "_completed_bar_source": {}})
     with pytest.raises(RuntimeError, match="history_insufficient"):
-        reader.selected_completed_bar_payload("005930", now=BASE, minimum_bars=2)
+        reader.selected_completed_bar_payload("005930_AL", now=BASE, minimum_bars=2)
 
 
 def test_invalid_history_scope_does_not_bootstrap(monkeypatch):
-    monkeypatch.setenv("KORSTOCKSCAN_EPISODE_BAR_SOURCE", "ws")
-    monkeypatch.setenv("KORSTOCKSCAN_EPISODE_BAR_WS_SYMBOLS", "005930")
+    monkeypatch.setenv("KORSTOCKSCAN_MAIN_BAR_SOURCE", "ws")
+    monkeypatch.setenv("KORSTOCKSCAN_MAIN_BAR_WS_SYMBOLS", "005930")
     monkeypatch.setattr(reader, "read_shared_completed_bars", lambda *a, **kw: pytest.fail("invalid scope read"))
     with pytest.raises(RuntimeError, match="history_scope_invalid"):
-        reader.selected_completed_bar_payload("005930", now=BASE, history_scope="unknown",
+        reader.selected_completed_bar_payload("005930_AL", now=BASE, history_scope="unknown",
                                              seed_fetch=lambda _: pytest.fail("invalid scope REST"))
 
 
@@ -282,31 +282,31 @@ def test_episode_gateway_uses_same_reader_without_rest_or_stale_cache(tmp_path,m
 
 
 def test_cutover_respects_existing_history_floor_and_gap_scope(monkeypatch):
-    monkeypatch.setenv("KORSTOCKSCAN_EPISODE_BAR_SOURCE","ws")
-    monkeypatch.setenv("KORSTOCKSCAN_EPISODE_BAR_WS_SYMBOLS","005930")
+    monkeypatch.setenv("KORSTOCKSCAN_MAIN_BAR_SOURCE","ws")
+    monkeypatch.setenv("KORSTOCKSCAN_MAIN_BAR_WS_SYMBOLS","005930")
     rows=[{"cntr_tm":"20260921160100"}]
     missing={"from_minute":int(BASE.timestamp()),"to_minute":int(BASE.timestamp())+60,"source_epoch":7}
     selected={"stk_min_pole_chart_qry":rows,"_completed_bar_source":{"missing_range":missing}}
     monkeypatch.setattr(reader,"read_shared_completed_bars",lambda *args,**kw:selected)
     calls=[]
     monkeypatch.setattr(reader,"shared_completed_bar_seed",lambda *args,**kw:calls.append(kw) or {"seed":True})
-    assert reader.selected_completed_bar_payload("005930",now=BASE,seed_fetch=lambda _:None,minimum_bars=2)=={"seed":True}
+    assert reader.selected_completed_bar_payload("005930_AL",now=BASE,seed_fetch=lambda _:None,minimum_bars=2)=={"seed":True}
     assert calls[0]["missing_range"]==missing
     rows.append({"cntr_tm":"20260921160200"})
-    assert reader.selected_completed_bar_payload("005930",now=BASE,seed_fetch=lambda _:pytest.fail("REST after WS history ready"),minimum_bars=2)==selected
+    assert reader.selected_completed_bar_payload("005930_AL",now=BASE,seed_fetch=lambda _:pytest.fail("REST after WS history ready"),minimum_bars=2)==selected
     assert len(calls)==1
 
 
 def test_mid_session_ws_cannot_rebase_session_anchor(monkeypatch):
-    monkeypatch.setenv("KORSTOCKSCAN_EPISODE_BAR_SOURCE","ws")
-    monkeypatch.setenv("KORSTOCKSCAN_EPISODE_BAR_WS_SYMBOLS","005930")
+    monkeypatch.setenv("KORSTOCKSCAN_MAIN_BAR_SOURCE","ws")
+    monkeypatch.setenv("KORSTOCKSCAN_MAIN_BAR_WS_SYMBOLS","005930")
     raw={"stk_min_pole_chart_qry":[{}]*100,"_completed_bar_source":{"complete_session_prefix":False}}
     monkeypatch.setattr(reader,"read_shared_completed_bars",lambda *args,**kw:raw)
     with pytest.raises(RuntimeError,match="session_anchor_history_incomplete"):
-        reader.selected_completed_bar_payload("005930",now=BASE,history_scope="session")
+        reader.selected_completed_bar_payload("005930_AL",now=BASE,history_scope="session")
     seed={"stk_min_pole_chart_qry":[{"cntr_tm":"20260921160000"}],"_completed_bar_source":{"source":"kiwoom_ka10080_AL_seed","adjustment":"adjusted_1"}}
     monkeypatch.setattr(reader,"shared_completed_bar_seed",lambda *args,**kw:seed)
-    selected=reader.selected_completed_bar_payload("005930",now=BASE,history_scope="session",seed_fetch=lambda _:None)
+    selected=reader.selected_completed_bar_payload("005930_AL",now=BASE,history_scope="session",seed_fetch=lambda _:None)
     assert selected is seed and selected["_completed_bar_source"]["ws_selection_blocker"]=="session_anchor_history_incomplete"
 
 
@@ -407,9 +407,9 @@ def test_pre_session_boundary_prints_do_not_create_invalid_bars(tmp_path,monkeyp
     snapshot=bind(tmp_path,p,now)
     monkeypatch.setattr(reader,"SNAPSHOT_PATH",snapshot)
     monkeypatch.setattr(reader,"COMPLETED_BARS_ROOT",tmp_path)
-    monkeypatch.setenv("KORSTOCKSCAN_EPISODE_BAR_SOURCE","ws")
-    monkeypatch.setenv("KORSTOCKSCAN_EPISODE_BAR_WS_SYMBOLS","005930")
-    r=reader.selected_completed_bar_payload("005930",now=now,history_scope="session",
+    monkeypatch.setenv("KORSTOCKSCAN_MAIN_BAR_SOURCE","ws")
+    monkeypatch.setenv("KORSTOCKSCAN_MAIN_BAR_WS_SYMBOLS","005930")
+    r=reader.selected_completed_bar_payload("005930_AL",now=now,history_scope="session",
                 seed_fetch=lambda _:pytest.fail("REST despite complete native session"))
     assert r["_completed_bar_source"]["complete_session_prefix"]
     assert r["_completed_bar_source"]["rest_request_count"]==0
@@ -427,34 +427,34 @@ def test_post_session_print_seals_prior_bar_without_cross_session_candle(tmp_pat
 
 
 def test_ready_mode_retains_rest_until_native_floor_then_selects_ws(monkeypatch):
-    monkeypatch.setenv("KORSTOCKSCAN_EPISODE_BAR_SOURCE","ws_when_ready")
-    monkeypatch.setenv("KORSTOCKSCAN_EPISODE_BAR_WS_SYMBOLS","005930")
+    monkeypatch.setenv("KORSTOCKSCAN_MAIN_BAR_SOURCE","ws_when_ready")
+    monkeypatch.setenv("KORSTOCKSCAN_MAIN_BAR_WS_SYMBOLS","005930")
     native={"stk_min_pole_chart_qry":[{}],"_completed_bar_source":{
         "source":"kiwoom_ws_AL_completed_1m","complete_session_prefix":False,"content_sha256":"native"}}
     monkeypatch.setattr(reader,"read_shared_completed_bars",lambda *a,**kw:native)
     selected={}
     def no_seed(_):pytest.fail("ready mode must retain existing REST cadence, not freeze a seed")
-    assert reader.selected_completed_bar_payload("005930",now=BASE,history_scope="session",seed_fetch=no_seed,selection_receipt=selected) is None
+    assert reader.selected_completed_bar_payload("005930_AL",now=BASE,history_scope="session",seed_fetch=no_seed,selection_receipt=selected) is None
     assert selected["reason"]=="session_anchor_history_incomplete"
-    assert reader.selected_completed_bar_payload("005930",now=BASE,minimum_bars=2,seed_fetch=no_seed,selection_receipt=selected) is None
+    assert reader.selected_completed_bar_payload("005930_AL",now=BASE,minimum_bars=2,seed_fetch=no_seed,selection_receipt=selected) is None
     assert selected["reason"]=="completed_bar_history_insufficient"
     native["stk_min_pole_chart_qry"].append({})
-    assert reader.selected_completed_bar_payload("005930",now=BASE,minimum_bars=2,seed_fetch=no_seed,selection_receipt=selected) is native
+    assert reader.selected_completed_bar_payload("005930_AL",now=BASE,minimum_bars=2,seed_fetch=no_seed,selection_receipt=selected) is native
     assert selected["status"]=="ws_selected"
     assert not reader.completed_bar_cache_requires_revalidation("005930",{"stk_min_pole_chart_qry":[]})
-    assert reader.completed_bar_cache_requires_revalidation("005930",native)
+    assert reader.completed_bar_cache_requires_revalidation("005930_AL",native)
     annotated=reader.annotate_completed_bar_rest({"stk_min_pole_chart_qry":[]},"005930",{"mode":"ws_when_ready","reason":"session_anchor_history_incomplete"})
     assert annotated["_completed_bar_source"]["request_code"]=="005930"
     assert not reader.completed_bar_cache_requires_revalidation("005930",annotated)
 
 
 def test_ready_mode_does_not_mask_invalid_live_source_with_rest(monkeypatch):
-    monkeypatch.setenv("KORSTOCKSCAN_EPISODE_BAR_SOURCE","ws_when_ready")
-    monkeypatch.setenv("KORSTOCKSCAN_EPISODE_BAR_WS_SYMBOLS","005930")
+    monkeypatch.setenv("KORSTOCKSCAN_MAIN_BAR_SOURCE","ws_when_ready")
+    monkeypatch.setenv("KORSTOCKSCAN_MAIN_BAR_WS_SYMBOLS","005930")
     def invalid(*a,**kw):raise ValueError("completed_bar_live_binding_invalid")
     monkeypatch.setattr(reader,"read_shared_completed_bars",invalid)
     with pytest.raises(RuntimeError,match="live_binding_invalid"):
-        reader.selected_completed_bar_payload("005930",now=BASE,seed_fetch=lambda _:pytest.fail("invalid source REST"))
+        reader.selected_completed_bar_payload("005930_AL",now=BASE,seed_fetch=lambda _:pytest.fail("invalid source REST"))
 
 
 
@@ -523,13 +523,12 @@ def test_observed_history_quiet_snapshot_age_is_not_disconnect(tmp_path):
 def test_approved_observed_session_selects_ws_without_seed(monkeypatch,tmp_path):
     p=CompletedBarProjection(tmp_path);run(p,[point(1,10),point(2,60),point(3,121)])
     now=BASE+timedelta(hours=1);snapshot=bind(tmp_path,p,now)
-    monkeypatch.setenv('KORSTOCKSCAN_EPISODE_BAR_SOURCE','ws_when_ready')
-    monkeypatch.setenv('KORSTOCKSCAN_EPISODE_BAR_WS_SYMBOLS','005930')
+    monkeypatch.setenv('KORSTOCKSCAN_MAIN_BAR_SOURCE','ws_when_ready')
+    monkeypatch.setenv('KORSTOCKSCAN_MAIN_BAR_WS_SYMBOLS','005930')
     monkeypatch.setenv('KORSTOCKSCAN_WS_COMPLETED_BAR_GAP_POLICY','observed_valid_rows')
     monkeypatch.setattr(reader,'COMPLETED_BARS_ROOT',tmp_path);monkeypatch.setattr(reader,'SNAPSHOT_PATH',snapshot)
     result=reader.selected_completed_bar_payload('005930_AL',now=now,history_scope='session',seed_fetch=lambda _:pytest.fail('REST forbidden'))
-    assert result['_completed_bar_source']['history_basis']=='observed_valid_rows'
-    assert result['_completed_bar_source']['complete_session_prefix'] is False
+    assert result is None  # Main never inherits retired episode partial-session admission.
     assert reader.selected_completed_bar_payload('005930_AL',now=now,minimum_bars=2) is None
 
 
@@ -573,8 +572,8 @@ def test_dead_producer_is_not_missing_artifact_rest_permission(tmp_path,monkeypa
     p=CompletedBarProjection(tmp_path);run(p,[point(1,10),point(2,60),point(3,121)])
     now=BASE+timedelta(hours=1);snapshot=bind(tmp_path,p,now)
     monkeypatch.setattr(reader,'COMPLETED_BARS_ROOT',tmp_path);monkeypatch.setattr(reader,'SNAPSHOT_PATH',snapshot)
-    monkeypatch.setenv('KORSTOCKSCAN_EPISODE_BAR_SOURCE',mode)
-    monkeypatch.setenv('KORSTOCKSCAN_EPISODE_BAR_WS_SYMBOLS','005930')
+    monkeypatch.setenv('KORSTOCKSCAN_MAIN_BAR_SOURCE',mode)
+    monkeypatch.setenv('KORSTOCKSCAN_MAIN_BAR_WS_SYMBOLS','005930')
     monkeypatch.setenv('KORSTOCKSCAN_WS_COMPLETED_BAR_GAP_POLICY','observed_valid_rows')
     def dead(_):raise FileNotFoundError('/proc/exited/stat')
     monkeypatch.setattr(reader,'process_generation',dead)

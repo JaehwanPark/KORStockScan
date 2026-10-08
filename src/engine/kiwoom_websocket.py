@@ -2227,7 +2227,7 @@ class KiwoomWSManager:
                 "foreign_broker_net_est_qty", "foreign_broker_net_est_delta_qty",
                 "last_foreign_broker_update_ts", "last_ws_item",
                 "last_ws_market_suffix", "last_ws_market_route",
-                "last_realtime_type_ts", "last_realtime_type_item",
+                "last_realtime_type_ts", "last_realtime_type_item", "last_realtime_type_transport_epoch",
                 "last_realtime_type_market_suffix", "last_realtime_type_market_route",
                 "last_trade_tick", "realtime_type_snapshots_by_route",
                 "recent_trade_ticks", "recent_trade_ticks_by_route",
@@ -2328,18 +2328,17 @@ class KiwoomWSManager:
                 with self.lock:
                     capture_started = time.monotonic()
                     realtime_snapshot = {
-                        str(code): self._snapshot_target(target, dashboard_only=True)
+                        str(code): self._snapshot_target(target, dashboard_only=True, _defer_finish=True)
                         for code, target in self.realtime_data.items()
                     }
                     observation_route_snapshot = {
-                        str(item): self._snapshot_target(target, dashboard_only=True)
+                        str(item): self._snapshot_target(target, dashboard_only=True, _defer_finish=True)
                         for item, target in (
                             self._micro_reversion_observation_route_data.items()
                         )
                     }
-                    registration_receipt_snapshot = json.loads(
-                        json.dumps(self._micro_reversion_registration_receipt)
-                    )
+                    from src.engine.infrastructure.snapshot_copy import snapshot_copy
+                    registration_receipt_snapshot = snapshot_copy(self._micro_reversion_registration_receipt)
                     shared_transport_producer = {
                         "transport_epoch": self._market_data_transport_epoch,
                         "registered_items": sorted({item for items in self._registered_items_by_code.values() for item in items}),
@@ -2348,6 +2347,8 @@ class KiwoomWSManager:
                         "capture_lock_ms": round((time.monotonic() - capture_started) * 1000, 3),
                     }
                     frame_captured_at = time.time()
+                realtime_snapshot = {k:self._finish_snapshot(v, dashboard_only=True) for k,v in realtime_snapshot.items()}
+                observation_route_snapshot = {k:self._finish_snapshot(v, dashboard_only=True) for k,v in observation_route_snapshot.items()}
                 collector = self._micro_reversion_forward_collector
                 if collector is not None and hasattr(collector, "completed_bar_integrity"):
                     shared_transport_producer["completed_bar_integrity"] = collector.completed_bar_integrity()
@@ -4466,6 +4467,7 @@ class KiwoomWSManager:
                                 self._ws_item_actual_execution_venue(raw_item_code)
                             )
                             type_ts = target.setdefault("last_realtime_type_ts", {})
+                            target.setdefault("last_realtime_type_transport_epoch", {})[real_type] = self._market_data_transport_epoch
                             if isinstance(type_ts, dict):
                                 type_ts[real_type] = now_update_ts
                             type_items = target.setdefault(
@@ -4666,6 +4668,15 @@ class KiwoomWSManager:
                                         observed_clock = datetime.fromtimestamp(now_update_ts, KST).timetz()
                                         reversal_session = _session_bucket(_explicit_item_venue(realtime_snapshot['item']), observed_clock)
                                         observe_normalized(item_code[:6], reversal_session, realtime_snapshot)
+                                        try:
+                                            from src.engine.scalping.reversal_current_backend import backend
+                                            from src.engine.monitoring.runtime_performance import record_native_ready
+                                            from src.engine.scalping.continuous_reversal import market_bucket
+                                            record_native_ready(backend(), item_code[:6], _explicit_item_venue(realtime_snapshot['item']),
+                                                realtime_snapshot['item'], market_bucket(reversal_session), now_update_ts)
+                                        except (ValueError, TypeError, KeyError, AttributeError):
+                                            pass  # Diagnostics cannot change ingress or native admission.
+
                                     quiet_state = route_snapshot["_quiet_tape_state"]
                                     if real_type in {"0B", "0D"}:
                                         if real_type == "0D":

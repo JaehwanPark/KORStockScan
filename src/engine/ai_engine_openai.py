@@ -691,10 +691,12 @@ class OpenAIResponseRequest:
     reasoning_effort: str | None = None
     metadata: dict[str, str] = field(default_factory=dict)
     response_schema_override: dict[str, Any] | None = None
+    caller_deadline_perf: float | None = None
 
     @property
     def deadline_perf(self) -> float:
-        return self.submitted_at_perf + (max(1, int(self.timeout_ms)) / 1000.0)
+        own = self.submitted_at_perf + (max(1, int(self.timeout_ms)) / 1000.0)
+        return min(own, self.caller_deadline_perf) if self.caller_deadline_perf is not None else own
 
     def remaining_timeout_sec(self) -> float:
         return max(0.0, self.deadline_perf - time.perf_counter())
@@ -4789,11 +4791,18 @@ class GPTSniperEngine:
         warmup = getattr(self, '_transport_warmup', None)
         if warmup is not None and request.model_name == 'gpt-5.4-nano':
             warmup.note_activity(client)
-        future = self._get_http_deadline_executor().submit(
-            client.responses.create,
-            **provider_payload,
-            timeout=max(0.05, remaining),
-        )
+        def transmit():
+            physical_remaining = request.remaining_timeout_sec()
+            if physical_remaining <= 0:
+                raise OpenAIHTTPWallClockDeadlineError('OpenAI HTTP deadline exhausted in worker queue', future_cancelled=True)
+            from src.engine.monitoring.runtime_performance import observe
+            started = time.perf_counter()
+            observe('provider_key_wait', max(0., started-request.submitted_at_perf))
+            try:
+                return client.responses.create(**provider_payload, timeout=physical_remaining)
+            finally:
+                observe('provider_transport', time.perf_counter()-started)
+        future = self._get_http_deadline_executor().submit(transmit)
         wait_remaining = request.remaining_timeout_sec()
         if wait_remaining <= 0:
             cancelled = future.cancel()
@@ -5079,6 +5088,7 @@ class GPTSniperEngine:
         replay_context=None,
         response_schema_override=None,
         auxiliary_registry_sha256=None,
+        caller_deadline_perf=None,
     ):
         """Responses API HTTP/WS transport와 예외 처리를 전담하는 중앙 호출기."""
         metadata = dict(metadata_extra or {})
@@ -5146,6 +5156,9 @@ class GPTSniperEngine:
             metadata_extra=metadata_extra,
             timeout_ms_override=timeout_ms_override,
         )
+        request.caller_deadline_perf = caller_deadline_perf
+        if request.remaining_timeout_sec() <= 0:
+            raise OpenAIHTTPWallClockDeadlineError("OpenAI deadline exhausted before capture", future_cancelled=True)
         if not compact_auxiliary_call and self._uses_openai_primary_bedrock_fallback(
             request
         ):
@@ -8637,6 +8650,7 @@ class GPTSniperEngine:
         entry_economics_observer=None,
         entry_input_refresher=None,
         entry_input_deadline_epoch=None,
+        entry_input_deadline_perf=None,
         machine_only=False,
         reversal_signal_claim=None,
     ):
@@ -8664,6 +8678,10 @@ class GPTSniperEngine:
             prompt_profile = "watching"
         economic_source_fields = {}
         analysis_started = time.perf_counter()
+        from src.engine.scalping.entry_deadline import EntryDeadline
+        entry_budget = EntryDeadline.create(reversal_signal_claim, entry_input_deadline_epoch, entry_input_deadline_perf)
+        if entry_budget is not None:
+            entry_input_deadline_epoch = entry_budget.epoch
         preparation_stages = {}
         prompt_version = "default_v1"
         cache_strategy = strategy
@@ -9582,6 +9600,10 @@ class GPTSniperEngine:
                             evaluation_attempt_id=machine_exact['evaluation_attempt_id'],
                             machine_bundle_sha256=entry_setup_live_policy['machine_bundle_sha256'],live_clock=True) if claim else None
                         entry_setup_live_policy['continuous_reversal_claim']=claim
+                        if claim and entry_budget is None:
+                            entry_budget = EntryDeadline.create(claim, entry_input_deadline_epoch, entry_input_deadline_perf)
+                            entry_input_deadline_epoch = entry_budget.epoch
+
                     else:
                         # A wake-selected v1 signal is passed as a frozen tuple.
                         snapshot=(reversal_signal_claim or {}).get('snapshot') if reversal_signal_claim else current_snapshot(
@@ -9670,6 +9692,7 @@ class GPTSniperEngine:
 
                 if entry_input_deadline_epoch is not None and time.time() >= entry_input_deadline_epoch:
                     raise ValueError("entry_machine_input_deadline_expired")
+                capture_started_perf = time.perf_counter()
                 machine_capture = capture_machine_observation(
                     exact_payload=machine_exact,
                     setup_evidence=machine_setup,
@@ -9683,6 +9706,8 @@ class GPTSniperEngine:
                          'ai_component_sha256': entry_setup_live_policy.get('auxiliary_policy_sha256')}
                     ),
                 )
+                from src.engine.monitoring.runtime_performance import observe
+                observe('capture_append', time.perf_counter()-capture_started_perf)
                 if machine_only:
                     # Discovery probes have no provider, WATCHING, or order
                     # authority. A later live WATCHING attempt gets a new
@@ -9886,6 +9911,8 @@ class GPTSniperEngine:
             0,
             int(getattr(TRADING_RULES, "OPENAI_ANALYZE_TARGET_LOCK_WAIT_MS", 250) or 0),
         )
+        if entry_budget is not None:
+            lock_wait_ms = min(lock_wait_ms, int(entry_budget.remaining()*1000))
         lock_wait_started = time.perf_counter()
         if lock_wait_ms > 0:
             lock_acquired = self.lock.acquire(timeout=lock_wait_ms / 1000.0)
@@ -9972,6 +9999,8 @@ class GPTSniperEngine:
                 time.time() - self.last_call_time
             )
             if min_interval_remaining > 0:
+                if entry_budget is not None and min_interval_remaining >= entry_budget.remaining():
+                    raise ValueError('entry_machine_input_deadline_expired')
                 time.sleep(min_interval_remaining)
                 min_interval_wait_ms = int(round(min_interval_remaining * 1000))
 
@@ -10517,16 +10546,26 @@ class GPTSniperEngine:
                     if not active or active['bundle_sha256']!=entry_setup_live_policy['machine_bundle_sha256']:
                         raise ValueError('reversal_policy_changed_before_provider')
                     validate_claim(entry_setup_live_policy.get('continuous_reversal_claim'),assessment['family_sha256'],now=time.time())
+                if entry_budget is not None:
+                    entry_budget.require()
                 request_identity=digest([assessment['signal_id'],prompt_version,replay_context,prompt,reversal_schema])
                 if assessment.get('policy_version') in {'continuous_reversal_policy_v5','continuous_reversal_policy_v6'}:
                     from src.engine.scalping.reversal_operating_outbox import reserve
+                    reserve_started_perf = time.perf_counter()
                     reserve(DATA_DIR,assessment,request_identity)
+                    from src.engine.monitoring.runtime_performance import observe
+                    observe('provider_reserve', time.perf_counter()-reserve_started_perf)
+                    from src.engine.monitoring.runtime_performance import mark_signal
+                    mark_signal(assessment['signal_id'],'machine',identity=dict(evaluation_attempt_id=machine_capture.get('evaluation_attempt_id'),
+                        opportunity_key=assessment.get('opportunity_key'),request_identity=request_identity))
                 else:
                     reserve_reversal_signal(DATA_DIR/'runtime/initial_quantity/reversal_signals',
                         signal_id=assessment['signal_id'],stage='provider_request',identity=request_identity,
                         binding=dict(family_sha256=assessment['family_sha256'],primary_branch=assessment['primary_branch'],
                                      phase=assessment['decision_phase'],request_sha256=request_identity))
                 trace_metadata_extra['continuous_reversal_request_identity']=request_identity
+            if entry_budget is not None:
+                entry_budget.require()
             provider_attempted = True
             provider_started_monotonic = time.perf_counter()
             result = self._call_openai_safe(
@@ -10562,14 +10601,10 @@ class GPTSniperEngine:
                     else None
                 ),
                 timeout_ms_override=(
-                    getattr(
-                        TRADING_RULES,
-                        "OPENAI_SCALPING_ENTRY_TIMEOUT_MS",
-                        5000,
-                    )
-                    if is_scalping_entry_call
-                    else None
-                ),
+                    entry_budget.transport_ms(getattr(TRADING_RULES,"OPENAI_SCALPING_ENTRY_TIMEOUT_MS",5000), reserve_sec=__import__("src.engine.monitoring.runtime_performance",fromlist=["response_reserve"]).response_reserve())
+                    if entry_budget is not None and is_scalping_entry_call
+                    else getattr(TRADING_RULES,"OPENAI_SCALPING_ENTRY_TIMEOUT_MS",5000) if is_scalping_entry_call else None),
+                caller_deadline_perf=entry_budget.perf if entry_budget is not None else None,
                 replay_context=replay_context,
                 **({'response_schema_override': reversal_schema,
                     'auxiliary_registry_sha256': entry_setup_live_policy.get('continuous_reversal_assessment',{}).get('auxiliary_registry_sha256')}
@@ -10581,6 +10616,7 @@ class GPTSniperEngine:
                 from src.engine.monitoring.runtime_performance import mark_signal
                 assessment = entry_setup_live_policy.get('continuous_reversal_assessment', {})
                 mark_signal(assessment.get('signal_id') or assessment.get('event_id'), 'provider')
+                validation_started_perf = time.perf_counter()
             # V2.14 validates a deliberately narrow model-response schema.
             if entry_setup_live_policy.get('continuous_reversal_assessment',{}).get('policy_version') in {'continuous_reversal_policy_v5','continuous_reversal_policy_v6'}:
                 from src.engine.scalping.reversal_operating_outbox import advance
@@ -10707,6 +10743,9 @@ class GPTSniperEngine:
                 result_source="live",
                 input_contract_fields=input_contract_fields,
             )
+            if entry_setup_live_policy.get('continuous_reversal_input') and provider_attempted:
+                from src.engine.monitoring.runtime_performance import observe
+                observe('response_validate', time.perf_counter()-validation_started_perf)
             if machine_first_context is None:
                 self._cache_set(
                     "_analysis_cache",
@@ -10717,6 +10756,12 @@ class GPTSniperEngine:
             return result
 
         except Exception as e:
+            if isinstance(e, ValueError) and str(e).startswith('entry_machine_input_deadline_'):
+                return {"action":"WAIT", "score":50, "reason":str(e),
+                        "provider_called":bool(provider_attempted),
+                        "ai_result_source":"entry_deadline_expired",
+                        "actual_order_submitted":False, "broker_order_forbidden":True,
+                        **machine_capture}
             failure_count = self._record_failure_and_maybe_disable(
                 context_name=f"{target_name}({strategy}:{prompt_type})"
             )

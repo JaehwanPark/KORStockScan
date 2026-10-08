@@ -283,6 +283,9 @@ class HotPathAIDispatcher:
             )
         with self._lock:
             self._completed.append(result)
+            notification = getattr(self, "completion_event", None)
+            if notification is not None:
+                notification.set()
 
     def drain_completed(
         self,

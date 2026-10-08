@@ -101,20 +101,20 @@ def _read_shared_frame(path):
 COMPLETED_BARS_ROOT = DATA_DIR / "runtime" / "shared_ws_completed_bars"
 
 
-def completed_bar_mode(request_code, *, consumer="episode"):
+def completed_bar_mode(request_code, *, consumer="main"):
     """Separate explicit bar rollout; quote selection never promotes bars."""
-    if consumer not in {"episode"}:
+    if consumer != "main":
         raise ValueError("completed_bar_consumer_invalid")
-    mode = os.getenv(f"KORSTOCKSCAN_{consumer.upper()}_BAR_SOURCE", "rest").strip().lower()
+    mode = os.getenv("KORSTOCKSCAN_MAIN_BAR_SOURCE", "ws_when_ready").strip().lower()
     if mode not in {"rest", "ws", "ws_when_ready"}:
         raise ValueError("completed_bar_source_invalid")
-    members = os.getenv(f"KORSTOCKSCAN_{consumer.upper()}_BAR_WS_SYMBOLS", "")
+    members = os.getenv("KORSTOCKSCAN_MAIN_BAR_WS_SYMBOLS", "005930,034020,036930,196170,403870")
     if mode == "rest":
         return mode
     codes = members.split(",")
     if any(not re.fullmatch(r"[0-9]{6}", c) for c in codes) or len(set(codes)) != len(codes):
         raise ValueError("completed_bar_scope_invalid")
-    return mode if re.fullmatch(r"[0-9]{6}(?:_AL)?", request_code) and request_code[:6] in codes else "rest"
+    return mode if re.fullmatch(r"[0-9]{6}_AL", request_code) and request_code[:6] in codes else "rest"
 
 
 def completed_bar_cache_requires_revalidation(request_code, cached):
@@ -298,7 +298,7 @@ def read_shared_completed_bars(request_code, *, now, root=None, snapshot_path=No
     return {"stk_min_pole_chart_qry": rows, "_completed_bar_source": receipt}
 
 
-def selected_completed_bar_payload(request_code, *, now, consumer="episode", seed_fetch=None, minimum_bars=1, history_scope="rolling", selection_receipt=None):
+def selected_completed_bar_payload(request_code, *, now, consumer="main", seed_fetch=None, minimum_bars=1, history_scope="rolling", selection_receipt=None):
     mode = completed_bar_mode(request_code, consumer=consumer)
     selection = selection_receipt if selection_receipt is not None else {}
     selection.update(mode=mode, minimum_bars=minimum_bars, history_scope=history_scope)
@@ -310,7 +310,7 @@ def selected_completed_bar_payload(request_code, *, now, consumer="episode", see
             raise ValueError("completed_bar_history_scope_invalid")
         if type(minimum_bars) is not int or minimum_bars < 1:
             raise ValueError("completed_bar_history_floor_invalid")
-        partial = observed_completed_bar_history_enabled()
+        partial = False if consumer == "main" else observed_completed_bar_history_enabled()
         result = read_shared_completed_bars(item, now=now, **({"allow_partial_history": True} if partial else {}))
         selection.update(available_bars=len(result["stk_min_pole_chart_qry"]),
                          source_content_sha256=result["_completed_bar_source"].get("content_sha256"))

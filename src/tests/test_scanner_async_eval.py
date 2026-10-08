@@ -376,7 +376,7 @@ def test_async_eval_superseded_result_is_observation_only():
     result = _wait_for_result(coordinator)
     coordinator.shutdown()
 
-    assert result.status in {"superseded_before_ai", "superseded_result"}
+    assert result.status in {"superseded_before_preparation", "superseded_before_ai", "superseded_result"}
     assert result.observation_only is True
 
 
@@ -386,6 +386,7 @@ def test_cancelled_generation_can_reactivate_only_after_transport_is_quiesced():
     generation = _generation()
     now = time.time()
     release = threading.Event()
+    started = threading.Event()
     pending_context = ScannerAsyncEvalContext.create(
         generation=generation,
         cache_key="pending",
@@ -398,10 +399,11 @@ def test_cancelled_generation_can_reactivate_only_after_transport_is_quiesced():
     assert coordinator.submit(
         ScannerAsyncEvalRequest(
             context=pending_context,
-            prepare=lambda ctx: (release.wait(0.5) and {"ready": True}) or {},
+            prepare=lambda ctx: (started.set(), release.wait(0.5), {"ready": True})[-1],
             evaluate=lambda ctx, prepared: {"action": "WAIT"},
         )
     ).accepted
+    assert started.wait(0.5)  # Test an active physical worker, not queued cancellation.
     coordinator.invalidate_generation(generation.generation_id)
     assert coordinator.reactivate_generation(generation.generation_id) is False
 

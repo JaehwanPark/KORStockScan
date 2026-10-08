@@ -776,7 +776,8 @@ def _post_kiwoom_with_auth_retry(url, headers, payload, api_id, *, timeout=5):
         )
         if not admission.admitted:
             raise RuntimeError(f"account_read_shared_rate_deferred:{admission.reason}")
-    response = requests.post(url, headers=active_headers, json=payload, timeout=timeout)
+    from src.utils.kiwoom_transport_telemetry import measured_http_call, record_decoded_response
+    response = measured_http_call(requests.post, url, telemetry_owner=f"kiwoom_orders.{api_label}", telemetry_class="execution_critical", telemetry_code=payload.get("stk_cd"), headers=active_headers, json=payload, timeout=timeout)
     http_rate_limit_recorded = False
     if read_api and response.status_code == 429:
         kiwoom_utils.record_kiwoom_read_rate_limit(
@@ -791,6 +792,7 @@ def _post_kiwoom_with_auth_retry(url, headers, payload, api_id, *, timeout=5):
         http_rate_limit_recorded = True
     try:
         data = response.json()
+        record_decoded_response(response, data)
     except Exception:
         return response, {}
 
@@ -856,8 +858,8 @@ def _post_kiwoom_with_auth_retry(url, headers, payload, api_id, *, timeout=5):
             raise RuntimeError(
                 f"account_read_shared_rate_deferred:{retry_admission.reason}"
             )
-    retry_response = requests.post(
-        url, headers=retry_headers, json=payload, timeout=timeout
+    retry_response = measured_http_call(
+        requests.post, url, telemetry_owner=f"kiwoom_orders.{api_label}.auth_retry", telemetry_class="execution_critical", telemetry_code=payload.get("stk_cd"), headers=retry_headers, json=payload, timeout=timeout
     )
     retry_http_rate_limit_recorded = False
     if read_api and retry_response.status_code == 429:
@@ -873,6 +875,7 @@ def _post_kiwoom_with_auth_retry(url, headers, payload, api_id, *, timeout=5):
         retry_http_rate_limit_recorded = True
     try:
         retry_data = retry_response.json()
+        record_decoded_response(retry_response, retry_data)
     except Exception:
         return retry_response, {}
     retry_success = (

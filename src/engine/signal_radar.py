@@ -1,3 +1,7 @@
+import time
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 import pandas as pd
 import pandas_ta as ta
 import FinanceDataReader as fdr
@@ -21,6 +25,13 @@ class SniperRadar:
     def __init__(self, token):
         self.access_token = token
         self._big_bite_state = {}
+        self._regime_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='radar_regime')
+        self._regime_lock = threading.Lock()
+        self._regime_pending = None
+        self._regime_result = None
+        self._regime_age_sec = 30.0
+        self._regime_closed = False
+
 
         # 💡 [핵심] EventBus 인스턴스 획득 및 실시간 데이터 구독
         self.event_bus = EventBus()
@@ -67,7 +78,8 @@ class SniperRadar:
 
         # 4. 🚀 [조건 충족 시 타점 계산 및 이벤트 발행]
         if score >= 70:  # 매수 기준 통과
-            market_trend = self.get_market_regime(self.access_token)
+            market_trend, regime_source = self._prepared_market_regime()
+            metrics["market_regime_source"] = regime_source
 
             target_price, drop_pct = self.get_smart_target_price(
                 curr_price=prices["curr"],
@@ -423,60 +435,56 @@ class SniperRadar:
 
         return round(score, 2)
 
-    def get_market_regime(self, token=None):
-        """
-        코스피 지수를 분석하여 현재 시장 상태(BULL/BEAR)를 판별합니다.
-        (1차: FinanceDataReader, 2차: 키움 ka20006 API 우회)
-        기준: 코스피 현재가가 20일 이동평균선 위에 있으면 BULL, 아래면 BEAR
-        """
-        # 1차: FDR 사용 (코스피 지수 KS11)
-        try:
-            df = fdr.DataReader("KS11")
-            if not df.empty and len(df) >= 20:
-                current_close = float(df["Close"].iloc[-1])
-                ma20 = float(df["Close"].tail(20).mean())
-                return "BULL" if current_close >= ma20 else "BEAR"
-        except Exception as e:
-            print(f"⚠️ FDR 코스피 조회 실패. 키움 ka20006 API로 우회합니다: {e}")
+    def _prepared_market_regime(self):
+        """Existing qualifying tick trigger only; never await network in EventBus."""
+        now = time.time()
+        with self._regime_lock:
+            if self._regime_pending is not None and self._regime_pending.done():
+                try:
+                    self._regime_result = self._regime_pending.result()
+                except Exception as exc:
+                    self._regime_result = dict(regime='BEAR', source_quality='invalid',
+                        reason=type(exc).__name__, fetched_epoch=now)
+                self._regime_pending = None
+            value = self._regime_result
+            usable = value is not None and 0 <= now-value['fetched_epoch'] <= self._regime_age_sec
+            if not usable and self._regime_pending is None and not self._regime_closed:
+                self._regime_pending = self._regime_executor.submit(self._fetch_market_regime, self.access_token)
+            if usable:
+                return value['regime'], dict(value, age_sec=now-value['fetched_epoch'])
+            return 'BEAR', dict(source_quality='pending_or_stale', reason='regime_preparation_pending',
+                                decision_authority='conservative_existing_fallback')
 
-        # 2차: 키움 ka20006 (업종일봉조회요청) 사용
-        if token:
+    def _fetch_market_regime(self, token=None):
+        from src.trading.market.index_regime import index_regime
+        started = time.time()
+        started_perf = time.perf_counter()
+        base_date = datetime.now().strftime('%Y%m%d')
+        def bind_clock(result):
+            result = dict(result, fetched_epoch=started, completed_epoch=time.time())
+            if time.perf_counter()-started_perf > self._regime_age_sec or datetime.now().strftime('%Y%m%d') != base_date:
+                return dict(result, regime='BEAR', source_quality='invalid', reason='regime_original_query_expired')
+            return result
+        try:
+            df = fdr.DataReader('KS11')
+            rows = [{'dt':day.strftime('%Y%m%d'), 'cur_prc':row['Close']}
+                    for day,row in df.tail(20).iloc[::-1].iterrows()]
+            result = index_regime(rows, base_date=base_date)
+            return bind_clock(dict(result, source='FDR_KS11'))
+        except Exception as exc:
+            log_info('[RADAR_REGIME_FDR_INVALID] reason=' + type(exc).__name__)
+        if token and time.perf_counter()-started_perf <= self._regime_age_sec:
             try:
-                active_token = kiwoom_utils.resolve_kiwoom_request_token(token)
-                url = kiwoom_utils.get_api_url("/api/dostk/mrkcond")
-                payload = {"upjong_cd": "001"}  # 001: 코스피
-                responses = kiwoom_utils.fetch_kiwoom_api_continuous(
-                    url=url,
-                    token=active_token,
-                    api_id="ka20006",
-                    payload=payload,
-                    use_continuous=False,
-                    request_owner="signal_radar_market_regime_fallback",
-                    request_class="runtime_required",
-                    request_code="001",
-                )
-                if responses:
-                    res_json = responses[0]
-                    for key, val in res_json.items():
-                        if (
-                            isinstance(val, list)
-                            and len(val) >= 20
-                            and "cur_prc" in val[0]
-                        ):
-                            df_k = pd.DataFrame(val)
-                            df_k["cur_prc"] = pd.to_numeric(
-                                df_k["cur_prc"]
-                                .astype(str)
-                                .str.replace(",", "", regex=False)
-                                .str.replace("+", "", regex=False)
-                                .str.replace("-", "", regex=False),
-                                errors="coerce",
-                            )
-                            current_close = df_k["cur_prc"].iloc[0]
-                            ma20 = df_k["cur_prc"].head(20).mean()
-                            return "BULL" if current_close >= ma20 else "BEAR"
-            except Exception as e2:
-                log_error(f"ka20006 처리 중 예외 발생: {e2}")
-                print(f"🚨 키움 ka20006 우회 조회 실패: {e2}")
-        # 둘 다 실패하면 보수적으로 BEAR(하락장) 모드 전환하여 리스크 관리
-        return "BEAR"
+                return bind_clock(kiwoom_utils.get_index_twenty_day_regime_ka20006(token, base_date=base_date))
+            except Exception as exc:
+                log_info('[RADAR_REGIME_KIWOOM_INVALID] reason=' + type(exc).__name__)
+        return bind_clock(dict(regime='BEAR', source_quality='invalid', reason='regime_source_invalid'))
+
+    def shutdown(self):
+        with self._regime_lock:
+            self._regime_closed = True
+            self._regime_executor.shutdown(wait=False, cancel_futures=True)
+
+    def get_market_regime(self, token=None):
+        """Synchronous offline/scanner compatibility; WS uses preparation only."""
+        return self._fetch_market_regime(token)['regime']

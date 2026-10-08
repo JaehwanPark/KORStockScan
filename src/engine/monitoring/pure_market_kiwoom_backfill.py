@@ -345,6 +345,8 @@ def _normalize_index_row(row: object) -> tuple[IndexBar | None, str | None]:
 def _response_json(response: requests.Response, *, api_id: str) -> dict[str, Any]:
     try:
         payload = response.json()
+        from src.utils.kiwoom_transport_telemetry import record_decoded_response
+        record_decoded_response(response, payload)
     except ValueError as exc:
         raise BackfillError(f"{api_id}_response_not_json") from exc
     if not isinstance(payload, dict):
@@ -401,8 +403,8 @@ def fetch_ka10080_history(
                 api_id="ka10080",
                 request_code=request_code,
             )
-        response = post(
-            url,
+        from src.utils.kiwoom_transport_telemetry import measured_http_call
+        response = measured_http_call(post, url, telemetry_owner='pure_market_kiwoom_backfill', telemetry_class='source_only',
             headers={
                 "Content-Type": "application/json;charset=UTF-8",
                 "authorization": f"Bearer {active_token}",
@@ -576,8 +578,8 @@ def fetch_ka20005_history(
                 api_id="ka20005",
                 request_code="001",
             )
-        response = post(
-            url,
+        from src.utils.kiwoom_transport_telemetry import measured_http_call
+        response = measured_http_call(post, url, telemetry_owner='pure_market_kiwoom_backfill', telemetry_class='source_only',
             headers={
                 "Content-Type": "application/json;charset=UTF-8",
                 "authorization": f"Bearer {active_token}",

@@ -160,6 +160,8 @@ def test_real_retry_has_new_evaluation_and_timeout_clears_previous_pass(monkeypa
 @pytest.mark.parametrize('gap,expected', [(False, 'ready'), (True, 'warmup_after_source_stale_or_invalid')])
 def test_diagnostics_never_change_kernel_event_or_auxiliary_input(monkeypatch, gap, expected):
     from src.engine.scalping import continuous_reversal as K
+    from src.engine.scalping import reversal_current_backend as D
+    monkeypatch.setattr(D, 'backend', lambda *args: K)
     from src.engine.scalping.reversal_source_diagnostics import project
     from src.tests.test_continuous_reversal import rows
     seq=rows([100]* (100 if gap else 120) + [99,100])
@@ -191,6 +193,8 @@ def test_diagnostics_never_change_kernel_event_or_auxiliary_input(monkeypatch, g
 
 def _native_reversal_claim(monkeypatch):
     from src.engine.scalping import continuous_reversal_branches as B
+    from src.engine.scalping import reversal_current_backend as D
+    monkeypatch.setattr(D, 'backend', lambda *args: B)
     from src.tests.test_continuous_reversal import rows
     monkeypatch.setattr(B, '_STATES', {})
     monkeypatch.setattr(B, '_CLAIMS', {})

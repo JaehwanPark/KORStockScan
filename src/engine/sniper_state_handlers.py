@@ -12528,6 +12528,11 @@ def _observe_entry_economics_before_ai(stock, code, ws_data, *, exact_payload,
 
 
 def _log_entry_pipeline(stock, code, stage, **fields):
+    if stage == 'order_leg_request' and isinstance(stock, dict):
+        from src.engine.monitoring.runtime_performance import mark_signal
+        native_decision = (stock.get('last_watching_ai_machine_primary_fields') or {}).get('entry_mechanistic_policy_decision') or {}
+        native_assessment = native_decision.get('continuous_reversal_assessment') or native_decision
+        mark_signal(native_assessment.get('signal_id') or native_assessment.get('event_id'), 'guard_done')
     if stage in {'residual_blocked', 'probe_continuation_deferred'} and isinstance(stock, dict):
         try:
             from src.engine.scalping.entry_probe_conditional_replay import SCHEMA, native_receipt
@@ -61067,6 +61072,10 @@ def _scanner_async_entry_state_version(stock: dict) -> str:
         "status": str(stock.get("status") or "").upper(),
         "scanner_generation_id": stock.get("scanner_generation_id"),
         "scanner_promotion_id": stock.get("scanner_promotion_id"),
+        "watch_origin": stock.get("watch_origin"),
+        "watch_admission_id": stock.get("watch_admission_id"),
+        "watch_generation_id": stock.get("watch_generation_id"),
+        "broker_route": stock.get("broker_route"),
         "buy_qty": _safe_int(stock.get("buy_qty"), 0),
         "buy_price": _safe_int(stock.get("buy_price"), 0),
         "entry_split_probe_phase": stock.get("entry_split_probe_phase"),
@@ -61530,11 +61539,28 @@ def _resolve_scanner_async_entry_ai(
 ) -> dict:
     """Dispatch immutable preparation/AI and apply only on main-thread commit."""
 
+    from src.engine.scalping.scanner_async_eval import FixedWatchGeneration
+    from src.engine.scalping.entry_deadline import claim_deadline_epoch
     coordinator = runtime.get("scanner_async_eval_coordinator")
     generation = runtime.get("scanner_async_generation")
-    if not isinstance(coordinator, ScannerAsyncEvalCoordinator) or not isinstance(
-        generation, ScannerGeneration
-    ):
+    fixed_route = _fixed_watch_entry_source_route(stock, time.time())
+    fixed_watch = bool(fixed_route)
+    claim = copy.deepcopy(stock.get('_fixed_watch_async_claim') or stock.get('_continuous_reversal_pending_claim'))
+    if fixed_watch and isinstance(coordinator, ScannerAsyncEvalCoordinator) and claim:
+        try:
+            generation = FixedWatchGeneration.from_claim(code, claim)
+            if (fixed_route['item'] != claim['snapshot'][0].get('source_item')
+                    or fixed_route['broker_route'] != generation.venue):
+                raise ValueError('fixed_watch_claim_session_route_changed')
+        except ValueError as exc:
+            # Drain late evidence, never renew a fixed-watch claim budget.
+            if stock.get('_scanner_async_generation_id') and stock.get('_scanner_async_cache_key'):
+                old_result = coordinator.take_completed(generation_id=stock['_scanner_async_generation_id'], cache_key=stock['_scanner_async_cache_key'])
+                if old_result is None and coordinator.is_pending(generation_id=stock['_scanner_async_generation_id'], cache_key=stock['_scanner_async_cache_key']):
+                    return {"status":"pending", "reason":"invalid_claim_physical_work_draining"}
+            stock.pop('_fixed_watch_async_claim', None)
+            return {"status":"commit_rejected", "reason":str(exc)}
+    if not isinstance(coordinator, ScannerAsyncEvalCoordinator) or not isinstance(generation, (ScannerGeneration, FixedWatchGeneration)):
         _request_entry_capacity_preparation(stock, code, ws_data)
         return {"status": "not_enabled"}
 
@@ -61545,7 +61571,7 @@ def _resolve_scanner_async_entry_ai(
         last_ai_time=last_ai_time,
     )
     state_version = _scanner_async_entry_state_version(stock)
-    commit_phase = bool(runtime.get("scanner_async_commit_phase"))
+    commit_phase = fixed_watch or bool(runtime.get("scanner_async_commit_phase"))
     result = (
         coordinator.take_completed(
             generation_id=generation.generation_id,
@@ -61556,23 +61582,32 @@ def _resolve_scanner_async_entry_ai(
     )
     if result is not None:
         now_epoch = time.time()
+        commit_started = time.perf_counter()
+        native_valid = True
+        if fixed_watch:
+            try:
+                from src.engine.scalping.reversal_current_backend import backend
+                from src.engine.scalping.reversal_source_diagnostics import validate_claim_with_receipt
+                validate_claim_with_receipt(claim, backend()._GENERATION, now=now_epoch, live_clock=True)
+            except ValueError:
+                native_valid = False
         decision = validate_scanner_async_commit(
             result,
             current_generation=generation,
             current_status=stock.get("status") or "",
-            current_venue=stock.get("effective_venue")
+            current_venue=(generation.venue if fixed_watch and native_valid else stock.get("effective_venue"))
             or stock.get("venue")
             or "UNKNOWN",
-            current_source_signature=stock.get("source_signature")
+            current_source_signature=(generation.source_signature if fixed_watch and native_valid else stock.get("source_signature"))
             or stock.get("scanner_source_signature")
             or "",
-            venue_resolution_valid=bool(
+            venue_resolution_valid=(native_valid if fixed_watch else bool(
                 str(stock.get("venue_resolution") or "").strip()
                 and not any(
                     token in str(stock.get("venue_resolution") or "").strip().lower()
                     for token in ("missing", "unknown", "conflict", "unresolved")
                 )
-            ),
+            )),
             current_state_version=_scanner_async_entry_state_version(stock),
             quote_fresh=_scanner_async_quote_is_fresh(
                 ws_data,
@@ -61659,12 +61694,24 @@ def _resolve_scanner_async_entry_ai(
                 ),
             ],
         )
+        stock.pop("_fixed_watch_async_claim", None)
         if not decision.allowed:
             return {"status": "commit_rejected", "reason": decision.reason}
+        if claim and result.ai_payload.get('entry_mechanistic_policy_decision'):
+            from src.engine.scalping.reversal_current_backend import acknowledge_any
+            if (stock.get('_continuous_reversal_pending_claim') or {}).get('token') == claim['token']:
+                stock.pop('_continuous_reversal_pending_claim',None)
+            stock['_continuous_reversal_last_requested_id']=claim['snapshot'][0]['event_id']
+            acknowledge_any(claim,status='evaluated')
+        revision = thaw_scanner_async_value(result.ai_payload.get('_entry_observation_revision') or {})
+        if isinstance(revision, dict) and revision:
+            stock['_machine_observation_revision'] = thaw_scanner_async_value(revision)
+        from src.engine.monitoring.runtime_performance import observe
+        observe('main_commit', time.perf_counter()-commit_started)
         return {
             "status": "completed",
-            "prepared_context": dict(result.prepared_context),
-            "ai_decision": dict(result.ai_payload),
+            "prepared_context": thaw_scanner_async_value(result.prepared_context),
+            "ai_decision": thaw_scanner_async_value(result.ai_payload),
             "completed_epoch": result.completed_epoch,
         }
 
@@ -61675,13 +61722,15 @@ def _resolve_scanner_async_entry_ai(
         return {"status": "pending"}
 
     submitted_epoch = time.time()
-    deadline_sec = 5.0
+    deadline_epoch = claim_deadline_epoch(claim) if claim else submitted_epoch + 5.0
+    if deadline_epoch <= submitted_epoch:
+        return {"status":"commit_rejected", "reason":"entry_machine_input_deadline_expired"}
     context = ScannerAsyncEvalContext.create(
         generation=generation,
         cache_key=cache_key,
         submitted_epoch=submitted_epoch,
-        deadline_epoch=submitted_epoch + deadline_sec,
-        stock_snapshot=stock,
+        deadline_epoch=deadline_epoch,
+        stock_snapshot={**stock, '_continuous_reversal_pending_claim':claim} if claim else stock,
         ws_snapshot=ws_data,
         state_version=state_version,
     )
@@ -61709,7 +61758,7 @@ def _resolve_scanner_async_entry_ai(
         )
         if recent_exit_context:
             prepared_ws["recent_exit_context"] = recent_exit_context
-        entry_request_code = resolve_entry_candle_request_code(
+        entry_request_code = (claim["snapshot"][0]["source_item"] if fixed_watch else resolve_entry_candle_request_code(
             code,
             venue=generation.venue,
             session=resolve_entry_candle_session(
@@ -61718,12 +61767,14 @@ def _resolve_scanner_async_entry_ai(
             ),
             ws_data=prepared_ws,
             broker_route=kiwoom_orders.resolve_order_dmst_stex_tp(),
-        )
-        recent_ticks = kiwoom_utils.get_tick_history_ka10003(
-            KIWOOM_TOKEN,
-            entry_request_code,
-            limit=10,
-        )
+        ))
+        from src.trading.market.entry_ws_source import select_trade_history
+        source_started = time.perf_counter()
+        recent_ticks = select_trade_history(prepared_ws, entry_request_code, now=time.time(), limit=10)
+        if recent_ticks is None:
+            recent_ticks = kiwoom_utils.get_tick_history_ka10003(
+                KIWOOM_TOKEN, entry_request_code, limit=10, explicit_request_code=True,
+                request_owner='main_entry_async_prepare', request_class='source_only')
         recent_candles, candle_source_meta = fetch_entry_candles_with_meta(
             KIWOOM_TOKEN,
             code,
@@ -61733,6 +61784,8 @@ def _resolve_scanner_async_entry_ai(
             now_ts=time.time(),
             allow_integrated_sor_execution_view=True,
         )
+        from src.engine.monitoring.runtime_performance import observe
+        observe('source_prepare',time.perf_counter()-source_started)
         if not prepared_ws.get("orderbook") or not recent_ticks:
             return {
                 "source_quality_ok": False,
@@ -61800,15 +61853,18 @@ def _resolve_scanner_async_entry_ai(
             # This remains the existing worker and the same source-only budget.
             refreshed["entry_capacity_prefetch"] = {
                 "status": "skipped", "reason": "noninitial_or_nonreal_scope"}
-            stock_snapshot = async_context.stock_snapshot
+            stock_snapshot = thaw_scanner_async_value(async_context.stock_snapshot)
             if (_safe_int(stock_snapshot.get("buy_qty"), 0) <= 0
                     and not _is_any_simulated_position(stock_snapshot, stock_snapshot.get("strategy"))):
+                capacity_started = time.perf_counter()
                 refreshed["entry_capacity_prefetch"] = _prefetch_entry_capacity_for_async_evaluation(
                     code, refreshed.get("ws_data") or {}, async_context.deadline_epoch,
                     correlation_id=async_context.request_id,
                     diagnostic_context={name: (refreshed.get("ws_data") or {}).get(name)
                         or stock_snapshot.get(name) for name in (
                             "broker_route", "effective_venue", "session_bucket")})
+                from src.engine.monitoring.runtime_performance import observe
+                observe("capacity_prepare",time.perf_counter()-capacity_started)
         return refreshed
 
     def evaluate(
@@ -61822,7 +61878,7 @@ def _resolve_scanner_async_entry_ai(
                 "reason": "scanner_async_source_quality_incomplete",
                 "ai_result_source": "fail_closed_before_provider",
             }
-        stock_snapshot = async_context.stock_snapshot
+        stock_snapshot = thaw_scanner_async_value(async_context.stock_snapshot)
         decision = dict(
             ai_engine.analyze_target(
                 stock_snapshot.get("name") or code,
@@ -61830,9 +61886,11 @@ def _resolve_scanner_async_entry_ai(
                 thaw_scanner_async_value(prepared.get("recent_ticks") or []),
                 thaw_scanner_async_value(prepared.get("recent_candles") or []),
                 entry_economics_observer=lambda **facts: _observe_entry_economics_before_ai(
-                    stock, code, facts.pop('observation_ws_data', thaw_scanner_async_value(prepared.get('ws_data') or {})), **facts),
+                    stock_snapshot, code, facts.pop('observation_ws_data', thaw_scanner_async_value(prepared.get('ws_data') or {})), **facts),
                 entry_input_refresher=lambda ws, ticks, context: _refresh_prepared_entry_inputs(code, ws, ticks, context),
                 entry_input_deadline_epoch=async_context.deadline_epoch,
+                entry_input_deadline_perf=async_context.deadline_perf,
+                reversal_signal_claim=stock_snapshot.get("_continuous_reversal_pending_claim"),
                 prompt_profile="watching",
                 metadata_extra={
                     **_scanner_promotion_correlation_fields(stock_snapshot),
@@ -61845,7 +61903,7 @@ def _resolve_scanner_async_entry_ai(
                         "entry_adm_candidate_id"
                     ),
                     "source_event_stage": "watching_analyze_target_async_v1",
-                    "scanner_generation_id": generation.generation_id,
+                    **({"fixed_watch_request_identity":generation.generation_id} if fixed_watch else {"scanner_generation_id":generation.generation_id}),
                 },
                 candle_context=thaw_scanner_async_value(
                     prepared.get("candle_context") or {}
@@ -61856,6 +61914,8 @@ def _resolve_scanner_async_entry_ai(
         decision.update(
             thaw_scanner_async_value(prepared.get("final_entry_refresh_fields") or {})
         )
+        if stock_snapshot.get('_machine_observation_revision'):
+            decision['_entry_observation_revision'] = stock_snapshot['_machine_observation_revision']
         return decision
 
     submit_decision = coordinator.submit(
@@ -61867,6 +61927,8 @@ def _resolve_scanner_async_entry_ai(
         )
     )
     if submit_decision.accepted:
+        if fixed_watch:
+            stock['_fixed_watch_async_claim'] = copy.deepcopy(claim)
         _mutate_stock_state(
             stock,
             set_fields={
@@ -63149,6 +63211,7 @@ def _handle_watching_strategy_branch(
                                 recent_ticks,
                                 recent_candles,
                                 reversal_signal_claim=stock.get('_continuous_reversal_pending_claim'),
+                                entry_input_deadline_epoch=__import__("src.engine.scalping.entry_deadline",fromlist=["claim_deadline_epoch"]).claim_deadline_epoch(stock.get("_continuous_reversal_pending_claim")),
                                 entry_economics_observer=lambda **facts: _observe_entry_economics_before_ai(
                                     stock, code, facts.pop('observation_ws_data', entry_ai_ws_data), **facts),
                                 entry_input_refresher=lambda ws, ticks, context: _refresh_prepared_entry_inputs(code, ws, ticks, context),
@@ -63173,11 +63236,13 @@ def _handle_watching_strategy_branch(
                             )
                             ai_call_completed_at = time.time()
                             pending_claim=stock.pop('_continuous_reversal_pending_claim',None)
+                            entry_recheck_claim=pending_claim
                             if pending_claim and ai_decision.get('entry_mechanistic_policy_decision'):
                                 stock['_continuous_reversal_last_requested_id']=pending_claim['snapshot'][0]['event_id']
                                 from src.engine.scalping.reversal_current_backend import acknowledge_any as acknowledge
                                 acknowledge(pending_claim,status='evaluated')
                         ai_decision.update(pre_ai_ws_refresh_fields)
+                        entry_recheck_claim = locals().get("entry_recheck_claim") or (ai_decision.get("entry_mechanistic_policy_decision") or {}).get("continuous_reversal_claim")
                         ai_call_executed = True
                         _mutate_stock_state(
                             stock,
@@ -63631,6 +63696,8 @@ def _handle_watching_strategy_branch(
                                 entry_economics_observer=lambda **facts: _observe_entry_economics_before_ai(
                                     stock, code, facts.pop('observation_ws_data', ws_data), **facts),
                                 entry_input_refresher=lambda ws, ticks, context: _refresh_prepared_entry_inputs(code, ws, ticks, context),
+                                reversal_signal_claim=entry_recheck_claim,
+                                entry_input_deadline_epoch=__import__('src.engine.scalping.entry_deadline',fromlist=['claim_deadline_epoch']).claim_deadline_epoch(entry_recheck_claim),
                                 prompt_profile="watching",
                                 cache_profile="numeric_consistency_recheck",
                                 metadata_extra={
@@ -63851,6 +63918,8 @@ def _handle_watching_strategy_branch(
                                 entry_economics_observer=lambda **facts: _observe_entry_economics_before_ai(
                                     stock, code, facts.pop('observation_ws_data', ws_data), **facts),
                                 entry_input_refresher=lambda ws, ticks, context: _refresh_prepared_entry_inputs(code, ws, ticks, context),
+                                reversal_signal_claim=entry_recheck_claim,
+                                entry_input_deadline_epoch=__import__('src.engine.scalping.entry_deadline',fromlist=['claim_deadline_epoch']).claim_deadline_epoch(entry_recheck_claim),
                                 prompt_profile="watching",
                                 cache_profile="early_accel_strong_bundle_recheck",
                                 metadata_extra={
@@ -69987,8 +70056,9 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         try:
             from src.engine.scalping.reversal_auxiliary_intraday import validate_submit
             from src.engine.monitoring.runtime_performance import mark_signal
-            perf_assessment = (stock.get('last_watching_ai_machine_primary_fields') or {}).get('entry_mechanistic_policy_decision') or {}
-            mark_signal(perf_assessment.get('signal_id') or perf_assessment.get('event_id'), 'submit')
+            perf_decision = (stock.get('last_watching_ai_machine_primary_fields') or {}).get('entry_mechanistic_policy_decision') or {}
+            perf_assessment = perf_decision.get('continuous_reversal_assessment') or perf_decision
+            mark_signal(perf_assessment.get('signal_id') or perf_assessment.get('event_id'), 'pre_submit')
             validate_submit(DATA_DIR, stock.get("last_watching_ai_machine_primary_fields") or {}, now=time.time())
         except (OSError, ValueError, KeyError, TypeError) as exc:
             _log_entry_pipeline(stock, code, "auxiliary_binding_submit_recheck", reason=str(exc),
@@ -72060,6 +72130,15 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         ),
         {},
     )
+    try:
+        from src.engine.monitoring.runtime_performance import mark_signal
+        performance_decision = (stock.get('last_watching_ai_machine_primary_fields') or {}).get('entry_mechanistic_policy_decision') or {}
+        performance_assessment = performance_decision.get('continuous_reversal_assessment') or performance_decision
+        performance_signal = performance_assessment.get('signal_id') or performance_assessment.get('event_id')
+        mark_signal(performance_signal, 'guard_done')
+        mark_signal(performance_signal, 'actual_submit')
+    except (TypeError, ValueError):
+        pass  # Diagnostic join failure never changes native submission custody.
     _log_entry_pipeline(
         stock,
         code,

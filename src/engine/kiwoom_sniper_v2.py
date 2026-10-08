@@ -12668,7 +12668,7 @@ def run_sniper(is_test_mode=False):
             f"(main_openai={'ON' if runtime_role == 'main' else 'OFF'})"
         )
 
-    if run_sniper.scanner_scheduler_mode == "async_v1":
+    if run_sniper.scanner_scheduler_mode == "async_v1" or (AI_ENGINE is not None and openai_api_keys):
         if AI_ENGINE is None or not openai_api_keys:
             log_error(
                 "[SCANNER_ASYNC] async_v1 requested without a loaded OpenAI "
@@ -12700,7 +12700,8 @@ def run_sniper(is_test_mode=False):
                     pending_dispatcher.shutdown(wait=False)
                 run_sniper.hot_path_ai_dispatcher = None
                 run_sniper.scanner_async_eval_coordinator = None
-                run_sniper.scanner_scheduler_mode = "deadline_v1"
+                if run_sniper.scanner_scheduler_mode == "async_v1":
+                    run_sniper.scanner_scheduler_mode = "deadline_v1"
     log_info(
         "[SCANNER_SCHEDULER_RUNTIME_MODE] "
         f"requested_mode={run_sniper.scanner_scheduler_requested_mode} "
@@ -16231,7 +16232,12 @@ def run_sniper(is_test_mode=False):
                 log_snapshot()
                 _LOOP_METRICS_LAST_LOG_TS = now_ts
 
-            time.sleep(_sleep_ms / 1000.0)
+            coordinator = getattr(run_sniper, 'scanner_async_eval_coordinator', None)
+            if coordinator is not None:
+                coordinator.completion_event.wait(_sleep_ms / 1000.0)
+                coordinator.completion_event.clear()
+            else:
+                time.sleep(_sleep_ms / 1000.0)
 
     except Exception as e:
         log_error(f"🔥 스나이퍼 루프 치명적 에러: {e}\n{traceback.format_exc()}")
@@ -16245,6 +16251,7 @@ def run_sniper(is_test_mode=False):
         print("\n🛑 스나이퍼 매매 엔진 종료")
 
     finally:
+        radar.shutdown()
         try:
             if getattr(AI_ENGINE, '_transport_warmup', None) is not None:
                 AI_ENGINE.stop_transport_warmup()

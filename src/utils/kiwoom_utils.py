@@ -1,3 +1,4 @@
+from src.utils.kiwoom_transport_telemetry import measured_http_call, record_decoded_response, demand as transport_demand
 import os
 import sys
 import json
@@ -757,11 +758,12 @@ def _request_new_kiwoom_token(config: dict) -> tuple[str | None, dict]:
     headers = {"Content-Type": "application/json;charset=UTF-8"}
 
     try:
-        res = requests.post(url, headers=headers, json=params, timeout=5)
+        res = measured_http_call(requests.post, url, telemetry_owner='kiwoom_utils.oauth', telemetry_class='auth', headers=headers, json=params, timeout=5)
 
         log_info(f"🔐 [TOKEN] 응답 코드: {res.status_code}")
         if res.status_code == 200:
             payload = res.json() or {}
+            record_decoded_response(res, payload)
             token = payload.get("access_token") or payload.get("token")
             if token:
                 log_info(f"🔐 [TOKEN] 발급 성공 (len={len(str(token))})")
@@ -2607,6 +2609,21 @@ def get_item_info_ka10100(token, code):
     return None
 
 
+def get_index_twenty_day_regime_ka20006(token, *, base_date=None):
+    """Official chart contract, distinct from the existing two-value helper."""
+    from src.trading.market.index_regime import index_regime
+    base_date = base_date or datetime.now().strftime('%Y%m%d')
+    responses = fetch_kiwoom_api_continuous(
+        url=get_api_url('/api/dostk/chart'), token=token, api_id='ka20006',
+        payload={'inds_cd':'001','base_dt':base_date}, use_continuous=False,
+        request_owner='signal_radar_market_regime_fallback',
+        request_class=REQUEST_CLASS_RUNTIME_REQUIRED, request_code='001')
+    if not responses or str(responses[0].get('return_code')) != '0':
+        raise ValueError('index_source_missing_or_failed')
+    result=index_regime(responses[0].get('inds_dt_pole_qry'),base_date=base_date,scale=100.)
+    return dict(result, source='kiwoom_ka20006', fetched_epoch=time.time())
+
+
 def get_index_daily_ka20006(token, inds_cd="001"):
     """
     [ka20006] 업종일봉조회요청 API를 호출하여 최근 6거래일 지수 데이터를 가져옵니다.
@@ -4347,12 +4364,16 @@ def check_program_buying_ka90008(token, code, date_str=None, retry_prev_if_zero=
 def get_program_flow_realtime(token, code, ws_data=None):
     """실시간 프로그램 수급은 WS '0w'를 우선, 없으면 ka90008 전일 스냅샷으로 fallback."""
     ws_data = ws_data or {}
-    received_types = set(ws_data.get("received_types", []))
-    has_ws_program = "0w" in received_types or any(
-        int(ws_data.get(k, 0) or 0) != 0
-        for k in ("prog_net_qty", "prog_delta_qty", "prog_net_amt", "prog_delta_amt")
-    )
-
+    request_code = get_effective_kiwoom_code(code)
+    stamp = (ws_data.get('last_realtime_type_ts') or {}).get('0w')
+    item = (ws_data.get('last_realtime_type_item') or {}).get('0w')
+    age = (time.time()-stamp)*1000 if type(stamp) in (int,float) else None
+    # Missing provenance is unavailable, never refreshed by a current 0B tick.
+    has_ws_program = (item == request_code and age is not None and 0 <= age <= 60000
+        and type(ws_data.get('market_data_transport_epoch')) is int
+        and ws_data['market_data_transport_epoch'] > 0
+        and (ws_data.get('last_realtime_type_transport_epoch') or {}).get('0w') == ws_data['market_data_transport_epoch']
+        and not ws_data.get('source_conflict') and not ws_data.get('price_conflict'))
     if has_ws_program:
         net_qty = int(ws_data.get("prog_net_qty", 0) or 0)
         delta_qty = int(ws_data.get("prog_delta_qty", 0) or 0)
@@ -4543,10 +4564,12 @@ def get_tick_history_ka10003(
         req_code = f"{normalize_stock_code(code)}{explicit_suffix}"
     else:
         req_code = get_effective_kiwoom_code(code)
+    transport_demand("ka10003", "logical_demand")
     cache_key = (str(req_code), int(limit))
     cache_key = (_market_data_cache_scope(token), cache_key)
     cached = _cache_get("ka10003_ticks", cache_key)
     if cached is not None:
+        transport_demand("ka10003", "cache_http0")
         return _rest_trade_rows_at_consume(
             cached, api_id="ka10003", request_code=str(req_code),
             request_owner=request_owner, request_class=request_class, reuse=True,
@@ -5305,6 +5328,8 @@ def fetch_kiwoom_api_continuous(
             "request_owner": str(request_owner or f"kiwoom_utils.{api_id}"),
         }
     )
+    if joined:
+        transport_demand(api_id, "singleflight_follower_http0")
     return (results, meta) if return_meta else results
 
 
@@ -5330,13 +5355,16 @@ def _fetch_kiwoom_api_continuous_transport(
     - use_continuous=False: 1회성 조회만 수행합니다. (ka10001 등에 사용)
     """
     all_results = []
+    import uuid
     max_attempts = max(1, int(max_retries))
     meta = _empty_kiwoom_source_meta(api_id)
+    meta["logical_request_id"] = uuid.uuid4().hex
     normalized_owner = str(request_owner or f"kiwoom_utils.{api_id}").strip()
     normalized_request_code = str(
         request_code
         or payload.get("stk_cd")
         or payload.get("upjong_cd")
+        or payload.get("inds_cd")
         or "not_applicable"
     ).strip()
     meta.update(
@@ -5435,8 +5463,12 @@ def _fetch_kiwoom_api_continuous_transport(
                     meta.setdefault("first_http_started_epoch", started_epoch)
                     meta["last_http_started_epoch"] = started_epoch
                     meta["request_attempt_count"] += 1  # Count a timeout as a sent attempt.
-                response = requests.post(
-                    url,
+                if api_id != "kt00011":
+                    meta["request_attempt_count"] = int(meta.get("request_attempt_count") or 0) + 1
+                response = measured_http_call(
+                    requests.post, url, telemetry_owner=normalized_owner,
+                    telemetry_class=request_class, telemetry_code=normalized_request_code,
+                    telemetry_logical_id=meta["logical_request_id"],
                     headers=headers,
                     json=payload,
                     timeout=(
@@ -5448,10 +5480,6 @@ def _fetch_kiwoom_api_continuous_transport(
                 response_received_ts_ms = int(time.time() * 1000)
                 if api_id == "kt00011":
                     meta["last_http_received_epoch"] = response_received_ts_ms / 1000.0
-                else:
-                    meta["request_attempt_count"] = (
-                        int(meta.get("request_attempt_count") or 0) + 1
-                    )
                 meta["last_http_status_code"] = response.status_code
 
                 if response.status_code == 200:
@@ -5576,6 +5604,7 @@ def _fetch_kiwoom_api_continuous_transport(
             break
 
         res_json = response.json()
+        record_decoded_response(response, res_json)
         meta["rest_received_ts_ms"] = response_received_ts_ms
 
         # return_code 체크 (정상이 아니면 경고 후 응답값 저장)

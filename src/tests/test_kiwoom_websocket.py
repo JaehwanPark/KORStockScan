@@ -4536,48 +4536,35 @@ def test_dashboard_omits_unused_histories_preserving_exported_route_window(symbo
     assert frozen['recent_trade_ticks_by_route']['krx_nxt_integrated'][0]['price'] == 10000
 
 
-def test_research_capture_cannot_block_next_dashboard_or_start_second_writer(monkeypatch):
-    from threading import Event
-    from pathlib import Path
+def test_dashboard_finishes_projection_outside_ingress_lock(monkeypatch):
     manager = KiwoomWSManager('test-token')
-    codes = {"005930", "034020", "403870", "196170", "036930", "006800"}
-    for code in codes: manager._ensure_target_defaults(code)
-    research_started, release_research, research_done = Event(), Event(), Event()
-    first_frame, second_frame = Event(), Event()
-    frames, captures = [], []
-    def research(now):
-        captures.append(now); research_started.set()
-        try:
-            assert release_research.wait(3)
-        finally:
-            research_done.set()
-    def write(frame, **kwargs):
-        assert set(frame) == codes
-        frames.append(kwargs['now_ts'])
-        (first_frame if len(frames) == 1 else second_frame).set()
-        return Path('fixture')
-    monkeypatch.setattr(manager, '_capture_episode_research_facts', research)
-    monkeypatch.setattr(kiwoom_websocket, 'write_ws_snapshot', write)
-    try:
-        manager._maybe_write_dashboard_snapshot()
-        assert research_started.wait(2)
-        # The first publisher must finish while the research writer stays blocked.
-        for _ in range(100):
-            if not manager._dashboard_snapshot_write_inflight:
-                break
-            __import__('time').sleep(.005)
-        assert not manager._dashboard_snapshot_write_inflight
-        manager._last_dashboard_snapshot_at = 0
-        manager._maybe_write_dashboard_snapshot()
-        assert second_frame.wait(2)
-        assert len(captures) == 1
-        assert len(frames) == 2
-    finally:
-        release_research.set()
-        research_done.wait(2)
+    manager._ensure_target_defaults('005930')
+    original = manager._finish_snapshot
+    seen = []
+    class ImmediateThread:
+        def __init__(self, *, target, **kwargs): self.target = target
+        def start(self): self.target()
+    # Patch the publisher thread only, keeping an actual probe thread above.
+    from threading import Thread
+    def finish_without_patched_thread(snapshot, **kwargs):
+        acquired = []
+        def probe():
+            ok = manager.lock.acquire(timeout=.2)
+            acquired.append(ok)
+            if ok: manager.lock.release()
+        thread = Thread(target=probe)
+        thread.start(); thread.join(.5)
+        assert acquired == [True]
+        seen.append(True)
+        return original(snapshot, **kwargs)
+    monkeypatch.setattr(manager, '_finish_snapshot', finish_without_patched_thread)
+    monkeypatch.setattr(kiwoom_websocket.threading, 'Thread', ImmediateThread)
+    monkeypatch.setattr(kiwoom_websocket, 'write_ws_snapshot', lambda *a, **kw: 'fixture')
+    manager._maybe_write_dashboard_snapshot()
+    assert seen and not manager._dashboard_snapshot_write_inflight
 
 
-def test_failed_worker_start_resets_publication_and_research_guards(monkeypatch):
+def test_failed_worker_start_resets_publication_guard(monkeypatch):
     manager = KiwoomWSManager('test-token')
     class BrokenThread:
         def __init__(self, **kwargs): pass
@@ -4585,8 +4572,6 @@ def test_failed_worker_start_resets_publication_and_research_guards(monkeypatch)
     monkeypatch.setattr(kiwoom_websocket.threading, 'Thread', BrokenThread)
     with pytest.raises(RuntimeError): manager._maybe_write_dashboard_snapshot()
     assert manager._dashboard_snapshot_write_inflight is False
-    with pytest.raises(RuntimeError): manager._schedule_episode_research_capture()
-    assert not manager._episode_research_capture_lock.locked()
 
 
 def test_dashboard_uses_capture_clock_when_projection_is_delayed(monkeypatch):
@@ -4612,29 +4597,16 @@ def test_dashboard_uses_capture_clock_when_projection_is_delayed(monkeypatch):
     assert captured == {'now': 1000.0, 'event': 999.0}
     assert clock[0] == 1003.0
 
-@pytest.mark.parametrize('case,expected', [('busy','cross_process_owner_busy'),('error','capture_failed'),('invalid','capture_failed'),('waiting','capture_completed')])
-def test_research_worker_status_does_not_manufacture_facts_or_block_snapshot(monkeypatch,case,expected):
-    manager=KiwoomWSManager('test-token')
+def test_dashboard_preserves_main_projection_without_retired_research(monkeypatch):
+    manager = KiwoomWSManager('test-token')
+    assert not hasattr(manager, '_capture_episode_research_facts')
+    assert not hasattr(manager, '_schedule_episode_research_capture')
+    frames = []
     class ImmediateThread:
-        def __init__(self,**kwargs):self.target=kwargs['target']
-        def start(self):self.target()
-    monkeypatch.setattr(kiwoom_websocket.threading,'Thread',ImmediateThread)
-    monkeypatch.setattr(kiwoom_websocket,'log_error',lambda *_:None)
-    def capture(_now):
-        if case=='busy':raise BlockingIOError('owned')
-        if case=='error':raise OSError('persistence unavailable')
-        if case=='invalid':return None
-        return dict(status='waiting',written_facts=0,source_gap_symbols=['006800'])
-    monkeypatch.setattr(manager,'_capture_episode_research_facts',capture)
-    manager._schedule_episode_research_capture()
-    assert not manager._episode_research_capture_lock.locked()
-    assert manager._episode_research_capture_status['status']==expected
-    assert manager._episode_research_capture_status['written_facts']==(0 if case=='waiting' else None)
-    frames=[]
-    monkeypatch.setattr(kiwoom_websocket,'write_ws_snapshot',lambda frame,**kw:frames.append(kw) or 'fixture')
+        def __init__(self, *, target, **kwargs): self.target = target
+        def start(self): self.target()
+    monkeypatch.setattr(kiwoom_websocket.threading, 'Thread', ImmediateThread)
+    monkeypatch.setattr(kiwoom_websocket, 'write_ws_snapshot', lambda frame, **kw: frames.append(kw) or 'fixture')
     manager._maybe_write_dashboard_snapshot()
     assert not manager._dashboard_snapshot_write_inflight
-    assert frames[0]['shared_transport_producer']['episode_research_capture']['status']==expected
-    if case=='waiting':
-        assert frames[0]['shared_transport_producer']['episode_research_capture']['source_status']=='waiting'
-        assert frames[0]['shared_transport_producer']['episode_research_capture']['source_gap_count']==1
+    assert 'episode_research_capture' not in frames[0]['shared_transport_producer']
