@@ -49,3 +49,27 @@ v4 PID 70105의 50초 추가 스택 표본에서 Main 96회 중 31회는 `manual
 남은 원장 조회 병목은 기존 소유자 `trading/order/owner_custody_registry.py`에서 보완했다. 원래의 EX flock을 그대로 획득하고 원장 전체 hash chain 검증으로 얻은 증빙 행만 재사용한다. 경로/실제 대상/파일 및 링크 inode·size·mtime·ctime 변경과 append는 즉시 폐기한다. 읽기 전후 identity가 달라도 실패한다. 계좌·일자·종목·policy·mode·allowed owners·migration·broker snapshot·entry authority 비교는 매 호출 수행하므로 판정/수동 통제 결과를 cache하지 않는다. 최대 64행×ASCII JSON 4,096 bytes이고 큰 행은 기존 검증 읽기로 돌아간다. mutation·주문 예약/append·보유/청산·권한 정의는 변경하지 않았다.
 
 정확한 현재 원장 1,476 event/1,891,615 bytes를 한 번만 격리 임시 복사한 뒤 양쪽 30회 비교하여 25.201ms→0.053ms 중앙값을 확인했다(`activation-lookup-benchmark.json`; 측정 후 임시 사본 자동 삭제). 신규 호출·주문·실원장 변경은 없었다. 계좌 및 모든 authority 필드, ctime/동일 mtime 변경, 삭제/원자 교체/링크 교체/append, 읽는 중 변경, 동시 조회, 반환 row 격리 및 큰 row fallback 관련 기존·추가 회귀 251 PASS다. review에서 이 보완을 LP4의 실측 병목 범위에 포함했으며 다른 소유권 규칙은 확장하지 않았다.
+
+### 최종 배포와 10:45:47 KST 성능 구간
+
+- 최종 코드 `aed0ffcaf0bbce32fe84fab15a77ea36953f7202`, immutable release `main-loop-latency-20261008-v5`, 실제 Main PID `76094`/start ticks `674250`/cwd `.../v5/src`. 정확 cwd에서 anchor 혼용·정책 내용 digest 일치를 확인했고, 이 release의 기동/소유권 통합 173 PASS다. 배포 코드의 미해결 in-scope 리뷰 결함은 없다. 별도 보조 연구의 dirty 변경은 배포하지 않았다.
+- 10:40:58 기동 env/PID 검증 PASS, 10:41:50 기계 128개·보조 128개 binding의 실제 소비가 확인됐다. current는 `consumed_exact`, `active`, `prepared_verified`; 기존 bundle/family/execution hash, 추가 패턴, 보조 binding과 5초 claim TTL을 보존했다. 증거 `deployment-v5.json`, `mixed-anchor-immutable-v5.json`.
+- 장중 handoff PASS, 원 PREOPEN candidate SHA `1ac6274f39022fcb33a038cc4dec69cd85bbbe35cf7de20b39b6fc776a153a19` 유지. `strict_checklist_generation_stale`/generation invalid 없음. `log_rotation_cleanup`, `postclose_finalization`의 기존 06:50 이후 완료 경고는 계속 공개하며 재생성 성공으로 덮지 않는다.
+
+| 최종 PID 관측 | 표본 | 결과 | 초기 목표 판정 |
+| --- | ---: | --- | --- |
+| warm Main loop | 100 | p95 4.194초 / p99 7.698초 / max 8.251초 / 5초 초과 4회 | **미달**, 완료로 포장하지 않음 |
+| 첫 정책 세대 loop | 1 | 13.850초 | cold 별도 |
+| 정책 준비 | 82 | p95 1.100초 / max 2.579초 | cold/재검증 포함, 부분 경로 오프라인 수치와 구별 |
+| WS lock hold | 최근 4,096 / 전체 13,343 | p99 28.287ms / max 376.510ms | **10ms 목표 미달** |
+| confirmed→claim / AI / pre-submit | 0 | 관측 불가 | 목표 달성·실패·경제성으로 대체하지 않음 |
+
+`performance-v5.json`의 10:45:47.378 구간 기준이며 log 표본 간격이 아니라 모든 완료 loop를 집계했다. 기동 후 policy refresh 실패 0, 고정 감시 5개다. v3 123회 p95 8.250초, v4 136회 p95 5.793초, v5 100회 p95 4.194초로 자연 구간이 개선됐지만 시간·입력률·경합이 달라 원인별 개선율로 단정하지 않는다. 통제된 부분 경로 비교와 자연 분포를 분리한다. 실제 주문/체결/손익 개선은 미검증이다.
+
+### 남은 외부 경합과 다음 종료 조건
+
+최종 Main 스택 95회 중 26회가 여전히 원장 EX flock 대기였다(`after-stack-summary-v5.json`, 비원자 표본·전체 thread read 오류 101개). `/proc/locks`에서 해당 lock inode의 WRITE holder PID `50309`를 확인했고, 실제 cwd/cgroup은 `episode-eight-retired-main-five-20261006-511664f3`의 `korstockscan-low-price-two-leg@hanwha_ocean_late_morning.service`였다. 같은 구 릴리스의 `sd_biosensor_late_morning` PID `74710`, `sk_eternix_late_morning` PID `78161`도 live 실행 중이다. 이들은 Main 선택 릴리스의 수정 코드를 소비하지 않는다.
+
+한화오션 holder의 별도 20회 표본은 기존 원장 chain 재읽기·hash와 `assert_owner`/활성화 조회를 확인했다(`external-holder-summary.json`; frame read 오류 0). 로컬 native 상태는 전일 `TARGET_OPEN`, `position_qty=10`이므로 브로커 flat을 입증한 상태가 아니다. 다른 두 profile의 로컬 상태는 당일 READY/0이나 이것만으로 전체 custody 종료를 대신하지 않는다. 정확 상태 증거는 `external-episode-custody.json`이다.
+
+이번 Main 지연 개선 승인을 [아직 계획 상태인 전체 episode 제거](../proposals/main-only-widget-episode-full-retirement-plan-2026-10-07.md)의 잔량/주문 책임 해제나 독립 service 중지로 확대하지 않았다. 따라서 해당 세 service/timer를 변경하지 않았다. 다음 종료 조건은 기존 custody owner의 브로커·native 주문/잔량 대사 및 청산 인계, 독립 서비스의 원장 임계구간 개선 또는 승인된 퇴역 이후 동일 Main loop/lock 재측정이다. latency owner `DirectFamilySourceRepairMainMechanisticEntry`의 성능 목표는 남겨두며, 구현·배포 완료를 전체 지연 제거 완료와 구분한다. 보고용 detector는 최종 95개 표본 모두 주기 대기로 관측돼, 이 작업에서 별도 report daemon/프로세스 분리는 추가하지 않았다.
