@@ -210,6 +210,91 @@ def _native_reversal_claim(monkeypatch):
     return B, state, values, claim
 
 
+@pytest.mark.parametrize('version', ['v5', 'v6'])
+@pytest.mark.parametrize('case,expected', [
+    ('down', 'reversal_first_signal_invalidated'),
+    ('expire', 'reversal_signal_expired'),
+    ('epoch', None), ('invalid_source', None), ('bad_quote', None),
+])
+def test_operating_claim_lifecycle_requires_exact_cell_and_intact_source(monkeypatch, tmp_path, version, case, expected):
+    from src.engine.scalping import reversal_current_backend as D
+    from src.engine.scalping import reversal_source_diagnostics as DIAG
+    from src.engine.scalping import reversal_extended_runtime as V6
+    from src.engine.scalping import reversal_operating_runtime as V5
+    from src.engine.scalping import reversal_extended_state as E
+    from src.engine.scalping.reversal_path_catalog import cell_key
+    from src.tests.test_reversal_path_policy import row
+    from src.engine.monitoring.submission_bottleneck_monitor import _reversal_lifecycle_diagnostic, source_gap_semantics
+    from src.tests.test_submission_bottleneck_monitor import _source_gap_files
+    B = V6 if version == 'v6' else V5
+    values = [row(i, 100) for i in range(121)] + [row(121, 99), row(122, 100)]
+    for r in values:
+        r[9] = '403870_AL'
+    state = E.State(branch_ids=['legacy_dd5_ge_0_4_v1'], generation='a'*64)
+    for r in values:
+        state.observe(r, symbol='403870', venue='SOR', session='SOR_REGULAR')
+    at = values[-1][0]
+    day = datetime.fromtimestamp(at, B.K.KST).date().isoformat()
+    cell = cell_key('403870', 'REGULAR', 100)
+    key = ('403870', 'SOR', '403870_AL', 'REGULAR', day, cell)
+    monkeypatch.setattr(B, '_STATES', {key: state})
+    monkeypatch.setattr(B, '_CLAIMS', {})
+    monkeypatch.setattr(B, '_GENERATION', 'f'*64)
+    monkeypatch.setattr(B, '_FAMILY', dict(family_sha256='f'*64,
+        machine_cells={cell: dict(routes={'SOR': dict(scope_execution_hash='a'*64)})}))
+    monkeypatch.setattr(D, 'backend', lambda *args: B)
+    monkeypatch.setattr(DIAG.time, 'time', lambda: at)
+    claim = DIAG.claim_snapshot_with_receipt('403870', 'SOR', 'SOR_REGULAR',
+        now=at, item='403870_AL', family_sha256='f'*64)
+    assert claim and claim['backend'] == 'operating_'+version
+    now = at + (6 if case == 'expire' else 1)
+    if case == 'expire':
+        for offset in range(123, 128):
+            tick = row(offset, 100)
+            tick[9] = '403870_AL'
+            state.observe(tick, symbol='403870', venue='SOR', session='SOR_REGULAR')
+    update = row(128 if case == 'expire' else 123, 99)
+    update[9] = '403870_AL'
+    if case == 'epoch': update[1] += 1
+    if case == 'invalid_source': update[8] = 0
+    if case == 'bad_quote': update[4:6] = [101, 99]
+    state.observe(update, symbol='403870', venue='SOR', session='SOR_REGULAR')
+    monkeypatch.setattr(DIAG.time, 'time', lambda: now)
+    before = deepcopy((claim, B._CLAIMS))
+    with pytest.raises(ValueError) as native:
+        B.validate_claim(claim, 'f'*64, now=now)
+    with pytest.raises(ValueError) as measured:
+        DIAG.validate_claim_with_receipt(claim, 'f'*64, now=now,
+            evaluation_attempt_id='attempt-operating', machine_bundle_sha256='b'*64)
+    assert str(native.value) == str(measured.value)
+    assert (claim, B._CLAIMS) == before
+    receipt = measured.value.reversal_source_receipt
+    trace = dict(stock_code='403870', decision_ts=B.K.iso(now+.01),
+        decision_stage='entry_screen', machine_evaluation_status='assessment_contract_invalid',
+        market_data_route='krx_nxt_integrated', evaluation_attempt_id='attempt-operating',
+        machine_bundle_sha256='b'*64, machine_contract_error=str(measured.value),
+        provider_called=False, continuous_reversal_rejected_claim_receipt=receipt)
+    assert _reversal_lifecycle_diagnostic(trace) == expected
+    clock = datetime.fromtimestamp(now+.1, B.K.KST)
+    _source_gap_files(tmp_path, clock, traces=[trace])
+    result = source_gap_semantics(tmp_path, clock)
+    assert result['issues'] == ({} if expected else {'machine_trace:'+str(native.value): 1})
+    if expected:
+        assert result['diagnostics'] == {'machine_trace:'+expected: 1}
+        for field in ('stored_envelope_family_sha256', 'state_generation',
+                      'active_scope_execution_hash', 'source_registration_receipt',
+                      'active_generation', 'snapshot_sha256'):
+            broken = dict(receipt, **{field: None})
+            assert _reversal_lifecycle_diagnostic(dict(trace, continuous_reversal_rejected_claim_receipt=broken)) is None
+        for field, value in [('state_observed_epoch', now+6), ('price_path_segment_start', now),
+                             ('scope', ['foreign']), ('claim_token', 'c'*64)]:
+            broken = dict(receipt, **{field: value})
+            assert _reversal_lifecycle_diagnostic(dict(trace, continuous_reversal_rejected_claim_receipt=broken)) is None
+        # Old receipts cannot prove the separate cell-to-family binding.
+        old = dict(receipt, schema='continuous_reversal_claim_source_receipt_v3')
+        assert _reversal_lifecycle_diagnostic(dict(trace, continuous_reversal_rejected_claim_receipt=old)) is None
+
+
 @pytest.mark.parametrize('case,cause,lifecycle', [
     ('expire', 'reversal_signal_expired', True),
     ('down', 'reversal_first_signal_invalidated', True),

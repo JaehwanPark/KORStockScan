@@ -28,13 +28,13 @@ def test_native_stage_and_notifier_functional_coverage():
     from src.engine.automation.postclose_summary_handoff import STAGE_REGISTRY
     from src.engine.notify_error_detection_admin import SEMANTIC_ALERT_STAGES
     result = validate_semantic_coverage('2026-10-07')
-    assert result['status'] == 'pass' and result['native_stage_count'] == 13
+    assert result['status'] == 'pass' and result['native_stage_count'] == len(STAGE_REGISTRY)
     assert result['stages']['main_auxiliary_policy']['prerequisites'] == ['main_machine_policy']
     assert len(REQUIRED_ARTIFACT_IDS) == 40
     bad = validate_semantic_coverage('2026-10-07', alert_stages=SEMANTIC_ALERT_STAGES-{'main_machine_policy'})
     assert bad['findings'] == ['main_machine_policy:notifier_unbound']
-    bad = validate_semantic_coverage('2026-10-07', stages={k:v for k,v in STAGE_REGISTRY.items() if k!='episode_policy'})
-    assert 'episode_policy:stage_unregistered' in bad['findings']
+    bad = validate_semantic_coverage('2026-10-07', stages={k:v for k,v in STAGE_REGISTRY.items() if k!='main_machine_policy'})
+    assert 'main_machine_policy:stage_unregistered' in bad['findings']
     assert validate_semantic_coverage('2026-10-07', hooks={})['status'] == 'source_invalid'
 
 

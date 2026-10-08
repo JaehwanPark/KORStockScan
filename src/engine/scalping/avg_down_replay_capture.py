@@ -143,6 +143,7 @@ def policy_snapshot(handlers, now_ts: float) -> dict:
     from src.engine.scalping.position_peak_ledger import (
         DEFAULT_LEDGER_PATH, POSITION_PEAK_LEDGER,
     )
+    from src.trading.order.owner_custody_registry import registry_path
     if _IMPLEMENTATION is None:
         _IMPLEMENTATION = implementation_identity()
     if handlers.TRADING_RULES is None:
@@ -155,14 +156,7 @@ def policy_snapshot(handlers, now_ts: float) -> dict:
         DATA_DIR / "config" / "manual_control_excluded_codes.txt",
         DATA_DIR / "runtime" / "trade_pause_state.json",
         DATA_DIR.parent / "pause.flag",
-        DATA_DIR
-        / "runtime"
-        / "symbol_owner_policy"
-        / (
-            "symbol_owner_policy_"
-            + datetime.fromtimestamp(now_ts, tz=_KST).date().isoformat()
-            + ".json"
-        ),
+        registry_path(),
     }
     for key, value in {**rules, **environment}.items():
         if (

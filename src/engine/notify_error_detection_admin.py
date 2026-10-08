@@ -17,8 +17,8 @@ DEFAULT_STATE_FILE = PROJECT_ROOT / "tmp" / "error_detection_telegram_notify_sta
 
 SEMANTIC_ALERT_STAGES = frozenset({
     "legacy_machine_report", "main_machine_policy", "main_auxiliary_policy",
-    "postclose_handoff", "entry_cancel_wait_tuning", "episode_policy",
-    "samsung_frozen_validation", "episode_startup",
+    "postclose_handoff", "entry_cancel_wait_tuning",
+    "samsung_frozen_validation",
 })
 
 

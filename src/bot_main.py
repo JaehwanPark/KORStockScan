@@ -69,11 +69,7 @@ from src.engine.error_detector import (
     iter_daemon_alert_events,
     REPORT_DIR as ERROR_REPORT_DIR,
 )
-from src.trading.samsung_morning_one_share.authority_handoff import (
-    consume_guarded_restart_request,
-    record_scheduled_restart_block,
-    restart_guard_decision,
-)
+from src.engine.infrastructure.restart_requests import consume_restart_request
 
 
 # ==========================================
@@ -522,21 +518,6 @@ if __name__ == "__main__":
 
             # [스케줄러 2] 야간(23:50) 시스템 자동 재시작
             if now.hour == 23 and now.minute == 50:
-                restart_guard = restart_guard_decision(main_bot_pid=os.getpid())
-                if not restart_guard.get("allowed"):
-                    print(
-                        "🛑 삼성 모닝 독립 owner custody/authority가 남아 있어 "
-                        "야간 봇 재기동을 차단합니다. "
-                        f"reason={restart_guard.get('reason')}"
-                    )
-                    record_scheduled_restart_block(
-                        main_bot_pid=os.getpid(),
-                        request="source=bot_main_nightly_2350",
-                        decision=restart_guard,
-                        now=now.astimezone(),
-                    )
-                    time.sleep(65)
-                    continue
                 print("🌙 시스템 일일 초기화 및 메모리 정리를 위해 봇을 재가동합니다.")
                 event_bus.publish(
                     "TELEGRAM_BROADCAST",
@@ -552,7 +533,7 @@ if __name__ == "__main__":
 
             # [스케줄러 3] 관리자의 우아한 재시작(restart.flag) 감지
             if RESTART_FLAG_PATH.exists():
-                restart_guard = consume_guarded_restart_request(
+                restart_guard = consume_restart_request(
                     RESTART_FLAG_PATH,
                     main_bot_pid=os.getpid(),
                 )

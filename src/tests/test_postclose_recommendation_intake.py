@@ -14,15 +14,6 @@ from src.engine.monitoring.machine_recommendation_identity import bind_recommend
 DATE = "2026-09-09"
 
 
-def test_samsung_machine_entry_source_retired_after_cutover(tmp_path):
-    target = "2026-09-30"
-    report_dir = tmp_path / "data" / "report"
-    paths = mod.source_paths(report_dir, target)
-    assert "samsung_machine_entry_tuning" not in paths
-    assert "samsung_machine_entry_tuning" in mod.source_paths(report_dir, DATE)
-    result = mod.build_intake(report_dir, target)
-    assert result["sources"]["samsung_machine_entry_tuning"]["status"] == "retired_not_applicable"
-    assert "samsung_machine_entry_tuning" not in result["missing_sources"]
 
 
 def write(path, payload):
@@ -195,59 +186,8 @@ def test_nonselected_change_and_rank_change_are_different():
     assert result["new_selected_order_ids"] == ["order_b"]
 
 
-def test_all_owners_mirrors_nested_workorders_and_invalid_siblings(tmp_path):
-    reports, paths = sources(tmp_path, [order()])
-    a = recommendation()
-    invalid = {
-        "decision": "code_patch_required",
-        "runtime_effect": False,
-        "allowed_runtime_apply": False,
-    }
-    write(
-        paths["machine_entry_timing_tuning"],
-        {
-            "target_date": DATE,
-            "recommendations": [a, invalid],
-            "mirror": a,
-            "child": {"code_improvement_orders": [order("child")]},
-        },
-    )
-    result = mod.build_intake(reports, DATE)
-    assert result["counts"]["intake_total"] == 4
-    assert result["counts"]["implementation_requested_total"] == 3
-    assert (
-        len(
-            next(
-                row
-                for row in result["rows"]
-                if row["native_id"] == a["recommendation_id"]
-            )["sources"]
-        )
-        == 2
-    )
-    assert result["counts"]["invalid_or_missing_authority_total"] == 1
-    assert result["issues"] == []
-    assert any(
-        "native_identity_invalid" in row.get("validation_issues", [])
-        for row in result["rows"]
-    )
-    assert result["conservation_pass"]
-    assert result["all_implementations_completed"] is False
 
 
-def test_conflicting_mirror_cannot_reuse_identity(tmp_path):
-    reports, paths = sources(tmp_path)
-    a = recommendation()
-    write(
-        paths["machine_entry_timing_tuning"],
-        {
-            "target_date": DATE,
-            "recommendations": [a],
-            "mirror": {**a, "allowed_runtime_apply": True},
-        },
-    )
-    result = mod.build_intake(reports, DATE)
-    assert any("conflicting_native_id" in issue for issue in result["issues"])
 
 
 
@@ -367,74 +307,8 @@ def publish_summaries(reports, checklist):
     return tower
 
 
-def test_isolated_native_gap_is_visible_warning_not_global_completion_failure(tmp_path):
-    reports, paths = sources(tmp_path)
-    write(
-        paths["machine_entry_timing_tuning"],
-        {
-            "target_date": DATE,
-            "recommendations": [
-                {
-                    "decision": "code_patch_required",
-                    "runtime_effect": False,
-                    "allowed_runtime_apply": False,
-                }
-            ],
-        },
-    )
-    checklist = tmp_path / "checklist.md"
-    publish_summaries(reports, checklist)
-    result = handoff.verify_summary_handoff(
-        DATE, report_dir=reports, checklist_path=checklist
-    )
-    assert result["status"] == "pass"
-    intake = result["recommendation_intake"]
-    assert intake["status"] == "warning"
-    assert intake["counts"]["invalid_or_missing_authority_total"] == 1
-    assert intake["all_implementations_completed"] is False
 
 
-def test_semantics_not_just_hash_markers_and_late_machine_generation(tmp_path):
-    reports, paths = sources(tmp_path, [order()])
-    checklist = tmp_path / "checklist.md"
-    tower = publish_summaries(reports, checklist)
-
-    def verify():
-        return handoff.verify_summary_handoff(
-            DATE, report_dir=reports, checklist_path=checklist
-        )
-    assert (
-        verify()["status"] == "pass"
-    )  # Operational handoff, not implementation completion.
-    assert not verify()["recommendation_intake"]["implementation_fixed_point"]
-    payload = json.loads(tower.read_text())
-    payload.pop("recommendation_intake")
-    write(tower, payload)
-    assert (
-        "postclose_summary_handoff:tower:intake_semantics_mismatch"
-        in verify()["issues"]
-    )
-    publish_summaries(reports, checklist)
-    checklist.write_text(
-        handoff.checklist_marker(
-            handoff.source_receipt(
-                handoff.source_paths(reports, DATE, "checklist"), DATE
-            )
-        )
-    )
-    assert (
-        "postclose_summary_handoff:checklist:intake_semantics_mismatch"
-        in verify()["issues"]
-    )
-    publish_summaries(reports, checklist)
-    write(
-        paths["machine_entry_timing_tuning"],
-        {"target_date": DATE, "recommendations": [recommendation("machine")]},
-    )
-    assert any("source_generation_mismatch" in issue for issue in verify()["issues"])
-    publish_summaries(reports, checklist)
-    assert verify()["status"] == "pass"
-    assert verify()["recommendation_intake"]["counts"]["intake_total"] == 2
 
 
 def test_equal_plan_manifest_counts_are_not_equal_selection():
@@ -465,81 +339,10 @@ def test_equal_plan_manifest_counts_are_not_equal_selection():
     )
 
 
-def test_empty_versus_missing_and_nonfinite_sources(tmp_path):
-    reports, paths = sources(tmp_path)
-    assert mod.build_intake(reports, DATE)["implementation_fixed_point"]
-    paths["machine_entry_timing_tuning"].unlink()
-    result = mod.build_intake(reports, DATE)
-    assert result["status"] == "waiting_sources"
-    assert not result["implementation_fixed_point"]
-    paths["machine_entry_timing_tuning"].write_text('{"target_date":NaN}')
-    assert mod.build_intake(reports, DATE)["status"] == "fail"
 
 
-@pytest.mark.parametrize(
-    "change,expected",
-    [
-        ({}, "done"),
-        ({"ActiveState": "activating"}, "waiting_running"),
-        ({"ActiveState": "failed", "Result": "exit-code"}, "failed_producer_terminal"),
-        (
-            {"ExecMainStartTimestamp": "2026-09-08 21:15:00 KST"},
-            "waiting_exact_date_run",
-        ),
-        ({"ExecMainStartTimestamp": "2026-09-10 00:15:00 KST"}, "done"),
-        ({"LoadState": "not-found"}, "failed_installed_owner_contract"),
-        ({"LoadState": "masked", "UnitFileState": "masked"}, "done_off_masked"),
-    ],
-)
-def test_late_independent_producers_must_be_terminal_or_explicitly_off(
-    tmp_path, change, expected
-):
-    reports, _ = sources(tmp_path)
-    properties = {
-        "LoadState": "loaded",
-        "UnitFileState": "static",
-        "ActiveState": "inactive",
-        "Result": "success",
-        "ExecMainStartTimestamp": f"{DATE} 21:15:00 KST",
-        **change,
-    }
-
-    def runner(cmd, **kwargs):
-        assert cmd[:2] == ["systemctl", "show"]
-        assert kwargs["timeout"] == 10
-        return SimpleNamespace(
-            returncode=0, stdout="\n".join(f"{k}={v}" for k, v in properties.items())
-        )
-
-    assert set(
-        handoff.installed_producer_terminal_states(
-            DATE, runner=runner, report_dir=reports
-        ).values()
-    ) == {expected}
 
 
-@pytest.mark.parametrize("bad_source", [None, {"target_date": "2026-09-08"}])
-def test_successful_unit_cannot_hide_missing_or_previous_date_source(
-    tmp_path, bad_source
-):
-    reports, paths = sources(tmp_path)
-    path = paths["machine_entry_timing_tuning"]
-    if bad_source is None:
-        path.unlink()
-    else:
-        write(path, bad_source)
-    def runner(*_args, **_kwargs):
-        return SimpleNamespace(
-            returncode=0,
-            stdout="LoadState=loaded\nUnitFileState=static\nActiveState=inactive\n"
-            f"Result=success\nExecMainStartTimestamp={DATE} 21:15:00 KST\n",
-        )
-    result = handoff.installed_producer_terminal_states(
-        DATE, runner=runner, report_dir=reports
-    )
-    assert result["korstockscan-machine-microstructure-final-refresh.service"] == (
-        "failed_exact_source_artifact:machine_entry_timing_tuning"
-    )
 
 
 def test_workorder_source_race_never_binds_new_hash_to_old_input(tmp_path):
@@ -592,26 +395,6 @@ def test_permission_error_is_not_a_zero_byte_source(monkeypatch, tmp_path):
         producer._file_fingerprint(path, "source")
 
 
-def test_json_boolean_is_not_numeric_zero_in_inventory_and_summary(tmp_path):
-    report = workorder([order()])
-    report["inventory_contract"]["runtime_effect"] = 0
-    assert "inventory_contract_mismatch" in contract.contract_issues(report, DATE)
-    reports, _ = sources(tmp_path)
-    checklist = tmp_path / "checklist.md"
-    tower = publish_summaries(reports, checklist)
-    payload = json.loads(tower.read_text())
-    payload["source_generation_contract"]["runtime_effect"] = 0
-    payload["recommendation_intake"]["counts"]["intake_total"] = False
-    write(tower, payload)
-    result = handoff.verify_summary_handoff(
-        DATE, report_dir=reports, checklist_path=checklist
-    )
-    assert (
-        "postclose_summary_handoff:tower:source_generation_mismatch" in result["issues"]
-    )
-    assert (
-        "postclose_summary_handoff:tower:intake_semantics_mismatch" in result["issues"]
-    )
 
 
 def test_existing_pid_receipt_is_reported_without_current_process_claim():

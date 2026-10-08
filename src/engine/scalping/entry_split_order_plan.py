@@ -6389,7 +6389,7 @@ def _refresh_execution_model_only(target_date, *, prepared_effective_date=None, 
     registry, registry_contract = _execution_registry_snapshot()
     from src.engine.sniper_missed_entry_counterfactual import _load_entry_events
     from src.engine.scalping.strategy_owner_replay import build_entry_opportunity_replays
-    from src.engine.monitoring import machine_microstructure_attribution as micro
+    from src.engine.scalping import native_packet_validation as micro
     native_generation = micro._source_generation_contract({}, extra_paths=[
         micro.OBSERVATION_ROOT / f"trade_date={target_date}", micro.DEFAULT_SOURCE_EXCLUSION_MANIFEST,
         micro.DEFAULT_CANARY_SNAPSHOT_PATH, micro.daily_canary_snapshot_path(date.fromisoformat(target_date), root=micro.CANARY_DAILY_SNAPSHOT_DIR)])

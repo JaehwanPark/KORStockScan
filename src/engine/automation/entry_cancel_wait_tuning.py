@@ -502,12 +502,16 @@ def _parents(target_date, events, registry, *, details=None):
         policy_generation_valid=False
         if sf.get('buy_registry_mode')=='single_owner_unregistered':
             try:
-                from src.trading.config.symbol_owner_policy import resolve_symbol_owner_policy
-                policy=resolve_symbol_owner_policy(event.get('stock_code'),target_date=target_date)
-                policy_generation_valid=(policy.target_date==target_date
-                    and not policy.symbol_selected and not policy.coexistence_enabled
-                    and sf.get('buy_owner_policy_reason')==policy.reason
-                    and str(sf.get('buy_owner_policy_hash') or '')==policy.policy_hash)
+                from src.trading.config.native_owner_policy import resolve_symbol_owner_policy, historical_single_owner_binding
+                policy_generation_valid = historical_single_owner_binding(
+                    {**sf, 'stock_code': event.get('stock_code')},
+                    observed_at=(sent or {}).get('timestamp'))
+                if not policy_generation_valid:
+                    policy=resolve_symbol_owner_policy(event.get('stock_code'),target_date=target_date)
+                    policy_generation_valid=(policy.target_date==target_date
+                        and not policy.symbol_selected and not policy.coexistence_enabled
+                        and sf.get('buy_owner_policy_reason')==policy.reason
+                        and str(sf.get('buy_owner_policy_hash') or '')==policy.policy_hash)
             except Exception:
                 policy_generation_valid=False
         single_owner=(not identity and sent is not None
@@ -965,7 +969,7 @@ def _fit_model(model_rows, identity):
 def _replay_parents(parents, outcomes, events, model):
     from src.engine.scalping import strategy_owner_replay as replay
     from src.engine.scalping import entry_split_order_plan as entry
-    from src.engine.monitoring import machine_microstructure_attribution as micro
+    from src.engine.scalping import native_packet_validation as micro
     from src.engine.scalping.entry_cancel_wait_runtime import bounded_candidates
     rows=[];models=[];bindings={}
     completed={};conflicts=set()
@@ -1134,7 +1138,7 @@ def build_report(target_date: str) -> dict[str, Any]:
                   and source['source_quality'].get('tuning_input_allowed') is True)
     # Do not retain old raw reads or silently treat unavailable windows as zero.
     identity=entry_operating_model_identity();model=_fit_model(predecessor.get('model_rows',[]),identity)
-    from src.engine.monitoring import machine_microstructure_attribution as micro
+    from src.engine.scalping import native_packet_validation as micro
     native_generation={d:micro._source_generation_contract({},extra_paths=[
         micro.OBSERVATION_ROOT/f'trade_date={d}',micro.DEFAULT_SOURCE_EXCLUSION_MANIFEST,
         micro.DEFAULT_CANARY_SNAPSHOT_PATH,micro.daily_canary_snapshot_path(date.fromisoformat(d),root=micro.CANARY_DAILY_SNAPSHOT_DIR)])
@@ -1494,7 +1498,7 @@ def validated_reconciliation_view(payload, policy=None, *, data_root=None, read_
         if not payload.get('economic_tuning_input_allowed') and payload.get('scope_overrides') != payload['incumbent_source'].get('previous_scope_overrides', []):
             findings.append('cancel_wait_incumbent_carry_mapping_invalid')
         if policy is not None:
-            from src.engine.automation.machine_entry_timing_tuning import _next_trading_date
+            from src.utils.market_day import next_krx_trading_date as _next_trading_date
             pub = policy.get('publication_date')
             allowed = payload.get('economic_tuning_input_allowed') is True
             if (not isinstance(pub, str) or pub > datetime.now(KST).date().isoformat()
@@ -1614,7 +1618,7 @@ def prepare_policy(payload, effective_date, *, publication_date=None):
     from src.engine.scalping.entry_cancel_wait_runtime import ECONOMIC_SCHEMA
     valid,reason=verify_report(payload)
     if not valid:raise ValueError(reason)
-    from src.engine.automation.machine_entry_timing_tuning import _next_trading_date
+    from src.utils.market_day import next_krx_trading_date as _next_trading_date
     publication_date=publication_date or payload['date']
     if not payload['date'] <= publication_date <= datetime.now(KST).date().isoformat():
         raise ValueError('cancel_wait_publication_date_invalid')
@@ -1693,7 +1697,7 @@ def verify_handoff(target_date, *, require_summary=True):
         if not valid:issues.append(reason)
         path=REPORT_DIR/f'entry_cancel_wait_policy_{target_date}.json'
         policy=json.loads(path.read_text())
-        from src.engine.automation.machine_entry_timing_tuning import _next_trading_date
+        from src.utils.market_day import next_krx_trading_date as _next_trading_date
         publication_date=policy.get('publication_date',target_date)
         if (not target_date <= publication_date <= datetime.now(KST).date().isoformat()
             or policy.get('source_date')!=target_date or policy.get('effective_date')!=_next_trading_date(date.fromisoformat(publication_date)).isoformat()
@@ -1728,7 +1732,7 @@ def write_report(target_date: str, *, effective_date=None, publication_date=None
     json_path.parent.mkdir(parents=True, exist_ok=True)
     _atomic_json(json_path,payload)
     if target_date >= EXECUTABLE_EVIDENCE_DATE:
-        from src.engine.automation.machine_entry_timing_tuning import _next_trading_date
+        from src.utils.market_day import next_krx_trading_date as _next_trading_date
         policy,path=prepare_policy(payload,effective_date or _next_trading_date(date.fromisoformat(publication_date or target_date)).isoformat(),publication_date=publication_date)
         _atomic_json(json_path.with_suffix('.reuse-contract.json'),dict(artifact_sha256=hashlib.sha256(json_path.read_bytes()).hexdigest(),
             preflight_fingerprint=payload['preflight_fingerprint'],as_of=payload['generated_at']))

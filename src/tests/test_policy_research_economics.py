@@ -4,14 +4,6 @@ import json
 import pytest
 
 from src.engine.monitoring import policy_research_economics as economics
-from src.engine.automation.machine_entry_timing_tuning import (
-    _candidate_observation,
-    _evaluate_dynamic_cohort,
-)
-from src.engine.monitoring.machine_microstructure_attribution import (
-    _unfilled_episode_decision_anchor,
-)
-from src.tests.test_machine_entry_timing_tuning import _entry_row
 
 DAY = date(2026, 8, 28)
 
@@ -343,43 +335,6 @@ def test_compact_corruption_never_falls_back_to_old_full_summary(tmp_path, monke
     assert economics.load_research_census(parent) is None
 
 
-def test_episode_admission_phase_refresh_preserves_economic_selection():
-    from src.engine.monitoring import (
-        low_price_two_leg_expanded_candidate_research as producer,
-    )
-
-    report = {
-        "end_date": str(DAY),
-        "research_profile_inventory": {
-            "profile": {"symbol": "000001", "name": "fixed"}
-        },
-        "recommendations": [{"policy": "unchanged"}],
-        "source_input_fingerprint": "frozen-economics",
-    }
-    original = json.loads(json.dumps(report))
-    producer._attach_admission_evidence(
-        report,
-        market_census={
-            "target_date": str(DAY),
-            "opportunity_details": [admission_row()],
-        },
-    )
-    assert report["research_admission_ledger"]["disposition_counts"] == {"admitted": 1}
-    old_phase = report["admission_input_fingerprint"]
-    producer._attach_admission_evidence(
-        report,
-        market_census={
-            "target_date": str(DAY),
-            "opportunity_details": [admission_row(), admission_row("new", "000002")],
-        },
-    )
-    assert report["admission_input_fingerprint"] != old_phase
-    assert report["research_admission_ledger"]["disposition_counts"] == {
-        "admitted": 1,
-        "deferred_capacity": 1,
-    }
-    assert report["recommendations"] == original["recommendations"]
-    assert report["source_input_fingerprint"] == original["source_input_fingerprint"]
 
 
 def test_census_publication_busy_preserves_verified_parent(tmp_path, monkeypatch):
@@ -402,38 +357,6 @@ def test_census_publication_busy_preserves_verified_parent(tmp_path, monkeypatch
     assert economics.load_research_census(parent) is not None
 
 
-def common_row(*, loss=False, submitted=False):
-    row = _entry_row(DAY, 1)
-    row.update(
-        actual_order_submitted=submitted,
-        owner_lifecycle_contract_valid=True,
-        source_entry_event_id="native:decision:1",
-    )
-    deadline = economics.aware(row["anchor_at"]) + timedelta(seconds=300)
-    for label in row["dynamic_confirmation_first_hit_outcomes"][
-        "checkpoint_outcomes"
-    ].values():
-        label["common_horizon_terminal"] = {
-            "schema": "machine_common_horizon_terminal_v1",
-            "deadline_at": deadline.isoformat(),
-            "observed_at": deadline.isoformat(),
-            "executable_bid": 98.0,
-            "available_bid_quantity": 10,
-            "quote_age_ms": 0,
-            "source_quality_status": "eligible",
-            "source_gap_reasons": [],
-            "evaluation_only": True,
-            "runtime_effect": False,
-            "allowed_runtime_apply": False,
-        }
-        if loss:
-            label["target_adverse_first_hit"].update(
-                state="unresolved",
-                target_at=None,
-                target_executable_bid=None,
-                target_available_bid_quantity=None,
-            )
-    return row
 
 
 def observe(row):
@@ -442,55 +365,10 @@ def observe(row):
     )
 
 
-@pytest.mark.parametrize("submitted", [False, None, True])
-def test_common_counterfactual_includes_original_decision_without_realized_fill(
-    submitted,
-):
-    row = common_row(submitted=submitted)
-    row["owner_outcome"] = {"realized": False}
-    result = observe(row)
-    assert result is not None
-    assert result["realized_quantity"] is None
-    assert result["modeled_quantity"] == 10
-    assert result["reported_cost_aware_net_pct"] is None
-    assert result["candidate_modeled_net_profit_krw"] > 0
-    assert _candidate_observation(source_date=DAY, row=row, delay_sec=1) is None
-    cohort = _evaluate_dynamic_cohort(cohort_rows=[(DAY, row)], target_date=DAY)
-    assert cohort["source_only_economic_pair_count"] == 1
-    assert (
-        cohort["economic_population_basis"]
-        == "common_300s_counterfactual_all_decisions"
-    )
 
 
-def test_unresolved_losing_opportunity_is_not_removed_or_imputed_as_zero():
-    result = observe(common_row(loss=True))
-    assert result["baseline_modeled_net_profit_krw"] < 0
-    assert result["candidate_modeled_net_profit_krw"] < 0
-    assert result["baseline_capital_krw_minutes"] == 5000
 
 
-@pytest.mark.parametrize(
-    "mutate",
-    [
-        lambda row: row.update(anchor_role="prospective_widget_research_entry"),
-        lambda row: row.update(source_entry_event_id=""),
-        lambda row: row.update(owner_requested_quantity=11),
-        lambda row: row["dynamic_confirmation_first_hit_outcomes"][
-            "checkpoint_outcomes"
-        ]["1"].update(sequence_epoch=8),
-        lambda row: row["dynamic_confirmation_first_hit_outcomes"][
-            "checkpoint_outcomes"
-        ]["0"]["common_horizon_terminal"].update(available_bid_quantity=9),
-        lambda row: row["dynamic_confirmation_first_hit_outcomes"][
-            "checkpoint_outcomes"
-        ]["0"]["common_horizon_terminal"].update(quote_age_ms=999),
-    ],
-)
-def test_common_economics_rejects_missing_signal_quantity_epoch_and_terminal(mutate):
-    row = common_row()
-    mutate(row)
-    assert observe(row) is None
 
 
 def episode(day="2026-08-28", *, price=100, net=1, minute=0):
@@ -577,54 +455,3 @@ def write_quotes(tmp_path, *, raw_only=False, depth=40):
         "holdout": {"episodes": []},
     }
     return result, signal, path
-
-
-
-
-
-
-def test_pending_episode_keeps_original_quantity_and_unknown_order_status():
-    at = economics.aware(f"{DAY.isoformat()}T09:00:00+09:00")
-    result = _unfilled_episode_decision_anchor(
-        leg={"entry_price": 100, "quantity": 10, "target_price": 101},
-        lifecycle_id="life",
-        leg_id="leg1",
-        decision_at=at,
-        source_event_id="native",
-        owner_row_eligible=True,
-        symbol="000001",
-        session="KRX_REGULAR",
-        scope_id="registered",
-        expected_venues=["KRX"],
-        expected_buckets=["KRX_REGULAR"],
-        cost_pct=0.23,
-        source_quality={},
-    )
-    assert result["owner_requested_quantity"] == 10
-    assert result["owner_outcome"]["entry_notional_krw"] is None
-    assert result["actual_order_submitted"] is None
-
-
-def test_confirmation_projection_does_not_turn_unknown_order_status_into_no_order():
-    from src.engine.monitoring.machine_microstructure_attribution import (
-        _entry_confirmation_label,
-    )
-
-    pending = {
-        "anchor_role": "episode_signal_decision_leg",
-        "actual_order_submitted": None,
-        "owner": "episode",
-        "metrics": {},
-    }
-    assert _entry_confirmation_label(pending)["actual_order_submitted"] is None
-
-
-def test_common_replay_never_pools_legacy_actual_terminal_with_new_cf_horizon():
-    current = common_row()
-    legacy = _entry_row(DAY, 2)
-    result = _evaluate_dynamic_cohort(
-        cohort_rows=[(DAY, current), (DAY, legacy)], target_date=DAY
-    )
-    assert result["source_only_economic_pair_count"] == 1
-    assert result["right_censored_count"] == 1
-    assert result["population_disposition"]["unaccounted_count"] == 0

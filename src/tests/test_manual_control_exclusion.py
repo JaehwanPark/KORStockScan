@@ -8,6 +8,7 @@ from src.engine.risk import manual_control_exclusion
 
 @pytest.fixture(autouse=True)
 def _isolate_symbol_owner_policy(monkeypatch, tmp_path):
+    monkeypatch.setenv("KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH", str(tmp_path / "registry.jsonl"))
     monkeypatch.setenv(
         "KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE",
         str(tmp_path / "missing-symbol-owner-policy.json"),
@@ -497,7 +498,7 @@ def test_auto_exclusion_appends_during_legacy_machine_scope_transition(
         manual_control_exclusion.independent_machine_ownership_source(
             "005930", owner="episode"
         )
-        == "legacy_machine_owner_scope"
+        == ""
     )
 
     added = manual_control_exclusion.add_manual_control_exclusion_code(

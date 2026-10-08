@@ -39,9 +39,6 @@ PRIMARY_DIRECT_OWNERS = (
     "entry_split",
     "pre_submit_delay",
     "scale_in_split",
-    "machine_entry",
-    "low_price_two_leg",
-    "low_price_expansion",
     "ws_freshness",
     "main_mechanistic_entry",
     "compact_auxiliary",
@@ -55,9 +52,6 @@ PRODUCER_FLAG_BY_OWNER = {
     "entry_split": "entry_split_order_plan",
     "pre_submit_delay": "pre_submit_delay_tuning",
     "scale_in_split": "scale_in_split_order_plan",
-    "machine_entry": "samsung_machine_entry_tuning",
-    "low_price_two_leg": "low_price_two_leg_tuning",
-    "low_price_expansion": "low_price_two_leg_candidate_recommendation",
     "ws_freshness": "intraday_ws_freshness_finalize",
     "main_mechanistic_entry": "ai_decision_action_outcome_calibration",
     "compact_auxiliary": "ai_decision_action_outcome_calibration",
@@ -69,9 +63,6 @@ POLICY_OWNER_BY_SOURCE = {
     "entry_split": "entry_split_policy",
     "pre_submit_delay": "pre_submit_delay_policy",
     "scale_in_split": "scale_in_split_policy",
-    "machine_entry": "machine_entry_candidate",
-    "low_price_two_leg": "low_price_candidate",
-    "low_price_expansion": "low_price_expansion_policy",
     "rising_missed": "rising_missed_policy",
     "compact_auxiliary": "compact_policy",
     "main_mechanistic_entry": "main_mechanistic_policy",
@@ -83,9 +74,6 @@ DEFAULT_CLOSURE_OWNER = {
     "entry_split": "entry_split_order_plan",
     "pre_submit_delay": "pre_submit_delay_tuning",
     "scale_in_split": "scale_in_split_order_plan",
-    "machine_entry": "samsung_machine_entry_tuning",
-    "low_price_two_leg": "low_price_two_leg_tuning",
-    "low_price_expansion": "low_price_two_leg_expanded_candidate_research",
     "ws_freshness": "intraday_ws_freshness_monitor",
     "main_mechanistic_entry": "ai_decision_action_outcome_calibration",
     "compact_auxiliary": "compact_auxiliary_paired_replay",
@@ -147,11 +135,6 @@ def _paths(target_date: str) -> dict[str, Path]:
         if machine_policies
         else DATA_DIR / "runtime/mechanistic_entry_policy" / "policy_missing.json"
     )
-    expansion_policies = []
-    for candidate in sorted((DATA_DIR / "runtime/low_price_two_leg_auto_expansion").glob("low_price_two_leg_auto_expansion_????-??-??.json")):
-        payload = _load_json(candidate)
-        if payload.get("source_date") == target_date and (not policy_effective or payload.get("effective_date") == policy_effective):
-            expansion_policies.append(candidate)
     return {
         "source_quality": report / "observation_source_quality_audit" / f"observation_source_quality_audit_{target_date}.json",
         "entry_cancel_wait": report / "entry_cancel_wait_tuning" / f"entry_cancel_wait_tuning_{target_date}.json",
@@ -162,12 +145,6 @@ def _paths(target_date: str) -> dict[str, Path]:
         "pre_submit_delay_policy": threshold / "pre_submit_delay_policy" / f"pre_submit_delay_policy_{target_date}.json",
         "scale_in_split": report / "scale_in_split_order_plan" / f"scale_in_split_order_plan_{target_date}.json",
         "scale_in_split_policy": threshold / "scale_in_split_order_policy" / f"scale_in_split_order_policy_{target_date}.json",
-        "machine_entry": report / "samsung_machine_entry_tuning" / f"samsung_machine_entry_tuning_{target_date}.json",
-        "machine_entry_candidate": threshold / "samsung_machine_entry_policy" / "candidates" / f"samsung_machine_entry_policy_candidate_{target_date}.json",
-        "low_price_two_leg": report / "low_price_two_leg_tuning" / f"low_price_two_leg_tuning_{target_date}.json",
-        "low_price_candidate": threshold / "low_price_two_leg" / "candidates" / f"low_price_two_leg_policy_candidate_{target_date}.json",
-        "low_price_expansion": report / "low_price_two_leg_expanded_candidate_research" / f"low_price_two_leg_expanded_candidate_research_{target_date}.json",
-        "low_price_expansion_policy": expansion_policies[-1] if expansion_policies else DATA_DIR / "runtime/low_price_two_leg_auto_expansion" / "policy_missing.json",
         "ws_freshness": report / "intraday_ws_freshness_monitor" / f"intraday_ws_freshness_monitor_{target_date}.json",
         "main_mechanistic_entry": (report / 'continuous_reversal' / target_date / 'machine.json'
                                    if reversal_policies else report / "ai_decision_action_outcome_calibration" / f"ai_decision_action_outcome_calibration_{target_date}.json"),
@@ -302,22 +279,6 @@ def _owner_requirements(target_date: str) -> tuple[dict[str, bool], dict[str, An
     }
 
 
-def _expansion_economic_projection(path: Path) -> dict[str, Any]:
-    from src.engine.monitoring.low_price_two_leg_expanded_candidate_research import read_report
-    report = read_report(path)
-    payload = {key: report.get(key) for key in (
-        "schema", "report_type", "target_date", "status", "decision", "runtime_effect",
-        "allowed_runtime_apply", "actual_order_submitted", "source_symbol_count",
-        "eligible_source_symbol_count", "quarantined_source_symbol_count")}
-    gate = report.get("joint_allocation_gate") or {}
-    payload["economic_evaluation"] = {
-        "status": "source_gap" if report.get("status") == "partial_source_quality" or gate.get("status") == "allocation_blocked" else "insufficient_sample",
-        "blocker": gate.get("reason") or ("retained_source_quarantine" if report.get("source_quarantine") else "independent_economic_selection_pending"),
-        "candidate_count": report.get("recommendation_count", 0),
-        "allowed_runtime_apply": False,
-        "closure_test": "retained_source_isolation_frozen_allocator_independent_holdout_and_dated_consumer",
-    }
-    return payload
 
 
 def _large_companion(
@@ -347,68 +308,6 @@ def _large_companion(
         except (OSError, ValueError, TypeError, KeyError) as exc:
             proof["generation_reason"] = type(exc).__name__
         return {}, proof, "semantic_unverified_large_source"
-    if owner == "low_price_two_leg":
-        companion_path = paths["low_price_candidate"]
-        payload, error, read_mode, _ = _read(companion_path)
-        projection = _read_top_level_sections(
-            path,
-            {"schema", "target_date", "artifact_hash", "paired_economic_search"},
-        )
-        embedded_sha = projection.get("artifact_hash")
-        source_path = Path(str(payload.get("source_report_path") or ""))
-        source_name_matches = source_path.name == path.name
-        semantic_sha_matches = bool(
-            embedded_sha and payload.get("source_report_artifact_hash") == embedded_sha
-        )
-        projection_matches = bool(
-            projection.get("target_date") == target_date
-            and payload.get("source_report_schema") == projection.get("schema")
-            and payload.get("paired_economic_search") == projection.get("paired_economic_search")
-        )
-        verified = (
-            error is None and _date_matches(payload, target_date) and source_name_matches
-            and semantic_sha_matches and projection_matches
-        )
-        return payload, {
-            "path": str(companion_path),
-            "sha256": _sha(companion_path),
-            "read_mode": read_mode,
-            "contract": "low_price_candidate_source_semantic_hash",
-            "source_name_matches": source_name_matches,
-            "source_semantic_sha256": embedded_sha,
-            "semantic_sha_matches": semantic_sha_matches,
-            "economic_projection_matches": projection_matches,
-            "verified": verified,
-        }, None if verified else "semantic_unverified_large_source"
-    if owner == "low_price_expansion":
-        companion_path = path.with_name(path.name + ".reuse-contract.json")
-        payload, error, read_mode, _ = _read(companion_path)
-        source_path = Path(str(payload.get("artifact_path") or ""))
-        source_name_matches = source_path.name == path.name
-        byte_sha_matches = bool(artifact_sha256 and payload.get("artifact_sha256") == artifact_sha256)
-        verified = error is None and _date_matches(payload, target_date) and source_name_matches and byte_sha_matches
-        if not verified:
-            # The late machine publisher can legitimately replace the study
-            # after main's reuse receipt. Accept only its current native proof.
-            from src.engine.automation.machine_research_closed_loop_refresh import validate_current_receipt
-            native_path = path.parent.parent / "machine_research_closed_loop" / f"machine_research_closed_loop_{target_date}.json"
-            native, native_error, native_mode, _ = _read(native_path)
-            if (native_error is None and (native.get("dependency_sources") or {}).get(str(path.resolve()))
-                and validate_current_receipt(native, target_date)):
-                return _expansion_economic_projection(path), {
-                    "path": str(native_path), "sha256": _sha(native_path),
-                    "read_mode": native_mode, "contract": "machine_research_closed_loop_current_dependency",
-                    "source_artifact_sha256": artifact_sha256, "verified": True,
-                }, None
-        return (_expansion_economic_projection(path) if verified else payload), {
-            "path": str(companion_path),
-            "sha256": _sha(companion_path),
-            "read_mode": read_mode,
-            "contract": "postclose_artifact_reuse_contract_v1",
-            "source_name_matches": source_name_matches,
-            "artifact_sha_matches": byte_sha_matches,
-            "verified": verified,
-        }, None if verified else "semantic_unverified_large_source"
     if owner == "ws_freshness":
         companion_path = path.with_name(path.name + ".reuse-contract.json")
         payload, error, read_mode, _ = _read(companion_path)
@@ -484,8 +383,6 @@ def _economic_section(owner: str, payload: dict[str, Any]) -> dict[str, Any]:
         return _dict_value(payload, "economic_acceptance")
     if owner == "scale_in_split":
         return _dict_value(payload, "evaluation_state")
-    if owner == "low_price_two_leg":
-        return _dict_value(payload, "paired_economic_search")
     if owner == "ws_freshness":
         return _dict_value(payload, "postclose_quality_handoff")
     if owner == "main_mechanistic_entry":
@@ -646,10 +543,6 @@ def _status_texts(owner: str, payload: dict[str, Any]) -> list[str]:
         payload.get("comparison_status"), payload.get("selection_status"), payload.get("decision"), payload.get("status"), payload.get("conclusion"),
         payload.get("evaluation_state"),
     ]
-    if owner == "low_price_two_leg":
-        for row in (_dict_value(payload, "paired_economic_search").get("profiles") or {}).values():
-            if isinstance(row, dict):
-                values.extend([row.get("disposition"), row.get("promotion_disposition")])
     return [str(value).strip().lower() for value in values if value not in (None, "")]
 
 
@@ -660,15 +553,6 @@ def _comparison_status(owner: str, payload: dict[str, Any]) -> str:
     joined = " ".join(texts)
     if any("validated_edge" in value for value in texts):
         return "validated_edge"
-    if owner == "low_price_two_leg":
-        profiles = _dict_value(payload, "paired_economic_search").get("profiles") or {}
-        profile_states = {
-            str(row.get("disposition") or row.get("promotion_disposition") or "").lower()
-            for row in profiles.values() if isinstance(row, dict)
-        }
-        profile_states.discard("")
-        if len(profile_states) > 1:
-            return "mixed"
     if "source_gap" in joined or "contract_block" in joined or "missing_source" in joined:
         return "source_gap"
     if "unsupported" in joined:
@@ -691,17 +575,6 @@ def _first_blocker(owner: str, payload: dict[str, Any]) -> str | None:
         rows = economic.get(key)
         if isinstance(rows, list) and rows:
             values.append(rows[0])
-    if owner == "low_price_two_leg":
-        for row in (_dict_value(payload, "paired_economic_search").get("profiles") or {}).values():
-            if not isinstance(row, dict):
-                continue
-            blockers = row.get("promotion_blocking_reasons")
-            if isinstance(blockers, list) and blockers:
-                values.append(blockers[0])
-                break
-            if row.get("disposition") == "source_gap":
-                values.append("profile_source_gap")
-                break
     value = _first_nonempty(*values)
     return str(value) if value is not None else None
 
@@ -873,8 +746,6 @@ def _economic_projection(owner: str, payload: dict[str, Any], *, data_root=None)
             "entry_split": "submitted_order_frozen_plan_model_holdout_paired_candidate_and_loader",
             "pre_submit_delay": "exact_attempt_submit_clock_quote_cost_terminal_and_independent_holdout",
             "scale_in_split": "eligible_add_fill_terminal_clock_cost_and_independent_paired_holdout",
-            "low_price_two_leg": "profile_leg_durable_denominator_custody_cost_and_dated_consumer",
-            "low_price_expansion": "retained_source_isolation_frozen_allocator_independent_holdout_and_dated_consumer",
         }.get(owner),
         "model_delta_ev_is_actual_profit": False,
     }

@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Iterator
 from zoneinfo import ZoneInfo
 
-from src.engine.monitoring.machine_microstructure_attribution import (
+from src.engine.scalping.native_packet_validation import (
     resolve_completed_machine_target_date,
 )
 from src.utils.constants import PROJECT_ROOT
@@ -1362,96 +1362,6 @@ def _build_tasks(
             lines=tuple(threshold_lines),
         ),
     ]
-    if machine_micro_approval_pending:
-        machine_micro_approval_path = (
-            MACHINE_MICROSTRUCTURE_POLICY_APPROVAL_REPORT_DIR
-            / f"machine_microstructure_policy_approval_postclose_{source_date}.json"
-        )
-        tasks.append(
-            GeneratedTask(
-                task_id=f"MachineMicroPolicyApprovalPreopen{mmdd}",
-                title="micro 기반 기계 정책 승인 대기열 및 PREOPEN handoff 확인",
-                slot="PREOPEN",
-                time_window="08:45~08:50",
-                track="ScalpingLogic",
-                source=(
-                    f"[machine_microstructure_policy_approval_postclose_{source_date}.json]"
-                    f"(/home/ubuntu/KORStockScan/{_rel(machine_micro_approval_path)}), "
-                    "[machine_microstructure_policy_approval.py]"
-                    "(/home/ubuntu/KORStockScan/src/engine/automation/"
-                    "machine_microstructure_policy_approval.py)"
-                ),
-                lines=(
-                    f"판정 기준: 이월된 승인 대기 후보 {machine_micro_approval_pending}의 design/approval/expiry 상태와 동일 candidate hash의 명시 승인 artifact를 확인한다.",
-                    "금지: `DESIGN_REQUIRED`, 변경된 candidate hash, 미등록 runtime family, same-stage 충돌, rollback/post-apply 계약 결손을 PREOPEN env 수정으로 우회하지 않는다.",
-                    "다음 액션: `source_gap_repair`, `design_required`, `review_ready_request_operator_decision`, `user_approved_handoff_ready`, `preopen_scheduled`, `hold_followup`, `applied_attribution_pending`, `post_apply_attributed`, `expired_revalidate`, `rejected` 중 하나로 닫고 handoff는 family-owned apply receipt와 분리 확인한다.",
-                ),
-            )
-        )
-    if machine_micro_objective_followups:
-        machine_micro_approval_path = (
-            MACHINE_MICROSTRUCTURE_POLICY_APPROVAL_REPORT_DIR
-            / f"machine_microstructure_policy_approval_postclose_{source_date}.json"
-        )
-        tasks.append(
-            GeneratedTask(
-                task_id=f"MachineLifecycleTurnoverObjectiveFollowup{mmdd}",
-                title="episode 빠른 회전 목적의 미완료 후속 구현 확인",
-                slot="POSTCLOSE",
-                time_window="21:30~21:40",
-                track="ScalpingLogic",
-                source=(
-                    f"[machine_microstructure_policy_approval_postclose_{source_date}.json]"
-                    f"(/home/ubuntu/KORStockScan/{_rel(machine_micro_approval_path)}), "
-                    "[machine_microstructure_attribution.py]"
-                    "(/home/ubuntu/KORStockScan/src/engine/monitoring/"
-                    "machine_microstructure_attribution.py)"
-                ),
-                lines=(
-                    "판정 기준: 승인 후보 수와 무관하게 "
-                    f"`followup_required=true`인 미완료 목적 항목 {machine_micro_objective_followups}의 "
-                    "상태와 상태별 `next_action`을 확인하고 구현 또는 표본수집 경로로 닫는다.",
-                    "상태별 다음 액션: `IMPLEMENTATION_REQUIRED`는 source-only rolling paired policy 연구를 구현하고, "
-                    "`EVIDENCE_ACCUMULATING`은 exact-date floor 충족까지 수집·재검증한다. "
-                    "`CANDIDATE_QUEUE_HANDOFF|COMPLETE`는 closed 상태이므로 report에서 제외되고 다음 refresh에서 builder-owned 항목이 제거된다.",
-                    "권한 경계: 이 POSTCLOSE 후속 항목은 source-only 구현·검증 작업이며 runtime env, 실주문, target/timeout/cooldown/cap, threshold, provider/bot, hard safety 또는 broker guard 변경 권한이 없다.",
-                ),
-            )
-        )
-    if machine_micro_approval_source_status != "loaded":
-        machine_micro_approval_path = (
-            MACHINE_MICROSTRUCTURE_POLICY_APPROVAL_REPORT_DIR
-            / f"machine_microstructure_policy_approval_postclose_{source_date}.json"
-        )
-        source_status = _compact_inline_value(
-            machine_micro_approval_source_status,
-            fallback="unknown_source_gap",
-        )
-        tasks.append(
-            GeneratedTask(
-                task_id=f"MachineMicroPolicyApprovalSourceGap{mmdd}",
-                title="micro 정책 승인·목적 ledger source gap 복구",
-                slot="POSTCLOSE",
-                time_window="21:25~21:30",
-                track="RuntimeStability",
-                source=(
-                    f"[machine_microstructure_policy_approval_postclose_{source_date}.json]"
-                    f"(/home/ubuntu/KORStockScan/{_rel(machine_micro_approval_path)}), "
-                    "[machine_microstructure_policy_approval.py]"
-                    "(/home/ubuntu/KORStockScan/src/engine/automation/"
-                    "machine_microstructure_policy_approval.py), "
-                    "[machine final refresh service]"
-                    "(/home/ubuntu/KORStockScan/deploy/systemd/"
-                    "korstockscan-machine-microstructure-final-refresh.service)"
-                ),
-                lines=(
-                    "판정 기준: 21:15 final refresh의 exact-date POSTCLOSE approval report가 "
-                    f"`source_status={source_status}`이므로 schema/phase/target-date/non-runtime authority와 generated-at/source hash·mtime predecessor 계약을 복구하고 checklist를 재생성한다.",
-                    "완료 조건: 동일 source date의 approval report가 현재 attribution source hash·mtime 이후의 exact contract로 재생성되고, 미완료 objective는 별도 POSTCLOSE followup task로 이월되며 closed objective는 제거되어야 한다.",
-                    "권한 경계: source gap 복구는 report/checklist 제어면 작업이며 runtime env, 실주문, threshold, provider/bot, hard safety 또는 broker guard 변경 권한이 없다.",
-                ),
-            )
-        )
     if _has_approval_request(ev_report, swing_report):
         tasks.append(
             GeneratedTask(
@@ -2447,18 +2357,7 @@ def _build_next_stage2_checklist_locked(
         AUTOMATION_TRIGGER_DECISION_REPORT_DIR
         / f"automation_chain_trigger_decision_{source_date}.json"
     )
-    machine_micro_approval_report, machine_micro_approval_source_status = (
-        _load_machine_microstructure_approval_report(
-            MACHINE_MICROSTRUCTURE_POLICY_APPROVAL_REPORT_DIR
-            / f"machine_microstructure_policy_approval_postclose_{source_date}.json",
-            source_date=source_date,
-            attribution_path=(
-                MACHINE_MICROSTRUCTURE_ATTRIBUTION_REPORT_DIR
-                / f"machine_microstructure_attribution_{source_date}.json"
-            ),
-            approval_not_before=machine_micro_approval_not_before,
-        )
-    )
+    machine_micro_approval_report, machine_micro_approval_source_status = {}, "retired"
     existing = target_path.read_text(encoding="utf-8") if target_path.exists() else ""
     exclude_task_ids = _existing_manual_task_ids(existing) if existing else set()
     auto_block = _render_auto_block(

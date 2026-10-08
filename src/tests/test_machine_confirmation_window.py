@@ -8,7 +8,7 @@ from src.trading.market.micro_confirmation import (
     evaluate_live_dynamic_confirmation_progress,
     build_dynamic_micro_confirmation_checkpoints,
 )
-from src.engine.monitoring.machine_microstructure_attribution import (
+from src.engine.scalping.native_packet_validation import (
     _entry_checkpoint_ask_depletion_feature,
 )
 

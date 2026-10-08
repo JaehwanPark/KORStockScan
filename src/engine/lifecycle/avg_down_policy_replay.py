@@ -347,6 +347,7 @@ class FrozenFiles:
         if row is None:
             raise FileNotFoundError(errno.ENOENT, "recorded_absence", os.fspath(path))
         return SimpleNamespace(
+            st_dev=0, st_ino=0, st_ctime_ns=row["mtime_ns"],
             st_mtime=row["mtime"],
             st_mtime_ns=row["mtime_ns"],
             st_size=row.get("size", len(row.get("content", "").encode())),

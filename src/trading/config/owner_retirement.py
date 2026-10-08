@@ -1,10 +1,16 @@
-"""Permanent new-entry exclusions; historical custody keeps its exit owner.
+"""Permanent automatic-owner retirement; historical receipts remain readable.
 
 This registry owns symbol/owner retirement, not broker protocol or policy
 quality. Consumers must use the symbol, including for dynamically named lanes.
 """
 
 from __future__ import annotations
+
+RETIRED_AUTOMATIC_OWNERS = frozenset({"episode", "widget_auto_trade"})
+
+
+def automatic_owner_retired(owner: object) -> bool:
+    return str(owner or "").strip().lower() in RETIRED_AUTOMATIC_OWNERS
 
 # Historical identities only. Runtime parameters for these lanes are removed.
 RETIRED_EPISODE_PROFILES = {
@@ -27,6 +33,8 @@ def new_entry_retired(symbol: object, owner: object) -> bool:
         code = code[1:]
     code = code.split("_", 1)[0]
     owner_name = str(owner or "").strip().lower()
+    if automatic_owner_retired(owner_name):
+        return True
     if (code, owner_name) in RETIRED_SYMBOL_OWNERS:
         return True
     if owner_name == "episode":

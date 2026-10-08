@@ -152,7 +152,8 @@ def _reversal_lifecycle_diagnostic(row):
             or not isinstance(receipt, dict) or receipt.get("status") != "observed"
             or receipt.get("schema") not in {"continuous_reversal_claim_source_receipt_v1",
                                              "continuous_reversal_claim_source_receipt_v2",
-                                             "continuous_reversal_claim_source_receipt_v3"}
+                                             "continuous_reversal_claim_source_receipt_v3",
+                                             "continuous_reversal_claim_source_receipt_v4"}
             or not row.get("evaluation_attempt_id")
             or receipt.get("evaluation_attempt_id") != row.get("evaluation_attempt_id")
             or not row.get("machine_bundle_sha256")
@@ -187,13 +188,30 @@ def _reversal_lifecycle_diagnostic(row):
                        else at)
         age = at - event["epoch"]
         family = receipt["requested_family_sha256"]
+        operating = receipt['schema'] == 'continuous_reversal_claim_source_receipt_v4'
+        if operating:
+            from src.engine.scalping.reversal_source_diagnostics import verified_registration
+            from src.engine.scalping.continuous_reversal import good_quote
+            proof = verified_registration(dict(token=receipt['claim_token'],
+                generation=receipt['claim_generation'], snapshot=receipt['supplied_snapshot'],
+                backend=receipt.get('claim_backend')), receipt.get('source_registration_receipt'))
+            if (receipt.get('claim_backend') not in {'operating_v5', 'operating_v6'}
+                    or receipt.get('registered_claim_present') is not True
+                    or not proof or scope != proof['scope']
+                    or family != receipt.get('active_generation')
+                    or family != receipt.get('stored_envelope_family_sha256')
+                    or generation != receipt.get('state_generation')
+                    or generation != receipt.get('active_scope_execution_hash')
+                    or generation != event.get('registry_generation')
+                    or at < proof['observed_epoch'] or not good_quote(latest)):
+                return None
         encoded = json.dumps(snapshot, sort_keys=True, separators=(",", ":"),
                              ensure_ascii=True, allow_nan=False).encode()
         snapshot_sha = hashlib.sha256(encoded).hexdigest()
-        token = hashlib.sha256(json.dumps([family, event["signal_id"], snapshot],
+        token = hashlib.sha256(json.dumps([generation, event["signal_id"], snapshot],
             sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode()).hexdigest()
         trace_at = stamp(row["decision_ts"]).timestamp()
-        if (family != generation or family != receipt["claim_generation"]
+        if ((not operating and family != generation) or generation != receipt["claim_generation"]
                 or (not expired_registration and snapshot_sha != receipt["snapshot_sha256"])
                 or snapshot_sha != receipt["supplied_snapshot_sha256"]
                 or token != receipt["claim_token"] or age != receipt["signal_age_seconds"]
@@ -209,6 +227,15 @@ def _reversal_lifecycle_diagnostic(row):
                 or not 0 <= trace_at-observed_at <= 5 or not 0 <= trace_at-at <= 5):
             return None
         cause = receipt.get("failure_cause")
+        if (operating and cause == row['machine_contract_error'] == 'reversal_signal_path_changed'
+                and 0 <= age <= 5 and receipt.get('registered_signal_ready') is False
+                and event.get('decision_phase') == 'FIRST_UPTICK'
+                and event.get('branch_signals')
+                and all(s.get('decision_phase') == 'FIRST_UPTICK'
+                        for s in event['branch_signals'].values())
+                and receipt.get('current_turn_id') is None
+                and latest[0] > event['epoch'] and latest[3] < event['confirmation_price']):
+            return 'reversal_first_signal_invalidated'
         if (cause == "reversal_signal_expired" and age > 5
                 and (row["machine_contract_error"] == "reversal_signal_expired_or_changed"
                      or expired_registration)):

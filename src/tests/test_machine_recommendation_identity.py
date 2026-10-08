@@ -6,9 +6,6 @@ from src.engine.monitoring.machine_recommendation_identity import bind_recommend
 from src.engine.monitoring.machine_recommendation_identity import (
     recommendation_inventory,
 )
-from src.engine.monitoring import (
-    low_price_two_leg_expanded_candidate_research as episode,
-)
 
 
 def bind(row, **overrides):

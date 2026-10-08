@@ -1,6 +1,10 @@
+## Main-only 퇴역 계약
+
+자동 실행은 Main 단일 owner다. 에피소드·위젯의 전용 실행/정책/연구/알림/예약과 독립 IPO 자동실행은 제거한다. 과거 체결 잔여분은 사용자 수동관리이며 Main은 인수·매도하지 않는다. 잔여 수량·미종료 intent·broker flat·손익 확인은 퇴역이나 Main 기동의 조건이 아니다. 공통 journal/DB와 Main 정책 부모, 수동 금지·주문 안전은 보존한다. 옛 설치/재가동 명령은 실행하지 않는다.
+
 ## 위젯 퇴역 경계
 
-위젯 자동·수동 주문, 가격 API·collector·연구·장후 정책 발행 및 전용 unit는 퇴역했다. 위젯 unit·timer를 설치하거나 복구하지 않는다. 과거 이름이 있는 migration 코드는 삭제 전용이며 실패 시 옛 위젯 timer를 재시작하지 않는다. Main/에피소드 서비스와 공통 인증·WS·custody는 보존한다.
+위젯 자동·수동 주문, 가격 API·collector·연구·장후 정책 발행 및 전용 unit는 퇴역했다. 위젯 unit·timer를 설치하거나 복구하지 않는다. 과거 이름이 있는 migration 코드는 삭제 전용이며 실패 시 옛 위젯 timer를 재시작하지 않는다. Main과 공통 인증·WS·custody는 보존한다.
 
 # Time-Based Operations Runbook
 

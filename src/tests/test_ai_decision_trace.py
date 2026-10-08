@@ -30,7 +30,8 @@ def _enable(monkeypatch, tmp_path):
 
 @pytest.mark.parametrize('schema', ['continuous_reversal_claim_source_receipt_v1',
                                    'continuous_reversal_claim_source_receipt_v2',
-                                   'continuous_reversal_claim_source_receipt_v3'])
+                                   'continuous_reversal_claim_source_receipt_v3',
+                                   'continuous_reversal_claim_source_receipt_v4'])
 def test_rejected_reversal_keeps_source_receipt_without_provider_or_outcome(monkeypatch, tmp_path, schema):
     _enable(monkeypatch, tmp_path)
     receipt = dict(schema=schema,
@@ -43,6 +44,10 @@ def test_rejected_reversal_keeps_source_receipt_without_provider_or_outcome(monk
     if schema.endswith('_v3'):
         receipt.update(registered_claim_present=False, supplied_snapshot=['original'],
                        source_registration_receipt={'sha256': 'registration-proof'}, active_generation='f'*64)
+    if schema.endswith('_v4'):
+        receipt.update(claim_backend='operating_v6', registered_claim_present=True,
+            stored_envelope_family_sha256='f'*64, state_generation='a'*64,
+            active_scope_execution_hash='a'*64, registered_signal_ready=False)
     trace.record_ai_decision_trace(dict(ai_decision_trace_id='exact-rejected-trace',
         action='DROP', score=0, evaluation_attempt_id='exact-rejected-attempt',
         machine_bundle_sha256='b'*64, machine_evaluation_status='assessment_contract_invalid',

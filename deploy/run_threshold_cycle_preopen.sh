@@ -72,18 +72,9 @@ fi
 
 # Family publishers retain their own evidence and apply contracts. Failures do
 # not manufacture a replacement candidate in the common bootstrap.
-if ! PYTHONPATH=. "$VENV_PY" -m src.engine.automation.low_price_two_leg_policy_apply \
-  --target-date "$TARGET_DATE" --write; then
-  echo "[WARN] low-price family publisher failed; approved incumbent preserved"
-fi
-if ! PYTHONPATH=. "$VENV_PY" -m src.engine.automation.machine_microstructure_policy_approval \
-  --phase preopen --target-date "$TARGET_DATE" --write --notify; then
-  echo "[WARN] machine microstructure family publisher failed; approved incumbent preserved"
-fi
-if ! PYTHONPATH=. "$VENV_PY" -m src.engine.automation.machine_entry_timing_tuning \
-  --phase preopen --target-date "$TARGET_DATE" --write; then
-  echo "[WARN] machine entry-timing family publisher failed; approved incumbent preserved"
-fi
+
+
+
 PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.scanner_lookup_attention_policy \
   --target-date "$TARGET_DATE" --write
 PYTHONPATH=. "$VENV_PY" -m src.engine.automation.scalp_trailing_mechanical_policy_apply \
@@ -105,9 +96,6 @@ fi
 bootstrap_args=(
   --date "$TARGET_DATE"
   --write
-  --receipt "$PROJECT_DIR/data/threshold_cycle/low_price_two_leg/applied/low_price_two_leg_policy_${TARGET_DATE}.json"
-  --receipt "$PROJECT_DIR/data/report/machine_microstructure_policy_approval/machine_microstructure_policy_approval_preopen_${TARGET_DATE}.json"
-  --receipt "$PROJECT_DIR/data/report/machine_entry_timing_tuning/machine_entry_timing_tuning_${TARGET_DATE}.json"
   --receipt "$PROJECT_DIR/data/threshold_cycle/scanner_lookup_attention_preopen/scanner_lookup_attention_preopen_${TARGET_DATE}.json"
 )
 rising_missed_policy="$PROJECT_DIR/data/report/rising_missed_classifier_prior/rising_missed_tp1_policy_${TARGET_DATE}.json"

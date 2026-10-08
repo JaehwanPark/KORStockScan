@@ -9514,7 +9514,7 @@ class GPTSniperEngine:
                 from src.trading.market.micro_confirmation import (
                     load_live_dynamic_confirmation_source,
                 )
-                from src.trading.market.entry_adverse_flow import evaluate_machine_entry_payload
+                from src.trading.market.main_entry_micro_window import evaluate_machine_entry_payload
 
                 # Observe before first child adoption too: collection must not
                 # require the policy whose evidence it is meant to produce.
@@ -11733,7 +11733,7 @@ class GPTSniperEngine:
             resolve_entry_candle_venue,
         )
         from src.trading.market.micro_confirmation import load_live_dynamic_confirmation_source
-        from src.trading.market.entry_adverse_flow import evaluate_machine_entry_payload
+        from src.trading.market.main_entry_micro_window import evaluate_machine_entry_payload
 
         blocked = {"should_add": False, "reason": "shared_main_rebound_source_unavailable"}
         try:

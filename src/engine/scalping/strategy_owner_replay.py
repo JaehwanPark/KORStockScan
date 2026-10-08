@@ -1003,7 +1003,7 @@ def freeze_entry_opportunity(plan, *, stock_code, observed_at, profile=None,
     The original orders, quantities, prices and signed plan are never changed.
     Probe continuations with unknown future prices are not replayable.
     """
-    from src.engine.monitoring.research_closed_loop import digest
+    from src.utils.evidence_digest import digest
     from src.trading.order.tick_utils import move_price_down_by_bps, clamp_price_to_tick
     def gap(reason):
         if isinstance(diagnostic, dict):
@@ -1128,7 +1128,7 @@ def freeze_entry_opportunity(plan, *, stock_code, observed_at, profile=None,
 
 
 def _entry_seed_valid(seed):
-    from src.engine.monitoring.research_closed_loop import digest
+    from src.utils.evidence_digest import digest
     from src.trading.order.tick_utils import move_price_down_by_bps, clamp_price_to_tick
     try:
         if not isinstance(seed, dict):
@@ -1216,8 +1216,8 @@ def replay_entry_opportunity(seed, depth_rows, trade_rows, *, source_ready, eval
     A no-fill is supported only if BOTH the observed asks and trades stay above
     every limit throughout the entire declared TTL. Actual outcomes stay separate.
     """
-    from src.engine.monitoring.research_closed_loop import digest
-    from src.engine.monitoring.machine_microstructure_attribution import _validate_depth_row, _validate_stream_row
+    from src.utils.evidence_digest import digest
+    from src.engine.scalping.native_packet_validation import _validate_depth_row, _validate_stream_row
     from src.engine.scalping.entry_split_order_plan import QUANTITY_LEG_FOUR_ARM_IDS
     result = dict(schema=ENTRY_REPLAY_SCHEMA, status='source_gap', blocker=None,
                   seed_sha256=seed.get('seed_sha256') if isinstance(seed, dict) else None,
@@ -1405,8 +1405,8 @@ def build_entry_opportunity_replays(day, events, *, evaluated_at=None, micro_loa
     """
     import ast
     from collections import Counter
-    from src.engine.monitoring import machine_microstructure_attribution as micro
-    from src.engine.monitoring.research_closed_loop import digest
+    from src.engine.scalping import native_packet_validation as micro
+    from src.utils.evidence_digest import digest
     from src.engine.sniper_missed_entry_counterfactual import _price_ready_plan
     from src.engine.scalping.entry_split_order_plan import QUANTITY_LEG_FOUR_ARM_IDS
     output = dict(schema=ENTRY_REPLAY_SCHEMA, source_date=day, rows=[],
@@ -1719,7 +1719,7 @@ def select_entry_price_replay(rows, *, eligible_count=None, source_counts=None):
     Output is re-evaluated by publisher/PREOPEN/runtime from signed paired rows.
     """
     from collections import Counter, defaultdict
-    from src.engine.monitoring.research_closed_loop import digest
+    from src.utils.evidence_digest import digest
     groups, seen, conflicts = defaultdict(list), {}, set()
     # A completed-row list cannot prove the original population or its latest
     # eligible date. Formal selection always needs the producer's full census.
@@ -1837,7 +1837,7 @@ def select_entry_price_replay(rows, *, eligible_count=None, source_counts=None):
 
 
 def entry_price_selection_evidence_valid(proof):
-    from src.engine.monitoring.research_closed_loop import digest
+    from src.utils.evidence_digest import digest
     try:
         if not isinstance(proof, dict) or proof.get('selection_contract') != ENTRY_PRICE_SELECTION:
             return False
@@ -1992,7 +1992,7 @@ def entry_native_cancel_terminal(seed, execution, depths, trades, model, *, plan
     A touched passive queue or fills during cancellation remain unsupported.
     Each state needs prior independent empirical cancel/late-fill validation.
     """
-    from src.engine.monitoring.machine_microstructure_attribution import _validate_depth_row, _validate_stream_row
+    from src.engine.scalping.native_packet_validation import _validate_depth_row, _validate_stream_row
     context = seed['operating_contract']
     kind = 'partial' if execution['modeled_filled_qty'] else 'no_fill'
     scope = [seed['effective_venue'], seed['session_bucket'], context.get('broker_route'), context.get('cancel_wait_profile')]
@@ -2185,7 +2185,7 @@ def replay_operating_entry_arm(seed, arm, depth_rows, *, executor=None, trade_ro
             ack_at = _timestamp(cancel['terminal_at'], seed['source_date']).timestamp()
             if ack_at < last_at:
                 raise ValueError('cancel_terminal_before_final_fill')
-        from src.engine.monitoring.machine_microstructure_attribution import _validate_depth_row
+        from src.engine.scalping.native_packet_validation import _validate_depth_row
         if any(valid and clock is not None and first_at < clock.timestamp() < last_at
             for valid,clock,*_ in (_validate_depth_row(row) for row in depth_rows)):
             raise ValueError('operating_pre_final_fill_holding_transition_unmodeled')
@@ -2251,7 +2251,7 @@ def replay_operating_entry_arm(seed, arm, depth_rows, *, executor=None, trade_ro
             clock = row.get('exchange_at') or row.get('observed_at') or row.get('emitted_at')
             # Native validation precedes this helper; exact policy/service values
             # remain bound to the recorded frame, never looked up from today's env.
-            from src.engine.monitoring.machine_microstructure_attribution import _validate_depth_row
+            from src.engine.scalping.native_packet_validation import _validate_depth_row
             if (row.get('symbol') != seed['stock_code'] or row.get('venue') != entry_native_market_venue(seed['effective_venue'])
                 or row.get('session_bucket') != seed['session_bucket']):
                 raise ValueError('operating_native_frame_scope_mismatch')
@@ -2262,7 +2262,7 @@ def replay_operating_entry_arm(seed, arm, depth_rows, *, executor=None, trade_ro
                 continue
             ws = row.get('ws_data')
             if not isinstance(ws, dict):
-                from src.engine.monitoring.machine_microstructure_attribution import _validate_stream_row
+                from src.engine.scalping.native_packet_validation import _validate_stream_row
                 tick_values = []
                 for tick in trade_rows:
                     valid_tick, eligible_tick, tick_at, tick_price, _, _ = _validate_stream_row(tick)
@@ -2404,7 +2404,7 @@ def replay_cancel_wait_arm(seed, timeout, journal_legs, depth_rows, trade_rows, 
     Unknown passive queues, pending holding transitions and cancel races stay
     unsupported. Longer waits cannot manufacture fills after the real cancel.
     """
-    from src.engine.monitoring.machine_microstructure_attribution import _validate_depth_row, _validate_stream_row
+    from src.engine.scalping.native_packet_validation import _validate_depth_row, _validate_stream_row
     from src.engine.scalping.entry_cancel_wait_runtime import bounded_candidates
     gap = dict(status='unsupported_scope', net_pnl_krw=None, blocker=None, **AUTHORITY)
     try:

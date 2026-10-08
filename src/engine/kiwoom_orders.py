@@ -20,7 +20,7 @@ from src.utils import kiwoom_utils
 from src.engine.trade_pause_control import is_buy_side_paused, get_pause_state_label
 from src.engine.risk.manual_control_exclusion import evaluate_main_bot_control_exclusion
 from src.trading.market import session_contract
-from src.trading.config.symbol_owner_policy import (
+from src.trading.config.native_owner_policy import (
     SymbolOwnerPolicyError,
     resolve_symbol_owner_policy,
 )
@@ -406,6 +406,9 @@ def _reserve_owner_registry_intent(
 ):
     effective_order_date = order_date or datetime.now(KST).date()
     context = _owner_registry_context(owner_context)
+    from src.trading.config.owner_retirement import automatic_owner_retired
+    if context is not None and automatic_owner_retired(context.owner_type):
+        return None, None, _owner_registry_block_response("automatic_owner_permanently_retired")
     is_new_entry = str(side).upper() == "BUY" and str(action).upper() == "NEW"
     if context is None or context.owner_type == "main_scalping":
         exclusion = evaluate_main_bot_control_exclusion(
@@ -458,7 +461,8 @@ def _reserve_owner_registry_intent(
                     "registered_coexistence_symbol_requires_exact_date_policy"
                 ),
             )
-        return None, None, None
+        if context is None or context.owner_type != "main_scalping" or not policy.migration_completed:
+            return None, None, None
     if context is None:
         return (
             None,

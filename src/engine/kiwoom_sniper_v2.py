@@ -49,9 +49,7 @@ from src.utils import kiwoom_utils
 from src.utils.logger import log_error, log_info
 from src.utils.constants import DATA_DIR, RESTART_FLAG_PATH, TRADING_RULES
 from src.utils.pipeline_event_logger import emit_pipeline_event
-from src.trading.samsung_morning_one_share.authority_handoff import (
-    consume_guarded_restart_request,
-)
+from src.engine.infrastructure.restart_requests import consume_restart_request
 from src.database.db_manager import (
     DBManager,
     SWING_REAL_WATCHING_ENABLED_ENV,
@@ -12887,7 +12885,7 @@ def run_sniper(is_test_mode=False):
             _sn_whb("sniper_engine")
 
             if RESTART_FLAG_PATH.exists():
-                restart_guard = consume_guarded_restart_request(
+                restart_guard = consume_restart_request(
                     RESTART_FLAG_PATH,
                     main_bot_pid=os.getpid(),
                 )

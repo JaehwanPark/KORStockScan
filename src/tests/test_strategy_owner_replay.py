@@ -21,7 +21,7 @@ from src.tests.test_score_recovery_net_approval import sign
 @pytest.fixture(autouse=True)
 def isolate_native_replay_generation(monkeypatch, tmp_path):
     """Keep source generation deterministic; never inspect live raw paths."""
-    from src.engine.monitoring import machine_microstructure_attribution as micro
+    from src.engine.scalping import native_packet_validation as micro
     monkeypatch.setattr(micro, "OBSERVATION_ROOT", tmp_path / "native_observations")
     monkeypatch.setattr(micro, "DEFAULT_SOURCE_EXCLUSION_MANIFEST", tmp_path / "exclusions.json")
     monkeypatch.setattr(micro, "DEFAULT_CANARY_SNAPSHOT_PATH", tmp_path / "canary.json")
@@ -29,7 +29,7 @@ def isolate_native_replay_generation(monkeypatch, tmp_path):
 
 
 def test_native_replay_still_rejects_generation_change_with_mock_windows():
-    from src.engine.monitoring import machine_microstructure_attribution as micro
+    from src.engine.scalping import native_packet_validation as micro
     event = entry_owner_event()
 
     def changing_source(*args):
@@ -540,7 +540,7 @@ def entry_seed(day='2026-09-14', ordinal=0, *, profile='strong_1tick_pressure', 
 
 
 def entry_native_path(seed):
-    from src.tests.test_machine_microstructure_attribution import _depth_row, _micro_row
+    from src.tests.native_market_evidence_fixtures import _depth_row, _micro_row
     start = datetime.fromisoformat(seed['observed_at'])
     depths, trades = [], []
     for i in range(181):
@@ -623,7 +623,7 @@ def test_price_union_small_positive_pair_recomputed_by_final_consumer():
 
 @pytest.mark.parametrize('other_branch', ['normal', 'unregistered'])
 def test_price_union_retains_other_owner_price_branches_without_profile_coverage_bias(other_branch):
-    from src.engine.monitoring.research_closed_loop import digest
+    from src.utils.evidence_digest import digest
     rows = []
     for day in ('2026-09-14', '2026-09-15'):
         for i in range(30):
@@ -701,7 +701,7 @@ def test_native_entry_producer_quarantines_conflicts_and_retains_missing_populat
     event = entry_owner_event()
     conflicting = deepcopy(event)
     conflicting.fields['entry_opportunity_replay_seed']['candidate_qty'] = 8
-    from src.engine.monitoring.research_closed_loop import digest
+    from src.utils.evidence_digest import digest
     seed = conflicting.fields['entry_opportunity_replay_seed']
     seed['seed_sha256'] = digest({k: v for k, v in seed.items() if k != 'seed_sha256'})
     missing = deepcopy(event)
@@ -721,7 +721,7 @@ def test_native_entry_producer_quarantines_conflicts_and_retains_missing_populat
 def test_price_replay_allocation_keeps_overlap_rows_without_summing_capital():
     rows = [entry_replay(entry_seed(day, 0)) for day in ['2026-09-14', '2026-09-15'] for _ in range(10)]
     # Different real attempts, same source time: one common research reservation.
-    from src.engine.monitoring.research_closed_loop import digest
+    from src.utils.evidence_digest import digest
     for i, row in enumerate(rows):
         row['seed']['evaluation_attempt_id'] += f'-{i}'
         row['seed']['seed_sha256'] = digest({k: v for k, v in row['seed'].items() if k != 'seed_sha256'})
@@ -754,7 +754,7 @@ def test_price_union_requires_original_per_date_eligible_population(census):
     proof = mod.select_entry_price_replay(rows, eligible_count=20,
         source_counts={'2026-09-14': 10, '2026-09-15': 10})[0]
     # Even a recomputed digest cannot make a shifted/absent census authoritative.
-    from src.engine.monitoring.research_closed_loop import digest
+    from src.utils.evidence_digest import digest
     proof['source_counts'] = census
     proof['evidence_sha256'] = digest({k: v for k, v in proof.items() if k != 'evidence_sha256'})
     assert not mod.entry_price_selection_evidence_valid(proof)

@@ -135,13 +135,7 @@ def test_cancel_wait_parent_requires_same_submit_owner_account_and_explicit_pare
         buy_owner_policy_reason='exact_date_policy_missing_legacy_exclusion_retained',
         buy_owner_policy_hash='')
     submit['fields']['owner_registry_intent_id'] = ''
-    from types import SimpleNamespace
-    from src.trading.config import symbol_owner_policy
-    monkeypatch.setattr(symbol_owner_policy, 'resolve_symbol_owner_policy',
-        lambda *a, **k: SimpleNamespace(target_date=day,
-            symbol_selected=False, coexistence_enabled=False,
-            reason='exact_date_policy_missing_legacy_exclusion_retained',
-            policy_hash=''))
+    sent['timestamp'] = day + 'T09:00:00+09:00'
     parents, unknown = mod._parents(day, [submit, sent], [])
     assert unknown == 0 and parents[0]['parent_id'] == 'attempt-42'
     assert list(parents[0]['children'].values())[0]['intent_id'] is None

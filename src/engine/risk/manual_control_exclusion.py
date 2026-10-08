@@ -557,7 +557,7 @@ def evaluate_main_bot_control_exclusion(
         # predates the structured provenance markers.
         return decision
     try:
-        from src.trading.config.symbol_owner_policy import (
+        from src.trading.config.native_owner_policy import (
             SymbolOwnerPolicyError,
             resolve_symbol_owner_policy,
         )
@@ -570,6 +570,9 @@ def evaluate_main_bot_control_exclusion(
             f"symbol_owner_policy_fail_closed:{type(exc).__name__}",
             decision.source,
         )
+    if owner_policy.migration_completed and machine_scope_source and not owner_policy.symbol_selected:
+        return ManualControlExclusionDecision(False, decision.code,
+            "native_main_manual_contract_replaces_retired_machine_scope", owner_policy.source_path)
     if owner_policy.symbol_selected:
         if owner_policy.owner_allowed("main_scalping", new_entry=new_entry):
             try:
@@ -640,7 +643,7 @@ def independent_machine_ownership_source(
         return ""
     legacy = machine_owner_scope_source(code) or legacy_machine_owner_scope_source(code)
     try:
-        from src.trading.config.symbol_owner_policy import (
+        from src.trading.config.native_owner_policy import (
             SymbolOwnerPolicyError,
             resolve_symbol_owner_policy,
         )

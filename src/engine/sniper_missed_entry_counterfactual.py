@@ -3370,7 +3370,7 @@ def build_missed_entry_counterfactual_report(
             "price_ready_diagnostic_economic_pair_eligible": False,
         }
     )
-    from src.engine.monitoring.research_closed_loop import read_object
+    from src.utils.evidence_digest import read_object
     try:
         from src.engine.scalping.entry_split_order_plan import REPORT_DIR as split_report_dir
         split = read_object(split_report_dir / f'entry_split_order_plan_{safe_date}.json',

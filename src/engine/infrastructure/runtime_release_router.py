@@ -45,7 +45,7 @@ LEGACY_TAGS = {
 CRON_TARGETS = frozenset({"start", *TAGS.values()})
 REQUIRED_CRON_TARGETS = CRON_TARGETS
 OPERATIONS = ("start", "restart", *OWNED, "paired-replay", "eod", "archive", "buy-funnel",
-              "pre-submit-source", "holding-exit-sentinel", "error-detection", "machine-final-refresh")
+              "pre-submit-source", "holding-exit-sentinel", "error-detection")
 RELEASE_SET_LOCK = "runtime_release_set.lock"
 MAX_RELEASE_SET_UNITS = 256
 CORE_SYSTEMD_UNITS = (
@@ -170,7 +170,10 @@ def _release_identity(
 
 def check_release_set(workspace: Path, selected_root: Path, selected_commit: str) -> dict:
     """Read-only consistency check for separately routed live code owners."""
-    units = list(CORE_SYSTEMD_UNITS)
+    main_only = (workspace / "data/runtime/retirements/main-only-retirement.json").is_file()
+    if main_only:
+        _validate_retired_surfaces(workspace, selected_root)
+    units = [] if main_only else list(CORE_SYSTEMD_UNITS)
     listed = subprocess.run(
         [
             "systemctl", "list-units", "--type=service", "--all", "--no-legend",
@@ -186,6 +189,11 @@ def check_release_set(workspace: Path, selected_root: Path, selected_commit: str
     for line in listed.stdout.splitlines():
         unit = line.split(None, 1)[0] if line.split() else ""
         if unit and unit not in units:
+            if main_only:
+                fields = _systemd_properties(unit)
+                if int(fields.get("MainPID", "0") or 0) or fields.get("ActiveState") in {"active", "activating", "reloading"}:
+                    raise ValueError(f"retired_automatic_owner_running:{unit}")
+                continue
             units.append(unit)
     if len(units) > MAX_RELEASE_SET_UNITS:
         raise ValueError("systemd_release_set_inventory_limit_exceeded")
@@ -374,6 +382,26 @@ def _episode_retirement_receipts(workspace):
 
 
 def _validate_retired_surfaces(workspace: Path, root: Path) -> None:
+    family_receipt = workspace / "data/runtime/retirements/main-only-retirement.json"
+    if family_receipt.exists():
+        body = json.loads(family_receipt.read_text())
+        if (body.get("schema") != "main_only_automatic_owner_retirement_v1"
+            or body.get("management") != "operator_manual"
+            or body.get("retired_owners") != ["episode", "widget_auto_trade"]
+            or body.get("receipt_sha256") != _retirement_digest({k:v for k,v in body.items() if k != "receipt_sha256"})):
+            raise ValueError("main_only_retirement_receipt_invalid")
+        guard = root / "src/trading/config/owner_retirement.py"
+        if not guard.is_file() or hashlib.sha256(guard.read_bytes()).hexdigest() != body.get("guard_file_sha256"):
+            raise ValueError("release_restores_retired_automatic_owner_guard")
+        for path in body.get("removed_surfaces", []):
+            candidate = Path(path)
+            if candidate.is_absolute() or '..' in candidate.parts or not candidate.parts or candidate.parts[0] not in {'src', 'deploy'}:
+                raise ValueError("main_only_retirement_surface_invalid")
+            if (root / candidate).exists():
+                raise ValueError("release_restores_retired_automatic_owner_surface")
+        if not body.get("removed_surfaces"):
+            raise ValueError("main_only_retirement_surfaces_missing")
+        return
     receipt = workspace / "data/runtime/retirements/widget-retirement-2026-10-06.json"
     for owner in _episode_retirement_receipts(workspace):
         guard = root / "src/trading/config/owner_retirement.py"
@@ -570,8 +598,6 @@ def make_plan(
                    "--delay-source-only", "--date", target_date, "--notify"]
     elif operation == "holding-exit-sentinel":
         command = ["/bin/bash", str(root / "deploy/run_holding_exit_sentinel_intraday.sh"), target_date]
-    elif operation == "machine-final-refresh":
-        command = ["/bin/bash", str(root / "deploy/run_machine_microstructure_final_refresh.sh"), target_date]
     elif operation == "paired-replay":
         command = [
             "/bin/bash",
@@ -831,13 +857,6 @@ def main() -> int:
         if not args.operation:
             raise ValueError("operation_required")
         target_date=args.target_date or datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat()
-        if args.operation=='machine-final-refresh' and args.target_date is None:
-            # Persistent timers may catch up after midnight. Bind the completed
-            # source, not the router's wall-clock date or a historical code pin.
-            target_date=subprocess.check_output([str(root/'.venv/bin/python'),'-c',
-                'from src.engine.monitoring.machine_microstructure_attribution import resolve_completed_machine_target_date; print(resolve_completed_machine_target_date().isoformat())'],
-                cwd=root,env={**os.environ,'PYTHONPATH':str(root),'PROJECT_DIR':str(root),
-                    'KORSTOCKSCAN_PROJECT_DIR':str(root),'KORSTOCKSCAN_PYTHON_BIN':str(root/'.venv/bin/python')},text=True,timeout=30).strip()
         plan = make_plan(workspace, root, commit, args.operation, target_date)
         if args.print_plan:
             print(json.dumps(plan), flush=True)

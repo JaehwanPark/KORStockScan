@@ -115,7 +115,6 @@ def validate_semantic_coverage(day, *, stages=None, alert_stages=None, hooks=Non
     functions = {
         'main_machine_policy': artifacts._continuous_reversal_result_semantics,
         'main_auxiliary_policy': artifacts._auxiliary_result_semantics,
-        'episode_policy': artifacts._family_policy_semantics,
         'postclose_handoff': artifacts._postclose_handoff_semantics,
         'submission_bottleneck_monitor': submission.machine_semantics,
     } if hooks is None else hooks
@@ -134,11 +133,11 @@ def validate_semantic_coverage(day, *, stages=None, alert_stages=None, hooks=Non
             prerequisites=list(prerequisites), native_validator='stage_receipt_issues',
             terminal_consumer='strict_controller_prepared',
             expected_disposition='installed_stage_or_explicit_off',
-            notifier_expected=stage in {'main_machine_policy', 'main_auxiliary_policy', 'episode_policy'})
-    for stage in ('main_machine_policy', 'main_auxiliary_policy', 'episode_policy', 'postclose_handoff'):
+            notifier_expected=stage in {'main_machine_policy', 'main_auxiliary_policy'})
+    for stage in ('main_machine_policy', 'main_auxiliary_policy', 'postclose_handoff'):
         if stage not in allowed:
             findings.append(stage + ':notifier_unbound')
-    for stage in ('main_machine_policy', 'main_auxiliary_policy', 'episode_policy', 'postclose_handoff',
+    for stage in ('main_machine_policy', 'main_auxiliary_policy', 'postclose_handoff',
                   'submission_bottleneck_monitor'):
         if not callable(functions.get(stage)):
             findings.append(stage + ':native_semantic_hook_unbound')
@@ -147,4 +146,4 @@ def validate_semantic_coverage(day, *, stages=None, alert_stages=None, hooks=Non
     return dict(status='pass' if not findings else 'source_invalid', findings=sorted(findings),
                 stages=bindings, native_stage_count=len(bindings), decision_authority='report_only',
                 historical_main='audit_only', retired_widget='retired_not_expected',
-                surviving_episode='installed_profile_source_and_pid_required')
+                surviving_episode='retired_not_expected')

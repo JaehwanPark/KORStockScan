@@ -42,7 +42,7 @@ from src.utils.constants import (
 from src.utils.logger import log_error, log_info
 from src.utils.pipeline_event_logger import emit_pipeline_event
 from src.engine import kiwoom_orders
-from src.trading.config.symbol_owner_policy import (
+from src.trading.config.native_owner_policy import (
     SymbolOwnerPolicyError,
     policy_path,
     resolve_symbol_owner_policy,

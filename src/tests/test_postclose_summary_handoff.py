@@ -28,22 +28,6 @@ def test_machine_barrier_waits_for_exact_inputs_and_allows_scoped_recovery(tmp_p
     assert mod.wait_for_machine_inputs(tmp_path, day, timeout=0) == 75
 
 
-def test_incomplete_joint_cohort_is_reported_without_granting_allocation(tmp_path, monkeypatch):
-    from datetime import date
-    from src.engine.monitoring import research_closed_loop as loop
-    own = dict(inputs_sha256="own")
-    peer = dict(schema=loop.SCHEMA, family="widget", source_date="2026-09-21", **loop.AUTHORITY)
-    peer["inputs_sha256"] = loop.digest(peer)
-    monkeypatch.setattr(loop, "joint_inputs", lambda *a, **kw: own)
-    monkeypatch.setattr(loop, "read_object", lambda *a: peer)
-    def invalid(*a, **kw):
-        raise ValueError("joint_cohort_member_pruned_without_supersession")
-    monkeypatch.setattr(loop, "frozen_joint_bundle", invalid)
-    result = loop.combined_joint_gate({}, family="episode", source_date=date(2026,9,21), directory=tmp_path)
-    assert result["status"] == "allocation_blocked"
-    assert result["reason"] == "joint_cohort_member_pruned_without_supersession"
-    assert result["feasible_combined_net_profit_krw"] is None
-    assert all(result[k] is v for k, v in loop.AUTHORITY.items())
 
 
 def _publish(tmp_path, target="2026-09-07"):
@@ -441,73 +425,12 @@ def test_retired_common_layer_handoff_skips_legacy_intake(monkeypatch, tmp_path)
     assert result["status"] == "pass"
 
 
-def test_independent_producer_roundtrip_and_post_terminal_source_drift(monkeypatch, tmp_path):
-    from src.engine.automation import postclose_summary_handoff as handoff
-    from src.engine.automation.postclose_recommendation_intake import source_paths
-    from src.utils import constants
-    from pathlib import Path
-    import json
-    data = tmp_path / "data"
-    monkeypatch.setattr(constants, "DATA_DIR", data)
-    monkeypatch.setattr(constants, "PROJECT_ROOT", tmp_path)
-    monkeypatch.setattr(handoff.subprocess, "check_output", lambda *a, **k: "a" * 40)
-    day = "2026-09-17"
-    paths = source_paths(data / "report", day)
-    for label in handoff.INDEPENDENT_SOURCES["machine"]:
-        path = paths.get(label, data / "report" / label / f"{label}_{day}.json")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"target_date": day}))
-    assert handoff._producer_main(["--owner", "machine", "--date", day, "--phase", "started"]) == 0
-    assert handoff.producer_receipt_issues(data / "report", day, "machine")
-    assert handoff._producer_main(["--owner", "machine", "--date", day, "--phase", "finished"]) == 0
-    assert handoff.producer_receipt_issues(data / "report", day, "machine") == []
-    paths[handoff.INDEPENDENT_SOURCES["machine"][0]].write_text("{}")
-    assert handoff.producer_receipt_issues(data / "report", day, "machine")
-    old = handoff.producer_receipt_path(data / "report", day, "machine").read_bytes()
-    assert handoff._producer_main(["--owner", "machine", "--date", day, "--phase", "started"]) == 0
-    assert any(p.read_bytes() == old for p in (data / "report/postclose_producer_terminal/attempts").glob("*.json"))
-    assert handoff._producer_main(["--owner", "machine", "--date", day, "--phase", "finished", "--exit-code", "17"]) == 1
 
 
 
 
 
 
-@pytest.mark.parametrize('clock,publication,prepared,allowed', [
-    ('2026-09-22T00:30:00+09:00', '2026-09-21', False, True),
-    ('2026-09-22T07:29:59+09:00', '2026-09-21', False, True),
-    ('2026-09-22T07:30:00+09:00', '2026-09-21', False, False),
-    ('2026-09-22T00:30:00+09:00', '2026-09-21', True, False),
-    ('2026-09-22T00:30:00+09:00', '', False, False),
-    ('2026-09-22T00:30:00+09:00', '2026-09-18', False, False),
-])
-def test_overnight_publication_recovery_stops_before_preopen(tmp_path, monkeypatch, clock, publication, prepared, allowed):
-    from datetime import date, datetime
-    from src.engine.monitoring import research_closed_loop as loop
-    class Clock(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            return datetime.fromisoformat(clock)
-    monkeypatch.setattr(loop, 'datetime', Clock)
-    monkeypatch.setattr(loop, 'DATA_DIR', tmp_path)
-    monkeypatch.setenv('POSTCLOSE_POLICY_PUBLICATION_DATE', publication)
-    effective = date(2026, 9, 22)
-    folder = tmp_path / 'policies'
-    initial = loop.publication_transaction(folder, effective_date=effective, files={'policy.json': {'revision': 1}})
-    if prepared:
-        root = tmp_path / 'runtime' / 'policy_bootstrap'
-        root.mkdir(parents=True)
-        (root / f'runtime_policy_bootstrap_{effective}.json').write_text('{}')
-    parent = loop.future_publication_parent(folder, effective)
-    if allowed:
-        assert parent == initial['generation_sha256']
-        updated = loop.publication_transaction(folder, effective_date=effective, files={'policy.json': {'revision': 2}}, expected_generation=parent)
-        assert updated['parent_generation_sha256'] == parent
-        loop.verify_publication(folder, effective_date=effective, name='policy.json', value={'revision': 2})
-    else:
-        assert parent is None
-        with pytest.raises(ValueError, match='publication_conflict'):
-            loop.publication_transaction(folder, effective_date=effective, files={'policy.json': {'revision': 2}}, expected_generation=initial['generation_sha256'])
 
 
 
@@ -671,19 +594,6 @@ def test_machine_resource_timeout_writes_deferred_terminal(stage_environment):
 
 
 
-@pytest.mark.parametrize("failed_stage", ["market_weakness", "main_auxiliary_policy", "episode_policy", "summary_handoff"])
-def test_stage_failure_does_not_cancel_independent_machine(stage_environment, failed_stage):
-    h, day, report, run, produce = stage_environment
-    if failed_stage == 'main_auxiliary_policy':
-        run('outcome_labels')
-        run('legacy_machine_report')
-    if failed_stage == 'market_weakness': run('machine_attribution')
-    failed = run(failed_stage, runner=lambda *a, **kw: 9)
-    machine = run('main_machine_policy')
-    assert failed['status'] == 'failed'
-    assert machine['status'] == 'succeeded'
-    assert not h.stage_receipt_issues(report, day, 'main_machine_policy')
-    assert h.stage_receipt_issues(report, day, 'main_machine_policy', code_hash='new-code') == ['main_machine_policy:code_changed']
 
 
 def test_machine_stage_validates_bound_completed_price_generation(stage_environment):
@@ -725,16 +635,6 @@ def test_machine_stage_validates_bound_completed_price_generation(stage_environm
         report_dir, day, 'main_machine_policy')
 
 
-def test_stage_prerequisites_and_changed_generation(stage_environment):
-    h, day, report, run, produce = stage_environment
-    deferred = run('machine_timing')
-    assert deferred['status'] == 'deferred'
-    assert run('machine_attribution')['status'] == 'succeeded'
-    assert run('machine_timing')['status'] == 'succeeded'
-    path = h.stage_artifacts(report, day, 'machine_attribution')['machine_microstructure_attribution']
-    path.write_text(json.dumps(dict(target_date=day, status='complete', revised=True)))
-    assert h.stage_receipt_issues(report, day, 'machine_attribution') == ['machine_attribution:output_generation_changed']
-    assert run('machine_timing')['status'] == 'deferred'
 
 
 def test_pre_submit_stage_rejects_unsealed_raw_generation(tmp_path, monkeypatch):
@@ -874,38 +774,6 @@ def test_historical_summary_consumer_preserves_exact_generation_only(stage_envir
     assert path.read_bytes() == before
 
 
-@pytest.mark.parametrize('damage', [
-    None, 'output', 'prerequisite', 'digest', 'code', 'failed',
-    'new_publication', 'invalid_publication', 'source_date',
-])
-def test_historical_terminal_consumer_keeps_producer_and_hash_guards(stage_environment, damage):
-    h, day, report, run, _produce = stage_environment
-    assert run('machine_attribution')['status'] == 'succeeded'
-    assert run('machine_timing')['status'] == 'succeeded'
-    path = h.stage_path(report, day, 'machine_timing')
-    value = h._load_json(path)
-    value['schema'] = 'postclose_stage_terminal_v2'
-    h._stage_write(path, value)
-    assert h.stage_receipt_issues(report, day, 'machine_timing')
-    if damage == 'output':
-        h.stage_artifacts(report, day, 'machine_timing')['machine_entry_timing_tuning'].write_text('{}')
-    elif damage == 'prerequisite':
-        h.stage_path(report, day, 'machine_attribution').write_text('{}')
-    elif damage == 'digest':
-        value['run_id'] = 'unsealed-change'
-        path.write_text(json.dumps(value))
-    elif damage:
-        if damage == 'code': value['stage_code_sha256'] = 'unknown-code'
-        elif damage == 'failed': value.update(status='failed', exit_code=1)
-        elif damage == 'new_publication': value['publication_date'] = '2026-10-06'
-        elif damage == 'invalid_publication': value['publication_date'] = '2026-10-00'
-        elif damage == 'source_date': value['source_date'] = '2026-09-22'
-        h._stage_write(path, value)
-    before = path.read_bytes()
-    issues = h.stage_receipt_issues(report, day, 'machine_timing', allow_historical_terminal=True)
-    assert bool(issues) is (damage is not None), issues
-    assert path.read_bytes() == before
-    assert 'widget_policy' not in h.STAGE_REGISTRY
 
 
 def test_legacy_machine_code_hash_still_binds_original_dependencies(tmp_path):
@@ -1003,28 +871,28 @@ def test_exact_ai_stage_keeps_off_and_failed_terminal_semantics(stage_environmen
 def test_stage_lock_and_live_orphan_identity_prevent_duplicate(stage_environment):
     import fcntl, os
     h, day, report, run, produce = stage_environment
-    path = h.stage_path(report, day, 'machine_attribution'); path.parent.mkdir(parents=True)
+    path = h.stage_path(report, day, 'legacy_machine_report'); path.parent.mkdir(parents=True)
     with path.with_suffix('.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        assert run('machine_attribution')['reason'] == 'existing_stage_writer'
+        assert run('legacy_machine_report')['reason'] == 'existing_stage_writer'
     h._stage_write(path, dict(status='running', child_pid=os.getpid(), child_start_ticks=Path('/proc/self/stat').read_text().split()[21]))
-    assert run('machine_attribution')['reason'] == 'existing_child_running'
+    assert run('legacy_machine_report')['reason'] == 'existing_child_running'
 
 
 def test_stage_runner_exception_is_terminal_failure(stage_environment):
     h, day, report, run, produce = stage_environment
     def fail(*a, **kw): raise ValueError('bad_input')
-    r = run('machine_attribution', runner=fail)
+    r = run('legacy_machine_report', runner=fail)
     assert r['status'] == 'failed' and r['issues'] == ['bad_input']
-    assert run('machine_attribution')['status'] == 'succeeded'
+    assert run('legacy_machine_report')['status'] == 'succeeded'
 
 
 def test_stage_publication_date_is_pinned_and_invalid_future_rejected(stage_environment):
     h, day, report, run, produce = stage_environment
-    r = run('machine_attribution', publication='2026-09-21')
+    r = run('pre_submit_delay', publication='2026-09-21')
     assert r['source_date'] == day and r['effective_date'] == '2026-09-22'
     with pytest.raises(ValueError, match='stage_date_contract_invalid'):
-        run('machine_attribution', publication='2099-01-01')
+        run('pre_submit_delay', publication='2099-01-01')
 
 
 def test_late_summary_recovery_uses_source_day_prepared_session(stage_environment):
@@ -1057,120 +925,10 @@ def test_late_summary_recovery_uses_source_day_prepared_session(stage_environmen
 
 
 
-def test_closed_capacity_failure_blocks_allocation_and_controller_then_binds_native_generation(stage_environment, monkeypatch):
-    from datetime import date, datetime
-    from types import SimpleNamespace
-    from src.engine.monitoring import research_native_capacity_source as native
-    from src.engine.automation import postclose_done_controller as controller
-    from src.engine.automation import machine_research_closed_loop_refresh as refresh
-    from src.engine.monitoring import research_closed_loop as loop
-
-    h, day, report, run, produce = stage_environment
-    capacity_root = report.parent / 'runtime' / 'machine_research_closed_loop'
-    # A report marked complete, without its frozen native generation, is not a
-    # successful capacity terminal and must not admit allocation.
-    failed = run('research_capacity')
-    assert failed['status'] == 'failed'
-    assert 'research_capacity:native_source_invalid:' in failed['issues'][0]
-    assert run('research_allocation')['status'] == 'deferred'
-
-    monkeypatch.setattr(controller, 'DATA_DIR', report.parent)
-    monkeypatch.setattr(controller, 'REPORT_DIR', report / 'postclose_done_controller')
-    monkeypatch.setattr(h, 'stage_overview', lambda *args: {})
-    monkeypatch.setattr(controller, 'build_runtime_approval_summary',
-                        lambda *args: pytest.fail('blocked controller rebuilt summary'))
-    def blocked_controller(*args, **kwargs):
-        receipt = controller.build_postclose_done_controller(
-            day, summary_handoff_only=True, require_independent_producers=True)
-        assert receipt['status'] == 'blocked_independent_producer'
-        assert 'research_capacity:failed' in receipt['blocked_reasons']
-        assert receipt['final_verifier_status'] == 'not_run'
-        return 1
-    assert run('summary_handoff', runner=blocked_controller)['status'] == 'failed'
-
-    captured = datetime.fromisoformat(day + 'T20:06:00+09:00')
-    monkeypatch.setattr(native, 'datetime', SimpleNamespace(
-        now=lambda tz: captured, fromisoformat=datetime.fromisoformat,
-    ))
-    adapters = dict(
-        inventory=lambda token: ([], {'KRX','NXT'}, {'normalization_contract_complete': True}),
-        unfilled=lambda token: ([], {'normalization_contract_complete': True,
-                                     'request_succeeded': True}),
-        deposit=lambda token: None,
-        deposit_meta=lambda: dict(source='api_fresh', raw_amount=100000),
-        capacity=lambda *args, **kwargs: dict(
-            cash_only_orderable_amount=200000, cash_only_orderable_qty=10,
-            cash_orderable_contract_status='valid', capacity_source_sha256='a'*64,
-            capacity_contract_version=1, requested_stock_code='005930',
-            error='', capacity_observed_at=captured.isoformat()),
-    )
-    assert native.acquire(date.fromisoformat(day), directory=capacity_root,
-                          token='fixture', adapters=adapters)['status'] == 'complete'
-    repaired = run('research_capacity', runner=lambda *args, **kwargs: 0)
-    assert repaired['status'] == 'succeeded'
-    assert repaired['run_id'] != failed['run_id']
-    assert (h.stage_path(report, day, 'research_capacity').parent / 'attempts' /
-            f"research_capacity_{failed['run_id']}.json").exists()
-    assert set(repaired['input_sources']) == {'native_cash','native_inventory'}
-    assert h.stage_receipt_issues(report, day, 'research_capacity') == []
-
-    # Limit this fixture to capacity→allocation: widget/episode receipts are
-    # separate owners, represented by stable exact-date terminal files.
-    for stage in ('episode_policy',):
-        path = h.stage_path(report, day, stage)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({'source_date': day, 'stage_id': stage}))
-    original_issues = h.stage_receipt_issues
-    monkeypatch.setattr(h, 'stage_receipt_issues',
-                        lambda root, source_date, stage, **kw: [] if stage in {'widget_policy','episode_policy'}
-                        else original_issues(root, source_date, stage, **kw))
-    monkeypatch.setattr(refresh, 'validate_current_receipt', lambda *args, **kwargs: True)
-    allocation = run('research_allocation')
-    assert allocation['status'] == 'succeeded'
-    assert set(allocation['prerequisite_receipts']) == {
-        'episode_policy', 'research_capacity'
-    }
-    assert allocation['prerequisite_receipts']['research_capacity']['sha256'] == (
-        h._stage_sources({'capacity': h.stage_path(report, day, 'research_capacity')})['capacity']['sha256']
-    )
-    assert h.stage_receipt_issues(report, day, 'research_allocation') == []
-    downstream = controller.build_postclose_done_controller(
-        day, summary_handoff_only=True, require_independent_producers=True)
-    assert downstream['status'] == 'blocked_independent_producer'
-    assert not any('research_capacity:' in issue or 'research_allocation:' in issue
-                   for issue in downstream['blocked_reasons'])
-    assert downstream['final_verifier_status'] == 'not_run'
-    cash = capacity_root / 'native_capacity' / day / 'native_cash.json'
-    cash.write_text(cash.read_text() + '\n')
-    assert h.stage_receipt_issues(report, day, 'research_capacity') == [
-        'research_capacity:input_generation_changed'
-    ]
-    blocked_again = run('research_allocation')
-    assert blocked_again['status'] == 'deferred'
-    assert 'research_capacity:input_generation_changed' in blocked_again['issues']
-    assert (h.stage_path(report, day, 'research_allocation').parent / 'attempts' /
-            f"research_allocation_{allocation['run_id']}.json").exists()
-    downstream = controller.build_postclose_done_controller(
-        day, summary_handoff_only=True, require_independent_producers=True)
-    assert 'research_capacity:input_generation_changed' in downstream['blocked_reasons']
-    assert 'research_allocation:deferred' in downstream['blocked_reasons']
 
 
-def test_research_capacity_explicit_off_does_not_require_native_source(stage_environment):
-    h, day, report, run, _produce = stage_environment
-    assert run('research_capacity', off=True)['status'] == 'off'
-    assert h.stage_receipt_issues(report, day, 'research_capacity') == []
 
 
-def test_retired_episode_disables_joint_research_only_with_valid_receipt(stage_environment):
-    h, day, report, run, _produce = stage_environment
-    assert h._joint_research_peer_off(report, day) is False
-    receipt = run('episode_policy', off=True)
-    assert receipt['status'] == 'off'
-    assert h._joint_research_peer_off(report, day) is True
-    path = h.stage_path(report, day, 'episode_policy')
-    path.write_text(path.read_text().replace(receipt['receipt_sha256'], '0' * 64))
-    assert h._joint_research_peer_off(report, day) is False
 
 
 def test_staged_winrate_descendant_requires_same_proof_and_machine(tmp_path):
@@ -1238,72 +996,12 @@ def test_winrate_generation_only_retains_seal_source_and_same_policy_checks(tmp_
     assert not h._staged_winrate_generation_preserved(staged, child, runtime, tmp_path, generation_only=True)
 
 
-def test_family_source_read_does_not_require_peer(tmp_path, monkeypatch):
-    from datetime import date
-    from src.engine.automation import machine_research_closed_loop_refresh as phase
-    from src.engine.monitoring import research_closed_loop as loop
-    seen=[]
-    def read(path):
-        seen.append(path)
-        return dict(target_date='2026-09-21', closed_loop_contract=loop.SCHEMA, **loop.AUTHORITY)
-    monkeypatch.setattr(phase, '_read_report_dependency', read)
-    studies, paths, missing = phase.read_studies(date(2026,9,21), report_root=tmp_path, families=('episode',))
-    assert not missing and set(studies) == {'episode'} and len(seen) == 1
 
 
 
 
-def test_policy_readiness_is_separate_from_failed_diagnostic(stage_environment, monkeypatch):
-    h, day, report, run, produce = stage_environment
-    from src.engine.scalping import mechanistic_entry_runtime_policy as main
-    from src.engine.automation import low_price_two_leg_auto_expansion_policy as episode
-    bootstrap=report.parent/'runtime'/'policy_bootstrap'/'runtime_policy_bootstrap_verify_2026-09-22.json'
-    bootstrap.parent.mkdir(parents=True); bootstrap.write_text(json.dumps(dict(passed=True, target_date='2026-09-22', status='pass')))
-    from src.engine.automation import runtime_policy_bootstrap as bootstrap_owner
-    monkeypatch.setattr(bootstrap_owner, 'manifest_path', lambda *a: bootstrap.parent/'manifest.json')
-    monkeypatch.setattr(bootstrap_owner, 'verify_bootstrap', lambda *a, **kw: {'passed':True})
-    monkeypatch.setattr(main, 'load_effective', lambda **kw: {'valid':True})
-    monkeypatch.setattr(episode, 'load_policy', lambda *a, **kw: {'valid':True})
-    run('market_weakness', runner=lambda *a, **kw: 1)
-    view=h.stage_overview(report, day)
-    assert not view['postclose_all_active_stages_complete']
-    assert view['next_session_policy_ready']
-    view=h.stage_overview(report, day)
-    assert view['next_session_policy_ready']
-    monkeypatch.setattr(bootstrap_owner, 'verify_bootstrap', lambda *a, **kw: {'passed':False})
-    assert not h.stage_overview(report, day)['next_session_policy_ready']
-    monkeypatch.setattr(bootstrap_owner, 'verify_bootstrap', lambda *a, **kw: {'passed':True})
-    monkeypatch.setattr(main, 'load_effective', lambda **kw: None)
-    assert not h.stage_overview(report, day)['next_session_policy_ready']
 
 
-def test_verified_off_episode_and_isolated_preparation_are_startup_ready(stage_environment, monkeypatch):
-    h, day, report, run, _ = stage_environment
-    from src.engine.automation import next_preopen_readiness as readiness
-    from src.engine.automation import low_price_two_leg_auto_expansion_policy as episode
-    from src.engine.scalping import mechanistic_entry_runtime_policy as main
-    run('episode_policy', off=True)
-    monkeypatch.setattr(episode, 'load_policy', lambda *a, **kw: None)
-    monkeypatch.setattr(main, 'load_effective', lambda **kw: {'valid': True})
-    root = report.parent/'runtime'/'policy_bootstrap'/'prepared'/'2026-09-22'
-    root.mkdir(parents=True)
-    receipt = root/'generation'/'readiness.json';receipt.parent.mkdir()
-    receipt.write_text(json.dumps({'source_date': day}))
-    (root/'latest.json').write_text(json.dumps({'receipt_path': str(receipt)}))
-    monkeypatch.setattr(readiness, 'verify_prepared', lambda *a, **kw: {'status': 'pass'})
-    view = h.stage_overview(report, day)
-    assert view['next_session_policy_ready']
-    assert view['episode_policy_authority'] == 'explicit_schedule_disabled'
-    assert view['startup_basis'] == 'isolated_prepared_next_preopen'
-    assert view['day_of_activation_required'] and not view['actual_pid_consumed']
-    receipt.write_text(json.dumps({'source_date': '2026-09-20'}))
-    assert not h.stage_overview(report, day)['next_session_policy_ready']
-    receipt.write_text(json.dumps({'source_date': day}))
-    monkeypatch.setattr(readiness, 'verify_prepared', lambda *a, **kw: {'status': 'fail'})
-    assert not h.stage_overview(report, day)['next_session_policy_ready']
-    monkeypatch.setattr(readiness, 'verify_prepared', lambda *a, **kw: {'status': 'pass'})
-    monkeypatch.setattr(main, 'load_effective', lambda **kw: None)
-    assert not h.stage_overview(report, day)['next_session_policy_ready']
 
 
 def test_stage_machine_rejects_sealed_but_unbound_terminal(stage_environment):
@@ -1440,43 +1138,6 @@ def test_existing_winrate_carry_binding_requires_same_parent_and_policy(tmp_path
     )
 
 
-def test_family_publication_validation_uses_bounded_64_mib_read(tmp_path, monkeypatch):
-    from src.engine.monitoring import research_closed_loop as loop
-
-    day = '2026-09-21'
-    report_dir = tmp_path / 'data' / 'report'
-    paths = mod.stage_artifacts(report_dir, day, 'episode_policy')
-    source = paths['low_price_two_leg_expanded_candidate_research']
-    policy = tmp_path / 'data' / 'runtime' / 'low_price_two_leg_auto_expansion' / 'policy.json'
-    source.parent.mkdir(parents=True)
-    policy.parent.mkdir(parents=True)
-    source_payload = {'end_date': day, 'status': 'complete'}
-    policy_payload = {'effective_date': '2026-09-22', 'runtime_effect': False}
-    source.write_text(json.dumps(source_payload), encoding='utf-8')
-    policy.write_text(json.dumps(policy_payload), encoding='utf-8')
-    refresh = paths['episode_policy_refresh']
-    refresh.parent.mkdir(parents=True)
-    from src.engine.monitoring.research_closed_loop import digest
-    value = {
-        'source_date': day,
-        'source_path': str(source),
-        'source_sha256': digest(source_payload),
-        'policy_path': str(policy),
-        'policy_sha256': digest(policy_payload),
-        'status': 'complete',
-    }
-    value['receipt_sha256'] = digest(value)
-    refresh.write_text(json.dumps(value), encoding='utf-8')
-
-    calls = []
-    original = loop.read_object
-    def bounded(path, *, limit=0):
-        calls.append(limit)
-        return original(path, limit=limit)
-    monkeypatch.setattr(loop, 'read_object', bounded)
-
-    assert mod._stage_output_issues(report_dir, day, 'episode_policy') == []
-    assert calls == [64 * 1024 * 1024, 64 * 1024 * 1024]
 
 
 def test_label_ready_time_uses_kst_instant(stage_environment):
@@ -1513,15 +1174,11 @@ def test_machine_strategy_refresh_runs_before_auxiliary_ai():
     assert 'legacy_machine_report' in h.STAGE_REGISTRY['main_auxiliary_policy'][0]
 
 
-def test_market_weakness_waits_for_its_attribution_source(stage_environment):
-    h, _, _, _, _ = stage_environment
-
-    assert h.STAGE_REGISTRY['market_weakness'][0] == ('machine_attribution',)
 
 
 def test_unchanged_stage_accepts_exact_selected_release_code_hash(stage_environment, monkeypatch, tmp_path):
     h, day, report, run, _ = stage_environment
-    run('machine_attribution')
+    run('legacy_machine_report')
 
     managed = tmp_path / 'KORStockScan-runtime-releases'
     release = managed / 'immutable-release'
@@ -1545,12 +1202,12 @@ def test_unchanged_stage_accepts_exact_selected_release_code_hash(stage_environm
         return 'previous-release-code' if project.name == 'previous-release' else 'selected-release-code'
 
     monkeypatch.setattr(h, '_stage_code', code_hash)
-    path = h.stage_path(report, day, 'machine_attribution')
+    path = h.stage_path(report, day, 'legacy_machine_report')
     terminal = h._load_json(path)
     terminal['stage_code_sha256'] = 'previous-release-code'
     h._stage_write(path, terminal)
 
-    assert h.stage_receipt_issues(report, day, 'machine_attribution', code_hash='repaired-code') == []
+    assert h.stage_receipt_issues(report, day, 'legacy_machine_report', code_hash='repaired-code') == []
 
 
 def test_stage_stop_cleans_child_and_preserves_checkpoint(stage_environment, monkeypatch, tmp_path):
@@ -1561,7 +1218,7 @@ def test_stage_stop_cleans_child_and_preserves_checkpoint(stage_environment, mon
     monkeypatch.setattr(h, 'stage_commands', lambda *a, **kw: [command])
     stop=threading.Event(); timer=threading.Timer(1, stop.set); timer.start()
     try:
-        result=h.run_stage('machine_attribution', day, report_dir=report, project=tmp_path, stop_event=stop, timeout=10)
+        result=h.run_stage('legacy_machine_report', day, report_dir=report, project=tmp_path, stop_event=stop, timeout=10)
     finally:
         timer.cancel()
     assert result['status']=='failed' and checkpoint.read_text()=='saved'
@@ -1570,13 +1227,13 @@ def test_stage_stop_cleans_child_and_preserves_checkpoint(stage_environment, mon
 
 def test_summary_receipt_does_not_hash_itself(stage_environment):
     h, day, report, run, produce = stage_environment
-    run('machine_attribution')
+    run('legacy_machine_report')
     paths=h.source_paths(report, day, 'checklist')
-    assert h.stage_path(report, day, 'machine_attribution') in paths.values()
+    assert h.stage_path(report, day, 'legacy_machine_report') in paths.values()
     assert h.stage_path(report, day, 'summary_handoff') not in paths.values()
     assert h.stage_artifacts(report, day, 'summary_handoff')['postclose_done_controller'] not in paths.values()
-    assert 'stage_pre_submit_delay' not in paths
-    assert 'pre_submit_delay' not in h.stage_overview(report, day)['stages']
+    assert 'stage_legacy_machine_report' in paths
+    assert 'legacy_machine_report' in h.stage_overview(report, day)['stages']
 
 
 @pytest.mark.parametrize('status', ['pending', 'running', 'deferred'])
@@ -1590,7 +1247,6 @@ def test_scheduled_stage_check_reports_pending_as_deferred(stage_environment, mo
 
 @pytest.mark.parametrize('stage,recovery,expected', [
     ('main_auxiliary_policy', True, 123), ('main_auxiliary_policy', False, 123),
-    ('machine_timing', True, 0), ('machine_timing', False, 123),
 ])
 def test_compact_recovery_keeps_bounded_prerequisite_wait(monkeypatch, stage, recovery, expected):
     import signal
@@ -1622,66 +1278,12 @@ def test_compact_wait_does_not_hide_terminal_failed_peer(stage_environment, monk
 
 
 
-@pytest.mark.parametrize("independent", ['research_capacity'])
-def test_main_generation_wait_includes_independent_producers(monkeypatch, independent):
-    import time
-    from src.engine.automation import postclose_summary_handoff as h
-    finished = False
-    sleeps = []
-    def load(path):
-        # The summary consumer cannot block its own predecessor generation.
-        if path.stem == 'summary_handoff':
-            return {'status': 'running'}
-        return {'status': 'running' if path.stem == independent and not finished else 'succeeded'}
-    def sleep(seconds):
-        nonlocal finished
-        sleeps.append(seconds)
-        finished = True
-    monkeypatch.setattr(h, '_load_json', load)
-    monkeypatch.setattr(time, 'sleep', sleep)
-    monkeypatch.setattr(h, 'run_stage', lambda *a, **kw: pytest.fail('wait cannot launch a producer'))
-    assert h._stage_main(['--stage', 'wait', '--date', '2026-09-21']) == 0
-    assert sleeps == [1]
 
 
-def test_main_generation_wait_preserves_existing_timeout(monkeypatch):
-    import time
-    from src.engine.automation import postclose_summary_handoff as h
-    ticks = iter([0.0, 2.0])
-    monkeypatch.setattr(time, 'monotonic', lambda: next(ticks))
-    monkeypatch.setattr(time, 'sleep', lambda *a: pytest.fail('deadline already elapsed'))
-    monkeypatch.setattr(h, '_load_json', lambda p: {'status': 'running' if p.stem == 'research_capacity' else 'succeeded'})
-    assert h._stage_main(['--stage', 'wait', '--date', '2026-09-21', '--timeout-sec', '1']) == 75
 
 
-def test_continuous_machine_group_preserves_single_main_policy_writer():
-    from src.engine.automation import postclose_summary_handoff as h
-    assert 'main_machine_policy' in h.machine_group_children('2026-10-02')
-    assert 'main_machine_policy' not in h.machine_group_children('2026-10-06')
-    assert set(h.machine_group_children('2026-10-06'))=={'machine_timing','market_weakness','research_allocation','legacy_policy_approval'}
-    paths=h.stage_artifacts(Path('/tmp/data/report'),'2026-10-06','main_auxiliary_policy')
-    assert 'reversal_actual_responses' in paths and 'reversal_auxiliary' in paths
-    command=h.stage_commands('legacy_machine_report','2026-10-06','2026-10-06')[0]
-    assert '--report-only' in command and '--activate-now' not in command
 
 
-def test_continuous_machine_group_cli_uses_parsed_date_and_single_writer(monkeypatch):
-    import signal
-    from src.engine.automation import postclose_summary_handoff as h
-    seen = []
-    monkeypatch.setattr(signal, 'signal', lambda *a: None)
-    monkeypatch.setattr(h, '_joint_research_peer_off', lambda *a: True)
-    def run(stage, day, **kwargs):
-        assert day == '2026-10-06'
-        assert kwargs['off'] is (stage in {'research_capacity','research_allocation'})
-        seen.append(stage)
-        return dict(stage_id=stage, status='succeeded', exit_code=0)
-    monkeypatch.setattr(h, 'run_stage', run)
-    assert h._stage_main(['--stage', 'machine_group', '--date', '2026-10-06']) == 0
-    assert set(seen) == {'research_capacity', 'machine_attribution', 'machine_timing',
-                         'market_weakness', 'research_allocation', 'legacy_policy_approval',
-                         'summary_handoff'}
-    assert seen[-1] == 'summary_handoff'
 
 
 def test_one_stage_barrier_waits_without_waiting_for_later_consumers(monkeypatch,tmp_path):

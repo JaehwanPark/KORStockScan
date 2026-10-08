@@ -292,9 +292,7 @@ def test_resealed_postclose_accepts_actual_new_pid_without_rewriting_original_su
         assert all(Path(p).read_bytes() == value for p, value in before.items())
         assert not (data/'runtime/policy_bootstrap/future_handoff_transitions').exists()
         from src.engine.scalping import mechanistic_entry_runtime_policy as machine
-        from src.engine.automation import low_price_two_leg_auto_expansion_policy as episode
         monkeypatch.setattr(machine, 'load_effective', lambda **kw: {'valid': True})
-        monkeypatch.setattr(episode, 'load_policy', lambda *a, **kw: {'valid': True})
         assert postclose.stage_overview(data/'report', source_day)['next_session_policy_ready'] is True
     else:
         assert result['status'] == 'stale', result

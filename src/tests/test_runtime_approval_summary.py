@@ -249,117 +249,12 @@ def test_summary_distinguishes_missing_required_from_optional(monkeypatch, tmp_p
     assert all("entry_split_policy:missing" != item for item in report["blocking_reasons"])
 
 
-def test_wrapper_disabled_owner_is_not_required(monkeypatch, tmp_path):
-    data = _patch(monkeypatch, tmp_path)
-    target = "2026-09-19"
-    _seed_required(target)
-    mod._paths(target)["machine_entry"].unlink()
-    _write(
-        data / "report" / "threshold_cycle_postclose_status" / f"threshold_cycle_postclose_{target}.status.json",
-        {"target_date": target, "producer_flags": {"samsung_machine_entry_tuning": False}},
-    )
-
-    report = mod.build_runtime_approval_summary(target)
-
-    assert report["status"] == mod.DIRECT_EVIDENCE_COMPLETE
-    assert report["sources"]["machine_entry"]["required"] is False
-    assert report["sources"]["machine_entry"]["applicability"] == "not_applicable_disabled_by_wrapper"
-    assert report["owner_contract"]["fallback_used"] is True
 
 
-def test_samsung_machine_entry_retired_source_is_not_required_after_cutover(monkeypatch, tmp_path):
-    _patch(monkeypatch, tmp_path)
-    target = "2026-09-30"
-    _seed_required(target)
-    mod._paths(target)["machine_entry"].unlink()
-
-    report = mod.build_runtime_approval_summary(target)
-
-    source = report["sources"]["machine_entry"]
-    assert source["required"] is False
-    assert source["applicability"] == "retired_not_applicable"
-    assert source["status"] == "retired_not_applicable"
-    assert source["policy_owner"] is None
-    assert not any(reason.startswith("machine_entry:") for reason in report["blocking_reasons"])
 
 
-def test_large_report_uses_semantically_bound_candidate_companion(monkeypatch, tmp_path):
-    _patch(monkeypatch, tmp_path)
-    target = "2026-09-19"
-    _seed_required(target)
-    path = mod._paths(target)["low_price_two_leg"]
-    semantic_sha = "a" * 64
-    paired = {"profiles": {}}
-    content = (json.dumps(
-        {
-            "schema": "low_price_two_leg_tuning_report_v10",
-            "target_date": target,
-            "artifact_hash": semantic_sha,
-            "paired_economic_search": paired,
-            "padding": "x" * 1024,
-        },
-        indent=2,
-    ) + "\n").encode()
-    path.write_bytes(content)
-    candidate = mod._paths(target)["low_price_candidate"]
-    _write(
-        candidate,
-        {
-            "target_date": target,
-            "source_report_path": str(path),
-            "source_report_schema": "low_price_two_leg_tuning_report_v10",
-            "source_report_artifact_hash": semantic_sha,
-            "paired_economic_search": paired,
-            "decision": "incumbent_preserved",
-            "allowed_runtime_apply": False,
-        },
-    )
-    monkeypatch.setattr(mod, "MAX_DIRECT_JSON_BYTES", 512)
-
-    report = mod.build_runtime_approval_summary(target)
-    row = report["sources"]["low_price_two_leg"]
-
-    assert report["status"] == mod.DIRECT_EVIDENCE_COMPLETE
-    assert row["read_mode"] == "bounded_terminal_companion"
-    assert row["semantic_companion"]["verified"] is True
-    assert row["sha256"] == hashlib.sha256(content).hexdigest()
 
 
-def test_large_report_without_matching_companion_fails_closed(monkeypatch, tmp_path):
-    _patch(monkeypatch, tmp_path)
-    target = "2026-09-19"
-    _seed_required(target)
-    path = mod._paths(target)["low_price_two_leg"]
-    paired = {"profiles": {}}
-    path.write_text(
-        json.dumps(
-            {
-                "schema": "low_price_two_leg_tuning_report_v10",
-                "target_date": target,
-                "artifact_hash": "a" * 64,
-                "paired_economic_search": paired,
-                "padding": "x" * 1024,
-            },
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
-    _write(
-        mod._paths(target)["low_price_candidate"],
-        {
-            "target_date": target,
-            "source_report_path": str(path),
-            "source_report_schema": "low_price_two_leg_tuning_report_v10",
-            "source_report_artifact_hash": "b" * 64,
-            "paired_economic_search": paired,
-        },
-    )
-    monkeypatch.setattr(mod, "MAX_DIRECT_JSON_BYTES", 512)
-
-    report = mod.build_runtime_approval_summary(target)
-
-    assert report["status"] == mod.DIRECT_EVIDENCE_INCOMPLETE
-    assert "low_price_two_leg:semantic_unverified_large_source" in report["blocking_reasons"]
 
 
 def test_economic_states_keep_source_gap_no_edge_and_validated_edge_distinct(monkeypatch, tmp_path):
@@ -892,24 +787,6 @@ def test_rising_policy_receipt_rejects_multiple_runtime_axes(monkeypatch, tmp_pa
     assert source["economic_evidence"]["comparison_status"] == "source_gap"
 
 
-def test_large_expansion_uses_current_late_machine_dependency_proof(monkeypatch, tmp_path):
-    from src.engine.automation import machine_research_closed_loop_refresh as native
-    day = "2026-09-17"
-    path = tmp_path / "low_price_two_leg_expanded_candidate_research" / f"study_{day}.json"
-    _write(path, {"target_date": day, "enriched": True})
-    receipt_path = tmp_path / "machine_research_closed_loop" / f"machine_research_closed_loop_{day}.json"
-    receipt = dict(target_date=day, dependency_sources={str(path.resolve()): "semantic_hash"}, native_valid=True)
-    _write(receipt_path, receipt)
-    monkeypatch.setattr(native, "validate_current_receipt", lambda value, day: value.get("native_valid") is True)
-    payload, proof, error = mod._large_companion("low_price_expansion", path, day, mod._sha(path), {})
-    assert error is None and proof["verified"]
-    assert proof["contract"] == "machine_research_closed_loop_current_dependency"
-    receipt["native_valid"] = False
-    _write(receipt_path, receipt)
-    assert mod._large_companion("low_price_expansion", path, day, mod._sha(path), {})[2] == "semantic_unverified_large_source"
-    receipt.update(native_valid=True, dependency_sources={str(tmp_path / "other.json"): "unrelated"})
-    _write(receipt_path, receipt)
-    assert mod._large_companion("low_price_expansion", path, day, mod._sha(path), {})[2] == "semantic_unverified_large_source"
 
 
 def test_ws_freshness_reuse_contract_verifies_final_source_only_report(tmp_path):
@@ -1000,16 +877,6 @@ def test_pre_submit_price_analysis_invalid_diagnostic_does_not_claim_completion(
     assert source["error"] == "price_pattern_contract_invalid"
 
 
-def test_active_expansion_source_gap_is_not_retired_or_not_applicable(tmp_path):
-    path = tmp_path / "study.json"
-    _write(path, dict(target_date="2026-09-17", status="partial_source_quality",
-        source_symbol_count=204, eligible_source_symbol_count=197,
-        quarantined_source_symbol_count=7, recommendation_count=0,
-        joint_allocation_gate=dict(status="allocation_blocked", reason="allocator_snapshot_contract_invalid")))
-    row = mod._economic_projection("low_price_expansion", mod._expansion_economic_projection(path))
-    assert row["comparison_status"] == "source_gap"
-    assert row["closure_test"] and row["first_blocker"] == "allocator_snapshot_contract_invalid"
-    assert row["resolution_mode"] != "retired_or_not_applicable"
 
 
 def test_main_supported_economics_never_uses_terminal_proxy_as_currency_ev():

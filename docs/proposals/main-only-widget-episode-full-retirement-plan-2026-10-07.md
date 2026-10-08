@@ -2,7 +2,13 @@
 
 작성일: 2026-10-07 KST
 
-상태: **계획 재리뷰·보완 완료. 구현·주문·서비스 제어·배포·데이터 삭제 미실행.**
+최종 계획 리뷰: 2026-10-08 KST — 에피소드 체결분 수동관리 지시 반영.
+
+상태: **수동관리 전제의 완전 퇴역/삭제 계획 보완. 구 episode 서비스 강제 종료·영구 OFF는 10/8 실행 완료. 코드·데이터 완전 제거는 미실행.**
+
+2026-10-08 운영자 추가 지시: **에피소드로 체결된 주문은 사용자가 수동관리한다. 잔여 보유·미체결·intent의 0건 대사나 청산 완료를 위젯·에피소드 코드/서비스/전용 데이터 삭제의 선행 조건으로 두지 않는다.** 한화오션·SK이터닉스를 포함한 에피소드 자동 진입·청산·취소·보호 관리는 영구 종료한다. 수동관리 승인은 이번 사용자 지시로 충족하며 별도 보유 인수 확인을 다시 요구하지 않는다. 실제 flat·주문 terminal은 확인하지 않은 상태로 보존하고 Main의 보유로 치환하지 않는다. [강제 종료·영구 OFF 실행 기록](../audits/episode-permanent-off-lock-release-2026-10-08.md).
+
+현행 요청은 **구현·반복 리뷰/보완·배포/재기동·불필요 파일 삭제 실행**이다. 앞선 계획 리뷰 이후 승인된 실행이며 실제 결과는 §14와 구현 검토에 기록한다.
 
 사용자 후속 확인: **위젯은 삭제 완료. 서버에 남은 설치본까지 삭제하도록 계획을 보완한다.** 위젯 삭제를 다시 확인받거나 Windows 제거 영수증을 새 선행 조건으로 요구하지 않는다. 아래 과거 영수증의 `operator_removal_pending`은 이번 사용자 확인 이전 상태다.
 
@@ -14,23 +20,25 @@
 - Main의 기계·보조 AI, 연속 반전·다중 정책, 승인된 고정감시, 초기 매수수량, 보유·청산·AVG_DOWN, 주문·수량·계좌 안전장치는 유지한다. 에피소드 종목을 Main 고정감시에 자동 추가하거나 자본·슬롯을 늘리지 않는다.
 - 수동 보유·운영자 잠금·명시적 매매 금지는 보존한다. 여기서 Main 전용은 **자동 주문을 생성하는 운영 주체**의 범위다. 브로커 계좌에 존재하는 수동 자산을 Main 소유로 바꾸는 지시가 아니다.
 - `episode`라는 필드·파일 이름만으로 삭제하지 않는다. Main의 `position_episode_id`, AVG_DOWN 묶음, 반전 표본 구간, Main 삼성 연구의 episode는 독립 매매기계와 구분한다.
-- 계획 작성은 현재 가동 중인 소유자의 청산 책임을 해제하지 않는다. 최종 제거는 아래 수량·주문 대사와 코드 이관을 마친 뒤 수행한다.
+- 에피소드 잔여분의 매도 시점·수량·원가·취소·손익·계좌 flat 조사는 이 퇴역 구현의 업무가 아니다. 잔여 exit worker, 자동 보호 예외, broker terminal 대기 단계를 만들지 않는다. Main이 수동관리분을 자동 인수하지 않는 경계와 공통 데이터 보호만 검증한다.
 
-기준 문서: [Plan Rebase](../plan-korStockScanPerformanceOptimization.rebase.md) §1–§8, [오늘 체크리스트](../checklists/2026-10-07-stage2-todo-checklist.md), [Main 다중 정책 계획](main-multi-policy-parallel-entry-and-samsung-shallow-pullback-implementation-plan-2026-10-07.md). 현재 Main의 누적 raw 승률 선택·운영 AI quota None 승인과 hard safety를 유지하며 이 정리로 EV·최소 일수·표본·holdout 등의 새 채택 문턱을 추가하지 않는다.
+기준 문서: [Plan Rebase](../plan-korStockScanPerformanceOptimization.rebase.md) §1–§8, [오늘 체크리스트](../checklists/2026-10-08-stage2-todo-checklist.md), [Main 다중 정책 계획](main-multi-policy-parallel-entry-and-samsung-shallow-pullback-implementation-plan-2026-10-07.md). 현재 Main의 누적 raw 승률 선택·운영 AI 계약·장후 보조비교 원천일당 100회와 hard safety를 유지하며 이 정리로 EV·최소 일수·표본·holdout 등의 새 채택 문턱을 추가하지 않는다. 퇴역을 위한 새 AI 연구 호출은 필요하지 않다.
 
 이 계획의 “Main 정책 보존”은 전환 직전 승인된 기계·보조 AI·초기수량·보유/청산 정책 payload와 그 부모, 수동 금지의 보존이다. Main 소유권 계약 이관으로 새로 생기는 custody schema/hash와 release·summary·PREOPEN hash는 정확히 다시 결속한다. 삭제할 에피소드 정책 hash까지 보존 대상에 넣거나 새 custody 영수증의 hash 차이를 전략 변경으로 오인하지 않는다.
 
-## 2. 확인한 현재 상태와 조사 한계
+## 2. 현재 OFF 증거와 과거 삭제 후보 조사
+
+10/8 11:08:45 실행 검증은 episode 서비스 132개·timer 69개 **총 201개 영구 mask**, episode PID 0, Main PID 76094 지속 실행이다. 공유 lock inode는 유지되고 구 PID의 잠금은 해제됐다. `/etc/korstockscan/episode-permanent-off` 및 10개 기본 unit/template의 OFF drop-in이 있다. 이 값은 [해당 실행 기록](../audits/episode-permanent-off-lock-release-2026-10-08.md)의 시점 증거이며, 삭제 구현 R0에서 다시 확인한다. mask와 실행본 보존 디렉터리도 최종 정리 대상이며 OFF만으로 완전 삭제를 완료했다고 하지 않는다.
 
 [읽기 전용 조사 목록](../../tmp/main-only-widget-episode-retirement-plan-20261007/inventory.json)은 **2026-10-07 12:04:52 KST** 기준 파일 경로·해시, 설치 unit, loaded unit, 선택 릴리스·PID 영수증, 로컬 상태를 담는다. 경로 검색 결과는 삭제 명세가 아니며, 실제 import·호출·파일 소비·소유권을 별도로 대조한다.
 
-| 항목 | 현재 확인 | 제거 계획에 주는 의미 |
+| 항목 | 10/7 과거 조사 | 제거 계획에 주는 의미 |
 |---|---|---|
 | 관련 소스·설정·배포·테스트 후보 | 287파일 | 전용 삭제 / Main 공통 이관 / 보존을 파일별 확정해야 함 |
 | 관련 설치 unit 파일 | 151개: enabled 65, masked 71, disabled 6, static 9 | 서비스의 disabled만으로 예약 중단을 판단할 수 없음 |
 | enabled 구성 | low-price profile timer 62개, auto-expansion 1개, 21:15 refresh 1개, owner 자동적용 1개 | 31개 profile뿐 아니라 자동 확장·정책 적용 경로도 제거 |
 | 실행 중인 관련 unit | 한화오션 late-morning 서비스와 그 timer | 실행 worker는 서비스 1개이며 timer를 매매 worker로 중복 집계하지 않음 |
-| 로컬 상태 61파일 | 한화오션 `TARGET_OPEN`, `position_qty=10` 발견 | **계좌 미대사 후보**. 이미 flat이라고 판단하거나 청산 서비스를 먼저 삭제할 수 없음 |
+| 로컬 상태 61파일 | 한화오션 `TARGET_OPEN`, `position_qty=10` 발견 | 과거 로컬 관측이며 현재 잔량 확정치가 아님. 사용자 수동관리 범위로 분리하고 코드/전용 상태 삭제를 막지 않음 |
 | 위젯 퇴역 영수증/사용자 확인 | 과거 영수증은 서버 terminal, 잔량·active intent 0, Windows pending; **이후 사용자가 위젯 삭제 완료 확인** | Windows 재확인 대기는 종료. 서버 설치 잔존물과 Main 자연 실행 확인을 진행 |
 | Main 선택 릴리스 | `integrated-workspace-20261007-v1`, commit `940101c8`, 기록 PID `823272` | 작업트리와 별개. 실행 때 실제 PID/cwd/UID 및 최신 selector 재확인 |
 | 에피소드 service/preflight pin | `episode-eight-retired-main-five-20261006-511664f3` 계열 | Main 릴리스 교체만으로 구 에피소드가 사라지지 않음 |
@@ -38,9 +46,9 @@
 
 최근 native 튜닝 보고서의 잔존 집합은 31 profile, 10종목(`006800`, `010140`, `011170`, `015760`, `028050`, `028670`, `042660`, `108320`, `137310`, `475150`)이다. 이미 퇴역한 profile과 재명명·자동 확장 profile까지 전체 owner 계열을 대상으로 하며 이 31개만 하드코딩하지 않는다.
 
-추가 발견: ubuntu crontab에 **08:59 IPO 자동실행**이 있고, [래퍼](../../deploy/run_ipo_listing_day_autorun.sh)는 dry-select 이후 [독립 runner](../../src/engine/ipo_listing_day_runner.py)의 실제 `send_buy_order` 경로를 호출한다. 오늘 실제 주문 여부는 확인하지 않았다. **Main 전용 종료 기준에는 이 독립 자동주문 경로도 포함**한다. 이름이 widget/episode가 아니어서 조사에서 빠지는 것을 방지한다. Swing OFF·오프라인 재생은 복원하지 않으며, 연구 함수와 실행 가능한 자동주문 진입점을 구분한다.
+추가 발견: ubuntu crontab에 **08:59 IPO 자동실행**이 있고, `래퍼` (삭제된 전용 경로)는 dry-select 이후 `독립 runner` (삭제된 전용 경로)의 실제 `send_buy_order` 경로를 호출한다. 오늘 실제 주문 여부는 확인하지 않았다. **Main 전용 종료 기준에는 이 독립 자동주문 경로도 포함**한다. 이름이 widget/episode가 아니어서 조사에서 빠지는 것을 방지한다. Swing OFF·오프라인 재생은 복원하지 않으며, 연구 함수와 실행 가능한 자동주문 진입점을 구분한다.
 
-추가 서버 조사에서 `korstockscan-machine-fill-telegram.service`도 active로 확인했다. [알림 consumer](../../src/notify/machine_trade_telegram.py)는 `OWNERS={"episode"}`만 처리하므로 잔여 청산 알림 종료 후 제거 대상이다. 위 151개는 최초 이름 기반 조사 집합이며 이 별도 서비스까지 포함한 최종 설치 총수가 아니다.
+10/7 추가 서버 조사에서 `korstockscan-machine-fill-telegram.service`도 active로 확인했다. `알림 consumer` (삭제된 전용 경로)는 `OWNERS={"episode"}`만 처리하므로 전용 서비스·ledger reader·알림 상태를 함께 제거한다. 수동관리분의 청산/알림 종료를 기다리지 않는다. 위 151개와 10/8 마스킹 201개는 조사 범위가 다르며 전용 알림·장후 writer까지 포함한 최종 삭제 수량이 아니다.
 
 이번 조사는 로컬 코드·설정·systemd/cron·영수증 조회다. 브로커 API는 호출하지 않았다. 위젯 삭제는 사용자 완료 통보를 근거로 반영한다. 조사 이후 다른 세션의 Main·raw 정리 작업이 진행 중이므로 실행 직전 새 manifest를 고정한다.
 
@@ -49,7 +57,7 @@
 | 영역 | 대상과 조치 | 남아야 하는 기능 |
 |---|---|---|
 | 에피소드 실행 | `src/trading/low_price_two_leg/`, `samsung_morning_one_share/`, `samsung_midday_one_share/`, `samsung_afternoon_one_share/`의 service/preflight/gateway/machine/reentry/manual-addon/auto-expansion 삭제 | Main native 진입·보유·청산, 기존 승인 고정감시 |
-| 전용 주문·청산 | `regular_two_leg_machine`, `episode_quantity`, `kiwoom_episode_read_control`, `manual_episode_exit_reconciliation`, `order/adaptive_exit/`의 전용 부분을 잔여 종료 후 삭제 | 공용 broker transport·주문/체결/비용/취소·owner registry; Main native trailing·AVG_DOWN |
+| 전용 주문·청산 | `regular_two_leg_machine`, `episode_quantity`, `kiwoom_episode_read_control`, `manual_episode_exit_reconciliation`, `order/adaptive_exit/`의 전용 부분 삭제. 잔여 자동청산 예외 없음 | 공용 broker transport·Main 주문/체결/비용/취소·owner registry와 수동관리 격리; Main native trailing·AVG_DOWN |
 | 전용 정책·적용 | low-price apply/auto-expansion, Samsung one-share 정책, machine adaptive-exit activation/apply/catalog, 에피소드 timing/weakness 정책 소비 제거 | Main 기계·보조·초기수량·청산 정책 및 현재 적용 hash |
 | 소유권 공존 자동화 | `symbol_owner_policy*`, standing authority, 07:32 자동적용의 에피소드 공존 정책 제거 | Main+수동 소유권 대사·명시적 manual veto; §4.2 이관 선행 |
 | 위젯 잔존물 | 서버/UI/API/수동·자동 주문 버튼, collector/research/alert, installer·설정·패키지·구 릴리스/복사본의 서버 설치 잔존물 제거 | Main 웹 대시보드/Gunicorn 및 공통 API. 사용자 완료 위젯 삭제는 재요구하지 않음 |
@@ -59,7 +67,7 @@
 | WS·원천 | Main의 episode 전용 writer/thread/status와 전용 seed/manifest 생성 제거 | Main exact-route WS, 호가·체결·완성봉·공통 cache/REST 읽기 제한 |
 | 감시·표시 | `episode_health`, `notify.machine_trade_telegram`·전용 서비스/상태, 퇴역 family freshness/알림/추천/자동수리/대시보드 카드 제거 | Main source/submit/holding/exit 감시·Main 체결 알림과 공통 계좌 안전 |
 | 실행 인프라 | 서비스·timer·template·instance·drop-in·cron·설치/복구 스크립트·release pin·재시작 allowlist 삭제 | Main 시작·PREOPEN·장후·로그 정리 및 공통 운영 |
-| 독립 IPO | runner/실행 cron·installer·전용 설정/상태 소비를 소유권 확인 후 제거 | 재사용되는 Main transport·scanner 등 공통 기능 |
+| 독립 IPO | 기존 Main-only 범위의 독립 자동주문 runner/cron·installer 제거. 과거 보유 대사를 선행시키지 않고 Main 공통 caller만 확인 | 재사용되는 Main transport·scanner 등 공통 기능 |
 | 테스트·문서 | 전용 동작을 계속 요구하는 테스트·현행 운영 항목 삭제/수정 | 재활성화 방지·Main 회귀·소유권 검증, 최소 과거 종료 증거 |
 
 삭제 후보의 이름만으로 `risk/market_weakness_*`, `research_*`, `machine_*`, `order/adaptive_exit/` 전체를 즉시 제거하지 않는다. Main 실제 consumer가 남으면 해당 기능을 먼저 이관하고 전용 구현을 제거한다. 테스트만 남은 전용 구현을 보존 이유로 삼지 않는다.
@@ -79,7 +87,7 @@
 [run_bot.sh](../../src/run_bot.sh)는 `data/runtime/symbol_owner_policy/owner_custody.env`를 읽으며, [manual_control_exclusion.py](../../src/engine/risk/manual_control_exclusion.py)는 `resolve_symbol_owner_policy`를 호출한다. 07:32 자동적용과 그 출력을 먼저 지우면 Main이 결손으로 차단되거나 수동 금지를 잃을 수 있다.
 
 1. Main·수동용 custody/잠금 판단을 남길 공통 owner를 정하고 현행 consumer를 그쪽으로 이관한다. canonical Main owner 이름·계좌·주문 식별자 계약을 실제 호출자와 일치시킨다.
-2. 명시적 운영자 veto와 에피소드 격리 때문에 추가된 `machine_owner_scope` 값을 출처별 구분한다. 자동 생성 제한만 종료 근거에 따라 제거하며 같은 종목의 수동 제한을 함께 지우지 않는다.
+2. 명시적 운영자 veto와 에피소드 격리 때문에 추가된 `machine_owner_scope` 값을 출처별 구분한다. 오래된 공존 활성화 요구만 제거하고, 수동관리분 자동 인수 방지는 Main 공통 경계에 보존한다. 과거 에피소드 진입 이력만으로 동일 종목의 새 native Main 전략을 일괄 금지하거나 이미 있는 수동 제한을 지우지 않는다.
 3. Main 시작이 퇴역 정책/env를 요구하지 않는 것을 확인한 뒤 공존 정책 생성기·loader·07:32 timer를 삭제한다. 유효한 원천 결손을 임의 허용으로 바꾸지 않는다.
 4. [공통 owner registry](../../src/trading/order/owner_custody_registry.py)와 append-only ledger는 유지한다. 과거 owner 문자열을 Main으로 일괄 치환하지 않는다.
 
@@ -88,17 +96,19 @@
 | Main 소비자 | 현행 의존·실패 가능성 | 이관·검증 계약 |
 |---|---|---|
 | [kiwoom_orders.py](../../src/engine/kiwoom_orders.py)의 `_reserve_owner_registry_intent` | 매수·매도·취소 예약에서 정책을 직접 조회. 등록된 종목은 정책만 지우면 `registered_coexistence_symbol_requires_exact_date_policy` | `main_scalping`·`manual_operator`의 native 소유권 계약으로 대체. 정상 Main 주문과 기존 pending 주문의 취소/매도 허용을 각각 확인 |
-| [sniper_execution_receipts.py](../../src/engine/sniper_execution_receipts.py) | 정책 조회 실패 시 체결 callback이 return. 등록된 종목은 원 order owner·activation에 결속 | 기존 주문 ID의 체결·부분체결·금액 정정·지연 callback이 동일 owner/position에 반영. 삭제한 정책을 이유로 실제 체결을 버리지 않음 |
+| [sniper_execution_receipts.py](../../src/engine/sniper_execution_receipts.py) | 정책 조회 실패 시 체결 callback이 return. 등록된 종목은 원 order owner·activation에 결속 | Main callback은 정상 처리. 도착한 옛 episode/widget callback은 공통 원장에 원 owner/order로 수동관리 이력만 기록하고 즉시 반환. 전용 module/현재 episode activation·SELL/CANCEL·재진입을 호출하지 않음 |
 | [sniper_sync.py](../../src/engine/sniper_sync.py), [sniper_s15_fast_track.py](../../src/engine/sniper_s15_fast_track.py) | 계좌 집계 수량과 Main 소유 수량의 대사·회복에서 정책 조회 | 동일 종목 수동 자산을 Main 수량/평단으로 덮어쓰지 않음. registry 관리 종목을 일반 계좌 합산 경로로 되돌리지 않음 |
-| `owner_custody_registry` | 삭제 후보 모듈에서 `ACTIVATION_SCHEMA`·`normalize_symbol`을 import | 필요한 schema/정규화·과거 event reader를 공통 소유권 위치로 이관. 기존 ledger bytes/hash chain 유지 |
+| `owner_custody_registry` | 삭제 후보 모듈에서 `ACTIVATION_SCHEMA`·`normalize_symbol`을 import. 현행 activation은 `owner_registry_retirement_not_flat`을 요구하고 aggregate는 옛 owner 수량까지 합산 | schema/정규화·과거 reader를 공통 위치로 이관. 수동관리 지정 뒤 live Main 수량/예약 계산에서 옛 owner를 분리하며 기존 ledger bytes/hash chain 유지. 옛 flat 전용 migration 함수를 그대로 사용하지 않음 |
 | [avg_down_replay_capture.py](../../src/engine/scalping/avg_down_replay_capture.py) | 날짜별 공존 정책 파일을 정책 snapshot에 포함 | 신규 snapshot은 Main 소유권 계약을 정확히 고정. 과거 snapshot은 옛 schema/hash를 읽기 전용 해석하며 새 상태로 다시 라벨링하지 않음 |
 | [entry_cancel_wait_tuning.py](../../src/engine/automation/entry_cancel_wait_tuning.py), [sniper_trade_review_report.py](../../src/engine/sniper_trade_review_report.py) | `single_owner_unregistered`의 부모 증거를 옛 정책 reason/hash로 검증 | 구·신 source 계약별 검증기를 구분. 이관 이후 정상 Main 표본이 일괄 source_gap/제외되지 않는지 검증 |
 
 후속 구현의 Main 소유권 계약은 계좌·종목·native Main/수동 owner·registry generation/활성화 근거·유효 시작 시각을 명시한다. 옛 공존 정책의 매일 발행을 제거하더라도 **현재 Main 수량/미체결 소유권 검증은 생략하지 않는다.** 기존 `registry_managed`와 `single_owner_unregistered`를 그대로 구분하고, 등록 이력만 지워서 단일 소유자로 꾸미지 않는다. 과거 event parser와 신규 주문 허가를 분리해 역사적 episode event 해석은 유지하되 새 episode 주문은 열지 않는다.
 
+수동 매도 뒤 옛 episode BUY 이력이 남는 경우를 반드시 검증한다. 현재 `_reconcile_symbol_quantity_from_state`는 모든 owner의 역사적 잔량을 합산하므로 그대로 두면 `owner_registry_broker_quantity_deficit`가 생긴다. **수동관리 지정과 live Main 소유 수량의 투영을 분리**하여 옛 잔량·응답 불명 intent가 Main의 슬롯·매도 가능 수량·기동을 계속 잠그지 않도록 한다. Main 자체의 실제 미체결/수량 결손은 계속 보호한다. 계좌 합계가 바뀌었다고 Main 수량·평단을 보충하거나 원래 episode 수량을 0/청산 완료로 조작하지 않는다. 퇴역 자료 재조회·전용 상태 재생성·매일 전체 원장 복제 없이 기존 공통 registry/수동관리 계약을 확장하고, hot path의 전체 원장 재해시·장시간 공유 lock을 다시 도입하지 않는다.
+
 ### 4.3 공통 hash·비용·시장 방어
 
-`compact_auxiliary_paired_replay`와 `strategy_owner_replay`는 [research_closed_loop.py](../../src/engine/monitoring/research_closed_loop.py)의 `digest`를 import한다. Main에 필요한 순수 함수를 기존 공용 역할 package로 옮긴 후 전용 closed-loop를 제거한다. JSON 정규화·hash bytes·부모/정책 식별자는 동일하게 유지하며 모듈 이동 때문에 현재 정책을 새로 생성하지 않는다.
+`compact_auxiliary_paired_replay`와 `strategy_owner_replay`는 `research_closed_loop.py` (삭제된 전용 경로)의 `digest`를 import한다. Main에 필요한 순수 함수를 기존 공용 역할 package로 옮긴 후 전용 closed-loop를 제거한다. JSON 정규화·hash bytes·부모/정책 식별자는 동일하게 유지하며 모듈 이동 때문에 현재 정책을 새로 생성하지 않는다.
 
 `comparison_cost`, tick 계산, WS/cache, broker/order/custody, shared-read 예산은 Main 호출자를 보존한다. `market_weakness_threshold_policy`를 참조하는 panic breadth/알림 등도 먼저 Main 요구를 분리한다. 새 모듈은 기존 `src/utils`, `src/trading/market`, `src/engine/risk` 등 실제 역할에 배치하고 `src/engine` root에 새 구현을 추가하지 않는다.
 
@@ -108,7 +118,7 @@
 
 - [samsung_policy_episode_research.py](../../src/engine/scalping/samsung_policy_episode_research.py)는 Main 삼성 pattern/runtime/trailing 연구 소비자와 연결된다. Main 기능을 보존하고 필요하면 Main 역할이 드러나는 이름으로 이관한다.
 - `scalping/risky_micro_episode`와 Main의 관련 observer는 source-only 반사실적 관측이다. 독립 매매기계로 오인하지 않는다. 현재 Main consumer가 요구하는 부분을 유지하며 새 주문 권한을 부여하지 않는다.
-- [21:15 wrapper](../../deploy/run_machine_microstructure_final_refresh.sh)는 에피소드 단계 외에 [samsung_frozen_postclose_validation](../../src/engine/automation/samsung_frozen_postclose_validation.py)을 호출한다. 필요한 Main 삼성 source-only 검증을 **기존 Main 장후의 선택적 진단 실행부로 이관한 뒤** wrapper/timer를 삭제한다. exact source date·입력 hash·단일 writer를 보존한다. 현재 `report_only`, `policy_publication=false`이며 실패도 추가 기동 요건이 아니다. 이관 후에도 결손/대기/실패를 기록하되 Main 정책 발행·strict/controller 완료·PREOPEN/기동을 막는 필수 predecessor로 승격하지 않는다.
+- `21:15 wrapper` (삭제된 전용 경로)는 에피소드 단계 외에 [samsung_frozen_postclose_validation](../../src/engine/automation/samsung_frozen_postclose_validation.py)을 호출한다. 필요한 Main 삼성 source-only 검증을 **기존 Main 장후의 선택적 진단 실행부로 이관한 뒤** wrapper/timer를 삭제한다. exact source date·입력 hash·단일 writer를 보존한다. 현재 `report_only`, `policy_publication=false`이며 실패도 추가 기동 요건이 아니다. 이관 후에도 결손/대기/실패를 기록하되 Main 정책 발행·strict/controller 완료·PREOPEN/기동을 막는 필수 predecessor로 승격하지 않는다.
 
 ## 5. 장후·정책 적용·최종화에서 삭제할 계약
 
@@ -134,46 +144,44 @@
 5. Main active family·source·terminal만으로 summary → strict → controller/finalization → 다음 영업일 PREOPEN 준비를 새로 봉인한다. Main 정책 payload를 보존하더라도 source/checklist/release가 바뀐 이전 prepared 영수증은 재사용하지 않는다.
 6. 장후 writer가 실행 중이면 해당 generation을 끝내거나 정식 중단 영수증을 남긴 뒤 교체한다. 구·신 writer가 공유 출력에 동시에 기록하지 않는다. source date와 다음 실제 영업일을 명시하며 과거 전체 기간을 다시 계산하지 않는다.
 
-## 6. 보유·미체결 처리와 단계별 제거 순서
+## 6. 수동관리 경계와 단계별 제거 순서
 
-### 6.1 제거 전 소유권 종료 조건
+### 6.1 잔여 보유와 무관하게 삭제하기 위한 Main 경계
 
-대상 owner별 **보유 수량 0 + 소유 미체결/부분체결 잔량 0 + 미해결 intent/취소·정정/체결 callback 0 + broker/registry 일치**를 요구한다. 실제 체결 비용·종료 증거가 결손이면 null/결손으로 보존하며 0 손익으로 채우지 않는다.
+**기존 에피소드 체결분은 사용자 수동관리다. 보유·미체결·응답 불명 intent가 남아 있어도 삭제를 진행할 수 있으며, 계좌 조회·flat·체결 비용·소유권 terminal 확인을 삭제 요건으로 추가하지 않는다.** `owner_retirement_transition.py` (삭제된 전용 경로)의 `require_flat` 및 기존 registry의 `owner_registry_retirement_not_flat` 경로를 이 전환의 gate로 재사용하지 않는다. 잔여 exit 전환 릴리스나 임시 청산 worker는 만들지 않는다.
 
-계좌 전체 또는 같은 종목 전체의 flat을 요구하지 않는다. 현재 [owner_retirement_transition.py](../../src/engine/automation/owner_retirement_transition.py)의 symbol-wide `require_flat`을 그대로 재사용하면 Main/수동 보유까지 잘못 제한할 수 있다. 계좌·종목·venue·order ID별 소유자 수량을 대조하고 **퇴역 owner 몫만 종료**한다. 귀속 불명 수량이 있으면 해당 owner의 terminal 판정이 미완료다.
+구현 시 필요한 것은 다음 세 가지다.
 
-한화오션 로컬 10주는 첫 대사 대상이다. 실제 잔량이 남으면 신규 BUY/재진입/자동 확장만 차단하고 기존 소유자의 cancel/SELL·보호·체결 처리는 유한한 잔여 목록에 한해 유지한다. 현재 소유자의 정상 종료 후 삭제하며, 계획 수립 자체로 강제 매도·주문 취소·Main 이관을 실행하지 않는다. 소유권 이관을 택할 경우에는 수량·미체결·원가·보호 상태의 native 인수 영수증과 이전 owner 종료를 검증해야 하며 label만 바꿔 종료시키지 않는다.
+1. 이번 수동관리 지시·효력 시각·퇴역 owner 계열을 기존 공통 소유권 계약에 한 번 기록한다. 이는 **관리 책임의 지정**이지 수량/원가/주문 상태 변경이 아니다. 기존 이력을 `manual_operator`/`main_scalping`으로 일괄 재기록하거나 0수량/가짜 SELL/terminal을 추가하지 않는다. 미해결 상태는 과거 사실로 남고 추가 보유 승인·주문 대사는 필요하지 않다.
+2. Main의 자동 HOLDING 복구·수량/평단·매도 가능 수량·슬롯·진입 예약·취소 대상에서 수동관리분과 그 주문을 분리한다. Main+수동 동일 종목에서 Main의 독립 수량/원가/주문만 관리하며, 수동 매도 후에도 옛 episode 잔량 때문에 공용 Main 경로가 고장 나지 않아야 한다. 자동 인수/강제 매도/취소·재시도·에피소드 보호 예외를 만들지 않는다.
+3. 이미 공통 WS로 들어온 옛 체결·부분체결·지연 callback은 기존 order ID/역사적 owner로 수동관리 이력만 보존한다. 계보가 없으면 외부/미확인 기록으로 남기고 Main 포지션·주문 의도를 만들지 않는다. 이를 위해 옛 정책을 매일 발행하거나 에피소드 전용 수집·복구 API·writer를 계속 실행하지 않는다. 과거 callback이 실제 도착할 때까지 삭제를 기다리지 않으며 저장 fixture로 분리 동작을 검증한다.
 
-평가·AI 요청·제출 예약·브로커 응답을 기다리는 작업도 전환 경계에 포함한다. 신규 진입 fence를 실제 consumer에 적용한 뒤 in-flight BUY를 주문 ID/intent별로 확인한다. **보유 0·미체결 조회 0만으로 응답 불명 BUY를 종료 처리하지 않는다.** 취소 요청 성공은 취소 완료가 아니며 부분체결·뒤늦은 체결을 최종 대사에 반영한다. terminal ledger의 마지막 sequence/hash, broker snapshot 시각·모든 해당 venue의 주문/잔량, 처리한 callback 경계와 PID를 함께 기록한다. 처리 결과가 불명확한 intent는 `source_gap`으로 남기고 해당 소유자 삭제를 보류한다.
+[owner_retirement.py](../../src/trading/config/owner_retirement.py)는 현재 일부 종목의 신규 진입만 막는다. 후속 구현에서 **위젯·에피소드 owner 계열 전체의 주문 생성/정정/취소를 영구 차단**하도록 공용 호출 경계와 맞춘다. 종목·profile rename·새 자동 확장·구 env·기존 position ID로 BUY뿐 아니라 SELL/CANCEL도 되살릴 수 없어야 한다. 수동관리자는 브로커에서 직접 관리하며 이 삭제 작업이 수동 주문을 대신 실행하지 않는다. 공통 수신·회계 기록의 허용과 퇴역 owner의 주문 실행 권한을 분리한다.
 
-신규 진입 차단은 [owner_retirement.py](../../src/trading/config/owner_retirement.py)의 특정 종목 퇴역 목록을 **위젯·에피소드 owner 계열 전체의 영구 차단**으로 확장한다. profile 이름 변경·새 종목·자동 확장·구 env가 이를 우회할 수 없어야 한다. 공용 주문 경계에서 **신규 노출을 만드는 BUY와 기존 주문 cancel/SELL·체결 귀속을 분리**한다. 남은 exit 처리는 정확한 기존 owner/order/position/잔량으로 제한하고, BUY 정정으로 노출을 늘리거나 신규 intent로 우회하지 못하게 한다.
-
-신규 자동 BUY는 검증된 Main 진입점과 native `main_scalping` context를 결속한다. 문자열만 Main으로 덧씌우는 변환은 금지한다. 현재 IPO는 owner context 없이 공용 주문 함수를 호출하므로 `context=None`을 Main으로 간주하는 우회까지 점검한다. 정상 Main 호출자가 context 없는 경로를 사용한다면 실제 Main native ID를 producer에서 결속한 후 guard를 적용한다. 관측 전용 Main 기능·실제 Main 단일 소유자/registry 경로를 같은 fixture로 대조한다. 최종 IPO runner/cron 삭제와 공용 주문 경계 테스트를 모두 통과해야 Main-only로 판정한다.
+정상 Main 주문은 검증된 Main 진입점과 native `main_scalping` context에 결속한다. 문자열만 Main으로 덧씌우거나 `context=None`을 Main으로 간주해 퇴역 호출자가 우회하지 못하도록 실제 producer를 확인한다. 기존 Main 단일 소유자·등록 소유자 경로와 IPO 등 독립 자동주문 경로를 대조하되 Main 보호조건을 풀어 통과시키지 않는다.
 
 ### 6.2 실행 단계
 
 | 단계 | 수행 작업 | 통과 증거/다음 단계 |
 |---|---|---|
-| R0 대상 확정 | 최신 작업트리·selector·PID·unit/drop-in/cron·프로세스·열린 파일·소유권·출력 참조 재조사. 경로별 제거/이관/보존 manifest와 hash 고정 | 미분류 소비자 0. 삭제 bytes는 이때 계산. 다른 배포·writer·파일 변경 감지 시 해당 명세 재고정 |
-| R1 Main 의존성 이관 | §4의 주문/체결/동기화/후행 consumer·공통 hash/비용/custody/시장방어와 Main 선택 진단 이관. Main 정책·잠금 before hash 고정 | 동일 입력의 Main 판정/수량/보호/정책 선택 동일. 신규 단일소유/등록소유와 과거 snapshot 검증 |
-| R2 신규 진입 종료 | 신규 예약 timer/확장 경로 중단과 진입 fence를 검증된 전환 릴리스의 실제 PID에 적용. in-flight BUY·broker/소유권 대사, 잔여 exit owner와 다음 점검 조건 고정 | 새 퇴역 BUY 0. 잔여 목록이면 `residual_custody_pending`; exit에 필요한 기존 공통 코드/구독/상태만 한시 유지 |
-| R3 코드·예약 제거 | terminal owner의 전용 패키지·UI·설치/복구·timer/서비스·drop-in·cron·pin 및 장후 계약 제거. Main-only 릴리스 작성·리뷰 | production import/호출/신규 write 경로 0. §8 회귀 통과 |
-| R4 배포·다음 기동 연결 | **전체 G1 충족 후** Main-only 최종 릴리스로 전환. ubuntu Main PID/웹·구독·정책 소비 확인. 새 Main 장후/최종화/PREOPEN 연결 검증 | code/release/prepared/실제 PID 영수증 각각 확인. 구 exit worker/연구 writer/PID 0 |
-| R5 파일 영구 정리 | 참조·FD·소유권 종료 확인 후 전용 raw/cache/policy/상태·불필요한 보고/로그/백업/구 릴리스 삭제 | 실제 제거 명세·보존 hash·회수 용량, 삭제한 경로의 재생성 0 |
+| R0 대상 확정 | 최신 작업트리·selector·PID·unit/drop-in/cron·프로세스·FD·출력 참조 재조사. 201개 OFF unit과 추가 전용 알림/장후 writer, `/etc/korstockscan` 보존 사본을 manifest에 포함 | 기존 OFF 유지. 경로별 제거/이관/보존 및 삭제 bytes 고정. 잔여 계좌 대사 불필요 |
+| R1 Main 의존성 이관 | §4의 주문/수신/동기화/후행·공통 hash/custody/시장방어 이관과 §6.1 수동관리 경계 구현. Main 정책·잠금 before hash 고정 | 동일 Main 입력/정책·보호 유지. 수동관리 수량 자동 인수 0. 잔여가 있는 fixture에서 삭제/기동 가능 |
+| R2 영구 OFF 완결 | 이미 종료한 서비스는 재기동하지 않음. 계열 전체 주문 거절, 남은 전용 알림/수집/장후 writer 종료와 재예약 차단을 준비 | 퇴역 주문·API·전용 writer 0. 기존 보유/미체결 때문에 보류하거나 자동 청산하지 않음 |
+| R3 코드·예약 제거 | 전용 패키지·UI·설치/복구·unit/drop-in·cron·pin 및 장후 계약을 producer/consumer와 함께 제거. Main-only 릴리스 작성·리뷰 | production 참조/재생성 경로 0, §8 회귀 통과. 잔여 exit 호환 실행부 없음 |
+| R4 배포·다음 기동 연결 | 코드 리뷰 및 **수동관리 경계 G1** 검증 후 승인된 Main-only 릴리스로 전환. Main PID/웹·구독·정책과 Main 장후/최종화/PREOPEN 연결 검증 | code/release/prepared/PID 각각 확인. 수동 보유 매도 완료나 broker terminal 대기 없음 |
+| R5 파일 영구 정리 | 실행 참조·FD·Main 이관 확인 후 전용 raw/cache/policy/상태·불필요 보고/로그/백업/구 릴리스 삭제 | 실제 제거 명세·보존 hash·회수 용량, 삭제한 경로의 재생성 0. 수동관리 보유 존재와 독립 |
 | R6 자연·서버 제거 종료 | 다음 자연 Main 장후와 영업일 기동, 서버 설치본·구 릴리스·복사본 최종 재검사 | §9 모든 gate 충족 시 완료. 사용자 완료 위젯 삭제는 재확인 gate에서 제외 |
 
-R1~R3는 리뷰 가능한 코드 변경으로 준비하되, 실제 서비스 제어는 검증된 순서로 수행한다. 잔여 owner 하나 때문에 무관한 전용 연구·화면 정리를 멈출 필요는 없지만, 잔여 청산 코드까지 지우고 완료로 표시하지 않는다. 배포 후 문제가 나면 **퇴역 차단을 포함한 Main 호환 복구 릴리스**로 회복하며 옛 위젯·에피소드 실행 기능을 통째로 복구하지 않는다.
+R1~R3의 코드/자동화 검증을 마친 Main-only 변경을 통합 배포한다. 에피소드 청산을 위한 중간 릴리스는 불필요하다. selector만 바꾸어 하드코딩된 옛 unit/구 installer를 남기지 않으며, 장애 시에도 **퇴역 차단과 수동관리 경계를 포함한 Main 복구본**만 허용한다. 이전 episode PID·exit worker·전용 writer를 복원하지 않는다.
 
-**전환 릴리스와 최종 제거 릴리스를 구분한다.** R2에서 필요한 전환 릴리스는 신규 진입을 금지하면서 잔여 청산을 보존한다. selector만 바꾸면 이미 떠 있는 구 PID·하드코딩된 episode unit에는 적용되지 않는다. 각 실제 consumer의 fence 적용 영수증을 확인한다. R3에서 제거 변경을 준비하더라도 R4 전체 제거 배포는 G1 이후다. 전환 중 잔여 exit worker가 사용하는 import·WS 공급·상태/잠금·알림은 그 consumer 종료 전까지 삭제하지 않는다. 전환 릴리스는 최종 G1 이후 제거 명세에 다시 포함한다.
-
-배포 시작 시 Main code/policy generation·selector·checklist·수동 잠금의 비교 기준을 고정하고, 동시 Main 배포 또는 raw 삭제로 값이 바뀌면 덮어쓰지 않고 변경된 대상부터 재검증한다. 배포/삭제는 같은 실행 소유자의 배타 lock과 compare-and-swap 조건으로 진행한다. 실패 시 신규 퇴역 진입 fence는 유지하고 Main 호환 복구본 또는 잔여 exit 전환본으로 복구한다. 데이터는 consumer 참조를 모두 끊은 뒤 삭제하므로 복구본도 삭제 예정 전용 raw를 요구하지 않아야 한다.
+배포 시작 시 Main code/policy generation·selector·checklist·수동 잠금의 비교 기준을 고정하고, 동시 Main 배포 또는 raw 삭제로 값이 바뀌면 덮어쓰지 않고 변경된 대상부터 재검증한다. 배포/삭제는 같은 실행 소유자의 배타 lock과 compare-and-swap 조건으로 진행한다. 실패해도 영구 OFF는 유지하며 복구본이 삭제 예정 전용 raw/정책을 요구하지 않아야 한다. 이 배포 잠금은 Main 공유 주문 원장의 장시간 잠금을 뜻하지 않는다.
 
 ## 7. 설치·프로세스·파일을 깨끗하게 정리하는 방법
 
 ### 7.1 실행 가능한 잔존 경로
 
-- systemd template/instance와 user/system unit, wants 링크, override/drop-in의 실제 `ExecStart`·`EnvironmentFile`·재시작 설정을 조사한다. lexical 순서가 뒤인 과거 pin도 포함한다. **신규 기동 timer/확장 예약 차단 → 잔여 service의 fence·exit 보호 유지 → owner terminal 확인 → service 종료 → unit/drop-in/installer 삭제 → daemon reload** 순서다. timer 차단과 보유 관리 service 중단을 한 번에 묶지 않는다.
-- masked 71개도 영구 방치하지 않는다. 구 installer·payload·복구 경로가 사라지고 owner-wide 차단이 적용된 뒤 불필요한 mask까지 정리한다. **최소 재활성화 방지 규칙과 terminal 증거만 허용**하며 실행 코드나 일일 퇴역 보고서는 남기지 않는다.
+- systemd template/instance와 user/system unit, wants 링크, override/drop-in의 실제 `ExecStart`·`EnvironmentFile`·재시작 설정을 조사한다. lexical 순서가 뒤인 과거 pin도 포함한다. **영구 OFF 유지 → 남은 전용 timer/알림/수집 writer 중단 → Main 소비 분리 → unit/drop-in/installer 삭제 → daemon reload** 순서다. 이미 종료한 매매 서비스를 대사·청산을 위해 다시 기동하지 않는다.
+- 10/8의 episode mask 201개와 기존 widget mask도 영구 방치하지 않는다. 구 installer·payload·복구 경로가 사라지고 owner-wide 주문 차단이 적용된 뒤 불필요한 instance mask·drop-in을 제거한다. 마지막 재활성화 차단까지 먼저 지우지 않는다. 최소 공통 퇴역 guard와 운영자 수동관리/삭제 증거만 보존하고, 매일 퇴역 보고서나 전용 실행 서비스는 남기지 않는다.
 - ubuntu뿐 아니라 기존 root/user systemd·cron·tmux·nohup/transient 작업의 잔존 실행을 조사한다. Main 실제 프로세스는 ubuntu여야 한다. 공통 Main cron 전체를 덮어쓰지 않고 해당 항목만 제거한다.
 - 사용자가 위젯 삭제를 완료했으므로 Windows 재설치/제거 확인 작업은 남기지 않는다. 서버에 보관한 클라이언트 빌드·배포 패키지·installer·다운로드 경로·위젯 전용 키 사본은 §7.3에 따라 정리하고, 서버 API/인증 scope/구 클라이언트 재연결이 퇴역 주문·수집을 열 수 없게 한다. 공용 broker/web 자격 증명은 보존한다.
 - 전용 dependency는 lockfile/전체 import와 Main UI 사용을 확인한 것만 제거한다. 공통 Python·웹 패키지를 일괄 삭제하지 않는다. 패키지 설치/제거가 필요한 실제 단계는 환경 규칙에 따른다.
@@ -185,13 +193,14 @@ R1~R3는 리뷰 가능한 코드 변경으로 준비하되, 실제 서비스 제
 | 파일 종류 | 처리 |
 |---|---|
 | 위젯·에피소드 전용 raw/압축본/cache/research/관측 로그 | writer·consumer 종료 후 원본·복사본·백업을 함께 영구 삭제. 대체 백업이나 과거 raw 자동 복원 없음 |
-| 전용 active 정책/env/잠금/profile·상태/보고서 | terminal·Main 이관 확인 후 제거. 명시적 manual veto·Main 초기수량/부모 보고서·공통 잠금은 제외 |
+| 전용 active 정책/env/잠금/profile·상태/보고서 | Main 소비 이관·writer 종료 후 제거. 보유나 과거 미해결 주문이 있어도 전용 상태/정책을 보관할 의무 없음. 명시적 manual veto·Main 초기수량/부모 보고서·공통 잠금은 제외 |
 | 공통 ledger·혼합 raw/report | **append-only custody ledger와 그 hash chain은 파일 그대로 보존하며 행을 잘라내거나 재해시하지 않음.** 그 외 혼합 파일은 Main/manual·현재 정책 계보·주문 종료 증거의 참조를 먼저 대조. 부모 전체 bytes/hash를 요구하면 원 파일 보존; 독립 분리가 입증된 경우만 전용 잔여 제거 |
-| 최소 terminal 감사 증거 | 퇴역 owner ID·기준 시각·종료 수량/주문 대사·해시·삭제 목록·Main 보존 목록만 유지. 대량 원천의 별도 archive가 아님 |
+| 최소 퇴역·수동관리 감사 증거 | 퇴역 owner 계열·사용자 지시·효력 시각·공통 ledger 기준 hash·삭제 목록·Main 보존 목록만 유지. 수량/주문 대사·최종 손익 보고서를 새로 만들지 않음. 과거 terminal 미확인은 그대로 보존 |
+| 10/8 systemd 정의 보존 사본 | `/etc/korstockscan/episode-off-units-20261008T110347+0900`의 전용 `.service`/`.timer`도 실행 payload이므로 참조 해소 후 삭제. 최소 조작 결과/hash만 남기며 새 복구 archive로 옮기지 않음 |
 | 구 릴리스/checkout/임시 복사본 | selector·rollback·systemd/cron·PID/cwd/FD·symlink/shared mount 참조 해소 후 전용 실행 사본 제거. Main 지원 복구본과 공유 `.venv`/데이터를 따라가서 삭제하지 않음 |
 | 기존 Git 역사·완료 문서 | 실행 트리·설치본 정리와 구분. 공용 Git 이력 강제 재작성은 계획 범위 밖. 과거 문서의 종목·owner를 거짓으로 지우지 않고 현행 절차에서 분리 |
 
-manifest에는 canonical path, device/inode·type·size·SHA, 소유자, producer/consumer, 참조 해소 증거, 처리 방식, 보존 이유를 넣는다. glob만으로 삭제하지 않으며 symlink/hardlink·변경된 hash·열린 FD·새 writer를 재검증한다. 삭제 직전 durable intent, 삭제 후 terminal 및 `df` 차이를 기록한다. 287파일/151unit은 용량 추정치도 최종 삭제 수량도 아니다.
+manifest에는 canonical path, device/inode·type·size·SHA, 소유자, producer/consumer, 참조 해소 증거, 처리 방식, 보존 이유를 넣는다. glob만으로 삭제하지 않으며 symlink/hardlink·변경된 hash·열린 FD·새 writer를 재검증한다. 삭제 직전 durable intent, 삭제 후 파일 삭제 terminal 및 `df` 차이를 기록한다. 이 파일 작업 terminal은 금융 주문 terminal과 다르다. 287파일/151unit/201mask는 용량 추정치나 최종 삭제 수량이 아니다.
 
 디렉터리·tar/zip 삭제도 **내부 파일 전체에 같은 보호 규칙**을 적용한다. DB/dump·공통 ledger·Main 정책·부모·다른 세션의 dirty 파일이 하위 경로나 압축 멤버에 하나라도 있으면 컨테이너 단위 삭제를 금지한다. 보호 자료를 정확 bytes로 별도 보존하는 검증된 절차가 없는 한 원 컨테이너를 유지한다. 대상 밖으로 나가는 symlink/hardlink/중첩 mount는 따라가지 않는다. `source_data_retirement` 작업의 nonraw 보존 사본·진행 중 durable intent도 최신 manifest에서 보호 여부를 대조한다. 실행 파일은 전용 코드를 제거한 새 릴리스로 옮겨 참조를 해소하며, 보호 컨테이너 잔존을 삭제 완료로 숨기지 않는다.
 
@@ -203,7 +212,7 @@ manifest에는 canonical path, device/inode·type·size·SHA, 소유자, produce
 
 | 서버 위치 | 확인한 잔존물 / 후속 처리 |
 |---|---|
-| `/etc/systemd/system` | 위젯 전용 service 7개와 timer 4개의 `/dev/null` mask, 에피소드 등에 적용된 `~zz-widget-retirement-20261006.conf` 등 확인. 전용 unit/mask 제거와 살아 있는 공통 unit의 drop-in 정리를 구분 |
+| `/etc/systemd/system`, `/run/systemd/system`, `/etc/korstockscan` | 10/7 위젯 service 7개·timer 4개 mask, 10/8 episode 201개 mask, 임시 runtime mask·OFF drop-in·정의 보존 사본을 함께 census. 기본 unit만 지우고 pin/보존 사본을 남기지 않음. 공통 퇴역 guard가 실제 적용된 뒤 중복 mask·전용 marker 정리 |
 | `/home/ubuntu/KORStockScan-runtime-releases` | widget 이름 파일 3,370개. 구 실행 소스·설치 스크립트·웹 route·테스트/문서가 포함됨. 참조가 끝난 구 릴리스는 디렉터리 단위 제거; 참조 중이면 Main 호환 깨끗한 릴리스로 먼저 교체 |
 | `/home/ubuntu/KORStockScan-worktrees` | 438개. 작업 중인 다른 세션/branch·dirty 파일 소유자를 확인하고 전용 잔존 코드 제거를 해당 작업본에 반영. 사용 중인 worktree를 일괄 삭제하지 않음 |
 | `/home/ubuntu/KORStockScan-release-mount-backups` | 42개. shared mount/symlink와 실제 원본을 대조한 뒤 불필요 설치 복사본 제거 |
@@ -217,7 +226,7 @@ manifest에는 canonical path, device/inode·type·size·SHA, 소유자, produce
 2. Main 의존성을 이관한 깨끗한 릴리스와 필요한 Main 복구본을 확보한 뒤 구 설치 경로의 실행 참조를 끊는다. **immutable 릴리스에서 위젯 파일만 임의 삭제해 manifest/hash를 깨뜨리지 않는다.**
 3. 사용하지 않는 구 릴리스·전용 패키지/복사본·서버에 보관한 위젯 배포물을 제거한다. 혼합 백업에 Main 자료가 있으면 보호 목록을 먼저 분리 검증한다. Main 자료를 보존하기 위해 위젯 설치 사본 전체를 새 archive로 옮기지 않는다.
 4. `__pycache__`/standalone bytecode, console entrypoint, web route/asset, 환경변수·전용 config·키, startup/복구 hook까지 재검사한다. 공통 키·venv·DB·Main 웹앱은 보존한다.
-5. 서버의 **위젯 실행 설치본/재설치 payload/활성 route/예약 작업/프로세스 0**을 검증한다. 남긴 문서·Git 역사·최소 퇴역 guard/test·공통 custody 증거는 경로와 이유를 별도 허용 목록에 기록한다. 문자열 잔존과 실행 설치본을 구분한다.
+5. 서버의 **위젯·에피소드 실행 설치본/재설치 payload/활성 route/예약 작업/프로세스/전용 writer 0**을 검증한다. 남긴 문서·Git 역사·최소 퇴역 guard/test·공통 custody 증거는 경로와 이유를 별도 허용 목록에 기록한다. 문자열 잔존과 실행 설치본을 구분한다.
 
 기존 `tools/windows/README.md`와 위젯 퇴역 OPEN 항목의 “운영자 삭제 대기”는 후속 문서 현행화 때 **사용자 삭제 완료·서버 잔존 설치 정리**로 바로잡는다. 과거 terminal 원본을 성공으로 덮어쓰는 대신 이번 사용자 확인과 서버 제거 결과를 별도 기록한다.
 
@@ -227,9 +236,9 @@ manifest에는 canonical path, device/inode·type·size·SHA, 소유자, produce
 
 | 검증 묶음 | 필수 사례와 합격 기준 |
 |---|---|
-| 재활성화 차단 | 구 CLI/HTTP/환경변수/profile rename/새 종목·자동 확장/구 installer/복구 릴리스로 퇴역 BUY가 생성되지 않음. broker 호출 직전 owner 검사 포함 |
+| 재활성화 차단 | 구 CLI/HTTP/환경변수/profile rename/새 종목·자동 확장/구 installer/복구 릴리스로 퇴역 BUY/SELL/CANCEL/정정이 생성되지 않음. broker 호출 직전 owner 검사와 과거 callback의 수동 기록만 허용 |
 | Main 동일성 | 보존 fixture에 대해 기계·보조·수량·cap·AVG_DOWN·청산·manual veto 동일. 이관 함수 hash/비용 bytes 동일. Main 정책 payload·승인 override 불변 |
-| 잔여 소유권 | 한화오션 10주 후보, 부분체결·늦은 fill·미체결 취소/정정·재기동·Main/수동 동일 종목 보유·귀속 불명 각각 검증. 잔여 관리 중 신규 BUY 금지와 기존 보호 유지 |
+| 수동관리 경계 | 한화오션·SK이터닉스 잔여가 있는 경우, 부분/늦은 fill, 응답 불명 intent, 수동 매도 후 잔고 감소, 재기동, Main/수동 동일 종목 fixture 검증. episode 보호/청산 호출 0, Main 자동 인수 0, Main native 수량·보호 정상, 옛 잔량 때문에 삭제/기동 대기 0 |
 | import/입출력 | Main 실제 import graph·dynamic CLI·entrypoint에서 삭제 모듈 참조 0. 퇴역 디렉터리가 없는 fixture로 Main 부팅·웹·감시·장후·PREOPEN 통과. 퇴역 경로 read/write/open 재시도 0 |
 | 장후 세대 | Main-only stage 분모, exact-date/source/release/hash·단일 writer 검증. 누락한 퇴역 보고서를 source_gap으로 오인하지 않음. Main 실제 결손은 여전히 차단. 삼성 선택 진단 missing/failed가 기동 gate로 번지지 않음. 과거 실패 PASS 재작성 0 |
 | 배포·재설치 | 새 checkout 설치, reboot/start와 timer reload 후 전용 unit·cron·PID 0. selector와 실제 Main ubuntu PID 일치. Web/WS 공유 기능 유지 |
@@ -244,40 +253,42 @@ manifest에는 canonical path, device/inode·type·size·SHA, 소유자, produce
 
 | 묶음 | 기존 테스트 소유 위치 | 추가해야 할 사례 |
 |---|---|---|
-| 주문·수량·소유권 | `test_kiwoom_orders.py`, `test_symbol_owner_coexistence.py`, `test_manual_control_exclusion.py`, `test_s15_custody_recovery.py` | 신규 episode BUY 거절과 잔여 SELL/CANCEL 허용; context 없는 IPO 거절; Main 단일소유·등록소유·수동 공존 정상 처리; 늦은 fill 정확 귀속 |
+| 주문·수량·소유권 | `test_kiwoom_orders.py`, `test_symbol_owner_coexistence.py`, `test_manual_control_exclusion.py`, `test_s15_custody_recovery.py` | 퇴역 BUY/SELL/CANCEL/정정 모두 거절; context 없는 우회 거절; Main 단일소유·등록소유·수동 공존 정상; 늦은 fill은 수동 기록만, 가짜 terminal/수량 덮어쓰기 0 |
 | Main 후행·회복 | `test_entry_cancel_wait_tuning.py`, `test_entry_cancel_wait_attribution.py`, `test_avg_down_replay.py`, `test_strategy_owner_replay.py` | 구/신 소유권 snapshot·reason/hash와 실제 부모 결속; 정책 제거 후 Main 표본이 0건/source_gap으로 바뀌는 회귀 방지 |
 | 공통 관측·장후 | `test_market_opportunity_census.py`, `test_samsung_tick_transition_forward_validation.py`, `test_postclose_summary_handoff.py`, `test_postclose_done_controller.py`, `test_verify_threshold_cycle_postclose_chain.py` | census 공통 출력 유지·episode admission write 0; 선택 진단 실패의 비차단성; episode 입력 없는 실제 Main 단계 의존성 검증 |
-| 릴리스·기동·삭제 | `test_runtime_release_router.py`, `test_next_preopen_readiness.py`, `test_postclose_finalization_generation.py`, `test_source_data_retirement.py` | 구 PID/fence 미적용 탐지, 잔여 exit 전환본/최종본 구분, 정책/selector 변경 시 재검증, 보호 하위 파일·archive 멤버·진행 중 삭제 intent 보존 |
+| 릴리스·기동·삭제 | `test_runtime_release_router.py`, `test_next_preopen_readiness.py`, `test_postclose_finalization_generation.py`, `test_source_data_retirement.py` | 구 PID/OFF 미적용 탐지, 잔여가 있어도 Main-only 부팅/삭제, 정책/selector 변경 시 재검증, 보호 하위 파일·archive 멤버·진행 중 삭제 intent 보존 |
 
 위 파일은 `src/tests/` 아래의 기존 검증 위치다. 삭제되는 전용 테스트에서 필요한 공통 case는 이 소유자들로 이관한다. 이름만 통과하는 테스트 대신 실제 native 호출·파일 소비를 검증한다.
 
-샘플은 (1) 정상 Main 신규 진입/추가 매수/청산, (2) Main+수동 동일 종목, (3) episode 잔여·부분체결·응답 불명, (4) manual veto/결손, (5) 전용 자료가 전혀 없는 Main 장후를 포함한다. 저장된 broker/provider 응답과 synthetic receipt를 격리 경로에서 재생하고 네트워크·운영 DB·실제 systemd/cron mutation은 차단한다. baseline/candidate는 같은 최신 승인 Main 정책과 같은 원천/시각으로 3회 이상 대조하고 판정·주문 의도·수량·source 분모를 비교한다. API/쓰기 호출 수, CPU/RSS, wall time·지연 분포와 반복 간 편차를 남긴다. 단기 무체결이나 표본 부재를 기능/성능 PASS로 대체하지 않는다. 새 수익성 gate는 추가하지 않는다.
+샘플은 (1) 정상 Main 신규 진입/추가 매수/청산, (2) Main+수동 동일 종목, (3) 수동관리로 지정된 episode 잔여·부분체결·응답 불명, (4) manual veto/Main 실제 결손, (5) 전용 자료가 전혀 없는 Main 장후를 포함한다. (3)은 수동관리 격리 코드의 합성/저장 fixture이며 운영 보유를 조사·청산하는 작업이 아니다. 저장된 broker/provider 응답과 synthetic receipt를 격리 경로에서 재생하고 네트워크·운영 DB·실제 systemd/cron mutation은 차단한다. baseline/candidate는 같은 최신 승인 Main 정책과 같은 원천/시각으로 3회 이상 대조하고 판정·주문 의도·수량·source 분모를 비교한다. API/쓰기 호출 수, CPU/RSS, wall time·지연 분포와 반복 간 편차를 남긴다. 단기 무체결이나 표본 부재를 기능/성능 PASS로 대체하지 않는다. 새 수익성 gate는 추가하지 않는다.
 
 ## 9. 완료 기준과 남을 수 있는 제한
 
 | Gate | 완료 기준 | 미완료 시 owner·다음 확인 |
 |---|---|---|
 | G0 범위 | 새 manifest의 전용/공통/보존 분류 완료, Main 외 자동주문 진입점 누락 0 | 제거 manifest의 미분류 행·실제 caller 대조 |
-| G1 소유권 | 퇴역 owner qty/orders/intents 0, broker/native 대사 완료 | owner별 잔여 관리 receipt. 한화오션 후보 우선; source_gap은 종료로 간주하지 않음 |
+| G1 수동관리 경계 | 사용자 수동관리 지시 반영, 퇴역 주문 생성 0, Main 자동 인수/수량 혼입 0, 수동 매도/늦은 fill 후 Main 경계 검증. **잔여 수량·주문·intent 0/계좌 대사 불필요** | §4.2·§6.1 코드와 격리 fixture. 실제 수동 매도나 추가 승인 대기 없음 |
 | G2 실행 제거 | 전용 production 코드·실행 경로·설치/복구·unit/cron/PID·재생성 writer 0 | code/import·systemd/cron/PID census 재확인 |
 | G3 Main 연결 | Main 정책/잠금/수량·보호 동일, shared helper 이관 완료, 선택 릴리스와 실제 PID 소비 일치 | Main regression 및 exact policy/PID receipt |
 | G4 장후/기동 | Main-only summary/strict/controller/finalization/PREOPEN 성공, 다음 자연 Main 장후·기동 확인 | exact-date finalization/prepared/PID. 예정 시점 전에는 `not_observed` |
-| G5 서버 설치본 | §7.3 전체 서버 경로에서 위젯 실행 설치본·재설치 payload·불필요 복사본 0 | 서버 삭제 manifest·구 릴리스 참조·unit/route/PID 재검사. Windows는 사용자 삭제 완료로 반영 |
+| G5 서버 설치본 | §7.3 전체 서버 경로에서 위젯·에피소드 실행 설치본·재설치 payload·불필요 복사본 0 | 서버 삭제 manifest·구 릴리스·`/etc/korstockscan` 보존 사본·unit/route/PID 재검사. Windows는 사용자 삭제 완료로 반영 |
 | G6 데이터/문서 | 전용 불필요 파일·백업 정리, Main/DB 보호 검증, 현행 문서·미래 작업에서 복구 요구 0 | 삭제 terminal/보존 hash 및 parsed owner 목록 |
 
-G1은 주문·보유 안전 종료, G2/G5는 코드·설치 삭제, G3/G4는 Main 소비·자연 실행으로 각각 검증한다. 과거의 정확한 비용 결손은 최소 원천/종료 증거에 남기되 **회계 결손만으로 이미 broker terminal인 전용 매매 프로세스를 계속 가동하지 않는다.** 수량·주문 귀속이 미해결이면 G1을 닫을 수 없다. 삭제 명세가 이후에도 필요로 하는 원 증거를 지워 스스로 검증 불가능해지지 않도록, 남길 native 종료 증거와 content hash는 R5 전에 확정한다.
+G1은 **자동 실행 종료와 수동관리분의 Main 격리**이며 금융 주문의 종료 요건이 아니다. G2/G5는 코드·설치 삭제, G3/G4는 Main 소비·자연 실행으로 각각 검증한다. 과거 수량/주문/손익의 미확인 상태는 그대로 남겨도 전체 퇴역을 완료할 수 있다. 보존 대상은 공통 ledger·Main 계보·명시적 수동 제한·최소 삭제 증거이며 에피소드 잔여를 대사하기 위한 전용 상태/정책/원천 유지 의무는 없다. 코드·파일 삭제 검증은 실행 가능한 시점에 닫고 다음 자연 장후/기동 수용만 실제 예정 시각에 따로 확인한다.
 
-최소 owner-wide 퇴역 차단, 수동/과거 custody ledger, 삭제·종료 감사 증거는 기능 잔재가 아닌 **재활성화 방지와 계좌 해석에 필요한 보존 목록**으로 명시한다. `episode` 문자열 0건을 완료 기준으로 삼지 않는다. 잔여 exit manager나 서버 실행 설치본이 남으면 전체 완전 제거를 완료로 표시하지 않는다. 장후/자연 기동을 무기한 기다리는 대신 다음 실제 예정 시각과 정확한 receipt를 잔여 owner에 명시한다.
+최소 owner-wide 퇴역 차단, 수동/과거 custody ledger, 삭제 감사 증거는 **재활성화 방지와 계좌 해석에 필요한 보존 목록**으로 명시한다. `episode` 문자열 0건을 완료 기준으로 삼지 않는다. 잔여 exit manager나 서버 실행 설치본이 남으면 전체 완전 제거를 완료로 표시하지 않는다. 장후/자연 기동의 실제 예정 시각과 영수증만 현행 Main owner에 인계하고 수동 보유의 청산 예정 시각을 요구하지 않는다.
 
 ## 10. 운영 문서·실행 owner 반영
 
-구현 변경과 함께 Plan Rebase §5/§7/§8, 해당 README/runbook/prompt/AGENTS, 장중·장후 지시문, [장후 작업 목록](../audit-reports/2026-09-05-postclose-work-inventory.md), 설치·복구·Windows 문서를 Main-only 상태로 현행화하는 작업을 포함한다. 이번에는 운영 중인 상태를 미리 삭제 완료로 변경하지 않는다.
+구현 변경과 함께 Plan Rebase §5/§7/§8, 해당 README/runbook/prompt/AGENTS, 장중·장후 지시문, [장후 작업 목록](../audit-reports/2026-09-05-postclose-work-inventory.md), 설치·복구·Windows 문서를 Main-only 상태로 현행화하는 작업을 포함한다. 실제 구현·설치 삭제·배포 영수증에 맞춰 현행 상태를 갱신한다.
 
-실행 시점의 일일 체크리스트에 하나의 통합 owner를 두고 Due/Slot/TimeWindow/Track과 R0~R6/G0~G6를 연결한다. 기존 `WidgetFullRetirement1006`, `DirectFamilySourceRepairLowPriceTwoLeg`, `EpisodeCaptureSequence1006`는 과거 Acceptance·증거를 남기고 **이 계획에 따른 제거로 대체되는 작업/남은 서버 설치·custody 작업**을 구분해 인계한다. 에피소드 수익 튜닝·원천 복구를 더 실행해서 제거 허가를 얻도록 만들지 않는다. 현재 Main 구현·raw 정리 OPEN owner와 작업본은 보존한다.
+현재 실행 인계는 10/8 체크리스트의 **`DirectFamilySourceRepairMainMechanisticEntry` 하나**에 R0~R6/G0~G6로 연결한다. 과거 `WidgetFullRetirement1006`·`EpisodeCaptureSequence1006`를 새 OPEN으로 복원하지 않는다. 자동 생성된 10/7 원천의 `DirectFamilySourceRepairLowPriceTwoLeg`와 source_gap 표는 과거 증거로 보존하며 사용자 영구 OFF/수동관리 지시가 우선한다. 이를 퇴역 원천 복구·튜닝·서비스 재가동의 실행 owner로 사용하지 않는다. 후속 구현에서 생성기의 해당 family/owner 발행을 제거하고 새 Main-only 계약으로 인계한다. 현재 Main·raw 작업의 다른 OPEN과 dirty 변경은 보존한다.
 
-이번 문서 변경에서는 기존 `WidgetFullRetirement1006`의 사용자 위젯 삭제 완료·서버 잔존 정리 계획 연결을 갱신한다. 에피소드 실행 종료를 완료로 처리하거나 중복 실행 owner를 추가하지 않는다. print-only parser로 기존 owner의 단일 등록을 확인하고, 후속 구현에서 미래 에피소드 작업 재생성 0을 검증한다. 외부 Project/Calendar 동기화는 수행하지 않는다.
+이 계획은 사용자 구현·배포·재기동·정리 승인으로 실행한다. 이미 확인한 episode 서비스 OFF와 아직 실행하지 않은 완전 삭제를 구분한다. 자동 생성 strict 원본 블록은 수정하지 않고 수동 인계 영역에 우선 지시를 기록한다. print-only parser로 Main owner의 단일 등록을 확인한다. 체크리스트 수정 자체로 과거 strict/PREOPEN 봉인을 현재 성공으로 주장하지 않으며, 구현 시 최종 source/checklist/release에 맞춰 새 봉인을 검증한다. 외부 Project/Calendar 동기화는 수행하지 않는다.
 
-## 11. 계획 작성 검토 기록
+## 11. 10/7 계획 작성 검토 기록 — 과거 증거
+
+아래 검증 횟수·owner와 종료 조건은 10/7 계획 당시 기록이다. **잔여 보유 대사·청산 worker 유지 조건은 10/8 수동관리 지시로 폐기됐으며 현행 실행 요건은 §6·§9를 따른다.**
 
 - 1차 검토에서 단순 디렉터리 삭제로 끊기는 Main WS writer, 공통 digest, Main 수동 잠금 consumer, 21:15의 Main 삼성 검증 단계를 찾아 선행 이관에 반영했다.
 - 2차 검토에서 잔여 한화오션 로컬 10주, symbol 전체 flat 조건의 과잉 제한, enabled timer와 disabled service 차이, 독립 IPO 주문 경로를 보완했다.
@@ -291,7 +302,7 @@ G1은 주문·보유 안전 종료, G2/G5는 코드·설치 삭제, G3/G4는 Mai
 - 로컬 링크 검사 누락 0. `git diff --check` 및 새 문서의 독립 whitespace 검사 통과. 최초 검사의 줄 끝 공백 1건은 수정 후 재검증했다.
 - 이번 변경은 새 계획 문서, 기존 체크리스트의 해당 위젯 항목, 읽기 전용 조사/검증 기록이다. 다른 세션의 Main·raw 구현 작업본을 보존했다. Python/shell 구현 변경이 없어 pytest/compile/bash 및 실거래·장후 재실행·서비스 제어·배포·삭제는 실행하지 않았다.
 
-## 12. 추가 계획 리뷰와 보완 결과
+## 12. 10/7 추가 계획 리뷰 — 과거 증거
 
 2026-10-07 사용자 계획 리뷰 요청에 따라 실제 호출자를 다시 대조했다. 아래는 **계획 결함의 수정 내역**이며 해당 runtime 코드가 이미 수정됐다는 뜻이 아니다.
 
@@ -307,6 +318,22 @@ G1은 주문·보유 안전 종료, G2/G5는 코드·설치 삭제, G3/G4는 Mai
 | PR8 | 구체적 sample/test 소유 위치와 성능 비교 절차 부족; live ledger 정상 append를 변조로 오인 가능 | §8.1의 격리 표본·대상 테스트·3회 비교, §8의 원 prefix/hash chain 보호와 정상 append 허용 |
 | PR9 | 정확 비용 결손만으로 퇴역 매매 프로세스를 계속 유지할 가능성 | §9에서 broker/소유권 terminal과 역사적 회계 결손 분리. 증거 보존 후 실행부는 제거 |
 
-재리뷰에서는 Main 보호 정책 payload와 새 custody/release/PREOPEN hash의 의미를 분리했고, 사용자 위젯 삭제 완료를 다시 미확인으로 돌리는 조건이 없는지 확인했다. 계획·체크리스트 검증 결과는 별도 리뷰 증빙에 기록한다. 실행 단계에서만 확인 가능한 broker terminal·배포/PID·설치 삭제·자연 수용은 G0~G6의 잔여 검증이다.
+이 과거 리뷰는 Main 정책 payload와 custody/release/PREOPEN hash를 구분한 근거로 보존한다. **PR4·PR5·PR9의 잔여 자동 청산/terminal 선행 설계는 현재 요건이 아니며 §6·§9로 대체됐다.** 과거 문서 PASS는 현재 삭제·배포·자연 수용의 완료 증거가 아니다.
 
 **추가 리뷰 검증:** [검증 기록](../../tmp/main-only-widget-episode-retirement-plan-20261007/plan-review-validation.json). PR1~PR9 계획 반영 후 재리뷰에서 미반영 계획 결함 0. 링크 누락 0, 명시한 기존 테스트 파일 17개 존재, print-only parser exit 0/29개 task·관련 owner 5개 각 1개, diff/새 문서 whitespace 검사 통과. 이는 문서 검증 결과이며 회귀 테스트 실행 결과가 아니다. 이번 추가 리뷰에서 runtime 코드·설치·정책·DB·주문·파일 삭제는 변경하지 않았다.
+
+## 13. 10/8 수동관리 지시 반영 리뷰
+
+| 발견한 계획 결함 | 보완 결과 |
+| --- | --- |
+| 상단 OFF 지시와 §6/§9의 잔여 0건·broker terminal·청산 worker 유지가 충돌 | 삭제의 잔여/flat 선행 요건 제거. G1은 수동관리분의 Main 격리이며 실제 보유 청산 검증이 아님 |
+| 기존 registry 이관을 재사용하면 `owner_registry_retirement_not_flat`, 수동 매도 뒤 과거 잔량 합산으로 `owner_registry_broker_quantity_deficit` 발생 가능 | §4.2에 정확한 함수·소비 경로와 live Main 투영 이관을 지정. 옛 이력은 보존하고 실수량·Main 소유 수량을 조작하지 않음 |
+| BUY만 차단하고 옛 SELL/CANCEL/재시도 경로는 존속 | 계열 전체 주문 실행 폐기. 공통 callback의 수동 이력 기록과 자동 주문 권한을 분리 |
+| 10/7 설치 수와 현재 201개 OFF unit·10개 drop-in·`/etc/korstockscan` 실행 보존 사본이 혼재 | 현재 OFF 영수증과 과거 조사 표를 구분하고 mask/backup까지 최종 삭제 manifest에 포함 |
+| 수동관리분을 계속 대사하거나 알림·정책·원천 복구/미완료 작업을 요구할 여지 | 전용 알림·장후 producer/consumer·감시·미래 checklist 발행 제거. 퇴역 관련 새 연구 호출·원장 복제 없음 |
+
+실제 Main 주문 예약·체결 수신·보유 동기화·공통 registry와 stage handoff의 호출자를 읽어 계획을 대조했다. 이번 변경은 문서에 한정한다. 남은 것은 후속 구현·격리 회귀·배포·서버 파일 삭제와 자연 Main 장후/기동 검증이며, 사용자 수동관리 보유의 계좌 조회나 매도 완료가 아니다. 문서 검증 결과는 [10/8 리뷰 기록](../../tmp/main-only-widget-episode-retirement-plan-20261007/plan-manual-management-review-20261008.json)에 남긴다.
+
+## 14. 구현·배포 검토
+
+사용자가 실행·반복 리뷰/보완·배포/재기동·불필요 데이터 삭제를 승인했다. 구현 결과와 남은 자연 장후 확인은 [구현 검토](../audits/main-only-widget-episode-full-retirement-implementation-review-2026-10-08.md)에 기록한다. 구 자동 owner 잔여의 청산이나 계좌 조회는 수행하지 않는다.

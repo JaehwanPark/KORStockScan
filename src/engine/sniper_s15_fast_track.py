@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 from src.engine import kiwoom_orders
-from src.trading.config.symbol_owner_policy import (
+from src.trading.config.native_owner_policy import (
     KST,
     SymbolOwnerPolicyError,
     policy_path,

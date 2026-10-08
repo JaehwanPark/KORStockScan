@@ -5,7 +5,6 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from src.trading.low_price_two_leg.gateway import KiwoomLowPriceTwoLegGateway
 
 from src.trading.order.entry_liquidity_guard import (
     ENTRY_EXECUTION_VELOCITY_POLICY_CONTRACT,
@@ -22,11 +21,6 @@ from src.trading.order.entry_liquidity_guard import (
     parse_ka10003_entry_execution_velocity_snapshot,
     parse_ka10004_entry_liquidity_snapshot,
 )
-from src.trading.samsung_afternoon_one_share.gateway import (
-    KiwoomAfternoonOneShareGateway,
-)
-from src.trading.samsung_midday_one_share.gateway import KiwoomMiddayOneShareGateway
-from src.trading.samsung_morning_one_share.gateway import KiwoomOneShareGateway
 from src.utils import kiwoom_utils
 
 
@@ -450,74 +444,8 @@ def test_execution_velocity_rejects_duplicate_accumulated_volume_rows():
     assert snapshot.error == "ka10003_accumulated_volume_not_latest_first"
 
 
-@pytest.mark.parametrize(
-    ("gateway", "invoke", "expected_request_code"),
-    [
-        (
-            KiwoomLowPriceTwoLegGateway(
-                symbol="111770", token_loader=lambda: "shared-token"
-            ),
-            lambda value: value.entry_execution_velocity_snapshot(route="SOR"),
-            "111770_AL",
-        ),
-        (
-            KiwoomOneShareGateway(token_loader=lambda: "shared-token"),
-            lambda value: value.entry_execution_velocity_snapshot(route="SOR"),
-            "005930_AL",
-        ),
-        (
-            KiwoomMiddayOneShareGateway(token_loader=lambda: "shared-token"),
-            lambda value: value.entry_execution_velocity_snapshot(route="SOR"),
-            "005930_AL",
-        ),
-        (
-            KiwoomAfternoonOneShareGateway(token_loader=lambda: "shared-token"),
-            lambda value: value.entry_execution_velocity_snapshot(route="SOR"),
-            "005930_AL",
-        ),
-    ],
-)
-def test_production_gateways_request_exact_route_and_latest_ten_prints(
-    monkeypatch, gateway, invoke, expected_request_code
-):
-    calls = []
-
-    def fake_tick_history(token, request_code, *, limit, request_owner, request_class):
-        calls.append((token, request_code, limit))
-        assert request_owner.endswith("_entry_velocity")
-        assert request_class == "execution_critical"
-        now = datetime.now(tz=KST)
-        venue = "NXT" if request_code.endswith("_NX") else "KRX"
-        return _velocity_ticks(
-            [
-                (now - timedelta(seconds=index)).strftime("%H%M%S")
-                for index in range(10)
-            ],
-            venue=venue,
-        )
-
-    monkeypatch.setattr(kiwoom_utils, "get_tick_history_ka10003", fake_tick_history)
-
-    snapshot = invoke(gateway)
-
-    assert snapshot.source_ok
-    assert snapshot.request_code == expected_request_code
-    assert calls == [("shared-token", expected_request_code, 10)]
 
 
-def test_production_gateway_tick_history_failure_is_fail_closed(monkeypatch):
-    def fail_tick_history(*args, **kwargs):
-        raise RuntimeError("broker_read_failed")
-
-    monkeypatch.setattr(kiwoom_utils, "get_tick_history_ka10003", fail_tick_history)
-    gateway = KiwoomLowPriceTwoLegGateway(
-        symbol="111770", token_loader=lambda: "shared-token"
-    )
-
-    snapshot = gateway.entry_execution_velocity_snapshot(route="SOR")
-
-    assert not snapshot.source_ok
-    assert snapshot.error == "RuntimeError"
 
 
 def _rest_book(**overrides):
@@ -613,39 +541,6 @@ def test_invalid_injected_age_fails_closed_without_raising(age):
     assert not evaluate_entry_liquidity(snapshot, requested_quantity=20).allowed
 
 
-@pytest.mark.parametrize(
-    "gateway_class,kwargs,invoke",
-    [
-        (KiwoomOneShareGateway, {}, lambda g: g.entry_liquidity_snapshot()),
-        (KiwoomMiddayOneShareGateway, {}, lambda g: g.entry_liquidity_snapshot()),
-        (KiwoomAfternoonOneShareGateway, {}, lambda g: g.entry_liquidity_snapshot()),
-        (
-            KiwoomLowPriceTwoLegGateway,
-            {"symbol": "111770"},
-            lambda g: g.entry_liquidity_snapshot(route="SOR"),
-        ),
-    ],
-)
-def test_all_surviving_gateways_preserve_common_rest_quote_health(
-    monkeypatch, gateway_class, kwargs, invoke
-):
-    monkeypatch.setattr(
-        kiwoom_utils,
-        "get_stock_orderbook_ka10004",
-        lambda token, code, **k: _rest_book(stock_code=code[:6], request_code=code),
-    )
-    import src.trading.order.entry_liquidity_guard as guard
-
-    monkeypatch.setattr(guard.time, "time", lambda: 100.5)
-    snapshot = invoke(gateway_class(token_loader=lambda: "shared-token", **kwargs))
-    assert snapshot.source_ok
-    rest = snapshot.market_data_health["rest_quote"]
-    assert snapshot.age_ms == rest["quote_receive_age_ms"] == 500
-    assert rest["market_data_scope"] == "KRX_NXT_INTEGRATED"
-    assert rest["effective_venue"] == "UNKNOWN"
-    assert rest["underlying_event_venue_proven"] is False
-    assert rest["trade_activity_state"] == "OBSERVATION_UNPROVEN"
-    assert rest["quiet_episode_count"] is None
 
 
 def _velocity_receipted_rows(observed):

@@ -244,7 +244,8 @@ def publish_broker_account_snapshot(
         _BROKER_ACCOUNT_SNAPSHOT.update(snapshot)
 
 
-def broker_symbol_verified_flat(stock_code: str, *, now_ts: float) -> tuple[bool, str]:
+def broker_symbol_verified_flat(stock_code: str, *, now_ts: float,
+                                allow_manual_remainder: bool = False) -> tuple[bool, str]:
     """Require both exchange inventories and open orders before watch admission."""
     code = _base_code(stock_code)
     with _BROKER_ACCOUNT_SNAPSHOT_LOCK:
@@ -274,11 +275,23 @@ def broker_symbol_verified_flat(stock_code: str, *, now_ts: float) -> tuple[bool
         except (TypeError, ValueError):
             return False, "broker_inventory_quantity_invalid"
         if quantity != 0:
-            return False, "broker_position_nonzero"
+            if not allow_manual_remainder or quantity < 0:
+                return False, "broker_position_nonzero"
+            try:
+                from src.trading.order.owner_custody_registry import default_order_owner_registry
+                registry = default_order_owner_registry()
+                contract = registry.native_owner_contract(code)
+                if not contract['disposition_hash']:
+                    return False, "native_manual_management_missing"
+                projection = registry.reconcile_symbol_quantity(symbol=code, broker_quantity=quantity)
+                if projection['registered_owner_quantity']:
+                    return False, "main_position_nonzero"
+            except Exception:
+                return False, "native_owner_quantity_unverified"
     open_orders = (snapshot.get("open_qty_by_code") or {}).get(code) or {}
     if int(open_orders.get("open_buy_qty") or 0) or int(open_orders.get("open_sell_qty") or 0):
         return False, "broker_open_orders_nonzero"
-    return True, "verified_flat"
+    return True, "verified_main_flat_manual_remainder" if inventory is not None and int(quantity) else "verified_flat"
 
 
 def _broker_account_context(

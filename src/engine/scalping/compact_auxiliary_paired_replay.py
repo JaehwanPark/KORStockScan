@@ -261,7 +261,7 @@ def owner_replay_valid(replay, row):
         _entry_seed_valid,
         ENTRY_REPLAY_SCHEMA,
     )
-    from src.engine.monitoring.research_closed_loop import digest as owner_digest
+    from src.utils.evidence_digest import digest as owner_digest
 
     seed = replay.get("seed") or {}
     return bool(
@@ -287,7 +287,7 @@ def owner_operating_arm(replay, row):
     from src.engine.scalping.strategy_owner_replay import (
         ENTRY_OPERATING_SCHEMA, entry_operating_model_identity, entry_operating_route_supported,
     )
-    from src.engine.monitoring.research_closed_loop import digest as owner_digest
+    from src.utils.evidence_digest import digest as owner_digest
     if not owner_replay_valid(replay, row):
         return {}
     seed = replay["seed"]

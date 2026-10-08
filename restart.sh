@@ -38,21 +38,8 @@ START_TIMEOUT_SEC="${KORSTOCKSCAN_GRACEFUL_RESTART_START_TIMEOUT_SEC:-150}"
 POLL_SEC="${KORSTOCKSCAN_GRACEFUL_RESTART_POLL_SEC:-2}"
 BOT_TMUX_SESSION="${KORSTOCKSCAN_BOT_TMUX_SESSION:-bot}"
 RUN_BOT_PATH="$PROJECT_DIR/src/run_bot.sh"
-SAMSUNG_HANDOFF_CONFIRM="SAMSUNG_MAIN_BOT_RESTART_HANDOFF"
-SAMSUNG_HANDOFF_PLAN="$PROJECT_DIR/data/runtime/samsung_morning_main_bot_restart_handoff_plan.json"
-HANDOFF_OLD_PID=""
-
 cleanup_restart_request() {
     rm -f "$RESTART_REQUEST_TMP"
-    if [ -n "$HANDOFF_OLD_PID" ] \
-        && [ -f "$SAMSUNG_HANDOFF_PLAN" ] \
-        && kill -0 "$HANDOFF_OLD_PID" 2>/dev/null; then
-        PYTHONPATH="$PROJECT_DIR" "$VENV_PY" \
-            -m src.trading.samsung_morning_one_share.authority_handoff \
-            --action abort \
-            --old-main-bot-pid "$HANDOFF_OLD_PID" \
-            --confirm "$SAMSUNG_HANDOFF_CONFIRM" >/dev/null 2>&1 || true
-    fi
 }
 
 trap cleanup_restart_request EXIT
@@ -152,46 +139,6 @@ if [ "${#OLD_PIDS[@]}" -ne 1 ]; then
     exit 1
 fi
 
-echo "Validating Samsung morning owner continuity before restart ..."
-HANDOFF_OLD_PID="${OLD_PIDS[0]}"
-set +e
-HANDOFF_PREPARE_RC=0
-if [ -n "${KORSTOCKSCAN_RESTART_PREPARED_HANDOFF_ID:-}" ]; then
-    # A staged env change may follow a strict old-PID prepare. Reuse only that
-    # exact, fresh plan; the runtime guard and post-start commit revalidate it.
-    HANDOFF_OLD_PID=""
-    PYTHONPATH="$PROJECT_DIR" "$VENV_PY" - "${OLD_PIDS[0]}" \
-        "$KORSTOCKSCAN_RESTART_PREPARED_HANDOFF_ID" <<'PY_PREPARED_HANDOFF' || HANDOFF_PREPARE_RC=$?
-import json
-import sys
-from src.trading.samsung_morning_one_share.authority_handoff import restart_guard_decision
-decision = restart_guard_decision(main_bot_pid=int(sys.argv[1]))
-valid = (
-    decision.get("allowed") is True
-    and decision.get("reason") == "prepared_same_date_pid_handoff"
-    and decision.get("plan_id") == sys.argv[2]
-)
-print(json.dumps(decision))
-raise SystemExit(0 if valid else 3)
-PY_PREPARED_HANDOFF
-    if [ "$HANDOFF_PREPARE_RC" -eq 0 ]; then
-        HANDOFF_OLD_PID="${OLD_PIDS[0]}"
-    fi
-else
-    PYTHONPATH="$PROJECT_DIR" "$VENV_PY" \
-        -m src.trading.samsung_morning_one_share.authority_handoff \
-        --action prepare \
-        --old-main-bot-pid "${OLD_PIDS[0]}" \
-        --confirm "$SAMSUNG_HANDOFF_CONFIRM" \
-        --write || HANDOFF_PREPARE_RC=$?
-fi
-set -e
-if [ "$HANDOFF_PREPARE_RC" -ne 0 ]; then
-    echo "Samsung morning authority/custody continuity is not safe; restart blocked (rc=$HANDOFF_PREPARE_RC)." >&2
-    exit "$HANDOFF_PREPARE_RC"
-fi
-unset KORSTOCKSCAN_RESTART_PREPARED_HANDOFF_ID
-
 CURRENT_LAUNCHER_SHA256="$(current_launcher_sha256)"
 LOADED_LAUNCHER_SHA256="$(pid_env_value "${OLD_PIDS[0]}" KORSTOCKSCAN_RUNTIME_LAUNCHER_RUN_BOT_SHA256 || true)"
 LOADED_SOURCE_ROOT="$(pid_env_value "${OLD_PIDS[0]}" KORSTOCKSCAN_RUNTIME_SOURCE_ROOT || true)"
@@ -234,13 +181,6 @@ done
 
 if [ "$elapsed" -ge "$STOP_TIMEOUT_SEC" ]; then
     echo "Timed out waiting for previous bot PID to exit. Leaving restart.flag in place for bot_main.py."
-    set +e
-    PYTHONPATH="$PROJECT_DIR" "$VENV_PY" \
-        -m src.trading.samsung_morning_one_share.authority_handoff \
-        --action abort \
-        --old-main-bot-pid "${OLD_PIDS[0]}" \
-        --confirm "$SAMSUNG_HANDOFF_CONFIRM"
-    set -e
     exit 2
 fi
 
@@ -269,23 +209,6 @@ while [ "$elapsed" -lt "$START_TIMEOUT_SEC" ]; do
                 exit "$VERIFY_RC"
             fi
             echo "Runtime env handoff verification passed."
-            echo "Committing Samsung morning same-date PID handoff when required ..."
-            set +e
-            HANDOFF_COMMIT_RC=0
-            PYTHONPATH="$PROJECT_DIR" "$VENV_PY" \
-                -m src.trading.samsung_morning_one_share.authority_handoff \
-                --action commit \
-                --new-main-bot-pid "$pid" \
-                --confirm "$SAMSUNG_HANDOFF_CONFIRM" \
-                --write || HANDOFF_COMMIT_RC=$?
-            set -e
-            if [ "$HANDOFF_COMMIT_RC" -ne 0 ]; then
-                echo "[FAIL] Samsung morning PID handoff commit failed (rc=$HANDOFF_COMMIT_RC)." >&2
-                echo "[FAIL] New BUY remains fail-closed; do not delete the handoff plan manually." >&2
-                exit "$HANDOFF_COMMIT_RC"
-            fi
-            HANDOFF_OLD_PID=""
-            echo "Samsung morning authority/custody continuity verified."
             exit 0
         fi
     done

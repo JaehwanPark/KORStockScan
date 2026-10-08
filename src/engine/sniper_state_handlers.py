@@ -71196,7 +71196,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         # Observation only. The order adapter independently resolves the
         # exact-date policy; a failed read here cannot authorize or veto BUY.
         try:
-            from src.trading.config.symbol_owner_policy import resolve_symbol_owner_policy
+            from src.trading.config.native_owner_policy import resolve_symbol_owner_policy
             buy_owner_policy = resolve_symbol_owner_policy(
                 code, target_date=datetime.now(_KST).date())
             buy_owner_policy_fields = {

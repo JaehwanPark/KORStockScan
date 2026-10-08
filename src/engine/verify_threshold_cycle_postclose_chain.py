@@ -197,10 +197,20 @@ def _stage_generation(target_date: str) -> dict[str, dict[str, Any]]:
     from src.engine.automation.postclose_summary_handoff import active_stage_names, stage_path
 
     result = {}
-    for stage in active_stage_names(target_date):
+    names = list(active_stage_names(target_date))
+    # Preserve byte-for-byte verification of previously sealed stages. These
+    # archive readers cannot dispatch a retired producer or satisfy a new run.
+    if target_date < '2026-10-08':
+        for retired in ('episode_policy', 'machine_attribution', 'machine_timing',
+                        'market_weakness', 'research_capacity', 'research_allocation',
+                        'legacy_policy_approval'):
+            historical = REPORT_DIR / 'postclose_stage_terminal' / target_date / (retired + '.json')
+            if historical.is_file():
+                names.append(retired)
+    for stage in names:
         if stage == "summary_handoff":
             continue
-        path = stage_path(REPORT_DIR, target_date, stage)
+        path = REPORT_DIR / 'postclose_stage_terminal' / target_date / (stage + '.json')
         value = _load(path)
         result[stage] = {
             "sha256": _sha(path),

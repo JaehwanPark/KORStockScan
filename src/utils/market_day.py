@@ -39,3 +39,13 @@ def count_krx_trading_days(start_exclusive: date, end_inclusive: date) -> int:
             count += 1
         current += timedelta(days=1)
     return count
+
+
+def next_krx_trading_date(source_date):
+    from datetime import timedelta
+    candidate = source_date + timedelta(days=1)
+    for _ in range(370):
+        if is_krx_trading_day(candidate):
+            return candidate
+        candidate += timedelta(days=1)
+    raise ValueError("next_krx_trading_date_unresolved")

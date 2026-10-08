@@ -124,7 +124,7 @@ def broker_and_owner_clear(now_epoch: float, route: dict) -> tuple[bool, str]:
 
     symbol = str(route.get("symbol") or route.get("item") or SAMSUNG_CODE)[:6]
     spec_for(symbol)
-    clear, reason = broker_symbol_verified_flat(symbol, now_ts=now_epoch)
+    clear, reason = broker_symbol_verified_flat(symbol, now_ts=now_epoch, allow_manual_remainder=True)
     if not clear:
         return False, reason
     try:

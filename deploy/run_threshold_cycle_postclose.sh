@@ -352,7 +352,7 @@ if status == "running" and os.environ.get("POSTCLOSE_REUSE_RECEIPT"):
     assert receipt["origin_run_id"] == payload.get("run_id")
     assert receipt["origin_code_commit"] == payload.get("code_commit")
     assert payload.get("status") == "failed"
-    allowed = {"src.engine.sniper_post_sell_feedback", "src.engine.monitoring.rising_missed_intraday_feedback", "src.engine.monitoring.low_price_two_leg_expanded_candidate_research"}
+    allowed = {"src.engine.sniper_post_sell_feedback", "src.engine.monitoring.rising_missed_intraday_feedback"}
     assert receipt["reused_modules"] and set(receipt["reused_modules"]) <= allowed
     inherited = []
     if receipt.get("inherited_receipt_sha256"):
@@ -1470,7 +1470,7 @@ print(stage2_checklist_path(target_date))
 PY
 }
 
-for spec in "main_machine_policy:$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" "legacy_machine_report:$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" "main_auxiliary_policy:$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" "episode_policy:$RUN_LOW_PRICE_TWO_LEG_CANDIDATE_RECOMMENDATION" "outcome_labels:$RUN_AI_DECISION_QUALITY_DAILY_MATERIALIZATION"; do
+for spec in "main_machine_policy:$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" "legacy_machine_report:$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" "main_auxiliary_policy:$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" "outcome_labels:$RUN_AI_DECISION_QUALITY_DAILY_MATERIALIZATION"; do
   stage="${spec%%:*}"; enabled="${spec#*:}"
   if [[ "$enabled" != "true" && "$enabled" != "1" ]]; then
     "$VENV_PY" -m src.engine.automation.postclose_summary_handoff --stage "$stage" --date "$TARGET_DATE" --off
@@ -1545,10 +1545,7 @@ if [[ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" == "true" || "$RUN_AI_DECISI
 fi
 
 
-if [ "$RUN_LOW_PRICE_TWO_LEG_CANDIDATE_RECOMMENDATION" = "true" ] || [ "$RUN_LOW_PRICE_TWO_LEG_CANDIDATE_RECOMMENDATION" = "1" ]; then
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.postclose_summary_handoff \
-    --stage episode_policy --date "$TARGET_DATE" --publication-date "$POLICY_PUBLICATION_DATE" "${POSTCLOSE_STAGE_RECOVERY_ARGS[@]}" --launch
-fi
+
 # Rising Missed scout entry and dedicated studies retired 2026-09-18.
 echo "[threshold-cycle] entry AI gate diagnostic skipped schedule=$ENTRY_AI_GATE_BACKTEST_SCHEDULE target_date=$TARGET_DATE"
 # Legacy raw microstructure study retired; calibration owns the modern diagnostic.
@@ -1895,32 +1892,8 @@ if [ "$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT" = "true" ] || [ "$RUN_OBSERVATION_S
 fi
 # These candidates bind the audit's exact file hash. Build them once after the
 # final audit, not against the preflight generation that the final audit replaces.
-if [ "$RUN_SAMSUNG_MACHINE_ENTRY_TUNING" = "true" ] || [ "$RUN_SAMSUNG_MACHINE_ENTRY_TUNING" = "1" ]; then
-  wait_for_postclose_resources "samsung_machine_entry_tuning"
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.monitoring.samsung_machine_entry_tuning \
-    --target-date "$TARGET_DATE" \
-    --print-summary
-  wait_for_report_artifact \
-    "$PROJECT_DIR/data/report/samsung_machine_entry_tuning/samsung_machine_entry_tuning_${TARGET_DATE}.json" \
-    "$PROJECT_DIR/data/report/samsung_machine_entry_tuning/samsung_machine_entry_tuning_${TARGET_DATE}.md" \
-    "samsung_machine_entry_tuning"
-  wait_for_file_artifact \
-    "$PROJECT_DIR/data/threshold_cycle/samsung_machine_entry_policy/candidates/samsung_machine_entry_policy_candidate_${TARGET_DATE}.json" \
-    "samsung_machine_entry_policy_candidate"
-fi
-if [ "$RUN_LOW_PRICE_TWO_LEG_TUNING" = "true" ] || [ "$RUN_LOW_PRICE_TWO_LEG_TUNING" = "1" ]; then
-  wait_for_postclose_resources "low_price_two_leg_tuning"
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.monitoring.low_price_two_leg_tuning \
-    --target-date "$TARGET_DATE" \
-    --print-summary
-  wait_for_report_artifact \
-    "$PROJECT_DIR/data/report/low_price_two_leg_tuning/low_price_two_leg_tuning_${TARGET_DATE}.json" \
-    "$PROJECT_DIR/data/report/low_price_two_leg_tuning/low_price_two_leg_tuning_${TARGET_DATE}.md" \
-    "low_price_two_leg_tuning"
-  wait_for_file_artifact \
-    "$PROJECT_DIR/data/threshold_cycle/low_price_two_leg/candidates/low_price_two_leg_policy_candidate_${TARGET_DATE}.json" \
-    "low_price_two_leg_policy_candidate"
-fi
+
+
 if [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "true" ] || [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "1" ]; then
   wait_for_postclose_resources "ai_decision_action_outcome_calibration"
   for stage in legacy_machine_report main_auxiliary_policy; do
@@ -2159,6 +2132,13 @@ if (report.get("date") != target_date
 PY
 # Wait for asynchronous policy producers and consumers before hashing their
 # source generations into the runtime summary and next-day checklist.
+if [[ -f "$PROJECT_DIR/data/runtime/research/samsung_tick_transition/consumer-contract-v2.json" ]]; then
+  # Optional Main-only frozen research; no policy publication or startup gate.
+  if ! env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.samsung_frozen_postclose_validation \
+      --root "$PROJECT_DIR" --date "$TARGET_DATE"; then
+    echo "[threshold-cycle] optional Samsung frozen validation failed date=$TARGET_DATE" >&2
+  fi
+fi
 run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.postclose_summary_handoff \
   --stage wait --date "$TARGET_DATE" --timeout-sec 14400
 wait_for_postclose_resources "runtime_approval_summary"

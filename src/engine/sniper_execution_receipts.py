@@ -88,7 +88,7 @@ from src.engine.sniper_time import (
 )
 from src.engine.sniper_post_sell_feedback import record_post_sell_candidate
 from src.trading.market.session_contract import resolve_market_session
-from src.trading.config.symbol_owner_policy import (
+from src.trading.config.native_owner_policy import (
     SymbolOwnerPolicyError,
     resolve_symbol_owner_policy,
 )

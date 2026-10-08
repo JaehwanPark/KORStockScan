@@ -1313,80 +1313,6 @@ def _entry_cancel_wait_result_semantics(root, source_date, now=None, *, data_roo
     return result
 
 
-def _family_policy_semantics(root, source_date, family):
-    from src.engine.monitoring import family_policy_semantics as native
-    folders = {'episode': 'low_price_two_leg_tuning'}
-    path = root / 'data/report' / folders[family] / f'{family}_policy_semantics_{source_date}.json'
-    try:
-        execution = _semantic_stage_binding(root, source_date, family + '_policy')
-        if execution['status'] in {'pending', 'running'}:
-            return dict(status='unobservable', source_date=source_date, artifact=str(path),
-                        findings=[], execution=execution, reason='family_generation_in_transition')
-    except (OSError, ValueError, TypeError, KeyError) as exc:
-        return dict(_semantic_failure(exc), source_date=source_date, artifact=str(path))
-    if not path.exists() and not path.is_symlink():
-        if source_date >= '2026-10-06':
-            try:
-                stage = _semantic_stage_binding(root, source_date, family + '_policy')
-                if stage['status'] == 'succeeded':
-                    return dict(status='source_invalid', source_date=source_date, artifact=str(path),
-                                findings=[f'{family}_semantic_projection_missing_after_completed_producer'])
-            except (OSError, ValueError, TypeError, KeyError) as exc:
-                return dict(_semantic_failure(exc), source_date=source_date, artifact=str(path))
-        return {'status': 'not_assessed' if source_date < '2026-10-06' else 'waiting_producer',
-                'source_date': source_date, 'findings': [], 'artifact': str(path)}
-    try:
-        value, sha = _semantic_object(path, limit=4 * 1024 * 1024)
-        if (value != native.seal(value) or value.get('schema') != native.SCHEMA
-            or value.get('metric_contract') != native.CONTRACT or value.get('family') != family
-            or value.get('source_date') != source_date or value.get('runtime_effect') is not False
-            or value.get('actual_order_submitted') is not False):
-            raise ValueError(f'{family}_semantic_projection_invalid')
-        for receipt in [value['report'], value['policy']]:
-            _, source_sha = _semantic_object(Path(receipt['path']), hash_only=True)
-            if source_sha != receipt['sha256']:
-                raise ValueError(f'{family}_semantic_generation_mismatch')
-        if not value.get('producer_kernels'):
-            raise ValueError(f'{family}_semantic_producer_missing')
-        kernel_custody = {}
-        for source_path, source_sha in value['producer_kernels'].items():
-            kernel_custody[source_path] = native.verify_kernel(root / 'data', source_path, source_sha)
-        # The summary itself must still agree with its bound original report.
-        # Retaining an old kernel is no authority to attach a different summary.
-        original_report, _ = _semantic_object(Path(value['report']['path']))
-        if value['summary'] != native.episode_summary(original_report):
-            raise ValueError(f'{family}_semantic_summary_generation_mismatch')
-        summary = value['summary']
-        rows = summary['rows']
-        if not isinstance(rows, list) or any(not isinstance(r, dict) for r in rows):
-            raise ValueError(f'{family}_semantic_population_invalid')
-        findings = []
-        if family == 'episode':
-            counts = summary.get('stage_counts') or {}
-            dispositions = dict(Counter(r['disposition'] for r in rows))
-            if counts.get('profiles') != len(rows) or summary.get('dispositions') != dispositions:
-                raise ValueError('episode_semantic_population_invalid')
-            if len({r['profile_id'] for r in rows}) != len(rows):
-                raise ValueError('episode_semantic_duplicate_profile')
-            from src.trading.config.owner_retirement import episode_profile_retired
-            active_dispositions = Counter(r['disposition'] for r in rows if not episode_profile_retired(r['profile_id']))
-            if active_dispositions.get('source_gap'):
-                findings.append('episode_native_source_gap')
-            if (summary.get('capture_manifest') or {}).get('invalid_event_count'):
-                findings.append('episode_capture_invalid_events')
-        # Re-read the small seal after its predecessor hashes to catch publication
-        # between reads. A moving generation is unobservable, not corruption.
-        if _semantic_object(path, limit=4 * 1024 * 1024)[1] != sha:
-            raise ValueError('semantic_generation_changed_during_read')
-        historical = execution.get('status') == 'off'
-        return dict(status='off' if historical else 'warning' if findings else 'pass',
-            findings=[] if historical else findings, historical_findings=findings if historical else [],
-            source_date=source_date, target_date=value.get('target_date'),
-            artifact=str(path), report_sha256=sha, summary=summary, kernel_custody=kernel_custody,
-            scopes={r.get('profile_id') or f"{r['symbol']}|{r['session']}": r for r in rows},
-            actual_pid_consumed=False, decision_authority='report_only')
-    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
-        return dict(_semantic_failure(exc), source_date=source_date, artifact=str(path))
 
 
 def _samsung_forward_semantics(root, source_date, *, current_main=False):
@@ -1495,7 +1421,7 @@ def _postclose_handoff_semantics(root, source_date, now):
     result = {"status": "not_assessed", "source_date": source_date,
               "findings": [], "stages": {}, "consumption": "not_observed"}
     try:
-        for stage in ("episode_policy",):
+        for stage in ("summary_handoff",):
             result["stages"][stage] = _semantic_stage_binding(root, source_date, stage)
             if result["stages"][stage]["status"] == "succeeded":
                 from src.engine.automation.postclose_summary_handoff import stage_artifacts
@@ -1589,8 +1515,6 @@ def _project_semantic_owner(alert, current_owners, as_of_date):
         'main_auxiliary_policy': 'DirectFamilySourceRepairMainMechanisticEntry',
         'postclose_handoff': 'DirectFamilyPreopenPolicyHandoff',
         'entry_cancel_wait_tuning': 'DirectFamilySourceRepairEntryCancelWait',
-        'episode_policy': 'DirectFamilySourceRepairLowPriceTwoLeg',
-        'episode_startup': 'EpisodeCaptureSequence1006',
         'samsung_frozen_validation': 'SemanticMonitorProducerConsumerRefresh1007',
         'legacy_machine_report': 'SemanticMonitorProducerConsumerRefresh1007',
     }
@@ -1604,21 +1528,13 @@ def _project_semantic_owner(alert, current_owners, as_of_date):
 def _semantic_alert_candidates(name, semantics, source_date):
     if semantics.get('status') in {'off', 'historical_diagnostic'}:
         return []
-    if name in {'episode_policy', 'samsung_frozen_validation', 'episode_startup'}:
+    if name == 'samsung_frozen_validation':
         if semantics.get('status') in {'not_assessed', 'unobservable', 'waiting_producer', 'future_due'}:
             return []
         return [dict(source_date=source_date, target_date=semantics.get('target_date'),
             stage=name, scope='report', reason=reason, status=semantics['status'],
             artifact=semantics.get('artifact'), generation=semantics.get('report_sha256'),
-            **(dict(affected=sum(reason in row.get('findings', []) for row in semantics.get('rows', [])),
-                    eligible=sum(row.get('status') not in {'future_due', 'quarantined'}
-                                 for row in semantics.get('rows', [])),
-                    total=len(semantics.get('rows', [])), count_unit='profile')
-               if name == 'episode_startup' and any(reason in row.get('findings', [])
-                                                   for row in semantics.get('rows', [])) else {}),
-            owner='WidgetEpisodeNextSessionStartup1006' if name == 'episode_startup'
-                  else 'SamsungFrozenCandidateValidation1006' if name == 'samsung_frozen_validation'
-                  else 'SemanticPolicyCoverageRemediation1006',
+            owner='SamsungFrozenCandidateValidation1006',
             closure_test='exact_family_date_generation_source_policy_and_native_validator')
             for reason in semantics.get('findings', [])]
     if name == "entry_cancel_wait_tuning":
@@ -2623,8 +2539,7 @@ class ArtifactFreshnessDetector(BaseDetector):
             details["postclose_handoff_semantics"] = handoff
             if handoff["findings"]:
                 warnings.append("postclose_handoff_semantics: " + ", ".join(handoff["findings"]))
-            family_results = [(name, _family_policy_semantics(PROJECT_ROOT, semantic_day, family))
-                              for name, family in (('episode_policy', 'episode'),)]
+            family_results = []
             family_results.append(('samsung_frozen_validation', _samsung_forward_semantics(
                 PROJECT_ROOT, semantic_day, current_main=machine_semantics.get('selection_metric') == 'cumulative_raw_win_fraction')))
             for name, result in family_results:
@@ -2653,18 +2568,6 @@ class ArtifactFreshnessDetector(BaseDetector):
         if cancel_wait is not None:
             alerts.extend(_semantic_alerts('entry_cancel_wait_tuning', cancel_wait, cancel_wait_day))
         details['semantic_alerts'] = alerts
-        from src.engine.error_detectors.episode_health import check as episode_check
-        episode_startup = episode_check(PROJECT_ROOT, now_dt,
-            target_date=selection['target_date'] if not trading_day else today, reader=_semantic_object,
-            read_clock=lambda: datetime.now(ZoneInfo('Asia/Seoul')))
-        details['episode_startup_semantics'] = episode_startup
-        if episode_startup['findings']:
-            warnings.append('episode_startup_semantics: ' + ', '.join(episode_startup['findings']))
-        startup_alerts = _semantic_alerts('episode_startup', episode_startup, episode_startup['source_date'])
-        alerts.extend(startup_alerts)
-        bindings.append(dict(stage='episode_startup', source_date=episode_startup['source_date'],
-            target_date=episode_startup['target_date'], as_of_date=_today_kst_str(now_dt),
-            generation=episode_startup.get('report_sha256'), status=episode_startup['status']))
         current_owners = _current_semantic_owners(PROJECT_ROOT, today)
         # Apply one exact-date owner projection to every semantic hook,
         # including startup and cancel-wait hooks outside the stage loop.

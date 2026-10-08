@@ -28,22 +28,12 @@ SCHEMA = "postclose_recommendation_intake_v1"
 DISPOSITION_SCHEMA = "postclose_recommendation_dispositions_v1"
 SECTION_START = "<!-- POSTCLOSE_RECOMMENDATION_INTAKE_START -->"
 SECTION_END = "<!-- POSTCLOSE_RECOMMENDATION_INTAKE_END -->"
-SOURCE_LABELS = (
-    "code_improvement_workorder",
-    "samsung_machine_entry_tuning",
-    "low_price_two_leg_tuning",
-    "low_price_two_leg_expanded_candidate_research",
-    "machine_microstructure_attribution",
-    "machine_entry_timing_tuning",
-    "machine_microstructure_policy_approval",
-)
-SAMSUNG_MACHINE_ENTRY_RETIRED_FROM = "2026-09-30"
+SOURCE_LABELS = ("code_improvement_workorder",)
 
 
-def active_source_labels(target_date: str) -> tuple[str, ...]:
-    if target_date >= SAMSUNG_MACHINE_ENTRY_RETIRED_FROM:
-        return tuple(label for label in SOURCE_LABELS if label != "samsung_machine_entry_tuning")
+def active_source_labels(target_date):
     return SOURCE_LABELS
+
 IMPLEMENT = {"implement_now", "code_patch_required", "already_implemented"}
 COMPLETED = {"already_implemented_verified", "implemented_pass1", "implemented_pass2"}
 DISPOSITIONS = COMPLETED | {
@@ -414,10 +404,6 @@ def build_intake(report_dir: Path, target_date: str) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     sources = {}
     issues = []
-    if target_date >= SAMSUNG_MACHINE_ENTRY_RETIRED_FROM:
-        sources["samsung_machine_entry_tuning"] = {
-            "sha256": None, "status": "retired_not_applicable"
-        }
     for label in active_source_labels(target_date):
         payload, sha, error = _read(paths[label])
         sources[label] = {"sha256": sha, "status": error or "loaded"}

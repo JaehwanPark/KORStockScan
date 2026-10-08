@@ -1938,7 +1938,7 @@ def _load_buy_parent_handoff_projection(
                 "entry_projection": projection, "owner_registry": custody}
     policy_generation = {}
     try:
-        from src.trading.config.symbol_owner_policy import resolve_symbol_owner_policy
+        from src.trading.config.native_owner_policy import resolve_symbol_owner_policy
     except Exception:
         resolve_symbol_owner_policy = None
     for symbol in {str(row.get("stock_code") or "")[:6] for row in sent
@@ -1951,6 +1951,13 @@ def _load_buy_parent_handoff_projection(
             if (decision.target_date == source_date and not decision.symbol_selected
                 and not decision.coexistence_enabled):
                 policy_generation[symbol] = (decision.reason, decision.policy_hash)
+            from src.trading.config.native_owner_policy import historical_single_owner_binding
+            for event in sent:
+                fields = event.get('fields') or {}
+                if str(event.get('stock_code') or '')[:6] == symbol and historical_single_owner_binding(
+                        {**fields, 'stock_code': symbol}, observed_at=event.get('timestamp')):
+                    policy_generation[symbol] = (str(fields.get('buy_owner_policy_reason') or ''),
+                                                 str(fields.get('buy_owner_policy_hash') or ''))
         except Exception:
             continue
     result = _buy_parent_handoff_projection(

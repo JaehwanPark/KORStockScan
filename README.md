@@ -1,6 +1,6 @@
 # KORStockScan
 
-KORStockScan은 키움증권 REST/WebSocket과 연동하는 개인용 스캘핑 매매 엔진입니다. 넓은 시장을 탐색하는 메인 봇, 정해진 종목·시간대의 반복 패턴을 거래하는 에피소드 매매기계를 서로 독립된 주문 owner로 운영합니다. 위젯 자동·수동 매매와 화면·수집·연구·장후 정책 발행은 퇴역했습니다.
+KORStockScan은 키움증권 REST/WebSocket과 연동하는 개인용 스캘핑 매매 엔진입니다. 자동 매매는 Main 단일 owner로 운영합니다. 에피소드와 위젯의 실행·화면·수집·연구·장후 정책 발행 및 설치 경로는 퇴역했습니다. 과거 에피소드 체결분은 사용자가 수동 관리하며 Main이 인수하지 않습니다.
 
 목표는 위험을 모두 피하는 것이 아닙니다. 감당 가능한 위험 안에서 더 많은 유효 기회를 탐색하고, probe·분할 진입·동적 수량·부분익절·trailing·hard/protect/emergency guard 같은 후단 보호장치로 기대값과 누적 순이익을 높이는 것입니다.
 
@@ -12,7 +12,7 @@ KORStockScan은 키움증권 REST/WebSocket과 연동하는 개인용 스캘핑 
 
 ## 매매 기능
 
-메인과 에피소드 매매기계는 신호와 주문 상태를 공유하지 않습니다. 같은 종목을 다룰 때에도 owner, episode ID, 주문번호, 보유수량과 청산 귀속을 분리해 다른 기계의 수량을 매도하거나 중복 진입하지 않도록 합니다.
+공통 원장은 과거 주문 owner와 체결 이력을 보존합니다. 자동 주문은 Main 소유 수량만 사용하고 수동관리 잔여분과 명시적 수동 금지·안전 보호조건을 분리합니다.
 
 ### 메인 봇 매매기계
 
@@ -40,19 +40,9 @@ scanner/WATCHING
 
 삼성전자와 두산의 고정감시는 Main의 기존 진입·보유·청산·주문 owner를 사용한다. 두산 초기 정책은 현재 Main 비삼성 정책으로 지정하며 별도의 초기 경제성 입증을 요구하지 않는다. 두산 에피소드 신규 진입·발행·자동 확장을 제거한 작업본과 실제 설치/배포 상태는 구분한다. [전환 계획과 검증](docs/proposals/doosan-episode-retirement-main-fixed-watch-initial-policy-plan-2026-10-06.md)을 따른다.
 
-### 위젯 퇴역
+### 자동 owner 퇴역
 
-위젯 기능의 실행·설치·정책 발행 경로를 제거합니다. Main 삼성전자 고정 감시와 에피소드의 원천·주문 owner는 유지합니다. 과거 위젯 custody 기록은 감사 입력이며 새 주문 권한이 없습니다. [제거계획 및 실행 gate](docs/proposals/widget-full-runtime-postclose-retirement-plan-2026-10-06.md)를 따릅니다.
-
-### 에피소드 매매기계
-
-에피소드 매매기계는 특정 종목과 세션에서 반복 관측된 진입·회복 패턴을 독립 프로세스로 실행합니다. 삼성전자 시간대별 기계와 저가주 two-leg profile들이 대표적이며, 실제 활성 profile은 exact-date PREOPEN policy와 systemd schedule이 결정합니다.
-
-- **매매 목적:** 일반 scanner 경쟁이나 범용 threshold에 맡기기 어려운 종목·시간대별 반복 패턴을 재현 가능한 작은 거래 단위로 포착합니다.
-- **매매 목표:** 신규 episode는 서로 분리된 10주 두 leg, 최대 20주 범위에서 진입하고 profile별 tick/가격 목표를 추구합니다. 목표 미체결 보유분은 해당 episode owner가 계속 관리합니다.
-- **강점:** 종목·venue·시간창별 명시적 profile, 결정론적 두 leg 가격, 체결분만을 기준으로 한 목표가, 독립 lock/state/ledger, 정확한 주문 귀속과 PREOPEN calibration을 갖습니다.
-
-에피소드 매매기계의 entry·target·재진입 규칙은 profile마다 다릅니다. 보편 규칙으로 임의 완화하지 않으며, legacy 1주 보유는 custody compatibility로만 관리하고 신규 수량으로 확대하지 않습니다. 자세한 내용은 [Low-price Two-leg Machines](docs/low-price-two-leg-machines.md)와 [Samsung Episode Machine](docs/samsung-morning-one-share-machine.md)을 참고합니다.
+에피소드·위젯의 BUY/SELL/CANCEL/재시도와 독립 IPO 자동실행은 제거했습니다. Main 고정감시 5개와 등록 패턴·보조 AI·초기수량·trailing·AVG_DOWN을 유지합니다. 잔여분의 broker flat이나 과거 손익 결손은 삭제 선행 조건이 아닙니다. 공통 journal/DB와 Main 정책 부모는 보존합니다. [퇴역 계획](docs/proposals/main-only-widget-episode-full-retirement-plan-2026-10-07.md), [구현 검토](docs/audits/main-only-widget-episode-full-retirement-implementation-review-2026-10-08.md)를 따릅니다.
 
 ## 튜닝축
 
@@ -83,15 +73,6 @@ Main AI R0–R3는 변경 요청이 있을 때만 실행하는 작업이 아니�
 
 위젯 종목·신호·보조판정 연구는 실행하지 않습니다. 과거 결과와 공통 원천은 감사 및 살아 있는 소비자의 재현에 필요한 범위로 보존합니다.
 
-### 에피소드
-
-에피소드 튜닝은 profile별 시간창, leg 가격과 목표가가 실제 체결 및 terminal 결과에 적합했는지 갱신합니다.
-
-- 두 leg의 제출·부분체결·취소·목표가 귀속을 분리해 평가합니다.
-- 종목과 KRX/NXT/PREMARKET_KRX_LIKE 실적을 섞지 않습니다.
-- clean baseline 이후 rolling 결과와 최소 표본을 충족한 profile만 다음 PREOPEN 후보가 됩니다.
-- 수량은 튜닝축이 아니며 신규 episode의 두 개 10주 leg 계약을 유지합니다.
-
 ### 공통 smoothing 원칙
 
 Smoothing은 순간적인 tick·호가·OFI/QI 흔들림 때문에 진입·보유·청산 판단이 왕복하는 것을 줄이는 공통 품질축입니다. 별도 주문 owner나 위험 완화 권한은 아닙니다.
@@ -106,14 +87,14 @@ Smoothing은 순간적인 tick·호가·OFI/QI 흔들림 때문에 진입·보�
 
 장후 작업은 당일 원천을 검증하고 전용 owner별 평가·승계·정책 발행과 다음 기동 준비를 수행하는 자동화 체인입니다. 핵심 경로는 다음과 같습니다.
 
-설치 예약·stage 의존관계·내부 producer·정책 소비·OFF/퇴역 구성은 [장후작업 현행 활성 목록](docs/audit-reports/2026-09-05-postclose-work-inventory.md), 당일 실행·Acceptance는 checklist가 소유합니다. 실행·복구는 명시적으로 호출된 [장후 지시문](docs/postclose-tuning-result-review-task-instructions.md)을 따릅니다. 문서 현행화는 실행 요청이 아닙니다. ADM/LDM·bucket·greenfield·전용 institutional aggregate와 정규 scalp-sim chain은 퇴역, Swing과 Episode 신규 후보 연구는 OFF입니다. 기존 Episode 실매매·승인 정책과 real post-sell 관찰은 각 owner에서 유지합니다.
+설치 예약·stage 의존관계·내부 producer·정책 소비·OFF/퇴역 구성은 [장후작업 현행 활성 목록](docs/audit-reports/2026-09-05-postclose-work-inventory.md), 당일 실행·Acceptance는 checklist가 소유합니다. 실행·복구는 명시적으로 호출된 [장후 지시문](docs/postclose-tuning-result-review-task-instructions.md)을 따릅니다. 문서 현행화는 실행 요청이 아닙니다. ADM/LDM·bucket·greenfield·전용 institutional aggregate와 정규 scalp-sim chain은 퇴역, Swing과 Episode 신규 후보 연구는 OFF입니다. Episode 전용 평가·정책·알림·보호 worker는 실행하지 않습니다.
 
 ```text
 장중 raw event와 broker receipt 종료
   -> source-quality audit
   -> entry / submit / holding / scale-in / exit lifecycle 재구성
   -> Main 승률·full 전략 / compact AI / 전용 family 평가
-  -> 독립 machine-group stage terminal과 OFF receipt
+  -> Main의 6개 stage terminal
   -> owner별 비용·검증·후보 또는 정상 carry·정책 소비
   -> summary / tower / checklist / strict verifier
   -> 전체 controller DONE
@@ -125,7 +106,7 @@ Smoothing은 순간적인 tick·호가·OFI/QI 흔들림 때문에 진입·보�
 1. **Source-quality preflight:** clean baseline, 필수 필드, venue, 시각, executable price와 provenance를 검증합니다. 결손 row/window를 안정적으로 격리해 정상 입력을 보존하고, 전역 계약 결손·격리 실패는 전체 차단합니다. 예약 stage 전 미생성은 실패가 아닙니다.
 2. **Lifecycle 복기:** 실제 주문, 미진입, probe/residual, scale-in, 부분익절·trailing·최종 청산을 같은 흐름으로 재구성하되 real·sim·source-only를 분리합니다.
 3. **평가:** 기계 v7은 미진입 회복 우선·성공 보존, 보조 v4는 PASS/VETO/CAUTION의 full-cost 비교와 동결 후보 검증을 적용합니다. 새 계약은 10/2 원천의 장후 계산부터이며 갱신 원천은 9/29 이후 적격 자료입니다. 전용 family의 진단·경제성 분모와 source gap을 구분합니다.
-4. **정책 선택:** dated PREOPEN 정책, Main full 전략의 검증된 current/parent CAS, 독립 Episode 정책은 각 owner의 적용 경계를 따릅니다. 후보 부족·결손은 기존 유효 정책 승계와 원천 수리로 구분하고 정책 선택을 PID 소비로 대신하지 않습니다.
+4. **정책 선택:** dated PREOPEN 정책, Main full 전략의 검증된 current/parent CAS, 퇴역 owner 정책은 자동 실행 권한이 없습니다. 후보 부족·결손은 기존 유효 정책 승계와 원천 수리로 구분하고 정책 선택을 PID 소비로 대신하지 않습니다.
 5. **검증과 종료:** producer/consumer 순서, AI provider, artifact freshness, runtime env와 apply plan을 검증합니다. tower와 마지막 checklist의 exact source hash 및 strict verifier 명령이 성공한 뒤에만 controller가 `DONE`을 표시합니다. 이전 PASS artifact로 새 명령 실패를 숨기지 않습니다.
 
 6. **최종화와 다음 기동:** main wrapper DONE 뒤 독립 작업·전체 controller/strict·cleanup·최종 detector를 확인합니다. 장전 준비 PASS와 전체 장후 완료는 별도이며 실제 PREOPEN/PID·적용 버전의 비용 후 outcome을 자연 receipt로 확인합니다.
@@ -135,7 +116,7 @@ Smoothing은 순간적인 tick·호가·OFI/QI 흔들림 때문에 진입·보�
 ## 안전과 권한 경계
 
 - stale/conflict, price freshness, hard/protect/emergency stop, broker/account/order/quantity/cooldown은 hard safety이며 튜닝이 우회하지 않습니다.
-- `position_sizing_dynamic_formula`가 메인 봇의 신규·추가매수 수량을 소유합니다. 에피소드 수량은 각 독립 owner의 계약을 따릅니다.
+- `position_sizing_dynamic_formula`가 메인 봇의 신규·추가매수 수량을 소유합니다. 과거 에피소드 잔여 수량은 수동관리분입니다.
 - KRX, `PREMARKET_KRX_LIKE`, NXT 데이터와 성과를 분리합니다.
 - full fill과 partial fill, 실현손익과 매도 후 반사실 기회, real과 sim/source-only 결과를 합산하지 않습니다.
 - AI provider, bot 상태, cap, hard safety 또는 실주문 권한 변경은 리포트 단독으로 실행하지 않습니다.
@@ -148,7 +129,7 @@ KORStockScan/
 ├── src/
 │   ├── bot_main.py                 # 메인 봇 진입점
 │   ├── engine/                     # lifecycle, AI, monitoring, automation
-│   └── trading/                    # 에피소드 등 독립 주문 owner
+│   └── trading/                    # 공통 주문·원천·Main/수동 소유권
 ├── data/
 │   ├── pipeline_events/            # 장중 raw event
 │   ├── threshold_cycle/            # compact event, apply plan, runtime env

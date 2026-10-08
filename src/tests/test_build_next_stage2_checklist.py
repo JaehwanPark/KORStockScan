@@ -13,63 +13,6 @@ from src.engine import build_next_stage2_checklist as mod
 from src.engine.sync_docs_backlog_to_project import parse_checklist_tasks
 
 
-def _patch_dirs(monkeypatch, tmp_path):
-    docs = tmp_path / "docs"
-    ev = tmp_path / "data" / "report" / "threshold_cycle_ev"
-    openai = tmp_path / "data" / "report" / "openai_ws"
-    swing = tmp_path / "data" / "report" / "swing_runtime_approval"
-    code = tmp_path / "data" / "report" / "code_improvement_workorder"
-    runtime_gap = tmp_path / "data" / "report" / "runtime_apply_gap_audit"
-    tuning_performance = (
-        tmp_path / "data" / "report" / "tuning_performance_control_tower"
-    )
-    trigger_decision = (
-        tmp_path / "data" / "report" / "automation_chain_trigger_decision"
-    )
-    rising_missed = tmp_path / "data" / "report" / "rising_missed_scout_workorder"
-    main_ai_quality = tmp_path / "data" / "report" / "main_ai_quality_r0_r3"
-    machine_micro_approval = (
-        tmp_path / "data" / "report" / "machine_microstructure_policy_approval"
-    )
-    machine_micro_attribution = (
-        tmp_path / "data" / "report" / "machine_microstructure_attribution"
-    )
-    for path in (
-        docs,
-        ev,
-        openai,
-        swing,
-        code,
-        runtime_gap,
-        tuning_performance,
-        trigger_decision,
-        rising_missed,
-        main_ai_quality,
-        machine_micro_approval,
-        machine_micro_attribution,
-    ):
-        path.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(mod, "DOCS_DIR", docs)
-    monkeypatch.setattr(mod, "CHECKLIST_DIR", docs / "checklists")
-    monkeypatch.setattr(mod, "CHECKLIST_LOCK_DIR", tmp_path / "checklist-locks")
-    monkeypatch.setattr(mod, "EV_REPORT_DIR", ev)
-    monkeypatch.setattr(mod, "OPENAI_WS_REPORT_DIR", openai, raising=False)
-    monkeypatch.setattr(mod, "SWING_RUNTIME_APPROVAL_DIR", swing)
-    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_REPORT_DIR", code)
-    monkeypatch.setattr(mod, "RUNTIME_APPLY_GAP_REPORT_DIR", runtime_gap)
-    monkeypatch.setattr(mod, "TUNING_PERFORMANCE_REPORT_DIR", tuning_performance)
-    monkeypatch.setattr(mod, "AUTOMATION_TRIGGER_DECISION_REPORT_DIR", trigger_decision)
-    monkeypatch.setattr(
-        mod,
-        "MACHINE_MICROSTRUCTURE_POLICY_APPROVAL_REPORT_DIR",
-        machine_micro_approval,
-    )
-    monkeypatch.setattr(
-        mod,
-        "MACHINE_MICROSTRUCTURE_ATTRIBUTION_REPORT_DIR",
-        machine_micro_attribution,
-    )
-    return docs, ev, openai, swing, code
 
 
 def _write_json(path: Path, payload: dict):
@@ -222,101 +165,8 @@ def _direct_summary(
 
 
 
-def _write_machine_micro_approval_report(path: Path, payload: dict) -> None:
-    source_date = str(payload.get("target_date") or "")
-    attribution_path = (
-        mod.MACHINE_MICROSTRUCTURE_ATTRIBUTION_REPORT_DIR
-        / f"machine_microstructure_attribution_{source_date}.json"
-    )
-    _write_json(
-        attribution_path,
-        {
-            "schema": "machine_microstructure_attribution_v1",
-            "target_date": source_date,
-            "generated_at_kst": datetime.now().astimezone().isoformat(),
-            "authority": {
-                "runtime_effect": False,
-                "allowed_runtime_apply": False,
-                "actual_order_submitted": False,
-                "broker_order_forbidden": True,
-            },
-        },
-    )
-    source_bytes = attribution_path.read_bytes()
-    source_stat = attribution_path.stat()
-    enriched = dict(payload)
-    enriched.setdefault(
-        "generated_at_kst",
-        datetime.fromtimestamp(source_stat.st_mtime)
-        .astimezone()
-        .isoformat(timespec="seconds"),
-    )
-    enriched["source_path"] = str(attribution_path)
-    enriched["source_artifact"] = {
-        "schema": "machine_microstructure_policy_source_artifact_provenance_v1",
-        "path": str(attribution_path),
-        "sha256": hashlib.sha256(source_bytes).hexdigest(),
-        "mtime_ns": source_stat.st_mtime_ns,
-        "size_bytes": source_stat.st_size,
-    }
-    _write_json(path, enriched)
 
 
-def _machine_micro_approval_report(
-    source_date: str,
-    *,
-    objective_followups: list[dict] | None = None,
-    actionable_candidates: list[dict] | None = None,
-    source_status: str = "loaded",
-    objective_followup_source_status: str = "loaded",
-    objective_followup_rejections: list[dict] | None = None,
-) -> dict:
-    objectives = [
-        {
-            "schema": "machine_fast_lifecycle_objective_followup_v1",
-            "source_date": source_date,
-            "operator_decision_required": False,
-            "metric_contract": {
-                "decision_authority": "postclose_followup_tracking_only"
-            },
-            "runtime_effect": False,
-            "allowed_runtime_apply": False,
-            "actual_order_submitted": False,
-            "broker_order_forbidden": True,
-            "authority": {
-                "runtime_effect": False,
-                "allowed_runtime_apply": False,
-                "actual_order_submitted": False,
-                "broker_order_forbidden": True,
-            },
-            **row,
-        }
-        for row in (objective_followups or [])
-    ]
-    candidates = list(actionable_candidates or [])
-    rejections = list(objective_followup_rejections or [])
-    return {
-        "schema": "machine_microstructure_policy_approval_status_v1",
-        "report_type": "machine_microstructure_policy_approval",
-        "phase": "postclose",
-        "target_date": source_date,
-        "source_status": source_status,
-        "objective_followup_source_status": objective_followup_source_status,
-        "summary": {
-            "actionable_candidate_count": len(candidates),
-            "actionable_objective_followup_count": len(objectives),
-            "objective_followup_rejection_count": len(rejections),
-        },
-        "actionable_candidates": candidates,
-        "objective_followups": objectives,
-        "objective_followup_rejections": rejections,
-        "authority": {
-            "runtime_effect": False,
-            "runtime_apply_performed": False,
-            "actual_order_submitted": False,
-            "broker_order_forbidden": True,
-        },
-    }
 
 
 def test_build_next_stage2_checklist_generates_next_trading_day_and_tasks(
@@ -569,9 +419,8 @@ def test_build_next_stage2_checklist_skips_optional_tasks_when_optional_artifact
         "PostcloseSourceQualityGateReview0526",
         "ThresholdDailyEVReport0526",
         "HumanInterventionSummary0526",
-        "MachineMicroPolicyApprovalSourceGap0526",
     ]
-    assert "source_status=missing" in text
+    assert "MachineMicroPolicyApproval" not in text
     assert "CodeImprovementWorkorderReview0526" not in text
     assert "AutomationTriggerDecisionSummary0526" not in text
     assert "tuning_performance_control_tower_2026-05-22.json" not in text
@@ -685,770 +534,36 @@ def test_runtime_apply_gap_pending_is_surfaced_in_preopen_task(monkeypatch, tmp_
     assert "runtime_gap_pending_not_consumed" in text
 
 
-def test_machine_microstructure_policy_approval_is_surfaced_in_preopen_task(
-    monkeypatch, tmp_path
-):
-    docs, ev_dir, _, swing_dir, code_dir = _patch_dirs(monkeypatch, tmp_path)
-    approval_dir = mod.MACHINE_MICROSTRUCTURE_POLICY_APPROVAL_REPORT_DIR
-    _write_json(
-        ev_dir / "threshold_cycle_ev_2026-05-22.json",
-        {"runtime_apply": {"runtime_change": False}},
-    )
-    _write_json(
-        swing_dir / "swing_runtime_approval_2026-05-22.json",
-        {"approval_requests": []},
-    )
-    _write_json(
-        code_dir / "code_improvement_workorder_2026-05-22.json",
-        {"summary": {"selected_order_count": 0}},
-    )
-    _write_machine_micro_approval_report(
-        approval_dir
-        / "machine_microstructure_policy_approval_postclose_2026-05-22.json",
-        _machine_micro_approval_report(
-            "2026-05-22",
-            actionable_candidates=[
-                {
-                    "candidate_id": "widget:005930:entry:micro_axis",
-                    "candidate_sha256": "a" * 64,
-                    "state": "REVIEW_READY",
-                }
-            ],
-            objective_followups=[
-                {
-                    "followup_id": "machine_lifecycle_turnover_policy",
-                    "state": "EVIDENCE_ACCUMULATING",
-                    "followup_required": True,
-                    "next_action": "continue_collection_and_recheck_floors",
-                }
-            ],
-        ),
-    )
 
-    mod.build_next_stage2_checklist("2026-05-22")
 
-    text = (docs / "checklists" / "2026-05-26-stage2-todo-checklist.md").read_text(
-        encoding="utf-8"
-    )
-    assert "[MachineMicroPolicyApprovalPreopen0526]" in text
-    assert "widget:005930:entry:micro_axis" in text
-    assert "REVIEW_READY" in text
-    assert "aaaaaaaaaaaaaaaa" in text
-    assert "미등록 runtime family" in text
-    objective_task = "[MachineLifecycleTurnoverObjectiveFollowup0526]"
-    assert objective_task in text
-    assert text.index("[MachineMicroPolicyApprovalPreopen0526]") < text.index(
-        "## 장중 체크리스트"
-    )
-    assert text.index(objective_task) > text.index("## 장후 체크리스트")
 
 
-def test_machine_microstructure_closed_candidate_removes_builder_owned_preopen_task(
-    monkeypatch, tmp_path
-):
-    docs, ev_dir, _, _, _ = _patch_dirs(monkeypatch, tmp_path)
-    approval_path = (
-        mod.MACHINE_MICROSTRUCTURE_POLICY_APPROVAL_REPORT_DIR
-        / "machine_microstructure_policy_approval_postclose_2026-05-22.json"
-    )
-    _write_json(
-        ev_dir / "threshold_cycle_ev_2026-05-22.json",
-        {"runtime_apply": {"runtime_change": False}},
-    )
-    _write_machine_micro_approval_report(
-        approval_path,
-        _machine_micro_approval_report(
-            "2026-05-22",
-            actionable_candidates=[
-                {
-                    "candidate_id": "widget:005930:entry:micro_axis",
-                    "candidate_sha256": "a" * 64,
-                    "state": "REVIEW_READY",
-                }
-            ],
-        ),
-    )
 
-    mod.build_next_stage2_checklist("2026-05-22")
-    target = docs / "checklists" / "2026-05-26-stage2-todo-checklist.md"
-    assert "[MachineMicroPolicyApprovalPreopen0526]" in target.read_text(
-        encoding="utf-8"
-    )
 
-    _write_machine_micro_approval_report(
-        approval_path,
-        _machine_micro_approval_report("2026-05-22"),
-    )
-    mod.build_next_stage2_checklist("2026-05-22")
 
-    assert "[MachineMicroPolicyApprovalPreopen0526]" not in target.read_text(
-        encoding="utf-8"
-    )
 
 
-def test_machine_microstructure_objective_followup_is_surfaced_without_candidate(
-    monkeypatch, tmp_path
-):
-    docs, ev_dir, _, swing_dir, code_dir = _patch_dirs(monkeypatch, tmp_path)
-    approval_dir = mod.MACHINE_MICROSTRUCTURE_POLICY_APPROVAL_REPORT_DIR
-    _write_json(
-        ev_dir / "threshold_cycle_ev_2026-05-22.json",
-        {"runtime_apply": {"runtime_change": False}},
-    )
-    _write_json(
-        swing_dir / "swing_runtime_approval_2026-05-22.json",
-        {"approval_requests": []},
-    )
-    _write_json(
-        code_dir / "code_improvement_workorder_2026-05-22.json",
-        {"summary": {"selected_order_count": 0}},
-    )
-    _write_machine_micro_approval_report(
-        approval_dir
-        / "machine_microstructure_policy_approval_postclose_2026-05-22.json",
-        _machine_micro_approval_report(
-            "2026-05-22",
-            objective_followups=[
-                {
-                    "followup_id": "machine_lifecycle_turnover_policy_research_v1",
-                    "state": "IMPLEMENTATION_REQUIRED",
-                    "followup_required": True,
-                    "next_action": "implement_source_only_rolling_paired_policy_research",
-                }
-            ],
-        ),
-    )
 
-    mod.build_next_stage2_checklist("2026-05-22")
 
-    checklist = docs / "checklists" / "2026-05-26-stage2-todo-checklist.md"
-    text = checklist.read_text(encoding="utf-8")
-    task = "[MachineLifecycleTurnoverObjectiveFollowup0526]"
-    assert task in text
-    assert "[MachineMicroPolicyApprovalPreopen0526]" not in text
-    assert text.index(task) > text.index("## 장후 체크리스트")
-    assert "`Slot: POSTCLOSE`" in text[text.index(task) :]
-    assert "machine_lifecycle_turnover_policy_research_v1" in text
-    assert "IMPLEMENTATION_REQUIRED" in text
-    assert "implement_source_only_rolling_paired_policy_research" in text
-    assert "runtime env, 실주문" in text
-    monkeypatch.setenv("DOC_CHECKLIST_PATH", str(checklist))
-    parsed = [row for row in parse_checklist_tasks() if task in row.title]
-    assert len(parsed) == 1
-    assert parsed[0].due_date == "2026-05-26"
 
 
-def test_machine_microstructure_closed_objective_followup_is_removed_on_refresh(
-    monkeypatch, tmp_path
-):
-    docs, ev_dir, _, swing_dir, code_dir = _patch_dirs(monkeypatch, tmp_path)
-    approval_dir = mod.MACHINE_MICROSTRUCTURE_POLICY_APPROVAL_REPORT_DIR
-    _write_json(
-        ev_dir / "threshold_cycle_ev_2026-05-22.json",
-        {"runtime_apply": {"runtime_change": False}},
-    )
-    _write_json(
-        swing_dir / "swing_runtime_approval_2026-05-22.json",
-        {"approval_requests": []},
-    )
-    _write_json(
-        code_dir / "code_improvement_workorder_2026-05-22.json",
-        {"summary": {"selected_order_count": 0}},
-    )
-    _write_machine_micro_approval_report(
-        approval_dir
-        / "machine_microstructure_policy_approval_postclose_2026-05-22.json",
-        _machine_micro_approval_report(
-            "2026-05-22",
-            objective_followups=[
-                {
-                    "followup_id": "machine_lifecycle_turnover_policy",
-                    "state": "IMPLEMENTATION_REQUIRED",
-                    "followup_required": True,
-                    "next_action": "implement_source_only_rolling_paired_policy_research",
-                }
-            ],
-        ),
-    )
 
-    mod.build_next_stage2_checklist("2026-05-22")
-    target = docs / "checklists" / "2026-05-26-stage2-todo-checklist.md"
-    text = target.read_text(encoding="utf-8")
-    assert "[MachineLifecycleTurnoverObjectiveFollowup0526]" in text
 
-    auto_end = text.index(mod.AUTO_END)
-    target.write_text(
-        text[:auto_end] + "- [ ] `[CustomPostclose0526] 수동 auto-block 보강` "
-        "(`Due: 2026-05-26`, `Slot: POSTCLOSE`, "
-        "`TimeWindow: 21:50~21:55`, `Track: RuntimeStability`)\n"
-        "  - Source: [manual.md](/home/ubuntu/KORStockScan/docs/manual.md)\n"
-        "  - 판정 기준: builder가 보존해야 한다.\n\n" + text[auto_end:],
-        encoding="utf-8",
-    )
-    _write_machine_micro_approval_report(
-        approval_dir
-        / "machine_microstructure_policy_approval_postclose_2026-05-22.json",
-        _machine_micro_approval_report("2026-05-22"),
-    )
-    mod.build_next_stage2_checklist("2026-05-22")
 
-    text = target.read_text(encoding="utf-8")
-    assert "[MachineLifecycleTurnoverObjectiveFollowup0526]" not in text
-    assert "[CustomPostclose0526]" in text
 
 
-@pytest.mark.parametrize(
-    ("mutation", "expected_status"),
-    [
-        ({"schema": "wrong"}, "contract_invalid:schema"),
-        ({"phase": "preopen"}, "contract_invalid:phase"),
-        ({"target_date": "2026-05-21"}, "contract_invalid:target_date"),
-        (
-            {"generated_at_kst": "not-an-aware-timestamp"},
-            "predecessor_invalid:generated_at_kst",
-        ),
-        (
-            {"objective_followup_source_status": "unknown"},
-            "contract_invalid:objective_followup_source_status",
-        ),
-        (
-            {
-                "summary": {
-                    "actionable_objective_followup_count": "0",
-                    "objective_followup_rejection_count": 0,
-                }
-            },
-            "contract_invalid:objective_followup_count",
-        ),
-        (
-            {
-                "summary": {
-                    "actionable_objective_followup_count": 0,
-                    "objective_followup_rejection_count": "0",
-                }
-            },
-            "contract_invalid:objective_followup_rejection_count",
-        ),
-        (
-            {
-                "authority": {
-                    "runtime_effect": True,
-                    "runtime_apply_performed": False,
-                    "actual_order_submitted": False,
-                    "broker_order_forbidden": True,
-                }
-            },
-            "contract_invalid:authority",
-        ),
-    ],
-)
-def test_machine_microstructure_approval_contract_gap_is_explicit(
-    monkeypatch, tmp_path, mutation, expected_status
-):
-    docs, ev_dir, _, _, _ = _patch_dirs(monkeypatch, tmp_path)
-    approval_dir = mod.MACHINE_MICROSTRUCTURE_POLICY_APPROVAL_REPORT_DIR
-    _write_json(
-        ev_dir / "threshold_cycle_ev_2026-05-22.json",
-        {"runtime_apply": {"runtime_change": False}},
-    )
-    payload = _machine_micro_approval_report("2026-05-22")
-    payload.update(mutation)
-    _write_machine_micro_approval_report(
-        approval_dir
-        / "machine_microstructure_policy_approval_postclose_2026-05-22.json",
-        payload,
-    )
 
-    mod.build_next_stage2_checklist("2026-05-22")
 
-    text = (docs / "checklists" / "2026-05-26-stage2-todo-checklist.md").read_text(
-        encoding="utf-8"
-    )
-    assert "[MachineMicroPolicyApprovalSourceGap0526]" in text
-    assert f"source_status={expected_status}" in text
-    assert "[MachineLifecycleTurnoverObjectiveFollowup0526]" not in text
 
 
-def test_stale_same_date_approval_is_not_loaded_after_attribution_refresh(
-    monkeypatch, tmp_path
-):
-    docs, ev_dir, _, _, _ = _patch_dirs(monkeypatch, tmp_path)
-    _write_json(
-        ev_dir / "threshold_cycle_ev_2026-05-22.json",
-        {"runtime_apply": {"runtime_change": False}},
-    )
-    approval_path = (
-        mod.MACHINE_MICROSTRUCTURE_POLICY_APPROVAL_REPORT_DIR
-        / "machine_microstructure_policy_approval_postclose_2026-05-22.json"
-    )
-    _write_machine_micro_approval_report(
-        approval_path,
-        _machine_micro_approval_report(
-            "2026-05-22",
-            objective_followups=[
-                {
-                    "followup_id": "machine_lifecycle_turnover_policy_research_v1",
-                    "state": "IMPLEMENTATION_REQUIRED",
-                    "followup_required": True,
-                    "next_action": (
-                        "implement_source_only_rolling_paired_policy_research"
-                    ),
-                }
-            ],
-        ),
-    )
-    attribution_path = (
-        mod.MACHINE_MICROSTRUCTURE_ATTRIBUTION_REPORT_DIR
-        / "machine_microstructure_attribution_2026-05-22.json"
-    )
-    refreshed = json.loads(attribution_path.read_text(encoding="utf-8"))
-    refreshed["generation_id"] = "later_same_date_final_refresh"
-    _write_json(attribution_path, refreshed)
 
-    mod.build_next_stage2_checklist("2026-05-22")
 
-    text = (docs / "checklists" / "2026-05-26-stage2-todo-checklist.md").read_text(
-        encoding="utf-8"
-    )
-    assert "[MachineMicroPolicyApprovalSourceGap0526]" in text
-    assert "source_status=predecessor_invalid:source_artifact_sha256" in text
-    assert "[MachineLifecycleTurnoverObjectiveFollowup0526]" not in text
 
 
-def test_completed_refresh_rejects_old_but_mutually_matching_same_date_artifacts(
-    monkeypatch, tmp_path
-):
-    docs, ev_dir, _, _, _ = _patch_dirs(monkeypatch, tmp_path)
-    _write_json(
-        ev_dir / "threshold_cycle_ev_2026-05-22.json",
-        {"runtime_apply": {"runtime_change": False}},
-    )
-    approval_path = (
-        mod.MACHINE_MICROSTRUCTURE_POLICY_APPROVAL_REPORT_DIR
-        / "machine_microstructure_policy_approval_postclose_2026-05-22.json"
-    )
-    _write_machine_micro_approval_report(
-        approval_path,
-        _machine_micro_approval_report("2026-05-22"),
-    )
 
-    mod.build_next_stage2_checklist(
-        "2026-05-22",
-        machine_micro_approval_not_before=(
-            datetime.now().astimezone() + timedelta(minutes=1)
-        ),
-    )
 
-    text = (docs / "checklists" / "2026-05-26-stage2-todo-checklist.md").read_text(
-        encoding="utf-8"
-    )
-    assert "[MachineMicroPolicyApprovalSourceGap0526]" in text
-    assert (
-        "source_status=predecessor_invalid:"
-        "approval_generated_before_completed_refresh_window"
-    ) in text
 
 
-def test_completed_refresh_rejects_fresh_approval_over_stale_loaded_source(
-    monkeypatch, tmp_path
-):
-    docs, ev_dir, _, _, _ = _patch_dirs(monkeypatch, tmp_path)
-    _write_json(
-        ev_dir / "threshold_cycle_ev_2026-05-22.json",
-        {"runtime_apply": {"runtime_change": False}},
-    )
-    approval_path = (
-        mod.MACHINE_MICROSTRUCTURE_POLICY_APPROVAL_REPORT_DIR
-        / "machine_microstructure_policy_approval_postclose_2026-05-22.json"
-    )
-    _write_machine_micro_approval_report(
-        approval_path,
-        _machine_micro_approval_report("2026-05-22"),
-    )
-    attribution_path = (
-        mod.MACHINE_MICROSTRUCTURE_ATTRIBUTION_REPORT_DIR
-        / "machine_microstructure_attribution_2026-05-22.json"
-    )
-    now = datetime.now().astimezone()
-    stale_at = now - timedelta(minutes=65)
-    source_payload = json.loads(attribution_path.read_text(encoding="utf-8"))
-    source_payload["generated_at_kst"] = stale_at.isoformat()
-    _write_json(attribution_path, source_payload)
-    os.utime(attribution_path, (stale_at.timestamp(), stale_at.timestamp()))
-    source_bytes = attribution_path.read_bytes()
-    source_stat = attribution_path.stat()
-    approval_payload = json.loads(approval_path.read_text(encoding="utf-8"))
-    approval_payload["generated_at_kst"] = now.isoformat(timespec="seconds")
-    approval_payload["source_artifact"].update(
-        {
-            "sha256": hashlib.sha256(source_bytes).hexdigest(),
-            "mtime_ns": source_stat.st_mtime_ns,
-            "size_bytes": source_stat.st_size,
-        }
-    )
-    _write_json(approval_path, approval_payload)
-
-    mod.build_next_stage2_checklist(
-        "2026-05-22",
-        machine_micro_approval_not_before=now - timedelta(minutes=30),
-    )
-
-    text = (docs / "checklists" / "2026-05-26-stage2-todo-checklist.md").read_text(
-        encoding="utf-8"
-    )
-    assert "[MachineMicroPolicyApprovalSourceGap0526]" in text
-    assert "source_payload_generated_before_completed_refresh_window" in text
-    assert "source_artifact_mtime_before_completed_refresh_window" in text
-
-
-def test_fresh_explicit_objective_source_gap_preserves_prior_open_objective(
-    monkeypatch, tmp_path
-):
-    docs, ev_dir, _, _, _ = _patch_dirs(monkeypatch, tmp_path)
-    _write_json(
-        ev_dir / "threshold_cycle_ev_2026-05-22.json",
-        {"runtime_apply": {"runtime_change": False}},
-    )
-    approval_path = (
-        mod.MACHINE_MICROSTRUCTURE_POLICY_APPROVAL_REPORT_DIR
-        / "machine_microstructure_policy_approval_postclose_2026-05-22.json"
-    )
-    attribution_path = (
-        mod.MACHINE_MICROSTRUCTURE_ATTRIBUTION_REPORT_DIR
-        / "machine_microstructure_attribution_2026-05-22.json"
-    )
-    now = datetime.now().astimezone()
-    payload = _machine_micro_approval_report(
-        "2026-05-22",
-        objective_followup_source_status="missing_or_unreadable",
-        objective_followups=[
-            {
-                "followup_id": "machine_lifecycle_turnover_policy_research_v1",
-                "source_date": "2026-05-21",
-                "state": "EVIDENCE_ACCUMULATING",
-                "followup_required": True,
-                "next_action": "continue_exact_date_collection",
-            }
-        ],
-    )
-    payload.update(
-        {
-            "generated_at_kst": now.isoformat(timespec="seconds"),
-            "source_status": "missing_or_unreadable",
-            "source_path": str(attribution_path),
-            "source_artifact": {
-                "schema": mod.MACHINE_MICROSTRUCTURE_SOURCE_ARTIFACT_SCHEMA,
-                "path": str(attribution_path),
-                "sha256": None,
-                "mtime_ns": None,
-                "size_bytes": None,
-            },
-        }
-    )
-    _write_json(approval_path, payload)
-
-    summary = mod.build_next_stage2_checklist(
-        "2026-05-22",
-        machine_micro_approval_not_before=now - timedelta(minutes=1),
-    )
-
-    assert "MachineLifecycleTurnoverObjectiveFollowup0526" in summary["tasks"]
-    assert "MachineMicroPolicyApprovalSourceGap0526" in summary["tasks"]
-    text = (docs / "checklists" / "2026-05-26-stage2-todo-checklist.md").read_text(
-        encoding="utf-8"
-    )
-    assert "source_status=objective_source_gap:missing_or_unreadable" in text
-    assert "machine_lifecycle_turnover_policy_research_v1" in text
-
-
-@pytest.mark.parametrize(
-    ("source_mutation", "expected_error"),
-    [
-        ({"schema": "wrong"}, "source_payload_schema"),
-        ({"target_date": "2026-05-21"}, "source_payload_target_date"),
-        (
-            {
-                "authority": {
-                    "runtime_effect": True,
-                    "allowed_runtime_apply": False,
-                    "actual_order_submitted": False,
-                    "broker_order_forbidden": True,
-                }
-            },
-            "source_payload_authority",
-        ),
-    ],
-)
-def test_approval_predecessor_semantics_are_validated_after_matching_rehash(
-    monkeypatch, tmp_path, source_mutation, expected_error
-):
-    docs, ev_dir, _, _, _ = _patch_dirs(monkeypatch, tmp_path)
-    _write_json(
-        ev_dir / "threshold_cycle_ev_2026-05-22.json",
-        {"runtime_apply": {"runtime_change": False}},
-    )
-    approval_path = (
-        mod.MACHINE_MICROSTRUCTURE_POLICY_APPROVAL_REPORT_DIR
-        / "machine_microstructure_policy_approval_postclose_2026-05-22.json"
-    )
-    _write_machine_micro_approval_report(
-        approval_path,
-        _machine_micro_approval_report("2026-05-22"),
-    )
-    attribution_path = (
-        mod.MACHINE_MICROSTRUCTURE_ATTRIBUTION_REPORT_DIR
-        / "machine_microstructure_attribution_2026-05-22.json"
-    )
-    source_payload = json.loads(attribution_path.read_text(encoding="utf-8"))
-    source_payload.update(source_mutation)
-    _write_json(attribution_path, source_payload)
-    source_bytes = attribution_path.read_bytes()
-    source_stat = attribution_path.stat()
-    approval_payload = json.loads(approval_path.read_text(encoding="utf-8"))
-    approval_payload["generated_at_kst"] = (
-        datetime.fromtimestamp(source_stat.st_mtime)
-        .astimezone()
-        .isoformat(timespec="seconds")
-    )
-    approval_payload["source_artifact"].update(
-        {
-            "sha256": hashlib.sha256(source_bytes).hexdigest(),
-            "mtime_ns": source_stat.st_mtime_ns,
-            "size_bytes": source_stat.st_size,
-        }
-    )
-    _write_json(approval_path, approval_payload)
-
-    mod.build_next_stage2_checklist("2026-05-22")
-
-    text = (docs / "checklists" / "2026-05-26-stage2-todo-checklist.md").read_text(
-        encoding="utf-8"
-    )
-    assert "[MachineMicroPolicyApprovalSourceGap0526]" in text
-    assert f"source_status=predecessor_invalid:{expected_error}" in text
-
-
-def test_machine_microstructure_unreadable_approval_gap_is_explicit(
-    monkeypatch, tmp_path
-):
-    docs, ev_dir, _, _, _ = _patch_dirs(monkeypatch, tmp_path)
-    approval_path = (
-        mod.MACHINE_MICROSTRUCTURE_POLICY_APPROVAL_REPORT_DIR
-        / "machine_microstructure_policy_approval_postclose_2026-05-22.json"
-    )
-    _write_json(
-        ev_dir / "threshold_cycle_ev_2026-05-22.json",
-        {"runtime_apply": {"runtime_change": False}},
-    )
-    approval_path.write_text("{not-json", encoding="utf-8")
-
-    mod.build_next_stage2_checklist("2026-05-22")
-
-    text = (docs / "checklists" / "2026-05-26-stage2-todo-checklist.md").read_text(
-        encoding="utf-8"
-    )
-    assert "[MachineMicroPolicyApprovalSourceGap0526]" in text
-    assert "source_status=unreadable" in text
-
-
-def test_machine_microstructure_source_gap_task_is_removed_after_valid_refresh(
-    monkeypatch, tmp_path
-):
-    docs, ev_dir, _, _, _ = _patch_dirs(monkeypatch, tmp_path)
-    approval_dir = mod.MACHINE_MICROSTRUCTURE_POLICY_APPROVAL_REPORT_DIR
-    _write_json(
-        ev_dir / "threshold_cycle_ev_2026-05-22.json",
-        {"runtime_apply": {"runtime_change": False}},
-    )
-
-    mod.build_next_stage2_checklist("2026-05-22")
-    target = docs / "checklists" / "2026-05-26-stage2-todo-checklist.md"
-    assert "[MachineMicroPolicyApprovalSourceGap0526]" in target.read_text(
-        encoding="utf-8"
-    )
-
-    _write_machine_micro_approval_report(
-        approval_dir
-        / "machine_microstructure_policy_approval_postclose_2026-05-22.json",
-        _machine_micro_approval_report("2026-05-22"),
-    )
-    mod.build_next_stage2_checklist("2026-05-22")
-
-    assert "[MachineMicroPolicyApprovalSourceGap0526]" not in target.read_text(
-        encoding="utf-8"
-    )
-
-
-def test_machine_microstructure_prior_open_objective_is_preserved_with_source_gap(
-    monkeypatch, tmp_path
-):
-    docs, ev_dir, _, _, _ = _patch_dirs(monkeypatch, tmp_path)
-    approval_dir = mod.MACHINE_MICROSTRUCTURE_POLICY_APPROVAL_REPORT_DIR
-    _write_json(
-        ev_dir / "threshold_cycle_ev_2026-05-22.json",
-        {"runtime_apply": {"runtime_change": False}},
-    )
-    _write_machine_micro_approval_report(
-        approval_dir
-        / "machine_microstructure_policy_approval_postclose_2026-05-22.json",
-        _machine_micro_approval_report(
-            "2026-05-22",
-            source_status="missing_or_unreadable",
-            objective_followup_source_status="missing_or_unreadable",
-            objective_followups=[
-                {
-                    "followup_id": "machine_lifecycle_turnover_policy_research_v1",
-                    "source_date": "2026-05-21",
-                    "state": "EVIDENCE_ACCUMULATING",
-                    "followup_required": True,
-                    "next_action": "continue_exact_date_collection",
-                }
-            ],
-        ),
-    )
-
-    mod.build_next_stage2_checklist("2026-05-22")
-
-    text = (docs / "checklists" / "2026-05-26-stage2-todo-checklist.md").read_text(
-        encoding="utf-8"
-    )
-    assert "[MachineLifecycleTurnoverObjectiveFollowup0526]" in text
-    assert "machine_lifecycle_turnover_policy_research_v1" in text
-    assert "[MachineMicroPolicyApprovalSourceGap0526]" in text
-    assert "source_status=objective_source_gap:missing_or_unreadable" in text
-
-
-def test_machine_microstructure_rejected_new_row_preserves_prior_open_objective(
-    monkeypatch, tmp_path
-):
-    docs, ev_dir, _, _, _ = _patch_dirs(monkeypatch, tmp_path)
-    approval_dir = mod.MACHINE_MICROSTRUCTURE_POLICY_APPROVAL_REPORT_DIR
-    _write_json(
-        ev_dir / "threshold_cycle_ev_2026-05-22.json",
-        {"runtime_apply": {"runtime_change": False}},
-    )
-    _write_machine_micro_approval_report(
-        approval_dir
-        / "machine_microstructure_policy_approval_postclose_2026-05-22.json",
-        _machine_micro_approval_report(
-            "2026-05-22",
-            objective_followup_source_status="loaded",
-            objective_followups=[
-                {
-                    "followup_id": "machine_lifecycle_turnover_policy_research_v1",
-                    "source_date": "2026-05-21",
-                    "state": "EVIDENCE_ACCUMULATING",
-                    "followup_required": True,
-                    "next_action": "continue_exact_date_collection",
-                }
-            ],
-            objective_followup_rejections=[
-                {
-                    "followup_id": "machine_lifecycle_turnover_policy_research_v1",
-                    "errors": ["objective_followup_state_invalid"],
-                }
-            ],
-        ),
-    )
-
-    mod.build_next_stage2_checklist("2026-05-22")
-
-    text = (docs / "checklists" / "2026-05-26-stage2-todo-checklist.md").read_text(
-        encoding="utf-8"
-    )
-    assert "[MachineLifecycleTurnoverObjectiveFollowup0526]" in text
-    assert "machine_lifecycle_turnover_policy_research_v1" in text
-    assert "[MachineMicroPolicyApprovalSourceGap0526]" in text
-    assert "source_status=objective_source_gap:rejected_rows:1" in text
-
-
-@pytest.mark.parametrize("row_source_date", ["2026-05-17", "2026-05-23"])
-def test_machine_microstructure_source_gap_rejects_nontrading_or_future_objective(
-    monkeypatch, tmp_path, row_source_date
-):
-    docs, ev_dir, _, _, _ = _patch_dirs(monkeypatch, tmp_path)
-    approval_dir = mod.MACHINE_MICROSTRUCTURE_POLICY_APPROVAL_REPORT_DIR
-    _write_json(
-        ev_dir / "threshold_cycle_ev_2026-05-22.json",
-        {"runtime_apply": {"runtime_change": False}},
-    )
-    _write_machine_micro_approval_report(
-        approval_dir
-        / "machine_microstructure_policy_approval_postclose_2026-05-22.json",
-        _machine_micro_approval_report(
-            "2026-05-22",
-            source_status="contract_invalid",
-            objective_followup_source_status="contract_invalid",
-            objective_followups=[
-                {
-                    "followup_id": "machine_lifecycle_turnover_policy_research_v1",
-                    "source_date": row_source_date,
-                    "state": "EVIDENCE_ACCUMULATING",
-                    "followup_required": True,
-                    "next_action": "continue_exact_date_collection",
-                }
-            ],
-        ),
-    )
-
-    mod.build_next_stage2_checklist("2026-05-22")
-
-    text = (docs / "checklists" / "2026-05-26-stage2-todo-checklist.md").read_text(
-        encoding="utf-8"
-    )
-    assert "source_status=contract_invalid:objective_followup_rows" in text
-    assert "[MachineLifecycleTurnoverObjectiveFollowup0526]" not in text
-
-
-@pytest.mark.parametrize(
-    "row_mutation",
-    [
-        {"source_date": "2026-05-21"},
-        {"state": "COMPLETE", "followup_required": False},
-        {"operator_decision_required": True},
-        {"metric_contract": {"decision_authority": "runtime_apply"}},
-        {
-            "authority": {
-                "runtime_effect": True,
-                "allowed_runtime_apply": False,
-                "actual_order_submitted": False,
-                "broker_order_forbidden": True,
-            }
-        },
-    ],
-)
-def test_machine_microstructure_objective_row_contract_gap_is_explicit(
-    monkeypatch, tmp_path, row_mutation
-):
-    docs, ev_dir, _, _, _ = _patch_dirs(monkeypatch, tmp_path)
-    approval_dir = mod.MACHINE_MICROSTRUCTURE_POLICY_APPROVAL_REPORT_DIR
-    _write_json(
-        ev_dir / "threshold_cycle_ev_2026-05-22.json",
-        {"runtime_apply": {"runtime_change": False}},
-    )
-    row = {
-        "followup_id": "machine_lifecycle_turnover_policy_research_v1",
-        "state": "IMPLEMENTATION_REQUIRED",
-        "followup_required": True,
-        "next_action": "implement_source_only_rolling_paired_policy_research",
-        **row_mutation,
-    }
-    _write_machine_micro_approval_report(
-        approval_dir
-        / "machine_microstructure_policy_approval_postclose_2026-05-22.json",
-        _machine_micro_approval_report(
-            "2026-05-22",
-            objective_followups=[row],
-        ),
-    )
-
-    mod.build_next_stage2_checklist("2026-05-22")
-
-    text = (docs / "checklists" / "2026-05-26-stage2-todo-checklist.md").read_text(
-        encoding="utf-8"
-    )
-    assert "source_status=contract_invalid:objective_followup_rows" in text
-    assert "[MachineLifecycleTurnoverObjectiveFollowup0526]" not in text
 
 
 def test_completed_machine_source_date_mode_is_safe_for_persistent_holiday_catchup(
@@ -2254,3 +1369,157 @@ def test_actual_cancel_wait_tower_checklist_and_scoped_strict_chain(monkeypatch,
     checked = cancel.verify_handoff(day)
     assert checked['status'] == 'FAIL'
     assert 'cancel_wait_last_consumer_semantics_or_generation_invalid' in checked['issues']
+
+
+def _patch_dirs(monkeypatch, tmp_path):
+    docs = tmp_path / "docs"
+    ev = tmp_path / "data" / "report" / "threshold_cycle_ev"
+    openai = tmp_path / "data" / "report" / "openai_ws"
+    swing = tmp_path / "data" / "report" / "swing_runtime_approval"
+    code = tmp_path / "data" / "report" / "code_improvement_workorder"
+    runtime_gap = tmp_path / "data" / "report" / "runtime_apply_gap_audit"
+    tuning_performance = (
+        tmp_path / "data" / "report" / "tuning_performance_control_tower"
+    )
+    trigger_decision = (
+        tmp_path / "data" / "report" / "automation_chain_trigger_decision"
+    )
+    rising_missed = tmp_path / "data" / "report" / "rising_missed_scout_workorder"
+    main_ai_quality = tmp_path / "data" / "report" / "main_ai_quality_r0_r3"
+    machine_micro_approval = (
+        tmp_path / "data" / "report" / "machine_microstructure_policy_approval"
+    )
+    machine_micro_attribution = (
+        tmp_path / "data" / "report" / "machine_microstructure_attribution"
+    )
+    for path in (
+        docs,
+        ev,
+        openai,
+        swing,
+        code,
+        runtime_gap,
+        tuning_performance,
+        trigger_decision,
+        rising_missed,
+        main_ai_quality,
+        machine_micro_approval,
+        machine_micro_attribution,
+    ):
+        path.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(mod, "DOCS_DIR", docs)
+    monkeypatch.setattr(mod, "CHECKLIST_DIR", docs / "checklists")
+    monkeypatch.setattr(mod, "CHECKLIST_LOCK_DIR", tmp_path / "checklist-locks")
+    monkeypatch.setattr(mod, "EV_REPORT_DIR", ev)
+    monkeypatch.setattr(mod, "OPENAI_WS_REPORT_DIR", openai, raising=False)
+    monkeypatch.setattr(mod, "SWING_RUNTIME_APPROVAL_DIR", swing)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_REPORT_DIR", code)
+    monkeypatch.setattr(mod, "RUNTIME_APPLY_GAP_REPORT_DIR", runtime_gap)
+    monkeypatch.setattr(mod, "TUNING_PERFORMANCE_REPORT_DIR", tuning_performance)
+    monkeypatch.setattr(mod, "AUTOMATION_TRIGGER_DECISION_REPORT_DIR", trigger_decision)
+    monkeypatch.setattr(
+        mod,
+        "MACHINE_MICROSTRUCTURE_POLICY_APPROVAL_REPORT_DIR",
+        machine_micro_approval,
+    )
+    monkeypatch.setattr(
+        mod,
+        "MACHINE_MICROSTRUCTURE_ATTRIBUTION_REPORT_DIR",
+        machine_micro_attribution,
+    )
+    return docs, ev, openai, swing, code
+
+def _write_machine_micro_approval_report(path: Path, payload: dict) -> None:
+    source_date = str(payload.get("target_date") or "")
+    attribution_path = (
+        mod.MACHINE_MICROSTRUCTURE_ATTRIBUTION_REPORT_DIR
+        / f"machine_microstructure_attribution_{source_date}.json"
+    )
+    _write_json(
+        attribution_path,
+        {
+            "schema": "machine_microstructure_attribution_v1",
+            "target_date": source_date,
+            "generated_at_kst": datetime.now().astimezone().isoformat(),
+            "authority": {
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            },
+        },
+    )
+    source_bytes = attribution_path.read_bytes()
+    source_stat = attribution_path.stat()
+    enriched = dict(payload)
+    enriched.setdefault(
+        "generated_at_kst",
+        datetime.fromtimestamp(source_stat.st_mtime)
+        .astimezone()
+        .isoformat(timespec="seconds"),
+    )
+    enriched["source_path"] = str(attribution_path)
+    enriched["source_artifact"] = {
+        "schema": "machine_microstructure_policy_source_artifact_provenance_v1",
+        "path": str(attribution_path),
+        "sha256": hashlib.sha256(source_bytes).hexdigest(),
+        "mtime_ns": source_stat.st_mtime_ns,
+        "size_bytes": source_stat.st_size,
+    }
+    _write_json(path, enriched)
+
+def _machine_micro_approval_report(
+    source_date: str,
+    *,
+    objective_followups: list[dict] | None = None,
+    actionable_candidates: list[dict] | None = None,
+    source_status: str = "loaded",
+    objective_followup_source_status: str = "loaded",
+    objective_followup_rejections: list[dict] | None = None,
+) -> dict:
+    objectives = [
+        {
+            "schema": "machine_fast_lifecycle_objective_followup_v1",
+            "source_date": source_date,
+            "operator_decision_required": False,
+            "metric_contract": {
+                "decision_authority": "postclose_followup_tracking_only"
+            },
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "authority": {
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            },
+            **row,
+        }
+        for row in (objective_followups or [])
+    ]
+    candidates = list(actionable_candidates or [])
+    rejections = list(objective_followup_rejections or [])
+    return {
+        "schema": "machine_microstructure_policy_approval_status_v1",
+        "report_type": "machine_microstructure_policy_approval",
+        "phase": "postclose",
+        "target_date": source_date,
+        "source_status": source_status,
+        "objective_followup_source_status": objective_followup_source_status,
+        "summary": {
+            "actionable_candidate_count": len(candidates),
+            "actionable_objective_followup_count": len(objectives),
+            "objective_followup_rejection_count": len(rejections),
+        },
+        "actionable_candidates": candidates,
+        "objective_followups": objectives,
+        "objective_followup_rejections": rejections,
+        "authority": {
+            "runtime_effect": False,
+            "runtime_apply_performed": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        },
+    }

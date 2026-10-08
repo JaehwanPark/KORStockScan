@@ -132,6 +132,19 @@ def _claim_failure_receipt(B, claim, family_sha256, now, reason):
         price_path_segment_start=state.legacy.segment_start if state else None,
         validation_error=reason, failure_cause=reason,
         runtime_effect=False, actual_order_submitted=False)
+    if isinstance(claim, dict) and claim.get('backend') in {'operating_v5', 'operating_v6'}:
+        # Operating claims bind to a cell execution hash, not the envelope hash.
+        # Retain both identities under the same validation/ingestion lock.
+        family = getattr(B, '_FAMILY', None) or {}
+        cell = (family.get('machine_cells', {}).get(scope[-1], {}).get('routes', {})
+                .get(scope[1], {})) if scope else {}
+        receipt.update(schema='continuous_reversal_claim_source_receipt_v4',
+            claim_backend=claim['backend'],
+            stored_envelope_family_sha256=original.get('envelope_sha256') if original else None,
+            state_generation=state.generation if state else None,
+            active_scope_execution_hash=cell.get('scope_execution_hash'),
+            registered_signal_ready=(any(r['event']['signal_id'] == event.get('signal_id')
+                                         for r in state.ready) if state else None))
     if (reason == 'reversal_signal_generation_changed' and not original and verified
             and B._GENERATION == family_sha256 == verified['generation']
             and receipt['signal_age_seconds'] > 5):

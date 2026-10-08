@@ -1,3 +1,7 @@
+## Main-only 퇴역 계약
+
+자동 실행은 Main 단일 owner다. 에피소드·위젯의 전용 실행/정책/연구/알림/예약과 독립 IPO 자동실행은 제거한다. 과거 체결 잔여분은 사용자 수동관리이며 Main은 인수·매도하지 않는다. 잔여 수량·미종료 intent·broker flat·손익 확인은 퇴역이나 Main 기동의 조건이 아니다. 공통 journal/DB와 Main 정책 부모, 수동 금지·주문 안전은 보존한다. 옛 설치/재가동 명령은 실행하지 않는다.
+
 # Main runtime release routing
 
 Owner: deployment infrastructure. Installed main routing is separate from exact-date trading approval. Widget/episode services use the separately authorized machine pin described below, not the main selector.

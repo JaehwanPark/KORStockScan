@@ -4899,9 +4899,6 @@ def write_report(report: dict[str, Any]) -> tuple[Path, Path]:
             + "\n",
         )
         publish(md_path, render_markdown(report))
-        from src.engine.monitoring.research_closed_loop import write_admissions
-
-        write_admissions(report)
 
     return json_path, md_path
 

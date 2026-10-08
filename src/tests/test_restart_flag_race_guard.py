@@ -11,15 +11,14 @@ from src.engine import kiwoom_sniper_v2
 
 def test_bot_main_restart_flag_consumption_is_owner_guarded():
     source = inspect.getsource(bot_main)
-    assert "consume_guarded_restart_request(" in source
-    assert "restart_guard_decision(main_bot_pid=os.getpid())" in source
+    assert "consume_restart_request(" in source
+    assert "samsung_morning_one_share" not in source
     assert "source=unknown_legacy_touch" in source
-    assert "record_scheduled_restart_block(" in source
 
 
 def test_sniper_engine_restart_flag_claim_terminates_the_whole_process():
     source = inspect.getsource(kiwoom_sniper_v2)
-    assert "consume_guarded_restart_request(" in source
+    assert "consume_restart_request(" in source
     assert "os.kill(os.getpid(), signal.SIGTERM)" in source
 
 
@@ -33,13 +32,7 @@ def test_restart_script_publishes_request_metadata_atomically():
     assert 'RESTART_REQUEST_TMP="${RESTART_FLAG}.$$"' in source
     assert 'mv -f "$RESTART_REQUEST_TMP" "$RESTART_FLAG"' in source
     assert "requested_at_utc=" in source
-    assert "--action prepare" in source
-    assert "--action commit" in source
-    assert "--action abort" in source
-    assert "SAMSUNG_MAIN_BOT_RESTART_HANDOFF" in source
     assert "cleanup_restart_request" in source
-    assert 'kill -0 "$HANDOFF_OLD_PID"' in source
-    assert '[ -f "$SAMSUNG_HANDOFF_PLAN" ]' in source
 
 
 def test_restart_script_reloads_stale_supervisor_only_after_child_drain():
@@ -237,34 +230,3 @@ def test_context_promotion_uses_canonical_data_identity():
 
     assert context.PROMOTION_DIR == DATA_DIR / "runtime"
     assert context.RUNTIME_ENV_DIR == DATA_DIR / "threshold_cycle/runtime_env"
-
-
-@pytest.mark.parametrize(
-    "allowed,reason,plan_id,expected_rc",
-    [
-        (True, "prepared_same_date_pid_handoff", "exact-plan", 0),
-        (False, "handoff_plan_expired", "exact-plan", 3),
-        (True, "prepared_same_date_pid_handoff", "other-plan", 3),
-        (True, "morning_owner_not_active", "exact-plan", 3),
-    ],
-)
-def test_restart_staged_env_requires_exact_prepared_guard(
-    monkeypatch, allowed, reason, plan_id, expected_rc
-):
-    import sys
-    from src.trading.samsung_morning_one_share import authority_handoff as handoff
-
-    script = Path("restart.sh").read_text().split("<<'PY_PREPARED_HANDOFF'", 1)[1]
-    script = script.split("\n", 1)[1].split("\nPY_PREPARED_HANDOFF", 1)[0]
-    monkeypatch.setattr(sys, "argv", ["-", "1234", "exact-plan"])
-    calls = []
-
-    def check(**kwargs):
-        calls.append(kwargs)
-        return {"allowed": allowed, "reason": reason, "plan_id": plan_id}
-
-    monkeypatch.setattr(handoff, "restart_guard_decision", check)
-    with pytest.raises(SystemExit) as caught:
-        exec(compile(script, "restart_prepared_handoff", "exec"), {})
-    assert caught.value.code == expected_rc
-    assert calls == [{"main_bot_pid": 1234}]

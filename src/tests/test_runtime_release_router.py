@@ -43,12 +43,6 @@ def test_error_detector_route_consumes_selected_release_and_keeps_log_owner(rele
     assert plan["cwd"] == str(root)
 
 
-def test_machine_final_refresh_routes_reviewed_release_exact_source(release):
-    workspace,root,_,_=release
-    plan=router.make_plan(workspace,root,'a'*40,'machine-final-refresh','2026-10-07')
-    assert plan['command']==['/bin/bash',str(root/'deploy/run_machine_microstructure_final_refresh.sh'),'2026-10-07']
-    unit=(Path(__file__).resolve().parents[2]/'deploy/systemd/korstockscan-machine-microstructure-final-refresh.service').read_text()
-    assert 'run_runtime_release.sh machine-final-refresh' in unit
 
 
 def test_error_cron_installer_preserves_unrelated_auth_and_finalizer(tmp_path):
@@ -668,104 +662,10 @@ def test_stage2_pre_submit_source_monitor_has_independent_selected_release_trigg
     assert "!/PRE_SUBMIT_SOURCE_/" in installer
 
 
-@pytest.mark.parametrize('case',['sealed','tampered','foreign','active'])
-def test_release_set_accepts_only_sealed_inactive_retirement_masks(release,monkeypatch,case):
-    workspace,root,_,_=release
-    closed={f'korstockscan-low-price-two-leg{prefix}@doosan_enerbility_{session}.service'
-        for prefix in ('','-preflight') for session in ('morning','late_morning','afternoon')}
-    unit=next(iter(closed)) if case!='foreign' else 'korstockscan-low-price-two-leg@nhn_afternoon.service'
-    receipt=dict(schema='symbol_owner_retirement_transition_v1',state='terminal',symbol='034020',owner='episode',masked_instances=sorted(closed))
-    receipt['receipt_sha256']=hashlib.sha256(json.dumps(receipt,sort_keys=True,separators=(',',':'),ensure_ascii=True).encode()).hexdigest()
-    if case=='tampered':receipt['symbol']='005930'
-    path=workspace/'data/runtime/retirements/doosan-episode-retirement.json';path.parent.mkdir(parents=True);path.write_text(json.dumps(receipt))
-    monkeypatch.setattr(router.subprocess,'run',lambda command,**kwargs:subprocess.CompletedProcess(command,0,f'{unit} masked inactive dead\n',''))
-    def show(name,**kwargs):
-        if name==unit:
-            return dict(LoadState='masked',ActiveState='active' if case=='active' else 'inactive',MainPID='0')
-        return dict(LoadState='loaded',ActiveState='inactive',SubState='dead',MainPID='0',WorkingDirectory=str(root),ExecStart=str(root/'deploy/run_owner.sh'),Environment='')
-    monkeypatch.setattr(router,'_systemd_properties',show)
-    if case=='sealed':
-        report=router.check_release_set(workspace,root,'a'*40)
-        assert report['retired_masked_units']==[unit]
-        assert report['episode_profile_inventory']['loaded_units_checked']==0
-    else:
-        with pytest.raises(ValueError,match='systemd_unit_not_loaded|retirement_symbol_scope_invalid'):
-            router.check_release_set(workspace,root,'a'*40)
-
-@pytest.mark.parametrize('damage', [None, 'scope', 'digest', 'guard'])
-def test_reviewed_guard_revision_preserves_original_retirement_and_blocks_old_release(release, damage):
-    from src.engine.automation import owner_retirement_transition as owner
-    workspace, root, _, _ = release
-    guard=root/'src/trading/config/owner_retirement.py'; guard.parent.mkdir(parents=True)
-    actual=Path(owner.__file__).resolve().parents[2]/'trading/config/owner_retirement.py'
-    guard.write_bytes(actual.read_bytes())
-    # Original prior receipt is immutable; a successor carries only code continuity.
-    original=dict(schema=owner.SCHEMA, symbol='034020', owner='episode', state='terminal',guard_file_sha256='b'*64)
-    original['receipt_sha256']=owner.digest(original)
-    directory=workspace/'data/runtime/retirements'; directory.mkdir(parents=True)
-    predecessor=directory/'doosan-episode-retirement.json'; predecessor.write_text(json.dumps(original))
-    original_bytes=predecessor.read_bytes()
-    [revision_path]=owner.publish_guard_revision(workspace, root)
-    assert predecessor.read_bytes()==original_bytes
-    revision=json.loads(Path(revision_path).read_text())
-    if damage=='scope': revision['preserved_symbols']=['080220']
-    if damage=='digest': revision['receipt_sha256']='c'*64
-    if damage in {'scope'}: revision['receipt_sha256']=owner.digest({k:v for k,v in revision.items() if k!='receipt_sha256'})
-    Path(revision_path).write_text(json.dumps(revision))
-    if damage=='guard': guard.write_text('old guard')
-    if damage:
-        with pytest.raises(ValueError,match='retirement|retired'):
-            router._validate_retired_surfaces(workspace,root)
-    else:
-        router._validate_retired_surfaces(workspace,root)
-        old=root.parent/'old'; old.mkdir()
-        with pytest.raises(ValueError,match='retired'):
-            router._validate_retired_surfaces(workspace,old)
-
-@pytest.mark.parametrize('damage', ['profiles','units','symbols'])
-def test_group_retirement_cannot_hide_foreign_profile_or_unit(release, damage):
-    from src.engine.automation import owner_retirement_transition as owner
-    workspace, root, _, _ = release
-    guard=workspace/'src/trading/config/owner_retirement.py'; guard.parent.mkdir(parents=True);guard.write_text('reviewed')
-    manifest=owner.prepare(workspace,systemd_dir=workspace/'units',symbols=['080220'])
-    manifest['state']='terminal'
-    if damage=='profiles':manifest['profile_ids'].append('mirae_asset_morning')
-    if damage=='units':manifest['units'].append('korstockscan-low-price-two-leg@mirae_asset_morning.service')
-    if damage=='symbols':manifest['symbols'].append('005930')
-    manifest['receipt_sha256']=owner.digest({k:v for k,v in manifest.items() if k!='receipt_sha256'})
-    directory=workspace/'data/runtime/retirements';directory.mkdir(parents=True)
-    (directory/'episode-retirement-fixture.json').write_text(json.dumps(manifest))
-    with pytest.raises(ValueError,match='retirement'):
-        router._episode_retirement_receipts(workspace)
 
 
-def test_retirement_validation_runs_in_isolated_wrapper_interpreter(tmp_path):
-    from src.engine.automation import owner_retirement_transition as owner
-    manifest = dict(schema=owner.GROUP_SCHEMA, state='terminal', owner='episode',
-                    symbols=['080220'], profile_ids=['jeju_semiconductor_morning'],
-                    units=list(owner.units(['080220'])),
-                    masked_instances=[unit for unit in owner.units(['080220']) if unit.endswith('.service')])
-    manifest['receipt_sha256'] = owner.digest(manifest)
-    directory = tmp_path/'data/runtime/retirements'
-    directory.mkdir(parents=True)
-    (directory/'episode-retirement-fixture.json').write_text(json.dumps(manifest))
-    (tmp_path/'data/runtime/runtime_release_selection.json').write_text('{}')
-    code = """
-import runpy,sys,subprocess
-from pathlib import Path
-module=runpy.run_path(sys.argv[1],run_name='isolated_review')
-receipt=module['_episode_retirement_receipts'](Path(sys.argv[2]))[0]
-assert receipt['symbols']==['080220']
-namespace=module['check_release_set'].__globals__
-namespace['CORE_SYSTEMD_UNITS']=()
-namespace['_systemd_properties']=lambda unit,**kwargs:dict(LoadState='masked',ActiveState='inactive',MainPID='0')
-subprocess.run=lambda *args,**kwargs:subprocess.CompletedProcess([],0,'\\n'.join(receipt['masked_instances']),'')
-report=module['check_release_set'](Path(sys.argv[2]),Path(sys.argv[2]),'a'*40)
-assert report['retired_masked_units']==sorted(receipt['masked_instances'])
-"""
-    result = subprocess.run([sys.executable, '-I', '-c', code, router.__file__, str(tmp_path)],
-                            capture_output=True, text=True)
-    assert result.returncode == 0, result.stderr
+
+
 
 
 @pytest.mark.parametrize('kind',['valid','malformed','dangling'])

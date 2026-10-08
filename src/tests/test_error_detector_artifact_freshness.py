@@ -25,28 +25,6 @@ def test_family_kernel_never_manufactures_missing_original(tmp_path):
         native.preserve_kernel(tmp_path/'data',b'current code','a'*64)
 
 
-def test_episode_original_kernel_custody_preserves_native_gaps_and_rejects_tampering(tmp_path, monkeypatch):
-    from src.engine.monitoring import family_policy_semantics as native
-    from src.engine.error_detectors import artifact_freshness as detector
-    import json
-    day='2026-10-02'
-    folder=tmp_path/'data/report/low_price_two_leg_tuning'; folder.mkdir(parents=True)
-    report={'target_date':day, 'paired_economic_search':{
-        'stage_counts':{'profiles':1},'profiles':{'p1':{'disposition':'source_gap'}}},
-        'daily':{'profiles':{'p1':{'symbol':'005930','session':'KRX_REGULAR'}}}}
-    policy={'effective_date':'2026-10-06'}
-    rp=folder/f'low_price_two_leg_tuning_{day}.json'; rp.write_text(json.dumps(report))
-    pp=folder/'policy.json'; pp.write_text(json.dumps(policy))
-    producer=tmp_path/'producer.py'; producer.write_text('original producer')
-    path=native.publish(report,policy,report_path=rp,policy_path=pp,family='episode',producer_path=producer)
-    producer.write_text('retired producer')
-    monkeypatch.setattr(detector,'_semantic_stage_binding',lambda *args:{'status':'not_assessed'})
-    result=detector._family_policy_semantics(tmp_path,day,'episode')
-    assert result['status']=='warning' and result['findings']==['episode_native_source_gap']
-    assert result['kernel_custody'][str(producer)]=='retained_original_bytes'
-    sealed=json.loads(path.read_text()); sealed['summary']['rows'][0]['disposition']='valid_empty_no_fill'
-    path.write_text(json.dumps(native.seal(sealed)))
-    assert 'summary_generation_mismatch' in str(detector._family_policy_semantics(tmp_path,day,'episode'))
 
 import hashlib
 import pytest
@@ -84,7 +62,7 @@ def test_semantic_generation_race_is_unobservable_not_corruption(tmp_path, monke
     paths = {
         "machine": "data/report/postclose_stage_terminal/2026-10-02/legacy_machine_report.json",
         "auxiliary": "data/report/postclose_stage_terminal/2026-10-02/main_auxiliary_policy.json",
-        "handoff": "data/report/postclose_stage_terminal/2026-10-02/episode_policy.json",
+        "handoff": "data/report/postclose_stage_terminal/2026-10-02/summary_handoff.json",
     }
     path = tmp_path / paths[owner]
     path.parent.mkdir(parents=True)
@@ -1098,8 +1076,6 @@ class TestArtifactFreshnessDetector:
 
         # These tests own individual artifact registry contracts. Independent
         # startup semantics have dedicated exact-receipt tests below.
-        monkeypatch.setattr("src.engine.error_detectors.episode_health.check",
-            lambda *a, **k: dict(findings=[], alerts=[], status="not_assessed", source_date="2026-10-06", target_date="2026-10-06"))
         monkeypatch.setattr("src.engine.error_detectors.artifact_freshness._completed_semantic_source",
             lambda *a, **k: dict(findings=[], source_date=None, prepared_source_date=None, target_date="2026-10-06"))
 

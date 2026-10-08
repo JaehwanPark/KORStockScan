@@ -311,14 +311,11 @@ while true; do
         set +a
     fi
     apply_authoritative_ai_context_promotion "$RUNTIME_TARGET_DATE" || exit 1
-    # Load custody identity after every general runtime/operator layer so none
-    # can silently replace the account/registry bound by the apply receipt.
-    OWNER_CUSTODY_RUNTIME_ENV="../data/runtime/symbol_owner_policy/owner_custody.env"
-    if [ -f "$OWNER_CUSTODY_RUNTIME_ENV" ]; then
-        echo "📌 same-symbol owner custody env 적용: $OWNER_CUSTODY_RUNTIME_ENV"
+    # Native Main/manual identity uses the common registry, not retired daily policies.
+    NATIVE_CUSTODY_ENV="../data/config/native_owner_custody.env"
+    if [ -f "$NATIVE_CUSTODY_ENV" ]; then
         set -a
-        # shellcheck source=/dev/null
-        . "$OWNER_CUSTODY_RUNTIME_ENV"
+        . "$NATIVE_CUSTODY_ENV"
         set +a
     fi
     apply_retired_runtime_policy_env || exit 1

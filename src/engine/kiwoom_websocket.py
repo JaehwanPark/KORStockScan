@@ -350,8 +350,6 @@ class KiwoomWSManager:
         self._pending_token_handoff = None
         self._last_dashboard_snapshot_at = 0.0
         self._dashboard_snapshot_write_inflight = False
-        self._episode_research_capture_lock = threading.Lock()
-        self._episode_research_capture_status = {"status": "not_observed", "written_facts": None}
         self._recent_reg_request_ts = {}
         self._micro_reversion_deferred_reg_codes = {}
         self._alternate_route_request_ts = {}
@@ -2306,55 +2304,7 @@ class KiwoomWSManager:
             }
         return snapshot
 
-    def _capture_episode_research_facts(self, now):
-        """Project received episode books without requesting new market data."""
-        from src.engine.monitoring.research_source_facts import SharedResearchFactWriter
-        from src.engine.monitoring.research_closed_loop import writer_lock, DIRECTORY
 
-        with writer_lock(DIRECTORY / "episode_native_fact_capture", blocking=False):
-            writer = getattr(self, "_episode_research_fact_writer", None)
-            if writer is None:
-                writer = SharedResearchFactWriter(())
-                self._episode_research_fact_writer = writer
-            return writer.collect_once(now)
-
-    def _schedule_episode_research_capture(self):
-        """Keep one research writer without holding up WS frame publication."""
-        if self._stop_event.is_set() or not self._episode_research_capture_lock.acquire(False):
-            return
-
-        def _capture():
-            observed_at = datetime.now(KST)
-            self._episode_research_capture_status = {"status": "running", "attempted_at_kst": observed_at.isoformat(), "written_facts": None}
-            try:
-                if not self._stop_event.is_set():
-                    receipt = self._capture_episode_research_facts(observed_at)
-                    if (not isinstance(receipt, dict) or receipt.get("status") not in {"complete", "waiting"}
-                        or type(receipt.get("written_facts")) is not int or receipt["written_facts"] < 0
-                        or not isinstance(receipt.get("source_gap_symbols"), list)):
-                        raise ValueError("episode_research_capture_receipt_invalid")
-                    self._episode_research_capture_status = {
-                        "status": "capture_completed", "attempted_at_kst": observed_at.isoformat(),
-                        "finished_at_kst": datetime.now(KST).isoformat(),
-                        "source_status": receipt["status"], "written_facts": receipt["written_facts"],
-                        "source_gap_count": len(receipt["source_gap_symbols"]),
-                    }
-                else:
-                    self._episode_research_capture_status = {"status": "stopped", "attempted_at_kst": observed_at.isoformat(), "written_facts": None}
-            except BlockingIOError:
-                self._episode_research_capture_status = {"status": "cross_process_owner_busy", "attempted_at_kst": observed_at.isoformat(), "written_facts": None}
-            except Exception as exc:
-                self._episode_research_capture_status = {"status": "capture_failed", "attempted_at_kst": observed_at.isoformat(), "error_type": type(exc).__name__, "written_facts": None}
-                log_error(f"[WS] episode native research fact capture failed: {exc}")
-            finally:
-                self._episode_research_capture_lock.release()
-
-        try:
-            threading.Thread(target=_capture, name="episode-native-research-facts", daemon=True).start()
-        except Exception:
-            self._episode_research_capture_status = {"status": "worker_start_failed", "written_facts": None}
-            self._episode_research_capture_lock.release()
-            raise
 
     def _maybe_write_dashboard_snapshot(self):
         now_ts = time.time()
@@ -2396,7 +2346,6 @@ class KiwoomWSManager:
                         "registration_basis": "local_sent_registry_not_broker_ack",
                         "connection_available": self.websocket is not None and self._session_ready.is_set(),
                         "capture_lock_ms": round((time.monotonic() - capture_started) * 1000, 3),
-                        "episode_research_capture": dict(self._episode_research_capture_status),
                     }
                     frame_captured_at = time.time()
                 collector = self._micro_reversion_forward_collector
@@ -2419,8 +2368,6 @@ class KiwoomWSManager:
                         "[WS] dashboard snapshot or micro-reversion registration "
                         "receipt persistence failed"
                     )
-                else:
-                    self._schedule_episode_research_capture()
             except Exception as e:
                 log_error(f"[WS] dashboard snapshot write failed: {e}")
             finally:

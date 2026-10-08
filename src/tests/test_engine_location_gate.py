@@ -33,7 +33,6 @@ LEGACY_ENGINE_ROOT_PY_FILES = {
     "holding_exit_observation_report.py",
     "holding_exit_sentinel.py",
     "institutional_flow_context.py",
-    "ipo_listing_day_runner.py",
     "kiwoom_orders.py",
     "kiwoom_sniper_v2.py",
     "kiwoom_websocket.py",

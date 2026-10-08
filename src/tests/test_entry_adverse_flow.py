@@ -7,13 +7,7 @@ import json
 
 import pytest
 
-from src.trading.market.entry_adverse_flow import CONTRACT, evaluate_snapshot
-from src.trading.config.machine_entry_adverse_policy import (
-    PATH_ENV,
-    HASH_ENV,
-    load_policy,
-)
-from src.trading.order import entry_adverse_guard as guard
+from src.trading.market.main_entry_micro_window import CONTRACT, evaluate_snapshot
 
 SCOPE = dict(
     owner="widget",
@@ -122,26 +116,6 @@ def calc(data):
     )
 
 
-@pytest.fixture
-def pin(tmp_path, monkeypatch):
-    policy = dict(
-        contract=CONTRACT,
-        enabled=True,
-        valid_from="2026-06-05T00:00:00+09:00",
-        valid_until=None,
-        scopes=[SCOPE],
-        approval_reference="test-only-no-live-authority",
-    )
-    path = tmp_path / "policy.json"
-
-    def write():
-        raw = json.dumps(policy).encode()
-        path.write_bytes(raw)
-        monkeypatch.setenv(PATH_ENV, str(path))
-        monkeypatch.setenv(HASH_ENV, hashlib.sha256(raw).hexdigest())
-
-    write()
-    return policy, write
 
 
 @pytest.mark.parametrize("adverse", [True, False])
@@ -239,245 +213,33 @@ def test_causal_cutoff_duplicate_and_half_boundary():
     assert before["sell_qty_halves"] == [40, 70]
 
 
-def prepare(holder, now=NOW, identity="signal1", **kwargs):
-    return guard.prepare(
-        holder=holder,
-        identity=identity,
-        signal_at=NOW,
-        now=now,
-        scope=SCOPE,
-        timing_mode="baseline_immediate",
-        **kwargs,
-    )
 
 
-def test_wait_recovery_terminal_and_no_extension(pin, monkeypatch):
-    clock = [NOW]
-    adverse = [True]
-    monkeypatch.setattr(
-        guard,
-        "load_live_dynamic_confirmation_source",
-        lambda: (tape(clock[0], adverse[0]), "ready"),
-    )
-    holder = {}
-    assert not prepare(holder)
-    assert holder[guard.KEY]["next_checkpoint_ms"] == 1000
-    clock[0] += timedelta(seconds=1)
-    adverse[0] = False
-    assert prepare(holder, clock[0])
-    assert not prepare(holder, NOW + timedelta(milliseconds=6501))
-    assert not prepare(holder, NOW + timedelta(seconds=1))
-    assert holder[guard.KEY]["action"] == "SKIP_DEADLINE"
 
 
-@pytest.mark.parametrize("elapsed,allowed", [(5000, True), (6500, True), (6501, False)])
-def test_last_checkpoint_grace(pin, monkeypatch, elapsed, allowed):
-    monkeypatch.setattr(
-        guard,
-        "load_live_dynamic_confirmation_source",
-        lambda: (tape(NOW + timedelta(seconds=5), False), "ready"),
-    )
-    holder = {}
-    assert prepare(holder, NOW + timedelta(milliseconds=elapsed)) is allowed
 
 
-@pytest.mark.parametrize(
-    "data,action", [(None, "SKIP_SOURCE_UNAVAILABLE"), ("adverse", "SKIP_ADVERSE_FLOW")]
-)
-def test_last_checkpoint_never_falls_through(pin, monkeypatch, data, action):
-    monkeypatch.setattr(
-        guard,
-        "load_live_dynamic_confirmation_source",
-        lambda: (tape(NOW + timedelta(seconds=5)) if data else None, "gap"),
-    )
-    holder = {}
-    assert not prepare(holder, NOW + timedelta(seconds=5))
-    assert holder[guard.KEY]["action"] == action
 
 
-def test_revocation_and_terminal_identity_history(pin, monkeypatch):
-    monkeypatch.setattr(
-        guard, "load_live_dynamic_confirmation_source", lambda: (tape(), "ready")
-    )
-    holder = {}
-    assert not prepare(holder)
-    monkeypatch.delenv(PATH_ENV)
-    monkeypatch.delenv(HASH_ENV)
-    assert not prepare(holder)
-    assert prepare(holder, identity="signal2")
-    assert guard.KEY not in holder
-    assert not prepare(holder)
 
 
-def test_policy_no_daily_economics_gate_and_exact_scope(pin):
-    selected = load_policy(scope=SCOPE, now=NOW, signal_at=NOW)
-    assert selected is not None
-    assert (
-        load_policy(scope=dict(SCOPE, symbol="000001"), now=NOW, signal_at=NOW) is None
-    )
-    assert (
-        load_policy(
-            scope=SCOPE, now=NOW + timedelta(days=7), signal_at=NOW + timedelta(days=7)
-        )
-        is not None
-    )
 
 
-@pytest.mark.parametrize(
-    "change", ["pin", "duplicate_scopes", "approval", "extra", "owner"]
-)
-def test_malformed_activation_blocks(pin, monkeypatch, change):
-    p, write = pin
-    if change == "pin":
-        monkeypatch.setenv(HASH_ENV, "0" * 64)
-    else:
-        if change == "duplicate_scopes":
-            p["scopes"].append(dict(SCOPE))
-        if change == "approval":
-            p["approval_reference"] = ""
-        if change == "extra":
-            p["positive_ev_required"] = True
-        if change == "owner":
-            p["scopes"][0] = dict(SCOPE, owner="main")
-        write()
-    holder = {}
-    assert not prepare(holder)
-    assert holder[guard.KEY]["action"] == "SKIP_POLICY_INVALID"
 
 
-def test_dynamic_policy_not_overridden(pin):
-    holder = {}
-    assert not guard.prepare(
-        holder=holder,
-        identity="a",
-        signal_at=NOW,
-        now=NOW,
-        scope=SCOPE,
-        timing_mode="dynamic",
-    )
-    assert holder[guard.KEY]["action"] == "SKIP_TIMING_CONFLICT"
 
 
-@pytest.mark.parametrize(
-    "failure", ["adverse", "gap", "deadline", "owner", "save", "epoch"]
-)
-def test_final_transport_veto_after_waits(pin, monkeypatch, failure):
-    monkeypatch.setattr(
-        guard,
-        "load_live_dynamic_confirmation_source",
-        lambda: (tape(adverse=False), "ready"),
-    )
-    holder = {}
-    assert prepare(holder)
-    data = tape(adverse=failure == "adverse")
-    if failure == "epoch":
-        for kind in ("0B", "0D"):
-            source(data)["realtime_types"][kind]["transport_epoch"] = 2
-        for stream in ("recent_depth", "recent_trades"):
-            for row in source(data)[stream]:
-                row["transport_epoch"] = 2
-    monkeypatch.setattr(
-        guard,
-        "load_live_dynamic_confirmation_source",
-        lambda: (None if failure == "gap" else data, "ready"),
-    )
-
-    def save():
-        if failure == "save":
-            raise OSError("disk_error")
-
-    with pytest.raises(guard.EntryNotSent):
-        guard.final_check(
-            holder=holder,
-            clock=lambda: NOW + timedelta(seconds=7) if failure == "deadline" else NOW,
-            validate_owner=lambda: failure != "owner",
-            save=save,
-        )
-    assert holder[guard.KEY]["action"] != "TRANSPORT_STARTED"
 
 
-def test_single_transport_context_no_cancel_or_other_task_effect(pin, monkeypatch):
-    monkeypatch.setattr(
-        guard,
-        "load_live_dynamic_confirmation_source",
-        lambda: (tape(adverse=False), "ready"),
-    )
-    holder = {}
-    assert prepare(holder)
-    calls = []
-    callback = lambda: guard.final_check(
-        holder=holder,
-        clock=lambda: NOW,
-        validate_owner=lambda: True,
-        save=lambda: calls.append(1),
-    )
-    with guard.transport_check(callback):
-        guard.before_transport("kt10003")
-        assert not calls
-        guard.before_transport("kt10000")
-        with pytest.raises(guard.EntryNotSent):
-            guard.before_transport("kt10000")
-    guard.before_transport("kt10000")
-    assert calls == [1]
 
 
-@pytest.mark.parametrize("limit", ["policy", "owner", "source", "clock_regression"])
-def test_save_latency_cannot_cross_earlier_deadline(pin, monkeypatch, limit):
-    policy, write = pin
-    if limit == "policy":
-        policy["valid_until"] = (NOW + timedelta(milliseconds=500)).isoformat()
-        write()
-    monkeypatch.setattr(
-        guard,
-        "load_live_dynamic_confirmation_source",
-        lambda: (tape(adverse=False), "ready"),
-    )
-    holder = {}
-    assert prepare(holder)
-    if limit == "owner":
-        holder[guard.KEY]["owner_deadline_ms"] = int(NOW.timestamp() * 1000) + 500
-    clock = {"now": NOW}
-
-    def save():
-        clock["now"] = NOW + timedelta(seconds=-1 if limit == "clock_regression" else 2)
-
-    with pytest.raises(guard.EntryNotSent):
-        guard.final_check(
-            holder=holder,
-            clock=lambda: clock["now"],
-            validate_owner=lambda: True,
-            save=save,
-        )
-    assert holder[guard.KEY]["action"] == "SKIP_DEADLINE"
 
 
-@pytest.mark.parametrize(
-    "owner,scope_id,symbol,route,session",
-    [
-        ("widget", "005930:KRX_REGULAR", "005930", "SOR", "KRX_REGULAR"),
-        ("episode", "morning", "005930", "NXT", "NXT_PREMARKET"),
-        ("episode", "low_price:custom", "080220", "KRX", "KRX_REGULAR"),
-    ],
-)
-def test_operator_all_existing_scopes_preserves_original_owner(
-    pin, owner, scope_id, symbol, route, session
-):
-    from src.trading.config.machine_entry_adverse_policy import load_policy
-
-    p, write = pin
-    p["scopes"] = "all_existing_widget_episode"
-    write()
-    scope = dict(
-        owner=owner, scope_id=scope_id, symbol=symbol, route=route, session=session
-    )
-    assert load_policy(scope=scope, now=NOW, signal_at=NOW) is not None
-    with pytest.raises(ValueError, match="scope_invalid"):
-        load_policy(scope=dict(scope, owner="main"), now=NOW, signal_at=NOW)
 
 
 @pytest.mark.parametrize('venue,session', [('KRX_NXT_INTEGRATED', 'KRX_NXT_AFTERMARKET'), ('PREMARKET_KRX_LIKE', 'PREMARKET_KRX_LIKE')])
 def test_machine_scope_alias_uses_exact_market_data_route_and_keeps_broker_route_separate(venue, session):
-    from src.trading.market.entry_adverse_flow import evaluate_machine_entry_payload
+    from src.trading.market.main_entry_micro_window import evaluate_machine_entry_payload
     data = snapshot(NOW)
     for receipt in source(data)['realtime_types'].values():
         receipt['market_route'] = 'krx_nxt_integrated'
@@ -497,7 +259,7 @@ def test_machine_scope_alias_uses_exact_market_data_route_and_keeps_broker_route
 
 
 def test_machine_payload_route_missing_or_identity_conflict_stays_source_gap():
-    from src.trading.market.entry_adverse_flow import evaluate_machine_entry_payload
+    from src.trading.market.main_entry_micro_window import evaluate_machine_entry_payload
     data = snapshot(NOW)
     payload = {'stock_code': '005930', 'effective_venue': 'KRX_NXT_INTEGRATED', 'session_bucket': 'KRX_NXT_AFTERMARKET',
                'ai_market_snapshot_v1': {'snapshot_id': 'exact', 'stock_code': '005930',
@@ -512,123 +274,7 @@ def test_machine_payload_route_missing_or_identity_conflict_stays_source_gap():
 
 @pytest.mark.parametrize('payload', [None, [], {'ai_market_snapshot_v1': ['invalid']}])
 def test_malformed_machine_route_source_returns_gap_without_fallback(payload):
-    from src.trading.market.entry_adverse_flow import evaluate_machine_entry_payload
+    from src.trading.market.main_entry_micro_window import evaluate_machine_entry_payload
     result = evaluate_machine_entry_payload(snapshot=snapshot(NOW), payload=payload, cutoff_ms=int(NOW.timestamp()*1000))
     assert result['action'] == 'SOURCE_UNAVAILABLE'
     assert result['reason'] == 'machine_payload_market_route_missing_or_conflicting'
-
-
-def test_expired_owner_is_distinct_from_policy_change(pin, monkeypatch):
-    monkeypatch.setattr(guard, "load_live_dynamic_confirmation_source", lambda: (tape(adverse=False), "ready"))
-    holder = {}
-    assert prepare(holder)
-    def owner():
-        holder[guard.KEY]["owner_deadline_ms"] = int(NOW.timestamp()*1000)
-        return False
-    with pytest.raises(guard.EntryNotSent, match="SKIP_OWNER_DEADLINE"):
-        guard.final_check(holder=holder, clock=lambda: NOW, validate_owner=owner, save=lambda: None)
-    assert holder[guard.KEY]["action"] == "SKIP_OWNER_DEADLINE"
-
-
-@pytest.mark.parametrize('route', ['NXT', 'KRX', 'SOR'])
-@pytest.mark.parametrize('symbol', ['005930', '006800'])
-def test_order_flow_accepts_integrated_tape_without_relabeling_order_route(route, symbol):
-    from src.trading.market.entry_adverse_flow import evaluate_order_snapshot
-    data = tape(adverse=False)
-    row = source(data)
-    for receipt in row['realtime_types'].values():
-        receipt['item'] = symbol + '_AL'
-    for stream in ('recent_depth', 'recent_trades'):
-        for event in row[stream]:
-            event['item'] = symbol + '_AL'
-    data['stocks'][symbol] = data['stocks'].pop('005930')
-    result = evaluate_order_snapshot(snapshot=data, symbol=symbol, route=route,
-                                    cutoff_ms=int(NOW.timestamp() * 1000), require_latest=True)
-    assert result['action'] == 'CONTINUE'
-    assert result['item'] == symbol + '_AL'
-    assert result['order_route'] == route
-    assert result['market_data_route'] == 'SOR'
-    assert row['realtime_types']['0B']['item'] == symbol + '_AL'
-
-
-@pytest.mark.parametrize('damage', ['partial', 'duplicate', 'stale', 'epoch', 'route_conflict'])
-def test_integrated_source_failure_does_not_fall_back_to_valid_native(damage):
-    from src.trading.market.entry_adverse_flow import evaluate_order_snapshot
-    data = tape(adverse=False)
-    integrated = source(data)
-    native = deepcopy(integrated)
-    for receipt in native['realtime_types'].values():
-        receipt['item'] = '005930_NX'
-    for stream in ('recent_depth', 'recent_trades'):
-        for row in native[stream]:
-            row['item'] = '005930_NX'
-    routes = data['stocks']['005930']['machine_confirmation_routes']
-    routes['NXT'] = native
-    if damage == 'partial':
-        integrated['realtime_types'].pop('0D')
-    elif damage == 'duplicate':
-        routes['duplicate'] = deepcopy(integrated)
-    elif damage == 'stale':
-        for stream in ('recent_depth', 'recent_trades'):
-            for row in integrated[stream]:
-                row['received_at_ms'] -= 10000
-    elif damage == 'epoch':
-        integrated['realtime_types']['0D']['transport_epoch'] = 2
-    else:
-        integrated['realtime_types']['0B']['market_route'] = 'nxt_only'
-    result = evaluate_order_snapshot(snapshot=data, symbol='005930', route='NXT',
-                                    cutoff_ms=int(NOW.timestamp() * 1000), require_latest=True)
-    assert result['action'] == 'SOURCE_UNAVAILABLE'
-    assert result['market_data_route'] == 'SOR'
-    routes.pop('SOR')
-    routes.pop('duplicate', None)
-    native_result = evaluate_order_snapshot(snapshot=data, symbol='005930', route='NXT',
-                                           cutoff_ms=int(NOW.timestamp() * 1000), require_latest=True)
-    assert native_result['action'] == 'CONTINUE'
-    assert native_result['item'] == '005930_NX'
-
-
-def test_integrated_flow_cannot_make_invalid_order_route_valid():
-    from src.trading.market.entry_adverse_flow import evaluate_order_snapshot
-    result = evaluate_order_snapshot(snapshot=tape(adverse=False), symbol='005930',
-                                    route='UNKNOWN', cutoff_ms=int(NOW.timestamp()*1000))
-    assert result['reason'] == 'order_route_invalid'
-
-
-@pytest.mark.parametrize('corrupt_final', [False, True])
-def test_nxt_order_uses_al_at_prepare_and_final_transport_without_scope_mutation(pin, monkeypatch, corrupt_final):
-    policy, write = pin
-    scope = dict(owner='episode', scope_id='morning', symbol='005930',
-                 route='NXT', session='NXT_PREMARKET')
-    policy['scopes'] = [scope]
-    write()
-    data = tape(adverse=False)
-    monkeypatch.setattr(guard, 'load_live_dynamic_confirmation_source', lambda: (data, 'ready'))
-    holder = {}
-    assert guard.prepare(holder=holder, identity='morning-nxt', signal_at=NOW,
-                         now=NOW, scope=scope, timing_mode='baseline_immediate')
-    state = holder[guard.KEY]
-    assert state['scope'] == scope
-    assert state['anchor'] == ['005930_AL', 1]
-    if corrupt_final:
-        source(data)['realtime_types']['0D']['transport_epoch'] = 2
-        with pytest.raises(guard.EntryNotSent):
-            guard.final_check(holder=holder, clock=lambda: NOW, validate_owner=lambda: True, save=lambda: None)
-        assert state['action'] != 'TRANSPORT_STARTED'
-    else:
-        guard.final_check(holder=holder, clock=lambda: NOW, validate_owner=lambda: True, save=lambda: None)
-        assert state['action'] == 'TRANSPORT_STARTED'
-        assert state['pre_transport']['order_route'] == 'NXT'
-        assert state['pre_transport']['market_data_route'] == 'SOR'
-    assert state['scope'] == scope
-
-
-def test_partial_duplicate_al_is_not_ignored_when_one_complete_al_exists():
-    from src.trading.market.entry_adverse_flow import evaluate_order_snapshot
-    data = tape(adverse=False)
-    extra = deepcopy(source(data))
-    extra['realtime_types'].pop('0D')
-    data['stocks']['005930']['machine_confirmation_routes']['extra'] = extra
-    result = evaluate_order_snapshot(snapshot=data, symbol='005930', route='NXT',
-                                    cutoff_ms=int(NOW.timestamp()*1000))
-    assert result['reason'] == 'exact_route_missing_or_duplicate'

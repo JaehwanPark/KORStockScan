@@ -9,6 +9,7 @@ Every append is serialized with ``flock`` and chained by SHA-256.
 from __future__ import annotations
 
 import fcntl
+import copy
 import hashlib
 import json
 import os
@@ -19,8 +20,8 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from src.trading.config.symbol_owner_policy import ACTIVATION_SCHEMA, normalize_symbol
-from src.trading.config.owner_retirement import main_manual_after_episode_retirement, new_entry_retired
+from src.trading.config.owner_identity import ACTIVATION_SCHEMA, normalize_symbol
+from src.trading.config.owner_retirement import automatic_owner_retired, main_manual_after_episode_retirement, new_entry_retired
 from src.utils.constants import DATA_DIR
 
 KST = ZoneInfo("Asia/Seoul")
@@ -189,6 +190,15 @@ class OrderOwnerRegistry:
         self.lock_path = self.path.with_suffix(self.path.suffix + ".lock")
         self._activation_signature = None
         self._activation_rows = {}
+        self._journal_signature = None
+        self._journal_events = None
+
+    def _journal_identity(self):
+        try:
+            value = self.path.stat()
+        except FileNotFoundError:
+            return None
+        return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
 
     @staticmethod
     def _canonical(event: dict[str, Any]) -> bytes:
@@ -199,6 +209,9 @@ class OrderOwnerRegistry:
         ).encode("utf-8")
 
     def _read_locked(self) -> list[dict[str, Any]]:
+        identity = self._journal_identity()
+        if identity is not None and identity == self._journal_signature:
+            return copy.deepcopy(self._journal_events)
         try:
             lines = self.path.read_text(encoding="utf-8").splitlines()
         except FileNotFoundError:
@@ -235,6 +248,10 @@ class OrderOwnerRegistry:
                 )
             previous = expected
             events.append(event)
+        if self._journal_identity() != identity:
+            raise OwnerRegistryConflict("owner_registry_changed_during_read")
+        self._journal_signature = identity
+        self._journal_events = copy.deepcopy(events)
         return events
 
     @staticmethod
@@ -411,8 +428,8 @@ class OrderOwnerRegistry:
         authority_policy_id: str = "",
         authority_policy_hash: str = "",
     ) -> str:
-        if context.owner_type == "widget_auto_trade":
-            raise OwnerRegistryError("widget_owner_permanently_retired")
+        if automatic_owner_retired(context.owner_type):
+            raise OwnerRegistryError("automatic_owner_permanently_retired")
         context.validate()
         clean_symbol = _registry_symbol(symbol)
         clean_side = str(side or "").strip().upper()
@@ -537,6 +554,8 @@ class OrderOwnerRegistry:
             for row in state.values():
                 if (
                     row.get("account_key") == account_key
+                    and not (self._manual_disposition(events, account_key)
+                             and automatic_owner_retired(row.get("owner_type")))
                     and row.get("order_date") == clean_date
                     and row.get("symbol") == clean_symbol
                     and row.get("side") == clean_side
@@ -1821,6 +1840,7 @@ class OrderOwnerRegistry:
         account_key: str,
         symbol: str,
         broker_quantity: int,
+        retired_manual: bool = False,
     ) -> dict[str, Any]:
         by_position: dict[str, int] = {}
         for row in state.values():
@@ -1828,6 +1848,7 @@ class OrderOwnerRegistry:
                 row.get("account_key") != account_key
                 or row.get("symbol") != symbol
                 or row.get("action") != "NEW"
+                or (retired_manual and row.get("owner_type") != "main_scalping")
             ):
                 continue
             filled = int(row.get("filled_qty") or 0)
@@ -1855,15 +1876,69 @@ class OrderOwnerRegistry:
         clean_symbol = _registry_symbol(symbol)
         lock = self._locked()
         try:
+            events = self._read_locked()
             return self._reconcile_symbol_quantity_from_state(
-                self._state(self._read_locked()),
+                self._state(events),
                 account_key=broker_account_key(),
                 symbol=clean_symbol,
                 broker_quantity=int(broker_quantity),
+                retired_manual=bool(self._manual_disposition(events, broker_account_key())),
             )
         finally:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
             lock.close()
+
+    @staticmethod
+    def _manual_disposition(events, account_key):
+        rows = [row for row in events if row.get("event") == "RETIRED_OWNERS_MANUAL_MANAGEMENT"
+                and row.get("account_key") == account_key]
+        if len(rows) > 1:
+            raise OwnerRegistryConflict("manual_management_disposition_ambiguous")
+        if rows and (rows[0].get("retired_owners") != ["episode", "widget_auto_trade"]
+                     or rows[0].get("authority") != "operator_manual_management_2026_10_08"):
+            raise OwnerRegistryConflict("manual_management_disposition_invalid")
+        return rows[0] if rows else None
+
+    def retire_automatic_owners_to_manual(self):
+        """Record management responsibility, never flat/fill/terminal status."""
+        lock = self._locked()
+        try:
+            events = self._read_locked()
+            account = broker_account_key()
+            prior = self._manual_disposition(events, account)
+            if prior:
+                return dict(prior)
+            return self._append_locked(events, {
+                "event": "RETIRED_OWNERS_MANUAL_MANAGEMENT",
+                "account_key": account,
+                "retired_owners": ["episode", "widget_auto_trade"],
+                "authority": "operator_manual_management_2026_10_08",
+                "management_only": True,
+                "broker_flat_verified": False,
+            })
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+            lock.close()
+
+    def native_owner_contract(self, symbol):
+        """One verified snapshot binds account, registration and disposition."""
+        clean = _registry_symbol(symbol)
+        if not self.path.exists():
+            return {"registered": False, "account_key": broker_account_key(),
+                    "disposition_hash": "", "effective_at": "", "registry_path": str(self.path)}
+        # Read-only authority lookup must also work inside frozen replay. The
+        # journal reader verifies the hash chain and unchanged file generation;
+        # a concurrent append fails closed. Actual reservations still hold flock.
+        events = self._read_locked()
+        account = broker_account_key()
+        rows = [r for r in self._state(events).values() if r.get("symbol") == clean]
+        if rows and not any(r.get("account_key") == account for r in rows):
+            raise OwnerRegistryConflict("owner_registry_account_identity_missing_or_mismatched")
+        disposition = self._manual_disposition(events, account)
+        return {"registered": bool(rows), "account_key": account,
+                "disposition_hash": disposition["event_hash"] if disposition else "",
+                "effective_at": disposition["observed_at_kst"] if disposition else "",
+                "registry_path": str(self.path)}
 
     def unresolved_intent_summary(
         self,
@@ -1877,8 +1952,10 @@ class OrderOwnerRegistry:
         clean_date = _registry_order_date(active_date) if active_date is not None else None
         lock = self._locked()
         try:
-            state = self._state(self._read_locked())
+            events = self._read_locked()
+            state = self._state(events)
             account_key = broker_account_key(require_explicit=True)
+            manual_management = bool(self._manual_disposition(events, account_key))
             rows = [
                 row
                 for row in state.values()
@@ -1886,6 +1963,7 @@ class OrderOwnerRegistry:
                 and (clean_date is None or row.get("order_date") == clean_date)
                 and row.get("symbol") == clean_symbol
                 and row.get("state") in _ACTIVE_UNBOUND_STATES
+                and not (manual_management and automatic_owner_retired(row.get("owner_type")))
             ]
         finally:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
@@ -2358,6 +2436,11 @@ class OrderOwnerRegistry:
             lock.close()
 
     def decision_activation_matches(self, decision: Any) -> bool:
+        if getattr(decision, "policy_id", "") == "main_manual_native_custody_v1":
+            status = self.native_owner_contract(decision.symbol)
+            return bool(status["disposition_hash"]
+                        and status["disposition_hash"] == decision.activation_event_hash
+                        and status["account_key"] == decision.account_key)
         """Verify a resolved coexistence decision without duplicating fields."""
 
         if not bool(getattr(decision, "coexistence_enabled", False)):

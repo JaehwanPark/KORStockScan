@@ -13,6 +13,15 @@ from pathlib import Path
 from typing import Any, Mapping
 
 RETIREMENT_ID = "scalping_adm_ldm_retirement_20260906"
+INDEPENDENT_AUTOMATION_RETIRED_REPORTS = frozenset({
+    "low_price_two_leg_tuning", "low_price_two_leg_expanded_candidate_research",
+    "samsung_machine_entry_tuning", "machine_microstructure_attribution",
+    "machine_entry_timing_tuning", "machine_microstructure_policy_approval",
+    "market_weakness_hysteresis_tuning", "research_native_capacity",
+    "machine_research_closed_loop", "episode_policy_refresh", "episode_policy",
+    "research_capacity", "research_allocation", "machine_adaptive_exit",
+    "episode_source_research", "episode_prospective_research",
+})
 SCALP_OVERNIGHT_RETIREMENT_ID = "scalping_overnight_retirement_20260906"
 LATENCY_RECOMMENDATION_RETIREMENT_ID = "latency_recommendation_retirement_20260906"
 LATENCY_RECOMMENDATION_RETIRED_REPORTS = frozenset(
@@ -89,6 +98,7 @@ RETIRED_REPORTS = (
     | ENTRY_RECHECK_RETIRED_REPORTS
     | CLAUDE_LAB_RETIRED_REPORTS
     | LIMIT_DOWN_RETIRED_REPORTS
+    | INDEPENDENT_AUTOMATION_RETIRED_REPORTS
 )
 RETIRED_FAMILIES = (
     RETIRED_REPORTS
@@ -119,6 +129,17 @@ RETIRED_FAMILIES = (
     | SCALP_OVERNIGHT_RETIRED_FAMILIES
 )
 RETIRED_ENV_PREFIXES = (
+    "KORSTOCKSCAN_LOW_PRICE_TWO_LEG_",
+    "KORSTOCKSCAN_SAMSUNG_MORNING_ONE_SHARE_",
+    "KORSTOCKSCAN_SAMSUNG_MIDDAY_ONE_SHARE_",
+    "KORSTOCKSCAN_SAMSUNG_AFTERNOON_ONE_SHARE_",
+    "KORSTOCKSCAN_MACHINE_ADAPTIVE_EXIT_",
+    "KORSTOCKSCAN_MACHINE_REBOUND_REENTRY_",
+    "KORSTOCKSCAN_MACHINE_PROFIT_STAGNATION_",
+    "KORSTOCKSCAN_MACHINE_TARGET_RATCHET_",
+    "KORSTOCKSCAN_SYMBOL_OWNER_POLICY_",
+    "THRESHOLD_CYCLE_RUN_LOW_PRICE_TWO_LEG_",
+    "THRESHOLD_CYCLE_RUN_SAMSUNG_MACHINE_ENTRY_TUNING",
     "KORSTOCKSCAN_NXT_RISING_MISSED_TP1_PARTIAL_",
     "KORSTOCKSCAN_SCALP_MFE_PROTECT_",
     "KORSTOCKSCAN_LIMIT_DOWN_",

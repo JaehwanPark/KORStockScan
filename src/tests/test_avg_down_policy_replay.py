@@ -61,7 +61,8 @@ def policy_fixture():
     observation["initial_policy_state"] = capture.holding_state(runtime, stock)
     snapshot = capture.policy_snapshot(runtime, epoch)
     for name in snapshot["files"]:
-        if "manual_control_excluded_codes" in name or "symbol_owner_policy_" in name:
+        if ("manual_control_excluded_codes" in name or "symbol_owner_policy_" in name
+                or "order_owner_registry" in name):
             snapshot["files"][name] = None
     # Explicit test-only control exclusion makes a deterministic full-handler
     # early HOLD, without replacing the handler with a callback fixture.

@@ -874,7 +874,7 @@ def test_s15_inventory_uses_only_exact_main_owner_for_registered_symbol(
         client_intent_id="main:migration",
     )
     episode_position = OwnerOrderContext(
-        owner_type="episode",
+        owner_type="manual_operator",
         owner_id="episode:other",
         position_id="episode:other",
         client_intent_id="episode:migration",
@@ -926,6 +926,7 @@ def test_s15_inventory_uses_only_exact_main_owner_for_registered_symbol(
         registry.transition(intent_id, state="ORDER_BOUND", broker_order_no=order_no)
         open_order_nos.append(order_no)
 
+    registry.retire_automatic_owners_to_manual()
     monkeypatch.setenv("KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH", str(registry_path))
     monkeypatch.setenv(
         "KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE",

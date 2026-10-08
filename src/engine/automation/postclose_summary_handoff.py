@@ -60,13 +60,7 @@ def installed_producer_terminal_states(
     paths = intake_source_paths(report_dir, target_date)
     runner = runner or subprocess.run
     result = {}
-    owner_sources = {
-        "korstockscan-machine-microstructure-final-refresh.service": (
-            "machine_microstructure_attribution",
-            "machine_entry_timing_tuning",
-            "machine_microstructure_policy_approval",
-        ),
-    }
+    owner_sources = {}
     for unit, labels in owner_sources.items():
         owner = "machine"
         receipt_path = producer_receipt_path(report_dir, target_date, owner)
@@ -224,17 +218,6 @@ def source_paths(report_dir: Path, target_date: str, consumer: str) -> dict[str,
     paths = {
         label: report_dir / label / f"{label}_{target_date}.json" for label in labels
     }
-    if consumer == "checklist":
-        paths.update(
-            {
-                "machine_microstructure_policy_approval": report_dir
-                / "machine_microstructure_policy_approval"
-                / f"machine_microstructure_policy_approval_postclose_{target_date}.json",
-                "machine_microstructure_attribution": report_dir
-                / "machine_microstructure_attribution"
-                / f"machine_microstructure_attribution_{target_date}.json",
-            }
-        )
     from src.engine.automation.postclose_recommendation_intake import (
         EFFECTIVE_DATE,
         source_paths as intake_source_paths,
@@ -265,11 +248,6 @@ def source_paths(report_dir: Path, target_date: str, consumer: str) -> dict[str,
         paths["pipeline_event_verbosity"] = report_dir / "pipeline_event_verbosity" / f"pipeline_event_verbosity_{target_date}.json"
         paths['entry_cancel_wait_tuning'] = report_dir / 'entry_cancel_wait_tuning' / f'entry_cancel_wait_tuning_{target_date}.json'
         paths['entry_cancel_wait_policy'] = report_dir / 'entry_cancel_wait_tuning' / f'entry_cancel_wait_policy_{target_date}.json'
-        from src.engine.automation.machine_research_closed_loop_refresh import (
-            report_path,
-        )
-
-        paths["machine_research_closed_loop"] = report_path(report_dir, target_date)
     return paths
 
 
@@ -694,11 +672,7 @@ def verify_summary_handoff(
 
 # Independent producer receipts survive manual historical recovery and do not
 # depend on systemd's most recent (possibly different-date) invocation.
-INDEPENDENT_SOURCES = {
-    "machine": ("machine_microstructure_attribution", "machine_entry_timing_tuning",
-                "machine_microstructure_policy_approval", "market_weakness_hysteresis_tuning",
-                "machine_research_closed_loop"),
-}
+INDEPENDENT_SOURCES = {'machine': ('machine_policy', 'machine_policy_terminal')}
 
 
 def producer_receipt_path(report_dir: Path, day: str, owner: str) -> Path:
@@ -741,7 +715,7 @@ def machine_input_issues(report_dir: Path, day: str) -> list[str]:
         issues.append("main:producer_running")
     if issues:
         return issues
-    for label in ("ai_decision_outcome_labels", "low_price_two_leg_expanded_candidate_research",
+    for label in ("ai_decision_outcome_labels",
                   "runtime_approval_summary"):
         path = report_dir / label / f"{label}_{day}.json"
         if _report_date(_load_json(path)) != day:
@@ -832,13 +806,6 @@ STAGE_REGISTRY = {
     'legacy_machine_report': ((), ('ai_decision_action_outcome_calibration',)),
     'main_auxiliary_policy': (('outcome_labels', 'legacy_machine_report'), ('compact_auxiliary_paired_economic',)),
     'outcome_labels': ((), ('ai_decision_outcome_labels',)),
-    'episode_policy': ((), ('low_price_two_leg_expanded_candidate_research', 'episode_policy_refresh')),
-    'machine_attribution': ((), ('machine_microstructure_attribution',)),
-    'machine_timing': (('machine_attribution',), ('machine_entry_timing_tuning',)),
-    'market_weakness': (('machine_attribution',), ('market_weakness_hysteresis_tuning',)),
-    'research_capacity': ((), ('research_native_capacity',)),
-    'research_allocation': (('episode_policy', 'research_capacity'), ('machine_research_closed_loop',)),
-    'legacy_policy_approval': (('machine_attribution',), ('machine_microstructure_policy_approval',)),
     'summary_handoff': ((), ('postclose_done_controller',)),
 }
 
@@ -847,11 +814,7 @@ def active_stage_names(day):
     """A new mandatory family must not retroactively invalidate old dates."""
     return tuple(stage for stage in STAGE_REGISTRY
                  if stage != 'pre_submit_delay' or day >= '2026-09-23')
-STAGE_OWNER_GROUPS = {
-    'machine': ('machine_attribution', 'machine_timing',
-                'market_weakness', 'research_allocation', 'legacy_policy_approval',
-                'main_machine_policy', 'main_auxiliary_policy', 'legacy_machine_report', 'outcome_labels', 'episode_policy', 'research_capacity'),
-}
+STAGE_OWNER_GROUPS = {'machine': ('main_machine_policy', 'main_auxiliary_policy', 'legacy_machine_report', 'outcome_labels')}
 
 
 def stage_prerequisites(stage,day):
@@ -885,7 +848,6 @@ def stage_artifacts(report_dir, day, stage):
     paths['research_native_capacity'] = Path(report_dir).parent / 'runtime' / 'machine_research_closed_loop' / f'capacity_source_{day}.json'
     paths['pre_submit_delay_tuning'] = Path(report_dir) / 'pre_submit_delay_tuning' / f'pre_submit_delay_tuning_{day}.json'
     paths['pre_submit_delay_policy'] = Path(report_dir).parent / 'threshold_cycle' / 'pre_submit_delay_policy' / f'pre_submit_delay_policy_{day}.json'
-    paths['episode_policy_refresh'] = Path(report_dir) / 'machine_research_closed_loop' / f'episode_policy_refresh_{day}.json'
     outputs = {name: paths.get(name, Path(report_dir) / name / f'{name}_{day}.json') for name in STAGE_REGISTRY[stage][1]}
     if day >= '2026-10-06' and stage in {'main_machine_policy','main_auxiliary_policy'}:
         owned=Path(report_dir)/'continuous_reversal'/day
@@ -1114,20 +1076,10 @@ def stage_receipt_issues(report_dir, day, stage, *, code_hash=None,
     return _safe_stage_output_issues(report_dir, day, stage)
 
 
-def _joint_research_peer_off(report_dir, day):
-    """The joint allocation has no active peer when episode policy is OFF."""
-    receipt = _load_json(stage_path(report_dir, day, 'episode_policy'))
-    return (receipt.get('status') == 'off'
-            and receipt.get('off_reason') == 'explicit_schedule_disabled'
-            and not stage_receipt_issues(report_dir, day, 'episode_policy'))
 
 
 def stage_input_paths(report_dir, day, stage):
     paths = {s:stage_path(report_dir, day, s) for s in stage_prerequisites(stage,day)}
-    if stage == 'research_capacity':
-        root = Path(report_dir).parent / 'runtime' / 'machine_research_closed_loop' / 'native_capacity' / day
-        paths['native_cash'] = root / 'native_cash.json'
-        paths['native_inventory'] = root / 'native_inventory.json'
     if stage == 'summary_handoff':
         paths.update({s:stage_path(report_dir, day, s) for s in active_stage_names(day)
                       if s != 'summary_handoff'})
@@ -1390,21 +1342,6 @@ def _stage_output_issues(report_dir, day, stage):
                 or value.get('status') not in {'mature_label_rows_available','partial_horizons_keep_maturing'}
                 or generated.tzinfo is None or generated.astimezone(ZoneInfo('Asia/Seoul')) < datetime.fromisoformat(day + 'T20:00:00+09:00')):
                 errors.append(f'{stage}:label_contract_invalid')
-        if name == 'research_native_capacity':
-            from src.engine.monitoring.research_native_capacity_source import validate_existing
-            native = validate_existing(date.fromisoformat(day), directory=Path(report_dir).parent / 'runtime' / 'machine_research_closed_loop')
-            if native.get('status') != 'complete':
-                errors.append(f'{stage}:native_source_invalid:{native.get("reason")}')
-        if name in {'episode_policy_refresh'}:
-            from src.engine.monitoring.research_closed_loop import digest, read_object
-            if (value.get('receipt_sha256') != digest({k:v for k,v in value.items() if k != 'receipt_sha256'})
-                or value.get('source_sha256') != digest(read_object(Path(value.get('source_path') or ''), limit=FAMILY_ARTIFACT_MAX_BYTES))
-                or value.get('policy_sha256') != digest(read_object(Path(value.get('policy_path') or ''), limit=FAMILY_ARTIFACT_MAX_BYTES))):
-                errors.append(f'{stage}:family_publication_invalid')
-        if name == 'machine_research_closed_loop':
-            from src.engine.automation.machine_research_closed_loop_refresh import validate_current_receipt
-            if not validate_current_receipt(value, day):
-                errors.append(f'{stage}:allocation_receipt_invalid')
     if stage == 'main_machine_policy':
         paths = stage_artifacts(report_dir, day, stage)
         report, terminal = _load_json(paths['machine_policy']), _load_json(paths['machine_policy_terminal'])
@@ -1577,19 +1514,6 @@ def stage_commands(stage, day, publication, *, recovery=False):
                 command('scalping.entry_setup_paired_replay_batch', *common, '--finalize-compact', '--publication-date', publication)]
     if stage == 'outcome_labels':
         return [command('scalping.ai_decision_quality', '--date', day, '--mode', 'postclose', '--write')]
-    if stage == 'episode_policy':
-        study = [] if recovery else [command('monitoring.low_price_two_leg_expanded_candidate_research', *date_args)]
-        return study + [command('automation.machine_research_closed_loop_refresh', '--source-date', day, '--family', 'episode', '--write', '--source-wait-sec', '0')]
-    modules = dict(
-        machine_attribution='monitoring.machine_microstructure_attribution', machine_timing='automation.machine_entry_timing_tuning',
-        market_weakness='automation.market_weakness_hysteresis_tuning', legacy_policy_approval='automation.machine_microstructure_policy_approval')
-    if stage in modules:
-        extra = ['--phase', 'postclose'] if stage == 'legacy_policy_approval' else []
-        return [command(modules[stage], *date_args, *extra)]
-    if stage == 'research_capacity':
-        return [] if recovery else [command('monitoring.research_native_capacity_source', '--source-date', day, '--write')]
-    if stage == 'research_allocation':
-        return [command('automation.machine_research_closed_loop_refresh', '--source-date', day, '--family', 'allocation', '--write', '--source-wait-sec', '0')]
     return [command('automation.postclose_done_controller', '--date', day, '--summary-handoff-only', '--require-independent-producers')]
 
 
@@ -1602,14 +1526,9 @@ def _stage_code(stage, commands, project, *, dispatcher_path=None,
             paths[module] = project / (module.replace('.', '/') + '.py')
         elif cmd[0] == '/bin/bash':
             paths[cmd[1]] = project / cmd[1]
-    if stage in {'episode_policy', 'research_allocation'}:
-        from src.engine.automation.machine_research_closed_loop_refresh import code_contract
-        return _stage_digest([_stage_sources(paths), code_contract()])
     if stage == 'summary_handoff':
         paths['next_stage2_checklist'] = project / 'src/engine/build_next_stage2_checklist.py'
         paths['direct_tower'] = project / 'src/engine/automation/tuning_performance_control_tower.py'
-    if stage == 'research_capacity':
-        paths['native_capacity'] = project / 'src/engine/monitoring/research_native_capacity_source.py'
     if stage == 'main_machine_policy':
         if not legacy_main_machine:
             paths['main_fixed_watch_research'] = project / 'src/engine/monitoring/main_fixed_watch_policy_research.py'
@@ -1797,10 +1716,6 @@ def run_stage(stage, day, *, report_dir, project, publication=None, effective=No
                             time.sleep(1)
                         rc = child.returncode
                 if rc: break
-            if stage == 'research_capacity' and not rc:
-                # Native files are produced by this command on the current
-                # source date; bind their final generation to the stage.
-                value['input_sources'] = _stage_sources(stage_input_paths(report_dir, day, stage))
             issues = _safe_stage_output_issues(report_dir, day, stage) if not rc else [f'command_exit:{rc}']
             if value['prerequisite_receipts'] != _stage_sources(prerequisites): issues.append('prerequisite_changed_during_consumption')
             if value['input_sources'] != _stage_sources(stage_input_paths(report_dir, day, stage)): issues.append('input_changed_during_consumption')
@@ -1841,10 +1756,6 @@ def run_stage(stage, day, *, report_dir, project, publication=None, effective=No
                     value['policy_disposition']='continuous_reversal_selected'
                     value['selection_metric']='cumulative_raw_win_fraction'
                     value['machine_report_sha256']=terminal.get('report_sha256')
-            if stage in {'episode_policy'} and not issues:
-                family_receipt = _load_json(stage_artifacts(report_dir, day, stage)[stage.replace('_policy', '_policy_refresh')])
-                value['policy_sha256'] = family_receipt.get('policy_sha256')
-                value['policy_disposition'] = 'updated' if old.get('policy_sha256') != value['policy_sha256'] else 'incumbent_carry'
             return _stage_write(path, value)
         except (OSError, ValueError, TypeError, KeyError, InterruptedError) as exc:
             return _stage_write(path, {**value, 'status':'failed', 'exit_code':1, 'issues':[str(exc)], 'finished_at':now()})
@@ -1889,19 +1800,9 @@ def stage_overview(report_dir, day):
                 ready = False
     policy_checks = {}
     from src.engine.scalping.mechanistic_entry_runtime_policy import load_effective
-    from src.engine.automation.low_price_two_leg_auto_expansion_policy import load_policy
     data_root = Path(report_dir).parent
     try: policy_checks['main'] = bool(load_effective(data_root=data_root, target_date=effective))
     except (OSError, ValueError, TypeError, KeyError): policy_checks['main'] = False
-    try: policy_checks['episode'] = bool(load_policy(date.fromisoformat(effective), policy_dir=data_root / 'runtime' / 'low_price_two_leg_auto_expansion'))
-    except (OSError, ValueError, TypeError, KeyError): policy_checks['episode'] = False
-    episode_authority = 'dated_policy' if policy_checks['episode'] else 'missing'
-    episode_state = states.get('episode_policy') or {}
-    if (not policy_checks['episode'] and episode_state.get('status') == 'off'
-        and episode_state.get('off_reason') == 'explicit_schedule_disabled'
-        and not issues.get('episode_policy')):
-        policy_checks['episode'] = True
-        episode_authority = 'explicit_schedule_disabled'
     ready = ready and all(policy_checks.values())
     future_handoff = {"status": "not_applicable", "actual_pid_consumed": False}
     if day >= "2026-09-23":
@@ -1918,7 +1819,6 @@ def stage_overview(report_dir, day):
         postclose_all_active_stages_complete=not any(issues.values()) and states['summary_handoff'].get('status') == 'succeeded',
         next_session_policy_ready=ready, policy_loader_checks=policy_checks,
         future_handoff=future_handoff,
-        episode_policy_authority=episode_authority,
         startup_basis=startup_basis, day_of_activation_required=startup_basis == 'isolated_prepared_next_preopen',
         actual_pid_consumed=False,
         startup_contract='prepared_verified' if startup_basis == 'isolated_prepared_next_preopen' else bootstrap.get('status', 'not_verified'))
@@ -1995,8 +1895,7 @@ def _stage_main(argv):
         return run_stage(s, day, report_dir=DATA_DIR / 'report', project=PROJECT_ROOT,
             publication=args.publication_date, recovery=args.recover_closed_target,
             execute=not args.validate_existing, timeout=args.timeout_sec,
-            off=args.off or (s in {'research_capacity', 'research_allocation'} and
-                             _joint_research_peer_off(DATA_DIR / 'report', day)),
+            off=args.off,
             # Native recovery launches Main and compact together. Compact must
             # wait for that live predecessor outside the compute slot; zero
             # wait would defer it permanently before Main can finish.
@@ -2008,12 +1907,7 @@ def _stage_main(argv):
         # a consumer can accept the previous succeeded parent receipt before
         # the concurrent parent has published its new pending/running state.
         # The existing host-wide two-child compute limit remains unchanged.
-        results=[run('research_capacity')]
-        with ThreadPoolExecutor(max_workers=6) as pool:
-            parents = ('machine_attribution',)
-            results += list(pool.map(run, parents))
-            children = machine_group_children(day)
-            results += list(pool.map(run, children))
+        results=[]
         results.append(run('summary_handoff'))
     else: results=[run(args.stage)]
     print(json.dumps([dict(stage=r.get('stage_id'), status=r['status'], exit_code=r['exit_code'], cache_reused=r.get('cache_reused',False)) for r in results]))
