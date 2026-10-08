@@ -280,4 +280,6 @@ PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_main_rest_ws_latency.p
 
 B5b는 `adjusted_1` REST 역사와 `raw_same_day` WS tail의 동등성 미입증으로 composition 선택을 열지 않았다. 430봉 하한과 기존 bounded REST 경로를 보존한다. 이는 다른 단계의 배포를 막는 조건이 아니며, 완료된 코드 수리와 구분해 source contract 미지원으로 기록한다.
 
+추가 운영 검증에서 native 신호가 없는 활성 fixed-watch가 `not_enabled`로 기존 Main inline REST 준비에 들어가는 결함을 발견해 B1에 포함했다. 검증된 당일 exact scope/route의 native 정책은 신호가 생길 때까지 `waiting_native_signal`을 반환하며, 실제 유효 claim의 비동기 dispatch/commit과 비지원 backend의 기존 동작은 유지한다. 원 5초 claim이나 quote/주문 guard는 늘리지 않는다. 중간 배포의 72.847초 warm loop를 실패 관측으로 보존하고 보완 배포의 별도 자연 창을 수집한다.
+
 최종 회귀·수리 내용, 통제된 microbenchmark, 실제 새 PID의 소비 및 자연 성능/원천/호출 관측은 위 통합 리뷰와 [실행 증거 디렉터리](../../data/report/main_bottleneck_compact/2026-10-08/)가 소유한다. 단일 현재 checklist owner와 원 strict checklist 바이트는 유지한다. 배포 완료나 실제 주문·비용후 승률은 코드 검증으로 대신하지 않는다.

@@ -43,6 +43,14 @@
 
 [이전 성능 snapshot](../../data/report/main_bottleneck_compact/2026-10-08/previous-performance.json)의 PID 241227 warm loop 2,863회는 p95 0.894초/p99 1.948초, >5초 2회였다. 이전 schema에는 circuit 관측이 없고 새 배포와 장세·부하 window가 다르므로 인과적 전후 개선율을 계산하지 않는다. 새 release의 circuit/신호/source/HTTP demand 및 warmup 이후 분모를 별도로 수집한다. 자연 요청이 없으면 async/provider/submit 성능은 미관측이다.
 
+첫 운영 v2 배포의 [자연 관측](../../data/report/main_bottleneck_compact/2026-10-08/new-performance-latency-incident.json)에서 warm loop 65회 중 72.847초 지연 1회를 확인했다. 첫 loop 1.191초와 별개이며 워밍업 제외로 숨기지 않는다. 해당 시점에는 async/native claim 분모가 0이었는데, 신호 없는 fixed-watch의 `not_enabled`가 실제 Main의 inline REST 준비를 시작했다. 관측된 개별 HTTP 시간만으로 72초 전체를 증권사 지연이라고 확정하지 않는다.
+
+추가 수리에서는 검증된 당일 정책의 exact 종목/시장/가격대/주문 route가 `union_v5/v6`로 활성화되어 있고 native claim이 없으면 `waiting_native_signal`로 돌아온다. 실제 Main consumer가 inline 준비 이전에 반환함을 실행 검증했다. 유효 claim은 기존 비동기 준비/AI/commit 경로를 그대로 사용하며, 비지원 backend는 기존 경로를 유지한다. 5종목 × PRE/REGULAR/AFTER × native/legacy backend 경계와 단일 신호 소비 회귀 **279 passed**를 확인했다. false 첫 AI 시작 로그도 신호 대기 중에는 출력하지 않는다. 최종 immutable 배포 후 성능은 별도 PID 창으로 기록한다.
+
 ## 5. 배포 및 실제 소비
 
-최종 immutable release 검증 및 native handoff 완료 후 이 절에 실제 selection/PID/정책/strict 기동 결과를 기록한다. 현재 이 문단은 배포 대기 상태이며 기동/체결 성공을 의미하지 않는다.
+중간 immutable v2 `f1cd48730419eababc9b9bd994ef093ad78404fb`는 확대 회귀 **1,107 passed / 18 deselected** 후 17:01 KST에 배포했다. Main PID 271405와 web release를 정렬했고 native handoff·base/auxiliary 실제 소비·HTTP 200을 확인했다. 기존 bundle/overlay/128 bindings 및 네 scope v2를 그대로 승계했다. 위 추가 발견을 수리한 최종 v3는 다시 immutable 검증과 인계를 수행하며 결과를 이 절에 이어 기록한다.
+
+v2의 read-only cron 검사에서 finalization generation issue는 `{}`이며 `strict_checklist_generation_stale`은 재현되지 않았다. cleanup/finalization의 과거 06:50 cutoff 이후 복구 warning은 계속 보고한다. 전체 health PASS 또는 실제 체결 성공으로 표현하지 않는다.
+
+최종 준비 직전 별도 문서 작업이 약세 관찰 계획 owner를 추가했다. 현재 checklist SHA `503685557588993927f13d39db72218cce9deeeafe877f6630c1afff26c9ed93`, parser 22개·이번 Main owner 1개이며 원 AUTO 봉인 블록은 동일하다. 이 변경을 덮어쓰거나 해당 계획을 구현하지 않는다. 최신 checklist 인계는 기존 native handoff에서 검증한다.

@@ -19230,6 +19230,7 @@ def _fixed_watch_entry_source_route(stock: dict | None, now_ts: float) -> dict |
     return {
         "item": route["item"],
         "broker_route": (stock or {})["broker_route"],
+        "market_session_bucket": route["bucket"],
     }
 
 
@@ -61574,9 +61575,27 @@ def _resolve_scanner_async_entry_ai(
     from src.engine.scalping.entry_deadline import claim_deadline_epoch
     coordinator = runtime.get("scanner_async_eval_coordinator")
     generation = runtime.get("scanner_async_generation")
-    fixed_route = _fixed_watch_entry_source_route(stock, time.time())
+    scope_epoch = time.time()
+    fixed_route = _fixed_watch_entry_source_route(stock, scope_epoch)
     fixed_watch = bool(fixed_route)
     claim = copy.deepcopy(stock.get('_fixed_watch_async_claim') or stock.get('_continuous_reversal_pending_claim'))
+    if fixed_watch and isinstance(coordinator, ScannerAsyncEvalCoordinator) and not claim:
+        # A registered native scope remains enabled while it has no signal.
+        # Falling back to inline REST here blocks Main before any eligible
+        # claim exists. Other backends keep their original preparation path.
+        from src.engine.scalping.reversal_evaluation_context import prepare as prepare_policy
+        from src.engine.scalping import reversal_extended_catalog as catalog, continuous_reversal as native
+        from src.utils.constants import DATA_DIR
+        active = prepare_policy(data_root=DATA_DIR, day=datetime.fromtimestamp(scope_epoch, _KST).date().isoformat())
+        family = (active or {}).get('continuous_reversal') or {}
+        if family.get('schema') in {'continuous_reversal_policy_v5', 'continuous_reversal_policy_v6'}:
+            key = catalog.cell_key(code, native.market_bucket(fixed_route['market_session_bucket']),
+                                   ws_data.get('curr') or 0)
+            cell = (family.get('machine_cells', {}).get(key, {}).get('routes', {})
+                    .get(fixed_route['broker_route'], {}))
+            if cell.get('backend') in {'union_v5', 'union_v6'}:
+                _request_entry_capacity_preparation(stock, code, ws_data)
+                return {'status': 'waiting_native_signal', 'reason': 'native_signal_not_ready'}
     if fixed_watch and isinstance(coordinator, ScannerAsyncEvalCoordinator) and claim:
         try:
             generation = FixedWatchGeneration.from_claim(code, claim)
@@ -63128,11 +63147,6 @@ def _handle_watching_strategy_branch(
 
             # Smart target is an execution price reference. It cannot suppress
             # machine observation or consumption of a completed async decision.
-            if last_ai_time == 0:
-                log_info(
-                    f"⏳ [{stock['name']}] 첫 AI 분석을 시작합니다... (기계적 매수 일시 보류)"
-                )
-
             runtime_refresh_allowed = bool(watching_state_refresh.get("allowed"))
             runtime_refresh_allowed = bool(
                 runtime_refresh_allowed or early_accel_recheck.get("allowed")
@@ -63164,6 +63178,8 @@ def _handle_watching_strategy_branch(
                         last_ai_time=last_ai_time,
                         current_ai_score=current_ai_score,
                     )
+                    if last_ai_time == 0 and async_resolution.get('status') in {'dispatched', 'completed', 'not_enabled'}:
+                        log_info(f"⏳ [{stock['name']}] 첫 AI 분석을 시작합니다... (기계적 매수 일시 보류)")
                     scanner_async_enabled = (
                         async_resolution.get("status") != "not_enabled"
                     )

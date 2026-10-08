@@ -513,6 +513,48 @@ def test_strict_cdf_boundary_survives_retention(monkeypatch):
     assert v['cumulative_over_five_seconds']==1
 
 
+@pytest.mark.parametrize('backend,expected',[('union_v6','waiting_native_signal'),('union_v5','waiting_native_signal'),('registered_v4','not_enabled'),(None,'not_enabled')])
+@pytest.mark.parametrize('code',['005930','034020','036930','196170','403870'])
+@pytest.mark.parametrize('bucket,market,route,item_suffix',[
+    ('krx_like_premarket','PRE','NXT','_NX'),
+    ('krx_regular','REGULAR','SOR','_AL'),
+    ('krx_nxt_aftermarket','AFTER','SOR','_AL'),
+])
+def test_native_fixed_scope_without_signal_cannot_fall_back_inline(monkeypatch,backend,expected,code,bucket,market,route,item_suffix):
+    from src.engine import sniper_state_handlers as H
+    from src.engine.scalping import reversal_evaluation_context as E
+    from src.engine.scalping import reversal_extended_catalog as catalog
+    from src.engine.scalping.scanner_async_eval import ScannerAsyncEvalCoordinator
+    from src.engine.ai.hot_path_ai_dispatcher import HotPathAIDispatcher
+    key=catalog.cell_key(code,market,110000)
+    family=dict(schema='continuous_reversal_policy_v6',machine_cells={key:{'routes':{route:{'backend':backend}}}})
+    monkeypatch.setattr(E,'prepare',lambda **kw:{'continuous_reversal':family})
+    monkeypatch.setattr(H,'_fixed_watch_entry_source_route',lambda *a:dict(item=code+item_suffix,broker_route=route,market_session_bucket=bucket))
+    monkeypatch.setattr(H,'_request_entry_capacity_preparation',lambda *a,**kw:None)
+    monkeypatch.setattr(H.kiwoom_utils,'get_tick_history_ka10003',lambda *a,**kw:pytest.fail('inline source before native signal'))
+    coordinator=ScannerAsyncEvalCoordinator(ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1))
+    try:
+        stock=dict(code=code,status='WATCHING')
+        result=H._resolve_scanner_async_entry_ai(stock,code,{'curr':110000},None,
+            {'scanner_async_eval_coordinator':coordinator},trigger_reason='normal',last_ai_time=0,current_ai_score=0)
+        assert result['status']==expected
+        assert not coordinator.is_pending(generation_id='none',cache_key='none')
+        assert '_scanner_async_generation_id' not in stock
+        # Execute the real consumer branch: waiting native work returns before
+        # the legacy inline source path, while unsupported scopes retain it.
+        if expected=='waiting_native_signal':
+            tree=ast.parse(inspect.getsource(H._handle_watching_strategy_branch))
+            node=next(n for n in ast.walk(tree) if isinstance(n,ast.If)
+                      and ast.unparse(n.test)=='scanner_async_enabled')
+            function=ast.FunctionDef(name='consume',args=ast.arguments(posonlyargs=[],args=[],
+                kwonlyargs=[],kw_defaults=[],defaults=[]),decorator_list=[],body=[node])
+            namespace=dict(scanner_async_enabled=True,async_resolution=result,stock=stock)
+            exec(compile(ast.fix_missing_locations(ast.Module(body=[function],type_ignores=[])),
+                         '<actual-native-wait-consumer>','exec'),namespace)
+            assert namespace['consume']() is False
+    finally:coordinator.shutdown()
+
+
 def test_http_late_terminal_remains_accounted_after_minute_eviction(monkeypatch):
     import importlib
     T0=importlib.reload(T)

@@ -96,6 +96,7 @@ def test_fixed_watch_entry_source_uses_exact_session_item_and_order_route():
         assert handlers._fixed_watch_entry_source_route(target, now) == {
             "item": item,
             "broker_route": broker_route,
+            "market_session_bucket": session_route["bucket"],
         }
         with pytest.raises(ValueError, match="fixed_watch_entry_session_route_conflict"):
             handlers._fixed_watch_entry_source_route(
