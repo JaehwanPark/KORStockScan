@@ -177,6 +177,7 @@ class ScannerAsyncEvalResult:
     error_type: str = ""
     error_message: str = ""
     deadline_perf: float = 0.0
+    generation_kind: str = "scanner"
 
 
 @dataclass(frozen=True, slots=True)
@@ -566,6 +567,7 @@ class ScannerAsyncEvalCoordinator:
             error_type=error_type,
             error_message=error_message,
             deadline_perf=context.deadline_perf,
+            generation_kind="fixed_watch" if isinstance(context.generation, FixedWatchGeneration) else "scanner",
         )
         with self._lock:
             if self._requests.get(context.request_id) is not request:

@@ -215,8 +215,9 @@ def test_diagnostic_signal_join_handles_native_decision_variants(decision,expect
     assert machine_signal_id({'entry_mechanistic_policy_decision':decision})==expected
 
 
+@pytest.mark.parametrize('outer_drain',[False,True])
 @pytest.mark.parametrize('commit_change',[None,'route','watch_generation'])
-def test_fixed_watch_dispatch_keeps_claim_and_worker_state_private(monkeypatch,commit_change):
+def test_fixed_watch_dispatch_keeps_claim_and_worker_state_private(monkeypatch,commit_change,outer_drain):
     from src.engine import sniper_state_handlers as H
     from src.engine.scalping import reversal_current_backend as B, reversal_source_diagnostics as D
     from src.engine.scalping.scanner_async_eval import ScannerAsyncEvalCoordinator
@@ -259,6 +260,20 @@ def test_fixed_watch_dispatch_keeps_claim_and_worker_state_private(monkeypatch,c
             runtime,trigger_reason='continuous_reversal_first_uptick',last_ai_time=0,current_ai_score=50)
         assert result['status']=='dispatched'
         assert invoked.wait(1)
+        refresh=H._resolve_watching_state_change_refresh(stock,ws,now_ts=now,
+            last_ai_time=now,cooldown_sec=100)
+        assert refresh['allowed'] and refresh['reason']=='fixed_watch_async_pending'
+        if outer_drain:
+            from src.engine import kiwoom_sniper_v2 as M
+            tree=ast.parse(inspect.getsource(M.run_sniper))
+            node=next(n for n in ast.walk(tree) if isinstance(n,ast.For)
+                and ast.unparse(n.target)=='async_result'
+                and 'drain_completed' in ast.unparse(n.iter))
+            deadline=time.time()+1
+            while not coordinator.has_undrained_result() and time.time()<deadline:time.sleep(.005)
+            exec(compile(ast.Module(body=[node],type_ignores=[]),'<actual-main-outer-drain>','exec'),
+                {'async_coordinator':coordinator})
+            assert coordinator.has_completed_result()
         if commit_change=='route':
             monkeypatch.setattr(H,'_fixed_watch_entry_source_route',lambda *a:{'item':'005930_NX','broker_route':'NXT'})
         elif commit_change=='watch_generation':
@@ -278,7 +293,22 @@ def test_fixed_watch_dispatch_keeps_claim_and_worker_state_private(monkeypatch,c
             assert result['reversal_signal_claim'] is not claim
             assert stock['_machine_observation_revision']=={'test_receipt':'captured'}
         assert '_fixed_watch_async_claim' not in stock
+        assert not coordinator.has_completed_result()
+        assert len(coordinator.drain_completed())==(0 if outer_drain else 1)
+        assert coordinator.drain_completed()==[]
     finally:coordinator.shutdown()
+
+
+@pytest.mark.parametrize('quote_age,transport_age,allowed',[(2.5,9.,True),(3.5,0.,False),(-1.,0.,False),(None,0.,False)])
+def test_fixed_watch_quote_commit_uses_canonical_receipt(monkeypatch,quote_age,transport_age,allowed):
+    from src.engine import sniper_state_handlers as H
+    from src.trading.market import quote_consistency as Q
+    monkeypatch.setattr(Q,'ws_quote_receive_age_ms',lambda *a,**kw:None if quote_age is None else quote_age*1000)
+    monkeypatch.setattr(Q,'build_market_data_health',lambda *a,**kw:{})
+    monkeypatch.setattr(H,'_rule',lambda key,default=None:3. if key=='SCALP_PRE_AI_MAX_WS_AGE_SEC' else default)
+    monkeypatch.setattr(H,'_get_ws_snapshot_age_sec',lambda *a:transport_age)
+    assert H._scanner_async_quote_is_fresh({'curr':1000},now_ts=time.time(),native_fixed_watch=True)==allowed
+    if allowed:assert not H._scanner_async_quote_is_fresh({'curr':1000},now_ts=time.time())
 
 
 def test_priority_queue_moves_confirmed_before_fresh_background_without_preemption():

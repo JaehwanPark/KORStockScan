@@ -50080,6 +50080,12 @@ def _commit_watching_entry_evaluation(
 def _resolve_watching_state_change_refresh(
     stock, ws_data, *, now_ts, last_ai_time, cooldown_sec
 ) -> dict:
+    if ((stock or {}).get('_fixed_watch_async_claim')
+            and stock.get('_scanner_async_generation_id')
+            and stock.get('_scanner_async_cache_key')):
+        # Consume the original request even during cooldown; native validity
+        # and all execution guards are checked at Main commit, never renewed.
+        return {'allowed': True, 'reason': 'fixed_watch_async_pending', 'signature': {}}
     timeout_retry_after = _safe_float(
         (stock or {}).get("_scanner_entry_ai_transport_retry_after_epoch"), 0.0
     )
@@ -61083,7 +61089,7 @@ def _scanner_async_entry_state_version(stock: dict) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:20]
 
 
-def _scanner_async_quote_is_fresh(ws_data: dict, *, now_ts: float) -> bool:
+def _scanner_async_quote_is_fresh(ws_data: dict, *, now_ts: float, native_fixed_watch: bool = False) -> bool:
     if _safe_int((ws_data or {}).get("curr"), 0) <= 0:
         return False
     _update_ai_quote_freshness_fields(ws_data)
@@ -61094,6 +61100,10 @@ def _scanner_async_quote_is_fresh(ws_data: dict, *, now_ts: float) -> bool:
         or ws_data.get("source_conflict")
     ):
         return False
+    if native_fixed_watch:
+        # The canonical quote freshness above owns the native limit. The
+        # scanner's extra transport-age bound is not a fixed-watch guard.
+        return True
     quote_age_sec = _get_ws_snapshot_age_sec(ws_data)
     return bool(quote_age_sec is not None and quote_age_sec <= 2.0)
 
@@ -61610,6 +61620,7 @@ def _resolve_scanner_async_entry_ai(
             quote_fresh=_scanner_async_quote_is_fresh(
                 ws_data,
                 now_ts=now_epoch,
+                native_fixed_watch=fixed_watch,
             ),
             position_or_pending_order_present=bool(
                 _safe_int(stock.get("buy_qty"), 0) > 0

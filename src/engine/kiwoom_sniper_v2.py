@@ -13215,6 +13215,10 @@ def run_sniper(is_test_mode=False):
                 async_coordinator, ScannerAsyncEvalCoordinator
             ):
                 for async_result in async_coordinator.drain_completed():
+                    if async_result.generation_kind == "fixed_watch":
+                        # The native WATCHING handler owns take/commit. A
+                        # scanner-only target lookup must not discard it.
+                        continue
                     async_target = next(
                         (
                             target

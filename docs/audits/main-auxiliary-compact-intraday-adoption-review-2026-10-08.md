@@ -16,6 +16,8 @@
 | 실제 일반 WATCHING caller의 coordinator 누락 | Main이 생성한 기존 coordinator를 wrapper/handler로 전달 | 실제 Main call 식과 wrapper 실행, 5개 고정감시 인자 전달·no-claim 미전송, 기존 native async commit/경로 변경 회귀 |
 | 전송 직전 native claim 종료의 provider 실패 오분류 | `validate_active_claim`의 명시된 종료만 WAIT로 반환, provider 실패 횟수 증가/성공 reset 모두 금지 | 동일 native 종료 5회에도 원 실패 수 유지; 알 수 없는 예외·실제 provider 실패 5회 차단 유지 |
 | 진입 금지 시간에는 PID policy 소비 기록도 지연됨 | Main 기동 시 기존 `prepare`를 호출해 실제 PID에서 정책 검증·소비 | 실제 기동 분기 실행 회귀; 신호 claim/provider/주문 생성 없음 |
+| scanner outer drain이 fixed-watch 완료를 폐기할 수 있음 | 생성 시 확정한 generation kind로 native 완료를 기존 Main handler에 남김; cooldown 중에도 원 요청만 수집 | 실제 outer drain 분기→기존 commit, 원 상태 변경 시 거절, 단일 소비·bounded 완료 알림 보존 |
+| async 연결로 고정감시에 scanner 전용 2초 transport 제한 유입 | fixed-watch는 기존 canonical quote age/설정 한도를 사용 | 정상 2.5초·만료 3.5초·미관측/미래 시각 검사; scanner 제한 유지 |
 
 새 codec/호환/전환 모듈은 `src/engine/scalping`에 둔다. 원 기계 kernel, v5/v6 policy와 native outbox의 고정 파일을 변경하지 않았다. 가격·수량·5초 confirmation TTL·provider 중복/불확실 예약·broker/custody·Main-only 퇴역 보호조건을 유지한다. 코드 변경은 새 prompt 생성이나 호출한도 해제가 아니다.
 
@@ -49,3 +51,7 @@
 15:15:23 KST에 첫 검증 릴리스 `main-aux-compact-20261008-v1`로 재기동했다(PID 232463). 15:15:25 bootstrap PASS, 15:20 자연 오류 감시 `no_alert`, 상시감시 5종목을 확인했다. 기존 15:10 정규장 신규 진입 cutoff 때문에 평가 시 기록되는 auxiliary 소비는 미관측이었다. 이를 정책 실패나 소비 성공으로 대체하지 않고, 기동 시 기존 reader 검증을 추가했다.
 
 발행 전 재리뷰에서 [기존 PID 진단](main-pid-206123-post-warmup-latency-rest-ws-monitoring-2026-10-08.md)의 두 직접 결함도 확인하여 위 caller 연결과 native 종료 분리만 함께 수정했다. 별도 B3~B6 성능계획 전체를 구현한 것은 아니다. 83개 직접 회귀와 11개 기존 Main 호출 계약이 통과했으며 최종 통합/불변 릴리스 재검증 후 정책을 발행한다. PRE 자연 요청과 이후 장후/다음 기동은 시점이 도래하기 전에는 완료로 표시하지 않는다.
+
+15:31:05 두 번째 릴리스 `main-aux-compact-20261008-v2`의 bootstrap도 통과했으나, 15:31:14 다른 작업의 checklist 변경 후 `intraday_preserved_generation_changed`가 발생했고 15:31:32 기동 reader는 이를 정확히 거절했다. 당시 보조 overlay는 발행하지 않았다. 원 체크리스트 수정·기존 봉인/소비 영수증은 보존하며 마지막 릴리스는 최신 문서 바이트로 새 정식 인계를 생성한다.
+
+후속 async 검증 **130 passed**. 더 넓게 실행한 scanner 종목 부착 검사 2건은 `SymbolOwnerPolicyError`로 실패했고, 수정 전 불변 v1 릴리스의 동일 두 검사에서도 같은 실패를 재현했다(`preexisting-scanner-test-baseline.txt`). 현재 변경의 회귀로 처리하거나 owner 보호를 해제하지 않는다. 전체 저장소 모든 검사 무결함을 주장하지 않는다.
