@@ -48,6 +48,22 @@ def failure(stage, reason):
         log_info('[RUNTIME_PREPARATION_FAILURE] ' + json.dumps(dict(stage=key[0], reason=key[1], pid=os.getpid(), decision_authority='none')))
 
 
+def machine_signal_id(fields):
+    """Read an optional diagnostic identity without interpreting a decision.
+
+    Source-invalid preflight uses a string in the same legacy result field.
+    Missing/malformed telemetry cannot become an execution-path exception.
+    """
+    decision = fields.get('entry_mechanistic_policy_decision') if isinstance(fields, dict) else None
+    if not isinstance(decision, dict):
+        return None
+    assessment = decision.get('continuous_reversal_assessment') or decision
+    if not isinstance(assessment, dict):
+        return None
+    value = assessment.get('signal_id') or assessment.get('event_id')
+    return value if isinstance(value, str) and value else None
+
+
 def mark_signal(signal_id, stage, *, identity=None):
     """At most 128 in-process stage clocks; missing joins stay unobservable."""
     if not signal_id or stage not in {'claim', 'machine', 'provider', 'submit', 'pre_submit', 'guard_done', 'actual_submit'}:

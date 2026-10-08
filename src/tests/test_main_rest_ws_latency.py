@@ -150,6 +150,17 @@ def test_counter_histogram_survives_deque_eviction():
     assert sum(metric['cumulative_histogram'].values())==5001
 
 
+@pytest.mark.parametrize('decision,expected', [
+    ('source_invalid',None), ('RECHECK',None), (None,None),
+    ({'signal_id':'s'},'s'), ({'continuous_reversal_assessment':{'event_id':'e'}},'e'),
+    ({'continuous_reversal_assessment':'source_invalid'},None),
+    ({'signal_id':{}},None),
+])
+def test_diagnostic_signal_join_handles_native_decision_variants(decision,expected):
+    from src.engine.monitoring.runtime_performance import machine_signal_id
+    assert machine_signal_id({'entry_mechanistic_policy_decision':decision})==expected
+
+
 @pytest.mark.parametrize('commit_change',[None,'route','watch_generation'])
 def test_fixed_watch_dispatch_keeps_claim_and_worker_state_private(monkeypatch,commit_change):
     from src.engine import sniper_state_handlers as H
@@ -186,7 +197,7 @@ def test_fixed_watch_dispatch_keeps_claim_and_worker_state_private(monkeypatch,c
         kw['entry_economics_observer'](exact_payload={},assessment={},capture={},bundle_sha256='b')
         assert '_machine_observation_revision' not in stock
         invoked.set()
-        return dict(action='WAIT',entry_mechanistic_policy_decision={'continuous_reversal_claim':claim})
+        return dict(action='WAIT',entry_mechanistic_policy_decision='source_invalid')
     coordinator=ScannerAsyncEvalCoordinator(ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1))
     runtime={'scanner_async_eval_coordinator':coordinator}
     try:
@@ -209,6 +220,8 @@ def test_fixed_watch_dispatch_keeps_claim_and_worker_state_private(monkeypatch,c
             assert '_machine_observation_revision' not in stock
         else:
             assert result['status']=='completed'
+            assert result['reversal_signal_claim']==claim
+            assert result['reversal_signal_claim'] is not claim
             assert stock['_machine_observation_revision']=={'test_receipt':'captured'}
         assert '_fixed_watch_async_claim' not in stock
     finally:coordinator.shutdown()

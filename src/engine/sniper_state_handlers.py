@@ -12529,10 +12529,8 @@ def _observe_entry_economics_before_ai(stock, code, ws_data, *, exact_payload,
 
 def _log_entry_pipeline(stock, code, stage, **fields):
     if stage == 'order_leg_request' and isinstance(stock, dict):
-        from src.engine.monitoring.runtime_performance import mark_signal
-        native_decision = (stock.get('last_watching_ai_machine_primary_fields') or {}).get('entry_mechanistic_policy_decision') or {}
-        native_assessment = native_decision.get('continuous_reversal_assessment') or native_decision
-        mark_signal(native_assessment.get('signal_id') or native_assessment.get('event_id'), 'guard_done')
+        from src.engine.monitoring.runtime_performance import mark_signal, machine_signal_id
+        mark_signal(machine_signal_id(stock.get('last_watching_ai_machine_primary_fields')), 'guard_done')
     if stage in {'residual_blocked', 'probe_continuation_deferred'} and isinstance(stock, dict):
         try:
             from src.engine.scalping.entry_probe_conditional_replay import SCHEMA, native_receipt
@@ -61712,6 +61710,7 @@ def _resolve_scanner_async_entry_ai(
             "status": "completed",
             "prepared_context": thaw_scanner_async_value(result.prepared_context),
             "ai_decision": thaw_scanner_async_value(result.ai_payload),
+            "reversal_signal_claim": copy.deepcopy(claim),
             "completed_epoch": result.completed_epoch,
         }
 
@@ -63078,6 +63077,7 @@ def _handle_watching_strategy_branch(
                 )
             ):
                 try:
+                    entry_recheck_claim = None
                     async_resolution = _resolve_scanner_async_entry_ai(
                         stock,
                         code,
@@ -63131,6 +63131,7 @@ def _handle_watching_strategy_branch(
                         ai_decision = dict(
                             async_resolution.get("ai_decision") or {}
                         )
+                        entry_recheck_claim = async_resolution.get("reversal_signal_claim")
                         ai_call_completed_at = _safe_float(
                             async_resolution.get("completed_epoch"),
                             time.time(),
@@ -63242,7 +63243,9 @@ def _handle_watching_strategy_branch(
                                 from src.engine.scalping.reversal_current_backend import acknowledge_any as acknowledge
                                 acknowledge(pending_claim,status='evaluated')
                         ai_decision.update(pre_ai_ws_refresh_fields)
-                        entry_recheck_claim = locals().get("entry_recheck_claim") or (ai_decision.get("entry_mechanistic_policy_decision") or {}).get("continuous_reversal_claim")
+                        # Preflight/source-invalid decisions may be strings.
+                        # A retry inherits only the original native request
+                        # claim, never a field inferred from the AI decision.
                         ai_call_executed = True
                         _mutate_stock_state(
                             stock,
@@ -70055,10 +70058,8 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         final_ai_age = time.time() - confirmed_epoch if confirmed_epoch > 0 else None
         try:
             from src.engine.scalping.reversal_auxiliary_intraday import validate_submit
-            from src.engine.monitoring.runtime_performance import mark_signal
-            perf_decision = (stock.get('last_watching_ai_machine_primary_fields') or {}).get('entry_mechanistic_policy_decision') or {}
-            perf_assessment = perf_decision.get('continuous_reversal_assessment') or perf_decision
-            mark_signal(perf_assessment.get('signal_id') or perf_assessment.get('event_id'), 'pre_submit')
+            from src.engine.monitoring.runtime_performance import mark_signal, machine_signal_id
+            mark_signal(machine_signal_id(stock.get('last_watching_ai_machine_primary_fields')), 'pre_submit')
             validate_submit(DATA_DIR, stock.get("last_watching_ai_machine_primary_fields") or {}, now=time.time())
         except (OSError, ValueError, KeyError, TypeError) as exc:
             _log_entry_pipeline(stock, code, "auxiliary_binding_submit_recheck", reason=str(exc),
@@ -72131,10 +72132,8 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         {},
     )
     try:
-        from src.engine.monitoring.runtime_performance import mark_signal
-        performance_decision = (stock.get('last_watching_ai_machine_primary_fields') or {}).get('entry_mechanistic_policy_decision') or {}
-        performance_assessment = performance_decision.get('continuous_reversal_assessment') or performance_decision
-        performance_signal = performance_assessment.get('signal_id') or performance_assessment.get('event_id')
+        from src.engine.monitoring.runtime_performance import mark_signal, machine_signal_id
+        performance_signal = machine_signal_id(stock.get('last_watching_ai_machine_primary_fields'))
         mark_signal(performance_signal, 'guard_done')
         mark_signal(performance_signal, 'actual_submit')
     except (TypeError, ValueError):

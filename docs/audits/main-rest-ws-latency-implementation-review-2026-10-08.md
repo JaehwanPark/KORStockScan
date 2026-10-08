@@ -42,3 +42,7 @@
 재리뷰에서는 timezone 없는 입력이 범위 검사로 통과하지 않게 보완했다. 새 source/route 회귀와 account/order·admission·handoff·finalization/router를 함께 검사한다. 기존 예수금 cooldown 테스트 두 개의 시계 호출 횟수 의존 fixture는 명시적 1초 경과 clock으로 바꿔, 계측 시계 호출 추가에도 동일 cooldown/HTTP1회 보호를 검증한다.
 
 14:03:09 `strict_checklist_generation_stale`는 selector 전환 후 기존 PID의 종료 전 구간에서 발생했다. 14:08:46 자연 detector에서 cron은 `recovered after effective-date 06:50 cutoff`, artifact freshness/process는 PASS였으며 이후 실패는 위 분봉 오류의 log burst다. 경고를 숨기거나 과거 strict/PREOPEN을 재생하지 않는다. 수정 배포에서는 native prepare 직후 Main 재기동을 먼저 완료하고 web 교체를 이어가며 새 PID의 최종화·오류 상태를 재확인한다.
+
+v2(`6256e13ac951ef6a9d21dcb6e80cbab507c8ad60`)는 484개 회귀/immutable 644개 검증 후 14:14:07 PID201361로 기동했다. 기존 분봉 오류는 재발하지 않았고 native policy128 소비를 확인했다. 추가 자연 검증에서 HPSP의 source-invalid 응답을 읽는 새 재확인 분기가 `entry_mechanistic_policy_decision`을 항상 dict로 가정하는 결함을 확인했다. 실제 preflight는 문자열 `source_invalid`/`RECHECK`도 반환한다. 재확인 claim을 결정 필드에서 추정하는 분기를 없애고 원 sync request 또는 완료된 async native context에서 별도로 전달한다. request별 초기화로 이전 평가의 claim도 승계하지 않는다. 같은 형식을 읽는 진단 signal join도 타입을 구분하며 결손은 미관측으로 유지한다.
+
+기존 테스트가 이 필드에 dict만 넣던 맹점을 수정했다. 문자열 결손 결과를 실제 WATCHING 처리 함수에 넣어 평가 commit까지 예외 없이 도달하는 8개 cooldown/refresh 조합과 async 원 claim 복사·route/watch 교체 거부, 진단 7개 타입을 회귀했다. 수정 대상 통합 203개가 통과했다. v2 초기화 loop97.382초 및 warm tail은 별도로 기록하며, 적은 표본이나 결과 예외로 평가가 생략된 창을 성능 향상 근거로 사용하지 않는다.

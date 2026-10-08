@@ -371,14 +371,17 @@ def test_daily_source_projection_is_bounded_and_consumed_by_exact_day(
     "last_call,refresh,expected",
     [(0, False, 1), (1, False, 1), (995, False, 0), (995, True, 1)],
 )
+@pytest.mark.parametrize("completed_source_invalid", [False, True])
 def test_watching_evaluates_above_smart_target_with_existing_cooldown(
-    monkeypatch, last_call, refresh, expected
+    monkeypatch, last_call, refresh, expected, completed_source_invalid
 ):
     from src.engine import sniper_state_handlers as H
     from src.utils.constants import TRADING_RULES
     from src.tests.test_sniper_scale_in import _DummyDB
 
     calls = []
+    commits = []
+    errors = []
     for name in (
         "_handle_watching_opening_rotation",
         "_opening_rotation_handoff_defers_pre_ai_baseline",
@@ -390,6 +393,10 @@ def test_watching_evaluates_above_smart_target_with_existing_cooldown(
     monkeypatch.setattr(H, "TRADING_RULES", TRADING_RULES)
     monkeypatch.setattr(H, "_resolve_stock_marcap", lambda *a: 1_000_000_000_000)
     monkeypatch.setattr(H, "_log_entry_pipeline", lambda *a, **k: None)
+    monkeypatch.setattr(H, "log_error", lambda message, *a, **k: errors.append(message))
+    monkeypatch.setattr(H, "_extract_ai_overlap_snapshot", lambda **k: {})
+    monkeypatch.setattr(H, "_commit_watching_entry_evaluation",
+                        lambda stock, code, decision, **k: commits.append(decision))
     monkeypatch.setattr(H, "arm_big_bite_if_triggered", lambda **k: (False, {}))
     monkeypatch.setattr(H, "confirm_big_bite_follow_through", lambda **k: (True, {}))
     monkeypatch.setattr(
@@ -411,7 +418,11 @@ def test_watching_evaluates_above_smart_target_with_existing_cooldown(
     monkeypatch.setattr(
         H,
         "_resolve_scanner_async_entry_ai",
-        lambda *a, **k: calls.append(k) or dict(status="pending"),
+        lambda *a, **k: calls.append(k) or (
+            dict(status="completed", prepared_context={"recent_ticks":[{"price":273000}]},
+                 ai_decision={"action":"WAIT", "score":0, "reason":"source invalid",
+                              "entry_mechanistic_policy_decision":"source_invalid"})
+            if completed_source_invalid else dict(status="pending")),
     )
     runtime = dict(
         strategy="SCALPING",
@@ -449,6 +460,7 @@ def test_watching_evaluates_above_smart_target_with_existing_cooldown(
             ask_tot=100000,
             bid_tot=100000,
             open=270000,
+            orderbook={"ask_tot":100000,"bid_tot":100000},
         ),
         radar,
         object(),
@@ -461,6 +473,10 @@ def test_watching_evaluates_above_smart_target_with_existing_cooldown(
         },
     )
     assert len(calls) == expected
+    if completed_source_invalid and expected:
+        assert len(commits)==1
+        assert commits[0]["entry_mechanistic_policy_decision"]=="source_invalid"
+        assert not errors
 
 
 def test_external_price_reader_consumes_all_sealed_manifests(tmp_path):
