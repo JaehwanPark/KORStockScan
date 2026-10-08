@@ -9,7 +9,7 @@
 ## 구현·리뷰
 
 - `mechanistic_entry_runtime_policy`가 검증된 불변 view를 발급한다. 같은 동기 평가의 영수증 읽기만 view를 공유하고 외부 loader의 dict는 계속 격리한다. current pointer 변경은 context 진입·중첩 조회·종료에서 차단한다. AI 응답 및 제출의 기존 검증 경계는 독립이다.
-- 매 평가의 파일 stat 검사를 유지하면서 공통 상위 경로 해석을 한 pass 안에서 공유한다. 경로/링크 inode·ctime·target, 내용 파일 inode·mtime·ctime·크기, 누락·원자 교체를 확인하고 pass 종료에 상위 경로를 재확인한다. cache miss는 단일 검증자/최대 2초 대기이며 실패한 옛 view를 반환하지 않는다. 파일 hash는 streaming으로 계산하고 기존 32-entry 상한을 유지한다.
+- 매 평가의 파일 stat 검사를 유지하면서 공통 상위 경로 해석을 한 pass 안에서 공유한다. 경로/링크 inode·ctime·target, 내용 파일 inode·mtime·ctime·크기, 누락·원자 교체를 확인하고 pass 종료에 상위 경로를 재확인한다. cache miss는 단일 검증자/최대 2초 대기이며 실패한 옛 view를 반환하지 않는다. 파일 hash는 streaming으로 계산한다. 실제 원천 766개에 기존 32-entry cache가 매번 1,063회 miss를 내는 것을 확인하여, 물리 파일 identity 단위 최대 1,024개·accounted metadata 1MiB의 이중 상한을 적용했다. 파일 본문은 저장하지 않고 경로 provenance 검사는 각 호출에 남긴다.
 - 새 orchestration은 `scalping/reversal_evaluation_context.py`에 둔다. 같은 검증 세대/일자/PID start ticks/cwd/선택 commit/backend에서 구성과 소비 영수증을 재사용한다. 현재 selector·정책 의존 원천·보조 overlay/취소·registry/reader·handoff·기계/보조 consumed 파일의 변경은 계속 검사한다. 실패한 부분 구성은 완료로 cache하지 않는다. 기존 reader의 process-lifetime handoff set이 바뀐 handoff 검증을 생략하지 않도록 추가 검증했다. 코드 pin에 포함된 v4/v5/v6 모듈은 수정하지 않았다.
 - WS는 `infrastructure/snapshot_copy.py`의 격리 복사를 사용한다. 전체 history 길이/순서/타입 및 alias/cycle을 보존하고, 원본 참조를 잠금 밖으로 내보내지 않는다. unknown 객체는 deepcopy protocol을 유지한다. 이미 격리된 payload의 health/형식 후처리만 잠금 밖으로 이동했다. raw 무손실 전달·pending 병합/lock 순서는 보존한다. Kiwoom 요청/parser/FID/REG/recovery는 수정하지 않았다.
 - 실제 claim 검사는 무거운 준비/claim lock 대기 뒤의 현재 시각을 사용한다. replay는 주어진 oracle 시각을 유지한다. 원 신호 epoch와 5초 TTL을 갱신하지 않는다.
@@ -39,3 +39,7 @@ v2 구형 postclose 보고 회귀 한 건의 `KeyError: routes`는 현재 수정
 ### 자연 실행 중 재리뷰
 
 첫 배포의 자연 검증에서 policy refresh의 `machine_policy_generation_changed_during_evaluation`을 확인했다. 기존 handler가 이 예외를 조용히 넘겨 원인이 가려져 있었으므로 최대 16종/종별 60초 간격의 원인 기록을 보완했다. canonical data root가 같은 release data 링크/절대 anchor의 cache 충돌을 발견하여, cache/검증 view 식별자에 lexical anchor와 실제 target을 함께 결속했다. 경로 혼용 회귀를 추가했고 관련 184 PASS를 확인했다. 첫 배포의 빠른 일부 loop는 정책 준비가 끝나지 않은 상태여서 최종 자연 성능 개선 근거에서 제외한다. 개선된 release의 실제 기계·보조 소비를 다시 확인한다.
+
+v3 PID 57809의 기계·보조 소비 및 실제 ENTER_NOW 판정 관측으로 경로 혼용 수정의 소비를 확인했다. 이 상태의 Main warm loop 123회는 p95 8.250초/p99 9.526초/max 12.168초, 5초 초과 19회로 초기 목표 미달이다. 신호 claim 6회는 최대 4.919초이며 실제 claim된 분모만 포함한다. 주문·체결 개선으로 해석하지 않는다.
+
+보고용 원천 반복 검증을 추가 측정했다. `hash-working-set.json`의 기존 2회 검증은 1.564/1.552초, 각각 1,063 miss였다. `hash-working-set-after.json`의 bounded cache 적용 후 첫 검증 1.310초/766 miss, 이후 0.285/0.286초와 0 miss다. metadata 457,302 bytes, 766 entries이며 signature/원천 hash 일치는 그대로 검사했다. 해당 변경 관련 208 PASS, 최종 추가 반례 포함 18 PASS(서로 중복)를 확인했다. 읽기 실패·읽는 중 내용 변경은 cache에 기록하지 않고, hardlink alias의 digest 재사용과 링크 교체 차단, entry/byte eviction, 동시 single-flight를 검증했다. 보고 프로세스 분리는 이번 재사용 개선 이후 남은 자연 경합 측정에 따라 후속 판단한다.

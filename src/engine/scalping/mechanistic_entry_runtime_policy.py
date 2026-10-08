@@ -14,9 +14,10 @@ import json
 import os
 import re
 import stat as stat_module
+import sys
 import tempfile
+from collections import OrderedDict, namedtuple
 from datetime import date, datetime, timedelta
-from functools import lru_cache
 from contextvars import ContextVar
 from contextlib import contextmanager
 from threading import RLock, Event
@@ -322,14 +323,84 @@ def _source_hash(path: str, signature: tuple) -> str:
     return _cached_source_hash(str(source_path(path)), signature)
 
 
-@lru_cache(maxsize=32)
 def _cached_source_hash(path: str, signature: tuple) -> str:
+    """Bounded physical-file digest cache; lexical provenance stays in signature.
+
+    Measured active validation working set: 766 paths. Store hashes only, at
+    most 1024 entries AND 1 MiB accounted metadata, never source contents.
+    """
+    global _HASH_BYTES, _HASH_HITS, _HASH_MISSES
     source = Path(path)
-    with source.open('rb') as handle:
-        observed = hashlib.file_digest(handle, 'sha256').hexdigest()
     if _signature(source) != signature:
         raise ValueError("machine_policy_source_changed_during_read")
-    return observed
+    key = signature[1:6]  # device/inode/size/mtime/ctime; aliases share the digest
+    with _HASH_LOCK:
+        cached = _HASH_CACHE.get(key)
+        if cached is not None:
+            _HASH_HITS += 1
+            _HASH_CACHE.move_to_end(key)
+            return cached[0]
+        pending = _HASH_FLIGHTS.get(key)
+        leader = pending is None
+        if leader:
+            pending = Event()
+            _HASH_FLIGHTS[key] = pending
+            _HASH_MISSES += 1
+    if not leader:
+        if not pending.wait(timeout=2.0):
+            raise ValueError('machine_policy_source_hash_in_progress')
+        if _signature(source) != signature:
+            raise ValueError('machine_policy_source_changed_during_read')
+        with _HASH_LOCK:
+            cached = _HASH_CACHE.get(key)
+            if cached is not None:
+                _HASH_HITS += 1
+                _HASH_CACHE.move_to_end(key)
+                return cached[0]
+        raise ValueError('machine_policy_source_hash_failed_or_evicted')
+    try:
+        with source.open('rb') as handle:
+            observed = hashlib.file_digest(handle, 'sha256').hexdigest()
+        if _signature(source) != signature:
+            raise ValueError('machine_policy_source_changed_during_read')
+        size = sys.getsizeof(key) + sum(sys.getsizeof(v) for v in key) + sys.getsizeof(observed) + 256
+        with _HASH_LOCK:
+            while _HASH_CACHE and (len(_HASH_CACHE) >= _HASH_MAX_ENTRIES or _HASH_BYTES + size > _HASH_MAX_BYTES):
+                _, (_, removed_size) = _HASH_CACHE.popitem(last=False)
+                _HASH_BYTES -= removed_size
+            if size <= _HASH_MAX_BYTES:
+                _HASH_CACHE[key] = (observed, size)
+                _HASH_BYTES += size
+        return observed
+    finally:
+        with _HASH_LOCK:
+            _HASH_FLIGHTS.pop(key, None)
+            pending.set()
+
+
+_HASH_LOCK = RLock()
+_HASH_CACHE = OrderedDict()
+_HASH_FLIGHTS = {}
+_HASH_MAX_ENTRIES = 1024
+_HASH_MAX_BYTES = 1024 * 1024
+_HASH_BYTES = _HASH_HITS = _HASH_MISSES = 0
+_HashInfo = namedtuple('CacheInfo', 'hits misses maxsize currsize')
+
+
+def _hash_cache_info():
+    with _HASH_LOCK:
+        return _HashInfo(_HASH_HITS, _HASH_MISSES, _HASH_MAX_ENTRIES, len(_HASH_CACHE))
+
+
+def _hash_cache_clear():
+    global _HASH_BYTES, _HASH_HITS, _HASH_MISSES
+    with _HASH_LOCK:
+        _HASH_CACHE.clear()
+        _HASH_BYTES = _HASH_HITS = _HASH_MISSES = 0
+
+
+_cached_source_hash.cache_info = _hash_cache_info
+_cached_source_hash.cache_clear = _hash_cache_clear
 
 
 def _signature(path: Path) -> tuple:

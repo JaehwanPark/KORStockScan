@@ -211,3 +211,93 @@ def test_launch_relative_mount_and_absolute_anchor_do_not_conflate(loader,monkey
     with N.verified_evaluation(data_root=Path('data'),target_date='2026-10-08') as value:
         assert value['bundle_sha256']=='1'
     assert len(calls)==2
+
+
+def test_full_ws_snapshot_and_signal_projection_equal_legacy_copy(monkeypatch):
+    from collections import deque
+    from src.engine import kiwoom_websocket as W
+    from src.engine.infrastructure import snapshot_copy as C
+    from src.engine.sniper_condition_handlers_big_bite import build_tick_data_from_ws
+    manager=W.KiwoomWSManager('offline');target=manager._ensure_target_defaults('005930')
+    target.update(curr=1000,v_pw=130,price_history=deque(range(500),maxlen=500),
+                  strength_momentum_history=deque([{'ts':1.,'price':1000,'v_pw':130,'nested':[1]}]*2000),
+                  recent_trade_ticks_by_route={'KRX|krx':deque([{'price':1000,'qty':3,'values':{'10':'1000'}}])})
+    monkeypatch.setattr(W.time,'time',lambda:1234.)
+    fast=C.snapshot_copy
+    monkeypatch.setattr(C,'snapshot_copy',copy.deepcopy)
+    expected=manager.get_all_data(['005930'])
+    monkeypatch.setattr(C,'snapshot_copy',fast)
+    actual=manager.get_all_data(['005930'])
+    assert actual==expected
+    assert build_tick_data_from_ws(actual['005930'])==build_tick_data_from_ws(expected['005930'])
+    actual['005930']['strength_momentum_history'][0]['nested'][0]=-1
+    assert target['strength_momentum_history'][0]['nested']==[1]
+
+
+def test_ws_concurrent_capture_keeps_epoch_item_and_nested_rows_coherent():
+    from collections import deque
+    from src.engine.kiwoom_websocket import KiwoomWSManager
+    manager=KiwoomWSManager('offline');target=manager._ensure_target_defaults('005930')
+    def produce():
+        for i in range(1,1000):
+            with manager.lock:
+                manager._market_data_transport_epoch=i
+                target.update(curr=i,last_ws_item=str(i),recent_trade_ticks=deque([{'price':i,'nested':[i]}]))
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        future=pool.submit(produce)
+        for _ in range(80):
+            value=manager.get_latest_data('005930')
+            if value['curr']:
+                assert value['curr']==value['recent_trade_ticks'][0]['price']==value['market_data_transport_epoch']
+                assert str(value['curr'])==value['last_ws_item']
+        future.result()
+
+
+def test_digest_cache_reuses_physical_file_but_detects_alias_and_content_changes(tmp_path):
+    N._cached_source_hash.cache_clear()
+    path=tmp_path/'source';path.write_bytes(b'one');alias=tmp_path/'alias';os.link(path,alias)
+    first=N._source_hash(str(path),N._signature(path))
+    assert N._source_hash(str(alias),N._signature(alias))==first
+    assert N._cached_source_hash.cache_info().misses==1
+    before=path.stat();path.write_bytes(b'two');os.utime(path,ns=(before.st_atime_ns,before.st_mtime_ns))
+    assert N._source_hash(str(alias),N._signature(alias))!=first
+    expected=N._signature(alias);alias.unlink();alias.symlink_to(path)
+    with pytest.raises(ValueError,match='changed_during_read'):N._source_hash(str(alias),expected)
+
+
+def test_digest_cache_entry_and_byte_bounds_and_singleflight(tmp_path,monkeypatch):
+    N._cached_source_hash.cache_clear()
+    monkeypatch.setattr(N,'_HASH_MAX_ENTRIES',4);monkeypatch.setattr(N,'_HASH_MAX_BYTES',2000)
+    for i in range(8):
+        p=tmp_path/str(i);p.write_bytes(str(i).encode());N._source_hash(str(p),N._signature(p))
+    assert N._cached_source_hash.cache_info().currsize<=4 and N._HASH_BYTES<=2000
+    N._cached_source_hash.cache_clear()
+    p=tmp_path/'parallel';p.write_bytes(b'parallel');sig=N._signature(p)
+    original=N.hashlib.file_digest;entered=threading.Event();release=threading.Event();reads=[]
+    def digest(*a):
+        reads.append(1);entered.set();assert release.wait(1);return original(*a)
+    monkeypatch.setattr(N.hashlib,'file_digest',digest)
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        fs=[pool.submit(N._source_hash,str(p),sig) for _ in range(5)]
+        assert entered.wait(1);release.set();assert len({f.result() for f in fs})==1
+    assert len(reads)==1 and not N._HASH_FLIGHTS
+    N._cached_source_hash.cache_clear()
+
+
+def test_digest_failure_or_concurrent_write_never_populates_cache(tmp_path,monkeypatch):
+    N._cached_source_hash.cache_clear()
+    p=tmp_path/'source';p.write_bytes(b'original');sig=N._signature(p)
+    original=N.hashlib.file_digest
+    def broken(*args):
+        raise OSError('read failed')
+    monkeypatch.setattr(N.hashlib,'file_digest',broken)
+    with pytest.raises(OSError,match='read failed'):N._source_hash(str(p),sig)
+    assert not N._HASH_CACHE and not N._HASH_FLIGHTS
+    def changed(*args):
+        value=original(*args);p.write_bytes(b'modified');return value
+    monkeypatch.setattr(N.hashlib,'file_digest',changed)
+    with pytest.raises(ValueError,match='changed_during_read'):N._source_hash(str(p),sig)
+    assert not N._HASH_CACHE and not N._HASH_FLIGHTS
+    monkeypatch.setattr(N.hashlib,'file_digest',original)
+    assert N._source_hash(str(p),N._signature(p))==N.hashlib.sha256(b'modified').hexdigest()
+    N._cached_source_hash.cache_clear()
