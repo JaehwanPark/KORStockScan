@@ -53,6 +53,8 @@
 
 후보 v3의 추가 확대 검사에서는 생존 경로 1,231개가 통과했으나 주문 분할 테스트의 autouse fixture가 삭제된 `machine_microstructure_attribution`을 불러와 200개 setup error가 났다. 후보는 배포하지 않았다. 이미 퇴역한 collector 격리 fixture를 제거했고 생존 주문 분할 회귀 **198 passed / 2 deselected**를 확인했다. 제외된 2건은 삭제된 collector 기반 옛 replay 검사다. 실제 주문 분할·broker 불확실성·submit 예외 보호를 건너뛰지 않았다. 최종 immutable에 이 테스트 수리까지 포함한다.
 
+후보 v4의 확대 회귀 **1,429 passed / 9 deselected**를 확인했다. 마지막 계측 리뷰에서 ready coverage는 PID 수명 누적이고 latency metrics만 정책 generation에서 reset된다는 원 동작을 확인했다. 이를 혼동시키던 `ready_coverage_window` 설명만 `process_lifetime`으로 명확히 했다. circuit 및 카운터를 인위적으로 reset하지 않는다. 후보와 최종 배포는 구분한다.
+
 v2의 read-only cron 검사에서 finalization generation issue는 `{}`이며 `strict_checklist_generation_stale`은 재현되지 않았다. cleanup/finalization의 과거 06:50 cutoff 이후 복구 warning은 계속 보고한다. 전체 health PASS 또는 실제 체결 성공으로 표현하지 않는다.
 
 최종 준비 직전 별도 문서 작업이 약세 관찰 계획 owner를 추가했다. 현재 checklist SHA `503685557588993927f13d39db72218cce9deeeafe877f6630c1afff26c9ed93`, parser 22개·이번 Main owner 1개이며 원 AUTO 봉인 블록은 동일하다. 이 변경을 덮어쓰거나 해당 계획을 구현하지 않는다. 최신 checklist 인계는 기존 native handoff에서 검증한다.

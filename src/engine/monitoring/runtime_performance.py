@@ -185,7 +185,7 @@ def snapshot():
         metrics=metrics, preparation_failures=failures,
         ai_circuit=circuit,
         ready_coverage=coverage, ready_coverage_basis='native_ready_seen_at_ingress_not_all_market_opportunities',
-        ready_coverage_window='process_lifetime_metrics_reset_on_policy_generation',
+        ready_coverage_window='process_lifetime',
         recent_terminal_timelines=timelines, retained_signal_timelines=inflight)
 
 
