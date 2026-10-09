@@ -172,3 +172,13 @@ def test_cost_generation_change_rejects_legacy_snapshot_without_cost_binding(tmp
 @pytest.mark.parametrize("value", [None, "", "NaN", "Infinity", True, "-1", "1,000", "1e3"])
 def test_missing_cost_is_not_zero(value):
     with pytest.raises(ValueError): C.number(value)
+
+
+def test_unit_http_default_cannot_reach_real_account_service(monkeypatch):
+    import requests
+    import pytest
+
+    monkeypatch.setattr(requests.sessions.Session, "send",
+                        lambda *_a, **_kw: pytest.fail("network send escaped test isolation"))
+    with pytest.raises(requests.exceptions.RequestException, match="unit_test_http_not_mocked"):
+        requests.post("https://api.kiwoom.com/api/dostk/acnt", json={})

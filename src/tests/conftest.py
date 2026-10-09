@@ -1,9 +1,32 @@
 from datetime import datetime as _REAL_DATETIME
 from pathlib import Path
+import tempfile
 
 import pytest
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+
+
+def pytest_configure(config):
+    """Never let unit-test fallback workers reach the real HTTP service.
+
+    Configure is also called for conftests discovered after session start.
+    Session lifetime matters: a bounded quote worker may outlive its test's
+    monkeypatch fixture. Explicit HTTP response mocks still override this
+    default; unmocked calls follow the normal transport-failure path.
+    """
+    import requests
+    import src.utils.logger as logger
+
+    def unmocked_http(*_args, **_kwargs):
+        raise requests.exceptions.RequestException("unit_test_http_not_mocked")
+
+    requests.sessions.Session.request = unmocked_http
+    # Per-test logger patches restore to this isolated session directory,
+    # never production logs, including late background-worker completion.
+    root = Path(tempfile.mkdtemp(prefix="korstockscan-unit-logs-"))
+    logger.LOGS_DIR = root / "logs"
+    logger.LEGACY_LOGS_DIR = root / "legacy_logs"
 
 
 @pytest.fixture(autouse=True)
